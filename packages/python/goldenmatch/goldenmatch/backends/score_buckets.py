@@ -2511,6 +2511,30 @@ def score_buckets(
                     f"{_mar:7.3f}s ({_kp(_mar):5.1f}%)",
                     flush=True,
                 )
+            # Rust-kernel split (score.rs / fs-core, GOLDENMATCH_BUCKET_DEBUG):
+            # string-comparison (field_similarity) vs aggregation (level+weight+
+            # normalize+emit+loop) of the FS scoring kernel itself. This is the
+            # go/no-go for factorized comparison: strcmp% high -> factorize wins.
+            try:
+                from goldenmatch.core._native_loader import native_module as _nm
+                _fn = getattr(_nm(), "fs_kernel_timing_ns", None)
+                if _fn is not None:
+                    _strcmp_ns, _total_ns = _fn()
+                    if _total_ns > 0:
+                        _sc = _strcmp_ns / 1e9
+                        _tt = _total_ns / 1e9
+                        _ag = max(_tt - _sc, 0.0)
+                        print(
+                            "[score_buckets][DEBUG] FS kernel compute split "
+                            "(score.rs total vs fs-core strcmp; CPU-time summed over workers):\n"
+                            f"  string-comparison (field_similarity): {_sc:8.2f}s "
+                            f"({100.0 * _sc / _tt:5.1f}%)\n"
+                            f"  aggregation (level+weight+norm+emit):  {_ag:8.2f}s "
+                            f"({100.0 * _ag / _tt:5.1f}%)",
+                            flush=True,
+                        )
+            except Exception:
+                pass
     if _arrow:
         import pyarrow as _pa
 

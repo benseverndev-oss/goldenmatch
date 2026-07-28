@@ -15,8 +15,30 @@
 //! sourced here. Parity holds by construction (same computation, relocated).
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Instant;
 
 use goldenmatch_score_core::score_one;
+
+/// BUCKET_DEBUG kernel-timing (diagnostic): when on, `score_fs_pair` accumulates
+/// the nanos spent in `field_similarity` (the string-similarity algorithm) into
+/// FS_STRCMP_NS -- one atomic add per pair (per-field time summed locally first
+/// to avoid 16-thread contention on the counter). The native `score.rs` caller
+/// times the whole span loop; aggregation = total - strcmp. Off by default ->
+/// zero cost (the `if` guards the Instant + the add).
+static FS_TIMING_ON: AtomicBool = AtomicBool::new(false);
+static FS_STRCMP_NS: AtomicU64 = AtomicU64::new(0);
+
+/// Enable/disable the per-pair strcmp timer (set by the native FS caller from
+/// `GOLDENMATCH_BUCKET_DEBUG`). Not reset -- accumulates across the process.
+pub fn set_fs_timing(on: bool) {
+    FS_TIMING_ON.store(on, Ordering::Relaxed);
+}
+
+/// Read the accumulated string-comparison nanos.
+pub fn fs_strcmp_ns() -> u64 {
+    FS_STRCMP_NS.load(Ordering::Relaxed)
+}
 
 // ---------------------------------------------------------------------------
 // Reference-data-aware name scorers (`name_freq_weighted_jw` /
@@ -568,6 +590,8 @@ where
     F: Fn(usize, usize) -> Option<&'d str>,
     G: Fn(usize, usize) -> Option<&'d str>,
 {
+    let timing = FS_TIMING_ON.load(Ordering::Relaxed);
+    let mut strcmp_ns = 0u64;
     let mut total_weight = 0.0_f64;
     // #1854 full-range normalization: the min-max range spans ALL matchkey
     // fields, not only the ones observed for this pair. `base_min`/`base_max`
@@ -590,6 +614,7 @@ where
             // the row vectors, not the string value — `get_field` above still
             // gates observed-ness (raw value column, or a never-null synthetic
             // column for record_embedding), so nulls flow through the SAME path.
+            let _ts = if timing { Some(Instant::now()) } else { None };
             let sim = if p.scorer_ids[f] == FS_SCORER_EMBEDDING_COSINE {
                 match p.emb_vectors.get(f).copied().flatten() {
                     Some(flat) => {
@@ -606,6 +631,9 @@ where
             } else {
                 field_similarity(p.scorer_ids[f], a, b, p.surname_freq, p.name_aliases)
             };
+            if let Some(t) = _ts {
+                strcmp_ns += t.elapsed().as_nanos() as u64;
+            }
             let level = fs_level_from_sim(
                 sim,
                 p.levels[f],
@@ -650,7 +678,7 @@ where
             }
         }
     }
-    if !p.calibrated && p.require_positive_evidence && total_weight <= 0.0 {
+    let normalized = if !p.calibrated && p.require_positive_evidence && total_weight <= 0.0 {
         // Net-zero / net-negative evidence (LR <= 1) is a Fellegi-Sunter
         // non-match; keep it below any cut so the asymmetric min-max can't
         // auto-link it into a mega-cluster. See `require_positive_evidence`.
@@ -665,7 +693,14 @@ where
             pair_min,
             pair_max - pair_min,
         )
+    };
+    if timing {
+        // One atomic add per pair (per-field time summed locally above) to keep
+        // 16-thread contention on the counter low. NE-loop strcmp is not timed
+        // (NE fields are absent on the common single-mk shape).
+        FS_STRCMP_NS.fetch_add(strcmp_ns, Ordering::Relaxed);
     }
+    normalized
 }
 
 #[cfg(test)]
@@ -897,7 +932,7 @@ mod tests {
             match_weights: &mw,
             field_mins: &field_mins,
             field_maxs: &field_maxs,
-            base_min: min_weight - regular_min, // 0
+            base_min: min_weight - regular_min,                // 0
             base_max: min_weight + weight_range - regular_max, // 0
             ne_scorer_ids: &[],
             ne_thresholds: &[],
@@ -933,7 +968,10 @@ mod tests {
 
         // Disagree: the null field is forced to level 0 (-4) and counts observed.
         // total = 5 + (-4) = 1. normalized = (1 - (-7)) / 18 = 8/18.
-        let p_dis = FsPairParams { missing_disagree: true, ..base };
+        let p_dis = FsPairParams {
+            missing_disagree: true,
+            ..base
+        };
         let s_dis = score_fs_pair(0, 1, &p_dis, get, noop_ne);
         assert!(
             (s_dis - (8.0 / 18.0)).abs() < 1e-12,

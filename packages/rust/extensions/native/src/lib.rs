@@ -139,6 +139,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(score::score_block_pairs, m)?)?;
     m.add_function(wrap_pyfunction!(score::score_block_pairs_fs, m)?)?;
     m.add_function(wrap_pyfunction!(score::score_block_pairs_fs_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(score::fs_kernel_timing_ns, m)?)?;
     m.add_function(wrap_pyfunction!(score::score_block_pairs_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(score::score_field_matrix, m)?)?;
     m.add_function(wrap_pyfunction!(score::score_field_pairwise, m)?)?;

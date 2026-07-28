@@ -22,7 +22,34 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
+use std::time::Instant;
+
+/// BUCKET_DEBUG kernel split: total wall spent in the `score_block_pairs_fs`
+/// span loop (all pairs). The string-similarity portion is accumulated
+/// separately inside `goldenmatch_fs_core::score_fs_pair` (FS_STRCMP_NS there);
+/// aggregation = total - strcmp. Read from Python via [`fs_kernel_timing_ns`].
+/// Gated on `GOLDENMATCH_BUCKET_DEBUG` so it's zero-cost off (one env read per
+/// kernel call + one atomic add per call).
+static FS_KERNEL_TOTAL_NS: AtomicU64 = AtomicU64::new(0);
+
+fn fs_kernel_timing_on() -> bool {
+    std::env::var("GOLDENMATCH_BUCKET_DEBUG")
+        .map(|v| !matches!(v.as_str(), "" | "0" | "false" | "False" | "no" | "off"))
+        .unwrap_or(false)
+}
+
+/// Read the accumulated (string-comparison, total) kernel nanos. Diagnostic
+/// only: strcmp from fs-core's per-pair timer, total from the score.rs span
+/// loop; aggregation = total - strcmp.
+#[pyfunction]
+pub fn fs_kernel_timing_ns() -> (u64, u64) {
+    (
+        goldenmatch_fs_core::fs_strcmp_ns(),
+        FS_KERNEL_TOTAL_NS.load(Ordering::Relaxed),
+    )
+}
 
 /// Process-level reference-data tables for the FS name scorers
 /// (`name_freq_weighted_jw` / `given_name_aliased_jw`). Built ONCE per process
@@ -654,6 +681,11 @@ pub fn score_block_pairs_fs(
     require_positive_evidence: bool,
     missing_disagree: bool,
 ) -> PyResult<Vec<(i64, i64, f64)>> {
+    // BUCKET_DEBUG kernel-timing: turn on the per-pair strcmp timer in fs-core
+    // (accumulates across all calls / rayon workers) and time the whole span
+    // loop below. Off by default -> zero cost.
+    let timing = fs_kernel_timing_on();
+    goldenmatch_fs_core::set_fs_timing(timing);
     // FS_SUPPORTS_EXCLUDE_SET: prefer the shared Arc handle (built once per
     // score_buckets call via `build_exclude_set`), fall back to the legacy
     // Vec-rebuilt-per-call path. Same resolution as score_block_pairs_arrow --
@@ -811,6 +843,7 @@ pub fn score_block_pairs_fs(
         missing_disagree,
     };
 
+    let _t_kernel = if timing { Some(Instant::now()) } else { None };
     let result = py.detach(|| {
         spans
             .par_iter()
@@ -843,6 +876,9 @@ pub fn score_block_pairs_fs(
             })
             .collect()
     });
+    if let Some(t) = _t_kernel {
+        FS_KERNEL_TOTAL_NS.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    }
     Ok(result)
 }
 
@@ -1106,6 +1142,11 @@ pub fn score_block_pairs_fs_arrow(
     require_positive_evidence: bool,
     missing_disagree: bool,
 ) -> PyResult<Vec<(i64, i64, f64)>> {
+    // BUCKET_DEBUG kernel-timing (this arrow entry is the FS default path when
+    // FS_SUPPORTS_ARROW is true). Enable the fs-core per-pair strcmp timer + time
+    // the whole span loop below. Off by default -> zero cost.
+    let timing = fs_kernel_timing_on();
+    goldenmatch_fs_core::set_fs_timing(timing);
     let row_data = row_ids.0;
     if row_data.data_type() != &DataType::Int64 {
         return Err(PyValueError::new_err(format!(
@@ -1333,7 +1374,8 @@ pub fn score_block_pairs_fs_arrow(
         .and_then(|v| v.parse().ok())
         .unwrap_or(20_000_000);
 
-    Ok(py.detach(|| {
+    let _t_kernel = if timing { Some(Instant::now()) } else { None };
+    let result: Vec<(i64, i64, f64)> = py.detach(|| {
         if total_pairs >= rayon_min_pairs {
             spans
                 .par_iter()
@@ -1345,7 +1387,11 @@ pub fn score_block_pairs_fs_arrow(
                 .flat_map(|&(offset, size)| score_span(offset, size))
                 .collect()
         }
-    }))
+    });
+    if let Some(t) = _t_kernel {
+        FS_KERNEL_TOTAL_NS.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    }
+    Ok(result)
 }
 
 // ============================================================================
