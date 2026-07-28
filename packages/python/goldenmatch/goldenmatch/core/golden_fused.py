@@ -737,6 +737,23 @@ def run_golden_fused_arrow(
     import pyarrow.compute as _pc_fac
 
     from goldenmatch.core.bench import stage as _bench_stage
+    from goldenmatch.core.frame import is_polars_dataframe as _ipd_fac
+
+    # dictionary_encode is byte-identical to the reference _factorize_with_map
+    # ONLY for GENUINE string columns: a polars Object/mixed column (e.g. int 1
+    # and str "1" together) is coerced to string by .to_arrow() (both -> "1"),
+    # collapsing codes the reference keeps distinct (1 != "1") and flipping
+    # unanimous_or_null. Restrict the fast path to real Utf8 columns; everything
+    # else uses the EXACT reference path over `sdf.column(c).to_list()` (raw seam
+    # values, no arrow coercion). Arrow-frame string columns are always genuine
+    # (arrow has no object type; to_list == to_arrow there).
+    _pl_str_cols = None
+    if _ipd_fac(sdf.native):
+        import polars as _pl_fac
+
+        _pl_str_cols = {
+            _n for _n, _dt in sdf.native.schema.items() if _dt == _pl_fac.String
+        }
     with _bench_stage("golden_fused_factorize"):
         for c in user_cols:
             _arr = sdf.column(c).to_arrow()
@@ -746,14 +763,17 @@ def run_golden_fused_arrow(
                 _arr = _arr.combine_chunks()
                 if isinstance(_arr, pa.ChunkedArray):
                     _arr = _arr.chunk(0) if _arr.num_chunks else pa.array([], type=_arr.type)
-            if pa.types.is_string(_arr.type) or pa.types.is_large_string(_arr.type):
+            _genuine_str = (
+                pa.types.is_string(_arr.type) or pa.types.is_large_string(_arr.type)
+            ) and (_pl_str_cols is None or c in _pl_str_cols)
+            if _genuine_str:
                 _dic = _pc_fac.dictionary_encode(_arr)
                 if _needs_col_maps:
                     col_maps[c] = {v: i for i, v in enumerate(_dic.dictionary.to_pylist())}
                 text_cols.append(_pc_fac.cast(_arr, pa.string()))
                 code_cols.append(_pc_fac.fill_null(_dic.indices.cast(pa.int64()), -1))
             else:
-                values = _arr.to_pylist()
+                values = sdf.column(c).to_list()
                 text = [None if v is None else str(v) for v in values]
                 if _needs_col_maps:
                     codes, vmap = _factorize_with_map(values)
