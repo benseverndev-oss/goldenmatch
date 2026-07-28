@@ -30,10 +30,18 @@ from sources.csv_tables import read_id_table
 # rename happens.
 _SPLIT_FILES: dict[str, str] = {"train": "train.csv", "val": "valid.csv", "test": "test.csv"}
 
-# TODO(#magellan-fetch): real DeepMatcher mirror URL + expected sha256 per
-# dataset. Left undocumented here since we can't exercise a real download in
-# CI; the network GUARD below is what's tested, not this download logic.
-_DEEPMATCHER_BASE_URL = "https://pages.cs.wisc.edu/~anhai/data/deepmatcher_data/"
+# Confirmed base for the "Structured" DeepMatcher benchmarks (verified via a
+# direct HTTP 200 fetch of Structured/Walmart-Amazon/exp_data/{tableA,test}.csv;
+# note the "data1" segment -- "data" 404s). Per-dataset files are direct CSVs
+# (not zips) at f"{base}Structured/<UrlName>/exp_data/{tableA,tableB,train,valid,test}.csv".
+_DEEPMATCHER_BASE_URL = "https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/"
+
+# `self.name` (dataset registry key, e.g. "walmart_amazon") -> the hyphenated
+# "UrlName" DeepMatcher uses on disk (e.g. "Walmart-Amazon"). Explicit map for
+# the two datasets this fetch has been verified against; fall back to a
+# title-cased/hyphenated guess for anything else (may need its own entry here
+# once verified -- DeepMatcher's naming isn't perfectly regular, e.g. casing).
+_URL_NAMES: dict[str, str] = {"walmart_amazon": "Walmart-Amazon", "beer": "Beer"}
 
 
 class MagellanSource:
@@ -96,19 +104,58 @@ class MagellanSource:
     def fetch(self) -> None:
         """Network fetch, GUARDED behind an explicit opt-in env var -- this
         source's data is cite-only-licensed and must never be downloaded
-        (or committed) silently."""
+        (or committed) silently.
+
+        Downloads the 5 direct CSVs (tableA, tableB, train, valid, test) for
+        this dataset from the DeepMatcher "Structured" mirror into `self.root`,
+        then validates each is non-empty and that the 3 pair-split files carry
+        a `label` column in their header (catches an HTML error page silently
+        landing where a CSV was expected, e.g. from a bad _URL_NAMES guess)."""
         if os.environ.get("GOLDENMATCH_ALLOW_FETCH") != "1":
             raise RuntimeError(
                 "network fetch disabled; set GOLDENMATCH_ALLOW_FETCH=1 to download "
                 "Magellan data (eval-only, cite-only license)"
             )
 
-        # TODO(#magellan-fetch): `import urllib.request` here and resolve the
-        # real per-dataset archive URL under _DEEPMATCHER_BASE_URL + self.name,
-        # download to self.root, verify against a known sha256, and unpack
-        # tableA/tableB/train/valid/test CSVs. Not exercised here (no real
-        # download in CI).
-        raise NotImplementedError(
-            f"Magellan fetch for dataset {self.name!r} is not yet implemented "
-            f"(target base URL: {_DEEPMATCHER_BASE_URL})"
-        )
+        import hashlib
+        import urllib.request
+
+        if self._has_local_data():
+            print(f"[magellan] {self.name}: already present under {self.root}, skipping download")
+            return
+
+        url_name = _URL_NAMES.get(self.name, self.name.replace("_", "-").title())
+        base_url = f"{_DEEPMATCHER_BASE_URL}Structured/{url_name}/exp_data/"
+        self.root.mkdir(parents=True, exist_ok=True)
+
+        filenames = ("tableA.csv", "tableB.csv", *_SPLIT_FILES.values())
+        headers = {"User-Agent": "goldenmatch-er-matcher-fetch/1.0"}
+        for fname in filenames:
+            url = base_url + fname
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=120) as resp:  # noqa: S310 (trusted host)
+                data = resp.read()
+            digest = hashlib.sha256(data).hexdigest()
+            (self.root / fname).write_bytes(data)
+            print(
+                f"[magellan] {self.name}: downloaded {fname} "
+                f"({len(data)} bytes, sha256={digest}) -> {self.root / fname}"
+            )
+
+        for fname in filenames:
+            path = self.root / fname
+            if path.stat().st_size == 0:
+                raise RuntimeError(
+                    f"magellan fetch for {self.name!r}: {fname} downloaded empty from {base_url} "
+                    f"(bad dataset name / _URL_NAMES mapping for url_name={url_name!r}?)"
+                )
+        for fname in ("train.csv", "valid.csv", "test.csv"):
+            path = self.root / fname
+            with open(path, encoding="utf-8") as f:
+                header = f.readline()
+            if "label" not in header:
+                raise RuntimeError(
+                    f"magellan fetch for {self.name!r}: {fname} header {header.strip()!r} does not "
+                    "contain 'label' -- looks like an error page, not a CSV "
+                    f"(check _URL_NAMES mapping for url_name={url_name!r} against {base_url})"
+                )
