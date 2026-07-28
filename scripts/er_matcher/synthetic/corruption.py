@@ -15,6 +15,8 @@ at the profile's base rate.
 
 from __future__ import annotations
 
+import re
+
 _NICKNAMES: dict[str, tuple[str, ...]] = {
     "robert": ("Rob", "Bob", "Bobby"),
     "william": ("Will", "Bill", "Billy"),
@@ -93,12 +95,19 @@ def _substitute(value: str, rng) -> str:
 
 
 def case_ws(value: str, rng, *, rate: float) -> str:
-    """Random case flip on one char, or a stray inserted/doubled whitespace."""
+    """Random case flip on one char, or a stray inserted/doubled whitespace.
+
+    At ``rate=1.0`` the result is guaranteed different from ``value`` (for any
+    non-empty input): the "case" op only considers alpha positions (flipping
+    a space/digit/punctuation is a silent no-op), falling back to the
+    whitespace op -- which always changes length -- when there are none.
+    """
     if not value or rng.random() >= rate:
         return value
-    op = rng.choice(("case", "whitespace"))
+    alpha_positions = [i for i, ch in enumerate(value) if ch.isalpha()]
+    op = rng.choice(("case", "whitespace")) if alpha_positions else "whitespace"
     if op == "case":
-        pos = rng.randint(0, len(value) - 1)
+        pos = rng.choice(alpha_positions)
         ch = value[pos]
         flipped = ch.lower() if ch.isupper() else ch.upper()
         return value[:pos] + flipped + value[pos + 1 :]
@@ -156,29 +165,53 @@ def format_variant(value: str, rng, *, rate: float, kind: str) -> str:
             return f"{local.replace('.', '_', 1)}@{domain}"
         return value
     if kind == "address":
-        replacements = (
-            (" Street", " St"),
-            (" Avenue", " Ave"),
-            (" Boulevard", " Blvd"),
-            (" Drive", " Dr"),
-            (" Lane", " Ln"),
-            (" Road", " Rd"),
-            (" St", " Street"),
-            (" Ave", " Avenue"),
-        )
-        for old, new in replacements:
-            if value.endswith(old):
-                return value[: -len(old)] + new
-        return value
+        return _address_variant(value, rng)
     return value
+
+
+# Whole-word street-suffix pairs, either direction abbreviates/expands the
+# OTHER member. Matched anywhere in the string (mid-token, not just at the
+# end) so compound comma-joined addresses like "476 River Dr, Burlington, VT
+# 05483" get corrupted too, not just a bare "123 Main St".
+_STREET_SUFFIX_PAIRS = (
+    ("Street", "St"),
+    ("Avenue", "Ave"),
+    ("Boulevard", "Blvd"),
+    ("Drive", "Dr"),
+    ("Lane", "Ln"),
+    ("Road", "Rd"),
+)
+
+
+def _address_variant(value: str, rng) -> str:
+    """Abbreviate/expand one whole-word street-suffix token anywhere in ``value``.
+
+    Identity if no suffix token is present (e.g. a bare city name).
+    """
+    candidates: list[tuple[int, int, str]] = []
+    for full, abbr in _STREET_SUFFIX_PAIRS:
+        for token, counterpart in ((full, abbr), (abbr, full)):
+            for m in re.finditer(rf"\b{re.escape(token)}\b", value):
+                candidates.append((m.start(), m.end(), counterpart))
+    if not candidates:
+        return value
+    start, end, counterpart = rng.choice(candidates)
+    return value[:start] + counterpart + value[end:]
 
 
 # Per-field channel plan: which channels apply, and how each field maps to a
 # format_variant "kind" hint (fields not listed here get no format_variant).
-_NAME_FIELDS = frozenset({"first", "last", "name", "legal_name", "dba"})
+# Person names (given names) are the only fields nickname() can ever match --
+# company names ("Smith LLC") never hit the formal->nickname dict, so routing
+# nickname() at them was pure dead code.
+_PERSON_NAME_FIELDS = frozenset({"first", "last"})
+_COMPANY_NAME_FIELDS = frozenset({"name", "legal_name", "dba"})
 _PHONE_FIELDS = frozenset({"phone"})
 _EMAIL_FIELDS = frozenset({"email"})
+# city has no street suffix, so format_variant(kind="address") only applies
+# to street/address; case_ws + token_drop still apply to all three.
 _ADDRESS_FIELDS = frozenset({"street", "address", "city"})
+_ADDRESS_FORMAT_FIELDS = frozenset({"street", "address"})
 
 
 def corrupt_record(rec: dict, *, strong_id: str, rng, profile: str) -> dict:
@@ -193,8 +226,11 @@ def corrupt_record(rec: dict, *, strong_id: str, rng, profile: str) -> dict:
         if field == strong_id or not isinstance(value, str):
             continue
 
-        if field in _NAME_FIELDS:
+        if field in _PERSON_NAME_FIELDS:
             value = nickname(value, rng, rate=rate)
+            value = char_typo(value, rng, rate=rate)
+            value = case_ws(value, rng, rate=rate)
+        elif field in _COMPANY_NAME_FIELDS:
             value = char_typo(value, rng, rate=rate)
             value = case_ws(value, rng, rate=rate)
         elif field in _PHONE_FIELDS:
@@ -205,7 +241,8 @@ def corrupt_record(rec: dict, *, strong_id: str, rng, profile: str) -> dict:
             value = char_typo(value, rng, rate=rate)
         elif field in _ADDRESS_FIELDS:
             value = token_drop(value, rng, rate=rate)
-            value = format_variant(value, rng, rate=rate, kind="address")
+            if field in _ADDRESS_FORMAT_FIELDS:
+                value = format_variant(value, rng, rate=rate, kind="address")
             value = case_ws(value, rng, rate=rate)
         else:
             value = char_typo(value, rng, rate=rate)
