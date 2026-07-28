@@ -9369,6 +9369,10 @@
       "path": "packages/rust/extensions/goldenfuzz-core"
     },
     {
+      "name": "goldenfuzz-py",
+      "path": "packages/rust/extensions/goldenfuzz-py"
+    },
+    {
       "name": "goldengraph-cabi",
       "path": "packages/rust/extensions/goldengraph-cabi"
     },
