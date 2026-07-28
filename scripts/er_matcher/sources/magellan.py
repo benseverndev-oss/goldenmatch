@@ -38,10 +38,16 @@ _DEEPMATCHER_BASE_URL = "https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data
 
 # `self.name` (dataset registry key, e.g. "walmart_amazon") -> the hyphenated
 # "UrlName" DeepMatcher uses on disk (e.g. "Walmart-Amazon"). Explicit map for
-# the two datasets this fetch has been verified against; fall back to a
+# the datasets this fetch has been verified against; fall back to a
 # title-cased/hyphenated guess for anything else (may need its own entry here
 # once verified -- DeepMatcher's naming isn't perfectly regular, e.g. casing).
-_URL_NAMES: dict[str, str] = {"walmart_amazon": "Walmart-Amazon", "beer": "Beer"}
+_URL_NAMES: dict[str, str] = {
+    "walmart_amazon": "Walmart-Amazon",
+    "beer": "Beer",
+    # Verified via direct HTTP 200 fetch of all 5 exp_data CSVs (tableA/tableB/
+    # train/valid/test) at Structured/Fodors-Zagats/exp_data/ -- 2026-07-28.
+    "fodors_zagats": "Fodors-Zagats",
+}
 
 
 class MagellanSource:
