@@ -47,28 +47,42 @@ generalization claim. Fetched behind `GOLDENMATCH_ALLOW_FETCH` via `fetch_data.p
 
 ### 2. Logit-based confidence (the calibratable probability)
 
-The model emits a fixed `confidence` string (0.9/0.1) — a constant can't be
-temperature-scaled. So the eval derives confidence from the model's **token
-logits**: at the verdict-boolean position, read the logits for the match vs
-no_match tokens, softmax → **P(match)** — a real probability. This replaces the
-parsed-text confidence in the matcher. (The match/no_match DECISION can stay as
-the generated verdict; only the CONFIDENCE is logit-derived.)
+The model emits a FIXED `confidence` string (0.9/0.1) — a constant can't be
+temperature-scaled. So a NEW eval path derives a real probability from the model's
+**token logits**: teacher-force the verdict prefix up to `{"match":` and read the
+next-token logits over the `true` / `false` token ids → softmax → **P(match)**.
+(This needs `output_scores`/a forward pass, i.e. a genuinely new `zeroshot_eval`
+inference path, NOT a tweak to `eval_model`'s `generate()`+`parse_verdict`.)
+
+**ECE semantics (pin this — `eval.py:50`'s ECE compares confidence to prediction
+CORRECTNESS):** the value the matcher feeds `run_eval` as `confidence` is
+**P(predicted class)** — `P(match)` when the verdict is match, else `1-P(match)` —
+so `eval.run_eval`'s ECE is semantically correct. The DECISION stays the generated
+verdict; only the confidence is logit-derived. Separately, `calibration.py` fits/
+reports on the raw `P(match)` vs the match LABEL. Both raw and calibrated ECE are
+reported via `eval.py`'s (correct-semantics) ECE; the ship gate consumes the
+**calibrated** one.
 
 ### 3. Post-hoc temperature scaling
 
-Fit a single scalar temperature `T` on a held-out calibration slice (part of the
-eval data, disjoint from the scored split) to minimize NLL/ECE of the
-logit-probabilities; apply `sigmoid(logit / T)` to every scored pair. Report
-**raw ECE and calibrated ECE** side by side. `fit_temperature(logits, labels)`
-and the ECE computation are PURE (numbers in, T/ECE out) and box-safe unit-tested.
+Fit a single scalar temperature `T` by minimizing NLL of the raw `P(match)` logits
+against the match labels on the **Magellan `valid` split** (disjoint from the
+scored `test` split — `MagellanSource` yields both, keeping the zero-shot F1 claim
+leakage-free); apply `sigmoid(logit / T)` to the test pairs' logits. Report **raw
+ECE and calibrated ECE** side by side. `fit_temperature(logits, labels)` and the
+ECE math are PURE (numbers in, T/ECE out) and box-safe unit-tested.
 
 ### 4. Per-benchmark scorecard + SOTA + ship gate
 
-Per unseen benchmark: zero-shot **F1** (via the existing `eval.run_eval`) +
-**calibrated ECE**, presented next to a committed table of published DeepMatcher/
-Ditto F1 for that benchmark, and run through `eval.py`'s existing
-`evaluate_gate` (absolute F1 floor + baseline slots + calibration check). The gate
-already exists; SP3 wires the real inputs.
+Per unseen benchmark: zero-shot **F1** (via the existing `eval.run_eval`) + raw/
+**calibrated ECE**. A committed table of published DeepMatcher/Ditto F1 is shown as
+a **DISPLAY-ONLY comparison column** — NOT a gate input. Zero-shot F1 is EXPECTED
+below in-distribution SOTA, so wiring SOTA into `evaluate_gate`'s must-meet baseline
+slots (`hosted_boost_f1`/`fs_baseline_f1`/`baseline_f1`) would fail by design; leave
+those unset. The gate here is **informational**: report pass/fail of a documented
+zero-shot F1 floor (set an explicit zero-shot `abs_floor`, e.g. ~0.65, NOT the 0.80
+default) + the calibration check. `evaluate_gate` already exists; SP3 wires only the
+inputs that make sense for a zero-shot measurement.
 
 ### 5. Execute (Modal)
 
@@ -84,11 +98,16 @@ verdict). Pull + report the citable scorecard.
 - `scripts/er_matcher/eval.py` — **modify**: allow a logit-derived confidence path
   in scoring (or a `matcher` that returns a real P(match)); wire `evaluate_gate`
   inputs. Keep the pure metrics pure.
-- `scripts/er_matcher/fetch_data.py` — **modify**: add the unseen DeepMatcher
-  datasets (Walmart-Amazon, Beer) as fetch-only eval sources.
-- `scripts/er_matcher/modal_train.py` — **modify**: a `zeroshot_eval` entrypoint
-  that loads the model, extracts verdict-token logits per pair, computes P(match),
-  fits temperature, runs `run_eval` + `evaluate_gate`, writes results.
+- `scripts/er_matcher/sources/magellan.py` — **modify**: implement the existing
+  `MagellanSource.fetch()` stub (the `TODO(#magellan-fetch)` + `_DEEPMATCHER_BASE_URL`)
+  to download the unseen DeepMatcher datasets (Walmart-Amazon, Beer) behind
+  `GOLDENMATCH_ALLOW_FETCH`. Do NOT add cite-only fetch to `fetch_data.py` — its
+  docstring explicitly excludes the cite-only Magellan sources.
+- `scripts/er_matcher/modal_train.py` — **modify**: a NEW `zeroshot_eval` entrypoint
+  (distinct from `eval_model` — it needs the logit/forward-pass path, not
+  `generate()`) that loads the model, extracts verdict-token logits per pair →
+  P(match), fits temperature on valid, runs `run_eval` + `evaluate_gate` on test,
+  writes results.
 - `scripts/er_matcher/sota_baselines.py` (or a small data file) — **create**:
   published DeepMatcher/Ditto F1 per benchmark, for the comparison column.
 - Tests: `test_calibration.py` (temp-scaling + ECE), extend `test_eval.py`.
@@ -103,8 +122,9 @@ trainer).
 ## Open questions / risks
 
 - **License of Walmart-Amazon / Beer:** DeepMatcher/Magellan cite-only — fetch-only,
-  eval-only, never committed (same policy as the SP1 slate). Confirm the fetch URLs
-  during planning (the DeepMatcher data repo).
+  eval-only, never committed (same policy as the SP1 slate). Confirm the fetch URLs +
+  sha256 during planning; wire them into `MagellanSource._DEEPMATCHER_BASE_URL` /
+  the `fetch()` stub (the existing `TODO(#magellan-fetch)`), NOT `fetch_data.py`.
 - **Logit extraction mechanics:** getting the exact verdict-boolean token position
   under the chat template + tokenizer needs care (which token = "match"). Verified
   on the first real run (watch: P(match) should separate matches from non-matches).
