@@ -4352,11 +4352,14 @@ def _run_dedupe_pipeline(
                 and _polars_native_eligible(golden_rules, quality_scores=quality_scores)
             )
             _frames_pair_scores: dict[int, dict[tuple[int, int], float]] | None = None
-            if not _frames_fast_eligible:
-                # Bench diagnostic: this builds a {cluster: {(a,b): score}} dict
-                # over every scored pair (~10.7M at 5M) -- but ONLY
-                # confidence_majority survivorship reads it; most_complete never
-                # does. Suspected bulk of the golden stage's unaccounted wall.
+            # Only confidence_majority survivorship consumes pair scores; on any
+            # other strategy (the default most_complete) this {cluster:{(a,b):s}}
+            # dict over every scored pair (~10.7M at 5M) is built, passed to the
+            # builder, and never read -- measured at 32.8s / 71% of the golden
+            # stage. Gate the build so the default config skips it entirely
+            # (byte-identical: the builder + kernel both accept None here).
+            from goldenmatch.core.golden import _config_uses_confidence_majority
+            if not _frames_fast_eligible and _config_uses_confidence_majority(golden_rules):
                 with stage("golden_pair_score_view_build"):
                     _psv = _pair_score_view()
                     if _psv is not None:
