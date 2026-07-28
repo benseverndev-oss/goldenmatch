@@ -42,13 +42,26 @@ use nfkd::nfkd_chars;
 /// `s.to_uppercase().nfkd()`, keep the first codepoint verbatim, then map
 /// consonants to Soundex digits (collapsing adjacent equal digits, `H`/`W`
 /// transparent), pad/truncate to length 4.
+///
+/// ## ASCII fast path
+/// For pure-ASCII input (the overwhelming common case for names) `to_uppercase`
+/// == `to_ascii_uppercase` char-for-char and NFKD is the identity, so we skip the
+/// vendored per-char NFKD table lookup ([`nfkd_chars`]) entirely and build the
+/// working `char` vector directly. The unicode path below is preserved verbatim as
+/// the byte-identical-to-jellyfish reference for accented / decomposed input. Both
+/// feed the same downstream `Vec<char>` loop — no algorithm duplication.
 pub fn soundex(s: &str) -> String {
     if s.is_empty() {
         return String::new();
     }
 
-    let upper: Vec<char> = s.to_uppercase().chars().collect();
-    let v = nfkd_chars(&upper);
+    let v: Vec<char> = if s.is_ascii() {
+        // ASCII: uppercase in place, NFKD is identity — skip the table lookup.
+        s.chars().map(|c| c.to_ascii_uppercase()).collect()
+    } else {
+        let upper: Vec<char> = s.to_uppercase().chars().collect();
+        nfkd_chars(&upper)
+    };
     if v.is_empty() {
         // to_uppercase()/nfkd() cannot empty a non-empty string in practice, but
         // guard the v[0] index defensively (jellyfish indexes v[0] unconditionally).
@@ -281,40 +294,87 @@ pub fn metaphone(s: &str) -> String {
 // precomposed, and their NFD forms — proven over the fuzz corpus in
 // `scripts/check_phonetic_parity.py`.
 
-#[inline]
-fn ny_isvowel(s: &str) -> bool {
-    matches!(s, "A" | "E" | "I" | "O" | "U")
+/// One unit of the NYSIIS working sequence. The unicode path uses grapheme
+/// clusters (`String`); the ASCII fast path uses bare `char`s. The core algorithm
+/// ([`nysiis_core`]) is written once over this trait so there is a single source of
+/// truth for the NYSIIS logic — only the unit representation differs.
+trait NyUnit: Clone + PartialEq {
+    /// Build a unit from a single ASCII letter (the algorithm only ever synthesizes
+    /// single-ASCII-letter units: `A`/`F`/`G`/`S`/`N`/`C`/`D`/`Y`).
+    fn from_ascii(c: u8) -> Self;
+    /// Does this unit equal the single ASCII letter `c`? (A multi-codepoint
+    /// grapheme is never equal to a one-byte ASCII letter.)
+    fn eq_ascii(&self, c: u8) -> bool;
+    /// Append this unit to the output key string.
+    fn push_key(&self, out: &mut String);
+    /// Is this unit one of the NYSIIS vowels `A`/`E`/`I`/`O`/`U`?
+    #[inline]
+    fn is_vowel(&self) -> bool {
+        self.eq_ascii(b'A')
+            || self.eq_ascii(b'E')
+            || self.eq_ascii(b'I')
+            || self.eq_ascii(b'O')
+            || self.eq_ascii(b'U')
+    }
 }
 
-/// NYSIIS phonetic encoding, byte-identical to `jellyfish.nysiis`.
-pub fn nysiis(s: &str) -> String {
-    if s.is_empty() {
-        return String::new();
+impl NyUnit for char {
+    #[inline]
+    fn from_ascii(c: u8) -> Self {
+        c as char
     }
+    #[inline]
+    fn eq_ascii(&self, c: u8) -> bool {
+        *self == c as char
+    }
+    #[inline]
+    fn push_key(&self, out: &mut String) {
+        out.push(*self);
+    }
+}
 
-    let upper = s.to_uppercase();
-    let mut v: Vec<String> = graphemes(&upper.chars().collect::<Vec<_>>());
+impl NyUnit for String {
+    #[inline]
+    fn from_ascii(c: u8) -> Self {
+        (c as char).to_string()
+    }
+    #[inline]
+    fn eq_ascii(&self, c: u8) -> bool {
+        // A grapheme equals an ASCII letter iff it is exactly that one byte.
+        self.len() == 1 && self.as_bytes()[0] == c
+    }
+    #[inline]
+    fn push_key(&self, out: &mut String) {
+        out.push_str(self);
+    }
+}
 
+/// The NYSIIS algorithm over an abstract unit sequence, byte-identical to
+/// `jellyfish.nysiis`. `v` is the (grapheme- or char-) segmented, uppercased input;
+/// `upper` is the uppercased string used only for the prefix/suffix `starts_with` /
+/// `ends_with` tests (identical between paths on ASCII, and the reference behaviour
+/// on unicode). See [`nysiis`] for the ASCII/unicode split that feeds this.
+fn nysiis_core<U: NyUnit>(mut v: Vec<U>, upper: &str) -> String {
     // step 1: prefixes
     if upper.starts_with("MAC") {
-        v[1] = "C".to_string(); // MAC -> MCC
+        v[1] = U::from_ascii(b'C'); // MAC -> MCC
     } else if upper.starts_with("KN") {
         v.remove(0); // strip leading K from KN
     } else if upper.starts_with('K') {
-        v[0] = "C".to_string(); // K -> C
+        v[0] = U::from_ascii(b'C'); // K -> C
     } else if upper.starts_with("PH") || upper.starts_with("PF") {
-        v[0] = "F".to_string();
-        v[1] = "F".to_string(); // -> FF
+        v[0] = U::from_ascii(b'F');
+        v[1] = U::from_ascii(b'F'); // -> FF
     } else if upper.starts_with("SCH") {
-        v[1] = "S".to_string();
-        v[2] = "S".to_string(); // SCH -> SSS
+        v[1] = U::from_ascii(b'S');
+        v[2] = U::from_ascii(b'S'); // SCH -> SSS
     }
 
     // step 2: suffixes
     if upper.ends_with("IE") || upper.ends_with("EE") {
         v.pop();
         v.pop();
-        v.push("Y".to_string());
+        v.push(U::from_ascii(b'Y'));
     } else if upper.ends_with("DT")
         || upper.ends_with("RT")
         || upper.ends_with("RD")
@@ -323,57 +383,79 @@ pub fn nysiis(s: &str) -> String {
     {
         v.pop();
         v.pop();
-        v.push("D".to_string());
+        v.push(U::from_ascii(b'D'));
     }
 
     // step 3: key starts with first character
-    let mut key: Vec<String> = Vec::new();
+    let mut key: Vec<U> = Vec::with_capacity(v.len());
     key.push(v[0].clone());
 
-    // step 4: translate remaining characters
+    // step 4: translate remaining characters.
+    //
+    // Each iteration produces a 1- or 2-unit replacement group. jellyfish builds a
+    // `Vec` per character; we hold the group in a stack pair `(u0, u1)` so the hot
+    // loop makes ZERO heap allocations per character. Every arm produces at least
+    // `u0` (the `vec` was never empty), so the old `!chars.is_empty()` guard drops.
     let mut i = 1;
     while i < v.len() {
-        let chars: Vec<String> = match v[i].as_str() {
-            "E" if i + 1 < v.len() && v[i + 1] == "V" => {
-                i += 1;
-                vec!["A".to_string(), "F".to_string()]
-            }
-            "A" | "E" | "I" | "O" | "U" => vec!["A".to_string()],
-            "Q" => vec!["G".to_string()],
-            "Z" => vec!["S".to_string()],
-            "M" => vec!["N".to_string()],
-            "K" => {
-                if i + 1 < v.len() && v[i + 1] == "N" {
-                    vec!["N".to_string()]
-                } else {
-                    vec!["C".to_string()]
-                }
-            }
-            "S" if i + 2 < v.len() && v[i + 1] == "C" && v[i + 2] == "H" => {
-                i += 2;
-                vec!["S".to_string(), "S".to_string()]
-            }
-            "P" if i + 1 < v.len() && v[i + 1] == "H" => {
-                i += 1;
-                vec!["F".to_string()]
-            }
-            "H" if !ny_isvowel(&v[i - 1])
-                || (i + 1 < v.len() && !ny_isvowel(&v[i + 1]))
-                || (i + 1 == v.len()) =>
-            {
-                if ny_isvowel(&v[i - 1]) {
-                    vec!["A".to_string()]
-                } else {
-                    vec![v[i - 1].clone()]
-                }
-            }
-            "W" if ny_isvowel(&v[i - 1]) => vec![v[i - 1].clone()],
-            _ => vec![v[i].clone()],
-        };
+        // Ordered exactly like jellyfish's `match v[i] { .. }` guard chain.
+        let u0: U;
+        let mut u1: Option<U> = None;
+        if v[i].eq_ascii(b'E') && i + 1 < v.len() && v[i + 1].eq_ascii(b'V') {
+            i += 1;
+            u0 = U::from_ascii(b'A');
+            u1 = Some(U::from_ascii(b'F'));
+        } else if v[i].is_vowel() {
+            u0 = U::from_ascii(b'A');
+        } else if v[i].eq_ascii(b'Q') {
+            u0 = U::from_ascii(b'G');
+        } else if v[i].eq_ascii(b'Z') {
+            u0 = U::from_ascii(b'S');
+        } else if v[i].eq_ascii(b'M') {
+            u0 = U::from_ascii(b'N');
+        } else if v[i].eq_ascii(b'K') {
+            u0 = if i + 1 < v.len() && v[i + 1].eq_ascii(b'N') {
+                U::from_ascii(b'N')
+            } else {
+                U::from_ascii(b'C')
+            };
+        } else if v[i].eq_ascii(b'S')
+            && i + 2 < v.len()
+            && v[i + 1].eq_ascii(b'C')
+            && v[i + 2].eq_ascii(b'H')
+        {
+            i += 2;
+            u0 = U::from_ascii(b'S');
+            u1 = Some(U::from_ascii(b'S'));
+        } else if v[i].eq_ascii(b'P') && i + 1 < v.len() && v[i + 1].eq_ascii(b'H') {
+            i += 1;
+            u0 = U::from_ascii(b'F');
+        } else if v[i].eq_ascii(b'H')
+            && (!v[i - 1].is_vowel()
+                || (i + 1 < v.len() && !v[i + 1].is_vowel())
+                || (i + 1 == v.len()))
+        {
+            u0 = if v[i - 1].is_vowel() {
+                U::from_ascii(b'A')
+            } else {
+                v[i - 1].clone()
+            };
+        } else if v[i].eq_ascii(b'W') && v[i - 1].is_vowel() {
+            u0 = v[i - 1].clone();
+        } else {
+            u0 = v[i].clone();
+        }
 
-        if !chars.is_empty() && chars[chars.len() - 1] != key[key.len() - 1] {
-            for c in chars {
-                key.push(c);
+        // Dedup on the group's LAST unit vs key's last; push the whole group if it
+        // differs (jellyfish: `if chars[-1] != key[-1]: key.extend(chars)`).
+        let differs = {
+            let last = u1.as_ref().unwrap_or(&u0);
+            *last != key[key.len() - 1]
+        };
+        if differs {
+            key.push(u0);
+            if let Some(u1) = u1 {
+                key.push(u1);
             }
         }
 
@@ -381,21 +463,50 @@ pub fn nysiis(s: &str) -> String {
     }
 
     // step 5: remove trailing S
-    if key[key.len() - 1] == "S" && key.len() > 1 {
+    if key[key.len() - 1].eq_ascii(b'S') && key.len() > 1 {
         key.pop();
     }
 
     // step 6: replace AY with Y
-    if key.len() >= 2 && key[key.len() - 2] == "A" && key[key.len() - 1] == "Y" {
+    if key.len() >= 2 && key[key.len() - 2].eq_ascii(b'A') && key[key.len() - 1].eq_ascii(b'Y') {
         key.remove(key.len() - 2);
     }
 
     // step 7: remove trailing A
-    if key[key.len() - 1] == "A" && key.len() > 1 {
+    if key[key.len() - 1].eq_ascii(b'A') && key.len() > 1 {
         key.pop();
     }
 
-    key.concat()
+    let mut out = String::with_capacity(key.len());
+    for u in &key {
+        u.push_key(&mut out);
+    }
+    out
+}
+
+/// NYSIIS phonetic encoding, byte-identical to `jellyfish.nysiis`.
+///
+/// ## ASCII fast path
+/// For pure-ASCII input each `char` is its own grapheme cluster, so we skip the
+/// UAX-29 grapheme segmentation ([`graphemes`]) and its per-unit `String`
+/// allocations — the working sequence is a `Vec<char>` fed to [`nysiis_core`]. The
+/// unicode path builds the grapheme `Vec<String>` exactly as jellyfish does and is
+/// the byte-identical reference for accented / combining-mark input. Both call the
+/// same generic core, so there is one NYSIIS implementation, not two.
+pub fn nysiis(s: &str) -> String {
+    if s.is_empty() {
+        return String::new();
+    }
+
+    if s.is_ascii() {
+        let upper = s.to_ascii_uppercase();
+        let v: Vec<char> = upper.chars().collect();
+        nysiis_core(v, &upper)
+    } else {
+        let upper = s.to_uppercase();
+        let v: Vec<String> = graphemes(&upper.chars().collect::<Vec<_>>());
+        nysiis_core(v, &upper)
+    }
 }
 
 // ---------------------------------------------------------------------------
