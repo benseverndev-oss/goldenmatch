@@ -63,6 +63,10 @@ class SyntheticSource:
     duplicate; positives are same-entity (base vs dup), negatives are
     cross-entity within a domain (base vs base). Splits are assigned at the
     ENTITY level so no entity's records ever span two splits.
+
+    Domains are assigned strictly round-robin. The plan's ``domain_weights``
+    param was intentionally dropped for the lean cut (weighting is deferred);
+    whoever wires Task 5's ``sources.yaml`` should not assume that kwarg exists.
     """
 
     license = "CC0-1.0"
@@ -106,9 +110,11 @@ class SyntheticSource:
             base = build_record(domain, self._vocab, random.Random(f"{self.seed}:{eid}:base"))
             # Re-roll the duplicate on the same (advancing) rng until it differs
             # from the base -- a byte-identical "duplicate" is not a corruption
-            # and would collide with its base in record_pools(). The rng keeps
-            # advancing, so this stays deterministic and terminates (every record
-            # has a non-empty corruptible field).
+            # and would collide with its base in record_pools(). Termination is
+            # probabilistically-bounded, not deterministically-bounded: with many
+            # independently-corrupted fields the re-roll succeeds on the first or
+            # second try with overwhelming probability, so in practice it exits
+            # essentially immediately (and stays deterministic per seed).
             dup_rng = random.Random(f"{self.seed}:{eid}:dup")
             dup = corrupt_record(base, strong_id=strong_id, rng=dup_rng, profile=self.profile)
             while dup == base:

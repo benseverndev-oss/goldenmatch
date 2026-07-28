@@ -19,9 +19,10 @@ from generate import SyntheticSource  # noqa: E402
 
 
 def _src(**kw):
-    # n_entities kept generous so per-domain surname collisions (needed by the
-    # hard-negative test) reliably occur under Zipf-weighted census draws.
-    return SyntheticSource(name="synthetic", seed=20260728, n_entities=180,
+    # The hard-negative collision test needs enough per-(domain,split) entities
+    # for a real Zipf-census surname collision; 600 gives 100% headroom across
+    # seeds (vs ~68% at 180, a 1-in-3 flake for any future seed/frac change).
+    return SyntheticSource(name="synthetic", seed=20260728, n_entities=600,
                            profile="light", **kw)
 
 
