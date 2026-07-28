@@ -266,6 +266,11 @@ class IdentityStore:
         # The active psycopg pipeline (Postgres) while inside ``write_pipeline``;
         # ``bulk_copy_barrier`` suspends/reopens it around bulk COPY flushes.
         self._active_pipeline = None
+        # True only inside an engaged ``initial_load_writes`` block (Postgres,
+        # from-empty build): the bulk_* methods then COPY straight into the real
+        # table instead of temp-staging + INSERT..SELECT..ON CONFLICT. Off by
+        # default so every other caller keeps the idempotent upsert path.
+        self._pg_initial_load = False
         # Optional psycopg_pool.ConnectionPool for postgres. When set, methods
         # check out a pooled conn for each call. Default None preserves the
         # legacy per-store single-conn behavior the existing tests rely on.
@@ -642,6 +647,116 @@ class IdentityStore:
     # SQLite path is single-process and the row-by-row upsert_* methods are
     # plenty fast for that scale.
 
+    # The four bulk-written identity tables, in FK parent -> child order
+    # (source_records references identity_nodes). ``initial_load_writes`` toggles
+    # UNLOGGED child-first / LOGGED parent-first so the permanent->unlogged FK
+    # rule is never momentarily violated.
+    _INITIAL_LOAD_TABLES = (
+        "identity_nodes", "source_records", "evidence_edges", "identity_events",
+    )
+    # Plain performance btrees safe to drop for a from-empty bulk load and
+    # rebuild after (sort-based + parallel beats incremental maintenance). The PK
+    # indexes and the evidence_edges UNIQUE constraint are NOT here -- they guard
+    # correctness and stay live. name -> CREATE statement.
+    _INITIAL_LOAD_INDEXES = {
+        "idx_identity_nodes_dataset": "CREATE INDEX idx_identity_nodes_dataset ON identity_nodes(dataset)",
+        "idx_identity_nodes_status":  "CREATE INDEX idx_identity_nodes_status  ON identity_nodes(status)",
+        "idx_source_records_entity":  "CREATE INDEX idx_source_records_entity ON source_records(entity_id)",
+        "idx_source_records_source":  "CREATE INDEX idx_source_records_source ON source_records(source)",
+        "idx_source_records_hash":    "CREATE INDEX idx_source_records_hash   ON source_records(record_hash)",
+        "idx_edges_entity": "CREATE INDEX idx_edges_entity ON evidence_edges(entity_id)",
+        "idx_edges_pair":   "CREATE INDEX idx_edges_pair   ON evidence_edges(record_a_id, record_b_id)",
+        "idx_edges_run":    "CREATE INDEX idx_edges_run    ON evidence_edges(run_name)",
+        "idx_events_entity": "CREATE INDEX idx_events_entity ON identity_events(entity_id)",
+        "idx_events_kind":   "CREATE INDEX idx_events_kind   ON identity_events(kind)",
+        "idx_events_run":    "CREATE INDEX idx_events_run    ON identity_events(run_name)",
+    }
+
+    def _pg_tables_empty(self) -> bool:
+        """True when all four bulk-written identity tables are empty -- the
+        safety gate for the direct-COPY fast path (a from-empty build cannot hit
+        a PK/UNIQUE conflict, so dropping ON CONFLICT is sound)."""
+        for t in self._INITIAL_LOAD_TABLES:
+            if self._conn.execute(f"SELECT EXISTS(SELECT 1 FROM {t})").fetchone()[0]:
+                return False
+        return True
+
+    @contextlib.contextmanager
+    def initial_load_writes(
+        self, *, enabled: bool = True, unlogged: bool = False,
+    ) -> Iterator[None]:
+        """Opt-in initial-load fast path for a from-empty Postgres build.
+
+        Wrap the whole write phase (OUTSIDE ``bulk_writes``). When it engages, the
+        ``bulk_*`` methods COPY straight into the real tables -- no temp staging,
+        no ``INSERT..SELECT``, no ``ON CONFLICT`` probe -- and the plain secondary
+        indexes are dropped up front and rebuilt (parallel, sort-based) on exit.
+        With ``unlogged=True`` the tables are also loaded UNLOGGED (skip WAL) and
+        flipped back with ``SET LOGGED`` at the end.
+
+        Engages ONLY when ``enabled`` AND the backend is Postgres AND all four
+        tables are empty. Otherwise it is a transparent no-op and the normal
+        idempotent upsert path runs, so callers can wrap unconditionally and it is
+        safe on an incremental (non-empty) store. Because it drops ON CONFLICT, it
+        must only be used where conflicts cannot occur -- a from-empty build of
+        brand-new clusters -- which the emptiness gate enforces.
+
+        Durability note for ``unlogged``: an UNLOGGED table is truncated on crash,
+        and the closing ``SET LOGGED`` rewrites+WALs the table (handing back part
+        of the WAL saving). Only enable it when the build is re-runnable from
+        source (the initial from-``raw_union`` build is), or the target is a
+        staging table that gets swapped in.
+        """
+        if not (enabled and self._backend == "postgres" and self._pg_tables_empty()):
+            if enabled and self._backend == "postgres":
+                log.info(
+                    "initial_load_writes: tables not empty, using normal "
+                    "upsert path (fast path skipped)",
+                )
+            yield
+            return
+        conn: Any = self._conn
+        if unlogged:  # child -> parent: never leave a permanent FK to an unlogged table
+            for t in reversed(self._INITIAL_LOAD_TABLES):
+                conn.execute(f"ALTER TABLE {t} SET UNLOGGED")
+        for name in self._INITIAL_LOAD_INDEXES:
+            conn.execute(f"DROP INDEX IF EXISTS {name}")
+        self._pg_initial_load = True
+        try:
+            yield
+        finally:
+            self._pg_initial_load = False
+            # Rebuild parallel + generously; SET LOCAL-style session scope is fine
+            # on this autocommit conn (values persist for the rebuild only matters).
+            conn.execute("SET max_parallel_maintenance_workers = 4")
+            conn.execute("SET maintenance_work_mem = '1GB'")
+            for stmt in self._INITIAL_LOAD_INDEXES.values():
+                conn.execute(stmt)
+            if unlogged:  # parent -> child: nodes durable before records references it
+                for t in self._INITIAL_LOAD_TABLES:
+                    conn.execute(f"ALTER TABLE {t} SET LOGGED")
+            for t in self._INITIAL_LOAD_TABLES:
+                conn.execute(f"ANALYZE {t}")
+
+    def _pg_copy_direct(
+        self, table: str, columns: str, cols: list[str], df: Any,
+    ) -> None:
+        """Initial-load fast path COPY: stream ``df[cols]`` straight into the real
+        ``table`` -- no temp table, no ``INSERT..SELECT``, no ``ON CONFLICT``.
+        Valid ONLY under an engaged ``initial_load_writes`` (empty tables +
+        brand-new clusters). Runs in the current ``bulk_writes`` transaction with
+        the pipeline already suspended by the caller's ``bulk_copy_barrier``."""
+        import polars as pl  # noqa: PLC0415
+        missing = [c for c in cols if c not in df.columns]
+        if missing:
+            df = df.with_columns([pl.lit(None).alias(c) for c in missing])
+        conn: Any = self._conn
+        with conn.cursor() as cur, cur.copy(
+            f"COPY {table} ({columns}) FROM STDIN"
+        ) as copy:
+            for row in df.select(cols).iter_rows():
+                copy.write_row(row)
+
     @contextlib.contextmanager
     def bulk_writes(self) -> Iterator[None]:
         """Run a batch of writes inside ONE transaction (Postgres).
@@ -856,6 +971,14 @@ class IdentityStore:
         missing = [c for c in cols if c not in df.columns]
         if missing:
             df = df.with_columns([pl.lit(None).alias(c) for c in missing])
+        if self._pg_initial_load:
+            self._pg_copy_direct(
+                "identity_nodes",
+                "entity_id, status, merged_into, golden_record, "
+                "confidence, dataset, created_at, updated_at",
+                cols, df,
+            )
+            return
         conn: Any = self._conn
         with conn.transaction(), conn.cursor() as cur:
             cur.execute(
@@ -935,6 +1058,14 @@ class IdentityStore:
             "record_id", "source", "source_pk", "record_hash",
             "entity_id", "payload", "dataset", "first_seen_at", "last_seen_at",
         ]
+        if self._pg_initial_load:
+            self._pg_copy_direct(
+                "source_records",
+                "record_id, source, source_pk, record_hash, entity_id, "
+                "payload, dataset, first_seen_at, last_seen_at",
+                cols, df,
+            )
+            return
         conn: Any = self._conn
         with conn.transaction(), conn.cursor() as cur:
             cur.execute(
@@ -1011,6 +1142,15 @@ class IdentityStore:
             "matchkey_name", "controller_snapshot", "run_name", "dataset",
             "actor", "trust", "recorded_at",
         ]
+        if self._pg_initial_load:
+            self._pg_copy_direct(
+                "evidence_edges",
+                "entity_id, record_a_id, record_b_id, kind, score, "
+                "matchkey_name, controller_snapshot, run_name, dataset, "
+                "actor, trust, recorded_at",
+                cols, df,
+            )
+            return
         conn: Any = self._conn
         with conn.transaction(), conn.cursor() as cur:
             cur.execute(
@@ -1098,6 +1238,14 @@ class IdentityStore:
             "entity_id", "kind", "payload", "run_name", "dataset",
             "actor", "trust", "recorded_at",
         ]
+        if self._pg_initial_load:
+            self._pg_copy_direct(
+                "identity_events",
+                "entity_id, kind, payload, run_name, dataset, "
+                "actor, trust, recorded_at",
+                cols, df,
+            )
+            return
         conn: Any = self._conn
         with conn.transaction(), conn.cursor() as cur:
             cur.execute(

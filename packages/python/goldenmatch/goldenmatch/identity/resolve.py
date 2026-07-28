@@ -70,6 +70,30 @@ def _bulk_fast_path_enabled() -> bool:
     return os.environ.get("GOLDENMATCH_IDENTITY_BULK", "1").strip() != "0"
 
 
+def _initial_load_enabled() -> bool:
+    """Opt-in for the Postgres initial-load fast path (``store.initial_load_writes``).
+
+    ``GOLDENMATCH_IDENTITY_INITIAL_LOAD=1`` lets a from-empty build COPY straight
+    into the real tables (no temp staging / no ON CONFLICT) with the secondary
+    indexes dropped up front and rebuilt after. Default OFF: it is only sound for
+    an initial from-empty build (the store still gates on empty tables), so it
+    must be requested, never assumed. No effect on an incremental store -- the
+    emptiness gate turns it into a no-op there."""
+    return os.environ.get("GOLDENMATCH_IDENTITY_INITIAL_LOAD", "0").strip() == "1"
+
+
+def _initial_load_unlogged() -> bool:
+    """Also load the tables UNLOGGED (skip WAL) under the initial-load fast path.
+
+    ``GOLDENMATCH_IDENTITY_INITIAL_LOAD_UNLOGGED=1``. Default OFF because an
+    UNLOGGED table is truncated on crash and the closing ``SET LOGGED`` rewrites
+    the table -- only safe when the build is re-runnable from source. Ignored
+    unless the initial-load fast path is also enabled and engages."""
+    return os.environ.get(
+        "GOLDENMATCH_IDENTITY_INITIAL_LOAD_UNLOGGED", "0",
+    ).strip() == "1"
+
+
 def _bulk_flush_rows() -> int:
     """Source-record rows accumulated before the bulk fast-path flushes.
 
@@ -786,7 +810,21 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
         bulk_edge_rows.clear()
         bulk_event_rows.clear()
 
-    with store.bulk_writes():
+    # Opt-in initial-load fast path (Postgres, from-empty). ``initial_load_writes``
+    # itself re-checks backend + emptiness and no-ops otherwise, so wrapping is
+    # always safe; the getattr guard keeps older/stub stores working.
+    _ilw = getattr(store, "initial_load_writes", None)
+    _initial = (
+        use_bulk_fast_path
+        and getattr(store, "_backend", None) == "postgres"
+        and _initial_load_enabled()
+    )
+    _initial_ctx = (
+        _ilw(enabled=_initial, unlogged=_initial_load_unlogged())
+        if _ilw is not None
+        else contextlib.nullcontext()
+    )
+    with _initial_ctx, store.bulk_writes():
         with store.write_pipeline():
             # 3. Iterate clusters.
             for cluster_id, info in cluster_items:
