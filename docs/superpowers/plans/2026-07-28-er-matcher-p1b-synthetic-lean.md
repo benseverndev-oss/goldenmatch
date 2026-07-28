@@ -272,8 +272,9 @@ def test_hard_negative_shares_name_but_conflicts_on_strong_id():
 synthetic:
   loader: synthetic
   mechanism: generate
-  domain: multi          # SyntheticSource sets a per-ROW domain internally; this is just the entry's required field
-  weight: 1.0            # illustrative (blend ratios deferred)
+  license: public-domain  # REQUIRED key (load_sources raises without it); Census/SSA/city data are public domain
+  domain: multi           # SyntheticSource sets a per-ROW domain internally; entry-level domain is cosmetic (defaults to "generic")
+  weight: 1.0             # illustrative (blend ratios deferred)
   kwargs:
     n_entities: 3000
     profile: light
