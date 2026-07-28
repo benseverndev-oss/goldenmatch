@@ -1,0 +1,58 @@
+name: bench-identity-14m
+
+# Throwaway benchmark: 14M identity-store write via the merged initial-load fast
+# path, against a co-located Postgres service (no network mask). Triggered by
+# push to the bench branch so it runs from this branch without needing to live
+# on the default branch; workflow_dispatch kept for re-runs with custom sizes.
+on:
+  push:
+    branches: ['bench/identity-14m-fastpath']
+  workflow_dispatch:
+    inputs:
+      n_entities:
+        description: number of entities
+        default: '14000000'
+      chunk:
+        description: entities per chunk
+        default: '1000000'
+      mode:
+        description: fast | fast_unlogged
+        default: 'fast_unlogged'
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
+      - name: 14M initial-load fast-path bench
+        shell: bash
+        run: |
+          cd packages/python/goldenmatch
+          uv run --extra postgres python "$GITHUB_WORKSPACE/scripts/bench_identity_initial_load.py" \
+            "postgresql://postgres:postgres@localhost:5432/postgres" \
+            "${{ inputs.n_entities || '14000000' }}" \
+            "${{ inputs.chunk || '1000000' }}" \
+            "${{ inputs.mode || 'fast_unlogged' }}"
