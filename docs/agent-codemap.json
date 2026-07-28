@@ -6092,6 +6092,8 @@
             "_golden_record_from_members",
             "_golden_record_from_payloads",
             "_hash_payload",
+            "_initial_load_enabled",
+            "_initial_load_unlogged",
             "_match_record_rows",
             "_maybe_warn_singleton_sqlite_ceiling",
             "_node_age",
