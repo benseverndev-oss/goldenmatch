@@ -7,7 +7,7 @@
 // is characterised in the design doc, not here.
 use std::time::Instant;
 
-use goldenmatch_score_core::strsim;
+use goldenfuzz_core as strsim;
 use rapidfuzz::distance::{jaro_winkler as rf_jw, levenshtein as rf_lev};
 use rapidfuzz::fuzz as rf_fuzz;
 
@@ -50,7 +50,7 @@ fn time<F: FnMut() -> f64>(iters: usize, mut f: F) -> f64 {
 }
 
 fn main() {
-    let mut rng: u64 = 0xC0FFEE_1234_5678;
+    let mut rng: u64 = 0xC0FFEE12345678;
     let classes = [("name", 13usize, 200_000usize), ("address", 35, 100_000), ("document", 600, 4_000)];
     println!("{:<10} {:>6} {:>12} {:>12} {:>8}", "class", "len", "goldenfuzz", "rapidfuzz", "ratio");
     println!("{}", "-".repeat(52));

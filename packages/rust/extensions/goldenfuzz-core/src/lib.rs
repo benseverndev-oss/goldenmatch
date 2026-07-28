@@ -132,15 +132,50 @@ fn bv_lowest_set(v: &[u64]) -> Option<usize> {
     None
 }
 
-/// `Peq[c]` = bitmask (one bit per position) of where `c` occurs in `pattern`.
-fn peq_map<T: Eq + Hash>(pattern: &[T]) -> HashMap<&T, Vec<u64>> {
-    let nw = nwords(pattern.len()).max(1);
-    let mut m: HashMap<&T, Vec<u64>> = HashMap::new();
-    for (i, c) in pattern.iter().enumerate() {
-        let e = m.entry(c).or_insert_with(|| vec![0u64; nw]);
-        e[i / 64] |= 1u64 << (i % 64);
+/// Multiword position bitmap: `get(c)` is a length-`nw` limb slice with a bit set
+/// at each position where `c` occurs in the pattern. A Latin-1 pattern uses a flat
+/// stack-of-limbs array indexed by codepoint -- no hashing, no per-char alloc; a
+/// non-Latin-1 pattern (CJK / emoji) falls back to a HashMap. The flat path is
+/// what makes long-string scoring competitive: the HashMap peq for a 600-char
+/// pattern is ~16us (600 char-hashes + ~27 small Vec allocs) vs ~3us flat, and
+/// that build dominated our per-pair document cost. Byte-identical either way.
+enum MwPeq {
+    Flat { masks: Vec<u64>, nw: usize },
+    Hash(HashMap<char, Vec<u64>>),
+}
+
+impl MwPeq {
+    #[inline]
+    fn get<'a>(&'a self, c: char, empty: &'a [u64]) -> &'a [u64] {
+        match self {
+            MwPeq::Flat { masks, nw } => {
+                let ci = c as usize;
+                if ci < 256 {
+                    &masks[ci * nw..ci * nw + nw]
+                } else {
+                    empty
+                }
+            }
+            MwPeq::Hash(map) => map.get(&c).map(Vec::as_slice).unwrap_or(empty),
+        }
     }
-    m
+}
+
+fn peq_multiword(pattern: &[char]) -> MwPeq {
+    let nw = nwords(pattern.len()).max(1);
+    if pattern.iter().all(|&c| (c as u32) < 256) {
+        let mut masks = vec![0u64; 256 * nw];
+        for (i, &c) in pattern.iter().enumerate() {
+            masks[(c as usize) * nw + i / 64] |= 1u64 << (i % 64);
+        }
+        MwPeq::Flat { masks, nw }
+    } else {
+        let mut map: HashMap<char, Vec<u64>> = HashMap::new();
+        for (i, &c) in pattern.iter().enumerate() {
+            map.entry(c).or_insert_with(|| vec![0u64; nw])[i / 64] |= 1u64 << (i % 64);
+        }
+        MwPeq::Hash(map)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -339,16 +374,23 @@ fn jaro_similarity(s1: &[char], s2: &[char]) -> f64 {
         return jaro_similarity_sw(s1, s2, |c: char| sw_get(&peq, c));
     }
 
+    jaro_similarity_mw(s1, s2, &peq_multiword(s1))
+}
+
+/// Multiword Jaro body over a PREPARED peq, so the one-vs-many batch API can
+/// build the query's peq ONCE and reuse it across choices. Caller guarantees
+/// `len1 >= 1`, `len2 >= 1`, and not (`len1 == 1 && len2 == 1`) — the edge cases
+/// `jaro_similarity` handles before dispatching here. Byte-identical to the
+/// inline path it replaced.
+fn jaro_similarity_mw(s1: &[char], s2: &[char], peq: &MwPeq) -> f64 {
+    let len1 = s1.len();
+    let len2 = s2.len();
     // rapidfuzz bound = max(len1, len2) / 2 - 1 (both >= 1 here, so >= 0).
     let bound = std::cmp::max(len1, len2) / 2 - 1;
 
     // Bit-parallel FlaggedChars: bind each TEXT (s2) position to the LOWEST
-    // unflagged PATTERN (s1) position within [j-bound, j+bound] via a masked
-    // pattern-match bitvector + lowest-set-bit (rapidfuzz's `blsi` order),
-    // instead of the O(window) inner scan. Same match/transposition counts ->
-    // byte-identical similarity.
+    // unflagged PATTERN (s1) position within [j-bound, j+bound].
     let nw = nwords(len1);
-    let peq = peq_map(s1);
     let empty = vec![0u64; nw];
     let mut p_flag = vec![0u64; nw]; // matched pattern positions
     let mut t_flag_pos: Vec<usize> = Vec::new(); // matched text positions, ascending
@@ -360,7 +402,7 @@ fn jaro_similarity(s1: &[char], s2: &[char]) -> f64 {
         if lo > hi {
             continue;
         }
-        let pm = peq.get(&cj).unwrap_or(&empty);
+        let pm = peq.get(cj, &empty);
         for i in 0..nw {
             cand[i] = pm[i] & !p_flag[i];
         }
@@ -454,17 +496,22 @@ pub fn jaro_winkler_chars(s1: &[char], s2: &[char]) -> f64 {
 /// PATTERN `a` is packed one bit per position; each text char advances the
 /// vertical-delta vectors `pv`/`mv` with a fixed set of word ops. Integer result
 /// identical to the naive Wagner-Fischer DP and to rapidfuzz (proven in tests).
-pub fn levenshtein_distance<T: Eq + Hash>(a: &[T], b: &[T]) -> usize {
+pub fn levenshtein_distance(a: &[char], b: &[char]) -> usize {
     if a.is_empty() {
         return b.len();
     }
     if b.is_empty() {
         return a.len();
     }
+    levenshtein_distance_mw(a, b, &peq_multiword(a))
+}
+
+/// Multiword Myers body over a PREPARED peq (one-vs-many amortisation). Caller
+/// guarantees `a` and `b` non-empty.
+fn levenshtein_distance_mw(a: &[char], b: &[char], peq: &MwPeq) -> usize {
     let m = a.len();
     let nw = nwords(m);
     let tmask = top_mask(m);
-    let peq = peq_map(a);
     let empty = vec![0u64; nw];
     let top_word = (m - 1) / 64;
     let top_bit = 1u64 << ((m - 1) % 64);
@@ -481,8 +528,8 @@ pub fn levenshtein_distance<T: Eq + Hash>(a: &[T], b: &[T]) -> usize {
     let mut t = vec![0u64; nw];
     let mut t2 = vec![0u64; nw];
 
-    for cb in b {
-        let eq = peq.get(cb).unwrap_or(&empty);
+    for &cb in b {
+        let eq = peq.get(cb, &empty);
         for i in 0..nw {
             xv[i] = eq[i] | mv[i];
             t[i] = eq[i] & pv[i];
@@ -546,14 +593,19 @@ pub fn levenshtein_normalized_similarity(a: &str, b: &str) -> f64 {
 /// `V = (V + (V & Peq[c])) | (V - (V & Peq[c]))`, and the LCS length is the count
 /// of ZERO bits left in `V`. Integer result identical to the naive DP and to
 /// rapidfuzz's LCS kernel (proven in tests, incl. the multiword boundaries).
-fn lcs_length<T: Eq + Hash>(a: &[T], b: &[T]) -> usize {
+fn lcs_length(a: &[char], b: &[char]) -> usize {
     if a.is_empty() || b.is_empty() {
         return 0;
     }
+    lcs_length_mw(a, b, &peq_multiword(a))
+}
+
+/// Multiword Allison-Dix body over a PREPARED peq (one-vs-many amortisation).
+/// Caller guarantees `a` and `b` non-empty.
+fn lcs_length_mw(a: &[char], b: &[char], peq: &MwPeq) -> usize {
     let m = a.len();
     let nw = nwords(m);
     let tmask = top_mask(m);
-    let peq = peq_map(a);
     let empty = vec![0u64; nw];
 
     let mut v = vec![u64::MAX; nw];
@@ -561,8 +613,8 @@ fn lcs_length<T: Eq + Hash>(a: &[T], b: &[T]) -> usize {
     let mut u = vec![0u64; nw];
     let mut add = vec![0u64; nw];
     let mut sub = vec![0u64; nw];
-    for cb in b {
-        let p = peq.get(cb).unwrap_or(&empty);
+    for &cb in b {
+        let p = peq.get(cb, &empty);
         for i in 0..nw {
             u[i] = v[i] & p[i];
         }
@@ -607,6 +659,157 @@ pub fn indel_ratio(a: &str, b: &str) -> f64 {
     };
     let dist = maximum - 2 * lcs;
     1.0 - (dist as f64 / maximum as f64)
+}
+
+// ---------------------------------------------------------------------------
+// One-vs-many: BatchComparator / extract / cdist (amortised query peq)
+// ---------------------------------------------------------------------------
+//
+// The dominant per-pair cost is building the query's position bitmap (~16us for
+// a 600-char HashMap peq, ~3us flat). In a one-vs-many workload (a query vs many
+// choices -- fuzzy dedup, record linkage, autocomplete) that build is pure
+// repeated work. `BatchComparator` builds it ONCE and reuses it across every
+// choice, exactly like rapidfuzz's `process.cdist` / `BatchComparator`. Results
+// are byte-identical to the per-pair scorers (proven in tests).
+
+/// Which normalized-similarity scorer the batch API uses (all on `[0, 1]`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Scorer {
+    /// `jaro_winkler` normalized similarity.
+    JaroWinkler,
+    /// `levenshtein` normalized similarity.
+    Levenshtein,
+    /// `indel` normalized similarity (== `fuzz::ratio`).
+    Indel,
+}
+
+/// How a prepared query scores its choices.
+///
+/// For a `<= 64`-codepoint query the peq build is cheap (~80ns) and the per-pair
+/// path already has a zero-alloc byte tier that beats rapidfuzz, so we just reuse
+/// it (no `Vec<char>` collect per choice). Amortising only pays off for the
+/// EXPENSIVE multiword peq (a long / non-Latin-1 query, ~16us HashMap / ~3us
+/// flat), which we build once and reuse.
+enum Prepared {
+    PerPair(String),
+    Mw { q: Vec<char>, peq: MwPeq },
+}
+
+/// A query prepared for one-vs-many scoring (rapidfuzz's `BatchComparator` /
+/// `cdist`). Byte-identical to the per-pair scorers.
+pub struct BatchComparator {
+    prep: Prepared,
+}
+
+impl BatchComparator {
+    pub fn new(query: &str) -> Self {
+        let qc: Vec<char> = query.chars().collect();
+        let prep = if qc.len() <= SW_MAX {
+            Prepared::PerPair(query.to_string())
+        } else {
+            let peq = peq_multiword(&qc);
+            Prepared::Mw { q: qc, peq }
+        };
+        BatchComparator { prep }
+    }
+
+    pub fn jaro_winkler(&self, choice: &str) -> f64 {
+        match &self.prep {
+            Prepared::PerPair(qs) => jaro_winkler(qs, choice),
+            Prepared::Mw { q, peq } => {
+                let c: Vec<char> = choice.chars().collect();
+                // q.len() > 64, so only the empty-choice edge can fire here.
+                let raw = if c.is_empty() {
+                    0.0
+                } else {
+                    jaro_similarity_mw(q, &c, peq)
+                };
+                jaro_winkler_combine(q, &c, raw)
+            }
+        }
+    }
+
+    pub fn levenshtein(&self, choice: &str) -> f64 {
+        match &self.prep {
+            Prepared::PerPair(qs) => levenshtein_normalized_similarity(qs, choice),
+            Prepared::Mw { q, peq } => {
+                let c: Vec<char> = choice.chars().collect();
+                let maximum = std::cmp::max(q.len(), c.len());
+                let dist = if c.is_empty() {
+                    q.len()
+                } else {
+                    levenshtein_distance_mw(q, &c, peq)
+                };
+                1.0 - (dist as f64 / maximum as f64)
+            }
+        }
+    }
+
+    pub fn indel(&self, choice: &str) -> f64 {
+        match &self.prep {
+            Prepared::PerPair(qs) => indel_ratio(qs, choice),
+            Prepared::Mw { q, peq } => {
+                let c: Vec<char> = choice.chars().collect();
+                let maximum = q.len() + c.len();
+                let lcs = if c.is_empty() {
+                    0
+                } else {
+                    lcs_length_mw(q, &c, peq)
+                };
+                1.0 - ((maximum - 2 * lcs) as f64 / maximum as f64)
+            }
+        }
+    }
+
+    #[inline]
+    pub fn score(&self, choice: &str, scorer: Scorer) -> f64 {
+        match scorer {
+            Scorer::JaroWinkler => self.jaro_winkler(choice),
+            Scorer::Levenshtein => self.levenshtein(choice),
+            Scorer::Indel => self.indel(choice),
+        }
+    }
+}
+
+/// One-vs-many top-k. Scores `query` against each choice with `scorer` (the
+/// query peq is built once), keeps scores `>= score_cutoff`, and returns up to
+/// `limit` `(choice_index, score)` pairs, highest score first (ties broken by
+/// lower index). `limit == 0` means no limit.
+pub fn extract(
+    query: &str,
+    choices: &[&str],
+    scorer: Scorer,
+    score_cutoff: f64,
+    limit: usize,
+) -> Vec<(usize, f64)> {
+    let bc = BatchComparator::new(query);
+    let mut scored: Vec<(usize, f64)> = choices
+        .iter()
+        .enumerate()
+        .map(|(i, &c)| (i, bc.score(c, scorer)))
+        .filter(|&(_, s)| s >= score_cutoff)
+        .collect();
+    scored.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.0.cmp(&b.0))
+    });
+    if limit != 0 && scored.len() > limit {
+        scored.truncate(limit);
+    }
+    scored
+}
+
+/// Full one-vs-many score matrix: `out[i][j]` = `scorer(queries[i], choices[j])`.
+/// Each query's peq is built once and reused across all choices.
+pub fn cdist(queries: &[&str], choices: &[&str], scorer: Scorer) -> Vec<Vec<f64>> {
+    queries
+        .iter()
+        .map(|&q| {
+            let bc = BatchComparator::new(q);
+            choices.iter().map(|&c| bc.score(c, scorer)).collect()
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -782,7 +985,7 @@ mod tests {
         ] {
             check_pair(&mk(la, 0), &mk(lb, 3));
         }
-        let mut rng: u64 = 0xA5C11_0FF1CE;
+        let mut rng: u64 = 0xA5C110FF1CE;
         for _ in 0..30_000 {
             let la = (next(&mut rng) as usize) % 65; // 0..=64: pattern in byte-tier range
             let lb = (next(&mut rng) as usize) % 200; // text may spill past 64
@@ -807,6 +1010,44 @@ mod tests {
             let b: String = cb.into_iter().collect();
             check_pair(&a, &b);
             check_pair(&b, &a); // asymmetric pattern/text roles
+        }
+    }
+
+    #[test]
+    fn batch_matches_per_pair() {
+        // BatchComparator / extract / cdist just amortise the query peq, so every
+        // result must be bit-for-bit identical to the per-pair scorers.
+        let mut rng: u64 = 0xBA7C40FF1CE;
+        for _ in 0..20_000 {
+            let ml = [1usize, 3, 13, 40, 64, 100, 200][(next(&mut rng) as usize) % 7];
+            let q = gen(&mut rng, ml);
+            let c = gen(&mut rng, ml);
+            let bc = BatchComparator::new(&q);
+            assert_eq!(bc.jaro_winkler(&c).to_bits(), jaro_winkler(&q, &c).to_bits());
+            assert_eq!(
+                bc.levenshtein(&c).to_bits(),
+                levenshtein_normalized_similarity(&q, &c).to_bits()
+            );
+            assert_eq!(bc.indel(&c).to_bits(), indel_ratio(&q, &c).to_bits());
+        }
+        // extract: cutoff + top-k + descending order + exact match ranks first.
+        let choices = ["johnathan smith", "jonathan smith", "jon smith", "jane doe", "j smith"];
+        let got = extract("jonathan smith", &choices, Scorer::JaroWinkler, 0.5, 3);
+        assert!(got.len() <= 3 && !got.is_empty());
+        assert_eq!(got[0].0, 1); // the exact match
+        for w in got.windows(2) {
+            assert!(w[0].1 >= w[1].1);
+        }
+        for &(_, s) in &got {
+            assert!(s >= 0.5);
+        }
+        // cdist == per-pair over the full matrix.
+        let qs = ["abc", "café", ""];
+        let mat = cdist(&qs, &choices, Scorer::Indel);
+        for (i, &q) in qs.iter().enumerate() {
+            for (j, &c) in choices.iter().enumerate() {
+                assert_eq!(mat[i][j].to_bits(), indel_ratio(q, c).to_bits());
+            }
         }
     }
 

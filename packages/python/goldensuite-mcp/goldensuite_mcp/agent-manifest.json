@@ -9365,6 +9365,10 @@
       "path": "packages/rust/extensions/goldenflow-duckdb"
     },
     {
+      "name": "goldenfuzz-core",
+      "path": "packages/rust/extensions/goldenfuzz-core"
+    },
+    {
       "name": "goldengraph-cabi",
       "path": "packages/rust/extensions/goldengraph-cabi"
     },
