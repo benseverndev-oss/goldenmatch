@@ -1879,12 +1879,18 @@ class LazyClusterDict(dict):
     a consumer that ignores it pays nothing.
     """
 
-    __slots__ = ("_builder", "_built")
+    __slots__ = ("_builder", "_built", "_count")
 
-    def __init__(self, builder: Any):
+    def __init__(self, builder: Any, count: int | None = None):
         super().__init__()
         self._builder = builder
         self._built = False
+        # Known cluster count (metadata height). Lets len()/bool() answer O(1)
+        # WITHOUT building the dict -- the hot path (bench, stats-only dedupe_df
+        # callers) only ever wants the count, and forcing the full
+        # cluster_frames_to_dict for a `len(res.clusters)` was the flamegraph's
+        # top post-scoring cost. None -> fall back to building (unknown count).
+        self._count = count
 
     def _ensure(self) -> None:
         if not self._built:
@@ -1904,6 +1910,10 @@ class LazyClusterDict(dict):
         return dict.__getitem__(self, key)
 
     def __len__(self):  # also drives bool(self)
+        # O(1) from the known count when not yet built -- the builder produces
+        # exactly one entry per cluster (metadata row), so `len` == `_count`.
+        if not self._built and self._count is not None:
+            return self._count
         self._ensure()
         return dict.__len__(self)
 

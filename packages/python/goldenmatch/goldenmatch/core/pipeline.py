@@ -4133,19 +4133,18 @@ def _run_dedupe_pipeline(
             # cluster -- Python folds over seam columns, byte-identical).
             from goldenmatch.core.frame import to_frame
 
-            _m = to_frame(cluster_frames.metadata)
-            keep = [
-                c
-                for c, n, o in zip(
-                    _m.column("cluster_id").to_list(),
-                    _m.column("size").to_list(),
-                    _m.column("oversized").to_list(),
-                )
-                if n > 1 and not o
-            ]
+            # Columnar filter (no Python loop over 2.64M metadata rows): keep
+            # multi-member (size > 1), non-oversized clusters via seam-native
+            # ops; only the bounded kept-cid + final member_id lists materialize.
+            _m = to_frame(cluster_frames.metadata).with_gt_column(
+                "size", 1, "__multi__"
+            )
+            _kept = _m.filter_mask(_m.column("__multi__")).filter_eq(
+                "oversized", False
+            )
             return (
                 to_frame(cluster_frames.assignments)
-                .filter_in("cluster_id", keep)
+                .filter_in("cluster_id", _kept.column("cluster_id").to_list())
                 .column("member_id")
                 .to_list()
             )
@@ -4164,12 +4163,14 @@ def _run_dedupe_pipeline(
         from goldenmatch.core.frame import to_frame as _tf_d4
 
         _m = _tf_d4(cluster_frames.metadata)
-        _m_sizes = _m.column("size").to_list()
-        _m_over = _m.column("oversized").to_list()
+        # Counts via seam-native aggregates -- stays columnar, nothing crosses to
+        # Python per-row: `oversized` is a bool column (Column.sum() counts True);
+        # `multi` is a derived `size > 1` bool column, summed the same way.
+        _multi = _m.with_gt_column("size", 1, "__multi__").column("__multi__").sum()
         record_metrics({
             "cluster_count": _m.height,
-            "multi_member_cluster_count": sum(1 for n in _m_sizes if n > 1),
-            "oversized_cluster_count": sum(1 for o in _m_over if o),
+            "multi_member_cluster_count": int(_multi or 0),
+            "oversized_cluster_count": int(_m.column("oversized").sum() or 0),
         })
     else:
         record_metrics({
@@ -4714,10 +4715,18 @@ def _run_dedupe_pipeline(
     if cluster_frames is not None:
         from goldenmatch.core.frame import to_frame as _tf_cs
 
-        _sizes = _tf_cs(cluster_frames.metadata).column("size").to_list()
-        _multi_member = sum(1 for s in _sizes if s > 1)
-        _matched_records = sum(s for s in _sizes if s > 1)
+        # Seam-native (columnar, no per-row Python): multi-member count = sum of
+        # the `size > 1` bool column; matched records = sum of `size` over the
+        # multi-member rows. `_n_clusters` (metadata height) feeds the lazy
+        # `results["clusters"]` so `len()` never forces the dict build.
+        _mf = _tf_cs(cluster_frames.metadata).with_gt_column("size", 1, "__multi__")
+        _n_clusters = _mf.height
+        _multi_member = int(_mf.column("__multi__").sum() or 0)
+        _matched_records = int(
+            _mf.filter_mask(_mf.column("__multi__")).column("size").sum() or 0
+        )
     else:
+        _n_clusters = len(clusters)
         _multi_member = sum(1 for c in clusters.values() if c.get("size", 0) > 1)
         _matched_records = sum(
             c.get("size", 0) for c in clusters.values() if c.get("size", 0) > 1
@@ -4743,7 +4752,7 @@ def _run_dedupe_pipeline(
         "clusters": (
             _tc_clusters
             if _tc_clusters is not None
-            else LazyClusterDict(_clusters_dict)
+            else LazyClusterDict(_clusters_dict, count=_n_clusters)
             if cluster_frames is not None
             else _clusters_dict()
         ),
