@@ -10,7 +10,30 @@ import sys
 sys.path.insert(0, os.path.dirname(__file__))
 
 
-from fs_enrich import soft_confidence  # noqa: E402
+from fs_enrich import select_hard_negatives, soft_confidence  # noqa: E402
+
+
+def _cand(a, b, score, gold):  # helper: a scored candidate with its gold label
+    return {"a_id": a, "b_id": b, "score": score, "gold_match": gold}
+
+
+def test_select_keeps_near_threshold_gold_nonmatches_only():
+    cands = [
+        _cand("a", "b", 0.52, False),  # near tau, gold NON-match -> KEEP (hard neg)
+        _cand("c", "d", 0.99, True),  # gold MATCH -> reject (not a negative)
+        _cand("e", "f", 0.05, False),  # far below band -> reject (easy)
+        _cand("g", "h", 0.48, False),  # near tau, gold NON-match -> KEEP
+    ]
+    out = select_hard_negatives(cands, tau=0.5, delta=0.1, cap=10)
+    kept = {(c["a_id"], c["b_id"]) for c in out}
+    assert kept == {("a", "b"), ("g", "h")}
+
+
+def test_select_caps_and_is_deterministic():
+    cands = [_cand(f"a{i}", f"b{i}", 0.5, False) for i in range(20)]
+    out = select_hard_negatives(cands, tau=0.5, delta=0.1, cap=5)
+    assert len(out) == 5
+    assert out == select_hard_negatives(cands, tau=0.5, delta=0.1, cap=5)  # deterministic
 
 
 def test_soft_confidence_monotonic_and_clamped():

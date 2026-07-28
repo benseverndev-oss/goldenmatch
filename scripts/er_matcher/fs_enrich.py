@@ -31,3 +31,22 @@ def soft_confidence(
         # (mid_lo - lo) subtraction, before the multiply ever runs.
         return mid_lo
     return lo + (mid_lo - lo) * frac
+
+
+def select_hard_negatives(
+    scored_candidates: list[dict],
+    *,
+    tau: float = 0.5,
+    delta: float = 0.1,
+    cap: int,
+) -> list[dict]:
+    """Keep candidates whose FS score is within [tau-delta, tau+delta] AND whose gold
+    label is non-match. Sort by closeness to tau (hardest first) for a deterministic
+    cap. Gold label is the truth; FS only selects difficulty."""
+    band = [
+        c
+        for c in scored_candidates
+        if not c["gold_match"] and abs(c["score"] - tau) <= delta
+    ]
+    band.sort(key=lambda c: (abs(c["score"] - tau), c["a_id"], c["b_id"]))
+    return band[:cap]
