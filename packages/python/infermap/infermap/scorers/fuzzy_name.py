@@ -1,7 +1,7 @@
 """Fuzzy name scorer — Jaro-Winkler similarity on normalized field names."""
 from __future__ import annotations
 
-from rapidfuzz.distance import JaroWinkler
+import goldenfuzz
 
 from infermap._native_loader import native_enabled, native_module
 from infermap.types import FieldInfo, ScorerResult
@@ -19,8 +19,11 @@ def _fuzzy_name_score(a: str, b: str) -> float:
 
 
 def _fuzzy_name_score_pure(a: str, b: str) -> float:
-    """Byte-identical reference for ``infermap-core::fuzzy_name_score`` (normalize + JW)."""
-    return JaroWinkler.similarity(_normalize(a), _normalize(b))
+    """Byte-identical reference for ``infermap-core::fuzzy_name_score`` (normalize + JW).
+
+    Uses ``goldenfuzz.jaro_winkler`` (our owned, byte-identical-to-rapidfuzz kernel)
+    rather than rapidfuzz -- same value, no third-party string-metric dependency."""
+    return goldenfuzz.jaro_winkler(_normalize(a), _normalize(b))
 
 
 class FuzzyNameScorer:
