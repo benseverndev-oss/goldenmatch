@@ -19,9 +19,15 @@ def soft_confidence(
     if is_match:
         frac = max((s - tau) / (1.0 - tau), 0.0) if tau < 1.0 else 0.0
         if frac >= 1.0:
+            # Return the exact boundary constant: mid_hi + (hi-mid_hi)*1.0 usually
+            # rounds back to hi, but that's a coincidence of these literals, not a
+            # guarantee -- don't delete this in favor of the interpolation below.
             return hi
         return mid_hi + (hi - mid_hi) * frac
     frac = min(s / tau, 1.0) if tau > 0.0 else 0.0
     if frac >= 1.0:
+        # Return the exact boundary constant; lo + (mid_lo-lo)*1.0 overshoots to
+        # 0.45000000000000007 because the rounding error is baked into the
+        # (mid_lo - lo) subtraction, before the multiply ever runs.
         return mid_lo
     return lo + (mid_lo - lo) * frac

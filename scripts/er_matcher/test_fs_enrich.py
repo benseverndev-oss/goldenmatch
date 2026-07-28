@@ -1,9 +1,16 @@
+"""Tests for FS-score-driven soft confidence targets (honest-yardstick Task 2).
+
+Covers monotonicity, clamping to the hi/lo/mid_hi/mid_lo boundary constants, and
+the never-0/1 invariant -- pure stdlib, box-safe (no torch/scipy/numpy/network)."""
+from __future__ import annotations
+
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from fs_enrich import soft_confidence
+
+from fs_enrich import soft_confidence  # noqa: E402
 
 
 def test_soft_confidence_monotonic_and_clamped():
