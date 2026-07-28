@@ -2027,6 +2027,32 @@ class LazyClusterDict(dict):
         return {k: _copy.deepcopy(v, memo) for k, v in dict.items(self)}
 
 
+def _try_native_group_members(assignments: Any) -> tuple[list[int], list[list[int]]] | None:
+    """Native arrow grouping of the assignments frame (``cluster_id`` ->
+    per-cluster ``member_id`` lists), or ``None`` to fall back to the Python loop
+    (kernel absent / stale wheel without the symbol). Feeds the cluster-dict
+    ``by_cid`` build without a Python ``to_list`` + setdefault over every member.
+    """
+    from goldenmatch.core._native_loader import native_enabled, native_module
+
+    if not native_enabled("clustering"):
+        return None
+    fn = getattr(native_module(), "group_members_by_cluster_arrow", None)
+    if fn is None:  # stale wheel predating the symbol -> Python fallback
+        return None
+
+    def _single_array(col_name: str):
+        # PyArrowType<ArrayData> wants a single pa.Array, not a ChunkedArray.
+        a = assignments.column(col_name).to_arrow()
+        if hasattr(a, "combine_chunks"):  # ChunkedArray -> single-chunk -> Array
+            a = a.combine_chunks()
+        if hasattr(a, "num_chunks"):
+            a = a.chunk(0)
+        return a
+
+    return fn(_single_array("cluster_id"), _single_array("member_id"))
+
+
 def cluster_frames_to_dict(frames: ClusterFrames) -> dict[int, dict]:
     """Adapter: two-frame Phase-2 representation -> legacy
     ``dict[int, dict]`` shape. For migrating consumers during Phase 2b.
@@ -2045,14 +2071,22 @@ def cluster_frames_to_dict(frames: ClusterFrames) -> dict[int, dict]:
     if assignments.height == 0:
         return {}
 
-    # Build member lists by cluster_id from the assignments frame.
-    by_cid: dict[int, list[int]] = {}
-    for cid, mid in zip(
-        assignments.column("cluster_id").to_list(),
-        assignments.column("member_id").to_list(),
-        strict=True,
-    ):
-        by_cid.setdefault(int(cid), []).append(int(mid))
+    # Build member lists by cluster_id. Prefer the native arrow grouping kernel
+    # (zero-copy in; groups every member row in Rust) over the Python to_list +
+    # setdefault loop -- the flamegraph's cold-path cost when a caller
+    # materializes results["clusters"]. Byte-identical (first-appearance cid
+    # order, input-order members); falls back to Python when the kernel is absent.
+    _grouped = _try_native_group_members(assignments)
+    if _grouped is not None:
+        by_cid: dict[int, list[int]] = dict(zip(*_grouped, strict=True))
+    else:
+        by_cid = {}
+        for cid, mid in zip(
+            assignments.column("cluster_id").to_list(),
+            assignments.column("member_id").to_list(),
+            strict=True,
+        ):
+            by_cid.setdefault(int(cid), []).append(int(mid))
 
     # PERF (hotspot round 1): columnar reads + zip instead of per-row dict
     # materialization -- 950K metadata rows allocated 950K dicts and was 35%

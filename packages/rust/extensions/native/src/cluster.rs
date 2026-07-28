@@ -22,6 +22,7 @@ use pyo3::prelude::*;
 // keep the original names (which the pymodule exports to Python).
 use goldenmatch_cluster_core::{
     cluster_confidence as core_cluster_confidence, find,
+    group_members_by_cluster as core_group_members_by_cluster,
     mst_split_components as core_mst_split_components,
     severe_bridge_count as core_severe_bridge_count, ConfidenceResult,
 };
@@ -64,6 +65,23 @@ pub fn severe_bridge_count(members: Vec<i64>, edges: Vec<(i64, i64, f64)>) -> us
 #[pyfunction]
 pub fn cluster_confidence(edges: Vec<(i64, i64, f64)>, size: usize) -> ConfidenceResult {
     core_cluster_confidence(edges, size)
+}
+
+/// Group `member_id`s by `cluster_id` over the ClusterFrames `assignments`
+/// columns (Arrow C-Data i64 arrays, zero-copy in), returning
+/// `(cluster_ids, member_lists)` so `cluster_frames_to_dict` builds `by_cid`
+/// without a Python `to_list` + setdefault loop over every member row.
+/// Byte-identical to the Python grouping (first-appearance cid order, input-order
+/// members -- see the core crate). Assignments are dense int64; a stray null
+/// would read its buffer value, which the caller's null-free contract excludes.
+#[pyfunction]
+pub fn group_members_by_cluster_arrow(
+    cluster_id: PyArrowType<ArrayData>,
+    member_id: PyArrowType<ArrayData>,
+) -> PyResult<(Vec<i64>, Vec<Vec<i64>>)> {
+    let cid = Int64Array::from(cluster_id.0);
+    let mid = Int64Array::from(member_id.0);
+    Ok(core_group_members_by_cluster(cid.values(), mid.values()))
 }
 
 // =============================================================================
