@@ -171,6 +171,44 @@ def evaluate_gate(
     return res
 
 
+# --- zero-shot scorecard (SP3 Task 3) ----------------------------------------
+def build_zeroshot_scorecard(per_benchmark: dict[str, dict]) -> dict:
+    """Build a per-benchmark zero-shot scorecard: F1 + calibration + a SOTA
+    display column, gated ONLY on the F1 floor + calibration (no baseline
+    comparisons -- those are for the measured-run gate, not this display).
+
+    ``per_benchmark`` maps benchmark name -> {"f1", "raw_ece", "calibrated_ece",
+    "n"}. Pure -- composes ``sota_baselines.sota_for`` and the existing
+    ``evaluate_gate`` without modifying either."""
+    from sota_baselines import sota_for
+
+    rows: dict[str, Any] = {}
+    for name, entry in per_benchmark.items():
+        f1 = entry["f1"]
+        raw_ece = entry["raw_ece"]
+        calibrated_ece = entry["calibrated_ece"]
+        n = entry["n"]
+        synthetic_scorecard = {
+            "splits": {"test": {"overall": {"f1": f1, "ece": calibrated_ece}}}
+        }
+        gate = evaluate_gate(
+            synthetic_scorecard,
+            abs_floor=0.65,
+            hosted_boost_f1=None,
+            fs_baseline_f1=None,
+            baseline_f1=None,
+        )
+        rows[name] = {
+            "f1": f1,
+            "raw_ece": raw_ece,
+            "calibrated_ece": calibrated_ece,
+            "n": n,
+            "sota": sota_for(name),
+            "gate": gate,
+        }
+    return rows
+
+
 # --- CLI ---------------------------------------------------------------------
 def _load_splits(data_dir: Path) -> dict[str, list[dict]]:
     splits: dict[str, list[dict]] = {}
