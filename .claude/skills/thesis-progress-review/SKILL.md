@@ -1,6 +1,6 @@
 ---
 name: thesis-progress-review
-description: Review GoldenMatch pull requests added since the previous run, relate them to the project thesis, assess project progress and drift, and advance a local checkpoint only after a complete review.
+description: Review GoldenMatch pull requests added since the previous run, assess project progress and thesis alignment, report only material deltas, and advance a local checkpoint after a complete review.
 argument-hint: "[--lookback-days N]"
 disable-model-invocation: true
 ---
@@ -9,7 +9,15 @@ disable-model-invocation: true
 
 Review every GoldenMatch pull request created since this skill last completed. On the first run, use a rolling four-day lookback unless the user supplied another positive `--lookback-days` value.
 
-The review is analytical, not a list of PR summaries. Explain what the work means for the project thesis, how confidence has changed, where evidence is still indirect, and what phase the project is entering.
+The review is analytical, not a list of PR summaries. Report what changed since the previous run, why it matters, how confidence changed, and what phase the project is entering. Use the governing thesis as the evaluation rubric, not as a repeated preamble.
+
+## Output and side-effect contract
+
+Running this skill is read-only against GitHub and the repository. Apart from the local checkpoint file, do not create or update branches, commits, pull requests, issues, comments, releases, or repository files. Do not publish the generated report into the repository. Repository changes require a separate explicit user request.
+
+Do not include a standalone recap of the governing thesis on routine runs. Read the thesis sources silently and mention a thesis clause only when a reviewed change advances it, contradicts it, exposes drift, or amends it. Stable background that has not changed since the prior run should not be repeated.
+
+Keep the report delta-focused. When the reviewed work is routine, a short report is preferred. Expand only for material regressions, architectural changes, production-readiness evidence, or conflicts between repository claims and implementation.
 
 ## Safety and checkpoint contract
 
@@ -40,7 +48,7 @@ Read the JSON fields:
 
 When `review_item_count` is zero, report that there are no new or materially changed tracked PRs and leave the checkpoint unchanged.
 
-## 2. Re-establish the governing thesis
+## 2. Load the review criteria silently
 
 Read the current versions of these sources before interpreting PRs:
 
@@ -51,19 +59,17 @@ Read the current versions of these sources before interpreting PRs:
 5. `parity/thesis_conformance.yaml`
 6. `README.md`, to detect public-status drift
 
-Distill the thesis into explicit review dimensions:
+Use these review dimensions internally:
 
-- **North Star:** GoldenMatch should be the entity-resolution tool developers reach for by default.
-- **Zero-config floor:** the first run should require no training or tuning and keep approaching expert-tuned quality.
-- **Scale-invariant correctness:** speed, memory, or backend work must preserve the answer from laptop scale through 100M+.
-- **Shared-capability conformance:** where a capability is shared, CLI/library/SQL/MCP/A2A/TypeScript/Python behavior must conform; intentional asymmetry must be explicit and justified.
-- **Advanced, never black-box:** decisions, defaults, refusals, migrations, and model-backed behavior must remain inspectable and auditable.
-- **One product, two engines:** bulk identity compute is Arrow-oriented and Rust-authoritative where practical; durable identity is a transaction-native control plane with deterministic, idempotent, auditable state transitions.
-- **Explicit compute/control seam:** evidence and data cross through a versioned resolution-batch contract with bounded resource behavior.
-- **Conformance v2:** an authoritative owner must be the default route; fixture parity must be supplemented by representative behavioral evidence; deferral premises must be revalidated.
-- **Adoption-first progression:** the roadmap says the primary remaining deficit is external pull, discoverability, time-to-first-success, and outside contribution—not an endless supply of inward architecture projects.
+- the zero-config first-run floor and progress toward expert-tuned quality;
+- scale-invariant correctness;
+- conformant shared capabilities and explicit intentional asymmetry;
+- inspectable defaults, refusals, migrations, and model-backed behavior;
+- distinct compute and control engines joined by an explicit versioned seam;
+- default routing, representative behavioral evidence, and deferral re-validation;
+- adoption-first progression rather than unbounded inward architecture work.
 
-Treat roadmap and conformance claims as repository assertions to verify against PR evidence, not as automatic proof.
+Treat roadmap and conformance claims as repository assertions to verify against PR evidence, not as automatic proof. Do not reproduce this list in the report unless a reviewed PR changes the governing criteria themselves.
 
 ## 3. Inspect every review item
 
@@ -74,7 +80,7 @@ gh pr view <PR_NUMBER> --repo <OWNER/REPO> \
   --json number,title,author,body,state,isDraft,createdAt,updatedAt,mergedAt,closedAt,baseRefName,headRefName,labels,files,additions,deletions,commits,statusCheckRollup,url
 ```
 
-Read the diff when the PR is substantive, changes a thesis-critical surface, makes a performance or conformance claim, is open or failing, has an unclear body, or could duplicate/supersede another PR:
+Read the diff when the PR is substantive, changes a thesis-critical surface, makes a performance or conformance claim, is open or failing, has an unclear body, or could duplicate or supersede another PR:
 
 ```bash
 gh pr diff <PR_NUMBER> --repo <OWNER/REPO>
@@ -92,53 +98,49 @@ At minimum, account for every selected PR in a chronological workstream. Separat
 
 For long PR sequences, review chronologically in coherent workstreams, but retain an auditable PR-number range or index for each workstream.
 
-## 4. Orient the work to the thesis
+## 4. Orient the work
 
-For each workstream, answer:
+For each workstream, determine:
 
-1. Which North Star commitment, two-engine invariant, conformance-v2 test, or roadmap workstream does it advance?
-2. Does it strengthen the shared product contract, clarify deliberate engine/surface divergence, or introduce drift?
-3. What evidence was added: implementation, contract test, migration proof, representative benchmark, operational surface, release, or documentation?
-4. What confidence should change, and why?
-5. What remains unproven, newly risky, or adoption-irrelevant?
+1. Which product commitment, two-engine invariant, conformance-v2 test, or roadmap workstream it affects.
+2. Whether it strengthens the shared product contract, clarifies deliberate engine or surface divergence, or introduces drift.
+3. What evidence was added: implementation, contract test, migration proof, representative benchmark, operational surface, release, or documentation.
+4. What confidence should change, and why.
+5. What remains unproven, newly risky, or adoption-irrelevant.
 
-Assess project progression, not only feature completion. State whether the recent work moves the project through architecture definition, implementation, structural parity, behavioral validation, release hardening, pilot adoption, or production proof. Do not call the product complete merely because the architecture program or conformance ledger is complete.
+Assess project progression, not only feature completion. State whether recent work moves the project through architecture definition, implementation, structural parity, behavioral validation, release hardening, pilot adoption, or production proof. Do not call the product complete merely because the architecture program or conformance ledger is complete.
 
 ## 5. Produce the report
 
-Use this structure:
+Start with a one- or two-sentence verdict describing the most important change in project confidence or phase.
+
+Use this default structure:
 
 ### Review boundary
 
-State the prior checkpoint or first-run cutoff, the first and last reviewed PR, the number of new PRs and resurfaced updates, and the status mix. Mention dependency-only and superseded PRs separately.
+State the prior checkpoint or first-run cutoff, the first and last reviewed PR, the number of new PRs and resurfaced updates, and the status mix. Mention dependency-only and superseded PRs separately. Keep this compact.
 
-### Project thesis
+### What changed and why it matters
 
-Give a compact thesis in your own words and identify its non-negotiable constraints.
-
-### What changed, chronologically
-
-Group PRs into a small number of dated workstreams. For each group, include PR numbers, thesis relationship, shipped/open status, and the meaningful outcome. Avoid one paragraph per trivial PR.
-
-### Thesis scorecard
-
-Assess at least these dimensions: zero-config/default routing, scale-invariant correctness, shared semantics, compute/control separation, explainability, migration/adoption ergonomics, operability, representative evidence, and public-document consistency. Use `strong`, `advancing`, `mixed`, `at risk`, or `not evidenced`, and add a confidence note.
+Group PRs into a small number of chronological workstreams. Include PR numbers, shipped or open status, the meaningful outcome, the relevant alignment or drift, and the evidence quality. Avoid one paragraph per trivial PR.
 
 ### Project progression
 
-Explain the phase transition produced by the reviewed work. Separate the repository's declared milestone state from your independent confidence in real-world readiness and external adoption.
+Explain only the phase transition or confidence change produced by this run. Separate the repository's declared milestone state from independent confidence in real-world readiness and external adoption.
 
-### Risks, contradictions, and gaps
+### Risks and gaps
 
-Call out stale public claims, duplicate abstractions, failed/open work, integration risk, missing adoption evidence, benchmark limitations, or claims not supported by changed code/tests.
+Call out stale public claims, duplicate abstractions, failed or open work, integration risk, missing adoption evidence, benchmark limitations, or claims not supported by changed code or tests.
 
 ### Next best work
 
-Recommend only the few highest-leverage actions implied by the thesis and current phase. Prefer integration, compatibility, pilot, soak, rollback, release, getting-started, case-study, and real-user evidence when architecture gates are already satisfied; do not invent more architecture work without a demonstrated regression.
+Recommend only the few highest-leverage actions implied by the current phase. Prefer integration, compatibility, pilot, soak, rollback, release, getting-started, case-study, and real-user evidence when architecture gates are already satisfied.
 
 ### Checkpoint
 
 State the highest fully reviewed PR, any still-tracked open PRs, and whether the local checkpoint was advanced.
+
+Do not include a `Project thesis` section. Do not restate stable governing principles. An optional compact scorecard may be added only when several review dimensions materially changed during this run.
 
 ## 6. Advance the checkpoint only after completion
 
