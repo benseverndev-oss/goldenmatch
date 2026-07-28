@@ -4,7 +4,9 @@
 // dominates. Build+run: cargo run --release --example bench_batch
 use std::time::Instant;
 
-use goldenfuzz_core::{indel_ratio, jaro_winkler, levenshtein_normalized_similarity, BatchComparator};
+use goldenfuzz_core::{
+    indel_ratio, jaro_winkler, levenshtein_normalized_similarity, BatchComparator,
+};
 use rapidfuzz::distance::{jaro_winkler as rf_jw, levenshtein as rf_lev};
 use rapidfuzz::fuzz as rf_fuzz;
 
@@ -18,7 +20,9 @@ fn next(s: &mut u64) -> u64 {
 
 fn doc(rng: &mut u64, len: usize) -> String {
     const AB: &[u8] = b"abcdefghijklmnop qrstuvwxyz";
-    (0..len).map(|_| AB[(next(rng) as usize) % AB.len()] as char).collect()
+    (0..len)
+        .map(|_| AB[(next(rng) as usize) % AB.len()] as char)
+        .collect()
 }
 
 fn main() {
@@ -28,43 +32,92 @@ fn main() {
         let choices: Vec<String> = (0..n).map(|_| doc(&mut rng, qlen)).collect();
         let cref: Vec<&str> = choices.iter().map(String::as_str).collect();
         println!("\n== {class} (query {qlen} chars vs {n} choices), ns/choice ==");
-        println!("{:<14} {:>12} {:>12} {:>12}", "scorer", "per-pair", "gf-batch", "rf-batch");
+        println!(
+            "{:<14} {:>12} {:>12} {:>12}",
+            "scorer", "per-pair", "gf-batch", "rf-batch"
+        );
 
         // jaro-winkler
-        let t = Instant::now(); let mut acc = 0.0;
-        for c in &cref { acc += jaro_winkler(&query, c); }
+        let t = Instant::now();
+        let mut acc = 0.0;
+        for c in &cref {
+            acc += jaro_winkler(&query, c);
+        }
         let pp = t.elapsed().as_secs_f64() / n as f64 * 1e9;
-        let t = Instant::now(); let bc = BatchComparator::new(&query);
-        for c in &cref { acc += bc.jaro_winkler(c); }
+        let t = Instant::now();
+        let bc = BatchComparator::new(&query);
+        for c in &cref {
+            acc += bc.jaro_winkler(c);
+        }
         let gb = t.elapsed().as_secs_f64() / n as f64 * 1e9;
-        let t = Instant::now(); let rb = rf_jw::BatchComparator::new(query.chars());
-        for c in &cref { acc += rb.normalized_similarity(c.chars()); }
+        let t = Instant::now();
+        let rb = rf_jw::BatchComparator::new(query.chars());
+        for c in &cref {
+            acc += rb.normalized_similarity(c.chars());
+        }
         let rbn = t.elapsed().as_secs_f64() / n as f64 * 1e9;
-        println!("{:<14} {:>10.1}ns {:>10.1}ns {:>10.1}ns  (gf-batch/rf {:.2}x)", "jaro_winkler", pp, gb, rbn, gb / rbn);
+        println!(
+            "{:<14} {:>10.1}ns {:>10.1}ns {:>10.1}ns  (gf-batch/rf {:.2}x)",
+            "jaro_winkler",
+            pp,
+            gb,
+            rbn,
+            gb / rbn
+        );
 
         // levenshtein
         let t = Instant::now();
-        for c in &cref { acc += levenshtein_normalized_similarity(&query, c); }
+        for c in &cref {
+            acc += levenshtein_normalized_similarity(&query, c);
+        }
         let pp = t.elapsed().as_secs_f64() / n as f64 * 1e9;
-        let t = Instant::now(); let bc = BatchComparator::new(&query);
-        for c in &cref { acc += bc.levenshtein(c); }
+        let t = Instant::now();
+        let bc = BatchComparator::new(&query);
+        for c in &cref {
+            acc += bc.levenshtein(c);
+        }
         let gb = t.elapsed().as_secs_f64() / n as f64 * 1e9;
-        let t = Instant::now(); let rb = rf_lev::BatchComparator::new(query.chars());
-        for c in &cref { acc += rb.normalized_similarity(c.chars()); }
+        let t = Instant::now();
+        let rb = rf_lev::BatchComparator::new(query.chars());
+        for c in &cref {
+            acc += rb.normalized_similarity(c.chars());
+        }
         let rbn = t.elapsed().as_secs_f64() / n as f64 * 1e9;
-        println!("{:<14} {:>10.1}ns {:>10.1}ns {:>10.1}ns  (gf-batch/rf {:.2}x)", "levenshtein", pp, gb, rbn, gb / rbn);
+        println!(
+            "{:<14} {:>10.1}ns {:>10.1}ns {:>10.1}ns  (gf-batch/rf {:.2}x)",
+            "levenshtein",
+            pp,
+            gb,
+            rbn,
+            gb / rbn
+        );
 
         // indel
         let t = Instant::now();
-        for c in &cref { acc += indel_ratio(&query, c); }
+        for c in &cref {
+            acc += indel_ratio(&query, c);
+        }
         let pp = t.elapsed().as_secs_f64() / n as f64 * 1e9;
-        let t = Instant::now(); let bc = BatchComparator::new(&query);
-        for c in &cref { acc += bc.indel(c); }
+        let t = Instant::now();
+        let bc = BatchComparator::new(&query);
+        for c in &cref {
+            acc += bc.indel(c);
+        }
         let gb = t.elapsed().as_secs_f64() / n as f64 * 1e9;
-        let t = Instant::now(); let rb = rf_fuzz::RatioBatchComparator::new(query.chars());
-        for c in &cref { acc += rb.similarity(c.chars()); }
+        let t = Instant::now();
+        let rb = rf_fuzz::RatioBatchComparator::new(query.chars());
+        for c in &cref {
+            acc += rb.similarity(c.chars());
+        }
         let rbn = t.elapsed().as_secs_f64() / n as f64 * 1e9;
-        println!("{:<14} {:>10.1}ns {:>10.1}ns {:>10.1}ns  (gf-batch/rf {:.2}x)", "indel/ratio", pp, gb, rbn, gb / rbn);
+        println!(
+            "{:<14} {:>10.1}ns {:>10.1}ns {:>10.1}ns  (gf-batch/rf {:.2}x)",
+            "indel/ratio",
+            pp,
+            gb,
+            rbn,
+            gb / rbn
+        );
 
         std::hint::black_box(acc);
     }

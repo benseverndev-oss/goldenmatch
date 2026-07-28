@@ -22,7 +22,9 @@
 //! only with the `rapidfuzz` dev-dependency) asserts `f64::to_bits` equality
 //! against the crate over a large randomized + adversarial corpus.
 
+use std::collections::BTreeSet;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::hash::Hash;
 
 // ---------------------------------------------------------------------------
@@ -114,7 +116,11 @@ fn bv_clear_below(v: &mut [u64], lo: usize) {
 fn bv_clear_above(v: &mut [u64], hi: usize) {
     let w = hi / 64;
     let r = hi % 64;
-    let keep = if r == 63 { u64::MAX } else { (1u64 << (r + 1)) - 1 };
+    let keep = if r == 63 {
+        u64::MAX
+    } else {
+        (1u64 << (r + 1)) - 1
+    };
     if w < v.len() {
         v[w] &= keep;
     }
@@ -185,7 +191,12 @@ fn peq_multiword(pattern: &[char]) -> MwPeq {
 /// rapidfuzz `jaro::calculate_similarity`: `transposition/=2` then
 /// `(m/p_len + m/t_len + (m-t)/m) / 3` — exact operation order preserved.
 #[inline]
-fn jaro_calculate_similarity(p_len: usize, t_len: usize, common: usize, mut transposition: usize) -> f64 {
+fn jaro_calculate_similarity(
+    p_len: usize,
+    t_len: usize,
+    common: usize,
+    mut transposition: usize,
+) -> f64 {
     transposition /= 2;
     let mut sim: f64 = 0.0;
     sim += common as f64 / p_len as f64;
@@ -865,6 +876,441 @@ pub fn damerau_levenshtein_distance<T: Eq + Hash + Copy>(a: &[T], b: &[T]) -> us
     d[at(la + 1, lb + 1)]
 }
 
+// ---------------------------------------------------------------------------
+// fuzz::* composite scorers  (rapidfuzz `fuzz` module, byte-identical)
+// ---------------------------------------------------------------------------
+//
+// Faithful ports of rapidfuzz's PURE-PYTHON reference (`rapidfuzz/fuzz_py.py`
+// + `distance/Indel_py.py`), all returning a float in [0, 100]. The rapidfuzz
+// Rust crate 0.5.0 only exposes `fuzz::ratio`, so these are proven byte-for-byte
+// against the Python `rapidfuzz.fuzz.*` oracle (the `emit_fuzz_corpus` test dumps
+// a large deterministic corpus that `scripts/check_fuzz_parity.py` cross-checks).
+//
+// The internal `*_cut` variants thread rapidfuzz's `score_cutoff` EXACTLY as the
+// reference does (WRatio bumps `score_cutoff = max(sc, end_ratio) / SCALE` before
+// each sub-call, which can early-return 0 and change the final `max`). The public
+// entry points pass `score_cutoff = 0.0`, which is behaviorally identical to the
+// reference's `None` (a threshold of 0 never zeroes a non-negative score).
+
+/// rapidfuzz's tokenizer whitespace test, matching the SHIPPED `rapidfuzz.fuzz`
+/// (its C++ `common::is_space<CharT>`). This is WIDTH-DEPENDENT and does NOT
+/// match Python `str.split()`: rapidfuzz picks the smallest integer element type
+/// holding a string's max codepoint (uint8 for all-Latin1, uint16/uint32
+/// otherwise), and `is_space` for the 8-bit type EXCLUDES `0x85` (NEL) and `0xA0`
+/// (NBSP) even though they fit in a byte. So an all-Latin1 string does NOT split
+/// on NEL/NBSP, while any string containing a codepoint > 0xFF does (matching the
+/// pure-Python `str.split()` there). This is DECISIVE per-string (a narrow s1
+/// keeps its NBSP regardless of a wide s2 — verified against the C++ default).
+/// `0x1C..=0x1F` (info separators) split in both widths. All other cases verified
+/// char-by-char over the Python whitespace set + `0x180E`/`0x200B`/`0xFEFF`.
+#[inline]
+fn is_rf_whitespace(c: char, wide: bool) -> bool {
+    let cp = c as u32;
+    if matches!(cp, 0x09..=0x0D | 0x1C..=0x1F | 0x20) {
+        return true;
+    }
+    // NEL/NBSP + the Unicode space separators: only for a "wide" (any codepoint
+    // > 0xFF) string. (The 0x1680.. separators are themselves > 0xFF, so they can
+    // only appear in a wide string anyway; the load-bearing gate is NEL/NBSP.)
+    wide && matches!(
+        cp,
+        0x85 | 0xA0 | 0x1680 | 0x2000..=0x200A | 0x2028 | 0x2029 | 0x202F | 0x205F | 0x3000
+    )
+}
+
+/// rapidfuzz's `_split_sequence` on a string (its C++ tokenizer): split on runs
+/// of whitespace (see `is_rf_whitespace`), drop empty tokens. Preserves order
+/// and duplicates (the `token_sort` / list path). The whitespace set is chosen
+/// per string from its own max codepoint (uint8 vs wider).
+fn split_tokens(s: &str) -> Vec<String> {
+    let wide = s.chars().any(|c| c as u32 > 0xFF);
+    let mut out: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    for c in s.chars() {
+        if is_rf_whitespace(c, wide) {
+            if !cur.is_empty() {
+                out.push(std::mem::take(&mut cur));
+            }
+        } else {
+            cur.push(c);
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// `_join_splitted_sequence`: single-space join (`" ".join(tokens)`); empty -> "".
+#[inline]
+fn join_tokens(tokens: &[String]) -> String {
+    tokens.join(" ")
+}
+
+/// Codepoint length of `" ".join(tokens)` without building the string
+/// (`len(_join_splitted_sequence(intersect))`, order-independent).
+#[inline]
+fn joined_len_refs(v: &[&String]) -> usize {
+    if v.is_empty() {
+        0
+    } else {
+        v.iter().map(|s| s.chars().count()).sum::<usize>() + v.len() - 1
+    }
+}
+
+/// Indel normalized similarity on `[0, 1]` for codepoint slices (== `fuzz.ratio`
+/// / 100). `maximum == 0 -> 1.0` (both empty). Byte-identical to `indel_ratio`.
+#[inline]
+fn indel_sim01_chars(a: &[char], b: &[char]) -> f64 {
+    let maximum = a.len() + b.len();
+    if maximum == 0 {
+        return 1.0;
+    }
+    let lcs = lcs_length(a, b);
+    let dist = maximum - 2 * lcs;
+    1.0 - (dist as f64 / maximum as f64)
+}
+
+/// Indel edit distance `len1 + len2 - 2*lcs` for codepoint slices.
+#[inline]
+fn indel_distance_chars(a: &[char], b: &[char]) -> usize {
+    let lcs = lcs_length(a, b);
+    a.len() + b.len() - 2 * lcs
+}
+
+/// `_norm_distance(dist, lensum, score_cutoff)`: `100 - 100*dist/lensum`
+/// (`lensum == 0 -> 100`), zeroed below `score_cutoff`. Operation order matches
+/// the reference (`100 - 100 * dist / lensum`, left-associative).
+#[inline]
+fn norm_distance(dist: usize, lensum: usize, score_cutoff: f64) -> f64 {
+    let score = if lensum != 0 {
+        100.0 - 100.0 * (dist as f64) / (lensum as f64)
+    } else {
+        100.0
+    };
+    if score >= score_cutoff {
+        score
+    } else {
+        0.0
+    }
+}
+
+/// `ratio` on codepoint slices with a `score_cutoff` in `[0, 100]`. The reference
+/// divides the cutoff by 100 and gates `norm_sim >= score_cutoff/100` before the
+/// `* 100` scale-up.
+#[inline]
+fn ratio_cut(a: &[char], b: &[char], score_cutoff: f64) -> f64 {
+    let sim01 = indel_sim01_chars(a, b);
+    if sim01 >= score_cutoff / 100.0 {
+        sim01 * 100.0
+    } else {
+        0.0
+    }
+}
+
+/// `_partial_ratio_impl` (short-needle path): slides `s1` (the shorter string)
+/// across `s2` and returns the best `fuzz.ratio` in `[0, 100]`. Assumes
+/// `s1.len() <= s2.len()`. Replicates the three window loops, the
+/// `s2[...] in set(s1)` guards, the running `score_cutoff`, and the exact-match
+/// early return EXACTLY.
+fn partial_ratio_impl(s1: &[char], s2: &[char], mut cutoff_frac: f64) -> f64 {
+    let len1 = s1.len();
+    let len2 = s2.len();
+    // Empty needle: every window guard fails (set(s1) is empty) -> 0.0. (Also
+    // sidesteps the reference's Python-negative-index `s2[i+len1-1]` when len1==0.)
+    if len1 == 0 {
+        return 0.0;
+    }
+    let s1_set: HashSet<char> = s1.iter().copied().collect();
+    let mut best = 0.0_f64; // best sim01 seen (fraction)
+
+    // Returns true on an exact-match early exit (score forced to 100).
+    macro_rules! consider {
+        ($window:expr) => {{
+            let sim = indel_sim01_chars(s1, $window);
+            let ls = if sim >= cutoff_frac { sim } else { 0.0 };
+            if ls > best {
+                best = ls;
+                cutoff_frac = ls;
+                if ls == 1.0 {
+                    return 100.0;
+                }
+            }
+        }};
+    }
+
+    // loop 1: windows s2[0..i], i in 1..len1  (guard: s2[i-1] in set(s1))
+    for i in 1..len1 {
+        if !s1_set.contains(&s2[i - 1]) {
+            continue;
+        }
+        consider!(&s2[0..i]);
+    }
+    // loop 2: windows s2[i..i+len1], i in 0..len2-len1  (guard: s2[i+len1-1])
+    for i in 0..(len2 - len1) {
+        if !s1_set.contains(&s2[i + len1 - 1]) {
+            continue;
+        }
+        consider!(&s2[i..i + len1]);
+    }
+    // loop 3: windows s2[i..len2], i in len2-len1..len2  (guard: s2[i])
+    for i in (len2 - len1)..len2 {
+        if !s1_set.contains(&s2[i]) {
+            continue;
+        }
+        consider!(&s2[i..len2]);
+    }
+    best * 100.0
+}
+
+/// `partial_ratio` / `partial_ratio_alignment` score on codepoint slices, in
+/// `[0, 100]`. Runs `_partial_ratio_impl` on the shorter-in-longer, adds the
+/// `len1 == len2` swapped re-run, and applies the outer `score < score_cutoff ->
+/// None (0)` gate.
+fn partial_ratio_cut(s1: &[char], s2: &[char], score_cutoff: f64) -> f64 {
+    // Both empty -> ScoreAlignment(100.0), returned before the cutoff gate.
+    if s1.is_empty() && s2.is_empty() {
+        return 100.0;
+    }
+    let len1 = s1.len();
+    let len2 = s2.len();
+    let (shorter, longer) = if len1 <= len2 { (s1, s2) } else { (s2, s1) };
+
+    let mut res_score = partial_ratio_impl(shorter, longer, score_cutoff / 100.0);
+    if res_score != 100.0 && len1 == len2 {
+        let sc2 = f64::max(score_cutoff, res_score);
+        let res2 = partial_ratio_impl(longer, shorter, sc2 / 100.0);
+        if res2 > res_score {
+            res_score = res2;
+        }
+    }
+    if res_score < score_cutoff {
+        return 0.0;
+    }
+    res_score
+}
+
+/// `token_sort_ratio`: sort the token LIST (dups kept), join, `ratio`.
+fn token_sort_ratio_cut(s1: &str, s2: &str, score_cutoff: f64) -> f64 {
+    let mut t1 = split_tokens(s1);
+    t1.sort();
+    let mut t2 = split_tokens(s2);
+    t2.sort();
+    let j1: Vec<char> = join_tokens(&t1).chars().collect();
+    let j2: Vec<char> = join_tokens(&t2).chars().collect();
+    ratio_cut(&j1, &j2, score_cutoff)
+}
+
+/// `token_set_ratio`: the intersect/diff formula, EXACTLY as `fuzz_py.py`.
+fn token_set_ratio_cut(s1: &str, s2: &str, score_cutoff: f64) -> f64 {
+    let a: BTreeSet<String> = split_tokens(s1).into_iter().collect();
+    let b: BTreeSet<String> = split_tokens(s2).into_iter().collect();
+    if a.is_empty() || b.is_empty() {
+        return 0.0;
+    }
+    let inter: Vec<&String> = a.intersection(&b).collect();
+    let diff_ab: Vec<String> = a.difference(&b).cloned().collect(); // BTreeSet -> sorted
+    let diff_ba: Vec<String> = b.difference(&a).cloned().collect();
+    // one sentence is part of the other one
+    if !inter.is_empty() && (diff_ab.is_empty() || diff_ba.is_empty()) {
+        return 100.0;
+    }
+
+    let diff_ab_joined = join_tokens(&diff_ab);
+    let diff_ba_joined = join_tokens(&diff_ba);
+    let ab_len = diff_ab_joined.chars().count();
+    let ba_len = diff_ba_joined.chars().count();
+    let sect_len = joined_len_refs(&inter);
+    let sect_flag = usize::from(sect_len != 0);
+
+    let sect_ab_len = sect_len + sect_flag + ab_len;
+    let sect_ba_len = sect_len + sect_flag + ba_len;
+    let lensum = sect_ab_len + sect_ba_len;
+
+    let mut result = 0.0_f64;
+    let cutoff_distance = (lensum as f64 * (1.0 - score_cutoff / 100.0)).ceil();
+    let dab: Vec<char> = diff_ab_joined.chars().collect();
+    let dba: Vec<char> = diff_ba_joined.chars().collect();
+    let dist = indel_distance_chars(&dab, &dba);
+    if (dist as f64) <= cutoff_distance {
+        result = norm_distance(dist, lensum, score_cutoff);
+    }
+
+    // exit early since the other ratios are 0
+    if sect_len == 0 {
+        return result;
+    }
+
+    let sect_ab_dist = sect_flag + ab_len;
+    let sect_ab_ratio = norm_distance(sect_ab_dist, sect_len + sect_ab_len, score_cutoff);
+    let sect_ba_dist = sect_flag + ba_len;
+    let sect_ba_ratio = norm_distance(sect_ba_dist, sect_len + sect_ba_len, score_cutoff);
+
+    result.max(sect_ab_ratio).max(sect_ba_ratio)
+}
+
+/// `token_ratio` = `max(token_set_ratio, token_sort_ratio)`.
+fn token_ratio_cut(s1: &str, s2: &str, score_cutoff: f64) -> f64 {
+    f64::max(
+        token_set_ratio_cut(s1, s2, score_cutoff),
+        token_sort_ratio_cut(s1, s2, score_cutoff),
+    )
+}
+
+/// `partial_token_sort_ratio`: sort the token LIST, join, `partial_ratio`.
+fn partial_token_sort_ratio_cut(s1: &str, s2: &str, score_cutoff: f64) -> f64 {
+    let mut t1 = split_tokens(s1);
+    t1.sort();
+    let mut t2 = split_tokens(s2);
+    t2.sort();
+    let j1: Vec<char> = join_tokens(&t1).chars().collect();
+    let j2: Vec<char> = join_tokens(&t2).chars().collect();
+    partial_ratio_cut(&j1, &j2, score_cutoff)
+}
+
+/// `partial_token_set_ratio`: common-word early-100, else `partial_ratio` of the
+/// sorted-unique diffs.
+fn partial_token_set_ratio_cut(s1: &str, s2: &str, score_cutoff: f64) -> f64 {
+    let a: BTreeSet<String> = split_tokens(s1).into_iter().collect();
+    let b: BTreeSet<String> = split_tokens(s2).into_iter().collect();
+    if a.is_empty() || b.is_empty() {
+        return 0.0;
+    }
+    if a.intersection(&b).next().is_some() {
+        return 100.0;
+    }
+    let diff_ab: Vec<String> = a.difference(&b).cloned().collect();
+    let diff_ba: Vec<String> = b.difference(&a).cloned().collect();
+    let j1: Vec<char> = join_tokens(&diff_ab).chars().collect();
+    let j2: Vec<char> = join_tokens(&diff_ba).chars().collect();
+    partial_ratio_cut(&j1, &j2, score_cutoff)
+}
+
+/// `partial_token_ratio` = max of the sorted-list partial ratio and (unless the
+/// diffs equal the whole token lists) the sorted-diff partial ratio, threading
+/// `score_cutoff = max(cutoff, result)` between the two.
+fn partial_token_ratio_cut(s1: &str, s2: &str, score_cutoff: f64) -> f64 {
+    let list_a = split_tokens(s1);
+    let list_b = split_tokens(s2);
+    let a: BTreeSet<String> = list_a.iter().cloned().collect();
+    let b: BTreeSet<String> = list_b.iter().cloned().collect();
+    if a.intersection(&b).next().is_some() {
+        return 100.0;
+    }
+    let diff_ab: Vec<String> = a.difference(&b).cloned().collect();
+    let diff_ba: Vec<String> = b.difference(&a).cloned().collect();
+
+    let mut sorted_a = list_a.clone();
+    sorted_a.sort();
+    let mut sorted_b = list_b.clone();
+    sorted_b.sort();
+    let ja: Vec<char> = join_tokens(&sorted_a).chars().collect();
+    let jb: Vec<char> = join_tokens(&sorted_b).chars().collect();
+    let result = partial_ratio_cut(&ja, &jb, score_cutoff);
+
+    // do not calculate the same partial_ratio twice
+    if list_a.len() == diff_ab.len() && list_b.len() == diff_ba.len() {
+        return result;
+    }
+    let cutoff2 = f64::max(score_cutoff, result);
+    let jda: Vec<char> = join_tokens(&diff_ab).chars().collect();
+    let jdb: Vec<char> = join_tokens(&diff_ba).chars().collect();
+    result.max(partial_ratio_cut(&jda, &jdb, cutoff2))
+}
+
+// ---- Public fuzz entry points (score_cutoff = 0, == reference `None`) --------
+
+/// `fuzz.ratio` in `[0, 100]` (Indel normalized similarity * 100).
+pub fn ratio(a: &str, b: &str) -> f64 {
+    indel_ratio(a, b) * 100.0
+}
+
+/// `fuzz.partial_ratio` in `[0, 100]`.
+pub fn partial_ratio(a: &str, b: &str) -> f64 {
+    let s1: Vec<char> = a.chars().collect();
+    let s2: Vec<char> = b.chars().collect();
+    partial_ratio_cut(&s1, &s2, 0.0)
+}
+
+/// `fuzz.token_sort_ratio` in `[0, 100]`.
+pub fn token_sort_ratio(a: &str, b: &str) -> f64 {
+    token_sort_ratio_cut(a, b, 0.0)
+}
+
+/// `fuzz.token_set_ratio` in `[0, 100]`.
+pub fn token_set_ratio(a: &str, b: &str) -> f64 {
+    token_set_ratio_cut(a, b, 0.0)
+}
+
+/// `fuzz.token_ratio` = `max(token_set_ratio, token_sort_ratio)`.
+pub fn token_ratio(a: &str, b: &str) -> f64 {
+    token_ratio_cut(a, b, 0.0)
+}
+
+/// `fuzz.partial_token_sort_ratio` in `[0, 100]`.
+pub fn partial_token_sort_ratio(a: &str, b: &str) -> f64 {
+    partial_token_sort_ratio_cut(a, b, 0.0)
+}
+
+/// `fuzz.partial_token_set_ratio` in `[0, 100]`.
+pub fn partial_token_set_ratio(a: &str, b: &str) -> f64 {
+    partial_token_set_ratio_cut(a, b, 0.0)
+}
+
+/// `fuzz.partial_token_ratio` in `[0, 100]`.
+pub fn partial_token_ratio(a: &str, b: &str) -> f64 {
+    partial_token_ratio_cut(a, b, 0.0)
+}
+
+/// `fuzz.WRatio` — the composite weighted ratio in `[0, 100]`. Empty input -> 0.
+pub fn w_ratio(a: &str, b: &str) -> f64 {
+    // in FuzzyWuzzy this returns 0 -- keep parity (rapidfuzz issue #110).
+    if a.is_empty() || b.is_empty() {
+        return 0.0;
+    }
+    const UNBASE_SCALE: f64 = 0.95;
+    let s1: Vec<char> = a.chars().collect();
+    let s2: Vec<char> = b.chars().collect();
+    let len1 = s1.len();
+    let len2 = s2.len();
+    let len_ratio = if len1 > len2 {
+        len1 as f64 / len2 as f64
+    } else {
+        len2 as f64 / len1 as f64
+    };
+
+    let mut score_cutoff = 0.0_f64;
+    let end_ratio = ratio_cut(&s1, &s2, score_cutoff);
+    if len_ratio < 1.5 {
+        score_cutoff = f64::max(score_cutoff, end_ratio) / UNBASE_SCALE;
+        return f64::max(
+            end_ratio,
+            token_ratio_cut(a, b, score_cutoff) * UNBASE_SCALE,
+        );
+    }
+
+    let partial_scale = if len_ratio <= 8.0 { 0.9 } else { 0.6 };
+    score_cutoff = f64::max(score_cutoff, end_ratio) / partial_scale;
+    let end_ratio = f64::max(
+        end_ratio,
+        partial_ratio_cut(&s1, &s2, score_cutoff) * partial_scale,
+    );
+
+    score_cutoff = f64::max(score_cutoff, end_ratio) / UNBASE_SCALE;
+    f64::max(
+        end_ratio,
+        partial_token_ratio_cut(a, b, score_cutoff) * UNBASE_SCALE * partial_scale,
+    )
+}
+
+/// `fuzz.QRatio` = `ratio`, except two empty (or one-empty) strings return 0.
+pub fn q_ratio(a: &str, b: &str) -> f64 {
+    if a.is_empty() || b.is_empty() {
+        return 0.0;
+    }
+    indel_ratio(a, b) * 100.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -922,10 +1368,19 @@ mod tests {
         let mut rng: u64 = 0xF00D_CAFE_1234_5678;
         // Directed edge cases first.
         let edge = [
-            ("", ""), ("a", ""), ("", "a"), ("a", "a"), ("a", "b"),
-            ("ab", "ba"), ("abc", "acb"), ("martha", "marhta"),
-            ("dwayne", "duane"), ("dixon", "dicksonx"), ("aabbcc", "abcabc"),
-            ("2026-07-26", "2026-07-25"), ("caaba", "aabac"),
+            ("", ""),
+            ("a", ""),
+            ("", "a"),
+            ("a", "a"),
+            ("a", "b"),
+            ("ab", "ba"),
+            ("abc", "acb"),
+            ("martha", "marhta"),
+            ("dwayne", "duane"),
+            ("dixon", "dicksonx"),
+            ("aabbcc", "abcabc"),
+            ("2026-07-26", "2026-07-25"),
+            ("caaba", "aabac"),
         ];
         for (a, b) in edge {
             check_pair(a, b);
@@ -961,7 +1416,14 @@ mod tests {
             check_pair(&a, &b);
         }
         // Non-Latin-1 (codepoint >= 256) forces sw_peq -> None -> multiword.
-        let uni = ["日本語abc", "Ωμέγα x", "naïve 日", "abc日def", "Ω", "café日"];
+        let uni = [
+            "日本語abc",
+            "Ωμέγα x",
+            "naïve 日",
+            "abc日def",
+            "Ω",
+            "café日",
+        ];
         for a in uni {
             for b in uni {
                 check_pair(a, b);
@@ -980,8 +1442,18 @@ mod tests {
             (0..len).map(|i| AB[(i + off) % AB.len()]).collect()
         };
         for &(la, lb) in &[
-            (0usize, 0usize), (0, 5), (5, 0), (1, 1), (1, 9), (9, 1),
-            (2, 2), (2, 200), (64, 64), (64, 200), (65, 3), (66, 66),
+            (0usize, 0usize),
+            (0, 5),
+            (5, 0),
+            (1, 1),
+            (1, 9),
+            (9, 1),
+            (2, 2),
+            (2, 200),
+            (64, 64),
+            (64, 200),
+            (65, 3),
+            (66, 66),
         ] {
             check_pair(&mk(la, 0), &mk(lb, 3));
         }
@@ -989,8 +1461,12 @@ mod tests {
         for _ in 0..30_000 {
             let la = (next(&mut rng) as usize) % 65; // 0..=64: pattern in byte-tier range
             let lb = (next(&mut rng) as usize) % 200; // text may spill past 64
-            let a: String = (0..la).map(|_| AB[(next(&mut rng) as usize) % AB.len()]).collect();
-            let b: String = (0..lb).map(|_| AB[(next(&mut rng) as usize) % AB.len()]).collect();
+            let a: String = (0..la)
+                .map(|_| AB[(next(&mut rng) as usize) % AB.len()])
+                .collect();
+            let b: String = (0..lb)
+                .map(|_| AB[(next(&mut rng) as usize) % AB.len()])
+                .collect();
             assert!(a.is_ascii() && b.is_ascii());
             check_pair(&a, &b);
         }
@@ -1023,7 +1499,10 @@ mod tests {
             let q = gen(&mut rng, ml);
             let c = gen(&mut rng, ml);
             let bc = BatchComparator::new(&q);
-            assert_eq!(bc.jaro_winkler(&c).to_bits(), jaro_winkler(&q, &c).to_bits());
+            assert_eq!(
+                bc.jaro_winkler(&c).to_bits(),
+                jaro_winkler(&q, &c).to_bits()
+            );
             assert_eq!(
                 bc.levenshtein(&c).to_bits(),
                 levenshtein_normalized_similarity(&q, &c).to_bits()
@@ -1031,7 +1510,13 @@ mod tests {
             assert_eq!(bc.indel(&c).to_bits(), indel_ratio(&q, &c).to_bits());
         }
         // extract: cutoff + top-k + descending order + exact match ranks first.
-        let choices = ["johnathan smith", "jonathan smith", "jon smith", "jane doe", "j smith"];
+        let choices = [
+            "johnathan smith",
+            "jonathan smith",
+            "jon smith",
+            "jane doe",
+            "j smith",
+        ];
         let got = extract("jonathan smith", &choices, Scorer::JaroWinkler, 0.5, 3);
         assert!(got.len() <= 3 && !got.is_empty());
         assert_eq!(got[0].0, 1); // the exact match
@@ -1049,6 +1534,339 @@ mod tests {
                 assert_eq!(mat[i][j].to_bits(), indel_ratio(q, c).to_bits());
             }
         }
+    }
+
+    // ---- fuzz::* composite scorers: directed + emitted-corpus parity ----------
+    //
+    // The rapidfuzz Rust crate 0.5.0 exposes only `fuzz::ratio`, so the composite
+    // family (WRatio / token_* / partial_*) is proven against the Python
+    // `rapidfuzz.fuzz.*` oracle: `emit_fuzz_corpus` writes a large deterministic
+    // corpus + our results to `target/goldenfuzz_fuzz_corpus.jsonl`, which
+    // `scripts/check_fuzz_parity.py` cross-checks (equality within 1e-9).
+
+    #[test]
+    fn ratio_matches_crate_fuzz_scaled() {
+        // `fuzz::ratio` IS in the crate -> a cheap in-Rust oracle for the *100 scale.
+        let mut rng: u64 = 0x1234_ABCD_9876;
+        for _ in 0..5_000 {
+            let ml = [1usize, 3, 8, 20][(next(&mut rng) as usize) % 4];
+            let a = gen(&mut rng, ml);
+            let b = gen(&mut rng, ml);
+            let mine = ratio(&a, &b);
+            // The rapidfuzz CRATE's `fuzz::ratio` is [0,1]; Python's is *100.
+            let theirs = rf_fuzz::ratio(a.chars(), b.chars()) * 100.0;
+            assert_bits("ratio*100", &a, &b, mine, theirs);
+            // QRatio == ratio for non-empty, 0 for empty.
+            let q = q_ratio(&a, &b);
+            if a.is_empty() || b.is_empty() {
+                assert_eq!(q, 0.0);
+            } else {
+                assert_eq!(q.to_bits(), mine.to_bits());
+            }
+        }
+    }
+
+    #[test]
+    fn fuzz_directed_identities() {
+        // Exact-match / subset identities are float-exact (100.0) in the reference.
+        assert_eq!(
+            token_sort_ratio("fuzzy wuzzy was a bear", "wuzzy fuzzy was a bear"),
+            100.0
+        );
+        assert_eq!(
+            token_set_ratio("fuzzy was a bear", "fuzzy fuzzy was a bear"),
+            100.0
+        );
+        assert_eq!(
+            token_set_ratio("fuzzy was a bear but not a dog", "fuzzy was a bear"),
+            100.0
+        );
+        assert_eq!(token_ratio("a b c", "c b a"), 100.0);
+        // ratio identities
+        assert_eq!(ratio("", ""), 100.0);
+        assert_eq!(q_ratio("", ""), 0.0);
+        assert_eq!(q_ratio("abc", ""), 0.0);
+        assert_eq!(ratio("abc", "abc"), 100.0);
+        assert_eq!(w_ratio("", "abc"), 0.0);
+        assert_eq!(w_ratio("abc", "abc"), 100.0);
+        assert_eq!(partial_ratio("", ""), 100.0);
+        assert_eq!(partial_ratio("abc", "abc"), 100.0);
+        // rapidfuzz splits 0x1c..0x1f (info separators) in both widths.
+        assert_eq!(split_tokens("a\u{1c}b\tc  d"), vec!["a", "b", "c", "d"]);
+        assert_eq!(token_sort_ratio("b a", "a\u{1c}b"), 100.0);
+        // WIDTH-DEPENDENT NBSP: an all-Latin1 string does NOT split on NBSP
+        // (matches C++ `is_space<uint8>`), so "a\u{a0}b" stays one token; a
+        // string with a codepoint > 0xFF DOES split on NBSP.
+        assert_eq!(split_tokens("a\u{a0}b"), vec!["a\u{a0}b"]);
+        assert_eq!(split_tokens("\u{4e00}\u{a0}b"), vec!["\u{4e00}", "b"]);
+        assert_eq!(split_tokens("a\u{85}b"), vec!["a\u{85}b"]);
+    }
+
+    // Deterministic corpus spanning every required category. Returns >5000 pairs.
+    fn fuzz_corpus() -> Vec<(String, String)> {
+        const TOKS: &[&str] = &[
+            "john",
+            "jon",
+            "jonathan",
+            "smith",
+            "smyth",
+            "acme",
+            "corp",
+            "corporation",
+            "inc",
+            "ltd",
+            "the",
+            "of",
+            "and",
+            "a",
+            "bear",
+            "fuzzy",
+            "wuzzy",
+            "was",
+            "dog",
+            "cat",
+            "not",
+            "but",
+            "café",
+            "naïve",
+            "日本",
+            "東京",
+            "Ωμέγα",
+            "müller",
+            "strasse",
+            "o'brien",
+            "mary",
+            "anne",
+            "van",
+            "der",
+            "berg",
+            "123",
+            "2026",
+            "x",
+            "ab",
+            "abc",
+            "abcd",
+            "z",
+        ];
+        const WS: &[&str] = &[" ", "  ", "\t", " \u{1c} ", "\n", "   ", " \u{a0}"];
+        let mut rng: u64 = 0x00C0_FFEE_1234_5678;
+        let mut out: Vec<(String, String)> = Vec::new();
+        let tok = |rng: &mut u64| TOKS[(next(rng) as usize) % TOKS.len()];
+        let ws = |rng: &mut u64| WS[(next(rng) as usize) % WS.len()];
+        let phrase = |rng: &mut u64, k: usize| -> Vec<String> {
+            (0..k).map(|_| tok(rng).to_string()).collect()
+        };
+        let join = |rng: &mut u64, ts: &[String]| -> String {
+            let mut s = String::new();
+            for (i, t) in ts.iter().enumerate() {
+                if i > 0 {
+                    s.push_str(ws(rng));
+                }
+                s.push_str(t);
+            }
+            s
+        };
+
+        // Directed edge cases.
+        for &(a, b) in &[
+            ("", ""),
+            ("a", ""),
+            ("", "a"),
+            ("a", "a"),
+            ("abc", "abc"),
+            ("this is a test", "this is a test!"),
+            ("fuzzy wuzzy was a bear", "wuzzy fuzzy was a bear"),
+            ("fuzzy was a bear", "fuzzy fuzzy was a bear"),
+            (
+                "fuzzy was a bear but not a dog",
+                "fuzzy was a bear but not a cat",
+            ),
+            ("fuzzy was a bear but not a dog", "fuzzy was a bear"),
+            ("a certain string", "cetain"),
+            ("jonathan smith", "jon smith"),
+            ("dixon", "dicksonx"),
+            ("   ", "       "),
+            ("a\u{1c}b c", "c b a"),
+            ("café", "cafe"),
+            ("Ωμέγα 日本", "日本 Ωμέγα"),
+            ("mary anne smith", "smith mary anne"),
+        ] {
+            out.push((a.to_string(), b.to_string()));
+        }
+
+        for _ in 0..6500 {
+            let cat = (next(&mut rng) as usize) % 12;
+            let (s1, s2) = match cat {
+                0 => {
+                    // single tokens
+                    (tok(&mut rng).to_string(), tok(&mut rng).to_string())
+                }
+                1 => {
+                    // multi-token phrases (2..6 tokens each)
+                    let k1 = 2 + (next(&mut rng) as usize) % 5;
+                    let k2 = 2 + (next(&mut rng) as usize) % 5;
+                    let p1 = phrase(&mut rng, k1);
+                    let p2 = phrase(&mut rng, k2);
+                    (join(&mut rng, &p1), join(&mut rng, &p2))
+                }
+                2 => {
+                    // identical
+                    let k = 1 + (next(&mut rng) as usize) % 5;
+                    let p = phrase(&mut rng, k);
+                    let s = join(&mut rng, &p);
+                    (s.clone(), s)
+                }
+                3 => {
+                    // shuffled tokens (same set, reordered) -> token_sort/set 100
+                    let k = 2 + (next(&mut rng) as usize) % 5;
+                    let mut p = phrase(&mut rng, k);
+                    let s1 = join(&mut rng, &p);
+                    // rotate
+                    p.rotate_left(1 + (next(&mut rng) as usize) % k);
+                    (s1, join(&mut rng, &p))
+                }
+                4 => {
+                    // subset: s2 is a subset of s1's tokens
+                    let k = 3 + (next(&mut rng) as usize) % 4;
+                    let p = phrase(&mut rng, k);
+                    let take = 1 + (next(&mut rng) as usize) % k;
+                    let sub: Vec<String> = p.iter().take(take).cloned().collect();
+                    (join(&mut rng, &p), join(&mut rng, &sub))
+                }
+                5 => {
+                    // length ratio > 8: token repeated many times
+                    let t = tok(&mut rng).to_string();
+                    let n = 10 + (next(&mut rng) as usize) % 8;
+                    let big: Vec<String> = std::iter::repeat_n(t.clone(), n).collect();
+                    (t, join(&mut rng, &big))
+                }
+                6 => {
+                    // length ratio 1.5..8
+                    let k = 1 + (next(&mut rng) as usize) % 2;
+                    let p = phrase(&mut rng, k);
+                    let s1 = join(&mut rng, &p);
+                    let reps = 2 + (next(&mut rng) as usize) % 3;
+                    let mut big = Vec::new();
+                    for _ in 0..reps {
+                        big.extend(p.iter().cloned());
+                    }
+                    (s1, join(&mut rng, &big))
+                }
+                7 => {
+                    // length ratio < 1.5 (tiny edit)
+                    let k = 1 + (next(&mut rng) as usize) % 4;
+                    let p = phrase(&mut rng, k);
+                    let s1 = join(&mut rng, &p);
+                    let mut s2 = s1.clone();
+                    if (next(&mut rng) & 1) == 0 {
+                        s2.push('x');
+                    } else if !s2.is_empty() {
+                        s2.pop();
+                    }
+                    (s1, s2)
+                }
+                8 => {
+                    // repeated tokens within a phrase
+                    let t = tok(&mut rng).to_string();
+                    let u = tok(&mut rng).to_string();
+                    let p1 = vec![t.clone(), t.clone(), u.clone()];
+                    let p2 = vec![t.clone(), u.clone(), u.clone()];
+                    (join(&mut rng, &p1), join(&mut rng, &p2))
+                }
+                9 => {
+                    // unicode-heavy
+                    let uni = ["café", "naïve", "日本", "東京", "Ωμέγα", "müller"];
+                    let a = uni[(next(&mut rng) as usize) % uni.len()];
+                    let b = uni[(next(&mut rng) as usize) % uni.len()];
+                    let w1 = ws(&mut rng);
+                    let t1 = tok(&mut rng);
+                    let t2 = tok(&mut rng);
+                    let w2 = ws(&mut rng);
+                    (format!("{a}{w1}{t1}"), format!("{t2}{w2}{b}"))
+                }
+                10 => {
+                    // one empty
+                    let p = phrase(&mut rng, 3);
+                    let s = join(&mut rng, &p);
+                    if (next(&mut rng) & 1) == 0 {
+                        (String::new(), s)
+                    } else {
+                        (s, String::new())
+                    }
+                }
+                _ => {
+                    // char-level edits on a single token
+                    let t = tok(&mut rng);
+                    let mut cs: Vec<char> = t.chars().collect();
+                    if !cs.is_empty() {
+                        let i = (next(&mut rng) as usize) % cs.len();
+                        cs[i] = TOKS[(next(&mut rng) as usize) % 8].chars().next().unwrap();
+                    }
+                    (t.to_string(), cs.into_iter().collect())
+                }
+            };
+            out.push((s1, s2));
+        }
+        out
+    }
+
+    fn json_escape(s: &str) -> String {
+        let mut out = String::from("\"");
+        for c in s.chars() {
+            match c {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+                c => out.push(c),
+            }
+        }
+        out.push('"');
+        out
+    }
+
+    #[test]
+    fn emit_fuzz_corpus() {
+        // Dump the corpus + our fuzz.* results as JSONL for the Python oracle
+        // cross-check (scripts/check_fuzz_parity.py). Full-precision floats via
+        // Display (shortest round-trippable) so Python recovers exact bits.
+        let corpus = fuzz_corpus();
+        let mut buf = String::new();
+        for (a, b) in &corpus {
+            let scores = [
+                ratio(a, b),
+                partial_ratio(a, b),
+                token_sort_ratio(a, b),
+                token_set_ratio(a, b),
+                token_ratio(a, b),
+                partial_token_sort_ratio(a, b),
+                partial_token_set_ratio(a, b),
+                partial_token_ratio(a, b),
+                w_ratio(a, b),
+                q_ratio(a, b),
+            ];
+            // sanity: all in [0, 100]
+            for s in scores {
+                assert!(
+                    (0.0..=100.0).contains(&s),
+                    "out of range {s} for ({a:?},{b:?})"
+                );
+            }
+            buf.push_str(&format!(
+                "{{\"s1\":{},\"s2\":{},\"ratio\":{},\"partial_ratio\":{},\"token_sort_ratio\":{},\"token_set_ratio\":{},\"token_ratio\":{},\"partial_token_sort_ratio\":{},\"partial_token_set_ratio\":{},\"partial_token_ratio\":{},\"WRatio\":{},\"QRatio\":{}}}\n",
+                json_escape(a), json_escape(b),
+                scores[0], scores[1], scores[2], scores[3], scores[4],
+                scores[5], scores[6], scores[7], scores[8], scores[9],
+            ));
+        }
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("goldenfuzz_fuzz_corpus.jsonl");
+        std::fs::write(&path, buf).unwrap();
+        assert!(corpus.len() >= 5000, "corpus too small: {}", corpus.len());
+        eprintln!("emitted {} pairs to {}", corpus.len(), path.display());
     }
 
     fn check_pair(a: &str, b: &str) {
