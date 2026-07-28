@@ -156,6 +156,20 @@ jobs:
         working-directory: packages/rust/extensions/goldenfuzz-core
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        # --allow-dirty is unnecessary (clean checkout); a duplicate version is a
-        # benign error on re-run, so don't fail the release on it.
-        run: cargo publish || echo "::warning::cargo publish returned non-zero (likely version already on crates.io)"
+        # Tolerate ONLY the idempotent "this version is already on crates.io" case
+        # (safe re-run of a release). Any other non-zero -- auth, unverified email,
+        # metadata, network -- is a real failure and MUST fail the job loudly. The
+        # old `cargo publish || echo warning` swallowed a genuine 400 (unverified
+        # email) and showed green; never disguise a real failure as success again.
+        run: |
+          set +e
+          out=$(cargo publish 2>&1); rc=$?
+          echo "$out"
+          if [ "$rc" -ne 0 ]; then
+            if echo "$out" | grep -qiE "already (uploaded|exists)"; then
+              echo "::warning::goldenfuzz-core version already on crates.io -- idempotent re-run, treating as success"
+            else
+              echo "::error::cargo publish failed for a non-idempotent reason (see log above)"
+              exit "$rc"
+            fi
+          fi

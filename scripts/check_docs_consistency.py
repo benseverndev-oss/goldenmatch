@@ -497,10 +497,7 @@ _PEPY_RE = re.compile(r"pepy\.tech/projects\?q=(?P<q>[A-Za-z0-9+._-]+)")
 # GitHub Release (not a PyPI/npm distribution -- no pypistats download API), so
 # like goldenmatch-pg it has a publish workflow but is excluded from the download
 # badge totals on purpose.
-# goldenfuzz has publish-goldenfuzz.yml but has not cut its first PyPI release
-# yet (pypistats 404s until then); move it into PYPI_PACKAGES + the README
-# pepy.tech ?q= list once published, same as the goldenmatch-hnsw note above.
-_PYPI_PUBLISH_BADGE_EXCEPTIONS = {"goldenmatch-pg", "goldenmatch-hnsw", "infermap-native", "er-matcher", "goldenfuzz"}
+_PYPI_PUBLISH_BADGE_EXCEPTIONS = {"goldenmatch-pg", "goldenmatch-hnsw", "infermap-native", "er-matcher"}
 
 
 def check_aggregate_badges(res: Result) -> None:

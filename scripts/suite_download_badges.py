@@ -30,6 +30,10 @@ PYPI_PACKAGES = [
     "infermap",
     "goldencheck-types",
     "goldensuite-mcp",
+    # Standalone fuzzy-string product (our rapidfuzz replacement, byte-identical
+    # Rust kernel). Published via publish-goldenfuzz.yml; its crates.io twin is
+    # goldenfuzz-core. A distinct PyPI distribution, counted like the rest.
+    "goldenfuzz",
     # One-line meta-package (whole suite + native, on by default). A distinct PyPI
     # distribution whose downloads partially overlap its component packages --
     # counted here for the same reason as the *-native extras below.
