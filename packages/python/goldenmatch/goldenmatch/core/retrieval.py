@@ -134,3 +134,107 @@ def retrieve_similar_records(
         record = {k2: v2 for k2, v2 in rows[pos].items() if not k2.startswith("__")}
         out.append(RetrievedRecord(row_id=row_ids[pos], score=float(score), record=record))
     return out
+
+
+_FUZZY_SCORERS = ("jaro_winkler", "levenshtein", "indel")
+
+
+def _fuzzy_extract(
+    query: str, values: list[str], scorer: str, cutoff: float, limit: int
+) -> list[tuple[int, float]]:
+    """One-vs-many top-k lexical ranking of ``values`` against ``query``.
+
+    Prefers the ``goldenfuzz`` wheel (native, builds the query bitmap once and
+    reuses it across every value -- see ``goldenfuzz.extract``). Falls back to the
+    vendored pure-Python ``core.strsim`` when the wheel is absent; the two are
+    byte-identical (both are the ``goldenfuzz-core`` math), so the ranking is the
+    same either way -- the wheel is just faster.
+    """
+    try:
+        import goldenfuzz  # optional: pip install goldenfuzz
+
+        return goldenfuzz.extract(query, values, scorer=scorer, score_cutoff=cutoff, limit=limit)
+    except ImportError:
+        from goldenmatch.core import strsim
+
+        fn = {
+            "jaro_winkler": strsim.jaro_winkler_normalized_similarity,
+            "levenshtein": strsim.levenshtein_normalized_similarity,
+            "indel": strsim.indel_normalized_similarity,
+        }[scorer]
+        scored = [(i, fn(query, v)) for i, v in enumerate(values)]
+        scored = [(i, s) for (i, s) in scored if s >= cutoff]
+        scored.sort(key=lambda t: (-t[1], t[0]))
+        return scored[:limit] if limit else scored
+
+
+def retrieve_similar_fuzzy(
+    df: pl.DataFrame,
+    query: str,
+    column: str,
+    *,
+    k: int = 20,
+    scorer: str = "jaro_winkler",
+    threshold: float = 0.0,
+    filters: dict[str, Any] | None = None,
+) -> list[RetrievedRecord]:
+    """Lexical (fuzzy-string) sibling of :func:`retrieve_similar_records`.
+
+    Ranks the records in ``df`` by fuzzy similarity of ``column`` to ``query`` --
+    typos, abbreviations, near-duplicates -- with NO embeddings and NO
+    torch/cloud dependency. Complements the semantic path: use this when the
+    signal is lexical (names, addresses, SKUs) rather than meaning.
+
+    Powered by ``goldenfuzz`` (byte-identical to rapidfuzz; the query bitmap is
+    built once and reused across the corpus), with a pure-Python fallback.
+
+    Args:
+        df/query/column/k/threshold/filters: as in
+            :func:`retrieve_similar_records`, but ``threshold`` is a
+            normalized-similarity cutoff in ``[0, 1]``.
+        scorer: one of ``jaro_winkler`` | ``levenshtein`` | ``indel``.
+
+    Returns:
+        ``list[RetrievedRecord]`` ranked highest-similarity first.
+
+    Raises:
+        ValueError: if ``column`` is not in ``df`` or ``scorer`` is unknown.
+    """
+    if column not in df.columns:
+        raise ValueError(
+            f"retrieve_similar_fuzzy: column {column!r} not in dataframe (have {df.columns})"
+        )
+    if scorer not in _FUZZY_SCORERS:
+        raise ValueError(f"retrieve_similar_fuzzy: scorer must be one of {_FUZZY_SCORERS}, got {scorer!r}")
+    if not query or df.is_empty():
+        return []
+
+    work = df
+    if filters:
+        cond: pl.Expr | None = None
+        for col, val in filters.items():
+            if col not in work.columns:
+                return []
+            pred = pl.col(col) == val
+            cond = pred if cond is None else (cond & pred)
+        if cond is not None:
+            work = work.filter(cond)
+    if work.is_empty():
+        return []
+
+    values = ["" if v is None else str(v) for v in work[column].to_list()]
+    ranked = _fuzzy_extract(str(query), values, scorer, threshold, k)
+
+    if "__row_id__" in work.columns:
+        row_ids = [int(r) for r in work["__row_id__"].to_list()]
+    else:
+        row_ids = list(range(work.height))
+    rows = work.to_dicts()
+
+    out: list[RetrievedRecord] = []
+    for pos, score in ranked:
+        if pos < 0 or pos >= work.height:
+            continue
+        record = {k2: v2 for k2, v2 in rows[pos].items() if not k2.startswith("__")}
+        out.append(RetrievedRecord(row_id=row_ids[pos], score=float(score), record=record))
+    return out

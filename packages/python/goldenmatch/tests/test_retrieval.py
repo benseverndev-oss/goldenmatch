@@ -120,3 +120,65 @@ def test_result_as_dict_serializable():
     res = retrieve_similar_records(_corpus(), "green apple tart bake", "title")
     blob = json.dumps([r.as_dict() for r in res])
     assert "row_id" in blob and "score" in blob
+
+
+# --- fuzzy (lexical) retrieval, powered by goldenfuzz with a pure-Python fallback
+
+
+def test_retrieve_similar_fuzzy_ranks_lexically():
+    import polars as pl
+    from goldenmatch.core.retrieval import retrieve_similar_fuzzy
+
+    df = pl.DataFrame(
+        {
+            "name": ["Jonathan Smith", "Jon Smyth", "Jane Doe", "J. Smith", "Johnathan Smithe"],
+            "city": ["NYC", "NYC", "LA", "NYC", "SF"],
+        }
+    )
+    res = retrieve_similar_fuzzy(df, "Jonathan Smith", "name", k=3, scorer="jaro_winkler")
+    assert [r.record["name"] for r in res][:1] == ["Jonathan Smith"]  # exact match first
+    assert res[0].score == 1.0
+    assert all(res[i].score >= res[i + 1].score for i in range(len(res) - 1))  # descending
+    assert len(res) <= 3
+
+    # metadata pre-filter + threshold
+    nyc = retrieve_similar_fuzzy(
+        df, "Jonathan Smith", "name", k=5, scorer="jaro_winkler", filters={"city": "NYC"}, threshold=0.7
+    )
+    assert {r.record["city"] for r in nyc} == {"NYC"}
+    assert all(r.score >= 0.7 for r in nyc)
+
+
+def test_retrieve_similar_fuzzy_fallback_matches_goldenfuzz():
+    # The pure-Python fallback must rank bit-identically to the goldenfuzz wheel
+    # (both are the goldenfuzz-core math).
+    import builtins
+
+    from goldenmatch.core.retrieval import _fuzzy_extract
+
+    vals = ["Jonathan Smith", "Jon Smyth", "Jane Doe", "J. Smith", "Johnathan Smithe"]
+    goldenfuzz = pytest.importorskip("goldenfuzz")
+    native = goldenfuzz.extract("Jonathan Smith", vals, scorer="jaro_winkler", score_cutoff=0.0, limit=0)
+
+    real_import = builtins.__import__
+
+    def _no_goldenfuzz(name, *a, **k):
+        if name == "goldenfuzz":
+            raise ImportError
+        return real_import(name, *a, **k)
+
+    builtins.__import__ = _no_goldenfuzz
+    try:
+        fallback = _fuzzy_extract("Jonathan Smith", vals, "jaro_winkler", 0.0, 0)
+    finally:
+        builtins.__import__ = real_import
+
+    assert native == fallback  # same indices AND same float bits
+
+
+def test_retrieve_similar_fuzzy_bad_scorer():
+    import polars as pl
+    from goldenmatch.core.retrieval import retrieve_similar_fuzzy
+
+    with pytest.raises(ValueError):
+        retrieve_similar_fuzzy(pl.DataFrame({"n": ["a"]}), "a", "n", scorer="nope")

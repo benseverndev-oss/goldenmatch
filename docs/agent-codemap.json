@@ -4170,10 +4170,13 @@
           "purpose": "Semantic retrieval -- find records similar to a query string (#1089).",
           "defines": [
             "RetrievedRecord",
+            "_fuzzy_extract",
+            "retrieve_similar_fuzzy",
             "retrieve_similar_records"
           ],
           "imports": [
             "goldenmatch._polars_lazy",
+            "goldenmatch.core",
             "goldenmatch.core.ann_blocker",
             "goldenmatch.core.embedder"
           ]

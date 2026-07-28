@@ -1,0 +1,36 @@
+# goldenfuzz — rapidfuzz-compatible fuzzy-string scorers, shipped as a maturin/
+# abi3 wheel that wraps the pyo3-free `goldenfuzz-core` Rust crate. Byte-identical
+# to rapidfuzz on jaro-winkler / levenshtein / indel, faster on short strings,
+# plus one-vs-many `extract` / `cdist` / `BatchComparator`.
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "goldenfuzz"
+version = "0.1.0"
+description = "Fast, byte-identical-to-rapidfuzz fuzzy-string scorers (jaro-winkler / levenshtein / indel) + one-vs-many extract/cdist"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Ben Severn", email = "ben@bensevern.dev" }]
+keywords = ["fuzzy", "string-matching", "levenshtein", "jaro-winkler", "rapidfuzz", "record-linkage"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3 :: Only",
+    "License :: OSI Approved :: MIT License",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Text Processing :: General",
+]
+
+[project.urls]
+Homepage = "https://github.com/benseverndev-oss/goldenmatch"
+Repository = "https://github.com/benseverndev-oss/goldenmatch"
+
+[tool.maturin]
+# Mixed layout: the thin Python wrapper lives in python/goldenfuzz/; the compiled
+# abi3 ext lands at goldenfuzz/_goldenfuzz (pymodule `_goldenfuzz`, so the last
+# path component matches and no Rust rename is needed).
+python-source = "python"
+module-name = "goldenfuzz._goldenfuzz"
