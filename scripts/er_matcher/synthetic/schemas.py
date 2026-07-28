@@ -29,14 +29,14 @@ _JOB_TITLES = (
 
 @dataclass(frozen=True)
 class Domain:
-    fields: list[str]
+    fields: tuple[str, ...]
     strong_id: str
     name_field: str
 
 
 DOMAINS: dict[str, Domain] = {
     "crm_contact": Domain(
-        fields=[
+        fields=(
             "first",
             "last",
             "email",
@@ -47,17 +47,17 @@ DOMAINS: dict[str, Domain] = {
             "city",
             "state",
             "zip",
-        ],
+        ),
         strong_id="email",
         name_field="last",
     ),
     "organization": Domain(
-        fields=["legal_name", "dba", "website_domain", "ein", "address"],
+        fields=("legal_name", "dba", "website_domain", "ein", "address"),
         strong_id="ein",
         name_field="legal_name",
     ),
     "business": Domain(
-        fields=["name", "email", "phone", "city", "state", "website"],
+        fields=("name", "email", "phone", "city", "state", "website"),
         strong_id="website",
         name_field="name",
     ),
@@ -80,7 +80,7 @@ def _digits(rng, n: int) -> str:
 
 def _build_crm_contact(vocab, rng) -> dict:
     first, last = vocab.sample_person_name(rng)
-    company_surname, _ = vocab.sample_person_name(rng)
+    company_surname = vocab.sample_surname(rng)
     company = _company_name(company_surname, rng)
     slug = _slugify(company)
     addr = vocab.sample_address(rng)
@@ -99,7 +99,7 @@ def _build_crm_contact(vocab, rng) -> dict:
 
 
 def _build_organization(vocab, rng) -> dict:
-    surname, _ = vocab.sample_person_name(rng)
+    surname = vocab.sample_surname(rng)
     legal_name = _company_name(surname, rng)
     slug = _slugify(legal_name)
     addr = vocab.sample_address(rng)
@@ -114,7 +114,7 @@ def _build_organization(vocab, rng) -> dict:
 
 
 def _build_business(vocab, rng) -> dict:
-    surname, _ = vocab.sample_person_name(rng)
+    surname = vocab.sample_surname(rng)
     name = _company_name(surname, rng)
     slug = _slugify(name)
     addr = vocab.sample_address(rng)
