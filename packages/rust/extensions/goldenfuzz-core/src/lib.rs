@@ -985,7 +985,7 @@ mod tests {
         ] {
             check_pair(&mk(la, 0), &mk(lb, 3));
         }
-        let mut rng: u64 = 0xA5C11_0FF1CE;
+        let mut rng: u64 = 0xA5C110FF1CE;
         for _ in 0..30_000 {
             let la = (next(&mut rng) as usize) % 65; // 0..=64: pattern in byte-tier range
             let lb = (next(&mut rng) as usize) % 200; // text may spill past 64
@@ -1017,7 +1017,7 @@ mod tests {
     fn batch_matches_per_pair() {
         // BatchComparator / extract / cdist just amortise the query peq, so every
         // result must be bit-for-bit identical to the per-pair scorers.
-        let mut rng: u64 = 0xBA7C_4_0FF1CE;
+        let mut rng: u64 = 0xBA7C40FF1CE;
         for _ in 0..20_000 {
             let ml = [1usize, 3, 13, 40, 64, 100, 200][(next(&mut rng) as usize) % 7];
             let q = gen(&mut rng, ml);

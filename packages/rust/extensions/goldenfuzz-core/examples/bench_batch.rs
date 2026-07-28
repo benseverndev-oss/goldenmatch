@@ -22,7 +22,7 @@ fn doc(rng: &mut u64, len: usize) -> String {
 }
 
 fn main() {
-    let mut rng = 0xBA7C_4u64;
+    let mut rng = 0xBA7C4u64;
     for &(class, qlen, n) in &[("name", 13usize, 5000usize), ("document", 600, 2000)] {
         let query = doc(&mut rng, qlen);
         let choices: Vec<String> = (0..n).map(|_| doc(&mut rng, qlen)).collect();
