@@ -1,7 +1,9 @@
-"""Tests for FS-score-driven soft confidence targets (honest-yardstick Task 2).
+"""Tests for FS-score-driven soft confidence targets, hard-negative selection, and
+enrichment orchestration (honest-yardstick Tasks 2-4).
 
-Covers monotonicity, clamping to the hi/lo/mid_hi/mid_lo boundary constants, and
-the never-0/1 invariant -- pure stdlib, box-safe (no torch/scipy/numpy/network)."""
+Covers monotonicity, clamping to the hi/lo/mid_hi/mid_lo boundary constants, the
+never-0/1 invariant, hard-negative mining, and the `enrich`/`cache_key` orchestration
+-- pure stdlib, box-safe (no torch/scipy/numpy/network)."""
 from __future__ import annotations
 
 import os
@@ -11,10 +13,10 @@ import sys
 sys.path.insert(0, os.path.dirname(__file__))
 
 
-from fs_enrich import select_hard_negatives, soft_confidence  # noqa: E402
+from fs_enrich import cache_key, enrich, select_hard_negatives, soft_confidence  # noqa: E402
 
 
-def _cand(a, b, score, gold):  # helper: a scored candidate with its gold label
+def _cand(a: str, b: str, score: float, gold: bool) -> dict:  # helper: a scored candidate with its gold label
     return {"a_id": a, "b_id": b, "score": score, "gold_match": gold}
 
 
@@ -67,3 +69,41 @@ def test_soft_confidence_never_hits_0_or_1():
         for m in (True, False):
             c = soft_confidence(s, m, tau=0.5)
             assert 0.0 < c < 1.0
+
+
+def test_enrich_attaches_soft_conf_and_appends_mined_negs():
+    pairs = [
+        {"a": {"id": "a"}, "b": {"id": "b"}, "label": "match", "eid_a": "a", "eid_b": "b"},
+        {"a": {"id": "c"}, "b": {"id": "d"}, "label": "no_match", "eid_a": "c", "eid_b": "d"},
+    ]
+
+    def scorer(x, y):
+        return {("a", "b"): 0.9, ("c", "d"): 0.1, ("e", "f"): 0.5}[(x["id"], y["id"])]
+
+    def candidates(records):
+        return [
+            {"a": {"id": "e"}, "b": {"id": "f"}, "gold_match": False, "eid_a": "e", "eid_b": "f"}
+        ]
+
+    out = enrich(
+        pairs,
+        records=[{"id": "e"}, {"id": "f"}],
+        scorer=scorer,
+        candidates_fn=candidates,
+        tau=0.5,
+        delta=0.1,
+        mine_cap=10,
+    )
+    assert all(0.0 < p["confidence"] < 1.0 for p in out)
+    mined = [p for p in out if (p["eid_a"], p["eid_b"]) == ("e", "f")]
+    assert len(mined) == 1 and mined[0]["label"] == "no_match"
+    assert mined[0]["negative_kind"] == "fs_mined"
+
+
+def test_cache_key_stable_and_sensitive():
+    a = cache_key(corpus_hash="h1", scorer_cfg="c1", tau=0.5, delta=0.1)
+    assert a == cache_key(corpus_hash="h1", scorer_cfg="c1", tau=0.5, delta=0.1)
+    assert a != cache_key(corpus_hash="h2", scorer_cfg="c1", tau=0.5, delta=0.1)
+    assert a != cache_key(corpus_hash="h1", scorer_cfg="c2", tau=0.5, delta=0.1)
+    assert a != cache_key(corpus_hash="h1", scorer_cfg="c1", tau=0.6, delta=0.1)
+    assert a != cache_key(corpus_hash="h1", scorer_cfg="c1", tau=0.5, delta=0.2)

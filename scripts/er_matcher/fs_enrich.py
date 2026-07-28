@@ -1,6 +1,8 @@
 """Post-blend FS enrichment: FS-score-driven soft confidence targets + hard-negative
 mining. Pure and box-testable; the FS matcher is injected as scorer(a,b)->float."""
 
+import hashlib
+
 
 def soft_confidence(
     score: float,
@@ -50,3 +52,56 @@ def select_hard_negatives(
     ]
     band.sort(key=lambda c: (abs(c["score"] - tau), c["a_id"], c["b_id"]))
     return band[:cap]
+
+
+def cache_key(*, corpus_hash: str, scorer_cfg: str, tau: float, delta: float) -> str:
+    """Stable digest of the enrichment inputs so a later build step can skip a
+    repeat FS pass when none of the corpus/scorer/threshold config changed."""
+    raw = f"{corpus_hash}|{scorer_cfg}|{tau:.4f}|{delta:.4f}"
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def enrich(
+    pairs: list[dict],
+    *,
+    records: list[dict],
+    scorer,
+    candidates_fn,
+    tau: float = 0.5,
+    delta: float = 0.1,
+    mine_cap: int,
+) -> list[dict]:
+    """Attach FS-score-driven soft confidence to every pair, and append near-threshold
+    gold non-matches mined from candidates_fn(records). Pure given injected scorer +
+    candidates_fn. Records must already be within a single split (leakage-free
+    ordering)."""
+    enriched = []
+    for p in pairs:
+        s = scorer(p["a"], p["b"])
+        conf = soft_confidence(s, p["label"] == "match", tau=tau)
+        enriched.append({**p, "confidence": round(conf, 4), "fs_score": round(s, 4)})
+
+    scored_cands = [
+        {
+            **c,
+            "score": scorer(c["a"], c["b"]),
+            "a_id": c["eid_a"],
+            "b_id": c["eid_b"],
+        }
+        for c in candidates_fn(records)
+    ]
+    for c in select_hard_negatives(scored_cands, tau=tau, delta=delta, cap=mine_cap):
+        conf = soft_confidence(c["score"], False, tau=tau)
+        enriched.append(
+            {
+                "a": c["a"],
+                "b": c["b"],
+                "label": "no_match",
+                "eid_a": c["eid_a"],
+                "eid_b": c["eid_b"],
+                "confidence": round(conf, 4),
+                "fs_score": round(c["score"], 4),
+                "negative_kind": "fs_mined",
+            }
+        )
+    return enriched
