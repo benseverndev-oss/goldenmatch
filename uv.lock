@@ -990,7 +990,6 @@ agent = [
 baseline = [
     { name = "numpy" },
     { name = "polars" },
-    { name = "scipy" },
 ]
 db = [
     { name = "connectorx" },
@@ -1044,7 +1043,6 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "rich", specifier = ">=13.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
-    { name = "scipy", marker = "extra == 'baseline'", specifier = ">=1.11" },
     { name = "sentence-transformers", marker = "extra == 'semantic'", specifier = ">=2.2" },
     { name = "textual", specifier = ">=1.0" },
     { name = "typer", specifier = ">=0.12" },
