@@ -14,7 +14,7 @@ from sota_baselines import sota_for  # noqa: E402
 
 
 def test_has_unseen_benchmarks_with_both_baselines():
-    for k in ("walmart_amazon", "beer", "fodors_zagats"):
+    for k in ("walmart_amazon", "beer", "fodors_zagats", "itunes_amazon"):
         e = sota_for(k)
         assert e is not None
         assert 0.0 < e["deepmatcher_f1"] <= 1.0

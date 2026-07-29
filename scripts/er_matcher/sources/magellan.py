@@ -47,6 +47,9 @@ _URL_NAMES: dict[str, str] = {
     # Verified via direct HTTP 200 fetch of all 5 exp_data CSVs (tableA/tableB/
     # train/valid/test) at Structured/Fodors-Zagats/exp_data/ -- 2026-07-28.
     "fodors_zagats": "Fodors-Zagats",
+    # iTunes-Amazon (music/media entity): non-saturated held-out benchmark added
+    # because Fodors-Zagats baselined at F1=1.0. All 5 CSVs HTTP 200 -- 2026-07-28.
+    "itunes_amazon": "iTunes-Amazon",
 }
 
 

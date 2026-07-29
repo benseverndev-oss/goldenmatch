@@ -32,6 +32,13 @@ SOTA: dict[str, dict] = {
         "ditto_f1": 1.0,
         "source": "DeepMatcher (Mudgal+ 2018) / Ditto (Li+ 2020)",
     },
+    # iTunes-Amazon Structured: non-saturated (has headroom) entity benchmark.
+    # Published F1 approx DeepMatcher 0.88 / Ditto 0.97 (display-only, not a gate).
+    "itunes_amazon": {
+        "deepmatcher_f1": 0.88,
+        "ditto_f1": 0.97,
+        "source": "DeepMatcher (Mudgal+ 2018) / Ditto (Li+ 2020)",
+    },
 }
 
 
