@@ -29,11 +29,9 @@ import shutil
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import duckdb
-
-from goldenmatch._polars_lazy import pl
 
 _TABLE_PREFIX = "prepared_"
 
@@ -153,21 +151,65 @@ class PreparedRecordStore:
         self.close()
 
 
+def _is_arrow_table(obj: Any) -> bool:
+    """True when ``obj`` is a PyArrow ``Table`` (arrow lane), False for a
+    Polars ``DataFrame``. Duck-typed on ``column_names`` (pa.Table has it,
+    pl.DataFrame exposes ``columns`` instead) so neither engine is imported
+    eagerly -- mirrors the ``core._hashing`` idiom."""
+    return hasattr(obj, "column_names")
+
+
+def _coerce_backend(frame: Any, backend: str) -> Any:
+    """Return ``frame`` (a ``core.frame`` Frame) on the requested backend.
+
+    record_store is arrow-native: the only conversion it performs is
+    polars->arrow (``.to_arrow()``, no Polars import), so a mixed
+    (polars-``df`` + arrow-assignments, or vice-versa) call still joins on
+    one lane. When ``backend="polars"`` the frame is returned as-is -- real
+    callers pass ``df`` and ``block_assignments`` on the same lane, and the
+    seam ``join_inner`` needs no coercion in that case."""
+    from goldenmatch.core.frame import to_frame
+
+    is_arrow = _is_arrow_table(frame.native)
+    if backend == "arrow" and not is_arrow:
+        return to_frame(frame.to_arrow())
+    return frame
+
+
+def _write_frame_parquet(frame: Any, path: Path) -> None:
+    """Write a ``core.frame`` Frame to ``path`` as snappy Parquet, per lane.
+    Polars frames use Polars' own writer (byte-identical to the pre-port
+    ``native.write_parquet``); arrow frames use ``pyarrow.parquet`` so the
+    arrow lane needs no Polars import."""
+    native = frame.native
+    if hasattr(native, "write_parquet"):  # polars DataFrame
+        native.write_parquet(path, compression="snappy")
+    else:  # pyarrow Table (arrow lane)
+        import pyarrow.parquet as papq
+
+        papq.write_table(native, str(path), compression="snappy")
+
+
 def materialize_prepared_records(
     store: PreparedRecordStore,
-    df: pl.DataFrame,
+    df: Any,
     *,
     signature: str,
 ) -> None:
     """Write ``df`` into the store under ``signature``.
 
-    Polars -> Arrow -> DuckDB via ``arrow_table`` view registration. Same
-    pattern as ``backends/score_duckdb.py`` (PR #235). Existing entries
-    at the same signature are replaced.
+    Arrow-native: ``df`` may be a PyArrow ``Table`` OR a Polars ``DataFrame``
+    -- both reach DuckDB as Arrow via the ``core.frame`` seam
+    (``to_frame(df).to_arrow()``), and record_store itself never imports
+    Polars. Same DuckDB ``arrow_table`` view registration pattern as
+    ``backends/score_duckdb.py`` (PR #235); existing entries at the same
+    signature are replaced.
     """
+    from goldenmatch.core.frame import to_frame
+
     table = _TABLE_PREFIX + _sanitize_signature(signature)
     con = store.connection
-    arrow_table = df.to_arrow()  # noqa: F841  -- DuckDB resolves by local name
+    arrow_table = to_frame(df).to_arrow()  # noqa: F841 -- DuckDB resolves by local name
     con.execute(f'DROP TABLE IF EXISTS "{table}"')
     con.execute(f'CREATE TABLE "{table}" AS SELECT * FROM arrow_table')
 
@@ -176,11 +218,13 @@ def load_prepared_records(
     store: PreparedRecordStore,
     *,
     signature: str,
-) -> pl.DataFrame | None:
-    """Read ``signature``'s entry back as a Polars DataFrame.
+) -> Any | None:
+    """Read ``signature``'s entry back as a PyArrow ``Table``.
 
     Returns None when the signature isn't present in the store (cache
-    miss; caller prepares + materializes).
+    miss; caller prepares + materializes). Arrow-native: the caller owns any
+    conversion to its own frame representation (record_store imports no
+    Polars).
     """
     table = _TABLE_PREFIX + _sanitize_signature(signature)
     con = store.connection
@@ -190,17 +234,21 @@ def load_prepared_records(
     ).fetchone()
     if exists is None:
         return None
-    arrow_table = con.execute(f'SELECT * FROM "{table}"').arrow()
-    # pl.from_arrow returns DataFrame | Series; an Arrow Table always
-    # produces a DataFrame, so narrow via cast for type-checkers.
-    return cast(pl.DataFrame, pl.from_arrow(arrow_table))
+    result = con.execute(f'SELECT * FROM "{table}"')
+    # Prefer the non-deprecated to_arrow_table(); fall back to .arrow() (a
+    # RecordBatchReader on newer DuckDB -> read_all() gives the Table).
+    to_arrow_table = getattr(result, "to_arrow_table", None)
+    if to_arrow_table is not None:
+        return to_arrow_table()
+    arrow_obj = result.arrow()
+    return arrow_obj.read_all() if hasattr(arrow_obj, "read_all") else arrow_obj
 
 
 def materialize_bucketed_blocks(
     store: PreparedRecordStore,
-    df: pl.DataFrame,
+    df: Any,
     *,
-    block_assignments: dict[int, str] | pl.DataFrame,
+    block_assignments: dict[int, str] | Any,
     n_buckets: int,
     signature: str,
 ) -> Path:
@@ -216,82 +264,101 @@ def materialize_bucketed_blocks(
       exists to avoid.
 
     Empty assignments yield a bucket_dir with no Parquet files
-    (Polars' partition_by skips empty groups).
+    (the group-partition step skips empty groups).
+
+    Arrow-native: ``df`` and ``block_assignments`` may be PyArrow ``Table``s
+    OR Polars ``DataFrame``s; every intermediate stays on ``df``'s backend
+    via the ``core.frame`` seam (record_store imports no Polars). Byte-
+    identical bucket layout on a Polars input (the seam's polars
+    ``with_bucket_column`` is this stage's old ``hash(seed) % n`` expr).
 
     Spec: docs/superpowers/specs/2026-05-17-...-v2-bucketed-storage-design.md
     §Components #1.
     """
+    from goldenmatch.core.frame import frame_from_column_data, to_frame
+
     sig_hash = _sanitize_signature(signature)
     bucket_dir = store.path.parent / f"buckets_{sig_hash}"
     # W4e FIX (latent stale-file bug): the signature is CONFIG-ONLY, so a
-    # persisted store re-materialized with different data (or, post-W5, a
-    # different backend hash) would leave stale bucket=K parquets that
-    # iter_buckets happily returns. Materialize is an authoritative rebuild:
-    # clear the dir first.
+    # persisted store re-materialized with different data (or a different
+    # backend hash) would leave stale bucket=K parquets that iter_buckets
+    # happily returns. Materialize is an authoritative rebuild: clear the
+    # dir first.
     if bucket_dir.exists():
         import shutil
 
         shutil.rmtree(bucket_dir)
     bucket_dir.mkdir(parents=True, exist_ok=True)
 
-    # Normalize to a Polars DataFrame.
+    # Build/keep every intermediate on the SAME backend as ``df`` so the seam
+    # join never mixes lanes and the arrow lane never imports Polars.
+    df_backend = "arrow" if _is_arrow_table(df) else "polars"
+
     if isinstance(block_assignments, dict):
         if not block_assignments:
             return bucket_dir
-        from goldenmatch.core.frame import frame_from_column_data
-
-        rid_to_block = frame_from_column_data(
+        assign_frame = frame_from_column_data(
             {
                 "__row_id__": list(block_assignments.keys()),
                 "__block_key__": list(block_assignments.values()),
             },
-            backend="polars",
-        ).native
+            backend=df_backend,
+        )
     else:
-        rid_to_block = block_assignments
-        if rid_to_block.height == 0:
+        assign_frame = to_frame(block_assignments)
+        if assign_frame.height == 0:
             return bucket_dir
         required = {"__row_id__", "__block_key__"}
-        if not required.issubset(set(rid_to_block.columns)):
+        if not required.issubset(set(assign_frame.columns)):
             raise ValueError(
                 f"block_assignments DataFrame must have columns "
-                f"{required}; got {set(rid_to_block.columns)}"
+                f"{required}; got {set(assign_frame.columns)}"
             )
+        assign_frame = _coerce_backend(assign_frame, df_backend)
 
     # Inner join attaches __block_key__. Rows in `df` without an
     # assignment drop out (matches v1: unassigned rows weren't scored).
-    from goldenmatch.core.frame import to_frame
+    keyed = to_frame(df).join_inner(assign_frame, on="__row_id__")
 
-    keyed = to_frame(df).join_inner(to_frame(rid_to_block), on="__row_id__")
-
-    # Bucket assignment via Polars xxHash with fixed seed. W5: bucket layout
-    # is per-backend shard-internal (never output-visible; the clear-on-
-    # materialize above makes cross-run reuse of a differently-hashed layout
-    # impossible) -- the arrow lane gets its own stable hash at the flip.
-    with_bucket = keyed.native.with_columns(
-        (pl.col("__block_key__").hash(seed=BUCKET_HASH_SEED) % n_buckets)
-        .alias("__bucket__"),
+    # Bucket assignment via the canonical `core.frame` seam -- the SAME
+    # `with_bucket_column(seed=BUCKET_HASH_SEED)` op the bucket scorer
+    # (`backends.score_buckets`) uses, so a block's bucket is consistent
+    # across the two surfaces by construction (test_cross_surface_consistency
+    # pins the shared seed). Polars lane is byte-identical to this stage's old
+    # `hash(seed) % n` expr; the arrow lane gets the seam's dictionary-code
+    # twin. Bucket layout is shard-internal (never output-visible; the
+    # clear-on-materialize above makes cross-run reuse of a differently-hashed
+    # layout impossible).
+    bucketed = keyed.with_bucket_column(
+        "__block_key__", "__bucket__", n_buckets, BUCKET_HASH_SEED,
     )
 
     # W4e: group_partitions == partition_by(as_dict) with unwrapped keys.
-    for bucket_id, bucket_frame in to_frame(with_bucket).group_partitions("__bucket__"):
+    for bucket_id, bucket_frame in bucketed.group_partitions("__bucket__"):
         bucket_path = bucket_dir / f"bucket={int(bucket_id)}" / "data.parquet"
         bucket_path.parent.mkdir(parents=True, exist_ok=True)
-        # W5: parquet shard IO goes through io_arrow twins at the flip.
-        bucket_frame.drop(["__bucket__"]).native.write_parquet(
-            bucket_path, compression="snappy",
-        )
+        _write_frame_parquet(bucket_frame.drop(["__bucket__"]), bucket_path)
 
     return bucket_dir
 
 
-def load_bucket(bucket_path: Path) -> pl.DataFrame:
-    """Read a bucket Parquet file as a Polars DataFrame.
+def load_bucket(bucket_path: Path) -> Any:
+    """Read a bucket Parquet file back as a PyArrow ``Table``.
+
+    Arrow-native (via ``pyarrow.parquet``): record_store imports no Polars.
+    The Ray worker consumer (``backends.ray_backend``) partitions the returned
+    table through the ``core.frame`` seam.
 
     Trivial wrapper, lifted to a function so future enhancements
     (streaming, column projection) have one site to change.
     """
-    return pl.read_parquet(bucket_path)
+    import pyarrow.parquet as papq
+
+    # Read ONLY this file. A dataset-style read (pq.read_table) would infer a
+    # Hive partition from the enclosing ``bucket=<id>`` directory and inject a
+    # spurious ``bucket`` column that the prior ``pl.read_parquet`` never
+    # produced -- ParquetFile.read() reads just the file's own schema.
+    return papq.ParquetFile(str(bucket_path)).read()
 
 
 def iter_buckets(bucket_dir: Path) -> Iterator[tuple[int, Path]]:

@@ -48,6 +48,9 @@ def test_materialize_and_load_roundtrips_dataframe(tmp_path: Path):
         signature = "sig-v1"
         materialize_prepared_records(store, df, signature=signature)
         loaded = load_prepared_records(store, signature=signature)
+        # record_store is arrow-native (returns a pa.Table); polars is the
+        # test's comparison oracle here.
+        loaded = pl.from_arrow(loaded)
         # Order may differ post-DuckDB; compare as sets of row tuples.
         assert set(loaded.iter_rows()) == set(df.iter_rows())
         assert set(loaded.columns) == set(df.columns)
@@ -76,8 +79,9 @@ def test_signature_isolates_entries(tmp_path: Path):
         loaded_b = load_prepared_records(store, signature="sig-b")
         assert loaded_a is not None
         assert loaded_b is not None
-        assert set(loaded_a.columns) == {"__row_id__", "name", "email", "__mk_email_lower__"}
-        assert set(loaded_b.columns) == {"__row_id__", "x"}
+        # arrow-native return: column names live on .column_names.
+        assert set(loaded_a.column_names) == {"__row_id__", "name", "email", "__mk_email_lower__"}
+        assert set(loaded_b.column_names) == {"__row_id__", "x"}
     finally:
         store.close()
 
@@ -111,7 +115,7 @@ def test_close_preserves_file_when_cleanup_false(tmp_path: Path):
     try:
         loaded = load_prepared_records(store2, signature="sig-v1")
         assert loaded is not None
-        assert loaded.height == 4
+        assert loaded.num_rows == 4
     finally:
         store2.close()
 
@@ -136,7 +140,7 @@ def test_read_only_false_allows_write(tmp_path: Path):
         materialize_prepared_records(store, _sample_df(), signature="sig-ro")
         loaded = load_prepared_records(store, signature="sig-ro")
         assert loaded is not None
-        assert loaded.height == 4
+        assert loaded.num_rows == 4
     finally:
         store.close()
 
@@ -170,6 +174,6 @@ def test_read_only_true_allows_read(tmp_path: Path):
     try:
         loaded = load_prepared_records(store, signature="sig-ro-read")
         assert loaded is not None
-        assert set(loaded.iter_rows()) == set(_sample_df().iter_rows())
+        assert set(pl.from_arrow(loaded).iter_rows()) == set(_sample_df().iter_rows())
     finally:
         store.close()

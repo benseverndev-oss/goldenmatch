@@ -3040,6 +3040,11 @@ def _run_dedupe_pipeline(
                 from goldenmatch.distributed.record_store import load_prepared_records
                 cached_disk = load_prepared_records(_prep_store, signature=disk_signature)
                 if cached_disk is not None:
+                    # record_store is arrow-native (returns a pa.Table); this
+                    # legacy prep-cache branch is polars-lazy, so coerce here.
+                    # (Migrating this whole branch onto the arrow lane is the
+                    # remaining prep-cache eviction step.)
+                    cached_disk = pl.from_arrow(cached_disk)
                     combined_lf = cached_disk.lazy()
                     # Seed in-memory cache so subsequent in-process iterations
                     # skip the disk read (RAM > DuckDB+Arrow latency).

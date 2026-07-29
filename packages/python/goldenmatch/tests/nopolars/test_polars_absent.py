@@ -148,6 +148,58 @@ def test_blocking_risk_arrow_is_polars_free() -> None:
     assert "polars" not in sys.modules
 
 
+def test_prepared_record_store_arrow_is_polars_free(tmp_path) -> None:
+    """The distributed prepared-record store (``distributed/record_store.py``)
+    round-trips a ``pa.Table`` with polars absent: ``materialize_prepared_records``
+    -> ``load_prepared_records`` returns a ``pa.Table``, and
+    ``materialize_bucketed_blocks`` -> ``iter_buckets``/``load_bucket`` stays arrow
+    end-to-end. record_store imports no polars (the distributed machinery is
+    arrow-native), and the bucket assignment co-locates same-block_key rows via
+    the shared ``core.frame`` ``with_bucket_column`` seam."""
+    pytest.importorskip("duckdb")
+    import pyarrow as pa
+    from goldenmatch.distributed.record_store import (
+        PreparedRecordStore,
+        iter_buckets,
+        load_bucket,
+        load_prepared_records,
+        materialize_bucketed_blocks,
+        materialize_prepared_records,
+    )
+
+    tbl = pa.table({"__row_id__": [0, 1, 2, 3], "name": ["a", "b", "c", "d"]})
+    with PreparedRecordStore(base_dir=str(tmp_path)) as store:
+        materialize_prepared_records(store, tbl, signature="sig")
+        loaded = load_prepared_records(store, signature="sig")
+        assert isinstance(loaded, pa.Table)
+        assert loaded.num_rows == 4
+
+        assignments = pa.table({
+            "__row_id__": [0, 1, 2, 3],
+            "__block_key__": ["k0", "k0", "k1", "k1"],
+        })
+        bucket_dir = materialize_bucketed_blocks(
+            store, tbl, block_assignments=assignments, n_buckets=4, signature="sig",
+        )
+        by_key: dict[str, set[int]] = {}
+        total = 0
+        for _bid, path in iter_buckets(bucket_dir):
+            bt = load_bucket(path)
+            assert isinstance(bt, pa.Table)
+            total += bt.num_rows
+            for rid, bk in zip(
+                bt.column("__row_id__").to_pylist(),
+                bt.column("__block_key__").to_pylist(),
+            ):
+                by_key.setdefault(bk, set()).add(rid)
+        assert total == 4
+        # co-location invariant: same block_key -> same bucket file.
+        assert by_key["k0"] == {0, 1}
+        assert by_key["k1"] == {2, 3}
+
+    assert "polars" not in sys.modules
+
+
 def test_guarded_matchkey_arrow_is_polars_free() -> None:
     """A guarded matchkey runs on a ``pa.Table`` polars-free. The pipeline's
     raw-value capture (for the guard's ``a_``/``b_`` predicate) reads through the

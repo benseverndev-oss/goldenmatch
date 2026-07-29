@@ -52,9 +52,9 @@ def test_load_bucket_roundtrip(tmp_path: Path):
     p.parent.mkdir(parents=True)
     df = pl.DataFrame({"__row_id__": [0, 1], "__block_key__": ["k0", "k0"]})
     df.write_parquet(p)
-    loaded = load_bucket(p)
-    assert loaded.shape == df.shape
-    assert set(loaded.columns) == set(df.columns)
+    loaded = load_bucket(p)  # arrow-native: pa.Table
+    assert (loaded.num_rows, loaded.num_columns) == df.shape
+    assert set(loaded.column_names) == set(df.columns)
 
 
 def test_iter_buckets_yields_sorted(tmp_path: Path):
@@ -98,8 +98,8 @@ def test_hash_is_deterministic_across_calls(tmp_path: Path):
     def bucket_for_key(store_path, key):
         # Find which bucket file contains rows with this block_key.
         for bid, path in iter_buckets(store_path.parent / f"buckets_{_sanitize_signature('sig-v1')}"):
-            bucket_df = load_bucket(path)
-            if key in bucket_df["__block_key__"].to_list():
+            bucket_tbl = load_bucket(path)  # arrow-native: pa.Table
+            if key in bucket_tbl.column("__block_key__").to_pylist():
                 return bid
         raise AssertionError(f"key {key!r} not found in any bucket")
 
@@ -121,6 +121,38 @@ def test_hash_is_deterministic_across_calls(tmp_path: Path):
         b_second = {f"k{i}": bucket_for_key(s2.path, f"k{i}") for i in range(10)}
 
     assert b_first == b_second
+
+
+def test_materialize_bucketed_blocks_arrow_input(tmp_path: Path):
+    """Arrow lane: a ``pa.Table`` df + ``pa.Table`` assignments round-trip through
+    the bucketed store WITHOUT polars. Same ``__block_key__`` co-locates (the
+    invariant that matters -- exact bucket numbers are shard-internal and the
+    arrow lane's dictionary-code hash differs from polars' xxhash), all rows are
+    preserved, and ``load_bucket`` returns a ``pa.Table``."""
+    import pyarrow as pa
+
+    tbl = pa.table({"__row_id__": list(range(6)), "name": [f"n{i}" for i in range(6)]})
+    assignments = pa.table({
+        "__row_id__": list(range(6)),
+        "__block_key__": ["k0", "k0", "k1", "k1", "k2", "k2"],
+    })
+    with PreparedRecordStore(base_dir=tmp_path) as store:
+        bucket_dir = materialize_bucketed_blocks(
+            store, tbl, block_assignments=assignments, n_buckets=8, signature="sig-arrow",
+        )
+        by_key: dict[str, set[int]] = {}
+        total = 0
+        for _bid, path in iter_buckets(bucket_dir):
+            bt = load_bucket(path)
+            assert isinstance(bt, pa.Table)  # arrow-native return, not polars
+            total += bt.num_rows
+            for rid, bk in zip(
+                bt.column("__row_id__").to_pylist(),
+                bt.column("__block_key__").to_pylist(),
+            ):
+                by_key.setdefault(bk, set()).add(rid)
+    assert total == 6
+    assert by_key == {"k0": {0, 1}, "k1": {2, 3}, "k2": {4, 5}}
 
 
 def test_n_buckets_bounds_validated():
@@ -169,7 +201,7 @@ def test_hash_distribution_skew_bounded(tmp_path: Path):
         )
         sizes = []
         for _, path in iter_buckets(bucket_dir):
-            sizes.append(load_bucket(path).height)
+            sizes.append(load_bucket(path).num_rows)  # arrow-native: pa.Table
     assert min(sizes) > 0
     assert max(sizes) / min(sizes) <= 3.0
 
