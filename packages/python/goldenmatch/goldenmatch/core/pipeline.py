@@ -3043,8 +3043,9 @@ def _run_dedupe_pipeline(
                     # record_store is arrow-native (returns a pa.Table); this
                     # legacy prep-cache branch is polars-lazy, so coerce here.
                     # (Migrating this whole branch onto the arrow lane is the
-                    # remaining prep-cache eviction step.)
-                    cached_disk = pl.from_arrow(cached_disk)
+                    # remaining prep-cache eviction step.) pl.from_arrow on a
+                    # Table always yields a DataFrame -> narrow for pyright.
+                    cached_disk = cast("pl.DataFrame", pl.from_arrow(cached_disk))
                     combined_lf = cached_disk.lazy()
                     # Seed in-memory cache so subsequent in-process iterations
                     # skip the disk read (RAM > DuckDB+Arrow latency).

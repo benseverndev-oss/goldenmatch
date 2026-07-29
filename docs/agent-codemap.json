@@ -5438,7 +5438,10 @@
           "purpose": "DuckDB-backed prepared-record store.",
           "defines": [
             "PreparedRecordStore",
+            "_coerce_backend",
+            "_is_arrow_table",
             "_sanitize_signature",
+            "_write_frame_parquet",
             "iter_buckets",
             "load_bucket",
             "load_prepared_records",
@@ -5446,7 +5449,6 @@
             "materialize_prepared_records"
           ],
           "imports": [
-            "goldenmatch._polars_lazy",
             "goldenmatch.core._hashing",
             "goldenmatch.core.frame"
           ]
