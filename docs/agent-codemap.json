@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 421,
+      "module_count": 422,
       "modules": [
         {
           "module": "goldenmatch",
@@ -5262,6 +5262,14 @@
           ]
         },
         {
+          "module": "goldenmatch.distributed._connected_components",
+          "file": "packages/python/goldenmatch/goldenmatch/distributed/_connected_components.py",
+          "purpose": "Owned weakly-connected-components over an undirected edge list.",
+          "defines": [
+            "connected_components_undirected"
+          ]
+        },
+        {
           "module": "goldenmatch.distributed._utils",
           "file": "packages/python/goldenmatch/goldenmatch/distributed/_utils.py",
           "purpose": "Tiny helpers shared across distributed submodules.",
@@ -5278,7 +5286,7 @@
             "_annotate_cluster_sizes",
             "_assert_scratch_shared_if_multinode",
             "_attach_quality_metadata",
-            "_build_clusters_scipy_fallback",
+            "_build_clusters_cc_fallback",
             "_derive_touched_ids",
             "_emit_boundary_pairs",
             "_phase_a_local_cc",
@@ -5312,7 +5320,8 @@
           ],
           "imports": [
             "goldenmatch.core.cluster",
-            "goldenmatch.core.frame"
+            "goldenmatch.core.frame",
+            "goldenmatch.distributed._connected_components"
           ]
         },
         {
