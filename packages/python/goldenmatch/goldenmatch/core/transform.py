@@ -144,9 +144,11 @@ def run_transform(
         import time as _time  # noqa: PLC0415
 
     try:
-        if _tdbg and not _is_pl_in:
+        if _tdbg:
             _t0 = _time.perf_counter()
-            _bridge_df = pl.from_arrow(_in_frame.native)
+            _bridge_df = (
+                _in_frame.native if _is_pl_in else pl.from_arrow(_in_frame.native)
+            )
             _t_bridge_in = _time.perf_counter() - _t0
             _t0 = _time.perf_counter()
             result = _do_transform(_bridge_df)
@@ -174,18 +176,23 @@ def run_transform(
         return _restore(_in_frame).native, []
 
     # Re-attach preserved columns and restore order on the caller's lane.
-    if _tdbg and not _is_pl_in:
-        _t0 = _time.perf_counter()
-        _res_native = result.df.to_arrow()
-        _t_bridge_out = _time.perf_counter() - _t0
-        _res_frame = _tf_a2(_res_native)
-        logger.warning(
-            "[transform][DEBUG] arrow-lane bridge split (rows=%d): "
-            "pl.from_arrow=%.3fs  _do_transform=%.3fs  to_arrow=%.3fs  "
-            "bridge_total=%.3fs (set GOLDENMATCH_TRANSFORM_DEBUG=0 to silence)",
-            _in_frame.height,
-            _t_bridge_in, _t_do, _t_bridge_out,
-            _t_bridge_in + _t_bridge_out,
+    if _tdbg:
+        if _is_pl_in:
+            _res_frame = _tf_a2(result.df)
+        else:
+            _t0 = _time.perf_counter()
+            _res_native = result.df.to_arrow()
+            _t_bridge_out = _time.perf_counter() - _t0
+            _res_frame = _tf_a2(_res_native)
+        print(
+            f"[transform][DEBUG] lane={'polars' if _is_pl_in else 'arrow'} "
+            f"rows={_in_frame.height}: "
+            f"bridge_in(from_arrow)={_t_bridge_in:.3f}s  "
+            f"_do_transform={_t_do:.3f}s  "
+            f"bridge_out(to_arrow)={_t_bridge_out:.3f}s  "
+            f"bridge_total={_t_bridge_in + _t_bridge_out:.3f}s "
+            f"(GOLDENMATCH_TRANSFORM_DEBUG=0 to silence)",
+            flush=True,
         )
     else:
         _res_frame = _tf_a2(
