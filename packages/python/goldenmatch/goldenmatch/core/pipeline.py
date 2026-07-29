@@ -2719,10 +2719,16 @@ def _run_fused_fs_match_short_circuit(
     # the Python candidate-pair list is never materialized (the RSS win the whole
     # short-circuit exists for).
     _need_blocks = not fs_model_preloaded(mk)
+    # build_blocks is dual-rep, but the polars vs seam-frame paths sample the EM
+    # training blocks with DIFFERENT RNG (per-backend sample divergence), which
+    # shifts EM weights at scale -- keep polars input on the EXACT classic path
+    # (`collected_df.lazy()`, byte-identical EM) and use the seam frame ONLY for
+    # arrow (a pa.Table has no `.lazy()`). Was a flat `_cf_entry`, which regressed
+    # historical_50k f1_probabilistic 0.826 -> 0.614.
+    import pyarrow as _pa_blocks  # noqa: PLC0415
+    _blk_src = _cf_entry if isinstance(collected_df, _pa_blocks.Table) else collected_df.lazy()
     blocks = (
-        # build_blocks is dual-rep -- pass the seam frame (_cf_entry), NOT
-        # `collected_df.lazy()` (a pa.Table has no `.lazy()` on the arrow lane).
-        list(build_blocks(_cf_entry, config.blocking))
+        list(build_blocks(_blk_src, config.blocking))
         if _need_blocks and config.blocking is not None
         else []
     )
