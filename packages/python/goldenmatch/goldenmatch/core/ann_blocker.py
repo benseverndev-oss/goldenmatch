@@ -1,26 +1,25 @@
 """ANN (Approximate Nearest Neighbor) blocker for GoldenMatch.
 
-Three interchangeable backends behind one surface, resolved per ``build_index``:
+Two interchangeable backends behind one surface, resolved per ``build_index``:
 
 * **native HNSW** -- the ``goldenmatch-hnsw`` wheel (``goldenmatch_hnsw``), a
   pure-Rust ``IndexHNSWFlat`` with zero C dependencies. Sub-linear ANN queries
   for large corpora, installs everywhere the pure-Python package does.
-* **FAISS** -- ``IndexFlatIP`` (the ``goldenmatch[embeddings]`` extra). Exact
-  inner product, O(N) per probe.
-* **numpy** -- a pure-numpy all-pairs inner-product fallback, zero deps.
+* **numpy** -- an owned pure-numpy all-pairs (flat) inner-product index, zero
+  deps. Exact top-k by descending inner product (a BLAS-backed ``q @ corpus.T``
+  matmul + argpartition), the exact-search reference for medium-scale corpora.
 
-Scores are the raw inner product on the FAISS and HNSW paths (byte-identical
-between them) and the range-safe cosine on the numpy path; on the normal
-GoldenMatch path the embedder emits L2-normalized vectors, so the three agree.
+Scores are the raw inner product on the HNSW path and the range-safe cosine on
+the numpy path; on the normal GoldenMatch path the embedder emits L2-normalized
+vectors, so the two agree.
 
-Backend selection (``_resolve_backend``) prefers **native HNSW -> FAISS ->
-numpy**, but in ``auto`` mode HNSW is chosen only where it actually wins:
+Backend selection (``_resolve_backend``) prefers **native HNSW -> numpy exact**,
+but in ``auto`` mode HNSW is chosen only where it actually wins:
 ``n_vectors >= GOLDENMATCH_ANN_HNSW_MIN`` (default 4096) AND
 ``top_k <= GOLDENMATCH_ANN_HNSW_MAX_K`` (default 512). Below the size gate,
-brute force is both faster and exact, so small N keeps the exact path and the
-numpy-fallback parity contract holds unchanged. ``GOLDENMATCH_ANN_BACKEND`` in
-``{auto, hnsw, faiss, numpy}`` forces a specific backend (gates ignored for an
-explicit ``hnsw``).
+brute force is both faster and exact, so small N keeps the exact numpy path.
+``GOLDENMATCH_ANN_BACKEND`` in ``{auto, hnsw, numpy}`` forces a specific backend
+(gates ignored for an explicit ``hnsw``).
 """
 
 from __future__ import annotations
@@ -30,8 +29,7 @@ import os
 
 import numpy as np
 
-# Detected once at import; tests flip these to exercise a specific backend.
-_HAS_FAISS = importlib.util.find_spec("faiss") is not None
+# Detected once at import; tests flip this to exercise a specific backend.
 _HAS_HNSW = importlib.util.find_spec("goldenmatch_hnsw") is not None
 
 # auto-mode size gates (env-overridable) — HNSW only earns its keep when the
@@ -41,23 +39,20 @@ _HNSW_MAX_K_DEFAULT = 512
 
 
 def _resolve_backend(n_vectors: int, top_k: int) -> str:
-    """Pick ``"hnsw"`` / ``"faiss"`` / ``"numpy"`` for this corpus.
+    """Pick ``"hnsw"`` / ``"numpy"`` for this corpus.
 
     Honors ``GOLDENMATCH_ANN_BACKEND`` (forced), else auto-selects with the
     HNSW size gate. Always degrades to an available backend (never returns a
-    backend whose library is absent).
+    backend whose library is absent) -- the numpy exact index is always
+    available (numpy is a base dep).
     """
     forced = os.environ.get("GOLDENMATCH_ANN_BACKEND", "auto").strip().lower()
     if forced == "hnsw":
-        if _HAS_HNSW:
-            return "hnsw"
-        return "faiss" if _HAS_FAISS else "numpy"
-    if forced == "faiss":
-        return "faiss" if _HAS_FAISS else "numpy"
+        return "hnsw" if _HAS_HNSW else "numpy"
     if forced == "numpy":
         return "numpy"
     # auto: prefer HNSW only above the size gate (its win is asymptotic); exact
-    # below, which keeps small-N results identical to the brute-force paths.
+    # numpy below, which keeps small-N results identical to the brute-force path.
     if _HAS_HNSW:
         try:
             min_n = int(os.environ.get("GOLDENMATCH_ANN_HNSW_MIN", _HNSW_MIN_DEFAULT))
@@ -66,30 +61,28 @@ def _resolve_backend(n_vectors: int, top_k: int) -> str:
             min_n, max_k = _HNSW_MIN_DEFAULT, _HNSW_MAX_K_DEFAULT
         if n_vectors >= min_n and top_k <= max_k:
             return "hnsw"
-    if _HAS_FAISS:
-        return "faiss"
     return "numpy"
 
 
 class ANNBlocker:
     """Build an inner-product index and query for top-K neighbors.
 
-    Backed by FAISS (`IndexFlatIP`) when available; otherwise a numpy all-pairs
-    inner-product fallback with byte-compatible top-K / self-exclusion /
-    canonicalization semantics.
+    Backed by native HNSW (`goldenmatch_hnsw`) at scale; otherwise an owned
+    numpy all-pairs (flat) inner-product index -- the exact-search reference,
+    with descending-inner-product top-K / self-exclusion / canonicalization
+    semantics.
     """
 
     def __init__(self, top_k: int = 20):
         self.top_k = top_k
-        self._index = None
-        # numpy-fallback corpus (stored on build_index so query_* can use it)
+        # numpy exact-index corpus (stored on build_index so query_* can use it)
         self._corpus: np.ndarray | None = None
         # native HNSW index (goldenmatch_hnsw.HnswIndex) when that backend wins.
         self._hnsw = None
         # Resolved on build_index; "numpy" until then.
         self._backend: str = "numpy"
 
-    # HNSW graph parameters (env-overridable). Defaults mirror FAISS
+    # HNSW graph parameters (env-overridable). Defaults mirror the common
     # IndexHNSWFlat(d, M=16) / hnswlib presets.
     @staticmethod
     def _hnsw_params() -> tuple[int, int, int]:
@@ -109,12 +102,11 @@ class ANNBlocker:
 
         The backend is resolved from the corpus size + ``top_k`` (see
         :func:`_resolve_backend`): native HNSW (``IndexHNSWFlat``) at scale,
-        FAISS ``IndexFlatIP`` for exact medium-scale, else the numpy all-pairs
-        fallback. All three share the ``_search`` result contract.
+        else the owned numpy all-pairs exact index. Both share the ``_search``
+        result contract.
         """
         corpus = np.ascontiguousarray(embeddings.astype(np.float32))
         self._corpus = corpus
-        self._index = None
         self._hnsw = None
         n = corpus.shape[0]
         self._backend = _resolve_backend(n, self.top_k)
@@ -131,17 +123,10 @@ class ANNBlocker:
             if n:
                 self._hnsw.add_batch(corpus.tobytes(), n)
             return
-        if self._backend == "numpy":
-            # numpy fallback: keep the corpus; scoring happens at query time.
-            return
-        import faiss
-
-        dim = corpus.shape[1]
-        self._index = faiss.IndexFlatIP(dim)  # inner product = cosine on normalized vectors
-        self._index.add(corpus)
+        # numpy exact index: keep the corpus; scoring happens at query time.
 
     def _hnsw_search(self, query_embeddings: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """HNSW replacement for ``faiss.IndexFlatIP.search``.
+        """HNSW replacement for an exact ``IndexFlatIP.search``.
 
         Returns ``(scores, indices)`` of shape ``(n_query, k)`` where
         ``k = min(top_k, n_corpus)``. Scores are the raw inner product (FAISS
@@ -207,15 +192,11 @@ class ANNBlocker:
         """Dispatch to the resolved backend's search.
 
         Returns ``(scores, indices)`` of shape ``(n_query, k)`` with consistent
-        ranking semantics across all three backends.
+        ranking semantics across both backends.
         """
         if self._backend == "hnsw":
             return self._hnsw_search(query_embeddings)
-        if self._backend == "numpy":
-            return self._np_search(query_embeddings)
-        if self._index is None:
-            raise RuntimeError("Index not built. Call build_index first.")
-        return self._index.search(query_embeddings.astype(np.float32), self.top_k)
+        return self._np_search(query_embeddings)
 
     def query(self, query_embeddings: np.ndarray) -> list[tuple[int, int]]:
         """Find top-K neighbors for each query. Returns (query_idx, neighbor_idx) pairs."""
@@ -234,9 +215,7 @@ class ANNBlocker:
         """Number of vectors currently in the index."""
         if self._backend == "hnsw":
             return len(self._hnsw) if self._hnsw is not None else 0
-        if self._backend == "numpy":
-            return 0 if self._corpus is None else int(self._corpus.shape[0])
-        return self._index.ntotal if self._index is not None else 0
+        return 0 if self._corpus is None else int(self._corpus.shape[0])
 
     def add_to_index(self, embedding: np.ndarray) -> int:
         """Add a single embedding vector to the index (incremental).
@@ -259,16 +238,10 @@ class ANNBlocker:
             if self._corpus is not None:
                 self._corpus = np.vstack([self._corpus, vec]).astype(np.float32)
             return pos
-        if self._backend == "numpy":
-            if self._corpus is None:
-                raise RuntimeError("Index not built. Call build_index first.")
-            pos = int(self._corpus.shape[0])
-            self._corpus = np.vstack([self._corpus, vec]).astype(np.float32)
-            return pos
-        if self._index is None:
+        if self._corpus is None:
             raise RuntimeError("Index not built. Call build_index first.")
-        pos = self._index.ntotal
-        self._index.add(vec)
+        pos = int(self._corpus.shape[0])
+        self._corpus = np.vstack([self._corpus, vec]).astype(np.float32)
         return pos
 
     def query_one(self, embedding: np.ndarray) -> list[tuple[int, float]]:

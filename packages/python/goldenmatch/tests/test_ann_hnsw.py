@@ -4,7 +4,7 @@ Two layers:
 
 * **Resolver logic** (no wheel needed) — monkeypatch the ``_HAS_*`` flags and
   assert :func:`_resolve_backend` honors the forced env var + the ``auto`` size
-  gate (native HNSW -> FAISS -> numpy).
+  gate (native HNSW -> numpy exact).
 * **Integration** (skipped unless ``goldenmatch-hnsw`` is installed) — build a
   corpus large enough to trip the size gate and assert the HNSW path returns
   high-recall, correctly-scored, incrementally-extensible results matching the
@@ -26,11 +26,8 @@ _HNSW_MIN = 4096  # keep in sync with _HNSW_MIN_DEFAULT
 
 def test_resolve_forced_backends(monkeypatch):
     monkeypatch.setattr(ab, "_HAS_HNSW", True)
-    monkeypatch.setattr(ab, "_HAS_FAISS", True)
     monkeypatch.setenv("GOLDENMATCH_ANN_BACKEND", "numpy")
     assert _resolve_backend(10_000, 20) == "numpy"
-    monkeypatch.setenv("GOLDENMATCH_ANN_BACKEND", "faiss")
-    assert _resolve_backend(10, 5) == "faiss"
     monkeypatch.setenv("GOLDENMATCH_ANN_BACKEND", "hnsw")
     # forced hnsw ignores the size gate
     assert _resolve_backend(1, 1) == "hnsw"
@@ -38,43 +35,36 @@ def test_resolve_forced_backends(monkeypatch):
 
 def test_resolve_forced_degrades_when_absent(monkeypatch):
     monkeypatch.setattr(ab, "_HAS_HNSW", False)
-    monkeypatch.setattr(ab, "_HAS_FAISS", False)
     monkeypatch.setenv("GOLDENMATCH_ANN_BACKEND", "hnsw")
-    assert _resolve_backend(10_000, 20) == "numpy"  # no hnsw, no faiss
-    monkeypatch.setattr(ab, "_HAS_FAISS", True)
-    assert _resolve_backend(10_000, 20) == "faiss"  # hnsw absent -> faiss
+    assert _resolve_backend(10_000, 20) == "numpy"  # no hnsw -> numpy exact
 
 
 def test_resolve_auto_size_gate(monkeypatch):
     monkeypatch.delenv("GOLDENMATCH_ANN_BACKEND", raising=False)
     monkeypatch.setattr(ab, "_HAS_HNSW", True)
-    monkeypatch.setattr(ab, "_HAS_FAISS", True)
-    # below the row floor -> exact (faiss)
-    assert _resolve_backend(_HNSW_MIN - 1, 20) == "faiss"
+    # below the row floor -> exact (numpy)
+    assert _resolve_backend(_HNSW_MIN - 1, 20) == "numpy"
     # at/above the floor with a small top_k -> hnsw
     assert _resolve_backend(_HNSW_MIN, 20) == "hnsw"
     # large top_k (retrieve-nearly-all) is HNSW's bad case -> exact
-    assert _resolve_backend(100_000, 100_000) == "faiss"
+    assert _resolve_backend(100_000, 100_000) == "numpy"
 
 
-def test_resolve_auto_prefers_hnsw_over_faiss(monkeypatch):
+def test_resolve_auto_prefers_hnsw_over_numpy(monkeypatch):
     monkeypatch.delenv("GOLDENMATCH_ANN_BACKEND", raising=False)
     monkeypatch.setattr(ab, "_HAS_HNSW", True)
-    monkeypatch.setattr(ab, "_HAS_FAISS", True)
-    assert _resolve_backend(10_000, 20) == "hnsw"  # HNSW wins when both present
+    assert _resolve_backend(10_000, 20) == "hnsw"  # HNSW wins above the gate
 
 
 def test_resolve_auto_falls_back_to_numpy(monkeypatch):
     monkeypatch.delenv("GOLDENMATCH_ANN_BACKEND", raising=False)
     monkeypatch.setattr(ab, "_HAS_HNSW", False)
-    monkeypatch.setattr(ab, "_HAS_FAISS", False)
     assert _resolve_backend(10_000, 20) == "numpy"
 
 
 def test_env_min_override(monkeypatch):
     monkeypatch.delenv("GOLDENMATCH_ANN_BACKEND", raising=False)
     monkeypatch.setattr(ab, "_HAS_HNSW", True)
-    monkeypatch.setattr(ab, "_HAS_FAISS", False)
     monkeypatch.setenv("GOLDENMATCH_ANN_HNSW_MIN", "100")
     assert _resolve_backend(150, 20) == "hnsw"
     assert _resolve_backend(50, 20) == "numpy"

@@ -5011,7 +5011,7 @@
         {
           "module": "goldenmatch.db.ann_index",
           "file": "packages/python/goldenmatch/goldenmatch/db/ann_index.py",
-          "purpose": "Persistent FAISS ANN index manager for database integration.",
+          "purpose": "Persistent ANN index manager for database integration.",
           "defines": [
             "PersistentANNIndex"
           ],
