@@ -705,6 +705,20 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
         if preflight_existing else {}
     )
 
+    # Same anti-N+1 for the CREATED-event idempotency guard in the created-cluster
+    # branch below: it did one ``has_run_event`` SELECT per created cluster
+    # (millions), which under ``write_pipeline`` syncs per cluster AND seq-scans
+    # identity_events when the secondary indexes are deferred by the initial-load
+    # fast path -> O(n^2) (measured: ~3h at 14M). Preload the run's already-created
+    # entities ONCE; the guard becomes an in-memory set test. Empty (instant) on a
+    # from-empty build; kept exact as CREATED events are added in-loop. SQL backends
+    # only -- mongo / minimal fake stores fall back to ``has_run_event``.
+    _created_events: set[str] | None = (
+        store.run_event_entities(run_name, EventKind.CREATED.value)
+        if getattr(store, "_backend", None) in ("sqlite", "postgres")
+        and hasattr(store, "run_event_entities") else None
+    )
+
     # Fire-and-forget event/edge writes: the resolve path ignores the generated
     # id, and skipping the read-back is what lets ``write_pipeline`` actually
     # batch (an id read-back would sync the pipeline on every call). The store
@@ -985,7 +999,13 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
                         created_at=now,
                         updated_at=now,
                     ))
-                    if not store.has_run_event(entity_id, run_name, EventKind.CREATED.value):
+                    _already_created = (
+                        entity_id in _created_events
+                        if _created_events is not None
+                        else store.has_run_event(
+                            entity_id, run_name, EventKind.CREATED.value)
+                    )
+                    if not _already_created:
                         _emit(IdentityEvent(
                             entity_id=entity_id,
                             kind=EventKind.CREATED.value,
@@ -998,6 +1018,8 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
                             actor=actor, trust=_cluster_confidence(info),
                         ))
                         summary.events_emitted += 1
+                        if _created_events is not None:
+                            _created_events.add(entity_id)
                     summary.created += 1
                     structural_change = True
                     changed_records = set(record_ids)
