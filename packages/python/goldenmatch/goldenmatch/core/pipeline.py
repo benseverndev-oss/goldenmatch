@@ -2584,16 +2584,19 @@ def _fused_result_from_clusters(
             )
         # Build multi_df: member rows + slim internal columns + __cluster_id__
         # (mirrors the dict-path golden branch for byte-identity).
-        multi_df = collected_frame.filter_in("__row_id__", golden_row_ids).native
+        _multi_frame = collected_frame.filter_in("__row_id__", golden_row_ids)
         if os.environ.get("GOLDENMATCH_GOLDEN_SLIM_MULTIDF", "1") != "0":
             _internal_prefixes = ("__xform_", "__mk_", "__block_key__", "__bucket__")
-            multi_df = multi_df.select(
-                [
-                    c
-                    for c in multi_df.columns
-                    if not any(c.startswith(p) for p in _internal_prefixes)
-                ]
-            )
+            # Seam `.columns` are NAMES on both reps; `pa.Table.columns` is arrays
+            # (the startswith crash on the arrow lane) so the filter MUST run off
+            # the frame, not `.native`. `.select(names)` works on pl + pa alike.
+            _keep = [
+                c
+                for c in _multi_frame.columns
+                if not any(c.startswith(p) for p in _internal_prefixes)
+            ]
+            _multi_frame = _multi_frame.select(_keep)
+        multi_df = _multi_frame.native
         # __cluster_id__ attach: map_column over the kernel's rid->cid map is
         # byte-equivalent to the old inner join against the fused frame
         # (unique rid keys; downstream golden groups by cluster, order-free)
@@ -2717,7 +2720,9 @@ def _run_fused_fs_match_short_circuit(
     # short-circuit exists for).
     _need_blocks = not fs_model_preloaded(mk)
     blocks = (
-        list(build_blocks(collected_df.lazy(), config.blocking))
+        # build_blocks is dual-rep -- pass the seam frame (_cf_entry), NOT
+        # `collected_df.lazy()` (a pa.Table has no `.lazy()` on the arrow lane).
+        list(build_blocks(_cf_entry, config.blocking))
         if _need_blocks and config.blocking is not None
         else []
     )
