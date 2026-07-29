@@ -24,7 +24,12 @@ dependencies = [
     # owned string-metric kernel (replaces the former rapidfuzz runtime dep). The
     # native infermap-core kernel is the primary path; this backs the pure fallback.
     "goldenfuzz>=0.1.0",
-    "scipy>=1.11",
+    # numpy backs the calibrators + engine (previously pulled in transitively via
+    # scipy). scipy itself is EVICTED: its sole runtime use was a 2-param
+    # Nelder-Mead fit, now owned in `infermap._optimize` (byte-close to scipy;
+    # scipy stays a dev-group parity oracle). Dropping it removes the compiled
+    # BLAS/LAPACK/Fortran tree from `pip install infermap`.
+    "numpy>=1.26",
     "pyyaml>=6.0",
     "typer>=0.12",
     "goldencheck-types",

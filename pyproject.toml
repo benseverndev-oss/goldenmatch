@@ -80,6 +80,13 @@ dev = [
     # `uv sync` installs it for CI/tests while `pip install goldenmatch` is
     # jellyfish-free (soundex was already in-house; metaphone moved off it here).
     "jellyfish>=1.0",
+    # scipy is a TEST-ONLY parity oracle: infermap owns its sole scipy use (a
+    # 2-param Nelder-Mead Platt fit) via infermap._optimize, so `pip install
+    # infermap` is scipy-free at RUNTIME. The optimizer parity test asserts the
+    # owned Nelder-Mead matches `scipy.optimize.minimize` on the convex log-loss,
+    # so `uv sync` installs it for CI/tests. (goldencheck[baseline] +
+    # goldenmatch distributed use scipy on their own, separately.)
+    "scipy>=1.11",
     # transitive test deps surfaced across workspace packages:
     "httpx>=0.27",  # required by starlette.testclient (used by goldenpipe tests)
 ]

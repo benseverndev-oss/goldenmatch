@@ -171,7 +171,7 @@ The engine also applies **common-prefix canonicalization** — automatically str
 | | Python | TypeScript |
 |---|---|---|
 | 6 built-in scorers (+ pluggable LLM) | ✅ | ✅ |
-| Hungarian assignment | ✅ (scipy) | ✅ (vendored) |
+| Hungarian assignment | ✅ (owned) | ✅ (vendored) |
 | Custom scorers | `@infermap.scorer` | `defineScorer()` |
 | Domain dictionaries | ✅ (YAML) | ✅ (inlined) |
 | Confidence calibration | ✅ (Identity/Isotonic/Platt) | ✅ |

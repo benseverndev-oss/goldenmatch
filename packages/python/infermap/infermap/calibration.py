@@ -145,7 +145,10 @@ class PlattCalibrator(Calibrator):
         self.b = float(b)
 
     def fit(self, scores: np.ndarray, correct: np.ndarray) -> None:
-        from scipy.optimize import minimize
+        # Owned Nelder-Mead (core._optimize) -- no scipy runtime dependency. The
+        # log-loss is convex, so this converges to the same (a, b) scipy did
+        # (the parity test asserts ~1e-12 agreement); scipy stays a dev oracle.
+        from infermap._optimize import minimize_nelder_mead
 
         scores = np.asarray(scores, dtype=float)
         correct = np.asarray(correct, dtype=float)
@@ -159,9 +162,9 @@ class PlattCalibrator(Calibrator):
             log1mp = -np.logaddexp(0.0, z)  # log (1-sigmoid(z))
             return -float(np.sum(correct * logp + (1.0 - correct) * log1mp))
 
-        res = minimize(nll, x0=np.array([1.0, 0.0]), method="Nelder-Mead")
-        self.a = float(res.x[0])
-        self.b = float(res.x[1])
+        x_opt, _ = minimize_nelder_mead(nll, [1.0, 0.0])
+        self.a = float(x_opt[0])
+        self.b = float(x_opt[1])
 
     def transform(self, scores: np.ndarray) -> np.ndarray:
         scores = np.asarray(scores, dtype=float)
