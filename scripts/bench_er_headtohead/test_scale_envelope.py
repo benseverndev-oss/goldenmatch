@@ -244,10 +244,14 @@ def test_probabilistic_numpy_lane_zero_native_eligible(tmp_path):
 
 
 def test_fs_basic_scorers_rewrite_engages_native(tmp_path):
-    # --fs-basic-scorers must rewrite autoconfig's specialized name scorers
-    # (given_name_aliased_jw / name_freq_weighted_jw) to jaro_winkler, which the
-    # native FS kernel implements -- so with native LOADED the matchkey becomes
-    # _fs_native_eligible and the Rust kernel engages.
+    # --fs-basic-scorers must rewrite autoconfig's NON-BASIC scorers (the
+    # reference-data name scorers given_name_aliased_jw / name_freq_weighted_jw)
+    # to jaro_winkler, keying on the FIXED base set {jaro_winkler, levenshtein,
+    # token_sort, exact} -- NOT the ever-growing _NATIVE_FS_SCORER_IDS (which now
+    # includes the name scorers, so keying on it would rewrite nothing). After the
+    # rewrite every field is a base scorer, so with native LOADED the matchkey is
+    # _fs_native_eligible and the Rust kernel engages, on a model comparable to
+    # Splink's own JaroWinkler FS.
     gen = _load("generate_fixture")
     fx, tr = tmp_path / "p.parquet", tmp_path / "p.truth.parquet"
     gen.generate(2000, 0.3, fx, tr, 42, 2000, shape="person")

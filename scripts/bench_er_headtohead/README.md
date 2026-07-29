@@ -63,16 +63,18 @@ so the two are reported as separate lanes rather than one silently substituting
 the other.
 
 **Both FS lanes pass `--fs-basic-scorers` (name fields forced to `jaro_winkler`).**
-Autoconfig picks specialized name scorers (`given_name_aliased_jw` for first_name,
-`name_freq_weighted_jw` for surname) that the native FS kernel does NOT implement
-(its set is `{exact, jaro_winkler, levenshtein, token_sort}`), so
-`_fs_native_eligible()` declines the matchkey and the native lane silently runs
-numpy - identical to the numpy lane. `--fs-basic-scorers` rewrites any field scorer
-outside the kernel set to `jaro_winkler`, which makes the matchkey native-eligible
-so the two lanes form a real matched numpy-vs-native pair that actually exercises
-the Rust kernel. It also makes the FS model JaroWinkler-comparable to Splink's own
-JaroWinkler FS. The rewrite runs before the eligibility telemetry below, so the
-counts reflect the config actually scored; the rewritten `(field, old_scorer)`
+Autoconfig picks specialized reference-data name scorers (`given_name_aliased_jw`
+for first_name, `name_freq_weighted_jw` for surname). `--fs-basic-scorers` rewrites
+any scorer NOT in the fixed **base set** `{jaro_winkler, levenshtein, token_sort,
+exact}` to `jaro_winkler`, so both FS lanes run the SAME basic JaroWinkler model:
+native-eligible via the base kernel ids AND comparable to Splink's own JaroWinkler
+FS. The rewrite keys on that **fixed base set, NOT on `_NATIVE_FS_SCORER_IDS`**:
+the native kernel has since grown to score the name scorers too (ids 4/5, behind
+the optional `FS_SUPPORTS_NAME_SCORERS` wheel capability + a loaded refdata pack),
+so keying on the full native set would leave the specialized name scorers in place
+and silently break both the "basic scorers" contract and the Splink comparability
+the flag exists for. The rewrite runs before the eligibility telemetry below, so
+the counts reflect the config actually scored; the rewritten `(field, old_scorer)`
 pairs are recorded on `fs_basic_scorers_rewritten`.
 
 **Proof-of-execution field (`fs_native_eligible_matchkeys`).** The global gate is

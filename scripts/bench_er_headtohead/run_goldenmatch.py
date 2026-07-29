@@ -200,25 +200,32 @@ def main() -> None:
             for mk in cfg.get_matchkeys():
                 if getattr(mk, "type", None) == "weighted":
                     mk.rerank = False
-            # Optionally force any specialized name scorer autoconfig picked
-            # (given_name_aliased_jw / name_freq_weighted_jw) that the native FS
-            # kernel doesn't implement to jaro_winkler. This makes BOTH FS lanes
-            # native-eligible (a matched numpy-vs-native pair) and comparable to
-            # Splink's JaroWinkler FS model. Runs BEFORE the eligibility telemetry
-            # below so the counts reflect the config actually scored.
+            # Optionally force any NON-BASIC scorer autoconfig picked -- the
+            # reference-data name scorers (given_name_aliased_jw /
+            # name_freq_weighted_jw), ensemble, embedding -- to jaro_winkler. This
+            # makes BOTH FS lanes run the SAME basic JaroWinkler model: native-
+            # eligible via the base kernel ids AND comparable to Splink's own
+            # JaroWinkler FS. Runs BEFORE the eligibility telemetry below so the
+            # counts reflect the config actually scored.
+            #
+            # "Basic" is the FIXED base set {jaro_winkler, levenshtein, token_sort,
+            # exact} -- the four string scorers the native FS kernel has always
+            # scored unconditionally and that mirror Splink's comparison functions.
+            # We key on this fixed set, NOT on `_NATIVE_FS_SCORER_IDS`: that set has
+            # since grown to include the name scorers (ids 4/5, behind the optional
+            # FS_SUPPORTS_NAME_SCORERS wheel capability + a loaded refdata pack), so
+            # keying on it would leave the specialized name scorers in place --
+            # silently breaking both the "basic scorers" contract and the Splink
+            # JaroWinkler comparability the flag exists to guarantee.
+            _FS_BASIC_SCORERS = {"jaro_winkler", "levenshtein", "token_sort", "exact"}
             rewritten: list = []
             if args.fs_basic_scorers:
-                try:
-                    from goldenmatch.core.probabilistic import _NATIVE_FS_SCORER_IDS
-
-                    for mk in cfg.get_matchkeys():
-                        for f in getattr(mk, "fields", None) or []:
-                            sc = getattr(f, "scorer", None)
-                            if sc is not None and sc not in _NATIVE_FS_SCORER_IDS:
-                                rewritten.append((getattr(f, "field", None), sc))
-                                f.scorer = "jaro_winkler"
-                except (ImportError, AttributeError):
-                    pass
+                for mk in cfg.get_matchkeys():
+                    for f in getattr(mk, "fields", None) or []:
+                        sc = getattr(f, "scorer", None)
+                        if sc is not None and sc not in _FS_BASIC_SCORERS:
+                            rewritten.append((getattr(f, "field", None), sc))
+                            f.scorer = "jaro_winkler"
             result["fs_basic_scorers_rewritten"] = rewritten
             # FS-native per-matchkey eligibility telemetry (spec section 8): count
             # how many resolved matchkeys the native FS kernel could score. Under
