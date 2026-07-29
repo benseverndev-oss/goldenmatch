@@ -7866,7 +7866,7 @@
     },
     "goldencheck": {
       "root": "packages/python/goldencheck/goldencheck",
-      "module_count": 114,
+      "module_count": 115,
       "modules": [
         {
           "module": "goldencheck",
@@ -8075,6 +8075,17 @@
           ]
         },
         {
+          "module": "goldencheck.baseline._owned_stats",
+          "file": "packages/python/goldencheck/goldencheck/baseline/_owned_stats.py",
+          "purpose": "Owned pure-Python statistics kernels -- goldencheck's scipy-free reference for",
+          "defines": [
+            "chi2_contingency_stat",
+            "chi2_gof",
+            "gamma_ur",
+            "pearson_r"
+          ]
+        },
+        {
           "module": "goldencheck.baseline.constraints",
           "file": "packages/python/goldencheck/goldencheck/baseline/constraints.py",
           "purpose": "Constraint mining: functional dependencies, candidate keys, temporal orders.",
@@ -8102,6 +8113,7 @@
           ],
           "imports": [
             "goldencheck._polars_lazy",
+            "goldencheck.baseline._owned_stats",
             "goldencheck.baseline.models",
             "goldencheck.core._native_loader"
           ]
@@ -8184,6 +8196,7 @@
           "imports": [
             "goldencheck._polars_lazy",
             "goldencheck.baseline._ks",
+            "goldencheck.baseline._owned_stats",
             "goldencheck.baseline.models",
             "goldencheck.core._native_loader"
           ]
