@@ -3003,6 +3003,15 @@ def _run_dedupe_pipeline(
             with stage("domain_extraction"):
                 _frame = _tf_lane(_apply_domain_extraction(_frame.native, config))
 
+        # ── Learning Memory: pre-scoring learner overlay (parity with the classic
+        # branch's memory_pre_overlay at ~3220). Operates on `matchkeys` +
+        # `memory_store` (opened once above the lane split), not the frame, so it
+        # sits here on the arrow lane before precompute. memory_post is already
+        # shared (below the lane merge), so this closes the last memory gap on the
+        # arrow lane -- arrow-lane migration phase 2.
+        with stage("memory_pre_overlay"):
+            _apply_memory_pre(memory_store, config, matchkeys)
+
         with stage("precompute_matchkey_transforms"):
             collected_frame = precompute_matchkey_transforms_frame(_frame, matchkeys)
         collected_df = collected_frame.native
@@ -4894,9 +4903,6 @@ def _arrow_lane_supported(config: Any, auto_config: bool) -> bool:
       this lane, not applied).
     """
     del auto_config  # auto-config is now supported on the arrow lane
-    _mem = getattr(config, "memory", None)
-    if _mem is not None and getattr(_mem, "enabled", False):
-        return False
     if getattr(config, "prepared_record_store", False):
         return False
     if getattr(config, "partitioned_block_scoring", False):
