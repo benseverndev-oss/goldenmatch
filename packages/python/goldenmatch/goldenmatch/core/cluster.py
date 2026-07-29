@@ -517,7 +517,9 @@ def build_clusters(
 
 
 
-def deterministic_merge_pairs(frame: Any, keys: list[str], id_col: str = "__row_id__"):
+def deterministic_merge_pairs(
+    frame: Any, keys: list[str], id_col: str = "__row_id__", max_group: int = 100,
+):
     """Synthetic max-score pairs that FORCE records sharing an authoritative
     identifier (``keys``, e.g. ``['npi']``) into the same cluster.
 
@@ -526,7 +528,13 @@ def deterministic_merge_pairs(frame: Any, keys: list[str], id_col: str = "__row_
     a unique government id like NPI can no longer be split across entities by a low
     probabilistic score (the ~6% entity fragmentation seen at 14M). Returns a
     ``PAIR_STREAM_SCHEMA`` (id_a, id_b, score) polars frame; fully vectorized (one
-    shifted-within-group pass per key), so it adds only ``n-1`` pairs per group."""
+    shifted-within-group pass per key), so it adds only ``n-1`` pairs per group.
+
+    HUB GUARD: a value shared by more than ``max_group`` RECORDS is a placeholder or
+    data-entry error (e.g. ``'0000000000'`` on thousands of rows), not a real
+    provider -- merging it would collapse thousands of unrelated records into one
+    giant cluster (an OOM). Such values are skipped; a genuine NPI is shared by a
+    handful of records."""
     import polars as pl
 
     df = frame if isinstance(frame, pl.DataFrame) else pl.from_arrow(frame)
@@ -540,6 +548,14 @@ def deterministic_merge_pairs(frame: Any, keys: list[str], id_col: str = "__row_
                 pl.col(key).cast(pl.Utf8).str.strip_chars().alias("_v"),
             ])
             .filter(pl.col("_v").is_not_null() & (pl.col("_v") != ""))
+        )
+        if sub.height < 2:
+            continue
+        # drop hub values (shared by > max_group records) before chaining
+        sub = (
+            sub.with_columns(pl.len().over("_v").alias("_n"))
+            .filter(pl.col("_n") <= max_group)
+            .drop("_n")
             .sort("_v")
         )
         if sub.height < 2:

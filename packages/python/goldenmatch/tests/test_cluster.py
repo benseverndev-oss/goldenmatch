@@ -472,3 +472,15 @@ def test_deterministic_merge_pairs_empty_cases():
     df = pl.DataFrame({"__row_id__": [0, 1], "npi": [None, ""]})
     assert deterministic_merge_pairs(df, ["npi"]).height == 0
     assert deterministic_merge_pairs(df, ["missing"]).height == 0
+
+
+def test_deterministic_merge_pairs_hub_guard():
+    """A value shared by more records than max_group (a placeholder / bad id) is
+    skipped, so it can't collapse thousands of unrelated records into one cluster."""
+    import polars as pl
+    from goldenmatch.core.cluster import deterministic_merge_pairs
+    df = pl.DataFrame({"__row_id__": list(range(8)),
+                       "npi": ["HUB", "HUB", "HUB", "HUB", "HUB", "HUB", "ok", "ok"]})
+    p = deterministic_merge_pairs(df, ["npi"], max_group=4)
+    assert p.height == 1                          # only the 'ok' pair survives
+    assert set(p["id_a"].to_list()) | set(p["id_b"].to_list()) == {6, 7}
