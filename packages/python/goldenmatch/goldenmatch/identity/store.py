@@ -85,9 +85,12 @@ def _rel_value_expr(raw: str, transform: str | None, backend: str) -> str:
         )
     if t == "normalize_company":
         if pg:
+            # NOTE: no literal '?' anywhere in this SQL -- `_pg_sql` turns every '?'
+            # into a bind placeholder (naive str.replace), so a regex '?' (e.g. the
+            # old '\.?$') would be miscounted as a parameter. Use '\.{0,1}$' instead.
             return (
                 f"nullif(btrim(regexp_replace(lower(btrim({raw})), "
-                r"'[\s,\.]+(inc|llc|ltd|corp|co|company|pllc|pc|pa|group|assoc|associates)\.?$', "
+                r"'[\s,\.]+(inc|llc|ltd|corp|co|company|pllc|pc|pa|group|assoc|associates)\.{0,1}$', "
                 "'', 'g')), '')"
             )
         # sqlite has no regexp_replace -> degrade to lower_trim (documented in the

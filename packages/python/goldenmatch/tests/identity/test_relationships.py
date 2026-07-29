@@ -257,3 +257,16 @@ def test_suggest_relationship_rules_ranks_shared_fields(store):
     assert "ssn" not in fields         # all unique -> no edges
     assert "country" not in fields     # shared by 6 > max_fanout 4 -> hub
     assert all(r.kind == f"shares_{r.field}" for r in rules)
+
+
+def test_pg_transform_sql_has_no_placeholder_collision():
+    """`_pg_sql` maps every '?' to a bind placeholder (naive str.replace), so a
+    transform's SQL must never contain a literal '?'. A regex '?' in
+    normalize_company ('\.?$') once broke the query at 14M ('4 placeholders but 3
+    parameters'); it never showed in sqlite tests (normalize_company degrades to
+    lower_trim there). This guards the whole class without needing Postgres."""
+    from goldenmatch.identity.store import _rel_value_expr
+    raw = "payload ->> 'x'"
+    for t in (None, "raw", "lower_trim", "zip3", "email_domain", "normalize_company"):
+        expr = _rel_value_expr(raw, t, "postgres")
+        assert "?" not in expr, f"transform {t!r} PG SQL has a '?': {expr}"
