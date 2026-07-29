@@ -110,7 +110,16 @@ def main() -> int:
 
         with open(args.fixture, newline="") as _fh:
             _names = next(_csv.reader(_fh))
-        _convert = pacsv.ConvertOptions(column_types={c: pa.string() for c in _names})
+        # Match pl.read_csv semantics: an EMPTY cell is MISSING (null), not the
+        # literal string "". pyarrow otherwise reads "" as a real value, which the
+        # FS scorer treats as a disagreement instead of unobserved -- the whole
+        # source of the earlier arrow-vs-polars blocking/cluster gap (a reader
+        # bug, NOT a goldenmatch lane difference; the engine is already arrow-native).
+        _convert = pacsv.ConvertOptions(
+            column_types={c: pa.string() for c in _names},
+            strings_can_be_null=True,
+            null_values=[""],
+        )
         _parse = pacsv.ParseOptions(invalid_row_handler=lambda _row: "skip")
         df = pacsv.read_csv(args.fixture, parse_options=_parse, convert_options=_convert)
         _keep = [c for c in df.column_names if c not in _drop_cols]
