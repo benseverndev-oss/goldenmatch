@@ -122,12 +122,14 @@ def main() -> int:
         )
         _parse = pacsv.ParseOptions(invalid_row_handler=lambda _row: "skip")
         df = pacsv.read_csv(args.fixture, parse_options=_parse, convert_options=_convert)
+        _truth = df.column("cluster_id").to_pylist() if "cluster_id" in df.column_names else None
         _keep = [c for c in df.column_names if c not in _drop_cols]
         df = df.select(_keep)
         n = df.num_rows
     else:
         import polars as pl
         df = pl.read_csv(args.fixture, ignore_errors=True, infer_schema_length=0)
+        _truth = df["cluster_id"].to_list() if "cluster_id" in df.columns else None
         for drop in _drop_cols:
             if drop in df.columns:
                 df = df.drop(drop)
@@ -156,6 +158,51 @@ def main() -> int:
     print(f"GOLDENMATCH_FS_COLUMNAR_CLUSTER={columnar}  block_scoring_native={native_enabled('block_scoring')}")
     print(f"rss_after_load_mb={rss_after_load:.0f}")
     print(f"dedupe_wall_s={wall:.2f}  clusters={n_clusters}")
+
+    # Ground-truth pairwise precision/recall vs the fixture's cluster_id (the
+    # generator's labels). Row i of the input aligns with _truth[i] (captured
+    # before dropping cluster_id). res.clusters maps a predicted cluster -> its
+    # member ROW INDICES, covering every row (singletons included). Pairwise
+    # metrics come from the (truth, pred) contingency via sum C(n,2) -- O(rows),
+    # no all-pairs enumeration. This is the ONLY authority on which lane is
+    # correct: cluster COUNT alone can't tell an over-merge from a recall hole.
+    if _truth is not None and hasattr(res, "clusters") and res.clusters:
+        from collections import Counter
+
+        def _members(c):
+            if isinstance(c, dict):
+                return c.get("members", [])
+            return getattr(c, "members", c)
+
+        pred = [None] * n
+        for _cid, _c in res.clusters.items():
+            for _m in _members(_c):
+                if 0 <= _m < n:
+                    pred[_m] = _cid
+        pair_ct: Counter = Counter()
+        t_ct: Counter = Counter()
+        p_ct: Counter = Counter()
+        for _i in range(n):
+            _t = _truth[_i]
+            _p = pred[_i]
+            pair_ct[(_t, _p)] += 1
+            t_ct[_t] += 1
+            p_ct[_p] += 1
+
+        def _c2(x: int) -> int:
+            return x * (x - 1) // 2
+
+        tp = sum(_c2(v) for v in pair_ct.values())
+        pred_pairs = sum(_c2(v) for v in p_ct.values())
+        true_pairs = sum(_c2(v) for v in t_ct.values())
+        prec = tp / pred_pairs if pred_pairs else 0.0
+        rec = tp / true_pairs if true_pairs else 0.0
+        f1 = 2 * prec * rec / (prec + rec) if (prec + rec) else 0.0
+        print(
+            f"GROUND-TRUTH  true_clusters={len(t_ct)}  pred_clusters={len(p_ct)}  "
+            f"pairwise_precision={prec:.4f}  pairwise_recall={rec:.4f}  f1={f1:.4f}"
+        )
+
     print(f"peak_rss_sampled_mb={sampler.peak:.0f}  ru_maxrss_mb={ru_peak:.0f}")
     print(f"peak_over_baseload_mb={sampler.peak - rss_after_load:.0f}")
     # Print the headline metrics first (stable order), then any others the
