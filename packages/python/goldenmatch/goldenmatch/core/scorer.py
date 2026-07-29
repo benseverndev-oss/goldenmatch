@@ -77,8 +77,9 @@ def _emit_scoring_profile(
     # auto-config controller's sample iterations), so ``current_emitter()`` is
     # the null singleton and ``set_scoring`` is a no-op -- but histogram_20 +
     # hartigan_dip + the mass_* passes below run over EVERY scored pair (~131M
-    # at 1M rows: the dip is a numpy/diptest sort, the rest are full-list Python
-    # loops). That ~149s of work was computed and immediately discarded. Same
+    # at 1M rows: the dip is an owned O(n log n) sort + GCM/LCM walk (core._dip),
+    # the rest are full-list Python loops). That work was computed and
+    # immediately discarded. Same
     # dead-work pattern as #837's matched_pairs; the guard makes the no-op path
     # actually do no work. When a capture IS active (sample iterations) the
     # construction is byte-identical to before.
