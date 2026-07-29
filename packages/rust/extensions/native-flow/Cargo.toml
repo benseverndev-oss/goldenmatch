@@ -28,10 +28,13 @@ arrow = { version = "59", default-features = false, features = ["pyarrow", "ffi"
 # Pure-Rust CSV reader/writer for the native file->transform->file path (Phase 2
 # of the Polars eviction). Tiny, no pyo3/arrow-csv churn — RFC4180 in/out.
 csv = "1"
-# Dates are intentionally NOT a native kernel: GoldenFlow's Polars fast path
-# (str.to_date coalesce) already resolves the 4-digit-year formats in vectorized
-# Rust, and a per-row chrono parser would be slower while reintroducing the
-# 2-digit-year parity hazard. The ragged date tail stays on dateutil.
+# Dates: the OWNED deterministic parser now lives in `goldenflow-core::dates`
+# (parse_date/parse_datetime -- no chrono, no dateutil, no Polars). The
+# native-flow ARROW export for the date family is a deferred follow-up (13
+# heterogeneous output shapes, not the single-`*_arrow` idiom); today the
+# pure-Python fallback in goldenflow (byte-identical to the core kernel) is the
+# runtime. When wired, add the `*_arrow` kernels here mirroring the email/text
+# families.
 #
 # Owned reference kernels (pure phone logic). native-flow is now a marshaling
 # shim: Arrow in/out + GIL release here, the actual computation in the core.
