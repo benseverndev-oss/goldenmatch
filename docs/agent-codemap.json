@@ -2230,6 +2230,7 @@
           "defines": [
             "BlockResult",
             "RowIdBlock",
+            "_AggOversizedBlock",
             "_ann_sub_block",
             "_auto_split_block",
             "_build_ann_blocks",
