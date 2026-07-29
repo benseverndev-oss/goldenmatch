@@ -74,6 +74,12 @@ dev = [
     # CI/tests while `pip install goldenmatch` stays rapidfuzz-free. Without this
     # every rapidfuzz oracle test ERROR'd at collection on main (#2231 regression).
     "rapidfuzz>=3.0",
+    # jellyfish is a TEST-ONLY parity oracle too: goldenmatch owns metaphone via
+    # goldenphonetic (byte-identical) at RUNTIME, but several test_*.py assert
+    # against jellyfish. Same shape as rapidfuzz -- keep it in the dev group so
+    # `uv sync` installs it for CI/tests while `pip install goldenmatch` is
+    # jellyfish-free (soundex was already in-house; metaphone moved off it here).
+    "jellyfish>=1.0",
     # transitive test deps surfaced across workspace packages:
     "httpx>=0.27",  # required by starlette.testclient (used by goldenpipe tests)
 ]

@@ -1239,7 +1239,7 @@ dependencies = [
     { name = "diptest" },
     { name = "duckdb" },
     { name = "goldenmatch-native", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or sys_platform == 'darwin' or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-11-goldenmatch-inhouse-embeddings' and extra == 'extra-11-goldenmatch-sail') or (sys_platform == 'linux' and extra == 'extra-11-goldenmatch-inhouse-embeddings' and extra == 'extra-11-goldenmatch-sail') or (sys_platform == 'win32' and extra == 'extra-11-goldenmatch-inhouse-embeddings' and extra == 'extra-11-goldenmatch-sail')" },
-    { name = "jellyfish" },
+    { name = "goldenphonetic" },
     { name = "numpy" },
     { name = "openpyxl" },
     { name = "psutil" },
@@ -1410,11 +1410,11 @@ requires-dist = [
     { name = "goldenmatch", extras = ["embeddings", "llm", "postgres", "mcp", "polars", "quality", "transform", "web", "vision", "audio"], marker = "extra == 'all'", editable = "packages/python/goldenmatch" },
     { name = "goldenmatch-native", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or sys_platform == 'darwin'", directory = "packages/rust/extensions/native" },
     { name = "goldenmatch-native", marker = "extra == 'native'", directory = "packages/rust/extensions/native" },
+    { name = "goldenphonetic", specifier = ">=0.1.0" },
     { name = "google-cloud-bigquery", marker = "extra == 'bigquery'", specifier = ">=3.0" },
     { name = "google-cloud-storage", marker = "extra == 'gcs'", specifier = ">=2.10" },
     { name = "httpx", marker = "extra == 'web'", specifier = ">=0.27" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.0" },
-    { name = "jellyfish", specifier = ">=1.0" },
     { name = "llama-cpp-python", marker = "extra == 'llama'", specifier = ">=0.3" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.28.1" },
     { name = "numpy", specifier = ">=1.26" },
@@ -1470,6 +1470,7 @@ source = { virtual = "." }
 dev = [
     { name = "httpx" },
     { name = "hypothesis" },
+    { name = "jellyfish" },
     { name = "pyright" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -1486,6 +1487,7 @@ dev = [
 dev = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "hypothesis", specifier = ">=6.0" },
+    { name = "jellyfish", specifier = ">=1.0" },
     { name = "pyright", specifier = ">=1.1.380" },
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-asyncio", specifier = ">=0.23" },
@@ -1500,6 +1502,19 @@ dev = [
 name = "goldenmatch-native"
 version = "0.1.19"
 source = { directory = "packages/rust/extensions/native" }
+
+[[package]]
+name = "goldenphonetic"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/74/db/1406432927433a65d2d4881bab6718ba5e2ab96139ceca64448f15298661/goldenphonetic-0.1.0.tar.gz", hash = "sha256:efd25d96c00db63da810117a58375ccf0010a4737643654262d2a0e5777c3fed", size = 58523, upload-time = "2026-07-28T21:02:32.956Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/db/6f/096d18da9432fea528de99b510fac71ce196c8a6f65d805b5384bd0f79e2/goldenphonetic-0.1.0-cp311-abi3-macosx_10_12_x86_64.whl", hash = "sha256:4f730fca2b49ced761cb91ed4eac7988bdd527ea4b7bd2b64a3f9b8d3b2f9e5c", size = 261164, upload-time = "2026-07-28T21:02:27.295Z" },
+    { url = "https://files.pythonhosted.org/packages/67/6a/d73af290793e6372c2090fa3e6c055950f4738069b35374f06abd5d17877/goldenphonetic-0.1.0-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:dc3985bc400f52a7260c310751ec240e47480b1f66947d439d59e9a6ddd8386c", size = 258113, upload-time = "2026-07-28T21:02:28.697Z" },
+    { url = "https://files.pythonhosted.org/packages/34/b0/20a08ff495e01d8987fdc3046d55395fc19b0605d445236a0a518d2d0c08/goldenphonetic-0.1.0-cp311-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:a26dbbc877c148d1c93ed8a6cb07cb987ab18974053be8985db052d9bf230031", size = 309828, upload-time = "2026-07-28T21:02:29.673Z" },
+    { url = "https://files.pythonhosted.org/packages/22/67/ab04fb2d69f9a9af3b485ecbd5089b8bc22825cf25f7b8d4fa9b70d533e0/goldenphonetic-0.1.0-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:4f3736273e7220772bef94cd3c3d206d4cbbddc26bc22db64c7920a537218ee4", size = 290861, upload-time = "2026-07-28T21:02:30.822Z" },
+    { url = "https://files.pythonhosted.org/packages/3b/85/7bf33a489474c4c012cf7f75cbd6f0189f92ecb02182f70f65b41027f449/goldenphonetic-0.1.0-cp311-abi3-win_amd64.whl", hash = "sha256:7f17453422df123d85a2ac7f2baa5f67fbbc39d3b2d1fea1dd75c8249b6003e4", size = 160586, upload-time = "2026-07-28T21:02:31.835Z" },
+]
 
 [[package]]
 name = "goldenpipe"
