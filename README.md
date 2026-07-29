@@ -28,7 +28,7 @@ The headline package, **GoldenMatch**, does the matching — fuzzy + exact + pro
 [![DBLP-ACM F1](https://img.shields.io/badge/DBLP--ACM%20F1-96.4%25-d4a017)](packages/python/goldenmatch/README.md#benchmarks)
 
 <!-- Reach -->
-[![PyPI downloads (suite)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbenseverndev-oss%2Fgoldenmatch%2Fbadges%2Fpypi-downloads.json)](https://pepy.tech/projects?q=goldenmatch+goldencheck+goldenpipe+goldenflow+goldenanalysis+infermap+goldencheck-types+goldensuite-mcp+goldenfuzz+goldenphonetic+goldenmatch-duckdb+goldenmatch-native+goldenflow-native+goldencheck-native+goldenanalysis-native+goldengraph-native+goldenmatch-embed+golden-suite)
+[![PyPI downloads (suite)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbenseverndev-oss%2Fgoldenmatch%2Fbadges%2Fpypi-downloads.json)](https://pepy.tech/projects?q=goldenmatch+goldencheck+goldenpipe+goldenflow+goldenanalysis+infermap+goldencheck-types+goldensuite-mcp+goldenfuzz+goldenphonetic+goldenmatch-hnsw+goldenmatch-duckdb+goldenmatch-native+goldenflow-native+goldencheck-native+goldenanalysis-native+goldengraph-native+goldenmatch-embed+golden-suite)
 [![npm downloads (suite)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbenseverndev-oss%2Fgoldenmatch%2Fbadges%2Fnpm-downloads.json)](https://www.npmjs.com/~benzsevern)
 [![GitHub stars](https://img.shields.io/github/stars/benseverndev-oss/goldenmatch?style=flat&color=d4a017&logo=github)](https://github.com/benseverndev-oss/goldenmatch/stargazers)
 
@@ -192,6 +192,7 @@ The suite owns its string-matching primitives instead of renting them — byte-i
 |---|---|---|---|
 | **[goldenfuzz](packages/rust/extensions/goldenfuzz-py/README.md)** | `rapidfuzz` | Fuzzy-string scorers — jaro-winkler / levenshtein / indel + the full `fuzz.*` composite family (WRatio, token/partial ratios) + one-vs-many `extract`/`cdist`. Byte-identical to rapidfuzz (oracle-fuzzed), faster on short strings. | `pip install goldenfuzz` · `cargo add goldenfuzz-core` |
 | **[goldenphonetic](packages/rust/extensions/goldenphonetic-py/README.md)** | `jellyfish` | Phonetic encoders — soundex / metaphone / nysiis / match-rating. Byte-identical to jellyfish (26,602-comparison fuzz), pure-Rust zero-dep; nysiis 6.8× faster. | `pip install goldenphonetic` · `cargo add goldenphonetic-core` |
+| **[goldenmatch-hnsw](packages/rust/extensions/hnsw-py/README.md)** | FAISS `IndexHNSWFlat` | Pure-Rust HNSW approximate-nearest-neighbor index (zero C deps) — powers embedding-based blocking; the same kernel runs the Python wheel, Rust core, and TS/WASM surface. | `pip install goldenmatch-hnsw` |
 
 ### Knowledge graphs
 
