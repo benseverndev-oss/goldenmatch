@@ -37,6 +37,9 @@ PYPI_PACKAGES = [
     # Standalone phonetic-encoder product (our owned jellyfish replacement).
     # Published via publish-goldenphonetic.yml; crates.io twin goldenphonetic-core.
     "goldenphonetic",
+    # Owned pure-Rust HNSW ANN index (our FAISS IndexHNSWFlat replacement).
+    # Published via publish-goldenmatch-hnsw.yml.
+    "goldenmatch-hnsw",
     # One-line meta-package (whole suite + native, on by default). A distinct PyPI
     # distribution whose downloads partially overlap its component packages --
     # counted here for the same reason as the *-native extras below.
