@@ -80,7 +80,7 @@ def main() -> None:
                     help="hand_built = explicit bucket+native config (default); "
                          "zeroconfig = auto_configure_df controller; "
                          "probabilistic = Fellegi-Sunter auto-config")
-    ap.add_argument("--shape", choices=["person", "biblio"], default="person",
+    ap.add_argument("--shape", choices=["person", "biblio", "product"], default="person",
                     help="fixture shape; selects the hand_built config from shapes.py")
     ap.add_argument("--require-native", action="store_true", default=True)
     ap.add_argument("--allow-pure-python", dest="require_native", action="store_false")

@@ -43,6 +43,16 @@ def test_biblio_shape_metadata():
     assert 150_000 <= s.blocking_cardinality <= 260_000
 
 
+def test_product_shape_metadata():
+    shapes = _load("shapes")
+    s = shapes.SHAPES["product"]
+    assert s.name == "product"
+    assert s.columns == ["record_id", "title", "brand", "category", "price"]
+    assert s.blocking_fields == ["brand", "category"]
+    # N_BRAND (4000) x N_CATEGORY (50) = 200K, mirrors person's C (spec 5.3)
+    assert s.blocking_cardinality == 200_000
+
+
 def test_projected_block_size_guard_flags_small_C():
     shapes = _load("shapes")
     # A key with only 18K distinct blocks is an N^2 trap at 100M (spec 5.2).
@@ -107,6 +117,57 @@ def test_generate_biblio_titles_actually_vary(tmp_path):
     assert max_titles > 1
 
 
+def test_generate_product_schema_and_stable_block_key(tmp_path):
+    import pyarrow.parquet as pq
+
+    gen = _load("generate_fixture")
+    out, truth = tmp_path / "p.parquet", tmp_path / "p.truth.parquet"
+    gen.generate(rows=3000, dupe_rate=0.3, out=out, truth=truth, seed=42,
+                 batch=1000, shape="product")
+    t = pq.read_table(out)
+    assert t.column_names == ["record_id", "title", "brand", "category", "price"]
+    # Within every truth cluster, brand+category (block key) must be identical
+    # across members -- the stability guarantee that avoids the recall trap.
+    from collections import defaultdict
+
+    truth_t = pq.read_table(truth)
+    rids = t.column("record_id").to_pylist()
+    brand_by_id = dict(zip(rids, t.column("brand").to_pylist()))
+    cat_by_id = dict(zip(rids, t.column("category").to_pylist()))
+    cl_brands: dict = defaultdict(set)
+    cl_cats: dict = defaultdict(set)
+    for r, c in zip(truth_t.column("record_id").to_pylist(),
+                    truth_t.column("cluster_id").to_pylist()):
+        cl_brands[c].add(brand_by_id.get(r))
+        cl_cats[c].add(cat_by_id.get(r))
+    # brand + category always unique per cluster (stable composite block key)
+    assert max(len(v) for v in cl_brands.values()) == 1
+    assert max(len(v) for v in cl_cats.values()) == 1
+
+
+def test_generate_product_titles_actually_vary(tmp_path):
+    gen = _load("generate_fixture")
+    out, truth = tmp_path / "p.parquet", tmp_path / "p.truth.parquet"
+    gen.generate(3000, 0.3, out, truth, 42, 1000, shape="product")
+    import pyarrow.parquet as pq
+    from collections import defaultdict
+
+    t = pq.read_table(out)
+    truth_t = pq.read_table(truth)
+    title_by_id = dict(zip(t.column("record_id").to_pylist(),
+                           t.column("title").to_pylist()))
+    cl_members: dict = defaultdict(list)
+    for r, c in zip(truth_t.column("record_id").to_pylist(),
+                    truth_t.column("cluster_id").to_pylist()):
+        cl_members[c].append(r)
+    # at least some multi-member clusters have >1 distinct title (corruption happened)
+    max_titles = 0
+    for members in cl_members.values():
+        if len(members) > 1:
+            max_titles = max(max_titles, len({title_by_id.get(m) for m in members}))
+    assert max_titles > 1
+
+
 def test_generator_projection_check_rejects_small_C():
     gen = _load("generate_fixture")
     # A hypothetical biblio-with-tiny-venue C would project a huge block at 100M.
@@ -146,6 +207,21 @@ def test_run_goldenmatch_handbuilt_biblio(tmp_path):
     r = json.loads(out.read_text())
     assert r["status"] == "ok" and r["dedupe_wall_seconds"] is not None
     assert r["shape"] == "biblio"
+
+
+def test_run_goldenmatch_handbuilt_product(tmp_path):
+    gen = _load("generate_fixture")
+    fx, tr = tmp_path / "p.parquet", tmp_path / "p.truth.parquet"
+    gen.generate(2000, 0.3, fx, tr, 42, 2000, shape="product")
+    out, pred = tmp_path / "r.json", tmp_path / "r.pred.parquet"
+    rc = subprocess.run([sys.executable, str(HERE / "run_goldenmatch.py"),
+        "--input", str(fx), "--rows", "2000", "--out", str(out), "--pred-out", str(pred),
+        "--threshold", "0.85", "--mode", "hand_built", "--shape", "product",
+        "--allow-pure-python"], env=_env()).returncode
+    assert rc == 0
+    r = json.loads(out.read_text())
+    assert r["status"] == "ok" and r["dedupe_wall_seconds"] is not None
+    assert r["shape"] == "product"
 
 
 def test_probabilistic_numpy_lane_zero_native_eligible(tmp_path):
