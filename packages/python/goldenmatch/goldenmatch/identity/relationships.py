@@ -63,62 +63,109 @@ def build_relationships(
     return (inserted, deleted)
 
 
+# Field-name hints -> a derived transform worth trying alongside the raw value, so
+# auto-detect can discover that (e.g.) `email_address` is a great edge field UNDER
+# `email_domain` even though the raw address is unique.
+_TRANSFORM_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("email",), "email_domain"),
+    (("zip", "postal"), "zip3"),
+    (("org", "company", "employer", "practice", "business", "clinic",
+      "hospital", "facility", "institution", "group", "affiliation"),
+     "normalize_company"),
+)
+# Never suggest edges on identity/plumbing columns (they relate a record to itself,
+# not two entities) -- skipped by default in addition to any caller ``exclude``.
+_DEFAULT_SKIP = frozenset({
+    "unique_id", "id", "row_id", "record_id", "entity_id", "source", "dataset",
+})
+
+
+def _candidate_transforms(field: str) -> list[str | None]:
+    f = field.lower()
+    cands: list[str | None] = [None]
+    for keys, transform in _TRANSFORM_HINTS:
+        if any(k in f for k in keys):
+            cands.append(transform)
+    return cands
+
+
+def profile_relationship_fields(
+    store: IdentityStore,
+    dataset: str | None = None,
+    *,
+    min_entities: int = 2,
+    max_fanout: int = 50,
+    exclude: list[str] | None = None,
+    sample_keys: int = 500,
+) -> list[dict]:
+    """Rank every candidate ``(field, best transform)`` by how many entities it
+    would actually give edges to (``coverage_entities``), with fanout measured on
+    the FULL data (``store.relationship_field_stats``), not a sample. For each field
+    the raw value and any name-hinted transform (email_domain / normalize_company /
+    zip3) are profiled and the highest-coverage variant kept.
+
+    This is the scale-correct core of auto-detect: hub attributes (specialty,
+    degree, state -- a value held by ~everyone) fall out with ``coverage=0``, and a
+    unique-looking field (email_address) surfaces under its transform (email_domain)
+    rather than being dismissed on its raw value. ``sample_keys`` only bounds how
+    many payloads are peeked to DISCOVER field names (keys are stable). Returns
+    dicts ``{field, transform, coverage_entities, sweet_values, hub_values}``,
+    best first (only fields that would produce at least one edge)."""
+    from goldenmatch.identity.store import _SAFE_FIELD
+
+    skip = _DEFAULT_SKIP | {c.lower() for c in (exclude or ())}
+    fields: set[str] = set()
+    for _eid, payload in store.sample_records(dataset, sample_keys):
+        for key in payload:
+            if key.lower() not in skip and _SAFE_FIELD.fullmatch(key):
+                fields.add(key)
+
+    ranked: list[dict] = []
+    for field in sorted(fields):
+        best: dict | None = None
+        for transform in _candidate_transforms(field):
+            st = store.relationship_field_stats(
+                field, dataset, min_entities, max_fanout, transform)
+            if st["coverage_entities"] <= 0:
+                continue
+            if best is None or st["coverage_entities"] > best["coverage_entities"]:
+                best = {"field": field, "transform": transform, **st}
+        if best is not None:
+            ranked.append(best)
+    ranked.sort(key=lambda r: r["coverage_entities"], reverse=True)
+    return ranked
+
+
 def suggest_relationship_rules(
     store: IdentityStore,
     dataset: str | None = None,
     *,
-    sample: int = 50_000,
     min_entities: int = 2,
     max_fanout: int = 50,
     top_k: int = 8,
     exclude: list[str] | None = None,
+    sample_keys: int = 500,
 ) -> list[RelationshipRule]:
-    """Profile a bounded sample of resolved records and SUGGEST relationship rules
-    for the fields that look like good edge sources -- fields with many values
-    shared by ``min_entities..max_fanout`` distinct entities (real pairwise links)
-    and few hub values (a value held by everyone, like ``country``, makes no useful
-    edge). This is the "the program identifies good fields" half of the feature;
-    the user-defined half is writing ``RelationshipRule``s by hand.
-
-    ADVISORY, not authoritative: the sample is ``LIMIT``-bounded (cheap at 14M) so
-    it can undercount a value's true fan-out -- treat the ranked list as a starting
-    point a human (or an ``auto`` config) reviews, not ground truth. Fields whose
-    names are not SQL-safe are skipped (they would fail ``relationship_groups``).
-    Returns up to ``top_k`` rules, highest edge-yield first."""
-    from collections import defaultdict
-
+    """SUGGEST relationship rules for the fields the program identifies as good edge
+    sources -- the "program identifies" half of the feature (the other half is
+    writing ``RelationshipRule``s by hand). Wraps ``profile_relationship_fields``:
+    ranks candidate ``(field, transform)`` by true full-data entity coverage, so it
+    prefers high-yield derived fields (email_domain) and rejects hub attributes
+    (specialty/degree/state) instead of ranking them first (the flaw of the old
+    LIMIT-sampled raw-value heuristic). Returns up to ``top_k`` rules, best first."""
     from goldenmatch.config.schemas import RelationshipRule
-    from goldenmatch.identity.store import _SAFE_FIELD
 
-    skip = {c.lower() for c in (exclude or ())}
-    field_vals: dict[str, dict[str, set]] = defaultdict(lambda: defaultdict(set))
-    for eid, payload in store.sample_records(dataset, sample):
-        for key, val in payload.items():
-            if key.lower() in skip or not _SAFE_FIELD.fullmatch(key) or val is None:
-                continue
-            sval = str(val).strip()
-            if sval:
-                field_vals[key][sval].add(eid)
-
-    scored: list[tuple[float, int, str]] = []
-    for field, vals in field_vals.items():
-        sweet = sum(1 for e in vals.values() if min_entities <= len(e) <= max_fanout)
-        if not sweet:
-            continue
-        hubs = sum(1 for e in vals.values() if len(e) > max_fanout)
-        # fraction of distinct values that yield real (non-hub) edges: rewards
-        # fields dominated by sweet-spot values, penalizes near-unique + hub fields.
-        score = sweet / (len(vals) + hubs + 1)
-        scored.append((score, sweet, field))
-
-    scored.sort(key=lambda t: (t[0], t[1]), reverse=True)
-    return [
-        RelationshipRule(
-            field=field, kind=f"shares_{field}",
-            min_entities=min_entities, max_fanout=max_fanout,
-        )
-        for _score, _sweet, field in scored[:top_k]
-    ]
+    ranked = profile_relationship_fields(
+        store, dataset, min_entities=min_entities, max_fanout=max_fanout,
+        exclude=exclude, sample_keys=sample_keys)
+    rules = []
+    for r in ranked[:top_k]:
+        field, transform = r["field"], r["transform"]
+        kind = f"shares_{field}" if transform is None else f"shares_{field}_{transform}"
+        rules.append(RelationshipRule(
+            field=field, kind=kind, transform=transform,
+            min_entities=min_entities, max_fanout=max_fanout))
+    return rules
 
 
 def _entity_name(node: object, name_field: str | None) -> str | None:

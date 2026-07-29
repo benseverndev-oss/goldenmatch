@@ -61,6 +61,7 @@ from goldenmatch.identity.query import (
 )
 from goldenmatch.identity.relationships import (
     build_relationships,
+    profile_relationship_fields,
     suggest_relationship_rules,
     to_graph_batch,
 )
@@ -131,6 +132,7 @@ __all__ = [
     "match_record_to_entity",
     "migrate_record_ids",
     "build_relationships",
+    "profile_relationship_fields",
     "suggest_relationship_rules",
     "to_graph_batch",
     "resolve_clusters",

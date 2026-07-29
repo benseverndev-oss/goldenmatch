@@ -1873,6 +1873,63 @@ class IdentityStore:
                 out.append((r["entity_id"], p))
         return out
 
+    def relationship_field_stats(
+        self, field: str, dataset: str | None,
+        min_entities: int, max_entities: int, transform: str | None = None,
+    ) -> dict[str, int]:
+        """Full-data cardinality profile of a candidate ``(field, transform)`` for
+        ``suggest_relationship_rules``. Over ALL resolved records (not a sample):
+
+        * ``sweet_values``  -- distinct values shared by ``[min_entities,
+          max_entities]`` distinct entities (each yields real pairwise edges),
+        * ``hub_values``    -- distinct values shared by ``> max_entities`` entities
+          (skipped as hubs),
+        * ``coverage_entities`` -- distinct ENTITIES that land in a sweet-spot value
+          (the rank key: how much of the graph this field would actually edge).
+
+        Because fanout is measured on the WHOLE dataset, a hub attribute (a value
+        held by ~everyone, e.g. a specialty or state) scores ``coverage=0`` -- the
+        opposite of a small LIMIT sample, where its in-sample fanout stays under the
+        cap and it masquerades as a good edge field."""
+        if self._backend == "mongo":
+            raise NotImplementedError("relationship_field_stats: not on mongo")
+        if not _SAFE_FIELD.fullmatch(field):
+            raise ValueError(f"unsafe relationship field name: {field!r}")
+        self._ensure_relationship_index(field)
+        if self._backend == "postgres":
+            raw = f"payload ->> '{field}'"
+        else:
+            raw = f"json_extract(payload, '$.{field}')"
+        vexpr = _rel_value_expr(raw, transform, self._backend)
+        ds = "" if dataset is None else " AND dataset = ?"
+        params: tuple = () if dataset is None else (dataset,)
+        sql = (
+            "WITH ex AS ("
+            f" SELECT {vexpr} AS v, entity_id FROM source_records"
+            f" WHERE entity_id IS NOT NULL{ds}"
+            "), pairs AS ("
+            " SELECT DISTINCT v, entity_id FROM ex WHERE v IS NOT NULL AND v <> ''"
+            "), card AS ("
+            " SELECT v, COUNT(*) AS n FROM pairs GROUP BY v"
+            ") "
+            "SELECT "
+            "(SELECT COUNT(*) FROM card WHERE n >= ? AND n <= ?) AS sweet_values, "
+            "(SELECT COUNT(*) FROM card WHERE n > ?) AS hub_values, "
+            "(SELECT COUNT(DISTINCT p.entity_id) FROM pairs p JOIN card c "
+            " ON p.v = c.v WHERE c.n >= ? AND c.n <= ?) AS coverage_entities"
+        )
+        rows = self._fetchall(
+            sql, params + (min_entities, max_entities, max_entities,
+                           min_entities, max_entities))
+        r = rows[0] if rows else None
+        if r is None:
+            return {"sweet_values": 0, "hub_values": 0, "coverage_entities": 0}
+        return {
+            "sweet_values": int(r["sweet_values"] or 0),
+            "hub_values": int(r["hub_values"] or 0),
+            "coverage_entities": int(r["coverage_entities"] or 0),
+        }
+
     def _ensure_relationship_index(self, field: str) -> None:
         """Best-effort covering expression index ``(payload->>field, entity_id)`` so
         ``relationship_groups`` reads an index-ordered stream instead of seq-scanning

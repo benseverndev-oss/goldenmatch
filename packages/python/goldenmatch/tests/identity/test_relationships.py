@@ -260,7 +260,7 @@ def test_suggest_relationship_rules_ranks_shared_fields(store):
 
 
 def test_pg_transform_sql_has_no_placeholder_collision():
-    """`_pg_sql` maps every '?' to a bind placeholder (naive str.replace), so a
+    r"""`_pg_sql` maps every '?' to a bind placeholder (naive str.replace), so a
     transform's SQL must never contain a literal '?'. A regex '?' in
     normalize_company ('\.?$') once broke the query at 14M ('4 placeholders but 3
     parameters'); it never showed in sqlite tests (normalize_company degrades to
@@ -270,3 +270,21 @@ def test_pg_transform_sql_has_no_placeholder_collision():
     for t in (None, "raw", "lower_trim", "zip3", "email_domain", "normalize_company"):
         expr = _rel_value_expr(raw, t, "postgres")
         assert "?" not in expr, f"transform {t!r} PG SQL has a '?': {expr}"
+
+
+def test_suggest_picks_transform_and_rejects_hubs(store):
+    """Full-data profiling fixes the two things the old sampled heuristic got wrong:
+    a unique-looking field surfaces under its TRANSFORM (email -> email_domain groups
+    by company), and a HUB attribute (specialty held by ~everyone) is rejected, not
+    ranked first."""
+    rows = [{"id": str(i), "name": f"P{i}",
+             "email": f"u{i}@acme.com" if i < 3 else f"u{i}@beta.com",
+             "specialty": "IM"}                       # all 6 share it -> hub
+            for i in range(6)]
+    _resolve(store, _df(rows), _singletons(6), [])
+    from goldenmatch.identity import suggest_relationship_rules
+    rules = suggest_relationship_rules(store, dataset="d", max_fanout=4, top_k=5)
+    by_field = {r.field: r for r in rules}
+    assert "email" in by_field
+    assert by_field["email"].transform == "email_domain"   # raw email is unique
+    assert "specialty" not in by_field                      # 6 > max_fanout 4 -> hub
