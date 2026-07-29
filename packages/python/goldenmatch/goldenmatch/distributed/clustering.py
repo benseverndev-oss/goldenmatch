@@ -148,15 +148,16 @@ def _wcc_algorithm() -> str:
     return os.environ.get("GOLDENMATCH_DISTRIBUTED_WCC", "two_phase").lower()
 
 
-# Peak driver bytes per scored pair on the in-memory scipy route: ~24 B for the
+# Peak driver bytes per scored pair on the in-memory connected-components route: ~24 B for the
 # (id_a, id_b, score) = (int64, int64, f64) triple, times ~4 because the arrow
-# table, the numpy id arrays, the CSR matrix, and the labels array are all live
-# at once. Deliberately conservative -- routing in-memory must not OOM the driver.
+# table, the numpy id arrays, the symmetrized edge arrays, and the labels array
+# are all live at once. Deliberately conservative -- routing in-memory must not
+# OOM the driver.
 _PAIR_PEAK_BYTES = 96
 
 
 def _route_distributed(pair_count: int) -> bool:
-    """Decide the clustering route: True => distributed WCC, False => in-memory scipy.
+    """Decide the clustering route: True => distributed WCC, False => in-memory connected-components.
 
     The scored pair set fits one node far more often than the legacy fixed 50M
     threshold assumed (110M pairs ~= 1.76 GB raw), so the slow distributed WCC
@@ -190,7 +191,7 @@ def _route_distributed(pair_count: int) -> bool:
         pair_count,
         est_peak / (1024 ** 3),
         available / (1024 ** 3),
-        "distributed WCC" if distribute else "in-memory scipy",
+        "distributed WCC" if distribute else "in-memory connected-components",
     )
     return distribute
 
@@ -205,7 +206,7 @@ def _resolve_use_label_prop(
 
     An explicit planner strategy ("in_memory" / "distributed_wcc") wins;
     otherwise fall back to the memory-aware route decision (#956): in-memory
-    scipy whenever the scored pair set fits driver RAM, distributed WCC when it
+    in-memory connected-components whenever the scored pair set fits driver RAM, distributed WCC when it
     doesn't (or an explicit CLUSTERING_THRESHOLD says so).
     """
     if force_label_propagation:
@@ -220,7 +221,7 @@ def _resolve_use_label_prop(
 def _derive_touched_ids(pairs_ds: Dataset) -> list[int]:
     """Distinct ids appearing in any pair (id_a or id_b), sorted.
 
-    Driver-side collect of the distinct SET -- used ONLY on the scipy and
+    Driver-side collect of the distinct SET -- used ONLY on the connected-components and
     label-propagation routes, which are gated below the 50M-pair threshold,
     so the set is bounded. The two_phase_wcc route never calls this (it takes
     all_ids=None and derives touched members distributively in Phase A).
@@ -248,12 +249,12 @@ def build_clusters_distributed(
     Row shape: {member_id, cluster_id, cluster_size, oversized}.
 
     Routing (Splink-Spark style), memory-aware by default (#956):
-      - Pair set fits available driver RAM: driver-side scipy.csgraph. The
+      - Pair set fits available driver RAM: driver-side connected-components. The
         in-memory connected-components pass is seconds where the distributed
         WCC is a multi-hour tail, so it is the default whenever the pairs fit.
       - Pair set does NOT fit driver RAM, OR force_label_propagation=True:
         distributed WCC / label propagation on Ray Datasets. Falls back to
-        scipy on non-convergence.
+        the CC fallback on non-convergence.
 
     Setting GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD overrides the
     memory-aware default with an explicit pair-count threshold (see
@@ -262,12 +263,12 @@ def build_clusters_distributed(
     ``algorithm`` (keyword-only) overrides the GOLDENMATCH_DISTRIBUTED_WCC env
     selector for this call (e.g. "randomized_contraction"); None = env default.
     Only affects the at/above-threshold WCC path; below the threshold the route
-    is scipy regardless.
+    is the in-memory CC route regardless.
 
     ``all_ids`` is the full id universe (incl. isolated singletons). Pass
     ``None`` (default) for the golden scale path: only multi-member clusters
     are needed, so the two_phase route derives touched members distributively
-    and never builds an O(N) driver id list. The scipy / label-propagation
+    and never builds an O(N) driver id list. The connected-components / label-propagation
     routes (small scale) derive the touched set on demand when all_ids is None.
 
     cluster_id is the minimum member_id in the connected component.
@@ -281,13 +282,13 @@ def build_clusters_distributed(
 
     if not use_label_prop:
         logger.info(
-            "build_clusters_distributed: %d pairs route to scipy.csgraph "
+            "build_clusters_distributed: %d pairs route to driver-side connected-components "
             "(driver-side, fits memory -- faster at this scale).",
             pair_count,
         )
         ids = all_ids if all_ids is not None else _derive_touched_ids(pairs_ds)
         return _annotate_cluster_sizes(
-            _build_clusters_scipy_fallback(pairs_ds, ids, max_cluster_size),
+            _build_clusters_cc_fallback(pairs_ds, ids, max_cluster_size),
             max_cluster_size,
             already_sized=True,
         )
@@ -312,11 +313,11 @@ def build_clusters_distributed(
             )
         except ConvergenceError as e:
             logger.warning(
-                "label propagation did not converge; scipy.csgraph fallback on driver. %s",
+                "label propagation did not converge; connected-components fallback on driver. %s",
                 e,
             )
             return _annotate_cluster_sizes(
-                _build_clusters_scipy_fallback(pairs_ds, ids, max_cluster_size),
+                _build_clusters_cc_fallback(pairs_ds, ids, max_cluster_size),
                 max_cluster_size,
                 already_sized=True,
             )
@@ -373,7 +374,7 @@ def _annotate_cluster_sizes(
     Same co-location trick build_golden_records_distributed uses. Bounded
     per-partition memory, no driver-side O(clusters) structure.
 
-    ``already_sized=True`` short-circuits for the scipy fallback, which
+    ``already_sized=True`` short-circuits for the CC fallback, which
     already emits {member_id, cluster_id, cluster_size, oversized}.
     """
     import os
@@ -424,19 +425,19 @@ def _annotate_cluster_sizes(
     return colocated.map_batches(_emit, batch_format="pyarrow")
 
 
-def _build_clusters_scipy_fallback(
+def _build_clusters_cc_fallback(
     pairs_ds: Dataset,
     all_ids: list[int],
     max_cluster_size: int,
 ) -> Dataset:
-    """Driver-side scipy.csgraph fallback.
+    """Driver-side connected-components fallback (owned; scipy-free).
 
     Used for two paths in build_clusters_distributed:
       - default route below the 50M-pair threshold (Splink-DuckDB analog)
       - convergence-failure escape hatch when label propagation can't finish
 
     Vectorized end-to-end: pair rows -> Arrow columns -> numpy index lookup
-    -> scipy connected_components -> Arrow output -> ray.data.from_arrow.
+    -> owned connected_components_undirected -> Arrow output -> ray.data.from_arrow.
     Run 26122054424 had this at 67s on 8.3M pairs / 16.6M members; the
     naive Python-loop path drove that wall. Vectorized path targets <30s.
     """
@@ -444,8 +445,10 @@ def _build_clusters_scipy_fallback(
     import polars as pl
     import pyarrow as pa
     import ray
-    from scipy.sparse import csr_matrix
-    from scipy.sparse.csgraph import connected_components
+
+    from goldenmatch.distributed._connected_components import (
+        connected_components_undirected,
+    )
 
     # Pull pairs in pyarrow batches and concatenate (vectorized; the prior
     # take_all + per-row dict comprehension was the 67s bottleneck on
@@ -467,9 +470,7 @@ def _build_clusters_scipy_fallback(
     row_idx = np.searchsorted(sorted_ids, id_a_arr)
     col_idx = np.searchsorted(sorted_ids, id_b_arr)
 
-    data = np.ones(row_idx.shape[0], dtype=np.int8)
-    graph = csr_matrix((data, (row_idx, col_idx)), shape=(n, n))
-    _n_components, labels = connected_components(graph, directed=False)
+    _n_components, labels = connected_components_undirected(row_idx, col_idx, n)
 
     # Compute per-cluster size via bincount; broadcast back to per-member.
     sizes_per_label = np.bincount(labels, minlength=int(labels.max()) + 1 if labels.size else 1)
@@ -1245,7 +1246,7 @@ def _rc_union_isolated(labels_ds: Any, all_ids: list[int], pairs_ds: Any) -> Any
 
     Only reached when a caller passes a concrete ``all_ids`` (the full-universe,
     smaller-scale regime), so the driver-side touched-set derive is acceptable --
-    the same posture the scipy / label_propagation routes already take.
+    the same posture the connected-components / label_propagation routes already take.
     """
     import ray
     touched = set(_derive_touched_ids(pairs_ds))
