@@ -11707,7 +11707,7 @@
     },
     "infermap": {
       "root": "packages/python/infermap/infermap",
-      "module_count": 30,
+      "module_count": 31,
       "modules": [
         {
           "module": "infermap",
@@ -11743,6 +11743,14 @@
           ]
         },
         {
+          "module": "infermap._optimize",
+          "file": "packages/python/infermap/infermap/_optimize.py",
+          "purpose": "Owned derivative-free optimizer — infermap's replacement for the ``scipy``",
+          "defines": [
+            "minimize_nelder_mead"
+          ]
+        },
+        {
           "module": "infermap.assignment",
           "file": "packages/python/infermap/infermap/assignment.py",
           "purpose": "Optimal 1:1 assignment via the Hungarian algorithm.",
@@ -11767,6 +11775,9 @@
             "calibrator_from_dict",
             "load_calibrator",
             "save_calibrator"
+          ],
+          "imports": [
+            "infermap._optimize"
           ]
         },
         {
