@@ -1,11 +1,12 @@
 """Correlation analyzer — Pearson (numeric-numeric) and Cramer's V (categorical-categorical).
 
 **Polars-accelerator-only (declined from the seam eviction, R4).** The core is a
-``group_by([a, b]).agg(pl.len()).pivot(on=b, index=a, values=...)`` plus a hard ``numpy``/``scipy``
-dependency (``pearsonr``, ``chi2_contingency``, ``.to_numpy()``) -- a ``group_by().agg()`` + real
+``group_by([a, b]).agg(pl.len()).pivot(on=b, index=a, values=...)`` plus a hard ``numpy``
+dependency (``.to_numpy()``; the Pearson r + chi-squared statistics are owned now,
+no scipy) -- a ``group_by().agg()`` + real
 ``.pivot()`` the ``Frame``/``Column`` seam does not model. It is NOT routed through the seam; it stays
 import-safe for the goldencheck import gate (lazy ``pl``; ``baseline`` is imported lazily) but requires
-Polars (and the ``[baseline]`` numpy/scipy extra) at runtime. See
+Polars (and the ``[baseline]`` numpy extra) at runtime. See
 ``docs/superpowers/specs/2026-07-09-goldencheck-relation-ports-r4-decline.md``.
 """
 from __future__ import annotations
@@ -16,14 +17,19 @@ from typing import TYPE_CHECKING
 
 try:
     import numpy as np
-    from scipy.stats import chi2_contingency, pearsonr
 except ImportError as _err:  # pragma: no cover
     raise ImportError(
-        "scipy and numpy are required for deep-profiling baseline. "
-        "Install them with: pip install 'goldencheck[baseline]'"
+        "numpy is required for deep-profiling baseline. "
+        "Install it with: pip install 'goldencheck[baseline]'"
     ) from _err
 
 from goldencheck._polars_lazy import pl
+from goldencheck.baseline._owned_stats import (
+    chi2_contingency_stat as _owned_chi2_contingency_stat,
+)
+from goldencheck.baseline._owned_stats import (
+    pearson_r as _owned_pearson_r,
+)
 from goldencheck.baseline.models import CorrelationEntry
 from goldencheck.core._native_loader import native_enabled, native_module
 
@@ -76,10 +82,10 @@ def _pearson_entry(df: pl.DataFrame, col_a: str, col_b: str) -> CorrelationEntry
     if np.std(a_vals) == 0.0 or np.std(b_vals) == 0.0:
         return None
 
-    corr, _ = pearsonr(a_vals, b_vals)
-    # Shadow (W4): also compute the native pearson_r kernel and discard it. The
-    # emitted CorrelationEntry stays scipy until the Flip; the guard + swallow
-    # ensure this shadow compute can never raise out or alter the finding.
+    # Owned Pearson r (W4 Flip): the native kernel when available, else the pure
+    # `_owned_stats` mirror -- no scipy. Both reproduce `scipy.stats.pearsonr[0]`
+    # to float epsilon (the emitted value is `round(corr, 6)`, so identical).
+    corr: float | None = None
     if native_enabled("pearson_r"):
         try:
             import pyarrow as pa
@@ -88,9 +94,15 @@ def _pearson_entry(df: pl.DataFrame, col_a: str, col_b: str) -> CorrelationEntry
             # columns may arrive as int dtype). Mirrors the benford kernel path.
             xa = pa.array(np.asarray(a_vals, dtype=np.float64))
             ya = pa.array(np.asarray(b_vals, dtype=np.float64))
-            native_module().pearson_r(xa, ya)
-        except BaseException:  # noqa: BLE001 - swallow even PyO3 PanicException
-            logger.debug("native pearson_r shadow failed", exc_info=True)
+            corr = float(native_module().pearson_r(xa, ya))
+        except BaseException:  # noqa: BLE001 - swallow even PyO3 PanicException, fall back to pure
+            logger.debug("native pearson_r failed; using owned pure", exc_info=True)
+            corr = None
+    if corr is None:
+        corr = _owned_pearson_r(
+            np.asarray(a_vals, dtype=np.float64).tolist(),
+            np.asarray(b_vals, dtype=np.float64).tolist(),
+        )
     if not np.isfinite(corr):
         return None
 
@@ -138,22 +150,23 @@ def _cramers_v(df: pl.DataFrame, col_a: str, col_b: str) -> CorrelationEntry | N
     if matrix.shape[0] < 2 or matrix.shape[1] < 2:
         return None
 
-    try:
-        chi2, _, _, _ = chi2_contingency(matrix)
-    except Exception as exc:
-        logger.debug("Chi2 contingency failed for (%s, %s): %s", col_a, col_b, exc)
-        return None
-
-    # Shadow (W4): also compute the native chi2_contingency_stat kernel and
-    # discard it. Only reached when scipy did not raise (so the matrix is
-    # well-formed); the guard + swallow keep the finding scipy-authoritative.
+    # Owned chi-squared statistic (W4 Flip): native kernel when available, else
+    # the pure `_owned_stats` mirror -- no scipy. Both reproduce
+    # `scipy.stats.chi2_contingency(matrix)[0]` (default Yates for 2x2) to float
+    # epsilon; only the statistic is used (Cramer's V), never scipy's p-value.
+    nrows_m, ncols_m = matrix.shape[0], matrix.shape[1]
+    flat = matrix.astype(np.float64).flatten().tolist()
+    chi2: float | None = None
     if native_enabled("chi2_contingency"):
         try:
-            native_module().chi2_contingency_stat(
-                matrix.flatten().tolist(), matrix.shape[0], matrix.shape[1]
-            )
-        except BaseException:  # noqa: BLE001 - swallow even PyO3 PanicException
-            logger.debug("native chi2_contingency shadow failed", exc_info=True)
+            chi2 = float(native_module().chi2_contingency_stat(flat, nrows_m, ncols_m))
+        except BaseException:  # noqa: BLE001 - swallow even PyO3 PanicException, fall back to pure
+            logger.debug("native chi2_contingency failed; using owned pure", exc_info=True)
+            chi2 = None
+    if chi2 is None:
+        chi2 = _owned_chi2_contingency_stat(flat, nrows_m, ncols_m)
+    if not np.isfinite(chi2):
+        return None
 
     n = int(matrix.sum())
     if n == 0:
@@ -194,8 +207,8 @@ def _cramers_v(df: pl.DataFrame, col_a: str, col_b: str) -> CorrelationEntry | N
 def analyze_correlations(df: pl.DataFrame) -> list[CorrelationEntry]:
     """Analyze pairwise correlations in *df* and return reportable entries.
 
-    - Numeric pairs: Pearson correlation via scipy.stats.pearsonr.
-    - Categorical pairs: Cramer's V via chi2_contingency.
+    - Numeric pairs: Pearson correlation via the owned `_owned_stats.pearson_r`.
+    - Categorical pairs: Cramer's V via the owned `_owned_stats.chi2_contingency_stat`.
     - Only moderate (>=0.4) or strong (>=0.7) correlations are reported.
     - At most _MAX_PAIRS column pairs are evaluated to prevent O(n²) blowup.
     - String columns must have n_unique < _MAX_CAT_UNIQUE to qualify as categorical.
