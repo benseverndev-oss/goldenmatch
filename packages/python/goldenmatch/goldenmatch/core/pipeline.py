@@ -4885,14 +4885,21 @@ def run_dedupe_df(
     frame = frame.with_literal_column("__source__", source_name)
     frame = frame.ensure_row_ids(offset=0)
 
-    # Back-compat routing: a polars input keeps the classic polars-LazyFrame
-    # path (byte-identical to the pre-flip `lf.collect().lazy()` -- the seam ops
-    # above are the verbatim polars twins); an arrow input flows through as a
-    # seam Frame so `_run_dedupe_pipeline`'s arrow lane (the
-    # `is_polars_lazyframe` router) carries it polars-free.
-    combined_lf: Any = (
-        frame.native.lazy() if isinstance(frame, _PolarsFrame) else frame
-    )
+    # Evict the classic-lazy polars path: a polars input is converted to an arrow
+    # seam Frame so it runs the SAME correct, polars-free arrow lane as a pa.Table
+    # input. The classic-lazy path OVER-MERGED at scale -- ground-truth pairwise
+    # precision 0.013 (transitive-closure blowup on a 75x-larger candidate set)
+    # vs 0.98 on the arrow Frame lane for identical data (bench-fs-single-mk-probe,
+    # 5M). `cast_all_str()` above makes the pl->arrow conversion clean (nulls
+    # preserved). GOLDENMATCH_FRAME_LANE=0 restores the classic shim (revert switch).
+    if isinstance(frame, _PolarsFrame):
+        combined_lf: Any = (
+            frame.native.lazy()
+            if os.environ.get("GOLDENMATCH_FRAME_LANE", "1") == "0"
+            else _to_frame(frame.to_arrow())
+        )
+    else:
+        combined_lf = frame
 
     # Phase 2 stopgap: when prepared_record_store=True and no caller-provided
     # _prep_store (Phase 3's controller will supply one), open our own store
