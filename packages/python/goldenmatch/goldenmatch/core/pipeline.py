@@ -2896,6 +2896,45 @@ def _run_dedupe_pipeline(
                     logger.info("Auto-fix: %d fixes applied", len(_af_fixes))
                 _frame = _tf_lane(_fixed_native)
 
+        # ── AUTO-CONFIG ON CLEANED DATA (if zero-config) ── arrow Frame lane
+        # Mirror the classic branch's Step 1.5b: build the config from the
+        # cleaned frame, then recompute matchkeys. Runs AFTER prep
+        # (quality -> transform -> auto_fix) and BEFORE validation rules /
+        # standardize / matchkeys / domain / precompute -- the SAME position
+        # the classic branch uses -- so every downstream stage sees the
+        # auto-configured `matchkeys`/`config`. `auto_configure_df` is dual-rep
+        # (accepts the seam `_frame` -> its `pa.Table` internally), keeping
+        # the lane polars-free. No prep-cache/eager-stage bridging is needed:
+        # this lane skips the classic prep cache entirely (correctness first),
+        # and run_dedupe_df never seeds `_eager_stages_done` for it.
+        if auto_config:
+            from goldenmatch.core.autoconfig import auto_configure_df
+            with stage("auto_configure"):
+                # Pass the seam Frame (not `_frame.native`): auto_configure_df
+                # is dual-rep and coerces via `to_frame` internally, and the
+                # Frame exposes `.height`/`.columns` like the classic branch's
+                # `pl.DataFrame`, so the profiling input is lane-consistent.
+                auto_cfg = auto_configure_df(
+                    _frame,
+                    llm_provider=auto_config_llm_provider,
+                    llm_auto=config.llm_auto,
+                )
+            config.matchkeys = auto_cfg.matchkeys
+            config.match_settings = auto_cfg.match_settings
+            config.blocking = auto_cfg.blocking
+            config.golden_rules = auto_cfg.golden_rules
+            config.llm_scorer = auto_cfg.llm_scorer
+            config.memory = auto_cfg.memory
+            # Propagate domain config so the domain-extraction stage below runs
+            # when auto_configure_df (via preflight Check 1) decided it should.
+            if auto_cfg.domain is not None:
+                config.domain = auto_cfg.domain
+            _propagate_autoconfig_markers(auto_cfg, config)
+            matchkeys = config.get_matchkeys()
+            logger.info(
+                "Auto-configured from cleaned data: %d matchkeys", len(matchkeys)
+            )
+
         if config.validation and config.validation.rules:
             with stage("validation"):
                 _v_rules = [
@@ -4840,15 +4879,21 @@ def _arrow_lane_supported(config: Any, auto_config: bool) -> bool:
     lane, drop its guard here.
 
     Un-ported flows:
-    - auto-config: the arrow lane never calls ``auto_configure_df`` (zero-config
-      runs entirely on the classic branch).
     - prep memory store: ``config.memory`` correction/threshold learning is
       classic-only (memory e2e).
     - prepared-record store / partitioned block scoring: the disk-backed prep
       store + the polars-native bucketed-materialize assembly.
+
+    Ported (guard dropped):
+    - auto-config: the arrow Frame lane now calls ``auto_configure_df`` on the
+      cleaned seam frame (Phase 1), mirroring the classic branch. NOTE the
+      memory guard below is evaluated against the CALLER's config (pre
+      auto-config), so a zero-config caller with ``config.memory is None``
+      evicts to the arrow lane; auto-config only produces a memory-enabled
+      config when ``llm_auto`` is set (then memory learning is a Phase-2 gap on
+      this lane, not applied).
     """
-    if auto_config:
-        return False
+    del auto_config  # auto-config is now supported on the arrow lane
     _mem = getattr(config, "memory", None)
     if _mem is not None and getattr(_mem, "enabled", False):
         return False
