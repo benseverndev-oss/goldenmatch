@@ -55,6 +55,46 @@ SCHEMA_VERSION = 7
 # so they are validated against this before use (never user free-text at the SQL).
 _SAFE_FIELD = re.compile(r"[A-Za-z0-9_]+")
 
+
+def _rel_value_expr(raw: str, transform: str | None, backend: str) -> str:
+    """Wrap the raw payload-extraction SQL ``raw`` in a value TRANSFORM so a
+    relationship rule can key edges on a DERIVED value (email domain, normalized
+    company, zip3, lowercased specialty/degree) instead of the literal field.
+
+    Transforms are a FIXED vocabulary mapped to fixed SQL templates -- never user
+    free-text -- so this is injection-safe (``raw`` itself is already built from a
+    ``_SAFE_FIELD``-validated name). A transform that yields empty/no-match returns
+    NULL so ``relationship_groups`` filters it out. ``None``/``'raw'`` returns
+    ``raw`` byte-for-byte, so the no-transform path is unchanged."""
+    t = (transform or "raw").lower()
+    pg = backend == "postgres"
+    if t == "raw":
+        return raw
+    if t == "lower_trim":
+        return f"lower(btrim({raw}))" if pg else f"lower(trim({raw}))"
+    if t == "zip3":
+        return f"substr({raw}, 1, 3)"
+    if t == "email_domain":
+        if pg:
+            return f"lower(nullif(split_part({raw}, '@', 2), ''))"
+        # sqlite: no split_part; guard so a value without '@' yields NULL, not the
+        # whole string (which would wrongly relate everyone missing an '@').
+        return (
+            f"CASE WHEN instr({raw}, '@') > 0 "
+            f"THEN lower(substr({raw}, instr({raw}, '@') + 1)) END"
+        )
+    if t == "normalize_company":
+        if pg:
+            return (
+                f"nullif(btrim(regexp_replace(lower(btrim({raw})), "
+                r"'[\s,\.]+(inc|llc|ltd|corp|co|company|pllc|pc|pa|group|assoc|associates)\.?$', "
+                "'', 'g')), '')"
+            )
+        # sqlite has no regexp_replace -> degrade to lower_trim (documented in the
+        # relationship-graph-v2 spec; the domain of corp suffixes needs a UDF).
+        return f"lower(trim({raw}))"
+    raise ValueError(f"unknown relationship transform: {transform!r}")
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS identity_nodes (
     entity_id      TEXT PRIMARY KEY,
@@ -1749,22 +1789,29 @@ class IdentityStore:
     def relationship_groups(
         self, field: str, dataset: str | None,
         min_entities: int, max_entities: int,
+        transform: str | None = None,
     ) -> list[tuple[str, list[str]]]:
         """Distinct entities that share a value of ``field`` (a payload key),
         grouped in ONE query. Returns ``[(shared_value, [entity_id, ...]), ...]``
         for values held by between ``min_entities`` and ``max_entities`` distinct
         entities. The field is read out of the JSON ``payload`` column; the
-        cardinality gate runs in SQL so only qualifying groups come back."""
+        cardinality gate runs in SQL so only qualifying groups come back.
+
+        ``transform`` (see ``_rel_value_expr``) keys the grouping on a DERIVED
+        value -- e.g. ``email_domain`` relates everyone at the same company domain,
+        ``normalize_company`` collapses "Acme, Inc." / "acme llc" -- instead of the
+        literal field. ``None`` groups on the raw value (SQL byte-identical)."""
         if self._backend == "mongo":
             raise NotImplementedError("relationship_groups: not supported on mongo")
         if not _SAFE_FIELD.fullmatch(field):
             raise ValueError(f"unsafe relationship field name: {field!r}")
         if self._backend == "postgres":
-            vexpr = f"((sr.payload)::jsonb ->> '{field}')"
+            raw = f"((sr.payload)::jsonb ->> '{field}')"
             agg = "string_agg(DISTINCT sr.entity_id, ',')"
         else:
-            vexpr = f"json_extract(sr.payload, '$.{field}')"
+            raw = f"json_extract(sr.payload, '$.{field}')"
             agg = "group_concat(DISTINCT sr.entity_id)"
+        vexpr = _rel_value_expr(raw, transform, self._backend)
         ds = "" if dataset is None else " AND sr.dataset = ?"
         params: tuple = () if dataset is None else (dataset,)
         sql = (

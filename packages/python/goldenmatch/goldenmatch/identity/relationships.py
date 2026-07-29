@@ -41,6 +41,7 @@ def build_relationships(
     for rule in rules:
         groups = store.relationship_groups(
             rule.field, dataset, rule.min_entities, rule.max_fanout,
+            rule.transform,
         )
         for value, eids in groups:
             uniq = sorted({e for e in eids if e})

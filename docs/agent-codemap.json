@@ -6175,6 +6175,7 @@
           "purpose": "IdentityStore -- SQLite/Postgres persistence for the Identity Graph.",
           "defines": [
             "IdentityStore",
+            "_rel_value_expr",
             "_row_get",
             "_sqlite_batch_size",
             "_sqlite_batch_writes_enabled",

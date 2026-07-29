@@ -210,3 +210,32 @@ def test_reconcile_idempotent_no_churn(store):
     s2 = _resolve(store, df, _singletons(2), PHONE, run_name="r2")
     assert s2.relationships_added == 0 and s2.relationships_deleted == 0
     assert store.count_relationships() == 1
+
+
+# ── v2: derived / transform edge fields (edge on ANY field, not just raw) ────
+
+def test_transform_email_domain_relates_same_company(store):
+    """A derived-field rule (transform='email_domain') keys edges on the domain,
+    so two entities at the same company relate even though their emails differ,
+    and someone at a different domain does not."""
+    df = _df([{"id": "1", "name": "Al", "email": "al@acme.com"},
+              {"id": "2", "name": "Bo", "email": "bo@acme.com"},
+              {"id": "3", "name": "Cy", "email": "cy@other.com"}])
+    rule = [RelationshipRule(field="email", kind="same_company",
+                             transform="email_domain")]
+    s = _resolve(store, df, _singletons(3), rule)
+    assert s.relationships_added == 1
+    assert store.count_relationships() == 1
+    rels = store.list_relationships("d")
+    assert rels[0]["shared_value"] == "acme.com"
+
+
+def test_transform_lower_trim_collapses_casing(store):
+    """transform='lower_trim' relates entities whose specialty differs only by
+    case/whitespace -- 'Cardiology' and ' cardiology ' become one group."""
+    df = _df([{"id": "1", "name": "Al", "spec": "Cardiology"},
+              {"id": "2", "name": "Bo", "spec": " cardiology "}])
+    rule = [RelationshipRule(field="spec", kind="same_specialty",
+                             transform="lower_trim")]
+    s = _resolve(store, df, _singletons(2), rule)
+    assert s.relationships_added == 1
