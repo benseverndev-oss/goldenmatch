@@ -20,10 +20,12 @@ Deterministic rules (some INTENTIONALLY diverge from dateutil, documented):
 - 2-digit years use a deterministic POSIX pivot (00-68 -> 2000-2068,
   69-99 -> 1969-1999) instead of dateutil's non-deterministic ``now()``-relative
   mapping.
+- A datetime-bearing string on a date-only transform TRUNCATES to the date
+  (``"2024-01-20 14:05:00" -> 2024-01-20``), matching dateutil -- datetime values
+  in a date column are common and standardizing them is the point.
 - Anything outside the supported set -> ``None`` (the value passes through
   unchanged). dateutil fuzz-parses the exotic tail (bare month names, AM/PM
-  times, weekday/ordinal words, embedded time on the date-only transforms); we
-  don't.
+  times, weekday/ordinal words); we don't.
 - Real calendar validation (month 1-12, day-in-month, leap-aware).
 """
 from __future__ import annotations
@@ -226,14 +228,20 @@ def _parse_datetime_ymdhms(s: str) -> tuple[int, int, int, int, int, int] | None
 
 def _parse_date(val: str | None) -> date | None:
     """Owned deterministic parse to a :class:`datetime.date` (``None`` on the
-    exotic tail / junk). The single primitive every date transform derives from."""
+    exotic tail / junk). The single primitive every date transform derives from.
+
+    Accepts a datetime-bearing string and TRUNCATES to the date (e.g.
+    ``"2024-01-20 14:05:00" -> 2024-01-20``), matching the prior dateutil
+    behavior -- datetime values in a date column are a common real shape, and
+    standardizing them is the whole point of these transforms. A trailing token
+    that is NOT a valid time still fails (whole-string parse, like dateutil)."""
     if not val:
         return None
-    ymd = _parse_date_ymd(val)
-    if ymd is None:
+    r = _parse_datetime_ymdhms(val)  # date + optional VALID trailing time
+    if r is None:
         return None
     try:
-        return date(*ymd)
+        return date(r[0], r[1], r[2])
     except ValueError:  # year out of the datetime range (e.g. 0000)
         return None
 

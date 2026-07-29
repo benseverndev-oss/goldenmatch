@@ -47,7 +47,21 @@ pub fn parse_date(s: &str) -> Option<(i32, u32, u32)> {
     if s.is_empty() {
         return None;
     }
+    // Accept a datetime-bearing string and TRUNCATE to the date (e.g.
+    // "2024-01-20 14:05:00" -> (2024,1,20)), matching the prior dateutil
+    // behavior -- datetime values in a date column are a common real shape.
+    // A trailing token that is NOT a valid time still fails (whole-string parse).
+    let (date_part, time_part) = peel_time(s);
+    let ymd = parse_date_only(date_part)?;
+    if let Some(t) = time_part {
+        parse_time(t)?; // trailing token must be a valid time, else not a date
+    }
+    Some(ymd)
+}
 
+/// Strict date-only parse (no trailing time): year-only, numeric, or English
+/// month-name. `parse_date` (time-tolerant) and `parse_datetime` build on this.
+fn parse_date_only(s: &str) -> Option<(i32, u32, u32)> {
     // 1. Year-only: exactly 4 ASCII digits -> (YYYY, 1, 1).
     if s.len() == 4 && s.bytes().all(|b| b.is_ascii_digit()) {
         let y: i32 = s.parse().ok()?;
@@ -71,7 +85,7 @@ pub fn parse_datetime(s: &str) -> Option<(i32, u32, u32, u32, u32, u32)> {
         return None;
     }
     let (date_part, time_part) = peel_time(s);
-    let (y, m, d) = parse_date(date_part)?;
+    let (y, m, d) = parse_date_only(date_part)?;
     let (hh, mm, ss) = match time_part {
         Some(t) => parse_time(t)?,
         None => (0, 0, 0),
@@ -323,6 +337,20 @@ mod tests {
         assert_eq!(parse_date("2024-03-15"), Some((2024, 3, 15)));
         assert_eq!(parse_date("2024/03/15"), Some((2024, 3, 15)));
         assert_eq!(parse_date("2024-3-5"), Some((2024, 3, 5)));
+    }
+
+    #[test]
+    fn parse_date_truncates_datetime() {
+        // A datetime-bearing string on a date-only parse truncates to the date
+        // (matches dateutil, which parses the whole string then we take .date()).
+        assert_eq!(parse_date("2024-01-20 14:05:00"), Some((2024, 1, 20)));
+        assert_eq!(parse_date("2024-01-20T14:05:00"), Some((2024, 1, 20)));
+        assert_eq!(parse_date("03/15/2024 09:30"), Some((2024, 3, 15)));
+        // Month-name dates with internal spaces are NOT mistaken for a time.
+        assert_eq!(parse_date("Jan 2, 2020"), Some((2020, 1, 2)));
+        assert_eq!(parse_date("2 January 2020"), Some((2020, 1, 2)));
+        // A trailing non-time token is still rejected (not silently truncated).
+        assert_eq!(parse_date("2024-01-20 garbage"), None);
     }
 
     #[test]
