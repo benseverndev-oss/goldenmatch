@@ -1477,6 +1477,8 @@ jobs:
               packages/typescript/goldenflow/tests/parity/identifiers_corpus.jsonl
           cmp packages/python/goldenflow/tests/parity/profile_corpus.jsonl \
               packages/typescript/goldenflow/tests/parity/profile_corpus.jsonl
+          cmp packages/python/goldenflow/tests/parity/dates_corpus.jsonl \
+              packages/typescript/goldenflow/tests/parity/dates_corpus.jsonl
       - name: Build goldenflow WASM artifact into the loader's artifacts/ dir
         # Mirrors score-wasm/build_wasm.sh: cargo build wasm32 + wasm-bindgen-cli
         # pinned from Cargo.lock, emitting goldenflow_wasm_bg.wasm + .js where the

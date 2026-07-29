@@ -9,6 +9,9 @@ pub mod address;
 pub mod autocorrect;
 pub mod categorical;
 pub mod company;
+/// Owned deterministic date/datetime parser — replaces both `dateutil` and the
+/// Polars `str.to_date` fast path. `parse_date` / `parse_datetime` over `&str`.
+pub mod dates;
 /// Fused apply — a whole owned-kernel chain in one pass (Pillar-1). The `Kernel`
 /// enums + the arrow-free `apply_chain_str` (WASM/pure surfaces) are always
 /// compiled; the Arrow-columnar executors inside are `#[cfg(feature = "arrow")]`.

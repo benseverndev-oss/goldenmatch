@@ -10625,9 +10625,11 @@
         {
           "module": "goldenflow.transforms.dates",
           "file": "packages/python/goldenflow/goldenflow/transforms/dates.py",
+          "purpose": "Date/datetime transforms — backed by an OWNED deterministic parser.",
           "defines": [
             "_age_from_dob_factory",
             "_age_scalar",
+            "_ascii_digits",
             "_date_eu_py",
             "_date_iso8601_py",
             "_date_shift_factory",
@@ -10635,13 +10637,27 @@
             "_date_us_py",
             "_date_validate_py",
             "_datetime_iso8601_py",
+            "_days_in_month",
             "_extract_day_of_week_py",
             "_extract_day_py",
             "_extract_month_py",
             "_extract_quarter_py",
             "_extract_year_py",
+            "_finish",
+            "_interpret_numeric",
+            "_is_leap",
+            "_looks_like_time",
+            "_month_from_name",
             "_parse_date",
-            "_parsed_date_expr",
+            "_parse_date_ymd",
+            "_parse_datetime_ymdhms",
+            "_parse_day_token",
+            "_parse_month_name",
+            "_parse_numeric",
+            "_parse_time",
+            "_parse_year_token",
+            "_peel_time",
+            "_valid_ymd",
             "age_from_dob",
             "date_eu",
             "date_iso8601",
@@ -10658,8 +10674,7 @@
           ],
           "imports": [
             "goldenflow._polars_lazy",
-            "goldenflow.transforms",
-            "goldenflow.transforms._fastpath"
+            "goldenflow.transforms"
           ]
         },
         {

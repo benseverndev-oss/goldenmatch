@@ -28,10 +28,15 @@ arrow = { version = "59", default-features = false, features = ["pyarrow", "ffi"
 # Pure-Rust CSV reader/writer for the native file->transform->file path (Phase 2
 # of the Polars eviction). Tiny, no pyo3/arrow-csv churn — RFC4180 in/out.
 csv = "1"
-# Dates are intentionally NOT a native kernel: GoldenFlow's Polars fast path
-# (str.to_date coalesce) already resolves the 4-digit-year formats in vectorized
-# Rust, and a per-row chrono parser would be slower while reintroducing the
-# 2-digit-year parity hazard. The ragged date tail stays on dateutil.
+# Dates: the OWNED deterministic parser lives in `goldenflow-core::dates`
+# (parse_date/parse_datetime -- no chrono, no dateutil, no Polars). The four
+# TOTAL string->string date transforms (date_iso8601/date_us/date_eu/
+# datetime_iso8601, + the date_parse alias) ride the EXISTING fused-chain Arrow
+# path (`apply_chain_arrow` -> `chain::Kernel`) -- no per-transform `*_arrow`
+# shim needed, exactly like soundex/metaphone. The int/bool/nullable date
+# transforms (extract_*, age_from_dob, date_validate, extract_day_of_week,
+# date_shift) don't fit the total-string chain; they stay on the pure-Python
+# scalar until a heterogeneous-output arrow shim is wired.
 #
 # Owned reference kernels (pure phone logic). native-flow is now a marshaling
 # shim: Arrow in/out + GIL release here, the actual computation in the core.

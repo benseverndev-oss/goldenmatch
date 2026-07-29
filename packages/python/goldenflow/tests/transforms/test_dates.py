@@ -115,11 +115,22 @@ def test_age_from_dob():
 
 
 def test_datetime_iso8601():
-    s = pl.Series("d", ["March 15, 2024 3:30 PM", "2024-01-20 14:05:00", None])
+    # 24-hour times (space or T separator) are the supported set.
+    s = pl.Series("d", ["March 15, 2024 15:30:00", "2024-01-20 14:05:00", None])
     result = datetime_iso8601(s)
     assert result[0] == "2024-03-15T15:30:00"
     assert result[1] == "2024-01-20T14:05:00"
     assert result[2] is None
+
+
+def test_datetime_iso8601_ampm_passes_through():
+    """DOCUMENTED DIVERGENCE from the old dateutil path: 12-hour AM/PM times are
+    the exotic tail (not in the owned contract), so the value passes through
+    unchanged rather than being coerced to 24-hour ISO. The owned parser is
+    deterministic + zero-dep; AM/PM parsing is a dateutil-fuzz feature we drop."""
+    s = pl.Series("d", ["March 15, 2024 3:30 PM"])
+    result = datetime_iso8601(s)
+    assert result[0] == "March 15, 2024 3:30 PM"
 
 
 def test_datetime_iso8601_date_only_gets_midnight():
