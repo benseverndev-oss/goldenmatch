@@ -132,11 +132,32 @@ def run_transform(
             out = out.with_column(c, preserved_frame.column(c))
         return out.select(original_columns)
 
+    # GOLDENMATCH_TRANSFORM_DEBUG=1 prints the arrow-lane bridge split
+    # (pl.from_arrow / _do_transform / to_arrow) to size how much of
+    # pipeline_prep_transform is the polars round-trip vs the actual transform
+    # compute. Off by default, zero cost, output-invariant. Same instrument
+    # pattern as GOLDENMATCH_BUCKET_DEBUG.
+    import os as _os  # noqa: PLC0415
+    _tdbg = _os.environ.get("GOLDENMATCH_TRANSFORM_DEBUG", "") not in ("", "0", "false", "False")
+    _t_bridge_in = _t_do = _t_bridge_out = 0.0
+    if _tdbg:
+        import time as _time  # noqa: PLC0415
+
     try:
-        _bridge_df = (
-            _in_frame.native if _is_pl_in else pl.from_arrow(_in_frame.native)
-        )
-        result = _do_transform(_bridge_df)
+        if _tdbg:
+            _t0 = _time.perf_counter()
+            _bridge_df = (
+                _in_frame.native if _is_pl_in else pl.from_arrow(_in_frame.native)
+            )
+            _t_bridge_in = _time.perf_counter() - _t0
+            _t0 = _time.perf_counter()
+            result = _do_transform(_bridge_df)
+            _t_do = _time.perf_counter() - _t0
+        else:
+            _bridge_df = (
+                _in_frame.native if _is_pl_in else pl.from_arrow(_in_frame.native)
+            )
+            result = _do_transform(_bridge_df)
     except ImportError:
         # GoldenFlow's transform engine (_do_transform) is polars-native; on the
         # arrow lane with polars absent, the `pl.from_arrow` bridge raises
@@ -155,9 +176,28 @@ def run_transform(
         return _restore(_in_frame).native, []
 
     # Re-attach preserved columns and restore order on the caller's lane.
-    _res_frame = _tf_a2(
-        result.df if _is_pl_in else result.df.to_arrow()
-    )
+    if _tdbg:
+        if _is_pl_in:
+            _res_frame = _tf_a2(result.df)
+        else:
+            _t0 = _time.perf_counter()
+            _res_native = result.df.to_arrow()
+            _t_bridge_out = _time.perf_counter() - _t0
+            _res_frame = _tf_a2(_res_native)
+        print(
+            f"[transform][DEBUG] lane={'polars' if _is_pl_in else 'arrow'} "
+            f"rows={_in_frame.height}: "
+            f"bridge_in(from_arrow)={_t_bridge_in:.3f}s  "
+            f"_do_transform={_t_do:.3f}s  "
+            f"bridge_out(to_arrow)={_t_bridge_out:.3f}s  "
+            f"bridge_total={_t_bridge_in + _t_bridge_out:.3f}s "
+            f"(GOLDENMATCH_TRANSFORM_DEBUG=0 to silence)",
+            flush=True,
+        )
+    else:
+        _res_frame = _tf_a2(
+            result.df if _is_pl_in else result.df.to_arrow()
+        )
     _res_frame = _restore(_res_frame)
 
     # Convert manifest to autofix-compatible format

@@ -161,8 +161,10 @@ class ResolveSummary:
     # v2.1: count of ``conflicts_with`` edges emitted automatically by the
     # resolver (weak bottlenecks + merges with prior conflicts).
     conflicts_flagged: int = 0
-    # semantic-graph: entity<->entity relationship edges written this run.
+    # semantic-graph: entity<->entity relationship edges reconciled this run
+    # (desired-vs-existing: added = inserted, deleted = stale removed).
     relationships_added: int = 0
+    relationships_deleted: int = 0
 
     def as_dict(self) -> dict[str, int]:
         return {
@@ -175,6 +177,7 @@ class ResolveSummary:
             "records_upserted": self.records_upserted,
             "conflicts_flagged": self.conflicts_flagged,
             "relationships_added": self.relationships_added,
+            "relationships_deleted": self.relationships_deleted,
         }
 
 
@@ -1277,8 +1280,8 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
     if relationships:
         from goldenmatch.identity.relationships import build_relationships
         try:
-            summary.relationships_added = build_relationships(
-                store, relationships, dataset,
+            summary.relationships_added, summary.relationships_deleted = (
+                build_relationships(store, relationships, dataset)
             )
         except Exception as e:  # never fail resolution over the relationship pass
             log.warning("relationship derivation failed: %s", e)

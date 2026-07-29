@@ -15,6 +15,7 @@ import hashlib
 import uuid
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import polars as pl
 from goldenmatch import dedupe_df
@@ -111,12 +112,16 @@ def _capture_pipeline_df(input_df: pl.DataFrame, db_path: str) -> pl.DataFrame:
     return captured["df"]
 
 
-def _record_hash_from_pipeline_df(pipeline_df: pl.DataFrame, row_id: int) -> str:
-    """Compute record_hash exactly as apply_corrections does: sorted cols
-    excluding __row_id__, joined by '|', sha256[:16]."""
-    sorted_cols = sorted(c for c in pipeline_df.columns if c != "__row_id__")
-    row = pipeline_df.filter(pl.col("__row_id__") == row_id).select(sorted_cols).row(0)
-    return hashlib.sha256("|".join(str(v) for v in row).encode()).hexdigest()[:16]
+def _record_hash_from_pipeline_df(pipeline_df: Any, row_id: int) -> str:
+    """Compute record_hash exactly as apply_corrections does -- by DELEGATING to
+    the production dual-rep ``compute_record_hash`` (the function the helper claims
+    to mirror), so the seeded hash matches the runtime hash on BOTH lanes. The old
+    inline polars re-impl did ``sorted(pipeline_df.columns)`` which, on the arrow
+    Frame lane, sorts ``pa.Table.columns`` (ChunkedArrays) and raises
+    ``ChunkedArray < ChunkedArray``. compute_record_hash reads through the seam, so
+    it is rep-invariant (same sha256[:16] over sorted str(v) content fields)."""
+    from goldenmatch.core.memory.corrections import compute_record_hash
+    return compute_record_hash(pipeline_df, row_id)
 
 
 def _seed_correction(

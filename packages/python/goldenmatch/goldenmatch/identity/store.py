@@ -55,6 +55,49 @@ SCHEMA_VERSION = 7
 # so they are validated against this before use (never user free-text at the SQL).
 _SAFE_FIELD = re.compile(r"[A-Za-z0-9_]+")
 
+
+def _rel_value_expr(raw: str, transform: str | None, backend: str) -> str:
+    """Wrap the raw payload-extraction SQL ``raw`` in a value TRANSFORM so a
+    relationship rule can key edges on a DERIVED value (email domain, normalized
+    company, zip3, lowercased specialty/degree) instead of the literal field.
+
+    Transforms are a FIXED vocabulary mapped to fixed SQL templates -- never user
+    free-text -- so this is injection-safe (``raw`` itself is already built from a
+    ``_SAFE_FIELD``-validated name). A transform that yields empty/no-match returns
+    NULL so ``relationship_groups`` filters it out. ``None``/``'raw'`` returns
+    ``raw`` byte-for-byte, so the no-transform path is unchanged."""
+    t = (transform or "raw").lower()
+    pg = backend == "postgres"
+    if t == "raw":
+        return raw
+    if t == "lower_trim":
+        return f"lower(btrim({raw}))" if pg else f"lower(trim({raw}))"
+    if t == "zip3":
+        return f"substr({raw}, 1, 3)"
+    if t == "email_domain":
+        if pg:
+            return f"lower(nullif(split_part({raw}, '@', 2), ''))"
+        # sqlite: no split_part; guard so a value without '@' yields NULL, not the
+        # whole string (which would wrongly relate everyone missing an '@').
+        return (
+            f"CASE WHEN instr({raw}, '@') > 0 "
+            f"THEN lower(substr({raw}, instr({raw}, '@') + 1)) END"
+        )
+    if t == "normalize_company":
+        if pg:
+            # NOTE: no literal '?' anywhere in this SQL -- `_pg_sql` turns every '?'
+            # into a bind placeholder (naive str.replace), so a regex '?' (e.g. the
+            # old '\.?$') would be miscounted as a parameter. Use '\.{0,1}$' instead.
+            return (
+                f"nullif(btrim(regexp_replace(lower(btrim({raw})), "
+                r"'[\s,\.]+(inc|llc|ltd|corp|co|company|pllc|pc|pa|group|assoc|associates)\.{0,1}$', "
+                "'', 'g')), '')"
+            )
+        # sqlite has no regexp_replace -> degrade to lower_trim (documented in the
+        # relationship-graph-v2 spec; the domain of corp suffixes needs a UDF).
+        return f"lower(trim({raw}))"
+    raise ValueError(f"unknown relationship transform: {transform!r}")
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS identity_nodes (
     entity_id      TEXT PRIMARY KEY,
@@ -1749,12 +1792,18 @@ class IdentityStore:
     def relationship_groups(
         self, field: str, dataset: str | None,
         min_entities: int, max_entities: int,
+        transform: str | None = None,
     ) -> list[tuple[str, list[str]]]:
         """Distinct entities that share a value of ``field`` (a payload key),
         grouped in ONE query. Returns ``[(shared_value, [entity_id, ...]), ...]``
         for values held by between ``min_entities`` and ``max_entities`` distinct
         entities. The field is read out of the JSON ``payload`` column; the
-        cardinality gate runs in SQL so only qualifying groups come back."""
+        cardinality gate runs in SQL so only qualifying groups come back.
+
+        ``transform`` (see ``_rel_value_expr``) keys the grouping on a DERIVED
+        value -- e.g. ``email_domain`` relates everyone at the same company domain,
+        ``normalize_company`` collapses "Acme, Inc." / "acme llc" -- instead of the
+        literal field. ``None`` groups on the raw value (SQL byte-identical)."""
         if self._backend == "mongo":
             raise NotImplementedError("relationship_groups: not supported on mongo")
         if not _SAFE_FIELD.fullmatch(field):
@@ -1771,11 +1820,14 @@ class IdentityStore:
         # expression index makes the dedup an index scan instead of a heap seq scan.
         self._ensure_relationship_index(field)
         if self._backend == "postgres":
-            vexpr = f"payload ->> '{field}'"        # payload is already jsonb
+            raw = f"payload ->> '{field}'"          # payload is already jsonb
             agg = "string_agg(p.entity_id, ',')"    # pairs are DISTINCT -> no DISTINCT
         else:
-            vexpr = f"json_extract(payload, '$.{field}')"
+            raw = f"json_extract(payload, '$.{field}')"
             agg = "group_concat(p.entity_id)"
+        # transform wraps the RAW extraction; transform=None returns it byte-for-byte
+        # so the covering index on (payload->>field, entity_id) still applies.
+        vexpr = _rel_value_expr(raw, transform, self._backend)
         ds = "" if dataset is None else " AND dataset = ?"
         params: tuple = () if dataset is None else (dataset,)
         sql = (
@@ -1792,6 +1844,107 @@ class IdentityStore:
         )
         rows = self._fetchall(sql, params + (min_entities, max_entities))
         return [(r["v"], str(r["eids"]).split(",")) for r in rows]
+
+    def sample_records(
+        self, dataset: str | None, limit: int,
+    ) -> list[tuple[str, dict]]:
+        """A LIMIT-bounded sample of ``(entity_id, payload_dict)`` for resolved
+        records, for offline field profiling (``suggest_relationship_rules``). This
+        is deliberately NOT a full scan -- at 14M a full profile per field is what
+        we avoid -- so callers get a cheap, approximate view of the payload shape."""
+        if self._backend == "mongo":
+            raise NotImplementedError("sample_records: not supported on mongo")
+        ds = "" if dataset is None else " AND dataset = ?"
+        params: tuple = () if dataset is None else (dataset,)
+        rows = self._fetchall(
+            "SELECT entity_id, payload FROM source_records "
+            f"WHERE entity_id IS NOT NULL{ds} LIMIT ?",
+            params + (int(limit),),
+        )
+        out: list[tuple[str, dict]] = []
+        for r in rows:
+            p = r["payload"]
+            if isinstance(p, str):
+                try:
+                    p = json.loads(p)
+                except (ValueError, TypeError):
+                    continue
+            if isinstance(p, dict):
+                out.append((r["entity_id"], p))
+        return out
+
+    def relationship_field_stats(
+        self, field: str, dataset: str | None,
+        min_entities: int, max_entities: int, transform: str | None = None,
+    ) -> dict[str, int]:
+        """Full-data cardinality profile of a candidate ``(field, transform)`` for
+        ``suggest_relationship_rules``. Over ALL resolved records (not a sample):
+
+        * ``sweet_values``  -- distinct values shared by ``[min_entities,
+          max_entities]`` distinct entities (each yields real pairwise edges),
+        * ``hub_values``    -- distinct values shared by ``> max_entities`` entities
+          (skipped as hubs),
+        * ``coverage_entities`` -- distinct ENTITIES that land in a sweet-spot value
+          (how much of the graph this field would actually edge),
+        * ``sweet_pairs``   -- pairwise edges the sweet-spot values yield
+          (``SUM n*(n-1)/2``),
+        * ``sweet_pair_n``  -- ``SUM n*(n-1)/2 * n`` over sweet values, so the caller
+          can derive the edge-weighted mean group size (``sweet_pair_n /
+          sweet_pairs``) and hence a RARITY signal: a field linked through small,
+          specific groups (a shared phone) is a stronger relationship than one
+          linked through large common ones (a shared surname), even at equal
+          coverage.
+
+        Because fanout is measured on the WHOLE dataset, a hub attribute (a value
+        held by ~everyone, e.g. a specialty or state) scores ``coverage=0`` -- the
+        opposite of a small LIMIT sample, where its in-sample fanout stays under the
+        cap and it masquerades as a good edge field."""
+        if self._backend == "mongo":
+            raise NotImplementedError("relationship_field_stats: not on mongo")
+        if not _SAFE_FIELD.fullmatch(field):
+            raise ValueError(f"unsafe relationship field name: {field!r}")
+        self._ensure_relationship_index(field)
+        if self._backend == "postgres":
+            raw = f"payload ->> '{field}'"
+        else:
+            raw = f"json_extract(payload, '$.{field}')"
+        vexpr = _rel_value_expr(raw, transform, self._backend)
+        ds = "" if dataset is None else " AND dataset = ?"
+        params: tuple = () if dataset is None else (dataset,)
+        sql = (
+            "WITH ex AS ("
+            f" SELECT {vexpr} AS v, entity_id FROM source_records"
+            f" WHERE entity_id IS NOT NULL{ds}"
+            "), pairs AS ("
+            " SELECT DISTINCT v, entity_id FROM ex WHERE v IS NOT NULL AND v <> ''"
+            "), card AS ("
+            " SELECT v, COUNT(*) AS n FROM pairs GROUP BY v"
+            ") "
+            "SELECT "
+            "(SELECT COUNT(*) FROM card WHERE n >= ? AND n <= ?) AS sweet_values, "
+            "(SELECT COUNT(*) FROM card WHERE n > ?) AS hub_values, "
+            "(SELECT COUNT(DISTINCT p.entity_id) FROM pairs p JOIN card c "
+            " ON p.v = c.v WHERE c.n >= ? AND c.n <= ?) AS coverage_entities, "
+            "(SELECT COALESCE(SUM(n*(n-1)/2), 0) FROM card "
+            " WHERE n >= ? AND n <= ?) AS sweet_pairs, "
+            "(SELECT COALESCE(SUM(n*(n-1)/2*n), 0) FROM card "
+            " WHERE n >= ? AND n <= ?) AS sweet_pair_n"
+        )
+        rows = self._fetchall(
+            sql, params + (min_entities, max_entities, max_entities,
+                           min_entities, max_entities, min_entities,
+                           max_entities, min_entities, max_entities))
+        r = rows[0] if rows else None
+        if r is None:
+            return {"sweet_values": 0, "hub_values": 0, "coverage_entities": 0,
+                    "sweet_pairs": 0, "sweet_pair_n": 0}
+        return {
+            "sweet_values": int(r["sweet_values"] or 0),
+            "hub_values": int(r["hub_values"] or 0),
+            "coverage_entities": int(r["coverage_entities"] or 0),
+            "sweet_pairs": int(r["sweet_pairs"] or 0),
+            "sweet_pair_n": int(r["sweet_pair_n"] or 0),
+        }
 
     def _ensure_relationship_index(self, field: str) -> None:
         """Best-effort covering expression index ``(payload->>field, entity_id)`` so
@@ -1849,6 +2002,85 @@ class IdentityStore:
                 norm,
             )
         return len(norm)
+
+    def reconcile_relationships(
+        self, dataset: str | None, kind: str, desired: Iterable[tuple],
+    ) -> tuple[int, int, int]:
+        """Make ``identity_relationships`` for ``(dataset, kind)`` EQUAL the
+        ``desired`` edge set: insert new edges, DELETE stale ones, in ONE
+        transaction (all-or-nothing -- explicit partial-failure behavior).
+
+        ``desired`` is an iterable of ``(a, b, kind, field, shared_value, dataset)``
+        tuples as ``build_relationships`` emits. Edge identity is the PK
+        ``(a<b, kind, shared_value)``, so a link whose shared value CHANGED is a
+        delete + insert, and a MERGE/SPLIT falls out for free because ``desired`` is
+        recomputed from the CURRENT entity ids (edges under a retired id are simply
+        not in ``desired`` -> deleted). Same data twice -> (0, 0, all) = no churn.
+        Deletes are scoped to ``dataset`` + ``kind`` so a rule never touches another
+        rule's or another dataset's edges. Returns ``(inserted, deleted, unchanged)``.
+        """
+        if self._backend == "mongo":
+            raise NotImplementedError("reconcile_relationships: not supported on mongo")
+        want: dict[tuple, tuple] = {}
+        for a, b, k, field, val, _ds in desired:
+            if a is None or b is None or a == b:
+                continue
+            lo, hi = (a, b) if a < b else (b, a)
+            want[(lo, hi, k, val)] = (lo, hi, k, field, val, dataset)
+        existing = {
+            (r["entity_a_id"], r["entity_b_id"], r["kind"], r["shared_value"])
+            for r in self._fetchall(
+                "SELECT entity_a_id, entity_b_id, kind, shared_value "
+                "FROM identity_relationships WHERE dataset = ? AND kind = ?",
+                (dataset, kind),
+            )
+        }
+        want_keys = set(want)
+        ins_keys = want_keys - existing
+        del_keys = existing - want_keys
+        unchanged = len(want_keys & existing)
+        if not ins_keys and not del_keys:
+            return (0, 0, unchanged)
+        ins_rows = [want[k] for k in ins_keys]
+        # del key = (a, b, kind, value); DELETE binds (dataset, a, b, kind, value).
+        del_rows = [(dataset, a, b, k, v) for (a, b, k, v) in del_keys]
+        del_sql = (
+            "DELETE FROM identity_relationships WHERE dataset = ? "
+            "AND entity_a_id = ? AND entity_b_id = ? AND kind = ? AND shared_value = ?"
+        )
+        if self._backend == "postgres":
+            ins_sql = (
+                "INSERT INTO identity_relationships "
+                "(entity_a_id, entity_b_id, kind, field, shared_value, dataset) "
+                "VALUES (%s, %s, %s, %s, %s, %s) "
+                "ON CONFLICT (entity_a_id, entity_b_id, kind, shared_value) DO NOTHING"
+            )
+            with self._conn.transaction(), self._conn.cursor() as cur:
+                if del_rows:
+                    cur.executemany(self._pg_sql(del_sql), del_rows)
+                if ins_rows:
+                    cur.executemany(ins_sql, ins_rows)
+        else:  # sqlite: one transaction (savepoint-safe if already inside one)
+            ins_sql = (
+                "INSERT OR IGNORE INTO identity_relationships "
+                "(entity_a_id, entity_b_id, kind, field, shared_value, dataset) "
+                "VALUES (?, ?, ?, ?, ?, ?)"
+            )
+            outer = self._conn.in_transaction
+            if not outer:
+                self._conn.execute("BEGIN")
+            try:
+                if del_rows:
+                    self._conn.executemany(del_sql, del_rows)
+                if ins_rows:
+                    self._conn.executemany(ins_sql, ins_rows)
+                if not outer:
+                    self._conn.execute("COMMIT")
+            except BaseException:
+                if not outer and self._conn.in_transaction:
+                    self._conn.execute("ROLLBACK")
+                raise
+        return (len(ins_keys), len(del_keys), unchanged)
 
     def get_relationships(self, entity_id: str) -> list[dict[str, Any]]:
         """Every relationship edge touching ``entity_id`` (either endpoint),

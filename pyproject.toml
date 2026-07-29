@@ -93,6 +93,13 @@ dev = [
     # parity test asserts the owned kernel matches `diptest.dipstat` exactly, so
     # `uv sync` installs it for CI/tests. Same shape as the oracles above.
     "diptest>=0.5.2",
+    # python-dateutil is a TEST-ONLY parity oracle: goldenflow owns date parsing
+    # via goldenflow-core (deterministic, dateutil-free at RUNTIME -- #dates
+    # kernel), but the date parity tests assert the owned parser matches dateutil
+    # on the covered format set. Same shape as rapidfuzz/jellyfish above -- keep
+    # it in the dev group so `uv sync` installs it for CI/tests while
+    # `pip install goldenflow` stays dateutil-free.
+    "python-dateutil>=2.9",
     # transitive test deps surfaced across workspace packages:
     "httpx>=0.27",  # required by starlette.testclient (used by goldenpipe tests)
 ]

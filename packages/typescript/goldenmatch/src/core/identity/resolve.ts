@@ -36,6 +36,7 @@ export interface ResolveSummary {
   // port does not run the relationship post-pass (Python-only), so it stays 0 --
   // present for cross-language ResolveSummary parity.
   relationshipsAdded: number;
+  relationshipsDeleted: number;
 }
 
 export interface ResolveOptions {
@@ -61,6 +62,7 @@ function emptySummary(): ResolveSummary {
     recordsUpserted: 0,
     conflictsFlagged: 0,
     relationshipsAdded: 0,
+    relationshipsDeleted: 0,
   };
 }
 
