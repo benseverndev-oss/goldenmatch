@@ -770,6 +770,9 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `lineage` | `--run-name` | text | `'lineage'` | Run name for the lineage file |
 | `lineage` | `--max-pairs` | integer | `10000` | Cap on lineage records (0 = no cap) |
 | `lineage` | `--nl` | boolean | `False` | Include natural-language explanations |
+| `llm serve-local` | `--host` | text | `'127.0.0.1'` | Bind host (loopback by default). |
+| `llm serve-local` | `--port` | integer | `8081` | Bind port. |
+| `llm serve-local` | `--model-path` | text | `None` | Explicit GGUF path (else the pinned model is resolved / downloaded). |
 | `match` | `target` | text | **required** | Target file as path or path:source_name |
 | `match` | `--against` | text | **required** | Reference files as path or path:source_name |
 | `match` | `--config` | text | `None` | Path to YAML config file (optional - auto-detects if omitted) |
@@ -1152,7 +1155,7 @@ _`_PLANNING_EFFORTS` -- `planning_effort`._
 
 ## Environment variables (index)
 
-182 `GOLDENMATCH_*` runtime knob(s) read by the package, scanned from source so this is complete. Details in [Tuning & opt-ins](/goldenmatch/tuning). Grouped by area:
+185 `GOLDENMATCH_*` runtime knob(s) read by the package, scanned from source so this is complete. Details in [Tuning & opt-ins](/goldenmatch/tuning). Grouped by area:
 
 - **AGENT** (1): `GOLDENMATCH_AGENT_TOKEN`
 - **ALLOWED** (1): `GOLDENMATCH_ALLOWED_ROOT`
@@ -1191,6 +1194,7 @@ _`_PLANNING_EFFORTS` -- `planning_effort`._
 - **INHOUSE** (1): `GOLDENMATCH_INHOUSE_MODEL`
 - **LLAMA** (1): `GOLDENMATCH_LLAMA_GGUF`
 - **LLM** (2): `GOLDENMATCH_LLM_BASE_URL`, `GOLDENMATCH_LLM_MODEL`
+- **LOCAL** (3): `GOLDENMATCH_LOCAL_LLM`, `GOLDENMATCH_LOCAL_LLM_GPU_LAYERS`, `GOLDENMATCH_LOCAL_LLM_PATH`
 - **MATCH** (2): `GOLDENMATCH_MATCH_FUSED`, `GOLDENMATCH_MATCH_LOG_FLUSH_PAIRS`
 - **MCP** (6): `GOLDENMATCH_MCP_ALLOW_PUBLIC`, `GOLDENMATCH_MCP_MAX_UPLOAD_BYTES`, `GOLDENMATCH_MCP_SESSION_MAX`, `GOLDENMATCH_MCP_SESSION_TTL`, `GOLDENMATCH_MCP_TOKEN`, `GOLDENMATCH_MCP_UPLOAD_TTL`
 - **MULTISOURCE** (1): `GOLDENMATCH_MULTISOURCE_AUTOCONFIG`

@@ -77,7 +77,8 @@ class LocalLLMAdapter(Protocol):
 
     def score_pair(
         self, row_a: dict, row_b: dict, columns: list[str]
-    ) -> tuple[bool, float]: ...
+    ) -> tuple[bool, float]:
+        """Return ``(is_match, confidence)`` for the two records."""
 
 
 def _local_llm_mode() -> str:
