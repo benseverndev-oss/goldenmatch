@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 422,
+      "module_count": 423,
       "modules": [
         {
           "module": "goldenmatch",
