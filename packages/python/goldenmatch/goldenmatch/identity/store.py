@@ -2053,6 +2053,21 @@ class IdentityStore:
         )
         return row is not None
 
+    def run_event_entities(self, run_name: str, kind: str) -> set[str]:
+        """Batch form of ``has_run_event``: the set of entity_ids that already have
+        an event of (``run_name``, ``kind``). ``resolve_clusters`` preloads this
+        ONCE so the created-cluster idempotency guard is an in-memory membership
+        test instead of one ``has_run_event`` SELECT per cluster -- an N+1 that also
+        seq-scanned ``identity_events`` (O(n^2)) whenever the secondary indexes are
+        deferred by the initial-load fast path. SQL backends only; the caller
+        falls back to ``has_run_event`` for mongo/minimal stores."""
+        rows = self._fetchall(
+            "SELECT DISTINCT entity_id FROM identity_events "
+            "WHERE run_name = ? AND kind = ?",
+            (run_name, kind),
+        )
+        return {r["entity_id"] for r in rows}
+
     def add_alias(self, alias: IdentityAlias) -> None:
         if self._backend == "mongo":
             self._mongo.add_alias(alias)
