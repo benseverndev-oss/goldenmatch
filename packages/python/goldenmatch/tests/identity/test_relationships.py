@@ -181,3 +181,153 @@ def test_to_graph_batch_roundtrips_into_goldengraph(store):
     dump = json.loads(ps.query())
     preds = {e["predicate"] for e in dump.get("edges", [])}
     assert "shares_phone" in preds
+
+
+# ── v2: authoritative reconciliation (desired-vs-existing) ──────────────────
+
+def test_reconcile_deletes_stale_edges(store):
+    """A warm re-run where a shared value disappears DELETES the edge, not leaves
+    it stale -- the whole point of desired-vs-existing reconciliation."""
+    df1 = _df([{"id": "1", "name": "Al", "phone": "555"},
+               {"id": "2", "name": "Bo", "phone": "555"}])
+    _resolve(store, df1, _singletons(2), PHONE, run_name="r1")
+    assert store.count_relationships() == 1
+    # r2: same records/entities, but Bo's phone changed -> no longer shared.
+    df2 = _df([{"id": "1", "name": "Al", "phone": "555"},
+               {"id": "2", "name": "Bo", "phone": "999"}])
+    s2 = _resolve(store, df2, _singletons(2), PHONE, run_name="r2")
+    assert store.count_relationships() == 0
+    assert s2.relationships_added == 0
+    assert s2.relationships_deleted == 1
+
+
+def test_reconcile_idempotent_no_churn(store):
+    """Same data twice -> second run inserts 0 AND deletes 0 (no churn)."""
+    df = _df([{"id": "1", "name": "Al", "phone": "555"},
+              {"id": "2", "name": "Bo", "phone": "555"}])
+    s1 = _resolve(store, df, _singletons(2), PHONE, run_name="r1")
+    assert s1.relationships_added == 1 and s1.relationships_deleted == 0
+    s2 = _resolve(store, df, _singletons(2), PHONE, run_name="r2")
+    assert s2.relationships_added == 0 and s2.relationships_deleted == 0
+    assert store.count_relationships() == 1
+
+
+# ── v2: derived / transform edge fields (edge on ANY field, not just raw) ────
+
+def test_transform_email_domain_relates_same_company(store):
+    """A derived-field rule (transform='email_domain') keys edges on the domain,
+    so two entities at the same company relate even though their emails differ,
+    and someone at a different domain does not."""
+    df = _df([{"id": "1", "name": "Al", "email": "al@acme.com"},
+              {"id": "2", "name": "Bo", "email": "bo@acme.com"},
+              {"id": "3", "name": "Cy", "email": "cy@other.com"}])
+    rule = [RelationshipRule(field="email", kind="same_company",
+                             transform="email_domain")]
+    s = _resolve(store, df, _singletons(3), rule)
+    assert s.relationships_added == 1
+    assert store.count_relationships() == 1
+    rels = store.list_relationships("d")
+    assert rels[0]["shared_value"] == "acme.com"
+
+
+def test_transform_lower_trim_collapses_casing(store):
+    """transform='lower_trim' relates entities whose specialty differs only by
+    case/whitespace -- 'Cardiology' and ' cardiology ' become one group."""
+    df = _df([{"id": "1", "name": "Al", "spec": "Cardiology"},
+              {"id": "2", "name": "Bo", "spec": " cardiology "}])
+    rule = [RelationshipRule(field="spec", kind="same_specialty",
+                             transform="lower_trim")]
+    s = _resolve(store, df, _singletons(2), rule)
+    assert s.relationships_added == 1
+
+
+# ── v2: auto-detect (the program suggests good edge fields) ─────────────────
+
+def test_suggest_relationship_rules_ranks_shared_fields(store):
+    """The profiler suggests a rule for a SHARED field (clinic), skips a UNIQUE
+    field (ssn -> no edges) and a HUB field (country -> everyone, over fanout)."""
+    from goldenmatch.identity import suggest_relationship_rules
+    rows = [{"id": str(i), "name": f"P{i}", "ssn": f"s{i}",
+             "clinic": "A" if i < 3 else "B", "country": "US"}
+            for i in range(6)]
+    _resolve(store, _df(rows), _singletons(6), [])  # populate, no rules needed
+    rules = suggest_relationship_rules(store, dataset="d", max_fanout=4, top_k=5)
+    fields = [r.field for r in rules]
+    assert "clinic" in fields          # 3 + 3 entities -> both in [2, 4]
+    assert "ssn" not in fields         # all unique -> no edges
+    assert "country" not in fields     # shared by 6 > max_fanout 4 -> hub
+    assert all(r.kind == f"shares_{r.field}" for r in rules)
+
+
+def test_pg_transform_sql_has_no_placeholder_collision():
+    r"""`_pg_sql` maps every '?' to a bind placeholder (naive str.replace), so a
+    transform's SQL must never contain a literal '?'. A regex '?' in
+    normalize_company ('\.?$') once broke the query at 14M ('4 placeholders but 3
+    parameters'); it never showed in sqlite tests (normalize_company degrades to
+    lower_trim there). This guards the whole class without needing Postgres."""
+    from goldenmatch.identity.store import _rel_value_expr
+    raw = "payload ->> 'x'"
+    for t in (None, "raw", "lower_trim", "zip3", "email_domain", "normalize_company"):
+        expr = _rel_value_expr(raw, t, "postgres")
+        assert "?" not in expr, f"transform {t!r} PG SQL has a '?': {expr}"
+
+
+def test_suggest_picks_transform_and_rejects_hubs(store):
+    """Full-data profiling fixes the two things the old sampled heuristic got wrong:
+    a unique-looking field surfaces under its TRANSFORM (email -> email_domain groups
+    by company), and a HUB attribute (specialty held by ~everyone) is rejected, not
+    ranked first."""
+    rows = [{"id": str(i), "name": f"P{i}",
+             "email": f"u{i}@acme.com" if i < 3 else f"u{i}@beta.com",
+             "specialty": "IM"}                       # all 6 share it -> hub
+            for i in range(6)]
+    _resolve(store, _df(rows), _singletons(6), [])
+    from goldenmatch.identity import suggest_relationship_rules
+    rules = suggest_relationship_rules(store, dataset="d", max_fanout=4, top_k=5)
+    by_field = {r.field: r for r in rules}
+    assert "email" in by_field
+    assert by_field["email"].transform == "email_domain"   # raw email is unique
+    assert "specialty" not in by_field                      # 6 > max_fanout 4 -> hub
+
+
+def test_suggest_prefers_rare_specific_values(store):
+    """At equal coverage, a field linked through small specific groups outranks one
+    linked through a large common group (rarity/specificity weighting)."""
+    vals = ["a", "a", "b", "b", "c", "c"]           # 'rare': three pairs
+    rows = [{"id": str(i), "name": f"P{i}", "rare": vals[i], "common": "X"}
+            for i in range(6)]                       # 'common': all six share "X"
+    _resolve(store, _df(rows), _singletons(6), [])
+    from goldenmatch.identity import suggest_relationship_rules
+    fields = [r.field for r in
+              suggest_relationship_rules(store, dataset="d", max_fanout=10, top_k=5)]
+    assert fields.index("rare") < fields.index("common")
+
+
+def test_suggest_downweights_matchkeys(store):
+    """Two fields with IDENTICAL sharing, but one is a declared matchkey -> the
+    matchkey (an identity signal, not a relationship) ranks below the other."""
+    rows = [{"id": str(i), "name": f"P{i}",
+             "clinic": "A" if i < 3 else "B",
+             "team": "A" if i < 3 else "B"} for i in range(6)]
+    _resolve(store, _df(rows), _singletons(6), [])
+    from goldenmatch.identity import suggest_relationship_rules
+    fields = [r.field for r in suggest_relationship_rules(
+        store, dataset="d", max_fanout=4, top_k=5, matchkey_fields={"team"})]
+    assert "clinic" in fields and "team" in fields
+    assert fields.index("clinic") < fields.index("team")
+
+
+def test_suggest_excludes_near_unique_matchkeys(store):
+    """A matchkey shared only in near-PAIRS is a near-unique identifier (the same
+    entity duplicated -- a missed merge), not a relationship, so it is excluded;
+    a matchkey shared in larger groups (a clinic phone) is kept."""
+    rows = [{"id": str(i), "name": f"P{i}",
+             "ssn": "A" if i < 2 else "B",   # two pairs -> mean group 2 (near-unique)
+             "phone": "X"} for i in range(4)]  # one group of 4 -> mean group 4
+    _resolve(store, _df(rows), _singletons(4), [])
+    from goldenmatch.identity import suggest_relationship_rules
+    fields = [r.field for r in suggest_relationship_rules(
+        store, dataset="d", max_fanout=10, top_k=5,
+        matchkey_fields={"ssn", "phone"})]
+    assert "phone" in fields        # larger groups -> real relationship
+    assert "ssn" not in fields      # near-pair matchkey -> identifier, excluded

@@ -546,8 +546,9 @@ _One rule for deriving entity-to-entity relationship edges from a shared,_
 
 | Field | Type | Default | Choices / notes |
 |---|---|---|---|
-| `field` | str | **required** | Payload field whose shared value relates two entities (e.g. 'phone_number', 'zip5', 'employer'). |
+| `field` | str | **required** | Payload field whose shared value relates two entities (e.g. 'phone_number', 'zip5', 'employer', 'email', 'specialty', 'degree'). |
 | `kind` | str | **required** | Relationship label for the emitted edge (e.g. 'shares_phone', 'same_address'). |
+| `transform` | str \| None | `None` | Optional derived-value transform applied to `field` before grouping, so edges key on a DERIVED value rather than the literal field: 'email_domain' (the domain after '@'), 'normalize_company' (lowercased, common corp suffixes stripped), 'lower_trim' (lowercased + trimmed, good for specialty/degree), 'zip3' (first 3 chars of a zip). None (default) uses the raw field value. |
 | `min_entities` | int | `2` | A shared value must be held by at least this many distinct entities to emit edges. |
 | `max_fanout` | int | `50` | Skip values shared by more than this many distinct entities (hub values like a switchboard line are not pairwise relationships). |
 
