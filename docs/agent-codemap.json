@@ -6057,6 +6057,7 @@
           "defines": [
             "_entity_name",
             "build_relationships",
+            "suggest_relationship_rules",
             "to_graph_batch"
           ],
           "imports": [

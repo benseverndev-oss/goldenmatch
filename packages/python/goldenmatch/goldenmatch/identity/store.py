@@ -1826,6 +1826,34 @@ class IdentityStore:
         rows = self._fetchall(sql, params + (min_entities, max_entities))
         return [(r["v"], str(r["eids"]).split(",")) for r in rows]
 
+    def sample_records(
+        self, dataset: str | None, limit: int,
+    ) -> list[tuple[str, dict]]:
+        """A LIMIT-bounded sample of ``(entity_id, payload_dict)`` for resolved
+        records, for offline field profiling (``suggest_relationship_rules``). This
+        is deliberately NOT a full scan -- at 14M a full profile per field is what
+        we avoid -- so callers get a cheap, approximate view of the payload shape."""
+        if self._backend == "mongo":
+            raise NotImplementedError("sample_records: not supported on mongo")
+        ds = "" if dataset is None else " AND dataset = ?"
+        params: tuple = () if dataset is None else (dataset,)
+        rows = self._fetchall(
+            "SELECT entity_id, payload FROM source_records "
+            f"WHERE entity_id IS NOT NULL{ds} LIMIT ?",
+            params + (int(limit),),
+        )
+        out: list[tuple[str, dict]] = []
+        for r in rows:
+            p = r["payload"]
+            if isinstance(p, str):
+                try:
+                    p = json.loads(p)
+                except (ValueError, TypeError):
+                    continue
+            if isinstance(p, dict):
+                out.append((r["entity_id"], p))
+        return out
+
     def add_relationships(self, rows: list[tuple]) -> int:
         """Insert ``(entity_a, entity_b, kind, field, shared_value, dataset)``
         relationship edges, idempotently. Endpoints are canonicalized

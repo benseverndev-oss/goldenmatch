@@ -63,6 +63,64 @@ def build_relationships(
     return (inserted, deleted)
 
 
+def suggest_relationship_rules(
+    store: IdentityStore,
+    dataset: str | None = None,
+    *,
+    sample: int = 50_000,
+    min_entities: int = 2,
+    max_fanout: int = 50,
+    top_k: int = 8,
+    exclude: list[str] | None = None,
+) -> list[RelationshipRule]:
+    """Profile a bounded sample of resolved records and SUGGEST relationship rules
+    for the fields that look like good edge sources -- fields with many values
+    shared by ``min_entities..max_fanout`` distinct entities (real pairwise links)
+    and few hub values (a value held by everyone, like ``country``, makes no useful
+    edge). This is the "the program identifies good fields" half of the feature;
+    the user-defined half is writing ``RelationshipRule``s by hand.
+
+    ADVISORY, not authoritative: the sample is ``LIMIT``-bounded (cheap at 14M) so
+    it can undercount a value's true fan-out -- treat the ranked list as a starting
+    point a human (or an ``auto`` config) reviews, not ground truth. Fields whose
+    names are not SQL-safe are skipped (they would fail ``relationship_groups``).
+    Returns up to ``top_k`` rules, highest edge-yield first."""
+    from collections import defaultdict
+
+    from goldenmatch.config.schemas import RelationshipRule
+    from goldenmatch.identity.store import _SAFE_FIELD
+
+    skip = {c.lower() for c in (exclude or ())}
+    field_vals: dict[str, dict[str, set]] = defaultdict(lambda: defaultdict(set))
+    for eid, payload in store.sample_records(dataset, sample):
+        for key, val in payload.items():
+            if key.lower() in skip or not _SAFE_FIELD.fullmatch(key) or val is None:
+                continue
+            sval = str(val).strip()
+            if sval:
+                field_vals[key][sval].add(eid)
+
+    scored: list[tuple[float, int, str]] = []
+    for field, vals in field_vals.items():
+        sweet = sum(1 for e in vals.values() if min_entities <= len(e) <= max_fanout)
+        if not sweet:
+            continue
+        hubs = sum(1 for e in vals.values() if len(e) > max_fanout)
+        # fraction of distinct values that yield real (non-hub) edges: rewards
+        # fields dominated by sweet-spot values, penalizes near-unique + hub fields.
+        score = sweet / (len(vals) + hubs + 1)
+        scored.append((score, sweet, field))
+
+    scored.sort(key=lambda t: (t[0], t[1]), reverse=True)
+    return [
+        RelationshipRule(
+            field=field, kind=f"shares_{field}",
+            min_entities=min_entities, max_fanout=max_fanout,
+        )
+        for _score, _sweet, field in scored[:top_k]
+    ]
+
+
 def _entity_name(node: object, name_field: str | None) -> str | None:
     """A display name for an entity: the configured golden-record field, else the
     first non-empty string value of the golden record."""

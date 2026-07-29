@@ -239,3 +239,21 @@ def test_transform_lower_trim_collapses_casing(store):
                              transform="lower_trim")]
     s = _resolve(store, df, _singletons(2), rule)
     assert s.relationships_added == 1
+
+
+# ── v2: auto-detect (the program suggests good edge fields) ─────────────────
+
+def test_suggest_relationship_rules_ranks_shared_fields(store):
+    """The profiler suggests a rule for a SHARED field (clinic), skips a UNIQUE
+    field (ssn -> no edges) and a HUB field (country -> everyone, over fanout)."""
+    from goldenmatch.identity import suggest_relationship_rules
+    rows = [{"id": str(i), "name": f"P{i}", "ssn": f"s{i}",
+             "clinic": "A" if i < 3 else "B", "country": "US"}
+            for i in range(6)]
+    _resolve(store, _df(rows), _singletons(6), [])  # populate, no rules needed
+    rules = suggest_relationship_rules(store, dataset="d", max_fanout=4, top_k=5)
+    fields = [r.field for r in rules]
+    assert "clinic" in fields          # 3 + 3 entities -> both in [2, 4]
+    assert "ssn" not in fields         # all unique -> no edges
+    assert "country" not in fields     # shared by 6 > max_fanout 4 -> hub
+    assert all(r.kind == f"shares_{r.field}" for r in rules)
