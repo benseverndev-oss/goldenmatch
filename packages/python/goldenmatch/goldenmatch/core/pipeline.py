@@ -4825,6 +4825,34 @@ def _run_dedupe_pipeline(
     return results
 
 
+def _arrow_lane_supported(config: Any, auto_config: bool) -> bool:
+    """Gate for the polars-input eviction: True only when the arrow Frame lane
+    fully + correctly implements the requested flow, so a ``pl.DataFrame`` input
+    can be routed to it (fixing the classic-lazy over-merge). The arrow lane is a
+    PARTIAL port; each ``return False`` below is a consumer not yet on the lane,
+    kept on the classic (polars) path until it is. As a flow lands on the arrow
+    lane, drop its guard here.
+
+    Un-ported flows:
+    - auto-config: the arrow lane never calls ``auto_configure_df`` (zero-config
+      runs entirely on the classic branch).
+    - prep memory store: ``config.memory`` correction/threshold learning is
+      classic-only (memory e2e).
+    - prepared-record store / partitioned block scoring: the disk-backed prep
+      store + the polars-native bucketed-materialize assembly.
+    """
+    if auto_config:
+        return False
+    _mem = getattr(config, "memory", None)
+    if _mem is not None and getattr(_mem, "enabled", False):
+        return False
+    if getattr(config, "prepared_record_store", False):
+        return False
+    if getattr(config, "partitioned_block_scoring", False):
+        return False
+    return True
+
+
 def run_dedupe_df(
     df: Any,  # pl.DataFrame | pa.Table | Frame -- coerced via to_frame (PR-6)
     config: GoldenMatchConfig,
@@ -4890,18 +4918,25 @@ def run_dedupe_df(
     frame = frame.with_literal_column("__source__", source_name)
     frame = frame.ensure_row_ids(offset=0)
 
-    # Evict the classic-lazy polars path: a polars input is converted to an arrow
-    # seam Frame so it runs the SAME correct, polars-free arrow lane as a pa.Table
-    # input. The classic-lazy path OVER-MERGED at scale -- ground-truth pairwise
-    # precision 0.013 (transitive-closure blowup on a 75x-larger candidate set)
-    # vs 0.98 on the arrow Frame lane for identical data (bench-fs-single-mk-probe,
-    # 5M). `cast_all_str()` above makes the pl->arrow conversion clean (nulls
-    # preserved). GOLDENMATCH_FRAME_LANE=0 restores the classic shim (revert switch).
+    # Evict the classic-lazy polars path for the flows the arrow Frame lane fully
+    # supports: a polars input is converted to an arrow seam Frame so it runs the
+    # SAME correct, polars-free arrow lane as a pa.Table input. The classic-lazy
+    # path OVER-MERGED at scale -- ground-truth pairwise precision 0.013
+    # (transitive-closure blowup on a 75x-larger candidate set) vs 0.98 on the
+    # arrow lane for identical data (bench-fs-single-mk-probe, 5M). `cast_all_str()`
+    # above makes the pl->arrow conversion clean (nulls preserved).
+    # GATED eviction: the arrow lane is a PARTIAL port -- it does not yet implement
+    # auto-config, the prep memory store, or partitioned block scoring. Decline
+    # (keep polars input on the classic lane) for those so they stay correct; each
+    # is a tracked port target that re-opens as its consumer lands on the lane.
+    # GOLDENMATCH_FRAME_LANE=0 restores the classic shim (revert switch).
     if isinstance(frame, _PolarsFrame):
+        _evict_ok = (
+            os.environ.get("GOLDENMATCH_FRAME_LANE", "1") != "0"
+            and _arrow_lane_supported(config, auto_config)
+        )
         combined_lf: Any = (
-            frame.native.lazy()
-            if os.environ.get("GOLDENMATCH_FRAME_LANE", "1") == "0"
-            else _to_frame(frame.to_arrow())
+            _to_frame(frame.to_arrow()) if _evict_ok else frame.native.lazy()
         )
     else:
         combined_lf = frame
