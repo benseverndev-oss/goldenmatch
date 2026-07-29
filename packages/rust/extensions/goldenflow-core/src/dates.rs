@@ -94,6 +94,50 @@ pub fn parse_datetime(s: &str) -> Option<(i32, u32, u32, u32, u32, u32)> {
 }
 
 // --------------------------------------------------------------------------- //
+// String-output transform kernels (the fused-chain surface).
+//
+// These are the TOTAL `fn(&str) -> String` shapes the fused chain (`chain::Kernel`)
+// dispatches — byte-identical to GoldenFlow's `_date_*_py` scalars: parse, format,
+// and on a parse miss PASS THE INPUT THROUGH UNCHANGED (never null; the null cell
+// is handled by the caller scattering nulls back). Years are always 4-digit from
+// the parser's covered inputs (explicit `YYYY` / POSIX-pivoted 2-digit -> 1969-2068),
+// so `{:04}` matches Python `date.isoformat()` / `strftime("%Y")` on this set.
+// --------------------------------------------------------------------------- //
+
+/// `date_iso8601` / `date_parse`: parse -> `YYYY-MM-DD`; passthrough on a miss.
+pub fn date_iso8601(s: &str) -> String {
+    match parse_date(s) {
+        Some((y, m, d)) => format!("{y:04}-{m:02}-{d:02}"),
+        None => s.to_string(),
+    }
+}
+
+/// `date_us`: parse -> `MM/DD/YYYY`; passthrough on a miss.
+pub fn date_us(s: &str) -> String {
+    match parse_date(s) {
+        Some((y, m, d)) => format!("{m:02}/{d:02}/{y:04}"),
+        None => s.to_string(),
+    }
+}
+
+/// `date_eu`: parse -> `DD/MM/YYYY`; passthrough on a miss.
+pub fn date_eu(s: &str) -> String {
+    match parse_date(s) {
+        Some((y, m, d)) => format!("{d:02}/{m:02}/{y:04}"),
+        None => s.to_string(),
+    }
+}
+
+/// `datetime_iso8601`: parse -> `YYYY-MM-DDTHH:MM:SS` (missing time -> `00:00:00`);
+/// passthrough on a miss.
+pub fn datetime_iso8601(s: &str) -> String {
+    match parse_datetime(s) {
+        Some((y, m, d, hh, mm, ss)) => format!("{y:04}-{m:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}"),
+        None => s.to_string(),
+    }
+}
+
+// --------------------------------------------------------------------------- //
 // Numeric dates
 // --------------------------------------------------------------------------- //
 
@@ -351,6 +395,27 @@ mod tests {
         assert_eq!(parse_date("2 January 2020"), Some((2020, 1, 2)));
         // A trailing non-time token is still rejected (not silently truncated).
         assert_eq!(parse_date("2024-01-20 garbage"), None);
+    }
+
+    #[test]
+    fn string_kernels_format_and_passthrough() {
+        // Format shapes match the `_date_*_py` scalars.
+        assert_eq!(date_iso8601("03/15/2024"), "2024-03-15");
+        assert_eq!(date_iso8601("Jan 2, 2020"), "2020-01-02");
+        assert_eq!(date_iso8601("2020"), "2020-01-01");
+        assert_eq!(date_us("2024-03-15"), "03/15/2024");
+        assert_eq!(date_eu("2024-03-15"), "15/03/2024");
+        assert_eq!(
+            datetime_iso8601("2024-01-20 14:05:00"),
+            "2024-01-20T14:05:00"
+        );
+        assert_eq!(datetime_iso8601("2024-03-15"), "2024-03-15T00:00:00");
+        // Datetime-bearing string truncates on the date-only kernels.
+        assert_eq!(date_iso8601("2024-01-20 14:05:00"), "2024-01-20");
+        // A parse miss passes the input through UNCHANGED (total, never null).
+        assert_eq!(date_iso8601("garbage"), "garbage");
+        assert_eq!(date_us("not a date"), "not a date");
+        assert_eq!(datetime_iso8601("2024-01-20 garbage"), "2024-01-20 garbage");
     }
 
     #[test]

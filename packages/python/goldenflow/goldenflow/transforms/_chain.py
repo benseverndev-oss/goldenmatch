@@ -56,6 +56,16 @@ FUSABLE_KERNELS: frozenset[str] = frozenset(
         "soundex",
         "double_metaphone_primary",
         "double_metaphone_alt",
+        # date family (total string->string; a parse miss passes the value
+        # through unchanged -- never null). `date_parse` is a `date_iso8601`
+        # alias. The int/bool/nullable date transforms (extract_*, age_from_dob,
+        # date_validate, extract_day_of_week, date_shift) are NOT here -- they
+        # aren't total string->string, so they stay on the per-transform scalar.
+        "date_iso8601",
+        "date_parse",
+        "date_us",
+        "date_eu",
+        "datetime_iso8601",
     }
 )
 

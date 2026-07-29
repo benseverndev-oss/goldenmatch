@@ -45,6 +45,15 @@ export const FUSABLE_KERNELS: ReadonlySet<string> = new Set([
   "soundex",
   "double_metaphone_primary",
   "double_metaphone_alt",
+  // date family (total string->string; a parse miss passes the value through).
+  // `date_parse` is a `date_iso8601` alias. The int/bool date transforms
+  // (extract_*, age_from_dob, date_validate, extract_day_of_week, date_shift)
+  // are NOT fusable — they take the per-transform path.
+  "date_iso8601",
+  "date_parse",
+  "date_us",
+  "date_eu",
+  "datetime_iso8601",
 ]);
 
 /** The fused chain is active only when a WASM backend that exposes `applyChain`

@@ -47,7 +47,7 @@ use arrow_buffer::{Buffer, OffsetBuffer, ScalarBuffer};
 // arrow-only.
 #[cfg(feature = "arrow")]
 use crate::numeric;
-use crate::{company, email, names, phonetic, text, url};
+use crate::{company, dates, email, names, phonetic, text, url};
 
 /// One owned, no-arg, total string→string kernel eligible for the fused chain.
 /// The name mapping (`from_name`) is the single source of truth the host's
@@ -85,6 +85,11 @@ pub enum Kernel {
     Soundex,
     DoubleMetaphonePrimary,
     DoubleMetaphoneAlt,
+    // date family (total string->string; passthrough on a parse miss)
+    DateIso8601,
+    DateUs,
+    DateEu,
+    DatetimeIso8601,
     // parameterized string->string (carry their args; total, never null)
     Truncate(usize),
     PadLeft(usize, char),
@@ -126,6 +131,11 @@ impl Kernel {
             "soundex" => Kernel::Soundex,
             "double_metaphone_primary" => Kernel::DoubleMetaphonePrimary,
             "double_metaphone_alt" => Kernel::DoubleMetaphoneAlt,
+            // `date_parse` is an alias of `date_iso8601` (identical bytes).
+            "date_iso8601" | "date_parse" => Kernel::DateIso8601,
+            "date_us" => Kernel::DateUs,
+            "date_eu" => Kernel::DateEu,
+            "datetime_iso8601" => Kernel::DatetimeIso8601,
             _ => return None,
         })
     }
@@ -192,6 +202,11 @@ impl Kernel {
         "soundex",
         "double_metaphone_primary",
         "double_metaphone_alt",
+        "date_iso8601",
+        "date_parse",
+        "date_us",
+        "date_eu",
+        "datetime_iso8601",
     ];
 
     /// Append `s` transformed by this kernel into `out` (which the caller has
@@ -229,6 +244,10 @@ impl Kernel {
             Kernel::Soundex => out.push_str(&phonetic::soundex(s)),
             Kernel::DoubleMetaphonePrimary => out.push_str(&phonetic::double_metaphone_primary(s)),
             Kernel::DoubleMetaphoneAlt => out.push_str(&phonetic::double_metaphone_alt(s)),
+            Kernel::DateIso8601 => out.push_str(&dates::date_iso8601(s)),
+            Kernel::DateUs => out.push_str(&dates::date_us(s)),
+            Kernel::DateEu => out.push_str(&dates::date_eu(s)),
+            Kernel::DatetimeIso8601 => out.push_str(&dates::datetime_iso8601(s)),
             Kernel::Truncate(n) => out.push_str(&text::truncate(s, n)),
             Kernel::PadLeft(w, p) => text::pad_left_into(s, w, p, out),
             Kernel::PadRight(w, p) => text::pad_right_into(s, w, p, out),
