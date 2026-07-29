@@ -83,9 +83,13 @@ def main() -> int:
     ap.add_argument("fixture", type=Path)
     ap.add_argument("--block", default="last_name",
                     help="blocking field (default last_name — the generator tunes its block sizes)")
+    ap.add_argument("--ingest", choices=("polars", "arrow"), default="polars",
+                    help="Frame the fixture is fed to dedupe_df as. 'arrow' (pa.Table) "
+                         "removes the caller-injected polars so the internal lane stays "
+                         "arrow until a genuine polars island forces a bridge; 'polars' "
+                         "(pl.read_csv, the historical default) keeps prior runs comparable.")
     args = ap.parse_args()
 
-    import polars as pl
     from goldenmatch.core._native_loader import native_enabled
     from goldenmatch.core.bench import bench_capture
 
@@ -94,11 +98,31 @@ def main() -> int:
     except ImportError:
         from goldenmatch._api import dedupe_df
 
-    df = pl.read_csv(args.fixture, ignore_errors=True, infer_schema_length=0)
-    for drop in ("id", "cluster_id"):
-        if drop in df.columns:
-            df = df.drop(drop)
-    n = df.height
+    _drop_cols = ("id", "cluster_id")
+    if args.ingest == "arrow":
+        # Read every column AS TEXT (matches pl.read_csv(infer_schema_length=0):
+        # no dtype inference, leading zeros preserved) straight into a pa.Table, so
+        # NO polars touches the ingest. column_types needs the names up front.
+        import csv as _csv
+
+        import pyarrow as pa
+        import pyarrow.csv as pacsv
+
+        with open(args.fixture, newline="") as _fh:
+            _names = next(_csv.reader(_fh))
+        _convert = pacsv.ConvertOptions(column_types={c: pa.string() for c in _names})
+        _parse = pacsv.ParseOptions(invalid_row_handler=lambda _row: "skip")
+        df = pacsv.read_csv(args.fixture, parse_options=_parse, convert_options=_convert)
+        _keep = [c for c in df.column_names if c not in _drop_cols]
+        df = df.select(_keep)
+        n = df.num_rows
+    else:
+        import polars as pl
+        df = pl.read_csv(args.fixture, ignore_errors=True, infer_schema_length=0)
+        for drop in _drop_cols:
+            if drop in df.columns:
+                df = df.drop(drop)
+        n = df.height
     rss_after_load = _vmrss_mb()
     cfg = _single_mk_config(args.block)
 

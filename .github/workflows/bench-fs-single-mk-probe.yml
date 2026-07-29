@@ -39,6 +39,10 @@ on:
         description: "GOLDENMATCH_TRANSFORM_DEBUG: '1' prints the prep_transform arrow-lane bridge split (pl.from_arrow/_do_transform/to_arrow)"
         required: false
         default: "0"
+      ingest:
+        description: "Frame fed to dedupe_df: 'arrow' (pa.Table, no caller polars) or 'polars' (pl.read_csv, historical default)"
+        required: false
+        default: "polars"
       label:
         description: "Tag for the output filename"
         required: false
@@ -85,7 +89,8 @@ jobs:
           set -o pipefail
           .venv/bin/python scripts/bench_fs_single_mk_probe.py \
             .profile_tmp/scale_fixtures/synthetic_bench.csv \
-            --block "${{ inputs.block }}" | tee /tmp/probe_${{ inputs.label }}.txt
+            --block "${{ inputs.block }}" \
+            --ingest "${{ inputs.ingest }}" | tee /tmp/probe_${{ inputs.label }}.txt
           {
             echo "## bench-fs-single-mk-probe (${{ inputs.label }}, columnar=${{ inputs.columnar }})"
             echo '```'
