@@ -109,9 +109,22 @@ class TestLiveWeightedPathMatchesScorePair:
         a = {"record_id": 0, "first_name": "john", "surname": "smith", "dob": "1980-01-01"}
         b = {"record_id": 1, "first_name": "zachary", "surname": "smith", "dob": None}
         df = pl.DataFrame([a, b])
-        assert (0, 1) not in self._cluster_pairs(df, backend), (
-            f"{backend}: renormalization must not make DISAGREEMENT free"
-        )
+        pairs = self._cluster_pairs(df, backend)
+        if (0, 1) in pairs:
+            # This has flaked ONCE in CI (native full-matrix) and does not reproduce
+            # against a correctly-built kernel -- the leading theory is an xdist
+            # worker state-leak, NOT a scoring bug. Dump the smoking gun so the NEXT
+            # occurrence is diagnosable: score_pair is the correct weighted score
+            # (~0.77 < 0.85 here) -- if it's below threshold yet the pair clustered,
+            # the merge did NOT come from this matchkey (suspect a leaked
+            # matchkey/config/registration from another test in the worker).
+            sp = score_pair(a, b, _mk().fields)
+            raise AssertionError(
+                f"{backend}: renormalization must not make DISAGREEMENT free. "
+                f"clustered={sorted(pairs)}; score_pair(a,b)={sp:.4f} "
+                f"threshold={_mk().threshold}. If score_pair < threshold, the clustering "
+                f"did NOT come from the weighted matchkey -> state-leak flake, not scoring."
+            )
 
 
 class TestAllNullColumnDoesNotZeroEveryPair:
