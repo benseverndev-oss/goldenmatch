@@ -315,3 +315,19 @@ def test_suggest_downweights_matchkeys(store):
         store, dataset="d", max_fanout=4, top_k=5, matchkey_fields={"team"})]
     assert "clinic" in fields and "team" in fields
     assert fields.index("clinic") < fields.index("team")
+
+
+def test_suggest_excludes_near_unique_matchkeys(store):
+    """A matchkey shared only in near-PAIRS is a near-unique identifier (the same
+    entity duplicated -- a missed merge), not a relationship, so it is excluded;
+    a matchkey shared in larger groups (a clinic phone) is kept."""
+    rows = [{"id": str(i), "name": f"P{i}",
+             "ssn": "A" if i < 2 else "B",   # two pairs -> mean group 2 (near-unique)
+             "phone": "X"} for i in range(4)]  # one group of 4 -> mean group 4
+    _resolve(store, _df(rows), _singletons(4), [])
+    from goldenmatch.identity import suggest_relationship_rules
+    fields = [r.field for r in suggest_relationship_rules(
+        store, dataset="d", max_fanout=10, top_k=5,
+        matchkey_fields={"ssn", "phone"})]
+    assert "phone" in fields        # larger groups -> real relationship
+    assert "ssn" not in fields      # near-pair matchkey -> identifier, excluded

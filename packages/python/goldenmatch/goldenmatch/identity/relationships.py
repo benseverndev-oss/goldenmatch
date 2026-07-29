@@ -99,6 +99,7 @@ def profile_relationship_fields(
     sample_keys: int = 500,
     matchkey_fields: "set[str] | list[str] | None" = None,
     matchkey_penalty: float = 0.25,
+    near_unique_max: float = 2.5,
 ) -> list[dict]:
     """Rank every candidate ``(field, best transform)`` by a relationship SCORE that
     blends three full-data signals (``store.relationship_field_stats``, so fanout is
@@ -143,6 +144,12 @@ def profile_relationship_fields(
             if cov <= 0 or pairs <= 0:
                 continue
             mean_group = pair_n / pairs            # edge-weighted mean sweet fanout
+            # A matchkey shared almost only in near-PAIRS is a near-unique identifier
+            # (a government id like npi): two entities "sharing" it are the SAME one
+            # not merged -- a missed-merge / dedup signal, not a relationship. Skip
+            # its raw value as a relationship candidate.
+            if is_mk and transform is None and mean_group < near_unique_max:
+                continue
             specificity = 1.0 / mean_group         # small groups -> specific link
             penalty = matchkey_penalty if (is_mk and transform is None) else 1.0
             score = cov * specificity * penalty
@@ -171,6 +178,7 @@ def suggest_relationship_rules(
     sample_keys: int = 500,
     matchkey_fields: "set[str] | list[str] | None" = None,
     matchkey_penalty: float = 0.25,
+    near_unique_max: float = 2.5,
 ) -> list[RelationshipRule]:
     """SUGGEST relationship rules for the fields the program identifies as good edge
     sources -- the "program identifies" half of the feature (the other half is
@@ -185,7 +193,8 @@ def suggest_relationship_rules(
     ranked = profile_relationship_fields(
         store, dataset, min_entities=min_entities, max_fanout=max_fanout,
         exclude=exclude, sample_keys=sample_keys,
-        matchkey_fields=matchkey_fields, matchkey_penalty=matchkey_penalty)
+        matchkey_fields=matchkey_fields, matchkey_penalty=matchkey_penalty,
+        near_unique_max=near_unique_max)
     rules = []
     for r in ranked[:top_k]:
         field, transform = r["field"], r["transform"]
