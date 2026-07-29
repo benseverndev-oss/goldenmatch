@@ -442,3 +442,33 @@ def test_group_members_kernel_matches_python_fallback(monkeypatch):
     fallback_dict = cl.cluster_frames_to_dict(frames)
 
     assert kernel_dict == fallback_dict, "kernel dict diverged from Python fallback"
+
+
+def test_deterministic_merge_pairs_unions_shared_id():
+    """Records sharing an authoritative id yield a chain of score=1.0 pairs that
+    union the whole group; singletons and nulls are left alone."""
+    import polars as pl
+    from goldenmatch.core.cluster import deterministic_merge_pairs
+    df = pl.DataFrame({"__row_id__": [0, 1, 2, 3, 4], "npi": ["A", "A", "A", None, "B"]})
+    p = deterministic_merge_pairs(df, ["npi"])
+    assert set(p.columns) == {"id_a", "id_b", "score"}
+    assert p.height == 2
+    assert all(s == 1.0 for s in p["score"].to_list())
+    par = {}
+    def find(x):
+        par.setdefault(x, x)
+        while par[x] != x:
+            x = par[x]
+        return x
+    for a, b in zip(p["id_a"].to_list(), p["id_b"].to_list()):
+        par[find(a)] = find(b)
+    assert len({find(0), find(1), find(2)}) == 1
+    assert find(4) == 4
+
+
+def test_deterministic_merge_pairs_empty_cases():
+    import polars as pl
+    from goldenmatch.core.cluster import deterministic_merge_pairs
+    df = pl.DataFrame({"__row_id__": [0, 1], "npi": [None, ""]})
+    assert deterministic_merge_pairs(df, ["npi"]).height == 0
+    assert deterministic_merge_pairs(df, ["missing"]).height == 0

@@ -181,6 +181,13 @@
               "description": "Opt-in semantic candidate-generation keys (ANN, initialism, alias) unioned into blocking."
             },
             {
+              "name": "deterministic_merge_keys",
+              "type": "list[str]",
+              "required": false,
+              "default": "[]",
+              "description": "Authoritative identifier columns (e.g. 'npi') whose shared non-null value FORCES records into the same entity regardless of probabilistic score. Injected as max-score deterministic pairs into the clustering union-find, so a unique government id like NPI can't be split across entities. Empty (default) = off."
+            },
+            {
               "name": "allow_slow_path",
               "type": "bool",
               "required": false,

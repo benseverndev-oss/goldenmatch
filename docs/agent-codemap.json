@@ -2442,6 +2442,7 @@
             "cluster_dict_to_frames",
             "cluster_frames_to_dict",
             "compute_cluster_confidence",
+            "deterministic_merge_pairs",
             "metadata_height",
             "split_oversized_cluster",
             "split_oversized_cluster_to_size",

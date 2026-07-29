@@ -2160,6 +2160,10 @@ class GoldenMatchConfig(BaseModel):
         default=None,
         description="Opt-in semantic candidate-generation keys (ANN, initialism, alias) unioned into blocking.",
     )
+    deterministic_merge_keys: list[str] = Field(
+        default_factory=list,
+        description="Authoritative identifier columns (e.g. 'npi') whose shared non-null value FORCES records into the same entity regardless of probabilistic score. Injected as max-score deterministic pairs into the clustering union-find, so a unique government id like NPI can't be split across entities. Empty (default) = off.",
+    )
     allow_slow_path: bool = Field(
         default=False,
         description="Permits falling back to a slower non-fused execution path when the fast path is ineligible.",
