@@ -177,9 +177,9 @@ def transformed_column(arr: Any, transforms: Sequence[str]) -> Any:
 
             _fn = canonical_soundex
         elif _t == "metaphone":
-            import jellyfish
+            import goldenphonetic
 
-            _fn = jellyfish.metaphone
+            _fn = goldenphonetic.metaphone
         else:
             _fn = partial(apply_transform, transform=_t)
         vals = [None if v is None else _fn(v) for v in cast.to_pylist()]

@@ -12,7 +12,9 @@ sys.path.insert(0, os.path.dirname(__file__))
 from pathlib import Path
 
 import pytest
+from sources.base import PairSource
 from sources_config import SourceEntry, build_source, load_sources
+from synthetic.generate import SyntheticSource
 
 REAL_YAML = Path(__file__).parent / "sources.yaml"
 FIX = Path(__file__).parent / "tests" / "fixtures"
@@ -36,6 +38,8 @@ def test_real_yaml_loads_expected_names_loaders_mechanisms():
     assert entries["magellan_abt_buy"].mechanism == "fetch"
     assert entries["ncvr"].loader == "ncvr"
     assert entries["ncvr"].mechanism == "fetch"
+    assert entries["synthetic"].loader == "synthetic"
+    assert entries["synthetic"].mechanism == "generate"
 
 
 def test_real_yaml_every_ccby_entry_has_attribution():
@@ -64,6 +68,7 @@ def test_real_yaml_names_match_yaml_keys():
         "dblp_scholar",
         "magellan_abt_buy",
         "ncvr",
+        "synthetic",
     }
 
 
@@ -286,6 +291,29 @@ def test_build_source_ncvr_stub_raises_not_implemented():
     assert src.name == "ncvr"
     with pytest.raises(NotImplementedError):
         src.splits()
+
+
+def test_build_source_synthetic_returns_pairsource_with_rows():
+    entry = SourceEntry(
+        name="synthetic_mini",
+        loader="synthetic",
+        mechanism="generate",
+        license="CC0-1.0",
+        domain="multi",
+        kwargs={"n_entities": 30, "profile": "light"},
+    )
+    src = build_source(entry, seed=1)
+    assert isinstance(src, SyntheticSource)
+    assert src.name == "synthetic_mini"
+    rows = [r for split in src.splits().values() for r in split]
+    assert rows
+
+
+def test_synthetic_source_isinstance_pairsource():
+    src = SyntheticSource(name="synthetic", seed=1, n_entities=30)
+    assert isinstance(src, PairSource)
+    assert src.name == "synthetic"
+    assert hasattr(src, "splits")
 
 
 def test_build_source_unknown_loader_raises():

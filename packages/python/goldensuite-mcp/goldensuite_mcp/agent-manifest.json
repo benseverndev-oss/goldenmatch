@@ -5598,6 +5598,8 @@
           "GOLDENMATCH_FS_EM_BLOCK_SLIM",
           "GOLDENMATCH_FS_EM_SAMPLE_ROWS",
           "GOLDENMATCH_FS_EVIDENCE_CUT",
+          "GOLDENMATCH_FS_FACTORIZE",
+          "GOLDENMATCH_FS_FACTORIZE_MIN_REPEAT",
           "GOLDENMATCH_FS_MAX_PASS_PAIRS",
           "GOLDENMATCH_FS_MISSING",
           "GOLDENMATCH_FS_MONOTONIC",
@@ -9493,6 +9495,14 @@
     {
       "name": "goldenmatch_pg",
       "path": "packages/rust/extensions/postgres"
+    },
+    {
+      "name": "goldenphonetic-core",
+      "path": "packages/rust/extensions/goldenphonetic-core"
+    },
+    {
+      "name": "goldenphonetic-py",
+      "path": "packages/rust/extensions/goldenphonetic-py"
     },
     {
       "name": "goldenpipe-core",

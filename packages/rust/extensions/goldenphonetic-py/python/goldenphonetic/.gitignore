@@ -1,0 +1,4 @@
+# The compiled abi3 extension built by maturin (develop / build) lands here as an
+# in-tree artifact; ignore it, keep the Python source (__init__.py).
+*.pyd
+*.so

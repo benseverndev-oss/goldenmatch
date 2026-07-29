@@ -3940,6 +3940,8 @@
             "_fs_link_threshold",
             "_fs_monotonic_mode",
             "_fs_name_refdata_available",
+            "_fs_native_dbg_on",
+            "_fs_native_dbg_record",
             "_fs_native_eligible",
             "_fs_native_enabled",
             "_fs_ne_extend_cols",

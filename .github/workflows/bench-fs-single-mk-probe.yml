@@ -27,6 +27,14 @@ on:
         description: "GOLDENMATCH_FS_COLUMNAR_CLUSTER (B2c): '1'/'0' to A/B; blank = code default"
         required: false
         default: ""
+      fs_factorize:
+        description: "GOLDENMATCH_FS_FACTORIZE: '1' = factorized-comparison prototype (distinct value-pair matrices)"
+        required: false
+        default: "0"
+      bucket_debug:
+        description: "GOLDENMATCH_BUCKET_DEBUG: '1' prints the bucket_score prep/kernel/post split"
+        required: false
+        default: "0"
       label:
         description: "Tag for the output filename"
         required: false
@@ -65,6 +73,9 @@ jobs:
         if: ${{ inputs.columnar != '' }}
         run: echo "GOLDENMATCH_FS_COLUMNAR_CLUSTER=${{ inputs.columnar }}" >> $GITHUB_ENV
       - name: Run probe
+        env:
+          GOLDENMATCH_BUCKET_DEBUG: ${{ inputs.bucket_debug }}
+          GOLDENMATCH_FS_FACTORIZE: ${{ inputs.fs_factorize }}
         run: |
           set -o pipefail
           .venv/bin/python scripts/bench_fs_single_mk_probe.py \

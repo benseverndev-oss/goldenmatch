@@ -14,8 +14,11 @@ Blend weights (`SourceEntry.weight`) are recorded in the manifest for the
 model card but ratio-blending by weight is DEFERRED -- this task only caps
 per-source row counts (the `cap` lever); it does not re-weight the mix.
 
-Box-safe: stdlib + `sources_config` (PyYAML) only. Never touches the
-network -- `fetch` sources contribute no rows here, so no download happens
+Box-safe: stdlib + `sources_config` (PyYAML) + `fs_scorer` only. `fs_scorer`
+keeps every goldenmatch/polars import function-local, so importing it here is
+free -- the heavy stack loads only under `--fs-enrich` (the opt-in FS
+enrichment layer; default off keeps the blend byte-identical). Never touches
+the network -- `fetch` sources contribute no rows here, so no download happens
 during a corpus build.
 """
 
@@ -23,10 +26,21 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import warnings
 from pathlib import Path
 from typing import Any
 
+from fs_scorer import (
+    _gold_components,
+    _load_fs_cache,
+    _make_candidates,
+    _make_fs_scorer,
+    _pairs_hash,
+    _rebalance_negatives,
+    _sample_labeled_pairs,
+    _save_fs_cache,
+)
 from sources_config import build_source, load_sources
 
 _SPLITS = ("train", "val", "test")
@@ -36,6 +50,13 @@ _SPLITS = ("train", "val", "test")
 # somehow False, since their data is either cite-only/eval-only by design
 # or not locally materialized.
 _ROW_MECHANISMS = {"bundle", "generate"}
+
+# ── FS enrichment tunables (Task 6) ────────────────────────────────────────
+# The near-threshold hard-negative mining band half-width and per-split mining
+# cap threaded into `fs_enrich.enrich`. `DELTA` starts at 0.1 per the plan. The
+# goldenmatch-coupled scorer/blocker layer lives in `fs_scorer`.
+DELTA = 0.1
+MINE_CAP = 200
 
 
 def _cap_preserving_balance(rows: list[dict[str, Any]], cap: int) -> list[dict[str, Any]]:
@@ -59,8 +80,91 @@ def _cap_preserving_balance(rows: list[dict[str, Any]], cap: int) -> list[dict[s
     return interleaved[:cap]
 
 
+# ── FS enrichment orchestrator (Task 6) ────────────────────────────────────
+# The goldenmatch-coupled scorer/blocker/cache layer lives in `fs_scorer`; this
+# orchestrator only sequences it (fit once per source, enrich each split, cache).
+
+
+def _fs_enrich_source(
+    src: Any,
+    entry: Any,
+    splits: dict[str, Any],
+    out_dir: Path,
+    *,
+    delta: float,
+    mine_cap: int,
+) -> dict[str, list[dict]]:
+    """Fit the FS scorer once on the source's TRAIN pool and enrich each split's
+    pairs (soft confidence + mined near-threshold gold non-matches), threading a
+    per-source disk cache keyed on `fs_enrich.cache_key`. Sources without a
+    `record_pools()` (or an empty train pool) are returned UNENRICHED -- the
+    trainer's per-row confidence has a constant fallback, so mixed rows are
+    safe."""
+    from fs_enrich import cache_key, enrich
+
+    materialized = {s: list(splits.get(s, [])) for s in _SPLITS}
+    pools = getattr(src, "record_pools", lambda: {})()
+    train_pool = pools.get("train", [])
+    if not train_pool:
+        print(
+            f"[fs-enrich] source {entry.name!r} has no train record pool; "
+            f"skipping FS enrichment (rows keep the training constant fallback)",
+            file=sys.stderr,
+        )
+        return materialized
+
+    sample_pairs = _sample_labeled_pairs(materialized["train"])
+    scorer, tau, blocking_cfg, scorer_cfg = _make_fs_scorer(
+        train_pool, entry.domain, sample_pairs=sample_pairs
+    )
+
+    corpus_hash = _pairs_hash([p for s in _SPLITS for p in materialized[s]])
+    key = cache_key(corpus_hash=corpus_hash, scorer_cfg=scorer_cfg, tau=tau, delta=delta)
+    cached = _load_fs_cache(out_dir, key)
+    if cached is not None:
+        print(f"[fs-enrich] cache hit for {entry.name!r} ({key[:12]})", file=sys.stderr)
+        return cached
+
+    result: dict[str, list[dict]] = {}
+    for split in _SPLITS:
+        rows = materialized[split]
+        recs = pools.get(split, [])
+        gold_linked = _gold_components(rows)
+        id_prefix = f"{entry.name}:{split}:"
+        if recs:
+            candidates_fn = (
+                lambda r, gl=gold_linked, pfx=id_prefix: _make_candidates(
+                    r, blocking_cfg, gold_linked=gl, id_prefix=pfx
+                )
+            )
+        else:
+            candidates_fn = lambda r: []  # noqa: E731 (defensive: no pool -> no mining)
+        enriched = enrich(
+            rows,
+            records=recs,
+            scorer=scorer,
+            candidates_fn=candidates_fn,
+            tau=tau,
+            delta=delta,
+            mine_cap=mine_cap,
+            domain=entry.domain,
+        )
+        mined = sum(1 for r in enriched if r.get("negative_kind") == "fs_mined")
+        result[split] = _rebalance_negatives(enriched, mined)
+
+    _save_fs_cache(out_dir, key, result)
+    return result
+
+
 def build_corpus(
-    sources_yaml: Path, out_dir: Path, *, seed: int, cap: int | None = None
+    sources_yaml: Path,
+    out_dir: Path,
+    *,
+    seed: int,
+    cap: int | None = None,
+    enrich_fs: bool = False,
+    delta: float = DELTA,
+    mine_cap: int = MINE_CAP,
 ) -> dict[str, Any]:
     """Blend every bundled/generated, non-eval-only source into
     `out_dir/{train,val,test}.jsonl` + `out_dir/manifest.json`. Returns the
@@ -71,6 +175,15 @@ def build_corpus(
     before truncating, see its docstring), so results stay reproducible AND
     class-balanced. This is the "cap oversized sources" lever; proportional
     weight-blending (`SourceEntry.weight`) is deferred to a later task.
+
+    `enrich_fs` (default OFF) folds the real goldenmatch Fellegi-Sunter scorer
+    into each contributing source: fit the FS posterior once on the source's
+    train pool, attach an FS-score-driven soft `confidence` to every pair, and
+    mine near-threshold gold non-matches (`negative_kind="fs_mined"`). OFF keeps
+    the output byte-identical to the pre-Task-6 blend (the pure box tests never
+    enable it and never import goldenmatch). `delta`/`mine_cap` thread the mining
+    band + per-split cap. eval-only/`fetch` sources are never enriched (they
+    never contribute rows).
     """
     entries = load_sources(sources_yaml)
 
@@ -94,8 +207,15 @@ def build_corpus(
 
         if contributes:
             splits = src.splits()
+            enriched_splits = (
+                _fs_enrich_source(
+                    src, entry, splits, out_dir, delta=delta, mine_cap=mine_cap
+                )
+                if enrich_fs
+                else {s: list(splits.get(s, [])) for s in _SPLITS}
+            )
             for split in _SPLITS:
-                rows = list(splits.get(split, []))
+                rows = enriched_splits.get(split, [])
                 if cap is not None:
                     rows = _cap_preserving_balance(rows, cap)
                 corpus[split].extend(rows)
@@ -167,9 +287,25 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out-dir", type=Path, default=Path("data/er_matcher"))
     ap.add_argument("--seed", type=int, default=20260727)
     ap.add_argument("--cap", type=int, default=None)
+    ap.add_argument(
+        "--fs-enrich",
+        action="store_true",
+        help="Fold the real goldenmatch FS scorer in: soft confidence + mined "
+        "near-threshold gold negatives (needs the goldenmatch package + polars).",
+    )
+    ap.add_argument("--fs-delta", type=float, default=DELTA, help="FS mining band half-width.")
+    ap.add_argument("--fs-mine-cap", type=int, default=MINE_CAP, help="Max mined negatives/split.")
     args = ap.parse_args(argv)
 
-    manifest = build_corpus(args.sources, args.out_dir, seed=args.seed, cap=args.cap)
+    manifest = build_corpus(
+        args.sources,
+        args.out_dir,
+        seed=args.seed,
+        cap=args.cap,
+        enrich_fs=args.fs_enrich,
+        delta=args.fs_delta,
+        mine_cap=args.fs_mine_cap,
+    )
     print(json.dumps(manifest["totals"], indent=2, sort_keys=True))
     return 0
 

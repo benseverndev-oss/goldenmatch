@@ -77,6 +77,43 @@ def test_negatives_are_strictly_cross_table():
     assert all(r["eid_a"][0] != r["eid_b"][0] for r in no_match)
 
 
+def test_record_pool_every_record_in_exactly_one_split():
+    src = LeipzigSource(name="abt_buy", root=FIX, domain="product", block_fields=["title"], seed=1)
+    pools = src.record_pools()
+    assert set(pools) == {"train", "val", "test"}
+    all_ids = [
+        entry.get("id") or entry.get("title") for split in pools.values() for entry in split
+    ]
+    # 4 rows in tableA + 4 rows in tableB == 8 total records, none dropped
+    # and none duplicated across splits.
+    assert sum(len(v) for v in pools.values()) == 8
+    assert len(all_ids) == len(set(all_ids))
+
+
+def test_record_pool_leakage_consistent_with_gold_pairs():
+    src = LeipzigSource(name="abt_buy", root=FIX, domain="product", block_fields=["title"], seed=1)
+    pools = src.record_pools()
+    entities = src._entities()
+    gold_pairs = src._read_gold_pairs()
+    key_of = src._key_of(entities, gold_pairs)
+
+    # Build id -> split from the record pool by matching on the field
+    # payload (record_pools() returns bare field dicts, not namespaced ids).
+    def find_split(rid: str) -> str:
+        for split, records in pools.items():
+            if entities[rid] in records:
+                return split
+        raise AssertionError(f"{rid} missing from record_pools()")
+
+    rows = _all_rows(src)
+    positive_rows = [r for r in rows if r["label"] == "match"]
+    assert positive_rows  # sanity
+    for r in positive_rows:
+        expected_split = src._split_of_record(key_of, r["eid_a"])
+        assert find_split(r["eid_a"]) == expected_split
+        assert find_split(r["eid_b"]) == expected_split
+
+
 def test_no_shortfall_warning_on_fixture():
     import warnings
 

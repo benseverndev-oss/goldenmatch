@@ -78,3 +78,13 @@ sources:
     eval_only: true
     domain: person
     kwargs: {}
+
+  synthetic:
+    loader: synthetic
+    mechanism: generate
+    license: CC0-1.0
+    domain: multi
+    weight: 1.0
+    kwargs:
+      n_entities: 3000
+      profile: light

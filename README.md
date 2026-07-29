@@ -28,7 +28,7 @@ The headline package, **GoldenMatch**, does the matching — fuzzy + exact + pro
 [![DBLP-ACM F1](https://img.shields.io/badge/DBLP--ACM%20F1-96.4%25-d4a017)](packages/python/goldenmatch/README.md#benchmarks)
 
 <!-- Reach -->
-[![PyPI downloads (suite)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbenseverndev-oss%2Fgoldenmatch%2Fbadges%2Fpypi-downloads.json)](https://pepy.tech/projects?q=goldenmatch+goldencheck+goldenpipe+goldenflow+goldenanalysis+infermap+goldencheck-types+goldensuite-mcp+goldenfuzz+goldenmatch-duckdb+goldenmatch-native+goldenflow-native+goldencheck-native+goldenanalysis-native+goldengraph-native+goldenmatch-embed+golden-suite)
+[![PyPI downloads (suite)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbenseverndev-oss%2Fgoldenmatch%2Fbadges%2Fpypi-downloads.json)](https://pepy.tech/projects?q=goldenmatch+goldencheck+goldenpipe+goldenflow+goldenanalysis+infermap+goldencheck-types+goldensuite-mcp+goldenfuzz+goldenphonetic+goldenmatch-duckdb+goldenmatch-native+goldenflow-native+goldencheck-native+goldenanalysis-native+goldengraph-native+goldenmatch-embed+golden-suite)
 [![npm downloads (suite)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbenseverndev-oss%2Fgoldenmatch%2Fbadges%2Fnpm-downloads.json)](https://www.npmjs.com/~benzsevern)
 [![GitHub stars](https://img.shields.io/github/stars/benseverndev-oss/goldenmatch?style=flat&color=d4a017&logo=github)](https://github.com/benseverndev-oss/goldenmatch/stargazers)
 
@@ -183,6 +183,15 @@ GoldenMatch's core workflow is a loop, not a one-shot:
 | **[goldencheck-action](packages/actions/goldencheck/README.md)** | YAML | GitHub Action — fail PRs that introduce data-quality regressions. | Marketplace |
 
 > The deepest docs live in **[packages/python/goldenmatch/README.md](packages/python/goldenmatch/README.md)** (~1,300 lines: full feature list, CLI, architecture, benchmarks).
+
+### Owned libraries (standalone)
+
+The suite owns its string-matching primitives instead of renting them — byte-identical drop-in replacements for the popular libraries, published on their own so they're usable outside the suite too. Same result, our own kernel, faster on the entity-resolution common case.
+
+| Library | Replaces | What it is | Install |
+|---|---|---|---|
+| **[goldenfuzz](packages/rust/extensions/goldenfuzz-py/README.md)** | `rapidfuzz` | Fuzzy-string scorers — jaro-winkler / levenshtein / indel + the full `fuzz.*` composite family (WRatio, token/partial ratios) + one-vs-many `extract`/`cdist`. Byte-identical to rapidfuzz (oracle-fuzzed), faster on short strings. | `pip install goldenfuzz` · `cargo add goldenfuzz-core` |
+| **[goldenphonetic](packages/rust/extensions/goldenphonetic-py/README.md)** | `jellyfish` | Phonetic encoders — soundex / metaphone / nysiis / match-rating. Byte-identical to jellyfish (26,602-comparison fuzz), pure-Rust zero-dep; nysiis 6.8× faster. | `pip install goldenphonetic` · `cargo add goldenphonetic-core` |
 
 ### Knowledge graphs
 

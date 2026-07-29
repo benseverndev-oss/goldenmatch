@@ -1805,23 +1805,39 @@ class IdentityStore:
             raise NotImplementedError("relationship_groups: not supported on mongo")
         if not _SAFE_FIELD.fullmatch(field):
             raise ValueError(f"unsafe relationship field name: {field!r}")
+        # Perf (#2226-followup): the old shape extracted the payload field 3x per
+        # row, re-cast an already-``jsonb`` column, and ran ``COUNT(DISTINCT)`` +
+        # ``string_agg(DISTINCT)`` PER GROUP over every ``source_records`` row -- so
+        # a mega-shared value (a clinic switchboard phone held by 100k+ records) got
+        # its full distinct-aggregate computed only to be thrown away by the fanout
+        # cap. On 28M rows that seq-scanned + stalled for >1h. Rewrite: extract the
+        # field ONCE, dedup ``(value, entity_id)`` pairs, find the values whose
+        # distinct-entity count is in range, then ``string_agg`` ONLY those
+        # qualifying (small) groups -- never the mega-shared ones. A covering
+        # expression index makes the dedup an index scan instead of a heap seq scan.
+        self._ensure_relationship_index(field)
         if self._backend == "postgres":
-            raw = f"((sr.payload)::jsonb ->> '{field}')"
-            agg = "string_agg(DISTINCT sr.entity_id, ',')"
+            raw = f"payload ->> '{field}'"          # payload is already jsonb
+            agg = "string_agg(p.entity_id, ',')"    # pairs are DISTINCT -> no DISTINCT
         else:
-            raw = f"json_extract(sr.payload, '$.{field}')"
-            agg = "group_concat(DISTINCT sr.entity_id)"
+            raw = f"json_extract(payload, '$.{field}')"
+            agg = "group_concat(p.entity_id)"
+        # transform wraps the RAW extraction; transform=None returns it byte-for-byte
+        # so the covering index on (payload->>field, entity_id) still applies.
         vexpr = _rel_value_expr(raw, transform, self._backend)
-        ds = "" if dataset is None else " AND sr.dataset = ?"
+        ds = "" if dataset is None else " AND dataset = ?"
         params: tuple = () if dataset is None else (dataset,)
         sql = (
-            f"SELECT {vexpr} AS v, {agg} AS eids "
-            "FROM source_records sr "
-            f"WHERE sr.entity_id IS NOT NULL AND {vexpr} IS NOT NULL "
-            f"AND {vexpr} != ''{ds} "
-            f"GROUP BY {vexpr} "
-            "HAVING COUNT(DISTINCT sr.entity_id) >= ? "
-            "AND COUNT(DISTINCT sr.entity_id) <= ?"
+            "WITH ex AS ("
+            f" SELECT {vexpr} AS v, entity_id FROM source_records"
+            f" WHERE entity_id IS NOT NULL{ds}"
+            "), pairs AS ("
+            " SELECT DISTINCT v, entity_id FROM ex WHERE v IS NOT NULL AND v <> ''"
+            "), qual AS ("
+            " SELECT v FROM pairs GROUP BY v HAVING COUNT(*) >= ? AND COUNT(*) <= ?"
+            ") "
+            f"SELECT p.v AS v, {agg} AS eids "
+            "FROM pairs p JOIN qual q ON p.v = q.v GROUP BY p.v"
         )
         rows = self._fetchall(sql, params + (min_entities, max_entities))
         return [(r["v"], str(r["eids"]).split(",")) for r in rows]
@@ -1853,6 +1869,29 @@ class IdentityStore:
             if isinstance(p, dict):
                 out.append((r["entity_id"], p))
         return out
+
+    def _ensure_relationship_index(self, field: str) -> None:
+        """Best-effort covering expression index ``(payload->>field, entity_id)`` so
+        ``relationship_groups`` reads an index-ordered stream instead of seq-scanning
+        + re-parsing jsonb across the whole ``source_records`` heap. Idempotent
+        (``IF NOT EXISTS``) and fail-soft: the query is correct without it, and a
+        build failure (e.g. read-only role) must never break a resolve."""
+        if not _SAFE_FIELD.fullmatch(field):
+            return
+        idx = f"idx_sr_rel_{field}"[:60]
+        try:
+            if self._backend == "postgres":
+                self._conn.execute(
+                    f"CREATE INDEX IF NOT EXISTS {idx} ON source_records "
+                    f"((payload ->> '{field}'), entity_id) WHERE entity_id IS NOT NULL"
+                )
+            elif self._backend == "sqlite":
+                self._conn.execute(
+                    f"CREATE INDEX IF NOT EXISTS {idx} ON source_records "
+                    f"(json_extract(payload, '$.{field}'), entity_id)"
+                )
+        except Exception:  # noqa: BLE001 -- the index is an optimization, never fatal
+            pass
 
     def add_relationships(self, rows: list[tuple]) -> int:
         """Insert ``(entity_a, entity_b, kind, field, shared_value, dataset)``
@@ -2169,6 +2208,21 @@ class IdentityStore:
             (entity_id, run_name, kind),
         )
         return row is not None
+
+    def run_event_entities(self, run_name: str, kind: str) -> set[str]:
+        """Batch form of ``has_run_event``: the set of entity_ids that already have
+        an event of (``run_name``, ``kind``). ``resolve_clusters`` preloads this
+        ONCE so the created-cluster idempotency guard is an in-memory membership
+        test instead of one ``has_run_event`` SELECT per cluster -- an N+1 that also
+        seq-scanned ``identity_events`` (O(n^2)) whenever the secondary indexes are
+        deferred by the initial-load fast path. SQL backends only; the caller
+        falls back to ``has_run_event`` for mongo/minimal stores."""
+        rows = self._fetchall(
+            "SELECT DISTINCT entity_id FROM identity_events "
+            "WHERE run_name = ? AND kind = ?",
+            (run_name, kind),
+        )
+        return {r["entity_id"] for r in rows}
 
     def add_alias(self, alias: IdentityAlias) -> None:
         if self._backend == "mongo":

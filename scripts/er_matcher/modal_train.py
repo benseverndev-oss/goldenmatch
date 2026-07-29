@@ -199,7 +199,16 @@ def full(config_name: str = "bf16-lora", gpu: str = GPU_FULL) -> None:
     function argument.
     """
     qlora = config_name == "qlora-4bit"
-    train_full.with_options(gpu=gpu).remote(qlora=qlora)
+    fn = train_full
+    if gpu != GPU_FULL:
+        # runtime GPU retarget needs modal.Function.with_options (newer modal);
+        # fall back to the decorator's GPU_FULL when it's unavailable (modal 1.4.x).
+        if hasattr(fn, "with_options"):
+            fn = fn.with_options(gpu=gpu)
+        else:
+            print(f"[warn] runtime GPU override to {gpu!r} needs modal.with_options "
+                  f"(unavailable here); using decorator default {GPU_FULL!r}")
+    fn.remote(qlora=qlora)
     print("full run done -> `modal volume get er-matcher-out model/merged` "
           "(quantize + publish per plan §Phase 4)")
 
@@ -211,10 +220,14 @@ def full(config_name: str = "bf16-lora", gpu: str = GPU_FULL) -> None:
     volumes={"/out": _out_vol},
     secrets=[modal.Secret.from_name("er-matcher-hf")],
 )
-def eval_model(limit: int = 0) -> None:
-    """Load the merged model and score match-F1 on the held-out test split via
-    generative inference (build_chat -> generate -> parse_verdict), using
-    eval.run_eval for overall + per-domain P/R/F1 + calibration."""
+def eval_model(limit: int = 0, fast: bool = True) -> None:
+    """Load the merged model and score match-F1 on the held-out test split, using
+    eval.run_eval for overall + per-domain P/R/F1 + calibration.
+
+    fast=True (default): teacher-force the compact-JSON verdict prefix `{"match":`
+    and read the next-token logits over the `true`/`false` ids (one forward pass per
+    pair, ~15x faster than generation). fast=False: full generative inference
+    (build_chat -> generate -> parse_verdict) for exact production-decode fidelity."""
     import json
     import sys
 
@@ -239,27 +252,56 @@ def eval_model(limit: int = 0) -> None:
     )
 
     # run_eval scores each pair once for "overall" AND again per-domain -- memoize
-    # so a slow generative matcher only does one generation per pair.
+    # so the matcher only touches the model once per pair.
     cache: dict[tuple[int, int], dict | None] = {}
 
-    def matcher(a: dict, b: dict) -> dict | None:
-        key = (id(a), id(b))
-        if key in cache:
-            return cache[key]
-        text = tok.apply_chat_template(build_chat(a, b), tokenize=False, add_generation_prompt=True)
-        inputs = tok(text, return_tensors="pt").to(model.device)
-        with torch.no_grad():
-            out = model.generate(**inputs, max_new_tokens=64, do_sample=False,
-                                 pad_token_id=tok.eos_token_id)
-        gen = tok.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
-        v = parse_verdict(gen)
-        cache[key] = v
-        return v
+    if fast:
+        # compact JSON (render_target uses separators=(",",":")) -> the value token
+        # after `{"match":` is `true`/`false` with NO leading space.
+        _tid = tok.encode("true", add_special_tokens=False)
+        _fid = tok.encode("false", add_special_tokens=False)
+        if len(_tid) != 1 or len(_fid) != 1:
+            raise RuntimeError(f"true/false not single tokens: {_tid} {_fid}")
+        true_id, false_id = _tid[0], _fid[0]
+
+        def matcher(a: dict, b: dict) -> dict | None:
+            key = (id(a), id(b))
+            if key in cache:
+                return cache[key]
+            text = tok.apply_chat_template(
+                build_chat(a, b), tokenize=False, add_generation_prompt=True
+            ) + '{"match":'
+            inputs = tok(text, return_tensors="pt").to(model.device)
+            with torch.no_grad():
+                logits = model(**inputs).logits[0, -1, :]
+            pair = torch.softmax(torch.stack([logits[true_id], logits[false_id]]), dim=0)
+            p_match = float(pair[0])
+            match = p_match > 0.5
+            v = {"match": match, "confidence": p_match if match else 1.0 - p_match}
+            cache[key] = v
+            return v
+    else:
+        def matcher(a: dict, b: dict) -> dict | None:
+            key = (id(a), id(b))
+            if key in cache:
+                return cache[key]
+            text = tok.apply_chat_template(
+                build_chat(a, b), tokenize=False, add_generation_prompt=True
+            )
+            inputs = tok(text, return_tensors="pt").to(model.device)
+            with torch.no_grad():
+                out = model.generate(**inputs, max_new_tokens=64, do_sample=False,
+                                     pad_token_id=tok.eos_token_id)
+            gen = tok.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
+            v = parse_verdict(gen)
+            cache[key] = v
+            return v
 
     rows = [json.loads(ln) for ln in open("/root/data/er_matcher/test.jsonl") if ln.strip()]
     if limit:
         rows = rows[:limit]
-    print(f"[eval] scoring {len(rows)} test pairs (memoized generative matcher)...")
+    print(f"[eval] scoring {len(rows)} test pairs ({'fast logit' if fast else 'generative'} "
+          "matcher)...")
     scorecard = ev.run_eval({"test": rows}, matcher)
     with open("/out/eval_results.json", "w") as f:
         json.dump(scorecard, f, indent=2)
@@ -271,6 +313,17 @@ def eval_model(limit: int = 0) -> None:
 def evaluate(limit: int = 0) -> None:
     eval_model.remote(limit=limit)
     print("eval done -> `modal volume get er-matcher-out eval_results.json`")
+
+
+@app.local_entrypoint()
+def evaluate_detached(limit: int = 0) -> None:
+    """Fire-and-forget in-distribution eval: spawn eval_model and return immediately.
+    Run with `modal run --detach ...::evaluate_detached` so the spawned call survives
+    the client exit (the generative scan of the full test split takes ~30-60 min).
+    Poll `modal volume get er-matcher-out eval_results.json` for the result."""
+    call = eval_model.spawn(limit=limit)
+    print(f"eval spawned (detached): {call.object_id} -> poll "
+          "`modal volume get er-matcher-out eval_results.json`")
 
 
 @app.function(
