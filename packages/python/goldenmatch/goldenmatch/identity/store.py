@@ -1885,7 +1885,15 @@ class IdentityStore:
         * ``hub_values``    -- distinct values shared by ``> max_entities`` entities
           (skipped as hubs),
         * ``coverage_entities`` -- distinct ENTITIES that land in a sweet-spot value
-          (the rank key: how much of the graph this field would actually edge).
+          (how much of the graph this field would actually edge),
+        * ``sweet_pairs``   -- pairwise edges the sweet-spot values yield
+          (``SUM n*(n-1)/2``),
+        * ``sweet_pair_n``  -- ``SUM n*(n-1)/2 * n`` over sweet values, so the caller
+          can derive the edge-weighted mean group size (``sweet_pair_n /
+          sweet_pairs``) and hence a RARITY signal: a field linked through small,
+          specific groups (a shared phone) is a stronger relationship than one
+          linked through large common ones (a shared surname), even at equal
+          coverage.
 
         Because fanout is measured on the WHOLE dataset, a hub attribute (a value
         held by ~everyone, e.g. a specialty or state) scores ``coverage=0`` -- the
@@ -1916,18 +1924,26 @@ class IdentityStore:
             "(SELECT COUNT(*) FROM card WHERE n >= ? AND n <= ?) AS sweet_values, "
             "(SELECT COUNT(*) FROM card WHERE n > ?) AS hub_values, "
             "(SELECT COUNT(DISTINCT p.entity_id) FROM pairs p JOIN card c "
-            " ON p.v = c.v WHERE c.n >= ? AND c.n <= ?) AS coverage_entities"
+            " ON p.v = c.v WHERE c.n >= ? AND c.n <= ?) AS coverage_entities, "
+            "(SELECT COALESCE(SUM(n*(n-1)/2), 0) FROM card "
+            " WHERE n >= ? AND n <= ?) AS sweet_pairs, "
+            "(SELECT COALESCE(SUM(n*(n-1)/2*n), 0) FROM card "
+            " WHERE n >= ? AND n <= ?) AS sweet_pair_n"
         )
         rows = self._fetchall(
             sql, params + (min_entities, max_entities, max_entities,
-                           min_entities, max_entities))
+                           min_entities, max_entities, min_entities,
+                           max_entities, min_entities, max_entities))
         r = rows[0] if rows else None
         if r is None:
-            return {"sweet_values": 0, "hub_values": 0, "coverage_entities": 0}
+            return {"sweet_values": 0, "hub_values": 0, "coverage_entities": 0,
+                    "sweet_pairs": 0, "sweet_pair_n": 0}
         return {
             "sweet_values": int(r["sweet_values"] or 0),
             "hub_values": int(r["hub_values"] or 0),
             "coverage_entities": int(r["coverage_entities"] or 0),
+            "sweet_pairs": int(r["sweet_pairs"] or 0),
+            "sweet_pair_n": int(r["sweet_pair_n"] or 0),
         }
 
     def _ensure_relationship_index(self, field: str) -> None:

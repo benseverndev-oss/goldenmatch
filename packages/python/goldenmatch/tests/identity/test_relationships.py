@@ -288,3 +288,30 @@ def test_suggest_picks_transform_and_rejects_hubs(store):
     assert "email" in by_field
     assert by_field["email"].transform == "email_domain"   # raw email is unique
     assert "specialty" not in by_field                      # 6 > max_fanout 4 -> hub
+
+
+def test_suggest_prefers_rare_specific_values(store):
+    """At equal coverage, a field linked through small specific groups outranks one
+    linked through a large common group (rarity/specificity weighting)."""
+    vals = ["a", "a", "b", "b", "c", "c"]           # 'rare': three pairs
+    rows = [{"id": str(i), "name": f"P{i}", "rare": vals[i], "common": "X"}
+            for i in range(6)]                       # 'common': all six share "X"
+    _resolve(store, _df(rows), _singletons(6), [])
+    from goldenmatch.identity import suggest_relationship_rules
+    fields = [r.field for r in
+              suggest_relationship_rules(store, dataset="d", max_fanout=10, top_k=5)]
+    assert fields.index("rare") < fields.index("common")
+
+
+def test_suggest_downweights_matchkeys(store):
+    """Two fields with IDENTICAL sharing, but one is a declared matchkey -> the
+    matchkey (an identity signal, not a relationship) ranks below the other."""
+    rows = [{"id": str(i), "name": f"P{i}",
+             "clinic": "A" if i < 3 else "B",
+             "team": "A" if i < 3 else "B"} for i in range(6)]
+    _resolve(store, _df(rows), _singletons(6), [])
+    from goldenmatch.identity import suggest_relationship_rules
+    fields = [r.field for r in suggest_relationship_rules(
+        store, dataset="d", max_fanout=4, top_k=5, matchkey_fields={"team"})]
+    assert "clinic" in fields and "team" in fields
+    assert fields.index("clinic") < fields.index("team")

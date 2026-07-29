@@ -97,23 +97,34 @@ def profile_relationship_fields(
     max_fanout: int = 50,
     exclude: list[str] | None = None,
     sample_keys: int = 500,
+    matchkey_fields: "set[str] | list[str] | None" = None,
+    matchkey_penalty: float = 0.25,
 ) -> list[dict]:
-    """Rank every candidate ``(field, best transform)`` by how many entities it
-    would actually give edges to (``coverage_entities``), with fanout measured on
-    the FULL data (``store.relationship_field_stats``), not a sample. For each field
-    the raw value and any name-hinted transform (email_domain / normalize_company /
-    zip3) are profiled and the highest-coverage variant kept.
+    """Rank every candidate ``(field, best transform)`` by a relationship SCORE that
+    blends three full-data signals (``store.relationship_field_stats``, so fanout is
+    measured on the whole dataset, not a sample):
 
-    This is the scale-correct core of auto-detect: hub attributes (specialty,
-    degree, state -- a value held by ~everyone) fall out with ``coverage=0``, and a
-    unique-looking field (email_address) surfaces under its transform (email_domain)
-    rather than being dismissed on its raw value. ``sample_keys`` only bounds how
-    many payloads are peeked to DISCOVER field names (keys are stable). Returns
-    dicts ``{field, transform, coverage_entities, sweet_values, hub_values}``,
-    best first (only fields that would produce at least one edge)."""
+    * **coverage** -- distinct entities the field would edge (quantity),
+    * **specificity** -- ``1 / mean sweet-group size``: a field linked through small
+      groups (a shared phone, a small clinic's email domain) is a stronger
+      relationship than one linked through large common groups (a shared surname),
+      so RARE/specific values are rewarded over common ones at equal coverage,
+    * **matchkey down-weight** -- a field used for identity MATCHING (``matchkey_fields``)
+      is an identity signal, not a relationship, so its RAW value is scaled by
+      ``matchkey_penalty``. A derived transform (``email_domain``) is a different,
+      non-matched value and is NOT penalized -- which is exactly how a specific
+      matchkey like ``phone`` still ranks high while a common one like ``last_name``
+      sinks.
+
+    ``score = coverage * specificity * (matchkey_penalty if raw matchkey else 1)``.
+    Hub attributes (specialty/state) fall out at ``coverage=0``. For each field the
+    raw value and any name-hinted transform are profiled and the highest-SCORING
+    variant kept. Returns dicts ``{field, transform, score, coverage_entities,
+    mean_group_size, hub_values, is_matchkey}``, best first."""
     from goldenmatch.identity.store import _SAFE_FIELD
 
     skip = _DEFAULT_SKIP | {c.lower() for c in (exclude or ())}
+    mk = {c.lower() for c in (matchkey_fields or ())}
     fields: set[str] = set()
     for _eid, payload in store.sample_records(dataset, sample_keys):
         for key in payload:
@@ -122,17 +133,30 @@ def profile_relationship_fields(
 
     ranked: list[dict] = []
     for field in sorted(fields):
+        is_mk = field.lower() in mk
         best: dict | None = None
         for transform in _candidate_transforms(field):
             st = store.relationship_field_stats(
                 field, dataset, min_entities, max_fanout, transform)
-            if st["coverage_entities"] <= 0:
+            cov, pairs, pair_n = (st["coverage_entities"], st["sweet_pairs"],
+                                  st["sweet_pair_n"])
+            if cov <= 0 or pairs <= 0:
                 continue
-            if best is None or st["coverage_entities"] > best["coverage_entities"]:
-                best = {"field": field, "transform": transform, **st}
+            mean_group = pair_n / pairs            # edge-weighted mean sweet fanout
+            specificity = 1.0 / mean_group         # small groups -> specific link
+            penalty = matchkey_penalty if (is_mk and transform is None) else 1.0
+            score = cov * specificity * penalty
+            cand = {
+                "field": field, "transform": transform, "score": score,
+                "coverage_entities": cov, "hub_values": st["hub_values"],
+                "mean_group_size": round(mean_group, 2),
+                "is_matchkey": is_mk and transform is None,
+            }
+            if best is None or score > best["score"]:
+                best = cand
         if best is not None:
             ranked.append(best)
-    ranked.sort(key=lambda r: r["coverage_entities"], reverse=True)
+    ranked.sort(key=lambda r: r["score"], reverse=True)
     return ranked
 
 
@@ -145,19 +169,23 @@ def suggest_relationship_rules(
     top_k: int = 8,
     exclude: list[str] | None = None,
     sample_keys: int = 500,
+    matchkey_fields: "set[str] | list[str] | None" = None,
+    matchkey_penalty: float = 0.25,
 ) -> list[RelationshipRule]:
     """SUGGEST relationship rules for the fields the program identifies as good edge
     sources -- the "program identifies" half of the feature (the other half is
     writing ``RelationshipRule``s by hand). Wraps ``profile_relationship_fields``:
-    ranks candidate ``(field, transform)`` by true full-data entity coverage, so it
-    prefers high-yield derived fields (email_domain) and rejects hub attributes
-    (specialty/degree/state) instead of ranking them first (the flaw of the old
-    LIMIT-sampled raw-value heuristic). Returns up to ``top_k`` rules, best first."""
+    ranks candidate ``(field, transform)`` by the full-data relationship score
+    (coverage x specificity x matchkey-weight), so it prefers specific, non-identity
+    signals (email_domain, a small shared phone) over common identity fields
+    (last_name) and hub attributes (specialty/state). Returns up to ``top_k`` rules,
+    best first."""
     from goldenmatch.config.schemas import RelationshipRule
 
     ranked = profile_relationship_fields(
         store, dataset, min_entities=min_entities, max_fanout=max_fanout,
-        exclude=exclude, sample_keys=sample_keys)
+        exclude=exclude, sample_keys=sample_keys,
+        matchkey_fields=matchkey_fields, matchkey_penalty=matchkey_penalty)
     rules = []
     for r in ranked[:top_k]:
         field, transform = r["field"], r["transform"]
