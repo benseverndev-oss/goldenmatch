@@ -2230,6 +2230,7 @@
           "defines": [
             "BlockResult",
             "RowIdBlock",
+            "_AggOversizedBlock",
             "_ann_sub_block",
             "_auto_split_block",
             "_build_ann_blocks",
@@ -3770,6 +3771,7 @@
             "_apply_memory_post",
             "_apply_memory_pre",
             "_apply_postflight",
+            "_arrow_lane_supported",
             "_as_polars_df",
             "_build_em_blocks",
             "_cast_user_cols_to_str",

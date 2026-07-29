@@ -2584,16 +2584,19 @@ def _fused_result_from_clusters(
             )
         # Build multi_df: member rows + slim internal columns + __cluster_id__
         # (mirrors the dict-path golden branch for byte-identity).
-        multi_df = collected_frame.filter_in("__row_id__", golden_row_ids).native
+        _multi_frame = collected_frame.filter_in("__row_id__", golden_row_ids)
         if os.environ.get("GOLDENMATCH_GOLDEN_SLIM_MULTIDF", "1") != "0":
             _internal_prefixes = ("__xform_", "__mk_", "__block_key__", "__bucket__")
-            multi_df = multi_df.select(
-                [
-                    c
-                    for c in multi_df.columns
-                    if not any(c.startswith(p) for p in _internal_prefixes)
-                ]
-            )
+            # Seam `.columns` are NAMES on both reps; `pa.Table.columns` is arrays
+            # (the startswith crash on the arrow lane) so the filter MUST run off
+            # the frame, not `.native`. `.select(names)` works on pl + pa alike.
+            _keep = [
+                c
+                for c in _multi_frame.columns
+                if not any(c.startswith(p) for p in _internal_prefixes)
+            ]
+            _multi_frame = _multi_frame.select(_keep)
+        multi_df = _multi_frame.native
         # __cluster_id__ attach: map_column over the kernel's rid->cid map is
         # byte-equivalent to the old inner join against the fused frame
         # (unique rid keys; downstream golden groups by cluster, order-free)
@@ -2716,8 +2719,16 @@ def _run_fused_fs_match_short_circuit(
     # the Python candidate-pair list is never materialized (the RSS win the whole
     # short-circuit exists for).
     _need_blocks = not fs_model_preloaded(mk)
+    # build_blocks is dual-rep, but the polars vs seam-frame paths sample the EM
+    # training blocks with DIFFERENT RNG (per-backend sample divergence), which
+    # shifts EM weights at scale -- keep polars input on the EXACT classic path
+    # (`collected_df.lazy()`, byte-identical EM) and use the seam frame ONLY for
+    # arrow (a pa.Table has no `.lazy()`). Was a flat `_cf_entry`, which regressed
+    # historical_50k f1_probabilistic 0.826 -> 0.614.
+    import pyarrow as _pa_blocks  # noqa: PLC0415
+    _blk_src = _cf_entry if isinstance(collected_df, _pa_blocks.Table) else collected_df.lazy()
     blocks = (
-        list(build_blocks(collected_df.lazy(), config.blocking))
+        list(build_blocks(_blk_src, config.blocking))
         if _need_blocks and config.blocking is not None
         else []
     )
@@ -4820,6 +4831,34 @@ def _run_dedupe_pipeline(
     return results
 
 
+def _arrow_lane_supported(config: Any, auto_config: bool) -> bool:
+    """Gate for the polars-input eviction: True only when the arrow Frame lane
+    fully + correctly implements the requested flow, so a ``pl.DataFrame`` input
+    can be routed to it (fixing the classic-lazy over-merge). The arrow lane is a
+    PARTIAL port; each ``return False`` below is a consumer not yet on the lane,
+    kept on the classic (polars) path until it is. As a flow lands on the arrow
+    lane, drop its guard here.
+
+    Un-ported flows:
+    - auto-config: the arrow lane never calls ``auto_configure_df`` (zero-config
+      runs entirely on the classic branch).
+    - prep memory store: ``config.memory`` correction/threshold learning is
+      classic-only (memory e2e).
+    - prepared-record store / partitioned block scoring: the disk-backed prep
+      store + the polars-native bucketed-materialize assembly.
+    """
+    if auto_config:
+        return False
+    _mem = getattr(config, "memory", None)
+    if _mem is not None and getattr(_mem, "enabled", False):
+        return False
+    if getattr(config, "prepared_record_store", False):
+        return False
+    if getattr(config, "partitioned_block_scoring", False):
+        return False
+    return True
+
+
 def run_dedupe_df(
     df: Any,  # pl.DataFrame | pa.Table | Frame -- coerced via to_frame (PR-6)
     config: GoldenMatchConfig,
@@ -4885,14 +4924,28 @@ def run_dedupe_df(
     frame = frame.with_literal_column("__source__", source_name)
     frame = frame.ensure_row_ids(offset=0)
 
-    # Back-compat routing: a polars input keeps the classic polars-LazyFrame
-    # path (byte-identical to the pre-flip `lf.collect().lazy()` -- the seam ops
-    # above are the verbatim polars twins); an arrow input flows through as a
-    # seam Frame so `_run_dedupe_pipeline`'s arrow lane (the
-    # `is_polars_lazyframe` router) carries it polars-free.
-    combined_lf: Any = (
-        frame.native.lazy() if isinstance(frame, _PolarsFrame) else frame
-    )
+    # Evict the classic-lazy polars path for the flows the arrow Frame lane fully
+    # supports: a polars input is converted to an arrow seam Frame so it runs the
+    # SAME correct, polars-free arrow lane as a pa.Table input. The classic-lazy
+    # path OVER-MERGED at scale -- ground-truth pairwise precision 0.013
+    # (transitive-closure blowup on a 75x-larger candidate set) vs 0.98 on the
+    # arrow lane for identical data (bench-fs-single-mk-probe, 5M). `cast_all_str()`
+    # above makes the pl->arrow conversion clean (nulls preserved).
+    # GATED eviction: the arrow lane is a PARTIAL port -- it does not yet implement
+    # auto-config, the prep memory store, or partitioned block scoring. Decline
+    # (keep polars input on the classic lane) for those so they stay correct; each
+    # is a tracked port target that re-opens as its consumer lands on the lane.
+    # GOLDENMATCH_FRAME_LANE=0 restores the classic shim (revert switch).
+    if isinstance(frame, _PolarsFrame):
+        _evict_ok = (
+            os.environ.get("GOLDENMATCH_FRAME_LANE", "1") != "0"
+            and _arrow_lane_supported(config, auto_config)
+        )
+        combined_lf: Any = (
+            _to_frame(frame.to_arrow()) if _evict_ok else frame.native.lazy()
+        )
+    else:
+        combined_lf = frame
 
     # Phase 2 stopgap: when prepared_record_store=True and no caller-provided
     # _prep_store (Phase 3's controller will supply one), open our own store
