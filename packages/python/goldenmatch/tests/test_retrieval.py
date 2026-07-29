@@ -80,9 +80,9 @@ def test_missing_column_raises():
 
 
 def test_numpy_fallback_matches(monkeypatch):
-    # Force the no-FAISS path; the exact-text query must still rank its row first.
+    # Force the exact numpy path; the exact-text query must still rank its row first.
     monkeypatch.setattr(
-        "goldenmatch.core.ann_blocker._HAS_FAISS", False, raising=False,
+        "goldenmatch.core.ann_blocker._HAS_HNSW", False,
     )
     res = retrieve_similar_records(_corpus(), "red apple pie recipe", "title", k=3)
     assert res[0].row_id == 10

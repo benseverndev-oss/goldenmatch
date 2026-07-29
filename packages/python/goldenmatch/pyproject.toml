@@ -73,7 +73,6 @@ dev = [
 ]
 embeddings = [
     "sentence-transformers>=2.2",
-    "faiss-cpu>=1.7",
 ]
 # Decode adapters for the multimodal-ER crawl tier (ADR 0022). The perceptual
 # kernel itself is dependency-free (operates on decoded luma grids / PCM); these

@@ -5,18 +5,9 @@ from __future__ import annotations
 import json
 
 import numpy as np
-import pytest
-
-try:
-    import faiss  # noqa: F401  # availability check for optional dep
-    HAS_FAISS = True
-except ImportError:
-    HAS_FAISS = False
-
 
 # ── Persistent ANN Index Tests ────────────────────────────────────────────
 
-@pytest.mark.skipif(not HAS_FAISS, reason="faiss-cpu not installed")
 class TestPersistentANNIndex:
     def test_build_and_query(self, tmp_path):
         from goldenmatch.db.ann_index import PersistentANNIndex
@@ -53,7 +44,7 @@ class TestPersistentANNIndex:
         index.add(ids, embeddings)
         index.save()
 
-        assert (index_dir / "index.faiss").exists()
+        assert (index_dir / "index_vectors.npy").exists()
         assert (index_dir / "id_map.npy").exists()
         assert (index_dir / "index_meta.json").exists()
 
@@ -143,7 +134,6 @@ class TestHybridBlockingUnit:
 
 # ── Progressive Embedding Tests ───────────────────────────────────────────
 
-@pytest.mark.skipif(not HAS_FAISS, reason="faiss-cpu not installed")
 class TestProgressiveEmbedding:
     def test_index_grows_across_adds(self, tmp_path):
         """Simulate progressive embedding across multiple runs."""
