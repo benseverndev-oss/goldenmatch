@@ -16,6 +16,7 @@ except ImportError as _err:  # pragma: no cover
     ) from _err
 
 from goldencheck._polars_lazy import pl
+from goldencheck.baseline._ks import kstest as _owned_kstest
 from goldencheck.baseline.models import StatProfile
 from goldencheck.core._native_loader import native_enabled, native_module
 
@@ -154,7 +155,9 @@ def _fit_distribution(values: np.ndarray) -> tuple[str | None, dict | None]:
 
         try:
             fit_params = dist.fit(values)  # type: ignore[attr-defined]
-            _stat, pvalue = _stats.kstest(values, dist.name, args=fit_params)  # type: ignore[attr-defined]
+            # Owned KS test (no scipy) -- byte-identical D, p = kstwo_sf(D, n).
+            # (scipy is still used for `dist.fit` above -- a separate follow-up.)
+            _stat, pvalue = _owned_kstest(values, dist.name, fit_params)  # type: ignore[attr-defined]
         except Exception as exc:
             logger.debug("Distribution fit failed for %s: %s", name, exc)
             continue

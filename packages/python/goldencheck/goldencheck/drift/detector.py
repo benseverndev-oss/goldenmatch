@@ -15,6 +15,7 @@ except ImportError:
     _SCIPY_AVAILABLE = False
 
 from goldencheck._polars_lazy import pl
+from goldencheck.baseline._ks import kstest as _owned_kstest
 from goldencheck.baseline.correlation import _cramers_v
 from goldencheck.baseline.models import BaselineProfile
 from goldencheck.baseline.patterns import _induce_column_grammars
@@ -114,14 +115,16 @@ def _check_distribution_drift(col: str, series: pl.Series, sp: Any) -> list[Find
     if sp.distribution is None or sp.params is None:
         return []
 
-    dist_map = {
-        "normal": _stats.norm,
-        "log_normal": _stats.lognorm,
-        "exponential": _stats.expon,
-        "uniform": _stats.uniform,
+    # goldencheck's internal distribution name -> the scipy distribution name the
+    # owned KS test keys on (byte-identical to `scipy.stats.kstest(..., name)`).
+    dist_name_map = {
+        "normal": "norm",
+        "log_normal": "lognorm",
+        "exponential": "expon",
+        "uniform": "uniform",
     }
-    dist_obj = dist_map.get(sp.distribution)
-    if dist_obj is None:
+    dist_name = dist_name_map.get(sp.distribution)
+    if dist_name is None:
         return []
 
     values: np.ndarray = series.cast(pl.Float64).to_numpy()
@@ -143,8 +146,9 @@ def _check_distribution_drift(col: str, series: pl.Series, sp: Any) -> list[Find
     except (KeyError, TypeError):
         return []
 
+    # Owned KS test (no scipy) -- byte-identical D, p-value = kstwo_sf(D, n).
     try:
-        _stat, pvalue = _stats.kstest(values, dist_obj.name, args=fit_params)
+        _stat, pvalue = _owned_kstest(values, dist_name, fit_params)
     except Exception as exc:
         logger.debug("KS-test failed for %s: %s", col, exc)
         return []
