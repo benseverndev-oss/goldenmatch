@@ -2,6 +2,20 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-07-28 -- ADR 0048: own the string-matching primitives (goldenfuzz, goldenphonetic)
+- Added **[ADR 0048](../decisions/0048-own-string-matching-primitives.md)** recording the decision
+  to OWN the two third-party string-matching deps as byte-identical, pyo3-free, published products:
+  `goldenfuzz` (replaces rapidfuzz -- distances + the full `fuzz.*` composites + extract/cdist) and
+  `goldenphonetic` (replaces jellyfish -- soundex/metaphone/nysiis/match-rating, nysiis 6.8x faster).
+  Both on PyPI + crates.io; rapidfuzz + jellyfish evicted from every suite RUNTIME dep, retained only
+  as workspace test-only oracles. Governing principle: **own it, don't clone it forever** -- remove the
+  incumbent from runtime, pin correctness to the ALGORITHM (never `assert x == rapidfuzz`), prove speed
+  in benches, keep the competitor only as a port-fidelity oracle in the owning kernel's own suite.
+- Doc sweep: README gained an "Owned libraries (standalone)" table; `llms.txt` lists both; goldenphonetic
+  graduated from the badge exception into `PYPI_PACKAGES` + the README pepy `?q=` download list.
+- Applies [ADR 0047](../decisions/0047-one-product-two-engines-architecture.md)'s "one authoritative
+  semantic owner per capability" test to the primitives. Next ownership target: ANN (faiss/hnswlib -> hnsw-core).
+
 ## 2026-07-27 -- ADR 0047 amended: conformance v2 (behavioral + temporal)
 - Amended **[ADR 0047](../decisions/0047-one-product-two-engines-architecture.md)** after the
   thesis-conformance board hit its floor (10 low, 0 undeclared, T5 silent). The five tenets'
