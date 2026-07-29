@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 421,
+      "module_count": 422,
       "modules": [
         {
           "module": "goldenmatch",
@@ -1478,6 +1478,14 @@
           ]
         },
         {
+          "module": "goldenmatch.core._dip",
+          "file": "packages/python/goldenmatch/goldenmatch/core/_dip.py",
+          "purpose": "Owned Hartigan dip statistic — GoldenMatch's replacement for the ``diptest``",
+          "defines": [
+            "hartigan_dip"
+          ]
+        },
+        {
           "module": "goldenmatch.core._hashing",
           "file": "packages/python/goldenmatch/goldenmatch/core/_hashing.py",
           "purpose": "Canonical record fingerprint (cross-surface stable hash).",
@@ -1550,6 +1558,7 @@
             "transitivity_rate"
           ],
           "imports": [
+            "goldenmatch.core._dip",
             "goldenmatch.core.frame"
           ]
         },
