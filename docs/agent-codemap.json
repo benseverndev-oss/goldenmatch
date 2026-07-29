@@ -7855,7 +7855,7 @@
     },
     "goldencheck": {
       "root": "packages/python/goldencheck/goldencheck",
-      "module_count": 113,
+      "module_count": 114,
       "modules": [
         {
           "module": "goldencheck",
@@ -8049,6 +8049,21 @@
           ]
         },
         {
+          "module": "goldencheck.baseline._ks",
+          "file": "packages/python/goldencheck/goldencheck/baseline/_ks.py",
+          "purpose": "Owned one-sample Kolmogorov-Smirnov test -- goldencheck's scipy-free",
+          "defines": [
+            "_cdf_expon",
+            "_cdf_lognorm",
+            "_cdf_norm",
+            "_cdf_uniform",
+            "_ks_cdf",
+            "_mpower",
+            "kstest",
+            "kstwo_sf"
+          ]
+        },
+        {
           "module": "goldencheck.baseline.constraints",
           "file": "packages/python/goldencheck/goldencheck/baseline/constraints.py",
           "purpose": "Constraint mining: functional dependencies, candidate keys, temporal orders.",
@@ -8157,6 +8172,7 @@
           ],
           "imports": [
             "goldencheck._polars_lazy",
+            "goldencheck.baseline._ks",
             "goldencheck.baseline.models",
             "goldencheck.core._native_loader"
           ]
@@ -8562,6 +8578,7 @@
           ],
           "imports": [
             "goldencheck._polars_lazy",
+            "goldencheck.baseline._ks",
             "goldencheck.baseline.correlation",
             "goldencheck.baseline.models",
             "goldencheck.baseline.patterns",
