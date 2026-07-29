@@ -132,11 +132,30 @@ def run_transform(
             out = out.with_column(c, preserved_frame.column(c))
         return out.select(original_columns)
 
+    # GOLDENMATCH_TRANSFORM_DEBUG=1 prints the arrow-lane bridge split
+    # (pl.from_arrow / _do_transform / to_arrow) to size how much of
+    # pipeline_prep_transform is the polars round-trip vs the actual transform
+    # compute. Off by default, zero cost, output-invariant. Same instrument
+    # pattern as GOLDENMATCH_BUCKET_DEBUG.
+    import os as _os  # noqa: PLC0415
+    _tdbg = _os.environ.get("GOLDENMATCH_TRANSFORM_DEBUG", "") not in ("", "0", "false", "False")
+    _t_bridge_in = _t_do = _t_bridge_out = 0.0
+    if _tdbg:
+        import time as _time  # noqa: PLC0415
+
     try:
-        _bridge_df = (
-            _in_frame.native if _is_pl_in else pl.from_arrow(_in_frame.native)
-        )
-        result = _do_transform(_bridge_df)
+        if _tdbg and not _is_pl_in:
+            _t0 = _time.perf_counter()
+            _bridge_df = pl.from_arrow(_in_frame.native)
+            _t_bridge_in = _time.perf_counter() - _t0
+            _t0 = _time.perf_counter()
+            result = _do_transform(_bridge_df)
+            _t_do = _time.perf_counter() - _t0
+        else:
+            _bridge_df = (
+                _in_frame.native if _is_pl_in else pl.from_arrow(_in_frame.native)
+            )
+            result = _do_transform(_bridge_df)
     except ImportError:
         # GoldenFlow's transform engine (_do_transform) is polars-native; on the
         # arrow lane with polars absent, the `pl.from_arrow` bridge raises
@@ -155,9 +174,23 @@ def run_transform(
         return _restore(_in_frame).native, []
 
     # Re-attach preserved columns and restore order on the caller's lane.
-    _res_frame = _tf_a2(
-        result.df if _is_pl_in else result.df.to_arrow()
-    )
+    if _tdbg and not _is_pl_in:
+        _t0 = _time.perf_counter()
+        _res_native = result.df.to_arrow()
+        _t_bridge_out = _time.perf_counter() - _t0
+        _res_frame = _tf_a2(_res_native)
+        logger.warning(
+            "[transform][DEBUG] arrow-lane bridge split (rows=%d): "
+            "pl.from_arrow=%.3fs  _do_transform=%.3fs  to_arrow=%.3fs  "
+            "bridge_total=%.3fs (set GOLDENMATCH_TRANSFORM_DEBUG=0 to silence)",
+            _in_frame.height,
+            _t_bridge_in, _t_do, _t_bridge_out,
+            _t_bridge_in + _t_bridge_out,
+        )
+    else:
+        _res_frame = _tf_a2(
+            result.df if _is_pl_in else result.df.to_arrow()
+        )
     _res_frame = _restore(_res_frame)
 
     # Convert manifest to autofix-compatible format
