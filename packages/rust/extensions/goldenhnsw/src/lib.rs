@@ -96,6 +96,74 @@ impl SplitMix64 {
     }
 }
 
+/// Inner product `⟨a, b⟩` with eight independent accumulators so LLVM can emit
+/// packed FMA — a single scalar f32 accumulator (or `.sum()`) can't vectorize
+/// because float addition isn't associative. `chunks_exact(8)` yields
+/// fixed-length-8 slices, so the per-lane indexing carries no bounds check and
+/// the hot loop lowers to SIMD. The 8-lane reduction differs from a strict
+/// left-to-right sum only in the low bits; for this approximate index that
+/// perturbation is below the ranking granularity (recall is unchanged — see
+/// `examples/bench_hnsw.rs`) and within the 1e-6 golden-parity tolerance.
+#[inline]
+fn inner_product(a: &[f32], b: &[f32]) -> f32 {
+    debug_assert_eq!(a.len(), b.len());
+    let mut acc = [0.0f32; 8];
+    let mut ai = a.chunks_exact(8);
+    let mut bi = b.chunks_exact(8);
+    for (ca, cb) in ai.by_ref().zip(bi.by_ref()) {
+        for lane in 0..8 {
+            acc[lane] += ca[lane] * cb[lane];
+        }
+    }
+    let mut tail = 0.0f32;
+    for (x, y) in ai.remainder().iter().zip(bi.remainder()) {
+        tail += x * y;
+    }
+    ((acc[0] + acc[1]) + (acc[2] + acc[3])) + ((acc[4] + acc[5]) + (acc[6] + acc[7])) + tail
+}
+
+/// Generation-stamped visited set: a per-`search_layer` "seen" mask whose reset
+/// is O(1) (bump a counter) instead of re-zeroing an O(N) bitmap. The old
+/// `vec![false; n]` allocated + zeroed N bytes on *every* `search_layer` call,
+/// which during a build (one `search_layer` per layer per insert) is O(N²)
+/// allocation traffic — the dominant build-time cost at scale. Reusing one
+/// stamp buffer across calls turns that into a single amortized-O(N) grow.
+#[derive(Default)]
+struct VisitedSet {
+    stamp: Vec<u32>,
+    cur: u32,
+}
+
+impl VisitedSet {
+    /// Begin a fresh visited epoch over `n` slots. O(1) except when the buffer
+    /// must grow, or on the ~4-billionth epoch when the stamp counter wraps
+    /// (then, and only then, re-zero so stale stamps can't alias the new epoch).
+    #[inline]
+    fn begin(&mut self, n: usize) {
+        if self.stamp.len() < n {
+            self.stamp.resize(n, 0);
+        }
+        self.cur = self.cur.wrapping_add(1);
+        if self.cur == 0 {
+            self.stamp.iter_mut().for_each(|s| *s = 0);
+            self.cur = 1;
+        }
+    }
+
+    /// Mark `id` visited; returns `true` iff it was not already visited this
+    /// epoch (so callers branch exactly as they did on the old bitmap).
+    #[inline]
+    fn visit(&mut self, id: u32) -> bool {
+        let slot = &mut self.stamp[id as usize];
+        if *slot == self.cur {
+            false
+        } else {
+            *slot = self.cur;
+            true
+        }
+    }
+}
+
 /// A `(distance, id)` pair ordered by distance then id. `BinaryHeap<Item>` is a
 /// max-heap (farthest first); `BinaryHeap<Reverse<Item>>` a min-heap.
 #[derive(Clone, Copy, PartialEq)]
@@ -133,6 +201,10 @@ pub struct HnswIndex {
     entry_point: Option<u32>,
     max_level: usize,
     rng: SplitMix64,
+    // Reusable visited-set scratch, so build-time `search_layer` calls don't
+    // each allocate an O(N) mask (see `VisitedSet`). Lifted in/out via
+    // `mem::take` in `add`; `search` uses a local since it searches once.
+    scratch_visited: VisitedSet,
 }
 
 impl HnswIndex {
@@ -150,6 +222,7 @@ impl HnswIndex {
             entry_point: None,
             max_level: 0,
             rng: SplitMix64::new(params.seed),
+            scratch_visited: VisitedSet::default(),
         }
     }
 
@@ -174,12 +247,7 @@ impl HnswIndex {
     /// HNSW navigation distance: negative inner product (lower = nearer).
     #[inline]
     fn dist(&self, q: &[f32], id: u32) -> f32 {
-        let x = self.vec_at(id);
-        let mut acc = 0.0f32;
-        for i in 0..self.dim {
-            acc += q[i] * x[i];
-        }
-        -acc
+        -inner_product(q, self.vec_at(id))
     }
 
     fn m_max(&self, layer: usize) -> usize {
@@ -250,11 +318,21 @@ impl HnswIndex {
         }
 
         // Phase 2: from min(level, top) down to 0, search with ef_construction,
-        // select neighbors, and wire bidirectional links.
+        // select neighbors, and wire bidirectional links. Lift the reusable
+        // visited scratch out of `self` for the duration (put back below) so the
+        // per-layer `search_layer` calls share one grown buffer instead of
+        // allocating an O(N) mask each.
+        let mut visited = std::mem::take(&mut self.scratch_visited);
         let mut entry_points = vec![cur];
         let start = level.min(top);
         for lc in (0..=start).rev() {
-            let w = self.search_layer(&q, &entry_points, self.params.ef_construction, lc);
+            let w = self.search_layer(
+                &q,
+                &entry_points,
+                self.params.ef_construction,
+                lc,
+                &mut visited,
+            );
             // Candidates as (dist, id), nearest first.
             let mut candidates: Vec<Item> = w;
             candidates.sort_unstable();
@@ -273,6 +351,8 @@ impl HnswIndex {
                 entry_points = vec![cur];
             }
         }
+        // Return the grown buffer to `self` for the next insert to reuse.
+        self.scratch_visited = visited;
 
         if level > self.max_level {
             self.max_level = level;
@@ -348,18 +428,24 @@ impl HnswIndex {
 
     /// HNSW SEARCH-LAYER: greedily explore `layer` from `entry_points`, keeping
     /// the `ef` nearest to `q`. Returns those `ef` (or fewer) as `Item`s.
-    fn search_layer(&self, q: &[f32], entry_points: &[u32], ef: usize, layer: usize) -> Vec<Item> {
+    fn search_layer(
+        &self,
+        q: &[f32],
+        entry_points: &[u32],
+        ef: usize,
+        layer: usize,
+        visited: &mut VisitedSet,
+    ) -> Vec<Item> {
         let ef = ef.max(1);
         let n = self.len();
-        let mut visited = vec![false; n];
+        visited.begin(n);
         // candidates: min-heap (nearest first) via Reverse.
         let mut candidates: BinaryHeap<std::cmp::Reverse<Item>> = BinaryHeap::new();
         // w: max-heap (farthest first), holds the current best `ef`.
         let mut w: BinaryHeap<Item> = BinaryHeap::new();
 
         for &ep in entry_points {
-            if (ep as usize) < n && !visited[ep as usize] {
-                visited[ep as usize] = true;
+            if (ep as usize) < n && visited.visit(ep) {
                 let d = self.dist(q, ep);
                 let it = Item { dist: d, id: ep };
                 candidates.push(std::cmp::Reverse(it));
@@ -378,10 +464,9 @@ impl HnswIndex {
                 break;
             }
             for &e in self.neighbors_at(c.id, layer) {
-                if visited[e as usize] {
+                if !visited.visit(e) {
                     continue;
                 }
-                visited[e as usize] = true;
                 let d = self.dist(q, e);
                 let farthest = w.peek().map(|it| it.dist).unwrap_or(f32::INFINITY);
                 if d < farthest || w.len() < ef {
@@ -434,8 +519,11 @@ impl HnswIndex {
             lc -= 1;
         }
 
-        // Layer 0: full ef search.
-        let found = self.search_layer(query, &[cur], ef, 0);
+        // Layer 0: full ef search. `search` takes `&self` (concurrent-query
+        // safe), so it uses a local visited set rather than the build-time
+        // scratch — one grow per call, as before, but now O(1) to reset.
+        let mut visited = VisitedSet::default();
+        let found = self.search_layer(query, &[cur], ef, 0, &mut visited);
         // Sort by ascending nav-distance (= descending inner product), tie-break
         // on id for determinism, then take k and flip the sign back to raw IP.
         let mut items: Vec<Item> = found;
