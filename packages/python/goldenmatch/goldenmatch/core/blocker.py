@@ -341,6 +341,15 @@ class RowIdBlock:
         return len(self._ids)
 
 
+class _AggOversizedBlock(NotImplementedError):
+    """Raised inside ``build_em_blocks_agg`` when a block exceeds
+    ``max_block_size``. ``build_blocks`` auto-splits such blocks (producing a
+    different EM training set), so the row-id-array builder is NOT byte-identical
+    there and must defer to ``build_blocks``. A ``NotImplementedError`` subclass
+    so ``_build_em_blocks``'s fallback catches it like the strategy-unsupported
+    case."""
+
+
 def build_em_blocks_agg(frame: Any, config: BlockingConfig) -> list:
     """Field-hash EM-training blocks as compact row-id arrays via ONE
     ``group_by().agg()`` per pass -- NEVER materializing per-block frames.
@@ -375,13 +384,38 @@ def build_em_blocks_agg(frame: Any, config: BlockingConfig) -> list:
             f"build_em_blocks_agg supports static/multi_pass, not {config.strategy!r}"
         )
 
-    native = _tf(frame).native
-    if is_polars_lazyframe(native):
-        lf = native
-    elif is_polars_dataframe(native):
-        lf = native.lazy()
-    else:  # arrow Table
-        lf = cast(pl.DataFrame, pl.from_arrow(native)).lazy()
+    # Resolve to a LazyFrame WITHOUT round-tripping a LazyFrame through
+    # ``to_frame`` (which rejects LazyFrames). A polars LazyFrame is the form
+    # ``block_frame`` takes on the classic (polars) dedupe lane -- the arrow
+    # "Frame lane" (#2250) instead hands a ``pa.Table``. Reaching ``to_frame``
+    # with a LazyFrame raised ``TypeError`` and silently sent the polars lane
+    # to the ``build_blocks`` fallback while the arrow lane used THIS builder;
+    # the two builders are NOT equivalent on datasets with oversized blocks
+    # (see the oversized guard below), so that split-by-frame-type diverged the
+    # EM training set -> EM weights -> the whole run BETWEEN the two lanes.
+    if is_polars_lazyframe(frame):
+        lf = frame
+    else:
+        native = _tf(frame).native
+        if is_polars_lazyframe(native):
+            lf = native
+        elif is_polars_dataframe(native):
+            lf = native.lazy()
+        else:  # arrow Table
+            lf = cast(pl.DataFrame, pl.from_arrow(native)).lazy()
+
+    # Oversized-block faithfulness (the parity gap the docstring flags): when a
+    # block exceeds ``max_block_size`` ``build_blocks`` AUTO-SPLITS it into
+    # smaller sub-blocks (``_auto_split_block`` -> compound keys / multi-field
+    # provenance), whereas this row-id-array builder keeps it whole. That
+    # changes which pairs EM samples -> a different ``EMResult`` -> a different
+    # run. It stayed latent because the classic (polars-LazyFrame) lane never
+    # actually reached this builder; the arrow-lane bridge exposed it as a
+    # cross-lane F1 regression (historical_50k 0.826 -> 0.614). Decline here so
+    # BOTH lanes fall back to the reference ``build_blocks`` whenever an
+    # oversized block is present -- keeping the memory win only where the two
+    # builders are genuinely byte-identical (no block over the cap).
+    max_block_size = getattr(config, "max_block_size", None)
 
     def _agg_pass(key_config: BlockingKeyConfig, strategy: str) -> list:
         # Same key expr + sentinel filter as _build_static_blocks, but agg the
@@ -410,6 +444,10 @@ def build_em_blocks_agg(frame: Any, config: BlockingConfig) -> list:
         ):
             if key_str is None or len(ids) < 2:
                 continue
+            if max_block_size is not None and len(ids) > max_block_size:
+                # build_blocks would auto-split / skip this block -> the two
+                # builders diverge. Bail so the caller uses build_blocks.
+                raise _AggOversizedBlock(len(ids))
             out.append(
                 RowIdBlock(key_str, np.asarray(ids, dtype=np.int64), fields, strategy)
             )
