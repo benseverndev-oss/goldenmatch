@@ -331,3 +331,28 @@ def test_suggest_excludes_near_unique_matchkeys(store):
         matchkey_fields={"ssn", "phone"})]
     assert "phone" in fields        # larger groups -> real relationship
     assert "ssn" not in fields      # near-pair matchkey -> identifier, excluded
+
+
+# ── deterministic merge (collapse entities sharing an authoritative id) ──────
+
+def test_deterministic_merge_collapses_shared_id(store):
+    """Two distinct entities that share an NPI (a missed merge) collapse into one:
+    records reassign to the surviving (lowest) id; idempotent on re-run."""
+    df = _df([{"id": "1", "name": "Robert Smith", "npi": "999"},
+              {"id": "2", "name": "Bob Smith", "npi": "999"}])
+    _resolve(store, df, _singletons(2), None)
+    a = store.find_entity_by_record("src:1")
+    b = store.find_entity_by_record("src:2")
+    assert a != b
+    assert store.merge_by_shared_field("d", "npi") == (1, 1)
+    assert store.find_entity_by_record("src:1") == store.find_entity_by_record("src:2")
+    assert store.find_entity_by_record("src:1") == min(a, b)
+    assert store.merge_by_shared_field("d", "npi") == (0, 0)   # idempotent
+
+
+def test_deterministic_merge_hub_guard(store):
+    """A value shared by more entities than max_group is a placeholder id -> skipped."""
+    df = _df([{"id": str(i), "name": f"P{i}", "npi": "000"} for i in range(4)])
+    _resolve(store, df, _singletons(4), None)
+    assert store.merge_by_shared_field("d", "npi", max_group=2) == (0, 0)  # 4 > cap
+    assert store.merge_by_shared_field("d", "npi", max_group=10) == (3, 1)  # collapses

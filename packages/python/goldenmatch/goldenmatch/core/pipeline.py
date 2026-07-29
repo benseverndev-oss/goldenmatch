@@ -1289,6 +1289,7 @@ def _resolve_identities(
             emit_singletons=config.identity.emit_singletons,
             weak_confidence_threshold=config.identity.weak_confidence_threshold,
             relationships=config.identity.relationships,
+            deterministic_merge_keys=config.identity.deterministic_merge_keys,
             pair_score_view=pair_score_view,
             cluster_frames=cluster_frames,
         )
@@ -4020,23 +4021,6 @@ def _run_dedupe_pipeline(
     # `cluster_frames is None`). Explicit init keeps pyright from seeing it as
     # possibly-unbound.
     clusters: dict[int, dict] = {}
-    # Deterministic merge: force records that share an authoritative identifier
-    # (config.deterministic_merge_keys, e.g. ['npi']) into the same cluster by
-    # injecting max-score pairs into the union-find stream -- a unique gov id can't
-    # be split across entities by a low probabilistic score. Columnar paths only
-    # (the scaled path); no-op when unset.
-    if getattr(config, "deterministic_merge_keys", None) and _columnar_pairs_df is not None:
-        from goldenmatch.core.cluster import deterministic_merge_pairs
-        _dm_syn = deterministic_merge_pairs(collected_df, config.deterministic_merge_keys)
-        if _dm_syn is not None and _dm_syn.height:
-            import pyarrow as _pa_dm
-            import polars as _pl_dm
-            if isinstance(_columnar_pairs_df, _pa_dm.Table):
-                _columnar_pairs_df = _pa_dm.concat_tables(
-                    [_columnar_pairs_df, _dm_syn.to_arrow().cast(_columnar_pairs_df.schema)])
-            else:
-                _columnar_pairs_df = _pl_dm.concat(
-                    [_columnar_pairs_df, _dm_syn.select(_columnar_pairs_df.columns)])
     with stage("cluster"):
         if _use_fs_columnar and _columnar_pairs_df is not None:
             # B2c frames-out: feed the columnar Arrow pair table STRAIGHT into the

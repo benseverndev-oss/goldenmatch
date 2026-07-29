@@ -517,66 +517,6 @@ def build_clusters(
 
 
 
-def deterministic_merge_pairs(
-    frame: Any, keys: list[str], id_col: str = "__row_id__", max_group: int = 100,
-):
-    """Synthetic max-score pairs that FORCE records sharing an authoritative
-    identifier (``keys``, e.g. ``['npi']``) into the same cluster.
-
-    Clustering is a union-find over the scored-pair stream, so emitting a chain of
-    ``score=1.0`` pairs within each shared non-null value unions the whole group --
-    a unique government id like NPI can no longer be split across entities by a low
-    probabilistic score (the ~6% entity fragmentation seen at 14M). Returns a
-    ``PAIR_STREAM_SCHEMA`` (id_a, id_b, score) polars frame; fully vectorized (one
-    shifted-within-group pass per key), so it adds only ``n-1`` pairs per group.
-
-    HUB GUARD: a value shared by more than ``max_group`` RECORDS is a placeholder or
-    data-entry error (e.g. ``'0000000000'`` on thousands of rows), not a real
-    provider -- merging it would collapse thousands of unrelated records into one
-    giant cluster (an OOM). Such values are skipped; a genuine NPI is shared by a
-    handful of records."""
-    import polars as pl
-
-    df = frame if isinstance(frame, pl.DataFrame) else pl.from_arrow(frame)
-    parts = []
-    for key in keys:
-        if key not in df.columns:
-            continue
-        sub = (
-            df.select([
-                pl.col(id_col).cast(pl.Int64),
-                pl.col(key).cast(pl.Utf8).str.strip_chars().alias("_v"),
-            ])
-            .filter(pl.col("_v").is_not_null() & (pl.col("_v") != ""))
-        )
-        if sub.height < 2:
-            continue
-        # drop hub values (shared by > max_group records) before chaining
-        sub = (
-            sub.with_columns(pl.len().over("_v").alias("_n"))
-            .filter(pl.col("_n") <= max_group)
-            .drop("_n")
-            .sort("_v")
-        )
-        if sub.height < 2:
-            continue
-        chain = (
-            sub.with_columns(pl.col(id_col).shift(1).over("_v").alias("_prev"))
-            .drop_nulls("_prev")
-            .select([
-                pl.col("_prev").alias("id_a"),
-                pl.col(id_col).alias("id_b"),
-                pl.lit(1.0).alias("score"),
-            ])
-        )
-        if chain.height:
-            parts.append(chain)
-    if not parts:
-        return pl.DataFrame(
-            schema={"id_a": pl.Int64, "id_b": pl.Int64, "score": pl.Float64})
-    return pl.concat(parts)
-
-
 def build_cluster_frames(
     pairs: Any,
     all_ids: list[int] | None = None,
