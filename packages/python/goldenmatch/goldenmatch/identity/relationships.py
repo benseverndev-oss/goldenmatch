@@ -25,28 +25,41 @@ def build_relationships(
     store: IdentityStore,
     rules: list[RelationshipRule] | None,
     dataset: str | None = None,
-) -> int:
+) -> tuple[int, int]:
     """Derive entity<->entity relationship edges from shared non-identity
-    attributes and write them to ``store``. Idempotent across runs. Returns the
-    number of edges written (attempted; duplicates are ignored)."""
+    attributes and RECONCILE them into ``store`` so the graph equals the current
+    desired state: new edges inserted, stale edges deleted, merges/splits reflected
+    (``desired`` is recomputed from current entity ids). Idempotent -- same data
+    twice writes/deletes nothing. Returns ``(inserted, deleted)``.
+
+    Reconciliation is per ``(dataset, kind)``, so rules that share a ``kind`` union
+    into one desired set, and a kind whose rule now yields NO edges (its shared
+    values disappeared) still has its stale edges cleared (reconcile-to-empty)."""
     if not rules:
-        return 0
-    total = 0
+        return (0, 0)
+    by_kind: dict[str, list[tuple]] = {}
     for rule in rules:
         groups = store.relationship_groups(
             rule.field, dataset, rule.min_entities, rule.max_fanout,
         )
-        edges: list[tuple] = []
         for value, eids in groups:
             uniq = sorted({e for e in eids if e})
+            bucket = by_kind.setdefault(rule.kind, [])
             for i in range(len(uniq)):
                 for j in range(i + 1, len(uniq)):
-                    edges.append(
+                    bucket.append(
                         (uniq[i], uniq[j], rule.kind, rule.field, value, dataset)
                     )
-        if edges:
-            total += store.add_relationships(edges)
-    return total
+    # Kinds whose rules produced nothing this run must still reconcile to empty so
+    # their prior-run edges get deleted, not left stale.
+    for rule in rules:
+        by_kind.setdefault(rule.kind, [])
+    inserted = deleted = 0
+    for kind, desired in by_kind.items():
+        ins, dele, _ = store.reconcile_relationships(dataset, kind, desired)
+        inserted += ins
+        deleted += dele
+    return (inserted, deleted)
 
 
 def _entity_name(node: object, name_field: str | None) -> str | None:

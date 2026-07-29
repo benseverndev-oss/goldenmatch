@@ -181,3 +181,32 @@ def test_to_graph_batch_roundtrips_into_goldengraph(store):
     dump = json.loads(ps.query())
     preds = {e["predicate"] for e in dump.get("edges", [])}
     assert "shares_phone" in preds
+
+
+# ── v2: authoritative reconciliation (desired-vs-existing) ──────────────────
+
+def test_reconcile_deletes_stale_edges(store):
+    """A warm re-run where a shared value disappears DELETES the edge, not leaves
+    it stale -- the whole point of desired-vs-existing reconciliation."""
+    df1 = _df([{"id": "1", "name": "Al", "phone": "555"},
+               {"id": "2", "name": "Bo", "phone": "555"}])
+    _resolve(store, df1, _singletons(2), PHONE, run_name="r1")
+    assert store.count_relationships() == 1
+    # r2: same records/entities, but Bo's phone changed -> no longer shared.
+    df2 = _df([{"id": "1", "name": "Al", "phone": "555"},
+               {"id": "2", "name": "Bo", "phone": "999"}])
+    s2 = _resolve(store, df2, _singletons(2), PHONE, run_name="r2")
+    assert store.count_relationships() == 0
+    assert s2.relationships_added == 0
+    assert s2.relationships_deleted == 1
+
+
+def test_reconcile_idempotent_no_churn(store):
+    """Same data twice -> second run inserts 0 AND deletes 0 (no churn)."""
+    df = _df([{"id": "1", "name": "Al", "phone": "555"},
+              {"id": "2", "name": "Bo", "phone": "555"}])
+    s1 = _resolve(store, df, _singletons(2), PHONE, run_name="r1")
+    assert s1.relationships_added == 1 and s1.relationships_deleted == 0
+    s2 = _resolve(store, df, _singletons(2), PHONE, run_name="r2")
+    assert s2.relationships_added == 0 and s2.relationships_deleted == 0
+    assert store.count_relationships() == 1
