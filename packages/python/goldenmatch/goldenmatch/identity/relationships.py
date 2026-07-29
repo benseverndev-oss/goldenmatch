@@ -97,7 +97,7 @@ def profile_relationship_fields(
     max_fanout: int = 50,
     exclude: list[str] | None = None,
     sample_keys: int = 500,
-    matchkey_fields: "set[str] | list[str] | None" = None,
+    matchkey_fields: set[str] | list[str] | None = None,
     matchkey_penalty: float = 0.25,
     near_unique_max: float = 2.5,
 ) -> list[dict]:
@@ -176,7 +176,7 @@ def suggest_relationship_rules(
     top_k: int = 8,
     exclude: list[str] | None = None,
     sample_keys: int = 500,
-    matchkey_fields: "set[str] | list[str] | None" = None,
+    matchkey_fields: set[str] | list[str] | None = None,
     matchkey_penalty: float = 0.25,
     near_unique_max: float = 2.5,
 ) -> list[RelationshipRule]:
