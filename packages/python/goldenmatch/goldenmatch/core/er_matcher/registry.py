@@ -42,8 +42,11 @@ MODELS: dict[str, ModelSpec] = {
     "3b": ModelSpec(
         tier="3b",
         filename="goldenmatch-er-matcher-3b-q4_k_m.gguf",
-        url=None,
-        sha256=None,
+        url=(
+            "https://github.com/benseverndev-oss/goldenmatch/releases/download/"
+            "er-matcher-3b-v1.0.0/goldenmatch-er-matcher-3b-q4_k_m.gguf"
+        ),
+        sha256="b6637fd9892b21b565098524501083edb91199b0bfffc267edf48885ce9c1d3b",
         base_model="Qwen/Qwen2.5-3B-Instruct",
         serializer_version="v1",
     ),

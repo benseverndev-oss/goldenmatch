@@ -65,10 +65,13 @@ class TestLoader:
         assert L.resolve_model_path() is None
 
     def test_override_path_present_no_sha_returns_it(self, monkeypatch, tmp_path):
+        # A spec with no sha256 -> the override path is returned unverified.
+        # (Uses an explicit spec since PINNED_MODEL now carries a real sha256.)
         p = tmp_path / "model.gguf"
         p.write_bytes(b"gguf-bytes")
         monkeypatch.setenv("GOLDENMATCH_LOCAL_LLM_PATH", str(p))
-        assert L.resolve_model_path() == str(p)
+        spec = L.LocalModelSpec(url="https://example.test/m.gguf", filename="m.gguf", sha256=None)
+        assert L.resolve_model_path(spec) == str(p)
 
     def test_override_path_sha_mismatch_raises(self, monkeypatch, tmp_path):
         p = tmp_path / "model.gguf"
