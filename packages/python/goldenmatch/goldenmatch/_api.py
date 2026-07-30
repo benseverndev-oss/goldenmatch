@@ -295,6 +295,14 @@ class DedupeResult:
     # at scale (#2006). `clusters`/`golden`/`dupes`/`unique` are unaffected --
     # only the steward-facing raw pair list is empty. Never silent (this marker).
     scored_pairs_shed: bool = False
+    # Closed-loop refit suggestion (D2, `dedupe_df(..., auto_refit=...)`). A
+    # `goldenmatch.core.refit.RefitResult` when this run's confident corrections
+    # yielded a refined Fellegi-Sunter model; None otherwise (auto_refit off, no
+    # probabilistic matchkey, no memory store, or no confident labels). In
+    # `auto_refit="apply"` mode the refined model was ALSO persisted and this
+    # result is the second pass that used it; `config`'s probabilistic matchkey
+    # then carries the applied `model_path`.
+    refit_suggestion: Any | None = None
 
     # `clusters` (annotated above so it stays a constructor kwarg) is exposed as
     # a lazy, C-SAFE property. The frames-out path stores a ``LazyClusterDict``
@@ -711,6 +719,7 @@ def dedupe_df(
     throughput: Any | None = None,
     suggest: bool = False,
     heal: bool = False,
+    auto_refit: bool | str = False,
 ) -> DedupeResult:
     """Deduplicate a Polars DataFrame directly (no file I/O).
 
@@ -743,6 +752,18 @@ def dedupe_df(
             roughly K-times the cost. The audit-calibrated SAFE lower bound is
             NOT computed here (it needs a labelled sample; use the ``evaluate``
             CLI / ``audit_calibrated_bound`` for that).
+        auto_refit: Close the loop from this run's confident adjudication
+            verdicts (the LLM boost / review queue write them to the configured
+            ``MemoryStore`` as ``approve`` corrections) back into a refined
+            Fellegi-Sunter model. ``False`` (default) is off. ``True`` /
+            ``"suggest"`` attaches a :class:`~goldenmatch.core.refit.RefitResult`
+            to ``DedupeResult.refit_suggestion`` WITHOUT changing this run's
+            output — inspect it, then apply via ``RefitResult.persist``.
+            ``"apply"`` is the stronger opt-in: it persists the refined model and
+            re-runs scoring + clustering ONCE with it, returning that second pass
+            (with the suggestion still attached). Only meaningful with a
+            probabilistic matchkey and an active corrections source; a no-op
+            (``refit_suggestion=None``) when either is absent.
 
     Returns:
         DedupeResult with golden records, clusters, dupes, unique, and stats.
@@ -993,7 +1014,133 @@ def dedupe_df(
     except Exception:  # noqa: BLE001 - healer is advisory; never break a dedupe
         logger.debug("config-suggestion surface skipped (error)", exc_info=True)
 
+    # Closed-loop auto-refit (D2). Suggest-only by default; "apply" re-runs
+    # scoring+clustering once with the refined model. Additive + fail-open — a
+    # refit that isn't applicable (no probabilistic matchkey / memory / labels)
+    # leaves refit_suggestion=None and the result otherwise unchanged.
+    _refit_mode = _resolve_auto_refit_mode(auto_refit)
+    if _refit_mode is not None:
+        dedupe_result = _run_auto_refit(df, config, _refit_mode, dedupe_result, source_name)
+
     return dedupe_result
+
+
+def _resolve_auto_refit_mode(auto_refit: bool | str) -> str | None:
+    """Normalize the ``auto_refit`` kwarg to ``'suggest'``, ``'apply'``, or None.
+
+    ``False``/``None`` -> off; ``True``/``'suggest'`` -> suggest-only (default
+    posture); ``'apply'`` -> apply-in-run. Any other value is a caller error.
+    """
+    if auto_refit is False or auto_refit is None:
+        return None
+    if auto_refit is True or auto_refit == "suggest":
+        return "suggest"
+    if auto_refit == "apply":
+        return "apply"
+    raise ValueError(
+        f"auto_refit must be False, True, 'suggest', or 'apply'; got {auto_refit!r}"
+    )
+
+
+def _frame_with_row_id(df: Any) -> Any:
+    """Return a polars frame carrying ``__row_id__`` (positional 0..n-1 if absent).
+
+    The refit's ``estimate_m_from_labels`` needs the run's ``__row_id__`` — the
+    same positional id the pipeline assigns via ``with_row_index`` before any row
+    filtering, so a persisted correction's ``(id_a, id_b)`` line up with a bare
+    positional index on the caller's frame. Accepts polars or a pa.Table.
+    """
+    import polars as pl
+
+    if isinstance(df, pl.DataFrame):
+        frame = df
+    else:  # pa.Table / other -> coerce through polars
+        frame = pl.from_arrow(df) if hasattr(df, "num_rows") else pl.DataFrame(df)
+    if "__row_id__" not in frame.columns:
+        frame = frame.with_row_index("__row_id__").with_columns(
+            pl.col("__row_id__").cast(pl.Int64)
+        )
+    return frame
+
+
+def _compute_refit_suggestion(df: Any, config: Any) -> Any:
+    """Read this run's persisted corrections and produce a suggested FS refit.
+
+    Returns a ``RefitResult`` or None when a refit isn't applicable (memory
+    disabled, no probabilistic matchkey, or no confident labels). Fail-open — a
+    refit never breaks the dedupe it annotates.
+    """
+    from goldenmatch.core import refit as _refit
+    from goldenmatch.core.pipeline import _open_memory_store
+
+    store = _open_memory_store(config)
+    if store is None:
+        return None
+    try:
+        frame = _frame_with_row_id(df)
+        dataset = config.memory.dataset if getattr(config, "memory", None) else None
+        return _refit.refit_from_memory(frame, config, store, dataset=dataset)
+    except _refit.RefitNotApplicableError:
+        return None
+    except Exception:  # noqa: BLE001 - refit is additive; never break a dedupe
+        logger.debug("auto_refit: refit suggestion skipped (error)", exc_info=True)
+        return None
+    finally:
+        try:
+            store.close()
+        except Exception:  # noqa: BLE001 - close is best-effort
+            pass
+
+
+def _refit_model_path(config: Any, matchkey_name: str) -> str:
+    """Pick a discoverable path to persist an applied refit's refined model.
+
+    Co-locates the model with the memory store's learned state when the store is
+    an on-disk sqlite file; otherwise falls back to a persistent temp file.
+    """
+    mem = getattr(config, "memory", None)
+    mem_path = getattr(mem, "path", None) if mem else None
+    if mem_path and mem_path not in (":memory:", "") and getattr(mem, "backend", "sqlite") == "sqlite":
+        base = Path(mem_path).parent
+        base.mkdir(parents=True, exist_ok=True)
+        return str(base / f"refit-{matchkey_name}.json")
+    import tempfile
+
+    fd, tmp = tempfile.mkstemp(prefix=f"gm-refit-{matchkey_name}-", suffix=".json")
+    os.close(fd)
+    return tmp
+
+
+def _run_auto_refit(
+    df: Any, config: Any, mode: str, result: DedupeResult, source_name: str
+) -> DedupeResult:
+    """Attach a refit suggestion (both modes) and, for ``apply``, re-run once.
+
+    Suggest mode returns ``result`` with ``refit_suggestion`` set. Apply mode
+    additionally persists the refined model, points the probabilistic matchkey at
+    it, and re-runs ``dedupe_df`` once (``auto_refit`` off to avoid recursion),
+    returning that second pass with the suggestion carried over.
+    """
+    suggestion = _compute_refit_suggestion(df, config)
+    if suggestion is None:
+        result.refit_suggestion = None
+        return result
+    if mode == "suggest":
+        result.refit_suggestion = suggestion
+        return result
+
+    # apply: persist the refined model, re-run scoring+clustering once with it.
+    try:
+        model_path = _refit_model_path(config, suggestion.matchkey_name)
+        applied_config = suggestion.persist(config, model_path)
+    except Exception:  # noqa: BLE001 - fall back to suggest-only on a persist failure
+        logger.warning("auto_refit apply: model persist failed; returning suggestion only", exc_info=True)
+        result.refit_suggestion = suggestion
+        return result
+
+    second = dedupe_df(df, config=applied_config, source_name=source_name, auto_refit=False)
+    second.refit_suggestion = suggestion
+    return second
 
 
 @guard_entrypoint("match", "match_df raised an unexpected error")
