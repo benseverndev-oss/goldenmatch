@@ -126,6 +126,8 @@ def build_resolved_crosswalk(
                 try:
                     os.unlink(store_path + suffix)
                 except OSError:
+                    # Best-effort cleanup: the sidecar may not exist, and a
+                    # unlink failure must not mask an otherwise-successful result.
                     pass
 
     out = pa.table({
