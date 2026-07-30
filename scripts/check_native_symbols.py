@@ -63,11 +63,19 @@ _WRAP = re.compile(r"wrap_pyfunction!\(\s*(?:\w+::)*(\w+)")
 # FS_SUPPORTS_LEVEL_THRESHOLDS) are kernel exports too; hosts probe them via
 # getattr(native_module(), "NAME", ...) so they must reconcile like functions.
 _MADD = re.compile(r'm\.add\(\s*"(\w+)"')
+# m.add_class::< <optional module:: paths> Name >()? -- pyclass exports (e.g. a
+# StreamingClusterBuilder), reached by hosts as native_module().Name(), so they
+# reconcile like functions too.
+_MADD_CLASS = re.compile(r"add_class::<\s*(?:\w+::)*(\w+)\s*>")
 _BIND = re.compile(r"(\w+)\s*=\s*(?:native_module\(\)|_ensure_native\(\))(?!\s*\.)")
 
 
 def parse_registrations_text(text: str) -> set[str]:
-    return set(_WRAP.findall(text)) | set(_MADD.findall(text))
+    return (
+        set(_WRAP.findall(text))
+        | set(_MADD.findall(text))
+        | set(_MADD_CLASS.findall(text))
+    )
 
 
 def parse_registrations(paths) -> set[str]:

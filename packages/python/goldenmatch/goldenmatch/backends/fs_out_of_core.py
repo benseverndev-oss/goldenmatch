@@ -45,6 +45,20 @@ bounded levers, all default-on within the opt-in out-of-core route):
     rows × 40 cols; batched: 0.74 GB, −10.6x, byte-identical count) — the same
     peak the in-memory 25M golden fix (#334) removed by 500K-cluster batching.
 
+  - **Clustering is memory-bounded by a Rust streaming Union-Find**
+    (`GOLDENMATCH_FS_OOC_STREAM_CLUSTER`, `auto`). The one-shot
+    `build_clusters_arrow` fetches the whole deduped edge set (O(pairs)) AND builds
+    an `edge_pos`/`per_cluster_edges` structure for the confidence/bottleneck
+    METADATA this path discards. `_cluster_streaming_from_duckdb` instead streams
+    the DuckDB-spilled edges in batches into the native `StreamingClusterBuilder`,
+    keeping ONLY the Union-Find parent map (O(members)); singletons fold via a
+    DuckDB LEFT JOIN. A pure-Python UF was a NET memory regression (dict-based,
+    ~15-20 GB at 100M members), so the kernel is Rust/Arrow-native — the compact
+    parent map is the irreducible clustering floor. Same connected-component
+    partitions as the one-shot (union-strategy-invariant, parity-tested); `auto`
+    routes to it past `GOLDENMATCH_FS_OOC_STREAM_CLUSTER_MIN_PAIRS`, and it falls
+    back to the one-shot kernel on an older wheel lacking the symbol.
+
 Remaining work: load-peak reduction below ~1x frame (stream input parquet ->
 DuckDB during prep, never materialise the frame at all) + the CI proof that 50M
 completes. See
@@ -139,6 +153,75 @@ def _fs_ooc_spill_pairs_enabled() -> bool:
     if v is None:
         return True
     return v.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _fs_ooc_stream_cluster_mode() -> str:
+    """Route for the out-of-core CLUSTERING step: ``auto`` (default) / ``1`` / ``0``.
+
+    ``1`` forces the memory-bounded Rust streaming Union-Find
+    (``StreamingClusterBuilder``): edges stream from the DuckDB-spilled
+    ``pair_stream`` in waves into a kernel that keeps ONLY the parent map
+    (O(members)), never the O(pairs) deduped edge set the one-shot
+    ``build_clusters_arrow`` fetches (plus its `edge_pos`/`per_cluster_edges`
+    metadata structures the streaming path discards). ``0`` forces the one-shot
+    Rust arrow path (the byte-parity oracle for the partitions). ``auto`` uses
+    streaming only past ``GOLDENMATCH_FS_OOC_STREAM_CLUSTER_MIN_PAIRS`` — below
+    that the one-shot fetch is cheap and its native kernel is a hair faster."""
+    v = os.environ.get("GOLDENMATCH_FS_OOC_STREAM_CLUSTER")
+    if v is None:
+        return "auto"
+    v = v.strip().lower()
+    if v in ("1", "true", "yes", "on"):
+        return "1"
+    if v in ("0", "false", "no", "off"):
+        return "0"
+    return "auto"
+
+
+def _fs_ooc_stream_cluster_min_pairs() -> int:
+    """``auto``-route threshold: use the streaming Union-Find once the deduped edge
+    set reaches this many pairs (default 20M — where the one-shot fetch starts to
+    matter). ``GOLDENMATCH_FS_OOC_STREAM_CLUSTER_MIN_PAIRS`` overrides."""
+    v = os.environ.get("GOLDENMATCH_FS_OOC_STREAM_CLUSTER_MIN_PAIRS")
+    if v and v.strip().isdigit() and int(v) > 0:
+        return int(v)
+    return 20_000_000
+
+
+def _fs_ooc_wcc_batch() -> int:
+    """Edge-batch size for the streaming Union-Find scan (bounds the per-wave
+    resident edge rows). ``GOLDENMATCH_FS_OOC_STREAM_CLUSTER_BATCH`` overrides;
+    ``0``/invalid -> the 2M default."""
+    v = os.environ.get("GOLDENMATCH_FS_OOC_STREAM_CLUSTER_BATCH")
+    if v and v.strip().isdigit() and int(v) > 0:
+        return int(v)
+    return 2_000_000
+
+
+def _streaming_cluster_symbol_available() -> bool:
+    """True iff the native clustering kernel is enabled AND the published/in-tree
+    wheel actually exports ``StreamingClusterBuilder`` (the #688-class wheel-skew
+    guard — an older wheel degrades gracefully to the one-shot arrow path)."""
+    try:
+        from goldenmatch.core._native_loader import native_enabled, native_module
+        if not native_enabled("clustering"):
+            return False
+        nm = native_module()
+        return nm is not None and hasattr(nm, "StreamingClusterBuilder")
+    except Exception:  # noqa: BLE001 - any loader hiccup -> fall back to one-shot
+        return False
+
+
+def _use_streaming_cluster(con: Any, pair_sink: str) -> bool:
+    """Decide whether to cluster via the streaming Union-Find. Requires the native
+    symbol; ``auto`` additionally gates on the deduped-edge count."""
+    mode = _fs_ooc_stream_cluster_mode()
+    if mode == "0" or not _streaming_cluster_symbol_available():
+        return False
+    if mode == "1":
+        return True
+    n = con.execute(f"SELECT count(*) FROM {_sql_ident(pair_sink)}").fetchone()[0]
+    return int(n or 0) >= _fs_ooc_stream_cluster_min_pairs()
 
 
 def _fs_ooc_golden_batch_clusters() -> int:
@@ -1030,6 +1113,66 @@ def _cluster_arrow_native_from_duckdb(
     return _normalize_assignments(cf), n_pairs
 
 
+def _cluster_streaming_from_duckdb(
+    con: Any,
+    pair_sink: str,
+    link_threshold: float | None,
+) -> tuple[Any, int]:
+    """Cluster with the MEMORY-BOUNDED Rust streaming Union-Find — clustering RAM
+    is the parent map (O(members)), never the O(pairs) deduped edge set.
+
+    The max-score canonical dedup + best-score link filter run IN DuckDB (spills
+    under the ``memory_limit``) into a ``wcc_edges`` table, which is then STREAMED
+    in bounded batches into ``StreamingClusterBuilder.union_batch`` — the native
+    kernel keeps only the Union-Find parent map, so the edges never become a
+    resident array (nor the one-shot kernel's ``edge_pos``/``per_cluster_edges``
+    metadata structures). ``assignments()`` returns ``(member_id, cluster_id)`` for
+    pair-touched members (cluster_id = component min member id); singletons fold to
+    their own id via a DuckDB LEFT JOIN, so no O(N) id list is materialised. Same
+    connected-component partitions as ``_cluster_arrow_native_from_duckdb`` (the
+    grouping is union-strategy-invariant), so it's cluster-parity-safe."""
+    import pyarrow as pa
+
+    from goldenmatch.core._native_loader import native_module
+
+    having = ""
+    if link_threshold is not None:
+        having = f"HAVING max(score) >= {float(link_threshold)!r}"
+    con.execute(
+        f"CREATE OR REPLACE TEMP TABLE wcc_edges AS "
+        f"SELECT least(id_a, id_b) AS id_a, greatest(id_a, id_b) AS id_b "
+        f"FROM {_sql_ident(pair_sink)} "
+        f"GROUP BY least(id_a, id_b), greatest(id_a, id_b) {having}"
+    )
+    n_pairs = int(con.execute("SELECT count(*) FROM wcc_edges").fetchone()[0] or 0)
+
+    builder = native_module().StreamingClusterBuilder()
+    reader = con.execute(
+        "SELECT id_a, id_b FROM wcc_edges"
+    ).fetch_record_batch(_fs_ooc_wcc_batch())
+    for batch in reader:
+        builder.union_batch(batch.column("id_a"), batch.column("id_b"))
+
+    member_arr, cid_arr = builder.assignments()
+    con.register(
+        "wcc_lbl_arrow",
+        pa.table({"member_id": member_arr, "__cluster_id__": cid_arr}),
+    )
+    con.execute("CREATE OR REPLACE TEMP TABLE wcc_labels AS SELECT * FROM wcc_lbl_arrow")
+    con.unregister("wcc_lbl_arrow")
+
+    # Fold singletons (rows in no edge) to their own cluster in DuckDB — no O(N)
+    # id list in the driver; the assignment table is built by the store.
+    asn = con.execute(
+        "SELECT p.__row_id__ AS __row_id__, "
+        "coalesce(l.__cluster_id__, p.__row_id__) AS __cluster_id__ "
+        "FROM prep p LEFT JOIN wcc_labels l ON p.__row_id__ = l.member_id"
+    ).fetch_arrow_table()
+    con.execute("DROP TABLE IF EXISTS wcc_edges")
+    con.execute("DROP TABLE IF EXISTS wcc_labels")
+    return asn, n_pairs
+
+
 def run_fs_dedupe_streaming(
     prepared_df: Any,
     blocking_config: BlockingConfig,
@@ -1113,10 +1256,18 @@ def run_fs_dedupe_streaming(
         try:
             if spill_pairs:
                 # `pairs` is the DuckDB sink table name (always created, possibly
-                # empty -> an all-singleton run).
-                assignments, n_pairs = _cluster_arrow_native_from_duckdb(
-                    con, pairs, max_cluster_size, link_threshold,
-                )
+                # empty -> an all-singleton run). Cluster with the memory-bounded
+                # streaming Union-Find at the large-N tail (O(members) parent map,
+                # no O(pairs) edge fetch); the one-shot arrow kernel below the
+                # threshold / when the native symbol is absent.
+                if _use_streaming_cluster(con, pairs):
+                    assignments, n_pairs = _cluster_streaming_from_duckdb(
+                        con, pairs, link_threshold,
+                    )
+                else:
+                    assignments, n_pairs = _cluster_arrow_native_from_duckdb(
+                        con, pairs, max_cluster_size, link_threshold,
+                    )
             elif arrow_stream:
                 assignments, n_pairs = _cluster_arrow_native(
                     con, pairs, max_cluster_size, link_threshold,

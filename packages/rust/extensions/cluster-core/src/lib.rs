@@ -34,9 +34,85 @@ pub fn find(parent: &mut HashMap<i64, i64>, x: i64) -> i64 {
     root
 }
 
+/// Streaming connected-components over edge BATCHES: keep only the Union-Find
+/// parent map (O(members)) and consume `(id_a, id_b)` batches one at a time,
+/// never accumulating the edges. The memory-bounded clustering kernel for the
+/// out-of-core FS path — edges are spilled to DuckDB and fed here in waves, so
+/// peak clustering RAM is the parent map, not O(pairs) (contrast
+/// `build_clusters_arrow`, which materialises every edge PLUS an `edge_pos` map +
+/// `per_cluster_edges` for the confidence/bottleneck METADATA the streaming path
+/// discards). Union strategy is naive parent-relink (like `build_clusters_arrow`);
+/// component membership is invariant to it, and the min-member label makes the
+/// output independent of edge/union order.
+#[derive(Default)]
+pub struct StreamingComponents {
+    parent: HashMap<i64, i64>,
+}
+
+impl StreamingComponents {
+    pub fn new() -> Self {
+        Self {
+            parent: HashMap::new(),
+        }
+    }
+
+    pub fn with_capacity(n: usize) -> Self {
+        Self {
+            parent: HashMap::with_capacity(n),
+        }
+    }
+
+    /// Union one batch of edges. `a` and `b` are parallel id slices (non-null by
+    /// construction — the FS dedup emits `least`/`greatest` of two non-null ids).
+    pub fn union_batch(&mut self, a: &[i64], b: &[i64]) {
+        let n = a.len().min(b.len());
+        self.parent.reserve(n);
+        for i in 0..n {
+            let (ea, eb) = (a[i], b[i]);
+            self.parent.entry(ea).or_insert(ea);
+            self.parent.entry(eb).or_insert(eb);
+            let ra = find(&mut self.parent, ea);
+            let rb = find(&mut self.parent, eb);
+            if ra != rb {
+                self.parent.insert(ra, rb);
+            }
+        }
+    }
+
+    pub fn n_members(&self) -> usize {
+        self.parent.len()
+    }
+
+    /// Finalise: `(member_ids, cluster_ids)` for every pair-touched member, where
+    /// cluster_id is the MIN member id of the member's component (deterministic,
+    /// order-independent). Singletons (records in no edge) are absent — the caller
+    /// folds them in (each its own cluster) downstream, so this stays O(members
+    /// touched) rather than O(N).
+    pub fn assignments_min_member(&mut self) -> (Vec<i64>, Vec<i64>) {
+        let keys: Vec<i64> = self.parent.keys().copied().collect();
+        // root -> min member id in that component.
+        let mut root_min: HashMap<i64, i64> = HashMap::with_capacity(keys.len());
+        for &k in &keys {
+            let r = find(&mut self.parent, k);
+            let e = root_min.entry(r).or_insert(k);
+            if k < *e {
+                *e = k;
+            }
+        }
+        let mut members = Vec::with_capacity(keys.len());
+        let mut cids = Vec::with_capacity(keys.len());
+        for &k in &keys {
+            let r = find(&mut self.parent, k);
+            members.push(k);
+            cids.push(root_min[&r]);
+        }
+        (members, cids)
+    }
+}
+
 /// Max-weight spanning tree (Kruskal), then drop the single weakest MST edge
 /// and return the resulting components. Behavior-exact mirror of `_build_mst`
-/// + weakest-edge removal + re-union + `get_clusters` in cluster.py's
+/// plus weakest-edge removal, re-union, and `get_clusters` in cluster.py's
 /// `split_oversized_cluster`.
 ///
 /// `edges` MUST arrive in `pair_scores` iteration order: the stable
@@ -200,6 +276,49 @@ mod tests {
         }
         groups.sort();
         groups
+    }
+
+    /// Group a StreamingComponents assignment into canonical member sets by
+    /// cluster id, for structural comparison.
+    fn stream_groups(sc: &mut StreamingComponents) -> Vec<Vec<i64>> {
+        let (members, cids) = sc.assignments_min_member();
+        let mut by_cid: HashMap<i64, Vec<i64>> = HashMap::new();
+        for (m, c) in members.into_iter().zip(cids) {
+            by_cid.entry(c).or_default().push(m);
+        }
+        canon(by_cid.into_values().collect())
+    }
+
+    #[test]
+    fn streaming_components_batched_equals_single_batch() {
+        // Edges: 1-2, 2-3 (chain), 5-6, and 8-9-10 split ACROSS two batches so
+        // the cross-batch link (9-10) must still merge — the whole point.
+        let mut single = StreamingComponents::new();
+        single.union_batch(&[1, 2, 5, 8, 9], &[2, 3, 6, 9, 10]);
+
+        let mut batched = StreamingComponents::new();
+        batched.union_batch(&[1, 2], &[2, 3]); // {1,2,3}
+        batched.union_batch(&[5, 8, 9], &[6, 9, 10]); // {5,6}, {8,9,10}
+        batched.union_batch(&[10], &[8]); // redundant edge, no-op on membership
+
+        assert_eq!(stream_groups(&mut single), stream_groups(&mut batched));
+        // min-member labels: {1,2,3}->1, {5,6}->5, {8,9,10}->8.
+        let (members, cids) = batched.assignments_min_member();
+        let label: HashMap<i64, i64> = members.into_iter().zip(cids).collect();
+        assert_eq!(label[&3], 1);
+        assert_eq!(label[&6], 5);
+        assert_eq!(label[&10], 8);
+    }
+
+    #[test]
+    fn streaming_components_transitive_cross_batch_merge() {
+        // 1-2 in batch A, 2-3 in batch B, 3-4 in batch C => all one component
+        // {1,2,3,4} even though no single batch saw more than one edge of it.
+        let mut sc = StreamingComponents::new();
+        sc.union_batch(&[1], &[2]);
+        sc.union_batch(&[2], &[3]);
+        sc.union_batch(&[3], &[4]);
+        assert_eq!(stream_groups(&mut sc), vec![vec![1, 2, 3, 4]]);
     }
 
     #[test]

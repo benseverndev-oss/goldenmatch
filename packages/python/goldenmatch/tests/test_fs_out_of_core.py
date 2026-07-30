@@ -573,3 +573,38 @@ def test_streaming_pair_spill_parity_with_in_ram(tmp_path, monkeypatch, link_thr
     for k in ("unique_count", "dupes_count", "golden_count", "pairs"):
         assert res_ram[k] == res_spill[k], (k, res_ram[k], res_spill[k])
     assert _stream_partitions(str(tmp_path / "ram")) == _stream_partitions(str(tmp_path / "spill"))
+
+
+@pytest.mark.parametrize("link_threshold", [None, 0.5])
+def test_streaming_union_find_cluster_parity(tmp_path, monkeypatch, link_threshold):
+    """The Rust streaming Union-Find clusterer (GOLDENMATCH_FS_OOC_STREAM_CLUSTER=1)
+    yields the SAME cluster partitions as the one-shot arrow kernel (=0), with and
+    without a link threshold — the memory-bounded path is partition-parity-safe."""
+    import types
+
+    from goldenmatch.backends.fs_out_of_core import (
+        _streaming_cluster_symbol_available,
+        run_fs_dedupe_streaming,
+    )
+
+    if not _streaming_cluster_symbol_available():
+        pytest.skip("native StreamingClusterBuilder not available")
+
+    df = _bigger_df()
+    mk = _make_probabilistic_mk()
+    blocking = BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])])
+    em = _train(df, blocking, mk)
+    cfg = types.SimpleNamespace(golden_rules=None)
+
+    monkeypatch.setenv("GOLDENMATCH_FS_OOC_STREAM_CLUSTER", "0")  # one-shot oracle
+    res_oneshot = run_fs_dedupe_streaming(
+        df, blocking, mk, em, cfg, str(tmp_path / "o"), link_threshold=link_threshold
+    )
+    monkeypatch.setenv("GOLDENMATCH_FS_OOC_STREAM_CLUSTER", "1")  # streaming UF
+    res_stream = run_fs_dedupe_streaming(
+        df, blocking, mk, em, cfg, str(tmp_path / "s"), link_threshold=link_threshold
+    )
+
+    for k in ("unique_count", "dupes_count", "golden_count", "pairs"):
+        assert res_oneshot[k] == res_stream[k], (k, res_oneshot[k], res_stream[k])
+    assert _stream_partitions(str(tmp_path / "o")) == _stream_partitions(str(tmp_path / "s"))

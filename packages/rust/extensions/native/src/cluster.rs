@@ -24,7 +24,7 @@ use goldenmatch_cluster_core::{
     cluster_confidence as core_cluster_confidence, find,
     group_members_by_cluster as core_group_members_by_cluster,
     mst_split_components as core_mst_split_components,
-    severe_bridge_count as core_severe_bridge_count, ConfidenceResult,
+    severe_bridge_count as core_severe_bridge_count, ConfidenceResult, StreamingComponents,
 };
 
 /// Connected components over `all_ids` ∪ edge endpoints. Mirrors
@@ -428,6 +428,76 @@ pub fn build_clusters_arrow(
         PyArrowType(metadata_min.to_data()),
         PyArrowType(metadata_avg.to_data()),
     ))
+}
+
+/// Streaming Arrow connected-components builder — the MEMORY-BOUNDED clustering
+/// kernel for the out-of-core FS path.
+///
+/// `union_batch(id_a, id_b)` folds one edge batch into the Union-Find, keeping
+/// ONLY the parent map (O(members)); the edges are never accumulated (contrast
+/// `build_clusters_arrow`, which materialises every edge PLUS an `edge_pos` map +
+/// `per_cluster_edges` for the confidence/bottleneck metadata this kernel omits).
+/// The caller streams the DuckDB-spilled `pair_stream` in waves, so peak
+/// clustering RAM is the parent map, not O(pairs). `assignments()` returns
+/// `(member_id, cluster_id)` for every pair-touched member with cluster_id = the
+/// component's MIN member id (order-independent); singletons are folded in by the
+/// caller. Same connected-component grouping as `build_clusters_arrow` (naive
+/// union; membership is union-strategy-invariant).
+#[pyclass]
+pub struct StreamingClusterBuilder {
+    inner: StreamingComponents,
+}
+
+#[pymethods]
+impl StreamingClusterBuilder {
+    #[new]
+    fn new() -> Self {
+        Self {
+            inner: StreamingComponents::new(),
+        }
+    }
+
+    /// Fold one edge batch (int64 `id_a`/`id_b`, non-null) into the Union-Find.
+    fn union_batch(
+        &mut self,
+        id_a: PyArrowType<ArrayData>,
+        id_b: PyArrowType<ArrayData>,
+    ) -> PyResult<()> {
+        for (name, dt) in [("id_a", id_a.0.data_type()), ("id_b", id_b.0.data_type())] {
+            if dt != &DataType::Int64 {
+                return Err(PyValueError::new_err(format!(
+                    "StreamingClusterBuilder.union_batch: {name:?} must be Int64, got {dt:?}"
+                )));
+            }
+        }
+        let a = Int64Array::from(id_a.0);
+        let b = Int64Array::from(id_b.0);
+        if a.len() != b.len() {
+            return Err(PyValueError::new_err(format!(
+                "StreamingClusterBuilder.union_batch: id_a/id_b lengths differ ({} vs {})",
+                a.len(),
+                b.len(),
+            )));
+        }
+        self.inner.union_batch(a.values(), b.values());
+        Ok(())
+    }
+
+    #[getter]
+    fn n_members(&self) -> usize {
+        self.inner.n_members()
+    }
+
+    /// `(member_id, cluster_id)` Int64 arrays for every pair-touched member;
+    /// cluster_id = component min member id. Mutates the parent map (path
+    /// compression), so call once at the end.
+    fn assignments(&mut self) -> PyResult<(PyArrowType<ArrayData>, PyArrowType<ArrayData>)> {
+        let (members, cids) = self.inner.assignments_min_member();
+        Ok((
+            PyArrowType(Int64Array::from(members).to_data()),
+            PyArrowType(Int64Array::from(cids).to_data()),
+        ))
+    }
 }
 
 /// Arrow columnar connected components. Edge columns int64/int64/float64 + an

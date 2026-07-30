@@ -103,6 +103,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
         cluster::group_members_by_cluster_arrow,
         m
     )?)?;
+    m.add_class::<cluster::StreamingClusterBuilder>()?;
     m.add_function(wrap_pyfunction!(pairs::canonicalize_pairs, m)?)?;
     m.add_function(wrap_pyfunction!(pairs::dedup_pairs_max_score, m)?)?;
     m.add_function(wrap_pyfunction!(pairs::dedup_pairs_arrow, m)?)?;
