@@ -493,18 +493,7 @@ _PEPY_RE = re.compile(r"pepy\.tech/projects\?q=(?P<q>[A-Za-z0-9+._-]+)")
 # like goldenmatch-pg it has a publish workflow but is excluded from the download
 # badge totals on purpose. (goldenmatch-hnsw published its first release 2026-07-29
 # and graduated into PYPI_PACKAGES + the README pepy list.)
-# goldengraph / goldenprofile-native gained publish workflows in #2273 but are not
-# yet graduated into the download-badge totals — same "publish-wired, not-yet-badged"
-# default as goldenmatch-hnsw before its first release. goldenprofile-native is a
-# native accelerator (mirrors infermap-native); goldengraph can be graduated into
-# PYPI_PACKAGES + the README pepy list when a badge is wanted.
-_PYPI_PUBLISH_BADGE_EXCEPTIONS = {
-    "goldenmatch-pg", "infermap-native", "er-matcher",
-    "goldengraph", "goldenprofile-native",
-}
-# npm equivalent: goldenmatch-wasm-runtime (#2273) is a shared internal WASM runtime,
-# not a user-facing package with its own download badge.
-_NPM_PUBLISH_BADGE_EXCEPTIONS = {"goldenmatch-wasm-runtime"}
+_PYPI_PUBLISH_BADGE_EXCEPTIONS = {"goldenmatch-pg", "infermap-native", "er-matcher"}
 
 
 def check_aggregate_badges(res: Result) -> None:
@@ -526,7 +515,7 @@ def check_aggregate_badges(res: Result) -> None:
         f"symmetric-diff (add to PYPI_PACKAGES, add a publish-*.yml, or to "
         f"EXCEPTIONS): {sorted(pypi_drift)}" if pypi_drift else "",
     )
-    npm_drift = (npm_pub - _NPM_PUBLISH_BADGE_EXCEPTIONS) ^ npm_set
+    npm_drift = npm_pub ^ npm_set
     res.record(
         "npm publishers <-> badge NPM_PACKAGES",
         not npm_drift,
