@@ -276,6 +276,7 @@ jobs:
                 scripts/bench_er_headtohead/run_goldenmatch.py \
                 --input "ca_out/${SHAPE}.parquet" --rows "$COST_AWARE_SCALE" \
                 --mode zeroconfig --shape "$SHAPE" --allow-pure-python \
+                --measure-refused \
                 --out "ca_out/${SHAPE}_flag${FLAG}.json" \
                 --pred-out "ca_out/${SHAPE}_flag${FLAG}_pred.parquet"
               uv run python scripts/bench_er_headtohead/evaluate.py \

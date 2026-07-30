@@ -88,6 +88,15 @@ def main() -> None:
                     help="probabilistic mode only: rewrite any FS field scorer NOT in "
                          "the native FS kernel set to jaro_winkler, so both FS lanes "
                          "engage the Rust kernel and match Splink's JaroWinkler model")
+    ap.add_argument("--measure-refused", action="store_true", default=False,
+                    help="zeroconfig mode only: when the controller REFUSES a RED "
+                         "config (>=100K identifier-poor input), MEASURE the committed "
+                         "config's F1 by force-running it with allow_red_config=True "
+                         "(the QIS-gate idiom) and flag refused=true, instead of "
+                         "recording status=refused with no prediction. Required by the "
+                         "cost-aware OFF-vs-ON gate, whose person shape refuses by "
+                         "design (the #2021 case). Default OFF preserves the head-to-"
+                         "head matrix's refuse-and-record semantics.")
     args = ap.parse_args()
 
     os.environ["GOLDENMATCH_NATIVE"] = "1" if args.require_native else "auto"
@@ -178,18 +187,41 @@ def main() -> None:
             try:
                 with bench_capture() as bench:
                     ded = dedupe_df(df)
+                result["refused"] = False
             except ControllerNotConfidentError as e:
-                dedupe_wall = time.perf_counter() - t0
-                result.update(status="refused", error=str(e),
-                              dedupe_wall_seconds=round(dedupe_wall, 2))
-                result["total_wall_seconds"] = round(time.perf_counter() - t_start, 2)
-                result["peak_rss_mb"] = _peak_rss_mb()
-                _atomic_write(args.out, result)
+                if not args.measure_refused:
+                    dedupe_wall = time.perf_counter() - t0
+                    result.update(status="refused", error=str(e),
+                                  dedupe_wall_seconds=round(dedupe_wall, 2))
+                    result["total_wall_seconds"] = round(time.perf_counter() - t_start, 2)
+                    result["peak_rss_mb"] = _peak_rss_mb()
+                    _atomic_write(args.out, result)
+                    print(
+                        f"[goldenmatch] rows={args.rows:,} mode={args.mode} "
+                        f"status=refused error={e}"
+                    )
+                    return
+                # --measure-refused: a RED refusal is EXPECTED on identifier-poor
+                # inputs (the #2021 person case the cost-aware flag targets), and the
+                # OFF-vs-ON gate needs the committed config's ACTUAL F1 to compare.
+                # Re-config + force-run the SAME committed config with
+                # allow_red_config=True (+ _skip_finalize=True to skip the full-df
+                # verification profile) -- the QIS-gate measure_rungs idiom -- and
+                # flag refused=true for context. Pass/fail stays on the measured F1,
+                # not the refuse verdict (RED is a confidence flag, not a wrong
+                # answer). The force-run's bench_capture is what the pred-out +
+                # metrics below use, so they reflect the config actually scored.
+                from goldenmatch import auto_configure_df
+                result["refused"] = True
+                cfg = auto_configure_df(
+                    df, confidence_required=False, allow_red_config=True,
+                    _skip_finalize=True)
+                with bench_capture() as bench:
+                    ded = dedupe_df(df, config=cfg)
                 print(
                     f"[goldenmatch] rows={args.rows:,} mode={args.mode} "
-                    f"status=refused error={e}"
+                    f"status=refused-measured (allow_red_config force-run) error={e}"
                 )
-                return
             dedupe_wall = time.perf_counter() - t0
         else:  # probabilistic
             from goldenmatch.core.autoconfig import auto_configure_probabilistic_df
