@@ -18,6 +18,17 @@ from __future__ import annotations
 
 from goldenmatch.core.key_integrity_certificate import KeyIntegrityCertificate
 from goldenmatch.semantic.crosswalk import ResolvedCrosswalk, build_resolved_crosswalk
+from goldenmatch.semantic.cube import (
+    Cube,
+    CubeDimension,
+    CubeJoin,
+    CubeMeasure,
+    certify_cube_joins,
+    cube_join_keys,
+    emit_cube_from_crosswalk,
+    emit_cube_yaml,
+    parse_cube_models,
+)
 from goldenmatch.semantic.key_integrity import certify_key_integrity
 from goldenmatch.semantic.metricflow import (
     DeclaredKeySpec,
@@ -38,6 +49,7 @@ from goldenmatch.semantic.osi import (
     emit_osi_yaml,
     osi_join_keys,
     parse_osi_models,
+    validate_osi,
 )
 
 __all__ = [
@@ -59,9 +71,20 @@ __all__ = [
     "emit_osi_model",
     "emit_osi_yaml",
     "emit_osi_from_crosswalk",
+    "validate_osi",
     "OsiModel",
     "OsiDataset",
     "OsiRelationship",
     "OsiField",
     "OsiMetric",
+    # follow-on — Cube (cube.dev) dialect (reader + emitter + bridges)
+    "parse_cube_models",
+    "cube_join_keys",
+    "certify_cube_joins",
+    "emit_cube_yaml",
+    "emit_cube_from_crosswalk",
+    "Cube",
+    "CubeDimension",
+    "CubeMeasure",
+    "CubeJoin",
 ]
