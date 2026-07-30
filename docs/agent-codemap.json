@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 433,
+      "module_count": 435,
       "modules": [
         {
           "module": "goldenmatch",
@@ -481,6 +481,18 @@
           ]
         },
         {
+          "module": "goldenmatch.cli.certify_keys",
+          "file": "packages/python/goldenmatch/goldenmatch/cli/certify_keys.py",
+          "purpose": "CLI `certify-keys` command -- the semantic-layer front door.",
+          "defines": [
+            "certify_keys_cmd"
+          ],
+          "imports": [
+            "goldenmatch.core.io_arrow",
+            "goldenmatch.semantic"
+          ]
+        },
+        {
           "module": "goldenmatch.cli.compare",
           "file": "packages/python/goldenmatch/goldenmatch/cli/compare.py",
           "purpose": "CLI compare-clusters command for GoldenMatch.",
@@ -728,6 +740,7 @@
             "goldenmatch.cli.agent_serve",
             "goldenmatch.cli.anomalies",
             "goldenmatch.cli.autoconfig",
+            "goldenmatch.cli.certify_keys",
             "goldenmatch.cli.compare",
             "goldenmatch.cli.dedupe",
             "goldenmatch.cli.demo",
@@ -6473,6 +6486,7 @@
             "_safe_path_or_error",
             "_tool_analyze_blocking",
             "_tool_build_clusters",
+            "_tool_certify_semantic_model",
             "_tool_compare_clusters",
             "_tool_config_weaknesses",
             "_tool_convert_splink_config",
@@ -6533,6 +6547,7 @@
             "goldenmatch.core.evaluate",
             "goldenmatch.core.explainer",
             "goldenmatch.core.ingest",
+            "goldenmatch.core.io_arrow",
             "goldenmatch.core.lineage",
             "goldenmatch.core.match_one",
             "goldenmatch.core.matchkey",
@@ -6551,6 +6566,7 @@
             "goldenmatch.mcp.routing_tools",
             "goldenmatch.pprl.autoconfig",
             "goldenmatch.pprl.protocol",
+            "goldenmatch.semantic",
             "goldenmatch.tui.engine"
           ]
         },
@@ -7055,7 +7071,26 @@
           "purpose": "Semantic-layer interoperability (the MetricFlow / Cube / OSI wedge).",
           "imports": [
             "goldenmatch.core.key_integrity_certificate",
+            "goldenmatch.semantic.certify",
             "goldenmatch.semantic.crosswalk",
+            "goldenmatch.semantic.cube",
+            "goldenmatch.semantic.key_integrity",
+            "goldenmatch.semantic.metricflow",
+            "goldenmatch.semantic.osi"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.certify",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/certify.py",
+          "purpose": "Zero-config front door: certify every declared key in a semantic model.",
+          "defines": [
+            "KeyCertification",
+            "SemanticCertification",
+            "certify_semantic_model",
+            "detect_dialect"
+          ],
+          "imports": [
+            "goldenmatch.core.key_integrity_certificate",
             "goldenmatch.semantic.cube",
             "goldenmatch.semantic.key_integrity",
             "goldenmatch.semantic.metricflow",
