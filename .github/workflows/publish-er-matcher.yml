@@ -30,9 +30,9 @@ on:
         description: "Release tag to create (fresh tag; e.g. er-matcher-3b-v1.0.0 — a burned immutable tag can't be reused)"
         required: true
       quant:
-        description: "Quantization types to build (space-separated llama.cpp quant names)"
+        description: "Quantization types to build (space-separated). Each asset must be < 2 GiB (GitHub release cap) — q8_0/f16 exceed it for a 3B+ model."
         required: false
-        default: "q4_k_m q8_0"
+        default: "q4_k_m"
 
 permissions:
   contents: write   # create the Release + upload assets
@@ -131,6 +131,18 @@ jobs:
           for q in ${{ inputs.quant }}; do
             out="dist/goldenmatch-er-matcher-${{ inputs.tier }}-${q}.gguf"
             "$QUANTIZE" base-f16.gguf "$out" "$q"
+          done
+          # GitHub caps a release asset at 2 GiB. Fail HERE (before touching the
+          # release) with a clear message rather than mid-upload — a too-big quant
+          # (q8_0/f16 on a 3B+) should be dropped or split, not silently skipped.
+          CAP=$((2 * 1024 * 1024 * 1024))
+          for f in dist/*.gguf; do
+            sz=$(stat -c%s "$f")
+            echo "$(numfmt --to=iec "$sz")  $f"
+            if [ "$sz" -ge "$CAP" ]; then
+              echo "::error::$f is $(numfmt --to=iec "$sz") >= 2 GiB (GitHub release-asset cap). Drop this quant from the 'quant' input or split it."
+              exit 1
+            fi
           done
           cd dist && sha256sum *.gguf | tee SHA256SUMS.txt
 
