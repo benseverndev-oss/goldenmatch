@@ -52,6 +52,13 @@ env:
   ARROW_DEFAULT_MEMORY_POOL: system
   _RJEM_MALLOC_CONF: "dirty_decay_ms:1000,muzzy_decay_ms:0"
   GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+  # 200M pinned ~63 GB: during the LOAD stage the un-streamed prep frame (~30 GB
+  # once internal cols are added) coexists with DuckDB's default ~55%-of-RAM
+  # buffer (~35 GB) -> ~2x frame resident. Cap DuckDB low so `prep` SPILLS to disk
+  # during load instead of buffering it, dropping the load peak to ~= frame + a
+  # small buffer. (The real fix for arbitrary N is streaming the prep frame -- the
+  # documented remaining work; this knob just extends the single-node reach.)
+  GOLDENMATCH_FS_OOC_DUCKDB_MEMORY: "16GB"
 
 concurrency:
   # newest push wins -- supersede a still-running (or stuck) bench of this ref.
