@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from goldenmatch.config.schemas import GoldenMatchConfig, MatchkeyConfig
+    from goldenmatch.core.memory.store import Correction, MemoryStore
     from goldenmatch.core.probabilistic import EMResult
 
 # A verdict from the adjudicator: (id_a, id_b, is_match, confidence).
@@ -101,6 +102,84 @@ def labels_from_verdicts(
             seen.add(pair)
             labels.append(pair)
     return labels
+
+
+def labels_from_corrections(
+    corrections: Iterable[Correction],
+    *,
+    sources: Iterable[str] | None = None,
+) -> list[tuple[int, int]]:
+    """Extract confident-match labels from persisted ``Correction`` verdicts.
+
+    The LLM boost, the review-queue steward loop, and the boost tab all persist
+    their per-pair verdicts to a ``MemoryStore`` as ``approve``/``reject``
+    ``Correction`` rows. This turns the ``approve`` ones into labels — the honest
+    bridge from the real adjudication stream to the refit.
+
+    Only pair-level ``approve`` decisions are kept: ``reject`` is dropped (u stays
+    from random pairs), and ``field_correct`` / ``cluster_decision`` rows (whose
+    ``id_a``/``id_b`` mean cluster-id / unused, not a pair) are excluded by the
+    ``approve`` filter. Pairs are canonicalized ``(min, max)`` and deduped.
+
+    Args:
+        corrections: the persisted verdicts (e.g. ``store.get_corrections(dataset)``).
+        sources: if given, keep only corrections whose ``source`` is in this set
+            (e.g. ``{"llm"}`` to trust only the model's verdicts). None = all sources.
+    """
+    from goldenmatch.core.memory.store import Decision
+
+    allow = set(sources) if sources is not None else None
+    seen: set[tuple[int, int]] = set()
+    labels: list[tuple[int, int]] = []
+    for c in corrections:
+        if c.decision != Decision.APPROVE or c.id_a == c.id_b:
+            continue
+        if allow is not None and c.source not in allow:
+            continue
+        pair = (min(c.id_a, c.id_b), max(c.id_a, c.id_b))
+        if pair not in seen:
+            seen.add(pair)
+            labels.append(pair)
+    return labels
+
+
+def refit_from_corrections(
+    df,
+    config: GoldenMatchConfig,
+    corrections: Iterable[Correction],
+    *,
+    sources: Iterable[str] | None = None,
+    matchkey: MatchkeyConfig | None = None,
+) -> RefitResult:
+    """Refit the FS model from persisted ``Correction`` verdicts (suggest mode).
+
+    Equivalent to :func:`labels_from_corrections` followed by
+    :func:`refit_from_labels`. The ``(id_a, id_b)`` in the corrections must
+    reference ``df``'s ``__row_id__`` (true for a same-frame in-run refit; across
+    runs, re-anchor the corrections to the current frame first).
+    """
+    labels = labels_from_corrections(corrections, sources=sources)
+    return refit_from_labels(df, config, labels, matchkey=matchkey)
+
+
+def refit_from_memory(
+    df,
+    config: GoldenMatchConfig,
+    store: MemoryStore,
+    *,
+    dataset: str | None = None,
+    sources: Iterable[str] | None = None,
+    matchkey: MatchkeyConfig | None = None,
+) -> RefitResult:
+    """Refit the FS model from a ``MemoryStore``'s verdicts (suggest mode).
+
+    Reads ``store.get_corrections(dataset)`` and refits. The closed loop from the
+    persisted adjudication stream, end to end: the boost / review / LLM tier writes
+    ``approve``/``reject`` corrections during a run; this reads them back and
+    produces a refined, suggested config.
+    """
+    corrections = store.get_corrections(dataset)
+    return refit_from_corrections(df, config, corrections, sources=sources, matchkey=matchkey)
 
 
 def _find_probabilistic_matchkey(config: GoldenMatchConfig) -> MatchkeyConfig:
