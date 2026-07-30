@@ -220,9 +220,14 @@ def full(config_name: str = "bf16-lora", gpu: str = GPU_FULL) -> None:
     volumes={"/out": _out_vol},
     secrets=[modal.Secret.from_name("er-matcher-hf")],
 )
-def eval_model(limit: int = 0, fast: bool = True) -> None:
+def eval_model(model_path: str = "/out/model/merged", out_name: str = "eval_results.json",
+               limit: int = 0, fast: bool = True) -> None:
     """Load the merged model and score match-F1 on the held-out test split, using
     eval.run_eval for overall + per-domain P/R/F1 + calibration.
+
+    model_path/out_name default to the 3B (/out/model/merged -> eval_results.json)
+    but are overridable to score a scale variant without clobbering the 3B's card,
+    e.g. --model-path /out/model_7b/merged --out-name eval_results_7b.json.
 
     fast=True (default): teacher-force the compact-JSON verdict prefix `{"match":`
     and read the next-token logits over the `true`/`false` ids (one forward pass per
@@ -239,7 +244,8 @@ def eval_model(limit: int = 0, fast: bool = True) -> None:
     import eval as ev  # the mounted scripts/er_matcher/eval.py (pure metrics module)
     from goldenmatch.core.er_matcher.prompt import build_chat, parse_verdict
 
-    mpath = "/out/model/merged"
+    mpath = model_path
+    print(f"[eval] model={mpath} -> /out/{out_name}")
     tok = AutoTokenizer.from_pretrained(mpath)
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
@@ -303,27 +309,29 @@ def eval_model(limit: int = 0, fast: bool = True) -> None:
     print(f"[eval] scoring {len(rows)} test pairs ({'fast logit' if fast else 'generative'} "
           "matcher)...")
     scorecard = ev.run_eval({"test": rows}, matcher)
-    with open("/out/eval_results.json", "w") as f:
+    with open(f"/out/{out_name}", "w") as f:
         json.dump(scorecard, f, indent=2)
     _out_vol.commit()
     print("[eval] overall:", json.dumps(scorecard["splits"]["test"]["overall"], indent=2))
 
 
 @app.local_entrypoint()
-def evaluate(limit: int = 0) -> None:
-    eval_model.remote(limit=limit)
-    print("eval done -> `modal volume get er-matcher-out eval_results.json`")
+def evaluate(limit: int = 0, model_path: str = "/out/model/merged",
+             out_name: str = "eval_results.json") -> None:
+    eval_model.remote(model_path=model_path, out_name=out_name, limit=limit)
+    print(f"eval done -> `modal volume get er-matcher-out {out_name}`")
 
 
 @app.local_entrypoint()
-def evaluate_detached(limit: int = 0) -> None:
+def evaluate_detached(limit: int = 0, model_path: str = "/out/model/merged",
+                      out_name: str = "eval_results.json") -> None:
     """Fire-and-forget in-distribution eval: spawn eval_model and return immediately.
     Run with `modal run --detach ...::evaluate_detached` so the spawned call survives
     the client exit (the generative scan of the full test split takes ~30-60 min).
-    Poll `modal volume get er-matcher-out eval_results.json` for the result."""
-    call = eval_model.spawn(limit=limit)
+    Poll `modal volume get er-matcher-out <out_name>` for the result."""
+    call = eval_model.spawn(model_path=model_path, out_name=out_name, limit=limit)
     print(f"eval spawned (detached): {call.object_id} -> poll "
-          "`modal volume get er-matcher-out eval_results.json`")
+          f"`modal volume get er-matcher-out {out_name}`")
 
 
 @app.function(
@@ -333,8 +341,14 @@ def evaluate_detached(limit: int = 0) -> None:
     volumes={"/out": _out_vol},
     secrets=[modal.Secret.from_name("er-matcher-hf")],
 )
-def zeroshot_eval(dataset: str = "walmart_amazon", allow_fetch: bool = True, limit: int = 0) -> None:
+def zeroshot_eval(dataset: str = "walmart_amazon", allow_fetch: bool = True, limit: int = 0,
+                  model_path: str = "/out/model/merged",
+                  out_name: str = "zeroshot_eval_results.json") -> None:
     """Zero-shot P(match) via teacher-forced next-token logits (SP3 Task 5).
+
+    model_path/out_name default to the 3B but are overridable to score a scale
+    variant on the same held-out benchmark without clobbering the 3B's card,
+    e.g. --model-path /out/model_7b/merged --out-name zeroshot_7b_walmart.json.
 
     Unlike `eval_model` (which generates full JSON and parses it), this scores
     each pair by teacher-forcing the exact JSON prefix the SFT target starts
@@ -358,7 +372,8 @@ def zeroshot_eval(dataset: str = "walmart_amazon", allow_fetch: bool = True, lim
     from goldenmatch.core.er_matcher.prompt import build_chat
     from sources.magellan import MagellanSource
 
-    mpath = "/out/model/merged"
+    mpath = model_path
+    print(f"[zeroshot_eval] model={mpath} dataset={dataset} -> /out/{out_name}")
     tok = AutoTokenizer.from_pretrained(mpath)
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
@@ -500,13 +515,15 @@ def zeroshot_eval(dataset: str = "walmart_amazon", allow_fetch: bool = True, lim
         "separation": {"mean_p_match_true": mean_true, "mean_p_match_non": mean_non},
         "scorecard": card_json,
     }
-    with open("/out/zeroshot_eval_results.json", "w") as f:
+    with open(f"/out/{out_name}", "w") as f:
         json.dump(results, f, indent=2)
     _out_vol.commit()
     print("[zeroshot_eval] scorecard:", json.dumps(card_json, indent=2))
 
 
 @app.local_entrypoint()
-def zeroshot(dataset: str = "walmart_amazon", limit: int = 0) -> None:
-    zeroshot_eval.remote(dataset=dataset, limit=limit)
-    print("zeroshot eval done -> `modal volume get er-matcher-out zeroshot_eval_results.json`")
+def zeroshot(dataset: str = "walmart_amazon", limit: int = 0,
+             model_path: str = "/out/model/merged",
+             out_name: str = "zeroshot_eval_results.json") -> None:
+    zeroshot_eval.remote(dataset=dataset, limit=limit, model_path=model_path, out_name=out_name)
+    print(f"zeroshot eval done -> `modal volume get er-matcher-out {out_name}`")
