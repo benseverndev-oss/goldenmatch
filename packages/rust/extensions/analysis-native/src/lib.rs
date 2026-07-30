@@ -23,7 +23,7 @@ use arrow::pyarrow::PyArrowType;
 use pyo3::prelude::*;
 
 /// Intern one Arrow column to dense `u64` value-ids by extracting a typed buffer
-/// (+ byte-per-row validity) and delegating to the shared `analysis-core`
+/// (+ Arrow's packed validity bitmap, passed through) and delegating to the shared `analysis-core`
 /// interner (#1788) -- ONE arrow-free implementation shared with the wasm / SQL
 /// surfaces, so they cannot drift. Null slots share id 0; non-null get dense ids
 /// from 1; floats canonicalize NaN / signed-zero (`analysis_core::canon_f64_bits`)
@@ -34,13 +34,30 @@ use pyo3::prelude::*;
 fn intern_column(data: ArrayData) -> PyResult<Vec<u64>> {
     let n = data.len();
 
-    // A byte-per-row validity buffer (0 = null) for any concrete Arrow array.
+    // The array's validity as a packed LSB-first Arrow bitmap (bit set = valid) --
+    // the SAME layout `analysis-core::is_null` and the wasm/TS surfaces consume.
+    // We pass Arrow's OWN null buffer through instead of expanding it byte-per-row:
+    // no nulls => empty slice (all valid); a full (offset-0) column => the null
+    // buffer's packed bytes, zero-copy; a sliced array (non-zero bit offset, rare
+    // for a fresh `.to_arrow()` column) => a realigned bitmap.
     macro_rules! validity {
         ($arr:expr) => {{
             let a = &$arr;
-            (0..n)
-                .map(|i| if a.is_null(i) { 0u8 } else { 1u8 })
-                .collect::<Vec<u8>>()
+            match a.nulls() {
+                None => std::borrow::Cow::Borrowed(&[][..]),
+                Some(nb) if nb.inner().offset() == 0 => {
+                    std::borrow::Cow::Borrowed(nb.inner().values())
+                }
+                Some(nb) => {
+                    let mut bits = vec![0u8; n.div_ceil(8)];
+                    for i in 0..n {
+                        if !nb.is_null(i) {
+                            bits[i >> 3] |= 1 << (i & 7);
+                        }
+                    }
+                    std::borrow::Cow::Owned(bits)
+                }
+            }
         }};
     }
     // Promote any int/uint/bool array to i64 + validity, then core-intern. `as i64`
@@ -67,12 +84,12 @@ fn intern_column(data: ArrayData) -> PyResult<Vec<u64>> {
             let arr = <$arrty>::from(data);
             let valid = validity!(arr);
             // Rebuild a contiguous utf8 offsets/bytes buffer; null rows get an empty
-            // span (validity marks them, so `intern_str` skips them regardless).
+            // span (the bitmap marks them, so `intern_str` skips them regardless).
             let mut bytes: Vec<u8> = Vec::new();
             let mut offsets: Vec<u32> = Vec::with_capacity(n + 1);
             offsets.push(0);
             for i in 0..n {
-                if valid[i] != 0 {
+                if !arr.is_null(i) {
                     bytes.extend_from_slice(arr.value(i).as_bytes());
                 }
                 offsets.push(bytes.len() as u32);
