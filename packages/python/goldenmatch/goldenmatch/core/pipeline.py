@@ -613,9 +613,9 @@ def _run_fs_streaming_dedupe(
     )
     # Drop this frame's EM references — the only remaining strong ref is now the
     # holder slot, which the scorer nulls right after the DuckDB load so the
-    # frame is freed before the clustering + output back-half.
-    score_frame = None
-    _em_src = None
+    # frame is freed before the clustering + output back-half. `del` (not `= None`)
+    # so these read as deliberate reference-drops, not dead stores.
+    del score_frame, _em_src
     res = run_fs_dedupe_streaming(
         frame_holder, blocking, scoring_mk, em_result, config, output_dir,
         link_threshold=link_threshold,

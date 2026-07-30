@@ -510,7 +510,7 @@ def test_streaming_frees_prepared_frame_via_holder(tmp_path):
 
     ref = weakref.ref(df)
     holder = [df]
-    df = None  # holder is now the only strong reference
+    del df  # holder is now the only strong reference
     res = run_fs_dedupe_streaming(holder, blocking, mk, em, cfg, str(tmp_path))
     assert holder[0] is None            # scorer nulled the holder slot after load
     gc.collect()
