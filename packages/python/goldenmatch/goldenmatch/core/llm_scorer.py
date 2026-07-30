@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING
 from goldenmatch._polars_lazy import pl
 
 if TYPE_CHECKING:
+    from goldenmatch.core._llm_loader import LocalLLMAdapter
     from goldenmatch.core.memory.store import MemoryStore
 
 logger = logging.getLogger(__name__)
@@ -110,6 +111,7 @@ def llm_score_pairs(
     matchkey_fields: list[str] | None = None,
     matchkey_name: str | None = None,
     dataset: str | None = None,
+    local_adapter: LocalLLMAdapter | None = None,  # noqa: F821  # forward ref, resolved lazily
 ) -> list[tuple[int, int, float]] | tuple[list[tuple[int, int, float]], dict | None]:
     """Score borderline pairs with an LLM.
 
@@ -169,6 +171,32 @@ def llm_score_pairs(
 
     if not pairs:
         return _return(pairs)
+
+    # Self-hosted local model (D1 Path B). A distinct provider from openai/
+    # anthropic: scored in-process by a LocalLLMAdapter, no API key, no network.
+    # Resolve an injected adapter first (tests / callers), else the pinned model
+    # via _llm_loader. Graceful abstain: no adapter -> pairs returned unchanged
+    # (mirrors the no-key fallback), never a crash.
+    if provider == "local":
+        adapter = local_adapter
+        if adapter is None:
+            from goldenmatch.core._llm_loader import load_local_adapter
+            adapter = load_local_adapter()
+        if adapter is None:
+            logger.warning(
+                "provider='local' but no local model is available; candidates keep "
+                "fuzzy scores. Install goldenmatch[local-llm] or set "
+                "GOLDENMATCH_LOCAL_LLM_PATH."
+            )
+            return _return(pairs)
+        return _return(
+            _local_score_pairs(
+                pairs, df, adapter,
+                auto_threshold=auto_threshold,
+                candidate_lo=candidate_lo,
+                display_columns=display_columns,
+            )
+        )
 
     # Auto-detect provider
     if not provider or not api_key:
@@ -310,6 +338,51 @@ def llm_score_pairs(
         )
 
     return _return(result)
+
+
+def _local_score_pairs(
+    pairs: list[tuple[int, int, float]],
+    df: pl.DataFrame,
+    adapter: LocalLLMAdapter,
+    *,
+    auto_threshold: float = 0.95,
+    candidate_lo: float = 0.75,
+    display_columns: list[str] | None = None,
+) -> list[tuple[int, int, float]]:
+    """Score the borderline band in-process with a self-hosted local model.
+
+    Same three-tier contract as the hosted path: ``>= auto_threshold`` auto-accept
+    (score 1.0); ``[candidate_lo, auto_threshold)`` sent to the adapter, promoted
+    to 1.0 on a match, else the original fuzzy score is kept (never demoted);
+    ``< candidate_lo`` untouched.
+
+    Scored sequentially against one model context (a single llama.cpp context is
+    not thread-safe). Multiprocessing for local throughput — a pool of worker
+    processes each holding a context — is the D3 follow-up; the hosted path stays
+    threaded (network-bound).
+    """
+    from goldenmatch.core.frame import to_frame as _tf_local
+
+    frame = _tf_local(df)
+    cols = display_columns or [c for c in frame.columns if not c.startswith("__")]
+    row_lookup: dict[int, dict] = {}
+    for row in frame.select_dicts(["__row_id__"] + cols):
+        row_lookup[row["__row_id__"]] = row
+
+    result = list(pairs)
+    for i, (a, b, s) in enumerate(pairs):
+        if s >= auto_threshold:
+            result[i] = (a, b, 1.0)
+        elif s >= candidate_lo:
+            row_a, row_b = row_lookup.get(a), row_lookup.get(b)
+            if row_a is None or row_b is None:
+                continue  # id not in frame -> keep original score
+            is_match, _conf = adapter.score_pair(row_a, row_b, cols)
+            if is_match:
+                result[i] = (a, b, 1.0)
+            # else: keep original fuzzy score (never demote), mirroring the hosted path
+        # below candidate_lo: untouched
+    return result
 
 
 def llm_explain_pair(

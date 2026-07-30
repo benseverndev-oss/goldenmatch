@@ -182,6 +182,7 @@ cli_commands:
   python_only:
   - import-dbt
   - ingest-docs
+  - llm
   - migrate-splink
   - serve-ui
   - setup

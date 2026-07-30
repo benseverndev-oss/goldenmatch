@@ -3580,6 +3580,32 @@
           ]
         },
         {
+          "command": "llm serve-local",
+          "options": [
+            {
+              "name": "--host",
+              "type": "text",
+              "required": false,
+              "default": "'127.0.0.1'",
+              "help": "Bind host (loopback by default)."
+            },
+            {
+              "name": "--port",
+              "type": "integer",
+              "required": false,
+              "default": "8081",
+              "help": "Bind port."
+            },
+            {
+              "name": "--model-path",
+              "type": "text",
+              "required": false,
+              "default": "None",
+              "help": "Explicit GGUF path (else the pinned model is resolved / downloaded)."
+            }
+          ]
+        },
+        {
           "command": "match",
           "options": [
             {
@@ -5667,6 +5693,11 @@
         "LLM": [
           "GOLDENMATCH_LLM_BASE_URL",
           "GOLDENMATCH_LLM_MODEL"
+        ],
+        "LOCAL": [
+          "GOLDENMATCH_LOCAL_LLM",
+          "GOLDENMATCH_LOCAL_LLM_GPU_LAYERS",
+          "GOLDENMATCH_LOCAL_LLM_PATH"
         ],
         "MATCH": [
           "GOLDENMATCH_MATCH_FUSED",

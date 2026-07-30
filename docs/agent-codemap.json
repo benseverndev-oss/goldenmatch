@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 423,
+      "module_count": 426,
       "modules": [
         {
           "module": "goldenmatch",
@@ -685,6 +685,19 @@
           ]
         },
         {
+          "module": "goldenmatch.cli.llm",
+          "file": "packages/python/goldenmatch/goldenmatch/cli/llm.py",
+          "purpose": "``goldenmatch llm`` — local-model convenience commands (D1 Path A).",
+          "defines": [
+            "_launch_server",
+            "_llama_server_available",
+            "serve_local_cmd"
+          ],
+          "imports": [
+            "goldenmatch.core._llm_loader"
+          ]
+        },
+        {
           "module": "goldenmatch.cli.main",
           "file": "packages/python/goldenmatch/goldenmatch/cli/main.py",
           "purpose": "GoldenMatch CLI application.",
@@ -721,6 +734,7 @@
             "goldenmatch.cli.ingest_docs",
             "goldenmatch.cli.label",
             "goldenmatch.cli.lineage",
+            "goldenmatch.cli.llm",
             "goldenmatch.cli.match",
             "goldenmatch.cli.mcp_serve",
             "goldenmatch.cli.memory",
@@ -1498,6 +1512,23 @@
           ],
           "imports": [
             "goldenmatch.core._native_loader"
+          ]
+        },
+        {
+          "module": "goldenmatch.core._llm_loader",
+          "file": "packages/python/goldenmatch/goldenmatch/core/_llm_loader.py",
+          "purpose": "Loader + gate for the optional self-hosted local LLM adapter (D1 Path B).",
+          "defines": [
+            "LocalLLMAdapter",
+            "LocalLLMUnavailableError",
+            "LocalLlamaAdapter",
+            "LocalModelSpec",
+            "_local_llm_mode",
+            "_verify_sha256",
+            "load_local_adapter",
+            "parse_verdict",
+            "resolve_model_path",
+            "serialize_pair_v1"
           ]
         },
         {
@@ -3540,6 +3571,7 @@
             "_detect_provider",
             "_focused_sample",
             "_iterative_calibrate",
+            "_local_score_pairs",
             "_openai_base_url",
             "_record_llm_corrections",
             "_stratified_sample",
@@ -3548,6 +3580,7 @@
           ],
           "imports": [
             "goldenmatch._polars_lazy",
+            "goldenmatch.core._llm_loader",
             "goldenmatch.core.frame",
             "goldenmatch.core.llm_budget",
             "goldenmatch.core.memory.corrections",
@@ -4161,6 +4194,24 @@
           "imports": [
             "goldenmatch._api",
             "goldenmatch.core.autoconfig"
+          ]
+        },
+        {
+          "module": "goldenmatch.core.refit",
+          "file": "packages/python/goldenmatch/goldenmatch/core/refit.py",
+          "purpose": "Closed-loop refit — turn adjudication verdicts into supervised FS labels (D2).",
+          "defines": [
+            "RefitNotApplicableError",
+            "RefitResult",
+            "_find_probabilistic_matchkey",
+            "labels_from_verdicts",
+            "refit_from_labels",
+            "refit_from_verdicts"
+          ],
+          "imports": [
+            "goldenmatch.config.schemas",
+            "goldenmatch.core.blocker",
+            "goldenmatch.core.probabilistic"
           ]
         },
         {
