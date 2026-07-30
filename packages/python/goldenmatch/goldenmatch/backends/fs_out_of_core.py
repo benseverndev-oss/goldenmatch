@@ -120,6 +120,27 @@ def _ooc_debug_on() -> bool:
     )
 
 
+def _fs_ooc_spill_pairs_enabled() -> bool:
+    """Spill the Arrow pair STREAM to the DuckDB file instead of accumulating every
+    wave's pair table in RAM (default ON within the already-opt-in out-of-core
+    route).
+
+    The arrow path otherwise holds `pair_tables` — one `PAIR_STREAM` table PER WAVE
+    — resident across the whole run, then concatenates + dedups them: an O(pairs)
+    driver structure (~1.6 GB at 50M / ~67M pairs, plus the dedup output) that is
+    the Arrow-side twin of the prep frame the DuckDB spill already bounds. When on,
+    each wave is appended to a DuckDB `pair_stream` table (spills to disk under the
+    `memory_limit`), and clustering reads the max-score canonical dedup + best-score
+    link filter straight out of DuckDB — so only the BOUNDED deduped edge set is
+    ever materialised in RAM (the minimum the Union-Find needs), never the raw
+    stream. `GOLDENMATCH_FS_OOC_SPILL_PAIRS=0` restores the in-RAM arrow
+    accumulation (the byte-parity oracle)."""
+    v = os.environ.get("GOLDENMATCH_FS_OOC_SPILL_PAIRS")
+    if v is None:
+        return True
+    return v.strip().lower() in ("1", "true", "yes", "on")
+
+
 def _fs_ooc_golden_batch_clusters() -> int:
     """How many multi-member clusters the streaming golden build materialises per
     batch. The golden subset (non-oversized multi-member rows) can be MOST of N at
@@ -319,6 +340,7 @@ def score_fs_out_of_core(
     db_path: str | None = None,
     max_block_rows: int | None = None,
     emit: str = "tuples",
+    pair_sink: str | None = None,
 ) -> Any:
     """Score FS blocks out-of-core from a DuckDB-resident prepared table.
 
@@ -422,11 +444,15 @@ def score_fs_out_of_core(
         )
 
         _arrow = emit == "arrow"
+        _spill = _arrow and pair_sink is not None  # spill waves to DuckDB, not RAM
         out: list[tuple[int, int, float]] = []
         seen: set[tuple[int, int]] = set()
         pair_tables: list = []  # arrow mode: one PAIR_STREAM pa.Table per wave
+        _sink_created = [False]  # spill mode: lazily CREATE the sink on wave 1
         if _arrow:
             from goldenmatch.backends.score_buckets import pairs_to_pair_stream
+        if _spill:
+            con.execute(f"DROP TABLE IF EXISTS {_sql_ident(pair_sink)}")
 
         # Score blocks in PARALLEL across a bounded wave, mirroring the in-memory
         # `score_buckets` ThreadPoolExecutor -- the native FS kernel (and the
@@ -510,8 +536,28 @@ def score_fs_out_of_core(
                         ):
                             continue
                         wave.append((a, b, s))
-                if wave:
-                    pair_tables.append(pairs_to_pair_stream(wave))
+                if not wave:
+                    return
+                wave_tbl = pairs_to_pair_stream(wave)
+                if _spill:
+                    # Append this wave to the DuckDB sink and DROP it from RAM, so
+                    # the pair stream never accumulates in the driver (it spills to
+                    # disk under the memory_limit). Clustering reads the dedup back.
+                    con.register("_gm_pairwave", wave_tbl)
+                    if not _sink_created[0]:
+                        con.execute(
+                            f"CREATE TABLE {_sql_ident(pair_sink)} AS "
+                            "SELECT * FROM _gm_pairwave"
+                        )
+                        _sink_created[0] = True
+                    else:
+                        con.execute(
+                            f"INSERT INTO {_sql_ident(pair_sink)} "
+                            "SELECT * FROM _gm_pairwave"
+                        )
+                    con.unregister("_gm_pairwave")
+                else:
+                    pair_tables.append(wave_tbl)
                 return
             for pairs in results:
                 for a, b, s in pairs:
@@ -644,6 +690,17 @@ def score_fs_out_of_core(
                           f"blockrows={_map_h} map {_map_dt:.1f}s "
                           f"scan+score {_time.perf_counter()-_t_scan:.1f}s",
                           flush=True)
+        if _spill:
+            # Pairs live in the DuckDB `pair_sink` table (spilled). The caller
+            # (run_fs_dedupe_streaming) clusters straight from it; nothing to hand
+            # back in RAM. Ensure the table EXISTS even when no wave emitted a pair
+            # (all-singleton run) so the caller's read is uniform.
+            if not _sink_created[0]:
+                con.execute(
+                    f"CREATE TABLE {_sql_ident(pair_sink)} "
+                    "(id_a BIGINT, id_b BIGINT, score DOUBLE)"
+                )
+            return pair_sink
         if _arrow:
             if pair_tables:
                 return pa.concat_tables(pair_tables)
@@ -921,6 +978,58 @@ def _cluster_arrow_native(
     return asn, n_pairs
 
 
+def _normalize_assignments(cf: Any) -> Any:
+    """``ClusterFrames.assignments`` → a ``pa.Table`` renamed to the
+    ``(__row_id__, __cluster_id__)`` shape ``stream_fs_dedupe_output`` joins on."""
+    import pyarrow as pa
+
+    asn = cf.assignments
+    if not isinstance(asn, pa.Table):
+        asn = asn.to_arrow()
+    return asn.rename_columns([
+        "__cluster_id__" if c == "cluster_id" else "__row_id__"
+        for c in asn.column_names
+    ])
+
+
+def _cluster_arrow_native_from_duckdb(
+    con: Any,
+    pair_sink: str,
+    max_cluster_size: int,
+    link_threshold: float | None,
+) -> tuple[Any, int]:
+    """Cluster from the DuckDB-SPILLED ``pair_sink`` table — the Arrow-side twin of
+    the DuckDB prep spill.
+
+    The scored pairs were streamed to disk wave-by-wave (never accumulated in RAM),
+    so the raw O(pairs) stream is never driver-resident. The max-score canonical
+    dedup + best-score link filter run IN DuckDB (``GROUP BY least/greatest`` →
+    ``max(score)`` → ``HAVING``, which spills under the ``memory_limit``), so only
+    the BOUNDED deduped edge set is materialised into Arrow for the Rust Union-Find
+    — the minimum the kernel needs. Semantically identical to
+    ``_cluster_arrow_native``'s ``dedup_pairs_max_score_arrow_table`` + score filter
+    (canonical ``(min, max)``, max score, link iff best score clears the cut), so
+    the cluster assignments match (parity-tested)."""
+    from goldenmatch.core.cluster import build_clusters_arrow_native
+
+    having = ""
+    if link_threshold is not None:
+        # Link iff the BEST cross-pass score clears the cut (== dedup-then-filter).
+        having = f"HAVING max(score) >= {float(link_threshold)!r}"
+    deduped = con.execute(
+        f"SELECT least(id_a, id_b) AS id_a, greatest(id_a, id_b) AS id_b, "
+        f"max(score) AS score FROM {_sql_ident(pair_sink)} "
+        f"GROUP BY least(id_a, id_b), greatest(id_a, id_b) {having}"
+    ).fetch_arrow_table()
+    n_pairs = deduped.num_rows
+
+    all_ids = _prep_all_ids(con)
+    cf = build_clusters_arrow_native(
+        deduped, all_ids=all_ids, max_cluster_size=max_cluster_size, backend="arrow",
+    )
+    return _normalize_assignments(cf), n_pairs
+
+
 def run_fs_dedupe_streaming(
     prepared_df: Any,
     blocking_config: BlockingConfig,
@@ -954,6 +1063,16 @@ def run_fs_dedupe_streaming(
     the ~20 B/pair Arrow stream, and the clustering wall is native. Assignments
     stream straight into ``stream_fs_dedupe_output`` as an Arrow table.
 
+    **The Arrow pair stream itself SPILLS to the DuckDB file** (default;
+    ``GOLDENMATCH_FS_OOC_SPILL_PAIRS=0`` restores the in-RAM accumulation). Even the
+    ~20 B/pair Arrow stream is O(pairs) and accumulates across every wave (~2.4 GB
+    at 100M pairs) — the Arrow-side twin of the prep frame the DuckDB spill already
+    bounds. So each wave is appended to a DuckDB ``pair_stream`` table (spills under
+    the ``memory_limit``), and the max-score canonical dedup + best-score link
+    filter run IN DuckDB, leaving only the BOUNDED deduped edge set resident for the
+    Union-Find. With this, the whole streaming back-half holds NO O(N)-growing
+    driver structure — prep, golden, AND pairs are all disk-bounded.
+
     ``link_threshold``: when set, only pairs scoring ``>= link_threshold`` are
     CLUSTERED (lower-scoring pairs are review candidates the in-memory pipeline
     surfaces separately and never clusters — streaming has no review output, so
@@ -975,17 +1094,30 @@ def run_fs_dedupe_streaming(
     fd, db_path = tempfile.mkstemp(prefix="gm_fs_stream_", suffix=".duckdb")
     _os.close(fd)
     _os.unlink(db_path)  # DuckDB creates it
+    # Spill the pair STREAM to the same DuckDB file instead of accumulating every
+    # wave's Arrow table in the driver — the Arrow-side twin of the prep spill.
+    # Clustering then reads the max-score dedup + link filter straight out of
+    # DuckDB (bounded), so the raw O(pairs) stream is never RAM-resident. Only
+    # within the arrow-cluster route; `=0` restores the in-RAM accumulation.
+    spill_pairs = arrow_stream and _fs_ooc_spill_pairs_enabled()
     try:
         # 1+2: load frame into the persistent file + score (frame freed on return).
         pairs = score_fs_out_of_core(
             prepared_df, blocking_config, mk, matched_pairs, em_result,
             target_ids=target_ids, db_path=db_path,
             emit="arrow" if arrow_stream else "tuples",
+            pair_sink="pair_stream" if spill_pairs else None,
         )
         con = duckdb.connect(db_path)
         _configure_ooc_duckdb(con, db_path)
         try:
-            if arrow_stream:
+            if spill_pairs:
+                # `pairs` is the DuckDB sink table name (always created, possibly
+                # empty -> an all-singleton run).
+                assignments, n_pairs = _cluster_arrow_native_from_duckdb(
+                    con, pairs, max_cluster_size, link_threshold,
+                )
+            elif arrow_stream:
                 assignments, n_pairs = _cluster_arrow_native(
                     con, pairs, max_cluster_size, link_threshold,
                 )

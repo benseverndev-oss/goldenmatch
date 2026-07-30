@@ -533,3 +533,43 @@ def test_streaming_bare_frame_still_supported(tmp_path):
 
     res = run_fs_dedupe_streaming(df, blocking, mk, em, cfg, str(tmp_path))
     assert res["unique_count"] + res["dupes_count"] == df.height
+
+
+def _stream_partitions(res_dir):
+    """Sorted dupes row_id partitions for a run_fs_dedupe_streaming result dir —
+    the cluster-outcome fingerprint."""
+    import os
+
+    dupes = os.path.join(res_dir, "dupes.parquet")
+    return _partition_set_from_parquet(dupes) if os.path.exists(dupes) else []
+
+
+@pytest.mark.parametrize("link_threshold", [None, 0.5])
+def test_streaming_pair_spill_parity_with_in_ram(tmp_path, monkeypatch, link_threshold):
+    """The DuckDB pair-STREAM spill (GOLDENMATCH_FS_OOC_SPILL_PAIRS=1, default) — max
+    -score canonical dedup + best-score link filter done in DuckDB SQL — yields the
+    SAME cluster outcome as the in-RAM arrow path (Rust dedup_pairs_arrow kernel),
+    with and without a link threshold. Locks the SQL-dedup == arrow-kernel-dedup
+    equivalence."""
+    import types
+
+    from goldenmatch.backends.fs_out_of_core import run_fs_dedupe_streaming
+
+    df = _bigger_df()
+    mk = _make_probabilistic_mk()
+    blocking = BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])])
+    em = _train(df, blocking, mk)
+    cfg = types.SimpleNamespace(golden_rules=None)
+
+    monkeypatch.setenv("GOLDENMATCH_FS_OOC_SPILL_PAIRS", "0")  # in-RAM arrow oracle
+    res_ram = run_fs_dedupe_streaming(
+        df, blocking, mk, em, cfg, str(tmp_path / "ram"), link_threshold=link_threshold
+    )
+    monkeypatch.setenv("GOLDENMATCH_FS_OOC_SPILL_PAIRS", "1")  # DuckDB spill
+    res_spill = run_fs_dedupe_streaming(
+        df, blocking, mk, em, cfg, str(tmp_path / "spill"), link_threshold=link_threshold
+    )
+
+    for k in ("unique_count", "dupes_count", "golden_count", "pairs"):
+        assert res_ram[k] == res_spill[k], (k, res_ram[k], res_spill[k])
+    assert _stream_partitions(str(tmp_path / "ram")) == _stream_partitions(str(tmp_path / "spill"))
