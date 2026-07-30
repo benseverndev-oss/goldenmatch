@@ -26,7 +26,7 @@ on:
       rows:
         description: "Row count"
         type: string
-        default: "100000000"
+        default: "200000000"
       filler_cols:
         description: "Extra string columns (0 = narrow scale-out shape; ~8 = representative width)"
         type: string
@@ -63,7 +63,7 @@ jobs:
     runs-on: ${{ github.event.inputs.runner || 'large-new-64GB' }}
     timeout-minutes: 240
     env:
-      ROWS: ${{ github.event.inputs.rows || '100000000' }}
+      ROWS: ${{ github.event.inputs.rows || '200000000' }}
       FILLER_COLS: ${{ github.event.inputs.filler_cols || '0' }}
       AVG_BLOCK: ${{ github.event.inputs.avg_block || '8' }}
       BENCH: packages/python/goldenmatch/scripts/bench_fs_streaming_peak.py
