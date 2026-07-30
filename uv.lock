@@ -1086,7 +1086,6 @@ dependencies = [
     { name = "goldenfuzz" },
     { name = "phonenumbers" },
     { name = "pydantic" },
-    { name = "python-dateutil" },
     { name = "python-multipart" },
     { name = "pyyaml" },
     { name = "rich" },
@@ -1172,7 +1171,6 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
-    { name = "python-dateutil", specifier = ">=2.9" },
     { name = "python-multipart", specifier = ">=0.0.20" },
     { name = "python-multipart", marker = "extra == 'dev'", specifier = ">=0.0.20" },
     { name = "pyyaml", specifier = ">=6.0" },
@@ -1213,7 +1211,6 @@ name = "goldenmatch"
 version = "3.10.0"
 source = { editable = "packages/python/goldenmatch" }
 dependencies = [
-    { name = "diptest" },
     { name = "duckdb" },
     { name = "goldenmatch-native", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or sys_platform == 'darwin' or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-11-goldenmatch-inhouse-embeddings' and extra == 'extra-11-goldenmatch-sail') or (sys_platform == 'linux' and extra == 'extra-11-goldenmatch-inhouse-embeddings' and extra == 'extra-11-goldenmatch-sail') or (sys_platform == 'win32' and extra == 'extra-11-goldenmatch-inhouse-embeddings' and extra == 'extra-11-goldenmatch-sail')" },
     { name = "goldenphonetic" },
@@ -1374,7 +1371,6 @@ requires-dist = [
     { name = "boto3", marker = "extra == 's3'", specifier = ">=1.26" },
     { name = "databricks-sql-connector", marker = "extra == 'databricks'", specifier = ">=3.0" },
     { name = "datafusion", marker = "extra == 'datafusion'", specifier = ">=53,<54" },
-    { name = "diptest", specifier = ">=0.5.2" },
     { name = "duckdb", specifier = ">=0.9" },
     { name = "duckdb", marker = "extra == 'bench'", specifier = ">=0.10" },
     { name = "duckdb", marker = "extra == 'duckdb'", specifier = ">=0.9" },
@@ -1442,6 +1438,7 @@ source = { virtual = "." }
 
 [package.dev-dependencies]
 dev = [
+    { name = "diptest" },
     { name = "httpx" },
     { name = "hypothesis" },
     { name = "jellyfish" },
@@ -1451,6 +1448,7 @@ dev = [
     { name = "pytest-cov" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
+    { name = "python-dateutil" },
     { name = "rapidfuzz" },
     { name = "ruff" },
     { name = "scipy" },
@@ -1460,6 +1458,7 @@ dev = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "diptest", specifier = ">=0.5.2" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "hypothesis", specifier = ">=6.0" },
     { name = "jellyfish", specifier = ">=1.0" },
@@ -1469,6 +1468,7 @@ dev = [
     { name = "pytest-cov", specifier = ">=5.0" },
     { name = "pytest-timeout", specifier = ">=2.3" },
     { name = "pytest-xdist", specifier = ">=3.6" },
+    { name = "python-dateutil", specifier = ">=2.9" },
     { name = "rapidfuzz", specifier = ">=3.0" },
     { name = "ruff", specifier = ">=0.6" },
     { name = "scipy", specifier = ">=1.11" },

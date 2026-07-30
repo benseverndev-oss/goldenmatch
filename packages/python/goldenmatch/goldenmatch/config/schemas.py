@@ -1927,10 +1927,14 @@ class RelationshipRule(BaseModel):
     maintained in the same pass.
     """
     field: str = Field(
-        description="Payload field whose shared value relates two entities (e.g. 'phone_number', 'zip5', 'employer').",
+        description="Payload field whose shared value relates two entities (e.g. 'phone_number', 'zip5', 'employer', 'email', 'specialty', 'degree').",
     )
     kind: str = Field(
         description="Relationship label for the emitted edge (e.g. 'shares_phone', 'same_address').",
+    )
+    transform: str | None = Field(
+        default=None,
+        description="Optional derived-value transform applied to `field` before grouping, so edges key on a DERIVED value rather than the literal field: 'email_domain' (the domain after '@'), 'normalize_company' (lowercased, common corp suffixes stripped), 'lower_trim' (lowercased + trimmed, good for specialty/degree), 'zip3' (first 3 chars of a zip). None (default) uses the raw field value.",
     )
     min_entities: int = Field(
         default=2,

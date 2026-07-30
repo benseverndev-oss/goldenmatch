@@ -59,7 +59,12 @@ from goldenmatch.identity.query import (
     promote_claim,
     revoke_claim,
 )
-from goldenmatch.identity.relationships import build_relationships, to_graph_batch
+from goldenmatch.identity.relationships import (
+    build_relationships,
+    profile_relationship_fields,
+    suggest_relationship_rules,
+    to_graph_batch,
+)
 from goldenmatch.identity.resolve import (
     ResolveSummary,
     match_record_to_entity,
@@ -127,6 +132,8 @@ __all__ = [
     "match_record_to_entity",
     "migrate_record_ids",
     "build_relationships",
+    "profile_relationship_fields",
+    "suggest_relationship_rules",
     "to_graph_batch",
     "resolve_clusters",
     "resolve_record_incremental",

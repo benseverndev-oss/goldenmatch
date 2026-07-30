@@ -85,11 +85,17 @@ _OWNED_PINNED = frozenset(
 # corpus); only the lookup-with-fallback loop stays in the host.
 _DATA_DEPENDENT = frozenset({"category_standardize", "category_from_file"})
 
-# Structurally non-byte-portable: date parsing/formatting depends on
-# dateutil's fuzzy parser + non-deterministic partial-date resolution, which
-# MEASURABLY cannot be reproduced byte-for-byte in Rust/TS (see the memory
-# reference_dates_chrono_dateutil_parity + the boundary design doc). Dates stay
-# Python-reference; Polars already vectorizes them, so there is no perf gap.
+# Owned deterministic parser (goldenflow-core::dates), NOT yet in the byte-parity
+# corpus. The date family used to depend on dateutil's fuzzy parser + a Polars
+# fast path; both are gone. `parse_date`/`parse_datetime` in goldenflow-core are
+# now the reference (cargo-tested), with a byte-identical pure-Python fallback
+# that IS the runtime today (dateutil-free, Polars-free). The native/wasm ARROW
+# export (which would move these into the string-keyed corpus like the other
+# families) is a documented follow-up: the date family has 13 heterogeneous
+# output shapes (str/int/bool + parameterized), so wiring it is not the single-
+# `*_arrow` idiom the other families used. Deterministic divergences from the old
+# dateutil path (2-digit POSIX pivot, exotic tail -> passthrough) are documented
+# in dates.rs / dates.py.
 _DEFERRED_DATES = frozenset(
     {
         "date_iso8601",

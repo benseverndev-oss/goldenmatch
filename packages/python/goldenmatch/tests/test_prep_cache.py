@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import goldenmatch as gm
 import polars as pl
+import pytest
 from goldenmatch.core.pipeline import (
     _PREP_CACHE,
     _PREP_CACHE_LRU,
@@ -20,6 +21,18 @@ from goldenmatch.core.pipeline import (
     _prep_cache_clear,
     _prep_cache_signature,
 )
+
+
+@pytest.fixture(autouse=True)
+def _pin_classic_prep_cache_lane(monkeypatch):
+    """The prep cache lives on the classic (polars-lazy) prep branch; the arrow
+    Frame lane does not populate it yet (a tracked port target of the gated
+    over-merge eviction). Direct explicit-config ``dedupe_df`` now routes the
+    arrow lane by default, so pin the classic lane to exercise the cache
+    mechanism these tests own. The cache's real beneficiary -- the auto-config
+    controller -- uses ``auto_config`` and stays classic regardless (see
+    ``test_controller_iterations_hit_cache``)."""
+    monkeypatch.setenv("GOLDENMATCH_FRAME_LANE", "0")
 
 
 def _make_df() -> pl.DataFrame:

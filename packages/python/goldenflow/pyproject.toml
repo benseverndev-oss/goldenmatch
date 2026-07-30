@@ -37,7 +37,6 @@ dependencies = [
     "python-multipart>=0.0.20",
     "uvicorn>=0.30",
     "phonenumbers>=8.13",
-    "python-dateutil>=2.9",
     "pyyaml>=6.0",
     # Composite fuzzy ratios (WRatio for column-name mapping, ratio for
     # auto-correct). goldenfuzz is our owned rapidfuzz replacement -- its

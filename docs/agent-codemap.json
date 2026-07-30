@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 422,
+      "module_count": 423,
       "modules": [
         {
           "module": "goldenmatch",
@@ -1478,6 +1478,14 @@
           ]
         },
         {
+          "module": "goldenmatch.core._dip",
+          "file": "packages/python/goldenmatch/goldenmatch/core/_dip.py",
+          "purpose": "Owned Hartigan dip statistic — GoldenMatch's replacement for the ``diptest``",
+          "defines": [
+            "hartigan_dip"
+          ]
+        },
+        {
           "module": "goldenmatch.core._hashing",
           "file": "packages/python/goldenmatch/goldenmatch/core/_hashing.py",
           "purpose": "Canonical record fingerprint (cross-surface stable hash).",
@@ -1550,6 +1558,7 @@
             "transitivity_rate"
           ],
           "imports": [
+            "goldenmatch.core._dip",
             "goldenmatch.core.frame"
           ]
         },
@@ -2230,6 +2239,7 @@
           "defines": [
             "BlockResult",
             "RowIdBlock",
+            "_AggOversizedBlock",
             "_ann_sub_block",
             "_auto_split_block",
             "_build_ann_blocks",
@@ -3770,6 +3780,7 @@
             "_apply_memory_post",
             "_apply_memory_pre",
             "_apply_postflight",
+            "_arrow_lane_supported",
             "_as_polars_df",
             "_build_em_blocks",
             "_cast_user_cols_to_str",
@@ -6066,8 +6077,11 @@
           "file": "packages/python/goldenmatch/goldenmatch/identity/relationships.py",
           "purpose": "Semantic-graph: entity<->entity relationship edges (#semantic-graph).",
           "defines": [
+            "_candidate_transforms",
             "_entity_name",
             "build_relationships",
+            "profile_relationship_fields",
+            "suggest_relationship_rules",
             "to_graph_batch"
           ],
           "imports": [
@@ -6186,6 +6200,7 @@
           "purpose": "IdentityStore -- SQLite/Postgres persistence for the Identity Graph.",
           "defines": [
             "IdentityStore",
+            "_rel_value_expr",
             "_row_get",
             "_sqlite_batch_size",
             "_sqlite_batch_writes_enabled",
@@ -8089,6 +8104,17 @@
           ]
         },
         {
+          "module": "goldencheck.baseline._owned_stats",
+          "file": "packages/python/goldencheck/goldencheck/baseline/_owned_stats.py",
+          "purpose": "Owned pure-Python statistics kernels -- goldencheck's scipy-free reference for",
+          "defines": [
+            "chi2_contingency_stat",
+            "chi2_gof",
+            "gamma_ur",
+            "pearson_r"
+          ]
+        },
+        {
           "module": "goldencheck.baseline.constraints",
           "file": "packages/python/goldencheck/goldencheck/baseline/constraints.py",
           "purpose": "Constraint mining: functional dependencies, candidate keys, temporal orders.",
@@ -8116,6 +8142,7 @@
           ],
           "imports": [
             "goldencheck._polars_lazy",
+            "goldencheck.baseline._owned_stats",
             "goldencheck.baseline.models",
             "goldencheck.core._native_loader"
           ]
@@ -8200,6 +8227,7 @@
             "goldencheck.baseline",
             "goldencheck.baseline._distributions",
             "goldencheck.baseline._ks",
+            "goldencheck.baseline._owned_stats",
             "goldencheck.baseline.models",
             "goldencheck.core._native_loader"
           ]
@@ -10641,9 +10669,11 @@
         {
           "module": "goldenflow.transforms.dates",
           "file": "packages/python/goldenflow/goldenflow/transforms/dates.py",
+          "purpose": "Date/datetime transforms — backed by an OWNED deterministic parser.",
           "defines": [
             "_age_from_dob_factory",
             "_age_scalar",
+            "_ascii_digits",
             "_date_eu_py",
             "_date_iso8601_py",
             "_date_shift_factory",
@@ -10651,13 +10681,27 @@
             "_date_us_py",
             "_date_validate_py",
             "_datetime_iso8601_py",
+            "_days_in_month",
             "_extract_day_of_week_py",
             "_extract_day_py",
             "_extract_month_py",
             "_extract_quarter_py",
             "_extract_year_py",
+            "_finish",
+            "_interpret_numeric",
+            "_is_leap",
+            "_looks_like_time",
+            "_month_from_name",
             "_parse_date",
-            "_parsed_date_expr",
+            "_parse_date_ymd",
+            "_parse_datetime_ymdhms",
+            "_parse_day_token",
+            "_parse_month_name",
+            "_parse_numeric",
+            "_parse_time",
+            "_parse_year_token",
+            "_peel_time",
+            "_valid_ymd",
             "age_from_dob",
             "date_eu",
             "date_iso8601",
@@ -10674,8 +10718,7 @@
           ],
           "imports": [
             "goldenflow._polars_lazy",
-            "goldenflow.transforms",
-            "goldenflow.transforms._fastpath"
+            "goldenflow.transforms"
           ]
         },
         {

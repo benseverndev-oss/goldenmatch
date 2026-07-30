@@ -76,6 +76,7 @@ describe("resolveClusters parity (Python fixture)", () => {
         records_upserted: summary.recordsUpserted,
         conflicts_flagged: summary.conflictsFlagged,
         relationships_added: summary.relationshipsAdded,
+        relationships_deleted: summary.relationshipsDeleted,
       };
     }
   });
