@@ -55,13 +55,14 @@ pub fn cluster_size_histogram_impl(sizes: &[f64]) -> Vec<f64> {
 //
 // Wave 1b, un-deferred: #1788 moved interning OUT of Arrow into analysis-core's
 // plain-buffer `intern_f64`/`intern_str`, so the SAME equality canon (canon_f64_bits
-// NaN/-0.0 fold; byte string equality; null == validity 0) crosses to WASM with no
-// arrow-rs bloat. Dense value-ids cross as f64 (exact ints well within 2^53, the same
+// NaN/-0.0 fold; byte string equality; null via the packed Arrow validity bitmap)
+// crosses to WASM with no arrow-rs bloat. Dense value-ids cross as f64 (exact ints well within 2^53, the same
 // convention histogram counts use). The TS surface routes numeric columns through
 // `intern_f64` (JS has one number type) + string columns through `intern_str`, and
 // falls back to pure-TS for bool/mixed columns.
 
-/// Intern a numeric column to dense value-ids (as f64). `validity[i]==0` => null (id 0).
+/// Intern a numeric column to dense value-ids (as f64). `validity` is a packed
+/// LSB-first Arrow validity bitmap (bit set = valid; empty = all valid); null => id 0.
 pub fn intern_f64_impl(values: &[f64], validity: &[u8]) -> Vec<f64> {
     intern_f64(values, validity)
         .into_iter()
@@ -70,7 +71,8 @@ pub fn intern_f64_impl(values: &[f64], validity: &[u8]) -> Vec<f64> {
 }
 
 /// Intern a UTF-8 column (Arrow utf8 layout `offsets[n+1]` + `bytes`) to dense value-ids
-/// (as f64). `validity[i]==0` => null (id 0); an empty slice is a valid empty string.
+/// (as f64). `validity` is a packed LSB-first Arrow bitmap (bit set = valid; empty = all
+/// valid); null => id 0. An empty byte-span is a valid empty string (distinct from null).
 pub fn intern_str_impl(offsets: &[u32], bytes: &[u8], validity: &[u8]) -> Vec<f64> {
     intern_str(offsets, bytes, validity)
         .into_iter()
@@ -161,12 +163,24 @@ mod tests {
     // Frame kernels: assert the wasm impls reproduce frame_kernels_adversarial.json
     // (the same fixture the pure-TS + Python paths lock), so the reroute is byte-faithful.
 
+    /// Pack a byte-per-row validity mask (1 = valid) into the packed LSB-first Arrow
+    /// bitmap the interners consume -- the SAME layout `aggregate.ts` now emits.
+    fn pack(valid: &[u8]) -> Vec<u8> {
+        let mut bits = vec![0u8; valid.len().div_ceil(8)];
+        for (i, &v) in valid.iter().enumerate() {
+            if v != 0 {
+                bits[i >> 3] |= 1 << (i & 7);
+            }
+        }
+        bits
+    }
+
     #[test]
     fn frame_float_nan_null_matches_fixture() {
         // f = [-0.0, 0.0, NaN, NaN, null, 1.0, 1.0]  (fixture: distinct 4, dup 6/7)
         let ids = intern_f64_impl(
             &[-0.0, 0.0, f64::NAN, f64::NAN, 0.0, 1.0, 1.0],
-            &[1, 1, 1, 1, 0, 1, 1],
+            &pack(&[1, 1, 1, 1, 0, 1, 1]),
         );
         assert_eq!(distinct_count_ids_impl(&ids), 4.0);
         assert!((duplicate_row_ratio_ids_impl(&ids, 1, 7) - 6.0 / 7.0).abs() < 1e-12);
@@ -175,7 +189,11 @@ mod tests {
     #[test]
     fn frame_string_empty_null_matches_fixture() {
         // s = ["a","a","",null,"a","b",null]  (fixture: distinct 4, dup 5/7)
-        let ids = intern_str_impl(&[0, 1, 2, 2, 2, 3, 4, 4], b"aaab", &[1, 1, 1, 0, 1, 1, 0]);
+        let ids = intern_str_impl(
+            &[0, 1, 2, 2, 2, 3, 4, 4],
+            b"aaab",
+            &pack(&[1, 1, 1, 0, 1, 1, 0]),
+        );
         assert_eq!(distinct_count_ids_impl(&ids), 4.0);
         assert!((duplicate_row_ratio_ids_impl(&ids, 1, 7) - 5.0 / 7.0).abs() < 1e-12);
     }
@@ -185,10 +203,17 @@ mod tests {
         // mixed f/i/s (fixture: distinct 4/3/4, dup 2/7 over the 3-col rows)
         let f = intern_f64_impl(
             &[-0.0, 0.0, f64::NAN, f64::NAN, 0.0, 1.0, 1.0],
-            &[1, 1, 1, 1, 0, 1, 1],
+            &pack(&[1, 1, 1, 1, 0, 1, 1]),
         );
-        let i = intern_f64_impl(&[5.0, 5.0, 3.0, 3.0, 0.0, 5.0, 5.0], &[1, 1, 1, 1, 0, 1, 1]);
-        let s = intern_str_impl(&[0, 1, 2, 2, 2, 3, 4, 4], b"aaab", &[1, 1, 1, 0, 1, 1, 0]);
+        let i = intern_f64_impl(
+            &[5.0, 5.0, 3.0, 3.0, 0.0, 5.0, 5.0],
+            &pack(&[1, 1, 1, 1, 0, 1, 1]),
+        );
+        let s = intern_str_impl(
+            &[0, 1, 2, 2, 2, 3, 4, 4],
+            b"aaab",
+            &pack(&[1, 1, 1, 0, 1, 1, 0]),
+        );
         assert_eq!(distinct_count_ids_impl(&f), 4.0);
         assert_eq!(distinct_count_ids_impl(&i), 3.0);
         assert_eq!(distinct_count_ids_impl(&s), 4.0);
@@ -247,14 +272,15 @@ mod wasm {
     }
 
     /// JS entry: intern a numeric column to dense value-ids (Float64Array). `validity`
-    /// is one byte per row (0 = null).
+    /// is a packed LSB-first Arrow bitmap (bit set = valid; empty = all valid).
     #[wasm_bindgen]
     pub fn intern_f64(values: &[f64], validity: &[u8]) -> Vec<f64> {
         intern_f64_impl(values, validity)
     }
 
     /// JS entry: intern a UTF-8 column (`offsets`[n+1] + `bytes`, Arrow utf8 layout) to
-    /// dense value-ids (Float64Array). `validity` is one byte per row (0 = null).
+    /// dense value-ids (Float64Array). `validity` is a packed LSB-first Arrow bitmap
+    /// (bit set = valid; empty = all valid).
     #[wasm_bindgen]
     pub fn intern_str(offsets: &[u32], bytes: &[u8], validity: &[u8]) -> Vec<f64> {
         intern_str_impl(offsets, bytes, validity)
