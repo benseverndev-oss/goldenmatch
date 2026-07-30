@@ -36,8 +36,38 @@ def _df():
 
 class TestSerializerAndParse:
     def test_serialize_pair_v1_is_deterministic_field_order(self):
+        # Rendering is the canonical prompt.serialize_pair_v1 (2-space indent,
+        # sorted-union field order, single-newline record separator).
         s = L.serialize_pair_v1({"b": 2, "a": 1}, {"a": 9, "b": 8}, ["a", "b"])
-        assert s == "Record A:\na: 1\nb: 2\n\nRecord B:\na: 9\nb: 8"
+        assert s == "Record A:\n  a: 1\n  b: 2\nRecord B:\n  a: 9\n  b: 8"
+
+    def test_serialize_pair_v1_is_single_sourced_from_prompt(self):
+        # The model is fine-tuned on core.er_matcher.prompt.serialize_pair_v1;
+        # Path B MUST render byte-identically or it feeds the model OOD prompts
+        # the registry's version-string drift guard cannot catch.
+        from goldenmatch.core.er_matcher.prompt import (
+            SYSTEM_RUBRIC,
+            build_chat,
+        )
+        from goldenmatch.core.er_matcher.prompt import (
+            serialize_pair_v1 as canonical,
+        )
+
+        a = {"name": "Ann Lee", "city": "NYC", "email": None}
+        b = {"name": "ann lee", "email": "a@x.io"}
+        cols = sorted(set(a) | set(b))
+        assert L.serialize_pair_v1(a, b, cols) == canonical(a, b)
+        # and the adapter's messages carry the canonical system rubric + user turn
+        msgs = build_chat(a, b)
+        assert msgs[0] == {"role": "system", "content": SYSTEM_RUBRIC}
+        assert msgs[1]["content"] == canonical(a, b)
+
+    def test_serialize_pair_v1_projects_out_internal_columns(self):
+        # __row_id__ and other internals must not leak into the prompt.
+        a = {"__row_id__": 7, "name": "Ann"}
+        b = {"__row_id__": 9, "name": "Ann"}
+        s = L.serialize_pair_v1(a, b, ["name"])
+        assert "__row_id__" not in s and "7" not in s
 
     def test_parse_verdict_plain_json(self):
         assert L.parse_verdict('{"match": true, "confidence": 0.9}') == (True, 0.9)

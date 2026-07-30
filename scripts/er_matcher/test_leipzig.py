@@ -124,3 +124,48 @@ def test_no_shortfall_warning_on_fixture():
     shortfall_warnings = [w for w in caught if "negatives after gold-filter" in str(w.message)]
     assert not shortfall_warnings
     assert sum(r["label"] == "no_match" for r in rows) == 2
+
+
+FIX_MM = Path(__file__).parent / "tests" / "fixtures" / "leipzig_manytomany"
+
+
+def test_manytomany_negatives_never_same_entity():
+    """Regression for the negative-mining label flip: on a many-to-many source a
+    sampled cross-table pair can belong to the SAME entity (connected component)
+    without a DIRECT gold edge. Filtering negatives by gold-pair MEMBERSHIP (not
+    entity-key equality) would emit that true match as `no_match` -- silent
+    training-label corruption. Assert no emitted negative is same-entity.
+
+    Fixture: mapping a1-b1, a1-b2, a2-b2 => entity {a1,a2,b1,b2}; (a2,b1) is
+    same-entity but NOT a direct gold edge. a3-b3 is a distinct entity (so valid
+    cross-entity negatives still exist).
+    """
+    # Single split (val/test frac 0) co-locates both entities so cross-table
+    # negatives -- including the same-entity (a2,b1) -- are actually generated,
+    # making the invariant non-vacuous (it fails on the old gold_set check).
+    src = LeipzigSource(name="mm", root=FIX_MM, domain="product", block_fields=["title"],
+                        seed=1, val_frac=0.0, test_frac=0.0)
+    entities = src._entities()
+    gold = src._read_gold_pairs()
+    key_of = src._key_of(entities, gold)
+
+    negs = {(r["eid_a"], r["eid_b"]) for r in _all_rows(src) if r["label"] == "no_match"}
+    assert negs  # negatives were actually generated (else the test is vacuous)
+    for a, b in negs:
+        assert key_of[a] != key_of[b], f"same-entity pair {a},{b} mislabeled no_match"
+
+    # the specific transitive same-entity pair must never surface as a negative
+    both = negs | {(b, a) for a, b in negs}
+    assert ("A:a2", "B:b1") not in both
+
+
+def test_manytomany_still_emits_cross_entity_negatives():
+    """The fix must not over-prune: distinct entities (a3-b3 vs the {a1,a2,b1,b2}
+    component) still produce valid negatives, so the corpus keeps hard negatives."""
+    src = LeipzigSource(name="mm", root=FIX_MM, domain="product", block_fields=["title"],
+                        seed=1, val_frac=0.0, test_frac=0.0)
+    entities = src._entities()
+    key_of = src._key_of(entities, src._read_gold_pairs())
+    negs = {(r["eid_a"], r["eid_b"]) for r in _all_rows(src) if r["label"] == "no_match"}
+    # at least one negative spans the two distinct entities
+    assert any(key_of[a] != key_of[b] for a, b in negs)
