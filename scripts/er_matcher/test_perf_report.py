@@ -92,6 +92,39 @@ def test_gate_nogo_on_oom():
     assert any(c["check"] == "memory" and not c["passed"] for c in g.checks)
 
 
+def test_gate_advisory_on_empty_learning_curve():
+    # A single --smoke run emits no slice sweep -> empty learning_curve. That must
+    # be advisory (not measured), NOT a hard NO-GO; otherwise the documented
+    # smoke->gate flow could never return GO.
+    m = _good_metrics()
+    m["learning_curve"] = []
+    g = pr.evaluate_perf_gate(m)
+    assert g.go is True
+    lc = next(c for c in g.checks if c["check"] == "learning_curve")
+    assert lc["passed"] is True and "not measured" in lc["detail"]
+
+
+def test_gate_advisory_on_missing_gpu_util():
+    # gpu_util None means telemetry unavailable (pynvml absent), NOT 0% data-bound.
+    m = _good_metrics()
+    m["gpu_util"] = None
+    g = pr.evaluate_perf_gate(m)
+    assert g.go is True
+    gu = next(c for c in g.checks if c["check"] == "gpu_util")
+    assert gu["passed"] is True and "not measured" in gu["detail"]
+
+
+def test_gate_memory_applies_headroom():
+    # peak just under raw capacity but over the 90%-derated usable ceiling must fail.
+    m = _good_metrics()
+    m["peak_mem_gb"] = 23.0  # < 24 raw, but > 0.9*24 = 21.6 usable
+    g = pr.evaluate_perf_gate(m)
+    assert g.go is False
+    assert any(c["check"] == "memory" and not c["passed"] for c in g.checks)
+    # slacker headroom passes it
+    assert pr.evaluate_perf_gate(m, mem_headroom=1.0).go is True
+
+
 def test_extrapolate_on_tier_prices_at_tier_rate():
     tier = gpu_tiers.Tier("L4", 24.0, 0.80)
     ext = pr.extrapolate_on_tier(

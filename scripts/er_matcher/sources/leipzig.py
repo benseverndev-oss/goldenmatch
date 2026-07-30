@@ -104,9 +104,6 @@ class LeipzigSource:
     def splits(self) -> dict[str, list[Row]]:
         entities = self._entities()
         gold_pairs = self._read_gold_pairs()
-        # Order-normalized so a sampled negative is caught regardless of
-        # which side synth_negatives happened to put first.
-        gold_set = {(a, b) for a, b in gold_pairs} | {(b, a) for a, b in gold_pairs}
         # Connected components over the gold-match edges give every A-side
         # and B-side record a stable ENTITY key (Task 1 fix). A gold pair's
         # two records are always unioned into the same entity, so eid_a and
@@ -150,9 +147,15 @@ class LeipzigSource:
             for eid_a, eid_b, _tag in candidates:
                 if kept >= n_positives:
                     break
-                if (eid_a, eid_b) in gold_set:
+                if key_of.get(eid_a) == key_of.get(eid_b):
                     # A sampled "negative" that is actually a true match --
-                    # dropping it is correctness-critical, not cosmetic.
+                    # dropping it is correctness-critical, not cosmetic. We test
+                    # ENTITY-key equality (connected components over the gold edges),
+                    # NOT direct gold-pair membership: on many-to-many sources
+                    # (amazon_google, dblp_scholar) two records can belong to the
+                    # same entity without a DIRECT gold edge between them, and a
+                    # gold_set-membership check would emit that true match as a
+                    # `no_match` -- silent training-label corruption.
                     continue
                 out[split].append(self._row(entities, eid_a, eid_b, "no_match"))
                 kept += 1

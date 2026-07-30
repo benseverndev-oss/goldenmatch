@@ -201,16 +201,17 @@ def _norm(v: Any) -> str:
     return "" if v is None else str(v).strip().lower()
 
 
-def serialized_token_lengths(rows: Iterable[dict[str, Any]], tokenizer: Any) -> list[int]:
-    """Token length of each serialized pair (system+user+target) under the real
-    tokenizer -- feeds measured_max_seq_len. Tokenizer is injected so this is
-    testable with a stub (len-of-split) without transformers."""
-    out = []
-    for row in rows:
-        msgs = example_to_messages(row, TrainConfig())
-        text = "\n".join(m["content"] for m in msgs)
-        out.append(len(tokenizer(text)))
-    return out
+def serialized_token_lengths(rows: Iterable[dict[str, Any]], tokenize_messages: Any) -> list[int]:
+    """Token length of each training example under the SAME tokenization the
+    trainer uses -- the chat-templated (system+user+target) message sequence.
+
+    ``tokenize_messages(messages) -> Sequence`` is injected: the GPU caller passes
+    ``lambda msgs: tokenizer.apply_chat_template(msgs, tokenize=True)`` so the
+    measured P95 includes the per-turn special tokens (``<|im_start|>`` etc.) --
+    a naive ``"\\n".join(content)`` omits them and under-measures max_seq_len,
+    making truncation more common than intended. Injecting the tokenizer keeps
+    this testable with a stub (no transformers)."""
+    return [len(tokenize_messages(example_to_messages(row, TrainConfig()))) for row in rows]
 
 
 # --- IO ----------------------------------------------------------------------
