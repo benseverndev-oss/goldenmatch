@@ -37,9 +37,12 @@ dependencies = [
     "python-multipart>=0.0.20",
     "uvicorn>=0.30",
     "phonenumbers>=8.13",
-    "python-dateutil>=2.9",
     "pyyaml>=6.0",
-    "rapidfuzz>=3.0",
+    # Composite fuzzy ratios (WRatio for column-name mapping, ratio for
+    # auto-correct). goldenfuzz is our owned rapidfuzz replacement -- its
+    # WRatio/ratio are byte-identical to rapidfuzz's fuzz.* (0.1.1 adds the
+    # fuzz.* composite family). Replaces the former rapidfuzz runtime dep.
+    "goldenfuzz>=0.1.1",
 ]
 
 [project.optional-dependencies]

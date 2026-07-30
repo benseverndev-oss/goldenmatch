@@ -187,7 +187,7 @@ def test_reload_repopulates_cache_so_add_skips_known_text(tmp_path):
 
 
 def test_numpy_fallback_path(tmp_path, monkeypatch):
-    monkeypatch.setattr(ann_blocker, "_HAS_FAISS", False)
+    monkeypatch.setattr(ann_blocker, "_HAS_HNSW", False)
     idx = VectorIndex(tmp_path / "vi", column="name").build(CORP)
     hits = idx.query("acme corporation", k=1)
     assert hits and hits[0].record["name"] == "acme corporation"

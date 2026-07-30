@@ -16,15 +16,15 @@ def histogram_20(scores: list[float]) -> list[int]:
 def hartigan_dip(scores: list[float]) -> float:
     """Hartigan's dip statistic. Returns value in [0, 0.25]; small=unimodal.
 
-    Hard-requires the ``diptest`` package (added as dep in Task 2.2).
+    Uses GoldenMatch's owned kernel (``core._dip``), a byte-identical port of the
+    ``diptest`` C algorithm -- no ``diptest`` runtime dependency. ``diptest``
+    stays a test-only parity oracle in the workspace dev group.
     """
     if not scores:
         return 0.0
-    import diptest
-    import numpy as np
-    # diptest.dipstat overload returns float | tuple[float, dict]; the no-extra
-    # path returns float at runtime, but the stub union confuses pyright.
-    return float(diptest.dipstat(np.asarray(scores)))  # pyright: ignore[reportArgumentType]  # diptest stub returns union; runtime is always float in the no-pval branch
+    from goldenmatch.core._dip import hartigan_dip as _owned_dip
+
+    return _owned_dip(scores)
 
 
 def mass_above(scores: list[float], threshold: float) -> float:

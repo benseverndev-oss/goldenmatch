@@ -39,19 +39,18 @@ def _pure_scores(scorer_name: str, a: Any, b: Any) -> list[float]:
     """The pure-Python rapidfuzz floor + parity reference. ``a``/``b`` are
     iterables of ``str | None`` (None scored as ""); returns list[float] in
     [0, 1]."""
-    from rapidfuzz import fuzz
-    from rapidfuzz.distance import JaroWinkler, Levenshtein
+    from goldenmatch.core import strsim
 
     if scorer_name == "jaro_winkler":
         def score(x: Any, y: Any) -> float:
-            return JaroWinkler.normalized_similarity(x or "", y or "")
+            return strsim.jaro_winkler_normalized_similarity(x or "", y or "")
     elif scorer_name == "levenshtein":
         def score(x: Any, y: Any) -> float:
-            return Levenshtein.normalized_similarity(x or "", y or "")
+            return strsim.levenshtein_normalized_similarity(x or "", y or "")
     elif scorer_name == "token_sort":
         # repo convention: normalize the 0-100 ratio scorer to [0, 1].
         def score(x: Any, y: Any) -> float:
-            return fuzz.token_sort_ratio(x or "", y or "") / 100.0
+            return strsim.token_sort_ratio(x or "", y or "") / 100.0
     else:
         raise NotImplementedError(
             f"Sail supports scorers {_SUPPORTED}; got {scorer_name!r}."

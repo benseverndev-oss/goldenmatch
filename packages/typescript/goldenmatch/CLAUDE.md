@@ -270,6 +270,9 @@ npx vitest run tests/parity/        # parity-only suite
 ## Edge-safety rule
 `src/core/**` MUST NOT import `node:*`. Node-only code lives in `src/node/`. Memory backed by SQLite is `src/node/memory/`; the edge-safe interface is `src/core/memory/`. This is enforced by build separation, not by lint — verify when adding new imports.
 
+## Batteries (`.`) vs lean core (`./core`) — the two runtime entries (v1.26.0)
+The bare `goldenmatch` root (`src/index.ts`) is **batteries-included**: it re-exports all of `./core` AND auto-enables the fs-core wasm kernel (`enableFsWasmScoring()` side-effect on import), so the DEFAULT `dedupe()`/`match()` probabilistic path runs the shared kernel (Python's #1854 operating point). `goldenmatch/core` (`src/core/index.ts`) stays **lean + opt-in** — identical API, pure-TS FS scoring, no wasm bytes — and keeps the "no wasm in the core bundle" discipline every sibling reroute respects. Edge/size-sensitive callers import `goldenmatch/core`; batteries callers wanting pure-TS call `disableFsWasmScoring()` (re-exported from the root). The ~187 KB fs-wasm is registered eagerly but compiled lazily (first kernel-eligible block). The flip was gated on a MEASURED F1 delta (F1-neutral), locked in `tests/unit/fs-default-f1-measure.test.ts` — whose header documents the tiny-sample-EM degeneracy that made an earlier draft measurement over-report a bogus regression. So: `src/index.ts` is the ONE place `src/core/**`'s no-wasm rule is (deliberately) not re-imposed — it is not under `src/core/`.
+
 ## Strict TS
 `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes`. Idioms:
 - Bounded-loop indices: use `arr[i]!` after a length check.

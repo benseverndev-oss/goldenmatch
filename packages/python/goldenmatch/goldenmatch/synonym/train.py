@@ -5,7 +5,7 @@ Jaccard, Jaro-Winkler, shared-prefix ratio, length ratio + bias), trained on the
 committed PUBLIC pairs (`data/drug_synonyms.train.jsonl`). Genuinely trained, but
 its ceiling is the features' signal: morphological synonyms (spelling/salt) are
 learnable; arbitrary brand<->generic (Advil<->ibuprofen) has no morphological
-signal, so the model can't learn it (the measured ceiling). numpy + rapidfuzz
+signal, so the model can't learn it (the measured ceiling). numpy + owned strsim
 only; CPU-instant; seeded → reproducible (committed weights re-derive exactly).
 """
 
@@ -15,7 +15,8 @@ import json
 from pathlib import Path
 
 import numpy as np
-from rapidfuzz.distance import JaroWinkler
+
+from goldenmatch.core import strsim
 
 _DATA = Path(__file__).resolve().parent / "data" / "drug_synonyms.train.jsonl"
 _MODEL = Path(__file__).resolve().parent / "data" / "drug_synonym_model.json"
@@ -45,7 +46,7 @@ def _jaccard(a: str, b: str, n: int) -> float:
 
 def pair_features(a: str, b: str) -> np.ndarray:
     a, b = _norm(a), _norm(b)
-    jw = float(JaroWinkler.similarity(a, b))
+    jw = float(strsim.jaro_winkler_similarity(a, b))
     p = 0
     for ca, cb in zip(a, b):
         if ca == cb:

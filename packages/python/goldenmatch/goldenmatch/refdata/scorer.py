@@ -24,9 +24,8 @@ from __future__ import annotations
 import math
 
 import numpy as np
-from rapidfuzz.distance import JaroWinkler
-from rapidfuzz.process import cdist
 
+from goldenmatch.core import strsim
 from goldenmatch.plugins.registry import PluginRegistry
 from goldenmatch.refdata.given_names import (
     aliases_of,
@@ -71,7 +70,7 @@ class NameFreqWeightedJW(ScorerPlugin):
 
     Algorithm::
 
-        jw = JaroWinkler.similarity(a, b)
+        jw = strsim.jaro_winkler_similarity(a, b)
         if jw >= _BORDERLINE_HIGH or jw < _BORDERLINE_LOW:
             return jw                         # confident — no re-weighting
         if either side is OOV in the bundled table:
@@ -92,7 +91,7 @@ class NameFreqWeightedJW(ScorerPlugin):
     ) -> float | None:
         if val_a is None or val_b is None:
             return None
-        jw = JaroWinkler.similarity(val_a, val_b)
+        jw = strsim.jaro_winkler_similarity(val_a, val_b)
         # Data-driven branch (#1207 PR2a): when a per-dataset frequency table is
         # supplied, downweight agreements on common values across the WHOLE JW
         # range. tf_freqs is keyed on POST-transform values; score_pair receives
@@ -135,7 +134,7 @@ class NameFreqWeightedJW(ScorerPlugin):
         n = len(values)
         clean = [v if v is not None else "" for v in values]
         jw = np.asarray(
-            cdist(clean, clean, scorer=JaroWinkler.similarity),
+            strsim.pure_field_matrix(clean, "jaro_winkler"),
             dtype=np.float32,
         )
         # Data-driven branch (#1207 PR2a): short-circuits the static census path.
@@ -182,7 +181,7 @@ class GivenNameAliasedJW(ScorerPlugin):
         if a and b are known aliases of the same canonical name:
             return 1.0          # William ↔ Bill, Robert ↔ Bob, etc.
         else:
-            return JaroWinkler.similarity(a, b)
+            return strsim.jaro_winkler_similarity(a, b)
 
     Net effect: pairs that plain JW would score low (William vs Bill,
     JW ~= 0.55) but that are actually the same person get promoted to
@@ -197,7 +196,7 @@ class GivenNameAliasedJW(ScorerPlugin):
             return None
         if given_names_available() and are_equivalent(val_a, val_b):
             return 1.0
-        return JaroWinkler.similarity(val_a, val_b)
+        return strsim.jaro_winkler_similarity(val_a, val_b)
 
     def score_matrix(self, values: list[str | None]) -> np.ndarray:
         """Vectorized N×N scorer.
@@ -221,7 +220,7 @@ class GivenNameAliasedJW(ScorerPlugin):
         n = len(values)
         clean = [v if v is not None else "" for v in values]
         base = np.asarray(
-            cdist(clean, clean, scorer=JaroWinkler.similarity),
+            strsim.pure_field_matrix(clean, "jaro_winkler"),
             dtype=np.float32,
         )
         if n == 0 or not given_names_available():

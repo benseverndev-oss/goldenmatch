@@ -47,6 +47,14 @@ throughput:
   - 'packages/python/goldenmatch/goldenmatch/core/autoconfig_planner.py'
   - 'packages/python/goldenmatch/goldenmatch/config/schemas.py'
   - 'scripts/bench_corpus_dedup/**'
+  # The gate now builds + runs the native bit-parallel scoring kernel for the
+  # controller's fuzzy profiling pass, so a change to the scoring cores (or the
+  # pyo3 wrapper) must re-run it -- a kernel regression there is exactly what
+  # would re-slow (or drift) the profiling.
+  - 'packages/rust/extensions/goldenfuzz-core/**'
+  - 'packages/rust/extensions/score-core/**'
+  - 'packages/rust/extensions/native/**'
+  - 'packages/python/goldenmatch/goldenmatch/core/strsim.py'
   - '.github/workflows/ci.yml'
 python_goldencheck:
   - 'packages/python/goldencheck/**'
@@ -461,6 +469,15 @@ config_matrix:
   - 'packages/python/*/pyproject.toml'
   - 'packages/typescript/*/package.json'
   - 'parity/*.yaml'
+  - '.github/workflows/ci.yml'
+  - '.github/filters.yml'
+# OSS ER-matcher box-safe tests (plan 2026-07-26 §Testing): the repo-root
+# scripts/er_matcher/ suite (data-gen, eval/ship-gate, P3a perf gate, P3 trainer
+# pure helpers). The shared prompt contract lives in the goldenmatch package, so a
+# change there can move the serializer/parse contract the scripts depend on.
+er_matcher:
+  - 'scripts/er_matcher/**'
+  - 'packages/python/goldenmatch/goldenmatch/core/er_matcher/**'
   - '.github/workflows/ci.yml'
   - '.github/filters.yml'
 # Native-symbol reconciliation gate: the goldenmatch host's

@@ -1,0 +1,149 @@
+{
+  "_comment": "AUTHORED by the Python native score_block_pairs_fs (the oracle) with negative evidence + custom level-banding + a partial-MISSING field. fs-wasm calls the SAME fs-core::score_fs_pair -> byte-identical. This is the fs-default-ts-path PR2 cross-language GATE. No require_positive_evidence / missing_disagree (both default off), matching the fs-wasm entry. Regenerate: python scripts/emit_fs_wasm_fixture.py",
+  "field_values": [
+    [
+      "robert",
+      "robert",
+      "rupert",
+      "robert",
+      "xyzzy"
+    ],
+    [
+      "A1",
+      "A1",
+      "A1",
+      "B2",
+      "Z9"
+    ],
+    [
+      "paris",
+      "paris",
+      null,
+      "london",
+      "tokyo"
+    ]
+  ],
+  "row_ids": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "block_sizes": [
+    5
+  ],
+  "scorer_ids": [
+    0,
+    3,
+    0
+  ],
+  "levels": [
+    3,
+    2,
+    2
+  ],
+  "partial_thresholds": [
+    0.8,
+    0.9,
+    0.8
+  ],
+  "match_weights": [
+    [
+      -2.0,
+      0.5,
+      3.0
+    ],
+    [
+      -1.5,
+      2.5
+    ],
+    [
+      -1.0,
+      2.0
+    ]
+  ],
+  "calibrated": false,
+  "prior_w": 0.0,
+  "min_weight": -7.5,
+  "weight_range": 15.0,
+  "threshold": -1000000000.0,
+  "level_thresholds": [
+    [
+      0.95,
+      0.3
+    ],
+    null,
+    null
+  ],
+  "ne_values": [
+    [
+      "1990",
+      "1990",
+      "1985",
+      "1990",
+      "1971"
+    ]
+  ],
+  "ne_scorer_ids": [
+    3
+  ],
+  "ne_thresholds": [
+    0.5
+  ],
+  "ne_weights": [
+    -3.0
+  ],
+  "expected_pairs": [
+    [
+      0,
+      1,
+      1.0
+    ],
+    [
+      0,
+      2,
+      0.5
+    ],
+    [
+      0,
+      3,
+      0.533333
+    ],
+    [
+      0,
+      4,
+      0.0
+    ],
+    [
+      1,
+      2,
+      0.5
+    ],
+    [
+      1,
+      3,
+      0.533333
+    ],
+    [
+      1,
+      4,
+      0.0
+    ],
+    [
+      2,
+      3,
+      0.233333
+    ],
+    [
+      2,
+      4,
+      0.066667
+    ],
+    [
+      3,
+      4,
+      0.0
+    ]
+  ]
+}

@@ -42,15 +42,16 @@ def create_baseline(
         A fully-populated baseline profile.
     """
     # ------------------------------------------------------------------
-    # Guard: scipy + numpy must be importable before any heavy work.
+    # Guard: numpy must be importable before any heavy work. (The baseline
+    # subsystem is scipy-free -- chi-squared / Pearson / KS / distribution MLEs
+    # are owned in `goldencheck.baseline`; only numpy + polars are needed.)
     # ------------------------------------------------------------------
     try:
         import numpy  # noqa: F401
-        import scipy  # noqa: F401
     except ImportError as exc:
         raise ImportError(
-            "scipy and numpy are required for deep-profiling baseline. "
-            "Install them with: pip install 'goldencheck[baseline]'"
+            "numpy is required for deep-profiling baseline. "
+            "Install it with: pip install 'goldencheck[baseline]'"
         ) from exc
 
     skip_set: set[str] = set(skip or [])

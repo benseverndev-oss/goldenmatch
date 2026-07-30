@@ -1,0 +1,23 @@
+# Standalone workspace (same rationale as the sibling goldenfuzz-core / score-core
+# / fingerprint-core crates): a pyo3-free, dependency-free phonetic-encoder kernel
+# that can be a path dependency of any core / native / wasm surface without those
+# workspaces claiming it. This is the "goldenphonetic" boundary: our own
+# byte-identical port of the Python `jellyfish` (>=1.0) phonetic algorithms
+# (soundex / metaphone / nysiis / match_rating), including jellyfish's exact
+# uppercasing + NFKD unicode handling. Zero runtime deps -- std only (the NFKD
+# table is vendored as generated static data, see scripts/gen_nfkd_table.py).
+[workspace]
+
+[package]
+name = "goldenphonetic-core"
+version = "0.1.1"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "Cross-surface, byte-identical-to-jellyfish phonetic encoders (soundex / metaphone / nysiis / match-rating), pyo3-free, zero runtime deps."
+repository = "https://github.com/benseverndev-oss/goldenmatch"
+keywords = ["phonetic", "soundex", "metaphone", "nysiis", "jellyfish"]
+categories = ["text-processing", "algorithms"]
+
+[lib]
+name = "goldenphonetic_core"

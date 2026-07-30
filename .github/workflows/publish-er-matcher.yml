@@ -1,0 +1,178 @@
+name: Publish ER-matcher GGUF
+
+# P4 of the OSS ER-matcher (plan/spec 2026-07-26). Converts the trained + merged
+# fp16 model (from the Modal full run, plan §Phase 3b) to quantized GGUF via
+# llama.cpp, computes sha256, uploads to a GitHub Release in THIS org, and prints
+# the exact registry pin to paste into
+# `packages/python/goldenmatch/goldenmatch/core/er_matcher/registry.py`.
+#
+# The repo ships ONLY the pin (url + sha256); the GGUF lives on the Release asset
+# (a direct-download URL `resolve_model` verifies by sha256 -- never-black-box).
+# CPU-only: llama.cpp convert + quantize run on ubuntu-latest (no GPU needed here;
+# the GPU work is the training run, done on Modal out-of-band).
+#
+# workflow_dispatch ONLY -- it is never automatic. Run it after the P5 eval gate
+# passes (a model must WIN before it ships).
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_source:
+        description: "Merged fp16 model: an https URL of a tarball/zip, OR modal://<volume>/<remote-path> to pull straight from a Modal volume"
+        required: true
+      tier:
+        description: "Model tier (fills the GGUF filename + which registry pin to print)"
+        required: true
+        default: "3b"
+        type: choice
+        options: ["3b", "7b"]
+      release_tag:
+        description: "Release tag to create (fresh tag; e.g. er-matcher-3b-v1.0.0 — a burned immutable tag can't be reused)"
+        required: true
+      quant:
+        description: "Quantization types to build (space-separated). Each asset must be < 2 GiB (GitHub release cap) — q8_0/f16 exceed it for a 3B+ model."
+        required: false
+        default: "q4_k_m"
+
+permissions:
+  contents: write   # create the Release + upload assets
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Fetch llama.cpp (Python converter + quantize binary)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Pin the Python converter and the quantize binary to the SAME llama.cpp
+          # release (GGUF format match), and PREFER the prebuilt ubuntu binary so
+          # the runner never OOMs compiling libllama's hundreds of per-architecture
+          # model .cpp files (the exit-143 shutdown). Fall back to a throttled
+          # source build (-j2, quantize target only) if the prebuilt can't run here.
+          LCPP_TAG="$(gh release view --repo ggml-org/llama.cpp --json tagName -q .tagName)"
+          echo "llama.cpp release: $LCPP_TAG"
+          git clone --depth 1 --branch "$LCPP_TAG" https://github.com/ggml-org/llama.cpp
+          pip install -r llama.cpp/requirements.txt
+          mkdir -p bin
+          asset="$(gh release view "$LCPP_TAG" --repo ggml-org/llama.cpp --json assets \
+            -q '.assets[].name | select(test("ubuntu-x64\\.zip$"))' | head -1 || true)"
+          ok=0
+          if [ -n "$asset" ]; then
+            echo "prebuilt asset: $asset"
+            gh release download "$LCPP_TAG" --repo ggml-org/llama.cpp --pattern "$asset" --output lcpp.zip
+            unzip -o lcpp.zip -d lcpp
+            find lcpp -type f \( -name 'llama-quantize' -o -name '*.so*' \) -exec cp {} bin/ \;
+            chmod +x bin/llama-quantize 2>/dev/null || true
+            if [ -x bin/llama-quantize ] && LD_LIBRARY_PATH="$PWD/bin" ./bin/llama-quantize --help >/dev/null 2>&1; then
+              ok=1; echo "using prebuilt llama-quantize"
+            fi
+          fi
+          if [ "$ok" != "1" ]; then
+            echo "::warning::prebuilt llama-quantize unavailable/unusable; building from source (throttled -j2)."
+            cmake -S llama.cpp -B llama.cpp/build -DGGML_NATIVE=OFF \
+              -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF
+            cmake --build llama.cpp/build --config Release -j 2 --target llama-quantize
+            cp llama.cpp/build/bin/llama-quantize bin/
+          fi
+          echo "QUANTIZE=$PWD/bin/llama-quantize" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$PWD/bin" >> "$GITHUB_ENV"
+
+      - name: Download merged model
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: |
+          set -euo pipefail
+          mkdir -p model
+          src="${{ inputs.model_source }}"
+          if [[ "$src" == modal://* ]]; then
+            # modal://<volume>/<remote-path> -> pull the merged fp16 dir straight from
+            # a Modal volume on this runner (GitHub runners have direct network to Modal).
+            if [ -z "${MODAL_TOKEN_ID:-}" ] || [ -z "${MODAL_TOKEN_SECRET:-}" ]; then
+              echo "::error::model_source is modal:// but MODAL_TOKEN_ID / MODAL_TOKEN_SECRET repo secrets are not set."
+              exit 1
+            fi
+            pip install --upgrade modal
+            rest="${src#modal://}"
+            vol="${rest%%/*}"
+            path="${rest#*/}"
+            if [ -z "$vol" ] || [ "$path" = "$rest" ] || [ -z "$path" ]; then
+              echo "::error::modal source must be modal://<volume>/<remote-path>"; exit 1
+            fi
+            modal volume get "$vol" "$path" model/
+          else
+            # an https URL of a tarball/zip of the merged fp16 dir
+            curl -fSL "$src" -o model_src.archive
+            if [[ "$src" == *.zip ]]; then unzip -q model_src.archive -d model; else tar -xf model_src.archive -C model; fi
+          fi
+          # normalize: point MODEL_DIR at wherever config.json actually landed
+          if [ -f model/config.json ]; then
+            model_dir="model"
+          else
+            model_dir="$(find model -maxdepth 3 -name config.json -printf '%h\n' | head -1)"
+          fi
+          test -n "$model_dir" || { echo "::error::no HF model dir (config.json) found in the downloaded source"; exit 1; }
+          echo "MODEL_DIR=$model_dir" >> "$GITHUB_ENV"
+
+      - name: Convert to GGUF + quantize + sha256
+        run: |
+          set -euo pipefail
+          python llama.cpp/convert_hf_to_gguf.py "$MODEL_DIR" \
+            --outfile base-f16.gguf --outtype f16
+          mkdir -p dist
+          for q in ${{ inputs.quant }}; do
+            out="dist/goldenmatch-er-matcher-${{ inputs.tier }}-${q}.gguf"
+            "$QUANTIZE" base-f16.gguf "$out" "$q"
+          done
+          # GitHub caps a release asset at 2 GiB. Fail HERE (before touching the
+          # release) with a clear message rather than mid-upload — a too-big quant
+          # (q8_0/f16 on a 3B+) should be dropped or split, not silently skipped.
+          CAP=$((2 * 1024 * 1024 * 1024))
+          for f in dist/*.gguf; do
+            sz=$(stat -c%s "$f")
+            echo "$(numfmt --to=iec "$sz")  $f"
+            if [ "$sz" -ge "$CAP" ]; then
+              echo "::error::$f is $(numfmt --to=iec "$sz") >= 2 GiB (GitHub release-asset cap). Drop this quant from the 'quant' input or split it."
+              exit 1
+            fi
+          done
+          cd dist && sha256sum *.gguf | tee SHA256SUMS.txt
+
+      - name: Upload to a GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.release_tag }}"
+          # Immutable releases are ON in this repo: a PUBLISHED release is sealed and
+          # rejects later asset uploads (HTTP 422). So attach every asset AT creation
+          # via a DRAFT (drafts aren't sealed), then publish with `edit --draft=false`,
+          # which seals it WITH the assets. Remove any prior/failed release for this
+          # tag first (best-effort; a burned immutable tag needs a fresh tag instead).
+          gh release delete "$tag" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$tag" dist/*.gguf dist/SHA256SUMS.txt \
+            --draft --title "ER-matcher ${{ inputs.tier }}" \
+            --notes "OSS ER-matcher GGUF (${{ inputs.tier }}). Base: Qwen2.5-${{ inputs.tier }}-Instruct (Apache-2.0). See docs/superpowers/plans/2026-07-26-oss-er-matcher-llm-boost-plan.md."
+          gh release edit "$tag" --draft=false
+
+      - name: Print the pin to paste into the runtime loader
+        run: |
+          set -euo pipefail
+          repo="${{ github.repository }}"
+          tag="${{ inputs.release_tag }}"
+          echo "::notice::Paste the q4_k_m pin below into core/_llm_loader.py PINNED_MODEL (the wired-in local-llm loader). The tiered core/er_matcher/registry.py MODELS['${{ inputs.tier }}'] takes the same (url, filename, sha256):"
+          for f in dist/goldenmatch-er-matcher-${{ inputs.tier }}-*.gguf; do
+            name=$(basename "$f")
+            sha=$(sha256sum "$f" | cut -d' ' -f1)
+            url="https://github.com/${repo}/releases/download/${tag}/${name}"
+            printf '  url=%q\n  filename=%q\n  sha256=%q\n\n' "$url" "$name" "$sha"
+          done
+          echo "Then run the P5 eval gate (scripts/er_matcher/eval.py) and only ship if it wins."

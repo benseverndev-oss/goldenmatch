@@ -3,13 +3,11 @@
 
 # Golden Suite
 
-**Zero-config entity resolution that scales — dedupe & match messy records from a laptop CSV to 100M+ rows. No training data, no tuning.**
+**Splink-beating entity resolution — Arrow-native, Rust-fast, zero-tuning — feeding a durable identity layer, so messy records from every source become stable golden entities with whole-record, Customer-360 provenance.**
 
-The headline package, **GoldenMatch**, does the matching — fuzzy + exact + probabilistic (Fellegi-Sunter) + LLM — and **beats hand-tuned Splink out of the box** (96.4% F1 on DBLP-ACM), identical in Python, edge-safe TypeScript, and SQL. It even runs on **unstructured input**: extract records from PDFs and images, then dedupe. Around it sits a full data-quality suite — Check, Flow, Analysis, Pipe, InferMap — with a Rust layer for Postgres / DuckDB and optional WebAssembly acceleration behind the TS ports.
+Zero-config matching that **beats expert-tuned Splink head-to-head on messy customer records**, in an **Arrow-native, Rust-authoritative** engine verified from a laptop CSV to a **100M-row dedupe in 9.2 minutes**. The identities it produces live in a **transaction-native control plane** — stable `entity_id`s, per-field provenance, merge/split, and a tamper-evident audit log — one call away as a Customer 360. It even **owns its primitives**: byte-identical, faster-than-`rapidfuzz` / `jellyfish` / FAISS Rust kernels, not rented dependencies.
 
-**Made for GraphRAG, too** — entity resolution is the stage knowledge-graph pipelines do *worst* (the same entity scatters across documents as duplicate surface forms). GoldenMatch drops into **neo4j-graphrag / LlamaIndex / Graphiti** as the resolution stage ([`goldenmatch-kg`](packages/python/goldenmatch-kg/README.md)), or builds a KG straight from text with that resolution at its core ([`goldengraph`](packages/python/goldengraph/README.md)). [→ Knowledge graphs](#knowledge-graphs)
-
-**Verified at scale: 100,000,000 records deduped in 9.2 min on a Ray cluster — recall-complete across any partitioning, 0.36 GB driver footprint.**
+**Python · TypeScript · SQL, at 4-decimal parity · native in Postgres + DuckDB · edge WASM · 70+ MCP tools · beats hand-tuned Splink · 100M rows in 9.2 min**
 
 <br>
 
@@ -25,11 +23,12 @@ The headline package, **GoldenMatch**, does the matching — fuzzy + exact + pro
 [![codecov](https://codecov.io/gh/benseverndev-oss/goldenmatch/graph/badge.svg)](https://codecov.io/gh/benseverndev-oss/goldenmatch)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/benseverndev-oss/goldenmatch/badge)](https://scorecard.dev/viewer/?uri=github.com/benseverndev-oss/goldenmatch)
 [![Fellegi-Sunter beats hand-rolled Splink](https://img.shields.io/badge/Fellegi--Sunter-beats%20hand--rolled%20Splink-d4a017)](docs/benchmarks/2026-06-09-splink-bakeoff.md)
-[![DBLP-ACM F1](https://img.shields.io/badge/DBLP--ACM%20F1-96.4%25-d4a017)](packages/python/goldenmatch/README.md#benchmarks)
+[![100M rows in 9.2 min](https://img.shields.io/badge/scale-100M%20rows%20%2F%209.2%20min-d4a017)](packages/python/goldenmatch/README.md#benchmarks)
 
 <!-- Reach -->
-[![PyPI downloads (suite)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbenseverndev-oss%2Fgoldenmatch%2Fbadges%2Fpypi-downloads.json)](https://pepy.tech/projects?q=goldenmatch+goldencheck+goldenpipe+goldenflow+goldenanalysis+infermap+goldencheck-types+goldensuite-mcp+goldenmatch-duckdb+goldenmatch-native+goldenflow-native+goldencheck-native+goldenanalysis-native+goldengraph-native+goldenmatch-embed+golden-suite)
+[![PyPI downloads (suite)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbenseverndev-oss%2Fgoldenmatch%2Fbadges%2Fpypi-downloads.json)](https://pepy.tech/projects?q=goldenmatch+goldencheck+goldenpipe+goldenflow+goldenanalysis+infermap+goldencheck-types+goldensuite-mcp+goldenfuzz+goldenphonetic+goldenmatch-hnsw+goldenmatch-duckdb+goldenmatch-native+goldenflow-native+goldencheck-native+goldenanalysis-native+goldengraph-native+goldenprofile-native+goldenmatch-embed+goldengraph+golden-suite)
 [![npm downloads (suite)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbenseverndev-oss%2Fgoldenmatch%2Fbadges%2Fnpm-downloads.json)](https://www.npmjs.com/~benzsevern)
+[![crates.io downloads](https://img.shields.io/crates/d/goldenfuzz-core?color=d4a017&label=crates.io%20dl&logo=rust&logoColor=white)](https://crates.io/crates/goldenfuzz-core)
 [![GitHub stars](https://img.shields.io/github/stars/benseverndev-oss/goldenmatch?style=flat&color=d4a017&logo=github)](https://github.com/benseverndev-oss/goldenmatch/stargazers)
 
 <!-- Ecosystem -->
@@ -44,18 +43,6 @@ The headline package, **GoldenMatch**, does the matching — fuzzy + exact + pro
 [![GoldenMatch web workbench — pair drilldown with NL prose](packages/python/goldenmatch/docs/screenshots/web/web-inspector.png)](https://github.com/benseverndev-oss/goldenmatch/wiki/Web-UI)
 
 <p align="center"><sub><em>Pair drilldown in the web workbench: cluster members, field-level diff, and a one-line NL explanation per pair. <code>pip install goldenmatch[web]</code> then <code>goldenmatch serve-ui &lt;project&gt;</code>. <a href="https://github.com/benseverndev-oss/goldenmatch/wiki/Web-UI">More screenshots →</a></em></sub></p>
-
-```bash
-# Dedupe a CSV in 30 seconds — zero config, writes <timestamp>_golden.csv.
-# Add --tui to review interactively, --output-all for every artifact.
-pip install goldenmatch && goldenmatch dedupe customers.csv
-
-# From Python — zero-config, returns golden records
-python -c "import goldenmatch as gm; gm.dedupe('customers.csv').golden.write_csv('deduped.csv')"
-
-npm install goldenmatch     # TypeScript / edge runtimes
-pip install golden-suite    # the WHOLE suite (Check + Flow + Match + Analysis + Pipe + InferMap) + native
-```
 
 <!-- README-callouts:start  (auto-synced from packages/python/goldenmatch/CHANGELOG.md by scripts/sync_readme_callouts.py — edit the CHANGELOG, not this block) -->
 > **v3.5.0** — **New `date` scorer for date fields (#1858).** `jaro_winkler` scores unrelated
@@ -84,155 +71,191 @@ pure-Python fallback automatically).
 
 ---
 
-## Why a suite?
+## What you get: the golden entity
 
-Each tool stands alone, but they compose into a single pipeline:
+Most entity-resolution tools hand you clusters and stop. GoldenMatch keeps going: it resolves messy records into a **durable golden entity** — one per real-world customer — that survives re-runs, carries provenance on *every field*, and answers "who is this, and where did each value come from?" in a single call.
 
-```mermaid
-flowchart LR
-    raw([raw rows])
-    golden([golden records])
+- **A stable identity, not a throwaway cluster id.** Every entity gets a stable `entity_id` (UUIDv7) that persists across runs as new data arrives — records are absorbed, entities merge or split, but the id an entity earns is the id downstream systems can rely on. Run-local cluster numbers reshuffle on every run; these don't.
+- **Whole-record provenance.** Every field of the golden record traces back to the source record that won it — which source, when it was last seen, and which survivorship strategy picked it — with the values it *didn't* pick kept visible, not silently dropped. Provenance is on the whole unified record, not just the match decision.
+- **Governed by construction.** Conflicting values collapse to one best value by an explicit survivorship policy (most-complete · source-priority · most-recent · majority-vote); every identity change lands in an **append-only event timeline**; and the log is sealed with a **hash-chained, tamper-evident audit** that a reviewer (or the other language port) can independently verify.
 
-    subgraph orchestration ["GoldenPipe orchestrates"]
-        direction LR
-        infermap[InferMap]
-        goldencheck[GoldenCheck]
-        goldenflow[GoldenFlow]
-        goldenmatch[GoldenMatch]
-        infermap --> goldencheck --> goldenflow --> goldenmatch
-    end
+`customer_360(entity_id)` composes it into one read — golden record, per-field provenance, every linked source record, the event timeline, and the entity's relationship neighborhood:
 
-    raw --> infermap
-    goldenmatch --> golden
+```jsonc
+// customer_360("018f...c2a1")  — trimmed
+{
+  "entity_id": "018f2b7e-...-c2a1", "confidence": 0.97, "record_count": 3,
+  "sources": ["salesforce", "billing", "support"],
+  "golden_record": { "name": "Ada Lovelace", "email": "ada@analytical.io", "phone": "+1-555-0100" },
+  "field_provenance": [
+    { "field": "email", "value": "ada@analytical.io",
+      "winning_source": "billing", "winning_record_id": "billing:8821",
+      "conflicting_values": [ { "value": "ada@ada.dev", "source": "salesforce" } ] },
+    { "field": "phone", "value": "+1-555-0100", "winning_source": "salesforce" }
+  ],
+  "timeline": [ { "kind": "created", "actor": "pipeline", "recorded_at": "2026-07-30T..." },
+                { "kind": "absorbed_record", "reason": "matched billing:8821" } ],
+  "relationships": [ { "other_entity_id": "018f...9d0e", "kind": "shares_address" } ]
+}
 ```
 
-| Step | Role |
-|---|---|
-| **InferMap** | schema mapping — auto-aligns columns across heterogeneous sources |
-| **GoldenCheck** | profile + validate — encoding, format, anomaly detection |
-| **GoldenFlow** | standardize + transform — phone, date, address, categorical normalization |
-| **GoldenMatch** | dedupe + cluster + survivorship — fuzzy / exact / probabilistic / LLM |
-| **GoldenAnalysis** | analysis + reporting — one exportable report over any stage, plus cross-run regression detection |
-| **GoldenPipe** | orchestrator — declarative YAML pipeline wiring the steps |
+> **What ships today vs. what's emerging.** The **identity spine is production-grade and in `main`**: stable `entity_id`s, per-field provenance, survivorship, merge/split, the append-only log + audit chain, cross-channel stitching, the relationship overlay, and **incremental resolution** against a persisted index (a new record resolves without a full re-run). The **`customer_360()` serving view** above and the **source-registry** layer that keeps it fresh from live systems are the newer, actively-landing pieces (the source connectors — Snowflake, BigQuery, Salesforce, HubSpot — ship today; the registry that wires them into the spine is emerging) — see [the Customer 360 design + ADR](context-network/architecture/customer-360-data-connection.md). We label the seam rather than blur it.
 
-What sets it apart:
-
-- **Zero-config that beats hand-tuned.** 96.4% F1 on DBLP-ACM out of the box; the opt-in Fellegi-Sunter engine beats expert-tuned Splink head-to-head on every dataset Splink scores (`historical_50k` pairwise F1 **0.778 vs 0.757**, cluster B³ **0.844 vs 0.789**; one shared evaluator, [reproducible bake-off](docs/benchmarks/2026-06-09-splink-bakeoff.md)). Every step self-verifies (preflight + postflight) and returns an inspectable report instead of failing silently.
-- **A healing loop, not a one-shot.** Zero-config gets you most of the way; the healer attaches ranked, self-verified config tweaks and closes the gap to expert-tuned without you being the expert. [↓ details](#the-healing-loop)
-- **Durable identity.** Learning Memory persists corrections across runs (re-anchored across row reorders); the Identity Graph gives stable `entity_id`s that survive re-runs, an append-only event log, and create / absorb / merge / split semantics on CLI, REST, MCP, and SQL.
-- **Privacy-preserving record linkage** — match across organizations without sharing raw data (PPRL, 92.4% F1 on FEBRL4).
-- **AI-native by design** — every package ships an MCP server, a REST API, and an A2A agent surface (70+ MCP tools across the suite), all exposing the *same* JSON telemetry shape across web, TUI, CLI, Postgres, DuckDB, and MCP.
-- **Polyglot parity, edge-safe, optional native speed.** The full suite ships on **npm** alongside PyPI; Python and TypeScript track the same outputs to 4-decimal precision. The TS cores are dependency-free and `node:*`-free (browsers, Cloudflare Workers, Vercel Edge, Deno); an opt-in WebAssembly backend (`await enableWasm()`) swaps in the *same* pyo3-free Rust kernels the Python wheels and SQL UDFs use, with pure-TS as the byte-identical default.
-- **SQL-native at parity** — the same functions run inside **PostgreSQL** (pgrx) and **DuckDB**: dedupe / match / score / auto-config + telemetry / identity graph, profiling, `evaluate`, Fellegi-Sunter scoring, and GoldenFlow transforms.
-- **Production paths** — Postgres sync, daemon mode, lineage tracking, review queues, dbt integration, GitHub Actions.
+The golden entity lives in the **control plane**; the matching that builds it runs in the **compute engine**. That split is the next section.
 
 ---
 
-## Cross-language interoperability (know the limits)
+## One product, two engines
 
-The Python and TypeScript ports are at **surface parity** — the same operations
-exist in both. That is *not* the same as being able to hand any pipeline phase
-from one language to the other and back byte-for-byte. Some boundaries genuinely
-round-trip; others are numerically tolerance-bounded; a few can't cross at all.
-Each verdict below is **measured** by a conformance harness, not assumed:
+The golden entity above is produced by two engines that optimize for genuinely different things — and keeping them distinct is the architecture, not an implementation detail ([ADR 0047](context-network/decisions/0047-one-product-two-engines-architecture.md)).
+
+```mermaid
+flowchart LR
+    src([source records])
+    e360([golden entities · Customer 360])
+    subgraph compute ["Identity Compute Engine — Arrow-native, Rust-authoritative"]
+        match[block · score · cluster]
+    end
+    subgraph control ["Identity Control Plane — transaction-native state machine"]
+        spine[stable ids · survivorship · merge/split · provenance · audit]
+    end
+    src --> compute -->|resolution batch + evidence| control --> e360
+    control -.->|persisted index| compute
+```
+
+| | Identity Compute Engine | Identity Control Plane |
+|---|---|---|
+| **Shape** | Arrow at bulk boundaries, Rust-authoritative kernels | Transaction-native state machine (SQLite default · Postgres) |
+| **Job** | Block, score, cluster — throughput, vectorized, deterministic per run | Stable ids, survivorship, merge/split, provenance, append-only audit |
+| **State** | Stateless per call; measurement-driven kernelization | Durable, transactional, replayable, auditable |
+| **Backends** | DataFusion · Ray · Sail are *replaceable* execution backends, none synonymous with GoldenMatch | Storage backends conform to one externally-observable semantics |
+
+**Many surfaces, one answer.** The same capabilities reach Python, edge-safe TypeScript (with an opt-in WASM backend running the *same* Rust kernels), SQL inside PostgreSQL and DuckDB, and MCP / REST / A2A — governed by **specification + conformance**, not copy-paste. There is one authoritative owner per capability; pure-Python / standalone-TS paths are classified, conformance-tested fallbacks. Where a boundary can't cross byte-for-byte, we [measure and label it](#cross-language-parity) rather than claim parity.
+
+**Why a platform engineer should care:**
+
+- **The compute layer isn't framework lock-in.** It's Arrow-native and backend-replaceable — push the heavy matching to a query engine that plans, spills, and distributes (verified to 100M rows), without the identity state coming along for the ride.
+- **The identity layer is a real state machine**, not a columnar rebuild-every-time batch — durable ids, transactional merge/split, provenance and audit as first-class operations you can integrate against.
+- **Behavior is consistent where it's shared** — SQL, Python, and TypeScript track the same answers to a conformance spec, so the surface you build on isn't quietly inventing its own semantics.
+
+---
+
+## Resolution that beats the expert
+
+The identity layer is only as good as the matching underneath it — and the matching starts at zero config. `dedupe_df(df)` runs with no rules and no training data: it profiles the data, picks a defensible configuration, and returns golden records immediately. The config it chose comes back on `result.config` — inspectable, diffable, versionable. Never a black box.
+
+- **Beats the expert, out of the box.** On messy customer records, the opt-in Fellegi-Sunter engine beats hand-tuned Splink head-to-head — `historical_50k` pairwise F1 **0.778 vs 0.757**, cluster B³ **0.844 vs 0.789**, one shared evaluator, [reproducible bake-off](docs/benchmarks/2026-06-09-splink-bakeoff.md). Fuzzy, exact, probabilistic (Fellegi-Sunter), and LLM scorers, with EM-trained weights and calibrated scores.
+- **A healing loop, not a one-shot.** Zero-config gets you most of the way; then every run checks a free unsupervised signal and, when there's headroom, attaches **ranked, self-verified config tweaks** to `result.suggestions`. Each is kept only if it doesn't worsen a health proxy — so a suggestion never makes results worse. `dedupe_df(df, heal=True)` applies and re-runs in one call. You close the gap to expert-tuned without being the expert.
+- **Privacy-preserving record linkage.** Match across organizations without sharing raw data — Bloom-filter PPRL, **92.4% F1 on FEBRL4**, with HMAC-salted encodings.
+- **Self-verifying.** Every step runs preflight + postflight checks and returns an inspectable report instead of failing silently — the "advanced, never black-box" contract that makes an automated identity layer safe to build on.
+
+> Runs on **unstructured input**, too: extract records from PDFs and images, then resolve them like any other source (`pip install goldenmatch[documents]`).
+
+---
+
+## Runs where your stack is
+
+The engine and the identity layer reach your stack through the surface you already use — the *same* capabilities, governed by conformance ([one product, two engines](#one-product-two-engines)), not a thin re-implementation per surface.
+
+- **SQL-native, at parity.** The same functions run inside **PostgreSQL** (pgrx extension) and **DuckDB**: dedupe · match · score · auto-config + telemetry · identity-graph reads · profiling · `evaluate` · Fellegi-Sunter scoring · GoldenFlow transforms. Resolve without moving data out of the warehouse.
+- **Python and edge-safe TypeScript.** The full suite ships on **npm** alongside PyPI. The TS cores are dependency-free and `node:*`-free (browsers, Cloudflare Workers, Vercel Edge, Deno); an opt-in WebAssembly backend (`await enableWasm()`) swaps in the *same* pyo3-free Rust kernels the Python wheels and SQL UDFs use, with pure-TS as the byte-identical default.
+- **AI-native by default.** Every package ships an MCP server, a REST API, and an A2A agent surface (70+ MCP tools across the suite), all exposing the *same* JSON telemetry shape across web, TUI, CLI, Postgres, DuckDB, and MCP.
+- **Pipeline-native.** A dbt package (dedupe/match materializations, quality tests, identity-graph reads), a GitHub Action (fail PRs on data-quality regressions), and 13 drop-in Airflow DAGs ([Deploy](#deploy)).
+- **Production paths.** Postgres sync, daemon mode, lineage tracking, review queues.
+
+### Cross-language parity
+
+Surface parity is *not* the same as handing any pipeline phase from one language to the other byte-for-byte. Each verdict below is **measured** by a conformance harness, not assumed:
 
 | Boundary | Verdict |
 | --- | --- |
 | **Identity graph DB** | ✅ byte-safe + cryptographically cross-verifiable (a seal written by one toolkit validates under the other) |
-| **`score → cluster`** and the **end-to-end split-run** (score in Python, cluster in TS) | ✅ byte-safe — reproduces the single-language run |
-| Cluster JSON · config YAML · Learning Memory · run log · `record_fingerprint` | ✅ portable |
+| **`score → cluster`** and the end-to-end split-run | ✅ byte-safe — reproduces the single-language run |
+| Cluster JSON · config YAML · Learning Memory · `record_fingerprint` | ✅ portable |
 | **String scoring** | 🟡 4-decimal tolerance — a pair on a threshold can flip (byte-identical only with the shared WASM scorer) |
 | **Standardize / dates** · embeddings · auto-config controller | 🟠 divergent — not byte-portable |
-| Distributed / Ray · document (VLM) ingest · distributed routing | ⛔ Python-only by architecture |
+| Distributed / Ray · document (VLM) ingest | ⛔ Python-only by architecture |
 
-**Rule of thumb:** hand off at the **cluster** or **identity** boundary and it's
-seamless; don't split a pipeline across `standardize`/dates, embeddings, or the
-controller and expect bit-exact reproduction. Full detail, guidance, and the
-runnable harness that keeps these verdicts honest:
-[Cross-language parity & phase-handoff limits](https://docs.bensevern.dev/concepts/cross-language-parity).
+**Rule of thumb:** hand off at the **cluster** or **identity** boundary and it's seamless; don't split across `standardize`/dates, embeddings, or the controller and expect bit-exact reproduction. Full detail + the runnable harness that keeps these verdicts honest: [Cross-language parity & phase-handoff limits](https://docs.bensevern.dev/concepts/cross-language-parity).
 
 ---
 
-## The healing loop
+## The suite — the pipeline into the spine
 
-GoldenMatch's core workflow is a loop, not a one-shot:
+GoldenMatch is the headline, but resolution is only as good as what feeds it. Five sibling tools clean, standardize, and map records *before* they reach the identity layer — each stands alone, but they compose into one pipeline, orchestrated declaratively by GoldenPipe:
 
-1. **Zero-config first pass** — `dedupe_df(df)` runs with no rules and no training data; auto-config picks a defensible config and you get good results immediately.
-2. **You get the config it chose** — on `result.config`: inspectable, diffable, versionable. Never a black box.
-3. **The healer suggests tweaks** — every run checks a free signal and, when there's headroom, attaches ranked, explainable, self-verified edits to `result.suggestions`. Each is kept only if it doesn't worsen an unsupervised health proxy, so a tweak never makes results worse.
-4. **You apply them** — `dedupe_df(df, heal=True)` applies and re-runs in one call (returning the healed `result.config` + a `result.heal_trail`); or take the wheel with `apply_suggestion`.
-5. **Results improve. Repeat** — until the healer goes quiet.
+```mermaid
+flowchart LR
+    raw([raw rows])
+    golden([golden entities])
+    subgraph orchestration ["GoldenPipe orchestrates"]
+        direction LR
+        infermap[InferMap] --> goldencheck[GoldenCheck] --> goldenflow[GoldenFlow] --> goldenmatch[GoldenMatch]
+    end
+    raw --> infermap
+    goldenmatch --> golden
+```
 
-> **Wired into the default pipeline on every surface** — Python (`suggest=True` / `heal=True` / `review_config`), CLI (`--suggest` / `--heal`), MCP & A2A, REST, web, TUI, and the edge-safe TypeScript port via WebAssembly (`enableSuggestWasm()`). Needs `goldenmatch[native]`; degrades gracefully without it (attaches nothing, never errors). Kill-switch `GOLDENMATCH_SUGGEST_ON_DEDUPE=0`. Full details: [config-suggestions](https://docs.bensevern.dev/goldenmatch/config-suggestions).
-
----
-
-## The Suite
-
-| Package | Lang | What it does | Install |
+| Package | Lang | Role in the pipeline | Install |
 |---|---|---|---|
-| **[golden-suite](packages/python/golden-suite/README.md)** | Python | One-line meta-install: the whole suite + native acceleration, defaulted to the perf-optimized config. | `pip install golden-suite` |
-| **[GoldenMatch](packages/python/goldenmatch/README.md)** | Python · TS | Zero-config entity resolution. Fuzzy + exact + probabilistic + LLM. Headline package. | `pip install goldenmatch` · `npm i goldenmatch` |
-| **[GoldenCheck](packages/python/goldencheck/README.md)** | Python · TS | Data-quality scanning: encoding, Unicode, format validation, anomaly detection. | `pip install goldencheck` · `npm i goldencheck` |
-| **[GoldenFlow](packages/python/goldenflow/README.md)** | Python · TS | Transforms & standardizers: phone, date, address, categorical normalization. | `pip install goldenflow` · `npm i goldenflow` |
-| **[GoldenPipe](packages/python/goldenpipe/README.md)** | Python · TS | Orchestrator wiring Check → Flow → Match → Identity → Analysis into one declarative pipeline. | `pip install goldenpipe` · `npm i goldenpipe` |
-| **[InferMap](packages/python/infermap/README.md)** | Python · TS | Schema mapping — auto-aligns columns across heterogeneous sources. | `pip install infermap` · `npm i infermap` |
-| **[GoldenAnalysis](packages/python/goldenanalysis/README.md)** | Python · TS | Cross-cutting analysis & reporting — any stage's artifacts (or a raw DataFrame) → a unified exportable `AnalysisReport`; optional Rust / WASM kernels. | `pip install goldenanalysis` · `npm i goldenanalysis` |
-| **[goldenmatch-extensions](packages/rust/extensions/README.md)** | Rust | Postgres extension (pgrx) + DuckDB UDFs. SQL-native fuzzy matching. | source build |
-| **[dbt-goldensuite](packages/dbt/goldensuite/README.md)** | dbt · Python | dbt package — dedupe + match materializations (incl. zero-config FS), an ER build gate, quality tests, transforms, identity-graph reads. | `packages.yml` (git subdir) |
-| **[goldencheck-action](packages/actions/goldencheck/README.md)** | YAML | GitHub Action — fail PRs that introduce data-quality regressions. | Marketplace |
+| **[InferMap](packages/python/infermap/README.md)** | Python · TS | Schema mapping — auto-aligns columns across heterogeneous sources | `pip install infermap` · `npm i infermap` |
+| **[GoldenCheck](packages/python/goldencheck/README.md)** | Python · TS | Data-quality scanning — encoding, format validation, anomaly detection | `pip install goldencheck` · `npm i goldencheck` |
+| **[GoldenFlow](packages/python/goldenflow/README.md)** | Python · TS | Transforms & standardizers — phone, date, address, categorical | `pip install goldenflow` · `npm i goldenflow` |
+| **[GoldenMatch](packages/python/goldenmatch/README.md)** | Python · TS | Zero-config entity resolution → the identity spine. **Headline package.** | `pip install goldenmatch` · `npm i goldenmatch` |
+| **[GoldenAnalysis](packages/python/goldenanalysis/README.md)** | Python · TS | Analysis & reporting — any stage's artifacts → a unified `AnalysisReport` + cross-run regression detection | `pip install goldenanalysis` · `npm i goldenanalysis` |
+| **[GoldenPipe](packages/python/goldenpipe/README.md)** | Python · TS | Orchestrator — declarative YAML wiring the steps | `pip install goldenpipe` · `npm i goldenpipe` |
+| **[golden-suite](packages/python/golden-suite/README.md)** | Python | One-line meta-install: the whole suite + native acceleration | `pip install golden-suite` |
 
 > The deepest docs live in **[packages/python/goldenmatch/README.md](packages/python/goldenmatch/README.md)** (~1,300 lines: full feature list, CLI, architecture, benchmarks).
 
+### Owned libraries (standalone)
+
+The suite owns its string-matching primitives instead of renting them — byte-identical drop-in replacements, published on their own so they're usable outside the suite too.
+
+| Library | Replaces | What it is | Install |
+|---|---|---|---|
+| **[goldenfuzz](packages/rust/extensions/goldenfuzz-py/README.md)** | `rapidfuzz` | Fuzzy-string scorers + the full `fuzz.*` composite family + one-vs-many `extract`/`cdist`. Byte-identical (oracle-fuzzed), faster on short strings. | `pip install goldenfuzz` · `cargo add goldenfuzz-core` |
+| **[goldenphonetic](packages/rust/extensions/goldenphonetic-py/README.md)** | `jellyfish` | Phonetic encoders — soundex / metaphone / nysiis / match-rating. Byte-identical (6,000-input + 2,500-pair fuzz corpus), pure-Rust zero-dep. | `pip install goldenphonetic` · `cargo add goldenphonetic-core` |
+| **[goldenmatch-hnsw](packages/rust/extensions/hnsw-py/README.md)** | FAISS `IndexHNSWFlat` | Pure-Rust HNSW approximate-nearest-neighbor index (zero C deps) — powers embedding-based blocking across Python, Rust, and TS/WASM. | `pip install goldenmatch-hnsw` |
+
 ### Knowledge graphs
 
-Entity resolution is the stage most GraphRAG pipelines do badly — duplicate surface forms of the same entity scatter across documents. Two packages put GoldenMatch's resolution there:
+Entity resolution is the stage most GraphRAG pipelines do worst — duplicate surface forms of one entity scatter across documents. Two packages put GoldenMatch's resolution there:
 
 | Package | What it does | Status |
 |---|---|---|
-| **[goldenmatch-kg](packages/python/goldenmatch-kg/README.md)** | Drop-in GoldenMatch resolution as the ER stage of existing KG frameworks (neo4j-graphrag, LlamaIndex PropertyGraphIndex, Graphiti). One framework-agnostic `resolve_entities` core + per-framework adapters. Lift measured by [ER-KG-Bench](packages/python/goldenmatch/benchmarks/er-kg-bench), not asserted. | in-repo · first PyPI release pending |
-| **[goldengraph](packages/python/goldengraph/README.md)** | Build-your-own-KG from text — `text → LLM extraction → GoldenMatch resolution → a durable bi-temporal store`. Engine (store / query / community detection) is pyo3-free Rust; ER is the differentiator. | in-repo · first PyPI release pending |
+| **[goldenmatch-kg](packages/python/goldenmatch-kg/README.md)** | Drop-in GoldenMatch resolution as the ER stage of existing KG frameworks (neo4j-graphrag, LlamaIndex, Graphiti). | in-repo · not published (by design) |
+| **[goldengraph](packages/python/goldengraph/README.md)** | Build-your-own-KG from text — `text → LLM extraction → GoldenMatch resolution → durable bi-temporal store`. Rust engine; ER is the differentiator. | in-repo · first PyPI release pending |
 
-**Measured, not asserted** ([ER-KG-Bench](packages/python/goldenmatch/benchmarks/er-kg-bench)): resolution scores **F1 0.602** on the labelled set, ahead of Neo4j-KGBuilder (0.456), neo4j-graphrag (0.403), and MS-GraphRAG / LightRAG / Cognee / mem0 (0.066). Beyond ER quality, a resolved graph does two things a passage-window RAG structurally can't — **exact aggregation** (size-invariant where RAG recall collapses `0.99 → 0.64` as the answer set grows) and **temporal as-of** (`1.000` vs RAG's `0.002` on past-date queries) — both benchmarked on real Wikidata data. What it does *not* differentiate on is multi-hop QA, where a hybrid graph converges to plain text-RAG; the edge is ER + structured queries, and that's what the board measures.
-
----
-
-## Real-world pipelines
-
-Reproducible end-to-end pipelines running GoldenMatch on public data at scale, each with measured headline numbers vs baselines:
-
-- **[shell-company-network](https://github.com/benseverndev-oss/goldenmatch-shell-company-network)** — investigative ER across ICIJ Offshore Leaks + OpenSanctions + GLEIF + UK PSC + disqualified-directors. **−62.5% analyst-hours to triage** vs single-source baselines; +133% adversarial perturbation recovery.
-- **[vuln-attribution](https://github.com/benseverndev-oss/goldenmatch-vuln-attribution)** — cross-database ER on 6.1M OSS vulnerability records across 40 sources. **6,126,895 records → 847,475 canonical vulns** in ~5 minutes on a single 64GB runner via the full suite.
-- **[sanctions-reconciliation](https://github.com/benseverndev-oss/goldenmatch-sanctions-reconciliation)** — cross-list coverage on 85 public sanctions lists across 50+ jurisdictions, plus 10-year OFAC SDN history and PEP/crypto cross-analysis. A coverage-gap benchmark for any screening vendor.
+**Measured, not asserted** ([ER-KG-Bench](packages/python/goldenmatch/benchmarks/er-kg-bench)): resolution scores **F1 0.602** on the labelled set, ahead of Neo4j-KGBuilder (0.456), neo4j-graphrag (0.403), and MS-GraphRAG / LightRAG / Cognee / mem0 (0.066). A resolved graph also does two things passage-window RAG structurally can't — **exact aggregation** (size-invariant where RAG recall collapses `0.99 → 0.64` across cluster-size buckets) and **temporal as-of** (`1.000` vs `0.002` on past-date queries).
 
 ---
 
-## Choose your path
+## Scale & benchmarks
 
-| I want to... | Go here |
-|---|---|
-| Deduplicate a CSV right now | [`goldenmatch` quick start](packages/python/goldenmatch/README.md#quick-start) |
-| Match records from PDFs / images (unstructured input) | [document ingest](https://docs.bensevern.dev/goldenmatch/documents) |
-| Use from Claude Desktop / Code | [`goldenmatch` — MCP](packages/python/goldenmatch/README.md#remote-mcp-server) |
-| Edit rules in a browser, label pairs, compare runs | [`goldenmatch` — Web UI](packages/python/goldenmatch/README.md#web-ui) |
-| Build AI agents that deduplicate | [ER Agent / A2A wiki](https://github.com/benseverndev-oss/goldenmatch/wiki/ER-Agent) |
-| Profile data quality before matching | [`goldencheck`](packages/python/goldencheck/README.md) |
-| Standardize messy fields (phone, date, address) | [`goldenflow`](packages/python/goldenflow/README.md) |
-| Run the full pipeline declaratively | [`goldenpipe`](packages/python/goldenpipe/README.md) |
-| Map columns across schemas | [`infermap`](packages/python/infermap/README.md) |
-| Analyze + report across stages and runs | [`goldenanalysis`](packages/python/goldenanalysis/README.md) |
-| Write TypeScript / Node / Edge (optional WASM) | [`packages/typescript/goldenmatch`](packages/typescript/goldenmatch/README.md) |
-| Match in Postgres / DuckDB SQL | [`packages/rust/extensions`](packages/rust/extensions/README.md) |
-| Add data-quality gates to dbt | [`dbt-goldensuite`](packages/dbt/goldensuite/README.md) |
-| Block bad data in GitHub PRs | [`goldencheck-action`](packages/actions/goldencheck/README.md) |
-| Run as Airflow DAGs | [`examples/airflow/`](examples/airflow/README.md) — 13 drop-in DAGs |
-| Run from a single MCP container | [`goldensuite-mcp`](packages/python/goldensuite-mcp/README.md) |
+Every headline number maps back to a single committed runner (`scripts/run_benchmarks.py`); see [`docs/reproducing-benchmarks.md`](docs/reproducing-benchmarks.md) for per-number commands, dataset URLs, and expected output with tolerance.
+
+- **Accuracy on customer-shaped data** — NC Voter **0.9719** F1, Febrl3 **0.9443** F1, DQbench composite **91.04**; the opt-in Fellegi-Sunter path beats hand-tuned Splink head-to-head on every dataset Splink scores ([bake-off](docs/benchmarks/2026-06-09-splink-bakeoff.md)). (Bibliographic DBLP-ACM lands **96.4%** F1 for the record-linkage crowd, but customer identity is the focus.)
+- **Privacy-preserving** — PPRL **92.4%** F1 on FEBRL4, matching across parties with no shared raw data.
+- **Scale envelope** ([`docs/scale-envelope.md`](docs/scale-envelope.md)) — per-backend ranges (in-memory/bucket to a few M · DuckDB out-of-core to ~50M · Ray distributed ≥ 50M), block-size failure modes, and a decision tree for picking a backend.
+
+**Verified at the top end:** a full **100M-row** dedupe on a 5-node Ray cluster in **9.2 min** (554 s), **20,000,000 golden records recovered exactly**, driver peak **0.36 GB RSS**. The default distributed path is **recall-complete** — duplicates merge correctly *no matter how the input is partitioned* (blocking-key shuffle scoring + distributed randomized-contraction WCC), and it stays driver-collect-free end to end. Recipe: [`configs/distributed-100m.yaml`](packages/python/goldenmatch/configs/distributed-100m.yaml).
+
+Three reproducible real-world pipelines run this on public data at scale:
+
+- **[shell-company-network](https://github.com/benseverndev-oss/goldenmatch-shell-company-network)** — investigative ER across ICIJ Offshore Leaks + OpenSanctions + GLEIF + UK PSC. **−62.5% analyst-hours to triage** vs single-source baselines.
+- **[vuln-attribution](https://github.com/benseverndev-oss/goldenmatch-vuln-attribution)** — **6,126,895 OSS-vulnerability records → 847,475 canonical vulns** across 40 sources in ~5 minutes on one 64GB runner.
+- **[sanctions-reconciliation](https://github.com/benseverndev-oss/goldenmatch-sanctions-reconciliation)** — cross-list coverage on 85 public sanctions lists across 50+ jurisdictions.
 
 ---
 
-## Quick examples
+## Install & quick start
 
-**Python — dedupe in 30 seconds**
+**Dedupe a CSV in 30 seconds** — zero config, writes `<timestamp>_golden.csv`:
+
+```bash
+pip install goldenmatch && goldenmatch dedupe customers.csv
+```
 
 ```python
 import goldenmatch as gm
@@ -242,101 +265,60 @@ print(result)                                     # DedupeResult(records=5000, c
 result.golden.write_csv("deduped.csv")
 
 result = gm.dedupe("customers.csv",               # or be explicit
-    exact=["email"], fuzzy={"name": 0.85, "zip": 0.95},
-    blocking=["zip"], threshold=0.85)
+    exact=["email"], fuzzy={"name": 0.85, "zip": 0.95}, blocking=["zip"], threshold=0.85)
 ```
-
-**TypeScript — edge-safe core**
 
 ```typescript
-import { dedupe } from "goldenmatch";
-
+import { dedupe } from "goldenmatch";           // edge-safe: browsers, Vercel Edge, Workers, Deno
 const result = dedupe(rows, { fuzzy: { name: 0.85 }, blocking: ["zip"], threshold: 0.85 });
-console.log(result.stats);   // { totalRecords, totalClusters, matchRate, ... }
 ```
 
-Runs in browsers, Vercel Edge, Cloudflare Workers, Deno — and optionally swaps in the Rust `score-core` kernel via `await enableWasm()`. ~940 tests, strict TypeScript.
-
-**Composed pipeline**
-
-```python
-import goldenpipe as gp
-
-pipeline = gp.Pipeline.from_yaml("pipeline.yaml")   # check → flow → match
-result = pipeline.run("customers.csv")
-result.report.write_html("report.html")
-```
-
-**Web workbench** — `pip install 'goldenmatch[web]'` then `goldenmatch serve-ui my-project` (opens `http://localhost:5050`): edit rules with live validation, preview against a sampled slice, label pairs (mirrored into Learning Memory), compare runs, sweep parameters.
-
-**More**: [`examples/`](examples/README.md) has runnable demos —
-[Python](examples/python/README.md) (quickstart, full pipeline, customer 360, PPRL, review, MCP client) ·
-[TypeScript](examples/typescript/README.md) (quickstart, Vercel Edge, MCP client) ·
-[Airflow](examples/airflow/README.md) (production-shaped DAGs).
-
----
-
-## Install
-
-**The whole suite, configured for speed** — the [`golden-suite`](packages/python/golden-suite/README.md) meta-package pulls in every package plus the native (Rust) kernels, pinned to compatible versions and defaulted to the perf-optimized config (native paths on, no env vars). The native wheels are **hard** dependencies on purpose: a platform without a wheel fails loudly rather than silently running the slow pure-Python path.
+**The whole suite, configured for speed** — [`golden-suite`](packages/python/golden-suite/README.md) pulls in every package plus the native (Rust) kernels, pinned and defaulted to the perf-optimized config. Native wheels are **hard** dependencies on purpose: a platform without a wheel fails loudly rather than silently running the slow pure-Python path.
 
 ```bash
 pip install golden-suite
 golden-suite doctor        # verify every package + native kernel is importable and healthy
 golden-suite optimize      # repair / re-enable the perf-optimized config
 
-pip install golden-suite[mcp]     # + the aggregator MCP server (every tool, one endpoint)
-pip install golden-suite[agent]   # + GoldenPipe serving surfaces (A2A + REST + TUI)
+pip install golden-suite[mcp]     # + aggregator MCP server (every tool, one endpoint)
 pip install golden-suite[all]     # everything
 ```
 
-**Just GoldenMatch** — ships fat optional extras so you only pay for what you use (native acceleration is already default on common platforms):
+**Just GoldenMatch** — fat optional extras, pay only for what you use (native acceleration is default on common platforms):
 
 ```bash
 pip install goldenmatch                    # core (CSV in, CSV out) + native
-pip install goldenmatch[documents]         # + PDF/image ingest (run on unstructured input)
+pip install goldenmatch[documents]         # + PDF/image ingest (resolve unstructured input)
 pip install goldenmatch[embeddings]        # + sentence-transformers, FAISS
 pip install goldenmatch[llm]               # + Claude / OpenAI for LLM boost
-pip install goldenmatch[duckdb]            # + DuckDB out-of-core backend
 pip install goldenmatch[ray]               # + Ray distributed backend (50M+ rows)
 pip install goldenmatch[postgres]          # + Postgres sync  (also: [snowflake] [bigquery] [databricks] [salesforce])
-pip install goldenmatch[quality]           # + GoldenCheck    (also: [transform] for GoldenFlow)
 pip install goldenmatch[mcp]               # + MCP server     (also: [agent] A2A, [web] browser workbench)
-
-goldenmatch setup    # interactive wizard: GPU, API keys, database
 ```
 
-Sister packages compose: `pip install goldenpipe[full]` brings in Check + Flow + Match together.
+**Web workbench** — `pip install 'goldenmatch[web]'` then `goldenmatch serve-ui my-project` (opens `http://localhost:5050`): edit rules with live validation, preview against a sampled slice, label pairs (mirrored into Learning Memory), compare runs.
+
+**More:** [`examples/`](examples/README.md) — [Python](examples/python/README.md) (quickstart, full pipeline, customer 360, PPRL, MCP client) · [TypeScript](examples/typescript/README.md) (quickstart, Vercel Edge, MCP client) · [Airflow](examples/airflow/README.md).
 
 ---
 
 ## Deploy
 
-### Remote MCP (nothing to install)
-
-Hosted on [Smithery](https://smithery.ai/servers/benzsevern/goldenmatch) — connect any MCP client:
+**Remote MCP (nothing to install)** — hosted on [Smithery](https://smithery.ai/servers/benzsevern/goldenmatch); connect any MCP client:
 
 ```json
 { "mcpServers": { "goldenmatch": { "url": "https://goldenmatch-mcp-production.up.railway.app/mcp/" } } }
 ```
 
-70+ MCP tools across the suite: deduplicate, match, explain, review, link privately, configure, scan quality, transform, synthesize golden records, analyze trends and regressions, manage Learning Memory.
-
-### Containers
-
-Every package ships as a multi-arch image (linux/amd64 + arm64) on GHCR — pull anonymously:
+**Containers** — every package ships as a multi-arch image (linux/amd64 + arm64) on GHCR, pull anonymously:
 
 ```bash
 docker run -p 8300:8300 ghcr.io/benseverndev-oss/goldensuite-mcp:latest   # one container, every tool
-docker run -p 8200:8200 ghcr.io/benseverndev-oss/goldenmatch-mcp:latest   # per-package (also: goldencheck/goldenflow/goldenpipe/infermap -mcp)
+docker run -p 8200:8200 ghcr.io/benseverndev-oss/goldenmatch-mcp:latest   # per-package (also goldencheck/goldenflow/goldenpipe/infermap)
 docker run -e POSTGRES_PASSWORD=secret ghcr.io/benseverndev-oss/goldenmatch-extensions:latest   # Postgres + extension
 ```
 
-Tags: `:latest` (current `main`), `:main-<sha7>` (every push, immutable), `:vX.Y.Z` / `:vX.Y` (on release). See [`goldensuite-mcp`](packages/python/goldensuite-mcp/README.md) for the aggregator's tool-collision behaviour.
-
-### Airflow
-
-13 drop-in DAGs at [`examples/airflow/`](examples/airflow/README.md) (TaskFlow API, Airflow 2.7+ / 3.x; tunable knobs, idempotent retries, marker-protected against double-processing), grouped by lifecycle stage:
+**Airflow** — 13 drop-in DAGs at [`examples/airflow/`](examples/airflow/README.md) (TaskFlow API, Airflow 2.7+ / 3.x; idempotent, marker-protected), grouped by lifecycle stage:
 
 | Group | DAGs |
 |---|---|
@@ -348,58 +330,45 @@ Tags: `:latest` (current `main`), `:main-<sha7>` (every push, immutable), `:vX.Y
 
 ---
 
-## Benchmarks & scale
-
-Published GoldenMatch numbers (DQbench composite **91.04**, DBLP-ACM **0.9641** F1, Febrl3 **0.9443** F1, NCVR **0.9719** F1) map back to a single committed runner, `scripts/run_benchmarks.py`. See [`docs/reproducing-benchmarks.md`](docs/reproducing-benchmarks.md) for per-number commands, dataset URLs, expected output with tolerance, and a one-click reproduction snippet. The same runner powers the weekly `benchmarks.yml` workflow.
-
-**Scale envelope** ([`docs/scale-envelope.md`](docs/scale-envelope.md)) — per-backend ranges (Polars in-memory < 500K, DuckDB out-of-core 500K–50M, Ray distributed ≥ 50M), block-size failure modes, candidate-pair math, and a decision tree for picking a backend.
-
-**Verified at the top end:** a full **100M-row** dedupe on a 5-node Ray cluster (`e2-standard-16`, 80 CPU) in **9.2 min** (554 s), **20,000,000 golden records recovered exactly**, driver peak **0.36 GB RSS**. The default distributed path is **recall-complete** (blocking-key shuffle scoring + distributed randomized-contraction WCC), so duplicates merge correctly *no matter how the input is partitioned*, and it stays driver-collect-free end to end (#844). A faster per-partition path (`GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE=0`, ~213 s on a 4-worker run) suits inputs where duplicates already co-locate within partitions. Recipe: [`configs/distributed-100m.yaml`](packages/python/goldenmatch/configs/distributed-100m.yaml).
-
----
-
 ## Repository layout
 
 ```
 goldenmatch/
 ├── packages/
 │   ├── python/        goldenmatch · goldencheck · goldenflow · goldenpipe · infermap · goldenanalysis
-│   │                  goldensuite-mcp (aggregator) · golden-suite (meta)
+│   │                  goldensuite-mcp (aggregator) · golden-suite (meta) · goldengraph · goldenmatch-kg
 │   ├── typescript/    full TS ports (edge-safe cores + WASM) · goldencheck-types
-│   ├── rust/extensions/  Postgres pgrx + DuckDB UDFs (own Cargo workspace)
+│   ├── rust/extensions/  Postgres pgrx + DuckDB UDFs + native kernels + owned libraries (own Cargo workspace)
 │   ├── dbt/goldensuite/  dbt materializations, tests, macros
 │   └── actions/goldencheck/  GitHub Action
 ├── examples/          python · typescript · airflow (drop-in DAGs)
+├── context-network/   architecture decisions + design docs (ADRs, the two-engine frame, Customer 360)
 ├── docs/superpowers/  design specs and implementation plans
-├── justfile · pyproject.toml (uv workspace) · pnpm-workspace.yaml (Turborepo) · .github/workflows/ci.yml
+└── justfile · pyproject.toml (uv workspace) · pnpm-workspace.yaml (Turborepo) · .github/workflows/ci.yml
 ```
 
-- **Cargo — no root workspace.** `packages/rust/extensions/` is itself a Cargo workspace (the `postgres` crate is excluded for pgrx build requirements); Cargo commands run from inside it.
-- **TypeScript — one pnpm workspace.** `packages/typescript/*` form a single pnpm + Turborepo workspace; `.npmrc` pins `node-linker=hoisted` for a flat `node_modules` (avoids Windows symlink issues).
+- **Cargo — no root workspace.** `packages/rust/extensions/` is itself a Cargo workspace (the `postgres` crate is excluded for pgrx); Cargo commands run from inside it.
+- **TypeScript — one pnpm workspace.** `packages/typescript/*` form a single pnpm + Turborepo workspace.
 
 ```bash
 just install   # uv sync + per-package npm install + cargo fetch
 just test      # all languages   ·   just lint   ·   just build
 ```
 
----
-
 ## Contributing
 
 - Feature work on `feature/<name>` branches; merge via squash PR. Titles: `feat:` / `fix:` / `docs:`.
 - Tests must pass on all three languages where the change applies; the parity harness in `packages/typescript/goldenmatch/tests/parity/` enforces 4-decimal Python ↔ TypeScript scorer parity.
-- See `docs/superpowers/specs/` for design rationale.
-
-**TypeScript dev setup (pnpm + Turborepo)** — from the repo root:
+- Architecture changes conform to (or amend) the [one-product-two-engines frame](context-network/architecture/one-product-two-engines.md) in the same PR. Design rationale lives in `context-network/decisions/` and `docs/superpowers/specs/`.
 
 ```bash
-corepack enable                               # one-time, picks up pnpm@9.15.0 from package.json
+corepack enable                               # one-time, picks up pnpm@9.15.0
 pnpm install
-pnpm turbo run build test typecheck lint      # full pipeline (cached after first run)
+pnpm turbo run build test typecheck           # full pipeline (cached after first run)
 ```
 
-**Windows:** enable Developer Mode (Settings → For Developers) so `pnpm install` can create symlinks; if `corepack enable` needs admin, `npm i -g pnpm@9.15.0` is equivalent.
+**Windows:** enable Developer Mode so `pnpm install` can create symlinks; if `corepack enable` needs admin, `npm i -g pnpm@9.15.0` is equivalent.
 
 ---
 
-<sub>This repo was formed on **2026-05-01** by folding 8 sibling repos into `goldenmatch` via `git filter-repo` (full history preserved) — [design](docs/superpowers/specs/2026-05-01-goldenmatch-monorepo-fold-in-design.md) · [plan](docs/superpowers/plans/2026-05-01-goldenmatch-monorepo-fold-in.md). Built by **[Ben Severn](https://bensevern.dev)**. MIT — see [LICENSE](LICENSE).</sub>
+<sub>This repo was formed on **2026-05-01** by folding 8 sibling repos into `goldenmatch` via `git filter-repo` (full history preserved). Built by **[Ben Severn](https://bensevern.dev)**. MIT — see [LICENSE](LICENSE).</sub>

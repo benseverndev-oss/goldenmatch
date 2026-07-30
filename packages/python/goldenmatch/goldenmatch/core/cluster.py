@@ -545,29 +545,69 @@ def build_cluster_frames(
     ``pair_scores`` stripped, everything else byte-identical.
     """
     import numpy as _np
+    import pyarrow as _pa_cf
 
-
-    pairs_list = list(pairs)
-    if all_ids is None:                       # mirror build_clusters (:411-417)
-        seen: set[int] = set()
-        for a, b, _s in pairs_list:
-            seen.add(a)
-            seen.add(b)
-        all_ids = list(seen)
-
-    # W2c: constructed via the seam (spec schema == PAIR_STREAM_SCHEMA).
+    # Accept either a list[(id_a, id_b, score)] OR an already-columnar pair frame
+    # -- a pa.Table (B2c: straight out of score_buckets_arrow, Arrow end-to-end)
+    # or a Polars frame (weighted columnar). The frame path skips rebuilding a
+    # Python list + re-materializing a df, and defers the list to `_pairs_list()`
+    # below: only the off-native presplit and the rare oversized auto-split
+    # minority ever touch it. On the native clustering path with no oversized
+    # clusters the list is NEVER built -- that is the win: the 16M-tuple rebuild
+    # + the per-cluster/pair_scores dict build_clusters_columnar's legacy path
+    # paid both vanish.
     from goldenmatch.core.frame import PAIR_STREAM_SCHEMA_SPEC as _PAIR_SPEC
     from goldenmatch.core.frame import frame_from_columns as _ffc
 
-    pairs_df = _ffc(
-        {
-            "id_a": [p[0] for p in pairs_list],
-            "id_b": [p[1] for p in pairs_list],
-            "score": [p[2] for p in pairs_list],
-        },
-        _PAIR_SPEC,
-        backend=backend,
-    ).native
+    _pairs_list_cache: list | None = None
+    _arrow_in = isinstance(pairs, _pa_cf.Table)
+    if _arrow_in or _is_pairs_dataframe(pairs):
+        pairs_df = pairs
+        if all_ids is None:
+            _empty = pairs.num_rows == 0 if _arrow_in else pairs.is_empty()
+            if _empty:
+                all_ids = []
+            else:
+                _col = (lambda c: pairs.column(c).to_numpy(zero_copy_only=False)) \
+                    if _arrow_in else (lambda c: pairs[c].to_numpy())
+                all_ids = _np.unique(
+                    _np.concatenate([_col("id_a"), _col("id_b")])
+                ).tolist()
+    else:
+        _pairs_list_cache = list(pairs)
+        if all_ids is None:                   # mirror build_clusters (:411-417)
+            seen: set[int] = set()
+            for a, b, _s in _pairs_list_cache:
+                seen.add(a)
+                seen.add(b)
+            all_ids = list(seen)
+        # W2c: constructed via the seam (spec schema == PAIR_STREAM_SCHEMA).
+        pairs_df = _ffc(
+            {
+                "id_a": [p[0] for p in _pairs_list_cache],
+                "id_b": [p[1] for p in _pairs_list_cache],
+                "score": [p[2] for p in _pairs_list_cache],
+            },
+            _PAIR_SPEC,
+            backend=backend,
+        ).native
+    assert all_ids is not None  # set in both branches above; narrow for pyright
+
+    def _pairs_list() -> list:
+        """The (id_a, id_b, score) list, materialized on demand: free when the
+        caller passed a list; a one-time numpy.tolist() when it passed a frame."""
+        nonlocal _pairs_list_cache
+        if _pairs_list_cache is None:
+            if isinstance(pairs_df, _pa_cf.Table):
+                _pairs_list_cache = list(zip(
+                    pairs_df.column("id_a").to_numpy(zero_copy_only=False).tolist(),
+                    pairs_df.column("id_b").to_numpy(zero_copy_only=False).tolist(),
+                    pairs_df.column("score").to_numpy(zero_copy_only=False).tolist(),
+                    strict=True,
+                ))
+            else:
+                _pairs_list_cache = _pairs_df_to_list_numpy(pairs_df)
+        return _pairs_list_cache
     # BULK pre-split frames. Two paths, IDENTICAL output schema/shape (the SP-A
     # parity test runs both native=1 and native=0):
     #   - Native: the Arrow kernel ALREADY returns canonical (assignments,
@@ -596,7 +636,7 @@ def build_cluster_frames(
         metadata = _tf(frames0.metadata).with_fill_null(["min_edge", "avg_edge"], 0.0).native
     else:
         sorted_clusters, metadata_by_cid, _weak = _columnar_presplit(
-            pairs_list, pairs_df, all_ids, max_cluster_size,
+            _pairs_list(), pairs_df, all_ids, max_cluster_size,
         )
         n_clusters = len(sorted_clusters)
         total_members = sum(len(s) for s in sorted_clusters)
@@ -691,7 +731,7 @@ def build_cluster_frames(
             for cid in oversized:
                 members = members_by_cid[int(cid)]
                 ms = set(members)
-                ps = {(a, b): s for a, b, s in pairs_list if a in ms and b in ms}
+                ps = {(a, b): s for a, b, s in _pairs_list() if a in ms and b in ms}
                 edge_work += len(ps)
                 if edge_work > edge_budget:
                     budget_tripped = True
@@ -765,7 +805,11 @@ def build_cluster_frames(
 
     metadata = _tf3(metadata).apply_weak_quality(weak_cluster_threshold).native
 
-    _emit_cluster_profile_frames(metadata, assignments, pairs_list)
+    # Telemetry only (no-op without an active emitter). Guard on the emitter so
+    # the df-input fast path never materializes the pair list just to feed a
+    # profiler that isn't capturing -- the whole point of the lazy `_pairs_list`.
+    if _emitter_stack.get():
+        _emit_cluster_profile_frames(metadata, assignments, _pairs_list())
     return ClusterFrames(assignments=assignments, metadata=metadata)
 
 
@@ -1835,12 +1879,18 @@ class LazyClusterDict(dict):
     a consumer that ignores it pays nothing.
     """
 
-    __slots__ = ("_builder", "_built")
+    __slots__ = ("_builder", "_built", "_count")
 
-    def __init__(self, builder: Any):
+    def __init__(self, builder: Any, count: int | None = None):
         super().__init__()
         self._builder = builder
         self._built = False
+        # Known cluster count (metadata height). Lets len()/bool() answer O(1)
+        # WITHOUT building the dict -- the hot path (bench, stats-only dedupe_df
+        # callers) only ever wants the count, and forcing the full
+        # cluster_frames_to_dict for a `len(res.clusters)` was the flamegraph's
+        # top post-scoring cost. None -> fall back to building (unknown count).
+        self._count = count
 
     def _ensure(self) -> None:
         if not self._built:
@@ -1860,6 +1910,10 @@ class LazyClusterDict(dict):
         return dict.__getitem__(self, key)
 
     def __len__(self):  # also drives bool(self)
+        # O(1) from the known count when not yet built -- the builder produces
+        # exactly one entry per cluster (metadata row), so `len` == `_count`.
+        if not self._built and self._count is not None:
+            return self._count
         self._ensure()
         return dict.__len__(self)
 
@@ -1973,6 +2027,32 @@ class LazyClusterDict(dict):
         return {k: _copy.deepcopy(v, memo) for k, v in dict.items(self)}
 
 
+def _try_native_group_members(assignments: Any) -> tuple[list[int], list[list[int]]] | None:
+    """Native arrow grouping of the assignments frame (``cluster_id`` ->
+    per-cluster ``member_id`` lists), or ``None`` to fall back to the Python loop
+    (kernel absent / stale wheel without the symbol). Feeds the cluster-dict
+    ``by_cid`` build without a Python ``to_list`` + setdefault over every member.
+    """
+    from goldenmatch.core._native_loader import native_enabled, native_module
+
+    if not native_enabled("clustering"):
+        return None
+    fn = getattr(native_module(), "group_members_by_cluster_arrow", None)
+    if fn is None:  # stale wheel predating the symbol -> Python fallback
+        return None
+
+    def _single_array(col_name: str):
+        # PyArrowType<ArrayData> wants a single pa.Array, not a ChunkedArray.
+        a = assignments.column(col_name).to_arrow()
+        if hasattr(a, "combine_chunks"):  # ChunkedArray -> single-chunk -> Array
+            a = a.combine_chunks()
+        if hasattr(a, "num_chunks"):
+            a = a.chunk(0)
+        return a
+
+    return fn(_single_array("cluster_id"), _single_array("member_id"))
+
+
 def cluster_frames_to_dict(frames: ClusterFrames) -> dict[int, dict]:
     """Adapter: two-frame Phase-2 representation -> legacy
     ``dict[int, dict]`` shape. For migrating consumers during Phase 2b.
@@ -1991,14 +2071,22 @@ def cluster_frames_to_dict(frames: ClusterFrames) -> dict[int, dict]:
     if assignments.height == 0:
         return {}
 
-    # Build member lists by cluster_id from the assignments frame.
-    by_cid: dict[int, list[int]] = {}
-    for cid, mid in zip(
-        assignments.column("cluster_id").to_list(),
-        assignments.column("member_id").to_list(),
-        strict=True,
-    ):
-        by_cid.setdefault(int(cid), []).append(int(mid))
+    # Build member lists by cluster_id. Prefer the native arrow grouping kernel
+    # (zero-copy in; groups every member row in Rust) over the Python to_list +
+    # setdefault loop -- the flamegraph's cold-path cost when a caller
+    # materializes results["clusters"]. Byte-identical (first-appearance cid
+    # order, input-order members); falls back to Python when the kernel is absent.
+    _grouped = _try_native_group_members(assignments)
+    if _grouped is not None:
+        by_cid: dict[int, list[int]] = dict(zip(*_grouped, strict=True))
+    else:
+        by_cid = {}
+        for cid, mid in zip(
+            assignments.column("cluster_id").to_list(),
+            assignments.column("member_id").to_list(),
+            strict=True,
+        ):
+            by_cid.setdefault(int(cid), []).append(int(mid))
 
     # PERF (hotspot round 1): columnar reads + zip instead of per-row dict
     # materialization -- 950K metadata rows allocated 950K dicts and was 35%

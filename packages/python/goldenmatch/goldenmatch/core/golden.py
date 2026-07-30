@@ -804,6 +804,37 @@ def _polars_native_eligible(
     return True
 
 
+def _config_uses_confidence_majority(rules: GoldenRulesConfig) -> bool:
+    """True iff any effective survivorship strategy is ``confidence_majority``.
+
+    ``confidence_majority`` is the ONLY strategy that consumes per-cluster pair
+    scores (``merge_field`` -> ``_confidence_majority``; the fused kernel's
+    Stage-4 pair-edge build is likewise guarded on it). When no rule uses it,
+    building the ``{cluster: {(row_a, row_b): score}}`` pair-score dict is pure
+    waste -- it is passed to the builder and never read. On the default
+    ``most_complete`` config at 5M that dict cost 32.8s / 71% of the golden
+    stage, so callers gate the build on this. Checks every rule surface: the
+    default strategy, each field_rule (incl. list-form conditional clauses),
+    field_groups, and cluster_overrides.
+    """
+    if rules.default_strategy == "confidence_majority":
+        return True
+    for entry in rules.field_rules.values():
+        clauses = entry if isinstance(entry, list) else [entry]
+        if any(getattr(c, "strategy", None) == "confidence_majority" for c in clauses):
+            return True
+    if any(getattr(g, "strategy", None) == "confidence_majority" for g in rules.field_groups):
+        return True
+    if rules.cluster_overrides:
+        for overrides in rules.cluster_overrides.values():
+            if any(
+                getattr(r, "strategy", None) == "confidence_majority"
+                for r in overrides.values()
+            ):
+                return True
+    return False
+
+
 def _polars_importable() -> bool:
     """True when polars is actually installed (D6 fallback gate: the fast
     columnar + vectorized survivorship routes are polars-present WALL

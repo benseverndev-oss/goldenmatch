@@ -37,9 +37,14 @@ from goldenmatch.identity.model import (
     SourceRecord,
 )
 from goldenmatch.identity.profile import (
+    Customer360,
     EntityProfile,
+    FieldContribution,
+    FieldProvenance,
     IdentitySummary,
     WorklistItem,
+    customer_360,
+    customer_360_page,
     entity_profile,
     identity_summary_stats,
     steward_worklist,
@@ -58,6 +63,12 @@ from goldenmatch.identity.query import (
     manual_split,
     promote_claim,
     revoke_claim,
+)
+from goldenmatch.identity.relationships import (
+    build_relationships,
+    profile_relationship_fields,
+    suggest_relationship_rules,
+    to_graph_batch,
 )
 from goldenmatch.identity.resolve import (
     ResolveSummary,
@@ -125,6 +136,10 @@ __all__ = [
     "revoke_claim",
     "match_record_to_entity",
     "migrate_record_ids",
+    "build_relationships",
+    "profile_relationship_fields",
+    "suggest_relationship_rules",
+    "to_graph_batch",
     "resolve_clusters",
     "resolve_record_incremental",
     "DEFAULT_CHANNEL_TRUST",
@@ -143,9 +158,14 @@ __all__ = [
     "build_golden_with_provenance",
     "learn_field_survivorship",
     "learned_field_strategies",
+    "Customer360",
     "EntityProfile",
+    "FieldContribution",
+    "FieldProvenance",
     "IdentitySummary",
     "WorklistItem",
+    "customer_360",
+    "customer_360_page",
     "entity_profile",
     "identity_summary_stats",
     "steward_worklist",

@@ -8,6 +8,10 @@ import type { ClusterInfo, PairKey } from "./types.js";
 // default bundle. Populated via `enableGraphWasm()` from the opt-in
 // `goldenmatch/core/graph-wasm` subpath.
 import { getGraphWasmBackend } from "./graphWasmBackend.js";
+// Same lean-registry pattern for the MST-split + confidence kernels. Populated
+// via `enableClusterWasm()` from the opt-in `goldenmatch/core/cluster-wasm`
+// subpath; null (pure-TS fallback) by default.
+import { getClusterWasmBackend } from "./clusterWasmBackend.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -155,6 +159,23 @@ export function computeClusterConfidence(
   pairScores: ReadonlyMap<PairKey, number>,
   size: number,
 ): ClusterConfidence {
+  // Rust-source-of-truth path: the shared cluster-core kernel when the wasm
+  // backend is enabled; the pure-TS math below stays the default fallback. The
+  // kernel handles every case (incl. size<=1 / no edges) identically, so the
+  // result is byte-equivalent — edges are passed in pairScores iteration order
+  // so the bottleneck first-min tie-break + float-sum order match bit-for-bit.
+  const backend = getClusterWasmBackend();
+  if (backend) {
+    const edges: [number, number, number][] = [];
+    for (const [key, score] of pairScores) {
+      const [a, b] = parsePairKey(key);
+      edges.push([a, b, score]);
+    }
+    const [minEdge, avgEdge, connectivity, bottleneckPair, confidence] =
+      backend.clusterConfidence(edges, size);
+    return { minEdge, avgEdge, connectivity, bottleneckPair, confidence };
+  }
+
   if (size <= 1 || pairScores.size === 0) {
     return {
       minEdge: null,
@@ -229,42 +250,62 @@ export function splitOversizedCluster(
     ];
   }
 
-  const mst = buildMst(members, pairScores);
-  if (mst.length === 0) {
-    return [
-      {
-        members: [...members].sort((a, b) => a - b),
-        size: members.length,
-        oversized: false,
-        pairScores: new Map(pairScores),
-        confidence: 1.0,
-        bottleneckPair: null,
-        clusterQuality: "strong",
-      },
-    ];
-  }
+  // Compute the post-split components. Rust-source-of-truth path: the shared
+  // cluster-core kernel (max-weight MST, drop the weakest edge) when the wasm
+  // backend is enabled; the pure-TS MST below stays the default fallback. Both
+  // use the same stable score-descending sort + first-min tie-break, so the
+  // components are IDENTICAL (not merely partition-equivalent). An empty result
+  // means an empty MST -> unsplittable, same as the pure-TS `mst.length === 0`.
+  const unsplittable = (): MutableClusterInfo[] => [
+    {
+      members: [...members].sort((a, b) => a - b),
+      size: members.length,
+      oversized: false,
+      pairScores: new Map(pairScores),
+      confidence: 1.0,
+      bottleneckPair: null,
+      clusterQuality: "strong",
+    },
+  ];
 
-  // Find weakest edge
-  let weakestIdx = 0;
-  let weakestScore = mst[0]![2];
-  for (let i = 1; i < mst.length; i++) {
-    if (mst[i]![2] < weakestScore) {
-      weakestScore = mst[i]![2];
-      weakestIdx = i;
+  let components: Set<number>[];
+  const backend = getClusterWasmBackend();
+  if (backend) {
+    const edges: [number, number, number][] = [];
+    for (const [key, score] of pairScores) {
+      const [a, b] = parsePairKey(key);
+      edges.push([a, b, score]);
     }
-  }
+    const comps = backend.mstSplitComponents(members as number[], edges);
+    if (comps.length === 0) return unsplittable();
+    components = comps.map((c) => new Set(c));
+  } else {
+    const mst = buildMst(members, pairScores);
+    if (mst.length === 0) return unsplittable();
 
-  // Rebuild without weakest edge
-  const uf = new UnionFind();
-  uf.addMany(members as number[]);
-  for (let i = 0; i < mst.length; i++) {
-    if (i !== weakestIdx) {
-      uf.union(mst[i]![0], mst[i]![1]);
+    // Find weakest edge
+    let weakestIdx = 0;
+    let weakestScore = mst[0]![2];
+    for (let i = 1; i < mst.length; i++) {
+      if (mst[i]![2] < weakestScore) {
+        weakestScore = mst[i]![2];
+        weakestIdx = i;
+      }
     }
+
+    // Rebuild without weakest edge
+    const uf = new UnionFind();
+    uf.addMany(members as number[]);
+    for (let i = 0; i < mst.length; i++) {
+      if (i !== weakestIdx) {
+        uf.union(mst[i]![0], mst[i]![1]);
+      }
+    }
+    components = uf.getClusters();
   }
 
   const result: MutableClusterInfo[] = [];
-  for (const subMembers of uf.getClusters()) {
+  for (const subMembers of components) {
     const subList = [...subMembers].sort((a, b) => a - b);
     const subPairs = new Map<PairKey, number>();
     for (const [key, score] of pairScores) {

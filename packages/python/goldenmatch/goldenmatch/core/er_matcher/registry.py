@@ -3,8 +3,9 @@
 The repo holds ONLY the pin (URL + sha256), never the weights (spec §5). On first
 use, ``resolve_model`` downloads the GGUF to a local cache and verifies its
 sha256 -- never-black-box: the exact bytes are pinned and checked. The URL is a
-direct-download asset (a GitHub Release asset in the project's own org, or an HF
-resolve URL); ghcr/OCI is an alternative that needs an OCI puller (deferred).
+direct-download **GitHub Release asset** in the project's own org (published by
+the ``publish-er-matcher`` workflow); ghcr/OCI is an alternative that needs an
+OCI puller (deferred).
 
 Weights are published only after the P5 eval gate passes; until then the specs
 carry ``sha256=None`` (a `PENDING` pin) and ``resolve_model`` refuses to download
@@ -41,8 +42,11 @@ MODELS: dict[str, ModelSpec] = {
     "3b": ModelSpec(
         tier="3b",
         filename="goldenmatch-er-matcher-3b-q4_k_m.gguf",
-        url=None,
-        sha256=None,
+        url=(
+            "https://github.com/benseverndev-oss/goldenmatch/releases/download/"
+            "er-matcher-3b-v1.0.0/goldenmatch-er-matcher-3b-q4_k_m.gguf"
+        ),
+        sha256="b6637fd9892b21b565098524501083edb91199b0bfffc267edf48885ce9c1d3b",
         base_model="Qwen/Qwen2.5-3B-Instruct",
         serializer_version="v1",
     ),

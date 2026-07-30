@@ -1,0 +1,36 @@
+# goldenphonetic — jellyfish-compatible phonetic encoders, shipped as a maturin/
+# abi3 wheel that wraps the pyo3-free `goldenphonetic-core` Rust crate. Byte-
+# identical to the Python `jellyfish` package on soundex / metaphone / nysiis /
+# match_rating, with zero runtime dependencies.
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "goldenphonetic"
+version = "0.1.1"
+description = "Fast, byte-identical-to-jellyfish phonetic encoders (soundex / metaphone / nysiis / match_rating)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Ben Severn", email = "ben@bensevern.dev" }]
+keywords = ["phonetic", "soundex", "metaphone", "nysiis", "jellyfish", "record-linkage"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3 :: Only",
+    "License :: OSI Approved :: MIT License",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Text Processing :: General",
+]
+
+[project.urls]
+Homepage = "https://github.com/benseverndev-oss/goldenmatch"
+Repository = "https://github.com/benseverndev-oss/goldenmatch"
+
+[tool.maturin]
+# Mixed layout: the thin Python wrapper lives in python/goldenphonetic/; the
+# compiled abi3 ext lands at goldenphonetic/_goldenphonetic (pymodule
+# `_goldenphonetic`, so the last path component matches and no Rust rename needed).
+python-source = "python"
+module-name = "goldenphonetic._goldenphonetic"

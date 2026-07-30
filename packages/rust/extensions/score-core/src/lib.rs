@@ -1,4 +1,5 @@
-//! Canonical string scorers backed by the `rapidfuzz` Rust crate — the single
+//! Canonical string scorers over GoldenMatch's own vendored string-sim
+//! primitives ([`strsim`]) — the single
 //! source of truth shared (by construction) between the `goldenmatch._native`
 //! PyO3 extension and the `datafusion-udf` FFI ScalarUDFs. Both link this crate,
 //! so the per-pair scoring is identical across surfaces; parity is structural,
@@ -8,8 +9,16 @@
 //! `#[pyfunction]` shims that delegate here; the FFI UDFs call these `pub fn`s
 //! directly. All functions operate on Unicode chars (codepoints), matching
 //! rapidfuzz.
-use rapidfuzz::distance::{damerau_levenshtein, jaro_winkler, levenshtein};
-use rapidfuzz::fuzz;
+//!
+//! The four string-sim primitives (jaro_winkler / levenshtein / indel-ratio /
+//! damerau_levenshtein) are GoldenMatch's OWN vendored implementations, now
+//! living in the standalone [`goldenfuzz_core`] crate and re-exported here AS
+//! `strsim` so every `goldenmatch_score_core::strsim::*` caller is unchanged.
+//! They are byte-for-byte ports of rapidfuzz-rs 0.5.0, proven identical by
+//! `goldenfuzz_core`'s parity oracle (rapidfuzz is a dev-dep-only oracle there,
+//! not a shipped dependency), plus a single-word fast path that beats rapidfuzz
+//! on short strings. See docs/design/2026-07-27-goldenfuzz.md.
+pub use goldenfuzz_core as strsim;
 use unicode_normalization::UnicodeNormalization;
 // `alias_match` (score_one id 8) + its `regex`-backed strip_legal_form live behind
 // the default `alias` feature; `pub use` re-exports the public fns at the crate
@@ -36,21 +45,22 @@ fn token_sort_string(s: &str) -> String {
 //      jaro_winkler/levenshtein on 0-1, token_sort_ratio on 0-100) ----
 
 pub fn jaro_winkler_similarity(a: &str, b: &str) -> f64 {
-    // rapidfuzz JaroWinkler default prefix_weight = 0.1.
-    jaro_winkler::normalized_similarity(a.chars(), b.chars())
+    // Vendored JaroWinkler, default prefix_weight = 0.1 (byte-identical to the
+    // old rapidfuzz-rs path — see strsim parity test).
+    strsim::jaro_winkler(a, b)
 }
 
 pub fn levenshtein_similarity(a: &str, b: &str) -> f64 {
-    // rapidfuzz Levenshtein default uniform weights (1, 1, 1).
-    levenshtein::normalized_similarity(a.chars(), b.chars())
+    // Vendored Levenshtein, uniform weights (1, 1, 1).
+    strsim::levenshtein_normalized_similarity(a, b)
 }
 
 /// token_sort_ratio on the 0-100 scale (score_field divides by 100).
 pub fn token_sort_ratio(a: &str, b: &str) -> f64 {
     let sa = token_sort_string(a);
     let sb = token_sort_string(b);
-    // rapidfuzz-rs fuzz::ratio returns [0, 1]; Python fuzz.ratio is [0, 100].
-    fuzz::ratio(sa.chars(), sb.chars()) * 100.0
+    // Vendored Indel ratio returns [0, 1]; Python fuzz.ratio is [0, 100].
+    strsim::indel_ratio(&sa, &sb) * 100.0
 }
 
 /// TS/Python `token_sort_ratio` preprocessing for the **WASM TS-parity path**:
@@ -79,7 +89,7 @@ pub fn token_sort_normalized_ratio(a: &str, b: &str) -> f64 {
         toks.sort_unstable();
         toks.join(" ")
     }
-    fuzz::ratio(normalize(a).chars(), normalize(b).chars())
+    strsim::indel_ratio(&normalize(a), &normalize(b))
 }
 
 /// Canonicalize an ISO-8601 `YYYY-MM-DD` date to its 8 packed digits
@@ -126,7 +136,7 @@ fn iso_date_digits(s: &str) -> Option<[u8; 8]> {
 pub fn date_similarity(a: &str, b: &str) -> f64 {
     match (iso_date_digits(a), iso_date_digits(b)) {
         (Some(da), Some(db)) => {
-            let d = damerau_levenshtein::distance(da.iter().copied(), db.iter().copied());
+            let d = strsim::damerau_levenshtein_distance(&da, &db);
             match d {
                 0 => 1.0,
                 1 => 0.90,
@@ -135,7 +145,7 @@ pub fn date_similarity(a: &str, b: &str) -> f64 {
             }
         }
         // Not both ISO dates: fall back to plain normalized edit distance.
-        _ => levenshtein::normalized_similarity(a.chars(), b.chars()),
+        _ => strsim::levenshtein_normalized_similarity(a, b),
     }
 }
 
@@ -358,7 +368,7 @@ pub fn geo_haversine_similarity(a: &str, b: &str) -> f64 {
 /// Padding means even the empty string yields the all-`#` gram, so the set is
 /// never empty for n>=2 (the Python `if not union` branch is unreachable, but
 /// `qgram_similarity` guards it anyway).
-fn qgram_set(s: &str) -> std::collections::HashSet<[char; 3]> {
+fn qgram_set(s: &str) -> rustc_hash::FxHashSet<[char; 3]> {
     const N: usize = 3;
     // Build the padded codepoint sequence directly into one Vec -- (N-1) `#`
     // sentinels, the lowercased chars, then (N-1) `#` -- with no intermediate
@@ -370,14 +380,19 @@ fn qgram_set(s: &str) -> std::collections::HashSet<[char; 3]> {
     chars.extend(lower.chars());
     chars.extend(std::iter::repeat_n('#', N - 1));
     if chars.len() < N {
-        return std::collections::HashSet::new();
+        return rustc_hash::FxHashSet::default();
     }
     // The gram count is known (chars.len() - N + 1), so pre-size the set to avoid
     // rehashing while inserting. Grams are stored as a fixed `[char; N]` (N=3)
     // rather than an allocated `String`, so scoring many pairs doesn't
     // heap-allocate per trigram; set membership semantics are identical
-    // (codepoint-wise equality).
-    let mut set = std::collections::HashSet::with_capacity(chars.len() - N + 1);
+    // (codepoint-wise equality). FxHash (not the default SipHash) hashes the
+    // 12-byte key in a couple of multiplies -- byte-identical results, much less
+    // per-gram hashing overhead in the score_one(5) hot path.
+    let mut set = rustc_hash::FxHashSet::with_capacity_and_hasher(
+        chars.len() - N + 1,
+        rustc_hash::FxBuildHasher,
+    );
     for i in 0..=(chars.len() - N) {
         set.insert([chars[i], chars[i + 1], chars[i + 2]]);
     }
@@ -396,13 +411,15 @@ const ARRAY_INTERSECT_SEPARATORS: [char; 3] = ['|', ';', ','];
 /// first separator present (in `|`, `;`, `,` order) is used; a value with no
 /// separator is a single-element set; empty/whitespace-only -> empty set.
 /// Mirrors Python `_parse_token_set`.
-fn array_intersect_token_set(s: &str) -> std::collections::HashSet<&str> {
+fn array_intersect_token_set(s: &str) -> rustc_hash::FxHashSet<&str> {
+    // FxHash (not SipHash) for the per-call token set -- same equality-based
+    // membership, byte-identical result, cheaper hashing (see `qgram_set`).
     let sep = ARRAY_INTERSECT_SEPARATORS.iter().find(|c| s.contains(**c));
     match sep {
         None => {
             let tok = s.trim();
             if tok.is_empty() {
-                std::collections::HashSet::new()
+                rustc_hash::FxHashSet::default()
             } else {
                 std::iter::once(tok).collect()
             }
@@ -1310,12 +1327,12 @@ pub fn audio_fp_similarity(a: &str, b: &str) -> f64 {
 /// is a silent-drift trap.
 pub fn score_one(scorer_id: u8, a: &str, b: &str) -> f64 {
     match scorer_id {
-        0 => jaro_winkler::normalized_similarity(a.chars(), b.chars()),
-        1 => levenshtein::normalized_similarity(a.chars(), b.chars()),
+        0 => strsim::jaro_winkler(a, b),
+        1 => strsim::levenshtein_normalized_similarity(a, b),
         2 => {
             let sa = token_sort_string(a);
             let sb = token_sort_string(b);
-            fuzz::ratio(sa.chars(), sb.chars())
+            strsim::indel_ratio(&sa, &sb)
         }
         // id=3 = exact match. Guard arm collapses the if/else into the match
         // (clippy::collapsible-match under CI's stable toolchain); scorer_id==3

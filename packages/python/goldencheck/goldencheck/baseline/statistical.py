@@ -8,14 +8,17 @@ from typing import TYPE_CHECKING
 
 try:
     import numpy as np
-    import scipy.stats as _stats
 except ImportError as _err:  # pragma: no cover
     raise ImportError(
-        "scipy and numpy are required for deep-profiling baseline. "
-        "Install them with: pip install 'goldencheck[baseline]'"
+        "numpy is required for deep-profiling baseline. "
+        "Install it with: pip install 'goldencheck[baseline]'"
     ) from _err
 
 from goldencheck._polars_lazy import pl
+from goldencheck.baseline import _distributions as _dists
+from goldencheck.baseline._distributions import OwnedDist
+from goldencheck.baseline._ks import kstest as _owned_kstest
+from goldencheck.baseline._owned_stats import chi2_gof as _owned_chi2_gof
 from goldencheck.baseline.models import StatProfile
 from goldencheck.core._native_loader import native_enabled, native_module
 
@@ -40,12 +43,14 @@ _ID_KEYWORDS = frozenset({"_id", "id_", " id", "id ", "code", "key", "uuid", "gu
 # Keyword fragments that mark a column as a percentage — Benford skipped.
 _PCT_KEYWORDS = frozenset({"pct", "percent", "ratio", "rate", "share", "proportion"})
 
-# Candidate distributions for fitting, each as (name, scipy_dist).
-_CANDIDATE_DISTS: list[tuple[str, object]] = [
-    ("normal", _stats.norm),
-    ("log_normal", _stats.lognorm),
-    ("exponential", _stats.expon),
-    ("uniform", _stats.uniform),
+# Candidate distributions for fitting, each as (internal name, owned dist). The
+# owned dists (`_distributions`) expose the same `.name` / `.fit` / `.logpdf` the
+# scipy objects did -- no scipy in the fit path (KS test is owned via `_ks`).
+_CANDIDATE_DISTS: list[tuple[str, OwnedDist]] = [
+    ("normal", _dists.NORM),
+    ("log_normal", _dists.LOGNORM),
+    ("exponential", _dists.EXPON),
+    ("uniform", _dists.UNIFORM),
 ]
 
 # Minimum KS-test p-value to accept a distribution fit.
@@ -153,8 +158,9 @@ def _fit_distribution(values: np.ndarray) -> tuple[str | None, dict | None]:
             continue
 
         try:
-            fit_params = dist.fit(values)  # type: ignore[attr-defined]
-            _stat, pvalue = _stats.kstest(values, dist.name, args=fit_params)  # type: ignore[attr-defined]
+            fit_params = dist.fit(values)  # owned MLE (`_distributions`), no scipy
+            # Owned KS test (no scipy) -- byte-identical D, p = kstwo_sf(D, n).
+            _stat, pvalue = _owned_kstest(values, dist.name, fit_params)
         except Exception as exc:
             logger.debug("Distribution fit failed for %s: %s", name, exc)
             continue
@@ -322,18 +328,21 @@ def _compute_benford(values: np.ndarray) -> dict[str, float]:
         observed_props.append(obs_count)
         expected_vals.append(expected_props[d] * total)
 
-    # Chi-squared test
-    chi2, pvalue = _stats.chisquare(f_obs=observed_props, f_exp=expected_vals)
-    # Shadow (W4): also compute the native chi2_gof kernel (statistic + p-value)
-    # on the same inputs scipy got, and discard it. The emitted chi2_pvalue stays
-    # scipy until the Flip; the guard + swallow keep it output-invariant.
+    # Chi-squared goodness-of-fit p-value (W4 Flip): the native chi2_gof kernel
+    # when available, else the pure `_owned_stats` mirror -- no scipy. Both
+    # reproduce `scipy.stats.chisquare(f_obs, f_exp)[1]` to float epsilon (the
+    # emitted value is `round(pvalue, 6)`, so identical).
+    obs_f = [float(x) for x in observed_props]
+    exp_f = [float(x) for x in expected_vals]
+    pvalue: float | None = None
     if native_enabled("chi2_gof"):
         try:
-            native_module().chi2_gof(
-                [float(x) for x in observed_props], [float(x) for x in expected_vals]
-            )
-        except BaseException:  # noqa: BLE001 - swallow even PyO3 PanicException
-            logger.debug("native chi2_gof shadow failed", exc_info=True)
+            _chi2, pvalue = native_module().chi2_gof(obs_f, exp_f)
+        except BaseException:  # noqa: BLE001 - swallow even PyO3 PanicException, fall back to pure
+            logger.debug("native chi2_gof failed; using owned pure", exc_info=True)
+            pvalue = None
+    if pvalue is None:
+        _chi2, pvalue = _owned_chi2_gof(obs_f, exp_f)
     result["chi2_pvalue"] = round(float(pvalue), 6)
 
     return result

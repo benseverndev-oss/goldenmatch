@@ -137,6 +137,80 @@ def test_confident_rungs_still_scored_when_a_later_rung_unmeasurable():
     assert (100_000, "scale_invariance") in checks     # unmeasurable vs GREEN reference
 
 
+def test_pair_explosion_unmeasurable_rung_is_non_gating():
+    # THE #2021 fix: the 1M rung's committed RED config explodes to billions of
+    # candidate pairs (unmeasurable in any CI window), while 50K-500K measure the
+    # SAME config at high F1. A pair-explosion unmeasurable rung ABOVE a measured
+    # reference is a COST property, not a regression -> non-gating SKIP, not a
+    # violation (the #1934 gym-gate skipped_degenerate_ceiling precedent).
+    rung_f1 = {50_000: 0.998, 100_000: 0.99, 500_000: 0.985, 1_000_000: None}
+    refused = {50_000: False, 100_000: True, 500_000: True, 1_000_000: True}
+    reasons = {50_000: None, 100_000: None, 500_000: None, 1_000_000: "pair_explosion"}
+    r = mod.evaluate_gate(rung_f1, None, rung_refused=refused,
+                          rung_unmeasurable_reason=reasons)
+    assert r.ok, [v.line() for v in r.violations]
+    assert {s.rung for s in r.skipped} == {1_000_000}
+    assert r.skipped[0].reason == "pair_explosion"
+    assert not any(v.rung == 1_000_000 for v in r.violations)
+
+
+def test_pair_explosion_skip_is_non_gating_even_when_not_refused():
+    # THE #2021 preflight path: on the corrupted-realistic shape the >=100K rung
+    # COMMITS a coarse blocking config (no refusal) that would still explode
+    # candidate pairs, so the skip now fires BEFORE dedupe_df runs and records
+    # refused=False. A pair-explosion skip must be non-gating regardless of the
+    # refuse verdict -- gating keys off the reason, not `refused`.
+    rung_f1 = {50_000: 0.998, 100_000: 0.99, 500_000: 0.985, 1_000_000: None}
+    refused = {50_000: False, 100_000: False, 500_000: False, 1_000_000: False}
+    reasons = {50_000: None, 100_000: None, 500_000: None, 1_000_000: "pair_explosion"}
+    r = mod.evaluate_gate(rung_f1, None, rung_refused=refused,
+                          rung_unmeasurable_reason=reasons)
+    assert r.ok, [v.line() for v in r.violations]
+    assert {s.rung for s in r.skipped} == {1_000_000}
+    assert not any(v.rung == 1_000_000 for v in r.violations)
+
+
+def test_pair_explosion_at_reference_is_still_a_violation():
+    # No smaller rung to establish the config measures fine -> even a pair-explosion
+    # at the reference scale is a hard flag (can't wave through the ONLY evidence).
+    r = mod.evaluate_gate({1_000_000: None}, None,
+                          rung_refused={1_000_000: True},
+                          rung_unmeasurable_reason={1_000_000: "pair_explosion"})
+    checks = {(v.rung, v.check) for v in r.violations}
+    assert (1_000_000, "scale_invariance") in checks
+    assert not r.ok
+    assert not r.skipped
+
+
+def test_error_unmeasurable_still_gates_not_skipped():
+    # An unmeasurable rung whose reason is NOT pair_explosion (a genuine force-run
+    # ERROR) must STILL be a violation -- only the known-benign pair explosion is
+    # non-gating. Guards against the fix silently swallowing real breakage.
+    rung_f1 = {50_000: 0.99, 500_000: None}
+    reasons = {50_000: None, 500_000: "error"}
+    r = mod.evaluate_gate(rung_f1, None, rung_refused={50_000: False, 500_000: True},
+                          rung_unmeasurable_reason=reasons)
+    checks = {(v.rung, v.check) for v in r.violations}
+    assert (500_000, "scale_invariance") in checks
+    assert not r.ok
+    assert not r.skipped
+
+
+def test_pair_explosion_skip_does_not_mask_a_real_regression():
+    # A measured rung that craters is STILL caught even when a higher rung is a
+    # non-gating pair-explosion skip -- the skip only excuses the exploded rung.
+    rung_f1 = {50_000: 0.99, 100_000: 0.55, 500_000: None}
+    refused = {50_000: False, 100_000: False, 500_000: True}
+    reasons = {50_000: None, 100_000: None, 500_000: "pair_explosion"}
+    r = mod.evaluate_gate(rung_f1, None, rung_refused=refused,
+                          rung_unmeasurable_reason=reasons)
+    checks = {(v.rung, v.check) for v in r.violations}
+    assert (100_000, "absolute_floor") in checks       # 0.55 < 0.80 floor -> real fail
+    assert (100_000, "scale_invariance") in checks       # 0.55 << 0.99 reference
+    assert {s.rung for s in r.skipped} == {500_000}      # explosion still skipped
+    assert not r.ok                                       # the real regression fails the gate
+
+
 def test_empty_measurements_raises():
     try:
         mod.evaluate_gate({}, None)

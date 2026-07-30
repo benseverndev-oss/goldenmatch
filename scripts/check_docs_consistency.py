@@ -488,12 +488,12 @@ _PEPY_RE = re.compile(r"pepy\.tech/projects\?q=(?P<q>[A-Za-z0-9+._-]+)")
 # Published distributions deliberately NOT counted in the suite download totals.
 # goldenmatch-pg ships as GitHub-release tarballs (no pypistats download API),
 # so it has a publish workflow but is excluded from PYPI_PACKAGES on purpose.
-# goldenmatch-hnsw has its publish workflow but has not cut its first PyPI
-# release yet (pypistats 404s until then); move it into PYPI_PACKAGES + the
-# README pepy.tech ?q= list once published, same as the goldengraph note in
-# suite_download_badges.py. (goldengraph-native is now registered directly in
-# PYPI_PACKAGES via #1958, so it is NOT excepted here.)
-_PYPI_PUBLISH_BADGE_EXCEPTIONS = {"goldenmatch-pg", "goldenmatch-hnsw", "infermap-native"}
+# er-matcher's publish-er-matcher.yml uploads a quantized GGUF *model* to a
+# GitHub Release (not a PyPI/npm distribution -- no pypistats download API), so
+# like goldenmatch-pg it has a publish workflow but is excluded from the download
+# badge totals on purpose. (goldenmatch-hnsw published its first release 2026-07-29
+# and graduated into PYPI_PACKAGES + the README pepy list.)
+_PYPI_PUBLISH_BADGE_EXCEPTIONS = {"goldenmatch-pg", "infermap-native", "er-matcher"}
 
 
 def check_aggregate_badges(res: Result) -> None:

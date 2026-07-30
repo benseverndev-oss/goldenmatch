@@ -72,6 +72,24 @@ DEFAULT_DELTA_TOL = 0.02  # a rung may sit at most this far below its committed 
 DEFAULT_ABS_FLOOR = 0.80  # hard minimum pairwise F1 for zero-config at any gated scale
 METRIC = "pairwise"       # headline metric; b_cubed/cluster are recorded for context
 
+# A committed config whose ESTIMATED candidate-pair count exceeds this is
+# UNMEASURABLE-by-explosion: scoring it would run far longer than any CI window.
+# On the corrupted-realistic shape zero-config COMMITS a coarse `birth_year`-only
+# blocking config (~65 distinct values -> giant blocks) whose candidate pairs grow
+# n^2 (~1.9B at 500K -- ~9 min -- vs ~7.7B at 1M, which outlives the runner). The
+# controller does NOT refuse this (it commits it as best-effort), so dedupe_df(df)
+# runs it to completion on the confident path; at 1M that never finishes and the
+# nightly reds for a RUNNER-preemption, not a quality regression: smaller rungs
+# measure the SAME config at high F1. Such a rung is skipped proactively -- via the
+# per-rung `_preflight_pair_explosion`, BEFORE any full run, on both the confident-
+# commit and RED-refuse paths -- and flagged NON-GATING (the #1934 gym-gate
+# `skipped_degenerate_ceiling` precedent + the #1933 "measure, don't auto-fail on a
+# refusal" contract), while a rung unmeasurable for any OTHER reason (an actual
+# force-run error) stays a hard violation. Chosen above 500K's ~1.9B (kept
+# measurable) and below 1M's ~7.7B; ~3B is ~15 min of scoring, well under the
+# ~40-min runner-reclaim window this shape was hitting.
+MEASURE_MAX_PAIRS = 3_000_000_000
+
 
 @dataclass
 class Violation:
@@ -89,10 +107,25 @@ class Violation:
 
 
 @dataclass
+class Skip:
+    """A rung that could not be measured for a KNOWN-benign reason (currently a
+    pair-explosion on a degenerate committed config). Advisory / non-gating --
+    surfaced in the summary + logs, but NOT a violation. Mirrors the #1934
+    gym-gate `skipped_degenerate_ceiling` sentinel."""
+    rung: int
+    reason: str
+    detail: str
+
+    def line(self) -> str:
+        return f"[skipped:{self.reason}] n={self.rung}: {self.detail}"
+
+
+@dataclass
 class GateResult:
     rung_f1: dict[int, float]
     reference_n: int
     violations: list[Violation] = field(default_factory=list)
+    skipped: list[Skip] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -104,6 +137,7 @@ def evaluate_gate(
     baseline: Optional[dict[str, float]],
     *,
     rung_refused: Optional[dict[int, bool]] = None,
+    rung_unmeasurable_reason: Optional[dict[int, Optional[str]]] = None,
     scale_tol: float = DEFAULT_SCALE_TOL,
     delta_tol: float = DEFAULT_DELTA_TOL,
     abs_floor: float = DEFAULT_ABS_FLOOR,
@@ -137,6 +171,7 @@ def evaluate_gate(
     if not rung_f1:
         raise ValueError("evaluate_gate: no rung measurements supplied")
     refused = rung_refused or {}
+    unmeasurable_reason = rung_unmeasurable_reason or {}
 
     reference_n = min(rung_f1)
     reference_f1 = rung_f1[reference_n]
@@ -155,8 +190,24 @@ def evaluate_gate(
         # explosion). A refused rung whose F1 WAS recovered does NOT land here --
         # it flows through the floor/scale checks below, RED being context only.
         if f1 is None:
+            reason = unmeasurable_reason.get(n)
             qualifier = "REFUSED (RED config) and F1 could not be measured" if was_refused \
                 else "F1 could not be measured"
+            # A pair-explosion unmeasurable rung ABOVE a measured reference is a
+            # KNOWN degenerate-config COST, not a regression (the same config
+            # measures at high F1 on the smaller rungs) -- skip it, non-gating, the
+            # #1934 precedent. At the reference scale there is no smaller rung to
+            # establish that, so even a pair-explosion there is a hard flag. Any
+            # OTHER unmeasurable reason (a real force-run error) stays a violation.
+            if reason == "pair_explosion" and n != reference_n and not reference_unmeasured:
+                res.skipped.append(
+                    Skip(n, "pair_explosion",
+                         f"zero-config committed a degenerate RED config whose estimated "
+                         f"candidate pairs exceed the {MEASURE_MAX_PAIRS/1e6:.0f}M measure "
+                         f"ceiling; F1 measured fine at the n={reference_n} reference "
+                         f"(f1={reference_f1:.4f}) -- non-gating (cost, not a regression)")
+                )
+                continue
             if n == reference_n:
                 res.violations.append(
                     Violation(n, "scale_invariance", 0.0, abs_floor,
@@ -207,6 +258,38 @@ def evaluate_gate(
 # --------------------------------------------------------------------------- IO
 
 
+def _estimate_candidate_pairs(cfg, df) -> float:
+    """Estimate a committed config's candidate-pair count on ``df``, mirroring the
+    ``config_lint`` ``blocking.pair_explosion`` rule EXACTLY: per blocking key/pass,
+    the most-selective field bounds the block size, so pairs ~= n^2 / (2 * n_distinct),
+    summed across keys (a union adds pairs). Best-effort -- any failure returns 0.0
+    (measure as before; the guard never makes a measurable rung skip). Reuses the
+    lint rule's own ``_blocking_keys`` extractor so the estimate can't drift from the
+    warning the pipeline already prints."""
+    try:
+        from goldenmatch.core.config_lint.rules import _blocking_keys
+        keys = _blocking_keys(cfg)
+        n = df.height if hasattr(df, "height") else len(df)
+        if not keys or n <= 1:
+            return 0.0
+        est = 0.0
+        for key in keys:
+            ratios = []
+            for c in key:
+                cols = getattr(df, "columns", [])
+                if c in cols:
+                    nd = int(df[c].n_unique())
+                    if nd > 0:
+                        ratios.append(nd / n)
+            if not ratios:
+                continue
+            n_distinct = max(1.0, max(ratios) * n)
+            est += (n * n) / (2.0 * n_distinct)
+        return est
+    except Exception:  # noqa: BLE001 -- best-effort guard; fall back to measuring
+        return 0.0
+
+
 def load_baseline(path: Path) -> Optional[dict]:
     if not path.exists():
         return None
@@ -254,10 +337,54 @@ def measure_rungs(rungs: list[int], *, seed: int, shape: str, corruption: str) -
                 predicted[int(cid)] = list(members)
         return qis.score_quality(predicted, gt)
 
-    def _measure_red(df) -> Optional[dict]:
+    def _pair_explosion(cfg, df) -> bool:
+        """True (+ a stderr note) when ``cfg``'s ESTIMATED candidate pairs exceed
+        ``MEASURE_MAX_PAIRS`` on this rung's ``df`` -- an infeasible run that would
+        outlive the CI runner. The single skip authority, shared by the per-rung
+        preflight (the confident-COMMIT path) and ``_measure_red`` (the RED-refuse
+        path), so ONE estimate governs both."""
+        est = _estimate_candidate_pairs(cfg, df)
+        if est > MEASURE_MAX_PAIRS:
+            print(f"[qis-gate] n={n}: committed config estimated ~{est/1e6:.0f}M candidate "
+                  f"pairs (> {MEASURE_MAX_PAIRS/1e6:.0f}M) -- UNMEASURABLE (pair explosion), "
+                  f"skipping the run (non-gating: degenerate cost, not a regression)",
+                  file=sys.stderr, flush=True)
+            return True
+        return False
+
+    def _preflight_pair_explosion(df) -> bool:
+        """Config the rung the CHEAP way (sample-based auto-config, ``_skip_finalize``)
+        and apply the pair-explosion check BEFORE any full-pipeline ``dedupe_df`` runs.
+
+        This is the #2021 fix. The earlier skip lived ONLY in ``_measure_red`` (the
+        RED-refuse branch), on the assumption that a >=100K rung whose committed
+        config explodes candidate pairs always REFUSES. It does not: on the
+        corrupted-realistic shape the controller COMMITS a coarse ``birth_year``-only
+        blocking config (~65 distinct -> ~7.7B pairs at 1M) as non-RED, so
+        ``dedupe_df(df)`` took the confident path and ran that config to a
+        runner-preempting completion -- ``_measure_red`` was never reached and the
+        1M rung reddened the nightly for a RUNNER-preemption, not a regression.
+        Estimating what zero-config would commit up front skips it on BOTH paths.
+        Best-effort: ``False`` on any config failure (fall through and measure, as
+        before -- the guard never makes a measurable rung skip)."""
+        try:
+            cfg = goldenmatch.auto_configure_df(
+                df, confidence_required=False, allow_red_config=True, _skip_finalize=True)
+        except Exception:  # noqa: BLE001 -- can't preflight -> measure as before
+            return False
+        return _pair_explosion(cfg, df)
+
+    def _measure_red(df) -> tuple[Optional[dict], Optional[str]]:
         """Score the committed RED config via the allow_red_config force-run.
-        Returns the metrics dict, or None if the config could not be measured
-        (force-run errored / OOM-risk) -- an honest UNMEASURABLE, not a 0.0."""
+        Returns ``(metrics, None)`` when measured, ``(None, "pair_explosion")`` when
+        the committed config's ESTIMATED candidate pairs exceed ``MEASURE_MAX_PAIRS``
+        (skip the infeasible force-run BEFORE it grinds for 30+ min and the runner is
+        reclaimed -- the chronic-nightly-red root cause), or ``(None, "error")`` on a
+        genuine force-run failure. The pair-explosion check here is a second guard on
+        the RED-refuse path; the per-rung ``_preflight_pair_explosion`` is the primary
+        one and covers the confident-commit path too. An UNMEASURABLE rung is an
+        honest None, never a fabricated 0.0; the reason decides gating
+        (``pair_explosion`` is non-gating, ``error`` still flags)."""
         try:
             cfg = goldenmatch.auto_configure_df(
                 df, confidence_required=False, allow_red_config=True, _skip_finalize=True)
@@ -266,27 +393,40 @@ def measure_rungs(rungs: list[int], *, seed: int, shape: str, corruption: str) -
                     mk.rerank = False
                 if getattr(mk, "type", None) == "exact" and getattr(mk, "negative_evidence", None):
                     mk.negative_evidence = []
-            return _score(goldenmatch.dedupe_df(df, config=cfg))
+            if _pair_explosion(cfg, df):
+                return None, "pair_explosion"
+            return _score(goldenmatch.dedupe_df(df, config=cfg)), None
         except Exception as exc:  # noqa: BLE001  -- OOM/degenerate config: report, don't crash
             print(f"[qis-gate] n={n}: RED force-run unmeasurable ({type(exc).__name__}: "
                   f"{str(exc)[:120]})", file=sys.stderr, flush=True)
-            return None
+            return None, "error"
 
     _NONE = {"f1": None, "p": None, "r": None}
     out: dict[int, dict] = {}
     for n in rungs:
         df, gt = qis.generate_with_gt(n, seed=seed, shape=shape, corruption=corruption)
+        # (#2021) Proactively skip a rung whose committed zero-config config would
+        # explode candidate pairs beyond the CI window -- BEFORE dedupe_df(df) runs
+        # it. Guards the CONFIDENT-COMMIT path (which ran the exploding config to a
+        # runner-preempting completion), not only the RED-refuse path. Non-gating:
+        # refused=False because we never observed a refusal -- we skipped ahead.
+        if _preflight_pair_explosion(df):
+            out[n] = {"refused": False, "pairwise": dict(_NONE), "b_cubed": dict(_NONE),
+                      "cluster": dict(_NONE), "unmeasurable_reason": "pair_explosion"}
+            continue
         try:
             result = goldenmatch.dedupe_df(df)
         except ControllerNotConfidentError:
             # RED config on a >=100K input. Measure the committed config's actual
             # F1 (allow_red_config) rather than treating the refusal as a failure.
-            rec = _measure_red(df)
+            rec, reason = _measure_red(df)
             if rec is None:
                 out[n] = {"refused": True, "pairwise": dict(_NONE),
-                          "b_cubed": dict(_NONE), "cluster": dict(_NONE)}
+                          "b_cubed": dict(_NONE), "cluster": dict(_NONE),
+                          "unmeasurable_reason": reason}
             else:
                 rec["refused"] = True
+                rec["unmeasurable_reason"] = None
                 out[n] = rec
             continue
         predicted: dict[int, list[int]] = {}
@@ -296,6 +436,7 @@ def measure_rungs(rungs: list[int], *, seed: int, shape: str, corruption: str) -
                 predicted[int(cid)] = list(members)
         rec = qis.score_quality(predicted, gt)
         rec["refused"] = False
+        rec["unmeasurable_reason"] = None
         out[n] = rec
     return out
 
@@ -349,17 +490,28 @@ def write_step_summary(result: GateResult, records: dict[int, dict]) -> None:
 
     for n in sorted(records):
         r = records[n]
-        if not r.get("refused"):
+        reason = r.get("unmeasurable_reason")
+        f1 = r["pairwise"]["f1"]
+        # Reason-first: a pair-explosion skip can come from the preflight
+        # (refused=False) OR _measure_red (refused=True), so it must be classified
+        # off the reason, not the refuse verdict.
+        if reason == "pair_explosion":
+            verdict = "⚪ skipped — F1 unmeasurable (pair explosion, non-gating)"
+        elif f1 is None:
+            verdict = "🔴 F1 unmeasurable"
+        elif not r.get("refused"):
             verdict = "🟢 confident"
-        elif r["pairwise"]["f1"] is not None:
-            verdict = "🟡 RED (refused) — F1 measured via allow_red_config"
         else:
-            verdict = "🔴 RED (refused) — F1 unmeasurable"
+            verdict = "🟡 RED (refused) — F1 measured via allow_red_config"
         lines.append(f"| {n:,} | {_f(r['pairwise']['f1'])} | "
                      f"{_f(r['b_cubed']['f1'])} | {_f(r['cluster']['f1'])} | {verdict} |")
     lines.append("")
+    if result.skipped:
+        lines.append(f"⚪ **{len(result.skipped)} rung(s) skipped (non-gating):**")
+        for s in result.skipped:
+            lines.append(f"- {s.line()}")
     if result.ok:
-        lines.append(f"🟢 all rungs within tolerance (reference n={result.reference_n:,}).")
+        lines.append(f"🟢 all measurable rungs within tolerance (reference n={result.reference_n:,}).")
     else:
         lines.append(f"🔴 **{len(result.violations)} violation(s):**")
         for v in result.violations:
@@ -391,9 +543,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     records = measure_rungs(rungs, seed=args.seed, shape=args.shape, corruption=args.corruption)
     rung_f1 = {n: records[n][METRIC]["f1"] for n in records}
     rung_refused = {n: bool(records[n].get("refused")) for n in records}
+    rung_reason = {n: records[n].get("unmeasurable_reason") for n in records}
     for n in sorted(rung_f1):
-        f1, refused = rung_f1[n], rung_refused[n]
-        shown = "REFUSED (RED)" if refused else f"{METRIC}_f1={f1:.4f}"
+        f1, refused, reason = rung_f1[n], rung_refused[n], rung_reason[n]
+        if f1 is None:
+            shown = f"UNMEASURABLE ({reason or 'unknown'})"
+        elif refused:
+            shown = f"REFUSED (RED) {METRIC}_f1={f1:.4f}"
+        else:
+            shown = f"{METRIC}_f1={f1:.4f}"
         print(f"  n={n:>9,}  {shown}")
 
     if args.out_json:
@@ -411,13 +569,20 @@ def main(argv: Optional[list[str]] = None) -> int:
     baseline = load_baseline(args.baseline)
     base_f1 = (baseline or {}).get("f1") if baseline else None
     result = evaluate_gate(rung_f1, base_f1, rung_refused=rung_refused,
+                           rung_unmeasurable_reason=rung_reason,
                            scale_tol=args.scale_tol, delta_tol=args.delta_tol,
                            abs_floor=args.abs_floor)
     write_step_summary(result, records)
 
+    for s in result.skipped:
+        print(f"::notice::qis-gate {s.line()}")
+
     if result.ok:
-        print(f"OK: all {len(rung_f1)} rungs within tolerance "
-              f"(reference n={result.reference_n:,}, f1={rung_f1[result.reference_n]:.4f})")
+        ref_f1 = rung_f1[result.reference_n]
+        ref_shown = f"f1={ref_f1:.4f}" if ref_f1 is not None else "UNMEASURABLE"
+        skip_note = f" ({len(result.skipped)} rung(s) skipped, non-gating)" if result.skipped else ""
+        print(f"OK: all measurable rungs within tolerance{skip_note} "
+              f"(reference n={result.reference_n:,}, {ref_shown})")
         return 0
     print(f"::error::qis-gate FAILED with {len(result.violations)} violation(s):", file=sys.stderr)
     for v in result.violations:

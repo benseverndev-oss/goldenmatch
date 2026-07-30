@@ -85,7 +85,8 @@ def test_exact_parity(a, b):
 @native_only
 @pytest.mark.parametrize("a,b", _NAME_PAIRS)
 def test_fuzzy_parity(a, b):
-    # rapidfuzz-rs (score-core) vs Python rapidfuzz byte-equality re-validation (spec §6.1).
+    # Native infermap-core kernel vs the pure Python fallback (goldenfuzz-backed)
+    # byte-equality re-validation (spec §6.1). Both are our owned code now.
     assert native_module().fuzzy_name_score(a, b) == _fuzzy_name_score_pure(a, b)
 
 

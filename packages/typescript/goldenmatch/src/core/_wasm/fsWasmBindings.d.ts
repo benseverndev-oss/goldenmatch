@@ -15,6 +15,14 @@ export function score_block_pairs_fs(
   min_weight: number,
   weight_range: number,
   threshold: number,
+  level_thresholds_flat: Float64Array,
+  level_thresholds_lens: Int32Array,
+  ne_values_flat: string[],
+  ne_nulls: Uint8Array,
+  n_ne: number,
+  ne_scorer_ids: Uint8Array,
+  ne_thresholds: Float64Array,
+  ne_weights: Float64Array,
 ): string;
 export type SyncInitInput = BufferSource | WebAssembly.Module;
 export function initSync(

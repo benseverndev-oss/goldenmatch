@@ -30,6 +30,16 @@ PYPI_PACKAGES = [
     "infermap",
     "goldencheck-types",
     "goldensuite-mcp",
+    # Standalone fuzzy-string product (our rapidfuzz replacement, byte-identical
+    # Rust kernel). Published via publish-goldenfuzz.yml; its crates.io twin is
+    # goldenfuzz-core. A distinct PyPI distribution, counted like the rest.
+    "goldenfuzz",
+    # Standalone phonetic-encoder product (our owned jellyfish replacement).
+    # Published via publish-goldenphonetic.yml; crates.io twin goldenphonetic-core.
+    "goldenphonetic",
+    # Owned pure-Rust HNSW ANN index (our FAISS IndexHNSWFlat replacement).
+    # Published via publish-goldenmatch-hnsw.yml.
+    "goldenmatch-hnsw",
     # One-line meta-package (whole suite + native, on by default). A distinct PyPI
     # distribution whose downloads partially overlap its component packages --
     # counted here for the same reason as the *-native extras below.
@@ -44,13 +54,19 @@ PYPI_PACKAGES = [
     "goldencheck-native",
     "goldenanalysis-native",
     "goldengraph-native",
+    # Optional Semantic-Signature accelerator (goldengraph gates on it). Gained its
+    # PyPI publisher in publish-goldenprofile-native.yml; a *-native extra like the rest.
+    "goldenprofile-native",
     "goldenmatch-embed",
-    # PENDING FIRST PYPI RELEASE -- add once published (pypistats 404s until then):
-    # "goldenmatch-kg", "goldengraph". Their pepy.tech link in the root README
-    # aggregate badge must be extended in lockstep.
+    # goldengraph gained its PyPI publisher (publish-goldengraph.yml), so the
+    # publisher<->badge gate now requires it here. First release is pending, so
+    # pypistats 404s until then (tolerated; the badge preserves the prior value).
+    # Its pepy.tech link in the root README aggregate badge is extended in lockstep.
+    "goldengraph",
+    # goldenmatch-kg stays OUT by design -- it has no publish-*.yml (heavy framework
+    # extras), so adding it would break the reverse (badge -> publisher) symmetry.
 ]
-# Every TS package with a `publish-<pkg>-js.yml` → npm workflow. goldenmatch-wasm-runtime
-# is a workspace dep with no publish workflow, so it has no npm download count.
+# Every TS package with a `publish-<pkg>-js.yml` → npm workflow.
 NPM_PACKAGES = [
     "goldenmatch",
     "goldencheck",
@@ -66,6 +82,10 @@ NPM_PACKAGES = [
     # npm-only: the goldengraph KG-engine TS/WASM surface (publish-goldengraph-js.yml,
     # wired; first release pending, stats 404 until then — tolerated).
     "goldengraph",
+    # Shared WASM scorer runtime the other TS packages consume; gained its npm
+    # publisher in publish-goldenmatch-wasm-runtime-js.yml. First release pending,
+    # 404 tolerated until then.
+    "goldenmatch-wasm-runtime",
 ]
 
 # pypistats.org rate-limits unauthenticated callers; a short sleep between

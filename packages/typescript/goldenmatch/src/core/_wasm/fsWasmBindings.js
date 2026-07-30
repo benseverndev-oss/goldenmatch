@@ -3,10 +3,26 @@
 /* @ts-self-types="./goldenmatch_fs_wasm.d.ts" */
 
 /**
- * Zero-config FS block scoring (no NE, no custom banding, no cross-batch
- * exclude — the `auto_configure_probabilistic_df` shape). `field_values_flat`
- * / `field_nulls` are column-major (`field 0` rows, then `field 1` …).
- * Returns a JSON array of `[a, b, score]` triples.
+ * FS block scoring. `field_values_flat` / `field_nulls` are column-major
+ * (`field 0` rows, then `field 1` …). Returns a JSON array of `[a, b, score]`
+ * triples.
+ *
+ * The trailing arguments carry the capabilities `score_block_pairs_fs_impl`
+ * (and `fs_core::score_fs_pair`) already support but the zero-config shape
+ * does not exercise. They are ADDITIVE — passing the empty/None defaults
+ * (empty `level_thresholds_lens`, `n_ne = 0`, empty `ne_*`) reproduces the
+ * prior byte-identical zero-config output:
+ *
+ * * Custom level-banding (`fs_core` `field_thresholds`) arrives ragged as a
+ *   flat `f64` buffer + a per-field length vector (the same flat+lens idiom
+ *   as `match_weights`), with a `-1` length sentinel meaning "no custom
+ *   thresholds for this field" (→ `None`). An EMPTY `level_thresholds_lens`
+ *   means every field is `None` (the old hardcoded behavior).
+ * * Negative evidence mirrors the native pyo3 `score_block_pairs_fs`
+ *   shape: `ne_values_flat`/`ne_nulls` are column-major over `n_ne` NE
+ *   fields × `n_rows` (reshaped exactly like the regular field values), plus
+ *   parallel `ne_scorer_ids`/`ne_thresholds`/`ne_weights` (length `n_ne`).
+ *   `n_ne = 0` = no negative evidence.
  * @param {BigInt64Array} row_ids
  * @param {Uint32Array} block_sizes
  * @param {string[]} field_values_flat
@@ -22,11 +38,19 @@
  * @param {number} min_weight
  * @param {number} weight_range
  * @param {number} threshold
+ * @param {Float64Array} level_thresholds_flat
+ * @param {Int32Array} level_thresholds_lens
+ * @param {string[]} ne_values_flat
+ * @param {Uint8Array} ne_nulls
+ * @param {number} n_ne
+ * @param {Uint8Array} ne_scorer_ids
+ * @param {Float64Array} ne_thresholds
+ * @param {Float64Array} ne_weights
  * @returns {string}
  */
-export function score_block_pairs_fs(row_ids, block_sizes, field_values_flat, field_nulls, n_fields, scorer_ids, levels, partial_thresholds, match_weights_flat, match_weights_lens, calibrated, prior_w, min_weight, weight_range, threshold) {
-    let deferred10_0;
-    let deferred10_1;
+export function score_block_pairs_fs(row_ids, block_sizes, field_values_flat, field_nulls, n_fields, scorer_ids, levels, partial_thresholds, match_weights_flat, match_weights_lens, calibrated, prior_w, min_weight, weight_range, threshold, level_thresholds_flat, level_thresholds_lens, ne_values_flat, ne_nulls, n_ne, ne_scorer_ids, ne_thresholds, ne_weights) {
+    let deferred17_0;
+    let deferred17_1;
     try {
         const ptr0 = passArray64ToWasm0(row_ids, wasm.__wbindgen_malloc);
         const len0 = WASM_VECTOR_LEN;
@@ -46,12 +70,26 @@ export function score_block_pairs_fs(row_ids, block_sizes, field_values_flat, fi
         const len7 = WASM_VECTOR_LEN;
         const ptr8 = passArray32ToWasm0(match_weights_lens, wasm.__wbindgen_malloc);
         const len8 = WASM_VECTOR_LEN;
-        const ret = wasm.score_block_pairs_fs(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, n_fields, ptr4, len4, ptr5, len5, ptr6, len6, ptr7, len7, ptr8, len8, calibrated, prior_w, min_weight, weight_range, threshold);
-        deferred10_0 = ret[0];
-        deferred10_1 = ret[1];
+        const ptr9 = passArrayF64ToWasm0(level_thresholds_flat, wasm.__wbindgen_malloc);
+        const len9 = WASM_VECTOR_LEN;
+        const ptr10 = passArray32ToWasm0(level_thresholds_lens, wasm.__wbindgen_malloc);
+        const len10 = WASM_VECTOR_LEN;
+        const ptr11 = passArrayJsValueToWasm0(ne_values_flat, wasm.__wbindgen_malloc);
+        const len11 = WASM_VECTOR_LEN;
+        const ptr12 = passArray8ToWasm0(ne_nulls, wasm.__wbindgen_malloc);
+        const len12 = WASM_VECTOR_LEN;
+        const ptr13 = passArray8ToWasm0(ne_scorer_ids, wasm.__wbindgen_malloc);
+        const len13 = WASM_VECTOR_LEN;
+        const ptr14 = passArrayF64ToWasm0(ne_thresholds, wasm.__wbindgen_malloc);
+        const len14 = WASM_VECTOR_LEN;
+        const ptr15 = passArrayF64ToWasm0(ne_weights, wasm.__wbindgen_malloc);
+        const len15 = WASM_VECTOR_LEN;
+        const ret = wasm.score_block_pairs_fs(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, n_fields, ptr4, len4, ptr5, len5, ptr6, len6, ptr7, len7, ptr8, len8, calibrated, prior_w, min_weight, weight_range, threshold, ptr9, len9, ptr10, len10, ptr11, len11, ptr12, len12, n_ne, ptr13, len13, ptr14, len14, ptr15, len15);
+        deferred17_0 = ret[0];
+        deferred17_1 = ret[1];
         return getStringFromWasm0(ret[0], ret[1]);
     } finally {
-        wasm.__wbindgen_free(deferred10_0, deferred10_1, 1);
+        wasm.__wbindgen_free(deferred17_0, deferred17_1, 1);
     }
 }
 function __wbg_get_imports() {

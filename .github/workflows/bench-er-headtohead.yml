@@ -12,7 +12,7 @@
 #   gm_zeroconfig           - zero-effort controller
 #   gm_converted_splink     - GM running Splink's own spec via from_splink
 #
-# Shapes (2): person + biblio. The `shapes` input becomes a job matrix
+# Shapes: person + biblio (default) + product (opt-in). The `shapes` input becomes a job matrix
 # (fail-fast: false), so each shape runs on its own runner and uploads its own
 # artifact `er-headtohead-<shape>-<run_tag>`.
 #
@@ -40,7 +40,7 @@ on:
         required: false
         default: "splink gm_hand_built gm_probabilistic gm_probabilistic_native gm_zeroconfig gm_converted_splink"
       shapes:
-        description: "Space-separated fixture shapes (person biblio)"
+        description: "Space-separated fixture shapes (person biblio product)"
         required: false
         default: "person biblio"
       scales:

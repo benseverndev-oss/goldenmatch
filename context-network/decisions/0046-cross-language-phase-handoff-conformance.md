@@ -81,13 +81,20 @@ name — verified against `main` before recording:
   Reduction/recomposition order, same 1-ULP class as native↔pure-Python. The prior
   row read "byte-identical … with the shared Rust/WASM scorer", which over-claimed for
   these ids.
-- **The default TS Fellegi-Sunter path is pure-TS, not the shared kernel.**
-  `pipeline.ts` scores probabilistic matchkeys via `probabilistic.ts::scoreProbabilistic`;
-  `fs-wasm` (`goldenmatch-fs-core`, `src/core/fsWasm.ts`) exists and passes
-  `tests/parity/fs-wasm.parity.test.ts` but is called by **no pipeline/engine site**.
-  So FS scoring parity rests on the hand-written pure-TS port (at the string-scoring
-  tolerance), not the WASM kernel. Wiring the pipeline to `fs-wasm` is tracked as
-  weakness `fs-default-ts-path-unwired-second-source` (Wave D).
+- **FS scoring: the batteries `goldenmatch` import now runs the shared kernel by
+  default** (RESOLVED, Wave D, 2026-07-27). `pipeline.ts` reroutes probabilistic
+  block scoring onto the shared `fs-core` kernel via the `fsScoreBackend` registry,
+  and the batteries root entry (`src/index.ts`) auto-enables it on import — so the
+  DEFAULT bare-`goldenmatch` FS path is byte-aligned with Python-native (the #1854
+  fixed full-field operating point), measured F1-neutral vs the pure-TS path. The
+  lean `goldenmatch/core` entry keeps the pure-TS `probabilistic.ts` path as the
+  classified fallback (4-dp tolerance) unless `enableFsWasmScoring()` is called, and
+  for configs the kernel can't express (embedding / name-refdata / TF fields). Closed
+  weakness `fs-default-ts-path-unwired-second-source`.
+- **`array_intersect` `overlap` MODE is pure-TS-only.** The base `array_intersect`
+  scorer is kernel-backed, but its `overlap` mode is not expressible through the
+  fixed-id `score_matrix` boundary, so that mode runs pure-TS on both surfaces. A
+  per-mode divergence, not a whole-scorer one.
 - **PPRL CLKs diverge on float fields.** `str(5.0)`="5.0" (Python) vs `String(5.0)`="5"
   (JS) yields non-equal bloom filters; the `pprl.json` fixtures dodge it by using
   string fields. Guidance: cast floats to strings before PPRL if cross-language CLK

@@ -10,6 +10,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from collections.abc import Iterable, Iterator
@@ -48,7 +49,54 @@ def _write_pipeline_enabled() -> bool:
     ).strip() != "0"
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
+
+# Relationship field names are interpolated into a JSON path / column expression,
+# so they are validated against this before use (never user free-text at the SQL).
+_SAFE_FIELD = re.compile(r"[A-Za-z0-9_]+")
+
+
+def _rel_value_expr(raw: str, transform: str | None, backend: str) -> str:
+    """Wrap the raw payload-extraction SQL ``raw`` in a value TRANSFORM so a
+    relationship rule can key edges on a DERIVED value (email domain, normalized
+    company, zip3, lowercased specialty/degree) instead of the literal field.
+
+    Transforms are a FIXED vocabulary mapped to fixed SQL templates -- never user
+    free-text -- so this is injection-safe (``raw`` itself is already built from a
+    ``_SAFE_FIELD``-validated name). A transform that yields empty/no-match returns
+    NULL so ``relationship_groups`` filters it out. ``None``/``'raw'`` returns
+    ``raw`` byte-for-byte, so the no-transform path is unchanged."""
+    t = (transform or "raw").lower()
+    pg = backend == "postgres"
+    if t == "raw":
+        return raw
+    if t == "lower_trim":
+        return f"lower(btrim({raw}))" if pg else f"lower(trim({raw}))"
+    if t == "zip3":
+        return f"substr({raw}, 1, 3)"
+    if t == "email_domain":
+        if pg:
+            return f"lower(nullif(split_part({raw}, '@', 2), ''))"
+        # sqlite: no split_part; guard so a value without '@' yields NULL, not the
+        # whole string (which would wrongly relate everyone missing an '@').
+        return (
+            f"CASE WHEN instr({raw}, '@') > 0 "
+            f"THEN lower(substr({raw}, instr({raw}, '@') + 1)) END"
+        )
+    if t == "normalize_company":
+        if pg:
+            # NOTE: no literal '?' anywhere in this SQL -- `_pg_sql` turns every '?'
+            # into a bind placeholder (naive str.replace), so a regex '?' (e.g. the
+            # old '\.?$') would be miscounted as a parameter. Use '\.{0,1}$' instead.
+            return (
+                f"nullif(btrim(regexp_replace(lower(btrim({raw})), "
+                r"'[\s,\.]+(inc|llc|ltd|corp|co|company|pllc|pc|pa|group|assoc|associates)\.{0,1}$', "
+                "'', 'g')), '')"
+            )
+        # sqlite has no regexp_replace -> degrade to lower_trim (documented in the
+        # relationship-graph-v2 spec; the domain of corp suffixes needs a UDF).
+        return f"lower(trim({raw}))"
+    raise ValueError(f"unknown relationship transform: {transform!r}")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS identity_nodes (
@@ -165,6 +213,26 @@ CREATE TABLE IF NOT EXISTS identity_record_block_keys (
 CREATE INDEX IF NOT EXISTS idx_rbk_block  ON identity_record_block_keys(pass_sig, block_key);
 CREATE INDEX IF NOT EXISTS idx_rbk_entity ON identity_record_block_keys(entity_id);
 CREATE INDEX IF NOT EXISTS idx_rbk_record ON identity_record_block_keys(record_id);
+
+-- semantic-graph: entity<->entity relationship edges derived from a shared
+-- NON-identity attribute (two entities on one clinic phone, one address, ...).
+-- Distinct from evidence_edges (which is record-level, WITHIN an entity); this is
+-- entity-level, BETWEEN entities. The UNIQUE key omits run_name on purpose so a
+-- re-resolve is idempotent (INSERT OR IGNORE de-dupes across runs). Endpoints are
+-- canonicalized entity_a_id < entity_b_id so each pair is stored once.
+CREATE TABLE IF NOT EXISTS identity_relationships (
+    entity_a_id   TEXT NOT NULL,
+    entity_b_id   TEXT NOT NULL,
+    kind          TEXT NOT NULL,
+    field         TEXT NOT NULL,
+    shared_value  TEXT,
+    dataset       TEXT,
+    recorded_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (entity_a_id, entity_b_id, kind, shared_value)
+);
+CREATE INDEX IF NOT EXISTS idx_rel_a    ON identity_relationships(entity_a_id);
+CREATE INDEX IF NOT EXISTS idx_rel_b    ON identity_relationships(entity_b_id);
+CREATE INDEX IF NOT EXISTS idx_rel_kind ON identity_relationships(kind);
 """
 
 
@@ -238,6 +306,14 @@ class IdentityStore:
         # commit. Set for every backend so ``_exec`` needs no hasattr guard.
         self._sqlite_batch = 0
         self._sqlite_pending = 0
+        # The active psycopg pipeline (Postgres) while inside ``write_pipeline``;
+        # ``bulk_copy_barrier`` suspends/reopens it around bulk COPY flushes.
+        self._active_pipeline = None
+        # True only inside an engaged ``initial_load_writes`` block (Postgres,
+        # from-empty build): the bulk_* methods then COPY straight into the real
+        # table instead of temp-staging + INSERT..SELECT..ON CONFLICT. Off by
+        # default so every other caller keeps the idempotent upsert path.
+        self._pg_initial_load = False
         # Optional psycopg_pool.ConnectionPool for postgres. When set, methods
         # check out a pooled conn for each call. Default None preserves the
         # legacy per-store single-conn behavior the existing tests rely on.
@@ -374,6 +450,27 @@ class IdentityStore:
             # + indexes, idempotent on fresh (already carries it from ``_SCHEMA``)
             # and migrated DBs.
             self._ensure_block_index_table()
+        if version < 7:
+            # v6 -> v7: entity<->entity relationship edges (semantic-graph). CREATE
+            # TABLE IF NOT EXISTS + indexes, idempotent on fresh (already in
+            # ``_SCHEMA``) and migrated DBs.
+            self._conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS identity_relationships (
+                    entity_a_id   TEXT NOT NULL,
+                    entity_b_id   TEXT NOT NULL,
+                    kind          TEXT NOT NULL,
+                    field         TEXT NOT NULL,
+                    shared_value  TEXT,
+                    dataset       TEXT,
+                    recorded_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (entity_a_id, entity_b_id, kind, shared_value)
+                );
+                CREATE INDEX IF NOT EXISTS idx_rel_a    ON identity_relationships(entity_a_id);
+                CREATE INDEX IF NOT EXISTS idx_rel_b    ON identity_relationships(entity_b_id);
+                CREATE INDEX IF NOT EXISTS idx_rel_kind ON identity_relationships(kind);
+                """
+            )
         if version < SCHEMA_VERSION:
             self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
@@ -566,6 +663,21 @@ class IdentityStore:
         CREATE INDEX IF NOT EXISTS idx_rbk_block  ON identity_record_block_keys(pass_sig, block_key);
         CREATE INDEX IF NOT EXISTS idx_rbk_entity ON identity_record_block_keys(entity_id);
         CREATE INDEX IF NOT EXISTS idx_rbk_record ON identity_record_block_keys(record_id);
+
+        -- semantic-graph: entity<->entity relationship edges (see _SCHEMA).
+        CREATE TABLE IF NOT EXISTS identity_relationships (
+            entity_a_id   TEXT NOT NULL,
+            entity_b_id   TEXT NOT NULL,
+            kind          TEXT NOT NULL,
+            field         TEXT NOT NULL,
+            shared_value  TEXT,
+            dataset       TEXT,
+            recorded_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (entity_a_id, entity_b_id, kind, shared_value)
+        );
+        CREATE INDEX IF NOT EXISTS idx_rel_a    ON identity_relationships(entity_a_id);
+        CREATE INDEX IF NOT EXISTS idx_rel_b    ON identity_relationships(entity_b_id);
+        CREATE INDEX IF NOT EXISTS idx_rel_kind ON identity_relationships(kind);
         """
         with self._conn.cursor() as cur:
             cur.execute(ddl)
@@ -577,6 +689,122 @@ class IdentityStore:
     # Single transaction per call. SQLite raises NotImplementedError -- the
     # SQLite path is single-process and the row-by-row upsert_* methods are
     # plenty fast for that scale.
+
+    # Class-level default so stores built via ``IdentityStore.__new__`` (test
+    # fakes that bypass __init__, e.g. test_postgres_bulk_payload_parity) still
+    # resolve the flag to False -> normal upsert path. __init__ sets the instance
+    # attribute; ``initial_load_writes`` flips it per-instance during a build.
+    _pg_initial_load: bool = False
+
+    # The four bulk-written identity tables, in FK parent -> child order
+    # (source_records references identity_nodes). ``initial_load_writes`` toggles
+    # UNLOGGED child-first / LOGGED parent-first so the permanent->unlogged FK
+    # rule is never momentarily violated.
+    _INITIAL_LOAD_TABLES = (
+        "identity_nodes", "source_records", "evidence_edges", "identity_events",
+    )
+    # Plain performance btrees safe to drop for a from-empty bulk load and
+    # rebuild after (sort-based + parallel beats incremental maintenance). The PK
+    # indexes and the evidence_edges UNIQUE constraint are NOT here -- they guard
+    # correctness and stay live. name -> CREATE statement.
+    _INITIAL_LOAD_INDEXES = {
+        "idx_identity_nodes_dataset": "CREATE INDEX idx_identity_nodes_dataset ON identity_nodes(dataset)",
+        "idx_identity_nodes_status":  "CREATE INDEX idx_identity_nodes_status  ON identity_nodes(status)",
+        "idx_source_records_entity":  "CREATE INDEX idx_source_records_entity ON source_records(entity_id)",
+        "idx_source_records_source":  "CREATE INDEX idx_source_records_source ON source_records(source)",
+        "idx_source_records_hash":    "CREATE INDEX idx_source_records_hash   ON source_records(record_hash)",
+        "idx_edges_entity": "CREATE INDEX idx_edges_entity ON evidence_edges(entity_id)",
+        "idx_edges_pair":   "CREATE INDEX idx_edges_pair   ON evidence_edges(record_a_id, record_b_id)",
+        "idx_edges_run":    "CREATE INDEX idx_edges_run    ON evidence_edges(run_name)",
+        "idx_events_entity": "CREATE INDEX idx_events_entity ON identity_events(entity_id)",
+        "idx_events_kind":   "CREATE INDEX idx_events_kind   ON identity_events(kind)",
+        "idx_events_run":    "CREATE INDEX idx_events_run    ON identity_events(run_name)",
+    }
+
+    def _pg_tables_empty(self) -> bool:
+        """True when all four bulk-written identity tables are empty -- the
+        safety gate for the direct-COPY fast path (a from-empty build cannot hit
+        a PK/UNIQUE conflict, so dropping ON CONFLICT is sound)."""
+        for t in self._INITIAL_LOAD_TABLES:
+            if self._conn.execute(f"SELECT EXISTS(SELECT 1 FROM {t})").fetchone()[0]:
+                return False
+        return True
+
+    @contextlib.contextmanager
+    def initial_load_writes(
+        self, *, enabled: bool = True, unlogged: bool = False,
+    ) -> Iterator[None]:
+        """Opt-in initial-load fast path for a from-empty Postgres build.
+
+        Wrap the whole write phase (OUTSIDE ``bulk_writes``). When it engages, the
+        ``bulk_*`` methods COPY straight into the real tables -- no temp staging,
+        no ``INSERT..SELECT``, no ``ON CONFLICT`` probe -- and the plain secondary
+        indexes are dropped up front and rebuilt (parallel, sort-based) on exit.
+        With ``unlogged=True`` the tables are also loaded UNLOGGED (skip WAL) and
+        flipped back with ``SET LOGGED`` at the end.
+
+        Engages ONLY when ``enabled`` AND the backend is Postgres AND all four
+        tables are empty. Otherwise it is a transparent no-op and the normal
+        idempotent upsert path runs, so callers can wrap unconditionally and it is
+        safe on an incremental (non-empty) store. Because it drops ON CONFLICT, it
+        must only be used where conflicts cannot occur -- a from-empty build of
+        brand-new clusters -- which the emptiness gate enforces.
+
+        Durability note for ``unlogged``: an UNLOGGED table is truncated on crash,
+        and the closing ``SET LOGGED`` rewrites+WALs the table (handing back part
+        of the WAL saving). Only enable it when the build is re-runnable from
+        source (the initial from-``raw_union`` build is), or the target is a
+        staging table that gets swapped in.
+        """
+        if not (enabled and self._backend == "postgres" and self._pg_tables_empty()):
+            if enabled and self._backend == "postgres":
+                log.info(
+                    "initial_load_writes: tables not empty, using normal "
+                    "upsert path (fast path skipped)",
+                )
+            yield
+            return
+        conn: Any = self._conn
+        if unlogged:  # child -> parent: never leave a permanent FK to an unlogged table
+            for t in reversed(self._INITIAL_LOAD_TABLES):
+                conn.execute(f"ALTER TABLE {t} SET UNLOGGED")
+        for name in self._INITIAL_LOAD_INDEXES:
+            conn.execute(f"DROP INDEX IF EXISTS {name}")
+        self._pg_initial_load = True
+        try:
+            yield
+        finally:
+            self._pg_initial_load = False
+            # Rebuild parallel + generously; SET LOCAL-style session scope is fine
+            # on this autocommit conn (values persist for the rebuild only matters).
+            conn.execute("SET max_parallel_maintenance_workers = 4")
+            conn.execute("SET maintenance_work_mem = '1GB'")
+            for stmt in self._INITIAL_LOAD_INDEXES.values():
+                conn.execute(stmt)
+            if unlogged:  # parent -> child: nodes durable before records references it
+                for t in self._INITIAL_LOAD_TABLES:
+                    conn.execute(f"ALTER TABLE {t} SET LOGGED")
+            for t in self._INITIAL_LOAD_TABLES:
+                conn.execute(f"ANALYZE {t}")
+
+    def _pg_copy_direct(
+        self, table: str, columns: str, cols: list[str], df: Any,
+    ) -> None:
+        """Initial-load fast path COPY: stream ``df[cols]`` straight into the real
+        ``table`` -- no temp table, no ``INSERT..SELECT``, no ``ON CONFLICT``.
+        Valid ONLY under an engaged ``initial_load_writes`` (empty tables +
+        brand-new clusters). Runs in the current ``bulk_writes`` transaction with
+        the pipeline already suspended by the caller's ``bulk_copy_barrier``."""
+        import polars as pl  # noqa: PLC0415
+        missing = [c for c in cols if c not in df.columns]
+        if missing:
+            df = df.with_columns([pl.lit(None).alias(c) for c in missing])
+        conn: Any = self._conn
+        with conn.cursor() as cur, cur.copy(
+            f"COPY {table} ({columns}) FROM STDIN"
+        ) as copy:
+            for row in df.select(cols).iter_rows():
+                copy.write_row(row)
 
     @contextlib.contextmanager
     def bulk_writes(self) -> Iterator[None]:
@@ -645,19 +873,56 @@ class IdentityStore:
         per-statement round-trip (see ``_write_pipeline_enabled``). No-op for
         SQLite / Mongo and when the kill-switch is set.
 
-        COPY is not permitted in pipeline mode, so the caller must flush any bulk
-        COPY accumulators OUTSIDE this block (still inside ``bulk_writes``). Reads
-        issued inside a pipeline still work -- psycopg auto-syncs to fetch a
-        result -- but each such sync forfeits batching, so callers should
-        pre-fetch reads (e.g. ``get_identities``) before the write loop and pass
-        ``return_id=False`` to the write helpers that would otherwise read back a
-        generated id.
+        COPY is not permitted in pipeline mode, so bulk-COPY flushes must run
+        OUTSIDE this block; ``bulk_copy_barrier`` suspends the pipeline around each
+        flush so ``resolve_clusters`` (which interleaves per-record writes and bulk
+        flushes in one loop) can flush unconditionally. Reads issued inside a
+        pipeline still work -- psycopg auto-syncs to fetch a result -- but each such
+        sync forfeits batching, so callers should pre-fetch reads (e.g.
+        ``get_identities``) before the write loop and pass ``return_id=False`` to
+        the write helpers that would otherwise read back a generated id.
         """
         if self._backend == "postgres" and _write_pipeline_enabled():
-            with self._conn.pipeline():
+            self._active_pipeline = self._conn.pipeline()
+            self._active_pipeline.__enter__()
+            try:
                 yield
+            finally:
+                # A bulk_copy_barrier may have swapped in a fresh pipeline; exit
+                # whatever is currently active, not the one captured on entry.
+                pipe = self._active_pipeline
+                self._active_pipeline = None
+                if pipe is not None:
+                    pipe.__exit__(None, None, None)
         else:
             yield
+
+    @contextlib.contextmanager
+    def bulk_copy_barrier(self) -> Iterator[None]:
+        """Suspend an active psycopg pipeline for the duration of a bulk COPY.
+
+        COPY cannot run inside psycopg pipeline mode ("COPY cannot be used in
+        pipeline mode"), yet ``resolve_clusters`` flushes its bulk-COPY
+        accumulators from WITHIN the ``write_pipeline`` loop. This exits the active
+        pipeline (syncing any pending statements), runs the COPY in normal mode,
+        then reopens a fresh pipeline inside the same ``bulk_writes`` transaction.
+        No-op when no pipeline is active (SQLite / Mongo / the kill-switch), so the
+        caller wraps every ``_flush_bulk`` unconditionally. Before this, the COPY
+        raised inside the pipeline and the caller (pipeline.py) swallowed it,
+        committing zero rows while reporting success.
+        """
+        pipe = getattr(self, "_active_pipeline", None)
+        if pipe is None:
+            yield
+            return
+        self._active_pipeline = None
+        pipe.__exit__(None, None, None)      # sync + close the current pipeline
+        try:
+            yield
+        finally:
+            newpipe = self._conn.pipeline()
+            newpipe.__enter__()
+            self._active_pipeline = newpipe
 
     def _sqlite_stage(self, stage: str, cols: list[str], df: Any) -> None:
         """Load ``df[cols]`` into a per-connection TEMP staging table, replacing
@@ -755,6 +1020,14 @@ class IdentityStore:
         missing = [c for c in cols if c not in df.columns]
         if missing:
             df = df.with_columns([pl.lit(None).alias(c) for c in missing])
+        if self._pg_initial_load:
+            self._pg_copy_direct(
+                "identity_nodes",
+                "entity_id, status, merged_into, golden_record, "
+                "confidence, dataset, created_at, updated_at",
+                cols, df,
+            )
+            return
         conn: Any = self._conn
         with conn.transaction(), conn.cursor() as cur:
             cur.execute(
@@ -834,6 +1107,14 @@ class IdentityStore:
             "record_id", "source", "source_pk", "record_hash",
             "entity_id", "payload", "dataset", "first_seen_at", "last_seen_at",
         ]
+        if self._pg_initial_load:
+            self._pg_copy_direct(
+                "source_records",
+                "record_id, source, source_pk, record_hash, entity_id, "
+                "payload, dataset, first_seen_at, last_seen_at",
+                cols, df,
+            )
+            return
         conn: Any = self._conn
         with conn.transaction(), conn.cursor() as cur:
             cur.execute(
@@ -910,6 +1191,15 @@ class IdentityStore:
             "matchkey_name", "controller_snapshot", "run_name", "dataset",
             "actor", "trust", "recorded_at",
         ]
+        if self._pg_initial_load:
+            self._pg_copy_direct(
+                "evidence_edges",
+                "entity_id, record_a_id, record_b_id, kind, score, "
+                "matchkey_name, controller_snapshot, run_name, dataset, "
+                "actor, trust, recorded_at",
+                cols, df,
+            )
+            return
         conn: Any = self._conn
         with conn.transaction(), conn.cursor() as cur:
             cur.execute(
@@ -997,6 +1287,14 @@ class IdentityStore:
             "entity_id", "kind", "payload", "run_name", "dataset",
             "actor", "trust", "recorded_at",
         ]
+        if self._pg_initial_load:
+            self._pg_copy_direct(
+                "identity_events",
+                "entity_id, kind, payload, run_name, dataset, "
+                "actor, trust, recorded_at",
+                cols, df,
+            )
+            return
         conn: Any = self._conn
         with conn.transaction(), conn.cursor() as cur:
             cur.execute(
@@ -1434,6 +1732,401 @@ class IdentityStore:
             )
         return [self._row_to_edge(r) for r in rows]
 
+    def status_counts(self, dataset: str | None = None) -> dict[str, int]:
+        """Entity count per status in one grouped query.
+
+        Lets ``identity_summary_stats`` tally statuses without paging every node
+        (#2198). Raises on mongo so the caller keeps its paged fallback."""
+        if self._backend == "mongo":
+            raise NotImplementedError("status_counts: mongo uses the paged fallback")
+        if dataset is None:
+            rows = self._fetchall(
+                "SELECT status, COUNT(*) AS n FROM identity_nodes GROUP BY status", (),
+            )
+        else:
+            rows = self._fetchall(
+                "SELECT status, COUNT(*) AS n FROM identity_nodes "
+                "WHERE dataset = ? GROUP BY status", (dataset,),
+            )
+        return {r["status"]: int(r["n"]) for r in rows}
+
+    def active_record_stats(
+        self, dataset: str | None = None,
+    ) -> tuple[dict[str, int], dict[str, int]]:
+        """``(records_per_active_entity, records_per_source)`` in two grouped
+        queries instead of one ``get_records_for_entity`` per entity (#2198).
+
+        Records live on active entities (a merge reassigns them), matching
+        ``identity_summary_stats``' per-active-entity accounting. The entity map
+        LEFT JOINs so an active entity with zero records still appears (count 0),
+        preserving the prior ``len()``-based semantics. Raises on mongo so the
+        caller keeps its paged fallback."""
+        if self._backend == "mongo":
+            raise NotImplementedError(
+                "active_record_stats: mongo uses the paged fallback"
+            )
+        ds = "" if dataset is None else " AND n.dataset = ?"
+        params: tuple = () if dataset is None else (dataset,)
+        per_entity_rows = self._fetchall(
+            "SELECT n.entity_id AS eid, COUNT(sr.record_id) AS n "
+            "FROM identity_nodes n "
+            "LEFT JOIN source_records sr ON sr.entity_id = n.entity_id "
+            f"WHERE n.status = 'active'{ds} "
+            "GROUP BY n.entity_id",
+            params,
+        )
+        source_rows = self._fetchall(
+            "SELECT sr.source AS source, COUNT(*) AS n "
+            "FROM source_records sr "
+            "JOIN identity_nodes n ON sr.entity_id = n.entity_id "
+            f"WHERE n.status = 'active'{ds} "
+            "GROUP BY sr.source",
+            params,
+        )
+        per_entity = {r["eid"]: int(r["n"]) for r in per_entity_rows}
+        source_breakdown = {r["source"]: int(r["n"]) for r in source_rows}
+        return per_entity, source_breakdown
+
+    # ----- Semantic-graph: entity<->entity relationships -----
+
+    def relationship_groups(
+        self, field: str, dataset: str | None,
+        min_entities: int, max_entities: int,
+        transform: str | None = None,
+    ) -> list[tuple[str, list[str]]]:
+        """Distinct entities that share a value of ``field`` (a payload key),
+        grouped in ONE query. Returns ``[(shared_value, [entity_id, ...]), ...]``
+        for values held by between ``min_entities`` and ``max_entities`` distinct
+        entities. The field is read out of the JSON ``payload`` column; the
+        cardinality gate runs in SQL so only qualifying groups come back.
+
+        ``transform`` (see ``_rel_value_expr``) keys the grouping on a DERIVED
+        value -- e.g. ``email_domain`` relates everyone at the same company domain,
+        ``normalize_company`` collapses "Acme, Inc." / "acme llc" -- instead of the
+        literal field. ``None`` groups on the raw value (SQL byte-identical)."""
+        if self._backend == "mongo":
+            raise NotImplementedError("relationship_groups: not supported on mongo")
+        if not _SAFE_FIELD.fullmatch(field):
+            raise ValueError(f"unsafe relationship field name: {field!r}")
+        # Perf (#2226-followup): the old shape extracted the payload field 3x per
+        # row, re-cast an already-``jsonb`` column, and ran ``COUNT(DISTINCT)`` +
+        # ``string_agg(DISTINCT)`` PER GROUP over every ``source_records`` row -- so
+        # a mega-shared value (a clinic switchboard phone held by 100k+ records) got
+        # its full distinct-aggregate computed only to be thrown away by the fanout
+        # cap. On 28M rows that seq-scanned + stalled for >1h. Rewrite: extract the
+        # field ONCE, dedup ``(value, entity_id)`` pairs, find the values whose
+        # distinct-entity count is in range, then ``string_agg`` ONLY those
+        # qualifying (small) groups -- never the mega-shared ones. A covering
+        # expression index makes the dedup an index scan instead of a heap seq scan.
+        self._ensure_relationship_index(field)
+        if self._backend == "postgres":
+            raw = f"payload ->> '{field}'"          # payload is already jsonb
+            agg = "string_agg(p.entity_id, ',')"    # pairs are DISTINCT -> no DISTINCT
+        else:
+            raw = f"json_extract(payload, '$.{field}')"
+            agg = "group_concat(p.entity_id)"
+        # transform wraps the RAW extraction; transform=None returns it byte-for-byte
+        # so the covering index on (payload->>field, entity_id) still applies.
+        vexpr = _rel_value_expr(raw, transform, self._backend)
+        ds = "" if dataset is None else " AND dataset = ?"
+        params: tuple = () if dataset is None else (dataset,)
+        sql = (
+            "WITH ex AS ("
+            f" SELECT {vexpr} AS v, entity_id FROM source_records"
+            f" WHERE entity_id IS NOT NULL{ds}"
+            "), pairs AS ("
+            " SELECT DISTINCT v, entity_id FROM ex WHERE v IS NOT NULL AND v <> ''"
+            "), qual AS ("
+            " SELECT v FROM pairs GROUP BY v HAVING COUNT(*) >= ? AND COUNT(*) <= ?"
+            ") "
+            f"SELECT p.v AS v, {agg} AS eids "
+            "FROM pairs p JOIN qual q ON p.v = q.v GROUP BY p.v"
+        )
+        rows = self._fetchall(sql, params + (min_entities, max_entities))
+        return [(r["v"], str(r["eids"]).split(",")) for r in rows]
+
+    def sample_records(
+        self, dataset: str | None, limit: int,
+    ) -> list[tuple[str, dict]]:
+        """A LIMIT-bounded sample of ``(entity_id, payload_dict)`` for resolved
+        records, for offline field profiling (``suggest_relationship_rules``). This
+        is deliberately NOT a full scan -- at 14M a full profile per field is what
+        we avoid -- so callers get a cheap, approximate view of the payload shape."""
+        if self._backend == "mongo":
+            raise NotImplementedError("sample_records: not supported on mongo")
+        ds = "" if dataset is None else " AND dataset = ?"
+        params: tuple = () if dataset is None else (dataset,)
+        rows = self._fetchall(
+            "SELECT entity_id, payload FROM source_records "
+            f"WHERE entity_id IS NOT NULL{ds} LIMIT ?",
+            params + (int(limit),),
+        )
+        out: list[tuple[str, dict]] = []
+        for r in rows:
+            p = r["payload"]
+            if isinstance(p, str):
+                try:
+                    p = json.loads(p)
+                except (ValueError, TypeError):
+                    continue
+            if isinstance(p, dict):
+                out.append((r["entity_id"], p))
+        return out
+
+    def relationship_field_stats(
+        self, field: str, dataset: str | None,
+        min_entities: int, max_entities: int, transform: str | None = None,
+    ) -> dict[str, int]:
+        """Full-data cardinality profile of a candidate ``(field, transform)`` for
+        ``suggest_relationship_rules``. Over ALL resolved records (not a sample):
+
+        * ``sweet_values``  -- distinct values shared by ``[min_entities,
+          max_entities]`` distinct entities (each yields real pairwise edges),
+        * ``hub_values``    -- distinct values shared by ``> max_entities`` entities
+          (skipped as hubs),
+        * ``coverage_entities`` -- distinct ENTITIES that land in a sweet-spot value
+          (how much of the graph this field would actually edge),
+        * ``sweet_pairs``   -- pairwise edges the sweet-spot values yield
+          (``SUM n*(n-1)/2``),
+        * ``sweet_pair_n``  -- ``SUM n*(n-1)/2 * n`` over sweet values, so the caller
+          can derive the edge-weighted mean group size (``sweet_pair_n /
+          sweet_pairs``) and hence a RARITY signal: a field linked through small,
+          specific groups (a shared phone) is a stronger relationship than one
+          linked through large common ones (a shared surname), even at equal
+          coverage.
+
+        Because fanout is measured on the WHOLE dataset, a hub attribute (a value
+        held by ~everyone, e.g. a specialty or state) scores ``coverage=0`` -- the
+        opposite of a small LIMIT sample, where its in-sample fanout stays under the
+        cap and it masquerades as a good edge field."""
+        if self._backend == "mongo":
+            raise NotImplementedError("relationship_field_stats: not on mongo")
+        if not _SAFE_FIELD.fullmatch(field):
+            raise ValueError(f"unsafe relationship field name: {field!r}")
+        self._ensure_relationship_index(field)
+        if self._backend == "postgres":
+            raw = f"payload ->> '{field}'"
+        else:
+            raw = f"json_extract(payload, '$.{field}')"
+        vexpr = _rel_value_expr(raw, transform, self._backend)
+        ds = "" if dataset is None else " AND dataset = ?"
+        params: tuple = () if dataset is None else (dataset,)
+        sql = (
+            "WITH ex AS ("
+            f" SELECT {vexpr} AS v, entity_id FROM source_records"
+            f" WHERE entity_id IS NOT NULL{ds}"
+            "), pairs AS ("
+            " SELECT DISTINCT v, entity_id FROM ex WHERE v IS NOT NULL AND v <> ''"
+            "), card AS ("
+            " SELECT v, COUNT(*) AS n FROM pairs GROUP BY v"
+            ") "
+            "SELECT "
+            "(SELECT COUNT(*) FROM card WHERE n >= ? AND n <= ?) AS sweet_values, "
+            "(SELECT COUNT(*) FROM card WHERE n > ?) AS hub_values, "
+            "(SELECT COUNT(DISTINCT p.entity_id) FROM pairs p JOIN card c "
+            " ON p.v = c.v WHERE c.n >= ? AND c.n <= ?) AS coverage_entities, "
+            "(SELECT COALESCE(SUM(n*(n-1)/2), 0) FROM card "
+            " WHERE n >= ? AND n <= ?) AS sweet_pairs, "
+            "(SELECT COALESCE(SUM(n*(n-1)/2*n), 0) FROM card "
+            " WHERE n >= ? AND n <= ?) AS sweet_pair_n"
+        )
+        rows = self._fetchall(
+            sql, params + (min_entities, max_entities, max_entities,
+                           min_entities, max_entities, min_entities,
+                           max_entities, min_entities, max_entities))
+        r = rows[0] if rows else None
+        if r is None:
+            return {"sweet_values": 0, "hub_values": 0, "coverage_entities": 0,
+                    "sweet_pairs": 0, "sweet_pair_n": 0}
+        return {
+            "sweet_values": int(r["sweet_values"] or 0),
+            "hub_values": int(r["hub_values"] or 0),
+            "coverage_entities": int(r["coverage_entities"] or 0),
+            "sweet_pairs": int(r["sweet_pairs"] or 0),
+            "sweet_pair_n": int(r["sweet_pair_n"] or 0),
+        }
+
+    def _ensure_relationship_index(self, field: str) -> None:
+        """Best-effort covering expression index ``(payload->>field, entity_id)`` so
+        ``relationship_groups`` reads an index-ordered stream instead of seq-scanning
+        + re-parsing jsonb across the whole ``source_records`` heap. Idempotent
+        (``IF NOT EXISTS``) and fail-soft: the query is correct without it, and a
+        build failure (e.g. read-only role) must never break a resolve."""
+        if not _SAFE_FIELD.fullmatch(field):
+            return
+        idx = f"idx_sr_rel_{field}"[:60]
+        try:
+            if self._backend == "postgres":
+                self._conn.execute(
+                    f"CREATE INDEX IF NOT EXISTS {idx} ON source_records "
+                    f"((payload ->> '{field}'), entity_id) WHERE entity_id IS NOT NULL"
+                )
+            elif self._backend == "sqlite":
+                self._conn.execute(
+                    f"CREATE INDEX IF NOT EXISTS {idx} ON source_records "
+                    f"(json_extract(payload, '$.{field}'), entity_id)"
+                )
+        except Exception:  # noqa: BLE001 -- the index is an optimization, never fatal
+            pass
+
+    def add_relationships(self, rows: list[tuple]) -> int:
+        """Insert ``(entity_a, entity_b, kind, field, shared_value, dataset)``
+        relationship edges, idempotently. Endpoints are canonicalized
+        (a < b) and the PRIMARY KEY de-dupes across runs. Returns rows attempted."""
+        if not rows:
+            return 0
+        norm = []
+        for a, b, kind, field, val, dataset in rows:
+            if a == b:
+                continue
+            lo, hi = (a, b) if a < b else (b, a)
+            norm.append((lo, hi, kind, field, val, dataset))
+        if not norm:
+            return 0
+        if self._backend == "mongo":
+            raise NotImplementedError("add_relationships: not supported on mongo")
+        if self._backend == "postgres":
+            sql = (
+                "INSERT INTO identity_relationships "
+                "(entity_a_id, entity_b_id, kind, field, shared_value, dataset) "
+                "VALUES (%s, %s, %s, %s, %s, %s) "
+                "ON CONFLICT (entity_a_id, entity_b_id, kind, shared_value) DO NOTHING"
+            )
+            with self._conn.cursor() as cur:
+                cur.executemany(sql, norm)
+        else:
+            self._conn.executemany(
+                "INSERT OR IGNORE INTO identity_relationships "
+                "(entity_a_id, entity_b_id, kind, field, shared_value, dataset) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                norm,
+            )
+        return len(norm)
+
+    def reconcile_relationships(
+        self, dataset: str | None, kind: str, desired: Iterable[tuple],
+    ) -> tuple[int, int, int]:
+        """Make ``identity_relationships`` for ``(dataset, kind)`` EQUAL the
+        ``desired`` edge set: insert new edges, DELETE stale ones, in ONE
+        transaction (all-or-nothing -- explicit partial-failure behavior).
+
+        ``desired`` is an iterable of ``(a, b, kind, field, shared_value, dataset)``
+        tuples as ``build_relationships`` emits. Edge identity is the PK
+        ``(a<b, kind, shared_value)``, so a link whose shared value CHANGED is a
+        delete + insert, and a MERGE/SPLIT falls out for free because ``desired`` is
+        recomputed from the CURRENT entity ids (edges under a retired id are simply
+        not in ``desired`` -> deleted). Same data twice -> (0, 0, all) = no churn.
+        Deletes are scoped to ``dataset`` + ``kind`` so a rule never touches another
+        rule's or another dataset's edges. Returns ``(inserted, deleted, unchanged)``.
+        """
+        if self._backend == "mongo":
+            raise NotImplementedError("reconcile_relationships: not supported on mongo")
+        want: dict[tuple, tuple] = {}
+        for a, b, k, field, val, _ds in desired:
+            if a is None or b is None or a == b:
+                continue
+            lo, hi = (a, b) if a < b else (b, a)
+            want[(lo, hi, k, val)] = (lo, hi, k, field, val, dataset)
+        existing = {
+            (r["entity_a_id"], r["entity_b_id"], r["kind"], r["shared_value"])
+            for r in self._fetchall(
+                "SELECT entity_a_id, entity_b_id, kind, shared_value "
+                "FROM identity_relationships WHERE dataset = ? AND kind = ?",
+                (dataset, kind),
+            )
+        }
+        want_keys = set(want)
+        ins_keys = want_keys - existing
+        del_keys = existing - want_keys
+        unchanged = len(want_keys & existing)
+        if not ins_keys and not del_keys:
+            return (0, 0, unchanged)
+        ins_rows = [want[k] for k in ins_keys]
+        # del key = (a, b, kind, value); DELETE binds (dataset, a, b, kind, value).
+        del_rows = [(dataset, a, b, k, v) for (a, b, k, v) in del_keys]
+        del_sql = (
+            "DELETE FROM identity_relationships WHERE dataset = ? "
+            "AND entity_a_id = ? AND entity_b_id = ? AND kind = ? AND shared_value = ?"
+        )
+        if self._backend == "postgres":
+            ins_sql = (
+                "INSERT INTO identity_relationships "
+                "(entity_a_id, entity_b_id, kind, field, shared_value, dataset) "
+                "VALUES (%s, %s, %s, %s, %s, %s) "
+                "ON CONFLICT (entity_a_id, entity_b_id, kind, shared_value) DO NOTHING"
+            )
+            with self._conn.transaction(), self._conn.cursor() as cur:
+                if del_rows:
+                    cur.executemany(self._pg_sql(del_sql), del_rows)
+                if ins_rows:
+                    cur.executemany(ins_sql, ins_rows)
+        else:  # sqlite: one transaction (savepoint-safe if already inside one)
+            ins_sql = (
+                "INSERT OR IGNORE INTO identity_relationships "
+                "(entity_a_id, entity_b_id, kind, field, shared_value, dataset) "
+                "VALUES (?, ?, ?, ?, ?, ?)"
+            )
+            outer = self._conn.in_transaction
+            if not outer:
+                self._conn.execute("BEGIN")
+            try:
+                if del_rows:
+                    self._conn.executemany(del_sql, del_rows)
+                if ins_rows:
+                    self._conn.executemany(ins_sql, ins_rows)
+                if not outer:
+                    self._conn.execute("COMMIT")
+            except BaseException:
+                if not outer and self._conn.in_transaction:
+                    self._conn.execute("ROLLBACK")
+                raise
+        return (len(ins_keys), len(del_keys), unchanged)
+
+    def get_relationships(self, entity_id: str) -> list[dict[str, Any]]:
+        """Every relationship edge touching ``entity_id`` (either endpoint),
+        as ``{other_entity_id, kind, field, shared_value}``."""
+        if self._backend == "mongo":
+            raise NotImplementedError("get_relationships: not supported on mongo")
+        rows = self._fetchall(
+            "SELECT entity_a_id, entity_b_id, kind, field, shared_value "
+            "FROM identity_relationships "
+            "WHERE entity_a_id = ? OR entity_b_id = ?",
+            (entity_id, entity_id),
+        )
+        out = []
+        for r in rows:
+            other = r["entity_b_id"] if r["entity_a_id"] == entity_id else r["entity_a_id"]
+            out.append({"other_entity_id": other, "kind": r["kind"],
+                        "field": r["field"], "shared_value": r["shared_value"]})
+        return out
+
+    def count_relationships(self) -> int:
+        if self._backend == "mongo":
+            raise NotImplementedError("count_relationships: not supported on mongo")
+        row = self._fetchone("SELECT COUNT(*) AS n FROM identity_relationships", ())
+        return int(row["n"]) if row else 0
+
+    def list_relationships(
+        self, dataset: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """All relationship edges as ``{entity_a_id, entity_b_id, kind, field,
+        shared_value}`` (optionally dataset-scoped). Used by the GoldenGraph
+        export."""
+        if self._backend == "mongo":
+            raise NotImplementedError("list_relationships: not supported on mongo")
+        where = "" if dataset is None else " WHERE dataset = ?"
+        params: tuple = () if dataset is None else (dataset,)
+        rows = self._fetchall(
+            "SELECT entity_a_id, entity_b_id, kind, field, shared_value "
+            f"FROM identity_relationships{where}",
+            params,
+        )
+        return [
+            {"entity_a_id": r["entity_a_id"], "entity_b_id": r["entity_b_id"],
+             "kind": r["kind"], "field": r["field"], "shared_value": r["shared_value"]}
+            for r in rows
+        ]
+
     def emit_event(
         self, event: IdentityEvent, *, return_id: bool = True
     ) -> int | None:
@@ -1591,6 +2284,21 @@ class IdentityStore:
             (entity_id, run_name, kind),
         )
         return row is not None
+
+    def run_event_entities(self, run_name: str, kind: str) -> set[str]:
+        """Batch form of ``has_run_event``: the set of entity_ids that already have
+        an event of (``run_name``, ``kind``). ``resolve_clusters`` preloads this
+        ONCE so the created-cluster idempotency guard is an in-memory membership
+        test instead of one ``has_run_event`` SELECT per cluster -- an N+1 that also
+        seq-scanned ``identity_events`` (O(n^2)) whenever the secondary indexes are
+        deferred by the initial-load fast path. SQL backends only; the caller
+        falls back to ``has_run_event`` for mongo/minimal stores."""
+        rows = self._fetchall(
+            "SELECT DISTINCT entity_id FROM identity_events "
+            "WHERE run_name = ? AND kind = ?",
+            (run_name, kind),
+        )
+        return {r["entity_id"] for r in rows}
 
     def add_alias(self, alias: IdentityAlias) -> None:
         if self._backend == "mongo":

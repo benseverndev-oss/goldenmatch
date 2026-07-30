@@ -1,0 +1,106 @@
+# Controlled single-FS-matchkey scale probe — workflow_dispatch only.
+#
+# Isolates B2c (the FS columnar-cluster path) from the zero-config confounds:
+# pins a FIXED single-probabilistic-matchkey config on the `bucket` route (the
+# exact shape B2c is eligible for) so GOLDENMATCH_FS_COLUMNAR_CLUSTER 1-vs-0 is a
+# clean A/B. Dumps per-stage {wall, peak RSS} on the 64GB runner.
+#
+# To run: GitHub -> Actions -> "bench-fs-single-mk-probe" -> Run workflow.
+name: bench-fs-single-mk-probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      n_records:
+        description: "Synthetic fixture record count"
+        required: false
+        default: "5000000"
+      dupe_rate:
+        description: "Fraction of records that are duplicates (0..1)"
+        required: false
+        default: "0.12"
+      block:
+        description: "Blocking field for the fixed single matchkey"
+        required: false
+        default: "last_name"
+      columnar:
+        description: "GOLDENMATCH_FS_COLUMNAR_CLUSTER (B2c): '1'/'0' to A/B; blank = code default"
+        required: false
+        default: ""
+      fs_factorize:
+        description: "GOLDENMATCH_FS_FACTORIZE: '1' = factorized-comparison prototype (distinct value-pair matrices)"
+        required: false
+        default: "0"
+      bucket_debug:
+        description: "GOLDENMATCH_BUCKET_DEBUG: '1' prints the bucket_score prep/kernel/post split"
+        required: false
+        default: "0"
+      transform_debug:
+        description: "GOLDENMATCH_TRANSFORM_DEBUG: '1' prints the prep_transform arrow-lane bridge split (pl.from_arrow/_do_transform/to_arrow)"
+        required: false
+        default: "0"
+      ingest:
+        description: "Frame fed to dedupe_df: 'arrow' (pa.Table, no caller polars) or 'polars' (pl.read_csv, historical default)"
+        required: false
+        default: "polars"
+      label:
+        description: "Tag for the output filename"
+        required: false
+        default: "single-mk"
+
+permissions:
+  contents: write  # fetch_or_gen_fixture.sh caches the fixture as a release asset
+
+jobs:
+  probe:
+    runs-on: large-new-64GB
+    timeout-minutes: 350
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pip install uv
+      - name: Sync workspace
+        run: uv sync --all-packages
+      - name: Editable-install goldenmatch (defensive)
+        run: uv pip install -e packages/python/goldenmatch
+      - name: Build native extension (FS native path measurable)
+        run: uv run python scripts/build_native.py
+      - name: Fetch-or-generate fixture (cached as a bench-fixtures release asset)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash scripts/fetch_or_gen_fixture.sh \
+            "${{ inputs.n_records }}" "${{ inputs.dupe_rate }}" \
+            .profile_tmp/scale_fixtures/synthetic_bench.csv
+      - name: Apply FS columnar-cluster (B2c) override (if set)
+        if: ${{ inputs.columnar != '' }}
+        run: echo "GOLDENMATCH_FS_COLUMNAR_CLUSTER=${{ inputs.columnar }}" >> $GITHUB_ENV
+      - name: Run probe
+        env:
+          GOLDENMATCH_BUCKET_DEBUG: ${{ inputs.bucket_debug }}
+          GOLDENMATCH_FS_FACTORIZE: ${{ inputs.fs_factorize }}
+          GOLDENMATCH_TRANSFORM_DEBUG: ${{ inputs.transform_debug }}
+        run: |
+          set -o pipefail
+          .venv/bin/python scripts/bench_fs_single_mk_probe.py \
+            .profile_tmp/scale_fixtures/synthetic_bench.csv \
+            --block "${{ inputs.block }}" \
+            --ingest "${{ inputs.ingest }}" | tee /tmp/probe_${{ inputs.label }}.txt
+          {
+            echo "## bench-fs-single-mk-probe (${{ inputs.label }}, columnar=${{ inputs.columnar }})"
+            echo '```'
+            cat /tmp/probe_${{ inputs.label }}.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload probe output
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: bench-fs-single-mk-probe-${{ inputs.label }}
+          path: /tmp/probe_${{ inputs.label }}.txt
+          retention-days: 90

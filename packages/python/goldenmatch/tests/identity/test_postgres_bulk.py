@@ -162,3 +162,58 @@ def test_resolve_clusters_bulk_fast_path_writes_brand_new(pg_url: str) -> None:
     assert summary.events_emitted == n_clusters
     assert store.count_identities() == n_clusters
     store.close()
+
+
+def test_bulk_mid_loop_flush_commits_under_write_pipeline(
+    pg_url: str, monkeypatch,
+) -> None:
+    """Regression: a MID-LOOP bulk COPY flush must commit even while
+    ``write_pipeline`` (psycopg pipeline mode) is active.
+
+    COPY is forbidden in pipeline mode, and ``resolve_clusters`` flushes its bulk
+    accumulators from INSIDE the ``write_pipeline`` loop when the accumulator hits
+    the flush threshold. Without ``bulk_copy_barrier`` the COPY raised "COPY cannot
+    be used in pipeline mode", the pipeline aborted, and (until pipeline.py stopped
+    swallowing it) 0 rows committed while the run reported success -- the exact
+    failure seen on a 14M resolve. The 20-row happy-path test never triggered a
+    mid-loop flush (only the final flush, which runs OUTSIDE the pipeline). Force a
+    tiny flush threshold with the pipeline explicitly ON so the mid-loop flush
+    fires; the fix must leave the rows committed."""
+    import polars as pl
+    from goldenmatch.identity.resolve import resolve_clusters
+    from goldenmatch.identity.store import IdentityStore
+
+    monkeypatch.setenv("GOLDENMATCH_IDENTITY_WRITE_PIPELINE", "1")   # pipeline ON
+    monkeypatch.setenv("GOLDENMATCH_IDENTITY_BULK_FLUSH_ROWS", "2")  # -> mid-loop flush
+
+    store = IdentityStore(backend="postgres", connection=pg_url)
+    n_clusters = 6
+    n_rows = n_clusters * 2
+    df = pl.DataFrame(
+        {
+            "__row_id__": list(range(n_rows)),
+            "__source__": ["bench"] * n_rows,
+            "name": [f"mid_{i}" for i in range(n_rows)],
+            "email": [f"m{i}@x.com" for i in range(n_rows)],
+        }
+    )
+    clusters = {
+        i: {
+            "members": [i * 2, i * 2 + 1],
+            "size": 2,
+            "confidence": 0.95,
+            "pair_scores": {(i * 2, i * 2 + 1): 0.95},
+        }
+        for i in range(n_clusters)
+    }
+    scored_pairs = [(i * 2, i * 2 + 1, 0.95) for i in range(n_clusters)]
+
+    summary = resolve_clusters(
+        clusters, df, scored_pairs, "weighted", store,
+        run_name="mid-flush-test", source_pk_col=None, dataset="midflush",
+    )
+
+    assert summary.created == n_clusters
+    # The write COMMITTED (was 0 before the fix: the in-pipeline COPY rolled back).
+    assert store.count_identities(dataset="midflush") == n_clusters
+    store.close()

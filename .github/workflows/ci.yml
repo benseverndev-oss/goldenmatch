@@ -121,6 +121,7 @@ jobs:
       api_parity: ${{ steps.filter.outputs.api_parity }}
       native_symbols: ${{ steps.filter.outputs.native_symbols }}
       config_matrix: ${{ steps.filter.outputs.config_matrix }}
+      er_matcher: ${{ steps.filter.outputs.er_matcher }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v4.0.1
@@ -364,7 +365,7 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:
           path: dist-dfudf
-          key: dfudf-wheel-${{ runner.os }}-${{ hashFiles('packages/rust/extensions/datafusion-udf/**', 'packages/rust/extensions/score-core/**', 'packages/rust/extensions/graph-core/**', 'packages/rust/extensions/goldenembed/**', 'packages/rust/extensions/fingerprint-core/**') }}
+          key: dfudf-wheel-${{ runner.os }}-${{ hashFiles('packages/rust/extensions/datafusion-udf/**', 'packages/rust/extensions/score-core/**', 'packages/rust/extensions/goldenfuzz-core/**', 'packages/rust/extensions/graph-core/**', 'packages/rust/extensions/goldenembed/**', 'packages/rust/extensions/fingerprint-core/**') }}
       # DataFusion FFI ScalarUDF gate (Stage B): the FFI string scorers
       # (jaro_winkler / token_sort / levenshtein) are diffed against the native
       # per-pair scorers by tests/test_datafusion_ffi_udf.py, which HARD-imports
@@ -417,6 +418,7 @@ jobs:
             --ignore=packages/python/goldenmatch/tests/test_reconcile.py \
             --ignore=packages/python/goldenmatch/tests/test_mcp_and_watch.py \
             --ignore=packages/python/goldenmatch/tests/test_embedder.py \
+            --ignore=packages/python/goldenmatch/tests/test_metrics_harness.py \
             --ignore=packages/python/goldenmatch/tests/test_llm_boost.py \
             --ignore=packages/python/goldenmatch/tests/test_autoconfig_benchmarks.py \
             --ignore=packages/python/goldenmatch/tests/test_qis_harness.py \
@@ -449,15 +451,35 @@ jobs:
 
   # The OOM-prone full-pipeline tests, split out of the sharded suite: they
   # OOM-kill xdist workers under `-n auto` + coverage on a 2-core runner (silent
-  # "node down", no traceback), so they run SERIALLY (full runner memory) with a
-  # 300s timeout. Their coverage folds back in via the combine job. (Was the
-  # "SERIAL_HEAVY" pass inside the old single goldenmatch leg.) Needs no
-  # datafusion runtime (these files don't import it).
+  # "node down", no traceback), so each shard runs its subset SERIALLY (full
+  # runner memory) with a 300s timeout. Their coverage folds back in via the
+  # combine job. Needs no datafusion runtime (these files don't import it).
+  #
+  # The three files are dominated by test_metrics_harness.py (~728s of the
+  # ~817s serial wall -- two ~180s probes + four ~90s), so a 3-way pytest-split
+  # of the collected TESTS parallelizes the pole: ~13m37s serial -> ~4.6m per
+  # shard (balanced 273/273/273s), STILL SERIAL WITHIN A SHARD (no `-n auto`),
+  # so the OOM-avoidance is preserved. Split is deterministic (same 3 files ->
+  # same collection -> same groups on every shard).
+  #
+  # Balance requires TWO non-defaults: (1) --splitting-algorithm least_duration
+  # (the default duration_based_chunks is order-preserving and can't separate
+  # the adjacent ~180s probes -> lumpy 355/275/189 with empty groups at N>=4;
+  # least_duration greedily assigns by duration -> even thirds). (2) a DEDICATED
+  # .test_durations_heavy: the suite-wide .test_durations records these probes
+  # at ~6s (they run fast in the durations-collection env where the semantic /
+  # embedder work degrades), but the real CI heavy lane pays ~180s, so seeding
+  # from CI-measured durations is what makes the split balance here. Refresh it
+  # from a heavy-lane `--durations=20` dump if these tests drift materially.
   python_goldenmatch_heavy:
     needs: changes
     if: needs.changes.outputs.python_goldenmatch == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
@@ -465,19 +487,23 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
       - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
-      - name: pytest (heavy, serial)
+      - name: pytest (heavy, shard ${{ matrix.shard }} of 3, serial)
         env:
-          COVERAGE_FILE: coverage_heavy.dat
+          COVERAGE_FILE: coverage_heavy_${{ matrix.shard }}.dat
         run: |
-          uv run pytest \
+          uv run --with pytest-split pytest \
             packages/python/goldenmatch/tests/test_controller_adaptive_e2e.py \
             packages/python/goldenmatch/tests/test_memory_e2e.py \
+            packages/python/goldenmatch/tests/test_metrics_harness.py \
+            --splits 3 --group ${{ matrix.shard }} \
+            --splitting-algorithm least_duration \
+            --durations-path "${GITHUB_WORKSPACE}/packages/python/goldenmatch/.test_durations_heavy" \
             --timeout=300 --timeout-method=thread --durations=20 \
             --cov=goldenmatch --cov-report=
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         with:
-          name: gm-cov-heavy
-          path: coverage_heavy.dat
+          name: gm-cov-heavy-${{ matrix.shard }}
+          path: coverage_heavy_${{ matrix.shard }}.dat
           retention-days: 1
           if-no-files-found: error
 
@@ -506,7 +532,8 @@ jobs:
       - name: Combine coverage + enforce per-module floors
         run: |
           uv run coverage combine --rcfile=packages/python/goldenmatch/pyproject.toml \
-            coverage_shard1.dat coverage_shard2.dat coverage_shard3.dat coverage_heavy.dat
+            coverage_shard1.dat coverage_shard2.dat coverage_shard3.dat \
+            coverage_heavy_1.dat coverage_heavy_2.dat coverage_heavy_3.dat
           uv run coverage xml --rcfile=packages/python/goldenmatch/pyproject.toml \
             -o packages/python/goldenmatch/coverage.xml
           uv run python scripts/check_coverage_floors.py packages/python/goldenmatch/coverage.xml
@@ -1474,6 +1501,8 @@ jobs:
               packages/typescript/goldenflow/tests/parity/identifiers_corpus.jsonl
           cmp packages/python/goldenflow/tests/parity/profile_corpus.jsonl \
               packages/typescript/goldenflow/tests/parity/profile_corpus.jsonl
+          cmp packages/python/goldenflow/tests/parity/dates_corpus.jsonl \
+              packages/typescript/goldenflow/tests/parity/dates_corpus.jsonl
       - name: Build goldenflow WASM artifact into the loader's artifacts/ dir
         # Mirrors score-wasm/build_wasm.sh: cargo build wasm32 + wasm-bindgen-cli
         # pinned from Cargo.lock, emitting goldenflow_wasm_bg.wasm + .js where the
@@ -1660,6 +1689,8 @@ jobs:
           workspaces: |
             packages/rust/extensions
             packages/rust/extensions/graph-core
+            packages/rust/extensions/goldenfuzz-core
+            packages/rust/extensions/goldenphonetic-core
             packages/rust/extensions/score-core
             packages/rust/extensions/sketch-core
             packages/rust/extensions/perceptual-core
@@ -1698,6 +1729,18 @@ jobs:
       # here (the wasm32 build runs in the typescript lane's graph drift guard).
       - run: cargo check --manifest-path graph-wasm/Cargo.toml
       - run: cargo clippy --manifest-path graph-wasm/Cargo.toml --all-targets -- -D warnings
+      # goldenfuzz-core: the extracted fuzzy-string kernel (its own [workspace],
+      # like score-core). score-core re-exports it as `strsim`, so it's built
+      # transitively everywhere, but its OWN unit tests + rapidfuzz parity oracle
+      # only run when tested explicitly.
+      - run: cargo test --manifest-path goldenfuzz-core/Cargo.toml
+      - run: cargo clippy --manifest-path goldenfuzz-core/Cargo.toml --all-targets -- -D warnings
+      # goldenphonetic-core: byte-identical-to-jellyfish phonetic encoders
+      # (soundex / metaphone / nysiis / match_rating), its own [workspace] like
+      # goldenfuzz-core. The `goldenphonetic` product's kernel; run its unit
+      # tests + the jellyfish parity oracle explicitly.
+      - run: cargo test --manifest-path goldenphonetic-core/Cargo.toml
+      - run: cargo clippy --manifest-path goldenphonetic-core/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --manifest-path score-core/Cargo.toml
       - run: cargo clippy --manifest-path score-core/Cargo.toml -- -D warnings
       # fs-core (2026-07-17) is the pyo3-free single source of truth for the
@@ -3746,7 +3789,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      GOLDENMATCH_NATIVE: "0"
+      # Native-on. The throughput tier's PROFILING pass (the autoconfig
+      # controller sample) scores a full NxN fuzzy field matrix over the text
+      # column; on document-length text only the bit-parallel Rust kernel
+      # (score-core::strsim) is fast enough -- naive DP / pure-Python hang the
+      # profiling past run_goldenmatch's watchdog at this 1500-doc workload
+      # (rapidfuzz's bit-parallel cdist used to hide that cost before #2159).
+      # The gate's verdict metrics (candidate_pairs / reduction_ratio /
+      # measured_recall) are byte-identical native-vs-pure-Python, so the
+      # committed baseline stays valid; native only changes SPEED. build_native.py
+      # drops goldenmatch._native below (mirrors the autoconfig quality lane).
       POLARS_SKIP_CPU_CHECK: "1"
       # Clean, reproducible CI runs (no cross-run memory db).
       GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
@@ -3768,6 +3820,16 @@ jobs:
       - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       - run: uv pip install -e packages/python/goldenmatch
       - run: uv pip install duckdb
+      # Build the native bit-parallel kernel so the controller's fuzzy profiling
+      # pass runs on it (see the job env comment). build_native.py drops
+      # goldenmatch._native into the package, exactly as the autoconfig quality
+      # lane does.
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/native
+      - name: Build native ext (throughput profiling runs on the bit-parallel kernel)
+        run: uv run python scripts/build_native.py
       - name: Bench harness unit tests
         # --timeout converts any hang into a per-test traceback (the bench tests
         # spawn tier subprocesses; a network/model stall must fail actionably).
@@ -3865,6 +3927,33 @@ jobs:
       - name: Build loadable cdylib
         run: cargo build --release
 
+  er_matcher:
+    # Box-safe tests for the OSS ER-matcher scripts (plan 2026-07-26 §Testing):
+    # data-gen determinism/no-leakage, prompt/serializer contract via eval, the P5
+    # ship-gate logic, the P3a perf GO/NO-GO gate, and the P3 trainer's PURE
+    # helpers (config/seq-len/chat-target). The heavy GPU train + real-model eval
+    # run out-of-band (Modal); this lane gates everything runnable on CPU. The P2/P6
+    # tests live under packages/python/goldenmatch/tests and already run in the
+    # python_goldenmatch lane; this covers the repo-root scripts/er_matcher/ suite,
+    # which no other lane collects.
+    needs: changes
+    if: needs.changes.outputs.er_matcher == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Sync workspace (goldenmatch importable + dev tools)
+        run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
+      - name: ER-matcher box-safe tests
+        run: uv run pytest scripts/er_matcher/ -q
+        env:
+          GOLDENMATCH_NATIVE: "0"
+          POLARS_SKIP_CPU_CHECK: "1"
+
   ci-required:
     needs:
       - changes
@@ -3926,6 +4015,7 @@ jobs:
       - api_parity
       - native_symbols
       - config_matrix
+      - er_matcher
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 1

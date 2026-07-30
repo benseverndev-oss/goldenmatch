@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import sys
 from typing import TYPE_CHECKING, Any
 
 from rich.panel import Panel
@@ -140,7 +139,10 @@ def profile_column(series: Any, name: str | None = None) -> dict[str, Any]:
     latter the caller passes ``name`` and dtype falls back to the semantic
     spelling (the ``pl.Series`` dtype string is unavailable without polars)."""
     col = _as_column(series)
-    _is_pl_series = "polars" in sys.modules and isinstance(series, pl.Series)
+    # Structural detection (see core.frame.is_polars_dataframe): robust to a
+    # co-located test dropping polars from sys.modules; never imports polars.
+    _st = type(series)
+    _is_pl_series = _st.__module__.partition(".")[0] == "polars" and _st.__name__ == "Series"
     if _is_pl_series:
         name = series.name
         dtype = str(series.dtype)

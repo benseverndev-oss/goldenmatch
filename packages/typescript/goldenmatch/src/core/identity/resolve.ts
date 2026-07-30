@@ -32,6 +32,11 @@ export interface ResolveSummary {
   eventsEmitted: number;
   recordsUpserted: number;
   conflictsFlagged: number;
+  // semantic-graph: entity-to-entity relationship edges written this run. The TS
+  // port does not run the relationship post-pass (Python-only), so it stays 0 --
+  // present for cross-language ResolveSummary parity.
+  relationshipsAdded: number;
+  relationshipsDeleted: number;
 }
 
 export interface ResolveOptions {
@@ -56,6 +61,8 @@ function emptySummary(): ResolveSummary {
     eventsEmitted: 0,
     recordsUpserted: 0,
     conflictsFlagged: 0,
+    relationshipsAdded: 0,
+    relationshipsDeleted: 0,
   };
 }
 

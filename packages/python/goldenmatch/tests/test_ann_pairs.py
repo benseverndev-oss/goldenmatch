@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import numpy as np
 import polars as pl
-import pytest
 from goldenmatch.config.schemas import (
     BlockingConfig,
     BlockingKeyConfig,
@@ -12,14 +11,7 @@ from goldenmatch.config.schemas import (
     MatchkeyField,
 )
 
-try:
-    import faiss  # noqa: F401  # availability check for optional dep
-    HAS_FAISS = True
-except ImportError:
-    HAS_FAISS = False
 
-
-@pytest.mark.skipif(not HAS_FAISS, reason="faiss-cpu not installed")
 class TestQueryWithScores:
     def test_returns_scores(self):
         from goldenmatch.core.ann_blocker import ANNBlocker
@@ -66,7 +58,6 @@ class TestQueryWithScores:
             assert a != b
 
 
-@pytest.mark.skipif(not HAS_FAISS, reason="faiss-cpu not installed")
 class TestAnnPairsBlocking:
     def _make_fake_embedder(self):
         from goldenmatch.core.embedder import Embedder

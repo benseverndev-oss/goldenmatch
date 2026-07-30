@@ -10,12 +10,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 import numpy as np
-from rapidfuzz.distance import DamerauLevenshtein, JaroWinkler, Levenshtein
-from rapidfuzz.fuzz import token_sort_ratio
-from rapidfuzz.process import cdist
 
 from goldenmatch._polars_lazy import pl
 from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+from goldenmatch.core import strsim
 from goldenmatch.core._profile_helpers import (
     hartigan_dip,
     histogram_20,
@@ -79,8 +77,9 @@ def _emit_scoring_profile(
     # auto-config controller's sample iterations), so ``current_emitter()`` is
     # the null singleton and ``set_scoring`` is a no-op -- but histogram_20 +
     # hartigan_dip + the mass_* passes below run over EVERY scored pair (~131M
-    # at 1M rows: the dip is a numpy/diptest sort, the rest are full-list Python
-    # loops). That ~149s of work was computed and immediately discarded. Same
+    # at 1M rows: the dip is an owned O(n log n) sort + GCM/LCM walk (core._dip),
+    # the rest are full-list Python loops). That work was computed and
+    # immediately discarded. Same
     # dead-work pattern as #837's matched_pairs; the guard makes the no-op path
     # actually do no work. When a capture IS active (sample iterations) the
     # construction is byte-identical to before.
@@ -167,9 +166,9 @@ def _date_similarity_py(val_a: str, val_b: str) -> float:
     (``jaro_winkler`` scores unrelated birthdays 0.80+)."""
     da, db = _iso_date_digits(val_a), _iso_date_digits(val_b)
     if da is not None and db is not None:
-        d = DamerauLevenshtein.distance(da, db)
+        d = strsim.damerau_levenshtein_distance(da, db)
         return {0: 1.0, 1: 0.90, 2: 0.75}.get(d, 0.0)
-    return Levenshtein.normalized_similarity(val_a, val_b)
+    return strsim.levenshtein_normalized_similarity(val_a, val_b)
 
 
 # --- date_diff: magnitude-aware date comparator ----------------------------
@@ -490,11 +489,11 @@ def score_field(val_a: str | None, val_b: str | None, scorer: str) -> float | No
     elif scorer == "cosine":
         return _cosine_similarity_py(val_a, val_b)
     elif scorer == "jaro_winkler":
-        return JaroWinkler.similarity(val_a, val_b)
+        return strsim.jaro_winkler_similarity(val_a, val_b)
     elif scorer == "levenshtein":
-        return Levenshtein.normalized_similarity(val_a, val_b)
+        return strsim.levenshtein_normalized_similarity(val_a, val_b)
     elif scorer == "token_sort":
-        return token_sort_ratio(val_a, val_b) / 100.0
+        return strsim.token_sort_ratio(val_a, val_b) / 100.0
     elif scorer == "soundex_match":
         return _soundex_score_single(val_a, val_b)
     elif scorer == "ensemble":
@@ -621,6 +620,95 @@ def _apply_negative_evidence(matchkey: MatchkeyConfig, pair: dict) -> float:
     return total_penalty
 
 
+def _apply_negative_evidence_batch(
+    matchkey: MatchkeyConfig, pairs: list[dict]
+) -> list[float]:
+    """Vectorized twin of ``_apply_negative_evidence`` over many pairs at once.
+
+    Returns one penalty per pair, byte-identical to
+    ``[_apply_negative_evidence(matchkey, p) for p in pairs]`` -- the scalar
+    path is the source of truth (see tests/test_ne_batch_parity.py).
+
+    The win: each NE field is scored across ALL pairs in a single native
+    ``score_field_pairwise`` FFI crossing (scorer ids 0..3 -- jaro_winkler /
+    levenshtein / token_sort / exact) instead of a per-pair pure-Python
+    ``strsim`` call. Non-pairwise scorers (soundex, numeric, geo, ...) and the
+    native-off path fall back to the same scalar ``score_field`` the source of
+    truth uses, so parity holds unconditionally; only the hot string scorers
+    accelerate.
+
+    Parity is preserved exactly for the common shapes: NE fields are iterated
+    in config order, per-pair penalties accumulate in that order (float sum is
+    order-stable per pair), None/missing values skip with no penalty, and
+    ``_NE_BROKEN`` short-circuits a known-broken (scorer, field). The one
+    theoretical divergence from the scalar loop is a scorer that raises on some
+    pairs but not others (transforms are pure functions of config, so in
+    practice a field is all-or-nothing): the scalar path penalizes the pairs it
+    processed before the raise, whereas this path drops the whole field. NE
+    fields come from homogeneous DataFrame columns, so this case does not arise.
+    """
+    n = len(pairs)
+    if not matchkey.negative_evidence or n == 0:
+        return [0.0] * n
+
+    totals = [0.0] * n
+    for ne in matchkey.negative_evidence:
+        ne_key = (ne.scorer, ne.field)
+        if ne_key in _NE_BROKEN:
+            continue
+        # Gather transformed, non-null (a, b) values with their pair indices --
+        # mirrors the scalar path's per-pair transform + None-skip.
+        idxs: list[int] = []
+        a_vals: list[str] = []
+        b_vals: list[str] = []
+        try:
+            for i, pair in enumerate(pairs):
+                if ne.field not in pair:
+                    continue
+                val_a, val_b = pair[ne.field]
+                val_a = apply_transforms(val_a, ne.transforms)
+                val_b = apply_transforms(val_b, ne.transforms)
+                if val_a is None or val_b is None:
+                    continue
+                idxs.append(i)
+                a_vals.append(val_a)
+                b_vals.append(val_b)
+            if not idxs:
+                continue
+            # Native pairwise for eligible scorers; scalar per-element otherwise.
+            sims = _native_field_pairwise(a_vals, b_vals, ne.scorer)
+            if sims is None:
+                sims = [score_field(a, b, ne.scorer) for a, b in zip(a_vals, b_vals)]
+        except (ValueError, KeyError) as exc:
+            with _NE_BROKEN_LOCK:
+                _NE_BROKEN.add(ne_key)
+            logger.warning(
+                "auto-config: NE scorer '%s' for field '%s' not registered or failed: %s; "
+                "skipping (further pairs with this NE entry will be silently skipped)",
+                ne.scorer, ne.field, exc,
+            )
+            continue
+        except Exception as exc:
+            with _NE_BROKEN_LOCK:
+                _NE_BROKEN.add(ne_key)
+            logger.warning(
+                "auto-config: NE scoring of field '%s' raised %s; "
+                "skipping (further pairs with this NE entry will be silently skipped)",
+                ne.field, type(exc).__name__,
+            )
+            continue
+
+        threshold = ne.threshold
+        penalty = ne.flat_penalty
+        for k, i in enumerate(idxs):
+            sim = sims[k]
+            if sim is None:
+                continue
+            if sim < threshold:
+                totals[i] += penalty
+    return totals
+
+
 def _apply_negative_evidence_to_exact_pairs(  # pyright: ignore[reportUnusedFunction]  # called from core/pipeline.py (outside slice)
     pairs: list[tuple[int, int, float]],
     matchkey: MatchkeyConfig,
@@ -650,7 +738,12 @@ def _apply_negative_evidence_to_exact_pairs(  # pyright: ignore[reportUnusedFunc
         zip(full_df["__row_id__"].to_list(), range(full_df.height))
     )
 
-    filtered: list[tuple[int, int, float]] = []
+    # Materialize the per-pair NE value dicts, then score them all in one
+    # vectorized pass (_apply_negative_evidence_batch -> native pairwise). The
+    # scalar per-pair loop this replaced re-entered pure-Python strsim per pair;
+    # the batch penalties are byte-identical (tests/test_ne_batch_parity.py).
+    valid_pairs: list[tuple[int, int]] = []
+    pair_dicts: list[dict] = []
     for row_a, row_b, _initial_score in pairs:
         idx_a = row_id_to_idx.get(row_a)
         idx_b = row_id_to_idx.get(row_b)
@@ -667,7 +760,12 @@ def _apply_negative_evidence_to_exact_pairs(  # pyright: ignore[reportUnusedFunc
                 pair_dict[ne.field] = (val_a, val_b)
             except Exception:
                 pair_dict[ne.field] = (None, None)
-        penalty = _apply_negative_evidence(matchkey, pair_dict)
+        valid_pairs.append((row_a, row_b))
+        pair_dicts.append(pair_dict)
+
+    penalties = _apply_negative_evidence_batch(matchkey, pair_dicts)
+    filtered: list[tuple[int, int, float]] = []
+    for (row_a, row_b), penalty in zip(valid_pairs, penalties):
         final_score = max(0.0, 1.0 - penalty)
         if final_score >= threshold:
             filtered.append((row_a, row_b, final_score))
@@ -713,6 +811,59 @@ def _apply_guard_to_exact_pairs(  # pyright: ignore[reportUnusedFunction]  # cal
         if guard_passes(matchkey.guard, cols, _rec(row_a), _rec(row_b)):
             filtered.append((row_a, row_b, score))
     return filtered
+
+
+# Set by core/pipeline before scoring a weighted matchkey that carries
+# field-level guards, so find_fuzzy_matches can read RAW (pre-prep) values by
+# __row_id__ when building a field's guard mask. ThreadPoolExecutor workers
+# share this module global; matchkeys are scored sequentially in the pipeline
+# loop, so there is no cross-matchkey contamination.
+_active_raw_guard_values: dict[str, dict[int, Any]] = {}
+
+
+def _field_guard_mask(
+    guard_expr: str, row_ids: list, block_df: Any,
+) -> np.ndarray:
+    """Per-pair boolean mask (n x n) for a field-level guard.
+
+    ``mask[i, j]`` is True when the guard holds for the (row i, row j) pair.
+    Values come from the RAW snapshot (``_active_raw_guard_values``, by
+    ``__row_id__``) when available, else the prepared block column read through
+    the arrow-native ``to_frame`` + Column seam (NOT polars ``[c]`` indexing --
+    goldenmatch is polars-free). The guard should be SYMMETRIC in a/b (the a/b
+    assignment within an emitted pair is not canonically ordered).
+    """
+    import numpy as _np
+
+    from goldenmatch.core.frame import to_frame as _to_frame_guard
+    from goldenmatch.core.guard import guard_columns, guard_passes
+
+    cols = guard_columns(guard_expr)
+    n = len(row_ids)
+    _bf = _to_frame_guard(block_df)
+    _bf_names = set(_bf.columns)
+    prepared = {c: _bf.column(c).to_list() for c in cols if c in _bf_names}
+
+    def _rec(i: int) -> dict:
+        rid = row_ids[i]
+        rec: dict = {}
+        for c in cols:
+            raw = _active_raw_guard_values.get(c)
+            if raw is not None and rid in raw:
+                rec[c] = raw[rid]
+            elif c in prepared:
+                rec[c] = prepared[c][i]
+        return rec
+
+    recs = [_rec(i) for i in range(n)]
+    mask = _np.zeros((n, n), dtype=bool)
+    for i in range(n):
+        ri = recs[i]
+        for j in range(i + 1, n):
+            if guard_passes(guard_expr, cols, ri, recs[j]):
+                mask[i, j] = True
+                mask[j, i] = True
+    return mask
 
 
 def find_exact_matches(
@@ -828,7 +979,7 @@ _NATIVE_FIELD_SCORER_IDS: dict[str, int] = {
 
 def _native_field_matrix(values: list, scorer_name: str) -> np.ndarray | None:
     """Native cdist-shaped fallback. Returns None when the kernel isn't
-    loaded or the scorer isn't supported -- caller stays on the rapidfuzz
+    loaded or the scorer isn't supported -- caller stays on the pure-Python strsim
     path.
 
     Self-cdist: passes the same Arrow array on both sides and marks
@@ -858,7 +1009,47 @@ def _native_field_matrix(values: list, scorer_name: str) -> np.ndarray | None:
         arr = pa.array(clean, type=pa.large_string())
         return native.score_field_matrix(arr, arr, scorer_id, True)
     except Exception:
-        # Any FFI / pyarrow / numpy hiccup falls through to rapidfuzz.
+        # Any FFI / pyarrow / numpy hiccup falls through to pure-Python strsim.
+        return None
+
+
+# Pairwise-eligible native scorer ids. score_field_pairwise handles ids 0..3
+# (jaro_winkler / levenshtein / token_sort / exact); soundex (id 4) is
+# matrix-only (no per-pair precompute amortization), so it stays scalar.
+_PAIRWISE_FIELD_SCORER_IDS: dict[str, int] = {
+    name: sid for name, sid in _NATIVE_FIELD_SCORER_IDS.items() if sid <= 3
+}
+
+
+def _native_field_pairwise(
+    a_vals: list[str], b_vals: list[str], scorer_name: str
+) -> np.ndarray | None:
+    """Elementwise native pairwise scores (``out[i] = score(a[i], b[i])``), or
+    None when the kernel isn't loaded / the scorer isn't pairwise-eligible --
+    caller falls back to the scalar ``score_field`` path.
+
+    Honors the same ``GOLDENMATCH_NATIVE`` gate as ``_native_field_matrix``;
+    the pairwise and matrix kernels share ``score_one``, so token_sort/exact/
+    jaro_winkler/levenshtein are byte-parity with the pure-Python ``strsim``
+    scalars (asserted in tests/test_ne_batch_parity.py under the native lane).
+    """
+    scorer_id = _PAIRWISE_FIELD_SCORER_IDS.get(scorer_name)
+    if scorer_id is None:
+        return None
+    from goldenmatch.core._native_loader import native_enabled, native_module
+
+    if not native_enabled("field_scoring"):
+        return None
+    native = native_module()
+    if native is None or not hasattr(native, "score_field_pairwise"):
+        return None
+    try:
+        import pyarrow as pa
+        aa = pa.array(a_vals, type=pa.large_string())
+        bb = pa.array(b_vals, type=pa.large_string())
+        return native.score_field_pairwise(aa, bb, scorer_id)
+    except Exception:
+        # Any FFI / pyarrow / numpy hiccup falls through to pure-Python strsim.
         return None
 
 
@@ -883,7 +1074,7 @@ def _fuzzy_score_matrix(
     values: list, scorer_name: str, model_name: str = "all-MiniLM-L6-v2",
     tf_freqs: dict[str, float] | None = None,
 ) -> np.ndarray:
-    """NxN fuzzy score matrix using rapidfuzz cdist or embedding cosine similarity."""
+    """NxN fuzzy score matrix via the native kernel / pure-Python strsim, or embedding cosine similarity."""
     if scorer_name == "embedding":
         try:
             from goldenmatch.core.embedder import get_embedder
@@ -905,13 +1096,13 @@ def _fuzzy_score_matrix(
     # largest single contributor to the 1M-row OOM cliff (PR #173).
     if scorer_name == "ensemble":
         # Combine multiple scorers, take element-wise max. Each subscorer
-        # tries the native kernel first; falls back to rapidfuzz cdist.
+        # tries the native kernel first; falls back to pure-Python strsim.
         jw = _native_field_matrix(values, "jaro_winkler")
         if jw is None:
-            jw = np.asarray(cdist(clean, clean, scorer=JaroWinkler.similarity), dtype=np.float32)
+            jw = np.asarray(strsim.pure_field_matrix(clean, "jaro_winkler"), dtype=np.float32)
         ts = _native_field_matrix(values, "token_sort")
         if ts is None:
-            ts = np.asarray(cdist(clean, clean, scorer=token_sort_ratio), dtype=np.float32) / 100.0
+            ts = np.asarray(strsim.pure_field_matrix(clean, "token_sort"), dtype=np.float32) / 100.0
         sx = _soundex_score_matrix(values).astype(np.float32) * 0.8
         matrix = np.maximum(np.maximum(jw, ts), sx)
     elif scorer_name in ("jaro_winkler", "levenshtein", "token_sort"):
@@ -919,11 +1110,11 @@ def _fuzzy_score_matrix(
         if m is not None:
             matrix = m
         elif scorer_name == "jaro_winkler":
-            matrix = np.asarray(cdist(clean, clean, scorer=JaroWinkler.similarity), dtype=np.float32)
+            matrix = np.asarray(strsim.pure_field_matrix(clean, "jaro_winkler"), dtype=np.float32)
         elif scorer_name == "levenshtein":
-            matrix = np.asarray(cdist(clean, clean, scorer=Levenshtein.normalized_similarity), dtype=np.float32)
+            matrix = np.asarray(strsim.pure_field_matrix(clean, "levenshtein"), dtype=np.float32)
         else:
-            matrix = np.asarray(cdist(clean, clean, scorer=token_sort_ratio), dtype=np.float32) / 100.0
+            matrix = np.asarray(strsim.pure_field_matrix(clean, "token_sort"), dtype=np.float32) / 100.0
     elif scorer_name == "date":
         # Date-aware scorer (#1858). This find_fuzzy_matches / polars-direct path
         # stays pure-Python: score_field_matrix's native id namespace already uses
@@ -1456,8 +1647,8 @@ def _ensemble_score_single(val_a: str, val_b: str) -> float:
     ``GOLDENMATCH_ENSEMBLE_KERNEL=f32`` mode casts the per-pair score to float32
     to quantize it like the matrix's per-field values (parity experiment).
     """
-    jw = JaroWinkler.similarity(val_a, val_b)
-    ts = token_sort_ratio(val_a, val_b) / 100.0
+    jw = strsim.jaro_winkler_similarity(val_a, val_b)
+    ts = strsim.token_sort_ratio(val_a, val_b) / 100.0
     try:
         ca = canonical_soundex(val_a)
         sx = 0.8 if ca and ca == canonical_soundex(val_b) else 0.0
@@ -1655,6 +1846,12 @@ def find_fuzzy_matches(
         else:  # alias_match
             scores = _alias_score_matrix(values)
 
+        # Field-level guard: drop this field for pairs whose guard fails (it
+        # contributes 0 to BOTH numerator and denominator, so the weighted
+        # average renormalizes over the surviving fields automatically).
+        if f.guard:
+            valid = valid & _field_guard_mask(f.guard, row_ids, block_df)
+
         cheap_numerator += scores * _w(f) * valid
         cheap_denominator += _w(f) * valid
 
@@ -1728,6 +1925,8 @@ def find_fuzzy_matches(
                     )
                     emb_row_null &= np.array([v is None for v in col_vals])
                 emb_valid = ~(emb_row_null[:, None] | emb_row_null[None, :])
+                if f.guard:
+                    emb_valid = emb_valid & _field_guard_mask(f.guard, row_ids, block_df)
                 fuzzy_numerator += scores * _w(f) * emb_valid
                 fuzzy_denominator += _w(f) * emb_valid
             else:
@@ -1740,6 +1939,10 @@ def find_fuzzy_matches(
                     values, f.scorer, model_name=f.model or "all-MiniLM-L6-v2",
                     tf_freqs=getattr(f, "tf_freqs", None),
                 )
+
+                # Field-level guard: drop this field for guard-failing pairs.
+                if f.guard:
+                    valid = valid & _field_guard_mask(f.guard, row_ids, block_df)
 
                 fuzzy_numerator += scores * _w(f) * valid
                 fuzzy_denominator += _w(f) * valid

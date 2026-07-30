@@ -1,0 +1,90 @@
+# Per-source config for the multi-source ER data pipeline (Task 7).
+# Loaded + strictly validated via `sources_config.load_sources`; each entry
+# is turned into a running loader via `sources_config.build_source`.
+# `weight` values are illustrative only -- blending these into one training
+# corpus is deferred to a later task.
+#
+# NOTE: MusicBrainz is a multi-source CLUSTERING benchmark (N-way entity
+# groups, not pairwise two-table matching like every source below) and needs
+# a different loader shape -- deferred.
+
+sources:
+  febrl:
+    loader: febrl
+    mechanism: bundle
+    license: MPL-1.1
+    domain: person
+    weight: 1.0
+    kwargs:
+      root: data/er_matcher/raw/febrl
+
+  abt_buy:
+    loader: leipzig
+    mechanism: bundle
+    license: CC-BY
+    attribution: "Leipzig DB Group; VLDB2010"
+    domain: product
+    weight: 1.0
+    kwargs:
+      root: data/er_matcher/raw/leipzig/abt_buy
+      block_fields: [name]
+
+  amazon_google:
+    loader: leipzig
+    mechanism: bundle
+    license: CC-BY
+    attribution: "Leipzig DB Group; VLDB2010"
+    domain: product
+    weight: 1.0
+    kwargs:
+      root: data/er_matcher/raw/leipzig/amazon_google
+      block_fields: [name]
+
+  dblp_acm:
+    loader: leipzig
+    mechanism: bundle
+    license: CC-BY
+    attribution: "Leipzig DB Group; VLDB2010"
+    domain: citation
+    weight: 1.0
+    kwargs:
+      root: data/er_matcher/raw/leipzig/dblp_acm
+      block_fields: [title]
+
+  dblp_scholar:
+    loader: leipzig
+    mechanism: bundle
+    license: CC-BY
+    attribution: "Leipzig DB Group; VLDB2010"
+    domain: citation
+    weight: 1.0
+    kwargs:
+      root: data/er_matcher/raw/leipzig/dblp_scholar
+      block_fields: [title]
+
+  magellan_abt_buy:
+    loader: magellan
+    mechanism: fetch
+    license: cite-only
+    eval_only: true
+    domain: product
+    kwargs:
+      root: data/er_matcher/raw/magellan/abt_buy
+
+  ncvr:
+    loader: ncvr
+    mechanism: fetch
+    license: public-record
+    eval_only: true
+    domain: person
+    kwargs: {}
+
+  synthetic:
+    loader: synthetic
+    mechanism: generate
+    license: CC0-1.0
+    domain: multi
+    weight: 1.0
+    kwargs:
+      n_entities: 3000
+      profile: light

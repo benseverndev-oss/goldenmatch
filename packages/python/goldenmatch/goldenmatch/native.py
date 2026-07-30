@@ -39,7 +39,7 @@ def string_similarity(a: str | None, b: str | None, scorer: str = "jaro_winkler"
 
     ``scorer`` is one of :data:`STRING_SCORERS`. Uses the Rust kernel when the
     ``goldenmatch._native`` extension is importable (bit-parity with rapidfuzz to
-    1e-9), else the pure-Python rapidfuzz reference. ``None`` is treated as the
+    1e-9), else the pure-Python strsim reference. ``None`` is treated as the
     empty string. The gate honours ``GOLDENMATCH_NATIVE`` like every other native
     call (these are the kernels behind native block scoring)."""
     if scorer not in STRING_SCORERS:
@@ -54,13 +54,12 @@ def string_similarity(a: str | None, b: str | None, scorer: str = "jaro_winkler"
             return float(mod.levenshtein_similarity(sa, sb))
         return float(mod.token_sort_ratio(sa, sb)) / 100.0
     # Pure-Python reference — exactly what the native kernels replicate.
-    from rapidfuzz.distance import JaroWinkler, Levenshtein
-    from rapidfuzz.fuzz import token_sort_ratio
+    from goldenmatch.core import strsim
     if scorer == "jaro_winkler":
-        return float(JaroWinkler.similarity(sa, sb))
+        return float(strsim.jaro_winkler_similarity(sa, sb))
     if scorer == "levenshtein":
-        return float(Levenshtein.normalized_similarity(sa, sb))
-    return float(token_sort_ratio(sa, sb)) / 100.0
+        return float(strsim.levenshtein_normalized_similarity(sa, sb))
+    return float(strsim.token_sort_ratio(sa, sb)) / 100.0
 
 
 __all__ = [

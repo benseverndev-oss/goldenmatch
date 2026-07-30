@@ -84,12 +84,19 @@ def test_probabilistic_matchkey_guard_deferred():
         )
 
 
-def test_field_level_guard_deferred():
-    with pytest.raises(ValueError, match="planned follow-up"):
+def test_field_level_guard_accepted_on_weighted():
+    MatchkeyConfig(
+        name="w", type="weighted", threshold=0.8,
+        fields=[MatchkeyField(field="name", scorer="jaro_winkler", weight=1.0,
+                              guard="a_country == b_country")],
+    )
+
+
+def test_field_level_guard_rejected_on_exact():
+    with pytest.raises(ValueError, match="only valid on weighted"):
         MatchkeyConfig(
-            name="w", type="weighted", threshold=0.8,
-            fields=[MatchkeyField(field="name", scorer="jaro_winkler", weight=1.0,
-                                  guard="a_country == b_country")],
+            name="e", type="exact",
+            fields=[MatchkeyField(field="ssn", guard="a_country == b_country")],
         )
 
 
@@ -200,3 +207,44 @@ def test_weighted_guard_suppresses_cross_country_match():
     multi = _run(df, cfg)
     assert [0, 1] in multi          # same country -> merged
     assert all(2 not in c for c in multi)   # CA row never merged across the border
+
+
+# ── field-level guard (drop-and-renormalize) ─────────────────────────────────
+
+
+def _two_field_cfg(email_guard):
+    fields = [
+        MatchkeyField(field="name", scorer="jaro_winkler", weight=0.5),
+        MatchkeyField(field="email", scorer="exact", weight=0.5,
+                      **({"guard": email_guard} if email_guard else {})),
+    ]
+    return GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(name="ne", type="weighted", threshold=0.75, fields=fields)],
+        blocking=BlockingConfig(strategy="static", keys=[BlockingKeyConfig(fields=["zip"])]),
+    )
+
+
+_ROLE = "a_email not in ('info@x.com', 'sales@x.com') and b_email not in ('info@x.com', 'sales@x.com')"
+
+
+def test_field_guard_drops_field_and_renormalizes():
+    # Same name, different role emails. Without the guard the exact-email
+    # mismatch drags the weighted average to 0.5 (< 0.75) -> no merge. With a
+    # field guard that drops the email field for role addresses, the score
+    # renormalizes to the name-only 1.0 -> merge.
+    df = pl.DataFrame({
+        "id": [0, 1], "name": ["Acme Corp", "Acme Corp"],
+        "email": ["info@x.com", "sales@x.com"], "zip": ["1", "1"],
+    })
+    assert _run(df, _two_field_cfg(None)) == []          # mismatch blocks the merge
+    assert _run(df, _two_field_cfg(_ROLE)) == [[0, 1]]     # guarded field drops out -> merge
+
+
+def test_field_guard_keeps_field_when_guard_holds():
+    # Distinct real emails: the guard holds (neither is a role address), so the
+    # email field is NOT dropped and its exact mismatch still blocks the merge.
+    df = pl.DataFrame({
+        "id": [0, 1], "name": ["Acme Corp", "Acme Corp"],
+        "email": ["ann@acme.com", "bob@acme.com"], "zip": ["1", "1"],
+    })
+    assert _run(df, _two_field_cfg(_ROLE)) == []   # field counted -> mismatch blocks merge

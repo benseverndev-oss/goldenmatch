@@ -779,29 +779,6 @@ wheels = [
 ]
 
 [[package]]
-name = "faiss-cpu"
-version = "1.13.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "numpy" },
-    { name = "packaging" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/07/c9/671f66f6b31ec48e5825d36435f0cb91189fa8bb6b50724029dbff4ca83c/faiss_cpu-1.13.2-cp310-abi3-macosx_14_0_arm64.whl", hash = "sha256:a9064eb34f8f64438dd5b95c8f03a780b1a3f0b99c46eeacb1f0b5d15fc02dc1", size = 3452776, upload-time = "2025-12-24T10:27:01.419Z" },
-    { url = "https://files.pythonhosted.org/packages/5a/4a/97150aa1582fb9c2bca95bd8fc37f27d3b470acec6f0a6833844b21e4b40/faiss_cpu-1.13.2-cp310-abi3-macosx_14_0_x86_64.whl", hash = "sha256:c8d097884521e1ecaea6467aeebbf1aa56ee4a36350b48b2ca6b39366565c317", size = 7896434, upload-time = "2025-12-24T10:27:03.592Z" },
-    { url = "https://files.pythonhosted.org/packages/0b/d0/0940575f059591ca31b63a881058adb16a387020af1709dcb7669460115c/faiss_cpu-1.13.2-cp310-abi3-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:0ee330a284042c2480f2e90450a10378fd95655d62220159b1408f59ee83ebf1", size = 11485825, upload-time = "2025-12-24T10:27:05.681Z" },
-    { url = "https://files.pythonhosted.org/packages/e7/e1/a5acac02aa593809f0123539afe7b4aff61d1db149e7093239888c9053e1/faiss_cpu-1.13.2-cp310-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:ab88ee287c25a119213153d033f7dd64c3ccec466ace267395872f554b648cd7", size = 23845772, upload-time = "2025-12-24T10:27:08.194Z" },
-    { url = "https://files.pythonhosted.org/packages/9c/7b/49dcaf354834ec457e85ca769d50bc9b5f3003fab7c94a9dcf08cf742793/faiss_cpu-1.13.2-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:85511129b34f890d19c98b82a0cd5ffb27d89d1cec2ee41d2621ee9f9ef8cf3f", size = 13477567, upload-time = "2025-12-24T10:27:10.822Z" },
-    { url = "https://files.pythonhosted.org/packages/f7/6b/12bb4037921c38bb2c0b4cfc213ca7e04bbbebbfea89b0b5746248ce446e/faiss_cpu-1.13.2-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:8b32eb4065bac352b52a9f5ae07223567fab0a976c7d05017c01c45a1c24264f", size = 25102239, upload-time = "2025-12-24T10:27:13.476Z" },
-    { url = "https://files.pythonhosted.org/packages/14/6d/40439a05e4e60a0e889aa68b08ec70f5c8e32901f75f2be25c593a2e050e/faiss_cpu-1.13.2-cp311-cp311-win_amd64.whl", hash = "sha256:7c5944d7807d58fe7244b6aba06be710ee7ed99343365ed92699349efe979f51", size = 18879906, upload-time = "2025-12-24T10:27:19.041Z" },
-    { url = "https://files.pythonhosted.org/packages/9f/f9/b97eadbdd9e00f945d1566c7101382344f504596bfb19219465b0fc61e6e/faiss_cpu-1.13.2-cp311-cp311-win_arm64.whl", hash = "sha256:19508a1badfb36e456c1c8664eeb948349f604db5c7545f277a0126b4a84b080", size = 8548280, upload-time = "2025-12-24T10:27:22.114Z" },
-    { url = "https://files.pythonhosted.org/packages/87/ff/35ed875423200c17bdd594ce921abfc1812ddd21e09355290b9a94e170ab/faiss_cpu-1.13.2-cp312-cp312-win_amd64.whl", hash = "sha256:b82c01d30430dd7b1fa442001b9099735d1a82f6bb72033acdc9206d5ac66a64", size = 18890300, upload-time = "2025-12-24T10:27:24.194Z" },
-    { url = "https://files.pythonhosted.org/packages/c5/3a/bbdf5deaf6feb34b46b469c0a0acd40216c3d3c6ecf5aeb71d56b8a650e3/faiss_cpu-1.13.2-cp312-cp312-win_arm64.whl", hash = "sha256:2c4f696ae76e7c97cbc12311db83aaf1e7f4f7be06a3ffea7e5b0e8ec1fd805b", size = 8553157, upload-time = "2025-12-24T10:27:26.38Z" },
-    { url = "https://files.pythonhosted.org/packages/60/4b/903d85bf3a8264d49964ec799e45c7ffc91098606b8bc9ef2c904c1a56cb/faiss_cpu-1.13.2-cp313-cp313-win_amd64.whl", hash = "sha256:cb4b5ee184816a4b099162ac93c0d7f0033d81a88e7c1291d0a9cc41ec348984", size = 18891330, upload-time = "2025-12-24T10:27:28.806Z" },
-    { url = "https://files.pythonhosted.org/packages/b2/52/5d10642da628f63544aab27e48416be4a7ea25c6b81d8bd65016d8538b00/faiss_cpu-1.13.2-cp313-cp313-win_arm64.whl", hash = "sha256:1243967eeb2298791ff7f3683a4abd2100d7e6ec7542ca05c3b75d47a7f621e5", size = 8553088, upload-time = "2025-12-24T10:27:31.325Z" },
-]
-
-[[package]]
 name = "fastapi"
 version = "0.136.1"
 source = { registry = "https://pypi.org/simple" }
@@ -996,11 +973,11 @@ version = "3.2.0"
 source = { editable = "packages/python/goldencheck" }
 dependencies = [
     { name = "goldencheck-types" },
+    { name = "goldenfuzz" },
     { name = "openpyxl" },
     { name = "pyarrow" },
     { name = "pydantic" },
     { name = "pyyaml" },
-    { name = "rapidfuzz" },
     { name = "rich" },
     { name = "textual" },
     { name = "typer" },
@@ -1013,7 +990,6 @@ agent = [
 baseline = [
     { name = "numpy" },
     { name = "polars" },
-    { name = "scipy" },
 ]
 db = [
     { name = "connectorx" },
@@ -1051,6 +1027,7 @@ requires-dist = [
     { name = "connectorx", marker = "extra == 'db'", specifier = ">=0.3" },
     { name = "goldencheck-native", marker = "extra == 'native'", directory = "packages/rust/extensions/goldencheck-native" },
     { name = "goldencheck-types", editable = "packages/python/goldencheck-types" },
+    { name = "goldenfuzz", specifier = ">=0.1.0" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.28.1" },
     { name = "numpy", marker = "extra == 'baseline'", specifier = ">=1.26" },
     { name = "openai", marker = "extra == 'llm'", specifier = ">=1.30" },
@@ -1064,10 +1041,8 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "rapidfuzz", specifier = ">=3.0" },
     { name = "rich", specifier = ">=13.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
-    { name = "scipy", marker = "extra == 'baseline'", specifier = ">=1.11" },
     { name = "sentence-transformers", marker = "extra == 'semantic'", specifier = ">=2.2" },
     { name = "textual", specifier = ">=1.0" },
     { name = "typer", specifier = ">=0.12" },
@@ -1106,12 +1081,11 @@ source = { editable = "packages/python/goldenflow" }
 dependencies = [
     { name = "fastapi" },
     { name = "goldenflow-native" },
+    { name = "goldenfuzz" },
     { name = "phonenumbers" },
     { name = "pydantic" },
-    { name = "python-dateutil" },
     { name = "python-multipart" },
     { name = "pyyaml" },
-    { name = "rapidfuzz" },
     { name = "rich" },
     { name = "textual" },
     { name = "typer" },
@@ -1182,6 +1156,7 @@ requires-dist = [
     { name = "goldencheck", marker = "extra == 'check'", editable = "packages/python/goldencheck" },
     { name = "goldenflow", extras = ["check", "excel", "db", "mcp", "agent", "s3", "gcs", "polars", "parquet", "native"], marker = "extra == 'all'", editable = "packages/python/goldenflow" },
     { name = "goldenflow-native", directory = "packages/rust/extensions/native-flow" },
+    { name = "goldenfuzz", specifier = ">=0.1.1" },
     { name = "google-cloud-storage", marker = "extra == 'gcs'", specifier = ">=2.14" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.28.1" },
@@ -1194,11 +1169,9 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
-    { name = "python-dateutil", specifier = ">=2.9" },
     { name = "python-multipart", specifier = ">=0.0.20" },
     { name = "python-multipart", marker = "extra == 'dev'", specifier = ">=0.0.20" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "rapidfuzz", specifier = ">=3.0" },
     { name = "rich", specifier = ">=13.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
     { name = "textual", specifier = ">=0.50" },
@@ -1219,21 +1192,32 @@ dependencies = [
 requires-dist = [{ name = "pyarrow", specifier = ">=10" }]
 
 [[package]]
+name = "goldenfuzz"
+version = "0.1.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1b/71/0ec2c890edae20bb64bb4b220d755ffb18710e0bfe108cb6c78002c39b4a/goldenfuzz-0.1.1.tar.gz", hash = "sha256:bc03a87d80942c86a29899b83944c8c42fbc7625df78a320d28fc8d217bca820", size = 31185, upload-time = "2026-07-28T17:11:44.482Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b5/9b/93ebaee542dcc9204d540f323e932f32dd0bc76d0cb2d79bb392c7133feb/goldenfuzz-0.1.1-cp311-abi3-macosx_10_12_x86_64.whl", hash = "sha256:f978ca53a81a106763826cb16ef0adf5dc9b13480c483d812a375c1a8fa69527", size = 290376, upload-time = "2026-07-28T17:11:39.368Z" },
+    { url = "https://files.pythonhosted.org/packages/c3/e0/8d376b1bdcd223f8a4758e29d23b5cc8d94dcd9b9279aabd633108526866/goldenfuzz-0.1.1-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:46f78993ca609b33b9a3ed5f34d504f2212b15fca44cfe16611046ac8ce4a287", size = 281809, upload-time = "2026-07-28T17:11:40.41Z" },
+    { url = "https://files.pythonhosted.org/packages/d4/e1/e7f72ceb8cca02fb3026c35898edd8d049b51e40c81129117c14ec434327/goldenfuzz-0.1.1-cp311-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:e0b3bb2302137afa945444dd75f6ac837e8d4721fe77ed44badcf575f8bd0213", size = 308028, upload-time = "2026-07-28T17:11:41.644Z" },
+    { url = "https://files.pythonhosted.org/packages/77/d2/fac913a57b65ff344f30181af280e7f9ecae7b3ef0dc36b50414bed13103/goldenfuzz-0.1.1-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:6590191e8d7ce3f58eeed8c5e5d96e23b1203223d2f82d764562271829c6a93f", size = 313716, upload-time = "2026-07-28T17:11:42.541Z" },
+    { url = "https://files.pythonhosted.org/packages/c9/4f/d22c6ca10b702dcdb210e994b40739b46372d86a6695c545c5bc7c7267fb/goldenfuzz-0.1.1-cp311-abi3-win_amd64.whl", hash = "sha256:52cfe2b458e025853c1b51d7c8e8adfcc0f1d2a65dd38b738d663831a12fbd93", size = 185609, upload-time = "2026-07-28T17:11:43.503Z" },
+]
+
+[[package]]
 name = "goldenmatch"
 version = "3.10.0"
 source = { editable = "packages/python/goldenmatch" }
 dependencies = [
-    { name = "diptest" },
     { name = "duckdb" },
     { name = "goldenmatch-native", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or sys_platform == 'darwin' or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-11-goldenmatch-inhouse-embeddings' and extra == 'extra-11-goldenmatch-sail') or (sys_platform == 'linux' and extra == 'extra-11-goldenmatch-inhouse-embeddings' and extra == 'extra-11-goldenmatch-sail') or (sys_platform == 'win32' and extra == 'extra-11-goldenmatch-inhouse-embeddings' and extra == 'extra-11-goldenmatch-sail')" },
-    { name = "jellyfish" },
+    { name = "goldenphonetic" },
     { name = "numpy" },
     { name = "openpyxl" },
     { name = "psutil" },
     { name = "pyarrow" },
     { name = "pydantic" },
     { name = "pyyaml" },
-    { name = "rapidfuzz" },
     { name = "rich" },
     { name = "textual" },
     { name = "typer" },
@@ -1246,7 +1230,6 @@ agent = [
 all = [
     { name = "alembic" },
     { name = "anthropic" },
-    { name = "faiss-cpu" },
     { name = "fastapi" },
     { name = "goldencheck", extra = ["polars"] },
     { name = "goldenflow" },
@@ -1287,6 +1270,7 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
+    { name = "rapidfuzz" },
     { name = "ruff" },
 ]
 documents = [
@@ -1297,7 +1281,6 @@ duckdb = [
     { name = "duckdb" },
 ]
 embeddings = [
-    { name = "faiss-cpu" },
     { name = "sentence-transformers" },
 ]
 gcs = [
@@ -1316,6 +1299,9 @@ llama = [
 llm = [
     { name = "anthropic" },
     { name = "openai" },
+]
+local-llm = [
+    { name = "llama-cpp-python" },
 ]
 mcp = [
     { name = "mcp" },
@@ -1386,23 +1372,22 @@ requires-dist = [
     { name = "boto3", marker = "extra == 's3'", specifier = ">=1.26" },
     { name = "databricks-sql-connector", marker = "extra == 'databricks'", specifier = ">=3.0" },
     { name = "datafusion", marker = "extra == 'datafusion'", specifier = ">=53,<54" },
-    { name = "diptest", specifier = ">=0.5.2" },
     { name = "duckdb", specifier = ">=0.9" },
     { name = "duckdb", marker = "extra == 'bench'", specifier = ">=0.10" },
     { name = "duckdb", marker = "extra == 'duckdb'", specifier = ">=0.9" },
-    { name = "faiss-cpu", marker = "extra == 'embeddings'", specifier = ">=1.7" },
     { name = "fastapi", marker = "extra == 'web'", specifier = ">=0.110" },
     { name = "goldencheck", extras = ["polars"], marker = "extra == 'quality'", editable = "packages/python/goldencheck" },
     { name = "goldenflow", marker = "extra == 'transform'", editable = "packages/python/goldenflow" },
     { name = "goldenmatch", extras = ["embeddings", "llm", "postgres", "mcp", "polars", "quality", "transform", "web", "vision", "audio"], marker = "extra == 'all'", editable = "packages/python/goldenmatch" },
     { name = "goldenmatch-native", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or sys_platform == 'darwin'", directory = "packages/rust/extensions/native" },
     { name = "goldenmatch-native", marker = "extra == 'native'", directory = "packages/rust/extensions/native" },
+    { name = "goldenphonetic", specifier = ">=0.1.0" },
     { name = "google-cloud-bigquery", marker = "extra == 'bigquery'", specifier = ">=3.0" },
     { name = "google-cloud-storage", marker = "extra == 'gcs'", specifier = ">=2.10" },
     { name = "httpx", marker = "extra == 'web'", specifier = ">=0.27" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.0" },
-    { name = "jellyfish", specifier = ">=1.0" },
     { name = "llama-cpp-python", marker = "extra == 'llama'", specifier = ">=0.3" },
+    { name = "llama-cpp-python", marker = "extra == 'local-llm'", specifier = ">=0.3" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.28.1" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "onnx", marker = "extra == 'inhouse-embeddings'", specifier = ">=1.22.0" },
@@ -1431,8 +1416,8 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
     { name = "python-multipart", marker = "extra == 'web'", specifier = ">=0.0.9" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "rapidfuzz", specifier = ">=3.0" },
-    { name = "ray", marker = "extra == 'ray'", specifier = ">=2.0" },
+    { name = "rapidfuzz", marker = "extra == 'dev'", specifier = ">=3.0" },
+    { name = "ray", marker = "extra == 'ray'", specifier = ">=2.56.0" },
     { name = "redshift-connector", marker = "extra == 'redshift'", specifier = ">=2.0" },
     { name = "rich", specifier = ">=13.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
@@ -1446,7 +1431,7 @@ requires-dist = [
     { name = "typer", specifier = ">=0.12" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'web'", specifier = ">=0.29" },
 ]
-provides-extras = ["dev", "embeddings", "vision", "documents", "audio", "inhouse-embeddings", "llm", "postgres", "mcp", "pprl", "snowflake", "bigquery", "databricks", "salesforce", "redshift", "s3", "gcs", "azure-blob", "sqlserver", "mysql", "duckdb", "pgvector", "ray", "datafusion", "sail", "agent", "polars", "quality", "transform", "native", "lance", "llama", "web", "bench", "all"]
+provides-extras = ["dev", "embeddings", "vision", "documents", "audio", "inhouse-embeddings", "llm", "postgres", "mcp", "pprl", "snowflake", "bigquery", "databricks", "salesforce", "redshift", "s3", "gcs", "azure-blob", "sqlserver", "mysql", "duckdb", "pgvector", "ray", "datafusion", "sail", "agent", "polars", "quality", "transform", "native", "lance", "llama", "local-llm", "web", "bench", "all"]
 
 [[package]]
 name = "goldenmatch-monorepo"
@@ -1455,36 +1440,59 @@ source = { virtual = "." }
 
 [package.dev-dependencies]
 dev = [
+    { name = "diptest" },
     { name = "httpx" },
     { name = "hypothesis" },
+    { name = "jellyfish" },
     { name = "pyright" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
+    { name = "python-dateutil" },
+    { name = "rapidfuzz" },
     { name = "ruff" },
+    { name = "scipy" },
 ]
 
 [package.metadata]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "diptest", specifier = ">=0.5.2" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "hypothesis", specifier = ">=6.0" },
+    { name = "jellyfish", specifier = ">=1.0" },
     { name = "pyright", specifier = ">=1.1.380" },
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-asyncio", specifier = ">=0.23" },
     { name = "pytest-cov", specifier = ">=5.0" },
     { name = "pytest-timeout", specifier = ">=2.3" },
     { name = "pytest-xdist", specifier = ">=3.6" },
+    { name = "python-dateutil", specifier = ">=2.9" },
+    { name = "rapidfuzz", specifier = ">=3.0" },
     { name = "ruff", specifier = ">=0.6" },
+    { name = "scipy", specifier = ">=1.11" },
 ]
 
 [[package]]
 name = "goldenmatch-native"
 version = "0.1.19"
 source = { directory = "packages/rust/extensions/native" }
+
+[[package]]
+name = "goldenphonetic"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/74/db/1406432927433a65d2d4881bab6718ba5e2ab96139ceca64448f15298661/goldenphonetic-0.1.0.tar.gz", hash = "sha256:efd25d96c00db63da810117a58375ccf0010a4737643654262d2a0e5777c3fed", size = 58523, upload-time = "2026-07-28T21:02:32.956Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/db/6f/096d18da9432fea528de99b510fac71ce196c8a6f65d805b5384bd0f79e2/goldenphonetic-0.1.0-cp311-abi3-macosx_10_12_x86_64.whl", hash = "sha256:4f730fca2b49ced761cb91ed4eac7988bdd527ea4b7bd2b64a3f9b8d3b2f9e5c", size = 261164, upload-time = "2026-07-28T21:02:27.295Z" },
+    { url = "https://files.pythonhosted.org/packages/67/6a/d73af290793e6372c2090fa3e6c055950f4738069b35374f06abd5d17877/goldenphonetic-0.1.0-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:dc3985bc400f52a7260c310751ec240e47480b1f66947d439d59e9a6ddd8386c", size = 258113, upload-time = "2026-07-28T21:02:28.697Z" },
+    { url = "https://files.pythonhosted.org/packages/34/b0/20a08ff495e01d8987fdc3046d55395fc19b0605d445236a0a518d2d0c08/goldenphonetic-0.1.0-cp311-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:a26dbbc877c148d1c93ed8a6cb07cb987ab18974053be8985db052d9bf230031", size = 309828, upload-time = "2026-07-28T21:02:29.673Z" },
+    { url = "https://files.pythonhosted.org/packages/22/67/ab04fb2d69f9a9af3b485ecbd5089b8bc22825cf25f7b8d4fa9b70d533e0/goldenphonetic-0.1.0-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:4f3736273e7220772bef94cd3c3d206d4cbbddc26bc22db64c7920a537218ee4", size = 290861, upload-time = "2026-07-28T21:02:30.822Z" },
+    { url = "https://files.pythonhosted.org/packages/3b/85/7bf33a489474c4c012cf7f75cbd6f0189f92ecb02182f70f65b41027f449/goldenphonetic-0.1.0-cp311-abi3-win_amd64.whl", hash = "sha256:7f17453422df123d85a2ac7f2baa5f67fbbc39d3b2d1fea1dd75c8249b6003e4", size = 160586, upload-time = "2026-07-28T21:02:31.835Z" },
+]
 
 [[package]]
 name = "goldenpipe"
@@ -2018,10 +2026,10 @@ version = "0.6.0"
 source = { editable = "packages/python/infermap" }
 dependencies = [
     { name = "goldencheck-types" },
+    { name = "goldenfuzz" },
+    { name = "numpy" },
     { name = "polars" },
     { name = "pyyaml" },
-    { name = "rapidfuzz" },
-    { name = "scipy" },
     { name = "typer" },
 ]
 
@@ -2067,10 +2075,12 @@ requires-dist = [
     { name = "anthropic", marker = "extra == 'llm'", specifier = ">=0.30" },
     { name = "duckdb", marker = "extra == 'duckdb'", specifier = ">=0.9" },
     { name = "goldencheck-types", editable = "packages/python/goldencheck-types" },
+    { name = "goldenfuzz", specifier = ">=0.1.0" },
     { name = "infermap", extras = ["postgres", "mysql", "duckdb", "excel", "llm"], marker = "extra == 'all'", editable = "packages/python/infermap" },
     { name = "infermap-native", marker = "extra == 'native'", directory = "packages/rust/extensions/infermap-native" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.28.1" },
     { name = "mysql-connector-python", marker = "extra == 'mysql'", specifier = ">=8.0" },
+    { name = "numpy", specifier = ">=1.26" },
     { name = "openai", marker = "extra == 'llm'", specifier = ">=1.30" },
     { name = "openpyxl", marker = "extra == 'excel'", specifier = ">=3.1" },
     { name = "polars", specifier = ">=1.0" },
@@ -2078,9 +2088,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "rapidfuzz", specifier = ">=3.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
-    { name = "scipy", specifier = ">=1.11" },
     { name = "typer", specifier = ">=0.12" },
 ]
 provides-extras = ["postgres", "mysql", "duckdb", "excel", "llm", "all", "mcp", "native", "dev"]
@@ -4061,7 +4069,7 @@ wheels = [
 
 [[package]]
 name = "ray"
-version = "2.55.1"
+version = "2.56.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
@@ -4074,17 +4082,17 @@ dependencies = [
     { name = "requests" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/88/7d/48ba2f49b40a34b0071ee27c0144a2573d8836094eaca213d59cef12c271/ray-2.55.1-cp311-cp311-macosx_12_0_arm64.whl", hash = "sha256:0053fd5b400f7ac56263aa1bbd3d68fb79341b08b8dc697c88782d5aca7b3ed4", size = 65835271, upload-time = "2026-04-22T20:09:34.984Z" },
-    { url = "https://files.pythonhosted.org/packages/8f/a3/d6db3a428e4ea17cc72e79f747cfe11e90e63e36e1705bb8324e45f334b7/ray-2.55.1-cp311-cp311-manylinux2014_aarch64.whl", hash = "sha256:0ea2f670a7725833ad2333a8c46ab69865ad06c8e5de9f65695e0f8f35331cec", size = 72879783, upload-time = "2026-04-22T20:09:40.986Z" },
-    { url = "https://files.pythonhosted.org/packages/46/59/41da0e72a59cd3e8978480ccfeb86ef4235ae5ceb9b8928168a764fa930a/ray-2.55.1-cp311-cp311-manylinux2014_x86_64.whl", hash = "sha256:d5382da181c03ee2f502ef46cf0ae4bbc30157b5bd9a67d7651f6a272528a85a", size = 73706515, upload-time = "2026-04-22T20:09:47.079Z" },
-    { url = "https://files.pythonhosted.org/packages/65/52/c16bbdc3e31a5178f97be88966ab56db6f7e04882640c5cf2fee5b87757b/ray-2.55.1-cp311-cp311-win_amd64.whl", hash = "sha256:5e56d2e8f304cafe990c198a2b894f5b813de018998cd7212869201f6dc17cff", size = 27882093, upload-time = "2026-04-22T20:09:52.943Z" },
-    { url = "https://files.pythonhosted.org/packages/ac/3a/4d34f471a68b958b7f94c974c19ad6836a61a2dc16393df4294169a2e4b0/ray-2.55.1-cp312-cp312-macosx_12_0_arm64.whl", hash = "sha256:137f9006eee28caab8260803cca314f37bbda3fc94fdfa31c770b5d019626ad8", size = 65822379, upload-time = "2026-04-22T20:09:58.064Z" },
-    { url = "https://files.pythonhosted.org/packages/f1/13/0db535102d0256b350ca116d8987588aca1a1f9ebb4638e1e1ff88bbcef8/ray-2.55.1-cp312-cp312-manylinux2014_aarch64.whl", hash = "sha256:26541f69bb55607ef8335baac75b2ed12ff2ce02d56313219b29eda003039221", size = 72910802, upload-time = "2026-04-22T20:10:04.382Z" },
-    { url = "https://files.pythonhosted.org/packages/4c/f8/fffadf3f4285eebd460e4d7f2ed1c0cd641ed89613c3f49eb881ee9fa7e2/ray-2.55.1-cp312-cp312-manylinux2014_x86_64.whl", hash = "sha256:263705f6bab29e7622a94f82da25fd7f9cead76cdf89a07aab28f79cdf8f9d95", size = 73765203, upload-time = "2026-04-22T20:10:10.495Z" },
-    { url = "https://files.pythonhosted.org/packages/10/f7/5acb86fc9625a0e6bbc40e1c7d42c60770e78585439a921c32738b6d675a/ray-2.55.1-cp312-cp312-win_amd64.whl", hash = "sha256:9ad56704c8bd7e92130162f9c58e4ef473609515637673d5a36e761f95335206", size = 27865547, upload-time = "2026-04-22T20:10:15.364Z" },
-    { url = "https://files.pythonhosted.org/packages/d5/95/898699cc1a6a5f304ea95376d079843b5c05f4c8c1ec7e55a5cc7ffcea50/ray-2.55.1-cp313-cp313-macosx_12_0_arm64.whl", hash = "sha256:f9844a9272ef2e6eb5771025866072cf4234cf4c7cc1a31e235b7de7111864be", size = 65766823, upload-time = "2026-04-22T20:10:20.786Z" },
-    { url = "https://files.pythonhosted.org/packages/c9/13/87deecc090c672e45a0cf6f5eef511de448b93f37ef18fd10eb8e8557a0d/ray-2.55.1-cp313-cp313-manylinux2014_aarch64.whl", hash = "sha256:b415d590e062f248907e0fe42994943f11726b7178fcf4b1cf5546721fb1a5f8", size = 72818676, upload-time = "2026-04-22T20:10:26.705Z" },
-    { url = "https://files.pythonhosted.org/packages/71/d7/fc95d3b8824c62105c64aa1b59c59600b581f608d78a2af753e010936dc9/ray-2.55.1-cp313-cp313-manylinux2014_x86_64.whl", hash = "sha256:1380e043eb57cde69b7e9199c6f2558ceeb8f0fc41c97d1d5e50ea042115f302", size = 73678908, upload-time = "2026-04-22T20:10:32.795Z" },
+    { url = "https://files.pythonhosted.org/packages/7b/f2/2cbbbef7a67adc6555b141c7a67557bd7ce21cfb85b85772627c6a582e97/ray-2.56.0-cp311-cp311-macosx_12_0_arm64.whl", hash = "sha256:a9ad4e26941eb2f8dbd494ad07f9f2227143164c6114132b26b23ad4f20b1c6f", size = 66354212, upload-time = "2026-06-29T20:50:37.148Z" },
+    { url = "https://files.pythonhosted.org/packages/d6/69/09c8320519aa4d075bd6ecb1694c28d26b5b07a5b46050703d9ac2c5a9b6/ray-2.56.0-cp311-cp311-manylinux2014_aarch64.whl", hash = "sha256:aea655831d25084cb343002a8e67a77b6aa552ddb776a65461d49f62884f096a", size = 73299499, upload-time = "2026-06-29T20:50:42.584Z" },
+    { url = "https://files.pythonhosted.org/packages/18/d3/84df370c773a0b853abdba498a6258106cb928d452ff56eec7f86c2f80b4/ray-2.56.0-cp311-cp311-manylinux2014_x86_64.whl", hash = "sha256:c5bf1a4384c0e2aa4420c95474b734d064cac354b0f00760be02d886afe96ca4", size = 74143858, upload-time = "2026-06-29T20:50:48.228Z" },
+    { url = "https://files.pythonhosted.org/packages/5a/1b/0b4c96879ded375d0b35441c6b3633ccbea7c7c5448335589811fe5f275c/ray-2.56.0-cp311-cp311-win_amd64.whl", hash = "sha256:8e57781685bb4332edf8a7cfb1135ff53d50002b6a0504006e68365bcd26aa7c", size = 28390306, upload-time = "2026-06-29T20:50:53.841Z" },
+    { url = "https://files.pythonhosted.org/packages/05/d2/83777f52c10e04654c162bfa093f4e34cf6decf7a0bb4311e2432bfa8ecb/ray-2.56.0-cp312-cp312-macosx_12_0_arm64.whl", hash = "sha256:684a427c50745989e92a332343f0812c93b8506f71c768b95b1eefc113492699", size = 66344824, upload-time = "2026-06-29T20:50:58.367Z" },
+    { url = "https://files.pythonhosted.org/packages/6e/b2/d610ffe2878dae8ab903cfdded883a054c102b0104670bca7b34b662db51/ray-2.56.0-cp312-cp312-manylinux2014_aarch64.whl", hash = "sha256:e1fd03c6ecc5fe4c31466569e41ce0a4faf26fb930798c9d1f1eb1f405a687c8", size = 73317367, upload-time = "2026-06-29T20:51:03.893Z" },
+    { url = "https://files.pythonhosted.org/packages/39/d1/8d442116f41e6bebec418d89f1556c67c77d593b55cf59e716503e7a4a17/ray-2.56.0-cp312-cp312-manylinux2014_x86_64.whl", hash = "sha256:78ef34a71383c1fcf335e531e0e590867857fce9069f06ed351be6ce7a58fc50", size = 74192607, upload-time = "2026-06-29T20:51:09.528Z" },
+    { url = "https://files.pythonhosted.org/packages/b9/9e/cac7454325c79eb32f36f233285d9179858c7073bc27ac91afb74854ff12/ray-2.56.0-cp312-cp312-win_amd64.whl", hash = "sha256:a8fc809dab6fc07cf05d45ea93a776c852c990512eb1fac0e3d15819fe6df10a", size = 28370978, upload-time = "2026-06-29T20:51:14.168Z" },
+    { url = "https://files.pythonhosted.org/packages/65/86/29c9444c9f11f0bf3d4da75d3dc7a27c0fb86f8604beea6513968dc2df26/ray-2.56.0-cp313-cp313-macosx_12_0_arm64.whl", hash = "sha256:992047f50473b5bfea74c8f528f999968e0b4bc735af23ad476a0f4e04741aea", size = 66289930, upload-time = "2026-06-29T20:51:20.79Z" },
+    { url = "https://files.pythonhosted.org/packages/59/59/3c4d533a92e99b12b9d2e8690e41d7ace269d77deecb0aef753df7924b9e/ray-2.56.0-cp313-cp313-manylinux2014_aarch64.whl", hash = "sha256:a0e9cfe92c88ab74abca23923c15a592f49bc7617ffdda4190daca7785a7c4f6", size = 73252460, upload-time = "2026-06-29T20:51:26.216Z" },
+    { url = "https://files.pythonhosted.org/packages/59/ba/285d409253b332af91884daa4b0a3be3ce799682aa2c1e0f8dbbafaf1da4/ray-2.56.0-cp313-cp313-manylinux2014_x86_64.whl", hash = "sha256:54d2725f8b65d9615c933fec5ec62e54a67b8f2e14286026fb014606253670ef", size = 74130685, upload-time = "2026-06-29T20:51:31.59Z" },
 ]
 
 [[package]]

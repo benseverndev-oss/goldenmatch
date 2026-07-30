@@ -68,6 +68,38 @@ dev = [
     "ruff>=0.6",
     "pyright>=1.1.380",  # strict typing on goldenmatch core slice (see pyrightconfig.json)
     "hypothesis>=6.0",  # property-based tests (test_property_invariants.py + test_autoconfig_properties.py); OpenSSF Scorecard Fuzzing check
+    # rapidfuzz is a TEST-ONLY parity oracle (14 test_*.py assert the owned
+    # scorer matches it) -- it's rapidfuzz-free at RUNTIME (#2231 dropped it from
+    # `dependencies`). It belongs in the dev group so `uv sync` installs it for
+    # CI/tests while `pip install goldenmatch` stays rapidfuzz-free. Without this
+    # every rapidfuzz oracle test ERROR'd at collection on main (#2231 regression).
+    "rapidfuzz>=3.0",
+    # jellyfish is a TEST-ONLY parity oracle too: goldenmatch owns metaphone via
+    # goldenphonetic (byte-identical) at RUNTIME, but several test_*.py assert
+    # against jellyfish. Same shape as rapidfuzz -- keep it in the dev group so
+    # `uv sync` installs it for CI/tests while `pip install goldenmatch` is
+    # jellyfish-free (soundex was already in-house; metaphone moved off it here).
+    "jellyfish>=1.0",
+    # scipy is a TEST-ONLY parity oracle: infermap owns its sole scipy use (a
+    # 2-param Nelder-Mead Platt fit) via infermap._optimize, so `pip install
+    # infermap` is scipy-free at RUNTIME. The optimizer parity test asserts the
+    # owned Nelder-Mead matches `scipy.optimize.minimize` on the convex log-loss,
+    # so `uv sync` installs it for CI/tests. (goldencheck[baseline] +
+    # goldenmatch distributed use scipy on their own, separately.)
+    "scipy>=1.11",
+    # diptest is a TEST-ONLY parity oracle: goldenmatch owns Hartigan's dip
+    # statistic via goldenmatch.core._dip (a byte-identical port of diptest's C
+    # `dip.c`), so `pip install goldenmatch` is diptest-free at RUNTIME. The dip
+    # parity test asserts the owned kernel matches `diptest.dipstat` exactly, so
+    # `uv sync` installs it for CI/tests. Same shape as the oracles above.
+    "diptest>=0.5.2",
+    # python-dateutil is a TEST-ONLY parity oracle: goldenflow owns date parsing
+    # via goldenflow-core (deterministic, dateutil-free at RUNTIME -- #dates
+    # kernel), but the date parity tests assert the owned parser matches dateutil
+    # on the covered format set. Same shape as rapidfuzz/jellyfish above -- keep
+    # it in the dev group so `uv sync` installs it for CI/tests while
+    # `pip install goldenflow` stays dateutil-free.
+    "python-dateutil>=2.9",
     # transitive test deps surfaced across workspace packages:
     "httpx>=0.27",  # required by starlette.testclient (used by goldenpipe tests)
 ]

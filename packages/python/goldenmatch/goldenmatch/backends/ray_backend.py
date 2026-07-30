@@ -166,17 +166,18 @@ def score_blocks_ray(
         each block, returns concatenated pairs."""
         from pathlib import Path as _Path
 
+        from goldenmatch.core.frame import to_frame
         from goldenmatch.core.scorer import _score_one_block
         from goldenmatch.distributed.record_store import load_bucket
 
-        bucket_df = load_bucket(_Path(bucket_path))
+        # load_bucket is arrow-native (pa.Table); partition per block_key via
+        # the core.frame seam (polars-free) rather than pl.partition_by.
+        bucket_tbl = load_bucket(_Path(bucket_path))
         all_pairs: list[tuple[int, int, float]] = []
-        for block_key, block_df in bucket_df.partition_by(
-            "__block_key__", as_dict=True,
-        ).items():
-            # block_key arrives as tuple under Polars >= 1.0 partition_by.
-            if isinstance(block_key, tuple):
-                block_key = block_key[0]
+        for block_key, block_frame in to_frame(bucket_tbl).group_partitions(
+            "__block_key__",
+        ):
+            block_df = block_frame.native
             shim = _KeyModeBlock(block_key=str(block_key), df=block_df)
             all_pairs.extend(
                 _score_one_block(

@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 419,
+      "module_count": 433,
       "modules": [
         {
           "module": "goldenmatch",
@@ -83,13 +83,18 @@
             "_attach_memory_to_postflight",
             "_build_config",
             "_capture_run",
+            "_compute_refit_suggestion",
             "_detect_llm_provider",
             "_extract_stats",
             "_frame_columns",
             "_frame_head_dicts",
             "_frame_height",
+            "_frame_with_row_id",
             "_frame_write_csv",
             "_frame_write_parquet",
+            "_refit_model_path",
+            "_resolve_auto_refit_mode",
+            "_run_auto_refit",
             "_run_config_lint",
             "_to_result_table",
             "add_correction",
@@ -127,6 +132,7 @@
             "goldenmatch.core.diagnostics",
             "goldenmatch.core.evaluate",
             "goldenmatch.core.explain",
+            "goldenmatch.core.frame",
             "goldenmatch.core.memory.corrections",
             "goldenmatch.core.memory.learner",
             "goldenmatch.core.memory.store",
@@ -376,6 +382,7 @@
           "imports": [
             "goldenmatch._polars_lazy",
             "goldenmatch.config.schemas",
+            "goldenmatch.core",
             "goldenmatch.core._hashing",
             "goldenmatch.core._native_loader",
             "goldenmatch.core.bench",
@@ -684,6 +691,19 @@
           ]
         },
         {
+          "module": "goldenmatch.cli.llm",
+          "file": "packages/python/goldenmatch/goldenmatch/cli/llm.py",
+          "purpose": "``goldenmatch llm`` — local-model convenience commands (D1 Path A).",
+          "defines": [
+            "_launch_server",
+            "_llama_server_available",
+            "serve_local_cmd"
+          ],
+          "imports": [
+            "goldenmatch.core._llm_loader"
+          ]
+        },
+        {
           "module": "goldenmatch.cli.main",
           "file": "packages/python/goldenmatch/goldenmatch/cli/main.py",
           "purpose": "GoldenMatch CLI application.",
@@ -720,6 +740,7 @@
             "goldenmatch.cli.ingest_docs",
             "goldenmatch.cli.label",
             "goldenmatch.cli.lineage",
+            "goldenmatch.cli.llm",
             "goldenmatch.cli.match",
             "goldenmatch.cli.mcp_serve",
             "goldenmatch.cli.memory",
@@ -1102,6 +1123,7 @@
             "OutputConfig",
             "PerceptualKeyConfig",
             "QualityConfig",
+            "RelationshipRule",
             "RulesPayload",
             "SemanticBlockingConfig",
             "SimHashKeyConfig",
@@ -1476,6 +1498,14 @@
           ]
         },
         {
+          "module": "goldenmatch.core._dip",
+          "file": "packages/python/goldenmatch/goldenmatch/core/_dip.py",
+          "purpose": "Owned Hartigan dip statistic — GoldenMatch's replacement for the ``diptest``",
+          "defines": [
+            "hartigan_dip"
+          ]
+        },
+        {
           "module": "goldenmatch.core._hashing",
           "file": "packages/python/goldenmatch/goldenmatch/core/_hashing.py",
           "purpose": "Canonical record fingerprint (cross-surface stable hash).",
@@ -1488,6 +1518,24 @@
           ],
           "imports": [
             "goldenmatch.core._native_loader"
+          ]
+        },
+        {
+          "module": "goldenmatch.core._llm_loader",
+          "file": "packages/python/goldenmatch/goldenmatch/core/_llm_loader.py",
+          "purpose": "Loader + gate for the optional self-hosted local LLM adapter (D1 Path B).",
+          "defines": [
+            "LocalLLMAdapter",
+            "LocalLLMUnavailableError",
+            "LocalLlamaAdapter",
+            "LocalModelSpec",
+            "_local_llm_mode",
+            "_model_cache_dir",
+            "_verify_sha256",
+            "load_local_adapter",
+            "parse_verdict",
+            "resolve_model_path",
+            "serialize_pair_v1"
           ]
         },
         {
@@ -1548,6 +1596,7 @@
             "transitivity_rate"
           ],
           "imports": [
+            "goldenmatch.core._dip",
             "goldenmatch.core.frame"
           ]
         },
@@ -2220,6 +2269,7 @@
           ],
           "imports": [
             "goldenmatch._polars_lazy",
+            "goldenmatch.core",
             "goldenmatch.core.frame"
           ]
         },
@@ -2230,6 +2280,7 @@
           "defines": [
             "BlockResult",
             "RowIdBlock",
+            "_AggOversizedBlock",
             "_ann_sub_block",
             "_auto_split_block",
             "_build_ann_blocks",
@@ -2307,6 +2358,7 @@
           "imports": [
             "goldenmatch._polars_lazy",
             "goldenmatch.config.schemas",
+            "goldenmatch.core",
             "goldenmatch.core.blocker"
           ]
         },
@@ -2347,6 +2399,7 @@
           ],
           "imports": [
             "goldenmatch._polars_lazy",
+            "goldenmatch.core",
             "goldenmatch.core.cross_encoder",
             "goldenmatch.core.embedder",
             "goldenmatch.core.frame",
@@ -2430,6 +2483,7 @@
             "_record_unmerge_corrections",
             "_severe_bridge_count",
             "_split_edge_work_budget",
+            "_try_native_group_members",
             "add_to_cluster",
             "build_cluster_frames",
             "build_clusters",
@@ -2995,6 +3049,7 @@
           ],
           "imports": [
             "goldenmatch.config.schemas",
+            "goldenmatch.core",
             "goldenmatch.utils.transforms"
           ]
         },
@@ -3089,6 +3144,7 @@
             "GroupProvenance",
             "_build_golden_records_polars_native",
             "_confidence_majority",
+            "_config_uses_confidence_majority",
             "_dispatch_custom_strategy",
             "_first_non_null",
             "_is_internal",
@@ -3153,6 +3209,7 @@
             "goldenmatch._polars_lazy",
             "goldenmatch.config.schemas",
             "goldenmatch.core._native_loader",
+            "goldenmatch.core.bench",
             "goldenmatch.core.frame",
             "goldenmatch.core.golden",
             "goldenmatch.core.golden_fused_predicate",
@@ -3342,6 +3399,7 @@
           ],
           "imports": [
             "goldenmatch._polars_lazy",
+            "goldenmatch.core",
             "goldenmatch.core._paths",
             "goldenmatch.core.frame",
             "goldenmatch.core.io_arrow",
@@ -3364,6 +3422,14 @@
           ],
           "imports": [
             "goldenmatch.core.ingest"
+          ]
+        },
+        {
+          "module": "goldenmatch.core.key_integrity_certificate",
+          "file": "packages/python/goldenmatch/goldenmatch/core/key_integrity_certificate.py",
+          "purpose": "Metric-aware key-integrity certificate (semantic-layer wedge).",
+          "defines": [
+            "KeyIntegrityCertificate"
           ]
         },
         {
@@ -3523,6 +3589,7 @@
             "_detect_provider",
             "_focused_sample",
             "_iterative_calibrate",
+            "_local_score_pairs",
             "_openai_base_url",
             "_record_llm_corrections",
             "_stratified_sample",
@@ -3531,6 +3598,7 @@
           ],
           "imports": [
             "goldenmatch._polars_lazy",
+            "goldenmatch.core._llm_loader",
             "goldenmatch.core.frame",
             "goldenmatch.core.llm_budget",
             "goldenmatch.core.memory.corrections",
@@ -3670,6 +3738,7 @@
             "connected_components",
             "dedup_pairs_max_score",
             "dedup_pairs_max_score_arrow",
+            "dedup_pairs_max_score_arrow_table",
             "dedup_pairs_max_score_columnar"
           ],
           "imports": [
@@ -3762,6 +3831,7 @@
             "_apply_memory_post",
             "_apply_memory_pre",
             "_apply_postflight",
+            "_arrow_lane_supported",
             "_as_polars_df",
             "_build_em_blocks",
             "_cast_user_cols_to_str",
@@ -3932,6 +4002,8 @@
             "_fs_link_threshold",
             "_fs_monotonic_mode",
             "_fs_name_refdata_available",
+            "_fs_native_dbg_on",
+            "_fs_native_dbg_record",
             "_fs_native_eligible",
             "_fs_native_enabled",
             "_fs_ne_extend_cols",
@@ -4143,6 +4215,28 @@
           ]
         },
         {
+          "module": "goldenmatch.core.refit",
+          "file": "packages/python/goldenmatch/goldenmatch/core/refit.py",
+          "purpose": "Closed-loop refit — turn adjudication verdicts into supervised FS labels (D2).",
+          "defines": [
+            "RefitNotApplicableError",
+            "RefitResult",
+            "_find_probabilistic_matchkey",
+            "labels_from_corrections",
+            "labels_from_verdicts",
+            "refit_from_corrections",
+            "refit_from_labels",
+            "refit_from_memory",
+            "refit_from_verdicts"
+          ],
+          "imports": [
+            "goldenmatch.config.schemas",
+            "goldenmatch.core.blocker",
+            "goldenmatch.core.memory.store",
+            "goldenmatch.core.probabilistic"
+          ]
+        },
+        {
           "module": "goldenmatch.core.report",
           "file": "packages/python/goldenmatch/goldenmatch/core/report.py",
           "purpose": "HTML report generator — standalone report with charts and match details.",
@@ -4164,10 +4258,13 @@
           "purpose": "Semantic retrieval -- find records similar to a query string (#1089).",
           "defines": [
             "RetrievedRecord",
+            "_fuzzy_extract",
+            "retrieve_similar_fuzzy",
             "retrieve_similar_records"
           ],
           "imports": [
             "goldenmatch._polars_lazy",
+            "goldenmatch.core",
             "goldenmatch.core.ann_blocker",
             "goldenmatch.core.embedder"
           ]
@@ -4252,7 +4349,8 @@
             "auto_map_columns"
           ],
           "imports": [
-            "goldenmatch._polars_lazy"
+            "goldenmatch._polars_lazy",
+            "goldenmatch.core"
           ]
         },
         {
@@ -4265,6 +4363,7 @@
             "_alias_score_matrix",
             "_apply_guard_to_exact_pairs",
             "_apply_negative_evidence",
+            "_apply_negative_evidence_batch",
             "_apply_negative_evidence_to_exact_pairs",
             "_array_intersect_similarity_py",
             "_audio_fp_score_matrix",
@@ -4285,6 +4384,7 @@
             "_ensemble_score_single",
             "_ensemble_score_single_f32",
             "_exact_score_matrix",
+            "_field_guard_mask",
             "_filter_target_ids_df",
             "_find_exact_match_ids",
             "_fuzzy_score_matrix",
@@ -4299,6 +4399,7 @@
             "_jaccard_score_matrix",
             "_jaccard_score_single",
             "_native_field_matrix",
+            "_native_field_pairwise",
             "_norm_phash_hex",
             "_numeric_diff_similarity_py",
             "_pad_to_equal_length",
@@ -4337,6 +4438,7 @@
           "imports": [
             "goldenmatch._polars_lazy",
             "goldenmatch.config.schemas",
+            "goldenmatch.core",
             "goldenmatch.core._native_loader",
             "goldenmatch.core._profile_helpers",
             "goldenmatch.core.acronym",
@@ -4518,6 +4620,26 @@
             "goldenmatch.core.cluster",
             "goldenmatch.core.match_one",
             "goldenmatch.identity.resolve"
+          ]
+        },
+        {
+          "module": "goldenmatch.core.strsim",
+          "file": "packages/python/goldenmatch/goldenmatch/core/strsim.py",
+          "purpose": "Vendored pure-Python string-similarity primitives — GoldenMatch's own",
+          "defines": [
+            "_jaro_winkler_raw",
+            "_lcs_length",
+            "damerau_levenshtein_distance",
+            "indel_normalized_similarity",
+            "jaro_similarity",
+            "jaro_winkler_normalized_similarity",
+            "jaro_winkler_similarity",
+            "levenshtein_distance",
+            "levenshtein_normalized_similarity",
+            "partial_ratio",
+            "pure_field_matrix",
+            "ratio",
+            "token_sort_ratio"
           ]
         },
         {
@@ -4973,7 +5095,7 @@
         {
           "module": "goldenmatch.db.ann_index",
           "file": "packages/python/goldenmatch/goldenmatch/db/ann_index.py",
-          "purpose": "Persistent FAISS ANN index manager for database integration.",
+          "purpose": "Persistent ANN index manager for database integration.",
           "defines": [
             "PersistentANNIndex"
           ],
@@ -5224,6 +5346,14 @@
           ]
         },
         {
+          "module": "goldenmatch.distributed._connected_components",
+          "file": "packages/python/goldenmatch/goldenmatch/distributed/_connected_components.py",
+          "purpose": "Owned weakly-connected-components over an undirected edge list.",
+          "defines": [
+            "connected_components_undirected"
+          ]
+        },
+        {
           "module": "goldenmatch.distributed._utils",
           "file": "packages/python/goldenmatch/goldenmatch/distributed/_utils.py",
           "purpose": "Tiny helpers shared across distributed submodules.",
@@ -5240,7 +5370,7 @@
             "_annotate_cluster_sizes",
             "_assert_scratch_shared_if_multinode",
             "_attach_quality_metadata",
-            "_build_clusters_scipy_fallback",
+            "_build_clusters_cc_fallback",
             "_derive_touched_ids",
             "_emit_boundary_pairs",
             "_phase_a_local_cc",
@@ -5274,7 +5404,8 @@
           ],
           "imports": [
             "goldenmatch.core.cluster",
-            "goldenmatch.core.frame"
+            "goldenmatch.core.frame",
+            "goldenmatch.distributed._connected_components"
           ]
         },
         {
@@ -5374,7 +5505,6 @@
           "imports": [
             "goldenmatch",
             "goldenmatch._api",
-            "goldenmatch._polars_lazy",
             "goldenmatch.config.schemas",
             "goldenmatch.core.autoconfig",
             "goldenmatch.core.golden",
@@ -5389,7 +5519,10 @@
           "purpose": "DuckDB-backed prepared-record store.",
           "defines": [
             "PreparedRecordStore",
+            "_coerce_backend",
+            "_is_arrow_table",
             "_sanitize_signature",
+            "_write_frame_parquet",
             "iter_buckets",
             "load_bucket",
             "load_prepared_records",
@@ -5397,7 +5530,6 @@
             "materialize_prepared_records"
           ],
           "imports": [
-            "goldenmatch._polars_lazy",
             "goldenmatch.core._hashing",
             "goldenmatch.core.frame"
           ]
@@ -5810,6 +5942,7 @@
             "goldenmatch.identity.model",
             "goldenmatch.identity.profile",
             "goldenmatch.identity.query",
+            "goldenmatch.identity.relationships",
             "goldenmatch.identity.resolve",
             "goldenmatch.identity.stabilize",
             "goldenmatch.identity.stitching",
@@ -5971,10 +6104,21 @@
           "file": "packages/python/goldenmatch/goldenmatch/identity/profile.py",
           "purpose": "Entity profiles + stewardship ops views -- MDM ops (#1114, epic #1108).",
           "defines": [
+            "Customer360",
             "EntityProfile",
+            "FieldContribution",
+            "FieldProvenance",
             "IdentitySummary",
             "WorklistItem",
+            "_event_as_dict",
+            "_field_provenance",
             "_iter_entities",
+            "_norm",
+            "_record_as_dict",
+            "_summary_from_counts",
+            "_summary_stats_scan",
+            "customer_360",
+            "customer_360_page",
             "entity_profile",
             "identity_summary_stats",
             "steward_worklist",
@@ -6012,6 +6156,23 @@
           ]
         },
         {
+          "module": "goldenmatch.identity.relationships",
+          "file": "packages/python/goldenmatch/goldenmatch/identity/relationships.py",
+          "purpose": "Semantic-graph: entity<->entity relationship edges (#semantic-graph).",
+          "defines": [
+            "_candidate_transforms",
+            "_entity_name",
+            "build_relationships",
+            "profile_relationship_fields",
+            "suggest_relationship_rules",
+            "to_graph_batch"
+          ],
+          "imports": [
+            "goldenmatch.config.schemas",
+            "goldenmatch.identity.store"
+          ]
+        },
+        {
           "module": "goldenmatch.identity.resolution_batch",
           "file": "packages/python/goldenmatch/goldenmatch/identity/resolution_batch.py",
           "purpose": "The versioned compute->control seam contract (Wave C, milestone C1).",
@@ -6039,6 +6200,8 @@
             "_golden_record_from_members",
             "_golden_record_from_payloads",
             "_hash_payload",
+            "_initial_load_enabled",
+            "_initial_load_unlogged",
             "_match_record_rows",
             "_maybe_warn_singleton_sqlite_ceiling",
             "_node_age",
@@ -6046,6 +6209,8 @@
             "_referenced_row_ids",
             "_resolve_via_index",
             "_row_to_payload",
+            "_survivor_value",
+            "apply_batch",
             "derive_record_id",
             "match_record_to_entity",
             "resolve_clusters",
@@ -6064,6 +6229,7 @@
             "goldenmatch.identity.block_index",
             "goldenmatch.identity.fingerprint_batch",
             "goldenmatch.identity.model",
+            "goldenmatch.identity.relationships",
             "goldenmatch.identity.resolution_batch",
             "goldenmatch.identity.store"
           ]
@@ -6117,6 +6283,7 @@
           "purpose": "IdentityStore -- SQLite/Postgres persistence for the Identity Graph.",
           "defines": [
             "IdentityStore",
+            "_rel_value_expr",
             "_row_get",
             "_sqlite_batch_size",
             "_sqlite_batch_writes_enabled",
@@ -6398,6 +6565,7 @@
             "string_similarity"
           ],
           "imports": [
+            "goldenmatch.core",
             "goldenmatch.core._native_loader",
             "goldenmatch.core.pairs"
           ]
@@ -6742,6 +6910,7 @@
             "register_scorers"
           ],
           "imports": [
+            "goldenmatch.core",
             "goldenmatch.plugins.base",
             "goldenmatch.plugins.registry",
             "goldenmatch.refdata.given_names",
@@ -6860,6 +7029,7 @@
             "score_batch"
           ],
           "imports": [
+            "goldenmatch.core",
             "goldenmatch.core._native_loader"
           ]
         },
@@ -6880,6 +7050,127 @@
           "purpose": "Sail (Spark Connect) session helpers. Sail is programmed via PySpark /",
           "defines": [
             "connect"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/__init__.py",
+          "purpose": "Semantic-layer interoperability (the MetricFlow / Cube / OSI wedge).",
+          "imports": [
+            "goldenmatch.core.key_integrity_certificate",
+            "goldenmatch.semantic.crosswalk",
+            "goldenmatch.semantic.cube",
+            "goldenmatch.semantic.key_integrity",
+            "goldenmatch.semantic.metricflow",
+            "goldenmatch.semantic.osi"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.crosswalk",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/crosswalk.py",
+          "purpose": "Resolve once, emit a durable entity crosswalk for the semantic layer (wedge B).",
+          "defines": [
+            "ResolvedCrosswalk",
+            "build_resolved_crosswalk"
+          ],
+          "imports": [
+            "goldenmatch._api",
+            "goldenmatch.config.schemas",
+            "goldenmatch.core.autoconfig",
+            "goldenmatch.identity.store",
+            "goldenmatch.semantic.key_integrity"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.cube",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/cube.py",
+          "purpose": "Cube (cube.dev) semantic-layer reader + emitter — the third dialect.",
+          "defines": [
+            "Cube",
+            "CubeDimension",
+            "CubeJoin",
+            "CubeMeasure",
+            "_member_refs",
+            "_normalize_relationship",
+            "_parse_dimension",
+            "_parse_join",
+            "_parse_measure",
+            "certify_cube_joins",
+            "cube_join_keys",
+            "emit_cube",
+            "emit_cube_dimension",
+            "emit_cube_from_crosswalk",
+            "emit_cube_join",
+            "emit_cube_measure",
+            "emit_cube_yaml",
+            "parse_cube_models"
+          ],
+          "imports": [
+            "goldenmatch.semantic.key_integrity",
+            "goldenmatch.semantic.metricflow"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.key_integrity",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/key_integrity.py",
+          "purpose": "Metric-aware key-integrity certification (the semantic-layer wedge).",
+          "defines": [
+            "_add_resolution",
+            "_as_list",
+            "_row_key_values",
+            "_to_arrow",
+            "certify_key_integrity"
+          ],
+          "imports": [
+            "goldenmatch._api",
+            "goldenmatch.core.autoconfig",
+            "goldenmatch.core.key_integrity_certificate"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.metricflow",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/metricflow.py",
+          "purpose": "Read / emit dbt / MetricFlow semantic-model entity declarations.",
+          "defines": [
+            "DeclaredKeySpec",
+            "_entity_column",
+            "_load",
+            "_measure_column",
+            "emit_from_crosswalk",
+            "emit_metricflow_yaml",
+            "emit_semantic_model",
+            "parse_semantic_models"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.osi",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/osi.py",
+          "purpose": "Open Semantic Interchange / Apache Ossie reader + emitter (wedge C).",
+          "defines": [
+            "OsiDataset",
+            "OsiField",
+            "OsiMetric",
+            "OsiModel",
+            "OsiRelationship",
+            "_dialect_expression",
+            "_expression_issues",
+            "_parse_dataset",
+            "_parse_relationship",
+            "_read_expression",
+            "certify_osi_relationships",
+            "emit_osi_dataset",
+            "emit_osi_field",
+            "emit_osi_from_crosswalk",
+            "emit_osi_model",
+            "emit_osi_relationship",
+            "emit_osi_yaml",
+            "osi_join_keys",
+            "parse_osi_models",
+            "validate_osi"
+          ],
+          "imports": [
+            "goldenmatch.semantic.key_integrity",
+            "goldenmatch.semantic.metricflow"
           ]
         },
         {
@@ -6988,6 +7279,7 @@
             "SynonymScorer"
           ],
           "imports": [
+            "goldenmatch.core",
             "goldenmatch.synonym.model",
             "goldenmatch.synonym.providers",
             "goldenmatch.synonym.table"
@@ -7017,6 +7309,9 @@
             "save_model",
             "train",
             "train_default"
+          ],
+          "imports": [
+            "goldenmatch.core"
           ]
         },
         {
@@ -7788,7 +8083,7 @@
     },
     "goldencheck": {
       "root": "packages/python/goldencheck/goldencheck",
-      "module_count": 113,
+      "module_count": 116,
       "modules": [
         {
           "module": "goldencheck",
@@ -7982,6 +8277,48 @@
           ]
         },
         {
+          "module": "goldencheck.baseline._distributions",
+          "file": "packages/python/goldencheck/goldencheck/baseline/_distributions.py",
+          "purpose": "Owned continuous-distribution fits + log-pdfs -- goldencheck's scipy-free",
+          "defines": [
+            "OwnedDist",
+            "_expon_fit",
+            "_expon_logpdf",
+            "_lognorm_fit",
+            "_lognorm_logpdf",
+            "_norm_fit",
+            "_norm_logpdf",
+            "_uniform_fit",
+            "_uniform_logpdf"
+          ]
+        },
+        {
+          "module": "goldencheck.baseline._ks",
+          "file": "packages/python/goldencheck/goldencheck/baseline/_ks.py",
+          "purpose": "Owned one-sample Kolmogorov-Smirnov test -- goldencheck's scipy-free",
+          "defines": [
+            "_cdf_expon",
+            "_cdf_lognorm",
+            "_cdf_norm",
+            "_cdf_uniform",
+            "_ks_cdf",
+            "_mpower",
+            "kstest",
+            "kstwo_sf"
+          ]
+        },
+        {
+          "module": "goldencheck.baseline._owned_stats",
+          "file": "packages/python/goldencheck/goldencheck/baseline/_owned_stats.py",
+          "purpose": "Owned pure-Python statistics kernels -- goldencheck's scipy-free reference for",
+          "defines": [
+            "chi2_contingency_stat",
+            "chi2_gof",
+            "gamma_ur",
+            "pearson_r"
+          ]
+        },
+        {
           "module": "goldencheck.baseline.constraints",
           "file": "packages/python/goldencheck/goldencheck/baseline/constraints.py",
           "purpose": "Constraint mining: functional dependencies, candidate keys, temporal orders.",
@@ -8009,6 +8346,7 @@
           ],
           "imports": [
             "goldencheck._polars_lazy",
+            "goldencheck.baseline._owned_stats",
             "goldencheck.baseline.models",
             "goldencheck.core._native_loader"
           ]
@@ -8090,6 +8428,10 @@
           ],
           "imports": [
             "goldencheck._polars_lazy",
+            "goldencheck.baseline",
+            "goldencheck.baseline._distributions",
+            "goldencheck.baseline._ks",
+            "goldencheck.baseline._owned_stats",
             "goldencheck.baseline.models",
             "goldencheck.core._native_loader"
           ]
@@ -8495,6 +8837,8 @@
           ],
           "imports": [
             "goldencheck._polars_lazy",
+            "goldencheck.baseline._ks",
+            "goldencheck.baseline._owned_stats",
             "goldencheck.baseline.correlation",
             "goldencheck.baseline.models",
             "goldencheck.baseline.patterns",
@@ -10530,9 +10874,11 @@
         {
           "module": "goldenflow.transforms.dates",
           "file": "packages/python/goldenflow/goldenflow/transforms/dates.py",
+          "purpose": "Date/datetime transforms — backed by an OWNED deterministic parser.",
           "defines": [
             "_age_from_dob_factory",
             "_age_scalar",
+            "_ascii_digits",
             "_date_eu_py",
             "_date_iso8601_py",
             "_date_shift_factory",
@@ -10540,13 +10886,27 @@
             "_date_us_py",
             "_date_validate_py",
             "_datetime_iso8601_py",
+            "_days_in_month",
             "_extract_day_of_week_py",
             "_extract_day_py",
             "_extract_month_py",
             "_extract_quarter_py",
             "_extract_year_py",
+            "_finish",
+            "_interpret_numeric",
+            "_is_leap",
+            "_looks_like_time",
+            "_month_from_name",
             "_parse_date",
-            "_parsed_date_expr",
+            "_parse_date_ymd",
+            "_parse_datetime_ymdhms",
+            "_parse_day_token",
+            "_parse_month_name",
+            "_parse_numeric",
+            "_parse_time",
+            "_parse_year_token",
+            "_peel_time",
+            "_valid_ymd",
             "age_from_dob",
             "date_eu",
             "date_iso8601",
@@ -10563,8 +10923,7 @@
           ],
           "imports": [
             "goldenflow._polars_lazy",
-            "goldenflow.transforms",
-            "goldenflow.transforms._fastpath"
+            "goldenflow.transforms"
           ]
         },
         {
@@ -11640,7 +11999,7 @@
     },
     "infermap": {
       "root": "packages/python/infermap/infermap",
-      "module_count": 30,
+      "module_count": 31,
       "modules": [
         {
           "module": "infermap",
@@ -11676,6 +12035,14 @@
           ]
         },
         {
+          "module": "infermap._optimize",
+          "file": "packages/python/infermap/infermap/_optimize.py",
+          "purpose": "Owned derivative-free optimizer — infermap's replacement for the ``scipy``",
+          "defines": [
+            "minimize_nelder_mead"
+          ]
+        },
+        {
           "module": "infermap.assignment",
           "file": "packages/python/infermap/infermap/assignment.py",
           "purpose": "Optimal 1:1 assignment via the Hungarian algorithm.",
@@ -11700,6 +12067,9 @@
             "calibrator_from_dict",
             "load_calibrator",
             "save_calibrator"
+          ],
+          "imports": [
+            "infermap._optimize"
           ]
         },
         {
@@ -12081,7 +12451,7 @@
     },
     "goldenanalysis": {
       "root": "packages/python/goldenanalysis/goldenanalysis",
-      "module_count": 30,
+      "module_count": 31,
       "modules": [
         {
           "module": "goldenanalysis",
@@ -12239,6 +12609,18 @@
           ],
           "imports": [
             "goldenanalysis.core",
+            "goldenanalysis.models"
+          ]
+        },
+        {
+          "module": "goldenanalysis.analyzers.key_integrity",
+          "file": "packages/python/goldenanalysis/goldenanalysis/analyzers/key_integrity.py",
+          "purpose": "``key.integrity`` — metric-aware key-integrity metrics from a certificate.",
+          "defines": [
+            "KeyIntegrityAnalyzer",
+            "_get"
+          ],
+          "imports": [
             "goldenanalysis.models"
           ]
         },

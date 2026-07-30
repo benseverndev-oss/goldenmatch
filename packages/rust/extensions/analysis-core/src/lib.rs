@@ -47,7 +47,9 @@ pub fn histogram(values: &[f64], bins: i64) -> Vec<(f64, i64)> {
         }
         counts[idx] += 1;
     }
-    (0..bins).map(|i| (lo + i as f64 * width, counts[i])).collect()
+    (0..bins)
+        .map(|i| (lo + i as f64 * width, counts[i]))
+        .collect()
 }
 
 /// Linear-interpolation quantile (numpy default), mirroring `aggregate.quantile`.
@@ -165,14 +167,15 @@ pub fn cluster_size_histogram(sizes: &[f64]) -> Vec<i64> {
 // the equality PARTITION matters to the kernels, never the specific id numbers,
 // so this is parity by construction, not a re-derived mirror.
 //
-// `validity`: one byte per row, 0 = null, non-zero = valid. (A packed Arrow
-// validity bitmap is the production refinement; byte-per-row keeps the ABI
-// trivial from JS -- just a `Uint8Array`.)
+// `validity`: a packed LSB-first Arrow validity bitmap (bit set = valid; an EMPTY
+// slice = "no null buffer" = all valid, Arrow's `null_count == 0` optimization) --
+// the C Data Interface's own layout, so `analysis-native` passes Arrow's null
+// buffer straight through (no byte-per-row expansion) and the wasm/TS surfaces emit
+// the same bitmap. See `is_null` + the 2026-07-30 C-Data-validity-bitmap design.
 //
-// Spike-validated on branch `spike/analysis-wasm-cdata-abi` (PR #1691); this
-// lands the shared interner + adversarial parity tests. Wiring `analysis-native`
-// to delegate here (retiring its Arrow `intern_column`) and a wasm/TS surface
-// are tracked follow-ups on #1788.
+// Spike-validated on branch `spike/analysis-wasm-cdata-abi` (PR #1691). The shared
+// interner + native delegation (#1880/#1881) and the wasm/TS surface all shipped
+// (#1788); this ABI is the Arrow-conformant validity encoding across every surface.
 
 /// Canonical f64 bit pattern: one id for all `NaN`, one for `-0.0`/`+0.0`.
 /// Mirrors `analysis-native::canon_f64_bits`.
@@ -187,12 +190,21 @@ pub fn canon_f64_bits(x: f64) -> u64 {
     }
 }
 
+/// Read row `i`'s null flag from a **packed LSB-first Arrow validity bitmap**
+/// (the C Data Interface layout): bit *set* = valid, bit *clear* = null. An EMPTY
+/// slice means "no null buffer" (Arrow's `null_count == 0` optimization) => every
+/// row valid; a byte past the end is treated as valid too. This is the shared
+/// standard the native (Arrow) and wasm/TS surfaces both emit, so `analysis-native`
+/// can pass Arrow's own null buffer through instead of expanding it byte-per-row.
 #[inline]
 fn is_null(validity: &[u8], i: usize) -> bool {
-    validity.get(i).is_some_and(|&b| b == 0)
+    validity
+        .get(i >> 3)
+        .is_some_and(|&byte| (byte >> (i & 7)) & 1 == 0)
 }
 
 /// Intern an f64 column (canonicalizing NaN / signed-zero) to dense u64 ids.
+/// `validity` is a packed LSB-first Arrow bitmap (bit set = valid; empty = all valid).
 pub fn intern_f64(values: &[f64], validity: &[u8]) -> Vec<u64> {
     let mut map: HashMap<u64, u64> = HashMap::new();
     let mut ids = Vec::with_capacity(values.len());
@@ -214,7 +226,8 @@ pub fn intern_f64(values: &[f64], validity: &[u8]) -> Vec<u64> {
 
 /// Intern an i64 column to dense u64 ids. Signed/unsigned ints of any width and
 /// booleans reach this by promotion (a `u64` is bit-cast to `i64`, which is
-/// bijective, so the equality partition is preserved).
+/// bijective, so the equality partition is preserved). `validity` is a packed
+/// LSB-first Arrow bitmap (bit set = valid; empty = all valid).
 pub fn intern_i64(values: &[i64], validity: &[u8]) -> Vec<u64> {
     let mut map: HashMap<i64, u64> = HashMap::new();
     let mut ids = Vec::with_capacity(values.len());
@@ -236,7 +249,9 @@ pub fn intern_i64(values: &[i64], validity: &[u8]) -> Vec<u64> {
 
 /// Intern a UTF-8 column to dense u64 ids. `offsets` has `n_rows + 1` entries
 /// (Arrow utf8 layout): value `i` is `bytes[offsets[i]..offsets[i+1]]`. An empty
-/// slice is a valid empty string (distinct from null, which is `validity[i]==0`).
+/// slice is a valid empty string (distinct from null). `validity` is a packed
+/// LSB-first Arrow bitmap (bit set = valid; empty = all valid) — a null row's byte
+/// span is skipped regardless of its (empty) offsets.
 pub fn intern_str(offsets: &[u32], bytes: &[u8], validity: &[u8]) -> Vec<u64> {
     let n = offsets.len().saturating_sub(1);
     let mut map: HashMap<&[u8], u64> = HashMap::new();
@@ -265,7 +280,10 @@ mod tests {
     #[test]
     fn cluster_size_histogram_basic() {
         // sizes 1,1,2,3,4,5,1 -> n1=3, n2=1, n3=1, n4plus=2
-        assert_eq!(cluster_size_histogram(&[1.0, 1.0, 2.0, 3.0, 4.0, 5.0, 1.0]), vec![3, 1, 1, 2]);
+        assert_eq!(
+            cluster_size_histogram(&[1.0, 1.0, 2.0, 3.0, 4.0, 5.0, 1.0]),
+            vec![3, 1, 1, 2]
+        );
     }
 
     #[test]
@@ -391,13 +409,39 @@ mod tests {
     const NULL: u8 = 0;
     const OK: u8 = 1;
 
+    /// Pack a byte-per-row validity mask (1 = valid, 0 = null) into the packed
+    /// LSB-first Arrow bitmap the interners now consume — keeps the test literals
+    /// readable while exercising the real bitmap reader.
+    fn pack(valid: &[u8]) -> Vec<u8> {
+        let mut bits = vec![0u8; valid.len().div_ceil(8)];
+        for (i, &v) in valid.iter().enumerate() {
+            if v != 0 {
+                bits[i >> 3] |= 1 << (i & 7);
+            }
+        }
+        bits
+    }
+
+    #[test]
+    fn is_null_reads_packed_bitmap() {
+        // Empty bitmap => every row valid (Arrow null_count==0 optimization).
+        assert!(!is_null(&[], 0));
+        assert!(!is_null(&[], 99));
+        // Row 3 and row 9 null, all others valid; spans two bytes.
+        let bits = pack(&[OK, OK, OK, NULL, OK, OK, OK, OK, OK, NULL, OK]);
+        assert_eq!(bits.len(), 2); // ceil(11/8)
+        for i in 0..11 {
+            assert_eq!(is_null(&bits, i), i == 3 || i == 9, "row {i}");
+        }
+    }
+
     #[test]
     fn intern_float_nan_null_matches_fixture() {
         let nan = f64::NAN;
         // f = [-0.0, 0.0, NaN, NaN, null, 1.0, 1.0]
         let f = intern_f64(
             &[-0.0, 0.0, nan, nan, 0.0, 1.0, 1.0],
-            &[OK, OK, OK, OK, NULL, OK, OK],
+            &pack(&[OK, OK, OK, OK, NULL, OK, OK]),
         );
         assert_eq!(distinct_count(&f), 4); // {-0/+0, NaN, null, 1.0} (fixture distinct.f == 4)
         assert!((duplicate_row_ratio(&[f], 7) - 6.0 / 7.0).abs() < 1e-12); // fixture dup_ratio == 6/7
@@ -406,8 +450,8 @@ mod tests {
     #[test]
     fn intern_typed_numeric_matches_fixture() {
         // i = [5,5,3,null,5]   g = [5.0,5.0,3.0,null,5.0]
-        let i = intern_i64(&[5, 5, 3, 0, 5], &[OK, OK, OK, NULL, OK]);
-        let g = intern_f64(&[5.0, 5.0, 3.0, 0.0, 5.0], &[OK, OK, OK, NULL, OK]);
+        let i = intern_i64(&[5, 5, 3, 0, 5], &pack(&[OK, OK, OK, NULL, OK]));
+        let g = intern_f64(&[5.0, 5.0, 3.0, 0.0, 5.0], &pack(&[OK, OK, OK, NULL, OK]));
         assert_eq!(distinct_count(&i), 3); // fixture: distinct.i == 3
         assert_eq!(distinct_count(&g), 3); // fixture: distinct.g == 3
         assert!((duplicate_row_ratio(&[i, g], 5) - 0.6).abs() < 1e-12); // fixture: dup_ratio == 0.6
@@ -418,7 +462,7 @@ mod tests {
         // s = ["a","a","",null,"a","b",null]  -- empty-string is NOT null.
         // bytes "aaab", offsets slice each row; the null rows (3,6) have empty spans.
         let offsets = [0u32, 1, 2, 2, 2, 3, 4, 4];
-        let s = intern_str(&offsets, b"aaab", &[OK, OK, OK, NULL, OK, OK, NULL]);
+        let s = intern_str(&offsets, b"aaab", &pack(&[OK, OK, OK, NULL, OK, OK, NULL]));
         assert_eq!(distinct_count(&s), 4); // {a, "", b, null}  (fixture: distinct.s == 4)
         assert!((duplicate_row_ratio(&[s], 7) - 5.0 / 7.0).abs() < 1e-12); // fixture: dup_ratio == 5/7
     }
@@ -428,11 +472,14 @@ mod tests {
         let nan = f64::NAN;
         let f = intern_f64(
             &[-0.0, 0.0, nan, nan, 0.0, 1.0, 1.0],
-            &[OK, OK, OK, OK, NULL, OK, OK],
+            &pack(&[OK, OK, OK, OK, NULL, OK, OK]),
         );
-        let i = intern_i64(&[5, 5, 3, 3, 0, 5, 5], &[OK, OK, OK, OK, NULL, OK, OK]);
+        let i = intern_i64(
+            &[5, 5, 3, 3, 0, 5, 5],
+            &pack(&[OK, OK, OK, OK, NULL, OK, OK]),
+        );
         let offsets = [0u32, 1, 2, 2, 2, 3, 4, 4];
-        let s = intern_str(&offsets, b"aaab", &[OK, OK, OK, NULL, OK, OK, NULL]);
+        let s = intern_str(&offsets, b"aaab", &pack(&[OK, OK, OK, NULL, OK, OK, NULL]));
         // Fixture `mixed`: distinct f/i/s == 4/3/4; dup_ratio == 2/7 (only rows 0,1
         // are identical across all three columns).
         assert_eq!(distinct_count(&f), 4);

@@ -49,6 +49,10 @@ goldenmatch-fs-core = { path = "../fs-core" }
 # The #[pyfunction] graph shims below delegate here so DuckDB/DataFusion and
 # this extension module share one behavior-exact path.
 goldenmatch-graph-core = { path = "../graph-core" }
+# Pyo3-free MST-split + confidence clustering kernels (mst_split_components /
+# severe_bridge_count / cluster_confidence / find). The cluster.rs shims delegate
+# here so a future cluster-wasm surface shares one behavior-exact path.
+goldenmatch-cluster-core = { path = "../cluster-core" }
 # Pyo3-free MinHash/LSH sketch kernels (#1081). The sketch.rs shims delegate
 # here; byte-identical with core/sketch.py and the TS port (shared golden vectors).
 goldenmatch-sketch-core = { path = "../sketch-core" }
@@ -89,4 +93,16 @@ numpy = ">=0.28, <0.29"
 
 [profile.release]
 opt-level = 3
+# Thin LTO (main's proven profile). Fat LTO + codegen-units=1 was tried in this
+# change set as a speculative codegen-quality tweak but its win "couldn't be
+# isolated" (single-crate hot path), so it isn't worth deviating from main's
+# profile -- kept thin. NOTE: fat LTO was earlier BLAMED for the
+# tests/test_metrics_harness.py xdist "worker crashed" deaths, but that was a
+# misdiagnosis -- reverting to thin LTO did NOT fix them. The real cause was OOM:
+# those torch/onnxruntime trained-embedder probes are memory-heavy and were
+# running under `-n auto` in the sharded lane; #2159's new test files (absent from
+# .test_durations) shifted the pytest-split groups so shard 3 packed more of them
+# concurrently -> OOM (silent SIGKILL, no faulthandler trace). Fixed by routing
+# test_metrics_harness.py to the serial python_goldenmatch_heavy lane, where
+# test_embedder.py already lives. The real measured win here is the FxHash scorer.
 lto = "thin"

@@ -18,6 +18,23 @@ export interface AnalysisBackend {
   quantile(values: Float64Array, q: number): number;
   /** Discrete cluster-size histogram: counts of sizes ==1/==2/==3/>=4 (4 buckets). */
   clusterSizeHistogram(sizes: Float64Array): number[];
+
+  // ── Frame kernels (Wave 1b) — shared interning canon over plain buffers ──
+  // The caller classifies each column + marshals it to typed buffers (numeric =>
+  // Float64Array, string => Arrow utf8 offsets+bytes) with a `validity` packed
+  // LSB-first Arrow bitmap (bit set = valid; Arrow's C Data Interface layout).
+  // `internNumeric`/`internString` return dense value-ids (as f64, exact ints);
+  // the caller feeds those to `distinctCountIds` / `duplicateRowRatioIds`. Same
+  // canon (canon_f64_bits NaN/-0 fold; byte string equality; null id 0) the
+  // Python/native path interns with.
+  /** Intern a numeric column to dense value-ids. `validity` = packed Arrow bitmap (bit set = valid). */
+  internNumeric(values: Float64Array, validity: Uint8Array): Float64Array;
+  /** Intern a UTF-8 column (Arrow utf8 `offsets`[n+1] + `bytes`) to dense value-ids. */
+  internString(offsets: Uint32Array, bytes: Uint8Array, validity: Uint8Array): Float64Array;
+  /** Distinct-value count over interned ids (null id counts). */
+  distinctCountIds(ids: Float64Array): number;
+  /** Exact-duplicate row ratio over `nCols` COLUMN-MAJOR interned id-columns. */
+  duplicateRowRatioIds(idsFlat: Float64Array, nCols: number, nRows: number): number;
 }
 
 const _registry = createBackendRegistry<AnalysisBackend>();

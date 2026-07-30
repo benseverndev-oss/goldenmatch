@@ -6,7 +6,7 @@ import hashlib
 import re
 import unicodedata
 
-import jellyfish
+import goldenphonetic
 
 # GoldenMatch canonical American Soundex -- the pure-Python reference that
 # byte-matches the Rust `goldenmatch-score-core::soundex` kernel (the single
@@ -157,7 +157,7 @@ def apply_transform(value: str | None, transform: str) -> str | None:
     elif transform == "soundex":
         return canonical_soundex(value)
     elif transform == "metaphone":
-        return jellyfish.metaphone(value)
+        return goldenphonetic.metaphone(value)
     elif transform == "digits_only":
         return re.sub(r"[^0-9]", "", value)
     elif transform == "alpha_only":

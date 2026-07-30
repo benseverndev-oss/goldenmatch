@@ -16,10 +16,14 @@
  *
  * Scope (mirrors the native/fs-wasm crate): scores an ALREADY-trained EMResult
  * over ALREADY-transformed field values — EM training and transforms stay
- * host-side, exactly as they stay Python-side. This entry covers the zero-config
- * FS shape (no NE, no custom banding, no cross-batch exclude — what
- * `auto_configure_probabilistic_df` emits); NE / custom `level_thresholds` grow
- * from here, like the native kernel.
+ * host-side, exactly as they stay Python-side. The zero-config FS shape (no NE,
+ * no custom banding — what `auto_configure_probabilistic_df` emits) is the
+ * default; the OPTIONAL `levelThresholds` (custom level-banding) + NE fields
+ * (`neValues`/`neScorerIds`/`neThresholds`/`neWeights`) carry the negative
+ * evidence + custom banding the shared `fs_core::score_fs_pair` kernel already
+ * supports, marshaled exactly like the native pyo3 `score_block_pairs_fs`. When
+ * they are absent the output is byte-identical to the zero-config path. (The
+ * cross-batch exclude set stays host-side / unused here.)
  */
 import { score_block_pairs_fs, initSync } from "./_wasm/fsWasmBindings.js";
 import { FS_WASM_BASE64 } from "./_wasm/fsWasmBytes.js";
@@ -80,6 +84,28 @@ export interface FsBlockScoringInput {
   readonly weightRange: number;
   /** Emit pairs whose normalized score is at/above this. */
   readonly threshold: number;
+  /**
+   * ADDITIVE: per-field custom level-banding cutoffs (`fs_core`
+   * `field_thresholds`), one entry per regular field. `null` (or a missing
+   * entry) = use the default `levels`/`partialThreshold` banding for that field.
+   * When present, a field's thresholds are the descending similarity cutoffs and
+   * its `matchWeights` row must have `thresholds.length + 1` entries. Omit the
+   * whole field (undefined/empty) to reproduce the zero-config behavior exactly.
+   */
+  readonly levelThresholds?: readonly (readonly number[] | null)[];
+  /**
+   * ADDITIVE: Fellegi-Sunter negative-evidence field values, `[neField][row]`
+   * post-transform (`null` = unobserved), mirroring `fieldValues`. Must be
+   * supplied together with `neScorerIds`/`neThresholds`/`neWeights` (all length
+   * `neValues.length`). Omit (or pass empty) for no negative evidence.
+   */
+  readonly neValues?: readonly (readonly (string | null)[])[];
+  /** ADDITIVE: per-NE-field comparison scorer id (0=jaro_winkler … 3=exact, 6=ensemble). */
+  readonly neScorerIds?: readonly number[];
+  /** ADDITIVE: per-NE-field firing threshold — the field fires when similarity is STRICTLY below this. */
+  readonly neThresholds?: readonly number[];
+  /** ADDITIVE: per-NE-field fired weight (normally negative) added to the pair's summed weight when it fires. */
+  readonly neWeights?: readonly number[];
 }
 
 /** One scored within-block pair: `[a, b, score]` with `a < b`. */
@@ -129,6 +155,49 @@ export function scoreBlockPairsFs(input: FsBlockScoringInput): FsScoredPair[] {
     for (let k = 0; k < row.length; k++) weightsFlat.push(row[k]!);
   }
 
+  // ADDITIVE: custom level-banding, ragged flat + a per-field lengths vector
+  // with a -1 sentinel meaning "no custom thresholds for this field" (=> the
+  // kernel uses the default levels/partialThreshold banding). An empty lens
+  // vector (no levelThresholds supplied) reproduces the zero-config default.
+  const levelThresholdsFlat: number[] = [];
+  let levelThresholdsLens: Int32Array;
+  if (input.levelThresholds !== undefined && input.levelThresholds.length > 0) {
+    levelThresholdsLens = new Int32Array(nFields);
+    for (let f = 0; f < nFields; f++) {
+      const cuts = input.levelThresholds[f];
+      if (cuts === null || cuts === undefined) {
+        levelThresholdsLens[f] = -1;
+      } else {
+        levelThresholdsLens[f] = cuts.length;
+        for (let k = 0; k < cuts.length; k++) levelThresholdsFlat.push(cuts[k]!);
+      }
+    }
+  } else {
+    levelThresholdsLens = new Int32Array(0);
+  }
+
+  // ADDITIVE: negative evidence, column-major values (like fieldValues) + the
+  // parallel scorer/threshold/weight arrays. nNe = 0 => no negative evidence.
+  const neValues = input.neValues ?? [];
+  const nNe = neValues.length;
+  const neFlat: string[] = [];
+  const neNulls = new Uint8Array(nNe * nRows);
+  for (let k = 0; k < nNe; k++) {
+    const col = neValues[k]!;
+    for (let r = 0; r < nRows; r++) {
+      const v = col[r];
+      if (v === null || v === undefined) {
+        neNulls[k * nRows + r] = 1;
+        neFlat.push("");
+      } else {
+        neFlat.push(v);
+      }
+    }
+  }
+  const neScorerIds = Uint8Array.from(input.neScorerIds ?? []);
+  const neThresholds = Float64Array.from(input.neThresholds ?? []);
+  const neWeights = Float64Array.from(input.neWeights ?? []);
+
   const json = score_block_pairs_fs(
     rowIds,
     blockSizes,
@@ -145,6 +214,14 @@ export function scoreBlockPairsFs(input: FsBlockScoringInput): FsScoredPair[] {
     input.minWeight,
     input.weightRange,
     input.threshold,
+    Float64Array.from(levelThresholdsFlat),
+    levelThresholdsLens,
+    neFlat,
+    neNulls,
+    nNe,
+    neScorerIds,
+    neThresholds,
+    neWeights,
   );
 
   const parsed = JSON.parse(json) as Array<[number, number, number]>;

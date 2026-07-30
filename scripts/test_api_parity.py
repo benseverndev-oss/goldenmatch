@@ -1,6 +1,8 @@
 """Unit tests for the API-parity gate. Pure data — no package imports, no YAML,
 box-safe. Run: python -m pytest scripts/test_api_parity.py -q"""
-import importlib.util, pathlib
+import importlib.util
+import pathlib
+
 _spec = importlib.util.spec_from_file_location(
     "check_api_parity", pathlib.Path(__file__).parent / "check_api_parity.py")
 gate = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(gate)
@@ -278,7 +280,12 @@ def test_structure_allows_deferred_map():
     assert not any(f.kind == "unknown_surface" for f in gate.check_structure(m))
 
 
-import os, subprocess, sys, json, pathlib
+import json
+import os
+import pathlib
+import subprocess
+import sys
+
 
 def test_python_emitter_goldenmatch_smoke():
     """Runs the real emitter against goldenmatch. Box-safe (needs goldenmatch[mcp] in the venv)."""
@@ -419,13 +426,15 @@ def test_python_emitter_goldenanalysis_analyzers_surface():
 
 def test_goldenanalysis_manifest_analyzers_partition_is_clean():
     """The committed parity/goldenanalysis.yaml analyzers surface is structurally
-    valid and in full parity (no python_only/ts_only deltas)."""
+    valid. `key.integrity` is the one declared python_only analyzer (the v1
+    semantic-layer wedge, ADR 0049; its TS/WASM port is a follow-on) — every
+    other analyzer stays fully shared, so this still catches accidental drift."""
     import yaml
     root = pathlib.Path(__file__).resolve().parent.parent
     m = yaml.safe_load((root / "parity" / "goldenanalysis.yaml").read_text())
     assert "analyzers" in m, "goldenanalysis manifest must model the analyzers surface"
     assert not gate.check_structure(m)
-    assert m["analyzers"]["python_only"] == [] and m["analyzers"]["ts_only"] == []
+    assert m["analyzers"]["python_only"] == ["key.integrity"] and m["analyzers"]["ts_only"] == []
 
 
 # ── Advisory SQL surfaces (postgres / duckdb) — visibility, non-gating ────────

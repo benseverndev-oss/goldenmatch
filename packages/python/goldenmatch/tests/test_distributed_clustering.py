@@ -155,8 +155,9 @@ def test_build_clusters_distributed_falls_back_on_non_convergence(caplog):
     assert any("fallback" in r.message.lower() for r in caplog.records)
 
 
-def test_build_clusters_distributed_routes_to_scipy_below_threshold(caplog):
-    """Default routing: small pair lists go straight to scipy.csgraph."""
+def test_build_clusters_distributed_routes_to_cc_below_threshold(caplog):
+    """Default routing: small pair lists go straight to the driver-side owned
+    connected-components fallback."""
     import logging
 
     from goldenmatch.distributed.clustering import (
@@ -174,9 +175,9 @@ def test_build_clusters_distributed_routes_to_scipy_below_threshold(caplog):
 
     rows = clusters_ds.take_all()
     assert len(rows) == 5
-    # Routing log must mention scipy.csgraph; label-prop log must NOT fire.
+    # Routing log must mention the connected-components route; label-prop must NOT fire.
     routing_msgs = [r.message.lower() for r in caplog.records]
-    assert any("scipy" in m for m in routing_msgs), routing_msgs
+    assert any("connected-components" in m for m in routing_msgs), routing_msgs
     assert not any("distributed label propagation" in m for m in routing_msgs)
 
 

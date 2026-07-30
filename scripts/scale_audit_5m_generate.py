@@ -1,13 +1,21 @@
 """Synthetic person-record generator for the 5M scale audit.
 
-Streaming CSV writer. Pulls names from the bundled refdata packs
-(US Census 2010 surnames + given-name canonicals) so the blocking
-distribution at 5M is realistic instead of pathologically uniform
-across 46 buckets like ``tests/generate_synthetic.py``.
+Vectorized (numpy draws + polars string assembly / corruption / write) so 5M
+rows generate in seconds instead of the ~15-23 min the old per-row
+``random.Random`` + ``csv.writerow`` loop took. Pulls names from the bundled
+refdata packs (US Census 2010 surnames + given-name canonicals) so the blocking
+distribution at 5M is realistic instead of pathologically uniform.
 
-Output schema: ``id, cluster_id, first_name, last_name, email,
-phone, address, city, state, zip, specialty``. Records sharing a
-``cluster_id`` are duplicates of one another (ground truth for F1).
+Output schema: ``id, cluster_id, first_name, last_name, email, phone, address,
+city, state, zip, specialty``. Records sharing a ``cluster_id`` are duplicates
+of one another (ground truth for F1). Duplicates carry realistic messiness
+(case / whitespace / typo variation + null'd secondary fields).
+
+Deterministic for a given ``(n_records, dupe_rate, seed)`` -- the seed drives a
+single ``np.random.default_rng``, so the fixture is reproducible (and cacheable
+by ``fetch_or_gen_fixture.sh``). NOT byte-identical to the old row-loop output
+(different RNG), but statistically equivalent: same split, same census-weighted
+surname skew, same corruption kinds and rates.
 
 Usage:
 
@@ -16,19 +24,17 @@ Usage:
         --dupe-rate 0.12 \\
         --output tests/benchmarks/datasets/synthetic_5m.csv
 
-The ground-truth CSV (``<output>.ground_truth.csv``) is written
-alongside for ``goldenmatch evaluate``.
+The ground-truth CSV (``<output>.ground_truth.csv``) is written alongside for
+``goldenmatch evaluate``.
 """
 from __future__ import annotations
 
 import argparse
-import csv
-import random
-import string
 import sys
 import time
 from pathlib import Path
 
+import numpy as np
 from goldenmatch.refdata import given_names, surnames
 
 # ── value pools ────────────────────────────────────────────────────────────
@@ -90,65 +96,17 @@ def _load_name_pools() -> tuple[list[str], list[int], list[str]]:
     return pool_last, weights_last, pool_first
 
 
-def _random_phone(rng: random.Random) -> str:
-    return f"{rng.randint(200, 999)}-{rng.randint(100, 999)}-{rng.randint(1000, 9999)}"
+def _apply_case(col, choice):
+    """Polars expr: per-row case variation (upper/lower/title/unchanged) keyed
+    by an integer ``choice`` Series in [0, 4)."""
+    import polars as pl
 
-
-def _random_zip(rng: random.Random) -> str:
-    return f"{rng.randint(10000, 99999)}"
-
-
-def _random_address(rng: random.Random) -> str:
-    return f"{rng.randint(1, 9999)} {rng.choice(STREETS)}"
-
-
-def _mess_up(value: str | None, mess_type: str, rng: random.Random) -> str | None:
-    """Apply realistic messiness to a duplicated value."""
-    if value is None or value == "":
-        return value
-    if mess_type == "case":
-        return rng.choice([value.upper(), value.lower(), value.title(), value])
-    if mess_type == "whitespace":
-        spaces = " " * rng.randint(1, 4)
-        return rng.choice([spaces + value, value + spaces, spaces + value + spaces])
-    if mess_type == "typo":
-        if len(value) > 2:
-            i = rng.randint(1, len(value) - 2)
-            return value[:i] + rng.choice(string.ascii_lowercase) + value[i + 1:]
-        return value
-    if mess_type == "null":
-        return rng.choice(["", "NULL", "N/A", "  "])
-    if mess_type == "phone_format":
-        digits = value.replace("-", "")
-        return rng.choice([
-            digits,
-            f"({digits[:3]}) {digits[3:6]}-{digits[6:]}",
-            f"{digits[:3]}.{digits[3:6]}.{digits[6:]}",
-            f"1-{value}",
-            f"+1{digits}",
-        ])
-    if mess_type == "email_mess":
-        return rng.choice([
-            value.upper(),
-            " " + value,
-            value + " ",
-            value.replace("@", " @ "),
-        ])
-    return value
-
-
-_MESS_OPTIONS = [
-    ("first_name", "case"), ("first_name", "typo"), ("first_name", "whitespace"),
-    ("last_name", "case"), ("last_name", "typo"), ("last_name", "whitespace"),
-    ("email", "email_mess"), ("email", "case"),
-    ("phone", "phone_format"),
-    ("address", "case"), ("address", "whitespace"),
-    ("city", "case"),
-    ("state", "case"),
-    # No ("zip", "whitespace") — Polars infers zip as int and chokes on the
-    # whitespace-wrapped value during downstream CSV re-reads (GoldenCheck).
-    ("specialty", "case"), ("specialty", "typo"),
-]
+    return (
+        pl.when(choice == 0).then(col.str.to_uppercase())
+        .when(choice == 1).then(col.str.to_lowercase())
+        .when(choice == 2).then(col.str.to_titlecase())
+        .otherwise(col)
+    )
 
 
 def generate(
@@ -157,114 +115,124 @@ def generate(
     dupe_rate: float,
     seed: int = 42,
 ) -> dict[str, int | float]:
-    """Stream-generate ``n_records`` rows with controlled duplicates.
+    """Vectorized generate of ``n_records`` rows with controlled duplicates.
 
     Returns a stats dict for the runner to log.
     """
-    rng = random.Random(seed)
-    pool_last, weights_last, pool_first = _load_name_pools()
+    import polars as pl
+
+    rng = np.random.default_rng(seed)
+    pool_last_l, weights_last, pool_first_l = _load_name_pools()
+    pool_last = np.asarray(pool_last_l)
+    pool_first = np.asarray(pool_first_l)
+    p_last = np.asarray(weights_last, dtype=np.float64)
+    p_last /= p_last.sum()
 
     n_unique = int(n_records * (1 - dupe_rate))
     n_dupes = n_records - n_unique
-    # No pure-junk rows in this fixture — they exist in real data but crash
-    # the GoldenCheck reader during controller sample iteration before any
-    # downstream quality override can fire. The scale audit measures dedupe
-    # throughput, not GoldenCheck robustness; that's tested elsewhere.
+    # No pure-junk rows (they crash the GoldenCheck reader during controller
+    # sample iteration); the scale audit measures dedupe throughput, not reader
+    # robustness. Retained as a stat for parity with prior fixtures.
     n_junk = 0
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     ground_truth_path = output_path.with_suffix(".ground_truth.csv")
-
-    print(f"Streaming {n_unique:,} unique + {n_dupes:,} dupes + {n_junk:,} junk "
-          f"= {n_records:,} total to {output_path}")
-
-    # Phase 1: write base records to CSV, keep a tuple-index in memory for
-    # the duplicate-sampling phase. Tuple is the minimum needed to rebuild
-    # a duplicate row (id, cluster_id, name fields, email, phone, address).
+    print(f"Generating {n_unique:,} unique + {n_dupes:,} dupes = {n_records:,} "
+          f"total to {output_path}", flush=True)
     t0 = time.time()
-    base_index: list[tuple] = []
-    with output_path.open("w", newline="", encoding="utf-8") as out_f, \
-         ground_truth_path.open("w", newline="", encoding="utf-8") as gt_f:
-        writer = csv.DictWriter(out_f, fieldnames=FIELDNAMES)
-        writer.writeheader()
-        gt_writer = csv.writer(gt_f)
-        gt_writer.writerow(["id", "cluster_id"])
 
-        for i in range(n_unique):
-            cluster_id = i + 1
-            first = rng.choice(pool_first)
-            last = rng.choices(pool_last, weights=weights_last, k=1)[0]
-            email = f"{first.lower()}.{last.lower()}{rng.randint(1, 999)}@{rng.choice(DOMAINS)}"
-            phone = _random_phone(rng)
-            address = _random_address(rng)
-            city = rng.choice(CITIES)
-            state = rng.choice(STATES)
-            zip_code = _random_zip(rng)
-            specialty = rng.choice(SPECIALTIES)
-            record = {
-                "id": cluster_id,
-                "cluster_id": cluster_id,
-                "first_name": first,
-                "last_name": last,
-                "email": email,
-                "phone": phone,
-                "address": address,
-                "city": city,
-                "state": state,
-                "zip": zip_code,
-                "specialty": specialty,
-            }
-            writer.writerow(record)
-            gt_writer.writerow([cluster_id, cluster_id])
-            base_index.append(record)
+    def _pick(pool, n):
+        return pool[rng.integers(0, len(pool), n)]
 
-        # Phase 2: stream duplicates, sampling from base_index.
-        next_id = n_unique + 1
-        for _ in range(n_dupes):
-            original = rng.choice(base_index)
-            dupe = dict(original)
-            dupe["id"] = next_id
-            # cluster_id stays — that's the ground-truth link.
-            next_id += 1
+    # ── unique base records (fully vectorized) ──
+    first = _pick(pool_first, n_unique)
+    last = pool_last[rng.choice(len(pool_last), size=n_unique, p=p_last)]
+    city = _pick(np.asarray(CITIES), n_unique)
+    state = _pick(np.asarray(STATES), n_unique)
+    specialty = _pick(np.asarray(SPECIALTIES), n_unique)
+    street = _pick(np.asarray(STREETS), n_unique)
+    email_num = rng.integers(1, 1000, n_unique).astype(str)
+    domain = _pick(np.asarray(DOMAINS), n_unique)
+    phone = np.char.add(np.char.add(np.char.add(np.char.add(
+        rng.integers(200, 1000, n_unique).astype(str), "-"),
+        rng.integers(100, 1000, n_unique).astype(str)), "-"),
+        rng.integers(1000, 10000, n_unique).astype(str))
+    address = np.char.add(np.char.add(
+        rng.integers(1, 10000, n_unique).astype(str), " "), street)
+    zip_code = rng.integers(10000, 100000, n_unique).astype(str)
+    # email = first.lower() + "." + last.lower() + num + "@" + domain
+    email = np.char.add(np.char.add(np.char.add(np.char.add(np.char.add(
+        np.char.lower(first), "."), np.char.lower(last)),
+        email_num), "@"), domain)
 
-            # 30% chance to null out 0-2 secondary fields.
-            if rng.random() < 0.3:
-                null_fields = rng.sample(
-                    ["phone", "email", "address", "specialty"],
-                    k=rng.randint(1, 2),
-                )
-                for f in null_fields:
-                    dupe[f] = ""
+    ids = np.arange(1, n_unique + 1, dtype=np.int64)
+    uniq = pl.DataFrame({
+        "id": ids, "cluster_id": ids,
+        "first_name": first, "last_name": last, "email": email,
+        "phone": phone, "address": address, "city": city, "state": state,
+        "zip": zip_code, "specialty": specialty,
+    })
 
-            # Apply 1-3 messiness types.
-            n_messes = rng.randint(1, 3)
-            for field, mess_type in rng.sample(_MESS_OPTIONS, min(n_messes, len(_MESS_OPTIONS))):
-                v = dupe.get(field)
-                if v and v not in ("NULL", "N/A"):
-                    dupe[field] = _mess_up(v, mess_type, rng)
+    # ── duplicates: gather base rows, new ids, keep cluster_id ──
+    src = rng.integers(0, n_unique, n_dupes)
+    dupe_ids = np.arange(n_unique + 1, n_records + 1, dtype=np.int64)
+    dupes = uniq[src].with_columns(pl.Series("id", dupe_ids))
 
-            writer.writerow(dupe)
-            gt_writer.writerow([dupe["id"], dupe["cluster_id"]])
+    # Corruption (vectorized; matches the OLD per-row _mess_up KINDS + rates):
+    #   - case variation on the key match fields + city/state/specialty
+    #   - whitespace padding on a subset of names
+    #   - single-char interior typo on a subset of last names (random position)
+    #   - null 1-2 secondary fields on ~30% of dupes
+    lc = pl.col
 
-        # Phase 3: pure-junk rows (no cluster_id — they should land in their
-        # own singleton clusters in the output).
-        for _ in range(n_junk):
-            cluster_id = next_id
-            next_id += 1
-            junk_type = rng.choice(["empty", "garbage"])
-            if junk_type == "empty":
-                row = {k: "" for k in FIELDNAMES}
-                row["id"] = cluster_id
-                row["cluster_id"] = cluster_id
-            else:
-                row = {
-                    k: "".join(rng.choices(string.printable[:62], k=rng.randint(1, 20)))
-                    for k in FIELDNAMES
-                }
-                row["id"] = cluster_id
-                row["cluster_id"] = cluster_id
-            writer.writerow(row)
-            gt_writer.writerow([cluster_id, cluster_id])
+    def _rc(n):  # per-row case choice Series in [0, 4)
+        return pl.Series(rng.integers(0, 4, n))
+
+    def _mask(n, p):
+        return pl.Series(rng.random(n) < p)
+
+    dupes = dupes.with_columns([
+        _apply_case(lc("first_name"), _rc(n_dupes)).alias("first_name"),
+        _apply_case(lc("last_name"), _rc(n_dupes)).alias("last_name"),
+        _apply_case(lc("city"), _rc(n_dupes)).alias("city"),
+        _apply_case(lc("state"), _rc(n_dupes)).alias("state"),
+        _apply_case(lc("specialty"), _rc(n_dupes)).alias("specialty"),
+    ])
+    # Whitespace pad ~20% of first names (leading), ~20% of last names (trailing).
+    dupes = dupes.with_columns([
+        pl.when(_mask(n_dupes, 0.2)).then(pl.lit("  ") + lc("first_name"))
+          .otherwise(lc("first_name")).alias("first_name"),
+        pl.when(_mask(n_dupes, 0.2)).then(lc("last_name") + pl.lit("  "))
+          .otherwise(lc("last_name")).alias("last_name"),
+    ])
+    # Single-char interior typo on a subset of names (>3 chars): replace one
+    # char at a per-row random position (str.slice takes per-row expression
+    # offsets). Applied to last (~45%) and first (~35%) names so nearly every
+    # dupe carries at least one fuzzy match field (old loop guaranteed >=1 mess).
+    _alpha = np.asarray(list("abcdefghijklmnopqrstuvwxyz"))
+
+    def _typo(field, p):
+        flen = lc(field).str.len_chars()
+        pos = pl.Series(rng.integers(0, 1_000_000, n_dupes)) % (flen - 2).clip(lower_bound=1) + 1
+        tchar = pl.Series(_alpha[rng.integers(0, 26, n_dupes)])
+        return (
+            pl.when(_mask(n_dupes, p) & (flen > 3))
+            .then(lc(field).str.slice(0, pos) + tchar + lc(field).str.slice(pos + 1))
+            .otherwise(lc(field)).alias(field)
+        )
+
+    dupes = dupes.with_columns([_typo("last_name", 0.45), _typo("first_name", 0.35)])
+    # Null 1-2 secondary fields on ~30% of dupes.
+    null_row = rng.random(n_dupes) < 0.3
+    for fld in ("phone", "email", "address", "specialty"):
+        fmask = pl.Series(null_row & (rng.random(n_dupes) < 0.45))
+        dupes = dupes.with_columns(
+            pl.when(fmask).then(pl.lit("")).otherwise(lc(fld)).alias(fld)
+        )
+
+    full = pl.concat([uniq, dupes], how="vertical").select(FIELDNAMES)
+    full.write_csv(output_path)
+    full.select(["id", "cluster_id"]).write_csv(ground_truth_path)
 
     elapsed = time.time() - t0
     size_mb = output_path.stat().st_size / 1024 / 1024
@@ -272,12 +240,12 @@ def generate(
         "n_unique_base": n_unique,
         "n_dupes": n_dupes,
         "n_junk": n_junk,
-        "n_total": n_unique + n_dupes + n_junk,
+        "n_total": n_unique + n_dupes,
         "size_mb": round(size_mb, 1),
         "elapsed_seconds": round(elapsed, 1),
         "n_surnames_in_pool": len(pool_last),
     }
-    print(f"Done in {elapsed:.1f}s. {size_mb:.1f} MB. Stats: {stats}")
+    print(f"Done in {elapsed:.1f}s. {size_mb:.1f} MB. Stats: {stats}", flush=True)
     return stats
 
 

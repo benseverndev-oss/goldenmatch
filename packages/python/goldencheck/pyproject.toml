@@ -41,10 +41,11 @@ dependencies = [
     "openpyxl>=3.1",
     "textual>=1.0",
     "goldencheck-types",
-    # Fast C Levenshtein for the fuzzy_values / cell_quality Python path (the
-    # fallback when goldencheck-native is absent). Same pin as the rest of the
-    # suite (goldenmatch/goldenflow). ~38x over the pure-Python DP it replaced.
-    "rapidfuzz>=3.0",
+    # Levenshtein for the fuzzy_values / cell_quality Python path (the fallback
+    # when goldencheck-native is absent). goldenfuzz is our owned string-metric
+    # kernel: its normalized similarity IS `1 - dist/max(len)`, the metric this
+    # profiler uses. Replaces the former rapidfuzz runtime dep.
+    "goldenfuzz>=0.1.0",
 ]
 
 [project.urls]
@@ -79,9 +80,10 @@ agent = [
 ]
 baseline = [
     # The baseline statistics + drift + correlation subsystems are opt-in and still
-    # run on Polars (group_by/pivot/join) + scipy. 3.0.0 gates them here rather than
-    # porting them off Polars -- installing [baseline] pulls the polars they need.
-    "scipy>=1.11",
+    # run on Polars (group_by/pivot/join). They are now scipy-FREE: chi-squared,
+    # Pearson, the Kolmogorov-Smirnov test, and the distribution MLEs are owned in
+    # `goldencheck.baseline` (`_owned_stats` / `_ks` / `_distributions`, byte-close
+    # to scipy). scipy stays a dev-only parity oracle in the workspace dev group.
     "numpy>=1.26",
     "polars>=1.0",
 ]

@@ -1,4 +1,11 @@
-"""Persistent FAISS ANN index manager for database integration."""
+"""Persistent ANN index manager for database integration.
+
+Owned pure-numpy flat (brute-force) inner-product index over the
+``gm_embeddings`` table -- exact top-K by descending inner product, the same
+semantics an exact ``IndexFlatIP`` provides. Vectors are persisted as an
+``index_vectors.npy`` matrix (alongside ``id_map.npy`` + ``index_meta.json``);
+no third-party ANN library is required (numpy is a base dependency).
+"""
 
 from __future__ import annotations
 
@@ -12,12 +19,17 @@ from goldenmatch.db.connector import DatabaseConnector
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_INDEX_DIR = ".goldenmatch_faiss"
+DEFAULT_INDEX_DIR = ".goldenmatch_ann"
 DEFAULT_MIN_COVERAGE = 0.10  # 10% of records must be embedded for ANN to activate
 
 
 class PersistentANNIndex:
-    """Manages a persistent FAISS index backed by gm_embeddings table."""
+    """Manages a persistent flat inner-product index backed by gm_embeddings.
+
+    Backed by an in-memory ``np.ndarray`` of vectors; ``query`` does an exact
+    brute-force top-K inner-product search (``q @ vectors.T`` + argpartition),
+    returning raw inner-product scores in descending order.
+    """
 
     def __init__(
         self,
@@ -33,7 +45,7 @@ class PersistentANNIndex:
         self.model_name = model_name
         self.min_coverage = min_coverage
 
-        self._index = None
+        self._vectors: np.ndarray | None = None  # (n, dim) float32 corpus
         self._id_map: list[int] = []  # positional index → DB record ID
         self._id_to_pos: dict[int, int] = {}  # DB record ID → positional index
         self._dim: int = 0
@@ -42,7 +54,7 @@ class PersistentANNIndex:
     @property
     def is_available(self) -> bool:
         """True if index has enough embeddings for useful queries."""
-        if self._index is None or len(self._id_map) == 0:
+        if self._vectors is None or len(self._id_map) == 0:
             return False
         if self.connector is None:
             return len(self._id_map) > 0
@@ -63,12 +75,6 @@ class PersistentANNIndex:
 
     def load_or_build(self) -> None:
         """Load index from disk if fresh, rebuild from DB if stale."""
-        try:
-            import faiss  # noqa: F401  # availability check for optional dep
-        except ImportError:
-            logger.warning("faiss-cpu not installed. ANN index unavailable.")
-            return
-
         disk_count = self._load_from_disk()
         db_count = self._get_db_embedding_count()
 
@@ -97,21 +103,19 @@ class PersistentANNIndex:
         logger.info("No embeddings available yet. ANN index empty.")
 
     def _load_from_disk(self) -> int:
-        """Load FAISS index + id_map from disk. Returns record count or 0."""
-        index_path = self.index_dir / "index.faiss"
+        """Load vectors + id_map from disk. Returns record count or 0."""
+        vectors_path = self.index_dir / "index_vectors.npy"
         meta_path = self.index_dir / "index_meta.json"
         idmap_path = self.index_dir / "id_map.npy"
 
-        if not all(p.exists() for p in [index_path, meta_path, idmap_path]):
+        if not all(p.exists() for p in [vectors_path, meta_path, idmap_path]):
             return 0
 
         try:
-            import faiss
-
             with open(meta_path) as f:
                 meta = json.load(f)
 
-            self._index = faiss.read_index(str(index_path))
+            self._vectors = np.load(str(vectors_path)).astype(np.float32)
             self._id_map = np.load(str(idmap_path)).tolist()
             self._id_to_pos = {rid: i for i, rid in enumerate(self._id_map)}
             self._dim = meta.get("dim", 0)
@@ -158,9 +162,7 @@ class PersistentANNIndex:
             return None
 
     def _rebuild_from_db(self) -> None:
-        """Full rebuild of FAISS index from gm_embeddings."""
-        import faiss
-
+        """Full rebuild of the vector index from gm_embeddings."""
         logger.info("Rebuilding ANN index from gm_embeddings...")
 
         df = self.connector.read_query(
@@ -176,11 +178,10 @@ class PersistentANNIndex:
         ids = df["record_id"].to_list()
         embeddings = np.array([
             np.frombuffer(b, dtype=np.float32) for b in df["embedding"].to_list()
-        ])
+        ]).astype(np.float32)
 
         self._dim = embeddings.shape[1]
-        self._index = faiss.IndexFlatIP(self._dim)
-        self._index.add(embeddings)
+        self._vectors = embeddings
         self._id_map = ids
         self._id_to_pos = {rid: i for i, rid in enumerate(ids)}
 
@@ -189,20 +190,37 @@ class PersistentANNIndex:
     # ── Query ─────────────────────────────────────────────────────────
 
     def query(self, embeddings: np.ndarray, top_k: int = 20) -> list[tuple[int, int, float]]:
-        """Find top-K neighbors. Returns (query_idx, db_record_id, score)."""
-        if self._index is None or self._index.ntotal == 0:
+        """Find top-K neighbors. Returns (query_idx, db_record_id, score).
+
+        Exact brute-force inner-product search: top-K by descending raw inner
+        product against the stored vectors (identical neighbor set + raw-IP
+        scores to an exact ``IndexFlatIP.search``).
+        """
+        if self._vectors is None or self._vectors.shape[0] == 0:
             return []
 
-        k = min(top_k, self._index.ntotal)
-        scores, indices = self._index.search(embeddings.astype(np.float32), k)
+        ntotal = self._vectors.shape[0]
+        k = min(top_k, ntotal)
+        if k <= 0:
+            return []
+
+        q = embeddings.astype(np.float32)
+        ip = q @ self._vectors.T  # (n_query, ntotal) raw inner-product matrix
+        # Top-k per row by descending raw IP (argpartition for the cut, then
+        # sort the k survivors so order matches a sorted IndexFlatIP output).
+        part = np.argpartition(-ip, k - 1, axis=1)[:, :k]
+        part_ip = np.take_along_axis(ip, part, axis=1)
+        order = np.argsort(-part_ip, axis=1)
+        indices = np.take_along_axis(part, order, axis=1)
+        scores = np.take_along_axis(ip, indices, axis=1)
 
         results = []
         for query_idx in range(len(embeddings)):
             for j in range(k):
-                faiss_idx = int(indices[query_idx][j])
-                if faiss_idx < 0 or faiss_idx >= len(self._id_map):
+                pos = int(indices[query_idx][j])
+                if pos < 0 or pos >= len(self._id_map):
                     continue
-                db_id = self._id_map[faiss_idx]
+                db_id = self._id_map[pos]
                 score = float(scores[query_idx][j])
                 results.append((query_idx, db_id, score))
 
@@ -212,29 +230,32 @@ class PersistentANNIndex:
 
     def add(self, record_ids: list[int], embeddings: np.ndarray) -> None:
         """Add new embeddings to index and store in gm_embeddings."""
-        import faiss
-
         if len(record_ids) == 0:
             return
 
         emb = embeddings.astype(np.float32)
-
-        if self._index is None:
-            self._dim = emb.shape[1]
-            self._index = faiss.IndexFlatIP(self._dim)
-
-        # Add to FAISS
-        self._index.add(emb)
-
-        # Update id_map
-        for rid in record_ids:
-            pos = len(self._id_map)
-            self._id_map.append(rid)
-            self._id_to_pos[rid] = pos
+        self._add_to_index(record_ids, emb)
 
         # Store in DB
         if self.connector is not None:
             self._store_embeddings_in_db(record_ids, emb)
+
+    def _add_to_index(self, record_ids: list[int], embeddings: np.ndarray) -> None:
+        """Append vectors + extend id_map (in-memory only, no DB write)."""
+        if len(record_ids) == 0:
+            return
+
+        emb = embeddings.astype(np.float32)
+        if self._vectors is None:
+            self._vectors = emb
+        else:
+            self._vectors = np.vstack([self._vectors, emb])
+        self._dim = self._vectors.shape[1]
+
+        for rid in record_ids:
+            pos = len(self._id_map)
+            self._id_map.append(rid)
+            self._id_to_pos[rid] = pos
 
     def _store_embeddings_in_db(self, record_ids: list[int], embeddings: np.ndarray) -> None:
         """Batch insert embeddings into gm_embeddings."""
@@ -258,14 +279,12 @@ class PersistentANNIndex:
 
     def save(self) -> None:
         """Persist index to disk."""
-        if self._index is None or len(self._id_map) == 0:
+        if self._vectors is None or len(self._id_map) == 0:
             return
-
-        import faiss
 
         self.index_dir.mkdir(parents=True, exist_ok=True)
 
-        faiss.write_index(self._index, str(self.index_dir / "index.faiss"))
+        np.save(str(self.index_dir / "index_vectors.npy"), self._vectors)
         np.save(str(self.index_dir / "id_map.npy"), np.array(self._id_map))
 
         meta = {

@@ -704,11 +704,12 @@ class MatchkeyConfig(BaseModel):
                         "EM-learned NE weights; set penalty_bits to override."
                     )
         # Guards: parse + require a_/b_ prefixes at config time (column existence
-        # is checked later, where the frame's columns are known). v1 wires
-        # matchkey-level guards on exact + weighted matchkeys. Probabilistic
-        # matchkey guards and field-level guards (weighted-average
-        # drop-and-renormalize) are a planned follow-up -- reject them here so a
-        # guard is never SILENTLY ignored. Spec:
+        # is checked later, where the frame's columns are known). Matchkey-level
+        # guards are wired on exact + weighted; field-level guards are wired on
+        # weighted matchkeys (a guard-failing field drops out of the weighted
+        # average). Probabilistic matchkey guards and field-level guards on
+        # exact/probabilistic are a planned follow-up -- rejected here so a guard
+        # is never SILENTLY ignored. Spec:
         # docs/superpowers/specs/2026-07-26-guarded-matchkeys-design.md.
         from goldenmatch.core.guard import GuardError, guard_columns
 
@@ -734,12 +735,13 @@ class MatchkeyConfig(BaseModel):
                 raise ValueError(
                     f"Matchkey '{self.name}' field '{f.field}': {exc}"
                 ) from None
-            raise ValueError(
-                f"Matchkey '{self.name}' field '{f.field}': field-level guards "
-                "(dropping a field from the weighted average when its guard fails) "
-                "are a planned follow-up and not yet applied. Use the matchkey-level "
-                "'guard' to gate the whole matchkey for now."
-            )
+            if self.type != "weighted":
+                raise ValueError(
+                    f"Matchkey '{self.name}' (type={self.type!r}): field-level guards "
+                    f"(field '{f.field}') are only valid on weighted matchkeys (they "
+                    "drop a field from the weighted average). Use the matchkey-level "
+                    "'guard' to gate an exact/probabilistic matchkey."
+                )
         return self
 
     # ── Typed accessors ──
@@ -1928,6 +1930,37 @@ class MediationConfig(BaseModel):
     )
 
 
+class RelationshipRule(BaseModel):
+    """One rule for deriving entity-to-entity relationship edges from a shared,
+    NON-identity attribute (#semantic-graph).
+
+    Identity resolution collapses records that are the SAME entity. The same
+    blocking data also surfaces DIFFERENT entities that share a non-identity
+    attribute -- two prescribers on one clinic phone, two people at one address --
+    which is a relationship, not a merge. This rule emits those as edges keyed on
+    the stable ``entity_id``s, turning the identity graph into a semantic graph
+    maintained in the same pass.
+    """
+    field: str = Field(
+        description="Payload field whose shared value relates two entities (e.g. 'phone_number', 'zip5', 'employer', 'email', 'specialty', 'degree').",
+    )
+    kind: str = Field(
+        description="Relationship label for the emitted edge (e.g. 'shares_phone', 'same_address').",
+    )
+    transform: str | None = Field(
+        default=None,
+        description="Optional derived-value transform applied to `field` before grouping, so edges key on a DERIVED value rather than the literal field: 'email_domain' (the domain after '@'), 'normalize_company' (lowercased, common corp suffixes stripped), 'lower_trim' (lowercased + trimmed, good for specialty/degree), 'zip3' (first 3 chars of a zip). None (default) uses the raw field value.",
+    )
+    min_entities: int = Field(
+        default=2,
+        description="A shared value must be held by at least this many distinct entities to emit edges.",
+    )
+    max_fanout: int = Field(
+        default=50,
+        description="Skip values shared by more than this many distinct entities (hub values like a switchboard line are not pairwise relationships).",
+    )
+
+
 class IdentityConfig(BaseModel):
     """Identity Graph configuration.
 
@@ -1968,6 +2001,13 @@ class IdentityConfig(BaseModel):
     weak_confidence_threshold: float = Field(
         default=0.6,
         description="Cluster confidence below which the bottleneck pair is flagged as a conflict for steward review; 0 disables it.",
+    )
+    # semantic-graph: derive entity-to-entity relationship edges from shared
+    # non-identity attributes, in the same resolve pass. Empty (default) = no
+    # relationships emitted; identity resolution is unchanged.
+    relationships: list[RelationshipRule] = Field(
+        default_factory=list,
+        description="Rules deriving entity-to-entity relationship edges from shared non-identity attributes; empty leaves identity resolution unchanged.",
     )
     # #1110: cross-device / channel stitching (CDP/MDM epic #1108). None ->
     # stitching is not configured (the default; identity resolution is

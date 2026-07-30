@@ -1,10 +1,13 @@
-"""Parity gate for the vectorized fast paths (`_fastpath.apply_with_residual`).
+"""Parity gate for the column transforms' owned-scalar reference.
 
-Each vectorized transform must produce output byte-identical to its pure
-per-row (`dateutil` / `phonenumbers`) reference. These tests build a large
-random corpus that deliberately mixes the fast-path-resolvable shapes with
-ambiguous and junk rows that force the residual fallback, then assert equality.
-If the fast path ever resolves a row differently than the reference, this fails.
+The date family no longer has a Polars fast path OR a dateutil reference: the
+owned deterministic parser (`goldenflow-core::dates`; the pure-Python
+`_date_*_py` fallback) is the single source of truth. This gate asserts the
+`series`-mode date transforms produce output byte-identical to their owned
+per-row scalar over a large mixed corpus (well-formed + ambiguous + junk rows),
+so the Polars `series` path and the Polars-free columnar `scalar=` path can
+never diverge. The phone transforms still have a vectorized fast path checked
+against the `phonenumbers` reference (a runtime dep).
 """
 from __future__ import annotations
 
@@ -12,9 +15,7 @@ import random
 
 import phonenumbers
 import polars as pl
-from dateutil import parser as dateutil_parser
 from goldenflow.transforms.dates import (
-    _DEFAULT_DATE,
     _date_eu_py,
     _date_iso8601_py,
     _date_us_py,
@@ -25,19 +26,10 @@ from goldenflow.transforms.dates import (
 from goldenflow.transforms.phone import phone_digits, phone_e164
 
 # --- references: the OWNED deterministic per-row implementations --------------
-# The date family is now the deterministic source of truth (missing fields fill to
-# Jan 1 via _DEFAULT_DATE, not dateutil's non-deterministic today-fill). The parity
-# references ARE those owned scalars, so the vectorized fast path is checked against
-# the same deterministic reference the columnar/native path runs.
-
-def _ref_parse_date(val):
-    if not val:
-        return None
-    try:
-        return dateutil_parser.parse(val, default=_DEFAULT_DATE).date()
-    except (ValueError, OverflowError):
-        return None
-
+# The date family is the deterministic source of truth (missing fields fill to
+# Jan 1, 2-digit years use the POSIX pivot, exotic tail -> passthrough). The parity
+# references ARE those owned scalars, so the `series` path is checked against the
+# same deterministic reference the columnar/native path runs.
 
 def _ref_iso(val):
     return _date_iso8601_py(val)

@@ -128,7 +128,7 @@ def _default_discriminative_fields(
 
 def _make_weak_positive_fn(sample_df: pl.DataFrame, fields: list[tuple[str, str]]):
     """Closure: (id_a, id_b) -> bool, True if the pair agrees on >= 2 fields."""
-    from rapidfuzz.distance import JaroWinkler
+    from goldenmatch.core import strsim
 
     row_by_id = {r["__row_id__"]: r for r in sample_df.to_dicts()}
 
@@ -146,7 +146,7 @@ def _make_weak_positive_fn(sample_df: pl.DataFrame, fields: list[tuple[str, str]
             if kind == "exact":
                 if sa == sb and sa != "":
                     agree += 1
-            elif JaroWinkler.similarity(sa, sb) >= 0.85:
+            elif strsim.jaro_winkler_similarity(sa, sb) >= 0.85:
                 agree += 1
             if agree >= 2:
                 return True

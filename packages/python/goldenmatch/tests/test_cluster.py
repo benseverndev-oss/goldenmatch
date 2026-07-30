@@ -370,3 +370,75 @@ class TestBuildClustersColumnar:
         from_df = build_clusters(empty_df)
         from_list = build_clusters([])
         assert _canonical_clusters(from_df) == _canonical_clusters(from_list)
+
+
+def test_lazy_cluster_dict_len_is_o1_from_count():
+    """(#2219 part b) LazyClusterDict.len()/bool() answer from the known cluster
+    count WITHOUT invoking the builder -- the hot path (bench, stats-only
+    dedupe_df callers) does `len(res.clusters)` and must not force the O(clusters)
+    cluster_frames_to_dict build. First real content access still builds."""
+    from goldenmatch.core.cluster import LazyClusterDict
+
+    calls = {"n": 0}
+
+    def builder():
+        calls["n"] += 1
+        return {1: {"members": [0, 1]}, 2: {"members": [2, 3]}, 3: {"members": [4]}}
+
+    d = LazyClusterDict(builder, count=3)
+    assert len(d) == 3 and calls["n"] == 0, "len must come from count, not build"
+    assert bool(d) is True and calls["n"] == 0, "bool must not build"
+    assert d[1] == {"members": [0, 1]} and calls["n"] == 1, "access builds once"
+    assert len(d) == 3, "len still correct after build"
+
+    # count=None -> falls back to building (unknown count).
+    d2 = LazyClusterDict(builder, count=None)
+    assert len(d2) == 3 and calls["n"] == 2, "no count -> build to answer len"
+
+    # count=0 -> empty, falsy, no build.
+    d3 = LazyClusterDict(builder, count=0)
+    assert len(d3) == 0 and not d3 and calls["n"] == 2
+
+
+def test_group_members_kernel_matches_python_fallback(monkeypatch):
+    """The native arrow grouping kernel (group_members_by_cluster_arrow, wired
+    into cluster_frames_to_dict) must produce a byte-identical cluster dict to
+    the Python to_list + setdefault fallback. Builds real ClusterFrames and
+    compares the kernel path against the fallback forced via monkeypatch."""
+    import goldenmatch.core.cluster as cl
+
+    pairs = [
+        (0, 1, 0.97),
+        (1, 2, 0.96),  # cluster {0,1,2}
+        (5, 6, 0.95),  # cluster {5,6}
+        (8, 9, 0.94),
+        (9, 10, 0.93),  # cluster {8,9,10}
+        (3, 4, 0.92),  # cluster {3,4}
+    ]
+    all_ids = list(range(11))
+    frames = cl.build_cluster_frames(
+        pairs,
+        all_ids,
+        max_cluster_size=100,
+        weak_cluster_threshold=0.0,
+        auto_split=False,
+        backend="arrow",
+    )
+
+    from goldenmatch.core._native_loader import native_enabled, native_module
+
+    have_kernel = native_enabled("clustering") and hasattr(
+        native_module(), "group_members_by_cluster_arrow"
+    )
+    if not have_kernel:  # kernel unavailable in this env -> nothing to compare
+        import pytest
+
+        pytest.skip("native grouping kernel not loaded")
+
+    kernel_dict = cl.cluster_frames_to_dict(frames)
+
+    # Force the pure-Python fallback and rebuild.
+    monkeypatch.setattr(cl, "_try_native_group_members", lambda _a: None)
+    fallback_dict = cl.cluster_frames_to_dict(frames)
+
+    assert kernel_dict == fallback_dict, "kernel dict diverged from Python fallback"

@@ -37,25 +37,29 @@ analyzers:
   - frame.summary
   - match.rates
   - quality.rollup
-  python_only: []
+  # key.integrity: metric-aware key-integrity certification (semantic-layer wedge,
+  # ADR 0049). Python-only in v1 — reports a goldenmatch KeyIntegrityCertificate
+  # whose resolution tier runs the goldenmatch ER pipeline; a TS/WASM port is a
+  # deliberate follow-on. Declared python_only so the analyzers parity gate passes.
+  python_only:
+  - key.integrity
   ts_only: []
 # Frame-kernel cross-language boundary (distinct_count / null_ratio /
 # duplicate_row_ratio). Same classification-map idiom as goldenmatch's
 # blocking_kernels_deferred / scorer_kernels_deferred (skipped in check_structure;
-# not a shared/python_only/ts_only partition). The COUNTING primitives live in the
-# pyo3-free analysis-core, but the semantically load-bearing step is interning
-# heterogeneous Arrow values to canonical u64 ids (canon_f64_bits: -0.0/0.0,
-# NaN/NaN/null, int/float), which is Arrow-specific and has NO clean WASM boundary
-# -- Wave 1b was consciously DEFERRED (docs/superpowers/specs/
-# 2026-07-06-goldenanalysis-wave1b-deferred.md): arrow-in-wasm is heavy and a
-# second JS-value interner would be a new drift surface, with no established
-# in-browser frame-dedup workload to justify either. Instead the TS<->Python
-# equality semantics are locked by an ADVERSARIAL cross-surface fixture
-# (frame_kernels_adversarial.json + test_frame_kernels_parity.py /
-# frameKernels.parity.test.ts) -- which already caught a real NaN/null conflation
-# bug. Revisit only on a measured in-browser workload; then arrow-in-wasm is the
-# thesis-pure path. `deferred --` = will kernelize when that lands.
-frame_kernels_deferred:
-  distinct_count: "deferred -- Arrow-bound interning has no clean WASM boundary (Wave 1b); TS<->Python locked by frame_kernels_adversarial.json"
-  null_ratio: "deferred -- reads Arrow null buffers directly; no WASM boundary (Wave 1b); TS<->Python locked by frame_kernels_adversarial.json"
-  duplicate_row_ratio: "deferred -- Arrow-bound row interning has no clean WASM boundary (Wave 1b); TS<->Python locked by frame_kernels_adversarial.json"
+# not a shared/python_only/ts_only partition). Wave 1b, UN-DEFERRED (2026-07-27):
+# #1788 moved the semantically load-bearing interning OUT of Arrow into
+# analysis-core's plain-buffer `intern_f64`/`intern_str` (canon_f64_bits: -0.0/0.0,
+# NaN/NaN/null fold), so the SAME canon crosses to WASM with no arrow-rs bloat.
+# analysis-wasm now exports intern_f64/intern_str + distinct_count_ids/
+# duplicate_row_ratio_ids; the TS `nUnique`/`duplicateRowRatio` route homogeneously-
+# typed number/string columns through that shared kernel (opt-in enableAnalysisWasm;
+# pure-TS is the classified fallback for bool/mixed columns). Locked by the
+# adversarial cross-surface fixture (frame_kernels_adversarial.json) run through
+# BOTH the pure-TS path (frameKernels.parity.test.ts) and the kernel
+# (wasm-frame-kernels.parity.test.ts). See docs/superpowers/specs/
+# 2026-07-06-goldenanalysis-wave1b-deferred.md (superseded).
+frame_kernels:
+  distinct_count: "shared -- analysis-wasm intern_f64/intern_str + distinct_count_ids (opt-in); pure-TS fallback for bool/mixed columns; locked by frame_kernels_adversarial.json"
+  duplicate_row_ratio: "shared -- analysis-wasm intern_* + duplicate_row_ratio_ids (opt-in); pure-TS fallback for bool/mixed columns; locked by frame_kernels_adversarial.json"
+  null_ratio: "pure-TS -- pure null-counting, no interning canon to share; TS<->Python locked by frame_kernels_adversarial.json"

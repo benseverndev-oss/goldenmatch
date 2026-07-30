@@ -205,6 +205,16 @@ def run_check(card: dict, strict: bool) -> int:
         if pt not in ("__unset__", None) and not (REPO / pt).exists():
             problems.append(f"weakness '{w['id']}' names parity_test '{pt}' that does not exist")
 
+    # Conformance v2 (0047 amendment) -- T1 default-routing: a shared owner that the
+    # DEFAULT caller path does NOT route to is a LATENT second source (opt-in while a
+    # second impl is the default). `default_routed: true` = owner is the default;
+    # `opt-in` = deliberate fallback-default (edge-bundle discipline); `false` = flag.
+    for w in card["weaknesses"]:
+        if w.get("default_routed") is False:
+            problems.append(
+                f"LATENT second source: '{w['id']}' has a shared owner but the default "
+                f"path does not route to it (default_routed: false) -- conformance v2 T1")
+
     if problems:
         print("THESIS-CONFORMANCE DRIFT:")
         for p in problems:
@@ -244,6 +254,27 @@ def render(card: dict) -> None:
         for w in items:
             flag = "" if w.get("declared", True) else "  !!UNDECLARED"
             print(f"     - ({w['severity']}) {w['title']}{flag}")
+        print()
+
+    routed = [w for w in ws if "default_routed" in w]
+    revalidate = [w for w in ws if w.get("un_defer")]
+    if routed or revalidate:
+        print("-" * 78)
+        print("CONFORMANCE v2 (0047 amendment: behavioral + default-routing + re-validation)")
+        print("-" * 78)
+        if routed:
+            print("Default-routing (T1: does the DEFAULT caller path route to the owner?)")
+            for w in routed:
+                dr = w["default_routed"]
+                tag = {True: "DEFAULT", "opt-in": "opt-in (classified fallback is default)"}.get(
+                    dr, str(dr))
+                mark = "  !!LATENT-2ND-SOURCE" if dr is False else ""
+                print(f"    [{tag}] {w['id']}{mark}")
+        if revalidate:
+            print("Re-validate (deferral premises -- re-check the un-defer trigger):")
+            for w in revalidate:
+                first = " ".join(str(w["un_defer"]).split())
+                print(f"    - {w['id']}: {first[:110]}{'...' if len(first) > 110 else ''}")
         print()
 
     print("-" * 78)

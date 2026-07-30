@@ -539,24 +539,26 @@ def run_golden_fused_arrow(
     # Spec 4.3: within-cluster members must be __row_id__-ascending for the
     # kernel's first-occurrence tie-breaks to match the reference.
     sort_cols = ["__cluster_id__", "__row_id__"] if "__row_id__" in fr.columns else ["__cluster_id__"]
-    if _is_pl:
-        _sdf_native = fr.native.sort(sort_cols)
-        # Drop singletons (size <= 1), mirroring _multi_df_from_frames'
-        # size > 1 filter. The window filter preserves the sort order.
-        _sdf_native = _sdf_native.filter(pl.len().over("__cluster_id__") > 1)
-        sdf = to_frame(_sdf_native)
-    else:
-        sdf = fr.sort(sort_cols)
-        # Sorted input -> run_lengths gives per-cluster sizes in order; the
-        # repeated size>1 mask is the window filter's arrow twin.
-        _sizes = sdf.run_lengths("__cluster_id__")
-        if any(sz <= 1 for sz in _sizes):
-            import pyarrow as pa
+    from goldenmatch.core.bench import stage as _bench_stage
+    with _bench_stage("golden_fused_sort_filter"):
+        if _is_pl:
+            _sdf_native = fr.native.sort(sort_cols)
+            # Drop singletons (size <= 1), mirroring _multi_df_from_frames'
+            # size > 1 filter. The window filter preserves the sort order.
+            _sdf_native = _sdf_native.filter(pl.len().over("__cluster_id__") > 1)
+            sdf = to_frame(_sdf_native)
+        else:
+            sdf = fr.sort(sort_cols)
+            # Sorted input -> run_lengths gives per-cluster sizes in order; the
+            # repeated size>1 mask is the window filter's arrow twin.
+            _sizes = sdf.run_lengths("__cluster_id__")
+            if any(sz <= 1 for sz in _sizes):
+                import pyarrow as pa
 
-            _mask: list[bool] = []
-            for sz in _sizes:
-                _mask.extend([sz > 1] * sz)
-            sdf = to_frame(sdf.native.filter(pa.array(_mask)))
+                _mask: list[bool] = []
+                for sz in _sizes:
+                    _mask.extend([sz > 1] * sz)
+                sdf = to_frame(sdf.native.filter(pa.array(_mask)))
 
     user_cols = [c for c in sdf.columns if not _is_internal(c) and c != "__cluster_id__"]
 
@@ -708,13 +710,78 @@ def run_golden_fused_arrow(
     # predicate lowering's `code_of` so a `when:` literal resolves to the SAME
     # code space as the referenced column's factorized winner value.
     col_maps: dict[str, dict] = {}
-    for c in user_cols:
-        values = sdf.column(c).to_list()
-        text = [None if v is None else str(v) for v in values]
-        codes, vmap = _factorize_with_map(values)
-        col_maps[c] = vmap
-        text_cols.append(pa.array(text, type=pa.string()))
-        code_cols.append(pa.array(codes, type=pa.int64()))
+    # Stage-1 factorization: produce the per-column integer code array (grouping
+    # key for equality/majority/unanimous; null -> -1) + the raw-value->code map
+    # (col_maps, for conditional predicate lowering) + the text array (str form,
+    # for longest_value/most_complete tie-breaks).
+    #
+    # STRING columns (the FS hot path -- dedupe_df pre-casts every user column to
+    # Utf8) take the arrow-native route: pyarrow.compute.dictionary_encode does
+    # the factorization in C. It is BYTE-IDENTICAL to the Python reference
+    # _factorize_with_map -- pyarrow builds the dictionary in first-appearance
+    # order, so the codes match exactly, and nulls become the -1 sentinel via
+    # fill_null (verified across nulls / repeats / string-numerics). str(v) == v
+    # for strings, so `text` is the column itself. This drops the ~N*user_cols
+    # Python .to_list() + str() + dict-factorize (measured ~7-8s / 5M).
+    #
+    # NON-STRING columns (file-based dedupe with native dtypes) keep the exact
+    # Python str() formatting -- pyarrow's string cast diverges from Python str()
+    # for floats/bools/etc., so that path stays on the reference loop.
+    # col_maps (raw value -> code) is read ONLY by the conditional predicate
+    # lowering's _code_of (Stage 6); with no list-form field_rules there are no
+    # conditionals and it is never consulted. Building it means a Python dict of
+    # size = #distinct values -- ~N for high-cardinality columns (name/email),
+    # i.e. the same O(N) Python work dictionary_encode just moved into C. So build
+    # it ONLY when conditionals exist; otherwise skip and use the map-less factor.
+    _needs_col_maps = any(isinstance(e, list) for e in rules.field_rules.values())
+    import pyarrow.compute as _pc_fac
+
+    from goldenmatch.core.bench import stage as _bench_stage
+    from goldenmatch.core.frame import is_polars_dataframe as _ipd_fac
+
+    # dictionary_encode is byte-identical to the reference _factorize_with_map
+    # ONLY for GENUINE string columns: a polars Object/mixed column (e.g. int 1
+    # and str "1" together) is coerced to string by .to_arrow() (both -> "1"),
+    # collapsing codes the reference keeps distinct (1 != "1") and flipping
+    # unanimous_or_null. Restrict the fast path to real Utf8 columns; everything
+    # else uses the EXACT reference path over `sdf.column(c).to_list()` (raw seam
+    # values, no arrow coercion). Arrow-frame string columns are always genuine
+    # (arrow has no object type; to_list == to_arrow there).
+    _pl_str_cols = None
+    if _ipd_fac(sdf.native):
+        import polars as _pl_fac
+
+        _pl_str_cols = {
+            _n for _n, _dt in sdf.native.schema.items() if _dt == _pl_fac.String
+        }
+    with _bench_stage("golden_fused_factorize"):
+        for c in user_cols:
+            _arr = sdf.column(c).to_arrow()
+            if isinstance(_arr, pa.ChunkedArray):
+                # combine_chunks returns an Array on some pyarrow versions and a
+                # single-chunk ChunkedArray on others -- normalize to one Array.
+                _arr = _arr.combine_chunks()
+                if isinstance(_arr, pa.ChunkedArray):
+                    _arr = _arr.chunk(0) if _arr.num_chunks else pa.array([], type=_arr.type)
+            _genuine_str = (
+                pa.types.is_string(_arr.type) or pa.types.is_large_string(_arr.type)
+            ) and (_pl_str_cols is None or c in _pl_str_cols)
+            if _genuine_str:
+                _dic = _pc_fac.dictionary_encode(_arr)
+                if _needs_col_maps:
+                    col_maps[c] = {v: i for i, v in enumerate(_dic.dictionary.to_pylist())}
+                text_cols.append(_pc_fac.cast(_arr, pa.string()))
+                code_cols.append(_pc_fac.fill_null(_dic.indices.cast(pa.int64()), -1))
+            else:
+                values = sdf.column(c).to_list()
+                text = [None if v is None else str(v) for v in values]
+                if _needs_col_maps:
+                    codes, vmap = _factorize_with_map(values)
+                    col_maps[c] = vmap
+                else:
+                    codes = _factorize_codes(values)
+                text_cols.append(pa.array(text, type=pa.string()))
+                code_cols.append(pa.array(codes, type=pa.int64()))
 
     # ── Stage 2: source_priority + most_recent extra keys ────────────────────
     empty_i64 = pa.array([], type=pa.int64())
@@ -779,13 +846,54 @@ def run_golden_fused_arrow(
     empty_f64 = pa.array([], type=pa.float64())
     qweights: list[Any] = [empty_f64 for _ in user_cols]
     if quality_scores is not None:
-        if "__row_id__" in sdf.columns:
-            row_ids_list = sdf.column("__row_id__").to_list()
-        else:
-            row_ids_list = list(range(n))
-        for ci, c in enumerate(user_cols):
-            w = [float(quality_scores.get((rid, c), 1.0)) for rid in row_ids_list]
-            qweights[ci] = pa.array(w, type=pa.float64())
+        # Densify the per-column weight channel WITHOUT the N*user_cols Python
+        # dict-get loop. quality_scores is sparse ({(row_id,col): weight}, ~276K
+        # cells out of N*cols at 5M); regrouping it by column touches only those
+        # cells, then each column's dense weight vector is built with Arrow C
+        # kernels: index_in (hash-lookup of the sorted-frame row_ids into that
+        # column's flagged row_ids, order-preserving) -> take -> fill_null(1.0).
+        # Byte-identical to `[quality_scores.get((rid,col),1.0) for rid in rows]`
+        # (verified). A column with no flagged cells keeps the empty array =>
+        # the kernel's unweighted branch.
+        import pyarrow.compute as _pc_qw
+
+        from goldenmatch.core.bench import stage as _bench_stage
+        with _bench_stage("golden_qweights_build_fused"):
+            if "__row_id__" in sdf.columns:
+                _rid_qw = sdf.column("__row_id__").to_arrow()
+                if isinstance(_rid_qw, pa.ChunkedArray):
+                    _rid_qw = _rid_qw.combine_chunks()
+                    if isinstance(_rid_qw, pa.ChunkedArray):
+                        _rid_qw = _rid_qw.chunk(0) if _rid_qw.num_chunks else pa.array([], type=pa.int64())
+                _rid_qw = _pc_qw.cast(_rid_qw, pa.int64())
+            else:
+                _rid_qw = pa.array(range(n), type=pa.int64())
+            # One pass over the SPARSE dict, grouped by column (not N*cols).
+            _col_pos = {c: ci for ci, c in enumerate(user_cols)}
+            _by_col: dict[int, tuple[list[int], list[float]]] = {}
+            for (rid, c), wt in quality_scores.items():
+                ci = _col_pos.get(c)
+                if ci is None:
+                    continue
+                bucket = _by_col.get(ci)
+                if bucket is None:
+                    bucket = ([], [])
+                    _by_col[ci] = bucket
+                bucket[0].append(rid)
+                bucket[1].append(float(wt))
+            # Every column gets a DENSE weight array (matching the old loop, which
+            # set one for every column when quality_scores is not None -> the
+            # kernel's weighted branch uniformly). A column with no flagged cells
+            # uses an empty value_set: index_in -> all null -> fill_null -> all 1.0.
+            for ci in range(len(user_cols)):
+                rids, wts = _by_col.get(ci, ([], []))
+                _idx = _pc_qw.index_in(
+                    _rid_qw, value_set=pa.array(rids, type=pa.int64())
+                )
+                _w = _pc_qw.fill_null(
+                    _pc_qw.take(pa.array(wts, type=pa.float64()), _idx), 1.0
+                )
+                qweights[ci] = _w.combine_chunks() if isinstance(_w, pa.ChunkedArray) else _w
 
     # ── Stage 4: confidence_majority per-cluster pair-score edges ─────────────
     # Mirror build_golden_records_batch (golden.py:969-980): per cluster, remap
@@ -947,15 +1055,16 @@ def run_golden_fused_arrow(
             overrides=override_specs,
         ),
     )
-    winner_idx, field_conf, group_conf, cluster_ids_out = fn(
-        row_ids_arr,
-        cluster_ids_arr,
-        len(user_cols),
-        strategy_ids,
-        text_cols,
-        code_cols,
-        side,
-    )
+    with _bench_stage("golden_fused_kernel"):
+        winner_idx, field_conf, group_conf, cluster_ids_out = fn(
+            row_ids_arr,
+            cluster_ids_arr,
+            len(user_cols),
+            strategy_ids,
+            text_cols,
+            code_cols,
+            side,
+        )
 
     # __golden_confidence__ = mean of per-UNIT confidences. A resolution unit is a
     # scalar column OR a whole group (resolve.py:100/149) -- so the denominator is
@@ -968,41 +1077,44 @@ def run_golden_fused_arrow(
     denom = len(scalar_col_indices) + n_groups
     # denom >= 1: user_cols is non-empty (early return), and every user column is
     # either a scalar unit or owned by one of the >=1 groups.
-    gconf = [
-        (
-            sum(field_conf[ci][k] for ci in scalar_col_indices)
-            + sum(group_conf[g][k] for g in range(n_groups))
-        )
-        / denom
-        for k in range(n_clusters)
-    ]
-
-    if _is_pl:
-        out: dict[str, pl.Series] = {}
-        for ci, c in enumerate(user_cols):
-            out[c] = _gather_with_nulls(sdf.native.get_column(c), list(winner_idx[ci]))
-        result: Any = pl.DataFrame(out)
-        result = result.with_columns(
-            pl.Series("__cluster_id__", list(cluster_ids_out), dtype=pl.Int64)
-        )
-        result = result.with_columns(
-            pl.Series("__golden_confidence__", gconf, dtype=pl.Float64)
-        )
-    else:
-        # Arrow gather twin (probed): take() with null indices yields nulls --
-        # the -1 sentinel maps to None, preserving the source dtype exactly.
-        _tbl = sdf.native
-        _arrays = []
-        for ci, c in enumerate(user_cols):
-            _idx = pa.array(
-                [int(i) if i >= 0 else None for i in winner_idx[ci]], type=pa.int64()
+    # Bench diagnostic: per-cluster confidence mean (2.6M * scalar_cols Python
+    # sums) + per-column winner gather. Timed to separate it from factorize/kernel.
+    with _bench_stage("golden_fused_gather"):
+        gconf = [
+            (
+                sum(field_conf[ci][k] for ci in scalar_col_indices)
+                + sum(group_conf[g][k] for g in range(n_groups))
             )
-            _arrays.append(_tbl.column(c).combine_chunks().take(_idx))
-        _arrays.append(pa.array([int(x) for x in cluster_ids_out], type=pa.int64()))
-        _arrays.append(pa.array(gconf, type=pa.float64()))
-        result = pa.Table.from_arrays(
-            _arrays, names=[*user_cols, "__cluster_id__", "__golden_confidence__"]
-        )
+            / denom
+            for k in range(n_clusters)
+        ]
+
+        if _is_pl:
+            out: dict[str, pl.Series] = {}
+            for ci, c in enumerate(user_cols):
+                out[c] = _gather_with_nulls(sdf.native.get_column(c), list(winner_idx[ci]))
+            result: Any = pl.DataFrame(out)
+            result = result.with_columns(
+                pl.Series("__cluster_id__", list(cluster_ids_out), dtype=pl.Int64)
+            )
+            result = result.with_columns(
+                pl.Series("__golden_confidence__", gconf, dtype=pl.Float64)
+            )
+        else:
+            # Arrow gather twin (probed): take() with null indices yields nulls --
+            # the -1 sentinel maps to None, preserving the source dtype exactly.
+            _tbl = sdf.native
+            _arrays = []
+            for ci, c in enumerate(user_cols):
+                _idx = pa.array(
+                    [int(i) if i >= 0 else None for i in winner_idx[ci]], type=pa.int64()
+                )
+                _arrays.append(_tbl.column(c).combine_chunks().take(_idx))
+            _arrays.append(pa.array([int(x) for x in cluster_ids_out], type=pa.int64()))
+            _arrays.append(pa.array(gconf, type=pa.float64()))
+            result = pa.Table.from_arrays(
+                _arrays, names=[*user_cols, "__cluster_id__", "__golden_confidence__"]
+            )
 
     if not provenance:
         return result

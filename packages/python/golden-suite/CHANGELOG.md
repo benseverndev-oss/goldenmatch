@@ -4,6 +4,15 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.3.5] - 2026-07-27
+
+- Floor bump: `goldenmatch[polars]>=3.10` (was `>=3.8`). 3.9.0 + 3.10.0 close the
+  MCP surface parity gap in both directions -- +5 core-primitive tools (3.9.0:
+  `score_strings`/`score_pair`/`find_exact_matches`/`find_fuzzy_matches`/`build_clusters`)
+  + 3 host-helper tools (3.10.0: `server_info`/`read_file`/`write_csv`), taking the
+  goldenmatch MCP surface 82 -> 90 tools with `mcp_tools.ts_only` now empty (the TS
+  MCP server is a strict subset of Python). No other member floors changed.
+
 ## [0.3.4] - 2026-07-22
 
 - Floor bump: `goldenmatch[polars]>=3.8`. 3.8.0 adds the opt-in FS columnar-cluster

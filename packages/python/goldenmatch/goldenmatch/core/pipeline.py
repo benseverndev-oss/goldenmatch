@@ -113,22 +113,31 @@ def _fs_arrow_stream_enabled() -> bool:
 
 
 def _fs_columnar_cluster_enabled() -> bool:
-    """``GOLDENMATCH_FS_COLUMNAR_CLUSTER`` (default OFF) opts the eligible FS
-    bucket dedupe path onto B2c (#1811): the Arrow pair stream is threaded
-    STRAIGHT to the columnar cluster path (``build_clusters_columnar`` +
-    ``_columnar_pairs_df``), so the driver-resident ``all_pairs`` Python
-    ``list[tuple]`` is NEVER built. At 14M on tight-blocking/dup-dense data the
-    above-threshold pair set runs to hundreds of millions of tuples (~150 B
-    each) held on the driver through scoring -> clustering -- the late-stage OOM
-    of #1811. Superset of ``GOLDENMATCH_FS_ARROW_STREAM`` (B2b, which only drops
-    the ``matched_pairs`` exclude set): B2c uses the Arrow emit unconditionally
-    when active and reuses the shipped, parity-gated columnar cluster/dedup
-    downstream. Clusters are NOT byte-identical to the list path (the FS bucket
-    pipeline is ~0.1%-nondeterministic run-to-run regardless); parity is a
-    pair-set-overlap gate, not byte equality."""
-    return os.environ.get(
-        "GOLDENMATCH_FS_COLUMNAR_CLUSTER", "0"
-    ).strip().lower() in ("1", "true", "yes")
+    """``GOLDENMATCH_FS_COLUMNAR_CLUSTER`` (**DEFAULT ON**; ``0``/``false``/``no``/
+    ``off`` forces the legacy list path) opts the eligible FS bucket dedupe path
+    onto B2c (#1811/#2006): the Arrow pair table is threaded STRAIGHT from
+    ``score_buckets_arrow`` into the frames-out clustering (``build_cluster_frames``
+    with the arrow table + the native arrow kernel), Arrow end-to-end with NO
+    polars, so the driver-resident ``all_pairs`` Python ``list[tuple]`` AND the
+    per-cluster/pair_scores dict (``build_clusters_columnar``'s legacy path) are
+    NEVER built. At 14M on tight-blocking/dup-dense data the above-threshold pair
+    set runs to hundreds of millions of tuples held on the driver through scoring
+    -> clustering -- the late-stage OOM of #1811; the clustering measured ~40s +
+    the RSS peak on that dict build at 5M.
+
+    Default flipped ON: the eligibility gate (``_use_fs_columnar``: single
+    probabilistic matchkey, bucket route, no across-files/llm/boost/semantic/
+    bench-dump) fences it to the exact scale route where those accumulators are
+    the peak; ineligible configs fall back to the list path unchanged. Clusters
+    are NOT byte-identical to the list path (the FS bucket pipeline is
+    ~0.1%-nondeterministic run-to-run regardless); parity is a pair-set-overlap
+    gate, not byte equality, so the flip moves the default output within that
+    band only. ``=0`` is the escape hatch to the exact legacy list path (the
+    byte-parity oracle)."""
+    v = os.environ.get("GOLDENMATCH_FS_COLUMNAR_CLUSTER")
+    if v is None:
+        return True
+    return v.strip().lower() not in ("0", "false", "no", "off")
 
 
 def _fs_scored_pairs_cap() -> int:
@@ -795,7 +804,7 @@ def _score_probabilistic_matchkey(
             # semantic blocking, no bench-dump) folds columnar_out into
             # _columnar_pairs_df + sets _use_columnar, so the shipped columnar
             # cluster/dedup downstream consumes it without materializing a list.
-            import polars as _pl_b2c
+            import pyarrow.compute as _pc_b2c
 
             from goldenmatch.backends.score_buckets import score_buckets_arrow
             _pair_table = score_buckets_arrow(
@@ -806,18 +815,31 @@ def _score_probabilistic_matchkey(
                 n_buckets=config.n_buckets,
                 em_result=em_result,
             )
-            _cdf = _pl_b2c.from_arrow(_pair_table)
-            del _pair_table
-            # from_arrow of a pa.Table yields a DataFrame; narrow for pyright.
-            assert isinstance(_cdf, _pl_b2c.DataFrame)
-            if _cdf.height:
-                # Keep only the linked (>= link_threshold) pairs; the review band
-                # is not clustered (matches _split_pair_stream's `pairs`).
-                _cdf = _cdf.filter(_pl_b2c.col("score") >= link_threshold)
+            # Stay Arrow end-to-end (NO polars): split link/review on the pa.Table
+            # itself. score_buckets_arrow already floors the table at the review
+            # cut, so `score < link_threshold` is exactly the review band. The
+            # linked set stays a columnar pa.Table for frames-out clustering (the
+            # O(pairs) driver list B2c drops); the bounded review band
+            # materializes to review_pairs (matching the list path's split).
+            if _pair_table.num_rows:
+                _link_mask = _pc_b2c.greater_equal(  # pyright: ignore[reportAttributeAccessIssue]
+                    _pair_table.column("score"), link_threshold
+                )
+                _linked_tbl = _pair_table.filter(_link_mask)
+                _review_tbl = _pair_table.filter(
+                    _pc_b2c.invert(_link_mask)  # pyright: ignore[reportAttributeAccessIssue]
+                )
+                if _review_tbl.num_rows:
+                    _rd = _review_tbl.to_pydict()
+                    review_pairs.extend(
+                        zip(_rd["id_a"], _rd["id_b"], _rd["score"])
+                    )
+            else:
+                _linked_tbl = _pair_table
             if columnar_out is not None:
-                columnar_out.append(_cdf)
-            # matched_pairs intentionally NOT populated (single matchkey) and
-            # review_pairs left empty (no review queue on the columnar scale path).
+                columnar_out.append(_linked_tbl)
+            # matched_pairs intentionally NOT populated (single matchkey); the
+            # review band is carried above so the columnar path is review-complete.
             return
         _use_arrow_stream = (
             target_ids is None
@@ -1246,8 +1268,8 @@ def _resolve_identities(
             )
             return summary.as_dict()
         except Exception as e:
-            logger.warning("Distributed identity resolution failed: %s", e)
-            return None
+            logger.error("Distributed identity resolution failed: %s", e)
+            raise
 
     # In-memory path (legacy, unchanged).
     store = _open_identity_store(config)
@@ -1268,13 +1290,19 @@ def _resolve_identities(
             source_pk_col=config.identity.source_pk_column,
             emit_singletons=config.identity.emit_singletons,
             weak_confidence_threshold=config.identity.weak_confidence_threshold,
+            relationships=config.identity.relationships,
             pair_score_view=pair_score_view,
             cluster_frames=cluster_frames,
         )
         return summary.as_dict()
     except Exception as e:
-        logger.warning("Identity resolution failed: %s", e)
-        return None
+        # A REQUESTED identity resolution (config.identity.enabled) that fails must
+        # not masquerade as success -- silently returning None commits no graph
+        # while dedupe_df reports ok (this once made a broken Postgres write, "COPY
+        # cannot be used in pipeline mode", look like a fast successful write).
+        # Surface it so a failed write is a failed run, not silent data loss.
+        logger.error("Identity resolution failed: %s", e)
+        raise
     finally:
         try:
             store.close()
@@ -2558,16 +2586,19 @@ def _fused_result_from_clusters(
             )
         # Build multi_df: member rows + slim internal columns + __cluster_id__
         # (mirrors the dict-path golden branch for byte-identity).
-        multi_df = collected_frame.filter_in("__row_id__", golden_row_ids).native
+        _multi_frame = collected_frame.filter_in("__row_id__", golden_row_ids)
         if os.environ.get("GOLDENMATCH_GOLDEN_SLIM_MULTIDF", "1") != "0":
             _internal_prefixes = ("__xform_", "__mk_", "__block_key__", "__bucket__")
-            multi_df = multi_df.select(
-                [
-                    c
-                    for c in multi_df.columns
-                    if not any(c.startswith(p) for p in _internal_prefixes)
-                ]
-            )
+            # Seam `.columns` are NAMES on both reps; `pa.Table.columns` is arrays
+            # (the startswith crash on the arrow lane) so the filter MUST run off
+            # the frame, not `.native`. `.select(names)` works on pl + pa alike.
+            _keep = [
+                c
+                for c in _multi_frame.columns
+                if not any(c.startswith(p) for p in _internal_prefixes)
+            ]
+            _multi_frame = _multi_frame.select(_keep)
+        multi_df = _multi_frame.native
         # __cluster_id__ attach: map_column over the kernel's rid->cid map is
         # byte-equivalent to the old inner join against the fused frame
         # (unique rid keys; downstream golden groups by cluster, order-free)
@@ -2690,8 +2721,16 @@ def _run_fused_fs_match_short_circuit(
     # the Python candidate-pair list is never materialized (the RSS win the whole
     # short-circuit exists for).
     _need_blocks = not fs_model_preloaded(mk)
+    # build_blocks is dual-rep, but the polars vs seam-frame paths sample the EM
+    # training blocks with DIFFERENT RNG (per-backend sample divergence), which
+    # shifts EM weights at scale -- keep polars input on the EXACT classic path
+    # (`collected_df.lazy()`, byte-identical EM) and use the seam frame ONLY for
+    # arrow (a pa.Table has no `.lazy()`). Was a flat `_cf_entry`, which regressed
+    # historical_50k f1_probabilistic 0.826 -> 0.614.
+    import pyarrow as _pa_blocks  # noqa: PLC0415
+    _blk_src = _cf_entry if isinstance(collected_df, _pa_blocks.Table) else collected_df.lazy()
     blocks = (
-        list(build_blocks(collected_df.lazy(), config.blocking))
+        list(build_blocks(_blk_src, config.blocking))
         if _need_blocks and config.blocking is not None
         else []
     )
@@ -2782,16 +2821,23 @@ def _run_dedupe_pipeline(
     # column breaks the quality scanner). No-op when no matchkey carries a guard.
     _raw_guard_values: dict[str, dict[int, Any]] = {}
     _guard_cols = _collect_guard_columns(matchkeys)
-    if _guard_cols and hasattr(combined_lf, "collect_schema"):
+    if _guard_cols:
+        # Read through the arrow-native seam (to_frame + Column protocol), NOT
+        # polars-specific ``collect_schema`` / ``.select`` / ``[c]`` indexing:
+        # goldenmatch ships polars-free and combined_lf is a seam frame on the
+        # arrow path. ``.collect()`` is the standard lazy->eager (safe on both
+        # reps); an already-materialized seam frame has no ``collect``.
         try:
-            _schema_names = set(combined_lf.collect_schema().names())
-            _want = [c for c in sorted(_guard_cols) if c in _schema_names]
-            if _want and "__row_id__" in _schema_names:
-                _snap = combined_lf.select(["__row_id__", *_want]).collect()
-                _rids = _snap["__row_id__"].to_list()
+            from goldenmatch.core.frame import to_frame as _to_frame_guard
+            _src = combined_lf.collect() if hasattr(combined_lf, "collect") else combined_lf
+            _gf = _to_frame_guard(_src)
+            _names = set(_gf.columns)
+            _want = [c for c in sorted(_guard_cols) if c in _names]
+            if _want and "__row_id__" in _names:
+                _rids = _gf.column("__row_id__").to_list()
                 for c in _want:
-                    _raw_guard_values[c] = dict(zip(_rids, _snap[c].to_list()))
-        except Exception:  # noqa: BLE001 -- best-effort; guard falls back to prepared col
+                    _raw_guard_values[c] = dict(zip(_rids, _gf.column(c).to_list()))
+        except Exception:  # noqa: BLE001 -- best-effort; guarded pairs fail closed
             _raw_guard_values = {}
 
     # ── Attack C cache lookup (map_elements spec Tier 2): quality + transform
@@ -2852,6 +2898,45 @@ def _run_dedupe_pipeline(
                 if _af_fixes:
                     logger.info("Auto-fix: %d fixes applied", len(_af_fixes))
                 _frame = _tf_lane(_fixed_native)
+
+        # ── AUTO-CONFIG ON CLEANED DATA (if zero-config) ── arrow Frame lane
+        # Mirror the classic branch's Step 1.5b: build the config from the
+        # cleaned frame, then recompute matchkeys. Runs AFTER prep
+        # (quality -> transform -> auto_fix) and BEFORE validation rules /
+        # standardize / matchkeys / domain / precompute -- the SAME position
+        # the classic branch uses -- so every downstream stage sees the
+        # auto-configured `matchkeys`/`config`. `auto_configure_df` is dual-rep
+        # (accepts the seam `_frame` -> its `pa.Table` internally), keeping
+        # the lane polars-free. No prep-cache/eager-stage bridging is needed:
+        # this lane skips the classic prep cache entirely (correctness first),
+        # and run_dedupe_df never seeds `_eager_stages_done` for it.
+        if auto_config:
+            from goldenmatch.core.autoconfig import auto_configure_df
+            with stage("auto_configure"):
+                # Pass the seam Frame (not `_frame.native`): auto_configure_df
+                # is dual-rep and coerces via `to_frame` internally, and the
+                # Frame exposes `.height`/`.columns` like the classic branch's
+                # `pl.DataFrame`, so the profiling input is lane-consistent.
+                auto_cfg = auto_configure_df(
+                    _frame,
+                    llm_provider=auto_config_llm_provider,
+                    llm_auto=config.llm_auto,
+                )
+            config.matchkeys = auto_cfg.matchkeys
+            config.match_settings = auto_cfg.match_settings
+            config.blocking = auto_cfg.blocking
+            config.golden_rules = auto_cfg.golden_rules
+            config.llm_scorer = auto_cfg.llm_scorer
+            config.memory = auto_cfg.memory
+            # Propagate domain config so the domain-extraction stage below runs
+            # when auto_configure_df (via preflight Check 1) decided it should.
+            if auto_cfg.domain is not None:
+                config.domain = auto_cfg.domain
+            _propagate_autoconfig_markers(auto_cfg, config)
+            matchkeys = config.get_matchkeys()
+            logger.info(
+                "Auto-configured from cleaned data: %d matchkeys", len(matchkeys)
+            )
 
         if config.validation and config.validation.rules:
             with stage("validation"):
@@ -2921,6 +3006,15 @@ def _run_dedupe_pipeline(
             with stage("domain_extraction"):
                 _frame = _tf_lane(_apply_domain_extraction(_frame.native, config))
 
+        # ── Learning Memory: pre-scoring learner overlay (parity with the classic
+        # branch's memory_pre_overlay at ~3220). Operates on `matchkeys` +
+        # `memory_store` (opened once above the lane split), not the frame, so it
+        # sits here on the arrow lane before precompute. memory_post is already
+        # shared (below the lane merge), so this closes the last memory gap on the
+        # arrow lane -- arrow-lane migration phase 2.
+        with stage("memory_pre_overlay"):
+            _apply_memory_pre(memory_store, config, matchkeys)
+
         with stage("precompute_matchkey_transforms"):
             collected_frame = precompute_matchkey_transforms_frame(_frame, matchkeys)
         collected_df = collected_frame.native
@@ -2949,6 +3043,12 @@ def _run_dedupe_pipeline(
                 from goldenmatch.distributed.record_store import load_prepared_records
                 cached_disk = load_prepared_records(_prep_store, signature=disk_signature)
                 if cached_disk is not None:
+                    # record_store is arrow-native (returns a pa.Table); this
+                    # legacy prep-cache branch is polars-lazy, so coerce here.
+                    # (Migrating this whole branch onto the arrow lane is the
+                    # remaining prep-cache eviction step.) pl.from_arrow on a
+                    # Table always yields a DataFrame -> narrow for pyright.
+                    cached_disk = cast("pl.DataFrame", pl.from_arrow(cached_disk))
                     combined_lf = cached_disk.lazy()
                     # Seed in-memory cache so subsequent in-process iterations
                     # skip the disk read (RAM > DuckDB+Arrow latency).
@@ -3262,12 +3362,19 @@ def _run_dedupe_pipeline(
         and getattr(config, "semantic_blocking", None) is None
         and _mk0 is not None
         and getattr(_mk0, "type", None) == "probabilistic"
+        # Bench-dump needs the per-block candidate/emitted accounting the Arrow
+        # emit doesn't expose (same exclusion _fs_arrow_stream_eligible makes for
+        # B2b) -- fall back to the per-block loop when dumping pairs.
+        and os.environ.get("GOLDENMATCH_BENCH_DUMP_PAIRS") is None
         # _fs_use_bucket_route already excludes the true scale backends
         # (ray/duckdb/datafusion/chunked) while allowing backend "bucket"/None --
         # the routes B2c's Arrow emit + columnar cluster are valid for.
         and _fs_use_bucket_route(config, _mk0)
     )
-    _columnar_pairs_df: pl.DataFrame | None = None
+    # `_columnar_pairs_df` is a pa.Table on the B2c (FS) path (Arrow end-to-end)
+    # and a Polars frame on the weighted columnar path; consumers read it through
+    # the Frame seam. Typed broadly so neither lane is misannotated.
+    _columnar_pairs_df: Any = None
     _fs_columnar_sink: list = []
 
     # D2s-d1: collected_df is dual-rep from here down (Frame at D2s-d2);
@@ -3380,6 +3487,13 @@ def _run_dedupe_pipeline(
     _weighted_mks = [m for m in matchkeys if m.type == "weighted"]
     _last_weighted_mk = _weighted_mks[-1] if _weighted_mks else None
     _has_probabilistic_pass = any(m.type == "probabilistic" for m in matchkeys)
+    # Publish the raw guard-value snapshot so find_fuzzy_matches can build a
+    # field-level guard's per-pair mask off pre-prep values (module global; the
+    # block-scorer thread pool shares it). Every dedupe call overwrites this
+    # here, so a value never leaks meaningfully across runs; reset to {} right
+    # after the fuzzy stage below.
+    from goldenmatch.core import scorer as _scorer_mod
+    _scorer_mod._active_raw_guard_values = _raw_guard_values
     with stage("fuzzy_scoring"):
         for mk in matchkeys:
             if mk.type == "weighted":
@@ -3399,7 +3513,11 @@ def _run_dedupe_pipeline(
                 # memory on Linux runners (7 consecutive 5M bench runs
                 # hung at 62.99 GB RSS plateau before reaching real
                 # scoring).
-                if _use_bucket_scorer(config, collected_df):
+                # A field-level guard drops a field from the weighted average
+                # per pair -- implemented in find_fuzzy_matches (the slow path),
+                # so route such matchkeys off the vectorized bucket scorer.
+                _mk_field_guarded = any(f.guard for f in mk.fields)
+                if _use_bucket_scorer(config, collected_df) and not _mk_field_guarded:
                     from goldenmatch.backends.score_buckets import score_buckets
                     pairs = score_buckets(
                         collected_df,
@@ -3582,6 +3700,10 @@ def _run_dedupe_pipeline(
                     )
                 all_pairs.extend(pairs)
                 fuzzy_pair_count += len(pairs)
+
+    # Field-level guards consumed the raw snapshot above; clear the module global
+    # so it never lingers past this run.
+    _scorer_mod._active_raw_guard_values = {}
 
     record_metrics({
         "fuzzy_pair_count": fuzzy_pair_count,
@@ -3938,12 +4060,15 @@ def _run_dedupe_pipeline(
             auto_split = config.golden_rules.auto_split
         split_edge_budget = getattr(config.golden_rules, "split_edge_budget", None)
 
-    record_metric(
-        "scored_pair_count",
-        _columnar_pairs_df.height
-        if (_use_columnar and _columnar_pairs_df is not None)
-        else len(all_pairs),
-    )
+    if _use_columnar and _columnar_pairs_df is not None:
+        # `_columnar_pairs_df` is a pa.Table on the B2c (FS) path and a Polars
+        # frame on the weighted columnar path -- read the row count through the
+        # Frame seam so it works for both without re-introducing polars.
+        from goldenmatch.core.frame import to_frame as _tf_cnt
+        _scored_pair_count = _tf_cnt(_columnar_pairs_df).height
+    else:
+        _scored_pair_count = len(all_pairs)
+    record_metric("scored_pair_count", _scored_pair_count)
     # SP-B/SP-C: frames-out path. Build the two-frame ClusterFrames
     # representation and consume it DIRECTLY for GOLDEN + STATS + DUPES + REPORT
     # below (no dict). The legacy `clusters` dict is rebuilt LAZILY via
@@ -3964,9 +4089,27 @@ def _run_dedupe_pipeline(
     # possibly-unbound.
     clusters: dict[int, dict] = {}
     with stage("cluster"):
-        if _use_columnar and _columnar_pairs_df is not None:
-            # Phase A columnar path: same clusters as build_clusters on the
-            # equivalent list (parity: tests/test_columnar_pipeline_parity.py).
+        if _use_fs_columnar and _columnar_pairs_df is not None:
+            # B2c frames-out: feed the columnar Arrow pair table STRAIGHT into the
+            # frames-out clustering (native arrow kernel -> assignments/metadata),
+            # the SAME path the list branch takes. Skips build_clusters_columnar's
+            # legacy dict build -- the 16M-tuple list rebuilt twice + the
+            # per-cluster and 16M-key pair_scores dicts (the measured ~40s +
+            # peak-RSS bulk of the `cluster` stage at 5M). `_columnar_pairs_df` is
+            # a pa.Table here (Arrow end-to-end, no polars), so backend="arrow".
+            # Downstream consumes `cluster_frames` via the lazy-dict machinery
+            # identically to the else branch (parity: test_fs_columnar_cluster_1811).
+            cluster_frames = build_cluster_frames(
+                _columnar_pairs_df, all_ids,
+                max_cluster_size=max_cluster_size,
+                weak_cluster_threshold=weak_threshold,
+                auto_split=auto_split,
+                backend="arrow",
+                split_edge_budget=split_edge_budget,
+            )
+        elif _use_columnar and _columnar_pairs_df is not None:
+            # Weighted columnar pipeline (Polars, via score_blocks_columnar):
+            # legacy columnar dict path, unchanged.
             clusters = build_clusters_columnar(
                 _columnar_pairs_df, all_ids=all_ids,
                 max_cluster_size=max_cluster_size,
@@ -4010,8 +4153,21 @@ def _run_dedupe_pipeline(
             return None
         if not _pair_score_view_cache:
             from goldenmatch.core.cluster_pairscores import ClusterPairScores
+            _raw_pairs = all_pairs
+            if not _raw_pairs and _use_fs_columnar and _columnar_pairs_df is not None:
+                # B2c: the raw scored pairs live in the Arrow table, not
+                # all_pairs (which B2c never builds). Materialize (a, b, score)
+                # from it HERE -- only reached when a pair-score consumer
+                # (confidence_majority survivorship / lineage provenance) actually
+                # needs them; the fast-eligible golden path never calls this, so
+                # the O(pairs) list is NOT built on the hot path. Without this the
+                # frames-out B2c golden would silently degrade confidence_majority
+                # to count-majority (regression vs the old dict-path B2c, which
+                # carried pair_scores).
+                _d = _columnar_pairs_df.to_pydict()
+                _raw_pairs = list(zip(_d["id_a"], _d["id_b"], _d["score"]))
             _pair_score_view_cache.append(
-                ClusterPairScores.from_frames(cluster_frames.assignments, all_pairs)
+                ClusterPairScores.from_frames(cluster_frames.assignments, _raw_pairs)
             )
         return _pair_score_view_cache[0]
 
@@ -4045,19 +4201,18 @@ def _run_dedupe_pipeline(
             # cluster -- Python folds over seam columns, byte-identical).
             from goldenmatch.core.frame import to_frame
 
-            _m = to_frame(cluster_frames.metadata)
-            keep = [
-                c
-                for c, n, o in zip(
-                    _m.column("cluster_id").to_list(),
-                    _m.column("size").to_list(),
-                    _m.column("oversized").to_list(),
-                )
-                if n > 1 and not o
-            ]
+            # Columnar filter (no Python loop over 2.64M metadata rows): keep
+            # multi-member (size > 1), non-oversized clusters via seam-native
+            # ops; only the bounded kept-cid + final member_id lists materialize.
+            _m = to_frame(cluster_frames.metadata).with_gt_column(
+                "size", 1, "__multi__"
+            )
+            _kept = _m.filter_mask(_m.column("__multi__")).filter_eq(
+                "oversized", False
+            )
             return (
                 to_frame(cluster_frames.assignments)
-                .filter_in("cluster_id", keep)
+                .filter_in("cluster_id", _kept.column("cluster_id").to_list())
                 .column("member_id")
                 .to_list()
             )
@@ -4076,12 +4231,14 @@ def _run_dedupe_pipeline(
         from goldenmatch.core.frame import to_frame as _tf_d4
 
         _m = _tf_d4(cluster_frames.metadata)
-        _m_sizes = _m.column("size").to_list()
-        _m_over = _m.column("oversized").to_list()
+        # Counts via seam-native aggregates -- stays columnar, nothing crosses to
+        # Python per-row: `oversized` is a bool column (Column.sum() counts True);
+        # `multi` is a derived `size > 1` bool column, summed the same way.
+        _multi = _m.with_gt_column("size", 1, "__multi__").column("__multi__").sum()
         record_metrics({
             "cluster_count": _m.height,
-            "multi_member_cluster_count": sum(1 for n in _m_sizes if n > 1),
-            "oversized_cluster_count": sum(1 for o in _m_over if o),
+            "multi_member_cluster_count": int(_multi or 0),
+            "oversized_cluster_count": int(_m.column("oversized").sum() or 0),
         })
     else:
         record_metrics({
@@ -4192,6 +4349,16 @@ def _run_dedupe_pipeline(
                     "GoldenCheck quality weighting: %d penalized cell(s)",
                     len(quality_scores),
                 )
+            # Bench diagnostic: distinguish None (weighting off / no members) from
+            # an EMPTY {} (weighting on, zero penalized cells) from a real signal.
+            # An empty-but-non-None dict still forces golden off the fast columnar
+            # path (_polars_native_eligible checks `is not None`), so this count is
+            # the routing signal we want to see in the profile.
+            from goldenmatch.core.bench import record_metric as _rec_qs
+            _rec_qs(
+                "golden_quality_scores_len",
+                -1 if quality_scores is None else len(quality_scores),
+            )
 
     # Golden-record construction was the hidden N²-shaped stage that the
     # bench harness surfaced at 11K rows (36% of wall before this rewrite):
@@ -4238,10 +4405,11 @@ def _run_dedupe_pipeline(
                 )
                 from goldenmatch.core.frame import to_frame as _tf_golden
 
-                _golden_source = _tf_golden(collected_df).select([
-                    c for c in _collected_frame.columns
-                    if not any(c.startswith(p) for p in _internal_prefixes)
-                ]).native
+                with stage("golden_slim_source"):
+                    _golden_source = _tf_golden(collected_df).select([
+                        c for c in _collected_frame.columns
+                        if not any(c.startswith(p) for p in _internal_prefixes)
+                    ]).native
             # Source per-cluster pair scores from the view so the slow builder's
             # confidence_majority survivorship weights by edge confidence instead
             # of degrading to count-majority (the frames-out cluster dict carries
@@ -4252,13 +4420,21 @@ def _run_dedupe_pipeline(
                 and _polars_native_eligible(golden_rules, quality_scores=quality_scores)
             )
             _frames_pair_scores: dict[int, dict[tuple[int, int], float]] | None = None
-            if not _frames_fast_eligible:
-                _psv = _pair_score_view()
-                if _psv is not None:
-                    _frames_pair_scores = {
-                        cid: {(a, b): s for (a, b, s) in edges}
-                        for cid, edges in _psv.iter_clusters()
-                    }
+            # Only confidence_majority survivorship consumes pair scores; on any
+            # other strategy (the default most_complete) this {cluster:{(a,b):s}}
+            # dict over every scored pair (~10.7M at 5M) is built, passed to the
+            # builder, and never read -- measured at 32.8s / 71% of the golden
+            # stage. Gate the build so the default config skips it entirely
+            # (byte-identical: the builder + kernel both accept None here).
+            from goldenmatch.core.golden import _config_uses_confidence_majority
+            if not _frames_fast_eligible and _config_uses_confidence_majority(golden_rules):
+                with stage("golden_pair_score_view_build"):
+                    _psv = _pair_score_view()
+                    if _psv is not None:
+                        _frames_pair_scores = {
+                            cid: {(a, b): s for (a, b, s) in edges}
+                            for cid, edges in _psv.iter_clusters()
+                        }
             # Fused-golden routing (spec 2026-07-09, default-on): try the Arrow-
             # native kernel on the SAME multi_df the classic from-frames builder
             # assembles internally (via _multi_df_from_frames), so a non-None
@@ -4269,7 +4445,10 @@ def _run_dedupe_pipeline(
             _fused_golden_df = None
             if not _frames_fast_eligible:
                 from goldenmatch.core.golden import _multi_df_from_frames
-                _fused_multi_df = _multi_df_from_frames(_golden_source, cluster_frames)
+                # Bench diagnostic: the assignments->source join that assembles
+                # multi_df, timed apart from the fused kernel it feeds.
+                with stage("golden_multi_df_join"):
+                    _fused_multi_df = _multi_df_from_frames(_golden_source, cluster_frames)
                 _fused_golden_df = _try_fused_golden(
                     _fused_multi_df,
                     golden_rules,
@@ -4436,6 +4615,15 @@ def _run_dedupe_pipeline(
                                     cluster_pair_scores=cluster_pair_scores,
                                 )
 
+    # Bench diagnostic: which golden builder actually ran. golden_fused_used
+    # True => the Arrow-native fused kernel produced the frame; else a non-empty
+    # golden_records means the slow per-cluster list[dict] batch builder ran
+    # (fused declined / fast-columnar ineligible). Disambiguates the golden-stage
+    # wall for the quality-weighting screw investigation.
+    from goldenmatch.core.bench import record_metric as _rec_golden
+    _rec_golden("golden_fused_used", bool(golden_fused_used))
+    _rec_golden("golden_records_built", len(golden_records))
+
     # Build golden DataFrame (slow path: walks the list[dict] returned by
     # build_golden_records_batch. The fast path above already populated
     # golden_df directly and left golden_records empty, so this branch is
@@ -4598,15 +4786,17 @@ def _run_dedupe_pipeline(
             # the cap -- the last accumulator #1811 left. Clusters/golden are
             # already built off _columnar_pairs_df, so shedding only drops the
             # steward-facing raw pair list, never silently (scored_pairs_shed).
-            from goldenmatch.core.pairs import dedup_pairs_max_score_arrow
-            _scored_df = dedup_pairs_max_score_arrow(_columnar_pairs_df)
+            from goldenmatch.core.pairs import dedup_pairs_max_score_arrow_table
+            _scored_tbl = dedup_pairs_max_score_arrow_table(_columnar_pairs_df)
             _cap = _fs_scored_pairs_cap()
-            if _cap and _scored_df.height > _cap:
+            if _cap and _scored_tbl.num_rows > _cap:
                 scored_pairs = []
                 scored_pairs_shed = True
             else:
-                from goldenmatch.core.scorer import pairs_df_to_list
-                scored_pairs = pairs_df_to_list(_scored_df)
+                _sd = _scored_tbl.to_pydict()
+                scored_pairs = list(
+                    zip(_sd["id_a"], _sd["id_b"], _sd["score"])
+                )
         else:
             # Weighted columnar lane -- unchanged (byte-identical).
             from goldenmatch.core.scorer import pairs_df_to_list
@@ -4624,10 +4814,18 @@ def _run_dedupe_pipeline(
     if cluster_frames is not None:
         from goldenmatch.core.frame import to_frame as _tf_cs
 
-        _sizes = _tf_cs(cluster_frames.metadata).column("size").to_list()
-        _multi_member = sum(1 for s in _sizes if s > 1)
-        _matched_records = sum(s for s in _sizes if s > 1)
+        # Seam-native (columnar, no per-row Python): multi-member count = sum of
+        # the `size > 1` bool column; matched records = sum of `size` over the
+        # multi-member rows. `_n_clusters` (metadata height) feeds the lazy
+        # `results["clusters"]` so `len()` never forces the dict build.
+        _mf = _tf_cs(cluster_frames.metadata).with_gt_column("size", 1, "__multi__")
+        _n_clusters = _mf.height
+        _multi_member = int(_mf.column("__multi__").sum() or 0)
+        _matched_records = int(
+            _mf.filter_mask(_mf.column("__multi__")).column("size").sum() or 0
+        )
     else:
+        _n_clusters = len(clusters)
         _multi_member = sum(1 for c in clusters.values() if c.get("size", 0) > 1)
         _matched_records = sum(
             c.get("size", 0) for c in clusters.values() if c.get("size", 0) > 1
@@ -4653,7 +4851,7 @@ def _run_dedupe_pipeline(
         "clusters": (
             _tc_clusters
             if _tc_clusters is not None
-            else LazyClusterDict(_clusters_dict)
+            else LazyClusterDict(_clusters_dict, count=_n_clusters)
             if cluster_frames is not None
             else _clusters_dict()
         ),
@@ -4688,6 +4886,37 @@ def _run_dedupe_pipeline(
         if memory_store is not None:
             memory_store.close()
     return results
+
+
+def _arrow_lane_supported(config: Any, auto_config: bool) -> bool:
+    """Gate for the polars-input eviction: True only when the arrow Frame lane
+    fully + correctly implements the requested flow, so a ``pl.DataFrame`` input
+    can be routed to it (fixing the classic-lazy over-merge). The arrow lane is a
+    PARTIAL port; each ``return False`` below is a consumer not yet on the lane,
+    kept on the classic (polars) path until it is. As a flow lands on the arrow
+    lane, drop its guard here.
+
+    Un-ported flows:
+    - prep memory store: ``config.memory`` correction/threshold learning is
+      classic-only (memory e2e).
+    - prepared-record store / partitioned block scoring: the disk-backed prep
+      store + the polars-native bucketed-materialize assembly.
+
+    Ported (guard dropped):
+    - auto-config: the arrow Frame lane now calls ``auto_configure_df`` on the
+      cleaned seam frame (Phase 1), mirroring the classic branch. NOTE the
+      memory guard below is evaluated against the CALLER's config (pre
+      auto-config), so a zero-config caller with ``config.memory is None``
+      evicts to the arrow lane; auto-config only produces a memory-enabled
+      config when ``llm_auto`` is set (then memory learning is a Phase-2 gap on
+      this lane, not applied).
+    """
+    del auto_config  # auto-config is now supported on the arrow lane
+    if getattr(config, "prepared_record_store", False):
+        return False
+    if getattr(config, "partitioned_block_scoring", False):
+        return False
+    return True
 
 
 def run_dedupe_df(
@@ -4755,14 +4984,28 @@ def run_dedupe_df(
     frame = frame.with_literal_column("__source__", source_name)
     frame = frame.ensure_row_ids(offset=0)
 
-    # Back-compat routing: a polars input keeps the classic polars-LazyFrame
-    # path (byte-identical to the pre-flip `lf.collect().lazy()` -- the seam ops
-    # above are the verbatim polars twins); an arrow input flows through as a
-    # seam Frame so `_run_dedupe_pipeline`'s arrow lane (the
-    # `is_polars_lazyframe` router) carries it polars-free.
-    combined_lf: Any = (
-        frame.native.lazy() if isinstance(frame, _PolarsFrame) else frame
-    )
+    # Evict the classic-lazy polars path for the flows the arrow Frame lane fully
+    # supports: a polars input is converted to an arrow seam Frame so it runs the
+    # SAME correct, polars-free arrow lane as a pa.Table input. The classic-lazy
+    # path OVER-MERGED at scale -- ground-truth pairwise precision 0.013
+    # (transitive-closure blowup on a 75x-larger candidate set) vs 0.98 on the
+    # arrow lane for identical data (bench-fs-single-mk-probe, 5M). `cast_all_str()`
+    # above makes the pl->arrow conversion clean (nulls preserved).
+    # GATED eviction: the arrow lane is a PARTIAL port -- it does not yet implement
+    # auto-config, the prep memory store, or partitioned block scoring. Decline
+    # (keep polars input on the classic lane) for those so they stay correct; each
+    # is a tracked port target that re-opens as its consumer lands on the lane.
+    # GOLDENMATCH_FRAME_LANE=0 restores the classic shim (revert switch).
+    if isinstance(frame, _PolarsFrame):
+        _evict_ok = (
+            os.environ.get("GOLDENMATCH_FRAME_LANE", "1") != "0"
+            and _arrow_lane_supported(config, auto_config)
+        )
+        combined_lf: Any = (
+            _to_frame(frame.to_arrow()) if _evict_ok else frame.native.lazy()
+        )
+    else:
+        combined_lf = frame
 
     # Phase 2 stopgap: when prepared_record_store=True and no caller-provided
     # _prep_store (Phase 3's controller will supply one), open our own store

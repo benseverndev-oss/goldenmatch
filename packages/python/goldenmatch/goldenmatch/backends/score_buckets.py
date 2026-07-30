@@ -150,9 +150,8 @@ def _vec_field_matrix(values: list, scorer_name: str):
     scorers in ``_VEC_SUPPORTED`` reach here.
     """
     import numpy as np
-    from rapidfuzz.distance import JaroWinkler, Levenshtein
-    from rapidfuzz.fuzz import token_sort_ratio
-    from rapidfuzz.process import cdist
+
+    from goldenmatch.core import strsim
 
     if scorer_name == "soundex_match":
         from goldenmatch.core.scorer import _soundex_score_matrix
@@ -172,18 +171,18 @@ def _vec_field_matrix(values: list, scorer_name: str):
         # ensemble vec form agrees with `_ensemble_score_single`'s canonical
         # soundex empty-code-guard semantics (garbage/empty never matches).
         from goldenmatch.core.scorer import _soundex_score_matrix
-        jw = np.asarray(cdist(values, values, scorer=JaroWinkler.similarity, dtype=np.float64))
-        ts = np.asarray(cdist(values, values, scorer=token_sort_ratio, dtype=np.float64)) / 100.0
+        jw = np.asarray(strsim.pure_field_matrix(values, "jaro_winkler", "float64"))
+        ts = np.asarray(strsim.pure_field_matrix(values, "token_sort", "float64")) / 100.0
         sx = _soundex_score_matrix(values).astype(np.float64) * 0.8
         return np.maximum(np.maximum(jw, ts), sx)
     if scorer_name == "jaro_winkler":
-        return np.asarray(cdist(values, values, scorer=JaroWinkler.similarity, dtype=np.float64))
+        return np.asarray(strsim.pure_field_matrix(values, "jaro_winkler", "float64"))
     if scorer_name == "levenshtein":
         return np.asarray(
-            cdist(values, values, scorer=Levenshtein.normalized_similarity, dtype=np.float64)
+            strsim.pure_field_matrix(values, "levenshtein", "float64")
         )
     # token_sort: rapidfuzz returns 0-100; per-pair divides by 100.0 (same op order).
-    return np.asarray(cdist(values, values, scorer=token_sort_ratio, dtype=np.float64)) / 100.0
+    return np.asarray(strsim.pure_field_matrix(values, "token_sort", "float64")) / 100.0
 
 
 def _score_block_vec(
@@ -601,14 +600,14 @@ def _resolve_score_pair_callable(
     the final dedupe output was byte-identical with it OFF.
     """
     if scorer_name == "jaro_winkler":
-        from rapidfuzz.distance import JaroWinkler
-        return JaroWinkler.similarity
+        from goldenmatch.core import strsim
+        return strsim.jaro_winkler_similarity
     if scorer_name == "levenshtein":
-        from rapidfuzz.distance import Levenshtein
-        return Levenshtein.normalized_similarity
+        from goldenmatch.core import strsim
+        return strsim.levenshtein_normalized_similarity
     if scorer_name == "token_sort":
-        from rapidfuzz.fuzz import token_sort_ratio
-        return lambda a, b: token_sort_ratio(a, b) / 100.0
+        from goldenmatch.core import strsim
+        return lambda a, b: strsim.token_sort_ratio(a, b) / 100.0
     if scorer_name == "exact":
         return lambda a, b: 1.0 if a == b else 0.0
     if scorer_name == "soundex_match":
@@ -1890,6 +1889,12 @@ def score_buckets(
         # fragments glibc's malloc arena on Linux (1.4 GB / 30s RSS climb).
         from goldenmatch.core.frame import to_frame as _tf
 
+        # BUCKET_DEBUG: the probabilistic (FS) worker records the same
+        # prep/kernel/post split as the fast path (_dbg_rows) -- the fast-path
+        # _dbg mechanism (thread-safe list) is used, NOT bench.stage(), because
+        # workers run in a ThreadPoolExecutor whose threads don't inherit the
+        # recorder ContextVar. `kernel` here is score_probabilistic_bucket_native.
+        _t_prep0 = time.perf_counter() if _bucket_debug else 0.0
         sorted_frame = _tf(bucket_df).sort(["__block_key__"])
         sorted_df = sorted_frame.native
         # Pre-materialized run sizes (seam run_lengths == the old
@@ -1982,6 +1987,10 @@ def score_buckets(
                 score_probabilistic_bucket_native,
             )
 
+            # prep = entry through the keep-mask filter; kernel = the native
+            # score call(s); post = source/target pair filters (BUCKET_DEBUG).
+            _prep_s = (time.perf_counter() - _t_prep0) if _bucket_debug else 0.0
+            _t_kern0 = time.perf_counter() if _bucket_debug else 0.0
             pairs: list[tuple[int, int, float]] = []
             local_blocks = 0
             if kept_size_list:
@@ -2005,7 +2014,12 @@ def score_buckets(
                         )
                         local_blocks += 1
                 offset += s
+            _kern_s = (time.perf_counter() - _t_kern0) if _bucket_debug else 0.0
+            _t_post0 = time.perf_counter() if _bucket_debug else 0.0
             if not pairs and local_blocks == 0:
+                if _bucket_debug:
+                    with _dbg_lock:
+                        _dbg_rows.append((_prep_s, _kern_s, 0.0, local_blocks, 0))
                 return [], 0
             # Same post-filters as the per-block loop below (the native kernel
             # doesn't know about source_lookup / target_ids).
@@ -2019,6 +2033,10 @@ def score_buckets(
                     (a, b, s) for a, b, s in pairs
                     if (a in target_ids) != (b in target_ids)
                 ]
+            if _bucket_debug:
+                _post_s = time.perf_counter() - _t_post0
+                with _dbg_lock:
+                    _dbg_rows.append((_prep_s, _kern_s, _post_s, local_blocks, len(pairs)))
             return pairs, local_blocks
 
         def _score_block_frame(block_df) -> list[tuple[int, int, float]] | None:
@@ -2463,11 +2481,36 @@ def score_buckets(
                 f"{n_calls} calls / {n_blocks} blocks / {n_pairs} pairs "
                 f"(set GOLDENMATCH_BUCKET_DEBUG=0 to silence):\n"
                 f"  prep   (sort+group_by+to_arrow): {prep_s:7.3f}s ({_pct(prep_s):5.1f}%)\n"
-                f"  kernel (score_block_pairs_arrow): {kern_s:7.3f}s ({_pct(kern_s):5.1f}%)\n"
+                f"  kernel (native score_block/bucket): {kern_s:7.3f}s ({_pct(kern_s):5.1f}%)\n"
                 f"  post   (match-mode filter):       {post_s:7.3f}s ({_pct(post_s):5.1f}%)\n"
                 f"  total in-worker: {tot_s:.3f}s; slowest single kernel call: {slowest[1]:.3f}s",
                 flush=True,
             )
+            # Split the `kernel` bar into the Rust call (compute + pyo3
+            # Vec<tuple> conversion) vs the Python pair-marshal loop
+            # (`[(a,b,round(float(s),4)) ...]`), recorded in probabilistic.py.
+            from goldenmatch.core.probabilistic import _FS_NATIVE_DBG as _fnd
+
+            _pre = _fnd["prep_s"]
+            _nat = _fnd["native_s"]
+            _mar = _fnd["marshal_s"]
+            _kt = _pre + _nat + _mar
+            if _kt > 0:
+                def _kp(x: float) -> float:
+                    return 100.0 * x / _kt
+                print(
+                    "[score_buckets][DEBUG] kernel split "
+                    f"({_fnd['n_calls']} native calls, {_fnd['n_single_block']} "
+                    f"single-block / {_fnd['n_pairs']} pairs):\n"
+                    f"  input-prep (row_ids+field_arrays+const rebuild): "
+                    f"{_pre:7.3f}s ({_kp(_pre):5.1f}%)  "
+                    f"[single-block share {_fnd['single_block_prep_s']:.3f}s]\n"
+                    f"  rust (mod.score_block_pairs_fs* incl pyo3 out):  "
+                    f"{_nat:7.3f}s ({_kp(_nat):5.1f}%)\n"
+                    f"  out-marshal (Python round(float()) loop):        "
+                    f"{_mar:7.3f}s ({_kp(_mar):5.1f}%)",
+                    flush=True,
+                )
     if _arrow:
         import pyarrow as _pa
 

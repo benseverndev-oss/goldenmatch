@@ -1,41 +1,256 @@
+"""Date/datetime transforms — backed by an OWNED deterministic parser.
+
+The date family used to lean on two things: ``python-dateutil`` (per-row fuzzy
+parse) and a Polars ``str.to_date`` vectorized fast path. Both are gone. The
+owned parser (``goldenflow-core::dates`` in Rust; the byte-identical pure-Python
+fallback below) is now the single source of truth — no dateutil at runtime, no
+Polars dependence. See ``docs/design/2026-07-06-goldenflow-owned-kernel-
+boundary.md`` and the module docs in ``dates.rs`` for the full contract.
+
+Supported formats (byte-identical to
+``dateutil.parser.parse(v, default=datetime(2000,1,1)).date()`` on the covered
+set): numeric ``%Y-%m-%d`` / ``%Y/%m/%d`` / ``%m/%d/%Y`` / ``%m-%d-%Y``
+(ambiguous numeric is MONTH-FIRST, flipping to day-first when the month field
+> 12); English month names (abbrev + full, case-insensitive); ``Month Year``
+partials (day -> 1); year-only ``YYYYY`` -> Jan 1; and, for datetimes, a trailing
+24-hour ``HH:MM`` / ``HH:MM:SS`` after a space or ``T``.
+
+Deterministic rules (some INTENTIONALLY diverge from dateutil, documented):
+- Missing month/day -> 1; missing time -> 00:00:00 (the ``_DEFAULT_DATE`` policy).
+- 2-digit years use a deterministic POSIX pivot (00-68 -> 2000-2068,
+  69-99 -> 1969-1999) instead of dateutil's non-deterministic ``now()``-relative
+  mapping.
+- A datetime-bearing string on a date-only transform TRUNCATES to the date
+  (``"2024-01-20 14:05:00" -> 2024-01-20``), matching dateutil -- datetime values
+  in a date column are common and standardizing them is the point.
+- Anything outside the supported set -> ``None`` (the value passes through
+  unchanged). dateutil fuzz-parses the exotic tail (bare month names, AM/PM
+  times, weekday/ordinal words); we don't.
+- Real calendar validation (month 1-12, day-in-month, leap-aware).
+"""
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
-from dateutil import parser as dateutil_parser
-
 from goldenflow._polars_lazy import pl
 from goldenflow.transforms import register_transform
-from goldenflow.transforms._fastpath import _V, apply_with_residual
 
-# DETERMINISTIC fill for date fields absent from the input (Phase 4d / "own the
-# source of truth"). dateutil's default fills missing fields from `datetime.now()`,
-# so `parse("March 1995")` returned a DIFFERENT day on every run -- a latent
-# non-determinism bug, and inconsistent with GoldenFlow's own year-string fast path
-# (which already fills month/day with 1: "1995" -> "1995-01-01"). We pin the fill to
-# **month/day = 1, time = 00:00:00** so partial dates are deterministic AND agree
-# with the fast path. Only partial-date inputs (which were non-deterministic anyway)
-# change; fully-specified dates are unaffected. This is what makes the date family
-# byte-reproducible and therefore portable to the native/columnar path.
+# DETERMINISTIC fill policy anchor (kept as documentation + a stable import for
+# tests): date fields absent from the input fill to month/day = 1, time =
+# 00:00:00. dateutil's default filled missing fields from ``datetime.now()``, so
+# ``parse("March 1995")`` returned a DIFFERENT day on every run. Pinning the fill
+# is what makes the date family byte-reproducible and portable to the owned
+# kernel / columnar / native path.
 _DEFAULT_DATE = datetime(2000, 1, 1, 0, 0, 0)
 
 
+# --------------------------------------------------------------------------- #
+# Owned pure-Python parser — a byte-identical fallback for the goldenflow-core
+# Rust kernel (``dates.rs``). Mirrors that contract EXACTLY. Native/wasm arrow
+# wiring is a follow-up; today this pure path is the runtime, dateutil-free and
+# Polars-free. Keep the two in lockstep (the cargo tests + the Python parity
+# test are the guard).
+# --------------------------------------------------------------------------- #
+_MONTHS: dict[str, int] = {
+    "jan": 1, "january": 1,
+    "feb": 2, "february": 2,
+    "mar": 3, "march": 3,
+    "apr": 4, "april": 4,
+    "may": 5,
+    "jun": 6, "june": 6,
+    "jul": 7, "july": 7,
+    "aug": 8, "august": 8,
+    "sep": 9, "sept": 9, "september": 9,
+    "oct": 10, "october": 10,
+    "nov": 11, "november": 11,
+    "dec": 12, "december": 12,
+}
+
+
+def _ascii_digits(s: str) -> bool:
+    return len(s) > 0 and all("0" <= c <= "9" for c in s)
+
+
+def _month_from_name(tok: str) -> int | None:
+    return _MONTHS.get(tok.rstrip(".").lower())
+
+
+def _parse_day_token(tok: str) -> int | None:
+    if not (0 < len(tok) <= 2) or not _ascii_digits(tok):
+        return None
+    return int(tok)
+
+
+def _parse_year_token(tok: str) -> int | None:
+    if not (0 < len(tok) <= 4) or not _ascii_digits(tok):
+        return None
+    v = int(tok)
+    if len(tok) == 2:  # POSIX pivot
+        return 2000 + v if v <= 68 else 1900 + v
+    return v
+
+
+def _is_leap(y: int) -> bool:
+    return (y % 4 == 0 and y % 100 != 0) or y % 400 == 0
+
+
+_DIM = {1: 31, 3: 31, 5: 31, 7: 31, 8: 31, 10: 31, 12: 31, 4: 30, 6: 30, 9: 30, 11: 30}
+
+
+def _days_in_month(y: int, m: int) -> int:
+    if m == 2:
+        return 29 if _is_leap(y) else 28
+    return _DIM.get(m, 0)
+
+
+def _valid_ymd(y: int, m: int, d: int) -> bool:
+    return 1 <= m <= 12 and 1 <= d <= _days_in_month(y, m)
+
+
+def _finish(y: int, m: int, d: int) -> tuple[int, int, int] | None:
+    return (y, m, d) if _valid_ymd(y, m, d) else None
+
+
+def _interpret_numeric(g1: str, g2: str, g3: str) -> tuple[int, int, int] | None:
+    if len(g1) == 4:
+        # ISO: a 4-digit first group anchors year-first (Y, M, D).
+        y, m, d = int(g1), int(g2), int(g3)
+    else:
+        # US month-first: year is the last group; flip to day-first when the
+        # month field > 12 and the day field <= 12 (dateutil disambiguation).
+        y_opt = _parse_year_token(g3)
+        if y_opt is None:
+            return None
+        y = y_opt
+        a, b = int(g1), int(g2)
+        (m, d) = (b, a) if (a > 12 and b <= 12) else (a, b)
+    return _finish(y, m, d)
+
+
+def _parse_numeric(s: str) -> tuple[int, int, int] | None:
+    for sep in ("-", "/"):
+        parts = s.split(sep)
+        if len(parts) == 3 and all(0 < len(p) <= 4 and _ascii_digits(p) for p in parts):
+            r = _interpret_numeric(parts[0], parts[1], parts[2])
+            if r is not None:
+                return r
+    return None
+
+
+def _parse_month_name(s: str) -> tuple[int, int, int] | None:
+    toks = [t for t in (tok.rstrip(",") for tok in s.split()) if t]
+    n = len(toks)
+    if n == 3:
+        m = _month_from_name(toks[0])
+        if m is not None:  # "Mon Day Year"
+            d = _parse_day_token(toks[1])
+            y = _parse_year_token(toks[2])
+            return _finish(y, m, d) if (d is not None and y is not None) else None
+        m = _month_from_name(toks[1])
+        if m is not None:  # "Day Mon Year"
+            d = _parse_day_token(toks[0])
+            y = _parse_year_token(toks[2])
+            return _finish(y, m, d) if (d is not None and y is not None) else None
+        return None
+    if n == 2:
+        m = _month_from_name(toks[0])
+        if m is not None:  # "Mon Year" -> day 1
+            y = _parse_year_token(toks[1])
+            return _finish(y, m, 1) if y is not None else None
+        return None
+    return None
+
+
+def _parse_date_ymd(s: str) -> tuple[int, int, int] | None:
+    s = s.strip()
+    if not s:
+        return None
+    if len(s) == 4 and _ascii_digits(s):  # year-only
+        return (int(s), 1, 1)
+    r = _parse_numeric(s)
+    if r is not None:
+        return r
+    return _parse_month_name(s)
+
+
+def _looks_like_time(tok: str) -> bool:
+    parts = tok.split(":")
+    return len(parts) in (2, 3) and all(
+        0 < len(p) <= 2 and _ascii_digits(p) for p in parts
+    )
+
+
+def _parse_time(t: str) -> tuple[int, int, int] | None:
+    parts = t.split(":")
+    if len(parts) not in (2, 3):
+        return None
+    if any(not (0 < len(p) <= 2) or not _ascii_digits(p) for p in parts):
+        return None
+    hh, mm = int(parts[0]), int(parts[1])
+    ss = int(parts[2]) if len(parts) == 3 else 0
+    return (hh, mm, ss) if hh < 24 and mm < 60 and ss < 60 else None
+
+
+def _peel_time(s: str) -> tuple[str, str | None]:
+    n = len(s)
+    # ISO 'T' flanked by ASCII digits separates date and time.
+    for i in range(n):
+        if s[i] == "T" and 0 < i < n - 1 and s[i - 1] in "0123456789" and s[i + 1] in "0123456789":
+            return (s[:i], s[i + 1:])
+    # Trailing whitespace-delimited time token.
+    last = -1
+    for i, ch in enumerate(s):
+        if ch.isspace():
+            last = i
+    if last >= 0:
+        head, tail = s[:last], s[last + 1:]
+        if _looks_like_time(tail):
+            return (head.rstrip(), tail)
+    return (s, None)
+
+
+def _parse_datetime_ymdhms(s: str) -> tuple[int, int, int, int, int, int] | None:
+    s = s.strip()
+    if not s:
+        return None
+    date_part, time_part = _peel_time(s)
+    dr = _parse_date_ymd(date_part)
+    if dr is None:
+        return None
+    if time_part is None:
+        hms: tuple[int, int, int] | None = (0, 0, 0)
+    else:
+        hms = _parse_time(time_part)
+        if hms is None:
+            return None
+    return (*dr, *hms)
+
+
 def _parse_date(val: str | None) -> date | None:
+    """Owned deterministic parse to a :class:`datetime.date` (``None`` on the
+    exotic tail / junk). The single primitive every date transform derives from.
+
+    Accepts a datetime-bearing string and TRUNCATES to the date (e.g.
+    ``"2024-01-20 14:05:00" -> 2024-01-20``), matching the prior dateutil
+    behavior -- datetime values in a date column are a common real shape, and
+    standardizing them is the whole point of these transforms. A trailing token
+    that is NOT a valid time still fails (whole-string parse, like dateutil)."""
     if not val:
         return None
+    r = _parse_datetime_ymdhms(val)  # date + optional VALID trailing time
+    if r is None:
+        return None
     try:
-        return dateutil_parser.parse(val, default=_DEFAULT_DATE).date()
-    except (ValueError, OverflowError):
+        return date(r[0], r[1], r[2])
+    except ValueError:  # year out of the datetime range (e.g. 0000)
         return None
 
 
 # --------------------------------------------------------------------------- #
-# Module-level per-element references (Phase 4d). Deterministic (see _parse_date /
-# _DEFAULT_DATE), so they are the SAME fn the Polars `series` path applies AND the
-# owned reference the native/columnar path runs -- byte-identical, Polars-free.
-# Registered via `scalar=` so the in-memory columnar engine can run the date family
-# over a list. The str-returning date transforms are wired this wave; the
-# int/bool-returning ones (extract_year/…/date_validate) await dtype-aware egress.
+# Per-element references (the owned scalars). Deterministic, so they are BOTH the
+# fn the Polars ``series`` path applies (via ``map_elements``) AND the owned
+# reference the Polars-free columnar path runs (via ``scalar=``) — byte-identical
+# by construction, no fast-path-vs-scalar divergence.
 # --------------------------------------------------------------------------- #
 def _date_iso8601_py(val: str | None) -> str | None:
     if val is None:
@@ -61,10 +276,13 @@ def _date_eu_py(val: str | None) -> str | None:
 def _datetime_iso8601_py(val: str | None) -> str | None:
     if val is None:
         return None
+    r = _parse_datetime_ymdhms(val)
+    if r is None:
+        return val
+    y, m, d, hh, mm, ss = r
     try:
-        dt = dateutil_parser.parse(val, default=_DEFAULT_DATE)
-        return dt.strftime("%Y-%m-%dT%H:%M:%S")
-    except (ValueError, OverflowError):
+        return datetime(y, m, d, hh, mm, ss).strftime("%Y-%m-%dT%H:%M:%S")
+    except ValueError:
         return val
 
 
@@ -75,9 +293,6 @@ def _extract_day_of_week_py(val: str | None) -> str | None:
     return _DAY_NAMES[d.weekday()] if d is not None else None
 
 
-# int/bool-returning date references (Phase 4d dtype-egress). Deterministic via
-# _parse_date; the SAME per-element fn the Polars `series` path applies -> the
-# columnar engine egresses a real Int64/Boolean column, byte-identical.
 def _extract_year_py(val: str | None) -> int | None:
     d = _parse_date(val)
     return d.year if d else None
@@ -106,8 +321,6 @@ def _date_validate_py(val: str | None) -> bool | None:
     return _parse_date(val) is not None
 
 
-# Parameterized references (Phase 4d): a per-element fn bound to the op's params. The
-# same logic the Polars `series` path runs, single-sourced so engine == columnar.
 def _date_shift_scalar(val: str | None, days: int) -> str | None:
     if val is None:
         return None
@@ -132,51 +345,13 @@ def _age_scalar(val: str | None, ref: date) -> int | None:
 
 
 def _age_from_dob_factory(params: list[str]):
-    ref = (
-        dateutil_parser.parse(params[0], default=_DEFAULT_DATE).date()
-        if params and params[0]
-        else date.today()
-    )
+    ref = (_parse_date(params[0]) or date.today()) if params and params[0] else date.today()
     return lambda v: _age_scalar(v, ref)
 
 
+# Utf8 columns of pure 4-digit years take a cheap vectorized shortcut (no
+# per-row parse); it produces the SAME "YYYY-01-01" the owned scalar does.
 _YEAR_ONLY_RE = r"^\s*\d{4}\s*$"
-
-# Formats the vectorized fast path resolves entirely in Polars/Rust. Each is
-# either unambiguous (4-digit year anchors the field order) or matches
-# dateutil's default month-first interpretation, so a row this path resolves
-# is byte-identical to what `dateutil.parse(...).date()` would have produced —
-# the parity contract `apply_with_residual` relies on (asserted over a random
-# corpus in tests/transforms/test_dates.py). Anything not covered here (2-digit
-# years, times, exotic spellings) falls through to the per-row dateutil path.
-_DATE_FORMATS: tuple[str, ...] = (
-    "%Y-%m-%d",
-    "%Y/%m/%d",
-    "%m/%d/%Y",
-    "%m-%d-%Y",
-    "%b %d, %Y",
-    "%B %d, %Y",
-    "%b %d %Y",
-    "%B %d %Y",
-    "%d %b %Y",
-    "%d %B %Y",
-)
-
-
-def _parsed_date_expr() -> pl.Expr:
-    """Vectorized parse of the :data:`_V` column to a `pl.Date` (null where no
-    fast-path format matched).
-
-    Guarded on the presence of a 4-digit run: chrono's ``%Y`` greedily accepts
-    2-digit years (``"02/02/93"`` -> year 0093), but dateutil maps a 2-digit
-    year to 1993. Requiring a 4-digit year keeps the fast path off any 2-digit
-    -year input so those defer to the per-row dateutil reference — preserving
-    parity (see tests/transforms/test_fastpath_parity.py)."""
-    has_four_digit_year = pl.col(_V).str.contains(r"\d{4}")
-    parsed = pl.coalesce(
-        [pl.col(_V).str.to_date(fmt, strict=False) for fmt in _DATE_FORMATS]
-    )
-    return pl.when(has_four_digit_year).then(parsed).otherwise(None)
 
 
 @register_transform(
@@ -185,33 +360,21 @@ def _parsed_date_expr() -> pl.Expr:
 )
 def date_iso8601(series: pl.Series) -> pl.Series:
     # Fast path A: numeric column (the inferred "date" type matched a column
-    # that's actually integer years -- e.g. birth_year=1995). Skip dateutil
-    # entirely; format as "YYYY-01-01" via Polars vectorized string concat.
-    # At 10M rows this drops the transform from ~150s (per-row dateutil) to
-    # <1s (Rust string concat under the hood).
+    # that's actually integer years -- e.g. birth_year=1995). Format as
+    # "YYYY-01-01" via Polars vectorized string concat (no per-row parse).
     if series.dtype.is_numeric():
         return series.cast(pl.Int64, strict=False).cast(pl.Utf8) + "-01-01"
 
     # Fast path B: Utf8 column whose values are ALL 4-digit year strings
-    # (e.g. "1995"). This is the common shape when a year column was read
-    # from CSV as text. v15 measured 161s at 10M on this exact case -- the
-    # numeric fast path didn't trigger because the QIS fixture generates
-    # year_canon = rng.integers(1940, 2005).astype(str).tolist(), so Polars
-    # sees Utf8 values like "1995", not Int64. The dateutil slow path parses
-    # each "1995" -> date(1995, 1, 1) -> "1995-01-01" at ~16us per row.
-    # Vectorized: detect via regex (Rust-backed pl.str.contains), then strip
-    # + concat. ~150x speedup; falls through to dateutil for any column with
-    # non-year content.
+    # (e.g. "1995"). Vectorized strip + concat; identical to the owned scalar.
     if series.dtype == pl.Utf8:
         non_null = series.drop_nulls()
         if non_null.len() > 0 and bool(non_null.str.contains(_YEAR_ONLY_RE).all()):
             return series.str.strip_chars() + "-01-01"
 
-    # Vectorized fast path: parse the well-formed common formats in Rust and
-    # strftime to ISO; only rows the fast path can't resolve hit the deterministic
-    # per-row reference (_date_iso8601_py).
-    fast_iso = _parsed_date_expr().dt.strftime("%Y-%m-%d")
-    return apply_with_residual(series, fast_iso, _date_iso8601_py, pl.Utf8)
+    # Owned parse over the column: the deterministic scalar per element. No
+    # Polars fast path, no dateutil.
+    return series.map_elements(_date_iso8601_py, return_dtype=pl.Utf8)
 
 
 @register_transform(
@@ -219,8 +382,7 @@ def date_iso8601(series: pl.Series) -> pl.Series:
     scalar=_date_us_py,
 )
 def date_us(series: pl.Series) -> pl.Series:
-    fast = _parsed_date_expr().dt.strftime("%m/%d/%Y")
-    return apply_with_residual(series, fast, _date_us_py, pl.Utf8)
+    return series.map_elements(_date_us_py, return_dtype=pl.Utf8)
 
 
 @register_transform(
@@ -228,8 +390,7 @@ def date_us(series: pl.Series) -> pl.Series:
     scalar=_date_eu_py,
 )
 def date_eu(series: pl.Series) -> pl.Series:
-    fast = _parsed_date_expr().dt.strftime("%d/%m/%Y")
-    return apply_with_residual(series, fast, _date_eu_py, pl.Utf8)
+    return series.map_elements(_date_eu_py, return_dtype=pl.Utf8)
 
 
 @register_transform(
@@ -246,11 +407,7 @@ def date_parse(series: pl.Series) -> pl.Series:
     scalar_factory=_age_from_dob_factory, scalar_dtype="int",
 )
 def age_from_dob(series: pl.Series, reference_date: str | None = None) -> pl.Series:
-    ref = (
-        dateutil_parser.parse(reference_date, default=_DEFAULT_DATE).date()
-        if reference_date
-        else date.today()
-    )
+    ref = (_parse_date(reference_date) or date.today()) if reference_date else date.today()
     return series.map_elements(lambda v: _age_scalar(v, ref), return_dtype=pl.Int64)
 
 

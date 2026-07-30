@@ -1,0 +1,29 @@
+# Standalone workspace (same rationale as the sibling score-core / fingerprint-core
+# crates): a pyo3-free, dependency-free fuzzy-string kernel that can be a path
+# dependency of score-core -- and, transitively, of native / datafusion-udf /
+# fs-core / goldengraph-core / ... -- without any of those workspaces claiming it.
+# This is the extracted "goldenfuzz" boundary (see
+# docs/design/2026-07-27-goldenfuzz.md): our own byte-identical port of rapidfuzz's
+# jaro-winkler / levenshtein / indel / damerau, plus a single-word fast path that
+# beats rapidfuzz on short strings. Zero runtime deps -- std only.
+[workspace]
+
+[package]
+name = "goldenfuzz-core"
+version = "0.1.1"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "Cross-surface, byte-identical fuzzy-string primitives (jaro-winkler / levenshtein / indel / damerau), bit-parallel + single-word fast path, pyo3-free."
+repository = "https://github.com/benseverndev-oss/goldenmatch"
+keywords = ["fuzzy", "string-matching", "levenshtein", "jaro-winkler", "rapidfuzz"]
+categories = ["text-processing", "algorithms"]
+
+[lib]
+name = "goldenfuzz_core"
+
+[dev-dependencies]
+# rapidfuzz is the PARITY ORACLE only (dev-dep): the tests prove our vendored
+# primitives are byte-for-byte identical to the crate over a large fuzz corpus.
+# It is NOT a runtime dependency -- goldenfuzz-core owns its scoring math.
+rapidfuzz = "0.5.0"
