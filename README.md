@@ -234,7 +234,7 @@ Entity resolution is the stage most GraphRAG pipelines do worst — duplicate su
 
 Every headline number maps back to a single committed runner (`scripts/run_benchmarks.py`); see [`docs/reproducing-benchmarks.md`](docs/reproducing-benchmarks.md) for per-number commands, dataset URLs, and expected output with tolerance.
 
-- **Accuracy on customer-shaped data** — NC Voter **0.9719** F1, Febrl3 **0.9443** F1, DQbench composite **91.04**; the opt-in Fellegi-Sunter path beats hand-tuned Splink head-to-head on every dataset Splink scores ([bake-off](docs/benchmarks/2026-06-09-splink-bakeoff.md)). (Bibliographic DBLP-ACM lands **0.9641** F1 for the record-linkage crowd, but customer identity is the focus.)
+- **Accuracy on customer-shaped data** — NC Voter **0.9719** F1, Febrl3 **0.9443** F1, DQbench composite **91.04**; the opt-in Fellegi-Sunter path beats hand-tuned Splink head-to-head on every dataset Splink scores ([bake-off](docs/benchmarks/2026-06-09-splink-bakeoff.md)). (Bibliographic DBLP-ACM lands **96.4%** F1 for the record-linkage crowd, but customer identity is the focus.)
 - **Privacy-preserving** — PPRL **92.4%** F1 on FEBRL4, matching across parties with no shared raw data.
 - **Scale envelope** ([`docs/scale-envelope.md`](docs/scale-envelope.md)) — per-backend ranges (in-memory/bucket to a few M · DuckDB out-of-core to ~50M · Ray distributed ≥ 50M), block-size failure modes, and a decision tree for picking a backend.
 
