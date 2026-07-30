@@ -1043,29 +1043,22 @@ def _resolve_auto_refit_mode(auto_refit: bool | str) -> str | None:
 
 
 def _frame_with_row_id(df: Any) -> Any:
-    """Return a polars frame carrying ``__row_id__`` (positional 0..n-1 if absent).
+    """Return a native frame carrying ``__row_id__`` (positional 0..n-1 if absent).
 
     The refit's ``estimate_m_from_labels`` needs the run's ``__row_id__`` — the
     same positional id the pipeline assigns via ``with_row_index`` before any row
     filtering, so a persisted correction's ``(id_a, id_b)`` line up with a bare
-    positional index on the caller's frame. Accepts polars or a pa.Table.
+    positional index on the caller's frame. Arrow-native: coerces through
+    ``core.frame.to_frame`` so a pa.Table stays polars-free (the ``goldenmatch``
+    package carries no polars dep; a hard ``import polars`` here would break the
+    arrow-only install the ``goldenmatch_nopolars`` lane guards).
     """
-    import polars as pl
+    from goldenmatch.core.frame import to_frame
 
-    if isinstance(df, pl.DataFrame):
-        frame = df
-    elif hasattr(df, "num_rows"):  # pa.Table -> DataFrame
-        arrowed = pl.from_arrow(df)
-        # pl.from_arrow is typed DataFrame | Series; a Table always yields a
-        # DataFrame — narrow so the frame API below type-checks.
-        frame = arrowed.to_frame() if isinstance(arrowed, pl.Series) else arrowed
-    else:
-        frame = pl.DataFrame(df)
+    frame = to_frame(df)
     if "__row_id__" not in frame.columns:
-        frame = frame.with_row_index("__row_id__").with_columns(
-            pl.col("__row_id__").cast(pl.Int64)
-        )
-    return frame
+        frame = frame.with_row_index_int64("__row_id__")
+    return frame.native
 
 
 def _compute_refit_suggestion(df: Any, config: Any) -> Any:

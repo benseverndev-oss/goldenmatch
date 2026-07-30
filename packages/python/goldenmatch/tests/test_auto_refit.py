@@ -99,6 +99,18 @@ class TestSuggestMode:
         assert result.refit_suggestion.n_labels == 3
         assert result.refit_suggestion.matchkey_name == "fs"
 
+    def test_arrow_input_stays_polars_free(self, tmp_path):
+        # A pa.Table input must flow through the arrow-native frame path (no hard
+        # polars import) — auto_refit reuses core.frame.to_frame, not `import polars`.
+        import pyarrow as pa
+
+        cfg = _config(tmp_path)
+        _seed(cfg.memory.path, [_correction(0, 1, "approve"), _correction(2, 3, "approve")])
+        table = pa.Table.from_pydict(_df().to_dict(as_series=False))
+        result = dedupe_df(table, config=cfg, auto_refit=True)
+        assert result.refit_suggestion is not None
+        assert result.refit_suggestion.n_labels == 2
+
     def test_suggest_does_not_apply_model(self, tmp_path):
         cfg = _config(tmp_path)
         _seed(cfg.memory.path, [_correction(0, 1, "approve"), _correction(2, 3, "approve")])
