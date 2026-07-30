@@ -20,7 +20,7 @@ from goldenmatch.core.er_matcher.prompt import SERIALIZER_VERSION, parse_verdict
 
 def test_load_config_roundtrips_committed_yaml():
     cfg = tr.load_config(Path(__file__).with_name("config.yaml"))
-    assert cfg.base_model == "Qwen/Qwen2.5-3B-Instruct"
+    assert cfg.base_model == "Qwen/Qwen2.5-1.5B-Instruct"
     assert cfg.packing is True
     assert cfg.serializer_version == SERIALIZER_VERSION
 
