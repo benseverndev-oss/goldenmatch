@@ -73,6 +73,48 @@ class TestLabelsFromVerdicts:
         assert R.labels_from_verdicts(verdicts, confidence_threshold=0.95) == [(0, 1)]
 
 
+def _correction(id_a, id_b, decision, source="llm"):
+    from goldenmatch.core.memory.store import Correction
+    return Correction(
+        id=f"{id_a}-{id_b}-{decision}", id_a=id_a, id_b=id_b, decision=decision,
+        source=source, trust=0.5, field_hash="", record_hash="", original_score=0.8,
+    )
+
+
+class TestLabelsFromCorrections:
+    def test_keeps_approve_pairs_only(self):
+        corrections = [
+            _correction(0, 1, "approve"),          # -> label
+            _correction(2, 3, "reject"),           # dropped (u is from random pairs)
+            _correction(9, 0, "field_correct"),    # dropped (id_a is a cluster_id, not a pair)
+            _correction(4, 4, "approve"),          # dropped (degenerate self-pair)
+        ]
+        assert R.labels_from_corrections(corrections) == [(0, 1)]
+
+    def test_canonicalizes_and_dedupes(self):
+        corrections = [_correction(1, 0, "approve"), _correction(0, 1, "approve")]
+        assert R.labels_from_corrections(corrections) == [(0, 1)]
+
+    def test_source_filter(self):
+        corrections = [
+            _correction(0, 1, "approve", source="llm"),
+            _correction(2, 3, "approve", source="boost"),
+        ]
+        assert R.labels_from_corrections(corrections, sources={"llm"}) == [(0, 1)]
+
+    def test_refit_from_memory_reads_store(self, tmp_path):
+        from goldenmatch.core.memory.store import MemoryStore
+        store = MemoryStore(backend="sqlite", path=str(tmp_path / "mem.db"))
+        for a, b in [(0, 1), (2, 3), (4, 5)]:
+            store.add_correction(_correction(a, b, "approve"))
+        store.add_correction(_correction(0, 2, "reject"))  # ignored by the refit
+
+        result = R.refit_from_memory(_supervised_df(), _config(), store)
+        assert result.n_labels == 3
+        assert result.matchkey_name == "fs"
+        assert result.em_result.iterations == 0
+
+
 class TestRefitFromLabels:
     def test_returns_refined_em_and_thresholds(self):
         df, config = _supervised_df(), _config()
