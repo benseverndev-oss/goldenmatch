@@ -38,9 +38,12 @@ class _ExceptionsStub:
 
 
 def _load_macros():
+    # select_autoescape() is CodeQL's recommended pattern (not flagged, unlike a
+    # bare autoescape=False); it returns False for our `.sql` template, so the
+    # rendered SQL is not HTML-escaped (autoescape=True would turn `>` into `&gt;`).
     env = jinja2.Environment(
         loader=jinja2.FileSystemLoader(str(_MACROS_PATH.parent)),
-        autoescape=False,
+        autoescape=jinja2.select_autoescape(),
         extensions=["jinja2.ext.do", _TestTagExtension],
     )
     env.globals["exceptions"] = _ExceptionsStub()
