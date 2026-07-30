@@ -1531,11 +1531,15 @@
             "LocalModelSpec",
             "_local_llm_mode",
             "_model_cache_dir",
+            "_project",
             "_verify_sha256",
             "load_local_adapter",
             "parse_verdict",
             "resolve_model_path",
             "serialize_pair_v1"
+          ],
+          "imports": [
+            "goldenmatch.core.er_matcher.prompt"
           ]
         },
         {
