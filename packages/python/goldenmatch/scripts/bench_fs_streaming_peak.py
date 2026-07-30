@@ -42,6 +42,8 @@ def _vmrss_mb() -> float:
                 if line.startswith("VmRSS:"):
                     return int(line.split()[1]) / 1024
     except OSError:
+        # Best-effort sampling: /proc may be absent (non-Linux) — the peak just
+        # reads 0 there. Never let a sampler read break the bench run.
         pass
     return 0.0
 
