@@ -137,6 +137,7 @@ mcp_tools:
   - upload_dataset
   - write_csv
   python_only:
+  - certify_semantic_model
   - documents_ingest
   - documents_suggest_schema
   - explain_routing
@@ -180,6 +181,7 @@ cli_commands:
   - tui
   - unmerge
   python_only:
+  - certify-keys
   - import-dbt
   - ingest-docs
   - llm

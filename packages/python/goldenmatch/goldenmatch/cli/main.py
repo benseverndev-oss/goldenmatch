@@ -14,6 +14,7 @@ from goldenmatch import __version__
 from goldenmatch.cli.agent_serve import agent_serve_cmd
 from goldenmatch.cli.anomalies import anomalies_cmd
 from goldenmatch.cli.autoconfig import autoconfig_cmd
+from goldenmatch.cli.certify_keys import certify_keys_cmd
 from goldenmatch.cli.compare import compare_clusters_cmd
 from goldenmatch.cli.dedupe import dedupe_cmd
 from goldenmatch.cli.demo import demo_cmd
@@ -144,6 +145,7 @@ app.command("agent-serve", help="Start the A2A agent server for AI-to-AI discove
 app.command("incremental", help="Match new records against an existing base dataset.")(incremental_cmd)
 app.command("compare-clusters", help="Compare two ER clustering outcomes (CCMS).")(compare_clusters_cmd)
 app.command("sensitivity", help="Analyze parameter sensitivity using CCMS comparison.")(sensitivity_cmd)
+app.command("certify-keys", help="Certify the entity keys a semantic model (MetricFlow/Cube/OSI) declares.")(certify_keys_cmd)
 
 
 @app.command("analyze-blocking")

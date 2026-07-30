@@ -2359,6 +2359,37 @@
           ]
         },
         {
+          "command": "certify-keys",
+          "options": [
+            {
+              "name": "model",
+              "type": "text",
+              "required": true,
+              "help": "Semantic-model file (dbt/MetricFlow, Cube, or OSI YAML)"
+            },
+            {
+              "name": "--data",
+              "type": "text",
+              "required": true,
+              "help": "Frame for a model/dataset/cube as name=path (repeatable), e.g. -d orders=orders.csv"
+            },
+            {
+              "name": "--resolve",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Also measure entity fragmentation / undercount via ER (MetricFlow dialect only)."
+            },
+            {
+              "name": "--fail-untrustworthy",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Exit non-zero if any declared key is not unique at grain (CI gate)."
+            }
+          ]
+        },
+        {
           "command": "compare-clusters",
           "options": [
             {
@@ -4678,6 +4709,10 @@
         {
           "name": "certify_recall",
           "description": "Estimate match RECALL without ground truth (unsupervised). Treats each auto-configured matchkey/pass as a decorrelated system and uses capture-recapture over their overlaps to estimate how many true matches were missed. Returns a point estimate (a safe lower bound additionally needs a small labelled audit; see `goldenmatch evaluate --certify --audit-out`). Needs >=3 decorrelated systems."
+        },
+        {
+          "name": "certify_semantic_model",
+          "description": "Semantic-layer front door: certify every declared entity key in a dbt/MetricFlow, Cube, or OSI/Ossie semantic model against its data. The dialect is auto-detected. Returns, per declared key, whether it is unique at grain and its measure fan-out -- the keys a metric silently joins on. Advisory; it never mutates a metric."
         },
         {
           "name": "compare_clusters",

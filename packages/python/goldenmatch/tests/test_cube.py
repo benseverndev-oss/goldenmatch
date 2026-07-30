@@ -156,3 +156,36 @@ def test_certify_cube_joins_accepts_source_and_skips_absent_frames():
 def test_cube_dataclass_primary_key_property():
     c = Cube(name="x")
     assert c.primary_key == []
+
+
+def test_certify_cube_joins_one_to_many_certifies_the_one_side():
+    """For a one_to_many join the DECLARING cube is the one-side, so its key (not
+    the many-side FK) must be certified for uniqueness."""
+    doc = """
+cubes:
+  - name: customers
+    sql_table: public.customers
+    joins:
+      - name: orders
+        relationship: one_to_many
+        sql: "{CUBE}.id = {orders.customer_id}"
+    dimensions:
+      - name: id
+        sql: id
+        type: number
+        primary_key: true
+"""
+    # customers.id is a clean unique key; orders.customer_id (the many-side FK)
+    # fans out by design. The one_to_many one-side is `customers`.
+    frames = {
+        "customers": pa.table({"id": [1, 2, 3]}),
+        "orders": pa.table({"customer_id": [1, 1, 2, 3, 3]}),
+    }
+    rep = certify_cube_joins(parse_cube_models(doc), frames)
+    assert len(rep) == 1
+    entry = rep[0]
+    # certified the declaring (one) side, not the many-side FK
+    assert entry["from_cube"] == "customers" and entry["to_cube"] == "orders"
+    assert entry["key"] == ["id"]
+    assert entry["certificate"].is_unique_at_grain is True
+    assert entry["certificate"].max_fan_out == 1.0

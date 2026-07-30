@@ -611,6 +611,10 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `autoconfig` | `--show-controller` | boolean | `True` | Render the controller telemetry panel on stderr. |
 | `autoconfig` | `--verbose` | boolean | `False` | Include indicator priors + decision trace in the panel. |
 | `autoconfig` | `--quiet` | boolean | `False` | Suppress all stderr output (panel + status messages). |
+| `certify-keys` | `model` | text | **required** | Semantic-model file (dbt/MetricFlow, Cube, or OSI YAML) |
+| `certify-keys` | `--data` | text | **required** | Frame for a model/dataset/cube as name=path (repeatable), e.g. -d orders=orders.csv |
+| `certify-keys` | `--resolve` | boolean | `False` | Also measure entity fragmentation / undercount via ER (MetricFlow dialect only). |
+| `certify-keys` | `--fail-untrustworthy` | boolean | `False` | Exit non-zero if any declared key is not unique at grain (CI gate). |
 | `compare-clusters` | `file_a` | text | **required** | First cluster JSON file (baseline / ER1) |
 | `compare-clusters` | `file_b` | text | **required** | Second cluster JSON file (comparison / ER2) |
 | `compare-clusters` | `--details` | boolean | `False` | Show per-cluster transformation details |
@@ -908,7 +912,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 
 ## MCP tools
 
-90 MCP tool(s) exposed by `goldenmatch.mcp.server` -- the programmatic / agent surface. Config-bearing tools take the same knobs as above.
+91 MCP tool(s) exposed by `goldenmatch.mcp.server` -- the programmatic / agent surface. Config-bearing tools take the same knobs as above.
 
 | Tool | Description |
 |---|---|
@@ -925,6 +929,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `auto_configure` | Run AutoConfigController on a CSV; return the committed GoldenMatchConfig (incl. negative_evidence / Path Y when chosen) plus telemetry — stop_reason, health, decision trace, indicator column priors. Programmatic equivalent of `goldenmatch autoconfig`. |
 | `build_clusters` | Group records into clusters given a file and matchkey definition. |
 | `certify_recall` | Estimate match RECALL without ground truth (unsupervised). Treats each auto-configured matchkey/pass as a decorrelated system and uses capture-recapture over their overlaps to estimate how many true matches were missed. Returns a point estimate (a safe lower bound additionally needs a small labelled audit; see `goldenmatch evaluate --certify --audit-out`). Needs >=3 decorrelated systems. |
+| `certify_semantic_model` | Semantic-layer front door: certify every declared entity key in a dbt/MetricFlow, Cube, or OSI/Ossie semantic model against its data. The dialect is auto-detected. Returns, per declared key, whether it is unique at grain and its measure fan-out -- the keys a metric silently joins on. Advisory; it never mutates a metric. |
 | `compare_clusters` | Compare two ER clustering outcomes on the same dataset without ground truth (CCMS): classifies each cluster as unchanged / merged / partitioned / overlapping and returns the Talburt-Wang Index. Both inputs are JSON cluster files (as written by export-style output). |
 | `config_weaknesses` | Diagnose weaknesses in the loaded run's auto-config: columns admitted that shouldn't be (source/provenance labels, per-row IDs), oversized or shared-value blocks, null sinks, low-signal matchkeys, and over-merging. Returns ranked findings, each with a plain-English explanation + a concrete fix, plus a one-paragraph summary. |
 | `controller_telemetry` | Return the AutoConfigController telemetry from the most recent `auto_configure` or `agent_deduplicate` call in this MCP session. Same JSON shape as the web /api/v1/controller/telemetry endpoint. |

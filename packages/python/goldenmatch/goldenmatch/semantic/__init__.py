@@ -17,6 +17,12 @@ so ``import goldenmatch`` stays lightweight and polars-free; import it explicitl
 from __future__ import annotations
 
 from goldenmatch.core.key_integrity_certificate import KeyIntegrityCertificate
+from goldenmatch.semantic.certify import (
+    KeyCertification,
+    SemanticCertification,
+    certify_semantic_model,
+    detect_dialect,
+)
 from goldenmatch.semantic.crosswalk import ResolvedCrosswalk, build_resolved_crosswalk
 from goldenmatch.semantic.cube import (
     Cube,
@@ -53,6 +59,11 @@ from goldenmatch.semantic.osi import (
 )
 
 __all__ = [
+    # zero-config front door — certify a whole semantic model (any dialect)
+    "certify_semantic_model",
+    "SemanticCertification",
+    "KeyCertification",
+    "detect_dialect",
     # wedge A — certify a declared key
     "certify_key_integrity",
     "KeyIntegrityCertificate",

@@ -186,11 +186,15 @@ def _add_resolution(
         sub = table.select(attrs)
         # Build config zero-config, then disable rerank/cross-encoder so the
         # certification path never blocks on a model download (offline-safe).
-        cfg = auto_configure_df(sub, confidence_required=False)
+        cfg = auto_configure_df(sub, confidence_required=False, allow_red_config=True)
         for mk in cfg.get_matchkeys():
             if getattr(mk, "rerank", False):
                 mk.rerank = False
-        res = dedupe_df(sub, config=cfg, confidence_required=False)
+        # allow_red_config so a large table (>= the controller's REFUSE_AT_N) still
+        # MEASURES fragmentation rather than raising ControllerNotConfidentError and
+        # falling through to the "resolution unavailable" note (the #715 contract:
+        # confidence_required=False no longer bypasses the RED-refuse).
+        res = dedupe_df(sub, config=cfg, confidence_required=False, allow_red_config=True)
         clusters = getattr(res, "clusters", None) or {}
 
         keyvals = _row_key_values(table, key_columns)
