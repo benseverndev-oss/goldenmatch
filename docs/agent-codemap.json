@@ -1772,6 +1772,7 @@
             "_classify_by_name",
             "_compute_max_safe_block",
             "_concrete_dtype_spelling",
+            "_cost_aware_blocking_enabled",
             "_degenerate_blocking_config",
             "_detect_source_partition",
             "_detect_standardization_config",
