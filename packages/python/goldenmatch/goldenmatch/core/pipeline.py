@@ -551,7 +551,7 @@ def _fs_streaming_dedupe_eligible(
 
 
 def _run_fs_streaming_dedupe(
-    collected_df: Any,
+    frame_holder: list,
     config: GoldenMatchConfig,
     mk: Any,
     output_dir: str,
@@ -562,6 +562,15 @@ def _run_fs_streaming_dedupe(
     block-pair sample), then hands the prepared frame to ``run_fs_dedupe_streaming``
     (score from a DuckDB file → cluster → stream unique/dupes/golden to parquet).
 
+    ``frame_holder`` is a single-element ``[frame]`` list: the caller
+    (``_run_dedupe_pipeline``) rebinds ITS own prep-frame locals to ``None`` and
+    hands ownership through this holder so the ~1× prepared frame can be dropped
+    right after the DuckDB load (inside ``score_fs_out_of_core``) instead of
+    staying resident through clustering + output. This helper trains EM off
+    ``frame_holder[0]`` (the last frame use), then rebinds its own EM locals to
+    ``None`` and forwards the SAME holder so the scorer nulls its slot — leaving
+    no strong reference to the frame when the memory-heavy back-half runs.
+
     Returns a result dict of output PATHS + counts (never in-memory frames) —
     the streaming path exists precisely so the back-half is never materialized."""
     from goldenmatch.backends.fs_out_of_core import run_fs_dedupe_streaming
@@ -571,7 +580,7 @@ def _run_fs_streaming_dedupe(
 
     assert config.blocking is not None, "streaming FS dedupe requires blocking"
 
-    score_frame, blocking = collected_df, config.blocking
+    score_frame, blocking = frame_holder[0], config.blocking
 
     # EM training blocks (bounded sample when the frame exceeds the cap — the
     # blocks feed ONLY EM's pair sample; the streaming scorer re-blocks from disk).
@@ -602,8 +611,13 @@ def _run_fs_streaming_dedupe(
         "F-S EM: converged=%s, iterations=%d, match_rate=%.4f",
         em_result.converged, em_result.iterations, em_result.proportion_matched,
     )
+    # Drop this frame's EM references — the only remaining strong ref is now the
+    # holder slot, which the scorer nulls right after the DuckDB load so the
+    # frame is freed before the clustering + output back-half.
+    score_frame = None
+    _em_src = None
     res = run_fs_dedupe_streaming(
-        score_frame, blocking, scoring_mk, em_result, config, output_dir,
+        frame_holder, blocking, scoring_mk, em_result, config, output_dir,
         link_threshold=link_threshold,
     )
     res["streaming"] = True
@@ -3276,8 +3290,20 @@ def _run_dedupe_pipeline(
     # is byte-unchanged. Returns a dict of PATHS + counts, not frames.
     if _fs_streaming_dedupe_eligible(config, matchkeys, output_dir):
         assert output_dir is not None  # narrowed by the eligibility gate
+        # Hand the prepared frame to the streaming back-half through a
+        # single-element HOLDER and rebind EVERY driver-local that pins the frame
+        # (collected_df, the .lazy() view, the pre-matchkey copy) to None, so the
+        # scorer can free the ~1x prepared frame right after the DuckDB load
+        # rather than holding it resident through clustering + output (the
+        # ~17 GB / 50M lever). This branch returns immediately, so nulling the
+        # locals is safe. `= None` (not `del`) never raises if a local was unset
+        # on the eager-arrow path.
+        _frame_holder = [collected_df]
+        collected_df = None
+        combined_lf = None
+        _collected_pre_mk = None
         _stream_res = _run_fs_streaming_dedupe(
-            collected_df, config, matchkeys[0], output_dir
+            _frame_holder, config, matchkeys[0], output_dir
         )
         if memory_store is not None:
             memory_store.close()

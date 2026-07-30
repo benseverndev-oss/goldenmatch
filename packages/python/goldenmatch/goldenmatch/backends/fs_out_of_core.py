@@ -13,17 +13,41 @@ the first out-of-core FS scorer: the prepared records live in DuckDB (on disk
 when `db_path` is a file), and blocks are pulled ONE GROUP AT A TIME, scored,
 and discarded, so the SCORING phase is bounded (peak = one block group).
 
-**End-to-end path: `run_fs_dedupe_streaming`.** Ties the two bounded mechanisms
+**End-to-end path: `run_fs_dedupe_streaming`.** Ties the bounded mechanisms
 together for single-box scale: prep frame -> DuckDB FILE (batched load,
 `_load_frame_batched` keeps the load peak ~1x the frame, not the ~2-3x a full
-`to_arrow()` copy would), FREE the frame, score from the store
-(`score_fs_out_of_core`), cluster, then STREAM unique/dupes/golden to parquet
-(`stream_fs_dedupe_output`, O(N) output via DuckDB `COPY`, never a result frame).
-So peak stays ~1x the prepared frame (only during the load) instead of the
-in-memory ~1.65 GB/M accumulation -- e.g. 50M is ~1x frame (~15-25 GB, FITS
-64 GB) vs the in-memory ~82 GB OOM. Load-peak reduction below ~1x frame (stream
-input parquet -> DuckDB during prep, never materialise it) + the CI proof that
-50M completes are the remaining work. See
+`to_arrow()` copy would), FREE the frame (see below), score from the store
+(`score_fs_out_of_core`), cluster (Arrow-native, no polars pair copy), then STREAM
+unique/dupes/golden to parquet (`stream_fs_dedupe_output`, O(N) output via DuckDB
+`COPY`, never a result frame). So peak stays ~1x the prepared frame (only during
+the load) instead of the in-memory ~1.65 GB/M accumulation -- e.g. 50M is ~1x
+frame (~15-25 GB, FITS 64 GB) vs the in-memory ~82 GB OOM.
+
+**The back-half holds NEITHER a resident frame NOR an O(N) golden spike** (three
+bounded levers, all default-on within the opt-in out-of-core route):
+  - **Frame freed at the load boundary, not held through clustering + output.**
+    The prepared frame is routed through a single-element HOLDER
+    (`_unwrap_frame_holder`); every downstream stage reads the DuckDB `prep`
+    table, never the frame, so once `_load_frame_batched` has copied it,
+    `score_fs_out_of_core` nulls the holder slot and the ~1x frame (~5-17 GB at
+    50M) is dropped BEFORE the memory-heavy back-half — instead of pinned resident
+    as dead weight through it. The pipeline driver rebinds its own frame locals so
+    the holder is the only strong reference. (Locked: `test_fs_out_of_core.py`
+    weakref test.)
+  - **DuckDB buffer bounded so `prep` spills to disk** (`_configure_ooc_duckdb`,
+    `memory_limit` ~55% RAM + `temp_directory`) — without a cap DuckDB's default
+    ~80%-of-RAM buffer would hold the WHOLE spilled `prep` in RAM (an equivalent
+    ~17 GB copy of the frame), defeating the spill design and re-OOMing at 50M.
+  - **Golden built in cluster-BATCHES, streamed via `ParquetWriter`**
+    (`_fs_ooc_golden_batch_clusters`, default 500K clusters/batch) — the golden
+    subset (non-oversized multi-member rows) can be MOST of N at full width, so
+    materialising it whole was an O(N) resident spike (measured 7.8 GB at 400K
+    rows × 40 cols; batched: 0.74 GB, −10.6x, byte-identical count) — the same
+    peak the in-memory 25M golden fix (#334) removed by 500K-cluster batching.
+
+Remaining work: load-peak reduction below ~1x frame (stream input parquet ->
+DuckDB during prep, never materialise the frame at all) + the CI proof that 50M
+completes. See
 `docs/superpowers/specs/2026-07-20-fs-frame-residency-bucket-streaming-design.md`.
 
 **Parity.** Block membership is derived with the SAME `_build_block_key_expr` +
@@ -96,6 +120,21 @@ def _ooc_debug_on() -> bool:
     )
 
 
+def _fs_ooc_golden_batch_clusters() -> int:
+    """How many multi-member clusters the streaming golden build materialises per
+    batch. The golden subset (non-oversized multi-member rows) can be MOST of N at
+    full width, so fetching it whole (one ``fetch_arrow_table`` + ``build_golden_
+    records_batch``) is an O(N) resident spike — the same peak the in-memory 25M
+    golden fix (#334) removed by processing clusters in 500K batches. This bounds
+    the streaming golden peak to one batch's member rows regardless of N.
+    ``GOLDENMATCH_FS_OOC_GOLDEN_BATCH`` overrides; ``0``/invalid -> the 500K
+    default."""
+    v = os.environ.get("GOLDENMATCH_FS_OOC_GOLDEN_BATCH")
+    if v and v.strip().isdigit() and int(v) > 0:
+        return int(v)
+    return 500_000
+
+
 def fs_out_of_core_enabled() -> bool:
     """Opt-in scale switch for the out-of-core FS path (default OFF).
 
@@ -126,6 +165,55 @@ def _fs_ooc_arrow_cluster_enabled() -> bool:
     if v is None:
         return True
     return v.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _fs_ooc_duckdb_memory_limit() -> str | None:
+    """DuckDB ``memory_limit`` for the out-of-core FS connections, or ``None`` to
+    leave DuckDB's default.
+
+    Without a cap, DuckDB's default buffer is ~80% of system RAM, so at scale it
+    holds the ENTIRE spilled ``prep`` table resident in RAM — an equivalent copy
+    of the prepared frame — which defeats the spill-to-disk design (the load
+    would then keep two ~17 GB copies at 50M and OOM regardless of the Python
+    frame being freed). Bounding it forces DuckDB to spill ``prep`` to its temp
+    dir and STREAM the sorted block scan from disk, leaving RAM for the Python
+    back-half (pair stream + golden build).
+
+    ``GOLDENMATCH_FS_OOC_DUCKDB_MEMORY`` overrides: a DuckDB size string like
+    ``'8GB'``, or ``'0'``/``'off'``/``'default'`` to leave DuckDB's default. The
+    default caps DuckDB at ~55% of system RAM (min 1 GB), leaving ~45% headroom
+    for the driver process."""
+    v = os.environ.get("GOLDENMATCH_FS_OOC_DUCKDB_MEMORY")
+    if v is not None:
+        v = v.strip()
+        if v.lower() in ("0", "off", "", "default"):
+            return None
+        return v
+    try:
+        total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (ValueError, OSError, AttributeError):
+        return None
+    gib = int(total * 0.55 / (1 << 30))
+    if gib < 1:
+        return None
+    return f"{gib}GB"
+
+
+def _configure_ooc_duckdb(con: Any, resolved_path: str) -> None:
+    """Bound DuckDB's buffer + point its spill dir at the on-disk db, so the
+    out-of-core scorer streams ``prep`` from disk instead of buffering it all in
+    RAM. No-op for an ``:memory:`` connection (nothing to spill; tests / tiny
+    frames). Best-effort: a PRAGMA that a given DuckDB build rejects is swallowed
+    so the run never breaks on a version quirk."""
+    if resolved_path == ":memory:":
+        return
+    lim = _fs_ooc_duckdb_memory_limit()
+    try:
+        if lim:
+            con.execute(f"PRAGMA memory_limit='{lim}'")
+        con.execute(f"PRAGMA temp_directory={_sql_lit(resolved_path + '.tmp')}")
+    except Exception:  # noqa: BLE001 - a rejected PRAGMA must never break the run
+        pass
 
 
 def _resolve_db_path(db_path: str | None) -> str:
@@ -166,6 +254,25 @@ def _load_frame_batched(con, proj, batch_rows: int = 500_000) -> None:
         con.register("_gm_batch", pf.head(0).to_arrow())
         con.execute("CREATE TABLE prep AS SELECT * FROM _gm_batch")
         con.unregister("_gm_batch")
+
+
+def _unwrap_frame_holder(prepared_df: Any) -> tuple[Any, list | None]:
+    """Return ``(frame, holder)``.
+
+    The out-of-core FS scorer only needs the prepared frame for the ONE-TIME
+    DuckDB load — every downstream stage (score / cluster / output) reads from
+    the spilled ``prep`` table, never the frame. So the streaming pipeline routes
+    the frame through a single-element ``[frame]`` HOLDER (all its own driver
+    locals rebound to ``None``); once ``_load_frame_batched`` has copied it to
+    DuckDB, ``score_fs_out_of_core`` sets ``holder[0] = None`` to drop the caller
+    chain's only remaining strong reference, so the ~1× prepared frame is NOT
+    resident as dead weight through clustering + output (the ~17 GB / 50M lever).
+
+    A bare frame (direct callers / tests) yields ``holder=None`` — no release,
+    byte-identical to the pre-holder behavior."""
+    if isinstance(prepared_df, list):
+        return prepared_df[0], prepared_df
+    return prepared_df, None
 
 
 def _needed_columns(prepared_native, mk: MatchkeyConfig, blocking: BlockingConfig) -> list[str]:
@@ -266,7 +373,10 @@ def score_fs_out_of_core(
     if max_block_rows is None:
         max_block_rows = max_block_size
 
-    native = _tf(prepared_df).native
+    _frame, _holder = _unwrap_frame_holder(prepared_df)
+    del prepared_df
+    native = _tf(_frame).native
+    del _frame
     if is_polars_lazyframe(native):
         native = native.collect()
     keep = _needed_columns(native, mk, blocking_config)
@@ -276,6 +386,7 @@ def score_fs_out_of_core(
 
     _resolved_path = _resolve_db_path(db_path)
     con = duckdb.connect(_resolved_path)
+    _configure_ooc_duckdb(con, _resolved_path)
     try:
         # BATCHED load: slice → Arrow → append → free, so peak stays ~1x the
         # frame (never the full `to_arrow()` copy that made this ~2-3x). With a
@@ -286,6 +397,14 @@ def score_fs_out_of_core(
         _t_load = _time.perf_counter()
         _load_frame_batched(con, proj)
         del proj, native
+        # Frame is now spilled to DuckDB; every downstream stage reads `prep`,
+        # never the frame. Drop the caller chain's last strong reference (the
+        # holder slot) so the ~1x prepared frame is freed BEFORE clustering +
+        # output rather than held resident as dead weight (the ~17 GB / 50M
+        # lever). No-op for a bare-frame caller (holder is None).
+        if _holder is not None:
+            _holder[0] = None
+            del _holder
         con.execute("CREATE INDEX ix_rid ON prep(__row_id__)")
         if _dbg:
             print(f"[fs-ooc] load+index {_time.perf_counter()-_t_load:.1f}s",
@@ -626,28 +745,66 @@ def stream_fs_dedupe_output(
         f"COPY (SELECT {_sel}, a.__cluster_id__ {base_join} WHERE s.n > 1) "
         f"TO {_sql_lit(dupes_path)} (FORMAT parquet)"
     )
-    # golden = non-oversized multi-member; bounded subset -> in-memory builder.
-    golden_tbl = con.execute(
-        f"SELECT {_sel}, a.__cluster_id__ {base_join} "
-        f"WHERE s.n > 1 AND s.n <= {int(max_cluster_size)}"
-    ).fetch_arrow_table()
+    import pyarrow.parquet as _pq
+
+    # golden = non-oversized multi-member; the subset can be MOST of N at full
+    # width, so build it in cluster-BATCHES (like the in-memory #334 fix) and
+    # STREAM each batch's golden rows to the parquet via a ParquetWriter — peak
+    # stays ~one batch's member rows regardless of N, never the whole subset.
+    # `gbatch` buckets qualifying clusters into fixed-size groups by cid order so
+    # each batch's member-row fetch is bounded; ranges keep clusters whole (a
+    # cluster's rows never split across batches).
+    _golden_rules_resolved = (
+        golden_rules if golden_rules is not None else _default_golden_rules()
+    )
+    _batch_clusters = _fs_ooc_golden_batch_clusters()
+    con.execute(
+        f"CREATE OR REPLACE TEMP TABLE gsizes AS "
+        f"SELECT cid, (row_number() OVER (ORDER BY cid) - 1) // {int(_batch_clusters)} "
+        f"AS gbatch FROM sizes WHERE n > 1 AND n <= {int(max_cluster_size)}"
+    )
+    _n_batches = con.execute(
+        "SELECT coalesce(max(gbatch), -1) + 1 FROM gsizes"
+    ).fetchone()[0]
     golden_count = 0
-    if golden_tbl.num_rows:
-        multi_df = pl.from_arrow(golden_tbl)
-        records = build_golden_records_batch(
-            multi_df,
-            golden_rules if golden_rules is not None else _default_golden_rules(),
-        )
-        golden_count = len(records)
-        pl.DataFrame(records).write_parquet(golden_path)
-    elif _os.path.exists(golden_path):
+    _writer = None
+    _writer_schema = None
+    try:
+        for _b in range(int(_n_batches)):
+            batch_tbl = con.execute(
+                f"SELECT {_sel}, a.__cluster_id__ {base_join} "
+                f"JOIN gsizes g ON a.__cluster_id__ = g.cid WHERE g.gbatch = {int(_b)}"
+            ).fetch_arrow_table()
+            if not batch_tbl.num_rows:
+                continue
+            records = build_golden_records_batch(
+                pl.from_arrow(batch_tbl), _golden_rules_resolved
+            )
+            del batch_tbl
+            if not records:
+                continue
+            golden_count += len(records)
+            gt = pl.DataFrame(records).to_arrow()
+            if _writer is None:
+                _writer_schema = gt.schema
+                _writer = _pq.ParquetWriter(golden_path, _writer_schema)
+            else:
+                # Later batches must share the first batch's schema (all-null
+                # columns can infer a narrower type in a small batch); cast to it.
+                if gt.schema != _writer_schema:
+                    gt = gt.cast(_writer_schema)
+            _writer.write_table(gt)
+            del gt, records
+    finally:
+        if _writer is not None:
+            _writer.close()
+    con.execute("DROP TABLE IF EXISTS gsizes")
+    if golden_count == 0 and _os.path.exists(golden_path):
         # No golden rows this run: remove a golden.parquet left by a PRIOR run
         # into the same out_dir, so the on-disk file set matches the returned
         # golden_path=None / golden_count=0 (unique/dupes are COPY-overwritten;
         # only golden is conditionally written, so only it can go stale).
         _os.unlink(golden_path)
-
-    import pyarrow.parquet as _pq
 
     return {
         "unique_path": unique_path,
@@ -719,31 +876,37 @@ def _cluster_arrow_native(
     (Rust Union-Find via the C Data Interface — no Python ``dict[int, dict]``).
     Returns ``(assignments pa.Table {__row_id__, __cluster_id__}, n_pairs)`` — the
     Arrow assignments feed ``stream_fs_dedupe_output`` directly, so the scored
-    pairs never become Python objects here."""
-    import polars as pl
+    pairs never become Python objects here.
+
+    Fully ARROW-NATIVE: the max-score dedup + link-threshold filter + Union-Find
+    all read the pair stream's Arrow buffers directly (no ``pl.from_arrow`` copy of
+    the whole pair set — the ~20 B/pair stream is never doubled into a polars
+    frame), keeping this path polars-free and the cluster-stage residency at ~1×
+    the pair stream instead of ~2×."""
     import pyarrow as pa
+    import pyarrow.compute as pc
 
     from goldenmatch.core.cluster import build_clusters_arrow_native
-    from goldenmatch.core.pairs import dedup_pairs_max_score_arrow
+    from goldenmatch.core.pairs import dedup_pairs_max_score_arrow_table
 
     # Cross-pass dedup: canonical (min, max), max score — the Arrow-native
     # replacement for the Python `seen` set. Union-Find membership is invariant to
-    # which duplicate's score survives, so this is cluster-parity-safe.
-    pairs_pl = pl.from_arrow(pair_table)
-    if not isinstance(pairs_pl, pl.DataFrame):
-        pairs_pl = pl.DataFrame(pairs_pl)
-    pairs_pl = dedup_pairs_max_score_arrow(pairs_pl)
+    # which duplicate's score survives, so this is cluster-parity-safe. Reassign so
+    # the pre-dedup stream is dropped once the kernel returns the collapsed table.
+    pair_table = dedup_pairs_max_score_arrow_table(pair_table)
     if link_threshold is not None:
         # Cluster only linked pairs; sub-link pairs are review candidates the
         # in-memory pipeline surfaces separately and never clusters. Filtering
         # AFTER max-score dedup means a pair links iff its BEST cross-pass score
         # clears the cut (== per-wave filter-then-dedup, since max is monotone).
-        pairs_pl = pairs_pl.filter(pl.col("score") >= link_threshold)
-    n_pairs = pairs_pl.height
+        pair_table = pair_table.filter(
+            pc.greater_equal(pair_table.column("score"), link_threshold)
+        )
+    n_pairs = pair_table.num_rows
 
     all_ids = _prep_all_ids(con)
     cf = build_clusters_arrow_native(
-        pairs_pl, all_ids=all_ids, max_cluster_size=max_cluster_size, backend="arrow",
+        pair_table, all_ids=all_ids, max_cluster_size=max_cluster_size, backend="arrow",
     )
     # ClusterFrames.assignments is {cluster_id, member_id} (pa.Table on the native
     # arrow lane, pl.DataFrame on the columnar fallback). Normalise to a pa.Table
@@ -820,6 +983,7 @@ def run_fs_dedupe_streaming(
             emit="arrow" if arrow_stream else "tuples",
         )
         con = duckdb.connect(db_path)
+        _configure_ooc_duckdb(con, db_path)
         try:
             if arrow_stream:
                 assignments, n_pairs = _cluster_arrow_native(

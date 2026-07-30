@@ -462,3 +462,74 @@ def test_dedupe_to_parquet_streaming_parity_with_in_memory(tmp_path, monkeypatch
 
     # Both index rows 1..N in ingest order, so row_id partitions are comparable.
     assert stream_parts == sorted(mem_parts)
+
+
+def test_streaming_golden_batching_parity(tmp_path, monkeypatch):
+    """The cluster-batched golden build (GOLDENMATCH_FS_OOC_GOLDEN_BATCH) emits the
+    SAME golden/unique/dupes counts whether every golden cluster is its OWN batch
+    (=1, exercises the multi-batch ParquetWriter path) or all in one — the
+    batching bounds golden-stage memory without changing the output."""
+    import types
+
+    from goldenmatch.backends.fs_out_of_core import run_fs_dedupe_streaming
+
+    df = _bigger_df()
+    mk = _make_probabilistic_mk()
+    blocking = BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])])
+    em = _train(df, blocking, mk)
+    cfg = types.SimpleNamespace(golden_rules=None)
+
+    monkeypatch.setenv("GOLDENMATCH_FS_OOC_GOLDEN_BATCH", "1")  # one cluster/batch
+    res_batched = run_fs_dedupe_streaming(df, blocking, mk, em, cfg, str(tmp_path / "b"))
+    monkeypatch.setenv("GOLDENMATCH_FS_OOC_GOLDEN_BATCH", "1000000")  # single shot
+    res_single = run_fs_dedupe_streaming(df, blocking, mk, em, cfg, str(tmp_path / "s"))
+
+    assert res_batched["golden_count"] >= 1
+    for k in ("unique_count", "dupes_count", "golden_count"):
+        assert res_batched[k] == res_single[k], k
+    # The multi-batch write must produce a valid parquet whose rows == the count.
+    import pyarrow.parquet as pq
+    assert pq.read_metadata(res_batched["golden_path"]).num_rows == res_batched["golden_count"]
+
+
+def test_streaming_frees_prepared_frame_via_holder(tmp_path):
+    """run_fs_dedupe_streaming([frame]) drops the frame after the DuckDB load: the
+    holder is nulled, so the ~1x prepared frame is not resident through clustering
+    + output (the scale lever). A weakref to the frame must die after the call."""
+    import gc
+    import types
+    import weakref
+
+    from goldenmatch.backends.fs_out_of_core import run_fs_dedupe_streaming
+
+    df = _bigger_df()
+    mk = _make_probabilistic_mk()
+    blocking = BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])])
+    em = _train(df, blocking, mk)
+    cfg = types.SimpleNamespace(golden_rules=None)
+
+    ref = weakref.ref(df)
+    holder = [df]
+    df = None  # holder is now the only strong reference
+    res = run_fs_dedupe_streaming(holder, blocking, mk, em, cfg, str(tmp_path))
+    assert holder[0] is None            # scorer nulled the holder slot after load
+    gc.collect()
+    assert ref() is None                # the prepared frame was freed
+    assert res["unique_count"] + res["dupes_count"] >= 1
+
+
+def test_streaming_bare_frame_still_supported(tmp_path):
+    """A bare-frame caller (holder=None path) still works unchanged — direct
+    callers / tests never build a holder."""
+    import types
+
+    from goldenmatch.backends.fs_out_of_core import run_fs_dedupe_streaming
+
+    df = _bigger_df()
+    mk = _make_probabilistic_mk()
+    blocking = BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])])
+    em = _train(df, blocking, mk)
+    cfg = types.SimpleNamespace(golden_rules=None)
+
+    res = run_fs_dedupe_streaming(df, blocking, mk, em, cfg, str(tmp_path))
+    assert res["unique_count"] + res["dupes_count"] == df.height
