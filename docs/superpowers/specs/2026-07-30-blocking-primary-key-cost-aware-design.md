@@ -81,3 +81,25 @@ precedent. Flip to default-on only on measured F1-neutrality + the 1M-measurabil
 - No change to the learned-blocking ranking (it is already correct given good pairs).
 - No change to #438 date-pass recall behaviour (the date column stays a pass).
 - DQBench is not exercised for this change.
+
+## Update — domain routing + OFF-vs-ON bench lane (2026-07-30)
+
+**Domain routing (`_is_bibliographic_dataset`).** The year/date primary-key demotion
+is now routed by dataset type via `core.domain.detect_domain` on the column names.
+On **bibliographic** data (title/authors/venue/journal/doi/isbn/**year**) a `year`
+column is the *publication* year — a legitimately strong same-year blocking signal
+(every true match is same-year: the DBLP-ACM shape) — so the demotion is **skipped**
+there. Person/other shapes (first_name/last_name/email/birth_year) score `person`,
+not bibliographic, so the demotion still applies to them (the #2021 win). This is the
+"route bibliographic to the year-key, everything else demotes it" design; it makes
+DBLP-ACM exempt **by construction**, so flag-ON cannot regress it. Fail-open to
+"apply the demotion" on any detection error.
+
+**OFF-vs-ON gate.** `bench-er-headtohead.yml` gained a `cost-aware-offvson` job that
+runs the **weighted zero-config** path (`run_goldenmatch.py --mode zeroconfig`, the
+path `build_blocking` — and hence the flag — actually affects) twice per shape
+(`GOLDENMATCH_BLOCKING_COST_AWARE` 0 vs 1) on `person` + `biblio`, then
+`compare_cost_aware.py` diffs F1 + candidate pairs. Clears the default flip on: F1
+non-regression on every shape AND biblio-is-exempt (OFF == ON candidate pairs). The
+FS `panel-v1-v2` lane is NOT the right gate here — it runs the probabilistic path,
+which cost-aware does not touch.

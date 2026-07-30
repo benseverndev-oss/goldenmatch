@@ -63,6 +63,11 @@ on:
         description: "Tag stamped into artifact names for merge"
         required: false
         default: "manual"
+      fail_on_regression:
+        description: "cost-aware-offvson lane: fail the job on an F1 regression / biblio-not-exempt"
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -209,4 +214,88 @@ jobs:
           path: |
             merged.json
             merged.md
+          retention-days: 90
+
+  # ── Cost-aware blocking OFF vs ON lane (gates the GOLDENMATCH_BLOCKING_COST_AWARE
+  #    default flip, mirroring how panel-v1-v2 gated the FS v2 flip) ──────────────
+  #
+  # Runs the WEIGHTED zero-config path (`run_goldenmatch.py --mode zeroconfig` ->
+  # `dedupe_df` -> `build_blocking`), the path the cost-aware demotion (#2021)
+  # actually affects, twice per shape (GOLDENMATCH_BLOCKING_COST_AWARE 0 vs 1):
+  #   * person  — the WIN: cost-aware demotes the birth_year sole-primary (a ∝N
+  #               block that explodes candidate pairs at scale), so pairs collapse
+  #               while F1 holds or improves.
+  #   * biblio  — the domain-routing EXEMPTION: a publication `year` is a strong
+  #               same-year blocking signal, so cost-aware must be a NO-OP here
+  #               (OFF == ON on candidate pairs). This is the DBLP-ACM safety the
+  #               `_is_bibliographic_dataset` router provides.
+  # F1 non-regression on every shape + biblio-is-exempt clears the flip. Independent
+  # of the matrix sweep above; workflow_dispatch only, not a gate.
+  cost-aware-offvson:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 120
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/native
+
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: Build native extension (bucket + Arrow kernels)
+        run: uv run python scripts/build_native.py
+
+      - name: Install DuckDB (engine-agnostic accuracy evaluator)
+        run: uv pip install duckdb
+
+      - name: Generate + run person & biblio OFF vs ON
+        env:
+          COST_AWARE_SCALE: "200000"   # >= the 50K learned/exact gate, fast (~min)
+        run: |
+          set -euo pipefail
+          mkdir -p ca_out
+          for SHAPE in person biblio; do
+            uv run python scripts/bench_er_headtohead/generate_fixture.py \
+              --shape "$SHAPE" --rows "$COST_AWARE_SCALE" --dupe-rate 0.20 \
+              --out "ca_out/${SHAPE}.parquet" --ground-truth "ca_out/${SHAPE}_gt.parquet"
+            for FLAG in 0 1; do
+              GOLDENMATCH_BLOCKING_COST_AWARE="$FLAG" uv run python \
+                scripts/bench_er_headtohead/run_goldenmatch.py \
+                --input "ca_out/${SHAPE}.parquet" --rows "$COST_AWARE_SCALE" \
+                --mode zeroconfig --shape "$SHAPE" --allow-pure-python \
+                --out "ca_out/${SHAPE}_flag${FLAG}.json" \
+                --pred-out "ca_out/${SHAPE}_flag${FLAG}_pred.parquet"
+              uv run python scripts/bench_er_headtohead/evaluate.py \
+                --pred "ca_out/${SHAPE}_flag${FLAG}_pred.parquet" \
+                --truth "ca_out/${SHAPE}_gt.parquet" \
+                --out "ca_out/${SHAPE}_flag${FLAG}_eval.json"
+            done
+          done
+
+      - name: Compare OFF vs ON (verdict -> job summary)
+        run: |
+          FLAG=""
+          if [ "${{ inputs.fail_on_regression }}" = "true" ]; then FLAG="--fail-on-regression"; fi
+          uv run python scripts/bench_er_headtohead/compare_cost_aware.py \
+            --dir ca_out --shapes person,biblio --out ca_out/compare_cost_aware.md $FLAG
+
+      - name: Upload cost-aware OFF/ON results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: cost-aware-offvson-${{ inputs.run_tag }}
+          path: ca_out/
           retention-days: 90

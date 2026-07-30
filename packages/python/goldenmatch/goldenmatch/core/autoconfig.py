@@ -2477,10 +2477,34 @@ def _cost_aware_blocking_enabled() -> bool:
     better-bounded fallback exists (a name key or a bounded compound). Such a key's
     block grows ∝N (fixed tiny domain), so it explodes candidate pairs at scale
     (birth_year: 65 distinct → ~7.7B pairs at 1M); it belongs as a recall PASS (its
-    #438 role), not the primary. Spec:
+    #438 role), not the primary.
+
+    DOMAIN-ROUTED (``_is_bibliographic_dataset``): the demotion is SKIPPED on
+    bibliographic data, where ``year`` is a publication year -- a legitimately strong
+    same-year blocking signal (DBLP-ACM). Only person/other shapes get demoted. Spec:
     ``docs/superpowers/specs/2026-07-30-blocking-primary-key-cost-aware-design.md``."""
     val = os.environ.get("GOLDENMATCH_BLOCKING_COST_AWARE")
     return val is not None and val.lower() in ("1", "true", "yes", "on")
+
+
+def _is_bibliographic_dataset(profiles: list[ColumnProfile]) -> bool:
+    """True when the dataset's columns read as BIBLIOGRAPHIC (title/authors/venue/
+    journal/doi/isbn/year), via ``core.domain.detect_domain`` on the column names.
+
+    This routes the cost-aware year/date demotion (#2021): on bibliographic data a
+    ``year`` column is the PUBLICATION year -- a strong shared-identity blocking
+    signal (every true match is same-year, the DBLP-ACM shape), so blocking on it is
+    correct and must NOT be demoted. On person/other data a ``year`` is a coarse
+    ``birth_year`` whose block grows ∝N and explodes at scale, so it IS demoted. The
+    person shape (first_name/last_name/email/birth) scores ``person`` here, not
+    bibliographic, so demotion still applies to it. Fail-open to False (apply the
+    demotion) on any detection error."""
+    try:
+        from goldenmatch.core.domain import detect_domain
+        cols = [p.name for p in profiles if not p.name.startswith("__")]
+        return detect_domain(cols).name == "bibliographic"
+    except Exception:  # noqa: BLE001 -- detection is best-effort; default to demoting
+        return False
 
 
 def _has_fuzzy_tolerant_transform(transforms: list[str]) -> bool:
@@ -3332,7 +3356,15 @@ def build_blocking(
         # from the primary slot when a better-bounded fallback exists (a name key or a
         # bounded compound); it stays a recall PASS via _pick_date_blocking_col (#438).
         # If it is the ONLY option, keep it rather than refuse outright.
-        if _cost_aware_blocking_enabled() and safe_exact:
+        #
+        # DOMAIN-ROUTED: skip the demotion on BIBLIOGRAPHIC data, where a `year`
+        # column is the PUBLICATION year -- a strong shared-identity blocking signal
+        # (every true match is same-year: the DBLP-ACM shape), so year-blocking is
+        # correct there and must be preserved. Only person/other data (birth_year =
+        # coarse ∝N block) gets demoted. Detection is by column names via
+        # `core.domain.detect_domain` (the person shape scores `person`, not biblio).
+        if (_cost_aware_blocking_enabled() and safe_exact
+                and not _is_bibliographic_dataset(profiles)):
             non_growing = [p for p in safe_exact if p.col_type not in ("year", "date")]
             if non_growing:
                 safe_exact = non_growing
