@@ -70,3 +70,47 @@ def test_accepts_dict_and_path(tmp_path):
 def test_empty_or_missing_semantic_models():
     assert parse_semantic_models("version: 2") == []
     assert parse_semantic_models({}) == []
+
+
+def test_unique_entity_promoted_when_no_primary():
+    """A semantic model whose identity is a `unique` (not `primary`/`natural`)
+    entity is still certifiable — the unique key is promoted to the key."""
+    yaml = """
+semantic_models:
+  - name: sessions
+    model: ref('sessions')
+    entities:
+      - name: session
+        type: unique
+        expr: session_id
+      - name: user
+        type: foreign
+        expr: user_id
+    measures:
+      - name: session_count
+        agg: count
+"""
+    specs = parse_semantic_models(yaml)
+    assert [s.model for s in specs] == ["sessions"]
+    spec = specs[0]
+    assert spec.key == ["session_id"]          # unique promoted to the key
+    assert spec.foreign_keys == ["user_id"]
+
+
+def test_primary_wins_over_unique():
+    """When both a primary and a unique entity are declared, the primary is the
+    key and the unique is not promoted."""
+    yaml = """
+semantic_models:
+  - name: orders
+    model: ref('orders')
+    entities:
+      - name: order
+        type: primary
+        expr: order_id
+      - name: order_ref
+        type: unique
+        expr: external_ref
+"""
+    spec = parse_semantic_models(yaml)[0]
+    assert spec.key == ["order_id"]

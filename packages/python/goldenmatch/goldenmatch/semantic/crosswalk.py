@@ -110,13 +110,23 @@ def build_resolved_crosswalk(
         dataset=dataset,
     )
 
-    dedupe_df(df, config=cfg, source_name=source_name, confidence_required=False)
+    try:
+        dedupe_df(df, config=cfg, source_name=source_name, confidence_required=False)
 
-    store = IdentityStore(backend="sqlite", path=store_path)
-    pks = table.column(source_pk).to_pylist()
-    record_ids = [f"{source_name}:{pk}" for pk in pks]
-    mapping = store.lookup_entity_ids(record_ids)
-    resolved = [mapping.get(rid) for rid in record_ids]
+        store = IdentityStore(backend="sqlite", path=store_path)
+        pks = table.column(source_pk).to_pylist()
+        record_ids = [f"{source_name}:{pk}" for pk in pks]
+        mapping = store.lookup_entity_ids(record_ids)
+        resolved = [mapping.get(rid) for rid in record_ids]
+    finally:
+        if ephemeral:
+            # The ephemeral store is a throwaway temp DB — remove it (and any
+            # SQLite -wal/-shm sidecars) so repeated ephemeral runs don't leak files.
+            for suffix in ("", "-wal", "-shm"):
+                try:
+                    os.unlink(store_path + suffix)
+                except OSError:
+                    pass
 
     out = pa.table({
         "source": [source_name] * len(pks),

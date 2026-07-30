@@ -84,6 +84,7 @@ def parse_semantic_models(source: str | Path | dict[str, Any]) -> list[DeclaredK
 
         primary_key: list[str] = []
         foreign_keys: list[str] = []
+        unique_keys: list[str] = []
         for ent in entities:
             if not isinstance(ent, dict):
                 continue
@@ -96,13 +97,20 @@ def parse_semantic_models(source: str | Path | dict[str, Any]) -> list[DeclaredK
             elif etype == "foreign":
                 foreign_keys.append(col)
             elif etype == "unique":
-                # a unique (non-primary) key is still a valid identity to check;
-                # only promote it when no primary/natural entity was declared.
+                unique_keys.append(col)
+                # A unique (non-primary) entity is a join edge when a primary key
+                # is present (preserving the emit round-trip: a source key emitted
+                # as `unique`); it is promoted to the key only when no primary is.
                 foreign_keys.append(col)
 
-        if not primary_key:
-            # No primary/natural entity → nothing to certify for this model.
+        key = primary_key or unique_keys
+        if not key:
+            # No primary/natural/unique entity → nothing to certify for this model.
             continue
+        if not primary_key:
+            # Promoted a unique key to the primary role — it is the identity, not
+            # a foreign join edge, so drop it from foreign_keys.
+            foreign_keys = [c for c in foreign_keys if c not in unique_keys]
 
         measures = [
             c for m in (sm.get("measures") or [])
@@ -117,7 +125,7 @@ def parse_semantic_models(source: str | Path | dict[str, Any]) -> list[DeclaredK
         specs.append(
             DeclaredKeySpec(
                 model=name,
-                key=primary_key,
+                key=key,
                 measures=measures,
                 grain=grain,
                 foreign_keys=foreign_keys,
