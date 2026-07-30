@@ -299,7 +299,7 @@ def main() -> None:
                     help="write {record_id, cluster_id} truth parquet (dataset mode)")
     ap.add_argument("--threshold", type=float, default=0.95)
     ap.add_argument("--max-pairs", type=float, default=2e6, help="u-estimation sample size")
-    ap.add_argument("--shape", choices=["person", "biblio"], default="person",
+    ap.add_argument("--shape", choices=["person", "biblio", "product"], default="person",
                     help="fixture shape (--input mode); selects settings from shapes.py")
     args = ap.parse_args()
 

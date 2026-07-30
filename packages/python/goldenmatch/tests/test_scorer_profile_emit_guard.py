@@ -4,7 +4,8 @@
 Hartigan dip statistic, and two mass_* passes) and hands it to
 ``current_emitter().set_scoring``. The emit is a no-op under the null emitter,
 but the *construction* is not: histogram_20 + hartigan_dip + mass_* iterate over
-EVERY scored pair (~131M at 1M rows; the dip is a numpy/diptest sort). On the
+EVERY scored pair (~131M at 1M rows; the dip is an owned sort + GCM/LCM walk,
+goldenmatch.core._dip). On the
 full production pass there is NO ``profile_capture`` (every capture lives in the
 auto-config controller's sample iterations), so that ~149s of work was computed
 and immediately discarded -- the same dead-work pattern as #837's matched_pairs.

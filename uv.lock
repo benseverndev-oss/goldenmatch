@@ -990,7 +990,6 @@ agent = [
 baseline = [
     { name = "numpy" },
     { name = "polars" },
-    { name = "scipy" },
 ]
 db = [
     { name = "connectorx" },
@@ -1044,7 +1043,6 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "rich", specifier = ">=13.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
-    { name = "scipy", marker = "extra == 'baseline'", specifier = ">=1.11" },
     { name = "sentence-transformers", marker = "extra == 'semantic'", specifier = ">=2.2" },
     { name = "textual", specifier = ">=1.0" },
     { name = "typer", specifier = ">=0.12" },
@@ -1211,7 +1209,6 @@ name = "goldenmatch"
 version = "3.10.0"
 source = { editable = "packages/python/goldenmatch" }
 dependencies = [
-    { name = "diptest" },
     { name = "duckdb" },
     { name = "goldenmatch-native", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or sys_platform == 'darwin' or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-11-goldenmatch-inhouse-embeddings' and extra == 'extra-11-goldenmatch-sail') or (sys_platform == 'linux' and extra == 'extra-11-goldenmatch-inhouse-embeddings' and extra == 'extra-11-goldenmatch-sail') or (sys_platform == 'win32' and extra == 'extra-11-goldenmatch-inhouse-embeddings' and extra == 'extra-11-goldenmatch-sail')" },
     { name = "goldenphonetic" },
@@ -1372,7 +1369,6 @@ requires-dist = [
     { name = "boto3", marker = "extra == 's3'", specifier = ">=1.26" },
     { name = "databricks-sql-connector", marker = "extra == 'databricks'", specifier = ">=3.0" },
     { name = "datafusion", marker = "extra == 'datafusion'", specifier = ">=53,<54" },
-    { name = "diptest", specifier = ">=0.5.2" },
     { name = "duckdb", specifier = ">=0.9" },
     { name = "duckdb", marker = "extra == 'bench'", specifier = ">=0.10" },
     { name = "duckdb", marker = "extra == 'duckdb'", specifier = ">=0.9" },
@@ -1440,6 +1436,7 @@ source = { virtual = "." }
 
 [package.dev-dependencies]
 dev = [
+    { name = "diptest" },
     { name = "httpx" },
     { name = "hypothesis" },
     { name = "jellyfish" },
@@ -1459,6 +1456,7 @@ dev = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "diptest", specifier = ">=0.5.2" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "hypothesis", specifier = ">=6.0" },
     { name = "jellyfish", specifier = ">=1.0" },

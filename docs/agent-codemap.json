@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 425,
+      "module_count": 426,
       "modules": [
         {
           "module": "goldenmatch",
@@ -1492,6 +1492,14 @@
           ]
         },
         {
+          "module": "goldenmatch.core._dip",
+          "file": "packages/python/goldenmatch/goldenmatch/core/_dip.py",
+          "purpose": "Owned Hartigan dip statistic — GoldenMatch's replacement for the ``diptest``",
+          "defines": [
+            "hartigan_dip"
+          ]
+        },
+        {
           "module": "goldenmatch.core._hashing",
           "file": "packages/python/goldenmatch/goldenmatch/core/_hashing.py",
           "purpose": "Canonical record fingerprint (cross-surface stable hash).",
@@ -1581,6 +1589,7 @@
             "transitivity_rate"
           ],
           "imports": [
+            "goldenmatch.core._dip",
             "goldenmatch.core.frame"
           ]
         },
@@ -7921,7 +7930,7 @@
     },
     "goldencheck": {
       "root": "packages/python/goldencheck/goldencheck",
-      "module_count": 115,
+      "module_count": 116,
       "modules": [
         {
           "module": "goldencheck",
@@ -8115,6 +8124,22 @@
           ]
         },
         {
+          "module": "goldencheck.baseline._distributions",
+          "file": "packages/python/goldencheck/goldencheck/baseline/_distributions.py",
+          "purpose": "Owned continuous-distribution fits + log-pdfs -- goldencheck's scipy-free",
+          "defines": [
+            "OwnedDist",
+            "_expon_fit",
+            "_expon_logpdf",
+            "_lognorm_fit",
+            "_lognorm_logpdf",
+            "_norm_fit",
+            "_norm_logpdf",
+            "_uniform_fit",
+            "_uniform_logpdf"
+          ]
+        },
+        {
           "module": "goldencheck.baseline._ks",
           "file": "packages/python/goldencheck/goldencheck/baseline/_ks.py",
           "purpose": "Owned one-sample Kolmogorov-Smirnov test -- goldencheck's scipy-free",
@@ -8250,6 +8275,8 @@
           ],
           "imports": [
             "goldencheck._polars_lazy",
+            "goldencheck.baseline",
+            "goldencheck.baseline._distributions",
             "goldencheck.baseline._ks",
             "goldencheck.baseline._owned_stats",
             "goldencheck.baseline.models",
@@ -8658,6 +8685,7 @@
           "imports": [
             "goldencheck._polars_lazy",
             "goldencheck.baseline._ks",
+            "goldencheck.baseline._owned_stats",
             "goldencheck.baseline.correlation",
             "goldencheck.baseline.models",
             "goldencheck.baseline.patterns",

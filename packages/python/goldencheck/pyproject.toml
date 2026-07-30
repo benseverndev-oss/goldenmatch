@@ -80,9 +80,10 @@ agent = [
 ]
 baseline = [
     # The baseline statistics + drift + correlation subsystems are opt-in and still
-    # run on Polars (group_by/pivot/join) + scipy. 3.0.0 gates them here rather than
-    # porting them off Polars -- installing [baseline] pulls the polars they need.
-    "scipy>=1.11",
+    # run on Polars (group_by/pivot/join). They are now scipy-FREE: chi-squared,
+    # Pearson, the Kolmogorov-Smirnov test, and the distribution MLEs are owned in
+    # `goldencheck.baseline` (`_owned_stats` / `_ks` / `_distributions`, byte-close
+    # to scipy). scipy stays a dev-only parity oracle in the workspace dev group.
     "numpy>=1.26",
     "polars>=1.0",
 ]

@@ -87,6 +87,12 @@ dev = [
     # so `uv sync` installs it for CI/tests. (goldencheck[baseline] +
     # goldenmatch distributed use scipy on their own, separately.)
     "scipy>=1.11",
+    # diptest is a TEST-ONLY parity oracle: goldenmatch owns Hartigan's dip
+    # statistic via goldenmatch.core._dip (a byte-identical port of diptest's C
+    # `dip.c`), so `pip install goldenmatch` is diptest-free at RUNTIME. The dip
+    # parity test asserts the owned kernel matches `diptest.dipstat` exactly, so
+    # `uv sync` installs it for CI/tests. Same shape as the oracles above.
+    "diptest>=0.5.2",
     # python-dateutil is a TEST-ONLY parity oracle: goldenflow owns date parsing
     # via goldenflow-core (deterministic, dateutil-free at RUNTIME -- #dates
     # kernel), but the date parity tests assert the owned parser matches dateutil
