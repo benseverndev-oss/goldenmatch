@@ -8,11 +8,10 @@ from typing import TYPE_CHECKING
 
 try:
     import numpy as np
-    import scipy.stats as _stats
 except ImportError as _err:  # pragma: no cover
     raise ImportError(
-        "scipy and numpy are required for deep-profiling baseline. "
-        "Install them with: pip install 'goldencheck[baseline]'"
+        "numpy is required for deep-profiling baseline. "
+        "Install it with: pip install 'goldencheck[baseline]'"
     ) from _err
 
 from goldencheck._polars_lazy import pl

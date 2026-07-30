@@ -7879,7 +7879,7 @@
     },
     "goldencheck": {
       "root": "packages/python/goldencheck/goldencheck",
-      "module_count": 115,
+      "module_count": 116,
       "modules": [
         {
           "module": "goldencheck",
