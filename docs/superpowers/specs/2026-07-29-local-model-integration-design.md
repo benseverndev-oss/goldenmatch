@@ -117,9 +117,12 @@ Two wiring paths, same prompt/IO contract as the companion spec (§8 there).
   supplies the stub key. **Repo work: docs + a `goldenmatch llm serve-local`
   convenience command** that launches the pinned model. No scorer changes.
 - **Path B (in-process, no server):** a new optional extra
-  `goldenmatch[local-llm]` (`llama-cpp-python` + `huggingface_hub`) and a new
+  `goldenmatch[local-llm]` (`llama-cpp-python`; the GGUF is pulled from a GitHub
+  Release asset via stdlib `urllib` — no `huggingface_hub` dependency) and a new
   `provider="local"` branch. A `LocalLlamaAdapter` implements the same
-  prompt→`{match, confidence, reason}` contract in-process.
+  prompt→`{match, confidence, reason}` contract in-process. The model artifact is
+  published to a GitHub Release by the `publish-er-matcher` workflow
+  (Modal → GH), so users pull it from GitHub.
 
 **`_llm_loader.py` mirrors `core/_native_loader.py`:**
 
@@ -238,10 +241,11 @@ that shape the implementation:
    matches). Confirm — or restrict to confident matches only for v1.
 4. **Base model / artifact:** inherited from the companion spec (lean
    Qwen2.5-3B, Apache-2.0). No new decision here.
-5. **Cross-repo boundary:** the model artifact lives in the ER worktree /
-   HF Hub (companion spec §5); this repo holds only the loader, prompt template,
-   pinned `(repo_id, revision, filename, sha256)`, and the wiring. Confirm the
-   split.
+5. **Cross-repo boundary (resolved):** the model artifact is published as a
+   **GitHub Release asset** (trained on Modal → uploaded by the
+   `publish-er-matcher` workflow); this repo holds only the loader, prompt
+   template, pinned `(url, filename, sha256)`, and the wiring — the GGUF bytes are
+   never in the git tree.
 
 ## 9. Risks & mitigations
 

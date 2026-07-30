@@ -222,12 +222,12 @@ llama = [
 ]
 # Self-hosted local ER-matcher for the LLM-scorer tier (D1 Path B): the
 # in-process LocalLlamaAdapter (goldenmatch/core/_llm_loader.py). llama-cpp-python
-# runs the pinned GGUF offline; huggingface_hub does download-on-first-use into
-# the HF cache. Both lazy-imported; absent them, provider='local' abstains.
+# runs the pinned GGUF offline; the model is pulled from a GitHub Release asset via
+# stdlib urllib (no huggingface_hub dependency). llama-cpp-python is lazy-imported;
+# absent it, provider='local' abstains.
 # Spec: docs/superpowers/specs/2026-07-29-local-model-integration-design.md
 local-llm = [
     "llama-cpp-python>=0.3",
-    "huggingface_hub>=0.24",
 ]
 web = [
     "fastapi>=0.110",

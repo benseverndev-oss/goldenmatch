@@ -1530,6 +1530,7 @@
             "LocalLlamaAdapter",
             "LocalModelSpec",
             "_local_llm_mode",
+            "_model_cache_dir",
             "_verify_sha256",
             "load_local_adapter",
             "parse_verdict",

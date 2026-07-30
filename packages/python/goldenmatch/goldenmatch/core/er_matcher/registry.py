@@ -3,8 +3,9 @@
 The repo holds ONLY the pin (URL + sha256), never the weights (spec §5). On first
 use, ``resolve_model`` downloads the GGUF to a local cache and verifies its
 sha256 -- never-black-box: the exact bytes are pinned and checked. The URL is a
-direct-download asset (a GitHub Release asset in the project's own org, or an HF
-resolve URL); ghcr/OCI is an alternative that needs an OCI puller (deferred).
+direct-download **GitHub Release asset** in the project's own org (published by
+the ``publish-er-matcher`` workflow); ghcr/OCI is an alternative that needs an
+OCI puller (deferred).
 
 Weights are published only after the P5 eval gate passes; until then the specs
 carry ``sha256=None`` (a `PENDING` pin) and ``resolve_model`` refuses to download
