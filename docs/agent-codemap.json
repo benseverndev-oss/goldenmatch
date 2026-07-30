@@ -5423,7 +5423,6 @@
           "imports": [
             "goldenmatch",
             "goldenmatch._api",
-            "goldenmatch._polars_lazy",
             "goldenmatch.config.schemas",
             "goldenmatch.core.autoconfig",
             "goldenmatch.core.golden",
