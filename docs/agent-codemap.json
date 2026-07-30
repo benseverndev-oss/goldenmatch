@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 426,
+      "module_count": 430,
       "modules": [
         {
           "module": "goldenmatch",
@@ -3418,6 +3418,14 @@
           ],
           "imports": [
             "goldenmatch.core.ingest"
+          ]
+        },
+        {
+          "module": "goldenmatch.core.key_integrity_certificate",
+          "file": "packages/python/goldenmatch/goldenmatch/core/key_integrity_certificate.py",
+          "purpose": "Metric-aware key-integrity certificate (semantic-layer wedge).",
+          "defines": [
+            "KeyIntegrityCertificate"
           ]
         },
         {
@@ -7029,6 +7037,45 @@
           "purpose": "Sail (Spark Connect) session helpers. Sail is programmed via PySpark /",
           "defines": [
             "connect"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/__init__.py",
+          "purpose": "Semantic-layer interoperability (the MetricFlow / Cube / OSI wedge).",
+          "imports": [
+            "goldenmatch.core.key_integrity_certificate",
+            "goldenmatch.semantic.key_integrity",
+            "goldenmatch.semantic.metricflow"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.key_integrity",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/key_integrity.py",
+          "purpose": "Metric-aware key-integrity certification (the semantic-layer wedge).",
+          "defines": [
+            "_add_resolution",
+            "_as_list",
+            "_row_key_values",
+            "_to_arrow",
+            "certify_key_integrity"
+          ],
+          "imports": [
+            "goldenmatch._api",
+            "goldenmatch.core.autoconfig",
+            "goldenmatch.core.key_integrity_certificate"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.metricflow",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/metricflow.py",
+          "purpose": "Read declared entity keys + measures from a dbt / MetricFlow semantic model.",
+          "defines": [
+            "DeclaredKeySpec",
+            "_entity_column",
+            "_load",
+            "_measure_column",
+            "parse_semantic_models"
           ]
         },
         {
@@ -12309,7 +12356,7 @@
     },
     "goldenanalysis": {
       "root": "packages/python/goldenanalysis/goldenanalysis",
-      "module_count": 30,
+      "module_count": 31,
       "modules": [
         {
           "module": "goldenanalysis",
@@ -12467,6 +12514,18 @@
           ],
           "imports": [
             "goldenanalysis.core",
+            "goldenanalysis.models"
+          ]
+        },
+        {
+          "module": "goldenanalysis.analyzers.key_integrity",
+          "file": "packages/python/goldenanalysis/goldenanalysis/analyzers/key_integrity.py",
+          "purpose": "``key.integrity`` — metric-aware key-integrity metrics from a certificate.",
+          "defines": [
+            "KeyIntegrityAnalyzer",
+            "_get"
+          ],
+          "imports": [
             "goldenanalysis.models"
           ]
         },
