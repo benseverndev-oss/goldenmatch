@@ -1,0 +1,37 @@
+name: Publish goldenmatch-wasm-runtime to npm
+
+# Thin caller -> .github/workflows/_publish-js.yml (the shared template).
+# goldenmatch-wasm-runtime is the shared WASM scorer-backend runtime the other TS
+# packages (goldenmatch, goldenanalysis, goldenflow, goldenpipe, infermap) consume
+# as a `workspace:^` devDependency and bundle into their own dist. It had no npm
+# publisher of its own; this closes that gap so the runtime is installable
+# standalone. It is a leaf package (no workspace deps, pure-TS tsup build), so
+# build_deps=false and no WASM build step is needed here.
+on:
+  push:
+    tags:
+      - "goldenmatch-wasm-runtime-js-v*"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag or commit to build (default: HEAD of main)"
+        required: false
+        default: ""
+      dry_run:
+        description: "Pack and validate without publishing"
+        required: false
+        default: "false"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    uses: ./.github/workflows/_publish-js.yml
+    with:
+      package: goldenmatch-wasm-runtime
+      build_deps: false
+      ref: ${{ inputs.ref || '' }}
+      dry_run: ${{ inputs.dry_run || 'false' }}
+    secrets: inherit
