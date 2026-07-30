@@ -443,9 +443,12 @@ def _fs_use_bucket_route(config: GoldenMatchConfig, mk: Any) -> bool:
     RSS at parity, wall within noise of the batched route) and has NO row cap.
     The exclusions that remain are correctness- or contract-driven:
 
-      - an EXPLICIT scale backend (ray / duckdb / datafusion / chunked) keeps
+      - a genuinely-DISTRIBUTED scale backend (ray / datafusion / chunked) keeps
         its own routing; ``polars-direct`` is the planner's in-band choice and
-        keeps the default (same band semantics as ``_use_bucket_scorer``);
+        keeps the default (same band semantics as ``_use_bucket_scorer``).
+        ``duckdb`` is NOT excluded: it is a single-node STORAGE backend with no
+        distinct FS route, so FS honors the memory-bounded bucket scorer under it
+        (see the inline note) rather than falling to the batched OOM path;
       - ``GOLDENMATCH_FS_DEFAULT_BUCKET=0`` escape hatch (legacy batched --
         memory-unbounded; a warning is logged when it fires);
       - active profile emitter: auto-config reads the legacy block-size
@@ -459,7 +462,18 @@ def _fs_use_bucket_route(config: GoldenMatchConfig, mk: Any) -> bool:
     backend = getattr(config, "backend", None)
     if backend == "bucket":
         return True  # explicit choice -- honored at any size
-    if backend not in (None, "polars-direct"):
+    # `duckdb` is a single-node pair-STORAGE backend with NO distinct FS scoring
+    # route -- an FS matchkey under it simply falls to the legacy batched scorer
+    # (this function's own "#1798 OOM path"), which is measurably quality-DIVERGENT
+    # from the reference bucket scorer once an additive orthogonal anchor is present
+    # (historical_50k: bucket f1_prob 0.8456 vs batched 0.7733 -- a birth_place
+    # over-merge on the batched route only, exposed on <16GB hosts where the planner
+    # picks duckdb). The planner picks duckdb for host-memory reasons, NOT because
+    # FS needs the batched scorer; the bucket route is memory-bounded by design
+    # (partitions internally), so it is the strictly-safer AND path-consistent
+    # choice for FS. The genuinely-DISTRIBUTED backends (ray / datafusion) keep
+    # their own routing.
+    if backend not in (None, "polars-direct", "duckdb"):
         return False
     if (
         os.environ.get("GOLDENMATCH_FS_DEFAULT_BUCKET", "1").strip().lower()

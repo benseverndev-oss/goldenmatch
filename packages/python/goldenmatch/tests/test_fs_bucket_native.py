@@ -254,9 +254,14 @@ def test_fs_bucket_route_decision(monkeypatch, caplog):
     # polars-direct is the planner's in-band choice -> same default as None
     # (parity with _use_bucket_scorer's band semantics).
     assert _fs_use_bucket_route(_prob_config(backend="polars-direct"), mk) is True
-    # Explicit bucket honored, explicit scale backends keep their routing.
+    # Explicit bucket honored; genuinely-distributed scale backends keep their
+    # routing, but `duckdb` (single-node STORAGE, no distinct FS route) honors the
+    # memory-bounded bucket scorer for FS rather than falling to the batched OOM
+    # path -- which is also quality-divergent from bucket with an additive anchor
+    # (historical_50k). See _fs_use_bucket_route's inline note.
     assert _fs_use_bucket_route(_prob_config(backend="bucket"), mk) is True
-    for be in ("ray", "duckdb", "datafusion"):
+    assert _fs_use_bucket_route(_prob_config(backend="duckdb"), mk) is True
+    for be in ("ray", "datafusion"):
         assert _fs_use_bucket_route(_prob_config(backend=be), mk) is False
 
     # Escape hatch always wins -- and warns (the batched fallback is the
