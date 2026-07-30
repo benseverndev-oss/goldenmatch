@@ -1,8 +1,9 @@
 # Semantic Layering (MetricFlow / Cube / OSI) — brainstorm / planning
 
-> **Status:** wedges **A + B** SHIPPED — decisions
+> **Status:** wedges **A + B + C** SHIPPED — decisions
 > [0049](../decisions/0049-metric-aware-key-certification.md) (certify) +
-> [0050](../decisions/0050-resolved-crosswalk-emit.md) (resolve once + emit).
+> [0050](../decisions/0050-resolved-crosswalk-emit.md) (resolve once + emit) +
+> [0051](../decisions/0051-osi-ossie-native-provider.md) (OSI/Ossie provider).
 > Captures the framing for how GoldenMatch relates to the semantic-layer /
 > metrics-layer ecosystem (dbt Semantic Layer + MetricFlow, Cube, and the Open
 > Semantic Interchange spec), and a crawl→walk→run plan. Problem **A**
@@ -11,9 +12,13 @@
 > `goldenmatch_key_integrity` dbt test. Problem **B** (emit the resolved crosswalk):
 > `build_resolved_crosswalk` (durable control-plane entity ids) +
 > `emit_semantic_model` / `emit_metricflow_yaml` (declare the conformed key as the
-> primary entity; round-trips through the A reader). **C** (OSI provider) remains
-> planned. Greenfield when written: no prior repo code, doc, or decision referenced
-> this ecosystem (grep, 2026-07-30).
+> primary entity; round-trips through the A reader). Problem **C** (OSI/Apache Ossie
+> native provider): `parse_osi_models` + `osi_join_keys` (consume — learn what to
+> resolve), `certify_osi_relationships` (bridge to A — certify the keys metrics
+> join on), `emit_osi_from_crosswalk` (bridge to B — emit the conformed join), all
+> schema-faithful to Ossie `0.2.0.dev0`. The arc is complete — the whole
+> crawl→walk→run is landed. Greenfield when written: no prior repo code, doc, or
+> decision referenced this ecosystem (grep, 2026-07-30).
 
 ## The premise
 

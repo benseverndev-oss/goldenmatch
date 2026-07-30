@@ -26,6 +26,19 @@ from goldenmatch.semantic.metricflow import (
     emit_semantic_model,
     parse_semantic_models,
 )
+from goldenmatch.semantic.osi import (
+    OsiDataset,
+    OsiField,
+    OsiMetric,
+    OsiModel,
+    OsiRelationship,
+    certify_osi_relationships,
+    emit_osi_from_crosswalk,
+    emit_osi_model,
+    emit_osi_yaml,
+    osi_join_keys,
+    parse_osi_models,
+)
 
 __all__ = [
     # wedge A — certify a declared key
@@ -39,4 +52,16 @@ __all__ = [
     "emit_semantic_model",
     "emit_metricflow_yaml",
     "emit_from_crosswalk",
+    # wedge C — OSI / Apache Ossie native provider (bidirectional)
+    "parse_osi_models",
+    "osi_join_keys",
+    "certify_osi_relationships",
+    "emit_osi_model",
+    "emit_osi_yaml",
+    "emit_osi_from_crosswalk",
+    "OsiModel",
+    "OsiDataset",
+    "OsiRelationship",
+    "OsiField",
+    "OsiMetric",
 ]
