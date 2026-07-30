@@ -28,6 +28,7 @@ Zero-config matching that **beats expert-tuned Splink head-to-head on messy cust
 <!-- Reach -->
 [![PyPI downloads (suite)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbenseverndev-oss%2Fgoldenmatch%2Fbadges%2Fpypi-downloads.json)](https://pepy.tech/projects?q=goldenmatch+goldencheck+goldenpipe+goldenflow+goldenanalysis+infermap+goldencheck-types+goldensuite-mcp+goldenfuzz+goldenphonetic+goldenmatch-hnsw+goldenmatch-duckdb+goldenmatch-native+goldenflow-native+goldencheck-native+goldenanalysis-native+goldengraph-native+goldenprofile-native+goldenmatch-embed+goldengraph+golden-suite)
 [![npm downloads (suite)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbenseverndev-oss%2Fgoldenmatch%2Fbadges%2Fnpm-downloads.json)](https://www.npmjs.com/~benzsevern)
+[![crates.io downloads](https://img.shields.io/crates/d/goldenfuzz-core?color=d4a017&label=crates.io%20dl&logo=rust&logoColor=white)](https://crates.io/crates/goldenfuzz-core)
 [![GitHub stars](https://img.shields.io/github/stars/benseverndev-oss/goldenmatch?style=flat&color=d4a017&logo=github)](https://github.com/benseverndev-oss/goldenmatch/stargazers)
 
 <!-- Ecosystem -->
