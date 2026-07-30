@@ -5696,6 +5696,7 @@
         ],
         "LOCAL": [
           "GOLDENMATCH_LOCAL_LLM",
+          "GOLDENMATCH_LOCAL_LLM_CACHE",
           "GOLDENMATCH_LOCAL_LLM_GPU_LAYERS",
           "GOLDENMATCH_LOCAL_LLM_PATH"
         ],

@@ -1301,7 +1301,6 @@ llm = [
     { name = "openai" },
 ]
 local-llm = [
-    { name = "huggingface-hub" },
     { name = "llama-cpp-python" },
 ]
 mcp = [
@@ -1386,7 +1385,6 @@ requires-dist = [
     { name = "google-cloud-bigquery", marker = "extra == 'bigquery'", specifier = ">=3.0" },
     { name = "google-cloud-storage", marker = "extra == 'gcs'", specifier = ">=2.10" },
     { name = "httpx", marker = "extra == 'web'", specifier = ">=0.27" },
-    { name = "huggingface-hub", marker = "extra == 'local-llm'", specifier = ">=0.24" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.0" },
     { name = "llama-cpp-python", marker = "extra == 'llama'", specifier = ">=0.3" },
     { name = "llama-cpp-python", marker = "extra == 'local-llm'", specifier = ">=0.3" },

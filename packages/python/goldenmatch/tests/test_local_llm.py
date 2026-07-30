@@ -74,7 +74,7 @@ class TestLoader:
         p = tmp_path / "model.gguf"
         p.write_bytes(b"gguf-bytes")
         monkeypatch.setenv("GOLDENMATCH_LOCAL_LLM_PATH", str(p))
-        spec = L.LocalModelSpec(repo_id="x", revision="main", filename="m.gguf", sha256="deadbeef")
+        spec = L.LocalModelSpec(url="https://example.test/m.gguf", filename="m.gguf", sha256="deadbeef")
         with pytest.raises(L.LocalLLMUnavailableError):
             L.resolve_model_path(spec)
 
@@ -84,7 +84,7 @@ class TestLoader:
         p.write_bytes(b"gguf-bytes")
         digest = hashlib.sha256(b"gguf-bytes").hexdigest()
         monkeypatch.setenv("GOLDENMATCH_LOCAL_LLM_PATH", str(p))
-        spec = L.LocalModelSpec(repo_id="x", revision="main", filename="m.gguf", sha256=digest)
+        spec = L.LocalModelSpec(url="https://example.test/m.gguf", filename="m.gguf", sha256=digest)
         assert L.resolve_model_path(spec) == str(p)
 
     def test_mode_1_raises_when_unresolvable(self, monkeypatch):
@@ -92,6 +92,64 @@ class TestLoader:
         monkeypatch.setenv("GOLDENMATCH_LOCAL_LLM_PATH", "/no/such/model.gguf")
         with pytest.raises(L.LocalLLMUnavailableError):
             L.load_local_adapter()
+
+    # ── GitHub Release cache + download path ───────────────────────────────────
+
+    def test_cache_hit_returns_cached(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("GOLDENMATCH_LOCAL_LLM_PATH", raising=False)
+        monkeypatch.setenv("GOLDENMATCH_LOCAL_LLM_CACHE", str(tmp_path))
+        (tmp_path / "m.gguf").write_bytes(b"cached-bytes")
+        spec = L.LocalModelSpec(url="https://example.test/m.gguf", filename="m.gguf")
+        assert L.resolve_model_path(spec) == str(tmp_path / "m.gguf")
+
+    def _fake_urlopen(self, monkeypatch, payload: bytes):
+        import contextlib
+        import io
+
+        @contextlib.contextmanager
+        def _open(url, *a, **k):
+            yield io.BytesIO(payload)
+
+        monkeypatch.setattr("urllib.request.urlopen", _open)
+
+    def test_download_verifies_and_atomically_caches(self, monkeypatch, tmp_path):
+        import hashlib
+
+        monkeypatch.delenv("GOLDENMATCH_LOCAL_LLM_PATH", raising=False)
+        monkeypatch.setenv("GOLDENMATCH_LOCAL_LLM_CACHE", str(tmp_path))
+        payload = b"downloaded-gguf-bytes"
+        self._fake_urlopen(monkeypatch, payload)
+        spec = L.LocalModelSpec(
+            url="https://example.test/m.gguf", filename="m.gguf",
+            sha256=hashlib.sha256(payload).hexdigest(),
+        )
+        path = L.resolve_model_path(spec)
+        assert path == str(tmp_path / "m.gguf")
+        assert (tmp_path / "m.gguf").read_bytes() == payload
+        # no leftover .part temp files
+        assert not list(tmp_path.glob("*.part"))
+
+    def test_download_sha_mismatch_raises_and_leaves_no_cache(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("GOLDENMATCH_LOCAL_LLM_PATH", raising=False)
+        monkeypatch.setenv("GOLDENMATCH_LOCAL_LLM_CACHE", str(tmp_path))
+        self._fake_urlopen(monkeypatch, b"downloaded-gguf-bytes")
+        spec = L.LocalModelSpec(url="https://example.test/m.gguf", filename="m.gguf", sha256="deadbeef")
+        with pytest.raises(L.LocalLLMUnavailableError):
+            L.resolve_model_path(spec)
+        assert not (tmp_path / "m.gguf").exists()
+        assert not list(tmp_path.glob("*.part"))
+
+    def test_download_unreachable_abstains(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("GOLDENMATCH_LOCAL_LLM_PATH", raising=False)
+        monkeypatch.setenv("GOLDENMATCH_LOCAL_LLM_CACHE", str(tmp_path))
+
+        def _boom(url, *a, **k):
+            raise OSError("no network")
+
+        monkeypatch.setattr("urllib.request.urlopen", _boom)
+        spec = L.LocalModelSpec(url="https://example.test/m.gguf", filename="m.gguf")
+        assert L.resolve_model_path(spec) is None
+        assert not list(tmp_path.glob("*.part"))
 
 
 # ── provider="local" scoring path ──────────────────────────────────────────────
