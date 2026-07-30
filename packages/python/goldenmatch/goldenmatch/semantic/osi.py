@@ -31,6 +31,15 @@ from goldenmatch.semantic.metricflow import _load
 OSI_VERSION = "0.2.0.dev0"
 DEFAULT_DIALECT = "ANSI_SQL"
 
+# The Ossie 0.2.0.dev0 enums (core-spec/osi-schema.json). Used by validate_osi.
+_OSI_DIALECTS = frozenset(
+    {"ANSI_SQL", "SNOWFLAKE", "MDX", "TABLEAU", "DATABRICKS", "MAQL", "BIGQUERY"}
+)
+_OSI_DATATYPES = frozenset({
+    "String", "Integer", "Decimal", "Float", "Boolean",
+    "Date", "Time", "DateTime", "DateTimeTz", "Opaque",
+})
+
 
 # --- model -------------------------------------------------------------------
 
@@ -343,3 +352,94 @@ def certify_osi_relationships(model: OsiModel | str | Any, frames: dict[str, Any
             "certificate": cert,
         })
     return out
+
+
+# --- conformance validation --------------------------------------------------
+
+
+def _expression_issues(expr: Any, loc: str) -> list[str]:
+    """Validate an Ossie `expression` — a str or `{dialects: [{dialect, expression}]}`.
+    Returns issues for a missing/malformed expression AND for any dialect name
+    outside the Ossie enum (`_OSI_DIALECTS`)."""
+    if isinstance(expr, str):
+        return []
+    if isinstance(expr, dict):
+        dialects = expr.get("dialects")
+        if not isinstance(dialects, list) or not dialects:
+            return [f"{loc}: missing/invalid 'expression'"]
+        out: list[str] = []
+        for d in dialects:
+            dialect = d.get("dialect") if isinstance(d, dict) else None
+            if dialect is not None and dialect not in _OSI_DIALECTS:
+                out.append(f"{loc}: dialect {dialect!r} not in the Ossie enum")
+        return out
+    return [f"{loc}: missing/invalid 'expression'"]
+
+
+def validate_osi(source: str | Any) -> list[str]:
+    """Validate an OSI/Ossie document against the spec's structural constraints
+    (`core-spec/osi-schema.json`, 0.2.0.dev0) — returns a list of human-readable
+    issues, empty when valid. Faithful to the schema's `required` sets + enums,
+    and flags the keys the schema does NOT define (cardinality / foreign_key /
+    aggregation) so hand-written or third-party docs stay conformant.
+
+    Structural (no `jsonschema` dependency): validates required fields, list shape,
+    and enum membership — the checks that keep GoldenMatch-emitted OSI round-trippable
+    and portable across Ossie consumers. `validate_osi(emit_osi_yaml(...)) == []`.
+    """
+    data = _load(source)
+    issues: list[str] = []
+
+    if "version" not in data:
+        issues.append("missing top-level 'version'")
+    sm = data.get("semantic_model")
+    if not isinstance(sm, list):
+        issues.append("'semantic_model' must be a list of models")
+        return issues
+
+    for i, m in enumerate(sm):
+        loc = f"semantic_model[{i}]"
+        if not isinstance(m, dict):
+            issues.append(f"{loc}: must be a mapping")
+            continue
+        if not str(m.get("name", "")).strip():
+            issues.append(f"{loc}: missing 'name'")
+
+        for j, d in enumerate(m.get("datasets") or []):
+            dloc = f"{loc}.datasets[{j}]"
+            if not isinstance(d, dict) or not str(d.get("name", "")).strip():
+                issues.append(f"{dloc}: missing 'name'")
+                continue
+            if "foreign_key" in d:
+                issues.append(f"{dloc}: 'foreign_key' is not an Ossie key — declare FKs in relationships")
+            for k, f in enumerate(d.get("fields") or []):
+                floc = f"{dloc}.fields[{k}]"
+                if not isinstance(f, dict) or not str(f.get("name", "")).strip():
+                    issues.append(f"{floc}: missing 'name'")
+                    continue
+                issues.extend(_expression_issues(f.get("expression"), floc))
+                dt = f.get("datatype")
+                if dt is not None and dt not in _OSI_DATATYPES:
+                    issues.append(f"{floc}: datatype {dt!r} not in the Ossie enum")
+
+        for j, r in enumerate(m.get("relationships") or []):
+            rloc = f"{loc}.relationships[{j}]"
+            if not isinstance(r, dict):
+                issues.append(f"{rloc}: must be a mapping")
+                continue
+            for req in ("name", "from", "to", "from_columns", "to_columns"):
+                if req not in r or r.get(req) in (None, "", []):
+                    issues.append(f"{rloc}: missing required '{req}'")
+            if "cardinality" in r:
+                issues.append(f"{rloc}: 'cardinality' is not an Ossie key — direction is from(many)->to(one)")
+
+        for j, mt in enumerate(m.get("metrics") or []):
+            mloc = f"{loc}.metrics[{j}]"
+            if not isinstance(mt, dict) or not str(mt.get("name", "")).strip():
+                issues.append(f"{mloc}: missing 'name'")
+                continue
+            issues.extend(_expression_issues(mt.get("expression"), mloc))
+            if "aggregation" in mt or "agg" in mt:
+                issues.append(f"{mloc}: aggregation belongs inside the metric SQL expression, not a key")
+
+    return issues

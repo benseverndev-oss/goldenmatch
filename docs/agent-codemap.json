@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 432,
+      "module_count": 433,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7056,6 +7056,7 @@
           "imports": [
             "goldenmatch.core.key_integrity_certificate",
             "goldenmatch.semantic.crosswalk",
+            "goldenmatch.semantic.cube",
             "goldenmatch.semantic.key_integrity",
             "goldenmatch.semantic.metricflow",
             "goldenmatch.semantic.osi"
@@ -7075,6 +7076,35 @@
             "goldenmatch.core.autoconfig",
             "goldenmatch.identity.store",
             "goldenmatch.semantic.key_integrity"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.cube",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/cube.py",
+          "purpose": "Cube (cube.dev) semantic-layer reader + emitter — the third dialect.",
+          "defines": [
+            "Cube",
+            "CubeDimension",
+            "CubeJoin",
+            "CubeMeasure",
+            "_member_refs",
+            "_normalize_relationship",
+            "_parse_dimension",
+            "_parse_join",
+            "_parse_measure",
+            "certify_cube_joins",
+            "cube_join_keys",
+            "emit_cube",
+            "emit_cube_dimension",
+            "emit_cube_from_crosswalk",
+            "emit_cube_join",
+            "emit_cube_measure",
+            "emit_cube_yaml",
+            "parse_cube_models"
+          ],
+          "imports": [
+            "goldenmatch.semantic.key_integrity",
+            "goldenmatch.semantic.metricflow"
           ]
         },
         {
@@ -7120,6 +7150,7 @@
             "OsiModel",
             "OsiRelationship",
             "_dialect_expression",
+            "_expression_issues",
             "_parse_dataset",
             "_parse_relationship",
             "_read_expression",
@@ -7131,7 +7162,8 @@
             "emit_osi_relationship",
             "emit_osi_yaml",
             "osi_join_keys",
-            "parse_osi_models"
+            "parse_osi_models",
+            "validate_osi"
           ],
           "imports": [
             "goldenmatch.semantic.key_integrity",

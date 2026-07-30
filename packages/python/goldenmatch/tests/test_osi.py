@@ -9,6 +9,7 @@ from goldenmatch.semantic import (
     emit_osi_yaml,
     osi_join_keys,
     parse_osi_models,
+    validate_osi,
 )
 
 # A real-shaped Ossie document (TPC-DS): version + semantic_model list, datasets
@@ -121,3 +122,89 @@ def test_certify_osi_relationships_bridges_wedge_a():
 def test_certify_osi_relationships_accepts_source_and_skips_absent_frames():
     # passing the raw doc (not a parsed model) + no frames -> nothing to certify
     assert certify_osi_relationships(_DOC, frames={}) == []
+
+
+# --- conformance validation --------------------------------------------------
+
+
+def test_validate_osi_accepts_emitted_and_reference_docs():
+    # our own emit is valid, and the reference TPC-DS doc is valid
+    assert validate_osi(_DOC) == []
+    m = parse_osi_models(_DOC)[0]
+    assert validate_osi(emit_osi_yaml(m)) == []
+
+    class _XW:
+        source_pk_column = "customer_id"
+        resolved_key = "resolved_entity_id"
+        n_records = 12
+        n_entities = 11
+        reduction_ratio = 1 - 11 / 12
+
+    assert validate_osi(emit_osi_from_crosswalk(_XW(), source_dataset="store_sales")) == []
+
+
+def test_validate_osi_flags_the_non_ossie_keys_and_missing_requireds():
+    # A doc that violates several spec constraints at once, incl. the keys the
+    # schema does NOT define (cardinality / foreign_key / aggregation).
+    bad = {
+        "semantic_model": [  # note: no top-level 'version'
+            {
+                # no 'name'
+                "datasets": [
+                    {
+                        "name": "orders",
+                        "foreign_key": ["customer_id"],  # not an Ossie key
+                        "fields": [
+                            {"name": "amount"},  # missing expression
+                            {
+                                "name": "status",
+                                "expression": "status",
+                                "datatype": "Enum",  # not in the datatype enum
+                            },
+                        ],
+                    },
+                    {"source": "x"},  # missing dataset name
+                ],
+                "relationships": [
+                    {"name": "r", "from": "orders", "cardinality": "many_to_one"},  # missing to/cols + cardinality
+                ],
+                "metrics": [
+                    {"name": "total", "expression": "SUM(amount)", "agg": "sum"},  # agg is not a key
+                ],
+            }
+        ]
+    }
+    issues = validate_osi(bad)
+    joined = " | ".join(issues)
+    assert any("missing top-level 'version'" in i for i in issues)
+    assert any("missing 'name'" in i for i in issues)             # model + dataset
+    assert "foreign_key" in joined and "cardinality" in joined
+    assert any("datatype" in i for i in issues)
+    assert any("missing/invalid 'expression'" in i for i in issues)
+    assert any("aggregation belongs inside" in i for i in issues)
+    # relationship missing required to/from_columns/to_columns
+    assert any("missing required 'to'" in i for i in issues)
+
+
+def test_validate_osi_rejects_non_list_semantic_model():
+    assert validate_osi({"version": "0.2.0.dev0", "semantic_model": {}}) == [
+        "'semantic_model' must be a list of models"
+    ]
+
+
+def test_validate_osi_flags_unknown_dialect():
+    doc = {
+        "version": "0.2.0.dev0",
+        "semantic_model": [{
+            "name": "m",
+            "datasets": [{
+                "name": "d",
+                "fields": [{
+                    "name": "x",
+                    "expression": {"dialects": [{"dialect": "PRESTO", "expression": "x"}]},
+                }],
+            }],
+        }],
+    }
+    issues = validate_osi(doc)
+    assert any("dialect 'PRESTO' not in the Ossie enum" in i for i in issues)
