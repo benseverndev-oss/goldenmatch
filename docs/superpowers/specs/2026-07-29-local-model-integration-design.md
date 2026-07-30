@@ -162,10 +162,15 @@ name D2's surface `refit_from_labels` / `auto_refit`, never `RefitPolicy`).
 4. Package the refined `EMResult` (+ threshold) as the **suggested**
    `GoldenMatchConfig`, returned to the caller (surfaced on the result object).
 
-**Default = suggest, not apply.** Full-auto returns the refined config as a
-suggestion; the live run is unchanged. `auto_refit=True` (new kwarg /
-`GOLDENMATCH_AUTO_REFIT=1` / config field) re-runs the affected stage with the
-refined `EMResult` in the **same** call and applies it.
+**Default = suggest, not apply ("Both, gated").** The `auto_refit` kwarg on
+`dedupe_df` is tri-state: `False` (default) is off; `True` / `"suggest"` attaches
+the refined `EMResult` to `DedupeResult.refit_suggestion` and leaves the run
+unchanged; `"apply"` is the stronger opt-in that persists the refined `EMResult`
+(`save_json` → `model_path`) and re-runs scoring+clustering **once** with it in
+the same call, returning that second pass (suggestion still attached). Suggest
+reads the corrections THIS run persisted to the configured `MemoryStore` (via
+`refit_from_memory`); a run with no probabilistic matchkey / no memory / no
+confident labels is a no-op (`refit_suggestion=None`).
 
 **Reuse, don't reinvent:**
 - Confidence gate on which verdicts become labels: reuse the tier's
@@ -206,8 +211,9 @@ latency floor), not a per-call microbench.
   `GOLDENMATCH_LLM_BASE_URL` path end-to-end against a local server. Zero core risk.
 - **P2.** D2 the closed loop in **suggest** mode (return refined `EMResult` as a
   suggestion). No behavior change to a run; purely additive on the result object.
-- **P3.** D2 `auto_refit=True` (apply in-run) + persistence via `model_path` /
-  `Correction`.
+- **P3 (shipped).** D2 `auto_refit` tri-state on `dedupe_df` — `True`/`"suggest"`
+  attaches `DedupeResult.refit_suggestion`; `"apply"` persists via `model_path`
+  and re-runs once. Label source = this run's `MemoryStore` corrections.
 - **P4.** D1 Path B: `goldenmatch[local-llm]` in-process `LocalLlamaAdapter` +
   `_llm_loader.py`, skip-guarded test (mock the adapter or a tiny fixture model).
 - **P5.** D3 multiprocessing for the local provider.

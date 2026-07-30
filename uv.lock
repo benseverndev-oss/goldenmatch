@@ -1300,6 +1300,10 @@ llm = [
     { name = "anthropic" },
     { name = "openai" },
 ]
+local-llm = [
+    { name = "huggingface-hub" },
+    { name = "llama-cpp-python" },
+]
 mcp = [
     { name = "mcp" },
 ]
@@ -1382,8 +1386,10 @@ requires-dist = [
     { name = "google-cloud-bigquery", marker = "extra == 'bigquery'", specifier = ">=3.0" },
     { name = "google-cloud-storage", marker = "extra == 'gcs'", specifier = ">=2.10" },
     { name = "httpx", marker = "extra == 'web'", specifier = ">=0.27" },
+    { name = "huggingface-hub", marker = "extra == 'local-llm'", specifier = ">=0.24" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.0" },
     { name = "llama-cpp-python", marker = "extra == 'llama'", specifier = ">=0.3" },
+    { name = "llama-cpp-python", marker = "extra == 'local-llm'", specifier = ">=0.3" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.28.1" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "onnx", marker = "extra == 'inhouse-embeddings'", specifier = ">=1.22.0" },
@@ -1427,7 +1433,7 @@ requires-dist = [
     { name = "typer", specifier = ">=0.12" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'web'", specifier = ">=0.29" },
 ]
-provides-extras = ["dev", "embeddings", "vision", "documents", "audio", "inhouse-embeddings", "llm", "postgres", "mcp", "pprl", "snowflake", "bigquery", "databricks", "salesforce", "redshift", "s3", "gcs", "azure-blob", "sqlserver", "mysql", "duckdb", "pgvector", "ray", "datafusion", "sail", "agent", "polars", "quality", "transform", "native", "lance", "llama", "web", "bench", "all"]
+provides-extras = ["dev", "embeddings", "vision", "documents", "audio", "inhouse-embeddings", "llm", "postgres", "mcp", "pprl", "snowflake", "bigquery", "databricks", "salesforce", "redshift", "s3", "gcs", "azure-blob", "sqlserver", "mysql", "duckdb", "pgvector", "ray", "datafusion", "sail", "agent", "polars", "quality", "transform", "native", "lance", "llama", "local-llm", "web", "bench", "all"]
 
 [[package]]
 name = "goldenmatch-monorepo"
