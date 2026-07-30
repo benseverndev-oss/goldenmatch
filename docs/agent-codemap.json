@@ -7150,7 +7150,7 @@
             "OsiModel",
             "OsiRelationship",
             "_dialect_expression",
-            "_expr_ok",
+            "_expression_issues",
             "_parse_dataset",
             "_parse_relationship",
             "_read_expression",
