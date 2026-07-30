@@ -22,7 +22,7 @@ Discover order for the GGUF model file (first hit wins):
 Pin + verify: when :data:`PINNED_MODEL` carries a ``sha256`` the resolved file is
 checksum-verified (never-black-box — the exact bytes are pinned). The model
 artifact itself is NOT in the git tree; it is published as a **GitHub Release
-asset** (uploaded from the training box via the ``publish-er-matcher-model``
+asset** (uploaded from the training box via the ``publish-er-matcher``
 workflow), which the ``goldenmatch[local-llm]`` install pulls from GitHub — no
 Hugging Face Hub dependency. See the companion spec
 ``2026-07-26-oss-er-matcher-llm-boost-design.md`` §5.
@@ -63,16 +63,16 @@ class LocalModelSpec:
 
 # The default self-hosted ER-matcher (companion spec §4: Qwen2.5-3B, Apache-2.0,
 # 4-bit GGUF), published as a GitHub Release asset by the
-# ``publish-er-matcher-model`` workflow. Placeholder URL + `sha256=None` until the
+# ``publish-er-matcher`` workflow. Placeholder URL + `sha256=None` until the
 # trained model is uploaded and pinned (companion spec P3); the LOADER LOGIC below
 # is complete and tested regardless of whether this asset exists yet — an
 # unreachable URL simply abstains.
 PINNED_MODEL = LocalModelSpec(
     url=(
         "https://github.com/benseverndev-oss/goldenmatch/releases/download/"
-        "er-matcher-3b-v1/goldenmatch-er-matcher-3b.q4_k_m.gguf"
+        "er-matcher-3b-v1/goldenmatch-er-matcher-3b-q4_k_m.gguf"
     ),
-    filename="goldenmatch-er-matcher-3b.q4_k_m.gguf",
+    filename="goldenmatch-er-matcher-3b-q4_k_m.gguf",
     sha256=None,
 )
 

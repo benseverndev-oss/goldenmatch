@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       model_source:
-        description: "HF repo id OR https URL of the merged fp16 model dir (from the Modal full run)"
+        description: "https URL of a tarball/zip of the merged fp16 model dir (from the Modal full run)"
         required: true
       tier:
         description: "Model tier (fills the GGUF filename + which registry pin to print)"
@@ -57,20 +57,13 @@ jobs:
           cmake --build build --config Release -j --target llama-quantize
 
       - name: Download merged model
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}   # optional; only needed for a private HF repo
         run: |
           set -euo pipefail
           mkdir -p model
           src="${{ inputs.model_source }}"
-          if [[ "$src" == http*://* ]]; then
-            # a tarball/zip URL of the merged dir
-            curl -fSL "$src" -o model_src.archive
-            if [[ "$src" == *.zip ]]; then unzip -q model_src.archive -d model; else tar -xf model_src.archive -C model; fi
-          else
-            pip install "huggingface_hub[cli]"
-            hf download "$src" --local-dir model
-          fi
+          # a tarball/zip URL of the merged fp16 dir (e.g. served from the Modal run)
+          curl -fSL "$src" -o model_src.archive
+          if [[ "$src" == *.zip ]]; then unzip -q model_src.archive -d model; else tar -xf model_src.archive -C model; fi
           # normalize: if the archive nested a single dir, hoist it
           if [ ! -f model/config.json ]; then
             inner=$(find model -maxdepth 2 -name config.json -printf '%h\n' | head -1)
@@ -101,16 +94,16 @@ jobs:
                  --notes "OSS ER-matcher GGUF (${{ inputs.tier }}). Base: Qwen2.5-${{ inputs.tier }}-Instruct (Apache-2.0). See docs/superpowers/plans/2026-07-26-oss-er-matcher-llm-boost-plan.md."
           gh release upload "$tag" dist/*.gguf dist/SHA256SUMS.txt --clobber
 
-      - name: Print the registry pin to paste into registry.py
+      - name: Print the pin to paste into the runtime loader
         run: |
           set -euo pipefail
           repo="${{ github.repository }}"
           tag="${{ inputs.release_tag }}"
-          echo "::notice::Paste these pins into core/er_matcher/registry.py MODELS['${{ inputs.tier }}']:"
+          echo "::notice::Paste the q4_k_m pin below into core/_llm_loader.py PINNED_MODEL (the wired-in local-llm loader). The tiered core/er_matcher/registry.py MODELS['${{ inputs.tier }}'] takes the same (url, filename, sha256):"
           for f in dist/goldenmatch-er-matcher-${{ inputs.tier }}-*.gguf; do
             name=$(basename "$f")
             sha=$(sha256sum "$f" | cut -d' ' -f1)
             url="https://github.com/${repo}/releases/download/${tag}/${name}"
-            printf '  filename=%q\n  url=%q\n  sha256=%q\n\n' "$name" "$url" "$sha"
+            printf '  url=%q\n  filename=%q\n  sha256=%q\n\n' "$url" "$name" "$sha"
           done
-          echo "Then bump the registry, run the P5 eval gate (scripts/er_matcher/eval.py), and only ship if it wins."
+          echo "Then run the P5 eval gate (scripts/er_matcher/eval.py) and only ship if it wins."

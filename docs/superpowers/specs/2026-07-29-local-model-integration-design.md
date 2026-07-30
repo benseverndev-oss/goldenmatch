@@ -121,7 +121,7 @@ Two wiring paths, same prompt/IO contract as the companion spec (§8 there).
   Release asset via stdlib `urllib` — no `huggingface_hub` dependency) and a new
   `provider="local"` branch. A `LocalLlamaAdapter` implements the same
   prompt→`{match, confidence, reason}` contract in-process. The model artifact is
-  published to a GitHub Release by the `publish-er-matcher-model` workflow
+  published to a GitHub Release by the `publish-er-matcher` workflow
   (Modal → GH), so users pull it from GitHub.
 
 **`_llm_loader.py` mirrors `core/_native_loader.py`:**
@@ -243,7 +243,7 @@ that shape the implementation:
    Qwen2.5-3B, Apache-2.0). No new decision here.
 5. **Cross-repo boundary (resolved):** the model artifact is published as a
    **GitHub Release asset** (trained on Modal → uploaded by the
-   `publish-er-matcher-model` workflow); this repo holds only the loader, prompt
+   `publish-er-matcher` workflow); this repo holds only the loader, prompt
    template, pinned `(url, filename, sha256)`, and the wiring — the GGUF bytes are
    never in the git tree.
 
