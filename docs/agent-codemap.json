@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 431,
+      "module_count": 432,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7057,7 +7057,8 @@
             "goldenmatch.core.key_integrity_certificate",
             "goldenmatch.semantic.crosswalk",
             "goldenmatch.semantic.key_integrity",
-            "goldenmatch.semantic.metricflow"
+            "goldenmatch.semantic.metricflow",
+            "goldenmatch.semantic.osi"
           ]
         },
         {
@@ -7106,6 +7107,35 @@
             "emit_metricflow_yaml",
             "emit_semantic_model",
             "parse_semantic_models"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.osi",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/osi.py",
+          "purpose": "Open Semantic Interchange / Apache Ossie reader + emitter (wedge C).",
+          "defines": [
+            "OsiDataset",
+            "OsiField",
+            "OsiMetric",
+            "OsiModel",
+            "OsiRelationship",
+            "_dialect_expression",
+            "_parse_dataset",
+            "_parse_relationship",
+            "_read_expression",
+            "certify_osi_relationships",
+            "emit_osi_dataset",
+            "emit_osi_field",
+            "emit_osi_from_crosswalk",
+            "emit_osi_model",
+            "emit_osi_relationship",
+            "emit_osi_yaml",
+            "osi_join_keys",
+            "parse_osi_models"
+          ],
+          "imports": [
+            "goldenmatch.semantic.key_integrity",
+            "goldenmatch.semantic.metricflow"
           ]
         },
         {
