@@ -70,7 +70,7 @@ class LocalModelSpec:
 PINNED_MODEL = LocalModelSpec(
     url=(
         "https://github.com/benseverndev-oss/goldenmatch/releases/download/"
-        "er-matcher-3b-v1/goldenmatch-er-matcher-3b-q4_k_m.gguf"
+        "er-matcher-3b-v1.0.0/goldenmatch-er-matcher-3b-q4_k_m.gguf"
     ),
     filename="goldenmatch-er-matcher-3b-q4_k_m.gguf",
     sha256=None,

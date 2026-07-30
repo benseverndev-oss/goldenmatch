@@ -27,7 +27,7 @@ on:
         type: choice
         options: ["3b", "7b"]
       release_tag:
-        description: "Release tag to create/update (e.g. er-matcher-3b-v1)"
+        description: "Release tag to create (fresh tag; e.g. er-matcher-3b-v1.0.0 — a burned immutable tag can't be reused)"
         required: true
       quant:
         description: "Quantization types to build (space-separated llama.cpp quant names)"
@@ -140,10 +140,16 @@ jobs:
         run: |
           set -euo pipefail
           tag="${{ inputs.release_tag }}"
-          gh release view "$tag" >/dev/null 2>&1 \
-            || gh release create "$tag" --title "ER-matcher ${{ inputs.tier }}" \
-                 --notes "OSS ER-matcher GGUF (${{ inputs.tier }}). Base: Qwen2.5-${{ inputs.tier }}-Instruct (Apache-2.0). See docs/superpowers/plans/2026-07-26-oss-er-matcher-llm-boost-plan.md."
-          gh release upload "$tag" dist/*.gguf dist/SHA256SUMS.txt --clobber
+          # Immutable releases are ON in this repo: a PUBLISHED release is sealed and
+          # rejects later asset uploads (HTTP 422). So attach every asset AT creation
+          # via a DRAFT (drafts aren't sealed), then publish with `edit --draft=false`,
+          # which seals it WITH the assets. Remove any prior/failed release for this
+          # tag first (best-effort; a burned immutable tag needs a fresh tag instead).
+          gh release delete "$tag" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$tag" dist/*.gguf dist/SHA256SUMS.txt \
+            --draft --title "ER-matcher ${{ inputs.tier }}" \
+            --notes "OSS ER-matcher GGUF (${{ inputs.tier }}). Base: Qwen2.5-${{ inputs.tier }}-Instruct (Apache-2.0). See docs/superpowers/plans/2026-07-26-oss-er-matcher-llm-boost-plan.md."
+          gh release edit "$tag" --draft=false
 
       - name: Print the pin to paste into the runtime loader
         run: |
