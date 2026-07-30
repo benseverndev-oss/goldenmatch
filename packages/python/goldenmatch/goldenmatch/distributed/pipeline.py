@@ -18,8 +18,6 @@ import logging
 import os
 from typing import TYPE_CHECKING, Any
 
-from goldenmatch._polars_lazy import pl
-
 if TYPE_CHECKING:
     from ray.data import Dataset
 
@@ -49,11 +47,15 @@ def run_dedupe_pipeline_distributed(ds: Dataset, **kwargs: Any):
 
 
 def _run_phase2_cheat_line(ds: Dataset, **kwargs: Any):
+    import pyarrow as pa
+
     from goldenmatch import dedupe_df
 
     rows = ds.take_all()
-    df = pl.from_dicts(list(rows))
-    return dedupe_df(df, **kwargs)
+    # dedupe_df is arrow-native; build a pa.Table from the Ray rows (dicts)
+    # instead of pl.from_dicts so this cheat-line imports no polars.
+    tbl = pa.Table.from_pylist(list(rows))
+    return dedupe_df(tbl, **kwargs)
 
 
 def _run_phase4_pipeline(ds: Dataset, **kwargs: Any):
@@ -64,11 +66,15 @@ def _run_phase4_pipeline(ds: Dataset, **kwargs: Any):
     callers to the distributed path. Phase 5 retires the take_all here
     by distributing the scoring stage end-to-end.
     """
+    import pyarrow as pa
+
     from goldenmatch import dedupe_df
 
     rows = ds.take_all()
-    df = pl.from_dicts(list(rows))
-    return dedupe_df(df, **kwargs)
+    # dedupe_df is arrow-native; build a pa.Table from the Ray rows (dicts)
+    # instead of pl.from_dicts so this cheat-line imports no polars.
+    tbl = pa.Table.from_pylist(list(rows))
+    return dedupe_df(tbl, **kwargs)
 
 
 def _phase5_cluster(raw_pairs_ds: Dataset, cfg: Any) -> Dataset:
@@ -333,25 +339,24 @@ def _join_assignments_distributed(
     """
     import os
 
-    import polars as pl
-
     if num_partitions is None:
         cpu = os.cpu_count() or 16
         num_partitions = min(256, max(4, cpu * 4))
 
     def _project_multi(batch: Any) -> Any:  # pa.Table -> pa.Table
-        df = pl.from_arrow(batch)
-        assert isinstance(df, pl.DataFrame)
-        if df.height == 0:
-            return pl.DataFrame(
-                schema={"member_id": pl.Int64, "__cluster_id__": pl.Int64},
-            ).to_arrow()
-        df = df.filter(pl.col("cluster_size") > 1)
-        out = df.select(
-            pl.col("member_id").cast(pl.Int64),
-            pl.col("cluster_id").cast(pl.Int64).alias("__cluster_id__"),
-        )
-        return out.to_arrow()
+        import pyarrow as pa
+        import pyarrow.compute as pc
+
+        if batch.num_rows == 0:
+            return pa.table({
+                "member_id": pa.array([], pa.int64()),
+                "__cluster_id__": pa.array([], pa.int64()),
+            })
+        filtered = batch.filter(pc.greater(batch.column("cluster_size"), 1))
+        return pa.table({
+            "member_id": pc.cast(filtered.column("member_id"), pa.int64()),
+            "__cluster_id__": pc.cast(filtered.column("cluster_id"), pa.int64()),
+        })
 
     assign = assignments_ds.map_batches(_project_multi, batch_format="pyarrow")
 
@@ -364,10 +369,8 @@ def _join_assignments_distributed(
     )
 
     def _drop_member(batch: Any) -> Any:  # pa.Table -> pa.Table
-        df = pl.from_arrow(batch)
-        assert isinstance(df, pl.DataFrame)
-        if "member_id" in df.columns:
-            df = df.drop("member_id")
-        return df.to_arrow()
+        if "member_id" in batch.column_names:
+            return batch.drop_columns(["member_id"])
+        return batch
 
     return joined.map_batches(_drop_member, batch_format="pyarrow")
