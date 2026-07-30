@@ -8,14 +8,15 @@ from typing import TYPE_CHECKING
 
 try:
     import numpy as np
-    import scipy.stats as _stats
 except ImportError as _err:  # pragma: no cover
     raise ImportError(
-        "scipy and numpy are required for deep-profiling baseline. "
-        "Install them with: pip install 'goldencheck[baseline]'"
+        "numpy is required for deep-profiling baseline. "
+        "Install it with: pip install 'goldencheck[baseline]'"
     ) from _err
 
 from goldencheck._polars_lazy import pl
+from goldencheck.baseline import _distributions as _dists
+from goldencheck.baseline._distributions import OwnedDist
 from goldencheck.baseline._ks import kstest as _owned_kstest
 from goldencheck.baseline._owned_stats import chi2_gof as _owned_chi2_gof
 from goldencheck.baseline.models import StatProfile
@@ -42,12 +43,14 @@ _ID_KEYWORDS = frozenset({"_id", "id_", " id", "id ", "code", "key", "uuid", "gu
 # Keyword fragments that mark a column as a percentage — Benford skipped.
 _PCT_KEYWORDS = frozenset({"pct", "percent", "ratio", "rate", "share", "proportion"})
 
-# Candidate distributions for fitting, each as (name, scipy_dist).
-_CANDIDATE_DISTS: list[tuple[str, object]] = [
-    ("normal", _stats.norm),
-    ("log_normal", _stats.lognorm),
-    ("exponential", _stats.expon),
-    ("uniform", _stats.uniform),
+# Candidate distributions for fitting, each as (internal name, owned dist). The
+# owned dists (`_distributions`) expose the same `.name` / `.fit` / `.logpdf` the
+# scipy objects did -- no scipy in the fit path (KS test is owned via `_ks`).
+_CANDIDATE_DISTS: list[tuple[str, OwnedDist]] = [
+    ("normal", _dists.NORM),
+    ("log_normal", _dists.LOGNORM),
+    ("exponential", _dists.EXPON),
+    ("uniform", _dists.UNIFORM),
 ]
 
 # Minimum KS-test p-value to accept a distribution fit.
@@ -155,10 +158,9 @@ def _fit_distribution(values: np.ndarray) -> tuple[str | None, dict | None]:
             continue
 
         try:
-            fit_params = dist.fit(values)  # type: ignore[attr-defined]
+            fit_params = dist.fit(values)  # owned MLE (`_distributions`), no scipy
             # Owned KS test (no scipy) -- byte-identical D, p = kstwo_sf(D, n).
-            # (scipy is still used for `dist.fit` above -- a separate follow-up.)
-            _stat, pvalue = _owned_kstest(values, dist.name, fit_params)  # type: ignore[attr-defined]
+            _stat, pvalue = _owned_kstest(values, dist.name, fit_params)
         except Exception as exc:
             logger.debug("Distribution fit failed for %s: %s", name, exc)
             continue
