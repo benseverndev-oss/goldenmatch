@@ -1,14 +1,16 @@
 # FS out-of-core SCALE PROOF -- the empirical answer to "does the streaming FS
 # path clear the memory ceiling a single box hits in-memory?".
 #
-# Runs the REAL zero-config-shaped FS dedupe (explicit probabilistic config, zip
-# blocking) at N rows on a 64 GB box, in two modes, and compares:
-#   * in-memory (GOLDENMATCH_FS_OUT_OF_CORE=0): the classic pipeline -- expected
-#     to OOM (~82 GB projected at 50M, killed -> non-zero exit) at representative
-#     width. This is the BASELINE the streaming path must beat.
-#   * streaming (=1): the bounded out-of-core path (frame freed at load, DuckDB
-#     spill, golden batched, pair stream spilled, Rust streaming Union-Find) --
-#     must COMPLETE with a bounded peak.
+# Two INDEPENDENT matrix legs (separate runners, fail-fast: false) so the
+# in-memory baseline's near-OOM thrash can't take the streaming leg down with it
+# (the single-job v1 got its runner reclaimed mid in-memory-climb before streaming
+# ever ran):
+#   * streaming (=1): the bounded out-of-core path -- the GATE. Must COMPLETE
+#     (asserted via the RESULT line). This is the proof.
+#   * in-memory (=0): the classic pipeline baseline -- INFORMATIONAL
+#     (continue-on-error), TIME-BOUNDED (a 50M in-memory run climbs past ~56 GB and
+#     thrashes a 64 GB box; a hard timeout captures the memory-bound climb in the
+#     RSS log and kills it cleanly before the runner gets reclaimed).
 #
 # Scale-out (100M/200M/300M) uses NARROW columns (filler_cols=0) so the still-
 # un-streamed prep frame (~1x frame) stays under 64 GB and the BACK-HALF scaling
@@ -35,10 +37,6 @@ on:
         description: "Average block size (zip pool = rows/avg_block)"
         type: string
         default: "8"
-      run_in_memory:
-        description: "Also run the in-memory baseline (expected OOM at 50M)"
-        type: boolean
-        default: true
       runner:
         description: "Runner label"
         type: string
@@ -53,22 +51,26 @@ permissions:
   contents: read
 
 env:
-  # pyarrow's bundled mimalloc SIGSEGVs on goldenmatch's pipeline worker threads;
-  # force the system pool (the #1627 remedy). Required for any at-scale pipeline run.
   ARROW_DEFAULT_MEMORY_POOL: system
-  # jemalloc page-decay: return freed polars pages to the OS between stages
-  # (root CLAUDE.md scale standard; -33% peak at 1M).
   _RJEM_MALLOC_CONF: "dirty_decay_ms:1000,muzzy_decay_ms:0"
   GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
 
 concurrency:
+  # newest push wins -- supersede a still-running (or stuck) bench of this ref.
   group: bench-fs-ooc-scale-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
-  scale-proof:
+  scale:
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [streaming, in-memory]
+    # The in-memory baseline is informational -- it OOMs/thrashes by design, so a
+    # failed/timed-out leg must not fail the workflow. The streaming leg is the gate.
+    continue-on-error: ${{ matrix.mode == 'in-memory' }}
     runs-on: ${{ github.event.inputs.runner || 'large-new-64GB' }}
-    timeout-minutes: 240
+    timeout-minutes: 200
     env:
       ROWS: ${{ github.event.inputs.rows || '50000000' }}
       FILLER_COLS: ${{ github.event.inputs.filler_cols || '8' }}
@@ -85,64 +87,46 @@ jobs:
       - name: Build the native kernel (streaming Union-Find + FS kernels)
         run: uv run python scripts/build_native.py
 
-      - name: In-memory baseline (expected OOM at 50M)
-        id: inmem
-        if: ${{ github.event.inputs.run_in_memory != 'false' }}
-        run: |
-          # Never fail the job here -- an OOM kill (137) or a near-OOM hang
-          # (timeout -> 124) IS the baseline evidence. `timeout` caps it so a
-          # thrashing baseline can't eat the whole job budget.
-          if timeout 100m uv run python "$BENCH" --mode in-memory \
-              --rows "$ROWS" --filler-cols "$FILLER_COLS" --avg-block "$AVG_BLOCK" \
-              2>&1 | tee inmem.log; then
-            echo "code=0" >> "$GITHUB_OUTPUT"
-          else
-            echo "code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
-          fi
-          echo "in-memory exit code: $(tail -n1 "$GITHUB_OUTPUT")"
-
-      - name: Streaming out-of-core (must COMPLETE)
-        id: stream
+      - name: Streaming out-of-core (GATE -- must COMPLETE)
+        if: ${{ matrix.mode == 'streaming' }}
         run: |
           set -o pipefail
-          timeout 120m uv run python "$BENCH" --mode streaming \
+          timeout 170m uv run python "$BENCH" --mode streaming \
             --rows "$ROWS" --filler-cols "$FILLER_COLS" --avg-block "$AVG_BLOCK" \
-            2>&1 | tee stream.log
-          # Assert the streaming run reached the RESULT completion line.
-          grep -q "RESULT mode=streaming .* status=completed" stream.log
+            2>&1 | tee bench.log
+          grep -q "RESULT mode=streaming .* status=completed" bench.log
+
+      - name: In-memory baseline (informational -- expected memory-bound)
+        if: ${{ matrix.mode == 'in-memory' }}
+        run: |
+          # Time-bounded: a 50M in-memory run climbs past ~56 GB in <10 min; a hard
+          # cap captures that climb and kills it cleanly (124) before the thrashing
+          # runner is reclaimed. `|| true` -> never fails (continue-on-error too).
+          timeout 25m uv run python "$BENCH" --mode in-memory \
+            --rows "$ROWS" --filler-cols "$FILLER_COLS" --avg-block "$AVG_BLOCK" \
+            2>&1 | tee bench.log || true
+          echo "---"
+          if grep -q "RESULT mode=in-memory .* status=completed" bench.log; then
+            echo "in-memory COMPLETED (did not hit the ceiling at this size/width)"
+          else
+            echo "in-memory did NOT complete (memory-bound) -- peak RSS climb:"
+            grep -E "\[rss\]" bench.log | tail -3 || true
+          fi
 
       - name: Summary
         if: always()
         run: |
           {
-            echo "## FS out-of-core scale proof"
-            echo ""
-            echo "- rows=\`$ROWS\` filler_cols=\`$FILLER_COLS\` avg_block=\`$AVG_BLOCK\`"
-            echo ""
-            echo "### in-memory baseline (=0)"
-            if [ -f inmem.log ]; then
-              echo '```'
-              grep -E "RESULT|MemoryError|Killed|error" inmem.log | tail -5 || true
-              echo "exit_code=${{ steps.inmem.outputs.code }}"
-              echo '```'
-              if [ "${{ steps.inmem.outputs.code }}" != "0" ]; then
-                echo "-> in-memory did NOT complete (exit ${{ steps.inmem.outputs.code }}) -- the ceiling the streaming path clears."
-              fi
-            else
-              echo "(skipped)"
-            fi
-            echo ""
-            echo "### streaming out-of-core (=1)"
+            echo "## FS out-of-core scale proof -- \`${{ matrix.mode }}\`"
+            echo "rows=\`$ROWS\` filler_cols=\`$FILLER_COLS\` avg_block=\`$AVG_BLOCK\`"
             echo '```'
-            grep -E "RESULT" stream.log | tail -2 || echo "no RESULT line -- streaming did not complete"
+            grep -E "RESULT|\[rss\]" bench.log | tail -4 || echo "(no output)"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload logs
+      - name: Upload log
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: fs-ooc-scale-${{ env.ROWS }}
-          path: |
-            inmem.log
-            stream.log
+          name: fs-ooc-scale-${{ matrix.mode }}-${{ env.ROWS }}
+          path: bench.log
