@@ -20,7 +20,9 @@
 # from scripts/er_matcher/_train_runtime.py::estimate_total_steps rather
 # than eyeballing it here.
 
-base_model: "Qwen/Qwen2.5-3B-Instruct"   # Apache-2.0, redistribution-clean
+base_model: "Qwen/Qwen2.5-1.5B-Instruct"   # Apache-2.0, redistribution-clean (the SHIPPED base).
+# NOTE: Qwen2.5-3B and -72B are Qwen-Research-licensed (non-commercial), NOT Apache-2.0 --
+# do not ship a 3B/72B fine-tune. Apache sizes: 0.5B / 1.5B / 7B / 14B / 32B.
 base_revision: null                       # pin to a base commit sha before the full run
 serializer_version: "v1"                  # must match prompt.SERIALIZER_VERSION
 
