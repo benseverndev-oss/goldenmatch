@@ -1,15 +1,19 @@
 # Semantic Layering (MetricFlow / Cube / OSI) — brainstorm / planning
 
-> **Status:** v1 (wedge A) SHIPPED — see decision
-> [../decisions/0049-metric-aware-key-certification.md](../decisions/0049-metric-aware-key-certification.md).
+> **Status:** wedges **A + B** SHIPPED — decisions
+> [0049](../decisions/0049-metric-aware-key-certification.md) (certify) +
+> [0050](../decisions/0050-resolved-crosswalk-emit.md) (resolve once + emit).
 > Captures the framing for how GoldenMatch relates to the semantic-layer /
 > metrics-layer ecosystem (dbt Semantic Layer + MetricFlow, Cube, and the Open
 > Semantic Interchange spec), and a crawl→walk→run plan. Problem **A**
-> (metric-aware key certification) is built: `goldenmatch.semantic.certify_key_integrity`
+> (metric-aware key certification): `goldenmatch.semantic.certify_key_integrity`
 > + a MetricFlow YAML reader + a `key.integrity` goldenanalysis analyzer + a
-> `goldenmatch_key_integrity` dbt test. **B** (emit the crosswalk) and **C** (OSI
-> provider) remain planned. Greenfield when written: no prior repo code, doc, or
-> decision referenced this ecosystem (grep, 2026-07-30).
+> `goldenmatch_key_integrity` dbt test. Problem **B** (emit the resolved crosswalk):
+> `build_resolved_crosswalk` (durable control-plane entity ids) +
+> `emit_semantic_model` / `emit_metricflow_yaml` (declare the conformed key as the
+> primary entity; round-trips through the A reader). **C** (OSI provider) remains
+> planned. Greenfield when written: no prior repo code, doc, or decision referenced
+> this ecosystem (grep, 2026-07-30).
 
 ## The premise
 
