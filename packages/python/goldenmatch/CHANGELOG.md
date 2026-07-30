@@ -6,6 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added
+- **OSS local ER-matcher: ship the 1.5B model (Apache-2.0) as the default.** The
+  self-hosted LLM boost (Path A) now pins a Modal-trained, published
+  `er-matcher-1.5b-v1.0.0` GGUF (Qwen2.5-1.5B-Instruct base, Apache-2.0,
+  redistribution-clean) as the default tier. The 3B pin was withdrawn: Qwen2.5-3B
+  is under the Qwen Research License (non-commercial), so a 3B fine-tune is not
+  redistribution-clean. 1.5B is also measured stronger zero-shot (walmart pair-F1
+  0.795 vs the 3B's 0.721; in-dist F1 0.999). Training data is fully synthetic;
+  restricted real datasets are eval-only.
+
 ### Changed
 - **FS dedupe: Arrow-native columnar-cluster path (B2c), default-on (#1811/#2006).**
   A measure-first 5M profile pinned the FS scale wall at **clustering** (`cluster`
