@@ -2467,6 +2467,22 @@ def _quality_aware_blocking_enabled() -> bool:
     return val is not None and val.lower() in ("1", "true", "yes", "on")
 
 
+def _cost_aware_blocking_enabled() -> bool:
+    """Cost-aware primary-key selection (#2021). Default OFF (byte-identical) until
+    the ``bench_er_headtohead`` panel + QIS scale-invariance prove F1-neutrality; opt
+    in with ``GOLDENMATCH_BLOCKING_COST_AWARE=1`` (the #662 kill-switch pattern).
+
+    When on, the exact-blocking "best case" branch refuses to commit a small-fixed-
+    domain key (``year``/``date`` col_type) as the SOLE primary blocking key when a
+    better-bounded fallback exists (a name key or a bounded compound). Such a key's
+    block grows ∝N (fixed tiny domain), so it explodes candidate pairs at scale
+    (birth_year: 65 distinct → ~7.7B pairs at 1M); it belongs as a recall PASS (its
+    #438 role), not the primary. Spec:
+    ``docs/superpowers/specs/2026-07-30-blocking-primary-key-cost-aware-design.md``."""
+    val = os.environ.get("GOLDENMATCH_BLOCKING_COST_AWARE")
+    return val is not None and val.lower() in ("1", "true", "yes", "on")
+
+
 def _has_fuzzy_tolerant_transform(transforms: list[str]) -> bool:
     return any(
         t in _FUZZY_TOLERANT_TRANSFORMS or t.startswith("substring:") for t in transforms
@@ -3309,6 +3325,19 @@ def build_blocking(
         # it's rejected; an unbounded `email`/`name` key with a constant block is
         # kept.
         safe_exact = [p for p in candidates if _is_scale_safe([p.name])]
+        # Cost-aware (#2021): a small-fixed-domain exact key (year/date col_type) is
+        # "scale-safe" only at moderate N -- its block grows ∝N (fixed tiny domain),
+        # so as the SOLE primary it explodes candidate pairs at scale (birth_year: 65
+        # distinct → ~7.7B pairs at 1M, the issue #2021 runner-preemption). Demote it
+        # from the primary slot when a better-bounded fallback exists (a name key or a
+        # bounded compound); it stays a recall PASS via _pick_date_blocking_col (#438).
+        # If it is the ONLY option, keep it rather than refuse outright.
+        if _cost_aware_blocking_enabled() and safe_exact:
+            non_growing = [p for p in safe_exact if p.col_type not in ("year", "date")]
+            if non_growing:
+                safe_exact = non_growing
+            elif name_cols or _scale_safe_bounded_compound(candidates, _is_scale_safe):
+                safe_exact = []  # fall through to the bounded-compound / name branches
         if safe_exact:
             best = max(safe_exact, key=lambda p: _bf.column(p.name).n_unique())
             transforms = ["lowercase", "strip"] if best.col_type == "email" else ["strip"]
