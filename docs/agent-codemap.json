@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 426,
+      "module_count": 431,
       "modules": [
         {
           "module": "goldenmatch",
@@ -83,13 +83,18 @@
             "_attach_memory_to_postflight",
             "_build_config",
             "_capture_run",
+            "_compute_refit_suggestion",
             "_detect_llm_provider",
             "_extract_stats",
             "_frame_columns",
             "_frame_head_dicts",
             "_frame_height",
+            "_frame_with_row_id",
             "_frame_write_csv",
             "_frame_write_parquet",
+            "_refit_model_path",
+            "_resolve_auto_refit_mode",
+            "_run_auto_refit",
             "_run_config_lint",
             "_to_result_table",
             "add_correction",
@@ -127,6 +132,7 @@
             "goldenmatch.core.diagnostics",
             "goldenmatch.core.evaluate",
             "goldenmatch.core.explain",
+            "goldenmatch.core.frame",
             "goldenmatch.core.memory.corrections",
             "goldenmatch.core.memory.learner",
             "goldenmatch.core.memory.store",
@@ -1538,6 +1544,7 @@
             "LocalLlamaAdapter",
             "LocalModelSpec",
             "_local_llm_mode",
+            "_model_cache_dir",
             "_verify_sha256",
             "load_local_adapter",
             "parse_verdict",
@@ -3426,6 +3433,14 @@
           ],
           "imports": [
             "goldenmatch.core.ingest"
+          ]
+        },
+        {
+          "module": "goldenmatch.core.key_integrity_certificate",
+          "file": "packages/python/goldenmatch/goldenmatch/core/key_integrity_certificate.py",
+          "purpose": "Metric-aware key-integrity certificate (semantic-layer wedge).",
+          "defines": [
+            "KeyIntegrityCertificate"
           ]
         },
         {
@@ -6100,12 +6115,21 @@
           "file": "packages/python/goldenmatch/goldenmatch/identity/profile.py",
           "purpose": "Entity profiles + stewardship ops views -- MDM ops (#1114, epic #1108).",
           "defines": [
+            "Customer360",
             "EntityProfile",
+            "FieldContribution",
+            "FieldProvenance",
             "IdentitySummary",
             "WorklistItem",
+            "_event_as_dict",
+            "_field_provenance",
             "_iter_entities",
+            "_norm",
+            "_record_as_dict",
             "_summary_from_counts",
             "_summary_stats_scan",
+            "customer_360",
+            "customer_360_page",
             "entity_profile",
             "identity_summary_stats",
             "steward_worklist",
@@ -7037,6 +7061,65 @@
           "purpose": "Sail (Spark Connect) session helpers. Sail is programmed via PySpark /",
           "defines": [
             "connect"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/__init__.py",
+          "purpose": "Semantic-layer interoperability (the MetricFlow / Cube / OSI wedge).",
+          "imports": [
+            "goldenmatch.core.key_integrity_certificate",
+            "goldenmatch.semantic.crosswalk",
+            "goldenmatch.semantic.key_integrity",
+            "goldenmatch.semantic.metricflow"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.crosswalk",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/crosswalk.py",
+          "purpose": "Resolve once, emit a durable entity crosswalk for the semantic layer (wedge B).",
+          "defines": [
+            "ResolvedCrosswalk",
+            "build_resolved_crosswalk"
+          ],
+          "imports": [
+            "goldenmatch._api",
+            "goldenmatch.config.schemas",
+            "goldenmatch.core.autoconfig",
+            "goldenmatch.identity.store",
+            "goldenmatch.semantic.key_integrity"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.key_integrity",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/key_integrity.py",
+          "purpose": "Metric-aware key-integrity certification (the semantic-layer wedge).",
+          "defines": [
+            "_add_resolution",
+            "_as_list",
+            "_row_key_values",
+            "_to_arrow",
+            "certify_key_integrity"
+          ],
+          "imports": [
+            "goldenmatch._api",
+            "goldenmatch.core.autoconfig",
+            "goldenmatch.core.key_integrity_certificate"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.metricflow",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/metricflow.py",
+          "purpose": "Read / emit dbt / MetricFlow semantic-model entity declarations.",
+          "defines": [
+            "DeclaredKeySpec",
+            "_entity_column",
+            "_load",
+            "_measure_column",
+            "emit_from_crosswalk",
+            "emit_metricflow_yaml",
+            "emit_semantic_model",
+            "parse_semantic_models"
           ]
         },
         {
@@ -12317,7 +12400,7 @@
     },
     "goldenanalysis": {
       "root": "packages/python/goldenanalysis/goldenanalysis",
-      "module_count": 30,
+      "module_count": 31,
       "modules": [
         {
           "module": "goldenanalysis",
@@ -12475,6 +12558,18 @@
           ],
           "imports": [
             "goldenanalysis.core",
+            "goldenanalysis.models"
+          ]
+        },
+        {
+          "module": "goldenanalysis.analyzers.key_integrity",
+          "file": "packages/python/goldenanalysis/goldenanalysis/analyzers/key_integrity.py",
+          "purpose": "``key.integrity`` — metric-aware key-integrity metrics from a certificate.",
+          "defines": [
+            "KeyIntegrityAnalyzer",
+            "_get"
+          ],
+          "imports": [
             "goldenanalysis.models"
           ]
         },

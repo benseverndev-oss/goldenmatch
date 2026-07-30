@@ -39,6 +39,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [3.10.0] - 2026-07-24
 
 ### Added
+- **Customer 360 unified serving read (`identity.customer_360`).** One call composes
+  the durable Identity Store into the whole picture of a customer: the golden record
+  + per-field source provenance (which source record wins each value, and any
+  overridden competing values), every linked source record, the append-only event
+  timeline, and the entity's relationship neighborhood from the store's own overlay.
+  Read-only, derived entirely from persisted state (no live frame, no migration).
+  `customer_360_page` is the JSON-ready serialization future serving surfaces share.
+  Design: `context-network/architecture/customer-360-data-connection.md` (D1);
+  decision: `context-network/decisions/0049-customer-360-identity-store-spine.md`
+  (IdentityStore is the spine; the relationship overlay federates).
 - **3 host-helper MCP tools** (`server_info`, `read_file`, `write_csv`) -- the last
   `ts_only` entries. **`mcp_tools.ts_only` is now EMPTY**: the TS MCP surface is a
   strict subset of the Python one (83 shared, 0 TS-only, 7 Python-only). goldenmatch

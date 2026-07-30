@@ -21,12 +21,13 @@ export interface AnalysisBackend {
 
   // ── Frame kernels (Wave 1b) — shared interning canon over plain buffers ──
   // The caller classifies each column + marshals it to typed buffers (numeric =>
-  // Float64Array, string => Arrow utf8 offsets+bytes) with a `validity` byte per
-  // row (0 = null). `internNumeric`/`internString` return dense value-ids (as
-  // f64, exact ints); the caller feeds those to `distinctCountIds` /
-  // `duplicateRowRatioIds`. Same canon (canon_f64_bits NaN/-0 fold; byte string
-  // equality; null id 0) the Python/native path interns with.
-  /** Intern a numeric column to dense value-ids. `validity[i]==0` => null. */
+  // Float64Array, string => Arrow utf8 offsets+bytes) with a `validity` packed
+  // LSB-first Arrow bitmap (bit set = valid; Arrow's C Data Interface layout).
+  // `internNumeric`/`internString` return dense value-ids (as f64, exact ints);
+  // the caller feeds those to `distinctCountIds` / `duplicateRowRatioIds`. Same
+  // canon (canon_f64_bits NaN/-0 fold; byte string equality; null id 0) the
+  // Python/native path interns with.
+  /** Intern a numeric column to dense value-ids. `validity` = packed Arrow bitmap (bit set = valid). */
   internNumeric(values: Float64Array, validity: Uint8Array): Float64Array;
   /** Intern a UTF-8 column (Arrow utf8 `offsets`[n+1] + `bytes`) to dense value-ids. */
   internString(offsets: Uint32Array, bytes: Uint8Array, validity: Uint8Array): Float64Array;

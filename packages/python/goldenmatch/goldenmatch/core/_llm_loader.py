@@ -13,15 +13,19 @@ rather than raising into a pipeline run (the same contract as the LLM scorer's
 
 Discover order for the GGUF model file (first hit wins):
 1. ``GOLDENMATCH_LOCAL_LLM_PATH`` — an explicit local path override.
-2. the Hugging Face cache (already downloaded).
-3. download-on-first-use via ``huggingface_hub`` from the pinned
-   ``(repo_id, revision, filename)``.
+2. the local model cache (already downloaded; ``~/.cache/goldenmatch/models`` or
+   ``GOLDENMATCH_LOCAL_LLM_CACHE``).
+3. download-on-first-use from the pinned **GitHub Release asset URL** (stdlib
+   ``urllib`` — no auth for the public repo), verified then atomically cached.
 4. abstain (``None``).
 
 Pin + verify: when :data:`PINNED_MODEL` carries a ``sha256`` the resolved file is
 checksum-verified (never-black-box — the exact bytes are pinned). The model
-artifact itself is NOT in the git tree; it lives on the Hugging Face Hub (see the
-companion spec ``2026-07-26-oss-er-matcher-llm-boost-design.md`` §5).
+artifact itself is NOT in the git tree; it is published as a **GitHub Release
+asset** (uploaded from the training box via the ``publish-er-matcher``
+workflow), which the ``goldenmatch[local-llm]`` install pulls from GitHub — no
+Hugging Face Hub dependency. See the companion spec
+``2026-07-26-oss-er-matcher-llm-boost-design.md`` §5.
 
 The in-process adapter and its prompt/serializer are the same contract Path A's
 local OpenAI-compatible server uses, so the model artifact is identical across
@@ -45,23 +49,30 @@ class LocalLLMUnavailableError(RuntimeError):
 
 @dataclass(frozen=True)
 class LocalModelSpec:
-    """A pinned local model artifact (never-black-box: exact bytes are pinned)."""
+    """A pinned local model artifact (never-black-box: exact bytes are pinned).
 
-    repo_id: str
-    revision: str
+    Hosted as a **GitHub Release asset**: ``url`` is the public asset download URL
+    (``.../releases/download/<tag>/<file>``), ``filename`` the cached local name,
+    ``sha256`` the integrity pin (``None`` until the artifact is published + pinned).
+    """
+
+    url: str
     filename: str
     sha256: str | None = None  # None -> not yet pinned; verification skipped.
 
 
 # The default self-hosted ER-matcher (companion spec §4: Qwen2.5-3B, Apache-2.0,
-# 4-bit GGUF). Placeholder coordinates until the trained model is published to the
-# Hub (companion spec P3); `sha256=None` skips verification until the real bytes
-# are pinned. The LOADER LOGIC below is complete and tested regardless of whether
-# this artifact exists yet — a missing repo simply abstains.
+# 4-bit GGUF), published as a GitHub Release asset by the
+# ``publish-er-matcher`` workflow. Placeholder URL + `sha256=None` until the
+# trained model is uploaded and pinned (companion spec P3); the LOADER LOGIC below
+# is complete and tested regardless of whether this asset exists yet — an
+# unreachable URL simply abstains.
 PINNED_MODEL = LocalModelSpec(
-    repo_id="benseverndev-oss/goldenmatch-er-matcher-3b",
-    revision="main",
-    filename="goldenmatch-er-matcher-3b.q4_k_m.gguf",
+    url=(
+        "https://github.com/benseverndev-oss/goldenmatch/releases/download/"
+        "er-matcher-3b-v1/goldenmatch-er-matcher-3b-q4_k_m.gguf"
+    ),
+    filename="goldenmatch-er-matcher-3b-q4_k_m.gguf",
     sha256=None,
 )
 
@@ -97,13 +108,20 @@ def _verify_sha256(path: str, expected: str) -> None:
         )
 
 
+def _model_cache_dir() -> str:
+    """Directory the downloaded GGUF is cached in (override: ``GOLDENMATCH_LOCAL_LLM_CACHE``)."""
+    override = os.environ.get("GOLDENMATCH_LOCAL_LLM_CACHE")
+    if override:
+        return override
+    return os.path.join(os.path.expanduser("~"), ".cache", "goldenmatch", "models")
+
+
 def resolve_model_path(spec: LocalModelSpec = PINNED_MODEL) -> str | None:
     """Resolve the GGUF path via the discover order, or ``None`` to abstain.
 
-    Never raises for a plain "not reachable" (missing extra, offline, unknown
-    repo) — those all abstain. Only a genuine integrity failure (checksum
-    mismatch) raises, because a corrupt pinned artifact is an anomaly, not an
-    absence.
+    Never raises for a plain "not reachable" (offline, unknown asset) — those all
+    abstain. Only a genuine integrity failure (checksum mismatch) raises, because
+    a corrupt pinned artifact is an anomaly, not an absence.
     """
     # 1. Explicit local override.
     override = os.environ.get("GOLDENMATCH_LOCAL_LLM_PATH")
@@ -115,29 +133,44 @@ def resolve_model_path(spec: LocalModelSpec = PINNED_MODEL) -> str | None:
         logger.warning("GOLDENMATCH_LOCAL_LLM_PATH=%s does not exist; abstaining.", override)
         return None
 
-    # 2/3. HF cache hit, else download-on-first-use. Both go through
-    # huggingface_hub.hf_hub_download, which returns a cached path when present
-    # and downloads otherwise. Absence of the extra / network -> abstain.
-    try:
-        from huggingface_hub import hf_hub_download  # pyright: ignore[reportMissingImports]
-    except Exception:  # noqa: BLE001 - extra not installed -> abstain
-        logger.info(
-            "huggingface_hub not installed; local LLM abstains "
-            "(pip install goldenmatch[local-llm])."
-        )
-        return None
+    # 2. Cache hit (already downloaded).
+    cache_dir = _model_cache_dir()
+    cached = os.path.join(cache_dir, spec.filename)
+    if os.path.exists(cached):
+        if spec.sha256:
+            _verify_sha256(cached, spec.sha256)
+        return cached
 
+    # 3. Download-on-first-use from the pinned GitHub Release asset URL. Stream to
+    # a temp file, verify, then atomically publish into the cache — a partial or
+    # corrupt download never poisons the cache. Any network error -> abstain.
+    if not spec.url:
+        return None
+    import shutil
+    import tempfile
+    import urllib.request
+
+    os.makedirs(cache_dir, exist_ok=True)
+    tmp_path: str | None = None
     try:
-        path = hf_hub_download(
-            repo_id=spec.repo_id, revision=spec.revision, filename=spec.filename
-        )
-    except Exception as e:  # noqa: BLE001 - unreachable repo / offline -> abstain
+        fd, tmp_path = tempfile.mkstemp(dir=cache_dir, suffix=".part")
+        os.close(fd)
+        with urllib.request.urlopen(spec.url) as resp, open(tmp_path, "wb") as out:  # noqa: S310 - pinned https asset URL
+            shutil.copyfileobj(resp, out)
+    except Exception as e:  # noqa: BLE001 - unreachable asset / offline -> abstain
         logger.info("local model not reachable (%s); abstaining.", e)
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
         return None
 
     if spec.sha256:
-        _verify_sha256(path, spec.sha256)
-    return path
+        try:
+            _verify_sha256(tmp_path, spec.sha256)
+        except LocalLLMUnavailableError:
+            os.unlink(tmp_path)  # never keep corrupt bytes in the cache
+            raise
+    os.replace(tmp_path, cached)
+    return cached
 
 
 def load_local_adapter(

@@ -117,9 +117,12 @@ Two wiring paths, same prompt/IO contract as the companion spec (§8 there).
   supplies the stub key. **Repo work: docs + a `goldenmatch llm serve-local`
   convenience command** that launches the pinned model. No scorer changes.
 - **Path B (in-process, no server):** a new optional extra
-  `goldenmatch[local-llm]` (`llama-cpp-python` + `huggingface_hub`) and a new
+  `goldenmatch[local-llm]` (`llama-cpp-python`; the GGUF is pulled from a GitHub
+  Release asset via stdlib `urllib` — no `huggingface_hub` dependency) and a new
   `provider="local"` branch. A `LocalLlamaAdapter` implements the same
-  prompt→`{match, confidence, reason}` contract in-process.
+  prompt→`{match, confidence, reason}` contract in-process. The model artifact is
+  published to a GitHub Release by the `publish-er-matcher` workflow
+  (Modal → GH), so users pull it from GitHub.
 
 **`_llm_loader.py` mirrors `core/_native_loader.py`:**
 
@@ -162,10 +165,15 @@ name D2's surface `refit_from_labels` / `auto_refit`, never `RefitPolicy`).
 4. Package the refined `EMResult` (+ threshold) as the **suggested**
    `GoldenMatchConfig`, returned to the caller (surfaced on the result object).
 
-**Default = suggest, not apply.** Full-auto returns the refined config as a
-suggestion; the live run is unchanged. `auto_refit=True` (new kwarg /
-`GOLDENMATCH_AUTO_REFIT=1` / config field) re-runs the affected stage with the
-refined `EMResult` in the **same** call and applies it.
+**Default = suggest, not apply ("Both, gated").** The `auto_refit` kwarg on
+`dedupe_df` is tri-state: `False` (default) is off; `True` / `"suggest"` attaches
+the refined `EMResult` to `DedupeResult.refit_suggestion` and leaves the run
+unchanged; `"apply"` is the stronger opt-in that persists the refined `EMResult`
+(`save_json` → `model_path`) and re-runs scoring+clustering **once** with it in
+the same call, returning that second pass (suggestion still attached). Suggest
+reads the corrections THIS run persisted to the configured `MemoryStore` (via
+`refit_from_memory`); a run with no probabilistic matchkey / no memory / no
+confident labels is a no-op (`refit_suggestion=None`).
 
 **Reuse, don't reinvent:**
 - Confidence gate on which verdicts become labels: reuse the tier's
@@ -206,8 +214,9 @@ latency floor), not a per-call microbench.
   `GOLDENMATCH_LLM_BASE_URL` path end-to-end against a local server. Zero core risk.
 - **P2.** D2 the closed loop in **suggest** mode (return refined `EMResult` as a
   suggestion). No behavior change to a run; purely additive on the result object.
-- **P3.** D2 `auto_refit=True` (apply in-run) + persistence via `model_path` /
-  `Correction`.
+- **P3 (shipped).** D2 `auto_refit` tri-state on `dedupe_df` — `True`/`"suggest"`
+  attaches `DedupeResult.refit_suggestion`; `"apply"` persists via `model_path`
+  and re-runs once. Label source = this run's `MemoryStore` corrections.
 - **P4.** D1 Path B: `goldenmatch[local-llm]` in-process `LocalLlamaAdapter` +
   `_llm_loader.py`, skip-guarded test (mock the adapter or a tiny fixture model).
 - **P5.** D3 multiprocessing for the local provider.
@@ -232,10 +241,11 @@ that shape the implementation:
    matches). Confirm — or restrict to confident matches only for v1.
 4. **Base model / artifact:** inherited from the companion spec (lean
    Qwen2.5-3B, Apache-2.0). No new decision here.
-5. **Cross-repo boundary:** the model artifact lives in the ER worktree /
-   HF Hub (companion spec §5); this repo holds only the loader, prompt template,
-   pinned `(repo_id, revision, filename, sha256)`, and the wiring. Confirm the
-   split.
+5. **Cross-repo boundary (resolved):** the model artifact is published as a
+   **GitHub Release asset** (trained on Modal → uploaded by the
+   `publish-er-matcher` workflow); this repo holds only the loader, prompt
+   template, pinned `(url, filename, sha256)`, and the wiring — the GGUF bytes are
+   never in the git tree.
 
 ## 9. Risks & mitigations
 

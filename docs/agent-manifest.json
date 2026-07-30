@@ -5702,6 +5702,7 @@
         ],
         "LOCAL": [
           "GOLDENMATCH_LOCAL_LLM",
+          "GOLDENMATCH_LOCAL_LLM_CACHE",
           "GOLDENMATCH_LOCAL_LLM_GPU_LAYERS",
           "GOLDENMATCH_LOCAL_LLM_PATH"
         ],
@@ -9090,6 +9091,7 @@
           "goldenanalysis.analyzers": {
             "cluster.distribution": "goldenanalysis.analyzers.cluster_dist:ClusterDistributionAnalyzer",
             "frame.summary": "goldenanalysis.analyzers.frame_summary:FrameSummaryAnalyzer",
+            "key.integrity": "goldenanalysis.analyzers.key_integrity:KeyIntegrityAnalyzer",
             "match.rates": "goldenanalysis.analyzers.match_rates:MatchRatesAnalyzer",
             "quality.rollup": "goldenanalysis.analyzers.quality_rollup:QualityRollupAnalyzer"
           }
@@ -9339,6 +9341,9 @@
             {
               "value": "frame.summary",
               "meaning": "Generic frame stats: row/column counts, null ratio, duplicate ratio, memory."
+            },
+            {
+              "value": "key.integrity"
             },
             {
               "value": "match.rates",
