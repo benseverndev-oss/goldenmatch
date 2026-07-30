@@ -190,3 +190,21 @@ def test_validate_osi_rejects_non_list_semantic_model():
     assert validate_osi({"version": "0.2.0.dev0", "semantic_model": {}}) == [
         "'semantic_model' must be a list of models"
     ]
+
+
+def test_validate_osi_flags_unknown_dialect():
+    doc = {
+        "version": "0.2.0.dev0",
+        "semantic_model": [{
+            "name": "m",
+            "datasets": [{
+                "name": "d",
+                "fields": [{
+                    "name": "x",
+                    "expression": {"dialects": [{"dialect": "PRESTO", "expression": "x"}]},
+                }],
+            }],
+        }],
+    }
+    issues = validate_osi(doc)
+    assert any("dialect 'PRESTO' not in the Ossie enum" in i for i in issues)

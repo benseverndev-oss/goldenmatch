@@ -357,14 +357,23 @@ def certify_osi_relationships(model: OsiModel | str | Any, frames: dict[str, Any
 # --- conformance validation --------------------------------------------------
 
 
-def _expr_ok(expr: Any) -> bool:
-    """A valid Ossie expression is a str or a `{dialects: [{dialect, expression}]}`."""
+def _expression_issues(expr: Any, loc: str) -> list[str]:
+    """Validate an Ossie `expression` — a str or `{dialects: [{dialect, expression}]}`.
+    Returns issues for a missing/malformed expression AND for any dialect name
+    outside the Ossie enum (`_OSI_DIALECTS`)."""
     if isinstance(expr, str):
-        return True
+        return []
     if isinstance(expr, dict):
         dialects = expr.get("dialects")
-        return isinstance(dialects, list) and bool(dialects)
-    return False
+        if not isinstance(dialects, list) or not dialects:
+            return [f"{loc}: missing/invalid 'expression'"]
+        out: list[str] = []
+        for d in dialects:
+            dialect = d.get("dialect") if isinstance(d, dict) else None
+            if dialect is not None and dialect not in _OSI_DIALECTS:
+                out.append(f"{loc}: dialect {dialect!r} not in the Ossie enum")
+        return out
+    return [f"{loc}: missing/invalid 'expression'"]
 
 
 def validate_osi(source: str | Any) -> list[str]:
@@ -408,8 +417,7 @@ def validate_osi(source: str | Any) -> list[str]:
                 if not isinstance(f, dict) or not str(f.get("name", "")).strip():
                     issues.append(f"{floc}: missing 'name'")
                     continue
-                if not _expr_ok(f.get("expression")):
-                    issues.append(f"{floc}: missing/invalid 'expression'")
+                issues.extend(_expression_issues(f.get("expression"), floc))
                 dt = f.get("datatype")
                 if dt is not None and dt not in _OSI_DATATYPES:
                     issues.append(f"{floc}: datatype {dt!r} not in the Ossie enum")
@@ -430,8 +438,7 @@ def validate_osi(source: str | Any) -> list[str]:
             if not isinstance(mt, dict) or not str(mt.get("name", "")).strip():
                 issues.append(f"{mloc}: missing 'name'")
                 continue
-            if not _expr_ok(mt.get("expression")):
-                issues.append(f"{mloc}: missing/invalid 'expression'")
+            issues.extend(_expression_issues(mt.get("expression"), mloc))
             if "aggregation" in mt or "agg" in mt:
                 issues.append(f"{mloc}: aggregation belongs inside the metric SQL expression, not a key")
 
