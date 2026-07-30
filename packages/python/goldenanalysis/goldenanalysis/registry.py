@@ -21,6 +21,7 @@ _FALLBACK: dict[str, tuple[str, str]] = {
     "match.rates": ("goldenanalysis.analyzers.match_rates", "MatchRatesAnalyzer"),
     "cluster.distribution": ("goldenanalysis.analyzers.cluster_dist", "ClusterDistributionAnalyzer"),
     "quality.rollup": ("goldenanalysis.analyzers.quality_rollup", "QualityRollupAnalyzer"),
+    "key.integrity": ("goldenanalysis.analyzers.key_integrity", "KeyIntegrityAnalyzer"),
 }
 
 

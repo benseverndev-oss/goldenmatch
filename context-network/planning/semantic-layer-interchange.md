@@ -1,11 +1,15 @@
 # Semantic Layering (MetricFlow / Cube / OSI) — brainstorm / planning
 
-> **Status:** brainstorm (not yet a decision). Captures the framing for how
-> GoldenMatch relates to the semantic-layer / metrics-layer ecosystem (dbt
-> Semantic Layer + MetricFlow, Cube, and the Open Semantic Interchange spec),
-> and a crawl→walk→run plan. Hardens into an ADR once v1 scope is locked.
-> Greenfield: no prior repo code, doc, or decision references this ecosystem
-> (grep, 2026-07-30).
+> **Status:** v1 (wedge A) SHIPPED — see decision
+> [../decisions/0049-metric-aware-key-certification.md](../decisions/0049-metric-aware-key-certification.md).
+> Captures the framing for how GoldenMatch relates to the semantic-layer /
+> metrics-layer ecosystem (dbt Semantic Layer + MetricFlow, Cube, and the Open
+> Semantic Interchange spec), and a crawl→walk→run plan. Problem **A**
+> (metric-aware key certification) is built: `goldenmatch.semantic.certify_key_integrity`
+> + a MetricFlow YAML reader + a `key.integrity` goldenanalysis analyzer + a
+> `goldenmatch_key_integrity` dbt test. **B** (emit the crosswalk) and **C** (OSI
+> provider) remain planned. Greenfield when written: no prior repo code, doc, or
+> decision referenced this ecosystem (grep, 2026-07-30).
 
 ## The premise
 
