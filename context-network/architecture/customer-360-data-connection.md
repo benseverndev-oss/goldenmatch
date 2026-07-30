@@ -133,9 +133,17 @@ and the *outbound* half.
 
 ## Milestones
 
-- **D1 — Serving primitive (highest leverage, no new subsystem).** `get_customer_360()` composing
-  the existing spine readers (everything except relationships), one response shape across
-  surfaces. Demoable "unified customer with full provenance" on day one.
+- **D1 — Serving primitive (highest leverage, no new subsystem) — LANDED.**
+  `identity.customer_360(store, entity_id)` (+ JSON-ready `customer_360_page`) composes the
+  spine readers into one view: profile + golden record + store-derived per-field provenance
+  (which source record wins each value, and overridden competing values) + every source record
+  + the event timeline + the relationship overlay (read from the store's own
+  `identity_relationships` edges, decision 0049 — degrades to empty on backends without it).
+  Read-only, no migration; the golden's *resolve-time* `CellProvenance` (merge strategy +
+  confidence) stays a superset when a caller holds the live frame. Library primitive only so
+  far — the MCP/REST/CLI surfaces (via `customer_360_page`, one shape everywhere) are D1b, held
+  separate to carry the `api_parity` + surface-count obligations in their own change. Tests:
+  `tests/identity/test_customer_360.py`.
 - **D2 — Source registry.** The `Source` object + `sources` table; wire the dormant
   `connectors/` `read()` into the resolve/identity path; trust-tier → field survivorship. Turns
   the ad-hoc `(path, name)` tuple into a durable connection.

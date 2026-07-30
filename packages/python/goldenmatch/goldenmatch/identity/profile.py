@@ -339,3 +339,270 @@ def steward_worklist_page(
         store, dataset, weak_confidence=weak_confidence, limit=limit
     )
     return {"items": [it.as_dict() for it in items]}
+
+
+# ── Customer 360 (unified serving read) ──────────────────────────────────────
+#
+# One read that composes the durable spine into the whole picture of a customer:
+# golden record + per-field source provenance + every linked source record +
+# the event timeline + the federated relationship overlay. Everything below is
+# derived from PERSISTED store state (no live frame, no migration) -- the serving
+# realization of decision 0049 (IdentityStore is the spine; the relationship
+# overlay is read from the store's own ``identity_relationships`` edges) and the
+# design ``context-network/architecture/customer-360-data-connection.md`` (D1).
+
+
+def _norm(value: Any) -> str | None:
+    """Normalize a payload/golden cell for provenance comparison: ``None`` stays
+    ``None``; everything else is ``str``-cast and stripped, so a golden ``42``
+    matches a source payload ``"42"`` (payloads round-trip through JSON) without
+    treating an empty string as a real value."""
+    if value is None:
+        return None
+    s = str(value).strip()
+    return s or None
+
+
+@dataclass
+class FieldContribution:
+    source: str
+    record_id: str
+    source_pk: str
+    value: Any
+    last_seen: datetime | None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "source": self.source,
+            "record_id": self.record_id,
+            "source_pk": self.source_pk,
+            "value": self.value,
+            "last_seen": self.last_seen.isoformat() if self.last_seen else None,
+        }
+
+
+@dataclass
+class FieldProvenance:
+    """Why one golden field holds its value: the source record that wins it, the
+    other records that agree, and any competing values that were overridden.
+
+    Store-derived -- attributes the persisted golden value back to the persisted
+    source records that carry it. This is the durable, always-available answer to
+    "where did this come from"; the richer resolve-time ``CellProvenance`` (merge
+    strategy + confidence) is emitted by ``survivorship.build_golden_with_provenance``
+    at write time and is a superset when a caller has the live frame."""
+
+    field: str
+    value: Any
+    winning_source: str | None
+    winning_record_id: str | None
+    contributors: list[FieldContribution]
+    conflicting_values: list[dict[str, Any]]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "field": self.field,
+            "value": self.value,
+            "winning_source": self.winning_source,
+            "winning_record_id": self.winning_record_id,
+            "contributors": [c.as_dict() for c in self.contributors],
+            "conflicting_values": self.conflicting_values,
+        }
+
+
+def _field_provenance(
+    golden_record: dict[str, Any] | None,
+    records: list[Any],
+) -> list[FieldProvenance]:
+    """Attribute each golden field to the source records that carry its value.
+
+    Winner = the contributing record with the most recent ``last_seen_at`` (ties
+    broken by ``record_id`` for determinism). ``conflicting_values`` lists the
+    distinct competing values other records held for the field, so an overridden
+    value stays visible rather than silently dropped."""
+    if not golden_record:
+        return []
+    out: list[FieldProvenance] = []
+    for fname, gvalue in golden_record.items():
+        gnorm = _norm(gvalue)
+        contributors: list[FieldContribution] = []
+        conflicts: dict[str, dict[str, Any]] = {}
+        for rec in records:
+            payload = rec.payload or {}
+            if fname not in payload:
+                continue
+            rnorm = _norm(payload[fname])
+            if rnorm is not None and rnorm == gnorm:
+                contributors.append(FieldContribution(
+                    source=rec.source,
+                    record_id=rec.record_id,
+                    source_pk=rec.source_pk,
+                    value=payload[fname],
+                    last_seen=getattr(rec, "last_seen_at", None),
+                ))
+            elif rnorm is not None:
+                # A different, non-empty value for the same field: an override.
+                conflicts.setdefault(rnorm, {
+                    "value": payload[fname],
+                    "source": rec.source,
+                    "record_id": rec.record_id,
+                })
+        contributors.sort(
+            key=lambda c: (
+                c.last_seen or datetime.min,
+                c.record_id,
+            ),
+            reverse=True,
+        )
+        winner = contributors[0] if contributors else None
+        out.append(FieldProvenance(
+            field=fname,
+            value=gvalue,
+            winning_source=winner.source if winner else None,
+            winning_record_id=winner.record_id if winner else None,
+            contributors=contributors,
+            conflicting_values=sorted(
+                conflicts.values(), key=lambda d: str(d["value"])
+            ),
+        ))
+    return out
+
+
+def _record_as_dict(rec: Any) -> dict[str, Any]:
+    return {
+        "record_id": rec.record_id,
+        "source": rec.source,
+        "source_pk": rec.source_pk,
+        "dataset": rec.dataset,
+        "first_seen": rec.first_seen_at.isoformat() if rec.first_seen_at else None,
+        "last_seen": rec.last_seen_at.isoformat() if rec.last_seen_at else None,
+        "payload": rec.payload,
+    }
+
+
+def _event_as_dict(ev: Any) -> dict[str, Any]:
+    reason = None
+    if isinstance(ev.payload, dict):
+        reason = ev.payload.get("reason")
+    return {
+        "event_id": ev.event_id,
+        "kind": ev.kind,
+        "actor": ev.actor,
+        "trust": ev.trust,
+        "run_name": ev.run_name,
+        "dataset": ev.dataset,
+        "reason": reason,
+        "recorded_at": ev.recorded_at.isoformat() if ev.recorded_at else None,
+    }
+
+
+@dataclass
+class Customer360:
+    """The unified serving view of one customer: the golden record and its
+    per-field source provenance, every linked source record, the event timeline,
+    and the federated relationship neighborhood. All fields are JSON-ready via
+    ``as_dict()``."""
+
+    entity_id: str
+    profile: EntityProfile
+    golden_record: dict[str, Any] | None
+    field_provenance: list[FieldProvenance]
+    source_records: list[dict[str, Any]]
+    timeline: list[dict[str, Any]]
+    relationships: list[dict[str, Any]]
+
+    def as_dict(self) -> dict[str, Any]:
+        p = self.profile
+        return {
+            "entity_id": self.entity_id,
+            "status": p.status,
+            "merged_into": p.merged_into,
+            "dataset": p.dataset,
+            "confidence": p.confidence,
+            "version": p.version,
+            "record_count": p.record_count,
+            "sources": p.sources,
+            "source_counts": p.source_counts,
+            "conflict_count": p.conflict_count,
+            "first_seen": p.first_seen.isoformat() if p.first_seen else None,
+            "last_seen": p.last_seen.isoformat() if p.last_seen else None,
+            "golden_record": self.golden_record,
+            "field_provenance": [fp.as_dict() for fp in self.field_provenance],
+            "source_records": self.source_records,
+            "timeline": self.timeline,
+            "relationships": self.relationships,
+        }
+
+
+def customer_360(
+    store: IdentityStore,
+    entity_id: str,
+    *,
+    include_relationships: bool = True,
+    timeline_limit: int | None = None,
+) -> Customer360 | None:
+    """The single Customer 360 serving read: everything known about one entity,
+    composed from the durable store in one call. Returns ``None`` if the entity
+    does not exist (mirrors ``entity_profile``).
+
+    Composes, all from persisted state (no live frame, no migration):
+
+    * **profile** -- ``entity_profile`` (status, confidence, source mix, version,
+      activity window, conflict count);
+    * **golden_record + field_provenance** -- the golden values plus, per field,
+      the source record(s) that carry each value and any overridden competing
+      values (``_field_provenance``);
+    * **source_records** -- every linked source record with its payload;
+    * **timeline** -- the append-only ``IdentityEvent`` log (the audit trail);
+    * **relationships** -- the entity's neighborhood from the store's own
+      relationship overlay (decision 0049). If the backend doesn't support the
+      relationship read (e.g. mongo), it degrades to an empty list rather than
+      failing the whole 360.
+
+    ``include_relationships=False`` skips the relationship read; ``timeline_limit``
+    caps the number of (most-recent-first is the store's order) events."""
+    profile = entity_profile(store, entity_id)
+    if profile is None:
+        return None
+
+    records = store.get_records_for_entity(entity_id)
+    field_prov = _field_provenance(profile.golden_record, records)
+
+    relationships: list[dict[str, Any]] = []
+    if include_relationships:
+        try:
+            relationships = store.get_relationships(entity_id)
+        except (AttributeError, NotImplementedError):
+            relationships = []
+
+    events = store.history(entity_id, limit=timeline_limit)
+
+    return Customer360(
+        entity_id=entity_id,
+        profile=profile,
+        golden_record=profile.golden_record,
+        field_provenance=field_prov,
+        source_records=[_record_as_dict(r) for r in records],
+        timeline=[_event_as_dict(e) for e in events],
+        relationships=relationships,
+    )
+
+
+def customer_360_page(
+    store: IdentityStore,
+    entity_id: str,
+    *,
+    include_relationships: bool = True,
+    timeline_limit: int | None = None,
+) -> dict[str, Any] | None:
+    """JSON-ready Customer 360: the ``as_dict()`` of :func:`customer_360`, or
+    ``None`` if the entity doesn't exist. This is the single serialization the
+    serving surfaces (future MCP ``customer_360`` tool / REST
+    ``/api/v1/identities/{id}/360``) share, so every surface returns the same
+    360 shape (North Star: shared capabilities conform)."""
+    result = customer_360(
+        store, entity_id,
+        include_relationships=include_relationships,
+        timeline_limit=timeline_limit,
+    )
+    return result.as_dict() if result is not None else None
