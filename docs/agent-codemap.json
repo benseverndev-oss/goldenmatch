@@ -4204,13 +4204,17 @@
             "RefitNotApplicableError",
             "RefitResult",
             "_find_probabilistic_matchkey",
+            "labels_from_corrections",
             "labels_from_verdicts",
+            "refit_from_corrections",
             "refit_from_labels",
+            "refit_from_memory",
             "refit_from_verdicts"
           ],
           "imports": [
             "goldenmatch.config.schemas",
             "goldenmatch.core.blocker",
+            "goldenmatch.core.memory.store",
             "goldenmatch.core.probabilistic"
           ]
         },
