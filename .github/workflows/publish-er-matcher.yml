@@ -47,14 +47,43 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Build llama.cpp (convert + quantize)
+      - name: Fetch llama.cpp (Python converter + quantize binary)
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          git clone --depth 1 https://github.com/ggerganov/llama.cpp
-          cd llama.cpp
-          pip install -r requirements.txt
-          cmake -B build -DGGML_NATIVE=OFF
-          cmake --build build --config Release -j --target llama-quantize
+          # Pin the Python converter and the quantize binary to the SAME llama.cpp
+          # release (GGUF format match), and PREFER the prebuilt ubuntu binary so
+          # the runner never OOMs compiling libllama's hundreds of per-architecture
+          # model .cpp files (the exit-143 shutdown). Fall back to a throttled
+          # source build (-j2, quantize target only) if the prebuilt can't run here.
+          LCPP_TAG="$(gh release view --repo ggml-org/llama.cpp --json tagName -q .tagName)"
+          echo "llama.cpp release: $LCPP_TAG"
+          git clone --depth 1 --branch "$LCPP_TAG" https://github.com/ggml-org/llama.cpp
+          pip install -r llama.cpp/requirements.txt
+          mkdir -p bin
+          asset="$(gh release view "$LCPP_TAG" --repo ggml-org/llama.cpp --json assets \
+            -q '.assets[].name | select(test("ubuntu-x64\\.zip$"))' | head -1 || true)"
+          ok=0
+          if [ -n "$asset" ]; then
+            echo "prebuilt asset: $asset"
+            gh release download "$LCPP_TAG" --repo ggml-org/llama.cpp --pattern "$asset" --output lcpp.zip
+            unzip -o lcpp.zip -d lcpp
+            find lcpp -type f \( -name 'llama-quantize' -o -name '*.so*' \) -exec cp {} bin/ \;
+            chmod +x bin/llama-quantize 2>/dev/null || true
+            if [ -x bin/llama-quantize ] && LD_LIBRARY_PATH="$PWD/bin" ./bin/llama-quantize --help >/dev/null 2>&1; then
+              ok=1; echo "using prebuilt llama-quantize"
+            fi
+          fi
+          if [ "$ok" != "1" ]; then
+            echo "::warning::prebuilt llama-quantize unavailable/unusable; building from source (throttled -j2)."
+            cmake -S llama.cpp -B llama.cpp/build -DGGML_NATIVE=OFF \
+              -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF
+            cmake --build llama.cpp/build --config Release -j 2 --target llama-quantize
+            cp llama.cpp/build/bin/llama-quantize bin/
+          fi
+          echo "QUANTIZE=$PWD/bin/llama-quantize" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$PWD/bin" >> "$GITHUB_ENV"
 
       - name: Download merged model
         env:
@@ -101,7 +130,7 @@ jobs:
           mkdir -p dist
           for q in ${{ inputs.quant }}; do
             out="dist/goldenmatch-er-matcher-${{ inputs.tier }}-${q}.gguf"
-            ./llama.cpp/build/bin/llama-quantize base-f16.gguf "$out" "$q"
+            "$QUANTIZE" base-f16.gguf "$out" "$q"
           done
           cd dist && sha256sum *.gguf | tee SHA256SUMS.txt
 
