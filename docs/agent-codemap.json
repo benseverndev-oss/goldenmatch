@@ -132,6 +132,7 @@
             "goldenmatch.core.diagnostics",
             "goldenmatch.core.evaluate",
             "goldenmatch.core.explain",
+            "goldenmatch.core.frame",
             "goldenmatch.core.memory.corrections",
             "goldenmatch.core.memory.learner",
             "goldenmatch.core.memory.store",
