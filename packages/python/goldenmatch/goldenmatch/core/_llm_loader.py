@@ -73,7 +73,7 @@ PINNED_MODEL = LocalModelSpec(
         "er-matcher-3b-v1.0.0/goldenmatch-er-matcher-3b-q4_k_m.gguf"
     ),
     filename="goldenmatch-er-matcher-3b-q4_k_m.gguf",
-    sha256=None,
+    sha256="b6637fd9892b21b565098524501083edb91199b0bfffc267edf48885ce9c1d3b",
 )
 
 
