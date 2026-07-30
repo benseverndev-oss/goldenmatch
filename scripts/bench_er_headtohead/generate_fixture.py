@@ -74,11 +74,19 @@ def _load_shapes_module():
 _shapes = _load_shapes_module()
 N_VENUE = _shapes.N_VENUE
 N_YEAR = _shapes.N_YEAR
+N_BRAND = _shapes.N_BRAND
+N_CATEGORY = _shapes.N_CATEGORY
 
 # biblio pool sizes.
 N_TITLE_WORDS = 20_000  # title-word vocabulary
 K_TITLE = 4  # words composed into each title
 BIBLIO_YEAR_START = 1965
+
+# product pool sizes.
+N_PRODUCT_WORDS = 20_000  # product-title-word vocabulary
+K_PRODUCT = 4  # words composed into each product title
+PRODUCT_PRICE_MIN = 5.0
+PRODUCT_PRICE_MAX = 2_000.0
 
 # Pool sizes chosen so compound blocking (surname + dob-year) yields small blocks
 # at every scale, keeping candidate-pair growth ~linear rather than quadratic.
@@ -206,6 +214,15 @@ BIBLIO_SCHEMA = pa.schema(
         ("year", pa.string()),
     ]
 )
+PRODUCT_SCHEMA = pa.schema(
+    [
+        ("record_id", pa.int64()),
+        ("title", pa.string()),
+        ("brand", pa.string()),
+        ("category", pa.string()),
+        ("price", pa.string()),
+    ]
+)
 TRUTH_SCHEMA = pa.schema([("record_id", pa.int64()), ("cluster_id", pa.int64())])
 
 
@@ -230,6 +247,24 @@ def _build_pools_biblio(seed: int):
     }
 
 
+def _build_pools_product(seed: int):
+    """Product pools: product-title-word vocabulary (+ parallel typo array via the
+    [base|typo] trick), brand pool (N_BRAND) and category pool (N_CATEGORY) -- the
+    two STABLE composite block-key fields, never corrupted."""
+    rng = np.random.default_rng(seed)
+    title_base = _syllable_pool(N_PRODUCT_WORDS, rng, 4, 10)
+    title_typo = [_typo_variant(s, rng) for s in title_base]
+    brands = [b + " Inc" for b in _syllable_pool(N_BRAND, rng, 4, 9)]
+    categories = _syllable_pool(N_CATEGORY, rng, 5, 10)
+    return {
+        # Combined [base | typo] array so a single fancy-index picks exact-or-typo.
+        "title_words": np.array(title_base + title_typo, dtype=object),
+        "n_title_words": len(title_base),
+        "brands": np.array(brands, dtype=object),
+        "categories": np.array(categories, dtype=object),
+    }
+
+
 def generate(
     rows: int,
     dupe_rate: float,
@@ -239,18 +274,21 @@ def generate(
     batch: int,
     shape: str = "person",
 ) -> dict:
-    if shape not in ("person", "biblio"):
+    if shape not in ("person", "biblio", "product"):
         raise ValueError(f"unknown shape: {shape!r}")
-    schema = SCHEMA if shape == "person" else BIBLIO_SCHEMA
+    schema = {"person": SCHEMA, "biblio": BIBLIO_SCHEMA, "product": PRODUCT_SCHEMA}[shape]
     if shape == "person":
         pools = _build_pools(seed)
         n_first = pools["n_first"]
         n_surname = pools["n_surname"]
         sur_cumw = pools["surname_cumw"]
-    else:
+    elif shape == "biblio":
         pools = _build_pools_biblio(seed)
         n_title_words = pools["n_title_words"]
         n_author = pools["n_surname"]
+    else:  # product
+        pools = _build_pools_product(seed)
+        n_title_words = pools["n_title_words"]
     rng = np.random.default_rng(seed + 1)
     out.parent.mkdir(parents=True, exist_ok=True)
     truth.parent.mkdir(parents=True, exist_ok=True)
@@ -331,7 +369,7 @@ def generate(
                     "postcode": pa.array(postcode, pa.string()),
                     "city": pa.array(city, pa.string()),
                 }
-            else:  # biblio
+            elif shape == "biblio":
                 # venue + year are the BLOCK KEY: canonical per identity, broadcast
                 # to rows, and NEVER offset for duplicates (stable block key, spec
                 # 5.2). Corruption lives only on the scored title/authors fields.
@@ -377,6 +415,55 @@ def generate(
                     "authors": pa.array(authors, pa.string()),
                     "venue": pa.array(venue, pa.string()),
                     "year": pa.array(year, pa.string()),
+                }
+            else:  # product
+                # brand + category are the BLOCK KEY: canonical per identity,
+                # broadcast to rows, NEVER offset for duplicates (stable composite
+                # key, spec 5.3, the product analogue of biblio's (venue, year)).
+                # Corruption lives only on the scored title/price fields.
+                bi = np.repeat(rng.integers(0, N_BRAND, len(sizes)), sizes)
+                cati = np.repeat(rng.integers(0, N_CATEGORY, len(sizes)), sizes)
+
+                # Title: K words per identity, broadcast. On duplicate rows only the
+                # NON-FIRST words get the typo offset into the [base|typo] half
+                # (mirrors biblio title corruption -- jaro_winkler-tolerant noise).
+                title = None
+                for k in range(K_PRODUCT):
+                    wi = np.repeat(rng.integers(0, n_title_words, len(sizes)), sizes)
+                    if k == 0:
+                        wi_pick = wi
+                    else:
+                        r = rng.random(total)
+                        wi_pick = wi + np.where(is_dup & (r < 0.30), n_title_words, 0)
+                    word = pools["title_words"][wi_pick]
+                    title = word if title is None else (title + " " + word)
+
+                # Price: canonical per identity, broadcast. Duplicate variation =
+                # a small +/-5% perturbation on ~40% of duplicates (mirrors real
+                # cross-source price drift); formatted as a "%.2f" string so the
+                # jaro_winkler secondary signal sees shared leading digits.
+                base_price = np.round(
+                    rng.uniform(PRODUCT_PRICE_MIN, PRODUCT_PRICE_MAX, len(sizes)), 2
+                )
+                price_val = np.repeat(base_price, sizes)
+                pert = is_dup & (rng.random(total) < 0.40)
+                factors = np.where(pert, 1.0 + rng.uniform(-0.05, 0.05, total), 1.0)
+                price_val = np.round(price_val * factors, 2)
+                price = np.char.mod("%.2f", price_val).astype(object)
+                # Occasional null price on duplicates (mirrors person null postcode /
+                # biblio null year); a null-price duplicate still blocks + scores on
+                # title, so the weighted matchkey degrades rather than drops it.
+                price = np.where(is_dup & (rng.random(total) < 0.05), None, price)
+
+                brand = pools["brands"][bi]  # stable, never corrupted/nulled
+                category = pools["categories"][cati]  # stable, never corrupted/nulled
+
+                columns = {
+                    "record_id": pa.array(rids, pa.int64()),
+                    "title": pa.array(title, pa.string()),
+                    "brand": pa.array(brand, pa.string()),
+                    "category": pa.array(category, pa.string()),
+                    "price": pa.array(price, pa.string()),
                 }
 
             writer.write_table(pa.table(columns, schema=schema))
@@ -428,7 +515,7 @@ def main() -> None:
     ap.add_argument("--ground-truth", type=Path, default=None)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--batch", type=int, default=1_000_000)
-    ap.add_argument("--shape", choices=["person", "biblio"], default="person")
+    ap.add_argument("--shape", choices=["person", "biblio", "product"], default="person")
     ap.add_argument(
         "--check-block-size",
         type=int,

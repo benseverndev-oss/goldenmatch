@@ -63,16 +63,18 @@ so the two are reported as separate lanes rather than one silently substituting
 the other.
 
 **Both FS lanes pass `--fs-basic-scorers` (name fields forced to `jaro_winkler`).**
-Autoconfig picks specialized name scorers (`given_name_aliased_jw` for first_name,
-`name_freq_weighted_jw` for surname) that the native FS kernel does NOT implement
-(its set is `{exact, jaro_winkler, levenshtein, token_sort}`), so
-`_fs_native_eligible()` declines the matchkey and the native lane silently runs
-numpy - identical to the numpy lane. `--fs-basic-scorers` rewrites any field scorer
-outside the kernel set to `jaro_winkler`, which makes the matchkey native-eligible
-so the two lanes form a real matched numpy-vs-native pair that actually exercises
-the Rust kernel. It also makes the FS model JaroWinkler-comparable to Splink's own
-JaroWinkler FS. The rewrite runs before the eligibility telemetry below, so the
-counts reflect the config actually scored; the rewritten `(field, old_scorer)`
+Autoconfig picks specialized reference-data name scorers (`given_name_aliased_jw`
+for first_name, `name_freq_weighted_jw` for surname). `--fs-basic-scorers` rewrites
+any scorer NOT in the fixed **base set** `{jaro_winkler, levenshtein, token_sort,
+exact}` to `jaro_winkler`, so both FS lanes run the SAME basic JaroWinkler model:
+native-eligible via the base kernel ids AND comparable to Splink's own JaroWinkler
+FS. The rewrite keys on that **fixed base set, NOT on `_NATIVE_FS_SCORER_IDS`**:
+the native kernel has since grown to score the name scorers too (ids 4/5, behind
+the optional `FS_SUPPORTS_NAME_SCORERS` wheel capability + a loaded refdata pack),
+so keying on the full native set would leave the specialized name scorers in place
+and silently break both the "basic scorers" contract and the Splink comparability
+the flag exists for. The rewrite runs before the eligibility telemetry below, so
+the counts reflect the config actually scored; the rewritten `(field, old_scorer)`
 pairs are recorded on `fs_basic_scorers_rewritten`.
 
 **Proof-of-execution field (`fs_native_eligible_matchkeys`).** The global gate is
@@ -90,15 +92,16 @@ path. `gm_probabilistic` (env `=0`) must show
 `gm_probabilistic_native` reports its actual eligible/total split, so the doc can
 state honestly "N of M matchkeys FS-native-eligible".
 
-## The 2 shapes
+## The 3 shapes
 
-Both shapes share the streaming, bounded-memory, pooled-fancy-index generator
+All shapes share the streaming, bounded-memory, pooled-fancy-index generator
 (rows flushed one row-group at a time via `pyarrow.ParquetWriter`; all string
 columns produced by vectorised indexing into small precomputed pools; fixed
 seed). Each writes a records parquet + a `{record_id, cluster_id}` truth parquet.
 Select with `--shape` (generator + all runners); `shapes.py` is the single source
 of every shape fact (schema, blocking key, cardinality `C`, GM config, Splink
-settings).
+settings). The default sweep is `person biblio`; `product` is opt-in via
+`--shapes product`.
 
 ### person
 `record_id int64, first_name str, surname str, dob str(YYYY-MM-DD), postcode str, city str`.
@@ -133,6 +136,24 @@ projection guard extrapolates the max block size to the target N
 (`~ N / C`, skew-scaled) and rejects a too-small-`C` key **at design time,
 regardless of the smoke scale** (`--check-block-size <target_rows>`; a 100K smoke
 check says nothing about 100M).
+
+### product
+`record_id int64, title str, brand str, category str, price str`.
+Pools: product-title-word pool, **brand pool `N_BRAND=4_000`**, **category pool
+`N_CATEGORY=50`**, price range. Duplicates carry realistic catalog variation on
+the **scored** (non-blocking) fields: title typos + word drop, a small +/-5%
+price perturbation on ~40% of duplicates, occasional null price.
+
+**`(brand, category)` is the composite block key, kept STABLE under corruption**
+(the product analogue of biblio's `(venue, year)`). `C = N_BRAND x N_CATEGORY =
+200K` matches person's `C`, so all three shapes' block-size-vs-N curves are
+comparable; the projection guard extrapolates ~1,500 rows/block at 100M. The
+discriminative work lives in the free-text title (jaro_winkler, primary) + price
+(jaro_winkler, secondary). **Honest caveat (mirrors biblio):** recall is capped by
+`(brand, category)` coverage — this is a synthetic **scale** shape, deliberately
+bounded by construction, NOT the hard real-product accuracy test (the held-out
+Amazon-Google set in `datasets.py`, blank-manufacturer + free-text-title-only, is
+a distinct harder problem tracked separately).
 
 ## Metrics recorded per datapoint
 

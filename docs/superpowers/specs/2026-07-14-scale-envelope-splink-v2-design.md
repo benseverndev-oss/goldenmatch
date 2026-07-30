@@ -44,7 +44,17 @@ scale-envelope run and publishes the results.
 ### Non-goals (YAGNI)
 - **No distributed tier.** Single-node to the OOM ceiling only. Ray / Sail /
   DataFusion-spine paths are explicitly out of scope for this initiative.
-- **No third fixture shape.** Person + one bibliographic shape only.
+- ~~**No third fixture shape.** Person + one bibliographic shape only.~~
+  **AMENDED 2026-07-29 (branch `product-blocking-config`):** a third shape,
+  `product`, was added — see §5.3. The original v2 scope stopped at two shapes to
+  ship the harness; the harness is now generic over `--shape`, so a product shape
+  is a pure additive extension (one `Shape` entry + one generator branch + one
+  choices-list edit per runner, opt-in via `--shapes product`; the default sweep
+  stays `person biblio`). Rationale: product is the domain GoldenMatch is weakest
+  on and has no scale-envelope coverage; a synthetic `product` shape gives it a
+  first-class, CI-runnable lane across all six engines, authored to the same
+  stable-bounded-`C`-block-key discipline as biblio. It is a SCALE shape, not the
+  hard real-product accuracy test (§5.3).
 - **No per-scale Splink re-tuning.** One idiomatic, fixed Splink settings spec
   per shape. A Splink expert could squeeze more; the spec is "reasonable, not
   optimal", and that limitation is stated in the results doc.
@@ -187,6 +197,36 @@ check (~6 rows/block) says nothing about 100M. The generator computes each shape
 blocking-key cardinality `C` and asserts the **projected** max block size at the
 target N (`≈ N / C`, scaled by the key's skew factor) stays under a ceiling —
 catching a too-small-`C` (effectively N²) key at design time regardless of scale.
+
+### 5.3 product (added 2026-07-29, amends the "no third shape" non-goal)
+`record_id int64, title str, brand str, category str, price str`.
+Pools: product-title-word pool (multi-word titles), **brand pool `N_BRAND=4_000`**,
+**category pool `N_CATEGORY=50`**, price range. Duplicates carry realistic
+product-catalog variation on the **scored** (non-blocking) fields:
+- title single-char typos + occasional word drop (jaro_winkler-tolerant noise,
+  mirrors biblio title corruption),
+- a small ±5% price perturbation on ~40% of duplicates (cross-source price drift),
+- occasional null price.
+
+`brand` and `category` are the **composite block key**, held **stable/canonical**
+on duplicates (never corrupted, never nulled) — the exact product analogue of
+biblio's `(venue, year)`. `C = N_BRAND × N_CATEGORY = 200_000` matches person's
+`C`, so the block-size-vs-N curve (and the single-node OOM ceiling) is comparable
+across all three shapes; the projection guard (§5.2) extrapolates `C=200K` to
+~1,500 rows/block at 100M, bounded. The discriminative work lives in the free-text
+title (jaro_winkler, primary) + price (jaro_winkler, secondary weak signal).
+
+**Honest caveat, carried into the results doc (same posture as biblio's
+`(venue, year)`):** recall on the product shape is capped by `(brand, category)`
+block coverage. This is deliberately a **scale-envelope** shape — a synthetic
+product whose blocking is bounded by construction — NOT the hard real-product
+accuracy test. Real product ER (the held-out Amazon-Google set in `datasets.py`,
+where `manufacturer` is often blank and the free-text title is the only signal) is
+a distinct, harder blocking problem tracked separately; a synthetic shape can no
+more prove that than biblio's stable `venue` proves robustness to venue
+abbreviation. Measured at the 1.5K smoke scale: `gm_hand_built` pairwise
+P/R/F1 = 1.00 / 0.95 / 0.97 (zero false positives), B³ F1 = 0.99 — precision-clean,
+recall bounded by block coverage, the biblio pattern.
 
 ## 6. Shape config registries
 

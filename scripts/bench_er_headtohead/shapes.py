@@ -19,6 +19,14 @@ from typing import Callable
 N_VENUE = 3_500
 N_YEAR = 60  # ~60 distinct publication years
 
+# product pool sizes (spec 5.3). The block key is the composite (brand, category);
+# C = N_BRAND * N_CATEGORY ~ 200K, mirroring person's ~200K distinct blocks so the
+# block-size-vs-N curve (and the single-node OOM ceiling) is comparable across
+# shapes. A too-small C here would be the same N^2 trap biblio's projection guard
+# rejects at design time.
+N_BRAND = 4_000
+N_CATEGORY = 50
+
 
 def projected_max_block_size(rows: int, cardinality: int, skew: float = 3.0) -> float:
     """Extrapolated max block size at target N for a fixed-cardinality uniform key,
@@ -175,7 +183,83 @@ def _biblio_splink_settings(s):
 
 
 # ---------------------------------------------------------------------------
-# Shape registry (person, then biblio).
+# product shape (new; spec 5.3)
+# ---------------------------------------------------------------------------
+# Block-key choice: the 2-field COMPOSITE (brand, category). This is the product
+# analogue of biblio's (venue, year): both are STABLE, low-corruption categorical
+# fields held canonical on duplicates, never scored, with the discriminative work
+# living in the free-text title (+ price). C = N_BRAND * N_CATEGORY ~ 200K mirrors
+# person/biblio. A synthetic product shape deliberately uses a stable composite
+# key rather than the free-text title itself so the recall trap is bounded and the
+# scale curves stay comparable -- the same design decision (and the same honest
+# caveat: recall is capped by (brand, category) coverage) as biblio's (venue, year).
+# This is a SCALE-envelope shape, NOT the hard real-product accuracy test
+# (Amazon-Google in datasets.py, where manufacturer is often blank and the title is
+# the only signal -- a distinct, harder blocking problem, tracked separately).
+def _product_gm_hand_built(threshold: float):
+    """GoldenMatch hand_built config for the product shape: bucket on the composite
+    (brand, category) block key; weighted jaro_winkler on the discriminative title
+    (primary) + price (secondary weak signal). brand/category are stable blocking
+    fields, never scored."""
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+    )
+
+    return GoldenMatchConfig(
+        backend="bucket",
+        n_buckets=256,
+        blocking=BlockingConfig(
+            max_block_size=5000,
+            skip_oversized=False,
+            keys=[BlockingKeyConfig(fields=["brand", "category"], transforms=["strip"])],
+        ),
+        matchkeys=[
+            MatchkeyConfig(
+                name="product",
+                type="weighted",
+                threshold=threshold,
+                rerank=False,
+                fields=[
+                    MatchkeyField(field="title", scorer="jaro_winkler", weight=0.7, transforms=["lowercase"]),
+                    MatchkeyField(field="price", scorer="jaro_winkler", weight=0.3),
+                ],
+            )
+        ],
+    )
+
+
+def _product_splink_settings(s):
+    """Splink settings for the product shape: blocking union of (brand, category) +
+    (substr(title,1,8), category); JaroWinkler on title, DamerauLevenshtein on
+    price, ExactMatch on brand + category. Comparison types mirror biblio's, so
+    from_splink coverage (the gm_converted_splink lane) is inherited."""
+    SettingsCreator = s["SettingsCreator"]
+    block_on = s["block_on"]
+    cl = s["cl"]
+    settings = SettingsCreator(
+        link_type="dedupe_only",
+        unique_id_column_name="record_id",
+        blocking_rules_to_generate_predictions=[
+            block_on("brand", "category"),
+            block_on("substr(title, 1, 8)", "category"),
+        ],
+        comparisons=[
+            cl.JaroWinklerAtThresholds("title", [0.9, 0.7]),
+            cl.DamerauLevenshteinAtThresholds("price", [1, 2]),
+            cl.ExactMatch("brand"),
+            cl.ExactMatch("category"),
+        ],
+    )
+    training_rules = [block_on("brand", "category")]
+    return settings, training_rules
+
+
+# ---------------------------------------------------------------------------
+# Shape registry (person, biblio, then product).
 # ---------------------------------------------------------------------------
 SHAPES: dict[str, Shape] = {
     "person": Shape(
@@ -193,5 +277,13 @@ SHAPES: dict[str, Shape] = {
         blocking_cardinality=N_VENUE * N_YEAR,  # ~210K, mirrors person's C
         gm_hand_built=_biblio_gm_hand_built,
         splink_settings=_biblio_splink_settings,
+    ),
+    "product": Shape(
+        name="product",
+        columns=["record_id", "title", "brand", "category", "price"],
+        blocking_fields=["brand", "category"],
+        blocking_cardinality=N_BRAND * N_CATEGORY,  # 200K, mirrors person's C
+        gm_hand_built=_product_gm_hand_built,
+        splink_settings=_product_splink_settings,
     ),
 }

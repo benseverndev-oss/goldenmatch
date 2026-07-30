@@ -98,7 +98,7 @@ def main() -> None:
     ap.add_argument("--pred-out", type=Path, default=None,
                     help="write {record_id, pred_cluster_id} parquet for accuracy eval")
     ap.add_argument("--threshold", type=float, default=0.85)
-    ap.add_argument("--shape", choices=["person", "biblio"], default="person",
+    ap.add_argument("--shape", choices=["person", "biblio", "product"], default="person",
                     help="fixture shape; selects the Splink settings from shapes.py")
     args = ap.parse_args()
 
