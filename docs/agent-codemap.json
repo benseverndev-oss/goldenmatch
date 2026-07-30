@@ -8634,6 +8634,7 @@
           "imports": [
             "goldencheck._polars_lazy",
             "goldencheck.baseline._ks",
+            "goldencheck.baseline._owned_stats",
             "goldencheck.baseline.correlation",
             "goldencheck.baseline.models",
             "goldencheck.baseline.patterns",
