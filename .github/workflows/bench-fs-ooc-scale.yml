@@ -1,20 +1,18 @@
-# FS out-of-core SCALE PROOF -- the empirical answer to "does the streaming FS
-# path clear the memory ceiling a single box hits in-memory?".
+# FS out-of-core SCALE PROOF -- the empirical answer to "how far past the
+# in-memory memory ceiling does the streaming FS path take a single 64 GB box?".
 #
-# Two INDEPENDENT matrix legs (separate runners, fail-fast: false) so the
-# in-memory baseline's near-OOM thrash can't take the streaming leg down with it
-# (the single-job v1 got its runner reclaimed mid in-memory-climb before streaming
-# ever ran):
-#   * streaming (=1): the bounded out-of-core path -- the GATE. Must COMPLETE
-#     (asserted via the RESULT line). This is the proof.
-#   * in-memory (=0): the classic pipeline baseline -- INFORMATIONAL
-#     (continue-on-error), TIME-BOUNDED (a 50M in-memory run climbs past ~56 GB and
-#     thrashes a 64 GB box; a hard timeout captures the memory-bound climb in the
-#     RSS log and kills it cleanly before the runner gets reclaimed).
+# 50M PROOF (run #3, head 716bd42, 2026-07-30): the STREAMING leg COMPLETED a 50M
+# dedupe at representative width (filler_cols=8) in ~13 min on large-new-64GB,
+# while the IN-MEMORY baseline climbed to ~56 GB and the runner was reclaimed
+# mid-thrash (heading to the ~82 GB OOM). In-memory hits the wall; streaming
+# clears it. The in-memory baseline is proven + inherently runner-hostile (near-
+# OOM thrash reclaims the shared runner), so this workflow now runs STREAMING
+# ONLY -- the ladder just needs to show how far streaming goes.
 #
-# Scale-out (100M/200M/300M) uses NARROW columns (filler_cols=0) so the still-
-# un-streamed prep frame (~1x frame) stays under 64 GB and the BACK-HALF scaling
-# is what's exercised. NOT in ci-required -- a dispatch-only scale proof.
+# SCALE-OUT ladder (100M -> 300M) uses NARROW columns (filler_cols=0) so the
+# still-un-streamed PREP frame (~1x frame) stays under 64 GB and the BACK-HALF
+# scaling (frame-free + DuckDB spill + golden batch + pair spill + Rust streaming
+# Union-Find) is what's exercised. NOT in ci-required.
 #
 # NOTE (temporary): the branch-scoped `push` trigger fires this from the feature
 # branch (a brand-new workflow_dispatch can't be dispatched until it lands on the
@@ -28,11 +26,11 @@ on:
       rows:
         description: "Row count"
         type: string
-        default: "50000000"
+        default: "100000000"
       filler_cols:
-        description: "Extra string columns (widen the frame; ~8 = representative, 0 = narrow scale-out)"
+        description: "Extra string columns (0 = narrow scale-out shape; ~8 = representative width)"
         type: string
-        default: "8"
+        default: "0"
       avg_block:
         description: "Average block size (zip pool = rows/avg_block)"
         type: string
@@ -61,19 +59,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  scale:
-    strategy:
-      fail-fast: false
-      matrix:
-        mode: [streaming, in-memory]
-    # The in-memory baseline is informational -- it OOMs/thrashes by design, so a
-    # failed/timed-out leg must not fail the workflow. The streaming leg is the gate.
-    continue-on-error: ${{ matrix.mode == 'in-memory' }}
+  streaming:
     runs-on: ${{ github.event.inputs.runner || 'large-new-64GB' }}
-    timeout-minutes: 200
+    timeout-minutes: 240
     env:
-      ROWS: ${{ github.event.inputs.rows || '50000000' }}
-      FILLER_COLS: ${{ github.event.inputs.filler_cols || '8' }}
+      ROWS: ${{ github.event.inputs.rows || '100000000' }}
+      FILLER_COLS: ${{ github.event.inputs.filler_cols || '0' }}
       AVG_BLOCK: ${{ github.event.inputs.avg_block || '8' }}
       BENCH: packages/python/goldenmatch/scripts/bench_fs_streaming_peak.py
     steps:
@@ -87,40 +78,21 @@ jobs:
       - name: Build the native kernel (streaming Union-Find + FS kernels)
         run: uv run python scripts/build_native.py
 
-      - name: Streaming out-of-core (GATE -- must COMPLETE)
-        if: ${{ matrix.mode == 'streaming' }}
+      - name: Streaming out-of-core (must COMPLETE)
         run: |
           set -o pipefail
-          timeout 170m uv run python "$BENCH" --mode streaming \
+          timeout 210m uv run python "$BENCH" --mode streaming \
             --rows "$ROWS" --filler-cols "$FILLER_COLS" --avg-block "$AVG_BLOCK" \
             2>&1 | tee bench.log
           grep -q "RESULT mode=streaming .* status=completed" bench.log
-
-      - name: In-memory baseline (informational -- expected memory-bound)
-        if: ${{ matrix.mode == 'in-memory' }}
-        run: |
-          # Time-bounded: a 50M in-memory run climbs past ~56 GB in <10 min; a hard
-          # cap captures that climb and kills it cleanly (124) before the thrashing
-          # runner is reclaimed. `|| true` -> never fails (continue-on-error too).
-          timeout 25m uv run python "$BENCH" --mode in-memory \
-            --rows "$ROWS" --filler-cols "$FILLER_COLS" --avg-block "$AVG_BLOCK" \
-            2>&1 | tee bench.log || true
-          echo "---"
-          if grep -q "RESULT mode=in-memory .* status=completed" bench.log; then
-            echo "in-memory COMPLETED (did not hit the ceiling at this size/width)"
-          else
-            echo "in-memory did NOT complete (memory-bound) -- peak RSS climb:"
-            grep -E "\[rss\]" bench.log | tail -3 || true
-          fi
 
       - name: Summary
         if: always()
         run: |
           {
-            echo "## FS out-of-core scale proof -- \`${{ matrix.mode }}\`"
-            echo "rows=\`$ROWS\` filler_cols=\`$FILLER_COLS\` avg_block=\`$AVG_BLOCK\`"
+            echo "## FS out-of-core streaming scale -- rows=\`$ROWS\` filler_cols=\`$FILLER_COLS\`"
             echo '```'
-            grep -E "RESULT|\[rss\]" bench.log | tail -4 || echo "(no output)"
+            grep -E "RESULT|\[rss\]" bench.log | tail -4 || echo "(no output -- did not complete)"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -128,5 +100,5 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: fs-ooc-scale-${{ matrix.mode }}-${{ env.ROWS }}
+          name: fs-ooc-scale-streaming-${{ env.ROWS }}
           path: bench.log
