@@ -9,13 +9,14 @@ from typing import Any
 
 try:
     import numpy as np
-    import scipy.stats as _stats
-    _SCIPY_AVAILABLE = True
+    _NUMPY_AVAILABLE = True
 except ImportError:
-    _SCIPY_AVAILABLE = False
+    _NUMPY_AVAILABLE = False
 
 from goldencheck._polars_lazy import pl
 from goldencheck.baseline._ks import kstest as _owned_kstest
+from goldencheck.baseline._owned_stats import chi2_gof as _owned_chi2_gof
+from goldencheck.baseline._owned_stats import pearson_r as _owned_pearson_r
 from goldencheck.baseline.correlation import _cramers_v
 from goldencheck.baseline.models import BaselineProfile
 from goldencheck.baseline.patterns import _induce_column_grammars
@@ -110,7 +111,7 @@ def _check_statistical(df: pl.DataFrame, baseline: BaselineProfile) -> list[Find
 
 def _check_distribution_drift(col: str, series: pl.Series, sp: Any) -> list[Finding]:
     """KS-test: compare current distribution against the saved fitted distribution."""
-    if not _SCIPY_AVAILABLE:
+    if not _NUMPY_AVAILABLE:
         return []
     if sp.distribution is None or sp.params is None:
         return []
@@ -206,7 +207,7 @@ def _entropy(values: list) -> float:
 
 
 def _check_entropy_drift_numeric(col: str, series: pl.Series, sp: Any) -> list[Finding]:
-    if not _SCIPY_AVAILABLE:
+    if not _NUMPY_AVAILABLE:
         return []
     values: np.ndarray = series.cast(pl.Float64).to_numpy()
     values = values[np.isfinite(values)]
@@ -257,7 +258,7 @@ def _check_entropy_drift_categorical(col: str, series: pl.Series, sp: Any) -> li
 
 
 def _check_bound_violation(col: str, series: pl.Series, sp: Any) -> list[Finding]:
-    if not _SCIPY_AVAILABLE:
+    if not _NUMPY_AVAILABLE:
         return []
     bounds = sp.bounds
     p01 = bounds.get("p01")
@@ -291,7 +292,7 @@ def _check_bound_violation(col: str, series: pl.Series, sp: Any) -> list[Finding
 
 def _check_benford_drift(col: str, series: pl.Series, sp: Any) -> list[Finding]:
     """Warn if Benford's conformance flips (baseline passed, current fails or vice versa)."""
-    if not _SCIPY_AVAILABLE:
+    if not _NUMPY_AVAILABLE:
         return []
     if sp.benford is None:
         return []
@@ -347,16 +348,19 @@ def _compute_benford_pvalue(values: np.ndarray) -> float | None:
         return None
     observed = [counts.get(d, 0) for d in range(1, 10)]
     expected = [math.log10(1 + 1 / d) * total for d in range(1, 10)]
+    obs_f = [float(x) for x in observed]
+    exp_f = [float(x) for x in expected]
     try:
-        _chi2, pvalue = _stats.chisquare(f_obs=observed, f_exp=expected)
-        # Shadow (W5 reuse): compute the W4 native chi2_gof kernel alongside the
-        # authoritative scipy value and discard it. `except BaseException` because
-        # a pyo3 PanicException is a BaseException and would escape `except Exception`.
+        # Owned chi2_gof (no scipy): native kernel when available, else the pure
+        # `_owned_stats` mirror. Both reproduce `scipy.stats.chisquare(...)[1]`.
+        pvalue: float | None = None
         if native_enabled("chi2_gof"):
             try:
-                native_module().chi2_gof(observed, expected)
-            except BaseException:  # noqa: BLE001 - shadow must never raise out
-                pass
+                _chi2, pvalue = native_module().chi2_gof(obs_f, exp_f)
+            except BaseException:  # noqa: BLE001 - fall back to pure on any native error
+                pvalue = None
+        if pvalue is None:
+            _chi2, pvalue = _owned_chi2_gof(obs_f, exp_f)
         return float(pvalue)
     except Exception as exc:
         logger.debug("Benford chi-square test failed: %s", exc)
@@ -697,7 +701,7 @@ def _compute_correlation(
     df: pl.DataFrame, col_a: str, col_b: str, measure: str
 ) -> float | None:
     """Compute the requested correlation measure between two columns."""
-    if not _SCIPY_AVAILABLE:
+    if not _NUMPY_AVAILABLE:
         return None
 
     if measure == "pearson":
@@ -709,21 +713,21 @@ def _compute_correlation(
             b_vals = sub[col_b].cast(pl.Float64).to_numpy()
             if np.std(a_vals) == 0.0 or np.std(b_vals) == 0.0:
                 return None
-            corr, _ = _stats.pearsonr(a_vals, b_vals)
-            # Shadow (W5 reuse): compute the W4 native pearson_r kernel alongside
-            # the authoritative scipy value and discard it. a_vals/b_vals are
-            # already Float64 (drift pre-casts). `except BaseException` because a
-            # pyo3 PanicException would escape `except Exception`.
+            # Owned Pearson r (no scipy): native kernel when available, else the
+            # pure `_owned_stats` mirror -- both reproduce `scipy.stats.pearsonr[0]`.
+            corr: float | None = None
             if native_enabled("pearson_r"):
                 try:
                     import pyarrow as pa
 
-                    native_module().pearson_r(
+                    corr = float(native_module().pearson_r(
                         pa.array(a_vals, type=pa.float64()),
                         pa.array(b_vals, type=pa.float64()),
-                    )
-                except BaseException:  # noqa: BLE001 - shadow must never raise out
-                    pass
+                    ))
+                except BaseException:  # noqa: BLE001 - fall back to pure on any native error
+                    corr = None
+            if corr is None:
+                corr = _owned_pearson_r(a_vals.tolist(), b_vals.tolist())
             return float(corr) if np.isfinite(corr) else None
         except Exception as exc:
             logger.debug("Pearson correlation failed for (%s, %s): %s", col_a, col_b, exc)
