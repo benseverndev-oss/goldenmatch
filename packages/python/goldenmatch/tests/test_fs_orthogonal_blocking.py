@@ -279,3 +279,82 @@ def test_end_to_end_auto_noop_on_product(monkeypatch):
     cfg = auto_configure_probabilistic_df(_product_table())
     passes = list(cfg.blocking.passes or []) or list(cfg.blocking.keys or [])
     assert all(not getattr(p, "additive", False) for p in passes)
+
+
+# ── co-blocking ORTHOGONALITY gate (the historical_50k over-merge fix) ─────────
+def _overlap_table(n=150):
+    """A person table whose NAME COMPOSITE (`full_name`) is the primary block key.
+    An atomic name field (`first_name`) is then MOSTLY already co-blocked by that
+    composite (same first name -> same `full_name` prefix) -- a redundant anchor --
+    while `birth_place` is orthogonal (its same-value pairs span many names)."""
+    import random
+
+    rng = random.Random(11)
+    firsts = ["johnny", "janet", "alice", "robert", "carol"]
+    lasts = ["smith", "jones", "brown", "clark", "davis", "evans", "green", "hall"]
+    places = ["london", "paris", "berlin", "rome", "madrid", "vienna"]
+    cols: dict[str, list] = {
+        "record_id": [], "full_name": [], "first_name": [], "surname": [],
+        "birth_place": [], "dob": [],
+    }
+    for i in range(n):
+        f, s = rng.choice(firsts), rng.choice(lasts)
+        cols["record_id"].append(f"r{i:05d}")
+        cols["first_name"].append(f)
+        cols["surname"].append(s)
+        cols["full_name"].append(f"{f} {s}")
+        cols["birth_place"].append(rng.choice(places))
+        y = rng.randint(1950, 1999)
+        cols["dob"].append(f"{y}-0{rng.randint(1, 9)}-1{rng.randint(0, 9)}")
+    return pa.table(cols)
+
+
+def _overlap_profiles():
+    return [
+        _p("record_id", "identifier", card=1.0),
+        _p("full_name", "name", card=0.9),          # primary block key (composite)
+        _p("first_name", "name", card=0.033),        # atomic -> redundant w/ composite
+        _p("surname", "name", card=0.053),           # atomic -> redundant
+        _p("birth_place", "name", card=0.04),         # orthogonal anchor
+        _p("dob", "date", card=0.6),                  # person temporal anchor
+    ]
+
+
+def _composite_blocking():
+    return BlockingConfig(
+        strategy="multi_pass",
+        passes=[BlockingKeyConfig(fields=["full_name"], transforms=["substring:0:5"])],
+    )
+
+
+def test_overlap_gate_drops_redundant_name_anchor_keeps_orthogonal(monkeypatch):
+    # With the FRAME available, the co-blocking overlap gate keeps the genuinely
+    # orthogonal anchor (birth_place) and drops atomic name fields already covered
+    # by the name composite -- the fix for the historical_50k over-merge (adding
+    # first_name/surname re-blocks the corrupted name signal).
+    out = _diversify_unused_orthogonal_blocking(
+        _composite_blocking(), _overlap_profiles(), _overlap_table()
+    )
+    additive = {
+        f for p in out.passes if getattr(p, "additive", False) for f in p.fields
+    }
+    assert "birth_place" in additive, "orthogonal anchor must be kept"
+    # `first_name` is the atomic field the `full_name` substring pass keys on
+    # (same first name -> same 5-char prefix), so it is ALREADY co-blocked -> the
+    # overlap gate drops it. (Whether `surname` is redundant depends on the data's
+    # cluster structure, so it is not asserted here -- see the historical_50k gate.)
+    assert "first_name" not in additive, (
+        "an atomic name field already co-blocked by the name composite must be dropped"
+    )
+
+
+def test_overlap_gate_inert_without_frame():
+    # No df -> overlap is unmeasurable -> shape-only selection (prior behavior):
+    # every qualifying field is added, including the redundant atomic ones.
+    out = _diversify_unused_orthogonal_blocking(
+        _composite_blocking(), _overlap_profiles(), None
+    )
+    additive = {
+        f for p in out.passes if getattr(p, "additive", False) for f in p.fields
+    }
+    assert {"first_name", "surname", "birth_place"} <= additive
