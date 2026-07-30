@@ -1054,8 +1054,13 @@ def _frame_with_row_id(df: Any) -> Any:
 
     if isinstance(df, pl.DataFrame):
         frame = df
-    else:  # pa.Table / other -> coerce through polars
-        frame = pl.from_arrow(df) if hasattr(df, "num_rows") else pl.DataFrame(df)
+    elif hasattr(df, "num_rows"):  # pa.Table -> DataFrame
+        arrowed = pl.from_arrow(df)
+        # pl.from_arrow is typed DataFrame | Series; a Table always yields a
+        # DataFrame — narrow so the frame API below type-checks.
+        frame = arrowed.to_frame() if isinstance(arrowed, pl.Series) else arrowed
+    else:
+        frame = pl.DataFrame(df)
     if "__row_id__" not in frame.columns:
         frame = frame.with_row_index("__row_id__").with_columns(
             pl.col("__row_id__").cast(pl.Int64)
