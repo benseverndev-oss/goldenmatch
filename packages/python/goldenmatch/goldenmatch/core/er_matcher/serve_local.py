@@ -43,7 +43,7 @@ def _have_server() -> bool:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Serve the local ER-matcher (Path A).")
-    ap.add_argument("--tier", default="3b", help="model tier (3b default, 7b optional)")
+    ap.add_argument("--tier", default="1.5b", help="model tier (1.5b default/Apache-2.0, 7b optional)")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--n-ctx", type=int, default=2048)
