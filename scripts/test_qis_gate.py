@@ -154,6 +154,22 @@ def test_pair_explosion_unmeasurable_rung_is_non_gating():
     assert not any(v.rung == 1_000_000 for v in r.violations)
 
 
+def test_pair_explosion_skip_is_non_gating_even_when_not_refused():
+    # THE #2021 preflight path: on the corrupted-realistic shape the >=100K rung
+    # COMMITS a coarse blocking config (no refusal) that would still explode
+    # candidate pairs, so the skip now fires BEFORE dedupe_df runs and records
+    # refused=False. A pair-explosion skip must be non-gating regardless of the
+    # refuse verdict -- gating keys off the reason, not `refused`.
+    rung_f1 = {50_000: 0.998, 100_000: 0.99, 500_000: 0.985, 1_000_000: None}
+    refused = {50_000: False, 100_000: False, 500_000: False, 1_000_000: False}
+    reasons = {50_000: None, 100_000: None, 500_000: None, 1_000_000: "pair_explosion"}
+    r = mod.evaluate_gate(rung_f1, None, rung_refused=refused,
+                          rung_unmeasurable_reason=reasons)
+    assert r.ok, [v.line() for v in r.violations]
+    assert {s.rung for s in r.skipped} == {1_000_000}
+    assert not any(v.rung == 1_000_000 for v in r.violations)
+
+
 def test_pair_explosion_at_reference_is_still_a_violation():
     # No smaller rung to establish the config measures fine -> even a pair-explosion
     # at the reference scale is a hard flag (can't wave through the ONLY evidence).
