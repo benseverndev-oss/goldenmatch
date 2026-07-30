@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 430,
+      "module_count": 431,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7045,8 +7045,25 @@
           "purpose": "Semantic-layer interoperability (the MetricFlow / Cube / OSI wedge).",
           "imports": [
             "goldenmatch.core.key_integrity_certificate",
+            "goldenmatch.semantic.crosswalk",
             "goldenmatch.semantic.key_integrity",
             "goldenmatch.semantic.metricflow"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.crosswalk",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/crosswalk.py",
+          "purpose": "Resolve once, emit a durable entity crosswalk for the semantic layer (wedge B).",
+          "defines": [
+            "ResolvedCrosswalk",
+            "build_resolved_crosswalk"
+          ],
+          "imports": [
+            "goldenmatch._api",
+            "goldenmatch.config.schemas",
+            "goldenmatch.core.autoconfig",
+            "goldenmatch.identity.store",
+            "goldenmatch.semantic.key_integrity"
           ]
         },
         {
@@ -7069,12 +7086,15 @@
         {
           "module": "goldenmatch.semantic.metricflow",
           "file": "packages/python/goldenmatch/goldenmatch/semantic/metricflow.py",
-          "purpose": "Read declared entity keys + measures from a dbt / MetricFlow semantic model.",
+          "purpose": "Read / emit dbt / MetricFlow semantic-model entity declarations.",
           "defines": [
             "DeclaredKeySpec",
             "_entity_column",
             "_load",
             "_measure_column",
+            "emit_from_crosswalk",
+            "emit_metricflow_yaml",
+            "emit_semantic_model",
             "parse_semantic_models"
           ]
         },

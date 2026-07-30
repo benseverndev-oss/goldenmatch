@@ -17,12 +17,26 @@ so ``import goldenmatch`` stays lightweight and polars-free; import it explicitl
 from __future__ import annotations
 
 from goldenmatch.core.key_integrity_certificate import KeyIntegrityCertificate
+from goldenmatch.semantic.crosswalk import ResolvedCrosswalk, build_resolved_crosswalk
 from goldenmatch.semantic.key_integrity import certify_key_integrity
-from goldenmatch.semantic.metricflow import DeclaredKeySpec, parse_semantic_models
+from goldenmatch.semantic.metricflow import (
+    DeclaredKeySpec,
+    emit_from_crosswalk,
+    emit_metricflow_yaml,
+    emit_semantic_model,
+    parse_semantic_models,
+)
 
 __all__ = [
+    # wedge A — certify a declared key
     "certify_key_integrity",
     "KeyIntegrityCertificate",
     "parse_semantic_models",
     "DeclaredKeySpec",
+    # wedge B — resolve once, emit the conformed entity declaration
+    "build_resolved_crosswalk",
+    "ResolvedCrosswalk",
+    "emit_semantic_model",
+    "emit_metricflow_yaml",
+    "emit_from_crosswalk",
 ]
