@@ -7912,6 +7912,7 @@
             "_store_for",
             "by_record_endpoint",
             "conflicts_endpoint",
+            "customer_360_endpoint",
             "evidence_endpoint",
             "get_endpoint",
             "history_endpoint",
