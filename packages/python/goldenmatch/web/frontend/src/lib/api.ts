@@ -265,6 +265,67 @@ export type IdentityView = {
   events: IdentityEvent[];
 };
 
+// Customer 360: the unified serving view of one entity (golden record +
+// per-field provenance + linked records + event timeline + relationships),
+// from GET /api/v1/identities/{id}/360 (Python customer_360_page).
+export type FieldContribution = {
+  source: string;
+  record_id: string;
+  source_pk: string;
+  value: unknown;
+  last_seen: string | null;
+};
+
+export type FieldProvenance = {
+  field: string;
+  value: unknown;
+  winning_source: string | null;
+  winning_record_id: string | null;
+  contributors: FieldContribution[];
+  conflicting_values: { value: unknown; source: string; record_id: string }[];
+};
+
+export type Customer360SourceRecord = {
+  record_id: string;
+  source: string;
+  source_pk: string;
+  dataset: string | null;
+  first_seen: string | null;
+  last_seen: string | null;
+  payload: Record<string, unknown> | null;
+};
+
+export type Customer360TimelineEntry = {
+  event_id: number | null;
+  kind: string;
+  actor: string | null;
+  trust: number | null;
+  run_name: string | null;
+  dataset: string | null;
+  reason: unknown;
+  recorded_at: string | null;
+};
+
+export type Customer360Page = {
+  entity_id: string;
+  status: string;
+  merged_into: string | null;
+  dataset: string | null;
+  confidence: number | null;
+  version: number;
+  record_count: number;
+  sources: string[];
+  source_counts: Record<string, number>;
+  conflict_count: number;
+  first_seen: string | null;
+  last_seen: string | null;
+  golden_record: Record<string, unknown> | null;
+  field_provenance: FieldProvenance[];
+  source_records: Customer360SourceRecord[];
+  timeline: Customer360TimelineEntry[];
+  relationships: Record<string, unknown>[];
+};
+
 export type QualityFinding = {
   rule?: string;
   severity?: string;
@@ -604,6 +665,10 @@ export const api = {
   identityGet: (entityId: string): Promise<IdentityView> =>
     fetch(`/api/v1/identities/${encodeURIComponent(entityId)}`).then((r) =>
       json<IdentityView>(r),
+    ),
+  identity360: (entityId: string): Promise<Customer360Page> =>
+    fetch(`/api/v1/identities/${encodeURIComponent(entityId)}/360`).then((r) =>
+      json<Customer360Page>(r),
     ),
   identityHistory: (entityId: string, limit = 100): Promise<{ items: IdentityEvent[] }> =>
     fetch(`/api/v1/identities/${encodeURIComponent(entityId)}/history?limit=${limit}`).then((r) =>

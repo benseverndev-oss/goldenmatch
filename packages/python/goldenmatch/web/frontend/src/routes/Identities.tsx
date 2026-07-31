@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import type {
+  Customer360Page,
   IdentityListResponse,
   IdentityStatsResponse,
   IdentitySummary,
@@ -14,7 +15,7 @@ export function Identities() {
   const [selected, setSelected] = useState<string | null>(null);
   const [datasetFilter, setDatasetFilter] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<string>("");
-  const [view, setView] = useState<"list" | "graph">("list");
+  const [view, setView] = useState<"list" | "graph" | "360">("list");
 
   // Adapter: expand one entity into its records + evidence edges. Records in a
   // conflicts_with edge are colored as "conflict"; others by their source.
@@ -63,6 +64,12 @@ export function Identities() {
     queryKey: ["identity-detail", selected],
     queryFn: () => api.identityGet(selected!),
     enabled: !!selected,
+  });
+
+  const page360 = useQuery<Customer360Page>({
+    queryKey: ["identity-360", selected],
+    queryFn: () => api.identity360(selected!),
+    enabled: !!selected && view === "360",
   });
 
   const splitMut = useMutation({
@@ -139,6 +146,9 @@ export function Identities() {
           <ViewTab active={view === "list"} onClick={() => setView("list")}>
             list
           </ViewTab>
+          <ViewTab active={view === "360"} onClick={() => setView("360")}>
+            360
+          </ViewTab>
           <ViewTab active={view === "graph"} onClick={() => setView("graph")}>
             graph
           </ViewTab>
@@ -163,26 +173,11 @@ export function Identities() {
 
       {view === "list" && (
       <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="card px-5 py-4">
-          <p className="eyebrow mb-3">identities</p>
-          {list.data && list.data.items.length === 0 && (
-            <p className="text-sm text-ink-500">No identities yet.</p>
-          )}
-          <ul className="divide-y divide-ink-100">
-            {list.data?.items.map((row) => (
-              <li
-                key={row.entity_id}
-                className={
-                  "py-2 cursor-pointer hover:bg-ink-50 px-2 -mx-2 rounded transition-colors " +
-                  (selected === row.entity_id ? "bg-ink-50" : "")
-                }
-                onClick={() => setSelected(row.entity_id)}
-              >
-                <IdentityRow row={row} />
-              </li>
-            ))}
-          </ul>
-        </div>
+        <IdentityListCard
+          items={list.data?.items}
+          selected={selected}
+          onSelect={setSelected}
+        />
 
         <div className="card px-5 py-4">
           <p className="eyebrow mb-3">detail</p>
@@ -199,6 +194,73 @@ export function Identities() {
         </div>
       </section>
       )}
+
+      {view === "360" && (
+      <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <IdentityListCard
+          items={list.data?.items}
+          selected={selected}
+          onSelect={setSelected}
+        />
+
+        <div className="lg:col-span-2">
+          {!selected && (
+            <div className="card px-5 py-4">
+              <p className="text-sm text-ink-500">
+                Pick an identity to see its Customer 360 — golden record, per-field
+                provenance, linked source records, and the event timeline.
+              </p>
+            </div>
+          )}
+          {selected && page360.isPending && (
+            <div className="card px-5 py-4">
+              <p className="text-sm text-ink-500">Loading…</p>
+            </div>
+          )}
+          {selected && page360.error && (
+            <div className="card px-5 py-4">
+              <p className="text-sm text-ink-500">
+                Couldn&apos;t load the Customer 360 for this entity.
+              </p>
+            </div>
+          )}
+          {page360.data && <Customer360View page={page360.data} />}
+        </div>
+      </section>
+      )}
+    </div>
+  );
+}
+
+function IdentityListCard({
+  items,
+  selected,
+  onSelect,
+}: {
+  items: IdentitySummary[] | undefined;
+  selected: string | null;
+  onSelect: (entityId: string) => void;
+}) {
+  return (
+    <div className="card px-5 py-4 self-start">
+      <p className="eyebrow mb-3">identities</p>
+      {items && items.length === 0 && (
+        <p className="text-sm text-ink-500">No identities yet.</p>
+      )}
+      <ul className="divide-y divide-ink-100">
+        {items?.map((row) => (
+          <li
+            key={row.entity_id}
+            className={
+              "py-2 cursor-pointer hover:bg-ink-50 px-2 -mx-2 rounded transition-colors " +
+              (selected === row.entity_id ? "bg-ink-50" : "")
+            }
+            onClick={() => onSelect(row.entity_id)}
+          >
+            <IdentityRow row={row} />
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -333,6 +395,119 @@ function IdentityDetail({
                   <span className="text-ink-400"> · {shortDate(ev.recorded_at)}</span>
                 </li>
               ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Render an unknown golden/payload cell value as a compact string. */
+function cell(v: unknown): string {
+  if (v === null || v === undefined) return "—";
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  return JSON.stringify(v);
+}
+
+function Customer360View({ page }: { page: Customer360Page }) {
+  const golden = page.golden_record ?? {};
+  const goldenKeys = Object.keys(golden);
+  const provByField = new Map(page.field_provenance.map((p) => [p.field, p]));
+
+  return (
+    <div className="space-y-6">
+      <div className="card px-5 py-4">
+        <div className="font-mono text-[11px] text-ink-700 break-all">{page.entity_id}</div>
+        <div className="text-[11px] text-ink-500 mt-1">
+          {page.status}
+          {page.dataset && <span> · {page.dataset}</span>}
+          {page.confidence != null && <span> · conf {page.confidence.toFixed(3)}</span>}
+          <span> · v{page.version}</span>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
+          <Stat label="records" value={String(page.record_count)} />
+          <Stat label="sources" value={String(page.sources.length)} />
+          <Stat label="conflicts" value={String(page.conflict_count)} />
+          <Stat label="events" value={String(page.timeline.length)} />
+        </div>
+      </div>
+
+      <div className="card px-5 py-4">
+        <p className="eyebrow mb-3">golden record</p>
+        {goldenKeys.length === 0 && (
+          <p className="text-sm text-ink-500">No golden record for this entity.</p>
+        )}
+        <ul className="divide-y divide-ink-100">
+          {goldenKeys.map((field) => {
+            const prov = provByField.get(field);
+            return (
+              <li key={field} className="py-2">
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="font-mono text-[11px] text-ink-500">{field}</span>
+                  <span className="text-[12px] text-ink-900 text-right break-all">
+                    {cell(golden[field])}
+                  </span>
+                </div>
+                {prov && (prov.winning_source || prov.conflicting_values.length > 0) && (
+                  <div className="text-[10px] text-ink-400 mt-0.5 text-right">
+                    {prov.winning_source && (
+                      <span>
+                        from <span className="text-gold-600">{prov.winning_source}</span>
+                        {prov.winning_record_id && (
+                          <span className="font-mono"> ({prov.winning_record_id})</span>
+                        )}
+                      </span>
+                    )}
+                    {prov.conflicting_values.length > 0 && (
+                      <span>
+                        {prov.winning_source ? " · " : ""}
+                        overrode {prov.conflicting_values.length} value(s)
+                      </span>
+                    )}
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+
+      <div className="card px-5 py-4">
+        <p className="eyebrow mb-3">source records ({page.source_records.length})</p>
+        <ul className="divide-y divide-ink-100">
+          {page.source_records.map((r) => (
+            <li key={r.record_id} className="py-2">
+              <div className="flex items-center justify-between gap-3">
+                <span className="font-mono text-[11px] text-ink-900 truncate">{r.record_id}</span>
+                <span className="text-[10px] text-ink-400">{r.source}</span>
+              </div>
+              {r.payload && Object.keys(r.payload).length > 0 && (
+                <div className="text-[10px] text-ink-500 mt-1 font-mono break-all">
+                  {Object.entries(r.payload)
+                    .map(([k, v]) => `${k}=${cell(v)}`)
+                    .join("  ·  ")}
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      {page.timeline.length > 0 && (
+        <div className="card px-5 py-4">
+          <p className="eyebrow mb-3">timeline</p>
+          <ul className="space-y-1.5 max-h-72 overflow-y-auto">
+            {page.timeline.map((ev, i) => (
+              <li key={ev.event_id ?? ev.recorded_at ?? i} className="text-[11px]">
+                <span className="font-mono text-gold-600">{ev.kind}</span>
+                {ev.actor && <span className="text-ink-400"> · {ev.actor}</span>}
+                {ev.run_name && <span className="text-ink-400"> · {ev.run_name}</span>}
+                {ev.recorded_at && (
+                  <span className="text-ink-400"> · {shortDate(ev.recorded_at)}</span>
+                )}
+              </li>
+            ))}
           </ul>
         </div>
       )}
