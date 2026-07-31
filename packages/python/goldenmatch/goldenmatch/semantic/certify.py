@@ -83,6 +83,7 @@ def certify_semantic_model(
     frames: dict[str, Any],
     *,
     resolve: bool = False,
+    metric_aware: bool = True,
 ) -> SemanticCertification:
     """Certify every declared identity key in a semantic model.
 
@@ -94,14 +95,30 @@ def certify_semantic_model(
             is skipped and recorded in `skipped`.
         resolve: also run entity resolution to measure fragmentation / undercount.
             Applied uniformly across all three dialects.
+        metric_aware: when resolving, drive the ER off the model's own declared
+            roles — resolve on the declared **dimensions** and never on a
+            **measure** (the differentiated wedge). A model that declares no
+            dimensions is byte-identical to the blind selection. Set False to
+            resolve on every non-key, non-measure column (the prior behavior).
+            No effect unless `resolve=True`.
 
     Returns:
         A `SemanticCertification` with one `KeyCertification` per certified key.
     """
+    from goldenmatch.semantic.blocking import (
+        _frame_columns,
+        metric_aware_attributes,
+        semantic_field_roles,
+    )
+
     data = _load(source)
     dialect = detect_dialect(data)
     entries: list[KeyCertification] = []
     skipped: list[str] = []
+
+    # Read the model's declared roles once, so the resolution tier is metric-aware
+    # across every dialect (a measure is never identity evidence).
+    roles = semantic_field_roles(data) if (resolve and metric_aware) else None
 
     if dialect == "metricflow":
         for spec in parse_semantic_models(data):
@@ -109,20 +126,24 @@ def certify_semantic_model(
             if df is None:
                 skipped.append(spec.model)
                 continue
+            attributes = (
+                metric_aware_attributes(roles, _frame_columns(df))
+                if roles is not None else None
+            )
             cert = certify_key_integrity(
                 df, key=spec.key, measures=spec.measures, grain=spec.grain,
-                resolve=resolve,
+                resolve=resolve, attributes=attributes,
             )
             entries.append(KeyCertification(target=spec.model, key=list(spec.key), certificate=cert))
     elif dialect == "cube":
         # certify_cube_joins already certifies the one-side key of each join.
-        for rep in certify_cube_joins(data, frames, resolve=resolve):
+        for rep in certify_cube_joins(data, frames, resolve=resolve, roles=roles):
             entries.append(KeyCertification(
                 target=rep["to_cube"], key=list(rep["key"]), certificate=rep["certificate"],
                 context=f"join from {rep['from_cube']}",
             ))
     else:  # osi
-        for rep in certify_osi_relationships(data, frames, resolve=resolve):
+        for rep in certify_osi_relationships(data, frames, resolve=resolve, roles=roles):
             entries.append(KeyCertification(
                 target=rep["dataset"], key=list(rep["key"]), certificate=rep["certificate"],
                 context=f"relationship {rep['relationship']}",
