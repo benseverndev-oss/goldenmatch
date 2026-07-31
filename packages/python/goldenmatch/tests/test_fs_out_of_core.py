@@ -624,6 +624,31 @@ def test_sequential_scorer_is_polars_free(monkeypatch):
     assert got == ref
 
 
+def test_balanced_ranges_covers_and_balances():
+    """_balanced_ranges: contiguous full coverage in order, <= k groups, and
+    balances by scoring cost (block^2) so a giant block is isolated."""
+    from goldenmatch.backends.fs_out_of_core import _balanced_ranges
+
+    # Full contiguous coverage, offsets consistent with sizes, <= k groups.
+    for sizes, k in ([5, 5, 5, 5], 2), ([3, 1, 4, 1, 5, 9, 2, 6], 4), ([7], 3):
+        groups = _balanced_ranges(sizes, k)
+        assert len(groups) <= max(1, k)
+        assert groups[0][0] == 0 and groups[-1][1] == len(sizes)
+        exp_off = 0
+        for gi, (s, e, off, rows) in enumerate(groups):
+            if gi:
+                assert s == groups[gi - 1][1]  # contiguous block indices
+            assert off == exp_off
+            assert rows == sum(sizes[s:e])
+            exp_off += rows
+        assert exp_off == sum(sizes)
+
+    # Cost balancing: one huge block is isolated from the small ones.
+    g = _balanced_ranges([100, 1, 1, 1, 1], 2)
+    assert g[0] == (0, 1, 0, 100)  # the big block alone
+    assert g[1] == (1, 5, 100, 4)  # the tail together
+
+
 def test_sequential_non_field_strategy_raises():
     from goldenmatch.backends.fs_out_of_core import score_fs_sequential_arrow
 

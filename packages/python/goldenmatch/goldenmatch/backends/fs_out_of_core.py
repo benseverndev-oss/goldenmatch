@@ -618,6 +618,43 @@ def score_fs_out_of_core(
                     pass
 
 
+def _balanced_ranges(
+    sizes: Sequence[int], k: int
+) -> list[tuple[int, int, int, int]]:
+    """Partition contiguous blocks (given their per-block row ``sizes``) into <= k
+    ORDER-PRESERVING groups of ~equal SCORING COST, so a thread pool saturates
+    every core instead of one worker stalling on the big block while the rest go
+    idle. FS scoring is O(block^2), so a block's cost is its within-block pair
+    count (``s*s``), NOT its row count -- balancing by rows would pile several big
+    blocks on one worker. Returns ``(start_block, end_block, row_offset,
+    row_count)`` per group: ``row_offset``/``row_count`` index the block-contiguous
+    gathered table (``slice``), ``start``/``end`` slice the ``size_list``."""
+    n = len(sizes)
+    if k <= 1 or n <= 1:
+        return [(0, n, 0, sum(sizes))]
+    costs = [s * s for s in sizes]
+    target = max(1, sum(costs) // k)
+    groups: list[tuple[int, int, int, int]] = []
+    start = acc_cost = grp_rows = row_off = 0
+    for i in range(n):
+        acc_cost += costs[i]
+        grp_rows += sizes[i]
+        # Close a group once it holds ~its cost share, but keep enough blocks for
+        # the remaining groups so we don't collapse to fewer than k.
+        remaining_groups = k - 1 - len(groups)
+        if (
+            acc_cost >= target
+            and remaining_groups >= 1
+            and (n - (i + 1)) >= remaining_groups
+        ):
+            groups.append((start, i + 1, row_off, grp_rows))
+            row_off += grp_rows
+            start = i + 1
+            acc_cost = grp_rows = 0
+    groups.append((start, n, row_off, sum(sizes) - row_off))
+    return groups
+
+
 def score_fs_sequential_arrow(
     prepared_df: Any,
     blocking_config: BlockingConfig,
@@ -732,6 +769,8 @@ def score_fs_sequential_arrow(
     seen: set[tuple[int, int]] = set()
     pair_tables: list = []
     wave_rows = _fs_ooc_wave_rows()
+    _workers = _fs_ooc_workers()
+    _ex: Any = None  # bound to the ThreadPoolExecutor around the pass loop below
 
     def _merge(results) -> None:
         if _arrow:
@@ -771,18 +810,34 @@ def score_fs_sequential_arrow(
             return
         ids = np.concatenate(buf_ids)
         gathered = base.take(pa.array(_positions(ids)))
+        sizes = buf_sizes
         if use_native:
-            _merge((
-                score_probabilistic_bucket_native(
-                    gathered, buf_sizes, mk, em_result, frozen_exclude,
-                ),
-            ))
+            # Fan the wave across cores, BALANCED by scoring cost (block^2), so no
+            # worker stalls on the big block while the rest idle. Each group is ONE
+            # native kernel call over its block-contiguous slice + size_list; the
+            # kernel releases the GIL, so this is real N-core parallelism.
+            # ``executor.map`` preserves submission order -> block-order merge
+            # (parity with the serial reference).
+            groups = _balanced_ranges(sizes, _workers)
+            if _ex is None or len(groups) <= 1:
+                _merge((
+                    score_probabilistic_bucket_native(
+                        gathered, sizes, mk, em_result, frozen_exclude,
+                    ),
+                ))
+            else:
+                def _score_group(g, _g=gathered, _sz=sizes):
+                    s, e, off, rows = g
+                    return score_probabilistic_bucket_native(
+                        _g.slice(off, rows), _sz[s:e], mk, em_result, frozen_exclude,
+                    )
+                _merge(_ex.map(_score_group, groups))
         else:
             # Split the block-contiguous gather back into per-block frames (cheap
-            # slices/views) for the vectorized-batch / per-block scorer paths.
+            # zero-copy slices) for the vectorized-batch / per-block scorer paths.
             blocks = []
             off = 0
-            for sz in buf_sizes:
+            for sz in sizes:
                 blocks.append(gathered.slice(off, sz))
                 off += sz
             if _use_vec_batch:
@@ -791,13 +846,20 @@ def score_fs_sequential_arrow(
                         blocks, mk, em_result, frozen_exclude
                     ),
                 ))
-            else:
+            elif _ex is None:
                 _merge(prob_scorer(b, frozen_exclude) for b in blocks)
+            else:
+                _merge(_ex.map(lambda b: prob_scorer(b, frozen_exclude), blocks))
         buf_ids = []
         buf_sizes = []
         buf_rows = 0
 
-    for pass_config in passes:
+    # ONE thread pool across all passes: `_flush` fans each wave's balanced groups
+    # out over it (the native kernel releases the GIL -> real N-core scoring). A
+    # plain create/shutdown (not `with`) keeps the pass loop at its current indent.
+    _ex = concurrent.futures.ThreadPoolExecutor(max_workers=_workers)
+    try:
+      for pass_config in passes:  # noqa: E111 (executor lives across passes)
         # ARROW-NATIVE block-key grouping (no polars): derive the block key via
         # the Frame seam's ``derive_block_key`` (the Arrow twin of
         # ``_build_block_key_expr`` -> ``core.arrow_derive.block_key``) + the
@@ -830,6 +892,8 @@ def score_fs_sequential_arrow(
         # Flush at the END of each pass so pass N is merged before pass N+1 (the
         # pass-order first-seen dedup for tuples mode; arrow mode is order-free).
         _flush()
+    finally:
+        _ex.shutdown(wait=True)
 
     if _arrow:
         if pair_tables:

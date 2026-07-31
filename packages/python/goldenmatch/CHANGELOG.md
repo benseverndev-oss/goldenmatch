@@ -35,7 +35,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   the bounded golden-record builder (`build_golden_records_batch` on the
   multi-member subset only — an Arrow golden builder is a separate core port). The
   `duckdb` block source (`GOLDENMATCH_FS_BLOCK_SOURCE=duckdb`) stays the
-  spill-past-RAM variant.
+  spill-past-RAM variant. Each wave is scored across cores by a
+  `ThreadPoolExecutor`, **balanced by scoring cost (block², not row count)** via
+  `_balanced_ranges` so no worker stalls on a giant block while the rest idle (the
+  native kernel releases the GIL → real N-core parallelism; `executor.map`
+  preserves order for block-order parity).
 
 ### Changed
 - **FS out-of-core streaming: single `resolve_fs_block_source` knob + DuckDB
