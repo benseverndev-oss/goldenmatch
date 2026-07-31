@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 439,
+      "module_count": 438,
       "modules": [
         {
           "module": "goldenmatch",
@@ -334,27 +334,6 @@
             "goldenmatch.core.frame",
             "goldenmatch.core.golden",
             "goldenmatch.core.pairs",
-            "goldenmatch.core.probabilistic"
-          ]
-        },
-        {
-          "module": "goldenmatch.backends.fs_pair_dedup",
-          "file": "packages/python/goldenmatch/goldenmatch/backends/fs_pair_dedup.py",
-          "purpose": "Cross-pass candidate-pair dedup for Fellegi-Sunter scoring.",
-          "defines": [
-            "_distinct_candidate_pairs",
-            "_field_codes",
-            "_pair_count_cap",
-            "_paired_similarity_codes",
-            "fs_pair_dedup_eligible",
-            "fs_pair_dedup_enabled",
-            "score_fs_pair_dedup"
-          ],
-          "imports": [
-            "goldenmatch.backends.score_buckets",
-            "goldenmatch.config.schemas",
-            "goldenmatch.core.blocker",
-            "goldenmatch.core.frame",
             "goldenmatch.core.probabilistic"
           ]
         },
@@ -3941,7 +3920,6 @@
             "goldenmatch._polars_lazy",
             "goldenmatch.backends.datafusion_backend",
             "goldenmatch.backends.fs_out_of_core",
-            "goldenmatch.backends.fs_pair_dedup",
             "goldenmatch.backends.ray_backend",
             "goldenmatch.backends.score_buckets",
             "goldenmatch.backends.score_duckdb",
