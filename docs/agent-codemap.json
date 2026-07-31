@@ -308,7 +308,6 @@
           "file": "packages/python/goldenmatch/goldenmatch/backends/fs_out_of_core.py",
           "purpose": "Out-of-core Fellegi-Sunter block scoring — stream block groups from a",
           "defines": [
-            "_balanced_ranges",
             "_cluster_arrow_native",
             "_cluster_python",
             "_default_golden_rules",
@@ -332,13 +331,11 @@
             "run_fs_dedupe_sequential",
             "run_fs_dedupe_streaming",
             "score_fs_out_of_core",
-            "score_fs_sequential_arrow",
             "stream_fs_dedupe_output"
           ],
           "imports": [
             "goldenmatch.backends.score_buckets",
             "goldenmatch.config.schemas",
-            "goldenmatch.core._native_loader",
             "goldenmatch.core.blocker",
             "goldenmatch.core.cluster",
             "goldenmatch.core.frame",
