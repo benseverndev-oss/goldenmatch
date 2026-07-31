@@ -68,7 +68,12 @@ from goldenmatch.semantic.osi import (
     validate_osi,
     validate_osi_schema,
 )
-from goldenmatch.semantic.serving import entity_360, profile_from_crosswalk
+from goldenmatch.semantic.serving import (
+    ServingJoinCertificate,
+    certify_serving_joins,
+    entity_360,
+    profile_from_crosswalk,
+)
 
 __all__ = [
     # zero-config front door — certify a whole semantic model (any dialect)
@@ -98,6 +103,9 @@ __all__ = [
     # Customer 360 drill-through — resolved key -> the whole customer view
     "profile_from_crosswalk",
     "entity_360",
+    # certify the keys a Customer 360 serving layer joins on
+    "certify_serving_joins",
+    "ServingJoinCertificate",
     # wedge C — OSI / Apache Ossie native provider (bidirectional)
     "parse_osi_models",
     "osi_join_keys",

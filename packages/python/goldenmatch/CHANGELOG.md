@@ -70,6 +70,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   the strict path. The `goldenmatch_key_integrity` dbt test gained a matching
   `grain_strict` argument in lockstep so the SQL test and this capability stay
   semantically identical.
+- **Certify the keys a Customer 360 serving layer joins on.**
+  `goldenmatch.semantic.certify_serving_joins(store, *, dataset=None, ...)` walks
+  the durable Identity Store and runs `certify_key_integrity` over the
+  source-record join key (`record_id` = `{source}:{source_pk}`) a Customer 360 view
+  rolls metrics up on — turning the serving layer's implicit join-key trust into an
+  advisory `KeyIntegrityCertificate`, so a metric joined through the 360 provably
+  can't double-count. Returns a `ServingJoinCertificate` (record certificate +
+  entity/record counts + `truncated` when a `max_entities` cap applies).
 
 ### Changed
 - **FS dedupe: Arrow-native columnar-cluster path (B2c), default-on (#1811/#2006).**
