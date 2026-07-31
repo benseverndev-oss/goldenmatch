@@ -158,3 +158,89 @@ def run_goldenmatch_dedupe(
         "applied_corrections": applied,
         "stale_corrections": stale,
     }
+
+
+def run_goldenmatch_crosswalk(
+    input_table: str,
+    source_pk: str,
+    output_table: str | None = None,
+    database: str = ":memory:",
+    source_name: str = "source",
+    store_path: str | None = None,
+    dataset: str | None = None,
+    config_path: str | None = None,
+) -> dict:
+    """Materialize a durable ``{source, source_pk, resolved_entity_id}`` crosswalk.
+
+    Runs GoldenMatch wedge-B (``goldenmatch.semantic.build_resolved_crosswalk``):
+    resolves identity once and writes the *conformed join key every metric can
+    group by* — the durable control-plane ``entity_id`` (UUIDv7), NOT the
+    run-local cluster id the ``goldenmatch_dedupe`` materialization emits. Point
+    a semantic layer's joins at ``resolved_entity_id`` and every metric inherits
+    correct, conformed joins ("resolve once, every metric inherits correct joins").
+
+    Unlike ``run_goldenmatch_dedupe``, the crosswalk has no pure-SQL warehouse UDF
+    equivalent: the resolved id comes from the stateful Identity Control Plane
+    (an IdentityStore), so this is a Python-helper materialization (call it from a
+    dbt Python model or out-of-band).
+
+    Usage in a dbt Python model::
+
+        def model(dbt, session):
+            from dbt_goldensuite.materialize import run_goldenmatch_crosswalk
+            run_goldenmatch_crosswalk(
+                input_table="raw_customers", source_pk="customer_id",
+                output_table="customer_crosswalk",
+                database=session.execute("PRAGMA database_list").fetchone()[2],
+                store_path="/warehouse/.goldenmatch/identity.db",  # durable ids
+            )
+            return session.sql("SELECT * FROM customer_crosswalk")
+
+    Args:
+        input_table: source table name in DuckDB.
+        source_pk: the column holding each record's source primary key.
+        output_table: destination table name (the crosswalk). Required.
+        database: DuckDB database path.
+        source_name: logical source name (the ``{source}`` half of the record id).
+        store_path: IdentityStore SQLite path. Pass a stable path to make entity
+            ids durable across runs ("resolve once"); omit for an ephemeral run.
+        dataset: identity-graph dataset scope (defaults to ``source_name``).
+        config_path: optional GoldenMatch YAML config; zero-config otherwise.
+
+    Returns:
+        Summary dict: ``input_rows``, ``n_records``, ``n_entities``, ``unmapped``,
+        ``reduction_ratio``, ``store_path`` (echoed when durable), ``durable``.
+    """
+    if output_table is None:
+        raise TypeError("run_goldenmatch_crosswalk() requires output_table")
+
+    from goldenmatch.semantic import build_resolved_crosswalk
+
+    conn = duckdb.connect(database)
+    df = conn.execute(f"SELECT * FROM {input_table}").pl()  # noqa: F841 (used below)
+
+    cfg = load_config(config_path) if config_path else None
+    crosswalk = build_resolved_crosswalk(
+        df,
+        source_pk=source_pk,
+        source_name=source_name,
+        dataset=dataset,
+        store_path=store_path,
+        config=cfg,
+    )
+    # `crosswalk_table` is referenced by DuckDB's replacement scan in the SQL
+    # string below (zero-copy pa.Table view), so it is intentionally "unused".
+    crosswalk_table = crosswalk.table  # noqa: F841
+    conn.execute(f"DROP TABLE IF EXISTS {output_table}")
+    conn.execute(f"CREATE TABLE {output_table} AS SELECT * FROM crosswalk_table")
+    conn.close()
+
+    return {
+        "input_rows": df.height,
+        "n_records": crosswalk.n_records,
+        "n_entities": crosswalk.n_entities,
+        "unmapped": crosswalk.unmapped,
+        "reduction_ratio": crosswalk.reduction_ratio,
+        "store_path": crosswalk.store_path,
+        "durable": store_path is not None,
+    }
