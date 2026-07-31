@@ -35,7 +35,7 @@ def test_agent_card_has_required_fields():
     assert card["authentication"]["schemes"] == ["bearer"]
 
 
-def test_agent_card_has_50_skills():
+def test_agent_card_has_51_skills():
     """v1.7-v1.12 added autoconfig+controller_telemetry (10->12); v2.0 added
     six identity_* skills (12->18); v1.19.x Phase 3 added add_correction
     (18->19); the MCP tool-coverage parity pass added 12 (19->31); #1089 added
@@ -48,13 +48,15 @@ def test_agent_card_has_50_skills():
     capability-gap parity pass added profile / suggest_config / memory_export /
     suggest_pprl (43->47); the a2a-fracture reconciliation advertised the #1114
     MDM read-side trio identity_profile / identity_stats / identity_worklist
-    (shared on MCP, previously ts_only on the A2A card) here too (47->50)."""
+    (shared on MCP, previously ts_only on the A2A card) here too (47->50); the
+    semantic-layer front door added certify_semantic_model (50->51)."""
     from goldenmatch.a2a.server import build_agent_card
 
     card = build_agent_card("http://localhost:8080")
-    assert len(card["skills"]) == 50
+    assert len(card["skills"]) == 51
     ids = {s["id"] for s in card["skills"]}
     assert "autoconfig" in ids
+    assert "certify_semantic_model" in ids
     assert "retrieve_similar" in ids
     assert "review_config" in ids
     assert {"list_scorers", "list_transforms", "list_strategies"} <= ids
@@ -815,3 +817,28 @@ def test_dispatch_suggest_pprl(tmp_path):
     result = dispatch_skill("suggest_pprl", {"file_path": str(csv_path)})
     assert "needs_pprl" in result
     assert "recommendation" in result
+
+
+def test_dispatch_certify_semantic_model(tmp_path):
+    """The certify_semantic_model A2A skill delegates to the MCP tool handler."""
+    from goldenmatch.a2a.skills import dispatch_skill
+
+    model = tmp_path / "sm.yml"
+    model.write_text(
+        "semantic_models:\n"
+        "  - name: orders\n"
+        "    entities:\n"
+        "      - {name: order, type: primary, expr: order_id}\n",
+        encoding="utf-8",
+    )
+    data = tmp_path / "orders.csv"
+    data.write_text("order_id\n1\n1\n2\n", encoding="utf-8")  # duplicate order_id
+
+    res = dispatch_skill(
+        "certify_semantic_model",
+        {"model_path": str(model), "frames": {"orders": str(data)}},
+    )
+    assert res["dialect"] == "metricflow"
+    assert res["n_certified"] == 1
+    assert res["all_trustworthy"] is False        # the duplicate key is unsafe
+    assert res["keys"][0]["key"] == ["order_id"]

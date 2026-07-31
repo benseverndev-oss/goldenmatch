@@ -369,7 +369,8 @@ def dispatch_skill(skill_id: str, params: dict, allow_pprl: bool = False) -> dic
     # Reuse the MCP dispatch where the JSON contract is identical (same pattern
     # as the identity_* skills above). File-based analysis skills that depend on
     # MCP's loaded-dataset state are implemented directly instead.
-    if skill_id in {"compare_clusters", "schema_match", "list_runs", "rollback"}:
+    if skill_id in {"compare_clusters", "schema_match", "list_runs", "rollback",
+                    "certify_semantic_model"}:
         from goldenmatch.mcp.server import _handle_tool
         return _handle_tool(skill_id, params)
 
