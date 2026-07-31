@@ -15,6 +15,8 @@
 - ``identity_profile``   -> MDM profile of one entity (sources, conflicts, version)
 - ``identity_stats``     -> graph-level summary / health stats
 - ``identity_worklist``  -> prioritized steward worklist
+- ``customer_360``       -> the unified serving view of one entity (golden record +
+                            provenance + linked records + timeline + relationships)
 """
 from __future__ import annotations
 
@@ -28,6 +30,7 @@ from goldenmatch.identity import (
     IdentityStore,
     audit_log_page,
     claim_record,
+    customer_360_page,
     entity_profile,
     find_by_record,
     find_conflicts,
@@ -353,6 +356,31 @@ IDENTITY_TOOLS: list[Tool] = [
             },
         },
     ),
+    Tool(
+        name="customer_360",
+        description=(
+            "The unified Customer 360 serving view of one entity, composed from "
+            "the durable store in one call: the golden record + per-field source "
+            "provenance, every linked source record, the event timeline, and the "
+            "relationship neighborhood. This is the same durable entity_id a "
+            "resolved crosswalk (semantic-layer wedge) groups metrics by, so a "
+            "metric row drills straight through to the customer. Returns "
+            "{found: false} when no such entity exists."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "entity_id": {"type": "string"},
+                "include_relationships": {"type": "boolean", "default": True},
+                "timeline_limit": {
+                    "type": "integer",
+                    "description": "Cap the number of timeline events (most recent first).",
+                },
+                "path": {"type": "string", "description": "Identity DB path"},
+            },
+            "required": ["entity_id"],
+        },
+    ),
 ]
 
 
@@ -502,6 +530,17 @@ def _dispatch(name: str, args: dict) -> dict[str, Any]:
                 weak_confidence=float(args.get("weak_confidence", 0.6)),
                 limit=int(args.get("limit", 50)),
             )
+
+    if name == "customer_360":
+        tl = args.get("timeline_limit")
+        with _open(args) as s:
+            page = customer_360_page(
+                s,
+                args["entity_id"],
+                include_relationships=bool(args.get("include_relationships", True)),
+                timeline_limit=int(tl) if tl is not None else None,
+            )
+        return page if page is not None else {"found": False}
 
     raise ValueError(f"unknown identity tool: {name}")
 

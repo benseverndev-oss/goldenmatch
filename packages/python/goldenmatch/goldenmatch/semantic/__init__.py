@@ -65,6 +65,7 @@ from goldenmatch.semantic.osi import (
     validate_osi,
     validate_osi_schema,
 )
+from goldenmatch.semantic.serving import entity_360, profile_from_crosswalk
 
 __all__ = [
     # zero-config front door — certify a whole semantic model (any dialect)
@@ -89,6 +90,9 @@ __all__ = [
     "emit_from_crosswalk",
     # live catalog write-back — persist the conformed declaration to a catalog file
     "write_resolved_catalog",
+    # Customer 360 drill-through — resolved key -> the whole customer view
+    "profile_from_crosswalk",
+    "entity_360",
     # wedge C — OSI / Apache Ossie native provider (bidirectional)
     "parse_osi_models",
     "osi_join_keys",

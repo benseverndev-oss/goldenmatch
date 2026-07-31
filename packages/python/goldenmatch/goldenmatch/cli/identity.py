@@ -10,6 +10,7 @@ from rich.table import Table
 
 from goldenmatch.identity import (
     IdentityStore,
+    customer_360_page,
     find_by_record,
     find_conflicts,
     get_entity,
@@ -98,6 +99,52 @@ def show_cmd(
         for r in view.records:
             t.add_row(r.record_id, r.source, r.record_hash[:12])
         console.print(t)
+
+
+@identity_app.command("360")
+def customer_360_cmd(
+    entity_id: str = typer.Argument(..., help="The entity_id to build the Customer 360 view for."),
+    path: str = typer.Option(DEFAULT_PATH, "--path", help="Path to the identity graph database."),
+    no_relationships: bool = typer.Option(
+        False, "--no-relationships", help="Skip the relationship neighborhood read."
+    ),
+    timeline_limit: int | None = typer.Option(
+        None, "--timeline-limit", help="Cap the number of timeline events (most recent first)."
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Emit the full 360 page as JSON."),
+) -> None:
+    """Customer 360: the unified serving view of one entity (golden record +
+    provenance + linked records + timeline + relationships)."""
+    with _open(path) as s:
+        page = customer_360_page(
+            s, entity_id,
+            include_relationships=not no_relationships,
+            timeline_limit=timeline_limit,
+        )
+    if page is None:
+        err_console.print(f"[red]Not found:[/red] {entity_id}")
+        raise typer.Exit(code=1)
+    if json_out:
+        console.print_json(json.dumps(page, default=str))
+        return
+    console.print(f"[bold cyan]{page['entity_id']}[/bold cyan]  status={page.get('status')}")
+    console.print(
+        f"  confidence: {page.get('confidence')}   records: {page.get('record_count')}   "
+        f"conflicts: {page.get('conflict_count')}"
+    )
+    gr = page.get("golden_record") or {}
+    if gr:
+        t = Table(title="Golden record")
+        t.add_column("field", style="cyan")
+        t.add_column("value")
+        for k, v in gr.items():
+            t.add_row(str(k), "" if v is None else str(v))
+        console.print(t)
+    console.print(
+        f"  sources: {', '.join(page.get('sources') or []) or '-'}   "
+        f"timeline events: {len(page.get('timeline') or [])}   "
+        f"relationships: {len(page.get('relationships') or [])}"
+    )
 
 
 @identity_app.command("resolve")

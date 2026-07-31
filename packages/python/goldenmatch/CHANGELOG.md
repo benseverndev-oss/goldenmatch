@@ -7,6 +7,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **Customer 360 serving surface + semantic-layer drill-through.** The `customer_360`
+  primitive (golden record + per-field provenance + linked source records + event
+  timeline + relationship neighborhood, composed from the durable store) is now
+  surfaced as a `customer_360` MCP tool and a `goldenmatch identity 360 <entity_id>`
+  CLI command (both share the `customer_360_page` serializer). New
+  `goldenmatch.semantic.profile_from_crosswalk(crosswalk, source_pk)` /
+  `entity_360(store_path, entity_id)` connect the semantic-layer wedge to Customer
+  360: a `ResolvedCrosswalk`'s `resolved_entity_id` is the same durable `entity_id`
+  the 360 keys on, so a metric row drills straight through to the whole customer
+  view with zero key translation. `customer_360` is a Python-only MCP tool (no TS
+  equivalent); goldenmatch MCP tools **91 → 92**.
 - **Live catalog write-back + JSON-Schema OSI validation (semantic-layer wedge).**
   `goldenmatch.semantic.write_resolved_catalog(crosswalk, path, *, dialect,
   source_target, ...)` emits a `ResolvedCrosswalk`'s conformed entity declaration
