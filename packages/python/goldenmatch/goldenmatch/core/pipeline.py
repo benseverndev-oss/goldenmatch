@@ -443,9 +443,12 @@ def _fs_use_bucket_route(config: GoldenMatchConfig, mk: Any) -> bool:
     RSS at parity, wall within noise of the batched route) and has NO row cap.
     The exclusions that remain are correctness- or contract-driven:
 
-      - an EXPLICIT scale backend (ray / duckdb / datafusion / chunked) keeps
+      - a genuinely-DISTRIBUTED scale backend (ray / datafusion / chunked) keeps
         its own routing; ``polars-direct`` is the planner's in-band choice and
-        keeps the default (same band semantics as ``_use_bucket_scorer``);
+        keeps the default (same band semantics as ``_use_bucket_scorer``).
+        ``duckdb`` is NOT excluded: it is a single-node STORAGE backend with no
+        distinct FS route, so FS honors the memory-bounded bucket scorer under it
+        (see the inline note) rather than falling to the batched OOM path;
       - ``GOLDENMATCH_FS_DEFAULT_BUCKET=0`` escape hatch (legacy batched --
         memory-unbounded; a warning is logged when it fires);
       - active profile emitter: auto-config reads the legacy block-size
@@ -459,7 +462,18 @@ def _fs_use_bucket_route(config: GoldenMatchConfig, mk: Any) -> bool:
     backend = getattr(config, "backend", None)
     if backend == "bucket":
         return True  # explicit choice -- honored at any size
-    if backend not in (None, "polars-direct"):
+    # `duckdb` is a single-node pair-STORAGE backend with NO distinct FS scoring
+    # route -- an FS matchkey under it simply falls to the legacy batched scorer
+    # (this function's own "#1798 OOM path"), which is measurably quality-DIVERGENT
+    # from the reference bucket scorer once an additive orthogonal anchor is present
+    # (historical_50k: bucket f1_prob 0.8456 vs batched 0.7733 -- a birth_place
+    # over-merge on the batched route only, exposed on <16GB hosts where the planner
+    # picks duckdb). The planner picks duckdb for host-memory reasons, NOT because
+    # FS needs the batched scorer; the bucket route is memory-bounded by design
+    # (partitions internally), so it is the strictly-safer AND path-consistent
+    # choice for FS. The genuinely-DISTRIBUTED backends (ray / datafusion) keep
+    # their own routing.
+    if backend not in (None, "polars-direct", "duckdb"):
         return False
     if (
         os.environ.get("GOLDENMATCH_FS_DEFAULT_BUCKET", "1").strip().lower()
@@ -587,7 +601,7 @@ def _run_fs_streaming_dedupe(
         )
     else:
         blocks = _build_em_blocks(score_frame, blocking)
-    blocking_fields = collect_blocking_fields(blocking)
+    blocking_fields = collect_blocking_fields(blocking, for_em=True)
     em_result = load_or_train_em(
         score_frame, mk, blocks=blocks, blocking_fields=blocking_fields,
         target_ids=None,
@@ -728,9 +742,11 @@ def _score_probabilistic_matchkey(
         blocks = build_blocks(block_frame, config.blocking)
     else:
         blocks = []
-    # Collect from keys AND passes (multi_pass puts keys in `.passes`).
+    # Collect from keys AND passes (multi_pass puts keys in `.passes`); for_em
+    # keeps additive orthogonal-anchor fields EM-trained (not demoted).
     blocking_fields = (
-        collect_blocking_fields(config.blocking) if config.blocking else []
+        collect_blocking_fields(config.blocking, for_em=True)
+        if config.blocking else []
     )
     # Reuses mk.model_path when set (Splink-style train-once), else trains.
     em_result = load_or_train_em(
@@ -839,6 +855,33 @@ def _score_probabilistic_matchkey(
             # matched_pairs intentionally NOT populated (single matchkey); the
             # review band is carried above so the columnar path is review-complete.
             return
+        # Cross-pass candidate-pair dedup (GOLDENMATCH_FS_PAIR_DEDUP=1, default
+        # OFF): score each DISTINCT candidate pair once instead of once per
+        # co-blocking pass. `scoring_mk` carries the review-cut threshold, so the
+        # returned set is review-inclusive (split below exactly like the bucket
+        # route). Returns None above the memory cap -> fall through to bucket.
+        from goldenmatch.backends.fs_pair_dedup import (
+            fs_pair_dedup_eligible,
+            fs_pair_dedup_enabled,
+            score_fs_pair_dedup,
+        )
+        if (
+            fs_pair_dedup_enabled()
+            and target_ids is None
+            and not across_files_only
+            and not bench_dump_dir
+            and fs_pair_dedup_eligible(scoring_mk, config.blocking)
+        ):
+            _pd_pairs = score_fs_pair_dedup(
+                score_frame, config.blocking, scoring_mk, matched_pairs, em_result,
+            )
+            if _pd_pairs is not None:
+                pairs, candidates = _split_probabilistic_pairs(_pd_pairs, link_threshold)
+                review_pairs.extend(candidates)
+                all_pairs.extend(pairs)
+                for a, b, _s in pairs:
+                    matched_pairs.add((min(a, b), max(a, b)))
+                return
         _use_arrow_stream = (
             target_ids is None
             and _fs_arrow_stream_enabled()
@@ -2733,7 +2776,8 @@ def _run_fused_fs_match_short_circuit(
         else []
     )
     blocking_fields = (
-        collect_blocking_fields(config.blocking) if config.blocking else []
+        collect_blocking_fields(config.blocking, for_em=True)
+        if config.blocking else []
     )
     em_result = load_or_train_em(
         collected_df, mk, blocks=blocks, blocking_fields=blocking_fields,

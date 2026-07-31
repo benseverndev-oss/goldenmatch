@@ -8,6 +8,7 @@ export { FrameSummaryAnalyzer } from "./analyzers/frameSummary.js";
 export { MatchRatesAnalyzer } from "./analyzers/matchRates.js";
 export { ClusterDistributionAnalyzer } from "./analyzers/clusterDist.js";
 export { QualityRollupAnalyzer } from "./analyzers/qualityRollup.js";
+export { KeyIntegrityAnalyzer } from "./analyzers/keyIntegrity.js";
 export * as aggregate from "./aggregate.js";
 export { enableAnalysisWasm, disableAnalysisWasm } from "./wasm/index.js";
 export type { AnalysisBackend, EnableAnalysisWasmOptions } from "./wasm/index.js";

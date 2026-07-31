@@ -1680,6 +1680,13 @@
               "required": false,
               "default": "{}",
               "description": "Per-field transform chains overriding the key-level transforms for the named fields only."
+            },
+            {
+              "name": "additive",
+              "type": "bool",
+              "required": false,
+              "default": "False",
+              "description": "If true, this pass co-locates pairs but its fields remain EM-trained comparison fields (Fellegi-Sunter path) instead of being demoted to fixed neutral weights."
             }
           ]
         },
@@ -2355,6 +2362,37 @@
               "required": false,
               "default": "False",
               "help": "Suppress all stderr output (panel + status messages)."
+            }
+          ]
+        },
+        {
+          "command": "certify-keys",
+          "options": [
+            {
+              "name": "model",
+              "type": "text",
+              "required": true,
+              "help": "Semantic-model file (dbt/MetricFlow, Cube, or OSI YAML)"
+            },
+            {
+              "name": "--data",
+              "type": "text",
+              "required": true,
+              "help": "Frame for a model/dataset/cube as name=path (repeatable), e.g. -d orders=orders.csv"
+            },
+            {
+              "name": "--resolve",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Also measure entity fragmentation / undercount via ER (MetricFlow dialect only)."
+            },
+            {
+              "name": "--fail-untrustworthy",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Exit non-zero if any declared key is not unique at grain (CI gate)."
             }
           ]
         },
@@ -4680,6 +4718,10 @@
           "description": "Estimate match RECALL without ground truth (unsupervised). Treats each auto-configured matchkey/pass as a decorrelated system and uses capture-recapture over their overlaps to estimate how many true matches were missed. Returns a point estimate (a safe lower bound additionally needs a small labelled audit; see `goldenmatch evaluate --certify --audit-out`). Needs >=3 decorrelated systems."
         },
         {
+          "name": "certify_semantic_model",
+          "description": "Semantic-layer front door: certify every declared entity key in a dbt/MetricFlow, Cube, or OSI/Ossie semantic model against its data. The dialect is auto-detected. Returns, per declared key, whether it is unique at grain and its measure fan-out -- the keys a metric silently joins on. Advisory; it never mutates a metric."
+        },
+        {
           "name": "compare_clusters",
           "description": "Compare two ER clustering outcomes on the same dataset without ground truth (CCMS): classifies each cluster as unchanged / merged / partitioned / overlapping and returns the Talburt-Wang Index. Both inputs are JSON cluster files (as written by export-style output)."
         },
@@ -5538,6 +5580,7 @@
         ],
         "BLOCKING": [
           "GOLDENMATCH_BLOCKING_CARDINALITY_SCALER",
+          "GOLDENMATCH_BLOCKING_COST_AWARE",
           "GOLDENMATCH_BLOCKING_DEGENERATE_MAX_AVG_BLOCK_SIZE",
           "GOLDENMATCH_BLOCKING_DEGENERATE_THRESHOLD",
           "GOLDENMATCH_BLOCKING_MAX_RATIO",
@@ -5640,7 +5683,10 @@
           "GOLDENMATCH_FS_OOC_ARROW_CLUSTER",
           "GOLDENMATCH_FS_OOC_DEBUG",
           "GOLDENMATCH_FS_OOC_WAVE_ROWS",
+          "GOLDENMATCH_FS_ORTHOGONAL_BLOCKING",
           "GOLDENMATCH_FS_OUT_OF_CORE",
+          "GOLDENMATCH_FS_PAIR_DEDUP",
+          "GOLDENMATCH_FS_PAIR_DEDUP_MAX_PAIRS",
           "GOLDENMATCH_FS_POST_BLOCKING_U",
           "GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE",
           "GOLDENMATCH_FS_ROUTE_MIN_ROWS",

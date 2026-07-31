@@ -1,6 +1,8 @@
 """Tests for goldenmatch.semantic.build_resolved_crosswalk (wedge B: resolve once)."""
 from __future__ import annotations
 
+import os
+
 import pyarrow as pa
 import pytest
 from goldenmatch.semantic import ResolvedCrosswalk, build_resolved_crosswalk
@@ -69,3 +71,16 @@ def test_ephemeral_store_notes_non_durability():
 def test_missing_source_pk_raises():
     with pytest.raises(ValueError):
         build_resolved_crosswalk(_frame(), source_pk="nope")
+
+
+def test_ephemeral_store_leaves_no_temp_files():
+    """The throwaway ephemeral store (and any SQLite sidecars) is removed after
+    the run — repeated ephemeral calls must not leak temp DB files."""
+    import glob
+    import tempfile
+
+    pattern = os.path.join(tempfile.gettempdir(), "gm_crosswalk_*")
+    before = set(glob.glob(pattern))
+    build_resolved_crosswalk(_frame(), source_pk="customer_id", source_name="crm")
+    after = set(glob.glob(pattern))
+    assert after <= before          # no new gm_crosswalk_* files remain

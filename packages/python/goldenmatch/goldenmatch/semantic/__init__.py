@@ -17,6 +17,18 @@ so ``import goldenmatch`` stays lightweight and polars-free; import it explicitl
 from __future__ import annotations
 
 from goldenmatch.core.key_integrity_certificate import KeyIntegrityCertificate
+from goldenmatch.semantic.blocking import (
+    SemanticFieldRoles,
+    metric_aware_attributes,
+    semantic_field_roles,
+)
+from goldenmatch.semantic.catalog import write_resolved_catalog
+from goldenmatch.semantic.certify import (
+    KeyCertification,
+    SemanticCertification,
+    certify_semantic_model,
+    detect_dialect,
+)
 from goldenmatch.semantic.crosswalk import ResolvedCrosswalk, build_resolved_crosswalk
 from goldenmatch.semantic.cube import (
     Cube,
@@ -48,22 +60,35 @@ from goldenmatch.semantic.osi import (
     emit_osi_model,
     emit_osi_yaml,
     osi_join_keys,
+    osi_json_schema,
     parse_osi_models,
     validate_osi,
+    validate_osi_schema,
 )
 
 __all__ = [
+    # zero-config front door — certify a whole semantic model (any dialect)
+    "certify_semantic_model",
+    "SemanticCertification",
+    "KeyCertification",
+    "detect_dialect",
     # wedge A — certify a declared key
     "certify_key_integrity",
     "KeyIntegrityCertificate",
     "parse_semantic_models",
     "DeclaredKeySpec",
+    # metric-aware resolution — declared roles drive the ER attribute selection
+    "semantic_field_roles",
+    "metric_aware_attributes",
+    "SemanticFieldRoles",
     # wedge B — resolve once, emit the conformed entity declaration
     "build_resolved_crosswalk",
     "ResolvedCrosswalk",
     "emit_semantic_model",
     "emit_metricflow_yaml",
     "emit_from_crosswalk",
+    # live catalog write-back — persist the conformed declaration to a catalog file
+    "write_resolved_catalog",
     # wedge C — OSI / Apache Ossie native provider (bidirectional)
     "parse_osi_models",
     "osi_join_keys",
@@ -72,6 +97,8 @@ __all__ = [
     "emit_osi_yaml",
     "emit_osi_from_crosswalk",
     "validate_osi",
+    "validate_osi_schema",
+    "osi_json_schema",
     "OsiModel",
     "OsiDataset",
     "OsiRelationship",

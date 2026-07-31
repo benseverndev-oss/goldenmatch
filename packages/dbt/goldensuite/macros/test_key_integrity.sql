@@ -16,8 +16,14 @@
     model         relation under test.
     key           entity key column, or a list of columns (composite key).
     measures      numeric columns to check for fan-out (default: none).
-    grain         ADVISORY in v1 -- recorded, not folded into the uniqueness
-                  group, to stay identical to the Python capability's semantics.
+    grain         ADVISORY by default -- recorded, not folded into the uniqueness
+                  group, to stay identical to the Python capability's default
+                  semantics. When `grain_strict=true`, grain IS folded into the
+                  GROUP BY (see below).
+    grain_strict  opt-in. When true AND `grain` is supplied, evaluate uniqueness /
+                  fan-out on `key + grain` (true "unique at grain") -- mirrors the
+                  Python `certify_key_integrity(grain_strict=True)`. Default false
+                  keeps grain advisory (byte-identical to the key-only test).
     max_fan_out   fail if any key group has more rows than this, or any measure
                   SUM inflates beyond it (default 1.0 = a true, non-fanning key).
     min_uniqueness fail if the fraction of unique-at-grain key groups drops below
@@ -25,12 +31,19 @@
 #}
 
 {% macro goldenmatch_key_integrity_sql(model, key, measures=[], grain=none,
-        max_fan_out=1.0, min_uniqueness=1.0) %}
+        max_fan_out=1.0, min_uniqueness=1.0, grain_strict=false) %}
     {%- set keys = [key] if key is string else key -%}
     {%- if keys | length == 0 -%}
         {{ exceptions.raise_compiler_error("goldenmatch_key_integrity: `key` must name at least one column") }}
     {%- endif -%}
-    {%- set keyexpr = keys | join(", ") -%}
+    {#- Grouping columns: the key alone by default; key + grain when grain_strict,
+        so a fact legitimately repeating a key across grain buckets is certified
+        unique *at grain* rather than reported as fan-out. Mirrors the Python
+        capability's `grain_strict` path. Grain cols already in the key aren't
+        repeated. -#}
+    {%- set grain_cols = ([grain] if grain is string else grain) if grain is not none else [] -%}
+    {%- set group_cols = keys + (grain_cols | reject("in", keys) | list) if grain_strict else keys -%}
+    {%- set keyexpr = group_cols | join(", ") -%}
 
     {%- set rep_cols = [] -%}      {# MAX(measure) per group = de-duplicated representative #}
     {%- set dedup_sums = [] -%}    {# SUM of per-group representatives #}
@@ -79,6 +92,6 @@ SELECT * FROM scored WHERE " ~ (conds | join(" OR "))) }}
 {% endmacro %}
 
 {% test goldenmatch_key_integrity(model, key, measures=[], grain=none,
-        max_fan_out=1.0, min_uniqueness=1.0) %}
-{{ dbt_goldensuite.goldenmatch_key_integrity_sql(model, key, measures, grain, max_fan_out, min_uniqueness) }}
+        max_fan_out=1.0, min_uniqueness=1.0, grain_strict=false) %}
+{{ dbt_goldensuite.goldenmatch_key_integrity_sql(model, key, measures, grain, max_fan_out, min_uniqueness, grain_strict) }}
 {% endtest %}

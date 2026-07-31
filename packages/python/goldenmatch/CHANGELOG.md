@@ -15,6 +15,42 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   redistribution-clean. 1.5B is also measured stronger zero-shot (walmart pair-F1
   0.795 vs the 3B's 0.721; in-dist F1 0.999). Training data is fully synthetic;
   restricted real datasets are eval-only.
+- **Live catalog write-back + JSON-Schema OSI validation (semantic-layer wedge).**
+  `goldenmatch.semantic.write_resolved_catalog(crosswalk, path, *, dialect,
+  source_target, ...)` emits a `ResolvedCrosswalk`'s conformed entity declaration
+  (the `resolved_entity_id` join a metric groups by) for dbt/MetricFlow, Cube, or
+  OSI and **writes it to the catalog file** the semantic layer reads — the last
+  mile of "resolve once, every metric inherits correct joins". Refuses to clobber
+  an existing file unless `overwrite=True`, creates parent dirs, and forwards
+  emitter kwargs (`measures`/`grain`/`resolved_field`/...). Also adds a bundled
+  JSON Schema for OSI/Ossie 0.2.0.dev0 (`osi_json_schema()`) and a
+  `jsonschema`-backed validator: `validate_osi_schema(source)` and
+  `validate_osi(source, engine="structural"|"jsonschema"|"auto")`. `jsonschema` is
+  optional (the `"auto"` engine falls back to the dependency-free structural check
+  when it is absent); the default `engine="structural"` is byte-identical to prior
+  behavior.
+- **Metric-aware resolution for the semantic-layer wedge (the differentiated
+  wedge).** New `goldenmatch.semantic.semantic_field_roles(source)` reads a
+  semantic model's declared `{keys, dimensions, measures}` across all three
+  dialects (dbt/MetricFlow, Cube, OSI), and `metric_aware_attributes(roles,
+  columns)` turns them into the entity-resolution attribute allow-list — resolve
+  on the declared dimensions, never on a measure (a measure like `revenue` is an
+  aggregation target, not identity evidence). `certify_semantic_model` gained a
+  `metric_aware=True` toggle (threaded uniformly through the Cube/OSI bridges via
+  a new `roles=` argument) so the `resolve=True` tier drives its ER off the
+  model's own metadata instead of blindly profiling every column. A model that
+  declares no dimensions is byte-identical to the prior blind selection; the
+  toggle has no effect unless `resolve=True`.
+- **`grain_strict` on `certify_key_integrity` (semantic-layer wedge).** Opt-in
+  argument (default `False` = byte-identical to prior behavior: grain stays advisory
+  context and uniqueness is evaluated on the key alone). When `True` and a `grain` is
+  supplied, uniqueness and per-measure fan-out are evaluated on `key + grain` — true
+  "unique at grain", so a fact that legitimately repeats a key across grain buckets
+  (e.g. daily rows per customer) is certified rather than reported as fan-out; a real
+  duplicate *within* a grain bucket is still flagged. Grain columns are validated on
+  the strict path. The `goldenmatch_key_integrity` dbt test gained a matching
+  `grain_strict` argument in lockstep so the SQL test and this capability stay
+  semantically identical.
 
 ### Changed
 - **FS dedupe: Arrow-native columnar-cluster path (B2c), default-on (#1811/#2006).**

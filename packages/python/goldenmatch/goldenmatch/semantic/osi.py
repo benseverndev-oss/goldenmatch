@@ -323,14 +323,21 @@ def emit_osi_from_crosswalk(
 # --- bridge: certify the keys an OSI model joins on (metric-aware, wedge A) ----
 
 
-def certify_osi_relationships(model: OsiModel | str | Any, frames: dict[str, Any]) -> list[dict[str, Any]]:
+def certify_osi_relationships(
+    model: OsiModel | str | Any, frames: dict[str, Any], *, resolve: bool = False,
+    roles: Any = None,
+) -> list[dict[str, Any]]:
     """For each relationship in an OSI model, certify the ONE-side key it joins on
     (the referenced PK) using wedge A — i.e. certify exactly the identity the
     metrics depend on. `frames` maps dataset name -> table; datasets without a
-    supplied frame are skipped.
+    supplied frame are skipped. `resolve=True` also measures entity
+    fragmentation / undercount via ER (fail-open); pass `roles` (a
+    `SemanticFieldRoles`) to make that ER metric-aware — it resolves on the
+    dataset's declared dimension fields and never on a measure.
 
     Returns `[{relationship, dataset, key, certificate}]`.
     """
+    from goldenmatch.semantic.blocking import _frame_columns, metric_aware_attributes
     from goldenmatch.semantic.key_integrity import certify_key_integrity
 
     if not isinstance(model, OsiModel):
@@ -344,7 +351,13 @@ def certify_osi_relationships(model: OsiModel | str | Any, frames: dict[str, Any
         df = frames.get(rel.to_dataset)
         if df is None or not rel.to_columns:
             continue
-        cert = certify_key_integrity(df, key=rel.to_columns)
+        attributes = (
+            metric_aware_attributes(roles, _frame_columns(df))
+            if (resolve and roles is not None) else None
+        )
+        cert = certify_key_integrity(
+            df, key=rel.to_columns, resolve=resolve, attributes=attributes
+        )
         out.append({
             "relationship": rel.name,
             "dataset": rel.to_dataset,
@@ -376,17 +389,85 @@ def _expression_issues(expr: Any, loc: str) -> list[str]:
     return [f"{loc}: missing/invalid 'expression'"]
 
 
-def validate_osi(source: str | Any) -> list[str]:
+def osi_json_schema() -> dict[str, Any]:
+    """Load the bundled OSI/Ossie 0.2.0.dev0 JSON Schema.
+
+    The schema (`osi_schema.json`, shipped in this package) is the machine-readable
+    form of the same structural contract `validate_osi` enforces — required fields,
+    the datatype/dialect enums, the `expression` shape, and the forbidden
+    `foreign_key`/`cardinality`/`aggregation` keys. Useful for validating OSI docs
+    with any JSON-Schema tool, not just GoldenMatch.
+    """
+    import json
+    from pathlib import Path
+
+    schema_path = Path(__file__).with_name("osi_schema.json")
+    with open(schema_path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def validate_osi_schema(source: str | Any) -> list[str]:
+    """Validate an OSI document against the bundled JSON Schema via `jsonschema`.
+
+    Returns a list of human-readable issues (empty when valid), sorted by JSON
+    path. Requires the optional `jsonschema` dependency; raises `ImportError` if it
+    is not installed (use `validate_osi` for the dependency-free structural check,
+    or `validate_osi(..., engine="auto")` to prefer this when available).
+    """
+    try:
+        import jsonschema
+    except ImportError as exc:  # pragma: no cover - exercised by the engine="auto" fallback
+        raise ImportError(
+            "validate_osi_schema requires the optional `jsonschema` package "
+            "(pip install jsonschema); use validate_osi(...) for the dependency-free "
+            "structural check."
+        ) from exc
+
+    data = _load(source)
+    validator = jsonschema.Draft202012Validator(osi_json_schema())
+    issues: list[str] = []
+    for err in sorted(validator.iter_errors(data), key=lambda e: list(e.absolute_path)):
+        loc = "/".join(str(p) for p in err.absolute_path) or "<root>"
+        issues.append(f"{loc}: {err.message}")
+    return issues
+
+
+def validate_osi(source: str | Any, *, engine: str = "structural") -> list[str]:
     """Validate an OSI/Ossie document against the spec's structural constraints
     (`core-spec/osi-schema.json`, 0.2.0.dev0) — returns a list of human-readable
     issues, empty when valid. Faithful to the schema's `required` sets + enums,
     and flags the keys the schema does NOT define (cardinality / foreign_key /
     aggregation) so hand-written or third-party docs stay conformant.
 
+    Args:
+        source: a path, raw YAML string, or loaded dict for an OSI document.
+        engine: `"structural"` (default) runs the dependency-free structural
+            validator below. `"jsonschema"` validates against the bundled JSON
+            Schema via the optional `jsonschema` package (raises if absent).
+            `"auto"` uses `jsonschema` when it is importable and falls back to the
+            structural check otherwise. All engines return the same issue-list
+            shape; the default is byte-identical to the prior behavior.
+
     Structural (no `jsonschema` dependency): validates required fields, list shape,
     and enum membership — the checks that keep GoldenMatch-emitted OSI round-trippable
     and portable across Ossie consumers. `validate_osi(emit_osi_yaml(...)) == []`.
     """
+    engine = engine.strip().lower()
+    if engine == "jsonschema":
+        return validate_osi_schema(source)
+    if engine == "auto":
+        try:
+            import jsonschema  # noqa: F401
+        except ImportError:
+            pass  # jsonschema absent → structural fallback below
+        else:
+            return validate_osi_schema(source)
+    elif engine != "structural":
+        raise ValueError(
+            f"validate_osi: unknown engine {engine!r}; expected 'structural', "
+            "'jsonschema', or 'auto'"
+        )
+
     data = _load(source)
     issues: list[str] = []
 
