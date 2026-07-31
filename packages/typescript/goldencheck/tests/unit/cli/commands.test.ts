@@ -48,6 +48,18 @@ describe("goldencheck CLI command registration", () => {
     expect(failOn!.defaultValue).toBe("error");
   });
 
+  it("registers the denial-constraints command (TS parity with the DC engine)", () => {
+    expect(names).toContain("denial-constraints");
+    const dc = program.commands.find((c) => c.name() === "denial-constraints");
+    expect(dc).toBeDefined();
+    // Single positional <file>.
+    expect(dc!.registeredArguments.map((a) => a.name())).toEqual(["file"]);
+    // The three engine knobs, mirroring goldencheck/cli/main.py.
+    expect(dc!.options.some((o) => o.long === "--min-confidence")).toBe(true);
+    expect(dc!.options.some((o) => o.long === "--sample-size")).toBe(true);
+    expect(dc!.options.some((o) => o.long === "--max-constraints")).toBe(true);
+  });
+
   it("registers the learn command (TS parity with Python's LLM rule generator)", () => {
     expect(names).toContain("learn");
     const learn = program.commands.find((c) => c.name() === "learn");

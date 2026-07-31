@@ -1,0 +1,11 @@
+[
+  "¬(order_day > ship_day ∧ status = 'shipped')",
+  "¬(order_id ≤ ship_day ∧ order_id ≥ ship_day)",
+  "¬(order_day > ship_day ∧ order_id > order_day)",
+  "¬(order_day > ship_day ∧ order_id ≥ order_day)",
+  "¬(order_day ≤ ship_day ∧ order_day ≥ ship_day)",
+  "¬(order_day ≥ ship_day ∧ order_id > order_day)",
+  "¬(order_day ≥ ship_day ∧ order_id ≥ order_day)",
+  "¬(order_day ≥ ship_day ∧ status = 'shipped')",
+  "¬(order_id ≤ order_day ∧ order_id ≥ order_day)"
+]

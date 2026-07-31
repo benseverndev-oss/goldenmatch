@@ -134,6 +134,10 @@ export { COLUMN_PROFILERS, type Profiler, type RelationProfiler, generalize } fr
 // Relations
 export { RELATION_PROFILERS, IdentitySafePkProfiler } from "./relations/index.js";
 
+// Denial constraints
+export { discoverDenialConstraints } from "./denial/mine.js";
+export { DenialConstraint, Predicate, Op, type PredicateKind } from "./denial/models.js";
+
 // Demo data generator
 export { generateDemoRecords, type DemoOptions } from "./cli/demo-data.js";
 
