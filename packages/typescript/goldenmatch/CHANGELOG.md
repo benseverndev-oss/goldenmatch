@@ -4,6 +4,25 @@ All notable changes to goldenmatch-js are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [Unreleased]
+
+### Added
+- **Customer 360 serving view (`customer360Page`) + the `customer_360` MCP tool.**
+  Edge-safe port of Python `identity/profile.py::customer_360` — the unified
+  serving read of one entity composed from the durable store in one call: golden
+  record + per-field source provenance + every linked source record + the event
+  timeline + the relationship neighborhood. `customer360Page(store, entityId,
+  { includeRelationships, timelineLimit })` returns the same `as_dict()`-shaped
+  object every Python surface returns (shared-capabilities-conform), so a metric
+  grouped on the durable `entity_id` drills straight through to the customer. The
+  relationship overlay is a federated read the edge-safe store doesn't implement,
+  so it degrades to `[]` (mirroring Python's `AttributeError → []` fallback; a
+  store MAY provide an optional `getRelationships`). Surfaced as the TS MCP
+  `customer_360` tool (identity tools 15 → 16, total MCP 83 → 84), which flips
+  `customer_360` from `python_only` to `shared` under `mcp_tools`; because the TS
+  A2A card auto-exposes every identity tool, it becomes an `a2a_skills.ts_only`
+  skill (Python's A2A never advertised it).
+
 ## [1.26.0] - 2026-07-27
 
 ### Changed (default behavior — read before upgrading)

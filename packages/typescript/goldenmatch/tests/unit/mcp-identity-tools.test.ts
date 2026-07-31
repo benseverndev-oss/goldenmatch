@@ -98,7 +98,7 @@ afterEach(() => {
 });
 
 describe("IDENTITY_TOOLS metadata", () => {
-  it("exports the 15 identity tools matching the Python sibling", () => {
+  it("exports the 16 identity tools matching the Python sibling", () => {
     expect(IDENTITY_TOOLS.map((t) => t.name)).toEqual([
       "identity_resolve",
       "identity_list",
@@ -115,8 +115,9 @@ describe("IDENTITY_TOOLS metadata", () => {
       "identity_profile",
       "identity_stats",
       "identity_worklist",
+      "customer_360",
     ]);
-    expect(IDENTITY_TOOL_NAMES.size).toBe(15);
+    expect(IDENTITY_TOOL_NAMES.size).toBe(16);
     for (const t of IDENTITY_TOOLS) {
       expect(t.description.length).toBeGreaterThan(0);
       expect(t.inputSchema).toBeTypeOf("object");
@@ -347,5 +348,56 @@ describe("identity read tools (show / profile / stats / worklist)", () => {
     expect(items.some((i) => i["entity_id"] === "E1")).toBe(true);
     const e1 = items.find((i) => i["entity_id"] === "E1")!;
     expect(e1["reasons"]).toContain("has_conflicts");
+  });
+
+  it("customer_360 composes the unified serving view", async () => {
+    const r = await call("customer_360", { entity_id: "E1" });
+    expect(r["entity_id"]).toBe("E1");
+    expect(r["record_count"]).toBe(1);
+    expect(r["golden_record"]).toEqual({ name: "E1" });
+    // every 360 section is present + JSON-ready
+    for (const key of [
+      "field_provenance",
+      "source_records",
+      "timeline",
+      "relationships",
+    ]) {
+      expect(Array.isArray(r[key])).toBe(true);
+    }
+    // per-field provenance: the golden `name` (E1) disagrees with src:1's
+    // payload (Alice), so it has no winning contributor and records the override
+    const prov = r["field_provenance"] as Record<string, unknown>[];
+    const nameProv = prov.find((p) => p["field"] === "name")!;
+    expect(nameProv["winning_record_id"]).toBeNull();
+    const conflicts = nameProv["conflicting_values"] as Record<string, unknown>[];
+    expect(conflicts.some((c) => c["value"] === "Alice")).toBe(true);
+    // the edge-safe store has no relationship overlay -> empty (Python's fallback)
+    expect(r["relationships"]).toEqual([]);
+  });
+
+  it("customer_360 attributes a golden field back to the source record that carries it", async () => {
+    // Re-stamp E1's golden so it agrees with src:1's payload (name: Alice).
+    await store.upsertIdentity({
+      entityId: "E1",
+      status: "active",
+      mergedInto: null,
+      goldenRecord: { name: "Alice" },
+      confidence: 0.9,
+      dataset: "d",
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    const r = await call("customer_360", { entity_id: "E1" });
+    const prov = r["field_provenance"] as Record<string, unknown>[];
+    const nameProv = prov.find((p) => p["field"] === "name")!;
+    expect(nameProv["winning_record_id"]).toBe("src:1");
+    expect(nameProv["winning_source"]).toBe("src");
+  });
+
+  it("customer_360 respects include_relationships=false and returns found:false for unknowns", async () => {
+    const r = await call("customer_360", { entity_id: "E1", include_relationships: false });
+    expect(r["relationships"]).toEqual([]);
+    const missing = await call("customer_360", { entity_id: "NOPE" });
+    expect(missing["found"]).toBe(false);
   });
 });

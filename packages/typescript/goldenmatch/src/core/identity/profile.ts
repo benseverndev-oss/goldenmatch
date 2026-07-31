@@ -8,7 +8,7 @@
  * Backs the `identity_profile` / `identity_stats` / `identity_worklist` MCP
  * tools. Each function returns the Python `as_dict()`-shaped object directly.
  */
-import type { IdentityStore, IdentityNode } from "./types.js";
+import type { IdentityStore, IdentityNode, SourceRecord, IdentityEvent } from "./types.js";
 import { pyIsoformat } from "./pyDatetime.js";
 
 const PAGE = 500;
@@ -156,6 +156,173 @@ export async function identitySummaryStats(
       entity_id,
       record_count,
     })),
+  };
+}
+
+// ── Customer 360 (unified serving read) ──────────────────────────────────────
+//
+// One read that composes the durable spine into the whole picture of a customer:
+// golden record + per-field source provenance + every linked source record + the
+// event timeline + the relationship overlay. Edge-safe port of Python
+// `identity/profile.py::customer_360` — the serving realization of decision 0049.
+// Backs the `customer_360` MCP tool and the REST `/identities/{id}/360` route.
+
+/** Normalize a payload/golden cell for provenance comparison: `null` stays
+ * `null`; everything else is string-cast + trimmed, so a golden `42` matches a
+ * source payload `"42"` without treating an empty string as a real value.
+ * (Float formatting differs Python↔JS — `String(5.0)` is `"5"` — the documented
+ * PPRL-class gap; irrelevant for the string payloads a 360 typically carries.) */
+function norm(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  const s = String(value).trim();
+  return s || null;
+}
+
+interface FieldContribution {
+  source: string;
+  record_id: string;
+  source_pk: string;
+  value: unknown;
+  last_seen: string | null;
+}
+
+/** Attribute each golden field to the source records that carry its value.
+ * Winner = the contributing record with the most recent `lastSeenAt` (ties broken
+ * by `recordId` descending, matching Python). Mirrors `_field_provenance`. */
+function fieldProvenance(
+  goldenRecord: Record<string, unknown> | null,
+  records: readonly SourceRecord[],
+): Array<Record<string, unknown>> {
+  if (!goldenRecord) return [];
+  const out: Array<Record<string, unknown>> = [];
+  for (const [fname, gvalue] of Object.entries(goldenRecord)) {
+    const gnorm = norm(gvalue);
+    const contributors: Array<FieldContribution & { _ts: number }> = [];
+    const conflicts = new Map<string, Record<string, unknown>>();
+    for (const rec of records) {
+      const payload = rec.payload ?? {};
+      if (!(fname in payload)) continue;
+      const rnorm = norm(payload[fname]);
+      if (rnorm !== null && rnorm === gnorm) {
+        contributors.push({
+          source: rec.source,
+          record_id: rec.recordId,
+          source_pk: rec.sourcePk,
+          value: payload[fname],
+          last_seen: rec.lastSeenAt ? pyIsoformat(rec.lastSeenAt) : null,
+          _ts: rec.lastSeenAt ? rec.lastSeenAt.getTime() : -Infinity,
+        });
+      } else if (rnorm !== null && !conflicts.has(rnorm)) {
+        conflicts.set(rnorm, {
+          value: payload[fname],
+          source: rec.source,
+          record_id: rec.recordId,
+        });
+      }
+    }
+    // Most recent first; ties broken by record_id descending (Python reverse sort).
+    contributors.sort((a, b) => {
+      if (a._ts !== b._ts) return b._ts - a._ts;
+      return a.record_id < b.record_id ? 1 : a.record_id > b.record_id ? -1 : 0;
+    });
+    const winner = contributors[0];
+    out.push({
+      field: fname,
+      value: gvalue,
+      winning_source: winner ? winner.source : null,
+      winning_record_id: winner ? winner.record_id : null,
+      contributors: contributors.map(({ _ts, ...c }) => c),
+      conflicting_values: [...conflicts.values()].sort((a, b) =>
+        String(a.value) < String(b.value) ? -1 : String(a.value) > String(b.value) ? 1 : 0,
+      ),
+    });
+  }
+  return out;
+}
+
+function recordAsDict(rec: SourceRecord): Record<string, unknown> {
+  return {
+    record_id: rec.recordId,
+    source: rec.source,
+    source_pk: rec.sourcePk,
+    dataset: rec.dataset,
+    first_seen: rec.firstSeenAt ? pyIsoformat(rec.firstSeenAt) : null,
+    last_seen: rec.lastSeenAt ? pyIsoformat(rec.lastSeenAt) : null,
+    payload: rec.payload,
+  };
+}
+
+function eventAsDict(ev: IdentityEvent): Record<string, unknown> {
+  const reason =
+    ev.payload && typeof ev.payload === "object" ? (ev.payload as Record<string, unknown>).reason ?? null : null;
+  return {
+    event_id: ev.eventId,
+    kind: ev.kind,
+    actor: ev.actor ?? null,
+    trust: ev.trust ?? null,
+    run_name: ev.runName,
+    dataset: ev.dataset,
+    reason,
+    recorded_at: ev.recordedAt ? pyIsoformat(ev.recordedAt) : null,
+  };
+}
+
+/** The single Customer 360 serving read: everything known about one entity,
+ * composed from the durable store in one call. Returns `null` if the entity
+ * doesn't exist. JSON-ready (the `as_dict()`-shaped object Python returns), so
+ * every serving surface returns the same 360 shape. Mirrors Python
+ * `customer_360_page`.
+ *
+ * The relationship overlay (decision 0049) is a federated read the edge-safe
+ * store doesn't implement; like Python's `AttributeError → []` fallback, it
+ * degrades to an empty list here (a store MAY provide an optional
+ * `getRelationships(entityId)` and it will be used). */
+export async function customer360Page(
+  store: IdentityStore,
+  entityId: string,
+  opts: { includeRelationships?: boolean; timelineLimit?: number } = {},
+): Promise<Record<string, unknown> | null> {
+  const includeRelationships = opts.includeRelationships ?? true;
+
+  const profile = await entityProfile(store, entityId);
+  if (profile === null) return null;
+
+  const records = await store.getRecordsForEntity(entityId);
+  const goldenRecord = (profile.golden_record ?? null) as Record<string, unknown> | null;
+
+  let relationships: Array<Record<string, unknown>> = [];
+  if (includeRelationships) {
+    const getRel = (store as { getRelationships?: (id: string) => Promise<Array<Record<string, unknown>>> })
+      .getRelationships;
+    if (typeof getRel === "function") {
+      try {
+        relationships = await getRel.call(store, entityId);
+      } catch {
+        relationships = [];
+      }
+    }
+  }
+
+  const events = await store.history(entityId, opts.timelineLimit);
+
+  return {
+    entity_id: entityId,
+    status: profile.status,
+    merged_into: profile.merged_into,
+    dataset: profile.dataset,
+    confidence: profile.confidence,
+    version: profile.version,
+    record_count: profile.record_count,
+    sources: profile.sources,
+    source_counts: profile.source_counts,
+    conflict_count: profile.conflict_count,
+    first_seen: profile.first_seen,
+    last_seen: profile.last_seen,
+    golden_record: goldenRecord,
+    field_provenance: fieldProvenance(goldenRecord, records),
+    source_records: records.map(recordAsDict),
+    timeline: events.map(eventAsDict),
+    relationships,
   };
 }
 
