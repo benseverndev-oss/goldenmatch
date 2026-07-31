@@ -26,12 +26,17 @@ This tool has two halves:
 
 Modes:
   (default)   Render the scorecard: live harvest + curated inventory by tenet/severity.
-  --check     Exit non-zero on a DRIFT invariant (advisory unless --strict):
+  --check     Exit non-zero on a DRIFT invariant. Most are advisory unless --strict:
                 - a scorer is UNCOVERED (not kernel-backed, not deferred);
                 - a package grew a NEW _FALLBACK_ONLY kernel with no inventory entry;
                 - a curated weakness marked declared-divergent that names a
                   parity_test file that does not exist on disk.
-  --strict    Make --check gating (exit 1 on any drift). Default is advisory (exit 0).
+              EXCEPT the T1 default-routing GATING check, which exits 1 regardless of
+              --strict: an `owner_default` kernel (parity/thesis_conformance.yaml
+              `default_routing`) no longer auto-registered at its batteries entry is the
+              fs-default class -- a shared owner shipped opt-in while a second impl is the
+              default -- and hard-fails so it can't sit behind a stale annotation.
+  --strict    Make the ADVISORY invariants gating too (exit 1 on any drift).
   --json      Emit the scorecard as JSON instead of text.
 
 Deliberately NOT wired into ci-required: this is a visibility/roadmap instrument,
@@ -43,6 +48,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -158,6 +164,86 @@ def harvest_fallback_only() -> dict:
     return out
 
 
+_TS_IMPORT_RE = re.compile(r"import\s*\{([^}]*)\}\s*from")
+_TS_TOP_CALL_RE = re.compile(r"^([A-Za-z_$][\w$]*)\(\s*\)\s*;?\s*$")
+
+
+def harvest_ts_default_routing(inv: dict) -> dict:
+    """For each declared TS batteries entry, the enable-* symbols it AUTO-REGISTERS as
+    an import-time side-effect -- the 'owner is the default' signal (conformance v2 T1).
+
+    An auto-registration is a bare top-level call in the entry (e.g. ``registerFsKernel();``),
+    resolved through single-line ``import { X as Y }`` aliases. Box-safe line parse (no
+    TS toolchain). LIMIT: single-line imports + column-0 bare calls (module top-level)
+    only; a multi-line aliased import is not resolved -- but that fails an
+    ``owner_default`` claim LOUD (symbol not found) rather than passing silently.
+    """
+    out = {}
+    for name, block in (inv.get("default_routing") or {}).items():
+        entry = REPO / (block.get("entry") or "")
+        auto: set[str] = set()
+        exists = entry.exists()
+        if exists:
+            alias: dict[str, str] = {}
+            calls: list[str] = []
+            for line in entry.read_text().splitlines():
+                m = _TS_IMPORT_RE.search(line)
+                if m:
+                    for item in m.group(1).split(","):
+                        item = item.strip()
+                        if not item:
+                            continue
+                        parts = [p.strip() for p in item.split(" as ")]
+                        alias[parts[-1]] = parts[0]  # local -> original export
+                    continue
+                c = _TS_TOP_CALL_RE.match(line)
+                if c:
+                    calls.append(c.group(1))
+            for callee in calls:
+                auto.add(alias.get(callee, callee))
+        out[name] = {"entry": block.get("entry", ""), "exists": exists,
+                     "auto_registered": sorted(auto)}
+    return out
+
+
+def check_default_routing(inv: dict, harvest: dict) -> tuple[list, list]:
+    """Reconcile the default_routing claims against the harvested reality (T1).
+
+    Returns ``(gating, advisory)``. GATING: an ``owner_default`` kernel NOT auto-registered
+    -- the owner exists but a second impl is the default (the fs-default class), a hard
+    regression. ADVISORY: an ``opt_in`` kernel that IS auto-registered (reclassify), or an
+    auto-registered kernel absent from the inventory (add it so its default is audited).
+    """
+    gating: list[str] = []
+    advisory: list[str] = []
+    for name, block in (inv.get("default_routing") or {}).items():
+        h = harvest.get(name, {})
+        if not h.get("exists"):
+            advisory.append(
+                f"default_routing '{name}': batteries entry not found ({block.get('entry')})")
+            continue
+        auto = set(h.get("auto_registered", []))
+        owner = list(block.get("owner_default") or [])
+        optin = set(block.get("opt_in") or [])
+        for sym in owner:
+            if sym not in auto:
+                gating.append(
+                    f"T1 default-routing REGRESSION ({name}): '{sym}' is declared owner-default "
+                    f"but is NOT auto-registered at the batteries entry -- the shared owner exists "
+                    f"yet a second impl is the default (the fs-default class). Restore the "
+                    f"import-time registration, or reclassify it opt_in if that is intended.")
+        for sym in sorted(auto):
+            if sym in optin:
+                advisory.append(
+                    f"default-routing ({name}): '{sym}' is classified opt_in but IS auto-registered "
+                    f"at the batteries entry -- reclassify owner_default or drop the registration.")
+            elif sym not in owner:
+                advisory.append(
+                    f"default-routing ({name}): '{sym}' is auto-registered but absent from the "
+                    f"default_routing inventory -- add it (owner_default) so its default is audited.")
+    return gating, advisory
+
+
 def load_inventory() -> dict:
     inv = _load_yaml(INVENTORY)
     if not inv:
@@ -180,12 +266,14 @@ def build_scorecard() -> dict:
     resolved = sorted((w for w in all_w if w.get("status") == "resolved"), key=_key)
     return {
         "tenets": inv.get("tenets", {}),
+        "inventory": inv,
         "weaknesses": weaknesses,
         "resolved": resolved,
         "live": {
             "surface_gaps": harvest_surface_gaps(),
             "scorer_coverage": harvest_scorer_coverage(),
             "fallback_only_kernels": harvest_fallback_only(),
+            "ts_default_routing": harvest_ts_default_routing(inv),
         },
     }
 
@@ -224,11 +312,21 @@ def run_check(card: dict, strict: bool) -> int:
                 f"LATENT second source: '{w['id']}' has a shared owner but the default "
                 f"path does not route to it (default_routed: false) -- conformance v2 T1")
 
-    if problems:
+    # T1 default-routing, VERIFIED against code (not just the manual annotation): an
+    # owner_default kernel that is no longer auto-registered at its batteries entry is a
+    # HARD regression (the fs-default class) and GATES regardless of --strict; the
+    # softer reclassify/audit prompts join the advisory set.
+    gating, dr_advisory = check_default_routing(
+        card["inventory"], card["live"]["ts_default_routing"])
+    problems.extend(dr_advisory)
+
+    if gating or problems:
         print("THESIS-CONFORMANCE DRIFT:")
+        for p in gating:
+            print(f"  - [GATING] {p}")
         for p in problems:
             print(f"  - {p}")
-        return 1 if strict else 0
+        return 1 if (gating or strict) else 0
     print("thesis-conformance drift check: OK")
     return 0
 
@@ -285,6 +383,20 @@ def render(card: dict) -> None:
             for w in revalidate:
                 first = " ".join(str(w["un_defer"]).split())
                 print(f"    - {w['id']}: {first[:110]}{'...' if len(first) > 110 else ''}")
+        print()
+
+    dr = card["live"].get("ts_default_routing") or {}
+    inv_dr = card.get("inventory", {}).get("default_routing") or {}
+    if dr:
+        print("-" * 78)
+        print("DEFAULT-ROUTING (T1, VERIFIED against code: is the owner auto-registered?)")
+        print("-" * 78)
+        for name, h in dr.items():
+            auto = set(h.get("auto_registered", []))
+            owner = list((inv_dr.get(name) or {}).get("owner_default") or [])
+            miss = [s for s in owner if s not in auto]
+            status = "OK" if not miss else f"REGRESSION -- owner-default not auto-registered: {miss}"
+            print(f"    {name} ({h.get('entry')}): auto-registered={sorted(auto)}  [{status}]")
         print()
 
     print("-" * 78)

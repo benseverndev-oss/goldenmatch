@@ -38,6 +38,31 @@ tenets:
   T4: "Compute vs control stay architecturally distinct (explicit, versioned seam)."
   T5: "Arrow at bulk boundaries, not the universal calling convention. [DECLARED WON -- see header]"
 
+# Default-routing inventory (conformance v2, 0047 amendment -- T1). The refined T1
+# test is "one owner AND the DEFAULT caller path routes to it": a shared owner shipped
+# opt-in while a second impl is the default is a LATENT second source (the fs-default
+# class). `check_thesis_conformance.py::harvest_ts_default_routing` VERIFIES these
+# claims against the code -- for a TS batteries entry it reads which enable-* kernels
+# are auto-registered as an import-time side-effect (a bare top-level call, resolving
+# `import { X as Y }` aliases) -- so a regressed default can't sit behind a stale
+# annotation. `owner_default` symbols MUST be auto-registered (else a GATING failure);
+# `opt_in` kernels must NOT be (deliberate edge-bundle discipline; auto-registering one
+# is an advisory reclassify prompt). A new auto-registered kernel absent from the
+# inventory is an advisory "add it so its default is audited".
+default_routing:
+  ts_batteries:
+    entry: packages/typescript/goldenmatch/src/index.ts
+    owner_default:
+      - enableFsWasmScoring   # fs_core default-on: registerFsKernel() at import (was the fs-default gap)
+    opt_in:                   # edge-bundle discipline: reachable only via an explicit enable*() call
+      - enableAutoconfigWasm
+      - enableClusterWasm
+      - enableFingerprintWasm
+      - enableGraphWasm
+      - enablePerceptualWasm
+      - enableSketchWasm
+      - enableSuggestWasm
+
 # Severity: critical > high > medium > low
 weaknesses:
   - id: incremental-resolution-no-persisted-index
