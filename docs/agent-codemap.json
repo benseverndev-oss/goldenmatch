@@ -314,6 +314,7 @@
             "_fs_ooc_arrow_cluster_enabled",
             "_fs_ooc_wave_rows",
             "_fs_ooc_workers",
+            "_fs_out_of_core_legacy_flag",
             "_load_frame_batched",
             "_needed_columns",
             "_ooc_debug_on",
@@ -322,6 +323,7 @@
             "_sql_ident",
             "_sql_lit",
             "fs_out_of_core_enabled",
+            "resolve_fs_block_source",
             "run_fs_dedupe_streaming",
             "score_fs_out_of_core",
             "stream_fs_dedupe_output"
@@ -381,6 +383,7 @@
           ],
           "imports": [
             "goldenmatch._polars_lazy",
+            "goldenmatch.backends.fs_out_of_core",
             "goldenmatch.config.schemas",
             "goldenmatch.core",
             "goldenmatch.core._hashing",
