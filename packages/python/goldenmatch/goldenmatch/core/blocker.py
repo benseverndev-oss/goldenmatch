@@ -34,7 +34,7 @@ def _memoized_transform(transforms: list):
     ``map_elements`` cost was also the documented 5M blocking hang."""
     cache: dict = {}
 
-    def _apply(val, transforms=transforms, cache=cache):
+    def _apply(val: Any) -> Any:
         hit = cache.get(val, _MEMO_MISS)
         if hit is _MEMO_MISS:
             hit = apply_transforms(val, transforms)
