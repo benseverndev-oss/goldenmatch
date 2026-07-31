@@ -62,6 +62,33 @@ def test_identity_get_unknown(client, sample_project: Path):
     assert r.status_code == 404
 
 
+def test_identity_360_endpoint(client, sample_project: Path):
+    seeded = _seed_identity_db(sample_project)
+    r = client.get(f"/api/v1/identities/{seeded['eid1']}/360")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["entity_id"] == seeded["eid1"]
+    assert body["record_count"] == 2
+    for key in ("golden_record", "field_provenance", "source_records", "timeline", "relationships"):
+        assert key in body
+
+
+def test_identity_360_no_relationships(client, sample_project: Path):
+    seeded = _seed_identity_db(sample_project)
+    r = client.get(
+        f"/api/v1/identities/{seeded['eid1']}/360",
+        params={"include_relationships": "false"},
+    )
+    assert r.status_code == 200
+    assert r.json()["relationships"] == []
+
+
+def test_identity_360_unknown(client, sample_project: Path):
+    _seed_identity_db(sample_project)
+    r = client.get("/api/v1/identities/does-not-exist/360")
+    assert r.status_code == 404
+
+
 def test_identity_by_record(client, sample_project: Path):
     seeded = _seed_identity_db(sample_project)
     r = client.get("/api/v1/identities/by-record/src:1")

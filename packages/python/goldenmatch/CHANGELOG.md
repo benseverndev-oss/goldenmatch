@@ -84,6 +84,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   (`certify-serving-joins`, `emit-catalog`) expose the Customer 360 serving-join
   certificate and the live-from-store semantic-catalog emit to agents and the
   shell — previously library-only. MCP tool count 92 → 94.
+- **REST `GET /api/v1/identities/{entity_id}/360`.** The Customer 360 serving
+  view (golden record + per-field provenance + linked source records + event
+  timeline + relationship neighborhood) is now reachable over the identity REST
+  surface, mirroring the `customer_360` MCP tool and the `identity 360` CLI
+  command. Query params `include_relationships` (default true) and
+  `timeline_limit`; 404 when the entity does not exist.
 
 ### Changed
 - **FS dedupe: Arrow-native columnar-cluster path (B2c), default-on (#1811/#2006).**
