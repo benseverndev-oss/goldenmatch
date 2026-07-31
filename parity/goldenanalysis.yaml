@@ -29,20 +29,24 @@ cli_commands:
 # from goldenanalysis.registry.available_analyzers (Python) <-> core/registry.ts
 # availableAnalyzers() (TS). This is the cross-language `analyzers` parity surface
 # -- a partition (no kernel floor; the analysis-core kernel-backing of individual
-# analyzers is guarded separately by native/wasm parity fixtures). All 4 analyzers
+# analyzers is guarded separately by native/wasm parity fixtures). All 5 analyzers
 # are shared 1:1 across Python + TS.
+#
+# key.integrity: metric-aware key-integrity certification (semantic-layer wedge,
+# ADR 0049). A pure-TS certificate-PROJECTION analyzer (like match.rates): it reads
+# a serialized goldenmatch KeyIntegrityCertificate from artifacts and projects it
+# into metrics + a measure_fan_out table. No YAML dialect parsing, no group-by
+# kernel, no ER tier on the TS side -- those stay Python-only, upstream in
+# goldenmatch, feeding the certificate over the wire. Ported in
+# core/analyzers/keyIntegrity.ts, so it is now shared.
 analyzers:
   shared:
   - cluster.distribution
   - frame.summary
+  - key.integrity
   - match.rates
   - quality.rollup
-  # key.integrity: metric-aware key-integrity certification (semantic-layer wedge,
-  # ADR 0049). Python-only in v1 — reports a goldenmatch KeyIntegrityCertificate
-  # whose resolution tier runs the goldenmatch ER pipeline; a TS/WASM port is a
-  # deliberate follow-on. Declared python_only so the analyzers parity gate passes.
-  python_only:
-  - key.integrity
+  python_only: []
   ts_only: []
 # Frame-kernel cross-language boundary (distinct_count / null_ratio /
 # duplicate_row_ratio). Same classification-map idiom as goldenmatch's
