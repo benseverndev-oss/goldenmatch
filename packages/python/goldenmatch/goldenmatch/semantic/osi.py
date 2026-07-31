@@ -324,16 +324,20 @@ def emit_osi_from_crosswalk(
 
 
 def certify_osi_relationships(
-    model: OsiModel | str | Any, frames: dict[str, Any], *, resolve: bool = False
+    model: OsiModel | str | Any, frames: dict[str, Any], *, resolve: bool = False,
+    roles: Any = None,
 ) -> list[dict[str, Any]]:
     """For each relationship in an OSI model, certify the ONE-side key it joins on
     (the referenced PK) using wedge A — i.e. certify exactly the identity the
     metrics depend on. `frames` maps dataset name -> table; datasets without a
     supplied frame are skipped. `resolve=True` also measures entity
-    fragmentation / undercount via ER (fail-open).
+    fragmentation / undercount via ER (fail-open); pass `roles` (a
+    `SemanticFieldRoles`) to make that ER metric-aware — it resolves on the
+    dataset's declared dimension fields and never on a measure.
 
     Returns `[{relationship, dataset, key, certificate}]`.
     """
+    from goldenmatch.semantic.blocking import _frame_columns, metric_aware_attributes
     from goldenmatch.semantic.key_integrity import certify_key_integrity
 
     if not isinstance(model, OsiModel):
@@ -347,7 +351,13 @@ def certify_osi_relationships(
         df = frames.get(rel.to_dataset)
         if df is None or not rel.to_columns:
             continue
-        cert = certify_key_integrity(df, key=rel.to_columns, resolve=resolve)
+        attributes = (
+            metric_aware_attributes(roles, _frame_columns(df))
+            if (resolve and roles is not None) else None
+        )
+        cert = certify_key_integrity(
+            df, key=rel.to_columns, resolve=resolve, attributes=attributes
+        )
         out.append({
             "relationship": rel.name,
             "dataset": rel.to_dataset,

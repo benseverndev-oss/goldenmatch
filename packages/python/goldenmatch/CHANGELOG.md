@@ -7,6 +7,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **Metric-aware resolution for the semantic-layer wedge (the differentiated
+  wedge).** New `goldenmatch.semantic.semantic_field_roles(source)` reads a
+  semantic model's declared `{keys, dimensions, measures}` across all three
+  dialects (dbt/MetricFlow, Cube, OSI), and `metric_aware_attributes(roles,
+  columns)` turns them into the entity-resolution attribute allow-list — resolve
+  on the declared dimensions, never on a measure (a measure like `revenue` is an
+  aggregation target, not identity evidence). `certify_semantic_model` gained a
+  `metric_aware=True` toggle (threaded uniformly through the Cube/OSI bridges via
+  a new `roles=` argument) so the `resolve=True` tier drives its ER off the
+  model's own metadata instead of blindly profiling every column. A model that
+  declares no dimensions is byte-identical to the prior blind selection; the
+  toggle has no effect unless `resolve=True`.
 - **`grain_strict` on `certify_key_integrity` (semantic-layer wedge).** Opt-in
   argument (default `False` = byte-identical to prior behavior: grain stays advisory
   context and uniqueness is evaluated on the key alone). When `True` and a `grain` is

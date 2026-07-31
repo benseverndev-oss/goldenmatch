@@ -17,6 +17,11 @@ so ``import goldenmatch`` stays lightweight and polars-free; import it explicitl
 from __future__ import annotations
 
 from goldenmatch.core.key_integrity_certificate import KeyIntegrityCertificate
+from goldenmatch.semantic.blocking import (
+    SemanticFieldRoles,
+    metric_aware_attributes,
+    semantic_field_roles,
+)
 from goldenmatch.semantic.certify import (
     KeyCertification,
     SemanticCertification,
@@ -69,6 +74,10 @@ __all__ = [
     "KeyIntegrityCertificate",
     "parse_semantic_models",
     "DeclaredKeySpec",
+    # metric-aware resolution — declared roles drive the ER attribute selection
+    "semantic_field_roles",
+    "metric_aware_attributes",
+    "SemanticFieldRoles",
     # wedge B — resolve once, emit the conformed entity declaration
     "build_resolved_crosswalk",
     "ResolvedCrosswalk",

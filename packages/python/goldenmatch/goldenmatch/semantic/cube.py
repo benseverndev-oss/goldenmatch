@@ -293,7 +293,8 @@ def emit_cube_from_crosswalk(
 
 
 def certify_cube_joins(
-    model: list[Cube] | str | Any, frames: dict[str, Any], *, resolve: bool = False
+    model: list[Cube] | str | Any, frames: dict[str, Any], *, resolve: bool = False,
+    roles: Any = None,
 ) -> list[dict[str, Any]]:
     """For each join in a Cube model, certify the ONE-side key it joins on (the
     referenced primary key) using wedge A — certifying exactly the identity the
@@ -303,10 +304,13 @@ def certify_cube_joins(
     must be unique (certifying the many-side FK would spuriously flag a fan-out).
     `frames` maps cube name -> table; a join whose one-side frame is absent or
     whose one-side columns can't be parsed is skipped. `resolve=True` also
-    measures entity fragmentation / undercount via ER (fail-open).
+    measures entity fragmentation / undercount via ER (fail-open); pass `roles`
+    (a `SemanticFieldRoles`) to make that ER metric-aware — it resolves on the
+    cube's declared dimensions and never on a measure.
 
     Returns `[{from_cube, to_cube, key, certificate}]`.
     """
+    from goldenmatch.semantic.blocking import _frame_columns, metric_aware_attributes
     from goldenmatch.semantic.key_integrity import certify_key_integrity
 
     cubes = model if isinstance(model, list) else parse_cube_models(model)
@@ -320,7 +324,13 @@ def certify_cube_joins(
             df = frames.get(one_cube)
             if df is None or not one_columns:
                 continue
-            cert = certify_key_integrity(df, key=one_columns, resolve=resolve)
+            attributes = (
+                metric_aware_attributes(roles, _frame_columns(df))
+                if (resolve and roles is not None) else None
+            )
+            cert = certify_key_integrity(
+                df, key=one_columns, resolve=resolve, attributes=attributes
+            )
             out.append({
                 "from_cube": jk["from_cube"],
                 "to_cube": jk["to_cube"],

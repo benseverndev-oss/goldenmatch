@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 436,
+      "module_count": 437,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7105,8 +7105,28 @@
           "purpose": "Semantic-layer interoperability (the MetricFlow / Cube / OSI wedge).",
           "imports": [
             "goldenmatch.core.key_integrity_certificate",
+            "goldenmatch.semantic.blocking",
             "goldenmatch.semantic.certify",
             "goldenmatch.semantic.crosswalk",
+            "goldenmatch.semantic.cube",
+            "goldenmatch.semantic.key_integrity",
+            "goldenmatch.semantic.metricflow",
+            "goldenmatch.semantic.osi"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.blocking",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/blocking.py",
+          "purpose": "Metric-aware attribute selection for the semantic-layer resolution tier.",
+          "defines": [
+            "SemanticFieldRoles",
+            "_dedup",
+            "_frame_columns",
+            "metric_aware_attributes",
+            "semantic_field_roles"
+          ],
+          "imports": [
+            "goldenmatch.semantic.certify",
             "goldenmatch.semantic.cube",
             "goldenmatch.semantic.key_integrity",
             "goldenmatch.semantic.metricflow",
@@ -7125,6 +7145,7 @@
           ],
           "imports": [
             "goldenmatch.core.key_integrity_certificate",
+            "goldenmatch.semantic.blocking",
             "goldenmatch.semantic.cube",
             "goldenmatch.semantic.key_integrity",
             "goldenmatch.semantic.metricflow",
@@ -7172,6 +7193,7 @@
             "parse_cube_models"
           ],
           "imports": [
+            "goldenmatch.semantic.blocking",
             "goldenmatch.semantic.key_integrity",
             "goldenmatch.semantic.metricflow"
           ]
@@ -7235,6 +7257,7 @@
             "validate_osi"
           ],
           "imports": [
+            "goldenmatch.semantic.blocking",
             "goldenmatch.semantic.key_integrity",
             "goldenmatch.semantic.metricflow"
           ]
