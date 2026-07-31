@@ -9,7 +9,11 @@
 
 ## Decisions locked (from spec review)
 
-- **Base model:** Qwen2.5-3B-Instruct (Apache-2.0 — redistribution-clean). 7B optional later.
+- **Base model:** Qwen2.5-**1.5B**-Instruct (**Apache-2.0** — redistribution-clean). NOTE:
+  Qwen2.5-**3B** and **72B** are under the **Qwen Research License** (non-commercial /
+  gated), NOT Apache-2.0 — the shipped base must be an Apache size (0.5B/1.5B/7B/14B/32B).
+  1.5B is the ship model (measured: in-dist F1 0.999, walmart zero-shot 0.795 > the 3B's
+  0.721); 7B is the optional heavier Apache alternative.
 - **Training data:** **fully synthetic** (generated + realistically corrupted seeds we own)
   + hard negatives mined from the FS pipeline's near-threshold pairs.
   **Restricted real datasets (NCVR/Valentine/DQBench) are EVAL-ONLY** — never in the

@@ -25,7 +25,7 @@ on:
         required: true
         default: "3b"
         type: choice
-        options: ["3b", "7b"]
+        options: ["1.5b", "3b", "7b"]
       release_tag:
         description: "Release tag to create (fresh tag; e.g. er-matcher-3b-v1.0.0 — a burned immutable tag can't be reused)"
         required: true
