@@ -50,3 +50,22 @@ def test_unlisted_auto_registered_kernel_is_advisory():
     gating, advisory = c.check_default_routing(inv, harvest)
     assert gating == []
     assert any("absent from the" in a and "enableNewWasm" in a for a in advisory)
+
+
+def test_declared_runtime_reached_tests_exist_on_disk():
+    # T2 follow-on: a default_routing block MAY name a `runtime_reached_test` -- the
+    # behavioral gate proving the DEFAULT workload routes through the owner (T1's
+    # documented honest limit). If named, the file MUST exist, so the runtime check
+    # can't be deleted/renamed while the inventory still claims the default is
+    # code-verified. Mirrors the gate's own weakness `parity_test` existence check.
+    inv = c.load_inventory()
+    named = 0
+    for name, block in (inv.get("default_routing") or {}).items():
+        rt = block.get("runtime_reached_test")
+        if rt is None:
+            continue
+        named += 1
+        assert (c.REPO / rt).exists(), f"default_routing '{name}' runtime_reached_test missing: {rt}"
+    # The ts_batteries fs-default class is the one that shipped opt-in-while-default;
+    # it MUST carry the runtime gate (regression guard on the annotation itself).
+    assert named >= 1, "expected at least one default_routing runtime_reached_test to be declared"

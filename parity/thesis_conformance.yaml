@@ -52,6 +52,12 @@ tenets:
 default_routing:
   ts_batteries:
     entry: packages/typescript/goldenmatch/src/index.ts
+    # T2 (conformance v2 follow-on): the static T1 gate proves the owner is
+    # AUTO-REGISTERED here; this vitest gate proves a default workload actually
+    # ROUTES THROUGH it (the honest limit T1 documented). Existence is guarded in
+    # scripts/test_thesis_conformance.py so the runtime check can't be silently
+    # dropped while this inventory still claims the default is code-verified.
+    runtime_reached_test: packages/typescript/goldenmatch/tests/unit/fs-default-routing-reached.test.ts
     owner_default:
       - enableFsWasmScoring   # fs_core default-on: registerFsKernel() at import (was the fs-default gap)
     opt_in:                   # edge-bundle discipline: reachable only via an explicit enable*() call
