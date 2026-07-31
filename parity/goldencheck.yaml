@@ -7,10 +7,13 @@
 #   core exposes a read-only domain registry (listAvailableDomains / getDomainTypes /
 #   DOMAIN_REGISTRY, src/core/index.ts) with no install path, so there is no TS operation
 #   to reconcile). CLI: Python still ships more commands, but they are servers/daemons/
-#   interactive (agent-serve/serve/schedule/scan-db/init/review) or unported engines
-#   (denial-constraints/refs). `learn` is now SHARED — the TS core already carried the
-#   engine (core/llm/rule-generator.ts: generateRules/serializeRules, edge-safe over
-#   fetch()), so the CLI command was wired over it (cli.ts), same as history/evaluate.
+#   interactive (agent-serve/serve/schedule/scan-db/init/review) or the unported
+#   engine (denial-constraints). `refs` is now SHARED — the referential-integrity
+#   engine was ported to core/engine/referential.ts (pure/edge-safe set-membership
+#   over the parent key set, file I/O in the CLI action like `diff`). `learn` is now
+#   SHARED — the TS core already carried the engine (core/llm/rule-generator.ts:
+#   generateRules/serializeRules, edge-safe over fetch()), so the CLI command was
+#   wired over it (cli.ts), same as history/evaluate.
 #   `history` + `evaluate` are now SHARED — the TS port
 #   already carries the engines (core/engine/history.ts + evaluateScan), so the CLI
 #   commands were wired over them. `health-score` / `list-domains` / `profile` are now
@@ -57,13 +60,13 @@ cli_commands:
   - list-domains
   - mcp-serve
   - profile
+  - refs
   - scan
   - validate
   - watch
   python_only:
   - denial-constraints
   - init
-  - refs
   - review
   - scan-db
   - schedule

@@ -56,6 +56,7 @@ export { maybeSample } from "./engine/sampler.js";
 export { applyCorroborationBoost, applyConfidenceDowngrade } from "./engine/confidence.js";
 export { applyFixes, type FixEntry, type FixReport } from "./engine/fixer.js";
 export { diffData, formatDiffReport, type DiffReport, type SchemaChange, type FindingChange, type StatChange } from "./engine/differ.js";
+export { referentialIntegrity, checkReferentialIntegrity, autoDetectMappings, parseOn, type ReferentialOptions } from "./engine/referential.js";
 export { autoTriage, type TriageResult } from "./engine/triage.js";
 export {
   evaluateScan,
