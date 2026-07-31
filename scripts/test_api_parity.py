@@ -426,15 +426,17 @@ def test_python_emitter_goldenanalysis_analyzers_surface():
 
 def test_goldenanalysis_manifest_analyzers_partition_is_clean():
     """The committed parity/goldenanalysis.yaml analyzers surface is structurally
-    valid. `key.integrity` is the one declared python_only analyzer (the v1
-    semantic-layer wedge, ADR 0049; its TS/WASM port is a follow-on) — every
-    other analyzer stays fully shared, so this still catches accidental drift."""
+    valid and FULLY SHARED. `key.integrity` (the v1 semantic-layer wedge, ADR 0049)
+    was python_only until its pure-projection TS port landed (core/analyzers/
+    keyIntegrity.ts), so all 5 analyzers are now shared 1:1 — no python_only/ts_only
+    divergence remains. A regression to either partition still trips this."""
     import yaml
     root = pathlib.Path(__file__).resolve().parent.parent
     m = yaml.safe_load((root / "parity" / "goldenanalysis.yaml").read_text())
     assert "analyzers" in m, "goldenanalysis manifest must model the analyzers surface"
     assert not gate.check_structure(m)
-    assert m["analyzers"]["python_only"] == ["key.integrity"] and m["analyzers"]["ts_only"] == []
+    assert m["analyzers"]["python_only"] == [] and m["analyzers"]["ts_only"] == []
+    assert "key.integrity" in m["analyzers"]["shared"]
 
 
 # ── Advisory SQL surfaces (postgres / duckdb) — visibility, non-gating ────────
