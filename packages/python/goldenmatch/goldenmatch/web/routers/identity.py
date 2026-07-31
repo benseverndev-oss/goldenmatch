@@ -3,6 +3,7 @@
 GET    /api/v1/identities                            -> list (paginated)
 GET    /api/v1/identities/stats                      -> counts
 GET    /api/v1/identities/{eid}                      -> full view
+GET    /api/v1/identities/{eid}/360                  -> Customer 360 serving view
 GET    /api/v1/identities/{eid}/history              -> events
 GET    /api/v1/identities/{eid}/evidence             -> edges
 GET    /api/v1/identities/by-record/{record_id}      -> view via record id
@@ -20,6 +21,7 @@ from pydantic import BaseModel
 
 from goldenmatch.identity import (
     IdentityStore,
+    customer_360_page,
     find_by_record,
     find_conflicts,
     get_entity,
@@ -101,6 +103,29 @@ def get_endpoint(entity_id: str, request: Request) -> dict[str, Any]:
     if view is None:
         raise HTTPException(status_code=404, detail=f"Identity {entity_id} not found")
     return view.to_dict()
+
+
+@router.get("/{entity_id}/360")
+def customer_360_endpoint(
+    entity_id: str,
+    request: Request,
+    include_relationships: bool = Query(True),
+    timeline_limit: int | None = Query(None, ge=1),
+) -> dict[str, Any]:
+    """The unified Customer 360 serving view of one entity: golden record +
+    per-field provenance + linked source records + event timeline + relationship
+    neighborhood, composed from the durable store in one call. This is the same
+    durable entity_id a resolved crosswalk (semantic-layer wedge) groups metrics
+    by, so a metric row drills straight through to the customer."""
+    with _store_for(request) as s:
+        page = customer_360_page(
+            s, entity_id,
+            include_relationships=include_relationships,
+            timeline_limit=timeline_limit,
+        )
+    if page is None:
+        raise HTTPException(status_code=404, detail=f"Identity {entity_id} not found")
+    return page
 
 
 @router.get("/{entity_id}/history")
