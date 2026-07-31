@@ -24,6 +24,7 @@ import {
 } from "../../core/identity/query.js";
 import { mediateConflict } from "../../core/identity/mediation.js";
 import {
+  customer360Page,
   entityProfile,
   identitySummaryStats,
   stewardWorklist,
@@ -307,6 +308,30 @@ export const IDENTITY_TOOLS: readonly Tool[] = [
         limit: { type: "integer", default: 50 },
         path: { type: "string", description: "Identity DB path" },
       },
+    },
+  },
+  {
+    name: "customer_360",
+    description:
+      "The unified Customer 360 serving view of one entity, composed from the " +
+      "durable store in one call: the golden record + per-field source " +
+      "provenance, every linked source record, the event timeline, and the " +
+      "relationship neighborhood. This is the same durable entity_id a resolved " +
+      "crosswalk (semantic-layer wedge) groups metrics by, so a metric row " +
+      "drills straight through to the customer. Returns {found: false} when no " +
+      "such entity exists.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        entity_id: { type: "string" },
+        include_relationships: { type: "boolean", default: true },
+        timeline_limit: {
+          type: "integer",
+          description: "Cap the number of timeline events (most recent first).",
+        },
+        path: { type: "string", description: "Identity DB path" },
+      },
+      required: ["entity_id"],
     },
   },
 ];
@@ -657,6 +682,18 @@ async function dispatch(
         limit: intArg(args, "limit", 50),
       });
       return { items };
+    }
+
+    if (name === "customer_360") {
+      const entityId = strArg(args, "entity_id");
+      if (!entityId) return { error: "Missing required parameter: entity_id" };
+      const rawIncl = args["include_relationships"];
+      const rawLimit = args["timeline_limit"];
+      const page = await customer360Page(store, entityId, {
+        includeRelationships: typeof rawIncl === "boolean" ? rawIncl : true,
+        ...(typeof rawLimit === "number" ? { timelineLimit: rawLimit } : {}),
+      });
+      return page ?? { found: false };
     }
 
     return { error: `Unknown identity tool: ${name}` };
