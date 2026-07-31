@@ -337,6 +337,7 @@
           "imports": [
             "goldenmatch.backends.score_buckets",
             "goldenmatch.config.schemas",
+            "goldenmatch.core._native_loader",
             "goldenmatch.core.blocker",
             "goldenmatch.core.cluster",
             "goldenmatch.core.frame",

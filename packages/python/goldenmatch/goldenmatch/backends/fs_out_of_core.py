@@ -669,12 +669,15 @@ def score_fs_sequential_arrow(
     """IN-RAM sequential Arrow-native / Rust FS block scoring (no DuckDB).
 
     The in-RAM analogue of ``score_fs_out_of_core``, and the block-source the
-    "sequential Arrow batches + WCC at the end" scale method wants: block-key
-    GROUPING is pure Arrow (the ``Frame`` seam's ``derive_block_key`` +
-    ``filter_valid_key`` + one pyarrow ``group_by`` per pass -- NO polars, NO
-    DuckDB SQL / on-disk sorted scans), each block's rows are GATHERED
-    (``pa.Table.take``) from the resident table by row-id, and blocks
-    stream through the SAME native FS kernel in bounded waves. With
+    "sequential Arrow batches + WCC at the end" scale method wants: the block key
+    is derived via the ``Frame`` seam's ``derive_block_key`` + ``filter_valid_key``
+    (NO polars, NO DuckDB SQL / on-disk sorted scans), then block-key GROUPING +
+    GATHER run in RUST -- ``build_block_index_arrow`` returns a row-position
+    permutation (blocks contiguous, singletons dropped) + per-block sizes in one
+    native call, and ``pa.Table.take(order)`` gathers each wave block-contiguous
+    (no pyarrow ``group_by`` + per-block ``.as_py()`` round-trip; a pyarrow
+    group_by fallback covers the missing-kernel case). Blocks stream through the
+    SAME native FS kernel in bounded waves. With
     ``emit="arrow"`` the scored pairs are converted to a ``PAIR_STREAM`` ``pa.Table``
     per wave and the tuples dropped, so pairs never accumulate as Python objects;
     the downstream Rust WCC (``build_clusters_arrow_native``) collapses cross-pass
@@ -700,6 +703,7 @@ def score_fs_sequential_arrow(
     import pyarrow as pa
 
     from goldenmatch.backends.score_buckets import pairs_to_pair_stream
+    from goldenmatch.core._native_loader import native_available, native_module
     from goldenmatch.core.frame import is_polars_lazyframe
     from goldenmatch.core.frame import (
         to_frame as _tf,
@@ -727,27 +731,15 @@ def score_fs_sequential_arrow(
 
     # Base as a pa.Table (ARROW-NATIVE, no polars). ``to_arrow`` handles a polars
     # frame (converts) or a pa.Table (returns as-is); a lazy frame is collected
-    # first. The whole scorer runs on this table + the Arrow ``Frame`` seam.
+    # first. The whole scorer runs on this table + the Arrow ``Frame`` seam. No
+    # sort/positions bookkeeping: the Rust grouping kernel returns a row-position
+    # permutation that indexes DIRECTLY into the keyed table (``keyed.take(order)``).
     _fw = _tf(prepared_df)
     if is_polars_lazyframe(_fw.native):
         _fw = _tf(_fw.native.collect())
     base = _fw.to_arrow()
     keep = _needed_columns(base, mk, blocking_config)
-    # Project to scoring columns + sort by __row_id__ ONCE so a block's row-ids
-    # map to physical positions by offset (contiguous -> id - lo) or a binary
-    # search (gapped ids).
-    base = base.select(keep).sort_by([("__row_id__", "ascending")])
-    _rid_np = base.column("__row_id__").to_numpy(zero_copy_only=False)
-    n_rows = len(_rid_np)
-    _lo = int(_rid_np[0]) if n_rows else 0
-    _hi = int(_rid_np[-1]) if n_rows else -1
-    _contiguous = n_rows > 0 and (_hi - _lo + 1 == n_rows)
-
-    def _positions(ids: np.ndarray) -> np.ndarray:
-        # row-id -> physical position in the __row_id__-sorted table.
-        if _contiguous:
-            return ids - _lo
-        return np.searchsorted(_rid_np, ids)  # rid sorted asc, all ids present
+    base = base.select(keep)
 
     use_native = _fs_native_eligible(mk)
     prob_scorer = None if use_native else probabilistic_block_scorer(mk, em_result)
@@ -797,20 +789,12 @@ def score_fs_sequential_arrow(
                 seen.add(key)
                 out.append((a, b, s))
 
-    # Wave buffer: block row-ids concatenated in block order + per-block sizes.
-    # ONE gather per wave (not per block) -> one block-contiguous frame + a
-    # size_list, exactly the score_probabilistic_bucket_native contract.
-    buf_ids: list[np.ndarray] = []
-    buf_sizes: list[int] = []
-    buf_rows = 0
-
-    def _flush() -> None:
-        nonlocal buf_ids, buf_sizes, buf_rows
-        if not buf_ids:
+    def _score_wave(gathered: Any, sizes: list[int]) -> None:
+        # ``gathered`` is one BLOCK-CONTIGUOUS frame (rows grouped by block, blocks
+        # laid end-to-end) + ``sizes`` its per-block row counts -- exactly the
+        # ``score_probabilistic_bucket_native`` contract.
+        if not sizes:
             return
-        ids = np.concatenate(buf_ids)
-        gathered = base.take(pa.array(_positions(ids)))
-        sizes = buf_sizes
         if use_native:
             # Fan the wave across cores, BALANCED by scoring cost (block^2), so no
             # worker stalls on the big block while the rest idle. Each group is ONE
@@ -850,21 +834,63 @@ def score_fs_sequential_arrow(
                 _merge(prob_scorer(b, frozen_exclude) for b in blocks)
             else:
                 _merge(_ex.map(lambda b: prob_scorer(b, frozen_exclude), blocks))
-        buf_ids = []
-        buf_sizes = []
-        buf_rows = 0
 
-    # ONE thread pool across all passes: `_flush` fans each wave's balanced groups
-    # out over it (the native kernel releases the GIL -> real N-core scoring). A
-    # plain create/shutdown (not `with`) keeps the pass loop at its current indent.
+    # Grouping kernel: Rust ``build_block_index_arrow`` groups keyed rows by block
+    # key and returns a row-POSITION permutation (blocks contiguous, singletons
+    # dropped) + per-block sizes in ONE native call -- no pyarrow ``group_by`` +
+    # per-block ``.as_py()`` round-trip. Fall back to a pyarrow group_by (over a
+    # synthetic position column) when the kernel symbol is absent.
+    _native_group = (
+        native_available()
+        and hasattr(native_module(), "build_block_index_arrow")
+    )
+
+    def _group_positions(keyed: Any) -> tuple[np.ndarray, list[int]]:
+        """(row-position permutation into ``keyed``, per-block sizes>=2)."""
+        if _native_group:
+            kc = keyed.column("__block_key__")
+            key_arr = (
+                pa.concat_arrays(kc.chunks)
+                if isinstance(kc, pa.ChunkedArray)
+                else kc
+            )
+            order_arr, sizes = native_module().build_block_index_arrow([key_arr])
+            order_np = (
+                order_arr.to_numpy(zero_copy_only=False)
+                if hasattr(order_arr, "to_numpy")
+                else np.asarray(order_arr, dtype=np.int64)
+            )
+            return order_np.astype(np.int64, copy=False), [int(s) for s in sizes]
+        # pyarrow fallback: aggregate a synthetic position index per block key.
+        keyed_p = keyed.append_column(
+            "__pos__", pa.array(np.arange(keyed.num_rows, dtype=np.int64))
+        )
+        grouped = keyed_p.group_by("__block_key__").aggregate([("__pos__", "list")])
+        parts: list[np.ndarray] = []
+        sizes: list[int] = []
+        for lst in grouped.column("__pos___list"):
+            arr = np.asarray(lst.as_py(), dtype=np.int64)
+            if arr.size < 2:
+                continue
+            parts.append(arr)
+            sizes.append(int(arr.size))
+        order_np = (
+            np.concatenate(parts) if parts else np.empty(0, dtype=np.int64)
+        )
+        return order_np, sizes
+
+    # ONE thread pool across all passes: `_score_wave` fans each wave's balanced
+    # groups out over it (the native kernel releases the GIL -> real N-core
+    # scoring). A plain create/shutdown (not `with`) keeps the pass loop indent.
     _ex = concurrent.futures.ThreadPoolExecutor(max_workers=_workers)
     try:
       for pass_config in passes:  # noqa: E111 (executor lives across passes)
         # ARROW-NATIVE block-key grouping (no polars): derive the block key via
         # the Frame seam's ``derive_block_key`` (the Arrow twin of
         # ``_build_block_key_expr`` -> ``core.arrow_derive.block_key``) + the
-        # verbatim null/sentinel guard ``filter_valid_key``, then group row-ids by
-        # block key with ONE pyarrow ``group_by().aggregate(list)`` per pass.
+        # verbatim null/sentinel guard ``filter_valid_key``, then GROUP + GATHER in
+        # Rust: ``build_block_index_arrow`` -> row-position permutation + sizes,
+        # and ``keyed.take(order)`` gathers each wave block-contiguous.
         _bf = _tf(base)
         _bf = _bf.with_column(
             "__block_key__",
@@ -877,21 +903,35 @@ def score_fs_sequential_arrow(
         keyed = _bf.filter_valid_key("__block_key__").native
         if keyed.num_rows == 0:
             continue
-        grouped = keyed.group_by("__block_key__").aggregate([("__row_id__", "list")])
-        for lst in grouped.column("__row_id___list"):
-            ids = np.asarray(lst.as_py(), dtype=np.int64)
-            if ids.size < 2:
-                continue
-            if ids.size > max_block_rows:  # oversized cap (the one non-parity edge)
-                ids = ids[:max_block_rows]
-            buf_ids.append(ids)
-            buf_sizes.append(int(ids.size))
-            buf_rows += int(ids.size)
-            if buf_rows >= wave_rows:
-                _flush()
+        order_np, sizes = _group_positions(keyed)
+        # Stream the permutation in bounded waves: accumulate whole blocks (capped
+        # at ``max_block_rows``, the one non-parity edge) until ~wave_rows, then ONE
+        # gather (``keyed.take``) + balanced parallel score, and release.
+        wave_pos: list[np.ndarray] = []
+        wave_sizes: list[int] = []
+        wave_acc = 0
+        off = 0
+
+        def _flush_wave(wp, ws, _keyed=keyed):
+            if not ws:
+                return
+            gathered = _keyed.take(pa.array(np.concatenate(wp)))
+            _score_wave(gathered, ws)
+
+        for s in sizes:
+            seg = order_np[off:off + s]
+            off += s
+            if s > max_block_rows:  # oversized cap (the one non-parity edge)
+                seg = seg[:max_block_rows]
+            wave_pos.append(seg)
+            wave_sizes.append(int(seg.shape[0]))
+            wave_acc += int(seg.shape[0])
+            if wave_acc >= wave_rows:
+                _flush_wave(wave_pos, wave_sizes)
+                wave_pos, wave_sizes, wave_acc = [], [], 0
         # Flush at the END of each pass so pass N is merged before pass N+1 (the
         # pass-order first-seen dedup for tuples mode; arrow mode is order-free).
-        _flush()
+        _flush_wave(wave_pos, wave_sizes)
     finally:
         _ex.shutdown(wait=True)
 
@@ -1350,18 +1390,21 @@ def run_fs_dedupe_sequential(
     if getattr(config, "golden_rules", None) is not None:
         max_cluster_size = config.golden_rules.max_cluster_size
 
-    # Score IN-RAM (pure Arrow/Rust batches -> Arrow edge stream). The frame is
-    # resident here, not spilled to disk.
-    pairs = score_fs_sequential_arrow(
-        prepared_df, blocking_config, mk, matched_pairs, em_result,
-        target_ids=target_ids, emit="arrow",
-    )
-
-    # Resident record table (pa.Table) for the WCC id-set + streamed output.
+    # Materialize the resident record table (pa.Table) ONCE, then share it between
+    # the scorer and the streamed output -- passing the pa.Table into
+    # ``score_fs_sequential_arrow`` makes its internal ``to_arrow()`` a no-op, so
+    # the frame is converted a single time (not once per consumer).
     _fw = _tf(prepared_df)
     if is_polars_lazyframe(_fw.native):
         _fw = _tf(_fw.native.collect())
     base = _fw.to_arrow()
+
+    # Score IN-RAM (pure Arrow/Rust batches -> Arrow edge stream). The frame is
+    # resident here, not spilled to disk.
+    pairs = score_fs_sequential_arrow(
+        base, blocking_config, mk, matched_pairs, em_result,
+        target_ids=target_ids, emit="arrow",
+    )
 
     # WCC: dedup edges + Rust Union-Find over the Arrow edge stream, folding in
     # every singleton row-id straight off the resident table.
