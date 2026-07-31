@@ -2337,6 +2337,7 @@
             "_build_static_blocks",
             "_emit_blocking_profile",
             "_fast_static_block_sizes",
+            "_memoized_transform",
             "_percentile",
             "_sub_block",
             "build_blocks",
