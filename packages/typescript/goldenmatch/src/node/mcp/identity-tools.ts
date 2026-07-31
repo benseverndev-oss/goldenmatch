@@ -29,6 +29,7 @@ import {
   identitySummaryStats,
   stewardWorklist,
 } from "../../core/identity/profile.js";
+import { certifyServingJoins } from "../../core/semantic/serving.js";
 import { sealAuditLog, verifyAuditChain, verificationSummary } from "../../core/identity/audit.js";
 import { pyIsoformat } from "../../core/identity/pyDatetime.js";
 import { trustForSource } from "../../core/memory/types.js";
@@ -332,6 +333,30 @@ export const IDENTITY_TOOLS: readonly Tool[] = [
         path: { type: "string", description: "Identity DB path" },
       },
       required: ["entity_id"],
+    },
+  },
+  {
+    name: "certify_serving_joins",
+    description:
+      "Certify that a Customer 360 serving layer's join keys can't double-count. " +
+      "A 360 view joins the golden record to its source records on the durable " +
+      "record_id (`{source}:{source_pk}`); if that key is duplicated, a fact " +
+      "rolled up through the 360 silently double-counts. This walks the store's " +
+      "entities, assembles the record_id join key, and returns a key-integrity " +
+      "certificate over it ({trustworthy, n_entities, n_records, truncated, " +
+      "record_id: {is_unique_at_grain, duplicate_key_groups, max_fan_out, estimate}}).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        dataset: { type: "string", description: "Restrict to one identity-graph dataset." },
+        status: { type: "string", default: "active", description: "Entity status to include (default 'active')." },
+        page_size: { type: "integer", default: 500, description: "Entity-scan pagination size." },
+        max_entities: {
+          type: "integer",
+          description: "Cap the scan at this many entities (cert then covers a prefix, truncated=true).",
+        },
+        path: { type: "string", description: "Identity DB path" },
+      },
     },
   },
 ];
@@ -694,6 +719,30 @@ async function dispatch(
         ...(typeof rawLimit === "number" ? { timelineLimit: rawLimit } : {}),
       });
       return page ?? { found: false };
+    }
+
+    if (name === "certify_serving_joins") {
+      const rawMax = args["max_entities"];
+      const rawStatus = args["status"];
+      const cert = await certifyServingJoins(store, {
+        dataset: strArg(args, "dataset") ?? null,
+        status: typeof rawStatus === "string" ? rawStatus : "active",
+        pageSize: intArg(args, "page_size", 500),
+        ...(typeof rawMax === "number" ? { maxEntities: rawMax } : {}),
+      });
+      const rc = cert.recordCertificate;
+      return {
+        trustworthy: cert.isTrustworthy,
+        n_entities: cert.nEntities,
+        n_records: cert.nRecords,
+        truncated: cert.truncated,
+        record_id: {
+          is_unique_at_grain: rc.isUniqueAtGrain,
+          duplicate_key_groups: rc.duplicateKeyGroups,
+          max_fan_out: rc.maxFanOut,
+          estimate: rc.estimate,
+        },
+      };
     }
 
     return { error: `Unknown identity tool: ${name}` };

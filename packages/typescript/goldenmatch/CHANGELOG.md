@@ -7,6 +7,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **Serving-join certification (`certifyServingJoins`) + the `certify_serving_joins`
+  MCP tool + a net-new key-integrity certifier (`certifyKeyIntegrity` /
+  `KeyIntegrityCertificate`).** Edge-safe port of Python
+  `semantic/serving.py::certify_serving_joins` and the structural tier of
+  `semantic/key_integrity.py`. A Customer 360 view joins the golden record to its
+  source records on the durable `recordId` (`{source}:{sourcePk}`); a duplicated
+  `recordId` makes a fact rolled up through the 360 silently double-count.
+  `certifyServingJoins(store, opts)` walks the store's entities, assembles the
+  `recordId` join key, and runs `certifyKeyIntegrity` over it — returning a
+  `ServingJoinCertificate` (`{ recordCertificate, nEntities, nRecords, truncated }`,
+  `isTrustworthy` getter). `certifyKeyIntegrity(table, { key, measures?, grain? })`
+  is the new structural key-integrity primitive (uniqueness at grain + per-measure
+  SUM fan-out); its `resolve=true` fragmentation/undercount tier is NOT ported.
+  Exposed as the TS MCP `certify_serving_joins` tool (identity tools 16 → 17, total
+  MCP 84 → 85), flipping `certify_serving_joins` from `python_only` to `shared`
+  under `mcp_tools`; like the other identity tools it is auto-advertised on the TS
+  A2A card, so it is declared `a2a_skills.ts_only`. New surface exports from
+  `goldenmatch/core` via `core/semantic`. NOTE: `emit_semantic_model_from_store`
+  stays Python-only — it depends on the entire Python-only semantic-layer emitter
+  subsystem (`ResolvedCrosswalk` + the MetricFlow/Cube/OSI YAML emitters), which is
+  a dedicated port, not part of this change.
 - **Customer 360 serving view (`customer360Page`) + the `customer_360` MCP tool.**
   Edge-safe port of Python `identity/profile.py::customer_360` — the unified
   serving read of one entity composed from the durable store in one call: golden
