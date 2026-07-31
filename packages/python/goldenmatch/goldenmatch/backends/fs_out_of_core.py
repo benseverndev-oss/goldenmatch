@@ -633,8 +633,10 @@ def score_fs_sequential_arrow(
 
     The in-RAM analogue of ``score_fs_out_of_core``, and the block-source the
     "sequential Arrow batches + WCC at the end" scale method wants: block-key
-    GROUPING happens in polars/Arrow (never DuckDB SQL / on-disk sorted scans),
-    each block's rows are GATHERED from the resident frame by row-id, and blocks
+    GROUPING is pure Arrow (the ``Frame`` seam's ``derive_block_key`` +
+    ``filter_valid_key`` + one pyarrow ``group_by`` per pass -- NO polars, NO
+    DuckDB SQL / on-disk sorted scans), each block's rows are GATHERED
+    (``pa.Table.take``) from the resident table by row-id, and blocks
     stream through the SAME native FS kernel in bounded waves. With
     ``emit="arrow"`` the scored pairs are converted to a ``PAIR_STREAM`` ``pa.Table``
     per wave and the tuples dropped, so pairs never accumulate as Python objects;
@@ -647,7 +649,9 @@ def score_fs_sequential_arrow(
     want the fast pure-Arrow/Rust path with a single WCC stitch at the end;
     ``score_fs_out_of_core`` is the DuckDB-spilled variant for frames that don't.
 
-    **Parity.** Same ``_build_block_key_expr`` + null/sentinel key filter +
+    **Parity.** ``derive_block_key`` is the byte-equivalent Arrow twin of
+    ``_build_block_key_expr`` (both -> ``core.arrow_derive.block_key``) and
+    ``filter_valid_key`` is the same null/sentinel guard, with the same
     ``multi_pass`` ``(pass_sig, block_key)`` semantics as ``build_blocks`` /
     ``score_fs_out_of_core``, and the SAME ``score_probabilistic_bucket_native``
     kernel, so the emitted pair set is byte-identical to ``score_buckets`` ABSENT
@@ -656,14 +660,10 @@ def score_fs_sequential_arrow(
     so the wave gather need not sort within a block.
     """
     import numpy as np
-    import polars as pl
     import pyarrow as pa
 
     from goldenmatch.backends.score_buckets import pairs_to_pair_stream
-    from goldenmatch.core.blocker import _build_block_key_expr
-    from goldenmatch.core.frame import (
-        is_polars_lazyframe,
-    )
+    from goldenmatch.core.frame import is_polars_lazyframe
     from goldenmatch.core.frame import (
         to_frame as _tf,
     )
@@ -688,26 +688,26 @@ def score_fs_sequential_arrow(
     if max_block_rows is None:
         max_block_rows = max_block_size
 
-    native = _tf(prepared_df).native
-    if is_polars_lazyframe(native):
-        native = native.collect()
-    if not isinstance(native, pl.DataFrame):
-        native = pl.from_arrow(native)
-    keep = _needed_columns(native, mk, blocking_config)
-    # Resident keyed frame, projected to the scoring columns, sorted by __row_id__
-    # ONCE so a block's row-ids map to physical positions by offset (contiguous
-    # ids -> id - lo) or a binary search (gapped ids). `.select` shares buffers.
-    frame = native.select(keep).sort("__row_id__")
-    del native
-    rid = frame["__row_id__"]
-    n_rows = frame.height
-    _lo = int(rid[0]) if n_rows else 0
-    _hi = int(rid[-1]) if n_rows else -1
+    # Base as a pa.Table (ARROW-NATIVE, no polars). ``to_arrow`` handles a polars
+    # frame (converts) or a pa.Table (returns as-is); a lazy frame is collected
+    # first. The whole scorer runs on this table + the Arrow ``Frame`` seam.
+    _fw = _tf(prepared_df)
+    if is_polars_lazyframe(_fw.native):
+        _fw = _tf(_fw.native.collect())
+    base = _fw.to_arrow()
+    keep = _needed_columns(base, mk, blocking_config)
+    # Project to scoring columns + sort by __row_id__ ONCE so a block's row-ids
+    # map to physical positions by offset (contiguous -> id - lo) or a binary
+    # search (gapped ids).
+    base = base.select(keep).sort_by([("__row_id__", "ascending")])
+    _rid_np = base.column("__row_id__").to_numpy(zero_copy_only=False)
+    n_rows = len(_rid_np)
+    _lo = int(_rid_np[0]) if n_rows else 0
+    _hi = int(_rid_np[-1]) if n_rows else -1
     _contiguous = n_rows > 0 and (_hi - _lo + 1 == n_rows)
-    _rid_np = None if _contiguous else rid.to_numpy()
 
     def _positions(ids: np.ndarray) -> np.ndarray:
-        # row-id -> physical position in the __row_id__-sorted frame.
+        # row-id -> physical position in the __row_id__-sorted table.
         if _contiguous:
             return ids - _lo
         return np.searchsorted(_rid_np, ids)  # rid sorted asc, all ids present
@@ -770,7 +770,7 @@ def score_fs_sequential_arrow(
         if not buf_ids:
             return
         ids = np.concatenate(buf_ids)
-        gathered = frame[_positions(ids)]
+        gathered = base.take(pa.array(_positions(ids)))
         if use_native:
             _merge((
                 score_probabilistic_bucket_native(
@@ -798,35 +798,33 @@ def score_fs_sequential_arrow(
         buf_rows = 0
 
     for pass_config in passes:
-        key_expr = _build_block_key_expr(pass_config)
-        _key_cols = ["__row_id__"] + [
-            f for f in dict.fromkeys(pass_config.fields) if f != "__row_id__"
-        ]
-        # Block-key GROUPING in polars: (block_key -> [row_ids]), null/sentinel
-        # keys dropped, >=2 rows, capped at max_block_rows. One group-by per pass.
-        groups = (
-            frame.lazy()
-            .select(_key_cols)
-            .with_columns(key_expr)
-            .filter(
-                pl.col("__block_key__").is_not_null()
-                & ~pl.col("__block_key__")
-                    .str.strip_chars()
-                    .str.to_lowercase()
-                    .is_in(["nan", "null", "none"])
-            )
-            .group_by("__block_key__")
-            .agg(pl.col("__row_id__"))
-            .filter(pl.col("__row_id__").list.len() >= 2)
-            .with_columns(pl.col("__row_id__").list.head(max_block_rows))
-            .select("__row_id__")
-            .collect()
+        # ARROW-NATIVE block-key grouping (no polars): derive the block key via
+        # the Frame seam's ``derive_block_key`` (the Arrow twin of
+        # ``_build_block_key_expr`` -> ``core.arrow_derive.block_key``) + the
+        # verbatim null/sentinel guard ``filter_valid_key``, then group row-ids by
+        # block key with ONE pyarrow ``group_by().aggregate(list)`` per pass.
+        _bf = _tf(base)
+        _bf = _bf.with_column(
+            "__block_key__",
+            _bf.derive_block_key(
+                list(pass_config.fields),
+                list(pass_config.transforms or []),
+                field_transforms=getattr(pass_config, "field_transforms", None),
+            ),
         )
-        for ids_list in groups["__row_id__"]:
-            ids = ids_list.to_numpy()
+        keyed = _bf.filter_valid_key("__block_key__").native
+        if keyed.num_rows == 0:
+            continue
+        grouped = keyed.group_by("__block_key__").aggregate([("__row_id__", "list")])
+        for lst in grouped.column("__row_id___list"):
+            ids = np.asarray(lst.as_py(), dtype=np.int64)
+            if ids.size < 2:
+                continue
+            if ids.size > max_block_rows:  # oversized cap (the one non-parity edge)
+                ids = ids[:max_block_rows]
             buf_ids.append(ids)
-            buf_sizes.append(len(ids))
-            buf_rows += len(ids)
+            buf_sizes.append(int(ids.size))
+            buf_rows += int(ids.size)
             if buf_rows >= wave_rows:
                 _flush()
         # Flush at the END of each pass so pass N is merged before pass N+1 (the
@@ -981,36 +979,42 @@ def _prep_all_ids(con: Any) -> Sequence[int]:
     return [r[0] for r in con.execute("SELECT __row_id__ FROM prep").fetchall()]
 
 
-def _prep_all_ids_frame(frame: Any) -> Sequence[int]:
-    """The polars analogue of ``_prep_all_ids``: the full ``__row_id__`` set off a
-    RESIDENT frame (no DuckDB) — a ``range`` when contiguous (min..max, no gaps —
-    the pipeline's dense global row index), else the explicit list. ``__row_id__``
-    is unique per row, so ``max - min + 1 == count`` iff exactly ``{min..max}``."""
-    col = frame["__row_id__"]
-    n = col.len()
+def _prep_all_ids_frame(table: Any) -> Sequence[int]:
+    """The pyarrow analogue of ``_prep_all_ids``: the full ``__row_id__`` set off a
+    RESIDENT ``pa.Table`` (no DuckDB, no polars) — a ``range`` when contiguous
+    (min..max, no gaps — the pipeline's dense global row index), else the explicit
+    list. ``__row_id__`` is unique per row, so ``max - min + 1 == count`` iff
+    exactly ``{min..max}``."""
+    import pyarrow.compute as pc
+
+    col = table.column("__row_id__")
+    n = len(col)
     if not n:
         return []
-    lo, hi = int(col.min()), int(col.max())
+    lo, hi = int(pc.min(col).as_py()), int(pc.max(col).as_py())
     if hi - lo + 1 == n:
         return range(lo, hi + 1)
-    return col.to_list()
+    return col.to_pylist()
 
 
-def _stream_fs_dedupe_output_polars(
+def _stream_fs_dedupe_output_arrow(
     frame: Any, assignments: Any, config: Any, out_dir: str
 ) -> dict:
-    """DuckDB-FREE O(N) dedupe output for the in-RAM sequential path: stream
-    unique/dupes to parquet with polars ``sink_parquet`` (the streaming-engine
-    equivalent of DuckDB ``COPY`` — no full result frame materialised) straight
-    off the RESIDENT prepared ``frame`` joined to the ``(row_id, cluster_id)``
-    assignments. Only ``golden`` (bounded multi-member subset) is collected for
-    the in-memory builder. Same unique=singleton / dupes=multi(oversized-incl) /
+    """DuckDB-FREE, POLARS-FREE O(N) dedupe output for the in-RAM sequential path.
+
+    unique/dupes (the O(N) bulk) are built in pure pyarrow — the resident
+    ``frame`` (``pa.Table``) is joined to the ``(row_id, cluster_id)`` assignments
+    + per-cluster sizes with ``pa.Table.join`` and written via ``ParquetWriter``,
+    so no polars touches the row-count-sized data. Only ``golden`` (the BOUNDED
+    non-oversized multi-member subset) is handed to the polars-native
+    ``build_golden_records_batch`` core primitive (an Arrow golden builder is a
+    separate core port). Same unique=singleton / dupes=multi(oversized-incl) /
     golden=non-oversized-multi semantics + ``__xform_*`` exclusion as
-    ``stream_fs_dedupe_output``, so the two output paths are parity-equivalent."""
+    ``stream_fs_dedupe_output``."""
     import os as _os
 
-    import polars as pl
     import pyarrow as pa
+    import pyarrow.compute as pc
     import pyarrow.parquet as _pq
 
     from goldenmatch.core.golden import build_golden_records_batch
@@ -1021,60 +1025,51 @@ def _stream_fs_dedupe_output_polars(
         max_cluster_size = golden_rules.max_cluster_size
 
     if isinstance(assignments, pa.Table):
-        asn = pl.from_arrow(assignments)
+        asn = assignments
     else:
-        asn = pl.DataFrame(
+        asn = pa.table(
             {
-                "__row_id__": [int(r) for r, _ in assignments],
-                "__cluster_id__": [int(c) for _, c in assignments],
-            },
-            schema={"__row_id__": pl.Int64, "__cluster_id__": pl.Int64},
+                "__row_id__": pa.array([int(r) for r, _ in assignments], pa.int64()),
+                "__cluster_id__": pa.array(
+                    [int(c) for _, c in assignments], pa.int64()
+                ),
+            }
         )
-    if not isinstance(asn, pl.DataFrame):
-        asn = pl.DataFrame(asn)
 
-    record_cols = [c for c in frame.columns if not c.startswith("__xform_")]
-    sizes = asn.group_by("__cluster_id__").agg(pl.len().alias("__n__"))
+    record_cols = [c for c in frame.column_names if not c.startswith("__xform_")]
+    sizes = asn.group_by("__cluster_id__").aggregate([("__row_id__", "count")])
+    sizes = sizes.rename_columns(
+        ["__cluster_id__" if c == "__cluster_id__" else "__n__" for c in sizes.column_names]
+    )
+
+    # frame ⨝ assignments ⨝ sizes -- pure Arrow inner joins.
+    joined = frame.join(asn, keys="__row_id__", join_type="inner").join(
+        sizes, keys="__cluster_id__", join_type="inner"
+    )
+    n_col = joined.column("__n__")
 
     _os.makedirs(out_dir, exist_ok=True)
     unique_path = _os.path.join(out_dir, "unique.parquet")
     dupes_path = _os.path.join(out_dir, "dupes.parquet")
     golden_path = _os.path.join(out_dir, "golden.parquet")
 
-    base = (
-        frame.lazy()
-        .join(asn.lazy(), on="__row_id__", how="inner")
-        .join(sizes.lazy(), on="__cluster_id__", how="inner")
+    unique_tbl = joined.filter(pc.equal(n_col, 1)).select(record_cols)
+    dupes_tbl = joined.filter(pc.greater(n_col, 1)).select(
+        [*record_cols, "__cluster_id__"]
     )
+    _pq.write_table(unique_tbl, unique_path)
+    _pq.write_table(dupes_tbl, dupes_path)
 
-    def _write(lf, path: str) -> None:
-        # Stream to disk (bounded); fall back to a collected write if this
-        # polars build can't stream a joined plan.
-        try:
-            lf.sink_parquet(path)
-        except Exception:
-            lf.collect().write_parquet(path)
-
-    # unique = singleton clusters; dupes = multi-member (oversized INCLUDED,
-    # mirroring _finalize's size>1 dupe rule). Both STREAMED via sink_parquet.
-    _write(base.filter(pl.col("__n__") == 1).select(record_cols), unique_path)
-    _write(
-        base.filter(pl.col("__n__") > 1).select([*record_cols, "__cluster_id__"]),
-        dupes_path,
-    )
-
-    # golden = non-oversized multi-member; bounded subset -> in-memory builder.
-    golden_df = (
-        base.filter(
-            (pl.col("__n__") > 1) & (pl.col("__n__") <= int(max_cluster_size))
-        )
-        .select([*record_cols, "__cluster_id__"])
-        .collect()
-    )
+    # golden = non-oversized multi-member; BOUNDED subset -> polars core builder.
+    golden_tbl = joined.filter(
+        pc.and_(pc.greater(n_col, 1), pc.less_equal(n_col, int(max_cluster_size)))
+    ).select([*record_cols, "__cluster_id__"])
     golden_count = 0
-    if golden_df.height:
+    if golden_tbl.num_rows:
+        import polars as pl
+
         records = build_golden_records_batch(
-            golden_df,
+            pl.from_arrow(golden_tbl),
             golden_rules if golden_rules is not None else _default_golden_rules(),
         )
         golden_count = len(records)
@@ -1086,8 +1081,8 @@ def _stream_fs_dedupe_output_polars(
         "unique_path": unique_path,
         "dupes_path": dupes_path,
         "golden_path": golden_path if golden_count else None,
-        "unique_count": _pq.read_metadata(unique_path).num_rows,
-        "dupes_count": _pq.read_metadata(dupes_path).num_rows,
+        "unique_count": unique_tbl.num_rows,
+        "dupes_count": dupes_tbl.num_rows,
         "golden_count": golden_count,
     }
 
@@ -1127,29 +1122,29 @@ def _cluster_arrow_native(
     out-of-core path, or straight off the resident polars frame on the in-RAM
     sequential path), so this clusterer is DuckDB-agnostic. Returns
     ``(assignments pa.Table {__row_id__, __cluster_id__}, n_pairs)``."""
-    import polars as pl
     import pyarrow as pa
+    import pyarrow.compute as pc
 
     from goldenmatch.core.cluster import build_clusters_arrow_native
-    from goldenmatch.core.pairs import dedup_pairs_max_score_arrow
+    from goldenmatch.core.pairs import dedup_pairs_max_score_arrow_table
 
-    # Cross-pass dedup: canonical (min, max), max score — the Arrow-native
+    # Cross-pass dedup: canonical (min, max), max score via the Rust
+    # ``dedup_pairs_arrow`` kernel over the pa.Table (NO polars) — the Arrow-native
     # replacement for the Python `seen` set. Union-Find membership is invariant to
     # which duplicate's score survives, so this is cluster-parity-safe.
-    pairs_pl = pl.from_arrow(pair_table)
-    if not isinstance(pairs_pl, pl.DataFrame):
-        pairs_pl = pl.DataFrame(pairs_pl)
-    pairs_pl = dedup_pairs_max_score_arrow(pairs_pl)
+    pairs_tbl = dedup_pairs_max_score_arrow_table(pair_table)
     if link_threshold is not None:
         # Cluster only linked pairs; sub-link pairs are review candidates the
         # in-memory pipeline surfaces separately and never clusters. Filtering
         # AFTER max-score dedup means a pair links iff its BEST cross-pass score
         # clears the cut (== per-wave filter-then-dedup, since max is monotone).
-        pairs_pl = pairs_pl.filter(pl.col("score") >= link_threshold)
-    n_pairs = pairs_pl.height
+        pairs_tbl = pairs_tbl.filter(
+            pc.greater_equal(pairs_tbl.column("score"), link_threshold)
+        )
+    n_pairs = pairs_tbl.num_rows
 
     cf = build_clusters_arrow_native(
-        pairs_pl, all_ids=all_ids, max_cluster_size=max_cluster_size, backend="arrow",
+        pairs_tbl, all_ids=all_ids, max_cluster_size=max_cluster_size, backend="arrow",
     )
     # ClusterFrames.assignments is {cluster_id, member_id} (pa.Table on the native
     # arrow lane, pl.DataFrame on the columnar fallback). Normalise to a pa.Table
@@ -1279,12 +1274,10 @@ def run_fs_dedupe_sequential(
     ``run_fs_dedupe_streaming`` (cluster only pairs whose best cross-pass score
     clears the cut).
 
-    **No DuckDB.** Scoring, the Rust WCC, and the O(N) parquet output all run off
-    the resident polars frame (``sink_parquet`` streams the output like DuckDB
-    ``COPY`` would, without a second full-frame copy) — the whole path is
-    polars/Arrow/Rust end to end."""
-    import polars as pl
-
+    **No DuckDB, no polars** (except the bounded golden-record builder, an
+    existing polars core primitive fed only the multi-member subset). Scoring, the
+    Rust WCC, and the O(N) unique/dupes parquet output all run off the resident
+    ``pa.Table`` — the O(N) path is pure pyarrow/Arrow/Rust end to end."""
     from goldenmatch.core.frame import is_polars_lazyframe
     from goldenmatch.core.frame import to_frame as _tf
 
@@ -1300,20 +1293,19 @@ def run_fs_dedupe_sequential(
         target_ids=target_ids, emit="arrow",
     )
 
-    # Resident record frame for the WCC id-set + the streamed output (no DuckDB).
-    native = _tf(prepared_df).native
-    if is_polars_lazyframe(native):
-        native = native.collect()
-    if not isinstance(native, pl.DataFrame):
-        native = pl.from_arrow(native)
+    # Resident record table (pa.Table) for the WCC id-set + streamed output.
+    _fw = _tf(prepared_df)
+    if is_polars_lazyframe(_fw.native):
+        _fw = _tf(_fw.native.collect())
+    base = _fw.to_arrow()
 
     # WCC: dedup edges + Rust Union-Find over the Arrow edge stream, folding in
-    # every singleton row-id straight off the resident frame.
+    # every singleton row-id straight off the resident table.
     assignments, n_pairs = _cluster_arrow_native(
-        _prep_all_ids_frame(native), pairs, max_cluster_size, link_threshold,
+        _prep_all_ids_frame(base), pairs, max_cluster_size, link_threshold,
     )
-    # O(N) output streamed to parquet from the resident frame via sink_parquet.
-    res = _stream_fs_dedupe_output_polars(native, assignments, config, out_dir)
+    # O(N) unique/dupes streamed to parquet from the resident table (pure pyarrow).
+    res = _stream_fs_dedupe_output_arrow(base, assignments, config, out_dir)
     res["pairs"] = n_pairs
     res["streaming"] = True
     res["sequential"] = True

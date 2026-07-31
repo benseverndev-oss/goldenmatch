@@ -594,6 +594,36 @@ def test_sequential_arrow_emit_matches_tuples():
     assert arrow_set == tup_set
 
 
+def test_sequential_scorer_is_polars_free(monkeypatch):
+    """score_fs_sequential_arrow on a pa.Table runs with `import polars` BLOCKED
+    -- block-key grouping (Arrow seam derive_block_key), gather (pa.Table.take),
+    and kernel feed are pure pyarrow, matching the same pairs as the reference."""
+    import sys
+
+    from goldenmatch.backends.fs_out_of_core import score_fs_sequential_arrow
+
+    df = _bigger_df()
+    mk = _make_probabilistic_mk()
+    blocking = BlockingConfig(
+        strategy="multi_pass",
+        passes=[
+            BlockingKeyConfig(fields=["zip"]),
+            BlockingKeyConfig(fields=["last_name"]),
+        ],
+    )
+    em = _train(df, blocking, mk)  # polars available at train time
+    ref = _reference_pairs(df, blocking, mk, em)
+    tbl = df.to_arrow()  # arrow-native input; scorer must not touch polars
+
+    # Simulate polars-absent: any `import polars` inside the scorer path raises.
+    monkeypatch.setitem(sys.modules, "polars", None)
+    got = {
+        (min(a, b), max(a, b), round(float(s), 4))
+        for a, b, s in score_fs_sequential_arrow(tbl, blocking, mk, set(), em)
+    }
+    assert got == ref
+
+
 def test_sequential_non_field_strategy_raises():
     from goldenmatch.backends.fs_out_of_core import score_fs_sequential_arrow
 

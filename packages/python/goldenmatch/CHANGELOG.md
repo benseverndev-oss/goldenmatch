@@ -22,11 +22,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   derivation + same kernel), gated by `tests/test_fs_out_of_core.py`. Routed via
   the shared `resolve_fs_block_source`/`fs_streaming_route` resolver and reachable
   through `gm.dedupe_to_parquet(*files, out_dir=…)`. Default path unchanged.
-  DuckDB-free end to end: the Rust WCC (`_cluster_arrow_native`) takes the row-id
-  set directly and the O(N) output streams via polars `sink_parquet`
-  (`_stream_fs_dedupe_output_polars`, the streaming-engine equivalent of DuckDB
-  `COPY`), so no second full-frame copy is held; the `duckdb` block source stays
-  the spill-past-RAM variant.
+  **DuckDB-free AND polars-free** (O(N) path): block-key grouping runs on the
+  Arrow `Frame` seam (`derive_block_key` → `core.arrow_derive.block_key`, the
+  byte-equivalent Arrow twin of the polars `_build_block_key_expr`) +
+  `filter_valid_key` + one pyarrow `group_by` per pass; blocks gather via
+  `pa.Table.take`; the FS kernel reads the `pa.Table` directly; cross-pass edge
+  dedup is the Rust `dedup_pairs_arrow` kernel (`dedup_pairs_max_score_arrow_table`,
+  no polars); the Rust WCC (`_cluster_arrow_native`) takes the row-id set +
+  `pa.Table` edge stream directly; and O(N) unique/dupes output is pure pyarrow
+  (`_stream_fs_dedupe_output_arrow`: `pa.Table.join` + `ParquetWriter`). The scorer
+  is guarded by a `import polars`-blocked test. The one remaining polars touch is
+  the bounded golden-record builder (`build_golden_records_batch` on the
+  multi-member subset only — an Arrow golden builder is a separate core port). The
+  `duckdb` block source (`GOLDENMATCH_FS_BLOCK_SOURCE=duckdb`) stays the
+  spill-past-RAM variant.
 
 ### Changed
 - **FS out-of-core streaming: single `resolve_fs_block_source` knob + DuckDB
