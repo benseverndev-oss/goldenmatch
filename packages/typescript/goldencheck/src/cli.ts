@@ -20,6 +20,7 @@ import { evaluateScan, type ExpectedFinding } from "./core/engine/evaluate.js";
 import { maybeSample } from "./core/engine/sampler.js";
 import { generateRules, serializeRules } from "./core/llm/rule-generator.js";
 import { referentialIntegrity } from "./core/engine/referential.js";
+import { discoverDenialConstraints } from "./core/denial/mine.js";
 
 export const program = new Command();
 
@@ -206,6 +207,38 @@ program
     }
 
     process.exitCode = ciCheck(findings, String(opts["failOn"] ?? "error"));
+  });
+
+// --- denial-constraints ---
+// Mirrors the Python `denial-constraints` command: read the file, mine denial
+// constraints (cross-column "if A then not-B" invariants), print each discovered
+// DC + its hold-rate line. The engine (core/denial/) is pure/edge-safe; file I/O
+// lives here. Closes the last goldencheck python_only CLI parity gap.
+program
+  .command("denial-constraints <file>")
+  .description("Discover denial constraints — cross-column 'if A then not-B' invariants — from data")
+  .option("--min-confidence <n>", "Fraction of rows/pairs a DC must hold for (default: engine default)")
+  .option("--sample-size <n>", "Bound the cross-tuple (pairwise) pass")
+  .option("--max-constraints <n>", "Cap the ranked number of DCs reported")
+  .action((file: string, opts: Record<string, unknown>) => {
+    const data = readFile(file);
+    const dcs = discoverDenialConstraints(data, {
+      minConfidence: opts["minConfidence"] !== undefined ? Number(opts["minConfidence"]) : null,
+      sampleSize: opts["sampleSize"] !== undefined ? Number(opts["sampleSize"]) : null,
+      maxConstraints: opts["maxConstraints"] !== undefined ? Number(opts["maxConstraints"]) : null,
+    });
+
+    if (dcs.length === 0) {
+      console.log("No denial constraints discovered.");
+      return;
+    }
+
+    console.log(`Discovered ${dcs.length} denial constraint(s):`);
+    for (const dc of dcs) {
+      const held = 1.0 - dc.g1;
+      console.log(`  ${dc.render()}`);
+      console.log(`    holds ${(held * 100).toFixed(1)}% (g1=${dc.g1.toFixed(4)}, ${dc.tupleScope}-tuple)`);
+    }
   });
 
 // --- watch ---
