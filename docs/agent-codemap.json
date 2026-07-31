@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 437,
+      "module_count": 438,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7106,6 +7106,7 @@
           "imports": [
             "goldenmatch.core.key_integrity_certificate",
             "goldenmatch.semantic.blocking",
+            "goldenmatch.semantic.catalog",
             "goldenmatch.semantic.certify",
             "goldenmatch.semantic.crosswalk",
             "goldenmatch.semantic.cube",
@@ -7129,6 +7130,19 @@
             "goldenmatch.semantic.certify",
             "goldenmatch.semantic.cube",
             "goldenmatch.semantic.key_integrity",
+            "goldenmatch.semantic.metricflow",
+            "goldenmatch.semantic.osi"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.catalog",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/catalog.py",
+          "purpose": "Live catalog write-back for the semantic-layer wedge (wedge B, persisted).",
+          "defines": [
+            "write_resolved_catalog"
+          ],
+          "imports": [
+            "goldenmatch.semantic.cube",
             "goldenmatch.semantic.metricflow",
             "goldenmatch.semantic.osi"
           ]
@@ -7253,8 +7267,10 @@
             "emit_osi_relationship",
             "emit_osi_yaml",
             "osi_join_keys",
+            "osi_json_schema",
             "parse_osi_models",
-            "validate_osi"
+            "validate_osi",
+            "validate_osi_schema"
           ],
           "imports": [
             "goldenmatch.semantic.blocking",

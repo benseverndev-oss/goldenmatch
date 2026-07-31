@@ -7,6 +7,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **Live catalog write-back + JSON-Schema OSI validation (semantic-layer wedge).**
+  `goldenmatch.semantic.write_resolved_catalog(crosswalk, path, *, dialect,
+  source_target, ...)` emits a `ResolvedCrosswalk`'s conformed entity declaration
+  (the `resolved_entity_id` join a metric groups by) for dbt/MetricFlow, Cube, or
+  OSI and **writes it to the catalog file** the semantic layer reads — the last
+  mile of "resolve once, every metric inherits correct joins". Refuses to clobber
+  an existing file unless `overwrite=True`, creates parent dirs, and forwards
+  emitter kwargs (`measures`/`grain`/`resolved_field`/...). Also adds a bundled
+  JSON Schema for OSI/Ossie 0.2.0.dev0 (`osi_json_schema()`) and a
+  `jsonschema`-backed validator: `validate_osi_schema(source)` and
+  `validate_osi(source, engine="structural"|"jsonschema"|"auto")`. `jsonschema` is
+  optional (the `"auto"` engine falls back to the dependency-free structural check
+  when it is absent); the default `engine="structural"` is byte-identical to prior
+  behavior.
 - **Metric-aware resolution for the semantic-layer wedge (the differentiated
   wedge).** New `goldenmatch.semantic.semantic_field_roles(source)` reads a
   semantic model's declared `{keys, dimensions, measures}` across all three
