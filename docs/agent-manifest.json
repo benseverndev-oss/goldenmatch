@@ -1680,6 +1680,13 @@
               "required": false,
               "default": "{}",
               "description": "Per-field transform chains overriding the key-level transforms for the named fields only."
+            },
+            {
+              "name": "additive",
+              "type": "bool",
+              "required": false,
+              "default": "False",
+              "description": "If true, this pass co-locates pairs but its fields remain EM-trained comparison fields (Fellegi-Sunter path) instead of being demoted to fixed neutral weights."
             }
           ]
         },
@@ -5675,6 +5682,7 @@
           "GOLDENMATCH_FS_OOC_ARROW_CLUSTER",
           "GOLDENMATCH_FS_OOC_DEBUG",
           "GOLDENMATCH_FS_OOC_WAVE_ROWS",
+          "GOLDENMATCH_FS_ORTHOGONAL_BLOCKING",
           "GOLDENMATCH_FS_OUT_OF_CORE",
           "GOLDENMATCH_FS_POST_BLOCKING_U",
           "GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE",
