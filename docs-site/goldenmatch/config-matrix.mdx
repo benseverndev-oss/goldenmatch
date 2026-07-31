@@ -691,6 +691,11 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `explain` | `--config` | path | **required** | Config YAML path |
 | `explain` | `--pair` | text | `None` | Explain a pair: 'id_a,id_b' |
 | `explain` | `--cluster` | integer | `None` | Explain a cluster by id |
+| `identity 360` | `entity_id` | text | **required** | The entity_id to build the Customer 360 view for. |
+| `identity 360` | `--path` | text | `'.goldenmatch/identity.db'` | Path to the identity graph database. |
+| `identity 360` | `--no-relationships` | boolean | `False` | Skip the relationship neighborhood read. |
+| `identity 360` | `--timeline-limit` | integer | `None` | Cap the number of timeline events (most recent first). |
+| `identity 360` | `--json` | boolean | `False` | Emit the full 360 page as JSON. |
 | `identity conflicts` | `--path` | text | `'.goldenmatch/identity.db'` | Path to the identity graph database. |
 | `identity conflicts` | `--dataset` | text | `None` | Filter to identities in this dataset. |
 | `identity conflicts` | `--json` | boolean | `False` | Emit results as JSON instead of a table. |
@@ -913,7 +918,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 
 ## MCP tools
 
-91 MCP tool(s) exposed by `goldenmatch.mcp.server` -- the programmatic / agent surface. Config-bearing tools take the same knobs as above.
+92 MCP tool(s) exposed by `goldenmatch.mcp.server` -- the programmatic / agent surface. Config-bearing tools take the same knobs as above.
 
 | Tool | Description |
 |---|---|
@@ -936,6 +941,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `controller_telemetry` | Return the AutoConfigController telemetry from the most recent `auto_configure` or `agent_deduplicate` call in this MCP session. Same JSON shape as the web /api/v1/controller/telemetry endpoint. |
 | `convert_splink_config` | Convert a Splink settings JSON (bare or trained) into a GoldenMatch config. Pass the settings as an inline JSON string -- no filesystem access needed. Returns the config as YAML, a findings report (severity/splink_path/message/mapped_to per finding), a summary, and -- when the Splink input carried trained m/u probabilities -- the imported EM model as a dict you can persist yourself. strict=True fails on ANY lossy mapping (not just hard errors). |
 | `create_domain` | Create a custom domain extraction rulebook. Define patterns for a specific data domain (medical devices, automotive parts, real estate, etc.). |
+| `customer_360` | The unified Customer 360 serving view of one entity, composed from the durable store in one call: the golden record + per-field source provenance, every linked source record, the event timeline, and the relationship neighborhood. This is the same durable entity_id a resolved crosswalk (semantic-layer wedge) groups metrics by, so a metric row drills straight through to the customer. Returns &#123;found: false&#125; when no such entity exists. |
 | `dedupe` | Alias for `find_duplicates`. Find duplicate matches for a record. Provide field values to search against the loaded dataset. |
 | `documents_ingest` | Extract records from documents (PDF/image) against a target schema into rows ready for dedupe_df. Returns records + an ingest report. |
 | `documents_suggest_schema` | Propose a target extraction schema (JSON) from a sample document image/PDF. |

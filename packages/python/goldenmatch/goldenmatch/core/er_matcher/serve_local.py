@@ -5,7 +5,7 @@ Resolves the pinned GGUF (download + sha256-verify) and starts
 `llm_score_pairs` path already consumes via ``GOLDENMATCH_LLM_BASE_URL``. So the
 whole Path-A boost is:
 
-    python -m goldenmatch.core.er_matcher.serve_local --tier 3b --port 8080
+    python -m goldenmatch.core.er_matcher.serve_local --tier 1.5b --port 8080
     export GOLDENMATCH_LLM_BASE_URL=http://localhost:8080/v1
     # ...then run goldenmatch with the LLM boost enabled -- offline, no API key.
 
@@ -43,7 +43,7 @@ def _have_server() -> bool:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Serve the local ER-matcher (Path A).")
-    ap.add_argument("--tier", default="3b", help="model tier (3b default, 7b optional)")
+    ap.add_argument("--tier", default="1.5b", help="model tier (1.5b default/Apache-2.0, 7b optional)")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--n-ctx", type=int, default=2048)

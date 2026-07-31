@@ -2959,6 +2959,45 @@
           ]
         },
         {
+          "command": "identity 360",
+          "options": [
+            {
+              "name": "entity_id",
+              "type": "text",
+              "required": true,
+              "help": "The entity_id to build the Customer 360 view for."
+            },
+            {
+              "name": "--path",
+              "type": "text",
+              "required": false,
+              "default": "'.goldenmatch/identity.db'",
+              "help": "Path to the identity graph database."
+            },
+            {
+              "name": "--no-relationships",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Skip the relationship neighborhood read."
+            },
+            {
+              "name": "--timeline-limit",
+              "type": "integer",
+              "required": false,
+              "default": "None",
+              "help": "Cap the number of timeline events (most recent first)."
+            },
+            {
+              "name": "--json",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Emit the full 360 page as JSON."
+            }
+          ]
+        },
+        {
           "command": "identity conflicts",
           "options": [
             {
@@ -4740,6 +4779,10 @@
         {
           "name": "create_domain",
           "description": "Create a custom domain extraction rulebook. Define patterns for a specific data domain (medical devices, automotive parts, real estate, etc.)."
+        },
+        {
+          "name": "customer_360",
+          "description": "The unified Customer 360 serving view of one entity, composed from the durable store in one call: the golden record + per-field source provenance, every linked source record, the event timeline, and the relationship neighborhood. This is the same durable entity_id a resolved crosswalk (semantic-layer wedge) groups metrics by, so a metric row drills straight through to the customer. Returns {found: false} when no such entity exists."
         },
         {
           "name": "dedupe",

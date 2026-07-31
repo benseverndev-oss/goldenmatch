@@ -19,7 +19,7 @@ from goldenmatch.mcp.identity_tools import (
 
 
 def test_identity_tool_count_and_names():
-    assert len(IDENTITY_TOOLS) == 15
+    assert len(IDENTITY_TOOLS) == 16
     assert IDENTITY_TOOL_NAMES == {
         "identity_resolve", "identity_list", "identity_history",
         "identity_conflicts", "identity_merge", "identity_split",
@@ -30,6 +30,8 @@ def test_identity_tool_count_and_names():
         "identity_claim", "identity_resolve_conflict", "identity_audit",
         # Agent Memory #1078: tamper-evident audit seal chain
         "identity_audit_seal", "identity_audit_verify",
+        # Customer 360 serving view (D1b)
+        "customer_360",
     }
 
 
@@ -76,6 +78,18 @@ def test_identity_conflicts(seeded_db):
     path, _ = seeded_db
     out = _dispatch("identity_conflicts", {"path": path})
     assert out["items"] == []
+
+
+def test_customer_360_via_mcp(seeded_db):
+    path, ids = seeded_db
+    out = _dispatch("customer_360", {"entity_id": ids["eid1"], "path": path})
+    # the unified serving page for the durable entity
+    assert out["entity_id"] == ids["eid1"]
+    assert out["record_count"] == 2                 # eid1 has src:1 + src:2
+    for key in ("golden_record", "field_provenance", "source_records", "timeline", "relationships"):
+        assert key in out
+    missing = _dispatch("customer_360", {"entity_id": "nope", "path": path})
+    assert missing == {"found": False}
 
 
 def test_identity_merge_via_mcp(seeded_db):
