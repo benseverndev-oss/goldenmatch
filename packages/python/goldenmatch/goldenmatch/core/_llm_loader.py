@@ -70,10 +70,10 @@ class LocalModelSpec:
 PINNED_MODEL = LocalModelSpec(
     url=(
         "https://github.com/benseverndev-oss/goldenmatch/releases/download/"
-        "er-matcher-3b-v1/goldenmatch-er-matcher-3b-q4_k_m.gguf"
+        "er-matcher-3b-v1.0.0/goldenmatch-er-matcher-3b-q4_k_m.gguf"
     ),
     filename="goldenmatch-er-matcher-3b-q4_k_m.gguf",
-    sha256=None,
+    sha256="b6637fd9892b21b565098524501083edb91199b0bfffc267edf48885ce9c1d3b",
 )
 
 
@@ -215,44 +215,44 @@ def load_local_adapter(
 # ── serializer + adapter (shared contract with Path A) ─────────────────────────
 
 
-def serialize_pair_v1(row_a: dict, row_b: dict, columns: list[str]) -> str:
-    """Render two records for the model — the pinned ``serialize_pair_v1``.
+def _project(row: dict, columns: list[str] | None) -> dict:
+    """Restrict a pipeline row to the caller's data columns (dropping ``__row_id__``
+    and other internals) before serialization — the model was trained on the record
+    fields only, so leaking internal columns into the prompt is out-of-distribution."""
+    if columns is None:
+        return row
+    return {c: row.get(c) for c in columns}
 
-    Deterministic field order (the caller's ``columns``), ``field: value`` lines.
-    The serializer version is part of the model card; changing it means a new
-    model revision (companion spec §8).
+
+def serialize_pair_v1(row_a: dict, row_b: dict, columns: list[str] | None = None) -> str:
+    """The pinned ``serialize_pair_v1`` — SINGLE-SOURCED from
+    ``core.er_matcher.prompt.serialize_pair_v1`` (the exact rendering the model was
+    fine-tuned on) so Path A (served) and Path B (in-process) are byte-identical.
+
+    ``columns`` selects which fields to render (the canonical serializer then orders
+    them by the sorted key union); pass ``None`` to render every key. Having ONE v1
+    rendering is what makes the registry serializer-version guard meaningful — a
+    second hand-rolled ``v1`` that disagreed would feed the model OOD prompts the
+    version-string check cannot catch.
     """
-    def _fmt(row: dict) -> str:
-        return "\n".join(f"{c}: {row.get(c, '')}" for c in columns)
+    from goldenmatch.core.er_matcher.prompt import serialize_pair_v1 as _canonical
 
-    return f"Record A:\n{_fmt(row_a)}\n\nRecord B:\n{_fmt(row_b)}"
-
-
-_SYSTEM_PROMPT = (
-    "You are an entity-resolution adjudicator. Decide whether Record A and "
-    "Record B describe the SAME real-world entity. Weigh agreements and "
-    "conflicts; a missing value is not a conflict. Reply with compact JSON only: "
-    '{"match": true|false, "confidence": 0.0-1.0}.'
-)
+    return _canonical(_project(row_a, columns), _project(row_b, columns))
 
 
 def parse_verdict(text: str) -> tuple[bool, float]:
     """Lenient parse of the model's JSON verdict -> ``(is_match, confidence)``.
 
-    A parse failure returns ``(False, 0.0)`` — abstain, never crash (mirrors the
-    hosted fallback contract). ``confidence`` is clamped to ``[0, 1]``.
+    Delegates to the canonical ``core.er_matcher.prompt.parse_verdict`` (one parser
+    contract). A parse failure returns ``(False, 0.0)`` — abstain, never crash
+    (mirrors the hosted fallback contract). ``confidence`` is clamped to ``[0, 1]``.
     """
-    import json
-    import re
+    from goldenmatch.core.er_matcher.prompt import parse_verdict as _canonical
 
-    try:
-        m = re.search(r"\{.*\}", text, re.DOTALL)
-        obj = json.loads(m.group(0) if m else text)
-        is_match = bool(obj.get("match", False))
-        conf = float(obj.get("confidence", 0.0))
-        return is_match, max(0.0, min(1.0, conf))
-    except Exception:  # noqa: BLE001 - any malformed output -> abstain
+    v = _canonical(text)
+    if v is None:
         return False, 0.0
+    return bool(v["match"]), max(0.0, min(1.0, float(v["confidence"])))
 
 
 class LocalLlamaAdapter:
@@ -265,13 +265,15 @@ class LocalLlamaAdapter:
     def score_pair(
         self, row_a: dict, row_b: dict, columns: list[str]
     ) -> tuple[bool, float]:
-        prompt = serialize_pair_v1(row_a, row_b, columns)
+        # build_chat single-sources BOTH the system rubric and the user-turn
+        # serialization from core.er_matcher.prompt — the same messages the model
+        # was fine-tuned on (project to the data columns first, see _project).
+        from goldenmatch.core.er_matcher.prompt import build_chat
+
+        messages = build_chat(_project(row_a, columns), _project(row_b, columns))
         try:
             resp = self._llm.create_chat_completion(
-                messages=[
-                    {"role": "system", "content": _SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
+                messages=messages,
                 max_tokens=64,
                 temperature=0.0,
             )

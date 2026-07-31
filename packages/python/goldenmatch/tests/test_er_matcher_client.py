@@ -59,15 +59,18 @@ def test_score_pairs_batch():
 
 
 # --- registry ---------------------------------------------------------------
-def test_registry_specs_pending_until_published():
-    # Weights ship only after the eval gate; pins are PENDING for now.
-    for tier in ("3b", "7b"):
-        assert registry.MODELS[tier].published is False
+def test_registry_3b_published_7b_pending():
+    # 3b is published (er-matcher-3b-v1.0.0 GitHub Release, pinned url+sha256);
+    # 7b weights still ship only after its eval gate, so it stays PENDING.
+    assert registry.MODELS["3b"].published is True
+    assert registry.MODELS["7b"].published is False
 
 
 def test_resolve_refuses_unpublished():
+    # 7b is still PENDING (no url/sha256) -> resolve refuses (can't verify what
+    # isn't pinned). 3b is published now, so use 7b for the refusal check.
     with pytest.raises(ValueError, match="not published"):
-        registry.resolve_model("3b")
+        registry.resolve_model("7b")
 
 
 def test_resolve_unknown_tier():

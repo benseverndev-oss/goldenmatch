@@ -1,6 +1,6 @@
 # Golden Suite
 
-> A polyglot data-quality and entity-resolution toolkit: profile, standardize, deduplicate, and report on tabular data. Six composable packages on PyPI and npm, with SQL-native PostgreSQL/DuckDB extensions, MCP/REST/A2A servers, and edge-safe TypeScript ports (optional WebAssembly). Headline package: GoldenMatch.
+> Zero-config entity resolution that feeds a durable identity layer — resolve messy records from any source into stable golden entities (a Customer 360 / master-data-management spine) with whole-record provenance, merge/split, and a tamper-evident audit log. The Arrow-native, Rust-authoritative matching engine beats hand-tuned Splink out of the box and scales to a verified 100M-row dedupe in 9.2 min; the resolved identities live in a transaction-native control plane (SQLite/Postgres). Fuzzy + exact + probabilistic (Fellegi-Sunter) + LLM matching, privacy-preserving record linkage (PPRL), and GraphRAG / knowledge-graph integration. A polyglot suite of composable packages on PyPI and npm, SQL-native in PostgreSQL and DuckDB, MCP/REST/A2A servers, and edge-safe TypeScript ports (optional WebAssembly). Headline package: GoldenMatch.
 
 ## The pipeline
 GoldenCheck (profile + validate) → GoldenFlow (standardize) → GoldenMatch (dedupe + cluster + survivorship) → GoldenAnalysis (cross-cutting reporting), orchestrated by GoldenPipe, with InferMap for schema mapping.
@@ -24,7 +24,7 @@ Zero-config gets good results and returns the config it chose; the healer (`revi
 - DQbench composite 91.04; PPRL 92.4% F1 on FEBRL4; a durable Identity Graph (stable entity_ids that survive across runs)
 
 ## AI-native surface
-- Every package ships an MCP server (131 tools across the suite), a REST API, and most an A2A agent surface
+- Every package ships an MCP server (132 tools across the suite), a REST API, and most an A2A agent surface
 - One aggregator container exposes the whole suite: `docker run ghcr.io/benseverndev-oss/goldensuite-mcp:latest`
 - Hosted remote MCP on Smithery, plus the official MCP Registry: `io.github.benseverndev-oss/{goldenmatch,goldencheck,goldenflow,goldenpipe,infermap}`
 

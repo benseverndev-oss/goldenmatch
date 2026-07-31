@@ -1,13 +1,18 @@
-"""Read declared entity keys + measures from a dbt / MetricFlow semantic model.
+"""Read / emit dbt / MetricFlow semantic-model entity declarations.
 
 MetricFlow declares, per `semantic_models[]`: `entities` (with `type` one of
 primary/foreign/unique/natural), `measures`, and a default `agg_time_dimension`.
 Joins across semantic models happen implicitly on *shared entities* — so the
 primary entity's key is exactly what `certify_key_integrity` needs to check.
 
-`parse_semantic_models(source) -> list[DeclaredKeySpec]` extracts that surface so
-you can point the certifier at a real dbt project instead of hand-passing a key.
-This reads the *declaration* only; it does not touch a warehouse.
+- `parse_semantic_models(source) -> list[DeclaredKeySpec]` (wedge A) reads the
+  declared key so you can point the certifier at a real dbt project.
+- `emit_semantic_model` / `emit_metricflow_yaml` (wedge B) go the other way: given
+  a GoldenMatch-resolved key, generate the `semantic_models` YAML that declares
+  that conformed key as the PRIMARY entity — so every metric joins on resolved
+  identity. `parse_semantic_models(emit_metricflow_yaml(...))` round-trips.
+
+This reads/writes the *declaration* only; it does not touch a warehouse.
 """
 from __future__ import annotations
 
@@ -79,6 +84,7 @@ def parse_semantic_models(source: str | Path | dict[str, Any]) -> list[DeclaredK
 
         primary_key: list[str] = []
         foreign_keys: list[str] = []
+        unique_keys: list[str] = []
         for ent in entities:
             if not isinstance(ent, dict):
                 continue
@@ -91,13 +97,20 @@ def parse_semantic_models(source: str | Path | dict[str, Any]) -> list[DeclaredK
             elif etype == "foreign":
                 foreign_keys.append(col)
             elif etype == "unique":
-                # a unique (non-primary) key is still a valid identity to check;
-                # only promote it when no primary/natural entity was declared.
+                unique_keys.append(col)
+                # A unique (non-primary) entity is a join edge when a primary key
+                # is present (preserving the emit round-trip: a source key emitted
+                # as `unique`); it is promoted to the key only when no primary is.
                 foreign_keys.append(col)
 
-        if not primary_key:
-            # No primary/natural entity → nothing to certify for this model.
+        key = primary_key or unique_keys
+        if not key:
+            # No primary/natural/unique entity → nothing to certify for this model.
             continue
+        if not primary_key:
+            # Promoted a unique key to the primary role — it is the identity, not
+            # a foreign join edge, so drop it from foreign_keys.
+            foreign_keys = [c for c in foreign_keys if c not in unique_keys]
 
         measures = [
             c for m in (sm.get("measures") or [])
@@ -112,7 +125,7 @@ def parse_semantic_models(source: str | Path | dict[str, Any]) -> list[DeclaredK
         specs.append(
             DeclaredKeySpec(
                 model=name,
-                key=primary_key,
+                key=key,
                 measures=measures,
                 grain=grain,
                 foreign_keys=foreign_keys,
@@ -120,3 +133,92 @@ def parse_semantic_models(source: str | Path | dict[str, Any]) -> list[DeclaredK
         )
 
     return specs
+
+
+# --- emit (wedge B): resolved key -> MetricFlow semantic-model declaration ------
+
+
+def emit_semantic_model(
+    model: str,
+    *,
+    resolved_key: str,
+    entity_name: str | None = None,
+    source_key: str | None = None,
+    measures: list[str] | tuple[str, ...] = (),
+    grain: list[str] | str | None = None,
+    model_ref: str | None = None,
+    measure_agg: str = "sum",
+) -> dict[str, Any]:
+    """Build ONE MetricFlow `semantic_models[]` entry declaring `resolved_key` as
+    the PRIMARY entity — the GoldenMatch-conformed join key every metric inherits.
+
+    The original per-source key (`source_key`), if given, is declared as a
+    `unique` entity so it stays queryable but is no longer the join primary.
+
+    Args:
+        model: the semantic model / dbt model name.
+        resolved_key: the resolved-entity column (e.g. `resolved_entity_id`) to
+            declare as the primary entity's `expr`.
+        entity_name: the entity's logical name (defaults to `model`).
+        source_key: the original source primary key, declared `unique` if given.
+        measures: measure column names (emitted with `agg=measure_agg`, `expr=name`).
+        grain: the default agg time dimension (str or 1-list), if any.
+        model_ref: the `model:` ref expression (defaults to `ref('<model>')`).
+        measure_agg: the aggregation stamped on each measure (a scaffold default —
+            set the real aggregation per measure in your project).
+    """
+    entities: list[dict[str, Any]] = [
+        {"name": entity_name or model, "type": "primary", "expr": resolved_key},
+    ]
+    if source_key and source_key != resolved_key:
+        entities.append({"name": source_key, "type": "unique", "expr": source_key})
+
+    sm: dict[str, Any] = {
+        "name": model,
+        "model": model_ref or f"ref('{model}')",
+        "entities": entities,
+    }
+
+    grain_list = [grain] if isinstance(grain, str) else list(grain or [])
+    if grain_list:
+        sm["defaults"] = {"agg_time_dimension": grain_list[0]}
+
+    if measures:
+        sm["measures"] = [
+            {"name": m, "agg": measure_agg, "expr": m} for m in measures
+        ]
+    return sm
+
+
+def emit_metricflow_yaml(models: dict[str, Any] | list[dict[str, Any]]) -> str:
+    """Render one or more `emit_semantic_model` dicts as a `semantic_models` YAML
+    document (block style, key order preserved). Round-trips through
+    `parse_semantic_models`."""
+    if isinstance(models, dict):
+        models = [models]
+    payload = {"semantic_models": list(models)}
+    return yaml.safe_dump(payload, sort_keys=False, default_flow_style=False)
+
+
+def emit_from_crosswalk(
+    crosswalk: Any,
+    model: str,
+    *,
+    entity_name: str | None = None,
+    measures: list[str] | tuple[str, ...] = (),
+    grain: list[str] | str | None = None,
+    model_ref: str | None = None,
+) -> str:
+    """Emit the `semantic_models` YAML for a `ResolvedCrosswalk`: its
+    `resolved_key` becomes the primary entity, its `source_pk_column` the `unique`
+    source key. Convenience over `emit_semantic_model` + `emit_metricflow_yaml`."""
+    sm = emit_semantic_model(
+        model,
+        resolved_key=getattr(crosswalk, "resolved_key", "resolved_entity_id"),
+        entity_name=entity_name,
+        source_key=getattr(crosswalk, "source_pk_column", None),
+        measures=measures,
+        grain=grain,
+        model_ref=model_ref,
+    )
+    return emit_metricflow_yaml(sm)

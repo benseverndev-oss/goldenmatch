@@ -1,15 +1,34 @@
 # Semantic Layering (MetricFlow / Cube / OSI) — brainstorm / planning
 
-> **Status:** v1 (wedge A) SHIPPED — see decision
-> [../decisions/0049-metric-aware-key-certification.md](../decisions/0049-metric-aware-key-certification.md).
+> **Status:** wedges **A + B + C** SHIPPED + **follow-ons** (Cube dialect, OSI
+> conformance validation) — decisions
+> [0049](../decisions/0049-metric-aware-key-certification.md) (certify) +
+> [0050](../decisions/0050-resolved-crosswalk-emit.md) (resolve once + emit) +
+> [0051](../decisions/0051-osi-ossie-native-provider.md) (OSI/Ossie provider) +
+> [0052](../decisions/0052-cube-dialect-and-osi-validation.md) (Cube dialect +
+> OSI validation).
 > Captures the framing for how GoldenMatch relates to the semantic-layer /
 > metrics-layer ecosystem (dbt Semantic Layer + MetricFlow, Cube, and the Open
 > Semantic Interchange spec), and a crawl→walk→run plan. Problem **A**
-> (metric-aware key certification) is built: `goldenmatch.semantic.certify_key_integrity`
+> (metric-aware key certification): `goldenmatch.semantic.certify_key_integrity`
 > + a MetricFlow YAML reader + a `key.integrity` goldenanalysis analyzer + a
-> `goldenmatch_key_integrity` dbt test. **B** (emit the crosswalk) and **C** (OSI
-> provider) remain planned. Greenfield when written: no prior repo code, doc, or
-> decision referenced this ecosystem (grep, 2026-07-30).
+> `goldenmatch_key_integrity` dbt test. Problem **B** (emit the resolved crosswalk):
+> `build_resolved_crosswalk` (durable control-plane entity ids) +
+> `emit_semantic_model` / `emit_metricflow_yaml` (declare the conformed key as the
+> primary entity; round-trips through the A reader). Problem **C** (OSI/Apache Ossie
+> native provider): `parse_osi_models` + `osi_join_keys` (consume — learn what to
+> resolve), `certify_osi_relationships` (bridge to A — certify the keys metrics
+> join on), `emit_osi_from_crosswalk` (bridge to B — emit the conformed join), all
+> schema-faithful to Ossie `0.2.0.dev0`. **Follow-ons** (0052): a **Cube (cube.dev)
+> dialect** — `parse_cube_models` + `cube_join_keys` (consume), `certify_cube_joins`
+> (bridge to A), `emit_cube_from_crosswalk` (bridge to B), completing the
+> MetricFlow ✓ / OSI ✓ / Cube ✓ reader+emitter symmetry — and **OSI conformance
+> validation** (`validate_osi`): a dependency-free structural validator over the
+> Ossie `0.2.0.dev0` required-field + enum constraints that also flags the
+> non-Ossie keys (`cardinality`/`foreign_key`/`aggregation`) hand-written docs
+> tend to invent. The arc is complete — the whole crawl→walk→run is landed.
+> Greenfield when written: no prior repo code, doc, or decision referenced this
+> ecosystem (grep, 2026-07-30).
 
 ## The premise
 

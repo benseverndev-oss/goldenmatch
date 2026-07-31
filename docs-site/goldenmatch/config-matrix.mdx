@@ -439,6 +439,7 @@ _v1.11: a field whose disagreement subtracts from a weighted matchkey's_
 | `fields` | list[str] | **required** | Columns whose combined values form the blocking key; records sharing a key become candidate pairs. |
 | `transforms` | list[str] | `[]` | Normalization steps applied to every field before deriving the block key. |
 | `field_transforms` | dict[str, list[str]] | `{}` | Per-field transform chains overriding the key-level transforms for the named fields only. |
+| `additive` | bool | `False` | If true, this pass co-locates pairs but its fields remain EM-trained comparison fields (Fellegi-Sunter path) instead of being demoted to fixed neutral weights. |
 
 ### `SortKeyField`
 
@@ -611,6 +612,10 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `autoconfig` | `--show-controller` | boolean | `True` | Render the controller telemetry panel on stderr. |
 | `autoconfig` | `--verbose` | boolean | `False` | Include indicator priors + decision trace in the panel. |
 | `autoconfig` | `--quiet` | boolean | `False` | Suppress all stderr output (panel + status messages). |
+| `certify-keys` | `model` | text | **required** | Semantic-model file (dbt/MetricFlow, Cube, or OSI YAML) |
+| `certify-keys` | `--data` | text | **required** | Frame for a model/dataset/cube as name=path (repeatable), e.g. -d orders=orders.csv |
+| `certify-keys` | `--resolve` | boolean | `False` | Also measure entity fragmentation / undercount via ER (MetricFlow dialect only). |
+| `certify-keys` | `--fail-untrustworthy` | boolean | `False` | Exit non-zero if any declared key is not unique at grain (CI gate). |
 | `compare-clusters` | `file_a` | text | **required** | First cluster JSON file (baseline / ER1) |
 | `compare-clusters` | `file_b` | text | **required** | Second cluster JSON file (comparison / ER2) |
 | `compare-clusters` | `--details` | boolean | `False` | Show per-cluster transformation details |
@@ -908,7 +913,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 
 ## MCP tools
 
-90 MCP tool(s) exposed by `goldenmatch.mcp.server` -- the programmatic / agent surface. Config-bearing tools take the same knobs as above.
+91 MCP tool(s) exposed by `goldenmatch.mcp.server` -- the programmatic / agent surface. Config-bearing tools take the same knobs as above.
 
 | Tool | Description |
 |---|---|
@@ -925,6 +930,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `auto_configure` | Run AutoConfigController on a CSV; return the committed GoldenMatchConfig (incl. negative_evidence / Path Y when chosen) plus telemetry — stop_reason, health, decision trace, indicator column priors. Programmatic equivalent of `goldenmatch autoconfig`. |
 | `build_clusters` | Group records into clusters given a file and matchkey definition. |
 | `certify_recall` | Estimate match RECALL without ground truth (unsupervised). Treats each auto-configured matchkey/pass as a decorrelated system and uses capture-recapture over their overlaps to estimate how many true matches were missed. Returns a point estimate (a safe lower bound additionally needs a small labelled audit; see `goldenmatch evaluate --certify --audit-out`). Needs >=3 decorrelated systems. |
+| `certify_semantic_model` | Semantic-layer front door: certify every declared entity key in a dbt/MetricFlow, Cube, or OSI/Ossie semantic model against its data. The dialect is auto-detected. Returns, per declared key, whether it is unique at grain and its measure fan-out -- the keys a metric silently joins on. Advisory; it never mutates a metric. |
 | `compare_clusters` | Compare two ER clustering outcomes on the same dataset without ground truth (CCMS): classifies each cluster as unchanged / merged / partitioned / overlapping and returns the Talburt-Wang Index. Both inputs are JSON cluster files (as written by export-style output). |
 | `config_weaknesses` | Diagnose weaknesses in the loaded run's auto-config: columns admitted that shouldn't be (source/provenance labels, per-row IDs), oversized or shared-value blocks, null sinks, low-signal matchkeys, and over-merging. Returns ranked findings, each with a plain-English explanation + a concrete fix, plus a one-paragraph summary. |
 | `controller_telemetry` | Return the AutoConfigController telemetry from the most recent `auto_configure` or `agent_deduplicate` call in this MCP session. Same JSON shape as the web /api/v1/controller/telemetry endpoint. |
@@ -1185,7 +1191,7 @@ _`_PLANNING_EFFORTS` -- `planning_effort`._
 - **FD** (1): `GOLDENMATCH_FD_NEGATIVE_EVIDENCE`
 - **FIELD** (1): `GOLDENMATCH_FIELD_GROUP_SURVIVORSHIP`
 - **FRAME** (2): `GOLDENMATCH_FRAME`, `GOLDENMATCH_FRAME_LANE`
-- **FS** (34): `GOLDENMATCH_FS_ARROW_STREAM`, `GOLDENMATCH_FS_AUTOCONFIG_V2`, `GOLDENMATCH_FS_BATCH_ROWS`, `GOLDENMATCH_FS_BLOCK_SOURCE`, `GOLDENMATCH_FS_BUCKET_BATCH`, `GOLDENMATCH_FS_BUCKET_NATIVE`, `GOLDENMATCH_FS_CALIBRATED`, `GOLDENMATCH_FS_CALIBRATE_THRESHOLD`, `GOLDENMATCH_FS_COLUMNAR_CLUSTER`, `GOLDENMATCH_FS_DEFAULT_BUCKET`, `GOLDENMATCH_FS_DOMAIN_COMPARATORS`, `GOLDENMATCH_FS_EM_AGG_BLOCKS`, `GOLDENMATCH_FS_EM_BLOCK_SLIM`, `GOLDENMATCH_FS_EM_SAMPLE_ROWS`, `GOLDENMATCH_FS_EVIDENCE_CUT`, `GOLDENMATCH_FS_FACTORIZE`, `GOLDENMATCH_FS_FACTORIZE_MIN_REPEAT`, `GOLDENMATCH_FS_MAX_PASS_PAIRS`, `GOLDENMATCH_FS_MISSING`, `GOLDENMATCH_FS_MONOTONIC`, `GOLDENMATCH_FS_NATIVE`, `GOLDENMATCH_FS_OOC_ARROW_CLUSTER`, `GOLDENMATCH_FS_OOC_DEBUG`, `GOLDENMATCH_FS_OOC_WAVE_ROWS`, `GOLDENMATCH_FS_OUT_OF_CORE`, `GOLDENMATCH_FS_POST_BLOCKING_U`, `GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE`, `GOLDENMATCH_FS_ROUTE_MIN_ROWS`, `GOLDENMATCH_FS_SCORED_PAIRS_MAX`, `GOLDENMATCH_FS_STRIP_HONORIFICS`, `GOLDENMATCH_FS_TF_ADJUSTMENT`, `GOLDENMATCH_FS_VECTORIZED`, `GOLDENMATCH_FS_VEC_MAX_ELEMS`, `GOLDENMATCH_FS_WORKERS`
+- **FS** (35): `GOLDENMATCH_FS_ARROW_STREAM`, `GOLDENMATCH_FS_AUTOCONFIG_V2`, `GOLDENMATCH_FS_BATCH_ROWS`, `GOLDENMATCH_FS_BLOCK_SOURCE`, `GOLDENMATCH_FS_BUCKET_BATCH`, `GOLDENMATCH_FS_BUCKET_NATIVE`, `GOLDENMATCH_FS_CALIBRATED`, `GOLDENMATCH_FS_CALIBRATE_THRESHOLD`, `GOLDENMATCH_FS_COLUMNAR_CLUSTER`, `GOLDENMATCH_FS_DEFAULT_BUCKET`, `GOLDENMATCH_FS_DOMAIN_COMPARATORS`, `GOLDENMATCH_FS_EM_AGG_BLOCKS`, `GOLDENMATCH_FS_EM_BLOCK_SLIM`, `GOLDENMATCH_FS_EM_SAMPLE_ROWS`, `GOLDENMATCH_FS_EVIDENCE_CUT`, `GOLDENMATCH_FS_FACTORIZE`, `GOLDENMATCH_FS_FACTORIZE_MIN_REPEAT`, `GOLDENMATCH_FS_MAX_PASS_PAIRS`, `GOLDENMATCH_FS_MISSING`, `GOLDENMATCH_FS_MONOTONIC`, `GOLDENMATCH_FS_NATIVE`, `GOLDENMATCH_FS_OOC_ARROW_CLUSTER`, `GOLDENMATCH_FS_OOC_DEBUG`, `GOLDENMATCH_FS_OOC_WAVE_ROWS`, `GOLDENMATCH_FS_ORTHOGONAL_BLOCKING`, `GOLDENMATCH_FS_OUT_OF_CORE`, `GOLDENMATCH_FS_POST_BLOCKING_U`, `GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE`, `GOLDENMATCH_FS_ROUTE_MIN_ROWS`, `GOLDENMATCH_FS_SCORED_PAIRS_MAX`, `GOLDENMATCH_FS_STRIP_HONORIFICS`, `GOLDENMATCH_FS_TF_ADJUSTMENT`, `GOLDENMATCH_FS_VECTORIZED`, `GOLDENMATCH_FS_VEC_MAX_ELEMS`, `GOLDENMATCH_FS_WORKERS`
 - **FUSED** (5): `GOLDENMATCH_FUSED_BLOCK_CONCURRENCY`, `GOLDENMATCH_FUSED_BYTES_PER_CELL`, `GOLDENMATCH_FUSED_BYTES_PER_PAIR`, `GOLDENMATCH_FUSED_PRESSURE_FRACTION`, `GOLDENMATCH_FUSED_RSS_SCALE`
 - **GOLDEN** (4): `GOLDENMATCH_GOLDEN_FUSED`, `GOLDENMATCH_GOLDEN_SLIM_MULTIDF`, `GOLDENMATCH_GOLDEN_STRATEGY_STRICT`, `GOLDENMATCH_GOLDEN_TUNER_MIN_CORRECTIONS`
 - **GPU** (3): `GOLDENMATCH_GPU_API_KEY`, `GOLDENMATCH_GPU_ENDPOINT`, `GOLDENMATCH_GPU_MODE`

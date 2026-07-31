@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 430,
+      "module_count": 435,
       "modules": [
         {
           "module": "goldenmatch",
@@ -481,6 +481,18 @@
           ]
         },
         {
+          "module": "goldenmatch.cli.certify_keys",
+          "file": "packages/python/goldenmatch/goldenmatch/cli/certify_keys.py",
+          "purpose": "CLI `certify-keys` command -- the semantic-layer front door.",
+          "defines": [
+            "certify_keys_cmd"
+          ],
+          "imports": [
+            "goldenmatch.core.io_arrow",
+            "goldenmatch.semantic"
+          ]
+        },
+        {
           "module": "goldenmatch.cli.compare",
           "file": "packages/python/goldenmatch/goldenmatch/cli/compare.py",
           "purpose": "CLI compare-clusters command for GoldenMatch.",
@@ -728,6 +740,7 @@
             "goldenmatch.cli.agent_serve",
             "goldenmatch.cli.anomalies",
             "goldenmatch.cli.autoconfig",
+            "goldenmatch.cli.certify_keys",
             "goldenmatch.cli.compare",
             "goldenmatch.cli.dedupe",
             "goldenmatch.cli.demo",
@@ -1531,11 +1544,15 @@
             "LocalModelSpec",
             "_local_llm_mode",
             "_model_cache_dir",
+            "_project",
             "_verify_sha256",
             "load_local_adapter",
             "parse_verdict",
             "resolve_model_path",
             "serialize_pair_v1"
+          ],
+          "imports": [
+            "goldenmatch.core.er_matcher.prompt"
           ]
         },
         {
@@ -1759,6 +1776,7 @@
             "ColumnProfile",
             "SemanticBlockingDecision",
             "_adaptive_threshold",
+            "_anchor_coblock_overlap",
             "_arrow_to_polars_dtype_spelling",
             "_auto_build_lsh_config",
             "_auto_semantic_blocking_enabled",
@@ -1770,13 +1788,16 @@
             "_check_source_overlap",
             "_classify_by_data",
             "_classify_by_name",
+            "_coblock_membership",
             "_compute_max_safe_block",
             "_concrete_dtype_spelling",
             "_cost_aware_blocking_enabled",
+            "_dataset_is_person_shaped",
             "_degenerate_blocking_config",
             "_detect_source_partition",
             "_detect_standardization_config",
             "_diversify_probabilistic_blocking",
+            "_diversify_unused_orthogonal_blocking",
             "_embedder_available",
             "_emit_data_profile",
             "_env_force_exclude",
@@ -1786,6 +1807,7 @@
             "_field_group_detection_enabled",
             "_fs_autoconfig_v2_enabled",
             "_fs_domain_comparators_enabled",
+            "_fs_orthogonal_blocking_mode",
             "_fs_route_min_rows",
             "_fs_strip_honorifics_enabled",
             "_fs_tf_adjustment_enabled",
@@ -1815,6 +1837,7 @@
             "_noise_aware_scorers_enabled",
             "_noise_aware_target_scorer",
             "_norm_colname",
+            "_pass_row_keys",
             "_pass_specs",
             "_pick_date_blocking_col",
             "_pick_missing_semantics",
@@ -6103,12 +6126,21 @@
           "file": "packages/python/goldenmatch/goldenmatch/identity/profile.py",
           "purpose": "Entity profiles + stewardship ops views -- MDM ops (#1114, epic #1108).",
           "defines": [
+            "Customer360",
             "EntityProfile",
+            "FieldContribution",
+            "FieldProvenance",
             "IdentitySummary",
             "WorklistItem",
+            "_event_as_dict",
+            "_field_provenance",
             "_iter_entities",
+            "_norm",
+            "_record_as_dict",
             "_summary_from_counts",
             "_summary_stats_scan",
+            "customer_360",
+            "customer_360_page",
             "entity_profile",
             "identity_summary_stats",
             "steward_worklist",
@@ -6466,6 +6498,7 @@
             "_safe_path_or_error",
             "_tool_analyze_blocking",
             "_tool_build_clusters",
+            "_tool_certify_semantic_model",
             "_tool_compare_clusters",
             "_tool_config_weaknesses",
             "_tool_convert_splink_config",
@@ -6526,6 +6559,7 @@
             "goldenmatch.core.evaluate",
             "goldenmatch.core.explainer",
             "goldenmatch.core.ingest",
+            "goldenmatch.core.io_arrow",
             "goldenmatch.core.lineage",
             "goldenmatch.core.match_one",
             "goldenmatch.core.matchkey",
@@ -6544,6 +6578,7 @@
             "goldenmatch.mcp.routing_tools",
             "goldenmatch.pprl.autoconfig",
             "goldenmatch.pprl.protocol",
+            "goldenmatch.semantic",
             "goldenmatch.tui.engine"
           ]
         },
@@ -7048,6 +7083,73 @@
           "purpose": "Semantic-layer interoperability (the MetricFlow / Cube / OSI wedge).",
           "imports": [
             "goldenmatch.core.key_integrity_certificate",
+            "goldenmatch.semantic.certify",
+            "goldenmatch.semantic.crosswalk",
+            "goldenmatch.semantic.cube",
+            "goldenmatch.semantic.key_integrity",
+            "goldenmatch.semantic.metricflow",
+            "goldenmatch.semantic.osi"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.certify",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/certify.py",
+          "purpose": "Zero-config front door: certify every declared key in a semantic model.",
+          "defines": [
+            "KeyCertification",
+            "SemanticCertification",
+            "certify_semantic_model",
+            "detect_dialect"
+          ],
+          "imports": [
+            "goldenmatch.core.key_integrity_certificate",
+            "goldenmatch.semantic.cube",
+            "goldenmatch.semantic.key_integrity",
+            "goldenmatch.semantic.metricflow",
+            "goldenmatch.semantic.osi"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.crosswalk",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/crosswalk.py",
+          "purpose": "Resolve once, emit a durable entity crosswalk for the semantic layer (wedge B).",
+          "defines": [
+            "ResolvedCrosswalk",
+            "build_resolved_crosswalk"
+          ],
+          "imports": [
+            "goldenmatch._api",
+            "goldenmatch.config.schemas",
+            "goldenmatch.core.autoconfig",
+            "goldenmatch.identity.store",
+            "goldenmatch.semantic.key_integrity"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.cube",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/cube.py",
+          "purpose": "Cube (cube.dev) semantic-layer reader + emitter — the third dialect.",
+          "defines": [
+            "Cube",
+            "CubeDimension",
+            "CubeJoin",
+            "CubeMeasure",
+            "_member_refs",
+            "_normalize_relationship",
+            "_parse_dimension",
+            "_parse_join",
+            "_parse_measure",
+            "certify_cube_joins",
+            "cube_join_keys",
+            "emit_cube",
+            "emit_cube_dimension",
+            "emit_cube_from_crosswalk",
+            "emit_cube_join",
+            "emit_cube_measure",
+            "emit_cube_yaml",
+            "parse_cube_models"
+          ],
+          "imports": [
             "goldenmatch.semantic.key_integrity",
             "goldenmatch.semantic.metricflow"
           ]
@@ -7072,13 +7174,47 @@
         {
           "module": "goldenmatch.semantic.metricflow",
           "file": "packages/python/goldenmatch/goldenmatch/semantic/metricflow.py",
-          "purpose": "Read declared entity keys + measures from a dbt / MetricFlow semantic model.",
+          "purpose": "Read / emit dbt / MetricFlow semantic-model entity declarations.",
           "defines": [
             "DeclaredKeySpec",
             "_entity_column",
             "_load",
             "_measure_column",
+            "emit_from_crosswalk",
+            "emit_metricflow_yaml",
+            "emit_semantic_model",
             "parse_semantic_models"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.osi",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/osi.py",
+          "purpose": "Open Semantic Interchange / Apache Ossie reader + emitter (wedge C).",
+          "defines": [
+            "OsiDataset",
+            "OsiField",
+            "OsiMetric",
+            "OsiModel",
+            "OsiRelationship",
+            "_dialect_expression",
+            "_expression_issues",
+            "_parse_dataset",
+            "_parse_relationship",
+            "_read_expression",
+            "certify_osi_relationships",
+            "emit_osi_dataset",
+            "emit_osi_field",
+            "emit_osi_from_crosswalk",
+            "emit_osi_model",
+            "emit_osi_relationship",
+            "emit_osi_yaml",
+            "osi_join_keys",
+            "parse_osi_models",
+            "validate_osi"
+          ],
+          "imports": [
+            "goldenmatch.semantic.key_integrity",
+            "goldenmatch.semantic.metricflow"
           ]
         },
         {

@@ -880,6 +880,80 @@ def _strip_honorifics_for(profile: ColumnProfile) -> bool:
     )
 
 
+# Coverage / cardinality bands for the "unused orthogonal field" blocking rule
+# (`_diversify_unused_orthogonal_blocking`). A field earns an additive single-field
+# blocking pass only when it is WELL-POPULATED (null rate under the ceiling) AND
+# sits in a MODERATE cardinality band -- neither near-constant (a gender-like field
+# at ~0.002 makes two giant blocks) nor near-unique (a surrogate key makes
+# singletons with no co-blocking value). Field-agnostic BY DESIGN: the win on
+# historical_50k is `birth_place` (an orthogonal anchor for the ~22% of true pairs
+# whose corrupted names never co-block), but the rule NEVER names it -- selection is
+# by data shape so it generalizes to whatever orthogonal field a dataset carries.
+_ORTHO_BLOCK_NULL_CEILING = 0.4
+_ORTHO_BLOCK_CARD_FLOOR = 0.02
+_ORTHO_BLOCK_CARD_CEILING = 0.9
+# A candidate anchor is admitted only if it is ORTHOGONAL to the passes that
+# already block -- measured as the fraction of its same-key row pairs that are
+# ALREADY co-blocked by some existing pass. A HIGH overlap means the field
+# re-blocks a signal the passes already cover (the classic case: an ATOMIC name
+# field -- first_name/surname -- when the name COMPOSITES already block; those
+# atomic fields pass the shape filter but their same-value pairs are ~0.8-0.94
+# already-co-blocked). Adding them widens the same-name candidate set the FS
+# scorer can't reject, over-merging on error-heavy data (historical_50k precision
+# 0.91->0.75). A genuinely orthogonal anchor (birth_place: overlap ~0.29) brings
+# NEW co-blocking and is the intended win. 0.5 cleanly separates the two regimes.
+_ORTHO_BLOCK_OVERLAP_CEILING = 0.5
+# Bounded head sample + pair cap for the overlap measurement (config-time, once).
+_ORTHO_OVERLAP_SAMPLE = 4000
+_ORTHO_OVERLAP_PAIR_CAP = 400_000
+
+
+# Col_types that mark a NAME field for the person-shape gate. A person identity
+# table pairs name fields with a strong temporal anchor (date of birth); that
+# anchor is exactly what keeps the enlarged orthogonal blocks SAFE -- within a
+# birth_place/dob block, name+dob still discriminate, so the topic-bucket
+# over-merge that sinks bibliographic/product data (dblp_scholar/amazon_google:
+# no `name`, no `date` -- title=description, authors=string, year=year) can't
+# happen. Composite first+last fields classify `multi_name`.
+_PERSON_NAME_COLTYPES = frozenset({"name", "multi_name"})
+
+
+def _dataset_is_person_shaped(profiles: list[ColumnProfile]) -> bool:
+    """True when the profile set looks like a PERSON identity table -- a name field
+    AND a date field both present.
+
+    This is the AUTO-enable condition for orthogonal-anchor blocking. Person data is
+    where the lever generalises (historical_50k / febrl / synthetic_person all carry
+    name+date and win out-of-panel); bibliographic/product data carries neither a
+    ``name`` nor a ``date`` col_type and is where the lever regresses, so the ``name
+    AND date`` signature cleanly separates the two validated regimes. Conservative by
+    design -- a false negative merely forgoes the gain, a false positive risks the
+    dblp_scholar-style precision collapse, so the gate errs toward NOT firing.
+    """
+    types = {p.col_type for p in profiles}
+    return bool(types & _PERSON_NAME_COLTYPES) and "date" in types
+
+
+def _fs_orthogonal_blocking_mode() -> str:
+    """Resolve ``GOLDENMATCH_FS_ORTHOGONAL_BLOCKING`` to ``auto`` | ``on`` | ``off``.
+
+    - ``auto`` (**default**): fire ONLY on person-shaped data
+      (``_dataset_is_person_shaped``) -- the dataset-type gate.
+    - ``on`` (``1``/``true``/``yes``/``enabled``): force everywhere (the pre-gate
+      behavior; useful to force it onto a person dataset a classifier misjudged).
+    - ``off`` (``0``/``false``/``no``/``disabled``): never fire (byte-identical to
+      the pre-lever field set).
+
+    Mirrors the ``GOLDENMATCH_NATIVE=auto/0/1`` tri-state idiom.
+    """
+    v = os.environ.get("GOLDENMATCH_FS_ORTHOGONAL_BLOCKING", "auto").lower()
+    if v in ("1", "true", "on", "yes", "enabled"):
+        return "on"
+    if v in ("0", "false", "off", "no", "disabled"):
+        return "off"
+    return "auto"
+
+
 # Fraction of a column's non-null sample values that must parse as valid
 # coordinates for it to be admitted as a single-field geo_haversine column.
 _LATLONG_SAMPLE_FLOOR = 0.8
@@ -5322,6 +5396,12 @@ def auto_configure_probabilistic_df(
     # identifier) so the FS candidate set isn't gated entirely on (corrupted)
     # name keys. Purely additive — recall ceiling can only rise.
     blocking = _diversify_probabilistic_blocking(blocking, profiles, df)
+    # Field-agnostic orthogonal-anchor blocking (default OFF, out-of-panel
+    # validated): add a pass on any well-populated, moderate-cardinality field the
+    # name/date/zip passes don't already cover -- the generalization that catches a
+    # misclassified orthogonal anchor (e.g. historical_50k `birth_place`, which
+    # profiles as `name` and escapes the v2 date/zip whitelist above).
+    blocking = _diversify_unused_orthogonal_blocking(blocking, profiles, df)
     # Pair-budget gate: bound EVERY pass (build_blocking's soundex passes + the
     # diversified ones) by candidate pairs Σ C(block,2), not just block rows —
     # the row ceiling let ~12.9B-pair configs (dob-YEAR + name-soundex mega-
@@ -5460,6 +5540,155 @@ def _diversify_probabilistic_blocking(
     })
 
 
+def _diversify_unused_orthogonal_blocking(
+    blocking: BlockingConfig | None,
+    profiles: list[ColumnProfile],
+    df: Any = None,
+) -> BlockingConfig | None:
+    """Add an additive blocking pass on each unused, well-populated,
+    moderate-cardinality field -- a field-agnostic generalization of the
+    orthogonal-anchor idea in ``_diversify_probabilistic_blocking``.
+
+    ``_diversify_probabilistic_blocking`` only diversifies onto ``date`` and
+    ``zip``/``identifier``/``phone`` col_types. But the strongest orthogonal anchor
+    a dataset carries may be classified as something else -- on historical_50k the
+    ``birth_place`` column (50.7% of the missed true pairs share it exactly) profiles
+    as ``name`` (null 0.13, card 0.48) and slips past that whitelist, so the FS
+    candidate set stays gated entirely on the (corrupted) name keys and
+    blocking_recall caps at ~0.78. This rule instead selects by DATA SHAPE, not
+    col_type: any field with ``null_rate <= _ORTHO_BLOCK_NULL_CEILING`` and
+    cardinality in ``[_ORTHO_BLOCK_CARD_FLOOR, _ORTHO_BLOCK_CARD_CEILING)`` that no
+    existing pass already keys on earns a single-field ``strip`` pass. Field-level
+    (not signature-level) dedup so a field the name passes / v2 diversify already
+    cover (dob-year, postcode-strip, the name composites) is never re-added.
+
+    Purely additive (recall can only rise; scoring still decides precision). A cheap
+    arrow-agnostic per-pass row guard drops a pass whose SAMPLE max block already
+    exceeds the FS scorer row cap; the real full-N bound is
+    ``_bound_probabilistic_blocking_pairs``, which runs after this over the whole
+    pass list.
+
+    **Gated ``GOLDENMATCH_FS_ORTHOGONAL_BLOCKING=auto`` (default).** ``auto`` fires
+    ONLY on person-shaped data (``_dataset_is_person_shaped``: a ``name`` + a
+    ``date`` col_type) -- the regime where the lever generalises out-of-panel
+    (historical_50k B3 0.808->0.873, febrl4 holdout +0.006) -- and is a NO-OP
+    (byte-identical) on bibliographic/product data, where a topic-bucket anchor
+    (venue/year) drives a scoring over-merge (dblp_scholar -0.24). ``=1`` forces it
+    everywhere, ``=0`` disables it. See ``_fs_orthogonal_blocking_mode``.
+    """
+    if blocking is None:
+        return blocking
+    _mode = _fs_orthogonal_blocking_mode()
+    if _mode == "off":
+        return blocking
+    if _mode == "auto" and not _dataset_is_person_shaped(profiles):
+        return blocking
+
+    # Fields ALREADY keyed by some pass (any transform) -- don't re-add a field the
+    # name passes / v2 diversify already cover. Field-level so we never duplicate.
+    covered: set[str] = set()
+    for k in list(blocking.keys or []) + list(blocking.passes or []):
+        covered.update(k.fields)
+
+    # Cheap arrow-agnostic per-pass sanity guard (sample scale). The real full-N
+    # bound is `_bound_probabilistic_blocking_pairs`, which runs after.
+    bframe = None
+    sample_n = 1
+    row_cap = 7071
+    _col_cache: dict[str, list] = {}
+    _tx_cache: dict[tuple, list] = {}
+    # Per-sample-row memberships across the EXISTING passes, for the co-blocking
+    # ORTHOGONALITY gate below (an anchor already covered by the current passes
+    # over-merges rather than diversifies -- see _ORTHO_BLOCK_OVERLAP_CEILING).
+    overlap_memb: list[set] | None = None
+    overlap_cap = 0
+    if df is not None:
+        try:
+            from goldenmatch.core.frame import to_frame as _tf
+            from goldenmatch.core.probabilistic import _fs_vec_max_elems
+
+            bframe = _tf(df)
+            sample_n = max(int(bframe.height), 1)
+            cap = _fs_vec_max_elems()
+            if cap > 0:
+                row_cap = int(cap**0.5)
+            overlap_cap = min(sample_n, _ORTHO_OVERLAP_SAMPLE)
+            base_specs = [
+                _pass_specs(k)
+                for k in (list(blocking.passes or []) or list(blocking.keys or []))
+            ]
+            if base_specs:
+                overlap_memb = _coblock_membership(
+                    bframe, base_specs, overlap_cap, _col_cache, _tx_cache
+                )
+        except Exception:
+            bframe = None
+
+    new_passes: list[BlockingKeyConfig] = []
+    for p in profiles:
+        if p.name in covered:
+            continue
+        if p.null_rate > _ORTHO_BLOCK_NULL_CEILING:
+            continue
+        if not (
+            _ORTHO_BLOCK_CARD_FLOOR <= p.cardinality_ratio < _ORTHO_BLOCK_CARD_CEILING
+        ):
+            continue
+        transforms = ["strip"]
+        cand_spec = [(p.name, tuple(transforms))]
+        if bframe is not None:
+            proj = _project_pass_pairs(
+                bframe, cand_spec, sample_n, sample_n, _col_cache, _tx_cache
+            )
+            if proj is not None and proj[0] > row_cap:
+                logger.debug(
+                    "orthogonal blocking: dropping oversized pass %s (sample max "
+                    "block %d rows > FS row cap %d)",
+                    p.name, proj[0], row_cap,
+                )
+                continue
+            # Orthogonality gate: skip a candidate whose same-key pairs are mostly
+            # ALREADY co-blocked by an existing pass (an atomic name field when the
+            # name composites already block). Such a "diversify" only re-blocks the
+            # primary signal, widening the same-signal candidate set the FS scorer
+            # can't reject -> over-merge (historical_50k precision 0.91->0.75). A
+            # genuinely orthogonal anchor (birth_place, overlap ~0.29) is admitted.
+            if overlap_memb is not None:
+                cand_keys = _pass_row_keys(
+                    bframe, cand_spec, overlap_cap, _col_cache, _tx_cache
+                )
+                if cand_keys is not None:
+                    ov = _anchor_coblock_overlap(cand_keys, overlap_memb)
+                    if ov >= _ORTHO_BLOCK_OVERLAP_CEILING:
+                        logger.debug(
+                            "orthogonal blocking: dropping redundant pass %s "
+                            "(co-block overlap %.3f >= %.2f -- already covered by an "
+                            "existing pass)",
+                            p.name, ov, _ORTHO_BLOCK_OVERLAP_CEILING,
+                        )
+                        continue
+        # additive=True: co-locate the missed pairs WITHOUT demoting the field from
+        # EM scoring. An orthogonal anchor (e.g. birth_place) is typically ALSO a
+        # useful FS discriminator; demoting it to a fixed neutral weight the moment
+        # it becomes a blocking key measurably costs F1 (birth_place kept-in-EM beat
+        # demoted on historical_50k), and demoting a strong name discriminator
+        # collapses recall outright. See BlockingKeyConfig.additive.
+        new_passes.append(
+            BlockingKeyConfig(fields=[p.name], transforms=transforms, additive=True)
+        )
+        covered.add(p.name)
+
+    if not new_passes:
+        return blocking
+
+    base_passes = list(blocking.passes or []) or list(blocking.keys or [])
+    return blocking.model_copy(update={
+        "strategy": "multi_pass",
+        "passes": base_passes + new_passes,
+        "auto_select": False,
+    })
+
+
 def _pass_specs(key: BlockingKeyConfig) -> list[tuple[str, tuple[str, ...]]]:
     """``[(field, transforms), ...]`` for a blocking key, honoring per-field
     ``field_transforms`` (a field present there uses ITS chain; absent fields use
@@ -5468,6 +5697,125 @@ def _pass_specs(key: BlockingKeyConfig) -> list[tuple[str, tuple[str, ...]]]:
     ft = getattr(key, "field_transforms", None) or {}
     shared = tuple(getattr(key, "transforms", None) or [])
     return [(f, tuple(ft[f]) if f in ft else shared) for f in key.fields]
+
+
+def _pass_row_keys(
+    bframe: Any,
+    specs: list[tuple[str, tuple[str, ...]]],
+    cap: int,
+    _col_cache: dict[str, list] | None = None,
+    _tx_cache: dict[tuple, list] | None = None,
+) -> list[str | None] | None:
+    """Per-row block key for a pass over the first ``cap`` rows (``None`` where any
+    component transforms to null/empty — the blocker drops those rows). Mirrors
+    ``_project_pass_pairs``' key derivation (shared ``_col_cache``/``_tx_cache``)
+    but returns the per-row keys instead of block-size counts. Polars/numpy-free.
+    Returns ``None`` if a column is unreadable."""
+    from goldenmatch.utils.transforms import apply_transforms as _apply
+
+    mapped_cols: list[list] = []
+    for fld, transforms in specs:
+        if _col_cache is not None and fld in _col_cache:
+            raw = _col_cache[fld]
+        else:
+            try:
+                raw = bframe.column(fld).to_list()
+            except Exception:  # pragma: no cover -- missing column, skip pass
+                return None
+            if _col_cache is not None:
+                _col_cache[fld] = raw
+        tkey = (fld, transforms)
+        if _tx_cache is not None and tkey in _tx_cache:
+            mapped = _tx_cache[tkey]
+        elif transforms:
+            tmap = {
+                v: (_apply(str(v), list(transforms)) if v is not None else None)
+                for v in set(raw)
+            }
+            mapped = [tmap[v] for v in raw]
+            if _tx_cache is not None:
+                _tx_cache[tkey] = mapped
+        else:
+            mapped = raw
+            if _tx_cache is not None:
+                _tx_cache[tkey] = mapped
+        mapped_cols.append(mapped)
+
+    keys: list[str | None] = []
+    if len(mapped_cols) == 1:
+        for v in mapped_cols[0][:cap]:
+            keys.append(None if (v is None or v == "") else str(v))
+    else:
+        for row in zip(*[m[:cap] for m in mapped_cols]):
+            keys.append(
+                "\x1f".join(str(v) for v in row)
+                if all(v is not None and v != "" for v in row)
+                else None
+            )
+    return keys
+
+
+def _coblock_membership(
+    bframe: Any,
+    base_specs: list[list[tuple[str, tuple[str, ...]]]],
+    cap: int,
+    _col_cache: dict[str, list] | None = None,
+    _tx_cache: dict[tuple, list] | None = None,
+) -> list[set] | None:
+    """Per-(sample-)row set of ``(pass_index, block_key)`` memberships across the
+    EXISTING passes — the reference an orthogonal-anchor candidate is judged
+    against. ``None`` when no pass is measurable."""
+    memb: list[set] = [set() for _ in range(cap)]
+    any_pass = False
+    for pidx, specs in enumerate(base_specs):
+        keys = _pass_row_keys(bframe, specs, cap, _col_cache, _tx_cache)
+        if keys is None:
+            continue
+        any_pass = True
+        for i, k in enumerate(keys):
+            if k is not None:
+                memb[i].add((pidx, k))
+    return memb if any_pass else None
+
+
+def _anchor_coblock_overlap(
+    cand_keys: list[str | None],
+    memb: list[set],
+    pair_cap: int = _ORTHO_OVERLAP_PAIR_CAP,
+) -> float:
+    """Fraction of the candidate anchor's same-key row pairs that are ALREADY
+    co-blocked by some existing pass (``memb``). High => redundant same-signal
+    anchor (an atomic name field vs the name composites) whose extra candidates
+    the FS scorer can't reject; low => a genuinely orthogonal anchor. Evaluated
+    over the sample rows, bounded by ``pair_cap`` (deterministic, row order)."""
+    from collections import defaultdict
+
+    groups: dict[str, list[int]] = defaultdict(list)
+    for i, k in enumerate(cand_keys):
+        if k is not None:
+            groups[k].append(i)
+    total = 0
+    redundant = 0
+    for members in groups.values():
+        g = len(members)
+        if g < 2:
+            continue
+        stop = False
+        for a in range(g):
+            if total >= pair_cap:
+                stop = True
+                break
+            sa = memb[members[a]]
+            for b in range(a + 1, g):
+                if total >= pair_cap:
+                    stop = True
+                    break
+                total += 1
+                if sa and (sa & memb[members[b]]):
+                    redundant += 1
+        if stop:
+            break
+    return (redundant / total) if total else 0.0
 
 
 def _project_pass_pairs(
@@ -5753,7 +6101,11 @@ def _bound_probabilistic_blocking_pairs(
                 ft = {f: list(t) for f, t in cspecs}
                 return (
                     BlockingKeyConfig(
-                        fields=[f for f, _ in cspecs], field_transforms=ft
+                        fields=[f for f, _ in cspecs], field_transforms=ft,
+                        # Preserve the additive (orthogonal-anchor, EM-trained)
+                        # intent across a scale bound -- else a compounded anchor
+                        # would silently revert to a demoted primary key.
+                        additive=getattr(key, "additive", False),
                     ),
                     cproj,
                 )

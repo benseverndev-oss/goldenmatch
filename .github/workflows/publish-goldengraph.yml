@@ -1,0 +1,38 @@
+name: Publish goldengraph to PyPI
+
+# Thin caller -> .github/workflows/_publish-pypi.yml (the shared template).
+# goldengraph is a pure-Python package (hatchling); its compiled store ships
+# separately as goldengraph-native (see publish-goldengraph-native.yml) and its
+# runtime deps (goldenmatch, goldengraph-native) resolve from PyPI. It was the
+# one standalone suite package with no PyPI publisher wired -- this closes that
+# gap. goldengraph is EXCLUDED from the uv workspace, but `python -m build` runs
+# from its own pyproject standalone, so the reusable template works unchanged.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag or commit to build (default: HEAD of main)"
+        required: false
+        default: ""
+      dry_run:
+        description: "Build + validate without publishing"
+        required: false
+        default: "false"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  publish:
+    # Only run for goldengraph-v* tags (kept distinct from goldengraph-js-v* and
+    # goldengraph-native-v* so the publishers never cross-trigger).
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'goldengraph-v')
+    uses: ./.github/workflows/_publish-pypi.yml
+    with:
+      package: goldengraph
+      ref: ${{ inputs.ref || '' }}
+      dry_run: ${{ inputs.dry_run || 'false' }}
+    secrets: inherit

@@ -137,8 +137,11 @@ def test_auto_reason_lists_agreements_and_conflicts():
 
 def test_serialized_token_lengths_uses_injected_tokenizer():
     rows = [_row(True), _row(False)]
-    # stub tokenizer = whitespace split; lengths are positive + deterministic
-    lens = tr.serialized_token_lengths(rows, lambda t: t.split())
+    # stub tokenize_messages: chat-template stand-in = whitespace-split the joined
+    # message contents (mirrors apply_chat_template(msgs, tokenize=True)'s shape:
+    # messages in, token sequence out). Lengths are positive + deterministic.
+    stub = lambda msgs: " ".join(m["content"] for m in msgs).split()  # noqa: E731
+    lens = tr.serialized_token_lengths(rows, stub)
     assert len(lens) == 2 and all(n > 0 for n in lens)
 
 

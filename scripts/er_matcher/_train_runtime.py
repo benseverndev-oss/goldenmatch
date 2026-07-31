@@ -54,11 +54,18 @@ class _ThroughputCallback(TrainerCallback):
     def __init__(self, seq_len: int) -> None:
         self.seq_len = seq_len
         self.t0 = None
+        self.t1 = None
         self.steps = 0
         self.util_samples: list[float] = []
 
     def on_train_begin(self, args, state, control, **kw):  # noqa: ANN001
         self.t0 = time.perf_counter()
+
+    def on_train_end(self, args, state, control, **kw):  # noqa: ANN001
+        # Snapshot the end of the training loop so wall_s() excludes the trailing
+        # trainer.evaluate()/save that happen AFTER training (otherwise s_per_step
+        # is inflated and the gate over-estimates the full-run cost).
+        self.t1 = time.perf_counter()
 
     def on_step_end(self, args, state, control, **kw):  # noqa: ANN001
         self.steps += 1
@@ -77,10 +84,19 @@ class _ThroughputCallback(TrainerCallback):
                 return
 
     def wall_s(self) -> float:
-        return (time.perf_counter() - self.t0) if self.t0 else 0.0
+        if not self.t0:
+            return 0.0
+        end = self.t1 if self.t1 is not None else time.perf_counter()
+        return end - self.t0
 
-    def mean_util(self) -> float:
-        return sum(self.util_samples) / len(self.util_samples) if self.util_samples else 0.0
+    def mean_util(self) -> float | None:
+        # None (not 0.0) when NO samples were collected: that means telemetry was
+        # unavailable (pynvml absent), which perf_report reads as "unknown/advisory"
+        # rather than "0% util = data-bound". 0.0 is reserved for a genuinely
+        # measured all-idle run.
+        if not self.util_samples:
+            return None
+        return sum(self.util_samples) / len(self.util_samples)
 
 
 def _load_split(data_dir: Path, name: str) -> list[dict[str, Any]]:
@@ -123,12 +139,16 @@ def run_training(cfg: TrainConfig, args: Any) -> int:
     if not train_rows:
         raise SystemExit(f"no train.jsonl under {args.data_dir} (run gen_pairs.py first)")
 
-    if args.smoke:
-        train_rows = train_rows[: args.smoke_rows]
-        val_rows = val_rows[: max(1, args.smoke_rows // 10)]
+    # Measure seq_len + total_steps over the FULL corpus BEFORE any smoke slice.
+    # The gate extrapolates the FULL run's cost from the smoke, so total_steps must
+    # be the full-corpus step count -- measuring it over the smoke slice (4k rows)
+    # under-counts steps by the slice ratio and yields a falsely-cheap GO.
+    # Tokenize the CHAT-TEMPLATED messages (what SFTTrainer actually tokenizes),
+    # NOT a naive content join, so the P95 includes the per-turn special tokens.
+    def _tok_msgs(msgs: list[dict[str, str]]):
+        return tok.apply_chat_template(msgs, tokenize=True)
 
-    # measured max_seq_len over the REAL tokenizer (the top memory/speed lever)
-    lengths = serialized_token_lengths(train_rows, lambda t: tok(t)["input_ids"])
+    lengths = serialized_token_lengths(train_rows, _tok_msgs)
     seq_len = measured_max_seq_len(
         lengths, percentile=cfg.seq_len_percentile,
         cap=cfg.seq_len_cap, multiple_of=cfg.seq_len_multiple_of,
@@ -136,16 +156,22 @@ def run_training(cfg: TrainConfig, args: Any) -> int:
     print(f"[train] measured max_seq_len={seq_len} (P{cfg.seq_len_percentile} of "
           f"{len(lengths)} pairs, cap {cfg.seq_len_cap})")
 
-    # Measured (packing-aware) total-step estimate for cfg.epochs over THESE
-    # rows' token lengths -- NOT rows/batch (packing makes that wrong) and NOT
+    # Measured (packing-aware) total-step estimate for cfg.epochs over the FULL
+    # corpus' token lengths -- NOT rows/batch (packing makes that wrong) and NOT
     # len(trainer.get_train_dataloader()) (packing=True builds a lengthless
-    # IterableDataset -- that raises TypeError). In --smoke mode this reflects
-    # the smoke-sliced rows (a coarser calibration figure); the sweep's 100%
-    # slice (run_sweep) measures it over the full, unsliced corpus.
+    # IterableDataset -- that raises TypeError). Computed over the full corpus in
+    # both --smoke and full mode so the emitted total_steps drives a correct
+    # full-run cost extrapolation.
     total_steps = estimate_total_steps(
         lengths, seq_len=seq_len, per_device_batch=cfg.per_device_batch,
         grad_accum=cfg.grad_accum, epochs=cfg.epochs,
     )
+
+    # Now (after measuring the full corpus) slice to the smoke rows for a cheap
+    # calibration train -- the metrics above still describe the full run.
+    if args.smoke:
+        train_rows = train_rows[: args.smoke_rows]
+        val_rows = val_rows[: max(1, args.smoke_rows // 10)]
 
     def to_text(rows: list[dict[str, Any]]) -> Dataset:
         recs = [{"messages": example_to_messages(r, cfg)} for r in rows]
@@ -225,7 +251,10 @@ def _emit_smoke_metrics(cfg: TrainConfig, args: Any, cb: _ThroughputCallback,
                         seq_len: int, total_steps: int) -> None:
     wall = cb.wall_s()
     toks = cb.steps * cfg.per_device_batch * cfg.grad_accum * seq_len
-    peak_gb = (torch.cuda.max_memory_allocated() / 1e9) if torch.cuda.is_available() else None
+    # Report RESERVED (not just allocated) peak: the caching allocator's reserved
+    # pool is what actually presses against capacity, so the gate's memory check
+    # (which derates capacity by a headroom factor) reasons about the real ceiling.
+    peak_gb = (torch.cuda.max_memory_reserved() / 1e9) if torch.cuda.is_available() else None
     cap_gb = (torch.cuda.get_device_properties(0).total_memory / 1e9
               if torch.cuda.is_available() else None)
     metrics = {
@@ -288,7 +317,8 @@ def run_sweep(cfg: TrainConfig, args: Any) -> int:
         raise SystemExit("--sweep needs val.jsonl (per-slice eval_loss) -- "
                           "run gen_pairs.py's split first")
 
-    lengths = serialized_token_lengths(train_rows, lambda t: tok(t)["input_ids"])
+    lengths = serialized_token_lengths(
+        train_rows, lambda msgs: tok.apply_chat_template(msgs, tokenize=True))
     seq_len = measured_max_seq_len(
         lengths, percentile=cfg.seq_len_percentile,
         cap=cfg.seq_len_cap, multiple_of=cfg.seq_len_multiple_of,
@@ -385,7 +415,10 @@ def _emit_sweep_metrics(cfg: TrainConfig, args: Any, points: list[tuple[float, f
                         cb: _ThroughputCallback, seq_len: int, total_steps: int) -> None:
     wall = cb.wall_s()
     toks = cb.steps * cfg.per_device_batch * cfg.grad_accum * seq_len
-    peak_gb = (torch.cuda.max_memory_allocated() / 1e9) if torch.cuda.is_available() else None
+    # Report RESERVED (not just allocated) peak: the caching allocator's reserved
+    # pool is what actually presses against capacity, so the gate's memory check
+    # (which derates capacity by a headroom factor) reasons about the real ceiling.
+    peak_gb = (torch.cuda.max_memory_reserved() / 1e9) if torch.cuda.is_available() else None
     cap_gb = (torch.cuda.get_device_properties(0).total_memory / 1e9
               if torch.cuda.is_available() else None)
     metrics = {
