@@ -683,7 +683,12 @@ def test_end_to_end_sequential_dedupe(tmp_path):
 
 def test_sequential_and_duckdb_orchestrators_agree(tmp_path):
     """run_fs_dedupe_sequential and run_fs_dedupe_streaming write the SAME
-    unique/dupes/golden counts (same pairs -> same WCC -> same output)."""
+    unique/dupes/golden counts (same links -> same partition -> same output).
+
+    ``pairs`` is NOT compared: the sequential path clusters through the fused FS
+    Rust kernel, which returns cluster assignments directly and never surfaces an
+    edge count (``pairs`` is ``None``), while the DuckDB path threads an edge
+    stream. The output-row counts are the cross-orchestrator contract."""
     import types
 
     from goldenmatch.backends.fs_out_of_core import (
@@ -699,7 +704,7 @@ def test_sequential_and_duckdb_orchestrators_agree(tmp_path):
 
     seq = run_fs_dedupe_sequential(df, blocking, mk, em, cfg, str(tmp_path / "seq"))
     ooc = run_fs_dedupe_streaming(df, blocking, mk, em, cfg, str(tmp_path / "ooc"))
-    for k in ("unique_count", "dupes_count", "golden_count", "pairs"):
+    for k in ("unique_count", "dupes_count", "golden_count"):
         assert seq[k] == ooc[k], k
 
 

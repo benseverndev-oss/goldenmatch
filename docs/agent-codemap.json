@@ -316,6 +316,7 @@
             "_fs_ooc_wave_rows",
             "_fs_ooc_workers",
             "_fs_out_of_core_legacy_flag",
+            "_fused_fs_assignments",
             "_load_frame_batched",
             "_needed_columns",
             "_ooc_debug_on",
@@ -341,8 +342,10 @@
             "goldenmatch.core.blocker",
             "goldenmatch.core.cluster",
             "goldenmatch.core.frame",
+            "goldenmatch.core.fused_match",
             "goldenmatch.core.golden",
             "goldenmatch.core.pairs",
+            "goldenmatch.core.pipeline",
             "goldenmatch.core.probabilistic"
           ]
         },

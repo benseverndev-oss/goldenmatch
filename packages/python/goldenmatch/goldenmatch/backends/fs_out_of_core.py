@@ -1363,25 +1363,31 @@ def run_fs_dedupe_sequential(
     target_ids: set[int] | None = None,
     link_threshold: float | None = None,
 ) -> dict:
-    """End-to-end IN-RAM SEQUENTIAL FS dedupe: score the resident frame with the
-    sequential Arrow-native / Rust batch scorer (``score_fs_sequential_arrow`` —
-    no DuckDB block source, no on-disk sorted scans), stitch with ONE Rust WCC
-    (``build_clusters_arrow_native`` over the Arrow edge stream), then write
-    unique/dupes/golden to parquet. The fast single-box path for frames that FIT
-    in RAM; ``run_fs_dedupe_streaming`` is the DuckDB-spilled variant past RAM.
+    """End-to-end IN-RAM SEQUENTIAL FS dedupe over the resident Arrow frame.
 
-    Scoring never touches DuckDB. Output reuses the tested
-    ``stream_fs_dedupe_output`` via an IN-MEMORY DuckDB (the record frame is
-    resident anyway), so the result shape matches the streaming path exactly. The
-    scored pairs stay Arrow end-to-end (edge stream -> Rust WCC), so they never
-    accumulate as ``list[tuple]``. ``link_threshold`` semantics match
-    ``run_fs_dedupe_streaming`` (cluster only pairs whose best cross-pass score
-    clears the cut).
+    The score -> cluster back-half runs through the **fused Fellegi-Sunter Rust
+    kernel** (``run_match_fused_fs_arrow`` / ``…_multipass_arrow`` ->
+    ``match_fused_fs``): block-key grouping, per-block FS scoring, AND the
+    connected-components WCC all happen inside ONE Rust call that returns
+    ``(__row_id__, __cluster_id__)`` cluster assignments directly — no Python block
+    orchestration, no candidate-pair list, no separate edge-stream + WCC pass. This
+    is the same arrow-native/Rust engine the in-memory dedupe short-circuit
+    (``_run_fused_fs_short_circuit``) uses; the streaming path just feeds it the
+    resident frame and streams the assignments to parquet. When the config is
+    outside the fused kernel's covered surface (or the native kernel is absent), it
+    falls back to ``score_fs_sequential_arrow`` (Arrow/Rust batch scoring +
+    ``build_block_index_arrow`` grouping) + a Rust WCC over the Arrow edge stream.
 
-    **No DuckDB, no polars** (except the bounded golden-record builder, an
-    existing polars core primitive fed only the multi-member subset). Scoring, the
-    Rust WCC, and the O(N) unique/dupes parquet output all run off the resident
-    ``pa.Table`` — the O(N) path is pure pyarrow/Arrow/Rust end to end."""
+    Output reuses the tested ``_stream_fs_dedupe_output_arrow`` (O(N) unique/dupes
+    via pure pyarrow, golden only on the bounded multi-member subset), so the
+    result shape matches ``run_fs_dedupe_streaming`` exactly. ``link_threshold``
+    semantics match ``run_fs_dedupe_streaming`` (cluster only pairs whose best
+    cross-pass score clears the cut).
+
+    **No DuckDB, no polars** (except the bounded golden-record builder, an existing
+    polars core primitive fed only the multi-member subset). The fast single-box
+    path for frames that FIT in RAM; ``run_fs_dedupe_streaming`` is the
+    DuckDB-spilled variant past RAM."""
     from goldenmatch.core.frame import is_polars_lazyframe
     from goldenmatch.core.frame import to_frame as _tf
 
@@ -1390,31 +1396,104 @@ def run_fs_dedupe_sequential(
     if getattr(config, "golden_rules", None) is not None:
         max_cluster_size = config.golden_rules.max_cluster_size
 
-    # Materialize the resident record table (pa.Table) ONCE, then share it between
-    # the scorer and the streamed output -- passing the pa.Table into
-    # ``score_fs_sequential_arrow`` makes its internal ``to_arrow()`` a no-op, so
-    # the frame is converted a single time (not once per consumer).
+    # Materialize the resident record table (pa.Table) ONCE, then share it across
+    # scoring + clustering + streamed output (a single frame conversion).
     _fw = _tf(prepared_df)
     if is_polars_lazyframe(_fw.native):
         _fw = _tf(_fw.native.collect())
     base = _fw.to_arrow()
 
-    # Score IN-RAM (pure Arrow/Rust batches -> Arrow edge stream). The frame is
-    # resident here, not spilled to disk.
-    pairs = score_fs_sequential_arrow(
-        base, blocking_config, mk, matched_pairs, em_result,
-        target_ids=target_ids, emit="arrow",
-    )
+    # ARROW-NATIVE / RUST FUSED PATH: grouping + FS scoring + connected-components
+    # in one kernel call -> cluster assignments directly. dedupe-only (no
+    # target_ids / matched_pairs exclude), which is exactly how the streaming
+    # dedupe caller invokes this.
+    assignments = None
+    n_pairs = None
+    if not target_ids and not matched_pairs:
+        assignments = _fused_fs_assignments(
+            base, blocking_config, mk, em_result, link_threshold,
+        )
 
-    # WCC: dedup edges + Rust Union-Find over the Arrow edge stream, folding in
-    # every singleton row-id straight off the resident table.
-    assignments, n_pairs = _cluster_arrow_native(
-        _prep_all_ids_frame(base), pairs, max_cluster_size, link_threshold,
-    )
+    if assignments is None:
+        # Fallback (uncovered config / native kernel absent): Arrow/Rust batch
+        # scorer (Rust block grouping via build_block_index_arrow) -> Arrow edge
+        # stream -> Rust Union-Find WCC.
+        pairs = score_fs_sequential_arrow(
+            base, blocking_config, mk, matched_pairs, em_result,
+            target_ids=target_ids, emit="arrow",
+        )
+        assignments, n_pairs = _cluster_arrow_native(
+            _prep_all_ids_frame(base), pairs, max_cluster_size, link_threshold,
+        )
+
     # O(N) unique/dupes streamed to parquet from the resident table (pure pyarrow).
     res = _stream_fs_dedupe_output_arrow(base, assignments, config, out_dir)
     res["pairs"] = n_pairs
     res["streaming"] = True
     res["sequential"] = True
+    res["fused"] = n_pairs is None
     res["output_dir"] = out_dir
     return res
+
+
+def _fused_fs_assignments(
+    base: Any,
+    blocking_config: BlockingConfig,
+    mk: MatchkeyConfig,
+    em_result: Any,
+    link_threshold: float | None,
+) -> Any | None:
+    """Cluster the resident frame via the fused FS Rust kernel — grouping + FS
+    scoring + connected-components in ONE ``match_fused_fs`` call — returning a
+    ``(__row_id__, __cluster_id__)`` Table remapped to ``base``'s real
+    ``__row_id__`` values, or ``None`` when the config is outside the fused
+    kernel's covered surface / the native kernel is absent (caller falls back).
+
+    The kernel emits links at the REAL ``link_threshold`` cut and CCs them, so the
+    resulting partition matches the classic ``score -> filter(>=link) -> cluster``
+    split. Column gathering + the ``GoldenMatchConfig`` shape mirror the in-memory
+    ``_run_fused_fs_short_circuit`` exactly (byte-parity by construction)."""
+    from goldenmatch.config.schemas import GoldenMatchConfig
+    from goldenmatch.core.frame import to_frame as _tf
+    from goldenmatch.core.fused_match import (
+        match_fused_fs_multipass_ready,
+        match_fused_fs_ready,
+        run_match_fused_fs_arrow,
+        run_match_fused_fs_multipass_arrow,
+    )
+
+    # Cut at the REAL link threshold (the caller's `mk` carries the review cut;
+    # clustering uses `link_threshold`). Kernel computes it from EM when None.
+    fused_mk = (
+        mk.model_copy(update={"link_threshold": float(link_threshold)})
+        if link_threshold is not None
+        else mk
+    )
+    cfg = GoldenMatchConfig(blocking=blocking_config, matchkeys=[fused_mk])
+    if not (match_fused_fs_ready(cfg) or match_fused_fs_multipass_ready(cfg)):
+        return None
+
+    # Gather the source columns the kernel reads as Arrow arrays (blocking key
+    # fields + comparison fields + NE fields), via the same _fused_needed_src_cols
+    # derivation the in-memory short-circuit uses.
+    from goldenmatch.core.pipeline import _fused_needed_src_cols
+
+    _fwbase = _tf(base)
+    cols = [c for c in _fused_needed_src_cols(cfg) if c in _fwbase.columns]
+    columns = {c: _fwbase.column(c).to_arrow() for c in cols}
+    n_rows = base.num_rows
+    fused_tbl = run_match_fused_fs_arrow(
+        columns, cfg, em_result, n_rows=n_rows
+    ) or run_match_fused_fs_multipass_arrow(
+        columns, cfg, em_result, n_rows=n_rows
+    )
+    if fused_tbl is None:
+        return None
+
+    # The kernel keys clusters by POSITIONAL row id (0..n-1). Remap to base's real
+    # __row_id__ (position i -> base.__row_id__[i]) so the streamed output joins
+    # correctly even when __row_id__ is gapped (post-quarantine).
+    pos = fused_tbl.column("__row_id__")
+    real_ids = base.column("__row_id__").take(pos)
+    idx = fused_tbl.schema.get_field_index("__row_id__")
+    return fused_tbl.set_column(idx, "__row_id__", real_ids)
