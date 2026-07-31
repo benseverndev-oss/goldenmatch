@@ -6,6 +6,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added
+- **`grain_strict` on `certify_key_integrity` (semantic-layer wedge).** Opt-in
+  argument (default `False` = byte-identical to prior behavior: grain stays advisory
+  context and uniqueness is evaluated on the key alone). When `True` and a `grain` is
+  supplied, uniqueness and per-measure fan-out are evaluated on `key + grain` — true
+  "unique at grain", so a fact that legitimately repeats a key across grain buckets
+  (e.g. daily rows per customer) is certified rather than reported as fan-out; a real
+  duplicate *within* a grain bucket is still flagged. Grain columns are validated on
+  the strict path. The `goldenmatch_key_integrity` dbt test gained a matching
+  `grain_strict` argument in lockstep so the SQL test and this capability stay
+  semantically identical.
+
 ### Changed
 - **FS dedupe: Arrow-native columnar-cluster path (B2c), default-on (#1811/#2006).**
   A measure-first 5M profile pinned the FS scale wall at **clustering** (`cluster`

@@ -18,6 +18,13 @@ Suite monorepo and is consumed from there (not published to PyPI).
   (macros) and a `pip install "git+...#subdirectory=..."` for the Python helper.
 
 ### Added
+- **`grain_strict` on the `goldenmatch_key_integrity` test.** Opt-in argument
+  (default `false` = byte-identical to the prior key-only test). When `true` and a
+  `grain` is supplied, uniqueness / fan-out is evaluated on `key + grain` — true
+  "unique at grain", so a fact that legitimately repeats a key across grain buckets
+  (e.g. daily rows per customer) is certified instead of being reported as fan-out.
+  Mirrors the Python `certify_key_integrity(grain_strict=True)` in lockstep so the
+  SQL test and the capability stay semantically identical.
 - **`run_goldenmatch_crosswalk` Python helper (semantic-layer wedge B).** Resolves
   identity once and materializes the durable `{source, source_pk, resolved_entity_id}`
   crosswalk table in DuckDB — the conformed join key a semantic layer (dbt/MetricFlow,
