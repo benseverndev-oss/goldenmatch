@@ -15,17 +15,35 @@
 # weakness is closed or a new one is found; the script's --check mode fails when a
 # live signal (a new _FALLBACK_ONLY kernel, an uncovered scorer, a declared-divergent
 # boundary with no parity test) has no matching inventory entry.
+#
+# `status: resolved` ARCHIVES an entry off the LIVE risk board (conformance v2, 0047
+# amendment process #4: "retire resolved-and-stable / vacuous items so the live list
+# is the actual risk surface, not a museum of closed wins"). The entry + its evidence
+# stay for the record; build_scorecard splits open (no status) from resolved, and the
+# gate only checks the open ones. Un-archive by removing the marker if a premise rots.
 
+# Housekeeping (conformance v2, 0047 amendment #5):
+# - T5 (Arrow-at-bulk-boundaries) is DECLARED WON: it has never recorded a weakness, and
+#   the smallest-stable-primitive discipline is enforced live (several kernels take plain
+#   list[str]/two-string args, not Arrow). A future Arrow-forced-into-a-scalar-call
+#   regression re-opens it -- until then it is a solved tenet, not a silent measurement gap.
+# - INTENTIONAL ASYMMETRY is a first-class principle, not a weakness: the edge-safe TS
+#   subset deliberately omits heavy Python surfaces (distributed / Ray / GPU / full
+#   REST+web UI, opt-in-default WASM for bundle size). Those surface gaps are
+#   declared-by-design and are NOT re-litigated each audit.
 tenets:
   T1: "One authoritative semantic owner per capability (no second source of truth)."
   T2: "Conformance defines correctness (every divergence has a declared level + a test)."
   T3: "Kernelize on measurement (deferrals classified; no silent regress to fallback)."
   T4: "Compute vs control stay architecturally distinct (explicit, versioned seam)."
-  T5: "Arrow at bulk boundaries, not the universal calling convention."
+  T5: "Arrow at bulk boundaries, not the universal calling convention. [DECLARED WON -- see header]"
 
 # Severity: critical > high > medium > low
 weaknesses:
   - id: incremental-resolution-no-persisted-index
+    status: resolved   # C2 index + C4 bounded-work + no-PK content-hash landed & tested;
+                       # only residual is an OPTIONAL large-corpus RSS bench -> that is a
+                       # measurement-frontier item (needs scale infra), not a correctness gap.
     tenet: T4
     severity: low   # RESOLVED: C2 (persisted index + bidirectional query) + C4
                     # (bounded-work scale proof) landed; only broader-corpus RSS
@@ -67,6 +85,8 @@ weaknesses:
     owner_next: "context-network/architecture/identity-control-plane-manifesto.md (§4 (ii) delivered; C2 + C4 + no-PK ids landed; optional: large-corpus RSS bench)"
 
   - id: no-versioned-resolution-batch-contract
+    status: resolved   # Wave B/C/C1 landed; apply_batch==adapter + with_data locks pass;
+                       # "No open follow-on" -- the whole handoff is one versioned object.
     tenet: T4
     severity: low   # RESOLVED -- Wave B fixed the acute bug; Wave C/C1 landed the
                     # versioned contract; the C1 data-array fold + apply_batch now done
@@ -95,6 +115,8 @@ weaknesses:
       - packages/python/goldenmatch/tests/identity/test_postgres_bulk_payload_parity.py
 
   - id: fs-default-ts-path-unwired-second-source
+    status: resolved   # default_routed:true -- batteries index.ts auto-registers the kernel;
+                       # owner is the default; F1-neutral gate passes; no open follow-up.
     tenet: T1
     severity: low   # was medium; RESOLVED-as-wired AND default-on -- the batteries
                     # `goldenmatch` root entry auto-enables the kernel; goldenmatch/core
@@ -148,6 +170,8 @@ weaknesses:
       - context-network/decisions/0046-cross-language-phase-handoff-conformance.md
 
   - id: standardize-dates-no-conformance-test
+    status: resolved   # dual Python+TS characterization tests present & green; the
+                       # None-vs-"" divergence declared. Runnable, no longer prose-only.
     tenet: T2
     severity: low   # was high; CLOSED -- now has a runnable dual-pinned characterization
     declared: true
@@ -167,6 +191,8 @@ weaknesses:
     parity_test: packages/typescript/goldenmatch/tests/parity/standardizer-conformance.parity.test.ts
 
   - id: undeclared-cross-surface-divergences
+    status: resolved   # the 0046 amendment enumerates radial/ensemble ~4dp, PPRL float-CLK,
+                       # array_intersect:overlap; goldenanalysis frame-kernel now shared.
     tenet: T2
     severity: low   # was high (undeclared); DECLARED now in 0046 amendment + docs-site
     declared: true   # Wave A (2026-07-26)
@@ -196,6 +222,8 @@ weaknesses:
       - docs/superpowers/specs/2026-07-06-goldenanalysis-wave1b-deferred.md
 
   - id: three-golden-record-implementations
+    status: resolved   # single-sourced through core.golden (_survivor_value -> merge_field /
+                       # most_complete_value); config-aware done; ONE owner, tested green.
     tenet: T1
     severity: low   # was medium + declared:false (the dangerous class); RESOLVED --
                     # single authoritative owner, only doc-follow-on (identity golden
@@ -276,6 +304,9 @@ weaknesses:
 
   - id: a2a-skills-bidirectional-fracture
     tenet: T1
+    status: resolved   # 2026-07-31: the MDM trio reconciled; every remaining delta is
+                       # verified-intentional divergence (commitment 3 ALLOWS it), so this
+                       # is no longer a conform gap -- archived off the live risk board.
     severity: low   # was medium; the one genuine surface INCONSISTENCY (the MDM
                     # trio, shared on MCP but ts_only on A2A) is now reconciled;
                     # the remaining two-sided gap is ALL verified-intentional
@@ -289,10 +320,12 @@ weaknesses:
       identity_worklist, which is SHARED on the MCP surface but was ts_only on the A2A card
       -- is fixed by advertising it on Python's A2A card too (the capability already existed
       via entity_profile/identity_summary_stats/steward_worklist + the MCP tools). Gap is now
-      14 python_only vs 10 ts_only, and every remaining divergence is VERIFIED-DIFFERENT, NOT
-      drift: PY's richer file-lifecycle/routing skills (configure/list_runs/rollback/review/
-      incremental/sensitivity/schema_match/compare_clusters/analyze_blocking/retrieve_similar/
-      documents_*) which the edge-safe TS surface intentionally omits; PY `quality` vs TS
+      15 python_only vs 10 ts_only, and every remaining divergence is VERIFIED-DIFFERENT, NOT
+      drift: PY's richer file-lifecycle/routing/semantic skills (configure/list_runs/rollback/
+      review/incremental/sensitivity/schema_match/compare_clusters/analyze_blocking/
+      retrieve_similar/documents_*/certify_semantic_model -- the last is the semantic-model
+      certification surface, a Python-only stateful/semantic capability the edge TS omits)
+      which the edge-safe TS surface intentionally omits; PY `quality` vs TS
       `scan_quality`+`fix_quality` (1:2 granularity); PY `pprl` RUNS linkage vs TS `suggest_pprl`
       SUGGESTS params; and TS's edge agent_* variants + score/memory_import primitives. Two
       surfaces exposing genuinely different capabilities is what commitment 3 ALLOWS -- the
@@ -326,6 +359,10 @@ weaknesses:
       - packages/python/goldenmatch/goldenmatch/identity/resolve.py:453
 
   - id: deferrals-lack-measurement-provenance
+    status: resolved   # VACUOUS: all 3 deferrals (embedding/record_embedding/simhash) are
+                       # model-backed, none perf/shape, so nothing owes a wall-clock. The
+                       # un_defer tripwire (a future perf/shape deferral re-fires it) is
+                       # preserved in the 0047 amendment; archived here, not deleted.
     tenet: T3
     severity: low
     declared: true

@@ -168,11 +168,20 @@ def load_inventory() -> dict:
 
 def build_scorecard() -> dict:
     inv = load_inventory()
-    weaknesses = sorted(inv.get("weaknesses", []),
-                        key=lambda w: (SEV_ORDER.get(w.get("severity"), 9), w.get("id", "")))
+    all_w = inv.get("weaknesses", [])
+
+    def _key(w):
+        return (SEV_ORDER.get(w.get("severity"), 9), w.get("id", ""))
+
+    # `status: resolved` archives an entry OFF the live risk board (conformance v2,
+    # 0047 amendment #4): the record stays, but only OPEN entries are the risk
+    # surface the gate checks + the scorecard ranks.
+    weaknesses = sorted((w for w in all_w if w.get("status") != "resolved"), key=_key)
+    resolved = sorted((w for w in all_w if w.get("status") == "resolved"), key=_key)
     return {
         "tenets": inv.get("tenets", {}),
         "weaknesses": weaknesses,
+        "resolved": resolved,
         "live": {
             "surface_gaps": harvest_surface_gaps(),
             "scorer_coverage": harvest_scorer_coverage(),
@@ -237,8 +246,9 @@ def render(card: dict) -> None:
     print("  frame: context-network/architecture/one-product-two-engines.md (0047)")
     print("=" * 78)
     print()
-    print("Weaknesses by severity: " + ", ".join(
-        f"{n} {s}" for s, n in sorted(counts.items(), key=lambda kv: SEV_ORDER[kv[0]])))
+    print("Open weaknesses by severity: " + (", ".join(
+        f"{n} {s}" for s, n in sorted(counts.items(), key=lambda kv: SEV_ORDER[kv[0]])) or "none"))
+    print(f"Resolved (archived off the live board): {len(card.get('resolved', []))}")
     print(f"Undeclared/under-declared (divergence with no conformance level): {len(undeclared)}"
           + (" -> " + ", ".join(w["id"] for w in undeclared) if undeclared else ""))
     print()

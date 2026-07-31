@@ -66,6 +66,7 @@ def render_block() -> str:
     card = t.build_scorecard()
     tenets: dict = card["tenets"]
     weaknesses: list = card["weaknesses"]  # already sorted (severity, id) by build_scorecard
+    resolved: list = card.get("resolved", [])  # archived off the live risk board
     live: dict = card["live"]
 
     sev_counts: dict[str, int] = {}
@@ -89,6 +90,7 @@ def render_block() -> str:
         "",
         (
             f"**{len(weaknesses)}** open weakness(es) — {sev_line}. "
+            f"**{len(resolved)}** resolved (archived below). "
             f"Undeclared (a real divergence with no conformance level / contract): "
             f"**{len(undeclared)}**."
         ),
@@ -97,7 +99,9 @@ def render_block() -> str:
             "A weakness is a place the codebase does not yet fully meet the frame; each maps "
             "to one of the five decision tests (tenets). *Declared* means the divergence has a "
             "conformance level and a test — an accepted, contained cost — not an accident. The "
-            "`declared: false` class is the dangerous one and is flagged below."
+            "`declared: false` class is the dangerous one and is flagged below. Resolved items "
+            "are archived off this live board (conformance v2 — the live list is the real risk "
+            "surface, not a museum of closed wins) but kept for the record."
         ),
         "",
     ]
@@ -213,6 +217,24 @@ def render_block() -> str:
             if po or to:
                 L.append(f"| `{pkg}` | {surface} | {po} | {to} |")
     L.append("")
+
+    # -- Resolved (archived) --------------------------------------------------
+    if resolved:
+        L += [
+            "## Resolved (archived)",
+            "",
+            (
+                "Weaknesses verified resolved-and-stable and moved off the live risk board "
+                "(conformance v2, 0047 amendment #4). Kept for the record — the evidence + "
+                "reasoning live in `parity/thesis_conformance.yaml`; a rotted premise un-archives."
+            ),
+            "",
+            "| Tenet | Weakness |",
+            "|---|---|",
+        ]
+        for w in resolved:
+            L.append(f"| {w['tenet']} | {_cell(w.get('title', w.get('id', '')))} |")
+        L.append("")
 
     L += [MARKER_END]
     return "\n".join(L)
