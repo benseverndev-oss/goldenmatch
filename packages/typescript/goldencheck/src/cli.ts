@@ -4,7 +4,7 @@
  * Port of goldencheck/cli/main.py using Commander.js.
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Command } from "commander";
@@ -17,6 +17,8 @@ import { ciCheck } from "./core/reporters/ci.js";
 import { listAvailableDomains } from "./core/semantic/domains/index.js";
 import { recordScan, loadHistory } from "./core/engine/history.js";
 import { evaluateScan, type ExpectedFinding } from "./core/engine/evaluate.js";
+import { maybeSample } from "./core/engine/sampler.js";
+import { generateRules, serializeRules } from "./core/llm/rule-generator.js";
 
 export const program = new Command();
 
@@ -341,6 +343,38 @@ program
     if (ev.f1 < minF1) {
       console.error(`\nF1 ${ev.f1.toFixed(4)} is below minimum ${minF1.toFixed(4)}`);
       process.exit(1);
+    }
+  });
+
+// Generate validation rules via LLM analysis of the data. Mirrors the Python
+// `learn` command (goldencheck/cli/main.py): sample -> scan -> generateRules ->
+// serialize to a rules file. The engine (generateRules/serializeRules) is already
+// edge-safe (fetch-based, no SDK); this wires the CLI command over it, closing the
+// goldencheck `learn` python_only parity gap.
+program
+  .command("learn <file>")
+  .description("Generate validation rules using LLM analysis of your data")
+  .option("-o, --output <path>", "Output path for rules", "goldencheck_rules.json")
+  .option("--llm-provider <provider>", "LLM provider: anthropic or openai", "anthropic")
+  .action(async (file: string, opts: Record<string, unknown>) => {
+    const data = readFile(file);
+    const sample = maybeSample(data, 100_000);
+    const { findings } = scanData(data);
+
+    console.log(`Analyzing ${data.rowCount.toLocaleString()} rows, ${data.columns.length} columns...`);
+    const rules = await generateRules(sample, findings, String(opts["llmProvider"] ?? "anthropic"));
+
+    if (rules.length === 0) {
+      console.error("No rules generated.");
+      process.exitCode = 1;
+      return;
+    }
+
+    const outPath = String(opts["output"] ?? "goldencheck_rules.json");
+    writeFileSync(outPath, serializeRules(rules));
+    console.log(`Generated ${rules.length} rules -> ${outPath}`);
+    for (const r of rules) {
+      console.log(`  [${r.ruleType}] ${r.column}: ${r.description}`);
     }
   });
 
