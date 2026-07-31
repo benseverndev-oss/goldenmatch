@@ -616,8 +616,10 @@
           "purpose": "CLI: ``goldenmatch identity ...`` -- inspect and manage the Identity Graph.",
           "defines": [
             "_open",
+            "certify_serving_joins_cmd",
             "conflicts_cmd",
             "customer_360_cmd",
+            "emit_catalog_cmd",
             "history_cmd",
             "list_cmd",
             "merge_cmd",
@@ -628,7 +630,8 @@
             "split_cmd"
           ],
           "imports": [
-            "goldenmatch.identity"
+            "goldenmatch.identity",
+            "goldenmatch.semantic"
           ]
         },
         {
@@ -6461,11 +6464,13 @@
             "_actor_trust",
             "_dispatch",
             "_open",
+            "_serving_certificate_dict",
             "handle_identity_tool"
           ],
           "imports": [
             "goldenmatch.core.memory.store",
-            "goldenmatch.identity"
+            "goldenmatch.identity",
+            "goldenmatch.semantic"
           ]
         },
         {

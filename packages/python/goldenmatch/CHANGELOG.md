@@ -78,6 +78,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   advisory `KeyIntegrityCertificate`, so a metric joined through the 360 provably
   can't double-count. Returns a `ServingJoinCertificate` (record certificate +
   entity/record counts + `truncated` when a `max_entities` cap applies).
+- **Surface the serving-layer certificate + store-emit on MCP and the CLI.** Two
+  new `identity_*` MCP tools (`certify_serving_joins`,
+  `emit_semantic_model_from_store`) and two `goldenmatch identity` subcommands
+  (`certify-serving-joins`, `emit-catalog`) expose the Customer 360 serving-join
+  certificate and the live-from-store semantic-catalog emit to agents and the
+  shell — previously library-only. MCP tool count 92 → 94.
 
 ### Changed
 - **FS dedupe: Arrow-native columnar-cluster path (B2c), default-on (#1811/#2006).**

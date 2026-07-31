@@ -19,7 +19,7 @@ from goldenmatch.mcp.identity_tools import (
 
 
 def test_identity_tool_count_and_names():
-    assert len(IDENTITY_TOOLS) == 16
+    assert len(IDENTITY_TOOLS) == 18
     assert IDENTITY_TOOL_NAMES == {
         "identity_resolve", "identity_list", "identity_history",
         "identity_conflicts", "identity_merge", "identity_split",
@@ -32,6 +32,8 @@ def test_identity_tool_count_and_names():
         "identity_audit_seal", "identity_audit_verify",
         # Customer 360 serving view (D1b)
         "customer_360",
+        # Semantic-layer <-> Customer 360 serving surfaces (D)
+        "certify_serving_joins", "emit_semantic_model_from_store",
     }
 
 
@@ -90,6 +92,45 @@ def test_customer_360_via_mcp(seeded_db):
         assert key in out
     missing = _dispatch("customer_360", {"entity_id": "nope", "path": path})
     assert missing == {"found": False}
+
+
+def test_certify_serving_joins_via_mcp(seeded_db):
+    path, ids = seeded_db
+    out = _dispatch("certify_serving_joins", {"dataset": "d", "path": path})
+    # 3 distinct source records across 2 entities -> unique record_id -> trustworthy
+    assert out["trustworthy"] is True
+    assert out["n_entities"] == 2
+    assert out["n_records"] == 3
+    assert out["truncated"] is False
+    assert out["record_id"]["is_unique_at_grain"] is True
+    assert out["record_id"]["duplicate_key_groups"] == 0
+
+
+def test_emit_semantic_model_from_store_via_mcp(seeded_db):
+    path, ids = seeded_db
+    out = _dispatch("emit_semantic_model_from_store", {
+        "source_name": "src",
+        "source_pk_column": "customer_id",
+        "dataset": "d",
+        "path": path,
+    })
+    assert out["written_to"] is None
+    # the emitted MetricFlow catalog groups metrics on the resolved key
+    assert "resolved_entity_id" in out["yaml"]
+
+
+def test_emit_semantic_model_from_store_writes_file_via_mcp(seeded_db, tmp_path):
+    path, ids = seeded_db
+    out_file = str(tmp_path / "catalog.yml")
+    out = _dispatch("emit_semantic_model_from_store", {
+        "source_name": "src",
+        "source_pk_column": "customer_id",
+        "dataset": "d",
+        "out_path": out_file,
+        "path": path,
+    })
+    assert out["written_to"] == out_file
+    assert Path(out_file).read_text() == out["yaml"]
 
 
 def test_identity_merge_via_mcp(seeded_db):
