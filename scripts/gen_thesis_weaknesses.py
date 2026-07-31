@@ -87,14 +87,18 @@ def render_block() -> str:
     L += [
         "## Standing",
         "",
-        f"**{len(weaknesses)}** open weakness(es) — {sev_line}. "
-        f"Undeclared (a real divergence with no conformance level / contract): "
-        f"**{len(undeclared)}**.",
+        (
+            f"**{len(weaknesses)}** open weakness(es) — {sev_line}. "
+            f"Undeclared (a real divergence with no conformance level / contract): "
+            f"**{len(undeclared)}**."
+        ),
         "",
-        "A weakness is a place the codebase does not yet fully meet the frame; each maps "
-        "to one of the five decision tests (tenets). *Declared* means the divergence has a "
-        "conformance level and a test — an accepted, contained cost — not an accident. The "
-        "`declared: false` class is the dangerous one and is flagged below.",
+        (
+            "A weakness is a place the codebase does not yet fully meet the frame; each maps "
+            "to one of the five decision tests (tenets). *Declared* means the divergence has a "
+            "conformance level and a test — an accepted, contained cost — not an accident. The "
+            "`declared: false` class is the dangerous one and is flagged below."
+        ),
         "",
     ]
 
@@ -113,9 +117,11 @@ def render_block() -> str:
     L += [
         "## Weakness board",
         "",
-        "Ranked by severity. *Routing* applies the conformance-v2 default-routing test "
-        "(0047 amendment): a shared owner the default caller path does not use is a latent "
-        "second source of truth, even when a fixture proves parity.",
+        (
+            "Ranked by severity. *Routing* applies the conformance-v2 default-routing test "
+            "(0047 amendment): a shared owner the default caller path does not use is a latent "
+            "second source of truth, even when a fixture proves parity."
+        ),
         "",
         "| Severity | Tenet | Declared | Routing | Weakness |",
         "|---|---|---|---|---|",
@@ -133,9 +139,11 @@ def render_block() -> str:
         L += [
             "## Re-validate (deferral triggers)",
             "",
-            "Each deferral names the explicit condition that would *un-defer* it (conformance-v2 "
-            "test T3). A deferral whose premise has already lifted is an OPEN divergence, not a "
-            "settled low — these are re-checked each audit.",
+            (
+                "Each deferral names the explicit condition that would *un-defer* it (conformance-v2 "
+                "test T3). A deferral whose premise has already lifted is an OPEN divergence, not a "
+                "settled low — these are re-checked each audit."
+            ),
             "",
         ]
         for w in revalidate:
@@ -150,15 +158,19 @@ def render_block() -> str:
     L += [
         "## Live harvest (auto-detected)",
         "",
-        "Static signals harvested directly from `parity/*.yaml` + each package's "
-        "`_native_loader.py` (no toolchain) — so drift shows up here without editing the "
-        "curated board above.",
+        (
+            "Static signals harvested directly from `parity/*.yaml` + each package's "
+            "`_native_loader.py` (no toolchain) — so drift shows up here without editing the "
+            "curated board above."
+        ),
         "",
-        "**Scorer-kernel coverage (goldenmatch).** "
-        f"{cov['kernel_backed']} of {cov['total']} scorers are kernel-backed; "
-        f"{len(cov['deferred'])} declared-deferred; "
-        f"uncovered (must be empty — coverage floor): "
-        f"{('none' if not cov['uncovered'] else '`' + '`, `'.join(cov['uncovered']) + '`')}.",
+        (
+            "**Scorer-kernel coverage (goldenmatch).** "
+            f"{cov['kernel_backed']} of {cov['total']} scorers are kernel-backed; "
+            f"{len(cov['deferred'])} declared-deferred; "
+            "uncovered (must be empty — coverage floor): "
+            f"{('none' if not cov['uncovered'] else '`' + '`, `'.join(cov['uncovered']) + '`')}."
+        ),
         "",
     ]
     if cov["deferred"]:
@@ -168,8 +180,10 @@ def render_block() -> str:
         L.append("")
 
     L += [
-        "**Fallback-only kernels** (a `-core` symbol the host references but the default "
-        "does not run — `_FALLBACK_ONLY`):",
+        (
+            "**Fallback-only kernels** (a `-core` symbol the host references but the default "
+            "does not run — `_FALLBACK_ONLY`):"
+        ),
         "",
     ]
     any_fb = False
@@ -183,8 +197,10 @@ def render_block() -> str:
     L.append("")
 
     L += [
-        "**Cross-language surface gaps** (declared Python-only / TS-only per surface — the "
-        "same partition the [suite matrix](/suite-matrix) renders in full):",
+        (
+            "**Cross-language surface gaps** (declared Python-only / TS-only per surface — the "
+            "same partition the [suite matrix](/suite-matrix) renders in full):"
+        ),
         "",
         "| Package | Surface | Python-only | TS-only |",
         "|---|---|---|---|",
