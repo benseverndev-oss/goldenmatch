@@ -10,9 +10,12 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import numpy as np
-from sklearn.ensemble import HistGradientBoostingClassifier
+
+if TYPE_CHECKING:
+    from sklearn.ensemble import HistGradientBoostingClassifier
 
 
 @dataclass
@@ -28,6 +31,10 @@ class BandStudent:
     _clf: HistGradientBoostingClassifier | None = field(default=None, repr=False)
 
     def fit(self, X: Sequence[Sequence[float]], y: Sequence[int]) -> BandStudent:
+        # Lazy import: the package must import without sklearn (offline dep) so
+        # pytest collection never hard-fails where the harness isn't exercised.
+        from sklearn.ensemble import HistGradientBoostingClassifier
+
         self._clf = HistGradientBoostingClassifier(
             max_iter=self.max_iter, max_depth=self.max_depth,
             learning_rate=self.learning_rate, l2_regularization=self.l2,
