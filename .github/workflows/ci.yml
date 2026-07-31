@@ -3688,6 +3688,8 @@ jobs:
         run: |
           uv run python scripts/gen_suite_matrix.py --check
           uv run pytest scripts/test_suite_matrix.py -q
+          uv run python scripts/gen_thesis_weaknesses.py --check
+          uv run pytest scripts/test_thesis_weaknesses.py -q
           uv run python scripts/gen_api_surface.py --check
         env:
           POLARS_SKIP_CPU_CHECK: "1"
