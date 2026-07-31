@@ -98,7 +98,7 @@ afterEach(() => {
 });
 
 describe("IDENTITY_TOOLS metadata", () => {
-  it("exports the 17 identity tools matching the Python sibling", () => {
+  it("exports the 18 identity tools matching the Python sibling", () => {
     expect(IDENTITY_TOOLS.map((t) => t.name)).toEqual([
       "identity_resolve",
       "identity_list",
@@ -117,8 +117,9 @@ describe("IDENTITY_TOOLS metadata", () => {
       "identity_worklist",
       "customer_360",
       "certify_serving_joins",
+      "emit_semantic_model_from_store",
     ]);
-    expect(IDENTITY_TOOL_NAMES.size).toBe(17);
+    expect(IDENTITY_TOOL_NAMES.size).toBe(18);
     for (const t of IDENTITY_TOOLS) {
       expect(t.description.length).toBeGreaterThan(0);
       expect(t.inputSchema).toBeTypeOf("object");
@@ -412,5 +413,32 @@ describe("identity read tools (show / profile / stats / worklist)", () => {
     const rc = r["record_id"] as Record<string, unknown>;
     expect(rc["is_unique_at_grain"]).toBe(true);
     expect(rc["duplicate_key_groups"]).toBe(0);
+  });
+
+  it("emit_semantic_model_from_store emits a MetricFlow catalog off the live store", async () => {
+    const r = await call("emit_semantic_model_from_store", {
+      source_name: "customers",
+      source_pk_column: "customer_id",
+      dataset: "d",
+    });
+    expect(r["written_to"]).toBe(null);
+    const yaml = r["yaml"] as string;
+    expect(yaml).toContain("semantic_models:");
+    expect(yaml).toContain("expr: resolved_entity_id");
+    expect(yaml).toContain("- name: customer_id\n    type: unique\n    expr: customer_id");
+  });
+
+  it("emit_semantic_model_from_store rejects an unknown dialect", async () => {
+    const r = await call("emit_semantic_model_from_store", {
+      source_name: "customers",
+      source_pk_column: "customer_id",
+      dialect: "looker",
+    });
+    expect(String(r["error"])).toMatch(/unknown dialect/);
+  });
+
+  it("emit_semantic_model_from_store requires source_name + source_pk_column", async () => {
+    const r = await call("emit_semantic_model_from_store", { source_name: "customers" });
+    expect(String(r["error"])).toMatch(/source_pk_column/);
   });
 });

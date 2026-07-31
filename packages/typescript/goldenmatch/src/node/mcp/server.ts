@@ -4,13 +4,13 @@
  *
  * Node-only: uses node:fs, node:path, node:readline. NOT edge-safe.
  *
- * Exposes 85 tools covering dedupe, match, scoring, explanation,
+ * Exposes 86 tools covering dedupe, match, scoring, explanation,
  * profiling, auto-config (shorthand), evaluation, listings, the Splink ->
  * GoldenMatch config converter (convert_splink_config), CCMS cluster
  * comparison (compare_clusters), Learning Memory (6 memory tools via
- * MEMORY_TOOLS, incl. memory_import), the Identity Graph (10 identity tools
+ * MEMORY_TOOLS, incl. memory_import), the Identity Graph (18 identity tools
  * via IDENTITY_TOOLS, incl. identity_claim + identity_resolve_conflict +
- * customer_360 + certify_serving_joins),
+ * customer_360 + certify_serving_joins + emit_semantic_model_from_store),
  * the AgentSession skills (15 agent tools via AGENT_MCP_TOOLS, incl. the
  * healer's review_config), the stateful run tools (7 via RUN_TOOLS:
  * get_stats/list_clusters/get_cluster/get_golden_record/export_results/
