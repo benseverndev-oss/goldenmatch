@@ -40,6 +40,75 @@ def test_composite_key():
     assert c.max_fan_out == 2.0
 
 
+def test_grain_advisory_by_default():
+    # A daily fact: customer 1 legitimately repeats across dates. The default
+    # (key-only) pass reports fan-out even though the key is unique AT grain.
+    t = pa.table({
+        "customer_id": [1, 1, 2],
+        "date": ["2026-01-01", "2026-01-02", "2026-01-01"],
+        "revenue": [10, 20, 5],
+    })
+    c = certify_key_integrity(t, key="customer_id", grain=["date"], measures=["revenue"])
+    assert c.is_unique_at_grain is False       # key 1 appears twice
+    assert c.max_fan_out == 2.0
+    # naive SUM=35, key-deduped SUM (max per key)=20+5=25 -> 1.4x
+    assert c.measure_fan_out["revenue"] == pytest.approx(35.0 / 25.0)
+    assert "recorded as context" in c.note
+
+
+def test_grain_strict_certifies_unique_at_grain():
+    # Same daily fact, but grain_strict folds `date` into the group: each
+    # (customer_id, date) is unique, so the key IS trustworthy at grain.
+    t = pa.table({
+        "customer_id": [1, 1, 2],
+        "date": ["2026-01-01", "2026-01-02", "2026-01-01"],
+        "revenue": [10, 20, 5],
+    })
+    c = certify_key_integrity(
+        t, key="customer_id", grain=["date"], measures=["revenue"], grain_strict=True
+    )
+    assert c.is_unique_at_grain is True
+    assert c.duplicate_key_groups == 0
+    assert c.max_fan_out == 1.0
+    assert c.measure_fan_out == {"revenue": 1.0}
+    assert c.is_trustworthy() is True
+    assert "at grain: key + ['date']" in c.note
+
+
+def test_grain_strict_still_catches_true_duplicates():
+    # (customer_id, date) repeated -> a real duplicate the grain can't excuse.
+    t = pa.table({
+        "customer_id": [1, 1, 2],
+        "date": ["2026-01-01", "2026-01-01", "2026-01-01"],
+        "revenue": [10, 10, 5],
+    })
+    c = certify_key_integrity(
+        t, key="customer_id", grain=["date"], measures=["revenue"], grain_strict=True
+    )
+    assert c.is_unique_at_grain is False
+    assert c.duplicate_key_groups == 1
+    assert c.max_fan_out == 2.0
+
+
+def test_grain_strict_missing_grain_column_raises():
+    t = pa.table({"customer_id": [1, 2], "revenue": [1, 2]})
+    with pytest.raises(ValueError, match="grain column"):
+        certify_key_integrity(t, key="customer_id", grain=["nope"], grain_strict=True)
+    # ...but a bogus grain on the default (advisory) path stays back-compat.
+    c = certify_key_integrity(t, key="customer_id", grain=["nope"])
+    assert c.is_unique_at_grain is True
+
+
+def test_grain_strict_ignores_grain_already_in_key():
+    # grain col == key col: no duplicate group column, behaves like key-only.
+    t = pa.table({"customer_id": [1, 2, 3], "revenue": [1, 2, 3]})
+    c = certify_key_integrity(
+        t, key="customer_id", grain=["customer_id"], measures=["revenue"], grain_strict=True
+    )
+    assert c.is_unique_at_grain is True
+    assert c.max_fan_out == 1.0
+
+
 def test_non_numeric_measure_skipped_with_note():
     t = pa.table({"customer_id": [1, 2], "label": ["x", "y"]})
     c = certify_key_integrity(t, key="customer_id", measures=["label"])

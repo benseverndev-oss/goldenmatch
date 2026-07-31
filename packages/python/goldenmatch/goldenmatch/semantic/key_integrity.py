@@ -68,6 +68,7 @@ def certify_key_integrity(
     grain: Sequence[str] | None = None,
     attributes: Sequence[str] | None = None,
     resolve: bool = False,
+    grain_strict: bool = False,
 ) -> KeyIntegrityCertificate:
     """Certify a declared entity key for metric use.
 
@@ -77,11 +78,20 @@ def certify_key_integrity(
             `primary_key`, OSI dataset key).
         measures: numeric columns aggregated against this entity — fan-out is
             quantified per measure.
-        grain: the model's aggregation grain (recorded as advisory context in v1;
-            uniqueness is evaluated on the entity `key`).
+        grain: the model's aggregation grain. Advisory context by default
+            (uniqueness is evaluated on the entity `key` alone); when
+            `grain_strict=True` it is folded into the grouping so uniqueness /
+            fan-out is evaluated on `key + grain` (true "unique at grain").
         attributes: columns to run entity resolution on when `resolve=True`
             (default: every column that isn't a key or a measure).
         resolve: also measure entity fragmentation / undercount via GoldenMatch ER.
+        grain_strict: opt-in. When True *and* `grain` is supplied, evaluate
+            uniqueness and fan-out on `key + grain` rather than the key alone —
+            i.e. certify the key is unique *within each grain bucket* (a fact at
+            `(customer_id, date)` grain legitimately repeats a customer across
+            days, so the default key-only pass over-reports fan-out for it). The
+            default (False) is byte-identical to prior behavior: grain stays
+            advisory context and uniqueness is evaluated on the key.
 
     Returns:
         A `KeyIntegrityCertificate`. Advisory only — it never mutates the data.
@@ -100,6 +110,14 @@ def certify_key_integrity(
     missing_measures = [c for c in measure_cols if c not in present]
     if missing_measures:
         raise ValueError(f"certify_key_integrity: measure column(s) not in table: {missing_measures}")
+    # grain is validated only on the strict path (the default path treats grain
+    # as free-text advisory context, so a bogus grain there stays back-compat).
+    if grain_strict and grain_cols:
+        missing_grain = [c for c in grain_cols if c not in present]
+        if missing_grain:
+            raise ValueError(
+                f"certify_key_integrity: grain column(s) not in table: {missing_grain}"
+            )
 
     n_rows = table.num_rows
     notes: list[str] = []
@@ -114,10 +132,19 @@ def certify_key_integrity(
     if skipped:
         notes.append(f"non-numeric measures skipped for fan-out: {skipped}")
 
+    # Uniqueness/fan-out grouping. Default: the declared key alone. Strict:
+    # key + grain, so a fact legitimately repeating a key across grain buckets
+    # (e.g. daily rows per customer) is certified unique *at grain* rather than
+    # reported as fan-out. Grain cols already in the key aren't repeated.
+    if grain_strict and grain_cols:
+        group_columns = key_columns + [g for g in grain_cols if g not in key_columns]
+    else:
+        group_columns = key_columns
+
     aggs: list = [([], "count_all")]
     for m in numeric_measures:
         aggs.append((m, "max"))
-    grouped = table.group_by(key_columns).aggregate(aggs)
+    grouped = table.group_by(group_columns).aggregate(aggs)
 
     n_key_groups = grouped.num_rows
     counts = grouped.column("count_all")
@@ -138,7 +165,10 @@ def certify_key_integrity(
             measure_fan_out[m] = 1.0
 
     if grain_cols:
-        notes.append(f"grain {grain_cols} recorded as context; uniqueness evaluated on key")
+        if grain_strict:
+            notes.append(f"uniqueness evaluated at grain: key + {grain_cols}")
+        else:
+            notes.append(f"grain {grain_cols} recorded as context; uniqueness evaluated on key")
 
     cert = KeyIntegrityCertificate(
         key_columns=key_columns,

@@ -76,6 +76,31 @@ def test_empty_key_errors():
         h.goldenmatch_key_integrity_sql(model="m", key=[])
 
 
+def test_grain_advisory_by_default():
+    # grain is recorded but NOT folded into the group -> key-only GROUP BY.
+    h = _load_macros()
+    sql = h.goldenmatch_key_integrity_sql(model="m", key="customer_id", grain=["date"])
+    assert "GROUP BY customer_id" in sql
+    assert "GROUP BY customer_id, date" not in sql
+
+
+def test_grain_strict_folds_grain_into_group():
+    h = _load_macros()
+    sql = h.goldenmatch_key_integrity_sql(
+        model="m", key="customer_id", grain=["date"], grain_strict=True
+    )
+    assert "GROUP BY customer_id, date" in sql
+
+
+def test_grain_strict_dedupes_grain_already_in_key():
+    h = _load_macros()
+    sql = h.goldenmatch_key_integrity_sql(
+        model="m", key="customer_id", grain=["customer_id"], grain_strict=True
+    )
+    assert "GROUP BY customer_id\n" in sql or "GROUP BY customer_id " in sql
+    assert "customer_id, customer_id" not in sql
+
+
 # --- DuckDB execution ----------------------------------------------------------
 
 duckdb = pytest.importorskip("duckdb")
@@ -117,6 +142,49 @@ def test_tolerant_thresholds_pass_dup():
     sql = h.goldenmatch_key_integrity_sql(model="t", key="customer_id",
         measures=["revenue"], max_fan_out=2.0, min_uniqueness=0.5)
     assert len(con.sql(sql).fetchall()) == 0
+
+
+def _make_daily_con():
+    con = duckdb.connect()
+    # customer 1 repeats across two DATES (legit at daily grain); 2 is single.
+    con.execute(
+        "CREATE TABLE daily AS SELECT * FROM (VALUES "
+        "(1,'2026-01-01',10),(1,'2026-01-02',20),(2,'2026-01-01',5)"
+        ") v(customer_id, date, revenue)"
+    )
+    return con
+
+
+def test_grain_strict_certifies_daily_fact():
+    h = _load_macros()
+    con = _make_daily_con()
+    # key-only: customer 1 fans out 2x -> FAILS.
+    key_only = h.goldenmatch_key_integrity_sql(
+        model="daily", key="customer_id", measures=["revenue"], grain=["date"]
+    )
+    assert len(con.sql(key_only).fetchall()) == 1
+    # grain_strict: (customer_id, date) is unique -> PASSES.
+    strict = h.goldenmatch_key_integrity_sql(
+        model="daily", key="customer_id", measures=["revenue"],
+        grain=["date"], grain_strict=True,
+    )
+    assert len(con.sql(strict).fetchall()) == 0
+
+
+def test_grain_strict_still_flags_true_duplicate_at_grain():
+    h = _load_macros()
+    con = duckdb.connect()
+    # (customer_id, date) genuinely repeated -> grain can't excuse it.
+    con.execute(
+        "CREATE TABLE dup AS SELECT * FROM (VALUES "
+        "(1,'2026-01-01',10),(1,'2026-01-01',10),(2,'2026-01-01',5)"
+        ") v(customer_id, date, revenue)"
+    )
+    strict = h.goldenmatch_key_integrity_sql(
+        model="dup", key="customer_id", measures=["revenue"],
+        grain=["date"], grain_strict=True,
+    )
+    assert len(con.sql(strict).fetchall()) == 1
 
 
 if __name__ == "__main__":  # pragma: no cover
