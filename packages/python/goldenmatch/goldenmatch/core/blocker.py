@@ -15,6 +15,34 @@ from goldenmatch.utils.transforms import apply_transforms
 
 logger = logging.getLogger(__name__)
 
+_MEMO_MISS = object()
+
+
+def _memoized_transform(transforms: list):
+    """A ``map_elements`` callable that applies ``transforms`` but computes each
+    DISTINCT input value only once (per-call cache).
+
+    Block keys are the Python-fallback path only for transforms with no native
+    polars expression (soundex / metaphone), and those run per-ROW via
+    ``map_elements``. Names repeat heavily within a column, so a distinct-value
+    cache skips the redundant recompute -- byte-identical output (same
+    ``apply_transforms``), and the same distinct-value idiom auto-config already
+    uses for its transform application. The cache is scoped to this returned
+    closure (one per built expression), so it is GC'd with the expression and
+    never leaks across ``dedupe`` calls. The redundancy (hence the win) scales
+    with row_count / distinct_values -- larger at scale, where the per-row
+    ``map_elements`` cost was also the documented 5M blocking hang."""
+    cache: dict = {}
+
+    def _apply(val, transforms=transforms, cache=cache):
+        hit = cache.get(val, _MEMO_MISS)
+        if hit is _MEMO_MISS:
+            hit = apply_transforms(val, transforms)
+            cache[val] = hit
+        return hit
+
+    return _apply
+
 
 def _percentile(xs: list[int], q: float) -> int:
     """Return the q-th percentile of a sorted list of ints."""
@@ -553,7 +581,7 @@ def _build_block_key_expr(key_config: BlockingKeyConfig) -> pl.Expr:
         elif transforms:
             field_exprs.append(
                 pl.col(field_name).map_elements(
-                    lambda val, transforms=transforms: apply_transforms(val, transforms),
+                    _memoized_transform(transforms),
                     return_dtype=pl.Utf8,
                 )
             )
@@ -1113,7 +1141,7 @@ def _build_sorted_neighborhood_blocks(
     for skf in config.sort_key:
         if skf.transforms:
             expr = pl.col(skf.column).map_elements(
-                lambda val, transforms=skf.transforms: apply_transforms(val, transforms),
+                _memoized_transform(skf.transforms),
                 return_dtype=pl.Utf8,
             )
         else:
