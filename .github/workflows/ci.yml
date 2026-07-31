@@ -3690,6 +3690,10 @@ jobs:
           uv run pytest scripts/test_suite_matrix.py -q
           uv run python scripts/gen_thesis_weaknesses.py --check
           uv run pytest scripts/test_thesis_weaknesses.py -q
+          # T1 default-routing auditor: HARD-fails on an owner-default kernel that
+          # regressed to opt-in (the fs-default class); advisory on the rest.
+          uv run python scripts/check_thesis_conformance.py --check
+          uv run pytest scripts/test_thesis_conformance.py -q
           uv run python scripts/gen_api_surface.py --check
         env:
           POLARS_SKIP_CPU_CHECK: "1"
