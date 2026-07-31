@@ -12,6 +12,9 @@
  * Node-only: depends on SqliteIdentityStore (better-sqlite3 optional peer dep).
  */
 
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+
 import { SqliteIdentityStore } from "../identity/sqlite-store.js";
 import {
   claimRecord,
@@ -30,6 +33,10 @@ import {
   stewardWorklist,
 } from "../../core/identity/profile.js";
 import { certifyServingJoins } from "../../core/semantic/serving.js";
+import {
+  emitSemanticModelFromStore,
+  type SemanticDialect,
+} from "../../core/semantic/catalog.js";
 import { sealAuditLog, verifyAuditChain, verificationSummary } from "../../core/identity/audit.js";
 import { pyIsoformat } from "../../core/identity/pyDatetime.js";
 import { trustForSource } from "../../core/memory/types.js";
@@ -357,6 +364,51 @@ export const IDENTITY_TOOLS: readonly Tool[] = [
         },
         path: { type: "string", description: "Identity DB path" },
       },
+    },
+  },
+  {
+    name: "emit_semantic_model_from_store",
+    description:
+      "Emit a conformed semantic-layer catalog (the `resolved_entity_id` join a " +
+      "MetricFlow / Cube / OSI model should group metrics by) directly from the " +
+      "durable identity store — 'keep the semantic layer's identity join live " +
+      "against the control plane'. Returns the emitted YAML; when `out_path` is " +
+      "set, also writes it to that catalog file (refuses to clobber unless " +
+      "overwrite=true).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        source_name: {
+          type: "string",
+          description: "Logical source name the records were ingested under.",
+        },
+        source_pk_column: {
+          type: "string",
+          description: "Column holding each record's source primary key (the join column).",
+        },
+        dialect: { type: "string", enum: ["metricflow", "cube", "osi"], default: "metricflow" },
+        dataset: { type: "string", description: "Identity-graph dataset scope (defaults to all)." },
+        source_target: {
+          type: "string",
+          description: "Source model / cube / dataset the join points at (defaults to source_name).",
+        },
+        resolved_key: {
+          type: "string",
+          default: "resolved_entity_id",
+          description: "The conformed join column name (the control-plane id).",
+        },
+        out_path: {
+          type: "string",
+          description: "Optional catalog file to write the emitted YAML to.",
+        },
+        overwrite: {
+          type: "boolean",
+          default: false,
+          description: "Overwrite an existing catalog file at `out_path`.",
+        },
+        path: { type: "string", description: "Identity DB path" },
+      },
+      required: ["source_name", "source_pk_column"],
     },
   },
 ];
@@ -743,6 +795,40 @@ async function dispatch(
           estimate: rc.estimate,
         },
       };
+    }
+
+    if (name === "emit_semantic_model_from_store") {
+      const sourceName = strArg(args, "source_name");
+      const sourcePkColumn = strArg(args, "source_pk_column");
+      if (!sourceName) return { error: "Missing required parameter: source_name" };
+      if (!sourcePkColumn) return { error: "Missing required parameter: source_pk_column" };
+      const rawDialect = strArg(args, "dialect");
+      const yamlStr = await emitSemanticModelFromStore(store, {
+        sourceName,
+        sourcePkColumn,
+        dialect: (rawDialect as SemanticDialect) ?? "metricflow",
+        dataset: strArg(args, "dataset") ?? null,
+        ...(strArg(args, "source_target") !== undefined
+          ? { sourceTarget: strArg(args, "source_target")! }
+          : {}),
+        resolvedKey: strArg(args, "resolved_key") ?? "resolved_entity_id",
+      });
+      const outPath = strArg(args, "out_path");
+      if (outPath) {
+        mkdirSync(dirname(outPath), { recursive: true });
+        const overwrite = args["overwrite"] === true;
+        try {
+          // `wx` = create-and-fail-if-exists (atomic, O_EXCL): the clobber
+          // guard is the write itself, so there is no check-then-write race.
+          writeFileSync(outPath, yamlStr, { encoding: "utf-8", flag: overwrite ? "w" : "wx" });
+        } catch (err) {
+          if (!overwrite && (err as NodeJS.ErrnoException).code === "EEXIST") {
+            return { error: `${outPath} already exists; pass overwrite=true to replace it` };
+          }
+          throw err;
+        }
+      }
+      return { yaml: yamlStr, written_to: outPath ?? null };
     }
 
     return { error: `Unknown identity tool: ${name}` };

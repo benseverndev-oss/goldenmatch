@@ -74,6 +74,7 @@ mcp_tools:
   - create_domain
   - customer_360
   - dedupe
+  - emit_semantic_model_from_store
   - evaluate
   - explain_cluster
   - explain_match
@@ -142,7 +143,6 @@ mcp_tools:
   - certify_semantic_model
   - documents_ingest
   - documents_suggest_schema
-  - emit_semantic_model_from_store
   - explain_routing
   - lint_routing
   - list_plugins
@@ -258,6 +258,7 @@ a2a_skills:
   - agent_review_queue
   - certify_serving_joins
   - customer_360
+  - emit_semantic_model_from_store
   - fix_quality
   - memory_import
   - scan_quality
