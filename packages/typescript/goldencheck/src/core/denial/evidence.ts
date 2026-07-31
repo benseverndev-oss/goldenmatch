@@ -3,6 +3,14 @@
  * the pure-Python fallback `_evidence_python` in
  * `packages/python/goldencheck/goldencheck/denial/evidence.py`.
  *
+ * THESIS NOTE (one authoritative owner): the evidence layer HAS a Rust `-core`
+ * owner — `goldencheck-core::dc.rs` (`denial_constraint_evidence`), which Python
+ * dispatches to via the native kernel. This module reimplements the pure-Python
+ * *fallback* rather than dispatching to that core; the cross-language conformance
+ * fixture (`tests/parity/denial.parity.test.ts`) locks TS == Python so they can't
+ * drift, but the thesis-pure endpoint is a WASM binding to `dc.rs`. See the
+ * follow-on: `docs/superpowers/specs/2026-07-31-goldencheck-denial-wasm-dispatch-followon.md`.
+ *
  * MASKS ARE u64 → BIGINT. JS `number` bitwise ops are 32-bit and would silently
  * corrupt masks above bit 31, so every mask is a `bigint` and evidence maps are
  * `Map<bigint, number>`.
