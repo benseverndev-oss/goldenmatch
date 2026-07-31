@@ -92,8 +92,8 @@ def certify_semantic_model(
         frames: maps each model/dataset/cube name to the table backing it
             (pyarrow / polars / pandas / dict). A target with no supplied frame
             is skipped and recorded in `skipped`.
-        resolve: also run entity resolution to measure fragmentation / undercount
-            (MetricFlow dialect only in v1; Cube/OSI certify structurally).
+        resolve: also run entity resolution to measure fragmentation / undercount.
+            Applied uniformly across all three dialects.
 
     Returns:
         A `SemanticCertification` with one `KeyCertification` per certified key.
@@ -116,19 +116,16 @@ def certify_semantic_model(
             entries.append(KeyCertification(target=spec.model, key=list(spec.key), certificate=cert))
     elif dialect == "cube":
         # certify_cube_joins already certifies the one-side key of each join.
-        for rep in certify_cube_joins(data, frames):
+        for rep in certify_cube_joins(data, frames, resolve=resolve):
             entries.append(KeyCertification(
                 target=rep["to_cube"], key=list(rep["key"]), certificate=rep["certificate"],
                 context=f"join from {rep['from_cube']}",
             ))
     else:  # osi
-        for rep in certify_osi_relationships(data, frames):
+        for rep in certify_osi_relationships(data, frames, resolve=resolve):
             entries.append(KeyCertification(
                 target=rep["dataset"], key=list(rep["key"]), certificate=rep["certificate"],
                 context=f"relationship {rep['relationship']}",
             ))
 
-    note = ""
-    if resolve and dialect != "metricflow":
-        note = f"resolution tier not applied for the {dialect} dialect (structural certification only)"
-    return SemanticCertification(dialect=dialect, entries=entries, skipped=skipped, note=note)
+    return SemanticCertification(dialect=dialect, entries=entries, skipped=skipped)

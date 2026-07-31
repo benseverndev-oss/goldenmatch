@@ -231,6 +231,7 @@ a2a_skills:
   - transform
   python_only:
   - analyze_blocking
+  - certify_semantic_model
   - compare_clusters
   - configure
   - documents_ingest

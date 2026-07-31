@@ -116,10 +116,17 @@ def test_osi_dialect_front_door():
     assert "relationship orders_to_customers" in entry.context
 
 
-def test_resolve_note_for_non_metricflow():
-    frames = {"customers": pa.table({"id": [1, 2, 3]})}
+def test_resolve_threads_to_all_dialects():
+    # resolve is now applied uniformly across dialects (no "not applied" note).
+    # A key-only frame has no attribute columns to resolve on, so the resolution
+    # tier records that on the certificate and leaves its fields None (fail-open).
+    frames = {"customers": pa.table({"id": [1, 2, 3], "name": ["a", "b", "c"]})}
     rep = certify_semantic_model(_OSI, frames, resolve=True)
-    assert "structural certification only" in rep.note
+    assert rep.note == ""                       # dialect-level note is gone
+    assert rep.n_certified == 1
+    # the resolution tier ran (or fail-open'd) on the certificate itself
+    cert = rep.entries[0].certificate
+    assert cert.resolved_entities is None or isinstance(cert.resolved_entities, int)
 
 
 def test_accepts_path(tmp_path):

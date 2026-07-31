@@ -412,6 +412,13 @@ _SKILLS = [
         "inputModes": ["application/json"],
         "outputModes": ["application/json"],
     },
+    {
+        "id": "certify_semantic_model",
+        "name": "Certify Semantic Model",
+        "description": "Certify every declared entity key in a dbt/MetricFlow, Cube, or OSI semantic model against its data (uniqueness at grain + measure fan-out). Advisory; never mutates a metric.",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
 ]
 
 
