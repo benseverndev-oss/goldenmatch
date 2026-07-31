@@ -607,6 +607,7 @@ Every `GOLDENMATCH_*` variable the package reads (plus the one `GOLDEN_*` except
 | `GOLDENMATCH_BLOCKING_CARDINALITY_SCALER` | Chao1 | `observed` uses sample-observed cardinality. |
 | `GOLDENMATCH_BLOCKING_DEGENERATE_THRESHOLD` / `_MAX_AVG_BLOCK_SIZE` | `0.95` / `10000` | Degenerate-blocking guard. |
 | `GOLDENMATCH_BLOCKING_PRUNE_PASSES` / `_PASS_MIN_WEAKPOS` | `0` / `1` | Weak-positive multi-pass pruning. |
+| `GOLDENMATCH_BLOCKING_COST_AWARE` | `0` | Demote a small-fixed-domain year/date column from the sole primary blocking key when a bounded name/compound fallback exists (it stays a recall pass), so identifier-poor data doesn't explode candidate pairs at scale. Domain-routed: skipped on bibliographic data, where a publication-year key is a legitimately strong same-year blocking signal. |
 | `GOLDENMATCH_QUALITY_AWARE_BLOCKING` | `0` | Add fuzzy passes for noisy columns (GoldenCheck door #1). |
 | `GOLDENMATCH_FD_NEGATIVE_EVIDENCE` | `0` | FD-driven negative evidence (GoldenCheck door #3). |
 | `GOLDENMATCH_FACILITY_NAME_NE` | `0` | On company/location-mode data (shared phone/address/company demoted because the sharers don't co-agree on the person name), add the person full name (first+last) as `token_sort` negative evidence so distinct colleagues at one facility don't fuse. Opt-in; only fires when facility mode is detected, so person datasets (e.g. Febrl) are unaffected even when set. |
