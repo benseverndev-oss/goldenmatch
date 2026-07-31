@@ -24,9 +24,9 @@ on:
         required: false
         default: "sequential streaming"
       in_memory_scale:
-        description: "Row count for the in-memory OOM contrast (empty to skip)"
+        description: "Row count for the in-memory OOM contrast (default EMPTY = skip; set e.g. 50000000 to run it -- note it OOMs/preempts near 64 GB and can kill the artifact upload)"
         required: false
-        default: "50000000"
+        default: ""
       runner:
         description: "Runner label (needs 64 GB)"
         required: false
