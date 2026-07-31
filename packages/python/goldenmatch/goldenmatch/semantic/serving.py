@@ -9,10 +9,39 @@ timeline + relationship neighborhood) with zero key translation.
 
 `entity_360(store_path, entity_id)` is the direct read; `profile_from_crosswalk`
 is the drill-through: a source primary key → its resolved entity → the 360 page.
+
+`certify_serving_joins(store)` closes the loop the other way: a Customer 360
+serving view is itself a join surface (golden record ⋈ source records ⋈ events ⋈
+relationships, all on the durable `entity_id` / `record_id`), so it carries the
+same fan-out / double-count risk `certify_key_integrity` was built to catch. It
+certifies that the serving layer's source-record join key is unique — so a metric
+joined through the 360 provably can't double-count.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
+
+
+@dataclass
+class ServingJoinCertificate:
+    """Certifies the join keys a Customer 360 serving layer rolls metrics up on.
+
+    `record_certificate` is a `KeyIntegrityCertificate` over the source-record
+    join key (`record_id` = `{source}:{source_pk}`): unique means a fact joined to
+    source records and rolled up to the entity can't double-count. `n_entities` /
+    `n_records` are the population it was computed over; `truncated` is True when a
+    `max_entities` cap stopped the scan short (so the cert covers a prefix).
+    """
+
+    record_certificate: Any            # KeyIntegrityCertificate
+    n_entities: int
+    n_records: int
+    truncated: bool = False
+
+    @property
+    def is_trustworthy(self) -> bool:
+        return bool(self.record_certificate.is_trustworthy())
 
 
 def entity_360(
@@ -92,4 +121,74 @@ def profile_from_crosswalk(
         entity_id,
         include_relationships=include_relationships,
         timeline_limit=timeline_limit,
+    )
+
+
+def certify_serving_joins(
+    store: Any,
+    *,
+    dataset: str | None = None,
+    status: str | None = "active",
+    page_size: int = 500,
+    max_entities: int | None = None,
+) -> ServingJoinCertificate:
+    """Certify that a Customer 360 serving layer's join keys don't double-count.
+
+    A C360 view joins the golden record to its source records (and events /
+    relationships) on the durable `entity_id`, and a dashboard typically joins a
+    fact table to those source records on `record_id` (`{source}:{source_pk}`)
+    before rolling up to the entity. If a `record_id` is duplicated, that roll-up
+    silently double-counts. This walks the store's active entities, assembles the
+    `record_id` join key across their source records, and runs
+    `certify_key_integrity` over it — turning the serving layer's implicit
+    join-key trust into an advisory `KeyIntegrityCertificate`.
+
+    Args:
+        store: an open `IdentityStore`.
+        dataset: restrict to one identity-graph dataset (default: all).
+        status: entity status to include (default `"active"`; None = all).
+        page_size: pagination size for the entity scan.
+        max_entities: cap the scan at this many entities (the cert then covers a
+            prefix and sets `truncated=True`); None scans every entity.
+
+    Returns:
+        A `ServingJoinCertificate` whose `record_certificate.is_trustworthy()` is
+        True when every source record has a unique join key.
+    """
+    from goldenmatch.semantic.key_integrity import certify_key_integrity
+
+    record_ids: list[str] = []
+    entity_ids: list[str] = []
+    offset = 0
+    truncated = False
+    while True:
+        limit = page_size
+        if max_entities is not None:
+            remaining = max_entities - len(entity_ids)
+            if remaining <= 0:
+                truncated = True
+                break
+            limit = min(page_size, remaining)
+        nodes = store.list_identities(
+            dataset=dataset, status=status, limit=limit, offset=offset
+        )
+        if not nodes:
+            break
+        for node in nodes:
+            entity_ids.append(node.entity_id)
+            for rec in store.get_records_for_entity(node.entity_id):
+                record_ids.append(rec.record_id)
+        offset += len(nodes)
+        if len(nodes) < limit:
+            break
+
+    # certify_key_integrity needs at least one row; an empty store is trivially
+    # trustworthy (no records means nothing can double-count).
+    table = {"record_id": record_ids or [None]}
+    cert = certify_key_integrity(table, key="record_id")
+    return ServingJoinCertificate(
+        record_certificate=cert,
+        n_entities=len(entity_ids),
+        n_records=len(record_ids),
+        truncated=truncated,
     )

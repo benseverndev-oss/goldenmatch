@@ -7289,11 +7289,14 @@
           "file": "packages/python/goldenmatch/goldenmatch/semantic/serving.py",
           "purpose": "Semantic-layer ↔ Customer 360 drill-through.",
           "defines": [
+            "ServingJoinCertificate",
+            "certify_serving_joins",
             "entity_360",
             "profile_from_crosswalk"
           ],
           "imports": [
-            "goldenmatch.identity"
+            "goldenmatch.identity",
+            "goldenmatch.semantic.key_integrity"
           ]
         },
         {
