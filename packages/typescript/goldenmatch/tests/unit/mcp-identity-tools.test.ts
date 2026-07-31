@@ -6,6 +6,9 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   IDENTITY_TOOLS,
@@ -426,6 +429,37 @@ describe("identity read tools (show / profile / stats / worklist)", () => {
     expect(yaml).toContain("semantic_models:");
     expect(yaml).toContain("expr: resolved_entity_id");
     expect(yaml).toContain("- name: customer_id\n    type: unique\n    expr: customer_id");
+  });
+
+  it("emit_semantic_model_from_store writes out_path and refuses to clobber", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "gm-catalog-"));
+    const outPath = join(dir, "catalog.yml");
+    const r1 = await call("emit_semantic_model_from_store", {
+      source_name: "customers",
+      source_pk_column: "customer_id",
+      dataset: "d",
+      out_path: outPath,
+    });
+    expect(r1["written_to"]).toBe(outPath);
+    expect(readFileSync(outPath, "utf-8")).toBe(r1["yaml"]);
+    // Second write without overwrite is refused (atomic wx flag).
+    const r2 = await call("emit_semantic_model_from_store", {
+      source_name: "customers",
+      source_pk_column: "customer_id",
+      dataset: "d",
+      out_path: outPath,
+    });
+    expect(String(r2["error"])).toMatch(/already exists/);
+    // overwrite=true replaces it.
+    const r3 = await call("emit_semantic_model_from_store", {
+      source_name: "customers",
+      source_pk_column: "customer_id",
+      dataset: "d",
+      out_path: outPath,
+      overwrite: true,
+    });
+    expect(r3["written_to"]).toBe(outPath);
+    rmSync(dir, { recursive: true, force: true });
   });
 
   it("emit_semantic_model_from_store rejects an unknown dialect", async () => {

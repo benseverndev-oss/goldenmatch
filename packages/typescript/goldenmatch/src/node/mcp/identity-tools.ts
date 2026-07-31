@@ -12,7 +12,7 @@
  * Node-only: depends on SqliteIdentityStore (better-sqlite3 optional peer dep).
  */
 
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { SqliteIdentityStore } from "../identity/sqlite-store.js";
@@ -815,13 +815,18 @@ async function dispatch(
       });
       const outPath = strArg(args, "out_path");
       if (outPath) {
-        if (existsSync(outPath) && args["overwrite"] !== true) {
-          return {
-            error: `${outPath} already exists; pass overwrite=true to replace it`,
-          };
-        }
         mkdirSync(dirname(outPath), { recursive: true });
-        writeFileSync(outPath, yamlStr, "utf-8");
+        const overwrite = args["overwrite"] === true;
+        try {
+          // `wx` = create-and-fail-if-exists (atomic, O_EXCL): the clobber
+          // guard is the write itself, so there is no check-then-write race.
+          writeFileSync(outPath, yamlStr, { encoding: "utf-8", flag: overwrite ? "w" : "wx" });
+        } catch (err) {
+          if (!overwrite && (err as NodeJS.ErrnoException).code === "EEXIST") {
+            return { error: `${outPath} already exists; pass overwrite=true to replace it` };
+          }
+          throw err;
+        }
       }
       return { yaml: yamlStr, written_to: outPath ?? null };
     }
