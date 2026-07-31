@@ -22,6 +22,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   derivation + same kernel), gated by `tests/test_fs_out_of_core.py`. Routed via
   the shared `resolve_fs_block_source`/`fs_streaming_route` resolver and reachable
   through `gm.dedupe_to_parquet(*files, out_dir=…)`. Default path unchanged.
+  DuckDB-free end to end: the Rust WCC (`_cluster_arrow_native`) takes the row-id
+  set directly and the O(N) output streams via polars `sink_parquet`
+  (`_stream_fs_dedupe_output_polars`, the streaming-engine equivalent of DuckDB
+  `COPY`), so no second full-frame copy is held; the `duckdb` block source stays
+  the spill-past-RAM variant.
 
 ### Changed
 - **FS out-of-core streaming: single `resolve_fs_block_source` knob + DuckDB

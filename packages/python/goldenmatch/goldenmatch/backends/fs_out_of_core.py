@@ -981,6 +981,117 @@ def _prep_all_ids(con: Any) -> Sequence[int]:
     return [r[0] for r in con.execute("SELECT __row_id__ FROM prep").fetchall()]
 
 
+def _prep_all_ids_frame(frame: Any) -> Sequence[int]:
+    """The polars analogue of ``_prep_all_ids``: the full ``__row_id__`` set off a
+    RESIDENT frame (no DuckDB) — a ``range`` when contiguous (min..max, no gaps —
+    the pipeline's dense global row index), else the explicit list. ``__row_id__``
+    is unique per row, so ``max - min + 1 == count`` iff exactly ``{min..max}``."""
+    col = frame["__row_id__"]
+    n = col.len()
+    if not n:
+        return []
+    lo, hi = int(col.min()), int(col.max())
+    if hi - lo + 1 == n:
+        return range(lo, hi + 1)
+    return col.to_list()
+
+
+def _stream_fs_dedupe_output_polars(
+    frame: Any, assignments: Any, config: Any, out_dir: str
+) -> dict:
+    """DuckDB-FREE O(N) dedupe output for the in-RAM sequential path: stream
+    unique/dupes to parquet with polars ``sink_parquet`` (the streaming-engine
+    equivalent of DuckDB ``COPY`` — no full result frame materialised) straight
+    off the RESIDENT prepared ``frame`` joined to the ``(row_id, cluster_id)``
+    assignments. Only ``golden`` (bounded multi-member subset) is collected for
+    the in-memory builder. Same unique=singleton / dupes=multi(oversized-incl) /
+    golden=non-oversized-multi semantics + ``__xform_*`` exclusion as
+    ``stream_fs_dedupe_output``, so the two output paths are parity-equivalent."""
+    import os as _os
+
+    import polars as pl
+    import pyarrow as pa
+    import pyarrow.parquet as _pq
+
+    from goldenmatch.core.golden import build_golden_records_batch
+
+    max_cluster_size = 100
+    golden_rules = getattr(config, "golden_rules", None)
+    if golden_rules is not None:
+        max_cluster_size = golden_rules.max_cluster_size
+
+    if isinstance(assignments, pa.Table):
+        asn = pl.from_arrow(assignments)
+    else:
+        asn = pl.DataFrame(
+            {
+                "__row_id__": [int(r) for r, _ in assignments],
+                "__cluster_id__": [int(c) for _, c in assignments],
+            },
+            schema={"__row_id__": pl.Int64, "__cluster_id__": pl.Int64},
+        )
+    if not isinstance(asn, pl.DataFrame):
+        asn = pl.DataFrame(asn)
+
+    record_cols = [c for c in frame.columns if not c.startswith("__xform_")]
+    sizes = asn.group_by("__cluster_id__").agg(pl.len().alias("__n__"))
+
+    _os.makedirs(out_dir, exist_ok=True)
+    unique_path = _os.path.join(out_dir, "unique.parquet")
+    dupes_path = _os.path.join(out_dir, "dupes.parquet")
+    golden_path = _os.path.join(out_dir, "golden.parquet")
+
+    base = (
+        frame.lazy()
+        .join(asn.lazy(), on="__row_id__", how="inner")
+        .join(sizes.lazy(), on="__cluster_id__", how="inner")
+    )
+
+    def _write(lf, path: str) -> None:
+        # Stream to disk (bounded); fall back to a collected write if this
+        # polars build can't stream a joined plan.
+        try:
+            lf.sink_parquet(path)
+        except Exception:
+            lf.collect().write_parquet(path)
+
+    # unique = singleton clusters; dupes = multi-member (oversized INCLUDED,
+    # mirroring _finalize's size>1 dupe rule). Both STREAMED via sink_parquet.
+    _write(base.filter(pl.col("__n__") == 1).select(record_cols), unique_path)
+    _write(
+        base.filter(pl.col("__n__") > 1).select([*record_cols, "__cluster_id__"]),
+        dupes_path,
+    )
+
+    # golden = non-oversized multi-member; bounded subset -> in-memory builder.
+    golden_df = (
+        base.filter(
+            (pl.col("__n__") > 1) & (pl.col("__n__") <= int(max_cluster_size))
+        )
+        .select([*record_cols, "__cluster_id__"])
+        .collect()
+    )
+    golden_count = 0
+    if golden_df.height:
+        records = build_golden_records_batch(
+            golden_df,
+            golden_rules if golden_rules is not None else _default_golden_rules(),
+        )
+        golden_count = len(records)
+        pl.DataFrame(records).write_parquet(golden_path)
+    elif _os.path.exists(golden_path):
+        _os.unlink(golden_path)
+
+    return {
+        "unique_path": unique_path,
+        "dupes_path": dupes_path,
+        "golden_path": golden_path if golden_count else None,
+        "unique_count": _pq.read_metadata(unique_path).num_rows,
+        "dupes_count": _pq.read_metadata(dupes_path).num_rows,
+        "golden_count": golden_count,
+    }
+
+
 def _cluster_python(
     con: Any,
     pairs: list[tuple[int, int, float]],
@@ -1003,7 +1114,7 @@ def _cluster_python(
 
 
 def _cluster_arrow_native(
-    con: Any,
+    all_ids: Any,
     pair_table: Any,
     max_cluster_size: int,
     link_threshold: float | None,
@@ -1011,9 +1122,11 @@ def _cluster_arrow_native(
     """Arrow-native path: dedup the ``PAIR_STREAM`` table with the Rust
     ``dedup_pairs_arrow`` kernel, then cluster with ``build_clusters_arrow_native``
     (Rust Union-Find via the C Data Interface — no Python ``dict[int, dict]``).
-    Returns ``(assignments pa.Table {__row_id__, __cluster_id__}, n_pairs)`` — the
-    Arrow assignments feed ``stream_fs_dedupe_output`` directly, so the scored
-    pairs never become Python objects here."""
+    ``all_ids`` is the full row-id set (range/list) for singleton folding —
+    supplied by the caller (from DuckDB via ``_prep_all_ids(con)`` on the
+    out-of-core path, or straight off the resident polars frame on the in-RAM
+    sequential path), so this clusterer is DuckDB-agnostic. Returns
+    ``(assignments pa.Table {__row_id__, __cluster_id__}, n_pairs)``."""
     import polars as pl
     import pyarrow as pa
 
@@ -1035,7 +1148,6 @@ def _cluster_arrow_native(
         pairs_pl = pairs_pl.filter(pl.col("score") >= link_threshold)
     n_pairs = pairs_pl.height
 
-    all_ids = _prep_all_ids(con)
     cf = build_clusters_arrow_native(
         pairs_pl, all_ids=all_ids, max_cluster_size=max_cluster_size, backend="arrow",
     )
@@ -1117,7 +1229,7 @@ def run_fs_dedupe_streaming(
         try:
             if arrow_stream:
                 assignments, n_pairs = _cluster_arrow_native(
-                    con, pairs, max_cluster_size, link_threshold,
+                    _prep_all_ids(con), pairs, max_cluster_size, link_threshold,
                 )
             else:
                 assignments, n_pairs = _cluster_python(
@@ -1165,8 +1277,13 @@ def run_fs_dedupe_sequential(
     scored pairs stay Arrow end-to-end (edge stream -> Rust WCC), so they never
     accumulate as ``list[tuple]``. ``link_threshold`` semantics match
     ``run_fs_dedupe_streaming`` (cluster only pairs whose best cross-pass score
-    clears the cut)."""
-    import duckdb
+    clears the cut).
+
+    **No DuckDB.** Scoring, the Rust WCC, and the O(N) parquet output all run off
+    the resident polars frame (``sink_parquet`` streams the output like DuckDB
+    ``COPY`` would, without a second full-frame copy) — the whole path is
+    polars/Arrow/Rust end to end."""
+    import polars as pl
 
     from goldenmatch.core.frame import is_polars_lazyframe
     from goldenmatch.core.frame import to_frame as _tf
@@ -1183,21 +1300,20 @@ def run_fs_dedupe_sequential(
         target_ids=target_ids, emit="arrow",
     )
 
-    # WCC + O(N) output: reuse the tested arrow-native clusterer + streamer over an
-    # in-memory DuckDB holding the full record frame (in-RAM, no disk spill).
+    # Resident record frame for the WCC id-set + the streamed output (no DuckDB).
     native = _tf(prepared_df).native
     if is_polars_lazyframe(native):
         native = native.collect()
-    con = duckdb.connect(":memory:")
-    try:
-        _load_frame_batched(con, native)
-        con.execute("CREATE INDEX ix_rid ON prep(__row_id__)")
-        assignments, n_pairs = _cluster_arrow_native(
-            con, pairs, max_cluster_size, link_threshold,
-        )
-        res = stream_fs_dedupe_output(con, "prep", assignments, config, out_dir)
-    finally:
-        con.close()
+    if not isinstance(native, pl.DataFrame):
+        native = pl.from_arrow(native)
+
+    # WCC: dedup edges + Rust Union-Find over the Arrow edge stream, folding in
+    # every singleton row-id straight off the resident frame.
+    assignments, n_pairs = _cluster_arrow_native(
+        _prep_all_ids_frame(native), pairs, max_cluster_size, link_threshold,
+    )
+    # O(N) output streamed to parquet from the resident frame via sink_parquet.
+    res = _stream_fs_dedupe_output_polars(native, assignments, config, out_dir)
     res["pairs"] = n_pairs
     res["streaming"] = True
     res["sequential"] = True
