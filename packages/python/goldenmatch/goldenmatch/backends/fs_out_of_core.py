@@ -1415,12 +1415,18 @@ def run_fs_dedupe_sequential(
         )
 
     if assignments is None:
-        # Fallback (uncovered config / native kernel absent): Arrow/Rust batch
-        # scorer (Rust block grouping via build_block_index_arrow) -> Arrow edge
-        # stream -> Rust Union-Find WCC.
-        pairs = score_fs_sequential_arrow(
-            base, blocking_config, mk, matched_pairs, em_result,
-            target_ids=target_ids, emit="arrow",
+        # Score through the SAME tuned in-memory bucket scorer the normal pipeline
+        # uses (`score_buckets_arrow` -> native FS kernel + value-dedup/small-block
+        # batching + the bounded `FrameBlockSource` streaming under
+        # GOLDENMATCH_FS_BLOCK_SOURCE=frame) -- NOT a hand-rolled per-wave scorer.
+        # It emits the identical Arrow PAIR_STREAM table, which the Rust WCC
+        # (`_cluster_arrow_native`) consumes unchanged.
+        from goldenmatch.backends.score_buckets import score_buckets_arrow
+
+        pairs = score_buckets_arrow(
+            base, blocking_config, mk, set(matched_pairs),
+            n_buckets=getattr(config, "n_buckets", None),
+            target_ids=target_ids, em_result=em_result,
         )
         assignments, n_pairs = _cluster_arrow_native(
             _prep_all_ids_frame(base), pairs, max_cluster_size, link_threshold,
