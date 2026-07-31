@@ -59,18 +59,23 @@ def test_score_pairs_batch():
 
 
 # --- registry ---------------------------------------------------------------
-def test_registry_3b_published_7b_pending():
-    # 3b is published (er-matcher-3b-v1.0.0 GitHub Release, pinned url+sha256);
-    # 7b weights still ship only after its eval gate, so it stays PENDING.
-    assert registry.MODELS["3b"].published is True
+def test_registry_1p5b_published_others_pending():
+    # 1.5b is the SHIPPED DEFAULT (er-matcher-1.5b-v1.0.0 GitHub Release, Apache-2.0
+    # base, pinned url+sha256). 3b is WITHDRAWN for licensing (Qwen Research License,
+    # non-commercial) so its pin is nulled; 7b weights ship only after its eval gate.
+    assert registry.DEFAULT_TIER == "1.5b"
+    assert registry.MODELS["1.5b"].published is True
+    assert registry.MODELS["3b"].published is False
     assert registry.MODELS["7b"].published is False
 
 
 def test_resolve_refuses_unpublished():
     # 7b is still PENDING (no url/sha256) -> resolve refuses (can't verify what
-    # isn't pinned). 3b is published now, so use 7b for the refusal check.
+    # isn't pinned). 3b is withdrawn (pin nulled), so it refuses too.
     with pytest.raises(ValueError, match="not published"):
         registry.resolve_model("7b")
+    with pytest.raises(ValueError, match="not published"):
+        registry.resolve_model("3b")
 
 
 def test_resolve_unknown_tier():
@@ -89,14 +94,16 @@ def test_verify_detects_tamper(tmp_path: Path):
 
 def test_serializer_drift_refused(monkeypatch):
     # A model built for a different serializer version must be refused (retrain).
-    spec = registry.MODELS["3b"]
+    # Serializer drift is checked BEFORE the published gate, so a pinned-but-drifted
+    # spec must still raise on the drift (not the not-published path).
+    spec = registry.MODELS["1.5b"]
     drifted = registry.ModelSpec(
         tier=spec.tier, filename=spec.filename, url="https://x/m.gguf",
         sha256="a" * 64, base_model=spec.base_model, serializer_version="v0",
     )
-    monkeypatch.setitem(registry.MODELS, "3b", drifted)
+    monkeypatch.setitem(registry.MODELS, "1.5b", drifted)
     with pytest.raises(ValueError, match="serializer drift"):
-        registry.resolve_model("3b")
+        registry.resolve_model("1.5b")
 
 
 # --- serve_local launcher ---------------------------------------------------
@@ -115,4 +122,4 @@ def test_serve_main_hints_when_server_absent():
     from goldenmatch.core.er_matcher import serve_local
     if serve_local._have_server():
         pytest.skip("llama_cpp installed; the no-server path isn't exercised here")
-    assert serve_local.main(["--tier", "3b"]) == 2
+    assert serve_local.main(["--tier", "1.5b"]) == 2

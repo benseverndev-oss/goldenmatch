@@ -13,7 +13,10 @@
 #   the CLI command wired over it (cli.ts), same as refs/learn. No unported engine
 #   remains. `refs` is now SHARED — the referential-integrity
 #   engine was ported to core/engine/referential.ts (pure/edge-safe set-membership
-#   over the parent key set, file I/O in the CLI action like `diff`). `learn` is now
+#   over the parent key set, file I/O in the CLI action like `diff`). No Rust owner
+#   (kernelize-on-measurement: cheap set-membership), so Python==TS is locked by a
+#   cross-language conformance fixture (tests/parity/referential.parity.test.ts) to
+#   stop the two hand-ports drifting. `learn` is now
 #   SHARED — the TS core already carried the engine (core/llm/rule-generator.ts:
 #   generateRules/serializeRules, edge-safe over fetch()), so the CLI command was
 #   wired over it (cli.ts), same as history/evaluate.
