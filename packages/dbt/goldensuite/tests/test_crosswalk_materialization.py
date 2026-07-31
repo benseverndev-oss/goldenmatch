@@ -14,6 +14,15 @@ try:
 except ImportError:
     pytest.skip("dbt-goldensuite not installed", allow_module_level=True)
 
+try:
+    # The crosswalk helper needs the semantic-layer wedge (ADR 0050). The dbt CI
+    # lane installs goldenmatch from PyPI, whose released build may predate the
+    # `goldenmatch.semantic` module — skip there until it ships (the feature is
+    # covered wherever a semantic-capable goldenmatch is present, e.g. workspace dev).
+    import goldenmatch.semantic  # noqa: F401
+except ImportError:
+    pytest.skip("goldenmatch.semantic not available", allow_module_level=True)
+
 from dbt_goldensuite.materialize import run_goldenmatch_crosswalk
 
 

@@ -214,7 +214,14 @@ def run_goldenmatch_crosswalk(
     if output_table is None:
         raise TypeError("run_goldenmatch_crosswalk() requires output_table")
 
-    from goldenmatch.semantic import build_resolved_crosswalk
+    try:
+        from goldenmatch.semantic import build_resolved_crosswalk
+    except ImportError as exc:  # pragma: no cover - exercised by the skip guard in CI
+        raise ImportError(
+            "run_goldenmatch_crosswalk requires a goldenmatch build that includes "
+            "the `goldenmatch.semantic` module (the semantic-layer wedge, ADR 0050). "
+            "Upgrade goldenmatch to a version that ships it."
+        ) from exc
 
     conn = duckdb.connect(database)
     df = conn.execute(f"SELECT * FROM {input_table}").pl()  # noqa: F841 (used below)
