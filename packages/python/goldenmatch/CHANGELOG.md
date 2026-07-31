@@ -7,6 +7,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **Customer 360 serving surface + semantic-layer drill-through.** The `customer_360`
+  primitive (golden record + per-field provenance + linked source records + event
+  timeline + relationship neighborhood, composed from the durable store) is now
+  surfaced as a `customer_360` MCP tool and a `goldenmatch identity 360 <entity_id>`
+  CLI command (both share the `customer_360_page` serializer). New
+  `goldenmatch.semantic.profile_from_crosswalk(crosswalk, source_pk)` /
+  `entity_360(store_path, entity_id)` connect the semantic-layer wedge to Customer
+  360: a `ResolvedCrosswalk`'s `resolved_entity_id` is the same durable `entity_id`
+  the 360 keys on, so a metric row drills straight through to the whole customer
+  view with zero key translation. `customer_360` is a Python-only MCP tool (no TS
+  equivalent); goldenmatch MCP tools **91 → 92**.
+- **`emit_semantic_model_from_store` — a conformed catalog from the durable spine.**
+  `goldenmatch.semantic.emit_semantic_model_from_store(store, *, source_name,
+  source_pk_column, dialect, ...)` reads the live IdentityStore's identity summary
+  and emits the same conformed `resolved_entity_id` join declaration the crosswalk
+  emitters produce — so a dbt/MetricFlow, Cube, or OSI catalog's identity join can
+  be regenerated from the control plane at any time ("keep the catalog live"),
+  not just from a single dedupe run's `ResolvedCrosswalk`. Pairs with
+  `write_resolved_catalog` (pass `path=` to also write it).
 - **OSS local ER-matcher: ship the 1.5B model (Apache-2.0) as the default.** The
   self-hosted LLM boost (Path A) now pins a Modal-trained, published
   `er-matcher-1.5b-v1.0.0` GGUF (Qwen2.5-1.5B-Instruct base, Apache-2.0,
