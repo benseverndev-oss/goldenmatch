@@ -32,17 +32,20 @@ cli_commands:
 # analyzers is guarded separately by native/wasm parity fixtures). All 4 analyzers
 # are shared 1:1 across Python + TS.
 analyzers:
+  # key.integrity: metric-aware key-integrity certification (semantic-layer wedge,
+  # ADR 0049) — reports a goldenmatch KeyIntegrityCertificate (unique-at-grain,
+  # per-measure fan-out, opt-in undercount/fragmentation). It is a PURE PROJECTION
+  # of the serialized certificate (no ER pipeline / kernel — the resolution tier that
+  # produces the cert stays Python-only), so the deliberate-follow-on TS port
+  # (core/analyzers/keyIntegrity.ts, mirroring match.rates) landed it as SHARED. All
+  # 5 analyzers are now shared 1:1 across Python + TS.
   shared:
   - cluster.distribution
   - frame.summary
+  - key.integrity
   - match.rates
   - quality.rollup
-  # key.integrity: metric-aware key-integrity certification (semantic-layer wedge,
-  # ADR 0049). Python-only in v1 — reports a goldenmatch KeyIntegrityCertificate
-  # whose resolution tier runs the goldenmatch ER pipeline; a TS/WASM port is a
-  # deliberate follow-on. Declared python_only so the analyzers parity gate passes.
-  python_only:
-  - key.integrity
+  python_only: []
   ts_only: []
 # Frame-kernel cross-language boundary (distinct_count / null_ratio /
 # duplicate_row_ratio). Same classification-map idiom as goldenmatch's
