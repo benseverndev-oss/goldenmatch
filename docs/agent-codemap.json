@@ -7141,9 +7141,13 @@
           "file": "packages/python/goldenmatch/goldenmatch/semantic/catalog.py",
           "purpose": "Live catalog write-back for the semantic-layer wedge (wedge B, persisted).",
           "defines": [
+            "_emit_for_dialect",
+            "emit_semantic_model_from_store",
             "write_resolved_catalog"
           ],
           "imports": [
+            "goldenmatch.identity",
+            "goldenmatch.semantic.crosswalk",
             "goldenmatch.semantic.cube",
             "goldenmatch.semantic.metricflow",
             "goldenmatch.semantic.osi"

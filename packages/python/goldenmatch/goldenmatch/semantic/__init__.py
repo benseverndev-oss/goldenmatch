@@ -22,7 +22,10 @@ from goldenmatch.semantic.blocking import (
     metric_aware_attributes,
     semantic_field_roles,
 )
-from goldenmatch.semantic.catalog import write_resolved_catalog
+from goldenmatch.semantic.catalog import (
+    emit_semantic_model_from_store,
+    write_resolved_catalog,
+)
 from goldenmatch.semantic.certify import (
     KeyCertification,
     SemanticCertification,
@@ -90,6 +93,8 @@ __all__ = [
     "emit_from_crosswalk",
     # live catalog write-back — persist the conformed declaration to a catalog file
     "write_resolved_catalog",
+    # emit a conformed catalog directly from the durable identity store
+    "emit_semantic_model_from_store",
     # Customer 360 drill-through — resolved key -> the whole customer view
     "profile_from_crosswalk",
     "entity_360",
