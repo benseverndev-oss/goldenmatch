@@ -82,9 +82,14 @@ jobs:
           done
 
       - name: In-memory OOM contrast (expected to be killed at 50M)
-        if: ${{ (github.event.inputs.in_memory_scale || '50000000') != '' }}
+        # Skippable: pass an EMPTY in_memory_scale to omit this leg entirely. The
+        # input's own `default: 50000000` supplies the default when unset, so
+        # DON'T re-add a `|| '50000000'` coalesce here -- that would override an
+        # explicit empty value and force the (preemption-prone) 50M leg to run,
+        # whose runner reclaim then kills the artifact upload.
+        if: ${{ inputs.in_memory_scale != '' }}
         run: |
-          n="${{ github.event.inputs.in_memory_scale || '50000000' }}"
+          n="${{ inputs.in_memory_scale }}"
           echo "::group::in_memory rows=$n (expected OOM)"
           uv run python scripts/bench_fs_out_of_core_scale.py \
             --rows "$n" --mode in_memory \
