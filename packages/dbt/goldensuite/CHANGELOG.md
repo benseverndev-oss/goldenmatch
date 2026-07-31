@@ -18,6 +18,15 @@ Suite monorepo and is consumed from there (not published to PyPI).
   (macros) and a `pip install "git+...#subdirectory=..."` for the Python helper.
 
 ### Added
+- **`run_goldenmatch_crosswalk` Python helper (semantic-layer wedge B).** Resolves
+  identity once and materializes the durable `{source, source_pk, resolved_entity_id}`
+  crosswalk table in DuckDB — the conformed join key a semantic layer (dbt/MetricFlow,
+  Cube, OSI) groups metrics by, keyed on the control-plane `entity_id` (not the
+  run-local cluster id `goldenmatch_dedupe` emits). Pass a `store_path` for entity ids
+  durable across runs ("resolve once, every metric inherits correct joins"). No pure-SQL
+  UDF equivalent — the resolved id comes from the stateful Identity Control Plane — so
+  it's a Python-helper materialization (call from a dbt Python model). Wraps
+  `goldenmatch.semantic.build_resolved_crosswalk` (ADR 0050).
 - **`goldenmatch_match` materialization (two-table record linkage).** Links a target
   model against a `reference` table and outputs matched pairs `(target_id, reference_id,
   score)` (best match per target). Backed by a new table-returning `goldenmatch_match_pairs`
