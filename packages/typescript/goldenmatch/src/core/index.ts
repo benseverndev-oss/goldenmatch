@@ -510,6 +510,7 @@ export { simhashSignature, simhashBandHashes } from "./simhash.js";
 
 export * from "./memory/index.js";
 export * from "./identity/index.js";
+export * from "./semantic/index.js";
 
 // ---------------------------------------------------------------------------
 // Agent decision core (AgentSession + strategy + skill registry)

@@ -59,11 +59,11 @@ neglect:
   (`read_file`, `write_csv`, `server_info`) were the last holdouts, and Python now
   exposes all eight.
 
-So GoldenMatch's **84 TS tools vs 94 Python** breaks down as 84 shared operations,
-**zero TS-only**, and 10 Python-only tools (the VLM document-ingest pair, the
+So GoldenMatch's **85 TS tools vs 94 Python** breaks down as 85 shared operations,
+**zero TS-only**, and 9 Python-only tools (the VLM document-ingest pair, the
 distributed routing trio, `list_plugins`, `pprl_auto_config`, and the
-semantic-layer wedge — `certify_semantic_model`, `certify_serving_joins`,
-`emit_semantic_model_from_store`). The TS MCP surface
+semantic-layer catalog front doors — `certify_semantic_model` and
+`emit_semantic_model_from_store` (the dialect emitters are Python-only)). The TS MCP surface
 is now a strict subset of the Python one — every TS tool has a Python counterpart of
 the same name, and what remains Python-only is the set with no JS-ecosystem
 equivalent. On the shared core the **public function names match**, and that parity

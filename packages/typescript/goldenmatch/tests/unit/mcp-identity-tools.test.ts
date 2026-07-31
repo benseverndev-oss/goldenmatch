@@ -98,7 +98,7 @@ afterEach(() => {
 });
 
 describe("IDENTITY_TOOLS metadata", () => {
-  it("exports the 16 identity tools matching the Python sibling", () => {
+  it("exports the 17 identity tools matching the Python sibling", () => {
     expect(IDENTITY_TOOLS.map((t) => t.name)).toEqual([
       "identity_resolve",
       "identity_list",
@@ -116,8 +116,9 @@ describe("IDENTITY_TOOLS metadata", () => {
       "identity_stats",
       "identity_worklist",
       "customer_360",
+      "certify_serving_joins",
     ]);
-    expect(IDENTITY_TOOL_NAMES.size).toBe(16);
+    expect(IDENTITY_TOOL_NAMES.size).toBe(17);
     for (const t of IDENTITY_TOOLS) {
       expect(t.description.length).toBeGreaterThan(0);
       expect(t.inputSchema).toBeTypeOf("object");
@@ -399,5 +400,17 @@ describe("identity read tools (show / profile / stats / worklist)", () => {
     expect(r["relationships"]).toEqual([]);
     const missing = await call("customer_360", { entity_id: "NOPE" });
     expect(missing["found"]).toBe(false);
+  });
+
+  it("certify_serving_joins certifies the record_id join key", async () => {
+    // The seed has 2 entities (E1, E2) with distinct src:1 / src:2 -> unique.
+    const r = await call("certify_serving_joins", { dataset: "d" });
+    expect(r["trustworthy"]).toBe(true);
+    expect(r["n_entities"]).toBe(2);
+    expect(r["n_records"]).toBe(2);
+    expect(r["truncated"]).toBe(false);
+    const rc = r["record_id"] as Record<string, unknown>;
+    expect(rc["is_unique_at_grain"]).toBe(true);
+    expect(rc["duplicate_key_groups"]).toBe(0);
   });
 });

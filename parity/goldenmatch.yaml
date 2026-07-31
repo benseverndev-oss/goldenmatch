@@ -66,6 +66,7 @@ mcp_tools:
   - auto_configure
   - build_clusters
   - certify_recall
+  - certify_serving_joins
   - compare_clusters
   - config_weaknesses
   - controller_telemetry
@@ -139,7 +140,6 @@ mcp_tools:
   - write_csv
   python_only:
   - certify_semantic_model
-  - certify_serving_joins
   - documents_ingest
   - documents_suggest_schema
   - emit_semantic_model_from_store
@@ -256,6 +256,7 @@ a2a_skills:
   - agent_explain_pair
   - agent_match_sources
   - agent_review_queue
+  - certify_serving_joins
   - customer_360
   - fix_quality
   - memory_import
