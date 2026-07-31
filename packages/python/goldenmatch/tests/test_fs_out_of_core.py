@@ -481,6 +481,7 @@ def test_resolve_fs_block_source_default_is_eager(monkeypatch):
 @pytest.mark.parametrize(
     "block_source,expected",
     [("frame", "frame"), ("duckdb", "duckdb"), ("eager", "eager"),
+     ("sequential", "sequential"), (" Sequential ", "sequential"),
      ("auto", "eager"), ("AUTO", "eager"), (" DuckDB ", "duckdb"),
      ("nonsense", "eager")],
 )
@@ -526,3 +527,162 @@ def test_block_source_frame_drives_bucket_streaming(monkeypatch):
     assert _fs_bounded_stream_enabled() is False
     monkeypatch.setenv("GOLDENMATCH_FS_BLOCK_SOURCE", "auto")
     assert _fs_bounded_stream_enabled() is False
+
+
+# ── sequential Arrow-native / Rust batch scorer + end-WCC (in-RAM) ──
+
+def _seq_pairs(df, blocking, mk, em) -> set:
+    from goldenmatch.backends.fs_out_of_core import score_fs_sequential_arrow
+
+    return {
+        (min(a, b), max(a, b), round(float(s), 4))
+        for a, b, s in score_fs_sequential_arrow(df, blocking, mk, set(), em)
+    }
+
+
+def test_sequential_static_parity():
+    df = _bigger_df()
+    mk = _make_probabilistic_mk()
+    blocking = BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])])
+    em = _train(df, blocking, mk)
+    assert _seq_pairs(df, blocking, mk, em) == _reference_pairs(df, blocking, mk, em)
+
+
+def test_sequential_multipass_parity():
+    df = _bigger_df()
+    mk = _make_probabilistic_mk()
+    blocking = BlockingConfig(
+        strategy="multi_pass",
+        passes=[
+            BlockingKeyConfig(fields=["zip"]),
+            BlockingKeyConfig(fields=["last_name"]),
+        ],
+    )
+    em = _train(df, blocking, mk)
+    assert _seq_pairs(df, blocking, mk, em) == _reference_pairs(df, blocking, mk, em)
+
+
+def test_sequential_matches_duckdb_out_of_core():
+    """The in-RAM sequential scorer emits the SAME pair set as the DuckDB
+    out-of-core scorer (both parity-defined against build_blocks)."""
+    df = _bigger_df()
+    mk = _make_probabilistic_mk()
+    blocking = BlockingConfig(
+        strategy="multi_pass",
+        passes=[
+            BlockingKeyConfig(fields=["zip"]),
+            BlockingKeyConfig(fields=["last_name"]),
+        ],
+    )
+    em = _train(df, blocking, mk)
+    assert _seq_pairs(df, blocking, mk, em) == _got_pairs(df, blocking, mk, em)
+
+
+def test_sequential_arrow_emit_matches_tuples():
+    from goldenmatch.backends.fs_out_of_core import score_fs_sequential_arrow
+
+    df = _bigger_df()
+    mk = _make_probabilistic_mk()
+    blocking = BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])])
+    em = _train(df, blocking, mk)
+    tbl = score_fs_sequential_arrow(df, blocking, mk, set(), em, emit="arrow")
+    arrow_set = {
+        (min(x, y), max(x, y))
+        for x, y in zip(tbl.column("id_a").to_pylist(), tbl.column("id_b").to_pylist())
+    }
+    tup_set = {(a, b) for a, b, _ in _seq_pairs(df, blocking, mk, em)}
+    assert arrow_set == tup_set
+
+
+def test_sequential_non_field_strategy_raises():
+    from goldenmatch.backends.fs_out_of_core import score_fs_sequential_arrow
+
+    df = _make_dedupe_df()
+    mk = _make_probabilistic_mk()
+    blocking = BlockingConfig(strategy="ann", keys=[BlockingKeyConfig(fields=["zip"])])
+    em = train_em(df, mk, blocks=[], blocking_fields=[])
+    with pytest.raises(NotImplementedError):
+        score_fs_sequential_arrow(df, blocking, mk, set(), em)
+
+
+def test_end_to_end_sequential_dedupe(tmp_path):
+    """run_fs_dedupe_sequential: in-RAM score -> Rust WCC -> streamed parquet.
+    Rows preserved, planted dups found, a golden per multi-member cluster."""
+    import types
+
+    from goldenmatch.backends.fs_out_of_core import run_fs_dedupe_sequential
+
+    df = _bigger_df()
+    mk = _make_probabilistic_mk()
+    blocking = BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])])
+    em = _train(df, blocking, mk)
+    cfg = types.SimpleNamespace(golden_rules=None)
+
+    res = run_fs_dedupe_sequential(df, blocking, mk, em, cfg, str(tmp_path))
+
+    assert res["sequential"] is True
+    assert res["unique_count"] + res["dupes_count"] == df.height
+    assert res["dupes_count"] >= 2
+    assert res["golden_count"] >= 1
+
+
+def test_sequential_and_duckdb_orchestrators_agree(tmp_path):
+    """run_fs_dedupe_sequential and run_fs_dedupe_streaming write the SAME
+    unique/dupes/golden counts (same pairs -> same WCC -> same output)."""
+    import types
+
+    from goldenmatch.backends.fs_out_of_core import (
+        run_fs_dedupe_sequential,
+        run_fs_dedupe_streaming,
+    )
+
+    df = _bigger_df()
+    mk = _make_probabilistic_mk()
+    blocking = BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])])
+    em = _train(df, blocking, mk)
+    cfg = types.SimpleNamespace(golden_rules=None)
+
+    seq = run_fs_dedupe_sequential(df, blocking, mk, em, cfg, str(tmp_path / "seq"))
+    ooc = run_fs_dedupe_streaming(df, blocking, mk, em, cfg, str(tmp_path / "ooc"))
+    for k in ("unique_count", "dupes_count", "golden_count", "pairs"):
+        assert seq[k] == ooc[k], k
+
+
+def test_fs_streaming_route_selects_orchestrator(monkeypatch):
+    from goldenmatch.backends.fs_out_of_core import fs_streaming_route
+
+    monkeypatch.delenv("GOLDENMATCH_FS_OUT_OF_CORE", raising=False)
+    for src, expected in (
+        ("sequential", "sequential"), ("duckdb", "duckdb"),
+        ("frame", None), ("eager", None), ("auto", None),
+    ):
+        monkeypatch.setenv("GOLDENMATCH_FS_BLOCK_SOURCE", src)
+        assert fs_streaming_route() == expected
+
+
+def test_dedupe_to_parquet_sequential_parity_with_in_memory(tmp_path, monkeypatch):
+    """dedupe_to_parquet under GOLDENMATCH_FS_BLOCK_SOURCE=sequential partitions
+    the SAME records as the default in-memory FS route."""
+    import polars as pl
+    from goldenmatch import dedupe_df, dedupe_to_parquet
+
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+    monkeypatch.delenv("GOLDENMATCH_FS_OUT_OF_CORE", raising=False)
+
+    csv_path = tmp_path / "people.csv"
+    _make_person_csv(csv_path)
+    df = pl.read_csv(csv_path)
+    cfg = _fs_person_config()
+
+    monkeypatch.setenv("GOLDENMATCH_FS_BLOCK_SOURCE", "eager")
+    mem = dedupe_df(df, config=cfg)
+    mem_parts = _partitions(mem)
+
+    monkeypatch.setenv("GOLDENMATCH_FS_BLOCK_SOURCE", "sequential")
+    out_dir = tmp_path / "out"
+    res = dedupe_to_parquet(str(csv_path), out_dir=str(out_dir), config=cfg)
+    assert res["streaming"] is True
+    assert res["sequential"] is True
+    stream_parts = _partition_set_from_parquet(res["dupes_path"])
+
+    assert stream_parts == sorted(mem_parts)

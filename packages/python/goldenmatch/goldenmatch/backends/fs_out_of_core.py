@@ -116,6 +116,12 @@ def resolve_fs_block_source() -> str:
       - ``"frame"``  — in-RAM bounded streaming (the spec's ``FrameBlockSource``):
         slice one bucket off the keyed frame on demand inside ``score_buckets``,
         holding only ``max_workers`` slices live. Lower peak, same box.
+      - ``"sequential"`` — in-RAM sequential Arrow-native / Rust batch scoring
+        (``score_fs_sequential_arrow``): block-key group in polars/Arrow, gather
+        each block, stream through the Rust kernel to an Arrow edge stream, then
+        ONE Rust WCC stitch at the end (``run_fs_dedupe_sequential``). No DuckDB,
+        no on-disk sorted scans — the fast pure-Arrow path while the frame fits
+        RAM.
       - ``"duckdb"`` — out-of-core: spill the prepared table to a DuckDB file and
         stream blocks + O(N) output (``score_fs_out_of_core`` /
         ``run_fs_dedupe_streaming``). The ≥40M single-box scale path.
@@ -124,16 +130,19 @@ def resolve_fs_block_source() -> str:
     recognized value; the legacy ``GOLDENMATCH_FS_OUT_OF_CORE=1`` is honored only
     when ``GOLDENMATCH_FS_BLOCK_SOURCE`` is unset/empty):
       - ``FS_BLOCK_SOURCE=frame`` → ``"frame"``
+      - ``FS_BLOCK_SOURCE=sequential`` → ``"sequential"``
       - ``FS_BLOCK_SOURCE=duckdb`` → ``"duckdb"``
       - ``FS_BLOCK_SOURCE=eager`` / ``auto`` / unset → ``"eager"`` (+ legacy alias)
 
     ``auto`` currently resolves to ``eager`` — the measured RAM-floor
-    auto-escalation to ``duckdb`` is the documented Phase-1 follow-on; until it
-    lands (and the default is flipped on a CI scale gate) ``auto`` stays
-    byte-identical to today."""
+    auto-escalation to ``sequential``/``duckdb`` is the documented Phase-1
+    follow-on; until it lands (and the default is flipped on a CI scale gate)
+    ``auto`` stays byte-identical to today."""
     v = os.environ.get("GOLDENMATCH_FS_BLOCK_SOURCE", "").strip().lower()
     if v == "frame":
         return "frame"
+    if v == "sequential":
+        return "sequential"
     if v == "duckdb":
         return "duckdb"
     if v in ("", "auto", "eager"):
@@ -154,6 +163,22 @@ def fs_out_of_core_enabled() -> bool:
     vars (``GOLDENMATCH_FS_OUT_OF_CORE=1`` and ``GOLDENMATCH_FS_BLOCK_SOURCE=duckdb``)
     are one decision, not two independent booleans."""
     return resolve_fs_block_source() == "duckdb"
+
+
+def fs_streaming_route() -> str | None:
+    """Which END-TO-END streaming FS dedupe orchestrator (score → WCC → parquet)
+    the current env selects, or ``None`` for the default in-memory pipeline.
+
+      - ``"sequential"`` → ``run_fs_dedupe_sequential`` (in-RAM Arrow/Rust batches,
+        ``GOLDENMATCH_FS_BLOCK_SOURCE=sequential``).
+      - ``"duckdb"`` → ``run_fs_dedupe_streaming`` (out-of-core DuckDB spill,
+        ``GOLDENMATCH_FS_OUT_OF_CORE=1`` / ``GOLDENMATCH_FS_BLOCK_SOURCE=duckdb``).
+
+    ``eager``/``frame`` are NOT end-to-end streaming routes (``frame`` only changes
+    ``score_buckets``'s in-bucket residency), so they return ``None`` and the
+    caller keeps the default pipeline."""
+    src = resolve_fs_block_source()
+    return src if src in ("sequential", "duckdb") else None
 
 
 def _fs_ooc_arrow_cluster_enabled() -> bool:
@@ -593,6 +618,228 @@ def score_fs_out_of_core(
                     pass
 
 
+def score_fs_sequential_arrow(
+    prepared_df: Any,
+    blocking_config: BlockingConfig,
+    mk: MatchkeyConfig,
+    matched_pairs: set[tuple[int, int]],
+    em_result,
+    *,
+    target_ids: set[int] | None = None,
+    max_block_rows: int | None = None,
+    emit: str = "tuples",
+) -> Any:
+    """IN-RAM sequential Arrow-native / Rust FS block scoring (no DuckDB).
+
+    The in-RAM analogue of ``score_fs_out_of_core``, and the block-source the
+    "sequential Arrow batches + WCC at the end" scale method wants: block-key
+    GROUPING happens in polars/Arrow (never DuckDB SQL / on-disk sorted scans),
+    each block's rows are GATHERED from the resident frame by row-id, and blocks
+    stream through the SAME native FS kernel in bounded waves. With
+    ``emit="arrow"`` the scored pairs are converted to a ``PAIR_STREAM`` ``pa.Table``
+    per wave and the tuples dropped, so pairs never accumulate as Python objects;
+    the downstream Rust WCC (``build_clusters_arrow_native``) collapses cross-pass
+    duplicate edges, so no ``seen`` set is kept in arrow mode.
+
+    Working set = the resident keyed frame + one WAVE of gathered block rows
+    (bounded by ``GOLDENMATCH_FS_OOC_WAVE_ROWS``) + the accumulated Arrow edge
+    stream (<< the frame). Use this when the prepared frame FITS in RAM and you
+    want the fast pure-Arrow/Rust path with a single WCC stitch at the end;
+    ``score_fs_out_of_core`` is the DuckDB-spilled variant for frames that don't.
+
+    **Parity.** Same ``_build_block_key_expr`` + null/sentinel key filter +
+    ``multi_pass`` ``(pass_sig, block_key)`` semantics as ``build_blocks`` /
+    ``score_fs_out_of_core``, and the SAME ``score_probabilistic_bucket_native``
+    kernel, so the emitted pair set is byte-identical to ``score_buckets`` ABSENT
+    oversized blocks (capped at ``max_block_rows``). Within-block gather order is
+    irrelevant (pairs are canonicalized + the kernel compares only within-block),
+    so the wave gather need not sort within a block.
+    """
+    import numpy as np
+    import polars as pl
+    import pyarrow as pa
+
+    from goldenmatch.backends.score_buckets import pairs_to_pair_stream
+    from goldenmatch.core.blocker import _build_block_key_expr
+    from goldenmatch.core.frame import (
+        is_polars_lazyframe,
+    )
+    from goldenmatch.core.frame import (
+        to_frame as _tf,
+    )
+    from goldenmatch.core.probabilistic import (
+        _fs_native_eligible,
+        _fs_vectorized_enabled,
+        _fs_vectorized_supported,
+        probabilistic_block_scorer,
+        score_probabilistic_bucket_native,
+        score_probabilistic_vectorized_batch,
+    )
+
+    if blocking_config.strategy not in ("static", "multi_pass"):
+        raise NotImplementedError(
+            f"score_fs_sequential_arrow supports static/multi_pass, not "
+            f"{blocking_config.strategy!r}"
+        )
+    if em_result is None:
+        raise ValueError("score_fs_sequential_arrow requires a trained em_result")
+
+    max_block_size = blocking_config.max_block_size
+    if max_block_rows is None:
+        max_block_rows = max_block_size
+
+    native = _tf(prepared_df).native
+    if is_polars_lazyframe(native):
+        native = native.collect()
+    if not isinstance(native, pl.DataFrame):
+        native = pl.from_arrow(native)
+    keep = _needed_columns(native, mk, blocking_config)
+    # Resident keyed frame, projected to the scoring columns, sorted by __row_id__
+    # ONCE so a block's row-ids map to physical positions by offset (contiguous
+    # ids -> id - lo) or a binary search (gapped ids). `.select` shares buffers.
+    frame = native.select(keep).sort("__row_id__")
+    del native
+    rid = frame["__row_id__"]
+    n_rows = frame.height
+    _lo = int(rid[0]) if n_rows else 0
+    _hi = int(rid[-1]) if n_rows else -1
+    _contiguous = n_rows > 0 and (_hi - _lo + 1 == n_rows)
+    _rid_np = None if _contiguous else rid.to_numpy()
+
+    def _positions(ids: np.ndarray) -> np.ndarray:
+        # row-id -> physical position in the __row_id__-sorted frame.
+        if _contiguous:
+            return ids - _lo
+        return np.searchsorted(_rid_np, ids)  # rid sorted asc, all ids present
+
+    use_native = _fs_native_eligible(mk)
+    prob_scorer = None if use_native else probabilistic_block_scorer(mk, em_result)
+    frozen_exclude = frozenset(matched_pairs)
+    _use_vec_batch = (
+        not use_native
+        and _fs_vectorized_enabled()
+        and _fs_vectorized_supported(mk)
+    )
+
+    passes = (
+        list(blocking_config.passes or [])
+        if blocking_config.strategy == "multi_pass"
+        else list(blocking_config.keys or [])
+    )
+
+    _arrow = emit == "arrow"
+    out: list[tuple[int, int, float]] = []
+    seen: set[tuple[int, int]] = set()
+    pair_tables: list = []
+    wave_rows = _fs_ooc_wave_rows()
+
+    def _merge(results) -> None:
+        if _arrow:
+            wave: list[tuple[int, int, float]] = []
+            for pairs in results:
+                for a, b, s in pairs:
+                    if target_ids is not None and (
+                        (a in target_ids) == (b in target_ids)
+                    ):
+                        continue
+                    wave.append((a, b, s))
+            if wave:
+                pair_tables.append(pairs_to_pair_stream(wave))
+            return
+        for pairs in results:
+            for a, b, s in pairs:
+                if target_ids is not None and (
+                    (a in target_ids) == (b in target_ids)
+                ):
+                    continue
+                key = (a, b) if a < b else (b, a)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append((a, b, s))
+
+    # Wave buffer: block row-ids concatenated in block order + per-block sizes.
+    # ONE gather per wave (not per block) -> one block-contiguous frame + a
+    # size_list, exactly the score_probabilistic_bucket_native contract.
+    buf_ids: list[np.ndarray] = []
+    buf_sizes: list[int] = []
+    buf_rows = 0
+
+    def _flush() -> None:
+        nonlocal buf_ids, buf_sizes, buf_rows
+        if not buf_ids:
+            return
+        ids = np.concatenate(buf_ids)
+        gathered = frame[_positions(ids)]
+        if use_native:
+            _merge((
+                score_probabilistic_bucket_native(
+                    gathered, buf_sizes, mk, em_result, frozen_exclude,
+                ),
+            ))
+        else:
+            # Split the block-contiguous gather back into per-block frames (cheap
+            # slices/views) for the vectorized-batch / per-block scorer paths.
+            blocks = []
+            off = 0
+            for sz in buf_sizes:
+                blocks.append(gathered.slice(off, sz))
+                off += sz
+            if _use_vec_batch:
+                _merge((
+                    score_probabilistic_vectorized_batch(
+                        blocks, mk, em_result, frozen_exclude
+                    ),
+                ))
+            else:
+                _merge(prob_scorer(b, frozen_exclude) for b in blocks)
+        buf_ids = []
+        buf_sizes = []
+        buf_rows = 0
+
+    for pass_config in passes:
+        key_expr = _build_block_key_expr(pass_config)
+        _key_cols = ["__row_id__"] + [
+            f for f in dict.fromkeys(pass_config.fields) if f != "__row_id__"
+        ]
+        # Block-key GROUPING in polars: (block_key -> [row_ids]), null/sentinel
+        # keys dropped, >=2 rows, capped at max_block_rows. One group-by per pass.
+        groups = (
+            frame.lazy()
+            .select(_key_cols)
+            .with_columns(key_expr)
+            .filter(
+                pl.col("__block_key__").is_not_null()
+                & ~pl.col("__block_key__")
+                    .str.strip_chars()
+                    .str.to_lowercase()
+                    .is_in(["nan", "null", "none"])
+            )
+            .group_by("__block_key__")
+            .agg(pl.col("__row_id__"))
+            .filter(pl.col("__row_id__").list.len() >= 2)
+            .with_columns(pl.col("__row_id__").list.head(max_block_rows))
+            .select("__row_id__")
+            .collect()
+        )
+        for ids_list in groups["__row_id__"]:
+            ids = ids_list.to_numpy()
+            buf_ids.append(ids)
+            buf_sizes.append(len(ids))
+            buf_rows += len(ids)
+            if buf_rows >= wave_rows:
+                _flush()
+        # Flush at the END of each pass so pass N is merged before pass N+1 (the
+        # pass-order first-seen dedup for tuples mode; arrow mode is order-free).
+        _flush()
+
+    if _arrow:
+        if pair_tables:
+            return pa.concat_tables(pair_tables)
+        return pairs_to_pair_stream([])
+    return out
+
+
 def stream_fs_dedupe_output(
     con: Any,
     prep_table: str,
@@ -891,3 +1138,68 @@ def run_fs_dedupe_streaming(
                 # Best-effort cleanup: a temp DB/WAL unlink failure is non-fatal
                 # (the OS reaps the tempdir), never break the run.
                 pass
+
+
+def run_fs_dedupe_sequential(
+    prepared_df: Any,
+    blocking_config: BlockingConfig,
+    mk: MatchkeyConfig,
+    em_result,
+    config: Any,
+    out_dir: str,
+    *,
+    matched_pairs: set[tuple[int, int]] | None = None,
+    target_ids: set[int] | None = None,
+    link_threshold: float | None = None,
+) -> dict:
+    """End-to-end IN-RAM SEQUENTIAL FS dedupe: score the resident frame with the
+    sequential Arrow-native / Rust batch scorer (``score_fs_sequential_arrow`` —
+    no DuckDB block source, no on-disk sorted scans), stitch with ONE Rust WCC
+    (``build_clusters_arrow_native`` over the Arrow edge stream), then write
+    unique/dupes/golden to parquet. The fast single-box path for frames that FIT
+    in RAM; ``run_fs_dedupe_streaming`` is the DuckDB-spilled variant past RAM.
+
+    Scoring never touches DuckDB. Output reuses the tested
+    ``stream_fs_dedupe_output`` via an IN-MEMORY DuckDB (the record frame is
+    resident anyway), so the result shape matches the streaming path exactly. The
+    scored pairs stay Arrow end-to-end (edge stream -> Rust WCC), so they never
+    accumulate as ``list[tuple]``. ``link_threshold`` semantics match
+    ``run_fs_dedupe_streaming`` (cluster only pairs whose best cross-pass score
+    clears the cut)."""
+    import duckdb
+
+    from goldenmatch.core.frame import is_polars_lazyframe
+    from goldenmatch.core.frame import to_frame as _tf
+
+    matched_pairs = set(matched_pairs or ())
+    max_cluster_size = 100
+    if getattr(config, "golden_rules", None) is not None:
+        max_cluster_size = config.golden_rules.max_cluster_size
+
+    # Score IN-RAM (pure Arrow/Rust batches -> Arrow edge stream). The frame is
+    # resident here, not spilled to disk.
+    pairs = score_fs_sequential_arrow(
+        prepared_df, blocking_config, mk, matched_pairs, em_result,
+        target_ids=target_ids, emit="arrow",
+    )
+
+    # WCC + O(N) output: reuse the tested arrow-native clusterer + streamer over an
+    # in-memory DuckDB holding the full record frame (in-RAM, no disk spill).
+    native = _tf(prepared_df).native
+    if is_polars_lazyframe(native):
+        native = native.collect()
+    con = duckdb.connect(":memory:")
+    try:
+        _load_frame_batched(con, native)
+        con.execute("CREATE INDEX ix_rid ON prep(__row_id__)")
+        assignments, n_pairs = _cluster_arrow_native(
+            con, pairs, max_cluster_size, link_threshold,
+        )
+        res = stream_fs_dedupe_output(con, "prep", assignments, config, out_dir)
+    finally:
+        con.close()
+    res["pairs"] = n_pairs
+    res["streaming"] = True
+    res["sequential"] = True
+    res["output_dir"] = out_dir
+    return res

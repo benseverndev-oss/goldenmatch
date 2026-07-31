@@ -6,6 +6,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added
+- **FS in-RAM sequential Arrow-native / Rust batch scorer + end-WCC
+  (`GOLDENMATCH_FS_BLOCK_SOURCE=sequential`, default OFF).** A single-box scale
+  path that avoids DuckDB entirely: block keys are grouped in polars/Arrow, each
+  block's rows are gathered from the resident frame and streamed through the
+  native Fellegi-Sunter kernel in bounded waves to an Arrow edge stream, then ONE
+  Rust Union-Find (WCC) stitches clusters at the end
+  (`backends.fs_out_of_core.score_fs_sequential_arrow` +
+  `run_fs_dedupe_sequential`). Working set = the resident frame + one wave of
+  gathered blocks + the (small) edge stream — no on-disk sorted scans, so it is
+  the fast pure-Arrow/Rust path while the prepared frame fits RAM (the DuckDB
+  `score_fs_out_of_core` remains the spill-past-RAM variant). Byte-parity with
+  `score_buckets`/`score_fs_out_of_core` absent oversized blocks (same block-key
+  derivation + same kernel), gated by `tests/test_fs_out_of_core.py`. Routed via
+  the shared `resolve_fs_block_source`/`fs_streaming_route` resolver and reachable
+  through `gm.dedupe_to_parquet(*files, out_dir=…)`. Default path unchanged.
+
 ### Changed
 - **FS out-of-core streaming: single `resolve_fs_block_source` knob + DuckDB
   API-deprecation cleanup.** The two FS bounded-streaming lanes are now governed by

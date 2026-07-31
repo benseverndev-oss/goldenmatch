@@ -115,7 +115,16 @@ def _fs_config_from_sample(fixture: Path, sample_rows: int = 200_000):
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--rows", type=int, required=True)
-    ap.add_argument("--mode", choices=["streaming", "in_memory"], required=True)
+    ap.add_argument(
+        "--mode",
+        choices=["streaming", "sequential", "in_memory"],
+        required=True,
+        help=(
+            "streaming=DuckDB out-of-core (FS_BLOCK_SOURCE=duckdb); "
+            "sequential=in-RAM Arrow/Rust batches + end-WCC (FS_BLOCK_SOURCE="
+            "sequential); in_memory=default pipeline contrast (EXPECTED OOM at 50M)"
+        ),
+    )
     ap.add_argument("--dupe-rate", type=float, default=0.20)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--workdir", type=Path, default=Path(".bench_fs_ooc"))
@@ -157,8 +166,14 @@ def main() -> None:
     sampler.start()
     t0 = time.perf_counter()
     try:
-        if args.mode == "streaming":
-            os.environ["GOLDENMATCH_FS_OUT_OF_CORE"] = "1"
+        if args.mode in ("streaming", "sequential"):
+            # streaming -> DuckDB out-of-core; sequential -> in-RAM Arrow/Rust
+            # batches + end-WCC. Both drive dedupe_to_parquet's streaming
+            # short-circuit; only the block-source env differs.
+            os.environ.pop("GOLDENMATCH_FS_OUT_OF_CORE", None)
+            os.environ["GOLDENMATCH_FS_BLOCK_SOURCE"] = (
+                "duckdb" if args.mode == "streaming" else "sequential"
+            )
             # Per-pass scoring progress in the CI log (the heartbeat covers the
             # opaque stages; this narrates the streaming scorer itself).
             os.environ["GOLDENMATCH_FS_OOC_DEBUG"] = "1"
@@ -178,6 +193,7 @@ def main() -> None:
                     "out-of-core path was not exercised"
                 )
         else:  # in_memory contrast
+            os.environ.pop("GOLDENMATCH_FS_BLOCK_SOURCE", None)
             os.environ["GOLDENMATCH_FS_OUT_OF_CORE"] = "0"
             import pyarrow.parquet as pq
             from goldenmatch import dedupe_df

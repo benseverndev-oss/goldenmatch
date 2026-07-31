@@ -19,6 +19,10 @@ on:
         description: "Space-separated row counts to run out-of-core (streaming)"
         required: false
         default: "25000000 50000000"
+      modes:
+        description: "Space-separated streaming modes to run (streaming=DuckDB out-of-core, sequential=in-RAM Arrow/Rust batches + end-WCC)"
+        required: false
+        default: "sequential streaming"
       in_memory_scale:
         description: "Row count for the in-memory OOM contrast (empty to skip)"
         required: false
@@ -63,16 +67,18 @@ jobs:
       - name: Build native extension (FS kernel)
         run: uv run python scripts/build_native.py
 
-      - name: Out-of-core streaming legs (one isolated subprocess per scale)
+      - name: Streaming legs (one isolated subprocess per scale x mode)
         run: |
           mkdir -p .bench_fs_ooc results
-          for n in ${{ github.event.inputs.scales || '25000000 50000000' }}; do
-            echo "::group::streaming rows=$n"
-            uv run python scripts/bench_fs_out_of_core_scale.py \
-              --rows "$n" --mode streaming \
-              --workdir .bench_fs_ooc --out-json "results/streaming_${n}.json" \
-              || echo "{\"rows\": $n, \"mode\": \"streaming\", \"completed\": false, \"killed\": true}" > "results/streaming_${n}.json"
-            echo "::endgroup::"
+          for m in ${{ github.event.inputs.modes || 'sequential streaming' }}; do
+            for n in ${{ github.event.inputs.scales || '25000000 50000000' }}; do
+              echo "::group::$m rows=$n"
+              uv run python scripts/bench_fs_out_of_core_scale.py \
+                --rows "$n" --mode "$m" \
+                --workdir .bench_fs_ooc --out-json "results/${m}_${n}.json" \
+                || echo "{\"rows\": $n, \"mode\": \"$m\", \"completed\": false, \"killed\": true}" > "results/${m}_${n}.json"
+              echo "::endgroup::"
+            done
           done
 
       - name: In-memory OOM contrast (expected to be killed at 50M)

@@ -536,10 +536,12 @@ def _fs_streaming_dedupe_eligible(
         out-of-core scorer supports — see ``score_fs_out_of_core``).
 
     Everything else keeps the in-memory pipeline. Deliberately conservative: this
-    is the opt-in scale option, not a default route change."""
-    from goldenmatch.backends.fs_out_of_core import fs_out_of_core_enabled
+    is the opt-in scale option, not a default route change. The concrete
+    orchestrator (in-RAM ``sequential`` Arrow/Rust batches vs out-of-core
+    ``duckdb`` spill) is chosen by ``fs_streaming_route`` at dispatch time."""
+    from goldenmatch.backends.fs_out_of_core import fs_streaming_route
 
-    if output_dir is None or not fs_out_of_core_enabled():
+    if output_dir is None or fs_streaming_route() is None:
         return False
     if config.blocking is None:
         return False
@@ -564,7 +566,11 @@ def _run_fs_streaming_dedupe(
 
     Returns a result dict of output PATHS + counts (never in-memory frames) —
     the streaming path exists precisely so the back-half is never materialized."""
-    from goldenmatch.backends.fs_out_of_core import run_fs_dedupe_streaming
+    from goldenmatch.backends.fs_out_of_core import (
+        fs_streaming_route,
+        run_fs_dedupe_sequential,
+        run_fs_dedupe_streaming,
+    )
     from goldenmatch.core.blocker import collect_blocking_fields
     from goldenmatch.core.frame import to_frame as _tf
     from goldenmatch.core.probabilistic import load_or_train_em
@@ -602,7 +608,12 @@ def _run_fs_streaming_dedupe(
         "F-S EM: converged=%s, iterations=%d, match_rate=%.4f",
         em_result.converged, em_result.iterations, em_result.proportion_matched,
     )
-    res = run_fs_dedupe_streaming(
+    _orchestrator = (
+        run_fs_dedupe_sequential
+        if fs_streaming_route() == "sequential"
+        else run_fs_dedupe_streaming
+    )
+    res = _orchestrator(
         score_frame, blocking, scoring_mk, em_result, config, output_dir,
         link_threshold=link_threshold,
     )
