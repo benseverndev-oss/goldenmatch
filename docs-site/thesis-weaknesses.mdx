@@ -1,0 +1,80 @@
+---
+title: "Repo thesis weaknesses"
+description: "Where the codebase does not yet meet the governing architecture frame (one product, two engines, many surfaces) — the thesis-conformance weakness board and live-harvested drift signals, generated and gated in CI."
+keywords: ["thesis", "conformance", "architecture", "weaknesses", "one product two engines", "governance", "reference"]
+---
+
+The [suite matrix](/suite-matrix) renders cross-language *surface* parity. This page renders the codebase's standing against the **governing architecture frame** — *one product, two engines, many surfaces* ([frame](https://github.com/benseverndev-oss/goldenmatch/blob/main/context-network/architecture/one-product-two-engines.md), decision 0047) — scored by its five decision tests (tenets). Everything below the line is generated from the thesis-conformance scorecard (`parity/thesis_conformance.yaml` + the live static harvest in `scripts/check_thesis_conformance.py`, via `scripts/gen_thesis_weaknesses.py`) and verified in CI, so it can't drift from the gate.
+
+{/* thesis-weaknesses:generated:start -- DO NOT EDIT. Regenerate: python scripts/gen_thesis_weaknesses.py --write */}
+
+## Standing
+
+**10** open weakness(es) — 🟢 low 10. Undeclared (a real divergence with no conformance level / contract): **0**.
+
+A weakness is a place the codebase does not yet fully meet the frame; each maps to one of the five decision tests (tenets). *Declared* means the divergence has a conformance level and a test — an accepted, contained cost — not an accident. The `declared: false` class is the dangerous one and is flagged below.
+
+## The five tenets
+
+| Tenet | Decision test | Open |
+|---|---|---|
+| **T1** | One authoritative semantic owner per capability (no second source of truth). | 4 |
+| **T2** | Conformance defines correctness (every divergence has a declared level + a test). | 2 |
+| **T3** | Kernelize on measurement (deferrals classified; no silent regress to fallback). | 1 |
+| **T4** | Compute vs control stay architecturally distinct (explicit, versioned seam). | 3 |
+| **T5** | Arrow at bulk boundaries, not the universal calling convention. | 0 |
+
+## Weakness board
+
+Ranked by severity. *Routing* applies the conformance-v2 default-routing test (0047 amendment): a shared owner the default caller path does not use is a latent second source of truth, even when a fixture proves parity.
+
+| Severity | Tenet | Declared | Routing | Weakness |
+|---|---|---|---|---|
+| 🟢 low | T1 | yes | — | goldenmatch a2a_skills two-sided gap is now all intentional divergence (MDM trio reconciled) |
+| 🟢 low | T3 | yes | — | Kernel deferrals state a reason but not measured wall-clock provenance |
+| 🟢 low | T4 | yes | — | Compute/control shared frame-residency budget: now a contract field (was env-only) |
+| 🟢 low | T1 | yes | owner is default | TS Fellegi-Sunter scoring runs the shared fs-core kernel by default (batteries entry); pure-TS is the classified fallback |
+| 🟢 low | T4 | yes | — | Incremental resolution against a persisted identity index (C2/C4 landed) |
+| 🟢 low | T4 | yes | — | Compute->control handoff is a versioned ResolutionBatch consumed by apply_batch(store, batch) |
+| 🟢 low | T1 | yes | opt-in (fallback default) | Clustering + goldenanalysis frame kernels: both families now share a kernel (cluster-wasm + analysis-wasm) |
+| 🟢 low | T2 | yes | — | Standardize divergence now has a runnable characterization test (was prose-only) |
+| 🟢 low | T1 | yes | — | Golden-record rollup single-sourced through core.golden (was a 2nd hand-rolled rule in resolve.py) |
+| 🟢 low | T2 | yes | — | Cross-surface scorer/package divergences are now declared in the 0046 verdict table |
+
+## Re-validate (deferral triggers)
+
+Each deferral names the explicit condition that would *un-defer* it (conformance-v2 test T3). A deferral whose premise has already lifted is an OPEN divergence, not a settled low — these are re-checked each audit.
+
+- **deferrals-lack-measurement-provenance** — RE-VALIDATE (conformance v2, 0047 amendment): re-fires the moment a scorer/blocking deferral is added whose reason is PERF/SHAPE rather than model-backed -- that entry then owes a MEASURED wall-clock (kernelize on measurement). Currently vacuous: every deferral (embedding / record_embedding / simhash) is model-backed. Re-check on any new scorer_kernels_deferred / blocking_kernels_deferred entry.
+
+## Live harvest (auto-detected)
+
+Static signals harvested directly from `parity/*.yaml` + each package's `_native_loader.py` (no toolchain) — so drift shows up here without editing the curated board above.
+
+**Scorer-kernel coverage (goldenmatch).** 22 of 24 scorers are kernel-backed; 2 declared-deferred; uncovered (must be empty — coverage floor): none.
+
+| Deferred scorer | Reason |
+|---|---|
+| `embedding` | n/a -- model-backed (sentence-transformers / Vertex); belongs to goldenembed, not a string kernel |
+| `record_embedding` | n/a -- model-backed multi-field embedding |
+
+**Fallback-only kernels** (a `-core` symbol the host references but the default does not run — `_FALLBACK_ONLY`):
+
+- `goldenflow`: `phone_validate`
+- `goldenmatch`: `sail_scoring`
+
+**Cross-language surface gaps** (declared Python-only / TS-only per surface — the same partition the [suite matrix](/suite-matrix) renders in full):
+
+| Package | Surface | Python-only | TS-only |
+|---|---|---|---|
+| `goldencheck` | cli_commands | 5 | 0 |
+| `goldencheck` | mcp_tools | 1 | 0 |
+| `goldenflow` | cli_commands | 4 | 0 |
+| `goldenflow` | transforms | 0 | 1 |
+| `goldenmatch` | a2a_skills | 15 | 10 |
+| `goldenmatch` | blocking_strategies | 1 | 0 |
+| `goldenmatch` | cli_commands | 9 | 0 |
+| `goldenmatch` | mcp_tools | 9 | 0 |
+| `goldenpipe` | cli_commands | 1 | 0 |
+
+{/* thesis-weaknesses:generated:end */}
