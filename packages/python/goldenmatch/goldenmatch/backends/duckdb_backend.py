@@ -51,7 +51,7 @@ class DuckDBBackend:
             Polars LazyFrame with the data.
         """
         sql = query or f"SELECT * FROM {table}"
-        arrow_table = self._conn.execute(sql).fetch_arrow_table()
+        arrow_table = self._conn.execute(sql).to_arrow_table()
         df = pl.from_arrow(arrow_table)
         logger.info("DuckDB: read %d rows from %s", df.height, table if not query else "query")
         return df.lazy()

@@ -462,3 +462,67 @@ def test_dedupe_to_parquet_streaming_parity_with_in_memory(tmp_path, monkeypatch
 
     # Both index rows 1..N in ingest order, so row_id partitions are comparable.
     assert stream_parts == sorted(mem_parts)
+
+
+# ── resolve_fs_block_source: the single knob unifying the two streaming lanes ──
+
+def test_resolve_fs_block_source_default_is_eager(monkeypatch):
+    from goldenmatch.backends.fs_out_of_core import (
+        fs_out_of_core_enabled,
+        resolve_fs_block_source,
+    )
+
+    monkeypatch.delenv("GOLDENMATCH_FS_BLOCK_SOURCE", raising=False)
+    monkeypatch.delenv("GOLDENMATCH_FS_OUT_OF_CORE", raising=False)
+    assert resolve_fs_block_source() == "eager"
+    assert fs_out_of_core_enabled() is False
+
+
+@pytest.mark.parametrize(
+    "block_source,expected",
+    [("frame", "frame"), ("duckdb", "duckdb"), ("eager", "eager"),
+     ("auto", "eager"), ("AUTO", "eager"), (" DuckDB ", "duckdb"),
+     ("nonsense", "eager")],
+)
+def test_resolve_fs_block_source_reads_block_source_env(
+    monkeypatch, block_source, expected
+):
+    from goldenmatch.backends.fs_out_of_core import resolve_fs_block_source
+
+    monkeypatch.delenv("GOLDENMATCH_FS_OUT_OF_CORE", raising=False)
+    monkeypatch.setenv("GOLDENMATCH_FS_BLOCK_SOURCE", block_source)
+    assert resolve_fs_block_source() == expected
+
+
+def test_resolve_fs_block_source_legacy_out_of_core_alias(monkeypatch):
+    """GOLDENMATCH_FS_OUT_OF_CORE=1 is honored as a duckdb alias when
+    GOLDENMATCH_FS_BLOCK_SOURCE is unset/auto/eager (back-compat)."""
+    from goldenmatch.backends.fs_out_of_core import (
+        fs_out_of_core_enabled,
+        resolve_fs_block_source,
+    )
+
+    monkeypatch.delenv("GOLDENMATCH_FS_BLOCK_SOURCE", raising=False)
+    monkeypatch.setenv("GOLDENMATCH_FS_OUT_OF_CORE", "1")
+    assert resolve_fs_block_source() == "duckdb"
+    assert fs_out_of_core_enabled() is True
+
+    # An explicit recognized FS_BLOCK_SOURCE wins over the legacy flag.
+    monkeypatch.setenv("GOLDENMATCH_FS_BLOCK_SOURCE", "frame")
+    assert resolve_fs_block_source() == "frame"
+    assert fs_out_of_core_enabled() is False
+
+
+def test_block_source_frame_drives_bucket_streaming(monkeypatch):
+    """score_buckets._fs_bounded_stream_enabled reads the SAME resolver, so
+    FS_BLOCK_SOURCE=frame turns on in-RAM bounded bucket streaming."""
+    from goldenmatch.backends.score_buckets import _fs_bounded_stream_enabled
+
+    monkeypatch.delenv("GOLDENMATCH_FS_OUT_OF_CORE", raising=False)
+    monkeypatch.setenv("GOLDENMATCH_FS_BLOCK_SOURCE", "frame")
+    assert _fs_bounded_stream_enabled() is True
+    # duckdb / eager are NOT the in-bucket streaming lane.
+    monkeypatch.setenv("GOLDENMATCH_FS_BLOCK_SOURCE", "duckdb")
+    assert _fs_bounded_stream_enabled() is False
+    monkeypatch.setenv("GOLDENMATCH_FS_BLOCK_SOURCE", "auto")
+    assert _fs_bounded_stream_enabled() is False

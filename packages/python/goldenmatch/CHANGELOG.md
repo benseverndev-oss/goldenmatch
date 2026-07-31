@@ -7,6 +7,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Changed
+- **FS out-of-core streaming: single `resolve_fs_block_source` knob + DuckDB
+  API-deprecation cleanup.** The two FS bounded-streaming lanes are now governed by
+  one resolver (`backends.fs_out_of_core.resolve_fs_block_source` → `eager` /
+  `frame` / `duckdb`) instead of two independent env booleans. `GOLDENMATCH_FS_BLOCK_SOURCE`
+  now accepts `duckdb` (equivalent to the out-of-core path) alongside `frame` (in-RAM
+  bounded bucket streaming) and `auto`/`eager` (today's default). The legacy
+  `GOLDENMATCH_FS_OUT_OF_CORE=1` is retained as a `duckdb` alias when
+  `GOLDENMATCH_FS_BLOCK_SOURCE` is unset, so existing runs/benches are unchanged;
+  `fs_out_of_core_enabled()` and `score_buckets._fs_bounded_stream_enabled()` both
+  read the shared resolver. Default stays `eager` (byte-identical to today) until a
+  CI scale gate justifies the flip. Also swapped the deprecated DuckDB
+  `fetch_record_batch`/`fetch_arrow_table` calls for `to_arrow_reader`/`to_arrow_table`
+  in the streaming scorer and the DuckDB backend.
 - **FS dedupe: Arrow-native columnar-cluster path (B2c), default-on (#1811/#2006).**
   A measure-first 5M profile pinned the FS scale wall at **clustering** (`cluster`
   100.8s / 41%), not the native scoring kernel (`bucket_score` 70.8s / 28%). Root

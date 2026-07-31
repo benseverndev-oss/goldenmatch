@@ -96,17 +96,64 @@ def _ooc_debug_on() -> bool:
     )
 
 
-def fs_out_of_core_enabled() -> bool:
-    """Opt-in scale switch for the out-of-core FS path (default OFF).
-
-    `GOLDENMATCH_FS_OUT_OF_CORE=1` routes the FS bucket scorer through
-    `score_fs_out_of_core` with a disk-resident prepared table instead of the
-    in-memory `score_buckets` — the separate, opt-in scale option for datasets
-    past the ~40M single-box wall. Off by default: byte-identical to today for
-    every existing run."""
+def _fs_out_of_core_legacy_flag() -> bool:
+    """The legacy standalone opt-in ``GOLDENMATCH_FS_OUT_OF_CORE=1``. Retained as
+    an alias for ``GOLDENMATCH_FS_BLOCK_SOURCE=duckdb`` (see
+    ``resolve_fs_block_source``) so existing runs/benches keep working."""
     return os.environ.get("GOLDENMATCH_FS_OUT_OF_CORE", "").strip().lower() in (
         "1", "true", "yes", "on",
     )
+
+
+def resolve_fs_block_source() -> str:
+    """Single resolver for HOW the FS (probabilistic) bucket route sources its
+    blocks — the one knob that governs both bounded-streaming lanes so callers
+    (and users) reason about one env var, not two.
+
+    Returns one of:
+      - ``"eager"``  — today's default: materialize the slim frame + eager
+        ``partition_by`` into all ``n_buckets`` (byte-identical to pre-streaming).
+      - ``"frame"``  — in-RAM bounded streaming (the spec's ``FrameBlockSource``):
+        slice one bucket off the keyed frame on demand inside ``score_buckets``,
+        holding only ``max_workers`` slices live. Lower peak, same box.
+      - ``"duckdb"`` — out-of-core: spill the prepared table to a DuckDB file and
+        stream blocks + O(N) output (``score_fs_out_of_core`` /
+        ``run_fs_dedupe_streaming``). The ≥40M single-box scale path.
+
+    Resolution (``GOLDENMATCH_FS_BLOCK_SOURCE`` is authoritative when set to a
+    recognized value; the legacy ``GOLDENMATCH_FS_OUT_OF_CORE=1`` is honored only
+    when ``GOLDENMATCH_FS_BLOCK_SOURCE`` is unset/empty):
+      - ``FS_BLOCK_SOURCE=frame`` → ``"frame"``
+      - ``FS_BLOCK_SOURCE=duckdb`` → ``"duckdb"``
+      - ``FS_BLOCK_SOURCE=eager`` / ``auto`` / unset → ``"eager"`` (+ legacy alias)
+
+    ``auto`` currently resolves to ``eager`` — the measured RAM-floor
+    auto-escalation to ``duckdb`` is the documented Phase-1 follow-on; until it
+    lands (and the default is flipped on a CI scale gate) ``auto`` stays
+    byte-identical to today."""
+    v = os.environ.get("GOLDENMATCH_FS_BLOCK_SOURCE", "").strip().lower()
+    if v == "frame":
+        return "frame"
+    if v == "duckdb":
+        return "duckdb"
+    if v in ("", "auto", "eager"):
+        # Unset/auto/eager: honor the legacy standalone flag, else eager.
+        return "duckdb" if _fs_out_of_core_legacy_flag() else "eager"
+    # Unrecognized value: fail safe to eager (never silently pick a scale path),
+    # but still honor the legacy flag so it can't be masked by a typo'd source.
+    return "duckdb" if _fs_out_of_core_legacy_flag() else "eager"
+
+
+def fs_out_of_core_enabled() -> bool:
+    """Whether the FS bucket scorer routes through the OUT-OF-CORE DuckDB path
+    (``score_fs_out_of_core`` / ``run_fs_dedupe_streaming``) instead of the
+    in-memory ``score_buckets`` — the opt-in scale option for datasets past the
+    ~40M single-box wall. Default OFF (byte-identical to today).
+
+    Now a thin view over ``resolve_fs_block_source`` so the two historical env
+    vars (``GOLDENMATCH_FS_OUT_OF_CORE=1`` and ``GOLDENMATCH_FS_BLOCK_SOURCE=duckdb``)
+    are one decision, not two independent booleans."""
+    return resolve_fs_block_source() == "duckdb"
 
 
 def _fs_ooc_arrow_cluster_enabled() -> bool:
@@ -492,7 +539,7 @@ def score_fs_out_of_core(
                 reader = con.execute(
                     "SELECT p.*, m.__blk__ AS __blk__ FROM prep p "
                     "JOIN blkmap m ON p.__row_id__ = m.__row_id__ ORDER BY m.__blk__"
-                ).fetch_record_batch(1 << 16)
+                ).to_arrow_reader(1 << 16)
 
                 # 3) Split the sorted stream into blocks by __blk__ runs, buffer
                 #    them, and score each WAVE in parallel. partition_by keeps row
@@ -630,7 +677,7 @@ def stream_fs_dedupe_output(
     golden_tbl = con.execute(
         f"SELECT {_sel}, a.__cluster_id__ {base_join} "
         f"WHERE s.n > 1 AND s.n <= {int(max_cluster_size)}"
-    ).fetch_arrow_table()
+    ).to_arrow_table()
     golden_count = 0
     if golden_tbl.num_rows:
         multi_df = pl.from_arrow(golden_tbl)
