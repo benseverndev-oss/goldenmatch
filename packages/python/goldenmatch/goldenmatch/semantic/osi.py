@@ -323,11 +323,14 @@ def emit_osi_from_crosswalk(
 # --- bridge: certify the keys an OSI model joins on (metric-aware, wedge A) ----
 
 
-def certify_osi_relationships(model: OsiModel | str | Any, frames: dict[str, Any]) -> list[dict[str, Any]]:
+def certify_osi_relationships(
+    model: OsiModel | str | Any, frames: dict[str, Any], *, resolve: bool = False
+) -> list[dict[str, Any]]:
     """For each relationship in an OSI model, certify the ONE-side key it joins on
     (the referenced PK) using wedge A — i.e. certify exactly the identity the
     metrics depend on. `frames` maps dataset name -> table; datasets without a
-    supplied frame are skipped.
+    supplied frame are skipped. `resolve=True` also measures entity
+    fragmentation / undercount via ER (fail-open).
 
     Returns `[{relationship, dataset, key, certificate}]`.
     """
@@ -344,7 +347,7 @@ def certify_osi_relationships(model: OsiModel | str | Any, frames: dict[str, Any
         df = frames.get(rel.to_dataset)
         if df is None or not rel.to_columns:
             continue
-        cert = certify_key_integrity(df, key=rel.to_columns)
+        cert = certify_key_integrity(df, key=rel.to_columns, resolve=resolve)
         out.append({
             "relationship": rel.name,
             "dataset": rel.to_dataset,

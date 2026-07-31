@@ -292,7 +292,9 @@ def emit_cube_from_crosswalk(
 # --- bridge: certify the keys a Cube model joins on (metric-aware, wedge A) ----
 
 
-def certify_cube_joins(model: list[Cube] | str | Any, frames: dict[str, Any]) -> list[dict[str, Any]]:
+def certify_cube_joins(
+    model: list[Cube] | str | Any, frames: dict[str, Any], *, resolve: bool = False
+) -> list[dict[str, Any]]:
     """For each join in a Cube model, certify the ONE-side key it joins on (the
     referenced primary key) using wedge A — certifying exactly the identity the
     metrics depend on. The one-side depends on the join's direction: for
@@ -300,7 +302,8 @@ def certify_cube_joins(model: list[Cube] | str | Any, frames: dict[str, Any]) ->
     `one_to_many` the declaring (`from`) cube is the one-side, so its key is what
     must be unique (certifying the many-side FK would spuriously flag a fan-out).
     `frames` maps cube name -> table; a join whose one-side frame is absent or
-    whose one-side columns can't be parsed is skipped.
+    whose one-side columns can't be parsed is skipped. `resolve=True` also
+    measures entity fragmentation / undercount via ER (fail-open).
 
     Returns `[{from_cube, to_cube, key, certificate}]`.
     """
@@ -317,7 +320,7 @@ def certify_cube_joins(model: list[Cube] | str | Any, frames: dict[str, Any]) ->
             df = frames.get(one_cube)
             if df is None or not one_columns:
                 continue
-            cert = certify_key_integrity(df, key=one_columns)
+            cert = certify_key_integrity(df, key=one_columns, resolve=resolve)
             out.append({
                 "from_cube": jk["from_cube"],
                 "to_cube": jk["to_cube"],
