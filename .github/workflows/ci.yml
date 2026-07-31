@@ -3955,7 +3955,10 @@ jobs:
       - name: Sync workspace (goldenmatch importable + dev tools)
         run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       - name: ER-matcher box-safe tests
-        run: uv run pytest scripts/er_matcher/ -q
+        # --with scikit-learn: the band_student harness (Phase 0 of the distilled
+        # band-override scorer) trains a GBDT; sklearn is an offline-only dep not in
+        # the workspace, added ephemerally here so its test RUNS (not skips).
+        run: uv run --with scikit-learn pytest scripts/er_matcher/ -q
         env:
           GOLDENMATCH_NATIVE: "0"
           POLARS_SKIP_CPU_CHECK: "1"
