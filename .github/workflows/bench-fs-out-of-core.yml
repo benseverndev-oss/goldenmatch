@@ -20,9 +20,9 @@ on:
         required: false
         default: "25000000 50000000"
       modes:
-        description: "Space-separated streaming modes to run (streaming=DuckDB out-of-core, sequential=in-RAM Arrow/Rust batches + end-WCC)"
+        description: "Space-separated streaming modes to run (sequential=in-RAM pyarrow/Rust batches + end-WCC [the fast default]; streaming=DuckDB out-of-core, the slower past-RAM tier -- add it only when you specifically want the spill comparison)"
         required: false
-        default: "sequential streaming"
+        default: "sequential"
       in_memory_scale:
         description: "Row count for the in-memory OOM contrast (default EMPTY = skip; set e.g. 50000000 to run it -- note it OOMs/preempts near 64 GB and can kill the artifact upload)"
         required: false
