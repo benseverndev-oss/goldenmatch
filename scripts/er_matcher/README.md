@@ -1,6 +1,7 @@
 # ER-Matcher data pipeline
 
-Builds the training/eval corpus for the OSS ER-matcher (Qwen2.5-3B LoRA SFT) by
+Builds the training/eval corpus for the OSS ER-matcher (Qwen2.5-1.5B LoRA SFT,
+Apache-2.0) by
 blending multiple **license-clean** entity-matching sources into the unified
 JSONL row contract the trainer already consumes. This is Phase 1a of the
 production-grade data effort (see

@@ -24,7 +24,7 @@ from goldenmatch.core.er_matcher.prompt import SERIALIZER_VERSION
 
 @dataclass(frozen=True)
 class ModelSpec:
-    tier: str            # "3b" (default) | "7b" (optional)
+    tier: str            # "1.5b" (default, Apache-2.0) | "3b" (withdrawn) | "7b" (optional)
     filename: str        # local cache filename, e.g. goldenmatch-er-3b-q4_k_m.gguf
     url: str | None      # direct-download asset URL (Release/HF); None until published
     sha256: str | None   # pinned digest; None = PENDING (not yet published/gated)
@@ -39,14 +39,29 @@ class ModelSpec:
 # Pins are PENDING until P3b trains + P5's gate passes + P4 publishes. The shapes
 # are real; url/sha256 get filled by the publish step (spec §5, plan P4).
 MODELS: dict[str, ModelSpec] = {
+    # SHIPPED DEFAULT: Apache-2.0 base (Qwen2.5-1.5B-Instruct) -- redistribution-clean,
+    # smallest/fastest (best for the CPU-boost latency budget), and measured strong
+    # (in-dist F1 0.999 / ECE 0.0009; walmart zero-shot F1 0.795, beating the 3B's 0.721).
+    "1.5b": ModelSpec(
+        tier="1.5b",
+        filename="goldenmatch-er-matcher-1.5b-q4_k_m.gguf",
+        url=(
+            "https://github.com/benseverndev-oss/goldenmatch/releases/download/"
+            "er-matcher-1.5b-v1.0.0/goldenmatch-er-matcher-1.5b-q4_k_m.gguf"
+        ),
+        sha256="64564eefd68373f5d1eddc064d21d24e9e172dd8d003e03255d10dfb09ce4ed0",
+        base_model="Qwen/Qwen2.5-1.5B-Instruct",
+        serializer_version="v1",
+    ),
+    # WITHDRAWN for licensing: Qwen2.5-3B is under the Qwen Research License
+    # (non-commercial), NOT Apache-2.0 -- the fine-tune is not redistribution-clean.
+    # Pin nulled so resolve_model refuses to serve it; the public er-matcher-3b-v1.0.0
+    # release should be deleted. Do NOT re-pin without an Apache-2.0 base.
     "3b": ModelSpec(
         tier="3b",
         filename="goldenmatch-er-matcher-3b-q4_k_m.gguf",
-        url=(
-            "https://github.com/benseverndev-oss/goldenmatch/releases/download/"
-            "er-matcher-3b-v1.0.0/goldenmatch-er-matcher-3b-q4_k_m.gguf"
-        ),
-        sha256="b6637fd9892b21b565098524501083edb91199b0bfffc267edf48885ce9c1d3b",
+        url=None,
+        sha256=None,
         base_model="Qwen/Qwen2.5-3B-Instruct",
         serializer_version="v1",
     ),
@@ -60,7 +75,7 @@ MODELS: dict[str, ModelSpec] = {
     ),
 }
 
-DEFAULT_TIER = "3b"
+DEFAULT_TIER = "1.5b"
 
 
 def cache_dir() -> Path:

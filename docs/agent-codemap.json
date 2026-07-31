@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 438,
+      "module_count": 439,
       "modules": [
         {
           "module": "goldenmatch",
@@ -617,6 +617,7 @@
           "defines": [
             "_open",
             "conflicts_cmd",
+            "customer_360_cmd",
             "history_cmd",
             "list_cmd",
             "merge_cmd",
@@ -7112,7 +7113,8 @@
             "goldenmatch.semantic.cube",
             "goldenmatch.semantic.key_integrity",
             "goldenmatch.semantic.metricflow",
-            "goldenmatch.semantic.osi"
+            "goldenmatch.semantic.osi",
+            "goldenmatch.semantic.serving"
           ]
         },
         {
@@ -7139,9 +7141,13 @@
           "file": "packages/python/goldenmatch/goldenmatch/semantic/catalog.py",
           "purpose": "Live catalog write-back for the semantic-layer wedge (wedge B, persisted).",
           "defines": [
+            "_emit_for_dialect",
+            "emit_semantic_model_from_store",
             "write_resolved_catalog"
           ],
           "imports": [
+            "goldenmatch.identity",
+            "goldenmatch.semantic.crosswalk",
             "goldenmatch.semantic.cube",
             "goldenmatch.semantic.metricflow",
             "goldenmatch.semantic.osi"
@@ -7276,6 +7282,18 @@
             "goldenmatch.semantic.blocking",
             "goldenmatch.semantic.key_integrity",
             "goldenmatch.semantic.metricflow"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.serving",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/serving.py",
+          "purpose": "Semantic-layer ↔ Customer 360 drill-through.",
+          "defines": [
+            "entity_360",
+            "profile_from_crosswalk"
+          ],
+          "imports": [
+            "goldenmatch.identity"
           ]
         },
         {
