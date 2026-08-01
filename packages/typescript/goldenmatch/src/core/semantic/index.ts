@@ -31,18 +31,22 @@ export {
 export {
   emitCubeFromCrosswalk,
   parseCubeModels,
+  emitCubeYaml,
   cubeJoinKeys,
   certifyCubeJoins,
   type EmitCubeFromCrosswalkOptions,
   type CubeKeyIntegrityCertificateLike,
   type ParsedCube,
   type ParsedCubeJoin,
+  type CubeDimension,
+  type CubeMeasure,
   type CubeJoinKey,
   type CertifiedJoin,
 } from "./cube.js";
 export {
   emitOsiFromCrosswalk,
   parseOsiModels,
+  emitOsiYaml,
   osiJoinKeys,
   certifyOsiRelationships,
   OSI_VERSION,
@@ -50,6 +54,9 @@ export {
   type EmitOsiFromCrosswalkOptions,
   type ParsedOsiModel,
   type ParsedOsiRelationship,
+  type OsiField,
+  type OsiDataset,
+  type OsiMetric,
   type OsiJoinKey,
   type CertifiedRelationship,
 } from "./osi.js";

@@ -431,7 +431,11 @@ async function handleRequest(
         return;
       }
       const dialectRaw = typeof body["dialect"] === "string" ? (body["dialect"] as string) : "metricflow";
-      if (!SEMANTIC_DIALECTS.has(dialectRaw)) {
+      // Normalize the way the core emitter does (trim().toLowerCase()) BEFORE
+      // validating, so casing/whitespace variants the core would accept ("Cube",
+      // " cube ") aren't rejected here — then pass the normalized value through.
+      const dialectNorm = dialectRaw.trim().toLowerCase();
+      if (!SEMANTIC_DIALECTS.has(dialectNorm)) {
         sendJson(res, 400, { error: `unknown dialect '${dialectRaw}'; expected metricflow | cube | osi` });
         return;
       }
@@ -439,7 +443,7 @@ async function handleRequest(
       const yamlStr = await emitSemanticModelFromStore(serverIdentityStore, {
         sourceName,
         sourcePkColumn,
-        dialect: dialectRaw as SemanticDialect,
+        dialect: dialectNorm as SemanticDialect,
         dataset,
         ...(typeof body["source_target"] === "string" ? { sourceTarget: body["source_target"] as string } : {}),
         resolvedKey: typeof body["resolved_key"] === "string" ? (body["resolved_key"] as string) : "resolved_entity_id",

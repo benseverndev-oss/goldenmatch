@@ -26,6 +26,13 @@ export function asStrStripped(v: unknown): string {
   return String(v).trim();
 }
 
+/** `str(v)`-equivalent (NOT stripped), matching Python's `str(d.get(k, ""))` for
+ * cube/osi field reads; "" when absent/null. */
+export function asStr(v: unknown): string {
+  if (v === undefined || v === null) return "";
+  return String(v);
+}
+
 /** A trimmed non-empty string if `v` is a string with content, else undefined. */
 export function optStr(v: unknown): string | undefined {
   if (typeof v !== "string") return undefined;
