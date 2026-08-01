@@ -4,6 +4,7 @@ import pytest
 
 try:
     from goldenpipe.mcp.server import (
+        _jail_path,
         _result_to_dict,
         _summarize_output,
         list_stages_tool,
@@ -134,3 +135,41 @@ class TestRunPipelineDedupe:
         assert isinstance(output["golden_preview"], list)
         assert output["golden_preview"]  # non-empty
         assert output["match_stats"]["total_records"] == 4
+
+
+class TestPathJail:
+    """The run_pipeline `source`/`config_path` reads are jailed to the working
+    dir (network-exposed MCP hardening) -- a path escaping the root is rejected."""
+
+    def test_jail_allows_paths_inside_cwd(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        f = tmp_path / "data.csv"
+        f.write_text("x\n")
+        assert _jail_path("data.csv") == str(f.resolve())
+        assert _jail_path(str(f)) == str(f.resolve())
+
+    def test_jail_rejects_escape(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(ValueError):
+            _jail_path("/etc/passwd")
+        with pytest.raises(ValueError):
+            _jail_path("../../etc/passwd")
+
+    def test_jail_rejects_nul_byte(self):
+        with pytest.raises(ValueError):
+            _jail_path("a\x00b")
+
+    def test_jail_honors_allowed_root_env(self, tmp_path, monkeypatch):
+        root = tmp_path / "allowed"
+        root.mkdir()
+        monkeypatch.setenv("GOLDENPIPE_ALLOWED_ROOT", str(root))
+        assert _jail_path(str(root / "ok.csv")) == str((root / "ok.csv").resolve())
+        with pytest.raises(ValueError):
+            _jail_path(str(tmp_path / "outside.csv"))
+
+    def test_run_pipeline_rejects_escaping_source(self, tmp_path, monkeypatch):
+        # A traversal `source` must be refused as data (no file read), not opened.
+        monkeypatch.chdir(tmp_path)
+        out = run_pipeline_tool(source="/etc/passwd")
+        assert "error" in out
+        assert "outside the allowed root" in out["error"]

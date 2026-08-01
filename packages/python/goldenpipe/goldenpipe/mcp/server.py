@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 from typing import Any
 
 try:
@@ -15,6 +17,27 @@ except ImportError:
 from goldenpipe.engine.registry import StageRegistry
 from goldenpipe.engine.resolver import Resolver, WiringError
 from goldenpipe.models.config import PipelineConfig, StageSpec
+
+
+def _jail_path(value: str) -> str:
+    """Resolve a caller-supplied path and reject escapes from the allowed root.
+
+    The ``run_pipeline`` ``source`` / ``config_path`` args are attacker-controllable
+    over the HTTP transport (this server is deployed as a public remote MCP), so a
+    path that escapes the server's working directory -- or contains a NUL byte -- is
+    rejected instead of being opened. Mirrors the goldenmatch / infermap MCP path
+    jail. The root defaults to the process working directory; override it with
+    ``GOLDENPIPE_ALLOWED_ROOT`` (e.g. a mounted data volume). Returns the resolved
+    absolute path string on success; raises ``ValueError`` on escape.
+    """
+    raw = os.fspath(value)
+    if "\x00" in raw:
+        raise ValueError("path contains NUL byte")
+    resolved = Path(raw).resolve()
+    root = Path(os.environ.get("GOLDENPIPE_ALLOWED_ROOT") or os.getcwd()).resolve()
+    if resolved != root and not resolved.is_relative_to(root):
+        raise ValueError(f"path {str(resolved)!r} is outside the allowed root {str(root)!r}")
+    return str(resolved)
 
 
 def list_stages_tool() -> dict[str, Any]:
@@ -72,11 +95,14 @@ def run_pipeline_tool(
     # Config: inline stages > YAML path > zero-config auto. An explicit (even
     # empty) ``stages`` list wins over auto; ``None`` means zero-config.
     cfg = None
-    if stages is not None:
-        cfg = PipelineConfig(pipeline="inline", stages=[StageSpec(use=s) for s in stages])
-    elif config_path:
-        from goldenpipe.config.loader import load_config
-        cfg = load_config(config_path)
+    try:
+        if stages is not None:
+            cfg = PipelineConfig(pipeline="inline", stages=[StageSpec(use=s) for s in stages])
+        elif config_path:
+            from goldenpipe.config.loader import load_config
+            cfg = load_config(_jail_path(config_path))
+    except ValueError as exc:  # path escaped the allowed root
+        return {"error": str(exc)}
 
     try:
         pipe = Pipeline(config=cfg, identity_opts=identity_opts)
@@ -86,7 +112,7 @@ def run_pipeline_tool(
             import io
             result = pipe.run(df=pl.read_csv(io.StringIO(csv_text), ignore_errors=True))
         elif source:
-            result = pipe.run(source=source)
+            result = pipe.run(source=_jail_path(source))
         else:
             return {"error": (
                 "provide one input: 'source' (file path), 'records' (list of "
