@@ -160,6 +160,23 @@ class TestPathJail:
         with pytest.raises(ValueError):
             _jail_path("a\x00b")
 
+    def test_jail_commonpath_valueerror_is_generic_reject(self, tmp_path, monkeypatch):
+        # commonpath raises ValueError on paths with no common anchor (different
+        # Windows drives). That must reject with the generic message, not crash or
+        # leak the underlying error. Simulate it on any platform via monkeypatch.
+        monkeypatch.chdir(tmp_path)
+        import goldenpipe.mcp.server as srv
+
+        def _raise(_):
+            raise ValueError("Paths don't have the same drive")
+
+        monkeypatch.setattr(srv.os.path, "commonpath", _raise)
+        try:
+            _jail_path("data.csv")
+            raise AssertionError("expected ValueError")
+        except ValueError as exc:
+            assert str(exc) == "path is outside the allowed root"
+
     def test_jail_honors_allowed_root_env(self, tmp_path, monkeypatch):
         root = tmp_path / "allowed"
         root.mkdir()

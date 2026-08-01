@@ -38,7 +38,13 @@ def _jail_path(value: str) -> str:
     # relative `raw` resolves against the cwd, same as before.
     resolved = os.path.realpath(raw)
     root = os.path.realpath(os.environ.get("GOLDENPIPE_ALLOWED_ROOT") or os.getcwd())
-    if resolved != root and os.path.commonpath((root, resolved)) != root:
+    try:
+        contained = resolved == root or os.path.commonpath((root, resolved)) == root
+    except ValueError:
+        # commonpath raises on paths with no common anchor (e.g. different Windows
+        # drives) -- that is definitively outside the root, not a crash.
+        contained = False
+    if not contained:
         # Generic message on purpose: this is a public, unauthenticated endpoint,
         # so the error must not disclose the resolved absolute path or the server's
         # root directory back to the caller.
