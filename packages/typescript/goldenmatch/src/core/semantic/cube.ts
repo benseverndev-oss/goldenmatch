@@ -13,7 +13,7 @@
 import { type YamlValue, dumpYaml, pyFloat } from "./yamlEmit.js";
 import { pyRound6 } from "./crosswalk.js";
 import type { ResolvedCrosswalk } from "./crosswalk.js";
-import { type LoadedDoc, asList, asStrStripped, isObj } from "./parseUtil.js";
+import { type LoadedDoc, asList, asStr, asStrStripped, isObj } from "./parseUtil.js";
 import { certifyKeyIntegrity, type KeyIntegrityCertificate } from "./keyIntegrity.js";
 import type { SemanticFrame, SemanticFrames } from "./frame.js";
 
@@ -113,21 +113,61 @@ function normalizeRelationship(rel: unknown): string {
   return RELATIONSHIP_ALIASES[key] ?? r;
 }
 
+export interface CubeDimension {
+  name: string;
+  sql: string; // the SQL expression — usually the column
+  type: string; // string / number / time / boolean / geo
+  primaryKey: boolean;
+}
+
+export interface CubeMeasure {
+  name: string;
+  type: string; // count / sum / avg / count_distinct / ...
+  sql: string | null; // not required for `count`
+}
+
 export interface ParsedCubeJoin {
   name: string; // the joined cube's name
   relationship: string;
   sql: string; // the ON condition, e.g. "{CUBE}.fk = {other.id}"
 }
 
+/** A fully-parsed Cube (dimensions/measures/joins/meta), faithful to Python's
+ * `Cube` dataclass — so a whole existing Cube model can be consumed, not just its
+ * join keys. */
 export interface ParsedCube {
   name: string;
+  sqlTable: string | null;
+  sql: string | null; // a SELECT used instead of a table
+  dimensions: CubeDimension[];
+  measures: CubeMeasure[];
   joins: ParsedCubeJoin[];
+  meta: Record<string, unknown> | null;
+}
+
+function parseDimension(d: Record<string, unknown>): CubeDimension {
+  return {
+    name: asStr(d["name"]),
+    sql: asStr("sql" in d ? d["sql"] : d["name"]),
+    type: "type" in d ? asStr(d["type"]) : "string",
+    primaryKey: Boolean(d["primary_key"]),
+  };
+}
+
+function parseMeasure(m: Record<string, unknown>): CubeMeasure {
+  const sql = m["sql"];
+  return {
+    name: asStr(m["name"]),
+    type: "type" in m ? asStr(m["type"]) : "count",
+    sql: typeof sql === "string" ? sql : null,
+  };
 }
 
 /**
- * Parse a Cube data model's top-level `cubes:` list into the join-bearing shape
- * the certifier reads. Faithful port of the join-relevant part of Python
- * `parse_cube_models` (consume half); operates on an already-loaded document.
+ * Parse a Cube data model's top-level `cubes:` list into full `ParsedCube`s.
+ * Faithful port of Python `parse_cube_models` (consume half); operates on an
+ * already-loaded document. (`views:` are a consumption re-projection with no keys
+ * of their own and are intentionally not modeled.)
  */
 export function parseCubeModels(doc: LoadedDoc): ParsedCube[] {
   const out: ParsedCube[] = [];
@@ -137,12 +177,20 @@ export function parseCubeModels(doc: LoadedDoc): ParsedCube[] {
     for (const j of asList(c["joins"])) {
       if (!isObj(j)) continue;
       joins.push({
-        name: asStrStripped(j["name"]),
+        name: asStr(j["name"]),
         relationship: normalizeRelationship(j["relationship"]),
-        sql: asStrStripped(j["sql"]),
+        sql: asStr(j["sql"]),
       });
     }
-    out.push({ name: asStrStripped(c["name"]), joins });
+    out.push({
+      name: asStr(c["name"]),
+      sqlTable: typeof c["sql_table"] === "string" ? (c["sql_table"] as string) : null,
+      sql: typeof c["sql"] === "string" ? (c["sql"] as string) : null,
+      dimensions: asList(c["dimensions"]).filter(isObj).map((d) => parseDimension(d as Record<string, unknown>)),
+      measures: asList(c["measures"]).filter(isObj).map((m) => parseMeasure(m as Record<string, unknown>)),
+      joins,
+      meta: isObj(c["meta"]) ? (c["meta"] as Record<string, unknown>) : null,
+    });
   }
   return out;
 }
@@ -239,4 +287,44 @@ export function certifyCubeJoins(doc: LoadedDoc, frames: SemanticFrames): Certif
     }
   }
   return out;
+}
+
+// --- emit a full ParsedCube back to YAML (round-trips with parseCubeModels) ---
+
+function emitCubeDimension(d: CubeDimension): { [k: string]: YamlValue } {
+  const out: { [k: string]: YamlValue } = { name: d.name, sql: d.sql, type: d.type };
+  if (d.primaryKey) out["primary_key"] = true;
+  return out;
+}
+
+function emitCubeMeasure(m: CubeMeasure): { [k: string]: YamlValue } {
+  const out: { [k: string]: YamlValue } = { name: m.name, type: m.type };
+  if (m.sql !== null) out["sql"] = m.sql;
+  return out;
+}
+
+function emitCubeJoin(j: ParsedCubeJoin): { [k: string]: YamlValue } {
+  return { name: j.name, relationship: normalizeRelationship(j.relationship), sql: j.sql };
+}
+
+/** emit_cube key order: name, (sql_table | sql), joins, dimensions, measures, meta. */
+function emitCube(cube: ParsedCube): { [k: string]: YamlValue } {
+  const out: { [k: string]: YamlValue } = { name: cube.name };
+  if (cube.sqlTable) out["sql_table"] = cube.sqlTable;
+  else if (cube.sql) out["sql"] = cube.sql;
+  if (cube.joins.length) out["joins"] = cube.joins.map(emitCubeJoin);
+  if (cube.dimensions.length) out["dimensions"] = cube.dimensions.map(emitCubeDimension);
+  if (cube.measures.length) out["measures"] = cube.measures.map(emitCubeMeasure);
+  if (cube.meta) out["meta"] = cube.meta as YamlValue;
+  return out;
+}
+
+/**
+ * Render `ParsedCube`(s) as a valid Cube data model — a top-level `cubes:` list.
+ * `parseCubeModels(emitCubeYaml(cubes))` round-trips. Mirrors Python
+ * `emit_cube_yaml`.
+ */
+export function emitCubeYaml(cubes: ParsedCube | ParsedCube[]): string {
+  const list = Array.isArray(cubes) ? cubes : [cubes];
+  return dumpYaml({ cubes: list.map(emitCube) });
 }

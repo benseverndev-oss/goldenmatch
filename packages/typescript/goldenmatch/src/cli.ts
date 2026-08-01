@@ -1135,7 +1135,10 @@ identityCmd
         overwrite?: boolean;
       },
     ) => {
-      if (!["metricflow", "cube", "osi"].includes(opts.dialect)) {
+      // Normalize the way the core emitter does before validating, so
+      // casing/whitespace variants the core accepts aren't rejected here.
+      const dialectNorm = opts.dialect.trim().toLowerCase();
+      if (!["metricflow", "cube", "osi"].includes(dialectNorm)) {
         process.stderr.write(`unknown dialect '${opts.dialect}'; expected metricflow | cube | osi\n`);
         process.exit(2);
       }
@@ -1144,7 +1147,7 @@ identityCmd
         const yamlStr = await emitSemanticModelFromStore(store, {
           sourceName,
           sourcePkColumn,
-          dialect: opts.dialect as SemanticDialect,
+          dialect: dialectNorm as SemanticDialect,
           dataset: opts.dataset ?? null,
           ...(opts.sourceTarget !== undefined ? { sourceTarget: opts.sourceTarget } : {}),
           resolvedKey: opts.resolvedKey,
@@ -1163,7 +1166,7 @@ identityCmd
             }
             throw err;
           }
-          process.stdout.write(`Wrote ${opts.dialect} catalog to ${opts.out}\n`);
+          process.stdout.write(`Wrote ${dialectNorm} catalog to ${opts.out}\n`);
         } else {
           process.stdout.write(yamlStr);
         }
