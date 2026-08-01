@@ -53,7 +53,8 @@ try:  # normal path (fully-installed goldenmatch)
     from goldenmatch.semantic import cube as cube_mod
     from goldenmatch.semantic import metricflow as mf_mod
     from goldenmatch.semantic import osi as osi_mod
-except Exception:
+except ImportError:  # only the "toolkit not installed" case -> isolated loader below
+
     sys.modules.setdefault("goldenmatch", types.ModuleType("goldenmatch"))
     sys.modules.setdefault("goldenmatch.semantic", types.ModuleType("goldenmatch.semantic"))
     mf_mod = _load("goldenmatch.semantic.metricflow", "semantic/metricflow.py")
