@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { resolve, isAbsolute, sep } from "node:path";
+import { resolve, isAbsolute, relative } from "node:path";
 import { readFile } from "../connectors/file.js";
 import { TransformEngine } from "../../core/engine/transformer.js";
 import { listTransforms } from "../../core/transforms/index.js";
@@ -8,9 +8,13 @@ import { listTransforms } from "../../core/transforms/index.js";
 function sanitizePath(raw: string): string {
   const resolved = isAbsolute(raw) ? resolve(raw) : resolve(process.cwd(), raw);
   const cwd = resolve(process.cwd());
-  // Require an exact match or a real path-separator boundary, so a sibling dir
-  // sharing the cwd prefix (e.g. `/srv/app-secrets` vs cwd `/srv/app`) can't escape.
-  if (resolved !== cwd && !resolved.startsWith(cwd + sep)) {
+  // Containment via path.relative: `resolved` is inside `cwd` iff the relative
+  // path is neither an escape (`..`) nor absolute. `rel === ""` (resolved is cwd
+  // exactly) is allowed. Handles a sibling dir sharing the cwd prefix
+  // (`/srv/app-secrets` vs cwd `/srv/app`), a root cwd (`/`, `C:\`) that a
+  // `cwd + sep` prefix check would wrongly reject, and cross-drive paths.
+  const rel = relative(cwd, resolved);
+  if (rel.startsWith("..") || isAbsolute(rel)) {
     throw new Error(`Path '${raw}' is outside the working directory`);
   }
   return resolved;
