@@ -149,8 +149,13 @@ export function parseCubeModels(doc: LoadedDoc): ParsedCube[] {
 
 // Member refs are asymmetric: `{CUBE}.col` (self, column OUTSIDE the braces) and
 // `{other_cube.member}` (column INSIDE). Capture the braced token + optional
-// trailing `.column`. Mirrors Python's `_MEMBER_REF`.
-const MEMBER_REF = /\{([^}]+)\}(?:\.(\w+))?/g;
+// trailing `.column`. Mirrors Python's `_MEMBER_REF` (`\{([^}]+)\}…`) but the
+// inner class also excludes `{` (`[^{}]+`), so a run of `{{{{…` with no closing
+// brace can't trigger the O(n^2) backtracking of `[^}]+` (a linear-time,
+// ReDoS-safe rewrite). Cube member refs never nest braces (`{CUBE}` /
+// `{cube.member}`), so this is byte-identical to Python on every real + fixture
+// input; the two diverge only on the never-emitted nested-brace pathology.
+const MEMBER_REF = /\{([^{}]+)\}(?:\.(\w+))?/g;
 
 /** Pull `{CUBE}.col` / `{other.col}` member refs out of a join `sql`, as
  * `[cubeOrNull, column]` — `{CUBE}` (self) yields `[null, col]`. */
