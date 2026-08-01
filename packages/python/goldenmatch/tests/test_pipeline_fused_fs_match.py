@@ -323,8 +323,6 @@ def test_fs_fused_name_scorer_declines_on_old_wheel(monkeypatch):
     """Wheel-skew guard: a wheel whose fused kernel lacks the field_similarity
     dispatch (no FUSED_FS_SUPPORTS_NAME_SCORERS) declines a name/ensemble field to
     the classic path, so it is never scored 0.0 via the old score_one catch-all."""
-    import goldenmatch.core._native_loader as loader
-
     class _OldWheel:
         # Every OTHER FS capability present, but NOT the fused name-scorer dispatch.
         FS_SUPPORTS_MISSING_NEUTRAL = True
@@ -335,7 +333,13 @@ def test_fs_fused_name_scorer_declines_on_old_wheel(monkeypatch):
         def __getattr__(self, name):  # match_fused_fs present, flags default False
             return None
 
-    monkeypatch.setattr(loader, "native_module", lambda: _OldWheel())
+    # String target keeps the file on a single `_native_loader` import style
+    # (the module-level `from ... import native_module` in `_kernel_present`);
+    # `_fused_fs_matchkey_covered` re-imports the symbol at call time, so patching
+    # the module attribute is picked up.
+    monkeypatch.setattr(
+        "goldenmatch.core._native_loader.native_module", lambda: _OldWheel()
+    )
     # ensemble needs the fused dispatch flag but no refdata pack -> isolates the
     # capability probe from the pack-availability gate.
     assert match_fused_fs_ready(_fs_config(scorer="ensemble")) is False
