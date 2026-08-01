@@ -67,6 +67,35 @@ real regression.** This single measurement is the justification for the whole pr
 discipline: the decision levers must be measured on the *current* config, not trusted from a
 docstring number taken on an older/simpler one.
 
+### Measured screening of the "cheap" levers (2026-08-01, the Phase 0 gate's first run)
+
+Ran `scripts/bench_er_headtohead/ab_lever.py` (the Phase 0 gate) over the 5-dataset F1 panel
+(person / febrl3 / ncvr_synthetic / dblp_acm / historical_50k), each lever OFF vs ON, on the
+*current* default auto-config:
+
+| lever (env) | gate | headline |
+|---|---|---|
+| `FS_CALIBRATE_THRESHOLD` (link_threshold) | **FAIL** | historical_50k −0.063 F1 (P −0.16) |
+| `FS_DOMAIN_COMPARATORS` | **FAIL** | historical_50k −0.013 F1; febrl3 +0.0014; else flat |
+| `FS_STRIP_HONORIFICS` | PASS | net-flat; historical_50k **P 0.928→0.957** / R 0.777→0.754 (precision/recall trade) |
+| `BLOCKING_PRUNE_PASSES` | PASS | +0.0000 on every dataset (no-op on this panel) |
+| `FS_TF_ADJUSTMENT` | PASS | +0.0000 on every dataset (no-op on this panel) |
+
+**Finding: there is no clean F1 win among the cheap levers on the validated panel.** Two regress on
+a naive default-flip; three pass the gate but are flat/no-op on F1. The audit's optimistic framing
+("measured wins held back by a flag") does not survive a multi-dataset gate on the *current* config —
+the docstring wins were taken on older/simpler configs. This re-scopes the program away from
+"flip stranded flags" and toward **per-dataset decisions** (and FS refinement), which is where the
+value actually is. The signals that *do* exist are decision-shaped, not flip-shaped:
+
+- **domain comparators**: `date_diff` *helps* febrl3 (+0.0014) but *hurts* corrupted-DOB historical_50k
+  (−0.013). The right enablement is a **per-column decision** (use `date_diff` only where the date
+  column is reliable, keep `levenshtein` when corrupted), not a global flip.
+- **honorific stripping**: a genuine **precision** lever (+0.029 P on historical_50k) that trades
+  recall — a candidate for a precision-starved *decision*, not a blanket default.
+- **blocking-pass pruning / tf_adjustment**: perf / skewed-frequency levers whose value is at scale
+  or on shapes not in this panel — F1-neutral here, so not F1-enablement candidates.
+
 ## The plan
 
 ### Phase 0 — the enablement gate (prereq, non-negotiable)
@@ -96,23 +125,28 @@ Effort: **S/M**, 1 PR. Blocks everything below.
 - **`levels` / `partial_threshold` from the score histogram — M.** Choose bands from the score
   distribution instead of the fixed 2/3 + 0.8/0.9. Higher blast radius (every field); gate carefully.
 
-### Phase 2 — env-flag → auto-config-owned (one lever per PR, each through the gate)
+### Phase 2 — per-dataset DECISIONS, not flag-flips (revised by the screening)
 
-Each is a *small* code change (flip the gate from "env truthy" to "auto-config decides from the
-profile + env override") but a *full* validation cycle. Ordered by measured-win magnitude and by
-risk (additive/scale-neutral first):
+The screening killed the original "flip stranded flags for free wins" framing — none is a clean win.
+So Phase 2 is not "flip the gate to default-on"; it is "make auto-config **decide** the lever
+per-dataset (or per-column) from the profile, gated." One decision per PR, each through the gate:
 
-- **domain comparators** (`date_diff`/`numeric_diff`/`geo_haversine`) — likely the lowest-risk first
-  ship: kernel-backed, additive, and already documented scale-neutral. Today dates get magnitude-blind
-  `levenshtein` and numeric fields are dropped entirely.
-- **blocking-pass pruning** + **quality-aware blocking** — also *perf* levers (fewer candidate pairs
-  → less scoring/clustering), so they advance both axes.
-- **`tf_adjustment`** — `_tf_adjustment_for` is already frequency-shaped; targets the precision /
-  over-merge regime.
-- **honorific stripping** — measured +0.011 F1 / +0.024 precision.
+- **Per-column domain comparators (the tractable first real decision).** Emit `date_diff` for a date
+  column only when it is *reliable* (low corruption / high parse rate), else keep `levenshtein`;
+  emit `numeric_diff`/`geo_haversine` where numeric/coord columns parse cleanly. This targets the
+  febrl3 win without the historical_50k regression the global flip caused. Requires a per-column
+  reliability signal from the profiler (parse rate / corruption score already computed by GoldenCheck
+  indicators).
+- **Honorific stripping as a precision decision** — apply when the config is precision-starved
+  (name-only fuzzy, high over-merge risk), not as a blanket default. Data-gated on the same signals
+  the controller's precision-anchor rule already uses.
 - **FS negative evidence — M (bigger).** `promote_negative_evidence` currently *skips* probabilistic
   matchkeys (`autoconfig_negative_evidence.py:148`); the FS scorer already honors NE fields, so this
-  is "add an FS-appropriate promotion," not new scoring.
+  is "add an FS-appropriate promotion," not new scoring. Gate hard (NE changes precision/recall
+  balance directly).
+- **blocking-pass pruning / tf_adjustment** — de-prioritized for the *F1* program (no-op on the
+  panel). Their value is perf (fewer pairs) / skewed-frequency precision; revisit under the perf
+  track or at scale, not here.
 
 ### Phase 3 — structural: FS gets refinement (the real answer, L, spec-first)
 
