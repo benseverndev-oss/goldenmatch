@@ -72,9 +72,10 @@ def _bootstrap() -> object:
 
 
 _certify_semantic_model = _bootstrap()
+# The emitters read a duck-typed stats object (`_StatsXW` below), so no real
+# `ResolvedCrosswalk` is constructed here.
 _emit_cube = sys.modules["goldenmatch.semantic.cube"].emit_cube_from_crosswalk
 _emit_osi = sys.modules["goldenmatch.semantic.osi"].emit_osi_from_crosswalk
-_ResolvedCrosswalk = None  # not needed; emitters read a duck-typed stats object
 
 
 class _StatsXW:
