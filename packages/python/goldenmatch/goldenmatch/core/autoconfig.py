@@ -5679,7 +5679,11 @@ def _add_atomic_name_soundex_blocking(
         len(new_passes), [k.fields[0] for k in new_passes],
     )
     updated = blocking.model_copy(deep=True)
-    updated.passes = list(blocking.passes or []) + new_passes
+    # Preserve the existing passes -- OR the `keys` when a static config carries
+    # its blocking key there (passes=None). `passes` (above) already resolves
+    # that fallback; seeding from `blocking.passes or []` alone would DROP the
+    # original static key when promoting to multi_pass.
+    updated.passes = list(passes) + new_passes
     if updated.strategy == "static":
         updated.strategy = "multi_pass"
     return updated

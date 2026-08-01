@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 # Training-time semi-supervised label anchors, keyed by matchkey name (or the
 # sentinel "*" to apply to every probabilistic matchkey). A two-pass driver
 # (run FS -> label the uncertain band -> rerun) sets this via
-# ``fs_label_anchors(...)`` so ``load_or_train_em`` feeds the labels into
+# ``set_fs_label_anchors(...)`` so ``load_or_train_em`` feeds the labels into
 # label-constrained EM without threading them through the user-facing config.
 # Default None -> unsupervised EM, byte-identical to the prior behavior.
 _FS_LABEL_ANCHORS: contextvars.ContextVar[dict | None] = contextvars.ContextVar(

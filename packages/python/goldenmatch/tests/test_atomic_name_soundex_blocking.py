@@ -159,3 +159,19 @@ class TestLever:
     def test_none_blocking_is_safe(self, monkeypatch):
         monkeypatch.setenv(FLAG, "on")
         assert _add_atomic_name_soundex_blocking(None, _person_profiles()) is None
+
+    def test_static_keys_config_preserves_the_key(self, monkeypatch):
+        monkeypatch.setenv(FLAG, "on")
+        # a static config carries its blocking key in `keys`, passes=None:
+        # promoting to multi_pass must KEEP the original key, not drop it.
+        blk = BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["full_name"],
+                                    transforms=["lowercase", "soundex"])],
+        )
+        out = _add_atomic_name_soundex_blocking(blk, _person_profiles())
+        assert out.strategy == "multi_pass"
+        fields = _pass_field_lists(out)
+        assert ["full_name"] in fields  # original static key preserved
+        assert ["surname"] in fields    # atomic passes added
+        assert ["first_name"] in fields
