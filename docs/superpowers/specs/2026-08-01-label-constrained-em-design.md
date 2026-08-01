@@ -10,8 +10,10 @@ An optional `label_pairs` input to Fellegi-Sunter EM training
 a mapping of canonical `(min_row_id, max_row_id)` pairs → `0/1` labels, the
 labeled pairs are **injected into the EM training sample** and their E-step
 responsibility is **clamped to the label** every iteration (match → 1.0,
-non-match → 0.0). The M-step then re-estimates `m`/`u` from the full blocked
-population *with those pairs pinned as ground truth*.
+non-match → 0.0). The M-step then re-estimates `m` (and the match prior
+`p_match`) from the full blocked population *with those pairs pinned as ground
+truth*. `u` is unchanged — it is estimated from random pairs and held fixed
+during EM, exactly as in the unsupervised path.
 
 This is **label-constrained (semi-supervised) EM**, distinct from the two
 mechanisms it supersedes for using labels:

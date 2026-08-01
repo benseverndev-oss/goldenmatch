@@ -2037,6 +2037,33 @@ class TestLabelConstrainedEM:
             reset_fs_label_anchors(tok)
         assert anc.proportion_matched != base.proportion_matched
 
+    def test_non_binary_label_raises(self):
+        import pytest
+        df = _make_dedupe_df()
+        mk = _make_probabilistic_mk()
+        with pytest.raises(ValueError, match="must be 0/1 or bool"):
+            train_em(df, mk, n_sample_pairs=100, label_pairs={(1, 2): 2})
+
+    def test_bool_labels_accepted(self):
+        df = _make_dedupe_df()
+        mk = _make_probabilistic_mk()
+        pos = train_em(df, mk, n_sample_pairs=100, seed=7,
+                       label_pairs={(1, 2): True, (3, 4): True})
+        neg = train_em(df, mk, n_sample_pairs=100, seed=7,
+                       label_pairs={(1, 2): False, (3, 4): False})
+        assert pos.proportion_matched > neg.proportion_matched
+
+    def test_self_pairs_are_ignored(self):
+        df = _make_dedupe_df()
+        mk = _make_probabilistic_mk()
+        base = train_em(df, mk, n_sample_pairs=100, seed=7)
+        # (a, a) self-pairs carry no comparison signal -> silently dropped,
+        # so the trained model is unchanged from the no-anchor baseline.
+        same = train_em(df, mk, n_sample_pairs=100, seed=7,
+                        label_pairs={(1, 1): 1, (5, 5): 0})
+        assert same.proportion_matched == base.proportion_matched
+        assert same.m_probs == base.m_probs
+
     def test_contextvar_default_is_inert(self):
         df = _make_dedupe_df()
         mk = _make_probabilistic_mk()

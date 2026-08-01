@@ -48,8 +48,7 @@ def set_fs_label_anchors(anchors: dict | None):
 
     ``anchors`` maps matchkey name -> {canonical (a, b) pair: 0/1 label}. Use
     the key ``"*"`` to apply the same anchor set to every probabilistic
-    matchkey. Reset with ``reset_fs_label_anchors(token)`` (or use the
-    ``fs_label_anchors`` context manager)."""
+    matchkey. Reset with ``reset_fs_label_anchors(token)``."""
     return _FS_LABEL_ANCHORS.set(anchors)
 
 
@@ -1246,9 +1245,12 @@ def train_em(
             ``(min_row_id, max_row_id)`` pairs to a 0/1 label. Labeled pairs are
             injected into the EM training sample and their E-step responsibility
             is clamped to the label every iteration (match -> 1.0,
-            non-match -> 0.0), so m/u stay representative of the full blocked
-            population (the anchors are a small fraction) while the labels steer
-            the decision boundary. This is label-constrained (semi-supervised)
+            non-match -> 0.0), so the trained m stays representative of the full
+            blocked population (the anchors are a small fraction) while the
+            labels steer the decision boundary. u is unchanged — it is estimated
+            from random pairs and held fixed during EM, exactly as in the
+            unsupervised path. Labels must be 0/1 (or bool); self-pairs
+            ``(a, a)`` are ignored. This is label-constrained (semi-supervised)
             EM, NOT a per-pair score override: the labels improve the trained
             model, which is then re-scored across the whole population. Default
             None is byte-identical to unsupervised EM.
@@ -1317,8 +1319,21 @@ def train_em(
         pair_conditioning = list(pair_conditioning)
         existing = {(min(a, b), max(a, b)) for a, b in blocked_pairs}
         for (a, b), lab in label_pairs.items():
-            key = (int(min(a, b)), int(max(a, b)))
-            label_anchors[key] = 1.0 if lab else 0.0
+            ai, bi = int(a), int(b)
+            if ai == bi:
+                continue  # a self-pair carries no comparison signal
+            # Caller-facing input: reject anything that isn't a clean 0/1 label
+            # rather than silently coercing (e.g. 2 -> match) an unintended anchor.
+            if lab is True or lab == 1:
+                val = 1.0
+            elif lab is False or lab == 0:
+                val = 0.0
+            else:
+                raise ValueError(
+                    f"label_pairs label for ({ai}, {bi}) must be 0/1 or bool, got {lab!r}"
+                )
+            key = (min(ai, bi), max(ai, bi))
+            label_anchors[key] = val
             if key not in existing:
                 blocked_pairs.append(key)
                 pair_conditioning.append(frozenset())
@@ -1482,8 +1497,9 @@ def train_em(
         posteriors = e_match / (e_match + e_nonmatch)
 
         # Semi-supervised clamp: pin labeled anchors' responsibility to the
-        # label so the M-step re-estimates m/u with those pairs as ground
-        # truth (label-constrained EM). No-op when no anchors were supplied.
+        # label so the M-step re-estimates m (and p_match) with those pairs as
+        # ground truth. u stays fixed from the random-pair estimate, exactly as
+        # in unsupervised EM. No-op when no anchors were supplied.
         if label_clamp_idx is not None:
             posteriors[label_clamp_idx] = label_clamp_val
 
