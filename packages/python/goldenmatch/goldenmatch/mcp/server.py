@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -2623,7 +2624,7 @@ async def run_server_http(
                 return await call_next(request)
             if token:
                 header = request.headers.get("Authorization", "")
-                if not header.startswith("Bearer ") or header[7:] != token:
+                if not header.startswith("Bearer ") or not secrets.compare_digest(header[7:], token):
                     return JSONResponse({"error": "Unauthorized"}, status_code=401)
             return await call_next(request)
 
