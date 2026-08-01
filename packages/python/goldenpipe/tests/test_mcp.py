@@ -7,6 +7,7 @@ try:
         _jail_path,
         _result_to_dict,
         _summarize_output,
+        explain_pipeline_tool,
         list_stages_tool,
         run_pipeline_tool,
         validate_pipeline_tool,
@@ -199,4 +200,16 @@ class TestPathJail:
         # the request (load_config raises FileNotFoundError past the jail check).
         monkeypatch.chdir(tmp_path)
         out = run_pipeline_tool(config_path="nonexistent.yml")
+        assert out.get("error") == "failed to load config"
+
+    def test_explain_pipeline_rejects_escaping_config_path(self, tmp_path, monkeypatch):
+        # explain_pipeline reads config_path too -- it must be jailed the same way.
+        monkeypatch.chdir(tmp_path)
+        out = explain_pipeline_tool(config_path="/etc/passwd")
+        assert "error" in out
+        assert "outside the allowed root" in out["error"]
+
+    def test_explain_pipeline_missing_config_returns_error(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        out = explain_pipeline_tool(config_path="nonexistent.yml")
         assert out.get("error") == "failed to load config"

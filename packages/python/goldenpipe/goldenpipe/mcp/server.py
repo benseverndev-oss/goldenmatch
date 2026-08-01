@@ -207,7 +207,15 @@ def _result_to_dict(result: Any, preview_rows: int = 10) -> dict[str, Any]:
 def explain_pipeline_tool(config_path: str) -> dict[str, Any]:
     """Explain what a pipeline config will do."""
     from goldenpipe.config.loader import load_config
-    config = load_config(config_path)
+    # Jail the caller-supplied config path (public unauthenticated MCP surface),
+    # same as run_pipeline. Surface an escape / load failure as data instead of
+    # opening an out-of-root file or echoing a YAML parse error (file contents).
+    try:
+        config = load_config(_jail_path(config_path))
+    except ValueError as exc:  # jail escape / NUL byte -- message is already generic
+        return {"error": str(exc)}
+    except Exception:  # missing / malformed config -- don't leak server internals
+        return {"error": "failed to load config"}
     reg = StageRegistry()
     reg.discover()
     try:
