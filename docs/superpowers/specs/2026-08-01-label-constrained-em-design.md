@@ -49,6 +49,18 @@ product model.
 
 ## Measurement (the honest result)
 
+> **⚠️ Leakage correction (2026-08-01).** The first pass of these experiments
+> called `auto_configure_probabilistic_df(df)` on the frame **including the gold
+> `cluster` column**, which auto-config pulled in as a matchkey field — partly
+> deduping on the answer. That inflated every absolute number below (the leak-free
+> baseline is **B³ F1 0.8620**, matching the documented ~0.826–0.8456, not ~0.99).
+> The **ΔF1 conclusion is unaffected** — baseline and anchored runs leaked
+> identically — and a clean leak-free re-check (drop `cluster`, gold-anchor the
+> decision-straddling band around the true ≈0.50 cut) gives **B³ F1 0.8620 →
+> 0.8640, ΔF1 +0.0020 at the oracle ceiling**: still ~neutral. The original
+> (leak-inflated) table is retained below for provenance; read the ΔF1 column, not
+> the absolutes.
+
 De-risked on `historical_50k` (50,578 rows) through the **real `dedupe_df`
 pipeline**, measured at **cluster level** (pairwise F1 over gold clusters — the
 gate that matters, since transitive closure absorbs near-boundary flips):

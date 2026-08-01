@@ -954,6 +954,41 @@ def _fs_orthogonal_blocking_mode() -> str:
     return "auto"
 
 
+def _fs_atomic_name_blocking_mode() -> str:
+    """Resolve ``GOLDENMATCH_FS_ATOMIC_NAME_BLOCKING`` to ``on`` | ``auto`` | ``off``.
+
+    Governs the atomic-name-soundex blocking lever
+    (``_add_atomic_name_soundex_blocking``): when the blocking already keys on a
+    COMPOSITE name via soundex (``full_name``/``first_and_surname``) but has no
+    ATOMIC single-name soundex pass, a corrupted first name breaks the whole
+    composite key even when the surname is intact -- so the same-surname
+    duplicates are never co-blocked (historical_50k: 49% of the missed true pairs
+    share a surname-soundex the blocking doesn't use).
+
+    - ``off`` (**default**): never fire (byte-identical to the pre-lever config).
+      Default-off pending the full ``bench_er_headtohead`` / ``qis_gate`` panel;
+      validated so far on historical_50k (leak-free B3 F1 0.8620 -> 0.8688,
+      +0.0067, precision -0.0027) + febrl3 (no-op). SOUNDEX is the precision-safe
+      variant -- atomic-name STRIP over-merges (historical_50k B3 precision
+      -0.05, the documented failure) because exact same-name blocks are mostly
+      non-matches; soundex's fuzzy-tolerant net adds disproportionately many
+      corrupted-spelling TRUE matches.
+    - ``auto`` (``auto``): fire ONLY on person-shaped data
+      (``_dataset_is_person_shaped``) -- the regime where names are the primary
+      blocking signal.
+    - ``on`` (``1``/``true``/``yes``/``enabled``): force everywhere.
+
+    Mirrors the ``GOLDENMATCH_FS_ORTHOGONAL_BLOCKING`` tri-state, but defaults OFF
+    (not ``auto``) because the full ER panel hasn't blessed it yet.
+    """
+    v = os.environ.get("GOLDENMATCH_FS_ATOMIC_NAME_BLOCKING", "off").lower()
+    if v in ("1", "true", "on", "yes", "enabled"):
+        return "on"
+    if v == "auto":
+        return "auto"
+    return "off"
+
+
 # Fraction of a column's non-null sample values that must parse as valid
 # coordinates for it to be admitted as a single-field geo_haversine column.
 _LATLONG_SAMPLE_FLOOR = 0.8
@@ -5402,6 +5437,12 @@ def auto_configure_probabilistic_df(
     # misclassified orthogonal anchor (e.g. historical_50k `birth_place`, which
     # profiles as `name` and escapes the v2 date/zip whitelist above).
     blocking = _diversify_unused_orthogonal_blocking(blocking, profiles, df)
+    # Atomic-name-soundex completion (default OFF): when names are blocked via a
+    # composite soundex pass but no atomic single-name soundex pass exists, a
+    # corrupted first name breaks the composite key -- add surname-/given-name
+    # soundex passes so same-surname duplicates still co-block. Additive; the
+    # pair-budget bound below drops any that explode.
+    blocking = _add_atomic_name_soundex_blocking(blocking, profiles)
     # Pair-budget gate: bound EVERY pass (build_blocking's soundex passes + the
     # diversified ones) by candidate pairs Σ C(block,2), not just block rows —
     # the row ceiling let ~12.9B-pair configs (dob-YEAR + name-soundex mega-
@@ -5538,6 +5579,110 @@ def _diversify_probabilistic_blocking(
         "passes": base_passes + new_passes,
         "auto_select": False,
     })
+
+
+def _add_atomic_name_soundex_blocking(
+    blocking: BlockingConfig | None,
+    profiles: list[ColumnProfile],
+) -> BlockingConfig | None:
+    """Add an additive atomic single-name SOUNDEX pass for each given/family name
+    field when the blocking keys names via a COMPOSITE soundex pass but has no
+    atomic single-name soundex pass.
+
+    The gap: ``build_blocking`` emits ``full_name`` / ``first_and_surname`` soundex
+    passes, so one corrupted name breaks the whole composite key -- a pair with a
+    mangled first name but an intact surname never co-blocks, even though a
+    ``surname`` soundex would catch it (historical_50k: surname-soundex alone
+    would recover 49% of the missed true pairs; first-initial+surname another
+    26%). Adding the atomic passes recovers that recall.
+
+    SOUNDEX not STRIP: an atomic-name *strip* (exact) pass co-blocks every
+    exact-same-name pair -- mostly unrelated people -- and over-merges
+    (historical_50k B3 precision -0.05, the documented failure the existing
+    orthogonal-anchor overlap gate correctly drops). Soundex's fuzzy-tolerant net
+    adds disproportionately many corrupted-spelling TRUE matches, so precision
+    holds while recall rises (leak-free historical_50k B3 F1 0.8620 -> 0.8688,
+    precision -0.0027; febrl3 no-op).
+
+    Purely additive (``additive=True``) -- co-locates the missed pairs WITHOUT
+    demoting the atomic name field from EM scoring, and the scorer still decides
+    precision. The downstream ``_bound_probabilistic_blocking_pairs`` bounds/drops
+    any pass whose candidate-pair count explodes, so a common-surname mega-block
+    can't OOM the run.
+
+    Gated ``GOLDENMATCH_FS_ATOMIC_NAME_BLOCKING`` (default **off** pending the
+    full ER panel; ``auto`` = person-shaped only; ``on`` = everywhere). See
+    ``_fs_atomic_name_blocking_mode``.
+    """
+    if blocking is None:
+        return blocking
+    mode = _fs_atomic_name_blocking_mode()
+    if mode == "off":
+        return blocking
+    if mode == "auto" and not _dataset_is_person_shaped(profiles):
+        return blocking
+
+    passes = list(blocking.passes or []) or list(blocking.keys or [])
+    if not passes:
+        return blocking
+
+    def _has_soundex(k: BlockingKeyConfig) -> bool:
+        return any("soundex" in str(t) for t in (k.transforms or []))
+
+    # Gap condition: names must already be a PRIMARY blocking signal via a
+    # composite soundex pass. If names aren't soundex-blocked at all (e.g. a
+    # non-person schema slipped past the gate), adding atomic name soundex would
+    # invent a signal the config deliberately doesn't use -- skip.
+    composite_name_soundex = any(
+        _has_soundex(k)
+        and any(_norm_colname(f) in _COMPOSITE_NAME_FIELDS for f in k.fields)
+        for k in passes
+    )
+    if not composite_name_soundex:
+        return blocking
+
+    # Atomic single-name fields already carrying their own soundex pass -- never
+    # duplicate.
+    atomic_names = _ATOMIC_GIVEN_NAMES | _ATOMIC_FAMILY_NAMES
+    already_atomic_soundex = {
+        _norm_colname(k.fields[0])
+        for k in passes
+        if len(k.fields) == 1 and _has_soundex(k)
+        and _norm_colname(k.fields[0]) in atomic_names
+    }
+
+    new_passes: list[BlockingKeyConfig] = []
+    for p in profiles:
+        if p.col_type not in _PERSON_NAME_COLTYPES:
+            continue
+        norm = _norm_colname(p.name)
+        if norm not in atomic_names:
+            continue  # skip composites + non-name columns
+        if norm in already_atomic_soundex:
+            continue
+        # Guard against a mostly-empty name column producing a giant null block.
+        if p.null_rate > _ORTHO_BLOCK_NULL_CEILING:
+            continue
+        new_passes.append(
+            BlockingKeyConfig(
+                fields=[p.name],
+                transforms=["lowercase", "soundex"],
+                additive=True,
+            )
+        )
+        already_atomic_soundex.add(norm)
+
+    if not new_passes:
+        return blocking
+    logger.info(
+        "atomic-name-soundex blocking: added %d additive pass(es) on %s",
+        len(new_passes), [k.fields[0] for k in new_passes],
+    )
+    updated = blocking.model_copy(deep=True)
+    updated.passes = list(blocking.passes or []) + new_passes
+    if updated.strategy == "static":
+        updated.strategy = "multi_pass"
+    return updated
 
 
 def _diversify_unused_orthogonal_blocking(
