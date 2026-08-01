@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -59,7 +60,7 @@ def create_app(state: AppState) -> FastAPI:
         path = request.url.path
         if token and path.startswith("/api/") and path not in _PUBLIC_API_PATHS:
             header = request.headers.get("Authorization", "")
-            if not header.startswith("Bearer ") or header[7:] != token:
+            if not header.startswith("Bearer ") or not secrets.compare_digest(header[7:], token):
                 return JSONResponse({"error": "Unauthorized"}, status_code=401)
         return await call_next(request)
 

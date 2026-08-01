@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import secrets
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -501,7 +502,7 @@ class APIHandler(BaseHTTPRequestHandler):
         if not _auth_token:
             return True
         header = self.headers.get("Authorization", "")
-        return header.startswith("Bearer ") and header[7:] == _auth_token
+        return header.startswith("Bearer ") and secrets.compare_digest(header[7:], _auth_token)
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)

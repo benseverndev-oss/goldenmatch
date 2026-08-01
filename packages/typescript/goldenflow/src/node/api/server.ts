@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { resolve, isAbsolute } from "node:path";
+import { resolve, isAbsolute, sep } from "node:path";
 import { readFile } from "../connectors/file.js";
 import { TransformEngine } from "../../core/engine/transformer.js";
 import { listTransforms } from "../../core/transforms/index.js";
@@ -8,7 +8,9 @@ import { listTransforms } from "../../core/transforms/index.js";
 function sanitizePath(raw: string): string {
   const resolved = isAbsolute(raw) ? resolve(raw) : resolve(process.cwd(), raw);
   const cwd = resolve(process.cwd());
-  if (!resolved.startsWith(cwd)) {
+  // Require an exact match or a real path-separator boundary, so a sibling dir
+  // sharing the cwd prefix (e.g. `/srv/app-secrets` vs cwd `/srv/app`) can't escape.
+  if (resolved !== cwd && !resolved.startsWith(cwd + sep)) {
     throw new Error(`Path '${raw}' is outside the working directory`);
   }
   return resolved;
