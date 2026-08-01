@@ -788,7 +788,6 @@ def test_fs_field_readers_prefer_precomputed_xform_column():
     speedup at 1M. Proven by making the precomputed column DIFFER from what
     re-deriving the raw field would produce and asserting the readers return the
     precomputed values; the fallback (column absent) still re-derives."""
-    import pyarrow as pa
     from goldenmatch.config.schemas import MatchkeyField
     from goldenmatch.core.matchkey import _xform_sig
 
@@ -801,10 +800,11 @@ def test_fs_field_readers_prefer_precomputed_xform_column():
         sig: ["<precomputed-0>", "<precomputed-1>"],
     })
     assert _field_values_for_block(df, f, 2) == ["<precomputed-0>", "<precomputed-1>"]
-    arr = _fs_arrow_column(df, f, 2)
-    assert pa.Array.to_pylist(arr) == ["<precomputed-0>", "<precomputed-1>"]
+    # `.to_pylist()` on the returned object (works for Array AND ChunkedArray --
+    # a chunked Polars series yields the latter).
+    assert _fs_arrow_column(df, f, 2).to_pylist() == ["<precomputed-0>", "<precomputed-1>"]
 
     # Fallback: no precomputed column -> re-derive the transform from the raw field.
     df_raw = pl.DataFrame({"first_name": ["ALICE", "BOB"]})
     assert _field_values_for_block(df_raw, f, 2) == ["alice", "bob"]
-    assert pa.Array.to_pylist(_fs_arrow_column(df_raw, f, 2)) == ["alice", "bob"]
+    assert _fs_arrow_column(df_raw, f, 2).to_pylist() == ["alice", "bob"]
