@@ -4098,6 +4098,7 @@
             "goldenmatch.core._native_loader",
             "goldenmatch.core.embedder",
             "goldenmatch.core.frame",
+            "goldenmatch.core.matchkey",
             "goldenmatch.core.scorer",
             "goldenmatch.core.tf_tables",
             "goldenmatch.refdata.given_names",
