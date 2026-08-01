@@ -10,6 +10,85 @@
 
 import { type YamlValue, dumpYaml } from "./yamlEmit.js";
 import type { ResolvedCrosswalk } from "./crosswalk.js";
+import { type LoadedDoc, asList, asStrStripped, isObj } from "./parseUtil.js";
+
+const PRIMARY_ENTITY_TYPES = new Set(["primary", "natural"]);
+
+/** One semantic model's declared identity, ready to feed `certifyKeyIntegrity`. */
+export interface DeclaredKeySpec {
+  model: string;
+  key: string[]; // primary/natural entity column(s)
+  measures: string[];
+  grain: string[] | null; // default agg_time_dimension, if any
+  foreignKeys: string[]; // foreign entities (join edges)
+}
+
+/** The physical column an entity maps to: `expr` if given, else `name`. */
+function entityColumn(entity: Record<string, unknown>): string {
+  const expr = entity["expr"];
+  if (typeof expr === "string" && expr.trim()) return expr.trim();
+  return asStrStripped(entity["name"]);
+}
+
+function measureColumn(measure: Record<string, unknown>): string {
+  const expr = measure["expr"];
+  if (typeof expr === "string" && expr.trim()) return expr.trim();
+  return asStrStripped(measure["name"]);
+}
+
+/**
+ * Parse dbt/MetricFlow `semantic_models` into `DeclaredKeySpec`s — one per model
+ * that declares a primary/natural entity (models without one are skipped;
+ * nothing to certify). Faithful port of Python `parse_semantic_models` (consume
+ * half); operates on an already-loaded document object.
+ */
+export function parseSemanticModels(doc: LoadedDoc): DeclaredKeySpec[] {
+  const specs: DeclaredKeySpec[] = [];
+  for (const sm of asList(doc["semantic_models"])) {
+    if (!isObj(sm)) continue;
+    const name = asStrStripped(sm["name"]);
+
+    const primaryKey: string[] = [];
+    let foreignKeys: string[] = [];
+    const uniqueKeys: string[] = [];
+    for (const ent of asList(sm["entities"])) {
+      if (!isObj(ent)) continue;
+      const etype = asStrStripped(ent["type"]).toLowerCase();
+      const col = entityColumn(ent);
+      if (!col) continue;
+      if (PRIMARY_ENTITY_TYPES.has(etype)) primaryKey.push(col);
+      else if (etype === "foreign") foreignKeys.push(col);
+      else if (etype === "unique") {
+        uniqueKeys.push(col);
+        // A unique (non-primary) entity is a join edge when a primary key is
+        // present; it is promoted to the key only when no primary is.
+        foreignKeys.push(col);
+      }
+    }
+
+    const key = primaryKey.length ? primaryKey : uniqueKeys;
+    if (!key.length) continue; // nothing to certify for this model
+    if (!primaryKey.length) {
+      // Promoted a unique key to the primary role — drop it from foreign_keys.
+      foreignKeys = foreignKeys.filter((c) => !uniqueKeys.includes(c));
+    }
+
+    const measures: string[] = [];
+    for (const m of asList(sm["measures"])) {
+      if (!isObj(m)) continue;
+      const c = measureColumn(m);
+      if (c) measures.push(c);
+    }
+
+    let grain: string[] | null = null;
+    const defaults = sm["defaults"];
+    const aggTime = isObj(defaults) ? defaults["agg_time_dimension"] : undefined;
+    if (typeof aggTime === "string" && aggTime.trim()) grain = [aggTime.trim()];
+
+    specs.push({ model: name, key: [...key], measures, grain, foreignKeys });
+  }
+  return specs;
+}
 
 export interface EmitSemanticModelOptions {
   resolvedKey: string;

@@ -4,7 +4,7 @@
  *
  * Node-only: uses node:fs, node:path, node:readline. NOT edge-safe.
  *
- * Exposes 86 tools covering dedupe, match, scoring, explanation,
+ * Exposes 87 tools covering dedupe, match, scoring, explanation,
  * profiling, auto-config (shorthand), evaluation, listings, the Splink ->
  * GoldenMatch config converter (convert_splink_config), CCMS cluster
  * comparison (compare_clusters), Learning Memory (6 memory tools via
@@ -34,8 +34,9 @@ import { createInterface } from "node:readline";
 
 import { dedupe, match, scoreStrings } from "../../core/api.js";
 import { readFile, writeCsv, writeJson } from "../connectors/file.js";
-import { loadConfigFile } from "../config-file.js";
+import { loadConfigFile, parseYamlDoc } from "../config-file.js";
 import { autoMapColumns } from "../../core/schema-match.js";
+import { certifySemanticModel } from "../../core/semantic/index.js";
 import { runPPRL, type PPRLConfig } from "../../core/pprl/protocol.js";
 import { diagnoseConfig } from "../../core/config-critique.js";
 import type { Row, MatchkeyField } from "../../core/types.js";
@@ -479,6 +480,33 @@ const EXISTING_TOOLS: readonly Tool[] = [
     },
   },
   {
+    name: "certify_semantic_model",
+    description:
+      "Certify every declared identity key in a semantic model (dbt/MetricFlow, " +
+      "Cube, or OSI/Ossie -- auto-detected) against its data files. A metric is " +
+      "only correct if the key its joins run on uniquely identifies one entity; " +
+      "this reports, per key, whether it is unique at grain and how much a " +
+      "duplicated key would inflate a SUM/COUNT (fan-out). Structural tier only " +
+      "(the resolve=true entity-resolution fragmentation tier is Python-only). " +
+      "Returns {dialect, n_certified, all_trustworthy, skipped, keys:[...]}.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        model_path: {
+          type: "string",
+          description: "Path to a MetricFlow/Cube/OSI semantic-model YAML (or JSON).",
+        },
+        frames: {
+          type: "object",
+          description:
+            "Maps each model/dataset/cube name to a data file path (csv/tsv/json/jsonl). " +
+            "A target with no supplied frame is skipped.",
+        },
+      },
+      required: ["model_path", "frames"],
+    },
+  },
+  {
     name: "pprl_link",
     description:
       "Run privacy-preserving record linkage (PPRL) between two parties' CSV " +
@@ -775,6 +803,16 @@ function buildFieldsFromArg(raw: unknown): MatchkeyField[] {
 // ---------------------------------------------------------------------------
 // Tool dispatch
 // ---------------------------------------------------------------------------
+
+/** Pivot parsed rows into the column-oriented frame the semantic certifier reads
+ * (`{ column: values[] }`), the edge-safe analogue of a pyarrow Table. */
+function rowsToColumns(rows: Array<Record<string, unknown>>): Record<string, unknown[]> {
+  const names = new Set<string>();
+  for (const r of rows) for (const k of Object.keys(r)) names.add(k);
+  const cols: Record<string, unknown[]> = {};
+  for (const name of names) cols[name] = rows.map((r) => (name in r ? r[name] : null));
+  return cols;
+}
 
 export async function handleTool(
   name: string,
@@ -1217,6 +1255,56 @@ export async function handleTool(
         const minScore =
           typeof args["min_score"] === "number" ? (args["min_score"] as number) : 0.5;
         return { mappings: autoMapColumns(rowsA, rowsB, minScore) };
+      }
+
+      case "certify_semantic_model": {
+        const rawModel = args["model_path"];
+        const framesArg = args["frames"];
+        if (typeof rawModel !== "string" || !rawModel) {
+          return { error: "model_path is required (path to a MetricFlow/Cube/OSI YAML)." };
+        }
+        if (typeof framesArg !== "object" || framesArg === null || Array.isArray(framesArg)) {
+          return { error: "frames must map a model/dataset/cube name to a data file path." };
+        }
+        const modelPath = sanitizePath(rawModel);
+        let doc: unknown;
+        try {
+          doc = parseYamlDoc(readFileSync(modelPath, "utf-8"));
+        } catch (err) {
+          return { error: `could not read semantic-model file (${modelPath}): ${err instanceof Error ? err.message : String(err)}` };
+        }
+        if (typeof doc !== "object" || doc === null || Array.isArray(doc)) {
+          return { error: `semantic-model file did not parse to a mapping: ${modelPath}` };
+        }
+        const frames: Record<string, Record<string, unknown[]>> = {};
+        for (const [target, p] of Object.entries(framesArg as Record<string, unknown>)) {
+          try {
+            frames[target] = rowsToColumns(readFile(sanitizePath(String(p))));
+          } catch (err) {
+            return { error: `could not read data for '${target}' (${String(p)}): ${err instanceof Error ? err.message : String(err)}` };
+          }
+        }
+        let report;
+        try {
+          report = certifySemanticModel(doc as Record<string, unknown>, frames);
+        } catch (err) {
+          return { error: err instanceof Error ? err.message : String(err) };
+        }
+        return {
+          dialect: report.dialect,
+          n_certified: report.nCertified,
+          all_trustworthy: report.allTrustworthy,
+          skipped: report.skipped,
+          keys: report.entries.map((e) => ({
+            target: e.target,
+            key: e.key,
+            context: e.context,
+            is_unique_at_grain: e.certificate.isUniqueAtGrain,
+            max_fan_out: e.certificate.maxFanOut,
+            estimate: e.certificate.estimate,
+            measure_fan_out: e.certificate.measureFanOut,
+          })),
+        };
       }
 
       case "pprl_link": {
