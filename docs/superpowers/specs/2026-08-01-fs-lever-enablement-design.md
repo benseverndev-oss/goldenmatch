@@ -75,11 +75,11 @@ Ran `scripts/bench_er_headtohead/ab_lever.py` (the Phase 0 gate) over the 5-data
 
 | lever (env) | gate | headline |
 |---|---|---|
-| `FS_CALIBRATE_THRESHOLD` (link_threshold) | **FAIL** | historical_50k −0.063 F1 (P −0.16) |
-| `FS_DOMAIN_COMPARATORS` | **FAIL** | historical_50k −0.013 F1; febrl3 +0.0014; else flat |
-| `FS_STRIP_HONORIFICS` | PASS | net-flat; historical_50k **P 0.928→0.957** / R 0.777→0.754 (precision/recall trade) |
-| `BLOCKING_PRUNE_PASSES` | PASS | +0.0000 on every dataset (no-op on this panel) |
-| `FS_TF_ADJUSTMENT` | PASS | +0.0000 on every dataset (no-op on this panel) |
+| `GOLDENMATCH_FS_CALIBRATE_THRESHOLD` (link_threshold) | **FAIL** | historical_50k −0.063 F1 (P −0.16) |
+| `GOLDENMATCH_FS_DOMAIN_COMPARATORS` | **FAIL** | historical_50k −0.013 F1; febrl3 +0.0014; else flat |
+| `GOLDENMATCH_FS_STRIP_HONORIFICS` | PASS | net-flat; historical_50k **P 0.928→0.957** / R 0.777→0.754 (precision/recall trade) |
+| `GOLDENMATCH_BLOCKING_PRUNE_PASSES` | PASS | +0.0000 on every dataset (no-op on this panel) |
+| `GOLDENMATCH_FS_TF_ADJUSTMENT` | PASS | +0.0000 on every dataset (no-op on this panel) |
 
 **Finding: there is no clean F1 win among the cheap levers on the validated panel.** Two regress on
 a naive default-flip; three pass the gate but are flat/no-op on F1. The audit's optimistic framing
