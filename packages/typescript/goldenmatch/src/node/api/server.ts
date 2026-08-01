@@ -40,6 +40,8 @@ import {
   type SemanticFrames,
 } from "../../core/semantic/index.js";
 
+const SEMANTIC_DIALECTS: ReadonlySet<string> = new Set(["metricflow", "cube", "osi"]);
+
 // ---------------------------------------------------------------------------
 // In-memory review queue
 // ---------------------------------------------------------------------------
@@ -363,9 +365,28 @@ async function handleRequest(
         sendJson(res, 400, { error: "'frames' must map a model/dataset/cube name to a column frame" });
         return;
       }
+      // Sanitize the untrusted frames into null-prototype maps + validate each
+      // column is an array, so a crafted name (`__proto__`) or a non-frame value
+      // can't yield surprising prototype-chain reads inside the certifier.
+      const frames: Record<string, Record<string, readonly unknown[]>> = Object.create(null);
+      for (const [name, frame] of Object.entries(framesArg as Record<string, unknown>)) {
+        if (typeof frame !== "object" || frame === null || Array.isArray(frame)) {
+          sendJson(res, 400, { error: `frame '${name}' must be a { column: values[] } object` });
+          return;
+        }
+        const cols: Record<string, readonly unknown[]> = Object.create(null);
+        for (const [col, vals] of Object.entries(frame as Record<string, unknown>)) {
+          if (!Array.isArray(vals)) {
+            sendJson(res, 400, { error: `frame '${name}' column '${col}' must be an array` });
+            return;
+          }
+          cols[col] = vals;
+        }
+        frames[name] = cols;
+      }
       let report;
       try {
-        report = certifySemanticModel(model as Record<string, unknown>, framesArg as SemanticFrames);
+        report = certifySemanticModel(model as Record<string, unknown>, frames as SemanticFrames);
       } catch (err) {
         sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
         return;
@@ -410,6 +431,10 @@ async function handleRequest(
         return;
       }
       const dialectRaw = typeof body["dialect"] === "string" ? (body["dialect"] as string) : "metricflow";
+      if (!SEMANTIC_DIALECTS.has(dialectRaw)) {
+        sendJson(res, 400, { error: `unknown dialect '${dialectRaw}'; expected metricflow | cube | osi` });
+        return;
+      }
       const dataset = typeof body["dataset"] === "string" ? (body["dataset"] as string) : null;
       const yamlStr = await emitSemanticModelFromStore(serverIdentityStore, {
         sourceName,
