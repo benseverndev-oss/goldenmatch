@@ -855,33 +855,6 @@ def _score_probabilistic_matchkey(
             # matched_pairs intentionally NOT populated (single matchkey); the
             # review band is carried above so the columnar path is review-complete.
             return
-        # Cross-pass candidate-pair dedup (GOLDENMATCH_FS_PAIR_DEDUP=1, default
-        # OFF): score each DISTINCT candidate pair once instead of once per
-        # co-blocking pass. `scoring_mk` carries the review-cut threshold, so the
-        # returned set is review-inclusive (split below exactly like the bucket
-        # route). Returns None above the memory cap -> fall through to bucket.
-        from goldenmatch.backends.fs_pair_dedup import (
-            fs_pair_dedup_eligible,
-            fs_pair_dedup_enabled,
-            score_fs_pair_dedup,
-        )
-        if (
-            fs_pair_dedup_enabled()
-            and target_ids is None
-            and not across_files_only
-            and not bench_dump_dir
-            and fs_pair_dedup_eligible(scoring_mk, config.blocking)
-        ):
-            _pd_pairs = score_fs_pair_dedup(
-                score_frame, config.blocking, scoring_mk, matched_pairs, em_result,
-            )
-            if _pd_pairs is not None:
-                pairs, candidates = _split_probabilistic_pairs(_pd_pairs, link_threshold)
-                review_pairs.extend(candidates)
-                all_pairs.extend(pairs)
-                for a, b, _s in pairs:
-                    matched_pairs.add((min(a, b), max(a, b)))
-                return
         _use_arrow_stream = (
             target_ids is None
             and _fs_arrow_stream_enabled()

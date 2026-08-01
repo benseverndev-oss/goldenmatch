@@ -111,7 +111,7 @@ jobs:
       # top it up. Prompt-hash keying is self-invalidating (a prompt change misses
       # and repopulates), so no code SHA is needed in the key.
       - name: Restore/save the goldengraph extraction LLM cache
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25  # v5.1.0
         with:
           path: ${{ github.workspace }}/.gg_llm_cache
           key: gg-llmcache-${{ inputs.corpus }}-${{ inputs.local_llm != '' && inputs.local_llm || 'api' }}-amb${{ matrix.ambiguity }}-${{ github.run_id }}
@@ -308,7 +308,7 @@ jobs:
       # `<corpus>-<model>-` restore-keys prefix is SHARED with head_to_head, so a cache
       # populated by either mode warms the other (same corpus + extraction model).
       - name: Restore/save the goldengraph extraction LLM cache
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25  # v5.1.0
         with:
           path: ${{ github.workspace }}/.gg_llm_cache
           key: gg-llmcache-${{ inputs.corpus }}-${{ inputs.local_llm != '' && inputs.local_llm || 'api' }}-amb${{ inputs.ambiguity }}-${{ github.run_id }}

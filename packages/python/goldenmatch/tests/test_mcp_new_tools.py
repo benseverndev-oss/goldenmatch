@@ -16,7 +16,7 @@ import pytest
 # ── Registration ──────────────────────────────────────────────────────────────
 
 
-def test_total_tool_count_is_91():
+def test_total_tool_count_is_94():
     from goldenmatch.mcp.agent_tools import AGENT_TOOLS
     from goldenmatch.mcp.identity_tools import IDENTITY_TOOLS
     from goldenmatch.mcp.memory_tools import MEMORY_TOOLS
@@ -25,10 +25,10 @@ def test_total_tool_count_is_91():
 
     assert len(AGENT_TOOLS) == 19   # +1 retrieve_similar (#1089) +1 upload_dataset
     assert len(MEMORY_TOOLS) == 7
-    assert len(IDENTITY_TOOLS) == 15  # +3 MDM ops (#1114) +5 agent-memory ops (#1075/#1078)
+    assert len(IDENTITY_TOOLS) == 18  # +1 customer_360 (D1b) +2 serving surfaces (D)
     assert len(_BASE_TOOLS) == 45   # +5 core primitives +3 host helpers +1 certify_semantic_model
     assert len(ROUTING_TOOLS) == 3  # plan_routing / explain_routing / lint_routing
-    assert len(TOOLS) == 91   # +1 certify_semantic_model (semantic-layer front door, python_only)
+    assert len(TOOLS) == 94   # +2 serving surfaces (certify_serving_joins, emit_semantic_model_from_store)
     # No duplicate tool names across the whole surface.
     names = [t.name for t in TOOLS]
     assert len(names) == len(set(names))

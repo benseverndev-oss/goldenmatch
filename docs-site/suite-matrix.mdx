@@ -14,13 +14,13 @@ Live counts (introspected from each package) side by side. `MCP` / `Exports` / `
 
 | Package | MCP tools | Exports | A2A skills | CLI commands | Recipes | TS port |
 |---|---|---|---|---|---|---|
-| `goldenmatch` | 91 | 202 | 51 | 41 | Yes | Yes |
+| `goldenmatch` | 94 | 202 | 51 | 41 | Yes | Yes |
 | `goldencheck` | 19 | 43 | 9 | 22 | Yes | Yes |
 | `goldenflow` | 10 | 36 | 6 | 16 | Yes | Yes |
 | `goldenpipe` | 4 | 20 | 4 | 8 | Yes | Yes |
 | `goldenanalysis` | 4 | 8 | — | 4 | Yes | Yes |
 | `infermap` | 4 | 19 | — | 5 | Yes | Yes |
-| **suite** | **132** | | | | | |
+| **suite** | **135** | | | | | |
 
 ## Compute substrate — the Rust `-core` kernel is the reference
 
@@ -41,9 +41,9 @@ Per surface: values shared by both languages vs each language's exclusives. A no
 
 | Package | Surface | Shared | Python-only | TS-only |
 |---|---|---|---|---|
-| `goldenmatch` | mcp_tools | 83 | 8 | 0 |
+| `goldenmatch` | mcp_tools | 87 | 7 | 0 |
 | `goldenmatch` | cli_commands | 32 | 9 | 0 |
-| `goldenmatch` | a2a_skills | 36 | 15 | 10 |
+| `goldenmatch` | a2a_skills | 36 | 15 | 13 |
 | `goldenmatch` | scorers | 24 | 0 | 0 |
 | `goldenmatch` | transforms | 13 | 0 | 0 |
 | `goldencheck` | mcp_tools | 18 | 1 | 0 |
@@ -66,10 +66,10 @@ Per surface: values shared by both languages vs each language's exclusives. A no
 ## Gaps & asymmetries (auto-detected)
 
 - **No A2A skills surface:** `goldenanalysis`, `infermap`.
-- `goldenmatch` **mcp_tools** — Python-only: `certify_semantic_model`, `documents_ingest`, `documents_suggest_schema`, `explain_routing`, `lint_routing`, `list_plugins`, `plan_routing`, `pprl_auto_config`.
+- `goldenmatch` **mcp_tools** — Python-only: `documents_ingest`, `documents_suggest_schema`, `explain_routing`, `lint_routing`, `list_plugins`, `plan_routing`, `pprl_auto_config`.
 - `goldenmatch` **cli_commands** — Python-only: `certify-keys`, `import-dbt`, `ingest-docs`, `llm`, `migrate-splink`, `serve-ui`, `setup`, `sync`, `watch`.
 - `goldenmatch` **a2a_skills** — Python-only: `analyze_blocking`, `certify_semantic_model`, `compare_clusters`, `configure`, `documents_ingest`, `documents_suggest_schema`, `incremental`, `list_runs`, `pprl`, `quality`, `retrieve_similar`, `review`, `rollback`, `schema_match`, `sensitivity`.
-- `goldenmatch` **a2a_skills** — TS-only: `agent_approve_reject`, `agent_deduplicate`, `agent_explain_cluster`, `agent_explain_pair`, `agent_match_sources`, `agent_review_queue`, `fix_quality`, `memory_import`, `scan_quality`, `score`.
+- `goldenmatch` **a2a_skills** — TS-only: `agent_approve_reject`, `agent_deduplicate`, `agent_explain_cluster`, `agent_explain_pair`, `agent_match_sources`, `agent_review_queue`, `certify_serving_joins`, `customer_360`, `emit_semantic_model_from_store`, `fix_quality`, `memory_import`, `scan_quality`, `score`.
 - `goldencheck` **mcp_tools** — Python-only: `install_domain`.
 - `goldencheck` **cli_commands** — Python-only: `init`, `review`, `scan-db`, `schedule`, `serve`.
 - `goldenflow` **cli_commands** — Python-only: `init`, `interactive`, `schedule`, `watch`.

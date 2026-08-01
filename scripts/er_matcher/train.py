@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""P3 LoRA SFT trainer for the OSS ER-matcher (Qwen2.5-3B-Instruct).
+"""P3 LoRA SFT trainer for the OSS ER-matcher (Qwen2.5-1.5B-Instruct, Apache-2.0).
 
 PERF-GATED (plan §Phase 3): built optimized + instrumented from the start so the
 cheap smoke run (``--smoke``) measures the real workload BEFORE the multi-hour
@@ -47,7 +47,7 @@ DEFAULT_NOMATCH_CONF = 0.1
 # --- config (pure) -----------------------------------------------------------
 @dataclass
 class TrainConfig:
-    base_model: str = "Qwen/Qwen2.5-3B-Instruct"
+    base_model: str = "Qwen/Qwen2.5-1.5B-Instruct"
     base_revision: str | None = None       # pin the base commit for reproducibility
     serializer_version: str = SERIALIZER_VERSION
     # LoRA
@@ -234,7 +234,7 @@ def apply_overrides(cfg: TrainConfig, args: Any) -> TrainConfig:
 
 # --- training entrypoint (lazy heavy deps) -----------------------------------
 def main(argv: Iterable[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="LoRA SFT the OSS ER-matcher (Qwen2.5-3B).")
+    ap = argparse.ArgumentParser(description="LoRA SFT the OSS ER-matcher (Qwen2.5-1.5B, Apache-2.0).")
     ap.add_argument("--config", type=Path, default=Path(__file__).with_name("config.yaml"))
     ap.add_argument("--data-dir", type=Path, default=Path("data/er_matcher"))
     ap.add_argument("--out-dir", type=Path, default=Path("data/er_matcher/model"))

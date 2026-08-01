@@ -2959,6 +2959,92 @@
           ]
         },
         {
+          "command": "identity 360",
+          "options": [
+            {
+              "name": "entity_id",
+              "type": "text",
+              "required": true,
+              "help": "The entity_id to build the Customer 360 view for."
+            },
+            {
+              "name": "--path",
+              "type": "text",
+              "required": false,
+              "default": "'.goldenmatch/identity.db'",
+              "help": "Path to the identity graph database."
+            },
+            {
+              "name": "--no-relationships",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Skip the relationship neighborhood read."
+            },
+            {
+              "name": "--timeline-limit",
+              "type": "integer",
+              "required": false,
+              "default": "None",
+              "help": "Cap the number of timeline events (most recent first)."
+            },
+            {
+              "name": "--json",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Emit the full 360 page as JSON."
+            }
+          ]
+        },
+        {
+          "command": "identity certify-serving-joins",
+          "options": [
+            {
+              "name": "--path",
+              "type": "text",
+              "required": false,
+              "default": "'.goldenmatch/identity.db'",
+              "help": "Path to the identity graph database."
+            },
+            {
+              "name": "--dataset",
+              "type": "text",
+              "required": false,
+              "default": "None",
+              "help": "Restrict to one identity-graph dataset."
+            },
+            {
+              "name": "--status",
+              "type": "text",
+              "required": false,
+              "default": "'active'",
+              "help": "Entity status to include."
+            },
+            {
+              "name": "--page-size",
+              "type": "integer",
+              "required": false,
+              "default": "500",
+              "help": "Entity-scan pagination size."
+            },
+            {
+              "name": "--max-entities",
+              "type": "integer",
+              "required": false,
+              "default": "None",
+              "help": "Cap the scan at this many entities (cert covers a prefix)."
+            },
+            {
+              "name": "--json",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Emit the certificate as JSON."
+            }
+          ]
+        },
+        {
           "command": "identity conflicts",
           "options": [
             {
@@ -2981,6 +3067,72 @@
               "required": false,
               "default": "False",
               "help": "Emit results as JSON instead of a table."
+            }
+          ]
+        },
+        {
+          "command": "identity emit-catalog",
+          "options": [
+            {
+              "name": "source_name",
+              "type": "text",
+              "required": true,
+              "help": "Logical source name the records were ingested under."
+            },
+            {
+              "name": "source_pk_column",
+              "type": "text",
+              "required": true,
+              "help": "Column holding each record's source primary key."
+            },
+            {
+              "name": "--path",
+              "type": "text",
+              "required": false,
+              "default": "'.goldenmatch/identity.db'",
+              "help": "Path to the identity graph database."
+            },
+            {
+              "name": "--dialect",
+              "type": "text",
+              "required": false,
+              "default": "'metricflow'",
+              "help": "metricflow | cube | osi."
+            },
+            {
+              "name": "--dataset",
+              "type": "text",
+              "required": false,
+              "default": "None",
+              "help": "Identity-graph dataset scope."
+            },
+            {
+              "name": "--source-target",
+              "type": "text",
+              "required": false,
+              "default": "None",
+              "help": "Source model/cube/dataset the join points at (defaults to source_name)."
+            },
+            {
+              "name": "--resolved-key",
+              "type": "text",
+              "required": false,
+              "default": "'resolved_entity_id'",
+              "help": "The conformed join column name."
+            },
+            {
+              "name": "--out",
+              "type": "text",
+              "required": false,
+              "default": "None",
+              "help": "Write the emitted YAML to this catalog file."
+            },
+            {
+              "name": "--overwrite",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Overwrite an existing catalog file at --out."
             }
           ]
         },
@@ -4722,6 +4874,10 @@
           "description": "Semantic-layer front door: certify every declared entity key in a dbt/MetricFlow, Cube, or OSI/Ossie semantic model against its data. The dialect is auto-detected. Returns, per declared key, whether it is unique at grain and its measure fan-out -- the keys a metric silently joins on. Advisory; it never mutates a metric."
         },
         {
+          "name": "certify_serving_joins",
+          "description": "Certify that a Customer 360 serving layer's join keys can't double-count. A 360 view joins the golden record to its source records on the durable record_id (`{source}:{source_pk}`); if that key is duplicated, a fact rolled up through the 360 silently double-counts. This walks the store's entities, assembles the record_id join key, and returns a key-integrity certificate over it ({trustworthy, n_entities, n_records, truncated, record_id: {is_unique_at_grain, duplicate_key_groups, max_fan_out, estimate}})."
+        },
+        {
           "name": "compare_clusters",
           "description": "Compare two ER clustering outcomes on the same dataset without ground truth (CCMS): classifies each cluster as unchanged / merged / partitioned / overlapping and returns the Talburt-Wang Index. Both inputs are JSON cluster files (as written by export-style output)."
         },
@@ -4742,6 +4898,10 @@
           "description": "Create a custom domain extraction rulebook. Define patterns for a specific data domain (medical devices, automotive parts, real estate, etc.)."
         },
         {
+          "name": "customer_360",
+          "description": "The unified Customer 360 serving view of one entity, composed from the durable store in one call: the golden record + per-field source provenance, every linked source record, the event timeline, and the relationship neighborhood. This is the same durable entity_id a resolved crosswalk (semantic-layer wedge) groups metrics by, so a metric row drills straight through to the customer. Returns {found: false} when no such entity exists."
+        },
+        {
           "name": "dedupe",
           "description": "Alias for `find_duplicates`. Find duplicate matches for a record. Provide field values to search against the loaded dataset."
         },
@@ -4752,6 +4912,10 @@
         {
           "name": "documents_suggest_schema",
           "description": "Propose a target extraction schema (JSON) from a sample document image/PDF."
+        },
+        {
+          "name": "emit_semantic_model_from_store",
+          "description": "Emit a conformed semantic-layer catalog (the `resolved_entity_id` join a MetricFlow / Cube / OSI model should group metrics by) directly from the durable identity store — 'keep the semantic layer's identity join live against the control plane'. Returns the emitted YAML; when `path` is set, also writes it to that catalog file (refuses to clobber unless overwrite=true)."
         },
         {
           "name": "evaluate",
@@ -5685,8 +5849,6 @@
           "GOLDENMATCH_FS_OOC_WAVE_ROWS",
           "GOLDENMATCH_FS_ORTHOGONAL_BLOCKING",
           "GOLDENMATCH_FS_OUT_OF_CORE",
-          "GOLDENMATCH_FS_PAIR_DEDUP",
-          "GOLDENMATCH_FS_PAIR_DEDUP_MAX_PAIRS",
           "GOLDENMATCH_FS_POST_BLOCKING_U",
           "GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE",
           "GOLDENMATCH_FS_ROUTE_MIN_ROWS",

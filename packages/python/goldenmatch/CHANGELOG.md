@@ -7,6 +7,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **Customer 360 serving surface + semantic-layer drill-through.** The `customer_360`
+  primitive (golden record + per-field provenance + linked source records + event
+  timeline + relationship neighborhood, composed from the durable store) is now
+  surfaced as a `customer_360` MCP tool and a `goldenmatch identity 360 <entity_id>`
+  CLI command (both share the `customer_360_page` serializer). New
+  `goldenmatch.semantic.profile_from_crosswalk(crosswalk, source_pk)` /
+  `entity_360(store_path, entity_id)` connect the semantic-layer wedge to Customer
+  360: a `ResolvedCrosswalk`'s `resolved_entity_id` is the same durable `entity_id`
+  the 360 keys on, so a metric row drills straight through to the whole customer
+  view with zero key translation. `customer_360` is a Python-only MCP tool (no TS
+  equivalent); goldenmatch MCP tools **91 → 92**.
+- **`emit_semantic_model_from_store` — a conformed catalog from the durable spine.**
+  `goldenmatch.semantic.emit_semantic_model_from_store(store, *, source_name,
+  source_pk_column, dialect, ...)` reads the live IdentityStore's identity summary
+  and emits the same conformed `resolved_entity_id` join declaration the crosswalk
+  emitters produce — so a dbt/MetricFlow, Cube, or OSI catalog's identity join can
+  be regenerated from the control plane at any time ("keep the catalog live"),
+  not just from a single dedupe run's `ResolvedCrosswalk`. Pairs with
+  `write_resolved_catalog` (pass `path=` to also write it).
+- **OSS local ER-matcher: ship the 1.5B model (Apache-2.0) as the default.** The
+  self-hosted LLM boost (Path A) now pins a Modal-trained, published
+  `er-matcher-1.5b-v1.0.0` GGUF (Qwen2.5-1.5B-Instruct base, Apache-2.0,
+  redistribution-clean) as the default tier. The 3B pin was withdrawn: Qwen2.5-3B
+  is under the Qwen Research License (non-commercial), so a 3B fine-tune is not
+  redistribution-clean. 1.5B is also measured stronger zero-shot (walmart pair-F1
+  0.795 vs the 3B's 0.721; in-dist F1 0.999). Training data is fully synthetic;
+  restricted real datasets are eval-only.
 - **Live catalog write-back + JSON-Schema OSI validation (semantic-layer wedge).**
   `goldenmatch.semantic.write_resolved_catalog(crosswalk, path, *, dialect,
   source_target, ...)` emits a `ResolvedCrosswalk`'s conformed entity declaration
@@ -43,6 +70,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   the strict path. The `goldenmatch_key_integrity` dbt test gained a matching
   `grain_strict` argument in lockstep so the SQL test and this capability stay
   semantically identical.
+- **Certify the keys a Customer 360 serving layer joins on.**
+  `goldenmatch.semantic.certify_serving_joins(store, *, dataset=None, ...)` walks
+  the durable Identity Store and runs `certify_key_integrity` over the
+  source-record join key (`record_id` = `{source}:{source_pk}`) a Customer 360 view
+  rolls metrics up on — turning the serving layer's implicit join-key trust into an
+  advisory `KeyIntegrityCertificate`, so a metric joined through the 360 provably
+  can't double-count. Returns a `ServingJoinCertificate` (record certificate +
+  entity/record counts + `truncated` when a `max_entities` cap applies).
+- **Surface the serving-layer certificate + store-emit on MCP and the CLI.** Two
+  new `identity_*` MCP tools (`certify_serving_joins`,
+  `emit_semantic_model_from_store`) and two `goldenmatch identity` subcommands
+  (`certify-serving-joins`, `emit-catalog`) expose the Customer 360 serving-join
+  certificate and the live-from-store semantic-catalog emit to agents and the
+  shell — previously library-only. MCP tool count 92 → 94.
+- **REST `GET /api/v1/identities/{entity_id}/360`.** The Customer 360 serving
+  view (golden record + per-field provenance + linked source records + event
+  timeline + relationship neighborhood) is now reachable over the identity REST
+  surface, mirroring the `customer_360` MCP tool and the `identity 360` CLI
+  command. Query params `include_relationships` (default true) and
+  `timeline_limit`; 404 when the entity does not exist.
 
 ### Changed
 - **FS dedupe: Arrow-native columnar-cluster path (B2c), default-on (#1811/#2006).**

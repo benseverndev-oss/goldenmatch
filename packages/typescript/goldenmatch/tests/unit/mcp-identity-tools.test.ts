@@ -6,6 +6,9 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   IDENTITY_TOOLS,
@@ -98,7 +101,7 @@ afterEach(() => {
 });
 
 describe("IDENTITY_TOOLS metadata", () => {
-  it("exports the 15 identity tools matching the Python sibling", () => {
+  it("exports the 18 identity tools matching the Python sibling", () => {
     expect(IDENTITY_TOOLS.map((t) => t.name)).toEqual([
       "identity_resolve",
       "identity_list",
@@ -115,8 +118,11 @@ describe("IDENTITY_TOOLS metadata", () => {
       "identity_profile",
       "identity_stats",
       "identity_worklist",
+      "customer_360",
+      "certify_serving_joins",
+      "emit_semantic_model_from_store",
     ]);
-    expect(IDENTITY_TOOL_NAMES.size).toBe(15);
+    expect(IDENTITY_TOOL_NAMES.size).toBe(18);
     for (const t of IDENTITY_TOOLS) {
       expect(t.description.length).toBeGreaterThan(0);
       expect(t.inputSchema).toBeTypeOf("object");
@@ -347,5 +353,126 @@ describe("identity read tools (show / profile / stats / worklist)", () => {
     expect(items.some((i) => i["entity_id"] === "E1")).toBe(true);
     const e1 = items.find((i) => i["entity_id"] === "E1")!;
     expect(e1["reasons"]).toContain("has_conflicts");
+  });
+
+  it("customer_360 composes the unified serving view", async () => {
+    const r = await call("customer_360", { entity_id: "E1" });
+    expect(r["entity_id"]).toBe("E1");
+    expect(r["record_count"]).toBe(1);
+    expect(r["golden_record"]).toEqual({ name: "E1" });
+    // every 360 section is present + JSON-ready
+    for (const key of [
+      "field_provenance",
+      "source_records",
+      "timeline",
+      "relationships",
+    ]) {
+      expect(Array.isArray(r[key])).toBe(true);
+    }
+    // per-field provenance: the golden `name` (E1) disagrees with src:1's
+    // payload (Alice), so it has no winning contributor and records the override
+    const prov = r["field_provenance"] as Record<string, unknown>[];
+    const nameProv = prov.find((p) => p["field"] === "name")!;
+    expect(nameProv["winning_record_id"]).toBeNull();
+    const conflicts = nameProv["conflicting_values"] as Record<string, unknown>[];
+    expect(conflicts.some((c) => c["value"] === "Alice")).toBe(true);
+    // the edge-safe store has no relationship overlay -> empty (Python's fallback)
+    expect(r["relationships"]).toEqual([]);
+  });
+
+  it("customer_360 attributes a golden field back to the source record that carries it", async () => {
+    // Re-stamp E1's golden so it agrees with src:1's payload (name: Alice).
+    await store.upsertIdentity({
+      entityId: "E1",
+      status: "active",
+      mergedInto: null,
+      goldenRecord: { name: "Alice" },
+      confidence: 0.9,
+      dataset: "d",
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    const r = await call("customer_360", { entity_id: "E1" });
+    const prov = r["field_provenance"] as Record<string, unknown>[];
+    const nameProv = prov.find((p) => p["field"] === "name")!;
+    expect(nameProv["winning_record_id"]).toBe("src:1");
+    expect(nameProv["winning_source"]).toBe("src");
+  });
+
+  it("customer_360 respects include_relationships=false and returns found:false for unknowns", async () => {
+    const r = await call("customer_360", { entity_id: "E1", include_relationships: false });
+    expect(r["relationships"]).toEqual([]);
+    const missing = await call("customer_360", { entity_id: "NOPE" });
+    expect(missing["found"]).toBe(false);
+  });
+
+  it("certify_serving_joins certifies the record_id join key", async () => {
+    // The seed has 2 entities (E1, E2) with distinct src:1 / src:2 -> unique.
+    const r = await call("certify_serving_joins", { dataset: "d" });
+    expect(r["trustworthy"]).toBe(true);
+    expect(r["n_entities"]).toBe(2);
+    expect(r["n_records"]).toBe(2);
+    expect(r["truncated"]).toBe(false);
+    const rc = r["record_id"] as Record<string, unknown>;
+    expect(rc["is_unique_at_grain"]).toBe(true);
+    expect(rc["duplicate_key_groups"]).toBe(0);
+  });
+
+  it("emit_semantic_model_from_store emits a MetricFlow catalog off the live store", async () => {
+    const r = await call("emit_semantic_model_from_store", {
+      source_name: "customers",
+      source_pk_column: "customer_id",
+      dataset: "d",
+    });
+    expect(r["written_to"]).toBe(null);
+    const yaml = r["yaml"] as string;
+    expect(yaml).toContain("semantic_models:");
+    expect(yaml).toContain("expr: resolved_entity_id");
+    expect(yaml).toContain("- name: customer_id\n    type: unique\n    expr: customer_id");
+  });
+
+  it("emit_semantic_model_from_store writes out_path and refuses to clobber", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "gm-catalog-"));
+    const outPath = join(dir, "catalog.yml");
+    const r1 = await call("emit_semantic_model_from_store", {
+      source_name: "customers",
+      source_pk_column: "customer_id",
+      dataset: "d",
+      out_path: outPath,
+    });
+    expect(r1["written_to"]).toBe(outPath);
+    expect(readFileSync(outPath, "utf-8")).toBe(r1["yaml"]);
+    // Second write without overwrite is refused (atomic wx flag).
+    const r2 = await call("emit_semantic_model_from_store", {
+      source_name: "customers",
+      source_pk_column: "customer_id",
+      dataset: "d",
+      out_path: outPath,
+    });
+    expect(String(r2["error"])).toMatch(/already exists/);
+    // overwrite=true replaces it.
+    const r3 = await call("emit_semantic_model_from_store", {
+      source_name: "customers",
+      source_pk_column: "customer_id",
+      dataset: "d",
+      out_path: outPath,
+      overwrite: true,
+    });
+    expect(r3["written_to"]).toBe(outPath);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("emit_semantic_model_from_store rejects an unknown dialect", async () => {
+    const r = await call("emit_semantic_model_from_store", {
+      source_name: "customers",
+      source_pk_column: "customer_id",
+      dialect: "looker",
+    });
+    expect(String(r["error"])).toMatch(/unknown dialect/);
+  });
+
+  it("emit_semantic_model_from_store requires source_name + source_pk_column", async () => {
+    const r = await call("emit_semantic_model_from_store", { source_name: "customers" });
+    expect(String(r["error"])).toMatch(/source_pk_column/);
   });
 });

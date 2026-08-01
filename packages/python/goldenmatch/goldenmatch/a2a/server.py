@@ -7,6 +7,7 @@ task lifecycle, and skill dispatch via aiohttp.
 from __future__ import annotations
 
 import os
+import secrets
 import uuid
 
 from aiohttp import web
@@ -601,7 +602,7 @@ async def _auth_middleware(request: web.Request, handler):
     token = os.environ.get("GOLDENMATCH_AGENT_TOKEN")
     if token and request.path not in _PUBLIC_PATHS:
         auth_header = request.headers.get("Authorization", "")
-        if not auth_header.startswith("Bearer ") or auth_header[7:] != token:
+        if not auth_header.startswith("Bearer ") or not secrets.compare_digest(auth_header[7:], token):
             return web.json_response({"error": "Unauthorized"}, status=401)
     return await handler(request)
 

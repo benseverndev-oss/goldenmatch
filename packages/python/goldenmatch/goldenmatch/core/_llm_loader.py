@@ -61,19 +61,18 @@ class LocalModelSpec:
     sha256: str | None = None  # None -> not yet pinned; verification skipped.
 
 
-# The default self-hosted ER-matcher (companion spec §4: Qwen2.5-3B, Apache-2.0,
-# 4-bit GGUF), published as a GitHub Release asset by the
-# ``publish-er-matcher`` workflow. Placeholder URL + `sha256=None` until the
-# trained model is uploaded and pinned (companion spec P3); the LOADER LOGIC below
-# is complete and tested regardless of whether this asset exists yet — an
-# unreachable URL simply abstains.
+# The default self-hosted ER-matcher: Qwen2.5-1.5B-Instruct (Apache-2.0,
+# redistribution-clean), 4-bit GGUF, published as a GitHub Release asset by the
+# ``publish-er-matcher`` workflow. NOTE: Qwen2.5-3B is Qwen-Research-licensed
+# (non-commercial), so the 3B fine-tune was WITHDRAWN -- 1.5B is the shipped base
+# (measured stronger zero-shot anyway: walmart F1 0.795 vs the 3B's 0.721).
 PINNED_MODEL = LocalModelSpec(
     url=(
         "https://github.com/benseverndev-oss/goldenmatch/releases/download/"
-        "er-matcher-3b-v1.0.0/goldenmatch-er-matcher-3b-q4_k_m.gguf"
+        "er-matcher-1.5b-v1.0.0/goldenmatch-er-matcher-1.5b-q4_k_m.gguf"
     ),
-    filename="goldenmatch-er-matcher-3b-q4_k_m.gguf",
-    sha256="b6637fd9892b21b565098524501083edb91199b0bfffc267edf48885ce9c1d3b",
+    filename="goldenmatch-er-matcher-1.5b-q4_k_m.gguf",
+    sha256="64564eefd68373f5d1eddc064d21d24e9e172dd8d003e03255d10dfb09ce4ed0",
 )
 
 

@@ -12,6 +12,9 @@
  * Node-only: depends on SqliteIdentityStore (better-sqlite3 optional peer dep).
  */
 
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+
 import { SqliteIdentityStore } from "../identity/sqlite-store.js";
 import {
   claimRecord,
@@ -24,10 +27,16 @@ import {
 } from "../../core/identity/query.js";
 import { mediateConflict } from "../../core/identity/mediation.js";
 import {
+  customer360Page,
   entityProfile,
   identitySummaryStats,
   stewardWorklist,
 } from "../../core/identity/profile.js";
+import { certifyServingJoins } from "../../core/semantic/serving.js";
+import {
+  emitSemanticModelFromStore,
+  type SemanticDialect,
+} from "../../core/semantic/catalog.js";
 import { sealAuditLog, verifyAuditChain, verificationSummary } from "../../core/identity/audit.js";
 import { pyIsoformat } from "../../core/identity/pyDatetime.js";
 import { trustForSource } from "../../core/memory/types.js";
@@ -307,6 +316,99 @@ export const IDENTITY_TOOLS: readonly Tool[] = [
         limit: { type: "integer", default: 50 },
         path: { type: "string", description: "Identity DB path" },
       },
+    },
+  },
+  {
+    name: "customer_360",
+    description:
+      "The unified Customer 360 serving view of one entity, composed from the " +
+      "durable store in one call: the golden record + per-field source " +
+      "provenance, every linked source record, the event timeline, and the " +
+      "relationship neighborhood. This is the same durable entity_id a resolved " +
+      "crosswalk (semantic-layer wedge) groups metrics by, so a metric row " +
+      "drills straight through to the customer. Returns {found: false} when no " +
+      "such entity exists.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        entity_id: { type: "string" },
+        include_relationships: { type: "boolean", default: true },
+        timeline_limit: {
+          type: "integer",
+          description: "Cap the number of timeline events (most recent first).",
+        },
+        path: { type: "string", description: "Identity DB path" },
+      },
+      required: ["entity_id"],
+    },
+  },
+  {
+    name: "certify_serving_joins",
+    description:
+      "Certify that a Customer 360 serving layer's join keys can't double-count. " +
+      "A 360 view joins the golden record to its source records on the durable " +
+      "record_id (`{source}:{source_pk}`); if that key is duplicated, a fact " +
+      "rolled up through the 360 silently double-counts. This walks the store's " +
+      "entities, assembles the record_id join key, and returns a key-integrity " +
+      "certificate over it ({trustworthy, n_entities, n_records, truncated, " +
+      "record_id: {is_unique_at_grain, duplicate_key_groups, max_fan_out, estimate}}).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        dataset: { type: "string", description: "Restrict to one identity-graph dataset." },
+        status: { type: "string", default: "active", description: "Entity status to include (default 'active')." },
+        page_size: { type: "integer", default: 500, description: "Entity-scan pagination size." },
+        max_entities: {
+          type: "integer",
+          description: "Cap the scan at this many entities (cert then covers a prefix, truncated=true).",
+        },
+        path: { type: "string", description: "Identity DB path" },
+      },
+    },
+  },
+  {
+    name: "emit_semantic_model_from_store",
+    description:
+      "Emit a conformed semantic-layer catalog (the `resolved_entity_id` join a " +
+      "MetricFlow / Cube / OSI model should group metrics by) directly from the " +
+      "durable identity store — 'keep the semantic layer's identity join live " +
+      "against the control plane'. Returns the emitted YAML; when `out_path` is " +
+      "set, also writes it to that catalog file (refuses to clobber unless " +
+      "overwrite=true).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        source_name: {
+          type: "string",
+          description: "Logical source name the records were ingested under.",
+        },
+        source_pk_column: {
+          type: "string",
+          description: "Column holding each record's source primary key (the join column).",
+        },
+        dialect: { type: "string", enum: ["metricflow", "cube", "osi"], default: "metricflow" },
+        dataset: { type: "string", description: "Identity-graph dataset scope (defaults to all)." },
+        source_target: {
+          type: "string",
+          description: "Source model / cube / dataset the join points at (defaults to source_name).",
+        },
+        resolved_key: {
+          type: "string",
+          default: "resolved_entity_id",
+          description: "The conformed join column name (the control-plane id).",
+        },
+        out_path: {
+          type: "string",
+          description: "Optional catalog file to write the emitted YAML to.",
+        },
+        overwrite: {
+          type: "boolean",
+          default: false,
+          description: "Overwrite an existing catalog file at `out_path`.",
+        },
+        path: { type: "string", description: "Identity DB path" },
+      },
+      required: ["source_name", "source_pk_column"],
     },
   },
 ];
@@ -657,6 +759,76 @@ async function dispatch(
         limit: intArg(args, "limit", 50),
       });
       return { items };
+    }
+
+    if (name === "customer_360") {
+      const entityId = strArg(args, "entity_id");
+      if (!entityId) return { error: "Missing required parameter: entity_id" };
+      const rawIncl = args["include_relationships"];
+      const rawLimit = args["timeline_limit"];
+      const page = await customer360Page(store, entityId, {
+        includeRelationships: typeof rawIncl === "boolean" ? rawIncl : true,
+        ...(typeof rawLimit === "number" ? { timelineLimit: rawLimit } : {}),
+      });
+      return page ?? { found: false };
+    }
+
+    if (name === "certify_serving_joins") {
+      const rawMax = args["max_entities"];
+      const rawStatus = args["status"];
+      const cert = await certifyServingJoins(store, {
+        dataset: strArg(args, "dataset") ?? null,
+        status: typeof rawStatus === "string" ? rawStatus : "active",
+        pageSize: intArg(args, "page_size", 500),
+        ...(typeof rawMax === "number" ? { maxEntities: rawMax } : {}),
+      });
+      const rc = cert.recordCertificate;
+      return {
+        trustworthy: cert.isTrustworthy,
+        n_entities: cert.nEntities,
+        n_records: cert.nRecords,
+        truncated: cert.truncated,
+        record_id: {
+          is_unique_at_grain: rc.isUniqueAtGrain,
+          duplicate_key_groups: rc.duplicateKeyGroups,
+          max_fan_out: rc.maxFanOut,
+          estimate: rc.estimate,
+        },
+      };
+    }
+
+    if (name === "emit_semantic_model_from_store") {
+      const sourceName = strArg(args, "source_name");
+      const sourcePkColumn = strArg(args, "source_pk_column");
+      if (!sourceName) return { error: "Missing required parameter: source_name" };
+      if (!sourcePkColumn) return { error: "Missing required parameter: source_pk_column" };
+      const rawDialect = strArg(args, "dialect");
+      const yamlStr = await emitSemanticModelFromStore(store, {
+        sourceName,
+        sourcePkColumn,
+        dialect: (rawDialect as SemanticDialect) ?? "metricflow",
+        dataset: strArg(args, "dataset") ?? null,
+        ...(strArg(args, "source_target") !== undefined
+          ? { sourceTarget: strArg(args, "source_target")! }
+          : {}),
+        resolvedKey: strArg(args, "resolved_key") ?? "resolved_entity_id",
+      });
+      const outPath = strArg(args, "out_path");
+      if (outPath) {
+        mkdirSync(dirname(outPath), { recursive: true });
+        const overwrite = args["overwrite"] === true;
+        try {
+          // `wx` = create-and-fail-if-exists (atomic, O_EXCL): the clobber
+          // guard is the write itself, so there is no check-then-write race.
+          writeFileSync(outPath, yamlStr, { encoding: "utf-8", flag: overwrite ? "w" : "wx" });
+        } catch (err) {
+          if (!overwrite && (err as NodeJS.ErrnoException).code === "EEXIST") {
+            return { error: `${outPath} already exists; pass overwrite=true to replace it` };
+          }
+          throw err;
+        }
+      }
+      return { yaml: yamlStr, written_to: outPath ?? null };
     }
 
     return { error: `Unknown identity tool: ${name}` };

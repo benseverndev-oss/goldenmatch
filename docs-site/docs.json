@@ -170,6 +170,7 @@
             "group": "Reference",
             "pages": [
               "suite-matrix",
+              "thesis-weaknesses",
               "reference/api-surface",
               "reference/versioning",
               "reference/vendor-comparison"

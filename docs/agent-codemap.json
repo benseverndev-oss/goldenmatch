@@ -338,27 +338,6 @@
           ]
         },
         {
-          "module": "goldenmatch.backends.fs_pair_dedup",
-          "file": "packages/python/goldenmatch/goldenmatch/backends/fs_pair_dedup.py",
-          "purpose": "Cross-pass candidate-pair dedup for Fellegi-Sunter scoring.",
-          "defines": [
-            "_distinct_candidate_pairs",
-            "_field_codes",
-            "_pair_count_cap",
-            "_paired_similarity_codes",
-            "fs_pair_dedup_eligible",
-            "fs_pair_dedup_enabled",
-            "score_fs_pair_dedup"
-          ],
-          "imports": [
-            "goldenmatch.backends.score_buckets",
-            "goldenmatch.config.schemas",
-            "goldenmatch.core.blocker",
-            "goldenmatch.core.frame",
-            "goldenmatch.core.probabilistic"
-          ]
-        },
-        {
           "module": "goldenmatch.backends.ray_backend",
           "file": "packages/python/goldenmatch/goldenmatch/backends/ray_backend.py",
           "purpose": "Ray distributed backend for large-scale entity resolution.",
@@ -616,7 +595,10 @@
           "purpose": "CLI: ``goldenmatch identity ...`` -- inspect and manage the Identity Graph.",
           "defines": [
             "_open",
+            "certify_serving_joins_cmd",
             "conflicts_cmd",
+            "customer_360_cmd",
+            "emit_catalog_cmd",
             "history_cmd",
             "list_cmd",
             "merge_cmd",
@@ -627,7 +609,8 @@
             "split_cmd"
           ],
           "imports": [
-            "goldenmatch.identity"
+            "goldenmatch.identity",
+            "goldenmatch.semantic"
           ]
         },
         {
@@ -2336,6 +2319,7 @@
             "_build_static_blocks",
             "_emit_blocking_profile",
             "_fast_static_block_sizes",
+            "_memoized_transform",
             "_percentile",
             "_sub_block",
             "build_blocks",
@@ -3939,7 +3923,6 @@
             "goldenmatch._polars_lazy",
             "goldenmatch.backends.datafusion_backend",
             "goldenmatch.backends.fs_out_of_core",
-            "goldenmatch.backends.fs_pair_dedup",
             "goldenmatch.backends.ray_backend",
             "goldenmatch.backends.score_buckets",
             "goldenmatch.backends.score_duckdb",
@@ -6460,11 +6443,13 @@
             "_actor_trust",
             "_dispatch",
             "_open",
+            "_serving_certificate_dict",
             "handle_identity_tool"
           ],
           "imports": [
             "goldenmatch.core.memory.store",
-            "goldenmatch.identity"
+            "goldenmatch.identity",
+            "goldenmatch.semantic"
           ]
         },
         {
@@ -7112,7 +7097,8 @@
             "goldenmatch.semantic.cube",
             "goldenmatch.semantic.key_integrity",
             "goldenmatch.semantic.metricflow",
-            "goldenmatch.semantic.osi"
+            "goldenmatch.semantic.osi",
+            "goldenmatch.semantic.serving"
           ]
         },
         {
@@ -7139,9 +7125,13 @@
           "file": "packages/python/goldenmatch/goldenmatch/semantic/catalog.py",
           "purpose": "Live catalog write-back for the semantic-layer wedge (wedge B, persisted).",
           "defines": [
+            "_emit_for_dialect",
+            "emit_semantic_model_from_store",
             "write_resolved_catalog"
           ],
           "imports": [
+            "goldenmatch.identity",
+            "goldenmatch.semantic.crosswalk",
             "goldenmatch.semantic.cube",
             "goldenmatch.semantic.metricflow",
             "goldenmatch.semantic.osi"
@@ -7276,6 +7266,21 @@
             "goldenmatch.semantic.blocking",
             "goldenmatch.semantic.key_integrity",
             "goldenmatch.semantic.metricflow"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.serving",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/serving.py",
+          "purpose": "Semantic-layer ↔ Customer 360 drill-through.",
+          "defines": [
+            "ServingJoinCertificate",
+            "certify_serving_joins",
+            "entity_360",
+            "profile_from_crosswalk"
+          ],
+          "imports": [
+            "goldenmatch.identity",
+            "goldenmatch.semantic.key_integrity"
           ]
         },
         {
@@ -7907,6 +7912,7 @@
             "_store_for",
             "by_record_endpoint",
             "conflicts_endpoint",
+            "customer_360_endpoint",
             "evidence_endpoint",
             "get_endpoint",
             "history_endpoint",
