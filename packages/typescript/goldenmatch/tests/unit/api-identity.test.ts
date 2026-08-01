@@ -220,4 +220,17 @@ describe("REST API /identities", () => {
     expect(body.yaml).toContain("expr: resolved_entity_id");
     expect(body.yaml).toContain("- name: customer_id\n    type: unique\n    expr: customer_id");
   });
+
+  it("POST /semantic/emit returns 400 for an unknown dialect", async () => {
+    const res = await fetch(`${baseUrl}/semantic/emit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source_name: "customers",
+        source_pk_column: "customer_id",
+        dialect: "looker",
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
 });

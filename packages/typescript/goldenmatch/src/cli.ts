@@ -820,12 +820,25 @@ program
       const path = spec.slice(eq + 1).trim();
       frames[name] = rowsToColumns(readFile(path));
     }
-    const doc = parseYamlDoc(readFileSync(model, "utf-8"));
+    let doc: unknown;
+    try {
+      doc = parseYamlDoc(readFileSync(model, "utf-8"));
+    } catch (err) {
+      process.stderr.write(`could not read/parse ${model}: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(2);
+    }
     if (typeof doc !== "object" || doc === null || Array.isArray(doc)) {
       process.stderr.write(`semantic-model file did not parse to a mapping: ${model}\n`);
       process.exit(2);
     }
-    const report = certifySemanticModel(doc as Record<string, unknown>, frames);
+    let report;
+    try {
+      report = certifySemanticModel(doc as Record<string, unknown>, frames);
+    } catch (err) {
+      // e.g. dialect detection failed (no cubes/semantic_models/semantic_model key).
+      process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(2);
+    }
     const nUntrust = report.untrustworthy.length;
     process.stdout.write(
       `Dialect: ${report.dialect}   certified: ${report.nCertified}   untrustworthy: ${nUntrust}\n`,
@@ -1122,6 +1135,10 @@ identityCmd
         overwrite?: boolean;
       },
     ) => {
+      if (!["metricflow", "cube", "osi"].includes(opts.dialect)) {
+        process.stderr.write(`unknown dialect '${opts.dialect}'; expected metricflow | cube | osi\n`);
+        process.exit(2);
+      }
       const store = await openIdentityStoreForCli(opts.path);
       try {
         const yamlStr = await emitSemanticModelFromStore(store, {
@@ -1133,13 +1150,19 @@ identityCmd
           resolvedKey: opts.resolvedKey,
         });
         if (opts.out) {
-          if (existsSync(opts.out) && !opts.overwrite) {
-            process.stderr.write(`${opts.out} already exists; pass --overwrite to replace it\n`);
-            process.exit(1);
-          }
           const dir = dirname(opts.out);
           if (dir) mkdirSync(dir, { recursive: true });
-          writeFileSync(opts.out, yamlStr, "utf-8");
+          try {
+            // `wx` = create-and-fail-if-exists (atomic, O_EXCL): the clobber
+            // guard IS the write, so there is no check-then-write race.
+            writeFileSync(opts.out, yamlStr, { encoding: "utf-8", flag: opts.overwrite ? "w" : "wx" });
+          } catch (err) {
+            if (!opts.overwrite && (err as NodeJS.ErrnoException).code === "EEXIST") {
+              process.stderr.write(`${opts.out} already exists; pass --overwrite to replace it\n`);
+              process.exit(1);
+            }
+            throw err;
+          }
           process.stdout.write(`Wrote ${opts.dialect} catalog to ${opts.out}\n`);
         } else {
           process.stdout.write(yamlStr);
