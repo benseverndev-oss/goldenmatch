@@ -11918,6 +11918,7 @@
             "_frame_head_dicts",
             "_frame_rows",
             "_is_frame",
+            "_jail_path",
             "_result_to_dict",
             "_summarize_output",
             "create_server",

@@ -8920,6 +8920,9 @@
         }
       ],
       "env_vars": {
+        "ALLOWED": [
+          "GOLDENPIPE_ALLOWED_ROOT"
+        ],
         "NATIVE": [
           "GOLDENPIPE_NATIVE"
         ]
