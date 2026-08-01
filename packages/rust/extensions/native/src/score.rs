@@ -44,7 +44,11 @@ fn name_refdata_cell() -> &'static RwLock<Option<Arc<NameRefData>>> {
 /// Snapshot the registered name reference data (a cheap `Arc` clone), or `None`
 /// if the host never registered it — in which case name-scorer fields degrade
 /// to plain Jaro-Winkler.
-fn current_name_refdata() -> Option<Arc<NameRefData>> {
+///
+/// `pub(crate)` so the fused FS kernel reads the SAME process-global tables the
+/// classic block scorer does (one registration via `set_name_reference_data`,
+/// reused across both entry points).
+pub(crate) fn current_name_refdata() -> Option<Arc<NameRefData>> {
     name_refdata_cell().read().ok().and_then(|g| g.clone())
 }
 
@@ -147,8 +151,10 @@ fn build_emb_vectors(
 
 /// Resolve the injected provider handles for a scoring call. Borrows live as
 /// long as the caller keeps the returned `Arc` alive.
+///
+/// `pub(crate)` so the fused FS kernel resolves providers the same way.
 #[inline]
-fn name_providers(
+pub(crate) fn name_providers(
     refdata: &Option<Arc<NameRefData>>,
 ) -> (
     Option<&(dyn SurnameFreq + Sync)>,

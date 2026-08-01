@@ -7,6 +7,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **Fused Fellegi-Sunter kernel now covers the reference-data name scorers +
+  `ensemble` (`goldenmatch-native` 0.1.20).** The fully-fused `match_fused_fs`
+  path (block-group → FS score → connected-components in ONE Rust call, no
+  candidate-pair list — the bounded-memory FS scale path) previously scored each
+  field via the stateless `score_one` (ids 0–3 only), so a matchkey using
+  `name_freq_weighted_jw` / `given_name_aliased_jw` (ids 4/5) or `ensemble`
+  (id 6) declined to the classic `score_buckets` + separate-WCC path. Since FS
+  auto-config v2 emits those name scorers for person data, the fused path never
+  engaged on the exact workload it targets. The fused kernel now scores each
+  field through fs-core's `field_similarity` — the SAME dispatch the classic
+  block scorer uses — so ids 4/5 reach the process-registered census / alias
+  tables (`set_name_reference_data`) and id 6 reaches `ensemble_sim`, single-
+  sourced (no duplicated dispatch). Regular-field coverage now matches
+  `_NATIVE_FS_SCORER_IDS` (embedding id 7 stays out — the fused kernel takes raw
+  string columns, not precomputed vectors); fused negative-evidence stays ids
+  0–3. Byte-identical to the classic native FS path (parity-gated:
+  `tests/test_pipeline_fused_fs_match.py` covers ensemble + `given_name_aliased_jw`
+  membership/golden parity, and the alias table genuinely linking William/Bill/Will).
+  **Wheel-gated on the new `FUSED_FS_SUPPORTS_NAME_SCORERS` capability flag** (name
+  scorers additionally require the refdata pack loaded): an older wheel whose fused
+  kernel lacks the dispatch declines these matchkeys to the classic path rather
+  than silently scoring ids 4/5/6 as 0.0. Requires republishing `goldenmatch-native`
+  to take effect in wheel-installed environments (in-tree builds pick it up
+  immediately); until then those matchkeys degrade gracefully to the classic path.
 - **FS in-RAM sequential Arrow-native / Rust batch scorer + end-WCC
   (`GOLDENMATCH_FS_BLOCK_SOURCE=sequential`, default OFF).** A single-box scale
   path that avoids DuckDB entirely: block keys are grouped in polars/Arrow, each

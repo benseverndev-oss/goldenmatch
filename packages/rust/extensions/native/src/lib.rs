@@ -92,6 +92,18 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // keeps the pure-Python plugin path (score_one's catch-all would score 15/16
     // as 0.0 otherwise).
     m.add("NATIVE_SUPPORTS_NAME_BUCKET_SCORERS", true)?;
+    // Wheel-skew capability flag: the FUSED FS kernel (`match_fused_fs`) now scores
+    // each field through fs-core's `field_similarity` (the SAME dispatch the classic
+    // block scorer uses), so scorer ids 4/5 (name_freq_weighted / given_name_aliased)
+    // reach the process-registered census / alias tables and id 6 (ensemble) reaches
+    // `ensemble_sim` — DISTINCT from the classic path's FS_SUPPORTS_NAME_SCORERS
+    // because an old wheel's FUSED kernel scored those ids via the stateless
+    // `score_one` catch-all (silent 0.0 / plain-JW). Python's
+    // `_fused_fs_matchkey_covered` admits a name/ensemble field on the fused path
+    // only when this flag is present (name scorers additionally require
+    // `set_name_reference_data`); old wheels lack the flag and keep the classic
+    // score_buckets + WCC path for those matchkeys.
+    m.add("FUSED_FS_SUPPORTS_NAME_SCORERS", true)?;
     m.add_function(wrap_pyfunction!(cluster::connected_components, m)?)?;
     m.add_function(wrap_pyfunction!(cluster::mst_split_components, m)?)?;
     m.add_function(wrap_pyfunction!(cluster::severe_bridge_count, m)?)?;

@@ -21,11 +21,14 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+use goldenmatch_fs_core::field_similarity;
 use goldenmatch_graph_core::{connected_components, dedup_pairs_max_score};
 use goldenmatch_score_core::score_one;
 
 use crate::block::{group_block_positions, read_key_cols};
-use crate::score::{fs_level_from_sim, fs_normalize, StrCol};
+use crate::score::{
+    current_name_refdata, fs_level_from_sim, fs_normalize, name_providers, StrCol,
+};
 
 /// Read + validate `row_ids` (Int64) and the score `field_arrays` (Utf8), shared
 /// by the weighted + FS entries.
@@ -392,6 +395,19 @@ pub fn match_fused_fs(
     let base_min = min_weight - field_mins.iter().sum::<f64>();
     let base_max = min_weight + weight_range - field_maxs.iter().sum::<f64>();
 
+    // Reference-data (name-scorer) providers: snapshot the process-global tables
+    // ONCE (a cheap Arc clone) and hand the fused loop the SAME `field_similarity`
+    // dispatch `score_fs_pair` uses, so scorer ids 4/5 (name_freq_weighted /
+    // given_name_aliased) reach the injected census/alias tables and id 6
+    // (ensemble) reaches `ensemble_sim` — instead of the stateless `score_one`
+    // catch-all that silently scored those ids 0.0. `refdata` outlives the
+    // `py.detach` block, so the borrowed `Sync` provider handles stay valid across
+    // the rayon-parallel spans. When the host never registered tables (or an id-4/5
+    // field has no table), `field_similarity` degrades to plain JW, matching the
+    // classic path.
+    let refdata = current_name_refdata();
+    let (surname_freq, name_aliases) = name_providers(&refdata);
+
     Ok(py.detach(|| {
         let (rid_sorted, vals, ne_vals, spans) =
             fused_gather(&key_cols, &score_cols, &ne_cols, n_rows, &all_ids);
@@ -410,7 +426,9 @@ pub fn match_fused_fs(
                     for f in 0..n_fields {
                         if let (Some(a), Some(b)) = (vals[f][i], vals[f][j]) {
                             has_regular_evidence = true;
-                            let sim = score_one(scorer_ids[f], a, b);
+                            let sim = field_similarity(
+                                scorer_ids[f], a, b, surname_freq, name_aliases,
+                            );
                             let level = fs_level_from_sim(
                                 sim,
                                 levels[f],

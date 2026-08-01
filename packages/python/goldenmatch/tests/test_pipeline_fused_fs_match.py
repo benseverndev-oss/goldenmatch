@@ -227,3 +227,115 @@ def test_fs_no_flag_uses_classic(monkeypatch):
     result = run_dedupe_df(df, _fs_config())
     assert result.get("match_fused_capacity_mode") is not True
     assert result["scored_pairs"] is not None
+
+
+# ── extended scorer coverage: the fused FS kernel now scores each field through
+# fs-core's `field_similarity` (the classic dispatch), so the reference-data name
+# scorers (ids 4/5) + ensemble (id 6) are covered, not just score_one 0..=3. ──
+
+
+def _given_names_available() -> bool:
+    try:
+        from goldenmatch.core.probabilistic import _fs_name_refdata_available
+
+        return _fs_name_refdata_available({"given_name_aliased_jw"})
+    except Exception:
+        return False
+
+
+requires_given_names = pytest.mark.skipif(
+    not _given_names_available(),
+    reason="given-name alias refdata pack not loaded",
+)
+
+
+def _alias_df() -> pl.DataFrame:
+    """Within each zip block, given-name ALIASES the alias table links but a plain
+    string scorer would not (William/Bill/Will). Alias agreement is a clean 1.0,
+    so EM is stable and both paths link the three 3-member groups deterministically."""
+    rows: list[dict] = []
+    for c, forms in enumerate(
+        [["William", "Bill", "Will"], ["Robert", "Bob", "Bobby"], ["Elizabeth", "Beth", "Liz"]]
+    ):
+        for gn in forms:
+            rows.append({"given_name": gn, "zip": f"300{c:02d}"})
+    rows.append({"given_name": "Zelda", "zip": "39999"})
+    return pl.DataFrame(rows)
+
+
+def _alias_config() -> GoldenMatchConfig:
+    cfg = _fs_config(scorer="given_name_aliased_jw")
+    cfg.get_matchkeys()[0].fields[0].field = "given_name"
+    return cfg
+
+
+def test_fs_fused_covers_ensemble():
+    """`ensemble` (FS id 6) is now a covered fused-FS field scorer (was declined
+    pre-extension: the fused kernel scored id 6 via score_one's 0.0 catch-all)."""
+    assert match_fused_fs_ready(_fs_config(scorer="ensemble")) is True
+
+
+@requires_kernel
+def test_fs_fused_parity_ensemble(monkeypatch):
+    """Fused == classic on an `ensemble`-scorer FS matchkey (membership + golden)."""
+    monkeypatch.delenv("GOLDENMATCH_MATCH_FUSED", raising=False)
+    df = _people_df()
+    classic = run_dedupe_df(df, _fs_config(scorer="ensemble"))
+    fused = run_dedupe_df(df, _flag(_fs_config(scorer="ensemble")))
+    assert fused["match_fused_capacity_mode"] is True
+    assert _multi_partition(fused["clusters"]) == _multi_partition(classic["clusters"])
+    assert_frame_equal(
+        _golden_content(fused["golden"]), _golden_content(classic["golden"])
+    )
+
+
+@requires_given_names
+def test_fs_fused_covers_name_scorer():
+    """A reference-data name scorer (`given_name_aliased_jw`, FS id 5) is now a
+    covered fused-FS field scorer when the alias pack is loaded + the wheel carries
+    FUSED_FS_SUPPORTS_NAME_SCORERS. Was declined pre-extension."""
+    assert match_fused_fs_ready(_alias_config()) is True
+
+
+@requires_kernel
+@requires_given_names
+def test_fs_fused_parity_name_scorer(monkeypatch):
+    """The fused kernel reaches the injected alias table: William/Bill/Will link
+    into a 3-member cluster (a plain scorer would not), byte-identical to the
+    classic native FS path -- proving the name-scorer dispatch, not a silent JW."""
+    monkeypatch.delenv("GOLDENMATCH_MATCH_FUSED", raising=False)
+    df = _alias_df()
+    classic = run_dedupe_df(df, _alias_config())
+    fused = run_dedupe_df(df, _flag(_alias_config()))
+    assert fused["match_fused_capacity_mode"] is True
+    # The alias table is genuinely consulted: three 3-member alias groups link.
+    assert sorted(len(c) for c in _multi_partition(fused["clusters"])) == [3, 3, 3]
+    assert _multi_partition(fused["clusters"]) == _multi_partition(classic["clusters"])
+    assert set(fused["dupes"]["__row_id__"].to_pylist()) == set(
+        classic["dupes"]["__row_id__"].to_pylist()
+    )
+    assert_frame_equal(
+        _golden_content(fused["golden"]), _golden_content(classic["golden"])
+    )
+
+
+def test_fs_fused_name_scorer_declines_on_old_wheel(monkeypatch):
+    """Wheel-skew guard: a wheel whose fused kernel lacks the field_similarity
+    dispatch (no FUSED_FS_SUPPORTS_NAME_SCORERS) declines a name/ensemble field to
+    the classic path, so it is never scored 0.0 via the old score_one catch-all."""
+    import goldenmatch.core._native_loader as loader
+
+    class _OldWheel:
+        # Every OTHER FS capability present, but NOT the fused name-scorer dispatch.
+        FS_SUPPORTS_MISSING_NEUTRAL = True
+        FS_SUPPORTS_NE = True
+        FUSED_FS_SUPPORTS_LEVEL_THRESHOLDS = True
+        FUSED_FS_SUPPORTS_NAME_SCORERS = False
+
+        def __getattr__(self, name):  # match_fused_fs present, flags default False
+            return None
+
+    monkeypatch.setattr(loader, "native_module", lambda: _OldWheel())
+    # ensemble needs the fused dispatch flag but no refdata pack -> isolates the
+    # capability probe from the pack-availability gate.
+    assert match_fused_fs_ready(_fs_config(scorer="ensemble")) is False
