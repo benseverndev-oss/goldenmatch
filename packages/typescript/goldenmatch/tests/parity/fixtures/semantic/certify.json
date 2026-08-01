@@ -63,7 +63,10 @@
             "context": "",
             "is_unique_at_grain": true,
             "max_fan_out": 1.0,
-            "estimate": 1.0
+            "estimate": 1.0,
+            "measure_fan_out": {
+              "revenue": 1.0
+            }
           }
         ]
       }
@@ -130,7 +133,10 @@
             "context": "",
             "is_unique_at_grain": false,
             "max_fan_out": 2.0,
-            "estimate": 0.5
+            "estimate": 0.5,
+            "measure_fan_out": {
+              "revenue": 1.2857142857142858
+            }
           }
         ]
       }
@@ -206,7 +212,10 @@
             "context": "",
             "is_unique_at_grain": true,
             "max_fan_out": 1.0,
-            "estimate": 1.0
+            "estimate": 1.0,
+            "measure_fan_out": {
+              "revenue": 1.0
+            }
           }
         ]
       }
@@ -290,7 +299,8 @@
             "context": "join from customers",
             "is_unique_at_grain": true,
             "max_fan_out": 1.0,
-            "estimate": 1.0
+            "estimate": 1.0,
+            "measure_fan_out": {}
           }
         ]
       }
@@ -374,7 +384,104 @@
             "context": "join from customers",
             "is_unique_at_grain": false,
             "max_fan_out": 2.0,
-            "estimate": 0.5
+            "estimate": 0.5,
+            "measure_fan_out": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "cube_one_to_many_certifies_from_cube_key",
+      "model": {
+        "cubes": [
+          {
+            "name": "customer",
+            "joins": [
+              {
+                "name": "orders",
+                "relationship": "one_to_many",
+                "sql": "{CUBE}.id = {orders.customer_id}"
+              }
+            ]
+          },
+          {
+            "name": "orders"
+          }
+        ]
+      },
+      "frames": {
+        "customer": {
+          "id": [
+            "1",
+            "2",
+            "3"
+          ]
+        }
+      },
+      "expected": {
+        "dialect": "cube",
+        "n_certified": 1,
+        "all_trustworthy": true,
+        "skipped": [],
+        "entries": [
+          {
+            "target": "orders",
+            "key": [
+              "id"
+            ],
+            "context": "join from customer",
+            "is_unique_at_grain": true,
+            "max_fan_out": 1.0,
+            "estimate": 1.0,
+            "measure_fan_out": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "cube_one_to_many_duplicated_from_key",
+      "model": {
+        "cubes": [
+          {
+            "name": "customer",
+            "joins": [
+              {
+                "name": "orders",
+                "relationship": "one_to_many",
+                "sql": "{CUBE}.id = {orders.customer_id}"
+              }
+            ]
+          },
+          {
+            "name": "orders"
+          }
+        ]
+      },
+      "frames": {
+        "customer": {
+          "id": [
+            "1",
+            "1",
+            "2"
+          ]
+        }
+      },
+      "expected": {
+        "dialect": "cube",
+        "n_certified": 1,
+        "all_trustworthy": false,
+        "skipped": [],
+        "entries": [
+          {
+            "target": "orders",
+            "key": [
+              "id"
+            ],
+            "context": "join from customer",
+            "is_unique_at_grain": false,
+            "max_fan_out": 2.0,
+            "estimate": 0.5,
+            "measure_fan_out": {}
           }
         ]
       }
@@ -498,7 +605,8 @@
             "context": "relationship customers_to_crosswalk",
             "is_unique_at_grain": true,
             "max_fan_out": 1.0,
-            "estimate": 1.0
+            "estimate": 1.0,
+            "measure_fan_out": {}
           }
         ]
       }
@@ -622,7 +730,8 @@
             "context": "relationship customers_to_crosswalk",
             "is_unique_at_grain": false,
             "max_fan_out": 3.0,
-            "estimate": 0.0
+            "estimate": 0.0,
+            "measure_fan_out": {}
           }
         ]
       }

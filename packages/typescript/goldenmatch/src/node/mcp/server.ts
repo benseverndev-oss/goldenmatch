@@ -805,12 +805,15 @@ function buildFieldsFromArg(raw: unknown): MatchkeyField[] {
 // ---------------------------------------------------------------------------
 
 /** Pivot parsed rows into the column-oriented frame the semantic certifier reads
- * (`{ column: values[] }`), the edge-safe analogue of a pyarrow Table. */
+ * (`{ column: values[] }`), the edge-safe analogue of a pyarrow Table. Uses a
+ * null-prototype map + own-property reads so a column literally named
+ * `__proto__` can't pollute the prototype. */
 function rowsToColumns(rows: Array<Record<string, unknown>>): Record<string, unknown[]> {
+  const hasOwn = Object.prototype.hasOwnProperty;
   const names = new Set<string>();
   for (const r of rows) for (const k of Object.keys(r)) names.add(k);
-  const cols: Record<string, unknown[]> = {};
-  for (const name of names) cols[name] = rows.map((r) => (name in r ? r[name] : null));
+  const cols: Record<string, unknown[]> = Object.create(null);
+  for (const name of names) cols[name] = rows.map((r) => (hasOwn.call(r, name) ? r[name] : null));
   return cols;
 }
 
@@ -1276,12 +1279,17 @@ export async function handleTool(
         if (typeof doc !== "object" || doc === null || Array.isArray(doc)) {
           return { error: `semantic-model file did not parse to a mapping: ${modelPath}` };
         }
-        const frames: Record<string, Record<string, unknown[]>> = {};
+        // Null-prototype map: `frames` keys are model-author-controlled target
+        // names, so a key like `__proto__` must not reach the prototype chain.
+        const frames: Record<string, Record<string, unknown[]>> = Object.create(null);
         for (const [target, p] of Object.entries(framesArg as Record<string, unknown>)) {
+          if (typeof p !== "string" || !p) {
+            return { error: `frames['${target}'] must be a non-empty file path string.` };
+          }
           try {
-            frames[target] = rowsToColumns(readFile(sanitizePath(String(p))));
+            frames[target] = rowsToColumns(readFile(sanitizePath(p)));
           } catch (err) {
-            return { error: `could not read data for '${target}' (${String(p)}): ${err instanceof Error ? err.message : String(err)}` };
+            return { error: `could not read data for '${target}' (${p}): ${err instanceof Error ? err.message : String(err)}` };
           }
         }
         let report;

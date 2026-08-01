@@ -20,6 +20,7 @@ interface ExpectedEntry {
   is_unique_at_grain: boolean;
   max_fan_out: number;
   estimate: number;
+  measure_fan_out: Record<string, number>;
 }
 interface FixtureCase {
   name: string;
@@ -51,6 +52,7 @@ function run(c: FixtureCase) {
       is_unique_at_grain: e.certificate.isUniqueAtGrain,
       max_fan_out: e.certificate.maxFanOut,
       estimate: e.certificate.estimate,
+      measure_fan_out: e.certificate.measureFanOut,
     })),
   };
 }

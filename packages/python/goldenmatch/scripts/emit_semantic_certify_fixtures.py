@@ -112,6 +112,7 @@ def _serialize(report) -> dict:
                 "is_unique_at_grain": e.certificate.is_unique_at_grain,
                 "max_fan_out": e.certificate.max_fan_out,
                 "estimate": e.certificate.estimate,
+                "measure_fan_out": dict(e.certificate.measure_fan_out),
             }
             for e in report.entries
         ],
@@ -175,6 +176,25 @@ def _cases() -> list[dict]:
         "cube_from_emitter_duplicated",
         cube_doc,
         {"crosswalk": {"customer_id": ["1", "1", "2"], "source": ["crm", "crm", "crm"], "resolved_entity_id": ["e1", "e2", "e3"]}},
+    ))
+    # one_to_many: the DECLARING (from) cube is the one-side, so ITS key must be
+    # unique — the opposite one-side selection from the many_to_one default. Locks
+    # the TS member-ref parse + one-side selection against Python.
+    cube_o2m = {
+        "cubes": [
+            {"name": "customer", "joins": [{"name": "orders", "relationship": "one_to_many", "sql": "{CUBE}.id = {orders.customer_id}"}]},
+            {"name": "orders"},
+        ]
+    }
+    cases.append(_case(
+        "cube_one_to_many_certifies_from_cube_key",
+        cube_o2m,
+        {"customer": {"id": ["1", "2", "3"]}},
+    ))
+    cases.append(_case(
+        "cube_one_to_many_duplicated_from_key",
+        cube_o2m,
+        {"customer": {"id": ["1", "1", "2"]}},
     ))
 
     # --- osi (parse the emitter's own output -> certify) ----------------------
