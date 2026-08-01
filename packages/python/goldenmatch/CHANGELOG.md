@@ -84,6 +84,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   parity-gated). This does not remove the O(N) prep frame-residency floor that
   `emit_singletons=True` still carries -- that remains separate bounded-streaming work.
 
+### Fixed
+- **FS pair-budget gate no longer compounds a coarse blocking pass with a unique
+  surrogate key.** `_bound_probabilistic_blocking_pairs` reduces an over-budget
+  coarse pass by ANDing in the strongest full-value "identity" reducer
+  (email/identifier/phone), previously selected by `col_type` alone. A UNIQUE
+  surrogate key (`record_id`, row-uuid; `cardinality_ratio` 1.0) collapses any
+  block to singletons (0 pairs, always under budget) so it looked like the
+  strongest reducer -- but duplicates do NOT share a surrogate key, so
+  `[coarse, record_id]` SPLITS every true pair. Measured on the 25M person shape
+  (truth keyed on `cluster_id`, `record_id` unique): recall 1.0 -> 0.49 /
+  F1 0.893 -> 0.653. Now mirrors the #721/#876 exact-matchkey gate -- columns with
+  `cardinality_ratio >= 1.0` are excluded from every reducer branch (full-value
+  identity AND substring-prefix; a prefix of a unique key is just as
+  recall-splitting). A real identity field (email, shared by duplicates) is still
+  preferred; a coarse pass with only a surrogate available falls back to the
+  recall-safe name initial or is dropped. Also threads `n_rows_full` through
+  `scripts/bench_fs_out_of_core_scale.py` so the bench extrapolates each pass's
+  Sum C(block,2) to the full population and actually exercises the pair-budget gate.
+
 ## [3.10.0] - 2026-07-24
 
 ### Added
