@@ -1333,6 +1333,14 @@ def train_em(
                     f"label_pairs label for ({ai}, {bi}) must be 0/1 or bool, got {lab!r}"
                 )
             key = (min(ai, bi), max(ai, bi))
+            # A caller passing both (a, b) and (b, a) with DIFFERENT labels is an
+            # input error -- surface it rather than silently letting the later
+            # dict entry win and produce a surprising anchored model.
+            if key in label_anchors and label_anchors[key] != val:
+                raise ValueError(
+                    f"label_pairs has conflicting labels for pair {key}: "
+                    f"{int(label_anchors[key])} vs {int(val)}"
+                )
             label_anchors[key] = val
             if key not in existing:
                 blocked_pairs.append(key)
@@ -1697,18 +1705,34 @@ def load_or_train_em(
     and the trained model is saved there for next time. With no ``model_path``
     this is exactly ``train_em``. The single seam all three pipeline call sites
     (core pipeline x2, TUI engine) share.
+
+    Semi-supervised anchors (``label_pairs`` kwarg or the ``set_fs_label_anchors``
+    ContextVar) are resolved BEFORE the persisted-model fast path: when anchors
+    are present they force a fresh anchored train (the cached un-anchored model
+    is bypassed, never returned), and the anchored result is NOT written back to
+    ``model_path`` -- it is a per-call override, so the shared canonical model is
+    left intact. Only an un-anchored train persists to ``model_path``.
     """
+    # Semi-supervised anchors: explicit kwarg wins; else the training-time
+    # ContextVar seam (a two-pass label-then-rerun driver). None -> unsupervised.
+    # Resolved BEFORE the persisted-model fast path so anchors are never silently
+    # ignored when the shared model file already exists.
+    if label_pairs is None:
+        label_pairs = _label_anchors_for(mk)
+
     path = getattr(mk, "model_path", None)
-    if path and os.path.exists(path):
+    if path and os.path.exists(path) and not label_pairs:
         em = EMResult.load_json(path)
         em.validate_for(mk)  # raises FSModelMismatchError on shape mismatch
         logger.info("Loaded FS model from %s (skipped EM training)", path)
         return em
-
-    # Semi-supervised anchors: explicit kwarg wins; else the training-time
-    # ContextVar seam (a two-pass label-then-rerun driver). None -> unsupervised.
-    if label_pairs is None:
-        label_pairs = _label_anchors_for(mk)
+    if path and os.path.exists(path) and label_pairs:
+        # The persisted model is un-anchored; the caller explicitly wants
+        # anchors, so retrain WITH them instead of returning the cached model.
+        logger.info(
+            "FS model at %s bypassed: %d semi-supervised label anchors force a "
+            "retrain", path, len(label_pairs),
+        )
 
     em = train_em(
         df, mk,
@@ -1719,7 +1743,10 @@ def load_or_train_em(
         target_ids=target_ids,
         label_pairs=label_pairs,
     )
-    if path:
+    # Persist ONLY the canonical un-anchored model. An anchored model is a
+    # per-call override; overwriting the shared model_path file with it would
+    # surprise the next reuse.
+    if path and not label_pairs:
         em.save_json(path)
         logger.info("Saved FS model to %s", path)
     return em

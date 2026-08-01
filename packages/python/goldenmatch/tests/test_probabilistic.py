@@ -2064,6 +2064,34 @@ class TestLabelConstrainedEM:
         assert same.proportion_matched == base.proportion_matched
         assert same.m_probs == base.m_probs
 
+    def test_conflicting_labels_raise(self):
+        import pytest
+        df = _make_dedupe_df()
+        mk = _make_probabilistic_mk()
+        # (1,2) and (2,1) canonicalize to the same pair with different labels.
+        with pytest.raises(ValueError, match="conflicting labels"):
+            train_em(df, mk, n_sample_pairs=100, label_pairs={(1, 2): 1, (2, 1): 0})
+
+    def test_anchors_bypass_persisted_model(self, tmp_path):
+        # A persisted (un-anchored) model must NOT be returned when anchors are
+        # supplied -- else the semi-supervised feature is a silent no-op in the
+        # train-once/reuse path. The anchored retrain also must not clobber the
+        # shared model file.
+        df = _make_dedupe_df()
+        model_file = tmp_path / "fs.json"
+        mk = _make_probabilistic_mk(model_path=str(model_file))
+        # First call (no anchors) trains + persists the canonical model.
+        base = load_or_train_em(df, mk)
+        assert model_file.exists()
+        persisted_bytes = model_file.read_bytes()
+        # Second call WITH anchors must retrain (not return the cached model)...
+        anc = load_or_train_em(
+            df, mk, label_pairs={(1, 2): 1, (3, 4): 1, (5, 6): 1, (7, 8): 1}
+        )
+        assert anc.proportion_matched != base.proportion_matched
+        # ...and must NOT overwrite the shared un-anchored model file.
+        assert model_file.read_bytes() == persisted_bytes
+
     def test_contextvar_default_is_inert(self):
         df = _make_dedupe_df()
         mk = _make_probabilistic_mk()
