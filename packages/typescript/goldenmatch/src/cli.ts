@@ -1133,13 +1133,19 @@ identityCmd
           resolvedKey: opts.resolvedKey,
         });
         if (opts.out) {
-          if (existsSync(opts.out) && !opts.overwrite) {
-            process.stderr.write(`${opts.out} already exists; pass --overwrite to replace it\n`);
-            process.exit(1);
-          }
           const dir = dirname(opts.out);
           if (dir) mkdirSync(dir, { recursive: true });
-          writeFileSync(opts.out, yamlStr, "utf-8");
+          try {
+            // `wx` = create-and-fail-if-exists (atomic, O_EXCL): the clobber
+            // guard IS the write, so there is no check-then-write race.
+            writeFileSync(opts.out, yamlStr, { encoding: "utf-8", flag: opts.overwrite ? "w" : "wx" });
+          } catch (err) {
+            if (!opts.overwrite && (err as NodeJS.ErrnoException).code === "EEXIST") {
+              process.stderr.write(`${opts.out} already exists; pass --overwrite to replace it\n`);
+              process.exit(1);
+            }
+            throw err;
+          }
           process.stdout.write(`Wrote ${opts.dialect} catalog to ${opts.out}\n`);
         } else {
           process.stdout.write(yamlStr);
