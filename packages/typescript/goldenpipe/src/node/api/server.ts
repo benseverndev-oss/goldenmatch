@@ -20,7 +20,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
-import { resolve, isAbsolute, relative } from "node:path";
+import { resolve, isAbsolute, relative, sep } from "node:path";
 import { handleTool } from "../mcp/server.js";
 import { run } from "../run.js";
 
@@ -36,7 +36,10 @@ function sanitizePath(raw: string): string {
   // (`/srv/app-secrets` vs cwd `/srv/app`), a root cwd (`/`, `C:\`) that a
   // `cwd + sep` prefix check would wrongly reject, and cross-drive paths.
   const rel = relative(cwd, resolved);
-  if (rel.startsWith("..") || isAbsolute(rel)) {
+  // Escape iff the first segment is exactly `..` (or rel is absolute, e.g. a
+  // different Windows drive). A raw `startsWith("..")` would wrongly reject a
+  // contained file whose name merely begins with `..` (e.g. `..env`).
+  if (rel === ".." || rel.startsWith(".." + sep) || isAbsolute(rel)) {
     throw new Error(`Path '${raw}' is outside the working directory`);
   }
   return resolved;
