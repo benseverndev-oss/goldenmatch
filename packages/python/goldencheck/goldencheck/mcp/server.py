@@ -642,8 +642,8 @@ def run_server_http(host: str = "0.0.0.0", port: int = 8100) -> None:
     from starlette.responses import JSONResponse
     from starlette.routing import Mount, Route
 
+    token = resolve_http_auth_token(host)  # fail closed before any server setup
     server = create_server()
-    token = resolve_http_auth_token(host)
     session_manager = StreamableHTTPSessionManager(
         app=server,
         json_response=False,
