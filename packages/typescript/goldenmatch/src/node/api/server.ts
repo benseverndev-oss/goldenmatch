@@ -13,6 +13,8 @@
  *   POST /clusters                   - return clusters from dedupe
  *   GET  /reviews                    - list pending review items
  *   POST /reviews/decide             - accept/reject a review item
+ *   POST /semantic/certify           - certify a semantic model's keys vs frames
+ *   POST /semantic/emit              - emit a conformed catalog from the store
  *
  * Ports ideas from goldenmatch/api/server.py.
  */
@@ -31,6 +33,12 @@ import {
 } from "../../core/types.js";
 import { explainPair } from "../../core/explain.js";
 import { profileRows } from "../../core/profiler.js";
+import {
+  certifySemanticModel,
+  emitSemanticModelFromStore,
+  type SemanticDialect,
+  type SemanticFrames,
+} from "../../core/semantic/index.js";
 
 // ---------------------------------------------------------------------------
 // In-memory review queue
@@ -336,6 +344,82 @@ async function handleRequest(
           sample_values: c.sampleValues,
         })),
       });
+      return;
+    }
+
+    if (pathname === "/semantic/certify" && method === "POST") {
+      // Certify a semantic model's declared join keys against supplied frames
+      // (structural tier). Body: { model: <loaded dbt/Cube/OSI doc object>,
+      // frames: { name: { column: [values] } } }. The REST body carries the
+      // already-parsed model + column frames, so no file I/O here.
+      const body = await readJsonBody(req);
+      const model = body["model"];
+      const framesArg = body["frames"];
+      if (typeof model !== "object" || model === null || Array.isArray(model)) {
+        sendJson(res, 400, { error: "'model' must be a loaded semantic-model object" });
+        return;
+      }
+      if (typeof framesArg !== "object" || framesArg === null || Array.isArray(framesArg)) {
+        sendJson(res, 400, { error: "'frames' must map a model/dataset/cube name to a column frame" });
+        return;
+      }
+      let report;
+      try {
+        report = certifySemanticModel(model as Record<string, unknown>, framesArg as SemanticFrames);
+      } catch (err) {
+        sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+        return;
+      }
+      sendJson(res, 200, {
+        dialect: report.dialect,
+        n_certified: report.nCertified,
+        all_trustworthy: report.allTrustworthy,
+        skipped: report.skipped,
+        keys: report.entries.map((e) => ({
+          target: e.target,
+          key: e.key,
+          context: e.context,
+          is_unique_at_grain: e.certificate.isUniqueAtGrain,
+          max_fan_out: e.certificate.maxFanOut,
+          estimate: e.certificate.estimate,
+          measure_fan_out: e.certificate.measureFanOut,
+        })),
+      });
+      return;
+    }
+
+    if (pathname === "/semantic/emit" && method === "POST") {
+      // Emit a conformed semantic-layer catalog (the resolved_entity_id join
+      // declaration) live from the bound identity store.
+      if (!serverIdentityStore) {
+        sendJson(res, 503, {
+          error: "IdentityStore not bound to server",
+          hint: "call setServerIdentityStore(store) at startup",
+        });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const sourceName = typeof body["source_name"] === "string" ? (body["source_name"] as string) : "";
+      const sourcePkColumn = typeof body["source_pk_column"] === "string" ? (body["source_pk_column"] as string) : "";
+      if (!sourceName) {
+        sendJson(res, 400, { error: "'source_name' is required" });
+        return;
+      }
+      if (!sourcePkColumn) {
+        sendJson(res, 400, { error: "'source_pk_column' is required" });
+        return;
+      }
+      const dialectRaw = typeof body["dialect"] === "string" ? (body["dialect"] as string) : "metricflow";
+      const dataset = typeof body["dataset"] === "string" ? (body["dataset"] as string) : null;
+      const yamlStr = await emitSemanticModelFromStore(serverIdentityStore, {
+        sourceName,
+        sourcePkColumn,
+        dialect: dialectRaw as SemanticDialect,
+        dataset,
+        ...(typeof body["source_target"] === "string" ? { sourceTarget: body["source_target"] as string } : {}),
+        resolvedKey: typeof body["resolved_key"] === "string" ? (body["resolved_key"] as string) : "resolved_entity_id",
+      });
+      sendJson(res, 200, { yaml: yamlStr });
       return;
     }
 

@@ -87,6 +87,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   shared` under `mcp_tools`; it is a base MCP tool (not on the TS A2A card), so it
   stays `a2a_skills.python_only`. With this, both halves of the semantic wedge —
   produce (emit) and consume (certify) — are cross-surface.
+- **Human-facing surfaces for the semantic wedge — CLI + REST.** The wedge was
+  reachable by agents (MCP) and code (library); these give a dbt/Cube developer a
+  one-command path.
+  - **CLI** `goldenmatch-js certify-keys <model> -d name=path…` (mirrors Python
+    `certify-keys`): reads a MetricFlow/Cube/OSI model + frame files, certifies
+    each declared join key, and prints the Python-parity report (`Dialect: … 
+    certified: N   untrustworthy: M`, a skipped/note line, and a `target / key /
+    unique@grain / max_fan_out / context` table), with `--fail-untrustworthy` as a
+    CI gate. Flips `certify-keys` `python_only → shared` under `cli_commands`. The
+    Python `--resolve` ER tier is deliberately not offered (structural tier only).
+  - **CLI** `goldenmatch-js identity emit-catalog <source> <source-pk> [--dialect
+    --dataset --source-target --resolved-key --out --overwrite]` (mirrors Python
+    `identity emit-catalog`): emits a conformed catalog live from the identity DB,
+    printing the YAML or writing it to `--out`. Functional parity under the
+    already-`shared` `identity` command (no manifest move).
+  - **REST** `POST /semantic/certify` (`{model, frames}` → per-key certification)
+    and `POST /semantic/emit` (`{source_name, source_pk_column, …}` → catalog YAML
+    from the bound identity store, 503 if unbound) on the thin `node/api/server.ts`.
+    These are a **net-new TS surface** — Python has no REST equivalent for the
+    wedge, so there is nothing to mirror and no parity-manifest impact (REST is not
+    a gated surface). Tests: `tests/unit/api-server.test.ts`, `api-identity.test.ts`.
 
 ## [1.26.0] - 2026-07-27
 

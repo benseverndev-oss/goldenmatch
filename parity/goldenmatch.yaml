@@ -155,6 +155,7 @@ cli_commands:
   - analyze-blocking
   - anomalies
   - autoconfig
+  - certify-keys
   - compare-clusters
   - config
   - dedupe
@@ -184,7 +185,6 @@ cli_commands:
   - tui
   - unmerge
   python_only:
-  - certify-keys
   - import-dbt
   - ingest-docs
   - llm
