@@ -7243,6 +7243,10 @@
           "GOLDENCHECK_LLM_BUDGET",
           "GOLDENCHECK_LLM_MODEL"
         ],
+        "MCP": [
+          "GOLDENCHECK_MCP_ALLOW_PUBLIC",
+          "GOLDENCHECK_MCP_TOKEN"
+        ],
         "NATIVE": [
           "GOLDENCHECK_NATIVE"
         ],
@@ -8923,6 +8927,10 @@
         "ALLOWED": [
           "GOLDENPIPE_ALLOWED_ROOT"
         ],
+        "MCP": [
+          "GOLDENPIPE_MCP_ALLOW_PUBLIC",
+          "GOLDENPIPE_MCP_TOKEN"
+        ],
         "NATIVE": [
           "GOLDENPIPE_NATIVE"
         ]
@@ -9275,6 +9283,10 @@
         }
       ],
       "env_vars": {
+        "MCP": [
+          "INFERMAP_MCP_ALLOW_PUBLIC",
+          "INFERMAP_MCP_TOKEN"
+        ],
         "NATIVE": [
           "INFERMAP_NATIVE"
         ]
@@ -9562,6 +9574,10 @@
         }
       ],
       "env_vars": {
+        "MCP": [
+          "GOLDENANALYSIS_MCP_ALLOW_PUBLIC",
+          "GOLDENANALYSIS_MCP_TOKEN"
+        ],
         "NATIVE": [
           "GOLDENANALYSIS_NATIVE"
         ]
