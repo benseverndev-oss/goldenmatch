@@ -167,9 +167,36 @@ class TestPathJail:
         with pytest.raises(ValueError):
             _jail_path(str(tmp_path / "outside.csv"))
 
+    def test_escape_message_is_generic(self, tmp_path, monkeypatch):
+        # Public unauthenticated endpoint: the error must NOT leak the resolved
+        # absolute path or the server's root directory.
+        monkeypatch.chdir(tmp_path)
+        try:
+            _jail_path("/etc/passwd")
+            raise AssertionError("expected ValueError")
+        except ValueError as exc:
+            msg = str(exc)
+        assert msg == "path is outside the allowed root"
+        assert "/etc/passwd" not in msg
+        assert str(tmp_path) not in msg
+
     def test_run_pipeline_rejects_escaping_source(self, tmp_path, monkeypatch):
         # A traversal `source` must be refused as data (no file read), not opened.
         monkeypatch.chdir(tmp_path)
         out = run_pipeline_tool(source="/etc/passwd")
         assert "error" in out
         assert "outside the allowed root" in out["error"]
+
+    def test_run_pipeline_rejects_escaping_config_path(self, tmp_path, monkeypatch):
+        # `config_path` is jailed too -- a traversal is refused as data, not opened.
+        monkeypatch.chdir(tmp_path)
+        out = run_pipeline_tool(config_path="/etc/shadow")
+        assert "error" in out
+        assert "outside the allowed root" in out["error"]
+
+    def test_run_pipeline_missing_config_returns_error(self, tmp_path, monkeypatch):
+        # A jailed-but-nonexistent config must return an error payload, not crash
+        # the request (load_config raises FileNotFoundError past the jail check).
+        monkeypatch.chdir(tmp_path)
+        out = run_pipeline_tool(config_path="nonexistent.yml")
+        assert out.get("error") == "failed to load config"

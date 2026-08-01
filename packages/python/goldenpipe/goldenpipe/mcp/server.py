@@ -36,7 +36,10 @@ def _jail_path(value: str) -> str:
     resolved = Path(raw).resolve()
     root = Path(os.environ.get("GOLDENPIPE_ALLOWED_ROOT") or os.getcwd()).resolve()
     if resolved != root and not resolved.is_relative_to(root):
-        raise ValueError(f"path {str(resolved)!r} is outside the allowed root {str(root)!r}")
+        # Generic message on purpose: this is a public, unauthenticated endpoint,
+        # so the error must not disclose the resolved absolute path or the server's
+        # root directory back to the caller.
+        raise ValueError("path is outside the allowed root")
     return str(resolved)
 
 
@@ -101,8 +104,11 @@ def run_pipeline_tool(
         elif config_path:
             from goldenpipe.config.loader import load_config
             cfg = load_config(_jail_path(config_path))
-    except ValueError as exc:  # path escaped the allowed root
+    except ValueError as exc:  # jail escape / NUL byte -- message is already generic
         return {"error": str(exc)}
+    except Exception:  # missing / malformed config -- surface as data, don't crash
+        # the request or leak the underlying filesystem error on a public endpoint.
+        return {"error": "failed to load config"}
 
     try:
         pipe = Pipeline(config=cfg, identity_opts=identity_opts)
