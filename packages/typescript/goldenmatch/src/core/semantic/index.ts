@@ -3,10 +3,10 @@
  *
  * GoldenMatch produces the resolved, conformed entity keys a semantic layer's
  * joins and measures silently assume. The TS port ships the key-integrity
- * certifier, the Customer 360 serving-join certificate, and the dialect catalog
- * emitters (MetricFlow / Cube / OSI) — including `emitSemanticModelFromStore`,
- * which regenerates the conformed `resolved_entity_id` join declaration live from
- * the durable IdentityStore.
+ * certifier, the Customer 360 serving-join certificate, the dialect catalog
+ * emitters (MetricFlow / Cube / OSI, incl. `emitSemanticModelFromStore`), AND the
+ * consume side — `certifySemanticModel` parses a dbt/Cube/OSI model and certifies
+ * every key its metrics join on. Produce and consume are now both cross-surface.
  */
 export {
   KeyIntegrityCertificate,
@@ -24,18 +24,34 @@ export {
   emitSemanticModel,
   emitMetricflowYaml,
   emitFromCrosswalk,
+  parseSemanticModels,
   type EmitSemanticModelOptions,
+  type DeclaredKeySpec,
 } from "./metricflow.js";
 export {
   emitCubeFromCrosswalk,
+  parseCubeModels,
+  cubeJoinKeys,
+  certifyCubeJoins,
   type EmitCubeFromCrosswalkOptions,
   type CubeKeyIntegrityCertificateLike,
+  type ParsedCube,
+  type ParsedCubeJoin,
+  type CubeJoinKey,
+  type CertifiedJoin,
 } from "./cube.js";
 export {
   emitOsiFromCrosswalk,
+  parseOsiModels,
+  osiJoinKeys,
+  certifyOsiRelationships,
   OSI_VERSION,
   DEFAULT_DIALECT,
   type EmitOsiFromCrosswalkOptions,
+  type ParsedOsiModel,
+  type ParsedOsiRelationship,
+  type OsiJoinKey,
+  type CertifiedRelationship,
 } from "./osi.js";
 export {
   emitSemanticModelFromStore,
@@ -43,3 +59,10 @@ export {
   type EmitSemanticModelFromStoreOptions,
   type EmitDialectExtras,
 } from "./catalog.js";
+export {
+  certifySemanticModel,
+  detectDialect,
+  SemanticCertification,
+  type KeyCertification,
+} from "./certify.js";
+export type { SemanticFrame, SemanticFrames } from "./frame.js";

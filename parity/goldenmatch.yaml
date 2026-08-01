@@ -66,6 +66,7 @@ mcp_tools:
   - auto_configure
   - build_clusters
   - certify_recall
+  - certify_semantic_model
   - certify_serving_joins
   - compare_clusters
   - config_weaknesses
@@ -140,7 +141,6 @@ mcp_tools:
   - upload_dataset
   - write_csv
   python_only:
-  - certify_semantic_model
   - documents_ingest
   - documents_suggest_schema
   - explain_routing

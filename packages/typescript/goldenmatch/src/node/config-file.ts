@@ -51,6 +51,15 @@ export function loadConfigFile(path: string): GoldenMatchConfig {
 }
 
 /**
+ * Parse a YAML (or JSON — JSON is a YAML subset) document string into a plain
+ * object. Uses the optional `yaml` peer dependency. Shared by callers that load
+ * arbitrary YAML documents (e.g. the semantic-model certifier), not just configs.
+ */
+export function parseYamlDoc(content: string): unknown {
+  return loadYamlModule().parse(content);
+}
+
+/**
  * Serialize a GoldenMatchConfig to a YAML string (no file I/O). Shared by
  * `writeConfigFile` and any caller (e.g. the Splink-import CLI) that needs to
  * control the write itself (ordering, error messages).

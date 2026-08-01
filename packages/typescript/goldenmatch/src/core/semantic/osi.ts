@@ -15,6 +15,9 @@ import { type YamlValue, dumpYaml, pyFloat } from "./yamlEmit.js";
 import { pyRound6 } from "./crosswalk.js";
 import type { ResolvedCrosswalk } from "./crosswalk.js";
 import type { CubeKeyIntegrityCertificateLike } from "./cube.js";
+import { type LoadedDoc, asList, asStrStripped, isObj } from "./parseUtil.js";
+import { certifyKeyIntegrity, type KeyIntegrityCertificate } from "./keyIntegrity.js";
+import type { SemanticFrames } from "./frame.js";
 
 export const OSI_VERSION = "0.2.0.dev0";
 export const DEFAULT_DIALECT = "ANSI_SQL";
@@ -114,4 +117,95 @@ export function emitOsiFromCrosswalk(
   };
 
   return dumpYaml({ version: OSI_VERSION, semantic_model: [model] });
+}
+
+// --- consume (parse) + certify (wedge A, structural tier) --------------------
+
+export interface ParsedOsiRelationship {
+  name: string;
+  fromDataset: string; // MANY side (`from`)
+  toDataset: string; // ONE side (`to`)
+  fromColumns: string[]; // FK columns
+  toColumns: string[]; // referenced PK/unique columns
+}
+
+export interface ParsedOsiModel {
+  name: string;
+  relationships: ParsedOsiRelationship[];
+}
+
+function cols(v: unknown): string[] {
+  if (v === undefined || v === null) return [];
+  if (typeof v === "string") return [v];
+  return asList(v).map((x) => String(x));
+}
+
+/**
+ * Parse an OSI/Ossie document's `semantic_model` list into the relationship-
+ * bearing shape the certifier reads. Faithful port of the relationship-relevant
+ * part of Python `parse_osi_models` (consume half); operates on a loaded document.
+ */
+export function parseOsiModels(doc: LoadedDoc): ParsedOsiModel[] {
+  const out: ParsedOsiModel[] = [];
+  for (const sm of asList(doc["semantic_model"])) {
+    if (!isObj(sm)) continue;
+    const relationships: ParsedOsiRelationship[] = [];
+    for (const r of asList(sm["relationships"])) {
+      if (!isObj(r)) continue;
+      relationships.push({
+        name: asStrStripped(r["name"]),
+        fromDataset: asStrStripped(r["from"]),
+        toDataset: asStrStripped(r["to"]),
+        fromColumns: cols(r["from_columns"]),
+        toColumns: cols(r["to_columns"]),
+      });
+    }
+    out.push({ name: asStrStripped(sm["name"]), relationships });
+  }
+  return out;
+}
+
+export interface OsiJoinKey {
+  dataset: string;
+  columns: string[];
+  side: "one" | "many";
+  relationship: string;
+}
+
+/** The keys the model's relationships join on. Mirrors Python `osi_join_keys`. */
+export function osiJoinKeys(model: ParsedOsiModel): OsiJoinKey[] {
+  const out: OsiJoinKey[] = [];
+  for (const r of model.relationships) {
+    out.push({ dataset: r.toDataset, columns: r.toColumns, side: "one", relationship: r.name });
+    out.push({ dataset: r.fromDataset, columns: r.fromColumns, side: "many", relationship: r.name });
+  }
+  return out;
+}
+
+export interface CertifiedRelationship {
+  relationship: string;
+  dataset: string;
+  key: string[];
+  certificate: KeyIntegrityCertificate;
+}
+
+/**
+ * For each relationship in an OSI model, certify the ONE-side key it joins on
+ * (the referenced PK) — the identity the metrics depend on (structural tier).
+ * Datasets without a supplied frame are skipped. Uses the FIRST model, mirroring
+ * Python `certify_osi_relationships` (`resolve=false` structural path; the ER
+ * fragmentation tier is Python-only).
+ */
+export function certifyOsiRelationships(doc: LoadedDoc, frames: SemanticFrames): CertifiedRelationship[] {
+  const models = parseOsiModels(doc);
+  if (!models.length) return [];
+  const model = models[0]!;
+  const out: CertifiedRelationship[] = [];
+  for (const rel of model.relationships) {
+    const df = frames[rel.toDataset];
+    if (df === undefined || rel.toColumns.length === 0) continue;
+    const cert = certifyKeyIntegrity(df, { key: rel.toColumns });
+    out.push({ relationship: rel.name, dataset: rel.toDataset, key: [...rel.toColumns], certificate: cert });
+  }
+  return out;
 }
