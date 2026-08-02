@@ -230,6 +230,7 @@
           "defines": [
             "APIHandler",
             "MatchServer",
+            "_certify_semantic_model_endpoint",
             "resolve_api_auth_token",
             "start_server"
           ],
@@ -237,11 +238,13 @@
             "goldenmatch.config.schemas",
             "goldenmatch.core.autoconfig",
             "goldenmatch.core.explainer",
+            "goldenmatch.core.io_arrow",
             "goldenmatch.core.memory.store",
             "goldenmatch.core.recall_certificate",
             "goldenmatch.core.retrieval",
             "goldenmatch.core.suggest",
             "goldenmatch.core.suggest.surface",
+            "goldenmatch.semantic",
             "goldenmatch.web.controller_telemetry"
           ]
         },
@@ -7180,6 +7183,7 @@
           "defines": [
             "KeyCertification",
             "SemanticCertification",
+            "certification_report_dict",
             "certify_semantic_model",
             "detect_dialect"
           ],

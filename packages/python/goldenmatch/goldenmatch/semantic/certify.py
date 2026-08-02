@@ -150,3 +150,36 @@ def certify_semantic_model(
             ))
 
     return SemanticCertification(dialect=dialect, entries=entries, skipped=skipped)
+
+
+def certification_report_dict(report: SemanticCertification) -> dict[str, Any]:
+    """JSON-serializable view of a `SemanticCertification` — the single source the
+    MCP `certify_semantic_model` tool, the REST `POST /semantic/certify` endpoint,
+    and the CLI `certify-keys --json` output all emit, so the wire shape can't
+    drift across surfaces.
+
+    Each key carries the full trust-verdict block (`certificate_verdict`) — the
+    same `key_integrity` projection the catalog emitters write back — so a consumer
+    reads the advisory `verdict` plus fan-out, per-measure inflation, and the
+    resolution-tier undercount bounds in one place. `n_untrustworthy` /
+    `all_trustworthy` are the build-gate signals.
+    """
+    from goldenmatch.core.key_integrity_certificate import certificate_verdict
+
+    return {
+        "dialect": report.dialect,
+        "n_certified": report.n_certified,
+        "n_untrustworthy": len(report.untrustworthy),
+        "all_trustworthy": report.all_trustworthy,
+        "skipped": list(report.skipped),
+        "note": report.note,
+        "keys": [
+            {
+                "target": e.target,
+                "key": list(e.key),
+                "context": e.context,
+                "key_integrity": certificate_verdict(e.certificate),
+            }
+            for e in report.entries
+        ],
+    }

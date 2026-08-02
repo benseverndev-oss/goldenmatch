@@ -230,6 +230,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   port (`certificateVerdict`) via a shared fixture (`emit_certificate_verdict_fixture.py`,
   drift-guarded by `ts_parity_freshness`). Byte-unchanged when no certificate is
   passed. Tests: `tests/test_certificate_verdict.py`.
+- **Key-integrity trust verdict surfaced on MCP, REST, and the CLI as a build
+  gate.** A shared `certification_report_dict(report)` serializer emits the
+  verdict-rich JSON (`{dialect, n_certified, n_untrustworthy, all_trustworthy,
+  keys:[{target, key, key_integrity}]}`, each key carrying the full
+  `certificate_verdict` block) so the wire shape can't drift across surfaces. The
+  MCP `certify_semantic_model` tool now returns the per-key verdict block (was a
+  flat 4-field shape); a new REST `POST /semantic/certify` endpoint (`{model,
+  frames, resolve}`) returns the same report; and `certify-keys` gained `--json`
+  (the machine-readable report) alongside the existing `--fail-untrustworthy` CI
+  gate, whose table now shows the pass/fail verdict + undercount. So certifying,
+  gating, and the catalog write-back all speak one contract. Tests in
+  `tests/test_certify_semantic_model.py`.
 
 ### Changed
 - **FS out-of-core streaming: single `resolve_fs_block_source` knob + DuckDB
