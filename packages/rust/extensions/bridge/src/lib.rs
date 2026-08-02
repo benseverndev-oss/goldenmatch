@@ -17,9 +17,9 @@ static INIT_RESULT: OnceLock<Result<(), String>> = OnceLock::new();
 /// Returns Ok(()) if goldenmatch is importable, Err otherwise.
 pub fn init() -> Result<(), error::BridgeError> {
     let result = INIT_RESULT.get_or_init(|| {
-        pyo3::prepare_freethreaded_python();
+        pyo3::Python::initialize();
 
-        Python::with_gil(|py| match py.import("goldenmatch") {
+        Python::attach(|py| match py.import("goldenmatch") {
             Ok(gm) => {
                 match gm.getattr("__version__") {
                     Ok(ver) => {
@@ -55,7 +55,7 @@ mod tests {
         // that pyo3 links against. Skip gracefully if not available.
         match init() {
             Ok(()) => {
-                Python::with_gil(|py| {
+                Python::attach(|py| {
                     let gm = py.import("goldenmatch").unwrap();
                     let ver: String = gm.getattr("__version__").unwrap().extract().unwrap();
                     assert!(!ver.is_empty());
