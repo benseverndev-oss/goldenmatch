@@ -1797,6 +1797,7 @@
             "_concrete_dtype_spelling",
             "_cost_aware_blocking_enabled",
             "_dataset_is_person_shaped",
+            "_date_column_reliable_for_diff",
             "_degenerate_blocking_config",
             "_detect_source_partition",
             "_detect_standardization_config",

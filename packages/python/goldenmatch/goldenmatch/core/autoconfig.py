@@ -157,6 +157,12 @@ class ColumnProfile:
     null_rate: float = 0.0  # fraction of nulls (0-1)
     cardinality_ratio: float = 0.0  # unique values / total rows (0-1)
     avg_len: float = 0.0  # average string length
+    date_parse_rate: float | None = None
+    # For col_type=="date": fraction of the profiled non-null sample that parses
+    # as a well-formed date (the same parser `date_diff` uses). A per-column
+    # reliability signal for the FS domain-comparator decision -- see
+    # `build_probabilistic_matchkeys`. None for non-date columns or when the
+    # profile was built without value access (e.g. hand-built profiles in tests).
 
 
 @dataclass
@@ -583,6 +589,23 @@ def profile_columns(
     if llm_provider and profiles:
         profiles = _llm_classify_columns(profiles, llm_provider)
 
+    # Per-column date reliability signal (both classify paths converge here, so
+    # the native path is covered too). For every `date` column, record the
+    # fraction of its profiled sample that parses as a well-formed date -- the
+    # FS domain-comparator decision reads this to keep magnitude-aware `date_diff`
+    # off messy/low-parse date columns (where it over-penalizes true matches with
+    # noisy dates) while using it on clean ones. Computed over the SAME ~1000-row
+    # sample `values` (not the 5 stored `sample_values`, which are too few).
+    _date_profiles = [p for p in profiles if p.col_type == "date"]
+    if _date_profiles:
+        from goldenmatch.core.scorer import _parse_date_ordinal  # noqa: PLC0415
+        _values_by_name = {cs[0]: cs[2] for cs in col_stats}
+        for p in _date_profiles:
+            vals = _values_by_name.get(p.name) or []
+            if vals:
+                parsed = sum(1 for v in vals if _parse_date_ordinal(v) is not None)
+                p.date_parse_rate = parsed / len(vals)
+
     return profiles
 
 
@@ -782,6 +805,35 @@ def _fs_domain_comparators_enabled() -> bool:
     return os.environ.get("GOLDENMATCH_FS_DOMAIN_COMPARATORS", "0").lower() in (
         "1", "true", "on", "yes", "enabled",
     )
+
+
+# FS domain-comparator per-column DECISION (spec 2026-08-01-fs-lever-enablement,
+# Phase 2). The global GOLDENMATCH_FS_DOMAIN_COMPARATORS flip is a net LOSS on
+# the panel because magnitude-aware `date_diff` HELPS clean date columns but
+# HURTS messy ones -- a true match whose recorded dates differ by months/years
+# (noisy/historical DOBs) drops from a near-match (levenshtein ~0.90) to a weak
+# partial (date_diff 0.60), costing recall. So `date_diff` is emitted per-column
+# only when the date column is RELIABLE, keeping `levenshtein` when it is not.
+# The reliability proxy is the column's date PARSE RATE (fraction of the profiled
+# sample that parses as a well-formed date): a low parse rate marks a messy date
+# column where magnitude banding over-penalizes. Calibrated against the corpora
+# (like `_pick_missing_semantics`), NOT derived: measured ab_lever ΔF1 for
+# date_diff is febrl3 +0.0014 (parse 0.993) / ncvr flat (1.000) vs historical_50k
+# -0.0130 (parse 0.926); 0.95 sits inside the separating band so the messy
+# genealogy DOB keeps levenshtein while the clean columns get date_diff.
+_DATE_DIFF_MIN_PARSE_RATE = 0.95
+
+
+def _date_column_reliable_for_diff(p: ColumnProfile) -> bool:
+    """Should a `date` column use the magnitude-aware `date_diff` scorer?
+
+    True when the column's `date_parse_rate` clears `_DATE_DIFF_MIN_PARSE_RATE`.
+    A missing signal (``None`` -- e.g. a hand-built profile in tests, or a
+    profile constructed without value access) is treated as reliable so the
+    flag-on behavior is unchanged for callers that don't carry the rate; the
+    real auto-config path always populates it for date columns.
+    """
+    return p.date_parse_rate is None or p.date_parse_rate >= _DATE_DIFF_MIN_PARSE_RATE
 
 
 # Discrete-categorical col_types where a match on a COMMON value ("Smith", a
@@ -5146,7 +5198,11 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
         if v2 and p.col_type == "date":
             if p.cardinality_ratio >= 1.0:
                 continue  # per-record timestamp surrogate: no shared-identity signal
-            _date_dc = _fs_domain_comparators_enabled()
+            # Phase 2 per-column decision: date_diff only on a RELIABLE date
+            # column (high parse rate); a messy one keeps levenshtein even under
+            # the flag, so the flag-on path is a net win instead of the global
+            # flip's historical_50k regression. See `_date_column_reliable_for_diff`.
+            _date_dc = _fs_domain_comparators_enabled() and _date_column_reliable_for_diff(p)
             fields.append(MatchkeyField(
                 field=p.name,
                 scorer="date_diff" if _date_dc else "levenshtein",
