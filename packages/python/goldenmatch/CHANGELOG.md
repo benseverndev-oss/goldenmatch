@@ -203,6 +203,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   single-sourced with the TS port via a shared fixture
   (`emit_undercount_ci_fixture.py`, drift-guarded by `ts_parity_freshness`).
   Tests: `tests/test_undercount_ci.py`.
+- **End-to-end demo + docs for the semantic-layer key-integrity certifier.** A
+  runnable example (`examples/semantic_key_integrity.py`) plants two defects an
+  `orders` semantic model can carry — a duplicated declared key (structural
+  fan-out that double-counts `SUM(revenue)`) and two distinct keys that are really
+  one customer (resolution-tier fragmentation / undercount) — then shows
+  `certify_key_integrity` quantifying both (measure fan-out, the 95% Wilson
+  undercount interval, and `safe_bound_conservative`) without mutating a metric,
+  and fixes it to a clean re-certification. New docs page
+  `docs-site/goldenmatch/semantic-key-integrity.mdx` (wired into the Features nav)
+  documents the structural + resolution tiers, the certificate fields, and the
+  one-kernel cross-surface story (Python / TS / DuckDB / Postgres / dbt). Docs +
+  example only — no code change.
 
 ### Changed
 - **FS out-of-core streaming: single `resolve_fs_block_source` knob + DuckDB

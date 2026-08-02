@@ -73,6 +73,7 @@
                   "goldenmatch/llm",
                   "goldenmatch/learning-memory",
                   "goldenmatch/identity-graph",
+                  "goldenmatch/semantic-key-integrity",
                   "goldenmatch/domain-packs",
                   "goldenmatch/reference-data",
                   "goldenmatch/streaming",
