@@ -13,6 +13,9 @@ on:
   schedule:
     # Weekly fresh sweep on Sunday early-morning UTC.
     - cron: "23 7 * * 0"
+  # On-demand run (e.g. to refresh the archived SARIF artifact below without
+  # waiting for a push or the weekly sweep).
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -66,3 +69,20 @@ jobs:
         uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e  # v3
         with:
           category: "/language:${{ matrix.language }}"
+          # Also write the SARIF locally so it can be archived as a build
+          # artifact (below). This lets maintainers/automation pull the exact
+          # findings via the Actions API without needing code-scanning:read;
+          # the analyze action still uploads to the Security tab (upload
+          # defaults to true).
+          output: sarif-results
+
+      - name: Archive SARIF as a build artifact
+        # Always upload — even when the scan surfaces findings — so the
+        # artifact is available for offline triage regardless of outcome.
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: codeql-sarif-${{ matrix.language }}
+          path: sarif-results/*.sarif
+          retention-days: 14
+          if-no-files-found: warn
