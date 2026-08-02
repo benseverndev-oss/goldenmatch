@@ -1431,6 +1431,7 @@ def bucket_frame_to_shards(
     match ``score_buckets``' internal bucketing — it only needs each block wholly in
     one bucket. Returns ``{pass_index: [shard_path, …]}``. Resident working set is
     one slice + the open writers' buffers, never the full pass partition."""
+    import contextlib as _contextlib
     import os as _os
     import zlib as _zlib
 
@@ -1441,13 +1442,17 @@ def bucket_frame_to_shards(
     from goldenmatch.core.frame import to_frame as _tf
 
     passes = _bucketed_passes(blocking_config)
-    writers: dict[tuple[int, int], Any] = {}
-    files: dict[tuple[int, int], Any] = {}
     paths: dict[int, dict[int, str]] = {i: {} for i in range(len(passes))}
 
+    # ExitStack guarantees every opened shard file + its Arrow IPC writer is closed
+    # even on a mid-loop error, and in LIFO order: the writer's close() (registered
+    # as a callback AFTER enter_context'ing the file) runs BEFORE the file closes,
+    # so each IPC footer flushes before its handle is released. The stack exits
+    # before the return, so all shards are complete when the caller reads them.
+    writers: dict[tuple[int, int], Any] = {}
     n = base.num_rows
     off = 0
-    try:
+    with _contextlib.ExitStack() as stack:
         while off < n:
             sl = base.slice(off, batch_rows)
             off += sl.num_rows
@@ -1476,27 +1481,13 @@ def bucket_frame_to_shards(
                     wk = (pi, b)
                     if wk not in writers:
                         p = _os.path.join(shard_root, f"pass{pi}_bkt{b}.arrow")
-                        files[wk] = open(p, "wb")
-                        writers[wk] = _pa.ipc.RecordBatchFileWriter(
-                            files[wk], sub.schema
-                        )
+                        fh = stack.enter_context(open(p, "wb"))
+                        w = _pa.ipc.RecordBatchFileWriter(fh, sub.schema)
+                        stack.callback(w.close)
+                        writers[wk] = w
                         paths[pi][b] = p
                     writers[wk].write_table(sub)
             del sl
-    finally:
-        # Close writers first (flushes each Arrow IPC footer), then the raw files;
-        # guard each close so one failure can't leak the other handles (e.g. on a
-        # mid-loop error).
-        for w in writers.values():
-            try:
-                w.close()
-            except Exception:  # noqa: BLE001 - best-effort resource cleanup
-                pass
-        for f in files.values():
-            try:
-                f.close()
-            except Exception:  # noqa: BLE001 - best-effort resource cleanup
-                pass
     return {pi: [paths[pi][b] for b in sorted(paths[pi])] for pi in paths}
 
 
