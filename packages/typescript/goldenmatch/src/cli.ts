@@ -27,6 +27,7 @@ import { analyzeBlocking } from "./core/block-analyzer.js";
 import { autoConfigure } from "./core/autoconfig.js";
 import {
   certifySemanticModel,
+  certifySemanticModelResolved,
   emitSemanticModelFromStore,
   type SemanticDialect,
 } from "./core/semantic/index.js";
@@ -802,78 +803,106 @@ program
     "-d, --data <spec...>",
     "Frame for a model/dataset/cube as name=path (repeatable), e.g. -d orders=orders.csv",
   )
+  .option(
+    "--resolve",
+    "Also run entity resolution to measure entity fragmentation / undercount (the resolution tier)",
+  )
+  .option(
+    "--no-metric-aware",
+    "With --resolve, resolve on every non-key, non-measure column instead of the model's declared dimensions",
+  )
   .option("--fail-untrustworthy", "Exit non-zero if any declared key is not unique at grain (CI gate)")
-  .action((model: string, opts: { data?: string[]; failUntrustworthy?: boolean }) => {
-    const specs = opts.data ?? [];
-    if (specs.length === 0) {
-      process.stderr.write("--data is required (name=path, repeatable), e.g. -d orders=orders.csv\n");
-      process.exit(2);
-    }
-    const frames: Record<string, Record<string, unknown[]>> = Object.create(null);
-    for (const spec of specs) {
-      const eq = spec.indexOf("=");
-      if (eq === -1) {
-        process.stderr.write(`--data must be name=path, got ${JSON.stringify(spec)}\n`);
+  .action(
+    async (
+      model: string,
+      opts: { data?: string[]; resolve?: boolean; metricAware?: boolean; failUntrustworthy?: boolean },
+    ) => {
+      const specs = opts.data ?? [];
+      if (specs.length === 0) {
+        process.stderr.write("--data is required (name=path, repeatable), e.g. -d orders=orders.csv\n");
         process.exit(2);
       }
-      const name = spec.slice(0, eq).trim();
-      const path = spec.slice(eq + 1).trim();
-      frames[name] = rowsToColumns(readFile(path));
-    }
-    let doc: unknown;
-    try {
-      doc = parseYamlDoc(readFileSync(model, "utf-8"));
-    } catch (err) {
-      process.stderr.write(`could not read/parse ${model}: ${err instanceof Error ? err.message : String(err)}\n`);
-      process.exit(2);
-    }
-    if (typeof doc !== "object" || doc === null || Array.isArray(doc)) {
-      process.stderr.write(`semantic-model file did not parse to a mapping: ${model}\n`);
-      process.exit(2);
-    }
-    let report;
-    try {
-      report = certifySemanticModel(doc as Record<string, unknown>, frames);
-    } catch (err) {
-      // e.g. dialect detection failed (no cubes/semantic_models/semantic_model key).
-      process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
-      process.exit(2);
-    }
-    const nUntrust = report.untrustworthy.length;
-    process.stdout.write(
-      `Dialect: ${report.dialect}   certified: ${report.nCertified}   untrustworthy: ${nUntrust}\n`,
-    );
-    if (report.skipped.length) {
-      process.stdout.write(`skipped (no frame supplied): ${report.skipped.join(", ")}\n`);
-    }
-    if (report.note) process.stdout.write(`${report.note}\n`);
+      const frames: Record<string, Record<string, unknown[]>> = Object.create(null);
+      for (const spec of specs) {
+        const eq = spec.indexOf("=");
+        if (eq === -1) {
+          process.stderr.write(`--data must be name=path, got ${JSON.stringify(spec)}\n`);
+          process.exit(2);
+        }
+        const name = spec.slice(0, eq).trim();
+        const path = spec.slice(eq + 1).trim();
+        frames[name] = rowsToColumns(readFile(path));
+      }
+      let doc: unknown;
+      try {
+        doc = parseYamlDoc(readFileSync(model, "utf-8"));
+      } catch (err) {
+        process.stderr.write(`could not read/parse ${model}: ${err instanceof Error ? err.message : String(err)}\n`);
+        process.exit(2);
+      }
+      if (typeof doc !== "object" || doc === null || Array.isArray(doc)) {
+        process.stderr.write(`semantic-model file did not parse to a mapping: ${model}\n`);
+        process.exit(2);
+      }
+      let report;
+      try {
+        // commander maps --no-metric-aware to opts.metricAware === false; default (flag
+        // absent) leaves it undefined, so metric-aware is on by default when resolving.
+        report =
+          opts.resolve === true
+            ? await certifySemanticModelResolved(doc as Record<string, unknown>, frames, {
+                metricAware: opts.metricAware !== false,
+              })
+            : certifySemanticModel(doc as Record<string, unknown>, frames);
+      } catch (err) {
+        // e.g. dialect detection failed (no cubes/semantic_models/semantic_model key).
+        process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+        process.exit(2);
+      }
+      const nUntrust = report.untrustworthy.length;
+      process.stdout.write(
+        `Dialect: ${report.dialect}   certified: ${report.nCertified}   untrustworthy: ${nUntrust}\n`,
+      );
+      if (report.skipped.length) {
+        process.stdout.write(`skipped (no frame supplied): ${report.skipped.join(", ")}\n`);
+      }
+      if (report.note) process.stdout.write(`${report.note}\n`);
 
-    if (report.entries.length) {
-      const rows = report.entries.map((e) => ({
-        target: e.target,
-        key: e.key.join(", "),
-        unique: e.certificate.isUniqueAtGrain ? "yes" : "NO",
-        fanOut: fmtG(e.certificate.maxFanOut),
-        context: e.context,
-      }));
-      const headers = { target: "target", key: "key", unique: "unique@grain", fanOut: "max_fan_out", context: "context" };
-      const w = {
-        target: Math.max(headers.target.length, ...rows.map((r) => r.target.length)),
-        key: Math.max(headers.key.length, ...rows.map((r) => r.key.length)),
-        unique: Math.max(headers.unique.length, ...rows.map((r) => r.unique.length)),
-        fanOut: Math.max(headers.fanOut.length, ...rows.map((r) => r.fanOut.length)),
-      };
-      const line = (t: string, k: string, u: string, f: string, c: string): string =>
-        `${t.padEnd(w.target)}  ${k.padEnd(w.key)}  ${u.padEnd(w.unique)}  ${f.padStart(w.fanOut)}  ${c}\n`;
-      process.stdout.write(line(headers.target, headers.key, headers.unique, headers.fanOut, headers.context));
-      for (const r of rows) process.stdout.write(line(r.target, r.key, r.unique, r.fanOut, r.context));
-    }
+      if (report.entries.length) {
+        const rows = report.entries.map((e) => ({
+          target: e.target,
+          key: e.key.join(", "),
+          unique: e.certificate.isUniqueAtGrain ? "yes" : "NO",
+          fanOut: fmtG(e.certificate.maxFanOut),
+          context: e.context,
+        }));
+        const headers = { target: "target", key: "key", unique: "unique@grain", fanOut: "max_fan_out", context: "context" };
+        const w = {
+          target: Math.max(headers.target.length, ...rows.map((r) => r.target.length)),
+          key: Math.max(headers.key.length, ...rows.map((r) => r.key.length)),
+          unique: Math.max(headers.unique.length, ...rows.map((r) => r.unique.length)),
+          fanOut: Math.max(headers.fanOut.length, ...rows.map((r) => r.fanOut.length)),
+        };
+        const line = (t: string, k: string, u: string, f: string, c: string): string =>
+          `${t.padEnd(w.target)}  ${k.padEnd(w.key)}  ${u.padEnd(w.unique)}  ${f.padStart(w.fanOut)}  ${c}\n`;
+        process.stdout.write(line(headers.target, headers.key, headers.unique, headers.fanOut, headers.context));
+        for (const r of rows) process.stdout.write(line(r.target, r.key, r.unique, r.fanOut, r.context));
 
-    if (opts.failUntrustworthy && nUntrust > 0) {
-      process.stderr.write(`${nUntrust} declared key(s) are not unique at grain.\n`);
-      process.exit(1);
-    }
-  });
+        // With --resolve, surface each key's resolution note (fragmentation /
+        // undercount) below the table — that's where the ER verdict lives.
+        if (opts.resolve === true) {
+          for (const e of report.entries) {
+            if (e.certificate.note) process.stdout.write(`  ${e.target}: ${e.certificate.note}\n`);
+          }
+        }
+      }
+
+      if (opts.failUntrustworthy && nUntrust > 0) {
+        process.stderr.write(`${nUntrust} declared key(s) are not unique at grain.\n`);
+        process.exit(1);
+      }
+    },
+  );
 
 // ---------- identity ----------
 // Mirrors `goldenmatch identity ...` in Python (cli/identity.py). Wraps the

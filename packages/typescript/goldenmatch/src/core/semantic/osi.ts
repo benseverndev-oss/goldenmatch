@@ -18,6 +18,8 @@ import type { CubeKeyIntegrityCertificateLike } from "./cube.js";
 import { type LoadedDoc, asList, asStr, isObj } from "./parseUtil.js";
 import { certifyKeyIntegrity, resolveKeyIntegrity, type KeyIntegrityCertificate } from "./keyIntegrity.js";
 import type { SemanticFrames } from "./frame.js";
+import { metricAwareAttributes, frameColumns } from "./blocking.js";
+import type { SemanticFieldRoles } from "./blocking.js";
 
 export const OSI_VERSION = "0.2.0.dev0";
 export const DEFAULT_DIALECT = "ANSI_SQL";
@@ -313,12 +315,15 @@ export function certifyOsiRelationships(doc: LoadedDoc, frames: SemanticFrames):
  * Async resolve-tier counterpart of {@link certifyOsiRelationships}: certifies
  * each relationship's one-side key AND runs entity resolution on that dataset's
  * frame to measure fragmentation / undercount. Mirrors Python
- * `certify_osi_relationships(..., resolve=True)` — blind attribute selection (all
- * columns except the key). Fail-open per key.
+ * `certify_osi_relationships(..., resolve=True, roles=...)`. Pass `roles` (from
+ * `semanticFieldRoles`) to make the ER metric-aware — it resolves on the model's
+ * declared dimensions and excludes measures; `null` (the default) is blind
+ * selection (all columns except the key). Fail-open per key.
  */
 export async function certifyOsiRelationshipsResolved(
   doc: LoadedDoc,
   frames: SemanticFrames,
+  roles: SemanticFieldRoles | null = null,
 ): Promise<CertifiedRelationship[]> {
   const models = parseOsiModels(doc);
   if (!models.length) return [];
@@ -327,7 +332,11 @@ export async function certifyOsiRelationshipsResolved(
   for (const rel of model.relationships) {
     const df = frames[rel.toDataset];
     if (df === undefined || rel.toColumns.length === 0) continue;
-    const cert = await resolveKeyIntegrity(df, { key: rel.toColumns });
+    const attributes = roles !== null ? metricAwareAttributes(roles, frameColumns(df)) : undefined;
+    const cert = await resolveKeyIntegrity(df, {
+      key: rel.toColumns,
+      ...(attributes !== undefined ? { attributes } : {}),
+    });
     out.push({ relationship: rel.name, dataset: rel.toDataset, key: [...rel.toColumns], certificate: cert });
   }
   return out;

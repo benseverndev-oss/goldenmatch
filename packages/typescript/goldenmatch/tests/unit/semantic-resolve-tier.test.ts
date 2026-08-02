@@ -125,7 +125,9 @@ describe("certifySemanticModelResolved — resolve tier across a semantic model"
           name: "customers",
           entities: [{ name: "customer", type: "primary", expr: "customer_id" }],
           measures: [{ name: "revenue" }],
-          dimensions: [{ name: "created", type: "time" }],
+          // Declare the identity-bearing attributes as dimensions so the (default)
+          // metric-aware ER resolves on name/email, not the differing `created`.
+          dimensions: [{ name: "name" }, { name: "email" }, { name: "created", type: "time" }],
         },
       ],
     };
