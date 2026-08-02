@@ -187,6 +187,25 @@ demands it.
 - **3c** — fold the FS loop into the controller's `RunHistory` / commit
   machinery so FS and weighted share one iteration surface (the "one iteration
   surface" unification; largest, last).
+  - **REFRAMED + delivered as OBSERVABILITY (2026-08-02).** The literal framing is
+    a **conceptual mismatch**: `auto_configure_probabilistic_df` is *non-iterative
+    by design* (it does NOT run `AutoConfigController`; 3a proved the FS config is
+    already good), and the refit is a *scoring-time* threshold adjustment in
+    `pipeline._maybe_refit_link_threshold`, not a config iteration — whereas
+    `RunHistory` is a config-iteration audit trail (propose → profile → refine →
+    commit). Forcing the refit into `RunHistory` would mean either re-architecting
+    FS to iterate configs (contradicts the deliberate non-iterated design) or
+    shoehorning a scoring-time decision into a config-time structure — a refactor
+    with **no F1 delta and negative structural value**. The genuine intent behind
+    "one surface" is **auditability**: the refit silently moved the link cutoff
+    (0.50→0.70) on an opt-in path with no record. Delivered by making the decision
+    OBSERVABLE on the SAME logging surface the controller uses for its commit
+    decision — `fs_refit_link_threshold` now logs INFO on commit (`0.50 -> 0.70`,
+    valley candidate, max cluster `N -> M`, over-merge reduced) and DEBUG on
+    decline/no-op. Return behavior byte-identical (log-only); the FS refit is the
+    non-iterated path's analogue of a `RunHistory` decision, now on one surface.
+    Tests: `TestRefitDecisionLogged`. The deeper `RunHistory` merge is DECLINED as
+    a mismatch, not deferred.
 
 ## Risks / non-goals
 

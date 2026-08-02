@@ -2665,11 +2665,30 @@ def fs_refit_link_threshold(id_a, id_b, score, default_link: float) -> float:
     only -- scores are not recomputed."""
     candidate = fs_refit_threshold(np.asarray(score, dtype=np.float64), default_link)
     if candidate <= default_link:
+        # No valley above the default -> the loop is a no-op (the common case on
+        # 0.50-optimal data). DEBUG so an opt-in run can confirm it engaged.
+        logger.debug(
+            "FS link-threshold refit: no distributional valley above %.4f -> keeping %.4f",
+            default_link, default_link,
+        )
         return default_link
-    if _max_cluster_size(id_a, id_b, score, candidate) < _max_cluster_size(
-        id_a, id_b, score, default_link
-    ):
+    max_default = _max_cluster_size(id_a, id_b, score, default_link)
+    max_candidate = _max_cluster_size(id_a, id_b, score, candidate)
+    if max_candidate < max_default:
+        # Committed: the same observability discipline the controller uses for its
+        # weighted-path commit decision, so the FS refit is auditable on one surface
+        # (this is the non-iterated FS path's analogue of a RunHistory decision).
+        logger.info(
+            "FS link-threshold refit: %.4f -> %.4f (valley candidate; max cluster "
+            "%d -> %d, over-merge reduced)",
+            default_link, candidate, max_default, max_candidate,
+        )
         return candidate
+    logger.debug(
+        "FS link-threshold refit: declined candidate %.4f (max cluster %d -> %d, no "
+        "over-merge reduction) -> keeping %.4f",
+        candidate, max_default, max_candidate, default_link,
+    )
     return default_link
 
 

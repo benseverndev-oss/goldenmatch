@@ -216,3 +216,53 @@ class TestMaybeRefitAcrossRoutes:
         tiny = [(0, 1, 0.9), (2, 3, 0.6)]
         assert len(tiny) < _REFIT_MIN_PAIRS
         assert _maybe_refit_link_threshold(self._MK(), 0.50, pairs=tiny) == 0.50
+
+
+# ── Observability: the refit decision is auditable (Phase 3c) ──────────────────
+
+
+class TestRefitDecisionLogged:
+    """The FS path is non-iterated (no RunHistory), so the refit is its analogue
+    of a controller commit decision. It must be OBSERVABLE on the same logging
+    surface -- an opt-in behavior that silently moved the link cutoff is a
+    footgun. Return values are unchanged (log-only)."""
+
+    def _over_merge(self):
+        pairs = []
+        for i in range(15):
+            for j in range(i + 1, 15):
+                pairs.append((i, j, 0.55))
+        for k in range(150):
+            a = 1000 + 2 * k
+            pairs.append((a, a + 1, 0.92))
+        return [p[0] for p in pairs], [p[1] for p in pairs], [p[2] for p in pairs]
+
+    def _no_over_merge(self):
+        pairs = []
+        for k in range(150):
+            a = 2 * k
+            pairs.append((a, a + 1, 0.62))
+        for k in range(150):
+            a = 2000 + 2 * k
+            pairs.append((a, a + 1, 0.95))
+        return [p[0] for p in pairs], [p[1] for p in pairs], [p[2] for p in pairs]
+
+    def test_commit_logs_info_with_before_after(self, caplog):
+        ia, ib, sc = self._over_merge()
+        with caplog.at_level("INFO", logger="goldenmatch.core.probabilistic"):
+            t = fs_refit_link_threshold(ia, ib, sc, default_link=0.50)
+        assert t > 0.50  # return unchanged by the logging
+        msgs = [r.getMessage() for r in caplog.records]
+        assert any("FS link-threshold refit: 0.5000 ->" in m and "over-merge reduced" in m
+                   for m in msgs), msgs
+
+    def test_decline_logs_debug_not_info(self, caplog):
+        ia, ib, sc = self._no_over_merge()
+        with caplog.at_level("DEBUG", logger="goldenmatch.core.probabilistic"):
+            t = fs_refit_link_threshold(ia, ib, sc, default_link=0.50)
+        assert t == 0.50
+        # No INFO commit line; a DEBUG line explains the decline.
+        infos = [r.getMessage() for r in caplog.records if r.levelname == "INFO"]
+        assert not any("over-merge reduced" in m for m in infos)
+        debugs = [r.getMessage() for r in caplog.records if r.levelname == "DEBUG"]
+        assert any("refit" in m for m in debugs), debugs
