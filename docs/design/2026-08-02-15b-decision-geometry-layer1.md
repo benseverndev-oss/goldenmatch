@@ -303,10 +303,50 @@ Two readings, and the distinction is the whole point:
 **This is a LOWER bound.** The logit lens reuses the *untrained* final RMSNorm+head on
 mid-layer residuals (a scale/basis mismatch — which is why L≤15 read degenerate even
 though the linear *probe* decodes the decision there from L1). A **truncate-and-adapt**
-run (cut at K, fine-tune a fresh readout) would confirm and very likely *extend* the
-strippable depth — ER F1 is arguably already present by L16 (0.93). That is the next
-step to turn this into a shipped smaller/faster ER head.
+run (cut at K, train a fresh readout) confirms and extends it — below.
 (`layer_early_exit.json` on the volume.)
+
+### Truncate-and-adapt: with a trained readout, in-distribution ER needs ~8 layers
+
+Truncate at K (keep layers 0..K-1) and train a **fresh linear readout** on the layer-K
+decision-token residual (frozen backbone; record-disjoint train/test by cluster parity
+so the head can't memorize). This replaces the untrained logit-lens head with a fair
+adapted one. 1200 train / 926 test pairs, historical_50k:
+
+| Truncate at L | F1 (trained readout) |
+|---|---|
+| 8 | 0.986 |
+| 12 | 0.986 |
+| 16 | 0.993 |
+| 21 | 0.992 |
+| 28 (full backbone) | 0.992 |
+
+**k\* = L8 → strip 20/28 layers (~71% of block params) with in-distribution ER F1
+preserved.** The ER decision is *linearly present in the residual by layer 8*; the
+logit lens needed L21 only because it reused the untrained final head. The ~46-layer
+gap between the two numbers (L21 vs L8) is exactly the work the late layers do that a
+fresh in-distribution head makes unnecessary.
+
+**Two caveats that bound the claim — this is where it would be easy to overclaim:**
+1. **The readout is SUPERVISED on in-distribution gold**, so this measures *information
+   presence* (is the label linearly decodable at layer K?), not the model's zero-shot
+   verdict. That's why F1 ≈ 0.99 here far exceeds the model's own generative F1 (0.886)
+   — the head is fit to *this* distribution. It's the stage-1 linear probe (0.99 @ L14)
+   extended down to L8.
+2. **In-distribution only.** Head trained and tested on historical_50k person records.
+   This does NOT test the 1.5B's actual value proposition — zero-shot *cross-domain*
+   generalization (held-out walmart 0.795). The late layers may be doing the
+   cross-domain abstraction that is invisible on a single in-distribution task.
+
+So the defensible conclusions:
+- **Fixed-domain deployment** (you have labels for the entity type you resolve): ship a
+  truncated ~8–16-layer backbone + a trained linear match head — a genuinely
+  smaller/faster ER scorer at in-distribution F1 ≥ the full model. Real and shippable.
+- **Open question (the decisive next test):** does a truncated backbone keep *zero-shot
+  cross-domain* F1? Truncate + LoRA-SFT on the training mix (generative objective), then
+  eval held-out walmart against the full model's 0.795. If it holds, the strip is
+  general; if it collapses, the late layers earn their keep on generalization — either
+  way a real result. (`truncate_adapt.json` on the volume.)
 
 ## Reproduce
 
