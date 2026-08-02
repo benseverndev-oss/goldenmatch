@@ -73,6 +73,9 @@ $PY "$GM/scripts/emit_semantic_roles_fixtures.py"
 echo "== goldenmatch: ER-resolution fragmentation reduction (key_integrity.py) =="
 $PY "$GM/scripts/emit_fragmentation_reduction_fixture.py"
 
+echo "== goldenmatch: resolution-tier undercount Wilson CI (key_integrity.py) =="
+$PY "$GM/scripts/emit_undercount_ci_fixture.py"
+
 echo "== goldenmatch: v2 (planner / EM / domain / tuners / blocker / clustering / golden) =="
 $PY "$GM/scripts/emit_v2_parity_fixtures.py" --out "$PARITY/v2-fixtures.json"
 

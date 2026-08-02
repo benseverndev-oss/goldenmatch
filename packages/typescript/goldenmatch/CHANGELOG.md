@@ -236,6 +236,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   kernelizing it would pay marshaling on a small call (the goldenanalysis
   quality_rollup / regressions precedent). Test:
   `tests/parity/fragmentation-reduction.parity.test.ts`.
+- **Resolution-tier undercount confidence interval.** `KeyIntegrityCertificate`
+  gains `undercountCiLow` / `undercountCiHigh` (a 95% Wilson score interval on the
+  fragmentation rate, computed by the new exported `wilsonInterval(k, n)`) and a
+  `safeBoundConservative` accessor that discounts the CI upper bound; `safeBound`
+  is unchanged. Bounds the sampling uncertainty in `undercountEstimate` (few
+  resolved entities → wide interval). Bit-identical to the Python port (same
+  z-literal + op order), locked by the shared fixture
+  `tests/parity/fixtures/key-integrity/undercount_ci_cases.json`. Test:
+  `tests/parity/undercount-ci.parity.test.ts`.
 
 ## [1.26.0] - 2026-07-27
 

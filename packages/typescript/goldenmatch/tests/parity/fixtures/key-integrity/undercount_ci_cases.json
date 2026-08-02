@@ -1,0 +1,105 @@
+{
+  "_comment": "Cross-language parity oracle for the resolution-tier undercount 95% Wilson score interval (bounds the SAMPLING uncertainty in fragmented/resolved). Generated from the Python reference goldenmatch.semantic.key_integrity._wilson_interval by scripts/emit_undercount_ci_fixture.py. Read DIRECTLY by both tests/test_undercount_ci.py and tests/parity/undercount-ci.parity.test.ts -- no copy. ci_low/ci_high are null when resolved == 0 (no observations to bound).",
+  "cases": [
+    {
+      "name": "no_resolved",
+      "fragmented": 0,
+      "resolved": 0,
+      "expected": {
+        "undercount_estimate": 0.0,
+        "ci_low": null,
+        "ci_high": null
+      }
+    },
+    {
+      "name": "half_of_two",
+      "fragmented": 1,
+      "resolved": 2,
+      "expected": {
+        "undercount_estimate": 0.5,
+        "ci_low": 0.09453120573423074,
+        "ci_high": 0.9054687942657693
+      }
+    },
+    {
+      "name": "half_of_2000",
+      "fragmented": 1,
+      "resolved": 2000,
+      "expected": {
+        "undercount_estimate": 0.0005,
+        "ci_low": 8.826773070546787e-05,
+        "ci_high": 0.0028268625032662133
+      }
+    },
+    {
+      "name": "none_of_five",
+      "fragmented": 0,
+      "resolved": 5,
+      "expected": {
+        "undercount_estimate": 0.0,
+        "ci_low": 0.0,
+        "ci_high": 0.43448246478317476
+      }
+    },
+    {
+      "name": "all_of_five",
+      "fragmented": 5,
+      "resolved": 5,
+      "expected": {
+        "undercount_estimate": 1.0,
+        "ci_low": 0.5655175352168251,
+        "ci_high": 1.0
+      }
+    },
+    {
+      "name": "three_of_ten",
+      "fragmented": 3,
+      "resolved": 10,
+      "expected": {
+        "undercount_estimate": 0.3,
+        "ci_low": 0.10779126740630099,
+        "ci_high": 0.6032218525388546
+      }
+    },
+    {
+      "name": "half_of_hundred",
+      "fragmented": 50,
+      "resolved": 100,
+      "expected": {
+        "undercount_estimate": 0.5,
+        "ci_low": 0.4038315303659956,
+        "ci_high": 0.5961684696340044
+      }
+    },
+    {
+      "name": "none_of_one",
+      "fragmented": 0,
+      "resolved": 1,
+      "expected": {
+        "undercount_estimate": 0.0,
+        "ci_low": 0.0,
+        "ci_high": 0.7934506856227626
+      }
+    },
+    {
+      "name": "all_of_one",
+      "fragmented": 1,
+      "resolved": 1,
+      "expected": {
+        "undercount_estimate": 1.0,
+        "ci_low": 0.20654931437723745,
+        "ci_high": 1.0
+      }
+    },
+    {
+      "name": "seven_of_thirteen",
+      "fragmented": 7,
+      "resolved": 13,
+      "expected": {
+        "undercount_estimate": 0.5384615384615384,
+        "ci_low": 0.29143795714506004,
+        "ci_high": 0.7679393219046169
+      }
+    }
+  ]
+}

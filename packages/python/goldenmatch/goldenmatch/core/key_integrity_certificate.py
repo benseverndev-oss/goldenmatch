@@ -44,6 +44,13 @@ class KeyIntegrityCertificate:
     resolved_entities: int | None = None     # multi-member clusters found by dedupe
     fragmented_entities: int | None = None   # resolved entities spanning >1 declared key value
     undercount_estimate: float | None = None # fragmented_entities / resolved_entities
+    # 95% Wilson score interval on the fragmentation rate (= undercount), a
+    # binomial proportion over `resolved_entities` observations. Bounds the
+    # SAMPLING uncertainty in `undercount_estimate` (few resolved entities → wide
+    # interval); it does NOT bound whether ER itself clustered correctly. None
+    # when resolution wasn't run or found no multi-member clusters.
+    undercount_ci_low: float | None = None
+    undercount_ci_high: float | None = None
 
     estimable: bool = True
     note: str = ""
@@ -66,6 +73,18 @@ class KeyIntegrityCertificate:
         if self.undercount_estimate is None:
             return self.estimate
         return min(self.estimate, 1.0 - self.undercount_estimate)
+
+    @property
+    def safe_bound_conservative(self) -> float | None:
+        """Statistically-conservative trust floor: like `safe_bound` but discounts
+        the WORST plausible undercount at the 95% confidence upper bound
+        (`undercount_ci_high`) rather than the point estimate — so a fragmentation
+        rate measured from few resolved entities (wide interval) is penalized more
+        than one measured from many. Falls back to `safe_bound` when the interval
+        wasn't computed (resolution not run / no multi-member clusters)."""
+        if self.undercount_ci_high is None:
+            return self.safe_bound
+        return min(self.estimate, 1.0 - self.undercount_ci_high)
 
     def is_trustworthy(self, *, max_fan_out: float = 1.0, min_estimate: float = 1.0) -> bool:
         """Advisory pass/fail: the declared key is unique at grain, doesn't fan

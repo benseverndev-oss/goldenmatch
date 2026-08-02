@@ -7244,6 +7244,7 @@
             "_structural_native",
             "_structural_pyarrow",
             "_to_arrow",
+            "_wilson_interval",
             "certify_key_integrity",
             "certify_structural_json"
           ],
