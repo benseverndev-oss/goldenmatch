@@ -88,6 +88,139 @@ _out_vol = modal.Volume.from_name("er-matcher-out", create_if_missing=True)
 
 @app.function(
     image=_image,
+    gpu=GPU_FULL,
+    timeout=3 * 60 * 60,
+    volumes={"/out": _out_vol},
+    secrets=[modal.Secret.from_name("er-matcher-hf")],
+)
+def train_truncated_eval(k: int = 16, walmart: str = "walmart_amazon", limit: int = 0) -> None:
+    """TRUNCATE-AND-ADAPT (generative): take the BASE Qwen2.5-1.5B, keep only layers
+    0..k-1, LoRA-SFT it on the SAME corpus + recipe as the full model, then eval
+    IN-DISTRIBUTION (test.jsonl) + ZERO-SHOT CROSS-DOMAIN (held-out walmart). k=28
+    reproduces the full model as the control, so the F1 delta vs a truncated k
+    isolates the TRUNCATION effect (same base, data, recipe -- only depth differs).
+    Answers: is the ~70% strippable depth (found in-distribution) GENERAL, or do the
+    late layers do the cross-domain generalization?"""
+    import json
+    import sys
+    from pathlib import Path
+
+    import torch
+    from datasets import Dataset
+    from peft import LoraConfig
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from trl import SFTConfig, SFTTrainer
+
+    sys.path.insert(0, "/root")
+    sys.path.insert(0, "/root/er_matcher")
+    import eval as ev
+    from _train_runtime import measured_max_seq_len
+    from goldenmatch.core.er_matcher.prompt import build_chat
+    from sources.magellan import MagellanSource
+    from train import example_to_messages, load_config, read_jsonl, serialized_token_lengths
+
+    cfg = load_config(Path("/root/er_matcher/config.yaml"))
+    out_name = f"eval_trunc{k}.json"
+    print(f"[trunc-sft] base={cfg.base_model} truncate_to_k={k}", flush=True)
+
+    tok = AutoTokenizer.from_pretrained(cfg.base_model)
+    if tok.pad_token is None:
+        tok.pad_token = tok.eos_token
+    model = AutoModelForCausalLM.from_pretrained(
+        cfg.base_model, torch_dtype=torch.bfloat16, attn_implementation="flash_attention_2")
+    n_full = model.config.num_hidden_layers
+    if k < n_full:  # keep layers 0..k-1; readout (norm+lm_head) realigns via LoRA-SFT
+        model.model.layers = model.model.layers[:k]
+        model.config.num_hidden_layers = k
+    model = model.cuda()
+
+    train_rows = read_jsonl(Path("/root/data/er_matcher/train.jsonl"))
+    seq_len = measured_max_seq_len(
+        serialized_token_lengths(train_rows, lambda m: tok.apply_chat_template(m, tokenize=True)),
+        percentile=cfg.seq_len_percentile, cap=cfg.seq_len_cap, multiple_of=cfg.seq_len_multiple_of)
+
+    def to_ds(rows):
+        return Dataset.from_list([{"messages": example_to_messages(r, cfg)} for r in rows])
+
+    peft_cfg = LoraConfig(
+        r=cfg.lora_r, lora_alpha=cfg.lora_alpha, lora_dropout=cfg.lora_dropout,
+        target_modules=cfg.lora_target_modules, bias="none", task_type="CAUSAL_LM")
+    sft = SFTConfig(
+        output_dir=f"/out/model_trunc{k}", num_train_epochs=cfg.epochs,
+        per_device_train_batch_size=cfg.per_device_batch, gradient_accumulation_steps=cfg.grad_accum,
+        learning_rate=cfg.learning_rate, lr_scheduler_type=cfg.lr_scheduler,
+        warmup_ratio=cfg.warmup_ratio, weight_decay=cfg.weight_decay, bf16=cfg.bf16,
+        gradient_checkpointing=True, gradient_checkpointing_kwargs={"use_reentrant": False},
+        packing=cfg.packing, max_seq_length=seq_len, group_by_length=cfg.group_by_length,
+        dataloader_num_workers=2, logging_steps=20, save_strategy="no", eval_strategy="no",
+        report_to=[], seed=cfg.seed)
+    trainer = SFTTrainer(model=model, args=sft, train_dataset=to_ds(train_rows),
+                         tokenizer=tok, peft_config=peft_cfg)
+    trainer.train()
+    model = trainer.model.eval()
+
+    # ---- eval: teacher-force {"match": and read true/false next-token logits ----
+    tid = tok.encode("true", add_special_tokens=False)
+    fid = tok.encode("false", add_special_tokens=False)
+    assert len(tid) == 1 and len(fid) == 1, (tid, fid)
+    true_id, false_id = tid[0], fid[0]
+
+    def p_match(a: dict, b: dict) -> float:
+        text = tok.apply_chat_template(build_chat(a, b), tokenize=False,
+                                       add_generation_prompt=True) + '{"match":'
+        inp = tok(text, return_tensors="pt").to(model.device)
+        with torch.no_grad():
+            logits = model(**inp).logits[0, -1, :]
+        pair = torch.softmax(torch.stack([logits[true_id], logits[false_id]]), 0)
+        return float(pair[0])
+
+    def f1_on(rows) -> dict:
+        cache: dict = {}
+
+        def matcher(a, b):
+            key = (id(a), id(b))
+            if key not in cache:
+                pm = p_match(a, b)
+                cache[key] = {"match": pm > 0.5, "confidence": pm if pm > 0.5 else 1 - pm}
+            return cache[key]
+
+        return ev.run_eval({"test": rows}, matcher)["splits"]["test"]["overall"]
+
+    indist_rows = read_jsonl(Path("/root/data/er_matcher/test.jsonl"))
+    if limit:
+        indist_rows = indist_rows[:limit]
+    indist = f1_on(indist_rows)
+    print(f"[trunc-sft] k={k} IN-DIST test F1={indist['f1']:.4f}", flush=True)
+
+    import os
+    os.environ["GOLDENMATCH_ALLOW_FETCH"] = "1"
+    splits = MagellanSource(walmart, Path(f"/out/magellan/{walmart}")).splits()
+    _out_vol.commit()
+    wal_test = splits["test"][:limit] if limit else splits["test"]
+    wal = f1_on(wal_test)
+    print(f"[trunc-sft] k={k} ZERO-SHOT {walmart} F1={wal['f1']:.4f} (full-model ref 0.795)",
+          flush=True)
+
+    result = {"k": k, "n_layers_full": n_full, "in_dist_f1": indist["f1"],
+              "walmart_f1": wal["f1"], "walmart": walmart,
+              "in_dist_overall": indist, "walmart_overall": wal}
+    with open(f"/out/{out_name}", "w") as fh:
+        json.dump(result, fh, indent=2)
+    _out_vol.commit()
+    print(f"[done] k={k} -> /out/{out_name}: in-dist {indist['f1']:.3f}, "
+          f"walmart {wal['f1']:.3f}", flush=True)
+
+
+@app.local_entrypoint()
+def truncate_sft(ks: str = "28,16,12") -> None:
+    """Spawn a truncate-and-adapt run per K (detached, parallel). k=28 = control."""
+    handles = [train_truncated_eval.spawn(k=int(k)) for k in ks.split(",")]
+    print(f"spawned {len(handles)} truncate-SFT runs: {[h.object_id for h in handles]}")
+    print("poll: modal volume get er-matcher-out 'eval_trunc*.json' <dir>")
+
+
+@app.function(
+    image=_image,
     gpu=GPU_SMOKE,
     timeout=60 * 60,
     volumes={"/out": _out_vol},
