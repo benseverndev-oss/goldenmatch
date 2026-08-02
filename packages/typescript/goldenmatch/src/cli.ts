@@ -780,8 +780,9 @@ memoryCmd
 // its data frames via the structural key-integrity tier.
 
 /** Pivot parsed rows into the column-oriented frame the certifier reads
- * (`{ column: values[] }`); null-prototype so a `__proto__` column can't pollute. */
-function rowsToColumns(rows: Array<Record<string, unknown>>): Record<string, unknown[]> {
+ * (`{ column: values[] }`); null-prototype so a `__proto__` column can't pollute.
+ * Exported for `certify-keys` CLI-logic tests. */
+export function rowsToColumns(rows: Array<Record<string, unknown>>): Record<string, unknown[]> {
   const hasOwn = Object.prototype.hasOwnProperty;
   const names = new Set<string>();
   for (const r of rows) for (const k of Object.keys(r)) names.add(k);
@@ -791,7 +792,7 @@ function rowsToColumns(rows: Array<Record<string, unknown>>): Record<string, unk
 }
 
 /** Python `f"{x:g}"` — general float format, trailing zeros stripped. */
-function fmtG(n: number): string {
+export function fmtG(n: number): string {
   return Number(n.toPrecision(6)).toString();
 }
 
