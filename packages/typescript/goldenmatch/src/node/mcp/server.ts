@@ -36,7 +36,7 @@ import { dedupe, match, scoreStrings } from "../../core/api.js";
 import { readFile, writeCsv, writeJson } from "../connectors/file.js";
 import { loadConfigFile, parseYamlDoc } from "../config-file.js";
 import { autoMapColumns } from "../../core/schema-match.js";
-import { certifySemanticModel } from "../../core/semantic/index.js";
+import { certifySemanticModel, certifySemanticModelResolved } from "../../core/semantic/index.js";
 import { runPPRL, type PPRLConfig } from "../../core/pprl/protocol.js";
 import { diagnoseConfig } from "../../core/config-critique.js";
 import type { Row, MatchkeyField } from "../../core/types.js";
@@ -486,8 +486,10 @@ const EXISTING_TOOLS: readonly Tool[] = [
       "Cube, or OSI/Ossie -- auto-detected) against its data files. A metric is " +
       "only correct if the key its joins run on uniquely identifies one entity; " +
       "this reports, per key, whether it is unique at grain and how much a " +
-      "duplicated key would inflate a SUM/COUNT (fan-out). Structural tier only " +
-      "(the resolve=true entity-resolution fragmentation tier is Python-only). " +
+      "duplicated key would inflate a SUM/COUNT (fan-out). With resolve=true it " +
+      "ALSO runs entity resolution on each frame's attributes to measure whether " +
+      "distinct declared keys collapse onto one real entity (fragmentation -> " +
+      "undercount) -- the part a semantic layer can't do itself. " +
       "Returns {dialect, n_certified, all_trustworthy, skipped, keys:[...]}.",
     inputSchema: {
       type: "object",
@@ -501,6 +503,12 @@ const EXISTING_TOOLS: readonly Tool[] = [
           description:
             "Maps each model/dataset/cube name to a data file path (csv/tsv/json/jsonl). " +
             "A target with no supplied frame is skipped.",
+        },
+        resolve: {
+          type: "boolean",
+          description:
+            "Also run entity resolution to measure fragmentation / undercount " +
+            "(the resolution tier). Default false (structural tier only).",
         },
       },
       required: ["model_path", "frames"],
@@ -1292,9 +1300,12 @@ export async function handleTool(
             return { error: `could not read data for '${target}' (${p}): ${err instanceof Error ? err.message : String(err)}` };
           }
         }
+        const resolve = args["resolve"] === true;
         let report;
         try {
-          report = certifySemanticModel(doc as Record<string, unknown>, frames);
+          report = resolve
+            ? await certifySemanticModelResolved(doc as Record<string, unknown>, frames)
+            : certifySemanticModel(doc as Record<string, unknown>, frames);
         } catch (err) {
           return { error: err instanceof Error ? err.message : String(err) };
         }
@@ -1311,6 +1322,13 @@ export async function handleTool(
             max_fan_out: e.certificate.maxFanOut,
             estimate: e.certificate.estimate,
             measure_fan_out: e.certificate.measureFanOut,
+            // Resolution tier — null unless resolve=true measured it.
+            resolved_entities: e.certificate.resolvedEntities,
+            fragmented_entities: e.certificate.fragmentedEntities,
+            undercount_estimate: e.certificate.undercountEstimate,
+            safe_bound: e.certificate.safeBound,
+            estimable: e.certificate.estimable,
+            note: e.certificate.note,
           })),
         };
       }

@@ -16,7 +16,7 @@ import { pyRound6 } from "./crosswalk.js";
 import type { ResolvedCrosswalk } from "./crosswalk.js";
 import type { CubeKeyIntegrityCertificateLike } from "./cube.js";
 import { type LoadedDoc, asList, asStr, isObj } from "./parseUtil.js";
-import { certifyKeyIntegrity, type KeyIntegrityCertificate } from "./keyIntegrity.js";
+import { certifyKeyIntegrity, resolveKeyIntegrity, type KeyIntegrityCertificate } from "./keyIntegrity.js";
 import type { SemanticFrames } from "./frame.js";
 
 export const OSI_VERSION = "0.2.0.dev0";
@@ -292,8 +292,8 @@ export interface CertifiedRelationship {
  * For each relationship in an OSI model, certify the ONE-side key it joins on
  * (the referenced PK) — the identity the metrics depend on (structural tier).
  * Datasets without a supplied frame are skipped. Uses the FIRST model, mirroring
- * Python `certify_osi_relationships` (`resolve=false` structural path; the ER
- * fragmentation tier is Python-only).
+ * Python `certify_osi_relationships` (`resolve=false` structural path;
+ * {@link certifyOsiRelationshipsResolved} is the ER fragmentation tier).
  */
 export function certifyOsiRelationships(doc: LoadedDoc, frames: SemanticFrames): CertifiedRelationship[] {
   const models = parseOsiModels(doc);
@@ -304,6 +304,30 @@ export function certifyOsiRelationships(doc: LoadedDoc, frames: SemanticFrames):
     const df = frames[rel.toDataset];
     if (df === undefined || rel.toColumns.length === 0) continue;
     const cert = certifyKeyIntegrity(df, { key: rel.toColumns });
+    out.push({ relationship: rel.name, dataset: rel.toDataset, key: [...rel.toColumns], certificate: cert });
+  }
+  return out;
+}
+
+/**
+ * Async resolve-tier counterpart of {@link certifyOsiRelationships}: certifies
+ * each relationship's one-side key AND runs entity resolution on that dataset's
+ * frame to measure fragmentation / undercount. Mirrors Python
+ * `certify_osi_relationships(..., resolve=True)` — blind attribute selection (all
+ * columns except the key). Fail-open per key.
+ */
+export async function certifyOsiRelationshipsResolved(
+  doc: LoadedDoc,
+  frames: SemanticFrames,
+): Promise<CertifiedRelationship[]> {
+  const models = parseOsiModels(doc);
+  if (!models.length) return [];
+  const model = models[0]!;
+  const out: CertifiedRelationship[] = [];
+  for (const rel of model.relationships) {
+    const df = frames[rel.toDataset];
+    if (df === undefined || rel.toColumns.length === 0) continue;
+    const cert = await resolveKeyIntegrity(df, { key: rel.toColumns });
     out.push({ relationship: rel.name, dataset: rel.toDataset, key: [...rel.toColumns], certificate: cert });
   }
   return out;

@@ -16,10 +16,10 @@
 import { type LoadedDoc } from "./parseUtil.js";
 import type { SemanticFrames } from "./frame.js";
 import type { KeyIntegrityCertificate } from "./keyIntegrity.js";
-import { certifyKeyIntegrity } from "./keyIntegrity.js";
+import { certifyKeyIntegrity, resolveKeyIntegrity } from "./keyIntegrity.js";
 import { parseSemanticModels } from "./metricflow.js";
-import { certifyCubeJoins } from "./cube.js";
-import { certifyOsiRelationships } from "./osi.js";
+import { certifyCubeJoins, certifyCubeJoinsResolved } from "./cube.js";
+import { certifyOsiRelationships, certifyOsiRelationshipsResolved } from "./osi.js";
 import type { SemanticDialect } from "./catalog.js";
 
 /** One certified declared key: which target declared it, the key column(s), the
@@ -122,6 +122,65 @@ export function certifySemanticModel(doc: LoadedDoc, frames: SemanticFrames): Se
     }
   } else {
     for (const rep of certifyOsiRelationships(doc, frames)) {
+      entries.push({
+        target: rep.dataset,
+        key: [...rep.key],
+        certificate: rep.certificate,
+        context: `relationship ${rep.relationship}`,
+      });
+    }
+  }
+
+  return new SemanticCertification({ dialect, entries, skipped });
+}
+
+/**
+ * Async resolve-tier counterpart of {@link certifySemanticModel}: certifies every
+ * declared identity key AND runs entity resolution on each frame's attributes to
+ * measure fragmentation / undercount — the part a semantic layer can't do itself.
+ * Mirrors Python `certify_semantic_model(..., resolve=True)`.
+ *
+ * Attribute selection is BLIND (all non-key, non-measure columns for MetricFlow;
+ * all non-key columns for Cube/OSI, matching Python which passes no measures on
+ * those paths). The metric-aware role-driven selection (`metric_aware=True`, which
+ * resolves on the model's declared **dimensions** only) needs the
+ * `semantic/blocking.py` roles reader and is a follow-up — a model that declares
+ * no dimensions is byte-identical to blind selection, so this covers that case.
+ * Each key's resolution is fail-open; a failure leaves the resolve fields null.
+ */
+export async function certifySemanticModelResolved(
+  doc: LoadedDoc,
+  frames: SemanticFrames,
+): Promise<SemanticCertification> {
+  const dialect = detectDialect(doc);
+  const entries: KeyCertification[] = [];
+  const skipped: string[] = [];
+
+  if (dialect === "metricflow") {
+    for (const spec of parseSemanticModels(doc)) {
+      const df = frames[spec.model];
+      if (df === undefined) {
+        skipped.push(spec.model);
+        continue;
+      }
+      const cert = await resolveKeyIntegrity(df, {
+        key: spec.key,
+        measures: spec.measures,
+        ...(spec.grain !== null ? { grain: spec.grain } : {}),
+      });
+      entries.push({ target: spec.model, key: [...spec.key], certificate: cert, context: "" });
+    }
+  } else if (dialect === "cube") {
+    for (const rep of await certifyCubeJoinsResolved(doc, frames)) {
+      entries.push({
+        target: rep.toCube,
+        key: [...rep.key],
+        certificate: rep.certificate,
+        context: `join from ${rep.fromCube}`,
+      });
+    }
+  } else {
+    for (const rep of await certifyOsiRelationshipsResolved(doc, frames)) {
       entries.push({
         target: rep.dataset,
         key: [...rep.key],

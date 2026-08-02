@@ -11,6 +11,7 @@
 export {
   KeyIntegrityCertificate,
   certifyKeyIntegrity,
+  resolveKeyIntegrity,
   type KeyIntegrityCertificateInit,
 } from "./keyIntegrity.js";
 export { ServingJoinCertificate, certifyServingJoins } from "./serving.js";
@@ -34,6 +35,7 @@ export {
   emitCubeYaml,
   cubeJoinKeys,
   certifyCubeJoins,
+  certifyCubeJoinsResolved,
   type EmitCubeFromCrosswalkOptions,
   type CubeKeyIntegrityCertificateLike,
   type ParsedCube,
@@ -49,6 +51,7 @@ export {
   emitOsiYaml,
   osiJoinKeys,
   certifyOsiRelationships,
+  certifyOsiRelationshipsResolved,
   OSI_VERSION,
   DEFAULT_DIALECT,
   type EmitOsiFromCrosswalkOptions,
@@ -68,6 +71,7 @@ export {
 } from "./catalog.js";
 export {
   certifySemanticModel,
+  certifySemanticModelResolved,
   detectDialect,
   SemanticCertification,
   type KeyCertification,
