@@ -541,6 +541,7 @@ Every `GOLDENMATCH_*` variable the package reads (plus the one `GOLDEN_*` except
 | `GOLDENMATCH_DUCKDB_SCORE_DB` | unset | path | DuckDB pair-store spill path. |
 | `GOLDENMATCH_NATIVE_RAYON_MIN_PAIRS` | `20000000` | int | Native kernel sequential-vs-rayon threshold. |
 | `GOLDENMATCH_NATIVE_RAYON_MIN_BLOOM_ROWS` | `10000` | int | Native PPRL bloom-filter sequential-vs-rayon threshold (row count). `0` = always parallel; a very large value = always sequential. Sibling of `_RAYON_MIN_PAIRS` (the #688-style futex-park guard). |
+| `GOLDENMATCH_KEY_INTEGRITY_NATIVE` | off | `0`/`1` | Route the structural key-integrity certifier (`certify_key_integrity`) through the shared `key-integrity-core` Rust kernel instead of the pyarrow group_by. Opt-in and fail-open (a missing native symbol / non-JSON-safe group column falls back to pyarrow). The pyarrow path stays the default + reference — the kernel path exists for the single-Rust-owner guarantee (shared with the TS/WASM surface), not speed (it is JSON-marshaled). |
 | `GOLDENMATCH_CONFIG_LINT` | `warn` | `warn`/`strict`/`off` | Pre-flight config linter: warn-and-run, refuse on error, or skip. |
 | `GOLDENMATCH_THROUGHPUT` | `0` (off) | `0`/`1` | Enable the sketch-then-verify throughput tier. Equivalent to `dedupe_df(throughput=True)`. |
 | `GOLDENMATCH_THROUGHPUT_RECALL` | `0.95` | float | LSH recall target; tunes the band/row split. |

@@ -36,6 +36,10 @@ blake2 = "0.10"
 # Canonical record fingerprint canonicalizer (sha256 + JSON parsing live here),
 # shared pyo3-free with the pgrx `postgres` crate so both compute the same id.
 goldenmatch-fingerprint-core = { path = "../fingerprint-core" }
+# Structural key-integrity certifier (group-by uniqueness + fan-out); pyo3-free,
+# shared with the TS/WASM surface. Delegated to via key_integrity.rs (opt-in
+# single-source path; pyarrow group_by stays the Python default).
+goldenmatch-key-integrity-core = { path = "../key-integrity-core" }
 # Canonical string scorers (jaro_winkler / levenshtein / token_sort / score_one),
 # shared pyo3-free with the `datafusion-udf` FFI crate so both surfaces score
 # identically by construction. The #[pyfunction] scorers below are thin shims

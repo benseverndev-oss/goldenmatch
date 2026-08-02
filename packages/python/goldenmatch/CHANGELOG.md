@@ -147,6 +147,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   surface, mirroring the `customer_360` MCP tool and the `identity 360` CLI
   command. Query params `include_relationships` (default true) and
   `timeline_limit`; 404 when the entity does not exist.
+- **Structural key-integrity certifier can run through the shared
+  `key-integrity-core` Rust kernel (opt-in `GOLDENMATCH_KEY_INTEGRITY_NATIVE`).**
+  The group-by uniqueness + fan-out reduction in `certify_key_integrity` is now
+  single-sourced with the TS/WASM surface: the same `key-integrity-core` kernel
+  is reachable from Python via the native wheel's `certify_structural_json`
+  symbol. The pyarrow group_by stays the DEFAULT and the reference the
+  cross-surface golden is generated from (it is the right Arrow-at-bulk boundary;
+  the kernel path is JSON-marshaled, so this is for the single-Rust-owner
+  guarantee, not speed) — the kernel path is opt-in and fail-open (any missing
+  symbol / non-JSON-safe column falls back to pyarrow). Parity-locked in
+  `tests/test_key_integrity_native_parity.py` (native == pyarrow == the committed
+  golden). Requires republishing `goldenmatch-native` to expose the symbol in
+  wheel-installed environments (in-tree builds pick it up immediately).
 
 ### Changed
 - **FS out-of-core streaming: single `resolve_fs_block_source` knob + DuckDB

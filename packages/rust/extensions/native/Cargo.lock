@@ -579,6 +579,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "goldenmatch-key-integrity-core"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "goldenmatch-native"
 version = "0.1.20"
 dependencies = [
@@ -590,6 +597,7 @@ dependencies = [
  "goldenmatch-fingerprint-core",
  "goldenmatch-fs-core",
  "goldenmatch-graph-core",
+ "goldenmatch-key-integrity-core",
  "goldenmatch-perceptual-core",
  "goldenmatch-score-core",
  "goldenmatch-sketch-core",

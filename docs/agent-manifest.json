@@ -5897,6 +5897,9 @@
         "INHOUSE": [
           "GOLDENMATCH_INHOUSE_MODEL"
         ],
+        "KEY": [
+          "GOLDENMATCH_KEY_INTEGRITY_NATIVE"
+        ],
         "LLAMA": [
           "GOLDENMATCH_LLAMA_GGUF"
         ],
