@@ -30,9 +30,20 @@ wholly inside one bucket** (all members of a block share the block key → the s
 hash → the same bucket). So a block never spans buckets, and scoring each bucket
 *independently* yields the **same edge set** as scoring the whole frame — for a
 single static pass, exactly; for `multi_pass`, apply it **per pass** (bucket the
-frame once per pass on that pass's key). Union the per-bucket, per-pass edges;
-`external_wcc_from_shards` already collapses cross-pass duplicate edges, so the
-partition is identical.
+frame once per pass on that pass's key). Union the per-bucket, per-pass edges; the
+union-find is **idempotent under duplicate edges** (`external_wcc_from_shards`
+applies `union(a,b)` on every raw edge, duplicates included, and `n_pairs` is the
+raw count — it does NOT dedup), so the partition is invariant to the cross-pass /
+cross-bucket duplicates and comes out identical.
+
+**Scope: static / multi_pass only.** This equivalence holds only where a pass's
+block is a single-key equivalence class, i.e. `_build_block_key_expr` exists for it.
+It is **unsound for `sorted_neighborhood`** (a sliding window over a *sort* key —
+one record appears in several windows straddling neighbors that hash to different
+buckets) and equally for `adaptive`/`ann`/`canopy`. The design is confined to
+static/multi_pass by the existing `_fs_streaming_dedupe_eligible` gate (see
+Correctness gate) — the same guard `build_em_blocks_agg` uses when it raises
+`NotImplementedError` for non-key strategies.
 
 This means the frame need **never be fully resident during scoring**: read the
 input in batches, bucket to on-disk Arrow shards, then stream **one bucket at a
@@ -70,23 +81,37 @@ Four bounded mechanisms; (A) and (C) are the new work, (B) reuses the spill path
 ### (A) Batched-read + per-pass disk bucketing — `bucket_frame_to_shards`
 Read the prepared input in row batches (`pq.ParquetFile.iter_batches` /
 `RecordBatch` stream — never a full resident frame). For each blocking pass,
-derive that pass's block key (reuse `blocker._build_block_key_expr` + the same
-null/sentinel filter that `build_blocks` uses), hash it to a bucket id, and append
-each batch's rows to per-`(pass, bucket)` Arrow IPC shards via bounded
-`RecordBatchFileWriter`s. Resident working set = one input batch + the open
-writers' current batch. `__row_id__` is assigned as a running counter across
-batches (matching the pipeline's ingest row-id contract).
+derive that pass's block key (reuse `core.blocker._build_block_key_expr`, which
+aliases `__block_key__`) and apply the SAME null/sentinel drop `build_blocks` uses
+— `core.frame.Frame.filter_valid_key(col)` (not a re-implemented `["nan","null",
+"none"]` filter), so key filtering is byte-identical to `build_blocks`. Hash the
+key to a bucket id and append each batch's rows to per-`(pass, bucket)` Arrow IPC
+shards via bounded `RecordBatchFileWriter`s. Resident working set = one input batch
++ the open writers' current batch. `__row_id__` is assigned as a running counter
+across batches (matching the pipeline's ingest row-id contract).
 
 Bucketing is on the **block key only**, so a stable non-cryptographic hash
 (`crc32`/`xxhash` of the key bytes) suffices — it does not need to match
 `score_buckets`' internal bucketing; it only needs each block wholly in one bucket.
 
 ### (B) Sequential bucket scoring + edge spill (reuse)
-For each `(pass, bucket)` shard: memory-map it, run the existing bucket scorer on a
+For each `(pass, bucket)` shard: memory-map it, run `score_buckets_arrow` on a
 single-pass config for that pass, and spill the pass's edges via the existing
-`spill_pair_shard` / `pair_sink` seam. Peak = one bucket's rows + one bucket's
-edges. This is the spill path's scorer, driven per bucket instead of per whole
-frame — no new scoring code.
+`spill_pair_shard` / `pair_sink(callable(pa.Table))` seam (arrow-mode only, invoked
+per pass). Peak = one bucket's rows + one bucket's edges. No new scoring code.
+
+**The reference is the FUSED kernel, not `score_buckets`.** `run_fs_dedupe_sequential`
+(and `_spill`) default to `_fused_fs_assignments` (`run_match_fused_fs_arrow` —
+group + FS-score + WCC in one call) and only fall back to `score_buckets_arrow +
+_cluster_arrow_native` when the config is uncovered. So the partition-equality gate
+is really **fused-kernel (reference) vs `score_buckets`-per-bucket (treatment)** in
+the common person case — the SAME `fused == score_buckets` invariant `sequential` ↔
+`spill` already rely on. `score_buckets` **auto-splits oversized blocks in-bucket**
+(`_split_oversized`/`_auto_split_block`, a deterministic pure function of the block's
+members) identically to the whole-frame call, so oversized blocks are NOT a
+bucketing-induced divergence on the scoring path; any oversized parity question
+lives in the fused-vs-`score_buckets` reference equivalence, not in the bucketing
+step (see Correctness gate).
 
 ### (C) Native external union-find — `FsExternalWcc(n_rows)`
 Replace the Python dict-UF with a stateful native kernel over an `O(N)` `Vec<i64>`
@@ -100,18 +125,36 @@ parent array (path-compression + union-by-rank):
   return, so `_stream_fs_dedupe_output_arrow` consumes it unchanged).
 
 Byte-parity gated against the Python `external_wcc_from_shards` (dict-UF) on the
-same shards. Lives in `packages/rust/extensions/native` next to the existing
-`build_clusters_arrow_native`; the Python `external_wcc_from_shards` stays as the
-classified fallback (`GOLDENMATCH_FS_EXTERNAL_WCC_NATIVE=0`).
+same shards. Lives in the `native` crate next to the existing Rust
+`build_clusters_arrow` kernel (`packages/rust/extensions/native/src/cluster.rs`,
+registered in `lib.rs`; note `core.cluster.build_clusters_arrow_native` is the
+Python *wrapper* over that kernel). The Python `external_wcc_from_shards` stays as
+the classified fallback (`GOLDENMATCH_FS_EXTERNAL_WCC_NATIVE=0`).
 
 ### (D) End-to-end — `run_fs_dedupe_bucketed`
-`stream input → bucket_frame_to_shards (per pass) → per-bucket score + edge spill →
-FsExternalWcc → _stream_fs_dedupe_output_arrow`. Routed via a new
-`resolve_fs_block_source()` value **`bucketed`** (alongside
-`eager`/`frame`/`sequential`/`spill`/`duckdb`), reachable through
-`gm.dedupe_to_parquet(*files, out_dir=…)` with
+`train EM (on the resident frame, unchanged) → bucket_frame_to_shards (per pass) →
+per-bucket score + edge spill → FsExternalWcc → _stream_fs_dedupe_output_arrow`.
+Routed via a new `resolve_fs_block_source()` value **`bucketed`** (alongside
+`eager`/`frame`/`sequential`/`spill`/`duckdb`) + a `fs_streaming_route()` return of
+`"bucketed"`, so `_fs_streaming_dedupe_eligible` (`pipeline.py`) fires — reachable
+through `gm.dedupe_to_parquet(*files, out_dir=…)` with
 `GOLDENMATCH_FS_BLOCK_SOURCE=bucketed`. DuckDB-free, polars-free except the bounded
 golden builder.
+
+**EM training is identical to the reference and is NOT bucketed.** Like
+`_run_fs_streaming_dedupe`, EM trains via `load_or_train_em` on the resident frame's
+bounded EM blocks (the `GOLDENMATCH_FS_EM_SAMPLE_ROWS` sample); only the
+score→cluster→output back-half is bucketed. The `EMResult` must be byte-identical or
+the sampled pairs — hence every score — diverge. (EM's own `build_blocks` residency
+is the separate, already-studied `GOLDENMATCH_FS_EM_AGG_BLOCKS` axis.)
+
+**The eligibility gate is the guardrail.** `_fs_streaming_dedupe_eligible`
+(`pipeline.py`) already enforces the two preconditions this design silently needs:
+**static/multi_pass blocking only** (rejects the SN/adaptive/ann/canopy strategies
+that make per-pass hash-bucketing unsound) and **exactly one probabilistic
+matchkey** (so there is no cross-bucket `matched_pairs` exclude set to share — which
+is what makes independent per-bucket scoring safe; arrow-mode `score_buckets`
+doesn't build the exclude set anyway). `bucketed` routes behind it.
 
 **Note on prep.** (A) removes frame residency during *scoring*. The pipeline's
 *prep* (auto_fix / standardize / matchkey precompute) currently still materializes
@@ -133,17 +176,24 @@ addresses; prep streaming is the next ceiling after this lands.
 
 `run_fs_dedupe_bucketed` is partition-gated against `run_fs_dedupe_sequential`
 (the in-RAM reference) on the SAME config: identical unique/dupes/golden counts AND
-identical dupes-partition, on person + bibliographic fixtures, single **and**
-multi-pass blocking (the per-pass bucketing is the multi-pass-specific risk). The
-native `FsExternalWcc` is separately byte-parity-gated against the Python
+identical dupes-partition, on person + bibliographic fixtures, **static AND
+multi_pass** blocking (per-pass bucketing is the multi-pass-specific risk;
+non-key strategies are out of scope by the eligibility gate). The native
+`FsExternalWcc` is separately byte-parity-gated against the Python
 `external_wcc_from_shards`. Because clustering is a pure function of the edge set,
 these are exact partition-equality gates.
 
-**Oversized-block caveat (mirror the EM-agg-blocks precedent):** `build_blocks`
-auto-splits a block over `max_block_size` (a scoring optimization); bucketing keeps
-a block whole. So parity is exact where no block exceeds `max_block_size`, and a
-bench-gated behavior change where some do — the `bench-probabilistic` panel is the
-standing gate for the oversized case, as with `GOLDENMATCH_FS_EM_AGG_BLOCKS`.
+**Oversized blocks are NOT a bucketing divergence on the scoring path.**
+`score_buckets` auto-splits an oversized block in-bucket
+(`_split_oversized`/`_auto_split_block`) identically to the whole-frame call — a
+whole block is co-located in one bucket and the split is a deterministic pure
+function of its members. The oversized parity question instead lives in the
+**fused-kernel vs `score_buckets` reference equivalence** (the reference defaults to
+the fused kernel; see (B)) — exactly the `fused == score_buckets` invariant
+`sequential` ↔ `spill` already carry, guarded by the `bench-probabilistic` panel as
+with `GOLDENMATCH_FS_EM_AGG_BLOCKS`. This design does not re-bucket EM-training block
+formation (the one place `build_em_blocks_agg` does raise on oversized), so that
+edge does not apply here.
 
 ## Scale gate
 
