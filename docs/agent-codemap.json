@@ -3478,7 +3478,8 @@
           "file": "packages/python/goldenmatch/goldenmatch/core/key_integrity_certificate.py",
           "purpose": "Metric-aware key-integrity certificate (semantic-layer wedge).",
           "defines": [
-            "KeyIntegrityCertificate"
+            "KeyIntegrityCertificate",
+            "certificate_verdict"
           ]
         },
         {
@@ -7230,6 +7231,7 @@
             "parse_cube_models"
           ],
           "imports": [
+            "goldenmatch.core.key_integrity_certificate",
             "goldenmatch.semantic.blocking",
             "goldenmatch.semantic.key_integrity",
             "goldenmatch.semantic.metricflow"
@@ -7272,6 +7274,9 @@
             "emit_metricflow_yaml",
             "emit_semantic_model",
             "parse_semantic_models"
+          ],
+          "imports": [
+            "goldenmatch.core.key_integrity_certificate"
           ]
         },
         {
@@ -7303,6 +7308,7 @@
             "validate_osi_schema"
           ],
           "imports": [
+            "goldenmatch.core.key_integrity_certificate",
             "goldenmatch.semantic.blocking",
             "goldenmatch.semantic.key_integrity",
             "goldenmatch.semantic.metricflow"

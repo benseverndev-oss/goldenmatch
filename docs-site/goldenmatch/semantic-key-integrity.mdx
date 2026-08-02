@@ -160,6 +160,41 @@ and fixing — ships in the examples:
 python examples/semantic_key_integrity.py
 ```
 
+## Writing the verdict back to the catalog
+
+The certificate isn't only a return value — its trust **verdict** can be written
+back into the catalog the semantic layer reads, so "resolve once, the verdict
+travels with the join." The Cube, OSI, and MetricFlow crosswalk emitters accept a
+`certificate=` and embed a single-sourced `key_integrity` block:
+
+```python
+from goldenmatch.semantic.metricflow import emit_from_crosswalk
+
+yaml_str = emit_from_crosswalk(crosswalk, "orders", measures=["revenue"], certificate=cert)
+```
+
+```yaml
+meta:
+  goldenmatch:
+    key_integrity:
+      verdict: untrustworthy          # the advisory pass/fail
+      unique_at_grain: false
+      uniqueness_estimate: 0.75
+      max_fan_out: 2.0
+      measure_fan_out:
+        revenue: 1.4
+      undercount_estimate: 0.5
+      undercount_ci: [0.0945, 0.9055]  # the 95% Wilson interval
+      safe_bound: 0.5
+      safe_bound_conservative: 0.0945
+```
+
+It rides in `meta.goldenmatch` (MetricFlow / Cube) or `custom_extensions.goldenmatch`
+(OSI). The same block is produced by `certificate_verdict(cert)` in Python and
+`certificateVerdict(cert)` in TypeScript — field-identical, locked by a
+cross-language fixture — so a downstream tool reads one trust contract regardless
+of which surface emitted the catalog.
+
 ## Cross-surface
 
 The **structural** certifier is one Rust kernel (`key-integrity-core`) behind

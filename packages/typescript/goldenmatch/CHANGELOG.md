@@ -245,6 +245,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   z-literal + op order), locked by the shared fixture
   `tests/parity/fixtures/key-integrity/undercount_ci_cases.json`. Test:
   `tests/parity/undercount-ci.parity.test.ts`.
+- **Certificate trust-verdict write-back to the semantic catalog (Cube / OSI /
+  MetricFlow).** New single-sourced `certificateVerdict(cert)` projects a
+  `KeyIntegrityCertificate` into the `key_integrity` metadata block the catalog
+  emitters embed — the advisory `verdict` plus `unique_at_grain`, per-measure
+  fan-out, and the resolution-tier trust floors (`safe_bound` / the CI-discounted
+  `safe_bound_conservative`, with the 95% undercount interval); a superset of the
+  legacy 3-field embed. `emitCubeFromCrosswalk` / `emitOsiFromCrosswalk` now write
+  the full verdict, and `emitFromCrosswalk` / `emitSemanticModel` gained a
+  `certificate` option that writes it into `meta.goldenmatch.key_integrity`
+  (MetricFlow embedded nothing before). Field-identical to the Python port
+  (`certificate_verdict`), locked by the shared fixture
+  `tests/parity/fixtures/key-integrity/certificate_verdict_cases.json`. Test:
+  `tests/parity/certificate-verdict.parity.test.ts`.
 
 ## [1.26.0] - 2026-07-27
 

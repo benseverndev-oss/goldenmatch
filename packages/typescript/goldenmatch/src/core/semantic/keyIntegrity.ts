@@ -113,6 +113,60 @@ export class KeyIntegrityCertificate {
   }
 }
 
+/** The (partial) certificate shape `certificateVerdict` reads — a full
+ * `KeyIntegrityCertificate` satisfies it; a stats-only object degrades
+ * gracefully (missing fields → null / omitted), mirroring Python's getattr. */
+export interface CertificateVerdictLike {
+  isUniqueAtGrain?: boolean | null;
+  estimate?: number | null;
+  maxFanOut?: number | null;
+  measureFanOut?: Record<string, number> | null;
+  undercountEstimate?: number | null;
+  undercountCiLow?: number | null;
+  undercountCiHigh?: number | null;
+  safeBound?: number | null;
+  safeBoundConservative?: number | null;
+  isTrustworthy?: (opts?: { maxFanOut?: number; minEstimate?: number }) => boolean;
+}
+
+/**
+ * Project a certificate into the trust-verdict metadata block a semantic catalog
+ * carries — the single source (mirrors Python `certificate_verdict`) for the
+ * `key_integrity` tag the Cube / OSI / MetricFlow emitters write back. snake_case
+ * keys + fixed insertion order so the emitted block is byte-identical across
+ * surfaces. Superset of the legacy 3-field embed (`uniqueness_estimate` /
+ * `max_fan_out` / `undercount_estimate`), extended with the pass/fail `verdict`,
+ * `unique_at_grain`, per-measure fan-out, and the resolution-tier trust floors.
+ */
+export function certificateVerdict(cert: CertificateVerdictLike): Record<string, unknown> {
+  let trustworthy: boolean | null = null;
+  if (typeof cert.isTrustworthy === "function") {
+    try {
+      trustworthy = Boolean(cert.isTrustworthy());
+    } catch {
+      trustworthy = null;
+    }
+  }
+
+  const block: Record<string, unknown> = {
+    verdict: trustworthy === null ? null : trustworthy ? "trustworthy" : "untrustworthy",
+    unique_at_grain: cert.isUniqueAtGrain ?? null,
+    uniqueness_estimate: cert.estimate ?? null,
+    max_fan_out: cert.maxFanOut ?? null,
+  };
+  const mfo = cert.measureFanOut;
+  if (mfo && Object.keys(mfo).length > 0) {
+    block["measure_fan_out"] = { ...mfo };
+  }
+  block["undercount_estimate"] = cert.undercountEstimate ?? null;
+  if (cert.undercountCiLow != null && cert.undercountCiHigh != null) {
+    block["undercount_ci"] = [cert.undercountCiLow, cert.undercountCiHigh];
+  }
+  block["safe_bound"] = cert.safeBound ?? null;
+  block["safe_bound_conservative"] = cert.safeBoundConservative ?? null;
+  return block;
+}
+
 function asList(x: string | readonly string[] | undefined): string[] {
   if (x === undefined) return [];
   return typeof x === "string" ? [x] : [...x];

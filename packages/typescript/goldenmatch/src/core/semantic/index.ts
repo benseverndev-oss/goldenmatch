@@ -10,8 +10,10 @@
  */
 export {
   KeyIntegrityCertificate,
+  certificateVerdict,
   certifyKeyIntegrity,
   resolveKeyIntegrity,
+  type CertificateVerdictLike,
   type KeyIntegrityCertificateInit,
 } from "./keyIntegrity.js";
 export { ServingJoinCertificate, certifyServingJoins } from "./serving.js";
