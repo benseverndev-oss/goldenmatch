@@ -20,7 +20,7 @@ on:
         required: false
         default: "25000000 50000000"
       modes:
-        description: "Space-separated streaming modes (sequential=in-RAM pyarrow/Rust batches + end-WCC [the fast default]; spill=DuckDB-FREE out-of-core, per-pass edge shards on disk + external union-find [the bounded-edge path]; streaming=DuckDB out-of-core, the slower past-RAM tier)"
+        description: "Space-separated streaming modes (sequential=in-RAM pyarrow/Rust batches + end-WCC [the fast default]; spill=DuckDB-FREE out-of-core, per-pass edge shards on disk + external union-find [the bounded-edge path]; bucketed=frame-residency out-of-core, hash-bucket the frame to disk per pass + score bucket-by-bucket [the bounded-FRAME path]; streaming=DuckDB out-of-core, the slower past-RAM tier)"
         required: false
         default: "sequential"
       force_shard:

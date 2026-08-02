@@ -153,6 +153,12 @@ def resolve_fs_block_source() -> str:
         term (largest single pass, not the sum of all passes) with no DuckDB
         dependency. Spec:
         ``docs/superpowers/specs/2026-08-02-fs-duckdb-free-spill-external-wcc-design.md``.
+      - ``"bucketed"`` — DuckDB-FREE frame-residency out-of-core: hash-bucket the
+        prepared frame to disk by EACH blocking pass's block key, then score
+        bucket-by-bucket (``run_fs_dedupe_bucketed`` / ``bucket_frame_to_shards``) —
+        never a whole-frame scoring copy, so it bounds the FRAME term the
+        ``spill``/fused paths leave resident (peak ~1x frame vs ~2.5x). Spec:
+        ``docs/superpowers/specs/2026-08-02-fs-frame-residency-bucketed-scoring-design.md``.
 
     Resolution (``GOLDENMATCH_FS_BLOCK_SOURCE`` is authoritative when set to a
     recognized value; the legacy ``GOLDENMATCH_FS_OUT_OF_CORE=1`` is honored only
@@ -160,6 +166,7 @@ def resolve_fs_block_source() -> str:
       - ``FS_BLOCK_SOURCE=frame`` → ``"frame"``
       - ``FS_BLOCK_SOURCE=sequential`` → ``"sequential"``
       - ``FS_BLOCK_SOURCE=spill`` → ``"spill"``
+      - ``FS_BLOCK_SOURCE=bucketed`` → ``"bucketed"``
       - ``FS_BLOCK_SOURCE=duckdb`` → ``"duckdb"``
       - ``FS_BLOCK_SOURCE=eager`` / ``auto`` / unset → ``"eager"`` (+ legacy alias)
 
@@ -174,6 +181,8 @@ def resolve_fs_block_source() -> str:
         return "sequential"
     if v == "spill":
         return "spill"
+    if v == "bucketed":
+        return "bucketed"
     if v == "duckdb":
         return "duckdb"
     if v in ("", "auto", "eager"):
@@ -205,6 +214,9 @@ def fs_streaming_route() -> str | None:
       - ``"spill"`` → ``run_fs_dedupe_spill`` (DuckDB-free out-of-core: per-pass
         edge shards on disk + external union-find,
         ``GOLDENMATCH_FS_BLOCK_SOURCE=spill``).
+      - ``"bucketed"`` → ``run_fs_dedupe_bucketed`` (DuckDB-free frame-residency
+        out-of-core: hash-bucket the frame to disk per pass + score bucket-by-bucket,
+        ``GOLDENMATCH_FS_BLOCK_SOURCE=bucketed``).
       - ``"duckdb"`` → ``run_fs_dedupe_streaming`` (out-of-core DuckDB spill,
         ``GOLDENMATCH_FS_OUT_OF_CORE=1`` / ``GOLDENMATCH_FS_BLOCK_SOURCE=duckdb``).
 
@@ -212,7 +224,7 @@ def fs_streaming_route() -> str | None:
     ``score_buckets``'s in-bucket residency), so they return ``None`` and the
     caller keeps the default pipeline."""
     src = resolve_fs_block_source()
-    return src if src in ("sequential", "spill", "duckdb") else None
+    return src if src in ("sequential", "spill", "bucketed", "duckdb") else None
 
 
 def _fs_ooc_arrow_cluster_enabled() -> bool:
@@ -1373,6 +1385,213 @@ def run_fs_dedupe_spill(
     res["streaming"] = True
     res["spill"] = True
     res["fused"] = n_pairs is None
+    res["output_dir"] = out_dir
+    return res
+
+
+_BUCKETED_N_BUCKETS = 64
+_BUCKETED_BATCH_ROWS = 200_000
+
+
+def _bucketed_passes(blocking_config: BlockingConfig) -> list:
+    """The list of ``BlockingKeyConfig`` passes to bucket the frame on — one shard
+    set per pass. ``multi_pass`` keys live in ``.passes``; ``static`` in ``.keys``.
+    Only these two strategies are hash-bucketable (each pass's block is a single
+    ``__block_key__`` equivalence class); the ``_fs_streaming_dedupe_eligible`` gate
+    already restricts the route to them (SN/adaptive/ann have no single block key —
+    unsound to hash-partition, see the design spec)."""
+    if blocking_config.strategy == "multi_pass":
+        return list(blocking_config.passes or [])
+    return list(blocking_config.keys or [])
+
+
+def bucket_frame_to_shards(
+    base: Any,
+    blocking_config: BlockingConfig,
+    shard_root: str,
+    *,
+    n_buckets: int = _BUCKETED_N_BUCKETS,
+    batch_rows: int = _BUCKETED_BATCH_ROWS,
+) -> dict[int, list[str]]:
+    """Hash-bucket a resident Arrow frame by EACH blocking pass's block key to
+    on-disk Arrow IPC shards — the frame-residency mechanism (spec
+    ``2026-08-02-fs-frame-residency-bucketed-scoring-design.md`` (A)).
+
+    Streams ``base`` in ``batch_rows`` slices (zero-copy views), and for each pass
+    derives that pass's ``__block_key__`` ARROW-NATIVELY
+    (``ArrowFrame.derive_block_key`` — the same ``arrow_derive.block_key`` the
+    blocker uses, so keys are byte-identical), drops null/sentinel keys via the SAME
+    ``filter_valid_key`` guard ``build_blocks`` applies, hashes the key to a bucket
+    id, and appends each slice's rows to per-``(pass, bucket)`` Arrow IPC shards.
+    Because all members of a block share one block key, hashing co-locates the whole
+    block in one bucket, so per-bucket scoring (``run_fs_dedupe_bucketed``) is
+    partition-exact with whole-frame scoring.
+
+    Only the block key is hashed (a stable ``crc32``), so the bucketing need NOT
+    match ``score_buckets``' internal bucketing — it only needs each block wholly in
+    one bucket. Returns ``{pass_index: [shard_path, …]}``. Resident working set is
+    one slice + the open writers' buffers, never the full pass partition."""
+    import contextlib as _contextlib
+    import os as _os
+    import zlib as _zlib
+
+    import numpy as _np
+    import pyarrow as _pa
+    import pyarrow.compute as _pc
+
+    from goldenmatch.core.frame import to_frame as _tf
+
+    passes = _bucketed_passes(blocking_config)
+    paths: dict[int, dict[int, str]] = {i: {} for i in range(len(passes))}
+
+    # ExitStack guarantees every opened shard file + its Arrow IPC writer is closed
+    # even on a mid-loop error, and in LIFO order: the writer is entered AFTER its
+    # file, so the writer's __exit__ (flush footer + close) runs BEFORE the file
+    # closes. The stack exits before the return, so all shards are complete when the
+    # caller reads them.
+    writers: dict[tuple[int, int], Any] = {}
+    n = base.num_rows
+    off = 0
+    with _contextlib.ExitStack() as stack:
+        while off < n:
+            sl = base.slice(off, batch_rows)
+            off += sl.num_rows
+            for pi, key_cfg in enumerate(passes):
+                bk = _tf(sl).derive_block_key(
+                    key_cfg.fields, key_cfg.transforms or [],
+                    field_transforms=getattr(key_cfg, "field_transforms", None),
+                ).to_arrow()
+                t2 = sl.append_column("__block_key__", bk)
+                t2 = _tf(t2).filter_valid_key("__block_key__").native
+                if t2.num_rows == 0:
+                    continue
+                keys = t2.column("__block_key__").to_pylist()
+                buckets = _np.fromiter(
+                    (_zlib.crc32(k.encode()) % n_buckets for k in keys),
+                    dtype=_np.int64, count=len(keys),
+                )
+                t2 = t2.drop_columns(["__block_key__"]).append_column(
+                    "__bkt__", _pa.array(buckets)
+                )
+                for b in _np.unique(buckets):
+                    b = int(b)
+                    sub = t2.filter(_pc.equal(t2.column("__bkt__"), b)).drop_columns(
+                        ["__bkt__"]
+                    )
+                    wk = (pi, b)
+                    if wk not in writers:
+                        p = _os.path.join(shard_root, f"pass{pi}_bkt{b}.arrow")
+                        fh = stack.enter_context(open(p, "wb"))
+                        # RecordBatchFileWriter is itself a context manager; entering
+                        # it registers its __exit__ (flush footer + close). LIFO: the
+                        # writer closes before its file handle releases.
+                        writers[wk] = stack.enter_context(
+                            _pa.ipc.RecordBatchFileWriter(fh, sub.schema)
+                        )
+                        paths[pi][b] = p
+                    writers[wk].write_table(sub)
+            del sl
+    return {pi: [paths[pi][b] for b in sorted(paths[pi])] for pi in paths}
+
+
+def run_fs_dedupe_bucketed(
+    prepared_df: Any,
+    blocking_config: BlockingConfig,
+    mk: MatchkeyConfig,
+    em_result,
+    config: Any,
+    out_dir: str,
+    *,
+    matched_pairs: set[tuple[int, int]] | None = None,
+    target_ids: set[int] | None = None,
+    link_threshold: float | None = None,
+) -> dict:
+    """Frame-residency-bounded FS dedupe: bucket the frame to disk by block key,
+    then score BUCKET-BY-BUCKET (never the whole-frame partition, never the fused
+    kernel's full-frame column gather) + edge spill + external WCC.
+
+    Spec: ``docs/superpowers/specs/2026-08-02-fs-frame-residency-bucketed-scoring-design.md``.
+
+    Unlike ``run_fs_dedupe_sequential``/``_spill`` (which default to the fused FS
+    kernel — a full-frame column gather + in-kernel WCC — and fall back to a
+    whole-frame ``score_buckets`` that materializes an N-row ``partition_by`` copy),
+    this route NEVER holds a whole-frame scoring copy: ``bucket_frame_to_shards``
+    writes per-pass hash-bucket shards to disk, then each shard is scored
+    independently with a SINGLE-PASS config through the same ``score_buckets_arrow``
+    kernel, spilling edges via the ``pair_sink`` seam. Clustering is the DuckDB-free
+    ``external_wcc_from_shards`` (Phase 1 Python union-find; the native
+    ``FsExternalWcc`` array-UF is Phase 2). Partition-exact with
+    ``run_fs_dedupe_sequential`` by construction (same block keys, same edge set;
+    the per-pass union is idempotent under duplicate edges).
+
+    EM is trained upstream on the resident frame (unchanged) and passed in — only
+    the score→cluster→output back-half is bucketed. The resident ``base`` is kept
+    for the O(N) streamed output (``_stream_fs_dedupe_output_arrow``); streaming the
+    output from disk to drop below ~1× frame is the Phase-3 streamed-prep follow-on.
+    Restricted to ``static``/``multi_pass`` blocking + one probabilistic matchkey by
+    the ``_fs_streaming_dedupe_eligible`` gate (per-pass hash-bucketing is unsound
+    for SN/adaptive/ann; the single matchkey means no cross-bucket exclude set)."""
+    import shutil as _shutil
+    import tempfile as _tempfile
+
+    import pyarrow as pa
+
+    from goldenmatch.backends.score_buckets import score_buckets_arrow
+    from goldenmatch.config.schemas import BlockingConfig as _BlockingConfig
+    from goldenmatch.core.frame import is_polars_lazyframe
+    from goldenmatch.core.frame import to_frame as _tf
+
+    matched_pairs = set(matched_pairs or ())
+    max_cluster_size = 100
+    if getattr(config, "golden_rules", None) is not None:
+        max_cluster_size = config.golden_rules.max_cluster_size
+
+    _fw = _tf(prepared_df)
+    if is_polars_lazyframe(_fw.native):
+        _fw = _tf(_fw.native.collect())
+    base = _fw.to_arrow()
+
+    passes = _bucketed_passes(blocking_config)
+    shard_dir = _tempfile.mkdtemp(prefix="gm_fs_bucketed_")
+    try:
+        # (A) frame -> per-pass hash-bucket shards on disk.
+        pass_shards = bucket_frame_to_shards(base, blocking_config, shard_dir)
+
+        # (B) score one bucket shard at a time with that pass's single-pass config;
+        #     edges leave RAM through the spill sink.
+        edge_shards: list[str] = []
+
+        def _sink(tbl: Any) -> None:
+            if tbl.num_rows:
+                edge_shards.append(
+                    spill_pair_shard(tbl, shard_dir, len(edge_shards))
+                )
+
+        for pi, shard_paths in pass_shards.items():
+            single_pass = _BlockingConfig(strategy="static", keys=[passes[pi]])
+            for sp in shard_paths:
+                with pa.memory_map(sp, "r") as src:
+                    bucket_tbl = pa.ipc.open_file(src).read_all()
+                if bucket_tbl.num_rows >= 2:
+                    score_buckets_arrow(
+                        bucket_tbl, single_pass, mk, set(matched_pairs),
+                        n_buckets=getattr(config, "n_buckets", None),
+                        target_ids=target_ids, em_result=em_result,
+                        pair_sink=_sink,
+                    )
+                del bucket_tbl
+
+        assignments, n_pairs = external_wcc_from_shards(
+            edge_shards, _prep_all_ids_frame(base), max_cluster_size, link_threshold,
+        )
+    finally:
+        _shutil.rmtree(shard_dir, ignore_errors=True)
+
+    res = _stream_fs_dedupe_output_arrow(base, assignments, config, out_dir)
+    res["pairs"] = n_pairs
+    res["streaming"] = True
+    res["bucketed"] = True
+    res["fused"] = False
     res["output_dir"] = out_dir
     return res
 

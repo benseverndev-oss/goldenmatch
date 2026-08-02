@@ -483,6 +483,7 @@ def test_resolve_fs_block_source_default_is_eager(monkeypatch):
     [("frame", "frame"), ("duckdb", "duckdb"), ("eager", "eager"),
      ("sequential", "sequential"), (" Sequential ", "sequential"),
      ("spill", "spill"), (" Spill ", "spill"),
+     ("bucketed", "bucketed"), (" Bucketed ", "bucketed"),
      ("auto", "eager"), ("AUTO", "eager"), (" DuckDB ", "duckdb"),
      ("nonsense", "eager")],
 )
@@ -666,12 +667,119 @@ def test_spill_and_sequential_orchestrators_agree(tmp_path):
     assert seq_parts == spill_parts
 
 
+def test_end_to_end_bucketed_dedupe(tmp_path):
+    """run_fs_dedupe_bucketed: frame -> per-pass hash-bucket shards on disk ->
+    per-bucket score + edge spill -> external WCC -> streamed parquet. Rows
+    preserved, planted dups found, a golden per multi-member cluster, bucketed=True
+    (never the whole-frame partition / fused kernel)."""
+    import types
+
+    from goldenmatch.backends.fs_out_of_core import run_fs_dedupe_bucketed
+
+    df = _bigger_df()
+    mk = _make_probabilistic_mk()
+    blocking = BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])])
+    em = _train(df, blocking, mk)
+    cfg = types.SimpleNamespace(golden_rules=None)
+
+    res = run_fs_dedupe_bucketed(df, blocking, mk, em, cfg, str(tmp_path))
+
+    assert res["bucketed"] is True
+    assert res["streaming"] is True
+    assert res["fused"] is False  # bucketed never uses the frame-gathering fused kernel
+    assert res["pairs"] is not None  # real edges spilled through the shard path
+    assert res["unique_count"] + res["dupes_count"] == df.height
+    assert res["dupes_count"] >= 2
+    assert res["golden_count"] >= 1
+
+
+def test_bucketed_and_sequential_orchestrators_agree(tmp_path):
+    """run_fs_dedupe_bucketed writes the SAME unique/dupes/golden counts AND the
+    SAME dupes-partition as run_fs_dedupe_sequential. Hash-bucketing by the block
+    key co-locates each block wholly in one bucket, so per-bucket scoring is
+    partition-exact with whole-frame scoring (single static pass)."""
+    import types
+
+    from goldenmatch.backends.fs_out_of_core import (
+        run_fs_dedupe_bucketed,
+        run_fs_dedupe_sequential,
+    )
+
+    df = _bigger_df()
+    mk = _make_probabilistic_mk()
+    blocking = BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])])
+    em = _train(df, blocking, mk)
+    cfg = types.SimpleNamespace(golden_rules=None)
+
+    seq = run_fs_dedupe_sequential(df, blocking, mk, em, cfg, str(tmp_path / "seq"))
+    buk = run_fs_dedupe_bucketed(df, blocking, mk, em, cfg, str(tmp_path / "buk"))
+    for k in ("unique_count", "dupes_count", "golden_count"):
+        assert seq[k] == buk[k], k
+    assert (
+        _partition_set_from_parquet(seq["dupes_path"])
+        == _partition_set_from_parquet(buk["dupes_path"])
+    )
+
+
+def test_bucketed_multipass_agrees_with_sequential(tmp_path):
+    """The multi-pass-specific risk: per-pass hash-bucketing (bucket the frame once
+    per blocking pass on that pass's key) must reproduce the exact multi_pass edge
+    set. A dup shares BOTH block keys; each pass is bucketed independently and the
+    per-pass edges union — partition-exact with the whole-frame reference."""
+    import types
+
+    from goldenmatch.backends.fs_out_of_core import (
+        run_fs_dedupe_bucketed,
+        run_fs_dedupe_sequential,
+    )
+    from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+
+    rows = []
+    fam = [
+        ("John", "Smith", "90210", "AA"), ("Jon", "Smith", "90210", "AA"),
+        ("Jane", "Doe", "10001", "BB"), ("Janet", "Doe", "10001", "BB"),
+        ("Bob", "Jones", "60601", "CC"), ("Robert", "Jones", "60601", "CC"),
+        ("Alice", "Brown", "30301", "DD"), ("Alicia", "Brown", "30301", "DD"),
+        ("Amy", "Clark", "90210", "EE"), ("Amie", "Clark", "90210", "EE"),
+    ]
+    for rid, (fn, ln, zp, cc) in enumerate(fam, start=1):
+        rows.append({"__row_id__": rid, "first_name": fn, "last_name": ln,
+                     "zip": zp, "city_code": cc})
+    df = pl.DataFrame(rows)
+    mk = MatchkeyConfig(
+        name="fs", type="probabilistic",
+        fields=[
+            MatchkeyField(field="first_name", scorer="jaro_winkler", levels=3,
+                          partial_threshold=0.8),
+            MatchkeyField(field="last_name", scorer="jaro_winkler", levels=2,
+                          partial_threshold=0.85),
+        ],
+    )
+    blocking = BlockingConfig(
+        strategy="multi_pass",
+        passes=[BlockingKeyConfig(fields=["zip"]),
+                BlockingKeyConfig(fields=["city_code"])],
+    )
+    em = _train(df, blocking, mk)
+    cfg = types.SimpleNamespace(golden_rules=None)
+
+    seq = run_fs_dedupe_sequential(df, blocking, mk, em, cfg, str(tmp_path / "seq"))
+    buk = run_fs_dedupe_bucketed(df, blocking, mk, em, cfg, str(tmp_path / "buk"))
+    for k in ("unique_count", "dupes_count", "golden_count"):
+        assert seq[k] == buk[k], k
+    assert (
+        _partition_set_from_parquet(seq["dupes_path"])
+        == _partition_set_from_parquet(buk["dupes_path"])
+    )
+
+
 def test_fs_streaming_route_selects_orchestrator(monkeypatch):
     from goldenmatch.backends.fs_out_of_core import fs_streaming_route
 
     monkeypatch.delenv("GOLDENMATCH_FS_OUT_OF_CORE", raising=False)
     for src, expected in (
-        ("sequential", "sequential"), ("spill", "spill"), ("duckdb", "duckdb"),
+        ("sequential", "sequential"), ("spill", "spill"),
+        ("bucketed", "bucketed"), ("duckdb", "duckdb"),
         ("frame", None), ("eager", None), ("auto", None),
     ):
         monkeypatch.setenv("GOLDENMATCH_FS_BLOCK_SOURCE", src)
@@ -730,6 +838,35 @@ def test_dedupe_to_parquet_spill_parity_with_in_memory(tmp_path, monkeypatch):
     res = dedupe_to_parquet(str(csv_path), out_dir=str(out_dir), config=cfg)
     assert res["streaming"] is True
     assert res["spill"] is True
+    stream_parts = _partition_set_from_parquet(res["dupes_path"])
+
+    assert stream_parts == sorted(mem_parts)
+
+
+def test_dedupe_to_parquet_bucketed_parity_with_in_memory(tmp_path, monkeypatch):
+    """dedupe_to_parquet under GOLDENMATCH_FS_BLOCK_SOURCE=bucketed (the
+    frame-residency per-pass-disk-bucketing route) partitions the SAME records as
+    the default in-memory FS route — end-to-end through the pipeline dispatch."""
+    import polars as pl
+    from goldenmatch import dedupe_df, dedupe_to_parquet
+
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+    monkeypatch.delenv("GOLDENMATCH_FS_OUT_OF_CORE", raising=False)
+
+    csv_path = tmp_path / "people.csv"
+    _make_person_csv(csv_path)
+    df = pl.read_csv(csv_path)
+    cfg = _fs_person_config()
+
+    monkeypatch.setenv("GOLDENMATCH_FS_BLOCK_SOURCE", "eager")
+    mem = dedupe_df(df, config=cfg)
+    mem_parts = _partitions(mem)
+
+    monkeypatch.setenv("GOLDENMATCH_FS_BLOCK_SOURCE", "bucketed")
+    out_dir = tmp_path / "out"
+    res = dedupe_to_parquet(str(csv_path), out_dir=str(out_dir), config=cfg)
+    assert res["streaming"] is True
+    assert res["bucketed"] is True
     stream_parts = _partition_set_from_parquet(res["dupes_path"])
 
     assert stream_parts == sorted(mem_parts)

@@ -125,14 +125,17 @@ def main() -> None:
     ap.add_argument("--rows", type=int, required=True)
     ap.add_argument(
         "--mode",
-        choices=["streaming", "sequential", "spill", "in_memory"],
+        choices=["streaming", "sequential", "spill", "bucketed", "in_memory"],
         required=True,
         help=(
             "streaming=DuckDB out-of-core (FS_BLOCK_SOURCE=duckdb); "
             "sequential=in-RAM Arrow/Rust batches + end-WCC (FS_BLOCK_SOURCE="
             "sequential); spill=DuckDB-FREE out-of-core -- per-pass edge shards on "
             "disk + external union-find (FS_BLOCK_SOURCE=spill), the bounded-edge "
-            "path; in_memory=default pipeline contrast (EXPECTED OOM at 50M)"
+            "path; bucketed=frame-residency out-of-core -- hash-bucket the frame to "
+            "disk per pass + score bucket-by-bucket (FS_BLOCK_SOURCE=bucketed), the "
+            "bounded-FRAME path (never a whole-frame scoring copy); in_memory="
+            "default pipeline contrast (EXPECTED OOM at 50M)"
         ),
     )
     ap.add_argument(
@@ -186,17 +189,19 @@ def main() -> None:
     sampler.start()
     t0 = time.perf_counter()
     try:
-        if args.mode in ("streaming", "sequential", "spill"):
+        if args.mode in ("streaming", "sequential", "spill", "bucketed"):
             # streaming -> DuckDB out-of-core; sequential -> in-RAM Arrow/Rust
             # batches + end-WCC; spill -> DuckDB-FREE out-of-core (per-pass edge
-            # shards on disk + external union-find). All three drive
-            # dedupe_to_parquet's streaming short-circuit; only the block-source
-            # env differs.
+            # shards on disk + external union-find); bucketed -> frame-residency
+            # out-of-core (hash-bucket the frame to disk per pass, score
+            # bucket-by-bucket). All drive dedupe_to_parquet's streaming
+            # short-circuit; only the block-source env differs.
             os.environ.pop("GOLDENMATCH_FS_OUT_OF_CORE", None)
             os.environ["GOLDENMATCH_FS_BLOCK_SOURCE"] = {
                 "streaming": "duckdb",
                 "sequential": "sequential",
                 "spill": "spill",
+                "bucketed": "bucketed",
             }[args.mode]
             if args.mode == "spill" and args.force_shard:
                 # Skip the fused short-circuit so the edge-shard spill mechanism
@@ -212,11 +217,17 @@ def main() -> None:
             res = dedupe_to_parquet(str(fixture), out_dir=str(out_dir), config=cfg)
             result["streaming_engaged"] = bool(res.get("streaming"))
             result["spill_engaged"] = bool(res.get("spill"))
+            result["bucketed_engaged"] = bool(res.get("bucketed"))
             # For spill: which internal path clustered — the fused kernel
             # (bounded, no pair list) or the edge-shard spill mechanism.
             if args.mode == "spill":
                 result["internal_path"] = (
                     "fused" if res.get("fused") else "edge_shard"
+                )
+            elif args.mode == "bucketed" and not result["bucketed_engaged"]:
+                result["error"] = (
+                    "bucketed route did NOT engage -- streaming ran a different "
+                    "orchestrator; the frame-residency bucketing was not exercised"
                 )
             result["unique_count"] = res.get("unique_count")
             result["dupes_count"] = res.get("dupes_count")
