@@ -108,6 +108,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
     These are a **net-new TS surface** — Python has no REST equivalent for the
     wedge, so there is nothing to mirror and no parity-manifest impact (REST is not
     a gated surface). Tests: `tests/unit/api-server.test.ts`, `api-identity.test.ts`.
+- **Full consume-side Cube/OSI parsers + `emitCubeYaml` / `emitOsiYaml` round-trip.**
+  The Cube/OSI parsers were join/relationship-focused (enough to certify keys);
+  they now parse the **whole model** — Cube `dimensions` / `measures` / `sql_table`
+  / `sql` / `meta`, OSI `datasets` / `fields` (with the `dialects[]` expression
+  shape) / `metrics` / `description` / `version` / `custom_extensions` — mirroring
+  Python's `Cube` / `OsiModel` dataclasses. New `emitCubeYaml(cubes)` /
+  `emitOsiYaml(models)` complete the emit chain, so `parse(emit(...))` round-trips
+  and TS can **consume arbitrary existing dbt/Cube/OSI projects**, not only certify
+  their keys. New exports: `parseCubeModels` (now full) / `emitCubeYaml` /
+  `CubeDimension` / `CubeMeasure`; `parseOsiModels` (now full) / `emitOsiYaml` /
+  `OsiField` / `OsiDataset` / `OsiMetric`. `parseSemanticModels` (MetricFlow) is a
+  lossy key extractor by design and was already complete. Parity: a Python-generated
+  fixture (`tests/parity/fixtures/semantic/parse.json`, from
+  `scripts/emit_semantic_parse_fixtures.py`, wired into `regen_ts_parity_fixtures.sh`)
+  holds canonical Python-emitted YAML for full models; the TS `emit(parse(yaml))`
+  reproduces it **byte-for-byte** (a round-trip that fails on any dropped/misread
+  field), and metricflow parse matches Python's `DeclaredKeySpec`. Also fixes the
+  block-YAML serializer (`yamlEmit.ts`) to emit nested sequences inline (`- - a`)
+  the way `yaml.safe_dump` does — needed for OSI `unique_keys` (a list of lists).
+- **Dialect-normalization follow-up** (closes the #2328 Copilot review): the
+  `/semantic/emit` REST endpoint and the `identity emit-catalog` CLI now normalize
+  the dialect with `trim().toLowerCase()` **before** validating and pass the
+  normalized value through, matching the core emitter's contract — so `"Cube"` /
+  `" cube "` are accepted rather than rejected.
 
 ## [1.26.0] - 2026-07-27
 

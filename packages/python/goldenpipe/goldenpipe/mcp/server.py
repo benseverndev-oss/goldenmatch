@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import os
 import secrets
-from pathlib import Path
 from typing import Any
 
 try:
@@ -34,14 +33,24 @@ def _jail_path(value: str) -> str:
     raw = os.fspath(value)
     if "\x00" in raw:
         raise ValueError("path contains NUL byte")
-    resolved = Path(raw).resolve()
-    root = Path(os.environ.get("GOLDENPIPE_ALLOWED_ROOT") or os.getcwd()).resolve()
-    if resolved != root and not resolved.is_relative_to(root):
+    # Normalize (resolving symlinks + `..`) then require the result to sit under the
+    # root via os.path.commonpath -- the canonical path-traversal barrier (recognized
+    # by CodeQL's py/path-injection query, unlike pathlib's is_relative_to). A
+    # relative `raw` resolves against the cwd, same as before.
+    resolved = os.path.realpath(raw)
+    root = os.path.realpath(os.environ.get("GOLDENPIPE_ALLOWED_ROOT") or os.getcwd())
+    try:
+        contained = resolved == root or os.path.commonpath((root, resolved)) == root
+    except ValueError:
+        # commonpath raises on paths with no common anchor (e.g. different Windows
+        # drives) -- that is definitively outside the root, not a crash.
+        contained = False
+    if not contained:
         # Generic message on purpose: this is a public, unauthenticated endpoint,
         # so the error must not disclose the resolved absolute path or the server's
         # root directory back to the caller.
         raise ValueError("path is outside the allowed root")
-    return str(resolved)
+    return resolved
 
 
 def list_stages_tool() -> dict[str, Any]:

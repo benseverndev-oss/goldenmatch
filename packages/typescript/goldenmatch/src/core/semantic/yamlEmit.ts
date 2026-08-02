@@ -103,8 +103,9 @@ function emitNode(v: YamlValue, indent: number, lines: string[]): void {
         // "- " then the map's first key on the same line, rest indented.
         emitMapInline(item, indent, `${pad}- `, lines);
       } else if (Array.isArray(item)) {
-        lines.push(`${pad}-`);
-        emitNode(item, indent + 1, lines);
+        // Nested block sequence: PyYAML puts the inner sequence's first marker
+        // inline after the outer "- " (e.g. `- - a`), rest at the next indent.
+        emitSeqInline(item, indent, `${pad}- `, lines);
       } else {
         lines.push(`${pad}- ${scalar(item)}`);
       }
@@ -140,6 +141,27 @@ function emitKey(k: string, val: YamlValue, indent: number, pad: string, lines: 
   } else {
     lines.push(`${pad}${key}: ${scalar(val)}`);
   }
+}
+
+/** Emit a nested block sequence whose first item's `- ` marker shares the line
+ * with `prefix` (the outer sequence item's "- "), e.g. `- - a` / `- - a\n  - b`.
+ * Mirrors PyYAML's inline nested-sequence layout. */
+function emitSeqInline(arr: YamlValue[], indent: number, prefix: string, lines: string[]): void {
+  if (arr.length === 0) {
+    lines.push(`${prefix}[]`);
+    return;
+  }
+  const childPad = "  ".repeat(indent + 1);
+  arr.forEach((el, i) => {
+    const p = i === 0 ? prefix : childPad;
+    if (isPlainObject(el)) {
+      emitMapInline(el, indent + 1, `${p}- `, lines);
+    } else if (Array.isArray(el)) {
+      emitSeqInline(el, indent + 1, `${p}- `, lines);
+    } else {
+      lines.push(`${p}- ${scalar(el)}`);
+    }
+  });
 }
 
 /** Emit a map whose first key shares a line with `prefix` (the "- " of a

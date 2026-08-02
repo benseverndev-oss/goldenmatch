@@ -26,6 +26,16 @@ export function asStrStripped(v: unknown): string {
   return String(v).trim();
 }
 
+/** Non-stripping string read for cube/osi fields: `""` for nullish (a missing
+ * key), otherwise `String(v)`. This is Python's `str(d.get(k, ""))` for the
+ * present-value case; it deliberately maps an explicit `null`/`undefined` to `""`
+ * rather than Python's `str(None) == "None"`, since a missing field should read as
+ * empty, not the literal string "None" (real models never carry a null name/sql). */
+export function asStr(v: unknown): string {
+  if (v === undefined || v === null) return "";
+  return String(v);
+}
+
 /** A trimmed non-empty string if `v` is a string with content, else undefined. */
 export function optStr(v: unknown): string | undefined {
   if (typeof v !== "string") return undefined;
