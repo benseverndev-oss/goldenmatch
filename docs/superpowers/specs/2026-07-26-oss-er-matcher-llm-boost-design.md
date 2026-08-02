@@ -215,8 +215,11 @@ hardware; the scorecard is committed alongside the model card.
 
 ## 13. Open questions
 
-1. Base model: **Qwen2.5-3B (Apache-2.0)** vs Llama-3.2-3B (license check) — lean
-   Qwen for redistribution cleanliness. Confirm.
+1. Base model: **RESOLVED — Qwen2.5-1.5B-Instruct (Apache-2.0)** is the shipped base.
+   CORRECTION to the original claim: Qwen2.5-**3B** (and 72B) are under the **Qwen
+   Research License** (non-commercial), NOT Apache-2.0 — so the 3B is not redistribution-
+   clean and must not ship. The Apache-2.0 Qwen2.5 sizes are 0.5B / 1.5B / 7B / 14B / 32B;
+   1.5B chosen (fast + measured-strong), 7B the heavier Apache alternative.
 2. Publish under `benseverndev-oss` HF org? (need the HF org + a token secret for
    the publish workflow.)
 3. Is Path A (local OpenAI-compatible server) enough for v1, deferring the

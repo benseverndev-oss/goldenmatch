@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://goldenmatch.dev/schemas/osi-0.2.0.dev0.json",
+  "title": "Open Semantic Interchange (Ossie) 0.2.0.dev0 — GoldenMatch structural schema",
+  "description": "Machine-readable JSON Schema for the OSI/Ossie 0.2.0.dev0 structural contract as GoldenMatch reads and emits it (core-spec/osi-schema.json). Authored by GoldenMatch to mirror goldenmatch.semantic.osi.validate_osi: required fields, the datatype/dialect enums, the expression shape, and the keys the spec does NOT define (foreign_key / cardinality / aggregation). It is the machine-readable form of the same contract the structural validator enforces, not a copy of the upstream incubating schema.",
+  "type": "object",
+  "required": ["version", "semantic_model"],
+  "properties": {
+    "version": {"type": "string"},
+    "semantic_model": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/model"}
+    }
+  },
+  "$defs": {
+    "expression": {
+      "oneOf": [
+        {"type": "string"},
+        {
+          "type": "object",
+          "required": ["dialects"],
+          "properties": {
+            "dialects": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": ["dialect", "expression"],
+                "properties": {
+                  "dialect": {
+                    "type": "string",
+                    "enum": ["ANSI_SQL", "SNOWFLAKE", "MDX", "TABLEAU", "DATABRICKS", "MAQL", "BIGQUERY"]
+                  },
+                  "expression": {"type": "string"}
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "field": {
+      "type": "object",
+      "required": ["name", "expression"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "expression": {"$ref": "#/$defs/expression"},
+        "datatype": {
+          "type": "string",
+          "enum": ["String", "Integer", "Decimal", "Float", "Boolean", "Date", "Time", "DateTime", "DateTimeTz", "Opaque"]
+        }
+      }
+    },
+    "dataset": {
+      "type": "object",
+      "required": ["name"],
+      "not": {"required": ["foreign_key"]},
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "source": {"type": "string"},
+        "primary_key": {"type": "array", "items": {"type": "string"}},
+        "unique_keys": {"type": "array"},
+        "fields": {"type": "array", "items": {"$ref": "#/$defs/field"}}
+      }
+    },
+    "relationship": {
+      "type": "object",
+      "required": ["name", "from", "to", "from_columns", "to_columns"],
+      "not": {"required": ["cardinality"]},
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "from": {"type": "string", "minLength": 1},
+        "to": {"type": "string", "minLength": 1},
+        "from_columns": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "to_columns": {"type": "array", "minItems": 1, "items": {"type": "string"}}
+      }
+    },
+    "metric": {
+      "type": "object",
+      "required": ["name", "expression"],
+      "allOf": [
+        {"not": {"required": ["aggregation"]}},
+        {"not": {"required": ["agg"]}}
+      ],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "expression": {"$ref": "#/$defs/expression"}
+      }
+    },
+    "model": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "datasets": {"type": "array", "items": {"$ref": "#/$defs/dataset"}},
+        "relationships": {"type": "array", "items": {"$ref": "#/$defs/relationship"}},
+        "metrics": {"type": "array", "items": {"$ref": "#/$defs/metric"}}
+      }
+    }
+  }
+}

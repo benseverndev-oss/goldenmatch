@@ -64,6 +64,89 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   `_balanced_ranges` so no worker stalls on a giant block while the rest idle (the
   native kernel releases the GIL → real N-core parallelism; `executor.map`
   preserves order for block-order parity).
+- **Customer 360 serving surface + semantic-layer drill-through.** The `customer_360`
+  primitive (golden record + per-field provenance + linked source records + event
+  timeline + relationship neighborhood, composed from the durable store) is now
+  surfaced as a `customer_360` MCP tool and a `goldenmatch identity 360 <entity_id>`
+  CLI command (both share the `customer_360_page` serializer). New
+  `goldenmatch.semantic.profile_from_crosswalk(crosswalk, source_pk)` /
+  `entity_360(store_path, entity_id)` connect the semantic-layer wedge to Customer
+  360: a `ResolvedCrosswalk`'s `resolved_entity_id` is the same durable `entity_id`
+  the 360 keys on, so a metric row drills straight through to the whole customer
+  view with zero key translation. `customer_360` is a Python-only MCP tool (no TS
+  equivalent); goldenmatch MCP tools **91 → 92**.
+- **`emit_semantic_model_from_store` — a conformed catalog from the durable spine.**
+  `goldenmatch.semantic.emit_semantic_model_from_store(store, *, source_name,
+  source_pk_column, dialect, ...)` reads the live IdentityStore's identity summary
+  and emits the same conformed `resolved_entity_id` join declaration the crosswalk
+  emitters produce — so a dbt/MetricFlow, Cube, or OSI catalog's identity join can
+  be regenerated from the control plane at any time ("keep the catalog live"),
+  not just from a single dedupe run's `ResolvedCrosswalk`. Pairs with
+  `write_resolved_catalog` (pass `path=` to also write it).
+- **OSS local ER-matcher: ship the 1.5B model (Apache-2.0) as the default.** The
+  self-hosted LLM boost (Path A) now pins a Modal-trained, published
+  `er-matcher-1.5b-v1.0.0` GGUF (Qwen2.5-1.5B-Instruct base, Apache-2.0,
+  redistribution-clean) as the default tier. The 3B pin was withdrawn: Qwen2.5-3B
+  is under the Qwen Research License (non-commercial), so a 3B fine-tune is not
+  redistribution-clean. 1.5B is also measured stronger zero-shot (walmart pair-F1
+  0.795 vs the 3B's 0.721; in-dist F1 0.999). Training data is fully synthetic;
+  restricted real datasets are eval-only.
+- **Live catalog write-back + JSON-Schema OSI validation (semantic-layer wedge).**
+  `goldenmatch.semantic.write_resolved_catalog(crosswalk, path, *, dialect,
+  source_target, ...)` emits a `ResolvedCrosswalk`'s conformed entity declaration
+  (the `resolved_entity_id` join a metric groups by) for dbt/MetricFlow, Cube, or
+  OSI and **writes it to the catalog file** the semantic layer reads — the last
+  mile of "resolve once, every metric inherits correct joins". Refuses to clobber
+  an existing file unless `overwrite=True`, creates parent dirs, and forwards
+  emitter kwargs (`measures`/`grain`/`resolved_field`/...). Also adds a bundled
+  JSON Schema for OSI/Ossie 0.2.0.dev0 (`osi_json_schema()`) and a
+  `jsonschema`-backed validator: `validate_osi_schema(source)` and
+  `validate_osi(source, engine="structural"|"jsonschema"|"auto")`. `jsonschema` is
+  optional (the `"auto"` engine falls back to the dependency-free structural check
+  when it is absent); the default `engine="structural"` is byte-identical to prior
+  behavior.
+- **Metric-aware resolution for the semantic-layer wedge (the differentiated
+  wedge).** New `goldenmatch.semantic.semantic_field_roles(source)` reads a
+  semantic model's declared `{keys, dimensions, measures}` across all three
+  dialects (dbt/MetricFlow, Cube, OSI), and `metric_aware_attributes(roles,
+  columns)` turns them into the entity-resolution attribute allow-list — resolve
+  on the declared dimensions, never on a measure (a measure like `revenue` is an
+  aggregation target, not identity evidence). `certify_semantic_model` gained a
+  `metric_aware=True` toggle (threaded uniformly through the Cube/OSI bridges via
+  a new `roles=` argument) so the `resolve=True` tier drives its ER off the
+  model's own metadata instead of blindly profiling every column. A model that
+  declares no dimensions is byte-identical to the prior blind selection; the
+  toggle has no effect unless `resolve=True`.
+- **`grain_strict` on `certify_key_integrity` (semantic-layer wedge).** Opt-in
+  argument (default `False` = byte-identical to prior behavior: grain stays advisory
+  context and uniqueness is evaluated on the key alone). When `True` and a `grain` is
+  supplied, uniqueness and per-measure fan-out are evaluated on `key + grain` — true
+  "unique at grain", so a fact that legitimately repeats a key across grain buckets
+  (e.g. daily rows per customer) is certified rather than reported as fan-out; a real
+  duplicate *within* a grain bucket is still flagged. Grain columns are validated on
+  the strict path. The `goldenmatch_key_integrity` dbt test gained a matching
+  `grain_strict` argument in lockstep so the SQL test and this capability stay
+  semantically identical.
+- **Certify the keys a Customer 360 serving layer joins on.**
+  `goldenmatch.semantic.certify_serving_joins(store, *, dataset=None, ...)` walks
+  the durable Identity Store and runs `certify_key_integrity` over the
+  source-record join key (`record_id` = `{source}:{source_pk}`) a Customer 360 view
+  rolls metrics up on — turning the serving layer's implicit join-key trust into an
+  advisory `KeyIntegrityCertificate`, so a metric joined through the 360 provably
+  can't double-count. Returns a `ServingJoinCertificate` (record certificate +
+  entity/record counts + `truncated` when a `max_entities` cap applies).
+- **Surface the serving-layer certificate + store-emit on MCP and the CLI.** Two
+  new `identity_*` MCP tools (`certify_serving_joins`,
+  `emit_semantic_model_from_store`) and two `goldenmatch identity` subcommands
+  (`certify-serving-joins`, `emit-catalog`) expose the Customer 360 serving-join
+  certificate and the live-from-store semantic-catalog emit to agents and the
+  shell — previously library-only. MCP tool count 92 → 94.
+- **REST `GET /api/v1/identities/{entity_id}/360`.** The Customer 360 serving
+  view (golden record + per-field provenance + linked source records + event
+  timeline + relationship neighborhood) is now reachable over the identity REST
+  surface, mirroring the `customer_360` MCP tool and the `identity 360` CLI
+  command. Query params `include_relationships` (default true) and
+  `timeline_limit`; 404 when the entity does not exist.
 
 ### Changed
 - **FS out-of-core streaming: single `resolve_fs_block_source` knob + DuckDB

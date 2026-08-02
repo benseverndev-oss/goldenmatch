@@ -27,7 +27,7 @@ package does not ship that surface.
 {/* api-surface-matrix:generated:start -- DO NOT EDIT. Regenerate: python scripts/gen_api_surface.py --write */}
 | Package | Python (PyPI) | TypeScript (npm) | CLI | MCP tools | REST | A2A | Native / SQL |
 |---------|:-------------:|:----------------:|-----|:---------:|:----:|:---:|--------------|
-| [GoldenMatch](#goldenmatch) | `3.10.0` | `1.26.0` | `goldenmatch` | 90 | ✓ | ✓ | wheel · Postgres · DuckDB |
+| [GoldenMatch](#goldenmatch) | `3.10.0` | `1.26.0` | `goldenmatch` | 94 | ✓ | ✓ | wheel · Postgres · DuckDB |
 | [GoldenCheck](#goldencheck) | `3.2.0` | `0.6.0` | `goldencheck` | 19 | ✓ | ✓ | wheel |
 | [GoldenFlow](#goldenflow) | `2.1.0` | `0.17.0` | `goldenflow` | 10 | ✓ | ✓ | wheel |
 | [GoldenPipe](#goldenpipe) | `1.4.0` | `0.3.0` | `goldenpipe` | 4 | ✓ | ✓ | core (WASM) |
@@ -59,9 +59,11 @@ neglect:
   (`read_file`, `write_csv`, `server_info`) were the last holdouts, and Python now
   exposes all eight.
 
-So GoldenMatch's **83 TS tools vs 90 Python** breaks down as 83 shared operations,
-**zero TS-only**, and 7 Python-only tools (the VLM document-ingest pair, the
-distributed routing trio, `list_plugins`, and `pprl_auto_config`). The TS MCP surface
+So GoldenMatch's **85 TS tools vs 94 Python** breaks down as 85 shared operations,
+**zero TS-only**, and 9 Python-only tools (the VLM document-ingest pair, the
+distributed routing trio, `list_plugins`, `pprl_auto_config`, and the
+semantic-layer catalog front doors — `certify_semantic_model` and
+`emit_semantic_model_from_store` (the dialect emitters are Python-only)). The TS MCP surface
 is now a strict subset of the Python one — every TS tool has a Python counterpart of
 the same name, and what remains Python-only is the set with no JS-ecosystem
 equivalent. On the shared core the **public function names match**, and that parity
@@ -128,7 +130,7 @@ graph, privacy-preserving linkage. The flagship — a native wheel, SQL extensio
 
 **Servers** — REST (`goldenmatch serve`: `/match`, `/autoconfig`, `/clusters`,
 `/reviews`, `/controller/telemetry`, …) · A2A (`goldenmatch agent-serve`) · local
-web UI (`goldenmatch serve-ui`) · **90 MCP tools**.
+web UI (`goldenmatch serve-ui`) · **94 MCP tools**.
 
 **Native / SQL** — `goldenmatch-native` wheel, a Postgres extension (pgrx:
 `goldenmatch_dedupe`, `goldenmatch_autoconfig`, `goldenmatch_connected_components`, …),

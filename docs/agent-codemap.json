@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 433,
+      "module_count": 438,
       "modules": [
         {
           "module": "goldenmatch",
@@ -491,6 +491,18 @@
           ]
         },
         {
+          "module": "goldenmatch.cli.certify_keys",
+          "file": "packages/python/goldenmatch/goldenmatch/cli/certify_keys.py",
+          "purpose": "CLI `certify-keys` command -- the semantic-layer front door.",
+          "defines": [
+            "certify_keys_cmd"
+          ],
+          "imports": [
+            "goldenmatch.core.io_arrow",
+            "goldenmatch.semantic"
+          ]
+        },
+        {
           "module": "goldenmatch.cli.compare",
           "file": "packages/python/goldenmatch/goldenmatch/cli/compare.py",
           "purpose": "CLI compare-clusters command for GoldenMatch.",
@@ -593,7 +605,10 @@
           "purpose": "CLI: ``goldenmatch identity ...`` -- inspect and manage the Identity Graph.",
           "defines": [
             "_open",
+            "certify_serving_joins_cmd",
             "conflicts_cmd",
+            "customer_360_cmd",
+            "emit_catalog_cmd",
             "history_cmd",
             "list_cmd",
             "merge_cmd",
@@ -604,7 +619,8 @@
             "split_cmd"
           ],
           "imports": [
-            "goldenmatch.identity"
+            "goldenmatch.identity",
+            "goldenmatch.semantic"
           ]
         },
         {
@@ -738,6 +754,7 @@
             "goldenmatch.cli.agent_serve",
             "goldenmatch.cli.anomalies",
             "goldenmatch.cli.autoconfig",
+            "goldenmatch.cli.certify_keys",
             "goldenmatch.cli.compare",
             "goldenmatch.cli.dedupe",
             "goldenmatch.cli.demo",
@@ -1541,11 +1558,15 @@
             "LocalModelSpec",
             "_local_llm_mode",
             "_model_cache_dir",
+            "_project",
             "_verify_sha256",
             "load_local_adapter",
             "parse_verdict",
             "resolve_model_path",
             "serialize_pair_v1"
+          ],
+          "imports": [
+            "goldenmatch.core.er_matcher.prompt"
           ]
         },
         {
@@ -1769,6 +1790,7 @@
             "ColumnProfile",
             "SemanticBlockingDecision",
             "_adaptive_threshold",
+            "_anchor_coblock_overlap",
             "_arrow_to_polars_dtype_spelling",
             "_auto_build_lsh_config",
             "_auto_semantic_blocking_enabled",
@@ -1780,12 +1802,16 @@
             "_check_source_overlap",
             "_classify_by_data",
             "_classify_by_name",
+            "_coblock_membership",
             "_compute_max_safe_block",
             "_concrete_dtype_spelling",
+            "_cost_aware_blocking_enabled",
+            "_dataset_is_person_shaped",
             "_degenerate_blocking_config",
             "_detect_source_partition",
             "_detect_standardization_config",
             "_diversify_probabilistic_blocking",
+            "_diversify_unused_orthogonal_blocking",
             "_embedder_available",
             "_emit_data_profile",
             "_env_force_exclude",
@@ -1795,6 +1821,7 @@
             "_field_group_detection_enabled",
             "_fs_autoconfig_v2_enabled",
             "_fs_domain_comparators_enabled",
+            "_fs_orthogonal_blocking_mode",
             "_fs_route_min_rows",
             "_fs_strip_honorifics_enabled",
             "_fs_tf_adjustment_enabled",
@@ -1802,6 +1829,7 @@
             "_fuzzy_pass_transforms",
             "_get_default_memory",
             "_has_fuzzy_tolerant_transform",
+            "_is_bibliographic_dataset",
             "_is_person_name_column",
             "_is_probabilistic_shape",
             "_is_short_code",
@@ -1823,6 +1851,7 @@
             "_noise_aware_scorers_enabled",
             "_noise_aware_target_scorer",
             "_norm_colname",
+            "_pass_row_keys",
             "_pass_specs",
             "_pick_date_blocking_col",
             "_pick_missing_semantics",
@@ -2300,6 +2329,7 @@
             "_build_static_blocks",
             "_emit_blocking_profile",
             "_fast_static_block_sizes",
+            "_memoized_transform",
             "_percentile",
             "_sub_block",
             "build_blocks",
@@ -4078,6 +4108,7 @@
             "goldenmatch.core._native_loader",
             "goldenmatch.core.embedder",
             "goldenmatch.core.frame",
+            "goldenmatch.core.matchkey",
             "goldenmatch.core.scorer",
             "goldenmatch.core.tf_tables",
             "goldenmatch.refdata.given_names",
@@ -6423,11 +6454,13 @@
             "_actor_trust",
             "_dispatch",
             "_open",
+            "_serving_certificate_dict",
             "handle_identity_tool"
           ],
           "imports": [
             "goldenmatch.core.memory.store",
-            "goldenmatch.identity"
+            "goldenmatch.identity",
+            "goldenmatch.semantic"
           ]
         },
         {
@@ -6483,6 +6516,7 @@
             "_safe_path_or_error",
             "_tool_analyze_blocking",
             "_tool_build_clusters",
+            "_tool_certify_semantic_model",
             "_tool_compare_clusters",
             "_tool_config_weaknesses",
             "_tool_convert_splink_config",
@@ -6543,6 +6577,7 @@
             "goldenmatch.core.evaluate",
             "goldenmatch.core.explainer",
             "goldenmatch.core.ingest",
+            "goldenmatch.core.io_arrow",
             "goldenmatch.core.lineage",
             "goldenmatch.core.match_one",
             "goldenmatch.core.matchkey",
@@ -6561,6 +6596,7 @@
             "goldenmatch.mcp.routing_tools",
             "goldenmatch.pprl.autoconfig",
             "goldenmatch.pprl.protocol",
+            "goldenmatch.semantic",
             "goldenmatch.tui.engine"
           ]
         },
@@ -7065,7 +7101,66 @@
           "purpose": "Semantic-layer interoperability (the MetricFlow / Cube / OSI wedge).",
           "imports": [
             "goldenmatch.core.key_integrity_certificate",
+            "goldenmatch.semantic.blocking",
+            "goldenmatch.semantic.catalog",
+            "goldenmatch.semantic.certify",
             "goldenmatch.semantic.crosswalk",
+            "goldenmatch.semantic.cube",
+            "goldenmatch.semantic.key_integrity",
+            "goldenmatch.semantic.metricflow",
+            "goldenmatch.semantic.osi",
+            "goldenmatch.semantic.serving"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.blocking",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/blocking.py",
+          "purpose": "Metric-aware attribute selection for the semantic-layer resolution tier.",
+          "defines": [
+            "SemanticFieldRoles",
+            "_dedup",
+            "_frame_columns",
+            "metric_aware_attributes",
+            "semantic_field_roles"
+          ],
+          "imports": [
+            "goldenmatch.semantic.certify",
+            "goldenmatch.semantic.cube",
+            "goldenmatch.semantic.key_integrity",
+            "goldenmatch.semantic.metricflow",
+            "goldenmatch.semantic.osi"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.catalog",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/catalog.py",
+          "purpose": "Live catalog write-back for the semantic-layer wedge (wedge B, persisted).",
+          "defines": [
+            "_emit_for_dialect",
+            "emit_semantic_model_from_store",
+            "write_resolved_catalog"
+          ],
+          "imports": [
+            "goldenmatch.identity",
+            "goldenmatch.semantic.crosswalk",
+            "goldenmatch.semantic.cube",
+            "goldenmatch.semantic.metricflow",
+            "goldenmatch.semantic.osi"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.certify",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/certify.py",
+          "purpose": "Zero-config front door: certify every declared key in a semantic model.",
+          "defines": [
+            "KeyCertification",
+            "SemanticCertification",
+            "certify_semantic_model",
+            "detect_dialect"
+          ],
+          "imports": [
+            "goldenmatch.core.key_integrity_certificate",
+            "goldenmatch.semantic.blocking",
             "goldenmatch.semantic.cube",
             "goldenmatch.semantic.key_integrity",
             "goldenmatch.semantic.metricflow",
@@ -7113,6 +7208,7 @@
             "parse_cube_models"
           ],
           "imports": [
+            "goldenmatch.semantic.blocking",
             "goldenmatch.semantic.key_integrity",
             "goldenmatch.semantic.metricflow"
           ]
@@ -7172,12 +7268,30 @@
             "emit_osi_relationship",
             "emit_osi_yaml",
             "osi_join_keys",
+            "osi_json_schema",
             "parse_osi_models",
-            "validate_osi"
+            "validate_osi",
+            "validate_osi_schema"
           ],
           "imports": [
+            "goldenmatch.semantic.blocking",
             "goldenmatch.semantic.key_integrity",
             "goldenmatch.semantic.metricflow"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.serving",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/serving.py",
+          "purpose": "Semantic-layer ↔ Customer 360 drill-through.",
+          "defines": [
+            "ServingJoinCertificate",
+            "certify_serving_joins",
+            "entity_360",
+            "profile_from_crosswalk"
+          ],
+          "imports": [
+            "goldenmatch.identity",
+            "goldenmatch.semantic.key_integrity"
           ]
         },
         {
@@ -7809,6 +7923,7 @@
             "_store_for",
             "by_record_endpoint",
             "conflicts_endpoint",
+            "customer_360_endpoint",
             "evidence_endpoint",
             "get_endpoint",
             "history_endpoint",
@@ -11813,6 +11928,7 @@
             "_frame_head_dicts",
             "_frame_rows",
             "_is_frame",
+            "_jail_path",
             "_result_to_dict",
             "_summarize_output",
             "create_server",

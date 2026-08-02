@@ -2612,10 +2612,19 @@ def _field_values_from_list(raw: list | None, f, n: int) -> list[str | None]:
 
 def _field_values_for_block(block_df: pl.DataFrame, f, n: int) -> list[str | None]:
     """Transformed per-field values for a block, matching comparison_vector.
-    Missing column -> all-null (unobserved evidence)."""
+    Missing column -> all-null (unobserved evidence).
+
+    Prefers the precomputed ``__xform_<sig>__`` column when present (already the
+    transformed values), skipping the per-row transform re-derivation -- the Vec
+    (older-wheel) analog of the ``_fs_arrow_column`` fast path. Byte-identical by
+    the precompute contract; falls back to the raw field otherwise."""
     from goldenmatch.core.frame import to_frame as _to_frame_d5
+    from goldenmatch.core.matchkey import _xform_sig
 
     _bf = _to_frame_d5(block_df)
+    sig = _xform_sig(f)
+    if sig in _bf.columns:
+        return _bf.column(sig).to_list()
     raw = _bf.column(f.field).to_list() if f.field in _bf.columns else None
     return _field_values_from_list(raw, f, n)
 
@@ -3533,8 +3542,27 @@ def _fs_arrow_column(native_df, f, n: int):
 
     from goldenmatch.core.frame import is_polars_dataframe as _ipd
     from goldenmatch.core.frame import to_frame as _tf
+    from goldenmatch.core.matchkey import _xform_sig
 
     _bf = _tf(native_df)
+    # Prefer the precomputed ``__xform_<sig>__`` column (materialized ONCE on the
+    # full frame by ``precompute_matchkey_transforms``). It already holds exactly
+    # the transformed values ``_field_values_from_list`` would rebuild, so reading
+    # it returns the arrow buffer ZERO-COPY and skips the per-bucket, per-row
+    # transform re-derivation that otherwise dominated FS scoring input-prep.
+    # Mirrors the weighted fast path (``score_buckets`` reads ``_xform_sig(f)``);
+    # byte-identical by the precompute contract (``__xform_<sig>__`` == the
+    # apply_transforms fallback). Falls back to the raw field where the column is
+    # absent (paths that skip precompute).
+    sig = _xform_sig(f)
+    if sig in _bf.columns:
+        native = _bf.native
+        arr = (
+            native[sig].to_arrow() if _ipd(native)
+            else native.column(sig).combine_chunks()
+        )
+        if _pa.types.is_string(arr.type) or _pa.types.is_large_string(arr.type):
+            return arr
     if f.field not in _bf.columns:
         return _pa.nulls(n, type=_pa.large_string())
     native = _bf.native

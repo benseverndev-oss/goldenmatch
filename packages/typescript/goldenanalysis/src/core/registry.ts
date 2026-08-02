@@ -3,6 +3,7 @@
 
 import { ClusterDistributionAnalyzer } from "./analyzers/clusterDist.js";
 import { FrameSummaryAnalyzer } from "./analyzers/frameSummary.js";
+import { KeyIntegrityAnalyzer } from "./analyzers/keyIntegrity.js";
 import { MatchRatesAnalyzer } from "./analyzers/matchRates.js";
 import { QualityRollupAnalyzer } from "./analyzers/qualityRollup.js";
 import type { Analyzer } from "./types.js";
@@ -12,6 +13,7 @@ const FACTORIES: Record<string, () => Analyzer> = {
   "match.rates": () => new MatchRatesAnalyzer(),
   "cluster.distribution": () => new ClusterDistributionAnalyzer(),
   "quality.rollup": () => new QualityRollupAnalyzer(),
+  "key.integrity": () => new KeyIntegrityAnalyzer(),
 };
 
 export function availableAnalyzers(): string[] {

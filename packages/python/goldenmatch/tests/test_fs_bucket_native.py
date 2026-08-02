@@ -28,6 +28,8 @@ from goldenmatch.config.schemas import (
     MatchkeyField,
 )
 from goldenmatch.core.probabilistic import (
+    _field_values_for_block,
+    _fs_arrow_column,
     _fs_native_enabled,
     score_probabilistic_bucket_native,
     score_probabilistic_native,
@@ -254,9 +256,14 @@ def test_fs_bucket_route_decision(monkeypatch, caplog):
     # polars-direct is the planner's in-band choice -> same default as None
     # (parity with _use_bucket_scorer's band semantics).
     assert _fs_use_bucket_route(_prob_config(backend="polars-direct"), mk) is True
-    # Explicit bucket honored, explicit scale backends keep their routing.
+    # Explicit bucket honored; genuinely-distributed scale backends keep their
+    # routing, but `duckdb` (single-node STORAGE, no distinct FS route) honors the
+    # memory-bounded bucket scorer for FS rather than falling to the batched OOM
+    # path -- which is also quality-divergent from bucket with an additive anchor
+    # (historical_50k). See _fs_use_bucket_route's inline note.
     assert _fs_use_bucket_route(_prob_config(backend="bucket"), mk) is True
-    for be in ("ray", "duckdb", "datafusion"):
+    assert _fs_use_bucket_route(_prob_config(backend="duckdb"), mk) is True
+    for be in ("ray", "datafusion"):
         assert _fs_use_bucket_route(_prob_config(backend=be), mk) is False
 
     # Escape hatch always wins -- and warns (the batched fallback is the
@@ -772,3 +779,32 @@ def test_fs_factorize_matches_per_pair(monkeypatch):
         fac_off = _pairset(score_probabilistic_bucket_native(sdf, sizes, mk, em))
 
         assert fac_on == fac_off, "factorized comparison diverged from per-pair"
+
+
+def test_fs_field_readers_prefer_precomputed_xform_column():
+    """`_fs_arrow_column` / `_field_values_for_block` must read the precomputed
+    `__xform_<sig>__` column (materialized once by precompute_matchkey_transforms)
+    instead of re-deriving the transform per bucket -- the ~5.6x bucket_score
+    speedup at 1M. Proven by making the precomputed column DIFFER from what
+    re-deriving the raw field would produce and asserting the readers return the
+    precomputed values; the fallback (column absent) still re-derives."""
+    from goldenmatch.config.schemas import MatchkeyField
+    from goldenmatch.core.matchkey import _xform_sig
+
+    f = MatchkeyField(field="first_name", scorer="jaro_winkler", transforms=["lowercase"])
+    sig = _xform_sig(f)
+    # Precomputed column carries SENTINELS distinct from lowercase(raw), so a
+    # reader that re-derives would return ["alice","bob"], not the sentinels.
+    df = pl.DataFrame({
+        "first_name": ["ALICE", "BOB"],
+        sig: ["<precomputed-0>", "<precomputed-1>"],
+    })
+    assert _field_values_for_block(df, f, 2) == ["<precomputed-0>", "<precomputed-1>"]
+    # `.to_pylist()` on the returned object (works for Array AND ChunkedArray --
+    # a chunked Polars series yields the latter).
+    assert _fs_arrow_column(df, f, 2).to_pylist() == ["<precomputed-0>", "<precomputed-1>"]
+
+    # Fallback: no precomputed column -> re-derive the transform from the raw field.
+    df_raw = pl.DataFrame({"first_name": ["ALICE", "BOB"]})
+    assert _field_values_for_block(df_raw, f, 2) == ["alice", "bob"]
+    assert _fs_arrow_column(df_raw, f, 2).to_pylist() == ["alice", "bob"]

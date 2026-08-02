@@ -4,19 +4,23 @@
  * Port of goldencheck/cli/main.py using Commander.js.
  */
 
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readFileSync, writeFileSync } from "node:fs";
+import { resolve, basename } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Command } from "commander";
 import { readFile } from "./node/reader.js";
 import { scanData } from "./core/engine/scanner.js";
 import { applyConfidenceDowngrade } from "./core/engine/confidence.js";
-import { Severity, healthScore, type Finding } from "./core/types.js";
+import { Severity, severityLabel, healthScore, type Finding } from "./core/types.js";
 import { reportJson } from "./core/reporters/json.js";
 import { ciCheck } from "./core/reporters/ci.js";
 import { listAvailableDomains } from "./core/semantic/domains/index.js";
 import { recordScan, loadHistory } from "./core/engine/history.js";
 import { evaluateScan, type ExpectedFinding } from "./core/engine/evaluate.js";
+import { maybeSample } from "./core/engine/sampler.js";
+import { generateRules, serializeRules } from "./core/llm/rule-generator.js";
+import { referentialIntegrity } from "./core/engine/referential.js";
+import { discoverDenialConstraints } from "./core/denial/mine.js";
 
 export const program = new Command();
 
@@ -164,6 +168,77 @@ program
     const newResult = scanData(newData);
     const report = diffData(oldData, newData, oldResult.findings, newResult.findings);
     console.log(formatDiffReport(report));
+  });
+
+// --- refs (cross-file referential integrity / foreign-key validation) ---
+// Mirrors the Python `refs` command: read child + parent, check that the child's
+// FK values all exist in the parent's key, report orphans / rate / cardinality.
+// The engine (core/engine/referential.ts) is pure/edge-safe; file I/O lives here.
+program
+  .command("refs <child> <parent>")
+  .description("Check referential integrity (foreign keys) between two files")
+  .option(
+    "--on <mapping>",
+    "FK mapping 'child_col=parent_col' (repeatable); omit to auto-detect",
+    (val: string, prev: string[]) => [...prev, val],
+    [] as string[],
+  )
+  .option("--json", "Output results as JSON")
+  .option("--fail-on <severity>", "CI exit threshold: error/warning/info", "error")
+  .action((child: string, parent: string, opts: Record<string, unknown>) => {
+    const childData = readFile(child);
+    const parentData = readFile(parent);
+    const on = opts["on"] as string[];
+    const findings = referentialIntegrity(childData, parentData, on.length > 0 ? on : undefined, {
+      childName: basename(child),
+      parentName: basename(parent),
+    });
+
+    if (opts["json"]) {
+      console.log(JSON.stringify(findings, null, 2));
+    } else {
+      const ordered = [...findings].sort((a, b) => b.severity - a.severity);
+      for (const f of ordered) {
+        console.log(`${severityLabel(f.severity)} ${f.column}: ${f.message}`);
+        if (f.sampleValues.length > 0) {
+          console.log(`  e.g. ${f.sampleValues.join(", ")}`);
+        }
+      }
+    }
+
+    process.exitCode = ciCheck(findings, String(opts["failOn"] ?? "error"));
+  });
+
+// --- denial-constraints ---
+// Mirrors the Python `denial-constraints` command: read the file, mine denial
+// constraints (cross-column "if A then not-B" invariants), print each discovered
+// DC + its hold-rate line. The engine (core/denial/) is pure/edge-safe; file I/O
+// lives here. Closes the last goldencheck python_only CLI parity gap.
+program
+  .command("denial-constraints <file>")
+  .description("Discover denial constraints — cross-column 'if A then not-B' invariants — from data")
+  .option("--min-confidence <n>", "Fraction of rows/pairs a DC must hold for (default: engine default)")
+  .option("--sample-size <n>", "Bound the cross-tuple (pairwise) pass")
+  .option("--max-constraints <n>", "Cap the ranked number of DCs reported")
+  .action((file: string, opts: Record<string, unknown>) => {
+    const data = readFile(file);
+    const dcs = discoverDenialConstraints(data, {
+      minConfidence: opts["minConfidence"] !== undefined ? Number(opts["minConfidence"]) : null,
+      sampleSize: opts["sampleSize"] !== undefined ? Number(opts["sampleSize"]) : null,
+      maxConstraints: opts["maxConstraints"] !== undefined ? Number(opts["maxConstraints"]) : null,
+    });
+
+    if (dcs.length === 0) {
+      console.log("No denial constraints discovered.");
+      return;
+    }
+
+    console.log(`Discovered ${dcs.length} denial constraint(s):`);
+    for (const dc of dcs) {
+      const held = 1.0 - dc.g1;
+      console.log(`  ${dc.render()}`);
+      console.log(`    holds ${(held * 100).toFixed(1)}% (g1=${dc.g1.toFixed(4)}, ${dc.tupleScope}-tuple)`);
+    }
   });
 
 // --- watch ---
@@ -341,6 +416,38 @@ program
     if (ev.f1 < minF1) {
       console.error(`\nF1 ${ev.f1.toFixed(4)} is below minimum ${minF1.toFixed(4)}`);
       process.exit(1);
+    }
+  });
+
+// Generate validation rules via LLM analysis of the data. Mirrors the Python
+// `learn` command (goldencheck/cli/main.py): sample -> scan -> generateRules ->
+// serialize to a rules file. The engine (generateRules/serializeRules) is already
+// edge-safe (fetch-based, no SDK); this wires the CLI command over it, closing the
+// goldencheck `learn` python_only parity gap.
+program
+  .command("learn <file>")
+  .description("Generate validation rules using LLM analysis of your data")
+  .option("-o, --output <path>", "Output path for rules", "goldencheck_rules.json")
+  .option("--llm-provider <provider>", "LLM provider: anthropic or openai", "anthropic")
+  .action(async (file: string, opts: Record<string, unknown>) => {
+    const data = readFile(file);
+    const sample = maybeSample(data, 100_000);
+    const { findings } = scanData(data);
+
+    console.log(`Analyzing ${data.rowCount.toLocaleString()} rows, ${data.columns.length} columns...`);
+    const rules = await generateRules(sample, findings, String(opts["llmProvider"] ?? "anthropic"));
+
+    if (rules.length === 0) {
+      console.error("No rules generated.");
+      process.exitCode = 1;
+      return;
+    }
+
+    const outPath = String(opts["output"] ?? "goldencheck_rules.json");
+    writeFileSync(outPath, serializeRules(rules));
+    console.log(`Generated ${rules.length} rules -> ${outPath}`);
+    for (const r of rules) {
+      console.log(`  [${r.ruleType}] ${r.column}: ${r.description}`);
     }
   });
 

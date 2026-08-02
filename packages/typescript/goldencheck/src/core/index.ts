@@ -56,6 +56,7 @@ export { maybeSample } from "./engine/sampler.js";
 export { applyCorroborationBoost, applyConfidenceDowngrade } from "./engine/confidence.js";
 export { applyFixes, type FixEntry, type FixReport } from "./engine/fixer.js";
 export { diffData, formatDiffReport, type DiffReport, type SchemaChange, type FindingChange, type StatChange } from "./engine/differ.js";
+export { referentialIntegrity, checkReferentialIntegrity, autoDetectMappings, parseOn, type ReferentialOptions } from "./engine/referential.js";
 export { autoTriage, type TriageResult } from "./engine/triage.js";
 export {
   evaluateScan,
@@ -132,6 +133,10 @@ export { COLUMN_PROFILERS, type Profiler, type RelationProfiler, generalize } fr
 
 // Relations
 export { RELATION_PROFILERS, IdentitySafePkProfiler } from "./relations/index.js";
+
+// Denial constraints
+export { discoverDenialConstraints } from "./denial/mine.js";
+export { DenialConstraint, Predicate, Op, type PredicateKind } from "./denial/models.js";
 
 // Demo data generator
 export { generateDemoRecords, type DemoOptions } from "./cli/demo-data.js";

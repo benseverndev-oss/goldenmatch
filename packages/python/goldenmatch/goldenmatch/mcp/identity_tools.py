@@ -15,6 +15,12 @@
 - ``identity_profile``   -> MDM profile of one entity (sources, conflicts, version)
 - ``identity_stats``     -> graph-level summary / health stats
 - ``identity_worklist``  -> prioritized steward worklist
+- ``customer_360``       -> the unified serving view of one entity (golden record +
+                            provenance + linked records + timeline + relationships)
+- ``certify_serving_joins`` -> certify that a Customer 360 serving layer's
+                            source-record join key is unique (can't double-count)
+- ``emit_semantic_model_from_store`` -> emit a conformed semantic-layer catalog
+                            (the ``resolved_entity_id`` join) directly from the store
 """
 from __future__ import annotations
 
@@ -28,6 +34,7 @@ from goldenmatch.identity import (
     IdentityStore,
     audit_log_page,
     claim_record,
+    customer_360_page,
     entity_profile,
     find_by_record,
     find_conflicts,
@@ -353,6 +360,111 @@ IDENTITY_TOOLS: list[Tool] = [
             },
         },
     ),
+    Tool(
+        name="customer_360",
+        description=(
+            "The unified Customer 360 serving view of one entity, composed from "
+            "the durable store in one call: the golden record + per-field source "
+            "provenance, every linked source record, the event timeline, and the "
+            "relationship neighborhood. This is the same durable entity_id a "
+            "resolved crosswalk (semantic-layer wedge) groups metrics by, so a "
+            "metric row drills straight through to the customer. Returns "
+            "{found: false} when no such entity exists."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "entity_id": {"type": "string"},
+                "include_relationships": {"type": "boolean", "default": True},
+                "timeline_limit": {
+                    "type": "integer",
+                    "description": "Cap the number of timeline events (most recent first).",
+                },
+                "path": {"type": "string", "description": "Identity DB path"},
+            },
+            "required": ["entity_id"],
+        },
+    ),
+    Tool(
+        name="certify_serving_joins",
+        description=(
+            "Certify that a Customer 360 serving layer's join keys can't "
+            "double-count. A 360 view joins the golden record to its source "
+            "records on the durable record_id (`{source}:{source_pk}`); if that "
+            "key is duplicated, a fact rolled up through the 360 silently "
+            "double-counts. This walks the store's entities, assembles the "
+            "record_id join key, and returns a key-integrity certificate over it "
+            "({trustworthy, n_entities, n_records, truncated, record_id: "
+            "{is_unique_at_grain, duplicate_key_groups, max_fan_out, estimate}})."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "dataset": {"type": "string", "description": "Restrict to one identity-graph dataset."},
+                "status": {
+                    "type": "string",
+                    "default": "active",
+                    "description": "Entity status to include (default 'active').",
+                },
+                "page_size": {"type": "integer", "default": 500, "description": "Entity-scan pagination size."},
+                "max_entities": {
+                    "type": "integer",
+                    "description": "Cap the scan at this many entities (cert then covers a prefix, truncated=true).",
+                },
+                "path": {"type": "string", "description": "Identity DB path"},
+            },
+        },
+    ),
+    Tool(
+        name="emit_semantic_model_from_store",
+        description=(
+            "Emit a conformed semantic-layer catalog (the `resolved_entity_id` "
+            "join a MetricFlow / Cube / OSI model should group metrics by) "
+            "directly from the durable identity store — 'keep the semantic "
+            "layer's identity join live against the control plane'. Returns the "
+            "emitted YAML; when `path` is set, also writes it to that catalog "
+            "file (refuses to clobber unless overwrite=true)."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "source_name": {
+                    "type": "string",
+                    "description": "Logical source name the records were ingested under.",
+                },
+                "source_pk_column": {
+                    "type": "string",
+                    "description": "Column holding each record's source primary key (the join column).",
+                },
+                "dialect": {
+                    "type": "string",
+                    "enum": ["metricflow", "cube", "osi"],
+                    "default": "metricflow",
+                },
+                "dataset": {"type": "string", "description": "Identity-graph dataset scope (defaults to all)."},
+                "source_target": {
+                    "type": "string",
+                    "description": "Source model / cube / dataset the join points at (defaults to source_name).",
+                },
+                "resolved_key": {
+                    "type": "string",
+                    "default": "resolved_entity_id",
+                    "description": "The conformed join column name (the control-plane id).",
+                },
+                "out_path": {
+                    "type": "string",
+                    "description": "Optional catalog file to write the emitted YAML to.",
+                },
+                "overwrite": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Overwrite an existing catalog file at `out_path`.",
+                },
+                "path": {"type": "string", "description": "Identity DB path"},
+            },
+            "required": ["source_name", "source_pk_column"],
+        },
+    ),
 ]
 
 
@@ -379,6 +491,24 @@ def _actor_trust(args: dict) -> tuple[str, float | None]:
         except Exception:
             trust = None
     return actor, (float(trust) if trust is not None else None)
+
+
+def _serving_certificate_dict(cert: Any) -> dict[str, Any]:
+    """Serialize a `ServingJoinCertificate` (from `certify_serving_joins`) to a
+    JSON-safe dict, projecting the inner `KeyIntegrityCertificate`."""
+    rc = cert.record_certificate
+    return {
+        "trustworthy": cert.is_trustworthy,
+        "n_entities": cert.n_entities,
+        "n_records": cert.n_records,
+        "truncated": cert.truncated,
+        "record_id": {
+            "is_unique_at_grain": rc.is_unique_at_grain,
+            "duplicate_key_groups": rc.duplicate_key_groups,
+            "max_fan_out": rc.max_fan_out,
+            "estimate": rc.estimate,
+        },
+    }
 
 
 def _dispatch(name: str, args: dict) -> dict[str, Any]:
@@ -502,6 +632,50 @@ def _dispatch(name: str, args: dict) -> dict[str, Any]:
                 weak_confidence=float(args.get("weak_confidence", 0.6)),
                 limit=int(args.get("limit", 50)),
             )
+
+    if name == "customer_360":
+        tl = args.get("timeline_limit")
+        with _open(args) as s:
+            page = customer_360_page(
+                s,
+                args["entity_id"],
+                include_relationships=bool(args.get("include_relationships", True)),
+                timeline_limit=int(tl) if tl is not None else None,
+            )
+        return page if page is not None else {"found": False}
+
+    if name == "certify_serving_joins":
+        from goldenmatch.semantic import certify_serving_joins
+        me = args.get("max_entities")
+        with _open(args) as s:
+            cert = certify_serving_joins(
+                s,
+                dataset=args.get("dataset"),
+                status=args.get("status", "active"),
+                page_size=int(args.get("page_size", 500)),
+                max_entities=int(me) if me is not None else None,
+            )
+        return _serving_certificate_dict(cert)
+
+    if name == "emit_semantic_model_from_store":
+        from goldenmatch.semantic import emit_semantic_model_from_store
+        emit_kwargs = {
+            k: args[k]
+            for k in ("dataset", "source_target")
+            if args.get(k) is not None
+        }
+        with _open(args) as s:
+            yaml_str = emit_semantic_model_from_store(
+                s,
+                source_name=args["source_name"],
+                source_pk_column=args["source_pk_column"],
+                dialect=args.get("dialect", "metricflow"),
+                resolved_key=args.get("resolved_key", "resolved_entity_id"),
+                path=args.get("out_path"),
+                overwrite=bool(args.get("overwrite", False)),
+                **emit_kwargs,
+            )
+        return {"yaml": yaml_str, "written_to": args.get("out_path")}
 
     raise ValueError(f"unknown identity tool: {name}")
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""P3 LoRA SFT trainer for the OSS ER-matcher (Qwen2.5-3B-Instruct).
+"""P3 LoRA SFT trainer for the OSS ER-matcher (Qwen2.5-1.5B-Instruct, Apache-2.0).
 
 PERF-GATED (plan §Phase 3): built optimized + instrumented from the start so the
 cheap smoke run (``--smoke``) measures the real workload BEFORE the multi-hour
@@ -47,7 +47,7 @@ DEFAULT_NOMATCH_CONF = 0.1
 # --- config (pure) -----------------------------------------------------------
 @dataclass
 class TrainConfig:
-    base_model: str = "Qwen/Qwen2.5-3B-Instruct"
+    base_model: str = "Qwen/Qwen2.5-1.5B-Instruct"
     base_revision: str | None = None       # pin the base commit for reproducibility
     serializer_version: str = SERIALIZER_VERSION
     # LoRA
@@ -201,16 +201,17 @@ def _norm(v: Any) -> str:
     return "" if v is None else str(v).strip().lower()
 
 
-def serialized_token_lengths(rows: Iterable[dict[str, Any]], tokenizer: Any) -> list[int]:
-    """Token length of each serialized pair (system+user+target) under the real
-    tokenizer -- feeds measured_max_seq_len. Tokenizer is injected so this is
-    testable with a stub (len-of-split) without transformers."""
-    out = []
-    for row in rows:
-        msgs = example_to_messages(row, TrainConfig())
-        text = "\n".join(m["content"] for m in msgs)
-        out.append(len(tokenizer(text)))
-    return out
+def serialized_token_lengths(rows: Iterable[dict[str, Any]], tokenize_messages: Any) -> list[int]:
+    """Token length of each training example under the SAME tokenization the
+    trainer uses -- the chat-templated (system+user+target) message sequence.
+
+    ``tokenize_messages(messages) -> Sequence`` is injected: the GPU caller passes
+    ``lambda msgs: tokenizer.apply_chat_template(msgs, tokenize=True)`` so the
+    measured P95 includes the per-turn special tokens (``<|im_start|>`` etc.) --
+    a naive ``"\\n".join(content)`` omits them and under-measures max_seq_len,
+    making truncation more common than intended. Injecting the tokenizer keeps
+    this testable with a stub (no transformers)."""
+    return [len(tokenize_messages(example_to_messages(row, TrainConfig()))) for row in rows]
 
 
 # --- IO ----------------------------------------------------------------------
@@ -233,7 +234,7 @@ def apply_overrides(cfg: TrainConfig, args: Any) -> TrainConfig:
 
 # --- training entrypoint (lazy heavy deps) -----------------------------------
 def main(argv: Iterable[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="LoRA SFT the OSS ER-matcher (Qwen2.5-3B).")
+    ap = argparse.ArgumentParser(description="LoRA SFT the OSS ER-matcher (Qwen2.5-1.5B, Apache-2.0).")
     ap.add_argument("--config", type=Path, default=Path(__file__).with_name("config.yaml"))
     ap.add_argument("--data-dir", type=Path, default=Path("data/er_matcher"))
     ap.add_argument("--out-dir", type=Path, default=Path("data/er_matcher/model"))

@@ -25,7 +25,12 @@ import {
 } from "./core/index.js";
 import { analyzeBlocking } from "./core/block-analyzer.js";
 import { autoConfigure } from "./core/autoconfig.js";
-import { loadConfigFile } from "./node/config-file.js";
+import {
+  certifySemanticModel,
+  emitSemanticModelFromStore,
+  type SemanticDialect,
+} from "./core/semantic/index.js";
+import { loadConfigFile, parseYamlDoc } from "./node/config-file.js";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import {
   compareClusters,
@@ -768,6 +773,108 @@ memoryCmd
     process.stdout.write(`  created_at:     ${c.createdAt.toISOString()}\n`);
   });
 
+// ---------- certify-keys ----------
+// Mirrors `goldenmatch certify-keys` (Python cli/certify_keys.py): certify every
+// declared identity key in a semantic model (dbt/MetricFlow, Cube, or OSI) against
+// its data frames via the structural key-integrity tier.
+
+/** Pivot parsed rows into the column-oriented frame the certifier reads
+ * (`{ column: values[] }`); null-prototype so a `__proto__` column can't pollute. */
+function rowsToColumns(rows: Array<Record<string, unknown>>): Record<string, unknown[]> {
+  const hasOwn = Object.prototype.hasOwnProperty;
+  const names = new Set<string>();
+  for (const r of rows) for (const k of Object.keys(r)) names.add(k);
+  const cols: Record<string, unknown[]> = Object.create(null);
+  for (const name of names) cols[name] = rows.map((r) => (hasOwn.call(r, name) ? r[name] : null));
+  return cols;
+}
+
+/** Python `f"{x:g}"` — general float format, trailing zeros stripped. */
+function fmtG(n: number): string {
+  return Number(n.toPrecision(6)).toString();
+}
+
+program
+  .command("certify-keys")
+  .description("Certify the entity keys a semantic model (MetricFlow/Cube/OSI) declares")
+  .argument("<model>", "Semantic-model file (dbt/MetricFlow, Cube, or OSI YAML)")
+  .option(
+    "-d, --data <spec...>",
+    "Frame for a model/dataset/cube as name=path (repeatable), e.g. -d orders=orders.csv",
+  )
+  .option("--fail-untrustworthy", "Exit non-zero if any declared key is not unique at grain (CI gate)")
+  .action((model: string, opts: { data?: string[]; failUntrustworthy?: boolean }) => {
+    const specs = opts.data ?? [];
+    if (specs.length === 0) {
+      process.stderr.write("--data is required (name=path, repeatable), e.g. -d orders=orders.csv\n");
+      process.exit(2);
+    }
+    const frames: Record<string, Record<string, unknown[]>> = Object.create(null);
+    for (const spec of specs) {
+      const eq = spec.indexOf("=");
+      if (eq === -1) {
+        process.stderr.write(`--data must be name=path, got ${JSON.stringify(spec)}\n`);
+        process.exit(2);
+      }
+      const name = spec.slice(0, eq).trim();
+      const path = spec.slice(eq + 1).trim();
+      frames[name] = rowsToColumns(readFile(path));
+    }
+    let doc: unknown;
+    try {
+      doc = parseYamlDoc(readFileSync(model, "utf-8"));
+    } catch (err) {
+      process.stderr.write(`could not read/parse ${model}: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(2);
+    }
+    if (typeof doc !== "object" || doc === null || Array.isArray(doc)) {
+      process.stderr.write(`semantic-model file did not parse to a mapping: ${model}\n`);
+      process.exit(2);
+    }
+    let report;
+    try {
+      report = certifySemanticModel(doc as Record<string, unknown>, frames);
+    } catch (err) {
+      // e.g. dialect detection failed (no cubes/semantic_models/semantic_model key).
+      process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(2);
+    }
+    const nUntrust = report.untrustworthy.length;
+    process.stdout.write(
+      `Dialect: ${report.dialect}   certified: ${report.nCertified}   untrustworthy: ${nUntrust}\n`,
+    );
+    if (report.skipped.length) {
+      process.stdout.write(`skipped (no frame supplied): ${report.skipped.join(", ")}\n`);
+    }
+    if (report.note) process.stdout.write(`${report.note}\n`);
+
+    if (report.entries.length) {
+      const rows = report.entries.map((e) => ({
+        target: e.target,
+        key: e.key.join(", "),
+        unique: e.certificate.isUniqueAtGrain ? "yes" : "NO",
+        fanOut: fmtG(e.certificate.maxFanOut),
+        context: e.context,
+      }));
+      const headers = { target: "target", key: "key", unique: "unique@grain", fanOut: "max_fan_out", context: "context" };
+      const w = {
+        target: Math.max(headers.target.length, ...rows.map((r) => r.target.length)),
+        key: Math.max(headers.key.length, ...rows.map((r) => r.key.length)),
+        unique: Math.max(headers.unique.length, ...rows.map((r) => r.unique.length)),
+        fanOut: Math.max(headers.fanOut.length, ...rows.map((r) => r.fanOut.length)),
+      };
+      const line = (t: string, k: string, u: string, f: string, c: string): string =>
+        `${t.padEnd(w.target)}  ${k.padEnd(w.key)}  ${u.padEnd(w.unique)}  ${f.padStart(w.fanOut)}  ${c}\n`;
+      process.stdout.write(line(headers.target, headers.key, headers.unique, headers.fanOut, headers.context));
+      for (const r of rows) process.stdout.write(line(r.target, r.key, r.unique, r.fanOut, r.context));
+    }
+
+    if (opts.failUntrustworthy && nUntrust > 0) {
+      process.stderr.write(`${nUntrust} declared key(s) are not unique at grain.\n`);
+      process.exit(1);
+    }
+  });
+
 // ---------- identity ----------
 // Mirrors `goldenmatch identity ...` in Python (cli/identity.py). Wraps the
 // SqliteIdentityStore for inspecting nodes, source records, edges, events,
@@ -993,6 +1100,76 @@ identityCmd
           `Split ${recordIds.length} record(s) from ${entityId}\n`,
         );
         process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+      } finally {
+        await store.close();
+      }
+    },
+  );
+
+// Mirrors `goldenmatch identity emit-catalog` (Python cli/identity.py): emit a
+// conformed semantic-layer catalog (the resolved_entity_id join a MetricFlow /
+// Cube / OSI model should group metrics by) live from the durable identity store.
+identityCmd
+  .command("emit-catalog")
+  .description("Emit a conformed semantic-layer catalog from the identity store")
+  .argument("<source-name>", "Logical source name the records were ingested under")
+  .argument("<source-pk-column>", "Column holding each record's source primary key")
+  .option("--path <path>", "Identity DB path", DEFAULT_IDENTITY_PATH)
+  .option("--dialect <dialect>", "metricflow | cube | osi", "metricflow")
+  .option("--dataset <name>", "Identity-graph dataset scope")
+  .option("--source-target <name>", "Source model/cube/dataset the join points at (defaults to source-name)")
+  .option("--resolved-key <col>", "The conformed join column name", "resolved_entity_id")
+  .option("--out <path>", "Write the emitted YAML to this catalog file")
+  .option("--overwrite", "Overwrite an existing catalog file at --out")
+  .action(
+    async (
+      sourceName: string,
+      sourcePkColumn: string,
+      opts: {
+        path: string;
+        dialect: string;
+        dataset?: string;
+        sourceTarget?: string;
+        resolvedKey: string;
+        out?: string;
+        overwrite?: boolean;
+      },
+    ) => {
+      // Normalize the way the core emitter does before validating, so
+      // casing/whitespace variants the core accepts aren't rejected here.
+      const dialectNorm = opts.dialect.trim().toLowerCase();
+      if (!["metricflow", "cube", "osi"].includes(dialectNorm)) {
+        process.stderr.write(`unknown dialect '${opts.dialect}'; expected metricflow | cube | osi\n`);
+        process.exit(2);
+      }
+      const store = await openIdentityStoreForCli(opts.path);
+      try {
+        const yamlStr = await emitSemanticModelFromStore(store, {
+          sourceName,
+          sourcePkColumn,
+          dialect: dialectNorm as SemanticDialect,
+          dataset: opts.dataset ?? null,
+          ...(opts.sourceTarget !== undefined ? { sourceTarget: opts.sourceTarget } : {}),
+          resolvedKey: opts.resolvedKey,
+        });
+        if (opts.out) {
+          const dir = dirname(opts.out);
+          if (dir) mkdirSync(dir, { recursive: true });
+          try {
+            // `wx` = create-and-fail-if-exists (atomic, O_EXCL): the clobber
+            // guard IS the write, so there is no check-then-write race.
+            writeFileSync(opts.out, yamlStr, { encoding: "utf-8", flag: opts.overwrite ? "w" : "wx" });
+          } catch (err) {
+            if (!opts.overwrite && (err as NodeJS.ErrnoException).code === "EEXIST") {
+              process.stderr.write(`${opts.out} already exists; pass --overwrite to replace it\n`);
+              process.exit(1);
+            }
+            throw err;
+          }
+          process.stdout.write(`Wrote ${dialectNorm} catalog to ${opts.out}\n`);
+        } else {
+          process.stdout.write(yamlStr);
+        }
       } finally {
         await store.close();
       }

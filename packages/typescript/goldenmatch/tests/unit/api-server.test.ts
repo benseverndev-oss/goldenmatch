@@ -236,4 +236,53 @@ describe("REST API server", () => {
     const decBody = (await dec.json()) as { decided: { status: string } };
     expect(decBody.decided.status).toBe("accepted");
   });
+
+  it("POST /semantic/certify certifies a model's declared keys against frames", async () => {
+    const res = await fetch(baseUrl + "/semantic/certify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: {
+          semantic_models: [
+            {
+              name: "orders",
+              entities: [{ name: "orders", type: "primary", expr: "resolved_entity_id" }],
+            },
+          ],
+        },
+        frames: { orders: { resolved_entity_id: ["e1", "e1", "e2"] } },
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      dialect: string;
+      n_certified: number;
+      all_trustworthy: boolean;
+      keys: Array<{ target: string; is_unique_at_grain: boolean; max_fan_out: number }>;
+    };
+    expect(body.dialect).toBe("metricflow");
+    expect(body.n_certified).toBe(1);
+    expect(body.all_trustworthy).toBe(false); // e1 duplicated
+    expect(body.keys[0]!.target).toBe("orders");
+    expect(body.keys[0]!.is_unique_at_grain).toBe(false);
+    expect(body.keys[0]!.max_fan_out).toBe(2);
+  });
+
+  it("POST /semantic/certify rejects a non-object model", async () => {
+    const res = await fetch(baseUrl + "/semantic/certify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "nope", frames: {} }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("POST /semantic/emit is 503 when no identity store is bound", async () => {
+    const res = await fetch(baseUrl + "/semantic/emit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source_name: "customers", source_pk_column: "customer_id" }),
+    });
+    expect(res.status).toBe(503);
+  });
 });

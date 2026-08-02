@@ -15,6 +15,34 @@ from goldenmatch.utils.transforms import apply_transforms
 
 logger = logging.getLogger(__name__)
 
+_MEMO_MISS = object()
+
+
+def _memoized_transform(transforms: list):
+    """A ``map_elements`` callable that applies ``transforms`` but computes each
+    DISTINCT input value only once (per-call cache).
+
+    Block keys are the Python-fallback path only for transforms with no native
+    polars expression (soundex / metaphone), and those run per-ROW via
+    ``map_elements``. Names repeat heavily within a column, so a distinct-value
+    cache skips the redundant recompute -- byte-identical output (same
+    ``apply_transforms``), and the same distinct-value idiom auto-config already
+    uses for its transform application. The cache is scoped to this returned
+    closure (one per built expression), so it is GC'd with the expression and
+    never leaks across ``dedupe`` calls. The redundancy (hence the win) scales
+    with row_count / distinct_values -- larger at scale, where the per-row
+    ``map_elements`` cost was also the documented 5M blocking hang."""
+    cache: dict = {}
+
+    def _apply(val: Any) -> Any:
+        hit = cache.get(val, _MEMO_MISS)
+        if hit is _MEMO_MISS:
+            hit = apply_transforms(val, transforms)
+            cache[val] = hit
+        return hit
+
+    return _apply
+
 
 def _percentile(xs: list[int], q: float) -> int:
     """Return the q-th percentile of a sorted list of ints."""
@@ -474,7 +502,9 @@ def build_em_blocks_agg(frame: Any, config: BlockingConfig) -> list:
     return results
 
 
-def collect_blocking_fields(config: BlockingConfig) -> list[str]:
+def collect_blocking_fields(
+    config: BlockingConfig, *, for_em: bool = False
+) -> list[str]:
     """All column names a blocking config groups on, across keys/passes/sub-blocks.
 
     Used by the Fellegi-Sunter pipeline to tell EM which fields are blocking
@@ -484,6 +514,14 @@ def collect_blocking_fields(config: BlockingConfig) -> list[str]:
     behavior) left the exclusion list empty and degraded multi-pass FS
     (Febrl4: 95.7% -> 98.4% F1 once the pass fields are excluded). Order is
     preserved and de-duplicated.
+
+    ``for_em`` selects the EM-DEMOTION set rather than the full field inventory: a
+    field that appears ONLY in ``additive`` passes (orthogonal anchors that should
+    stay EM-trained -- see ``BlockingKeyConfig.additive``) is excluded, so EM keeps
+    learning its weight from the other passes' pairs. A field that also keys a
+    non-additive (primary) pass is still demoted. Default ``for_em=False`` returns
+    every field a pass groups on (block-building, projection) and is byte-identical
+    to the historical behavior; with no additive pass present the two agree exactly.
     """
     seen: set[str] = set()
     out: list[str] = []
@@ -491,6 +529,23 @@ def collect_blocking_fields(config: BlockingConfig) -> list[str]:
     groups.extend(config.keys or [])
     groups.extend(config.passes or [])
     groups.extend(config.sub_block_keys or [])
+    if for_em:
+        # A field is EM-demoted only if some NON-additive pass keys on it. Fields
+        # confined to additive passes stay EM-trained comparison fields.
+        primary: set[str] = set()
+        additive_only: set[str] = set()
+        for key in groups:
+            target = additive_only if getattr(key, "additive", False) else primary
+            target.update(key.fields)
+        demote = primary  # additive-only fields excluded by construction
+        for key in groups:
+            if getattr(key, "additive", False):
+                continue
+            for f in key.fields:
+                if f in demote and f not in seen:
+                    seen.add(f)
+                    out.append(f)
+        return out
     for key in groups:
         for f in key.fields:
             if f not in seen:
@@ -526,7 +581,7 @@ def _build_block_key_expr(key_config: BlockingKeyConfig) -> pl.Expr:
         elif transforms:
             field_exprs.append(
                 pl.col(field_name).map_elements(
-                    lambda val, transforms=transforms: apply_transforms(val, transforms),
+                    _memoized_transform(transforms),
                     return_dtype=pl.Utf8,
                 )
             )
@@ -1086,7 +1141,7 @@ def _build_sorted_neighborhood_blocks(
     for skf in config.sort_key:
         if skf.transforms:
             expr = pl.col(skf.column).map_elements(
-                lambda val, transforms=skf.transforms: apply_transforms(val, transforms),
+                _memoized_transform(skf.transforms),
                 return_dtype=pl.Utf8,
             )
         else:

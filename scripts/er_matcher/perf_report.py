@@ -180,6 +180,7 @@ def evaluate_perf_gate(
     total_steps: int | None = None,
     gpu_cost_per_hour_usd: float | None = None,
     gpu_capacity_gb: float | None = None,
+    mem_headroom: float = 0.9,
 ) -> PerfGateResult:
     """Decide GO / NO-GO for the full run from a smoke-run ``metrics`` dict.
 
@@ -192,13 +193,21 @@ def evaluate_perf_gate(
     Pure; unit-tested without a GPU."""
     res = PerfGateResult(go=True)
 
-    util = float(metrics.get("gpu_util", 0.0))
-    res.add(
-        "gpu_util",
-        util >= min_gpu_util,
-        f"GPU util {util:.2%} vs floor {min_gpu_util:.0%} "
-        f"({'GPU-bound' if util >= min_gpu_util else 'DATA-BOUND -- fix the pack/dataloader path'})",
-    )
+    # gpu_util: None means telemetry was unavailable (pynvml absent / zero samples)
+    # -- that is "unknown", NOT "0% = data-bound". Only gate on a measured value,
+    # so a missing NVML never NO-GOs a genuinely GPU-bound run.
+    util_raw = metrics.get("gpu_util")
+    if util_raw is None:
+        res.add("gpu_util", True,
+                "GPU util not measured (NVML/pynvml telemetry unavailable) -- advisory, not gating")
+    else:
+        util = float(util_raw)
+        res.add(
+            "gpu_util",
+            util >= min_gpu_util,
+            f"GPU util {util:.2%} vs floor {min_gpu_util:.0%} "
+            f"({'GPU-bound' if util >= min_gpu_util else 'DATA-BOUND -- fix the pack/dataloader path'})",
+        )
 
     steps = int(metrics.get("smoke_steps", 0))
     wall = float(metrics.get("smoke_wall_s", 0.0))
@@ -223,21 +232,36 @@ def evaluate_perf_gate(
     else:
         res.add("budget", False, "cannot extrapolate: need smoke_steps/total_steps/gpu_cost_per_hour_usd")
 
-    slope = learning_curve_slope(metrics.get("learning_curve", []))
-    res.add(
-        "learning_curve",
-        slope > min_curve_slope,
-        f"marginal eval-loss improvement {slope:+.4f} vs floor {min_curve_slope} "
-        f"({'still climbing' if slope > min_curve_slope else 'plateaued -- more data/epochs will not help'})",
-    )
+    # learning_curve: needs >=2 slice points (the 10/25/50/100% sweep) to compute a
+    # slope. A single --smoke run emits an empty curve -- that is "not measured",
+    # NOT "plateaued", so it must be advisory. Otherwise the documented smoke->gate
+    # flow could NEVER return GO (empty curve -> slope 0.0 -> fails slope > 0.0).
+    curve = metrics.get("learning_curve") or []
+    if len(curve) < 2:
+        res.add("learning_curve", True,
+                "learning curve not measured (a single --smoke run has no 10/25/50/100% "
+                "slice sweep; run modal_train.py::benchmark to populate) -- advisory, not gating")
+    else:
+        slope = learning_curve_slope(curve)
+        res.add(
+            "learning_curve",
+            slope > min_curve_slope,
+            f"marginal eval-loss improvement {slope:+.4f} vs floor {min_curve_slope} "
+            f"({'still climbing' if slope > min_curve_slope else 'plateaued -- more data/epochs will not help'})",
+        )
 
+    # memory: compare against a headroom-derated capacity (default 0.9), consistent
+    # with gpu_tiers.select_cheapest_tier -- the caching allocator's reserved pool
+    # runs above the reported peak, so a no-margin `peak <= cap` can pass then OOM.
     cap = gpu_capacity_gb if gpu_capacity_gb is not None else metrics.get("gpu_capacity_gb")
     peak = metrics.get("peak_mem_gb")
     if cap is not None and peak is not None:
+        usable = float(cap) * mem_headroom
         res.add(
             "memory",
-            float(peak) <= float(cap),
-            f"peak mem {float(peak):.1f} GB vs GPU capacity {float(cap):.1f} GB",
+            float(peak) <= usable,
+            f"peak mem {float(peak):.1f} GB vs {mem_headroom:.0%} of {float(cap):.1f} GB "
+            f"capacity ({usable:.1f} GB usable)",
         )
     # memory check is advisory when capacity/peak absent (smoke may not report cap)
     return res
@@ -254,6 +278,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     ap.add_argument("--total-steps", type=int, default=None)
     ap.add_argument("--gpu-cost-per-hour-usd", type=float, default=None)
     ap.add_argument("--gpu-capacity-gb", type=float, default=None)
+    ap.add_argument("--mem-headroom", type=float, default=0.9,
+                    help="fraction of GPU capacity treated as usable (default 0.9)")
     args = ap.parse_args(list(argv) if argv is not None else None)
 
     metrics = json.loads(args.metrics.read_text())
@@ -265,6 +291,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         total_steps=args.total_steps,
         gpu_cost_per_hour_usd=args.gpu_cost_per_hour_usd,
         gpu_capacity_gb=args.gpu_capacity_gb,
+        mem_headroom=args.mem_headroom,
     )
     print(json.dumps({"go": gate.go, "checks": gate.checks,
                       "extrapolation": gate.extrapolation}, indent=2))

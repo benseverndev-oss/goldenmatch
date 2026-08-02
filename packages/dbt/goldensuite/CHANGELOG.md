@@ -18,6 +18,22 @@ Suite monorepo and is consumed from there (not published to PyPI).
   (macros) and a `pip install "git+...#subdirectory=..."` for the Python helper.
 
 ### Added
+- **`grain_strict` on the `goldenmatch_key_integrity` test.** Opt-in argument
+  (default `false` = byte-identical to the prior key-only test). When `true` and a
+  `grain` is supplied, uniqueness / fan-out is evaluated on `key + grain` — true
+  "unique at grain", so a fact that legitimately repeats a key across grain buckets
+  (e.g. daily rows per customer) is certified instead of being reported as fan-out.
+  Mirrors the Python `certify_key_integrity(grain_strict=True)` in lockstep so the
+  SQL test and the capability stay semantically identical.
+- **`run_goldenmatch_crosswalk` Python helper (semantic-layer wedge B).** Resolves
+  identity once and materializes the durable `{source, source_pk, resolved_entity_id}`
+  crosswalk table in DuckDB — the conformed join key a semantic layer (dbt/MetricFlow,
+  Cube, OSI) groups metrics by, keyed on the control-plane `entity_id` (not the
+  run-local cluster id `goldenmatch_dedupe` emits). Pass a `store_path` for entity ids
+  durable across runs ("resolve once, every metric inherits correct joins"). No pure-SQL
+  UDF equivalent — the resolved id comes from the stateful Identity Control Plane — so
+  it's a Python-helper materialization (call from a dbt Python model). Wraps
+  `goldenmatch.semantic.build_resolved_crosswalk` (ADR 0050).
 - **`goldenmatch_match` materialization (two-table record linkage).** Links a target
   model against a `reference` table and outputs matched pairs `(target_id, reference_id,
   score)` (best match per target). Backed by a new table-returning `goldenmatch_match_pairs`

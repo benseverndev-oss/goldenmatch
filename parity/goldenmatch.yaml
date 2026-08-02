@@ -66,12 +66,16 @@ mcp_tools:
   - auto_configure
   - build_clusters
   - certify_recall
+  - certify_semantic_model
+  - certify_serving_joins
   - compare_clusters
   - config_weaknesses
   - controller_telemetry
   - convert_splink_config
   - create_domain
+  - customer_360
   - dedupe
+  - emit_semantic_model_from_store
   - evaluate
   - explain_cluster
   - explain_match
@@ -151,6 +155,7 @@ cli_commands:
   - analyze-blocking
   - anomalies
   - autoconfig
+  - certify-keys
   - compare-clusters
   - config
   - dedupe
@@ -229,6 +234,7 @@ a2a_skills:
   - transform
   python_only:
   - analyze_blocking
+  - certify_semantic_model
   - compare_clusters
   - configure
   - documents_ingest
@@ -250,6 +256,9 @@ a2a_skills:
   - agent_explain_pair
   - agent_match_sources
   - agent_review_queue
+  - certify_serving_joins
+  - customer_360
+  - emit_semantic_model_from_store
   - fix_quality
   - memory_import
   - scan_quality

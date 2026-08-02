@@ -439,6 +439,7 @@ _v1.11: a field whose disagreement subtracts from a weighted matchkey's_
 | `fields` | list[str] | **required** | Columns whose combined values form the blocking key; records sharing a key become candidate pairs. |
 | `transforms` | list[str] | `[]` | Normalization steps applied to every field before deriving the block key. |
 | `field_transforms` | dict[str, list[str]] | `{}` | Per-field transform chains overriding the key-level transforms for the named fields only. |
+| `additive` | bool | `False` | If true, this pass co-locates pairs but its fields remain EM-trained comparison fields (Fellegi-Sunter path) instead of being demoted to fixed neutral weights. |
 
 ### `SortKeyField`
 
@@ -611,6 +612,10 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `autoconfig` | `--show-controller` | boolean | `True` | Render the controller telemetry panel on stderr. |
 | `autoconfig` | `--verbose` | boolean | `False` | Include indicator priors + decision trace in the panel. |
 | `autoconfig` | `--quiet` | boolean | `False` | Suppress all stderr output (panel + status messages). |
+| `certify-keys` | `model` | text | **required** | Semantic-model file (dbt/MetricFlow, Cube, or OSI YAML) |
+| `certify-keys` | `--data` | text | **required** | Frame for a model/dataset/cube as name=path (repeatable), e.g. -d orders=orders.csv |
+| `certify-keys` | `--resolve` | boolean | `False` | Also measure entity fragmentation / undercount via ER (MetricFlow dialect only). |
+| `certify-keys` | `--fail-untrustworthy` | boolean | `False` | Exit non-zero if any declared key is not unique at grain (CI gate). |
 | `compare-clusters` | `file_a` | text | **required** | First cluster JSON file (baseline / ER1) |
 | `compare-clusters` | `file_b` | text | **required** | Second cluster JSON file (comparison / ER2) |
 | `compare-clusters` | `--details` | boolean | `False` | Show per-cluster transformation details |
@@ -686,9 +691,29 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `explain` | `--config` | path | **required** | Config YAML path |
 | `explain` | `--pair` | text | `None` | Explain a pair: 'id_a,id_b' |
 | `explain` | `--cluster` | integer | `None` | Explain a cluster by id |
+| `identity 360` | `entity_id` | text | **required** | The entity_id to build the Customer 360 view for. |
+| `identity 360` | `--path` | text | `'.goldenmatch/identity.db'` | Path to the identity graph database. |
+| `identity 360` | `--no-relationships` | boolean | `False` | Skip the relationship neighborhood read. |
+| `identity 360` | `--timeline-limit` | integer | `None` | Cap the number of timeline events (most recent first). |
+| `identity 360` | `--json` | boolean | `False` | Emit the full 360 page as JSON. |
+| `identity certify-serving-joins` | `--path` | text | `'.goldenmatch/identity.db'` | Path to the identity graph database. |
+| `identity certify-serving-joins` | `--dataset` | text | `None` | Restrict to one identity-graph dataset. |
+| `identity certify-serving-joins` | `--status` | text | `'active'` | Entity status to include. |
+| `identity certify-serving-joins` | `--page-size` | integer | `500` | Entity-scan pagination size. |
+| `identity certify-serving-joins` | `--max-entities` | integer | `None` | Cap the scan at this many entities (cert covers a prefix). |
+| `identity certify-serving-joins` | `--json` | boolean | `False` | Emit the certificate as JSON. |
 | `identity conflicts` | `--path` | text | `'.goldenmatch/identity.db'` | Path to the identity graph database. |
 | `identity conflicts` | `--dataset` | text | `None` | Filter to identities in this dataset. |
 | `identity conflicts` | `--json` | boolean | `False` | Emit results as JSON instead of a table. |
+| `identity emit-catalog` | `source_name` | text | **required** | Logical source name the records were ingested under. |
+| `identity emit-catalog` | `source_pk_column` | text | **required** | Column holding each record's source primary key. |
+| `identity emit-catalog` | `--path` | text | `'.goldenmatch/identity.db'` | Path to the identity graph database. |
+| `identity emit-catalog` | `--dialect` | text | `'metricflow'` | metricflow \| cube \| osi. |
+| `identity emit-catalog` | `--dataset` | text | `None` | Identity-graph dataset scope. |
+| `identity emit-catalog` | `--source-target` | text | `None` | Source model/cube/dataset the join points at (defaults to source_name). |
+| `identity emit-catalog` | `--resolved-key` | text | `'resolved_entity_id'` | The conformed join column name. |
+| `identity emit-catalog` | `--out` | text | `None` | Write the emitted YAML to this catalog file. |
+| `identity emit-catalog` | `--overwrite` | boolean | `False` | Overwrite an existing catalog file at --out. |
 | `identity history` | `entity_id` | text | **required** | The entity_id of the identity to operate on. |
 | `identity history` | `--path` | text | `'.goldenmatch/identity.db'` | Path to the identity graph database. |
 | `identity history` | `--limit` | integer | `50` | Maximum number of events to return. |
@@ -908,7 +933,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 
 ## MCP tools
 
-90 MCP tool(s) exposed by `goldenmatch.mcp.server` -- the programmatic / agent surface. Config-bearing tools take the same knobs as above.
+94 MCP tool(s) exposed by `goldenmatch.mcp.server` -- the programmatic / agent surface. Config-bearing tools take the same knobs as above.
 
 | Tool | Description |
 |---|---|
@@ -925,14 +950,18 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `auto_configure` | Run AutoConfigController on a CSV; return the committed GoldenMatchConfig (incl. negative_evidence / Path Y when chosen) plus telemetry — stop_reason, health, decision trace, indicator column priors. Programmatic equivalent of `goldenmatch autoconfig`. |
 | `build_clusters` | Group records into clusters given a file and matchkey definition. |
 | `certify_recall` | Estimate match RECALL without ground truth (unsupervised). Treats each auto-configured matchkey/pass as a decorrelated system and uses capture-recapture over their overlaps to estimate how many true matches were missed. Returns a point estimate (a safe lower bound additionally needs a small labelled audit; see `goldenmatch evaluate --certify --audit-out`). Needs >=3 decorrelated systems. |
+| `certify_semantic_model` | Semantic-layer front door: certify every declared entity key in a dbt/MetricFlow, Cube, or OSI/Ossie semantic model against its data. The dialect is auto-detected. Returns, per declared key, whether it is unique at grain and its measure fan-out -- the keys a metric silently joins on. Advisory; it never mutates a metric. |
+| `certify_serving_joins` | Certify that a Customer 360 serving layer's join keys can't double-count. A 360 view joins the golden record to its source records on the durable record_id (`&#123;source&#125;:&#123;source_pk&#125;`); if that key is duplicated, a fact rolled up through the 360 silently double-counts. This walks the store's entities, assembles the record_id join key, and returns a key-integrity certificate over it (&#123;trustworthy, n_entities, n_records, truncated, record_id: &#123;is_unique_at_grain, duplicate_key_groups, max_fan_out, estimate&#125;&#125;). |
 | `compare_clusters` | Compare two ER clustering outcomes on the same dataset without ground truth (CCMS): classifies each cluster as unchanged / merged / partitioned / overlapping and returns the Talburt-Wang Index. Both inputs are JSON cluster files (as written by export-style output). |
 | `config_weaknesses` | Diagnose weaknesses in the loaded run's auto-config: columns admitted that shouldn't be (source/provenance labels, per-row IDs), oversized or shared-value blocks, null sinks, low-signal matchkeys, and over-merging. Returns ranked findings, each with a plain-English explanation + a concrete fix, plus a one-paragraph summary. |
 | `controller_telemetry` | Return the AutoConfigController telemetry from the most recent `auto_configure` or `agent_deduplicate` call in this MCP session. Same JSON shape as the web /api/v1/controller/telemetry endpoint. |
 | `convert_splink_config` | Convert a Splink settings JSON (bare or trained) into a GoldenMatch config. Pass the settings as an inline JSON string -- no filesystem access needed. Returns the config as YAML, a findings report (severity/splink_path/message/mapped_to per finding), a summary, and -- when the Splink input carried trained m/u probabilities -- the imported EM model as a dict you can persist yourself. strict=True fails on ANY lossy mapping (not just hard errors). |
 | `create_domain` | Create a custom domain extraction rulebook. Define patterns for a specific data domain (medical devices, automotive parts, real estate, etc.). |
+| `customer_360` | The unified Customer 360 serving view of one entity, composed from the durable store in one call: the golden record + per-field source provenance, every linked source record, the event timeline, and the relationship neighborhood. This is the same durable entity_id a resolved crosswalk (semantic-layer wedge) groups metrics by, so a metric row drills straight through to the customer. Returns &#123;found: false&#125; when no such entity exists. |
 | `dedupe` | Alias for `find_duplicates`. Find duplicate matches for a record. Provide field values to search against the loaded dataset. |
 | `documents_ingest` | Extract records from documents (PDF/image) against a target schema into rows ready for dedupe_df. Returns records + an ingest report. |
 | `documents_suggest_schema` | Propose a target extraction schema (JSON) from a sample document image/PDF. |
+| `emit_semantic_model_from_store` | Emit a conformed semantic-layer catalog (the `resolved_entity_id` join a MetricFlow / Cube / OSI model should group metrics by) directly from the durable identity store — 'keep the semantic layer's identity join live against the control plane'. Returns the emitted YAML; when `path` is set, also writes it to that catalog file (refuses to clobber unless overwrite=true). |
 | `evaluate` | Score the loaded run against ground-truth pairs. Loads a ground-truth CSV (id_a,id_b columns) and returns precision, recall, and F1 for the current clustering. |
 | `explain_cluster` | Alias for `agent_explain_cluster`. Explain why records are in the same cluster |
 | `explain_match` | Explain why two records match or don't match. Shows per-field score breakdown. |
@@ -1155,7 +1184,7 @@ _`_PLANNING_EFFORTS` -- `planning_effort`._
 
 ## Environment variables (index)
 
-186 `GOLDENMATCH_*` runtime knob(s) read by the package, scanned from source so this is complete. Details in [Tuning & opt-ins](/goldenmatch/tuning). Grouped by area:
+188 `GOLDENMATCH_*` runtime knob(s) read by the package, scanned from source so this is complete. Details in [Tuning & opt-ins](/goldenmatch/tuning). Grouped by area:
 
 - **AGENT** (1): `GOLDENMATCH_AGENT_TOKEN`
 - **ALLOWED** (1): `GOLDENMATCH_ALLOWED_ROOT`
@@ -1167,7 +1196,7 @@ _`_PLANNING_EFFORTS` -- `planning_effort`._
 - **AUTOCONFIG** (10): `GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE`, `GOLDENMATCH_AUTOCONFIG_FORCE_EXCLUDE`, `GOLDENMATCH_AUTOCONFIG_FORCE_INCLUDE`, `GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET`, `GOLDENMATCH_AUTOCONFIG_LLM`, `GOLDENMATCH_AUTOCONFIG_MEMORY`, `GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC`, `GOLDENMATCH_AUTOCONFIG_SAMPLE_STRATEGY`, `GOLDENMATCH_AUTOCONFIG_ZERO_LABEL_COMMIT`, `GOLDENMATCH_AUTOCONFIG_ZERO_LABEL_STABILITY`
 - **BASE** (1): `GOLDENMATCH_BASE_STORE`
 - **BENCH** (1): `GOLDENMATCH_BENCH_DUMP_PAIRS`
-- **BLOCKING** (8): `GOLDENMATCH_BLOCKING_CARDINALITY_SCALER`, `GOLDENMATCH_BLOCKING_DEGENERATE_MAX_AVG_BLOCK_SIZE`, `GOLDENMATCH_BLOCKING_DEGENERATE_THRESHOLD`, `GOLDENMATCH_BLOCKING_MAX_RATIO`, `GOLDENMATCH_BLOCKING_MIN_RATIO`, `GOLDENMATCH_BLOCKING_PAIRS_PER_ROW`, `GOLDENMATCH_BLOCKING_PASS_MIN_WEAKPOS`, `GOLDENMATCH_BLOCKING_PRUNE_PASSES`
+- **BLOCKING** (9): `GOLDENMATCH_BLOCKING_CARDINALITY_SCALER`, `GOLDENMATCH_BLOCKING_COST_AWARE`, `GOLDENMATCH_BLOCKING_DEGENERATE_MAX_AVG_BLOCK_SIZE`, `GOLDENMATCH_BLOCKING_DEGENERATE_THRESHOLD`, `GOLDENMATCH_BLOCKING_MAX_RATIO`, `GOLDENMATCH_BLOCKING_MIN_RATIO`, `GOLDENMATCH_BLOCKING_PAIRS_PER_ROW`, `GOLDENMATCH_BLOCKING_PASS_MIN_WEAKPOS`, `GOLDENMATCH_BLOCKING_PRUNE_PASSES`
 - **BRIDGE** (1): `GOLDENMATCH_BRIDGE_REQUIRE_PY`
 - **BUCKET** (5): `GOLDENMATCH_BUCKET_DEBUG`, `GOLDENMATCH_BUCKET_DEFAULT`, `GOLDENMATCH_BUCKET_SLIM_PROJECTION`, `GOLDENMATCH_BUCKET_VEC_MAX`, `GOLDENMATCH_BUCKET_VEC_MIN`
 - **CLUSTER** (1): `GOLDENMATCH_CLUSTER_SPLIT_EDGE_BUDGET`
@@ -1185,7 +1214,7 @@ _`_PLANNING_EFFORTS` -- `planning_effort`._
 - **FD** (1): `GOLDENMATCH_FD_NEGATIVE_EVIDENCE`
 - **FIELD** (1): `GOLDENMATCH_FIELD_GROUP_SURVIVORSHIP`
 - **FRAME** (2): `GOLDENMATCH_FRAME`, `GOLDENMATCH_FRAME_LANE`
-- **FS** (34): `GOLDENMATCH_FS_ARROW_STREAM`, `GOLDENMATCH_FS_AUTOCONFIG_V2`, `GOLDENMATCH_FS_BATCH_ROWS`, `GOLDENMATCH_FS_BLOCK_SOURCE`, `GOLDENMATCH_FS_BUCKET_BATCH`, `GOLDENMATCH_FS_BUCKET_NATIVE`, `GOLDENMATCH_FS_CALIBRATED`, `GOLDENMATCH_FS_CALIBRATE_THRESHOLD`, `GOLDENMATCH_FS_COLUMNAR_CLUSTER`, `GOLDENMATCH_FS_DEFAULT_BUCKET`, `GOLDENMATCH_FS_DOMAIN_COMPARATORS`, `GOLDENMATCH_FS_EM_AGG_BLOCKS`, `GOLDENMATCH_FS_EM_BLOCK_SLIM`, `GOLDENMATCH_FS_EM_SAMPLE_ROWS`, `GOLDENMATCH_FS_EVIDENCE_CUT`, `GOLDENMATCH_FS_FACTORIZE`, `GOLDENMATCH_FS_FACTORIZE_MIN_REPEAT`, `GOLDENMATCH_FS_MAX_PASS_PAIRS`, `GOLDENMATCH_FS_MISSING`, `GOLDENMATCH_FS_MONOTONIC`, `GOLDENMATCH_FS_NATIVE`, `GOLDENMATCH_FS_OOC_ARROW_CLUSTER`, `GOLDENMATCH_FS_OOC_DEBUG`, `GOLDENMATCH_FS_OOC_WAVE_ROWS`, `GOLDENMATCH_FS_OUT_OF_CORE`, `GOLDENMATCH_FS_POST_BLOCKING_U`, `GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE`, `GOLDENMATCH_FS_ROUTE_MIN_ROWS`, `GOLDENMATCH_FS_SCORED_PAIRS_MAX`, `GOLDENMATCH_FS_STRIP_HONORIFICS`, `GOLDENMATCH_FS_TF_ADJUSTMENT`, `GOLDENMATCH_FS_VECTORIZED`, `GOLDENMATCH_FS_VEC_MAX_ELEMS`, `GOLDENMATCH_FS_WORKERS`
+- **FS** (35): `GOLDENMATCH_FS_ARROW_STREAM`, `GOLDENMATCH_FS_AUTOCONFIG_V2`, `GOLDENMATCH_FS_BATCH_ROWS`, `GOLDENMATCH_FS_BLOCK_SOURCE`, `GOLDENMATCH_FS_BUCKET_BATCH`, `GOLDENMATCH_FS_BUCKET_NATIVE`, `GOLDENMATCH_FS_CALIBRATED`, `GOLDENMATCH_FS_CALIBRATE_THRESHOLD`, `GOLDENMATCH_FS_COLUMNAR_CLUSTER`, `GOLDENMATCH_FS_DEFAULT_BUCKET`, `GOLDENMATCH_FS_DOMAIN_COMPARATORS`, `GOLDENMATCH_FS_EM_AGG_BLOCKS`, `GOLDENMATCH_FS_EM_BLOCK_SLIM`, `GOLDENMATCH_FS_EM_SAMPLE_ROWS`, `GOLDENMATCH_FS_EVIDENCE_CUT`, `GOLDENMATCH_FS_FACTORIZE`, `GOLDENMATCH_FS_FACTORIZE_MIN_REPEAT`, `GOLDENMATCH_FS_MAX_PASS_PAIRS`, `GOLDENMATCH_FS_MISSING`, `GOLDENMATCH_FS_MONOTONIC`, `GOLDENMATCH_FS_NATIVE`, `GOLDENMATCH_FS_OOC_ARROW_CLUSTER`, `GOLDENMATCH_FS_OOC_DEBUG`, `GOLDENMATCH_FS_OOC_WAVE_ROWS`, `GOLDENMATCH_FS_ORTHOGONAL_BLOCKING`, `GOLDENMATCH_FS_OUT_OF_CORE`, `GOLDENMATCH_FS_POST_BLOCKING_U`, `GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE`, `GOLDENMATCH_FS_ROUTE_MIN_ROWS`, `GOLDENMATCH_FS_SCORED_PAIRS_MAX`, `GOLDENMATCH_FS_STRIP_HONORIFICS`, `GOLDENMATCH_FS_TF_ADJUSTMENT`, `GOLDENMATCH_FS_VECTORIZED`, `GOLDENMATCH_FS_VEC_MAX_ELEMS`, `GOLDENMATCH_FS_WORKERS`
 - **FUSED** (5): `GOLDENMATCH_FUSED_BLOCK_CONCURRENCY`, `GOLDENMATCH_FUSED_BYTES_PER_CELL`, `GOLDENMATCH_FUSED_BYTES_PER_PAIR`, `GOLDENMATCH_FUSED_PRESSURE_FRACTION`, `GOLDENMATCH_FUSED_RSS_SCALE`
 - **GOLDEN** (4): `GOLDENMATCH_GOLDEN_FUSED`, `GOLDENMATCH_GOLDEN_SLIM_MULTIDF`, `GOLDENMATCH_GOLDEN_STRATEGY_STRICT`, `GOLDENMATCH_GOLDEN_TUNER_MIN_CORRECTIONS`
 - **GPU** (3): `GOLDENMATCH_GPU_API_KEY`, `GOLDENMATCH_GPU_ENDPOINT`, `GOLDENMATCH_GPU_MODE`

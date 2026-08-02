@@ -1,0 +1,22 @@
+[
+  {
+    "severity": "ERROR",
+    "column": "region_id",
+    "check": "referential_integrity",
+    "message": "3 row(s) (2 distinct value(s), 30.0%) in 'refs_child.csv.region_id' have no match in 'refs_parent.csv.region_id' — orphaned foreign keys.",
+    "affected_rows": 3,
+    "sample_values": [
+      "7",
+      "99"
+    ],
+    "metadata": {
+      "technique": "referential_integrity",
+      "child_column": "region_id",
+      "parent_column": "region_id",
+      "cardinality": "N:1",
+      "orphan_rows": 3,
+      "distinct_orphans": 2,
+      "orphan_rate": 0.3
+    }
+  }
+]

@@ -58,6 +58,15 @@ $PY "$GM/scripts/emit_domain_comparator_fixtures.py"
 echo "== goldenmatch: blocking strategies (lsh / perceptual) =="
 $PY "$GM/scripts/emit_blocking_parity_fixtures.py"
 
+echo "== goldenmatch: semantic catalog emitters (metricflow / cube / osi) =="
+$PY "$GM/scripts/emit_semantic_catalog_fixtures.py"
+
+echo "== goldenmatch: semantic model certifier (consume side) =="
+$PY "$GM/scripts/emit_semantic_certify_fixtures.py"
+
+echo "== goldenmatch: semantic model parsers (full cube/osi round-trip) =="
+$PY "$GM/scripts/emit_semantic_parse_fixtures.py"
+
 echo "== goldenmatch: v2 (planner / EM / domain / tuners / blocker / clustering / golden) =="
 $PY "$GM/scripts/emit_v2_parity_fixtures.py" --out "$PARITY/v2-fixtures.json"
 

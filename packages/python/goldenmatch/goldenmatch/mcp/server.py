@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -781,6 +782,38 @@ _BASE_TOOLS = [
             },
         },
     ),
+    Tool(
+        name="certify_semantic_model",
+        description=(
+            "Semantic-layer front door: certify every declared entity key in a "
+            "dbt/MetricFlow, Cube, or OSI/Ossie semantic model against its data. "
+            "The dialect is auto-detected. Returns, per declared key, whether it is "
+            "unique at grain and its measure fan-out -- the keys a metric silently "
+            "joins on. Advisory; it never mutates a metric."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "model_path": {
+                    "type": "string",
+                    "description": "Path to the semantic-model YAML (MetricFlow / Cube / OSI).",
+                },
+                "frames": {
+                    "type": "object",
+                    "description": (
+                        "Map of model/dataset/cube name -> data file path, e.g. "
+                        "{\"orders\": \"orders.csv\"}. A target with no frame is skipped."
+                    ),
+                },
+                "resolve": {
+                    "type": "boolean",
+                    "description": "Also measure fragmentation/undercount via ER (MetricFlow only).",
+                    "default": False,
+                },
+            },
+            "required": ["model_path", "frames"],
+        },
+    ),
 ]
 
 # --- Cross-language naming aliases (Python<->TS MCP parity) -----------------
@@ -1319,8 +1352,63 @@ def _handle_tool(name: str, args: dict) -> dict:
         return _tool_config_weaknesses(
             args.get("max_findings", 6), args.get("phrasing", "plain")
         )
+    elif name == "certify_semantic_model":
+        return _tool_certify_semantic_model(
+            args.get("model_path", ""), args.get("frames", {}), args.get("resolve", False)
+        )
     else:
         return {"error": f"Unknown tool: {name}"}
+
+
+def _tool_certify_semantic_model(model_path: str, frames: dict, resolve: bool) -> dict:
+    """Certify every declared key in a semantic model against its data files.
+
+    ``frames`` maps model/dataset/cube name -> data file path; each is loaded
+    into a pyarrow Table. Returns a JSON-serializable per-key report.
+    """
+    if not model_path:
+        return {"error": "model_path is required (path to a MetricFlow/Cube/OSI YAML)."}
+    if not isinstance(frames, dict) or not frames:
+        return {"error": "frames must map a model/dataset/cube name to a data file path."}
+
+    from goldenmatch.core.io_arrow import read_table_arrow
+    from goldenmatch.semantic import certify_semantic_model
+
+    loaded: dict[str, object] = {}
+    for target, path in frames.items():
+        try:
+            loaded[str(target)] = read_table_arrow(str(path))
+        except FileNotFoundError:
+            return {"error": f"data file not found for {target!r}: {path}"}
+        except Exception as exc:  # noqa: BLE001 - surface a clean tool error
+            return {"error": f"could not read data for {target!r} ({path}): {exc}"}
+
+    try:
+        report = certify_semantic_model(model_path, loaded, resolve=bool(resolve))
+    except FileNotFoundError:
+        return {"error": f"semantic-model file not found: {model_path}"}
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    return {
+        "dialect": report.dialect,
+        "n_certified": report.n_certified,
+        "all_trustworthy": report.all_trustworthy,
+        "skipped": report.skipped,
+        "note": report.note,
+        "keys": [
+            {
+                "target": e.target,
+                "key": e.key,
+                "context": e.context,
+                "is_unique_at_grain": e.certificate.is_unique_at_grain,
+                "max_fan_out": e.certificate.max_fan_out,
+                "estimate": e.certificate.estimate,
+                "measure_fan_out": e.certificate.measure_fan_out,
+            }
+            for e in report.entries
+        ],
+    }
 
 
 def _tool_get_stats() -> dict:
@@ -2536,7 +2624,7 @@ async def run_server_http(
                 return await call_next(request)
             if token:
                 header = request.headers.get("Authorization", "")
-                if not header.startswith("Bearer ") or header[7:] != token:
+                if not header.startswith("Bearer ") or not secrets.compare_digest(header[7:], token):
                     return JSONResponse({"error": "Unauthorized"}, status_code=401)
             return await call_next(request)
 
