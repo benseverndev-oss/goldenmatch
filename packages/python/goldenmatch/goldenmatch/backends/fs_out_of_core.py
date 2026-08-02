@@ -1445,10 +1445,10 @@ def bucket_frame_to_shards(
     paths: dict[int, dict[int, str]] = {i: {} for i in range(len(passes))}
 
     # ExitStack guarantees every opened shard file + its Arrow IPC writer is closed
-    # even on a mid-loop error, and in LIFO order: the writer's close() (registered
-    # as a callback AFTER enter_context'ing the file) runs BEFORE the file closes,
-    # so each IPC footer flushes before its handle is released. The stack exits
-    # before the return, so all shards are complete when the caller reads them.
+    # even on a mid-loop error, and in LIFO order: the writer is entered AFTER its
+    # file, so the writer's __exit__ (flush footer + close) runs BEFORE the file
+    # closes. The stack exits before the return, so all shards are complete when the
+    # caller reads them.
     writers: dict[tuple[int, int], Any] = {}
     n = base.num_rows
     off = 0
@@ -1482,9 +1482,12 @@ def bucket_frame_to_shards(
                     if wk not in writers:
                         p = _os.path.join(shard_root, f"pass{pi}_bkt{b}.arrow")
                         fh = stack.enter_context(open(p, "wb"))
-                        w = _pa.ipc.RecordBatchFileWriter(fh, sub.schema)
-                        stack.callback(w.close)
-                        writers[wk] = w
+                        # RecordBatchFileWriter is itself a context manager; entering
+                        # it registers its __exit__ (flush footer + close). LIFO: the
+                        # writer closes before its file handle releases.
+                        writers[wk] = stack.enter_context(
+                            _pa.ipc.RecordBatchFileWriter(fh, sub.schema)
+                        )
                         paths[pi][b] = p
                     writers[wk].write_table(sub)
             del sl
