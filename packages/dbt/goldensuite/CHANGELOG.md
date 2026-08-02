@@ -18,6 +18,17 @@ Suite monorepo and is consumed from there (not published to PyPI).
   (macros) and a `pip install "git+...#subdirectory=..."` for the Python helper.
 
 ### Added
+- **`goldenmatch_key_integrity` macro now conformance-locked to the shared
+  `key_integrity_golden.json` oracle.** The macro is deliberately pure-SQL (no
+  UDF) so it runs on any warehouse — but that made it the one structural
+  key-integrity implementation not proven against the canonical golden the
+  `key-integrity-core` Rust kernel, the Python reference, the DuckDB/Postgres
+  UDFs, and the TS/WASM surface are all locked to. `tests/test_key_integrity_golden_parity.py`
+  renders the macro SQL and runs it on DuckDB over each golden case, asserting
+  the computed `uniqueness` / `max_fan_out` / per-measure fan-out match the same
+  certificate the kernel emits. Reads the golden directly (no copy). No macro
+  change — this proves the existing SQL is equivalent, closing the last
+  cross-surface drift surface for the structural certifier.
 - **`grain_strict` on the `goldenmatch_key_integrity` test.** Opt-in argument
   (default `false` = byte-identical to the prior key-only test). When `true` and a
   `grain` is supplied, uniqueness / fan-out is evaluated on `key + grain` — true
