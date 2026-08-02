@@ -52,6 +52,15 @@ def _person() -> tuple[pl.DataFrame, set]:
     return gen_labeled(n_entities=400, seed=7)  # has row-index ground truth
 
 
+def _household_hardneg() -> tuple[pl.DataFrame, set]:
+    """Off-peak FS link_threshold target (Phase 3 refit-loop work): household
+    hard-negatives (distinct people sharing a surname) make the fixed 0.50 cutoff
+    over-merge, so the F1-optimal threshold sits above 0.50 (committed 0.50 F1
+    ~0.90 vs oracle link=0.70 F1 ~0.98). See anchors.gen_household_hardneg."""
+    from scripts.autoconfig_quality.anchors import gen_household_hardneg
+    return gen_household_hardneg(n_households=350, seed=41)
+
+
 # ── real labeled datasets (skip-when-absent) ───────────────────────────────────
 _DATASETS_ROOT = Path(__file__).resolve().parents[2] / "packages/python/goldenmatch/tests/benchmarks/datasets"
 
