@@ -325,12 +325,14 @@
             "_sql_ident",
             "_sql_lit",
             "_stream_fs_dedupe_output_arrow",
+            "external_wcc_from_shards",
             "fs_out_of_core_enabled",
             "fs_streaming_route",
             "resolve_fs_block_source",
             "run_fs_dedupe_sequential",
             "run_fs_dedupe_streaming",
             "score_fs_out_of_core",
+            "spill_pair_shard",
             "stream_fs_dedupe_output"
           ],
           "imports": [

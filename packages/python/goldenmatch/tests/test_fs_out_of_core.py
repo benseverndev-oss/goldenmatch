@@ -615,3 +615,117 @@ def test_dedupe_to_parquet_sequential_parity_with_in_memory(tmp_path, monkeypatc
     stream_parts = _partition_set_from_parquet(res["dupes_path"])
 
     assert stream_parts == sorted(mem_parts)
+
+
+# ── external WCC over spilled edge shards (DuckDB-free bounded-edge clustering) ──
+# Spec: docs/superpowers/specs/2026-08-02-fs-duckdb-free-spill-external-wcc-design.md
+
+
+def _ref_partition(pairs, all_ids, link_threshold):
+    """Reference partition: a whole-set union-find over the threshold-filtered edge
+    list + singleton fold. The ground truth external_wcc_from_shards must match."""
+    parent = {i: i for i in all_ids}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for a, b, s in pairs:
+        if link_threshold is not None and s < link_threshold:
+            continue
+        parent.setdefault(a, a)
+        parent.setdefault(b, b)
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+    comps: dict[int, set] = {}
+    for rid in all_ids:
+        comps.setdefault(find(rid), set()).add(rid)
+    return {frozenset(v) for v in comps.values()}
+
+
+def _asn_partition(asn):
+    """(__row_id__, __cluster_id__) pa.Table -> {frozenset(row_ids) per cluster}."""
+    groups: dict[int, set] = {}
+    for r, c in zip(
+        asn.column("__row_id__").to_pylist(), asn.column("__cluster_id__").to_pylist()
+    ):
+        groups.setdefault(c, set()).add(r)
+    return {frozenset(v) for v in groups.values()}
+
+
+def _spill_pairs(pairs, shard_dir, n_shards):
+    """Split a pair list into n_shards Arrow IPC shards (a pair may straddle shards)."""
+    from goldenmatch.backends.fs_out_of_core import spill_pair_shard
+    from goldenmatch.backends.score_buckets import pairs_to_pair_stream
+
+    per = max(1, (len(pairs) + n_shards - 1) // n_shards)
+    paths = []
+    for i in range(0, len(pairs), per):
+        tbl = pairs_to_pair_stream(pairs[i : i + per])
+        paths.append(spill_pair_shard(tbl, shard_dir, len(paths)))
+    return paths
+
+
+def test_external_wcc_matches_reference_across_shards(tmp_path):
+    """external_wcc_from_shards streams edges from disk one shard at a time and
+    produces the SAME component partition a whole-set union-find would — including a
+    chain split across shards and singletons folded from all_ids."""
+    from goldenmatch.backends.fs_out_of_core import external_wcc_from_shards
+
+    # 0-1-2 chain, 3-4 pair, 5/6 singletons; edges deliberately out of order.
+    pairs = [(2, 1, 0.9), (0, 1, 0.8), (3, 4, 0.95)]
+    all_ids = list(range(7))
+    paths = _spill_pairs(pairs, str(tmp_path), n_shards=3)  # chain crosses shards
+
+    asn, n_pairs = external_wcc_from_shards(paths, all_ids, 100, None)
+    assert n_pairs == 3
+    assert _asn_partition(asn) == _ref_partition(pairs, all_ids, None)
+    # Every row assigned exactly once.
+    assert sorted(asn.column("__row_id__").to_pylist()) == all_ids
+
+
+def test_external_wcc_threshold_uses_best_cross_shard_score(tmp_path):
+    """A pair emitted twice across shards with scores straddling the cut unions iff
+    its BEST occurrence clears the cut (max is monotone) — the per-edge streaming
+    filter equals filter-after-max-dedup."""
+    from goldenmatch.backends.fs_out_of_core import external_wcc_from_shards
+
+    # (0,1) appears at 0.4 (shard A) and 0.7 (shard B); (2,3) only at 0.4.
+    pairs = [(0, 1, 0.4), (2, 3, 0.4), (0, 1, 0.7)]
+    all_ids = list(range(4))
+    paths = _spill_pairs(pairs, str(tmp_path), n_shards=3)
+
+    asn, _ = external_wcc_from_shards(paths, all_ids, 100, 0.5)
+    part = _asn_partition(asn)
+    assert frozenset({0, 1}) in part          # best score 0.7 >= 0.5 -> linked
+    assert frozenset({2}) in part and frozenset({3}) in part  # 0.4 < 0.5 -> split
+    assert part == _ref_partition(pairs, all_ids, 0.5)
+
+
+def test_external_wcc_partition_parity_with_cluster_arrow_native(tmp_path):
+    """The disk-spill external WCC yields the SAME partition as the in-RAM
+    _cluster_arrow_native on the identical pair set (cluster-id VALUES may differ;
+    the PARTITION does not)."""
+    from goldenmatch.backends.fs_out_of_core import (
+        _cluster_arrow_native,
+        external_wcc_from_shards,
+    )
+    from goldenmatch.backends.score_buckets import pairs_to_pair_stream
+
+    pairs = [
+        (0, 1, 0.9), (1, 2, 0.85), (3, 4, 0.6), (4, 5, 0.7),
+        (6, 7, 0.55), (0, 2, 0.95),  # redundant edge (already connected)
+    ]
+    all_ids = list(range(9))  # 8 is a singleton
+    link_threshold = 0.5
+
+    ref_asn, _ = _cluster_arrow_native(
+        all_ids, pairs_to_pair_stream(pairs), 100, link_threshold
+    )
+    paths = _spill_pairs(pairs, str(tmp_path), n_shards=4)
+    got_asn, _ = external_wcc_from_shards(paths, all_ids, 100, link_threshold)
+
+    assert _asn_partition(got_asn) == _asn_partition(ref_asn)
