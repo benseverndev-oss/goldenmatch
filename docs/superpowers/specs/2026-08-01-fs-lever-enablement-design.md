@@ -137,6 +137,18 @@ per-dataset (or per-column) from the profile, gated." One decision per PR, each 
   febrl3 win without the historical_50k regression the global flip caused. Requires a per-column
   reliability signal from the profiler (parse rate / corruption score already computed by GoldenCheck
   indicators).
+  - **SHIPPED (2026-08-02, the `date_diff` half).** `ColumnProfile.date_parse_rate` (populated in
+    `profile_columns` over the ~1000-row sample, both classify paths) + `_date_column_reliable_for_diff`
+    gate the date branch of `build_probabilistic_matchkeys`: under the flag, `date_diff` is emitted only
+    when parse rate `>= _DATE_DIFF_MIN_PARSE_RATE (0.95)`, else `levenshtein`. Calibrated against the
+    corpora, NOT derived — measured `date_diff` ΔF1 per dataset separates cleanly by parse rate:
+    febrl3 +0.0014 (0.99) / ncvr flat (1.0) vs historical_50k **−0.0130 (0.92)**. Result: the `ab_lever`
+    gate for `GOLDENMATCH_FS_DOMAIN_COMPARATORS` flips **FAIL (worst −0.0130) → PASS (worst +0.0000)** —
+    febrl3 keeps its win, historical_50k regression eliminated (gated to `levenshtein`). Flag stays
+    default-OFF; this makes the opt-in path a net win (the prerequisite to a future default flip). The
+    `numeric_diff`/`geo_haversine` per-column half is a follow-up (both already fall back to exact-string
+    equality on unparseable input, so they're less regression-prone than `date_diff`). Tests:
+    `tests/test_fs_date_diff_reliability.py` (13).
 - **Honorific stripping as a precision decision** — apply when the config is precision-starved
   (name-only fuzzy, high over-merge risk), not as a blanket default. Data-gated on the same signals
   the controller's precision-anchor rule already uses.
