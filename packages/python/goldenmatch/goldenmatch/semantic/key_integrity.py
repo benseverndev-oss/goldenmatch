@@ -17,6 +17,8 @@ fields None with an explanatory note and never breaks the structural certificate
 """
 from __future__ import annotations
 
+import json
+import os
 from collections.abc import Sequence
 from typing import Any
 
@@ -58,6 +60,97 @@ def _row_key_values(table: pa.Table, key_columns: list[str]) -> list[tuple]:
     """Per-row declared-key tuple (positional; row i == __row_id__ i)."""
     cols = [table.column(c).to_pylist() for c in key_columns]
     return list(zip(*cols))
+
+
+def _key_integrity_native_enabled() -> bool:
+    """Opt-in gate for the `key-integrity-core` kernel path.
+
+    OFF by default: the pyarrow group_by is the right Arrow-at-bulk boundary and
+    the reference the cross-surface golden is generated from. The kernel path is
+    JSON-marshaled (slower than pyarrow group_by) and exists for the
+    single-Rust-owner guarantee, not for speed — mirrors the TS opt-in
+    `enableKeyIntegrityWasm()`.
+    """
+    return os.environ.get("GOLDENMATCH_KEY_INTEGRITY_NATIVE", "").strip().lower() in (
+        "1",
+        "true",
+        "on",
+        "yes",
+    )
+
+
+def _structural_pyarrow(
+    table: pa.Table,
+    group_columns: list[str],
+    numeric_measures: list[str],
+    n_rows: int,
+) -> dict[str, Any]:
+    """The reference structural reduction: pyarrow group_by uniqueness + fan-out."""
+    aggs: list = [([], "count_all")]
+    for m in numeric_measures:
+        aggs.append((m, "max"))
+    grouped = table.group_by(group_columns).aggregate(aggs)
+    n_key_groups = grouped.num_rows
+    counts = grouped.column("count_all")
+    max_fan_out = float(pc.max(counts).as_py()) if n_key_groups else 0.0
+    duplicate_key_groups = (
+        int(pc.sum(pc.cast(pc.greater(counts, 1), pa.int64())).as_py() or 0)
+        if n_key_groups
+        else 0
+    )
+    is_unique_at_grain = n_key_groups == n_rows
+    measure_fan_out: dict[str, float] = {}
+    for m in numeric_measures:
+        total_sum = pc.sum(table.column(m)).as_py()
+        dedup_sum = pc.sum(grouped.column(f"{m}_max")).as_py()
+        measure_fan_out[m] = float(total_sum) / float(dedup_sum) if dedup_sum else 1.0
+    return {
+        "n_key_groups": n_key_groups,
+        "max_fan_out": max_fan_out,
+        "duplicate_key_groups": duplicate_key_groups,
+        "is_unique_at_grain": is_unique_at_grain,
+        "measure_fan_out": measure_fan_out,
+    }
+
+
+def _structural_native(
+    table: pa.Table,
+    group_columns: list[str],
+    numeric_measures: list[str],
+) -> dict[str, Any] | None:
+    """Structural reduction via the shared `key-integrity-core` kernel.
+
+    Fail-open: returns None (→ pyarrow fallback) if the native wheel lacks the
+    symbol or the input isn't JSON-safe (e.g. a date/decimal group column that
+    `certify_structural_json` can't accept), so opting in never breaks the
+    certificate.
+    """
+    try:
+        from goldenmatch.core._native_loader import native_module
+
+        nm = native_module()
+        if nm is None or not hasattr(nm, "certify_structural_json"):
+            return None
+        payload = json.dumps(
+            {
+                "n_rows": table.num_rows,
+                "group_columns": [table.column(c).to_pylist() for c in group_columns],
+                "measures": [
+                    {"name": m, "values": table.column(m).to_pylist()}
+                    for m in numeric_measures
+                ],
+            }
+        )
+        result = json.loads(nm.certify_structural_json(payload))
+        return {
+            "n_key_groups": result["n_key_groups"],
+            "max_fan_out": result["max_fan_out"],
+            "duplicate_key_groups": result["duplicate_key_groups"],
+            "is_unique_at_grain": result["is_unique_at_grain"],
+            "measure_fan_out": result["measure_fan_out"],
+        }
+    except Exception:  # fail-open: any marshaling / symbol issue → pyarrow reference
+        return None
 
 
 def certify_key_integrity(
@@ -141,28 +234,24 @@ def certify_key_integrity(
     else:
         group_columns = key_columns
 
-    aggs: list = [([], "count_all")]
-    for m in numeric_measures:
-        aggs.append((m, "max"))
-    grouped = table.group_by(group_columns).aggregate(aggs)
-
-    n_key_groups = grouped.num_rows
-    counts = grouped.column("count_all")
-    max_fan_out = float(pc.max(counts).as_py()) if n_key_groups else 0.0
-    duplicate_key_groups = (
-        int(pc.sum(pc.cast(pc.greater(counts, 1), pa.int64())).as_py() or 0)
-        if n_key_groups else 0
-    )
-    is_unique_at_grain = n_key_groups == n_rows
-
-    measure_fan_out: dict[str, float] = {}
-    for m in numeric_measures:
-        total_sum = pc.sum(table.column(m)).as_py()
-        dedup_sum = pc.sum(grouped.column(f"{m}_max")).as_py()
-        if dedup_sum:  # non-zero, non-None
-            measure_fan_out[m] = float(total_sum) / float(dedup_sum)
-        else:
-            measure_fan_out[m] = 1.0
+    # The group-by uniqueness + fan-out reduction runs through the shared
+    # `key-integrity-core` kernel when opted in (GOLDENMATCH_KEY_INTEGRITY_NATIVE
+    # + the native wheel), else the pyarrow group-by (the default + reference —
+    # Arrow-native, and the source the cross-surface golden is generated from).
+    # Both produce identical output (parity-locked in
+    # tests/test_key_integrity_native_parity.py). Default stays pyarrow because it
+    # is the right Arrow-at-bulk boundary; the kernel path is JSON-marshaled and
+    # exists for the single-Rust-owner guarantee, not for speed.
+    structural = None
+    if _key_integrity_native_enabled():
+        structural = _structural_native(table, group_columns, numeric_measures)
+    if structural is None:
+        structural = _structural_pyarrow(table, group_columns, numeric_measures, n_rows)
+    n_key_groups = structural["n_key_groups"]
+    max_fan_out = structural["max_fan_out"]
+    duplicate_key_groups = structural["duplicate_key_groups"]
+    is_unique_at_grain = structural["is_unique_at_grain"]
+    measure_fan_out = structural["measure_fan_out"]
 
     if grain_cols:
         if grain_strict:
