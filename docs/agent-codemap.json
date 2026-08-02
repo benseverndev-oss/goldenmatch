@@ -7237,7 +7237,8 @@
             "_structural_native",
             "_structural_pyarrow",
             "_to_arrow",
-            "certify_key_integrity"
+            "certify_key_integrity",
+            "certify_structural_json"
           ],
           "imports": [
             "goldenmatch._api",

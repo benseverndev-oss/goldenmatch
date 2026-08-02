@@ -223,6 +223,15 @@ def register(con: duckdb.DuckDBPyConnection) -> None:
     from goldenmatch_duckdb.goldencheck_kernels import register_goldencheck_functions
     register_goldencheck_functions(con)
 
+    # goldenmatch_certify_structural: the structural key-integrity certifier (the
+    # semantic-layer wedge), JSON-in/JSON-out over goldenmatch.semantic
+    # .certify_structural_json -- the SAME reference the Postgres native
+    # key-integrity-core surface + the wheel run, so byte-identical across
+    # surfaces. Fail-open if goldenmatch.semantic isn't importable. See
+    # `key_integrity_kernels.py`.
+    from goldenmatch_duckdb.key_integrity_kernels import register_key_integrity_functions
+    register_key_integrity_functions(con)
+
 
 # ── Implementation ──────────────────────────────────────────────────────
 

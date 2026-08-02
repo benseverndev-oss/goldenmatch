@@ -490,6 +490,7 @@ postgres:
   - goldenmatch_autoconfig
   - goldenmatch_autoconfig_telemetry
   - goldenmatch_autofix_table
+  - goldenmatch_certify_structural
   - goldenmatch_compare_clusters
   - goldenmatch_connected_components
   - goldenmatch_connected_components_str
@@ -542,6 +543,7 @@ duckdb:
   - goldenmatch_autoconfig
   - goldenmatch_autoconfig_telemetry
   - goldenmatch_autofix_table
+  - goldenmatch_certify_structural
   - goldenmatch_compare_clusters
   - goldenmatch_connected_components
   - goldenmatch_connected_components_str

@@ -44,7 +44,10 @@ from goldenmatch.semantic.cube import (
     emit_cube_yaml,
     parse_cube_models,
 )
-from goldenmatch.semantic.key_integrity import certify_key_integrity
+from goldenmatch.semantic.key_integrity import (
+    certify_key_integrity,
+    certify_structural_json,
+)
 from goldenmatch.semantic.metricflow import (
     DeclaredKeySpec,
     emit_from_crosswalk,
@@ -83,6 +86,7 @@ __all__ = [
     "detect_dialect",
     # wedge A — certify a declared key
     "certify_key_integrity",
+    "certify_structural_json",
     "KeyIntegrityCertificate",
     "parse_semantic_models",
     "DeclaredKeySpec",

@@ -1,6 +1,6 @@
 [package]
 name = "goldenmatch_pg"
-version = "0.16.0"
+version = "0.17.0"
 edition = "2021"
 license = "MIT"
 authors = ["Ben Severn <benzsevern@gmail.com>"]
@@ -49,6 +49,10 @@ goldenflow-core = { path = "../goldenflow-core" }
 # functions call these native-direct, the same reference kernel the wheel + the
 # DuckDB goldencheck_* UDFs run (cross-surface parity roadmap P5).
 goldencheck-core = { path = "../goldencheck-core" }
+# Pure-Rust structural key-integrity certifier (no pyo3) — goldenmatch_certify_structural
+# calls this native-direct, the SAME reference kernel the goldenmatch[native] wheel
+# (semantic.certify_structural_json) + the DuckDB UDF run (cross-surface parity).
+goldenmatch-key-integrity-core = { path = "../key-integrity-core" }
 serde_json = "1"
 
 [[bin]]
