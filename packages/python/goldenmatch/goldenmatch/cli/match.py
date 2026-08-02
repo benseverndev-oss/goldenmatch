@@ -25,7 +25,7 @@ def match_cmd(
     ),
     preview: bool = typer.Option(False, "--preview", help="Preview results without writing files"),
     preview_size: int = typer.Option(10000, "--preview-size", help="Number of records for preview sample"),
-    preview_random: bool = typer.Option(False, "--preview-random", help="Random sample instead of first N"),
+    preview_random: bool = typer.Option(False, "--preview-random", help="Deprecated no-op: accepted for back-compat but not applied (preview uses the first N)."),
     output_matched: bool = typer.Option(False, "--output-matched", help="Output matched records"),
     output_unmatched: bool = typer.Option(False, "--output-unmatched", help="Output unmatched records"),
     output_scores: bool = typer.Option(False, "--output-scores", help="Output score details"),

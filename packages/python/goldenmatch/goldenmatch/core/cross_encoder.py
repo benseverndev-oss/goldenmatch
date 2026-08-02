@@ -213,9 +213,15 @@ def merge_scores(
 ) -> list[tuple[int, int, float]]:
     """Merge bi-encoder and cross-encoder scores.
 
-    - Bi-encoder score > high_threshold: keep as match
-    - Bi-encoder score < low_threshold: reject
-    - Between: use cross-encoder score
+    For each bi-encoder pair, the cross-encoder score is used when one exists
+    for that pair (a rescored candidate); otherwise the bi-encoder score is
+    kept. No pairs are dropped.
+
+    NOTE: ``high_threshold`` / ``low_threshold`` are reserved for a future
+    three-tier gating variant (keep > high, reject < low, cross-encoder in
+    between) and are **not currently applied** — the docstring previously
+    described that unimplemented behavior. Wiring it up is a measured change
+    to the boost path, not a docstring fix.
     """
     merged = []
     for a, b, bi_score in bi_encoder_pairs:
