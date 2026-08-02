@@ -255,7 +255,15 @@ def train_sae(layer: int = 14, n_pairs: int = 3000, expansion: int = 16, l1: flo
             print(f"[sae capture] {i}/{len(prompts)}", flush=True)
     A = np.concatenate(acts, axis=0)
     D = np.concatenate(dec_tok, axis=0)
-    print(f"[sae] train activations={A.shape} decision-token={D.shape}")
+    # normalize activations to mean L2 norm sqrt(d) (standard SAE hygiene): makes
+    # the L1 coefficient meaningful + transferable and gives a sparse code instead
+    # of a dense one. A uniform scalar does NOT rotate the space, so the learned
+    # unit-norm decoder directions are unchanged -- only the recon/L1 balance is.
+    norm_scale = float(np.linalg.norm(A, axis=1).mean() / (A.shape[1] ** 0.5))
+    A = A / norm_scale
+    D = D / norm_scale
+    print(f"[sae] train activations={A.shape} decision-token={D.shape} "
+          f"norm_scale={norm_scale:.3f}")
 
     torch.manual_seed(seed)
     dev = model.device
@@ -275,8 +283,12 @@ def train_sae(layer: int = 14, n_pairs: int = 3000, expansion: int = 16, l1: flo
         x = At[idx]
         z = F.relu((x - b_dec) @ W_enc + b_enc)
         x_hat = z @ W_dec + b_dec
-        recon = F.mse_loss(x_hat, x)
-        sparsity = z.abs().mean()
+        # per-sample sums (batch-averaged) is the standard SAE convention: this
+        # puts the L1 coefficient at the usual scale. Averaging over features
+        # (the earlier bug) divided the per-sample penalty by m=#features, so L1
+        # was ~1e4x too weak and the code stayed dense (l0 ~ m/2).
+        recon = ((x_hat - x) ** 2).sum(1).mean()
+        sparsity = z.abs().sum(1).mean()
         loss = recon + l1 * sparsity
         opt.zero_grad()
         loss.backward()
@@ -311,11 +323,12 @@ def train_sae(layer: int = 14, n_pairs: int = 3000, expansion: int = 16, l1: flo
     os.makedirs("/out/interp", exist_ok=True)
     torch.save({"W_enc": W_enc.detach().cpu(), "b_enc": b_enc.detach().cpu(),
                 "W_dec": W_dec.detach().cpu(), "b_dec": b_dec.detach().cpu(),
-                "layer": layer, "d": d, "m": m},
+                "layer": layer, "d": d, "m": m, "norm_scale": norm_scale},
                f"/out/interp/sae_layer{layer}.pt")
     with open(f"/out/interp/sae_features_layer{layer}.json", "w") as fh:
         json.dump({"layer": layer, "d": d, "m": m, "l1": l1, "steps": steps,
-                   "n_train_acts": int(A.shape[0]), "top_features": top}, fh, indent=2)
+                   "norm_scale": norm_scale, "n_train_acts": int(A.shape[0]),
+                   "top_features": top}, fh, indent=2)
     _out_vol.commit()
     print(f"[done] SAE -> /out/interp/sae_layer{layer}.pt + sae_features_layer{layer}.json")
 
@@ -367,7 +380,8 @@ def causal_validate(layer: int = 14, per_class: int = 150, seed: int = 0,
     if os.path.exists(sae_path) and n_sae_features > 0:
         sae = torch.load(sae_path, map_location="cpu")
         feat_path = f"/out/interp/sae_features_layer{layer}.json"
-        top = json.load(open(feat_path))["top_features"][:n_sae_features]
+        with open(feat_path, encoding="utf-8") as fh:
+            top = json.load(fh)["top_features"][:n_sae_features]
         for f in top:
             j = f["feature"]
             wj = sae["W_dec"][j].numpy()
