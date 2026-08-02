@@ -399,11 +399,12 @@ def causal_validate(layer: int = 14, lo: int = 8, hi: int = 20, per_class: int =
     ctrl: dict = {"mode": None, "coeff": 0.0, "single": None}
 
     def make_hook(L: int):
-        u, g = layer_dirs[L]
-
         def hook(_m, _i, output):
             if ctrl["single"] is not None and ctrl["single"] != L:
                 return output
+            # read the direction/gap at CALL time (not registration) so the SAE
+            # secondary can repoint layer_dirs[L] to a feature direction per test.
+            u, g = layer_dirs[L]
             hidden = output[0] if isinstance(output, tuple) else output
             if ctrl["mode"] == "ablate":
                 coeff = (hidden[:, -1, :] * u).sum(-1, keepdim=True)

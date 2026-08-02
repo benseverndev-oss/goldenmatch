@@ -1,6 +1,8 @@
-# The 1.5B ER-matcher's decision geometry — Layer 1, brick 1
+# The 1.5B ER-matcher's decision geometry — Layer 1 (locked)
 
-**Status:** correlational result landed; causal validation deferred to the GPU path.
+**Status:** LOCKED. Correlational + per-layer geometry + dictionary learning + causal
+validation all done. Steering the match direction across depth drives the verdict 0→1
+monotonically — the direction is the causal substrate of the decision.
 **Scope:** mechanistic interpretability of the local ER-matcher (fine-tuned
 Qwen2.5-1.5B-Instruct, the pinned `er-1p5b` GGUF). Not a product/quality change.
 
@@ -107,15 +109,15 @@ These three gaps all require the **fp16 model with forward hooks on GPU** — th
 path where training already runs (`scripts/er_matcher/modal_train.py`,
 `gpu_tiers.py`) — not this llama.cpp box.
 
-## To lock Layer 1 (the GPU/Modal follow-on)
+## Locking Layer 1 (the GPU/Modal work)
 
 The GPU pipeline is `scripts/er_matcher/interp/modal_interp.py` (runs against the
 merged fp16 fine-tune the GGUF was quantized from, `/out/model_1p5b/merged`):
 
 1. **Residual-stream capture + per-layer geometry** — DONE (stage 1). ✅
-2. **Dictionary learning** — SAE on layer-L residuals (`train_sae`). In progress.
-3. **Causal validation (the lock)** — steer/ablate along the match direction + top
-   SAE features (`causal_validate`). Next.
+2. **Dictionary learning** — SAE on layer-14 residuals (`train_sae`). DONE. ✅
+3. **Causal validation (the lock)** — multi-layer steer/ablate (`causal_validate`).
+   DONE — the direction is causal. ✅
 
 ### Stage 1 result — where the primitive forms across depth
 
@@ -150,18 +152,59 @@ decision formed but still a rich distributed code (top-1 ≈ 0.55, not yet colla
 the richest layer for dictionary learning, and upstream of the final readout for
 steering. (`layer_probes.json` on the `er-matcher-out` volume has all 28 layers.)
 
-### Remaining to lock
+### Stage 2 result — dictionary learning (SAE) on layer 14
 
-- **Dictionary learning.** SAE decomposes the layer-14 residual into an overcomplete
-  monosemantic basis (the primitives under superposition); rank features by
-  decision-token match correlation.
-- **Causal validation (the lock).** Steer/ablate along the match direction and each
-  top SAE feature; a feature is a *real* primitive only if moving along it moves the
-  verdict as predicted. This is the linear-algebra-soundness bar Layer 1 demands.
+Sparse autoencoder on **848k** layer-14 token activations (expansion 8 → 12,288
+features; activations normalized to mean-norm √d; L1 = 0.06). Converged to a genuinely
+sparse code: **L0 ≈ 212** active features per token (1.7% of the dictionary), recon 2.2.
 
-**Only after causal validation holds does Layer 2 begin** — auto-labeling the proven
-features into human-readable match rationales/flags. Building the abstraction before
-the math is locked is precisely the linguistic-bias trap this program rejects.
+The decision-token feature analysis matches the geometry: **no single SAE feature
+dominates** — the top features correlate with the match label at only **|0.55–0.60|**
+(several negative = "non-match evidence" features, one positive). Consistent with the
+stage-1 finding that the concept is a *distributed* ~8D code, not one monosemantic
+neuron; the diff-of-means direction is the aggregate of many partial-signal features.
+(`sae_layer14.pt` + `sae_features_layer14.json` on the volume.)
+
+### Stage 3 result — the causal lock
+
+A single-layer intervention barely moved the verdict (steering the layer-14 decision
+token: swing 0.35→0.42; ablation 0.385→0.361) — because the direction is *redundantly*
+encoded across depth (present from layer 1), so downstream layers re-derive it. The
+correct test for a redundant code is **multi-layer intervention**: steer/ablate the
+per-layer diff-of-means direction at the decision token across layers **8–20** at once,
+in natural gap-units (c=1 = the class-mean difference at each layer).
+
+| Intervention (layers 8–20) | mean P(match) |
+|---|---|
+| steer c = −4 | **0.000** |
+| baseline (c = 0) | 0.385 |
+| steer c = +4 | **1.000** |
+| ablate the direction (all layers) | 0.226 |
+
+**Steering the match direction drives the verdict fully and monotonically from
+certain-non-match (0.000) to certain-match (1.000).** This is the lock: the direction
+is not epiphenomenal — it *is* the causal substrate of the same-entity decision.
+Ablating it across the window pushes the model toward non-match (0.385 → 0.226). The
+single-site→multi-site contrast is itself the mechanism: no one layer is a bottleneck,
+but the direction across depth controls the decision.
+
+Individual SAE features, steerable only single-layer (they are trained at one layer),
+move P(match) by ≤~0.02 — the same depth-redundancy that defeats single-site
+diff-of-means steering, so they are correlational markers rather than single-site
+causal levers. (`causal_multilayer_8_20.json` on the volume.)
+
+### Layer 1 is locked — what it means
+
+The same-entity decision is a **low-dimensional (~8D) linear structure** that **forms
+at layer 1**, **sharpens to a perfect linear separator by L13**, **concentrates onto
+the dominant residual axis late**, and is **causally controllable**: steering it flips
+the model's verdict 0→1 monotonically. The math is sound; the primitive is real.
+
+**Layer 2 can now begin** — auto-labeling the proven structure into human-readable
+match rationales/flags (e.g. interpreting the negative "non-match evidence" SAE
+features, or decomposing the diff-of-means direction into per-field contributions).
+Building that abstraction *before* this lock would have been the linguistic-bias trap
+this program rejects; now it rests on a causally-validated basis.
 
 ## Reproduce
 
@@ -175,3 +218,11 @@ GOLDENMATCH_LOCAL_LLM_PATH=<pinned er-1p5b.gguf> \
 Pure helpers (pair mining + the three probe estimators) are unit-tested model-free
 in `scripts/er_matcher/test_decision_geometry.py`. The model path (CPU, ~1.4s/pair)
 is exercised manually against the pinned GGUF.
+
+The GPU pipeline (Modal, against the fp16 `/out/model_1p5b/merged`):
+
+```bash
+modal run scripts/er_matcher/interp/modal_interp.py::probe_layers   # stage 1
+modal run scripts/er_matcher/interp/modal_interp.py::sae --layer 14 --l1 0.06 --expansion 8
+modal run scripts/er_matcher/interp/modal_interp.py::causal --layer 14 --lo 8 --hi 20
+```
