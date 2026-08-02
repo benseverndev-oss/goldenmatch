@@ -62,6 +62,38 @@ def _row_key_values(table: pa.Table, key_columns: list[str]) -> list[tuple]:
     return list(zip(*cols))
 
 
+def _reduce_fragmentation(
+    member_lists: Sequence[Sequence[int]], keyvals: Sequence[Any]
+) -> tuple[int, int, float]:
+    """The resolution-tier reduction: cluster membership → fragmentation counts.
+
+    A *resolved entity* is a cluster of ≥2 records (ER decided they are one real
+    entity); it is *fragmented* when its members carry >1 distinct declared key
+    (the join therefore undercounts distinct entities). Returns
+    ``(resolved_entities, fragmented_entities, undercount_estimate)`` where
+    ``undercount_estimate = fragmented / resolved`` (0.0 when nothing resolved).
+
+    Pure + engine-agnostic: `keyvals` is indexed by member id and its elements
+    are compared only for equality, so the caller's key representation (tuple,
+    string, …) doesn't matter. Cross-language parity-locked (Python == TS) by
+    `tests/fixtures/fragmentation_reduction_cases.json` — this reduction has no
+    kernel (it is a scalar loop, not Arrow-bulk muscle), so a shared data-driven
+    fixture is the single source of truth, mirroring goldenanalysis's
+    quality_rollup / regressions parity fixtures.
+    """
+    resolved = 0
+    fragmented = 0
+    for members in member_lists:
+        if len(members) < 2:
+            continue
+        resolved += 1
+        distinct_keys = {keyvals[int(m)] for m in members}
+        if len(distinct_keys) > 1:
+            fragmented += 1
+    undercount = (fragmented / resolved) if resolved else 0.0
+    return resolved, fragmented, undercount
+
+
 def _key_integrity_native_enabled() -> bool:
     """Opt-in gate for the `key-integrity-core` kernel path.
 
@@ -395,20 +427,15 @@ def _add_resolution(
         clusters = getattr(res, "clusters", None) or {}
 
         keyvals = _row_key_values(table, key_columns)
-        resolved = 0
-        fragmented = 0
-        for cl in clusters.values():
-            members = cl.get("members", []) if isinstance(cl, dict) else getattr(cl, "members", [])
-            if len(members) < 2:
-                continue
-            resolved += 1
-            distinct_keys = {keyvals[int(m)] for m in members}
-            if len(distinct_keys) > 1:
-                fragmented += 1
+        member_lists = [
+            (cl.get("members", []) if isinstance(cl, dict) else getattr(cl, "members", []))
+            for cl in clusters.values()
+        ]
+        resolved, fragmented, undercount = _reduce_fragmentation(member_lists, keyvals)
 
         cert.resolved_entities = resolved
         cert.fragmented_entities = fragmented
-        cert.undercount_estimate = (fragmented / resolved) if resolved else 0.0
+        cert.undercount_estimate = undercount
         if fragmented:
             notes.append(
                 f"{fragmented}/{resolved} resolved entities span >1 declared key "

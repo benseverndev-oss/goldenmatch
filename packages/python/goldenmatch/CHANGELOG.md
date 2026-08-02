@@ -175,6 +175,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   same structural certificate as the Python / TS / WASM surfaces. Byte-identical
   across all five by construction (shared kernel + shared golden). Tests:
   `tests/test_certify_structural_json.py`.
+- **ER-resolution fragmentation reduction single-sourced with TS via a shared
+  parity fixture.** The resolution tier's cluster→{resolved, fragmented,
+  undercount} reduction (`certify_key_integrity(..., resolve=True)`) is extracted
+  into a pure `_reduce_fragmentation(member_lists, keyvals)` and locked byte-for-
+  byte against the TypeScript port with a shared, Python-generated fixture
+  (`tests/fixtures/.../fragmentation_reduction_cases.json`, read directly by both
+  surfaces — no copy). This is deliberately a data-driven fixture, NOT a Rust
+  kernel: the reduction is a scalar loop over a cluster dict (no Arrow-bulk
+  muscle) whose inputs differ per engine, so kernelizing it would pay FFI
+  marshaling on a small call — the goldenanalysis quality_rollup / regressions
+  precedent. Regenerated + drift-guarded via
+  `scripts/emit_fragmentation_reduction_fixture.py` (wired into
+  `regen_ts_parity_fixtures.sh` → the `ts_parity_freshness` gate). Tests:
+  `tests/test_fragmentation_reduction.py`.
 
 ### Changed
 - **FS out-of-core streaming: single `resolve_fs_block_source` knob + DuckDB
