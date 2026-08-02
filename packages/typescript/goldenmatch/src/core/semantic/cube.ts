@@ -14,7 +14,7 @@ import { type YamlValue, dumpYaml, pyFloat } from "./yamlEmit.js";
 import { pyRound6 } from "./crosswalk.js";
 import type { ResolvedCrosswalk } from "./crosswalk.js";
 import { type LoadedDoc, asList, asStr, asStrStripped, isObj } from "./parseUtil.js";
-import { certifyKeyIntegrity, type KeyIntegrityCertificate } from "./keyIntegrity.js";
+import { certifyKeyIntegrity, resolveKeyIntegrity, type KeyIntegrityCertificate } from "./keyIntegrity.js";
 import type { SemanticFrame, SemanticFrames } from "./frame.js";
 
 /** An optional key-integrity certificate whose stats ride in `meta.goldenmatch`. */
@@ -270,7 +270,7 @@ export interface CertifiedJoin {
  * → the joined (`to`) cube; `one_to_many` → the declaring (`from`) cube (its key
  * must be unique). A join whose one-side frame is absent or whose one-side columns
  * can't be parsed is skipped. Mirrors Python `certify_cube_joins` (`resolve=false`
- * structural path — the ER fragmentation tier is Python-only).
+ * structural path — {@link certifyCubeJoinsResolved} is the ER fragmentation tier).
  */
 export function certifyCubeJoins(doc: LoadedDoc, frames: SemanticFrames): CertifiedJoin[] {
   const out: CertifiedJoin[] = [];
@@ -283,6 +283,33 @@ export function certifyCubeJoins(doc: LoadedDoc, frames: SemanticFrames): Certif
       const df = frames[oneCube];
       if (df === undefined || oneColumns.length === 0) continue;
       const cert = certifyKeyIntegrity(df, { key: oneColumns });
+      out.push({ fromCube: jk.fromCube, toCube: jk.toCube, key: [...oneColumns], certificate: cert });
+    }
+  }
+  return out;
+}
+
+/**
+ * Async resolve-tier counterpart of {@link certifyCubeJoins}: certifies each
+ * join's one-side key AND runs entity resolution on that frame's attributes to
+ * measure fragmentation / undercount. Mirrors Python `certify_cube_joins(...,
+ * resolve=True)` — blind attribute selection (all columns except the key; Cube's
+ * measures are NOT passed to the certifier, matching Python). Fail-open per key.
+ */
+export async function certifyCubeJoinsResolved(
+  doc: LoadedDoc,
+  frames: SemanticFrames,
+): Promise<CertifiedJoin[]> {
+  const out: CertifiedJoin[] = [];
+  for (const cube of parseCubeModels(doc)) {
+    for (const jk of cubeJoinKeys(cube)) {
+      const [oneCube, oneColumns] =
+        jk.relationship === "one_to_many"
+          ? [jk.fromCube, jk.fromColumns]
+          : [jk.toCube, jk.toColumns];
+      const df = frames[oneCube];
+      if (df === undefined || oneColumns.length === 0) continue;
+      const cert = await resolveKeyIntegrity(df, { key: oneColumns });
       out.push({ fromCube: jk.fromCube, toCube: jk.toCube, key: [...oneColumns], certificate: cert });
     }
   }

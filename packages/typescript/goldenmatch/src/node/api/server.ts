@@ -35,6 +35,7 @@ import { explainPair } from "../../core/explain.js";
 import { profileRows } from "../../core/profiler.js";
 import {
   certifySemanticModel,
+  certifySemanticModelResolved,
   emitSemanticModelFromStore,
   type SemanticDialect,
   type SemanticFrames,
@@ -350,10 +351,11 @@ async function handleRequest(
     }
 
     if (pathname === "/semantic/certify" && method === "POST") {
-      // Certify a semantic model's declared join keys against supplied frames
-      // (structural tier). Body: { model: <loaded dbt/Cube/OSI doc object>,
-      // frames: { name: { column: [values] } } }. The REST body carries the
-      // already-parsed model + column frames, so no file I/O here.
+      // Certify a semantic model's declared join keys against supplied frames.
+      // Body: { model: <loaded dbt/Cube/OSI doc object>,
+      // frames: { name: { column: [values] } }, resolve?: boolean }. The REST
+      // body carries the already-parsed model + column frames, so no file I/O
+      // here. resolve=true also runs the ER fragmentation/undercount tier.
       const body = await readJsonBody(req);
       const model = body["model"];
       const framesArg = body["frames"];
@@ -384,9 +386,12 @@ async function handleRequest(
         }
         frames[name] = cols;
       }
+      const resolveTier = body["resolve"] === true;
       let report;
       try {
-        report = certifySemanticModel(model as Record<string, unknown>, frames as SemanticFrames);
+        report = resolveTier
+          ? await certifySemanticModelResolved(model as Record<string, unknown>, frames as SemanticFrames)
+          : certifySemanticModel(model as Record<string, unknown>, frames as SemanticFrames);
       } catch (err) {
         sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
         return;
@@ -404,6 +409,13 @@ async function handleRequest(
           max_fan_out: e.certificate.maxFanOut,
           estimate: e.certificate.estimate,
           measure_fan_out: e.certificate.measureFanOut,
+          // Resolution tier — null unless resolve=true measured it.
+          resolved_entities: e.certificate.resolvedEntities,
+          fragmented_entities: e.certificate.fragmentedEntities,
+          undercount_estimate: e.certificate.undercountEstimate,
+          safe_bound: e.certificate.safeBound,
+          estimable: e.certificate.estimable,
+          note: e.certificate.note,
         })),
       });
       return;

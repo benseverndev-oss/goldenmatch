@@ -132,6 +132,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   the dialect with `trim().toLowerCase()` **before** validating and pass the
   normalized value through, matching the core emitter's contract — so `"Cube"` /
   `" cube "` are accepted rather than rejected.
+- **ER resolution tier for key-integrity certification (`resolveKeyIntegrity` +
+  `certifySemanticModelResolved`).** Ports the last Python-only certification
+  capability — `semantic/key_integrity.py::certify_key_integrity(resolve=True)`
+  (`_add_resolution`) — into TS now that the port has a `dedupe()` pipeline. Beyond
+  the structural tier (unique-at-grain + fan-out), the resolution tier runs entity
+  resolution on each record's ATTRIBUTE columns (all columns except the key +
+  measures) and checks whether any resolved entity (a ≥2-member cluster) spans more
+  than one distinct declared key — fragmentation, i.e. the join silently
+  **undercounts** distinct entities, the defect a semantic layer can't detect
+  itself. `KeyIntegrityCertificate` now carries the resolve fields
+  (`resolvedEntities` / `fragmentedEntities` / `undercountEstimate` / `estimable`)
+  and `safeBound` discounts a measured undercount (`min(estimate, 1 −
+  undercountEstimate)`), matching the Python dataclass. `resolveKeyIntegrity` is
+  async (TS `dedupe()` is async where Python's `dedupe_df` is sync) and **fail-open**
+  — any resolution failure leaves the resolve fields null with an explanatory note,
+  the structural certificate always intact. Threaded through
+  `certifyCubeJoinsResolved` / `certifyOsiRelationshipsResolved` /
+  `certifySemanticModelResolved` (blind attribute selection across all three
+  dialects, matching Python's non-metric-aware path), and surfaced via the new
+  `resolve` flag on the `certify_semantic_model` MCP tool and the
+  `POST /semantic/certify` REST endpoint (additive per-key resolve fields, null
+  unless measured). Attribute selection is BLIND for now — the metric-aware,
+  dimension-driven selection (Python `certify_semantic_model(metric_aware=True)`,
+  which needs the `semantic/blocking.py` roles reader) is a follow-up; pass an
+  explicit `attributes` list to drive it caller-side. Parity is BEHAVIORAL, not a
+  byte-parity fixture: the tier runs `dedupe()`, whose zero-config output is
+  engine/version-sensitive, so the tests assert the invariants (identical
+  attributes under distinct keys → fragmentation; distinct records → none;
+  no-attributes → skipped; structural fields untouched) rather than exact counts
+  (`tests/unit/semantic-resolve-tier.test.ts`, plus MCP + REST resolve-path cases).
 
 ## [1.26.0] - 2026-07-27
 

@@ -268,6 +268,48 @@ describe("REST API server", () => {
     expect(body.keys[0]!.max_fan_out).toBe(2);
   });
 
+  it("POST /semantic/certify resolve=true measures fragmentation / undercount", async () => {
+    const res = await fetch(baseUrl + "/semantic/certify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: {
+          semantic_models: [
+            {
+              name: "customers",
+              entities: [{ name: "customer", type: "primary", expr: "customer_id" }],
+            },
+          ],
+        },
+        frames: {
+          customers: {
+            customer_id: [1, 2, 3, 4],
+            name: ["Alice Smith", "Alice Smith", "Bob Jones", "Carol White"],
+            email: ["alice@x.com", "alice@x.com", "bob@y.com", "carol@z.com"],
+          },
+        },
+        resolve: true,
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      keys: Array<{
+        is_unique_at_grain: boolean;
+        estimate: number;
+        resolved_entities: number | null;
+        fragmented_entities: number | null;
+        undercount_estimate: number | null;
+        safe_bound: number;
+      }>;
+    };
+    const k = body.keys[0]!;
+    expect(k.is_unique_at_grain).toBe(true); // structural pass is clean
+    expect(k.resolved_entities).not.toBeNull();
+    expect(k.fragmented_entities as number).toBeGreaterThanOrEqual(1);
+    expect(k.undercount_estimate as number).toBeGreaterThan(0);
+    expect(k.safe_bound).toBeLessThan(k.estimate);
+  }, 20000);
+
   it("POST /semantic/certify rejects a non-object model", async () => {
     const res = await fetch(baseUrl + "/semantic/certify", {
       method: "POST",
