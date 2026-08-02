@@ -7232,12 +7232,16 @@
           "defines": [
             "_add_resolution",
             "_as_list",
+            "_key_integrity_native_enabled",
             "_row_key_values",
+            "_structural_native",
+            "_structural_pyarrow",
             "_to_arrow",
             "certify_key_integrity"
           ],
           "imports": [
             "goldenmatch._api",
+            "goldenmatch.core._native_loader",
             "goldenmatch.core.autoconfig",
             "goldenmatch.core.key_integrity_certificate"
           ]
