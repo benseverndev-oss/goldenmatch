@@ -68,9 +68,10 @@ def _ps(pairs) -> dict[tuple[int, int], float]:
     return {(min(a, b), max(a, b)): round(s, 4) for a, b, s in pairs}
 
 
-def _same(a: dict, b: dict, tol: float = 0.02) -> bool:
+def _same(a: dict, b: dict, tol: float = 0.01) -> bool:
     """Same canonical pair SET, and per-pair scores within native/rapidfuzz
-    tolerance (the same tol the vectorized-parity suite uses)."""
+    tolerance. ``tol=0.01`` matches ``test_probabilistic_vectorized``'s
+    ``pytest.approx(abs=0.01)`` scalar-vs-vectorized parity bound."""
     if set(a) != set(b):
         return False
     return all(abs(a[k] - b[k]) <= tol for k in a)
@@ -82,11 +83,17 @@ class TestDisagreeRouteParity:
 
     def test_fixture_is_discriminating(self):
         """Guard the guard: if ``disagree`` == ``unobserved`` on this fixture, a
-        route ignoring the mode would pass parity vacuously. It must not."""
+        route ignoring the mode would pass parity vacuously. It must not.
+
+        Score ONE ``EMResult`` under both modes so the delta is attributable to
+        scoring-time missing-value semantics alone -- retraining EM per mode
+        would let mode-dependent m/u estimation (not the scoring route) explain
+        the difference, weakening the invariant this guards."""
         mk_d, mk_u = _mk("disagree"), _mk("unobserved")
         df = _df()
-        dis = _ps(score_probabilistic_vectorized(df, mk_d, train_em(df, mk_d, n_sample_pairs=200)))
-        obs = _ps(score_probabilistic_vectorized(df, mk_u, train_em(df, mk_u, n_sample_pairs=200)))
+        em = train_em(df, mk_d, n_sample_pairs=200)
+        dis = _ps(score_probabilistic_vectorized(df, mk_d, em))
+        obs = _ps(score_probabilistic_vectorized(df, mk_u, em))
         assert dis != obs, (
             "fixture does not exercise the disagree/unobserved difference; "
             "the parity assertions below would be vacuous"
@@ -135,11 +142,17 @@ class TestDisagreeViaEnvOverride:
 
     def test_env_override_actually_changes_output(self, monkeypatch):
         """Sanity: the override is not a no-op — output differs from the
-        config-declared unobserved run."""
+        config-declared unobserved run.
+
+        Reuse ONE ``EMResult`` across both runs so the delta isolates the
+        scoring-time env override reaching the route (not mode-dependent EM
+        parameters). The env is unset when EM trains, so both runs share
+        identical m/u weights; only scoring differs."""
         df, mk = _df(), _mk("unobserved")
-        obs = _ps(score_probabilistic_vectorized(df, mk, train_em(df, mk, n_sample_pairs=200)))
+        em = train_em(df, mk, n_sample_pairs=200)
+        obs = _ps(score_probabilistic_vectorized(df, mk, em))
         monkeypatch.setenv("GOLDENMATCH_FS_MISSING", "disagree")
-        dis = _ps(score_probabilistic_vectorized(df, mk, train_em(df, mk, n_sample_pairs=200)))
+        dis = _ps(score_probabilistic_vectorized(df, mk, em))
         assert dis != obs
 
 
