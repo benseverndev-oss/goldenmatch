@@ -6,11 +6,12 @@
  * against the supplied frames via the key-integrity certifier — "point it at the
  * semantic model you already have and get a fan-out report on the first run."
  *
- * Faithful port of Python `semantic/certify.py::certify_semantic_model`, the
- * STRUCTURAL tier only (uniqueness + fan-out). The Python `resolve=true`
- * fragmentation/undercount tier runs entity resolution on the record attributes
- * and is deliberately Python-only (see `keyIntegrity.ts`). Advisory only — it
- * never mutates a metric or a key.
+ * Faithful port of Python `semantic/certify.py::certify_semantic_model`.
+ * `certifySemanticModel` is the STRUCTURAL tier (uniqueness + fan-out);
+ * `certifySemanticModelResolved` adds the `resolve=true` fragmentation/undercount
+ * tier, which runs entity resolution on the record attributes (async, since TS
+ * `dedupe()` is async — see `resolveKeyIntegrity` in `keyIntegrity.ts`). Advisory
+ * only — it never mutates a metric or a key.
  */
 
 import { type LoadedDoc } from "./parseUtil.js";
