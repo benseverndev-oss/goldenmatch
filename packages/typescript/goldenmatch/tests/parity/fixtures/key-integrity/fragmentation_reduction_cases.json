@@ -1,0 +1,199 @@
+{
+  "_comment": "Cross-language parity oracle for the ER-resolution fragmentation reduction (cluster membership -> resolved/fragmented/undercount). Generated from the Python reference goldenmatch.semantic.key_integrity._reduce_fragmentation by scripts/emit_fragmentation_reduction_fixture.py. Read DIRECTLY by both the Python test (tests/test_fragmentation_reduction.py) and the TS test (tests/parity/fragmentation-reduction.parity.test.ts) -- no copy, no drift surface. member_lists index into keyvals; keyvals compared by equality only (representation-agnostic).",
+  "cases": [
+    {
+      "name": "all_singletons",
+      "member_lists": [
+        [
+          0
+        ],
+        [
+          1
+        ],
+        [
+          2
+        ]
+      ],
+      "keyvals": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expected": {
+        "resolved_entities": 0,
+        "fragmented_entities": 0,
+        "undercount_estimate": 0.0
+      }
+    },
+    {
+      "name": "one_clean_multi",
+      "member_lists": [
+        [
+          0,
+          1
+        ],
+        [
+          2
+        ]
+      ],
+      "keyvals": [
+        "k",
+        "k",
+        "x"
+      ],
+      "expected": {
+        "resolved_entities": 1,
+        "fragmented_entities": 0,
+        "undercount_estimate": 0.0
+      }
+    },
+    {
+      "name": "one_fragmented",
+      "member_lists": [
+        [
+          0,
+          1
+        ]
+      ],
+      "keyvals": [
+        "k1",
+        "k2"
+      ],
+      "expected": {
+        "resolved_entities": 1,
+        "fragmented_entities": 1,
+        "undercount_estimate": 1.0
+      }
+    },
+    {
+      "name": "mixed",
+      "member_lists": [
+        [
+          0,
+          1
+        ],
+        [
+          2,
+          3,
+          4
+        ],
+        [
+          5
+        ]
+      ],
+      "keyvals": [
+        "a",
+        "a",
+        "b",
+        "b",
+        "c",
+        "d"
+      ],
+      "expected": {
+        "resolved_entities": 2,
+        "fragmented_entities": 1,
+        "undercount_estimate": 0.5
+      }
+    },
+    {
+      "name": "all_fragmented",
+      "member_lists": [
+        [
+          0,
+          1
+        ],
+        [
+          2,
+          3
+        ]
+      ],
+      "keyvals": [
+        "p",
+        "q",
+        "r",
+        "s"
+      ],
+      "expected": {
+        "resolved_entities": 2,
+        "fragmented_entities": 2,
+        "undercount_estimate": 1.0
+      }
+    },
+    {
+      "name": "empty",
+      "member_lists": [],
+      "keyvals": [],
+      "expected": {
+        "resolved_entities": 0,
+        "fragmented_entities": 0,
+        "undercount_estimate": 0.0
+      }
+    },
+    {
+      "name": "large_cluster_same_key",
+      "member_lists": [
+        [
+          0,
+          1,
+          2,
+          3
+        ]
+      ],
+      "keyvals": [
+        "z",
+        "z",
+        "z",
+        "z"
+      ],
+      "expected": {
+        "resolved_entities": 1,
+        "fragmented_entities": 0,
+        "undercount_estimate": 0.0
+      }
+    },
+    {
+      "name": "three_way_fragment",
+      "member_lists": [
+        [
+          0,
+          1,
+          2
+        ]
+      ],
+      "keyvals": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expected": {
+        "resolved_entities": 1,
+        "fragmented_entities": 1,
+        "undercount_estimate": 1.0
+      }
+    },
+    {
+      "name": "unsorted_members",
+      "member_lists": [
+        [
+          2,
+          0
+        ],
+        [
+          1,
+          3
+        ]
+      ],
+      "keyvals": [
+        "a",
+        "b",
+        "a",
+        "c"
+      ],
+      "expected": {
+        "resolved_entities": 2,
+        "fragmented_entities": 1,
+        "undercount_estimate": 0.5
+      }
+    }
+  ]
+}

@@ -225,6 +225,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   `key_integrity_wasm` path filter), and the `fixture_drift` catch-all
   auto-covers the build script. Python-native + SQL reroutes are the documented
   follow-ups (the crate is ready to back them).
+- **ER-resolution fragmentation reduction single-sourced with Python via a shared
+  parity fixture.** The resolution tier's cluster→{resolved, fragmented,
+  undercount} reduction (`resolveKeyIntegrity`) is extracted into a pure exported
+  `reduceFragmentation(memberLists, keyvals)` and locked byte-for-byte against the
+  Python reference by a shared fixture
+  (`tests/parity/fixtures/key-integrity/fragmentation_reduction_cases.json`,
+  Python-generated, read directly by both surfaces — no copy). Deliberately a
+  data-driven fixture, not a wasm kernel: the reduction is a scalar loop, so
+  kernelizing it would pay marshaling on a small call (the goldenanalysis
+  quality_rollup / regressions precedent). Test:
+  `tests/parity/fragmentation-reduction.parity.test.ts`.
 
 ## [1.26.0] - 2026-07-27
 

@@ -320,6 +320,39 @@ export async function resolveKeyIntegrity(
 /** Populate the fragmentation/undercount fields via GoldenMatch ER. Fail-open:
  * any error leaves the resolution fields null and returns an explanatory note.
  * Mirrors Python `_add_resolution`. */
+/**
+ * The resolution-tier reduction: cluster membership → fragmentation counts.
+ *
+ * A *resolved entity* is a cluster of ≥2 records; it is *fragmented* when its
+ * members carry >1 distinct declared key (the join therefore undercounts
+ * distinct entities). Returns resolved / fragmented counts +
+ * `undercountEstimate = fragmented / resolved` (0 when nothing resolved).
+ *
+ * Pure + engine-agnostic: `keyvals` is indexed by member id and compared only
+ * for equality, so the key representation doesn't matter. Cross-language
+ * parity-locked (Python == TS) by
+ * `tests/parity/fixtures/key-integrity/fragmentation_reduction_cases.json` —
+ * this reduction has no kernel (a scalar loop, not Arrow-bulk muscle), so a
+ * shared data-driven fixture is the single source of truth (the goldenanalysis
+ * quality_rollup / regressions parity-fixture precedent).
+ */
+export function reduceFragmentation(
+  memberLists: readonly (readonly number[])[],
+  keyvals: readonly unknown[],
+): { resolvedEntities: number; fragmentedEntities: number; undercountEstimate: number } {
+  let resolved = 0;
+  let fragmented = 0;
+  for (const members of memberLists) {
+    if (members.length < 2) continue;
+    resolved += 1;
+    const distinctKeys = new Set<unknown>();
+    for (const m of members) distinctKeys.add(keyvals[Math.trunc(m)]);
+    if (distinctKeys.size > 1) fragmented += 1;
+  }
+  const undercountEstimate = resolved ? fragmented / resolved : 0.0;
+  return { resolvedEntities: resolved, fragmentedEntities: fragmented, undercountEstimate };
+}
+
 async function addResolution(
   cert: KeyIntegrityCertificate,
   table: Readonly<Record<string, readonly unknown[]>>,
@@ -353,23 +386,18 @@ async function addResolution(
     const res = await dedupe(subRows, { config: subConfig });
 
     const keyvals = rowKeyValues(table, keyColumns);
-    let resolved = 0;
-    let fragmented = 0;
-    for (const cl of res.clusters.values()) {
-      const members = cl.members;
-      if (members.length < 2) continue;
-      resolved += 1;
-      const distinctKeys = new Set<string>();
-      for (const m of members) distinctKeys.add(keyvals[Math.trunc(m)]!);
-      if (distinctKeys.size > 1) fragmented += 1;
-    }
+    const memberLists = [...res.clusters.values()].map((cl) => cl.members);
+    const { resolvedEntities, fragmentedEntities, undercountEstimate } = reduceFragmentation(
+      memberLists,
+      keyvals,
+    );
 
-    cert.resolvedEntities = resolved;
-    cert.fragmentedEntities = fragmented;
-    cert.undercountEstimate = resolved ? fragmented / resolved : 0.0;
-    if (fragmented) {
+    cert.resolvedEntities = resolvedEntities;
+    cert.fragmentedEntities = fragmentedEntities;
+    cert.undercountEstimate = undercountEstimate;
+    if (fragmentedEntities) {
       notes.push(
-        `${fragmented}/${resolved} resolved entities span >1 declared key ` +
+        `${fragmentedEntities}/${resolvedEntities} resolved entities span >1 declared key ` +
           "(fragmentation → the join undercounts distinct entities)",
       );
     }

@@ -7239,6 +7239,7 @@
             "_add_resolution",
             "_as_list",
             "_key_integrity_native_enabled",
+            "_reduce_fragmentation",
             "_row_key_values",
             "_structural_native",
             "_structural_pyarrow",
