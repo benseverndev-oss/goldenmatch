@@ -70,6 +70,69 @@ def gen_labeled(n_entities: int = 400, seed: int = 7) -> tuple[pl.DataFrame, set
     return df, gt
 
 
+# ── household hard-negative anchor (off-peak FS link_threshold) ────────────────
+# A person shape with NO strong identifier and HOUSEHOLD hard-negatives: distinct
+# people who share a surname (family/co-residence) but differ on first_name + dob.
+# The shared surname co-blocks them and the FS scorer -- agreeing on surname (and
+# often city) while disagreeing on first_name/dob -- scores those NON-match pairs
+# just below the true-duplicate pairs. The fixed default link_threshold (0.50)
+# therefore OVER-MERGES households; the F1-optimal cutoff sits ABOVE 0.50. This
+# is the standing target for the FS threshold-refit work: measured committed 0.50
+# F1 ~0.90 (P ~0.82) vs oracle link=0.70 F1 ~0.98 -- a ~+0.078 headroom the
+# non-iterated FS path leaves on the table. Realistic (not degenerate): a shape
+# with heavier household field-overlap drives F1 at 0.50 far lower (P ~0.03,
+# giant surname-collapsed clusters -- an over-merge observable purely from cluster
+# shape), so the severity is a knob, not a fixed pathology.
+_CITY = ["Springfield", "Riverside", "Franklin", "Clinton", "Georgetown",
+         "Salem", "Madison", "Auburn", "Ashland", "Fairview"]
+_STREETS = ["Oak St", "Main St", "Elm Ave", "Cedar Rd", "Pine Ln", "Maple Dr",
+            "Park Blvd", "Hill Rd", "Lake Ave", "River Rd"]
+
+
+def _dob(rng: random.Random) -> str:
+    return f"{rng.randrange(1940, 2000)}-{rng.randrange(1, 13):02d}-{rng.randrange(1, 29):02d}"
+
+
+def gen_household_hardneg(
+    n_households: int = 350, seed: int = 41,
+) -> tuple[pl.DataFrame, set]:
+    """Household hard-negative person shape (see the section comment).
+
+    Each household = 2-3 DISTINCT people sharing a surname; each person = 1
+    original + 1-2 typo'd duplicates (mild first-name transposition, small dob
+    day-jitter). Ground truth = same-person pairs ONLY; household co-members are
+    non-matches that nonetheless co-block and score high. Deterministic per
+    ``seed``. Returns ``(df, gt_pairs)`` with ``(row_index, row_index)`` pairs."""
+    rng = random.Random(seed)
+    tagged: list[tuple[dict, int]] = []
+    eid = 0
+    for _h in range(n_households):
+        surname = rng.choice(_SURN)
+        for _m in range(rng.choice([2, 3])):
+            first = rng.choice(_FIRST)
+            dob = _dob(rng)
+            city = rng.choice(_CITY)
+            street = f"{rng.randrange(1, 300)} {rng.choice(_STREETS)}"
+            tagged.append(({"first_name": first, "surname": surname, "city": city,
+                            "street": street, "dob": dob}, eid))
+            for _ in range(rng.choice([1, 1, 2])):
+                y, m, _d = dob.split("-")
+                dup_dob = f"{y}-{m}-{rng.randrange(1, 29):02d}" if rng.random() < 0.5 else dob
+                tagged.append(({"first_name": _typo(first, rng), "surname": surname,
+                                "city": city, "street": street, "dob": dup_dob}, eid))
+            eid += 1
+    rng.shuffle(tagged)
+    df = pl.DataFrame([rec for rec, _ in tagged])
+    by_entity: dict[int, list[int]] = defaultdict(list)
+    for pos, (_, e) in enumerate(tagged):
+        by_entity[e].append(pos)
+    gt: set = set()
+    for positions in by_entity.values():
+        for a, b in combinations(sorted(positions), 2):
+            gt.add((a, b))
+    return df, gt
+
+
 # ── shared-email CRM anchor (multisource demote-phone / keep-shared-email) ─────
 def crm_df() -> pl.DataFrame:
     rows = []
