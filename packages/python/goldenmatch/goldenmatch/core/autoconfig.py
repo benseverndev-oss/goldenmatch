@@ -163,6 +163,12 @@ class ColumnProfile:
     # reliability signal for the FS domain-comparator decision -- see
     # `build_probabilistic_matchkeys`. None for non-date columns or when the
     # profile was built without value access (e.g. hand-built profiles in tests).
+    numeric_parse_rate: float | None = None
+    # For col_type=="numeric": fraction of the sample that parses as a finite
+    # float (the `numeric_diff` domain). Same reliability role as date_parse_rate.
+    coord_parse_rate: float | None = None
+    # For a coordinate-shaped column: fraction of the sample that parses as a
+    # valid "lat,long" pair (the `geo_haversine` domain). None otherwise.
 
 
 @dataclass
@@ -601,17 +607,32 @@ def profile_columns(
     # noisy dates) while using it on clean ones. Computed over the SAME ~1000-row
     # sample `values` (not the 5 stored `sample_values`, which are too few).
     _date_profiles = [p for p in profiles if p.col_type == "date"]
-    if _date_profiles:
-        from goldenmatch.core.scorer import _parse_date_ordinal  # noqa: PLC0415
-        for p in _date_profiles:
+    _numeric_profiles = [p for p in profiles if p.col_type == "numeric"]
+    _coord_profiles = [p for p in profiles if _looks_like_latlong(p)]
+    if _date_profiles or _numeric_profiles or _coord_profiles:
+        from goldenmatch.core.scorer import (  # noqa: PLC0415
+            _parse_date_ordinal,
+            _parse_float,
+            _parse_latlong,
+        )
+
+        def _rate(name: str, parse) -> float:
             # Rate over RAW non-null values (blanks retained): a blank is a
             # non-null unparseable value that must LOWER the rate, not be filtered
-            # out (else a mostly-blank messy date column looks reliable). Explicit
-            # 0.0 when there are no non-null samples -- never None on the
-            # auto-config path, so the reliability gate can't read it as reliable.
-            vals = nonnull_values_by_name.get(p.name, [])
-            parsed = sum(1 for v in vals if _parse_date_ordinal(v) is not None)
-            p.date_parse_rate = parsed / len(vals) if vals else 0.0
+            # out (else a mostly-blank messy column looks reliable). Explicit 0.0
+            # when there are no non-null samples -- never None on the auto-config
+            # path, so the reliability gate can't read an empty column as reliable.
+            vals = nonnull_values_by_name.get(name, [])
+            if not vals:
+                return 0.0
+            return sum(1 for v in vals if parse(v) is not None) / len(vals)
+
+        for p in _date_profiles:
+            p.date_parse_rate = _rate(p.name, _parse_date_ordinal)
+        for p in _numeric_profiles:
+            p.numeric_parse_rate = _rate(p.name, _parse_float)
+        for p in _coord_profiles:
+            p.coord_parse_rate = _rate(p.name, _parse_latlong)
 
     return profiles
 
@@ -841,6 +862,34 @@ def _date_column_reliable_for_diff(p: ColumnProfile) -> bool:
     real auto-config path always populates it for date columns.
     """
     return p.date_parse_rate is None or p.date_parse_rate >= _DATE_DIFF_MIN_PARSE_RATE
+
+
+# The numeric_diff / geo_haversine half of the per-column domain-comparator
+# decision. Unlike date_diff (a MEASURED panel regression, −0.0130 on
+# historical_50k), this is a DEFENSIVE consistency gate, NOT a measured-F1 fix:
+# the panel carries no lat/long column and only one clean numeric column, so
+# there's no panel regression to calibrate against. Both scorers already
+# exact-string fall back per-value on unparseable input, so the gate can only
+# withhold a column that mostly DOESN'T parse as its domain (don't magnitude-band
+# a "numeric"/"coord" column that isn't one) -- the dispersed-but-parseable
+# failure mode (the date-gate's known limit) is out of a parse-rate signal's
+# reach here too. The unreliable-else is the conservative pre-flag v2 default
+# (the column simply isn't admitted as that comparator). Same 0.95 "parses
+# cleanly" bar as the date cut (spec wording), not independently calibrated.
+_NUMERIC_GEO_MIN_PARSE_RATE = 0.95
+
+
+def _numeric_column_reliable_for_diff(p: ColumnProfile) -> bool:
+    """Should a `numeric` column be admitted as a `numeric_diff` field? True when
+    `numeric_parse_rate` clears the bar; ``None`` (no signal) is reliable-by
+    default so hand-built profiles keep the flag-on behavior."""
+    return p.numeric_parse_rate is None or p.numeric_parse_rate >= _NUMERIC_GEO_MIN_PARSE_RATE
+
+
+def _coord_column_reliable_for_haversine(p: ColumnProfile) -> bool:
+    """Should a coordinate-shaped column be admitted as a `geo_haversine` field?
+    True when `coord_parse_rate` clears the bar; ``None`` is reliable-by-default."""
+    return p.coord_parse_rate is None or p.coord_parse_rate >= _NUMERIC_GEO_MIN_PARSE_RATE
 
 
 # Discrete-categorical col_types where a match on a COMMON value ("Smith", a
@@ -5219,13 +5268,20 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
         # date_diff admission does). The card >= 1.0 guard drops per-record
         # surrogates (no shared-identity signal), mirroring the date branch.
         if v2 and _fs_domain_comparators_enabled():
-            if p.cardinality_ratio < 1.0 and _looks_like_latlong(p):
+            # Per-column reliability gate (Phase 2): admit the magnitude comparator
+            # only when the column actually parses as its domain; otherwise fall
+            # through to the conservative v2 default (the column isn't admitted as
+            # that comparator). See `_numeric_column_reliable_for_diff` /
+            # `_coord_column_reliable_for_haversine`.
+            if (p.cardinality_ratio < 1.0 and _looks_like_latlong(p)
+                    and _coord_column_reliable_for_haversine(p)):
                 fields.append(MatchkeyField(
                     field=p.name, scorer="geo_haversine", transforms=["strip"],
                     levels=3, partial_threshold=0.6,
                 ))
                 continue
-            if p.col_type == "numeric" and p.cardinality_ratio < 1.0:
+            if (p.col_type == "numeric" and p.cardinality_ratio < 1.0
+                    and _numeric_column_reliable_for_diff(p)):
                 fields.append(MatchkeyField(
                     field=p.name, scorer="numeric_diff:pct:0.1", transforms=["strip"],
                     levels=3, partial_threshold=0.6,

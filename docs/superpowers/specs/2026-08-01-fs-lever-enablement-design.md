@@ -149,6 +149,19 @@ per-dataset (or per-column) from the profile, gated." One decision per PR, each 
     `numeric_diff`/`geo_haversine` per-column half is a follow-up (both already fall back to exact-string
     equality on unparseable input, so they're less regression-prone than `date_diff`). Tests:
     `tests/test_fs_date_diff_reliability.py` (13).
+  - **SHIPPED (2026-08-02, the `numeric_diff`/`geo_haversine` half — completes the decision).** Symmetric
+    per-column gate: `ColumnProfile.numeric_parse_rate` / `coord_parse_rate` (populated in `profile_columns`)
+    + `_numeric_column_reliable_for_diff` / `_coord_column_reliable_for_haversine` gate the numeric/geo
+    branches of `build_probabilistic_matchkeys` at the same 0.95 "parses cleanly" bar; the unreliable-else
+    is the conservative v2 default (the column simply isn't admitted as that comparator). **Framed honestly
+    as a DEFENSIVE consistency gate, NOT a measured-F1 fix** — unlike `date_diff` there's no panel regression
+    to calibrate against (the panel has ZERO lat/long columns and one clean numeric column, febrl3
+    `street_number`), and both scorers already exact-string fall back per-value on unparseable input, so the
+    gate only withholds a column that mostly doesn't parse as its domain (the dispersed-but-parseable failure
+    mode is out of a parse-rate signal's reach here, the same known limit as the date gate). Validated by the
+    `ab_lever` gate staying **PASS** on the panel (febrl3 `street_number` stays admitted; nothing else moves)
+    + unit tests demonstrating a mostly-unparseable numeric/coord column is correctly withheld. Tests:
+    `tests/test_fs_numeric_geo_reliability.py` (12).
 - **Honorific stripping as a precision decision** — apply when the config is precision-starved
   (name-only fuzzy, high over-merge risk), not as a blanket default. Data-gated on the same signals
   the controller's precision-anchor rule already uses.
