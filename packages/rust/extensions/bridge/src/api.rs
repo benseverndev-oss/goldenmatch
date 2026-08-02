@@ -243,7 +243,7 @@ pub struct MatchResult {
 pub fn dedupe(table: &convert::TableData, config_json: &str) -> Result<DedupeResult, BridgeError> {
     crate::init()?;
 
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let gm = py.import("goldenmatch")?;
         let json_mod = py.import("json")?;
 
@@ -314,7 +314,7 @@ pub fn dedupe_full(
 ) -> Result<DedupeResult, BridgeError> {
     crate::init()?;
 
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let gm = py.import("goldenmatch")?;
         let json_mod = py.import("json")?;
 
@@ -381,7 +381,7 @@ pub fn dedupe_bundle(
 ) -> Result<DedupeBundle, BridgeError> {
     crate::init()?;
 
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let gm = py.import("goldenmatch")?;
         let json_mod = py.import("json")?;
 
@@ -492,7 +492,7 @@ pub fn autoconfig(table: &convert::TableData, mode: &str) -> Result<AutoConfigRe
         }
     };
 
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let df = convert::table_to_arrow_df(py, table)?;
         let autoconfig_mod = py.import("goldenmatch.core.autoconfig")?;
         let cfg = autoconfig_mod.call_method1(fn_name, (df,))?;
@@ -535,7 +535,7 @@ pub fn match_tables(
 ) -> Result<MatchResult, BridgeError> {
     crate::init()?;
 
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let gm = py.import("goldenmatch")?;
         let json_mod = py.import("json")?;
 
@@ -625,7 +625,7 @@ pub fn match_pairs(
 ) -> Result<Vec<MatchedPair>, BridgeError> {
     crate::init()?;
 
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let gm = py.import("goldenmatch")?;
         let json_mod = py.import("json")?;
 
@@ -691,7 +691,7 @@ pub fn match_pairs(
 pub fn score_strings(value_a: &str, value_b: &str, scorer: &str) -> Result<f64, BridgeError> {
     crate::init()?;
 
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let gm = py.import("goldenmatch")?;
         let result = gm.call_method1("score_strings", (value_a, value_b, scorer))?;
         let score: f64 = result.extract()?;
@@ -709,7 +709,7 @@ pub fn score_pair(
 ) -> Result<f64, BridgeError> {
     crate::init()?;
 
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let gm = py.import("goldenmatch")?;
         let json_mod = py.import("json")?;
 
@@ -745,7 +745,7 @@ pub fn explain_pair(
 ) -> Result<String, BridgeError> {
     crate::init()?;
 
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let gm = py.import("goldenmatch")?;
         let json_mod = py.import("json")?;
 
@@ -778,7 +778,7 @@ pub fn dedupe_pairs(
 ) -> Result<Vec<ScoredPair>, BridgeError> {
     crate::init()?;
 
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let gm = py.import("goldenmatch")?;
 
         let df = convert::table_to_arrow_df(py, table)?;
@@ -808,7 +808,7 @@ pub fn dedupe_clusters(
 ) -> Result<Vec<ClusterMember>, BridgeError> {
     crate::init()?;
 
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let gm = py.import("goldenmatch")?;
 
         let df = convert::table_to_arrow_df(py, table)?;
@@ -881,7 +881,7 @@ fn open_identity_store<'py>(
 /// view JSON. Returns ``{"found": false}`` when no identity owns the record.
 pub fn identity_resolve(record_id: &str, db_path: &str) -> Result<String, BridgeError> {
     crate::init()?;
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let identity = py.import("goldenmatch.identity")?;
         let find_by_record = identity.getattr("find_by_record")?;
         let store = open_identity_store(py, db_path)?;
@@ -904,7 +904,7 @@ pub fn identity_resolve(record_id: &str, db_path: &str) -> Result<String, Bridge
 /// Return the full identity view JSON keyed by ``entity_id``.
 pub fn identity_view(entity_id: &str, db_path: &str) -> Result<String, BridgeError> {
     crate::init()?;
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let identity = py.import("goldenmatch.identity")?;
         let get_entity = identity.getattr("get_entity")?;
         let store = open_identity_store(py, db_path)?;
@@ -927,7 +927,7 @@ pub fn identity_view(entity_id: &str, db_path: &str) -> Result<String, BridgeErr
 /// Return the temporal event log for an identity as a JSON array.
 pub fn identity_history(entity_id: &str, db_path: &str) -> Result<String, BridgeError> {
     crate::init()?;
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let identity = py.import("goldenmatch.identity")?;
         let history_fn = identity.getattr("history")?;
         let store = open_identity_store(py, db_path)?;
@@ -947,7 +947,7 @@ pub fn identity_history(entity_id: &str, db_path: &str) -> Result<String, Bridge
 /// means "all datasets".
 pub fn identity_conflicts(dataset: &str, db_path: &str) -> Result<String, BridgeError> {
     crate::init()?;
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let identity = py.import("goldenmatch.identity")?;
         let find_conflicts = identity.getattr("find_conflicts")?;
         let store = open_identity_store(py, db_path)?;
@@ -973,7 +973,7 @@ pub fn identity_conflicts(dataset: &str, db_path: &str) -> Result<String, Bridge
 /// Empty strings = no filter on that dimension.
 pub fn identity_list(dataset: &str, status: &str, db_path: &str) -> Result<String, BridgeError> {
     crate::init()?;
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let identity = py.import("goldenmatch.identity")?;
         let list_entities = identity.getattr("list_entities")?;
         let store = open_identity_store(py, db_path)?;
@@ -1043,7 +1043,7 @@ pub fn resolve_identities(
         ));
     }
 
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let gm = py.import("goldenmatch")?;
         let json_mod = py.import("json")?;
 
@@ -1054,7 +1054,7 @@ pub fn resolve_identities(
         // (rather than on the built Pydantic object) keeps it simple and dodges
         // assignment-validation quirks; a non-dict/garbage blob coerces to {}.
         let loaded = json_mod.call_method1("loads", (config_json,))?;
-        let cfg_map: Bound<'_, PyDict> = match loaded.downcast::<PyDict>() {
+        let cfg_map: Bound<'_, PyDict> = match loaded.cast::<PyDict>() {
             Ok(d) => d.clone(),
             Err(_) => PyDict::new(py),
         };
@@ -1062,7 +1062,7 @@ pub fn resolve_identities(
         // Preserve any existing identity sub-config (e.g. source_pk_column,
         // emit_singletons) and override only the backend/connection/enabled.
         let identity_map: Bound<'_, PyDict> = match cfg_map.get_item("identity")? {
-            Some(v) => match v.downcast::<PyDict>() {
+            Some(v) => match v.cast::<PyDict>() {
                 Ok(d) => d.clone(),
                 Err(_) => PyDict::new(py),
             },
@@ -1079,7 +1079,7 @@ pub fn resolve_identities(
         // Name the run for idempotent replay when the caller supplies one.
         if !run_name.is_empty() {
             let output_map: Bound<'_, PyDict> = match cfg_map.get_item("output")? {
-                Some(v) => match v.downcast::<PyDict>() {
+                Some(v) => match v.cast::<PyDict>() {
                     Ok(d) => d.clone(),
                     Err(_) => PyDict::new(py),
                 },
@@ -1140,7 +1140,7 @@ pub fn identity_merge(
                 .to_string(),
         ));
     }
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let identity = py.import("goldenmatch.identity")?;
         let merge_fn = identity.getattr("manual_merge")?;
         let store = open_identity_store(py, dsn)?;
@@ -1193,7 +1193,7 @@ pub fn identity_split(
                 .to_string(),
         ));
     }
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let identity = py.import("goldenmatch.identity")?;
         let split_fn = identity.getattr("manual_split")?;
         let store = open_identity_store(py, dsn)?;
@@ -1242,7 +1242,7 @@ fn dumps_default_str<'py>(py: Python<'py>, obj: Bound<'py, PyAny>) -> Result<Str
 /// (the pgrx wrapper substitutes the in-DB DSN when the caller passes empty).
 pub fn identity_audit(store_ref: &str, dataset: &str) -> Result<String, BridgeError> {
     crate::init()?;
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let identity = py.import("goldenmatch.identity")?;
         let audit_page = identity.getattr("audit_log_page")?;
         let store = open_identity_store(py, store_ref)?;
@@ -1260,7 +1260,7 @@ pub fn identity_audit(store_ref: &str, dataset: &str) -> Result<String, BridgeEr
 /// JSON verdict (`{"ok", "events_checked", ..., "summary"}`).
 pub fn identity_audit_verify(store_ref: &str, dataset: &str) -> Result<String, BridgeError> {
     crate::init()?;
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let identity = py.import("goldenmatch.identity")?;
         let verify = identity.getattr("verify_audit_chain")?;
         let store = open_identity_store(py, store_ref)?;
@@ -1279,7 +1279,7 @@ pub fn identity_audit_verify(store_ref: &str, dataset: &str) -> Result<String, B
 /// not exist (mirrors `identity_resolve`'s absent-record shape).
 pub fn identity_profile(store_ref: &str, entity_id: &str) -> Result<String, BridgeError> {
     crate::init()?;
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let identity = py.import("goldenmatch.identity")?;
         let profile_fn = identity.getattr("entity_profile")?;
         let store = open_identity_store(py, store_ref)?;
@@ -1297,7 +1297,7 @@ pub fn identity_profile(store_ref: &str, entity_id: &str) -> Result<String, Brid
 /// Graph-level identity health summary (JSON). Empty `dataset` = whole graph.
 pub fn identity_stats(store_ref: &str, dataset: &str) -> Result<String, BridgeError> {
     crate::init()?;
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let identity = py.import("goldenmatch.identity")?;
         let stats_fn = identity.getattr("identity_summary_stats")?;
         let store = open_identity_store(py, store_ref)?;
@@ -1316,7 +1316,7 @@ pub fn identity_stats(store_ref: &str, dataset: &str) -> Result<String, BridgeEr
 /// open conflicts and/or weak confidence). Empty `dataset` = all datasets.
 pub fn identity_worklist(store_ref: &str, dataset: &str) -> Result<String, BridgeError> {
     crate::init()?;
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let identity = py.import("goldenmatch.identity")?;
         let worklist_fn = identity.getattr("steward_worklist_page")?;
         let store = open_identity_store(py, store_ref)?;
@@ -1341,7 +1341,7 @@ pub fn identity_audit_seal(dsn: &str, dataset: &str, actor: &str) -> Result<Stri
                 .to_string(),
         ));
     }
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let identity = py.import("goldenmatch.identity")?;
         let seal_fn = identity.getattr("seal_audit_log")?;
         let seal_result = identity.getattr("seal_result_dict")?;
@@ -1378,7 +1378,7 @@ pub fn identity_resolve_conflict(
                 .to_string(),
         ));
     }
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let identity = py.import("goldenmatch.identity")?;
         let mediate = identity.getattr("mediate_conflict")?;
         let store = open_identity_store(py, dsn)?;
@@ -1414,7 +1414,7 @@ pub fn identity_claim(
                 .to_string(),
         ));
     }
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let identity = py.import("goldenmatch.identity")?;
         let claim = identity.getattr("claim_record")?;
         let store = open_identity_store(py, dsn)?;
@@ -1486,7 +1486,7 @@ pub fn correction_add(args: CorrectionAddArgs<'_>) -> Result<String, BridgeError
         )));
     }
 
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let store_mod = py.import("goldenmatch.core.memory.store")?;
         let datetime_mod = py.import("datetime")?;
         let uuid_mod = py.import("uuid")?;
@@ -1611,7 +1611,7 @@ pub fn correction_list(
     memory_path: Option<&str>,
 ) -> Result<String, BridgeError> {
     crate::init()?;
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let store_mod = py.import("goldenmatch.core.memory.store")?;
         let json_mod = py.import("json")?;
         let store_cls = store_mod.getattr("MemoryStore")?;
@@ -1655,7 +1655,7 @@ pub fn memory_learn(
     memory_path: Option<&str>,
 ) -> Result<String, BridgeError> {
     crate::init()?;
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let store_mod = py.import("goldenmatch.core.memory.store")?;
         let learner_mod = py.import("goldenmatch.core.memory.learner")?;
         let json_mod = py.import("json")?;
@@ -1697,7 +1697,7 @@ pub fn memory_learn(
 /// Cheap; safe for status checks. Mirrors the Python MCP `memory_stats` tool.
 pub fn memory_stats(memory_path: Option<&str>) -> Result<String, BridgeError> {
     crate::init()?;
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let store_mod = py.import("goldenmatch.core.memory.store")?;
         let json_mod = py.import("json")?;
         let dataclasses = py.import("dataclasses")?;
@@ -1813,7 +1813,7 @@ fn build_probabilistic_frame<'py>(
 /// the profile report as a JSON object (or `{"error": ...}` on failure).
 pub fn profile_table(table: &convert::TableData) -> Result<String, BridgeError> {
     crate::init()?;
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let result: Result<String, BridgeError> = (|| {
             let gm = py.import("goldenmatch")?;
             let df = convert::table_to_arrow_df(py, table)?;
@@ -1830,7 +1830,7 @@ pub fn profile_table(table: &convert::TableData) -> Result<String, BridgeError> 
 /// the DuckDB `null_handling="special"` registration.
 pub fn suggest_threshold(scores_json: &str) -> Result<Option<f64>, BridgeError> {
     crate::init()?;
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let result: Result<Option<f64>, BridgeError> = (|| {
             let gm = py.import("goldenmatch")?;
             let json_mod = py.import("json")?;
@@ -1862,7 +1862,7 @@ pub fn suggest_threshold(scores_json: &str) -> Result<Option<f64>, BridgeError> 
 /// list of column names. Returns the dataclass as a JSON object.
 pub fn detect_domain(columns_json: &str) -> Result<String, BridgeError> {
     crate::init()?;
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let result: Result<String, BridgeError> = (|| {
             let domain = py.import("goldenmatch.core.domain")?;
             let dataclasses = py.import("dataclasses")?;
@@ -1894,7 +1894,7 @@ pub fn detect_domain(columns_json: &str) -> Result<String, BridgeError> {
 /// unknown-kind / missing-text error JSON.
 pub fn extract_features(text: &str, kind: &str) -> Result<String, BridgeError> {
     crate::init()?;
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let result: Result<String, BridgeError> = (|| {
             let domain = py.import("goldenmatch.core.domain")?;
             let dataclasses = py.import("dataclasses")?;
@@ -1932,7 +1932,7 @@ pub fn extract_features(text: &str, kind: &str) -> Result<String, BridgeError> {
 /// `EvalResult.summary()` dict.
 pub fn evaluate(pairs_json: &str, ground_truth_json: &str) -> Result<String, BridgeError> {
     crate::init()?;
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let result: Result<String, BridgeError> = (|| {
             let gm = py.import("goldenmatch")?;
             let json_mod = py.import("json")?;
@@ -1996,7 +1996,7 @@ pub fn evaluate(pairs_json: &str, ground_truth_json: &str) -> Result<String, Bri
 /// the `CompareResult.summary()` dict.
 pub fn compare_clusters(a_json: &str, b_json: &str) -> Result<String, BridgeError> {
     crate::init()?;
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let result: Result<String, BridgeError> = (|| {
             let gm = py.import("goldenmatch")?;
             let json_mod = py.import("json")?;
@@ -2035,7 +2035,7 @@ pub fn compare_clusters(a_json: &str, b_json: &str) -> Result<String, BridgeErro
 /// `{report, valid_rows, quarantine_rows, quarantine}` JSON.
 pub fn validate_table(table: &convert::TableData, rules_json: &str) -> Result<String, BridgeError> {
     crate::init()?;
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let result: Result<String, BridgeError> = (|| {
             let validate_mod = py.import("goldenmatch.core.validate")?;
             let json_mod = py.import("json")?;
@@ -2088,7 +2088,7 @@ pub fn validate_table(table: &convert::TableData, rules_json: &str) -> Result<St
 /// `{fixes, fixed_rows, rows}` JSON.
 pub fn autofix_table(table: &convert::TableData) -> Result<String, BridgeError> {
     crate::init()?;
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let result: Result<String, BridgeError> = (|| {
             let gm = py.import("goldenmatch")?;
             let df = convert::table_to_arrow_df(py, table)?;
@@ -2114,7 +2114,7 @@ pub fn detect_anomalies(
     sensitivity: &str,
 ) -> Result<String, BridgeError> {
     crate::init()?;
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let result: Result<String, BridgeError> = (|| {
             let gm = py.import("goldenmatch")?;
             let df = convert::table_to_arrow_df(py, table)?;
@@ -2138,7 +2138,7 @@ pub fn detect_anomalies(
 /// Returns `{has_errors, config_was_modified, findings}` JSON.
 pub fn preflight(table: &convert::TableData, config_json: &str) -> Result<String, BridgeError> {
     crate::init()?;
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let result: Result<String, BridgeError> = (|| {
             let verify = py.import("goldenmatch.core.autoconfig_verify")?;
             let dataclasses = py.import("dataclasses")?;
@@ -2172,7 +2172,7 @@ pub fn preflight(table: &convert::TableData, config_json: &str) -> Result<String
 /// `{signals, adjustments, advisories}` JSON.
 pub fn postflight(table: &convert::TableData, config_json: &str) -> Result<String, BridgeError> {
     crate::init()?;
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let result: Result<String, BridgeError> = (|| {
             let gm = py.import("goldenmatch")?;
             let verify = py.import("goldenmatch.core.autoconfig_verify")?;
@@ -2216,7 +2216,7 @@ pub fn train_em(
     params_json: &str,
 ) -> Result<String, BridgeError> {
     crate::init()?;
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let result: Result<String, BridgeError> = (|| {
             let schemas = py.import("goldenmatch.config.schemas")?;
             let prob = py.import("goldenmatch.core.probabilistic")?;
@@ -2267,7 +2267,7 @@ pub fn score_probabilistic(
     em_result_json: &str,
 ) -> Result<String, BridgeError> {
     crate::init()?;
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let result: Result<String, BridgeError> = (|| {
             let schemas = py.import("goldenmatch.config.schemas")?;
             let prob = py.import("goldenmatch.core.probabilistic")?;
@@ -2279,7 +2279,7 @@ pub fn score_probabilistic(
 
             let em_cls = prob.getattr("EMResult")?;
             let em_dict = json_mod.call_method1("loads", (em_result_json,))?;
-            let em_kwargs = em_dict.downcast::<PyDict>().map_err(|e| {
+            let em_kwargs = em_dict.cast::<PyDict>().map_err(|e| {
                 BridgeError::PythonRuntime(format!("em_result_json must be a JSON object: {}", e))
             })?;
             let em = em_cls.call((), Some(em_kwargs))?;
@@ -2328,7 +2328,7 @@ pub fn score_probabilistic(
 pub fn goldenflow_transform(transform_name: &str, value: &str) -> Result<String, BridgeError> {
     crate::init()?;
 
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         // fail-open closure: on any pyo3 error inside, fall back to the input.
         let applied: Option<String> = (|| -> Result<Option<String>, BridgeError> {
             // Lazy import: goldenflow + polars may be absent. Treat as
