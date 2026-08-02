@@ -634,7 +634,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `dedupe` | `--model` | text | `None` | Override embedding model selection |
 | `dedupe` | `--preview` | boolean | `False` | Preview results without writing files |
 | `dedupe` | `--preview-size` | integer | `10000` | Number of records for preview sample |
-| `dedupe` | `--preview-random` | boolean | `False` | Random sample instead of first N |
+| `dedupe` | `--preview-random` | boolean | `False` | Deprecated no-op: accepted for back-compat but not applied (preview uses the first N). |
 | `dedupe` | `--output-golden` | boolean | `False` | Output golden records |
 | `dedupe` | `--output-clusters` | boolean | `False` | Output cluster info |
 | `dedupe` | `--output-dupes` | boolean | `False` | Output duplicate records |
@@ -649,13 +649,13 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `dedupe` | `--run-name` | text | `None` | Run name for output files |
 | `dedupe` | `--auto-fix` | boolean | `False` | Run auto-fix before matching |
 | `dedupe` | `--auto-block` | boolean | `False` | Auto-suggest blocking keys |
-| `dedupe` | `--chunked` | boolean | `False` | Large dataset mode - process in chunks for files >1M records |
+| `dedupe` | `--chunked` | boolean | `False` | Deprecated no-op: use --backend chunked for large-dataset chunked processing. |
 | `dedupe` | `--chunk-size` | integer | `100000` | Records per chunk in chunked mode |
 | `dedupe` | `--diff` | boolean | `False` | Generate before/after CSV diff |
-| `dedupe` | `--diff-html` | boolean | `False` | Generate before/after HTML diff with highlighting |
+| `dedupe` | `--diff-html` | boolean | `False` | Deprecated no-op: accepted for back-compat but not generated; use --diff for a CSV diff. |
 | `dedupe` | `--merge-preview` | boolean | `False` | Show merge preview (what will change) without writing |
 | `dedupe` | `--anomalies` | boolean | `False` | Detect suspicious/fake records |
-| `dedupe` | `--anomaly-sensitivity` | text | `'medium'` | low, medium, or high |
+| `dedupe` | `--anomaly-sensitivity` | text | `'medium'` | Deprecated no-op: accepted for back-compat but not applied (anomaly sensitivity is fixed). |
 | `dedupe` | `--llm-boost` | boolean | `False` | Boost accuracy with LLM-labeled training data |
 | `dedupe` | `--llm-retrain` | boolean | `False` | Force re-labeling (ignore saved model) |
 | `dedupe` | `--llm-provider` | text | `None` | LLM provider: auto, anthropic, or openai |
@@ -803,7 +803,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `match` | `--config` | text | `None` | Path to YAML config file (optional - auto-detects if omitted) |
 | `match` | `--preview` | boolean | `False` | Preview results without writing files |
 | `match` | `--preview-size` | integer | `10000` | Number of records for preview sample |
-| `match` | `--preview-random` | boolean | `False` | Random sample instead of first N |
+| `match` | `--preview-random` | boolean | `False` | Deprecated no-op: accepted for back-compat but not applied (preview uses the first N). |
 | `match` | `--output-matched` | boolean | `False` | Output matched records |
 | `match` | `--output-unmatched` | boolean | `False` | Output unmatched records |
 | `match` | `--output-scores` | boolean | `False` | Output score details |
