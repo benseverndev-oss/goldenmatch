@@ -687,7 +687,10 @@ def _score_probabilistic_matchkey(
     """
     from goldenmatch.core.blocker import collect_blocking_fields
     from goldenmatch.core.probabilistic import (
+        _REFIT_MIN_PAIRS,
+        _fs_refit_threshold_enabled,
         fs_model_preloaded,
+        fs_refit_link_threshold,
         load_or_train_em,
         probabilistic_block_scorer,
         score_probabilistic_blocks_batched,
@@ -843,6 +846,24 @@ def _score_probabilistic_matchkey(
                 n_buckets=config.n_buckets,
                 em_result=em_result,
             )
+            # Phase 3a threshold refit (GOLDENMATCH_FS_REFIT_THRESHOLD, default off):
+            # pick the link cutoff from the actual scored-pair distribution -- the
+            # class-separating valley -- but COMMIT it only when re-clustering there
+            # reduces over-merge (max cluster size), correcting the over-merge the
+            # non-iterated FS path can't see WITHOUT regressing clean data (a bare
+            # valley cut removes low-scoring true matches on person/ncvr; the
+            # cluster-shape guard rejects it there). No-op unless the flag is on and
+            # no explicit user threshold. Scores are already computed (re-cluster
+            # only, no re-scoring); only the cutoff used for the split moves.
+            if (
+                _fs_refit_threshold_enabled()
+                and mk.link_threshold is None
+                and _pair_table.num_rows >= _REFIT_MIN_PAIRS
+            ):
+                _d = _pair_table.to_pydict()
+                link_threshold = fs_refit_link_threshold(
+                    _d["id_a"], _d["id_b"], _d["score"], link_threshold
+                )
             # Stay Arrow end-to-end (NO polars): split link/review on the pa.Table
             # itself. score_buckets_arrow already floors the table at the review
             # cut, so `score < link_threshold` is exactly the review band. The
