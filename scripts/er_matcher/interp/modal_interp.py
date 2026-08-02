@@ -496,6 +496,89 @@ def probe_layers(per_class: int = 200, negatives: str = "hard", seed: int = 0) -
     print("done -> `modal volume get er-matcher-out interp/layer_probes.json`")
 
 
+# --------------------------------------------------------------------------- #
+# stage 4 (LAYER 2): abstract the locked direction into human field signals    #
+# --------------------------------------------------------------------------- #
+@app.function(image=_image, gpu=GPU, timeout=60 * 60, volumes={"/out": _out_vol})
+def layer2_abstraction(layer: int = 14, per_class: int = 400, seed: int = 0,
+                       n_sae_features: int = 12) -> None:
+    """Translate the causally-validated match direction at ``layer`` into
+    human-readable field signals: decompose the projection onto field-agreement
+    features, and label the top SAE features by the field they track. See
+    ``field_attribution.py`` (the pure, tested logic) for the method."""
+    import json
+    import os
+    import sys
+
+    import numpy as np
+    import torch
+    import torch.nn.functional as F
+
+    sys.path.insert(0, "/root/interp")
+    from field_attribution import attribute_direction, field_agreements, label_sae_features
+
+    tok, model = _load_model()
+    pairs, rows = _mine(per_class, "hard", seed)
+    y = np.array([t for *_, t in pairs])
+    prompts = [_prompt(tok, rows[a], rows[b]) for a, b, _ in pairs]
+
+    # decision-token residual at `layer`
+    reps = []
+    for i in range(0, len(prompts), 16):
+        enc = tok(prompts[i : i + 16], return_tensors="pt", padding=True).to(model.device)
+        with torch.no_grad():
+            out = model(**enc, output_hidden_states=True)
+        reps.append(out.hidden_states[layer][:, -1, :].float().cpu().numpy())
+    R = np.concatenate(reps, axis=0)
+
+    # the proven match direction (diff-of-means) + each pair's projection onto it
+    d = R[y == 1].mean(0) - R[y == 0].mean(0)
+    d = d / (np.linalg.norm(d) + 1e-9)
+    projections = R @ d
+
+    # human field-agreement signals (the primitives to translate INTO)
+    field_feats = field_agreements(rows, pairs, FIELDS)
+    decomp = attribute_direction(projections, field_feats, FIELDS)
+    print(f"[layer2] direction R^2 by field signals = {decomp['r2']:.3f}")
+    for e in decomp["ranking"]:
+        print(f"[layer2]   {e['field']:<14} coef={e['coef']:+.3f}", flush=True)
+
+    # label the top SAE features by the field their activation tracks
+    sae_labels = []
+    sae_path = f"/out/interp/sae_layer{layer}.pt"
+    if os.path.exists(sae_path):
+        sae = torch.load(sae_path, map_location="cpu")
+        with open(f"/out/interp/sae_features_layer{layer}.json", encoding="utf-8") as fh:
+            top = json.load(fh)["top_features"][:n_sae_features]
+        dev = model.device
+        ns = float(sae.get("norm_scale", 1.0))
+        Dn = torch.tensor(R / ns, dtype=torch.float32, device=dev)  # SAE trained normalized
+        W_enc = sae["W_enc"].to(dev)
+        b_enc = sae["b_enc"].to(dev)
+        b_dec = sae["b_dec"].to(dev)
+        cols = [f["feature"] for f in top]
+        with torch.no_grad():
+            Z = F.relu((Dn - b_dec) @ W_enc + b_enc)[:, cols].cpu().numpy()
+        labels = label_sae_features(Z, field_feats, FIELDS)
+        for f, lab in zip(top, labels):
+            lab["feature"] = f["feature"]
+            lab["match_corr"] = f["match_corr"]
+            sae_labels.append(lab)
+            print(f"[layer2] SAE feat {f['feature']:5d} (match_corr {f['match_corr']:+.2f}) "
+                  f"-> tracks {lab['top_field']} (r={lab['corr']:+.2f})", flush=True)
+
+    payload = {
+        "layer": layer, "n_pairs": len(pairs), "fields": FIELDS,
+        "direction_field_decomposition": decomp,
+        "sae_feature_labels": sae_labels,
+    }
+    os.makedirs("/out/interp", exist_ok=True)
+    with open(f"/out/interp/layer2_abstraction_L{layer}.json", "w") as fh:
+        json.dump(payload, fh, indent=2)
+    _out_vol.commit()
+    print(f"[done] layer2 -> /out/interp/layer2_abstraction_L{layer}.json")
+
+
 @app.local_entrypoint()
 def sae(layer: int = 14, n_pairs: int = 3000, expansion: int = 16, l1: float = 4e-3,
         steps: int = 4000) -> None:
@@ -509,3 +592,9 @@ def causal(layer: int = 14, lo: int = 8, hi: int = 20, per_class: int = 150,
     causal_validate.remote(layer=layer, lo=lo, hi=hi, per_class=per_class,
                            n_sae_features=n_sae_features)
     print(f"done -> `modal volume get er-matcher-out interp/causal_multilayer_{lo}_{hi}.json`")
+
+
+@app.local_entrypoint()
+def layer2(layer: int = 14, per_class: int = 400, n_sae_features: int = 12) -> None:
+    layer2_abstraction.remote(layer=layer, per_class=per_class, n_sae_features=n_sae_features)
+    print(f"done -> `modal volume get er-matcher-out interp/layer2_abstraction_L{layer}.json`")

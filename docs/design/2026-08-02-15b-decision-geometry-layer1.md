@@ -1,8 +1,10 @@
-# The 1.5B ER-matcher's decision geometry — Layer 1 (locked)
+# The 1.5B ER-matcher's decision geometry — Layer 1 locked + Layer 2 translation
 
-**Status:** LOCKED. Correlational + per-layer geometry + dictionary learning + causal
-validation all done. Steering the match direction across depth drives the verdict 0→1
-monotonically — the direction is the causal substrate of the decision.
+**Status:** Layer 1 LOCKED (correlational + per-layer geometry + dictionary learning +
+causal validation — steering the match direction across depth drives the verdict 0→1
+monotonically, so the direction is the causal substrate of the decision). Layer 2
+DONE — the proven direction is translated into human field signals (first_name +
+birth_place dominate; surname/dob ignored; R² = 0.51), cross-validated by the SAE basis.
 **Scope:** mechanistic interpretability of the local ER-matcher (fine-tuned
 Qwen2.5-1.5B-Instruct, the pinned `er-1p5b` GGUF). Not a product/quality change.
 
@@ -200,11 +202,59 @@ at layer 1**, **sharpens to a perfect linear separator by L13**, **concentrates 
 the dominant residual axis late**, and is **causally controllable**: steering it flips
 the model's verdict 0→1 monotonically. The math is sound; the primitive is real.
 
-**Layer 2 can now begin** — auto-labeling the proven structure into human-readable
-match rationales/flags (e.g. interpreting the negative "non-match evidence" SAE
-features, or decomposing the diff-of-means direction into per-field contributions).
-Building that abstraction *before* this lock would have been the linguistic-bias trap
-this program rejects; now it rests on a causally-validated basis.
+**Layer 2 now rests on a causally-validated basis** (below). Building that abstraction
+*before* this lock would have been the linguistic-bias trap this program rejects.
+
+## Layer 2 — the translation (human-readable, built on the locked basis)
+
+Layer 2 does only what the framework reserves for a locked Layer 1: it *abstracts the
+proven structure* into human-readable signals, **without inventing a new linguistic
+story** — it decomposes the exact direction Layer 1 proved causal. Two independent
+translations (`field_attribution.py`, run at layer 14 by
+`modal_interp.py::layer2_abstraction`, 400 match + 400 hard-negative pairs):
+
+### (a) Decompose the causal direction into human field signals
+
+Regress each pair's *projection onto the proven match direction* against
+human-readable per-field **agreement** signals (jaro-winkler similarity of each
+field's two values). Standardized coefficients:
+
+| Field | coef | reads as |
+|---|---|---|
+| **first_name** | **+0.42** | the dominant discriminator |
+| **birth_place** | +0.30 | secondary discriminator |
+| occupation | +0.15 | |
+| postcode | +0.08 | |
+| **surname** | **+0.04** | ~ignored |
+| **dob** | **+0.01** | ~ignored |
+
+**R² = 0.51** — an honest faithfulness number: human field-agreement explains ~half
+the projection onto the causal direction; the other half is context/interactions the
+simple per-field story cannot capture (and Layer 2 says so rather than overclaiming).
+
+Two readable findings fall straight out of the geometry:
+- **surname ≈ 0 (predicted).** The probe's hard negatives *share* surname-soundex by
+  construction, so surname agreement is uninformative among them — and the model's
+  match direction correctly ignores it, keying on **first_name** to break look-alikes.
+- **dob ≈ 0 (not predicted).** dob does *not* discriminate — consistent with dob being
+  corrupted/unreliable in historical_50k, so the model **learned to down-weight it**.
+
+### (b) Label the SAE basis by field
+
+For each top Layer-1 SAE feature, the field-agreement signal its activation tracks
+most. The basis is field-aligned, and **it converges with (a)**:
+- **"non-match evidence" features** (negative match-corr) mostly track **first_name**
+  disagreement (feats 501/1055/6347/1546), plus dob/surname/occupation disagreement.
+- **"match evidence" features** (positive match-corr) track **birth_place** and
+  **first_name** agreement — feat 10062 tracks birth_place at r = +0.59, the cleanest
+  single field-aligned primitive.
+
+Both translations — the direction decomposition and the independently-derived SAE
+labels — converge on the same human story: **first_name + birth_place agreement are
+the primitives composing the model's same-entity decision against surname look-alikes.**
+That convergence is the evidence the abstraction is faithful, not a just-so story —
+and it is only meaningful *because* the underlying direction was causally locked first.
+(`layer2_abstraction_L14.json` on the volume.)
 
 ## Reproduce
 
@@ -225,4 +275,8 @@ The GPU pipeline (Modal, against the fp16 `/out/model_1p5b/merged`):
 modal run scripts/er_matcher/interp/modal_interp.py::probe_layers   # stage 1
 modal run scripts/er_matcher/interp/modal_interp.py::sae --layer 14 --l1 0.06 --expansion 8
 modal run scripts/er_matcher/interp/modal_interp.py::causal --layer 14 --lo 8 --hi 20
+modal run scripts/er_matcher/interp/modal_interp.py::layer2 --layer 14   # Layer 2
 ```
+
+Layer-2 pure helpers (`field_attribution.py`) are unit-tested model-free in
+`scripts/er_matcher/test_field_attribution.py`.
