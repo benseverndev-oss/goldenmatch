@@ -337,12 +337,18 @@ def train_sae(layer: int = 14, n_pairs: int = 3000, expansion: int = 16, l1: flo
 # stage 3: causal validation -- steering / ablation (THE LOCK)                #
 # --------------------------------------------------------------------------- #
 @app.function(image=_image, gpu=GPU, timeout=60 * 60, volumes={"/out": _out_vol})
-def causal_validate(layer: int = 14, per_class: int = 150, seed: int = 0,
-                    coeffs: str = "-2,-1,-0.5,0,0.5,1,2", n_sae_features: int = 5) -> None:
-    """Add c*direction to the residual stream at ``layer`` during the forward pass
-    and measure the mean P(match) shift. A direction is CAUSAL iff P(match) moves
-    monotonically with c. Tests the diff-of-means axis + the top-correlated SAE
-    feature decoder directions. Also ablation (project the direction out)."""
+def causal_validate(layer: int = 14, lo: int = 8, hi: int = 20, per_class: int = 150,
+                    seed: int = 0, coeffs: str = "-4,-2,-1,0,1,2,4",
+                    n_sae_features: int = 5) -> None:
+    """MULTI-LAYER causal test (the lock). The match direction is redundantly
+    encoded across depth (present from layer 1), so a single-site intervention is
+    re-derived downstream -- an earlier single-layer run barely moved the verdict.
+    This steers/ablates the PER-LAYER diff-of-means direction at the decision token
+    across a WINDOW of layers [lo, hi] at once, in natural gap-units (c=1 adds
+    exactly the class-mean difference at each layer). The direction is CAUSAL iff
+    P(match) moves monotonically with c and ablation-across-the-window collapses the
+    decision toward chance. SAE feature directions (trained at ``layer``) are also
+    tested SINGLE-LAYER as a secondary, redundancy-limited probe."""
     import json
     import os
     import sys
@@ -354,103 +360,124 @@ def causal_validate(layer: int = 14, per_class: int = 150, seed: int = 0,
 
     tok, model = _load_model()
     true_id, false_id = _true_false_ids(tok)
+    dev = model.device
     cvals = [float(c) for c in coeffs.split(",")]
+    window = list(range(lo, hi + 1))
 
     pairs, rows = _mine(per_class, "hard", seed)
     y = np.array([t for *_, t in pairs])
     prompts = [_prompt(tok, rows[a], rows[b]) + '{"match":' for a, b, _ in pairs]
 
-    # decision-token residual at `layer` -> diff-of-means direction
-    def dec_residual() -> np.ndarray:
-        reps = []
-        for i in range(0, len(prompts), 16):
-            enc = tok(prompts[i : i + 16], return_tensors="pt", padding=True).to(model.device)
-            with torch.no_grad():
-                out = model(**enc, output_hidden_states=True)
-            reps.append(out.hidden_states[layer][:, -1, :].float().cpu().numpy())
-        return np.concatenate(reps, axis=0)
-
-    R = dec_residual()
-    mu1, mu0 = R[y == 1].mean(0), R[y == 0].mean(0)
-    diff_dir = mu1 - mu0
-    gap_norm = float(np.linalg.norm(diff_dir))
-    diff_dir = diff_dir / (gap_norm + 1e-9)
-    # steering is scaled by the residual RMS norm so a coefficient is an
-    # interpretable FRACTION of the residual magnitude (a unit-vector +-8 is
-    # negligible against a ~90-norm residual -> no verdict movement). c=1 adds a
-    # vector as large as the whole decision-token residual along the direction.
-    r_rms = float(np.linalg.norm(R, axis=1).mean())
-    print(f"[causal] residual RMS norm={r_rms:.1f}  class-gap norm={gap_norm:.2f}")
-
-    directions = {"diff_of_means": diff_dir}
-    sae_path = f"/out/interp/sae_layer{layer}.pt"
-    if os.path.exists(sae_path) and n_sae_features > 0:
-        sae = torch.load(sae_path, map_location="cpu")
-        feat_path = f"/out/interp/sae_features_layer{layer}.json"
-        with open(feat_path, encoding="utf-8") as fh:
-            top = json.load(fh)["top_features"][:n_sae_features]
-        for f in top:
-            j = f["feature"]
-            wj = sae["W_dec"][j].numpy()
-            directions[f"sae_feat_{j}"] = wj / (np.linalg.norm(wj) + 1e-9)
-        print(f"[causal] loaded {len(top)} SAE feature directions from {sae_path}")
-
-    # residual-stream hook at layer L (Qwen2 decoder block output). Two modes:
-    #   add:    hidden[-1] += vec               (steering)
-    #   ablate: hidden[-1] -= (hidden[-1].unit_dir)*unit_dir   (project the dir out)
-    ctrl: dict = {"add": None, "ablate": None}
-
-    def hook(_mod, _inp, output):
-        hidden = output[0] if isinstance(output, tuple) else output
-        if ctrl["ablate"] is not None:
-            u = ctrl["ablate"]
-            coeff = (hidden[:, -1, :] * u).sum(-1, keepdim=True)
-            hidden[:, -1, :] = hidden[:, -1, :] - coeff * u
-        if ctrl["add"] is not None:
-            hidden[:, -1, :] = hidden[:, -1, :] + ctrl["add"]
-        return (hidden, *output[1:]) if isinstance(output, tuple) else hidden
-
-    h = model.model.layers[layer].register_forward_hook(hook)
-
-    def mean_p_match(add=None, ablate=None) -> float:
-        ctrl["add"], ctrl["ablate"] = add, ablate
+    def batched_logits_pmatch() -> float:
         ps = []
         for i in range(0, len(prompts), 16):
-            enc = tok(prompts[i : i + 16], return_tensors="pt", padding=True).to(model.device)
+            enc = tok(prompts[i : i + 16], return_tensors="pt", padding=True).to(dev)
             with torch.no_grad():
                 logits = model(**enc).logits[:, -1, :]
             pair = torch.softmax(torch.stack([logits[:, true_id], logits[:, false_id]], 1), dim=1)
             ps.append(pair[:, 0].float().cpu().numpy())
-        ctrl["add"], ctrl["ablate"] = None, None
         return float(np.concatenate(ps).mean())
 
-    base = mean_p_match()
-    print(f"[causal] baseline mean P(match) = {base:.4f}")
+    # one capture pass -> per-layer decision-token residual for the whole window
+    accum: dict[int, list] = {L: [] for L in window}
+    for i in range(0, len(prompts), 16):
+        enc = tok(prompts[i : i + 16], return_tensors="pt", padding=True).to(dev)
+        with torch.no_grad():
+            out = model(**enc, output_hidden_states=True)
+        for L in window:
+            accum[L].append(out.hidden_states[L][:, -1, :].float().cpu().numpy())
+    layer_dirs: dict[int, tuple] = {}  # hidden-idx L -> (unit_dir fp16 tensor, gap)
+    for L in window:
+        R = np.concatenate(accum[L], axis=0)
+        d = R[y == 1].mean(0) - R[y == 0].mean(0)
+        g = float(np.linalg.norm(d))
+        layer_dirs[L] = (torch.tensor(d / (g + 1e-9), dtype=torch.float16, device=dev), g)
+    print(f"[causal] window={lo}..{hi}  per-layer class-gap norms: "
+          f"{ {L: round(layer_dirs[L][1], 2) for L in window} }", flush=True)
 
-    out: dict = {"layer": layer, "baseline_p_match": base, "coeffs": cvals,
-                 "residual_rms_norm": r_rms, "class_gap_norm": gap_norm, "directions": {}}
-    for name, dvec in directions.items():
-        dt = torch.tensor(dvec, dtype=torch.float16, device=model.device)
-        # coefficient c is a FRACTION of the residual RMS norm (see above)
-        sweep = {c: mean_p_match(add=dt * (c * r_rms)) for c in cvals}
-        ablated = mean_p_match(ablate=dt)
-        mono = _monotonic([sweep[c] for c in sorted(cvals)])
-        out["directions"][name] = {
-            "sweep": {str(c): sweep[c] for c in cvals},
-            "monotonic": mono,
+    # multi-layer hooks: hidden_states[L] is the output of decoder block L-1.
+    ctrl: dict = {"mode": None, "coeff": 0.0, "single": None}
+
+    def make_hook(L: int):
+        u, g = layer_dirs[L]
+
+        def hook(_m, _i, output):
+            if ctrl["single"] is not None and ctrl["single"] != L:
+                return output
+            hidden = output[0] if isinstance(output, tuple) else output
+            if ctrl["mode"] == "ablate":
+                coeff = (hidden[:, -1, :] * u).sum(-1, keepdim=True)
+                hidden[:, -1, :] = hidden[:, -1, :] - coeff * u
+            elif ctrl["mode"] == "steer":
+                hidden[:, -1, :] = hidden[:, -1, :] + ctrl["coeff"] * g * u
+            return (hidden, *output[1:]) if isinstance(output, tuple) else hidden
+
+        return hook
+
+    hooks = [model.model.layers[L - 1].register_forward_hook(make_hook(L)) for L in window]
+
+    def measure(mode=None, coeff=0.0, single=None) -> float:
+        ctrl["mode"], ctrl["coeff"], ctrl["single"] = mode, coeff, single
+        v = batched_logits_pmatch()
+        ctrl["mode"], ctrl["coeff"], ctrl["single"] = None, 0.0, None
+        return v
+
+    base = measure()
+    print(f"[causal] baseline mean P(match) = {base:.4f}", flush=True)
+
+    # PRIMARY: multi-layer diff-of-means steer + ablate across the window
+    sweep = {c: measure("steer", coeff=c) for c in cvals}
+    ablated_all = measure("ablate")
+    mono = _monotonic([sweep[c] for c in sorted(cvals)])
+    print(f"[causal] diff_of_means[MULTI {lo}..{hi}]: swing "
+          f"{sweep[min(cvals)]:.3f}->{sweep[max(cvals)]:.3f} monotonic={mono}  "
+          f"ablated_all={ablated_all:.3f} (base {base:.3f})", flush=True)
+
+    out: dict = {
+        "layer_window": [lo, hi], "sae_layer": layer, "baseline_p_match": base,
+        "coeffs": cvals, "coeff_units": "multiples of per-layer class-gap",
+        "per_layer_gap_norm": {L: layer_dirs[L][1] for L in window},
+        "diff_of_means_multilayer": {
+            "sweep": {str(c): sweep[c] for c in cvals}, "monotonic": mono,
             "delta_full_swing": sweep[max(cvals)] - sweep[min(cvals)],
-            "ablated_p_match": ablated,
-            "ablation_delta": ablated - base,
-        }
-        print(f"[causal] {name}: swing {sweep[min(cvals)]:.3f}->{sweep[max(cvals)]:.3f} "
-              f"monotonic={mono}  ablated={ablated:.3f} (base {base:.3f})", flush=True)
+            "ablated_all_p_match": ablated_all, "ablation_delta": ablated_all - base,
+        },
+        "sae_features_singlelayer": {},
+    }
 
-    h.remove()
+    # SECONDARY: SAE feature directions, steered SINGLE-LAYER at `layer` only
+    # (they are trained there; single-site => redundancy-limited, reported as such)
+    sae_path = f"/out/interp/sae_layer{layer}.pt"
+    if os.path.exists(sae_path) and n_sae_features > 0 and layer in layer_dirs:
+        sae = torch.load(sae_path, map_location="cpu")
+        with open(f"/out/interp/sae_features_layer{layer}.json", encoding="utf-8") as fh:
+            top = json.load(fh)["top_features"][:n_sae_features]
+        gap_l = layer_dirs[layer][1]
+        for f in top:
+            j = f["feature"]
+            wj = sae["W_dec"][j].numpy()
+            u = torch.tensor(wj / (np.linalg.norm(wj) + 1e-9), dtype=torch.float16, device=dev)
+            # temporarily repoint this layer's hook direction to the feature dir
+            layer_dirs[layer] = (u, gap_l)
+            sw = {c: measure("steer", coeff=c, single=layer) for c in cvals}
+            abl = measure("ablate", single=layer)
+            out["sae_features_singlelayer"][f"feat_{j}"] = {
+                "match_corr": f["match_corr"],
+                "sweep": {str(c): sw[c] for c in cvals},
+                "monotonic": _monotonic([sw[c] for c in sorted(cvals)]),
+                "ablated_p_match": abl,
+            }
+            print(f"[causal] sae_feat_{j}[SINGLE L{layer}] swing "
+                  f"{sw[min(cvals)]:.3f}->{sw[max(cvals)]:.3f} corr={f['match_corr']:.2f}",
+                  flush=True)
+
+    for h in hooks:
+        h.remove()
     os.makedirs("/out/interp", exist_ok=True)
-    with open(f"/out/interp/causal_layer{layer}.json", "w") as fh:
+    with open(f"/out/interp/causal_multilayer_{lo}_{hi}.json", "w") as fh:
         json.dump(out, fh, indent=2)
     _out_vol.commit()
-    print(f"[done] causal -> /out/interp/causal_layer{layer}.json")
+    print(f"[done] causal -> /out/interp/causal_multilayer_{lo}_{hi}.json")
 
 
 def _monotonic(vals: list[float], tol: float = 1e-3) -> bool:
@@ -476,6 +503,8 @@ def sae(layer: int = 14, n_pairs: int = 3000, expansion: int = 16, l1: float = 4
 
 
 @app.local_entrypoint()
-def causal(layer: int = 14, per_class: int = 150, n_sae_features: int = 5) -> None:
-    causal_validate.remote(layer=layer, per_class=per_class, n_sae_features=n_sae_features)
-    print(f"done -> `modal volume get er-matcher-out interp/causal_layer{layer}.json`")
+def causal(layer: int = 14, lo: int = 8, hi: int = 20, per_class: int = 150,
+           n_sae_features: int = 5) -> None:
+    causal_validate.remote(layer=layer, lo=lo, hi=hi, per_class=per_class,
+                           n_sae_features=n_sae_features)
+    print(f"done -> `modal volume get er-matcher-out interp/causal_multilayer_{lo}_{hi}.json`")
