@@ -26,6 +26,15 @@ from goldenmatch.core.autoconfig import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _force_fs_v2(monkeypatch):
+    """v2 gates whether date columns are admitted at all; a stray
+    ``GOLDENMATCH_FS_AUTOCONFIG_V2=0`` in the environment would fail this module
+    for reasons unrelated to the reliability decision under test. Pin it on so
+    the module is hermetic (Copilot #2337)."""
+    monkeypatch.setenv("GOLDENMATCH_FS_AUTOCONFIG_V2", "1")
+
+
 def _date_field_scorer(profiles):
     """The scorer the FS builder assigns to the (single) date column, or None."""
     date_names = {p.name for p in profiles if p.col_type == "date"}
@@ -98,6 +107,18 @@ class TestProfilerPopulatesRate:
         for p in profile_columns(df):
             if p.col_type != "date":
                 assert p.date_parse_rate is None
+
+    def test_blank_strings_lower_the_rate(self):
+        # Non-null blank/whitespace values are unparseable and MUST count against
+        # the rate (Copilot #2337); filtering them would inflate a messy column
+        # to look reliable. 10 ISO dates + 10 blanks -> ~0.5, well below the cut.
+        dates = ["1985-06-15", "1990-01-02", "1972-11-30", "1968-04-04", "1991-09-09"] * 2
+        blanks = ["", "   ", "\t", "", " ", "", "  ", "", " ", ""]
+        df = pl.DataFrame({"id": [str(i) for i in range(20)], "dob": dates + blanks})
+        dob = next(p for p in profile_columns(df) if p.name == "dob")
+        assert dob.date_parse_rate == pytest.approx(0.5)
+        assert dob.date_parse_rate < _DATE_DIFF_MIN_PARSE_RATE
+        assert _date_column_reliable_for_diff(dob) is False
 
 
 # ── Builder honors the decision under the flag ───────────────────────────────

@@ -477,6 +477,11 @@ def profile_columns(
     # Collect per-column stats using Polars (shared by both the native and
     # pure-Python paths — the native path delegates ONLY the classify step).
     col_stats: list[tuple[str, str, list[str], float, float, float]] = []
+    # RAW non-null sample values per column (blanks/whitespace RETAINED, unlike
+    # the classify `values` below which drops them). The date reliability signal
+    # is computed from this so a blank -- a non-null, unparseable value -- lowers
+    # the parse rate instead of being silently excluded (Copilot #2337).
+    nonnull_values_by_name: dict[str, list[str]] = {}
     for col_name in columns:
         if col_name.startswith("__"):
             continue
@@ -491,10 +496,9 @@ def profile_columns(
         null_count = col_series.null_count()
         null_rate = null_count / total_rows if total_rows > 0 else 0.0
 
-        values = [
-            str(v) for v in col_series.drop_nulls().to_list()
-            if v is not None and str(v).strip()
-        ]
+        nonnull_values = [str(v) for v in col_series.drop_nulls().to_list()]
+        nonnull_values_by_name[col_name] = nonnull_values
+        values = [v for v in nonnull_values if v.strip()]
 
         cardinality_ratio = len(set(values)) / total_rows if total_rows > 0 else 0.0
         avg_len = sum(len(v) for v in values) / len(values) if values else 0.0
@@ -599,12 +603,15 @@ def profile_columns(
     _date_profiles = [p for p in profiles if p.col_type == "date"]
     if _date_profiles:
         from goldenmatch.core.scorer import _parse_date_ordinal  # noqa: PLC0415
-        _values_by_name = {cs[0]: cs[2] for cs in col_stats}
         for p in _date_profiles:
-            vals = _values_by_name.get(p.name) or []
-            if vals:
-                parsed = sum(1 for v in vals if _parse_date_ordinal(v) is not None)
-                p.date_parse_rate = parsed / len(vals)
+            # Rate over RAW non-null values (blanks retained): a blank is a
+            # non-null unparseable value that must LOWER the rate, not be filtered
+            # out (else a mostly-blank messy date column looks reliable). Explicit
+            # 0.0 when there are no non-null samples -- never None on the
+            # auto-config path, so the reliability gate can't read it as reliable.
+            vals = nonnull_values_by_name.get(p.name, [])
+            parsed = sum(1 for v in vals if _parse_date_ordinal(v) is not None)
+            p.date_parse_rate = parsed / len(vals) if vals else 0.0
 
     return profiles
 
