@@ -28,7 +28,18 @@ import time
 # The real F1 panel (anchor shapes with no positive ground-truth pairs are
 # excluded — they gate structure, not F1). Skipped automatically when a
 # dataset's optional dep / vendored file is absent (loader returns None).
-_PANEL = ["person", "febrl3", "ncvr_synthetic", "dblp_acm", "historical_50k"]
+#
+# The five real datasets are all 0.50-OPTIMAL (FS at ceiling — every cheap lever
+# declined on them). The two synthetic over-merge shapes cover the failure mode
+# the real panel structurally lacks: household_hardneg (MODERATE surname
+# over-merge) + cotenant_hardneg (SEVERE address over-merge), where the fixed
+# 0.50 cutoff over-merges and a lever (the threshold-refit loop) can actually
+# move F1. Including them means a lever A/B is measured on both the at-ceiling
+# regime (must-not-regress) AND the has-headroom regime (can-it-win).
+_PANEL = [
+    "person", "febrl3", "ncvr_synthetic", "dblp_acm", "historical_50k",
+    "household_hardneg", "cotenant_hardneg",
+]
 
 
 def _load(name: str):
