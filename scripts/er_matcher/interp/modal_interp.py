@@ -173,6 +173,16 @@ def capture_probe_layers(per_class: int = 200, negatives: str = "hard", seed: in
     results = []
     for L in range(n_layers + 1):
         X = np.concatenate(per_layer[L], axis=0)
+        # L0 is the token embedding: the decision token is always "\n", so every
+        # pair's last-token vector is identical (RoPE is applied inside attention,
+        # not at the embedding) -> zero class-mean difference. Skip such degenerate
+        # layers rather than divide by a zero-norm direction.
+        class_gap = float(np.linalg.norm(X[y == 1].mean(0) - X[y == 0].mean(0)))
+        if class_gap < 1e-6:
+            results.append({"layer": L, "degenerate": True, "class_gap": class_gap})
+            print(f"[probe] L{L:2d}  DEGENERATE (class_gap={class_gap:.2e}) -- skipped",
+                  flush=True)
+            continue
         acc = probe_linear_separability(X, y)
         mean_auc, std_auc = probe_held_out_direction(X, y, seed=seed)
         low = probe_low_rank(X, y)
@@ -183,7 +193,8 @@ def capture_probe_layers(per_class: int = 200, negatives: str = "hard", seed: in
         print(f"[probe] L{L:2d}  sep={acc:.3f}  dir_auc={mean_auc:.3f}+/-{std_auc:.3f}  "
               f"top1={low.get(1):.3f} top8={low.get(8):.3f}", flush=True)
 
-    best = max(results, key=lambda r: r["dir_auc"])
+    scored = [r for r in results if not r.get("degenerate")]
+    best = max(scored, key=lambda r: r["dir_auc"])
     payload = {
         "model": MODEL_PATH, "n_pairs": len(pairs), "negatives": negatives, "seed": seed,
         "n_layers": n_layers, "layers": results,
