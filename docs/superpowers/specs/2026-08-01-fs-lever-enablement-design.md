@@ -165,10 +165,37 @@ per-dataset (or per-column) from the profile, gated." One decision per PR, each 
 - **Honorific stripping as a precision decision** — apply when the config is precision-starved
   (name-only fuzzy, high over-merge risk), not as a blanket default. Data-gated on the same signals
   the controller's precision-anchor rule already uses.
+  - **MEASURED-DECLINED (2026-08-02).** The `ab_lever` panel run for `GOLDENMATCH_FS_STRIP_HONORIFICS`
+    is flat-to-negative everywhere on the CURRENT baselines: febrl3/ncvr_synthetic/dblp_acm/person all
+    **+0.0000**, historical_50k **−0.0017** (precision +0.029 but recall −0.023). The original spike
+    (+0.0108 on historical_50k) was on a **0.7520** baseline; the orthogonal-anchor blocking + duckdb-bucket
+    fixes since then raised historical_50k to **0.8456**, and on that higher baseline the precision honorific
+    buys no longer covers its recall cost. Nor is there a data signal to gate on: the honorific-token rate
+    does NOT predict F1 impact (ncvr_synthetic has the highest token rate, 13.7% — mostly consistent
+    Jr/Sr suffixes that don't change match decisions — yet is flat; historical_50k at 2% is the only mover
+    and it's negative). So this is NOT shippable as an auto-applied F1 decision — it would apply to
+    historical_50k and regress. The existing `GOLDENMATCH_FS_STRIP_HONORIFICS` opt-in flag stays for
+    precision-critical users (the +0.029 P is a real precision lever at a recall cost); the controller
+    precision-anchor signals it would have gated on are weighted-path runtime signals the non-iterated FS
+    builder can't see anyway (that's the Phase 3 refit-loop dependency). Superseded, not built.
 - **FS negative evidence — M (bigger).** `promote_negative_evidence` currently *skips* probabilistic
   matchkeys (`autoconfig_negative_evidence.py:148`); the FS scorer already honors NE fields, so this
   is "add an FS-appropriate promotion," not new scoring. Gate hard (NE changes precision/recall
   balance directly).
+  - **MEASURED-DECLINED (2026-08-02).** Two findings kill it on the current panel. **(1) Nothing valid to
+    promote.** An NE-eligibility scan (identity_score ≥ 0.75 AND cardinality ≥ 0.5 AND not already an FS
+    comparison field) over all five panel datasets returns ONLY `id` ground-truth surrogates (febrl3, dblp_acm;
+    cardinality 1.0) — which are degenerate as NE (every pair disagrees on a unique id → penalize every pair →
+    recall collapse). ncvr_synthetic / historical_50k / person yield ZERO eligible columns (person's `email` is
+    already an FS comparison field). Real NE anchors (a strong non-name identity column DROPPED from the FS set)
+    don't occur, because the FS v2 curation already ADMITS every strong-id column as a comparison field, so one is
+    never "not in FS." **(2) FS handles negative evidence natively.** In Fellegi-Sunter every comparison field
+    already contributes its EM level-0 (disagree) weight — a negative log-likelihood — when it disagrees, so an
+    explicit NE field on a column that's already scored DOUBLE-COUNTS its disagreement. The weighted path needed
+    NE precisely because a plain weighted-sum doesn't capture disagreement penalties; FS's model does. So FS NE
+    promotion is both unmeasurable on the panel (no valid candidate) AND largely redundant with the EM model. The
+    `mk.type not in ("weighted","exact")` skip at `autoconfig_negative_evidence.py:148` is correct, not a gap.
+    Not built.
 - **blocking-pass pruning / tf_adjustment** — de-prioritized for the *F1* program (no-op on the
   panel). Their value is perf (fewer pairs) / skewed-frequency precision; revisit under the perf
   track or at scale, not here.
