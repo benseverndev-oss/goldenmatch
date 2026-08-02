@@ -17,6 +17,7 @@
     "./core/fingerprint-wasm": { "types": "./dist/core/fingerprintWasm.d.ts", "import": "./dist/core/fingerprintWasm.js", "require": "./dist/core/fingerprintWasm.cjs" },
     "./core/goldenembed-wasm": { "types": "./dist/core/goldenembedWasm.d.ts", "import": "./dist/core/goldenembedWasm.js", "require": "./dist/core/goldenembedWasm.cjs" },
     "./core/fs-wasm": { "types": "./dist/core/fsWasm.d.ts", "import": "./dist/core/fsWasm.js", "require": "./dist/core/fsWasm.cjs" },
+    "./core/key-integrity-wasm": { "types": "./dist/core/keyIntegrityWasm.d.ts", "import": "./dist/core/keyIntegrityWasm.js", "require": "./dist/core/keyIntegrityWasm.cjs" },
     "./core/fs-scoring": { "types": "./dist/core/fsScore.d.ts", "import": "./dist/core/fsScore.js", "require": "./dist/core/fsScore.cjs" },
     "./node": { "types": "./dist/node/index.d.ts", "import": "./dist/node/index.js", "require": "./dist/node/index.cjs" }
   },

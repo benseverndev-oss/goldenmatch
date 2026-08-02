@@ -112,6 +112,7 @@ jobs:
       hnsw_wasm: ${{ steps.filter.outputs.hnsw_wasm }}
       graph_wasm: ${{ steps.filter.outputs.graph_wasm }}
       fingerprint_wasm: ${{ steps.filter.outputs.fingerprint_wasm }}
+      key_integrity_wasm: ${{ steps.filter.outputs.key_integrity_wasm }}
       goldenembed_wasm: ${{ steps.filter.outputs.goldenembed_wasm }}
       warehouse_udf: ${{ steps.filter.outputs.warehouse_udf }}
       wasm_flow: ${{ steps.filter.outputs.wasm_flow }}
@@ -1287,6 +1288,21 @@ jobs:
             exit 1
           fi
           npx vitest run tests/parity/fingerprint-wasm.parity.test.ts tests/unit/fingerprint-wasm-reroute.test.ts
+      - name: Rebuild + verify embedded key-integrity wasm
+        if: needs.changes.outputs.key_integrity_wasm == 'true' || needs.changes.outputs.force_all == 'true'
+        working-directory: packages/typescript/goldenmatch
+        run: |
+          rustup target add wasm32-unknown-unknown
+          command -v wasm-pack >/dev/null 2>&1 || curl -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+          node scripts/build_key_integrity_wasm.mjs
+          if ! git diff --exit-code -- tests/parity/fixtures/key-integrity/; then
+            echo "::error::key-integrity golden fixture is stale. Run \
+              'node scripts/build_key_integrity_wasm.mjs' in packages/typescript/goldenmatch \
+              (after regenerating key-integrity-core/golden/key_integrity_golden.json via \
+              packages/python/goldenmatch/scripts/emit_key_integrity_golden.py) and commit the result." >&2
+            exit 1
+          fi
+          npx vitest run tests/parity/key-integrity-wasm.parity.test.ts tests/unit/key-integrity-wasm-reroute.test.ts
       # Same drift guard for the goldenembed (in-house embedder) wasm surface:
       # rebuild the inlined wasm + bindings + copy the golden fixture, diff ONLY
       # the deterministic golden JSON (not the version-varying wasm bytes), then
@@ -1824,6 +1840,16 @@ jobs:
       # guard). goldenembed-core's own tests run in the `goldenembed` job.
       - run: cargo check --manifest-path goldenembed-wasm/Cargo.toml
       - run: cargo clippy --manifest-path goldenembed-wasm/Cargo.toml --all-targets -- -D warnings
+      # key-integrity-core: the pyo3/pgrx-free structural key-integrity certifier
+      # (group-by uniqueness + fan-out) that the TS certifyKeyIntegrity reroutes
+      # through. Its own tests + the golden.rs oracle (generated from the Python
+      # reference certify_key_integrity) run here; key-integrity-wasm's cargo check
+      # validates the wasm wrapper compiles (the embed is exercised in the
+      # typescript lane's key-integrity drift guard).
+      - run: cargo test --manifest-path key-integrity-core/Cargo.toml
+      - run: cargo clippy --manifest-path key-integrity-core/Cargo.toml --all-targets -- -D warnings
+      - run: cargo check --manifest-path key-integrity-wasm/Cargo.toml
+      - run: cargo clippy --manifest-path key-integrity-wasm/Cargo.toml --all-targets -- -D warnings
 
   # Measured Rust line coverage (cargo-llvm-cov). The structural audit's unit
   # tests (graph-core / score-core / fingerprint-core / native / bridge) are now

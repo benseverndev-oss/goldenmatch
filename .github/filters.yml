@@ -114,6 +114,10 @@ typescript:
   # must re-run the TS lane's record-fingerprint drift guard.
   - 'packages/rust/extensions/fingerprint-core/**'
   - 'packages/rust/extensions/fingerprint-wasm/**'
+  # Same for the key-integrity wasm core: a kernel or wrapper change
+  # must re-run the TS lane's key-integrity drift guard.
+  - 'packages/rust/extensions/key-integrity-core/**'
+  - 'packages/rust/extensions/key-integrity-wasm/**'
   # Same for the goldenembed (in-house embedder) wasm core: a kernel
   # or wrapper change must re-run the TS lane's embed drift guard.
   - 'packages/rust/extensions/goldenembed-core/**'
@@ -277,6 +281,13 @@ fingerprint_wasm:
   - 'packages/rust/extensions/fingerprint-core/**'
   - 'packages/rust/extensions/fingerprint-wasm/**'
   - 'packages/typescript/goldenmatch/scripts/build_fingerprint_wasm.mjs'
+key_integrity_wasm:
+  # Gates the (rust-toolchain-heavy) key-integrity wasm rebuild + drift
+  # guard inside the typescript lane. Only fires when the structural
+  # key-integrity kernel, its wasm wrapper, or the embed script changes.
+  - 'packages/rust/extensions/key-integrity-core/**'
+  - 'packages/rust/extensions/key-integrity-wasm/**'
+  - 'packages/typescript/goldenmatch/scripts/build_key_integrity_wasm.mjs'
 goldenembed_wasm:
   # Gates the (rust-toolchain-heavy) goldenembed wasm rebuild + drift
   # guard inside the typescript lane. Only fires when the in-house

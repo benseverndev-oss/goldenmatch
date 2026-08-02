@@ -53,6 +53,12 @@ export default defineConfig({
     // wheel. ~187 KB inlined base64 as a separate subpath
     // (`goldenmatch/core/fs-wasm`), out of the default core bundle.
     "core/fsWasm": "src/core/fsWasm.ts",
+    // Opt-in entry: the structural key-integrity certifier (key-integrity-core)
+    // compiled to wasm, so `certifyKeyIntegrity`'s group-by uniqueness + fan-out
+    // reduction runs the SAME kernel as the Python reference. ~75 KB inlined
+    // base64 as a separate subpath (`goldenmatch/core/key-integrity-wasm`), out of
+    // the default core bundle.
+    "core/keyIntegrityWasm": "src/core/keyIntegrityWasm.ts",
     // Opt-in entry: the FS block-scoring REROUTE adapter — builds the kernel
     // inputs from (rows, matchkey, EMResult) and registers the fs-wasm backend
     // (`enableFsWasmScoring()`), so the probabilistic pipeline runs the shared

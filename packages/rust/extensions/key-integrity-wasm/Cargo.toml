@@ -1,0 +1,28 @@
+# Standalone workspace: a thin wasm-bindgen wrapper over `key-integrity-core`, so
+# the JS/TS structural key-integrity certifier runs the SAME group-by uniqueness +
+# fan-out kernel as the Python reference (and, later, the SQL surfaces) — one
+# source of truth. The kernel is Arrow-free (serde_json only), so the wasm build
+# is clean. Mirrors the sibling fingerprint-wasm / cluster-wasm crates.
+[workspace]
+
+[package]
+name = "key-integrity-wasm"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "wasm-bindgen wrapper over key-integrity-core (structural key-integrity certifier) for the JS/TS port"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+goldenmatch-key-integrity-core = { path = "../key-integrity-core" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

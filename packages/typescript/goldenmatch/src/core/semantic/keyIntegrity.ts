@@ -24,6 +24,8 @@ import type { GoldenMatchConfig, Row } from "../types.js";
 import { getMatchkeys } from "../types.js";
 import { autoConfigureRows } from "../autoconfig.js";
 import { dedupe } from "../api.js";
+import { getKeyIntegrityWasmBackend } from "../keyIntegrityWasmBackend.js";
+import type { KeyIntegrityStructuralResult } from "../keyIntegrityWasmBackend.js";
 
 export interface KeyIntegrityCertificateInit {
   keyColumns: string[];
@@ -109,6 +111,74 @@ function isFiniteNumber(v: unknown): v is number {
   return typeof v === "number" && Number.isFinite(v);
 }
 
+/** Pure-TS structural reduction: group-by uniqueness + fan-out. The faithful
+ * fallback + reference the shared key-integrity-core kernel matches. */
+function computeStructuralPure(
+  nRows: number,
+  groupCols: readonly (readonly unknown[])[],
+  measures: readonly { name: string; values: readonly unknown[] }[],
+): KeyIntegrityStructuralResult {
+  const counts = new Map<string, number>();
+  const measureMax = new Map<string, Record<string, number>>();
+  for (let i = 0; i < nRows; i++) {
+    const tuple = groupCols.map((c) => c[i]);
+    const gk = groupKey(tuple);
+    counts.set(gk, (counts.get(gk) ?? 0) + 1);
+    if (measures.length) {
+      const mm = measureMax.get(gk) ?? {};
+      for (const m of measures) {
+        const v = m.values[i];
+        if (isFiniteNumber(v)) mm[m.name] = m.name in mm ? Math.max(mm[m.name]!, v) : v;
+      }
+      measureMax.set(gk, mm);
+    }
+  }
+
+  const nKeyGroups = counts.size;
+  let maxFanOut = 0;
+  let duplicateKeyGroups = 0;
+  for (const c of counts.values()) {
+    if (c > maxFanOut) maxFanOut = c;
+    if (c > 1) duplicateKeyGroups += 1;
+  }
+
+  const measureFanOut: Record<string, number> = {};
+  for (const m of measures) {
+    let totalSum = 0;
+    for (const v of m.values) if (isFiniteNumber(v)) totalSum += v;
+    let dedupSum = 0;
+    for (const mm of measureMax.values()) if (isFiniteNumber(mm[m.name])) dedupSum += mm[m.name]!;
+    measureFanOut[m.name] = dedupSum ? totalSum / dedupSum : 1.0;
+  }
+
+  return {
+    nKeyGroups,
+    maxFanOut: nKeyGroups ? maxFanOut : 0,
+    duplicateKeyGroups,
+    isUniqueAtGrain: nKeyGroups === nRows,
+    measureFanOut,
+  };
+}
+
+/** Structural reduction: prefer the opt-in key-integrity-core wasm kernel (the
+ * single source of truth) when registered, else the pure-TS fallback. Fail-open —
+ * any backend error falls back, so the result is unchanged either way. */
+function computeStructural(
+  nRows: number,
+  groupCols: readonly (readonly unknown[])[],
+  measures: readonly { name: string; values: readonly unknown[] }[],
+): KeyIntegrityStructuralResult {
+  const backend = getKeyIntegrityWasmBackend();
+  if (backend) {
+    try {
+      return backend.certifyStructural({ nRows, groupColumns: groupCols, measures });
+    } catch {
+      // fall through to pure-TS (e.g. a value JSON can't carry — bigint)
+    }
+  }
+  return computeStructuralPure(nRows, groupCols, measures);
+}
+
 /**
  * Certify a declared entity key for metric use (structural tier). Mirrors Python
  * `certify_key_integrity`'s structural pass.
@@ -162,40 +232,16 @@ export function certifyKeyIntegrity(
   const groupColumns =
     grainStrict && grainCols.length ? [...keyColumns, ...grainCols.filter((g) => !keyColumns.includes(g))] : keyColumns;
 
-  // group-by: count rows per key-tuple + track per-measure max within the group
-  const counts = new Map<string, number>();
-  const measureMax = new Map<string, Record<string, number>>();
-  for (let i = 0; i < nRows; i++) {
-    const tuple = groupColumns.map((c) => (table[c] ?? [])[i]);
-    const gk = groupKey(tuple);
-    counts.set(gk, (counts.get(gk) ?? 0) + 1);
-    if (numericMeasures.length) {
-      const mm = measureMax.get(gk) ?? {};
-      for (const m of numericMeasures) {
-        const v = (table[m] ?? [])[i];
-        if (isFiniteNumber(v)) mm[m] = m in mm ? Math.max(mm[m]!, v) : v;
-      }
-      measureMax.set(gk, mm);
-    }
-  }
-
-  const nKeyGroups = counts.size;
-  let maxFanOut = 0;
-  let duplicateKeyGroups = 0;
-  for (const c of counts.values()) {
-    if (c > maxFanOut) maxFanOut = c;
-    if (c > 1) duplicateKeyGroups += 1;
-  }
-  const isUniqueAtGrain = nKeyGroups === nRows;
-
-  const measureFanOut: Record<string, number> = {};
-  for (const m of numericMeasures) {
-    let totalSum = 0;
-    for (const v of table[m] ?? []) if (isFiniteNumber(v)) totalSum += v;
-    let dedupSum = 0;
-    for (const mm of measureMax.values()) if (isFiniteNumber(mm[m])) dedupSum += mm[m]!;
-    measureFanOut[m] = dedupSum ? totalSum / dedupSum : 1.0;
-  }
+  // The structural reduction (group-by uniqueness + fan-out) runs through the
+  // shared key-integrity-core kernel when the opt-in wasm backend is registered,
+  // else the pure-TS fallback below — identical output either way (the loader
+  // JSON-normalizes values, so the kernel's grouping matches `groupKey`).
+  const { nKeyGroups, maxFanOut, duplicateKeyGroups, isUniqueAtGrain, measureFanOut } =
+    computeStructural(
+      nRows,
+      groupColumns.map((c) => table[c] ?? []),
+      numericMeasures.map((m) => ({ name: m, values: table[m] ?? [] })),
+    );
 
   if (grainCols.length) {
     notes.push(
