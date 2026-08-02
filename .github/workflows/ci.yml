@@ -1302,7 +1302,12 @@ jobs:
               packages/python/goldenmatch/scripts/emit_key_integrity_golden.py) and commit the result." >&2
             exit 1
           fi
-          npx vitest run tests/parity/key-integrity-wasm.parity.test.ts tests/unit/key-integrity-wasm-reroute.test.ts
+          npx vitest run tests/parity/key-integrity-wasm.parity.test.ts
+      # NOTE: only the self-contained parity test runs in this drift-guard step —
+      # the reroute test (tests/unit/key-integrity-wasm-reroute.test.ts) imports
+      # certifyKeyIntegrity, which transitively pulls the full pipeline
+      # (api -> scorer -> goldenmatch-wasm-runtime) that isn't resolvable in this
+      # isolated `npx vitest` invocation; it runs in the main typescript test step.
       # Same drift guard for the goldenembed (in-house embedder) wasm surface:
       # rebuild the inlined wasm + bindings + copy the golden fixture, diff ONLY
       # the deterministic golden JSON (not the version-varying wasm bytes), then
