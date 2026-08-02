@@ -189,6 +189,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   `scripts/emit_fragmentation_reduction_fixture.py` (wired into
   `regen_ts_parity_fixtures.sh` → the `ts_parity_freshness` gate). Tests:
   `tests/test_fragmentation_reduction.py`.
+- **Resolution-tier undercount now carries a 95% confidence interval.**
+  `certify_key_integrity(..., resolve=True)` reported `undercount_estimate =
+  fragmented_entities / resolved_entities` as a bare point estimate — "undercount
+  0.5" read the same from 2 resolved entities as from 2,000. The certificate now
+  also carries `undercount_ci_low` / `undercount_ci_high`, a Wilson score interval
+  on the fragmentation rate (a binomial proportion), so a rate measured from few
+  entities honestly shows a wide interval. A new `safe_bound_conservative`
+  property discounts the CI *upper* bound (worst plausible undercount) for callers
+  who want a statistically-conservative trust floor; `safe_bound` is unchanged
+  (still the point estimate — additive, non-breaking). The interval bounds
+  *sampling* uncertainty, not whether ER clustered correctly. Pure arithmetic,
+  single-sourced with the TS port via a shared fixture
+  (`emit_undercount_ci_fixture.py`, drift-guarded by `ts_parity_freshness`).
+  Tests: `tests/test_undercount_ci.py`.
 
 ### Changed
 - **FS out-of-core streaming: single `resolve_fs_block_source` knob + DuckDB

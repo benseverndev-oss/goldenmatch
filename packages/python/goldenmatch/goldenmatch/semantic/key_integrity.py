@@ -18,6 +18,7 @@ fields None with an explanatory note and never breaks the structural certificate
 from __future__ import annotations
 
 import json
+import math
 import os
 from collections.abc import Sequence
 from typing import Any
@@ -92,6 +93,32 @@ def _reduce_fragmentation(
             fragmented += 1
     undercount = (fragmented / resolved) if resolved else 0.0
     return resolved, fragmented, undercount
+
+
+# 97.5th percentile of the standard normal → 95% two-sided Wilson interval. The
+# same literal is used by the TS port so the interval is bit-identical.
+_WILSON_Z_95 = 1.959963984540054
+
+
+def _wilson_interval(k: int, n: int, z: float = _WILSON_Z_95) -> tuple[float, float] | None:
+    """95% Wilson score interval for a binomial proportion ``k/n`` (successes over
+    trials), clamped to [0, 1]. Returns None when ``n == 0`` (no observations to
+    bound). The Wilson interval is preferred over the normal approximation because
+    it stays inside [0,1] and behaves at small ``n`` / extreme ``p`` — exactly the
+    regime the fragmentation rate lives in when few entities resolve.
+
+    Pure arithmetic (parity-locked with the TS port via a shared fixture).
+    """
+    if n <= 0:
+        return None
+    p = k / n
+    z2 = z * z
+    denom = 1.0 + z2 / n
+    center = (p + z2 / (2.0 * n)) / denom
+    half = (z / denom) * math.sqrt(p * (1.0 - p) / n + z2 / (4.0 * n * n))
+    low = center - half
+    high = center + half
+    return (low if low > 0.0 else 0.0, high if high < 1.0 else 1.0)
 
 
 def _key_integrity_native_enabled() -> bool:
@@ -436,6 +463,9 @@ def _add_resolution(
         cert.resolved_entities = resolved
         cert.fragmented_entities = fragmented
         cert.undercount_estimate = undercount
+        ci = _wilson_interval(fragmented, resolved)
+        if ci is not None:
+            cert.undercount_ci_low, cert.undercount_ci_high = ci
         if fragmented:
             notes.append(
                 f"{fragmented}/{resolved} resolved entities span >1 declared key "

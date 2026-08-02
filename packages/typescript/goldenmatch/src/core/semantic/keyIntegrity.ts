@@ -58,6 +58,13 @@ export class KeyIntegrityCertificate {
   resolvedEntities: number | null = null; // multi-member clusters found by dedupe
   fragmentedEntities: number | null = null; // resolved entities spanning >1 declared key value
   undercountEstimate: number | null = null; // fragmentedEntities / resolvedEntities
+  // 95% Wilson score interval on the fragmentation rate (= undercount), a
+  // binomial proportion over `resolvedEntities` observations. Bounds the SAMPLING
+  // uncertainty in `undercountEstimate` (few resolved entities → wide interval);
+  // it does NOT bound whether ER itself clustered correctly. null when resolution
+  // wasn't run or found no multi-member clusters. Mirrors Python.
+  undercountCiLow: number | null = null;
+  undercountCiHigh: number | null = null;
   estimable = true;
 
   constructor(init: KeyIntegrityCertificateInit) {
@@ -86,6 +93,17 @@ export class KeyIntegrityCertificate {
   get safeBound(): number {
     if (this.undercountEstimate === null) return this.estimate;
     return Math.min(this.estimate, 1.0 - this.undercountEstimate);
+  }
+
+  /** Statistically-conservative trust floor: like `safeBound` but discounts the
+   * WORST plausible undercount at the 95% confidence upper bound
+   * (`undercountCiHigh`) rather than the point estimate — so a fragmentation rate
+   * measured from few resolved entities (wide interval) is penalized more than
+   * one from many. Falls back to `safeBound` when the interval wasn't computed.
+   * Mirrors Python `safe_bound_conservative`. */
+  get safeBoundConservative(): number {
+    if (this.undercountCiHigh === null) return this.safeBound;
+    return Math.min(this.estimate, 1.0 - this.undercountCiHigh);
   }
 
   /** Advisory pass/fail: the declared key is unique at grain, doesn't fan out
@@ -353,6 +371,29 @@ export function reduceFragmentation(
   return { resolvedEntities: resolved, fragmentedEntities: fragmented, undercountEstimate };
 }
 
+// 97.5th percentile of the standard normal → 95% two-sided Wilson interval. The
+// same literal is used by the Python port so the interval is bit-identical.
+const WILSON_Z_95 = 1.959963984540054;
+
+/**
+ * 95% Wilson score interval for a binomial proportion `k/n` (successes over
+ * trials), clamped to [0, 1]. Returns null when `n === 0` (no observations to
+ * bound). Preferred over the normal approximation because it stays inside [0,1]
+ * and behaves at small `n` / extreme `p` — the fragmentation-rate regime. Pure
+ * arithmetic (parity-locked with the Python port via a shared fixture).
+ */
+export function wilsonInterval(k: number, n: number, z: number = WILSON_Z_95): [number, number] | null {
+  if (n <= 0) return null;
+  const p = k / n;
+  const z2 = z * z;
+  const denom = 1.0 + z2 / n;
+  const center = (p + z2 / (2.0 * n)) / denom;
+  const half = (z / denom) * Math.sqrt((p * (1.0 - p)) / n + z2 / (4.0 * n * n));
+  const low = center - half;
+  const high = center + half;
+  return [low > 0.0 ? low : 0.0, high < 1.0 ? high : 1.0];
+}
+
 async function addResolution(
   cert: KeyIntegrityCertificate,
   table: Readonly<Record<string, readonly unknown[]>>,
@@ -395,6 +436,11 @@ async function addResolution(
     cert.resolvedEntities = resolvedEntities;
     cert.fragmentedEntities = fragmentedEntities;
     cert.undercountEstimate = undercountEstimate;
+    const ci = wilsonInterval(fragmentedEntities, resolvedEntities);
+    if (ci !== null) {
+      cert.undercountCiLow = ci[0];
+      cert.undercountCiHigh = ci[1];
+    }
     if (fragmentedEntities) {
       notes.push(
         `${fragmentedEntities}/${resolvedEntities} resolved entities span >1 declared key ` +
