@@ -9720,6 +9720,10 @@
       "path": "packages/rust/extensions/hnsw-py"
     },
     {
+      "name": "goldenmatch-key-integrity-core",
+      "path": "packages/rust/extensions/key-integrity-core"
+    },
+    {
       "name": "goldenmatch-native",
       "path": "packages/rust/extensions/native"
     },
@@ -9806,6 +9810,10 @@
     {
       "name": "infermap-wasm",
       "path": "packages/rust/extensions/infermap-wasm"
+    },
+    {
+      "name": "key-integrity-wasm",
+      "path": "packages/rust/extensions/key-integrity-wasm"
     },
     {
       "name": "sketch-wasm",

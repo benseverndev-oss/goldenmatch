@@ -45,6 +45,12 @@ exclude = [
     # layout → frames). Heavy/optional; its own workspace, kept out of the
     # default rust build.
     "graph-layout",
+    # key-integrity-core is the pyo3/pgrx-free structural key-integrity certifier
+    # (group-by uniqueness + fan-out); key-integrity-wasm is its cdylib
+    # wasm-bindgen wrapper for the JS/TS surface. Both self-isolate with their own
+    # [workspace]; excluded here too so the default rust build skips them.
+    "key-integrity-core",
+    "key-integrity-wasm",
 ]
 
 [workspace.package]

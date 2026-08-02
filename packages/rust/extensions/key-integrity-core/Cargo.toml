@@ -1,0 +1,21 @@
+# Standalone workspace so this pyo3-free / pgrx-free core can be a path
+# dependency of a wasm wrapper (and, later, the `native` wheel + SQL surfaces)
+# without any workspace claiming it. Mirrors fingerprint-core / cluster-core.
+[workspace]
+
+[package]
+name = "goldenmatch-key-integrity-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "Structural key-integrity certifier (group-by uniqueness + fan-out), pyo3/pgrx-free, shared across surfaces"
+
+[lib]
+name = "goldenmatch_key_integrity_core"
+
+[dependencies]
+# JSON in/out boundary (the same shape every non-Rust caller uses). No
+# arbitrary_precision: group keys need value-EQUALITY, and measure fan-out reads
+# f64, so default number handling is what both the wasm and native hosts feed.
+serde_json = "1"

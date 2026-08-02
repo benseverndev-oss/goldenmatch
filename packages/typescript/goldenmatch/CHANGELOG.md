@@ -201,6 +201,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   `cli.ts` — plus the resolve-routing contract the `--resolve` branch depends on
   (structural leaves resolve fields null; resolved populates + surfaces the
   fragmentation note).
+- **Structural key-integrity certifier single-sourced from a Rust kernel
+  (`key-integrity-core` + `goldenmatch/core/key-integrity-wasm`).** The structural
+  tier's group-by uniqueness + fan-out reduction was hand-written independently in
+  Python (pyarrow `group_by`) and TS (a JS `Map`) — two sources of truth for one
+  deterministic semantic. New pyo3/pgrx-free crate `key-integrity-core` collapses
+  that drift surface; its `key-integrity-wasm` wrapper compiles to a committed
+  inlined-base64 wasm (~75 KB) that reroutes `certifyKeyIntegrity`'s structural
+  compute through the shared kernel when the opt-in
+  `goldenmatch/core/key-integrity-wasm` subpath is imported and
+  `enableKeyIntegrityWasm()` is called. Pure-TS stays the default + fallback (no
+  wasm bytes in `dist/core/index.js` — separate tsup entry, verified), edge-safe
+  (no `node:*`), and the reroute is behavior-preserving: the loader JSON-normalizes
+  values so the kernel's grouping matches the pure-TS `groupKey`, and any
+  JSON-uncarriable value (e.g. `bigint`) falls back. Cross-surface golden
+  (`key_integrity_golden.json`) is generated from the Python reference
+  `certify_key_integrity` (`scripts/emit_key_integrity_golden.py`) and asserted by
+  BOTH the Rust `key-integrity-core/tests/golden.rs` AND the TS
+  `tests/parity/key-integrity-wasm.parity.test.ts`, so Rust == Python == TS by
+  construction; `tests/unit/key-integrity-wasm-reroute.test.ts` proves wasm ==
+  pure-TS. CI: cargo test/clippy for both crates in the `rust` lane, a
+  key-integrity drift guard in the `typescript` lane (gated on the new
+  `key_integrity_wasm` path filter), and the `fixture_drift` catch-all
+  auto-covers the build script. Python-native + SQL reroutes are the documented
+  follow-ups (the crate is ready to back them).
 
 ## [1.26.0] - 2026-07-27
 
