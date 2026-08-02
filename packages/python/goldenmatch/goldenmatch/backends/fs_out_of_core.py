@@ -913,6 +913,187 @@ def _stream_fs_dedupe_output_arrow(
     }
 
 
+_OUTPUT_BATCH_ROWS = 200_000
+
+
+def _split_output_batch(
+    tbl: Any, n_col_name: str, record_cols: list[str], max_cluster_size: int
+) -> tuple[Any, Any, Any]:
+    """Shared filter/select tail of the FS dedupe output (the one piece the
+    resident ``_stream_fs_dedupe_output_arrow`` and the batched variant have in
+    common). Given a frame (sub)table carrying a per-row cluster-size column
+    ``n_col_name``, split into ``(unique, dupes, golden)`` with IDENTICAL semantics:
+    unique = singleton clusters (``record_cols`` only), dupes = multi-member incl.
+    oversized (+ ``__cluster_id__``), golden = non-oversized multi-member
+    (``1 < n <= max_cluster_size``, + ``__cluster_id__``)."""
+    import pyarrow.compute as pc
+
+    n_col = tbl.column(n_col_name)
+    unique = tbl.filter(pc.equal(n_col, 1)).select(record_cols)
+    dupes = tbl.filter(pc.greater(n_col, 1)).select([*record_cols, "__cluster_id__"])
+    golden = tbl.filter(
+        pc.and_(pc.greater(n_col, 1), pc.less_equal(n_col, int(max_cluster_size)))
+    ).select([*record_cols, "__cluster_id__"])
+    return unique, dupes, golden
+
+
+def _stream_fs_dedupe_output_batched(
+    frame: Any,
+    assignments: Any,
+    config: Any,
+    out_dir: str,
+    *,
+    batch_rows: int = _OUTPUT_BATCH_ROWS,
+) -> dict:
+    """Join-FREE O(N) dedupe output for the bucketed route — the Phase-3a fix.
+
+    ``_stream_fs_dedupe_output_arrow`` builds ``frame.join(asn).join(sizes)``, a
+    second full-width ~frame copy that OOMs the 50M output phase (measured
+    31→63 GB). This variant streams the RESIDENT ``frame`` in ``__row_id__``-ordered
+    batches and attaches ``__cluster_id__`` + cluster size PER BATCH via a compact
+    lookup — never materialising the whole-frame ``joined`` — so the output peak
+    stays at ~1× frame (the scoring plateau) instead of ~2×. Byte-identical output
+    semantics to the resident function (unique=singleton, dupes=multi incl.
+    oversized, golden=non-oversized multi via ``build_golden_records_batch``,
+    ``__xform_*`` excluded, same return-dict keys, same stale-``golden.parquet``
+    unlink + ``golden_path=None`` on empty). Spec:
+    ``docs/superpowers/specs/2026-08-02-fs-frame-residency-streamed-output-design.md``.
+
+    Per-row lookup: ``assignments`` is the compact ``{__row_id__, __cluster_id__}``
+    WCC output (covers EVERY row incl. singletons). Contiguous ``__row_id__`` (the
+    common dense-index case) → build ``cluster_of`` by SCATTER
+    (``cluster_of[rid - lo] = cid`` — ``assignments`` row order is not guaranteed
+    position-aligned, and ``lo`` need not be 0) + per-cluster sizes via
+    ``bincount``, then gather each batch with ``.take``/fancy-index. Gapped
+    ``__row_id__`` (post-quarantine) → per-batch hash join (correctness over peak;
+    still bounded by ``assignments``, not 2× frame)."""
+    import os as _os
+
+    import numpy as _np
+    import pyarrow as pa
+    import pyarrow.parquet as _pq
+
+    from goldenmatch.core.golden import build_golden_records_batch
+
+    max_cluster_size = 100
+    golden_rules = getattr(config, "golden_rules", None)
+    if golden_rules is not None:
+        max_cluster_size = golden_rules.max_cluster_size
+
+    if not isinstance(assignments, pa.Table):
+        assignments = pa.table(
+            {
+                "__row_id__": pa.array([int(r) for r, _ in assignments], pa.int64()),
+                "__cluster_id__": pa.array(
+                    [int(c) for _, c in assignments], pa.int64()
+                ),
+            }
+        )
+
+    record_cols = [c for c in frame.column_names if not c.startswith("__xform_")]
+
+    _os.makedirs(out_dir, exist_ok=True)
+    unique_path = _os.path.join(out_dir, "unique.parquet")
+    dupes_path = _os.path.join(out_dir, "dupes.parquet")
+    golden_path = _os.path.join(out_dir, "golden.parquet")
+
+    # --- per-row (cluster_id, size) attach -----------------------------------
+    asn_rid = assignments.column("__row_id__").to_numpy(zero_copy_only=False)
+    asn_cid = assignments.column("__cluster_id__").to_numpy(zero_copy_only=False)
+    contiguous = False
+    lo = 0
+    if len(asn_rid):
+        lo = int(asn_rid.min())
+        hi = int(asn_rid.max())
+        contiguous = (hi - lo + 1) == len(asn_rid)
+
+    if contiguous:
+        cluster_of = _np.empty(len(asn_rid), dtype=_np.int64)
+        # Scatter: NOT a direct copy -- assignments row order == all_ids order,
+        # which is row_id-sorted only incidentally; index by (row_id - lo).
+        cluster_of[asn_rid - lo] = asn_cid
+        size_by_cid = _np.bincount(asn_cid.astype(_np.int64))
+        n_of = size_by_cid[cluster_of]  # aligned to position (row_id - lo)
+
+        def _attach(batch_tbl: Any) -> Any:
+            rids = batch_tbl.column("__row_id__").to_numpy(zero_copy_only=False)
+            pos = rids - lo
+            return batch_tbl.append_column(
+                "__cluster_id__", pa.array(cluster_of[pos], pa.int64())
+            ).append_column("__n__", pa.array(n_of[pos], pa.int64()))
+    else:
+        sizes = assignments.group_by("__cluster_id__").aggregate(
+            [("__row_id__", "count")]
+        )
+        sizes = sizes.rename_columns(
+            [
+                "__cluster_id__" if c == "__cluster_id__" else "__n__"
+                for c in sizes.column_names
+            ]
+        )
+
+        def _attach(batch_tbl: Any) -> Any:
+            return batch_tbl.join(
+                assignments, keys="__row_id__", join_type="inner"
+            ).join(sizes, keys="__cluster_id__", join_type="inner")
+
+    # --- stream the resident frame in row-id-ordered batches -----------------
+    record_schema = frame.select(record_cols).schema
+    dupes_schema = pa.schema(
+        [*list(record_schema), pa.field("__cluster_id__", pa.int64())]
+    )
+    unique_count = 0
+    dupes_count = 0
+    golden_parts: list[Any] = []
+    # Open both writers eagerly at a fixed schema so unique/dupes parquet always
+    # exist (possibly empty) -- matching the resident write_table contract.
+    uw = _pq.ParquetWriter(unique_path, record_schema)
+    dw = _pq.ParquetWriter(dupes_path, dupes_schema)
+    try:
+        for rb in frame.to_batches(max_chunksize=batch_rows):
+            att = _attach(pa.Table.from_batches([rb]))
+            uniq, dup, gold = _split_output_batch(
+                att, "__n__", record_cols, int(max_cluster_size)
+            )
+            if uniq.num_rows:
+                uw.write_table(uniq)
+                unique_count += uniq.num_rows
+            if dup.num_rows:
+                dw.write_table(dup)
+                dupes_count += dup.num_rows
+            if gold.num_rows:
+                golden_parts.append(gold)
+    finally:
+        uw.close()
+        dw.close()
+
+    # golden = non-oversized multi-member; BOUNDED subset -> polars core builder,
+    # built ONCE (members can straddle batches, so golden can't finalize per batch).
+    golden_count = 0
+    if golden_parts:
+        import polars as pl
+
+        golden_tbl = pa.concat_tables(golden_parts)
+        records = build_golden_records_batch(
+            pl.from_arrow(golden_tbl),
+            golden_rules if golden_rules is not None else _default_golden_rules(),
+        )
+        golden_count = len(records)
+        if golden_count:
+            pl.DataFrame(records).write_parquet(golden_path)
+    if golden_count == 0 and _os.path.exists(golden_path):
+        _os.unlink(golden_path)
+
+    return {
+        "unique_path": unique_path,
+        "dupes_path": dupes_path,
+        "golden_path": golden_path if golden_count else None,
+        "unique_count": unique_count,
+        "dupes_count": dupes_count,
+        "golden_count": golden_count,
+    }
+
+
 def _cluster_python(
     con: Any,
     pairs: list[tuple[int, int, float]],
@@ -1525,10 +1706,15 @@ def run_fs_dedupe_bucketed(
     the per-pass union is idempotent under duplicate edges).
 
     EM is trained upstream on the resident frame (unchanged) and passed in — only
-    the score→cluster→output back-half is bucketed. The resident ``base`` is kept
-    for the O(N) streamed output (``_stream_fs_dedupe_output_arrow``); streaming the
-    output from disk to drop below ~1× frame is the Phase-3 streamed-prep follow-on.
-    Restricted to ``static``/``multi_pass`` blocking + one probabilistic matchkey by
+    the score→cluster→output back-half is bucketed. Output is the join-FREE
+    ``_stream_fs_dedupe_output_batched`` (Phase 3a): it streams the resident
+    ``base`` in batches and attaches cluster_id/size per batch, so the output peak
+    stays at ~1× frame instead of the ~2× ``base.join(asn).join(sizes)`` in
+    ``_stream_fs_dedupe_output_arrow`` that OOM'd the 50M output phase (31→63 GB).
+    Freeing the resident frame to drop BELOW 1× frame needs caller-side reference
+    drops in ``pipeline.py`` (Phase 3b, deferred; the frame is zero-copy over the
+    caller's live ``collected_df``). Restricted to ``static``/``multi_pass``
+    blocking + one probabilistic matchkey by
     the ``_fs_streaming_dedupe_eligible`` gate (per-pass hash-bucketing is unsound
     for SN/adaptive/ann; the single matchkey means no cross-bucket exclude set)."""
     import shutil as _shutil
@@ -1587,7 +1773,11 @@ def run_fs_dedupe_bucketed(
     finally:
         _shutil.rmtree(shard_dir, ignore_errors=True)
 
-    res = _stream_fs_dedupe_output_arrow(base, assignments, config, out_dir)
+    # Join-FREE batched output (Phase 3a): stream the resident `base` in batches
+    # and attach cluster_id/size per batch, instead of the ~2x-frame
+    # `base.join(asn).join(sizes)` in `_stream_fs_dedupe_output_arrow` that OOMs
+    # the 50M output phase. Peak stays ~1x frame.
+    res = _stream_fs_dedupe_output_batched(base, assignments, config, out_dir)
     res["pairs"] = n_pairs
     res["streaming"] = True
     res["bucketed"] = True
