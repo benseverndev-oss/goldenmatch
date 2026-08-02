@@ -14,12 +14,22 @@ import { type YamlValue, dumpYaml, pyFloat } from "./yamlEmit.js";
 import { pyRound6 } from "./crosswalk.js";
 import type { ResolvedCrosswalk } from "./crosswalk.js";
 import { type LoadedDoc, asList, asStr, asStrStripped, isObj } from "./parseUtil.js";
-import { certifyKeyIntegrity, resolveKeyIntegrity, type KeyIntegrityCertificate } from "./keyIntegrity.js";
+import {
+  certificateVerdict,
+  certifyKeyIntegrity,
+  resolveKeyIntegrity,
+  type CertificateVerdictLike,
+  type KeyIntegrityCertificate,
+} from "./keyIntegrity.js";
 import type { SemanticFrame, SemanticFrames } from "./frame.js";
 import { metricAwareAttributes, frameColumns } from "./blocking.js";
 import type { SemanticFieldRoles } from "./blocking.js";
 
-/** An optional key-integrity certificate whose stats ride in `meta.goldenmatch`. */
+/** An optional key-integrity certificate whose trust verdict rides in
+ * `meta.goldenmatch.key_integrity`. A full `KeyIntegrityCertificate` yields the
+ * complete verdict; a stats-only object degrades gracefully (see
+ * `certificateVerdict`). Retained for back-compat — `CertificateVerdictLike` is
+ * the superset the emitter reads. */
 export interface CubeKeyIntegrityCertificateLike {
   estimate?: number | null;
   maxFanOut?: number | null;
@@ -32,7 +42,7 @@ export interface EmitCubeFromCrosswalkOptions {
   crosswalkCube?: string;
   crosswalkSqlTable?: string | null;
   resolvedField?: string;
-  certificate?: CubeKeyIntegrityCertificateLike | null;
+  certificate?: CertificateVerdictLike | null;
 }
 
 /**
@@ -66,11 +76,7 @@ export function emitCubeFromCrosswalk(
     reduction_ratio: pyFloat(pyRound6(crosswalk.reductionRatio ?? 0.0)),
   };
   if (opts.certificate != null) {
-    gm["key_integrity"] = {
-      uniqueness_estimate: opts.certificate.estimate ?? null,
-      max_fan_out: opts.certificate.maxFanOut ?? null,
-      undercount_estimate: opts.certificate.undercountEstimate ?? null,
-    };
+    gm["key_integrity"] = certificateVerdict(opts.certificate) as YamlValue;
   }
 
   // emit_cube key order: name, (sql_table|sql), joins, dimensions, measures, meta.

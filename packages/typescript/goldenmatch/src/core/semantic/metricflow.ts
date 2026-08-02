@@ -10,6 +10,7 @@
 
 import { type YamlValue, dumpYaml } from "./yamlEmit.js";
 import type { ResolvedCrosswalk } from "./crosswalk.js";
+import { certificateVerdict, type CertificateVerdictLike } from "./keyIntegrity.js";
 import { type LoadedDoc, asList, asStrStripped, isObj } from "./parseUtil.js";
 
 const PRIMARY_ENTITY_TYPES = new Set(["primary", "natural"]);
@@ -100,6 +101,9 @@ export interface EmitSemanticModelOptions {
   grain?: readonly string[] | string | null;
   modelRef?: string;
   measureAgg?: string;
+  /** Optional key-integrity certificate — its trust verdict is written back into
+   * `meta.goldenmatch.key_integrity` (parity with the Cube / OSI emitters). */
+  certificate?: CertificateVerdictLike | null;
 }
 
 /**
@@ -136,6 +140,10 @@ export function emitSemanticModel(
   if (measures.length > 0) {
     sm["measures"] = measures.map((m) => ({ name: m, agg: measureAgg, expr: m }));
   }
+
+  if (opts.certificate != null) {
+    sm["meta"] = { goldenmatch: { key_integrity: certificateVerdict(opts.certificate) as YamlValue } };
+  }
   return sm;
 }
 
@@ -162,6 +170,7 @@ export function emitFromCrosswalk(
     measures?: readonly string[];
     grain?: readonly string[] | string | null;
     modelRef?: string;
+    certificate?: CertificateVerdictLike | null;
   } = {},
 ): string {
   const sm = emitSemanticModel(model, {
@@ -171,6 +180,7 @@ export function emitFromCrosswalk(
     ...(opts.measures !== undefined ? { measures: opts.measures } : {}),
     ...(opts.grain !== undefined ? { grain: opts.grain } : {}),
     ...(opts.modelRef !== undefined ? { modelRef: opts.modelRef } : {}),
+    ...(opts.certificate != null ? { certificate: opts.certificate } : {}),
   });
   return emitMetricflowYaml(sm);
 }

@@ -215,6 +215,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   documents the structural + resolution tiers, the certificate fields, and the
   one-kernel cross-surface story (Python / TS / DuckDB / Postgres / dbt). Docs +
   example only — no code change.
+- **Certificate trust-verdict write-back to the semantic catalog (MetricFlow /
+  Cube / OSI).** A new single-sourced `certificate_verdict(cert)` projects a
+  `KeyIntegrityCertificate` into the `key_integrity` metadata block a semantic
+  catalog carries — the advisory pass/fail `verdict` plus `unique_at_grain`,
+  per-measure fan-out, and the resolution-tier trust floors (`safe_bound` and the
+  CI-discounted `safe_bound_conservative`, with the 95% undercount interval). It is
+  a superset of the legacy 3-field embed. The three crosswalk emitters now share
+  it: `emit_cube_from_crosswalk` / `emit_osi_from_crosswalk` write the full verdict
+  (previously only 3 raw stats), and `emit_from_crosswalk` /
+  `emit_semantic_model` gained a `certificate=` that writes it into
+  `meta.goldenmatch.key_integrity` (MetricFlow embedded nothing before). So
+  "resolve once, the verdict travels with the join." Single-sourced with the TS
+  port (`certificateVerdict`) via a shared fixture (`emit_certificate_verdict_fixture.py`,
+  drift-guarded by `ts_parity_freshness`). Byte-unchanged when no certificate is
+  passed. Tests: `tests/test_certificate_verdict.py`.
 
 ### Changed
 - **FS out-of-core streaming: single `resolve_fs_block_source` knob + DuckDB

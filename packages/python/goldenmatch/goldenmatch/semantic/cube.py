@@ -269,11 +269,9 @@ def emit_cube_from_crosswalk(
         "reduction_ratio": round(getattr(crosswalk, "reduction_ratio", 0.0), 6),
     }
     if certificate is not None:
-        gm["key_integrity"] = {
-            "uniqueness_estimate": getattr(certificate, "estimate", None),
-            "max_fan_out": getattr(certificate, "max_fan_out", None),
-            "undercount_estimate": getattr(certificate, "undercount_estimate", None),
-        }
+        from goldenmatch.core.key_integrity_certificate import certificate_verdict
+
+        gm["key_integrity"] = certificate_verdict(certificate)
     xw.meta = {"goldenmatch": gm}
 
     # The source cube declares the conformed join to the crosswalk (many source

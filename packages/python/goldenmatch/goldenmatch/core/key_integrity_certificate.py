@@ -19,6 +19,7 @@ way `match.rates` consumes a recall certificate.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -95,3 +96,50 @@ class KeyIntegrityCertificate:
             and self.max_fan_out <= max_fan_out
             and self.estimate >= min_estimate
         )
+
+
+def certificate_verdict(certificate: Any) -> dict[str, Any]:
+    """Project a `KeyIntegrityCertificate` into the trust-verdict metadata block a
+    semantic catalog carries — the single source for the `key_integrity` tag the
+    MetricFlow / Cube / OSI emitters write back onto the catalog the semantic layer
+    reads. "Resolve once, the verdict travels with the join."
+
+    Duck-typed (getattr) so a stats-only certificate-like object degrades
+    gracefully: missing structural fields → None / omitted, so an older or partial
+    certificate still yields a well-formed block. Insertion order is fixed so the
+    emitted block is stable across surfaces (the TS `certificateVerdict` mirror
+    produces the same shape).
+
+    The block is a superset of the legacy 3-field embed
+    (`uniqueness_estimate` / `max_fan_out` / `undercount_estimate`) — those keys are
+    retained — extended with the advisory pass/fail `verdict`, `unique_at_grain`,
+    per-measure fan-out, and the resolution-tier trust floors (`safe_bound` and the
+    CI-discounted `safe_bound_conservative`, with the 95% undercount interval).
+    """
+    trustworthy: bool | None = None
+    is_trustworthy = getattr(certificate, "is_trustworthy", None)
+    if callable(is_trustworthy):
+        try:
+            trustworthy = bool(is_trustworthy())
+        except Exception:
+            trustworthy = None
+
+    block: dict[str, Any] = {
+        "verdict": None
+        if trustworthy is None
+        else ("trustworthy" if trustworthy else "untrustworthy"),
+        "unique_at_grain": getattr(certificate, "is_unique_at_grain", None),
+        "uniqueness_estimate": getattr(certificate, "estimate", None),
+        "max_fan_out": getattr(certificate, "max_fan_out", None),
+    }
+    measure_fan_out = getattr(certificate, "measure_fan_out", None)
+    if measure_fan_out:
+        block["measure_fan_out"] = dict(measure_fan_out)
+    block["undercount_estimate"] = getattr(certificate, "undercount_estimate", None)
+    ci_low = getattr(certificate, "undercount_ci_low", None)
+    ci_high = getattr(certificate, "undercount_ci_high", None)
+    if ci_low is not None and ci_high is not None:
+        block["undercount_ci"] = [ci_low, ci_high]
+    block["safe_bound"] = getattr(certificate, "safe_bound", None)
+    block["safe_bound_conservative"] = getattr(certificate, "safe_bound_conservative", None)
+    return block
