@@ -2551,7 +2551,7 @@
               "type": "boolean",
               "required": false,
               "default": "False",
-              "help": "Random sample instead of first N"
+              "help": "Deprecated no-op: accepted for back-compat but not applied (preview uses the first N)."
             },
             {
               "name": "--output-golden",
@@ -2656,7 +2656,7 @@
               "type": "boolean",
               "required": false,
               "default": "False",
-              "help": "Large dataset mode - process in chunks for files >1M records"
+              "help": "Deprecated no-op: use --backend chunked for large-dataset chunked processing."
             },
             {
               "name": "--chunk-size",
@@ -2677,7 +2677,7 @@
               "type": "boolean",
               "required": false,
               "default": "False",
-              "help": "Generate before/after HTML diff with highlighting"
+              "help": "Deprecated no-op: accepted for back-compat but not generated; use --diff for a CSV diff."
             },
             {
               "name": "--merge-preview",
@@ -2698,7 +2698,7 @@
               "type": "text",
               "required": false,
               "default": "'medium'",
-              "help": "low, medium, or high"
+              "help": "Deprecated no-op: accepted for back-compat but not applied (anomaly sensitivity is fixed)."
             },
             {
               "name": "--llm-boost",
@@ -3836,7 +3836,7 @@
               "type": "boolean",
               "required": false,
               "default": "False",
-              "help": "Random sample instead of first N"
+              "help": "Deprecated no-op: accepted for back-compat but not applied (preview uses the first N)."
             },
             {
               "name": "--output-matched",
