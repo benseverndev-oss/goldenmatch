@@ -105,6 +105,24 @@ def _fs_out_of_core_legacy_flag() -> bool:
     )
 
 
+def _fs_spill_force_shard() -> bool:
+    """``GOLDENMATCH_FS_SPILL_FORCE_SHARD=1`` makes ``run_fs_dedupe_spill`` SKIP the
+    fused-kernel short-circuit and always take the edge-shard spill path
+    (``pair_sink`` shards on disk + ``external_wcc_from_shards``).
+
+    The fused FS kernel covers the common person-shape configs (grouping + FS
+    scoring + connected-components in ONE call, already bounded — no pair list),
+    so by default ``run_fs_dedupe_spill`` delegates to it and the edge-shard
+    mechanism is a FALLBACK for configs the fused kernel does not cover. This flag
+    forces the shard path so the bounded-edge spill mechanism can be exercised
+    and benchmarked directly (the DuckDB-free bounded-edge proof) even on a
+    fused-covered config. Default OFF (fused-first, byte-identical partition —
+    both paths cluster the same edge set)."""
+    return os.environ.get("GOLDENMATCH_FS_SPILL_FORCE_SHARD", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
 def resolve_fs_block_source() -> str:
     """Single resolver for HOW the FS (probabilistic) bucket route sources its
     blocks — the one knob that governs both bounded-streaming lanes so callers
@@ -1318,7 +1336,7 @@ def run_fs_dedupe_spill(
 
     assignments = None
     n_pairs = None
-    if not target_ids and not matched_pairs:
+    if not target_ids and not matched_pairs and not _fs_spill_force_shard():
         assignments = _fused_fs_assignments(
             base, blocking_config, mk, em_result, link_threshold,
         )

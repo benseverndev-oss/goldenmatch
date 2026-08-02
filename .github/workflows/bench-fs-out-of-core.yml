@@ -20,9 +20,13 @@ on:
         required: false
         default: "25000000 50000000"
       modes:
-        description: "Space-separated streaming modes to run (sequential=in-RAM pyarrow/Rust batches + end-WCC [the fast default]; streaming=DuckDB out-of-core, the slower past-RAM tier -- add it only when you specifically want the spill comparison)"
+        description: "Space-separated streaming modes (sequential=in-RAM pyarrow/Rust batches + end-WCC [the fast default]; spill=DuckDB-FREE out-of-core, per-pass edge shards on disk + external union-find [the bounded-edge path]; streaming=DuckDB out-of-core, the slower past-RAM tier)"
         required: false
         default: "sequential"
+      force_shard:
+        description: "spill mode only: force the edge-shard mechanism (skip the fused short-circuit) so the bounded-edge spill path is actually exercised. true/false."
+        required: false
+        default: "false"
       in_memory_scale:
         description: "Row count for the in-memory OOM contrast (default EMPTY = skip; set e.g. 50000000 to run it -- note it OOMs/preempts near 64 GB and can kill the artifact upload)"
         required: false
@@ -70,11 +74,18 @@ jobs:
       - name: Streaming legs (one isolated subprocess per scale x mode)
         run: |
           mkdir -p .bench_fs_ooc results
+          FORCE_SHARD=""
+          if [ "${{ github.event.inputs.force_shard }}" = "true" ]; then
+            FORCE_SHARD="--force-shard"
+          fi
           for m in ${{ github.event.inputs.modes || 'sequential streaming' }}; do
+            fs=""
+            # --force-shard only applies to the spill mode (ignored elsewhere).
+            if [ "$m" = "spill" ]; then fs="$FORCE_SHARD"; fi
             for n in ${{ github.event.inputs.scales || '25000000 50000000' }}; do
               echo "::group::$m rows=$n"
               uv run python scripts/bench_fs_out_of_core_scale.py \
-                --rows "$n" --mode "$m" \
+                --rows "$n" --mode "$m" $fs \
                 --workdir .bench_fs_ooc --out-json "results/${m}_${n}.json" \
                 || echo "{\"rows\": $n, \"mode\": \"$m\", \"completed\": false, \"killed\": true}" > "results/${m}_${n}.json"
               echo "::endgroup::"

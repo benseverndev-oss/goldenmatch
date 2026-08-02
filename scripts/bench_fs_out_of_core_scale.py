@@ -125,12 +125,24 @@ def main() -> None:
     ap.add_argument("--rows", type=int, required=True)
     ap.add_argument(
         "--mode",
-        choices=["streaming", "sequential", "in_memory"],
+        choices=["streaming", "sequential", "spill", "in_memory"],
         required=True,
         help=(
             "streaming=DuckDB out-of-core (FS_BLOCK_SOURCE=duckdb); "
             "sequential=in-RAM Arrow/Rust batches + end-WCC (FS_BLOCK_SOURCE="
-            "sequential); in_memory=default pipeline contrast (EXPECTED OOM at 50M)"
+            "sequential); spill=DuckDB-FREE out-of-core -- per-pass edge shards on "
+            "disk + external union-find (FS_BLOCK_SOURCE=spill), the bounded-edge "
+            "path; in_memory=default pipeline contrast (EXPECTED OOM at 50M)"
+        ),
+    )
+    ap.add_argument(
+        "--force-shard",
+        action="store_true",
+        help=(
+            "spill mode only: set GOLDENMATCH_FS_SPILL_FORCE_SHARD=1 so the fused "
+            "short-circuit is SKIPPED and the actual edge-shard spill mechanism "
+            "runs (the bounded-edge proof). Without it, a fused-covered config "
+            "clusters via the fused kernel and the shard path is never exercised."
         ),
     )
     ap.add_argument("--dupe-rate", type=float, default=0.20)
@@ -174,14 +186,23 @@ def main() -> None:
     sampler.start()
     t0 = time.perf_counter()
     try:
-        if args.mode in ("streaming", "sequential"):
+        if args.mode in ("streaming", "sequential", "spill"):
             # streaming -> DuckDB out-of-core; sequential -> in-RAM Arrow/Rust
-            # batches + end-WCC. Both drive dedupe_to_parquet's streaming
-            # short-circuit; only the block-source env differs.
+            # batches + end-WCC; spill -> DuckDB-FREE out-of-core (per-pass edge
+            # shards on disk + external union-find). All three drive
+            # dedupe_to_parquet's streaming short-circuit; only the block-source
+            # env differs.
             os.environ.pop("GOLDENMATCH_FS_OUT_OF_CORE", None)
-            os.environ["GOLDENMATCH_FS_BLOCK_SOURCE"] = (
-                "duckdb" if args.mode == "streaming" else "sequential"
-            )
+            os.environ["GOLDENMATCH_FS_BLOCK_SOURCE"] = {
+                "streaming": "duckdb",
+                "sequential": "sequential",
+                "spill": "spill",
+            }[args.mode]
+            if args.mode == "spill" and args.force_shard:
+                # Skip the fused short-circuit so the edge-shard spill mechanism
+                # (pair_sink shards + external_wcc_from_shards) actually runs.
+                os.environ["GOLDENMATCH_FS_SPILL_FORCE_SHARD"] = "1"
+                result["force_shard"] = True
             # Per-pass scoring progress in the CI log (the heartbeat covers the
             # opaque stages; this narrates the streaming scorer itself).
             os.environ["GOLDENMATCH_FS_OOC_DEBUG"] = "1"
@@ -190,6 +211,13 @@ def main() -> None:
             out_dir = args.workdir / f"out_{args.rows}"
             res = dedupe_to_parquet(str(fixture), out_dir=str(out_dir), config=cfg)
             result["streaming_engaged"] = bool(res.get("streaming"))
+            result["spill_engaged"] = bool(res.get("spill"))
+            # For spill: which internal path clustered — the fused kernel
+            # (bounded, no pair list) or the edge-shard spill mechanism.
+            if args.mode == "spill":
+                result["internal_path"] = (
+                    "fused" if res.get("fused") else "edge_shard"
+                )
             result["unique_count"] = res.get("unique_count")
             result["dupes_count"] = res.get("dupes_count")
             result["golden_count"] = res.get("golden_count")
@@ -199,6 +227,15 @@ def main() -> None:
                     "streaming short-circuit did NOT engage -- fell back to "
                     f"in-memory (blocking={_bl}, matchkeys={_mks}); "
                     "out-of-core path was not exercised"
+                )
+            elif args.mode == "spill" and not result["spill_engaged"]:
+                # streaming engaged but NOT via the spill orchestrator -- a
+                # silent route mismatch (e.g. fused short-circuit) that would let
+                # a non-spill path masquerade as the bounded-edge proof.
+                result["error"] = (
+                    "spill route did NOT engage -- streaming ran a DIFFERENT "
+                    "orchestrator; the DuckDB-free edge-spill path was not "
+                    "exercised"
                 )
         else:  # in_memory contrast
             os.environ.pop("GOLDENMATCH_FS_BLOCK_SOURCE", None)

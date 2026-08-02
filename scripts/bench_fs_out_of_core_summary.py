@@ -14,6 +14,7 @@ COLS = [
     ("mode", "mode"),
     ("completed", "completed"),
     ("streaming_engaged", "streaming"),
+    ("internal_path", "path"),
     ("peak_rss_sampled_mb", "peak_rss_mb"),
     ("wall_s", "wall_s"),
     ("unique_count", "unique"),
