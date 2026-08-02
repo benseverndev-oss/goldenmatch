@@ -450,6 +450,108 @@ def layer_early_exit(per_class: int = 400, seed: int = 0, k_min: int = 6) -> Non
 
 
 # --------------------------------------------------------------------------- #
+# stage 6: truncate-and-adapt -- how few layers survive a TRAINED readout      #
+# --------------------------------------------------------------------------- #
+@app.function(image=_image, gpu=GPU, timeout=90 * 60, volumes={"/out": _out_vol})
+def truncate_adapt(per_class: int = 600, seed: int = 0,
+                   ks: str = "8,10,12,14,16,18,21,24,28") -> None:
+    """Turn the layer early-exit LOWER bound into a real number: truncate the model
+    at layer K (keep layers 0..K-1) and train a FRESH readout on the layer-K
+    decision-token residual, instead of reusing the untrained final head. A frozen
+    truncated backbone + a trained linear match head = the cheapest valid adaptation
+    (a full LoRA-SFT could only do better). Record-DISJOINT train/test split (by
+    cluster parity) so the head can't memorize. Reports F1(K) vs the full-backbone
+    linear head F1(28) -> the smallest K that preserves ER F1 is the truly
+    strippable depth WITH adaptation."""
+    import json
+    import os
+    import sys
+
+    import numpy as np
+    import torch
+
+    sys.path.insert(0, "/root/interp")
+    import jellyfish
+    import polars as pl
+    import pyarrow.parquet as pq
+    from decision_geometry import mine_probe_pairs
+    from sklearn.linear_model import LogisticRegression
+
+    tok, model = _load_model()
+    n_layers = model.config.num_hidden_layers
+    k_list = [int(k) for k in ks.split(",") if int(k) <= n_layers]
+
+    raw = pl.from_arrow(pq.read_table(DATA))
+    gold = raw["cluster"].to_list()
+    rows = {i: {f: (raw[f][i] or "") for f in FIELDS} for i in range(len(gold))}
+    surname_key = [jellyfish.soundex(str(raw["surname"][i] or "")) for i in range(len(gold))]
+
+    # record-disjoint split: clusters alternate train/test so no record leaks
+    by_cluster: dict = {}
+    for i, g in enumerate(gold):
+        by_cluster.setdefault(g, []).append(i)
+    clusters = sorted(by_cluster)
+    train_ids = {i for c in clusters[::2] for i in by_cluster[c]}
+    test_ids = {i for c in clusters[1::2] for i in by_cluster[c]}
+
+    pool = mine_probe_pairs(gold, surname_key, per_class * 3, negatives="hard", seed=seed)
+    train_pairs = [(a, b, t) for a, b, t in pool if a in train_ids and b in train_ids][
+        : per_class * 2]
+    test_pairs = [(a, b, t) for a, b, t in pool if a in test_ids and b in test_ids][
+        : per_class * 2]
+    print(f"[trunc] train={len(train_pairs)} test={len(test_pairs)} pairs "
+          f"(record-disjoint), layers={n_layers}", flush=True)
+
+    def reps_for(pairs):
+        prompts = [_prompt(tok, rows[a], rows[b]) + '{"match":' for a, b, _ in pairs]
+        y = np.array([t for *_, t in pairs])
+        per_k = {K: [] for K in k_list}
+        for i in range(0, len(prompts), 16):
+            enc = tok(prompts[i : i + 16], return_tensors="pt", padding=True).to(model.device)
+            with torch.no_grad():
+                out = model(**enc, output_hidden_states=True)
+            for K in k_list:
+                per_k[K].append(out.hidden_states[K][:, -1, :].float().cpu().numpy())
+        return {K: np.concatenate(v, 0) for K, v in per_k.items()}, y
+
+    Xtr, ytr = reps_for(train_pairs)
+    Xte, yte = reps_for(test_pairs)
+
+    sweep = []
+    for K in k_list:
+        clf = LogisticRegression(max_iter=2000, C=0.5).fit(
+            (Xtr[K] - Xtr[K].mean(0)) / (Xtr[K].std(0) + 1e-8), ytr)
+        pred = clf.predict((Xte[K] - Xtr[K].mean(0)) / (Xtr[K].std(0) + 1e-8))
+        f1 = _prf_from_pred(pred.astype(bool), yte)
+        sweep.append({"K": K, "f1_trained_readout": f1})
+        print(f"[trunc] truncate@L{K:2d} + trained head: F1={f1:.3f}", flush=True)
+
+    full = next(r["f1_trained_readout"] for r in sweep if r["K"] == n_layers)
+    tol = 0.02
+    k_star = min((r["K"] for r in sweep if r["f1_trained_readout"] >= full - tol),
+                 default=n_layers)
+    strip = n_layers - k_star
+    print(f"[trunc] full-backbone linear head F1={full:.3f}; earliest K*={k_star} within "
+          f"{tol} -> strip {strip}/{n_layers} layers (~{strip / n_layers * 100:.0f}% of "
+          f"block params) with ER F1 preserved AFTER adaptation.", flush=True)
+
+    payload = {
+        "n_layers": n_layers, "train_pairs": len(train_pairs), "test_pairs": len(test_pairs),
+        "full_backbone_linear_f1": full, "k_star": k_star, "strippable_layers": strip,
+        "strippable_block_param_fraction": strip / n_layers, "tol": tol,
+        "note": "record-disjoint split; frozen truncated backbone + trained linear "
+                "readout (cheapest valid adaptation); in-distribution historical_50k. "
+                "Held-out product-domain (walmart) generalization is the next step.",
+        "sweep": sweep,
+    }
+    os.makedirs("/out/interp", exist_ok=True)
+    with open("/out/interp/truncate_adapt.json", "w") as fh:
+        json.dump(payload, fh, indent=2)
+    _out_vol.commit()
+    print("[done] truncate_adapt -> /out/interp/truncate_adapt.json")
+
+
+# --------------------------------------------------------------------------- #
 # stage 3: causal validation -- steering / ablation (THE LOCK)                #
 # --------------------------------------------------------------------------- #
 @app.function(image=_image, gpu=GPU, timeout=60 * 60, volumes={"/out": _out_vol})
@@ -720,3 +822,9 @@ def layer2(layer: int = 14, per_class: int = 400, n_sae_features: int = 12) -> N
 def strip(per_class: int = 400, k_min: int = 6) -> None:
     layer_early_exit.remote(per_class=per_class, k_min=k_min)
     print("done -> `modal volume get er-matcher-out interp/layer_early_exit.json`")
+
+
+@app.local_entrypoint()
+def truncate(per_class: int = 600, ks: str = "8,10,12,14,16,18,21,24,28") -> None:
+    truncate_adapt.remote(per_class=per_class, ks=ks)
+    print("done -> `modal volume get er-matcher-out interp/truncate_adapt.json`")
