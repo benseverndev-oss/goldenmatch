@@ -1193,8 +1193,18 @@ def score_buckets(
     target_ids: set[int] | None = None,
     em_result=None,
     _emit: str = "list",
+    pair_sink: Any = None,
 ) -> Any:
     """Score all blocks via hash-bucketed partition_by, no per-block LazyFrame.
+
+    ``pair_sink`` (arrow mode only): an optional ``callable(pa.Table)`` invoked with
+    each PASS's ``PAIR_STREAM`` table AS SOON AS the pass is scored, INSTEAD of
+    accumulating the passes into one returned table — so a caller streaming edges to
+    disk (``run_fs_dedupe_spill``) never holds more than one pass's pairs resident.
+    The per-pass table is exactly what the accumulating path would concat, so it
+    preserves the ``multi_pass`` block-collision dedup (parity-exact). When set, the
+    function returns an EMPTY pair stream (the sink consumed everything); ``None``
+    (default) is byte-identical to today.
 
     ``_emit`` (internal): ``"list"`` (default) returns
     ``list[tuple[int,int,float]]`` and mutates ``matched_pairs`` in place — the
@@ -2442,7 +2452,14 @@ def score_buckets(
             # (converted per BUCKET, B2c) -- accumulate it directly; no per-pass
             # list ever exists. See the PR-B design doc.
             n_emitted += pass_result.num_rows
-            pass_tables.append(pass_result)
+            if pair_sink is not None:
+                # Stream this pass's edges out (e.g. to a disk shard) and drop them
+                # -- never accumulate across passes. The per-pass table is identical
+                # to what `pass_tables.append` would collect, so downstream WCC sees
+                # the same edge set (parity-exact); only the residency differs.
+                pair_sink(pass_result)
+            else:
+                pass_tables.append(pass_result)
             del pass_result
         else:
             n_emitted += len(pass_result)

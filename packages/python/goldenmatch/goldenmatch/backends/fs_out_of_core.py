@@ -127,24 +127,35 @@ def resolve_fs_block_source() -> str:
       - ``"duckdb"`` — out-of-core: spill the prepared table to a DuckDB file and
         stream blocks + O(N) output (``score_fs_out_of_core`` /
         ``run_fs_dedupe_streaming``). The ≥40M single-box scale path.
+      - ``"spill"`` — DuckDB-FREE out-of-core: score via the SAME tuned
+        ``score_buckets_arrow`` as ``sequential``, but STREAM each pass's scored
+        pairs to Arrow IPC shards on disk (never accumulating the whole run's pair
+        table) and cluster with an external union-find that streams the shards back
+        (``run_fs_dedupe_spill`` / ``external_wcc_from_shards``). Bounds the edge
+        term (largest single pass, not the sum of all passes) with no DuckDB
+        dependency. Spec:
+        ``docs/superpowers/specs/2026-08-02-fs-duckdb-free-spill-external-wcc-design.md``.
 
     Resolution (``GOLDENMATCH_FS_BLOCK_SOURCE`` is authoritative when set to a
     recognized value; the legacy ``GOLDENMATCH_FS_OUT_OF_CORE=1`` is honored only
     when ``GOLDENMATCH_FS_BLOCK_SOURCE`` is unset/empty):
       - ``FS_BLOCK_SOURCE=frame`` → ``"frame"``
       - ``FS_BLOCK_SOURCE=sequential`` → ``"sequential"``
+      - ``FS_BLOCK_SOURCE=spill`` → ``"spill"``
       - ``FS_BLOCK_SOURCE=duckdb`` → ``"duckdb"``
       - ``FS_BLOCK_SOURCE=eager`` / ``auto`` / unset → ``"eager"`` (+ legacy alias)
 
     ``auto`` currently resolves to ``eager`` — the measured RAM-floor
-    auto-escalation to ``sequential``/``duckdb`` is the documented Phase-1
-    follow-on; until it lands (and the default is flipped on a CI scale gate)
-    ``auto`` stays byte-identical to today."""
+    auto-escalation to ``sequential``/``spill``/``duckdb`` is the documented
+    Phase-1 follow-on; until it lands (and the default is flipped on a CI scale
+    gate) ``auto`` stays byte-identical to today."""
     v = os.environ.get("GOLDENMATCH_FS_BLOCK_SOURCE", "").strip().lower()
     if v == "frame":
         return "frame"
     if v == "sequential":
         return "sequential"
+    if v == "spill":
+        return "spill"
     if v == "duckdb":
         return "duckdb"
     if v in ("", "auto", "eager"):
@@ -173,6 +184,9 @@ def fs_streaming_route() -> str | None:
 
       - ``"sequential"`` → ``run_fs_dedupe_sequential`` (in-RAM Arrow/Rust batches,
         ``GOLDENMATCH_FS_BLOCK_SOURCE=sequential``).
+      - ``"spill"`` → ``run_fs_dedupe_spill`` (DuckDB-free out-of-core: per-pass
+        edge shards on disk + external union-find,
+        ``GOLDENMATCH_FS_BLOCK_SOURCE=spill``).
       - ``"duckdb"`` → ``run_fs_dedupe_streaming`` (out-of-core DuckDB spill,
         ``GOLDENMATCH_FS_OUT_OF_CORE=1`` / ``GOLDENMATCH_FS_BLOCK_SOURCE=duckdb``).
 
@@ -180,7 +194,7 @@ def fs_streaming_route() -> str | None:
     ``score_buckets``'s in-bucket residency), so they return ``None`` and the
     caller keeps the default pipeline."""
     src = resolve_fs_block_source()
-    return src if src in ("sequential", "duckdb") else None
+    return src if src in ("sequential", "spill", "duckdb") else None
 
 
 def _fs_ooc_arrow_cluster_enabled() -> bool:
@@ -1245,6 +1259,101 @@ def run_fs_dedupe_sequential(
     res["pairs"] = n_pairs
     res["streaming"] = True
     res["sequential"] = True
+    res["fused"] = n_pairs is None
+    res["output_dir"] = out_dir
+    return res
+
+
+def run_fs_dedupe_spill(
+    prepared_df: Any,
+    blocking_config: BlockingConfig,
+    mk: MatchkeyConfig,
+    em_result,
+    config: Any,
+    out_dir: str,
+    *,
+    matched_pairs: set[tuple[int, int]] | None = None,
+    target_ids: set[int] | None = None,
+    link_threshold: float | None = None,
+) -> dict:
+    """DuckDB-free out-of-core FS dedupe: spill scored edges to disk + external WCC.
+
+    Spec: ``docs/superpowers/specs/2026-08-02-fs-duckdb-free-spill-external-wcc-design.md``.
+
+    Like ``run_fs_dedupe_sequential`` (resident frame, the SAME tuned
+    ``score_buckets_arrow`` scorer) but the scored pairs are STREAMED to Arrow IPC
+    shards one PASS at a time via ``score_buckets``'s ``pair_sink`` — never
+    accumulating the whole run's pair table — and clustered by
+    ``external_wcc_from_shards`` (an O(N) union-find that streams the shards back from
+    disk). So the resident edge term is bounded by the LARGEST SINGLE PASS, not the sum
+    of all passes, and clustering never holds the full pair table + dedup table the way
+    ``_cluster_arrow_native`` does. DuckDB-free end to end (no ``duckdb.connect``);
+    polars-free except the bounded golden builder.
+
+    The fused-kernel short-circuit (already bounded — grouping+scoring+WCC in one Rust
+    call, no pair list) is reused verbatim when the config is covered; only the
+    bucket-scorer fallback takes the spill route. Partition-parity with
+    ``run_fs_dedupe_sequential`` by construction (same scorer, same edge set; the
+    external WCC is partition-exact with ``_cluster_arrow_native``).
+
+    **Remaining (spec phases):** per-BUCKET spilling (finer than per-pass; needs a hook
+    inside ``_score_single_pass``), a native array-UF ``FsExternalWcc`` kernel, and
+    frame-residency streaming during prep (this path keeps the frame resident — the edge
+    term is what it bounds)."""
+    import shutil as _shutil
+    import tempfile as _tempfile
+
+    from goldenmatch.core.frame import is_polars_lazyframe
+    from goldenmatch.core.frame import to_frame as _tf
+
+    matched_pairs = set(matched_pairs or ())
+    max_cluster_size = 100
+    if getattr(config, "golden_rules", None) is not None:
+        max_cluster_size = config.golden_rules.max_cluster_size
+
+    _fw = _tf(prepared_df)
+    if is_polars_lazyframe(_fw.native):
+        _fw = _tf(_fw.native.collect())
+    base = _fw.to_arrow()
+
+    assignments = None
+    n_pairs = None
+    if not target_ids and not matched_pairs:
+        assignments = _fused_fs_assignments(
+            base, blocking_config, mk, em_result, link_threshold,
+        )
+
+    if assignments is None:
+        from goldenmatch.backends.score_buckets import score_buckets_arrow
+
+        shard_dir = _tempfile.mkdtemp(prefix="gm_fs_spill_")
+        try:
+            shard_paths: list[str] = []
+
+            def _sink(tbl: Any) -> None:
+                # One shard per non-empty pass; the pass's edges leave RAM here.
+                if tbl.num_rows:
+                    shard_paths.append(
+                        spill_pair_shard(tbl, shard_dir, len(shard_paths))
+                    )
+
+            # Sink consumes every pass table -> returns empty; no full pair stream.
+            score_buckets_arrow(
+                base, blocking_config, mk, set(matched_pairs),
+                n_buckets=getattr(config, "n_buckets", None),
+                target_ids=target_ids, em_result=em_result, pair_sink=_sink,
+            )
+            assignments, n_pairs = external_wcc_from_shards(
+                shard_paths, _prep_all_ids_frame(base), max_cluster_size,
+                link_threshold,
+            )
+        finally:
+            _shutil.rmtree(shard_dir, ignore_errors=True)
+
+    res = _stream_fs_dedupe_output_arrow(base, assignments, config, out_dir)
+    res["pairs"] = n_pairs
+    res["streaming"] = True
+    res["spill"] = True
     res["fused"] = n_pairs is None
     res["output_dir"] = out_dir
     return res

@@ -482,6 +482,7 @@ def test_resolve_fs_block_source_default_is_eager(monkeypatch):
     "block_source,expected",
     [("frame", "frame"), ("duckdb", "duckdb"), ("eager", "eager"),
      ("sequential", "sequential"), (" Sequential ", "sequential"),
+     ("spill", "spill"), (" Spill ", "spill"),
      ("auto", "eager"), ("AUTO", "eager"), (" DuckDB ", "duckdb"),
      ("nonsense", "eager")],
 )
@@ -577,12 +578,65 @@ def test_sequential_and_duckdb_orchestrators_agree(tmp_path):
         assert seq[k] == ooc[k], k
 
 
+def test_end_to_end_spill_dedupe(tmp_path):
+    """run_fs_dedupe_spill: score -> per-pass edge shards on disk -> external WCC ->
+    streamed parquet. DuckDB-free. Rows preserved, planted dups found, a golden per
+    multi-member cluster."""
+    import types
+
+    from goldenmatch.backends.fs_out_of_core import run_fs_dedupe_spill
+
+    df = _bigger_df()
+    mk = _make_probabilistic_mk()
+    blocking = BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])])
+    em = _train(df, blocking, mk)
+    cfg = types.SimpleNamespace(golden_rules=None)
+
+    res = run_fs_dedupe_spill(df, blocking, mk, em, cfg, str(tmp_path))
+
+    assert res["spill"] is True
+    assert res["streaming"] is True
+    assert res["unique_count"] + res["dupes_count"] == df.height
+    assert res["dupes_count"] >= 2
+    assert res["golden_count"] >= 1
+
+
+def test_spill_and_sequential_orchestrators_agree(tmp_path):
+    """run_fs_dedupe_spill and run_fs_dedupe_sequential write the SAME
+    unique/dupes/golden counts. Both score via score_buckets_arrow over the SAME
+    edge set; the spill path streams those edges through disk shards + external
+    union-find (partition-exact with _cluster_arrow_native), the sequential path
+    clusters in RAM — so the output-row counts must match by construction."""
+    import types
+
+    from goldenmatch.backends.fs_out_of_core import (
+        run_fs_dedupe_sequential,
+        run_fs_dedupe_spill,
+    )
+
+    df = _bigger_df()
+    mk = _make_probabilistic_mk()
+    blocking = BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])])
+    em = _train(df, blocking, mk)
+    cfg = types.SimpleNamespace(golden_rules=None)
+
+    seq = run_fs_dedupe_sequential(df, blocking, mk, em, cfg, str(tmp_path / "seq"))
+    spill = run_fs_dedupe_spill(df, blocking, mk, em, cfg, str(tmp_path / "spill"))
+    for k in ("unique_count", "dupes_count", "golden_count"):
+        assert seq[k] == spill[k], k
+
+    # Same records land in the dupes partition (not just the same counts).
+    seq_parts = _partition_set_from_parquet(seq["dupes_path"])
+    spill_parts = _partition_set_from_parquet(spill["dupes_path"])
+    assert seq_parts == spill_parts
+
+
 def test_fs_streaming_route_selects_orchestrator(monkeypatch):
     from goldenmatch.backends.fs_out_of_core import fs_streaming_route
 
     monkeypatch.delenv("GOLDENMATCH_FS_OUT_OF_CORE", raising=False)
     for src, expected in (
-        ("sequential", "sequential"), ("duckdb", "duckdb"),
+        ("sequential", "sequential"), ("spill", "spill"), ("duckdb", "duckdb"),
         ("frame", None), ("eager", None), ("auto", None),
     ):
         monkeypatch.setenv("GOLDENMATCH_FS_BLOCK_SOURCE", src)
@@ -612,6 +666,35 @@ def test_dedupe_to_parquet_sequential_parity_with_in_memory(tmp_path, monkeypatc
     res = dedupe_to_parquet(str(csv_path), out_dir=str(out_dir), config=cfg)
     assert res["streaming"] is True
     assert res["sequential"] is True
+    stream_parts = _partition_set_from_parquet(res["dupes_path"])
+
+    assert stream_parts == sorted(mem_parts)
+
+
+def test_dedupe_to_parquet_spill_parity_with_in_memory(tmp_path, monkeypatch):
+    """dedupe_to_parquet under GOLDENMATCH_FS_BLOCK_SOURCE=spill (the DuckDB-free
+    per-pass-shard + external-WCC route) partitions the SAME records as the default
+    in-memory FS route — end-to-end through the pipeline dispatch."""
+    import polars as pl
+    from goldenmatch import dedupe_df, dedupe_to_parquet
+
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+    monkeypatch.delenv("GOLDENMATCH_FS_OUT_OF_CORE", raising=False)
+
+    csv_path = tmp_path / "people.csv"
+    _make_person_csv(csv_path)
+    df = pl.read_csv(csv_path)
+    cfg = _fs_person_config()
+
+    monkeypatch.setenv("GOLDENMATCH_FS_BLOCK_SOURCE", "eager")
+    mem = dedupe_df(df, config=cfg)
+    mem_parts = _partitions(mem)
+
+    monkeypatch.setenv("GOLDENMATCH_FS_BLOCK_SOURCE", "spill")
+    out_dir = tmp_path / "out"
+    res = dedupe_to_parquet(str(csv_path), out_dir=str(out_dir), config=cfg)
+    assert res["streaming"] is True
+    assert res["spill"] is True
     stream_parts = _partition_set_from_parquet(res["dupes_path"])
 
     assert stream_parts == sorted(mem_parts)

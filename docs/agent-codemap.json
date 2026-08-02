@@ -330,6 +330,7 @@
             "fs_streaming_route",
             "resolve_fs_block_source",
             "run_fs_dedupe_sequential",
+            "run_fs_dedupe_spill",
             "run_fs_dedupe_streaming",
             "score_fs_out_of_core",
             "spill_pair_shard",
