@@ -1447,42 +1447,56 @@ def bucket_frame_to_shards(
 
     n = base.num_rows
     off = 0
-    while off < n:
-        sl = base.slice(off, batch_rows)
-        off += sl.num_rows
-        for pi, key_cfg in enumerate(passes):
-            bk = _tf(sl).derive_block_key(
-                key_cfg.fields, key_cfg.transforms or [],
-                field_transforms=getattr(key_cfg, "field_transforms", None),
-            ).to_arrow()
-            t2 = sl.append_column("__block_key__", bk)
-            t2 = _tf(t2).filter_valid_key("__block_key__").native
-            if t2.num_rows == 0:
-                continue
-            keys = t2.column("__block_key__").to_pylist()
-            buckets = _np.fromiter(
-                (_zlib.crc32(k.encode()) % n_buckets for k in keys),
-                dtype=_np.int64, count=len(keys),
-            )
-            t2 = t2.drop_columns(["__block_key__"]).append_column(
-                "__bkt__", _pa.array(buckets)
-            )
-            for b in _np.unique(buckets):
-                b = int(b)
-                sub = t2.filter(_pc.equal(t2.column("__bkt__"), b)).drop_columns(
-                    ["__bkt__"]
+    try:
+        while off < n:
+            sl = base.slice(off, batch_rows)
+            off += sl.num_rows
+            for pi, key_cfg in enumerate(passes):
+                bk = _tf(sl).derive_block_key(
+                    key_cfg.fields, key_cfg.transforms or [],
+                    field_transforms=getattr(key_cfg, "field_transforms", None),
+                ).to_arrow()
+                t2 = sl.append_column("__block_key__", bk)
+                t2 = _tf(t2).filter_valid_key("__block_key__").native
+                if t2.num_rows == 0:
+                    continue
+                keys = t2.column("__block_key__").to_pylist()
+                buckets = _np.fromiter(
+                    (_zlib.crc32(k.encode()) % n_buckets for k in keys),
+                    dtype=_np.int64, count=len(keys),
                 )
-                wk = (pi, b)
-                if wk not in writers:
-                    p = _os.path.join(shard_root, f"pass{pi}_bkt{b}.arrow")
-                    files[wk] = open(p, "wb")
-                    writers[wk] = _pa.ipc.RecordBatchFileWriter(files[wk], sub.schema)
-                    paths[pi][b] = p
-                writers[wk].write_table(sub)
-        del sl
-    for wk, w in writers.items():
-        w.close()
-        files[wk].close()
+                t2 = t2.drop_columns(["__block_key__"]).append_column(
+                    "__bkt__", _pa.array(buckets)
+                )
+                for b in _np.unique(buckets):
+                    b = int(b)
+                    sub = t2.filter(_pc.equal(t2.column("__bkt__"), b)).drop_columns(
+                        ["__bkt__"]
+                    )
+                    wk = (pi, b)
+                    if wk not in writers:
+                        p = _os.path.join(shard_root, f"pass{pi}_bkt{b}.arrow")
+                        files[wk] = open(p, "wb")
+                        writers[wk] = _pa.ipc.RecordBatchFileWriter(
+                            files[wk], sub.schema
+                        )
+                        paths[pi][b] = p
+                    writers[wk].write_table(sub)
+            del sl
+    finally:
+        # Close writers first (flushes each Arrow IPC footer), then the raw files;
+        # guard each close so one failure can't leak the other handles (e.g. on a
+        # mid-loop error).
+        for w in writers.values():
+            try:
+                w.close()
+            except Exception:  # noqa: BLE001 - best-effort resource cleanup
+                pass
+        for f in files.values():
+            try:
+                f.close()
+            except Exception:  # noqa: BLE001 - best-effort resource cleanup
+                pass
     return {pi: [paths[pi][b] for b in sorted(paths[pi])] for pi in paths}
 
 
