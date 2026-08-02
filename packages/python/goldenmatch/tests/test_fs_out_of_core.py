@@ -601,6 +601,41 @@ def test_end_to_end_spill_dedupe(tmp_path):
     assert res["golden_count"] >= 1
 
 
+def test_spill_force_shard_runs_edge_path_same_partition(tmp_path, monkeypatch):
+    """GOLDENMATCH_FS_SPILL_FORCE_SHARD=1 SKIPS the fused short-circuit so the
+    actual edge-shard spill mechanism runs (res['fused'] is False, a real pair
+    count), and its partition is IDENTICAL to the fused-first default (both
+    cluster the same edge set)."""
+    import types
+
+    from goldenmatch.backends.fs_out_of_core import run_fs_dedupe_spill
+
+    df = _bigger_df()
+    mk = _make_probabilistic_mk()
+    blocking = BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])])
+    em = _train(df, blocking, mk)
+    cfg = types.SimpleNamespace(golden_rules=None)
+
+    # Default: fused-first (this config is fused-covered).
+    monkeypatch.delenv("GOLDENMATCH_FS_SPILL_FORCE_SHARD", raising=False)
+    fused = run_fs_dedupe_spill(df, blocking, mk, em, cfg, str(tmp_path / "fused"))
+    assert fused["fused"] is True  # fused short-circuit took it (no pair list)
+
+    # Forced: skip fused, exercise the edge-shard path.
+    monkeypatch.setenv("GOLDENMATCH_FS_SPILL_FORCE_SHARD", "1")
+    shard = run_fs_dedupe_spill(df, blocking, mk, em, cfg, str(tmp_path / "shard"))
+    assert shard["spill"] is True
+    assert shard["fused"] is False  # the shard/external-WCC path actually ran
+    assert shard["pairs"] is not None and shard["pairs"] >= 1  # real edges spilled
+
+    for k in ("unique_count", "dupes_count", "golden_count"):
+        assert fused[k] == shard[k], k
+    assert (
+        _partition_set_from_parquet(fused["dupes_path"])
+        == _partition_set_from_parquet(shard["dupes_path"])
+    )
+
+
 def test_spill_and_sequential_orchestrators_agree(tmp_path):
     """run_fs_dedupe_spill and run_fs_dedupe_sequential write the SAME
     unique/dupes/golden counts. Both score via score_buckets_arrow over the SAME
