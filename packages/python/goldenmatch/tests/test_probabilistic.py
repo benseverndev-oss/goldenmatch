@@ -152,8 +152,11 @@ from goldenmatch.core.probabilistic import (
     EMResult,
     comparison_vector,
     compute_thresholds,
+    load_or_train_em,
+    reset_fs_label_anchors,
     score_pair_probabilistic,
     score_probabilistic,
+    set_fs_label_anchors,
     train_em,
 )
 
@@ -1946,3 +1949,155 @@ class TestNativeFSParity:
         kept = p.score_probabilistic_native(df, mk, em, excl)
         assert (0, 1) not in {(a, b) for a, b, _s in kept}
         assert len(kept) == len(all_pairs) - 1
+
+
+class TestLabelConstrainedEM:
+    """Semi-supervised (label-constrained) EM: caller-supplied labeled pairs
+    are injected into the EM sample and their E-step responsibility is clamped
+    to the label, so m/u stay representative of the full population while the
+    labels steer the boundary. Default None is byte-identical to unsupervised EM.
+    """
+
+    def test_label_pairs_none_is_inert(self):
+        df = _make_dedupe_df()
+        mk = _make_probabilistic_mk()
+        base = train_em(df, mk, n_sample_pairs=100, seed=7)
+        same = train_em(df, mk, n_sample_pairs=100, seed=7, label_pairs=None)
+        assert same.m_probs == base.m_probs
+        assert same.u_probs == base.u_probs
+        assert same.proportion_matched == base.proportion_matched
+
+    def test_empty_label_pairs_is_inert(self):
+        df = _make_dedupe_df()
+        mk = _make_probabilistic_mk()
+        base = train_em(df, mk, n_sample_pairs=100, seed=7)
+        same = train_em(df, mk, n_sample_pairs=100, seed=7, label_pairs={})
+        assert same.m_probs == base.m_probs
+        assert same.proportion_matched == base.proportion_matched
+
+    def test_positive_vs_negative_anchors_order_p_match(self):
+        # Clamping the SAME pairs to match vs non-match must order p_match:
+        # forcing pairs to match can only raise the trained match proportion.
+        df = _make_dedupe_df()
+        mk = _make_probabilistic_mk()
+        pairs = [(1, 2), (3, 4), (5, 6), (7, 8)]
+        pos = train_em(df, mk, n_sample_pairs=100, seed=7,
+                       label_pairs={p: 1 for p in pairs})
+        neg = train_em(df, mk, n_sample_pairs=100, seed=7,
+                       label_pairs={p: 0 for p in pairs})
+        assert pos.proportion_matched > neg.proportion_matched
+
+    def test_anchor_injected_even_when_not_naturally_sampled(self):
+        # An anchor pair that blocking/sampling would never draw is still
+        # injected into the training sample, so its clamp takes effect.
+        df = _make_dedupe_df()
+        mk = _make_probabilistic_mk()
+        # (1, 9) are unrelated rows (John Smith vs Tom Wilson) — never a
+        # natural within-block pair; anchoring both directions must still move m.
+        far = [(1, 9), (2, 10), (3, 7), (4, 8)]
+        pos = train_em(df, mk, n_sample_pairs=50, seed=3,
+                       label_pairs={p: 1 for p in far})
+        neg = train_em(df, mk, n_sample_pairs=50, seed=3,
+                       label_pairs={p: 0 for p in far})
+        assert pos.proportion_matched != neg.proportion_matched
+
+    def test_anchor_order_and_duplicates_dont_matter(self):
+        df = _make_dedupe_df()
+        mk = _make_probabilistic_mk()
+        a = train_em(df, mk, n_sample_pairs=100, seed=7,
+                     label_pairs={(1, 2): 1, (3, 4): 1})
+        # reversed pair keys canonicalize to the same anchors
+        b = train_em(df, mk, n_sample_pairs=100, seed=7,
+                     label_pairs={(2, 1): 1, (4, 3): 1})
+        assert a.proportion_matched == b.proportion_matched
+        assert a.m_probs == b.m_probs
+
+    def test_contextvar_seam_reaches_load_or_train_em(self):
+        # The training-time ContextVar seam (a two-pass label-then-rerun driver)
+        # feeds anchors into load_or_train_em without user-config plumbing.
+        df = _make_dedupe_df()
+        mk = _make_probabilistic_mk()  # name="fs"
+        base = load_or_train_em(df, mk)
+        pairs = {(1, 2): 1, (3, 4): 1, (5, 6): 1, (7, 8): 1}
+        tok = set_fs_label_anchors({"fs": pairs})
+        try:
+            anc = load_or_train_em(df, mk)
+        finally:
+            reset_fs_label_anchors(tok)
+        assert anc.proportion_matched != base.proportion_matched
+
+    def test_contextvar_wildcard_applies_to_any_matchkey(self):
+        df = _make_dedupe_df()
+        mk = _make_probabilistic_mk(name="other")
+        base = load_or_train_em(df, mk)
+        tok = set_fs_label_anchors({"*": {(1, 2): 1, (3, 4): 1, (5, 6): 1}})
+        try:
+            anc = load_or_train_em(df, mk)
+        finally:
+            reset_fs_label_anchors(tok)
+        assert anc.proportion_matched != base.proportion_matched
+
+    def test_non_binary_label_raises(self):
+        import pytest
+        df = _make_dedupe_df()
+        mk = _make_probabilistic_mk()
+        with pytest.raises(ValueError, match="must be 0/1 or bool"):
+            train_em(df, mk, n_sample_pairs=100, label_pairs={(1, 2): 2})
+
+    def test_bool_labels_accepted(self):
+        df = _make_dedupe_df()
+        mk = _make_probabilistic_mk()
+        pos = train_em(df, mk, n_sample_pairs=100, seed=7,
+                       label_pairs={(1, 2): True, (3, 4): True})
+        neg = train_em(df, mk, n_sample_pairs=100, seed=7,
+                       label_pairs={(1, 2): False, (3, 4): False})
+        assert pos.proportion_matched > neg.proportion_matched
+
+    def test_self_pairs_are_ignored(self):
+        df = _make_dedupe_df()
+        mk = _make_probabilistic_mk()
+        base = train_em(df, mk, n_sample_pairs=100, seed=7)
+        # (a, a) self-pairs carry no comparison signal -> silently dropped,
+        # so the trained model is unchanged from the no-anchor baseline.
+        same = train_em(df, mk, n_sample_pairs=100, seed=7,
+                        label_pairs={(1, 1): 1, (5, 5): 0})
+        assert same.proportion_matched == base.proportion_matched
+        assert same.m_probs == base.m_probs
+
+    def test_conflicting_labels_raise(self):
+        import pytest
+        df = _make_dedupe_df()
+        mk = _make_probabilistic_mk()
+        # (1,2) and (2,1) canonicalize to the same pair with different labels.
+        with pytest.raises(ValueError, match="conflicting labels"):
+            train_em(df, mk, n_sample_pairs=100, label_pairs={(1, 2): 1, (2, 1): 0})
+
+    def test_anchors_bypass_persisted_model(self, tmp_path):
+        # A persisted (un-anchored) model must NOT be returned when anchors are
+        # supplied -- else the semi-supervised feature is a silent no-op in the
+        # train-once/reuse path. The anchored retrain also must not clobber the
+        # shared model file.
+        df = _make_dedupe_df()
+        model_file = tmp_path / "fs.json"
+        mk = _make_probabilistic_mk(model_path=str(model_file))
+        # First call (no anchors) trains + persists the canonical model.
+        base = load_or_train_em(df, mk)
+        assert model_file.exists()
+        persisted_bytes = model_file.read_bytes()
+        # Second call WITH anchors must retrain (not return the cached model)...
+        anc = load_or_train_em(
+            df, mk, label_pairs={(1, 2): 1, (3, 4): 1, (5, 6): 1, (7, 8): 1}
+        )
+        assert anc.proportion_matched != base.proportion_matched
+        # ...and must NOT overwrite the shared un-anchored model file.
+        assert model_file.read_bytes() == persisted_bytes
+
+    def test_contextvar_default_is_inert(self):
+        df = _make_dedupe_df()
+        mk = _make_probabilistic_mk()
+        # No anchors set -> load_or_train_em == plain train_em.
+        a = load_or_train_em(df, mk)
+        b = train_em(df, mk, max_iterations=mk.em_iterations,
+                     convergence=mk.convergence_threshold)
+        assert a.proportion_matched == b.proportion_matched
+        assert a.m_probs == b.m_probs

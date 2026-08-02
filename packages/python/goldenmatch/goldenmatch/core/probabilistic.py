@@ -13,6 +13,7 @@ References:
 """
 from __future__ import annotations
 
+import contextvars
 import logging
 import math
 import os
@@ -30,6 +31,41 @@ from goldenmatch.config.schemas import MatchkeyConfig, NegativeEvidenceField
 from goldenmatch.core.scorer import score_field
 
 logger = logging.getLogger(__name__)
+
+# Training-time semi-supervised label anchors, keyed by matchkey name (or the
+# sentinel "*" to apply to every probabilistic matchkey). A two-pass driver
+# (run FS -> label the uncertain band -> rerun) sets this via
+# ``set_fs_label_anchors(...)`` so ``load_or_train_em`` feeds the labels into
+# label-constrained EM without threading them through the user-facing config.
+# Default None -> unsupervised EM, byte-identical to the prior behavior.
+_FS_LABEL_ANCHORS: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
+    "fs_label_anchors", default=None
+)
+
+
+def set_fs_label_anchors(anchors: dict | None):
+    """Set training-time label anchors; returns the ContextVar token to reset.
+
+    ``anchors`` maps matchkey name -> {canonical (a, b) pair: 0/1 label}. Use
+    the key ``"*"`` to apply the same anchor set to every probabilistic
+    matchkey. Reset with ``reset_fs_label_anchors(token)``."""
+    return _FS_LABEL_ANCHORS.set(anchors)
+
+
+def reset_fs_label_anchors(token) -> None:
+    """Restore the label-anchor ContextVar to its prior value."""
+    _FS_LABEL_ANCHORS.reset(token)
+
+
+def _label_anchors_for(mk: MatchkeyConfig) -> dict | None:
+    """Resolve the label anchors that apply to ``mk`` (name match, then '*')."""
+    anchors = _FS_LABEL_ANCHORS.get()
+    if not anchors:
+        return None
+    name = getattr(mk, "name", None)
+    if name is not None and name in anchors:
+        return anchors[name]
+    return anchors.get("*")
 
 # ── Score calibration ──────────────────────────────────────────────────────
 # Two ways to turn the summed Fellegi-Sunter match weight (Σ log2(m/u), in
@@ -1179,6 +1215,7 @@ def train_em(
     blocks: list | None = None,
     blocking_fields: list[str] | None = None,
     target_ids: set[int] | None = None,
+    label_pairs: dict[tuple[int, int], int] | None = None,
 ) -> EMResult:
     """Train Fellegi-Sunter model using Expectation-Maximization.
 
@@ -1204,6 +1241,19 @@ def train_em(
         target_ids: Target-side row ids for two-table linkage training. When
             provided, random and blocked samples contain only target-reference
             pairs.
+        label_pairs: Optional semi-supervised anchors — a mapping of canonical
+            ``(min_row_id, max_row_id)`` pairs to a 0/1 label. Labeled pairs are
+            injected into the EM training sample and their E-step responsibility
+            is clamped to the label every iteration (match -> 1.0,
+            non-match -> 0.0), so the trained m stays representative of the full
+            blocked population (the anchors are a small fraction) while the
+            labels steer the decision boundary. u is unchanged — it is estimated
+            from random pairs and held fixed during EM, exactly as in the
+            unsupervised path. Labels must be 0/1 (or bool); self-pairs
+            ``(a, a)`` are ignored. This is label-constrained (semi-supervised)
+            EM, NOT a per-pair score override: the labels improve the trained
+            model, which is then re-scored across the whole population. Default
+            None is byte-identical to unsupervised EM.
 
     Returns:
         EMResult with trained m/u probabilities and match weights.
@@ -1258,6 +1308,44 @@ def train_em(
         seed,
         target_ids=target_ids,
     )
+    # Semi-supervised anchors: append caller-provided labeled pairs to the EM
+    # training sample so their comparison vectors are present in comp_matrix and
+    # their E-step responsibility can be clamped to the label each iteration.
+    # Anchors carry no pass-conditioning (the label is authority, so every
+    # observed field contributes to the m re-estimate). Default None -> no-op.
+    label_anchors: dict[tuple[int, int], float] = {}
+    if label_pairs:
+        blocked_pairs = list(blocked_pairs)
+        pair_conditioning = list(pair_conditioning)
+        existing = {(min(a, b), max(a, b)) for a, b in blocked_pairs}
+        for (a, b), lab in label_pairs.items():
+            ai, bi = int(a), int(b)
+            if ai == bi:
+                continue  # a self-pair carries no comparison signal
+            # Caller-facing input: reject anything that isn't a clean 0/1 label
+            # rather than silently coercing (e.g. 2 -> match) an unintended anchor.
+            if lab is True or lab == 1:
+                val = 1.0
+            elif lab is False or lab == 0:
+                val = 0.0
+            else:
+                raise ValueError(
+                    f"label_pairs label for ({ai}, {bi}) must be 0/1 or bool, got {lab!r}"
+                )
+            key = (min(ai, bi), max(ai, bi))
+            # A caller passing both (a, b) and (b, a) with DIFFERENT labels is an
+            # input error -- surface it rather than silently letting the later
+            # dict entry win and produce a surprising anchored model.
+            if key in label_anchors and label_anchors[key] != val:
+                raise ValueError(
+                    f"label_pairs has conflicting labels for pair {key}: "
+                    f"{int(label_anchors[key])} vs {int(val)}"
+                )
+            label_anchors[key] = val
+            if key not in existing:
+                blocked_pairs.append(key)
+                pair_conditioning.append(frozenset())
+                existing.add(key)
     row_lookup = _row_lookup_for_pairs(df, cols, [random_pairs, blocked_pairs])
 
     random_matrix = _build_comparison_matrix(random_pairs, row_lookup, mk)
@@ -1340,6 +1428,24 @@ def train_em(
     n_pairs = len(pairs)
     _n_fields = len(mk.fields)
 
+    # Resolve semi-supervised anchors to comp_matrix row indices (the E-step
+    # clamps posteriors[label_clamp_idx] = label_clamp_val each iteration).
+    label_clamp_idx = None
+    label_clamp_val = None
+    if label_anchors:
+        pair_to_i = {(min(a, b), max(a, b)): i for i, (a, b) in enumerate(pairs)}
+        idxs: list[int] = []
+        vals: list[float] = []
+        for key, val in label_anchors.items():
+            i = pair_to_i.get(key)
+            if i is not None:
+                idxs.append(i)
+                vals.append(val)
+        if idxs:
+            label_clamp_idx = np.asarray(idxs, dtype=np.intp)
+            label_clamp_val = np.asarray(vals, dtype=np.float64)
+            logger.info("EM using %d semi-supervised label anchors", len(idxs))
+
     # Initialize m with strong priors (matches mostly agree at highest level)
     p_match = 0.02  # conservative prior
     m_probs = {}
@@ -1397,6 +1503,13 @@ def train_em(
         e_match = np.exp(log_match - max_log)
         e_nonmatch = np.exp(log_nonmatch - max_log)
         posteriors = e_match / (e_match + e_nonmatch)
+
+        # Semi-supervised clamp: pin labeled anchors' responsibility to the
+        # label so the M-step re-estimates m (and p_match) with those pairs as
+        # ground truth. u stays fixed from the random-pair estimate, exactly as
+        # in unsupervised EM. No-op when no anchors were supplied.
+        if label_clamp_idx is not None:
+            posteriors[label_clamp_idx] = label_clamp_val
 
         # M-step: update ONLY m_probs and p_match (u is fixed)
         total_match = posteriors.sum()
@@ -1581,6 +1694,7 @@ def load_or_train_em(
     max_iterations: int | None = None,
     convergence: float | None = None,
     target_ids: set[int] | None = None,
+    label_pairs: dict[tuple[int, int], int] | None = None,
 ) -> EMResult:
     """Return a trained EMResult, reusing ``mk.model_path`` when present.
 
@@ -1591,13 +1705,34 @@ def load_or_train_em(
     and the trained model is saved there for next time. With no ``model_path``
     this is exactly ``train_em``. The single seam all three pipeline call sites
     (core pipeline x2, TUI engine) share.
+
+    Semi-supervised anchors (``label_pairs`` kwarg or the ``set_fs_label_anchors``
+    ContextVar) are resolved BEFORE the persisted-model fast path: when anchors
+    are present they force a fresh anchored train (the cached un-anchored model
+    is bypassed, never returned), and the anchored result is NOT written back to
+    ``model_path`` -- it is a per-call override, so the shared canonical model is
+    left intact. Only an un-anchored train persists to ``model_path``.
     """
+    # Semi-supervised anchors: explicit kwarg wins; else the training-time
+    # ContextVar seam (a two-pass label-then-rerun driver). None -> unsupervised.
+    # Resolved BEFORE the persisted-model fast path so anchors are never silently
+    # ignored when the shared model file already exists.
+    if label_pairs is None:
+        label_pairs = _label_anchors_for(mk)
+
     path = getattr(mk, "model_path", None)
-    if path and os.path.exists(path):
+    if path and os.path.exists(path) and not label_pairs:
         em = EMResult.load_json(path)
         em.validate_for(mk)  # raises FSModelMismatchError on shape mismatch
         logger.info("Loaded FS model from %s (skipped EM training)", path)
         return em
+    if path and os.path.exists(path) and label_pairs:
+        # The persisted model is un-anchored; the caller explicitly wants
+        # anchors, so retrain WITH them instead of returning the cached model.
+        logger.info(
+            "FS model at %s bypassed: %d semi-supervised label anchors force a "
+            "retrain", path, len(label_pairs),
+        )
 
     em = train_em(
         df, mk,
@@ -1606,8 +1741,12 @@ def load_or_train_em(
         blocks=blocks,
         blocking_fields=blocking_fields,
         target_ids=target_ids,
+        label_pairs=label_pairs,
     )
-    if path:
+    # Persist ONLY the canonical un-anchored model. An anchored model is a
+    # per-call override; overwriting the shared model_path file with it would
+    # surprise the next reuse.
+    if path and not label_pairs:
         em.save_json(path)
         logger.info("Saved FS model to %s", path)
     return em
