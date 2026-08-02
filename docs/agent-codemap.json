@@ -3909,6 +3909,7 @@
             "_golden_records_to_df",
             "_is_columnar_eligible",
             "_load_input_frames",
+            "_maybe_refit_link_threshold",
             "_open_identity_store",
             "_open_memory_store",
             "_prep_cache_clear",
