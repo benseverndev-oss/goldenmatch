@@ -558,9 +558,14 @@ def _fs_bounded_stream_enabled() -> bool:
     ``GOLDENMATCH_FS_BLOCK_SOURCE=frame`` opts in; default (unset / any other value)
     keeps the byte-identical eager path until the >=1M peak/wall win is CI-measured
     and the default is flipped. Scoped to the FS (probabilistic) bucket route; the
-    weighted path is untouched. The DuckDB (above-RAM) source is a follow-on
-    (``score_fs_out_of_core`` already covers the out-of-core FS scoring lane)."""
-    return os.environ.get("GOLDENMATCH_FS_BLOCK_SOURCE", "").strip().lower() == "frame"
+    weighted path is untouched. The DuckDB (above-RAM) source
+    (``GOLDENMATCH_FS_BLOCK_SOURCE=duckdb`` / ``score_fs_out_of_core``) is the
+    sibling out-of-core lane; both are governed by the single
+    ``fs_out_of_core.resolve_fs_block_source`` resolver (lazy import to avoid a
+    module-load cycle)."""
+    from goldenmatch.backends.fs_out_of_core import resolve_fs_block_source
+
+    return resolve_fs_block_source() == "frame"
 
 
 def _default_n_buckets(height: int | None = None) -> int:

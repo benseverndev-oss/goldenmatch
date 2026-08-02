@@ -6061,20 +6061,40 @@ def _bound_probabilistic_blocking_pairs(
     by_type: dict[str, list[str]] = {}
     for p in profiles:
         by_type.setdefault(p.col_type, []).append(p.name)
+    # Perfect-surrogate exclusion (mirrors the #721/#876 exact-matchkey gate).
+    # A column with cardinality_ratio >= 1.0 is a unique surrogate key (record_id,
+    # row-uuid): duplicates do NOT share it, so ANDing it into a coarse pass as a
+    # full-value identity reducer SPLITS every true pair -- it looks like the
+    # strongest reducer (collapses blocks to singletons) but neuters recall. This
+    # is exactly the "identifier" full-value branch below, where a unique record
+    # key would otherwise be chosen first. Measured on the 25M person shape
+    # (record_id unique, truth keyed on cluster_id): compounding with record_id
+    # dropped recall 1.0 -> 0.49 at scale. Skip them everywhere a reducer is built.
+    _surrogate = {
+        p.name for p in profiles if getattr(p, "cardinality_ratio", 0.0) >= 1.0
+    }
     reducers: list[tuple[str, tuple[str, ...]]] = []
     for f in (
         by_type.get("email", [])
         + by_type.get("identifier", [])
         + by_type.get("phone", [])
     ):
+        if f in _surrogate:
+            continue
         reducers.append((f, ()))  # full value -- exact-shared identity
     for f in by_type.get("name", []):
+        if f in _surrogate:
+            continue
         reducers.append((f, ("substring:0:1",)))
     for f in by_type.get("geo", []) + by_type.get("city", []):
+        if f in _surrogate:
+            continue
         reducers.append((f, ("substring:0:1",)))
     for f in (
         by_type.get("zip", []) + by_type.get("identifier", []) + by_type.get("phone", [])
     ):
+        if f in _surrogate:
+            continue
         reducers.append((f, ("substring:0:2",)))
 
     _col_cache: dict[str, list] = {}

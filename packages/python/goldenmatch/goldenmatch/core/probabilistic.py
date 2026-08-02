@@ -3338,16 +3338,28 @@ _EMBEDDING_SCORER_IDS: frozenset[str] = frozenset({"embedding", "record_embeddin
 _NAME_SCORER_IDS: frozenset[str] = frozenset(
     {"name_freq_weighted_jw", "given_name_aliased_jw"}
 )
-# The FUSED match kernel (`match_fused_fs`) scores via `score_one` directly
-# (ids 0..=3), NOT `score_fs_pair`, so it does NOT dispatch the reference-data
-# name scorers (4/5) or ensemble (6). The fused readiness gate + marshaling use
-# THIS base set; a field/NE using a 4/5/6 scorer declines the fused path and
-# falls back to the classic `score_block_pairs_fs` path (which DOES dispatch
-# them). Do NOT widen this to `_NATIVE_FS_SCORER_IDS` — that would route ids the
-# fused kernel scores as 0.0.
+# The FUSED match kernel (`match_fused_fs`) now scores each field through
+# fs-core's `field_similarity` (the SAME dispatch `score_fs_pair` uses), so it
+# reaches the reference-data name scorers (`name_freq_weighted_jw` id 4 /
+# `given_name_aliased_jw` id 5) and `ensemble` (id 6) — matching the classic
+# `_NATIVE_FS_SCORER_IDS` regular-field set (embedding id 7 stays out: the fused
+# kernel takes a raw string columns mapping, not precomputed vectors). Coverage of
+# ids 4/5/6 on the fused path is wheel-gated on `FUSED_FS_SUPPORTS_NAME_SCORERS`
+# (see `_fused_fs_matchkey_covered`); an old wheel's fused kernel scored those ids
+# via the stateless `score_one` catch-all, so it declines to the classic path.
+# NOTE: this is the REGULAR-field set. Fused NE stays ids 0..=3 (the kernel
+# validates ne_scorer_ids in 0..=3 and has no reference-data / vector access on
+# its NE path) — `_fused_fs_matchkey_covered` restricts NE separately, so do NOT
+# read NE coverage off this map.
 _FUSED_FS_SCORER_IDS: dict[str, int] = {
     "jaro_winkler": 0, "levenshtein": 1, "token_sort": 2, "exact": 3,
+    "name_freq_weighted_jw": 4, "given_name_aliased_jw": 5, "ensemble": 6,
 }
+# Fused NE scorers stay the score_one base (0..=3) — the fused kernel's NE path
+# has no reference-data/vector access and validates ids in 0..=3.
+_FUSED_FS_NE_SCORER_IDS: frozenset[str] = frozenset(
+    {"jaro_winkler", "levenshtein", "token_sort", "exact"}
+)
 
 
 def _fs_name_refdata_available(scorers: set[str]) -> bool:

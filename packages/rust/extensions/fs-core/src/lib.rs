@@ -519,8 +519,14 @@ pub fn ensemble_sim(a: &str, b: &str) -> f64 {
 /// route to the injected reference-data tables (degrading to plain JW when the
 /// table is absent), `ensemble` (id 6) to [`ensemble_sim`], everything else to
 /// score-core's `score_one`.
+///
+/// `pub` so the fused kernel (`native::fused::match_fused_fs`) scores each field
+/// through the SAME dispatch `score_fs_pair` uses — single-sourcing the
+/// reference-data (name) + `ensemble` scorer coverage instead of the fused loop
+/// re-inlining a `score_one`-only subset (which silently scored ids 4/5/6 as the
+/// stateless catch-all). See the fused kernel's per-field loop.
 #[inline]
-fn field_similarity(
+pub fn field_similarity(
     scorer_id: u8,
     a: &str,
     b: &str,

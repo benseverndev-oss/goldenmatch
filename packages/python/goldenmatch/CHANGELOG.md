@@ -7,6 +7,63 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **Fused Fellegi-Sunter kernel now covers the reference-data name scorers +
+  `ensemble` (`goldenmatch-native` 0.1.20).** The fully-fused `match_fused_fs`
+  path (block-group → FS score → connected-components in ONE Rust call, no
+  candidate-pair list — the bounded-memory FS scale path) previously scored each
+  field via the stateless `score_one` (ids 0–3 only), so a matchkey using
+  `name_freq_weighted_jw` / `given_name_aliased_jw` (ids 4/5) or `ensemble`
+  (id 6) declined to the classic `score_buckets` + separate-WCC path. Since FS
+  auto-config v2 emits those name scorers for person data, the fused path never
+  engaged on the exact workload it targets. The fused kernel now scores each
+  field through fs-core's `field_similarity` — the SAME dispatch the classic
+  block scorer uses — so ids 4/5 reach the process-registered census / alias
+  tables (`set_name_reference_data`) and id 6 reaches `ensemble_sim`, single-
+  sourced (no duplicated dispatch). Regular-field coverage now matches
+  `_NATIVE_FS_SCORER_IDS` (embedding id 7 stays out — the fused kernel takes raw
+  string columns, not precomputed vectors); fused negative-evidence stays ids
+  0–3. Byte-identical to the classic native FS path (parity-gated:
+  `tests/test_pipeline_fused_fs_match.py` covers ensemble + `given_name_aliased_jw`
+  membership/golden parity, and the alias table genuinely linking William/Bill/Will).
+  **Wheel-gated on the new `FUSED_FS_SUPPORTS_NAME_SCORERS` capability flag** (name
+  scorers additionally require the refdata pack loaded): an older wheel whose fused
+  kernel lacks the dispatch declines these matchkeys to the classic path rather
+  than silently scoring ids 4/5/6 as 0.0. Requires republishing `goldenmatch-native`
+  to take effect in wheel-installed environments (in-tree builds pick it up
+  immediately); until then those matchkeys degrade gracefully to the classic path.
+- **FS in-RAM sequential Arrow-native / Rust batch scorer + end-WCC
+  (`GOLDENMATCH_FS_BLOCK_SOURCE=sequential`, default OFF).** A single-box scale
+  path that avoids DuckDB entirely: block keys are grouped in polars/Arrow, each
+  block's rows are gathered from the resident frame and streamed through the
+  native Fellegi-Sunter kernel in bounded waves to an Arrow edge stream, then ONE
+  Rust Union-Find (WCC) stitches clusters at the end
+  (`backends.fs_out_of_core.score_fs_sequential_arrow` +
+  `run_fs_dedupe_sequential`). Working set = the resident frame + one wave of
+  gathered blocks + the (small) edge stream — no on-disk sorted scans, so it is
+  the fast pure-Arrow/Rust path while the prepared frame fits RAM (the DuckDB
+  `score_fs_out_of_core` remains the spill-past-RAM variant). Byte-parity with
+  `score_buckets`/`score_fs_out_of_core` absent oversized blocks (same block-key
+  derivation + same kernel), gated by `tests/test_fs_out_of_core.py`. Routed via
+  the shared `resolve_fs_block_source`/`fs_streaming_route` resolver and reachable
+  through `gm.dedupe_to_parquet(*files, out_dir=…)`. Default path unchanged.
+  **DuckDB-free AND polars-free** (O(N) path): block-key grouping runs on the
+  Arrow `Frame` seam (`derive_block_key` → `core.arrow_derive.block_key`, the
+  byte-equivalent Arrow twin of the polars `_build_block_key_expr`) +
+  `filter_valid_key` + one pyarrow `group_by` per pass; blocks gather via
+  `pa.Table.take`; the FS kernel reads the `pa.Table` directly; cross-pass edge
+  dedup is the Rust `dedup_pairs_arrow` kernel (`dedup_pairs_max_score_arrow_table`,
+  no polars); the Rust WCC (`_cluster_arrow_native`) takes the row-id set +
+  `pa.Table` edge stream directly; and O(N) unique/dupes output is pure pyarrow
+  (`_stream_fs_dedupe_output_arrow`: `pa.Table.join` + `ParquetWriter`). The scorer
+  is guarded by a `import polars`-blocked test. The one remaining polars touch is
+  the bounded golden-record builder (`build_golden_records_batch` on the
+  multi-member subset only — an Arrow golden builder is a separate core port). The
+  `duckdb` block source (`GOLDENMATCH_FS_BLOCK_SOURCE=duckdb`) stays the
+  spill-past-RAM variant. Each wave is scored across cores by a
+  `ThreadPoolExecutor`, **balanced by scoring cost (block², not row count)** via
+  `_balanced_ranges` so no worker stalls on a giant block while the rest idle (the
+  native kernel releases the GIL → real N-core parallelism; `executor.map`
+  preserves order for block-order parity).
 - **Customer 360 serving surface + semantic-layer drill-through.** The `customer_360`
   primitive (golden record + per-field provenance + linked source records + event
   timeline + relationship neighborhood, composed from the durable store) is now
@@ -92,6 +149,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   `timeline_limit`; 404 when the entity does not exist.
 
 ### Changed
+- **FS out-of-core streaming: single `resolve_fs_block_source` knob + DuckDB
+  API-deprecation cleanup.** The two FS bounded-streaming lanes are now governed by
+  one resolver (`backends.fs_out_of_core.resolve_fs_block_source` → `eager` /
+  `frame` / `duckdb`) instead of two independent env booleans. `GOLDENMATCH_FS_BLOCK_SOURCE`
+  now accepts `duckdb` (equivalent to the out-of-core path) alongside `frame` (in-RAM
+  bounded bucket streaming) and `auto`/`eager` (today's default). The legacy
+  `GOLDENMATCH_FS_OUT_OF_CORE=1` is retained as a `duckdb` alias when
+  `GOLDENMATCH_FS_BLOCK_SOURCE` is unset, so existing runs/benches are unchanged;
+  `fs_out_of_core_enabled()` and `score_buckets._fs_bounded_stream_enabled()` both
+  read the shared resolver. Default stays `eager` (byte-identical to today) until a
+  CI scale gate justifies the flip. Also swapped the deprecated DuckDB
+  `fetch_record_batch`/`fetch_arrow_table` calls for `to_arrow_reader`/`to_arrow_table`
+  in the streaming scorer and the DuckDB backend.
 - **FS dedupe: Arrow-native columnar-cluster path (B2c), default-on (#1811/#2006).**
   A measure-first 5M profile pinned the FS scale wall at **clustering** (`cluster`
   100.8s / 41%), not the native scoring kernel (`bucket_score` 70.8s / 28%). Root
@@ -120,6 +190,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   are byte-identical to the per-row path (payloads and event/edge provenance carried;
   parity-gated). This does not remove the O(N) prep frame-residency floor that
   `emit_singletons=True` still carries -- that remains separate bounded-streaming work.
+
+### Fixed
+- **FS pair-budget gate no longer compounds a coarse blocking pass with a unique
+  surrogate key.** `_bound_probabilistic_blocking_pairs` reduces an over-budget
+  coarse pass by ANDing in the strongest full-value "identity" reducer
+  (email/identifier/phone), previously selected by `col_type` alone. A UNIQUE
+  surrogate key (`record_id`, row-uuid; `cardinality_ratio` 1.0) collapses any
+  block to singletons (0 pairs, always under budget) so it looked like the
+  strongest reducer -- but duplicates do NOT share a surrogate key, so
+  `[coarse, record_id]` SPLITS every true pair. Measured on the 25M person shape
+  (truth keyed on `cluster_id`, `record_id` unique): recall 1.0 -> 0.49 /
+  F1 0.893 -> 0.653. Now mirrors the #721/#876 exact-matchkey gate -- columns with
+  `cardinality_ratio >= 1.0` are excluded from every reducer branch (full-value
+  identity AND substring-prefix; a prefix of a unique key is just as
+  recall-splitting). A real identity field (email, shared by duplicates) is still
+  preferred; a coarse pass with only a surrogate available falls back to the
+  recall-safe name initial or is dropped. Also threads `n_rows_full` through
+  `scripts/bench_fs_out_of_core_scale.py` so the bench extrapolates each pass's
+  Sum C(block,2) to the full population and actually exercises the pair-budget gate.
 
 ## [3.10.0] - 2026-07-24
 

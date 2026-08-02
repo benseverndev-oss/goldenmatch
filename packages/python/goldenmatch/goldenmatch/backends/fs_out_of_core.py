@@ -96,17 +96,91 @@ def _ooc_debug_on() -> bool:
     )
 
 
-def fs_out_of_core_enabled() -> bool:
-    """Opt-in scale switch for the out-of-core FS path (default OFF).
-
-    `GOLDENMATCH_FS_OUT_OF_CORE=1` routes the FS bucket scorer through
-    `score_fs_out_of_core` with a disk-resident prepared table instead of the
-    in-memory `score_buckets` — the separate, opt-in scale option for datasets
-    past the ~40M single-box wall. Off by default: byte-identical to today for
-    every existing run."""
+def _fs_out_of_core_legacy_flag() -> bool:
+    """The legacy standalone opt-in ``GOLDENMATCH_FS_OUT_OF_CORE=1``. Retained as
+    an alias for ``GOLDENMATCH_FS_BLOCK_SOURCE=duckdb`` (see
+    ``resolve_fs_block_source``) so existing runs/benches keep working."""
     return os.environ.get("GOLDENMATCH_FS_OUT_OF_CORE", "").strip().lower() in (
         "1", "true", "yes", "on",
     )
+
+
+def resolve_fs_block_source() -> str:
+    """Single resolver for HOW the FS (probabilistic) bucket route sources its
+    blocks — the one knob that governs both bounded-streaming lanes so callers
+    (and users) reason about one env var, not two.
+
+    Returns one of:
+      - ``"eager"``  — today's default: materialize the slim frame + eager
+        ``partition_by`` into all ``n_buckets`` (byte-identical to pre-streaming).
+      - ``"frame"``  — in-RAM bounded streaming (the spec's ``FrameBlockSource``):
+        slice one bucket off the keyed frame on demand inside ``score_buckets``,
+        holding only ``max_workers`` slices live. Lower peak, same box.
+      - ``"sequential"`` — in-RAM: score the resident frame through the SAME tuned
+        ``score_buckets_arrow`` the normal pipeline uses (native FS kernel +
+        value-dedup / small-block batching), emit an Arrow pair stream, then ONE
+        Rust WCC stitch + O(N) streamed parquet output (``run_fs_dedupe_sequential``).
+        No DuckDB, no on-disk sorted scans. Distinct from ``"frame"`` only in the
+        streamed *output* (O(N) parquet vs in-memory result frames); both score
+        via ``score_buckets`` — pair ``"frame"`` with this route for the bounded
+        ``FrameBlockSource`` scoring partition.
+      - ``"duckdb"`` — out-of-core: spill the prepared table to a DuckDB file and
+        stream blocks + O(N) output (``score_fs_out_of_core`` /
+        ``run_fs_dedupe_streaming``). The ≥40M single-box scale path.
+
+    Resolution (``GOLDENMATCH_FS_BLOCK_SOURCE`` is authoritative when set to a
+    recognized value; the legacy ``GOLDENMATCH_FS_OUT_OF_CORE=1`` is honored only
+    when ``GOLDENMATCH_FS_BLOCK_SOURCE`` is unset/empty):
+      - ``FS_BLOCK_SOURCE=frame`` → ``"frame"``
+      - ``FS_BLOCK_SOURCE=sequential`` → ``"sequential"``
+      - ``FS_BLOCK_SOURCE=duckdb`` → ``"duckdb"``
+      - ``FS_BLOCK_SOURCE=eager`` / ``auto`` / unset → ``"eager"`` (+ legacy alias)
+
+    ``auto`` currently resolves to ``eager`` — the measured RAM-floor
+    auto-escalation to ``sequential``/``duckdb`` is the documented Phase-1
+    follow-on; until it lands (and the default is flipped on a CI scale gate)
+    ``auto`` stays byte-identical to today."""
+    v = os.environ.get("GOLDENMATCH_FS_BLOCK_SOURCE", "").strip().lower()
+    if v == "frame":
+        return "frame"
+    if v == "sequential":
+        return "sequential"
+    if v == "duckdb":
+        return "duckdb"
+    if v in ("", "auto", "eager"):
+        # Unset/auto/eager: honor the legacy standalone flag, else eager.
+        return "duckdb" if _fs_out_of_core_legacy_flag() else "eager"
+    # Unrecognized value: fail safe to eager (never silently pick a scale path),
+    # but still honor the legacy flag so it can't be masked by a typo'd source.
+    return "duckdb" if _fs_out_of_core_legacy_flag() else "eager"
+
+
+def fs_out_of_core_enabled() -> bool:
+    """Whether the FS bucket scorer routes through the OUT-OF-CORE DuckDB path
+    (``score_fs_out_of_core`` / ``run_fs_dedupe_streaming``) instead of the
+    in-memory ``score_buckets`` — the opt-in scale option for datasets past the
+    ~40M single-box wall. Default OFF (byte-identical to today).
+
+    Now a thin view over ``resolve_fs_block_source`` so the two historical env
+    vars (``GOLDENMATCH_FS_OUT_OF_CORE=1`` and ``GOLDENMATCH_FS_BLOCK_SOURCE=duckdb``)
+    are one decision, not two independent booleans."""
+    return resolve_fs_block_source() == "duckdb"
+
+
+def fs_streaming_route() -> str | None:
+    """Which END-TO-END streaming FS dedupe orchestrator (score → WCC → parquet)
+    the current env selects, or ``None`` for the default in-memory pipeline.
+
+      - ``"sequential"`` → ``run_fs_dedupe_sequential`` (in-RAM Arrow/Rust batches,
+        ``GOLDENMATCH_FS_BLOCK_SOURCE=sequential``).
+      - ``"duckdb"`` → ``run_fs_dedupe_streaming`` (out-of-core DuckDB spill,
+        ``GOLDENMATCH_FS_OUT_OF_CORE=1`` / ``GOLDENMATCH_FS_BLOCK_SOURCE=duckdb``).
+
+    ``eager``/``frame`` are NOT end-to-end streaming routes (``frame`` only changes
+    ``score_buckets``'s in-bucket residency), so they return ``None`` and the
+    caller keeps the default pipeline."""
+    src = resolve_fs_block_source()
+    return src if src in ("sequential", "duckdb") else None
 
 
 def _fs_ooc_arrow_cluster_enabled() -> bool:
@@ -492,7 +566,7 @@ def score_fs_out_of_core(
                 reader = con.execute(
                     "SELECT p.*, m.__blk__ AS __blk__ FROM prep p "
                     "JOIN blkmap m ON p.__row_id__ = m.__row_id__ ORDER BY m.__blk__"
-                ).fetch_record_batch(1 << 16)
+                ).to_arrow_reader(1 << 16)
 
                 # 3) Split the sorted stream into blocks by __blk__ runs, buffer
                 #    them, and score each WAVE in parallel. partition_by keeps row
@@ -630,7 +704,7 @@ def stream_fs_dedupe_output(
     golden_tbl = con.execute(
         f"SELECT {_sel}, a.__cluster_id__ {base_join} "
         f"WHERE s.n > 1 AND s.n <= {int(max_cluster_size)}"
-    ).fetch_arrow_table()
+    ).to_arrow_table()
     golden_count = 0
     if golden_tbl.num_rows:
         multi_df = pl.from_arrow(golden_tbl)
@@ -687,6 +761,114 @@ def _prep_all_ids(con: Any) -> Sequence[int]:
     return [r[0] for r in con.execute("SELECT __row_id__ FROM prep").fetchall()]
 
 
+def _prep_all_ids_frame(table: Any) -> Sequence[int]:
+    """The pyarrow analogue of ``_prep_all_ids``: the full ``__row_id__`` set off a
+    RESIDENT ``pa.Table`` (no DuckDB, no polars) — a ``range`` when contiguous
+    (min..max, no gaps — the pipeline's dense global row index), else the explicit
+    list. ``__row_id__`` is unique per row, so ``max - min + 1 == count`` iff
+    exactly ``{min..max}``."""
+    import pyarrow.compute as pc
+
+    col = table.column("__row_id__")
+    n = len(col)
+    if not n:
+        return []
+    lo, hi = int(pc.min(col).as_py()), int(pc.max(col).as_py())
+    if hi - lo + 1 == n:
+        return range(lo, hi + 1)
+    return col.to_pylist()
+
+
+def _stream_fs_dedupe_output_arrow(
+    frame: Any, assignments: Any, config: Any, out_dir: str
+) -> dict:
+    """DuckDB-FREE, POLARS-FREE O(N) dedupe output for the in-RAM sequential path.
+
+    unique/dupes (the O(N) bulk) are built in pure pyarrow — the resident
+    ``frame`` (``pa.Table``) is joined to the ``(row_id, cluster_id)`` assignments
+    + per-cluster sizes with ``pa.Table.join`` and written via ``ParquetWriter``,
+    so no polars touches the row-count-sized data. Only ``golden`` (the BOUNDED
+    non-oversized multi-member subset) is handed to the polars-native
+    ``build_golden_records_batch`` core primitive (an Arrow golden builder is a
+    separate core port). Same unique=singleton / dupes=multi(oversized-incl) /
+    golden=non-oversized-multi semantics + ``__xform_*`` exclusion as
+    ``stream_fs_dedupe_output``."""
+    import os as _os
+
+    import pyarrow as pa
+    import pyarrow.compute as pc
+    import pyarrow.parquet as _pq
+
+    from goldenmatch.core.golden import build_golden_records_batch
+
+    max_cluster_size = 100
+    golden_rules = getattr(config, "golden_rules", None)
+    if golden_rules is not None:
+        max_cluster_size = golden_rules.max_cluster_size
+
+    if isinstance(assignments, pa.Table):
+        asn = assignments
+    else:
+        asn = pa.table(
+            {
+                "__row_id__": pa.array([int(r) for r, _ in assignments], pa.int64()),
+                "__cluster_id__": pa.array(
+                    [int(c) for _, c in assignments], pa.int64()
+                ),
+            }
+        )
+
+    record_cols = [c for c in frame.column_names if not c.startswith("__xform_")]
+    sizes = asn.group_by("__cluster_id__").aggregate([("__row_id__", "count")])
+    sizes = sizes.rename_columns(
+        ["__cluster_id__" if c == "__cluster_id__" else "__n__" for c in sizes.column_names]
+    )
+
+    # frame ⨝ assignments ⨝ sizes -- pure Arrow inner joins.
+    joined = frame.join(asn, keys="__row_id__", join_type="inner").join(
+        sizes, keys="__cluster_id__", join_type="inner"
+    )
+    n_col = joined.column("__n__")
+
+    _os.makedirs(out_dir, exist_ok=True)
+    unique_path = _os.path.join(out_dir, "unique.parquet")
+    dupes_path = _os.path.join(out_dir, "dupes.parquet")
+    golden_path = _os.path.join(out_dir, "golden.parquet")
+
+    unique_tbl = joined.filter(pc.equal(n_col, 1)).select(record_cols)
+    dupes_tbl = joined.filter(pc.greater(n_col, 1)).select(
+        [*record_cols, "__cluster_id__"]
+    )
+    _pq.write_table(unique_tbl, unique_path)
+    _pq.write_table(dupes_tbl, dupes_path)
+
+    # golden = non-oversized multi-member; BOUNDED subset -> polars core builder.
+    golden_tbl = joined.filter(
+        pc.and_(pc.greater(n_col, 1), pc.less_equal(n_col, int(max_cluster_size)))
+    ).select([*record_cols, "__cluster_id__"])
+    golden_count = 0
+    if golden_tbl.num_rows:
+        import polars as pl
+
+        records = build_golden_records_batch(
+            pl.from_arrow(golden_tbl),
+            golden_rules if golden_rules is not None else _default_golden_rules(),
+        )
+        golden_count = len(records)
+        pl.DataFrame(records).write_parquet(golden_path)
+    elif _os.path.exists(golden_path):
+        _os.unlink(golden_path)
+
+    return {
+        "unique_path": unique_path,
+        "dupes_path": dupes_path,
+        "golden_path": golden_path if golden_count else None,
+        "unique_count": unique_tbl.num_rows,
+        "dupes_count": dupes_tbl.num_rows,
+        "golden_count": golden_count,
+    }
+
+
 def _cluster_python(
     con: Any,
     pairs: list[tuple[int, int, float]],
@@ -709,7 +891,7 @@ def _cluster_python(
 
 
 def _cluster_arrow_native(
-    con: Any,
+    all_ids: Any,
     pair_table: Any,
     max_cluster_size: int,
     link_threshold: float | None,
@@ -717,33 +899,34 @@ def _cluster_arrow_native(
     """Arrow-native path: dedup the ``PAIR_STREAM`` table with the Rust
     ``dedup_pairs_arrow`` kernel, then cluster with ``build_clusters_arrow_native``
     (Rust Union-Find via the C Data Interface — no Python ``dict[int, dict]``).
-    Returns ``(assignments pa.Table {__row_id__, __cluster_id__}, n_pairs)`` — the
-    Arrow assignments feed ``stream_fs_dedupe_output`` directly, so the scored
-    pairs never become Python objects here."""
-    import polars as pl
+    ``all_ids`` is the full row-id set (range/list) for singleton folding —
+    supplied by the caller (from DuckDB via ``_prep_all_ids(con)`` on the
+    out-of-core path, or straight off the resident polars frame on the in-RAM
+    sequential path), so this clusterer is DuckDB-agnostic. Returns
+    ``(assignments pa.Table {__row_id__, __cluster_id__}, n_pairs)``."""
     import pyarrow as pa
+    import pyarrow.compute as pc
 
     from goldenmatch.core.cluster import build_clusters_arrow_native
-    from goldenmatch.core.pairs import dedup_pairs_max_score_arrow
+    from goldenmatch.core.pairs import dedup_pairs_max_score_arrow_table
 
-    # Cross-pass dedup: canonical (min, max), max score — the Arrow-native
+    # Cross-pass dedup: canonical (min, max), max score via the Rust
+    # ``dedup_pairs_arrow`` kernel over the pa.Table (NO polars) — the Arrow-native
     # replacement for the Python `seen` set. Union-Find membership is invariant to
     # which duplicate's score survives, so this is cluster-parity-safe.
-    pairs_pl = pl.from_arrow(pair_table)
-    if not isinstance(pairs_pl, pl.DataFrame):
-        pairs_pl = pl.DataFrame(pairs_pl)
-    pairs_pl = dedup_pairs_max_score_arrow(pairs_pl)
+    pairs_tbl = dedup_pairs_max_score_arrow_table(pair_table)
     if link_threshold is not None:
         # Cluster only linked pairs; sub-link pairs are review candidates the
         # in-memory pipeline surfaces separately and never clusters. Filtering
         # AFTER max-score dedup means a pair links iff its BEST cross-pass score
         # clears the cut (== per-wave filter-then-dedup, since max is monotone).
-        pairs_pl = pairs_pl.filter(pl.col("score") >= link_threshold)
-    n_pairs = pairs_pl.height
+        pairs_tbl = pairs_tbl.filter(
+            pc.greater_equal(pairs_tbl.column("score"), link_threshold)
+        )
+    n_pairs = pairs_tbl.num_rows
 
-    all_ids = _prep_all_ids(con)
     cf = build_clusters_arrow_native(
-        pairs_pl, all_ids=all_ids, max_cluster_size=max_cluster_size, backend="arrow",
+        pairs_tbl, all_ids=all_ids, max_cluster_size=max_cluster_size, backend="arrow",
     )
     # ClusterFrames.assignments is {cluster_id, member_id} (pa.Table on the native
     # arrow lane, pl.DataFrame on the columnar fallback). Normalise to a pa.Table
@@ -823,7 +1006,7 @@ def run_fs_dedupe_streaming(
         try:
             if arrow_stream:
                 assignments, n_pairs = _cluster_arrow_native(
-                    con, pairs, max_cluster_size, link_threshold,
+                    _prep_all_ids(con), pairs, max_cluster_size, link_threshold,
                 )
             else:
                 assignments, n_pairs = _cluster_python(
@@ -844,3 +1027,158 @@ def run_fs_dedupe_streaming(
                 # Best-effort cleanup: a temp DB/WAL unlink failure is non-fatal
                 # (the OS reaps the tempdir), never break the run.
                 pass
+
+
+def run_fs_dedupe_sequential(
+    prepared_df: Any,
+    blocking_config: BlockingConfig,
+    mk: MatchkeyConfig,
+    em_result,
+    config: Any,
+    out_dir: str,
+    *,
+    matched_pairs: set[tuple[int, int]] | None = None,
+    target_ids: set[int] | None = None,
+    link_threshold: float | None = None,
+) -> dict:
+    """End-to-end IN-RAM SEQUENTIAL FS dedupe over the resident Arrow frame.
+
+    The score -> cluster back-half runs through the **fused Fellegi-Sunter Rust
+    kernel** (``run_match_fused_fs_arrow`` / ``…_multipass_arrow`` ->
+    ``match_fused_fs``): block-key grouping, per-block FS scoring, AND the
+    connected-components WCC all happen inside ONE Rust call that returns
+    ``(__row_id__, __cluster_id__)`` cluster assignments directly — no Python block
+    orchestration, no candidate-pair list, no separate edge-stream + WCC pass. This
+    is the same arrow-native/Rust engine the in-memory dedupe short-circuit
+    (``_run_fused_fs_short_circuit``) uses; the streaming path just feeds it the
+    resident frame and streams the assignments to parquet. When the config is
+    outside the fused kernel's covered surface (or the native kernel is absent), it
+    scores through the tuned ``score_buckets_arrow`` (the SAME native-kernel bucket
+    scorer the normal in-memory pipeline uses) + a Rust WCC over the Arrow pair
+    stream — NOT a hand-rolled scorer.
+
+    Output reuses the tested ``_stream_fs_dedupe_output_arrow`` (O(N) unique/dupes
+    via pure pyarrow, golden only on the bounded multi-member subset), so the
+    result shape matches ``run_fs_dedupe_streaming`` exactly. ``link_threshold``
+    semantics match ``run_fs_dedupe_streaming`` (cluster only pairs whose best
+    cross-pass score clears the cut).
+
+    **No DuckDB, no polars** (except the bounded golden-record builder, an existing
+    polars core primitive fed only the multi-member subset). The fast single-box
+    path for frames that FIT in RAM; ``run_fs_dedupe_streaming`` is the
+    DuckDB-spilled variant past RAM."""
+    from goldenmatch.core.frame import is_polars_lazyframe
+    from goldenmatch.core.frame import to_frame as _tf
+
+    matched_pairs = set(matched_pairs or ())
+    max_cluster_size = 100
+    if getattr(config, "golden_rules", None) is not None:
+        max_cluster_size = config.golden_rules.max_cluster_size
+
+    # Materialize the resident record table (pa.Table) ONCE, then share it across
+    # scoring + clustering + streamed output (a single frame conversion).
+    _fw = _tf(prepared_df)
+    if is_polars_lazyframe(_fw.native):
+        _fw = _tf(_fw.native.collect())
+    base = _fw.to_arrow()
+
+    # ARROW-NATIVE / RUST FUSED PATH: grouping + FS scoring + connected-components
+    # in one kernel call -> cluster assignments directly. dedupe-only (no
+    # target_ids / matched_pairs exclude), which is exactly how the streaming
+    # dedupe caller invokes this.
+    assignments = None
+    n_pairs = None
+    if not target_ids and not matched_pairs:
+        assignments = _fused_fs_assignments(
+            base, blocking_config, mk, em_result, link_threshold,
+        )
+
+    if assignments is None:
+        # Score through the SAME tuned in-memory bucket scorer the normal pipeline
+        # uses (`score_buckets_arrow` -> native FS kernel + value-dedup/small-block
+        # batching + the bounded `FrameBlockSource` streaming under
+        # GOLDENMATCH_FS_BLOCK_SOURCE=frame) -- NOT a hand-rolled per-wave scorer.
+        # It emits the identical Arrow PAIR_STREAM table, which the Rust WCC
+        # (`_cluster_arrow_native`) consumes unchanged.
+        from goldenmatch.backends.score_buckets import score_buckets_arrow
+
+        pairs = score_buckets_arrow(
+            base, blocking_config, mk, set(matched_pairs),
+            n_buckets=getattr(config, "n_buckets", None),
+            target_ids=target_ids, em_result=em_result,
+        )
+        assignments, n_pairs = _cluster_arrow_native(
+            _prep_all_ids_frame(base), pairs, max_cluster_size, link_threshold,
+        )
+
+    # O(N) unique/dupes streamed to parquet from the resident table (pure pyarrow).
+    res = _stream_fs_dedupe_output_arrow(base, assignments, config, out_dir)
+    res["pairs"] = n_pairs
+    res["streaming"] = True
+    res["sequential"] = True
+    res["fused"] = n_pairs is None
+    res["output_dir"] = out_dir
+    return res
+
+
+def _fused_fs_assignments(
+    base: Any,
+    blocking_config: BlockingConfig,
+    mk: MatchkeyConfig,
+    em_result: Any,
+    link_threshold: float | None,
+) -> Any | None:
+    """Cluster the resident frame via the fused FS Rust kernel — grouping + FS
+    scoring + connected-components in ONE ``match_fused_fs`` call — returning a
+    ``(__row_id__, __cluster_id__)`` Table remapped to ``base``'s real
+    ``__row_id__`` values, or ``None`` when the config is outside the fused
+    kernel's covered surface / the native kernel is absent (caller falls back).
+
+    The kernel emits links at the REAL ``link_threshold`` cut and CCs them, so the
+    resulting partition matches the classic ``score -> filter(>=link) -> cluster``
+    split. Column gathering + the ``GoldenMatchConfig`` shape mirror the in-memory
+    ``_run_fused_fs_short_circuit`` exactly (byte-parity by construction)."""
+    from goldenmatch.config.schemas import GoldenMatchConfig
+    from goldenmatch.core.frame import to_frame as _tf
+    from goldenmatch.core.fused_match import (
+        match_fused_fs_multipass_ready,
+        match_fused_fs_ready,
+        run_match_fused_fs_arrow,
+        run_match_fused_fs_multipass_arrow,
+    )
+
+    # Cut at the REAL link threshold (the caller's `mk` carries the review cut;
+    # clustering uses `link_threshold`). Kernel computes it from EM when None.
+    fused_mk = (
+        mk.model_copy(update={"link_threshold": float(link_threshold)})
+        if link_threshold is not None
+        else mk
+    )
+    cfg = GoldenMatchConfig(blocking=blocking_config, matchkeys=[fused_mk])
+    if not (match_fused_fs_ready(cfg) or match_fused_fs_multipass_ready(cfg)):
+        return None
+
+    # Gather the source columns the kernel reads as Arrow arrays (blocking key
+    # fields + comparison fields + NE fields), via the same _fused_needed_src_cols
+    # derivation the in-memory short-circuit uses.
+    from goldenmatch.core.pipeline import _fused_needed_src_cols
+
+    _fwbase = _tf(base)
+    cols = [c for c in _fused_needed_src_cols(cfg) if c in _fwbase.columns]
+    columns = {c: _fwbase.column(c).to_arrow() for c in cols}
+    n_rows = base.num_rows
+    fused_tbl = run_match_fused_fs_arrow(
+        columns, cfg, em_result, n_rows=n_rows
+    ) or run_match_fused_fs_multipass_arrow(
+        columns, cfg, em_result, n_rows=n_rows
+    )
+    if fused_tbl is None:
+        return None
+
+    # The kernel keys clusters by POSITIONAL row id (0..n-1). Remap to base's real
+    # __row_id__ (position i -> base.__row_id__[i]) so the streamed output joins
+    # correctly even when __row_id__ is gapped (post-quarantine).
+    pos = fused_tbl.column("__row_id__")
+    real_ids = base.column("__row_id__").take(pos)
+    idx = fused_tbl.schema.get_field_index("__row_id__")
+    return fused_tbl.set_column(idx, "__row_id__", real_ids)

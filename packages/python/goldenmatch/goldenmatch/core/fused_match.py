@@ -305,7 +305,12 @@ def _fused_fs_matchkey_covered(config: Any) -> bool:
     mks = get_mks() if callable(get_mks) else []
     if len(mks) != 1 or getattr(mks[0], "type", None) != "probabilistic" or not mks[0].fields:
         return False
-    from goldenmatch.core.probabilistic import _FUSED_FS_SCORER_IDS
+    from goldenmatch.core.probabilistic import (
+        _FUSED_FS_NE_SCORER_IDS,
+        _FUSED_FS_SCORER_IDS,
+        _NAME_SCORER_IDS,
+        _fs_name_refdata_available,
+    )
 
     mk = mks[0]
     ne_fields = getattr(mk, "negative_evidence", None) or []
@@ -314,9 +319,26 @@ def _fused_fs_matchkey_covered(config: Any) -> bool:
     )
     if not all(f.field and f.scorer in _FUSED_FS_SCORER_IDS for f in mk.fields):
         return False
+    # Reference-data name scorers (ids 4/5) + ensemble (id 6) are regular-field
+    # only. The fused kernel scores them through `field_similarity` — but ONLY on
+    # a wheel whose fused binary carries that dispatch (FUSED_FS_SUPPORTS_NAME_SCORERS);
+    # an older fused kernel scores ids 4/5/6 via the stateless score_one catch-all,
+    # so a matchkey using one must decline to the classic path there.
+    name_scorers_needed = {f.scorer for f in mk.fields if f.scorer in _NAME_SCORER_IDS}
+    needs_refdata_dispatch = any(
+        f.scorer in _NAME_SCORER_IDS or f.scorer == "ensemble" for f in mk.fields
+    )
     for ne in ne_fields:
-        if ne.scorer not in _FUSED_FS_SCORER_IDS or ne.derive_from:
+        # Fused NE has no reference-data/vector access + validates ids in 0..=3,
+        # so NE stays the score_one base set even though the REGULAR-field set was
+        # widened to name/ensemble.
+        if ne.scorer not in _FUSED_FS_NE_SCORER_IDS or ne.derive_from:
             return False
+    # Refdata pack must be LOADED for a name-scorer field (else the injected table
+    # is empty and the kernel degrades to plain JW, diverging from the classic
+    # path's own is_available gate). Pure-config, no native probe.
+    if name_scorers_needed and not _fs_name_refdata_available(name_scorers_needed):
+        return False
     # Missing-as-unobserved changes every FS matchkey, so always capability-
     # probe; older wheels silently map nulls to disagreement/level 0.
     if mk.fields:
@@ -337,6 +359,10 @@ def _fused_fs_matchkey_covered(config: Any) -> bool:
             return False
         if uses_level_thresholds and not getattr(
             mod, "FUSED_FS_SUPPORTS_LEVEL_THRESHOLDS", False
+        ):
+            return False
+        if needs_refdata_dispatch and not getattr(
+            mod, "FUSED_FS_SUPPORTS_NAME_SCORERS", False
         ):
             return False
     return True
@@ -389,6 +415,8 @@ def run_match_fused_fs_arrow(
     """
     from goldenmatch.core.probabilistic import (
         _FUSED_FS_SCORER_IDS,
+        _NAME_SCORER_IDS,
+        _ensure_fs_name_refdata,
         _field_values_from_list,
         _fs_calibration_mode,
         compute_thresholds,
@@ -402,6 +430,12 @@ def run_match_fused_fs_arrow(
 
     key_cfg = config.blocking.keys[0]
     mk = config.get_matchkeys()[0]
+    # Register the census / alias tables once per process when a name scorer is in
+    # play (kernel ids 4/5) — the fused kernel reads the SAME process-global tables
+    # the classic scorer does. Cheap no-op once registered; the readiness gate
+    # already required the pack loaded + FUSED_FS_SUPPORTS_NAME_SCORERS.
+    if any(f.scorer in _NAME_SCORER_IDS for f in mk.fields):
+        _ensure_fs_name_refdata(native_module())
     ne_fields = mk.negative_evidence or []
     src_cols = list(
         dict.fromkeys(

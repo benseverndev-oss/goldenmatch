@@ -487,6 +487,65 @@ def test_pair_gate_prefers_identity_field_reducer(monkeypatch):
     assert compound.field_transforms == {"city": ["strip"], "email": []}
 
 
+def test_pair_gate_excludes_unique_surrogate_reducer(monkeypatch):
+    # THE tight-config recall bug (#721/#876 mirror): a UNIQUE surrogate key
+    # (record_id, cardinality_ratio 1.0) collapses any coarse pass to singletons,
+    # so the un-guarded gate picks it as the strongest full-value identity reducer
+    # -- but duplicates do NOT share record_id, so [city, record_id] SPLITS every
+    # true pair (measured 25M person: recall 1.0 -> 0.49). The guard excludes it
+    # from every reducer branch, so the coarse pass is bounded with the recall-safe
+    # surname initial instead (or dropped), never with the surrogate.
+    monkeypatch.setenv(ON, "1")
+    monkeypatch.setenv("GOLDENMATCH_FS_MAX_PASS_PAIRS", "5")
+    df = pl.DataFrame({
+        "city": ["Xtown"] * 6,
+        "surname": ["Ash", "Bell", "Cole", "Dean", "East", "Frost"],
+        "record_id": [f"r{i}" for i in range(6)],  # unique surrogate PK
+    })
+    profs = [
+        _p("city", "geo"),
+        _p("surname", "name"),
+        _p("record_id", "identifier", card=1.0),  # perfect surrogate -> EXCLUDE
+    ]
+    out = _bound_probabilistic_blocking_pairs(_coarse_blocking("city"), profs, df)
+    compound = next((p for p in (out.passes or []) if set(p.fields) != {"city"}), None)
+    assert compound is not None, "coarse pass must be bounded, not left over budget"
+    assert "record_id" not in compound.fields, (
+        "unique surrogate must NOT be selected as an identity reducer -- it splits "
+        "true pairs"
+    )
+    # Falls back to the recall-safe surname initial.
+    assert set(compound.fields) == {"city", "surname"}
+    assert compound.field_transforms == {"city": ["strip"], "surname": ["substring:0:1"]}
+
+
+def test_pair_gate_prefers_real_identity_over_surrogate(monkeypatch):
+    # With BOTH a real identity field (email, shared by duplicates) and a unique
+    # surrogate (record_id) present, the gate compounds with EMAIL at full value --
+    # the surrogate is skipped even though it too would collapse the block, because
+    # only email keeps true pairs together.
+    monkeypatch.setenv(ON, "1")
+    monkeypatch.setenv("GOLDENMATCH_FS_MAX_PASS_PAIRS", "5")
+    df = pl.DataFrame({
+        "city": ["Xtown"] * 6,
+        "surname": ["Ash", "Bell", "Cole", "Dean", "East", "Frost"],
+        "email": [f"u{i}@x.com" for i in range(6)],
+        "record_id": [f"r{i}" for i in range(6)],
+    })
+    profs = [
+        _p("city", "geo"),
+        _p("surname", "name"),
+        _p("email", "email", card=0.9),          # real identity -> reducer
+        _p("record_id", "identifier", card=1.0),  # surrogate -> excluded
+    ]
+    out = _bound_probabilistic_blocking_pairs(_coarse_blocking("city"), profs, df)
+    compound = next((p for p in (out.passes or []) if set(p.fields) != {"city"}), None)
+    assert compound is not None
+    assert set(compound.fields) == {"city", "email"}
+    assert compound.field_transforms == {"city": ["strip"], "email": []}
+    assert "record_id" not in compound.fields
+
+
 def test_pair_gate_drops_coarse_pass_when_no_reducer_helps(monkeypatch):
     # surname is constant -> the [city, surname] compound is STILL one 15-pair
     # block, so no reducer brings city under budget -> the coarse pass is DROPPED,

@@ -462,3 +462,156 @@ def test_dedupe_to_parquet_streaming_parity_with_in_memory(tmp_path, monkeypatch
 
     # Both index rows 1..N in ingest order, so row_id partitions are comparable.
     assert stream_parts == sorted(mem_parts)
+
+
+# ── resolve_fs_block_source: the single knob unifying the two streaming lanes ──
+
+def test_resolve_fs_block_source_default_is_eager(monkeypatch):
+    from goldenmatch.backends.fs_out_of_core import (
+        fs_out_of_core_enabled,
+        resolve_fs_block_source,
+    )
+
+    monkeypatch.delenv("GOLDENMATCH_FS_BLOCK_SOURCE", raising=False)
+    monkeypatch.delenv("GOLDENMATCH_FS_OUT_OF_CORE", raising=False)
+    assert resolve_fs_block_source() == "eager"
+    assert fs_out_of_core_enabled() is False
+
+
+@pytest.mark.parametrize(
+    "block_source,expected",
+    [("frame", "frame"), ("duckdb", "duckdb"), ("eager", "eager"),
+     ("sequential", "sequential"), (" Sequential ", "sequential"),
+     ("auto", "eager"), ("AUTO", "eager"), (" DuckDB ", "duckdb"),
+     ("nonsense", "eager")],
+)
+def test_resolve_fs_block_source_reads_block_source_env(
+    monkeypatch, block_source, expected
+):
+    from goldenmatch.backends.fs_out_of_core import resolve_fs_block_source
+
+    monkeypatch.delenv("GOLDENMATCH_FS_OUT_OF_CORE", raising=False)
+    monkeypatch.setenv("GOLDENMATCH_FS_BLOCK_SOURCE", block_source)
+    assert resolve_fs_block_source() == expected
+
+
+def test_resolve_fs_block_source_legacy_out_of_core_alias(monkeypatch):
+    """GOLDENMATCH_FS_OUT_OF_CORE=1 is honored as a duckdb alias when
+    GOLDENMATCH_FS_BLOCK_SOURCE is unset/auto/eager (back-compat)."""
+    from goldenmatch.backends.fs_out_of_core import (
+        fs_out_of_core_enabled,
+        resolve_fs_block_source,
+    )
+
+    monkeypatch.delenv("GOLDENMATCH_FS_BLOCK_SOURCE", raising=False)
+    monkeypatch.setenv("GOLDENMATCH_FS_OUT_OF_CORE", "1")
+    assert resolve_fs_block_source() == "duckdb"
+    assert fs_out_of_core_enabled() is True
+
+    # An explicit recognized FS_BLOCK_SOURCE wins over the legacy flag.
+    monkeypatch.setenv("GOLDENMATCH_FS_BLOCK_SOURCE", "frame")
+    assert resolve_fs_block_source() == "frame"
+    assert fs_out_of_core_enabled() is False
+
+
+def test_block_source_frame_drives_bucket_streaming(monkeypatch):
+    """score_buckets._fs_bounded_stream_enabled reads the SAME resolver, so
+    FS_BLOCK_SOURCE=frame turns on in-RAM bounded bucket streaming."""
+    from goldenmatch.backends.score_buckets import _fs_bounded_stream_enabled
+
+    monkeypatch.delenv("GOLDENMATCH_FS_OUT_OF_CORE", raising=False)
+    monkeypatch.setenv("GOLDENMATCH_FS_BLOCK_SOURCE", "frame")
+    assert _fs_bounded_stream_enabled() is True
+    # duckdb / eager are NOT the in-bucket streaming lane.
+    monkeypatch.setenv("GOLDENMATCH_FS_BLOCK_SOURCE", "duckdb")
+    assert _fs_bounded_stream_enabled() is False
+    monkeypatch.setenv("GOLDENMATCH_FS_BLOCK_SOURCE", "auto")
+    assert _fs_bounded_stream_enabled() is False
+
+
+def test_end_to_end_sequential_dedupe(tmp_path):
+    """run_fs_dedupe_sequential: in-RAM score -> Rust WCC -> streamed parquet.
+    Rows preserved, planted dups found, a golden per multi-member cluster."""
+    import types
+
+    from goldenmatch.backends.fs_out_of_core import run_fs_dedupe_sequential
+
+    df = _bigger_df()
+    mk = _make_probabilistic_mk()
+    blocking = BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])])
+    em = _train(df, blocking, mk)
+    cfg = types.SimpleNamespace(golden_rules=None)
+
+    res = run_fs_dedupe_sequential(df, blocking, mk, em, cfg, str(tmp_path))
+
+    assert res["sequential"] is True
+    assert res["unique_count"] + res["dupes_count"] == df.height
+    assert res["dupes_count"] >= 2
+    assert res["golden_count"] >= 1
+
+
+def test_sequential_and_duckdb_orchestrators_agree(tmp_path):
+    """run_fs_dedupe_sequential and run_fs_dedupe_streaming write the SAME
+    unique/dupes/golden counts (same links -> same partition -> same output).
+
+    ``pairs`` is NOT compared: the sequential path clusters through the fused FS
+    Rust kernel, which returns cluster assignments directly and never surfaces an
+    edge count (``pairs`` is ``None``), while the DuckDB path threads an edge
+    stream. The output-row counts are the cross-orchestrator contract."""
+    import types
+
+    from goldenmatch.backends.fs_out_of_core import (
+        run_fs_dedupe_sequential,
+        run_fs_dedupe_streaming,
+    )
+
+    df = _bigger_df()
+    mk = _make_probabilistic_mk()
+    blocking = BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])])
+    em = _train(df, blocking, mk)
+    cfg = types.SimpleNamespace(golden_rules=None)
+
+    seq = run_fs_dedupe_sequential(df, blocking, mk, em, cfg, str(tmp_path / "seq"))
+    ooc = run_fs_dedupe_streaming(df, blocking, mk, em, cfg, str(tmp_path / "ooc"))
+    for k in ("unique_count", "dupes_count", "golden_count"):
+        assert seq[k] == ooc[k], k
+
+
+def test_fs_streaming_route_selects_orchestrator(monkeypatch):
+    from goldenmatch.backends.fs_out_of_core import fs_streaming_route
+
+    monkeypatch.delenv("GOLDENMATCH_FS_OUT_OF_CORE", raising=False)
+    for src, expected in (
+        ("sequential", "sequential"), ("duckdb", "duckdb"),
+        ("frame", None), ("eager", None), ("auto", None),
+    ):
+        monkeypatch.setenv("GOLDENMATCH_FS_BLOCK_SOURCE", src)
+        assert fs_streaming_route() == expected
+
+
+def test_dedupe_to_parquet_sequential_parity_with_in_memory(tmp_path, monkeypatch):
+    """dedupe_to_parquet under GOLDENMATCH_FS_BLOCK_SOURCE=sequential partitions
+    the SAME records as the default in-memory FS route."""
+    import polars as pl
+    from goldenmatch import dedupe_df, dedupe_to_parquet
+
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+    monkeypatch.delenv("GOLDENMATCH_FS_OUT_OF_CORE", raising=False)
+
+    csv_path = tmp_path / "people.csv"
+    _make_person_csv(csv_path)
+    df = pl.read_csv(csv_path)
+    cfg = _fs_person_config()
+
+    monkeypatch.setenv("GOLDENMATCH_FS_BLOCK_SOURCE", "eager")
+    mem = dedupe_df(df, config=cfg)
+    mem_parts = _partitions(mem)
+
+    monkeypatch.setenv("GOLDENMATCH_FS_BLOCK_SOURCE", "sequential")
+    out_dir = tmp_path / "out"
+    res = dedupe_to_parquet(str(csv_path), out_dir=str(out_dir), config=cfg)
+    assert res["streaming"] is True
+    assert res["sequential"] is True
+    stream_parts = _partition_set_from_parquet(res["dupes_path"])
+
+    assert stream_parts == sorted(mem_parts)

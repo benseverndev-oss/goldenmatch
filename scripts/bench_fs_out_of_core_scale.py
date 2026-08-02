@@ -93,10 +93,18 @@ class Sampler(threading.Thread):
         self.join(timeout=1)
 
 
-def _fs_config_from_sample(fixture: Path, sample_rows: int = 200_000):
+def _fs_config_from_sample(
+    fixture: Path, n_rows_full: int, sample_rows: int = 200_000
+):
     """Build the FS (probabilistic) config the same way the gm_probabilistic lane
     does -- auto_configure_probabilistic_df on a bounded head sample (auto-config
-    itself only ever samples, so the config is representative and cheap)."""
+    itself only ever samples, so the config is representative and cheap).
+
+    ``n_rows_full`` is threaded to the pair-budget bound so it extrapolates each
+    pass's Sum C(block,2) to the FULL population and prunes oversized passes at
+    scale. WITHOUT it the bound measures pairs at SAMPLE scale (a 66M-at-1.2M pass
+    reads as ~1.8M at a 200K sample), never fires, and the loose 8-pass config
+    inflates the wall ~6x -- exactly the bench artifact this argument fixes."""
     import pyarrow.parquet as pq
     from goldenmatch.core.autoconfig import auto_configure_probabilistic_df
 
@@ -105,7 +113,7 @@ def _fs_config_from_sample(fixture: Path, sample_rows: int = 200_000):
     import pyarrow as pa
 
     sample = pa.Table.from_batches([batch])
-    cfg = auto_configure_probabilistic_df(sample)
+    cfg = auto_configure_probabilistic_df(sample, n_rows_full=n_rows_full)
     for mk in cfg.get_matchkeys():
         if getattr(mk, "type", None) == "weighted":
             mk.rerank = False
@@ -115,7 +123,16 @@ def _fs_config_from_sample(fixture: Path, sample_rows: int = 200_000):
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--rows", type=int, required=True)
-    ap.add_argument("--mode", choices=["streaming", "in_memory"], required=True)
+    ap.add_argument(
+        "--mode",
+        choices=["streaming", "sequential", "in_memory"],
+        required=True,
+        help=(
+            "streaming=DuckDB out-of-core (FS_BLOCK_SOURCE=duckdb); "
+            "sequential=in-RAM Arrow/Rust batches + end-WCC (FS_BLOCK_SOURCE="
+            "sequential); in_memory=default pipeline contrast (EXPECTED OOM at 50M)"
+        ),
+    )
     ap.add_argument("--dupe-rate", type=float, default=0.20)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--workdir", type=Path, default=Path(".bench_fs_ooc"))
@@ -147,7 +164,7 @@ def main() -> None:
         result["fixture_gen_s"] = round(time.perf_counter() - t_gen, 1)
     result["fixture_bytes"] = fixture.stat().st_size
 
-    cfg = _fs_config_from_sample(fixture)
+    cfg = _fs_config_from_sample(fixture, n_rows_full=args.rows)
     _bl = getattr(cfg.blocking, "strategy", None)
     _mks = [m.type for m in cfg.get_matchkeys()]
     result["blocking_strategy"] = _bl
@@ -157,8 +174,14 @@ def main() -> None:
     sampler.start()
     t0 = time.perf_counter()
     try:
-        if args.mode == "streaming":
-            os.environ["GOLDENMATCH_FS_OUT_OF_CORE"] = "1"
+        if args.mode in ("streaming", "sequential"):
+            # streaming -> DuckDB out-of-core; sequential -> in-RAM Arrow/Rust
+            # batches + end-WCC. Both drive dedupe_to_parquet's streaming
+            # short-circuit; only the block-source env differs.
+            os.environ.pop("GOLDENMATCH_FS_OUT_OF_CORE", None)
+            os.environ["GOLDENMATCH_FS_BLOCK_SOURCE"] = (
+                "duckdb" if args.mode == "streaming" else "sequential"
+            )
             # Per-pass scoring progress in the CI log (the heartbeat covers the
             # opaque stages; this narrates the streaming scorer itself).
             os.environ["GOLDENMATCH_FS_OOC_DEBUG"] = "1"
@@ -178,6 +201,7 @@ def main() -> None:
                     "out-of-core path was not exercised"
                 )
         else:  # in_memory contrast
+            os.environ.pop("GOLDENMATCH_FS_BLOCK_SOURCE", None)
             os.environ["GOLDENMATCH_FS_OUT_OF_CORE"] = "0"
             import pyarrow.parquet as pq
             from goldenmatch import dedupe_df

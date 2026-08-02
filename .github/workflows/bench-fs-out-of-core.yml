@@ -19,10 +19,14 @@ on:
         description: "Space-separated row counts to run out-of-core (streaming)"
         required: false
         default: "25000000 50000000"
-      in_memory_scale:
-        description: "Row count for the in-memory OOM contrast (empty to skip)"
+      modes:
+        description: "Space-separated streaming modes to run (sequential=in-RAM pyarrow/Rust batches + end-WCC [the fast default]; streaming=DuckDB out-of-core, the slower past-RAM tier -- add it only when you specifically want the spill comparison)"
         required: false
-        default: "50000000"
+        default: "sequential"
+      in_memory_scale:
+        description: "Row count for the in-memory OOM contrast (default EMPTY = skip; set e.g. 50000000 to run it -- note it OOMs/preempts near 64 GB and can kill the artifact upload)"
+        required: false
+        default: ""
       runner:
         description: "Runner label (needs 64 GB)"
         required: false
@@ -63,22 +67,29 @@ jobs:
       - name: Build native extension (FS kernel)
         run: uv run python scripts/build_native.py
 
-      - name: Out-of-core streaming legs (one isolated subprocess per scale)
+      - name: Streaming legs (one isolated subprocess per scale x mode)
         run: |
           mkdir -p .bench_fs_ooc results
-          for n in ${{ github.event.inputs.scales || '25000000 50000000' }}; do
-            echo "::group::streaming rows=$n"
-            uv run python scripts/bench_fs_out_of_core_scale.py \
-              --rows "$n" --mode streaming \
-              --workdir .bench_fs_ooc --out-json "results/streaming_${n}.json" \
-              || echo "{\"rows\": $n, \"mode\": \"streaming\", \"completed\": false, \"killed\": true}" > "results/streaming_${n}.json"
-            echo "::endgroup::"
+          for m in ${{ github.event.inputs.modes || 'sequential streaming' }}; do
+            for n in ${{ github.event.inputs.scales || '25000000 50000000' }}; do
+              echo "::group::$m rows=$n"
+              uv run python scripts/bench_fs_out_of_core_scale.py \
+                --rows "$n" --mode "$m" \
+                --workdir .bench_fs_ooc --out-json "results/${m}_${n}.json" \
+                || echo "{\"rows\": $n, \"mode\": \"$m\", \"completed\": false, \"killed\": true}" > "results/${m}_${n}.json"
+              echo "::endgroup::"
+            done
           done
 
       - name: In-memory OOM contrast (expected to be killed at 50M)
-        if: ${{ (github.event.inputs.in_memory_scale || '50000000') != '' }}
+        # Skippable: pass an EMPTY in_memory_scale to omit this leg entirely. The
+        # input's own `default: 50000000` supplies the default when unset, so
+        # DON'T re-add a `|| '50000000'` coalesce here -- that would override an
+        # explicit empty value and force the (preemption-prone) 50M leg to run,
+        # whose runner reclaim then kills the artifact upload.
+        if: ${{ inputs.in_memory_scale != '' }}
         run: |
-          n="${{ github.event.inputs.in_memory_scale || '50000000' }}"
+          n="${{ inputs.in_memory_scale }}"
           echo "::group::in_memory rows=$n (expected OOM)"
           uv run python scripts/bench_fs_out_of_core_scale.py \
             --rows "$n" --mode in_memory \
