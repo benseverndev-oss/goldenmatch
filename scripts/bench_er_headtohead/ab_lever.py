@@ -32,16 +32,22 @@ _PANEL = ["person", "febrl3", "ncvr_synthetic", "dblp_acm", "historical_50k"]
 
 
 def _load(name: str):
+    """Load a panel dataset.
+
+    Raises ``KeyError`` on an UNKNOWN dataset name (a typo / config error the
+    gate must NOT silently swallow into a smaller panel). Returns ``None`` only
+    when a KNOWN loader reports the dataset is unavailable (optional dep or
+    vendored file absent -> that dataset is skipped, surfaced by the caller). A
+    real loader exception propagates (a genuine bug, not an expected skip)."""
     from scripts.autoconfig_quality import datasets as D
 
     fn = getattr(D, f"_{name}", None)
     if fn is None:
-        return None
-    try:
-        return fn()
-    except Exception as exc:  # dep/file absent -> skip
-        print(f"  [skip] {name}: {type(exc).__name__}: {exc}", file=sys.stderr)
-        return None
+        raise KeyError(
+            f"unknown panel dataset {name!r} "
+            f"(no loader _{name} in scripts.autoconfig_quality.datasets)"
+        )
+    return fn()  # loader returns None when its dep/vendored file is absent -> skip
 
 
 def _f1(name: str) -> dict | None:
@@ -79,15 +85,30 @@ def main() -> int:
     os.environ["GOLDENMATCH_AUTOCONFIG_MEMORY"] = "0"
     datasets = [d.strip() for d in args.datasets.split(",") if d.strip()]
 
-    rows: list[tuple[str, dict | None, dict | None]] = []
+    rows: list[tuple[str, dict, dict]] = []
+    skipped: list[str] = []
     for name in datasets:
+        # KeyError (unknown name) intentionally propagates -- a typo must not
+        # silently shrink the panel. A None result = a known-unavailable dataset.
         os.environ[args.env] = args.off
         off = _f1(name)
         if off is None:
+            skipped.append(name)
             continue
         os.environ[args.env] = args.on
         on = _f1(name)
+        assert on is not None, f"{name}: measurable OFF but unmeasurable ON"
         rows.append((name, off, on))
+
+    if skipped:
+        print(f"[skipped] {len(skipped)} unavailable dataset(s): {', '.join(skipped)}",
+              file=sys.stderr)
+    # A regression gate that measured NOTHING must FAIL, never PASS -- an empty
+    # panel is a broken environment, not a clean bill of health.
+    if not rows:
+        print(f"\nGATE: FAIL — 0 datasets measured (requested {len(datasets)}, "
+              f"all unavailable). A gate that measures nothing cannot PASS.")
+        return 1
 
     print(f"\nA/B lever: {args.env}  (OFF={args.off}  ON={args.on})  tol={args.tol}")
     print(f"{'dataset':18s} {'F1 off':>8s} {'F1 on':>8s} {'dF1':>8s} "
