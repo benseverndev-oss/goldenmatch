@@ -37,11 +37,25 @@ alone regressed):
 **MEASURED (dedupe_df, flag on vs off):** household_hardneg F1 **0.947 → 1.000
 (+0.053)**; the full panel (febrl3 / ncvr_synthetic / dblp_acm / person /
 historical_50k) is **flat, worst ΔF1 +0.0000** (ab_lever GATE PASS). Re-cluster
-only (no re-scoring). Wired into the default B2c columnar FS route
-(`_score_probabilistic_matchkey`); the out-of-core / arrow-stream / list routes
-keep the fixed cutoff (documented follow-on). Tests:
-`tests/test_fs_refit_threshold.py` (12). Helpers: `probabilistic.fs_refit_threshold`
-(pure valley), `_score_distribution_valley`, `fs_refit_link_threshold` (guarded).
+only (no re-scoring). Tests: `tests/test_fs_refit_threshold.py` (16). Helpers:
+`probabilistic.fs_refit_threshold` (pure valley), `_score_distribution_valley`,
+`fs_refit_link_threshold` (guarded).
+
+**ROUTE-EXTENSION (2026-08-02).** The refit was initially wired into the default
+B2c columnar route only. It now resolves through ONE shared helper
+(`pipeline._maybe_refit_link_threshold`, accepting a pair-list OR a
+`PAIR_STREAM_SCHEMA` table) called on EVERY FS scoring route: B2c columnar,
+arrow-stream, list/batched (the non-native fallback), external-blocks (lsh/ann/
+learned/canopy/SN), and out-of-core. Each computes the refit from its own scored
+pairs (down to the review cut) before the link/review split — same distribution,
+same guarded objective, route-independent. Only the per-block **bench-dump**
+diagnostic path keeps the fixed cutoff (it scores per-block for candidate
+accounting; the refit needs the whole distribution). **Measured (household_hardneg,
+flag on vs off): +0.0529 on ALL of B2c / list-batched / arrow-stream** (the
+non-columnar routes previously kept 0.947); **person flat +0.0000 on all** —
+no-regression preserved per-route. Route-agnostic contract locked by
+`TestMaybeRefitAcrossRoutes` (list==table, flag-off no-op, explicit-threshold
+respected, min-pairs guard).
 
 ---
 

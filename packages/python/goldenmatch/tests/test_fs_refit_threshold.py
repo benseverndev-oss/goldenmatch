@@ -145,3 +145,74 @@ class TestClusterShapeGuard:
             pairs.append((a, a + 1, 0.95))   # true matches at 0.95
         ia = [p[0] for p in pairs]; ib = [p[1] for p in pairs]; sc = [p[2] for p in pairs]
         assert fs_refit_link_threshold(ia, ib, sc, default_link=0.50) == 0.50
+
+
+# ── Route-uniformity: the shared pipeline helper all FS routes call ────────────
+
+
+class TestMaybeRefitAcrossRoutes:
+    """Phase 3a route-extension: every FS scoring route (B2c columnar, arrow-
+    stream, list/batched, out-of-core, external-blocks) resolves its link cutoff
+    through the ONE ``_maybe_refit_link_threshold`` helper, so the refit fires
+    uniformly regardless of route. These lock the helper's route-agnostic contract
+    for BOTH pair representations (list of tuples + pa.Table) and the guards."""
+
+    @staticmethod
+    def _over_merge_pairs():
+        # 15-node weak clique (0.55) + 150 tight true pairs (0.92): a valley
+        # between the bands that cutting shatters -> refit raises the cutoff.
+        pairs = []
+        for i in range(15):
+            for j in range(i + 1, 15):
+                pairs.append((i, j, 0.55))
+        for k in range(150):
+            a = 1000 + 2 * k
+            pairs.append((a, a + 1, 0.92))
+        return pairs
+
+    class _MK:  # minimal matchkey stand-in: no explicit user threshold
+        link_threshold = None
+
+    class _MKExplicit:
+        link_threshold = 0.5
+
+    def _table(self, pairs):
+        import pyarrow as pa
+        return pa.table({
+            "id_a": pa.array([p[0] for p in pairs], pa.int64()),
+            "id_b": pa.array([p[1] for p in pairs], pa.int64()),
+            "score": pa.array([p[2] for p in pairs], pa.float64()),
+        })
+
+    def test_list_and_table_agree(self, monkeypatch):
+        # The list-route and arrow-route representations of the SAME pairs must
+        # resolve to the SAME refit cutoff -- that's what "uniform across routes"
+        # means. Both raise it above the default on the over-merge shape.
+        from goldenmatch.core.pipeline import _maybe_refit_link_threshold
+        monkeypatch.setenv("GOLDENMATCH_FS_REFIT_THRESHOLD", "1")
+        pairs = self._over_merge_pairs()
+        t_list = _maybe_refit_link_threshold(self._MK(), 0.50, pairs=pairs)
+        t_tbl = _maybe_refit_link_threshold(self._MK(), 0.50, table=self._table(pairs))
+        assert t_list == t_tbl
+        assert t_list > 0.50
+
+    def test_flag_off_is_noop_both_forms(self, monkeypatch):
+        from goldenmatch.core.pipeline import _maybe_refit_link_threshold
+        monkeypatch.delenv("GOLDENMATCH_FS_REFIT_THRESHOLD", raising=False)
+        pairs = self._over_merge_pairs()
+        assert _maybe_refit_link_threshold(self._MK(), 0.50, pairs=pairs) == 0.50
+        assert _maybe_refit_link_threshold(self._MK(), 0.50, table=self._table(pairs)) == 0.50
+
+    def test_explicit_user_threshold_is_respected(self, monkeypatch):
+        # A caller-set mk.link_threshold must never be overridden by the refit.
+        from goldenmatch.core.pipeline import _maybe_refit_link_threshold
+        monkeypatch.setenv("GOLDENMATCH_FS_REFIT_THRESHOLD", "1")
+        pairs = self._over_merge_pairs()
+        assert _maybe_refit_link_threshold(self._MKExplicit(), 0.50, pairs=pairs) == 0.50
+
+    def test_below_min_pairs_is_noop(self, monkeypatch):
+        from goldenmatch.core.pipeline import _maybe_refit_link_threshold
+        monkeypatch.setenv("GOLDENMATCH_FS_REFIT_THRESHOLD", "1")
+        tiny = [(0, 1, 0.9), (2, 3, 0.6)]
+        assert len(tiny) < _REFIT_MIN_PAIRS
+        assert _maybe_refit_link_threshold(self._MK(), 0.50, pairs=tiny) == 0.50
