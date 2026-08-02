@@ -773,6 +773,110 @@ def test_bucketed_multipass_agrees_with_sequential(tmp_path):
     )
 
 
+def _output_dict_and_sets(res, tmp_dir):
+    """(counts, unique-rowid-set, dupes-partition-set, golden-rowcount) for an
+    FS output result dict -- the parity surface for comparing the batched output
+    against the resident-join reference."""
+    import polars as pl
+
+    counts = (res["unique_count"], res["dupes_count"], res["golden_count"])
+    uniq = set(pl.read_parquet(res["unique_path"])["__row_id__"].to_list())
+    dupes = _partition_set_from_parquet(res["dupes_path"])
+    gcount = (
+        pl.read_parquet(res["golden_path"]).height
+        if res["golden_path"] is not None
+        else 0
+    )
+    return counts, uniq, dupes, gcount
+
+
+@pytest.mark.parametrize("gapped", [False, True])
+def test_batched_output_equals_resident_join(tmp_path, gapped):
+    """`_stream_fs_dedupe_output_batched` (join-free, Phase 3a) produces the SAME
+    unique/dupes/golden as the resident `_stream_fs_dedupe_output_arrow` join, for
+    BOTH a contiguous `__row_id__` (lo!=0 fast path -- scatter, not slice) and a
+    GAPPED `__row_id__` (the per-batch hash-join fallback). Also locks `__xform_*`
+    exclusion. Tiny batch_rows forces multi-batch streaming incl. a cluster whose
+    members straddle batches (golden built once)."""
+    import types
+
+    import pyarrow as pa
+    from goldenmatch.backends.fs_out_of_core import (
+        _stream_fs_dedupe_output_arrow,
+        _stream_fs_dedupe_output_batched,
+    )
+
+    # Row ids: contiguous {2..6} (lo=2, not 0) or gapped {2,3,7,8,11}.
+    rids = [2, 3, 7, 8, 11] if gapped else [2, 3, 4, 5, 6]
+    frame = pa.table(
+        {
+            "__row_id__": pa.array(rids, pa.int64()),
+            "first_name": ["John", "Jon", "solo", "Amy", "Amie"],
+            "last_name": ["Smith", "Smith", "Nemo", "Clark", "Clark"],
+            # A transform column that MUST be excluded from output record_cols.
+            "__xform_x__": ["a", "b", "c", "d", "e"],
+        }
+    )
+    # Clusters: (r0,r1)->0 [multi], (r2)->1 [singleton], (r3,r4)->2 [multi].
+    assignments = pa.table(
+        {
+            "__row_id__": pa.array(rids, pa.int64()),
+            "__cluster_id__": pa.array([0, 0, 1, 2, 2], pa.int64()),
+        }
+    )
+    cfg = types.SimpleNamespace(golden_rules=None)
+
+    ref = _stream_fs_dedupe_output_arrow(
+        frame, assignments, cfg, str(tmp_path / "ref")
+    )
+    # batch_rows=2 -> the (r3,r4) cluster and (r0,r1) cluster each straddle batches.
+    got = _stream_fs_dedupe_output_batched(
+        frame, assignments, cfg, str(tmp_path / "got"), batch_rows=2
+    )
+
+    assert _output_dict_and_sets(got, tmp_path / "got") == _output_dict_and_sets(
+        ref, tmp_path / "ref"
+    )
+    # Concrete: 1 singleton, 4 duped rows, 2 golden; __xform_ excluded.
+    assert got["unique_count"] == 1 and got["dupes_count"] == 4
+    assert got["golden_count"] == 2
+    import polars as pl
+
+    assert "__xform_x__" not in pl.read_parquet(got["dupes_path"]).columns
+
+
+def test_batched_output_empty_golden_unlinks_stale(tmp_path):
+    """When a run yields no golden (all singletons or all oversized), the batched
+    output unlinks a prior-run golden.parquet and returns golden_path=None --
+    matching the resident function's empty-golden contract."""
+    import types
+
+    import pyarrow as pa
+    from goldenmatch.backends.fs_out_of_core import _stream_fs_dedupe_output_batched
+
+    out = tmp_path / "out"
+    out.mkdir()
+    stale = out / "golden.parquet"
+    stale.write_bytes(b"stale")  # a prior run's file
+
+    frame = pa.table(
+        {"__row_id__": pa.array([1, 2, 3], pa.int64()), "v": ["a", "b", "c"]}
+    )
+    # All singletons -> no golden.
+    assignments = pa.table(
+        {
+            "__row_id__": pa.array([1, 2, 3], pa.int64()),
+            "__cluster_id__": pa.array([0, 1, 2], pa.int64()),
+        }
+    )
+    res = _stream_fs_dedupe_output_batched(
+        frame, assignments, types.SimpleNamespace(golden_rules=None), str(out)
+    )
+    assert res["golden_count"] == 0
+    assert res["golden_path"] is None
+    assert not stale.exists()  # stale golden.parquet removed
+
+
 def test_fs_streaming_route_selects_orchestrator(monkeypatch):
     from goldenmatch.backends.fs_out_of_core import fs_streaming_route
 
