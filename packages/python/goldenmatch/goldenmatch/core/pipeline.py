@@ -623,10 +623,13 @@ def _run_fs_streaming_dedupe(
         "F-S EM: converged=%s, iterations=%d, match_rate=%.4f",
         em_result.converged, em_result.iterations, em_result.proportion_matched,
     )
-    _orchestrator = {
-        "sequential": run_fs_dedupe_sequential,
-        "spill": run_fs_dedupe_spill,
-    }.get(fs_streaming_route(), run_fs_dedupe_streaming)
+    _route = fs_streaming_route()
+    if _route == "sequential":
+        _orchestrator = run_fs_dedupe_sequential
+    elif _route == "spill":
+        _orchestrator = run_fs_dedupe_spill
+    else:
+        _orchestrator = run_fs_dedupe_streaming
     res = _orchestrator(
         score_frame, blocking, scoring_mk, em_result, config, output_dir,
         link_threshold=link_threshold,
