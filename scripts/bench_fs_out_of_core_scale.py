@@ -93,18 +93,69 @@ class Sampler(threading.Thread):
         self.join(timeout=1)
 
 
+# Stable orthogonal blocking anchors for the `person` fixture. These are the
+# columns whose value duplicates SHARE (dob/postcode are only ~5% null on dupe
+# rows and are NEVER typo-offset; contrast first_name/surname which are corrupted
+# 40%/50% of the time). A compound (postcode, dob) block is scale-INVARIANTLY
+# small (~1.25 rows/block on the sample -- density independent of N, since both
+# fields' cardinality is fixed, not row-count-scaled) yet co-blocks ~88% of true
+# pairs; a second (surname-soundex, dob-year) pass lifts that to ~94%. See the
+# EDGE-BEARING rationale below.
+_PERSON_STABLE_PASSES = [
+    # (field, transforms) tuples per pass.
+    [("postcode", ["strip"]), ("dob", ["strip"])],
+    [("surname", ["lowercase", "soundex"]), ("dob", ["lowercase", "substring:0:4"])],
+]
+
+
+def _stable_person_blocking():
+    """An explicit multi_pass over the person fixture's STABLE anchors.
+
+    The bench measures the out-of-core MECHANISM (does spill/bucketed score real
+    edges under bounded memory at 50M?), so it needs blocking that is BOTH
+    bounded at scale AND edge-bearing. Auto-config's own blocking is neither at
+    50M: the fixture carries no stable shared identifier (email/phone/id -- only a
+    per-ROW-unique ``record_id``, a perfect surrogate the pair-gate correctly
+    refuses as a reducer), so the candidate-pair budget falls back to compounding
+    coarse passes with corruption-prone name INITIALS (`surname:0:1`,
+    `first_name:0:5`). Those split the 40%/50%-typo'd duplicate names, collapsing
+    co-block recall to ~0.49 -- half the true pairs never become candidates, and
+    the surviving name-compound blocks are still large. The bench then measured
+    little-to-no real scoring/clustering work (the 0-edge artifact this replaces).
+
+    Blocking on the anchors duplicates actually share -- (postcode, dob), plus a
+    fuzzy-tolerant (surname-soundex, dob-year) pass -- yields ~1.25-rows/block
+    bounded blocks at ANY scale with ~0.94 co-block recall, so score->cluster->
+    output run over a realistic, bounded edge load. Mirrors the repo's
+    `explicit-personlike` precedent (CLAUDE.md): keep auto-config's representative
+    probabilistic MATCHKEY, override only the (scale-degenerate) blocking.
+    """
+    from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
+
+    passes = [
+        BlockingKeyConfig(
+            fields=[f for f, _ in p],
+            field_transforms={f: list(t) for f, t in p},
+        )
+        for p in _PERSON_STABLE_PASSES
+    ]
+    return BlockingConfig(strategy="multi_pass", passes=passes, auto_select=False)
+
+
 def _fs_config_from_sample(
     fixture: Path, n_rows_full: int, sample_rows: int = 200_000
 ):
-    """Build the FS (probabilistic) config the same way the gm_probabilistic lane
-    does -- auto_configure_probabilistic_df on a bounded head sample (auto-config
-    itself only ever samples, so the config is representative and cheap).
+    """Build the FS (probabilistic) config for the scale bench.
 
-    ``n_rows_full`` is threaded to the pair-budget bound so it extrapolates each
-    pass's Sum C(block,2) to the FULL population and prunes oversized passes at
-    scale. WITHOUT it the bound measures pairs at SAMPLE scale (a 66M-at-1.2M pass
-    reads as ~1.8M at a 200K sample), never fires, and the loose 8-pass config
-    inflates the wall ~6x -- exactly the bench artifact this argument fixes."""
+    Auto-config on a bounded head sample supplies the representative probabilistic
+    MATCHKEY (comparison fields + scorers the gm_probabilistic lane would pick;
+    auto-config itself only ever samples, so this is cheap and faithful). But the
+    blocking it emits at scale is REPLACED with an explicit stable-anchor
+    multi_pass -- see ``_stable_person_blocking`` for why auto-config's own
+    scale-pruned blocking is edge-starved on this fixture (no stable shared
+    identifier => corruption-prone name-initial compounding => ~0.49 co-block
+    recall). ``n_rows_full`` is still threaded so the matchkey build sees the true
+    population (EM sample cap, field admission), matching the in-memory lane."""
     import pyarrow.parquet as pq
     from goldenmatch.core.autoconfig import auto_configure_probabilistic_df
 
@@ -117,6 +168,8 @@ def _fs_config_from_sample(
     for mk in cfg.get_matchkeys():
         if getattr(mk, "type", None) == "weighted":
             mk.rerank = False
+    # Override the scale-degenerate blocking with the stable edge-bearing anchors.
+    cfg = cfg.model_copy(update={"blocking": _stable_person_blocking()})
     return cfg
 
 
