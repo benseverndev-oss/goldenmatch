@@ -338,7 +338,7 @@ def train_sae(layer: int = 14, n_pairs: int = 3000, expansion: int = 16, l1: flo
 # --------------------------------------------------------------------------- #
 @app.function(image=_image, gpu=GPU, timeout=60 * 60, volumes={"/out": _out_vol})
 def causal_validate(layer: int = 14, per_class: int = 150, seed: int = 0,
-                    coeffs: str = "-8,-4,-2,0,2,4,8", n_sae_features: int = 5) -> None:
+                    coeffs: str = "-2,-1,-0.5,0,0.5,1,2", n_sae_features: int = 5) -> None:
     """Add c*direction to the residual stream at ``layer`` during the forward pass
     and measure the mean P(match) shift. A direction is CAUSAL iff P(match) moves
     monotonically with c. Tests the diff-of-means axis + the top-correlated SAE
@@ -373,7 +373,14 @@ def causal_validate(layer: int = 14, per_class: int = 150, seed: int = 0,
     R = dec_residual()
     mu1, mu0 = R[y == 1].mean(0), R[y == 0].mean(0)
     diff_dir = mu1 - mu0
-    diff_dir = diff_dir / (np.linalg.norm(diff_dir) + 1e-9)
+    gap_norm = float(np.linalg.norm(diff_dir))
+    diff_dir = diff_dir / (gap_norm + 1e-9)
+    # steering is scaled by the residual RMS norm so a coefficient is an
+    # interpretable FRACTION of the residual magnitude (a unit-vector +-8 is
+    # negligible against a ~90-norm residual -> no verdict movement). c=1 adds a
+    # vector as large as the whole decision-token residual along the direction.
+    r_rms = float(np.linalg.norm(R, axis=1).mean())
+    print(f"[causal] residual RMS norm={r_rms:.1f}  class-gap norm={gap_norm:.2f}")
 
     directions = {"diff_of_means": diff_dir}
     sae_path = f"/out/interp/sae_layer{layer}.pt"
@@ -420,10 +427,12 @@ def causal_validate(layer: int = 14, per_class: int = 150, seed: int = 0,
     base = mean_p_match()
     print(f"[causal] baseline mean P(match) = {base:.4f}")
 
-    out: dict = {"layer": layer, "baseline_p_match": base, "coeffs": cvals, "directions": {}}
+    out: dict = {"layer": layer, "baseline_p_match": base, "coeffs": cvals,
+                 "residual_rms_norm": r_rms, "class_gap_norm": gap_norm, "directions": {}}
     for name, dvec in directions.items():
         dt = torch.tensor(dvec, dtype=torch.float16, device=model.device)
-        sweep = {c: mean_p_match(add=dt * c) for c in cvals}
+        # coefficient c is a FRACTION of the residual RMS norm (see above)
+        sweep = {c: mean_p_match(add=dt * (c * r_rms)) for c in cvals}
         ablated = mean_p_match(ablate=dt)
         mono = _monotonic([sweep[c] for c in sorted(cvals)])
         out["directions"][name] = {
