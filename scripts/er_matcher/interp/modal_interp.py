@@ -138,6 +138,7 @@ def capture_probe_layers(per_class: int = 200, negatives: str = "hard", seed: in
                          batch_size: int = 16) -> None:
     """Decision-token residual at EVERY layer -> the three probes per layer."""
     import json
+    import os
     import sys
 
     import numpy as np
@@ -200,6 +201,7 @@ def capture_probe_layers(per_class: int = 200, negatives: str = "hard", seed: in
         "n_layers": n_layers, "layers": results,
         "best_layer_by_dir_auc": best["layer"], "best_dir_auc": best["dir_auc"],
     }
+    os.makedirs("/out/interp", exist_ok=True)
     with open("/out/interp/layer_probes.json", "w") as fh:
         json.dump(payload, fh, indent=2)
     _out_vol.commit()
@@ -218,6 +220,7 @@ def train_sae(layer: int = 14, n_pairs: int = 3000, expansion: int = 16, l1: flo
     label. Standard tied-bias SAE: z=ReLU(W_enc(x-b_dec)+b_enc); x_hat=W_dec z+b_dec;
     loss=||x-x_hat||^2 + l1*||z||_1 with unit-norm decoder columns."""
     import json
+    import os
     import sys
 
     import numpy as np
@@ -305,6 +308,7 @@ def train_sae(layer: int = 14, n_pairs: int = 3000, expansion: int = 16, l1: flo
     print("[sae] top match-correlated features:",
           json.dumps(top[:8], indent=2), flush=True)
 
+    os.makedirs("/out/interp", exist_ok=True)
     torch.save({"W_enc": W_enc.detach().cpu(), "b_enc": b_enc.detach().cpu(),
                 "W_dec": W_dec.detach().cpu(), "b_dec": b_dec.detach().cpu(),
                 "layer": layer, "d": d, "m": m},
@@ -419,6 +423,7 @@ def causal_validate(layer: int = 14, per_class: int = 150, seed: int = 0,
               f"monotonic={mono}  ablated={ablated:.3f} (base {base:.3f})", flush=True)
 
     h.remove()
+    os.makedirs("/out/interp", exist_ok=True)
     with open(f"/out/interp/causal_layer{layer}.json", "w") as fh:
         json.dump(out, fh, indent=2)
     _out_vol.commit()

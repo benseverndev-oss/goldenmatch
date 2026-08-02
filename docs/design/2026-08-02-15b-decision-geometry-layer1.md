@@ -109,22 +109,59 @@ path where training already runs (`scripts/er_matcher/modal_train.py`,
 
 ## To lock Layer 1 (the GPU/Modal follow-on)
 
-1. **Residual-stream capture.** Load fp16 Qwen2.5-1.5B + the fine-tune with
-   `output_hidden_states` / hooks; capture the residual stream at every layer at the
-   decision token, over a few thousand pairs.
-2. **Per-layer geometry.** Re-run these three probes per layer → find *where* the
-   match direction emerges and sharpens across depth.
-3. **Dictionary learning.** Train a sparse autoencoder on the residual stream to
-   decompose it into an overcomplete set of monosemantic features (the actual
-   primitive basis under superposition).
-4. **Causal validation (the lock).** Steer/ablate along the candidate match
-   direction and each SAE feature; a feature is a *real* primitive only if moving
-   along it moves the verdict as predicted. This is the linear-algebra-soundness bar
-   Layer 1 demands.
+The GPU pipeline is `scripts/er_matcher/interp/modal_interp.py` (runs against the
+merged fp16 fine-tune the GGUF was quantized from, `/out/model_1p5b/merged`):
 
-**Only after 1–4 hold does Layer 2 begin** — auto-labeling the proven features into
-human-readable match rationales/flags. Building the abstraction before the math is
-locked is precisely the linguistic-bias trap this program rejects.
+1. **Residual-stream capture + per-layer geometry** — DONE (stage 1). ✅
+2. **Dictionary learning** — SAE on layer-L residuals (`train_sae`). In progress.
+3. **Causal validation (the lock)** — steer/ablate along the match direction + top
+   SAE features (`causal_validate`). Next.
+
+### Stage 1 result — where the primitive forms across depth
+
+28-layer sweep (200 hard-negative + 200 match pairs, decision-token residual). The
+embedding layer (L0) is degenerate — the decision token is always `\n`, so its
+last-token vector is identical across pairs — and is skipped.
+
+| Layer | sep_acc | dir_auc (held-out) | top-1 PC | top-8 PC |
+|---|---|---|---|---|
+| 1 | 1.000 | 0.993 | 0.485 | 0.993 |
+| 13 | 1.000 | **1.000** | 0.605 | 0.988 |
+| 14 | 1.000 | 0.999 | 0.550 | 0.988 |
+| 20 | 0.985 | 0.989 | 0.960 | 0.965 |
+| 28 | 0.982 | 0.992 | 0.960 | 0.968 |
+
+The arc is the mechanistic story:
+
+- **Formed early, distributed.** By **layer 1** the match direction is already a
+  near-perfect linear separator (dir_auc 0.993, sep 1.0) — but **top-1 PC ≈ 0.49
+  (chance)** while top-8 ≈ 0.99. So the primitive exists as a **low-rank (~8D)
+  distributed code**, *not* aligned to the dominant axis of variance (early-layer
+  variance is dominated by surface/token features).
+- **Sharpened mid-stack.** dir_auc **peaks at 1.000 (L13)** and sits ≥0.999 across
+  L11–14 — the crispest linear decision, decision formed but not yet collapsed.
+- **Concentrated late (the model "commits").** From L15→28, **top-1 PC jumps to
+  ~0.96**: the match direction *becomes* the dominant axis of the decision-token
+  residual — the residual stream reorganizes so the single top direction ≈ the
+  verdict. sep dips slightly (~0.98) as more of the variance *is* the decision.
+
+**SAE + causal target: L14** — near-peak linear crispness (dir_auc 0.999), mid-stack,
+decision formed but still a rich distributed code (top-1 ≈ 0.55, not yet collapsed) —
+the richest layer for dictionary learning, and upstream of the final readout for
+steering. (`layer_probes.json` on the `er-matcher-out` volume has all 28 layers.)
+
+### Remaining to lock
+
+- **Dictionary learning.** SAE decomposes the layer-14 residual into an overcomplete
+  monosemantic basis (the primitives under superposition); rank features by
+  decision-token match correlation.
+- **Causal validation (the lock).** Steer/ablate along the match direction and each
+  top SAE feature; a feature is a *real* primitive only if moving along it moves the
+  verdict as predicted. This is the linear-algebra-soundness bar Layer 1 demands.
+
+**Only after causal validation holds does Layer 2 begin** — auto-labeling the proven
+features into human-readable match rationales/flags. Building the abstraction before
+the math is locked is precisely the linguistic-bias trap this program rejects.
 
 ## Reproduce
 
