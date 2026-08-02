@@ -1,32 +1,42 @@
 #!/usr/bin/env python
-"""Validate the pinned local ER-matcher (1.5B) on PRODUCT matching.
+"""IN-DISTRIBUTION sanity check for the local ER-matcher (1.5B) on PRODUCT data.
 
-The 1.5B was measured on walmart_amazon zero-shot (F1 0.795, in
-``core/_llm_loader.py``). This extends that to Amazon-Google with the standard
-entity-matching protocol: pair-level F1 on a BALANCED set of true matches +
-HARD negatives (blocking-generated look-alikes -- non-matching pairs whose
-titles score high on fuzzy), compared to the fuzzy baseline on the SAME pairs.
+*** DO NOT read this as a SOTA comparison. ***
 
-It measures the SCORER's discrimination (the local-LLM-boost value), not
-full end-to-end clustering. The numbers are indicative vs the published
-DeepMatcher/Ditto figures (0.693 / 0.756), which use the canonical
-train/valid/test split -- this constructs its own balanced hard set from the
-Leipzig source tables, so treat the comparison as directional, not exact.
+**CONTAMINATION WARNING:** ``amazon_google`` is one of the 1.5B's SIX TRAINING
+sources (``scripts/er_matcher/sources.yaml`` -- bundle mechanism, not
+``eval_only``, so ``build_corpus.py`` folds it into the training corpus). This
+script therefore evaluates the model on (near-)TRAINING data -- it measures
+memorization + in-distribution fit, NOT held-out generalization. The high number
+it prints (this box, 2026-08-02, 250+250 hard set, seed 7: local 1.5B
+P/R/F1 = 0.800/0.992/0.886 vs fuzzy 0.585/0.784/0.670) is an inflated
+upper-bound and MUST NOT be compared to the published DeepMatcher (0.693) /
+Ditto (0.756) figures, which are on a held-out canonical test split. (An earlier
+version of this docstring wrongly claimed "above DeepMatcher/Ditto" -- retracted.)
+
+The ONLY honest, held-out, comparable product number is **walmart_amazon
+zero-shot F1 0.795** (walmart is NOT a training source; pinned in
+``core/_llm_loader.py``): it BEATS DeepMatcher (0.669) and is BELOW Ditto
+(0.868, which fine-tunes per-dataset). So the defensible claim is a competitive
+local/private/zero-config scorer, not a SOTA-beating one.
+
+To run a VALID product comparison, point this at a HELD-OUT dataset (e.g.
+walmart_amazon, or abt_buy ONLY if abt_buy is removed from the training corpus)
+and evaluate against the canonical DeepMatcher/Ditto test split -- not the
+in-training amazon_google tables.
+
+It measures the SCORER's discrimination on a BALANCED set of true matches + HARD
+negatives (blocking-generated look-alikes) vs the fuzzy baseline on the SAME
+pairs; not full end-to-end clustering. CPU-slow (~2.3s/pair); GPU or a smaller
+model for larger runs.
 
 Data: the Leipzig Amazon-Google CSVs under
 ``packages/python/goldenmatch/tests/benchmarks/datasets/Amazon-Google/``
 (gitignored; the ``bench_er_headtohead`` datasets loader reads them). Model:
-the pinned 1.5B GGUF, resolved by ``load_local_adapter`` (downloads on first
-use, or set ``GOLDENMATCH_LOCAL_LLM_PATH``).
+the pinned 1.5B GGUF, resolved by ``load_local_adapter``.
 
 Usage:
     GOLDENMATCH_LOCAL_LLM=1 python scripts/er_matcher/bench_product_matching.py [--per-class 250]
-
-MEASURED (this box, 2026-08-02, 250+250 hard set, seed 7): local 1.5B
-P/R/F1 = 0.800/0.992/0.886 vs fuzzy 0.585/0.784/0.670 -- the local model beats
-fuzzy by +0.216 F1 and lands above the published DeepMatcher/Ditto figures,
-with near-perfect recall. CPU-slow (~2.3s/pair); GPU/n_gpu_layers or a smaller
-model for larger runs.
 """
 from __future__ import annotations
 
@@ -130,8 +140,10 @@ def main() -> None:
     lp = _prf(llm_pred, y)
     print(f"\nLOCAL 1.5B  P/R/F1={lp[0]:.3f}/{lp[1]:.3f}/{lp[2]:.3f}  "
           f"({time.perf_counter() - t:.0f}s, {(time.perf_counter() - t) / len(testset):.1f}s/pair)")
-    print(f"\n=> local 1.5B F1 {lp[2]:.3f} vs fuzzy {bp[2]:.3f} "
-          f"(published DeepMatcher 0.693 / Ditto 0.756)")
+    print(f"\n=> local 1.5B F1 {lp[2]:.3f} vs fuzzy {bp[2]:.3f}  "
+          "[IN-DISTRIBUTION: amazon_google is a TRAINING source -- this is a "
+          "memorization/sanity number, NOT comparable to held-out "
+          "DeepMatcher/Ditto. Held-out product number: walmart_amazon 0.795.]")
 
 
 if __name__ == "__main__":
