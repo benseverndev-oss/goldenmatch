@@ -914,6 +914,10 @@ def _stream_fs_dedupe_output_arrow(
 
 
 _OUTPUT_BATCH_ROWS = 200_000
+# Golden build+write chunk size (rows). The golden builder materializes a
+# list[dict] per cluster plus polars input/output frames; chunking the build by
+# cluster-whole partitions bounds that transient at scale (the 50M OOM lever).
+_GOLDEN_BUILD_CHUNK_ROWS = 200_000
 
 
 def _split_output_batch(
@@ -1067,20 +1071,50 @@ def _stream_fs_dedupe_output_batched(
         uw.close()
         dw.close()
 
-    # golden = non-oversized multi-member; BOUNDED subset -> polars core builder,
-    # built ONCE (members can straddle batches, so golden can't finalize per batch).
+    # golden = non-oversized multi-member. The build materializes a list[dict] of
+    # one record per cluster PLUS the polars input + output frames; at 50M that
+    # subset (~15M rows / ~7M clusters) spikes memory and OOMs. Build+write in
+    # cluster-whole chunks (``__cluster_id__ % n`` keeps every cluster's rows in
+    # ONE chunk, since build_golden is per-cluster independent) so only one
+    # chunk's records/frames are ever resident. Byte-identical output (clusters
+    # are independent; chunk order is irrelevant -- golden is keyed by cluster).
     golden_count = 0
     if golden_parts:
         import polars as pl
 
         golden_tbl = pa.concat_tables(golden_parts)
-        records = build_golden_records_batch(
-            pl.from_arrow(golden_tbl),
-            golden_rules if golden_rules is not None else _default_golden_rules(),
+        del golden_parts
+        rules = golden_rules if golden_rules is not None else _default_golden_rules()
+        n_chunks = max(1, golden_tbl.num_rows // _GOLDEN_BUILD_CHUNK_ROWS)
+        # Cluster-whole chunk assignment via numpy (pyarrow.compute has no modulo
+        # kernel here): all rows of a cluster share __cluster_id__ -> same chunk.
+        chunk_of = (
+            None
+            if n_chunks == 1
+            else golden_tbl.column("__cluster_id__").to_numpy(zero_copy_only=False)
+            % n_chunks
         )
-        golden_count = len(records)
-        if golden_count:
-            pl.DataFrame(records).write_parquet(golden_path)
+        gw = None
+        try:
+            for c in range(n_chunks):
+                chunk = (
+                    golden_tbl
+                    if n_chunks == 1
+                    else golden_tbl.filter(pa.array(chunk_of == c))
+                )
+                if not chunk.num_rows:
+                    continue
+                records = build_golden_records_batch(pl.from_arrow(chunk), rules)
+                if records:
+                    gt = pl.DataFrame(records).to_arrow()
+                    if gw is None:
+                        gw = _pq.ParquetWriter(golden_path, gt.schema)
+                    gw.write_table(gt)
+                    golden_count += len(records)
+                del chunk, records
+        finally:
+            if gw is not None:
+                gw.close()
     if golden_count == 0 and _os.path.exists(golden_path):
         _os.unlink(golden_path)
 

@@ -845,6 +845,35 @@ def test_batched_output_equals_resident_join(tmp_path, gapped):
     assert "__xform_x__" not in pl.read_parquet(got["dupes_path"]).columns
 
 
+def test_bucketed_golden_chunked_write_parity(tmp_path, monkeypatch):
+    """The golden build+write is chunked by cluster (`__cluster_id__ % n`) to
+    bound the per-cluster survivorship transient at scale (the 50M OOM lever).
+    Forcing MANY chunks (tiny threshold) must produce byte-identical golden to the
+    single-chunk build -- clusters are independent, so chunk assignment/order is
+    irrelevant, and `% n` keeps every cluster's rows in ONE chunk (never split)."""
+    import types
+
+    import polars as pl
+    from goldenmatch.backends import fs_out_of_core as F
+    from goldenmatch.backends.fs_out_of_core import run_fs_dedupe_bucketed
+
+    df = _bigger_df()
+    mk = _make_probabilistic_mk()
+    blocking = BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])])
+    em = _train(df, blocking, mk)
+    cfg = types.SimpleNamespace(golden_rules=None)
+
+    monkeypatch.setattr(F, "_GOLDEN_BUILD_CHUNK_ROWS", 10**9)  # single chunk
+    one = run_fs_dedupe_bucketed(df, blocking, mk, em, cfg, str(tmp_path / "one"))
+    monkeypatch.setattr(F, "_GOLDEN_BUILD_CHUNK_ROWS", 1)  # one cluster per chunk
+    many = run_fs_dedupe_bucketed(df, blocking, mk, em, cfg, str(tmp_path / "many"))
+
+    assert one["golden_count"] == many["golden_count"] >= 1
+    g1 = pl.read_parquet(one["golden_path"])
+    g2 = pl.read_parquet(many["golden_path"])
+    assert g1.sort(by=g1.columns).equals(g2.sort(by=g2.columns))
+
+
 def test_batched_output_empty_golden_unlinks_stale(tmp_path):
     """When a run yields no golden (all singletons or all oversized), the batched
     output unlinks a prior-run golden.parquet and returns golden_path=None --
