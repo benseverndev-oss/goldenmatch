@@ -582,6 +582,7 @@ def _run_fs_streaming_dedupe(
     the streaming path exists precisely so the back-half is never materialized."""
     from goldenmatch.backends.fs_out_of_core import (
         fs_streaming_route,
+        run_fs_dedupe_bucketed,
         run_fs_dedupe_sequential,
         run_fs_dedupe_spill,
         run_fs_dedupe_streaming,
@@ -628,6 +629,8 @@ def _run_fs_streaming_dedupe(
         _orchestrator = run_fs_dedupe_sequential
     elif _route == "spill":
         _orchestrator = run_fs_dedupe_spill
+    elif _route == "bucketed":
+        _orchestrator = run_fs_dedupe_bucketed
     else:
         _orchestrator = run_fs_dedupe_streaming
     res = _orchestrator(
