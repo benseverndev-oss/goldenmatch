@@ -1,0 +1,43 @@
+# CodeQL configuration — scopes the security-extended scan to SHIPPING source.
+#
+# Why: the workflow scans the Python + JS/TS surface with the broad
+# `security-extended` suite. Run over the whole tree that also pulled in
+# ~2,900 non-shipping files (test suites, benchmarks, examples), where SAST
+# throws high-volume, low-value findings (fixture credentials, mock SSRF,
+# clear-text logging in tests) that bury the real product alerts. Excluding
+# those below focuses the scan on code that actually ships. On the next scan
+# of `main`, alerts located only in these paths auto-resolve as "no longer
+# detected". Product source, the web/API/MCP servers, and the docs-site remain
+# scanned.
+#
+# Keep the query suite here (single source of truth) — the workflow references
+# this file via `config-file:` instead of passing `queries:` inline.
+name: "goldenmatch CodeQL config"
+
+queries:
+  - uses: security-extended
+
+paths-ignore:
+  # Test suites (pytest + vitest/jest) — the dominant noise source.
+  - "**/tests/**"
+  - "**/test/**"
+  - "**/__tests__/**"
+  - "**/*.test.ts"
+  - "**/*.test.tsx"
+  - "**/*.test.js"
+  - "**/*.test.jsx"
+  - "**/*.test.mjs"
+  - "**/*.spec.ts"
+  - "**/*.spec.tsx"
+  - "**/conftest.py"
+  # Benchmarks and runnable examples — demonstration code, not shipped surface.
+  - "**/benchmarks/**"
+  - "**/examples/**"
+  # Retained pre-fold repo history (working-tree source, if ever checked out).
+  - "_archive/**"
+  # Generated / build / vendored output.
+  - "**/dist/**"
+  - "**/build/**"
+  - "**/.next/**"
+  - "**/__pycache__/**"
+  - "**/*.min.js"

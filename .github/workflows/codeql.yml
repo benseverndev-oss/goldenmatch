@@ -50,9 +50,11 @@ jobs:
         uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e  # v3
         with:
           languages: ${{ matrix.language }}
-          # Use the security-extended query suite — the default is too
-          # conservative for what we want from SAST gating.
-          queries: security-extended
+          # Config file scopes the scan to shipping source (paths-ignore for
+          # tests/benchmarks/examples/generated) and pins the query suite
+          # (security-extended — the default is too conservative for SAST
+          # gating). Single source of truth: .github/codeql/codeql-config.yml.
+          config-file: ./.github/codeql/codeql-config.yml
 
       - name: Autobuild
         # Python + JS are interpreted; autobuild is a no-op but the action
