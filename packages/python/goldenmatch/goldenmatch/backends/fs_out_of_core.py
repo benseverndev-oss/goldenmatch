@@ -941,6 +941,116 @@ def _cluster_arrow_native(
     return asn, n_pairs
 
 
+def spill_pair_shard(pair_table: Any, shard_dir: str, idx: int) -> str:
+    """Write one ``PAIR_STREAM`` ``pa.Table`` (``id_a``/``id_b`` int64, ``score``
+    float64) to an Arrow IPC shard on disk and return its path.
+
+    The bounded-edge producer half of the DuckDB-free spill path
+    (``docs/superpowers/specs/2026-08-02-fs-duckdb-free-spill-external-wcc-design.md``):
+    a scored WAVE's edges leave RAM the moment its shard is flushed, so the resident
+    edge term is one wave's pairs, never the whole run's pair table. Arrow IPC (not
+    parquet) so the read-back in ``external_wcc_from_shards`` is a zero-copy mmap."""
+    import os as _os
+
+    import pyarrow as pa
+
+    _os.makedirs(shard_dir, exist_ok=True)
+    path = _os.path.join(shard_dir, f"edges-{idx:06d}.arrow")
+    with pa.OSFile(path, "wb") as sink:
+        with pa.ipc.RecordBatchFileWriter(sink, pair_table.schema) as writer:
+            writer.write_table(pair_table)
+    return path
+
+
+def external_wcc_from_shards(
+    shard_paths: Any,
+    all_ids: Any,
+    max_cluster_size: int,
+    link_threshold: float | None,
+) -> tuple[Any, int]:
+    """External union-find over spilled ``PAIR_STREAM`` shards — the bounded-edge WCC.
+
+    Streams each Arrow IPC shard (``id_a``/``id_b``/``score``) one at a time and applies
+    ``union(a, b)`` for every edge clearing ``link_threshold``, so the FULL edge set
+    NEVER lives in RAM — only the union-find (keyed by the row ids that actually appear
+    in an edge, bounded by ``min(2*edges, N)``) plus the O(N) assignment does. This is
+    the DuckDB-free, disk-spill analogue of ``_cluster_arrow_native``, which instead
+    holds the whole deduped pair ``pa.Table`` resident.
+
+    **Cluster-parity with ``_cluster_arrow_native``** (partition-exact): clustering is a
+    pure function of the edge SET; the global max-score dedup that path runs is a memory
+    optimisation union-find membership is invariant to; and per-edge threshold filtering
+    equals filter-after-max-dedup because ``max`` is monotone (a pair unions iff ANY
+    cross-pass occurrence clears the cut == its best score clears the cut). Cluster-id
+    VALUES differ (independent numbering), the PARTITION does not — and the downstream
+    ``_stream_fs_dedupe_output_arrow`` groups by cluster id, so numbering is irrelevant.
+
+    Returns ``(assignments pa.Table {__row_id__, __cluster_id__}, n_pairs)``.
+    ``n_pairs`` is the RAW linked-edge count (cross-pass duplicates INCLUDED — this path
+    never materialises the deduped set), a stat, not a parity surface.
+    ``max_cluster_size`` is accepted for signature-parity but not applied: oversized
+    splitting is a scoring/output-stage concern, and the output streamer already routes
+    by cluster size; the WCC emits raw components.
+    """
+    import pyarrow as pa
+
+    from goldenmatch.core.cluster import UnionFind
+
+    uf = UnionFind()
+    parent = uf._parent
+    n_pairs = 0
+    for path in shard_paths:
+        with pa.memory_map(path, "r") as source:
+            reader = pa.ipc.open_file(source)
+            for bi in range(reader.num_record_batches):
+                batch = reader.get_batch(bi)
+                a_col = batch.column("id_a").to_pylist()
+                b_col = batch.column("id_b").to_pylist()
+                s_col = batch.column("score").to_pylist()
+                for k in range(len(a_col)):
+                    if link_threshold is not None and s_col[k] < link_threshold:
+                        continue
+                    a, b = a_col[k], b_col[k]
+                    if a not in parent:
+                        parent[a] = a
+                        uf._rank[a] = 0
+                    if b not in parent:
+                        parent[b] = b
+                        uf._rank[b] = 0
+                    uf.union(a, b)
+                    n_pairs += 1
+        # batch/table references dropped here -> the shard's edges leave RAM.
+
+    if isinstance(all_ids, (pa.Array, pa.ChunkedArray)):
+        ids = all_ids.to_pylist()
+    else:
+        ids = list(all_ids)
+
+    # Assign a stable cluster id per connected component; a row absent from any edge
+    # is its own singleton. O(N) in the row count, independent of the edge count.
+    root_to_cid: dict[int, int] = {}
+    rid_out: list[int] = []
+    cid_out: list[int] = []
+    next_cid = 0
+    for rid in ids:
+        root = uf.find(rid) if rid in parent else rid
+        cid = root_to_cid.get(root)
+        if cid is None:
+            cid = next_cid
+            root_to_cid[root] = cid
+            next_cid += 1
+        rid_out.append(rid)
+        cid_out.append(cid)
+
+    asn = pa.table(
+        {
+            "__row_id__": pa.array(rid_out, pa.int64()),
+            "__cluster_id__": pa.array(cid_out, pa.int64()),
+        }
+    )
+    return asn, n_pairs
+
+
 def run_fs_dedupe_streaming(
     prepared_df: Any,
     blocking_config: BlockingConfig,
