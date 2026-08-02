@@ -2538,6 +2538,141 @@ def _otsu_threshold(scores) -> float | None:
     return float((k + 1) / nbins)              # upper edge of the split bin
 
 
+# ── FS threshold-refit loop (Phase 3a) ───────────────────────────────────────
+# Design: docs/superpowers/specs/2026-08-02-fs-refit-loop-design.md.
+# The non-iterated FS path commits a FIXED link cutoff (0.50). On over-merge-prone
+# shapes (household hard-negatives: distinct people sharing a surname) the F1-
+# optimal cutoff sits ABOVE 0.50, and the fixed default over-merges. This picks
+# the cutoff from the ACTUAL scored-pair distribution via Otsu, GATED on a
+# bimodality test so it ONLY moves when there is a genuine class-separating valley
+# -- the guard that keeps it a no-op on 0.50-optimal data (historical_50k, whose
+# scored distribution is one non-match mass + a declining tail, no valley).
+#
+# MEASURED (score-once, re-cluster sweep):
+#   household_hardneg  Otsu-on-scored 0.750 == F1-optimal; valley_ratio 0.00 (gap)
+#   historical_50k     Otsu-on-scored 0.540 but valley_ratio 0.55 (NO valley) -> keep 0.50
+# A naive "maximize multi-member cluster count" objective was REJECTED: it peaks
+# at 0.60 on historical_50k and would regress F1 0.841 -> 0.756. The valley gate,
+# not the split, is what makes this safe.
+_REFIT_BINS = 20
+# A genuine class-separating valley is NEARLY EMPTY (household: the gap bin holds
+# 0% of the smaller flank mode). A shallow dip -- e.g. ncvr's 22%-of-mode trough
+# INSIDE its corruption-spread match distribution -- is a shoulder, not a class
+# boundary, and cutting there removes true matches. Require a deep gap so the
+# refit fires only on a real false-band / true-mass separation (measured:
+# household 0.00 < 0.10 fires; ncvr 0.22 > 0.10 does not).
+_REFIT_VALLEY_MAX = 0.10
+_REFIT_MIN_MODE_MASS = 0.02  # each side of the valley must hold >= 2% of scored pairs
+_REFIT_MIN_PAIRS = 200     # too few pairs -> histogram is noise, don't refit
+
+
+def _fs_refit_threshold_enabled() -> bool:
+    """Health-gated FS link-threshold refit. **Default OFF.**
+
+    When ``GOLDENMATCH_FS_REFIT_THRESHOLD`` is truthy, the FS path picks the link
+    cutoff from the actual scored-pair distribution (bimodality-gated Otsu) instead
+    of the fixed default, correcting the over-merge the non-iterated path can't see.
+    Default-off is byte-identical. Flip only after the accuracy panel + the
+    household_hardneg target prove it, per the domain-comparators/v2 precedent."""
+    return os.environ.get("GOLDENMATCH_FS_REFIT_THRESHOLD", "0").lower() in (
+        "1", "true", "on", "yes", "enabled",
+    )
+
+
+def _score_distribution_valley(hist) -> float | None:
+    """Locate the class-separating VALLEY of a [0,1] score histogram: a deep
+    density trough with substantial mass on BOTH sides. Returns the valley's cut
+    point (the low edge of the deepest qualifying bin, in [0,1]) when the
+    distribution is genuinely bimodal, else None.
+
+    The valley -- NOT Otsu's variance split -- is the right cut: with the mode
+    IMBALANCE typical of FS scores (a small false-pair band vs a huge true-match
+    mass), Otsu's between-class-variance maximum lands INSIDE the dominant mode
+    (measured: 0.88, deep in the true mass, cutting recall to 0.62), while the
+    valley sits exactly on the false/true boundary. We do NOT anchor on the global
+    peak (the true mass often dwarfs the false band, so the valley is BELOW the
+    peak): instead scan every candidate cut bin, keep those with >= _REFIT_MIN_MODE
+    _MASS on each side, and take the one whose trough is deepest relative to its
+    flanking maxima. The gate (trough < _REFIT_VALLEY_MAX of the smaller flank)
+    keeps this a no-op on overlapping unimodal-with-tail shapes (historical_50k:
+    no bin has a deep trough with mass on both sides -> None)."""
+    total = hist.sum()
+    if total <= 0:
+        return None
+    nb = len(hist)
+    best_idx: int | None = None
+    best_ratio = _REFIT_VALLEY_MAX
+    for v in range(1, nb - 1):
+        left, right = hist[:v], hist[v + 1:]
+        if left.sum() / total < _REFIT_MIN_MODE_MASS:
+            continue
+        if right.sum() / total < _REFIT_MIN_MODE_MASS:
+            continue
+        smaller = min(left.max(), right.max())
+        if smaller <= 0:
+            continue
+        ratio = hist[v] / smaller       # trough depth vs the shallower flank mode
+        if ratio < best_ratio:
+            best_ratio, best_idx = ratio, v
+    if best_idx is None:
+        return None
+    return float(best_idx) / nb         # low edge of the deepest valley bin
+
+
+def fs_refit_threshold(scores, default_link: float) -> float:
+    """Pick the FS link cutoff from the scored-pair distribution, GATED on
+    bimodality. Returns the class-separating VALLEY cut (clamped to the sane band)
+    only when the distribution has a genuine trough between a false-pair band and
+    the true-match mass; otherwise returns ``default_link`` unchanged -- so on a
+    0.50-optimal (non-bimodal) dataset the refit is a no-op and cannot regress.
+    ``scores`` is a 1-D array of the already-computed pair scores (no re-scoring)."""
+    arr = np.asarray(scores, dtype=np.float64)
+    if arr.shape[0] < _REFIT_MIN_PAIRS:
+        return default_link
+    hist, _ = np.histogram(arr, bins=_REFIT_BINS, range=(0.0, 1.0))
+    hist = hist.astype(np.float64)
+    valley = _score_distribution_valley(hist)
+    if valley is None:
+        return default_link
+    return round(float(np.clip(valley, _CALIBRATE_MIN, _CALIBRATE_MAX)), 4)
+
+
+def _max_cluster_size(id_a, id_b, score, threshold: float) -> int:
+    """Largest cluster size when linking pairs with score >= threshold. Singletons
+    can't be the max cluster, so ``build_clusters`` infers ids from the pairs (no
+    need for the full row-id set)."""
+    from goldenmatch.core.cluster import build_clusters  # noqa: PLC0415
+    linked = [
+        (int(a), int(b), float(s))
+        for a, b, s in zip(id_a, id_b, score) if s >= threshold
+    ]
+    if not linked:
+        return 0
+    clusters = build_clusters(linked)
+    return max((c["size"] for c in clusters.values()), default=0)
+
+
+def fs_refit_link_threshold(id_a, id_b, score, default_link: float) -> float:
+    """Guarded FS threshold refit: the distributional valley candidate, ACCEPTED
+    only when re-clustering at it actually REDUCES over-merge (max cluster size)
+    vs the default. This is the guard that a pure distributional valley needs: a
+    density gap can't tell an over-merge false-pair band (household: cutting it
+    shrinks giant surname-collapsed clusters, max 8 -> 3) from a gap between
+    low-scoring TRUE matches and the rest (person: cutting removes real matches,
+    max stays 3). Only a candidate that both (a) raises the cutoff and (b) shrinks
+    the largest cluster is committed; otherwise the default stands, so clean,
+    already-separated datasets (person/ncvr/historical_50k) are a no-op. Re-cluster
+    only -- scores are not recomputed."""
+    candidate = fs_refit_threshold(np.asarray(score, dtype=np.float64), default_link)
+    if candidate <= default_link:
+        return default_link
+    if _max_cluster_size(id_a, id_b, score, candidate) < _max_cluster_size(
+        id_a, id_b, score, default_link
+    ):
+        return candidate
+    return default_link
+
+
 def _calibrate_link_threshold(comp_matrix, mk, match_weights, p_match) -> float | None:
     """Pick a link cutoff from the training-pair normalized-score distribution via
     Otsu's method, instead of the fixed 0.50.

@@ -1,7 +1,51 @@
 # FS-aware refit loop — design (Phase 3, threshold-refit first slice)
 
-Status: **DESIGN — measurement done, awaiting approval before implementation.**
+Status: **IMPLEMENTED (Phase 3a, 2026-08-02)** — the objective below was CORRECTED
+by measurement during implementation (see "Implemented objective"). Approved
+design; shipped default-OFF behind `GOLDENMATCH_FS_REFIT_THRESHOLD`.
 Program: FS/Lever Enablement (`2026-08-01-fs-lever-enablement-design.md`), item 3.
+
+## Implemented objective (2026-08-02) — corrected by measurement
+
+The original design named a "cluster-size knee + mass_above_threshold/dip" health
+signal. Measurement during implementation REJECTED the naive forms and produced a
+different, validated objective. The negative results are the load-bearing part:
+
+- **Maximize multi-member cluster count** — REJECTED. Peaks at 0.60 on
+  historical_50k and would regress F1 0.841→0.756 (it can't tell a correctly
+  separated entity from a fragmented true one).
+- **Otsu on the scored pairs** — REJECTED as the cut. FS score distributions are
+  mode-IMBALANCED (a small false-pair band vs a huge true-match mass); Otsu's
+  variance split lands INSIDE the dominant mode (measured 0.88, cutting recall to
+  0.62).
+- **Bare distributional VALLEY** (density trough, mass on both sides) — recovers
+  household but REGRESSED person (−0.06) and ncvr (−0.10): a gap can't distinguish
+  an over-merge false band from a gap between low-scoring TRUE matches.
+
+The shipped objective is **valley + two guards** (defense-in-depth; each guard
+alone regressed):
+1. **Deep-valley gate** — the trough must be NEARLY EMPTY (`< _REFIT_VALLEY_MAX
+   = 0.10` of the smaller flank mode). A real class boundary is a near-empty gap
+   (household 0.00); ncvr's 22%-of-mode dip inside its corruption-spread match
+   distribution is a shoulder, not a boundary → no refit.
+2. **Cluster-shape guard** (`fs_refit_link_threshold`) — commit the candidate ONLY
+   when re-clustering at it REDUCES over-merge (max cluster size drops) vs the
+   default. Household: cutting shrinks giant surname-collapsed clusters (max 8→3)
+   → accept. person/ncvr/historical: already right-sized, cutting only drops real
+   matches (max unchanged) → reject, keep 0.50.
+
+**MEASURED (dedupe_df, flag on vs off):** household_hardneg F1 **0.947 → 1.000
+(+0.053)**; the full panel (febrl3 / ncvr_synthetic / dblp_acm / person /
+historical_50k) is **flat, worst ΔF1 +0.0000** (ab_lever GATE PASS). Re-cluster
+only (no re-scoring). Wired into the default B2c columnar FS route
+(`_score_probabilistic_matchkey`); the out-of-core / arrow-stream / list routes
+keep the fixed cutoff (documented follow-on). Tests:
+`tests/test_fs_refit_threshold.py` (12). Helpers: `probabilistic.fs_refit_threshold`
+(pure valley), `_score_distribution_valley`, `fs_refit_link_threshold` (guarded).
+
+---
+
+## Original design (as approved)
 
 ## Problem
 
