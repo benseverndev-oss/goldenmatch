@@ -1402,10 +1402,22 @@ def _apply_domain_extraction(
     )
 
     if domain_cfg.llm_validation and low_conf_ids:
+        # llm_extract_features / apply_llm_extractions are polars-native
+        # (``pl.col`` filter + ``with_columns``); on the arrow lane
+        # ``combined_df_tmp`` is a pa.Table, which raises
+        # ``TypeError: unexpected argument type Expr``. This path is LLM-gated +
+        # low-frequency, so coerce to polars here (the caller re-normalizes the
+        # returned frame via ``_tf_lane``) rather than porting both functions.
+        import polars as _pl_dom
+
         from goldenmatch.core.llm_extract import (
             apply_llm_extractions,
             llm_extract_features,
         )
+        if not isinstance(combined_df_tmp, _pl_dom.DataFrame):
+            # from_arrow is typed DataFrame|Series; a pa.Table always yields a
+            # DataFrame.
+            combined_df_tmp = cast("Any", _pl_dom.from_arrow(combined_df_tmp))
         budget = None
         if domain_cfg.budget:
             from goldenmatch.core.llm_budget import BudgetTracker

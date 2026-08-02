@@ -357,9 +357,17 @@ def _local_score_pairs(
     ``< candidate_lo`` untouched.
 
     Scored sequentially against one model context (a single llama.cpp context is
-    not thread-safe). Multiprocessing for local throughput — a pool of worker
-    processes each holding a context — is the D3 follow-up; the hosted path stays
-    threaded (network-bound).
+    not thread-safe). **CPU multiprocessing does NOT help local throughput and is
+    deliberately not implemented** (D3 investigated 2026-08-02): llama.cpp CPU
+    inference is memory-bandwidth-bound and already saturates every core for a
+    SINGLE inference, so fanning the band across N worker processes only splits
+    the cores + thrashes the memory bus + reloads the model per worker — measured
+    0.34x (i.e. ~3x SLOWER) with 2 workers on a 4-core box, at both small and
+    amortized band sizes, parity-identical output. The real local-throughput
+    levers are GPU offload (``GOLDENMATCH_LOCAL_LLM_GPU_LAYERS``), a
+    smaller/distilled model, or fewer LLM calls (a tighter candidate band) — not
+    process parallelism. The hosted path stays threaded (it is network-bound, a
+    different regime where concurrency does help).
     """
     from goldenmatch.core.frame import to_frame as _tf_local
 
