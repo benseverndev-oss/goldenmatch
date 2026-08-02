@@ -334,6 +334,122 @@ def train_sae(layer: int = 14, n_pairs: int = 3000, expansion: int = 16, l1: flo
 
 
 # --------------------------------------------------------------------------- #
+# stage 5: strip parameters that don't influence the outcome (layer early-exit)#
+# --------------------------------------------------------------------------- #
+def _prf_from_pred(pred, y):
+    tp = sum(1 for p, t in zip(pred, y) if p and t)
+    fp = sum(1 for p, t in zip(pred, y) if p and not t)
+    fn = sum(1 for p, t in zip(pred, y) if not p and t)
+    prec = tp / (tp + fp) if tp + fp else 0.0
+    rec = tp / (tp + fn) if tp + fn else 0.0
+    return (2 * prec * rec / (prec + rec)) if prec + rec else 0.0
+
+
+@app.function(image=_image, gpu=GPU, timeout=60 * 60, volumes={"/out": _out_vol})
+def layer_early_exit(per_class: int = 400, seed: int = 0, k_min: int = 6) -> None:
+    """Strip parameters that don't influence the ER verdict, measured directly.
+
+    Layer 1 said the decision is FORMED by ~L13 and only COMMITTED thereafter. If
+    that's causal, the late layers are dead weight for ER. This tests it: read the
+    verdict out of the layer-K residual (final norm + lm_head applied to
+    hidden_states[K] -- i.e. DELETE layers > K and pass the residual straight to the
+    readout, the 'logit lens'), sweep K, and compare to the full-model verdict + the
+    gold labels. The smallest K that preserves the decision tells us how many layers
+    can be stripped. (Logit-lens caveat: the final RMSNorm is trained for the last
+    layer's scale; it is scale-robust but this is an activation-space estimate of
+    strippability, to be confirmed by a fine-tune-free truncated-model eval.)"""
+    import json
+    import os
+    import sys
+
+    import numpy as np
+    import torch
+
+    sys.path.insert(0, "/root/interp")
+
+    tok, model = _load_model()
+    true_id, false_id = _true_false_ids(tok)
+    n_layers = model.config.num_hidden_layers
+
+    pairs, rows = _mine(per_class, "hard", seed)
+    y = np.array([t for *_, t in pairs])
+    prompts = [_prompt(tok, rows[a], rows[b]) + '{"match":' for a, b, _ in pairs]
+
+    # collect per-layer decision-token P(match) via the logit lens in one pass set
+    norm = model.model.norm
+    head = model.lm_head
+    per_layer_p = {K: [] for K in range(k_min, n_layers + 1)}
+    for i in range(0, len(prompts), 16):
+        enc = tok(prompts[i : i + 16], return_tensors="pt", padding=True).to(model.device)
+        with torch.no_grad():
+            out = model(**enc, output_hidden_states=True)
+            for K in range(k_min, n_layers + 1):
+                h = out.hidden_states[K][:, -1, :]          # residual after layer K
+                logits = head(norm(h))                       # delete layers>K -> readout
+                pair = torch.softmax(
+                    torch.stack([logits[:, true_id], logits[:, false_id]], 1), dim=1)
+                per_layer_p[K].append(pair[:, 0].float().cpu().numpy())
+        if (i // 16) % 5 == 0:
+            print(f"[strip] {i + 16}/{len(prompts)}", flush=True)
+
+    full_p = np.concatenate(per_layer_p[n_layers])
+    full_pred = full_p > 0.5
+    full_f1 = _prf_from_pred(full_pred, y)
+    print(f"[strip] full model ({n_layers} layers): F1={full_f1:.3f}", flush=True)
+
+    rows_out = []
+    for K in range(k_min, n_layers + 1):
+        pK = np.concatenate(per_layer_p[K])
+        predK = pK > 0.5
+        agree = float((predK == full_pred).mean())        # verdict agreement vs full
+        f1K = _prf_from_pred(predK, y)
+        rows_out.append({"K": K, "verdict_agree_vs_full": agree, "f1_vs_gold": f1K,
+                         "mean_p_match": float(pK.mean())})
+        print(f"[strip] exit@L{K:2d}: agree_vs_full={agree:.3f}  f1={f1K:.3f}", flush=True)
+
+    tol = 0.02
+    by_k = {r["K"]: r for r in rows_out}
+    # (a) STRICT: smallest K with >=99% verdict agreement AND F1 within tol (reproduces
+    #     even the borderline flips the late layers make -- an upper bound on caution).
+    k_verdict = min((r["K"] for r in rows_out
+                     if r["verdict_agree_vs_full"] >= 0.99 and r["f1_vs_gold"] >= full_f1 - tol),
+                    default=n_layers)
+    # (b) F1-SATURATION (what "influences the OUTCOME" means): smallest K such that EVERY
+    #     layer >= K keeps F1 within tol of full -- the depth beyond which no ER
+    #     correctness is added (late layers only shuffle borderline verdicts).
+    k_f1 = n_layers
+    for K in range(k_min, n_layers + 1):
+        if all(by_k[k2]["f1_vs_gold"] >= full_f1 - tol for k2 in range(K, n_layers + 1)):
+            k_f1 = K
+            break
+    strip_v, strip_f1 = n_layers - k_verdict, n_layers - k_f1
+    print(f"[strip] STRICT verdict-agreement K*={k_verdict} -> strip {strip_v}/{n_layers} "
+          f"(~{strip_v / n_layers * 100:.0f}%)", flush=True)
+    print(f"[strip] F1-SATURATION K*={k_f1} -> the last {strip_f1}/{n_layers} layers "
+          f"(~{strip_f1 / n_layers * 100:.0f}% of block params) add NO ER F1 "
+          f"(full {full_f1:.3f}, exit@L{k_f1} {by_k[k_f1]['f1_vs_gold']:.3f}, "
+          f"verdict-agree {by_k[k_f1]['verdict_agree_vs_full']:.3f}). Logit-lens = a "
+          f"no-retrain LOWER bound on strippability; confirm via truncate-and-adapt.",
+          flush=True)
+
+    payload = {
+        "n_layers": n_layers, "n_pairs": len(pairs), "full_f1": full_f1, "tol": tol,
+        "k_star_verdict_agreement": k_verdict, "strippable_layers_verdict": strip_v,
+        "k_star_f1_saturation": k_f1, "strippable_layers_f1": strip_f1,
+        "strippable_block_param_fraction_f1": strip_f1 / n_layers,
+        "method_caveat": "logit-lens (reuses the final untrained readout on mid-layer "
+                         "residuals) -> a no-retrain LOWER bound; truncate-and-adapt "
+                         "would confirm/extend",
+        "sweep": rows_out,
+    }
+    os.makedirs("/out/interp", exist_ok=True)
+    with open("/out/interp/layer_early_exit.json", "w") as fh:
+        json.dump(payload, fh, indent=2)
+    _out_vol.commit()
+    print("[done] layer_early_exit -> /out/interp/layer_early_exit.json")
+
+
+# --------------------------------------------------------------------------- #
 # stage 3: causal validation -- steering / ablation (THE LOCK)                #
 # --------------------------------------------------------------------------- #
 @app.function(image=_image, gpu=GPU, timeout=60 * 60, volumes={"/out": _out_vol})
@@ -598,3 +714,9 @@ def causal(layer: int = 14, lo: int = 8, hi: int = 20, per_class: int = 150,
 def layer2(layer: int = 14, per_class: int = 400, n_sae_features: int = 12) -> None:
     layer2_abstraction.remote(layer=layer, per_class=per_class, n_sae_features=n_sae_features)
     print(f"done -> `modal volume get er-matcher-out interp/layer2_abstraction_L{layer}.json`")
+
+
+@app.local_entrypoint()
+def strip(per_class: int = 400, k_min: int = 6) -> None:
+    layer_early_exit.remote(per_class=per_class, k_min=k_min)
+    print("done -> `modal volume get er-matcher-out interp/layer_early_exit.json`")

@@ -270,6 +270,44 @@ fields, exactly the learned behavior. It flags the low-confidence case where the
 field story disagrees with the verdict, and falls back to a neutral profile (no
 faithfulness claim) on schemas outside the person profile.
 
+## Stripping the model — which parameters don't influence the outcome
+
+Layer 1 said the ER decision is *formed by ~L13 and only committed thereafter*. If
+that's real, the late layers are dead weight for entity resolution. Direct test
+(`modal_interp.py::layer_early_exit`): read the verdict out of the layer-K residual
+(final norm + lm_head applied to `hidden_states[K]` — i.e. **delete every layer > K**
+and pass the residual straight to the readout, the "logit lens"); sweep K; compare to
+the full-model verdict and the gold labels. 400 match + 400 hard-neg, historical_50k.
+
+| Exit at layer K | verdict-agree vs full | F1 vs gold |
+|---|---|---|
+| full (28) | 1.000 | 0.886 |
+| 27 | 0.985 | 0.870 |
+| 24 | 0.973 | 0.919 |
+| **21** | **0.970** | **0.892** |
+| 20 | 0.954 | 0.839 |
+| 17 | 0.955 | 0.907 |
+| 16 | 0.870 | 0.929 |
+| ≤15 | ~0.4–0.6 | degenerate (0 / 0.667) |
+
+Two readings, and the distinction is the whole point:
+- **Strict verdict-reproduction → strip 0.** Exact agreement with the full model isn't
+  reached until L28 — the last layers keep flipping a few *borderline* pairs. If the
+  bar is "reproduce every borderline flip," no layer is removable.
+- **ER-outcome (F1) → strip the last 7 (~25% of the block params).** F1 saturates by
+  **L21** (0.892 ≥ full 0.886) and stays there through L28 with 97% verdict agreement.
+  **Layers 22–28 add no ER correctness — they only shuffle borderline verdicts.** This
+  is the honest answer to "strip parameters not influencing the outcome": for the ER
+  outcome, ~a quarter of the transformer depth is dead weight.
+
+**This is a LOWER bound.** The logit lens reuses the *untrained* final RMSNorm+head on
+mid-layer residuals (a scale/basis mismatch — which is why L≤15 read degenerate even
+though the linear *probe* decodes the decision there from L1). A **truncate-and-adapt**
+run (cut at K, fine-tune a fresh readout) would confirm and very likely *extend* the
+strippable depth — ER F1 is arguably already present by L16 (0.93). That is the next
+step to turn this into a shipped smaller/faster ER head.
+(`layer_early_exit.json` on the volume.)
+
 ## Reproduce
 
 ```bash
@@ -290,6 +328,7 @@ modal run scripts/er_matcher/interp/modal_interp.py::probe_layers   # stage 1
 modal run scripts/er_matcher/interp/modal_interp.py::sae --layer 14 --l1 0.06 --expansion 8
 modal run scripts/er_matcher/interp/modal_interp.py::causal --layer 14 --lo 8 --hi 20
 modal run scripts/er_matcher/interp/modal_interp.py::layer2 --layer 14   # Layer 2
+modal run scripts/er_matcher/interp/modal_interp.py::strip                # strip probe
 ```
 
 Layer-2 pure helpers (`field_attribution.py`) are unit-tested model-free in
