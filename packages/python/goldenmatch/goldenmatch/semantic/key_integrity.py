@@ -153,6 +153,84 @@ def _structural_native(
         return None
 
 
+def certify_structural_json(input_json: str) -> str:
+    """The JSON-in/JSON-out structural certifier — the Python analogue of the
+    `key-integrity-core` kernel's `certify_structural_json`.
+
+    Input: ``{"n_rows": N, "group_columns": [[..], ..],
+    "measures": [{"name": .., "values": [..]}, ..]}`` (the group columns are the
+    declared key, or key+grain — the caller picks). Output:
+    ``{"n_rows", "n_key_groups", "duplicate_key_groups", "max_fan_out",
+    "is_unique_at_grain", "measure_fan_out": {name: ratio}}`` — byte-identical to
+    the Rust core (locked by `key-integrity-core`'s golden + the native parity
+    test), so the SQL surfaces (`goldenmatch_certify_structural` on Postgres via
+    the Rust core, and DuckDB via this function) return the same certificate.
+
+    Runs through the shared native kernel when opted in
+    (``GOLDENMATCH_KEY_INTEGRITY_NATIVE`` + the wheel), else the pyarrow group_by
+    reference. Raises ``ValueError`` on invalid JSON / a wrong-shaped input,
+    matching the core's contract.
+    """
+    try:
+        root = json.loads(input_json)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise ValueError(f"certify_structural_json: invalid JSON: {exc}") from exc
+    if not isinstance(root, dict):
+        raise ValueError("certify_structural_json: input must be a JSON object")
+
+    n_rows = root.get("n_rows")
+    if not isinstance(n_rows, int) or isinstance(n_rows, bool) or n_rows < 0:
+        raise ValueError("certify_structural_json: n_rows must be a non-negative integer")
+    group_cols_raw = root.get("group_columns")
+    if not isinstance(group_cols_raw, list) or not all(
+        isinstance(c, list) for c in group_cols_raw
+    ):
+        raise ValueError("certify_structural_json: group_columns must be an array of arrays")
+    measures_raw = root.get("measures") or []
+    if not isinstance(measures_raw, list):
+        raise ValueError("certify_structural_json: measures must be an array")
+
+    # Native pass-through when opted in: the SAME core the Postgres surface calls,
+    # so the two are byte-identical by construction.
+    if _key_integrity_native_enabled():
+        try:
+            from goldenmatch.core._native_loader import native_module
+
+            nm = native_module()
+            if nm is not None and hasattr(nm, "certify_structural_json"):
+                return str(nm.certify_structural_json(input_json))
+        except Exception:  # fail-open → pyarrow reference below
+            pass
+
+    # pyarrow reference. Reconstruct a table from the columnar JSON and run the
+    # same reduction certify_key_integrity uses; serialize to the core's shape.
+    columns: dict[str, list] = {}
+    group_names = [f"__g{i}__" for i in range(len(group_cols_raw))]
+    for name, vals in zip(group_names, group_cols_raw):
+        columns[name] = vals
+    measure_names: list[str] = []
+    for m in measures_raw:
+        if not isinstance(m, dict) or "name" not in m or "values" not in m:
+            raise ValueError("certify_structural_json: each measure needs name + values")
+        columns[str(m["name"])] = list(m["values"])
+        measure_names.append(str(m["name"]))
+    if columns:
+        table = pa.table(columns)
+    else:  # zero group columns — an n_rows-length empty frame
+        table = pa.table({"__empty__": [None] * n_rows})
+        group_names = []
+    structural = _structural_pyarrow(table, group_names, measure_names, n_rows)
+    out = {
+        "n_rows": n_rows,
+        "n_key_groups": structural["n_key_groups"],
+        "duplicate_key_groups": structural["duplicate_key_groups"],
+        "max_fan_out": structural["max_fan_out"],
+        "is_unique_at_grain": structural["is_unique_at_grain"],
+        "measure_fan_out": structural["measure_fan_out"],
+    }
+    return json.dumps(out)
+
+
 def certify_key_integrity(
     df: Any,
     *,

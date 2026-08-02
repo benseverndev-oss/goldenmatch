@@ -160,6 +160,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   `tests/test_key_integrity_native_parity.py` (native == pyarrow == the committed
   golden). Requires republishing `goldenmatch-native` to expose the symbol in
   wheel-installed environments (in-tree builds pick it up immediately).
+- **`semantic.certify_structural_json` — a public JSON-in/JSON-out structural
+  certifier + a `goldenmatch_certify_structural` SQL UDF on both backends.** The
+  structural key-integrity tier (group-by uniqueness + fan-out) is now reachable
+  as a JSON boundary (`{"n_rows", "group_columns", "measures"}` →
+  `{"n_key_groups", "duplicate_key_groups", "max_fan_out", "is_unique_at_grain",
+  "measure_fan_out"}`) — the Python analogue of the `key-integrity-core` kernel's
+  `certify_structural_json`. It runs through the shared native kernel when opted
+  in (`GOLDENMATCH_KEY_INTEGRITY_NATIVE`), else the pyarrow reference, and is
+  byte-parity-locked to the committed golden. This closes the semantic-wedge
+  certifier's last surface gap: **DuckDB** (`goldenmatch_certify_structural(VARCHAR)
+  → VARCHAR`, over this function) and **Postgres** (`goldenmatch_certify_structural`
+  native-direct over `key-integrity-core`, pgrx `0.16.0` → `0.17.0`) now emit the
+  same structural certificate as the Python / TS / WASM surfaces. Byte-identical
+  across all five by construction (shared kernel + shared golden). Tests:
+  `tests/test_certify_structural_json.py`.
 
 ### Changed
 - **FS out-of-core streaming: single `resolve_fs_block_source` knob + DuckDB

@@ -9,6 +9,7 @@ mod correction;
 mod goldencheck_kernels;
 mod goldenflow;
 mod kernels;
+mod key_integrity;
 mod pipeline;
 mod quick;
 mod spi;
