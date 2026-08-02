@@ -152,6 +152,24 @@ demands it.
   `household_hardneg` anchor as its standing target. One PR.
 - **3b** — blocking / comparison-set refit on a measured target (needs a shape
   where the *blocking*, not the threshold, is off — a separate hunt).
+  - **MEASURED-DECLINED (2026-08-02).** The hunt for an off-*blocking* target came
+    up empty for a STRUCTURAL reason: **auto-config already emits a blocking pass
+    per field** (a 7-pass `multi_pass` on person data), so a true pair co-blocks
+    via *some* pass as long as it shares *any* stable field — committed blocking
+    recall is **1.0** on every constructed adversarial shape (corrupt one name,
+    corrupt both names, heavy surname corruption). The only real under-blocking
+    case — a field the classifier MISCLASSIFIED (e.g. `birth_place`→`name`) — was
+    already solved by the merged `GOLDENMATCH_FS_ORTHOGONAL_BLOCKING` lever. Every
+    residual failure on those shapes was **over-merge (precision 0.24–0.89, recall
+    still 1.0)** — 3a's threshold domain, not blocking. On real historical_50k the
+    same holds: LOWERING the threshold RAISES recall (0.777→0.890 at link 0.30),
+    proving the missing recall is pairs that ARE co-blocked but scored below the
+    cut — scoring, not coverage. A blocking refit can only *add* an unused field,
+    and there is none to add (auto-config used them all); the inverse move —
+    *pruning* noisy passes for precision — already exists opt-in
+    (`blocking_pass_selection.py`) and is better served by the threshold loop (3a).
+    Net: the FS refit-loop value was **entirely in the threshold slice (3a)**;
+    blocking is already iterated at build time. Not built.
 - **3c** — fold the FS loop into the controller's `RunHistory` / commit
   machinery so FS and weighted share one iteration surface (the "one iteration
   surface" unification; largest, last).
