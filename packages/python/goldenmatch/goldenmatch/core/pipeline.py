@@ -1415,7 +1415,9 @@ def _apply_domain_extraction(
             llm_extract_features,
         )
         if not isinstance(combined_df_tmp, _pl_dom.DataFrame):
-            combined_df_tmp = _pl_dom.from_arrow(combined_df_tmp)
+            # from_arrow is typed DataFrame|Series; a pa.Table always yields a
+            # DataFrame.
+            combined_df_tmp = cast("Any", _pl_dom.from_arrow(combined_df_tmp))
         budget = None
         if domain_cfg.budget:
             from goldenmatch.core.llm_budget import BudgetTracker
