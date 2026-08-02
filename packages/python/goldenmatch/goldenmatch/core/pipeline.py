@@ -639,6 +639,45 @@ def _run_fs_streaming_dedupe(
     return res
 
 
+def _maybe_refit_link_threshold(
+    mk: Any,
+    link_threshold: float,
+    *,
+    pairs: list | None = None,
+    table: Any = None,
+) -> float:
+    """Phase 3a threshold refit, applied UNIFORMLY across every FS scoring route.
+
+    Returns the refit link cutoff when the refit flag is on, the caller set no
+    explicit ``mk.link_threshold``, and there are ``>= _REFIT_MIN_PAIRS`` scored
+    pairs; otherwise returns ``link_threshold`` unchanged (byte-identical default).
+    Pass EITHER ``pairs`` (a ``list[(id_a, id_b, score)]``) OR ``table`` (a
+    ``PAIR_STREAM_SCHEMA`` ``pa.Table``) -- both hold the SAME scored-pair
+    distribution down to the review cut, so the valley/guard sees the sub-link
+    region on every route. Re-cluster only (no re-scoring); this only moves the
+    cutoff used for the link/review split. See ``fs_refit_link_threshold``.
+    """
+    from goldenmatch.core.probabilistic import (
+        _REFIT_MIN_PAIRS,
+        _fs_refit_threshold_enabled,
+        fs_refit_link_threshold,
+    )
+
+    if mk.link_threshold is not None or not _fs_refit_threshold_enabled():
+        return link_threshold
+    if table is not None:
+        if table.num_rows < _REFIT_MIN_PAIRS:
+            return link_threshold
+        d = table.to_pydict()
+        return fs_refit_link_threshold(d["id_a"], d["id_b"], d["score"], link_threshold)
+    if pairs is not None and len(pairs) >= _REFIT_MIN_PAIRS:
+        return fs_refit_link_threshold(
+            [p[0] for p in pairs], [p[1] for p in pairs], [p[2] for p in pairs],
+            link_threshold,
+        )
+    return link_threshold
+
+
 def _score_probabilistic_matchkey(
     mk: Any,
     config: GoldenMatchConfig,
@@ -687,10 +726,7 @@ def _score_probabilistic_matchkey(
     """
     from goldenmatch.core.blocker import collect_blocking_fields
     from goldenmatch.core.probabilistic import (
-        _REFIT_MIN_PAIRS,
-        _fs_refit_threshold_enabled,
         fs_model_preloaded,
-        fs_refit_link_threshold,
         load_or_train_em,
         probabilistic_block_scorer,
         score_probabilistic_blocks_batched,
@@ -815,6 +851,7 @@ def _score_probabilistic_matchkey(
                 score_frame, config.blocking, scoring_mk, matched_pairs, em_result,
                 target_ids=target_ids, db_path="auto",
             )
+            link_threshold = _maybe_refit_link_threshold(mk, link_threshold, pairs=pairs)
             pairs, candidates = _split_probabilistic_pairs(pairs, link_threshold)
             review_pairs.extend(candidates)
             all_pairs.extend(pairs)
@@ -855,15 +892,9 @@ def _score_probabilistic_matchkey(
             # cluster-shape guard rejects it there). No-op unless the flag is on and
             # no explicit user threshold. Scores are already computed (re-cluster
             # only, no re-scoring); only the cutoff used for the split moves.
-            if (
-                _fs_refit_threshold_enabled()
-                and mk.link_threshold is None
-                and _pair_table.num_rows >= _REFIT_MIN_PAIRS
-            ):
-                _d = _pair_table.to_pydict()
-                link_threshold = fs_refit_link_threshold(
-                    _d["id_a"], _d["id_b"], _d["score"], link_threshold
-                )
+            link_threshold = _maybe_refit_link_threshold(
+                mk, link_threshold, table=_pair_table
+            )
             # Stay Arrow end-to-end (NO polars): split link/review on the pa.Table
             # itself. score_buckets_arrow already floors the table at the review
             # cut, so `score < link_threshold` is exactly the review band. The
@@ -907,6 +938,9 @@ def _score_probabilistic_matchkey(
                 n_buckets=config.n_buckets,
                 em_result=em_result,
             )
+            link_threshold = _maybe_refit_link_threshold(
+                mk, link_threshold, table=_pair_table
+            )
             pairs, candidates = _split_pair_stream(_pair_table, link_threshold)
             del _pair_table
             review_pairs.extend(candidates)
@@ -926,6 +960,7 @@ def _score_probabilistic_matchkey(
             target_ids=target_ids,
             em_result=em_result,
         )
+        link_threshold = _maybe_refit_link_threshold(mk, link_threshold, pairs=pairs)
         pairs, candidates = _split_probabilistic_pairs(pairs, link_threshold)
         review_pairs.extend(candidates)
         all_pairs.extend(pairs)
@@ -959,6 +994,7 @@ def _score_probabilistic_matchkey(
             em_result, target_ids=target_ids,
         )
         pairs = _across_files_filter(pairs)
+        link_threshold = _maybe_refit_link_threshold(mk, link_threshold, pairs=pairs)
         pairs, candidates = _split_probabilistic_pairs(pairs, link_threshold)
         review_pairs.extend(candidates)
         all_pairs.extend(pairs)
@@ -993,6 +1029,7 @@ def _score_probabilistic_matchkey(
         target_ids=target_ids,
     )
     pairs = _across_files_filter(pairs)
+    link_threshold = _maybe_refit_link_threshold(mk, link_threshold, pairs=pairs)
     pairs, candidates = _split_probabilistic_pairs(pairs, link_threshold)
     review_pairs.extend(candidates)
     all_pairs.extend(pairs)
