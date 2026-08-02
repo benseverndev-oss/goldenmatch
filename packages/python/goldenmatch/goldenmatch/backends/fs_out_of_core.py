@@ -941,7 +941,17 @@ def _cluster_arrow_native(
     return asn, n_pairs
 
 
-def spill_pair_shard(pair_table: Any, shard_dir: str, idx: int) -> str:
+# Cap the rows per Arrow IPC record batch in a spilled shard, so the read-back in
+# `external_wcc_from_shards` materialises at most this many edges per `get_batch`
+# regardless of how large a single wave's pair table is — a single giant batch would
+# otherwise force the whole wave's edges into RAM at once, undermining the bounded
+# claim. 65_536 edges ≈ ~1.5 MB of int64/float64 buffers per batch.
+_SPILL_SHARD_CHUNK_ROWS = 65_536
+
+
+def spill_pair_shard(
+    pair_table: Any, shard_dir: str, idx: int, *, max_chunksize: int | None = None
+) -> str:
     """Write one ``PAIR_STREAM`` ``pa.Table`` (``id_a``/``id_b`` int64, ``score``
     float64) to an Arrow IPC shard on disk and return its path.
 
@@ -949,16 +959,22 @@ def spill_pair_shard(pair_table: Any, shard_dir: str, idx: int) -> str:
     (``docs/superpowers/specs/2026-08-02-fs-duckdb-free-spill-external-wcc-design.md``):
     a scored WAVE's edges leave RAM the moment its shard is flushed, so the resident
     edge term is one wave's pairs, never the whole run's pair table. Arrow IPC (not
-    parquet) so the read-back in ``external_wcc_from_shards`` is a zero-copy mmap."""
+    parquet) so the read-back in ``external_wcc_from_shards`` is a zero-copy mmap.
+
+    ``max_chunksize`` (default ``_SPILL_SHARD_CHUNK_ROWS``) caps the rows per record
+    batch, so a large single-chunk wave table is split into predictably-sized batches
+    rather than one giant batch — the read-back then materialises at most one batch of
+    edges at a time, keeping the bound per-batch not per-wave."""
     import os as _os
 
     import pyarrow as pa
 
+    chunk = _SPILL_SHARD_CHUNK_ROWS if max_chunksize is None else max_chunksize
     _os.makedirs(shard_dir, exist_ok=True)
     path = _os.path.join(shard_dir, f"edges-{idx:06d}.arrow")
     with pa.OSFile(path, "wb") as sink:
         with pa.ipc.RecordBatchFileWriter(sink, pair_table.schema) as writer:
-            writer.write_table(pair_table)
+            writer.write_table(pair_table, max_chunksize=chunk)
     return path
 
 
@@ -997,26 +1013,28 @@ def external_wcc_from_shards(
     from goldenmatch.core.cluster import UnionFind
 
     uf = UnionFind()
-    parent = uf._parent
     n_pairs = 0
     for path in shard_paths:
         with pa.memory_map(path, "r") as source:
             reader = pa.ipc.open_file(source)
             for bi in range(reader.num_record_batches):
                 batch = reader.get_batch(bi)
-                a_col = batch.column("id_a").to_pylist()
-                b_col = batch.column("id_b").to_pylist()
-                s_col = batch.column("score").to_pylist()
-                for k in range(len(a_col)):
-                    if link_threshold is not None and s_col[k] < link_threshold:
-                        continue
-                    a, b = a_col[k], b_col[k]
-                    if a not in parent:
-                        parent[a] = a
-                        uf._rank[a] = 0
-                    if b not in parent:
-                        parent[b] = b
-                        uf._rank[b] = 0
+                # Zero-copy numeric views of the mmap'd buffers; vectorise the
+                # threshold filter so only surviving edges become Python ints.
+                a_np = batch.column("id_a").to_numpy(zero_copy_only=False)
+                b_np = batch.column("id_b").to_numpy(zero_copy_only=False)
+                if link_threshold is not None:
+                    mask = (
+                        batch.column("score").to_numpy(zero_copy_only=False)
+                        >= link_threshold
+                    )
+                    a_np = a_np[mask]
+                    b_np = b_np[mask]
+                # `.tolist()` -> native Python ints so UF keys match the Python-int
+                # `all_ids` fold below (a bounded batch, not the whole wave).
+                for a, b in zip(a_np.tolist(), b_np.tolist()):
+                    uf.add(a)  # public API: resilient to UnionFind internals
+                    uf.add(b)
                     uf.union(a, b)
                     n_pairs += 1
         # batch/table references dropped here -> the shard's edges leave RAM.
@@ -1032,8 +1050,9 @@ def external_wcc_from_shards(
     rid_out: list[int] = []
     cid_out: list[int] = []
     next_cid = 0
+    seen = uf._parent  # membership check: a row absent here never appeared in an edge
     for rid in ids:
-        root = uf.find(rid) if rid in parent else rid
+        root = uf.find(rid) if rid in seen else rid
         cid = root_to_cid.get(root)
         if cid is None:
             cid = next_cid
