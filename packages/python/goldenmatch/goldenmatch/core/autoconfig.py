@@ -616,7 +616,7 @@ def profile_columns(
             _parse_latlong,
         )
 
-        def _rate(name: str, parse) -> float:
+        def _rate(name: str, parse: Callable[[str], object | None]) -> float:
             # Rate over RAW non-null values (blanks retained): a blank is a
             # non-null unparseable value that must LOWER the rate, not be filtered
             # out (else a mostly-blank messy column looks reliable). Explicit 0.0
