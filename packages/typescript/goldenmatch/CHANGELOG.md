@@ -185,6 +185,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   `tests/unit/semantic-metric-aware.test.ts` (deterministic role reading +
   attribute-selection logic per dialect, plus an end-to-end case proving a differing
   declared measure is excluded from ER).
+- **Cross-language parity fixture for the metric-aware roles reader + `certify-keys`
+  CLI test coverage** (hardening for the resolution-tier work above). The
+  `semanticFieldRoles` / `metricAwareAttributes` selection is DETERMINISTIC (no ER
+  engine), so unlike the resolution tier itself it's a byte-parity surface: a new
+  Python-generated golden (`tests/parity/fixtures/semantic/roles.json`, emitted by
+  `scripts/emit_semantic_roles_fixtures.py` via the isolation loader, wired into
+  `regen_ts_parity_fixtures.sh` and picked up by the `ts_parity_freshness` gate)
+  now locks the TS reader against Python `semantic/blocking.py` per dialect —
+  `tests/parity/semantic-roles.test.ts` asserts identical `{keys, dimensions,
+  measures}` and `metricAwareAttributes` allow-lists. Separately, `certify-keys` (0
+  tests before) gains `tests/unit/cli-certify-keys.test.ts`: the command-local
+  `rowsToColumns` frame pivot (ragged rows → null, null-prototype safety, key
+  union) and `fmtG` float format — both now `export`ed from the import-guarded
+  `cli.ts` — plus the resolve-routing contract the `--resolve` branch depends on
+  (structural leaves resolve fields null; resolved populates + surfaces the
+  fragmentation note).
 
 ## [1.26.0] - 2026-07-27
 
