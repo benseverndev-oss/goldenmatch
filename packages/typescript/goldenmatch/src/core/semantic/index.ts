@@ -76,4 +76,10 @@ export {
   SemanticCertification,
   type KeyCertification,
 } from "./certify.js";
+export {
+  semanticFieldRoles,
+  metricAwareAttributes,
+  frameColumns,
+  type SemanticFieldRoles,
+} from "./blocking.js";
 export type { SemanticFrame, SemanticFrames } from "./frame.js";

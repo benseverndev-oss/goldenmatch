@@ -22,6 +22,8 @@ import { parseSemanticModels } from "./metricflow.js";
 import { certifyCubeJoins, certifyCubeJoinsResolved } from "./cube.js";
 import { certifyOsiRelationships, certifyOsiRelationshipsResolved } from "./osi.js";
 import type { SemanticDialect } from "./catalog.js";
+import { semanticFieldRoles, metricAwareAttributes, frameColumns } from "./blocking.js";
+import type { SemanticFieldRoles } from "./blocking.js";
 
 /** One certified declared key: which target declared it, the key column(s), the
  * advisory certificate, and the join/relationship it feeds. */
@@ -141,21 +143,26 @@ export function certifySemanticModel(doc: LoadedDoc, frames: SemanticFrames): Se
  * measure fragmentation / undercount — the part a semantic layer can't do itself.
  * Mirrors Python `certify_semantic_model(..., resolve=True)`.
  *
- * Attribute selection is BLIND (all non-key, non-measure columns for MetricFlow;
- * all non-key columns for Cube/OSI, matching Python which passes no measures on
- * those paths). The metric-aware role-driven selection (`metric_aware=True`, which
- * resolves on the model's declared **dimensions** only) needs the
- * `semantic/blocking.py` roles reader and is a follow-up — a model that declares
- * no dimensions is byte-identical to blind selection, so this covers that case.
- * Each key's resolution is fail-open; a failure leaves the resolve fields null.
+ * When `metricAware` (default), the ER is driven off the model's own declared
+ * roles — it resolves on the declared **dimensions** and never treats a
+ * **measure** as identity evidence (the differentiated wedge). A model that
+ * declares no dimensions falls back to blind selection (every non-key, non-measure
+ * column), so it is byte-identical to `metricAware: false`. Each key's resolution
+ * is fail-open; a failure leaves the resolve fields null.
  */
 export async function certifySemanticModelResolved(
   doc: LoadedDoc,
   frames: SemanticFrames,
+  opts: { metricAware?: boolean } = {},
 ): Promise<SemanticCertification> {
+  const metricAware = opts.metricAware ?? true;
   const dialect = detectDialect(doc);
   const entries: KeyCertification[] = [];
   const skipped: string[] = [];
+
+  // Read the model's declared roles once, so the resolution tier is metric-aware
+  // across every dialect (a measure is never identity evidence).
+  const roles: SemanticFieldRoles | null = metricAware ? semanticFieldRoles(doc) : null;
 
   if (dialect === "metricflow") {
     for (const spec of parseSemanticModels(doc)) {
@@ -164,15 +171,17 @@ export async function certifySemanticModelResolved(
         skipped.push(spec.model);
         continue;
       }
+      const attributes = roles !== null ? metricAwareAttributes(roles, frameColumns(df)) : undefined;
       const cert = await resolveKeyIntegrity(df, {
         key: spec.key,
         measures: spec.measures,
         ...(spec.grain !== null ? { grain: spec.grain } : {}),
+        ...(attributes !== undefined ? { attributes } : {}),
       });
       entries.push({ target: spec.model, key: [...spec.key], certificate: cert, context: "" });
     }
   } else if (dialect === "cube") {
-    for (const rep of await certifyCubeJoinsResolved(doc, frames)) {
+    for (const rep of await certifyCubeJoinsResolved(doc, frames, roles)) {
       entries.push({
         target: rep.toCube,
         key: [...rep.key],
@@ -181,7 +190,7 @@ export async function certifySemanticModelResolved(
       });
     }
   } else {
-    for (const rep of await certifyOsiRelationshipsResolved(doc, frames)) {
+    for (const rep of await certifyOsiRelationshipsResolved(doc, frames, roles)) {
       entries.push({
         target: rep.dataset,
         key: [...rep.key],

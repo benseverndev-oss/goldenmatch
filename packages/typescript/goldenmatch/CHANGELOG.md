@@ -162,6 +162,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   attributes under distinct keys → fragmentation; distinct records → none;
   no-attributes → skipped; structural fields untouched) rather than exact counts
   (`tests/unit/semantic-resolve-tier.test.ts`, plus MCP + REST resolve-path cases).
+- **Metric-aware attribute selection for the resolution tier + the `certify-keys
+  --resolve` CLI flag** (completes the resolve tier at full Python parity — the
+  differentiated wedge + every surface). Ports Python `semantic/blocking.py`
+  (`semanticFieldRoles` / `metricAwareAttributes` / `frameColumns` in the new
+  `core/semantic/blocking.ts`): a semantic model already declares which columns are
+  entity **keys**, **measures** (aggregation targets — never identity evidence),
+  and **dimensions** (the identity-bearing attributes). `certifySemanticModelResolved`
+  now drives the ER off those declared roles by default — it resolves on the
+  declared **dimensions** and never treats a **measure** as a match signal (no
+  pure-ER tool has this metadata; the semantic model does). Threaded through
+  `certifyCubeJoinsResolved` / `certifyOsiRelationshipsResolved` (each takes an
+  optional `roles`), and exposed as `certifySemanticModelResolved(doc, frames, {
+  metricAware })` — `metricAware` defaults **true**; a model that declares no
+  dimensions falls back to blind selection, so `metricAware: false` is byte-identical
+  to the prior blind behavior. Because the MCP `certify_semantic_model` tool and
+  `POST /semantic/certify` call the resolved certifier with defaults, their
+  `resolve=true` path is now metric-aware automatically. The TS CLI `certify-keys`
+  gains `--resolve` (run the resolution tier; surfaces each key's
+  fragmentation/undercount note below the table) and `--no-metric-aware` (force blind
+  selection), matching Python `cli/certify_keys.py`. Tests:
+  `tests/unit/semantic-metric-aware.test.ts` (deterministic role reading +
+  attribute-selection logic per dialect, plus an end-to-end case proving a differing
+  declared measure is excluded from ER).
 
 ## [1.26.0] - 2026-07-27
 

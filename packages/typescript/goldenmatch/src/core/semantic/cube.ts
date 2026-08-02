@@ -16,6 +16,8 @@ import type { ResolvedCrosswalk } from "./crosswalk.js";
 import { type LoadedDoc, asList, asStr, asStrStripped, isObj } from "./parseUtil.js";
 import { certifyKeyIntegrity, resolveKeyIntegrity, type KeyIntegrityCertificate } from "./keyIntegrity.js";
 import type { SemanticFrame, SemanticFrames } from "./frame.js";
+import { metricAwareAttributes, frameColumns } from "./blocking.js";
+import type { SemanticFieldRoles } from "./blocking.js";
 
 /** An optional key-integrity certificate whose stats ride in `meta.goldenmatch`. */
 export interface CubeKeyIntegrityCertificateLike {
@@ -293,12 +295,15 @@ export function certifyCubeJoins(doc: LoadedDoc, frames: SemanticFrames): Certif
  * Async resolve-tier counterpart of {@link certifyCubeJoins}: certifies each
  * join's one-side key AND runs entity resolution on that frame's attributes to
  * measure fragmentation / undercount. Mirrors Python `certify_cube_joins(...,
- * resolve=True)` — blind attribute selection (all columns except the key; Cube's
- * measures are NOT passed to the certifier, matching Python). Fail-open per key.
+ * resolve=True, roles=...)`. Pass `roles` (from `semanticFieldRoles`) to make the
+ * ER metric-aware — it resolves on the model's declared dimensions and excludes
+ * measures; `null` (the default) is blind selection (all columns except the key).
+ * Fail-open per key.
  */
 export async function certifyCubeJoinsResolved(
   doc: LoadedDoc,
   frames: SemanticFrames,
+  roles: SemanticFieldRoles | null = null,
 ): Promise<CertifiedJoin[]> {
   const out: CertifiedJoin[] = [];
   for (const cube of parseCubeModels(doc)) {
@@ -309,7 +314,11 @@ export async function certifyCubeJoinsResolved(
           : [jk.toCube, jk.toColumns];
       const df = frames[oneCube];
       if (df === undefined || oneColumns.length === 0) continue;
-      const cert = await resolveKeyIntegrity(df, { key: oneColumns });
+      const attributes = roles !== null ? metricAwareAttributes(roles, frameColumns(df)) : undefined;
+      const cert = await resolveKeyIntegrity(df, {
+        key: oneColumns,
+        ...(attributes !== undefined ? { attributes } : {}),
+      });
       out.push({ fromCube: jk.fromCube, toCube: jk.toCube, key: [...oneColumns], certificate: cert });
     }
   }

@@ -248,10 +248,10 @@ function rowKeyValues(table: Readonly<Record<string, readonly unknown[]>>, keyCo
  * ER is run async here because TS `dedupe()` is async (Python's `dedupe_df` is sync);
  * the returned certificate carries the same `resolvedEntities` / `fragmentedEntities`
  * / `undercountEstimate` / `estimable` contract as the Python dataclass. Attribute
- * selection is BLIND (all non-key, non-measure columns) — the metric-aware
- * role-driven selection (`metric_aware=True` in Python's `certify_semantic_model`,
- * which needs the `semantic/blocking.py` roles reader) is a follow-up; pass an
- * explicit `attributes` list to drive it caller-side.
+ * selection here is BLIND by default (all non-key, non-measure columns); pass an
+ * explicit `attributes` list for the metric-aware, role-driven selection —
+ * `certifySemanticModelResolved` computes it from the model's declared dimensions
+ * via `blocking.ts` (`metricAwareAttributes`).
  */
 export async function resolveKeyIntegrity(
   table: Readonly<Record<string, readonly unknown[]>>,

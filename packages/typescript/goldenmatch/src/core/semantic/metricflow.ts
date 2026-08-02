@@ -23,14 +23,16 @@ export interface DeclaredKeySpec {
   foreignKeys: string[]; // foreign entities (join edges)
 }
 
-/** The physical column an entity maps to: `expr` if given, else `name`. */
-function entityColumn(entity: Record<string, unknown>): string {
+/** The physical column an entity maps to: `expr` if given, else `name`.
+ * Exported for the metric-aware roles reader (`blocking.ts`), which reads the
+ * same entity/dimension column shape. */
+export function entityColumn(entity: Record<string, unknown>): string {
   const expr = entity["expr"];
   if (typeof expr === "string" && expr.trim()) return expr.trim();
   return asStrStripped(entity["name"]);
 }
 
-function measureColumn(measure: Record<string, unknown>): string {
+export function measureColumn(measure: Record<string, unknown>): string {
   const expr = measure["expr"];
   if (typeof expr === "string" && expr.trim()) return expr.trim();
   return asStrStripped(measure["name"]);
