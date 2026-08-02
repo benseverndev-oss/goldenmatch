@@ -45,26 +45,50 @@ matches — so recall rises while precision holds. This is why the existing over
 gate (which only ever tested strip candidates) drops atomic-name passes, but the
 soundex variant is safe.
 
-## Measurement (leak-free, real `dedupe_df`, B³)
+## Measurement — CORRECTED (2026-08-02): the lever REGRESSES its target
 
-| dataset | | B³ P | B³ R | B³ F1 | ΔF1 |
-|---|---|---|---|---|---|
-| historical_50k | off | 0.9708 | 0.7752 | 0.8620 | — |
-| historical_50k | **+ atomic soundex** | 0.9680 | 0.7879 | **0.8688** | **+0.0067** |
-| historical_50k | + atomic **strip** (contrast) | 0.9203 | 0.7985 | 0.8551 | −0.0070 |
-| febrl3 | + atomic soundex | 1.0000 | 0.9946 | 0.9973 | +0.0000 (no-op) |
+> **⚠️ The original "+0.0067 B³ F1" claim was wrong.** It was a single-run
+> measurement against a stale pipeline state; main advanced between branch
+> restarts and it did **not reproduce**. Re-measured on the canonical
+> `bench_er_headtohead` panel (and confirmed across repeated runs + fixed hash
+> seeds + the original script), the lever is a **regression** on its only target.
 
-+0.0067 B³ F1 on the hard PII set (recall +1.27pp, precision −0.0027), no-op on
-clean data. **13× the entire scoring-side oracle ceiling.** The strip contrast
-reproduces the documented over-merge, validating the harness.
+Canonical panel (`validate_fs_holdout.py`, real `dedupe_df`):
 
-## Disposition
+| dataset | pairwise F1 OFF→ON | ΔF1 | blocking_recall OFF→ON | threshold_loss OFF→ON |
+|---|---|---|---|---|
+| historical_50k | 0.8473 → 0.8325 | **−0.0148** | 0.886 → **0.946 (+6pp)** | 0.281 → 0.353 (+7pp) |
+| febrl3 | 0.9942 → 0.9942 | +0.0000 | — | — |
+| febrl4 | 0.9946 → 0.9946 | +0.0000 | — | — |
 
-Ships **gated, default off**. `auto` fires only on person-shaped data
-(`_dataset_is_person_shaped`), a structural no-op elsewhere; `on` forces it.
-Default-off (not `auto`) because only historical_50k + febrl3 are validated so
-far — the `bench_er_headtohead` / `qis_gate` panel should bless it before the
-default flips, matching the `tf_adjustment` / FD-negative-evidence posture.
+Same direction on B³ (historical_50k −0.0078, stable across 4 hash seeds).
+
+**Why it fails end-to-end.** The blocking mechanism *works* — candidate recall
+jumps +6pp, the corrupted-name pairs are generated. But (1) those hard
+corrupted-name candidates score **below the FS threshold** (threshold_loss
++7pp) so they're generated then discarded, and (2) the **EM shift** from the
+added passes changes `m`/`u` and degrades the overall operating point, so
+precision *and* recall drop. Generating the pairs isn't enough when the scorer
+can't correctly score them — the same wall historical_50k's residual recall
+kept hitting on the scoring side. (Atomic-name STRIP is worse: B³ precision
+−0.05.)
+
+## Disposition — kept gated, default OFF (known-negative)
+
+Per the maintainer's call, the lever stays in place **gated, default off**, with
+the docs corrected to this honest measurement — a *documented known-negative*,
+not a pending win. `auto`/`on` must NOT be enabled outside experimentation. A
+possible future salvage is the threshold/EM interaction (e.g. accept the
+atomic-pass candidates on a per-pass calibrated threshold, or exclude the added
+passes from EM training) — but the evidence says the FS scorer fundamentally
+can't separate the corrupted-name matches from non-matches at that blocking key,
+so treat salvage as speculative.
+
+**Methodology lesson (the real takeaway):** never validate an FS lever on a
+single `dedupe_df` run — the pipeline's baseline drifts across processes/pipeline
+versions by ~±0.01, which swamped this lever's effect and produced a phantom
+win. Use the canonical `bench_er_headtohead` panel + repeated runs from the
+start.
 
 ## The LLM pass-selector idea — investigated and shelved
 

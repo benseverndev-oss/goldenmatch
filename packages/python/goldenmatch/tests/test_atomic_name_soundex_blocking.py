@@ -7,11 +7,14 @@ it (historical_50k: surname-soundex alone recovers 49% of the missed true pairs)
 
 `_add_atomic_name_soundex_blocking` adds an additive atomic single-name SOUNDEX
 pass for each given/family field when a composite-name soundex pass exists but the
-atomic one doesn't. SOUNDEX not STRIP: atomic-name strip over-merges (documented
-B3 precision -0.05); soundex is precision-safe (leak-free historical_50k B3 F1
-0.8620 -> 0.8688, precision -0.0027; febrl3 no-op).
+atomic one doesn't.
 
-Gated default OFF pending the full ER panel; `auto` = person-shaped only.
+KNOWN-NEGATIVE (corrected 2026-08-02): the lever raises candidate/blocking recall
+(+6pp on historical_50k) but REGRESSES end-to-end quality on the canonical
+bench_er_headtohead panel (historical_50k pairwise F1 -0.0148 / B3 -0.0078) --
+the corrupted-name candidates fall below the FS threshold and the EM shift
+degrades the operating point. Default OFF; do NOT enable. These tests only assert
+the pass-construction MECHANISM (gating, dedup, additive), not any F1 claim.
 """
 
 from __future__ import annotations

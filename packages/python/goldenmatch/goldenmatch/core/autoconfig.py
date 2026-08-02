@@ -1024,14 +1024,20 @@ def _fs_atomic_name_blocking_mode() -> str:
     duplicates are never co-blocked (historical_50k: 49% of the missed true pairs
     share a surname-soundex the blocking doesn't use).
 
-    - ``off`` (**default**): never fire (byte-identical to the pre-lever config).
-      Default-off pending the full ``bench_er_headtohead`` / ``qis_gate`` panel;
-      validated so far on historical_50k (leak-free B3 F1 0.8620 -> 0.8688,
-      +0.0067, precision -0.0027) + febrl3 (no-op). SOUNDEX is the precision-safe
-      variant -- atomic-name STRIP over-merges (historical_50k B3 precision
-      -0.05, the documented failure) because exact same-name blocks are mostly
-      non-matches; soundex's fuzzy-tolerant net adds disproportionately many
-      corrupted-spelling TRUE matches.
+    - ``off`` (**default -- KNOWN-NEGATIVE, do not flip**): never fire
+      (byte-identical to the pre-lever config). **The canonical
+      ``bench_er_headtohead`` panel measures this lever as a REGRESSION on its
+      only target: historical_50k pairwise F1 -0.0148 (B3 -0.0078), robustly
+      (stable across hash seeds + repeated runs).** It DOES raise candidate /
+      blocking recall +6pp (0.886 -> 0.946) -- the blocking mechanism works --
+      but the corrupted-name candidates it generates fall BELOW the FS threshold
+      (threshold_loss +7pp) and the EM shift from the added passes degrades the
+      operating point, so precision AND recall drop. (An earlier +0.0067 B3
+      figure was measured against a stale pipeline state and did NOT reproduce
+      on current main.) febrl3/febrl4 are no-ops. Kept gated for reference /
+      future salvage, NOT because it works. SOUNDEX vs STRIP note: atomic-name
+      STRIP over-merges even harder (historical_50k B3 precision -0.05); soundex
+      is the less-bad variant, but "less bad" is still net-negative here.
     - ``auto`` (``auto``): fire ONLY on person-shaped data
       (``_dataset_is_person_shaped``) -- the regime where names are the primary
       blocking signal.
@@ -5652,20 +5658,22 @@ def _add_atomic_name_soundex_blocking(
     field when the blocking keys names via a COMPOSITE soundex pass but has no
     atomic single-name soundex pass.
 
-    The gap: ``build_blocking`` emits ``full_name`` / ``first_and_surname`` soundex
-    passes, so one corrupted name breaks the whole composite key -- a pair with a
-    mangled first name but an intact surname never co-blocks, even though a
-    ``surname`` soundex would catch it (historical_50k: surname-soundex alone
-    would recover 49% of the missed true pairs; first-initial+surname another
-    26%). Adding the atomic passes recovers that recall.
+    The gap it targets: ``build_blocking`` emits ``full_name`` /
+    ``first_and_surname`` soundex passes, so one corrupted name breaks the whole
+    composite key -- a pair with a mangled first name but an intact surname never
+    co-blocks. Adding the atomic passes DOES recover that CANDIDATE recall
+    (historical_50k blocking recall 0.886 -> 0.946, +6pp).
 
-    SOUNDEX not STRIP: an atomic-name *strip* (exact) pass co-blocks every
-    exact-same-name pair -- mostly unrelated people -- and over-merges
-    (historical_50k B3 precision -0.05, the documented failure the existing
-    orthogonal-anchor overlap gate correctly drops). Soundex's fuzzy-tolerant net
-    adds disproportionately many corrupted-spelling TRUE matches, so precision
-    holds while recall rises (leak-free historical_50k B3 F1 0.8620 -> 0.8688,
-    precision -0.0027; febrl3 no-op).
+    **KNOWN-NEGATIVE -- default off, do not enable.** The candidate-recall gain
+    does NOT convert to end-to-end quality: on the canonical
+    ``bench_er_headtohead`` panel this lever REGRESSES historical_50k pairwise F1
+    -0.0148 (B3 -0.0078), robustly. The corrupted-name candidates it generates
+    fall below the FS threshold (threshold_loss +7pp) and the EM shift from the
+    added passes degrades the operating point, so precision AND recall drop. The
+    FS scorer simply can't accept the hard corrupted-name candidates at
+    acceptable precision -- generating them isn't enough. (An earlier +0.0067 B3
+    figure was a stale-pipeline artifact that did not reproduce.) STRIP is worse
+    still (B3 precision -0.05). Kept gated for reference / possible salvage.
 
     Purely additive (``additive=True``) -- co-locates the missed pairs WITHOUT
     demoting the atomic name field from EM scoring, and the scorer still decides
