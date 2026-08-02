@@ -281,3 +281,23 @@ class LocalLlamaAdapter:
             logger.warning("local LLM inference failed: %s", e)
             return False, 0.0
         return parse_verdict(text)
+
+    def score_and_explain(
+        self, row_a: dict, row_b: dict, columns: list[str],
+        *, weights: dict[str, float] | None = None,
+    ):
+        """Score the pair AND attach a field-grounded rationale.
+
+        Returns ``(is_match, confidence, PairExplanation)``. The explanation is
+        built from the model's OWN learned field-importance (the Layer-2 abstraction
+        of the causally-validated match direction — see
+        ``core.er_matcher.explainer``), so it reflects what actually moves the
+        model's decision, to a stated faithfulness bound.
+        """
+        from goldenmatch.core.er_matcher.explainer import explain_pair
+
+        match, conf = self.score_pair(row_a, row_b, columns)
+        explanation = explain_pair(
+            row_a, row_b, columns, match=match, confidence=conf, weights=weights
+        )
+        return match, conf, explanation

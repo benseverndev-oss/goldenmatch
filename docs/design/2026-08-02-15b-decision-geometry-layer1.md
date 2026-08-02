@@ -256,6 +256,20 @@ That convergence is the evidence the abstraction is faithful, not a just-so stor
 and it is only meaningful *because* the underlying direction was causally locked first.
 (`layer2_abstraction_L14.json` on the volume.)
 
+### Shipped: a per-decision explainer
+
+The Layer-2 profile is productized in the shipped package as a per-decision
+explainer (`goldenmatch/core/er_matcher/explainer.py` +
+`LocalLlamaAdapter.score_and_explain`). Given a record pair and the model's verdict,
+it emits a field-grounded rationale using the model's OWN learned field-importance —
+pure/model-free (jaro-winkler + the weight table), schema-agnostic, and honest about
+the R²=0.51 faithfulness bound. Example (hard-negative): *"NO MATCH (confidence 0.82).
+Supporting: surname (exact). Opposing: first_name ('John' vs 'Michael', 0.46),
+birth_place (0.45)…"* — surname agrees but the model rejects on the discriminating
+fields, exactly the learned behavior. It flags the low-confidence case where the
+field story disagrees with the verdict, and falls back to a neutral profile (no
+faithfulness claim) on schemas outside the person profile.
+
 ## Reproduce
 
 ```bash
