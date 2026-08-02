@@ -31,11 +31,17 @@ describe("certify-keys command-local logic", () => {
       expect(cols["email"]).toEqual(["a@x.com", null]);
     });
 
-    it("is null-prototype — a __proto__ column cannot pollute the prototype chain", () => {
-      const cols = rowsToColumns([{ __proto__: "x", id: "1" } as Record<string, unknown>]);
-      // The pivot result has no prototype, so a crafted column name is inert.
+    it("is null-prototype — a __proto__ column is captured as data, not prototype-mutating", () => {
+      // Computed key so `__proto__` is a real own enumerable column name (a hostile
+      // header), NOT prototype-mutating object-literal syntax (which JS ignores for a
+      // string value, so the pivot would never even see the column).
+      const cols = rowsToColumns([{ ["__proto__"]: "x", id: "1" } as Record<string, unknown>]);
+      // The pivot result has no prototype, so the crafted column is an inert own key.
       expect(Object.getPrototypeOf(cols)).toBeNull();
-      expect(({} as Record<string, unknown>)["polluted"]).toBeUndefined();
+      expect(Object.prototype.hasOwnProperty.call(cols, "__proto__")).toBe(true);
+      expect((cols as Record<string, unknown>)["__proto__"]).toEqual(["x"]);
+      // A plain object's prototype is untouched by having pivoted a __proto__ column.
+      expect(Object.getPrototypeOf({})).toBe(Object.prototype);
     });
 
     it("empty input → empty frame", () => {
