@@ -33,7 +33,7 @@ from mcp.types import (
     Tool,
 )
 
-from goldenmatch.core._paths import PathOutsideAllowedRootError, safe_path
+from goldenmatch.core._paths import _ENV_ROOT, PathOutsideAllowedRootError, safe_path
 from goldenmatch.mcp.agent_tools import AGENT_TOOLS, handle_agent_tool
 from goldenmatch.mcp.document_tools import (
     DOCUMENT_TOOL_NAMES,
@@ -1866,12 +1866,28 @@ def _tool_profile_data() -> dict:
     return {"columns": cols, "total_records": _engine.row_count}
 
 
+# Jail root for the NETWORK-exposed HTTP transport. ``run_server_http`` sets it
+# to ``GOLDENMATCH_ALLOWED_ROOT`` (else the CWD), so an authenticated MCP client
+# can't read/write outside that root by default -- the goldenpipe/infermap
+# sibling posture. It stays ``None`` on the stdio transport, where goldenmatch is
+# intentionally local-first (a trusted local caller may reference absolute
+# paths; opt-in containment via GOLDENMATCH_ALLOWED_ROOT still applies). See
+# ``core/_paths.py``.
+_HTTP_JAIL_ROOT: str | None = None
+
+
 def _safe_path_or_error(value: str) -> Path | dict:
-    """Validate *value* via safe_path; return the resolved Path or an error dict."""
+    """Validate *value* via safe_path, jailed to the HTTP transport root when set.
+
+    Returns the resolved Path or a GENERIC error dict -- the message never leaks
+    the resolved path or the server's root to a (possibly remote) MCP client.
+    """
     try:
-        return safe_path(value)
-    except (ValueError, PathOutsideAllowedRootError) as exc:
-        return {"error": str(exc)}
+        return safe_path(value, base_dir=_HTTP_JAIL_ROOT)
+    except PathOutsideAllowedRootError:
+        return {"error": "path is outside the allowed root"}
+    except ValueError:
+        return {"error": "invalid path"}
 
 
 def _tool_export_results(output_path: str, fmt: str) -> dict:
@@ -2606,6 +2622,7 @@ async def run_server_http(
     healthchecks.
     """
     import contextlib
+    import os
     from collections.abc import AsyncIterator
 
     import uvicorn
@@ -2617,6 +2634,12 @@ async def run_server_http(
     from starlette.routing import Mount, Route
 
     token = resolve_http_auth_token(host)
+
+    # Jail every MCP file-path argument to the allowed root by default on the
+    # network-exposed transport (GOLDENMATCH_ALLOWED_ROOT, else the CWD) -- the
+    # goldenpipe/infermap sibling posture. stdio stays local-first (unset).
+    global _HTTP_JAIL_ROOT
+    _HTTP_JAIL_ROOT = os.environ.get(_ENV_ROOT) or os.getcwd()
 
     class _BearerAuthMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request, call_next):
