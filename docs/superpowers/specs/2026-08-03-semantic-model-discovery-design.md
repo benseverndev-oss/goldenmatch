@@ -202,6 +202,23 @@ ProposedModel`.
    (`discover_semantic_model(..., name=False)`, CLI `discover-model --name`, MCP/REST
    `name` bool); `GOLDENMATCH_SEMANTIC_NAMER=0` is a hard kill-switch. No new MCP
    tool / CLI command -> no `api_parity` tool-list change.
+8. **PR-8 (optional) `--apply-names`.** An opt-in mode that writes the VERIFIED names
+   from `ProposedModel.naming` into the emitted MetricFlow YAML, turning the advisory
+   layer into an applied catalog. Only entity + measure names have a native MetricFlow
+   slot, so: entity business name -> the semantic_model's `label:`; measure name -> that
+   measure's `label:`; dimension-column + value-glossary names -> a
+   `meta.goldenmatch.glossary` block (a sibling of the key-integrity verdict already in
+   `meta.goldenmatch`). **Post-certification + cosmetic:** structural discovery, emit,
+   and certify run unchanged; the labels/meta are applied to the final `model.yaml`
+   AFTER certification (they don't touch grain/joins/measures, so the verdict stays
+   valid and is not recomputed). Only `verified=True` suggestions are applied; the full
+   `naming` list is still exposed. `apply_names=False` (default) -> byte-identical
+   emitted YAML. New pure `namer.apply_names(model) -> str` (no LLM; operates on the
+   already-produced `naming` + `yaml`), called by the orchestrator when
+   `apply_names=True` (which implies `name=True`). Surfaces:
+   `discover_semantic_model(..., apply_names=False)`, CLI `--apply-names`, MCP/REST
+   `apply_names` bool; `"yaml"` is added to `ProposedModel.to_dict()` so the applied
+   catalog is visible on every surface. No new MCP tool / CLI command.
 
 Each PR is independently useful (PR-1 alone gives "certified key discovery per
 table"). The certifier is exercised from PR-1, so the "pre-graded" property holds at

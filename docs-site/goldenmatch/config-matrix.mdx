@@ -680,6 +680,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `discover-model` | `--output` | text | `None` | Write the draft semantic-model YAML to this path. |
 | `discover-model` | `--resolve` | boolean | `False` | Also measure entity fragmentation / undercount via ER (fail-open). |
 | `discover-model` | `--name` | boolean | `False` | Also run the OPTIONAL advisory LLM namer (business names for entities/dimensions/values/measures; abstains without an LLM key). |
+| `discover-model` | `--apply-names` | boolean | `False` | Write the namer's VERIFIED names into the emitted YAML (entity/measure label:, dimension/value meta.goldenmatch.glossary). Implies --name; post-certification + cosmetic. |
 | `discover-model` | `--fail-untrustworthy` | boolean | `False` | Exit non-zero if any proposed key is not unique at grain (CI gate). |
 | `discover-model` | `--json` | boolean | `False` | Emit the full proposed model (shape + certification) as JSON. |
 | `evaluate` | `files` | text | **required** | Input files (path or path:source_name) |

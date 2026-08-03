@@ -129,6 +129,7 @@ class ProposedModel:
             ],
             "certification": self.certification,
             "naming": [n.to_dict() for n in self.naming],
+            "yaml": self.yaml,
         }
 
 
@@ -149,6 +150,7 @@ def discover_semantic_model(
     dialect: str = "metricflow",
     resolve: bool = False,
     name: bool = False,
+    apply_names: bool = False,
     namer_backend: Any = None,
 ) -> ProposedModel:
     """Discover a draft semantic model from a set of source tables.
@@ -248,8 +250,10 @@ def discover_semantic_model(
     )
 
     # Optional, advisory, non-authoritative: annotate the finished model with business
-    # names. The structural output above is complete and never altered by this.
-    if name:
+    # names. The structural output above is complete and never altered by naming
+    # itself; `apply_names` (opt-in) writes only the VERIFIED names into the emitted
+    # YAML afterward, post-certification and cosmetically (the verdict is unchanged).
+    if name or apply_names:
         from goldenmatch.semantic.discovery.namer import (
             load_namer_backend,
             name_semantic_model,
@@ -257,5 +261,10 @@ def discover_semantic_model(
 
         backend = namer_backend if namer_backend is not None else load_namer_backend()
         model.naming = name_semantic_model(model, tables, backend=backend)
+
+    if apply_names:
+        from goldenmatch.semantic.discovery.namer import apply_names as _apply_names
+
+        model.yaml = _apply_names(model)
 
     return model

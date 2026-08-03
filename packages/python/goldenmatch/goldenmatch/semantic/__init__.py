@@ -55,6 +55,7 @@ from goldenmatch.semantic.discovery import (
     ProposedModel,
     ProposedTable,
     TableMeasures,
+    apply_names,
     discover_entity_types,
     discover_joins,
     discover_keys,
@@ -171,6 +172,7 @@ __all__ = [
     # semantic-model discovery (Phase 5) — the orchestrator (assemble + emit + certify)
     "discover_semantic_model",
     # semantic-model discovery (Phase 7) — optional advisory LLM namer
+    "apply_names",
     "name_semantic_model",
     "NameSuggestion",
     "ProposedModel",

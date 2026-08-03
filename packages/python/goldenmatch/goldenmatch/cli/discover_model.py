@@ -37,6 +37,12 @@ def discover_model_cmd(
         help="Also run the OPTIONAL advisory LLM namer (business names for "
              "entities/dimensions/values/measures; abstains without an LLM key).",
     ),
+    apply_names: bool = typer.Option(
+        False, "--apply-names",
+        help="Write the namer's VERIFIED names into the emitted YAML "
+             "(entity/measure label:, dimension/value meta.goldenmatch.glossary). "
+             "Implies --name; post-certification + cosmetic.",
+    ),
     fail_untrustworthy: bool = typer.Option(
         False, "--fail-untrustworthy",
         help="Exit non-zero if any proposed key is not unique at grain (CI gate).",
@@ -61,7 +67,9 @@ def discover_model_cmd(
         tables[tbl_name.strip()] = read_table_arrow(path.strip())
 
     try:
-        model = discover_semantic_model(tables, dialect=dialect, resolve=resolve, name=name)
+        model = discover_semantic_model(
+            tables, dialect=dialect, resolve=resolve, name=name, apply_names=apply_names
+        )
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=2) from exc

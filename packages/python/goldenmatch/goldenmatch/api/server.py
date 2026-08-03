@@ -536,6 +536,7 @@ def _certify_semantic_model_endpoint(
 
 def _discover_semantic_model_endpoint(
     frames: Any, dialect: Any, resolve: bool, name: bool = False,
+    apply_names: bool = False,
 ) -> dict[str, Any]:
     """Stateless `POST /semantic/discover` handler: propose a draft semantic model
     from a set of source tables, pre-graded by the certifier.
@@ -562,7 +563,8 @@ def _discover_semantic_model_endpoint(
 
     try:
         model = discover_semantic_model(
-            loaded, dialect=str(dialect or "metricflow"), resolve=resolve, name=bool(name)
+            loaded, dialect=str(dialect or "metricflow"), resolve=resolve,
+            name=bool(name), apply_names=bool(apply_names),
         )
     except ValueError as exc:
         return {"error": str(exc)}
@@ -725,6 +727,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 data.get("dialect", "metricflow"),
                 bool(data.get("resolve", False)),
                 bool(data.get("name", False)),
+                bool(data.get("apply_names", False)),
             )
             self._json_response(result, 400 if "error" in result else 200)
         elif path == "/retrieve":

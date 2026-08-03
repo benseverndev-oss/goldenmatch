@@ -32,6 +32,8 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
+import yaml
+
 if TYPE_CHECKING:
     from goldenmatch.semantic.discovery.model import ProposedModel
 
@@ -248,6 +250,65 @@ def name_semantic_model(
                     confidence=conf, verified=verified, evidence=info["evidence"],
                 )
     return list(out.values())
+
+
+# --- applied catalog (PR-8): write verified names into the emitted YAML ---------
+
+
+def _glossary(sm: dict[str, Any]) -> dict[str, Any]:
+    """The `meta.goldenmatch.glossary` block for a semantic model, created on demand
+    (a sibling of the key-integrity verdict already carried in `meta.goldenmatch`)."""
+    return sm.setdefault("meta", {}).setdefault("goldenmatch", {}).setdefault("glossary", {})
+
+
+def apply_names(model: ProposedModel) -> str:
+    """Write the model's VERIFIED name suggestions into its emitted MetricFlow YAML,
+    returning the labeled document. Pure + LLM-free (operates on `model.naming` +
+    `model.yaml`), post-certification and cosmetic:
+
+    - entity  -> the semantic_model's ``label:`` (structural ``name:`` unchanged)
+    - measure -> that measure's ``label:``
+    - dimension / value -> ``meta.goldenmatch.glossary`` (MetricFlow has no native slot)
+
+    Only ``verified=True`` suggestions are applied. With no verified names (or no
+    emitted YAML) the original `model.yaml` is returned unchanged.
+    """
+    verified = [s for s in model.naming if s.verified]
+    if not verified or not model.yaml:
+        return model.yaml
+
+    doc = yaml.safe_load(model.yaml)
+    if not isinstance(doc, dict) or "semantic_models" not in doc:
+        return model.yaml
+    sms = doc["semantic_models"]
+    by_name = {sm.get("name"): sm for sm in sms}
+
+    for s in verified:
+        payload = s.target.split(":", 1)[1] if ":" in s.target else s.target
+        if s.kind == "entity":
+            for sm in sms:  # a multi-table entity labels each of its models
+                if any(e.get("type") == "primary" and e.get("name") == payload
+                       for e in sm.get("entities", [])):
+                    sm["label"] = s.suggested_name
+        elif s.kind == "measure":
+            table, _, col = payload.partition(".")
+            sm = by_name.get(table)
+            for m in (sm.get("measures", []) if sm else []):
+                if m.get("name") == col:
+                    m["label"] = s.suggested_name
+        elif s.kind == "dimension":
+            table, _, col = payload.partition(".")
+            sm = by_name.get(table)
+            if sm is not None:
+                _glossary(sm).setdefault("dimensions", {})[col] = s.suggested_name
+        elif s.kind == "value":
+            table_col, _, val = payload.partition("=")
+            table, _, col = table_col.partition(".")
+            sm = by_name.get(table)
+            if sm is not None:
+                _glossary(sm).setdefault("values", {}).setdefault(col, {})[val] = s.suggested_name
+
+    return yaml.safe_dump(doc, sort_keys=False, default_flow_style=False)
 
 
 # --- default backend (opt-in, graceful abstain) --------------------------------

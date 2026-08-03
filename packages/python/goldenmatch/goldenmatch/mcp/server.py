@@ -853,6 +853,16 @@ _BASE_TOOLS = [
                     ),
                     "default": False,
                 },
+                "apply_names": {
+                    "type": "boolean",
+                    "description": (
+                        "Write the namer's VERIFIED names into the emitted YAML "
+                        "(entity/measure `label:`, dimension/value `meta.goldenmatch."
+                        "glossary`). Implies `name`. Post-certification + cosmetic; the "
+                        "verdict is unchanged. Off = byte-identical structural YAML."
+                    ),
+                    "default": False,
+                },
             },
             "required": ["frames"],
         },
@@ -1405,6 +1415,7 @@ def _handle_tool(name: str, args: dict) -> dict:
             args.get("dialect", "metricflow"),
             args.get("resolve", False),
             args.get("name", False),
+            args.get("apply_names", False),
         )
     else:
         return {"error": f"Unknown tool: {name}"}
@@ -1447,7 +1458,8 @@ def _tool_certify_semantic_model(model_path: str, frames: dict, resolve: bool) -
 
 
 def _tool_discover_semantic_model(
-    frames: dict, dialect: str, resolve: bool, name: bool = False
+    frames: dict, dialect: str, resolve: bool, name: bool = False,
+    apply_names: bool = False,
 ) -> dict:
     """Discover a draft semantic model from a set of source tables.
 
@@ -1475,7 +1487,7 @@ def _tool_discover_semantic_model(
     try:
         model = discover_semantic_model(
             loaded, dialect=str(dialect or "metricflow"), resolve=bool(resolve),
-            name=bool(name),
+            name=bool(name), apply_names=bool(apply_names),
         )
     except ValueError as exc:
         return {"error": str(exc)}

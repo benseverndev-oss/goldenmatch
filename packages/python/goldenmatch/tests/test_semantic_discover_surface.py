@@ -32,10 +32,11 @@ def test_mcp_discover_tool_registered():
     tool = next((t for t in _BASE_TOOLS if t.name == "discover_semantic_model"), None)
     assert tool is not None
     props = tool.inputSchema["properties"]
-    assert set(props) == {"frames", "dialect", "resolve", "name"}
+    assert set(props) == {"frames", "dialect", "resolve", "name", "apply_names"}
     assert tool.inputSchema["required"] == ["frames"]
     assert props["dialect"]["default"] == "metricflow"
     assert props["name"]["default"] is False
+    assert props["apply_names"]["default"] is False
 
 
 def test_mcp_discover_tool_on_fixture(tmp_path: Path):
@@ -180,3 +181,58 @@ def test_cli_discover_model_name_flag(tmp_path: Path, monkeypatch):
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert len(payload["naming"]) > 0
+
+
+# --- PR-8: --apply-names plumbs through MCP / REST / CLI + public export ---------
+
+
+def test_public_export_apply_names():
+    from goldenmatch.semantic import apply_names
+
+    assert callable(apply_names)
+
+
+def test_mcp_discover_tool_apply_names_flag(tmp_path: Path, monkeypatch):
+    import goldenmatch.semantic.discovery.namer as namer_mod
+    from goldenmatch.mcp.server import _tool_discover_semantic_model
+
+    monkeypatch.setattr(namer_mod, "load_namer_backend", lambda: _AllYesBackend())
+    out = _tool_discover_semantic_model(
+        _write_fixture(tmp_path), "metricflow", False, False, True  # name=False, apply_names=True
+    )
+    assert "error" not in out
+    # apply_names implies naming ran, and the verified names are written into the yaml.
+    assert "label:" in out["yaml"]
+    assert "glossary" in out["yaml"]
+
+
+def test_rest_discover_endpoint_apply_names_flag(tmp_path: Path, monkeypatch):
+    import goldenmatch.semantic.discovery.namer as namer_mod
+    from goldenmatch.api.server import _discover_semantic_model_endpoint
+
+    monkeypatch.setattr(namer_mod, "load_namer_backend", lambda: _AllYesBackend())
+    out = _discover_semantic_model_endpoint(
+        _write_fixture(tmp_path), "metricflow", False, False, True
+    )
+    assert "error" not in out
+    assert "label:" in out["yaml"]
+
+
+def test_cli_discover_model_apply_names_flag(tmp_path: Path, monkeypatch):
+    import json
+
+    import goldenmatch.semantic.discovery.namer as namer_mod
+    from goldenmatch.cli.main import app
+    from typer.testing import CliRunner
+
+    monkeypatch.setattr(namer_mod, "load_namer_backend", lambda: _AllYesBackend())
+    frames = _write_fixture(tmp_path)
+    result = CliRunner().invoke(app, [
+        "discover-model",
+        "-d", f"customers={frames['customers']}",
+        "-d", f"orders={frames['orders']}",
+        "--apply-names", "--json",
+    ])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert "label:" in payload["yaml"]
