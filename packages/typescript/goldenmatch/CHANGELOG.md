@@ -6,6 +6,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.27.0] - 2026-08-03
+
 ### Added
 - **Serving-join certification (`certifyServingJoins`) + the `certify_serving_joins`
   MCP tool + a net-new key-integrity certifier (`certifyKeyIntegrity` /

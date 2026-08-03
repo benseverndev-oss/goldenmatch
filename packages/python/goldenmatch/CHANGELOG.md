@@ -6,6 +6,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [3.11.0] - 2026-08-03
+
 ### Added
 - **Fused Fellegi-Sunter kernel now covers the reference-data name scorers +
   `ensemble` (`goldenmatch-native` 0.1.20).** The fully-fused `match_fused_fs`

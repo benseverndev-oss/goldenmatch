@@ -24,7 +24,7 @@ import { resolve, isAbsolute, relative, sep } from "node:path";
 import { handleTool } from "../mcp/server.js";
 import { run } from "../run.js";
 
-const VERSION = "0.3.0";
+const VERSION = "0.3.1";
 
 /** Resolve a path relative to cwd and reject traversal outside it. */
 function sanitizePath(raw: string): string {

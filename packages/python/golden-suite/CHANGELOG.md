@@ -4,6 +4,16 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.3.6] - 2026-08-03
+
+- Floor bumps for the 2026-08 suite release: `goldenmatch[polars]>=3.11` (was
+  `>=3.10`) — the semantic-model discovery arc (certified key/join/entity/measure
+  discovery + orchestrator, MCP/REST/CLI surface, the advisory LLM namer +
+  `--apply-names` applied catalog, Cube/OSI emit, and compound + self-referential
+  keys); `goldencheck[polars]>=3.3` (was `>=3.2`) — the TS denial-constraints + refs
+  engine ports; and `goldenmatch-native>=0.1.20` (was `>=0.1.19`) — the fully-fused
+  Fellegi-Sunter kernel covering the reference-data name scorers + `ensemble`.
+
 ## [0.3.5] - 2026-07-27
 
 - Floor bump: `goldenmatch[polars]>=3.10` (was `>=3.8`). 3.9.0 + 3.10.0 close the
