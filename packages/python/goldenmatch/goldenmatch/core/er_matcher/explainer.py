@@ -23,6 +23,7 @@ verdict; :meth:`LocalLlamaAdapter.score_and_explain` wires the two together.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -176,8 +177,50 @@ def render_counterfactual_note(cfs: list[Counterfactual]) -> str:
             f"without changing the verdict.")
 
 
-def _agreement(va: Any, vb: Any) -> float | None:
-    """Jaro-winkler agreement of two field values, or None if missing on a side."""
+_TOKEN_RE = re.compile(r"[a-z]+|\d+")
+
+
+def _tokens(s: str) -> list[str]:
+    """Lowercase alphanumeric runs, split at letter/digit boundaries.
+
+    The boundary split is what makes product data work: ``"60GB"`` becomes
+    ``["60", "gb"]`` so it can align with a ``"60 GB"`` written the other way,
+    and ``"PS3"`` becomes ``["ps", "3"]``.
+    """
+    return _TOKEN_RE.findall(s.lower())
+
+
+def token_agreement(sa: str, sb: str) -> float:
+    """Order-insensitive token-overlap agreement in [0, 1].
+
+    Uses containment (``|A∩B| / min(|A|, |B|)``) when both sides are multi-token,
+    which tolerates one side carrying extra words — the normal case for product
+    titles. Single-token sides fall back to the stricter Jaccard so a short value
+    can't score 1.0 just by appearing inside a longer one.
+    """
+    ta, tb = set(_tokens(sa)), set(_tokens(sb))
+    if not ta or not tb:
+        return 0.0
+    inter = len(ta & tb)
+    if len(ta) >= 2 and len(tb) >= 2:
+        return inter / min(len(ta), len(tb))
+    return inter / max(len(ta), len(tb))
+
+
+def field_agreement(va: Any, vb: Any) -> float | None:
+    """Agreement of two field values in [0, 1], or None if missing on a side.
+
+    ``max`` of character-level jaro-winkler and :func:`token_agreement`, so it can
+    only ever ADD agreement that a pure string metric misses — never remove it.
+    That ordering is deliberate: whole-string jaro-winkler is what works on
+    corrupted person fields (a token-sort metric collapses there), while token
+    overlap is what works on reordered/verbose product text. ``"Sony 60GB PS3"``
+    vs ``"PlayStation 3 60 GB Sony"`` scores ~0.2 on jaro-winkler and 0.8 here.
+
+    This is the single source of truth for agreement: the interp measurement
+    harness passes this exact function, so the number the explainer shows and the
+    number we report faithfulness against cannot drift apart.
+    """
     sa = "" if va is None else str(va).strip()
     sb = "" if vb is None else str(vb).strip()
     if not sa or not sb:
@@ -186,7 +229,13 @@ def _agreement(va: Any, vb: Any) -> float | None:
         return 1.0
     import jellyfish
 
-    return float(jellyfish.jaro_winkler_similarity(sa, sb))
+    jw = float(jellyfish.jaro_winkler_similarity(sa, sb))
+    return max(jw, token_agreement(sa, sb))
+
+
+def _agreement(va: Any, vb: Any) -> float | None:
+    """Backwards-compatible alias for :func:`field_agreement`."""
+    return field_agreement(va, vb)
 
 
 def _importance_for(field: str, weights: dict[str, float] | None) -> tuple[float, bool]:

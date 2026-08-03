@@ -1127,7 +1127,10 @@ def _faithfulness_core(tok, model, dev, true_id, false_id, tr, te, rows, fields,
         prob_space_r2,
         richer_field_features,
     )
-    from goldenmatch.core.er_matcher.explainer import PERSON_FIELD_IMPORTANCE
+    from goldenmatch.core.er_matcher.explainer import (
+        PERSON_FIELD_IMPORTANCE,
+        field_agreement,
+    )
 
     def p_match(pairs) -> np.ndarray:
         """Teacher-forced readout: feed the '{"match":' prefix, softmax the
@@ -1149,7 +1152,10 @@ def _faithfulness_core(tok, model, dev, true_id, false_id, tr, te, rows, fields,
           f"frac<0.1={float((p_te < 0.1).mean()):.2f} "
           f"frac>0.9={float((p_te > 0.9).mean()):.2f} acc={acc:.3f}", flush=True)
 
-    A_tr, A_te = field_agreements(rows, tr, fields), field_agreements(rows, te, fields)
+    # pass the SHIPPED agreement function so `simple` measures the product's
+    # actual basis, not a lookalike that could drift from it
+    A_tr = field_agreements(rows, tr, fields, agreement=field_agreement)
+    A_te = field_agreements(rows, te, fields, agreement=field_agreement)
     X_tr, feat_names = richer_field_features(rows, tr, fields)
     X_te, _ = richer_field_features(rows, te, fields)
 

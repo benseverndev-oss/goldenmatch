@@ -326,3 +326,29 @@ class LocalLlamaAdapter:
             p_without=p_without,
         )
         return match, conf, explanation
+
+    def explain_for_review(
+        self, row_a: dict, row_b: dict, columns: list[str],
+        *, weights: dict[str, float] | None = None,
+    ):
+        """Review-queue explanation: :meth:`score_and_explain` with counterfactuals ON.
+
+        Same return shape, but this is the entry point for pairs going to a HUMAN,
+        where the extra ``len(columns)`` inference calls buy the thing a reviewer
+        actually needs — a measured counterfactual on this specific decision
+        ("removing modelno would reverse this verdict") rather than a corpus-level
+        weight.
+
+        Kept as a separate method rather than flipping ``score_and_explain``'s
+        default on purpose: bulk scoring must stay one forward pass per pair, and a
+        global default would multiply inference cost by the column count for every
+        caller. Choose the review path explicitly.
+
+        Note the measured base rate: only ~18–19% of pairs (person AND product) have
+        any single-field flip, so most reviews will legitimately read "no single
+        field decides this" — that is the model integrating redundant evidence, not
+        a missing explanation.
+        """
+        return self.score_and_explain(
+            row_a, row_b, columns, weights=weights, counterfactuals=True
+        )

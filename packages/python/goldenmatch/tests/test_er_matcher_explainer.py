@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import pytest
 from goldenmatch.core.er_matcher.explainer import (
+    _CONFLICT_THRESHOLD,
     DEFAULT_FIELD_IMPORTANCE,
     PERSON_FIELD_CAUSAL_RANKING,
     PERSON_FIELD_IMPORTANCE,
     PERSON_IMPORTANCE_FAITHFULNESS_R2,
     PairExplanation,
     explain_pair,
+    field_agreement,
 )
 
 COLS = ["first_name", "surname", "dob", "birth_place", "occupation"]
@@ -92,6 +94,63 @@ def test_faithfulness_is_the_measured_verdict_number():
     # 5-seed mean of the frozen weights vs the model's real P(match), cluster-disjoint
     # split, hard negatives. Guards against drifting back to a leaked/projection figure.
     assert PERSON_IMPORTANCE_FAITHFULNESS_R2 == 0.27
+
+
+class TestTokenAwareAgreement:
+    def test_reordered_verbose_product_title_now_agrees(self):
+        # jaro-winkler alone reads 0.69 here (below the 0.85 "agree" threshold, so
+        # the old basis scored this real match as merely "partial"); token overlap
+        # lifts it to 0.80. Real improvement, and deliberately not overstated.
+        a, b = "Sony 60GB PS3", "PlayStation 3 60 GB Sony"
+        import jellyfish
+        jw = jellyfish.jaro_winkler_similarity(a, b)
+        assert jw == pytest.approx(0.693, abs=0.01)
+        assert field_agreement(a, b) == pytest.approx(0.80, abs=0.01)
+        assert field_agreement(a, b) > jw
+
+    def test_never_lowers_a_string_match(self):
+        # max() with jaro-winkler: token overlap can only ADD agreement.
+        import jellyfish
+        for a, b in [("John", "Jon"), ("Smith", "Smyth"), ("Leeds", "Leeds"),
+                     ("1990-01-01", "1990-01-02"), ("baker", "bakers")]:
+            assert field_agreement(a, b) >= jellyfish.jaro_winkler_similarity(a, b)
+
+    def test_person_fields_unchanged_by_tokenization(self):
+        # single-token person values have no token overlap to gain -> jaro-winkler
+        import jellyfish
+        for a, b in [("John", "Jon"), ("Smith", "Smyth")]:
+            assert field_agreement(a, b) == pytest.approx(
+                jellyfish.jaro_winkler_similarity(a, b)
+            )
+
+    def test_alphanumeric_boundary_split(self):
+        from goldenmatch.core.er_matcher.explainer import token_agreement
+        # "60GB" must align with "60 GB", "PS3" with "PS 3"
+        assert token_agreement("60GB", "60 GB") == pytest.approx(1.0)
+        assert token_agreement("PS3", "ps 3") == pytest.approx(1.0)
+
+    def test_single_token_side_uses_stricter_jaccard(self):
+        from goldenmatch.core.er_matcher.explainer import token_agreement
+        # a bare "sony" inside a long title must NOT score 1.0
+        assert token_agreement("Sony", "Sony Ericsson W810i phone") < 0.5
+
+    def test_disjoint_values_add_nothing(self):
+        from goldenmatch.core.er_matcher.explainer import token_agreement
+        # unrelated products share no tokens, so the token term contributes 0 and
+        # the result is exactly jaro-winkler's own floor (~0.42) -- the new metric
+        # must not manufacture agreement where there is none.
+        a, b = "Canon EOS 5D", "Whirlpool dishwasher"
+        import jellyfish
+        assert token_agreement(a, b) == 0.0
+        assert field_agreement(a, b) == pytest.approx(
+            jellyfish.jaro_winkler_similarity(a, b)
+        )
+        assert field_agreement(a, b) < _CONFLICT_THRESHOLD  # still reads as conflict
+
+    def test_missing_and_exact_semantics_preserved(self):
+        assert field_agreement(None, "x") is None
+        assert field_agreement("", "x") is None
+        assert field_agreement("x", "x") == 1.0
 
 
 def test_counterfactuals_absent_by_default():

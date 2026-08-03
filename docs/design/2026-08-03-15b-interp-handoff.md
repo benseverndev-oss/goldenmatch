@@ -332,18 +332,53 @@ person-specific machinery.
    decides, not an artifact of the person corpus — and it means the low faithfulness R²
    was never going to be fixed by better weights.
 
+## Token-aware agreement — 6× on messy text, zero cost on person
+
+The walmart result above was a *feature-basis* failure, so the basis was fixed.
+`explainer.field_agreement` is now `max(jaro_winkler, token_agreement)`, where
+`token_agreement` splits on alphanumeric boundaries (`"60GB"` → `["60", "gb"]`,
+`"PS3"` → `["ps", "3"]`) and takes token containment for multi-token values, Jaccard
+when either side is single-token.
+
+`max` is the whole design: token overlap can only ever ADD agreement a string metric
+missed, never remove it. That is what protects person data, where a token-sort metric is
+known to collapse under corruption (`project_ncvr_recall_regression`).
+
+**Measured both ways before and after** (`simple` = the shipped basis):
+
+| | before | after |
+|---|---|---|
+| walmart_amazon `simple` | 0.024 | **0.149** (6×) |
+| person `fixed` (5-seed mean) | 0.2722 | **0.2726** |
+| person `simple` (5-seed mean) | 0.3042 | **0.3044** |
+
+Person is unchanged to three decimals — exactly as the `max` construction predicts,
+since single-token person values have no token overlap to gain.
+
+**Do not overstate it.** 0.149 is a 6× improvement on a very low base and still well
+short of `richer` (0.508) on the same pairs. The per-field story on messy text went from
+useless to weak, not to good. Closing the rest of that gap means richer per-field signals
+(the exact/missing/conflict/edit-distance decomposition `richer` already uses), not a
+better single scalar. `PERSON_IMPORTANCE_FAITHFULNESS_R2` stays **0.27**.
+
+**Kept honest by construction:** `faithfulness_eval` now passes
+`explainer.field_agreement` into `field_agreements(...)`, so the measured basis IS the
+shipped basis. They cannot drift.
+
 ## Next steps (highest leverage first)
 
-1. **Make counterfactuals the primary explanation** (the wiring shipped:
-   `score_and_explain(..., counterfactuals=True)`). The messy-domain result says the
-   weight table is domain-brittle while ablation generalizes, so the remaining work is
-   promoting counterfactuals from opt-in to the default path for review-queue
-   decisions, and deciding what to show for the ~81% of pairs where no single field
-   flips the verdict ("no single field decides this" is currently the honest answer).
-2. **Give the explainer domain-appropriate agreement features.** `simple` scoring 0.024
-   on walmart is a feature-basis failure, not a method failure — `richer` gets 0.508 on
-   the same pairs. Token-level/semantic agreement (not whole-string jaro-winkler) would
-   make the per-field story usable on messy text.
+1. **Find a call site for the ER-matcher explainer.** `score_and_explain` /
+   `explain_for_review` are a complete, tested API surface with NO caller — the review
+   queue's `why_for_correction` uses the older generic `explain_pair_nl` path instead.
+   Wiring the local-model explainer into that path (behind the existing
+   `use_llm`-style opt-in) is what turns this work from an available capability into a
+   shipped one. Until then "counterfactuals on the review queue" means the method
+   exists and defaults correctly, not that reviewers see them.
+2. **Push the messy-domain per-field story from weak to good.** Token-aware agreement
+   took walmart `simple` 0.024 -> 0.149, but `richer` gets 0.508 on the same pairs. The
+   remaining gap is per-field *signal decomposition* (exact / missing / conflict /
+   edit-distance), not a better single scalar — i.e. give `explain_pair` the richer
+   basis rather than one agreement number per field.
 3. **Perf for real volume.** Prefix-cache the system rubric (biggest CPU win) + wire the
    logit readout into the scorer for clean P(match); benchmark on GPU.
 4. **Benchmark head-to-head, honestly.** Against the ER landscape on *held-out* data

@@ -36,10 +36,20 @@ def field_agreements(
     rows: dict[int, dict[str, Any]],
     pairs: list[tuple[int, int, int]],
     fields: list[str],
+    agreement: Any = None,
 ) -> np.ndarray:
-    """Per-field jaro-winkler agreement for each pair -> (n_pairs, n_fields) in
-    [0, 1]. These are the HUMAN primitives ("do the surnames agree?"). Missing on
-    either side -> 0.0 (no positive agreement evidence). Pure; needs jellyfish."""
+    """Per-field agreement for each pair -> (n_pairs, n_fields) in [0, 1].
+
+    These are the HUMAN primitives ("do the surnames agree?"). Missing on either
+    side -> 0.0 (no positive agreement evidence).
+
+    ``agreement`` overrides the pairwise metric with a callable ``(va, vb) ->
+    float | None``. Callers that measure the SHIPPED explainer must pass
+    ``goldenmatch.core.er_matcher.explainer.field_agreement`` so the measured
+    basis and the product's basis cannot drift apart; the built-in default is
+    plain jaro-winkler and exists so this module stays testable standalone.
+    Pure; needs jellyfish.
+    """
     import jellyfish
 
     out = np.zeros((len(pairs), len(fields)), dtype=np.float64)
@@ -47,7 +57,9 @@ def field_agreements(
         ra, rb = rows[a], rows[b]
         for j, f in enumerate(fields):
             va, vb = str(ra.get(f, "") or "").strip(), str(rb.get(f, "") or "").strip()
-            if not va or not vb:
+            if agreement is not None:
+                out[i, j] = float(agreement(va, vb) or 0.0)
+            elif not va or not vb:
                 out[i, j] = 0.0
             elif va == vb:
                 out[i, j] = 1.0
