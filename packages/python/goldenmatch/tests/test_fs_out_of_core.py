@@ -474,6 +474,31 @@ def _sorted_rows(path):
     return (list(t.column_names), rows)
 
 
+def _sorted_golden(path):
+    """Cluster-id-AGNOSTIC view of a golden.parquet for parity comparison.
+
+    Golden rows carry `__cluster_id__`, an ARBITRARY integer label whose value
+    (and the resulting row order) depends on the bucket-processing order -- the
+    bounded / bucketed routes discover clusters in a different order than the
+    fused whole-frame kernel, so two byte-identical golden *record sets* come out
+    with different id labels. Drop the label and compare the multiset of semantic
+    rows: cluster IDs are arbitrary project-wide, and partition MEMBERSHIP (the
+    real invariant) is asserted separately via `_partition_set_from_parquet`."""
+    import json
+
+    import pyarrow.parquet as pq
+
+    t = pq.read_table(path)
+    keep = [c for c in t.column_names if c != "__cluster_id__"]
+    t = t.select(keep)
+    # Golden cells are struct columns ({value, confidence}); serialize each row to
+    # a canonical JSON string so the multiset compare never orders raw dicts (with
+    # __cluster_id__ dropped, the sort would otherwise tie on __golden_confidence__
+    # and fall through to comparing the struct dicts).
+    rows = sorted(json.dumps(r, sort_keys=True, default=str) for r in t.to_pylist())
+    return (keep, rows)
+
+
 def _native_fs_inactive() -> bool:
     """The sequential route's clustering (`_cluster_arrow_native`) needs the native
     kernel; the pure-Python fallback has a pre-existing _pairs_df_to_list(pa.Table)
@@ -520,7 +545,7 @@ def test_sequential_batched_output_escape_parity(tmp_path, monkeypatch):
     )
     assert _sorted_rows(legacy["unique_path"]) == _sorted_rows(default["unique_path"])
     if legacy["golden_count"]:
-        assert _sorted_rows(legacy["golden_path"]) == _sorted_rows(default["golden_path"])
+        assert _sorted_golden(legacy["golden_path"]) == _sorted_golden(default["golden_path"])
 
 
 def test_sequential_bounded_scoring_escape_parity(tmp_path, monkeypatch):
@@ -554,7 +579,7 @@ def test_sequential_bounded_scoring_escape_parity(tmp_path, monkeypatch):
     )
     assert _sorted_rows(fused["unique_path"]) == _sorted_rows(bounded["unique_path"])
     if fused["golden_count"]:
-        assert _sorted_rows(fused["golden_path"]) == _sorted_rows(bounded["golden_path"])
+        assert _sorted_golden(fused["golden_path"]) == _sorted_golden(bounded["golden_path"])
 
 
 # ── resolve_fs_block_source: the single knob unifying the two streaming lanes ──
