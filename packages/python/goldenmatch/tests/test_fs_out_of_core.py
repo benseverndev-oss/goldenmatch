@@ -464,6 +464,99 @@ def test_dedupe_to_parquet_streaming_parity_with_in_memory(tmp_path, monkeypatch
     assert stream_parts == sorted(mem_parts)
 
 
+def _sorted_rows(path):
+    """Column-order-checked, row-order-independent view of a parquet file for
+    byte-identity comparison."""
+    import pyarrow.parquet as pq
+
+    t = pq.read_table(path)
+    rows = sorted(tuple(sorted(r.items())) for r in t.to_pylist())
+    return (list(t.column_names), rows)
+
+
+def _native_fs_inactive() -> bool:
+    """The sequential route's clustering (`_cluster_arrow_native`) needs the native
+    kernel; the pure-Python fallback has a pre-existing _pairs_df_to_list(pa.Table)
+    bug. Skip the sequential parity tests when native isn't active."""
+    import os as _os
+
+    from goldenmatch.core._native_loader import native_available
+
+    forced_off = _os.environ.get("GOLDENMATCH_NATIVE", "auto").lower() == "0" or (
+        _os.environ.get("GOLDENMATCH_FS_NATIVE", "").lower() == "0"
+    )
+    return (not native_available()) or forced_off
+
+
+def test_sequential_batched_output_escape_parity(tmp_path, monkeypatch):
+    """The batched output writer (default) is BYTE-IDENTICAL to the legacy
+    frame.join arrow output (GOLDENMATCH_FS_SEQUENTIAL_BATCHED_OUTPUT=0). Locks the
+    rollback escape. Needs native (sequential fallback clustering)."""
+    if _native_fs_inactive():
+        pytest.skip("native FS/fused kernel not active (sequential fallback bug)")
+
+    from goldenmatch import dedupe_to_parquet
+
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+    monkeypatch.setenv("GOLDENMATCH_FS_BLOCK_SOURCE", "sequential")
+    # Hold scoring engine constant (fused) so ONLY the output writer differs.
+    monkeypatch.setenv("GOLDENMATCH_FS_SEQUENTIAL_BOUNDED_SCORING", "0")
+
+    csv_path = tmp_path / "people.csv"
+    _make_person_csv(csv_path)
+    cfg = _fs_person_config()
+
+    monkeypatch.setenv("GOLDENMATCH_FS_SEQUENTIAL_BATCHED_OUTPUT", "0")
+    legacy = dedupe_to_parquet(str(csv_path), out_dir=str(tmp_path / "legacy"), config=cfg)
+    monkeypatch.delenv("GOLDENMATCH_FS_SEQUENTIAL_BATCHED_OUTPUT", raising=False)
+    default = dedupe_to_parquet(str(csv_path), out_dir=str(tmp_path / "default"), config=cfg)
+
+    assert legacy["batched_output"] is False
+    assert default["batched_output"] is True
+    for k in ("unique_count", "dupes_count", "golden_count"):
+        assert legacy[k] == default[k], k
+    assert _partition_set_from_parquet(legacy["dupes_path"]) == _partition_set_from_parquet(
+        default["dupes_path"]
+    )
+    assert _sorted_rows(legacy["unique_path"]) == _sorted_rows(default["unique_path"])
+    if legacy["golden_count"]:
+        assert _sorted_rows(legacy["golden_path"]) == _sorted_rows(default["golden_path"])
+
+
+def test_sequential_bounded_scoring_escape_parity(tmp_path, monkeypatch):
+    """Bounded in-RAM FrameBlockSource scoring (default, the scale path) is
+    BYTE-IDENTICAL (same clusters/counts) to the fused whole-frame kernel
+    (GOLDENMATCH_FS_SEQUENTIAL_BOUNDED_SCORING=0). Locks the rollback escape.
+    Needs native. `pairs` differs (fused leaves it None) -- compare clusters."""
+    if _native_fs_inactive():
+        pytest.skip("native FS/fused kernel not active (sequential fallback bug)")
+
+    from goldenmatch import dedupe_to_parquet
+
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+    monkeypatch.setenv("GOLDENMATCH_FS_BLOCK_SOURCE", "sequential")
+
+    csv_path = tmp_path / "people.csv"
+    _make_person_csv(csv_path)
+    cfg = _fs_person_config()
+
+    monkeypatch.setenv("GOLDENMATCH_FS_SEQUENTIAL_BOUNDED_SCORING", "0")
+    fused = dedupe_to_parquet(str(csv_path), out_dir=str(tmp_path / "fused"), config=cfg)
+    monkeypatch.delenv("GOLDENMATCH_FS_SEQUENTIAL_BOUNDED_SCORING", raising=False)
+    bounded = dedupe_to_parquet(str(csv_path), out_dir=str(tmp_path / "bounded"), config=cfg)
+
+    assert fused["bounded_scoring"] is False
+    assert bounded["bounded_scoring"] is True
+    for k in ("unique_count", "dupes_count", "golden_count"):
+        assert fused[k] == bounded[k], k
+    assert _partition_set_from_parquet(fused["dupes_path"]) == _partition_set_from_parquet(
+        bounded["dupes_path"]
+    )
+    assert _sorted_rows(fused["unique_path"]) == _sorted_rows(bounded["unique_path"])
+    if fused["golden_count"]:
+        assert _sorted_rows(fused["golden_path"]) == _sorted_rows(bounded["golden_path"])
+
+
 # ── resolve_fs_block_source: the single knob unifying the two streaming lanes ──
 
 def test_resolve_fs_block_source_default_is_eager(monkeypatch):

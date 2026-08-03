@@ -105,6 +105,38 @@ def _fs_out_of_core_legacy_flag() -> bool:
     )
 
 
+def _fs_sequential_batched_output_enabled() -> bool:
+    """The in-RAM ``sequential``/``spill`` FS routes stream output via the join-FREE
+    ``_stream_fs_dedupe_output_batched`` (Phase 3a) — DEFAULT ON. The legacy
+    ``_stream_fs_dedupe_output_arrow`` built ``frame.join(asn).join(sizes)``, a
+    second full-width ~frame copy that OOMed the 50M output phase (measured
+    31→63 GB); the batched writer holds ~1× frame instead. Byte-identical
+    (parity-gated). ``GOLDENMATCH_FS_SEQUENTIAL_BATCHED_OUTPUT=0`` restores the
+    legacy join output (rollback lever)."""
+    return os.environ.get(
+        "GOLDENMATCH_FS_SEQUENTIAL_BATCHED_OUTPUT", ""
+    ).strip().lower() not in ("0", "false", "no", "off")
+
+
+def _fs_sequential_bounded_scoring_enabled() -> bool:
+    """``run_fs_dedupe_sequential`` scores via the bounded in-RAM ``FrameBlockSource``
+    (``score_buckets_arrow`` with ``force_bounded_stream=True``: slice one bucket
+    off the resident frame on demand, hold only ``max_workers`` slices) + Rust WCC
+    — DEFAULT ON. This is the in-RAM SCALE path: scoring peak stays ~1× the frame
+    (like ``bucketed``) WITHOUT the fused kernel's whole-frame column gather (which
+    OOMs ~65 GB at 50M) AND WITHOUT bucketed's on-disk shards. Measured on the
+    person/multi_pass shape it CLEARS 50M at 44.7 GB and is ~2× faster than the
+    fused path (score_buckets_arrow's value-dedup + small-block batch + parallel
+    buckets, no disk round-trip). Byte-identical to fused (FrameBlockSource ==
+    eager partition per bucket; the bucket-score→Rust-WCC split is partition-exact
+    with the fused kernel). ``GOLDENMATCH_FS_SEQUENTIAL_BOUNDED_SCORING=0`` restores
+    the fused whole-frame kernel (rollback / a shape where the single-call kernel
+    wins). NOTE: perf validated on one shape; correctness is by construction."""
+    return os.environ.get(
+        "GOLDENMATCH_FS_SEQUENTIAL_BOUNDED_SCORING", ""
+    ).strip().lower() not in ("0", "false", "no", "off")
+
+
 def _fs_spill_force_shard() -> bool:
     """``GOLDENMATCH_FS_SPILL_FORCE_SHARD=1`` makes ``run_fs_dedupe_spill`` SKIP the
     fused-kernel short-circuit and always take the edge-shard spill path
@@ -1571,9 +1603,13 @@ def run_fs_dedupe_sequential(
     # in one kernel call -> cluster assignments directly. dedupe-only (no
     # target_ids / matched_pairs exclude), which is exactly how the streaming
     # dedupe caller invokes this.
+    # DEFAULT scale path: bounded in-RAM FrameBlockSource scoring (skip the fused
+    # whole-frame kernel, which OOMs ~65 GB at 50M). GOLDENMATCH_FS_SEQUENTIAL_
+    # BOUNDED_SCORING=0 restores the fused kernel.
+    _bounded = _fs_sequential_bounded_scoring_enabled()
     assignments = None
     n_pairs = None
-    if not target_ids and not matched_pairs:
+    if not target_ids and not matched_pairs and not _bounded:
         assignments = _fused_fs_assignments(
             base, blocking_config, mk, em_result, link_threshold,
         )
@@ -1581,23 +1617,35 @@ def run_fs_dedupe_sequential(
     if assignments is None:
         # Score through the SAME tuned in-memory bucket scorer the normal pipeline
         # uses (`score_buckets_arrow` -> native FS kernel + value-dedup/small-block
-        # batching + the bounded `FrameBlockSource` streaming under
-        # GOLDENMATCH_FS_BLOCK_SOURCE=frame) -- NOT a hand-rolled per-wave scorer.
-        # It emits the identical Arrow PAIR_STREAM table, which the Rust WCC
-        # (`_cluster_arrow_native`) consumes unchanged.
+        # batching + the bounded `FrameBlockSource` streaming). It emits the
+        # identical Arrow PAIR_STREAM table, which the Rust WCC
+        # (`_cluster_arrow_native`) consumes unchanged. On the scale path
+        # (`_bounded`, the default) force the bounded FrameBlockSource on so the
+        # scoring peak stays ~1x frame in-RAM (byte-identical to the eager
+        # partition; no disk shards).
         from goldenmatch.backends.score_buckets import score_buckets_arrow
 
         pairs = score_buckets_arrow(
             base, blocking_config, mk, set(matched_pairs),
             n_buckets=getattr(config, "n_buckets", None),
             target_ids=target_ids, em_result=em_result,
+            force_bounded_stream=_bounded,
         )
         assignments, n_pairs = _cluster_arrow_native(
             _prep_all_ids_frame(base), pairs, max_cluster_size, link_threshold,
         )
 
-    # O(N) unique/dupes streamed to parquet from the resident table (pure pyarrow).
-    res = _stream_fs_dedupe_output_arrow(base, assignments, config, out_dir)
+    # O(N) unique/dupes streamed to parquet from the resident table. Join-FREE
+    # batched writer by default (GOLDENMATCH_FS_SEQUENTIAL_BATCHED_OUTPUT=0 -> the
+    # legacy 2x-frame join output).
+    _batched_out = _fs_sequential_batched_output_enabled()
+    _output_fn = (
+        _stream_fs_dedupe_output_batched if _batched_out
+        else _stream_fs_dedupe_output_arrow
+    )
+    res = _output_fn(base, assignments, config, out_dir)
+    res["batched_output"] = _batched_out
+    res["bounded_scoring"] = _bounded
     res["pairs"] = n_pairs
     res["streaming"] = True
     res["sequential"] = True
@@ -1692,7 +1740,13 @@ def run_fs_dedupe_spill(
         finally:
             _shutil.rmtree(shard_dir, ignore_errors=True)
 
-    res = _stream_fs_dedupe_output_arrow(base, assignments, config, out_dir)
+    _batched_out = _fs_sequential_batched_output_enabled()
+    _output_fn = (
+        _stream_fs_dedupe_output_batched if _batched_out
+        else _stream_fs_dedupe_output_arrow
+    )
+    res = _output_fn(base, assignments, config, out_dir)
+    res["batched_output"] = _batched_out
     res["pairs"] = n_pairs
     res["streaming"] = True
     res["spill"] = True
