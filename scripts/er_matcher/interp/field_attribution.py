@@ -130,47 +130,73 @@ def record_disjoint_split(
     return train_idx, test_idx
 
 
+# Fallback copies of the SHIPPED basis, used only when this module is exercised
+# standalone (its unit tests run without the goldenmatch package importable). The
+# production harness passes the real functions in; `test_basis_parity.py` in the
+# package suite asserts these two implementations agree, so the duplication is
+# gated rather than trusted.
+_LOCAL_SIGNAL_NAMES = ("agreement", "exact", "missing", "conflict", "len_ratio", "edit_norm")
+_LOCAL_CONFLICT_THRESHOLD = 0.60
+
+
+def _local_signal_vector(va: Any, vb: Any) -> dict[str, float]:
+    """Standalone mirror of ``explainer.field_signal_vector``. Keep in lockstep."""
+    import jellyfish
+
+    sa = "" if va is None else str(va).strip()
+    sb = "" if vb is None else str(vb).strip()
+    out: dict[str, float] = dict.fromkeys(_LOCAL_SIGNAL_NAMES, 0.0)
+    if not sa or not sb:
+        out["missing"] = 1.0
+        return out
+    agr = 1.0 if sa == sb else float(jellyfish.jaro_winkler_similarity(sa, sb))
+    out["agreement"] = agr
+    out["exact"] = 1.0 if sa == sb else 0.0
+    out["conflict"] = 1.0 if agr <= _LOCAL_CONFLICT_THRESHOLD else 0.0
+    out["len_ratio"] = min(len(sa), len(sb)) / max(len(sa), len(sb))
+    out["edit_norm"] = (
+        0.0 if sa == sb
+        else jellyfish.levenshtein_distance(sa, sb) / max(len(sa), len(sb))
+    )
+    return out
+
+
 def richer_field_features(
     rows: dict[int, dict[str, Any]],
     pairs: list[tuple[int, int, int]],
     fields: list[str],
+    signal_fn: Any = None,
+    signal_names: tuple[str, ...] | None = None,
 ) -> tuple[np.ndarray, list[str]]:
-    """Expanded per-field features -> ((n_pairs, 6*n_fields), names).
+    """Expanded per-field features -> ((n_pairs, k*n_fields), names).
 
-    Six signals per field, all cheap and human-nameable: jaro-winkler
-    ``agreement``, ``exact`` (identical), ``missing`` (absent on either side),
-    ``conflict`` (present on both sides but agreement <= 0.6), ``len_ratio``
-    (shorter/longer, 0 if missing), and ``edit_norm`` (normalized Levenshtein
-    distance). The extra signals let a fit distinguish cases the single
-    agreement scalar conflates -- notably *missing* (no evidence) from
-    *conflicting* (negative evidence), which both sit near agreement 0.
+    Six signals per field, all cheap and human-nameable: ``agreement``, ``exact``
+    (identical), ``missing`` (absent on either side), ``conflict`` (present on
+    both sides but agreement below the shipped conflict threshold), ``len_ratio``
+    (shorter/longer), and ``edit_norm`` (normalized Levenshtein). The extra
+    signals let a fit distinguish cases the single agreement scalar conflates --
+    notably *missing* (no evidence) from *conflicting* (negative evidence), which
+    both sit near agreement 0.
 
-    Pure; needs jellyfish. Used to measure how much faithfulness headroom the
-    simple 1-signal-per-field basis leaves on the table.
+    ``signal_fn``/``signal_names`` inject the SHIPPED decomposition
+    (``explainer.field_signal_vector`` / ``FIELD_SIGNAL_NAMES``). The production
+    harness always passes them, so what we measure is what we ship; the built-in
+    fallback exists only so this module stays testable standalone.
+
+    Pure; needs jellyfish.
     """
-    import jellyfish
-
-    names = [f"{f}__{s}" for f in fields
-             for s in ("agreement", "exact", "missing", "conflict", "len_ratio", "edit_norm")]
-    out = np.zeros((len(pairs), 6 * len(fields)), dtype=np.float64)
+    fn = signal_fn or _local_signal_vector
+    sig_names = tuple(signal_names or _LOCAL_SIGNAL_NAMES)
+    k = len(sig_names)
+    names = [f"{f}__{s}" for f in fields for s in sig_names]
+    out = np.zeros((len(pairs), k * len(fields)), dtype=np.float64)
     for i, (a, b, _t) in enumerate(pairs):
         ra, rb = rows[a], rows[b]
         for j, f in enumerate(fields):
-            va, vb = str(ra.get(f, "") or "").strip(), str(rb.get(f, "") or "").strip()
-            base = 6 * j
-            if not va or not vb:
-                out[i, base + 2] = 1.0  # missing; the rest stay 0
-                continue
-            if va == vb:
-                agr, edit = 1.0, 0.0
-            else:
-                agr = float(jellyfish.jaro_winkler_similarity(va, vb))
-                edit = jellyfish.levenshtein_distance(va, vb) / max(len(va), len(vb))
-            out[i, base + 0] = agr
-            out[i, base + 1] = 1.0 if va == vb else 0.0
-            out[i, base + 3] = 1.0 if agr <= 0.6 else 0.0
-            out[i, base + 4] = min(len(va), len(vb)) / max(len(va), len(vb))
-            out[i, base + 5] = float(edit)
+            vec = fn(ra.get(f, ""), rb.get(f, ""))
+            base = k * j
+            for m, s in enumerate(sig_names):
+                out[i, base + m] = float(vec[s])
     return out, names
 
 

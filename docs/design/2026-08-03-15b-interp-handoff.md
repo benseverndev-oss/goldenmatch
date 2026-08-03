@@ -111,7 +111,7 @@ diff-of-means **projection** — a lossy 1D shadow of the ~8D decision, and the 
 per-decision explainer. The right target is the model's **actual P(match)**.
 
 That is now measured by a **committed, reproducible** stage —
-`modal_interp.py::faithfulness_eval` (pure helpers + 41 unit tests in
+`modal_interp.py::faithfulness_eval` (pure helpers + 41 harness tests + a 34-test parity gate in
 `field_attribution.py` / `test_field_attribution.py`) — on a **cluster-disjoint** split
 (no entity shared train↔test), the fp16 `/out/model_1p5b/merged`, teacher-forced
 `{"match":` → softmax(true,false) readout. Artifacts:
@@ -349,6 +349,7 @@ known to collapse under corruption (`project_ncvr_recall_regression`).
 | | before | after |
 |---|---|---|
 | walmart_amazon `simple` | 0.024 | **0.149** (6×) |
+| walmart_amazon `richer` | 0.508 | **0.549** |
 | person `fixed` (5-seed mean) | 0.2722 | **0.2726** |
 | person `simple` (5-seed mean) | 0.3042 | **0.3044** |
 
@@ -356,14 +357,47 @@ Person is unchanged to three decimals — exactly as the `max` construction pred
 since single-token person values have no token overlap to gain.
 
 **Do not overstate it.** 0.149 is a 6× improvement on a very low base and still well
-short of `richer` (0.508) on the same pairs. The per-field story on messy text went from
+short of `richer` (0.549) on the same pairs. The per-field story on messy text went from
 useless to weak, not to good. Closing the rest of that gap means richer per-field signals
 (the exact/missing/conflict/edit-distance decomposition `richer` already uses), not a
 better single scalar. `PERSON_IMPORTANCE_FAITHFULNESS_R2` stays **0.27**.
 
-**Kept honest by construction:** `faithfulness_eval` now passes
-`explainer.field_agreement` into `field_agreements(...)`, so the measured basis IS the
-shipped basis. They cannot drift.
+### Basis parity — the harness measures what the product ships, and it's gated
+
+Every faithfulness number in this doc is a claim about the **shipped** explainer, which
+is only true while the harness and the product compute the same basis. That is now a
+guarantee rather than a convention:
+
+- **The basis lives in the shipped module.** `explainer.FIELD_SIGNAL_NAMES` +
+  `field_signal_vector()` own the six-signal decomposition (agreement / exact / missing
+  / conflict / len_ratio / edit_norm), reusing the same `_CONFLICT_THRESHOLD` the
+  rationale renderer uses — so "the explanation called this a conflict" and "the
+  conflict feature fired" cannot disagree.
+- **The harness injects it.** `faithfulness_eval` passes `field_agreement` into
+  `field_agreements(...)` and `field_signal_vector`/`FIELD_SIGNAL_NAMES` into
+  `richer_field_features(...)`. The standalone fallbacks in `field_attribution.py`
+  exist only so that module stays unit-testable without the package importable.
+- **A parity gate enforces it.** `tests/test_er_matcher_basis_parity.py` asserts the
+  signal names and conflict threshold match, that the structural signals agree
+  value-for-value across the cases that have bitten this thread, that the shipped
+  metric never scores *below* the fallback (the "strict improvement, not a trade"
+  claim), and — importantly — greps `modal_interp.py` to confirm the injection is
+  still wired. Drop the injection and this test fails instead of the numbers quietly
+  becoming about a basis nobody ships.
+
+**Unifying the basis also improved the richer rows** (the previous `richer`/`gbm`
+figures were computed on a plain-jaro-winkler decomposition the product never used):
+
+| | before | after |
+|---|---|---|
+| walmart `richer` | 0.508 | **0.549** |
+| walmart `gbm` | 0.529 | **0.614** |
+| person `richer` (5-seed mean) | 0.643 | **0.671** |
+| person `gbm` (5-seed mean) | 0.773 | 0.770 |
+| person `fixed` / `simple` | 0.2722 / 0.3042 | 0.2726 / 0.3044 |
+
+No row regressed. `fixed` and `simple` are unchanged because they already ran through
+`field_agreement`; `PERSON_IMPORTANCE_FAITHFULNESS_R2` stays **0.27**.
 
 ## Next steps (highest leverage first)
 
@@ -378,7 +412,9 @@ shipped basis. They cannot drift.
    took walmart `simple` 0.024 -> 0.149, but `richer` gets 0.508 on the same pairs. The
    remaining gap is per-field *signal decomposition* (exact / missing / conflict /
    edit-distance), not a better single scalar — i.e. give `explain_pair` the richer
-   basis rather than one agreement number per field.
+   basis rather than one agreement number per field. That decomposition already exists
+   and ships (`explainer.field_signal_vector`); what is missing is `explain_pair`
+   *using* it to score, and a weight table over 30 signals rather than 5 fields.
 3. **Perf for real volume.** Prefix-cache the system rubric (biggest CPU win) + wire the
    logit readout into the scorer for clean P(match); benchmark on GPU.
 4. **Benchmark head-to-head, honestly.** Against the ER landscape on *held-out* data

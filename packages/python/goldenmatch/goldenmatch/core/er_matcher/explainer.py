@@ -238,6 +238,46 @@ def _agreement(va: Any, vb: Any) -> float | None:
     return field_agreement(va, vb)
 
 
+# The per-field signal decomposition. Named here, in the SHIPPED module, because
+# this is the basis both the product and the interp harness must agree on -- the
+# faithfulness numbers are only meaningful if what we measure is what we ship.
+FIELD_SIGNAL_NAMES: tuple[str, ...] = (
+    "agreement", "exact", "missing", "conflict", "len_ratio", "edit_norm",
+)
+
+
+def field_signal_vector(va: Any, vb: Any) -> dict[str, float]:
+    """Decompose one field's two values into the six named signals.
+
+    Richer than the single :func:`field_agreement` scalar, and the difference
+    matters: *missing* (no evidence) and *conflicting* (negative evidence) both
+    sit near agreement 0 but mean opposite things to a reader and to a fit.
+
+    Returns a plain dict of floats — no numpy — so this module stays
+    dependency-light. ``conflict`` uses the same ``_CONFLICT_THRESHOLD`` the
+    rationale renderer uses, so "the explanation called this a conflict" and "the
+    conflict feature fired" can never disagree.
+    """
+    sa = "" if va is None else str(va).strip()
+    sb = "" if vb is None else str(vb).strip()
+    out: dict[str, float] = dict.fromkeys(FIELD_SIGNAL_NAMES, 0.0)
+    if not sa or not sb:
+        out["missing"] = 1.0
+        return out
+    agr = field_agreement(sa, sb) or 0.0
+    out["agreement"] = float(agr)
+    out["exact"] = 1.0 if sa == sb else 0.0
+    out["conflict"] = 1.0 if agr <= _CONFLICT_THRESHOLD else 0.0
+    out["len_ratio"] = min(len(sa), len(sb)) / max(len(sa), len(sb))
+    if sa == sb:
+        out["edit_norm"] = 0.0
+    else:
+        import jellyfish
+
+        out["edit_norm"] = jellyfish.levenshtein_distance(sa, sb) / max(len(sa), len(sb))
+    return out
+
+
 def _importance_for(field: str, weights: dict[str, float] | None) -> tuple[float, bool]:
     """(importance, is_learned) for a field. Explicit ``weights`` win; otherwise the
     bundled person profile; otherwise a neutral default (not learned)."""

@@ -1128,8 +1128,10 @@ def _faithfulness_core(tok, model, dev, true_id, false_id, tr, te, rows, fields,
         richer_field_features,
     )
     from goldenmatch.core.er_matcher.explainer import (
+        FIELD_SIGNAL_NAMES,
         PERSON_FIELD_IMPORTANCE,
         field_agreement,
+        field_signal_vector,
     )
 
     def p_match(pairs) -> np.ndarray:
@@ -1156,8 +1158,12 @@ def _faithfulness_core(tok, model, dev, true_id, false_id, tr, te, rows, fields,
     # actual basis, not a lookalike that could drift from it
     A_tr = field_agreements(rows, tr, fields, agreement=field_agreement)
     A_te = field_agreements(rows, te, fields, agreement=field_agreement)
-    X_tr, feat_names = richer_field_features(rows, tr, fields)
-    X_te, _ = richer_field_features(rows, te, fields)
+    X_tr, feat_names = richer_field_features(
+        rows, tr, fields, signal_fn=field_signal_vector, signal_names=FIELD_SIGNAL_NAMES
+    )
+    X_te, _ = richer_field_features(
+        rows, te, fields, signal_fn=field_signal_vector, signal_names=FIELD_SIGNAL_NAMES
+    )
 
     results: dict = {}
 
