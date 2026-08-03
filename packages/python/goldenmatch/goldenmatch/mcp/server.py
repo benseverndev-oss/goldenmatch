@@ -836,7 +836,7 @@ _BASE_TOOLS = [
                 },
                 "dialect": {
                     "type": "string",
-                    "description": "Emit dialect for the draft model (metricflow for now).",
+                    "description": "Emit dialect for the draft model: metricflow / cube / osi.",
                     "default": "metricflow",
                 },
                 "resolve": {

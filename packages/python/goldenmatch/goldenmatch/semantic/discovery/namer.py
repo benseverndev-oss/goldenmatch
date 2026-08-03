@@ -261,22 +261,44 @@ def _glossary(sm: dict[str, Any]) -> dict[str, Any]:
     return sm.setdefault("meta", {}).setdefault("goldenmatch", {}).setdefault("glossary", {})
 
 
+def _entity_tables(model: ProposedModel) -> dict[str, list[str]]:
+    """`{entity_type_name: [tables]}` — maps an `entity:<name>` target to the emitted
+    cubes/datasets it should label (cube/osi carry no entity object, unlike MetricFlow)."""
+    return {et.name: list(et.tables) for et in getattr(model, "entity_types", [])}
+
+
+def _split_value_target(payload: str) -> tuple[str, str, str]:
+    table_col, _, val = payload.partition("=")
+    table, _, col = table_col.partition(".")
+    return table, col, val
+
+
 def apply_names(model: ProposedModel) -> str:
-    """Write the model's VERIFIED name suggestions into its emitted MetricFlow YAML,
-    returning the labeled document. Pure + LLM-free (operates on `model.naming` +
-    `model.yaml`), post-certification and cosmetic:
+    """Write the model's VERIFIED name suggestions into its emitted YAML, returning the
+    labeled document. Pure + LLM-free (operates on `model.naming` + `model.yaml`),
+    post-certification and cosmetic. Dialect-aware:
 
-    - entity  -> the semantic_model's ``label:`` (structural ``name:`` unchanged)
-    - measure -> that measure's ``label:``
-    - dimension / value -> ``meta.goldenmatch.glossary`` (MetricFlow has no native slot)
+    - metricflow: entity/measure -> ``label:``; dimension/value -> ``meta.goldenmatch.glossary``.
+    - cube:       entity/measure -> ``title:``; dimension/value -> ``meta.goldenmatch.glossary``.
+    - osi:        dimension -> the field's native ``label``; measure -> the metric's
+      ``description``; entity/value -> ``custom_extensions.goldenmatch.glossary``.
 
-    Only ``verified=True`` suggestions are applied. With no verified names (or no
-    emitted YAML) the original `model.yaml` is returned unchanged.
+    Only ``verified=True`` suggestions are applied. With no verified names (or no emitted
+    YAML) the original `model.yaml` is returned unchanged.
     """
     verified = [s for s in model.naming if s.verified]
     if not verified or not model.yaml:
         return model.yaml
 
+    dialect = getattr(model, "dialect", "metricflow")
+    if dialect == "cube":
+        return _apply_cube(model, verified)
+    if dialect == "osi":
+        return _apply_osi(model, verified)
+    return _apply_metricflow(model, verified)
+
+
+def _apply_metricflow(model: ProposedModel, verified: list[NameSuggestion]) -> str:
     doc = yaml.safe_load(model.yaml)
     if not isinstance(doc, dict) or "semantic_models" not in doc:
         return model.yaml
@@ -302,11 +324,78 @@ def apply_names(model: ProposedModel) -> str:
             if sm is not None:
                 _glossary(sm).setdefault("dimensions", {})[col] = s.suggested_name
         elif s.kind == "value":
-            table_col, _, val = payload.partition("=")
-            table, _, col = table_col.partition(".")
+            table, col, val = _split_value_target(payload)
             sm = by_name.get(table)
             if sm is not None:
                 _glossary(sm).setdefault("values", {}).setdefault(col, {})[val] = s.suggested_name
+
+    return yaml.safe_dump(doc, sort_keys=False, default_flow_style=False)
+
+
+def _apply_cube(model: ProposedModel, verified: list[NameSuggestion]) -> str:
+    doc = yaml.safe_load(model.yaml)
+    cubes = doc.get("cubes") if isinstance(doc, dict) else None
+    if not cubes:
+        return model.yaml
+    by_name = {c.get("name"): c for c in cubes}
+    ent_tables = _entity_tables(model)
+
+    for s in verified:
+        payload = s.target.split(":", 1)[1] if ":" in s.target else s.target
+        if s.kind == "entity":
+            for tbl in ent_tables.get(payload, []):
+                if (c := by_name.get(tbl)) is not None:
+                    c["title"] = s.suggested_name
+        elif s.kind == "measure":
+            table, _, col = payload.partition(".")
+            c = by_name.get(table)
+            for mm in (c.get("measures", []) if c else []):
+                if mm.get("name") == col:
+                    mm["title"] = s.suggested_name
+        elif s.kind == "dimension":
+            table, _, col = payload.partition(".")
+            if (c := by_name.get(table)) is not None:
+                _glossary(c).setdefault("dimensions", {})[col] = s.suggested_name
+        elif s.kind == "value":
+            table, col, val = _split_value_target(payload)
+            if (c := by_name.get(table)) is not None:
+                _glossary(c).setdefault("values", {}).setdefault(col, {})[val] = s.suggested_name
+
+    return yaml.safe_dump(doc, sort_keys=False, default_flow_style=False)
+
+
+def _apply_osi(model: ProposedModel, verified: list[NameSuggestion]) -> str:
+    doc = yaml.safe_load(model.yaml)
+    models = doc.get("semantic_model") if isinstance(doc, dict) else None
+    if not models:
+        return model.yaml
+    ent_tables = _entity_tables(model)
+
+    for m0 in models:
+        datasets = {d.get("name"): d for d in m0.get("datasets", [])}
+        metrics = m0.get("metrics", [])
+        gloss = (m0.setdefault("custom_extensions", {})
+                 .setdefault("goldenmatch", {}).setdefault("glossary", {}))
+        for s in verified:
+            payload = s.target.split(":", 1)[1] if ":" in s.target else s.target
+            if s.kind == "dimension":
+                table, _, col = payload.partition(".")
+                ds = datasets.get(table)
+                for f in (ds.get("fields", []) if ds else []):
+                    if f.get("name") == col:
+                        f["label"] = s.suggested_name
+            elif s.kind == "measure":
+                table, _, col = payload.partition(".")
+                mname = f"{table}_{col}_total"
+                for mt in metrics:
+                    if mt.get("name") == mname:
+                        mt["description"] = s.suggested_name
+            elif s.kind == "entity":
+                for tbl in ent_tables.get(payload, []):
+                    gloss.setdefault("entities", {})[tbl] = s.suggested_name
+            elif s.kind == "value":
+                table, col, val = _split_value_target(payload)
+                gloss.setdefault("values", {}).setdefault(col, {})[val] = s.suggested_name
 
     return yaml.safe_dump(doc, sort_keys=False, default_flow_style=False)
 

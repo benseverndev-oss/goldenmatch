@@ -676,7 +676,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `demo` | `--graph` | boolean | `False` | Generate cluster graph |
 | `demo` | `--quiet` | boolean | `False` | Suppress animated output |
 | `discover-model` | `--data` | text | **required** | A source table as name=path (repeatable), e.g. -d orders=orders.csv |
-| `discover-model` | `--dialect` | text | `'metricflow'` | Emit dialect for the draft model (metricflow). |
+| `discover-model` | `--dialect` | text | `'metricflow'` | Emit dialect for the draft model: metricflow / cube / osi. |
 | `discover-model` | `--output` | text | `None` | Write the draft semantic-model YAML to this path. |
 | `discover-model` | `--resolve` | boolean | `False` | Also measure entity fragmentation / undercount via ER (fail-open). |
 | `discover-model` | `--name` | boolean | `False` | Also run the OPTIONAL advisory LLM namer (business names for entities/dimensions/values/measures; abstains without an LLM key). |

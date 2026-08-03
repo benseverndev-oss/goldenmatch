@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 446,
+      "module_count": 447,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7275,6 +7275,24 @@
           ]
         },
         {
+          "module": "goldenmatch.semantic.discovery.emit",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/discovery/emit.py",
+          "purpose": "Dialect emit for discovered models (PR-9).",
+          "defines": [
+            "_build_cube",
+            "_build_metricflow",
+            "_build_osi",
+            "_trustworthy_joins",
+            "build_model_yaml"
+          ],
+          "imports": [
+            "goldenmatch.core.key_integrity_certificate",
+            "goldenmatch.semantic",
+            "goldenmatch.semantic.cube",
+            "goldenmatch.semantic.osi"
+          ]
+        },
+        {
           "module": "goldenmatch.semantic.discovery.entities",
           "file": "packages/python/goldenmatch/goldenmatch/semantic/discovery/entities.py",
           "purpose": "Cross-table entity-type discovery (semantic-model discovery, Phase 2).",
@@ -7362,6 +7380,7 @@
           ],
           "imports": [
             "goldenmatch.semantic",
+            "goldenmatch.semantic.discovery.emit",
             "goldenmatch.semantic.discovery.entities",
             "goldenmatch.semantic.discovery.joins",
             "goldenmatch.semantic.discovery.keys",
@@ -7378,10 +7397,15 @@
             "NameSuggestion",
             "NamerBackend",
             "_Target",
+            "_apply_cube",
+            "_apply_metricflow",
+            "_apply_osi",
+            "_entity_tables",
             "_glossary",
             "_parse_json_object",
             "_propose_prompt",
             "_sample_values",
+            "_split_value_target",
             "_targets_for_table",
             "_targets_in_prompt",
             "_verify_prompt",

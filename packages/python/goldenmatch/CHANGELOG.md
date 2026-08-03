@@ -364,6 +364,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   discovery arc (design:
   `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
   `tests/test_semantic_discovery_apply_names.py`, `tests/test_semantic_discover_surface.py`.
+- **Semantic-model discovery — Cube / OSI emit (Phase 9).** `discover_semantic_model(dialect=...)`
+  now emits `cube` and `osi` draft catalogs in addition to `metricflow` (it used to raise
+  on anything else, though certification already spanned all three). A new
+  `goldenmatch/semantic/discovery/emit.py` maps the discovered structure onto the
+  existing dialect emitters: per table, the grain → primary key (a `primary_key`
+  `CubeDimension` / an `OsiDataset.primary_key` list — composite-ready), discovered
+  dimensions → `CubeDimension`/`OsiField`, sum-safe measures → `CubeMeasure`/`OsiMetric`,
+  and the key-integrity verdict → `meta.goldenmatch` (cube) / `custom_extensions.goldenmatch`
+  (osi). The certified **trustworthy** join graph is emitted natively as
+  `CubeJoin`/`OsiRelationship`, and every emitted model is re-certified end-to-end. The
+  MetricFlow path is byte-identical. `apply_names` (Phase 8) is now dialect-aware: cube
+  → `title:` on cube/measure + `meta.goldenmatch.glossary`; osi → native field `label` +
+  metric `description` + `custom_extensions.goldenmatch.glossary`. `dialect` already
+  plumbs through CLI `--dialect` + MCP/REST `dialect`; no new params or tools. The ninth
+  slice of the semantic-model discovery arc (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discovery_cube_osi_emit.py`.
 
 ### Changed
 - **FS out-of-core streaming: single `resolve_fs_block_source` knob + DuckDB
