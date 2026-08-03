@@ -30,7 +30,7 @@ standing discipline: **when a number looks too good, hunt the confound first.**
   `probe_layers` → `sae` → `causal`.
 - **Layer 2 — the human translation.** The proven direction decomposes into human
   field-importance (**first_name 0.42, birth_place 0.30**, occupation/postcode small,
-  **surname ~0.04 and dob ~0.01 = near-ignored**), cross-validated by an independently
+  **surname ~0.04 and dob ~0.01**), cross-validated by an independently
   trained SAE basis. `modal_interp.py::layer2_abstraction` + the pure/tested
   `scripts/er_matcher/interp/field_attribution.py`. **R² = 0.51 against the internal
   projection**; for faithfulness against the model's actual verdict — the number that
@@ -43,8 +43,11 @@ standing discipline: **when a number looks too good, hunt the confound first.**
   **contradicts two of the shipped field weights** — see its section below.
 - **Shipped product — the per-decision explainer.** `goldenmatch/core/er_matcher/
   explainer.py` + `LocalLlamaAdapter.score_and_explain`. Pure/model-free (jaro-winkler
-  + the learned weights), schema-agnostic, honest about the R²=0.51 bound. 10 unit
-  tests. Additive; `score_pair` unchanged.
+  + the learned weights), schema-agnostic. Ships TWO labelled tables:
+  `PERSON_FIELD_IMPORTANCE` (scoring: does agreement track the verdict?) and
+  `PERSON_FIELD_CAUSAL_RANKING` (necessity: does the model need the field?), which
+  disagree on purpose. Faithfulness now the measured **0.27** (was 0.51, the projection
+  number). 12 unit tests. Additive; `score_pair` unchanged.
 - **Live demo (artifact).** Real records + the actual model's verdicts, each explained
   by learned field importance. Built from `scratchpad/xai_demo.py`.
 
@@ -96,8 +99,8 @@ standing discipline: **when a number looks too good, hunt the confound first.**
 
 ## Faithfulness hardening — result (0.51 measured the wrong target; 0.87 did not survive)
 
-The 0.51 in `explainer.py` is the R² of explaining the internal diff-of-means
-**projection** — a lossy 1D shadow of the ~8D decision, and the wrong target for a
+The 0.51 that `explainer.py` used to publish is the R² of explaining the internal
+diff-of-means **projection** — a lossy 1D shadow of the ~8D decision, and the wrong target for a
 per-decision explainer. The right target is the model's **actual P(match)**.
 
 That is now measured by a **committed, reproducible** stage —
@@ -242,21 +245,42 @@ Spearman(causal, shipped weights) = **+0.14 … +0.43** — weak, never strong.
    verdict" counterfactual exists for roughly one decision in five, so per-pair
    attribution belongs on the **review queue**, not on every decision.
 
-**What this means for the explainer.** Causal attribution is the stronger audit artifact
-(a real counterfactual on a real decision, immune to the R² weakness), but it does *not*
-rescue the current weight table — it contradicts part of it. The cheapest honest fix is
-to **re-derive `PERSON_FIELD_IMPORTANCE` from ablation** (or publish both rankings and
-say which is which) rather than keep shipping coefficients that call dob irrelevant.
+### Re-deriving the weights from ablation — TRIED AND REJECTED ON EVIDENCE
+
+The obvious fix was to replace `PERSON_FIELD_IMPORTANCE` with the ablation magnitudes
+(normalized mean |ΔP|, 3 hard seeds → `birth_place` 0.27, `first_name` 0.21, `dob` 0.18,
+`postcode_fake` 0.15, `surname` 0.12, `occupation` 0.07; a random-negative run agrees to
+±0.01). It was implemented, then checked with `faithfulness_eval` — and **it made the
+explanation measurably worse**:
+
+| weights | held-out R² vs real P(match), 5 seeds | mean |
+|---|---|---|
+| original (direction regression) | 0.251 / 0.317 / 0.364 / 0.215 / 0.214 | **0.27** |
+| ablation-derived | 0.164 / 0.162 / 0.283 / 0.013 / **−0.124** | **0.10** |
+
+One seed goes *negative* — worse than predicting the mean. **Reverted.**
+
+**Why, and the lesson:** the two measures answer different questions and only one suits
+the scoring job. Ablation asks *"does the model need this field?"* — a marginal,
+necessity-given-the-rest quantity, which under a redundant decision is small and nearly
+flat across fields. `explain_pair` needs *"does this field's agreement level track the
+verdict?"*, which is the regression quantity. Flattening the weights toward the ablation
+profile pushes the score toward an unweighted mean of agreements and discriminates less.
+
+**What shipped instead:** both, kept separate and labelled — `PERSON_FIELD_IMPORTANCE`
+(scoring, unchanged) and the new `PERSON_FIELD_CAUSAL_RANKING` (necessity). The wrong
+*claim* is fixed without corrupting the scoring: the code and docs no longer say the
+model ignores dob, and a test locks the two rankings apart so they can't be silently
+merged. `PERSON_IMPORTANCE_FAITHFULNESS_R2` is now **0.27** (was 0.51 — the projection
+number), and the rationale text no longer says "decision geometry".
 
 ## Next steps (highest leverage first)
 
-1. **Re-derive `PERSON_FIELD_IMPORTANCE` from ablation.** The causal section above shows
-   the shipped table calls `dob` near-ignored (0.01) when it is a top-3 causal field, and
-   `occupation` 3rd (0.15) when it is dead last. That is a user-visible wrong claim in a
-   compliance artifact and it is now the highest-leverage fix. Either re-derive the
-   weights from `causal_attribution`, or publish both rankings clearly labelled.
-   Then wire per-pair counterfactuals into the **review queue** (only ~19% of decisions
-   have a single-field flip, and it costs 12 extra forward passes/pair).
+1. **Wire per-pair counterfactuals into the review queue.** The weight question is
+   settled (both rankings now ship, separately labelled — see above), so the remaining
+   product work is surfacing the counterfactual itself: ~19% of decisions have a
+   single-field flip, at 12 extra forward passes/pair, so it belongs on the review queue
+   rather than every decision.
 2. **Perf for real volume.** Prefix-cache the system rubric (biggest CPU win) + wire the
    logit readout into the scorer for clean P(match); benchmark on GPU.
 3. **Benchmark head-to-head, honestly.** Against the ER landscape on *held-out* data

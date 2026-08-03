@@ -7,8 +7,15 @@ causally-validated match direction from the mechanistic-interpretability work
 just-so story: the per-field importance below is the standardized regression of the
 *causally-locked* match direction onto per-field agreement, so the explanation
 reflects what actually moves the model's decision — bounded by an honest
-faithfulness number (the fields explain ~half the decision geometry; the rest is
-context/interactions the per-field story cannot capture).
+faithfulness number.
+
+**Two different questions, two tables.** ``PERSON_FIELD_IMPORTANCE`` says how much a
+field's agreement level *tracks* the verdict (what this module scores with).
+``PERSON_FIELD_CAUSAL_RANKING`` says which fields the model *needs*, measured by
+ablating them on the live model. They disagree — notably on ``dob`` — and each is
+right about its own question; see the comments on both. Swapping the ablation result
+into the scoring weights was tried and measurably made the explanation *less*
+faithful to the model's real verdict, so the two are kept separate on purpose.
 
 Pure + model-free (jaro-winkler agreement + a weight table): given two records and
 the model's verdict, it explains. The model itself is only needed to *produce* the
@@ -19,12 +26,17 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
-# Learned person-record field importance (Layer 2). Standardized coefficients of
-# the causally-validated match direction (layer 14) regressed onto per-field
-# jaro-winkler agreement, on historical_50k against HARD (shared-surname) negatives.
-# Reading: against surname look-alikes the model keys on first_name + birth_place,
-# and has LEARNED to down-weight surname (uninformative among look-alikes) and dob
-# (corrupted/unreliable in that data). `postcode` aliases `postcode_fake`.
+# Person-record field importance for SCORING the explanation: standardized
+# coefficients of the causally-validated match direction (layer 14) regressed onto
+# per-field jaro-winkler agreement, on historical_50k against HARD (shared-surname)
+# negatives. `postcode` aliases `postcode_fake`.
+#
+# These answer "how much does this field's AGREEMENT LEVEL track the verdict?", which
+# is the question `explain_pair` actually asks when it ranks supporting vs opposing
+# evidence. Re-deriving them from causal ablation was tried and MEASURABLY REJECTED:
+# ablation-magnitude weights scored held-out R^2 0.10 against the model's real P(match)
+# versus 0.27 for these (5 seeds, one seed negative). Ablation answers a different
+# question -- see PERSON_FIELD_CAUSAL_RANKING below. Do not swap one for the other.
 PERSON_FIELD_IMPORTANCE: dict[str, float] = {
     "first_name": 0.42,
     "birth_place": 0.30,
@@ -35,9 +47,33 @@ PERSON_FIELD_IMPORTANCE: dict[str, float] = {
     "dob": 0.01,
 }
 
-# How much of the model's decision geometry the per-field story explains (R^2 of the
-# Layer-2 regression). The explanation is faithful to THIS degree, not perfectly.
-PERSON_IMPORTANCE_FAITHFULNESS_R2 = 0.51
+# Which fields the model NEEDS, measured by blanking each field on both records and
+# watching the real verdict move (`modal_interp.py::causal_attribution`, 3 hard-negative
+# seeds x 400 pairs; a random-negative run agrees). Ordered most- to least-necessary.
+#
+# This is deliberately SEPARATE from the scoring weights above, because the two
+# disagree and both are correct about their own question. Most importantly: `dob` is a
+# top-3 field by ablation despite its 0.01 scoring coefficient, so the model does NOT
+# ignore date of birth -- never say it does. `occupation` is the reverse (0.15 to score
+# with, but last by necessity).
+#
+# Caveat that keeps this honest: removing any ONE field changes the verdict in only
+# ~19% of pairs. The decision is redundant, so this is a ranking of contributions to a
+# joint decision, not a list of deciding factors.
+PERSON_FIELD_CAUSAL_RANKING: tuple[str, ...] = (
+    "birth_place", "first_name", "dob", "postcode_fake", "surname", "occupation",
+)
+
+# How much of the model's ACTUAL verdict probability the per-field story explains:
+# held-out R^2 of these frozen weights against P(match), cluster-disjoint split,
+# hard negatives, 5-seed mean (`modal_interp.py::faithfulness_eval`).
+#
+# It is low because the decision is REDUNDANT (see above), not because the weights are
+# wrong -- refitting them on the same features buys almost nothing. Do not quote a
+# higher number: figures near 0.87 measured on a record-disjoint split (which leaks the
+# same entity across the split) or against the internal projection rather than the
+# verdict. This is the honest one for the look-alike regime the explainer runs in.
+PERSON_IMPORTANCE_FAITHFULNESS_R2 = 0.27
 
 # neutral weight for a field with no learned importance (unknown schema)
 DEFAULT_FIELD_IMPORTANCE = 0.10
@@ -183,7 +219,8 @@ def _render_rationale(
         parts.append("Note: the field-agreement view points the other way, so this "
                      "explanation is low-confidence for this pair.")
     if learned:
-        parts.append(f"(Field importance is the model's learned weighting; it "
-                     f"accounts for ~{int(PERSON_IMPORTANCE_FAITHFULNESS_R2 * 100)}% "
-                     f"of the model's decision geometry.)")
+        parts.append(f"(Field importance is the model's learned weighting. It accounts "
+                     f"for ~{int(PERSON_IMPORTANCE_FAITHFULNESS_R2 * 100)}% of the "
+                     f"model's verdict: the model combines evidence across fields, so "
+                     f"much of the decision is not attributable to any single one.)")
     return " ".join(parts)
