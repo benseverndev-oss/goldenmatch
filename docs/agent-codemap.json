@@ -1118,6 +1118,7 @@
             "_patch_field_placeholders",
             "_recognize_blocking_conjunct",
             "_recognize_forename_surname",
+            "_resolve_edit_len",
             "_strip_outer_parens",
             "convert_blocking",
             "convert_comparison",

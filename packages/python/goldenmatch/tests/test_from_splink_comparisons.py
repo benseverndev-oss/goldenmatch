@@ -375,3 +375,48 @@ def test_all_levels_unrecognized_returns_none():
     assert field is None
     assert report.has_warnings
     assert any("unrecognized sql_condition" in f.message for f in report.findings)
+
+
+def _lev_email_comparison():
+    return {
+        "output_column_name": "email",
+        "comparison_levels": [
+            {"sql_condition": '"email_l" IS NULL OR "email_r" IS NULL', "is_null_level": True},
+            {"sql_condition": '"email_l" = "email_r"'},
+            {"sql_condition": 'damerau_levenshtein("email_l", "email_r") <= 1'},
+            {"sql_condition": 'damerau_levenshtein("email_l", "email_r") <= 3'},
+            {"sql_condition": "ELSE"},
+        ],
+    }
+
+
+def test_edit_distance_length_is_the_default_10():
+    field = convert_comparison(_lev_email_comparison(), 0, ConversionReport())
+    # exact=1.0, then dist<=1 -> 1-1/10, dist<=3 -> 1-3/10 (the historical default)
+    assert field.level_thresholds == [1.0, 0.9, 0.7]
+
+
+def test_edit_distance_length_per_field_override():
+    # A real email averages ~22 chars, so dist<=1 should map to ~0.955, not 0.9;
+    # the flat 10 was too lenient. A per-field map makes the band faithful.
+    field = convert_comparison(
+        _lev_email_comparison(), 0, ConversionReport(), edit_len={"email": 22},
+    )
+    assert field.level_thresholds[0] == 1.0
+    assert abs(field.level_thresholds[1] - (1 - 1 / 22)) < 1e-9
+    assert abs(field.level_thresholds[2] - (1 - 3 / 22)) < 1e-9
+
+
+def test_edit_distance_length_global_int_override():
+    field = convert_comparison(
+        _lev_email_comparison(), 0, ConversionReport(), edit_len=20,
+    )
+    assert field.level_thresholds == [1.0, 1 - 1 / 20, 1 - 3 / 20]
+
+
+def test_edit_distance_length_unknown_field_falls_back_to_default():
+    # A map that doesn't cover this column keeps the default 10.
+    field = convert_comparison(
+        _lev_email_comparison(), 0, ConversionReport(), edit_len={"other": 30},
+    )
+    assert field.level_thresholds == [1.0, 0.9, 0.7]
