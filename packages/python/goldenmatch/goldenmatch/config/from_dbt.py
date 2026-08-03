@@ -21,6 +21,7 @@ polars-free (it only parses JSON + regexes SQL); ``verify_against_dbt`` lives in
 """
 from __future__ import annotations
 
+import fnmatch
 import json
 import re
 from dataclasses import dataclass
@@ -657,6 +658,36 @@ def _unique_test_columns(manifest: dict) -> dict[str, list[str]]:
     return out
 
 
+def _select_matches(node: dict, patterns: list[str] | tuple[str, ...]) -> bool:
+    """True if a manifest node matches at least one dbt-style ``--select`` pattern.
+
+    Model identification is inherently fuzzy on a full warehouse (every ``dim_`` /
+    ``xref`` / unique-tested staging model looks a little like ER), so a real
+    project scopes the converter the same way it runs dbt: with a selector.
+    Patterns (case-insensitive):
+
+    - ``tag:<name>``  -> the node's ``tags`` contains ``<name>``
+    - ``path:<glob>`` -> ``fnmatch`` on the node's file path
+    - ``<glob>``      -> ``fnmatch`` on the model NAME (e.g. ``dedup_*``)
+    """
+    name = str(node.get("name", "")).lower()
+    path = str(node.get("original_file_path") or node.get("path") or "").lower()
+    tags = {str(t).lower() for t in (node.get("tags") or [])}
+    for raw in patterns:
+        p = str(raw).strip().lower()
+        if not p:
+            continue
+        if p.startswith("tag:"):
+            if p[4:] in tags:
+                return True
+        elif p.startswith("path:"):
+            if fnmatch.fnmatch(path, p[5:]):
+                return True
+        elif fnmatch.fnmatch(name, p):
+            return True
+    return False
+
+
 def identify_er_models(manifest: dict) -> list[ErModel]:
     """Rank the manifest's models by how strongly they look like ER models."""
     unique_tests = _unique_test_columns(manifest)
@@ -861,6 +892,7 @@ def from_dbt(
     catalog_path: dict | str | Path | None = None,
     strict: bool = False,
     min_confidence: float = 0.5,
+    select: list[str] | tuple[str, ...] | None = None,
 ) -> DbtConversion:
     """Distill a dbt project's hand-rolled ER logic into a GoldenMatch config.
 
@@ -878,7 +910,14 @@ def from_dbt(
             :class:`DbtConversionError`. When False (default), only a malformed
             manifest raises -- a partial extraction is the expected outcome.
         min_confidence: models identified below this ER-confidence are reported
-            (in ``er_models``) but NOT analyzed for signal extraction.
+            (in ``er_models``) but NOT analyzed for signal extraction. Ignored for
+            models matched by ``select`` (an explicit selection is authoritative).
+        select: optional dbt-style scope patterns; when given, only ER-candidate
+            models matching one are analyzed. Without it a full warehouse
+            over-extracts (every ``dim_`` / ``xref`` / unique-tested staging model
+            looks a little like ER). Patterns: ``dedup_*`` (glob on the model
+            name), ``path:*entity_resolution*`` (glob on the file path), or
+            ``tag:<name>``. Case-insensitive.
 
     Returns:
         A :class:`DbtConversion` with a validated ``GoldenMatchConfig`` (or
@@ -897,9 +936,29 @@ def from_dbt(
         if n.get("resource_type") == "model"
     )
     er_models = identify_er_models(manifest)
-    analyzed = [m for m in er_models if m.confidence >= min_confidence]
+    if select:
+        nodes_all = manifest.get("nodes", {})
+        before = len(er_models)
+        er_models = [
+            m for m in er_models
+            if _select_matches(nodes_all.get(m.unique_id, {}), select)
+        ]
+        report.info(
+            "select",
+            f"--select {list(select)} scoped {before} ER-candidate model(s) down to "
+            f"{len(er_models)}; the selection is authoritative (the confidence gate is "
+            "not applied to selected models).",
+            mapped_to=None,
+        )
+        # An explicit selection asserts "these ARE my ER models", so analyze all of
+        # them regardless of the heuristic confidence gate.
+        analyzed = list(er_models)
+    else:
+        analyzed = [m for m in er_models if m.confidence >= min_confidence]
+
+    analyzed_ids = {m.unique_id for m in analyzed}
     for m in er_models:
-        if m.confidence >= min_confidence:
+        if m.unique_id in analyzed_ids:
             report.info(
                 f"model:{m.name}",
                 f"identified as ER (confidence {m.confidence:.2f}): "

@@ -3497,6 +3497,13 @@
               "help": "ER-model identification confidence floor for signal extraction"
             },
             {
+              "name": "--select",
+              "type": "text",
+              "required": false,
+              "default": "[]",
+              "help": "Scope to specific ER models (repeatable), dbt-style; without it a full warehouse over-extracts. Globs the model name (`dedup_*`), or `path:*entity_resolution*`, or `tag:<name>`. Selected models bypass --min-confidence."
+            },
+            {
               "name": "--verify",
               "type": "text",
               "required": false,
