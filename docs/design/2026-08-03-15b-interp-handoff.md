@@ -578,6 +578,38 @@ flipped by removing more. The honest ceiling for this method is therefore below 
 construction, and it also explains why intermediate orders flip pairs that order 6 does
 not (removing the discriminators raises P(match); removing everything drops it again).
 
+### Cross-domain: the low orders replicate, the ceilings do not (and can't be compared)
+
+Same sweep on walmart_amazon (5 fields, DeepMatcher test split, acc 0.96):
+
+| k | person | walmart |
+|---|---|---|
+| 1 | 0.195 | **0.180** |
+| 2 | 0.395 | 0.352 |
+| 3 | 0.573 | 0.420 |
+| 4 | 0.815 | 0.443 |
+| 5 | 0.897 | 0.443 (plateau) |
+| never flipped | 0.090 | 0.557 |
+
+**Low-order attributability replicates for the third time**: ~18–20% at k=1 and ~35–40%
+at k≤2, on two unrelated corpora with different schemas, different pair-generation
+processes, and 5 vs 6 fields. That constant is now the most reproducible number in this
+thread.
+
+**The ceilings are NOT comparable, and the difference is mostly base rate.** Ablation
+only removes evidence, so match-verdict pairs flip easily while no-match pairs flip only
+if their conflicts are deleted. Person is 38% match verdicts; walmart is 14%. The
+order-N consistency check holds in both (walmart: all-fields flip 0.107 vs base match
+rate 0.141; person: 0.385 vs 0.382), which confirms the mechanism rather than a bug.
+Normalizing per verdict class, ~53% of person's no-match pairs flip vs ~35% of
+walmart's — a real but much smaller gap than 0.91 vs 0.44 suggests. **Do not cite
+walmart as "more redundant" without that normalization**; the right measurement is
+flippability split by base verdict, which this sweep does not yet report.
+
+Per-order `any_flip` is legitimately non-monotonic (walmart order 3 = 0.403, order 4 =
+0.330) because removing *more* fields can restore the original verdict; the cumulative
+curve is monotone, as it must be.
+
 **What this means for the thesis.** This is the measurement that caps the strong
 "pause mid-thought and see which circuit fired" claim, at least for this model and task:
 for ~80% of decisions no one- or two-field account exists, and the honest per-decision
@@ -585,6 +617,10 @@ artifact is "these four fields jointly carry it," which is close to saying "the 
 does." Small-set attribution is not merely hard to compute here — the evidence says it
 mostly is not there. That is a real constraint on auditable-AI claims and it was
 measured by intervention, the one method that has survived every check in this thread.
+
+The cross-domain replication of the k=1 and k≤2 numbers is what makes this a claim about
+the models rather than about the person probe. The honest headline: **a single-field
+counterfactual exists for roughly one decision in five, in both domains tested.**
 
 ## Next steps (highest leverage first)
 
@@ -604,12 +640,16 @@ measured by intervention, the one method that has survived every check in this t
    0.33 vs 0.26 for the legible table (above) — a real edge on every seed, but small
    enough that two modes may not be worth the surface area. A product call, not a
    measurement one; the measurement is done.
-4. **Perf for real volume.** Prefix-cache the system rubric (biggest CPU win) + wire the
+4. **Split flippability by base verdict.** The multi-field ceilings are confounded by
+   class balance (person 38% match verdicts, walmart 14%) because ablation can only
+   remove evidence. Reporting the curve separately for match- and no-match-verdict pairs
+   makes the two domains comparable and is a small change to `ablation_flip_profile`.
+5. **Perf for real volume.** Prefix-cache the system rubric (biggest CPU win) + wire the
    logit readout into the scorer for clean P(match); benchmark on GPU.
-5. **Benchmark head-to-head, honestly.** Against the ER landscape on *held-out* data
+6. **Benchmark head-to-head, honestly.** Against the ER landscape on *held-out* data
    (walmart, not the contaminated in-training sets), reporting competitive-local, not
    SOTA. This is the step that turns "appears to address" into "demonstrably addresses."
-6. **Multi-source-corpus rerun** of the truncate/strip sweep so the walmart absolutes
+7. **Multi-source-corpus rerun** of the truncate/strip sweep so the walmart absolutes
    match the shipped model (expected: same collapse pattern, higher baseline).
 
 ## The one-paragraph version
