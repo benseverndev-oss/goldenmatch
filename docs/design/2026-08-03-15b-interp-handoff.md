@@ -452,13 +452,52 @@ the wrong fit. `PERSON_SIGNAL_IMPORTANCE` is now the sparse table,
 `PERSON_SIGNAL_IMPORTANCE_DENSE` — the measured comparison that justifies the choice
 (`fixed_richer` row), pinned by a test so the reason survives.
 
-**What remains a genuine trade:** the sparse table still puts `first_name` 5th, where
-both the 6-field table and ablation put it near the top, so it is still not the *display*
-table. `explain_pair(..., high_faithfulness=True)` reports 0.64 and attaches
-`signal_contributions` for an audit trail while the per-field prose stays byte-identical
-to the default mode (a test pins that). **0.27 legible / 0.64 accurate** — a much
-narrower gap than the 0.27-vs-0.53 it replaces, and worth one more attempt (grouped or
-sign-constrained fit) before calling it permanent.
+### The modes do NOT merge — and the reason is a probe confound, not a fit problem
+
+The "one more attempt" was run: a **two-stage grouped fit** (regress each field's six
+signals to a composite, L1-normalize the within-field pattern, then regress the six
+composites so the second-stage coefficients ARE the per-field importances by
+construction). R² 0.863 — and the rollup came out
+`['surname', 'birth_place', 'postcode_fake', 'dob', 'first_name', 'occupation']`,
+**identical in ordering to the sparse fit. first_name still 5th.**
+
+Three independent fit types — dense OLS, L1, grouped two-stage — agree. So it is not
+collinearity and not the fit. Hunting the confound found it:
+
+| check (probe set, hard negatives, 800 pairs) | value |
+|---|---|
+| mean `edit_norm` over all six fields, corr with label | **−0.903** |
+| `edit_norm` cross-field correlation (mean / max) | +0.382 / +0.626 |
+| `agreement` cross-field correlation (mean / max) | +0.217 / +0.368 |
+| `surname__edit_norm` vs label | −0.790 |
+| `birth_place__edit_norm` vs label | −0.807 |
+| `first_name__edit_norm` vs label | −0.710 |
+
+**`edit_norm` is a shared corruption-level proxy.** Probe matches are corrupted copies
+of one entity and non-matches are different entities, so overall string distance
+separates the classes almost on its own — a single global number gets −0.90. The richer
+fits therefore rank whichever field is the best *corruption* proxy (surname,
+birth_place) above the field that carries *identity* evidence (first_name).
+
+**Consequences, and they matter more than the 0.64:**
+
+1. **Read the high-faithfulness number as "predicts P(match) on this probe set", not
+   as "a better account of the model's field reasoning."** Its 0.64 is real but partly
+   earned on a property of how the pairs were mined. This is the same class of finding
+   as everything else in this thread; the standing discipline caught it.
+2. **Ablation is immune to this and the correlational bases are not.** Occlusion
+   perturbs one field at a time on the live model, so a cross-field nuisance correlate
+   cannot fool it. That is now a second, independent argument for causal attribution as
+   the audit method — it survived the messy-domain move AND it survives this confound.
+3. **The two modes stay split**, but for a better-understood reason: not a
+   legibility/accuracy trade, but that the accurate basis is measuring something partly
+   extrinsic to per-field reasoning. `PERSON_FIELD_IMPORTANCE` remains the prose;
+   `explain_pair(..., high_faithfulness=True)` reports 0.64 + `signal_contributions`
+   with the per-field prose byte-identical (pinned by a test).
+4. **Open:** re-measure faithfulness on pairs whose corruption level is matched across
+   classes, which would strip the shortcut and give the honest richer-basis number.
+   Untested on walmart — its pairs come from DeepMatcher candidate generation rather
+   than corruption-based mining, so the mechanism there is likely different.
 
 Person schema only — the product schema has no derived weights.
 
@@ -476,11 +515,11 @@ Person schema only — the product schema has no derived weights.
    regression. walmart has no derived table at all, so its `fixed`/`fixed_richer` rows do
    not exist and the product-domain explanation still rests on the unweighted basis.
    Running `layer2_abstraction` against a product-domain probe set is the missing piece.
-3. **Close the last of the legibility gap.** L1 already took the high-faithfulness
-   basis to 0.64 AND fixed its ranking at both ends (above). What still blocks a single
-   table is `first_name` sitting 5th in the sparse rollup. A sign-constrained or
-   per-field-grouped fit is the next thing to try; if it lands, the two modes merge and
-   the explainer publishes one number around 0.6 instead of 0.27.
+3. **Strip the corruption shortcut and re-measure.** The grouped fit settled that the
+   modes will not merge by better fitting (above) — the richer basis partly rides a
+   cross-field corruption proxy that is an artifact of probe mining. Re-run
+   `faithfulness_eval` on pairs matched for corruption level across classes; that number
+   is the honest one for the richer basis, and it will be lower than 0.64.
 4. **Perf for real volume.** Prefix-cache the system rubric (biggest CPU win) + wire the
    logit readout into the scorer for clean P(match); benchmark on GPU.
 5. **Benchmark head-to-head, honestly.** Against the ER landscape on *held-out* data

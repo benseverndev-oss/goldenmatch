@@ -107,8 +107,23 @@ PERSON_SIGNAL_IMPORTANCE_DENSE: dict[str, float] = {
 # coherent story by themselves -- `edit_norm` negative (further apart -> less match),
 # `exact` positive. Sparsity bought accuracy AND legibility at once.
 #
-# Still not the DISPLAY table: it puts first_name 5th, where both the 6-field table
-# and ablation put it near the top. `PERSON_FIELD_IMPORTANCE` remains the prose.
+# Still not the DISPLAY table, and the REASON is now understood rather than guessed.
+# Three independent fits (dense OLS, this L1, and a two-stage grouped fit) all rank
+# first_name low on the richer basis, so it is not a collinearity artifact. Measured
+# cause: `edit_norm` acts as a shared CORRUPTION-LEVEL proxy. Mean edit_norm across
+# the six fields correlates -0.90 with the label on the probe set, and the edit_norm
+# columns are far more cross-correlated (mean +0.38) than the agreement columns
+# (+0.22) -- because probe matches are corrupted copies of one entity while
+# non-matches are different entities, so overall string distance separates the
+# classes on its own. The fits therefore rank whichever field is the best corruption
+# proxy (surname, birth_place) above the field that actually carries identity
+# evidence (first_name).
+#
+# So read this basis as "predicts P(match) well on this probe set", NOT as "these are
+# the signals the model reasons with". `PERSON_FIELD_IMPORTANCE` remains the prose,
+# and per-field ABLATION (PERSON_FIELD_CAUSAL_RANKING) remains the trustworthy
+# importance story -- it perturbs one field at a time on the live model, so a
+# cross-field nuisance correlate cannot fool it.
 PERSON_SIGNAL_IMPORTANCE: dict[str, float] = {
     "surname__edit_norm": -0.226, "birth_place__edit_norm": -0.19,
     "postcode_fake__edit_norm": -0.147, "birth_place__exact": 0.135,

@@ -946,6 +946,7 @@ def layer2_abstraction(layer: int = 14, per_class: int = 400, seed: int = 0,
     sys.path.insert(0, "/root")
     from field_attribution import (
         attribute_direction,
+        attribute_direction_grouped,
         field_agreements,
         field_rollup,
         label_sae_features,
@@ -1003,6 +1004,12 @@ def layer2_abstraction(layer: int = 14, per_class: int = 400, seed: int = 0,
     # ranks fields backwards (collinearity spreads weight over redundant signals).
     # L1 should drop the redundant ones; the test is whether the per-field rollup
     # starts agreeing with what ablation says the model needs.
+    grouped = attribute_direction_grouped(projections, X, sig_names, FIELDS)
+    print(f"[layer2] GROUPED (two-stage) R^2={grouped['r2']:.3f} "
+          f"rollup={[e['field'] for e in grouped['ranking']]}", flush=True)
+    for e in grouped["ranking"]:
+        print(f"[layer2]   {e['field']:<14} a={e['coef']:+.3f}", flush=True)
+
     sparse_fits = {}
     for alpha in (0.005, 0.01, 0.02, 0.05, 0.1):
         sp = attribute_direction(projections, X, sig_names, l1_alpha=alpha)
@@ -1040,6 +1047,7 @@ def layer2_abstraction(layer: int = 14, per_class: int = 400, seed: int = 0,
         "direction_field_decomposition": decomp,
         "direction_richer_decomposition": rich,
         "direction_richer_sparse": sparse_fits,
+        "direction_richer_grouped": grouped,
         "richer_signal_names": sig_names,
         "sae_feature_labels": sae_labels,
     }

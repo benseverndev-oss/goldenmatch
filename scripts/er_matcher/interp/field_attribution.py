@@ -116,6 +116,75 @@ def attribute_direction(
     }
 
 
+def attribute_direction_grouped(
+    projections: np.ndarray,
+    feats: np.ndarray,
+    signal_names: list[str],
+    fields: list[str],
+) -> dict[str, Any]:
+    """Two-stage GROUPED fit: within-field pattern, then per-field importance.
+
+    The flat 36-signal fits score well but their per-field rollup is an accident of
+    which collinear signal happened to absorb the weight. This fits the structure
+    explicitly instead:
+
+      1. per field, regress the projection on that field's own signals -> a
+         within-field pattern ``beta_f``, L1-normalized to sum |beta| = 1;
+      2. regress the projection on the 6 resulting composites -> ``a_f``, which is
+         the field's importance *by construction*, directly comparable to the
+         6-field table.
+
+    Because the normalization fixes each field's internal scale, the per-field
+    rollup of the effective per-signal weights equals ``|a_f|`` exactly -- so the
+    ranking is designed rather than inferred, while each field still gets the full
+    six-signal decomposition. Returns the effective per-signal weights too, so the
+    result drops into the same frozen-weight scoring path as the other bases.
+    """
+    if feats.shape[1] != len(signal_names):
+        raise ValueError("feats columns must match signal_names")
+    from sklearn.linear_model import LinearRegression
+
+    xs = feats.std(0)
+    Xz = (feats - feats.mean(0)) / np.where(xs < 1e-9, 1.0, xs)
+    ys = projections.std()
+    yz = (projections - projections.mean()) / (ys if ys > 1e-9 else 1.0)
+
+    cols = {f: [j for j, n in enumerate(signal_names) if n.split("__")[0] == f]
+            for f in fields}
+    patterns: dict[str, dict[str, float]] = {}
+    composites = np.zeros((Xz.shape[0], len(fields)), dtype=np.float64)
+    for i, f in enumerate(fields):
+        idx = cols[f]
+        if not idx:
+            continue
+        beta = LinearRegression().fit(Xz[:, idx], yz).coef_
+        mass = float(np.abs(beta).sum())
+        beta = beta / mass if mass > 1e-12 else beta
+        patterns[f] = {signal_names[j]: float(beta[k]) for k, j in enumerate(idx)}
+        composites[:, i] = Xz[:, idx] @ beta
+
+    cs = composites.std(0)
+    Cz = (composites - composites.mean(0)) / np.where(cs < 1e-9, 1.0, cs)
+    outer = LinearRegression().fit(Cz, yz)
+    a = {f: float(outer.coef_[i]) for i, f in enumerate(fields)}
+
+    effective = {
+        n: a[f] * patterns[f][n]
+        for f in fields if f in patterns
+        for n in patterns[f]
+    }
+    ranking = sorted(a.items(), key=lambda kv: -abs(kv[1]))
+    return {
+        "r2": float(outer.score(Cz, yz)),
+        "field_importance": a,
+        "within_field_patterns": patterns,
+        "coefficients": effective,
+        "ranking": [{"field": f, "coef": c} for f, c in ranking],
+        "top_field": ranking[0][0] if ranking else None,
+        "n_nonzero": int(sum(1 for v in effective.values() if abs(v) > 1e-9)),
+    }
+
+
 def field_rollup(coefficients: dict[str, float]) -> list[tuple[str, float]]:
     """Sum |coef| per field over ``field__signal`` keys -> ranked (field, mass).
 
