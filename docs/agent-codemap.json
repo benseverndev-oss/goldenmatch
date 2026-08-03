@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 447,
+      "module_count": 448,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7269,6 +7269,7 @@
           "purpose": "Semantic-model discovery (the generative half of the semantic wedge).",
           "imports": [
             "goldenmatch.semantic.discovery.entities",
+            "goldenmatch.semantic.discovery.hierarchies",
             "goldenmatch.semantic.discovery.joins",
             "goldenmatch.semantic.discovery.keys",
             "goldenmatch.semantic.discovery.measures",
@@ -7284,6 +7285,8 @@
             "_build_cube",
             "_build_metricflow",
             "_build_osi",
+            "_gm_meta",
+            "_hierarchies_dicts",
             "_trustworthy_joins",
             "build_model_yaml"
           ],
@@ -7316,6 +7319,17 @@
             "goldenmatch.core.schema_match",
             "goldenmatch.semantic.discovery.joins",
             "goldenmatch.semantic.discovery.keys"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.discovery.hierarchies",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/discovery/hierarchies.py",
+          "purpose": "Dimension hierarchy discovery via functional dependencies (PR-11).",
+          "defines": [
+            "Hierarchy",
+            "_distinct_count",
+            "_fd_strength",
+            "discover_hierarchies"
           ]
         },
         {
@@ -7384,6 +7398,7 @@
             "goldenmatch.semantic",
             "goldenmatch.semantic.discovery.emit",
             "goldenmatch.semantic.discovery.entities",
+            "goldenmatch.semantic.discovery.hierarchies",
             "goldenmatch.semantic.discovery.joins",
             "goldenmatch.semantic.discovery.keys",
             "goldenmatch.semantic.discovery.measures",

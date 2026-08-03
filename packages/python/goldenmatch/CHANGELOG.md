@@ -6,6 +6,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added
+- **Semantic-model discovery — dimension hierarchies via FD (Phase 11).**
+  `goldenmatch.semantic.discover_hierarchies(table, columns)` detects drill-down
+  hierarchies (`country > state > city`) among a table's dimension columns by finding
+  **near-functional-dependencies** (a finer level determines a coarser one; a group-by
+  "fraction of determinant groups mapping to a single dependent value" test, default
+  threshold 0.95 so a few dirty rows don't kill a genuine hierarchy). Each column's
+  *immediate* parent is the highest-cardinality coarser column it determines, yielding
+  clean coarse→fine chains (`Hierarchy(table, levels, confidence)`) rather than
+  transitive-closure noise. Deterministic (no LLM) and **default-on**: attached to
+  `ProposedTable.hierarchies` + `ProposedModel.hierarchies`, included in `to_dict`, and
+  emitted into `meta.goldenmatch.hierarchies` (MetricFlow/Cube) /
+  `custom_extensions.goldenmatch.hierarchies` (OSI) — no dialect has a native hierarchy
+  slot. The first "frontier" slice turning certified structure into a queryable semantic
+  layer (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discovery_hierarchies.py`.
+
 ## [3.11.0] - 2026-08-03
 
 ### Added

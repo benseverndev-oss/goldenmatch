@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from goldenmatch.semantic.discovery.entities import EntityType, discover_entity_types
+from goldenmatch.semantic.discovery.hierarchies import Hierarchy, discover_hierarchies
 from goldenmatch.semantic.discovery.joins import JoinCandidate, discover_joins
 from goldenmatch.semantic.discovery.keys import KeyCandidate, discover_keys
 from goldenmatch.semantic.discovery.measures import (
@@ -49,6 +50,7 @@ class ProposedTable:
     key: KeyCandidate | None
     measures: list[Measure] = field(default_factory=list)
     dimensions: list[Dimension] = field(default_factory=list)
+    hierarchies: list[Hierarchy] = field(default_factory=list)
 
     @property
     def grain(self) -> list[str]:
@@ -75,6 +77,7 @@ class ProposedModel:
     yaml: str = ""
     certification: dict[str, Any] = field(default_factory=dict)
     naming: list[NameSuggestion] = field(default_factory=list)
+    hierarchies: list[Hierarchy] = field(default_factory=list)
 
     @property
     def all_trustworthy(self) -> bool:
@@ -129,6 +132,7 @@ class ProposedModel:
             ],
             "certification": self.certification,
             "naming": [n.to_dict() for n in self.naming],
+            "hierarchies": [h.to_dict() for h in self.hierarchies],
             "yaml": self.yaml,
         }
 
@@ -202,6 +206,10 @@ def discover_semantic_model(
         grain = grains[tbl_name]
         tm = discover_measures(table, key=grain, table_name=tbl_name)
         per_table_measures[tbl_name] = tm
+        # Phase 4.5 — deterministic dimension hierarchies (FD chains among the dims).
+        hierarchies = discover_hierarchies(
+            table, [d.column for d in tm.dimensions], table_name=tbl_name
+        )
         proposed_tables.append(
             ProposedTable(
                 table=tbl_name,
@@ -209,6 +217,7 @@ def discover_semantic_model(
                 key=grain,
                 measures=tm.measures,
                 dimensions=tm.dimensions,
+                hierarchies=hierarchies,
             )
         )
 
@@ -228,6 +237,7 @@ def discover_semantic_model(
         joins=joins,
         yaml=model_yaml,
         certification=certification,
+        hierarchies=[h for pt in proposed_tables for h in pt.hierarchies],
     )
 
     # Optional, advisory, non-authoritative: annotate the finished model with business
