@@ -1,0 +1,43 @@
+name: North Star scoreboard
+
+# Weekly adoption-metric snapshot -> context-network/planning/scoreboard.{jsonl,md}.
+# The falsifiable North Star proxy (see context-network/planning/north-star-roadmap.md):
+# stars, forks, PyPI/npm 30-day downloads, non-maintainer inbound issues -- tracked
+# as a TREND with week-over-week deltas, not a rolling badge snapshot.
+on:
+  schedule:
+    - cron: "17 6 * * 1"  # Mondays 06:17 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write  # commit the updated scoreboard back to main
+
+concurrency:
+  group: scoreboard
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+      - name: Snapshot the scoreboard
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/scoreboard.py
+      - name: Commit if changed
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- context-network/planning/scoreboard.jsonl context-network/planning/scoreboard.md; then
+            echo "No scoreboard change."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add context-network/planning/scoreboard.jsonl context-network/planning/scoreboard.md
+          git commit -m "chore(scoreboard): weekly adoption snapshot"
+          git push

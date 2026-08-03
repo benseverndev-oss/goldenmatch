@@ -25,18 +25,21 @@ on:
           - febrl3
           - ncvr
           - dqbench
+          - abt-buy
+          - amazon-google
+          - products
       with_llm:
         description: "Run DQbench with LLM scorer (requires OPENAI_API_KEY)"
         type: boolean
         default: false
       native:
-        description: "Build + run with native kernels (GOLDENMATCH_NATIVE=1) for the Phase 1/2 gate sign-off"
+        description: "Run with native kernels (GOLDENMATCH_NATIVE=1) — the perf path. Default ON; uncheck to A/B the pure-Python path."
         type: boolean
-        default: false
+        default: true
 
-# Locked-down by default; benchmarks job stays read-only.
+# The job commits the refreshed SoT report back to the branch, so it needs write.
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   benchmarks:
@@ -45,15 +48,17 @@ jobs:
     # the dataset secrets/vars to enable; otherwise the workflow exits 0
     # with a "not-configured" notice.
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
-      contents: read
+      contents: write
     env:
       DATASETS: ${{ inputs.datasets || 'all' }}
       WITH_LLM: ${{ inputs.with_llm || false }}
-      # "1" forces ALL native kernels (clustering + block_scoring) on; "0" pins
-      # Python. Scheduled runs (no inputs.native) stay Python.
-      NATIVE: ${{ inputs.native && '1' || '0' }}
+      # "1" forces ALL native kernels (clustering + block_scoring) on = the perf
+      # path, which is what the published numbers must reflect. Default '1';
+      # a dispatch can uncheck `native` to A/B the pure-Python path ('0').
+      # Scheduled runs (inputs.native unset, so not '== false') stay native.
+      NATIVE: ${{ inputs.native == false && '0' || '1' }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
@@ -92,17 +97,17 @@ jobs:
       # >= 91.04 sign-off gate for flipping core/_native_loader._GATED_ON).
       # Mirrors the ci.yml `native` lane's toolchain + build steps.
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
-        if: steps.prereqs.outputs.configured == 'true' && inputs.native
+        if: steps.prereqs.outputs.configured == 'true' && env.NATIVE == '1'
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
-        if: steps.prereqs.outputs.configured == 'true' && inputs.native
+        if: steps.prereqs.outputs.configured == 'true' && env.NATIVE == '1'
         with:
           workspaces: packages/rust/extensions/native
       - name: Build native extension
-        if: steps.prereqs.outputs.configured == 'true' && inputs.native
+        if: steps.prereqs.outputs.configured == 'true' && env.NATIVE == '1'
         run: uv run python scripts/build_native.py
 
-      - name: Run real benchmarks (DBLP-ACM/Febrl3/NCVR)
-        if: steps.prereqs.outputs.configured == 'true' && (env.DATASETS == 'all' || env.DATASETS != 'dqbench')
+      - name: Run benchmarks + write committed report
+        if: steps.prereqs.outputs.configured == 'true'
         shell: bash
         env:
           # Memory disabled so cross-run state doesn't leak between scheduled runs.
@@ -110,30 +115,37 @@ jobs:
           GOLDENMATCH_NATIVE: ${{ env.NATIVE }}
           # DBLP-ACM auto-pulls from Leipzig; override with a mirror if it 404s.
           # NCVR's 4.3 GB source isn't mirrored — point at a hosted 10k sample.
+          # Product sets (Abt-Buy, Amazon-Google) auto-pull from Leipzig too.
           GOLDENMATCH_DBLP_ACM_URL: ${{ vars.DBLP_ACM_URL }}
           GOLDENMATCH_NCVR_SAMPLE_URL: ${{ vars.NCVR_SAMPLE_URL }}
         run: |
           set -euo pipefail
-          # The runner auto-pulls missing file-backed datasets (--download is the
-          # default), then measures each + writes a JSON artifact + a markdown
-          # summary to $GITHUB_STEP_SUMMARY.
+          # One consolidated run over the selected datasets: measures each, writes
+          # a JSON artifact, the human summary to $GITHUB_STEP_SUMMARY, AND the
+          # committed SoT doc (docs/benchmarks/latest-results.{md,json}) so the
+          # published numbers are the perf-path truth, never a stale copy.
           uv run python scripts/run_benchmarks.py \
             --datasets "$DATASETS" \
             --output benchmark_results.json \
+            --report docs/benchmarks/latest-results.md \
             --summary-md "$GITHUB_STEP_SUMMARY"
 
-      - name: Run DQbench (no LLM)
-        if: steps.prereqs.outputs.configured == 'true' && (env.DATASETS == 'all' || env.DATASETS == 'dqbench')
+      - name: Commit refreshed report to the branch
+        # Only a full 'all' run is a complete SoT — a single-dataset dispatch must
+        # not clobber the doc with a partial table. Scheduled runs always use 'all'.
+        if: steps.prereqs.outputs.configured == 'true' && env.DATASETS == 'all'
         shell: bash
-        env:
-          GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
-          GOLDENMATCH_NATIVE: ${{ env.NATIVE }}
         run: |
           set -euo pipefail
-          uv run python scripts/run_benchmarks.py \
-            --datasets dqbench \
-            --output dqbench_results.json \
-            --summary-md "$GITHUB_STEP_SUMMARY"
+          if git diff --quiet -- docs/benchmarks/latest-results.md docs/benchmarks/latest-results.json; then
+            echo "No benchmark change."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/benchmarks/latest-results.md docs/benchmarks/latest-results.json
+          git commit -m "chore(benchmarks): refresh native results [skip ci]"
+          git push
 
       - name: Run DQbench (with LLM)
         if: steps.prereqs.outputs.configured == 'true' && env.WITH_LLM == 'true'

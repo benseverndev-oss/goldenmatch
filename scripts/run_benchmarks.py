@@ -23,6 +23,7 @@ Environment:
 from __future__ import annotations
 
 import argparse
+import datetime
 import functools
 import io
 import json
@@ -130,6 +131,82 @@ def _fetch_ncvr_sample(datasets_dir: Path) -> bool:
     return dest.exists()
 
 
+# Leipzig product-matching datasets (heterogeneous two-source schemas). Each spec
+# feeds `leipzig_eval.run_two_source_dedupe_zeroconfig`. These are the honest
+# HARD domain for a zero-config PII/bibliographic engine -- product titles resist
+# blocking (see #715) -- so the benchmark tracks them as an improvement target.
+_PRODUCT_SPECS: dict[str, dict[str, Any]] = {
+    "abt-buy": {
+        "url": os.environ.get("GOLDENMATCH_ABT_BUY_URL", "https://dbs.uni-leipzig.de/file/Abt-Buy.zip"),
+        "subdir": "Abt-Buy", "sentinel": "Abt.csv",
+        "file_a": "Abt.csv", "file_b": "Buy.csv",
+        "gt_file": "abt_buy_perfectMapping.csv", "gt_cols": ("idAbt", "idBuy"),
+        "src_a": "abt", "src_b": "buy", "rename": None, "label": "Abt-Buy",
+    },
+    "amazon-google": {
+        "url": os.environ.get("GOLDENMATCH_AMAZON_GOOGLE_URL", "https://dbs.uni-leipzig.de/file/Amazon-GoogleProducts.zip"),
+        "subdir": "Amazon-Google", "sentinel": "Amazon.csv",
+        "file_a": "Amazon.csv", "file_b": "GoogleProducts.csv",
+        "gt_file": "Amzon_GoogleProducts_perfectMapping.csv", "gt_cols": ("idAmazon", "idGoogleBase"),
+        "src_a": "amazon", "src_b": "google", "rename": {"name": "title"}, "label": "Amazon-Google",
+    },
+}
+
+
+def _fetch_leipzig_product(datasets_dir: Path, key: str) -> bool:
+    """Auto-pull a Leipzig product dataset zip (idempotent). Returns True if present."""
+    spec = _PRODUCT_SPECS[key]
+    out = datasets_dir / spec["subdir"]
+    if (out / spec["sentinel"]).exists():
+        return True
+    out.mkdir(parents=True, exist_ok=True)
+    _info(f"  {spec['label']}: downloading from {spec['url']} ...")
+    try:
+        zipfile.ZipFile(io.BytesIO(_http_get(spec["url"]))).extractall(out)
+    except Exception as exc:  # noqa: BLE001 - download is best-effort
+        _info(f"  {spec['label']}: download failed ({exc}). Skipping.")
+        return False
+    # Flatten if the zip nested the CSVs under a folder.
+    if not (out / spec["sentinel"]).exists():
+        for p in out.rglob(spec["sentinel"]):
+            for f in p.parent.iterdir():
+                f.rename(out / f.name)
+            break
+    return (out / spec["sentinel"]).exists()
+
+
+def _measure_product(datasets_dir: Path, key: str) -> dict[str, Any] | None:
+    """Zero-config dedupe on a Leipzig two-source product dataset; pairwise F1."""
+    from dqbench_adapters.leipzig_eval import run_two_source_dedupe_zeroconfig
+    from goldenmatch import dedupe_df
+
+    spec = _PRODUCT_SPECS[key]
+    _dedupe = functools.partial(dedupe_df, planning_effort=_PLANNING_EFFORT)
+    start = time.time()
+    res = run_two_source_dedupe_zeroconfig(
+        datasets_dir, _dedupe,
+        subdir=spec["subdir"], file_a=spec["file_a"], file_b=spec["file_b"],
+        gt_file=spec["gt_file"], gt_cols=spec["gt_cols"],
+        src_a=spec["src_a"], src_b=spec["src_b"], rename=spec["rename"],
+    )
+    elapsed = time.time() - start
+    if res is None:
+        _info(f"  {spec['label']}: dataset files missing — skipping")
+        return None
+    _info(
+        f"  {spec['label']}: f1={res.f1:.4f} precision={res.precision:.4f} "
+        f"recall={res.recall:.4f} elapsed={elapsed:.2f}s"
+    )
+    return {
+        "name": spec["label"], "f1": round(res.f1, 4),
+        "precision": round(res.precision, 4), "recall": round(res.recall, 4),
+        "tp": res.true_positives, "fp": res.false_positives, "fn": res.false_negatives,
+        "elapsed_seconds": round(elapsed, 2),
+        "health": "n/a", "stop_reason": "n/a", "domain": "product",
+        "planning_effort": _PLANNING_EFFORT,
+    }
+
+
 def _ensure_datasets(datasets_dir: Path, selected: set[str]) -> None:
     """Auto-pull any selected file-backed datasets that aren't already present.
 
@@ -141,6 +218,9 @@ def _ensure_datasets(datasets_dir: Path, selected: set[str]) -> None:
         _fetch_dblp_acm(datasets_dir)
     if "ncvr" in selected:
         _fetch_ncvr_sample(datasets_dir)
+    for key in ("abt-buy", "amazon-google"):
+        if key in selected:
+            _fetch_leipzig_product(datasets_dir, key)
 
 
 def _measure_with_polars(
@@ -386,7 +466,7 @@ def _run_dqbench(with_llm: bool = False) -> dict[str, Any] | None:
     }
 
 
-def _emit_markdown_summary(results: list[dict[str, Any]], summary_path: Path | None) -> None:
+def _emit_markdown_summary(results: list[dict[str, Any] | None], summary_path: Path | None) -> None:
     lines = ["## Benchmark results", "", "| Dataset | F1 | Precision | Recall | Time | Health |",
              "|---|---|---|---|---|---|"]
     for r in results:
@@ -407,10 +487,79 @@ def _emit_markdown_summary(results: list[dict[str, Any]], summary_path: Path | N
         print(text)
 
 
+def _render_report(payload: dict[str, Any]) -> str:
+    """Deterministic markdown SoT from a results payload (date carried in the
+    payload's metadata, NOT `today`, so `--check` is reproducible). This is the
+    committed number-of-record so published benchmarks never drift stale — the
+    CI run regenerates BOTH the JSON and this doc, and `--check` fails a PR whose
+    doc no longer matches its JSON."""
+    meta = payload.get("metadata", {})
+    results = [r for r in payload.get("results", []) if r]
+    date = meta.get("date", "—")
+    native = meta.get("native")
+    native_label = "native (GOLDENMATCH_NATIVE=1)" if native in ("1", "true", "True") else "pure-Python"
+    lines = [
+        "# GoldenMatch benchmark results",
+        "",
+        "**GENERATED — do not hand-edit.** Regenerated by",
+        "`python scripts/run_benchmarks.py --report docs/benchmarks/latest-results.md`",
+        "(the scheduled `.github/workflows/benchmarks.yml` commits it). A `--check`",
+        "gate fails any PR whose doc drifts from its JSON, so these numbers are the",
+        "current truth, not a stale copy pasted from a case study.",
+        "",
+        f"**Run date:** {date} &nbsp;·&nbsp; **path:** {native_label} &nbsp;·&nbsp; "
+        f"**planning_effort:** {meta.get('planning_effort', '—')} &nbsp;·&nbsp; "
+        f"**LLM features:** {'on' if meta.get('with_llm') else 'off'}",
+        "",
+    ]
+    if not results:
+        lines += [
+            "> **Awaiting the first native benchmark run.** These numbers are produced"
+            " by CI on the perf path (`GOLDENMATCH_NATIVE=1`), not on a laptop — the"
+            " zero-config controller is too slow locally to publish honest wall-times."
+            " Trigger `.github/workflows/benchmarks.yml` (workflow_dispatch) or wait for"
+            " the weekly run; it commits the filled-in table here.",
+            "",
+            "_Classification: benchmarks/generated — regenerated by"
+            " `scripts/run_benchmarks.py`._",
+        ]
+        return "\n".join(lines) + "\n"
+    lines += [
+        "| Dataset | Domain | F1 | Precision | Recall | Time |",
+        "|---|---|---|---|---|---|",
+    ]
+    for r in results:
+        if "composite" in r:
+            lines.append(
+                f"| {r['name']} | benchmark-suite | composite={r['composite']} | — | — | "
+                f"{r['elapsed_seconds']}s |"
+            )
+            continue
+        lines.append(
+            f"| {r['name']} | {r.get('domain', 'record')} | {r['f1']:.4f} | "
+            f"{r['precision']:.4f} | {r['recall']:.4f} | {r['elapsed_seconds']}s |"
+        )
+    lines += [
+        "",
+        "## Reading these numbers",
+        "",
+        "- **Record-domain** (DBLP-ACM, Febrl3, NCVR, DQbench) is the engine's home"
+        " turf — bibliographic / PII / voter records.",
+        "- **Product-domain** (Abt-Buy, Amazon-Google) is deliberately the HARD case:"
+        " short product titles resist blocking (see issue #715). We publish these to"
+        " make the gap visible and track it down, not to flatter the zero-config path.",
+        "",
+        "_Classification: benchmarks/generated — regenerated by"
+        " `scripts/run_benchmarks.py`._",
+    ]
+    return "\n".join(lines) + "\n"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--datasets", default="all",
-                        choices=["all", "dblp-acm", "febrl3", "ncvr", "dqbench"])
+                        choices=["all", "dblp-acm", "febrl3", "ncvr", "dqbench",
+                                 "abt-buy", "amazon-google", "products"])
     parser.add_argument("--with-llm", action="store_true",
                         help="Run DQbench with LLM scorer (requires OPENAI_API_KEY)")
     parser.add_argument("--output", type=Path, default=None,
@@ -425,11 +574,40 @@ def main() -> int:
                         help="Auto-config planning-effort tier applied to every "
                              "dedupe/match call (default: normal = prior behavior). "
                              "Use to A/B the tiers head-to-head on a dataset.")
+    parser.add_argument("--report", type=Path, default=None,
+                        help="Write a committed, deterministic markdown SoT (+ sibling "
+                             ".json) to this path (e.g. docs/benchmarks/latest-results.md). "
+                             "The scheduled workflow commits it so published numbers never "
+                             "go stale.")
+    parser.add_argument("--check", action="store_true",
+                        help="Do not run: render the report from the committed .json and "
+                             "fail (exit 1) if the committed .md is stale. Pairs with --report.")
     parser.add_argument("--download", action=argparse.BooleanOptionalAction, default=True,
                         help="Auto-pull missing file-backed datasets (DBLP-ACM from "
                              "Leipzig; NCVR 10k sample from GOLDENMATCH_NCVR_SAMPLE_URL). "
                              "Default on; --no-download to use only local files.")
     args = parser.parse_args()
+
+    if args.check:
+        # Staleness gate only: no benchmark run. Render from the committed JSON and
+        # compare byte-for-byte with the committed markdown.
+        if not args.report:
+            _info("--check requires --report <path-to-committed .md>")
+            return 2
+        json_path = args.report.with_suffix(".json")
+        if not json_path.exists() or not args.report.exists():
+            _info(f"--check: missing {json_path} or {args.report}; run --report first")
+            return 1
+        payload = json.loads(json_path.read_text(encoding="utf-8"))
+        expected = _render_report(payload)
+        actual = args.report.read_text(encoding="utf-8")
+        if expected != actual:
+            _info(f"{args.report} is stale vs {json_path}. Regenerate with "
+                  f"python scripts/run_benchmarks.py --report {args.report} --no-download "
+                  f"(or re-run the benchmark).")
+            return 1
+        _info(f"{args.report} is current vs {json_path}.")
+        return 0
 
     # Benchmarks must NOT use the cross-run auto-config cache — a config learned
     # on a prior run would leak across datasets and make numbers irreproducible.
@@ -440,7 +618,12 @@ def main() -> int:
     _PLANNING_EFFORT = args.planning_effort
     _info(f"planning_effort={_PLANNING_EFFORT} memory={os.environ.get('GOLDENMATCH_AUTOCONFIG_MEMORY')}")
 
-    selected = {args.datasets} if args.datasets != "all" else {"dblp-acm", "febrl3", "ncvr", "dqbench"}
+    if args.datasets == "all":
+        selected = {"dblp-acm", "febrl3", "ncvr", "dqbench", "abt-buy", "amazon-google"}
+    elif args.datasets == "products":
+        selected = {"abt-buy", "amazon-google"}
+    else:
+        selected = {args.datasets}
 
     if args.download:
         _ensure_datasets(args.datasets_dir, selected)
@@ -454,20 +637,34 @@ def main() -> int:
         results.append(_measure_ncvr(args.datasets_dir))
     if "dqbench" in selected:
         results.append(_run_dqbench(with_llm=args.with_llm))
+    for key in ("abt-buy", "amazon-google"):
+        if key in selected:
+            results.append(_measure_product(args.datasets_dir, key))
 
     results = [r for r in results if r is not None]
 
+    payload = {
+        "results": results,
+        "metadata": {
+            "date": datetime.date.today().isoformat(),
+            "with_llm": args.with_llm,
+            "planning_effort": _PLANNING_EFFORT,
+            "native": os.environ.get("GOLDENMATCH_NATIVE"),
+            "datasets_dir": str(args.datasets_dir),
+            "memory_disabled": os.environ.get("GOLDENMATCH_AUTOCONFIG_MEMORY") == "0",
+        },
+    }
+
     if args.output:
-        args.output.write_text(json.dumps({
-            "results": results,
-            "metadata": {
-                "with_llm": args.with_llm,
-                "planning_effort": _PLANNING_EFFORT,
-                "datasets_dir": str(args.datasets_dir),
-                "memory_disabled": os.environ.get("GOLDENMATCH_AUTOCONFIG_MEMORY") == "0",
-            },
-        }, indent=2))
+        args.output.write_text(json.dumps(payload, indent=2))
         _info(f"wrote results to {args.output}")
+
+    if args.report:
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+        args.report.with_suffix(".json").write_text(json.dumps(payload, indent=2) + "\n",
+                                                     encoding="utf-8")
+        args.report.write_text(_render_report(payload), encoding="utf-8")
+        _info(f"wrote committed report to {args.report} (+ .json)")
 
     _emit_markdown_summary(results, args.summary_md)
 

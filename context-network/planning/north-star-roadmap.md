@@ -30,12 +30,16 @@ where the North Star is starved.
 
 Every workstream below gates on a number, not on our own judgment.
 
-| Signal | Why it is the North Star proxy | Today |
+**LIVE (2026-07-29):** [scoreboard.md](./scoreboard.md) — a weekly-tracked trend
+(`scripts/scoreboard.py` + `.github/workflows/scoreboard.yml`), not a rolling
+badge snapshot. The "Today" column below is the seed reading.
+
+| Signal | Why it is the North Star proxy | Today (seed) |
 |---|---|---|
-| Weekly PyPI + npm downloads (suite + goldenmatch alone) | Actual reach | badge exists; not tracked as a goal |
-| GitHub stars *velocity* (per week) | Discovery momentum | unmeasured |
-| **Inbound issues / PRs from strangers** | The truest "someone reached for it" | ~0 |
-| Time-to-first-success (clone → correct dedupe) | Zero-config floor, measured | unmeasured |
+| Weekly PyPI + npm downloads (suite + goldenmatch alone) | Actual reach | now **tracked** (npm ~3.5k/30d; PyPI pending an unthrottled fetch) |
+| GitHub stars *velocity* (per week) | Discovery momentum | now **tracked** — 126 stars total (~28/mo since 2026-03) |
+| **Inbound issues / PRs from strangers** | The truest "someone reached for it" | **~0 genuine** — the only two "stranger" signals to date are MCP-marketplace badge bots, not users |
+| Time-to-first-success (clone → correct dedupe) | Zero-config floor, measured | still **unmeasured** (a future scoreboard row) |
 
 ---
 
