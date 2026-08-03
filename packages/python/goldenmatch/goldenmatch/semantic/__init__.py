@@ -51,6 +51,7 @@ from goldenmatch.semantic.discovery import (
     JoinCandidate,
     KeyCandidate,
     Measure,
+    NameSuggestion,
     ProposedModel,
     ProposedTable,
     TableMeasures,
@@ -59,6 +60,7 @@ from goldenmatch.semantic.discovery import (
     discover_keys,
     discover_measures,
     discover_semantic_model,
+    name_semantic_model,
 )
 from goldenmatch.semantic.key_integrity import (
     certify_key_integrity,
@@ -168,6 +170,9 @@ __all__ = [
     "TableMeasures",
     # semantic-model discovery (Phase 5) — the orchestrator (assemble + emit + certify)
     "discover_semantic_model",
+    # semantic-model discovery (Phase 7) — optional advisory LLM namer
+    "name_semantic_model",
+    "NameSuggestion",
     "ProposedModel",
     "ProposedTable",
 ]

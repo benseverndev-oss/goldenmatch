@@ -183,7 +183,25 @@ ProposedModel`.
    attaching the D4 verdict block. CLI `discover-model`.
 6. **PR-6 MCP/REST surfaces** (`discover_semantic_model` tool + `POST /semantic/discover`),
    shared serializer.
-7. **PR-7 (optional) advisory LLM namer**, default off, self-verified.
+7. **PR-7 (optional) advisory LLM namer**, default off, self-verified. New module
+   `semantic/discovery/namer.py`. Annotates a finished `ProposedModel` with business
+   names for **entity types, dimension columns, low-cardinality dimension VALUES**
+   (`status='C'` -> "churned"), and **measures** — attached as
+   `ProposedModel.naming: list[NameSuggestion]` (default `[]`, so structural discovery
+   is byte-identical without it; the emitted YAML + certification are computed BEFORE
+   naming and never altered). `NameSuggestion` = `{target, kind, suggested_name,
+   confidence, verified, evidence}`. **Two-pass self-critique:** per table, one
+   `propose` call (all targets + their structural evidence, incl. up to 30 sampled
+   distinct values per categorical dimension) then one `verify` call that critiques
+   each proposed name against its evidence; names that aren't supported / fall below a
+   confidence floor are kept but flagged `verified=False` (surfaced, never silently
+   applied). Backend is an injectable `NamerBackend` Protocol (`propose(prompt)->str`);
+   the default `load_namer_backend()` reuses `llm_labeler.detect_provider` +
+   `_call_llm_with_retry` (the `goldenmatch[llm]` extra) and **abstains** (returns
+   `None` -> `naming=[]`, never raises) when no provider/key resolves. Opt-in per call
+   (`discover_semantic_model(..., name=False)`, CLI `discover-model --name`, MCP/REST
+   `name` bool); `GOLDENMATCH_SEMANTIC_NAMER=0` is a hard kill-switch. No new MCP
+   tool / CLI command -> no `api_parity` tool-list change.
 
 Each PR is independently useful (PR-1 alone gives "certified key discovery per
 table"). The certifier is exercised from PR-1, so the "pre-graded" property holds at

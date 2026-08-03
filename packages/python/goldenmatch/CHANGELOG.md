@@ -329,6 +329,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   semantic-model discovery arc (design:
   `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
   `tests/test_semantic_discover_surface.py`.
+- **Semantic-model discovery — optional advisory LLM namer (Phase 7).**
+  `goldenmatch.semantic.name_semantic_model(model, tables, backend=...)` annotates a
+  finished `ProposedModel` with business names for entity types, dimension columns,
+  low-cardinality dimension VALUES (`status='C'` → "churned"), and measures — attached
+  as `ProposedModel.naming` (a list of `NameSuggestion`; default `[]`). It is
+  **opt-in, self-verified, and never authoritative**: the emitted YAML + certification
+  are computed before naming and are never altered, so structural discovery stays
+  byte-deterministic without it. **Two-pass self-critique** (propose, then a verify
+  pass that critiques each name against its structural evidence; unsupported /
+  low-confidence names are kept but flagged `verified=False`, never silently applied).
+  The backend is an injectable `NamerBackend` Protocol; the default reuses the existing
+  provider detection (the `goldenmatch[llm]` extra) and **abstains** (no names, never
+  raises) when no provider/key resolves. Opt-in per call
+  (`discover_semantic_model(..., name=False)`, CLI `discover-model --name`, MCP/REST
+  `name` bool); `GOLDENMATCH_SEMANTIC_NAMER=0` is a hard kill-switch. The seventh and
+  final slice of the semantic-model discovery arc (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discovery_namer.py`, `tests/test_semantic_discover_surface.py`.
 
 ### Changed
 - **FS out-of-core streaming: single `resolve_fs_block_source` knob + DuckDB

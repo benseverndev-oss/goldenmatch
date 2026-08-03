@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 445,
+      "module_count": 446,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7270,7 +7270,8 @@
             "goldenmatch.semantic.discovery.joins",
             "goldenmatch.semantic.discovery.keys",
             "goldenmatch.semantic.discovery.measures",
-            "goldenmatch.semantic.discovery.model"
+            "goldenmatch.semantic.discovery.model",
+            "goldenmatch.semantic.discovery.namer"
           ]
         },
         {
@@ -7364,7 +7365,31 @@
             "goldenmatch.semantic.discovery.entities",
             "goldenmatch.semantic.discovery.joins",
             "goldenmatch.semantic.discovery.keys",
-            "goldenmatch.semantic.discovery.measures"
+            "goldenmatch.semantic.discovery.measures",
+            "goldenmatch.semantic.discovery.namer"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.discovery.namer",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/discovery/namer.py",
+          "purpose": "Advisory LLM namer (PR-7) — the OPTIONAL, non-authoritative half of discovery.",
+          "defines": [
+            "LLMNamerBackend",
+            "NameSuggestion",
+            "NamerBackend",
+            "_Target",
+            "_parse_json_object",
+            "_propose_prompt",
+            "_sample_values",
+            "_targets_for_table",
+            "_targets_in_prompt",
+            "_verify_prompt",
+            "load_namer_backend",
+            "name_semantic_model"
+          ],
+          "imports": [
+            "goldenmatch.core.llm_labeler",
+            "goldenmatch.semantic.discovery.model"
           ]
         },
         {

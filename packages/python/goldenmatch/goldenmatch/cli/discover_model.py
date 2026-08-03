@@ -32,6 +32,11 @@ def discover_model_cmd(
         False, "--resolve",
         help="Also measure entity fragmentation / undercount via ER (fail-open).",
     ),
+    name: bool = typer.Option(
+        False, "--name",
+        help="Also run the OPTIONAL advisory LLM namer (business names for "
+             "entities/dimensions/values/measures; abstains without an LLM key).",
+    ),
     fail_untrustworthy: bool = typer.Option(
         False, "--fail-untrustworthy",
         help="Exit non-zero if any proposed key is not unique at grain (CI gate).",
@@ -52,11 +57,11 @@ def discover_model_cmd(
         if "=" not in spec:
             console.print(f"[red]--data must be name=path, got {spec!r}[/red]")
             raise typer.Exit(code=2)
-        name, path = spec.split("=", 1)
-        tables[name.strip()] = read_table_arrow(path.strip())
+        tbl_name, path = spec.split("=", 1)
+        tables[tbl_name.strip()] = read_table_arrow(path.strip())
 
     try:
-        model = discover_semantic_model(tables, dialect=dialect, resolve=resolve)
+        model = discover_semantic_model(tables, dialect=dialect, resolve=resolve, name=name)
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=2) from exc

@@ -844,6 +844,15 @@ _BASE_TOOLS = [
                     "description": "Also measure entity fragmentation/undercount via ER (fail-open).",
                     "default": False,
                 },
+                "name": {
+                    "type": "boolean",
+                    "description": (
+                        "Also run the OPTIONAL advisory LLM namer (business names for "
+                        "entities/dimensions/values/measures). Never authoritative; "
+                        "abstains to no names when no LLM provider/key resolves."
+                    ),
+                    "default": False,
+                },
             },
             "required": ["frames"],
         },
@@ -1395,6 +1404,7 @@ def _handle_tool(name: str, args: dict) -> dict:
             args.get("frames", {}),
             args.get("dialect", "metricflow"),
             args.get("resolve", False),
+            args.get("name", False),
         )
     else:
         return {"error": f"Unknown tool: {name}"}
@@ -1436,13 +1446,16 @@ def _tool_certify_semantic_model(model_path: str, frames: dict, resolve: bool) -
     return certification_report_dict(report)
 
 
-def _tool_discover_semantic_model(frames: dict, dialect: str, resolve: bool) -> dict:
+def _tool_discover_semantic_model(
+    frames: dict, dialect: str, resolve: bool, name: bool = False
+) -> dict:
     """Discover a draft semantic model from a set of source tables.
 
     ``frames`` maps table name -> data file path; each is loaded into a pyarrow
     Table. Returns the JSON-serializable ``ProposedModel.to_dict()`` -- the same
     wire shape the REST ``/semantic/discover`` endpoint + the ``discover-model``
-    CLI emit. Every proposed key is pre-graded by the certifier.
+    CLI emit. Every proposed key is pre-graded by the certifier. ``name`` opts into
+    the advisory LLM namer (abstains to no names when no provider/key resolves).
     """
     if not isinstance(frames, dict) or not frames:
         return {"error": "frames must map a table name to a data file path."}
@@ -1461,7 +1474,8 @@ def _tool_discover_semantic_model(frames: dict, dialect: str, resolve: bool) -> 
 
     try:
         model = discover_semantic_model(
-            loaded, dialect=str(dialect or "metricflow"), resolve=bool(resolve)
+            loaded, dialect=str(dialect or "metricflow"), resolve=bool(resolve),
+            name=bool(name),
         )
     except ValueError as exc:
         return {"error": str(exc)}

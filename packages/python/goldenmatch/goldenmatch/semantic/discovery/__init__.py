@@ -14,6 +14,8 @@ Phase 3: `discover_joins` — certified foreign-key join discovery across tables
 Phase 4: `discover_measures` — grain-gated measure/dimension proposal per table.
 Phase 5: `discover_semantic_model` — the orchestrator assembling all phases into a
     draft model, emitted + re-certified end-to-end.
+Phase 7 (optional): `name_semantic_model` — advisory, self-verified LLM business
+    naming, never authoritative (structural discovery is byte-deterministic without it).
 """
 from __future__ import annotations
 
@@ -31,6 +33,11 @@ from goldenmatch.semantic.discovery.model import (
     ProposedTable,
     discover_semantic_model,
 )
+from goldenmatch.semantic.discovery.namer import (
+    NamerBackend,
+    NameSuggestion,
+    name_semantic_model,
+)
 
 __all__ = [
     "Dimension",
@@ -38,6 +45,8 @@ __all__ = [
     "JoinCandidate",
     "KeyCandidate",
     "Measure",
+    "NameSuggestion",
+    "NamerBackend",
     "ProposedModel",
     "ProposedTable",
     "TableMeasures",
@@ -46,4 +55,5 @@ __all__ = [
     "discover_keys",
     "discover_measures",
     "discover_semantic_model",
+    "name_semantic_model",
 ]
