@@ -36,7 +36,7 @@ from goldenmatch.semantic.discovery.measures import (
 if TYPE_CHECKING:
     from goldenmatch.semantic.discovery.namer import NameSuggestion
 
-_SUPPORTED_DIALECTS = frozenset({"metricflow"})
+_SUPPORTED_DIALECTS = frozenset({"metricflow", "cube", "osi"})
 
 
 @dataclass
@@ -176,12 +176,8 @@ def discover_semantic_model(
             f"unsupported emit dialect {dialect!r}; supported: {sorted(_SUPPORTED_DIALECTS)}"
         )
 
-    from goldenmatch.semantic import (
-        certification_report_dict,
-        certify_semantic_model,
-        emit_metricflow_yaml,
-        emit_semantic_model,
-    )
+    from goldenmatch.semantic import certification_report_dict, certify_semantic_model
+    from goldenmatch.semantic.discovery.emit import build_model_yaml
 
     # Phase 1 — grain per table.
     keys: dict[str, list[KeyCandidate]] = {
@@ -216,25 +212,10 @@ def discover_semantic_model(
             )
         )
 
-    # Phase 5 — emit a draft MetricFlow model (only SUM-safe measures are declared, so
-    # the emitted model never scaffolds a double-counting SUM) + re-certify end-to-end.
-    models = []
-    for pt in proposed_tables:
-        if pt.key is None:
-            continue
-        key_col = pt.key.columns[0]
-        safe_measures = [m.column for m in pt.measures if m.safe_to_sum]
-        models.append(
-            emit_semantic_model(
-                pt.table,
-                resolved_key=key_col,
-                entity_name=pt.entity_type or pt.table,
-                measures=safe_measures,
-                certificate=pt.key.certificate,
-            )
-        )
-
-    model_yaml = emit_metricflow_yaml(models) if models else ""
+    # Phase 5 — emit a draft model in the requested dialect (only SUM-safe measures are
+    # declared, so the emitted model never scaffolds a double-counting SUM; only
+    # trustworthy joins are emitted) + re-certify end-to-end.
+    model_yaml = build_model_yaml(dialect, proposed_tables, joins)
     certification: dict[str, Any] = {}
     if model_yaml:
         report = certify_semantic_model(model_yaml, tables, resolve=resolve)

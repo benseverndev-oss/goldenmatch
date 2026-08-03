@@ -219,6 +219,24 @@ ProposedModel`.
    `discover_semantic_model(..., apply_names=False)`, CLI `--apply-names`, MCP/REST
    `apply_names` bool; `"yaml"` is added to `ProposedModel.to_dict()` so the applied
    catalog is visible on every surface. No new MCP tool / CLI command.
+9. **PR-9 (optional) Cube/OSI discovery emit.** `discover_semantic_model(dialect=...)`
+   emits `cube` and `osi` drafts in addition to `metricflow` (it used to raise on
+   anything else, even though certification already spans all three and the
+   `emit_cube_yaml` / `emit_osi_yaml` emitters + dataclasses exist). A new
+   `discovery/emit.py` builds the dialect YAML from the discovered structure: per
+   table, the grain -> `primary_key` (a `primary_key` `CubeDimension` / an
+   `OsiDataset.primary_key` list), discovered dimensions -> `CubeDimension`/`OsiField`,
+   sum-safe measures -> `CubeMeasure`/`OsiMetric`, and the key-integrity certificate ->
+   `meta.goldenmatch` (cube) / `custom_extensions.goldenmatch` (osi). The certified
+   **trustworthy** join graph is emitted natively: `CubeJoin` (a `{CUBE}.<fk> =
+   {<to>.<pk>}` SQL condition) / `OsiRelationship` (`from_columns`/`to_columns`). Every
+   emitted model is re-certified end-to-end (dialect auto-detected), and the metricflow
+   path stays byte-identical. `apply_names` becomes dialect-aware: cube -> `title:` on
+   cube/dimension/measure + `meta.goldenmatch.glossary`; osi -> `label`/`description` on
+   field/dataset + `custom_extensions.goldenmatch.glossary`. `dialect` already plumbs
+   through CLI `--dialect` + MCP/REST `dialect`; no new params. Follow-on: PR-10 lifts
+   the single-column key/FK limitation (the certifier + `KeyCandidate.columns` +
+   Cube/OSI composite primary keys already support multi-column).
 
 Each PR is independently useful (PR-1 alone gives "certified key discovery per
 table"). The certifier is exercised from PR-1, so the "pre-graded" property holds at

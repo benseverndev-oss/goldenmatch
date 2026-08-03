@@ -2854,7 +2854,7 @@
               "type": "text",
               "required": false,
               "default": "'metricflow'",
-              "help": "Emit dialect for the draft model (metricflow)."
+              "help": "Emit dialect for the draft model: metricflow / cube / osi."
             },
             {
               "name": "--output",

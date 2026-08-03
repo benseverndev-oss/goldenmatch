@@ -22,7 +22,7 @@ def discover_model_cmd(
     ),
     dialect: str = typer.Option(
         "metricflow", "--dialect",
-        help="Emit dialect for the draft model (metricflow).",
+        help="Emit dialect for the draft model: metricflow / cube / osi.",
     ),
     output: str | None = typer.Option(
         None, "--output", "-o",
