@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 440,
+      "module_count": 441,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7249,6 +7249,26 @@
           "file": "packages/python/goldenmatch/goldenmatch/semantic/discovery/__init__.py",
           "purpose": "Semantic-model discovery (the generative half of the semantic wedge).",
           "imports": [
+            "goldenmatch.semantic.discovery.joins",
+            "goldenmatch.semantic.discovery.keys"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.discovery.joins",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/discovery/joins.py",
+          "purpose": "Certified join / foreign-key discovery (semantic-model discovery, Phase 3).",
+          "defines": [
+            "JoinCandidate",
+            "_distinct_nonnull",
+            "_key_columns",
+            "_null_rate",
+            "discover_joins"
+          ],
+          "imports": [
+            "goldenmatch.core.autoconfig",
+            "goldenmatch.core.frame",
+            "goldenmatch.core.key_integrity_certificate",
+            "goldenmatch.semantic.cube",
             "goldenmatch.semantic.discovery.keys"
           ]
         },

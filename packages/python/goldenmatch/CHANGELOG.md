@@ -258,6 +258,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   compound/grain-ambiguous keys + the entity/join/measure phases + the
   `discover_semantic_model` orchestrator are the following PRs. Tests:
   `tests/test_semantic_discovery_keys.py`.
+- **Semantic-model discovery — certified join / FK discovery (Phase 3).**
+  `goldenmatch.semantic.discover_joins(tables, keys)` proposes the foreign-key joins
+  across a set of tables and PROVES each join's cardinality with the same certifier
+  the certify wedge uses. FK inference is the hypothesis (a column whose non-null
+  values are a subset of another table's certified key, matching semantic type →
+  a `many_to_one` join); `certify_cube_joins` is the falsification test (the "one"
+  side must be unique at grain, else a metric joined across it double-counts). A
+  returned `JoinCandidate` is pre-graded (`is_trustworthy`, fan-out, the certificate
+  on the referenced key); ranked trustworthy-first. Numeric/date/geo columns are
+  never proposed as foreign keys, and an untrustworthy target `KeyCandidate` is
+  skipped (an unsound grain makes an unsound join). Single-column FKs referencing the
+  caller-supplied per-table keys for this slice; compound/self-referential joins are
+  follow-ons. The second slice of the semantic-model discovery arc (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discovery_joins.py`.
 
 ### Changed
 - **FS out-of-core streaming: single `resolve_fs_block_source` knob + DuckDB

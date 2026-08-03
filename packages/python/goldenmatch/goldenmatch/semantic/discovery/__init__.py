@@ -8,12 +8,14 @@ against the data, not just guessed.
 Design + phased plan:
 `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`.
 
-Phase 1 (this slice): `discover_keys` — certified single-column key discovery per
-table. Later phases (entity typing, join discovery, measure/dimension proposal, the
-`discover_semantic_model` orchestrator) build on this.
+Phase 1: `discover_keys` — certified single-column key discovery per table.
+Phase 3: `discover_joins` — certified foreign-key join discovery across tables.
+Later phases (entity typing, measure/dimension proposal, the
+`discover_semantic_model` orchestrator) build on these.
 """
 from __future__ import annotations
 
+from goldenmatch.semantic.discovery.joins import JoinCandidate, discover_joins
 from goldenmatch.semantic.discovery.keys import KeyCandidate, discover_keys
 
-__all__ = ["KeyCandidate", "discover_keys"]
+__all__ = ["JoinCandidate", "KeyCandidate", "discover_joins", "discover_keys"]
