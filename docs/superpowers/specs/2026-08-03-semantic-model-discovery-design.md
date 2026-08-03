@@ -274,6 +274,17 @@ actually query. All are deterministic (no LLM) and default-on unless noted.
     grains), cardinality (m:n bridge / 1:1), SCD dimensions, a model completeness score,
     warehouse-scale derivation off `information_schema`, catalog reconciliation, and
     real-LLM namer validation.
+12. **Metrics.** New `discovery/metrics.py`: `discover_metrics(measures, grain)` proposes
+    certifiable business metrics **only when the grain is trustworthy** (so the ratios
+    don't double-count): per sum-safe measure an **average** (`avg_m = SUM(m)/COUNT(grain)`
+    — always meaningful at a clean grain, MetricFlow's canonical *ratio* metric), and per
+    sum-safe measure PAIR a **ratio** (`m1_per_m2 = SUM(m1)/SUM(m2)`, pool-capped to bound
+    the pair explosion). `Metric(name, kind, numerator, denominator, expression)`; on
+    `ProposedTable`/`ProposedModel.metrics` + `to_dict`, emitted NATIVELY (MetricFlow
+    top-level `metrics:` ratio metrics + a declared count measure; Cube calculated
+    `number` measures + a `count`; OSI `OsiMetric`s). Deterministic, default-on. *Derived
+    semantic* metrics (`profit = revenue − cost`) stay a namer/advisory follow-on (they
+    need to know which measure is revenue vs cost).
 
 Each PR is independently useful (PR-1 alone gives "certified key discovery per
 table"). The certifier is exercised from PR-1, so the "pre-graded" property holds at

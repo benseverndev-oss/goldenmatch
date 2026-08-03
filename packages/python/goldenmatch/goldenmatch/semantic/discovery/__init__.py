@@ -29,6 +29,7 @@ from goldenmatch.semantic.discovery.measures import (
     TableMeasures,
     discover_measures,
 )
+from goldenmatch.semantic.discovery.metrics import Metric, discover_metrics
 from goldenmatch.semantic.discovery.model import (
     ProposedModel,
     ProposedTable,
@@ -48,6 +49,7 @@ __all__ = [
     "JoinCandidate",
     "KeyCandidate",
     "Measure",
+    "Metric",
     "NameSuggestion",
     "NamerBackend",
     "ProposedModel",
@@ -58,6 +60,7 @@ __all__ = [
     "discover_joins",
     "discover_keys",
     "discover_measures",
+    "discover_metrics",
     "discover_semantic_model",
     "apply_names",
     "name_semantic_model",
