@@ -228,9 +228,15 @@ field's two values). Standardized coefficients:
 | **surname** | **+0.04** | ~ignored |
 | **dob** | **+0.01** | ~ignored |
 
-**R² = 0.51** — an honest faithfulness number: human field-agreement explains ~half
-the projection onto the causal direction; the other half is context/interactions the
-simple per-field story cannot capture (and Layer 2 says so rather than overclaiming).
+**R² = 0.51** — an honest faithfulness number *for this target*: human field-agreement
+explains ~half the **projection onto the causal direction**. **But that is the wrong
+target for a per-decision explainer** — the projection is a lossy 1D shadow of the ~8D
+decision. Against the model's **actual P(match) output** (what the explainer explains),
+the *same* simple features reach **R² 0.87**, and richer per-field features **0.97**
+(structured person data; near-bimodal target — see
+`2026-08-03-15b-interp-handoff.md`). So the per-field explanation is much more faithful
+to the model's actual verdict than 0.51 suggests; 0.51 is the pessimistic
+internal-projection number.
 
 Two readable findings fall straight out of the geometry:
 - **surname ≈ 0 (predicted).** The probe's hard negatives *share* surname-soundex by

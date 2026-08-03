@@ -84,13 +84,32 @@ standing discipline: **when a number looks too good, hunt the confound first.**
   probe set); training corpus `data/er_matcher/*.jsonl` (2,844 synthetic-only — NOT the
   shipped model's ~17,690-row multi-source corpus; matters for fair strip comparisons).
 
-## In flight (as of this handoff)
+## Faithfulness hardening — result (the 51% was the wrong target)
 
-- **Faithfulness hardening** (`scratchpad/faithfulness.py`, running): held-out R² of
-  simple-linear (the 51% basis) vs richer per-field features vs a GBM, predicting the
-  model's *actual* P(match) (not the projection — the correctness fix). Result pending;
-  append the number here when it lands. Expectation: richer+GBM pushes past 51%, at some
-  cost to legibility — report the frontier, don't chase a single number.
+Held-out R² explaining the model's **actual P(match)** (not the internal projection),
+400 record-disjoint historical_50k pairs (`scratchpad/faithfulness.py`):
+
+| basis | R² |
+|---|---|
+| simple linear (the 6-feature basis the explainer ships) | **0.871** |
+| richer linear (36 features: exact / missing / conflict / edit-dist / len-ratio) | **0.967** |
+| GBM on richer features | **0.984** |
+
+The **0.51 was measured against the wrong target** — the R² of explaining the internal
+diff-of-means *projection* (a lossy 1D shadow of the ~8D decision). Against the model's
+actual verdict probability — what a per-decision explainer should explain — the *same
+simple features* reach **0.87**, and richer features **0.97**. So the per-field
+explanation is far more faithful than 0.51 implied. **Caveats:** this is structured
+person data (the *easy* case — the decision genuinely is mostly weighted field
+agreement); P(match) is near-bimodal (explaining a near-deterministic verdict is
+easier); messy/product/cross-domain would be lower (untested); and these are *fresh*
+fits (a ceiling), while the shipped explainer uses the *fixed* causal-direction weights
+whose exact output-faithfulness (≤0.87) is not yet pinned.
+
+**Follow-up:** pin the fixed-weight output R², then either (a) cite ~0.87 as the
+explainer's faithfulness on structured PII (a big honest upgrade from 0.51), and/or (b)
+add a richer/GBM "high-faithfulness" mode alongside the simple/legible one. Also
+re-measure on a messy/product domain — that number is the one a skeptic will ask for.
 
 ## Next steps (highest leverage first)
 
