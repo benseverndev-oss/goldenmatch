@@ -95,6 +95,21 @@ class FieldSignal:
 
 
 @dataclass
+class Counterfactual:
+    """What the model actually does when one field is removed from both records.
+
+    Unlike :class:`FieldSignal`'s ``importance`` (a corpus-level weight), this is
+    measured on THIS pair by re-running the model, so it is a direct claim about
+    this decision. ``flips_verdict`` is the one a reviewer cares about.
+    """
+
+    field: str
+    p_without: float  # P(match) with this field blanked on both records
+    delta: float  # p_match - p_without; positive = field pushed TOWARD match
+    flips_verdict: bool
+
+
+@dataclass
 class PairExplanation:
     """The model's verdict + a field-grounded rationale."""
 
@@ -105,10 +120,60 @@ class PairExplanation:
     faithfulness_r2: float | None
     learned_weights_applied: bool
     field_story_agrees_with_verdict: bool
+    counterfactuals: list[Counterfactual] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         return d
+
+
+def build_counterfactuals(
+    p_match: float,
+    p_without: dict[str, float],
+    *,
+    threshold: float = 0.5,
+) -> list[Counterfactual]:
+    """Turn per-field "P(match) with this field removed" into ranked counterfactuals.
+
+    Both ``p_match`` and the values of ``p_without`` must be P(MATCH), not
+    confidence-in-the-verdict — otherwise a NO-MATCH pair's baseline is inverted
+    relative to the ablated scores and every delta is wrong. :func:`explain_pair`
+    does that conversion for you.
+
+    Pure: the caller supplies the re-scored probabilities (that part needs the
+    model). Sorted by absolute impact, so the first entry is the field that moved
+    this decision most.
+
+    Measured caveat worth repeating to users: on person data only ~19% of pairs
+    have ANY single-field flip, because the model integrates redundant evidence.
+    An empty flip list is the common case and is not a failure.
+    """
+    base_match = p_match >= threshold
+    out = [
+        Counterfactual(
+            field=f,
+            p_without=float(p),
+            delta=float(p_match) - float(p),
+            flips_verdict=(float(p) >= threshold) != base_match,
+        )
+        for f, p in p_without.items()
+    ]
+    out.sort(key=lambda c: -abs(c.delta))
+    return out
+
+
+def render_counterfactual_note(cfs: list[Counterfactual]) -> str:
+    """One-line reviewer-facing summary of the counterfactual sweep."""
+    if not cfs:
+        return ""
+    flips = [c for c in cfs if c.flips_verdict]
+    if flips:
+        parts = ", ".join(f"{c.field} (P {c.p_without:.2f})" for c in flips[:3])
+        return (f"Counterfactual: removing {parts} would REVERSE this verdict.")
+    top = cfs[0]
+    return (f"Counterfactual: no single field decides this — removing the most "
+            f"influential ({top.field}) moves P(match) by {abs(top.delta):.2f} "
+            f"without changing the verdict.")
 
 
 def _agreement(va: Any, vb: Any) -> float | None:
@@ -142,6 +207,7 @@ def explain_pair(
     match: bool,
     confidence: float,
     weights: dict[str, float] | None = None,
+    p_without: dict[str, float] | None = None,
 ) -> PairExplanation:
     """Explain the model's verdict for one record pair.
 
@@ -150,6 +216,14 @@ def explain_pair(
     the bundled person profile is applied to matching field names (neutral default
     otherwise). Returns a :class:`PairExplanation` with per-field signals, a
     human-readable rationale, and the faithfulness bound.
+
+    ``p_without`` optionally supplies per-field "P(match) with this field blanked
+    on both records", as produced by re-running the model
+    (:meth:`LocalLlamaAdapter.score_and_explain` with ``counterfactuals=True``).
+    When given, the explanation carries measured :class:`Counterfactual` entries
+    and the rationale states whether any single field would reverse the verdict —
+    a direct claim about THIS decision rather than a corpus-level weight. It costs
+    one extra forward pass per field, so it belongs on a review queue.
     """
     signals: list[FieldSignal] = []
     any_learned = False
@@ -184,15 +258,23 @@ def explain_pair(
     story_says_match = support_mass >= conflict_mass
     agrees = story_says_match == bool(match)
 
+    # `confidence` is confidence-in-the-verdict; counterfactuals live on the
+    # P(match) axis, so a NO-MATCH baseline has to be flipped before comparing.
+    p_match_base = float(confidence) if match else 1.0 - float(confidence)
+    cfs = build_counterfactuals(p_match_base, p_without) if p_without else None
     rationale = _render_rationale(
         match, confidence, supports, conflicts, agrees, any_learned
     )
+    if cfs:
+        # measured on THIS pair, so it leads over the corpus-level caveat
+        rationale = f"{rationale} {render_counterfactual_note(cfs)}"
     return PairExplanation(
         match=bool(match), confidence=float(confidence), signals=signals,
         rationale=rationale,
         faithfulness_r2=(PERSON_IMPORTANCE_FAITHFULNESS_R2 if any_learned else None),
         learned_weights_applied=any_learned,
         field_story_agrees_with_verdict=agrees,
+        counterfactuals=cfs,
     )
 
 

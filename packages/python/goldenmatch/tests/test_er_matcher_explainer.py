@@ -1,6 +1,7 @@
 """Per-decision explainer for the local ER-matcher verdict (model-free)."""
 from __future__ import annotations
 
+import pytest
 from goldenmatch.core.er_matcher.explainer import (
     DEFAULT_FIELD_IMPORTANCE,
     PERSON_FIELD_CAUSAL_RANKING,
@@ -91,6 +92,68 @@ def test_faithfulness_is_the_measured_verdict_number():
     # 5-seed mean of the frozen weights vs the model's real P(match), cluster-disjoint
     # split, hard negatives. Guards against drifting back to a leaked/projection figure.
     assert PERSON_IMPORTANCE_FAITHFULNESS_R2 == 0.27
+
+
+def test_counterfactuals_absent_by_default():
+    exp = explain_pair(_a(), _a(), COLS, match=True, confidence=0.9)
+    assert exp.counterfactuals is None
+    assert "Counterfactual" not in exp.rationale
+
+
+def test_counterfactual_flip_is_surfaced():
+    # base P(match)=0.9; removing birth_place drops it to 0.2 -> verdict reverses
+    exp = explain_pair(
+        _a(), _a(), COLS, match=True, confidence=0.9,
+        p_without={"birth_place": 0.2, "first_name": 0.88, "surname": 0.91},
+    )
+    cfs = {c.field: c for c in exp.counterfactuals}
+    assert cfs["birth_place"].flips_verdict is True
+    assert cfs["first_name"].flips_verdict is False
+    assert exp.counterfactuals[0].field == "birth_place"  # ranked by impact
+    assert "REVERSE" in exp.rationale
+    assert "birth_place" in exp.rationale
+
+
+def test_counterfactual_no_flip_says_so():
+    exp = explain_pair(
+        _a(), _a(), COLS, match=True, confidence=0.9,
+        p_without={"birth_place": 0.85, "first_name": 0.80},
+    )
+    assert all(not c.flips_verdict for c in exp.counterfactuals)
+    assert "no single field decides this" in exp.rationale
+
+
+def test_counterfactual_baseline_uses_p_match_not_confidence():
+    # NO-MATCH at confidence 0.9 means P(match)=0.1. Removing a field that raises
+    # P(match) to 0.7 must count as a flip; comparing against 0.9 would miss it
+    # AND report the delta with the wrong sign.
+    exp = explain_pair(
+        _a(), _a(), COLS, match=False, confidence=0.9, p_without={"dob": 0.7},
+    )
+    cf = exp.counterfactuals[0]
+    assert cf.flips_verdict is True
+    assert cf.delta < 0  # the field was pushing AWAY from match
+    assert cf.delta == pytest.approx(0.1 - 0.7)
+
+
+def test_counterfactual_delta_sign_and_ordering():
+    exp = explain_pair(
+        _a(), _a(), COLS, match=True, confidence=0.8,
+        p_without={"a_small": 0.75, "b_big": 0.10, "c_negative": 0.95},
+    )
+    deltas = {c.field: c.delta for c in exp.counterfactuals}
+    assert deltas["b_big"] == pytest.approx(0.7)
+    assert deltas["c_negative"] == pytest.approx(-0.15)
+    assert [c.field for c in exp.counterfactuals] == ["b_big", "c_negative", "a_small"]
+
+
+def test_counterfactuals_survive_to_dict():
+    exp = explain_pair(
+        _a(), _a(), COLS, match=True, confidence=0.9, p_without={"dob": 0.1},
+    )
+    d = exp.to_dict()
+    assert d["counterfactuals"][0]["field"] == "dob"
+    assert d["counterfactuals"][0]["flips_verdict"] is True
 
 
 def test_explicit_weights_override():

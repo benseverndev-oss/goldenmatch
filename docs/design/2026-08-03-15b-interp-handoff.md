@@ -38,16 +38,21 @@ standing discipline: **when a number looks too good, hunt the confound first.**
 - **Faithfulness measurement — committed.** `modal_interp.py::faithfulness_eval`
   measures the shipped weights against the model's real P(match) on a cluster-disjoint
   split. Replaces the lost `scratchpad/faithfulness.py`; see the results section below.
-- **Causal attribution — committed.** `modal_interp.py::causal_attribution` ablates each
-  field and measures the real verdict flip. Stronger audit artifact than any R², but it
-  **contradicts two of the shipped field weights** — see its section below.
+- **Causal attribution — committed + wired to the product.**
+  `modal_interp.py::causal_attribution` ablates each field and measures the real verdict
+  flip; `LocalLlamaAdapter.score_and_explain(..., counterfactuals=True)` surfaces it per
+  decision. Stronger audit artifact than any R², and it **generalizes to the messy
+  product domain** where the weight table collapses — but it **contradicts two of the
+  shipped field weights**. See its section below.
 - **Shipped product — the per-decision explainer.** `goldenmatch/core/er_matcher/
-  explainer.py` + `LocalLlamaAdapter.score_and_explain`. Pure/model-free (jaro-winkler
-  + the learned weights), schema-agnostic. Ships TWO labelled tables:
+  explainer.py` + `LocalLlamaAdapter.score_and_explain`. Model-free by default
+  (jaro-winkler + the learned weights), schema-agnostic, with an opt-in
+  `counterfactuals=True` path that re-scores per field on the live model. Ships TWO
+  labelled tables:
   `PERSON_FIELD_IMPORTANCE` (scoring: does agreement track the verdict?) and
   `PERSON_FIELD_CAUSAL_RANKING` (necessity: does the model need the field?), which
   disagree on purpose. Faithfulness now the measured **0.27** (was 0.51, the projection
-  number). 12 unit tests. Additive; `score_pair` unchanged.
+  number). 18 unit tests. Additive; `score_pair` unchanged.
 - **Live demo (artifact).** Real records + the actual model's verdicts, each explained
   by learned field importance. Built from `scratchpad/xai_demo.py`.
 
@@ -87,9 +92,11 @@ standing discipline: **when a number looks too good, hunt the confound first.**
   volume: `layer_probes.json`, `sae_layer14.pt`, `causal_multilayer_8_20.json`,
   `layer2_abstraction_L14.json`, `layer_early_exit.json`, `truncate_adapt.json`,
   `eval_trunc{28,16,12}_v2.json`, `leniency_dial.json`,
-  `causal_attribution_{hard,random}_seed{0,1,2}.json`,
-  `faithfulness_{cluster,record}_{hard,random}_seed{0..4}[_logit].json`. Modal token is set
-  locally.
+  `causal_attribution_{hard,random,walmart_amazon}_seed{0,1,2}.json`,
+  `faithfulness_{cluster,record}-disjoint_{hard,random}_seed{0..4}[_logit].json`,
+  `faithfulness_deepmatcher-train-test_walmart_amazon_seed0.json`. Modal token is set
+  locally. The product runs read the already-fetched DeepMatcher tables at
+  `/out/magellan/<dataset>` (cite-only license, never committed).
 - **Pinned GGUF** for on-box work: `scratchpad/er-1p5b.gguf` (Q4, the same weights as
   `/out/model_1p5b/merged`). llama.cpp only exposes the final layer — GPU/Modal needed
   for residual-stream + hooks.
@@ -274,19 +281,75 @@ model ignores dob, and a test locks the two rankings apart so they can't be sile
 merged. `PERSON_IMPORTANCE_FAITHFULNESS_R2` is now **0.27** (was 0.51 — the projection
 number), and the rationale text no longer says "decision geometry".
 
+## Messy domain (walmart_amazon) — the correlational story collapses, the causal one holds
+
+The number a skeptic asks for. Both stages now take `--dataset walmart_amazon` and run
+on DeepMatcher's **own train/test splits** (pre-labeled pairs, so no negative mining and
+no cluster leak to worry about — the benchmark's split *is* the honest split). Same
+model, same code path as person; only the pairs differ. Test accuracy 0.95–0.96.
+
+**Faithfulness — the shipped feature basis does not survive the move:**
+
+| basis | person (cluster/hard) | **walmart_amazon** |
+|---|---|---|
+| `simple` — one jaro-winkler agreement per field | 0.300 | **0.024** |
+| `richer` — 36/30 features | 0.667 | 0.508 |
+| `gbm` | 0.750 | 0.529 |
+
+`simple` explains **~2%** of the model's verdict on product data. The `fixed` row is
+absent by design: `PERSON_FIELD_IMPORTANCE` is person-only, and faking a weight table
+for a product schema would be dishonest.
+
+**Why, and it's fixable:** `richer` recovering to 0.51 shows the signal is there — what
+fails is specifically *whole-string jaro-winkler per field*. `"Sony 60GB PS3"` vs
+`"PlayStation 3 60 GB Sony"` is a match with low string similarity. Product fields need
+token-level/semantic agreement features, not a single fuzzy-string score.
+
+**Causal attribution — generalizes cleanly, with no tuning:**
+
+| field | rank | mean ΔP | flip rate | reading |
+|---|---|---|---|---|
+| **title** | 1st | **+0.069** | 7.5% | evidence FOR a match (removing it lowers P) |
+| **modelno** | 2nd | −0.035 | 8.3% | the discriminator (removing it raises P) |
+| price | 3rd | −0.030 | 4.8% | discriminator |
+| category | 4th | −0.006 | 4.3% | weak |
+| brand | 5th | −0.005 | 3.3% | weak |
+
+That is the domain-correct story — titles carry the match evidence, model numbers and
+prices are what rule a pair out — recovered from the model's behaviour with zero
+person-specific machinery.
+
+**Two conclusions that should steer the product:**
+
+1. **The causal/counterfactual route is the one that generalizes; the weight-table route
+   is domain-brittle.** A per-field weight table has to be re-derived per schema and its
+   simple-agreement basis silently degrades to ~0 on messy text. Ablation needs no
+   per-schema calibration and produced a sensible ranking on a domain it had never seen.
+   Prefer counterfactuals as the primary explanation and weights as the cheap
+   person-data fallback.
+2. **The ~18–19% redundancy constant holds across both domains** (person 0.175–0.195,
+   walmart 0.180). Independent evidence that this is a property of how the model
+   decides, not an artifact of the person corpus — and it means the low faithfulness R²
+   was never going to be fixed by better weights.
+
 ## Next steps (highest leverage first)
 
-1. **Wire per-pair counterfactuals into the review queue.** The weight question is
-   settled (both rankings now ship, separately labelled — see above), so the remaining
-   product work is surfacing the counterfactual itself: ~19% of decisions have a
-   single-field flip, at 12 extra forward passes/pair, so it belongs on the review queue
-   rather than every decision.
-2. **Perf for real volume.** Prefix-cache the system rubric (biggest CPU win) + wire the
+1. **Make counterfactuals the primary explanation** (the wiring shipped:
+   `score_and_explain(..., counterfactuals=True)`). The messy-domain result says the
+   weight table is domain-brittle while ablation generalizes, so the remaining work is
+   promoting counterfactuals from opt-in to the default path for review-queue
+   decisions, and deciding what to show for the ~81% of pairs where no single field
+   flips the verdict ("no single field decides this" is currently the honest answer).
+2. **Give the explainer domain-appropriate agreement features.** `simple` scoring 0.024
+   on walmart is a feature-basis failure, not a method failure — `richer` gets 0.508 on
+   the same pairs. Token-level/semantic agreement (not whole-string jaro-winkler) would
+   make the per-field story usable on messy text.
+3. **Perf for real volume.** Prefix-cache the system rubric (biggest CPU win) + wire the
    logit readout into the scorer for clean P(match); benchmark on GPU.
-3. **Benchmark head-to-head, honestly.** Against the ER landscape on *held-out* data
+4. **Benchmark head-to-head, honestly.** Against the ER landscape on *held-out* data
    (walmart, not the contaminated in-training sets), reporting competitive-local, not
    SOTA. This is the step that turns "appears to address" into "demonstrably addresses."
-4. **Multi-source-corpus rerun** of the truncate/strip sweep so the walmart absolutes
+5. **Multi-source-corpus rerun** of the truncate/strip sweep so the walmart absolutes
    match the shipped model (expected: same collapse pattern, higher baseline).
 
 ## The one-paragraph version

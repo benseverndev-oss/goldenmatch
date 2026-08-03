@@ -66,6 +66,9 @@ _image = (
         remote_path="/root/goldenmatch/core/er_matcher",
     )
     .add_local_dir("scripts/er_matcher/interp", remote_path="/root/interp")
+    # Magellan/DeepMatcher loaders, so the messy-domain (product) runs can read the
+    # already-fetched walmart_amazon tables off the volume -- pure parse, no network.
+    .add_local_dir("scripts/er_matcher/sources", remote_path="/root/sources")
     # the labeled person data the probe pairs are mined from
     .add_local_file(
         "scripts/autoconfig_quality/vendored/historical_50k.parquet",
@@ -118,6 +121,60 @@ def _mine(per_class: int, negatives: str, seed: int):
     surname_key = [jellyfish.soundex(str(raw["surname"][i] or "")) for i in range(len(gold))]
     pairs = mine_probe_pairs(gold, surname_key, per_class, negatives=negatives, seed=seed)
     return pairs, rows
+
+
+def _load_product_pairs(dataset: str, limit: int = 0):
+    """Magellan/DeepMatcher product pairs -> (train, test, rows, fields).
+
+    The MESSY-domain counterpart to ``_mine``: real product records (noisy
+    titles, missing brands/model numbers) with DeepMatcher's own pre-labeled
+    train/test splits, so no negative mining or cluster-disjoint split is needed
+    -- the benchmark's canonical splits ARE the honest split. Reads the copy
+    already fetched onto the volume at ``/out/magellan/<dataset>``; the parse is
+    pure (no network).
+
+    ``fields`` is the sorted union of the two tables' columns minus ``id``.
+    """
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, "/root")
+    from sources.magellan import MagellanSource
+
+    root = Path(f"/out/magellan/{dataset}")
+    if not root.exists():
+        raise RuntimeError(
+            f"{root} missing -- fetch it once via modal_train.py::zeroshot "
+            f"(cite-only license, so it is never committed)"
+        )
+    splits = MagellanSource(dataset, root).splits()
+
+    rows: dict[int, dict] = {}
+    key_of: dict[str, int] = {}
+    fields: set[str] = set()
+
+    def _pairs(rs):
+        out = []
+        for r in rs:
+            for side in ("a", "b"):
+                fields.update(k for k in r[side] if k != "id")
+            ids = []
+            for side, eid in (("a", r["eid_a"]), ("b", r["eid_b"])):
+                if eid not in key_of:
+                    key_of[eid] = len(rows)
+                    rows[len(rows)] = dict(r[side])
+                ids.append(key_of[eid])
+            out.append((ids[0], ids[1], 1 if r["label"] == "match" else 0))
+        return out
+
+    tr = _pairs(splits["train"])
+    te = _pairs(splits["test"])
+    flds = sorted(fields - {"id"})
+    for i in rows:
+        rows[i] = {f: (rows[i].get(f) or "") for f in flds}
+    if limit:
+        tr, te = tr[:limit], te[:limit]
+    return tr, te, rows, flds
 
 
 def _prompt(tok, a: dict, b: dict) -> str:
@@ -956,7 +1013,8 @@ def layer2_abstraction(layer: int = 14, per_class: int = 400, seed: int = 0,
 # --------------------------------------------------------------------------- #
 @app.function(image=_image, gpu=GPU, timeout=60 * 60, volumes={"/out": _out_vol})
 def faithfulness_eval(per_class: int = 400, seed: int = 0, negatives: str = "hard",
-                      split: str = "cluster", link: str = "linear") -> None:
+                      split: str = "cluster", link: str = "linear",
+                      dataset: str = "person") -> None:
     """Measure the per-field explanation against the model's ACTUAL P(match).
 
     The Layer-2 number (``layer2_abstraction``, R^2 ~= 0.51) regresses onto the
@@ -978,37 +1036,39 @@ def faithfulness_eval(per_class: int = 400, seed: int = 0, negatives: str = "har
     the gap between ``simple`` and ``gbm`` is the legibility/faithfulness
     frontier. -> interp/faithfulness.json
     """
-    import json
-    import os
     import sys
 
     import jellyfish
-    import numpy as np
     import polars as pl
     import pyarrow.parquet as pq
-    import torch
 
     sys.path.insert(0, "/root/interp")
     sys.path.insert(0, "/root")
     from decision_geometry import mine_probe_pairs
     from field_attribution import (
-        affine_r2,
-        field_agreements,
-        fixed_weight_score,
-        logit,
-        prob_space_r2,
         record_disjoint_split,
-        richer_field_features,
     )
-    from goldenmatch.core.er_matcher.explainer import PERSON_FIELD_IMPORTANCE
 
     tok, model = _load_model()
     true_id, false_id = _true_false_ids(tok)
     dev = model.device
 
+    if dataset != "person":
+        # messy domain: DeepMatcher's canonical train/test splits ARE the honest
+        # split (pre-labeled pairs, no clusters to mine or leak across)
+        tr, te, rows, fields = _load_product_pairs(dataset, limit=per_class * 2)
+        split = "deepmatcher-train/test"
+        print(f"[faith] dataset={dataset} train={len(tr)} test={len(te)} "
+              f"fields={len(fields)} split={split} link={link}", flush=True)
+        return _faithfulness_core(
+            tok, model, dev, true_id, false_id, tr, te, rows, fields,
+            dataset=dataset, split=split, negatives="n/a", seed=seed, link=link,
+        )
+
+    fields = FIELDS
     raw = pl.from_arrow(pq.read_table(DATA))
     gold = raw["cluster"].to_list()
-    rows = {i: {f: (raw[f][i] or "") for f in FIELDS} for i in range(len(gold))}
+    rows = {i: {f: (raw[f][i] or "") for f in fields} for i in range(len(gold))}
     surname_key = [jellyfish.soundex(str(raw["surname"][i] or "")) for i in range(len(gold))]
 
     pool = mine_probe_pairs(gold, surname_key, per_class * 3, negatives=negatives, seed=seed)
@@ -1036,10 +1096,42 @@ def faithfulness_eval(per_class: int = 400, seed: int = 0, negatives: str = "har
     print(f"[faith] train={len(tr)} test={len(te)} negatives={negatives} "
           f"split={split}-disjoint link={link}", flush=True)
 
+    return _faithfulness_core(
+        tok, model, dev, true_id, false_id, tr, te, rows, fields,
+        dataset=dataset, split=f"{split}-disjoint", negatives=negatives,
+        seed=seed, link=link,
+    )
+
+
+def _faithfulness_core(tok, model, dev, true_id, false_id, tr, te, rows, fields,
+                       *, dataset: str, split: str, negatives: str, seed: int,
+                       link: str) -> None:
+    """Score both splits, fit the four bases, write the artifact.
+
+    Shared by the person and product paths so the two datasets are measured by
+    identical code -- only how the pairs were obtained differs.
+    """
+    import json
+    import os
+    import sys
+
+    import numpy as np
+    import torch
+    sys.path.insert(0, "/root/interp")
+    sys.path.insert(0, "/root")
+    from field_attribution import (
+        affine_r2,
+        field_agreements,
+        fixed_weight_score,
+        logit,
+        prob_space_r2,
+        richer_field_features,
+    )
+    from goldenmatch.core.er_matcher.explainer import PERSON_FIELD_IMPORTANCE
+
     def p_match(pairs) -> np.ndarray:
-        """Teacher-forced readout: feed the '{\"match\":' prefix, softmax the
-        true/false logits. Same recipe as leniency_dial -- verdict-identical to
-        generation, and continuous."""
+        """Teacher-forced readout: feed the '{"match":' prefix, softmax the
+        true/false logits. Verdict-identical to generation, and continuous."""
         prompts = [_prompt(tok, rows[a], rows[b]) + '{"match":' for a, b, _ in pairs]
         ps = []
         for i in range(0, len(prompts), 16):
@@ -1051,24 +1143,29 @@ def faithfulness_eval(per_class: int = 400, seed: int = 0, negatives: str = "har
         return np.concatenate(ps)
 
     p_tr, p_te = p_match(tr), p_match(te)
+    y_te = np.array([t for *_, t in te])
+    acc = float(((p_te >= 0.5) == (y_te == 1)).mean())
     print(f"[faith] P(match) test: mean={p_te.mean():.3f} "
           f"frac<0.1={float((p_te < 0.1).mean()):.2f} "
-          f"frac>0.9={float((p_te > 0.9).mean()):.2f}", flush=True)
+          f"frac>0.9={float((p_te > 0.9).mean()):.2f} acc={acc:.3f}", flush=True)
 
-    A_tr, A_te = field_agreements(rows, tr, FIELDS), field_agreements(rows, te, FIELDS)
-    X_tr, feat_names = richer_field_features(rows, tr, FIELDS)
-    X_te, _ = richer_field_features(rows, te, FIELDS)
+    A_tr, A_te = field_agreements(rows, tr, fields), field_agreements(rows, te, fields)
+    X_tr, feat_names = richer_field_features(rows, tr, fields)
+    X_te, _ = richer_field_features(rows, te, fields)
 
     results: dict = {}
 
-    # (1) THE number to pin: shipped weights frozen, only the link is fit.
-    fixed = affine_r2(
-        fixed_weight_score(A_tr, FIELDS, PERSON_FIELD_IMPORTANCE), p_tr,
-        fixed_weight_score(A_te, FIELDS, PERSON_FIELD_IMPORTANCE), p_te,
-        link=link,
-    )
-    results["fixed"] = {**fixed, "n_features": len(FIELDS), "weights_refit": False}
-    print(f"[faith] fixed  (shipped weights, frozen) R^2_test={fixed['r2_test']:.3f}", flush=True)
+    # The shipped weight table is person-only; on a product schema there are no
+    # learned weights to freeze, so the `fixed` row is skipped rather than faked.
+    if dataset == "person":
+        fixed = affine_r2(
+            fixed_weight_score(A_tr, fields, PERSON_FIELD_IMPORTANCE), p_tr,
+            fixed_weight_score(A_te, fields, PERSON_FIELD_IMPORTANCE), p_te,
+            link=link,
+        )
+        results["fixed"] = {**fixed, "n_features": len(fields), "weights_refit": False}
+        print(f"[faith] fixed  (shipped weights, frozen) "
+              f"R^2_test={fixed['r2_test']:.3f}", flush=True)
 
     from sklearn.ensemble import GradientBoostingRegressor
     from sklearn.linear_model import LinearRegression
@@ -1090,17 +1187,17 @@ def faithfulness_eval(per_class: int = 400, seed: int = 0, negatives: str = "har
 
     results["simple"] = _fit_r2(LinearRegression(), A_tr, A_te, "simple")
     results["richer"] = _fit_r2(LinearRegression(), X_tr, X_te, "richer")
-    results["gbm"] = _fit_r2(
-        GradientBoostingRegressor(random_state=0), X_tr, X_te, "gbm"
-    )
+    results["gbm"] = _fit_r2(GradientBoostingRegressor(random_state=0), X_tr, X_te, "gbm")
 
     payload = {
         "target": "model P(match) via teacher-forced true/false logit readout",
-        "split": f"{split}-disjoint",
+        "dataset": dataset, "split": split,
         "negatives": negatives, "link": link,
         "n_train": len(tr), "n_test": len(te), "seed": seed,
-        "fields": FIELDS, "richer_feature_names": feat_names,
-        "shipped_weights": {f: PERSON_FIELD_IMPORTANCE.get(f, 0.0) for f in FIELDS},
+        "test_accuracy": acc,
+        "fields": fields, "richer_feature_names": feat_names,
+        "shipped_weights": ({f: PERSON_FIELD_IMPORTANCE.get(f, 0.0) for f in fields}
+                            if dataset == "person" else None),
         "p_match_test": {
             "mean": float(p_te.mean()), "std": float(p_te.std()),
             "frac_below_0.1": float((p_te < 0.1).mean()),
@@ -1110,11 +1207,13 @@ def faithfulness_eval(per_class: int = 400, seed: int = 0, negatives: str = "har
     }
     os.makedirs("/out/interp", exist_ok=True)
     suffix = "" if link == "linear" else f"_{link}"
-    out_path = f"/out/interp/faithfulness_{split}_{negatives}_seed{seed}{suffix}.json"
+    tag = negatives if dataset == "person" else dataset
+    out_path = f"/out/interp/faithfulness_{split.replace(chr(47), chr(45))}_{tag}_seed{seed}{suffix}.json"
     with open(out_path, "w") as fh:
         json.dump(payload, fh, indent=2)
     _out_vol.commit()
     print(f"[done] faithfulness -> {out_path}")
+
 
 
 # --------------------------------------------------------------------------- #
@@ -1122,7 +1221,7 @@ def faithfulness_eval(per_class: int = 400, seed: int = 0, negatives: str = "har
 # --------------------------------------------------------------------------- #
 @app.function(image=_image, gpu=GPU, timeout=60 * 60, volumes={"/out": _out_vol})
 def causal_attribution(per_class: int = 200, seed: int = 0, negatives: str = "hard",
-                       threshold: float = 0.5) -> None:
+                       threshold: float = 0.5, dataset: str = "person") -> None:
     """Per-pair CAUSAL field attribution by occlusion -- not another R^2.
 
     For each pair and each field, blank that field on BOTH records and re-score.
@@ -1165,8 +1264,16 @@ def causal_attribution(per_class: int = 200, seed: int = 0, negatives: str = "ha
     tok, model = _load_model()
     true_id, false_id = _true_false_ids(tok)
     dev = model.device
-    pairs, rows = _mine(per_class, negatives, seed)
-    print(f"[attr] pairs={len(pairs)} fields={len(FIELDS)} negatives={negatives}", flush=True)
+    if dataset == "person":
+        pairs, rows = _mine(per_class, negatives, seed)
+        fields = FIELDS
+        regime = f"negatives={negatives}"
+    else:
+        # messy domain: DeepMatcher's own test split, no negative mining
+        _tr, pairs, rows, fields = _load_product_pairs(dataset, limit=per_class * 2)
+        regime = "deepmatcher test split"
+    print(f"[attr] dataset={dataset} pairs={len(pairs)} fields={len(fields)} "
+          f"({regime})", flush=True)
 
     def p_match(recs: list[tuple[dict, dict]]) -> np.ndarray:
         prompts = [_prompt(tok, a, b) + '{"match":' for a, b in recs]
@@ -1181,17 +1288,17 @@ def causal_attribution(per_class: int = 200, seed: int = 0, negatives: str = "ha
 
     def blanked(r: dict, drop: set) -> dict:
         """Copy of ``r`` with ``drop`` fields emptied -> renders as ``(missing)``."""
-        return {f: ("" if f in drop else r.get(f, "")) for f in FIELDS}
+        return {f: ("" if f in drop else r.get(f, "")) for f in fields}
 
     base = p_match([(rows[a], rows[b]) for a, b, _ in pairs])
     y = np.array([t for *_, t in pairs])
     print(f"[attr] base P(match): mean={base.mean():.3f} "
           f"acc={float(((base >= threshold) == (y == 1)).mean()):.3f}", flush=True)
 
-    nec = np.zeros((len(pairs), len(FIELDS)))
-    suf = np.zeros((len(pairs), len(FIELDS)))
-    for j, f in enumerate(FIELDS):
-        others = set(FIELDS) - {f}
+    nec = np.zeros((len(pairs), len(fields)))
+    suf = np.zeros((len(pairs), len(fields)))
+    for j, f in enumerate(fields):
+        others = set(fields) - {f}
         nec[:, j] = p_match([(blanked(rows[a], {f}), blanked(rows[b], {f})) for a, b, _ in pairs])
         suf[:, j] = p_match(
             [(blanked(rows[a], others), blanked(rows[b], others)) for a, b, _ in pairs]
@@ -1200,32 +1307,37 @@ def causal_attribution(per_class: int = 200, seed: int = 0, negatives: str = "ha
               f"flip={float(((nec[:, j] >= threshold) != (base >= threshold)).mean()):.3f}",
               flush=True)
 
-    necessity = attribution_summary(
-        base, nec, FIELDS, weights=PERSON_FIELD_IMPORTANCE, threshold=threshold
-    )
-    sufficiency = attribution_summary(base, suf, FIELDS, threshold=threshold)
+    # the shipped weight table is person-only; on a product schema there is
+    # nothing to correlate against, so skip the comparison rather than fake it
+    w = PERSON_FIELD_IMPORTANCE if dataset == "person" else None
+    necessity = attribution_summary(base, nec, fields, weights=w, threshold=threshold)
+    sufficiency = attribution_summary(base, suf, fields, threshold=threshold)
     print(f"[attr] causal ranking: {necessity['ranking']}", flush=True)
-    print(f"[attr] spearman vs shipped weights = "
-          f"{necessity['spearman_vs_learned_weights']:+.3f}", flush=True)
+    if "spearman_vs_learned_weights" in necessity:
+        print(f"[attr] spearman vs shipped weights = "
+              f"{necessity['spearman_vs_learned_weights']:+.3f}", flush=True)
     print(f"[attr] any-field flip rate = {necessity['any_flip_rate']:.3f}", flush=True)
 
     payload = {
         "method": "occlusion (blank field on both records -> '(missing)' sentinel)",
+        "dataset": dataset, "regime": regime,
         "negatives": negatives, "seed": seed, "threshold": threshold,
-        "fields": FIELDS, "shipped_weights": {f: PERSON_FIELD_IMPORTANCE.get(f, 0.0)
-                                              for f in FIELDS},
+        "fields": fields,
+        "shipped_weights": ({f: PERSON_FIELD_IMPORTANCE.get(f, 0.0) for f in fields}
+                            if dataset == "person" else None),
         "base_p_mean": float(base.mean()),
         "base_accuracy": float(((base >= threshold) == (y == 1)).mean()),
         "necessity": necessity, "sufficiency": sufficiency,
         # per-pair rows so a review queue can cite the actual counterfactual
         "per_pair": [
             {"a": int(a), "b": int(b), "label": int(t), "p_base": float(base[i]),
-             "p_without": {f: float(nec[i, j]) for j, f in enumerate(FIELDS)}}
+             "p_without": {f: float(nec[i, j]) for j, f in enumerate(fields)}}
             for i, (a, b, t) in enumerate(pairs[:50])
         ],
     }
     os.makedirs("/out/interp", exist_ok=True)
-    out_path = f"/out/interp/causal_attribution_{negatives}_seed{seed}.json"
+    tag = negatives if dataset == "person" else dataset
+    out_path = f"/out/interp/causal_attribution_{tag}_seed{seed}.json"
     with open(out_path, "w") as fh:
         json.dump(payload, fh, indent=2)
     _out_vol.commit()
@@ -1233,17 +1345,22 @@ def causal_attribution(per_class: int = 200, seed: int = 0, negatives: str = "ha
 
 
 @app.local_entrypoint()
-def attribution(per_class: int = 200, seed: int = 0, negatives: str = "hard") -> None:
+def attribution(per_class: int = 200, seed: int = 0, negatives: str = "hard",
+                dataset: str = "person") -> None:
     """Per-pair causal field attribution by occlusion (necessity + sufficiency)."""
-    causal_attribution.remote(per_class=per_class, seed=seed, negatives=negatives)
+    causal_attribution.remote(
+        per_class=per_class, seed=seed, negatives=negatives, dataset=dataset
+    )
 
 
 @app.local_entrypoint()
 def faithfulness(per_class: int = 400, seed: int = 0, negatives: str = "hard",
-                 split: str = "cluster", link: str = "linear") -> None:
+                 split: str = "cluster", link: str = "linear",
+                 dataset: str = "person") -> None:
     """Pin the shipped explainer's faithfulness against the model's real verdict."""
     faithfulness_eval.remote(
-        per_class=per_class, seed=seed, negatives=negatives, split=split, link=link
+        per_class=per_class, seed=seed, negatives=negatives, split=split, link=link,
+        dataset=dataset,
     )
 
 
