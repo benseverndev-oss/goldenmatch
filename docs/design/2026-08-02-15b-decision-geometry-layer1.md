@@ -392,6 +392,37 @@ checkout, not the shipped model's ~17,690-row multi-source corpus. The internal 
 multi-source-corpus rerun would raise the absolutes but is expected to show the same
 collapse pattern. (`eval_trunc{28,16,12}_v2.json` on the volume.)
 
+## Manual control — can we tweak the model via the direction? (measured: yes, but…)
+
+Since the match direction is causally locked, we CAN steer the model's verdict at
+inference (Grade 1) or bake the shift into weights (Grade 2) — no retraining. The
+natural product is a **precision/recall leniency dial**: steer +c to merge more,
+−c to be stricter. `modal_interp.py::leniency_dial` measures whether steering the
+model's *internal decision axis* beats a plain **threshold** on its output.
+Per-layer directions from a record-disjoint TRAIN split; on TEST (1000 pairs):
+
+| control | P | R | F1 |
+|---|---|---|---|
+| steer c ≤ −0.5 | 0.00 | 0.00 | 0.00 (reject-all) |
+| **steer c = 0** (unsteered) | 0.997 | 0.786 | **0.879** |
+| steer c ≥ +0.5 | 0.746 | 1.00 | 0.855 (accept-all) |
+| **best threshold sweep** | — | — | **0.943** |
+
+**Steering is a validated but BLUNT control — a threshold is strictly better.** At the
+gap-unit scale that moves the decision, multi-layer steering saturates: it flips from
+reject-all to accept-all between c=0 and c=±0.5, with almost no usable middle, and it
+never beats thresholding at matched recall (0/13 points). The cleanest statement: the
+best "steer" point is c=0 (no steering) at F1 0.879, and from there the only thing that
+*improves* the operating point is moving the threshold (→0.943), not steering (→0.855).
+
+Why: a threshold operates on the model's own *calibrated confidence ranking* — the
+optimal way to pick an operating point from a scorer. Steering is a coarser, uncalibrated
+mid-network shove that can reorder borderline pairs against that ranking, so its frontier
+is dominated. **So manual tweaking is real, but a P/R dial is the wrong job for it — use
+a threshold.** Steering/weight-editing earns its keep only where a threshold *can't* reach:
+changing behavior when the output probability isn't exposed, or baking a fixed shift into
+a binary-only deployment. (`leniency_dial.json` on the volume.)
+
 ## Reproduce
 
 ```bash
