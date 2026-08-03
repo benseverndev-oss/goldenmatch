@@ -185,6 +185,84 @@ def attribute_direction_grouped(
     }
 
 
+def pair_corruption(
+    rows: dict[int, dict[str, Any]],
+    pairs: list[tuple[int, int, int]],
+    fields: list[str],
+    signal_fn: Any = None,
+) -> np.ndarray:
+    """Mean ``edit_norm`` across fields -> one corruption level per pair.
+
+    This single number nearly determines the label on a corruption-mined probe set
+    (matches are corrupted copies of one entity, non-matches are different
+    entities), which is what lets a wide fit score well without using field-specific
+    evidence. Computing it explicitly is the first step to removing it.
+    """
+    X, names = richer_field_features(rows, pairs, fields, signal_fn=signal_fn)
+    idx = [j for j, n in enumerate(names) if n.endswith("__edit_norm")]
+    return X[:, idx].mean(axis=1)
+
+
+def corruption_matched_pairs(
+    rows: dict[int, dict[str, Any]],
+    pairs: list[tuple[int, int, int]],
+    fields: list[str],
+    *,
+    signal_fn: Any = None,
+    tol: float = 0.05,
+) -> tuple[list[tuple[int, int, int]], dict[str, float]]:
+    """Subsample ``pairs`` so both classes have the SAME corruption distribution.
+
+    Greedy nearest-neighbour matching on :func:`pair_corruption`: each match is
+    paired with the closest-corruption non-match still available, and the pair is
+    kept only if they fall within ``tol``. The result is a balanced set on which
+    overall string distance carries ~no label information, so a fit can only score
+    by using field-specific evidence.
+
+    Returns ``(selected_pairs, diagnostics)`` where diagnostics carries the
+    corruption/label correlation before and after -- always check ``corr_after`` is
+    near zero before trusting anything measured on the result. Deterministic.
+    """
+    c = pair_corruption(rows, pairs, fields, signal_fn=signal_fn)
+    y = np.array([t for *_, t in pairs])
+    pos = sorted((i for i in range(len(pairs)) if y[i] == 1), key=lambda i: c[i])
+    neg = sorted((i for i in range(len(pairs)) if y[i] == 0), key=lambda i: c[i])
+    if not pos or not neg:
+        raise ValueError("need both classes present to corruption-match")
+
+    used = [False] * len(neg)
+    keep: list[int] = []
+    j = 0
+    for i in pos:
+        # advance a pointer to the closest unused negative by corruption
+        while j < len(neg) and (used[j] or c[neg[j]] < c[i] - tol):
+            j += 1
+        best, best_d = -1, tol
+        for k in range(j, len(neg)):
+            if c[neg[k]] > c[i] + tol:
+                break
+            if used[k]:
+                continue
+            d = abs(c[neg[k]] - c[i])
+            if d <= best_d:
+                best, best_d = k, d
+        if best >= 0:
+            used[best] = True
+            keep.extend([i, neg[best]])
+
+    sel = [pairs[i] for i in keep]
+    cs, yssel = c[keep], y[keep]
+    diag = {
+        "n_in": float(len(pairs)), "n_out": float(len(sel)),
+        "corr_before": float(np.corrcoef(c, y)[0, 1]),
+        "corr_after": (
+            float(np.corrcoef(cs, yssel)[0, 1]) if len(sel) > 2 and cs.std() > 1e-9
+            else 0.0
+        ),
+    }
+    return sel, diag
+
+
 def field_rollup(coefficients: dict[str, float]) -> list[tuple[str, float]]:
     """Sum |coef| per field over ``field__signal`` keys -> ranked (field, mass).
 

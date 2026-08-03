@@ -97,9 +97,11 @@ PERSON_SIGNAL_IMPORTANCE_DENSE: dict[str, float] = {
 # direction onto the 36-signal decomposition; 14 signals survive.
 #
 # MEASURED, frozen, vs the model's real P(match) (5 seeds, cluster-disjoint, hard
-# negatives): R^2 0.64 +- 0.09, against 0.27 +- 0.07 for the 6-field table and
-# 0.53 +- 0.09 for the dense 36-signal fit above. Better than BOTH on every seed,
-# and essentially at the refit ceiling (0.67) using only frozen weights.
+# negatives): R^2 0.64 +- 0.09 on the standard probe -- but only 0.33 +- 0.06 once
+# the pairs are CORRUPTION-MATCHED (see below). Most of its apparent advantage was
+# the shortcut. The honest number is 0.33, against 0.26 for the 6-field table on the
+# same de-confounded pairs: a real but modest edge, not the 2.4x the raw probe
+# suggested.
 #
 # It is also the readable one: summed per field it ranks birth_place FIRST and
 # occupation LAST, agreeing with ablation at both ends (rank-correlation vs the
@@ -118,6 +120,12 @@ PERSON_SIGNAL_IMPORTANCE_DENSE: dict[str, float] = {
 # classes on its own. The fits therefore rank whichever field is the best corruption
 # proxy (surname, birth_place) above the field that actually carries identity
 # evidence (first_name).
+#
+# CONFIRMED by re-measuring on corruption-matched pairs (each match paired with a
+# non-match at the same corruption level, so that channel carries no label signal):
+# this basis falls 0.64 -> 0.33 while the 6-field table barely moves (0.27 -> 0.26).
+# The shipped weights were measuring real per-field evidence all along; the richer
+# basis was substantially riding the shortcut.
 #
 # So read this basis as "predicts P(match) well on this probe set", NOT as "these are
 # the signals the model reasons with". `PERSON_FIELD_IMPORTANCE` remains the prose,
@@ -145,9 +153,15 @@ PERSON_SIGNAL_IMPORTANCE: dict[str, float] = {
 # verdict. This is the honest one for the look-alike regime the explainer runs in.
 PERSON_IMPORTANCE_FAITHFULNESS_R2 = 0.27
 
-# The same measurement for the sparse signal basis: frozen weights, 5-seed mean,
-# cluster-disjoint, hard negatives. Reported when `high_faithfulness=True`.
-PERSON_SIGNAL_FAITHFULNESS_R2 = 0.64
+# The same measurement for the sparse signal basis, on CORRUPTION-MATCHED pairs --
+# the de-confounded number (5-seed mean). The raw-probe figure is 0.64, but that is
+# inflated by the corruption shortcut; 0.33 is what survives.
+#
+# Note how small the remaining edge is: 0.33 vs 0.26 for the far more legible 6-field
+# table. The high-faithfulness mode is retained because the edge is real and holds on
+# every seed, but it no longer justifies itself on magnitude alone -- if the two-mode
+# split ever costs anything, retire the mode.
+PERSON_SIGNAL_FAITHFULNESS_R2 = 0.33
 
 # neutral weight for a field with no learned importance (unknown schema)
 DEFAULT_FIELD_IMPORTANCE = 0.10

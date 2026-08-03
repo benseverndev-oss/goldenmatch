@@ -52,7 +52,7 @@ standing discipline: **when a number looks too good, hunt the confound first.**
   `PERSON_FIELD_IMPORTANCE` (scoring: does agreement track the verdict?) and
   `PERSON_FIELD_CAUSAL_RANKING` (necessity: does the model need the field?), which
   disagree on purpose. Faithfulness now the measured **0.27** (was 0.51, the projection
-  number), or **0.64** in the opt-in `high_faithfulness=True` mode. 42 unit tests.
+  number), or **0.33** in the opt-in `high_faithfulness=True` mode. 42 unit tests.
   Additive; `score_pair` unchanged.
 - **Live demo (artifact).** Real records + the actual model's verdicts, each explained
   by learned field importance. Built from `scratchpad/xai_demo.py`.
@@ -494,10 +494,46 @@ birth_place) above the field that carries *identity* evidence (first_name).
    extrinsic to per-field reasoning. `PERSON_FIELD_IMPORTANCE` remains the prose;
    `explain_pair(..., high_faithfulness=True)` reports 0.64 + `signal_contributions`
    with the per-field prose byte-identical (pinned by a test).
-4. **Open:** re-measure faithfulness on pairs whose corruption level is matched across
-   classes, which would strip the shortcut and give the honest richer-basis number.
-   Untested on walmart — its pairs come from DeepMatcher candidate generation rather
-   than corruption-based mining, so the mechanism there is likely different.
+### The de-confounded numbers (corruption-matched pairs)
+
+Done: `faithfulness_eval --corruption-matched` pairs each match with a non-match at the
+same corruption level (greedy nearest-neighbour on mean `edit_norm`), so that channel
+carries no label signal. Correlation drops **−0.88 → −0.23**; the residual is not zero
+because the classes barely overlap in corruption, which is exactly why the shortcut
+works. 5 seeds, ~500 train / ~380 test after matching.
+
+| basis | standard probe | **corruption-matched** |
+|---|---|---|
+| **`fixed` — shipped 6 weights** | 0.27 ± 0.07 | **0.26 ± 0.08** |
+| `fixed_richer` — 36 dense | 0.53 ± 0.09 | 0.23 |
+| `fixed_sparse` — 14 L1 | 0.64 ± 0.09 | **0.33 ± 0.06** |
+| `simple` — refit | 0.30 | 0.37 ± 0.06 |
+| `richer` — refit | 0.67 | 0.63 ± 0.05 |
+| `gbm` — refit | 0.77 | 0.66 |
+| **model accuracy** | 0.88 | **0.72** |
+
+**Three conclusions, and the first is the one that matters:**
+
+1. **The shipped 6-field weights are robust: 0.27 → 0.26, essentially unchanged.** They
+   were measuring real per-field evidence all along, not the shortcut. After a day of
+   numbers that did not survive scrutiny, the one the product actually ships did.
+2. **The high-faithfulness basis was mostly shortcut: 0.64 → 0.33.** Its honest edge
+   over the legible table is 0.33 vs 0.26 — real, holds on every seed, but a fraction of
+   the 2.4× the raw probe implied. `PERSON_SIGNAL_FAITHFULNESS_R2` corrected to **0.33**.
+   The mode is kept because the edge is real, but it no longer justifies itself on
+   magnitude; if the two-mode split ever costs anything, retire it.
+3. **The MODEL uses the shortcut too** — accuracy 0.88 → 0.72 once corruption is matched.
+   So the explainer was not inventing the dependence; it was reflecting a real property
+   of how the model decides on this probe. Worth remembering before treating 0.88 as the
+   model's discriminative ability: a chunk of it is "these strings are similar overall".
+
+Refit bases hold up (`richer` 0.67 → 0.63) because refitting adapts to the de-confounded
+data, whereas the FROZEN weights were derived on confounded pairs and transfer poorly.
+That gap between frozen and refit is itself the size of the confound's fingerprint.
+
+**Still open:** untested on walmart — its pairs come from DeepMatcher candidate
+generation rather than corruption-based mining, so the mechanism there is likely
+different and the product-domain numbers do not inherit this caveat automatically.
 
 Person schema only — the product schema has no derived weights.
 
@@ -515,11 +551,10 @@ Person schema only — the product schema has no derived weights.
    regression. walmart has no derived table at all, so its `fixed`/`fixed_richer` rows do
    not exist and the product-domain explanation still rests on the unweighted basis.
    Running `layer2_abstraction` against a product-domain probe set is the missing piece.
-3. **Strip the corruption shortcut and re-measure.** The grouped fit settled that the
-   modes will not merge by better fitting (above) — the richer basis partly rides a
-   cross-field corruption proxy that is an artifact of probe mining. Re-run
-   `faithfulness_eval` on pairs matched for corruption level across classes; that number
-   is the honest one for the richer basis, and it will be lower than 0.64.
+3. **Decide whether the high-faithfulness mode earns its keep.** De-confounded it is
+   0.33 vs 0.26 for the legible table (above) — a real edge on every seed, but small
+   enough that two modes may not be worth the surface area. A product call, not a
+   measurement one; the measurement is done.
 4. **Perf for real volume.** Prefix-cache the system rubric (biggest CPU win) + wire the
    logit readout into the scorer for clean P(match); benchmark on GPU.
 5. **Benchmark head-to-head, honestly.** Against the ER landscape on *held-out* data

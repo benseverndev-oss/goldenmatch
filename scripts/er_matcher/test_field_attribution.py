@@ -13,10 +13,12 @@ from interp.field_attribution import (  # noqa: E402
     affine_r2,
     attribute_direction,
     attribution_summary,
+    corruption_matched_pairs,
     field_agreements,
     fixed_weight_score,
     label_sae_features,
     logit,
+    pair_corruption,
     prob_space_r2,
     record_disjoint_split,
     richer_field_features,
@@ -250,6 +252,69 @@ class TestAffineR2:
 
         with pytest.raises(ValueError):
             affine_r2(np.zeros(5), np.zeros(4), np.zeros(3), np.zeros(3))
+
+
+class TestCorruptionMatching:
+    def _corpus(self):
+        # The probe confound in miniature: MOST non-matches are unrelated strings
+        # (high corruption) while matches are near-copies (low corruption), so
+        # overall string distance separates the classes. A minority of non-matches
+        # sit at the SAME corruption as the matches -- those are the ones matching
+        # should retain, leaving a set the shortcut cannot separate.
+        rows, pairs = {}, []
+        for k in range(30):
+            base = f"aaaa{k:02d}"
+            rows[4 * k] = {"first_name": base, "surname": base, "dob": base}
+            rows[4 * k + 1] = {"first_name": base + "x", "surname": base,
+                               "dob": base}            # near copy -> MATCH
+            rows[4 * k + 2] = {"first_name": f"zzzz{k:02d}", "surname": f"yyyy{k:02d}",
+                               "dob": f"wwww{k:02d}"}   # unrelated -> NON-match
+            rows[4 * k + 3] = {"first_name": base + "y", "surname": base,
+                               "dob": base}            # SAME corruption -> NON-match
+            pairs.append((4 * k, 4 * k + 1, 1))
+            pairs.append((4 * k, 4 * k + 2, 0))
+            pairs.append((4 * k, 4 * k + 3, 0))
+        return rows, pairs
+
+    def test_confound_exists_before_matching(self):
+        rows, pairs = self._corpus()
+        c = pair_corruption(rows, pairs, FIELDS)
+        y = np.array([t for *_, t in pairs])
+        assert abs(np.corrcoef(c, y)[0, 1]) > 0.5  # the shortcut is real
+
+    def test_matching_removes_the_confound(self):
+        rows, pairs = self._corpus()
+        sel, diag = corruption_matched_pairs(rows, pairs, FIELDS, tol=0.05)
+        assert diag["n_out"] > 0
+        assert abs(diag["corr_after"]) < abs(diag["corr_before"])
+        assert abs(diag["corr_after"]) < 0.35
+        # the unrelated (high-corruption) non-matches are exactly what gets dropped
+        assert diag["n_out"] < diag["n_in"]
+
+    def test_output_is_class_balanced_and_a_subset(self):
+        rows, pairs = self._corpus()
+        sel, _ = corruption_matched_pairs(rows, pairs, FIELDS, tol=0.05)
+        labels = [t for *_, t in sel]
+        assert labels.count(1) == labels.count(0)
+        assert all(p in pairs for p in sel)
+
+    def test_deterministic(self):
+        rows, pairs = self._corpus()
+        a, _ = corruption_matched_pairs(rows, pairs, FIELDS, tol=0.05)
+        b, _ = corruption_matched_pairs(rows, pairs, FIELDS, tol=0.05)
+        assert a == b
+
+    def test_no_negative_reused(self):
+        rows, pairs = self._corpus()
+        sel, _ = corruption_matched_pairs(rows, pairs, FIELDS, tol=0.05)
+        negs = [(a, b) for a, b, t in sel if t == 0]
+        assert len(negs) == len(set(negs))
+
+    def test_raises_without_both_classes(self):
+        rows, pairs = self._corpus()
+        only_pos = [p for p in pairs if p[2] == 1]
+        with pytest.raises(ValueError):
+            corruption_matched_pairs(rows, only_pos, FIELDS)
 
 
 class TestSpearman:

@@ -1065,7 +1065,7 @@ def layer2_abstraction(layer: int = 14, per_class: int = 400, seed: int = 0,
 @app.function(image=_image, gpu=GPU, timeout=60 * 60, volumes={"/out": _out_vol})
 def faithfulness_eval(per_class: int = 400, seed: int = 0, negatives: str = "hard",
                       split: str = "cluster", link: str = "linear",
-                      dataset: str = "person") -> None:
+                      dataset: str = "person", corruption_matched: bool = False) -> None:
     """Measure the per-field explanation against the model's ACTUAL P(match).
 
     The Layer-2 number (``layer2_abstraction``, R^2 ~= 0.51) regresses onto the
@@ -1097,6 +1097,7 @@ def faithfulness_eval(per_class: int = 400, seed: int = 0, negatives: str = "har
     sys.path.insert(0, "/root")
     from decision_geometry import mine_probe_pairs
     from field_attribution import (
+        corruption_matched_pairs,
         record_disjoint_split,
     )
 
@@ -1141,6 +1142,21 @@ def faithfulness_eval(per_class: int = 400, seed: int = 0, negatives: str = "har
         te = [pool[i] for i in te_i]
     else:
         raise ValueError(f"split must be 'cluster' or 'record', got {split!r}")
+    if corruption_matched:
+        # Strip the corruption shortcut: probe matches are corrupted copies of one
+        # entity and non-matches are different entities, so mean edit_norm alone
+        # correlates ~-0.90 with the label and a wide fit can score well without
+        # using field-specific evidence. Pair each match with a non-match at the
+        # same corruption level so that channel carries no label information.
+        sys.path.insert(0, "/root")
+        from goldenmatch.core.er_matcher.explainer import field_signal_vector as _fsv
+
+        tr, dtr = corruption_matched_pairs(rows, tr, fields, signal_fn=_fsv)
+        te, dte = corruption_matched_pairs(rows, te, fields, signal_fn=_fsv)
+        print(f"[faith] corruption-matched: train {int(dtr['n_in'])}->{int(dtr['n_out'])} "
+              f"(corr {dtr['corr_before']:+.3f}->{dtr['corr_after']:+.3f})  "
+              f"test {int(dte['n_in'])}->{int(dte['n_out'])} "
+              f"(corr {dte['corr_before']:+.3f}->{dte['corr_after']:+.3f})", flush=True)
     tr, te = tr[: per_class * 2], te[: per_class * 2]
     if not tr or not te:
         raise RuntimeError(f"empty split: train={len(tr)} test={len(te)}")
@@ -1149,8 +1165,9 @@ def faithfulness_eval(per_class: int = 400, seed: int = 0, negatives: str = "har
 
     return _faithfulness_core(
         tok, model, dev, true_id, false_id, tr, te, rows, fields,
-        dataset=dataset, split=f"{split}-disjoint", negatives=negatives,
-        seed=seed, link=link,
+        dataset=dataset,
+        split=f"{split}-disjoint" + ("-corrmatched" if corruption_matched else ""),
+        negatives=negatives, seed=seed, link=link,
     )
 
 
@@ -1449,11 +1466,11 @@ def attribution(per_class: int = 200, seed: int = 0, negatives: str = "hard",
 @app.local_entrypoint()
 def faithfulness(per_class: int = 400, seed: int = 0, negatives: str = "hard",
                  split: str = "cluster", link: str = "linear",
-                 dataset: str = "person") -> None:
+                 dataset: str = "person", corruption_matched: bool = False) -> None:
     """Pin the shipped explainer's faithfulness against the model's real verdict."""
     faithfulness_eval.remote(
         per_class=per_class, seed=seed, negatives=negatives, split=split, link=link,
-        dataset=dataset,
+        dataset=dataset, corruption_matched=corruption_matched,
     )
 
 
