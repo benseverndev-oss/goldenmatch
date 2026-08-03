@@ -1,8 +1,17 @@
 # FS-aware refit loop — design (Phase 3, threshold-refit first slice)
 
-Status: **IMPLEMENTED (Phase 3a, 2026-08-02)** — the objective below was CORRECTED
-by measurement during implementation (see "Implemented objective"). Approved
-design; shipped default-OFF behind `GOLDENMATCH_FS_REFIT_THRESHOLD`.
+Status: **IMPLEMENTED + DEFAULT-ON (Phase 3a, 2026-08-02)** — the objective below
+was CORRECTED by measurement during implementation (see "Implemented objective").
+Approved design. **Default-flipped ON 2026-08-02** after validation:
+`GOLDENMATCH_FS_REFIT_THRESHOLD` now defaults on (`=0` restores the fixed cutoff).
+Evidence for the flip: (a) STRUCTURAL no-op on 0.50-optimal data — the
+cluster-shape guard rejects any candidate that doesn't reduce over-merge; (b)
+MEASURED scale-neutral + perf-neutral (QIS realistic 50k/100k: ΔF1 **+0.00000**,
+wall within run-to-run noise); (c) recovers the over-merge failure mode the fixed
+cutoff can't — household_hardneg **+0.053**, cotenant_hardneg **+0.678** (the two
+over-merge shapes added to the `ab_lever` panel); no measured regression on any
+real/clean dataset. Wired across ALL FS routes (route-extension) and auditable
+(3c observability logging).
 Program: FS/Lever Enablement (`2026-08-01-fs-lever-enablement-design.md`), item 3.
 
 ## Implemented objective (2026-08-02) — corrected by measurement

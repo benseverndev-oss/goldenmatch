@@ -135,3 +135,87 @@ def test_accepts_path(tmp_path):
     frames = {"orders": pa.table({"order_id": [1, 2], "amount": [1.0, 2.0]})}
     rep = certify_semantic_model(str(p), frames)
     assert rep.dialect == "metricflow" and rep.n_certified == 1
+
+
+# --- E: verdict-rich report serializer + MCP/REST/CLI surfaces -----------------
+
+
+def test_certification_report_dict_carries_the_verdict_block():
+    from goldenmatch.semantic import certification_report_dict
+
+    frames = {"orders": pa.table({"order_id": [1, 1, 2], "amount": [10.0, 10.0, 5.0]})}
+    rep = certify_semantic_model(_METRICFLOW, frames)
+    d = certification_report_dict(rep)
+
+    assert d["dialect"] == "metricflow"
+    assert d["n_certified"] == 1
+    assert d["n_untrustworthy"] == 1
+    assert d["all_trustworthy"] is False
+    key = d["keys"][0]
+    assert key["target"] == "orders" and key["key"] == ["order_id"]
+    # The full trust-verdict block (the same projection the catalog emitters embed).
+    ki = key["key_integrity"]
+    assert ki["verdict"] == "untrustworthy"
+    assert ki["unique_at_grain"] is False
+    assert ki["max_fan_out"] == 2.0
+    assert ki["measure_fan_out"]["amount"] > 1.0
+    assert "safe_bound_conservative" in ki
+
+
+def test_certification_report_dict_clean_key_is_trustworthy():
+    from goldenmatch.semantic import certification_report_dict
+
+    frames = {"orders": pa.table({"order_id": [1, 2, 3], "amount": [1.0, 2.0, 3.0]})}
+    d = certification_report_dict(certify_semantic_model(_METRICFLOW, frames))
+    assert d["all_trustworthy"] is True and d["n_untrustworthy"] == 0
+    assert d["keys"][0]["key_integrity"]["verdict"] == "trustworthy"
+
+
+def test_rest_semantic_certify_endpoint(tmp_path):
+    from goldenmatch.api.server import _certify_semantic_model_endpoint
+
+    model = tmp_path / "sm.yml"
+    model.write_text(_METRICFLOW, encoding="utf-8")
+    data = tmp_path / "orders.csv"
+    data.write_text("order_id,amount\n1,10\n1,10\n2,5\n", encoding="utf-8")
+
+    out = _certify_semantic_model_endpoint(str(model), {"orders": str(data)}, False)
+    assert out["n_untrustworthy"] == 1 and out["all_trustworthy"] is False
+    assert out["keys"][0]["key_integrity"]["verdict"] == "untrustworthy"
+
+    # Error paths return {"error": ...} (→ 400), never raise.
+    assert "error" in _certify_semantic_model_endpoint(None, {"orders": str(data)}, False)
+    assert "error" in _certify_semantic_model_endpoint(str(model), {}, False)
+    assert "error" in _certify_semantic_model_endpoint(str(model), {"orders": "/nope.csv"}, False)
+
+
+def test_cli_certify_keys_json_and_gate(tmp_path):
+    from goldenmatch.cli.main import app
+    from typer.testing import CliRunner
+
+    model = tmp_path / "sm.yml"
+    model.write_text(_METRICFLOW, encoding="utf-8")
+    data = tmp_path / "orders.csv"
+    data.write_text("order_id,amount\n1,10\n1,10\n2,5\n", encoding="utf-8")
+
+    runner = CliRunner()
+    # --json + --fail-untrustworthy on an unsafe key: JSON on stdout, exit 1.
+    res = runner.invoke(
+        app,
+        ["certify-keys", str(model), "-d", f"orders={data}", "--json", "--fail-untrustworthy"],
+    )
+    assert res.exit_code == 1
+    import json as _json
+
+    payload = _json.loads(res.output)
+    assert payload["n_untrustworthy"] == 1
+    assert payload["keys"][0]["key_integrity"]["verdict"] == "untrustworthy"
+
+    # A clean key passes the gate (exit 0).
+    clean = tmp_path / "clean.csv"
+    clean.write_text("order_id,amount\n1,10\n2,5\n", encoding="utf-8")
+    ok = runner.invoke(
+        app,
+        ["certify-keys", str(model), "-d", f"orders={clean}", "--fail-untrustworthy"],
+    )
+    assert ok.exit_code == 0

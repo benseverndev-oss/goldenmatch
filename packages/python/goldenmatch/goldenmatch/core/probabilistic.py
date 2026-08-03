@@ -2567,15 +2567,23 @@ _REFIT_MIN_PAIRS = 200     # too few pairs -> histogram is noise, don't refit
 
 
 def _fs_refit_threshold_enabled() -> bool:
-    """Health-gated FS link-threshold refit. **Default OFF.**
+    """Health-gated FS link-threshold refit. **Default ON (2026-08-02).**
 
-    When ``GOLDENMATCH_FS_REFIT_THRESHOLD`` is truthy, the FS path picks the link
-    cutoff from the actual scored-pair distribution (bimodality-gated Otsu) instead
-    of the fixed default, correcting the over-merge the non-iterated path can't see.
-    Default-off is byte-identical. Flip only after the accuracy panel + the
-    household_hardneg target prove it, per the domain-comparators/v2 precedent."""
-    return os.environ.get("GOLDENMATCH_FS_REFIT_THRESHOLD", "0").lower() in (
-        "1", "true", "on", "yes", "enabled",
+    The FS path picks the link cutoff from the actual scored-pair distribution
+    (bimodality-gated valley + cluster-shape guard) instead of the fixed default,
+    correcting the over-merge the non-iterated path can't see.
+    ``GOLDENMATCH_FS_REFIT_THRESHOLD=0`` (or ``false``/``off``/``no``/``disabled``)
+    restores the fixed cutoff.
+
+    Flipped on after validation, per the domain-comparators/orthogonal-blocking
+    precedent: the guarded loop is a STRUCTURAL no-op on 0.50-optimal data (the
+    cluster-shape guard rejects any candidate that doesn't reduce over-merge) and
+    MEASURED flat + perf-neutral at scale (QIS 50k/100k dF1 +0.00000, wall within
+    noise), while recovering the over-merge failure mode the fixed cutoff can't
+    (household_hardneg +0.053, cotenant_hardneg +0.678). No measured regression on
+    any panel dataset."""
+    return os.environ.get("GOLDENMATCH_FS_REFIT_THRESHOLD", "1").lower() not in (
+        "0", "false", "off", "no", "disabled",
     )
 
 

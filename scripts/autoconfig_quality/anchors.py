@@ -133,6 +133,52 @@ def gen_household_hardneg(
     return df, gt
 
 
+def gen_cotenant_hardneg(
+    n_addresses: int = 300, seed: int = 29,
+) -> tuple[pl.DataFrame, set]:
+    """Shared-ADDRESS co-tenant hard-negative shape -- the SEVERE over-merge
+    counterpart to ``gen_household_hardneg`` (a MODERATE surname over-merge), with
+    a DIFFERENT cause: distinct people with DIFFERENT surnames sharing an
+    address (street + city), not a surname.
+
+    Each address = 2-3 DISTINCT people (own first + surname + dob) sharing the
+    street+city; each person = 1 original + 1-2 typo'd duplicates. The shared
+    address co-blocks the co-tenants and the FS scorer -- agreeing on street +
+    city -- places those NON-match pairs above the fixed 0.50 cutoff, so the
+    committed config over-merges HARD (measured F1 ~0.41, precision ~0.26; giant
+    address-collapsed clusters). Realistic: address alone can't dedupe people,
+    which is exactly why co-residence is a classic ER hard negative. The
+    threshold-refit loop recovers it (~0.41 -> ~1.00). Ground truth = same-person
+    pairs ONLY. Deterministic per ``seed``. Returns ``(df, gt_pairs)``."""
+    rng = random.Random(seed)
+    tagged: list[tuple[dict, int]] = []
+    eid = 0
+    for _a in range(n_addresses):
+        city = rng.choice(_CITY)
+        street = f"{rng.randrange(1, 300)} {rng.choice(_STREETS)}"
+        for _m in range(rng.choice([2, 3])):
+            first = rng.choice(_FIRST)
+            surname = rng.choice(_SURN)
+            dob = _dob(rng)
+            tagged.append(({"first_name": first, "surname": surname, "city": city,
+                            "street": street, "dob": dob}, eid))
+            for _ in range(rng.choice([1, 1, 2])):
+                tagged.append(({"first_name": _typo(first, rng),
+                                "surname": _typo(surname, rng), "city": city,
+                                "street": street, "dob": dob}, eid))
+            eid += 1
+    rng.shuffle(tagged)
+    df = pl.DataFrame([rec for rec, _ in tagged])
+    by_entity: dict[int, list[int]] = defaultdict(list)
+    for pos, (_, e) in enumerate(tagged):
+        by_entity[e].append(pos)
+    gt: set = set()
+    for positions in by_entity.values():
+        for a, b in combinations(sorted(positions), 2):
+            gt.add((a, b))
+    return df, gt
+
+
 # ── shared-email CRM anchor (multisource demote-phone / keep-shared-email) ─────
 def crm_df() -> pl.DataFrame:
     rows = []

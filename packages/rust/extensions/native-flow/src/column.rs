@@ -8,7 +8,6 @@
 //! Correctness is proven by parity (round-trip a Polars Series through `Column`);
 //! the speed win is a CI number (the dev box is too noisy to trust locally).
 
-use std::ffi::CString;
 use std::sync::Arc;
 
 use arrow::array::{
@@ -31,8 +30,6 @@ use crate::chain::{resolve_chain, ChainOps};
 use crate::csvio::OpRecord;
 use crate::numeric_columnar::{resolve_numeric, run_numeric_column};
 use crate::split_columnar::{resolve_split, run_split_column};
-
-const STREAM_NAME: &[u8] = b"arrow_array_stream";
 
 /// `apply_split` result: `(source_column, [(output_name, output_column)], records)`.
 type SplitCols = (Column, Vec<(String, Column)>, Vec<OpRecord>);
@@ -64,17 +61,19 @@ impl Column {
             .map_err(|_| PyTypeError::new_err("__arrow_c_stream__ did not return a PyCapsule"))?;
         // Take ownership of the FFI stream (per the Arrow PyCapsule protocol: move
         // it out, leaving a released/empty struct so the producer won't double-free).
-        #[allow(deprecated)] // pointer() is fine here; the checked variant's API churned
-        let ptr = capsule.pointer() as *mut FFI_ArrowArrayStream;
-        if ptr.is_null() {
-            return Err(PyValueError::new_err("null arrow_array_stream capsule"));
-        }
+        // `pointer_checked` (pyo3 0.29) validates the capsule name + guarantees the
+        // pointer is non-null, so it replaces the removed `pointer()` and its manual
+        // null check — the same accessor arrow-pyarrow's own consumer uses.
+        let stream_ptr = capsule
+            .pointer_checked(Some(c"arrow_array_stream"))
+            .map_err(|e| PyValueError::new_err(format!("invalid arrow_array_stream capsule: {e}")))?
+            .cast::<FFI_ArrowArrayStream>();
         // Ingest is a one-time boundary op (not the hot loop), and the raw FFI
         // pointer isn't Send, so run it under the GIL. `from_raw` performs the
         // C-Data-interface move (the producer's release is transferred), so the
         // capsule won't double-free.
         let _ = py;
-        let reader = unsafe { ArrowArrayStreamReader::from_raw(ptr) }
+        let reader = unsafe { ArrowArrayStreamReader::from_raw(stream_ptr.as_ptr()) }
             .map_err(|e| PyValueError::new_err(format!("arrow stream import: {e}")))?;
         let empty_type = reader.schema().field(0).data_type().clone();
         let mut chunks: Vec<ArrayRef> = Vec::new();
@@ -133,8 +132,10 @@ impl Column {
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         let reader = RecordBatchIterator::new(vec![Ok(batch)], schema);
         let stream = FFI_ArrowArrayStream::new(Box::new(reader));
-        let name = CString::new(STREAM_NAME).unwrap();
-        let capsule = PyCapsule::new(py, stream, Some(name))?;
+        // pyo3 0.29: `new` is deprecated in favor of `new_with_value`, which takes a
+        // `&'static CStr` name directly (no runtime CString alloc). The Arrow
+        // PyCapsule protocol mandates the fixed name "arrow_array_stream".
+        let capsule = PyCapsule::new_with_value(py, stream, c"arrow_array_stream")?;
         Ok(capsule.into_any())
     }
 

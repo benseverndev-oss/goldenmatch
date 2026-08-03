@@ -196,12 +196,21 @@ class TestMaybeRefitAcrossRoutes:
         assert t_list == t_tbl
         assert t_list > 0.50
 
-    def test_flag_off_is_noop_both_forms(self, monkeypatch):
+    def test_kill_switch_is_noop_both_forms(self, monkeypatch):
+        # The refit is DEFAULT-ON (2026-08-02); the `=0` kill-switch restores the
+        # fixed cutoff on both pair representations even on an over-merge shape.
         from goldenmatch.core.pipeline import _maybe_refit_link_threshold
-        monkeypatch.delenv("GOLDENMATCH_FS_REFIT_THRESHOLD", raising=False)
+        monkeypatch.setenv("GOLDENMATCH_FS_REFIT_THRESHOLD", "0")
         pairs = self._over_merge_pairs()
         assert _maybe_refit_link_threshold(self._MK(), 0.50, pairs=pairs) == 0.50
         assert _maybe_refit_link_threshold(self._MK(), 0.50, table=self._table(pairs)) == 0.50
+
+    def test_default_on_fires_on_over_merge(self, monkeypatch):
+        # DEFAULT (env unset) now refits: an over-merge valley raises the cutoff.
+        from goldenmatch.core.pipeline import _maybe_refit_link_threshold
+        monkeypatch.delenv("GOLDENMATCH_FS_REFIT_THRESHOLD", raising=False)
+        pairs = self._over_merge_pairs()
+        assert _maybe_refit_link_threshold(self._MK(), 0.50, pairs=pairs) > 0.50
 
     def test_explicit_user_threshold_is_respected(self, monkeypatch):
         # A caller-set mk.link_threshold must never be overridden by the refit.
