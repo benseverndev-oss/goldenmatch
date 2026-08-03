@@ -845,6 +845,94 @@ def test_batched_output_equals_resident_join(tmp_path, gapped):
     assert "__xform_x__" not in pl.read_parquet(got["dupes_path"]).columns
 
 
+def _partition_from_assignments(asn):
+    """Cluster partition (frozenset of frozensets of row_ids) from an
+    {__row_id__, __cluster_id__} assignments table -- cluster-id VALUES are
+    irrelevant, only the grouping is."""
+    import collections
+
+    rid = asn.column("__row_id__").to_pylist()
+    cid = asn.column("__cluster_id__").to_pylist()
+    groups = collections.defaultdict(set)
+    for r, c in zip(rid, cid):
+        groups[c].add(r)
+    return frozenset(frozenset(g) for g in groups.values())
+
+
+def test_external_wcc_array_and_dict_agree():
+    """The numpy array-UF (contiguous ids) and the dict-UF fallback (gapped ids)
+    produce the SAME partition on the same logical edge set. Locks the array-UF
+    rewrite against the reference dict path."""
+    import tempfile
+
+    import pyarrow as pa
+    from goldenmatch.backends.fs_out_of_core import (
+        _external_wcc_dict,
+        external_wcc_from_shards,
+        spill_pair_shard,
+    )
+
+    # Edges over contiguous ids {0..9}: components {0,1,2},{3,4},{5},{6,7,8,9}...
+    edges = [(0, 1), (1, 2), (3, 4), (6, 7), (7, 8), (8, 9)]
+    tbl = pa.table({
+        "id_a": pa.array([a for a, _ in edges], pa.int64()),
+        "id_b": pa.array([b for _, b in edges], pa.int64()),
+        "score": pa.array([0.9] * len(edges), pa.float64()),
+    })
+    d = tempfile.mkdtemp()
+    shard = spill_pair_shard(tbl, d, 0)
+
+    all_ids = range(0, 10)  # contiguous -> array-UF fast path
+    asn_arr, n_arr = external_wcc_from_shards([shard], all_ids, 100, None)
+    asn_dict, n_dict = _external_wcc_dict([shard], list(all_ids), None)
+
+    assert n_arr == n_dict == len(edges)
+    assert asn_arr.num_rows == asn_dict.num_rows == 10
+    assert _partition_from_assignments(asn_arr) == _partition_from_assignments(asn_dict)
+    # Singletons (5) present as their own cluster.
+    assert frozenset([5]) in _partition_from_assignments(asn_arr)
+    # Threshold filter drops the sub-cut edge on BOTH paths identically.
+    tbl2 = pa.table({
+        "id_a": pa.array([0, 3], pa.int64()), "id_b": pa.array([1, 4], pa.int64()),
+        "score": pa.array([0.9, 0.2], pa.float64()),
+    })
+    shard2 = spill_pair_shard(tbl2, d, 1)
+    a_arr, _ = external_wcc_from_shards([shard2], range(0, 5), 100, 0.5)
+    a_dict, _ = _external_wcc_dict([shard2], list(range(0, 5)), 0.5)
+    assert _partition_from_assignments(a_arr) == _partition_from_assignments(a_dict)
+
+
+def test_bucketed_parallel_scoring_parity(tmp_path, monkeypatch):
+    """Concurrent shard scoring (workers>1) yields byte-identical output to the
+    serial path (workers=1) -- the external WCC is invariant to edge/shard order,
+    so parallelism changes only the wall."""
+    import types
+
+    from goldenmatch.backends.fs_out_of_core import run_fs_dedupe_bucketed
+
+    df = _bigger_df()
+    mk = _make_probabilistic_mk()
+    blocking = BlockingConfig(
+        strategy="multi_pass",
+        passes=[BlockingKeyConfig(fields=["zip"]),
+                BlockingKeyConfig(fields=["last_name"])],
+    )
+    em = _train(df, blocking, mk)
+    cfg = types.SimpleNamespace(golden_rules=None)
+
+    monkeypatch.setenv("GOLDENMATCH_FS_BUCKET_SCORE_WORKERS", "1")
+    serial = run_fs_dedupe_bucketed(df, blocking, mk, em, cfg, str(tmp_path / "s"))
+    monkeypatch.setenv("GOLDENMATCH_FS_BUCKET_SCORE_WORKERS", "4")
+    par = run_fs_dedupe_bucketed(df, blocking, mk, em, cfg, str(tmp_path / "p"))
+
+    for k in ("unique_count", "dupes_count", "golden_count"):
+        assert serial[k] == par[k], k
+    assert (
+        _partition_set_from_parquet(serial["dupes_path"])
+        == _partition_set_from_parquet(par["dupes_path"])
+    )
+
+
 def test_bucketed_golden_chunked_write_parity(tmp_path, monkeypatch):
     """The golden build+write is chunked by cluster (`__cluster_id__ % n`) to
     bound the per-cluster survivorship transient at scale (the 50M OOM lever).
