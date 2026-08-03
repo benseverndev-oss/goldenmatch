@@ -48,6 +48,7 @@ from goldenmatch.semantic.cube import (
 from goldenmatch.semantic.discovery import (
     Dimension,
     EntityType,
+    Hierarchy,
     JoinCandidate,
     KeyCandidate,
     Measure,
@@ -57,6 +58,7 @@ from goldenmatch.semantic.discovery import (
     TableMeasures,
     apply_names,
     discover_entity_types,
+    discover_hierarchies,
     discover_joins,
     discover_keys,
     discover_measures,
@@ -171,6 +173,9 @@ __all__ = [
     "TableMeasures",
     # semantic-model discovery (Phase 5) — the orchestrator (assemble + emit + certify)
     "discover_semantic_model",
+    # semantic-model discovery (Phase 11) — dimension hierarchies via FD
+    "discover_hierarchies",
+    "Hierarchy",
     # semantic-model discovery (Phase 7) — optional advisory LLM namer
     "apply_names",
     "name_semantic_model",

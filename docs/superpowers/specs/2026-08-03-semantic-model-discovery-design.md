@@ -252,6 +252,29 @@ ProposedModel`.
     surface change — a compound grain flows through the existing metricflow entity /
     Cube `primary_key` dims / OSI `primary_key` list emit; nothing new to plumb.
 
+## Frontier: from certified structure to a full semantic layer
+
+The PR-1..10 arc derives the certified *structure* (grain, joins, entities, grain-gated
+measures/dimensions). These slices close the gap to a semantic layer a human would
+actually query. All are deterministic (no LLM) and default-on unless noted.
+
+11. **Dimension hierarchies via FD.** New `discovery/hierarchies.py`:
+    `discover_hierarchies(table, columns) -> list[Hierarchy]`. Among a table's dimension
+    columns, detect **near-functional-dependencies** (a finer level determines a coarser
+    one: `city → state → country`, threshold default 0.95 to survive dirty rows via a
+    group-by "fraction of determinant groups mapping to a single dependent value" test),
+    pick each column's **immediate parent** (the highest-cardinality coarser column it
+    determines), and extract maximal coarse→fine chains as `Hierarchy(table,
+    levels=[country, state, city], confidence)`. Deterministic → default-on, attached to
+    `ProposedTable.hierarchies` + `ProposedModel.hierarchies` and emitted into
+    `meta.goldenmatch.hierarchies` (Cube/OSI/MetricFlow — no dialect has a native
+    hierarchy slot in these dataclasses); `to_dict` includes it. Reuses the FD machinery
+    (`fd_identity_scores` is per-column; this adds the pairwise group-by check). Follow-on
+    frontier slices: metrics (ratios/derived/cumulative), time intelligence (time spine +
+    grains), cardinality (m:n bridge / 1:1), SCD dimensions, a model completeness score,
+    warehouse-scale derivation off `information_schema`, catalog reconciliation, and
+    real-LLM namer validation.
+
 Each PR is independently useful (PR-1 alone gives "certified key discovery per
 table"). The certifier is exercised from PR-1, so the "pre-graded" property holds at
 every step.

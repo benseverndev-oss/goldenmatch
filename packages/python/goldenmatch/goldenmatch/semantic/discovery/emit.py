@@ -32,6 +32,25 @@ def _trustworthy_joins(joins: list[Any]) -> list[Any]:
     return [j for j in joins if getattr(j, "is_trustworthy", False)]
 
 
+def _hierarchies_dicts(pt: Any) -> list[dict[str, Any]]:
+    return [{"levels": list(h.levels), "confidence": h.confidence}
+            for h in getattr(pt, "hierarchies", []) or []]
+
+
+def _gm_meta(pt: Any) -> dict[str, Any]:
+    """The `goldenmatch` meta block for a table: the key-integrity verdict + any
+    discovered dimension hierarchies. Empty dict when neither is present."""
+    from goldenmatch.core.key_integrity_certificate import certificate_verdict
+
+    gm: dict[str, Any] = {}
+    if pt.key is not None and pt.key.certificate is not None:
+        gm["key_integrity"] = certificate_verdict(pt.key.certificate)
+    hier = _hierarchies_dicts(pt)
+    if hier:
+        gm["hierarchies"] = hier
+    return gm
+
+
 def _build_metricflow(proposed_tables: list[Any]) -> str:
     """The original inline emit, unchanged: entities + sum-safe measures per table."""
     from goldenmatch.semantic import emit_metricflow_yaml, emit_semantic_model
@@ -41,15 +60,17 @@ def _build_metricflow(proposed_tables: list[Any]) -> str:
         if pt.key is None:
             continue
         safe_measures = [m.column for m in pt.measures if m.safe_to_sum]
-        models.append(
-            emit_semantic_model(
-                pt.table,
-                resolved_key=pt.key.columns[0],
-                entity_name=pt.entity_type or pt.table,
-                measures=safe_measures,
-                certificate=pt.key.certificate,
-            )
+        sm = emit_semantic_model(
+            pt.table,
+            resolved_key=pt.key.columns[0],
+            entity_name=pt.entity_type or pt.table,
+            measures=safe_measures,
+            certificate=pt.key.certificate,
         )
+        hier = _hierarchies_dicts(pt)
+        if hier:  # additive to the meta.goldenmatch block emit_semantic_model set
+            sm.setdefault("meta", {}).setdefault("goldenmatch", {})["hierarchies"] = hier
+        models.append(sm)
     return emit_metricflow_yaml(models) if models else ""
 
 
@@ -57,7 +78,6 @@ def _build_cube(proposed_tables: list[Any], joins: list[Any]) -> str:
     """One Cube per table: grain -> primary_key dimensions, discovered dimensions,
     sum-safe measures, the key-integrity verdict in `meta.goldenmatch`, and the
     trustworthy join graph as `many_to_one` CubeJoins on the FROM cube."""
-    from goldenmatch.core.key_integrity_certificate import certificate_verdict
     from goldenmatch.semantic.cube import (
         Cube,
         CubeDimension,
@@ -92,8 +112,9 @@ def _build_cube(proposed_tables: list[Any], joins: list[Any]) -> str:
         ]
         cube = Cube(name=pt.table, sql_table=pt.table, dimensions=dims,
                     measures=measures, joins=cube_joins)
-        if pt.key.certificate is not None:
-            cube.meta = {"goldenmatch": {"key_integrity": certificate_verdict(pt.key.certificate)}}
+        gm = _gm_meta(pt)
+        if gm:
+            cube.meta = {"goldenmatch": gm}
         cubes.append(cube)
 
     return emit_cube_yaml(cubes) if cubes else ""
@@ -116,6 +137,7 @@ def _build_osi(proposed_tables: list[Any], joins: list[Any]) -> str:
     datasets = []
     metrics: list[Any] = []
     key_integrity: dict[str, Any] = {}
+    hierarchies: dict[str, Any] = {}
     for pt in proposed_tables:
         if pt.key is None:
             continue
@@ -132,6 +154,9 @@ def _build_osi(proposed_tables: list[Any], joins: list[Any]) -> str:
                                          expression=f"SUM({pt.table}.{m.column})"))
         if pt.key.certificate is not None:
             key_integrity[pt.table] = certificate_verdict(pt.key.certificate)
+        hier = _hierarchies_dicts(pt)
+        if hier:
+            hierarchies[pt.table] = hier
 
     if not datasets:
         return ""
@@ -146,7 +171,12 @@ def _build_osi(proposed_tables: list[Any], joins: list[Any]) -> str:
         )
         for j in _trustworthy_joins(joins)
     ]
-    ext = {"goldenmatch": {"key_integrity": key_integrity}} if key_integrity else None
+    gm_ext: dict[str, Any] = {}
+    if key_integrity:
+        gm_ext["key_integrity"] = key_integrity
+    if hierarchies:
+        gm_ext["hierarchies"] = hierarchies
+    ext = {"goldenmatch": gm_ext} if gm_ext else None
     model = OsiModel(name="discovered", datasets=datasets,
                      relationships=relationships, metrics=metrics,
                      custom_extensions=ext)
