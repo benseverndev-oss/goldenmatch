@@ -4,6 +4,8 @@ All notable changes to GoldenCheck will be documented in this file.
 
 ## [Unreleased]
 
+## [3.3.0] - 2026-08-03
+
 ### Changed
 
 - **Baseline functional-dependency mining runs the native-gated FD kernels

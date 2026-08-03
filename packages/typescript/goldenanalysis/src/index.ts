@@ -10,6 +10,6 @@
  *   console.log(toMarkdown(report));
  */
 
-export const VERSION = "0.2.0";
+export const VERSION = "0.3.0";
 
 export * from "./core/index.js";
