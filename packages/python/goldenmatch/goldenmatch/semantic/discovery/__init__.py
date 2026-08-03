@@ -11,20 +11,30 @@ Design + phased plan:
 Phase 1: `discover_keys` — certified single-column key discovery per table.
 Phase 2: `discover_entity_types` — cross-table entity-type discovery.
 Phase 3: `discover_joins` — certified foreign-key join discovery across tables.
-Later phases (measure/dimension proposal, the `discover_semantic_model`
-orchestrator) build on these.
+Phase 4: `discover_measures` — grain-gated measure/dimension proposal per table.
+Later phases (the `discover_semantic_model` orchestrator) build on these.
 """
 from __future__ import annotations
 
 from goldenmatch.semantic.discovery.entities import EntityType, discover_entity_types
 from goldenmatch.semantic.discovery.joins import JoinCandidate, discover_joins
 from goldenmatch.semantic.discovery.keys import KeyCandidate, discover_keys
+from goldenmatch.semantic.discovery.measures import (
+    Dimension,
+    Measure,
+    TableMeasures,
+    discover_measures,
+)
 
 __all__ = [
+    "Dimension",
     "EntityType",
     "JoinCandidate",
     "KeyCandidate",
+    "Measure",
+    "TableMeasures",
     "discover_entity_types",
     "discover_joins",
     "discover_keys",
+    "discover_measures",
 ]

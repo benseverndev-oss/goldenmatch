@@ -46,12 +46,16 @@ from goldenmatch.semantic.cube import (
     parse_cube_models,
 )
 from goldenmatch.semantic.discovery import (
+    Dimension,
     EntityType,
     JoinCandidate,
     KeyCandidate,
+    Measure,
+    TableMeasures,
     discover_entity_types,
     discover_joins,
     discover_keys,
+    discover_measures,
 )
 from goldenmatch.semantic.key_integrity import (
     certify_key_integrity,
@@ -154,4 +158,9 @@ __all__ = [
     # semantic-model discovery (Phase 3) — certified join / FK discovery across tables
     "discover_joins",
     "JoinCandidate",
+    # semantic-model discovery (Phase 4) — grain-gated measure/dimension proposal
+    "discover_measures",
+    "Measure",
+    "Dimension",
+    "TableMeasures",
 ]

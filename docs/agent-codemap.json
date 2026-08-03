@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 442,
+      "module_count": 443,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7251,7 +7251,8 @@
           "imports": [
             "goldenmatch.semantic.discovery.entities",
             "goldenmatch.semantic.discovery.joins",
-            "goldenmatch.semantic.discovery.keys"
+            "goldenmatch.semantic.discovery.keys",
+            "goldenmatch.semantic.discovery.measures"
           ]
         },
         {
@@ -7311,6 +7312,23 @@
             "goldenmatch.core.key_integrity_certificate",
             "goldenmatch.core.quality",
             "goldenmatch.semantic.key_integrity"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.discovery.measures",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/discovery/measures.py",
+          "purpose": "Measure & dimension proposal (semantic-model discovery, Phase 4).",
+          "defines": [
+            "Dimension",
+            "Measure",
+            "TableMeasures",
+            "_grain_spec",
+            "discover_measures"
+          ],
+          "imports": [
+            "goldenmatch.core.autoconfig",
+            "goldenmatch.core.key_integrity_certificate",
+            "goldenmatch.semantic.discovery.keys"
           ]
         },
         {

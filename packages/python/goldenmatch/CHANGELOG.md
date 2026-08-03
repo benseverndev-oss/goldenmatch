@@ -289,6 +289,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   discovery arc (design:
   `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
   `tests/test_semantic_discovery_entities.py`.
+- **Semantic-model discovery — grain-gated measure/dimension proposal (Phase 4).**
+  `goldenmatch.semantic.discover_measures(table, key=…)` proposes the measures +
+  dimensions a semantic model would declare over a table, and gates each measure's
+  `SUM`-safety on the grain key's Phase-1 CERTIFICATE. `COUNT`/`AVG`/`MIN`/`MAX` are
+  always proposed (fan-out-independent); `SUM` is proposed ONLY when the grain
+  certified clean (`max_fan_out == 1.0`) — on a fanned-out (or unknown) grain the
+  measure is returned with `safe_to_sum == False` and `SUM` withheld, the loud "this
+  would double-count" signal. Dimensions are the low-cardinality categorical columns +
+  dates + geo; the grain and id/reference columns are neither measure nor dimension.
+  So the certifier that graded the key directly grades the measures. The fourth slice
+  of the semantic-model discovery arc (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discovery_measures.py`.
 
 ### Changed
 - **FS out-of-core streaming: single `resolve_fs_block_source` knob + DuckDB
