@@ -381,6 +381,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   slice of the semantic-model discovery arc (design:
   `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
   `tests/test_semantic_discovery_cube_osi_emit.py`.
+- **Semantic-model discovery — compound + self-referential keys (Phase 10).** Lifts the
+  single-column restriction on the discovery side (the certifier, `KeyCandidate.columns`,
+  and all three emit paths already carried multi-column keys). `discover_keys` gains a
+  **fallback pairs** compound search: when no single-column candidate is unique at grain
+  (the grain double-counts), it certifies 2-column combinations of the key-eligible
+  columns (highest-cardinality first, pool-capped) and admits the trustworthy compounds
+  (`signals=["compound"]`), re-ranked trustworthy-first — so a `(order_id, product_id)`
+  order-items grain is discovered where neither column is unique alone. `discover_joins`
+  lifts the self-join exclusion for **self-referential single-column FKs** (a column whose
+  values are a subset of its OWN table's certified key, `fk_col != key_col`, e.g.
+  `employees.manager_id → employees.employee_id`; the self side reuses the table's key
+  certificate since `certify_cube_joins` can't certify a cube joined to itself). Compound
+  grains emit natively in Cube (`primary_key` dims) / OSI (`primary_key` list); MetricFlow,
+  which has no composite primary entity, declares the first column (a documented limit).
+  Compound (multi-column) FKs and 3+-column keys remain follow-ons. No surface change. The
+  tenth slice of the semantic-model discovery arc (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discovery_compound_selfref.py`.
 
 ### Changed
 - **FS out-of-core streaming: single `resolve_fs_block_source` knob + DuckDB

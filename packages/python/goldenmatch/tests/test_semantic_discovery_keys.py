@@ -58,12 +58,13 @@ def test_numeric_and_dimension_columns_are_not_proposed_as_keys() -> None:
 
 
 def test_no_clean_key_returns_only_untrustworthy_candidates() -> None:
-    # A table whose every id-shaped column duplicates → the loud "this grain will
-    # double-count" signal: proposed candidates exist, none trustworthy.
+    # A table with a fully DUPLICATED row → no unique key at any arity (not even the
+    # fallback compound), the loud "this grain will double-count" signal: proposed
+    # candidates exist, none trustworthy.
     t = pa.table(
         {
-            "order_id": ["o1", "o1", "o2"],   # duplicated
-            "customer_id": ["c1", "c2", "c2"],  # duplicated
+            "order_id": ["o1", "o1", "o2"],     # duplicated
+            "customer_id": ["c1", "c1", "c2"],  # (o1, c1) repeats -> compound isn't unique either
         }
     )
     cands = discover_keys(t)
