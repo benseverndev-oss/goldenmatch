@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 438,
+      "module_count": 440,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7134,6 +7134,7 @@
             "goldenmatch.semantic.certify",
             "goldenmatch.semantic.crosswalk",
             "goldenmatch.semantic.cube",
+            "goldenmatch.semantic.discovery",
             "goldenmatch.semantic.key_integrity",
             "goldenmatch.semantic.metricflow",
             "goldenmatch.semantic.osi",
@@ -7241,6 +7242,30 @@
             "goldenmatch.semantic.blocking",
             "goldenmatch.semantic.key_integrity",
             "goldenmatch.semantic.metricflow"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.discovery",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/discovery/__init__.py",
+          "purpose": "Semantic-model discovery (the generative half of the semantic wedge).",
+          "imports": [
+            "goldenmatch.semantic.discovery.keys"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.discovery.keys",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/discovery/keys.py",
+          "purpose": "Certified key discovery (semantic-model discovery, Phase 1).",
+          "defines": [
+            "KeyCandidate",
+            "_to_polars",
+            "discover_keys"
+          ],
+          "imports": [
+            "goldenmatch.core.autoconfig",
+            "goldenmatch.core.key_integrity_certificate",
+            "goldenmatch.core.quality",
+            "goldenmatch.semantic.key_integrity"
           ]
         },
         {

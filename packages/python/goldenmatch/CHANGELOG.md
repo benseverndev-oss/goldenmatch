@@ -242,6 +242,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   gate, whose table now shows the pass/fail verdict + undercount. So certifying,
   gating, and the catalog write-back all speak one contract. Tests in
   `tests/test_certify_semantic_model.py`.
+- **Semantic-model discovery — certified key discovery (Phase 1).**
+  `goldenmatch.semantic.discover_keys(table)` proposes a table's candidate entity
+  keys from three cheap signals (identifier col_type / near-unique cardinality /
+  functional-dependency determinant via `fd_identity_scores`) and PROVES each with
+  `certify_key_integrity` — so a returned `KeyCandidate` is pre-graded
+  (`is_trustworthy`, fan-out, the certificate). Ranked trustworthy-first; a table
+  with no clean key returns only untrustworthy candidates (the loud "this grain
+  double-counts" signal). Numeric/date/geo/description columns are excluded from
+  the key-cardinality signal (they're measures/dimensions, not keys). The first
+  slice of the semantic-model discovery arc (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`) — the
+  generative half of the semantic wedge, where discovery is hypothesis generation
+  and the certifier is the falsification test. Single-column keys for this slice;
+  compound/grain-ambiguous keys + the entity/join/measure phases + the
+  `discover_semantic_model` orchestrator are the following PRs. Tests:
+  `tests/test_semantic_discovery_keys.py`.
 
 ### Changed
 - **FS out-of-core streaming: single `resolve_fs_block_source` knob + DuckDB
