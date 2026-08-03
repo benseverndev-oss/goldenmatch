@@ -105,6 +105,22 @@ def _fs_out_of_core_legacy_flag() -> bool:
     )
 
 
+def _fs_xform_per_shard_enabled() -> bool:
+    """Lever 1 (frame-residency): ``GOLDENMATCH_FS_XFORM_PER_SHARD=1`` makes the
+    ``bucketed`` FS route skip the whole-frame ``__xform_`` materialization (so the
+    resident ``base`` is ~40% narrower ⇒ lower peak ⇒ higher single-box max scale)
+    and recompute each matchkey transform PER BUCKET SHARD (~1/64 of the frame) at
+    score time instead. Default OFF (byte-identical to the wide-base path: the
+    native FS fast path prefers the precomputed ``__xform_`` column, a −82%
+    ``bucket_score`` win the wide base keeps). Measurement-gated — trades that
+    per-call win for a lower peak; the A/B must show the peak win outweighs the
+    per-shard recompute. Spec:
+    ``docs/superpowers/specs/2026-08-03-fs-frame-residency-disk-spill-design.md``."""
+    return os.environ.get("GOLDENMATCH_FS_XFORM_PER_SHARD", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
 def _fs_spill_force_shard() -> bool:
     """``GOLDENMATCH_FS_SPILL_FORCE_SHARD=1`` makes ``run_fs_dedupe_spill`` SKIP the
     fused-kernel short-circuit and always take the edge-shard spill path
@@ -1868,6 +1884,15 @@ def run_fs_dedupe_bucketed(
         _fw = _tf(_fw.native.collect())
     base = _fw.to_arrow()
 
+    # Lever 1 (frame-residency): when the caller skipped the whole-frame
+    # __xform_ materialization (GOLDENMATCH_FS_XFORM_PER_SHARD; pipeline passes a
+    # narrow base), the base carries NO __xform_ columns. Detect that and
+    # recompute the transforms PER SHARD (~1/64 of the frame) below so the native
+    # fast path still engages — byte-identical pairs, ~40% narrower resident base.
+    _narrow = _fs_xform_per_shard_enabled() and not any(
+        c.startswith("__xform_") for c in base.column_names
+    )
+
     passes = _bucketed_passes(blocking_config)
     shard_dir = _tempfile.mkdtemp(prefix="gm_fs_bucketed_")
     try:
@@ -1907,6 +1932,16 @@ def run_fs_dedupe_bucketed(
             single_pass = _BlockingConfig(strategy="static", keys=[passes[pi]])
             with pa.memory_map(sp, "r") as src:
                 bucket_tbl = pa.ipc.open_file(src).read_all()
+            if _narrow and bucket_tbl.num_rows >= 2:
+                # Lever 1: recompute __xform_ on this shard so score_buckets_arrow's
+                # native fast path engages exactly as on a wide base. The shard is
+                # ~1/64 of the frame, so the recompute is bounded and transient.
+                from goldenmatch.core.matchkey import (
+                    precompute_matchkey_transforms_frame,
+                )
+                bucket_tbl = precompute_matchkey_transforms_frame(
+                    _tf(bucket_tbl), [mk]
+                ).native
             if bucket_tbl.num_rows >= 2:
                 score_buckets_arrow(
                     bucket_tbl, single_pass, mk, set(matched_pairs),
@@ -1939,6 +1974,10 @@ def run_fs_dedupe_bucketed(
     res["bucketed"] = True
     res["fused"] = False
     res["output_dir"] = out_dir
+    # Lever 1 A/B mechanism check: resident base width (narrow arm drops the
+    # ~40% __xform_ block) + whether per-shard recompute was active.
+    res["base_ncols"] = base.num_columns
+    res["xform_per_shard"] = _narrow
     return res
 
 
