@@ -185,6 +185,69 @@ def attribute_direction_grouped(
     }
 
 
+def contribution_summary(
+    contribs: np.ndarray,
+    names: list[str],
+    actual: np.ndarray,
+    *,
+    tol: float = 1e-3,
+) -> dict[str, Any]:
+    """Summarize an EXACT per-component decomposition of a linear readout.
+
+    ``contribs[i, j]`` is component ``j``'s contribution to the decision
+    projection for pair ``i``; ``actual[i]`` is the projection actually observed.
+    Because a transformer's residual stream is a sum and the readout is linear,
+    these must agree to floating-point error -- that is the property that makes
+    this an exact account of every decision rather than a fitted approximation.
+    The reconstruction error is therefore reported as a CHECK, not a metric to
+    optimize: if ``max_abs_err`` is not ~0 the decomposition is wrong, and no
+    ranking computed from it means anything.
+
+    Also reports concentration -- the cumulative share of total |contribution|
+    held by the top-k components -- which is what decides whether a legible
+    circuit exists or the computation is spread across everything.
+    """
+    contribs = np.asarray(contribs, dtype=np.float64)
+    actual = np.asarray(actual, dtype=np.float64)
+    if contribs.shape[0] != actual.shape[0]:
+        raise ValueError("contribs and actual must have the same #rows")
+    if contribs.shape[1] != len(names):
+        raise ValueError("contribs columns must match names")
+
+    recon = contribs.sum(axis=1)
+    err = np.abs(recon - actual)
+    scale = float(np.abs(actual).mean()) or 1.0
+
+    mean_abs = np.abs(contribs).mean(axis=0)
+    order = np.argsort(-mean_abs)
+    total = float(mean_abs.sum()) or 1.0
+    cum = np.cumsum(mean_abs[order]) / total
+
+    return {
+        "n_pairs": int(contribs.shape[0]),
+        "n_components": len(names),
+        "exact": bool(err.max() < tol * scale),
+        "max_abs_err": float(err.max()),
+        "mean_abs_err": float(err.mean()),
+        "rel_err": float(err.max() / scale),
+        "ranking": [
+            {
+                "component": names[j],
+                "mean": float(contribs[:, j].mean()),
+                "mean_abs": float(mean_abs[j]),
+                "std": float(contribs[:, j].std()),
+            }
+            for j in order
+        ],
+        "concentration": {
+            f"top_{k}": float(cum[min(k, len(cum)) - 1])
+            for k in (1, 3, 5, 10, 20, 50)
+            if k <= len(cum)
+        },
+        "n_for_90pct": int(np.searchsorted(cum, 0.90) + 1),
+    }
+
+
 def ablation_flip_profile(
     base_p: np.ndarray,
     combos: list[tuple[str, ...]],

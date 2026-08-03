@@ -14,6 +14,7 @@ from interp.field_attribution import (  # noqa: E402
     affine_r2,
     attribute_direction,
     attribution_summary,
+    contribution_summary,
     corruption_matched_pairs,
     field_agreements,
     fixed_weight_score,
@@ -253,6 +254,53 @@ class TestAffineR2:
 
         with pytest.raises(ValueError):
             affine_r2(np.zeros(5), np.zeros(4), np.zeros(3), np.zeros(3))
+
+
+class TestContributionSummary:
+    def test_exact_decomposition_is_recognised(self):
+        rng = np.random.default_rng(0)
+        c = rng.standard_normal((50, 4))
+        r = contribution_summary(c, list("abcd"), c.sum(axis=1))
+        assert r["exact"] is True
+        assert r["max_abs_err"] < 1e-9
+
+    def test_a_missing_term_is_caught(self):
+        # dropping a real component must fail the check, not degrade a metric
+        rng = np.random.default_rng(1)
+        c = rng.standard_normal((50, 4))
+        actual = c.sum(axis=1) + rng.standard_normal(50)  # unexplained term
+        r = contribution_summary(c, list("abcd"), actual)
+        assert r["exact"] is False
+        assert r["max_abs_err"] > 0.1
+
+    def test_ranks_by_mean_absolute_contribution(self):
+        c = np.zeros((10, 3))
+        c[:, 0] = 0.1
+        c[:, 1] = 5.0
+        c[:, 2] = -2.0
+        r = contribution_summary(c, ["small", "big", "mid"], c.sum(axis=1))
+        assert [e["component"] for e in r["ranking"]] == ["big", "mid", "small"]
+        assert r["ranking"][1]["mean"] < 0  # sign preserved separately from magnitude
+
+    def test_concentration_detects_a_sparse_circuit(self):
+        c = np.zeros((20, 10))
+        c[:, 3] = 10.0  # one component carries essentially everything
+        c[:, 7] = 0.01
+        r = contribution_summary(c, [f"c{i}" for i in range(10)], c.sum(axis=1))
+        assert r["concentration"]["top_1"] > 0.99
+        assert r["n_for_90pct"] == 1
+
+    def test_concentration_detects_a_dense_computation(self):
+        c = np.full((20, 10), 1.0)
+        r = contribution_summary(c, [f"c{i}" for i in range(10)], c.sum(axis=1))
+        assert r["concentration"]["top_1"] == pytest.approx(0.1)
+        assert r["n_for_90pct"] == 9
+
+    def test_shape_validation(self):
+        with pytest.raises(ValueError):
+            contribution_summary(np.zeros((5, 3)), list("abc"), np.zeros(4))
+        with pytest.raises(ValueError):
+            contribution_summary(np.zeros((5, 3)), list("ab"), np.zeros(5))
 
 
 class TestAblationFlipProfile:

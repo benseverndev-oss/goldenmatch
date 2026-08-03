@@ -94,6 +94,7 @@ standing discipline: **when a number looks too good, hunt the confound first.**
   `layer2_abstraction_L14.json`, `layer_early_exit.json`, `truncate_adapt.json`,
   `eval_trunc{28,16,12}_v2.json`, `leniency_dial.json`,
   `causal_attribution_{hard,random,walmart_amazon}_seed{0,1,2}.json`,
+  `direct_attribution_L14.json`,
   `faithfulness_{cluster,record}-disjoint_{hard,random}_seed{0..4}[_logit].json`,
   `faithfulness_deepmatcher-train-test_walmart_amazon_seed0.json`. Modal token is set
   locally. The product runs read the already-fetched DeepMatcher tables at
@@ -622,6 +623,85 @@ The cross-domain replication of the k=1 and k≤2 numbers is what makes this a c
 the models rather than about the person probe. The honest headline: **a single-field
 counterfactual exists for roughly one decision in five, in both domains tested.**
 
+## Exact direct attribution — the first mechanistic (not correlational) result
+
+Everything above this section estimates what the model *might* be doing. This states it.
+
+A transformer's residual stream is a **sum** (embeddings + every attention head's output
++ every MLP's output) and the decision readout is a **linear projection** onto the
+causally-validated match direction. So each component's contribution is exactly
+computable. `modal_interp.py::direct_attribution` decomposes to per-layer-MLP and
+per-attention-HEAD granularity (splitting `o_proj` by head — exact, since it is linear
+and bias-free): **183 components for the layer-14 readout.**
+
+**Exactness verified, not assumed:** contributions sum to the observed projection with
+`max_abs_err = 5.7e-03`, **relative error 5.4e-04** — consistent with fp16 accumulation
+over 183 terms. There is no R² here because nothing is fitted; the reconstruction error
+is a *correctness check*, and the stage prints a warning and invalidates its own ranking
+if it fails.
+
+### Ranking by magnitude was wrong — a methodological catch
+
+The first ranking put `L5.mlp` on top (mean −1.6898). But its `mean_abs` was **also**
+1.6898 — identical, meaning it contributes the same sign and magnitude on *every* pair.
+That is a constant offset, not decision logic. Ranking by magnitude conflates "large
+fixed bias" with "carries the decision."
+
+**98 of 183 components are near-constant** (std < 5% of |mean|), including most of the
+largest by magnitude: `L5.mlp` (var/mag 0.010), `L6.mlp` (0.014), `L3.mlp` (0.015),
+`L12.attn.h9` (0.030). Most of the projection's *magnitude* is an operating-point offset;
+the decision lives in a much smaller varying part.
+
+### Re-ranked by variance — where the decision actually varies
+
+| component | mean | std |
+|---|---|---|
+| **`L13.mlp`** | +1.1598 | **0.1706** |
+| `L11.mlp` | −0.2340 | 0.0745 |
+| `L12.mlp` | −0.4846 | 0.0600 |
+| `L10.mlp` | +0.9821 | 0.0510 |
+| `L13.attn.h11` | +0.2636 | 0.0470 |
+| `L13.attn.h9` | +0.6052 | 0.0378 |
+| `L13.attn.h5` | +0.2351 | 0.0329 |
+
+**The varying computation concentrates in layers 10–13** — independently matching the
+~layer-13 formation point found by the per-layer probes, by a completely different
+method. Two independent routes to the same answer is the strongest internal
+corroboration in this thread.
+
+### But there is no sparse circuit
+
+| top-k by std | share of total varying signal |
+|---|---|
+| 1 | 0.126 |
+| 5 | 0.297 |
+| 10 | 0.404 |
+| 20 | 0.543 |
+| 50 | 0.775 |
+| **89 of 183** | **0.90** |
+
+Late-layer MLPs dominate over attention heads, and the head-level "field comparison
+circuit" hypothesis is **not** supported by this evidence — no small set of heads carries
+the decision. Component-level computation is dense, mirroring the dense *input*
+dependence found by multi-field ablation.
+
+**What this establishes and what it doesn't.** Establishes: an exact, complete,
+per-decision account exists and is cheap — your Layer 1 in the strict sense, verified to
+floating-point. Does not establish: that the account is *compressible* to something
+human-sized. 89 components is exact and unreadable, which is precisely the gap the
+abstraction layer has to close, and now the gap is measured rather than assumed.
+
+**Immediate methodological caveat:** `std` measures variability, not decision-relevance —
+a component could vary with input features irrelevant to the verdict. The right next
+measure is each component's **covariance with the decision** (or with the label), which
+needs the per-pair contribution matrix persisted rather than just its summary. That is
+the first refinement, and it will shrink the 89.
+
+**Standing caveat:** these are DIRECT contributions. Indirect effects (one head changing
+another's attention pattern) are real causal paths that direct attribution assigns to the
+downstream component. Path patching is required for those; a decomposition exact on
+direct paths and silent on indirect ones is complete-looking and wrong.
+
 ## Next steps (highest leverage first)
 
 1. **Find a call site for the ER-matcher explainer.** `score_and_explain` /
@@ -640,16 +720,24 @@ counterfactual exists for roughly one decision in five, in both domains tested.*
    0.33 vs 0.26 for the legible table (above) — a real edge on every seed, but small
    enough that two modes may not be worth the surface area. A product call, not a
    measurement one; the measurement is done.
-4. **Split flippability by base verdict.** The multi-field ceilings are confounded by
+4. **Rank components by covariance with the decision, not variance.** Direct
+   attribution is exact but its ranking currently uses `std`, which measures
+   variability rather than decision-relevance. Persist the per-pair contribution matrix
+   and rank by covariance with the projection/label. Cheap, and it is what turns "89
+   components" into a real circuit size.
+5. **Path patching on the survivors.** Direct attribution is silent on indirect effects.
+   Until those are measured the component ranking is a lower bound on involvement, not
+   the circuit.
+6. **Split flippability by base verdict.** The multi-field ceilings are confounded by
    class balance (person 38% match verdicts, walmart 14%) because ablation can only
    remove evidence. Reporting the curve separately for match- and no-match-verdict pairs
    makes the two domains comparable and is a small change to `ablation_flip_profile`.
-5. **Perf for real volume.** Prefix-cache the system rubric (biggest CPU win) + wire the
+7. **Perf for real volume.** Prefix-cache the system rubric (biggest CPU win) + wire the
    logit readout into the scorer for clean P(match); benchmark on GPU.
-6. **Benchmark head-to-head, honestly.** Against the ER landscape on *held-out* data
+8. **Benchmark head-to-head, honestly.** Against the ER landscape on *held-out* data
    (walmart, not the contaminated in-training sets), reporting competitive-local, not
    SOTA. This is the step that turns "appears to address" into "demonstrably addresses."
-7. **Multi-source-corpus rerun** of the truncate/strip sweep so the walmart absolutes
+9. **Multi-source-corpus rerun** of the truncate/strip sweep so the walmart absolutes
    match the shipped model (expected: same collapse pattern, higher baseline).
 
 ## The one-paragraph version

@@ -1490,6 +1490,159 @@ def causal_attribution(per_class: int = 200, seed: int = 0, negatives: str = "ha
     print(f"[done] causal attribution -> {out_path}")
 
 
+# --------------------------------------------------------------------------- #
+# stage 9: EXACT direct attribution of the decision to model components         #
+# --------------------------------------------------------------------------- #
+@app.function(image=_image, gpu=GPU, timeout=60 * 60, volumes={"/out": _out_vol})
+def direct_attribution(layer: int = 14, per_class: int = 200, seed: int = 0,
+                       negatives: str = "hard") -> None:
+    """Decompose each decision into EXACT per-component contributions.
+
+    This is mechanistic rather than correlational, and the difference is the
+    point. A transformer's residual stream is a SUM -- embeddings plus every
+    attention head's output plus every MLP's output -- and the decision readout
+    is a linear projection onto the causally-validated match direction. So each
+    component's contribution to that projection is exactly computable, and the
+    contributions must sum to the observed projection to floating-point error.
+
+    Nothing here is fitted. There is no R^2, because there is no approximation:
+    the reconstruction error is a CORRECTNESS CHECK on the decomposition, not a
+    quality score. Every earlier per-field number in this thread estimated what
+    the model might be doing; this one states it.
+
+    Decomposes to per-layer MLP and per-ATTENTION-HEAD granularity (splitting
+    ``o_proj`` by head, which is exact since it is linear and bias-free), because
+    a circuit -- if there is one -- lives at head level.
+
+    Caveat recorded in the artifact: these are DIRECT contributions to the
+    readout. Indirect effects (one head changing another's attention pattern)
+    are real causal paths that direct attribution assigns to the downstream
+    component. Path patching is required for those; a decomposition that is exact
+    on direct paths and silent on indirect ones is complete-looking and wrong.
+    -> interp/direct_attribution_L{layer}.json
+    """
+    import json
+    import os
+    import sys
+
+    import numpy as np
+    import torch
+
+    sys.path.insert(0, "/root/interp")
+    from field_attribution import contribution_summary
+
+    tok, model = _load_model()
+    dev = model.device
+    pairs, rows = _mine(per_class, negatives, seed)
+    y = np.array([t for *_, t in pairs])
+    prompts = [_prompt(tok, rows[a], rows[b]) + '{"match":' for a, b, _ in pairs]
+
+    cfg = model.config
+    n_heads = cfg.num_attention_heads
+    head_dim = getattr(cfg, "head_dim", cfg.hidden_size // n_heads)
+    print(f"[direct] layers={cfg.num_hidden_layers} heads={n_heads} "
+          f"head_dim={head_dim} readout_layer={layer}", flush=True)
+
+    def resid_at(layer_idx: int) -> np.ndarray:
+        out = []
+        for i in range(0, len(prompts), 16):
+            enc = tok(prompts[i : i + 16], return_tensors="pt", padding=True).to(dev)
+            with torch.no_grad():
+                h = model(**enc, output_hidden_states=True).hidden_states[layer_idx]
+            out.append(h[:, -1, :].float().cpu().numpy())
+        return np.concatenate(out, 0)
+
+    # pass 1: the causally-validated match direction (same recipe as layer2)
+    R = resid_at(layer)
+    d = R[y == 1].mean(0) - R[y == 0].mean(0)
+    d = d / (np.linalg.norm(d) + 1e-9)
+    actual = R @ d
+    d_t = torch.tensor(d, dtype=torch.float32, device=dev)
+
+    # pass 2: capture every additive term feeding the residual at `layer`
+    names: list[str] = ["embed"]
+    for L in range(layer):
+        names += [f"L{L}.attn.h{h}" for h in range(n_heads)] + [f"L{L}.mlp"]
+    contribs = np.zeros((len(prompts), len(names)), dtype=np.float64)
+
+    store: dict[str, torch.Tensor] = {}
+    hooks = []
+
+    def mk_mlp_hook(L: int):
+        def hook(_m, _i, out):
+            store[f"L{L}.mlp"] = (out[0] if isinstance(out, tuple) else out)[:, -1, :]
+        return hook
+
+    def mk_oproj_hook(L: int):
+        # o_proj INPUT is the concatenated per-head outputs; splitting the weight
+        # by head gives each head's exact additive contribution to the residual.
+        def hook(mod, inp, _out):
+            x = inp[0][:, -1, :]  # (B, n_heads*head_dim)
+            W = mod.weight  # (hidden, n_heads*head_dim)
+            for h in range(n_heads):
+                sl = slice(h * head_dim, (h + 1) * head_dim)
+                store[f"L{L}.attn.h{h}"] = x[:, sl] @ W[:, sl].T
+        return hook
+
+    for L in range(layer):
+        blk = model.model.layers[L]
+        hooks.append(blk.mlp.register_forward_hook(mk_mlp_hook(L)))
+        hooks.append(blk.self_attn.o_proj.register_forward_hook(mk_oproj_hook(L)))
+
+    col = {n: j for j, n in enumerate(names)}
+    for i in range(0, len(prompts), 16):
+        enc = tok(prompts[i : i + 16], return_tensors="pt", padding=True).to(dev)
+        store.clear()
+        with torch.no_grad():
+            h0 = model(**enc, output_hidden_states=True).hidden_states[0][:, -1, :]
+        n = h0.shape[0]
+        contribs[i : i + n, col["embed"]] = (h0.float() @ d_t).cpu().numpy()
+        for name, v in store.items():
+            contribs[i : i + n, col[name]] = (v.float() @ d_t).cpu().numpy()
+        if (i // 16) % 5 == 0:
+            print(f"[direct] {i + n}/{len(prompts)}", flush=True)
+    for hk in hooks:
+        hk.remove()
+
+    summary = contribution_summary(contribs, names, actual)
+    print(f"[direct] EXACTNESS: max_abs_err={summary['max_abs_err']:.3e} "
+          f"rel={summary['rel_err']:.3e} exact={summary['exact']}", flush=True)
+    if not summary["exact"]:
+        print("[direct] WARNING: decomposition does NOT reconstruct the projection; "
+              "the ranking below is meaningless until this is fixed", flush=True)
+    print(f"[direct] concentration: {summary['concentration']}", flush=True)
+    print(f"[direct] components for 90% of |contribution|: "
+          f"{summary['n_for_90pct']} / {len(names)}", flush=True)
+    for e in summary["ranking"][:20]:
+        print(f"[direct]   {e['component']:<16} mean={e['mean']:+.4f} "
+              f"mean_abs={e['mean_abs']:.4f}", flush=True)
+
+    payload = {
+        "method": f"exact direct attribution to the layer-{layer} match direction",
+        "caveat": ("DIRECT contributions only -- indirect effects (a head changing "
+                   "another head's attention pattern) are attributed to the "
+                   "downstream component. Use path patching for those."),
+        "layer": layer, "negatives": negatives, "seed": seed,
+        "n_heads": n_heads, "head_dim": head_dim,
+        "n_pairs": len(pairs), "summary": summary,
+    }
+    os.makedirs("/out/interp", exist_ok=True)
+    out_path = f"/out/interp/direct_attribution_L{layer}.json"
+    with open(out_path, "w") as fh:
+        json.dump(payload, fh, indent=2)
+    _out_vol.commit()
+    print(f"[done] direct attribution -> {out_path}")
+
+
+@app.local_entrypoint()
+def direct(layer: int = 14, per_class: int = 200, seed: int = 0,
+           negatives: str = "hard") -> None:
+    """Exact per-component decomposition of the decision (mechanistic, not fitted)."""
+    direct_attribution.remote(
+        layer=layer, per_class=per_class, seed=seed, negatives=negatives
+    )
+
+
 @app.local_entrypoint()
 def attribution(per_class: int = 200, seed: int = 0, negatives: str = "hard",
                 dataset: str = "person", max_order: int = 1) -> None:
