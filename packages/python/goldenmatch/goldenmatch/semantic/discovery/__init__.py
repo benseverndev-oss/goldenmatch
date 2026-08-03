@@ -36,6 +36,7 @@ from goldenmatch.semantic.discovery.model import (
 from goldenmatch.semantic.discovery.namer import (
     NamerBackend,
     NameSuggestion,
+    apply_names,
     name_semantic_model,
 )
 
@@ -55,5 +56,6 @@ __all__ = [
     "discover_keys",
     "discover_measures",
     "discover_semantic_model",
+    "apply_names",
     "name_semantic_model",
 ]

@@ -343,10 +343,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   provider detection (the `goldenmatch[llm]` extra) and **abstains** (no names, never
   raises) when no provider/key resolves. Opt-in per call
   (`discover_semantic_model(..., name=False)`, CLI `discover-model --name`, MCP/REST
-  `name` bool); `GOLDENMATCH_SEMANTIC_NAMER=0` is a hard kill-switch. The seventh and
-  final slice of the semantic-model discovery arc (design:
+  `name` bool); `GOLDENMATCH_SEMANTIC_NAMER=0` is a hard kill-switch. The seventh
+  slice of the semantic-model discovery arc (design:
   `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
   `tests/test_semantic_discovery_namer.py`, `tests/test_semantic_discover_surface.py`.
+- **Semantic-model discovery — applied catalog `--apply-names` (Phase 8).** An opt-in
+  mode that writes the namer's **verified** names from `ProposedModel.naming` into the
+  emitted MetricFlow YAML: entity + measure business names land in native `label:`
+  fields; dimension-column + value-glossary names (`status='C'` → "Churned") land in a
+  `meta.goldenmatch.glossary` block (a sibling of the key-integrity verdict already in
+  `meta.goldenmatch`). **Post-certification + cosmetic:** structural discovery, emit,
+  and certification run unchanged; the labels/meta are applied to the final YAML
+  afterward and never touch grain/joins/measures, so the certification verdict is
+  untouched. Only `verified=True` names are applied; `apply_names=False` (default) is
+  byte-identical to today. New pure `goldenmatch.semantic.apply_names(model) -> str`
+  (no LLM). Opt-in per call (`discover_semantic_model(..., apply_names=False)`, CLI
+  `discover-model --apply-names`, MCP/REST `apply_names` bool; implies `name`); `"yaml"`
+  is now included in `ProposedModel.to_dict()` so the applied catalog is visible on
+  every surface. No new MCP tool / CLI command. The eighth slice of the semantic-model
+  discovery arc (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discovery_apply_names.py`, `tests/test_semantic_discover_surface.py`.
 
 ### Changed
 - **FS out-of-core streaming: single `resolve_fs_block_source` knob + DuckDB

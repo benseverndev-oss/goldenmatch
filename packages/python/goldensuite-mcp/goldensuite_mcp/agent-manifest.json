@@ -2878,6 +2878,13 @@
               "help": "Also run the OPTIONAL advisory LLM namer (business names for entities/dimensions/values/measures; abstains without an LLM key)."
             },
             {
+              "name": "--apply-names",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Write the namer's VERIFIED names into the emitted YAML (entity/measure label:, dimension/value meta.goldenmatch.glossary). Implies --name; post-certification + cosmetic."
+            },
+            {
               "name": "--fail-untrustworthy",
               "type": "boolean",
               "required": false,
