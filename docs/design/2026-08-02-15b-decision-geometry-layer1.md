@@ -342,11 +342,55 @@ So the defensible conclusions:
 - **Fixed-domain deployment** (you have labels for the entity type you resolve): ship a
   truncated ~8–16-layer backbone + a trained linear match head — a genuinely
   smaller/faster ER scorer at in-distribution F1 ≥ the full model. Real and shippable.
-- **Open question (the decisive next test):** does a truncated backbone keep *zero-shot
-  cross-domain* F1? Truncate + LoRA-SFT on the training mix (generative objective), then
-  eval held-out walmart against the full model's 0.795. If it holds, the strip is
-  general; if it collapses, the late layers earn their keep on generalization — either
-  way a real result. (`truncate_adapt.json` on the volume.)
+- **Open question (settled below):** does a truncated backbone keep *zero-shot
+  cross-domain* F1? (`truncate_adapt.json` on the volume.)
+
+### Truncate + LoRA-SFT, cross-domain — generalization lives in the late layers
+
+The generative test that settles it: take the BASE Qwen2.5-1.5B, keep only layers
+0..k-1, LoRA-SFT it on the same corpus + recipe (with a **trainable readout** —
+`lm_head`+`norm` in `modules_to_save`, so the generative output can realign to the
+truncated residual), then eval in-distribution **and** zero-shot held-out **walmart**.
+k=28 is the control (same recipe), so the F1 delta vs a truncated k isolates
+truncation. (`modal_train.py::train_truncated_eval`.)
+
+| k | in-distribution F1 | walmart (zero-shot, cross-domain) F1 |
+|---|---|---|
+| 28 (control) | 0.9996 | 0.488 |
+| 16 | **0.9962** | **0.179** |
+| 12 | 0.780 | 0.175 |
+
+The result is sharp and resolves the whole strip investigation:
+
+- **In-distribution, truncation is nearly free** — k=16 matches the full model (0.996 vs
+  0.9996). (A *frozen*-readout run collapsed even in-distribution to 0.52; that was a
+  readout-adaptation artifact — the trainable `lm_head` recovers it, confirming the
+  information is present early, exactly as the linear probe said.)
+- **Cross-domain, truncation is catastrophic** — walmart F1 collapses **0.488 → 0.179**
+  at k=16 *while in-distribution is fully preserved*. The late ~12 layers (17–28) are
+  **inert for in-distribution F1 but load-bearing for zero-shot transfer**.
+
+**So: generalization lives in the late layers.** This reconciles every earlier number.
+The logit-lens (25%), the linear probe (71% @ L8), and the in-distribution truncation
+(k=16) were all *in-distribution* measurements — and in-distribution the decision is
+computed early, so most of the depth *looks* strippable. But the same late layers that
+add no in-distribution F1 are doing the cross-domain abstraction that is the whole point
+of a zero-shot matcher. "Parameters that don't influence *this* outcome" are not
+"parameters that don't influence outcomes" — they carry out-of-distribution generality.
+
+Practical consequences:
+- **Fixed-domain deployment** (you have labels for the entity type you resolve): a
+  truncated ~16-layer model (−43% depth) matches the full model on your distribution —
+  a real smaller/faster ER scorer, *if* you never leave that distribution.
+- **General zero-shot matcher** (the 1.5B's actual value): keep the depth. Stripping the
+  late layers trades away exactly the transfer ability that justifies the model.
+
+Caveat on absolutes: the k=28 control scores walmart 0.488, below the shipped model's
+0.795, because this sweep trained on the 2,844-row synthetic-only corpus in the
+checkout, not the shipped model's ~17,690-row multi-source corpus. The internal *delta*
+(0.488 → 0.179 as depth drops, in-distribution held) is the clean signal; a
+multi-source-corpus rerun would raise the absolutes but is expected to show the same
+collapse pattern. (`eval_trunc{28,16,12}_v2.json` on the volume.)
 
 ## Reproduce
 
