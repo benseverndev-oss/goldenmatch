@@ -13,9 +13,9 @@ join silently dropped every DBLP ID (those are strings like
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 import polars as pl
 
@@ -148,6 +148,124 @@ def run_dblp_acm_zeroconfig(
     return LeipzigResult(
         found_pairs=len(found),
         ground_truth_pairs=len(gt),
+        true_positives=tp,
+        false_positives=fp,
+        false_negatives=fn,
+        precision=p,
+        recall=r,
+        f1=f1,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Two-source PRODUCT matching (Abt-Buy, Amazon-Google) via zero-config dedupe.
+#
+# Unlike DBLP-ACM (identical schemas, run through match_df), product sources have
+# heterogeneous schemas and the perf path is a UNIFIED dedupe: union both sources
+# into one frame with source-prefixed record_ids + a cluster_id ground truth
+# (connected components of the perfect mapping), run `dedupe_df`, and score the
+# recovered within-cluster pairs. Mirrors bench_er_headtohead's unified loader +
+# evaluate.py pairwise scoring, in one committed helper the runner can call.
+# --------------------------------------------------------------------------- #
+def _connected_components(all_ids: list[str], pairs: set[tuple[str, str]]) -> dict[str, str]:
+    parent = {r: r for r in all_ids}
+
+    def find(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for a, b in pairs:
+        if a in parent and b in parent:
+            parent[find(a)] = find(b)
+    return {r: find(r) for r in all_ids}
+
+
+def _within_cluster_pairs(assign: dict[str, str]) -> set[tuple[str, str]]:
+    from collections import defaultdict
+    groups: dict[str, list[str]] = defaultdict(list)
+    for rid, cid in assign.items():
+        groups[cid].append(rid)
+    pairs: set[tuple[str, str]] = set()
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        members = sorted(members)
+        for i in range(len(members)):
+            for j in range(i + 1, len(members)):
+                pairs.add((members[i], members[j]))
+    return pairs
+
+
+def run_two_source_dedupe_zeroconfig(
+    datasets_dir: Path,
+    dedupe_df: Callable,
+    *,
+    subdir: str,
+    file_a: str,
+    file_b: str,
+    gt_file: str,
+    gt_cols: tuple[str, str],
+    src_a: str,
+    src_b: str,
+    rename: dict[str, str] | None = None,
+) -> LeipzigResult | None:
+    """Zero-config dedupe of two product sources; pairwise-F1 vs the mapping.
+
+    Returns ``None`` if the vendor CSVs are absent. ``rename`` harmonises a
+    differently-named field across the two sources (e.g. Google ``name`` ->
+    ``title``) so both share a comparable text column.
+    """
+    base = datasets_dir / subdir
+    a_path, b_path, gt_path = base / file_a, base / file_b, base / gt_file
+    if not (a_path.exists() and b_path.exists() and gt_path.exists()):
+        return None
+
+    a = pl.read_csv(a_path, encoding="utf8-lossy", ignore_errors=True)
+    b = pl.read_csv(b_path, encoding="utf8-lossy", ignore_errors=True)
+    if rename:
+        a = a.rename({k: v for k, v in rename.items() if k in a.columns})
+        b = b.rename({k: v for k, v in rename.items() if k in b.columns})
+
+    shared = [c for c in a.columns if c in b.columns and c != "id"]
+
+    def _prep(df: pl.DataFrame, src: str) -> pl.DataFrame:
+        return (
+            df.select(["id"] + shared)
+            .with_columns((pl.lit(f"{src}:") + pl.col("id").cast(pl.Utf8)).alias("record_id"))
+            .drop("id")
+        )
+
+    records = pl.concat([_prep(a, src_a), _prep(b, src_b)])
+    all_ids = records["record_id"].to_list()
+
+    gt = pl.read_csv(gt_path, encoding="utf8-lossy", ignore_errors=True)
+    ca, cb = gt_cols
+    gt_pairs = {
+        (f"{src_a}:{str(row[ca]).strip()}", f"{src_b}:{str(row[cb]).strip()}")
+        for row in gt.to_dicts()
+    }
+    truth = _within_cluster_pairs(_connected_components(all_ids, gt_pairs))
+
+    ded = dedupe_df(records)
+    pred_assign: dict[str, str] = {}
+    for cid, cluster in (getattr(ded, "clusters", None) or {}).items():
+        members = cluster["members"] if isinstance(cluster, dict) else cluster.members
+        for row_id in members:
+            pred_assign[all_ids[row_id]] = str(cid)
+    # Records never emitted in a cluster are their own singleton (no pairs).
+    predicted = _within_cluster_pairs(pred_assign)
+
+    tp = len(predicted & truth)
+    fp = len(predicted - truth)
+    fn = len(truth - predicted)
+    p = tp / (tp + fp) if (tp + fp) else 0.0
+    r = tp / (tp + fn) if (tp + fn) else 0.0
+    f1 = (2 * p * r / (p + r)) if (p + r) else 0.0
+    return LeipzigResult(
+        found_pairs=len(predicted),
+        ground_truth_pairs=len(truth),
         true_positives=tp,
         false_positives=fp,
         false_negatives=fn,

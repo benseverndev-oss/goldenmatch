@@ -313,6 +313,10 @@ benchmark_runner:
   - 'scripts/run_benchmarks.py'
   - 'scripts/dqbench_adapters/**'
   - 'docs/reproducing-benchmarks.md'
+  # The committed SoT report + its JSON: a hand-edit of the markdown must
+  # trigger the smoke lane's `--check` staleness gate.
+  - 'docs/benchmarks/latest-results.md'
+  - 'docs/benchmarks/latest-results.json'
   # #435: changes to the library being benchmarked must also
   # trigger the smoke. Before this, refiner / blocker /
   # scorer / pipeline / autoconfig changes could silently
