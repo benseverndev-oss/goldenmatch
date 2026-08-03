@@ -37,6 +37,7 @@ export interface ResolveSummary {
   // present for cross-language ResolveSummary parity.
   relationshipsAdded: number;
   relationshipsDeleted: number;
+  deterministicMerged: number;
 }
 
 export interface ResolveOptions {
@@ -63,6 +64,7 @@ function emptySummary(): ResolveSummary {
     conflictsFlagged: 0,
     relationshipsAdded: 0,
     relationshipsDeleted: 0,
+    deterministicMerged: 0,
   };
 }
 
