@@ -34,6 +34,12 @@ from goldenmatch.semantic.discovery.measures import (
     discover_measures,
 )
 from goldenmatch.semantic.discovery.metrics import Metric, discover_metrics
+from goldenmatch.semantic.discovery.time_intelligence import (
+    TimeDimension,
+    TimeMetric,
+    discover_time_dimension,
+    discover_time_metrics,
+)
 
 if TYPE_CHECKING:
     from goldenmatch.semantic.discovery.namer import NameSuggestion
@@ -53,6 +59,8 @@ class ProposedTable:
     dimensions: list[Dimension] = field(default_factory=list)
     hierarchies: list[Hierarchy] = field(default_factory=list)
     metrics: list[Metric] = field(default_factory=list)
+    time_dimension: TimeDimension | None = None
+    time_metrics: list[TimeMetric] = field(default_factory=list)
 
     @property
     def grain(self) -> list[str]:
@@ -81,6 +89,8 @@ class ProposedModel:
     naming: list[NameSuggestion] = field(default_factory=list)
     hierarchies: list[Hierarchy] = field(default_factory=list)
     metrics: list[Metric] = field(default_factory=list)
+    time_dimensions: list[TimeDimension] = field(default_factory=list)
+    time_metrics: list[TimeMetric] = field(default_factory=list)
 
     @property
     def all_trustworthy(self) -> bool:
@@ -137,6 +147,8 @@ class ProposedModel:
             "naming": [n.to_dict() for n in self.naming],
             "hierarchies": [h.to_dict() for h in self.hierarchies],
             "metrics": [mt.to_dict() for mt in self.metrics],
+            "time_dimensions": [td.to_dict() for td in self.time_dimensions],
+            "time_metrics": [tm.to_dict() for tm in self.time_metrics],
             "yaml": self.yaml,
         }
 
@@ -217,6 +229,9 @@ def discover_semantic_model(
         )
         grain_cols = list(grain.columns) if grain is not None else []
         metrics = discover_metrics(tm.measures, grain_cols, table_name=tbl_name)
+        # Time intelligence — the primary time dimension + per-measure MTD/YoY/rolling.
+        time_dim = discover_time_dimension(table, tm.dimensions, table_name=tbl_name)
+        time_metrics = discover_time_metrics(tm.measures, time_dim, table_name=tbl_name)
         proposed_tables.append(
             ProposedTable(
                 table=tbl_name,
@@ -226,6 +241,8 @@ def discover_semantic_model(
                 dimensions=tm.dimensions,
                 hierarchies=hierarchies,
                 metrics=metrics,
+                time_dimension=time_dim,
+                time_metrics=time_metrics,
             )
         )
 
@@ -247,6 +264,9 @@ def discover_semantic_model(
         certification=certification,
         hierarchies=[h for pt in proposed_tables for h in pt.hierarchies],
         metrics=[mt for pt in proposed_tables for mt in pt.metrics],
+        time_dimensions=[pt.time_dimension for pt in proposed_tables
+                         if pt.time_dimension is not None],
+        time_metrics=[tm for pt in proposed_tables for tm in pt.time_metrics],
     )
 
     # Optional, advisory, non-authoritative: annotate the finished model with business

@@ -285,6 +285,20 @@ actually query. All are deterministic (no LLM) and default-on unless noted.
     `number` measures + a `count`; OSI `OsiMetric`s). Deterministic, default-on. *Derived
     semantic* metrics (`profit = revenue − cost`) stay a namer/advisory follow-on (they
     need to know which measure is revenue vs cost).
+13. **Time intelligence.** New `discovery/time_intelligence.py`. `discover_time_dimension(
+    table, dimensions)` picks the primary date column (`kind="date"`, name-preferring
+    `date`/`created`/`timestamp`), infers its **finest granularity from the data** (a
+    cheap value scan: time-of-day → `day`; all values on month/quarter/year starts →
+    that coarser grain), and proposes the drill granularities up from it
+    (`TimeDimension(table, column, grain, granularities)`). `discover_time_metrics(
+    measures, time_dimension)` derives per sum-safe measure the **MTD** / **YoY** /
+    **rolling-7d** variants (`TimeMetric(name, base, kind, window)`). Both on
+    `ProposedTable`/`ProposedModel` (+ `to_dict`). Emitted so the engine computes time
+    comparisons automatically: MetricFlow sets `defaults.agg_time_dimension` + a `type:
+    time` dimension with `time_granularity`, MTD/rolling as `type: cumulative` metrics
+    and YoY as a `type: derived` offset metric; Cube keeps the `type: time` dim +
+    granularities and the variants in `meta.goldenmatch.time`; OSI `is_time` +
+    `custom_extensions`. Deterministic, default-on.
 
 Each PR is independently useful (PR-1 alone gives "certified key discovery per
 table"). The certifier is exercised from PR-1, so the "pre-graded" property holds at

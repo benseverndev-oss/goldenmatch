@@ -48,6 +48,11 @@ def _gm_meta(pt: Any) -> dict[str, Any]:
     hier = _hierarchies_dicts(pt)
     if hier:
         gm["hierarchies"] = hier
+    td = getattr(pt, "time_dimension", None)
+    if td is not None:
+        gm["time"] = {"column": td.column, "grain": td.grain,
+                      "granularities": list(td.granularities),
+                      "metrics": [t.to_dict() for t in getattr(pt, "time_metrics", [])]}
     return gm
 
 
@@ -61,16 +66,37 @@ def _build_metricflow(proposed_tables: list[Any]) -> str:
         if pt.key is None:
             continue
         safe_measures = [m.column for m in pt.measures if m.safe_to_sum]
+        td = getattr(pt, "time_dimension", None)
         sm = emit_semantic_model(
             pt.table,
             resolved_key=pt.key.columns[0],
             entity_name=pt.entity_type or pt.table,
             measures=safe_measures,
+            grain=[td.column] if td is not None else None,  # -> defaults.agg_time_dimension
             certificate=pt.key.certificate,
         )
         hier = _hierarchies_dicts(pt)
         if hier:  # additive to the meta.goldenmatch block emit_semantic_model set
             sm.setdefault("meta", {}).setdefault("goldenmatch", {})["hierarchies"] = hier
+        # Time dimension: a native `type: time` dimension at the inferred grain, plus
+        # the grain/granularities in meta for the drill path.
+        if td is not None:
+            sm.setdefault("dimensions", []).append(
+                {"name": td.column, "type": "time",
+                 "type_params": {"time_granularity": td.grain}}
+            )
+            sm.setdefault("meta", {}).setdefault("goldenmatch", {})["time"] = {
+                "grain": td.grain, "granularities": list(td.granularities)
+            }
+        # Time metric variants: MTD + rolling as native cumulative metrics (YoY stays in
+        # the structured model.time_metrics; its native derived-offset emit is a follow-on).
+        for tmv in getattr(pt, "time_metrics", []):
+            if tmv.kind == "mtd":
+                metrics.append({"name": tmv.name, "type": "cumulative",
+                                "type_params": {"measure": tmv.base, "grain_to_date": tmv.grain_to_date}})
+            elif tmv.kind == "rolling":
+                metrics.append({"name": tmv.name, "type": "cumulative",
+                                "type_params": {"measure": tmv.base, "window": tmv.window}})
         # Native metrics: declare a COUNT measure so averages have a denominator, then
         # emit each derived metric as a MetricFlow ratio metric.
         if pt.metrics:
