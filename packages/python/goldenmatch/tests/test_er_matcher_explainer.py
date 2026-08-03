@@ -8,6 +8,8 @@ from goldenmatch.core.er_matcher.explainer import (
     PERSON_FIELD_CAUSAL_RANKING,
     PERSON_FIELD_IMPORTANCE,
     PERSON_IMPORTANCE_FAITHFULNESS_R2,
+    PERSON_SIGNAL_FAITHFULNESS_R2,
+    PERSON_SIGNAL_IMPORTANCE,
     PairExplanation,
     explain_pair,
     field_agreement,
@@ -151,6 +153,63 @@ class TestTokenAwareAgreement:
         assert field_agreement(None, "x") is None
         assert field_agreement("", "x") is None
         assert field_agreement("x", "x") == 1.0
+
+
+class TestHighFaithfulnessMode:
+    def test_off_by_default(self):
+        exp = explain_pair(_a(), _a(), COLS, match=True, confidence=0.9)
+        assert exp.signal_contributions is None
+        assert exp.faithfulness_r2 == PERSON_IMPORTANCE_FAITHFULNESS_R2
+
+    def test_reports_the_richer_number_and_contributions(self):
+        exp = explain_pair(
+            _a(), _a(), COLS, match=True, confidence=0.9, high_faithfulness=True
+        )
+        assert exp.faithfulness_r2 == PERSON_SIGNAL_FAITHFULNESS_R2
+        assert exp.faithfulness_r2 > PERSON_IMPORTANCE_FAITHFULNESS_R2
+        assert exp.signal_contributions
+        assert f"~{int(PERSON_SIGNAL_FAITHFULNESS_R2 * 100)}%" in exp.rationale
+
+    def test_prose_is_unchanged_by_the_mode(self):
+        # the richer basis informs the NUMBER, never the human story
+        b = _a() | {"first_name": "Zebedee"}
+        low = explain_pair(_a(), b, COLS, match=False, confidence=0.7)
+        high = explain_pair(
+            _a(), b, COLS, match=False, confidence=0.7, high_faithfulness=True
+        )
+        assert [s.field for s in low.signals] == [s.field for s in high.signals]
+        assert [s.importance for s in low.signals] == [s.importance for s in high.signals]
+
+    def test_contributions_are_signed_and_ranked(self):
+        exp = explain_pair(
+            _a(), _a(), COLS, match=True, confidence=0.9, high_faithfulness=True
+        )
+        cs = exp.signal_contributions
+        mags = [abs(c["contribution"]) for c in cs]
+        assert mags == sorted(mags, reverse=True)
+        assert all(
+            c["contribution"] == pytest.approx(c["weight"] * c["value"]) for c in cs
+        )
+
+    def test_rollup_must_not_be_used_for_display(self):
+        # Documents WHY the mode never touches the prose: summed per field these
+        # weights rank occupation first and first_name last, inverting the ablation
+        # ranking. If this ever stops holding, revisit the two-mode split.
+        roll: dict[str, float] = {}
+        for k, v in PERSON_SIGNAL_IMPORTANCE.items():
+            roll[k.split("__")[0]] = roll.get(k.split("__")[0], 0.0) + abs(v)
+        order = sorted(roll, key=lambda f: -roll[f])
+        assert order[0] == "occupation"
+        assert order[-1] == "first_name"
+        assert order[0] == PERSON_FIELD_CAUSAL_RANKING[-1]
+
+    def test_no_op_on_unknown_schema(self):
+        exp = explain_pair(
+            {"sku": "A"}, {"sku": "B"}, ["sku"], match=False, confidence=0.4,
+            high_faithfulness=True,
+        )
+        assert exp.signal_contributions is None
+        assert exp.faithfulness_r2 is None
 
 
 def test_counterfactuals_absent_by_default():

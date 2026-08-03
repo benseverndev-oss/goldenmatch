@@ -943,7 +943,18 @@ def layer2_abstraction(layer: int = 14, per_class: int = 400, seed: int = 0,
     import torch.nn.functional as F
 
     sys.path.insert(0, "/root/interp")
-    from field_attribution import attribute_direction, field_agreements, label_sae_features
+    sys.path.insert(0, "/root")
+    from field_attribution import (
+        attribute_direction,
+        field_agreements,
+        label_sae_features,
+        richer_field_features,
+    )
+    from goldenmatch.core.er_matcher.explainer import (
+        FIELD_SIGNAL_NAMES,
+        field_agreement,
+        field_signal_vector,
+    )
 
     tok, model = _load_model()
     pairs, rows = _mine(per_class, "hard", seed)
@@ -965,11 +976,25 @@ def layer2_abstraction(layer: int = 14, per_class: int = 400, seed: int = 0,
     projections = R @ d
 
     # human field-agreement signals (the primitives to translate INTO)
-    field_feats = field_agreements(rows, pairs, FIELDS)
+    field_feats = field_agreements(rows, pairs, FIELDS, agreement=field_agreement)
     decomp = attribute_direction(projections, field_feats, FIELDS)
     print(f"[layer2] direction R^2 by field signals = {decomp['r2']:.3f}")
     for e in decomp["ranking"]:
         print(f"[layer2]   {e['field']:<14} coef={e['coef']:+.3f}", flush=True)
+
+    # SAME derivation, RICHER basis: regress the proven direction onto the six
+    # shipped per-field signals instead of one agreement scalar. Provenance is
+    # identical to the table above (the causally-validated direction), so the
+    # resulting weights are comparable in kind -- just finer-grained.
+    X, sig_names = richer_field_features(
+        rows, pairs, FIELDS, signal_fn=field_signal_vector,
+        signal_names=FIELD_SIGNAL_NAMES,
+    )
+    rich = attribute_direction(projections, X, sig_names)
+    print(f"[layer2] direction R^2 by RICHER signals = {rich['r2']:.3f} "
+          f"({len(sig_names)} signals)", flush=True)
+    for e in rich["ranking"][:10]:
+        print(f"[layer2]   {e['field']:<26} coef={e['coef']:+.3f}", flush=True)
 
     # label the top SAE features by the field their activation tracks
     sae_labels = []
@@ -998,6 +1023,8 @@ def layer2_abstraction(layer: int = 14, per_class: int = 400, seed: int = 0,
     payload = {
         "layer": layer, "n_pairs": len(pairs), "fields": FIELDS,
         "direction_field_decomposition": decomp,
+        "direction_richer_decomposition": rich,
+        "richer_signal_names": sig_names,
         "sae_feature_labels": sae_labels,
     }
     os.makedirs("/out/interp", exist_ok=True)
@@ -1130,6 +1157,7 @@ def _faithfulness_core(tok, model, dev, true_id, false_id, tr, te, rows, fields,
     from goldenmatch.core.er_matcher.explainer import (
         FIELD_SIGNAL_NAMES,
         PERSON_FIELD_IMPORTANCE,
+        PERSON_SIGNAL_IMPORTANCE,
         field_agreement,
         field_signal_vector,
     )
@@ -1178,6 +1206,20 @@ def _faithfulness_core(tok, model, dev, true_id, false_id, tr, te, rows, fields,
         results["fixed"] = {**fixed, "n_features": len(fields), "weights_refit": False}
         print(f"[faith] fixed  (shipped weights, frozen) "
               f"R^2_test={fixed['r2_test']:.3f}", flush=True)
+
+        # Same question on the RICHER basis: freeze the direction-derived 36-signal
+        # weights and see whether the finer grain survives as OUTPUT faithfulness.
+        # Raw dot product, exactly like `fixed`, so the two are comparable.
+        fixed_rich = affine_r2(
+            fixed_weight_score(X_tr, feat_names, PERSON_SIGNAL_IMPORTANCE), p_tr,
+            fixed_weight_score(X_te, feat_names, PERSON_SIGNAL_IMPORTANCE), p_te,
+            link=link,
+        )
+        results["fixed_richer"] = {
+            **fixed_rich, "n_features": len(feat_names), "weights_refit": False,
+        }
+        print(f"[faith] fixed_richer (36 frozen signal weights) "
+              f"R^2_test={fixed_rich['r2_test']:.3f}", flush=True)
 
     from sklearn.ensemble import GradientBoostingRegressor
     from sklearn.linear_model import LinearRegression

@@ -65,6 +65,41 @@ PERSON_FIELD_CAUSAL_RANKING: tuple[str, ...] = (
     "birth_place", "first_name", "dob", "postcode_fake", "surname", "occupation",
 )
 
+# The HIGH-FAITHFULNESS basis. Standardized coefficients of the SAME causally
+# validated direction regressed onto the RICHER 36-signal basis instead of one
+# agreement scalar per field (`modal_interp.py::layer2_abstraction`). Same provenance
+# as PERSON_FIELD_IMPORTANCE, finer grain: 0.888 of the direction vs 0.511.
+#
+# MEASURED: frozen, these score R^2 0.53 +- 0.09 against the model's real P(match)
+# (5 seeds, cluster-disjoint, hard negatives) versus 0.27 +- 0.07 for the 6-field
+# table -- roughly double, and better on every seed.
+#
+# BUT they are NOT usable as the human-facing field story. Summed per field they rank
+# occupation FIRST and first_name LAST, near-exactly the reverse of the ablation
+# ranking -- classic collinearity across 36 correlated signals. So this basis scores
+# well and reads badly, which is why it is an opt-in mode
+# (`explain_pair(..., high_faithfulness=True)`) and never replaces the displayed
+# per-field importance. Believe its NUMBER, not its per-signal story.
+PERSON_SIGNAL_IMPORTANCE: dict[str, float] = {
+    "occupation__exact": 0.815, "occupation__missing": 0.448,
+    "surname__edit_norm": -0.351, "dob__agreement": -0.333,
+    "occupation__edit_norm": 0.332, "occupation__len_ratio": -0.292,
+    "birth_place__exact": 0.265, "postcode_fake__edit_norm": -0.222,
+    "dob__missing": -0.187, "dob__len_ratio": 0.187, "dob__edit_norm": -0.161,
+    "surname__exact": 0.139, "surname__agreement": -0.136, "dob__exact": 0.128,
+    "surname__len_ratio": -0.127, "postcode_fake__agreement": -0.126,
+    "first_name__edit_norm": -0.125, "postcode_fake__len_ratio": 0.123,
+    "birth_place__missing": 0.114, "occupation__agreement": -0.114,
+    "surname__missing": -0.108, "occupation__conflict": 0.093,
+    "birth_place__edit_norm": -0.074, "postcode_fake__exact": 0.056,
+    "birth_place__conflict": 0.033, "first_name__missing": -0.028,
+    "first_name__exact": 0.028, "surname__conflict": 0.028,
+    "first_name__agreement": -0.023, "postcode_fake__missing": -0.02,
+    "birth_place__len_ratio": 0.018, "first_name__len_ratio": 0.014,
+    "postcode_fake__conflict": -0.014, "birth_place__agreement": -0.011,
+    "dob__conflict": -0.008, "first_name__conflict": 0.005,
+}
+
 # How much of the model's ACTUAL verdict probability the per-field story explains:
 # held-out R^2 of these frozen weights against P(match), cluster-disjoint split,
 # hard negatives, 5-seed mean (`modal_interp.py::faithfulness_eval`).
@@ -75,6 +110,10 @@ PERSON_FIELD_CAUSAL_RANKING: tuple[str, ...] = (
 # same entity across the split) or against the internal projection rather than the
 # verdict. This is the honest one for the look-alike regime the explainer runs in.
 PERSON_IMPORTANCE_FAITHFULNESS_R2 = 0.27
+
+# The same measurement for the 36-signal basis above: frozen weights, 5-seed mean,
+# cluster-disjoint, hard negatives. Reported when `high_faithfulness=True`.
+PERSON_SIGNAL_FAITHFULNESS_R2 = 0.53
 
 # neutral weight for a field with no learned importance (unknown schema)
 DEFAULT_FIELD_IMPORTANCE = 0.10
@@ -122,6 +161,7 @@ class PairExplanation:
     learned_weights_applied: bool
     field_story_agrees_with_verdict: bool
     counterfactuals: list[Counterfactual] | None = None
+    signal_contributions: list[dict[str, Any]] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -288,6 +328,41 @@ def _importance_for(field: str, weights: dict[str, float] | None) -> tuple[float
     return DEFAULT_FIELD_IMPORTANCE, False
 
 
+def signal_contributions(
+    row_a: dict[str, Any],
+    row_b: dict[str, Any],
+    columns: list[str],
+    *,
+    weights: dict[str, float] | None = None,
+) -> list[dict[str, Any]]:
+    """Signed per-signal contributions under the high-faithfulness basis.
+
+    ``weights`` defaults to :data:`PERSON_SIGNAL_IMPORTANCE`. Each entry is
+    ``{signal, field, value, weight, contribution}`` with ``contribution =
+    weight * value``, sorted by absolute contribution. Signals with no weight are
+    dropped rather than defaulted, since this basis is person-specific.
+
+    Use for an audit trail or for ranking evidence when the *number* matters more
+    than the prose. Do NOT roll these up into a per-field importance for display —
+    summed per field they invert the ablation ranking (see the note on
+    :data:`PERSON_SIGNAL_IMPORTANCE`).
+    """
+    w = PERSON_SIGNAL_IMPORTANCE if weights is None else weights
+    out: list[dict[str, Any]] = []
+    for f in columns:
+        vec = field_signal_vector(row_a.get(f), row_b.get(f))
+        for s, val in vec.items():
+            key = f"{f}__{s}"
+            if key not in w:
+                continue
+            out.append({
+                "signal": key, "field": f, "value": float(val),
+                "weight": float(w[key]), "contribution": float(w[key]) * float(val),
+            })
+    out.sort(key=lambda e: -abs(e["contribution"]))
+    return out
+
+
 def explain_pair(
     row_a: dict[str, Any],
     row_b: dict[str, Any],
@@ -297,6 +372,7 @@ def explain_pair(
     confidence: float,
     weights: dict[str, float] | None = None,
     p_without: dict[str, float] | None = None,
+    high_faithfulness: bool = False,
 ) -> PairExplanation:
     """Explain the model's verdict for one record pair.
 
@@ -305,6 +381,12 @@ def explain_pair(
     the bundled person profile is applied to matching field names (neutral default
     otherwise). Returns a :class:`PairExplanation` with per-field signals, a
     human-readable rationale, and the faithfulness bound.
+
+    ``high_faithfulness=True`` attaches the 36-signal decomposition and reports the
+    measured R^2 of THAT basis (0.53 vs 0.27). The per-field prose is unchanged --
+    the richer weights score roughly twice as well but rank fields nonsensically
+    (first_name last), so they inform the number and the audit trail, never the
+    human story. Person schema only; a no-op on other schemas.
 
     ``p_without`` optionally supplies per-field "P(match) with this field blanked
     on both records", as produced by re-running the model
@@ -351,8 +433,13 @@ def explain_pair(
     # P(match) axis, so a NO-MATCH baseline has to be flipped before comparing.
     p_match_base = float(confidence) if match else 1.0 - float(confidence)
     cfs = build_counterfactuals(p_match_base, p_without) if p_without else None
+    sig = (
+        signal_contributions(row_a, row_b, columns)
+        if high_faithfulness and any_learned else None
+    )
     rationale = _render_rationale(
-        match, confidence, supports, conflicts, agrees, any_learned
+        match, confidence, supports, conflicts, agrees, any_learned,
+        PERSON_SIGNAL_FAITHFULNESS_R2 if sig else PERSON_IMPORTANCE_FAITHFULNESS_R2,
     )
     if cfs:
         # measured on THIS pair, so it leads over the corpus-level caveat
@@ -360,10 +447,15 @@ def explain_pair(
     return PairExplanation(
         match=bool(match), confidence=float(confidence), signals=signals,
         rationale=rationale,
-        faithfulness_r2=(PERSON_IMPORTANCE_FAITHFULNESS_R2 if any_learned else None),
+        faithfulness_r2=(
+            None if not any_learned
+            else PERSON_SIGNAL_FAITHFULNESS_R2 if sig
+            else PERSON_IMPORTANCE_FAITHFULNESS_R2
+        ),
         learned_weights_applied=any_learned,
         field_story_agrees_with_verdict=agrees,
         counterfactuals=cfs,
+        signal_contributions=sig,
     )
 
 
@@ -376,6 +468,7 @@ def _fmt(s: FieldSignal) -> str:
 def _render_rationale(
     match: bool, confidence: float, supports: list[FieldSignal],
     conflicts: list[FieldSignal], agrees: bool, learned: bool,
+    r2: float = PERSON_IMPORTANCE_FAITHFULNESS_R2,
 ) -> str:
     verdict = "MATCH" if match else "NO MATCH"
     parts = [f"{verdict} (confidence {confidence:.2f})."]
@@ -391,7 +484,7 @@ def _render_rationale(
                      "explanation is low-confidence for this pair.")
     if learned:
         parts.append(f"(Field importance is the model's learned weighting. It accounts "
-                     f"for ~{int(PERSON_IMPORTANCE_FAITHFULNESS_R2 * 100)}% of the "
+                     f"for ~{int(r2 * 100)}% of the "
                      f"model's verdict: the model combines evidence across fields, so "
                      f"much of the decision is not attributable to any single one.)")
     return " ".join(parts)

@@ -52,7 +52,8 @@ standing discipline: **when a number looks too good, hunt the confound first.**
   `PERSON_FIELD_IMPORTANCE` (scoring: does agreement track the verdict?) and
   `PERSON_FIELD_CAUSAL_RANKING` (necessity: does the model need the field?), which
   disagree on purpose. Faithfulness now the measured **0.27** (was 0.51, the projection
-  number). 18 unit tests. Additive; `score_pair` unchanged.
+  number), or **0.53** in the opt-in `high_faithfulness=True` mode. 39 unit tests.
+  Additive; `score_pair` unchanged.
 - **Live demo (artifact).** Real records + the actual model's verdicts, each explained
   by learned field importance. Built from `scratchpad/xai_demo.py`.
 
@@ -399,6 +400,41 @@ figures were computed on a plain-jaro-winkler decomposition the product never us
 No row regressed. `fixed` and `simple` are unchanged because they already ran through
 `field_agreement`; `PERSON_IMPORTANCE_FAITHFULNESS_R2` stays **0.27**.
 
+## Two-mode explainer — shipped, and the trade is now measured
+
+Next-step #2 done. The richer decomposition was derived the SAME way the 6-field table
+was (regressing the causally-validated direction, `layer2_abstraction`), just onto the
+36-signal basis instead of one agreement scalar per field. It explains **0.888 of the
+direction vs 0.511** — the scalar was discarding most of the direction's structure. The
+6 field coefficients reproduce exactly (0.420/0.305/0.147/0.082/0.038/0.014), confirming
+token-aware agreement did not disturb the person derivation.
+
+**Frozen, it roughly doubles output faithfulness** (`fixed_richer` row in
+`faithfulness_eval`, 5 seeds, cluster-disjoint, hard negatives):
+
+| basis | per-seed | mean |
+|---|---|---|
+| `fixed` — 6 field weights | 0.252 / 0.318 / 0.364 / 0.215 / 0.214 | **0.27 ± 0.07** |
+| `fixed_richer` — 36 signal weights | 0.436 / 0.678 / 0.540 / 0.478 / 0.499 | **0.53 ± 0.09** |
+| `richer` — refit ceiling | 0.669 / 0.754 / 0.618 / 0.600 / 0.715 | 0.67 |
+
+Better on **every** seed, and most of the way to the refit ceiling.
+
+**But it reads badly, and that is the whole reason it is a separate mode.** Summed per
+field, the 36 weights rank `occupation` FIRST and `first_name` LAST — near-exactly the
+reverse of the ablation ranking, and `occupation` is the field ablation says the model
+needs *least*. That is collinearity across 36 correlated signals: individual
+coefficients stop being readable long before the fit stops being accurate.
+
+So `explain_pair(..., high_faithfulness=True)` reports the 0.53 number and attaches
+`signal_contributions` for an audit trail, while **the per-field prose is byte-identical
+to the default mode** (a test pins that). Believe the mode's number, not its per-signal
+story. `PERSON_FIELD_IMPORTANCE` remains the display weights.
+
+This is the honest resolution of the legibility/faithfulness frontier this thread has
+been circling: **0.27 legible, 0.53 accurate, and they cannot currently be the same
+table.** Person schema only — the product schema has no derived weights.
+
 ## Next steps (highest leverage first)
 
 1. **Find a call site for the ER-matcher explainer.** `score_and_explain` /
@@ -408,19 +444,21 @@ No row regressed. `fixed` and `simple` are unchanged because they already ran th
    `use_llm`-style opt-in) is what turns this work from an available capability into a
    shipped one. Until then "counterfactuals on the review queue" means the method
    exists and defaults correctly, not that reviewers see them.
-2. **Push the messy-domain per-field story from weak to good.** Token-aware agreement
-   took walmart `simple` 0.024 -> 0.149, but `richer` gets 0.508 on the same pairs. The
-   remaining gap is per-field *signal decomposition* (exact / missing / conflict /
-   edit-distance), not a better single scalar — i.e. give `explain_pair` the richer
-   basis rather than one agreement number per field. That decomposition already exists
-   and ships (`explainer.field_signal_vector`); what is missing is `explain_pair`
-   *using* it to score, and a weight table over 30 signals rather than 5 fields.
-3. **Perf for real volume.** Prefix-cache the system rubric (biggest CPU win) + wire the
+2. **Derive product-schema signal weights.** The two-mode explainer (above) doubles
+   faithfulness on PERSON only, because the 36 weights come from a person-data direction
+   regression. walmart has no derived table at all, so its `fixed`/`fixed_richer` rows do
+   not exist and the product-domain explanation still rests on the unweighted basis.
+   Running `layer2_abstraction` against a product-domain probe set is the missing piece.
+3. **Fix the legibility side, not just the number.** 0.27 legible vs 0.53 accurate is a
+   real frontier, but collinearity is the cause, not information content — a sparse or
+   grouped fit (per-field signal groups, or L1) might recover most of the 0.53 with a
+   ranking a human can read. Worth one experiment before accepting two permanent modes.
+4. **Perf for real volume.** Prefix-cache the system rubric (biggest CPU win) + wire the
    logit readout into the scorer for clean P(match); benchmark on GPU.
-4. **Benchmark head-to-head, honestly.** Against the ER landscape on *held-out* data
+5. **Benchmark head-to-head, honestly.** Against the ER landscape on *held-out* data
    (walmart, not the contaminated in-training sets), reporting competitive-local, not
    SOTA. This is the step that turns "appears to address" into "demonstrably addresses."
-5. **Multi-source-corpus rerun** of the truncate/strip sweep so the walmart absolutes
+6. **Multi-source-corpus rerun** of the truncate/strip sweep so the walmart absolutes
    match the shipped model (expected: same collapse pattern, higher baseline).
 
 ## The one-paragraph version
