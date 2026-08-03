@@ -1493,7 +1493,7 @@ class IdentityStore:
         )
 
     def merge_by_shared_field(
-        self, dataset: str | None, field: str, max_group: int = 100,
+        self, dataset: str | None, field: str | list[str], max_group: int = 100,
     ) -> tuple[int, int]:
         """DETERMINISTIC merge: collapse entities that share a non-null value of
         ``field`` -- an authoritative identifier like ``npi`` -- into ONE, so a
@@ -1506,19 +1506,43 @@ class IdentityStore:
         next ``build_relationships`` (reconcile recomputes from current entity ids).
         Returns ``(entities_merged, groups_merged)``.
 
+        ``field`` may be a single column OR a list of columns for a GUARDED
+        (composite) merge: entities collapse only when they share the same non-null
+        TUPLE of all columns -- e.g. ``['npi', 'last_name']`` reproduces a
+        crosswalk that links records on a shared NPI only when the name also
+        agrees, so a dirty/shared id alone can't force a bad merge. All columns
+        must be non-null for a record to participate.
+
         Entity-level (post-resolve), so it can't cascade probabilistic clusters into
         giant components the way a pre-cluster record-level merge does."""
         if self._backend == "mongo":
             raise NotImplementedError("merge_by_shared_field: not supported on mongo")
-        if not _SAFE_FIELD.fullmatch(field):
-            raise ValueError(f"unsafe merge field name: {field!r}")
-        vexpr = (f"payload ->> '{field}'" if self._backend == "postgres"
-                 else f"json_extract(payload, '$.{field}')")
+        fields = [field] if isinstance(field, str) else list(field)
+        if not fields:
+            raise ValueError("merge_by_shared_field: no fields given")
+        for f in fields:
+            if not _SAFE_FIELD.fullmatch(f):
+                raise ValueError(f"unsafe merge field name: {f!r}")
+
+        def _vexpr(f: str) -> str:
+            return (f"payload ->> '{f}'" if self._backend == "postgres"
+                    else f"json_extract(payload, '$.{f}')")
+
+        parts = [_vexpr(f) for f in fields]
+        if len(parts) == 1:
+            vexpr = parts[0]
+            not_null = f"{vexpr} IS NOT NULL AND {vexpr} <> ''"
+        else:
+            # Composite value: concatenate with a unit-separator so distinct
+            # tuples can't collide. Every column must be present (guarded merge).
+            sep = "chr(31)" if self._backend == "postgres" else "char(31)"
+            vexpr = (" || " + sep + " || ").join(parts)
+            not_null = " AND ".join(f"{p} IS NOT NULL AND {p} <> ''" for p in parts)
         ds = "" if dataset is None else " AND dataset = ?"
         params: tuple = () if dataset is None else (dataset,)
         rows = self._fetchall(
             f"WITH ev AS (SELECT DISTINCT {vexpr} AS v, entity_id FROM source_records "
-            f" WHERE entity_id IS NOT NULL{ds} AND {vexpr} IS NOT NULL AND {vexpr} <> ''), "
+            f" WHERE entity_id IS NOT NULL{ds} AND {not_null}), "
             "grp AS (SELECT v FROM ev GROUP BY v HAVING COUNT(*) >= 2 AND COUNT(*) <= ?) "
             "SELECT ev.v AS v, ev.entity_id AS e FROM ev JOIN grp ON ev.v = grp.v",
             params + (max_group,))
