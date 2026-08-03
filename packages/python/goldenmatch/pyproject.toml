@@ -183,7 +183,7 @@ sail = [
     "setuptools>=83.0.0; python_version >= '3.12'",
 ]
 agent = [
-    "aiohttp>=3.14.0",
+    "aiohttp>=3.14.3",
 ]
 # D6: polars is OPTIONAL. The engine is arrow-native (pyarrow is the hard
 # dep); installing this extra lights up the polars-present WALL
