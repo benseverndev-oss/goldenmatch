@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 438,
+      "module_count": 445,
       "modules": [
         {
           "module": "goldenmatch",
@@ -231,6 +231,7 @@
             "APIHandler",
             "MatchServer",
             "_certify_semantic_model_endpoint",
+            "_discover_semantic_model_endpoint",
             "resolve_api_auth_token",
             "start_server"
           ],
@@ -573,6 +574,18 @@
           ]
         },
         {
+          "module": "goldenmatch.cli.discover_model",
+          "file": "packages/python/goldenmatch/goldenmatch/cli/discover_model.py",
+          "purpose": "CLI `discover-model` command — the semantic-model discovery front door.",
+          "defines": [
+            "discover_model_cmd"
+          ],
+          "imports": [
+            "goldenmatch.core.io_arrow",
+            "goldenmatch.semantic"
+          ]
+        },
+        {
           "module": "goldenmatch.cli.evaluate",
           "file": "packages/python/goldenmatch/goldenmatch/cli/evaluate.py",
           "purpose": "CLI evaluate command for GoldenMatch.",
@@ -772,6 +785,7 @@
             "goldenmatch.cli.compare",
             "goldenmatch.cli.dedupe",
             "goldenmatch.cli.demo",
+            "goldenmatch.cli.discover_model",
             "goldenmatch.cli.evaluate",
             "goldenmatch.cli.explain",
             "goldenmatch.cli.identity",
@@ -6551,6 +6565,7 @@
             "_tool_config_weaknesses",
             "_tool_convert_splink_config",
             "_tool_create_domain",
+            "_tool_discover_semantic_model",
             "_tool_evaluate",
             "_tool_explain_match",
             "_tool_export_results",
@@ -7136,6 +7151,7 @@
             "goldenmatch.semantic.certify",
             "goldenmatch.semantic.crosswalk",
             "goldenmatch.semantic.cube",
+            "goldenmatch.semantic.discovery",
             "goldenmatch.semantic.key_integrity",
             "goldenmatch.semantic.metricflow",
             "goldenmatch.semantic.osi",
@@ -7243,6 +7259,112 @@
             "goldenmatch.semantic.blocking",
             "goldenmatch.semantic.key_integrity",
             "goldenmatch.semantic.metricflow"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.discovery",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/discovery/__init__.py",
+          "purpose": "Semantic-model discovery (the generative half of the semantic wedge).",
+          "imports": [
+            "goldenmatch.semantic.discovery.entities",
+            "goldenmatch.semantic.discovery.joins",
+            "goldenmatch.semantic.discovery.keys",
+            "goldenmatch.semantic.discovery.measures",
+            "goldenmatch.semantic.discovery.model"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.discovery.entities",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/discovery/entities.py",
+          "purpose": "Cross-table entity-type discovery (semantic-model discovery, Phase 2).",
+          "defines": [
+            "EntityType",
+            "_best_key",
+            "_canonical_token",
+            "_identity_columns",
+            "_is_near_unique",
+            "_jaccard",
+            "_name_for",
+            "_signature",
+            "_value_overlap",
+            "discover_entity_types"
+          ],
+          "imports": [
+            "goldenmatch.core.autoconfig",
+            "goldenmatch.core.frame",
+            "goldenmatch.core.schema_match",
+            "goldenmatch.semantic.discovery.joins",
+            "goldenmatch.semantic.discovery.keys"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.discovery.joins",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/discovery/joins.py",
+          "purpose": "Certified join / foreign-key discovery (semantic-model discovery, Phase 3).",
+          "defines": [
+            "JoinCandidate",
+            "_distinct_nonnull",
+            "_key_columns",
+            "_null_rate",
+            "discover_joins"
+          ],
+          "imports": [
+            "goldenmatch.core.autoconfig",
+            "goldenmatch.core.frame",
+            "goldenmatch.core.key_integrity_certificate",
+            "goldenmatch.semantic.cube",
+            "goldenmatch.semantic.discovery.keys"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.discovery.keys",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/discovery/keys.py",
+          "purpose": "Certified key discovery (semantic-model discovery, Phase 1).",
+          "defines": [
+            "KeyCandidate",
+            "_to_polars",
+            "discover_keys"
+          ],
+          "imports": [
+            "goldenmatch.core.autoconfig",
+            "goldenmatch.core.key_integrity_certificate",
+            "goldenmatch.core.quality",
+            "goldenmatch.semantic.key_integrity"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.discovery.measures",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/discovery/measures.py",
+          "purpose": "Measure & dimension proposal (semantic-model discovery, Phase 4).",
+          "defines": [
+            "Dimension",
+            "Measure",
+            "TableMeasures",
+            "_grain_spec",
+            "discover_measures"
+          ],
+          "imports": [
+            "goldenmatch.core.autoconfig",
+            "goldenmatch.core.key_integrity_certificate",
+            "goldenmatch.semantic.discovery.keys"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.discovery.model",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/discovery/model.py",
+          "purpose": "Semantic-model discovery orchestrator (Phase 5) — the front door.",
+          "defines": [
+            "ProposedModel",
+            "ProposedTable",
+            "_best_key",
+            "discover_semantic_model"
+          ],
+          "imports": [
+            "goldenmatch.semantic",
+            "goldenmatch.semantic.discovery.entities",
+            "goldenmatch.semantic.discovery.joins",
+            "goldenmatch.semantic.discovery.keys",
+            "goldenmatch.semantic.discovery.measures"
           ]
         },
         {

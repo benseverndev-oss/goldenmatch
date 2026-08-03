@@ -18,6 +18,7 @@ from goldenmatch.cli.certify_keys import certify_keys_cmd
 from goldenmatch.cli.compare import compare_clusters_cmd
 from goldenmatch.cli.dedupe import dedupe_cmd
 from goldenmatch.cli.demo import demo_cmd
+from goldenmatch.cli.discover_model import discover_model_cmd
 from goldenmatch.cli.evaluate import evaluate_cmd
 from goldenmatch.cli.explain import explain_cmd
 from goldenmatch.cli.identity import identity_app
@@ -146,6 +147,7 @@ app.command("incremental", help="Match new records against an existing base data
 app.command("compare-clusters", help="Compare two ER clustering outcomes (CCMS).")(compare_clusters_cmd)
 app.command("sensitivity", help="Analyze parameter sensitivity using CCMS comparison.")(sensitivity_cmd)
 app.command("certify-keys", help="Certify the entity keys a semantic model (MetricFlow/Cube/OSI) declares.")(certify_keys_cmd)
+app.command("discover-model", help="Discover a draft semantic model from source tables, every key pre-graded by the certifier.")(discover_model_cmd)
 
 
 @app.command("analyze-blocking")

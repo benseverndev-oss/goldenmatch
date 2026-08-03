@@ -2834,6 +2834,52 @@
           ]
         },
         {
+          "command": "discover-model",
+          "options": [
+            {
+              "name": "--data",
+              "type": "text",
+              "required": true,
+              "help": "A source table as name=path (repeatable), e.g. -d orders=orders.csv"
+            },
+            {
+              "name": "--dialect",
+              "type": "text",
+              "required": false,
+              "default": "'metricflow'",
+              "help": "Emit dialect for the draft model (metricflow)."
+            },
+            {
+              "name": "--output",
+              "type": "text",
+              "required": false,
+              "default": "None",
+              "help": "Write the draft semantic-model YAML to this path."
+            },
+            {
+              "name": "--resolve",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Also measure entity fragmentation / undercount via ER (fail-open)."
+            },
+            {
+              "name": "--fail-untrustworthy",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Exit non-zero if any proposed key is not unique at grain (CI gate)."
+            },
+            {
+              "name": "--json",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Emit the full proposed model (shape + certification) as JSON."
+            }
+          ]
+        },
+        {
           "command": "evaluate",
           "options": [
             {
@@ -4918,6 +4964,10 @@
         {
           "name": "dedupe",
           "description": "Alias for `find_duplicates`. Find duplicate matches for a record. Provide field values to search against the loaded dataset."
+        },
+        {
+          "name": "discover_semantic_model",
+          "description": "Generative half of the semantic-layer front door: point GoldenMatch at a set of source tables and it PROPOSES a draft semantic model -- entity types, keys, joins, measures, dimensions -- where every declared key is already graded by the certifier (unique-at-grain + fan-out). Discovery is hypothesis generation; certification is the falsification test, so the draft is pre-proven against the data. Advisory; nothing is auto-applied."
         },
         {
           "name": "documents_ingest",

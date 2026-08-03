@@ -814,6 +814,40 @@ _BASE_TOOLS = [
             "required": ["model_path", "frames"],
         },
     ),
+    Tool(
+        name="discover_semantic_model",
+        description=(
+            "Generative half of the semantic-layer front door: point GoldenMatch at a "
+            "set of source tables and it PROPOSES a draft semantic model -- entity "
+            "types, keys, joins, measures, dimensions -- where every declared key is "
+            "already graded by the certifier (unique-at-grain + fan-out). Discovery is "
+            "hypothesis generation; certification is the falsification test, so the "
+            "draft is pre-proven against the data. Advisory; nothing is auto-applied."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "frames": {
+                    "type": "object",
+                    "description": (
+                        "Map of table name -> data file path, e.g. "
+                        "{\"orders\": \"orders.csv\", \"customers\": \"customers.csv\"}."
+                    ),
+                },
+                "dialect": {
+                    "type": "string",
+                    "description": "Emit dialect for the draft model (metricflow for now).",
+                    "default": "metricflow",
+                },
+                "resolve": {
+                    "type": "boolean",
+                    "description": "Also measure entity fragmentation/undercount via ER (fail-open).",
+                    "default": False,
+                },
+            },
+            "required": ["frames"],
+        },
+    ),
 ]
 
 # --- Cross-language naming aliases (Python<->TS MCP parity) -----------------
@@ -1356,6 +1390,12 @@ def _handle_tool(name: str, args: dict) -> dict:
         return _tool_certify_semantic_model(
             args.get("model_path", ""), args.get("frames", {}), args.get("resolve", False)
         )
+    elif name == "discover_semantic_model":
+        return _tool_discover_semantic_model(
+            args.get("frames", {}),
+            args.get("dialect", "metricflow"),
+            args.get("resolve", False),
+        )
     else:
         return {"error": f"Unknown tool: {name}"}
 
@@ -1394,6 +1434,39 @@ def _tool_certify_semantic_model(model_path: str, frames: dict, resolve: bool) -
     # resolution-tier undercount bounds), the single-sourced projection the
     # catalog emitters + REST + CLI share.
     return certification_report_dict(report)
+
+
+def _tool_discover_semantic_model(frames: dict, dialect: str, resolve: bool) -> dict:
+    """Discover a draft semantic model from a set of source tables.
+
+    ``frames`` maps table name -> data file path; each is loaded into a pyarrow
+    Table. Returns the JSON-serializable ``ProposedModel.to_dict()`` -- the same
+    wire shape the REST ``/semantic/discover`` endpoint + the ``discover-model``
+    CLI emit. Every proposed key is pre-graded by the certifier.
+    """
+    if not isinstance(frames, dict) or not frames:
+        return {"error": "frames must map a table name to a data file path."}
+
+    from goldenmatch.core.io_arrow import read_table_arrow
+    from goldenmatch.semantic import discover_semantic_model
+
+    loaded: dict[str, object] = {}
+    for target, path in frames.items():
+        try:
+            loaded[str(target)] = read_table_arrow(str(path))
+        except FileNotFoundError:
+            return {"error": f"data file not found for {target!r}: {path}"}
+        except Exception as exc:  # noqa: BLE001 - surface a clean tool error
+            return {"error": f"could not read data for {target!r} ({path}): {exc}"}
+
+    try:
+        model = discover_semantic_model(
+            loaded, dialect=str(dialect or "metricflow"), resolve=bool(resolve)
+        )
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    return model.to_dict()
 
 
 def _tool_get_stats() -> dict:

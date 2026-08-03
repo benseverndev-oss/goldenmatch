@@ -242,6 +242,93 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   gate, whose table now shows the pass/fail verdict + undercount. So certifying,
   gating, and the catalog write-back all speak one contract. Tests in
   `tests/test_certify_semantic_model.py`.
+- **Semantic-model discovery — certified key discovery (Phase 1).**
+  `goldenmatch.semantic.discover_keys(table)` proposes a table's candidate entity
+  keys from three cheap signals (identifier col_type / near-unique cardinality /
+  functional-dependency determinant via `fd_identity_scores`) and PROVES each with
+  `certify_key_integrity` — so a returned `KeyCandidate` is pre-graded
+  (`is_trustworthy`, fan-out, the certificate). Ranked trustworthy-first; a table
+  with no clean key returns only untrustworthy candidates (the loud "this grain
+  double-counts" signal). Numeric/date/geo/description columns are excluded from
+  the key-cardinality signal (they're measures/dimensions, not keys). The first
+  slice of the semantic-model discovery arc (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`) — the
+  generative half of the semantic wedge, where discovery is hypothesis generation
+  and the certifier is the falsification test. Single-column keys for this slice;
+  compound/grain-ambiguous keys + the entity/join/measure phases + the
+  `discover_semantic_model` orchestrator are the following PRs. Tests:
+  `tests/test_semantic_discovery_keys.py`.
+- **Semantic-model discovery — certified join / FK discovery (Phase 3).**
+  `goldenmatch.semantic.discover_joins(tables, keys)` proposes the foreign-key joins
+  across a set of tables and PROVES each join's cardinality with the same certifier
+  the certify wedge uses. FK inference is the hypothesis (a column whose non-null
+  values are a subset of another table's certified key, matching semantic type →
+  a `many_to_one` join); `certify_cube_joins` is the falsification test (the "one"
+  side must be unique at grain, else a metric joined across it double-counts). A
+  returned `JoinCandidate` is pre-graded (`is_trustworthy`, fan-out, the certificate
+  on the referenced key); ranked trustworthy-first. Numeric/date/geo columns are
+  never proposed as foreign keys, and an untrustworthy target `KeyCandidate` is
+  skipped (an unsound grain makes an unsound join). Single-column FKs referencing the
+  caller-supplied per-table keys for this slice; compound/self-referential joins are
+  follow-ons. The second slice of the semantic-model discovery arc (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discovery_joins.py`.
+- **Semantic-model discovery — cross-table entity typing (Phase 2).**
+  `goldenmatch.semantic.discover_entity_types(tables)` groups source tables into the
+  real-world entity types they realize, so the later phases conform one shared key /
+  one dimension per entity instead of one per table. Two signals decide it: a
+  **column-semantic signature** (columns canonicalize to shared tokens via the
+  `schema_match` synonym map + profiled `col_type`; high Jaccard → same kind of thing)
+  and **value overlap** on a shared identity column (email/phone/id-shaped) — but the
+  value-overlap "same entity" signal fires ONLY when the shared column is near-unique
+  on BOTH sides (the same population enumerated twice), so a foreign-key reference
+  (e.g. `orders.customer_id` into `customers`) is correctly read as a Phase-3 join, not
+  as sameness. Each `EntityType` names itself from its dominant hint (`person` /
+  `organization` / `entity_N`), records the per-table conformance key when keys are
+  supplied, and ranks multi-table-first. The third slice of the semantic-model
+  discovery arc (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discovery_entities.py`.
+- **Semantic-model discovery — grain-gated measure/dimension proposal (Phase 4).**
+  `goldenmatch.semantic.discover_measures(table, key=…)` proposes the measures +
+  dimensions a semantic model would declare over a table, and gates each measure's
+  `SUM`-safety on the grain key's Phase-1 CERTIFICATE. `COUNT`/`AVG`/`MIN`/`MAX` are
+  always proposed (fan-out-independent); `SUM` is proposed ONLY when the grain
+  certified clean (`max_fan_out == 1.0`) — on a fanned-out (or unknown) grain the
+  measure is returned with `safe_to_sum == False` and `SUM` withheld, the loud "this
+  would double-count" signal. Dimensions are the low-cardinality categorical columns +
+  dates + geo; the grain and id/reference columns are neither measure nor dimension.
+  So the certifier that graded the key directly grades the measures. The fourth slice
+  of the semantic-model discovery arc (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discovery_measures.py`.
+- **Semantic-model discovery — orchestrator + `discover-model` CLI (Phase 5).**
+  `goldenmatch.semantic.discover_semantic_model(tables)` assembles all four discovery
+  phases (keys → entity types → certified join graph → grain-gated measures) into a
+  draft MetricFlow model, emits it through the existing dialect emitters, and
+  re-certifies it end-to-end — the deliverable is a normal MetricFlow file plus a
+  verdict-rich `certification_report_dict` where EVERY key is already graded. Only
+  `SUM`-safe measures are declared in the emitted model, so a draft never scaffolds a
+  double-counting `SUM`. `ProposedModel.all_trustworthy` is the headline build-gate
+  signal; `.to_dict()` is the JSON shape the discover surfaces emit. New CLI
+  `goldenmatch discover-model -d name=path ... [--dialect metricflow] [-o model.yml]
+  [--json] [--fail-untrustworthy]` (Python-only, mirrors `certify-keys`). Nothing
+  auto-ships — a human reviews the graded draft. The fifth slice of the semantic-model
+  discovery arc (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discovery_model.py`.
+- **Semantic-model discovery — MCP tool + REST endpoint (Phase 6).** Surfaces
+  `discover_semantic_model` on MCP (`discover_semantic_model` tool) and REST
+  (`POST /semantic/discover`), both returning the same `ProposedModel.to_dict()`
+  wire shape the `discover-model` CLI emits — one contract across every surface, so a
+  build gate reads `all_trustworthy` identically whether it calls the tool, the
+  endpoint, or the CLI. Input is `frames` (table name → data file path), `dialect`
+  (default `metricflow`), and `resolve`; bad input / unreadable files / an
+  unsupported dialect return a clean `{"error": ...}` rather than raising. Python-only,
+  mirroring the `certify_semantic_model` surface. The sixth slice of the
+  semantic-model discovery arc (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discover_surface.py`.
 
 ### Changed
 - **FS out-of-core streaming: single `resolve_fs_block_source` knob + DuckDB

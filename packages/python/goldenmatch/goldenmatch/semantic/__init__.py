@@ -45,6 +45,21 @@ from goldenmatch.semantic.cube import (
     emit_cube_yaml,
     parse_cube_models,
 )
+from goldenmatch.semantic.discovery import (
+    Dimension,
+    EntityType,
+    JoinCandidate,
+    KeyCandidate,
+    Measure,
+    ProposedModel,
+    ProposedTable,
+    TableMeasures,
+    discover_entity_types,
+    discover_joins,
+    discover_keys,
+    discover_measures,
+    discover_semantic_model,
+)
 from goldenmatch.semantic.key_integrity import (
     certify_key_integrity,
     certify_structural_json,
@@ -137,4 +152,22 @@ __all__ = [
     "CubeDimension",
     "CubeMeasure",
     "CubeJoin",
+    # semantic-model discovery (Phase 1) — certified key discovery per table
+    "discover_keys",
+    "KeyCandidate",
+    # semantic-model discovery (Phase 2) — cross-table entity-type discovery
+    "discover_entity_types",
+    "EntityType",
+    # semantic-model discovery (Phase 3) — certified join / FK discovery across tables
+    "discover_joins",
+    "JoinCandidate",
+    # semantic-model discovery (Phase 4) — grain-gated measure/dimension proposal
+    "discover_measures",
+    "Measure",
+    "Dimension",
+    "TableMeasures",
+    # semantic-model discovery (Phase 5) — the orchestrator (assemble + emit + certify)
+    "discover_semantic_model",
+    "ProposedModel",
+    "ProposedTable",
 ]
