@@ -68,7 +68,8 @@
         "records_upserted": 4,
         "conflicts_flagged": 0,
         "relationships_added": 0,
-        "relationships_deleted": 0
+        "relationships_deleted": 0,
+        "deterministic_merged": 0
       }
     },
     {
@@ -116,7 +117,8 @@
         "records_upserted": 2,
         "conflicts_flagged": 0,
         "relationships_added": 0,
-        "relationships_deleted": 0
+        "relationships_deleted": 0,
+        "deterministic_merged": 0
       }
     },
     {
@@ -164,7 +166,8 @@
         "records_upserted": 2,
         "conflicts_flagged": 0,
         "relationships_added": 0,
-        "relationships_deleted": 0
+        "relationships_deleted": 0,
+        "deterministic_merged": 0
       }
     }
   ],

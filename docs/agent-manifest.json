@@ -1340,6 +1340,13 @@
               "description": "Rules deriving entity-to-entity relationship edges from shared non-identity attributes; empty leaves identity resolution unchanged."
             },
             {
+              "name": "deterministic_merge_keys",
+              "type": "list[str]",
+              "required": false,
+              "default": "[]",
+              "description": "Authoritative identifier columns (e.g. 'npi') whose shared non-null value collapses fragmented entities into one AFTER resolution: records are reassigned to the surviving id and absorbed nodes retired. A unique government id can't be split across entities. Entity-level (post-resolve), so it never cascades clusters. Empty (default) = off."
+            },
+            {
               "name": "stitching",
               "type": "ChannelStitchConfig | None",
               "required": false,
