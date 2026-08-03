@@ -566,6 +566,30 @@ def _fs_streaming_dedupe_eligible(
     return True
 
 
+def _fs_narrow_base_active(
+    config: GoldenMatchConfig, matchkeys: list, output_dir: str | None
+) -> bool:
+    """Lever 1 (frame-residency) gate: skip the whole-frame ``__xform_``
+    materialization so the resident ``base`` stays ~40% narrower, and let the
+    ``bucketed`` route recompute each transform per shard at score time. Active
+    ONLY when ``GOLDENMATCH_FS_XFORM_PER_SHARD`` is on AND this run takes the
+    eligible ``bucketed`` streaming route (so no other route ever sees a base
+    missing its ``__xform_`` columns). Byte-identical output — EM applies
+    transforms from raw source and the per-shard recompute re-adds the exact
+    columns the native fast path needs. Spec:
+    ``docs/superpowers/specs/2026-08-03-fs-frame-residency-disk-spill-design.md``."""
+    from goldenmatch.backends.fs_out_of_core import (
+        _fs_xform_per_shard_enabled,
+        resolve_fs_block_source,
+    )
+
+    return (
+        _fs_xform_per_shard_enabled()
+        and resolve_fs_block_source() == "bucketed"
+        and _fs_streaming_dedupe_eligible(config, matchkeys, output_dir)
+    )
+
+
 def _run_fs_streaming_dedupe(
     collected_df: Any,
     config: GoldenMatchConfig,
@@ -3123,7 +3147,11 @@ def _run_dedupe_pipeline(
             _apply_memory_pre(memory_store, config, matchkeys)
 
         with stage("precompute_matchkey_transforms"):
-            collected_frame = precompute_matchkey_transforms_frame(_frame, matchkeys)
+            collected_frame = precompute_matchkey_transforms_frame(
+                _frame,
+                matchkeys,
+                xform=not _fs_narrow_base_active(config, matchkeys, output_dir),
+            )
         collected_df = collected_frame.native
         combined_lf = collected_frame
         # W-5: mirror the classic prep tail -- auto-suggest runs after the
@@ -3370,7 +3398,11 @@ def _run_dedupe_pipeline(
         with stage("combined_lf_collect"):
             _collected_pre_mk = combined_lf.collect()
         with stage("precompute_matchkey_transforms"):
-            collected_df = precompute_matchkey_transforms(_collected_pre_mk, matchkeys)
+            collected_df = precompute_matchkey_transforms(
+                _collected_pre_mk,
+                matchkeys,
+                xform=not _fs_narrow_base_active(config, matchkeys, output_dir),
+            )
         combined_lf = collected_df.lazy()
     with stage("auto_suggest_blocking"):
         _run_auto_suggest(collected_df, config)

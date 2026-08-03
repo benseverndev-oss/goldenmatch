@@ -178,7 +178,10 @@ def main() -> None:
     ap.add_argument("--rows", type=int, required=True)
     ap.add_argument(
         "--mode",
-        choices=["streaming", "sequential", "spill", "bucketed", "in_memory"],
+        choices=[
+            "streaming", "sequential", "spill", "bucketed", "bucketed_narrow",
+            "in_memory",
+        ],
         required=True,
         help=(
             "streaming=DuckDB out-of-core (FS_BLOCK_SOURCE=duckdb); "
@@ -187,7 +190,10 @@ def main() -> None:
             "disk + external union-find (FS_BLOCK_SOURCE=spill), the bounded-edge "
             "path; bucketed=frame-residency out-of-core -- hash-bucket the frame to "
             "disk per pass + score bucket-by-bucket (FS_BLOCK_SOURCE=bucketed), the "
-            "bounded-FRAME path (never a whole-frame scoring copy); in_memory="
+            "bounded-FRAME path (never a whole-frame scoring copy); bucketed_narrow="
+            "bucketed + Lever 1 (GOLDENMATCH_FS_XFORM_PER_SHARD=1): skip whole-frame "
+            "__xform_ materialization (~40% narrower resident base) and recompute "
+            "per shard -- the arm B of the frame-residency A/B; in_memory="
             "default pipeline contrast (EXPECTED OOM at 50M)"
         ),
     )
@@ -242,7 +248,9 @@ def main() -> None:
     sampler.start()
     t0 = time.perf_counter()
     try:
-        if args.mode in ("streaming", "sequential", "spill", "bucketed"):
+        if args.mode in (
+            "streaming", "sequential", "spill", "bucketed", "bucketed_narrow",
+        ):
             # streaming -> DuckDB out-of-core; sequential -> in-RAM Arrow/Rust
             # batches + end-WCC; spill -> DuckDB-FREE out-of-core (per-pass edge
             # shards on disk + external union-find); bucketed -> frame-residency
@@ -255,7 +263,15 @@ def main() -> None:
                 "sequential": "sequential",
                 "spill": "spill",
                 "bucketed": "bucketed",
+                "bucketed_narrow": "bucketed",
             }[args.mode]
+            # Lever 1 arm B: narrow resident base + per-shard __xform_ recompute.
+            # Arm A (plain "bucketed") explicitly clears the flag so a stale env
+            # can't contaminate the same-box A/B.
+            if args.mode == "bucketed_narrow":
+                os.environ["GOLDENMATCH_FS_XFORM_PER_SHARD"] = "1"
+            else:
+                os.environ.pop("GOLDENMATCH_FS_XFORM_PER_SHARD", None)
             if args.mode == "spill" and args.force_shard:
                 # Skip the fused short-circuit so the edge-shard spill mechanism
                 # (pair_sink shards + external_wcc_from_shards) actually runs.
@@ -277,7 +293,9 @@ def main() -> None:
                 result["internal_path"] = (
                     "fused" if res.get("fused") else "edge_shard"
                 )
-            elif args.mode == "bucketed" and not result["bucketed_engaged"]:
+            elif args.mode in ("bucketed", "bucketed_narrow") and not result[
+                "bucketed_engaged"
+            ]:
                 result["error"] = (
                     "bucketed route did NOT engage -- streaming ran a different "
                     "orchestrator; the frame-residency bucketing was not exercised"
@@ -286,6 +304,9 @@ def main() -> None:
             result["dupes_count"] = res.get("dupes_count")
             result["golden_count"] = res.get("golden_count")
             result["pairs"] = res.get("pairs")
+            # Lever 1 A/B mechanism metrics: resident base width + per-shard flag.
+            result["base_ncols"] = res.get("base_ncols")
+            result["xform_per_shard"] = res.get("xform_per_shard")
             if not result["streaming_engaged"]:
                 result["error"] = (
                     "streaming short-circuit did NOT engage -- fell back to "

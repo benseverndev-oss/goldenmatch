@@ -464,6 +464,59 @@ def test_dedupe_to_parquet_streaming_parity_with_in_memory(tmp_path, monkeypatch
     assert stream_parts == sorted(mem_parts)
 
 
+def _sorted_rows(path):
+    """Column-order-checked, row-order-independent view of a parquet file for
+    byte-identity comparison."""
+    import pyarrow.parquet as pq
+
+    t = pq.read_table(path)
+    rows = sorted(tuple(sorted(r.items())) for r in t.to_pylist())
+    return (list(t.column_names), rows)
+
+
+def test_bucketed_narrow_base_lever1_parity(tmp_path, monkeypatch):
+    """Lever 1 (frame-residency): the bucketed route with
+    GOLDENMATCH_FS_XFORM_PER_SHARD=1 (narrow resident base + per-shard __xform_
+    recompute) is BYTE-IDENTICAL to the wide-base bucketed route in
+    unique/dupes/golden + pairs, and the resident base is strictly narrower (the
+    __xform_ block dropped). This is the parity gate for the Lever 1 A/B."""
+    from goldenmatch import dedupe_to_parquet
+
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+    monkeypatch.setenv("GOLDENMATCH_FS_BLOCK_SOURCE", "bucketed")
+
+    csv_path = tmp_path / "people.csv"
+    _make_person_csv(csv_path)
+    cfg = _fs_person_config()
+
+    # Arm A: wide base (flag off).
+    monkeypatch.delenv("GOLDENMATCH_FS_XFORM_PER_SHARD", raising=False)
+    wide = dedupe_to_parquet(str(csv_path), out_dir=str(tmp_path / "wide"), config=cfg)
+
+    # Arm B: narrow base + per-shard recompute (flag on).
+    monkeypatch.setenv("GOLDENMATCH_FS_XFORM_PER_SHARD", "1")
+    narrow = dedupe_to_parquet(str(csv_path), out_dir=str(tmp_path / "narrow"), config=cfg)
+
+    # Both take the bucketed streaming route.
+    assert wide["bucketed"] is True and narrow["bucketed"] is True
+    # Mechanism: wide kept the __xform_ block, narrow dropped it (per-shard on).
+    assert wide["xform_per_shard"] is False
+    assert narrow["xform_per_shard"] is True
+    assert narrow["base_ncols"] < wide["base_ncols"]
+
+    # Byte-identical counts + pairs.
+    for k in ("unique_count", "dupes_count", "golden_count", "pairs"):
+        assert wide[k] == narrow[k], k
+
+    # Byte-identical row-id partitions + unique/golden row sets (columns + values).
+    assert _partition_set_from_parquet(wide["dupes_path"]) == _partition_set_from_parquet(
+        narrow["dupes_path"]
+    )
+    assert _sorted_rows(wide["unique_path"]) == _sorted_rows(narrow["unique_path"])
+    if wide["golden_count"]:
+        assert _sorted_rows(wide["golden_path"]) == _sorted_rows(narrow["golden_path"])
+
+
 # ── resolve_fs_block_source: the single knob unifying the two streaming lanes ──
 
 def test_resolve_fs_block_source_default_is_eager(monkeypatch):

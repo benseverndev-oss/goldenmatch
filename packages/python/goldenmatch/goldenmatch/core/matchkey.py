@@ -289,9 +289,19 @@ def _xform_sig(field: MatchkeyField) -> str:
 
 
 def precompute_matchkey_transforms(
-    df: pl.DataFrame, matchkeys: list[MatchkeyConfig]
+    df: pl.DataFrame, matchkeys: list[MatchkeyConfig], *, xform: bool = True
 ) -> pl.DataFrame:
     """Add one __xform_<sig>__ column per unique (field, transforms) signature.
+
+    ``xform=False`` (Lever 1, frame-residency) materializes the synthesized
+    ``derive_from`` NE/field columns but SKIPS the wide ``__xform_<sig>__``
+    block, returning a ~40%-narrower frame. The bucketed FS out-of-core route
+    uses this to keep the resident ``base`` narrow and recompute each
+    ``__xform_`` per bucket shard at score time instead. Byte-identical
+    downstream: EM applies transforms from raw source (never reads
+    ``__xform_``), and the per-shard recompute re-adds the exact same columns
+    the native fast path expects. See
+    ``docs/superpowers/specs/2026-08-03-fs-frame-residency-disk-spill-design.md``.
 
     Same field+transforms across multiple matchkeys reuses one column — dedup
     is automatic via the signature. Native chains use vectorized Polars
@@ -398,6 +408,11 @@ def precompute_matchkey_transforms(
     if _derived_exprs:
         df = df.with_columns(_derived_exprs)
 
+    if not xform:
+        # Lever 1: keep derived-NE columns (EM + scoring read them) but skip the
+        # wide __xform_ block; the bucketed route recomputes per shard.
+        return df
+
     for mk in matchkeys:
         for field in mk.fields:
             _materialize_xform(field)
@@ -427,7 +442,9 @@ def precompute_matchkey_transforms(
     return df
 
 
-def precompute_matchkey_transforms_frame(frame, matchkeys: list[MatchkeyConfig]):
+def precompute_matchkey_transforms_frame(
+    frame, matchkeys: list[MatchkeyConfig], *, xform: bool = True
+):
     """Frame-level twin of ``precompute_matchkey_transforms`` (D2s-b, spine
     descent). Accepts a seam ``Frame`` (or a native frame) and returns a Frame
     of the same backend with the identical ``__xform_<sig>__`` / derived-NE
@@ -451,7 +468,7 @@ def precompute_matchkey_transforms_frame(frame, matchkeys: list[MatchkeyConfig])
 
     f = to_frame(frame)
     if isinstance(f, PolarsFrame):
-        return PolarsFrame(precompute_matchkey_transforms(f.native, matchkeys))
+        return PolarsFrame(precompute_matchkey_transforms(f.native, matchkeys, xform=xform))
 
     # Synthesized NE columns first (matchkey.py legacy order): a derived NE
     # field must exist before its xform signature materializes below.
@@ -472,6 +489,10 @@ def precompute_matchkey_transforms_frame(frame, matchkeys: list[MatchkeyConfig])
             f = _maybe_derive(f, ne, " ")
         for field in mk.fields:
             f = _maybe_derive(f, field, getattr(field, "derive_separator", " ") or " ")
+
+    if not xform:
+        # Lever 1: keep derived-NE columns, skip the wide __xform_ block.
+        return f
 
     seen: set[str] = set()
 
