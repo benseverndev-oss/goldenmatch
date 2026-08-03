@@ -1331,7 +1331,8 @@ def _faithfulness_core(tok, model, dev, true_id, false_id, tr, te, rows, fields,
 # --------------------------------------------------------------------------- #
 @app.function(image=_image, gpu=GPU, timeout=60 * 60, volumes={"/out": _out_vol})
 def causal_attribution(per_class: int = 200, seed: int = 0, negatives: str = "hard",
-                       threshold: float = 0.5, dataset: str = "person") -> None:
+                       threshold: float = 0.5, dataset: str = "person",
+                       max_order: int = 1) -> None:
     """Per-pair CAUSAL field attribution by occlusion -- not another R^2.
 
     For each pair and each field, blank that field on BOTH records and re-score.
@@ -1368,7 +1369,7 @@ def causal_attribution(per_class: int = 200, seed: int = 0, negatives: str = "ha
 
     sys.path.insert(0, "/root/interp")
     sys.path.insert(0, "/root")
-    from field_attribution import attribution_summary
+    from field_attribution import ablation_flip_profile, attribution_summary
     from goldenmatch.core.er_matcher.explainer import PERSON_FIELD_IMPORTANCE
 
     tok, model = _load_model()
@@ -1428,8 +1429,43 @@ def causal_attribution(per_class: int = 200, seed: int = 0, negatives: str = "ha
               f"{necessity['spearman_vs_learned_weights']:+.3f}", flush=True)
     print(f"[attr] any-field flip rate = {necessity['any_flip_rate']:.3f}", flush=True)
 
+    # MULTI-FIELD ablation: single-field occlusion says "no ONE field decides this"
+    # for ~81% of pairs. The sharper question is whether any PAIR or TRIPLE does --
+    # i.e. whether the decision is decomposable but not 1-sparse (explain it in
+    # pairs) or densely redundant (no small-set attribution exists at all).
+    flip_profile = None
+    if max_order > 1:
+        from itertools import combinations
+
+        combos: list[tuple] = []
+        for k in range(1, max_order + 1):
+            combos.extend(combinations(fields, k))
+        print(f"[attr] multi-field sweep: {len(combos)} combos up to order "
+              f"{max_order} x {len(pairs)} pairs", flush=True)
+        multi = np.zeros((len(pairs), len(combos)))
+        for j, combo in enumerate(combos):
+            drop = set(combo)
+            multi[:, j] = p_match(
+                [(blanked(rows[a], drop), blanked(rows[b], drop)) for a, b, _ in pairs]
+            )
+            if j % 10 == 0:
+                print(f"[attr]   {j + 1}/{len(combos)}", flush=True)
+        flip_profile = ablation_flip_profile(
+            base, [tuple(c) for c in combos], multi, threshold=threshold
+        )
+        for k, e in sorted(flip_profile["by_order"].items()):
+            print(f"[attr] order {k}: any-flip {e['any_flip_rate']:.3f}  "
+                  f"mean {e['mean_flip_rate']:.3f}  max {e['max_flip_rate']:.3f}  "
+                  f"best={e['best_combo']}", flush=True)
+        print(f"[attr] cumulative flippable by <=k: "
+              f"{ {k: round(v, 3) for k, v in flip_profile['cumulative_flippable'].items()} }",
+              flush=True)
+        print(f"[attr] never flipped at any order: "
+              f"{flip_profile['never_flipped_frac']:.3f}", flush=True)
+
     payload = {
         "method": "occlusion (blank field on both records -> '(missing)' sentinel)",
+        "max_order": max_order, "flip_profile": flip_profile,
         "dataset": dataset, "regime": regime,
         "negatives": negatives, "seed": seed, "threshold": threshold,
         "fields": fields,
@@ -1456,10 +1492,11 @@ def causal_attribution(per_class: int = 200, seed: int = 0, negatives: str = "ha
 
 @app.local_entrypoint()
 def attribution(per_class: int = 200, seed: int = 0, negatives: str = "hard",
-                dataset: str = "person") -> None:
+                dataset: str = "person", max_order: int = 1) -> None:
     """Per-pair causal field attribution by occlusion (necessity + sufficiency)."""
     causal_attribution.remote(
-        per_class=per_class, seed=seed, negatives=negatives, dataset=dataset
+        per_class=per_class, seed=seed, negatives=negatives, dataset=dataset,
+        max_order=max_order,
     )
 
 

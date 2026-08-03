@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(__file__))
 
 from interp.field_attribution import (  # noqa: E402
+    ablation_flip_profile,
     affine_r2,
     attribute_direction,
     attribution_summary,
@@ -252,6 +253,61 @@ class TestAffineR2:
 
         with pytest.raises(ValueError):
             affine_r2(np.zeros(5), np.zeros(4), np.zeros(3), np.zeros(3))
+
+
+class TestAblationFlipProfile:
+    COMBOS = [("a",), ("b",), ("c",), ("a", "b"), ("a", "c"), ("b", "c"), ("a", "b", "c")]
+
+    def test_dense_redundancy_only_flips_at_high_order(self):
+        # nothing flips at k=1 or k=2; only removing all three crosses 0.5
+        base = np.array([0.9, 0.9])
+        occ = np.array([
+            [0.8, 0.8, 0.8, 0.7, 0.7, 0.7, 0.1],
+            [0.8, 0.8, 0.8, 0.7, 0.7, 0.7, 0.2],
+        ])
+        r = ablation_flip_profile(base, self.COMBOS, occ)
+        assert r["by_order"][1]["any_flip_rate"] == 0.0
+        assert r["by_order"][2]["any_flip_rate"] == 0.0
+        assert r["by_order"][3]["any_flip_rate"] == 1.0
+        assert r["cumulative_flippable"][3] == 1.0
+        assert r["min_flip_set_hist"] == {1: 0, 2: 0, 3: 2}
+
+    def test_two_sparse_decision_is_detected(self):
+        # no single field flips, but a pair does -> decomposable, not 1-sparse
+        base = np.array([0.9])
+        occ = np.array([[0.8, 0.8, 0.8, 0.2, 0.7, 0.7, 0.1]])
+        r = ablation_flip_profile(base, self.COMBOS, occ)
+        assert r["by_order"][1]["any_flip_rate"] == 0.0
+        assert r["by_order"][2]["any_flip_rate"] == 1.0
+        assert r["min_flip_set_hist"][2] == 1
+        assert r["by_order"][2]["best_combo"] == ["a", "b"]
+
+    def test_one_sparse_decision_counts_at_k1(self):
+        base = np.array([0.9])
+        occ = np.array([[0.1, 0.8, 0.8, 0.1, 0.1, 0.7, 0.05]])
+        r = ablation_flip_profile(base, self.COMBOS, occ)
+        assert r["by_order"][1]["any_flip_rate"] == 1.0
+        assert r["min_flip_set_hist"][1] == 1  # credited to the SMALLEST set
+
+    def test_never_flipped_is_reported_not_hidden(self):
+        base = np.array([0.9, 0.9])
+        occ = np.full((2, 7), 0.8)
+        r = ablation_flip_profile(base, self.COMBOS, occ)
+        assert r["never_flipped"] == 2
+        assert r["never_flipped_frac"] == 1.0
+        assert r["cumulative_flippable"][3] == 0.0
+
+    def test_cumulative_is_monotone(self):
+        rng = np.random.default_rng(0)
+        base = rng.random(50)
+        occ = rng.random((50, 7))
+        r = ablation_flip_profile(base, self.COMBOS, occ)
+        vals = [r["cumulative_flippable"][k] for k in sorted(r["cumulative_flippable"])]
+        assert vals == sorted(vals)
+
+    def test_shape_validation(self):
+        with pytest.raises(ValueError):
+            ablation_flip_profile(np.zeros(3), self.COMBOS, np.zeros((3, 2)))
 
 
 class TestCorruptionMatching:

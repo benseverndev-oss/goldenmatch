@@ -185,6 +185,73 @@ def attribute_direction_grouped(
     }
 
 
+def ablation_flip_profile(
+    base_p: np.ndarray,
+    combos: list[tuple[str, ...]],
+    occluded_p: np.ndarray,
+    *,
+    threshold: float = 0.5,
+) -> dict[str, Any]:
+    """How many fields must be removed together before the verdict moves?
+
+    ``occluded_p[i, j]`` is P(match) for pair ``i`` with every field in
+    ``combos[j]`` blanked. Single-field ablation answers "is any one field
+    necessary?"; this answers the sharper question the single-field result raises:
+    if no ONE field decides a case, does any PAIR, or TRIPLE?
+
+    That distinction is the difference between a decision that is decomposable but
+    not 1-sparse (explain it in pairs) and one that is densely redundant (no
+    small-set attribution exists at all). Returns per-order flip statistics, the
+    cumulative fraction of pairs flippable by <= k fields, and the distribution of
+    each pair's MINIMAL flipping set size (``None`` bucket = never flipped).
+    """
+    base_p = np.asarray(base_p, dtype=np.float64)
+    occluded_p = np.asarray(occluded_p, dtype=np.float64)
+    if occluded_p.shape != (base_p.shape[0], len(combos)):
+        raise ValueError("occluded_p must be (n_pairs, n_combos) aligned with inputs")
+
+    base_verdict = base_p >= threshold
+    flips = (occluded_p >= threshold) != base_verdict[:, None]
+    orders = sorted({len(c) for c in combos})
+
+    by_order: dict[int, dict[str, Any]] = {}
+    for k in orders:
+        cols = [j for j, c in enumerate(combos) if len(c) == k]
+        f = flips[:, cols]
+        rates = f.mean(axis=0)
+        best = int(np.argmax(rates))
+        by_order[k] = {
+            "n_combos": len(cols),
+            "mean_flip_rate": float(rates.mean()),
+            "max_flip_rate": float(rates.max()),
+            "best_combo": list(combos[cols[best]]),
+            "any_flip_rate": float(f.any(axis=1).mean()),
+        }
+
+    # minimal flipping-set size per pair, and the cumulative curve
+    min_size = np.full(base_p.shape[0], -1, dtype=int)
+    cumulative: dict[int, float] = {}
+    seen = np.zeros(base_p.shape[0], dtype=bool)
+    for k in orders:
+        cols = [j for j, c in enumerate(combos) if len(c) == k]
+        hit = flips[:, cols].any(axis=1)
+        newly = hit & ~seen
+        min_size[newly] = k
+        seen |= hit
+        cumulative[k] = float(seen.mean())
+
+    hist = {int(k): int((min_size == k).sum()) for k in orders}
+    hist_none = int((min_size == -1).sum())
+    return {
+        "n_pairs": int(base_p.shape[0]),
+        "by_order": by_order,
+        "cumulative_flippable": cumulative,
+        "min_flip_set_hist": hist,
+        "never_flipped": hist_none,
+        "never_flipped_frac": float(hist_none / base_p.shape[0]),
+    }
+
+
 def pair_corruption(
     rows: dict[int, dict[str, Any]],
     pairs: list[tuple[int, int, int]],
