@@ -93,10 +93,13 @@ _out_vol = modal.Volume.from_name("er-matcher-out", create_if_missing=True)
     volumes={"/out": _out_vol},
     secrets=[modal.Secret.from_name("er-matcher-hf")],
 )
-def train_truncated_eval(k: int = 16, walmart: str = "walmart_amazon", limit: int = 0) -> None:
+def train_truncated_eval(k: int = 16, walmart: str = "walmart_amazon", limit: int = 0,
+                         epochs: float = 4.0) -> None:
     """TRUNCATE-AND-ADAPT (generative): take the BASE Qwen2.5-1.5B, keep only layers
-    0..k-1, LoRA-SFT it on the SAME corpus + recipe as the full model, then eval
-    IN-DISTRIBUTION (test.jsonl) + ZERO-SHOT CROSS-DOMAIN (held-out walmart). k=28
+    0..k-1, LoRA-SFT it (WITH a trainable readout -- ``lm_head`` in modules_to_save
+    -- so the generative output can realign to the truncated residual; a frozen
+    readout collapses in-distribution too, a readout-adaptation artifact not info
+    loss), then eval IN-DIST (test.jsonl) + ZERO-SHOT held-out walmart. k=28
     reproduces the full model as the control, so the F1 delta vs a truncated k
     isolates the TRUNCATION effect (same base, data, recipe -- only depth differs).
     Answers: is the ~70% strippable depth (found in-distribution) GENERAL, or do the
@@ -120,7 +123,7 @@ def train_truncated_eval(k: int = 16, walmart: str = "walmart_amazon", limit: in
     from train import example_to_messages, load_config, read_jsonl, serialized_token_lengths
 
     cfg = load_config(Path("/root/er_matcher/config.yaml"))
-    out_name = f"eval_trunc{k}.json"
+    out_name = f"eval_trunc{k}_v2.json"  # v2 = trainable readout (modules_to_save)
     print(f"[trunc-sft] base={cfg.base_model} truncate_to_k={k}", flush=True)
 
     tok = AutoTokenizer.from_pretrained(cfg.base_model)
@@ -142,11 +145,15 @@ def train_truncated_eval(k: int = 16, walmart: str = "walmart_amazon", limit: in
     def to_ds(rows):
         return Dataset.from_list([{"messages": example_to_messages(r, cfg)} for r in rows])
 
+    # modules_to_save=["lm_head","norm"] fully trains the readout so it can realign to
+    # the truncated residual (peft unties + trains lm_head). Without this a truncated
+    # model collapses in-distribution too -- the readout, not the info, is the failure.
     peft_cfg = LoraConfig(
         r=cfg.lora_r, lora_alpha=cfg.lora_alpha, lora_dropout=cfg.lora_dropout,
-        target_modules=cfg.lora_target_modules, bias="none", task_type="CAUSAL_LM")
+        target_modules=cfg.lora_target_modules, bias="none", task_type="CAUSAL_LM",
+        modules_to_save=["lm_head", "norm"])
     sft = SFTConfig(
-        output_dir=f"/out/model_trunc{k}", num_train_epochs=cfg.epochs,
+        output_dir=f"/out/model_trunc{k}", num_train_epochs=epochs,
         per_device_train_batch_size=cfg.per_device_batch, gradient_accumulation_steps=cfg.grad_accum,
         learning_rate=cfg.learning_rate, lr_scheduler_type=cfg.lr_scheduler,
         warmup_ratio=cfg.warmup_ratio, weight_decay=cfg.weight_decay, bf16=cfg.bf16,
