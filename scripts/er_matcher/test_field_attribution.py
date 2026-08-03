@@ -9,9 +9,12 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(__file__))
 
 from interp.field_attribution import (  # noqa: E402
+    affine_r2,
     attribute_direction,
     field_agreements,
+    fixed_weight_score,
     label_sae_features,
+    richer_field_features,
 )
 
 FIELDS = ["first_name", "surname", "dob"]
@@ -78,6 +81,97 @@ class TestAttributeDirection:
             attribute_direction(np.zeros(5), np.zeros((4, 3)), FIELDS)
         with pytest.raises(ValueError):
             attribute_direction(np.zeros(4), np.zeros((4, 2)), FIELDS)
+
+
+class TestRicherFieldFeatures:
+    def test_shape_and_names(self):
+        X, names = richer_field_features(_rows(), [(0, 1, 1), (0, 2, 0)], FIELDS)
+        assert X.shape == (2, 6 * len(FIELDS))
+        assert len(names) == 6 * len(FIELDS)
+        assert names[:2] == ["first_name__agreement", "first_name__exact"]
+
+    def test_exact_pair_sets_exact_and_zero_edit(self):
+        X, names = richer_field_features(_rows(), [(0, 1, 1)], FIELDS)
+        idx = {n: j for j, n in enumerate(names)}
+        assert X[0, idx["surname__exact"]] == 1.0
+        assert X[0, idx["surname__agreement"]] == 1.0
+        assert X[0, idx["surname__edit_norm"]] == 0.0
+        assert X[0, idx["surname__missing"]] == 0.0
+        assert X[0, idx["surname__conflict"]] == 0.0
+
+    def test_missing_is_distinguishable_from_conflict(self):
+        rows = {
+            0: {"first_name": "John", "surname": "Smith", "dob": "1990-01-01"},
+            1: {"first_name": "", "surname": "Zzzzzz", "dob": "1990-01-01"},
+        }
+        X, names = richer_field_features(rows, [(0, 1, 0)], FIELDS)
+        idx = {n: j for j, n in enumerate(names)}
+        # first_name absent on one side -> missing, NOT conflict
+        assert X[0, idx["first_name__missing"]] == 1.0
+        assert X[0, idx["first_name__conflict"]] == 0.0
+        # surname present on both but disagreeing -> conflict, NOT missing
+        assert X[0, idx["surname__missing"]] == 0.0
+        assert X[0, idx["surname__conflict"]] == 1.0
+
+    def test_features_are_bounded(self):
+        X, _ = richer_field_features(_rows(), [(0, 3, 1), (0, 2, 0), (2, 3, 0)], FIELDS)
+        assert X.min() >= 0.0
+        assert X.max() <= 1.0
+
+
+class TestFixedWeightScore:
+    def test_weights_are_applied_not_refit(self):
+        X = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+        s = fixed_weight_score(X, FIELDS, {"first_name": 0.42, "surname": 0.04, "dob": 0.01})
+        assert np.allclose(s, [0.42, 0.04])
+
+    def test_unknown_field_contributes_zero(self):
+        X = np.ones((1, 3))
+        s = fixed_weight_score(X, FIELDS, {"first_name": 1.0})
+        assert s[0] == 1.0
+
+    def test_shape_validation(self):
+        import pytest
+
+        with pytest.raises(ValueError):
+            fixed_weight_score(np.zeros((4, 2)), FIELDS, {})
+
+
+class TestAffineR2:
+    def test_perfect_affine_relation_scores_one(self):
+        s = np.linspace(0, 1, 50)
+        y = 3.0 * s - 1.0
+        res = affine_r2(s, y, s, y)
+        assert res["r2_test"] > 0.999
+        assert abs(res["slope"] - 3.0) < 1e-6
+        assert abs(res["intercept"] + 1.0) < 1e-6
+
+    def test_scale_and_offset_are_free_but_shape_is_not(self):
+        # a frozen score that is monotone-but-nonlinear in y cannot reach 1.0
+        rng = np.random.default_rng(0)
+        s = rng.random(400)
+        y = s**3
+        res = affine_r2(s, y, s, y)
+        assert 0.6 < res["r2_test"] < 0.98
+
+    def test_unrelated_score_scores_near_zero(self):
+        rng = np.random.default_rng(1)
+        s_tr, y_tr = rng.random(300), rng.random(300)
+        s_te, y_te = rng.random(300), rng.random(300)
+        assert affine_r2(s_tr, y_tr, s_te, y_te)["r2_test"] < 0.1
+
+    def test_held_out_can_be_worse_than_train(self):
+        rng = np.random.default_rng(2)
+        s_tr, y_tr = rng.random(30), rng.random(30)
+        s_te, y_te = rng.random(300), rng.random(300)
+        res = affine_r2(s_tr, y_tr, s_te, y_te)
+        assert res["r2_test"] <= res["r2_train"]
+
+    def test_shape_validation(self):
+        import pytest
+
+        with pytest.raises(ValueError):
+            affine_r2(np.zeros(5), np.zeros(4), np.zeros(3), np.zeros(3))
 
 
 class TestLabelSaeFeatures:

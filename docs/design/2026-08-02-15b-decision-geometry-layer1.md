@@ -231,12 +231,14 @@ field's two values). Standardized coefficients:
 **R² = 0.51** — an honest faithfulness number *for this target*: human field-agreement
 explains ~half the **projection onto the causal direction**. **But that is the wrong
 target for a per-decision explainer** — the projection is a lossy 1D shadow of the ~8D
-decision. Against the model's **actual P(match) output** (what the explainer explains),
-the *same* simple features reach **R² 0.87**, and richer per-field features **0.97**
-(structured person data; near-bimodal target — see
-`2026-08-03-15b-interp-handoff.md`). So the per-field explanation is much more faithful
-to the model's actual verdict than 0.51 suggests; 0.51 is the pessimistic
-internal-projection number.
+decision. The right target is the model's **actual P(match) output**, measured by the
+committed `modal_interp.py::faithfulness_eval` stage (cluster-disjoint split, fp16
+model, teacher-forced readout) — see the faithfulness section of
+`2026-08-03-15b-interp-handoff.md` for the table, the caveats, and the **unreproduced
+earlier 0.87/0.97 figures**. Headline: the *frozen shipped weights* score **0.25–0.32
+against look-alike (hard) negatives and 0.50 against random negatives**, and refitting
+the weights on the same 6-feature basis buys almost nothing (+0.01–0.05) — the binding
+constraint is the feature basis and the linear link, not the frozen weights.
 
 Two readable findings fall straight out of the geometry:
 - **surname ≈ 0 (predicted).** The probe's hard negatives *share* surname-soundex by

@@ -25,10 +25,17 @@ Three stages (each a Modal function; run in order):
      is a real primitive only if moving along it moves the verdict.
      -> interp/causal_layer{L}.json
 
+Later stages (added as the thread progressed) translate and stress-test the
+locked result: ``layer2_abstraction`` (field decomposition), ``layer_early_exit``
+/ ``truncate_adapt`` (depth stripping), ``leniency_dial`` (steering as a P/R
+knob), and ``faithfulness_eval`` (how much of the model's ACTUAL verdict the
+shipped per-field weights explain).
+
 Usage:
   modal run scripts/er_matcher/interp/modal_interp.py::probe_layers
   modal run scripts/er_matcher/interp/modal_interp.py::sae --layer 14
   modal run scripts/er_matcher/interp/modal_interp.py::causal --layer 14
+  modal run scripts/er_matcher/interp/modal_interp.py::faithfulness
 
 Imported by NOTHING (executed only via `modal run`), so the top-level
 `import modal` is intentional and safe -- mirrors modal_train.py.
@@ -941,6 +948,156 @@ def layer2_abstraction(layer: int = 14, per_class: int = 400, seed: int = 0,
         json.dump(payload, fh, indent=2)
     _out_vol.commit()
     print(f"[done] layer2 -> /out/interp/layer2_abstraction_L{layer}.json")
+
+
+# --------------------------------------------------------------------------- #
+# stage 7: faithfulness -- how much of the model's ACTUAL verdict do the        #
+#          per-field weights explain? (the shipped explainer's honesty number)  #
+# --------------------------------------------------------------------------- #
+@app.function(image=_image, gpu=GPU, timeout=60 * 60, volumes={"/out": _out_vol})
+def faithfulness_eval(per_class: int = 400, seed: int = 0, negatives: str = "hard") -> None:
+    """Measure the per-field explanation against the model's ACTUAL P(match).
+
+    The Layer-2 number (``layer2_abstraction``, R^2 ~= 0.51) regresses onto the
+    diff-of-means PROJECTION -- a lossy 1-D shadow of the ~8-D decision. For a
+    per-decision *explainer* the right target is the model's own verdict
+    probability. This stage measures that, on a CLUSTER-DISJOINT test split
+    (same recipe as ``leniency_dial``, so no entity is shared across the split):
+
+      - ``fixed``  -- the SHIPPED ``PERSON_FIELD_IMPORTANCE`` weights, FROZEN;
+                      only an intercept+scale link is fit on train. This is the
+                      number the shipped explainer may honestly cite.
+      - ``simple`` -- the same 6 agreement features, refit on train (a ceiling
+                      for ``fixed``: same basis, free weights).
+      - ``richer`` -- 36 features (agreement/exact/missing/conflict/len/edit).
+      - ``gbm``    -- gradient boosting on the richer features (upper bound,
+                      least legible).
+
+    The gap between ``fixed`` and ``simple`` is the cost of freezing the weights;
+    the gap between ``simple`` and ``gbm`` is the legibility/faithfulness
+    frontier. -> interp/faithfulness.json
+    """
+    import json
+    import os
+    import sys
+
+    import jellyfish
+    import numpy as np
+    import polars as pl
+    import pyarrow.parquet as pq
+    import torch
+
+    sys.path.insert(0, "/root/interp")
+    sys.path.insert(0, "/root")
+    from decision_geometry import mine_probe_pairs
+    from field_attribution import (
+        affine_r2,
+        field_agreements,
+        fixed_weight_score,
+        richer_field_features,
+    )
+    from goldenmatch.core.er_matcher.explainer import PERSON_FIELD_IMPORTANCE
+
+    tok, model = _load_model()
+    true_id, false_id = _true_false_ids(tok)
+    dev = model.device
+
+    raw = pl.from_arrow(pq.read_table(DATA))
+    gold = raw["cluster"].to_list()
+    rows = {i: {f: (raw[f][i] or "") for f in FIELDS} for i in range(len(gold))}
+    surname_key = [jellyfish.soundex(str(raw["surname"][i] or "")) for i in range(len(gold))]
+
+    # cluster-disjoint split: no ENTITY (hence no record) is shared train<->test
+    by_cluster: dict = {}
+    for i, g in enumerate(gold):
+        by_cluster.setdefault(g, []).append(i)
+    clusters = sorted(by_cluster)
+    train_ids = {i for c in clusters[::2] for i in by_cluster[c]}
+    test_ids = {i for c in clusters[1::2] for i in by_cluster[c]}
+    pool = mine_probe_pairs(gold, surname_key, per_class * 3, negatives=negatives, seed=seed)
+    tr = [(a, b, t) for a, b, t in pool if a in train_ids and b in train_ids][: per_class * 2]
+    te = [(a, b, t) for a, b, t in pool if a in test_ids and b in test_ids][: per_class * 2]
+    if not tr or not te:
+        raise RuntimeError(f"empty split: train={len(tr)} test={len(te)}")
+    print(f"[faith] train={len(tr)} test={len(te)} negatives={negatives} "
+          f"(cluster-disjoint)", flush=True)
+
+    def p_match(pairs) -> np.ndarray:
+        """Teacher-forced readout: feed the '{\"match\":' prefix, softmax the
+        true/false logits. Same recipe as leniency_dial -- verdict-identical to
+        generation, and continuous."""
+        prompts = [_prompt(tok, rows[a], rows[b]) + '{"match":' for a, b, _ in pairs]
+        ps = []
+        for i in range(0, len(prompts), 16):
+            enc = tok(prompts[i : i + 16], return_tensors="pt", padding=True).to(dev)
+            with torch.no_grad():
+                logits = model(**enc).logits[:, -1, :]
+            pair = torch.softmax(torch.stack([logits[:, true_id], logits[:, false_id]], 1), 1)
+            ps.append(pair[:, 0].float().cpu().numpy())
+        return np.concatenate(ps)
+
+    p_tr, p_te = p_match(tr), p_match(te)
+    print(f"[faith] P(match) test: mean={p_te.mean():.3f} "
+          f"frac<0.1={float((p_te < 0.1).mean()):.2f} "
+          f"frac>0.9={float((p_te > 0.9).mean()):.2f}", flush=True)
+
+    A_tr, A_te = field_agreements(rows, tr, FIELDS), field_agreements(rows, te, FIELDS)
+    X_tr, feat_names = richer_field_features(rows, tr, FIELDS)
+    X_te, _ = richer_field_features(rows, te, FIELDS)
+
+    results: dict = {}
+
+    # (1) THE number to pin: shipped weights frozen, only the link is fit.
+    fixed = affine_r2(
+        fixed_weight_score(A_tr, FIELDS, PERSON_FIELD_IMPORTANCE), p_tr,
+        fixed_weight_score(A_te, FIELDS, PERSON_FIELD_IMPORTANCE), p_te,
+    )
+    results["fixed"] = {**fixed, "n_features": len(FIELDS), "weights_refit": False}
+    print(f"[faith] fixed  (shipped weights, frozen) R^2_test={fixed['r2_test']:.3f}", flush=True)
+
+    from sklearn.ensemble import GradientBoostingRegressor
+    from sklearn.linear_model import LinearRegression
+
+    def _fit_r2(model_obj, Xa, Xb, name):
+        model_obj.fit(Xa, p_tr)
+        r2_te = float(model_obj.score(Xb, p_te))
+        r2_tr = float(model_obj.score(Xa, p_tr))
+        print(f"[faith] {name:<7} R^2_test={r2_te:.3f} (train {r2_tr:.3f})", flush=True)
+        return {"r2_test": r2_te, "r2_train": r2_tr,
+                "n_features": Xa.shape[1], "weights_refit": True}
+
+    results["simple"] = _fit_r2(LinearRegression(), A_tr, A_te, "simple")
+    results["richer"] = _fit_r2(LinearRegression(), X_tr, X_te, "richer")
+    results["gbm"] = _fit_r2(
+        GradientBoostingRegressor(random_state=0), X_tr, X_te, "gbm"
+    )
+
+    payload = {
+        "target": "model P(match) via teacher-forced true/false logit readout",
+        "split": "cluster-disjoint (no entity shared train<->test)",
+        "negatives": negatives,
+        "n_train": len(tr), "n_test": len(te), "seed": seed,
+        "fields": FIELDS, "richer_feature_names": feat_names,
+        "shipped_weights": {f: PERSON_FIELD_IMPORTANCE.get(f, 0.0) for f in FIELDS},
+        "p_match_test": {
+            "mean": float(p_te.mean()), "std": float(p_te.std()),
+            "frac_below_0.1": float((p_te < 0.1).mean()),
+            "frac_above_0.9": float((p_te > 0.9).mean()),
+        },
+        "results": results,
+    }
+    os.makedirs("/out/interp", exist_ok=True)
+    out_path = f"/out/interp/faithfulness_{negatives}_seed{seed}.json"
+    with open(out_path, "w") as fh:
+        json.dump(payload, fh, indent=2)
+    _out_vol.commit()
+    print(f"[done] faithfulness -> {out_path}")
+
+
+@app.local_entrypoint()
+def faithfulness(per_class: int = 400, seed: int = 0, negatives: str = "hard") -> None:
+    """Pin the shipped explainer's faithfulness against the model's real verdict."""
+    faithfulness_eval.remote(per_class=per_class, seed=seed, negatives=negatives)
 
 
 @app.local_entrypoint()

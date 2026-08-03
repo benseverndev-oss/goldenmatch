@@ -32,8 +32,12 @@ standing discipline: **when a number looks too good, hunt the confound first.**
   field-importance (**first_name 0.42, birth_place 0.30**, occupation/postcode small,
   **surname ~0.04 and dob ~0.01 = near-ignored**), cross-validated by an independently
   trained SAE basis. `modal_interp.py::layer2_abstraction` + the pure/tested
-  `scripts/er_matcher/interp/field_attribution.py`. **Faithfulness bound R² = 0.51**
-  (the field story explains ~half the decision; the rest is context/interactions).
+  `scripts/er_matcher/interp/field_attribution.py`. **R² = 0.51 against the internal
+  projection**; for faithfulness against the model's actual verdict — the number that
+  matters for the explainer — see the faithfulness section below.
+- **Faithfulness measurement — committed.** `modal_interp.py::faithfulness_eval`
+  measures the shipped weights against the model's real P(match) on a cluster-disjoint
+  split. Replaces the lost `scratchpad/faithfulness.py`; see the results section below.
 - **Shipped product — the per-decision explainer.** `goldenmatch/core/er_matcher/
   explainer.py` + `LocalLlamaAdapter.score_and_explain`. Pure/model-free (jaro-winkler
   + the learned weights), schema-agnostic, honest about the R²=0.51 bound. 10 unit
@@ -76,7 +80,8 @@ standing discipline: **when a number looks too good, hunt the confound first.**
   volume **`er-matcher-out`**. fp16 model at `/out/model_1p5b/merged`. Artifacts on the
   volume: `layer_probes.json`, `sae_layer14.pt`, `causal_multilayer_8_20.json`,
   `layer2_abstraction_L14.json`, `layer_early_exit.json`, `truncate_adapt.json`,
-  `eval_trunc{28,16,12}_v2.json`, `leniency_dial.json`. Modal token is set locally.
+  `eval_trunc{28,16,12}_v2.json`, `leniency_dial.json`,
+  `faithfulness_{hard,random}_seed{0,1}.json`. Modal token is set locally.
 - **Pinned GGUF** for on-box work: `scratchpad/er-1p5b.gguf` (Q4, the same weights as
   `/out/model_1p5b/merged`). llama.cpp only exposes the final layer — GPU/Modal needed
   for residual-stream + hooks.
@@ -84,41 +89,71 @@ standing discipline: **when a number looks too good, hunt the confound first.**
   probe set); training corpus `data/er_matcher/*.jsonl` (2,844 synthetic-only — NOT the
   shipped model's ~17,690-row multi-source corpus; matters for fair strip comparisons).
 
-## Faithfulness hardening — result (the 51% was the wrong target)
+## Faithfulness hardening — result (0.51 measured the wrong target; 0.87 did not survive)
 
-Held-out R² explaining the model's **actual P(match)** (not the internal projection),
-400 record-disjoint historical_50k pairs (`scratchpad/faithfulness.py`):
+The 0.51 in `explainer.py` is the R² of explaining the internal diff-of-means
+**projection** — a lossy 1D shadow of the ~8D decision, and the wrong target for a
+per-decision explainer. The right target is the model's **actual P(match)**.
 
-| basis | R² |
-|---|---|
-| simple linear (the 6-feature basis the explainer ships) | **0.871** |
-| richer linear (36 features: exact / missing / conflict / edit-dist / len-ratio) | **0.967** |
-| GBM on richer features | **0.984** |
+That is now measured by a **committed, reproducible** stage —
+`modal_interp.py::faithfulness_eval` (pure helpers + 21 unit tests in
+`field_attribution.py` / `test_field_attribution.py`) — on a **cluster-disjoint** split
+(no entity shared train↔test), the fp16 `/out/model_1p5b/merged`, teacher-forced
+`{"match":` → softmax(true,false) readout. Artifacts:
+`interp/faithfulness_{hard,random}_seed{0,1}.json`.
 
-The **0.51 was measured against the wrong target** — the R² of explaining the internal
-diff-of-means *projection* (a lossy 1D shadow of the ~8D decision). Against the model's
-actual verdict probability — what a per-decision explainer should explain — the *same
-simple features* reach **0.87**, and richer features **0.97**. So the per-field
-explanation is far more faithful than 0.51 implied. **Caveats:** this is structured
-person data (the *easy* case — the decision genuinely is mostly weighted field
-agreement); P(match) is near-bimodal (explaining a near-deterministic verdict is
-easier); messy/product/cross-domain would be lower (untested); and these are *fresh*
-fits (a ceiling), while the shipped explainer uses the *fixed* causal-direction weights
-whose exact output-faithfulness (≤0.87) is not yet pinned.
+| basis | hard neg. s0 | hard neg. s1 | random neg. s0 |
+|---|---|---|---|
+| **`fixed`** — the SHIPPED weights, frozen (intercept+scale only) | **0.251** | **0.317** | **0.495** |
+| `simple` — same 6 features, weights refit | 0.300 | 0.329 | 0.501 |
+| `richer` — 36 features (exact/missing/conflict/edit/len) | 0.667 | 0.767 | 0.747 |
+| `gbm` — gradient boosting on the richer features | 0.750 | 0.810 | 0.837 |
 
-**Follow-up:** pin the fixed-weight output R², then either (a) cite ~0.87 as the
-explainer's faithfulness on structured PII (a big honest upgrade from 0.51), and/or (b)
-add a richer/GBM "high-faithfulness" mode alongside the simple/legible one. Also
-re-measure on a messy/product domain — that number is the one a skeptic will ask for.
+**The two findings that matter:**
+
+1. **Freezing the shipped weights costs almost nothing** (+0.01–0.05 vs refitting the
+   same basis). The causally-derived weights are ~as good as a fresh fit — the
+   explainer's central claim holds up. The binding constraint is the **feature basis and
+   the linear link**, not the frozen weights: richer features roughly double R².
+2. **The earlier 0.871 / 0.967 / 0.984 did NOT reproduce.** Those came from
+   `scratchpad/faithfulness.py`, which no longer exists on any box (it lived in the
+   session `Issues.md` teleports to), so the gap can't be diagnosed directly. Known
+   protocol differences, each of which would inflate the old number: it likely scored
+   the **Q4 GGUF via llama.cpp** rather than the fp16 model; it said **"record-disjoint"**
+   where this is **cluster-disjoint** (record-disjoint alone still leaks — the *same
+   entity's* other records sit in train); and its negative-mining regime is unknown.
+   Note that even the *easy* regime here (random negatives) gives simple = 0.501, not
+   0.871 — so regime alone does not close the gap. **Treat 0.87/0.97/0.98 as
+   unreproduced and do not cite them.**
+
+**Consequence for the shipped explainer:** do **not** raise
+`PERSON_IMPORTANCE_FAITHFULNESS_R2` to 0.87. The measured output-faithfulness of the
+shipped weights is **0.50 on random negatives (≈ the 0.51 already published) and only
+0.25–0.32 in the discriminative look-alike regime** — which is precisely where the
+explainer is used (a review queue is look-alikes). The current 0.51 is, if anything,
+*optimistic* for the hard regime rather than pessimistic. Left unchanged pending the
+decision below.
+
+**Caveats on these numbers too:** structured person data is the easy case; P(match) is
+near-bimodal (82% of hard-negative test pairs sit outside [0.1, 0.9]), and a *linear*
+link to a bimodal target is a poor functional form — a logit link would likely raise all
+four rows and is the fairer metric to add next. Messy/product domains untested.
+
+**Follow-up:** (a) re-measure with a logit link before publishing any headline number;
+(b) decide whether to add a richer/GBM "high-faithfulness" mode (≈0.75–0.84) alongside
+the simple/legible one, and whether to report the hard-negative number in the product;
+(c) re-measure on a messy/product domain — that is the number a skeptic will ask for.
 
 ## Next steps (highest leverage first)
 
 1. **Faithfulness, two modes.** Ship (a) the simple/legible explainer (done) and (b) a
-   richer GBM/SHAP mode for a higher, honest R². For the audit story, add **per-pair
-   causal attribution** (ablate each field's residual contribution, measure the real
-   verdict flip) — that's a direct causal claim, not an R², and it's what a compliance
-   buyer wants. It costs extra forward passes → run it on the review queue, not every
-   decision.
+   richer GBM/SHAP mode for a higher, honest R² (measured ≈0.75–0.84 — decide against
+   the legibility cost). First re-run `faithfulness_eval` with a **logit link**; the
+   current linear-link numbers understate every row against a near-bimodal target. For
+   the audit story, add **per-pair causal attribution** (ablate each field's residual
+   contribution, measure the real verdict flip) — that's a direct causal claim, not an
+   R², and it's what a compliance buyer wants. It costs extra forward passes → run it on
+   the review queue, not every decision.
 2. **Perf for real volume.** Prefix-cache the system rubric (biggest CPU win) + wire the
    logit readout into the scorer for clean P(match); benchmark on GPU.
 3. **Benchmark head-to-head, honestly.** Against the ER landscape on *held-out* data
@@ -130,7 +165,9 @@ re-measure on a messy/product domain — that number is the one a skeptic will a
 ## The one-paragraph version
 
 We causally mapped the 1.5B's match decision to a low-dim linear direction, translated
-it into human field weights, and shipped a faithful (R²=0.51) per-decision explainer —
+it into human field weights, and shipped a per-decision explainer whose frozen weights
+are measurably ~as good as a fresh fit (R² 0.25–0.32 against look-alikes, 0.50 against
+random negatives, explaining the model's real P(match)) —
 addressing the explainability blocker in a way standard post-hoc XAI does not. Cost/
 privacy are addressed by the *local + banded* deployment (not "LLM on everything for
 free"); naive truncation does **not** yield a smaller *general* model because the late
