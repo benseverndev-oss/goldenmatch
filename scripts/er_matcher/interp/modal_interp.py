@@ -337,12 +337,158 @@ def train_sae(layer: int = 14, n_pairs: int = 3000, expansion: int = 16, l1: flo
 # stage 5: strip parameters that don't influence the outcome (layer early-exit)#
 # --------------------------------------------------------------------------- #
 def _prf_from_pred(pred, y):
+    return _pr_from_pred(pred, y)[2]
+
+
+def _pr_from_pred(pred, y):
     tp = sum(1 for p, t in zip(pred, y) if p and t)
     fp = sum(1 for p, t in zip(pred, y) if p and not t)
     fn = sum(1 for p, t in zip(pred, y) if not p and t)
     prec = tp / (tp + fp) if tp + fp else 0.0
     rec = tp / (tp + fn) if tp + fn else 0.0
-    return (2 * prec * rec / (prec + rec)) if prec + rec else 0.0
+    f1 = (2 * prec * rec / (prec + rec)) if prec + rec else 0.0
+    return prec, rec, f1
+
+
+# --------------------------------------------------------------------------- #
+# stage 7: the LENIENCY DIAL -- steer the causal decision axis as a P/R knob   #
+# --------------------------------------------------------------------------- #
+@app.function(image=_image, gpu=GPU, timeout=60 * 60, volumes={"/out": _out_vol})
+def leniency_dial(per_class: int = 500, seed: int = 0, lo: int = 8, hi: int = 20,
+                  coeffs: str = "-6,-4,-3,-2,-1,-0.5,0,0.5,1,2,3,4,6") -> None:
+    """Turn the causally-validated match direction into a usable PRECISION/RECALL
+    knob, and measure whether steering the model's INTERNAL decision axis traces a
+    better P/R frontier than a plain threshold on its output.
+
+    Per-layer diff-of-means directions from a record-DISJOINT TRAIN split; on TEST:
+      - THRESHOLD baseline: unsteered P(match), sweep the decision threshold.
+      - STEERING dial: fix threshold 0.5, add c*gap_L*dir_L across layers [lo,hi]
+        (the validated multi-layer recipe), sweep c.
+    Both trace a P/R curve; if steering's frontier dominates, the model's own
+    certainty axis is a better leniency control than a squashed-output cut."""
+    import json
+    import os
+    import sys
+
+    import jellyfish
+    import numpy as np
+    import polars as pl
+    import pyarrow.parquet as pq
+    import torch
+
+    sys.path.insert(0, "/root/interp")
+    from decision_geometry import mine_probe_pairs
+
+    tok, model = _load_model()
+    true_id, false_id = _true_false_ids(tok)
+    dev = model.device
+    window = list(range(lo, hi + 1))
+    cvals = [float(c) for c in coeffs.split(",")]
+
+    raw = pl.from_arrow(pq.read_table(DATA))
+    gold = raw["cluster"].to_list()
+    rows = {i: {f: (raw[f][i] or "") for f in FIELDS} for i in range(len(gold))}
+    surname_key = [jellyfish.soundex(str(raw["surname"][i] or "")) for i in range(len(gold))]
+
+    by_cluster: dict = {}
+    for i, g in enumerate(gold):
+        by_cluster.setdefault(g, []).append(i)
+    clusters = sorted(by_cluster)
+    train_ids = {i for c in clusters[::2] for i in by_cluster[c]}
+    test_ids = {i for c in clusters[1::2] for i in by_cluster[c]}
+    pool = mine_probe_pairs(gold, surname_key, per_class * 3, negatives="hard", seed=seed)
+    tr = [(a, b, t) for a, b, t in pool if a in train_ids and b in train_ids][: per_class * 2]
+    te = [(a, b, t) for a, b, t in pool if a in test_ids and b in test_ids][: per_class * 2]
+    yte = np.array([t for *_, t in te])
+    print(f"[dial] train={len(tr)} test={len(te)} window={lo}..{hi}", flush=True)
+
+    def prompts_of(pairs):
+        return [_prompt(tok, rows[a], rows[b]) + '{"match":' for a, b, _ in pairs]
+
+    def dec_resid(pairs, layer):
+        reps = []
+        for i in range(0, len(pairs), 16):
+            enc = tok(prompts_of(pairs[i : i + 16]), return_tensors="pt",
+                      padding=True).to(dev)
+            with torch.no_grad():
+                out = model(**enc, output_hidden_states=True)
+            reps.append(out.hidden_states[layer][:, -1, :].float().cpu().numpy())
+        return np.concatenate(reps, 0)
+
+    ytr = np.array([t for *_, t in tr])
+    layer_dirs = {}
+    for L in window:
+        R = dec_resid(tr, L)
+        d = R[ytr == 1].mean(0) - R[ytr == 0].mean(0)
+        g = float(np.linalg.norm(d))
+        layer_dirs[L] = (torch.tensor(d / (g + 1e-9), dtype=torch.float16, device=dev), g)
+
+    ctrl = {"coeff": 0.0}
+
+    def make_hook(L):
+        u, g = layer_dirs[L]
+
+        def hook(_m, _i, output):
+            hidden = output[0] if isinstance(output, tuple) else output
+            if ctrl["coeff"]:
+                hidden[:, -1, :] = hidden[:, -1, :] + ctrl["coeff"] * g * u
+            return (hidden, *output[1:]) if isinstance(output, tuple) else hidden
+
+        return hook
+
+    hooks = [model.model.layers[L - 1].register_forward_hook(make_hook(L)) for L in window]
+
+    te_prompts = prompts_of(te)
+
+    def p_match_all(coeff):
+        ctrl["coeff"] = coeff
+        ps = []
+        for i in range(0, len(te_prompts), 16):
+            enc = tok(te_prompts[i : i + 16], return_tensors="pt", padding=True).to(dev)
+            with torch.no_grad():
+                logits = model(**enc).logits[:, -1, :]
+            pair = torch.softmax(torch.stack([logits[:, true_id], logits[:, false_id]], 1), 1)
+            ps.append(pair[:, 0].float().cpu().numpy())
+        ctrl["coeff"] = 0.0
+        return np.concatenate(ps)
+
+    base_p = p_match_all(0.0)  # unsteered probabilities for the threshold baseline
+    thr_frontier = []
+    for ti in range(5, 100, 5):
+        T = ti / 100
+        p, r, f1 = _pr_from_pred(base_p >= T, yte)
+        thr_frontier.append({"threshold": T, "precision": p, "recall": r, "f1": f1})
+
+    steer_frontier = []
+    for c in cvals:
+        pc = p_match_all(c)
+        p, r, f1 = _pr_from_pred(pc >= 0.5, yte)
+        steer_frontier.append({"coeff": c, "precision": p, "recall": r, "f1": f1})
+        print(f"[dial] steer c={c:+.1f}: P={p:.3f} R={r:.3f} F1={f1:.3f}", flush=True)
+
+    for h in hooks:
+        h.remove()
+
+    best_thr = max(thr_frontier, key=lambda d: d["f1"])
+    best_steer = max(steer_frontier, key=lambda d: d["f1"])
+    # is the steering frontier at least as good as thresholding at matched recall?
+    dominates = 0
+    for s in steer_frontier:
+        near = [t for t in thr_frontier if abs(t["recall"] - s["recall"]) <= 0.03]
+        if near and s["precision"] >= max(t["precision"] for t in near) - 1e-9:
+            dominates += 1
+    print(f"[dial] best threshold F1={best_thr['f1']:.3f}  best steer F1={best_steer['f1']:.3f}  "
+          f"steer>=thr at matched recall: {dominates}/{len(steer_frontier)}", flush=True)
+
+    payload = {"window": [lo, hi], "n_test": len(te), "coeffs": cvals,
+               "threshold_frontier": thr_frontier, "steering_frontier": steer_frontier,
+               "best_threshold": best_thr, "best_steer": best_steer,
+               "steer_ge_threshold_at_recall": dominates, "n_steer_points": len(cvals)}
+    os.makedirs("/out/interp", exist_ok=True)
+    with open("/out/interp/leniency_dial.json", "w") as fh:
+        json.dump(payload, fh, indent=2)
+    _out_vol.commit()
+    print("[done] leniency_dial -> /out/interp/leniency_dial.json")
 
 
 @app.function(image=_image, gpu=GPU, timeout=60 * 60, volumes={"/out": _out_vol})
@@ -828,3 +974,9 @@ def strip(per_class: int = 400, k_min: int = 6) -> None:
 def truncate(per_class: int = 600, ks: str = "8,10,12,14,16,18,21,24,28") -> None:
     truncate_adapt.remote(per_class=per_class, ks=ks)
     print("done -> `modal volume get er-matcher-out interp/truncate_adapt.json`")
+
+
+@app.local_entrypoint()
+def leniency(per_class: int = 500, lo: int = 8, hi: int = 20) -> None:
+    leniency_dial.remote(per_class=per_class, lo=lo, hi=hi)
+    print("done -> `modal volume get er-matcher-out interp/leniency_dial.json`")
