@@ -1079,6 +1079,7 @@
             "_model_columns",
             "_name_signal",
             "_order_by_survivorship",
+            "_select_matches",
             "_shape_signal",
             "_split_top_level",
             "_unique_test_columns",

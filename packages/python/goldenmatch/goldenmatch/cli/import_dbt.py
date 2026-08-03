@@ -131,6 +131,17 @@ def import_dbt_cmd(
         "--min-confidence",
         help="ER-model identification confidence floor for signal extraction",
     ),
+    select: list[str] = typer.Option(
+        [],
+        "--select",
+        "-s",
+        help=(
+            "Scope to specific ER models (repeatable), dbt-style; without it a full "
+            "warehouse over-extracts. Globs the model name (`dedup_*`), or "
+            "`path:*entity_resolution*`, or `tag:<name>`. Selected models bypass "
+            "--min-confidence."
+        ),
+    ),
     verify: str | None = typer.Option(
         None,
         "--verify",
@@ -163,6 +174,7 @@ def import_dbt_cmd(
     try:
         conversion = from_dbt(
             manifest, catalog_path=catalog, strict=strict, min_confidence=min_confidence,
+            select=select or None,
         )
     except DbtConversionError as exc:
         err_console.print(f"[red]dbt conversion failed:[/red] {exc}")
