@@ -2864,6 +2864,13 @@
               "help": "Also measure entity fragmentation / undercount via ER (fail-open)."
             },
             {
+              "name": "--name",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Also run the OPTIONAL advisory LLM namer (business names for entities/dimensions/values/measures; abstains without an LLM key)."
+            },
+            {
               "name": "--fail-untrustworthy",
               "type": "boolean",
               "required": false,
@@ -6032,7 +6039,8 @@
           "GOLDENMATCH_SAIL_IDENTITY_ID_SCHEME"
         ],
         "SEMANTIC": [
-          "GOLDENMATCH_SEMANTIC_BLOCKING_THRESHOLD"
+          "GOLDENMATCH_SEMANTIC_BLOCKING_THRESHOLD",
+          "GOLDENMATCH_SEMANTIC_NAMER"
         ],
         "SKIP": [
           "GOLDENMATCH_SKIP_MATCH_LOG"

@@ -678,6 +678,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `discover-model` | `--dialect` | text | `'metricflow'` | Emit dialect for the draft model (metricflow). |
 | `discover-model` | `--output` | text | `None` | Write the draft semantic-model YAML to this path. |
 | `discover-model` | `--resolve` | boolean | `False` | Also measure entity fragmentation / undercount via ER (fail-open). |
+| `discover-model` | `--name` | boolean | `False` | Also run the OPTIONAL advisory LLM namer (business names for entities/dimensions/values/measures; abstains without an LLM key). |
 | `discover-model` | `--fail-untrustworthy` | boolean | `False` | Exit non-zero if any proposed key is not unique at grain (CI gate). |
 | `discover-model` | `--json` | boolean | `False` | Emit the full proposed model (shape + certification) as JSON. |
 | `evaluate` | `files` | text | **required** | Input files (path or path:source_name) |
@@ -1193,7 +1194,7 @@ _`_PLANNING_EFFORTS` -- `planning_effort`._
 
 ## Environment variables (index)
 
-193 `GOLDENMATCH_*` runtime knob(s) read by the package, scanned from source so this is complete. Details in [Tuning & opt-ins](/goldenmatch/tuning). Grouped by area:
+194 `GOLDENMATCH_*` runtime knob(s) read by the package, scanned from source so this is complete. Details in [Tuning & opt-ins](/goldenmatch/tuning). Grouped by area:
 
 - **AGENT** (1): `GOLDENMATCH_AGENT_TOKEN`
 - **ALLOWED** (1): `GOLDENMATCH_ALLOWED_ROOT`
@@ -1247,7 +1248,7 @@ _`_PLANNING_EFFORTS` -- `planning_effort`._
 - **PREPARED** (2): `GOLDENMATCH_PREPARED_RECORD_STORE_DIR`, `GOLDENMATCH_PREPARED_RECORD_STORE_PERSIST`
 - **QUALITY** (2): `GOLDENMATCH_QUALITY_AWARE_BLOCKING`, `GOLDENMATCH_QUALITY_GATED_REVIEW`
 - **SAIL** (1): `GOLDENMATCH_SAIL_IDENTITY_ID_SCHEME`
-- **SEMANTIC** (1): `GOLDENMATCH_SEMANTIC_BLOCKING_THRESHOLD`
+- **SEMANTIC** (2): `GOLDENMATCH_SEMANTIC_BLOCKING_THRESHOLD`, `GOLDENMATCH_SEMANTIC_NAMER`
 - **SKIP** (1): `GOLDENMATCH_SKIP_MATCH_LOG`
 - **STANDARDIZE** (1): `GOLDENMATCH_STANDARDIZE_STAGED`
 - **STREAMING** (1): `GOLDENMATCH_STREAMING_BLOCK_WORKERS`

@@ -21,7 +21,7 @@ it's that each guess is PROVEN against the data before you see it. Design:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from goldenmatch.semantic.discovery.entities import EntityType, discover_entity_types
 from goldenmatch.semantic.discovery.joins import JoinCandidate, discover_joins
@@ -32,6 +32,9 @@ from goldenmatch.semantic.discovery.measures import (
     TableMeasures,
     discover_measures,
 )
+
+if TYPE_CHECKING:
+    from goldenmatch.semantic.discovery.namer import NameSuggestion
 
 _SUPPORTED_DIALECTS = frozenset({"metricflow"})
 
@@ -71,6 +74,7 @@ class ProposedModel:
     joins: list[JoinCandidate]
     yaml: str = ""
     certification: dict[str, Any] = field(default_factory=dict)
+    naming: list[NameSuggestion] = field(default_factory=list)
 
     @property
     def all_trustworthy(self) -> bool:
@@ -124,6 +128,7 @@ class ProposedModel:
                 for j in self.joins
             ],
             "certification": self.certification,
+            "naming": [n.to_dict() for n in self.naming],
         }
 
 
@@ -143,6 +148,8 @@ def discover_semantic_model(
     *,
     dialect: str = "metricflow",
     resolve: bool = False,
+    name: bool = False,
+    namer_backend: Any = None,
 ) -> ProposedModel:
     """Discover a draft semantic model from a set of source tables.
 
@@ -193,14 +200,14 @@ def discover_semantic_model(
     # Phase 4 — measures + dimensions per table.
     proposed_tables: list[ProposedTable] = []
     per_table_measures: dict[str, TableMeasures] = {}
-    for name, table in tables.items():
-        grain = grains[name]
-        tm = discover_measures(table, key=grain, table_name=name)
-        per_table_measures[name] = tm
+    for tbl_name, table in tables.items():
+        grain = grains[tbl_name]
+        tm = discover_measures(table, key=grain, table_name=tbl_name)
+        per_table_measures[tbl_name] = tm
         proposed_tables.append(
             ProposedTable(
-                table=name,
-                entity_type=entity_of.get(name),
+                table=tbl_name,
+                entity_type=entity_of.get(tbl_name),
                 key=grain,
                 measures=tm.measures,
                 dimensions=tm.dimensions,
@@ -231,7 +238,7 @@ def discover_semantic_model(
         report = certify_semantic_model(model_yaml, tables, resolve=resolve)
         certification = certification_report_dict(report)
 
-    return ProposedModel(
+    model = ProposedModel(
         dialect=dialect,
         tables=proposed_tables,
         entity_types=entity_types,
@@ -239,3 +246,16 @@ def discover_semantic_model(
         yaml=model_yaml,
         certification=certification,
     )
+
+    # Optional, advisory, non-authoritative: annotate the finished model with business
+    # names. The structural output above is complete and never altered by this.
+    if name:
+        from goldenmatch.semantic.discovery.namer import (
+            load_namer_backend,
+            name_semantic_model,
+        )
+
+        backend = namer_backend if namer_backend is not None else load_namer_backend()
+        model.naming = name_semantic_model(model, tables, backend=backend)
+
+    return model
