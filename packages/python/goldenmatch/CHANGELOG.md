@@ -38,6 +38,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   `discover_metrics` + `Metric`. The second "frontier" slice (design:
   `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
   `tests/test_semantic_discovery_metrics.py`.
+- **Semantic-model discovery — time intelligence (Phase 13).** New
+  `goldenmatch/semantic/discovery/time_intelligence.py`.
+  `discover_time_dimension(table, dimensions)` picks the primary date column and infers
+  its finest grain FROM THE DATA (a cheap value scan: time-of-day → `day`; all values on
+  month/quarter/year starts → that coarser grain), then proposes the drill granularities
+  (`TimeDimension(table, column, grain, granularities)`). `discover_time_metrics(measures,
+  time_dimension)` derives per sum-safe measure the **MTD / YoY / rolling-7d** variants
+  (`TimeMetric`). On `ProposedTable`/`ProposedModel` (`time_dimensions` + `time_metrics`)
+  + `to_dict`, and emitted so the engine computes time comparisons automatically:
+  MetricFlow sets `defaults.agg_time_dimension` + a `type: time` dimension at the grain,
+  MTD/rolling as native `type: cumulative` metrics (YoY structured for now); Cube/OSI keep
+  the grain + granularities + variants in `meta.goldenmatch.time`. Deterministic,
+  default-on. New exports `discover_time_dimension`/`discover_time_metrics` +
+  `TimeDimension`/`TimeMetric`. The third "frontier" slice (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discovery_time_intelligence.py`.
 
 ## [3.11.0] - 2026-08-03
 

@@ -41,6 +41,12 @@ from goldenmatch.semantic.discovery.namer import (
     apply_names,
     name_semantic_model,
 )
+from goldenmatch.semantic.discovery.time_intelligence import (
+    TimeDimension,
+    TimeMetric,
+    discover_time_dimension,
+    discover_time_metrics,
+)
 
 __all__ = [
     "Dimension",
@@ -50,6 +56,8 @@ __all__ = [
     "KeyCandidate",
     "Measure",
     "Metric",
+    "TimeDimension",
+    "TimeMetric",
     "NameSuggestion",
     "NamerBackend",
     "ProposedModel",
@@ -61,6 +69,8 @@ __all__ = [
     "discover_keys",
     "discover_measures",
     "discover_metrics",
+    "discover_time_dimension",
+    "discover_time_metrics",
     "discover_semantic_model",
     "apply_names",
     "name_semantic_model",

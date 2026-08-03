@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 449,
+      "module_count": 450,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7275,7 +7275,8 @@
             "goldenmatch.semantic.discovery.measures",
             "goldenmatch.semantic.discovery.metrics",
             "goldenmatch.semantic.discovery.model",
-            "goldenmatch.semantic.discovery.namer"
+            "goldenmatch.semantic.discovery.namer",
+            "goldenmatch.semantic.discovery.time_intelligence"
           ]
         },
         {
@@ -7413,7 +7414,8 @@
             "goldenmatch.semantic.discovery.keys",
             "goldenmatch.semantic.discovery.measures",
             "goldenmatch.semantic.discovery.metrics",
-            "goldenmatch.semantic.discovery.namer"
+            "goldenmatch.semantic.discovery.namer",
+            "goldenmatch.semantic.discovery.time_intelligence"
           ]
         },
         {
@@ -7444,6 +7446,20 @@
           "imports": [
             "goldenmatch.core.llm_labeler",
             "goldenmatch.semantic.discovery.model"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.discovery.time_intelligence",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/discovery/time_intelligence.py",
+          "purpose": "Time intelligence (PR-13).",
+          "defines": [
+            "TimeDimension",
+            "TimeMetric",
+            "_granularities_from",
+            "_infer_grain",
+            "_pick_time_column",
+            "discover_time_dimension",
+            "discover_time_metrics"
           ]
         },
         {

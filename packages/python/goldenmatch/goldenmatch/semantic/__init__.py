@@ -57,6 +57,8 @@ from goldenmatch.semantic.discovery import (
     ProposedModel,
     ProposedTable,
     TableMeasures,
+    TimeDimension,
+    TimeMetric,
     apply_names,
     discover_entity_types,
     discover_hierarchies,
@@ -65,6 +67,8 @@ from goldenmatch.semantic.discovery import (
     discover_measures,
     discover_metrics,
     discover_semantic_model,
+    discover_time_dimension,
+    discover_time_metrics,
     name_semantic_model,
 )
 from goldenmatch.semantic.key_integrity import (
@@ -180,6 +184,10 @@ __all__ = [
     "Hierarchy",
     "Metric",
     "discover_metrics",
+    "discover_time_dimension",
+    "discover_time_metrics",
+    "TimeDimension",
+    "TimeMetric",
     # semantic-model discovery (Phase 7) — optional advisory LLM namer
     "apply_names",
     "name_semantic_model",
