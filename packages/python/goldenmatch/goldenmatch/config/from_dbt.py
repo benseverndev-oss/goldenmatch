@@ -38,8 +38,10 @@ from goldenmatch.config.schemas import (
     GoldenFieldRule,
     GoldenMatchConfig,
     GoldenRulesConfig,
+    IdentityConfig,
     MatchkeyConfig,
     MatchkeyField,
+    RelationshipRule,
 )
 from goldenmatch.core._paths import safe_path
 
@@ -113,8 +115,40 @@ _UNRECOGNIZED_WRAP_FUNCS: frozenset[str] = frozenset(
 
 SignalKind = Literal[
     "blocking", "exact_matchkey", "fuzzy_field", "transform", "survivorship",
-    "couldnt_extract",
+    "deterministic_merge", "relationship", "couldnt_extract",
 ]
+
+# ── Pure shared-key edge / crosswalk idioms ──────────────────────────────────
+#
+# A dbt model that self-joins on a shared attribute with NO fuzzy predicate is
+# an EDGE/crosswalk model (link records that share a value), not a fuzzy
+# matcher. This is common when the probabilistic matching lives OUTSIDE dbt
+# (e.g. an external Splink step) and dbt only does deterministic post-processing
+# -- exactly the shape the fuzzy-only signal 5 misses. We map it onto the two
+# GoldenMatch identity idioms:
+#   * an authoritative government/registry id -> identity.deterministic_merge_keys
+#     (a unique id can't be split across entities);
+#   * a softer shared attribute (email/phone/org/address) -> a RelationshipRule.
+#
+# Authoritative external identifiers whose shared value is a HARD merge. Curated
+# (NOT generic ``*_id``, which is usually a surrogate key, not authoritative).
+_AUTHORITATIVE_IDS: frozenset[str] = frozenset({
+    "npi", "ssn", "ein", "duns", "dea", "nabp", "upin", "tin", "isni", "orcid",
+    "mpi", "national_provider_id", "npi_number",
+})
+
+# Soft shared attributes -> a relationship edge. field -> (kind, transform).
+_REL_KIND_BY_FIELD: dict[str, tuple[str, str | None]] = {
+    "email": ("same_email", None),
+    "email_address": ("same_email_domain", "email_domain"),
+    "phone": ("shares_phone", None),
+    "phone_number": ("shares_phone", None),
+    "org": ("same_org", "normalize_company"),
+    "org_name": ("same_org", "normalize_company"),
+    "organization": ("same_org", "normalize_company"),
+    "company": ("same_org", "normalize_company"),
+    "address": ("same_address", None),
+}
 
 
 @dataclass
@@ -499,6 +533,36 @@ def extract_signals(
             signals.extend(extras)
             break  # one dedup GROUP BY per model is enough
 
+    # 7. Pure shared-key self-join / crosswalk (NO fuzzy predicate) -> identity
+    #    edge idiom. When the probabilistic matcher lives OUTSIDE dbt (e.g. an
+    #    external Splink step), dbt's remaining ER models just LINK records that
+    #    share a value: an authoritative id (-> deterministic_merge_keys) or a
+    #    soft attribute (-> a RelationshipRule). Signal 5 handles the fuzzy-paired
+    #    self-join; this handles the deterministic one it deliberately skips.
+    if not any(s.kind == "fuzzy_field" for s in signals) and not saw_window_key:
+        seen_share: set[str] = set()
+        for m in _ON_EQUALITY_RE.finditer(compiled):
+            la, lc, ra, rc = m.groups()
+            if la == ra or lc != rc:  # need a.col = b.col (self-join on one col)
+                continue
+            col = lc.lower()
+            if col in seen_share:
+                continue
+            seen_share.add(col)
+            if col in _AUTHORITATIVE_IDS:
+                signals.append(RecognizedSignal(
+                    "deterministic_merge", [lc], {}, model, 0.8, m.group(0)[:200],
+                ))
+            elif col in _REL_KIND_BY_FIELD:
+                kind, transform = _REL_KIND_BY_FIELD[col]
+                signals.append(RecognizedSignal(
+                    "relationship", [lc],
+                    {"kind": kind, "transform": transform}, model, 0.7,
+                    m.group(0)[:200],
+                ))
+            # else: a self-join on a surrogate/unknown key is not necessarily ER;
+            # skip silently rather than emit a false identity edge.
+
     return signals
 
 
@@ -641,19 +705,26 @@ class DbtConversionCoverage:
     transforms: int
     survivorship_rules: int
     couldnt_extract: int
+    # Pure shared-key edge/crosswalk idioms (external-matcher + dbt-postprocessing
+    # shape): authoritative-id merges and soft-attribute relationship edges.
+    deterministic_merge_keys: int = 0
+    relationship_edges: int = 0
 
     @property
     def story(self) -> Literal["fuzzy-er", "exact-dedup", "none"]:
         if self.fuzzy_fields > 0:
             return "fuzzy-er"
-        if self.exact_matchkeys > 0 or self.blocking_keys > 0:
+        if (self.exact_matchkeys > 0 or self.blocking_keys > 0
+                or self.deterministic_merge_keys > 0 or self.relationship_edges > 0):
             return "exact-dedup"
         return "none"
 
     @property
     def has_config(self) -> bool:
-        """True when at least one blocking key or matchkey was extracted."""
-        return self.blocking_keys > 0 or self.exact_matchkeys > 0 or self.fuzzy_fields > 0
+        """True when at least one config idiom (matchkey/blocking/identity) was extracted."""
+        return (self.blocking_keys > 0 or self.exact_matchkeys > 0
+                or self.fuzzy_fields > 0 or self.deterministic_merge_keys > 0
+                or self.relationship_edges > 0)
 
     def line(self) -> str:
         """One-line human summary."""
@@ -668,6 +739,11 @@ class DbtConversionCoverage:
             f"{self.exact_matchkeys} exact + {self.fuzzy_fields} fuzzy comparison field(s)",
             f"{self.survivorship_rules} survivorship rule(s)",
         ]
+        if self.deterministic_merge_keys or self.relationship_edges:
+            parts.append(
+                f"{self.deterministic_merge_keys} deterministic-merge key(s) + "
+                f"{self.relationship_edges} relationship edge(s)"
+            )
         if self.couldnt_extract:
             parts.append(f"{self.couldnt_extract} construct(s) flagged for review")
         return " -- ".join(parts) + f" -- story: {story_text}"
@@ -957,7 +1033,49 @@ def _emit_config(
             )],
         ))
 
-    if not matchkeys and not blocking_keys:
+    # Pure shared-key edge/crosswalk models -> identity idioms: an authoritative
+    # id becomes a deterministic_merge_key (a unique id can't split across
+    # entities); a soft shared attribute becomes a RelationshipRule.
+    det_keys: list[str] = []
+    for sig in signals:
+        if sig.kind != "deterministic_merge":
+            continue
+        col = sig.columns[0]
+        if col not in det_keys:
+            det_keys.append(col)
+            report.info(
+                f"model:{sig.source_model}",
+                f"self-join on authoritative id '{col}' with no fuzzy predicate "
+                "-> identity.deterministic_merge_keys",
+                mapped_to=f"identity.deterministic_merge_keys[{len(det_keys) - 1}]",
+            )
+    rel_rules: list[RelationshipRule] = []
+    rel_seen: set[tuple[str, str]] = set()
+    for sig in signals:
+        if sig.kind != "relationship":
+            continue
+        col, kind = sig.columns[0], sig.params["kind"]
+        if (col, kind) in rel_seen:
+            continue
+        rel_seen.add((col, kind))
+        rel_rules.append(RelationshipRule(
+            field=col, kind=kind, transform=sig.params.get("transform"),
+        ))
+        report.info(
+            f"model:{sig.source_model}",
+            f"self-join on shared '{col}' with no fuzzy predicate -> relationship "
+            f"edge '{kind}'",
+            mapped_to=f"identity.relationships[{len(rel_rules) - 1}]",
+        )
+    identity: IdentityConfig | None = None
+    if det_keys or rel_rules:
+        identity = IdentityConfig(
+            enabled=True,
+            deterministic_merge_keys=det_keys,
+            relationships=rel_rules,
+        )
+
+    if not matchkeys and not blocking_keys and identity is None:
         return None
 
     blocking: BlockingConfig | None = None
@@ -999,6 +1117,7 @@ def _emit_config(
         matchkeys=matchkeys or None,
         blocking=blocking,
         golden_rules=golden_rules,
+        identity=identity,
     )
 
 
@@ -1090,6 +1209,10 @@ def _build_coverage(
     transforms = sum(1 for s in signals if s.kind == "transform")
     survivorship = sum(1 for s in signals if s.kind == "survivorship")
     couldnt = sum(1 for s in signals if s.kind == "couldnt_extract")
+    det_keys = rel_edges = 0
+    if config is not None and config.identity is not None:
+        det_keys = len(config.identity.deterministic_merge_keys)
+        rel_edges = len(config.identity.relationships or [])
     return DbtConversionCoverage(
         total_models=total_models,
         er_models_analyzed=er_analyzed,
@@ -1099,4 +1222,6 @@ def _build_coverage(
         transforms=transforms,
         survivorship_rules=survivorship,
         couldnt_extract=couldnt,
+        deterministic_merge_keys=det_keys,
+        relationship_edges=rel_edges,
     )
