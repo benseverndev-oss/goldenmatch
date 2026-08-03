@@ -4959,6 +4959,10 @@
           "description": "Alias for `find_duplicates`. Find duplicate matches for a record. Provide field values to search against the loaded dataset."
         },
         {
+          "name": "discover_semantic_model",
+          "description": "Generative half of the semantic-layer front door: point GoldenMatch at a set of source tables and it PROPOSES a draft semantic model -- entity types, keys, joins, measures, dimensions -- where every declared key is already graded by the certifier (unique-at-grain + fan-out). Discovery is hypothesis generation; certification is the falsification test, so the draft is pre-proven against the data. Advisory; nothing is auto-applied."
+        },
+        {
           "name": "documents_ingest",
           "description": "Extract records from documents (PDF/image) against a target schema into rows ready for dedupe_df. Returns records + an ingest report."
         },

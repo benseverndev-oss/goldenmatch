@@ -26,9 +26,9 @@ def test_total_tool_count_is_94():
     assert len(AGENT_TOOLS) == 19   # +1 retrieve_similar (#1089) +1 upload_dataset
     assert len(MEMORY_TOOLS) == 7
     assert len(IDENTITY_TOOLS) == 18  # +1 customer_360 (D1b) +2 serving surfaces (D)
-    assert len(_BASE_TOOLS) == 45   # +5 core primitives +3 host helpers +1 certify_semantic_model
+    assert len(_BASE_TOOLS) == 46   # +5 core primitives +3 host helpers +1 certify_semantic_model +1 discover_semantic_model
     assert len(ROUTING_TOOLS) == 3  # plan_routing / explain_routing / lint_routing
-    assert len(TOOLS) == 94   # +2 serving surfaces (certify_serving_joins, emit_semantic_model_from_store)
+    assert len(TOOLS) == 95   # +2 serving surfaces (certify_serving_joins, emit_semantic_model_from_store) +1 discover_semantic_model
     # No duplicate tool names across the whole surface.
     names = [t.name for t in TOOLS]
     assert len(names) == len(set(names))

@@ -940,7 +940,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 
 ## MCP tools
 
-94 MCP tool(s) exposed by `goldenmatch.mcp.server` -- the programmatic / agent surface. Config-bearing tools take the same knobs as above.
+95 MCP tool(s) exposed by `goldenmatch.mcp.server` -- the programmatic / agent surface. Config-bearing tools take the same knobs as above.
 
 | Tool | Description |
 |---|---|
@@ -966,6 +966,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `create_domain` | Create a custom domain extraction rulebook. Define patterns for a specific data domain (medical devices, automotive parts, real estate, etc.). |
 | `customer_360` | The unified Customer 360 serving view of one entity, composed from the durable store in one call: the golden record + per-field source provenance, every linked source record, the event timeline, and the relationship neighborhood. This is the same durable entity_id a resolved crosswalk (semantic-layer wedge) groups metrics by, so a metric row drills straight through to the customer. Returns &#123;found: false&#125; when no such entity exists. |
 | `dedupe` | Alias for `find_duplicates`. Find duplicate matches for a record. Provide field values to search against the loaded dataset. |
+| `discover_semantic_model` | Generative half of the semantic-layer front door: point GoldenMatch at a set of source tables and it PROPOSES a draft semantic model -- entity types, keys, joins, measures, dimensions -- where every declared key is already graded by the certifier (unique-at-grain + fan-out). Discovery is hypothesis generation; certification is the falsification test, so the draft is pre-proven against the data. Advisory; nothing is auto-applied. |
 | `documents_ingest` | Extract records from documents (PDF/image) against a target schema into rows ready for dedupe_df. Returns records + an ingest report. |
 | `documents_suggest_schema` | Propose a target extraction schema (JSON) from a sample document image/PDF. |
 | `emit_semantic_model_from_store` | Emit a conformed semantic-layer catalog (the `resolved_entity_id` join a MetricFlow / Cube / OSI model should group metrics by) directly from the durable identity store — 'keep the semantic layer's identity join live against the control plane'. Returns the emitted YAML; when `path` is set, also writes it to that catalog file (refuses to clobber unless overwrite=true). |

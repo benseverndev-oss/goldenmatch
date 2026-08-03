@@ -231,6 +231,7 @@
             "APIHandler",
             "MatchServer",
             "_certify_semantic_model_endpoint",
+            "_discover_semantic_model_endpoint",
             "resolve_api_auth_token",
             "start_server"
           ],
@@ -6562,6 +6563,7 @@
             "_tool_config_weaknesses",
             "_tool_convert_splink_config",
             "_tool_create_domain",
+            "_tool_discover_semantic_model",
             "_tool_evaluate",
             "_tool_explain_match",
             "_tool_export_results",

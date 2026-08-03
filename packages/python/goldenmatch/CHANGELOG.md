@@ -317,6 +317,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   discovery arc (design:
   `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
   `tests/test_semantic_discovery_model.py`.
+- **Semantic-model discovery — MCP tool + REST endpoint (Phase 6).** Surfaces
+  `discover_semantic_model` on MCP (`discover_semantic_model` tool) and REST
+  (`POST /semantic/discover`), both returning the same `ProposedModel.to_dict()`
+  wire shape the `discover-model` CLI emits — one contract across every surface, so a
+  build gate reads `all_trustworthy` identically whether it calls the tool, the
+  endpoint, or the CLI. Input is `frames` (table name → data file path), `dialect`
+  (default `metricflow`), and `resolve`; bad input / unreadable files / an
+  unsupported dialect return a clean `{"error": ...}` rather than raising. Python-only,
+  mirroring the `certify_semantic_model` surface. The sixth slice of the
+  semantic-model discovery arc (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discover_surface.py`.
 
 ### Changed
 - **FS out-of-core streaming: single `resolve_fs_block_source` knob + DuckDB

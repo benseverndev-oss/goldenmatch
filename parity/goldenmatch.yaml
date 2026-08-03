@@ -141,6 +141,7 @@ mcp_tools:
   - upload_dataset
   - write_csv
   python_only:
+  - discover_semantic_model
   - documents_ingest
   - documents_suggest_schema
   - explain_routing

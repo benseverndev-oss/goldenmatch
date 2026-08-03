@@ -19,6 +19,7 @@ Endpoints:
     POST /unmerge             Pull a record out of its cluster
     POST /certify-recall      Estimate match recall without ground truth
     POST /semantic/certify    Certify a semantic model's declared keys (verdict + gate)
+    POST /semantic/discover   Discover a draft semantic model from source tables (pre-graded)
     POST /retrieve            Semantic retrieval: records most similar to a query
 """
 
@@ -533,6 +534,42 @@ def _certify_semantic_model_endpoint(
     return certification_report_dict(report)
 
 
+def _discover_semantic_model_endpoint(
+    frames: Any, dialect: Any, resolve: bool,
+) -> dict[str, Any]:
+    """Stateless `POST /semantic/discover` handler: propose a draft semantic model
+    from a set of source tables, pre-graded by the certifier.
+
+    Body: ``{"frames": {name: path, ...}, "dialect": "metricflow", "resolve": bool}``.
+    Returns the same JSON shape as the MCP `discover_semantic_model` tool + the CLI
+    `discover-model` (the shared `ProposedModel.to_dict()`), so a build gate can read
+    `all_trustworthy` identically on any surface.
+    """
+    if not isinstance(frames, dict) or not frames:
+        return {"error": "frames must map a table name to a data file path."}
+
+    from goldenmatch.core.io_arrow import read_table_arrow
+    from goldenmatch.semantic import discover_semantic_model
+
+    loaded: dict[str, object] = {}
+    for target, fpath in frames.items():
+        try:
+            loaded[str(target)] = read_table_arrow(str(fpath))
+        except FileNotFoundError:
+            return {"error": f"data file not found for {target!r}: {fpath}"}
+        except Exception as exc:  # noqa: BLE001 - surface a clean API error
+            return {"error": f"could not read data for {target!r} ({fpath}): {exc}"}
+
+    try:
+        model = discover_semantic_model(
+            loaded, dialect=str(dialect or "metricflow"), resolve=resolve
+        )
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    return model.to_dict()
+
+
 class APIHandler(BaseHTTPRequestHandler):
     """HTTP request handler for the GoldenMatch API."""
 
@@ -682,6 +719,13 @@ class APIHandler(BaseHTTPRequestHandler):
                 bool(data.get("resolve", False)),
             )
             self._json_response(result, 400 if "error" in result else 200)
+        elif path == "/semantic/discover":
+            result = _discover_semantic_model_endpoint(
+                data.get("frames"),
+                data.get("dialect", "metricflow"),
+                bool(data.get("resolve", False)),
+            )
+            self._json_response(result, 400 if "error" in result else 200)
         elif path == "/retrieve":
             query = data.get("query")
             column = data.get("column")
@@ -774,6 +818,7 @@ def start_server(
     print("   GET  /reviews             Review queue (steward)")
     print("   POST /reviews/decide      Approve/reject a pair")
     print("   POST /semantic/certify    Certify a semantic model's declared keys")
+    print("   POST /semantic/discover   Discover a draft semantic model (pre-graded)")
     print("   POST /retrieve            Semantic retrieval by query")
     print("\n   Press Ctrl+C to stop.\n")
 
