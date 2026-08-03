@@ -25,6 +25,7 @@ from interp.field_attribution import (  # noqa: E402
     record_disjoint_split,
     richer_field_features,
     spearman,
+    variance_decomposition,
 )
 
 FIELDS = ["first_name", "surname", "dob"]
@@ -301,6 +302,72 @@ class TestContributionSummary:
             contribution_summary(np.zeros((5, 3)), list("abc"), np.zeros(4))
         with pytest.raises(ValueError):
             contribution_summary(np.zeros((5, 3)), list("ab"), np.zeros(5))
+
+
+class TestVarianceDecomposition:
+    def test_shares_sum_to_one_exactly(self):
+        rng = np.random.default_rng(0)
+        c = rng.standard_normal((200, 5))
+        r = variance_decomposition(c, list("abcde"), c.sum(axis=1))
+        assert r["shares_sum"] == pytest.approx(1.0)
+        assert r["shares_sum_exact"] is True
+
+    def test_constant_offset_gets_zero_share(self):
+        # THE reason this replaces the std ranking: a huge constant contributes
+        # nothing to the decision and must score zero, not top.
+        rng = np.random.default_rng(1)
+        c = np.zeros((200, 3))
+        c[:, 0] = 100.0                       # enormous, constant
+        c[:, 1] = rng.standard_normal(200)    # the real signal
+        c[:, 2] = 0.01 * rng.standard_normal(200)
+        r = variance_decomposition(c, ["const", "signal", "tiny"], c.sum(axis=1))
+        by = {e["component"]: e["var_share"] for e in r["ranking"]}
+        assert by["const"] == pytest.approx(0.0, abs=1e-12)
+        assert by["signal"] > 0.9
+        assert r["ranking"][0]["component"] == "signal"
+
+    def test_suppression_shows_as_negative_share(self):
+        rng = np.random.default_rng(2)
+        base = rng.standard_normal(200)
+        c = np.stack([2.0 * base, -0.5 * base], axis=1)
+        r = variance_decomposition(c, ["driver", "suppressor"], c.sum(axis=1))
+        by = {e["component"]: e["var_share"] for e in r["ranking"]}
+        assert by["suppressor"] < 0
+        assert by["driver"] > 1.0  # exceeds 1 because the suppressor cancels part
+        assert r["n_negative_share"] == 1
+
+    def test_dense_computation_needs_many_components(self):
+        rng = np.random.default_rng(3)
+        c = rng.standard_normal((400, 20))
+        r = variance_decomposition(c, [f"c{i}" for i in range(20)], c.sum(axis=1))
+        assert r["n_for_90pct_variance"] > 10
+
+    def test_sparse_computation_needs_few(self):
+        rng = np.random.default_rng(4)
+        c = 0.01 * rng.standard_normal((400, 20))
+        c[:, 7] = rng.standard_normal(400)
+        r = variance_decomposition(c, [f"c{i}" for i in range(20)], c.sum(axis=1))
+        assert r["n_for_90pct_variance"] == 1
+        assert r["ranking"][0]["component"] == "c7"
+
+    def test_label_correlation_separates_correct_from_merely_active(self):
+        rng = np.random.default_rng(5)
+        y = rng.integers(0, 2, 300).astype(float)
+        useful = y + 0.1 * rng.standard_normal(300)
+        noise = rng.standard_normal(300)
+        c = np.stack([useful, noise], axis=1)
+        r = variance_decomposition(c, ["useful", "noise"], c.sum(axis=1), labels=y)
+        by = {e["component"]: e for e in r["ranking"]}
+        assert abs(by["useful"]["label_corr"]) > 0.9
+        assert abs(by["noise"]["label_corr"]) < 0.3
+
+    def test_rejects_constant_projection(self):
+        with pytest.raises(ValueError):
+            variance_decomposition(np.zeros((5, 2)), list("ab"), np.ones(5))
+
+    def test_shape_validation(self):
+        with pytest.raises(ValueError):
+            variance_decomposition(np.zeros((5, 2)), list("ab"), np.zeros(4))
 
 
 class TestAblationFlipProfile:

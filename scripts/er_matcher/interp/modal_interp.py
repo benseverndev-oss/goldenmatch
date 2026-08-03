@@ -1529,7 +1529,7 @@ def direct_attribution(layer: int = 14, per_class: int = 200, seed: int = 0,
     import torch
 
     sys.path.insert(0, "/root/interp")
-    from field_attribution import contribution_summary
+    from field_attribution import contribution_summary, variance_decomposition
 
     tok, model = _load_model()
     dev = model.device
@@ -1605,6 +1605,7 @@ def direct_attribution(layer: int = 14, per_class: int = 200, seed: int = 0,
         hk.remove()
 
     summary = contribution_summary(contribs, names, actual)
+    var_dec = variance_decomposition(contribs, names, actual, labels=y)
     print(f"[direct] EXACTNESS: max_abs_err={summary['max_abs_err']:.3e} "
           f"rel={summary['rel_err']:.3e} exact={summary['exact']}", flush=True)
     if not summary["exact"]:
@@ -1613,9 +1614,24 @@ def direct_attribution(layer: int = 14, per_class: int = 200, seed: int = 0,
     print(f"[direct] concentration: {summary['concentration']}", flush=True)
     print(f"[direct] components for 90% of |contribution|: "
           f"{summary['n_for_90pct']} / {len(names)}", flush=True)
-    for e in summary["ranking"][:20]:
-        print(f"[direct]   {e['component']:<16} mean={e['mean']:+.4f} "
-              f"mean_abs={e['mean_abs']:.4f}", flush=True)
+    # VARIANCE ranking -- the correct one. Magnitude ranks constant offsets top;
+    # a component that never varies cannot move the decision. The shares are an
+    # exact additive split of var(projection) and must sum to 1.
+    print(f"[direct] VARIANCE SHARES sum={var_dec['shares_sum']:.6f} "
+          f"exact={var_dec['shares_sum_exact']} "
+          f"negative={var_dec['n_negative_share']}/{var_dec['n_components']}",
+          flush=True)
+    print(f"[direct] cumulative var share: {var_dec['cumulative']}", flush=True)
+    print(f"[direct] components for 90% of DECISION VARIANCE: "
+          f"{var_dec['n_for_90pct_variance']} / {var_dec['n_components']}", flush=True)
+    for e in var_dec["ranking"][:20]:
+        print(f"[direct]   {e['component']:<16} var_share={e['var_share']:+.4f} "
+              f"mean={e['mean']:+.4f} label_r={e.get('label_corr', 0.0):+.3f}",
+              flush=True)
+    print("[direct] --- most SUPPRESSIVE (negative share) ---", flush=True)
+    for e in var_dec["ranking"][-5:]:
+        print(f"[direct]   {e['component']:<16} var_share={e['var_share']:+.4f} "
+              f"label_r={e.get('label_corr', 0.0):+.3f}", flush=True)
 
     payload = {
         "method": f"exact direct attribution to the layer-{layer} match direction",
@@ -1625,6 +1641,7 @@ def direct_attribution(layer: int = 14, per_class: int = 200, seed: int = 0,
         "layer": layer, "negatives": negatives, "seed": seed,
         "n_heads": n_heads, "head_dim": head_dim,
         "n_pairs": len(pairs), "summary": summary,
+        "variance_decomposition": var_dec,
     }
     os.makedirs("/out/interp", exist_ok=True)
     out_path = f"/out/interp/direct_attribution_L{layer}.json"

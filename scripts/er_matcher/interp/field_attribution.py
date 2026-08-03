@@ -248,6 +248,95 @@ def contribution_summary(
     }
 
 
+def variance_decomposition(
+    contribs: np.ndarray,
+    names: list[str],
+    actual: np.ndarray,
+    labels: np.ndarray | None = None,
+    *,
+    tol: float = 1e-3,
+) -> dict[str, Any]:
+    """EXACT additive split of the decision's VARIANCE across components.
+
+    Rests on an identity, not an approximation: because the projection is the sum
+    of the contributions,
+
+        var(proj) = cov(sum_j c_j, proj) = sum_j cov(c_j, proj)
+
+    so each component's covariance with the projection is its exact share of the
+    decision's variance, and the shares must sum to 1. That sum is reported as
+    ``shares_sum`` and is a second correctness check on the decomposition.
+
+    This is the right ranking, where ``std`` was not: a component with a huge
+    constant offset has zero share (it never moves the decision), and a component
+    that varies for reasons unrelated to the verdict gets no credit for it. A
+    NEGATIVE share means the component systematically opposes the decision --
+    suppression, which is real structure rather than an error.
+
+    ``labels`` optionally adds each component's correlation with the ground-truth
+    label, separating "moves the decision" from "moves it correctly".
+
+    ``tol`` is deliberately loose (1e-3): the identity is exact in real
+    arithmetic, but contributions captured from an fp16 model accumulate error
+    across ~200 terms, so a deviation around 1e-4 is the hardware, not a bug.
+    Tightening this below fp16 precision produces a false alarm.
+    """
+    contribs = np.asarray(contribs, dtype=np.float64)
+    actual = np.asarray(actual, dtype=np.float64)
+    if contribs.shape[0] != actual.shape[0]:
+        raise ValueError("contribs and actual must have the same #rows")
+    if contribs.shape[1] != len(names):
+        raise ValueError("contribs columns must match names")
+
+    ac = actual - actual.mean()
+    var = float((ac * ac).mean())
+    if var < 1e-15:
+        raise ValueError("projection has no variance to decompose")
+    cc = contribs - contribs.mean(axis=0)
+    cov = (cc * ac[:, None]).mean(axis=0)
+    shares = cov / var
+
+    lab_corr = None
+    if labels is not None:
+        y = np.asarray(labels, dtype=np.float64)
+        yc = y - y.mean()
+        den = np.sqrt((cc * cc).mean(axis=0) * (yc * yc).mean())
+        lab_corr = np.divide(
+            (cc * yc[:, None]).mean(axis=0), den,
+            out=np.zeros_like(shares), where=den > 1e-12,
+        )
+
+    order = np.argsort(-shares)
+    cum = np.cumsum(shares[order])
+    n90 = int(np.searchsorted(cum, 0.90) + 1) if cum[-1] >= 0.90 else len(names)
+
+    ranking = []
+    for j in order:
+        e = {
+            "component": names[j],
+            "var_share": float(shares[j]),
+            "mean": float(contribs[:, j].mean()),
+            "std": float(contribs[:, j].std()),
+        }
+        if lab_corr is not None:
+            e["label_corr"] = float(lab_corr[j])
+        ranking.append(e)
+
+    return {
+        "n_components": len(names),
+        "projection_var": var,
+        "shares_sum": float(shares.sum()),
+        "shares_sum_exact": bool(abs(shares.sum() - 1.0) < tol),
+        "ranking": ranking,
+        "n_for_90pct_variance": n90,
+        "n_negative_share": int((shares < 0).sum()),
+        "cumulative": {
+            f"top_{k}": float(cum[min(k, len(cum)) - 1])
+            for k in (1, 3, 5, 10, 20, 50) if k <= len(cum)
+        },
+    }
+
+
 def ablation_flip_profile(
     base_p: np.ndarray,
     combos: list[tuple[str, ...]],

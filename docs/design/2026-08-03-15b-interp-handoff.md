@@ -669,7 +669,67 @@ the decision lives in a much smaller varying part.
 method. Two independent routes to the same answer is the strongest internal
 corroboration in this thread.
 
-### But there is no sparse circuit
+### Ranked by VARIANCE SHARE -- the correct metric, and it finds a circuit
+
+`std` was also wrong: it measures variability, not decision-relevance. The right metric
+rests on an identity rather than a heuristic. Because the projection **is** the sum of
+the contributions,
+
+    var(proj) = cov(sum_j c_j, proj) = sum_j cov(c_j, proj)
+
+each component's covariance with the projection is its **exact additive share of the
+decision's variance**, and the shares must sum to 1 -- a second correctness check
+(measured 1.000083; the 8e-5 deviation is fp16 accumulation over ~200 terms, the same
+source as the reconstruction error, so the tolerance is set to fp16 reality not 1e-6).
+
+| top-k by variance share | cumulative |
+|---|---|
+| 1 | 0.256 |
+| 3 | 0.422 |
+| 5 | 0.541 |
+| 10 | 0.731 |
+| 20 | 0.894 |
+| **21 of 183** | **0.90** |
+
+**21 components carry 90% of the decision variance** -- against 89 by std and 96 by
+magnitude. A ~4x reduction purely from measuring the right thing.
+
+| component | var share | label corr |
+|---|---|---|
+| **`L13.mlp`** | **+0.256** | +0.837 |
+| `L11.mlp` | +0.097 | +0.799 |
+| `L12.mlp` | +0.068 | +0.671 |
+| `L13.attn.h11` | +0.067 | +0.781 |
+| `L13.attn.h9` | +0.052 | +0.739 |
+| `L10.mlp` | +0.051 | +0.594 |
+| `L13.attn.h5` | +0.046 | +0.776 |
+| `L10.attn.h0` | +0.035 | +0.731 |
+| `L13.attn.h7` | +0.034 | +0.741 |
+
+The structure is coherent: **late MLPs (10-13) plus a cluster of layer-13 attention
+heads {5, 6, 7, 8, 9, 11}**, all with high label correlation (0.6-0.84) -- so they move
+the decision *and* move it correctly, which `std` alone could not distinguish.
+
+**Suppression is real and measurable.** 59 of 183 components have *negative* share: they
+systematically oppose the decision. The strongest (`L5.attn.h1` -0.009, label_r -0.52;
+`L12.attn.h10`; `L12.attn.h3`) also anti-correlate with the label. That is why cumulative
+share exceeds 1.0 at top-50 (1.044) before the negatives pull it back -- structure, not
+error.
+
+### Three metrics, three answers -- the methodological point
+
+| ranking metric | components for 90% | what it actually measures |
+|---|---|---|
+| mean abs contribution | 96 | magnitude, including constant offsets |
+| std | 89 | variability, including decision-irrelevant variation |
+| **variance share** | **21** | exact additive share of the decision |
+
+The same exact decomposition underlies all three. **The measurement was never the hard
+part; choosing what to rank by was.** My first two readings of this experiment were
+wrong, and the earlier "no sparse circuit" conclusion was an artifact of the metric
+rather than a property of the model.
+
+### Where it does stay dense
 
 | top-k by std | share of total varying signal |
 |---|---|
@@ -680,22 +740,20 @@ corroboration in this thread.
 | 50 | 0.775 |
 | **89 of 183** | **0.90** |
 
-Late-layer MLPs dominate over attention heads, and the head-level "field comparison
-circuit" hypothesis is **not** supported by this evidence — no small set of heads carries
-the decision. Component-level computation is dense, mirroring the dense *input*
-dependence found by multi-field ablation.
+By raw magnitude the computation looks dense (96/183), and the *input* dependence
+genuinely is dense (multi-field ablation). But the decision-carrying computation is not:
+21 components, concentrated in layers 10-13. The head-level "field comparison circuit"
+hypothesis is **partly** supported -- the layer-13 head cluster is real -- but late MLPs
+carry more of the variance than any single head, so it is not a pure attention story.
 
-**What this establishes and what it doesn't.** Establishes: an exact, complete,
-per-decision account exists and is cheap — your Layer 1 in the strict sense, verified to
-floating-point. Does not establish: that the account is *compressible* to something
-human-sized. 89 components is exact and unreadable, which is precisely the gap the
-abstraction layer has to close, and now the gap is measured rather than assumed.
+**What this establishes.** An exact, complete, per-decision account exists, is cheap,
+and **compresses to ~21 components** — Layer 1 in the strict sense, verified to
+floating-point twice over (reconstruction, and the share-sum identity). That is a
+circuit-sized number and the first genuinely mechanistic result in this thread.
 
-**Immediate methodological caveat:** `std` measures variability, not decision-relevance —
-a component could vary with input features irrelevant to the verdict. The right next
-measure is each component's **covariance with the decision** (or with the label), which
-needs the per-pair contribution matrix persisted rather than just its summary. That is
-the first refinement, and it will shrink the 89.
+**What it does not establish.** That those 21 components are *human-readable*. Naming
+what `L13.mlp` computes is the abstraction-layer problem and it is unsolved — but it is
+now a tractable 21-component problem rather than a 183-component one.
 
 **Standing caveat:** these are DIRECT contributions. Indirect effects (one head changing
 another's attention pattern) are real causal paths that direct attribution assigns to the
@@ -720,14 +778,14 @@ direct paths and silent on indirect ones is complete-looking and wrong.
    0.33 vs 0.26 for the legible table (above) — a real edge on every seed, but small
    enough that two modes may not be worth the surface area. A product call, not a
    measurement one; the measurement is done.
-4. **Rank components by covariance with the decision, not variance.** Direct
-   attribution is exact but its ranking currently uses `std`, which measures
-   variability rather than decision-relevance. Persist the per-pair contribution matrix
-   and rank by covariance with the projection/label. Cheap, and it is what turns "89
-   components" into a real circuit size.
-5. **Path patching on the survivors.** Direct attribution is silent on indirect effects.
-   Until those are measured the component ranking is a lower bound on involvement, not
-   the circuit.
+4. **Path patching on the 21.** Direct attribution is silent on indirect effects, so the
+   21 are a lower bound on involvement rather than a validated circuit. The standard
+   test is faithfulness (ablate the 21 — behaviour should die) and completeness (patch
+   ONLY the 21 — behaviour should survive). Until that runs, "21 components" is a
+   ranking, not a circuit.
+5. **Name what `L13.mlp` computes.** It alone carries 25.6% of the decision variance at
+   label-correlation 0.84. An SAE or transcoder on that one MLP is now the highest-value
+   interpretability target in the model — one component rather than 183.
 6. **Split flippability by base verdict.** The multi-field ceilings are confounded by
    class balance (person 38% match verdicts, walmart 14%) because ablation can only
    remove evidence. Reporting the curve separately for match- and no-match-verdict pairs
