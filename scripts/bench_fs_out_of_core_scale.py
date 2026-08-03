@@ -178,12 +178,18 @@ def main() -> None:
     ap.add_argument("--rows", type=int, required=True)
     ap.add_argument(
         "--mode",
-        choices=["streaming", "sequential", "spill", "bucketed", "in_memory"],
+        choices=[
+            "streaming", "sequential", "sequential_fused", "spill", "bucketed",
+            "in_memory",
+        ],
         required=True,
         help=(
             "streaming=DuckDB out-of-core (FS_BLOCK_SOURCE=duckdb); "
-            "sequential=in-RAM Arrow/Rust batches + end-WCC (FS_BLOCK_SOURCE="
-            "sequential); spill=DuckDB-FREE out-of-core -- per-pass edge shards on "
+            "sequential=in-RAM SCALE path (FS_BLOCK_SOURCE=sequential): bounded "
+            "FrameBlockSource scoring + join-free batched output, ~1x base in-RAM, "
+            "no disk shards (defaults on); sequential_fused=the fused-kernel "
+            "rollback arm (BOUNDED_SCORING=0) for the A/B; spill=DuckDB-FREE "
+            "out-of-core -- per-pass edge shards on "
             "disk + external union-find (FS_BLOCK_SOURCE=spill), the bounded-edge "
             "path; bucketed=frame-residency out-of-core -- hash-bucket the frame to "
             "disk per pass + score bucket-by-bucket (FS_BLOCK_SOURCE=bucketed), the "
@@ -242,7 +248,9 @@ def main() -> None:
     sampler.start()
     t0 = time.perf_counter()
     try:
-        if args.mode in ("streaming", "sequential", "spill", "bucketed"):
+        if args.mode in (
+            "streaming", "sequential", "sequential_fused", "spill", "bucketed",
+        ):
             # streaming -> DuckDB out-of-core; sequential -> in-RAM Arrow/Rust
             # batches + end-WCC; spill -> DuckDB-FREE out-of-core (per-pass edge
             # shards on disk + external union-find); bucketed -> frame-residency
@@ -253,9 +261,19 @@ def main() -> None:
             os.environ["GOLDENMATCH_FS_BLOCK_SOURCE"] = {
                 "streaming": "duckdb",
                 "sequential": "sequential",
+                "sequential_fused": "sequential",
                 "spill": "spill",
                 "bucketed": "bucketed",
             }[args.mode]
+            # `sequential` now DEFAULTS to bounded in-RAM scoring + batched output
+            # (the scale path). `sequential_fused` is the rollback A/B arm: force
+            # the fused whole-frame kernel (bounded=0). Clear the escapes otherwise
+            # so a stale env can't contaminate the same-box A/B.
+            if args.mode == "sequential_fused":
+                os.environ["GOLDENMATCH_FS_SEQUENTIAL_BOUNDED_SCORING"] = "0"
+            else:
+                os.environ.pop("GOLDENMATCH_FS_SEQUENTIAL_BOUNDED_SCORING", None)
+            os.environ.pop("GOLDENMATCH_FS_SEQUENTIAL_BATCHED_OUTPUT", None)
             if args.mode == "spill" and args.force_shard:
                 # Skip the fused short-circuit so the edge-shard spill mechanism
                 # (pair_sink shards + external_wcc_from_shards) actually runs.
@@ -286,6 +304,10 @@ def main() -> None:
             result["dupes_count"] = res.get("dupes_count")
             result["golden_count"] = res.get("golden_count")
             result["pairs"] = res.get("pairs")
+            # Sequential scale-path mechanism: bounded in-RAM scoring + batched
+            # output (default on the `sequential` mode; off for `sequential_fused`).
+            result["bounded_scoring"] = res.get("bounded_scoring")
+            result["batched_output"] = res.get("batched_output")
             if not result["streaming_engaged"]:
                 result["error"] = (
                     "streaming short-circuit did NOT engage -- fell back to "

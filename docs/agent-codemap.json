@@ -322,6 +322,8 @@
             "_fs_ooc_wave_rows",
             "_fs_ooc_workers",
             "_fs_out_of_core_legacy_flag",
+            "_fs_sequential_batched_output_enabled",
+            "_fs_sequential_bounded_scoring_enabled",
             "_fs_spill_force_shard",
             "_fused_fs_assignments",
             "_load_frame_batched",

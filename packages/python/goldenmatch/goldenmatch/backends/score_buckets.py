@@ -1194,8 +1194,17 @@ def score_buckets(
     em_result=None,
     _emit: str = "list",
     pair_sink: Any = None,
+    force_bounded_stream: bool = False,
 ) -> Any:
     """Score all blocks via hash-bucketed partition_by, no per-block LazyFrame.
+
+    ``force_bounded_stream`` (FS probabilistic only): score buckets via the
+    bounded in-RAM ``FrameBlockSource`` (slice one bucket off the resident frame
+    on demand, hold only ``max_workers`` slices) regardless of
+    ``GOLDENMATCH_FS_BLOCK_SOURCE`` — the in-RAM caller (``run_fs_dedupe_sequential``
+    scale path) forces it so its scoring peak stays ~1x frame without switching the
+    global block source off ``sequential``. Byte-identical to the eager path
+    (``filter_eq`` preserves within-bucket order == ``partition_by``).
 
     ``pair_sink`` (arrow mode only): an optional ``callable(pa.Table)`` invoked with
     each PASS's ``PAIR_STREAM`` table AS SOON AS the pass is scored, INSTEAD of
@@ -2197,7 +2206,9 @@ def score_buckets(
     # eager path is byte-identical (same rows, same within-bucket order via
     # filter_eq == partition_by(maintain_order), and cross-bucket order is
     # unordered downstream: thread-pool scored + pairs canonicalized).
-    _fs_streaming = is_probabilistic and _fs_bounded_stream_enabled()
+    _fs_streaming = is_probabilistic and (
+        force_bounded_stream or _fs_bounded_stream_enabled()
+    )
 
     def _score_single_pass(
         key: BlockingKeyConfig,
