@@ -1465,6 +1465,90 @@ class IdentityStore:
             (new_status, merged_into, datetime.now().isoformat(), entity_id),
         )
 
+    def merge_by_shared_field(
+        self, dataset: str | None, field: str, max_group: int = 100,
+    ) -> tuple[int, int]:
+        """DETERMINISTIC merge: collapse entities that share a non-null value of
+        ``field`` -- an authoritative identifier like ``npi`` -- into ONE, so a
+        unique government id can't be split across entities (the ~6% NPI
+        fragmentation seen at 14M). Records are reassigned to the surviving
+        (lowest) entity id and the absorbed nodes retired ``merged_into`` it, in ONE
+        transaction. A value held by more than ``max_group`` DISTINCT entities is a
+        placeholder/bad id (e.g. ``'0000000000'``) and is skipped. Idempotent
+        (already one entity per value -> no-op). Relationship edges self-heal on the
+        next ``build_relationships`` (reconcile recomputes from current entity ids).
+        Returns ``(entities_merged, groups_merged)``.
+
+        Entity-level (post-resolve), so it can't cascade probabilistic clusters into
+        giant components the way a pre-cluster record-level merge does."""
+        if self._backend == "mongo":
+            raise NotImplementedError("merge_by_shared_field: not supported on mongo")
+        if not _SAFE_FIELD.fullmatch(field):
+            raise ValueError(f"unsafe merge field name: {field!r}")
+        vexpr = (f"payload ->> '{field}'" if self._backend == "postgres"
+                 else f"json_extract(payload, '$.{field}')")
+        ds = "" if dataset is None else " AND dataset = ?"
+        params: tuple = () if dataset is None else (dataset,)
+        rows = self._fetchall(
+            f"WITH ev AS (SELECT DISTINCT {vexpr} AS v, entity_id FROM source_records "
+            f" WHERE entity_id IS NOT NULL{ds} AND {vexpr} IS NOT NULL AND {vexpr} <> ''), "
+            "grp AS (SELECT v FROM ev GROUP BY v HAVING COUNT(*) >= 2 AND COUNT(*) <= ?) "
+            "SELECT ev.v AS v, ev.entity_id AS e FROM ev JOIN grp ON ev.v = grp.v",
+            params + (max_group,))
+        if not rows:
+            return (0, 0)
+        by_val: dict = {}
+        for r in rows:
+            by_val.setdefault(r["v"], []).append(r["e"])
+        # union-find across values (an entity may share two ids -> chain); survivor
+        # is the lexicographically smallest entity id in the component.
+        parent: dict = {}
+        def _find(x):
+            parent.setdefault(x, x)
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+        def _union(a, b):
+            ra, rb = _find(a), _find(b)
+            if ra != rb:
+                lo, hi = (ra, rb) if ra < rb else (rb, ra)
+                parent[hi] = lo
+        for ents in by_val.values():
+            for e in ents[1:]:
+                _union(ents[0], e)
+        allents = {e for ents in by_val.values() for e in ents}
+        remap = [(e, _find(e)) for e in allents if _find(e) != e]
+        if not remap:
+            return (0, 0)
+        groups = len({_find(e) for e in allents})
+        ts = datetime.now().isoformat()
+        merged_status = IdentityStatus.MERGED_INTO.value
+        rec_upd = [(new, old) for old, new in remap]
+        node_upd = [(new, ts, old) for old, new in remap]
+        rec_sql = "UPDATE source_records SET entity_id = ? WHERE entity_id = ?"
+        node_sql = ("UPDATE identity_nodes SET status = ?, merged_into = ?, "
+                    "updated_at = ? WHERE entity_id = ?")
+        node_upd = [(merged_status, new, ts, old) for old, new in remap]
+        if self._backend == "postgres":
+            with self._conn.transaction(), self._conn.cursor() as cur:
+                cur.executemany(self._pg_sql(rec_sql), rec_upd)
+                cur.executemany(self._pg_sql(node_sql), node_upd)
+        else:
+            outer = self._conn.in_transaction
+            if not outer:
+                self._conn.execute("BEGIN")
+            try:
+                self._conn.executemany(rec_sql, rec_upd)
+                self._conn.executemany(node_sql, node_upd)
+                if not outer:
+                    self._conn.execute("COMMIT")
+            except BaseException:
+                if not outer and self._conn.in_transaction:
+                    self._conn.execute("ROLLBACK")
+                raise
+        return (len(remap), groups)
+
     def upsert_record(self, rec: SourceRecord) -> None:
         if self._backend == "mongo":
             self._mongo.upsert_record(rec)

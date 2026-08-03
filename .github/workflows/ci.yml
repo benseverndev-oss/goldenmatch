@@ -876,6 +876,14 @@ jobs:
           assert r['f1'] >= 0.90, f'Febrl3 smoke regressed: {r}'
           print('febrl3 smoke F1=', r['f1'])
           "
+      - name: Committed benchmark report is not stale
+        shell: bash
+        run: |
+          # The committed SoT doc must match its JSON (benchmarks.yml regenerates
+          # both). This catches a hand-edited docs/benchmarks/latest-results.md
+          # without needing any real-dataset run.
+          uv run python scripts/run_benchmarks.py \
+            --report docs/benchmarks/latest-results.md --check
       - name: Smoke summary
         if: always()
         shell: bash

@@ -1,0 +1,111 @@
+# FS lever regression gate -- the standing guard for the FS/Lever-Enablement
+# levers whose DEFAULT rests on the over-merge accuracy panel. The `ab_lever`
+# A/B harness (scripts/bench_er_headtohead/ab_lever.py) measures a lever's
+# per-dataset F1 delta across the panel and FAILS if any dataset regresses
+# beyond --tol. Until now it only ran by hand -- so a change to the refit
+# objective / guards, the FS auto-config, or the comparators could silently
+# regress the shipped default-on behaviour with nothing red.
+#
+# GOLDENMATCH_FS_REFIT_THRESHOLD is default-ON: its flip rests on the two
+# synthetic over-merge shapes (household_hardneg / cotenant_hardneg) winning
+# while the at-ceiling real datasets stay flat. This gate re-asserts exactly
+# that invariant (--off 0 = kill-switch, --on 1 = the live default).
+#
+# Two tiers:
+#   pr   -- fast synthetic over-merge panel (person + the two hard-neg shapes,
+#           all pure-synthetic so always available). ~15-30s. Runs on PRs that
+#           touch the FS lever code paths (+ push to main so main-health catches
+#           a regression that already merged).
+#   full -- the whole ab_lever panel (adds febrl3/ncvr_synthetic/dblp_acm/
+#           historical_50k where present). Nightly + workflow_dispatch.
+#
+# NOT in ci-required (a scheduled/path-filtered quality watch, like
+# bench-quality-scale / qis_gate -- not a blocking per-PR merge gate).
+name: fs-lever-gate
+
+on:
+  pull_request:
+    paths:
+      - "packages/python/goldenmatch/goldenmatch/core/probabilistic.py"
+      - "packages/python/goldenmatch/goldenmatch/core/pipeline.py"
+      - "packages/python/goldenmatch/goldenmatch/core/autoconfig.py"
+      - "packages/python/goldenmatch/goldenmatch/core/autoconfig_*.py"
+      - "packages/python/goldenmatch/goldenmatch/core/scorer.py"
+      - "scripts/bench_er_headtohead/ab_lever.py"
+      - "scripts/autoconfig_quality/datasets.py"
+      - "scripts/autoconfig_quality/anchors.py"
+      - ".github/workflows/fs-lever-gate.yml"
+  push:
+    branches: [main]
+    paths:
+      - "packages/python/goldenmatch/goldenmatch/core/probabilistic.py"
+      - "packages/python/goldenmatch/goldenmatch/core/pipeline.py"
+      - "packages/python/goldenmatch/goldenmatch/core/autoconfig.py"
+      - "packages/python/goldenmatch/goldenmatch/core/autoconfig_*.py"
+      - "packages/python/goldenmatch/goldenmatch/core/scorer.py"
+      - "scripts/bench_er_headtohead/ab_lever.py"
+      - "scripts/autoconfig_quality/datasets.py"
+      - "scripts/autoconfig_quality/anchors.py"
+      - ".github/workflows/fs-lever-gate.yml"
+  schedule:
+    - cron: "0 7 * * *" # nightly 07:00 UTC -- full panel
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: "Panel scope"
+        type: choice
+        options: [pr, full]
+        default: full
+
+permissions:
+  contents: read
+
+env:
+  # pyarrow's bundled mimalloc SIGSEGVs on goldenmatch's pipeline worker threads;
+  # force the system pool (root CLAUDE.md standard for any lane running the
+  # full pipeline). Harmless where unneeded.
+  ARROW_DEFAULT_MEMORY_POOL: system
+  # jemalloc page-decay: return freed polars pages to the OS between stages.
+  _RJEM_MALLOC_CONF: "dirty_decay_ms:1000,muzzy_decay_ms:0"
+  GOLDENMATCH_AUTOCONFIG_MEMORY: "0" # no cross-run memory writes in CI
+
+concurrency:
+  group: fs-lever-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  refit-lever:
+    # ubuntu-latest (not a large runner): the synthetic panel is tiny and the
+    # full panel's largest set (historical_50k, 50k rows) fits <16GB FS -- the
+    # existing quality_gate already runs historical_50k there. Avoids the
+    # 30-60min provisioning lottery of brand-new larger runners on a PR gate.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Sync workspace (installs goldenmatch @ HEAD)
+        run: uv sync --all-packages
+      - name: Build the native kernel (mirror the real default FS path)
+        run: uv run python scripts/build_native.py
+      - name: Resolve panel scope
+        id: scope
+        run: |
+          # Full panel on schedule or an explicit full dispatch; fast synthetic
+          # over-merge panel on PR/push (and a pr dispatch).
+          if [ "${{ github.event_name }}" = "schedule" ] || \
+             [ "${{ github.event.inputs.tier }}" = "full" ]; then
+            echo "datasets=" >> "$GITHUB_OUTPUT"        # empty -> ab_lever default (whole panel)
+            echo "label=full panel" >> "$GITHUB_OUTPUT"
+          else
+            echo "datasets=--datasets person,household_hardneg,cotenant_hardneg" >> "$GITHUB_OUTPUT"
+            echo "label=synthetic over-merge panel" >> "$GITHUB_OUTPUT"
+          fi
+      - name: FS refit-threshold lever A/B (${{ steps.scope.outputs.label }})
+        run: |
+          uv run python -m scripts.bench_er_headtohead.ab_lever \
+            --env GOLDENMATCH_FS_REFIT_THRESHOLD --off 0 --on 1 \
+            ${{ steps.scope.outputs.datasets }}

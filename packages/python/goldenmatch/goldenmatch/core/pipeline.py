@@ -1380,6 +1380,7 @@ def _resolve_identities(
             emit_singletons=config.identity.emit_singletons,
             weak_confidence_threshold=config.identity.weak_confidence_threshold,
             relationships=config.identity.relationships,
+            deterministic_merge_keys=config.identity.deterministic_merge_keys,
             pair_score_view=pair_score_view,
             cluster_frames=cluster_frames,
         )

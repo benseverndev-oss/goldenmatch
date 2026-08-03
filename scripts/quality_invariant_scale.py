@@ -638,8 +638,20 @@ def _golden_hash(golden) -> str | None:
     docs/quality-invariant-scale.md (Methodology)."""
     if golden is None:
         return None
-    g = golden.sort(by=golden.columns)
-    return hashlib.sha256(g.write_csv().encode("utf-8")).hexdigest()
+    # golden is a pyarrow.Table on the arrow-native path (DedupeResult.golden is
+    # `pa.Table` since v3.0.0) and legacy-polars elsewhere; normalize through the
+    # frame protocol so the fingerprint is backend-agnostic (was polars-only
+    # `.sort(by=)` / `.write_csv()`, which AttributeError'd on a pa.Table).
+    import io
+
+    import pyarrow.csv as _pacsv
+    from goldenmatch.core.frame import to_frame
+
+    f = to_frame(golden)
+    g = f.sort(f.columns)  # sort by ALL columns (deterministic content order)
+    buf = io.BytesIO()
+    _pacsv.write_csv(g.to_arrow(), buf)
+    return hashlib.sha256(buf.getvalue()).hexdigest()
 
 
 def _golden_shape(golden) -> list[int] | None:
@@ -647,7 +659,10 @@ def _golden_shape(golden) -> list[int] | None:
     cluster partition (which IS reproducible), unlike the survivorship VALUES."""
     if golden is None:
         return None
-    return [int(golden.height), int(golden.width)]
+    from goldenmatch.core.frame import to_frame
+
+    f = to_frame(golden)
+    return [int(f.height), len(f.columns)]
 
 
 def _clusters_signature(predicted_members: dict[int, list[int]]) -> str:
