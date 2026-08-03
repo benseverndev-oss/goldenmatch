@@ -249,6 +249,13 @@ Two readable findings fall straight out of the geometry:
   match direction correctly ignores it, keying on **first_name** to break look-alikes.
 - **dob ≈ 0 (not predicted).** dob does *not* discriminate — consistent with dob being
   corrupted/unreliable in historical_50k, so the model **learned to down-weight it**.
+  **⚠ CONTRADICTED by causal ablation (`causal_attribution`, 4 runs).** Occluding dob
+  moves P(match) as much as occluding first_name and flips ~5% of verdicts, making it a
+  top-3 *causal* field despite this 0.01 coefficient. Ablation and this regression
+  measure different things (necessity-given-the-other-fields vs contribution to the
+  internal direction), but for a user-facing "the model ignores dob" claim the ablation
+  is the more defensible ground truth. See the causal-attribution section of
+  `2026-08-03-15b-interp-handoff.md`.
 
 ### (b) Label the SAE basis by field
 

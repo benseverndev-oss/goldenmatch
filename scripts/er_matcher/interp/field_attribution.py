@@ -246,6 +246,86 @@ def affine_r2(
     }
 
 
+def _rank(x: np.ndarray) -> np.ndarray:
+    """Average-tied ranks of ``x`` (1-based), for a Spearman correlation."""
+    order = np.argsort(x, kind="stable")
+    ranks = np.empty(len(x), dtype=np.float64)
+    ranks[order] = np.arange(1, len(x) + 1, dtype=np.float64)
+    # average ties so a flat weight table doesn't fake a perfect correlation
+    for v in np.unique(x):
+        m = x == v
+        if m.sum() > 1:
+            ranks[m] = ranks[m].mean()
+    return ranks
+
+
+def spearman(a: np.ndarray, b: np.ndarray) -> float:
+    """Spearman rank correlation, numpy-only (no scipy in the Modal image)."""
+    ra, rb = _rank(np.asarray(a, np.float64)), _rank(np.asarray(b, np.float64))
+    ca, cb = ra - ra.mean(), rb - rb.mean()
+    den = float(np.sqrt((ca * ca).sum() * (cb * cb).sum()))
+    return float((ca * cb).sum() / den) if den > 1e-12 else 0.0
+
+
+def attribution_summary(
+    base_p: np.ndarray,
+    occluded_p: np.ndarray,
+    field_names: list[str],
+    *,
+    weights: dict[str, float] | None = None,
+    threshold: float = 0.5,
+) -> dict[str, Any]:
+    """Summarize per-field CAUSAL attribution from an occlusion sweep.
+
+    ``occluded_p[i, j]`` is P(match) for pair ``i`` with field ``j`` removed from
+    both records. Unlike an R^2, this is a direct interventional claim: how far
+    the model's own verdict moves when the evidence is taken away.
+
+    Reports, per field: mean signed delta (``base - occluded``; positive means the
+    field was pushing TOWARD match), mean absolute delta (raw causal weight), and
+    **flip rate** -- the fraction of pairs whose verdict actually crosses
+    ``threshold`` when the field is removed. Flip rate is the number a compliance
+    reader wants: "removing birth_place changes the decision in N% of cases."
+
+    When ``weights`` is supplied, also returns the Spearman correlation between
+    the causal ranking and the explainer's learned weights -- an INDEPENDENT check
+    that the shipped weights rank fields the way ablation says they matter.
+    """
+    base_p = np.asarray(base_p, dtype=np.float64)
+    occluded_p = np.asarray(occluded_p, dtype=np.float64)
+    if occluded_p.ndim != 2 or occluded_p.shape[0] != base_p.shape[0]:
+        raise ValueError("occluded_p must be (n_pairs, n_fields) aligned with base_p")
+    if occluded_p.shape[1] != len(field_names):
+        raise ValueError("occluded_p columns must match field_names")
+
+    delta = base_p[:, None] - occluded_p
+    base_verdict = base_p >= threshold
+    flips = (occluded_p >= threshold) != base_verdict[:, None]
+
+    per_field = []
+    for j, f in enumerate(field_names):
+        per_field.append({
+            "field": f,
+            "mean_delta": float(delta[:, j].mean()),
+            "mean_abs_delta": float(np.abs(delta[:, j]).mean()),
+            "max_abs_delta": float(np.abs(delta[:, j]).max()),
+            "flip_rate": float(flips[:, j].mean()),
+        })
+    ranking = sorted(per_field, key=lambda e: -e["mean_abs_delta"])
+
+    out: dict[str, Any] = {
+        "n_pairs": int(base_p.shape[0]),
+        "per_field": per_field,
+        "ranking": [e["field"] for e in ranking],
+        "any_flip_rate": float(flips.any(axis=1).mean()),
+    }
+    if weights is not None:
+        causal = np.array([e["mean_abs_delta"] for e in per_field])
+        learned = np.array([float(weights.get(f, 0.0)) for f in field_names])
+        out["spearman_vs_learned_weights"] = spearman(causal, learned)
+    return out
+
+
 def label_sae_features(
     feature_acts: np.ndarray, field_feats: np.ndarray, field_names: list[str]
 ) -> list[dict[str, Any]]:

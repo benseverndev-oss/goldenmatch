@@ -1117,6 +1117,127 @@ def faithfulness_eval(per_class: int = 400, seed: int = 0, negatives: str = "har
     print(f"[done] faithfulness -> {out_path}")
 
 
+# --------------------------------------------------------------------------- #
+# stage 8: per-pair CAUSAL attribution -- ablate a field, watch the verdict     #
+# --------------------------------------------------------------------------- #
+@app.function(image=_image, gpu=GPU, timeout=60 * 60, volumes={"/out": _out_vol})
+def causal_attribution(per_class: int = 200, seed: int = 0, negatives: str = "hard",
+                       threshold: float = 0.5) -> None:
+    """Per-pair CAUSAL field attribution by occlusion -- not another R^2.
+
+    For each pair and each field, blank that field on BOTH records and re-score.
+    The prompt renders an absent value as the ``(missing)`` sentinel and the
+    system rubric explicitly trains the model to treat a missing field as "ignore,
+    do not penalize", so this removes the evidence *in-distribution* rather than
+    poking the model off-manifold.
+
+    Two interventions per field:
+      - **necessity** (leave-one-out): remove field f, keep the rest. A large
+        |delta P(match)| means the model's verdict genuinely leans on f.
+      - **sufficiency** (leave-one-in): keep ONLY f, blank the rest. Says whether
+        f alone carries the decision.
+
+    The headline is the **flip rate**: the fraction of pairs whose verdict
+    actually crosses ``threshold`` when a field is removed. That is a direct
+    interventional claim about a real decision ("removing birth_place changes the
+    verdict in N% of cases") rather than a variance-explained statistic -- which
+    is what an auditor is actually asking for, and it does not inherit the
+    faithfulness R^2's weakness on this domain.
+
+    Also reports the Spearman correlation between the causal ranking and the
+    shipped ``PERSON_FIELD_IMPORTANCE`` -- an INDEPENDENT check on the explainer's
+    weights, since those were derived from the residual-stream geometry and this
+    is measured from the model's output behaviour.
+    -> interp/causal_attribution_{negatives}_seed{seed}.json
+    """
+    import json
+    import os
+    import sys
+
+    import numpy as np
+    import torch
+
+    sys.path.insert(0, "/root/interp")
+    sys.path.insert(0, "/root")
+    from field_attribution import attribution_summary
+    from goldenmatch.core.er_matcher.explainer import PERSON_FIELD_IMPORTANCE
+
+    tok, model = _load_model()
+    true_id, false_id = _true_false_ids(tok)
+    dev = model.device
+    pairs, rows = _mine(per_class, negatives, seed)
+    print(f"[attr] pairs={len(pairs)} fields={len(FIELDS)} negatives={negatives}", flush=True)
+
+    def p_match(recs: list[tuple[dict, dict]]) -> np.ndarray:
+        prompts = [_prompt(tok, a, b) + '{"match":' for a, b in recs]
+        ps = []
+        for i in range(0, len(prompts), 16):
+            enc = tok(prompts[i : i + 16], return_tensors="pt", padding=True).to(dev)
+            with torch.no_grad():
+                logits = model(**enc).logits[:, -1, :]
+            pair = torch.softmax(torch.stack([logits[:, true_id], logits[:, false_id]], 1), 1)
+            ps.append(pair[:, 0].float().cpu().numpy())
+        return np.concatenate(ps)
+
+    def blanked(r: dict, drop: set) -> dict:
+        """Copy of ``r`` with ``drop`` fields emptied -> renders as ``(missing)``."""
+        return {f: ("" if f in drop else r.get(f, "")) for f in FIELDS}
+
+    base = p_match([(rows[a], rows[b]) for a, b, _ in pairs])
+    y = np.array([t for *_, t in pairs])
+    print(f"[attr] base P(match): mean={base.mean():.3f} "
+          f"acc={float(((base >= threshold) == (y == 1)).mean()):.3f}", flush=True)
+
+    nec = np.zeros((len(pairs), len(FIELDS)))
+    suf = np.zeros((len(pairs), len(FIELDS)))
+    for j, f in enumerate(FIELDS):
+        others = set(FIELDS) - {f}
+        nec[:, j] = p_match([(blanked(rows[a], {f}), blanked(rows[b], {f})) for a, b, _ in pairs])
+        suf[:, j] = p_match(
+            [(blanked(rows[a], others), blanked(rows[b], others)) for a, b, _ in pairs]
+        )
+        print(f"[attr] {f:<14} necessity dP={float((base - nec[:, j]).mean()):+.3f} "
+              f"flip={float(((nec[:, j] >= threshold) != (base >= threshold)).mean()):.3f}",
+              flush=True)
+
+    necessity = attribution_summary(
+        base, nec, FIELDS, weights=PERSON_FIELD_IMPORTANCE, threshold=threshold
+    )
+    sufficiency = attribution_summary(base, suf, FIELDS, threshold=threshold)
+    print(f"[attr] causal ranking: {necessity['ranking']}", flush=True)
+    print(f"[attr] spearman vs shipped weights = "
+          f"{necessity['spearman_vs_learned_weights']:+.3f}", flush=True)
+    print(f"[attr] any-field flip rate = {necessity['any_flip_rate']:.3f}", flush=True)
+
+    payload = {
+        "method": "occlusion (blank field on both records -> '(missing)' sentinel)",
+        "negatives": negatives, "seed": seed, "threshold": threshold,
+        "fields": FIELDS, "shipped_weights": {f: PERSON_FIELD_IMPORTANCE.get(f, 0.0)
+                                              for f in FIELDS},
+        "base_p_mean": float(base.mean()),
+        "base_accuracy": float(((base >= threshold) == (y == 1)).mean()),
+        "necessity": necessity, "sufficiency": sufficiency,
+        # per-pair rows so a review queue can cite the actual counterfactual
+        "per_pair": [
+            {"a": int(a), "b": int(b), "label": int(t), "p_base": float(base[i]),
+             "p_without": {f: float(nec[i, j]) for j, f in enumerate(FIELDS)}}
+            for i, (a, b, t) in enumerate(pairs[:50])
+        ],
+    }
+    os.makedirs("/out/interp", exist_ok=True)
+    out_path = f"/out/interp/causal_attribution_{negatives}_seed{seed}.json"
+    with open(out_path, "w") as fh:
+        json.dump(payload, fh, indent=2)
+    _out_vol.commit()
+    print(f"[done] causal attribution -> {out_path}")
+
+
+@app.local_entrypoint()
+def attribution(per_class: int = 200, seed: int = 0, negatives: str = "hard") -> None:
+    """Per-pair causal field attribution by occlusion (necessity + sufficiency)."""
+    causal_attribution.remote(per_class=per_class, seed=seed, negatives=negatives)
+
+
 @app.local_entrypoint()
 def faithfulness(per_class: int = 400, seed: int = 0, negatives: str = "hard",
                  split: str = "cluster", link: str = "linear") -> None:

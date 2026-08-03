@@ -5,12 +5,14 @@ import os
 import sys
 
 import numpy as np
+import pytest
 
 sys.path.insert(0, os.path.dirname(__file__))
 
 from interp.field_attribution import (  # noqa: E402
     affine_r2,
     attribute_direction,
+    attribution_summary,
     field_agreements,
     fixed_weight_score,
     label_sae_features,
@@ -18,6 +20,7 @@ from interp.field_attribution import (  # noqa: E402
     prob_space_r2,
     record_disjoint_split,
     richer_field_features,
+    spearman,
 )
 
 FIELDS = ["first_name", "surname", "dob"]
@@ -247,6 +250,85 @@ class TestAffineR2:
 
         with pytest.raises(ValueError):
             affine_r2(np.zeros(5), np.zeros(4), np.zeros(3), np.zeros(3))
+
+
+class TestSpearman:
+    def test_perfect_and_inverted(self):
+        a = np.array([1.0, 2.0, 3.0, 4.0])
+        assert spearman(a, a) == pytest.approx(1.0)
+        assert spearman(a, -a) == pytest.approx(-1.0)
+
+    def test_monotone_but_nonlinear_is_still_one(self):
+        a = np.array([1.0, 2.0, 3.0, 4.0])
+        assert spearman(a, a**5) == pytest.approx(1.0)
+
+    def test_constant_input_is_zero_not_nan(self):
+        r = spearman(np.array([1.0, 2.0, 3.0]), np.array([7.0, 7.0, 7.0]))
+        assert r == 0.0
+
+    def test_ties_are_averaged(self):
+        # without tie-averaging, a flat vector would fake a perfect correlation
+        r = spearman(np.array([1.0, 1.0, 2.0, 2.0]), np.array([5.0, 5.0, 9.0, 9.0]))
+        assert r == pytest.approx(1.0)
+
+
+class TestAttributionSummary:
+    def _case(self):
+        # field 0 is load-bearing (removing it drops P a lot and flips verdicts),
+        # field 2 is inert (removing it changes nothing).
+        base = np.array([0.9, 0.8, 0.95, 0.85])
+        occ = np.array([
+            [0.1, 0.7, 0.9],
+            [0.2, 0.6, 0.8],
+            [0.05, 0.9, 0.95],
+            [0.3, 0.75, 0.85],
+        ])
+        return base, occ
+
+    def test_ranks_the_load_bearing_field_first(self):
+        base, occ = self._case()
+        res = attribution_summary(base, occ, FIELDS)
+        assert res["ranking"][0] == "first_name"
+        assert res["ranking"][-1] == "dob"
+
+    def test_inert_field_has_zero_delta_and_no_flips(self):
+        base, occ = self._case()
+        by = {e["field"]: e for e in attribution_summary(base, occ, FIELDS)["per_field"]}
+        assert by["dob"]["mean_abs_delta"] == pytest.approx(0.0)
+        assert by["dob"]["flip_rate"] == 0.0
+
+    def test_flip_rate_counts_verdict_crossings(self):
+        base, occ = self._case()
+        by = {e["field"]: e for e in attribution_summary(base, occ, FIELDS)["per_field"]}
+        # every pair starts >= 0.5 and drops below when first_name is removed
+        assert by["first_name"]["flip_rate"] == 1.0
+        assert by["surname"]["flip_rate"] == 0.0
+        assert attribution_summary(base, occ, FIELDS)["any_flip_rate"] == 1.0
+
+    def test_signed_delta_shows_direction(self):
+        # a field that pushes AWAY from match: removing it RAISES P
+        base = np.array([0.4, 0.3])
+        occ = np.array([[0.9, 0.4, 0.4], [0.8, 0.3, 0.3]])
+        by = {e["field"]: e for e in attribution_summary(base, occ, FIELDS)["per_field"]}
+        assert by["first_name"]["mean_delta"] < 0
+        assert by["surname"]["mean_delta"] == pytest.approx(0.0)
+
+    def test_spearman_against_learned_weights(self):
+        base, occ = self._case()
+        agree = attribution_summary(
+            base, occ, FIELDS, weights={"first_name": 0.9, "surname": 0.3, "dob": 0.0}
+        )
+        assert agree["spearman_vs_learned_weights"] == pytest.approx(1.0)
+        disagree = attribution_summary(
+            base, occ, FIELDS, weights={"first_name": 0.0, "surname": 0.3, "dob": 0.9}
+        )
+        assert disagree["spearman_vs_learned_weights"] == pytest.approx(-1.0)
+
+    def test_shape_validation(self):
+        with pytest.raises(ValueError):
+            attribution_summary(np.zeros(4), np.zeros((3, 3)), FIELDS)
+        with pytest.raises(ValueError):
+            attribution_summary(np.zeros(4), np.zeros((4, 2)), FIELDS)
 
 
 class TestLabelSaeFeatures:

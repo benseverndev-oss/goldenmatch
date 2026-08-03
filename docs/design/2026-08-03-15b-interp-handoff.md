@@ -38,6 +38,9 @@ standing discipline: **when a number looks too good, hunt the confound first.**
 - **Faithfulness measurement — committed.** `modal_interp.py::faithfulness_eval`
   measures the shipped weights against the model's real P(match) on a cluster-disjoint
   split. Replaces the lost `scratchpad/faithfulness.py`; see the results section below.
+- **Causal attribution — committed.** `modal_interp.py::causal_attribution` ablates each
+  field and measures the real verdict flip. Stronger audit artifact than any R², but it
+  **contradicts two of the shipped field weights** — see its section below.
 - **Shipped product — the per-decision explainer.** `goldenmatch/core/er_matcher/
   explainer.py` + `LocalLlamaAdapter.score_and_explain`. Pure/model-free (jaro-winkler
   + the learned weights), schema-agnostic, honest about the R²=0.51 bound. 10 unit
@@ -81,6 +84,7 @@ standing discipline: **when a number looks too good, hunt the confound first.**
   volume: `layer_probes.json`, `sae_layer14.pt`, `causal_multilayer_8_20.json`,
   `layer2_abstraction_L14.json`, `layer_early_exit.json`, `truncate_adapt.json`,
   `eval_trunc{28,16,12}_v2.json`, `leniency_dial.json`,
+  `causal_attribution_{hard,random}_seed{0,1,2}.json`,
   `faithfulness_{cluster,record}_{hard,random}_seed{0..4}[_logit].json`. Modal token is set
   locally.
 - **Pinned GGUF** for on-box work: `scratchpad/er-1p5b.gguf` (Q4, the same weights as
@@ -97,7 +101,7 @@ The 0.51 in `explainer.py` is the R² of explaining the internal diff-of-means
 per-decision explainer. The right target is the model's **actual P(match)**.
 
 That is now measured by a **committed, reproducible** stage —
-`modal_interp.py::faithfulness_eval` (pure helpers + 31 unit tests in
+`modal_interp.py::faithfulness_eval` (pure helpers + 41 unit tests in
 `field_attribution.py` / `test_field_attribution.py`) — on a **cluster-disjoint** split
 (no entity shared train↔test), the fp16 `/out/model_1p5b/merged`, teacher-forced
 `{"match":` → softmax(true,false) readout. Artifacts:
@@ -191,16 +195,68 @@ simple/legible one, and whether to report the hard-negative number in the produc
 (d) score the **Q4 GGUF** as the target, since Q4 is what actually ships and it is the
 largest remaining unexplained difference vs the old 0.87.
 
+## Per-pair causal attribution — done, and it disagrees with the shipped weights
+
+`modal_interp.py::causal_attribution` (helpers + tests in `field_attribution.py`).
+Occlusion, not another R²: blank a field on **both** records and re-score. The prompt
+renders an absent value as `(missing)` and the system rubric explicitly trains the model
+to treat a missing field as "ignore, do not penalize", so this removes evidence
+*in-distribution* rather than poking the model off-manifold. Necessity (leave-one-out)
+and sufficiency (leave-one-in) per field, 400 pairs/run, base accuracy 0.88–0.90.
+Artifacts: `interp/causal_attribution_{hard,random}_seed{0,1,2}.json`.
+
+Stable across 4 runs (hard s0/s1/s2 + random s0):
+
+| field | causal rank | shipped weight | mean ΔP | flip rate | verdict |
+|---|---|---|---|---|---|
+| birth_place | **1st, every run** | 0.30 (2nd) | +0.02…+0.04 | 7.5–10% | agrees |
+| first_name | 2nd–3rd | 0.42 (1st) | −0.00…−0.02 | 5.5–6% | ~agrees |
+| **dob** | **2nd–3rd** | **0.01 (last)** | −0.02…−0.03 | 4.5–5.5% | **under-weighted** |
+| postcode_fake | 4th | 0.08 (4th) | +0.00…+0.01 | 3.5–5% | agrees |
+| surname | 5th | 0.04 (5th) | +0.00…+0.01 | 2.5–3% | agrees |
+| **occupation** | **last, every run** | **0.15 (3rd)** | ~0.00 | 1–2% | **over-weighted** |
+
+Spearman(causal, shipped weights) = **+0.14 … +0.43** — weak, never strong.
+
+**Three findings:**
+
+1. **The signs are coherent and readable.** On look-alikes, removing `first_name` or
+   `dob` *raises* P(match) (they carry the evidence AGAINST a match — the
+   discriminators), while removing `birth_place` or `surname` *lowers* it (evidence
+   FOR). That is exactly the story you would want an explainer to tell, and it comes
+   straight from the model's behaviour.
+2. **Two shipped weights are wrong in a user-visible way.** `dob` is documented as
+   "near-ignored" at 0.01 but is a top-3 causal field; `occupation` sits at 0.15 (3rd)
+   but is dead last causally, flipping 1–2% of verdicts. An explanation that tells an
+   auditor "the model ignores date of birth" is, by the ablation test, false.
+   *Fair caveat:* occlusion measures necessity **given the other five fields**, while
+   the Layer-2 coefficients measure contribution to the internal direction under a
+   standardized regression — under redundancy these genuinely differ, so this is not
+   simply "the weights are broken". But for a user-facing claim about what drives a
+   decision, ablation is the more defensible ground truth.
+3. **The decision is highly redundant — no single field is usually necessary.**
+   Removing *any one* field changes the verdict in only **~18–19%** of pairs. Good news
+   for robustness (a missing or corrupt field rarely breaks the model) and it explains
+   the low faithfulness R²: the model integrates redundant evidence rather than keying
+   on one or two fields. It also bounds the product story — a "removing X flips this
+   verdict" counterfactual exists for roughly one decision in five, so per-pair
+   attribution belongs on the **review queue**, not on every decision.
+
+**What this means for the explainer.** Causal attribution is the stronger audit artifact
+(a real counterfactual on a real decision, immune to the R² weakness), but it does *not*
+rescue the current weight table — it contradicts part of it. The cheapest honest fix is
+to **re-derive `PERSON_FIELD_IMPORTANCE` from ablation** (or publish both rankings and
+say which is which) rather than keep shipping coefficients that call dob irrelevant.
+
 ## Next steps (highest leverage first)
 
-1. **Faithfulness, two modes.** Ship (a) the simple/legible explainer (done) and (b) a
-   richer GBM/SHAP mode for a higher, honest R² (measured ≈0.75–0.84 — decide against
-   the legibility cost). First re-run `faithfulness_eval` with a **logit link**; the
-   current linear-link numbers understate every row against a near-bimodal target. For
-   the audit story, add **per-pair causal attribution** (ablate each field's residual
-   contribution, measure the real verdict flip) — that's a direct causal claim, not an
-   R², and it's what a compliance buyer wants. It costs extra forward passes → run it on
-   the review queue, not every decision.
+1. **Re-derive `PERSON_FIELD_IMPORTANCE` from ablation.** The causal section above shows
+   the shipped table calls `dob` near-ignored (0.01) when it is a top-3 causal field, and
+   `occupation` 3rd (0.15) when it is dead last. That is a user-visible wrong claim in a
+   compliance artifact and it is now the highest-leverage fix. Either re-derive the
+   weights from `causal_attribution`, or publish both rankings clearly labelled.
+   Then wire per-pair counterfactuals into the **review queue** (only ~19% of decisions
+   have a single-field flip, and it costs 12 extra forward passes/pair).
 2. **Perf for real volume.** Prefix-cache the system rubric (biggest CPU win) + wire the
    logit readout into the scorer for clean P(match); benchmark on GPU.
 3. **Benchmark head-to-head, honestly.** Against the ER landscape on *held-out* data
