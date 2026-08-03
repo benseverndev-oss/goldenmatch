@@ -315,6 +315,8 @@
             "_cluster_arrow_native",
             "_cluster_python",
             "_default_golden_rules",
+            "_external_wcc_dict",
+            "_fs_bucket_score_workers",
             "_fs_ooc_arrow_cluster_enabled",
             "_fs_ooc_wave_rows",
             "_fs_ooc_workers",

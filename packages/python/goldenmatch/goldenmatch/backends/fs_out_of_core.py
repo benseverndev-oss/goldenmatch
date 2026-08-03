@@ -913,6 +913,24 @@ def _stream_fs_dedupe_output_arrow(
     }
 
 
+def _fs_bucket_score_workers() -> int:
+    """Concurrency for the bucketed shard-scoring loop. ``1`` = serial (byte-
+    identical to the pre-parallel path). Default ``min(cpu, 8)`` -- each in-flight
+    shard adds a bounded scoring working set, so the cap keeps peak RSS under the
+    box even with the resident frame; override via
+    ``GOLDENMATCH_FS_BUCKET_SCORE_WORKERS`` (headroom-aware sizing on a bigger
+    box)."""
+    import os as _os
+
+    v = _os.environ.get("GOLDENMATCH_FS_BUCKET_SCORE_WORKERS")
+    if v:
+        try:
+            return max(1, int(v))
+        except ValueError:
+            pass
+    return min((_os.cpu_count() or 4), 8)
+
+
 _OUTPUT_BATCH_ROWS = 200_000
 # Golden build+write chunk size (rows). The golden builder materializes a
 # list[dict] per cluster plus polars input/output frames; chunking the build by
@@ -1267,6 +1285,93 @@ def external_wcc_from_shards(
     splitting is a scoring/output-stage concern, and the output streamer already routes
     by cluster size; the WCC emits raw components.
     """
+    import numpy as np
+    import pyarrow as pa
+
+    # Resolve the id domain. When ``__row_id__`` is a CONTIGUOUS ``{lo..hi}`` (the
+    # dense pipeline index — a ``range`` from ``_prep_all_ids_frame``, or any
+    # gapless id set), use a NUMPY ARRAY union-find: an ``int64[N]`` parent (~8
+    # bytes/row, vs the Python dict-UF's ~100 bytes/entry) + a FULLY-VECTORISED
+    # final compression, instead of a Python loop over all N ids. Gapped ids
+    # (post-quarantine) fall back to the dict-UF.
+    if isinstance(all_ids, range):
+        contiguous = len(all_ids) > 0 and all_ids.step == 1
+        lo = all_ids.start
+        n = len(all_ids)
+    else:
+        ids = all_ids.to_pylist() if isinstance(all_ids, (pa.Array, pa.ChunkedArray)) else list(all_ids)
+        n = len(ids)
+        if n:
+            _idarr = np.asarray(ids, dtype=np.int64)
+            lo = int(_idarr.min())
+            hi = int(_idarr.max())
+            # row_ids are unique, so {lo..hi} exactly iff span == count.
+            contiguous = (hi - lo + 1) == n
+        else:
+            contiguous = False
+
+    if not contiguous:
+        return _external_wcc_dict(shard_paths, all_ids, link_threshold)
+
+    # --- numpy array union-find over the dense id space [0, n) (row_id = i + lo) ---
+    parent = np.arange(n, dtype=np.int64)
+
+    def _find(x: int) -> int:
+        # path halving: array-indexed (no dict hashing / Python-int churn).
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    n_pairs = 0
+    for path in shard_paths:
+        with pa.memory_map(path, "r") as source:
+            reader = pa.ipc.open_file(source)
+            for bi in range(reader.num_record_batches):
+                batch = reader.get_batch(bi)
+                a_np = batch.column("id_a").to_numpy(zero_copy_only=False)
+                b_np = batch.column("id_b").to_numpy(zero_copy_only=False)
+                if link_threshold is not None:
+                    mask = (
+                        batch.column("score").to_numpy(zero_copy_only=False)
+                        >= link_threshold
+                    )
+                    a_np = a_np[mask]
+                    b_np = b_np[mask]
+                n_pairs += len(a_np)
+                # shift to index space once, vectorised.
+                for a, b in zip((a_np - lo).tolist(), (b_np - lo).tolist()):
+                    ra, rb = _find(a), _find(b)
+                    if ra != rb:
+                        parent[ra] = rb
+        # batch/table references dropped here -> the shard's edges leave RAM.
+
+    # Fully resolve every node to its root by pointer-jumping (vectorised;
+    # O(log tree-depth) numpy passes, no Python loop over N), then dense-number
+    # the distinct roots into cluster ids. A row in no edge points at itself ->
+    # its own singleton cluster (matches the dict-UF contract).
+    while True:
+        grandparent = parent[parent]
+        if np.array_equal(grandparent, parent):
+            break
+        parent = grandparent
+    _, cid = np.unique(parent, return_inverse=True)
+    rid = np.arange(lo, lo + n, dtype=np.int64)
+    asn = pa.table(
+        {
+            "__row_id__": pa.array(rid, pa.int64()),
+            "__cluster_id__": pa.array(cid.astype(np.int64), pa.int64()),
+        }
+    )
+    return asn, n_pairs
+
+
+def _external_wcc_dict(
+    shard_paths: Any, all_ids: Any, link_threshold: float | None
+) -> tuple[Any, int]:
+    """Dict union-find fallback for GAPPED ``__row_id__`` (post-quarantine) — the
+    original path, kept for the non-contiguous id domain the numpy array-UF can't
+    index. Partition-identical to the array-UF on the shared edge set."""
     import pyarrow as pa
 
     from goldenmatch.core.cluster import UnionFind
@@ -1278,8 +1383,6 @@ def external_wcc_from_shards(
             reader = pa.ipc.open_file(source)
             for bi in range(reader.num_record_batches):
                 batch = reader.get_batch(bi)
-                # Zero-copy numeric views of the mmap'd buffers; vectorise the
-                # threshold filter so only surviving edges become Python ints.
                 a_np = batch.column("id_a").to_numpy(zero_copy_only=False)
                 b_np = batch.column("id_b").to_numpy(zero_copy_only=False)
                 if link_threshold is not None:
@@ -1289,27 +1392,21 @@ def external_wcc_from_shards(
                     )
                     a_np = a_np[mask]
                     b_np = b_np[mask]
-                # `.tolist()` -> native Python ints so UF keys match the Python-int
-                # `all_ids` fold below (a bounded batch, not the whole wave).
                 for a, b in zip(a_np.tolist(), b_np.tolist()):
-                    uf.add(a)  # public API: resilient to UnionFind internals
+                    uf.add(a)
                     uf.add(b)
                     uf.union(a, b)
                     n_pairs += 1
-        # batch/table references dropped here -> the shard's edges leave RAM.
 
     if isinstance(all_ids, (pa.Array, pa.ChunkedArray)):
         ids = all_ids.to_pylist()
     else:
         ids = list(all_ids)
-
-    # Assign a stable cluster id per connected component; a row absent from any edge
-    # is its own singleton. O(N) in the row count, independent of the edge count.
     root_to_cid: dict[int, int] = {}
     rid_out: list[int] = []
     cid_out: list[int] = []
     next_cid = 0
-    seen = uf._parent  # membership check: a row absent here never appeared in an edge
+    seen = uf._parent
     for rid in ids:
         root = uf.find(rid) if rid in seen else rid
         cid = root_to_cid.get(root)
@@ -1777,29 +1874,54 @@ def run_fs_dedupe_bucketed(
         # (A) frame -> per-pass hash-bucket shards on disk.
         pass_shards = bucket_frame_to_shards(base, blocking_config, shard_dir)
 
-        # (B) score one bucket shard at a time with that pass's single-pass config;
-        #     edges leave RAM through the spill sink.
+        # (B) score bucket shards -> edges via the spill sink. Shards are
+        # INDEPENDENT (each reads its own file, scores, spills its own edges), and
+        # score_buckets_arrow releases the GIL (native kernel / rapidfuzz), so we
+        # score them CONCURRENTLY -- filling the RSS + CPU headroom the serial loop
+        # left idle during this wall-dominant phase. Byte-identical: the external
+        # WCC is invariant to edge order and shard order, so concurrency changes
+        # only the wall. Workers are bounded (each in-flight shard adds a bounded
+        # scoring working set on top of the resident frame) via
+        # GOLDENMATCH_FS_BUCKET_SCORE_WORKERS (default min(cpu, 8); =1 = serial).
+        import threading as _threading
+        from concurrent.futures import ThreadPoolExecutor as _TPE
+
         edge_shards: list[str] = []
+        _sink_lock = _threading.Lock()
 
         def _sink(tbl: Any) -> None:
             if tbl.num_rows:
-                edge_shards.append(
-                    spill_pair_shard(tbl, shard_dir, len(edge_shards))
+                # The spill (a small arrow write) serialises; the expensive scoring
+                # runs in parallel outside the lock. Unique shard index per slot.
+                with _sink_lock:
+                    edge_shards.append(
+                        spill_pair_shard(tbl, shard_dir, len(edge_shards))
+                    )
+
+        work = [
+            (pi, sp) for pi, shard_paths in pass_shards.items() for sp in shard_paths
+        ]
+
+        def _score_shard(item: tuple[int, str]) -> None:
+            pi, sp = item
+            single_pass = _BlockingConfig(strategy="static", keys=[passes[pi]])
+            with pa.memory_map(sp, "r") as src:
+                bucket_tbl = pa.ipc.open_file(src).read_all()
+            if bucket_tbl.num_rows >= 2:
+                score_buckets_arrow(
+                    bucket_tbl, single_pass, mk, set(matched_pairs),
+                    n_buckets=getattr(config, "n_buckets", None),
+                    target_ids=target_ids, em_result=em_result,
+                    pair_sink=_sink,
                 )
 
-        for pi, shard_paths in pass_shards.items():
-            single_pass = _BlockingConfig(strategy="static", keys=[passes[pi]])
-            for sp in shard_paths:
-                with pa.memory_map(sp, "r") as src:
-                    bucket_tbl = pa.ipc.open_file(src).read_all()
-                if bucket_tbl.num_rows >= 2:
-                    score_buckets_arrow(
-                        bucket_tbl, single_pass, mk, set(matched_pairs),
-                        n_buckets=getattr(config, "n_buckets", None),
-                        target_ids=target_ids, em_result=em_result,
-                        pair_sink=_sink,
-                    )
-                del bucket_tbl
+        _workers = _fs_bucket_score_workers()
+        if _workers <= 1 or len(work) <= 1:
+            for _item in work:
+                _score_shard(_item)
+        else:
+            with _TPE(max_workers=_workers) as _ex:
+                list(_ex.map(_score_shard, work))
 
         assignments, n_pairs = external_wcc_from_shards(
             edge_shards, _prep_all_ids_frame(base), max_cluster_size, link_threshold,
