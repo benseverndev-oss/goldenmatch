@@ -358,6 +358,34 @@ def test_deterministic_merge_hub_guard(store):
     assert store.merge_by_shared_field("d", "npi", max_group=10) == (3, 1)  # collapses
 
 
+def test_deterministic_merge_composite_key_requires_all_fields(store):
+    """A GUARDED composite key ['npi','last_name'] merges only when BOTH match:
+    same npi + same last_name collapses; same npi + a DIFFERENT last_name does
+    not (a shared/dirty id alone can't force a merge)."""
+    df = _df([{"id": "1", "name": "Robert Smith", "npi": "999", "last_name": "Smith"},
+              {"id": "2", "name": "Bob Smith", "npi": "999", "last_name": "Smith"},
+              {"id": "3", "name": "R Jones", "npi": "999", "last_name": "Jones"}])
+    _resolve(store, df, _singletons(3), None)
+    a = store.find_entity_by_record("src:1")
+    b = store.find_entity_by_record("src:2")
+    c = store.find_entity_by_record("src:3")
+    assert a != b != c
+    # 1 & 2 share (999, Smith) -> merge; 3 shares npi but (999, Jones) -> stays apart.
+    assert store.merge_by_shared_field("d", ["npi", "last_name"]) == (1, 1)
+    assert store.find_entity_by_record("src:1") == store.find_entity_by_record("src:2")
+    assert store.find_entity_by_record("src:3") == c
+    assert store.merge_by_shared_field("d", ["npi", "last_name"]) == (0, 0)  # idempotent
+
+
+def test_deterministic_merge_single_key_still_string(store):
+    """A single authoritative id (no guard) still merges on that one field."""
+    df = _df([{"id": "1", "name": "A", "npi": "777"},
+              {"id": "2", "name": "B", "npi": "777"}])
+    _resolve(store, df, _singletons(2), None)
+    assert store.merge_by_shared_field("d", "npi") == (1, 1)
+    assert store.find_entity_by_record("src:1") == store.find_entity_by_record("src:2")
+
+
 def test_config_lineage_records_run_and_resolves_entity_to_config(store):
     """A resolve stamps identity_runs with the config fingerprint, and an entity's
     events (which carry run_name) resolve back to that config_id."""

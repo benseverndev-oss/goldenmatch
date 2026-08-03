@@ -2011,9 +2011,9 @@ class IdentityConfig(BaseModel):
         default_factory=list,
         description="Rules deriving entity-to-entity relationship edges from shared non-identity attributes; empty leaves identity resolution unchanged.",
     )
-    deterministic_merge_keys: list[str] = Field(
+    deterministic_merge_keys: list[str | list[str]] = Field(
         default_factory=list,
-        description="Authoritative identifier columns (e.g. 'npi') whose shared non-null value collapses fragmented entities into one AFTER resolution: records are reassigned to the surviving id and absorbed nodes retired. A unique government id can't be split across entities. Entity-level (post-resolve), so it never cascades clusters. Empty (default) = off.",
+        description="Authoritative identifier columns (e.g. 'npi') whose shared non-null value collapses fragmented entities into one AFTER resolution: records are reassigned to the surviving id and absorbed nodes retired. A unique government id can't be split across entities. Entity-level (post-resolve), so it never cascades clusters. An entry may be a single column OR a list of columns for a GUARDED merge that requires the whole tuple to match (e.g. ['npi', 'last_name'] merges on a shared NPI only when the name also agrees, so a dirty/shared id alone can't force a bad merge). Empty (default) = off.",
     )
     # #1110: cross-device / channel stitching (CDP/MDM epic #1108). None ->
     # stitching is not configured (the default; identity resolution is

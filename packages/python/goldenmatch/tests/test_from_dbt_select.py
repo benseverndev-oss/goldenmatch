@@ -52,13 +52,13 @@ def test_select_name_glob_scopes_to_er_models():
     conv = from_dbt(_manifest_mixed(), select=["dedup_*"])
     assert conv.coverage.er_models_analyzed == 1
     assert conv.config is not None and conv.config.identity is not None
-    assert conv.config.identity.deterministic_merge_keys == ["npi"]
+    assert conv.config.identity.deterministic_merge_keys == [["npi", "last_name"]]
 
 
 def test_select_by_path():
     conv = from_dbt(_manifest_mixed(), select=["path:*entity_resolution*"])
     assert conv.coverage.er_models_analyzed == 1
-    assert conv.config.identity.deterministic_merge_keys == ["npi"]
+    assert conv.config.identity.deterministic_merge_keys == [["npi", "last_name"]]
 
 
 def test_select_by_tag():

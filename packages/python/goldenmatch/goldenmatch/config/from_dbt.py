@@ -541,28 +541,41 @@ def extract_signals(
     #    soft attribute (-> a RelationshipRule). Signal 5 handles the fuzzy-paired
     #    self-join; this handles the deterministic one it deliberately skips.
     if not any(s.kind == "fuzzy_field" for s in signals) and not saw_window_key:
+        shared: list[str] = []
         seen_share: set[str] = set()
         for m in _ON_EQUALITY_RE.finditer(compiled):
             la, lc, ra, rc = m.groups()
-            if la == ra or lc != rc:  # need a.col = b.col (self-join on one col)
+            if la == ra or lc != rc:  # need a.col = b.col (self-join equality)
                 continue
-            col = lc.lower()
-            if col in seen_share:
-                continue
-            seen_share.add(col)
-            if col in _AUTHORITATIVE_IDS:
-                signals.append(RecognizedSignal(
-                    "deterministic_merge", [lc], {}, model, 0.8, m.group(0)[:200],
-                ))
-            elif col in _REL_KIND_BY_FIELD:
-                kind, transform = _REL_KIND_BY_FIELD[col]
-                signals.append(RecognizedSignal(
-                    "relationship", [lc],
-                    {"kind": kind, "transform": transform}, model, 0.7,
-                    m.group(0)[:200],
-                ))
-            # else: a self-join on a surrogate/unknown key is not necessarily ER;
-            # skip silently rather than emit a false identity edge.
+            if lc.lower() not in seen_share:
+                seen_share.add(lc.lower())
+                shared.append(lc)  # preserve original-case column name
+        auth = [c for c in shared if c.lower() in _AUTHORITATIVE_IDS]
+        if auth:
+            # GUARDED merge: an authoritative id plus every OTHER equality in the
+            # same self-join. A crosswalk that joins on `a.npi=b.npi AND
+            # a.last_name=b.last_name` merges only when BOTH agree -> emit the whole
+            # tuple as a composite deterministic_merge key (the guard is NOT
+            # dropped). Single element when the id joins alone. One key per model.
+            primary = auth[0]
+            # Sort the guard columns so the same guard SET in a different SQL
+            # order (`npi,email,source` vs `npi,source,email`) dedups to one key.
+            cols = [primary] + sorted(c for c in shared if c != primary)
+            signals.append(RecognizedSignal(
+                "deterministic_merge", cols, {}, model, 0.8,
+                "join ... on " + " and ".join(f"{c} = {c}" for c in cols),
+            ))
+        else:
+            for c in shared:
+                if c.lower() in _REL_KIND_BY_FIELD:
+                    kind, transform = _REL_KIND_BY_FIELD[c.lower()]
+                    signals.append(RecognizedSignal(
+                        "relationship", [c],
+                        {"kind": kind, "transform": transform}, model, 0.7,
+                        f"join ... on {c} = {c}",
+                    ))
+                # else: a self-join on a surrogate/unknown key is not necessarily
+                # ER; skip silently rather than emit a false identity edge.
 
     return signals
 
@@ -1095,19 +1108,27 @@ def _emit_config(
     # Pure shared-key edge/crosswalk models -> identity idioms: an authoritative
     # id becomes a deterministic_merge_key (a unique id can't split across
     # entities); a soft shared attribute becomes a RelationshipRule.
-    det_keys: list[str] = []
+    det_keys: list[str | list[str]] = []
+    det_seen: set[tuple[str, ...]] = set()
     for sig in signals:
         if sig.kind != "deterministic_merge":
             continue
-        col = sig.columns[0]
-        if col not in det_keys:
-            det_keys.append(col)
-            report.info(
-                f"model:{sig.source_model}",
-                f"self-join on authoritative id '{col}' with no fuzzy predicate "
-                "-> identity.deterministic_merge_keys",
-                mapped_to=f"identity.deterministic_merge_keys[{len(det_keys) - 1}]",
-            )
+        cols = list(sig.columns)
+        sig_key = tuple(cols)
+        if sig_key in det_seen:
+            continue
+        det_seen.add(sig_key)
+        # single column -> a plain key; a tuple -> a guarded/composite key.
+        dm_key: str | list[str] = cols[0] if len(cols) == 1 else cols
+        det_keys.append(dm_key)
+        label = cols[0] if len(cols) == 1 else " + ".join(cols)
+        report.info(
+            f"model:{sig.source_model}",
+            f"self-join on authoritative id '{label}' with no fuzzy predicate "
+            "-> identity.deterministic_merge_keys"
+            + ("" if len(cols) == 1 else " (guarded/composite: all must match)"),
+            mapped_to=f"identity.deterministic_merge_keys[{len(det_keys) - 1}]",
+        )
     rel_rules: list[RelationshipRule] = []
     rel_seen: set[tuple[str, str]] = set()
     for sig in signals:
