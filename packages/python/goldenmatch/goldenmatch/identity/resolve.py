@@ -460,6 +460,9 @@ def resolve_clusters(
     cluster_frames: ClusterFrames | None = None,
     actor: str = "pipeline",
     field_strategies: dict[str, Any] | None = None,
+    config_id: str | None = None,
+    config_schema_version: int | None = None,
+    config_json: str | None = None,
     batch: ResolutionBatch | None = None,
 ) -> ResolveSummary:
     """Resolve run-local clusters to durable identities.
@@ -507,6 +510,9 @@ def resolve_clusters(
             field_strategies=field_strategies,
             relationships=relationships,
             deterministic_merge_keys=deterministic_merge_keys,
+            config_id=config_id,
+            config_schema_version=config_schema_version,
+            config_json=config_json,
         )
     # C1 follow-on: fold the bulk DATA parts (cluster partition / record frame /
     # scored-pair stream / pair-score view) into the batch, so the whole
@@ -554,6 +560,22 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
 
     if emit_singletons:
         _maybe_warn_singleton_sqlite_ceiling(store, _n_input_rows)
+
+    # Config lineage (#config-fingerprint): record which config produced this
+    # run so an entity's events (which carry run_name) resolve back to it via
+    # identity_runs. Only when a fingerprint was threaded through -- keeps the
+    # no-lineage path byte-identical (no identity_runs write).
+    if batch.config_id is not None:
+        try:
+            store.record_run(
+                run_name,
+                config_id=batch.config_id,
+                schema_version=batch.config_schema_version,
+                config_json=batch.config_json,
+                dataset=dataset,
+            )
+        except Exception as e:  # noqa: BLE001 -- lineage is advisory, never fails a resolve
+            log.warning("config-lineage record_run failed: %s", e)
 
     # Iteration source: ascending-cluster_id ``(cluster_id, info)`` pairs.
     # For the dict path this is ``clusters.items()`` (insertion order = build's

@@ -42,7 +42,7 @@ class ResolutionBatch:
     ``evidence_edges`` UNIQUE) -- ``run_id`` is the caller-facing half of that key.
     """
 
-    CONTRACT_VERSION: ClassVar[int] = 2
+    CONTRACT_VERSION: ClassVar[int] = 3
 
     run_id: str = ""
     dataset: str | None = None
@@ -63,6 +63,13 @@ class ResolutionBatch:
     # Deterministic merge: authoritative id columns (e.g. ['npi']) whose shared value
     # collapses fragmented entities post-resolve. None/empty = off.
     deterministic_merge_keys: list | None = None
+    # Config lineage (#config-fingerprint): the fingerprint + serialized form of the
+    # GoldenMatchConfig that produced this batch. Recorded once per run in
+    # identity_runs so an entity's events resolve back to their config. All None
+    # (default) = no lineage recorded (byte-identical to pre-lineage behavior).
+    config_id: str | None = None
+    config_schema_version: int | None = None
+    config_json: str | None = None
     # Frame-residency budget: the write side flushes every ``flush_rows`` records so
     # it never stacks a second O(N) term on the compute prep floor (manifesto §3).
     # A contract term now, not just ``GOLDENMATCH_IDENTITY_BULK_FLUSH_ROWS``.
@@ -127,6 +134,9 @@ class ResolutionBatch:
         field_strategies: dict[str, Any] | None = None,
         relationships: list | None = None,
         deterministic_merge_keys: list | None = None,
+        config_id: str | None = None,
+        config_schema_version: int | None = None,
+        config_json: str | None = None,
     ) -> ResolutionBatch:
         """Build a batch from the loose resolve args, filling the residency budget
         from the env default when unspecified. This is the adapter seam:
@@ -144,6 +154,9 @@ class ResolutionBatch:
             field_strategies=field_strategies,
             relationships=relationships,
             deterministic_merge_keys=deterministic_merge_keys,
+            config_id=config_id,
+            config_schema_version=config_schema_version,
+            config_json=config_json,
         )
 
 

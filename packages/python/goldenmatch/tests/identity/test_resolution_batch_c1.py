@@ -22,9 +22,10 @@ from .test_resolve_bulk_writes_1886 import (
 
 def test_batch_is_versioned():
     # v2 added the field_strategies survivorship-config term.
-    assert ResolutionBatch.CONTRACT_VERSION == 2
+    # v3 added the config-lineage terms (config_id / config_schema_version / config_json).
+    assert ResolutionBatch.CONTRACT_VERSION == 3
     b = ResolutionBatch.from_args(run_id="r1")
-    assert b.contract_version == 2
+    assert b.contract_version == 3
 
 
 def test_batch_is_immutable():

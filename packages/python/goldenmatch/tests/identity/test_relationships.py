@@ -356,3 +356,39 @@ def test_deterministic_merge_hub_guard(store):
     _resolve(store, df, _singletons(4), None)
     assert store.merge_by_shared_field("d", "npi", max_group=2) == (0, 0)  # 4 > cap
     assert store.merge_by_shared_field("d", "npi", max_group=10) == (3, 1)  # collapses
+
+
+def test_config_lineage_records_run_and_resolves_entity_to_config(store):
+    """A resolve stamps identity_runs with the config fingerprint, and an entity's
+    events (which carry run_name) resolve back to that config_id."""
+    df = _df([{"id": "1", "name": "Al", "phone": "555"}])
+    resolve_clusters(
+        _singletons(1), df, [], "mk", store, run_name="run1", source_pk_col="id",
+        dataset="d", emit_singletons=True,
+        config_id="sha256:deadbeef", config_schema_version=1,
+        config_json='{"matchkeys": []}',
+    )
+    run = store.run_config("run1")
+    assert run is not None
+    assert run["config_id"] == "sha256:deadbeef"
+    assert run["schema_version"] == 1
+    assert run["config_json"] == '{"matchkeys": []}'
+    # entity -> its events' run_name -> the recorded config_id
+    ent = store.find_entity_by_record("src:1")
+    run_names = {ev.run_name for ev in store.history(ent)}
+    assert "run1" in run_names
+    assert store.run_config("run1")["config_id"] == "sha256:deadbeef"
+
+
+def test_config_lineage_absent_when_no_fingerprint(store):
+    """No config_id threaded through -> no identity_runs row (byte-identical path)."""
+    df = _df([{"id": "1", "name": "Al", "phone": "555"}])
+    _resolve(store, df, _singletons(1), None, run_name="bare")
+    assert store.run_config("bare") is None
+
+
+def test_config_lineage_idempotent_on_repeated_run_name(store):
+    """First writer wins on a repeated run_name (idempotent replay)."""
+    store.record_run("rx", config_id="sha256:aaaa", schema_version=1)
+    store.record_run("rx", config_id="sha256:bbbb", schema_version=2)
+    assert store.run_config("rx")["config_id"] == "sha256:aaaa"
