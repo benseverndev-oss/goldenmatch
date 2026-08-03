@@ -195,6 +195,44 @@ It rides in `meta.goldenmatch` (MetricFlow / Cube) or `custom_extensions.goldenm
 cross-language fixture — so a downstream tool reads one trust contract regardless
 of which surface emitted the catalog.
 
+## Certifying keys as a build gate (CLI / MCP / REST)
+
+The verdict is exposed on three surfaces, all emitting the **same JSON** (a shared
+`certification_report_dict`) so a CI gate reads `n_untrustworthy` / `all_trustworthy`
+identically wherever it runs.
+
+**CLI** — point `certify-keys` at a semantic model + its data; `--fail-untrustworthy`
+exits non-zero when any declared key is untrustworthy for metric use:
+
+```bash
+goldenmatch certify-keys models/orders.yml -d orders=orders.csv --fail-untrustworthy
+# add --json for the machine-readable report a pipeline can parse
+goldenmatch certify-keys models/orders.yml -d orders=orders.csv --json
+```
+
+**MCP** — the `certify_semantic_model` tool returns the per-key verdict block
+(`{dialect, n_certified, n_untrustworthy, all_trustworthy, keys:[{target, key,
+key_integrity}]}`), so an agent can certify a model and act on the verdict.
+
+**REST** — `POST /semantic/certify` with `{"model": <path>, "frames": {name: path},
+"resolve": bool}` returns the same report:
+
+```json
+{
+  "dialect": "metricflow",
+  "n_certified": 1,
+  "n_untrustworthy": 1,
+  "all_trustworthy": false,
+  "keys": [
+    { "target": "orders", "key": ["customer_id"],
+      "key_integrity": { "verdict": "untrustworthy", "max_fan_out": 2.0, ... } }
+  ]
+}
+```
+
+Each key's `key_integrity` is the same trust-verdict block the catalog emitters write
+back — so certifying, gating, and the catalog tag all speak one contract.
+
 ## Cross-surface
 
 The **structural** certifier is one Rust kernel (`key-integrity-core`) behind

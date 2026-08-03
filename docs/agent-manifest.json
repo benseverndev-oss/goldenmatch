@@ -2393,6 +2393,13 @@
               "required": false,
               "default": "False",
               "help": "Exit non-zero if any declared key is not unique at grain (CI gate)."
+            },
+            {
+              "name": "--json",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Emit the verdict-rich report as JSON (the shared MCP/REST shape) — machine-readable for a CI gate."
             }
           ]
         },

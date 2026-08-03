@@ -1372,7 +1372,7 @@ def _tool_certify_semantic_model(model_path: str, frames: dict, resolve: bool) -
         return {"error": "frames must map a model/dataset/cube name to a data file path."}
 
     from goldenmatch.core.io_arrow import read_table_arrow
-    from goldenmatch.semantic import certify_semantic_model
+    from goldenmatch.semantic import certification_report_dict, certify_semantic_model
 
     loaded: dict[str, object] = {}
     for target, path in frames.items():
@@ -1390,25 +1390,10 @@ def _tool_certify_semantic_model(model_path: str, frames: dict, resolve: bool) -
     except ValueError as exc:
         return {"error": str(exc)}
 
-    return {
-        "dialect": report.dialect,
-        "n_certified": report.n_certified,
-        "all_trustworthy": report.all_trustworthy,
-        "skipped": report.skipped,
-        "note": report.note,
-        "keys": [
-            {
-                "target": e.target,
-                "key": e.key,
-                "context": e.context,
-                "is_unique_at_grain": e.certificate.is_unique_at_grain,
-                "max_fan_out": e.certificate.max_fan_out,
-                "estimate": e.certificate.estimate,
-                "measure_fan_out": e.certificate.measure_fan_out,
-            }
-            for e in report.entries
-        ],
-    }
+    # Each key carries the full trust-verdict block (verdict + fan-out + the
+    # resolution-tier undercount bounds), the single-sourced projection the
+    # catalog emitters + REST + CLI share.
+    return certification_report_dict(report)
 
 
 def _tool_get_stats() -> dict:

@@ -616,6 +616,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `certify-keys` | `--data` | text | **required** | Frame for a model/dataset/cube as name=path (repeatable), e.g. -d orders=orders.csv |
 | `certify-keys` | `--resolve` | boolean | `False` | Also measure entity fragmentation / undercount via ER (MetricFlow dialect only). |
 | `certify-keys` | `--fail-untrustworthy` | boolean | `False` | Exit non-zero if any declared key is not unique at grain (CI gate). |
+| `certify-keys` | `--json` | boolean | `False` | Emit the verdict-rich report as JSON (the shared MCP/REST shape) — machine-readable for a CI gate. |
 | `compare-clusters` | `file_a` | text | **required** | First cluster JSON file (baseline / ER1) |
 | `compare-clusters` | `file_b` | text | **required** | Second cluster JSON file (comparison / ER2) |
 | `compare-clusters` | `--details` | boolean | `False` | Show per-cluster transformation details |

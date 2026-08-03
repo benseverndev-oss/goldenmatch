@@ -29,6 +29,7 @@ from goldenmatch.semantic.catalog import (
 from goldenmatch.semantic.certify import (
     KeyCertification,
     SemanticCertification,
+    certification_report_dict,
     certify_semantic_model,
     detect_dialect,
 )
@@ -80,6 +81,7 @@ from goldenmatch.semantic.serving import (
 
 __all__ = [
     # zero-config front door — certify a whole semantic model (any dialect)
+    "certification_report_dict",
     "certify_semantic_model",
     "SemanticCertification",
     "KeyCertification",
