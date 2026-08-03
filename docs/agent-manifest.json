@@ -2827,6 +2827,52 @@
           ]
         },
         {
+          "command": "discover-model",
+          "options": [
+            {
+              "name": "--data",
+              "type": "text",
+              "required": true,
+              "help": "A source table as name=path (repeatable), e.g. -d orders=orders.csv"
+            },
+            {
+              "name": "--dialect",
+              "type": "text",
+              "required": false,
+              "default": "'metricflow'",
+              "help": "Emit dialect for the draft model (metricflow)."
+            },
+            {
+              "name": "--output",
+              "type": "text",
+              "required": false,
+              "default": "None",
+              "help": "Write the draft semantic-model YAML to this path."
+            },
+            {
+              "name": "--resolve",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Also measure entity fragmentation / undercount via ER (fail-open)."
+            },
+            {
+              "name": "--fail-untrustworthy",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Exit non-zero if any proposed key is not unique at grain (CI gate)."
+            },
+            {
+              "name": "--json",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Emit the full proposed model (shape + certification) as JSON."
+            }
+          ]
+        },
+        {
           "command": "evaluate",
           "options": [
             {

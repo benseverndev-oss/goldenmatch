@@ -673,6 +673,12 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `demo` | `--dashboard` | boolean | `False` | Generate before/after dashboard |
 | `demo` | `--graph` | boolean | `False` | Generate cluster graph |
 | `demo` | `--quiet` | boolean | `False` | Suppress animated output |
+| `discover-model` | `--data` | text | **required** | A source table as name=path (repeatable), e.g. -d orders=orders.csv |
+| `discover-model` | `--dialect` | text | `'metricflow'` | Emit dialect for the draft model (metricflow). |
+| `discover-model` | `--output` | text | `None` | Write the draft semantic-model YAML to this path. |
+| `discover-model` | `--resolve` | boolean | `False` | Also measure entity fragmentation / undercount via ER (fail-open). |
+| `discover-model` | `--fail-untrustworthy` | boolean | `False` | Exit non-zero if any proposed key is not unique at grain (CI gate). |
+| `discover-model` | `--json` | boolean | `False` | Emit the full proposed model (shape + certification) as JSON. |
 | `evaluate` | `files` | text | **required** | Input files (path or path:source_name) |
 | `evaluate` | `--config` | path | **required** | Config YAML path |
 | `evaluate` | `--ground-truth` | path | `None` | Ground truth CSV path (required unless --certify) |

@@ -51,11 +51,14 @@ from goldenmatch.semantic.discovery import (
     JoinCandidate,
     KeyCandidate,
     Measure,
+    ProposedModel,
+    ProposedTable,
     TableMeasures,
     discover_entity_types,
     discover_joins,
     discover_keys,
     discover_measures,
+    discover_semantic_model,
 )
 from goldenmatch.semantic.key_integrity import (
     certify_key_integrity,
@@ -163,4 +166,8 @@ __all__ = [
     "Measure",
     "Dimension",
     "TableMeasures",
+    # semantic-model discovery (Phase 5) — the orchestrator (assemble + emit + certify)
+    "discover_semantic_model",
+    "ProposedModel",
+    "ProposedTable",
 ]

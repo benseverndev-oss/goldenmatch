@@ -302,6 +302,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   of the semantic-model discovery arc (design:
   `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
   `tests/test_semantic_discovery_measures.py`.
+- **Semantic-model discovery — orchestrator + `discover-model` CLI (Phase 5).**
+  `goldenmatch.semantic.discover_semantic_model(tables)` assembles all four discovery
+  phases (keys → entity types → certified join graph → grain-gated measures) into a
+  draft MetricFlow model, emits it through the existing dialect emitters, and
+  re-certifies it end-to-end — the deliverable is a normal MetricFlow file plus a
+  verdict-rich `certification_report_dict` where EVERY key is already graded. Only
+  `SUM`-safe measures are declared in the emitted model, so a draft never scaffolds a
+  double-counting `SUM`. `ProposedModel.all_trustworthy` is the headline build-gate
+  signal; `.to_dict()` is the JSON shape the discover surfaces emit. New CLI
+  `goldenmatch discover-model -d name=path ... [--dialect metricflow] [-o model.yml]
+  [--json] [--fail-untrustworthy]` (Python-only, mirrors `certify-keys`). Nothing
+  auto-ships — a human reviews the graded draft. The fifth slice of the semantic-model
+  discovery arc (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discovery_model.py`.
 
 ### Changed
 - **FS out-of-core streaming: single `resolve_fs_block_source` knob + DuckDB

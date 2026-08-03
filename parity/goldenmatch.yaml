@@ -185,6 +185,7 @@ cli_commands:
   - tui
   - unmerge
   python_only:
+  - discover-model
   - import-dbt
   - ingest-docs
   - llm
