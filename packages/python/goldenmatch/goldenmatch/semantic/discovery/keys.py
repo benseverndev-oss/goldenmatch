@@ -17,14 +17,17 @@ cheap signals propose candidates; the certifier decides which are real:
     cardinality signal rather than duplicating it.)
 
 Every proposed column is then certified: unique at grain? measure fan-out? The
-result is ranked trustworthy-first. Scoped to SINGLE-column keys for this slice;
-compound/grain-ambiguous keys are a documented follow-on (see the design spec
+result is ranked trustworthy-first. Single-column keys are proposed first; when NONE
+is unique at grain, a fallback COMPOUND search certifies 2-column combinations of the
+key-eligible columns (the certifier already accepts a multi-column key). 3+-column
+keys are a documented follow-on (see the design spec
 `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`).
 
 Design: advisory only — it proposes + grades; a human approves. Never a black box.
 """
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -43,6 +46,10 @@ _DEFAULT_FD_MIN_CONFIDENCE = 0.98
 # a key — so the cardinality signal skips these col_types. (The `identifier` and
 # `fd` signals are unaffected; a genuine id classifies as `identifier`.)
 _NON_KEY_COL_TYPES = frozenset({"numeric", "date", "geo", "description"})
+
+# Cap on the key-eligible column pool the fallback compound search pairs over, so the
+# search stays C(cap, 2) certifications rather than combinatorial on wide tables.
+_COMPOUND_POOL_CAP = 6
 
 
 @dataclass
@@ -170,6 +177,28 @@ def discover_keys(
                 ),
             )
         )
+
+    # Fallback COMPOUND search (pairs): when no single column is unique at grain the
+    # grain double-counts, so try 2-column combinations of the key-eligible columns
+    # (highest cardinality first, pool-capped). The certifier already accepts a
+    # multi-column key; a trustworthy pair is the real grain.
+    if not any(c.is_trustworthy for c in candidates):
+        pool = [
+            p.name
+            for p in sorted(
+                (p for p in profiles if p.col_type not in _NON_KEY_COL_TYPES),
+                key=lambda p: -p.cardinality_ratio,
+            )
+        ][:_COMPOUND_POOL_CAP]
+        for c1, c2 in itertools.combinations(pool, 2):
+            try:
+                cert = certify_key_integrity(table, key=[c1, c2])
+            except Exception:  # noqa: BLE001 - a bad combination never breaks the sweep
+                continue
+            if cert.is_trustworthy():
+                candidates.append(
+                    KeyCandidate(columns=[c1, c2], signals=["compound"], certificate=cert)
+                )
 
     # Trustworthy first, then cleaner (score desc), then lower fan-out, then more
     # corroborating signals, then name for determinism.

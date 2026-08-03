@@ -237,6 +237,20 @@ ProposedModel`.
    through CLI `--dialect` + MCP/REST `dialect`; no new params. Follow-on: PR-10 lifts
    the single-column key/FK limitation (the certifier + `KeyCandidate.columns` +
    Cube/OSI composite primary keys already support multi-column).
+10. **PR-10 (optional) compound + self-referential keys.** Lifts the single-column
+    restriction on the discovery side (the certifier, `KeyCandidate.columns`, and all
+    three emit paths already carry multi-column keys). `discover_keys` gains a
+    **fallback pairs** compound search: when no single-column candidate is trustworthy
+    (the grain double-counts), it takes the signal-bearing key-ish columns (capped,
+    highest-cardinality first), certifies each **pair** with `certify_key_integrity`
+    (which already accepts `key=[c1, c2]`), and admits the trustworthy compounds
+    (`signals=["compound"]`), re-ranked trustworthy-first. `discover_joins` lifts the
+    self-join exclusion for **self-referential single-column FKs** (a column whose
+    values are a subset of the table's OWN certified key, `fk_col != key_col` — e.g.
+    `employees.manager_id -> employees.employee_id`); same value-subset + certification
+    path. Compound (multi-column) FKs and 3+-column keys stay documented follow-ons. No
+    surface change — a compound grain flows through the existing metricflow entity /
+    Cube `primary_key` dims / OSI `primary_key` list emit; nothing new to plumb.
 
 Each PR is independently useful (PR-1 alone gives "certified key discovery per
 table"). The certifier is exercised from PR-1, so the "pre-graded" property holds at

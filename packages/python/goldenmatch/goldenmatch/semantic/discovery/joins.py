@@ -18,8 +18,10 @@ Discovery is hypothesis generation; certification is the falsification test:
     fans out and double-counts. That's exactly what `certify_cube_joins` checks, so the
     proposed join is re-proven in join context via a minimal `Cube` model.
 
-Scoped to SINGLE-column foreign keys referencing the caller-supplied per-table keys;
-compound FKs and self-referential joins are documented follow-ons. Design:
+Scoped to SINGLE-column foreign keys referencing the caller-supplied per-table keys,
+including SELF-referential FKs (a column referencing its own table's certified key, e.g.
+`employees.manager_id -> employees.employee_id`). Compound (multi-column) FKs are a
+documented follow-on. Design:
 `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`.
 
 Design: advisory only — it proposes + grades; a human approves. Never a black box.
@@ -188,8 +190,6 @@ def discover_joins(
             key_type = col_types.get(to_table, {}).get(key_col)
 
             for from_table, source in tables.items():
-                if from_table == to_table:
-                    continue  # self-joins are a documented follow-on
                 from goldenmatch.core.frame import to_frame
 
                 try:
@@ -197,6 +197,10 @@ def discover_joins(
                 except Exception:  # noqa: BLE001
                     continue
                 for fk_col in source_cols:
+                    # Self-referential FK (from_table == to_table) is allowed, but a
+                    # column can never be a foreign key onto its OWN referenced key.
+                    if from_table == to_table and fk_col == key_col:
+                        continue
                     fk_values = _distinct_nonnull(source, fk_col)
                     if len(fk_values) < min_fk_distinct:
                         continue
@@ -213,25 +217,33 @@ def discover_joins(
                     if key_type is not None and fk_type == key_type:
                         signals.append("type_match")
 
-                    # Re-prove the one-side key's cardinality IN JOIN CONTEXT.
-                    many = Cube(
-                        name=from_table,
-                        joins=[CubeJoin(
-                            name=to_table,
-                            relationship="many_to_one",
-                            sql=f"{{CUBE}}.{fk_col} = {{{to_table}.{key_col}}}",
-                        )],
-                    )
-                    try:
-                        certified = certify_cube_joins(
-                            [many], {from_table: source, to_table: tables[to_table]},
-                            resolve=resolve,
+                    # Re-prove the one-side key's cardinality IN JOIN CONTEXT. A
+                    # self-referential FK's one side IS the table's own certified key
+                    # (and `certify_cube_joins` can't certify a cube joined to itself),
+                    # so reuse that certificate directly.
+                    if from_table == to_table:
+                        if key_cand is None:
+                            continue
+                        cert = key_cand.certificate
+                    else:
+                        many = Cube(
+                            name=from_table,
+                            joins=[CubeJoin(
+                                name=to_table,
+                                relationship="many_to_one",
+                                sql=f"{{CUBE}}.{fk_col} = {{{to_table}.{key_col}}}",
+                            )],
                         )
-                    except Exception:  # noqa: BLE001 - a bad pair never breaks the sweep
-                        continue
-                    if not certified:
-                        continue
-                    cert = certified[0]["certificate"]
+                        try:
+                            certified = certify_cube_joins(
+                                [many], {from_table: source, to_table: tables[to_table]},
+                                resolve=resolve,
+                            )
+                        except Exception:  # noqa: BLE001 - a bad pair never breaks the sweep
+                            continue
+                        if not certified:
+                            continue
+                        cert = certified[0]["certificate"]
                     candidates.append(
                         JoinCandidate(
                             from_table=from_table,
