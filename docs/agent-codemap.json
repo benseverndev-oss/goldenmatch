@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 448,
+      "module_count": 449,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7273,6 +7273,7 @@
             "goldenmatch.semantic.discovery.joins",
             "goldenmatch.semantic.discovery.keys",
             "goldenmatch.semantic.discovery.measures",
+            "goldenmatch.semantic.discovery.metrics",
             "goldenmatch.semantic.discovery.model",
             "goldenmatch.semantic.discovery.namer"
           ]
@@ -7385,6 +7386,15 @@
           ]
         },
         {
+          "module": "goldenmatch.semantic.discovery.metrics",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/discovery/metrics.py",
+          "purpose": "Metrics derivation (PR-12).",
+          "defines": [
+            "Metric",
+            "discover_metrics"
+          ]
+        },
+        {
           "module": "goldenmatch.semantic.discovery.model",
           "file": "packages/python/goldenmatch/goldenmatch/semantic/discovery/model.py",
           "purpose": "Semantic-model discovery orchestrator (Phase 5) — the front door.",
@@ -7402,6 +7412,7 @@
             "goldenmatch.semantic.discovery.joins",
             "goldenmatch.semantic.discovery.keys",
             "goldenmatch.semantic.discovery.measures",
+            "goldenmatch.semantic.discovery.metrics",
             "goldenmatch.semantic.discovery.namer"
           ]
         },

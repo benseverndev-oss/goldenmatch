@@ -56,6 +56,7 @@ def _build_metricflow(proposed_tables: list[Any]) -> str:
     from goldenmatch.semantic import emit_metricflow_yaml, emit_semantic_model
 
     models = []
+    metrics: list[dict[str, Any]] = []
     for pt in proposed_tables:
         if pt.key is None:
             continue
@@ -70,8 +71,30 @@ def _build_metricflow(proposed_tables: list[Any]) -> str:
         hier = _hierarchies_dicts(pt)
         if hier:  # additive to the meta.goldenmatch block emit_semantic_model set
             sm.setdefault("meta", {}).setdefault("goldenmatch", {})["hierarchies"] = hier
+        # Native metrics: declare a COUNT measure so averages have a denominator, then
+        # emit each derived metric as a MetricFlow ratio metric.
+        if pt.metrics:
+            count_name = f"{pt.table}_count"
+            sm.setdefault("measures", []).append(
+                {"name": count_name, "agg": "count", "expr": pt.key.columns[0]}
+            )
+            for mt in pt.metrics:
+                denom = count_name if mt.kind == "average" else mt.denominator
+                metrics.append({
+                    "name": mt.name, "type": "ratio",
+                    "type_params": {"numerator": mt.numerator, "denominator": denom},
+                })
         models.append(sm)
-    return emit_metricflow_yaml(models) if models else ""
+    if not models:
+        return ""
+    if metrics:
+        import yaml as _yaml
+
+        return _yaml.safe_dump(
+            {"semantic_models": models, "metrics": metrics},
+            sort_keys=False, default_flow_style=False,
+        )
+    return emit_metricflow_yaml(models)
 
 
 def _build_cube(proposed_tables: list[Any], joins: list[Any]) -> str:
@@ -102,6 +125,12 @@ def _build_cube(proposed_tables: list[Any], joins: list[Any]) -> str:
                                           type=_CUBE_DIM_TYPE.get(d.kind, "string")))
         measures = [CubeMeasure(m.column, type="sum", sql=m.column)
                     for m in pt.measures if m.safe_to_sum]
+        if pt.metrics:  # a count + calculated number measures referencing the sums
+            measures.append(CubeMeasure("count", type="count"))
+            for mt in pt.metrics:
+                denom = "count" if mt.kind == "average" else mt.denominator
+                measures.append(CubeMeasure(
+                    mt.name, type="number", sql=f"{{{mt.numerator}}} / {{{denom}}}"))
         cube_joins = [
             CubeJoin(
                 name=j.to_table,
@@ -152,6 +181,14 @@ def _build_osi(proposed_tables: list[Any], joins: list[Any]) -> str:
             if m.safe_to_sum:
                 metrics.append(OsiMetric(f"{pt.table}_{m.column}_total",
                                          expression=f"SUM({pt.table}.{m.column})"))
+        # Derived metrics (averages + ratios) as dataset-qualified OSI metrics.
+        grain_key = pt.key.columns[0]
+        for mt in pt.metrics:
+            if mt.kind == "average":
+                expr = f"SUM({pt.table}.{mt.numerator}) / COUNT({pt.table}.{grain_key})"
+            else:
+                expr = f"SUM({pt.table}.{mt.numerator}) / SUM({pt.table}.{mt.denominator})"
+            metrics.append(OsiMetric(mt.name, expression=expr))
         if pt.key.certificate is not None:
             key_integrity[pt.table] = certificate_verdict(pt.key.certificate)
         hier = _hierarchies_dicts(pt)

@@ -23,6 +23,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   layer (design:
   `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
   `tests/test_semantic_discovery_hierarchies.py`.
+- **Semantic-model discovery — metrics (Phase 12).**
+  `goldenmatch.semantic.discover_metrics(measures, grain)` turns the grain-gated
+  measures into certifiable business metrics — proposed ONLY when the grain is
+  trustworthy (the measures are `safe_to_sum`), so the ratios can't double-count: per
+  sum-safe measure an **average** (`avg_m = SUM(m)/COUNT(grain)`), and per sum-safe
+  measure PAIR a **ratio** (`m1_per_m2 = SUM(m1)/SUM(m2)`, pool-capped to `C(5,2)`).
+  `Metric(name, kind, numerator, denominator, expression)` on
+  `ProposedTable`/`ProposedModel.metrics` + `to_dict`, emitted **natively** per dialect:
+  MetricFlow top-level `metrics:` ratio metrics (plus a declared `count` measure so
+  averages have a denominator), Cube calculated `number` measures + a `count`, and OSI
+  dataset-qualified `OsiMetric`s. Deterministic, default-on. Derived *semantic* metrics
+  (`profit = revenue − cost`) stay a namer/advisory follow-on. New exports
+  `discover_metrics` + `Metric`. The second "frontier" slice (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discovery_metrics.py`.
 
 ## [3.11.0] - 2026-08-03
 

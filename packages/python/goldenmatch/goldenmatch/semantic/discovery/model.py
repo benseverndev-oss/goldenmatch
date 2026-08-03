@@ -33,6 +33,7 @@ from goldenmatch.semantic.discovery.measures import (
     TableMeasures,
     discover_measures,
 )
+from goldenmatch.semantic.discovery.metrics import Metric, discover_metrics
 
 if TYPE_CHECKING:
     from goldenmatch.semantic.discovery.namer import NameSuggestion
@@ -51,6 +52,7 @@ class ProposedTable:
     measures: list[Measure] = field(default_factory=list)
     dimensions: list[Dimension] = field(default_factory=list)
     hierarchies: list[Hierarchy] = field(default_factory=list)
+    metrics: list[Metric] = field(default_factory=list)
 
     @property
     def grain(self) -> list[str]:
@@ -78,6 +80,7 @@ class ProposedModel:
     certification: dict[str, Any] = field(default_factory=dict)
     naming: list[NameSuggestion] = field(default_factory=list)
     hierarchies: list[Hierarchy] = field(default_factory=list)
+    metrics: list[Metric] = field(default_factory=list)
 
     @property
     def all_trustworthy(self) -> bool:
@@ -133,6 +136,7 @@ class ProposedModel:
             "certification": self.certification,
             "naming": [n.to_dict() for n in self.naming],
             "hierarchies": [h.to_dict() for h in self.hierarchies],
+            "metrics": [mt.to_dict() for mt in self.metrics],
             "yaml": self.yaml,
         }
 
@@ -206,10 +210,13 @@ def discover_semantic_model(
         grain = grains[tbl_name]
         tm = discover_measures(table, key=grain, table_name=tbl_name)
         per_table_measures[tbl_name] = tm
-        # Phase 4.5 — deterministic dimension hierarchies (FD chains among the dims).
+        # Phase 4.5 — deterministic dimension hierarchies (FD chains among the dims)
+        # and certifiable metrics (averages + ratios over the sum-safe measures).
         hierarchies = discover_hierarchies(
             table, [d.column for d in tm.dimensions], table_name=tbl_name
         )
+        grain_cols = list(grain.columns) if grain is not None else []
+        metrics = discover_metrics(tm.measures, grain_cols, table_name=tbl_name)
         proposed_tables.append(
             ProposedTable(
                 table=tbl_name,
@@ -218,6 +225,7 @@ def discover_semantic_model(
                 measures=tm.measures,
                 dimensions=tm.dimensions,
                 hierarchies=hierarchies,
+                metrics=metrics,
             )
         )
 
@@ -238,6 +246,7 @@ def discover_semantic_model(
         yaml=model_yaml,
         certification=certification,
         hierarchies=[h for pt in proposed_tables for h in pt.hierarchies],
+        metrics=[mt for pt in proposed_tables for mt in pt.metrics],
     )
 
     # Optional, advisory, non-authoritative: annotate the finished model with business

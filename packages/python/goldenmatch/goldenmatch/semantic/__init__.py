@@ -52,6 +52,7 @@ from goldenmatch.semantic.discovery import (
     JoinCandidate,
     KeyCandidate,
     Measure,
+    Metric,
     NameSuggestion,
     ProposedModel,
     ProposedTable,
@@ -62,6 +63,7 @@ from goldenmatch.semantic.discovery import (
     discover_joins,
     discover_keys,
     discover_measures,
+    discover_metrics,
     discover_semantic_model,
     name_semantic_model,
 )
@@ -176,6 +178,8 @@ __all__ = [
     # semantic-model discovery (Phase 11) — dimension hierarchies via FD
     "discover_hierarchies",
     "Hierarchy",
+    "Metric",
+    "discover_metrics",
     # semantic-model discovery (Phase 7) — optional advisory LLM namer
     "apply_names",
     "name_semantic_model",
