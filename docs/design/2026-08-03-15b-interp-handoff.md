@@ -81,7 +81,8 @@ standing discipline: **when a number looks too good, hunt the confound first.**
   volume: `layer_probes.json`, `sae_layer14.pt`, `causal_multilayer_8_20.json`,
   `layer2_abstraction_L14.json`, `layer_early_exit.json`, `truncate_adapt.json`,
   `eval_trunc{28,16,12}_v2.json`, `leniency_dial.json`,
-  `faithfulness_{cluster,record}_{hard,random}_seed{0,1}.json`. Modal token is set locally.
+  `faithfulness_{cluster,record}_{hard,random}_seed{0..4}[_logit].json`. Modal token is set
+  locally.
 - **Pinned GGUF** for on-box work: `scratchpad/er-1p5b.gguf` (Q4, the same weights as
   `/out/model_1p5b/merged`). llama.cpp only exposes the final layer — GPU/Modal needed
   for residual-stream + hooks.
@@ -96,14 +97,15 @@ The 0.51 in `explainer.py` is the R² of explaining the internal diff-of-means
 per-decision explainer. The right target is the model's **actual P(match)**.
 
 That is now measured by a **committed, reproducible** stage —
-`modal_interp.py::faithfulness_eval` (pure helpers + 25 unit tests in
+`modal_interp.py::faithfulness_eval` (pure helpers + 31 unit tests in
 `field_attribution.py` / `test_field_attribution.py`) — on a **cluster-disjoint** split
 (no entity shared train↔test), the fp16 `/out/model_1p5b/merged`, teacher-forced
 `{"match":` → softmax(true,false) readout. Artifacts:
-`interp/faithfulness_{cluster,record}_{hard,random}_seed{0,1}.json` (`split="record"`
-reproduces the weaker split for comparison).
+`interp/faithfulness_{cluster,record}_{hard,random}_seed{0..4}[_logit].json`
+(`split="record"` reproduces the weaker split for comparison; `link="logit"` the
+alternative link — see the logit section below).
 
-| basis | **cluster** / hard s0 | cluster / hard s1 | cluster / random | **record** / hard | record / random |
+| basis (linear link) | **cluster** / hard s0 | cluster / hard s1 | cluster / random | **record** / hard | record / random |
 |---|---|---|---|---|---|
 | **`fixed`** — SHIPPED weights, frozen (intercept+scale only) | **0.251** | **0.317** | 0.495 | 0.485 | 0.577 |
 | `simple` — same 6 features, weights refit | 0.300 | 0.329 | 0.501 | 0.525 | 0.579 |
@@ -143,23 +145,51 @@ reproduces the weaker split for comparison).
 
 **Consequence for the shipped explainer:** do **not** raise
 `PERSON_IMPORTANCE_FAITHFULNESS_R2` to 0.87. Across every configuration tested the
-shipped weights land in **0.25–0.58**, and on the honest split in the discriminative
+shipped weights land in **0.21–0.58**, and on the honest split in the discriminative
 look-alike regime — precisely where the explainer runs, since a review queue *is*
-look-alikes — it is **0.25–0.32**. The published **0.51 sits mid-range and is
-defensible as-is**; if anything it is optimistic for the hard regime rather than
-pessimistic. `explainer.py` left unchanged pending the decision below.
+look-alikes — it is **0.27 ± 0.07** (5 seeds, linear link). The published **0.51 is
+therefore optimistic, not pessimistic, for the regime the explainer actually runs in**;
+it is defensible only as a whole-corpus figure. `explainer.py` left unchanged pending
+the decision below, but this is the number to revisit first.
 
-**Caveats on these numbers too:** structured person data is the easy case; P(match) is
-near-bimodal (82% of hard-negative test pairs sit outside [0.1, 0.9]), and a *linear*
-link to a bimodal target is a poor functional form — a logit link would likely raise all
-four rows and is the fairer metric to add next. Messy/product domains untested.
+### Logit link — tested, and it does not help (a wrong prediction, corrected)
 
-**Follow-up:** (a) re-measure with a logit link before publishing any headline number;
-(b) decide whether to add a richer/GBM "high-faithfulness" mode (≈0.67–0.75 on the
-honest split) alongside the simple/legible one, and whether to report the hard-negative
-number in the product; (c) re-measure on a messy/product domain — that is the number a
-skeptic will ask for; (d) optionally score the **Q4 GGUF** as the target to close the
-last of the gap to the old number, since Q4 is what actually ships.
+This doc previously predicted that a *linear* link to a near-bimodal target was the
+wrong functional form and that a logit link "would likely raise all four rows." **That
+was wrong.** `faithfulness_eval` now takes `link="linear"|"logit"` (fit against
+log-odds, scored back in *probability* space so the two stay comparable). Five seeds on
+the honest config (cluster-disjoint / hard negatives):
+
+| basis | linear (mean ± sd, n=5) | logit (mean ± sd, n=5) |
+|---|---|---|
+| **`fixed`** — shipped weights, frozen | **0.27 ± 0.07** | 0.21 ± 0.15 |
+| `simple` | 0.30 ± 0.06 | 0.26 ± 0.14 |
+| `richer` | 0.64 ± 0.08 | **0.73 ± 0.12** |
+| `gbm` | 0.77 ± 0.06 | 0.77 ± 0.10 |
+
+The logit link **lowers** the two rows that matter and roughly **doubles their
+variance** — `fixed` swings 0.015→0.391 across seeds under logit vs 0.215→0.364 under
+linear. In hindsight the mechanism is clear: against a saturated target `logit(p)` is
+dominated by the clipped extremes, so a frozen 1-D score regressed on log-odds becomes
+hostage to how many pairs land on the clip boundary. Only `richer` benefits (36 features
+can absorb it); `gbm` is unchanged. **Keep `link="linear"` as the default.**
+
+**The bigger lesson from this sweep: single-seed numbers here are not publishable.**
+Seed-to-seed spread exceeds the linear-vs-logit effect, and the mined test sets differ
+materially in difficulty (P(match) test mean ranges 0.36–0.67 across seeds). The earlier
+"0.25–0.32" range for `fixed` came from two seeds and was too tight; over five it is
+**0.27 ± 0.07**. Report means over ≥5 seeds here, not point estimates.
+
+**Caveats that remain:** structured person data is the easy case; messy/product domains
+untested; and all of the above scores the fp16 model, not the Q4 GGUF that ships.
+
+**Follow-up:** ~~(a) re-measure with a logit link~~ — **done, see above; it does not
+help and `linear` stays the default.** (b) decide whether to add a richer/GBM
+"high-faithfulness" mode (0.64–0.77 on the honest split, 5-seed means) alongside the
+simple/legible one, and whether to report the hard-negative number in the product;
+(c) re-measure on a messy/product domain — that is the number a skeptic will ask for;
+(d) score the **Q4 GGUF** as the target, since Q4 is what actually ships and it is the
+largest remaining unexplained difference vs the old 0.87.
 
 ## Next steps (highest leverage first)
 

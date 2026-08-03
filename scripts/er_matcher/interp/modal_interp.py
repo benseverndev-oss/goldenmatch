@@ -956,7 +956,7 @@ def layer2_abstraction(layer: int = 14, per_class: int = 400, seed: int = 0,
 # --------------------------------------------------------------------------- #
 @app.function(image=_image, gpu=GPU, timeout=60 * 60, volumes={"/out": _out_vol})
 def faithfulness_eval(per_class: int = 400, seed: int = 0, negatives: str = "hard",
-                      split: str = "cluster") -> None:
+                      split: str = "cluster", link: str = "linear") -> None:
     """Measure the per-field explanation against the model's ACTUAL P(match).
 
     The Layer-2 number (``layer2_abstraction``, R^2 ~= 0.51) regresses onto the
@@ -995,6 +995,8 @@ def faithfulness_eval(per_class: int = 400, seed: int = 0, negatives: str = "har
         affine_r2,
         field_agreements,
         fixed_weight_score,
+        logit,
+        prob_space_r2,
         record_disjoint_split,
         richer_field_features,
     )
@@ -1032,7 +1034,7 @@ def faithfulness_eval(per_class: int = 400, seed: int = 0, negatives: str = "har
     if not tr or not te:
         raise RuntimeError(f"empty split: train={len(tr)} test={len(te)}")
     print(f"[faith] train={len(tr)} test={len(te)} negatives={negatives} "
-          f"split={split}-disjoint", flush=True)
+          f"split={split}-disjoint link={link}", flush=True)
 
     def p_match(pairs) -> np.ndarray:
         """Teacher-forced readout: feed the '{\"match\":' prefix, softmax the
@@ -1063,6 +1065,7 @@ def faithfulness_eval(per_class: int = 400, seed: int = 0, negatives: str = "har
     fixed = affine_r2(
         fixed_weight_score(A_tr, FIELDS, PERSON_FIELD_IMPORTANCE), p_tr,
         fixed_weight_score(A_te, FIELDS, PERSON_FIELD_IMPORTANCE), p_te,
+        link=link,
     )
     results["fixed"] = {**fixed, "n_features": len(FIELDS), "weights_refit": False}
     print(f"[faith] fixed  (shipped weights, frozen) R^2_test={fixed['r2_test']:.3f}", flush=True)
@@ -1070,12 +1073,19 @@ def faithfulness_eval(per_class: int = 400, seed: int = 0, negatives: str = "har
     from sklearn.ensemble import GradientBoostingRegressor
     from sklearn.linear_model import LinearRegression
 
+    # With link="logit" every basis is fit against log-odds and scored back in
+    # PROBABILITY space, so the numbers stay comparable to the linear-link table.
+    t_tr = logit(p_tr) if link == "logit" else p_tr
+
     def _fit_r2(model_obj, Xa, Xb, name):
-        model_obj.fit(Xa, p_tr)
-        r2_te = float(model_obj.score(Xb, p_te))
-        r2_tr = float(model_obj.score(Xa, p_tr))
+        model_obj.fit(Xa, t_tr)
+        if link == "logit":
+            r2_te = prob_space_r2(model_obj.predict(Xb), p_te)
+            r2_tr = prob_space_r2(model_obj.predict(Xa), p_tr)
+        else:
+            r2_te, r2_tr = float(model_obj.score(Xb, p_te)), float(model_obj.score(Xa, p_tr))
         print(f"[faith] {name:<7} R^2_test={r2_te:.3f} (train {r2_tr:.3f})", flush=True)
-        return {"r2_test": r2_te, "r2_train": r2_tr,
+        return {"r2_test": r2_te, "r2_train": r2_tr, "link": link,
                 "n_features": Xa.shape[1], "weights_refit": True}
 
     results["simple"] = _fit_r2(LinearRegression(), A_tr, A_te, "simple")
@@ -1087,7 +1097,7 @@ def faithfulness_eval(per_class: int = 400, seed: int = 0, negatives: str = "har
     payload = {
         "target": "model P(match) via teacher-forced true/false logit readout",
         "split": f"{split}-disjoint",
-        "negatives": negatives,
+        "negatives": negatives, "link": link,
         "n_train": len(tr), "n_test": len(te), "seed": seed,
         "fields": FIELDS, "richer_feature_names": feat_names,
         "shipped_weights": {f: PERSON_FIELD_IMPORTANCE.get(f, 0.0) for f in FIELDS},
@@ -1099,7 +1109,8 @@ def faithfulness_eval(per_class: int = 400, seed: int = 0, negatives: str = "har
         "results": results,
     }
     os.makedirs("/out/interp", exist_ok=True)
-    out_path = f"/out/interp/faithfulness_{split}_{negatives}_seed{seed}.json"
+    suffix = "" if link == "linear" else f"_{link}"
+    out_path = f"/out/interp/faithfulness_{split}_{negatives}_seed{seed}{suffix}.json"
     with open(out_path, "w") as fh:
         json.dump(payload, fh, indent=2)
     _out_vol.commit()
@@ -1108,10 +1119,10 @@ def faithfulness_eval(per_class: int = 400, seed: int = 0, negatives: str = "har
 
 @app.local_entrypoint()
 def faithfulness(per_class: int = 400, seed: int = 0, negatives: str = "hard",
-                 split: str = "cluster") -> None:
+                 split: str = "cluster", link: str = "linear") -> None:
     """Pin the shipped explainer's faithfulness against the model's real verdict."""
     faithfulness_eval.remote(
-        per_class=per_class, seed=seed, negatives=negatives, split=split
+        per_class=per_class, seed=seed, negatives=negatives, split=split, link=link
     )
 
 

@@ -178,32 +178,71 @@ def fixed_weight_score(
     return field_feats @ w
 
 
+def logit(p: np.ndarray, eps: float = 1e-3) -> np.ndarray:
+    """log(p/(1-p)) with ``p`` clipped to [eps, 1-eps] so saturated probabilities
+    stay finite. The model's P(match) is near-bimodal (masses at ~0 and ~1), so
+    without clipping the transform blows up on the most common values."""
+    q = np.clip(np.asarray(p, dtype=np.float64), eps, 1.0 - eps)
+    return np.log(q / (1.0 - q))
+
+
+def _sigmoid(z: np.ndarray) -> np.ndarray:
+    return 1.0 / (1.0 + np.exp(-np.clip(np.asarray(z, dtype=np.float64), -60.0, 60.0)))
+
+
+def prob_space_r2(pred_logit: np.ndarray, y_true: np.ndarray) -> float:
+    """R^2 of logit-space predictions, scored back in PROBABILITY space.
+
+    A logit-link fit predicts log-odds; squashing through the sigmoid before
+    scoring keeps the number on the same scale as a linear-link R^2, so the two
+    links are directly comparable instead of being two different metrics.
+    """
+    yhat = _sigmoid(pred_logit)
+    y = np.asarray(y_true, dtype=np.float64)
+    ss_res = float(((y - yhat) ** 2).sum())
+    ss_tot = float(((y - y.mean()) ** 2).sum())
+    return 1.0 - ss_res / ss_tot if ss_tot > 1e-12 else 0.0
+
+
 def affine_r2(
     train_score: np.ndarray, train_y: np.ndarray,
     test_score: np.ndarray, test_y: np.ndarray,
-) -> dict[str, float]:
+    *, link: str = "linear", eps: float = 1e-3,
+) -> dict[str, Any]:
     """R^2 of a FROZEN 1-D score against ``y``, fitting only intercept + scale.
 
-    Two free parameters (a monotone affine link), fit on train and evaluated on
-    test -- so the reported number credits the fixed weights, not a refit. This
-    is the honest "what does the shipped explainer actually explain?" measure,
-    as opposed to refitting the weights (which yields a ceiling).
+    Two free parameters (a monotone link), fit on train and evaluated on test --
+    so the reported number credits the fixed weights, not a refit. This is the
+    honest "what does the shipped explainer actually explain?" measure, as
+    opposed to refitting the weights (which yields a ceiling).
+
+    ``link="linear"`` regresses the score straight onto ``y``. ``link="logit"``
+    regresses it onto ``logit(y)`` and scores the squashed prediction back in
+    probability space -- the fairer form when ``y`` is a saturated probability,
+    and still directly comparable to the linear number.
     """
     if train_score.shape[0] != train_y.shape[0] or test_score.shape[0] != test_y.shape[0]:
         raise ValueError("scores and targets must align")
+    if link not in ("linear", "logit"):
+        raise ValueError(f"link must be 'linear' or 'logit', got {link!r}")
+
+    target = logit(train_y, eps) if link == "logit" else np.asarray(train_y, np.float64)
     xc = train_score - train_score.mean()
     var = float((xc * xc).sum())
-    slope = float((xc * (train_y - train_y.mean())).sum() / var) if var > 1e-12 else 0.0
-    intercept = float(train_y.mean() - slope * train_score.mean())
+    slope = float((xc * (target - target.mean())).sum() / var) if var > 1e-12 else 0.0
+    intercept = float(target.mean() - slope * train_score.mean())
 
     def _r2(s: np.ndarray, y: np.ndarray) -> float:
-        ss_res = float(((y - (slope * s + intercept)) ** 2).sum())
+        pred = slope * s + intercept
+        if link == "logit":
+            return prob_space_r2(pred, y)
+        ss_res = float(((y - pred) ** 2).sum())
         ss_tot = float(((y - y.mean()) ** 2).sum())
         return 1.0 - ss_res / ss_tot if ss_tot > 1e-12 else 0.0
 
     return {
         "r2_test": _r2(test_score, test_y), "r2_train": _r2(train_score, train_y),
-        "slope": slope, "intercept": intercept,
+        "slope": slope, "intercept": intercept, "link": link,
     }
 
 

@@ -14,6 +14,8 @@ from interp.field_attribution import (  # noqa: E402
     field_agreements,
     fixed_weight_score,
     label_sae_features,
+    logit,
+    prob_space_r2,
     record_disjoint_split,
     richer_field_features,
 )
@@ -169,6 +171,45 @@ class TestFixedWeightScore:
 
         with pytest.raises(ValueError):
             fixed_weight_score(np.zeros((4, 2)), FIELDS, {})
+
+
+class TestLogitLink:
+    def test_saturated_probabilities_stay_finite(self):
+        z = logit(np.array([0.0, 1.0, 0.5]))
+        assert np.all(np.isfinite(z))
+        assert z[0] < 0 < z[1]
+        assert abs(z[2]) < 1e-9
+
+    def test_clipping_is_symmetric_and_eps_controlled(self):
+        tight, loose = logit(np.array([0.0]), eps=1e-6), logit(np.array([0.0]), eps=1e-1)
+        assert tight[0] < loose[0] < 0
+
+    def test_prob_space_r2_perfect_when_logits_are_exact(self):
+        p = np.array([0.01, 0.2, 0.5, 0.8, 0.99])
+        assert prob_space_r2(logit(p, eps=1e-9), p) > 0.999
+
+    def test_prob_space_r2_is_zero_for_a_constant_prediction(self):
+        p = np.array([0.1, 0.4, 0.6, 0.9])
+        r2 = prob_space_r2(np.full(4, logit(np.array([p.mean()]))[0]), p)
+        assert abs(r2) < 1e-6
+
+    def test_logit_link_beats_linear_on_a_logistic_relation(self):
+        # y really is sigmoid(affine(score)) -> the logit link should recover it
+        # almost exactly while a straight-line fit cannot.
+        s = np.linspace(-4, 4, 300)
+        y = 1.0 / (1.0 + np.exp(-(1.5 * s - 0.3)))
+        lin = affine_r2(s, y, s, y, link="linear")["r2_test"]
+        log_ = affine_r2(s, y, s, y, link="logit")["r2_test"]
+        assert log_ > 0.99
+        assert log_ > lin
+
+    def test_link_is_reported_and_validated(self):
+        import pytest
+
+        s = np.linspace(0.1, 0.9, 20)
+        assert affine_r2(s, s, s, s, link="logit")["link"] == "logit"
+        with pytest.raises(ValueError):
+            affine_r2(s, s, s, s, link="probit")
 
 
 class TestAffineR2:
