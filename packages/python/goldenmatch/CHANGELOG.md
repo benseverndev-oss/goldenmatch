@@ -273,6 +273,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   follow-ons. The second slice of the semantic-model discovery arc (design:
   `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
   `tests/test_semantic_discovery_joins.py`.
+- **Semantic-model discovery — cross-table entity typing (Phase 2).**
+  `goldenmatch.semantic.discover_entity_types(tables)` groups source tables into the
+  real-world entity types they realize, so the later phases conform one shared key /
+  one dimension per entity instead of one per table. Two signals decide it: a
+  **column-semantic signature** (columns canonicalize to shared tokens via the
+  `schema_match` synonym map + profiled `col_type`; high Jaccard → same kind of thing)
+  and **value overlap** on a shared identity column (email/phone/id-shaped) — but the
+  value-overlap "same entity" signal fires ONLY when the shared column is near-unique
+  on BOTH sides (the same population enumerated twice), so a foreign-key reference
+  (e.g. `orders.customer_id` into `customers`) is correctly read as a Phase-3 join, not
+  as sameness. Each `EntityType` names itself from its dominant hint (`person` /
+  `organization` / `entity_N`), records the per-table conformance key when keys are
+  supplied, and ranks multi-table-first. The third slice of the semantic-model
+  discovery arc (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discovery_entities.py`.
 
 ### Changed
 - **FS out-of-core streaming: single `resolve_fs_block_source` knob + DuckDB

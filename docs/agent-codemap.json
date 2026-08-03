@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 441,
+      "module_count": 442,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7249,6 +7249,31 @@
           "file": "packages/python/goldenmatch/goldenmatch/semantic/discovery/__init__.py",
           "purpose": "Semantic-model discovery (the generative half of the semantic wedge).",
           "imports": [
+            "goldenmatch.semantic.discovery.entities",
+            "goldenmatch.semantic.discovery.joins",
+            "goldenmatch.semantic.discovery.keys"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.discovery.entities",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/discovery/entities.py",
+          "purpose": "Cross-table entity-type discovery (semantic-model discovery, Phase 2).",
+          "defines": [
+            "EntityType",
+            "_best_key",
+            "_canonical_token",
+            "_identity_columns",
+            "_is_near_unique",
+            "_jaccard",
+            "_name_for",
+            "_signature",
+            "_value_overlap",
+            "discover_entity_types"
+          ],
+          "imports": [
+            "goldenmatch.core.autoconfig",
+            "goldenmatch.core.frame",
+            "goldenmatch.core.schema_match",
             "goldenmatch.semantic.discovery.joins",
             "goldenmatch.semantic.discovery.keys"
           ]

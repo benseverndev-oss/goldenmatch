@@ -46,8 +46,10 @@ from goldenmatch.semantic.cube import (
     parse_cube_models,
 )
 from goldenmatch.semantic.discovery import (
+    EntityType,
     JoinCandidate,
     KeyCandidate,
+    discover_entity_types,
     discover_joins,
     discover_keys,
 )
@@ -146,6 +148,9 @@ __all__ = [
     # semantic-model discovery (Phase 1) — certified key discovery per table
     "discover_keys",
     "KeyCandidate",
+    # semantic-model discovery (Phase 2) — cross-table entity-type discovery
+    "discover_entity_types",
+    "EntityType",
     # semantic-model discovery (Phase 3) — certified join / FK discovery across tables
     "discover_joins",
     "JoinCandidate",
