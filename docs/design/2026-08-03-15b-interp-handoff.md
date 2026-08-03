@@ -81,7 +81,7 @@ standing discipline: **when a number looks too good, hunt the confound first.**
   volume: `layer_probes.json`, `sae_layer14.pt`, `causal_multilayer_8_20.json`,
   `layer2_abstraction_L14.json`, `layer_early_exit.json`, `truncate_adapt.json`,
   `eval_trunc{28,16,12}_v2.json`, `leniency_dial.json`,
-  `faithfulness_{hard,random}_seed{0,1}.json`. Modal token is set locally.
+  `faithfulness_{cluster,record}_{hard,random}_seed{0,1}.json`. Modal token is set locally.
 - **Pinned GGUF** for on-box work: `scratchpad/er-1p5b.gguf` (Q4, the same weights as
   `/out/model_1p5b/merged`). llama.cpp only exposes the final layer — GPU/Modal needed
   for residual-stream + hooks.
@@ -96,43 +96,58 @@ The 0.51 in `explainer.py` is the R² of explaining the internal diff-of-means
 per-decision explainer. The right target is the model's **actual P(match)**.
 
 That is now measured by a **committed, reproducible** stage —
-`modal_interp.py::faithfulness_eval` (pure helpers + 21 unit tests in
+`modal_interp.py::faithfulness_eval` (pure helpers + 25 unit tests in
 `field_attribution.py` / `test_field_attribution.py`) — on a **cluster-disjoint** split
 (no entity shared train↔test), the fp16 `/out/model_1p5b/merged`, teacher-forced
 `{"match":` → softmax(true,false) readout. Artifacts:
-`interp/faithfulness_{hard,random}_seed{0,1}.json`.
+`interp/faithfulness_{cluster,record}_{hard,random}_seed{0,1}.json` (`split="record"`
+reproduces the weaker split for comparison).
 
-| basis | hard neg. s0 | hard neg. s1 | random neg. s0 |
-|---|---|---|---|
-| **`fixed`** — the SHIPPED weights, frozen (intercept+scale only) | **0.251** | **0.317** | **0.495** |
-| `simple` — same 6 features, weights refit | 0.300 | 0.329 | 0.501 |
-| `richer` — 36 features (exact/missing/conflict/edit/len) | 0.667 | 0.767 | 0.747 |
-| `gbm` — gradient boosting on the richer features | 0.750 | 0.810 | 0.837 |
+| basis | **cluster** / hard s0 | cluster / hard s1 | cluster / random | **record** / hard | record / random |
+|---|---|---|---|---|---|
+| **`fixed`** — SHIPPED weights, frozen (intercept+scale only) | **0.251** | **0.317** | 0.495 | 0.485 | 0.577 |
+| `simple` — same 6 features, weights refit | 0.300 | 0.329 | 0.501 | 0.525 | 0.579 |
+| `richer` — 36 features (exact/missing/conflict/edit/len) | 0.667 | 0.767 | 0.747 | 0.771 | 0.775 |
+| `gbm` — gradient boosting on the richer features | 0.750 | 0.810 | 0.837 | 0.870 | 0.842 |
 
-**The two findings that matter:**
+**The three findings that matter:**
 
 1. **Freezing the shipped weights costs almost nothing** (+0.01–0.05 vs refitting the
-   same basis). The causally-derived weights are ~as good as a fresh fit — the
-   explainer's central claim holds up. The binding constraint is the **feature basis and
-   the linear link**, not the frozen weights: richer features roughly double R².
-2. **The earlier 0.871 / 0.967 / 0.984 did NOT reproduce.** Those came from
-   `scratchpad/faithfulness.py`, which no longer exists on any box (it lived in the
-   session `Issues.md` teleports to), so the gap can't be diagnosed directly. Known
-   protocol differences, each of which would inflate the old number: it likely scored
-   the **Q4 GGUF via llama.cpp** rather than the fp16 model; it said **"record-disjoint"**
-   where this is **cluster-disjoint** (record-disjoint alone still leaks — the *same
-   entity's* other records sit in train); and its negative-mining regime is unknown.
-   Note that even the *easy* regime here (random negatives) gives simple = 0.501, not
-   0.871 — so regime alone does not close the gap. **Treat 0.87/0.97/0.98 as
-   unreproduced and do not cite them.**
+   same basis, in every cell). The causally-derived weights are ~as good as a fresh fit
+   — the explainer's central claim holds up. The binding constraint is the **feature
+   basis and the linear link**, not the frozen weights: richer features roughly double
+   R² in the honest column.
+2. **A record-disjoint split leaks, and the leak is worth ~+0.22 on the linear rows.**
+   Holding model / features / seed / negatives fixed and changing *only* the split,
+   `simple` goes 0.300 → 0.525 and `fixed` 0.251 → 0.485. In `historical_50k` a cluster
+   is one entity with several corrupted records, so a record-disjoint split still puts
+   **the same entity on both sides**; the fit learns that entity's agreement→P(match)
+   mapping in train and is then scored on it in test. **Use `split="cluster"` for any
+   number you intend to publish.**
+3. **Even so, the earlier 0.871 / 0.967 / 0.984 do NOT reproduce.** Stacking *both*
+   known weakenings (record split **and** random negatives — the most favorable
+   configuration tested) still gives simple **0.579**, richer **0.775**, gbm **0.842**.
+   The split leak explains a large share of the gap but not all of it. The residual is
+   most likely the target model and small-n: the original scored **400 pairs total**
+   at ~2.4 s/pair on CPU, i.e. the **Q4 GGUF via llama.cpp** (~200 train / 200 test),
+   where a 36-feature linear fit and a GBM reporting held-out 0.967 / 0.984 is a
+   small-n red flag on its own. `scratchpad/faithfulness.py` no longer exists on any
+   box (it lived in the session `Issues.md` teleports to), so this cannot be closed
+   directly. **Treat 0.87 / 0.97 / 0.98 as unreproduced and do not cite them.**
+
+   *Fair caveat in the other direction:* scoring the **Q4 GGUF** is arguably the more
+   product-relevant target, since the shipped local scorer is the quantized model. That
+   is a defensible difference of target, not simply an error — but quantization alone is
+   an implausible explanation for moving a linear R² from 0.58 to 0.87, and it remains
+   untested here.
 
 **Consequence for the shipped explainer:** do **not** raise
-`PERSON_IMPORTANCE_FAITHFULNESS_R2` to 0.87. The measured output-faithfulness of the
-shipped weights is **0.50 on random negatives (≈ the 0.51 already published) and only
-0.25–0.32 in the discriminative look-alike regime** — which is precisely where the
-explainer is used (a review queue is look-alikes). The current 0.51 is, if anything,
-*optimistic* for the hard regime rather than pessimistic. Left unchanged pending the
-decision below.
+`PERSON_IMPORTANCE_FAITHFULNESS_R2` to 0.87. Across every configuration tested the
+shipped weights land in **0.25–0.58**, and on the honest split in the discriminative
+look-alike regime — precisely where the explainer runs, since a review queue *is*
+look-alikes — it is **0.25–0.32**. The published **0.51 sits mid-range and is
+defensible as-is**; if anything it is optimistic for the hard regime rather than
+pessimistic. `explainer.py` left unchanged pending the decision below.
 
 **Caveats on these numbers too:** structured person data is the easy case; P(match) is
 near-bimodal (82% of hard-negative test pairs sit outside [0.1, 0.9]), and a *linear*
@@ -140,9 +155,11 @@ link to a bimodal target is a poor functional form — a logit link would likely
 four rows and is the fairer metric to add next. Messy/product domains untested.
 
 **Follow-up:** (a) re-measure with a logit link before publishing any headline number;
-(b) decide whether to add a richer/GBM "high-faithfulness" mode (≈0.75–0.84) alongside
-the simple/legible one, and whether to report the hard-negative number in the product;
-(c) re-measure on a messy/product domain — that is the number a skeptic will ask for.
+(b) decide whether to add a richer/GBM "high-faithfulness" mode (≈0.67–0.75 on the
+honest split) alongside the simple/legible one, and whether to report the hard-negative
+number in the product; (c) re-measure on a messy/product domain — that is the number a
+skeptic will ask for; (d) optionally score the **Q4 GGUF** as the target to close the
+last of the gap to the old number, since Q4 is what actually ships.
 
 ## Next steps (highest leverage first)
 

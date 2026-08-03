@@ -955,7 +955,8 @@ def layer2_abstraction(layer: int = 14, per_class: int = 400, seed: int = 0,
 #          per-field weights explain? (the shipped explainer's honesty number)  #
 # --------------------------------------------------------------------------- #
 @app.function(image=_image, gpu=GPU, timeout=60 * 60, volumes={"/out": _out_vol})
-def faithfulness_eval(per_class: int = 400, seed: int = 0, negatives: str = "hard") -> None:
+def faithfulness_eval(per_class: int = 400, seed: int = 0, negatives: str = "hard",
+                      split: str = "cluster") -> None:
     """Measure the per-field explanation against the model's ACTUAL P(match).
 
     The Layer-2 number (``layer2_abstraction``, R^2 ~= 0.51) regresses onto the
@@ -994,6 +995,7 @@ def faithfulness_eval(per_class: int = 400, seed: int = 0, negatives: str = "har
         affine_r2,
         field_agreements,
         fixed_weight_score,
+        record_disjoint_split,
         richer_field_features,
     )
     from goldenmatch.core.er_matcher.explainer import PERSON_FIELD_IMPORTANCE
@@ -1007,20 +1009,30 @@ def faithfulness_eval(per_class: int = 400, seed: int = 0, negatives: str = "har
     rows = {i: {f: (raw[f][i] or "") for f in FIELDS} for i in range(len(gold))}
     surname_key = [jellyfish.soundex(str(raw["surname"][i] or "")) for i in range(len(gold))]
 
-    # cluster-disjoint split: no ENTITY (hence no record) is shared train<->test
-    by_cluster: dict = {}
-    for i, g in enumerate(gold):
-        by_cluster.setdefault(g, []).append(i)
-    clusters = sorted(by_cluster)
-    train_ids = {i for c in clusters[::2] for i in by_cluster[c]}
-    test_ids = {i for c in clusters[1::2] for i in by_cluster[c]}
     pool = mine_probe_pairs(gold, surname_key, per_class * 3, negatives=negatives, seed=seed)
-    tr = [(a, b, t) for a, b, t in pool if a in train_ids and b in train_ids][: per_class * 2]
-    te = [(a, b, t) for a, b, t in pool if a in test_ids and b in test_ids][: per_class * 2]
+    if split == "cluster":
+        # no ENTITY (hence no record) is shared train<->test -- the honest split
+        by_cluster: dict = {}
+        for i, g in enumerate(gold):
+            by_cluster.setdefault(g, []).append(i)
+        clusters = sorted(by_cluster)
+        train_ids = {i for c in clusters[::2] for i in by_cluster[c]}
+        test_ids = {i for c in clusters[1::2] for i in by_cluster[c]}
+        tr = [(a, b, t) for a, b, t in pool if a in train_ids and b in train_ids]
+        te = [(a, b, t) for a, b, t in pool if a in test_ids and b in test_ids]
+    elif split == "record":
+        # WEAKER: records disjoint but the same ENTITY can straddle the split.
+        # Kept to quantify how much that leak inflates the number.
+        tr_i, te_i = record_disjoint_split(pool, seed=seed)
+        tr = [pool[i] for i in tr_i]
+        te = [pool[i] for i in te_i]
+    else:
+        raise ValueError(f"split must be 'cluster' or 'record', got {split!r}")
+    tr, te = tr[: per_class * 2], te[: per_class * 2]
     if not tr or not te:
         raise RuntimeError(f"empty split: train={len(tr)} test={len(te)}")
     print(f"[faith] train={len(tr)} test={len(te)} negatives={negatives} "
-          f"(cluster-disjoint)", flush=True)
+          f"split={split}-disjoint", flush=True)
 
     def p_match(pairs) -> np.ndarray:
         """Teacher-forced readout: feed the '{\"match\":' prefix, softmax the
@@ -1074,7 +1086,7 @@ def faithfulness_eval(per_class: int = 400, seed: int = 0, negatives: str = "har
 
     payload = {
         "target": "model P(match) via teacher-forced true/false logit readout",
-        "split": "cluster-disjoint (no entity shared train<->test)",
+        "split": f"{split}-disjoint",
         "negatives": negatives,
         "n_train": len(tr), "n_test": len(te), "seed": seed,
         "fields": FIELDS, "richer_feature_names": feat_names,
@@ -1087,7 +1099,7 @@ def faithfulness_eval(per_class: int = 400, seed: int = 0, negatives: str = "har
         "results": results,
     }
     os.makedirs("/out/interp", exist_ok=True)
-    out_path = f"/out/interp/faithfulness_{negatives}_seed{seed}.json"
+    out_path = f"/out/interp/faithfulness_{split}_{negatives}_seed{seed}.json"
     with open(out_path, "w") as fh:
         json.dump(payload, fh, indent=2)
     _out_vol.commit()
@@ -1095,9 +1107,12 @@ def faithfulness_eval(per_class: int = 400, seed: int = 0, negatives: str = "har
 
 
 @app.local_entrypoint()
-def faithfulness(per_class: int = 400, seed: int = 0, negatives: str = "hard") -> None:
+def faithfulness(per_class: int = 400, seed: int = 0, negatives: str = "hard",
+                 split: str = "cluster") -> None:
     """Pin the shipped explainer's faithfulness against the model's real verdict."""
-    faithfulness_eval.remote(per_class=per_class, seed=seed, negatives=negatives)
+    faithfulness_eval.remote(
+        per_class=per_class, seed=seed, negatives=negatives, split=split
+    )
 
 
 @app.local_entrypoint()

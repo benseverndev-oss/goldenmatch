@@ -89,6 +89,35 @@ def attribute_direction(
     }
 
 
+def record_disjoint_split(
+    pairs: list[tuple[int, int, int]], *, seed: int = 0, test_frac: float = 0.5
+) -> tuple[list[int], list[int]]:
+    """Split pair INDICES so train and test share no underlying RECORD.
+
+    Weaker than a cluster-disjoint split and kept only to measure the difference:
+    two records of the SAME entity can land on opposite sides, so a fit can learn
+    that entity's agreement->P(match) mapping in train and be scored on it in
+    test. Use ``split="cluster"`` in ``faithfulness_eval`` for the honest number;
+    this exists to quantify how much the weaker split inflates it.
+
+    Assigns each record id to a side, then keeps only pairs whose both endpoints
+    landed on the same side. Returns ``(train_idx, test_idx)``. Deterministic.
+    """
+    import random
+
+    rng = random.Random(seed)
+    side: dict[int, int] = {}
+    for a, b, _t in pairs:
+        for r in (a, b):
+            if r not in side:
+                side[r] = 1 if rng.random() < test_frac else 0
+    train_idx, test_idx = [], []
+    for i, (a, b, _t) in enumerate(pairs):
+        if side[a] == side[b]:
+            (test_idx if side[a] else train_idx).append(i)
+    return train_idx, test_idx
+
+
 def richer_field_features(
     rows: dict[int, dict[str, Any]],
     pairs: list[tuple[int, int, int]],

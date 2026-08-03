@@ -14,6 +14,7 @@ from interp.field_attribution import (  # noqa: E402
     field_agreements,
     fixed_weight_score,
     label_sae_features,
+    record_disjoint_split,
     richer_field_features,
 )
 
@@ -81,6 +82,39 @@ class TestAttributeDirection:
             attribute_direction(np.zeros(5), np.zeros((4, 3)), FIELDS)
         with pytest.raises(ValueError):
             attribute_direction(np.zeros(4), np.zeros((4, 2)), FIELDS)
+
+
+class TestRecordDisjointSplit:
+    def test_no_record_appears_on_both_sides(self):
+        pairs = [(i, i + 1, i % 2) for i in range(0, 200, 2)]
+        tr, te = record_disjoint_split(pairs, seed=0)
+        tr_recs = {r for i in tr for r in pairs[i][:2]}
+        te_recs = {r for i in te for r in pairs[i][:2]}
+        assert tr_recs and te_recs
+        assert not (tr_recs & te_recs)
+
+    def test_indices_are_disjoint_and_in_range(self):
+        pairs = [(i, i + 1, 1) for i in range(0, 100, 2)]
+        tr, te = record_disjoint_split(pairs, seed=3)
+        assert not (set(tr) & set(te))
+        assert all(0 <= i < len(pairs) for i in tr + te)
+
+    def test_deterministic(self):
+        pairs = [(i, i + 1, 1) for i in range(0, 60, 2)]
+        assert record_disjoint_split(pairs, seed=7) == record_disjoint_split(pairs, seed=7)
+
+    def test_does_not_guarantee_entity_disjointness(self):
+        # THE point of this helper: records 0 and 2 are the same entity, but
+        # nothing stops them landing on opposite sides -- that is the leak a
+        # cluster-disjoint split closes.
+        pairs = [(0, 1, 1), (2, 3, 1)]
+        seen_opposite = False
+        for s in range(40):
+            tr, te = record_disjoint_split(pairs, seed=s)
+            if tr and te:
+                seen_opposite = True
+                break
+        assert seen_opposite
 
 
 class TestRicherFieldFeatures:
