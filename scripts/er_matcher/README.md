@@ -82,6 +82,22 @@ those paths before running `build_corpus` against real data. Fetch-only sources
 (Magellan, NCVR) require `GOLDENMATCH_ALLOW_FETCH=1` and are consumed by the eval
 harness (a later sub-project), not the training build.
 
+## Interpretability (Layer 1 — locked)
+
+- `interp/decision_geometry.py` — probes the geometry of the model's
+  "same-entity" decision at the decision site (last-token hidden state) on the
+  CPU box via the pinned GGUF. Establishes the decision is a **low-dimensional
+  linear structure** (0.99 linear-probe accuracy, one held-out direction at
+  0.96 AUC vs hard negatives, ~4–8 effective dims). Pure helpers are unit-tested
+  model-free in `test_decision_geometry.py`.
+- `interp/modal_interp.py` — the GPU/Modal pipeline that **locks** Layer 1 on
+  the fp16 fine-tune: per-layer residual-stream geometry (the match direction
+  forms at L1, peaks at L13, concentrates onto the dominant axis late), a sparse
+  autoencoder (L0≈212 dictionary), and **causal validation** — multi-layer
+  steering drives the verdict 0→1 monotonically, so the direction is the causal
+  substrate of the decision. See
+  `docs/design/2026-08-02-15b-decision-geometry-layer1.md`.
+
 ## Module map
 
 - `sources/base.py` — `Row`, the `PairSource` protocol, the loader registry.
