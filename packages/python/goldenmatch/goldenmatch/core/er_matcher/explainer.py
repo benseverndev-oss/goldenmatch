@@ -65,22 +65,15 @@ PERSON_FIELD_CAUSAL_RANKING: tuple[str, ...] = (
     "birth_place", "first_name", "dob", "postcode_fake", "surname", "occupation",
 )
 
-# The HIGH-FAITHFULNESS basis. Standardized coefficients of the SAME causally
-# validated direction regressed onto the RICHER 36-signal basis instead of one
-# agreement scalar per field (`modal_interp.py::layer2_abstraction`). Same provenance
-# as PERSON_FIELD_IMPORTANCE, finer grain: 0.888 of the direction vs 0.511.
-#
-# MEASURED: frozen, these score R^2 0.53 +- 0.09 against the model's real P(match)
-# (5 seeds, cluster-disjoint, hard negatives) versus 0.27 +- 0.07 for the 6-field
-# table -- roughly double, and better on every seed.
-#
-# BUT they are NOT usable as the human-facing field story. Summed per field they rank
-# occupation FIRST and first_name LAST, near-exactly the reverse of the ablation
-# ranking -- classic collinearity across 36 correlated signals. So this basis scores
-# well and reads badly, which is why it is an opt-in mode
-# (`explain_pair(..., high_faithfulness=True)`) and never replaces the displayed
-# per-field importance. Believe its NUMBER, not its per-signal story.
-PERSON_SIGNAL_IMPORTANCE: dict[str, float] = {
+# SUPERSEDED, kept only as the comparison that justifies the sparse table below.
+# Dense OLS fit of the causally-validated direction onto all 36 signals. It explains
+# more of the DIRECTION (0.888 vs 0.867) yet is worse on the thing that matters --
+# frozen output-faithfulness R^2 0.53 +- 0.09 vs 0.64 +- 0.09 -- because OLS spreads
+# weight across collinear signals that do not generalize. It also reads backwards:
+# summed per field it ranks occupation FIRST and first_name LAST, inverting ablation.
+# A tidy illustration that a better in-sample fit can be both less faithful and less
+# legible. Do not ship it; `modal_interp.py` measures it as the `fixed_richer` row.
+PERSON_SIGNAL_IMPORTANCE_DENSE: dict[str, float] = {
     "occupation__exact": 0.815, "occupation__missing": 0.448,
     "surname__edit_norm": -0.351, "dob__agreement": -0.333,
     "occupation__edit_norm": 0.332, "occupation__len_ratio": -0.292,
@@ -100,6 +93,32 @@ PERSON_SIGNAL_IMPORTANCE: dict[str, float] = {
     "dob__conflict": -0.008, "first_name__conflict": 0.005,
 }
 
+# THE HIGH-FAITHFULNESS BASIS. L1 (alpha=0.05) fit of the causally-validated
+# direction onto the 36-signal decomposition; 14 signals survive.
+#
+# MEASURED, frozen, vs the model's real P(match) (5 seeds, cluster-disjoint, hard
+# negatives): R^2 0.64 +- 0.09, against 0.27 +- 0.07 for the 6-field table and
+# 0.53 +- 0.09 for the dense 36-signal fit above. Better than BOTH on every seed,
+# and essentially at the refit ceiling (0.67) using only frozen weights.
+#
+# It is also the readable one: summed per field it ranks birth_place FIRST and
+# occupation LAST, agreeing with ablation at both ends (rank-correlation vs the
+# causal ranking goes -0.77 dense -> +0.43 sparse), and the surviving signals tell a
+# coherent story by themselves -- `edit_norm` negative (further apart -> less match),
+# `exact` positive. Sparsity bought accuracy AND legibility at once.
+#
+# Still not the DISPLAY table: it puts first_name 5th, where both the 6-field table
+# and ablation put it near the top. `PERSON_FIELD_IMPORTANCE` remains the prose.
+PERSON_SIGNAL_IMPORTANCE: dict[str, float] = {
+    "surname__edit_norm": -0.226, "birth_place__edit_norm": -0.19,
+    "postcode_fake__edit_norm": -0.147, "birth_place__exact": 0.135,
+    "first_name__edit_norm": -0.106, "dob__exact": 0.099,
+    "surname__exact": 0.063, "dob__edit_norm": -0.058,
+    "surname__missing": 0.053, "postcode_fake__exact": 0.041,
+    "occupation__exact": 0.029, "birth_place__conflict": -0.028,
+    "first_name__exact": 0.016, "occupation__edit_norm": -0.013,
+}
+
 # How much of the model's ACTUAL verdict probability the per-field story explains:
 # held-out R^2 of these frozen weights against P(match), cluster-disjoint split,
 # hard negatives, 5-seed mean (`modal_interp.py::faithfulness_eval`).
@@ -111,9 +130,9 @@ PERSON_SIGNAL_IMPORTANCE: dict[str, float] = {
 # verdict. This is the honest one for the look-alike regime the explainer runs in.
 PERSON_IMPORTANCE_FAITHFULNESS_R2 = 0.27
 
-# The same measurement for the 36-signal basis above: frozen weights, 5-seed mean,
+# The same measurement for the sparse signal basis: frozen weights, 5-seed mean,
 # cluster-disjoint, hard negatives. Reported when `high_faithfulness=True`.
-PERSON_SIGNAL_FAITHFULNESS_R2 = 0.53
+PERSON_SIGNAL_FAITHFULNESS_R2 = 0.64
 
 # neutral weight for a field with no learned importance (unknown schema)
 DEFAULT_FIELD_IMPORTANCE = 0.10

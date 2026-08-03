@@ -52,7 +52,7 @@ standing discipline: **when a number looks too good, hunt the confound first.**
   `PERSON_FIELD_IMPORTANCE` (scoring: does agreement track the verdict?) and
   `PERSON_FIELD_CAUSAL_RANKING` (necessity: does the model need the field?), which
   disagree on purpose. Faithfulness now the measured **0.27** (was 0.51, the projection
-  number), or **0.53** in the opt-in `high_faithfulness=True` mode. 39 unit tests.
+  number), or **0.64** in the opt-in `high_faithfulness=True` mode. 42 unit tests.
   Additive; `score_pair` unchanged.
 - **Live demo (artifact).** Real records + the actual model's verdicts, each explained
   by learned field importance. Built from `scratchpad/xai_demo.py`.
@@ -426,14 +426,41 @@ reverse of the ablation ranking, and `occupation` is the field ablation says the
 needs *least*. That is collinearity across 36 correlated signals: individual
 coefficients stop being readable long before the fit stops being accurate.
 
-So `explain_pair(..., high_faithfulness=True)` reports the 0.53 number and attaches
-`signal_contributions` for an audit trail, while **the per-field prose is byte-identical
-to the default mode** (a test pins that). Believe the mode's number, not its per-signal
-story. `PERSON_FIELD_IMPORTANCE` remains the display weights.
+### Sparsity fixed both problems at once
 
-This is the honest resolution of the legibility/faithfulness frontier this thread has
-been circling: **0.27 legible, 0.53 accurate, and they cannot currently be the same
-table.** Person schema only — the product schema has no derived weights.
+The obvious follow-up — is collinearity the cause rather than information content? — was
+run, and the answer is yes. An **L1 fit (alpha=0.05) keeps 14 of 36 signals**, costs
+almost nothing in direction-R² (0.867 vs 0.888), and:
+
+| basis | frozen output R² (5 seeds) | rollup vs ablation |
+|---|---|---|
+| `fixed` — 6 field weights | 0.27 ± 0.07 | readable |
+| `fixed_richer` — 36 dense | 0.53 ± 0.09 | **inverted** (ρ = −0.77) |
+| **`fixed_sparse` — 14 L1** | **0.64 ± 0.09** | **agrees at both ends** (ρ = +0.43) |
+| `richer` — refit ceiling | 0.67 | n/a |
+
+**Sparse beats dense on every seed and essentially reaches the refit ceiling using only
+frozen weights.** L1 regularization improved generalization *and* legibility at the same
+time: the dense fit was spreading weight over collinear signals that fit the direction
+in-sample but did not transfer to P(match). Its rollup now ranks `birth_place` first and
+`occupation` last — matching ablation at both ends — and the surviving signals read
+coherently on their own (`edit_norm` negative, `exact` positive).
+
+So the two modes did NOT have to stay split on a trade-off; the dense fit was simply
+the wrong fit. `PERSON_SIGNAL_IMPORTANCE` is now the sparse table,
+`PERSON_SIGNAL_FAITHFULNESS_R2` is **0.64**, and the dense set is retained only as
+`PERSON_SIGNAL_IMPORTANCE_DENSE` — the measured comparison that justifies the choice
+(`fixed_richer` row), pinned by a test so the reason survives.
+
+**What remains a genuine trade:** the sparse table still puts `first_name` 5th, where
+both the 6-field table and ablation put it near the top, so it is still not the *display*
+table. `explain_pair(..., high_faithfulness=True)` reports 0.64 and attaches
+`signal_contributions` for an audit trail while the per-field prose stays byte-identical
+to the default mode (a test pins that). **0.27 legible / 0.64 accurate** — a much
+narrower gap than the 0.27-vs-0.53 it replaces, and worth one more attempt (grouped or
+sign-constrained fit) before calling it permanent.
+
+Person schema only — the product schema has no derived weights.
 
 ## Next steps (highest leverage first)
 
@@ -449,10 +476,11 @@ table.** Person schema only — the product schema has no derived weights.
    regression. walmart has no derived table at all, so its `fixed`/`fixed_richer` rows do
    not exist and the product-domain explanation still rests on the unweighted basis.
    Running `layer2_abstraction` against a product-domain probe set is the missing piece.
-3. **Fix the legibility side, not just the number.** 0.27 legible vs 0.53 accurate is a
-   real frontier, but collinearity is the cause, not information content — a sparse or
-   grouped fit (per-field signal groups, or L1) might recover most of the 0.53 with a
-   ranking a human can read. Worth one experiment before accepting two permanent modes.
+3. **Close the last of the legibility gap.** L1 already took the high-faithfulness
+   basis to 0.64 AND fixed its ranking at both ends (above). What still blocks a single
+   table is `first_name` sitting 5th in the sparse rollup. A sign-constrained or
+   per-field-grouped fit is the next thing to try; if it lands, the two modes merge and
+   the explainer publishes one number around 0.6 instead of 0.27.
 4. **Perf for real volume.** Prefix-cache the system rubric (biggest CPU win) + wire the
    logit readout into the scorer for clean P(match); benchmark on GPU.
 5. **Benchmark head-to-head, honestly.** Against the ER landscape on *held-out* data

@@ -947,6 +947,7 @@ def layer2_abstraction(layer: int = 14, per_class: int = 400, seed: int = 0,
     from field_attribution import (
         attribute_direction,
         field_agreements,
+        field_rollup,
         label_sae_features,
         richer_field_features,
     )
@@ -995,6 +996,20 @@ def layer2_abstraction(layer: int = 14, per_class: int = 400, seed: int = 0,
           f"({len(sig_names)} signals)", flush=True)
     for e in rich["ranking"][:10]:
         print(f"[layer2]   {e['field']:<26} coef={e['coef']:+.3f}", flush=True)
+    print(f"[layer2] dense rollup: "
+          f"{[f for f, _ in field_rollup(rich['coefficients'])]}", flush=True)
+
+    # Does SPARSITY buy back readability? The dense 36-signal fit scores well but
+    # ranks fields backwards (collinearity spreads weight over redundant signals).
+    # L1 should drop the redundant ones; the test is whether the per-field rollup
+    # starts agreeing with what ablation says the model needs.
+    sparse_fits = {}
+    for alpha in (0.005, 0.01, 0.02, 0.05, 0.1):
+        sp = attribute_direction(projections, X, sig_names, l1_alpha=alpha)
+        roll = [f for f, _ in field_rollup(sp["coefficients"])]
+        sparse_fits[str(alpha)] = {**sp, "rollup": roll}
+        print(f"[layer2] L1 a={alpha:<6} R^2={sp['r2']:.3f} "
+              f"nnz={sp['n_nonzero']:>2}/{len(sig_names)} rollup={roll}", flush=True)
 
     # label the top SAE features by the field their activation tracks
     sae_labels = []
@@ -1024,6 +1039,7 @@ def layer2_abstraction(layer: int = 14, per_class: int = 400, seed: int = 0,
         "layer": layer, "n_pairs": len(pairs), "fields": FIELDS,
         "direction_field_decomposition": decomp,
         "direction_richer_decomposition": rich,
+        "direction_richer_sparse": sparse_fits,
         "richer_signal_names": sig_names,
         "sae_feature_labels": sae_labels,
     }
@@ -1158,6 +1174,7 @@ def _faithfulness_core(tok, model, dev, true_id, false_id, tr, te, rows, fields,
         FIELD_SIGNAL_NAMES,
         PERSON_FIELD_IMPORTANCE,
         PERSON_SIGNAL_IMPORTANCE,
+        PERSON_SIGNAL_IMPORTANCE_DENSE,
         field_agreement,
         field_signal_vector,
     )
@@ -1211,15 +1228,29 @@ def _faithfulness_core(tok, model, dev, true_id, false_id, tr, te, rows, fields,
         # weights and see whether the finer grain survives as OUTPUT faithfulness.
         # Raw dot product, exactly like `fixed`, so the two are comparable.
         fixed_rich = affine_r2(
+            fixed_weight_score(X_tr, feat_names, PERSON_SIGNAL_IMPORTANCE_DENSE), p_tr,
+            fixed_weight_score(X_te, feat_names, PERSON_SIGNAL_IMPORTANCE_DENSE), p_te,
+            link=link,
+        )
+        results["fixed_richer"] = {
+            **fixed_rich, "n_features": len(PERSON_SIGNAL_IMPORTANCE_DENSE), "weights_refit": False,
+        }
+        print(f"[faith] fixed_richer (36 frozen signal weights) "
+              f"R^2_test={fixed_rich['r2_test']:.3f}", flush=True)
+
+        # The readable variant: L1-sparse (14/36) weights, frozen. If this holds
+        # most of fixed_richer's gain, the two explainer modes collapse into one.
+        fixed_sparse = affine_r2(
             fixed_weight_score(X_tr, feat_names, PERSON_SIGNAL_IMPORTANCE), p_tr,
             fixed_weight_score(X_te, feat_names, PERSON_SIGNAL_IMPORTANCE), p_te,
             link=link,
         )
-        results["fixed_richer"] = {
-            **fixed_rich, "n_features": len(feat_names), "weights_refit": False,
+        results["fixed_sparse"] = {
+            **fixed_sparse, "n_features": len(PERSON_SIGNAL_IMPORTANCE),
+            "weights_refit": False,
         }
-        print(f"[faith] fixed_richer (36 frozen signal weights) "
-              f"R^2_test={fixed_rich['r2_test']:.3f}", flush=True)
+        print(f"[faith] fixed_sparse (14 frozen L1 weights) "
+              f"R^2_test={fixed_sparse['r2_test']:.3f}", flush=True)
 
     from sklearn.ensemble import GradientBoostingRegressor
     from sklearn.linear_model import LinearRegression

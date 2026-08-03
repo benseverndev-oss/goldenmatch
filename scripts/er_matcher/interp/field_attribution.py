@@ -69,7 +69,11 @@ def field_agreements(
 
 
 def attribute_direction(
-    projections: np.ndarray, field_feats: np.ndarray, field_names: list[str]
+    projections: np.ndarray,
+    field_feats: np.ndarray,
+    field_names: list[str],
+    *,
+    l1_alpha: float | None = None,
 ) -> dict[str, Any]:
     """Regress the direction-PROJECTION onto standardized field-agreement signals.
 
@@ -77,19 +81,28 @@ def attribute_direction(
     match primitive), their ranking, and R^2 (how much of the projection the human
     field story explains -- the faithfulness of the abstraction). Standardizing
     both sides makes coefficients comparable across fields with different spreads.
+
+    ``l1_alpha`` switches the fit to Lasso. On a wide, correlated basis an
+    ordinary least-squares fit spreads weight across redundant signals and the
+    per-coefficient story stops being readable long before the fit stops being
+    accurate; L1 drops the redundant ones. Also reports ``n_nonzero`` so the
+    sparsity is visible alongside the R^2 it costs.
     """
     if field_feats.shape[0] != projections.shape[0]:
         raise ValueError("projections and field_feats must have the same #rows")
     if field_feats.shape[1] != len(field_names):
         raise ValueError("field_feats columns must match field_names")
-    from sklearn.linear_model import LinearRegression
+    from sklearn.linear_model import Lasso, LinearRegression
 
     xs = field_feats.std(0)
     Xz = (field_feats - field_feats.mean(0)) / np.where(xs < 1e-9, 1.0, xs)
     ys = projections.std()
     yz = (projections - projections.mean()) / (ys if ys > 1e-9 else 1.0)
 
-    reg = LinearRegression().fit(Xz, yz)
+    if l1_alpha is not None:
+        reg = Lasso(alpha=float(l1_alpha), max_iter=20000).fit(Xz, yz)
+    else:
+        reg = LinearRegression().fit(Xz, yz)
     r2 = float(reg.score(Xz, yz))
     coefs = {field_names[j]: float(reg.coef_[j]) for j in range(len(field_names))}
     ranking = sorted(coefs.items(), key=lambda kv: -abs(kv[1]))
@@ -98,7 +111,22 @@ def attribute_direction(
         "coefficients": coefs,
         "ranking": [{"field": f, "coef": c} for f, c in ranking],
         "top_field": ranking[0][0] if ranking else None,
+        "l1_alpha": l1_alpha,
+        "n_nonzero": int(sum(1 for c in coefs.values() if abs(c) > 1e-9)),
     }
+
+
+def field_rollup(coefficients: dict[str, float]) -> list[tuple[str, float]]:
+    """Sum |coef| per field over ``field__signal`` keys -> ranked (field, mass).
+
+    The readability test for a wide basis: if this ordering disagrees with what
+    ablation says the model needs, the coefficients are not a usable human story
+    however well they fit.
+    """
+    roll: dict[str, float] = {}
+    for k, v in coefficients.items():
+        roll[k.split("__")[0]] = roll.get(k.split("__")[0], 0.0) + abs(float(v))
+    return sorted(roll.items(), key=lambda kv: -kv[1])
 
 
 def record_disjoint_split(

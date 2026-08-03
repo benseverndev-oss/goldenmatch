@@ -10,6 +10,7 @@ from goldenmatch.core.er_matcher.explainer import (
     PERSON_IMPORTANCE_FAITHFULNESS_R2,
     PERSON_SIGNAL_FAITHFULNESS_R2,
     PERSON_SIGNAL_IMPORTANCE,
+    PERSON_SIGNAL_IMPORTANCE_DENSE,
     PairExplanation,
     explain_pair,
     field_agreement,
@@ -191,17 +192,39 @@ class TestHighFaithfulnessMode:
             c["contribution"] == pytest.approx(c["weight"] * c["value"]) for c in cs
         )
 
-    def test_rollup_must_not_be_used_for_display(self):
-        # Documents WHY the mode never touches the prose: summed per field these
-        # weights rank occupation first and first_name last, inverting the ablation
-        # ranking. If this ever stops holding, revisit the two-mode split.
+    @staticmethod
+    def _rollup(w: dict[str, float]) -> list[str]:
         roll: dict[str, float] = {}
-        for k, v in PERSON_SIGNAL_IMPORTANCE.items():
+        for k, v in w.items():
             roll[k.split("__")[0]] = roll.get(k.split("__")[0], 0.0) + abs(v)
-        order = sorted(roll, key=lambda f: -roll[f])
+        return sorted(roll, key=lambda f: -roll[f])
+
+    def test_sparse_basis_agrees_with_ablation_at_both_ends(self):
+        # Why the SPARSE table is the shipped one: its rollup puts birth_place
+        # first and occupation last, matching the causal ranking at both ends.
+        order = self._rollup(PERSON_SIGNAL_IMPORTANCE)
+        assert order[0] == PERSON_FIELD_CAUSAL_RANKING[0] == "birth_place"
+        assert order[-1] == PERSON_FIELD_CAUSAL_RANKING[-1] == "occupation"
+
+    def test_dense_basis_inverts_ablation_and_is_not_shipped(self):
+        # The rejected comparison, pinned so the reason survives: dense OLS ranks
+        # occupation FIRST and first_name LAST -- and scores worse held-out.
+        order = self._rollup(PERSON_SIGNAL_IMPORTANCE_DENSE)
         assert order[0] == "occupation"
         assert order[-1] == "first_name"
         assert order[0] == PERSON_FIELD_CAUSAL_RANKING[-1]
+
+    def test_sparse_is_sparse_and_a_strict_subset(self):
+        assert len(PERSON_SIGNAL_IMPORTANCE) < len(PERSON_SIGNAL_IMPORTANCE_DENSE)
+        assert set(PERSON_SIGNAL_IMPORTANCE) <= set(PERSON_SIGNAL_IMPORTANCE_DENSE)
+
+    def test_edit_norm_negative_exact_positive(self):
+        # the coherent story the sparse fit tells on its own
+        for k, v in PERSON_SIGNAL_IMPORTANCE.items():
+            if k.endswith("__edit_norm"):
+                assert v < 0, k
+            if k.endswith("__exact"):
+                assert v > 0, k
 
     def test_no_op_on_unknown_schema(self):
         exp = explain_pair(
