@@ -1381,6 +1381,11 @@ def _resolve_identities(
             weak_confidence_threshold=config.identity.weak_confidence_threshold,
             relationships=config.identity.relationships,
             deterministic_merge_keys=config.identity.deterministic_merge_keys,
+            # Config lineage (#config-fingerprint): stamp this run's config into
+            # identity_runs so an entity resolves back to the config that made it.
+            config_id=config.config_fingerprint(),
+            config_schema_version=config.schema_version,
+            config_json=config.model_dump_json(),
             pair_score_view=pair_score_view,
             cluster_frames=cluster_frames,
         )

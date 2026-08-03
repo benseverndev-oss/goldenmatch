@@ -131,6 +131,7 @@ Every config object in the pydantic tree(s), generated from the package schema. 
 
 | Field | Type | Default | Choices / notes |
 |---|---|---|---|
+| `schema_version` | int | `1` | Config schema version; set by GoldenMatch (not user-tuned). Recorded with a run's config fingerprint for lineage/migration. Excluded from the fingerprint so a semantics-preserving schema bump keeps the same config id. |
 | `input` | InputConfig \| None | `None` | [`InputConfig`](#inputconfig) -- Input files to load; omit when passing a DataFrame directly to the API. |
 | `output` | OutputConfig | _(default OutputConfig)_ | [`OutputConfig`](#outputconfig) -- Where and how results are written. |
 | `match_settings` | MatchSettingsConfig \| None | `None` | [`MatchSettingsConfig`](#matchsettingsconfig) -- Nested matchkeys container; an alternative to the top-level matchkeys field. |

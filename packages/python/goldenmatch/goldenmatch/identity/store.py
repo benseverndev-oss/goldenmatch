@@ -233,6 +233,21 @@ CREATE TABLE IF NOT EXISTS identity_relationships (
 CREATE INDEX IF NOT EXISTS idx_rel_a    ON identity_relationships(entity_a_id);
 CREATE INDEX IF NOT EXISTS idx_rel_b    ON identity_relationships(entity_b_id);
 CREATE INDEX IF NOT EXISTS idx_rel_kind ON identity_relationships(kind);
+
+-- Config lineage (#config-fingerprint): one row per named resolve run,
+-- recording the fingerprint of the GoldenMatchConfig that produced it. Events
+-- carry run_name, so entity -> its events' run_name -> identity_runs.config_id
+-- answers "which config produced this entity" across incremental runs, and two
+-- runs' config_id / config_json can be diffed. Written once per apply_batch.
+CREATE TABLE IF NOT EXISTS identity_runs (
+    run_name       TEXT PRIMARY KEY,
+    config_id      TEXT,
+    schema_version INTEGER,
+    config_json    TEXT,
+    dataset        TEXT,
+    created_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_runs_config ON identity_runs(config_id);
 """
 
 
@@ -678,6 +693,18 @@ class IdentityStore:
         CREATE INDEX IF NOT EXISTS idx_rel_a    ON identity_relationships(entity_a_id);
         CREATE INDEX IF NOT EXISTS idx_rel_b    ON identity_relationships(entity_b_id);
         CREATE INDEX IF NOT EXISTS idx_rel_kind ON identity_relationships(kind);
+
+        -- Config lineage (#config-fingerprint): one row per named resolve run
+        -- (see _SCHEMA). entity -> events.run_name -> identity_runs.config_id.
+        CREATE TABLE IF NOT EXISTS identity_runs (
+            run_name       TEXT PRIMARY KEY,
+            config_id      TEXT,
+            schema_version INTEGER,
+            config_json    TEXT,
+            dataset        TEXT,
+            created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS idx_runs_config ON identity_runs(config_id);
         """
         with self._conn.cursor() as cur:
             cur.execute(ddl)
@@ -2246,6 +2273,48 @@ class IdentityStore:
             (event.entity_id,),
         )
         return int(row["event_id"]) if row and row["event_id"] is not None else None
+
+    def record_run(
+        self,
+        run_name: str,
+        *,
+        config_id: str | None = None,
+        schema_version: int | None = None,
+        config_json: str | None = None,
+        dataset: str | None = None,
+    ) -> None:
+        """Record config lineage for a resolve run (idempotent by run_name).
+
+        Stamps the fingerprint of the config that produced ``run_name``. Events
+        carry run_name, so entity -> events.run_name -> this row's ``config_id``
+        answers "which config produced this entity". First writer wins on a
+        repeated run_name; calling with no ``config_id`` records the run bare.
+        No-op on the mongo backend.
+        """
+        if not run_name or self._backend == "mongo":
+            return
+        self._exec(
+            "INSERT INTO identity_runs "
+            "(run_name, config_id, schema_version, config_json, dataset) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT (run_name) DO NOTHING",
+            (run_name, config_id, schema_version, config_json, dataset),
+        )
+
+    def run_config(self, run_name: str) -> dict[str, Any] | None:
+        """The recorded config lineage for ``run_name`` (or None).
+
+        Keys: ``run_name``, ``config_id``, ``schema_version``, ``config_json``,
+        ``dataset``, ``created_at``.
+        """
+        if self._backend == "mongo":
+            return None
+        row = self._fetchone(
+            "SELECT run_name, config_id, schema_version, config_json, dataset, "
+            "created_at FROM identity_runs WHERE run_name = ?",
+            (run_name,),
+        )
+        return dict(row) if row else None
 
     def history(
         self, entity_id: str, limit: int | None = None

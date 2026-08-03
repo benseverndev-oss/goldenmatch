@@ -20,6 +20,13 @@
           "name": "GoldenMatchConfig",
           "fields": [
             {
+              "name": "schema_version",
+              "type": "int",
+              "required": false,
+              "default": "1",
+              "description": "Config schema version; set by GoldenMatch (not user-tuned). Recorded with a run's config fingerprint for lineage/migration. Excluded from the fingerprint so a semantics-preserving schema bump keeps the same config id."
+            },
+            {
               "name": "input",
               "type": "InputConfig | None",
               "required": false,

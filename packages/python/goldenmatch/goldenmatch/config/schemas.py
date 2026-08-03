@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -2110,7 +2112,18 @@ class SemanticBlockingConfig(BaseModel):
     )
 
 
+#: Current GoldenMatchConfig schema version. Bumped when the config surface
+#: changes in a way that needs migration. Recorded alongside a run's config
+#: fingerprint so lineage survives schema evolution; deliberately EXCLUDED from
+#: config_fingerprint() so a no-op schema bump doesn't change a config's id.
+CONFIG_SCHEMA_VERSION = 1
+
+
 class GoldenMatchConfig(BaseModel):
+    schema_version: int = Field(
+        default=CONFIG_SCHEMA_VERSION,
+        description="Config schema version; set by GoldenMatch (not user-tuned). Recorded with a run's config fingerprint for lineage/migration. Excluded from the fingerprint so a semantics-preserving schema bump keeps the same config id.",
+    )
     input: InputConfig | None = Field(
         default=None,
         description="Input files to load; omit when passing a DataFrame directly to the API.",
@@ -2301,6 +2314,32 @@ class GoldenMatchConfig(BaseModel):
         if self.match_settings:
             return self.match_settings.matchkeys
         return []
+
+    def config_fingerprint(self) -> str:
+        """Deterministic content hash of this config's matching semantics.
+
+        sha256 over the canonical JSON dump (sorted keys), so two configs that
+        would resolve identically get the same id and a diff is a byte diff.
+        Excludes the per-run ``output.run_name`` and the ``schema_version``
+        (a semantics-preserving schema bump must not change the id). Stamp the
+        return value on a resolve run to answer "which config produced this
+        entity" and to diff configs across runs. Returns ``"sha256:<64 hex>"``.
+        """
+        data = self.model_dump(mode="json", exclude_none=False)
+        data.pop("schema_version", None)
+        out = data.get("output")
+        if isinstance(out, dict):
+            out.pop("run_name", None)
+        canon = json.dumps(data, sort_keys=True, separators=(",", ":"), default=str)
+        return "sha256:" + hashlib.sha256(canon.encode("utf-8")).hexdigest()
+
+    @property
+    def config_id(self) -> str:
+        """Short form of :meth:`config_fingerprint` for display/labels.
+
+        ``"sha256:"`` plus the first 8 hex chars, e.g. ``"sha256:9f3c8a1b"``.
+        """
+        return self.config_fingerprint()[: len("sha256:") + 8]
 
 
 # RulesPayload's `blocking` field forward-references BlockingConfig (defined
