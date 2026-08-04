@@ -1651,6 +1651,244 @@ def direct_attribution(layer: int = 14, per_class: int = 200, seed: int = 0,
     print(f"[done] direct attribution -> {out_path}")
 
 
+# --------------------------------------------------------------------------- #
+# stage 10: circuit validation -- faithfulness + completeness by mean-ablation  #
+# --------------------------------------------------------------------------- #
+@app.function(image=_image, gpu=GPU, timeout=60 * 60, volumes={"/out": _out_vol})
+def circuit_validation(layer: int = 14, top_k: int = 21, per_class: int = 200,
+                       seed: int = 0, negatives: str = "hard") -> None:
+    """Turn the variance-share RANKING into a validated circuit -- or refute it.
+
+    Variance share says a component correlates with the decision along the direct
+    path. It does NOT say the model needs it. The standard test is a pair of
+    interventions:
+
+      - FAITHFULNESS: ablate the circuit. Behaviour should collapse.
+      - COMPLETENESS: ablate everything else. Behaviour should survive.
+
+    Ablation is MEAN, not zero, and that choice is forced by our own data: 98 of
+    183 components are near-constant offsets, so zeroing them would destroy the
+    model's operating point and confound the result with a scale change. Replacing
+    a component's decision-position output with its dataset mean removes exactly
+    the VARYING part -- which is what variance share measures -- and leaves the
+    constant contribution intact.
+
+    Four arms, because "ablating 21 things breaks the model" proves nothing on its
+    own: baseline, circuit, complement, and a RANDOM-k control matched on count.
+
+    Note this is a real intervention, so unlike direct attribution it does capture
+    effects downstream of the ablated component. It intervenes only at the decision
+    position, so attention from later layers to earlier positions is untouched.
+    -> interp/circuit_validation_L{layer}_k{top_k}.json
+    """
+    import json
+    import os
+    import random
+    import sys
+
+    import numpy as np
+    import torch
+
+    sys.path.insert(0, "/root/interp")
+    from field_attribution import variance_decomposition
+
+    tok, model = _load_model()
+    dev = model.device
+    true_id, false_id = _true_false_ids(tok)
+    pairs, rows = _mine(per_class, negatives, seed)
+    y = np.array([t for *_, t in pairs])
+    prompts = [_prompt(tok, rows[a], rows[b]) + '{"match":' for a, b, _ in pairs]
+
+    cfg = model.config
+    n_heads = cfg.num_attention_heads
+    head_dim = getattr(cfg, "head_dim", cfg.hidden_size // n_heads)
+
+    # ---- pass 1: direction, contributions, and per-component MEAN vectors ---- #
+    store: dict[str, torch.Tensor] = {}
+    hooks = []
+
+    def mk_mlp_cap(L):
+        def hook(_m, _i, out):
+            store[f"L{L}.mlp"] = (out[0] if isinstance(out, tuple) else out)[:, -1, :]
+        return hook
+
+    def mk_oproj_cap(L):
+        def hook(_m, inp, _o):
+            store[f"L{L}.oin"] = inp[0][:, -1, :]
+        return hook
+
+    for L in range(layer):
+        blk = model.model.layers[L]
+        hooks.append(blk.mlp.register_forward_hook(mk_mlp_cap(L)))
+        hooks.append(blk.self_attn.o_proj.register_forward_hook(mk_oproj_cap(L)))
+
+    names = ["embed"]
+    for L in range(layer):
+        names += [f"L{L}.attn.h{h}" for h in range(n_heads)] + [f"L{L}.mlp"]
+    col = {n: j for j, n in enumerate(names)}
+    contribs = np.zeros((len(prompts), len(names)))
+    resid = np.zeros((len(prompts), cfg.hidden_size))
+    sums: dict[str, torch.Tensor] = {}
+
+    for i in range(0, len(prompts), 16):
+        enc = tok(prompts[i : i + 16], return_tensors="pt", padding=True).to(dev)
+        store.clear()
+        with torch.no_grad():
+            hs = model(**enc, output_hidden_states=True).hidden_states
+        n = hs[0].shape[0]
+        resid[i : i + n] = hs[layer][:, -1, :].float().cpu().numpy()
+        store["embed"] = hs[0][:, -1, :]
+        for k, v in store.items():
+            sums[k] = v.float().sum(0) + (sums[k] if k in sums else 0.0)
+    for hk in hooks:
+        hk.remove()
+    means = {k: (v / len(prompts)) for k, v in sums.items()}
+
+    d = resid[y == 1].mean(0) - resid[y == 0].mean(0)
+    d = d / (np.linalg.norm(d) + 1e-9)
+    d_t = torch.tensor(d, dtype=torch.float32, device=dev)
+
+    # re-capture to project (cheap second pass keeps the code simple)
+    hooks = []
+    for L in range(layer):
+        blk = model.model.layers[L]
+        hooks.append(blk.mlp.register_forward_hook(mk_mlp_cap(L)))
+        hooks.append(blk.self_attn.o_proj.register_forward_hook(mk_oproj_cap(L)))
+    for i in range(0, len(prompts), 16):
+        enc = tok(prompts[i : i + 16], return_tensors="pt", padding=True).to(dev)
+        store.clear()
+        with torch.no_grad():
+            hs = model(**enc, output_hidden_states=True).hidden_states
+        n = hs[0].shape[0]
+        contribs[i : i + n, col["embed"]] = (
+            hs[0][:, -1, :].float() @ d_t).cpu().numpy()
+        for L in range(layer):
+            contribs[i : i + n, col[f"L{L}.mlp"]] = (
+                store[f"L{L}.mlp"].float() @ d_t).cpu().numpy()
+            x = store[f"L{L}.oin"].float()
+            W = model.model.layers[L].self_attn.o_proj.weight.detach().float()
+            for h in range(n_heads):
+                sl = slice(h * head_dim, (h + 1) * head_dim)
+                contribs[i : i + n, col[f"L{L}.attn.h{h}"]] = (
+                    (x[:, sl] @ W[:, sl].T) @ d_t).cpu().numpy()
+    for hk in hooks:
+        hk.remove()
+
+    vd = variance_decomposition(contribs, names, resid @ d, labels=y)
+    circuit = [e["component"] for e in vd["ranking"][:top_k]]
+    others = [n for n in names if n not in set(circuit) and n != "embed"]
+    rng = random.Random(seed)
+    control = rng.sample(others, min(top_k, len(others)))
+    print(f"[circ] circuit({top_k}) = {circuit}", flush=True)
+    print(f"[circ] random control  = {control}", flush=True)
+
+    # ---- arms ---- #
+    def run(ablate: list[str]) -> np.ndarray:
+        abl = set(ablate)
+        mlp_L = {int(n.split(".")[0][1:]) for n in abl if n.endswith(".mlp")}
+        head_L: dict[int, list[int]] = {}
+        for n in abl:
+            if ".attn.h" in n:
+                L = int(n.split(".")[0][1:])
+                head_L.setdefault(L, []).append(int(n.split(".h")[1]))
+        hk = []
+
+        def mk_mlp_sub(L):
+            def hook(_m, _i, out):
+                o = out[0] if isinstance(out, tuple) else out
+                o[:, -1, :] = means[f"L{L}.mlp"].to(o.dtype)
+                return (o, *out[1:]) if isinstance(out, tuple) else o
+            return hook
+
+        def mk_oproj_pre(L, heads):
+            def pre(_m, inp):
+                x = inp[0].clone()
+                m = means[f"L{L}.oin"].to(x.dtype)
+                for h in heads:
+                    sl = slice(h * head_dim, (h + 1) * head_dim)
+                    x[:, -1, sl] = m[sl]
+                return (x,)
+            return pre
+
+        for L in mlp_L:
+            hk.append(model.model.layers[L].mlp.register_forward_hook(mk_mlp_sub(L)))
+        for L, hs_ in head_L.items():
+            hk.append(model.model.layers[L].self_attn.o_proj
+                      .register_forward_pre_hook(mk_oproj_pre(L, hs_)))
+        ps, projs = [], []
+        for i in range(0, len(prompts), 16):
+            enc = tok(prompts[i : i + 16], return_tensors="pt", padding=True).to(dev)
+            with torch.no_grad():
+                o = model(**enc, output_hidden_states=True)
+            lg = o.logits[:, -1, :]
+            pr = torch.softmax(torch.stack([lg[:, true_id], lg[:, false_id]], 1), 1)
+            ps.append(pr[:, 0].float().cpu().numpy())
+            projs.append((o.hidden_states[layer][:, -1, :].float() @ d_t).cpu().numpy())
+        for h in hk:
+            h.remove()
+        return np.concatenate(ps), np.concatenate(projs)
+
+    base, base_proj = run([])
+    # ablate_all is a SANITY arm: if replacing every component's varying part
+    # leaves the layer-`layer` projection unchanged, the hooks are not firing and
+    # every other arm is meaningless.
+    all_comps = [n for n in names if n != "embed"]
+    arms = {
+        "baseline": (base, base_proj),
+        "ablate_circuit": run(circuit),
+        "ablate_complement": run(others),
+        "ablate_random_k": run(control),
+        "ablate_all_SANITY": run(all_comps),
+    }
+
+    results = {}
+    for name, (p, pj) in arms.items():
+        results[name] = {
+            "mean_p": float(p.mean()), "std_p": float(p.std()),
+            "accuracy": float(((p >= 0.5) == (y == 1)).mean()),
+            "verdict_agreement_with_baseline": float(((p >= 0.5) == (base >= 0.5)).mean()),
+            "corr_with_baseline": (
+                float(np.corrcoef(p, base)[0, 1]) if p.std() > 1e-9 else 0.0
+            ),
+            "std_retained": float(p.std() / base.std()) if base.std() > 1e-9 else 0.0,
+            "proj_std": float(pj.std()),
+            "proj_std_retained": (
+                float(pj.std() / base_proj.std()) if base_proj.std() > 1e-9 else 0.0
+            ),
+            "proj_corr_with_baseline": (
+                float(np.corrcoef(pj, base_proj)[0, 1]) if pj.std() > 1e-9 else 0.0
+            ),
+        }
+        e = results[name]
+        print(f"[circ] {name:<18} acc={e['accuracy']:.3f} "
+              f"p_std={e['std_retained']:.3f}x agree={e['verdict_agreement_with_baseline']:.3f} "
+              f"| PROJ std={e['proj_std_retained']:.3f}x "
+              f"corr={e['proj_corr_with_baseline']:+.3f}", flush=True)
+
+    payload = {
+        "layer": layer, "top_k": top_k, "n_pairs": len(pairs),
+        "ablation": "mean (not zero) -- 98/183 components are near-constant offsets",
+        "circuit": circuit, "random_control": control,
+        "variance_shares": {e["component"]: e["var_share"] for e in vd["ranking"][:top_k]},
+        "results": results,
+    }
+    os.makedirs("/out/interp", exist_ok=True)
+    out_path = f"/out/interp/circuit_validation_L{layer}_k{top_k}.json"
+    with open(out_path, "w") as fh:
+        json.dump(payload, fh, indent=2)
+    _out_vol.commit()
+    print(f"[done] circuit validation -> {out_path}")
+
+
+@app.local_entrypoint()
+def validate_circuit(layer: int = 14, top_k: int = 21, per_class: int = 200,
+                     seed: int = 0, negatives: str = "hard") -> None:
+    """Faithfulness + completeness test of the variance-share circuit."""
+    circuit_validation.remote(
+        layer=layer, top_k=top_k, per_class=per_class, seed=seed, negatives=negatives
+    )
+
+
 @app.local_entrypoint()
 def direct(layer: int = 14, per_class: int = 200, seed: int = 0,
            negatives: str = "hard") -> None:

@@ -760,6 +760,55 @@ another's attention pattern) are real causal paths that direct attribution assig
 downstream component. Path patching is required for those; a decomposition exact on
 direct paths and silent on indirect ones is complete-looking and wrong.
 
+### Circuit validation -- the ranking survives, the CAUSAL claim does not
+
+Variance share says a component correlates with the decision along the direct path. It
+does not say the model needs it. `circuit_validation` runs the standard pair of
+interventions by MEAN-ablation (not zero -- 98/183 components are near-constant offsets,
+so zeroing would destroy the operating point and confound a scale change with an effect),
+across four arms plus a sanity arm.
+
+| arm | layer-14 projection std retained | accuracy | verdict agreement |
+|---|---|---|---|
+| baseline | 1.000x | 0.885 | -- |
+| **ablate the 21** | **0.161x** | 0.887 | 0.998 |
+| ablate complement (162) | 0.565x | 0.885 | 1.000 |
+| ablate random 21 (control) | 0.968x | 0.890 | 0.995 |
+| **ablate all 183 (sanity)** | **0.000x** | **0.887** | **0.998** |
+
+**The ranking is validated.** The sanity arm drives projection variance to exactly zero,
+proving the intervention lands. Ablating the 21 removes **84%** of the layer-14 decision
+variance while ablating a random 21 removes **3%** -- a decisive separation. The 21
+components really are the ones carrying that projection.
+
+**The causal claim is refuted.** Ablating the 21 changes accuracy 0.885 -> 0.887 and
+leaves 99.8% of verdicts identical. So does ablating **everything** at layers 0-13. The
+layer-14 decision direction is *not necessary* for the model's output.
+
+**Why:** the intervention is at the DECISION POSITION only. The evidence lives at the
+field-token positions, and layers 14-27 simply re-read it by attention and rebuild the
+verdict. The model routes around the ablation entirely.
+
+**This qualifies the Layer-1 "lock" and it is the most important correction in the
+thread.** Steering the direction drives P(match) 0->1 (sufficiency: pushing hard along
+`d` changes the output). Mean-ablating it changes nothing (no necessity). Those are
+different claims, and "causally validated" has been carrying the stronger reading. The
+direction is a real, readable, exactly-decomposable *correlate of* the decision at layer
+14 -- not a bottleneck the computation must pass through.
+
+**What survives:** the exact decomposition (verified twice), the 21-component ranking
+(validated against a control), the layer 10-13 concentration, and suppression structure.
+All of that describes the layer-14 readout faithfully.
+
+**What does not:** any claim that explaining layer 14 explains the model's decision.
+
+**Next, and this is now the top of the list:** re-run ablation at ALL token positions,
+not just the decision position, and across layers 14-27 as well. If the behaviour still
+survives, the decision is genuinely distributed across positions and depth and no
+single-site circuit exists. If it collapses, the circuit is real but larger than the
+readout site -- and the honest unit of explanation is (position x layer x component),
+not component alone.
+
 ## Next steps (highest leverage first)
 
 1. **Find a call site for the ER-matcher explainer.** `score_and_explain` /
@@ -778,11 +827,11 @@ direct paths and silent on indirect ones is complete-looking and wrong.
    0.33 vs 0.26 for the legible table (above) — a real edge on every seed, but small
    enough that two modes may not be worth the surface area. A product call, not a
    measurement one; the measurement is done.
-4. **Path patching on the 21.** Direct attribution is silent on indirect effects, so the
-   21 are a lower bound on involvement rather than a validated circuit. The standard
-   test is faithfulness (ablate the 21 — behaviour should die) and completeness (patch
-   ONLY the 21 — behaviour should survive). Until that runs, "21 components" is a
-   ranking, not a circuit.
+4. **Ablate across POSITIONS, not just the decision token.** Validation showed the model
+   rebuilds the verdict from the field-token positions when the decision position is
+   ablated, so behaviour survives even total ablation at layers 0-13. Re-run the
+   intervention at all positions and across layers 14-27. This decides whether any
+   single-site circuit exists at all.
 5. **Name what `L13.mlp` computes.** It alone carries 25.6% of the decision variance at
    label-correlation 0.84. An SAE or transcoder on that one MLP is now the highest-value
    interpretability target in the model — one component rather than 183.
