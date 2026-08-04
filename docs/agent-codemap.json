@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 452,
+      "module_count": 453,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7271,6 +7271,7 @@
           "purpose": "Semantic-model discovery (the generative half of the semantic wedge).",
           "imports": [
             "goldenmatch.semantic.discovery.cardinality",
+            "goldenmatch.semantic.discovery.completeness",
             "goldenmatch.semantic.discovery.entities",
             "goldenmatch.semantic.discovery.hierarchies",
             "goldenmatch.semantic.discovery.joins",
@@ -7290,6 +7291,17 @@
           "defines": [
             "Bridge",
             "discover_bridges"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.discovery.completeness",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/discovery/completeness.py",
+          "purpose": "Model completeness / trust score (PR-16).",
+          "defines": [
+            "Gap",
+            "ModelCompleteness",
+            "_has_sum_safe_measure",
+            "score_model"
           ]
         },
         {
@@ -7422,6 +7434,7 @@
           "imports": [
             "goldenmatch.semantic",
             "goldenmatch.semantic.discovery.cardinality",
+            "goldenmatch.semantic.discovery.completeness",
             "goldenmatch.semantic.discovery.emit",
             "goldenmatch.semantic.discovery.entities",
             "goldenmatch.semantic.discovery.hierarchies",

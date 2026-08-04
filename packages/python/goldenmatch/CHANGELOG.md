@@ -80,6 +80,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   "frontier" slice (design:
   `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
   `tests/test_semantic_discovery_scd.py`.
+- **Semantic-model discovery — model completeness / trust score (Phase 16).** New
+  `goldenmatch/semantic/discovery/completeness.py`: `score_model(proposed_tables, joins)`
+  aggregates the existing discovery signals into a headline **grain-weighted** 0..1
+  `ModelCompleteness` score (grain coverage 0.5, connectivity 0.25, sum-safe-measure
+  coverage 0.25 — a certified grain is load-bearing, so it dominates) plus an explicit
+  `gaps` list (`Gap(table, kind, detail)` for `no_grain` / `no_measures` / `isolated`), so
+  "80% complete" always names the tables that are why it isn't 100%. On
+  `ProposedModel.completeness` + `to_dict`. Pure self-assessment; no new detection. New
+  exports `score_model` + `ModelCompleteness`. The sixth "frontier" slice (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discovery_completeness.py`.
 
 ## [3.11.0] - 2026-08-03
 
