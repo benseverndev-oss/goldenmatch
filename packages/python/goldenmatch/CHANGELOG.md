@@ -7,6 +7,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **Semantic-model discovery — warehouse-scale derivation off `information_schema`
+  (Phase 17).** New `goldenmatch.semantic.read_information_schema(columns,
+  table_constraints, key_column_usage, tables=None)` reads the three ANSI
+  `information_schema` relations (pyarrow tables or row dicts — no live DB connection, so
+  it stays testable and credential-free) into a `WarehouseManifest` of
+  `CandidateTable(name, columns, declared_pk, declared_fks, row_count)`. A warehouse has
+  hundreds of tables; `information_schema` tells you cheaply which ones exist and what
+  they declare, so you can point the certified pipeline at them without pulling every
+  table into memory. **Honest thesis marker:** Snowflake/BigQuery/Redshift do NOT enforce
+  PK/FK, so every declared PK/FK is left `certified=False` — a declaration is exactly the
+  kind of guess this arc PROVES against data, never a certificate. `plan_certification(
+  manifest)` ranks the tables worth pulling + certifying first (has-declared-PK, then
+  FK-referenced in-degree = spine/dimension tables, then smaller `row_count`, then name),
+  each `CertifyStep` naming why its declarations are unproven. `discover_from_manifest(
+  manifest, loader)` pulls each candidate's data (in plan order) and runs the normal
+  certified `discover_semantic_model` — the declared PK is used only to RANK; the grain,
+  joins, and measures are re-derived and proven from the loaded data, so a wrong
+  `information_schema` declaration can never leak into the model. Deterministic (no LLM),
+  **default-on**. The seventh "frontier" slice of the semantic-model discovery arc
+  (design: `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`, item
+  17). Tests: `tests/test_semantic_discovery_warehouse.py`.
 - **Semantic-model discovery — dimension hierarchies via FD (Phase 11).**
   `goldenmatch.semantic.discover_hierarchies(table, columns)` detects drill-down
   hierarchies (`country > state > city`) among a table's dimension columns by finding

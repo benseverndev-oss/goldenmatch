@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 453,
+      "module_count": 454,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7281,7 +7281,8 @@
             "goldenmatch.semantic.discovery.model",
             "goldenmatch.semantic.discovery.namer",
             "goldenmatch.semantic.discovery.scd",
-            "goldenmatch.semantic.discovery.time_intelligence"
+            "goldenmatch.semantic.discovery.time_intelligence",
+            "goldenmatch.semantic.discovery.warehouse"
           ]
         },
         {
@@ -7501,6 +7502,28 @@
             "_pick_time_column",
             "discover_time_dimension",
             "discover_time_metrics"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.discovery.warehouse",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/discovery/warehouse.py",
+          "purpose": "Warehouse-scale derivation off `information_schema` (PR-17).",
+          "defines": [
+            "CandidateColumn",
+            "CandidateFK",
+            "CandidateTable",
+            "CertifyStep",
+            "WarehouseManifest",
+            "_grouped",
+            "_ordered_cols",
+            "_rows",
+            "_truthy_no",
+            "discover_from_manifest",
+            "plan_certification",
+            "read_information_schema"
+          ],
+          "imports": [
+            "goldenmatch.semantic.discovery.model"
           ]
         },
         {

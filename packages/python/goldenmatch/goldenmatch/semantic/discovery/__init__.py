@@ -50,10 +50,25 @@ from goldenmatch.semantic.discovery.time_intelligence import (
     discover_time_dimension,
     discover_time_metrics,
 )
+from goldenmatch.semantic.discovery.warehouse import (
+    CandidateColumn,
+    CandidateFK,
+    CandidateTable,
+    CertifyStep,
+    WarehouseManifest,
+    discover_from_manifest,
+    plan_certification,
+    read_information_schema,
+)
 
 __all__ = [
     "Bridge",
+    "CandidateColumn",
+    "CandidateFK",
+    "CandidateTable",
+    "CertifyStep",
     "ModelCompleteness",
+    "WarehouseManifest",
     "Dimension",
     "EntityType",
     "Hierarchy",
@@ -81,6 +96,9 @@ __all__ = [
     "discover_time_dimension",
     "discover_time_metrics",
     "discover_semantic_model",
+    "discover_from_manifest",
+    "plan_certification",
+    "read_information_schema",
     "apply_names",
     "name_semantic_model",
 ]

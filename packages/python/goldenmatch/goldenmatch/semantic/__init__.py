@@ -47,6 +47,10 @@ from goldenmatch.semantic.cube import (
 )
 from goldenmatch.semantic.discovery import (
     Bridge,
+    CandidateColumn,
+    CandidateFK,
+    CandidateTable,
+    CertifyStep,
     Dimension,
     EntityType,
     Hierarchy,
@@ -62,9 +66,11 @@ from goldenmatch.semantic.discovery import (
     TableMeasures,
     TimeDimension,
     TimeMetric,
+    WarehouseManifest,
     apply_names,
     discover_bridges,
     discover_entity_types,
+    discover_from_manifest,
     discover_hierarchies,
     discover_joins,
     discover_keys,
@@ -75,6 +81,8 @@ from goldenmatch.semantic.discovery import (
     discover_time_dimension,
     discover_time_metrics,
     name_semantic_model,
+    plan_certification,
+    read_information_schema,
     score_model,
 )
 from goldenmatch.semantic.key_integrity import (
@@ -206,4 +214,13 @@ __all__ = [
     "NameSuggestion",
     "ProposedModel",
     "ProposedTable",
+    # semantic-model discovery (Phase 17) — warehouse-scale derivation off information_schema
+    "read_information_schema",
+    "plan_certification",
+    "discover_from_manifest",
+    "WarehouseManifest",
+    "CandidateTable",
+    "CandidateColumn",
+    "CandidateFK",
+    "CertifyStep",
 ]
