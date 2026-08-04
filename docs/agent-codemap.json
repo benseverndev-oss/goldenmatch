@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 454,
+      "module_count": 455,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7280,6 +7280,7 @@
             "goldenmatch.semantic.discovery.metrics",
             "goldenmatch.semantic.discovery.model",
             "goldenmatch.semantic.discovery.namer",
+            "goldenmatch.semantic.discovery.reconcile",
             "goldenmatch.semantic.discovery.scd",
             "goldenmatch.semantic.discovery.time_intelligence",
             "goldenmatch.semantic.discovery.warehouse"
@@ -7476,6 +7477,19 @@
           "imports": [
             "goldenmatch.core.llm_labeler",
             "goldenmatch.semantic.discovery.model"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.discovery.reconcile",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/discovery/reconcile.py",
+          "purpose": "Catalog reconciliation (PR-18).",
+          "defines": [
+            "Reconciliation",
+            "TableDiff",
+            "_CatalogTable",
+            "_normalize_catalog",
+            "_normalize_one",
+            "reconcile_model"
           ]
         },
         {
