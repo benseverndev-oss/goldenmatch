@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 455,
+      "module_count": 456,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7280,6 +7280,7 @@
             "goldenmatch.semantic.discovery.metrics",
             "goldenmatch.semantic.discovery.model",
             "goldenmatch.semantic.discovery.namer",
+            "goldenmatch.semantic.discovery.namer_eval",
             "goldenmatch.semantic.discovery.reconcile",
             "goldenmatch.semantic.discovery.scd",
             "goldenmatch.semantic.discovery.time_intelligence",
@@ -7477,6 +7478,22 @@
           "imports": [
             "goldenmatch.core.llm_labeler",
             "goldenmatch.semantic.discovery.model"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.discovery.namer_eval",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/discovery/namer_eval.py",
+          "purpose": "Namer quality eval harness (PR-19).",
+          "defines": [
+            "NamerQuality",
+            "TargetResult",
+            "_accepted",
+            "_norm",
+            "run_namer_eval",
+            "score_naming"
+          ],
+          "imports": [
+            "goldenmatch.semantic.discovery.namer"
           ]
         },
         {

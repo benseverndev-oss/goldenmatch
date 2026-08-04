@@ -59,6 +59,7 @@ from goldenmatch.semantic.discovery import (
     Measure,
     Metric,
     ModelCompleteness,
+    NamerQuality,
     NameSuggestion,
     ProposedModel,
     ProposedTable,
@@ -66,6 +67,7 @@ from goldenmatch.semantic.discovery import (
     SCDDimension,
     TableDiff,
     TableMeasures,
+    TargetResult,
     TimeDimension,
     TimeMetric,
     WarehouseManifest,
@@ -86,7 +88,9 @@ from goldenmatch.semantic.discovery import (
     plan_certification,
     read_information_schema,
     reconcile_model,
+    run_namer_eval,
     score_model,
+    score_naming,
 )
 from goldenmatch.semantic.key_integrity import (
     certify_key_integrity,
@@ -230,4 +234,9 @@ __all__ = [
     "reconcile_model",
     "Reconciliation",
     "TableDiff",
+    # semantic-model discovery (Phase 19) — namer quality eval harness
+    "score_naming",
+    "run_namer_eval",
+    "NamerQuality",
+    "TargetResult",
 ]

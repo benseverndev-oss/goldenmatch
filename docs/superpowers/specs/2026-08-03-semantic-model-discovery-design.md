@@ -355,6 +355,19 @@ actually query. All are deterministic (no LLM) and default-on unless noted.
     and measures; cross-dialect *join*-edge reconciliation and a **LookML** reader (no
     parser exists yet) are follow-ons — not silently omitted, explicitly deferred.
 
+19. **Real-LLM namer validation (eval harness).** New `discovery/namer_eval.py`:
+    `score_naming(suggestions, gold)` is a pure, deterministic scorer of the advisory
+    namer's (PR-7) output against a labeled `{target: accepted_name(s)}` gold map —
+    `NamerQuality(coverage, accuracy, precision, verified_accuracy, results)` where a name
+    matches after normalization (lowercase, alnum-only; NOT a stemmer — plural/alias
+    variants must be listed as explicit gold aliases). `run_namer_eval(model, tables,
+    gold, *, backend)` is a thin wrapper that names then scores. The scorer is
+    backend-agnostic: CI exercises it with hand-built suggestions and a dict-driven fake
+    backend (deterministic, no API calls); the real provider (`load_namer_backend`) is
+    **opt-in** behind `GOLDENMATCH_NAMER_EVAL_LIVE` (a skipped live test), so the harness
+    never spends live calls in CI. This closes the arc: slices 11-18 are deterministic
+    features; slice 19 is the *measurement* for the one non-deterministic part.
+
 Each PR is independently useful (PR-1 alone gives "certified key discovery per
 table"). The certifier is exercised from PR-1, so the "pre-graded" property holds at
 every step.

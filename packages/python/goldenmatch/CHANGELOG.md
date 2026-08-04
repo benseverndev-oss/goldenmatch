@@ -7,6 +7,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **Semantic-model discovery — real-LLM namer validation / eval harness (Phase 19).** New
+  `goldenmatch.semantic.score_naming(suggestions, gold)` is a pure, deterministic scorer of
+  the advisory namer's (Phase 7) output against a labeled `{target: accepted_name(s)}` gold
+  map — a `NamerQuality(coverage, accuracy, precision, verified_accuracy, results)` where a
+  name matches after normalization (lowercase, alphanumeric-only; deliberately NOT a
+  stemmer, so plural/alias variants are listed as explicit gold aliases rather than
+  silently conflated). `run_namer_eval(model, tables, gold, *, backend)` names then scores
+  in one call. The scorer is backend-agnostic: CI exercises it with hand-built suggestions
+  and a dict-driven fake backend (no API calls, fully deterministic), while the real
+  provider (`load_namer_backend`) is **opt-in** behind `GOLDENMATCH_NAMER_EVAL_LIVE` (a
+  skipped live test), so the harness never spends live calls in CI. This closes the
+  "frontier" arc: slices 11-18 added deterministic features; slice 19 is the *measurement*
+  for the one non-deterministic part (the LLM namer). New exports `score_naming`,
+  `run_namer_eval`, `NamerQuality`, `TargetResult`. The ninth and final "frontier" slice of
+  the semantic-model discovery arc (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`, item 19). Tests:
+  `tests/test_semantic_discovery_namer_eval.py`.
 - **Semantic-model discovery — catalog reconciliation (Phase 18).** New
   `goldenmatch.semantic.reconcile_model(proposed, existing)` diffs a discovered (certified)
   `ProposedModel` against an already-parsed existing catalog — a list of MetricFlow
