@@ -1,9 +1,12 @@
 # Semantic-model discovery ("GoldenModel") — design
 
-Status: **PROPOSED (design only, not implemented)** — a scoped feature that sits on
-top of the existing engines. This spec decomposes it into phases, names the exact
-existing functions each phase reuses vs. the new glue, and gives a phased PR plan.
-No code lands until this design is approved.
+Status: **IMPLEMENTED / SHIPPED (2026-08-04).** The full arc is merged to `main` -- the
+core structure (items 1-10) plus all nine "frontier" slices (items 11-19). Front door:
+`goldenmatch.semantic.discover_semantic_model`; per-package pointer in
+`packages/python/goldenmatch/CLAUDE.md` ("Semantic Layer" section). This spec is retained
+as the design-of-record. It was authored PROPOSED/design-only (a scoped feature on top of
+the existing engines, decomposed into phases that name the exact reused functions vs. new
+glue); the phased PR plan below is now a completed changelog, not a proposal.
 
 Program: Semantic-layer wedge (follows the certify/write-back arc:
 `certify_key_integrity` → catalog write-back D4 → MCP/REST/CLI gate E). This is the
