@@ -313,6 +313,30 @@ actually query. All are deterministic (no LLM) and default-on unless noted.
     valid_from, valid_to, current_flag, scd_type)` on `ProposedTable`/
     `ProposedModel.scd_dimensions` + `to_dict` + `meta.goldenmatch.scd`. Deterministic,
     default-on.
+16. **Model completeness / trust score.** New `discovery/completeness.py`:
+    `score_model(proposed_tables, joins)` aggregates the existing signals into a
+    headline **grain-weighted** 0..1 `ModelCompleteness` (grain coverage 0.5,
+    connectivity 0.25, sum-safe-measure coverage 0.25 — a certified grain is
+    load-bearing, so it dominates) plus an explicit `gaps` list (`no_grain` /
+    `no_measures` / `isolated`), so "80% complete" always names the tables that are why.
+    On `ProposedModel.completeness` + `to_dict`. Pure self-assessment; no new detection.
+    Deterministic, default-on.
+17. **Warehouse-scale derivation off `information_schema`.** New `discovery/warehouse.py`:
+    `read_information_schema(columns, table_constraints, key_column_usage, tables=None)`
+    reads the three ANSI `information_schema` relations (as pyarrow tables / row dicts —
+    no live DB connection, so it stays testable and credential-free) into a
+    `WarehouseManifest` of `CandidateTable(name, columns, declared_pk, declared_fks,
+    row_count)`. **The honest thesis marker:** every declared PK/FK is `certified=False`
+    — Snowflake/BigQuery/Redshift do NOT enforce PK/FK, so an `information_schema`
+    declaration is exactly the kind of guess this arc PROVES against data, never a
+    certificate. The manifest is a **planning artifact**, not a model:
+    `plan_certification(manifest)` ranks the tables worth pulling+certifying first
+    (has-declared-PK, then FK-referenced in-degree = spine/dimension tables, then smaller
+    row_count, then name) with per-table warnings that declared constraints are unproven.
+    A thin `discover_from_manifest(manifest, loader)` bridge (loader: `name -> table`)
+    pulls each candidate's data and runs the normal certified `discover_semantic_model`,
+    so nothing about the certification-first pipeline changes — `information_schema` just
+    tells you *which* tables to point it at at warehouse scale. Deterministic, default-on.
 
 Each PR is independently useful (PR-1 alone gives "certified key discovery per
 table"). The certifier is exercised from PR-1, so the "pre-graded" property holds at
