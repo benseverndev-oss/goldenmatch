@@ -54,6 +54,7 @@ from goldenmatch.semantic.discovery import (
     KeyCandidate,
     Measure,
     Metric,
+    ModelCompleteness,
     NameSuggestion,
     ProposedModel,
     ProposedTable,
@@ -74,6 +75,7 @@ from goldenmatch.semantic.discovery import (
     discover_time_dimension,
     discover_time_metrics,
     name_semantic_model,
+    score_model,
 )
 from goldenmatch.semantic.key_integrity import (
     certify_key_integrity,
@@ -173,6 +175,8 @@ __all__ = [
     # semantic-model discovery (Phase 2) — cross-table entity-type discovery
     "discover_bridges",
     "Bridge",
+    "score_model",
+    "ModelCompleteness",
     "discover_entity_types",
     "EntityType",
     # semantic-model discovery (Phase 3) — certified join / FK discovery across tables

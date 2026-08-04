@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from goldenmatch.semantic.discovery.cardinality import Bridge, discover_bridges
+from goldenmatch.semantic.discovery.completeness import ModelCompleteness, score_model
 from goldenmatch.semantic.discovery.entities import EntityType, discover_entity_types
 from goldenmatch.semantic.discovery.hierarchies import Hierarchy, discover_hierarchies
 from goldenmatch.semantic.discovery.joins import JoinCandidate, discover_joins
@@ -96,6 +97,7 @@ class ProposedModel:
     time_metrics: list[TimeMetric] = field(default_factory=list)
     bridges: list[Bridge] = field(default_factory=list)
     scd_dimensions: list[SCDDimension] = field(default_factory=list)
+    completeness: ModelCompleteness | None = None
 
     @property
     def all_trustworthy(self) -> bool:
@@ -156,6 +158,7 @@ class ProposedModel:
             "time_metrics": [tm.to_dict() for tm in self.time_metrics],
             "bridges": [b.to_dict() for b in self.bridges],
             "scd_dimensions": [s.to_dict() for s in self.scd_dimensions],
+            "completeness": self.completeness.to_dict() if self.completeness else None,
             "yaml": self.yaml,
         }
 
@@ -278,6 +281,7 @@ def discover_semantic_model(
         time_metrics=[tm for pt in proposed_tables for tm in pt.time_metrics],
         bridges=discover_bridges(proposed_tables, joins),
         scd_dimensions=[pt.scd for pt in proposed_tables if pt.scd is not None],
+        completeness=score_model(proposed_tables, joins),
     )
 
     # Optional, advisory, non-authoritative: annotate the finished model with business
