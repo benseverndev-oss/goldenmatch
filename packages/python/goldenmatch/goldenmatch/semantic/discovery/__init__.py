@@ -43,6 +43,12 @@ from goldenmatch.semantic.discovery.namer import (
     apply_names,
     name_semantic_model,
 )
+from goldenmatch.semantic.discovery.namer_eval import (
+    NamerQuality,
+    TargetResult,
+    run_namer_eval,
+    score_naming,
+)
 from goldenmatch.semantic.discovery.reconcile import (
     Reconciliation,
     TableDiff,
@@ -88,6 +94,8 @@ __all__ = [
     "TimeMetric",
     "NameSuggestion",
     "NamerBackend",
+    "NamerQuality",
+    "TargetResult",
     "ProposedModel",
     "ProposedTable",
     "TableMeasures",
@@ -107,6 +115,8 @@ __all__ = [
     "plan_certification",
     "read_information_schema",
     "reconcile_model",
+    "run_namer_eval",
+    "score_naming",
     "apply_names",
     "name_semantic_model",
 ]
