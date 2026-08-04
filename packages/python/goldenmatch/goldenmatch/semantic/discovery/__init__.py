@@ -43,6 +43,11 @@ from goldenmatch.semantic.discovery.namer import (
     apply_names,
     name_semantic_model,
 )
+from goldenmatch.semantic.discovery.reconcile import (
+    Reconciliation,
+    TableDiff,
+    reconcile_model,
+)
 from goldenmatch.semantic.discovery.scd import SCDDimension, discover_scd
 from goldenmatch.semantic.discovery.time_intelligence import (
     TimeDimension,
@@ -68,6 +73,8 @@ __all__ = [
     "CandidateTable",
     "CertifyStep",
     "ModelCompleteness",
+    "Reconciliation",
+    "TableDiff",
     "WarehouseManifest",
     "Dimension",
     "EntityType",
@@ -99,6 +106,7 @@ __all__ = [
     "discover_from_manifest",
     "plan_certification",
     "read_information_schema",
+    "reconcile_model",
     "apply_names",
     "name_semantic_model",
 ]

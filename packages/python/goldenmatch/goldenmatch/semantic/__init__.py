@@ -62,7 +62,9 @@ from goldenmatch.semantic.discovery import (
     NameSuggestion,
     ProposedModel,
     ProposedTable,
+    Reconciliation,
     SCDDimension,
+    TableDiff,
     TableMeasures,
     TimeDimension,
     TimeMetric,
@@ -83,6 +85,7 @@ from goldenmatch.semantic.discovery import (
     name_semantic_model,
     plan_certification,
     read_information_schema,
+    reconcile_model,
     score_model,
 )
 from goldenmatch.semantic.key_integrity import (
@@ -223,4 +226,8 @@ __all__ = [
     "CandidateColumn",
     "CandidateFK",
     "CertifyStep",
+    # semantic-model discovery (Phase 18) — catalog reconciliation
+    "reconcile_model",
+    "Reconciliation",
+    "TableDiff",
 ]

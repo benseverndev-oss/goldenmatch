@@ -337,6 +337,23 @@ actually query. All are deterministic (no LLM) and default-on unless noted.
     pulls each candidate's data and runs the normal certified `discover_semantic_model`,
     so nothing about the certification-first pipeline changes — `information_schema` just
     tells you *which* tables to point it at at warehouse scale. Deterministic, default-on.
+18. **Catalog reconciliation.** New `discovery/reconcile.py`:
+    `reconcile_model(proposed, existing)` diffs a discovered `ProposedModel` against an
+    **already-parsed** existing catalog (a list of MetricFlow `DeclaredKeySpec` or Cube
+    `Cube` — reusing the existing `parse_semantic_models` / `parse_cube_models` readers,
+    so no new format code). Both sides normalize to a common `(name, key, measures)` shape
+    and produce a `Reconciliation` of typed `TableDiff`s: `only_in_model` /
+    `only_in_catalog` (tables), `grain_drift` (the table exists in both but the discovered
+    certified grain ≠ the catalog's declared key), and `measure_only_in_model` /
+    `measure_only_in_catalog`. **The differentiator over a text diff:** the discovered
+    side is CERTIFIED, so a `grain_drift` where the discovered grain is trustworthy and
+    the catalog's declared key is *not* the certified grain is marked `proven=True` — a
+    provable defect in the catalog ("your model declares `order_id` the key; we proved the
+    grain is `order_id + line_no`, so every SUM at that grain double-counts"), not a
+    stylistic difference. `Reconciliation.in_sync` is the headline. On its own module +
+    `to_dict`; deterministic, default-on. **Scope cut (logged):** v1 covers tables, grain,
+    and measures; cross-dialect *join*-edge reconciliation and a **LookML** reader (no
+    parser exists yet) are follow-ons — not silently omitted, explicitly deferred.
 
 Each PR is independently useful (PR-1 alone gives "certified key discovery per
 table"). The certifier is exercised from PR-1, so the "pre-graded" property holds at

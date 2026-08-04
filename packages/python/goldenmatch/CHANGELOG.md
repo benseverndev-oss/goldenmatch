@@ -7,6 +7,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **Semantic-model discovery — catalog reconciliation (Phase 18).** New
+  `goldenmatch.semantic.reconcile_model(proposed, existing)` diffs a discovered (certified)
+  `ProposedModel` against an already-parsed existing catalog — a list of MetricFlow
+  `DeclaredKeySpec` (from `parse_semantic_models`) or Cube `Cube` (from
+  `parse_cube_models`), reusing the existing readers so there's no new format code. Both
+  sides normalize to a neutral `(name, key, measures)` shape and produce a
+  `Reconciliation` of typed `TableDiff`s: `only_in_model` / `only_in_catalog` (tables),
+  `grain_drift` (in both, but discovered certified grain ≠ declared key), and
+  `measure_only_in_model` / `measure_only_in_catalog`. **The differentiator over a text
+  diff:** the discovered side is CERTIFIED, so a `grain_drift` where the discovered grain
+  is trustworthy and the catalog's declared key isn't it is marked `proven=True` — a
+  provable double-counting defect in the catalog ("your model declares `order_id` the key;
+  we proved the grain is `order_id + line_no`"), not a stylistic difference.
+  `Reconciliation.in_sync` is the headline; `to_dict` for the serialized view.
+  Deterministic (no LLM), **default-on**. Scope cut (logged, not silently omitted): v1
+  covers tables, grain, and measures; cross-dialect join-edge reconciliation and a LookML
+  reader (no parser exists yet) are explicit follow-ons. The eighth "frontier" slice of the
+  semantic-model discovery arc (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`, item 18). Tests:
+  `tests/test_semantic_discovery_reconcile.py`.
 - **Semantic-model discovery — warehouse-scale derivation off `information_schema`
   (Phase 17).** New `goldenmatch.semantic.read_information_schema(columns,
   table_constraints, key_column_usage, tables=None)` reads the three ANSI
