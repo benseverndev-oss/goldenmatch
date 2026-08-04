@@ -809,6 +809,69 @@ single-site circuit exists. If it collapses, the circuit is real but larger than
 readout site -- and the honest unit of explanation is (position x layer x component),
 not component alone.
 
+### Where the decision actually enters -- and the third instance of redundancy
+
+`layer_cutoff_sweep` mean-ablates every head and MLP at the decision position for
+layers `< k`, sweeping k. Ablating layers 0-13 does nothing (previous section), and the
+logits are a function of the final residual at that position, so k = n_layers must
+destroy behaviour. The interesting quantity is where in between.
+
+**Cumulative sweep -- a sharp cliff:**
+
+| ablate layers | accuracy | P(match) std retained | verdict agreement |
+|---|---|---|---|
+| < 14 | 0.887 | 0.999x | 0.998 |
+| < 15 | 0.885 | 0.999x | 0.995 |
+| < 16 | 0.877 | 0.978x | 0.993 |
+| < 17 | 0.823 | 0.919x | 0.938 |
+| **< 18** | **0.500** | **0.226x** | **0.615** |
+| < 28 (sanity) | 0.500 | 0.000x | 0.615 |
+
+Behaviour is untouched until layer 16, degrades slightly at 17, and collapses to chance
+at 18.
+
+**Isolation control -- and it refutes the single-layer reading:**
+
+| ablate ONLY | accuracy |
+|---|---|
+| layer 14 | 0.885 |
+| layer 15 | 0.882 |
+| layer 16 | 0.833 |
+| **layer 17** | **0.770** |
+| layer 18 | **0.905** (up) |
+| layer 19 | **0.920** (up) |
+
+No single layer is the write point. Layer 17 alone costs 11 points -- real, but far from
+the collapse to 0.500 that removing 0-17 *together* produces. **The decision is written
+into the decision position redundantly across layers ~14-17**; remove any one and the
+others carry it, remove all of them and there is nothing left before layer 18. The cliff
+is a threshold effect over a redundant group, not a bottleneck.
+
+**Two further results:**
+
+- **Ablating layers 18-19 IMPROVES accuracy** (0.885 -> 0.905 / 0.920). Those layers
+  actively degrade the verdict on this probe set, consistent with the 59 negative-share
+  suppression components found by direct attribution.
+- **The whole interpretability effort targeted the wrong layer.** Layer 14 was chosen
+  because the direction is first linearly *readable* there. Ablating layer 14 alone
+  changes accuracy by 0.000. The load-bearing window is 15-17. "Where a feature first
+  becomes readable" and "where the computation is necessary" are 3-4 layers apart in
+  this model, and every Layer-2, faithfulness, and attribution number above was measured
+  at the readable layer rather than the necessary one.
+
+**Redundancy is now confirmed at three independent granularities:**
+
+| level | finding |
+|---|---|
+| input fields | a single-field counterfactual exists for ~19% of decisions (both domains) |
+| components | 21/183 carry 90% of the layer-14 readout, but ablating all 183 changes nothing |
+| layers | no single layer necessary; only a prefix through 17 destroys behaviour |
+
+That consistency is the strongest claim this thread can make, and it is a negative one:
+**at every granularity examined, this model has no small necessary set.** Small-set
+attribution is not missing for want of better tooling -- three different decompositions,
+each validated against a control, agree that it is not there.
+
 ## Next steps (highest leverage first)
 
 1. **Find a call site for the ER-matcher explainer.** `score_and_explain` /
@@ -827,11 +890,12 @@ not component alone.
    0.33 vs 0.26 for the legible table (above) — a real edge on every seed, but small
    enough that two modes may not be worth the surface area. A product call, not a
    measurement one; the measurement is done.
-4. **Ablate across POSITIONS, not just the decision token.** Validation showed the model
-   rebuilds the verdict from the field-token positions when the decision position is
-   ablated, so behaviour survives even total ablation at layers 0-13. Re-run the
-   intervention at all positions and across layers 14-27. This decides whether any
-   single-site circuit exists at all.
+4. **Redo the attribution at layers 15-17, not 14.** Every number above was measured
+   where the direction is first READABLE; ablation says the load-bearing window is
+   15-17, and ablating layer 14 alone changes accuracy by 0.000. Re-running
+   `direct_attribution` and `layer2_abstraction` at layer 17-18 is the single highest-
+   value repeat, because it targets the computation that matters rather than its
+   earliest shadow.
 5. **Name what `L13.mlp` computes.** It alone carries 25.6% of the decision variance at
    label-correlation 0.84. An SAE or transcoder on that one MLP is now the highest-value
    interpretability target in the model — one component rather than 183.

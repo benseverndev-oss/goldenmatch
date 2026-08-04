@@ -1880,6 +1880,165 @@ def circuit_validation(layer: int = 14, top_k: int = 21, per_class: int = 200,
     print(f"[done] circuit validation -> {out_path}")
 
 
+# --------------------------------------------------------------------------- #
+# stage 11: WHERE does the decision enter the decision position?                #
+# --------------------------------------------------------------------------- #
+@app.function(image=_image, gpu=GPU, timeout=60 * 60, volumes={"/out": _out_vol})
+def layer_cutoff_sweep(per_class: int = 200, seed: int = 0, negatives: str = "hard",
+                       cuts: str = "4,8,14,18,20,22,24,25,26,27,28",
+                       single: str = "") -> None:
+    """Sweep how much of the decision position can be erased before behaviour dies.
+
+    `circuit_validation` showed that mean-ablating EVERY component at the decision
+    position across layers 0-13 leaves accuracy and 99.8% of verdicts untouched --
+    the model rebuilds the verdict from the field-token positions. But the logits
+    are a function of the final residual AT that position, so ablating all 28
+    layers must destroy it. The interesting quantity is where in between.
+
+    For each cut ``k``, mean-ablate every attention head and MLP at the decision
+    position for layers ``< k`` and measure behaviour. The curve localizes the
+    layer at which the decision becomes committed at that position, which is the
+    honest answer to "where is the decision made" -- as opposed to "where is it
+    first linearly readable", which is what the probes measured.
+
+    k=28 is the built-in sanity arm: it must drive P(match) to a constant.
+    -> interp/layer_cutoff_sweep.json
+    """
+    import json
+    import os
+    import sys
+
+    import numpy as np
+    import torch
+
+    sys.path.insert(0, "/root/interp")
+
+    tok, model = _load_model()
+    dev = model.device
+    true_id, false_id = _true_false_ids(tok)
+    pairs, rows = _mine(per_class, negatives, seed)
+    y = np.array([t for *_, t in pairs])
+    prompts = [_prompt(tok, rows[a], rows[b]) + '{"match":' for a, b, _ in pairs]
+
+    cfg = model.config
+    n_layers = cfg.num_hidden_layers
+    cut_list = sorted({int(c) for c in cuts.split(",") if 0 < int(c) <= n_layers})
+
+    # ---- means of every component's decision-position output, all layers ---- #
+    store: dict[str, torch.Tensor] = {}
+    hooks = []
+
+    def mk_mlp_cap(L):
+        def hook(_m, _i, out):
+            store[f"L{L}.mlp"] = (out[0] if isinstance(out, tuple) else out)[:, -1, :]
+        return hook
+
+    def mk_oproj_cap(L):
+        def hook(_m, inp, _o):
+            store[f"L{L}.oin"] = inp[0][:, -1, :]
+        return hook
+
+    for L in range(n_layers):
+        blk = model.model.layers[L]
+        hooks.append(blk.mlp.register_forward_hook(mk_mlp_cap(L)))
+        hooks.append(blk.self_attn.o_proj.register_forward_hook(mk_oproj_cap(L)))
+
+    sums: dict[str, torch.Tensor] = {}
+    for i in range(0, len(prompts), 16):
+        enc = tok(prompts[i : i + 16], return_tensors="pt", padding=True).to(dev)
+        store.clear()
+        with torch.no_grad():
+            model(**enc)
+        for k, v in store.items():
+            sums[k] = v.float().sum(0) + (sums[k] if k in sums else 0.0)
+    for hk in hooks:
+        hk.remove()
+    means = {k: v / len(prompts) for k, v in sums.items()}
+
+    def run(layers) -> np.ndarray:
+        """``layers`` is the explicit set of layers to mean-ablate at the
+        decision position (a prefix for the cumulative sweep, or a single layer
+        for the isolation control -- a prefix sweep alone cannot separate 'this
+        layer writes the decision' from 'everything up to here mattered')."""
+        hk = []
+
+        def mk_mlp_sub(L):
+            def hook(_m, _i, out):
+                o = out[0] if isinstance(out, tuple) else out
+                o[:, -1, :] = means[f"L{L}.mlp"].to(o.dtype)
+                return (o, *out[1:]) if isinstance(out, tuple) else o
+            return hook
+
+        def mk_oproj_pre(L):
+            def pre(_m, inp):
+                x = inp[0].clone()
+                x[:, -1, :] = means[f"L{L}.oin"].to(x.dtype)
+                return (x,)
+            return pre
+
+        for L in layers:
+            blk = model.model.layers[L]
+            hk.append(blk.mlp.register_forward_hook(mk_mlp_sub(L)))
+            hk.append(blk.self_attn.o_proj.register_forward_pre_hook(mk_oproj_pre(L)))
+        ps = []
+        for i in range(0, len(prompts), 16):
+            enc = tok(prompts[i : i + 16], return_tensors="pt", padding=True).to(dev)
+            with torch.no_grad():
+                lg = model(**enc).logits[:, -1, :]
+            pr = torch.softmax(torch.stack([lg[:, true_id], lg[:, false_id]], 1), 1)
+            ps.append(pr[:, 0].float().cpu().numpy())
+        for h in hk:
+            h.remove()
+        return np.concatenate(ps)
+
+    base = run([])
+    print(f"[cut] baseline acc={float(((base >= 0.5) == (y == 1)).mean()):.3f} "
+          f"std={base.std():.4f}", flush=True)
+
+    rows_out = []
+    jobs = ([("only", int(x)) for x in single.split(",") if x.strip()]
+            if single else [("prefix", k) for k in cut_list])
+    for kind, k in jobs:
+        p = run([k] if kind == "only" else list(range(k)))
+        e = {
+            "kind": kind, "cut": k,
+            "accuracy": float(((p >= 0.5) == (y == 1)).mean()),
+            "std_p": float(p.std()),
+            "std_retained": float(p.std() / base.std()) if base.std() > 1e-9 else 0.0,
+            "verdict_agreement": float(((p >= 0.5) == (base >= 0.5)).mean()),
+            "mean_p": float(p.mean()),
+        }
+        rows_out.append(e)
+        label = f"ONLY layer {k:>2}" if kind == "only" else f"layers <{k:>2}"
+        print(f"[cut] ablate {label}: acc={e['accuracy']:.3f} "
+              f"std={e['std_retained']:.3f}x agree={e['verdict_agreement']:.3f} "
+              f"mean_p={e['mean_p']:.3f}", flush=True)
+
+    payload = {
+        "note": ("mean-ablation of every head+MLP at the DECISION POSITION for layers "
+                 "< cut; k=n_layers is the sanity arm and must give std_retained ~0"),
+        "n_layers": n_layers, "n_pairs": len(pairs), "negatives": negatives,
+        "seed": seed, "baseline_acc": float(((base >= 0.5) == (y == 1)).mean()),
+        "sweep": rows_out,
+    }
+    os.makedirs("/out/interp", exist_ok=True)
+    out_path = ("/out/interp/layer_cutoff_single.json" if single
+                else "/out/interp/layer_cutoff_sweep.json")
+    with open(out_path, "w") as fh:
+        json.dump(payload, fh, indent=2)
+    _out_vol.commit()
+    print(f"[done] layer cutoff sweep -> {out_path}")
+
+
+@app.local_entrypoint()
+def cutoff(per_class: int = 200, seed: int = 0, negatives: str = "hard",
+           cuts: str = "4,8,14,18,20,22,24,25,26,27,28", single: str = "") -> None:
+    """Where does the decision actually enter the decision position?"""
+    layer_cutoff_sweep.remote(
+        per_class=per_class, seed=seed, negatives=negatives, cuts=cuts, single=single
+    )
+
+
 @app.local_entrypoint()
 def validate_circuit(layer: int = 14, top_k: int = 21, per_class: int = 200,
                      seed: int = 0, negatives: str = "hard") -> None:
