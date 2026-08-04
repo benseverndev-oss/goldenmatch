@@ -42,6 +42,7 @@ from goldenmatch.semantic.discovery.namer import (
     apply_names,
     name_semantic_model,
 )
+from goldenmatch.semantic.discovery.scd import SCDDimension, discover_scd
 from goldenmatch.semantic.discovery.time_intelligence import (
     TimeDimension,
     TimeMetric,
@@ -58,6 +59,7 @@ __all__ = [
     "KeyCandidate",
     "Measure",
     "Metric",
+    "SCDDimension",
     "TimeDimension",
     "TimeMetric",
     "NameSuggestion",
@@ -72,6 +74,7 @@ __all__ = [
     "discover_keys",
     "discover_measures",
     "discover_metrics",
+    "discover_scd",
     "discover_time_dimension",
     "discover_time_metrics",
     "discover_semantic_model",

@@ -53,6 +53,9 @@ def _gm_meta(pt: Any) -> dict[str, Any]:
         gm["time"] = {"column": td.column, "grain": td.grain,
                       "granularities": list(td.granularities),
                       "metrics": [t.to_dict() for t in getattr(pt, "time_metrics", [])]}
+    scd = getattr(pt, "scd", None)
+    if scd is not None:
+        gm["scd"] = scd.to_dict()
     return gm
 
 

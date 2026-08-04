@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 451,
+      "module_count": 452,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7279,6 +7279,7 @@
             "goldenmatch.semantic.discovery.metrics",
             "goldenmatch.semantic.discovery.model",
             "goldenmatch.semantic.discovery.namer",
+            "goldenmatch.semantic.discovery.scd",
             "goldenmatch.semantic.discovery.time_intelligence"
           ]
         },
@@ -7429,6 +7430,7 @@
             "goldenmatch.semantic.discovery.measures",
             "goldenmatch.semantic.discovery.metrics",
             "goldenmatch.semantic.discovery.namer",
+            "goldenmatch.semantic.discovery.scd",
             "goldenmatch.semantic.discovery.time_intelligence"
           ]
         },
@@ -7460,6 +7462,18 @@
           "imports": [
             "goldenmatch.core.llm_labeler",
             "goldenmatch.semantic.discovery.model"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.discovery.scd",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/discovery/scd.py",
+          "purpose": "SCD / temporal dimension detection (PR-15).",
+          "defines": [
+            "SCDDimension",
+            "_distinct",
+            "_match",
+            "_pair_distinct",
+            "discover_scd"
           ]
         },
         {
