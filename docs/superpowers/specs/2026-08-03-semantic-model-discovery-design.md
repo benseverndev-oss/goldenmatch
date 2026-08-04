@@ -299,6 +299,20 @@ actually query. All are deterministic (no LLM) and default-on unless noted.
     and YoY as a `type: derived` offset metric; Cube keeps the `type: time` dim +
     granularities and the variants in `meta.goldenmatch.time`; OSI `is_time` +
     `custom_extensions`. Deterministic, default-on.
+14. **Cardinality.** `discover_joins` sets `relationship="one_to_one"` when the FK is
+    unique on the from side; new `discovery/cardinality.py`
+    `discover_bridges(proposed_tables, joins)` detects many-to-many junction tables (a
+    trustworthy 2-column compound key whose columns are certified FKs to two different
+    tables) as `Bridge(...)` on `ProposedModel.bridges`. Deterministic, default-on.
+15. **SCD / temporal dimensions.** New `discovery/scd.py`: `discover_scd(table, columns)`
+    flags a Slowly-Changing-Dimension (Type 2) table — validity columns (name-pattern
+    `valid_from/valid_to`, `effective_*`, `start_date/end_date`, `from_date/to_date`)
+    and/or an `is_current`/`is_active` flag — then **structure-confirms** it (the business
+    key repeats and `(business_key, valid_from)` is unique at grain, so it really is a
+    versioned dimension, not a stray `end_date`). `SCDDimension(table, business_key,
+    valid_from, valid_to, current_flag, scd_type)` on `ProposedTable`/
+    `ProposedModel.scd_dimensions` + `to_dict` + `meta.goldenmatch.scd`. Deterministic,
+    default-on.
 
 Each PR is independently useful (PR-1 alone gives "certified key discovery per
 table"). The certifier is exercised from PR-1, so the "pre-graded" property holds at

@@ -35,6 +35,7 @@ from goldenmatch.semantic.discovery.measures import (
     discover_measures,
 )
 from goldenmatch.semantic.discovery.metrics import Metric, discover_metrics
+from goldenmatch.semantic.discovery.scd import SCDDimension, discover_scd
 from goldenmatch.semantic.discovery.time_intelligence import (
     TimeDimension,
     TimeMetric,
@@ -62,6 +63,7 @@ class ProposedTable:
     metrics: list[Metric] = field(default_factory=list)
     time_dimension: TimeDimension | None = None
     time_metrics: list[TimeMetric] = field(default_factory=list)
+    scd: SCDDimension | None = None
 
     @property
     def grain(self) -> list[str]:
@@ -93,6 +95,7 @@ class ProposedModel:
     time_dimensions: list[TimeDimension] = field(default_factory=list)
     time_metrics: list[TimeMetric] = field(default_factory=list)
     bridges: list[Bridge] = field(default_factory=list)
+    scd_dimensions: list[SCDDimension] = field(default_factory=list)
 
     @property
     def all_trustworthy(self) -> bool:
@@ -152,6 +155,7 @@ class ProposedModel:
             "time_dimensions": [td.to_dict() for td in self.time_dimensions],
             "time_metrics": [tm.to_dict() for tm in self.time_metrics],
             "bridges": [b.to_dict() for b in self.bridges],
+            "scd_dimensions": [s.to_dict() for s in self.scd_dimensions],
             "yaml": self.yaml,
         }
 
@@ -235,6 +239,7 @@ def discover_semantic_model(
         # Time intelligence — the primary time dimension + per-measure MTD/YoY/rolling.
         time_dim = discover_time_dimension(table, tm.dimensions, table_name=tbl_name)
         time_metrics = discover_time_metrics(tm.measures, time_dim, table_name=tbl_name)
+        scd = discover_scd(table, list(getattr(table, "column_names", [])), table_name=tbl_name)
         proposed_tables.append(
             ProposedTable(
                 table=tbl_name,
@@ -246,6 +251,7 @@ def discover_semantic_model(
                 metrics=metrics,
                 time_dimension=time_dim,
                 time_metrics=time_metrics,
+                scd=scd,
             )
         )
 
@@ -271,6 +277,7 @@ def discover_semantic_model(
                          if pt.time_dimension is not None],
         time_metrics=[tm for pt in proposed_tables for tm in pt.time_metrics],
         bridges=discover_bridges(proposed_tables, joins),
+        scd_dimensions=[pt.scd for pt in proposed_tables if pt.scd is not None],
     )
 
     # Optional, advisory, non-authoritative: annotate the finished model with business

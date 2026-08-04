@@ -66,6 +66,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   exports `discover_bridges` + `Bridge`. The fourth "frontier" slice (design:
   `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
   `tests/test_semantic_discovery_cardinality.py`.
+- **Semantic-model discovery — SCD / temporal dimensions (Phase 15).** New
+  `goldenmatch/semantic/discovery/scd.py`: `discover_scd(table, columns)` flags a
+  Slowly-Changing-Dimension (Type 2) table. Validity columns (name-pattern
+  `valid_from/valid_to`, `effective_*`, `start_date/end_date`, `from_date/to_date`)
+  and/or an `is_current`/`is_active` flag NAME-propose it; then a STRUCTURE check
+  confirms real versioning — a business key that repeats (multiple versions) but is
+  unique combined with the validity anchor `(business_key, valid_from)` — so a stray
+  `end_date` on a non-versioned table doesn't false-positive. `SCDDimension(table,
+  business_key, valid_from, valid_to, current_flag, scd_type)` on
+  `ProposedTable`/`ProposedModel.scd_dimensions` + `to_dict` + `meta.goldenmatch.scd`.
+  Deterministic, default-on. New exports `discover_scd` + `SCDDimension`. The fifth
+  "frontier" slice (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discovery_scd.py`.
 
 ## [3.11.0] - 2026-08-03
 
