@@ -6,6 +6,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.28.0] - 2026-08-04
+
+- Lockstep suite release (2026-08 GoldenModel frontier cut). No functional changes to
+  goldenmatch-js; version kept in sync with the goldenmatch 3.12.0 / golden-suite 0.4.0 cut.
+
 ## [1.27.0] - 2026-08-03
 
 ### Added

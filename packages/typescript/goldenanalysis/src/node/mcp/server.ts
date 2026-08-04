@@ -231,7 +231,7 @@ export function startMcpServer(): void {
           id,
           result: {
             protocolVersion: "2024-11-05",
-            serverInfo: { name: "goldenanalysis", version: "0.3.0" },
+            serverInfo: { name: "goldenanalysis", version: "0.4.0" },
             capabilities: { tools: {} },
           },
         });

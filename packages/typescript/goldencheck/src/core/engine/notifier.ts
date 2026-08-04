@@ -91,7 +91,7 @@ export async function sendWebhook(
 
   const payload = {
     tool: "goldencheck-js",
-    version: "0.7.0",
+    version: "0.8.0",
     trigger,
     file,
     health_grade: grade,

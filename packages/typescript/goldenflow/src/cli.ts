@@ -20,7 +20,7 @@ import { listRuns } from "./node/history.js";
 // Ensure all transforms are registered
 import "./core/transforms/index.js";
 
-const VERSION = "0.18.0";
+const VERSION = "0.19.0";
 
 export const program = new Command()
   .name("goldenflow-js")

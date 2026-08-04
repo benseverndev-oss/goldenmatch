@@ -1,6 +1,6 @@
 {
   "name": "goldenanalysis",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Read-only cross-cutting analysis, metrics, and reporting for the Golden Suite. TypeScript port of the goldenanalysis Python library.",
   "keywords": [
     "analysis",
