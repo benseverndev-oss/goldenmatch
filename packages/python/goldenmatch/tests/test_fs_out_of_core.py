@@ -773,6 +773,83 @@ def test_bucketed_multipass_agrees_with_sequential(tmp_path):
     )
 
 
+def _assert_bucketed_outputs_identical(a, b):
+    """Both result dicts carry byte-identical unique/dupes/golden parquet — counts
+    AND full row contents (order-insensitive) — plus the same pair count. The
+    streaming-prep on-disk base must produce EXACTLY the resident-base output."""
+    import polars as pl
+
+    for k in ("unique_count", "dupes_count", "golden_count", "pairs"):
+        assert a[k] == b[k], k
+    for key in ("unique_path", "dupes_path", "golden_path"):
+        pa_, pb_ = a[key], b[key]
+        assert (pa_ is None) == (pb_ is None), key
+        if pa_ is None:
+            continue
+        da, db = pl.read_parquet(pa_), pl.read_parquet(pb_)
+        assert da.columns == db.columns, key
+        assert da.sort(by=da.columns).equals(db.sort(by=db.columns)), key
+
+
+def test_bucketed_prep_stream_flag_matches_resident(tmp_path, monkeypatch):
+    """GOLDENMATCH_FS_PREP_STREAM=1 spills the prepared base to an on-disk Arrow-IPC
+    file (read back memory-mapped batch-by-batch) instead of holding it resident; the
+    streamed unique/dupes/golden parquet must be byte-identical to the flag-OFF
+    resident path. Multi-pass so both the bucketing scan AND the output scan read the
+    base off disk."""
+    import types
+
+    from goldenmatch.backends.fs_out_of_core import run_fs_dedupe_bucketed
+
+    df = _bigger_df()
+    mk = _make_probabilistic_mk()
+    blocking = BlockingConfig(
+        strategy="multi_pass",
+        passes=[BlockingKeyConfig(fields=["zip"]),
+                BlockingKeyConfig(fields=["last_name"])],
+    )
+    em = _train(df, blocking, mk)
+    cfg = types.SimpleNamespace(golden_rules=None)
+
+    monkeypatch.setenv("GOLDENMATCH_FS_PREP_STREAM", "0")
+    off = run_fs_dedupe_bucketed(df, blocking, mk, em, cfg, str(tmp_path / "off"))
+    monkeypatch.setenv("GOLDENMATCH_FS_PREP_STREAM", "1")
+    on = run_fs_dedupe_bucketed(df, blocking, mk, em, cfg, str(tmp_path / "on"))
+
+    assert off["bucketed"] is True and on["bucketed"] is True
+    _assert_bucketed_outputs_identical(off, on)
+
+
+def test_bucketed_accepts_ipc_path_base(tmp_path, monkeypatch):
+    """Passing an on-disk Arrow-IPC PATH as ``prepared_df`` (the batched-ingest path
+    hands a disk-backed base) yields identical output to passing the resident
+    pa.Table — the path-aware base seam is transparent to the route."""
+    import types
+
+    from goldenmatch.backends.fs_out_of_core import (
+        _write_base_ipc,
+        run_fs_dedupe_bucketed,
+    )
+
+    df = _bigger_df()
+    mk = _make_probabilistic_mk()
+    blocking = BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])])
+    em = _train(df, blocking, mk)
+    cfg = types.SimpleNamespace(golden_rules=None)
+
+    monkeypatch.delenv("GOLDENMATCH_FS_PREP_STREAM", raising=False)
+    resident = run_fs_dedupe_bucketed(df, blocking, mk, em, cfg, str(tmp_path / "res"))
+
+    # Spill the same prepared frame to an Arrow-IPC file and pass the PATH directly.
+    base_path = str(tmp_path / "base.arrow")
+    _write_base_ipc(df.to_arrow(), base_path)
+    viapath = run_fs_dedupe_bucketed(
+        base_path, blocking, mk, em, cfg, str(tmp_path / "path")
+    )
+
+    _assert_bucketed_outputs_identical(resident, viapath)
+
+
 def _output_dict_and_sets(res, tmp_dir):
     """(counts, unique-rowid-set, dupes-partition-set, golden-rowcount) for an
     FS output result dict -- the parity surface for comparing the batched output

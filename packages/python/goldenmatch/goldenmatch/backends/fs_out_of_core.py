@@ -246,6 +246,25 @@ def _fs_ooc_arrow_cluster_enabled() -> bool:
     return v.strip().lower() in ("1", "true", "yes", "on")
 
 
+def _fs_prep_stream_enabled() -> bool:
+    """``GOLDENMATCH_FS_PREP_STREAM=1`` routes the frame-residency ``bucketed`` FS
+    route (``run_fs_dedupe_bucketed``) through an on-disk Arrow-IPC prepared ``base``
+    instead of holding the whole prepared frame RESIDENT for the score->WCC->output
+    back-half.
+
+    The bucketed route today builds ``base = _fw.to_arrow()`` and keeps it in RAM
+    through bucketing, clustering AND output — so peak ≈ 1× the wide prepared frame
+    (~0.8 GB/M, the measured 50M frame-residency ceiling; spec
+    ``2026-08-03-fs-frame-residency-disk-spill-design.md``). When on, the resident
+    ``base`` is spilled to a bounded Arrow-IPC file and read back memory-mapped
+    batch-by-batch, so the whole wide frame is never simultaneously resident. Default
+    OFF — byte-identical to today (resident ``base``). Parses like the sibling
+    flags: true iff the value is one of ``{"1","true","yes","on"}``."""
+    return os.environ.get("GOLDENMATCH_FS_PREP_STREAM", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
 def _resolve_db_path(db_path: str | None) -> str:
     """None → in-memory DuckDB (tests / small frames). ``"auto"`` → a tempfile
     that spills the prepared table to DISK, so post-load resident memory drops
@@ -805,21 +824,135 @@ def _prep_all_ids(con: Any) -> Sequence[int]:
     return [r[0] for r in con.execute("SELECT __row_id__ FROM prep").fetchall()]
 
 
+def _prepared_base_is_path(base: Any) -> bool:
+    """True when the prepared ``base`` is an on-disk Arrow-IPC PATH (streaming prep)
+    rather than a resident ``pa.Table``. A path lets the bucketed route source the
+    prepared frame memory-mapped batch-by-batch, so the whole wide frame is never
+    simultaneously RAM-resident (the ~0.8 GB/M frame-residency ceiling)."""
+    return isinstance(base, str)
+
+
+def _prepared_base_schema(base: Any) -> Any:
+    """Arrow schema of the prepared ``base`` — from the resident table, or from the
+    on-disk Arrow-IPC footer (never materialising the table) when ``base`` is a
+    path."""
+    if _prepared_base_is_path(base):
+        import pyarrow as pa
+
+        with pa.memory_map(base, "r") as src:
+            return pa.ipc.open_file(src).schema
+    return base.schema
+
+
+def _prepared_base_column_names(base: Any) -> list[str]:
+    """Column names of the prepared ``base`` (resident ``pa.Table`` or on-disk IPC
+    path)."""
+    if _prepared_base_is_path(base):
+        return list(_prepared_base_schema(base).names)
+    return list(base.column_names)
+
+
+def _prepared_base_batches(base: Any, batch_rows: int):
+    """Yield the prepared ``base`` as ``pa.Table`` chunks (<= ``batch_rows`` rows),
+    from EITHER a resident ``pa.Table`` (``slice`` loop — zero-copy views, exactly
+    the pre-streaming behaviour) OR a PATH to an on-disk Arrow-IPC file (a
+    memory-mapped record-batch reader — one batch live at a time, never the whole
+    table resident).
+
+    This is the ONE seam that makes ``bucket_frame_to_shards`` /
+    ``_stream_fs_dedupe_output_batched`` / ``_prep_all_ids_frame`` source the base
+    identically whether it lives in RAM or on disk. The on-disk batches were written
+    in bounded row-slices by ``_write_base_ipc``, so a path yields the writer's
+    already-bounded batches (``batch_rows`` governs both sides)."""
+    import pyarrow as pa
+
+    if _prepared_base_is_path(base):
+        # Generator holds the memory-map open across yields; it closes when the
+        # caller exhausts the loop. Each batch's buffers are backed by the mmap, so
+        # downstream ops (derive_block_key / filter / write) must run before the
+        # generator advances — which the sequential for-loops naturally guarantee.
+        with pa.memory_map(base, "r") as src:
+            reader = pa.ipc.open_file(src)
+            for i in range(reader.num_record_batches):
+                yield pa.Table.from_batches([reader.get_batch(i)])
+        return
+    n = base.num_rows
+    off = 0
+    while off < n:
+        sl = base.slice(off, batch_rows)
+        if sl.num_rows == 0:
+            break
+        yield sl
+        off += sl.num_rows
+
+
+def _write_base_ipc(base: Any, path: str, *, batch_rows: int | None = None) -> None:
+    """Spill a resident Arrow ``base`` to an on-disk Arrow-IPC file in bounded
+    row-slices (never a second whole-frame copy), so the streaming-prep bucketed
+    route can DROP the RAM frame and read ``base`` back memory-mapped batch-by-batch
+    via ``_prepared_base_batches``. Mirrors ``_load_frame_batched``'s
+    slice -> write -> free discipline through a single ``RecordBatchFileWriter``; the
+    bounded slice size is what makes the readback batches bounded too. ``batch_rows``
+    defaults to ``_BUCKETED_BATCH_ROWS`` (resolved at call time — the constant is
+    defined later in the module)."""
+    import pyarrow as pa
+
+    br = batch_rows if batch_rows is not None else _BUCKETED_BATCH_ROWS
+    with pa.OSFile(path, "wb") as sink, pa.ipc.RecordBatchFileWriter(
+        sink, base.schema
+    ) as writer:
+        n = base.num_rows
+        off = 0
+        while off < n:
+            sl = base.slice(off, br)
+            if sl.num_rows == 0:
+                break
+            writer.write_table(sl)
+            off += sl.num_rows
+
+
 def _prep_all_ids_frame(table: Any) -> Sequence[int]:
     """The pyarrow analogue of ``_prep_all_ids``: the full ``__row_id__`` set off a
-    RESIDENT ``pa.Table`` (no DuckDB, no polars) — a ``range`` when contiguous
-    (min..max, no gaps — the pipeline's dense global row index), else the explicit
-    list. ``__row_id__`` is unique per row, so ``max - min + 1 == count`` iff
-    exactly ``{min..max}``."""
+    RESIDENT ``pa.Table`` OR an on-disk Arrow-IPC base PATH (no DuckDB, no polars) —
+    a ``range`` when contiguous (min..max, no gaps — the pipeline's dense global row
+    index), else the explicit list. ``__row_id__`` is unique per row, so
+    ``max - min + 1 == count`` iff exactly ``{min..max}``.
+
+    Path branch: compute min/max/count by SCANNING the IPC batches (bounded — only
+    one ``__row_id__`` column batch is live at a time), returning a ``range`` when
+    contiguous. Only the rare gapped (post-quarantine) case does a second bounded
+    scan to collect the explicit id list — matching the resident ``to_pylist``
+    fallback without ever materialising the whole frame."""
     import pyarrow.compute as pc
+
+    if _prepared_base_is_path(table):
+        lo: int | None = None
+        hi: int | None = None
+        cnt = 0
+        for chunk in _prepared_base_batches(table, _BUCKETED_BATCH_ROWS):
+            col = chunk.column("__row_id__")
+            if len(col) == 0:
+                continue
+            cmin, cmax = int(pc.min(col).as_py()), int(pc.max(col).as_py())
+            lo = cmin if lo is None else min(lo, cmin)
+            hi = cmax if hi is None else max(hi, cmax)
+            cnt += len(col)
+        if not cnt:
+            return []
+        if hi - lo + 1 == cnt:  # type: ignore[operator]
+            return range(lo, hi + 1)  # type: ignore[arg-type]
+        ids: list[int] = []
+        for chunk in _prepared_base_batches(table, _BUCKETED_BATCH_ROWS):
+            ids.extend(chunk.column("__row_id__").to_pylist())
+        return ids
 
     col = table.column("__row_id__")
     n = len(col)
     if not n:
         return []
-    lo, hi = int(pc.min(col).as_py()), int(pc.max(col).as_py())
-    if hi - lo + 1 == n:
-        return range(lo, hi + 1)
+    lo2, hi2 = int(pc.min(col).as_py()), int(pc.max(col).as_py())
+    if hi2 - lo2 + 1 == n:
+        return range(lo2, hi2 + 1)
     return col.to_pylist()
 
 
@@ -1012,7 +1145,12 @@ def _stream_fs_dedupe_output_batched(
             }
         )
 
-    record_cols = [c for c in frame.column_names if not c.startswith("__xform_")]
+    # ``frame`` may be a resident ``pa.Table`` OR an on-disk Arrow-IPC path
+    # (streaming prep) — read column names / schema through the base seam so the
+    # whole frame is never materialised just to enumerate columns.
+    record_cols = [
+        c for c in _prepared_base_column_names(frame) if not c.startswith("__xform_")
+    ]
 
     _os.makedirs(out_dir, exist_ok=True)
     unique_path = _os.path.join(out_dir, "unique.parquet")
@@ -1059,8 +1197,14 @@ def _stream_fs_dedupe_output_batched(
                 assignments, keys="__row_id__", join_type="inner"
             ).join(sizes, keys="__cluster_id__", join_type="inner")
 
-    # --- stream the resident frame in row-id-ordered batches -----------------
-    record_schema = frame.select(record_cols).schema
+    # --- stream the frame in row-id-ordered batches --------------------------
+    # Resident frame keeps the exact ``select(...).schema`` (byte-identical to
+    # today); a path builds the record schema from the IPC footer fields.
+    if _prepared_base_is_path(frame):
+        _full_schema = _prepared_base_schema(frame)
+        record_schema = pa.schema([_full_schema.field(c) for c in record_cols])
+    else:
+        record_schema = frame.select(record_cols).schema
     dupes_schema = pa.schema(
         [*list(record_schema), pa.field("__cluster_id__", pa.int64())]
     )
@@ -1072,8 +1216,8 @@ def _stream_fs_dedupe_output_batched(
     uw = _pq.ParquetWriter(unique_path, record_schema)
     dw = _pq.ParquetWriter(dupes_path, dupes_schema)
     try:
-        for rb in frame.to_batches(max_chunksize=batch_rows):
-            att = _attach(pa.Table.from_batches([rb]))
+        for batch_tbl in _prepared_base_batches(frame, batch_rows):
+            att = _attach(batch_tbl)
             uniq, dup, gold = _split_output_batch(
                 att, "__n__", record_cols, int(max_cluster_size)
             )
@@ -1762,12 +1906,13 @@ def bucket_frame_to_shards(
     # closes. The stack exits before the return, so all shards are complete when the
     # caller reads them.
     writers: dict[tuple[int, int], Any] = {}
-    n = base.num_rows
-    off = 0
+    # Source ``base`` in bounded batches from EITHER the resident frame (slice loop)
+    # or an on-disk Arrow-IPC path (memory-mapped batch reader) — the streaming-prep
+    # seam. Everything downstream (block-key derive, null-key filter, crc32 bucket,
+    # per-(pass, bucket) IPC writers) is byte-identical on a slice vs an IPC batch,
+    # since both are ``pa.Table`` chunks over the same rows.
     with _contextlib.ExitStack() as stack:
-        while off < n:
-            sl = base.slice(off, batch_rows)
-            off += sl.num_rows
+        for sl in _prepared_base_batches(base, batch_rows):
             for pi, key_cfg in enumerate(passes):
                 bk = _tf(sl).derive_block_key(
                     key_cfg.fields, key_cfg.transforms or [],
@@ -1863,14 +2008,32 @@ def run_fs_dedupe_bucketed(
     if getattr(config, "golden_rules", None) is not None:
         max_cluster_size = config.golden_rules.max_cluster_size
 
-    _fw = _tf(prepared_df)
-    if is_polars_lazyframe(_fw.native):
-        _fw = _tf(_fw.native.collect())
-    base = _fw.to_arrow()
-
     passes = _bucketed_passes(blocking_config)
     shard_dir = _tempfile.mkdtemp(prefix="gm_fs_bucketed_")
     try:
+        # Resolve the prepared ``base``: an on-disk Arrow-IPC PATH (streaming prep —
+        # the whole wide frame is never simultaneously RAM-resident) or a resident
+        # ``pa.Table`` (today's default, byte-identical).
+        if _prepared_base_is_path(prepared_df):
+            # Caller handed an on-disk Arrow-IPC base directly (the batched-ingest
+            # path): use it as-is, no whole-frame materialisation here.
+            base: Any = prepared_df
+        else:
+            _fw = _tf(prepared_df)
+            if is_polars_lazyframe(_fw.native):
+                _fw = _tf(_fw.native.collect())
+            base = _fw.to_arrow()
+            if _fs_prep_stream_enabled():
+                # Streaming prep: spill the resident base to a bounded Arrow-IPC file
+                # in the shard dir, DROP the RAM table, then bucket + score + stream
+                # output from the PATH — so the ~0.8 GB/M prepared frame is never held
+                # resident through the score->WCC->output back-half (the
+                # frame-residency ceiling; spec 2026-08-03-fs-frame-residency-disk-spill).
+                _base_path = os.path.join(shard_dir, "prep_base.arrow")
+                _write_base_ipc(base, _base_path)
+                del base, _fw
+                base = _base_path
+
         # (A) frame -> per-pass hash-bucket shards on disk.
         pass_shards = bucket_frame_to_shards(base, blocking_config, shard_dir)
 
@@ -1926,14 +2089,19 @@ def run_fs_dedupe_bucketed(
         assignments, n_pairs = external_wcc_from_shards(
             edge_shards, _prep_all_ids_frame(base), max_cluster_size, link_threshold,
         )
+
+        # Join-FREE batched output (Phase 3a): stream ``base`` in batches (resident
+        # frame OR the on-disk IPC path) and attach cluster_id/size per batch,
+        # instead of the ~2x-frame `base.join(asn).join(sizes)` in
+        # `_stream_fs_dedupe_output_arrow` that OOMs the 50M output phase. Peak stays
+        # ~1x frame (or one batch when streaming from a path). Run INSIDE the try:
+        # when ``base`` is a path it lives in ``shard_dir``, so output must precede
+        # the finally-clause cleanup. Byte-identical output either way — only the
+        # temp-dir cleanup timing moves relative to output.
+        res = _stream_fs_dedupe_output_batched(base, assignments, config, out_dir)
     finally:
         _shutil.rmtree(shard_dir, ignore_errors=True)
 
-    # Join-FREE batched output (Phase 3a): stream the resident `base` in batches
-    # and attach cluster_id/size per batch, instead of the ~2x-frame
-    # `base.join(asn).join(sizes)` in `_stream_fs_dedupe_output_arrow` that OOMs
-    # the 50M output phase. Peak stays ~1x frame.
-    res = _stream_fs_dedupe_output_batched(base, assignments, config, out_dir)
     res["pairs"] = n_pairs
     res["streaming"] = True
     res["bucketed"] = True
