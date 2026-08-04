@@ -54,6 +54,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   `TimeDimension`/`TimeMetric`. The third "frontier" slice (design:
   `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
   `tests/test_semantic_discovery_time_intelligence.py`.
+- **Semantic-model discovery — cardinality: 1:1 + m:n bridges (Phase 14).** Two lifts of
+  the "everything is many_to_one" limitation. `discover_joins` now sets
+  `relationship="one_to_one"` when the FK column is UNIQUE on the from side (each from-row
+  references a distinct to-row) — flowing straight into the Cube `CubeJoin`/OSI relationship
+  emit. New `goldenmatch/semantic/discovery/cardinality.py`:
+  `discover_bridges(proposed_tables, joins)` detects **many-to-many** junction tables — a
+  trustworthy 2-column compound key (PR-10) whose columns are certified FKs (PR-3) to two
+  DIFFERENT tables — as `Bridge(bridge_table, left_table, left_column, right_table,
+  right_column)` on `ProposedModel.bridges` + `to_dict`. Deterministic, default-on. New
+  exports `discover_bridges` + `Bridge`. The fourth "frontier" slice (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discovery_cardinality.py`.
 
 ## [3.11.0] - 2026-08-03
 

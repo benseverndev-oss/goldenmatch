@@ -93,6 +93,21 @@ def _distinct_nonnull(table: Any, column: str) -> set:
         return set()
 
 
+def _is_unique_column(table: Any, column: str) -> bool:
+    """True when `column`'s non-null values are all distinct (no duplicates) — the FK
+    side of a one-to-one relationship."""
+    from goldenmatch.core.frame import to_frame
+
+    try:
+        frame = to_frame(table)
+        if column not in frame.columns:
+            return False
+        vals = frame.column(column).drop_nulls().to_list()
+        return len(vals) == len(set(vals)) and len(vals) > 0
+    except Exception:  # noqa: BLE001 - a bad column never breaks the sweep
+        return False
+
+
 def _null_rate(table: Any, column: str) -> float:
     from goldenmatch.core.frame import to_frame
 
@@ -250,7 +265,8 @@ def discover_joins(
                             from_column=fk_col,
                             to_table=to_table,
                             to_column=key_col,
-                            relationship="many_to_one",
+                            relationship=("one_to_one" if _is_unique_column(source, fk_col)
+                                          else "many_to_one"),
                             certificate=cert,
                             signals=signals,
                             containment=containment,
