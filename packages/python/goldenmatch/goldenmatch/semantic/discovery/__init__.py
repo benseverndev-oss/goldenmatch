@@ -19,6 +19,7 @@ Phase 7 (optional): `name_semantic_model` — advisory, self-verified LLM busine
 """
 from __future__ import annotations
 
+from goldenmatch.semantic.discovery.cardinality import Bridge, discover_bridges
 from goldenmatch.semantic.discovery.entities import EntityType, discover_entity_types
 from goldenmatch.semantic.discovery.hierarchies import Hierarchy, discover_hierarchies
 from goldenmatch.semantic.discovery.joins import JoinCandidate, discover_joins
@@ -49,6 +50,7 @@ from goldenmatch.semantic.discovery.time_intelligence import (
 )
 
 __all__ = [
+    "Bridge",
     "Dimension",
     "EntityType",
     "Hierarchy",
@@ -63,6 +65,7 @@ __all__ = [
     "ProposedModel",
     "ProposedTable",
     "TableMeasures",
+    "discover_bridges",
     "discover_entity_types",
     "discover_hierarchies",
     "discover_joins",

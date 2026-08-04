@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 450,
+      "module_count": 451,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7270,6 +7270,7 @@
           "file": "packages/python/goldenmatch/goldenmatch/semantic/discovery/__init__.py",
           "purpose": "Semantic-model discovery (the generative half of the semantic wedge).",
           "imports": [
+            "goldenmatch.semantic.discovery.cardinality",
             "goldenmatch.semantic.discovery.entities",
             "goldenmatch.semantic.discovery.hierarchies",
             "goldenmatch.semantic.discovery.joins",
@@ -7279,6 +7280,15 @@
             "goldenmatch.semantic.discovery.model",
             "goldenmatch.semantic.discovery.namer",
             "goldenmatch.semantic.discovery.time_intelligence"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.discovery.cardinality",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/discovery/cardinality.py",
+          "purpose": "Cardinality (PR-14): many-to-many bridge / junction detection.",
+          "defines": [
+            "Bridge",
+            "discover_bridges"
           ]
         },
         {
@@ -7343,6 +7353,7 @@
           "defines": [
             "JoinCandidate",
             "_distinct_nonnull",
+            "_is_unique_column",
             "_key_columns",
             "_null_rate",
             "discover_joins"
@@ -7409,6 +7420,7 @@
           ],
           "imports": [
             "goldenmatch.semantic",
+            "goldenmatch.semantic.discovery.cardinality",
             "goldenmatch.semantic.discovery.emit",
             "goldenmatch.semantic.discovery.entities",
             "goldenmatch.semantic.discovery.hierarchies",

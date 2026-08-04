@@ -23,6 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from goldenmatch.semantic.discovery.cardinality import Bridge, discover_bridges
 from goldenmatch.semantic.discovery.entities import EntityType, discover_entity_types
 from goldenmatch.semantic.discovery.hierarchies import Hierarchy, discover_hierarchies
 from goldenmatch.semantic.discovery.joins import JoinCandidate, discover_joins
@@ -91,6 +92,7 @@ class ProposedModel:
     metrics: list[Metric] = field(default_factory=list)
     time_dimensions: list[TimeDimension] = field(default_factory=list)
     time_metrics: list[TimeMetric] = field(default_factory=list)
+    bridges: list[Bridge] = field(default_factory=list)
 
     @property
     def all_trustworthy(self) -> bool:
@@ -149,6 +151,7 @@ class ProposedModel:
             "metrics": [mt.to_dict() for mt in self.metrics],
             "time_dimensions": [td.to_dict() for td in self.time_dimensions],
             "time_metrics": [tm.to_dict() for tm in self.time_metrics],
+            "bridges": [b.to_dict() for b in self.bridges],
             "yaml": self.yaml,
         }
 
@@ -267,6 +270,7 @@ def discover_semantic_model(
         time_dimensions=[pt.time_dimension for pt in proposed_tables
                          if pt.time_dimension is not None],
         time_metrics=[tm for pt in proposed_tables for tm in pt.time_metrics],
+        bridges=discover_bridges(proposed_tables, joins),
     )
 
     # Optional, advisory, non-authoritative: annotate the finished model with business
