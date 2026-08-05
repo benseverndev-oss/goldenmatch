@@ -119,6 +119,158 @@ def _warn_stale_native_wheel_once(n_exclude: int) -> None:
     )
 
 
+# ── #1826 / #2417: bounded scoring of an un-splittable oversized block ──────
+
+
+def _fs_oversized_pair_budget() -> int:
+    """Candidate-pair budget for ONE scoring call on an oversized block.
+
+    When ``_split_oversized`` cannot split a block and ``skip_oversized=False``,
+    the block used to be handed to the scorer WHOLE -- one call carrying
+    ``C(n, 2)`` candidate pairs. That is the #1826 shape and the #2417 OOM: a
+    ~6,300-row hub block (all rows share one blocking-key value, so no split
+    exists) is ~19.8M candidate pairs in a single call.
+
+    Above this budget the block is scored in TILES instead (see
+    ``_iter_bounded_tiles``), which bounds a call's candidate pairs to roughly
+    the budget. What that buys differs by lane -- measured with
+    ``scripts/repro_issue_2417.py``, which drives this exact function:
+
+    * VECTORIZED (numpy): the peak IS the dense ``n x n`` float64 matrices, so
+      it is ``O(n^2)`` in the block's rows and independent of how many pairs
+      survive -- 434 MB at n=2,500, 866 MB at n=3,500, ~2.8 GB at n=6,300.
+      Tiling bounds it to ~``16 x budget`` bytes per field (866 -> 562 MB at the
+      default, 144 MB at a 1M budget). It also makes blocks above
+      ``GOLDENMATCH_FS_VEC_MAX_ELEMS`` (>7,071 rows), which ``_fs_vec_guard``
+      currently REFUSES outright, scoreable at all.
+    * NATIVE: the kernel threshold-filters per pair, so the candidates are never
+      materialized -- the peak tracks SURVIVING pairs (16 MB at 53K survivors,
+      654 MB at 2.4M). Tiling only removes the whole-block double-buffering
+      (Rust ``Vec`` -> pyo3 list -> rounded list), worth ~27%; the accumulated
+      survivor list is the floor and no amount of chunking moves it. Bounding
+      THAT needs pair streaming / arrow emission, not tiling.
+
+    Default 4,000,000 pairs (~2,830-row tiles): comfortably above every normal
+    block (``max_block_size`` defaults to 5,000 -> 12.5M pairs is already
+    oversized territory) so ordinary scoring is untouched, and small enough that
+    one call's dense matrix stays ~64 MB rather than gigabytes.
+
+    ``GOLDENMATCH_FS_OVERSIZED_CHUNK_PAIRS=0`` disables tiling entirely (the
+    pre-#2417 score-whole behaviour, kept as the parity escape hatch).
+    """
+    raw = os.environ.get("GOLDENMATCH_FS_OVERSIZED_CHUNK_PAIRS", "").strip()
+    if not raw:
+        return 4_000_000
+    try:
+        val = int(raw)
+    except ValueError:
+        logger.warning(
+            "GOLDENMATCH_FS_OVERSIZED_CHUNK_PAIRS=%r is not an integer; "
+            "using the 4,000,000-pair default.", raw,
+        )
+        return 4_000_000
+    return max(val, 0)
+
+
+def _pair_count(n: int) -> int:
+    return n * (n - 1) // 2 if n >= 2 else 0
+
+
+def _iter_bounded_tiles(frame, n: int, budget: int):
+    """Yield ``(tile_frame, head_len)`` covering every intra-block pair of
+    ``frame`` (``n`` rows) exactly once, with each tile's candidate-pair count
+    bounded by ``budget``.
+
+    Split the block into ``g`` contiguous groups of ``k = isqrt(budget / 2)``
+    rows and emit:
+
+    * one DIAGONAL tile per group -- ``head_len=None``, every pair it produces
+      is wanted (the group's own intra pairs);
+    * one CROSS tile per unordered group pair ``(i < j)`` -- the two groups
+      concatenated, ``head_len = len(group_i)``. The scorer sees ``2k`` rows and
+      produces intra-i, intra-j AND cross pairs; the caller keeps ONLY the cross
+      pairs (the intra ones already came from, or will come from, the diagonal
+      tiles). That discard is why tiling costs ~2x the pair comparisons of a
+      single whole-block call -- the price of bounding a call that otherwise
+      allocates ``O(n^2)`` and can take the process down.
+
+    Union of the kept pairs == the whole-block pair set, with no duplicates: an
+    unordered pair sits in one group (diagonal tile) or straddles exactly one
+    group pair (cross tile). EMISSION ORDER differs from the whole-block call
+    (tile order, not row-major); pair values are identical, and every FS
+    consumer canonicalizes + dedups pairs before use.
+    """
+    from math import isqrt
+
+    from goldenmatch.core.frame import concat_frames
+    from goldenmatch.core.frame import to_frame as _tf
+
+    # A cross tile holds 2k rows -> C(2k,2) ~ 2k^2 candidate pairs, so k is
+    # sized off the budget's HALF to keep the widest tile inside it.
+    k = max(isqrt(max(budget, 2) // 2), 2)
+    bounds = [(off, min(k, n - off)) for off in range(0, n, k)]
+    slices = [frame.slice(off, size) for off, size in bounds]
+
+    for sl, (_off, size) in zip(slices, bounds):
+        if size >= 2:
+            yield sl, None
+    for i in range(len(slices)):
+        for j in range(i + 1, len(slices)):
+            yield (
+                concat_frames([_tf(slices[i]), _tf(slices[j])]).native,
+                bounds[i][1],
+            )
+
+
+def _score_block_bounded(
+    frame,
+    n: int,
+    score_one,
+    *,
+    tile_above_rows: int,
+    row_id_col: str = "__row_id__",
+):
+    """Score ONE block, tiling it when a single call would exceed the pair
+    budget (#1826/#2417). ``score_one(frame) -> list[(a, b, score)] | None``.
+
+    Tiling engages ONLY for a block that is BOTH oversized
+    (``n > tile_above_rows``, i.e. the un-splittable score-whole fallback --
+    auto-split sub-blocks land at or under ``max_block_size`` and are left
+    alone) AND above the pair budget. Everywhere else this is exactly
+    ``score_one(frame)`` -- same call, same order, zero overhead -- so only the
+    pathological blocks pay the tiling cost. ``None`` (the
+    ``_score_block_frame`` "block pre-filtered out" signal) propagates for the
+    untiled call; per-tile ``None``s are simply skipped.
+    """
+    budget = _fs_oversized_pair_budget()
+    if budget <= 0 or n <= tile_above_rows or _pair_count(n) <= budget:
+        return score_one(frame)
+
+    from goldenmatch.core.frame import to_frame as _tf
+
+    logger.info(
+        "Oversized block (%d rows, ~%s candidate pairs) scored in bounded "
+        "tiles of <=%s pairs instead of one whole-block call (#1826/#2417). "
+        "Same pair set; ~2x pair comparisons. Set "
+        "GOLDENMATCH_FS_OVERSIZED_CHUNK_PAIRS=0 to score whole.",
+        n, f"{_pair_count(n):,}", f"{budget:,}",
+    )
+    out: list[tuple[int, int, float]] = []
+    for tile, head_len in _iter_bounded_tiles(frame, n, budget):
+        pairs = score_one(tile)
+        if not pairs:
+            continue
+        if head_len is None:
+            out.extend(pairs)
+            continue
+        # Cross tile: keep only pairs that straddle the two groups. The head
+        # group's row ids identify the side; a pair is cross iff exactly one
+        # endpoint is in the head.
+        head = set(_tf(tile).slice(0, head_len).column(row_id_col).to_list())
+        out.extend(p for p in pairs if (p[0] in head) != (p[1] in head))
+    return out
+
+
 # Scorers whose batched NxN matrix form is BYTE-IDENTICAL to the per-pair
 # score_pair callable (asserted scorer-by-scorer in
 # tests/test_score_buckets_vectorized_fallback.py). The vectorized fast-path
@@ -1163,12 +1315,22 @@ def score_probabilistic_external_blocks(
             continue
         for frame in _frames(bdf, n):
             if use_native:
-                pairs = score_probabilistic_bucket_native(
-                    frame, [_height(frame)], mk, em_result, frozen_exclude,
-                    exclude_handle=exclude_handle,
-                )
+                def _score_one(f):
+                    return score_probabilistic_bucket_native(
+                        f, [_height(f)], mk, em_result, frozen_exclude,
+                        exclude_handle=exclude_handle,
+                    )
             else:
-                pairs = prob_scorer(frame, frozen_exclude)
+                def _score_one(f):
+                    return prob_scorer(f, frozen_exclude)
+
+            # #1826/#2417: a canopy / sorted-neighborhood mega-block that
+            # cannot be auto-split arrives WHOLE; tile it so one scoring call
+            # never carries its full C(n,2).
+            pairs = _score_block_bounded(
+                frame, _height(frame), _score_one,
+                tile_above_rows=max_block_size,
+            )
             for a, b, s in pairs:
                 if target_ids is not None and (
                     (a in target_ids) == (b in target_ids)
@@ -2026,14 +2188,23 @@ def score_buckets(
             # Oversized blocks: auto-split, then score each resolved frame in
             # its own single-block native call (same kernel, size_list=[n], so
             # the emitted cells match a per-block run exactly).
+            def _native_one(f):
+                return score_probabilistic_bucket_native(
+                    f, [len(f)], mk, em_result, frozen_exclude,
+                    exclude_handle=fs_exclude_handle,
+                )
+
             offset = 0
             for s in size_list:
                 if s > max_block_size:
                     for sub in _split_oversized(sorted_df.slice(offset, s), s):
+                        # #1826/#2417: an un-splittable oversized block comes
+                        # back WHOLE here; tile it so one kernel call never
+                        # carries the block's full C(n,2).
                         pairs.extend(
-                            score_probabilistic_bucket_native(
-                                sub, [len(sub)], mk, em_result, frozen_exclude,
-                                exclude_handle=fs_exclude_handle,
+                            _score_block_bounded(
+                                sub, len(sub), _native_one,
+                                tile_above_rows=max_block_size,
                             )
                         )
                         local_blocks += 1
@@ -2156,7 +2327,10 @@ def score_buckets(
                         for sub in _split_oversized(
                             sorted_df.slice(offset, size), size
                         ):
-                            pairs = _score_block_frame(sub)
+                            pairs = _score_block_bounded(
+                                sub, len(sub), _score_block_frame,
+                                tile_above_rows=max_block_size,
+                            )
                             if pairs is None:
                                 continue
                             local_pairs.extend(pairs)
@@ -2180,7 +2354,10 @@ def score_buckets(
                     for sub in _split_oversized(
                         sorted_df.slice(offset, size), size
                     ):
-                        pairs = _score_block_frame(sub)
+                        pairs = _score_block_bounded(
+                            sub, len(sub), _score_block_frame,
+                            tile_above_rows=max_block_size,
+                        )
                         if pairs is None:
                             continue
                         local_pairs.extend(pairs)
