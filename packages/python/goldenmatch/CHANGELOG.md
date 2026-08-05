@@ -6,6 +6,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [3.12.0] - 2026-08-04
+
 ### Added
 - **Semantic-model discovery — real-LLM namer validation / eval harness (Phase 19).** New
   `goldenmatch.semantic.score_naming(suggestions, gold)` is a pure, deterministic scorer of

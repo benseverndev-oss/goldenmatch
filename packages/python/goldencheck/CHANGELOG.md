@@ -4,6 +4,11 @@ All notable changes to GoldenCheck will be documented in this file.
 
 ## [Unreleased]
 
+## [3.4.0] - 2026-08-04
+
+- Lockstep suite release (2026-08 GoldenModel frontier cut). No functional changes to
+  GoldenCheck; version kept in sync with the goldenmatch 3.12.0 / golden-suite 0.4.0 cut.
+
 ## [3.3.0] - 2026-08-03
 
 ### Changed

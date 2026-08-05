@@ -4,6 +4,15 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.4.0] - 2026-08-04
+
+- Floor bumps for the 2026-08 GoldenModel frontier cut: `goldenmatch[polars]>=3.12` (was
+  `>=3.11`) — the nine "frontier" semantic-model discovery slices (dimension hierarchies,
+  metrics, time intelligence, cardinality/bridges, SCD, model completeness/trust score,
+  warehouse-scale derivation off `information_schema`, catalog reconciliation, and the
+  namer quality-eval harness); `goldencheck[polars]>=3.4` (was `>=3.3`, lockstep). Native
+  floors unchanged.
+
 ## [0.3.6] - 2026-08-03
 
 - Floor bumps for the 2026-08 suite release: `goldenmatch[polars]>=3.11` (was
