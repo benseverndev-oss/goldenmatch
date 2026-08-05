@@ -3,6 +3,6 @@ import { VERSION } from "../../src/index.js";
 
 describe("smoke", () => {
   it("exports a version", () => {
-    expect(VERSION).toBe("0.3.0");
+    expect(VERSION).toBe("0.4.0");
   });
 });
