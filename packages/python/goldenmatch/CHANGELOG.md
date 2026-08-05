@@ -6,6 +6,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Fixed
+- **FS: an un-splittable oversized block is now scored in bounded tiles instead of whole
+  (#1826/#2417).** When `_split_oversized` finds no useful split and `skip_oversized=false`
+  — the "hub" shape where thousands of rows share one blocking-key value, so no split
+  exists — the block used to be handed to the scorer WHOLE, in one call carrying its full
+  `C(n, 2)`. `score_buckets` (all three bucket lanes) and
+  `score_probabilistic_external_blocks` now tile such a block above a candidate-pair
+  budget: contiguous row groups, one diagonal tile per group plus one cross tile per group
+  pair, covering every intra-block pair exactly once. Same pair set, same scores; emission
+  order within that block becomes tile order, and the tiled block costs ~2.2x the pair
+  comparisons (cross tiles recompute the intra-group pairs they discard). Measured on one
+  hub block (`scripts/repro_issue_2417.py`): the vectorized-numpy lane's peak is `O(n^2)`
+  in the dense per-field matrices — 866 MB at 3,500 rows — and tiling cuts it to 562 MB at
+  the default budget and 144 MB at a 1M budget; it also makes blocks above
+  `GOLDENMATCH_FS_VEC_MAX_ELEMS` (>7,071 rows), which `_fs_vec_guard` currently *refuses*,
+  scoreable at all. On the native lane the kernel already threshold-filters per pair, so
+  its peak tracks SURVIVING pairs rather than candidates (16 MB at 53K survivors, 654 MB at
+  2.4M); tiling removes only the whole-block double-buffering there, worth ~27%. New
+  `GOLDENMATCH_FS_OVERSIZED_CHUNK_PAIRS` (default `4000000`; `0` = the pre-#2417
+  score-whole parity hatch). Blocks at or under `max_block_size`, and any block under the
+  budget, take the untouched single call. Tests: `tests/test_fs_oversized_chunked.py`.
+
 ## [3.12.0] - 2026-08-04
 
 ### Added
