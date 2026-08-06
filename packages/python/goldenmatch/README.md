@@ -1053,11 +1053,11 @@ A separate result for the `type: probabilistic` (Fellegi-Sunter) path. With the 
 
 | Dataset | GoldenMatch (probabilistic v2) | Splink |
 |---|---|---|
-| historical_50k | **0.778** | 0.757 |
-| febrl3 | **0.991** | 0.965 |
-| synthetic_person | **0.998** | 0.996 |
+| historical_50k | **0.827** | 0.757 |
+| febrl3 | **0.996** | 0.965 |
+| synthetic_person | **1.000** | 0.996 |
 
-GoldenMatch also wins at the cluster level on `historical_50k` (B-cubed F1 0.844 vs 0.789). These numbers are **deterministic and reproducible** as of #829, which fixed a non-deterministic EM training-pair sample that previously swung `historical_50k` F1 between 0.64 and 0.80 run-to-run. The full three-engine accuracy + performance bake-off (including wall / peak RSS / throughput, and the `gm_zeroconfig` controller path) is committed at `docs/benchmarks/2026-06-09-splink-bakeoff.md`.
+GoldenMatch also wins at the cluster level on `historical_50k` (B-cubed F1 0.862 vs 0.788). These numbers are **deterministic and reproducible** as of #829, which fixed a non-deterministic EM training-pair sample that previously swung `historical_50k` F1 between 0.64 and 0.80 run-to-run. The full three-engine accuracy + performance bake-off (including wall / peak RSS / throughput, and the `gm_zeroconfig` controller path) is committed at `docs/benchmarks/2026-06-09-splink-bakeoff.md`.
 
 The v2 levers: admit `date`/dob columns as `levenshtein` comparison fields, drop redundant person-name composites, additively diversify blocking onto orthogonal stable keys, and admit `description`/`multi_name` as `token_sort` fields. This is independent of the zero-config/weighted DBLP-ACM and NCVR numbers above.
 

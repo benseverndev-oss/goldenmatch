@@ -56,9 +56,9 @@ dataset Splink scores. Full writeup, including per-dataset P/R and performance:
 
 | Dataset | GM-prob F1 | Splink F1 | ΔF1 |
 |---|---|---|---|
-| historical_50k | **0.778** | 0.757 | +0.021 (cluster B³: 0.844 vs 0.789) |
-| febrl3 | **0.991** | 0.965 | +0.026 |
-| synthetic_person | **0.998** | 0.996 | +0.001 |
+| historical_50k | **0.827** | 0.757 | +0.070 (cluster B³: 0.862 vs 0.788) |
+| febrl3 | **0.996** | 0.965 | +0.030 |
+| synthetic_person | **1.000** | 0.996 | +0.004 |
 
 Read the caveats before quoting these:
 
@@ -75,7 +75,7 @@ Read the caveats before quoting these:
 - **Splink is faster** (3–19× on these datasets) and retains distributed F-S at 1B+
   rows on Spark plus the mature m/u comparison-viewer UI. GoldenMatch's edge is zero
   tuning and accuracy parity.
-- **Bibliographic data:** the probabilistic path is weak on `dblp_acm` (F1 0.377,
+- **Bibliographic data:** the probabilistic path is weak on `dblp_acm` (F1 0.381,
   recall-bound); use the **weighted** path there (0.964), not probabilistic.
 
 ## Evaluation methodology

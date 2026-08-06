@@ -233,25 +233,25 @@ The probabilistic auto-config path (`auto_configure_probabilistic_df` / `build_p
 
 | Dataset | GoldenMatch (probabilistic v2) | Splink |
 |---------|--------------------------------|--------|
-| historical_50k (Splink's flagship) | 0.778 | 0.757 |
-| febrl3 | 0.991 | 0.965 |
-| synthetic_person | 0.998 | 0.996 |
+| historical_50k (Splink's flagship) | 0.827 | 0.757 |
+| febrl3 | 0.996 | 0.965 |
+| synthetic_person | 1.000 | 0.996 |
 
-GoldenMatch also wins at the cluster level on historical_50k (B-cubed F1 0.844 vs 0.789). The full three-engine accuracy + performance bake-off (incl. the zero-config controller path, wall, peak RSS, throughput) is at [`docs/benchmarks/2026-06-09-splink-bakeoff.md`](https://github.com/benseverndev-oss/goldenmatch/blob/main/docs/benchmarks/2026-06-09-splink-bakeoff.md).
+GoldenMatch also wins at the cluster level on historical_50k (B-cubed F1 0.862 vs 0.788). The full three-engine accuracy + performance bake-off (incl. the zero-config controller path, wall, peak RSS, throughput) is at [`docs/benchmarks/2026-06-09-splink-bakeoff.md`](https://github.com/benseverndev-oss/goldenmatch/blob/main/docs/benchmarks/2026-06-09-splink-bakeoff.md).
 
 Four levers drive the gain:
 
 - **Admit `dob` / date fields as `levenshtein`** instead of leaving them exact-only, so near-miss dates still contribute weight.
 - **Drop redundant name composites** (`full_name` / `first_and_surname`) when atomic `given` + `family` fields already exist — no double-counting the same signal.
 - **Additively diversify blocking** onto orthogonal stable keys (date-year + postcode/zip) so a single noisy key doesn't cap recall.
-- **Admit `description` / multi-name fields as `token_sort`**, which lifts the bibliographic case (DBLP-ACM) from 0.003 → 0.377 — a large relative gain, but still recall-bound.
+- **Admit `description` / multi-name fields as `token_sort`**, which lifts the bibliographic case (DBLP-ACM) from 0.003 → 0.381 — a large relative gain, but still recall-bound.
 
 <Note>
   These are **pairwise F1 under one shared evaluator** (`bench_er_headtohead`). The often-cited ~0.97 Splink figure on historical_50k is a **cluster/entity-level** metric, not exhaustive within-cluster pairwise F1 — Splink itself scores ~0.75 pairwise on this dataset under the same harness, and the pairwise blocking ceiling for any engine on these columns is ~0.93. The honest claim is "matches/beats Splink head-to-head on the same evaluator," not "0.97 pairwise." Where Splink still leads: it is 3-19x faster on these datasets, runs distributed FS at 1B+ rows on Spark, and ships a mature interactive m/u comparison-viewer charting UI.
 </Note>
 
 <Note>
-  **For bibliographic data (DBLP-ACM), use the weighted path, not probabilistic.** Splink skips dblp_acm, and the probabilistic auto-config is weak there (pairwise F1 0.377, recall-bound). The zero-config **weighted** controller scores 0.964 on DBLP-ACM and is the right tool for that shape. The probabilistic path targets PII / person-record linkage (historical_50k, febrl3, synthetic_person).
+  **For bibliographic data (DBLP-ACM), use the weighted path, not probabilistic.** Splink skips dblp_acm, and the probabilistic auto-config is weak there (pairwise F1 0.381, recall-bound). The zero-config **weighted** controller scores 0.964 on DBLP-ACM and is the right tool for that shape. The probabilistic path targets PII / person-record linkage (historical_50k, febrl3, synthetic_person).
 </Note>
 
 ## LLM scoring
