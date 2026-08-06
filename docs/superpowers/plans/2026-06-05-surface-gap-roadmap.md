@@ -1,5 +1,10 @@
 # GoldenMatch Surface-Gap Roadmap (CLI / TUI / Web / API)
 
+> **Reconciliation (2026-08-04):** COMPLETE. Every queued PR in the ledger below (#771–#782) merged,
+> and the AgentSession / A2A TypeScript port (Wave 5.5, deferred at the time) shipped via #989/#994/#995/#996.
+> The 2026-06-05 four-surface gaps are closed; only routine Wave 6.x polish (SCORERS/TRANSFORMS codegen
+> sync, docs-vs-CLI parity test) is worth a spot-check. Retained as the historical execution ledger.
+
 > **For agentic workers:** Each wave is independently shippable. Steps use checkbox (`- [ ]`) syntax. Use superpowers:executing-plans (or subagent-driven-development) per wave. `docs/superpowers/` is gitignored — do NOT `git add` this plan.
 
 **Goal:** Close every gap surfaced in the 2026-06-05 four-surface audit (CLI, TUI, Web/HTTP, programmatic API) for the `goldenmatch` product, including full Python↔TypeScript parity.

@@ -1,8 +1,12 @@
 # goldenmatch-pg: identity audit + mediation + MDM SQL surface (post-#1913)
 
-**Status:** planned (not started). **Depends on:** #1913 (closed) — the in-DB
+**Status:** SHIPPED (#2094, `goldenmatch_pg` 0.16.0; crate now at 0.17.0). _Reconciled 2026-08-04._
+All 8 `gm_identity_{audit,audit_verify,audit_seal,resolve_conflict,claim,profile,stats,worklist}`
+functions are present in `packages/rust/extensions/postgres/sql/goldenmatch_pg--0.16.0.sql`
+(commit `4825c18f` "feat(pg): identity audit chain + steward mediation + MDM reads in SQL");
+the §9 checklist below is complete. **Depended on:** #1913 (closed) — the in-DB
 identity write path, GUC/DSN plumbing, dual `db_path`/in-DB store selection, and
-the `rust_pgrx` CI smoke it shipped are the foundation this reuses wholesale.
+the `rust_pgrx` CI smoke it shipped are the foundation this reused wholesale.
 
 ## 1. Context — what's already on the SQL surface vs. what's missing
 

@@ -1,7 +1,7 @@
 # Six-vertical extension roadmap
 
 **Date:** 2026-06-19
-**Status:** Planning (tracked in GitHub milestones #1–#6)
+**Status:** Substantially delivered — reconciled 2026-08-04. M1 (agent-memory / AgentSession + durable store), M2 (dedup-scale: FS out-of-core + frame-residency), M4 (one-to-many screening, #1187), and M6 (CDP/MDM: incremental resolution, per-cell survivorship, stabilization, mediation, Customer 360) have all landed on `main`; M3/M5 track their GitHub milestones. Original planning content preserved below.
 **Scope:** Six adjacent "hot tech" verticals GoldenMatch can extend into beyond the existing knowledge-graph / identity work, each taken to a **production / compliance-grade** done bar.
 
 ## Why these six

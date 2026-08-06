@@ -1,6 +1,13 @@
 # Single-Kernel-Collapse — Roadmap (R0–R5)
 
-**Status:** Spike • **Decision:** [../decisions/0016-single-kernel-collapse-spike.md](../decisions/0016-single-kernel-collapse-spike.md) • **Inventory:** [single-kernel-collapse-inventory.md](single-kernel-collapse-inventory.md)
+**Status:** R2–R4 substantially LANDED, **R5 remaining** (reconciled 2026-08-04) • **Decision:** [../decisions/0016-single-kernel-collapse-spike.md](../decisions/0016-single-kernel-collapse-spike.md) • **Inventory:** [single-kernel-collapse-inventory.md](single-kernel-collapse-inventory.md)
+
+> **Reconciliation note (2026-08-04):** far ahead of the per-stage text below. The own-string
+> primitives shipped and rapidfuzz was fully evicted suite-wide (#2159, #2218), as were
+> scipy/jellyfish/faiss/diptest/dateutil; the shared kernels were realized as their own published
+> products — **goldenfuzz**, **goldenphonetic**, **goldenhnsw**. R2 (scorers) and much of R3/R4 are
+> done; only **R5** (decommission dead duplicated math + the ast-grep gate forbidding algorithm math
+> outside `*-core`) genuinely remains. The stage text below is retained as the original plan of record.
 
 Staged plan for collapsing the suite's N duplicated algorithm implementations
 toward one shared Rust `*-core` kernel. **Additive until R5; one reversible flag
