@@ -1,0 +1,100 @@
+---
+title: "Zero-config vs. hand-tuned Splink"
+description: "A fair, deterministic bake-off: GoldenMatch with zero tuning beats an expert hand-rolled Splink model on pairwise F1 across every PII dataset Splink scores — judged by one shared evaluator."
+keywords: ["goldenmatch", "splink", "case study", "benchmark", "fellegi-sunter", "entity resolution", "record linkage", "zero-config", "bake-off"]
+---
+
+Splink is the reference open-source Fellegi–Sunter engine, and a well-tuned Splink model is a genuinely strong baseline. The obvious question for anyone evaluating GoldenMatch: **how close does zero-config get to expert hand-tuning?**
+
+We ran the bake-off to find out. The short answer: on every PII dataset Splink scores, GoldenMatch's probabilistic auto-config — with **no tuning at all** — beats a hand-rolled Splink model on pairwise F1, under a single shared evaluator (historical_50k **+0.070**, febrl3 **+0.030**, synthetic_person **+0.004**).
+
+<Note>
+  Numbers on this page are from a fresh run on **2026-08-06** (`bench-probabilistic.yml`, `run_bakeoff=true`, run `31105803648`, commit `14f06a16`) on a single 16-core / 64 GB Linux runner, with the native FS kernel built. Accuracy is deterministic as of #829 and reproduces run-to-run. See [Reproduce it](#reproduce-it).
+</Note>
+
+## The test
+
+Three engines, one dataset at a time, each self-timed in its own subprocess:
+
+1. **GoldenMatch (zero-config)** — `dedupe_df(df)` with no config; the controller auto-picks the path. Its controller overhead is reported, not hidden.
+2. **GoldenMatch (probabilistic)** — `auto_configure_probabilistic_df(df)` then `dedupe_df(df, config=…)`. Like-for-like against Splink (both Fellegi–Sunter), **zero tuning**.
+3. **Splink** — per-dataset **expert hand-rolled** configs (compound blocking + Jaro–Winkler / Damerau–Levenshtein / exact comparisons + EM), reused as-is.
+
+The fairness rules that make this honest:
+
+- **One shared evaluator.** All pairwise P/R/F1 and B-cubed (cluster) F1 come from the same `evaluate.evaluate` over the same string `record_id` key space — all three engines are judged by identical code.
+- **One Linux runner** for all three, so wall-clock ratios are comparable.
+- **Splink's skips are recorded as skips**, never scored as a GoldenMatch win.
+
+## Results
+
+On every dataset Splink's hand-rolled spec covers, GoldenMatch's zero-tuning probabilistic path beats it on pairwise F1:
+
+| Dataset | GoldenMatch (probabilistic) F1 | Splink (hand-tuned) F1 | ΔF1 | Cluster B³-F1 (GM vs Splink) |
+|---|---|---|---|---|
+| **historical_50k** (Splink's flagship, 50,578 records) | **0.827** | 0.757 | **+0.070** | 0.862 vs 0.788 |
+| **febrl3** (synthetic PII) | **0.996** | 0.965 | **+0.030** | 0.997 vs 0.980 |
+| **synthetic_person** | **1.000** | 0.996 | **+0.004** | 1.000 vs 0.999 |
+
+The gap is widest exactly where it matters most — on `historical_50k`, the dataset Splink itself is tuned around, zero-config GoldenMatch wins by **+0.070** pairwise and +0.074 at the cluster level (B³).
+
+<details>
+<summary>Full per-engine detail (P / R / F1 / wall / RSS)</summary>
+
+**historical_50k**
+
+| Engine | P | R | F1 | B³-F1 | wall(s) | peak RSS(MB) |
+|---|---|---|---|---|---|---|
+| GM zero-config | 0.969 | 0.644 | 0.774 | 0.799 | 42.4 | 1436 |
+| GM probabilistic | 0.903 | 0.763 | **0.827** | **0.862** | 14.5 | 1048 |
+| Splink | 0.966 | 0.623 | 0.757 | 0.788 | 2.9 | 818 |
+
+**febrl3**
+
+| Engine | P | R | F1 | B³-F1 | wall(s) | peak RSS(MB) |
+|---|---|---|---|---|---|---|
+| GM zero-config | 0.999 | 0.983 | 0.991 | 0.995 | 3.6 | 518 |
+| GM probabilistic | 1.000 | 0.991 | **0.996** | 0.997 | 3.2 | 532 |
+| Splink | 0.998 | 0.935 | 0.965 | 0.980 | 1.7 | 765 |
+
+**synthetic_person**
+
+| Engine | P | R | F1 | B³-F1 | wall(s) | peak RSS(MB) |
+|---|---|---|---|---|---|---|
+| GM zero-config | 1.000 | 1.000 | 1.000 | 1.000 | 7.1 | 543 |
+| GM probabilistic | 1.000 | 1.000 | **1.000** | 1.000 | 2.0 | 543 |
+| Splink | 1.000 | 0.993 | 0.996 | 0.999 | 1.6 | 543 |
+
+The native FS kernel (`gm_prob_native`) produces identical accuracy to the pure path at matching wall-clock, so it is omitted from the tables above for clarity.
+
+</details>
+
+## Where Splink still wins — the honest framing
+
+This is a claim about **accuracy without tuning**, not a claim that GoldenMatch dominates Splink. Splink still leads on real dimensions:
+
+- **Speed.** Splink is faster on these small datasets — **~1.3–5× on wall-clock** (historical_50k 5.0×, febrl3 1.9×, synthetic_person 1.3×). It hand-blocks tightly, and its wall-clock excludes the hours of expert tuning that produced its config, while GoldenMatch's *includes* the auto-config search that replaces that tuning. Two caveats on these ratios: they're a single run and runner-variance-prone (treat as directional), and the gap has closed sharply since the June 2026 bake-off — FS-path speedups cut GoldenMatch's `historical_50k` wall from ~61 s to ~15 s, so the old "3–19×" figure no longer holds.
+- **Scale ceiling.** Splink runs distributed Fellegi–Sunter at 1B+ rows on Spark; GoldenMatch's single-box sweet spot is smaller (though it does clear 50M on one 64 GB box).
+- **Tooling.** Splink's interactive m/u comparison-viewer UI is more mature for hands-on model inspection.
+- **The "~0.97 Splink" number you may have seen is a *cluster/entity* metric, not exhaustive within-cluster pairwise F1.** Under this shared harness Splink scores ~0.757 *pairwise* on `historical_50k` — recall-bound, because no single field there exceeds 0.60 recall, capping any engine near ~0.93 pairwise. The honest claim is "beats Splink **on the same evaluator**," not "beats 0.97."
+- **Bibliographic data (`dblp_acm`) is a Splink skip, not a GoldenMatch win.** GoldenMatch's *probabilistic* path is also weak there (0.381 pairwise); the right tool for bibliographic data is GoldenMatch's zero-config **weighted** path (0.964 F1), which this bake-off doesn't pit against Splink.
+
+## Why the numbers are trustworthy
+
+The earlier published figures rested on a **non-reproducible** measurement: three invocations of the *identical* probabilistic path on `historical_50k` once gave F1 of 0.805, 0.779, and 0.643 — a 0.16 spread across byte-identical code. The cause was a non-deterministic EM training-pair sample (blocks arrived in a hash-bucketed order, so a seeded shuffle still permuted differently run-to-run). #829 sorts blocks by their stable `block_key` before the shuffle; post-fix, independent harnesses agree on `historical_50k` within 0.002, and the accuracy numbers above reproduce run-to-run. (A too-clean earlier `dblp_acm = 0.879` figure was a lucky draw that did not reproduce and has been retracted.)
+
+## What it means
+
+If you already have a tuned Splink model, [GoldenMatch converts it directly](/goldenmatch/migrating-from-splink) — you keep your work. If you're starting from a CSV, this bake-off is the case for reaching for zero-config first: **you get better-than-hand-tuned-Splink accuracy on PII without writing a config**, at a wall-clock that's now within a small multiple of Splink's, and you can always drop to an explicit config later. Zero tuning is the differentiator; beating a hand-tuned baseline is the proof it isn't a toy default.
+
+## Reproduce it
+
+```bash
+# The bake-off harness (3 engines, each self-timed) lives in the repo:
+python scripts/bench_er_headtohead/run_bakeoff.py
+
+# Or run the CI workflow that produced these numbers:
+#   .github/workflows/bench-probabilistic.yml  (input: run_bakeoff=true)
+```
+
+Full methodology, the exact per-engine configs, and the determinism write-up are in the repository at `docs/benchmarks/2026-06-09-splink-bakeoff.md` (with the 2026-08-06 refresh appended). Broader reproduction instructions: `docs/reproducing-benchmarks.md`. See also the [ER vendor comparison](/reference/vendor-comparison) for how GoldenMatch sits against the wider landscape.

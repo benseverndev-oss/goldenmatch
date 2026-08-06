@@ -178,6 +178,12 @@
             ]
           },
           {
+            "group": "Case studies",
+            "pages": [
+              "case-studies/zero-config-vs-splink"
+            ]
+          },
+          {
             "group": "Research",
             "pages": [
               "research/amortized-bayesian-er",
