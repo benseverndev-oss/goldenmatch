@@ -32,7 +32,7 @@ GoldenMatch doesn't require structured data. Extract matchable records from PDFs
 
 ## Accuracy
 - DBLP-ACM: 96.4% F1 out of the box (zero-config weighted controller path)
-- Beats hand-rolled, expert-tuned Splink head-to-head: the zero-tuning probabilistic (Fellegi-Sunter) auto-config wins on every dataset Splink scores under one shared evaluator — historical_50k F1 0.778 vs 0.757 (cluster B³ 0.844 vs 0.789), febrl3 0.991 vs 0.965, synthetic_person 0.998 vs 0.996. Bake-off: docs/benchmarks/2026-06-09-splink-bakeoff.md
+- Beats hand-rolled, expert-tuned Splink head-to-head: the zero-tuning probabilistic (Fellegi-Sunter) auto-config wins on every dataset Splink scores under one shared evaluator — historical_50k F1 0.827 vs 0.757 (cluster B³ 0.862 vs 0.788), febrl3 0.996 vs 0.965, synthetic_person 1.000 vs 0.996. Bake-off: docs/benchmarks/2026-06-09-splink-bakeoff.md
 - DQbench composite: 91.04
 - PPRL: 92.4% F1 on FEBRL4
 

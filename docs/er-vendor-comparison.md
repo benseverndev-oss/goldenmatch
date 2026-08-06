@@ -34,7 +34,7 @@ Before comparing, the column we're comparing *against*. Numbers are as of `golde
 | **Accuracy, bibliographic (DBLP-ACM)** | F1 0.964 zero-config (hand-tuned ceiling 0.918) [^bench] |
 | **Accuracy, product (Abt-Buy)** | F1 0.722 +$0.04 LLM; 0.817 with Vertex AI + GPT-4o-mini [^bench] |
 | **Accuracy, voter records (NCVR)** | F1 0.972 zero-config [^bench] |
-| **Probabilistic (Fellegi-Sunter)** | Zero-tuning FS auto-config matches/beats hand-rolled Splink pairwise F1 on every dataset Splink scores, under one shared evaluator (febrl3 0.991 vs 0.965; historical_50k 0.778 vs 0.757; synthetic_person 0.998 vs 0.996); native FS kernel (2.9x), match-weight waterfall explainability, threshold sweep + m/u model report [^bakeoff] |
+| **Probabilistic (Fellegi-Sunter)** | Zero-tuning FS auto-config matches/beats hand-rolled Splink pairwise F1 on every dataset Splink scores, under one shared evaluator (febrl3 0.996 vs 0.965; historical_50k 0.827 vs 0.757; synthetic_person 1.000 vs 0.996); native FS kernel (2.9x), match-weight waterfall explainability, threshold sweep + m/u model report [^bakeoff] |
 | **Zero-config** | Introspective auto-config controller (v1.8+) with cross-run memory and LLM fallback. **Only OSS engine with a published zero-config benchmark suite.** |
 | **PPRL** | Bloom-filter PPRL with auto-configuration; F1 0.924 on FEBRL4 |
 | **Active learning** | `core/active_sampling.py` + boost tab; Learning Memory persistence; threshold learner triggers at 10+ corrections |
@@ -110,7 +110,7 @@ Observations from the matrix:
 - DuckDB-native by default; we treat it as a backend option.
 
 **Where GoldenMatch beats Splink:**
-- **Accuracy with zero tuning.** GM's probabilistic auto-config matches/beats hand-rolled Splink pairwise F1 on every dataset Splink scores, under one shared evaluator: febrl3 0.991 vs 0.965, historical_50k 0.778 vs 0.757, synthetic_person 0.998 vs 0.996 [^bakeoff]. Splink requires an expert comparison spec per field; we ship a controller. (The often-cited Splink ~0.97/0.998 Febrl figure is a *cluster* metric, not within-cluster pairwise.)
+- **Accuracy with zero tuning.** GM's probabilistic auto-config matches/beats hand-rolled Splink pairwise F1 on every dataset Splink scores, under one shared evaluator: febrl3 0.996 vs 0.965, historical_50k 0.827 vs 0.757, synthetic_person 1.000 vs 0.996 [^bakeoff]. Splink requires an expert comparison spec per field; we ship a controller. (The often-cited Splink ~0.97/0.998 Febrl figure is a *cluster* metric, not within-cluster pairwise.)
 - Non-PII (DBLP-ACM zero-config weighted path 0.964 vs Splink 0.728 [^splink]). Splink's F-S model assumes the comparison-level distributions hold; on bibliographic data they don't — its hand-rolled spec skips DBLP-ACM entirely.
 - Reference-data packs bundled (`goldenmatch.refdata`); Splink ships none.
 - Identity graph as a first-class output; Splink emits clusters.

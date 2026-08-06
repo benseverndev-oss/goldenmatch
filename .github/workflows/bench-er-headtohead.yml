@@ -68,6 +68,16 @@ on:
         type: boolean
         required: false
         default: false
+      run_sweep:
+        description: "Run the heavy lane x shape x scale matrix sweep (600-min job). Turn OFF to dispatch only the cost-aware lane."
+        type: boolean
+        required: false
+        default: true
+      run_cost_aware:
+        description: "Run the cost-aware blocking OFF-vs-ON lane (~20 min, independent of the sweep)"
+        type: boolean
+        required: false
+        default: true
 
 permissions:
   contents: read
@@ -105,6 +115,9 @@ jobs:
 
   bench:
     needs: setup
+    # Skippable so the cheap cost-aware lane below can be dispatched on its own
+    # (run_sweep=false) instead of riding this 600-min sweep.
+    if: inputs.run_sweep
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 600
     strategy:
@@ -182,7 +195,9 @@ jobs:
 
   merge:
     needs: bench
-    if: always()
+    # always() so a partially-OOMed sweep still merges what completed, but only
+    # when the sweep actually ran (otherwise there are no shape artifacts to union).
+    if: always() && inputs.run_sweep
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
@@ -232,6 +247,7 @@ jobs:
   # F1 non-regression on every shape + biblio-is-exempt clears the flip. Independent
   # of the matrix sweep above; workflow_dispatch only, not a gate.
   cost-aware-offvson:
+    if: inputs.run_cost_aware
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 120
     env:
