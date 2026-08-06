@@ -63,8 +63,10 @@ PYPI_PACKAGES = [
     # pypistats 404s until then (tolerated; the badge preserves the prior value).
     # Its pepy.tech link in the root README aggregate badge is extended in lockstep.
     "goldengraph",
-    # goldenmatch-kg stays OUT by design -- it has no publish-*.yml (heavy framework
-    # extras), so adding it would break the reverse (badge -> publisher) symmetry.
+    # goldenmatch-kg gained its PyPI publisher (publish-goldenmatch-kg.yml, 2026-08-04),
+    # so the publisher<->badge symmetry gate now requires it here. First release is
+    # pending, so pypistats 404s until then (tolerated; the badge preserves the prior value).
+    "goldenmatch-kg",
 ]
 # Every TS package with a `publish-<pkg>-js.yml` → npm workflow.
 NPM_PACKAGES = [

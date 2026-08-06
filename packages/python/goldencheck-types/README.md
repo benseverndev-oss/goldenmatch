@@ -44,4 +44,4 @@ The TypeScript sibling at [`packages/typescript/goldencheck-types`](https://gith
 
 ## License
 
-Apache-2.0. Part of the Golden Suite; see the [monorepo](https://github.com/benseverndev-oss/goldenmatch) for the full project.
+MIT. Part of the Golden Suite; see the [monorepo](https://github.com/benseverndev-oss/goldenmatch) for the full project.
