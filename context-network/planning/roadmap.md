@@ -1,5 +1,12 @@
 # Roadmap — Arrow-native arc
 
+> **Reconciliation (2026-08-04):** this doc (last substantive update 2026-06-13) predates the
+> FS-scale (out-of-core / frame-residency, 50M on 64GB single-box) and own-primitives / rapidfuzz-
+> eviction arcs — treat the "Adjacent / follow-ups" items as historical and verify against current
+> state before acting. The one genuinely-open engine item is the **Sail binding 100M multi-node run
+> → flip the `mode` default** (W3), still infra-blocked on `SAIL_REMOTE`; FS single-node out-of-core
+> has reduced its urgency. Per the North Star, **W1 adoption/distribution** leads this engine work.
+
 > **Strategic note:** this is the *engine* roadmap — one workstream (W3) of the broader
 > [north-star-roadmap.md](north-star-roadmap.md), which sequences adoption / zero-config /
 > surface-parity / bus-factor work *ahead* of engine unification. The Arrow-native arc below

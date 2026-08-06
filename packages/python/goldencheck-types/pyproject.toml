@@ -2,6 +2,7 @@
 name = "goldencheck-types"
 version = "0.2.0"
 description = "Shared canonical field types for the Golden Suite"
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = ["pyyaml>=6.0"]
 
