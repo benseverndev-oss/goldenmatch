@@ -10,8 +10,9 @@ message: >-
   export instead of re-implementing it.
 note: >-
   Single-kernel-collapse R5 (context-network/architecture/single-kernel-collapse-roadmap.md).
-  Sanctioned pure-TS fallbacks are ignored below (goldenmatch core/scorer.ts,
-  core/transforms.ts, core/perceptualWasm.ts) -- those ARE the permanent
+  Sanctioned pure-TS fallbacks are ignored below (goldenmatch
+  core/stringDistance.ts, core/scorer.ts, core/transforms.ts,
+  core/perceptualWasm.ts) -- those ARE the permanent
   edge-safe fallback surface and are parity-gated against the kernel. Everything
   else should import from them (or from the package's own scorer) rather than
   keep a private DP loop. Severity is `warning` while the remaining
@@ -22,6 +23,7 @@ files:
 ignores:
   # The sanctioned, parity-gated pure-TS fallback surface (kill-constraint 1:
   # "Pure-TS stays the permanent fallback" -- these are deliberate, not drift).
+  - "packages/typescript/goldenmatch/src/core/stringDistance.ts"
   - "packages/typescript/goldenmatch/src/core/scorer.ts"
   - "packages/typescript/goldenmatch/src/core/transforms.ts"
   - "packages/typescript/goldenmatch/src/core/perceptualWasm.ts"

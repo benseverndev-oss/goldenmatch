@@ -6,6 +6,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added
+- **`goldenmatch/core/string-distance` subpath** — the edit-distance primitives
+  (`jaro`, `jaroWinkler`, `levenshteinDistance`, `levenshteinSimilarity`,
+  `damerauLevenshteinDistance`) moved verbatim from `core/scorer.ts` into a
+  zero-import leaf module and published as their own subpath. `core/scorer.ts`
+  and `core/index` re-export them, so **no existing import changes and no
+  behavior changes** — the subpath exists so a sibling package can single-source
+  these primitives without pulling `core/scorer.ts`'s reference-data tables and
+  WASM registry. First consumer: infermap, which retired its vendored copies
+  (single-kernel-collapse R5).
+
 ## [1.28.0] - 2026-08-04
 
 - Lockstep suite release (2026-08 GoldenModel frontier cut). No functional changes to

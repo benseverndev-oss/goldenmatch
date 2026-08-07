@@ -73,6 +73,44 @@ stage's flag has been default-on and stable for a full release cycle.
 >    remaining R5 work, and it is cross-package (each needs a dependency
 >    decision), not a mechanical delete.
 >
+> **R5 consolidation — infermap DONE (2026-08-07), 5 findings → 2.** infermap's
+> vendored `jaroSimilarity`/`jaroWinklerSimilarity`/`levenshteinDistance` now
+> alias goldenmatch's. This was the cheap one: infermap already depended on
+> goldenmatch, and its *Python* `fuzzy_name` already reuses
+> `goldenmatch-score-core::jaro_winkler_similarity`, so the TS fork was the only
+> surface still running its own math — a Python↔TS parity gap, not just
+> duplication.
+>
+> It also validated the thesis empirically. The fork carried **all three**
+> pre-#879 bugs goldenmatch had already fixed: unfloored `t/2` transposition
+> (`jaroWinkler("saturday","sunday")` 0.7475 → 0.7775, the exact pair #879
+> cites), the `>= 0.7` vs strict `> 0.7` Winkler threshold, and UTF-16 code-unit
+> instead of codepoint iteration (57 jaro/JW + 62 levenshtein disagreements in a
+> 75.7K-pair sweep; zero on ASCII-only, so the blast radius was non-BMP input
+> plus the transposition class). A second copy does not stay in sync — it
+> silently misses the fixes the first one ships.
+>
+> **The mechanism, for the two remaining packages.** `core/scorer.ts` is 1794
+> lines and transitively pulls the reference-data tables and the WASM registry,
+> so "just import goldenmatch/core" is a disproportionate payload for three edit
+> -distance functions. The primitives were extracted into a **zero-import leaf**
+> `goldenmatch/src/core/stringDistance.ts`, published as the
+> `goldenmatch/core/string-distance` subpath; `core/scorer.ts` re-exports them,
+> so no existing import or public API changed. infermap keeps goldenmatch as a
+> **devDependency** and tsup inlines the leaf (`noExternal`) — the established
+> `goldenmatch-wasm-runtime` pattern — so no published runtime dep is added.
+> **Gotcha:** tsup's `dts.resolve` will not follow a subpath specifier, so a bare
+> `export … from` leaks an unresolvable `from 'goldenmatch/core/string-distance'`
+> into the published `.d.ts`. Re-export as type-annotated `const` aliases
+> instead; that emits self-contained declarations.
+>
+> Remaining: goldencheck `fuzzy-values.ts` (private `levenshtein`) and goldenflow
+> `phonetic.ts` (private `soundex`). Neither package depends on goldenmatch
+> today, so each needs an explicit dependency decision (import goldenmatch vs. a
+> new shared TS primitives package, alongside the existing shared-leaf precedents
+> `goldencheck-types` and `goldenmatch-wasm-runtime`) before the rule can go
+> **error**.
+>
 > Also done: the one *intra*-package duplicate was removed — goldenmatch
 > `core/indicators.ts` carried its own Levenshtein DP used solely by
 > `tokenSortRatio`; it now calls the exported `levenshteinSimilarity` from
