@@ -397,6 +397,7 @@ dependencies = [
  "arrow",
  "chrono",
  "csv",
+ "goldenfuzz-core",
  "regex",
  "rustc-hash",
  "statrs",
@@ -411,6 +412,10 @@ dependencies = [
  "pyo3",
  "rustc-hash",
 ]
+
+[[package]]
+name = "goldenfuzz-core"
+version = "0.1.1"
 
 [[package]]
 name = "half"

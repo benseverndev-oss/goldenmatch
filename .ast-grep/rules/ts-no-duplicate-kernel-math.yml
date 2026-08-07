@@ -1,6 +1,6 @@
 id: ts-no-duplicate-kernel-math
 language: typescript
-severity: warning
+severity: error
 message: >-
   Hand-rolled implementation of a kernel-backed string algorithm outside the
   sanctioned pure-TS fallback modules. These primitives are single-sourced from
@@ -15,9 +15,19 @@ note: >-
   core/perceptualWasm.ts) -- those ARE the permanent
   edge-safe fallback surface and are parity-gated against the kernel. Everything
   else should import from them (or from the package's own scorer) rather than
-  keep a private DP loop. Severity is `warning` while the remaining
-  cross-package duplicates are consolidated; promote to `error` once
-  `ast-grep scan` reports none.
+  keep a private DP loop.
+
+  Severity is `error`: the tree is clean, so this is now a REINTRODUCTION guard.
+  KNOWN LIMITS, so you can judge a hit rather than reflexively silence it --
+  (1) it matches function NAMES, so it can flag a thin series/columnar wrapper
+  that merely `.map()`s over the real scalar impl (that is why goldenflow's
+  `soundex` wrapper appears above while the actual `soundexTs` never matched);
+  (2) a name alone cannot distinguish "second copy of another package's kernel"
+  (real drift) from "this package's own parity-gated fallback" (legitimate).
+  If a new hit is genuinely the latter, allow-list the module here WITH the
+  parity gate that backs it named in the comment. It also cannot see Rust-side
+  duplication at all -- see the roadmap's note on
+  `goldenflow-core::soundex` vs `goldenphonetic-core::soundex`.
 files:
   - "packages/typescript/**/src/**/*.ts"
 ignores:
@@ -27,6 +37,16 @@ ignores:
   - "packages/typescript/goldenmatch/src/core/scorer.ts"
   - "packages/typescript/goldenmatch/src/core/transforms.ts"
   - "packages/typescript/goldenmatch/src/core/perceptualWasm.ts"
+  # Same category, different package: each of these is ITS OWN package's
+  # parity-gated pure-TS fallback for that package's Rust core -- not a second
+  # copy of somebody else's kernel. Audited 2026-08-07.
+  #   goldencheck fuzzy-values.ts -> mirrors `goldencheck-core::fuzzy`, and the
+  #     profiler already prefers `getGoldencheckWasmBackend()` when enabled.
+  #   goldenflow phonetic.ts -> its own header: "Pure-TS reference for
+  #     goldenflow-core's `phonetic` kernels; MUST reproduce the Rust/Python
+  #     bytes (byte-parity corpus)."
+  - "packages/typescript/goldencheck/src/core/profilers/fuzzy-values.ts"
+  - "packages/typescript/goldenflow/src/core/transforms/phonetic.ts"
   # Tests legitimately re-implement reference math to check the real impl.
   - "**/*.test.ts"
   - "**/*.spec.ts"

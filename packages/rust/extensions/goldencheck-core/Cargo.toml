@@ -21,6 +21,12 @@ name = "goldencheck_core"
 # Fast, deterministic hashing for the combinatorial key/FD kernels. rustc-hash
 # is already in the dependency graph (pulled by the goldenmatch native stack),
 # so this adds no new crates.io fetch.
+# The suite's shared fuzzy-string kernel -- owns the Levenshtein primitive the
+# `fuzzy` near-duplicate profiler scores with (single-kernel-collapse R5; this
+# crate used to carry its own two-row DP). Zero runtime deps, std-only, and
+# already wasm-proven via score-core -> score-wasm, so it costs goldencheck-wasm
+# nothing. Path dep, same as score-core takes it.
+goldenfuzz-core = { path = "../goldenfuzz-core" }
 rustc-hash = "2"
 # Same engine Polars uses for str.contains/replace_all, so regex ops are
 # byte-identical. Already resolved transitively (1.12.x) in the native lock.
