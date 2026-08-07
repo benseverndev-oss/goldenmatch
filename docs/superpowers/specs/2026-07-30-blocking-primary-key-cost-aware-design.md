@@ -1,6 +1,7 @@
 # Cost-aware blocking primary-key selection (identifier-poor data)
 
-Status: draft → implementing
+Status: SHIPPED opt-in (#2278) · **default flip DECLINED 2026-08-07 — stays OFF**
+(measured no-op on the OFF-vs-ON bench; see "Default-flip verdict" at the end)
 Owner: auto-config / blocking
 Flag: `GOLDENMATCH_BLOCKING_COST_AWARE` (default OFF; byte-identical when off)
 Validation: `bench_er_headtohead` panel (Febrl3 / synthetic / historical / DBLP-ACM), QIS
@@ -103,3 +104,43 @@ path `build_blocking` — and hence the flag — actually affects) twice per sha
 non-regression on every shape AND biblio-is-exempt (OFF == ON candidate pairs). The
 FS `panel-v1-v2` lane is NOT the right gate here — it runs the probabilistic path,
 which cost-aware does not touch.
+
+## Default-flip verdict (2026-08-07): DECLINED — the flag stays opt-in
+
+The OFF-vs-ON gate above was finally run standalone (`bench-er-headtohead.yml`,
+`run_sweep=false run_cost_aware=true`, run `31132798997`, 200K rows, 16c/64 GB).
+Result — a **null result**, not a safety pass:
+
+| shape | F1 OFF | F1 ON | ΔF1 | pairs OFF | pairs ON | pair Δ |
+| --- | --- | --- | --- | --- | --- | --- |
+| person | 0.9948 | 0.9948 | +0.0000 | 282,440 | 282,440 | +0.0% |
+| biblio | 0.7995 | 0.7995 | +0.0000 | 59,181 | 59,181 | +0.0% |
+
+The flag is a **byte-identical no-op on both shapes** — equal F1 *and* equal
+candidate-pair counts. The lane's whole purpose was to show person pairs COLLAPSING
+while F1 held; that did not happen.
+
+**Root cause — the fixture cannot exercise the flag.** The bench `person` shape's
+columns are `record_id, first_name, surname, dob, postcode, city`. It carries a
+`postcode`, so auto-config picks that bounded key as the blocking primary and
+`dob`/year never becomes the sole primary. The demotion therefore has nothing to
+demote and correctly does nothing. The bench person fixture is **not
+identifier-poor**, which is the shape (`qis_gate` corrupted-realistic) this whole
+change targets — so this lane, as currently designed, CANNOT validate the flag.
+
+**Decision:** do NOT flip the default (owner call, 2026-08-07). +0.0% is
+*no signal*, not evidence of safety, and flipping a default on no signal is exactly
+what the kill-switch discipline exists to prevent. The flag stays default-OFF and
+opt-in; it costs nothing where unused and is byte-identical when off.
+
+**If the flip is ever revisited, the prerequisite is a fixture that reproduces the
+pathology** — an identifier-poor `person` variant (same shape MINUS `postcode`, so a
+low-cardinality `dob`/year becomes the sole primary and the demotion actually fires).
+Re-running the existing lane unchanged will keep returning +0.0% forever.
+
+Two things this run DID validate, worth keeping:
+- The `--measure-refused` path works in production: biblio hit a RED commit at 200K
+  (`stop_reason: OSCILLATING`) and was force-run via `allow_red_config=True` to a real
+  F1 instead of aborting the lane on missing predictions.
+- The lane is now cheap: `run_sweep=false` skips the `bench`/`merge` sweep, so the
+  OFF-vs-ON evidence costs **~21 min instead of the 600-min matrix**.
