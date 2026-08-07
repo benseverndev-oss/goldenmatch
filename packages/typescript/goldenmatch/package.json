@@ -19,6 +19,7 @@
     "./core/fs-wasm": { "types": "./dist/core/fsWasm.d.ts", "import": "./dist/core/fsWasm.js", "require": "./dist/core/fsWasm.cjs" },
     "./core/key-integrity-wasm": { "types": "./dist/core/keyIntegrityWasm.d.ts", "import": "./dist/core/keyIntegrityWasm.js", "require": "./dist/core/keyIntegrityWasm.cjs" },
     "./core/fs-scoring": { "types": "./dist/core/fsScore.d.ts", "import": "./dist/core/fsScore.js", "require": "./dist/core/fsScore.cjs" },
+    "./core/string-distance": { "types": "./dist/core/stringDistance.d.ts", "import": "./dist/core/stringDistance.js", "require": "./dist/core/stringDistance.cjs" },
     "./node": { "types": "./dist/node/index.d.ts", "import": "./dist/node/index.js", "require": "./dist/node/index.cjs" }
   },
   "bin": { "goldenmatch-js": "./dist/cli.cjs", "goldenmatch-mcp": "./dist/node/mcp/server.cjs" },
