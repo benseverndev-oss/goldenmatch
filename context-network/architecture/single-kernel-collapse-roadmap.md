@@ -54,6 +54,36 @@ forbidding algorithm math outside `*-core` (e.g. a hand-rolled levenshtein DP lo
 in `scorer.ts`). This is the only DELETING stage; it lands only after every prior
 stage's flag has been default-on and stable for a full release cycle.
 
+> **R5 status (2026-08-07): the GATE has landed; the DELETION half is mostly a
+> no-op by design.** Two findings from doing the work:
+>
+> 1. **"Delete the duplicated math" cannot mean deleting the pure ports.** Hard
+>    constraint 1 above makes pure-TS the *permanent* fallback (cross-target WASM
+>    is still unverified), and the architecture frame classifies pure-Python /
+>    pure-TS as conformance-tested **fallbacks**, not dead code. So `scorer.ts`'s
+>    `levenshtein`/`jaro`/… are deliberate and STAY. The only genuinely dead math
+>    is a *second* copy of a primitive that already has a sanctioned home.
+> 2. **The gate is the durable deliverable.** `ts-no-duplicate-kernel-math`
+>    (`.ast-grep/rules/`) flags a hand-rolled kernel-backed primitive declared
+>    outside the sanctioned fallback modules, which are allow-listed. It ships
+>    **warning**-severity (per the repo's gradual-landing convention) because its
+>    current findings ARE the consolidation backlog: goldencheck
+>    `fuzzy-values.ts`, goldenflow `phonetic.ts`, infermap `string-distance.ts`
+>    (×3). Promote to **error** once those are consolidated — that is the
+>    remaining R5 work, and it is cross-package (each needs a dependency
+>    decision), not a mechanical delete.
+>
+> Also done: the one *intra*-package duplicate was removed — goldenmatch
+> `core/indicators.ts` carried its own Levenshtein DP used solely by
+> `tokenSortRatio`; it now calls the exported `levenshteinSimilarity` from
+> `core/scorer.ts` (same package, no new dep). That copy was UTF-16 code-unit
+> based while the scorer's is codepoint-aware (`Array.from`), so the dedup also
+> fixes a latent non-BMP divergence from the Python/Rust reference.
+>
+> Note the preconditions in the stage text are still only partly met (kill-criteria
+> 1c/2/3 below remain PENDING), which is exactly why nothing default-flipped and
+> nothing in the fallback surface was deleted here.
+
 ## The two hard constraints
 
 1. **TS edge-safety.** `src/core/**` must stay edge-safe (no `node:*`), and WASM

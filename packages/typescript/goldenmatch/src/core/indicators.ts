@@ -18,6 +18,7 @@ import type {
   SparsityVerdict,
   CollisionSignal,
 } from "./complexityProfile.js";
+import { levenshteinSimilarity } from "./scorer.js";
 
 // ---------------------------------------------------------------------------
 // Wall-clock budgets (seconds) — match Python constants.
@@ -375,29 +376,13 @@ export function computeIdentityCollisionSignal(
 function tokenSortRatio(a: string, b: string): number {
   const ta = a.toLowerCase().trim().split(/\s+/).filter(Boolean).sort().join(" ");
   const tb = b.toLowerCase().trim().split(/\s+/).filter(Boolean).sort().join(" ");
-  if (ta === tb) return 1.0;
-  if (ta.length === 0 && tb.length === 0) return 1.0;
-  const dist = levenshtein(ta, tb);
-  const maxLen = Math.max(ta.length, tb.length);
-  return maxLen === 0 ? 1.0 : 1.0 - dist / maxLen;
-}
-
-function levenshtein(a: string, b: string): number {
-  if (a === b) return 0;
-  if (a.length === 0) return b.length;
-  if (b.length === 0) return a.length;
-  const prev = new Array<number>(b.length + 1);
-  const curr = new Array<number>(b.length + 1);
-  for (let j = 0; j <= b.length; j++) prev[j] = j;
-  for (let i = 1; i <= a.length; i++) {
-    curr[0] = i;
-    for (let j = 1; j <= b.length; j++) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      curr[j] = Math.min(curr[j - 1]! + 1, prev[j]! + 1, prev[j - 1]! + cost);
-    }
-    for (let j = 0; j <= b.length; j++) prev[j] = curr[j]!;
-  }
-  return prev[b.length]!;
+  // Single-sourced from the scorer's Levenshtein (R5 dedup): this module used to
+  // carry its own DP copy. `levenshteinSimilarity` is the same 1 - dist/maxLen
+  // formula, and is the conformance-tested pure-TS fallback for the score-core
+  // kernel -- so this can no longer drift from the scorer. It is also
+  // codepoint-aware (`Array.from`) where the old local copy counted UTF-16 code
+  // units, which matches the Python/Rust reference on non-BMP input.
+  return levenshteinSimilarity(ta, tb);
 }
 
 // ---------------------------------------------------------------------------
