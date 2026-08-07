@@ -2567,23 +2567,37 @@ _REFIT_MIN_PAIRS = 200     # too few pairs -> histogram is noise, don't refit
 
 
 def _fs_refit_threshold_enabled() -> bool:
-    """Health-gated FS link-threshold refit. **Default ON (2026-08-02).**
+    """Health-gated FS link-threshold refit. **Default OFF again (2026-08-07).**
 
-    The FS path picks the link cutoff from the actual scored-pair distribution
-    (bimodality-gated valley + cluster-shape guard) instead of the fixed default,
-    correcting the over-merge the non-iterated path can't see.
-    ``GOLDENMATCH_FS_REFIT_THRESHOLD=0`` (or ``false``/``off``/``no``/``disabled``)
-    restores the fixed cutoff.
+    When ``GOLDENMATCH_FS_REFIT_THRESHOLD`` is truthy, the FS path picks the link
+    cutoff from the actual scored-pair distribution (bimodality-gated valley +
+    cluster-shape guard) instead of the fixed default, correcting the over-merge
+    the non-iterated path can't see. Default-off is byte-identical to the fixed
+    cutoff.
 
-    Flipped on after validation, per the domain-comparators/orthogonal-blocking
-    precedent: the guarded loop is a STRUCTURAL no-op on 0.50-optimal data (the
-    cluster-shape guard rejects any candidate that doesn't reduce over-merge) and
-    MEASURED flat + perf-neutral at scale (QIS 50k/100k dF1 +0.00000, wall within
-    noise), while recovering the over-merge failure mode the fixed cutoff can't
-    (household_hardneg +0.053, cotenant_hardneg +0.678). No measured regression on
-    any panel dataset."""
-    return os.environ.get("GOLDENMATCH_FS_REFIT_THRESHOLD", "1").lower() not in (
-        "0", "false", "off", "no", "disabled",
+    **Why it was flipped back (#2387).** #2377 turned this ON after validating on
+    the `ab_lever` panel + QIS. Neither covers `ncvr_synthetic`, and the
+    nightly-only `bench-suggest-quality` gate went red the very next morning and
+    stayed red for five nights: `convergence_final_f1` 0.9828 -> 0.8881
+    (**-0.0966**). Confirmed by single-variable A/B on one sha -- `=0` scores
+    0.9847, default-on scores 0.8881.
+
+    The cause is a DEFECT IN THE CLUSTER-SHAPE GUARD, not a baseline that needed
+    re-blessing, which is why this is a revert rather than a re-bless. On
+    ncvr_synthetic the guard commits ``0.5000 -> 0.7000 (max cluster 5 -> 2,
+    over-merge reduced)`` -- and every gold cluster in that dataset is EXACTLY
+    size 2 (2500 disjoint pairs, max gold size 2), so the guard's own objective is
+    satisfied while F1 still falls. `max_candidate < max_default` is a
+    single-outlier statistic: it fixes the one or two genuinely over-merged
+    clusters and is structurally blind to the true pairs the raised cutoff drops
+    across the other ~2500 correct size-2 clusters. It works on household_hardneg
+    (0.947 -> 1.000) only because there over-merge IS the dominant error mode.
+
+    Re-flipping needs a GLOBAL accept criterion (e.g. bound the drop in linked
+    pairs, or compare the whole cluster-size distribution rather than its max),
+    plus a panel that includes ncvr_synthetic -- see `fs_refit_link_threshold`."""
+    return os.environ.get("GOLDENMATCH_FS_REFIT_THRESHOLD", "0").lower() in (
+        "1", "true", "on", "yes", "enabled",
     )
 
 
@@ -2670,7 +2684,25 @@ def fs_refit_link_threshold(id_a, id_b, score, default_link: float) -> float:
     max stays 3). Only a candidate that both (a) raises the cutoff and (b) shrinks
     the largest cluster is committed; otherwise the default stands, so clean,
     already-separated datasets (person/ncvr/historical_50k) are a no-op. Re-cluster
-    only -- scores are not recomputed."""
+    only -- scores are not recomputed.
+
+    **KNOWN DEFECT (#2387) -- the reason this ships default-OFF.** The "ncvr is a
+    no-op" claim above is FALSE, and it is what the default flip (#2377) rested on.
+    ``max_candidate < max_default`` is a SINGLE-OUTLIER statistic: it compares one
+    scalar over the whole dataset, so a candidate that fixes the one genuinely
+    over-merged cluster is accepted no matter how many CORRECT clusters the raised
+    cutoff shatters. Measured on ncvr_synthetic: this guard commits
+    ``0.50 -> 0.70 (max cluster 5 -> 2)`` -- yet every gold cluster there is
+    exactly size 2 (2500 disjoint pairs), so the guard's own objective is MET while
+    F1 drops 0.0966. The damage sits entirely BELOW the max, where a max cannot see
+    it. It works on household_hardneg (0.947 -> 1.000) only because over-merge IS
+    the dominant error mode there.
+
+    A correct guard needs a GLOBAL criterion -- e.g. reject when the linked-pair
+    count drops more than some bound, or compare the full cluster-size distribution
+    rather than its maximum. Whatever replaces it must be validated on a panel that
+    INCLUDES ncvr_synthetic: `ab_lever` and QIS both omit it, which is exactly how
+    this reached main and sat red for five nights."""
     candidate = fs_refit_threshold(np.asarray(score, dtype=np.float64), default_link)
     if candidate <= default_link:
         # No valley above the default -> the loop is a no-op (the common case on

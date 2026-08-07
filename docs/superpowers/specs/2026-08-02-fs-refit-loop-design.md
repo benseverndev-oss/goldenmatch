@@ -1,17 +1,49 @@
 # FS-aware refit loop — design (Phase 3, threshold-refit first slice)
 
-Status: **IMPLEMENTED + DEFAULT-ON (Phase 3a, 2026-08-02)** — the objective below
-was CORRECTED by measurement during implementation (see "Implemented objective").
-Approved design. **Default-flipped ON 2026-08-02** after validation:
-`GOLDENMATCH_FS_REFIT_THRESHOLD` now defaults on (`=0` restores the fixed cutoff).
-Evidence for the flip: (a) STRUCTURAL no-op on 0.50-optimal data — the
+Status: **IMPLEMENTED, DEFAULT-OFF — the 2026-08-02 default flip was REVERTED on
+2026-08-07 (#2387).** The objective below was CORRECTED by measurement during
+implementation (see "Implemented objective"); the *guard* it settled on then
+turned out to be defective (see "Default flip reverted" immediately below).
+`GOLDENMATCH_FS_REFIT_THRESHOLD=1` opts in. Wired across ALL FS routes
+(route-extension) and auditable (3c observability logging).
+
+## Default flip reverted (2026-08-07, #2387)
+
+The flip's evidence was: (a) STRUCTURAL no-op on 0.50-optimal data — the
 cluster-shape guard rejects any candidate that doesn't reduce over-merge; (b)
-MEASURED scale-neutral + perf-neutral (QIS realistic 50k/100k: ΔF1 **+0.00000**,
-wall within run-to-run noise); (c) recovers the over-merge failure mode the fixed
-cutoff can't — household_hardneg **+0.053**, cotenant_hardneg **+0.678** (the two
-over-merge shapes added to the `ab_lever` panel); no measured regression on any
-real/clean dataset. Wired across ALL FS routes (route-extension) and auditable
-(3c observability logging).
+MEASURED scale-neutral (QIS realistic 50k/100k ΔF1 **+0.00000**); (c) recovers
+over-merge the fixed cutoff can't — household_hardneg **+0.053**,
+cotenant_hardneg **+0.678**; no regression on the `ab_lever` panel.
+
+**Claim (a) is false, and it is the load-bearing one.** The nightly
+`bench-suggest-quality` gate went red the morning after the flip and stayed red
+five nights: `ncvr_synthetic convergence_final_f1` **0.9847 → 0.8881 (−0.0966)**,
+confirmed by single-variable A/B on one sha (`=0` → 0.9847, default-on → 0.8881).
+
+**Root cause — the cluster-shape guard is a single-outlier statistic.**
+`max_candidate < max_default` compares one scalar over the whole dataset. On
+ncvr_synthetic the guard commits `0.5000 → 0.7000 (max cluster 5 → 2, over-merge
+reduced)` — and every gold cluster in that dataset is *exactly size 2* (2500
+disjoint pairs, max gold size 2). So the guard's own objective is SATISFIED while
+F1 falls: it fixes the one or two genuinely over-merged clusters and is
+structurally blind to the true pairs the raised cutoff drops across the other
+~2500 correct size-2 clusters — all of which live BELOW the max. The guard works
+on household_hardneg only because over-merge IS the dominant error mode there.
+
+This is a defect, not a stale baseline, so the fix is a revert rather than a
+re-bless (re-blessing would bake in −0.0966 on a dataset where the guard's stated
+objective was met).
+
+**Why the gates missed it:** `ab_lever` and QIS both omit ncvr_synthetic, and the
+`fs-lever-gate` added 2026-08-03 — *after* the flip — runs that same `ab_lever`
+panel. The only lane that covers it is nightly-only, so the flip went green on
+push and reddened the next morning.
+
+**Re-flipping requires both:** (1) a GLOBAL accept criterion — e.g. reject when
+the linked-pair count drops beyond a bound, or compare the full cluster-size
+distribution instead of its maximum; and (2) a validation panel that INCLUDES
+ncvr_synthetic. Validate a default flip on the panel that *gates* it, not the
+panel that motivated it.
 Program: FS/Lever Enablement (`2026-08-01-fs-lever-enablement-design.md`), item 3.
 
 ## Implemented objective (2026-08-02) — corrected by measurement
