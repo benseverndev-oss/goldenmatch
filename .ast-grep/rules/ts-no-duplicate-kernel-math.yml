@@ -1,0 +1,39 @@
+id: ts-no-duplicate-kernel-math
+language: typescript
+severity: warning
+message: >-
+  Hand-rolled implementation of a kernel-backed string algorithm outside the
+  sanctioned pure-TS fallback modules. These primitives are single-sourced from
+  the Rust `*-core` kernels (goldenmatch-score-core / goldenfuzz / goldenphonetic)
+  and mirrored by ONE conformance-tested pure-TS fallback; a second local copy
+  silently drifts from the kernel and from the Python port. Import the existing
+  export instead of re-implementing it.
+note: >-
+  Single-kernel-collapse R5 (context-network/architecture/single-kernel-collapse-roadmap.md).
+  Sanctioned pure-TS fallbacks are ignored below (goldenmatch core/scorer.ts,
+  core/transforms.ts, core/perceptualWasm.ts) -- those ARE the permanent
+  edge-safe fallback surface and are parity-gated against the kernel. Everything
+  else should import from them (or from the package's own scorer) rather than
+  keep a private DP loop. Severity is `warning` while the remaining
+  cross-package duplicates are consolidated; promote to `error` once
+  `ast-grep scan` reports none.
+files:
+  - "packages/typescript/**/src/**/*.ts"
+ignores:
+  # The sanctioned, parity-gated pure-TS fallback surface (kill-constraint 1:
+  # "Pure-TS stays the permanent fallback" -- these are deliberate, not drift).
+  - "packages/typescript/goldenmatch/src/core/scorer.ts"
+  - "packages/typescript/goldenmatch/src/core/transforms.ts"
+  - "packages/typescript/goldenmatch/src/core/perceptualWasm.ts"
+  # Tests legitimately re-implement reference math to check the real impl.
+  - "**/*.test.ts"
+  - "**/*.spec.ts"
+  - "**/tests/**"
+rule:
+  kind: function_declaration
+  has:
+    field: name
+    # Exact names only. A loose `<name><Suffix>?` regex over-matched helpers like
+    # `levenshteinCacheKey` (caught by this rule's own test case), so the set is
+    # enumerated: the primitive plus its conventional Distance/Similarity forms.
+    regex: "^(levenshtein|levenshteinDistance|levenshteinSimilarity|damerauLevenshtein|damerauLevenshteinDistance|damerauLevenshteinSimilarity|jaro|jaroSimilarity|jaroWinkler|jaroWinklerSimilarity|soundex|metaphone|doubleMetaphone|hamming|hammingDistance|diceCoefficient|jaccardSimilarity)$"
