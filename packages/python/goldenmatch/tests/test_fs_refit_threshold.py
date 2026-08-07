@@ -196,19 +196,29 @@ class TestMaybeRefitAcrossRoutes:
         assert t_list == t_tbl
         assert t_list > 0.50
 
-    def test_kill_switch_is_noop_both_forms(self, monkeypatch):
-        # The refit is DEFAULT-ON (2026-08-02); the `=0` kill-switch restores the
-        # fixed cutoff on both pair representations even on an over-merge shape.
+    def test_flag_off_is_noop_both_forms(self, monkeypatch):
+        # Reverted to DEFAULT-OFF (#2387). Both the explicit `=0` kill-switch and
+        # an UNSET env must leave the fixed cutoff alone on both pair
+        # representations, even on an over-merge shape the refit would otherwise
+        # fire on -- default-off has to be byte-identical to the fixed path.
         from goldenmatch.core.pipeline import _maybe_refit_link_threshold
-        monkeypatch.setenv("GOLDENMATCH_FS_REFIT_THRESHOLD", "0")
         pairs = self._over_merge_pairs()
-        assert _maybe_refit_link_threshold(self._MK(), 0.50, pairs=pairs) == 0.50
-        assert _maybe_refit_link_threshold(self._MK(), 0.50, table=self._table(pairs)) == 0.50
+        for value in ("0", None):
+            if value is None:
+                monkeypatch.delenv("GOLDENMATCH_FS_REFIT_THRESHOLD", raising=False)
+            else:
+                monkeypatch.setenv("GOLDENMATCH_FS_REFIT_THRESHOLD", value)
+            assert _maybe_refit_link_threshold(self._MK(), 0.50, pairs=pairs) == 0.50
+            assert (
+                _maybe_refit_link_threshold(self._MK(), 0.50, table=self._table(pairs))
+                == 0.50
+            )
 
-    def test_default_on_fires_on_over_merge(self, monkeypatch):
-        # DEFAULT (env unset) now refits: an over-merge valley raises the cutoff.
+    def test_opt_in_fires_on_over_merge(self, monkeypatch):
+        # Opting IN (=1) still refits: an over-merge valley raises the cutoff. The
+        # capability is intact; only the DEFAULT changed (#2387).
         from goldenmatch.core.pipeline import _maybe_refit_link_threshold
-        monkeypatch.delenv("GOLDENMATCH_FS_REFIT_THRESHOLD", raising=False)
+        monkeypatch.setenv("GOLDENMATCH_FS_REFIT_THRESHOLD", "1")
         pairs = self._over_merge_pairs()
         assert _maybe_refit_link_threshold(self._MK(), 0.50, pairs=pairs) > 0.50
 
