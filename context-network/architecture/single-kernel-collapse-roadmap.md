@@ -170,9 +170,74 @@ stage's flag has been default-on and stable for a full release cycle.
 > That cost is not justified by the TS findings above (which are legitimate
 > fallbacks) — but it may be justified by the Rust divergence, which should be
 > resolved in Rust first. Recommended order: (1) allow-list the two TS fallbacks
-> and promote the rule to `error`; (2) decide the goldenflow-vs-goldenphonetic
-> soundex semantics and make one of them the owner; (3) treat goldencheck's
-> levenshtein redundancy as an opportunistic perf/ownership cleanup.
+> and promote the rule to `error`; (2) decide the soundex semantics and make one
+> crate the owner; (3) treat goldencheck's levenshtein redundancy as an
+> opportunistic perf/ownership cleanup.
+>
+> **Steps 1 and 3 LANDED 2026-08-07.** `goldencheck-core::fuzzy` now calls
+> `goldenfuzz_core::levenshtein_distance` (verified equivalent to the removed DP
+> over 60,500 generated pairs incl. non-BMP and the >64-char multiword path,
+> 0 divergences; the `1 - dist/max(len)` ratio stays in goldencheck as scoring
+> policy). `ts-no-duplicate-kernel-math` is now `error` with both TS fallbacks
+> allow-listed and its known limits documented in the rule note.
+>
+> ### Step 2 is bigger than first reported: there are FOUR soundex kernels
+>
+> The first pass found two. A full survey (`grep 'fn soundex'`) finds **four
+> independent Rust implementations**, plus two pure-TS ones:
+>
+> | crate | role |
+> |---|---|
+> | `goldenphonetic-core` | the standalone published product; jellyfish-compatible, NFKD-folding |
+> | `goldenflow-core::phonetic` | goldenflow's standardization transform |
+> | `score-core` | goldenmatch's `soundex` / `soundex_match` scorer |
+> | `fs-core` | Fellegi-Sunter's own (its test is literally `soundex_matches_jellyfish_vectors`) |
+>
+> Measured by compiling all four and running one 50-case adversarial corpus
+> (accents, punctuation, digit-only, whitespace-only, particles, short names).
+> **6 of 50 cases disagree somewhere.** Pairwise divergences:
+>
+> | | flow | score | fs |
+> |---|---|---|---|
+> | **phonetic** | 6 | 2 | 2 |
+> | **flow** | — | 4 | 6 |
+> | **score** | — | — | 4 |
+>
+> The disagreeing cases, and what each divergence *is*:
+>
+> | input | phonetic | flow | score | fs |
+> |---|---|---|---|---|
+> | `T-t` | `T300` | `T000` | `T300` | `T300` |
+> | `T t` | `T300` | `T000` | `T300` | `T300` |
+> | `Ünal` | `U540` | `N400` | `U540` | `Ü540` |
+> | `Åke` | `A200` | `K000` | `A200` | `Å200` |
+> | `"   "` | `" 000"` | `""` | `""` | `" 000"` |
+> | `"123"` | `"1000"` | `""` | `""` | `"1000"` |
+>
+> Three distinct behavioural axes, not one:
+> * **non-letter separators** — phonetic/score/fs let them reset the digit run;
+>   flow filters them out entirely, so `T-t` collapses to `Tt`.
+> * **non-ASCII leading letter** — phonetic/score NFKD-fold `Ü`→`U`; fs keeps the
+>   raw `Ü` as the code's first character; flow drops non-ASCII letters entirely,
+>   which changes *which* letter leads (`Ünal`→`N400`).
+> * **degenerate input** — phonetic/fs emit a code from a non-letter first char
+>   (jellyfish indexes `v[0]` unconditionally); score returns `""`.
+>
+> **This supports `goldenphonetic-core` as the owner**: it is the standalone
+> product, it is the jellyfish-compatible reference (the de-facto standard the
+> Python ecosystem matches), and `score-core` and `fs-core` are each already
+> within 2 edge cases of it. `goldenflow-core` is the outlier at 6.
+>
+> **But the cost is concentrated in the outlier.** Changing `goldenflow-core`
+> changes standardized output on FOUR surfaces at once — Python (`transforms/
+> phonetic.py` fallback + `_native`), TS (`soundexTs` fallback), `goldenflow-wasm`,
+> and `goldenflow-duckdb` — plus the byte-parity corpus that pins them together.
+> The affected population is real, not theoretical: accented names and names with
+> particles/punctuation are exactly the ER-relevant cases. Treat it as a breaking
+> transform change with a migration note, not a refactor. Sequencing suggestion:
+> align `fs-core` and `score-core` first (2 edge cases each, near-zero blast
+> radius) to establish `goldenphonetic-core` as the owner, then do goldenflow as
+> its own change with the parity corpus re-blessed deliberately.
 >
 > Also done: the one *intra*-package duplicate was removed — goldenmatch
 > `core/indicators.ts` carried its own Levenshtein DP used solely by
