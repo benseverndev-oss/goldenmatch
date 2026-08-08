@@ -968,7 +968,7 @@ source = { directory = "packages/rust/extensions/analysis-native" }
 
 [[package]]
 name = "goldencheck"
-version = "3.3.0"
+version = "3.4.0"
 source = { editable = "packages/python/goldencheck" }
 dependencies = [
     { name = "goldencheck-types" },
@@ -1206,7 +1206,7 @@ wheels = [
 
 [[package]]
 name = "goldenmatch"
-version = "3.11.0"
+version = "3.12.0"
 source = { editable = "packages/python/goldenmatch" }
 dependencies = [
     { name = "duckdb" },

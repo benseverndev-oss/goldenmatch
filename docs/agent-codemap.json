@@ -5009,7 +5009,9 @@
           "file": "packages/python/goldenmatch/goldenmatch/core/transform.py",
           "purpose": "GoldenFlow integration -- data transformation before matching.",
           "defines": [
+            "_columnar_result_to_arrow",
             "_do_transform",
+            "_do_transform_columnar",
             "_goldenflow_available",
             "_warn_transform_needs_polars_once",
             "build_transform",
