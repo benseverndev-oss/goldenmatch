@@ -2800,6 +2800,10 @@ def _fused_result_from_clusters(
         "memory_stats": None,
         "identity_summary": None,
         "scored_pairs": [],
+        # Key-set parity (#2417): the classic dict carries the Arrow
+        # backing for the lazy list. The fused path has no pair stream to
+        # hand back, so the list is already the literal [] above.
+        "scored_pairs_table": None,
         "review_pairs": [],
         "llm_cost": None,
         "throughput_posture": None,

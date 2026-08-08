@@ -39,7 +39,10 @@ def label_cmd(
 
     # Candidate pairs come from the pipeline's scored-pair stream (SP3), not a
     # reconstruction from cluster pair_scores.
-    all_pairs = result.get("scored_pairs", [])
+    # #2417: via the helper -- `scored_pairs` is None on the B2c FS path
+    # (the Arrow table is the backing), so a bare `.get` reads empty.
+    from goldenmatch.core.pairs import materialize_scored_pairs
+    all_pairs = materialize_scored_pairs(result)
 
     if not all_pairs:
         console.print("[yellow]No pairs found. Check your config.[/yellow]")
