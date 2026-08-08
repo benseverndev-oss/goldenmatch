@@ -259,3 +259,35 @@ def dedup_pairs_max_score_arrow_table(table):  # pa.Table -> pa.Table
         _t.column("score").chunk(0),
     )
     return _pa.table({"id_a": a_out, "id_b": b_out, "score": s_out})
+
+
+def scored_pairs_from_table(table) -> list[tuple[int, int, float]]:
+    """Materialize an Arrow pair table as the historical ``list[tuple]``.
+
+    The one place the ``(id_a, id_b, score)`` tuple list is built, so its cost
+    is paid once and in a place that can be measured. MEASURED ~168 B/pair
+    resident, ~192 B/pair at the transient peak, against ~24 B/pair for the
+    Arrow table -- which is why #2417 made the callers pull this on demand
+    rather than the pipeline pushing it eagerly.
+    """
+    if table is None or table.num_rows == 0:
+        return []
+    d = table.to_pydict()
+    return list(zip(d["id_a"], d["id_b"], d["score"]))
+
+
+def materialize_scored_pairs(results: dict) -> list[tuple[int, int, float]]:
+    """Read ``scored_pairs`` off a pipeline result dict (#2417).
+
+    USE THIS instead of ``results.get("scored_pairs") or []``. On the B2c FS
+    path the pipeline leaves ``scored_pairs`` as ``None`` and carries the Arrow
+    table under ``scored_pairs_table``, so a bare ``.get`` reads EMPTY -- a
+    silent wrong answer rather than a loud one.
+
+    Returns ``[]`` when the list was shed above
+    ``GOLDENMATCH_FS_SCORED_PAIRS_MAX`` (``scored_pairs_shed`` marks that case).
+    """
+    pairs = results.get("scored_pairs")
+    if pairs is not None:
+        return pairs
+    return scored_pairs_from_table(results.get("scored_pairs_table"))

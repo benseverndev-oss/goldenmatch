@@ -226,7 +226,12 @@ def test_fs_no_flag_uses_classic(monkeypatch):
     df = _people_df()
     result = run_dedupe_df(df, _fs_config())
     assert result.get("match_fused_capacity_mode") is not True
-    assert result["scored_pairs"] is not None
+    # #2417: the classic B2c FS path leaves `scored_pairs` None and carries
+    # the Arrow backing, so read it the way real consumers do. Asserting
+    # non-EMPTY (not merely non-None) keeps the original intent -- the
+    # classic path ran and produced pairs.
+    from goldenmatch.core.pairs import materialize_scored_pairs
+    assert materialize_scored_pairs(result)
 
 
 # ── extended scorer coverage: the fused FS kernel now scores each field through
