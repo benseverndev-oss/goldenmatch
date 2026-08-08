@@ -1,0 +1,25 @@
+# goldencheck-types (TypeScript)
+
+> Shared TypeScript types and domain schemas for the goldencheck data-quality toolkit
+
+## Install
+```bash
+npm install goldencheck-types
+```
+
+## Authoritative sources
+Read these instead of inferring behaviour from the compiled `dist/`:
+- This file -- ships INSIDE the package: `node_modules/goldencheck-types/llms.txt`.
+- https://docs.bensevern.dev -- full docs.
+- https://github.com/benseverndev-oss/goldenmatch -- source + issues.
+- Python sibling (the reference implementation): `pip install goldencheck-types` -- same concepts, fuller surface.
+
+## Notes
+Types + domain schemas only. No runtime behaviour.
+
+This is part of the Golden Suite. Suite-level index: https://docs.bensevern.dev/llms.txt
+
+Behaviour here is *decided* and contract-tested against the Python
+implementation, not incidental. Reading `dist/` shows what one path does; it
+does not show which guarantees are load-bearing, which fallbacks are
+deliberate, or which knobs exist.

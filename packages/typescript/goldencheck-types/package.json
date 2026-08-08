@@ -13,7 +13,7 @@
       "require": "./dist/index.cjs"
     }
   },
-  "files": ["dist", "domains"],
+  "files": ["dist", "domains", "llms.txt"],
   "engines": { "node": ">=20" },
   "scripts": {
     "build": "tsup",

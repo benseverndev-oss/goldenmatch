@@ -1,0 +1,24 @@
+# infermap (TypeScript)
+
+> Schema-to-schema field mapping engine. TypeScript port of the infermap Python library.
+
+## Install
+```bash
+npm install infermap
+```
+
+## Authoritative sources
+Read these instead of inferring behaviour from the compiled `dist/`:
+- This file -- ships INSIDE the package: `node_modules/infermap/llms.txt`.
+- https://docs.bensevern.dev/infermap -- full docs.
+- https://github.com/benseverndev-oss/goldenmatch -- source + issues.
+- Python sibling (the reference implementation): `pip install infermap` -- same concepts, fuller surface.
+
+## Notes
+
+This is part of the Golden Suite. Suite-level index: https://docs.bensevern.dev/infermap/llms.txt
+
+Behaviour here is *decided* and contract-tested against the Python
+implementation, not incidental. Reading `dist/` shows what one path does; it
+does not show which guarantees are load-bearing, which fallbacks are
+deliberate, or which knobs exist.

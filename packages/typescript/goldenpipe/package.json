@@ -20,7 +20,7 @@
     "url": "git+https://github.com/benseverndev-oss/goldenmatch.git",
     "directory": "packages/typescript/goldenpipe"
   },
-  "homepage": "https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/typescript/goldenpipe",
+  "homepage": "https://docs.bensevern.dev/goldenpipe",
   "bugs": {
     "url": "https://github.com/benseverndev-oss/goldenmatch/issues"
   },
@@ -52,7 +52,8 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "llms.txt"
   ],
   "engines": {
     "node": ">=20"
