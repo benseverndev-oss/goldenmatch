@@ -3,7 +3,6 @@ CorpusBuild(schema, passages), and the GoldenGraph facade threads that PassageIn
 into ask() so mode="hybrid" works out of the box -- no hand-built retriever."""
 from __future__ import annotations
 
-import goldenmatch.core.ann_blocker as _ab
 import pytest
 from goldengraph.ingest import CorpusBuild, ingest_corpus
 from goldengraph.passage_index import PassageIndex
@@ -11,7 +10,17 @@ from goldengraph.passage_index import PassageIndex
 
 @pytest.fixture(autouse=True)
 def _force_numpy_fallback(monkeypatch):
-    monkeypatch.setattr(_ab, "_HAS_FAISS", False)
+    """Pin the exact numpy ANN path so the expected neighbour sets are stable.
+
+    Uses goldenmatch's PUBLIC backend switch rather than patching a private
+    module attribute. The old form set ``ann_blocker._HAS_FAISS``, which stopped
+    existing when goldenmatch replaced its FAISS backend with native HNSW --
+    and because ``monkeypatch.setattr`` raises on a missing attribute, that
+    turned into a collection error across every test using this fixture.
+    ``GOLDENMATCH_ANN_BACKEND`` is documented and honoured unconditionally, so
+    it survives the next internal rename.
+    """
+    monkeypatch.setenv("GOLDENMATCH_ANN_BACKEND", "numpy")
 
 
 class _StubLLM:
