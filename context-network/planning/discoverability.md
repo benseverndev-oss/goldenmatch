@@ -98,5 +98,58 @@ still exist under `benseverndev-oss` as **archived**. Two fixes:
   concise `llms.txt` is what crawlers key off); Mintlify nav is thin for
   goldenpipe/infermap (1 entry each).
 
+## Sub-arc: POST-INSTALL agent discoverability (2026-08-08)
+
+The 2026-06-13 pass above covers the surfaces a human or crawler hits **before**
+installing. This is the complement: what an AI agent can reach **after** install,
+working inside someone else's repo.
+
+**The observed problem:** agents consuming GM packages elsewhere reverse-engineer
+behaviour from source rather than reading GM's docs.
+
+**The diagnosis was not "the docs are missing".** `llms.txt` is good. It was
+*unreachable*: it sat BESIDE each package directory, so `packages = [...]` never
+shipped it. An agent in a foreign repo sees only `site-packages/<pkg>/`, cannot
+reach this repo, and finds no pointer in the installed artifact — reverse
+engineering was the only path available, not the lazy one.
+
+**Inventory: 36 distributable surfaces; 8 had an `llms.txt`; none shipped it.**
+(11 PyPI wheels, 10 npm, 10 maturin wheels, 2 crates.io crates, 1 SQL extension
+pair, 3 GitHub Actions, 1 dbt package.)
+
+**The rule, per ecosystem** — "ships inside the artifact" differs by packaging:
+- **PyPI / maturin** — the file must live INSIDE the importable package
+  (`goldenmatch/llms.txt`). Do NOT `force-include` from the package root: that
+  re-adds an already-collected path and triggers the "Duplicate filename in local
+  headers" failure that broke the v1.7.0 publish.
+- **npm** — package root is what ships; add to `files`.
+- **crates.io** — `include = [...]` plus `//!` crate docs (what docs.rs renders).
+- **SQL extensions** — no filesystem; a `goldenmatch_docs()` UDF is the surface.
+- **Actions / dbt** — consumed by ref; `action.yml` description + repo root.
+
+**Why in-package and not wheel-only:** a `force-include` ships correctly but makes
+`Path(pkg.__file__).parent / "llms.txt"` FALSE in a source checkout and an editable
+install — wrong for exactly the contributor-side agent it is meant to help. A
+pointer that lies is worse than no pointer. Moving the file makes it true in all
+three.
+
+**Also shipped per package:** `Documentation` → `docs.bensevern.dev/<pkg>` plus an
+`AI agents (llms.txt)` URL (PyPI renders and exposes these), and an
+authoritative-sources block opening the `__init__` docstring that says WHY —
+behaviour here is decided and contract-tested, so the implementation shows what one
+path does but not which guarantees are load-bearing.
+
+**Gotcha for whoever extends this:** the per-package pointers in the ROOT
+`llms.txt`, `docs/benchmark-claims.json`'s tracked-surface list, and
+`scripts/check_llms_counts.py` all hardcode the per-package path. Moving the file
+breaks all three, and each lives in a different file type — a `*.py`-only grep
+misses the JSON, and a grep excluding `*.txt` misses the root index.
+
+**Status:** Python wheels done (PR #2437). Remaining: npm ×10, maturin ×10, the
+`goldenmatch_docs()` UDF, crates.io ×2, Actions ×3, dbt, error-message pointers,
+and a discoverability gate extending `check_docs_consistency.py` (which already
+builds the authoritative roster and already REPORTS `llms.txt` presence without
+asserting it) with a per-ecosystem rule + deferral map.
+
 ---
-**Classification:** planning/workstream • **Last updated:** 2026-06-13
+**Classification:** planning/workstream • **Last updated:** 2026-08-08

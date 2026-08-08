@@ -6,11 +6,11 @@
 GoldenCheck (profile + validate) → GoldenFlow (standardize) → GoldenMatch (dedupe + cluster + survivorship) → GoldenAnalysis (cross-cutting reporting), orchestrated by GoldenPipe, with InferMap for schema mapping.
 
 ## Packages
-- GoldenMatch — zero-config entity resolution (fuzzy + exact + probabilistic Fellegi-Sunter + LLM). Headline package. `pip install goldenmatch` / `npm i goldenmatch`. Detail: packages/python/goldenmatch/llms.txt
-- GoldenCheck — data-quality scanning (encoding, format, anomaly detection, baseline drift). `pip install goldencheck` / `npm i goldencheck`. Detail: packages/python/goldencheck/llms.txt
-- GoldenFlow — transforms & standardizers (phone, phonetic, date, name, address, company, categorical, email/URL dedup keys, checksummed identifiers: card/IBAN/ISBN/EAN/VAT/ISIN/CUSIP/NPI). `pip install goldenflow` / `npm i goldenflow`. Detail: packages/python/goldenflow/llms.txt
-- GoldenAnalysis — read-only cross-cutting analysis & reporting + cross-run regression detection. `pip install goldenanalysis` / `npm i goldenanalysis`. Detail: packages/python/goldenanalysis/llms.txt
-- GoldenPipe — declarative YAML orchestrator wiring the stages. `pip install goldenpipe` / `npm i goldenpipe`. Detail: packages/python/goldenpipe/llms.txt
+- GoldenMatch — zero-config entity resolution (fuzzy + exact + probabilistic Fellegi-Sunter + LLM). Headline package. `pip install goldenmatch` / `npm i goldenmatch`. Detail: packages/python/goldenmatch/goldenmatch/llms.txt
+- GoldenCheck — data-quality scanning (encoding, format, anomaly detection, baseline drift). `pip install goldencheck` / `npm i goldencheck`. Detail: packages/python/goldencheck/goldencheck/llms.txt
+- GoldenFlow — transforms & standardizers (phone, phonetic, date, name, address, company, categorical, email/URL dedup keys, checksummed identifiers: card/IBAN/ISBN/EAN/VAT/ISIN/CUSIP/NPI). `pip install goldenflow` / `npm i goldenflow`. Detail: packages/python/goldenflow/goldenflow/llms.txt
+- GoldenAnalysis — read-only cross-cutting analysis & reporting + cross-run regression detection. `pip install goldenanalysis` / `npm i goldenanalysis`. Detail: packages/python/goldenanalysis/goldenanalysis/llms.txt
+- GoldenPipe — declarative YAML orchestrator wiring the stages. `pip install goldenpipe` / `npm i goldenpipe`. Detail: packages/python/goldenpipe/goldenpipe/llms.txt
 - InferMap — schema mapping; auto-aligns columns across heterogeneous sources. `pip install infermap` / `npm i infermap`.
 - goldenmatch-extensions (Rust) — Postgres (pgrx) extension + DuckDB UDFs: SQL-native dedupe / match / score / auto-config + telemetry / identity graph. Detail: packages/rust/extensions/llms.txt
 - goldenfuzz / goldenphonetic / goldenmatch-hnsw (owned libraries) — byte-identical/faster drop-in replacements for the string-matching + ANN deps: goldenfuzz replaces rapidfuzz (jaro-winkler/levenshtein/indel + the fuzz.* composites + extract/cdist), goldenphonetic replaces jellyfish (soundex/metaphone/nysiis/match-rating), goldenmatch-hnsw replaces FAISS IndexHNSWFlat (pure-Rust HNSW ANN, zero C deps). Standalone + pyo3-free: `pip install goldenfuzz` / `pip install goldenphonetic` / `pip install goldenmatch-hnsw`; crates.io `goldenfuzz-core` / `goldenphonetic-core`.
