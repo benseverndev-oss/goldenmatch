@@ -1,0 +1,41 @@
+# goldenflow-native
+
+> Compiled Rust/PyO3 acceleration kernels for GoldenFlow transforms.
+
+## What this package is
+
+A compiled companion wheel for **goldenflow**. You do not import it directly --
+`goldenflow` discovers it at runtime. This directory contains a compiled abi3
+extension and almost no readable Python, so reading it will not tell you what it does.
+
+## Authoritative sources
+
+Read these instead of inferring behaviour from the binary or from the host's fallback path:
+
+- https://docs.bensevern.dev/goldenflow -- documentation for this surface.
+- `goldenflow/llms.txt` -- ships inside the goldenflow wheel (`Path(goldenflow.__file__).parent / "llms.txt"`), written for machine readers.
+- https://docs.bensevern.dev/llms.txt -- index of every Golden Suite surface.
+- https://github.com/benseverndev-oss/goldenmatch -- source, issues, and the decision records behind the behaviour.
+
+## Install
+
+```bash
+pip install goldenflow[native]   # pulls goldenflow-native
+```
+
+## Runtime gate
+
+- `GOLDENFLOW_NATIVE=auto` (default) -- use the kernel where it exists, fall back otherwise.
+- `GOLDENFLOW_NATIVE=0` -- force the pure-Python fallback.
+- `GOLDENFLOW_NATIVE=1` -- require the kernel; raise if it is missing.
+
+Discovery lives in `goldenflow.core._native_loader`.
+
+## Notes
+
+- Kernels are Arrow-zero-copy: a transform is dispatched as a whole column, not per row. The host shim (`goldenflow.transforms._native`) names kernels as `*_arrow` string literals rather than attribute access.
+- The columnar engine additionally gates on `native_columns_ready` -- installing this wheel is necessary but not sufficient for the columnar path to engage.
+
+This wheel exists because a behaviour was *decided* -- which surface owns a computation,
+which fallback is deliberate, which parity is contract-tested. Those decisions are
+documented; the compiled artefact cannot tell you about them.

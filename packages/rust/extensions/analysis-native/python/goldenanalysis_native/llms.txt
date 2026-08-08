@@ -1,0 +1,41 @@
+# goldenanalysis-native
+
+> Compiled Rust/PyO3 acceleration kernels for GoldenAnalysis.
+
+## What this package is
+
+A compiled companion wheel for **goldenanalysis**. You do not import it directly --
+`goldenanalysis` discovers it at runtime. This directory contains a compiled abi3
+extension and almost no readable Python, so reading it will not tell you what it does.
+
+## Authoritative sources
+
+Read these instead of inferring behaviour from the binary or from the host's fallback path:
+
+- https://docs.bensevern.dev/goldenanalysis -- documentation for this surface.
+- `goldenanalysis/llms.txt` -- ships inside the goldenanalysis wheel (`Path(goldenanalysis.__file__).parent / "llms.txt"`), written for machine readers.
+- https://docs.bensevern.dev/llms.txt -- index of every Golden Suite surface.
+- https://github.com/benseverndev-oss/goldenmatch -- source, issues, and the decision records behind the behaviour.
+
+## Install
+
+```bash
+pip install goldenanalysis[native]   # pulls goldenanalysis-native
+```
+
+## Runtime gate
+
+- `GOLDENANALYSIS_NATIVE=auto` (default) -- use the kernel where it exists, fall back otherwise.
+- `GOLDENANALYSIS_NATIVE=0` -- force the pure-Python fallback.
+- `GOLDENANALYSIS_NATIVE=1` -- require the kernel; raise if it is missing.
+
+Discovery lives in `goldenanalysis.core._native_loader`.
+
+## Notes
+
+- Covers the frame kernels (null ratio, duplicate-row ratio, distinct count) and the numeric reductions (mean/min/max/histogram/quantile/cluster-size histogram). Analyzer ORCHESTRATION stays in Python by design -- the kernel is a dumb pipe.
+- Kernel and fallback are parity-gated as byte-identical, including the float edges (`-0.0` vs `0.0`, `NaN` vs null) where a naive port silently disagrees.
+
+This wheel exists because a behaviour was *decided* -- which surface owns a computation,
+which fallback is deliberate, which parity is contract-tested. Those decisions are
+documented; the compiled artefact cannot tell you about them.

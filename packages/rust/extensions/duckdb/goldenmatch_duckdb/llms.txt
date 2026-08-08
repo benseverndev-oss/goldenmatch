@@ -1,0 +1,92 @@
+# goldenmatch-duckdb
+
+> GoldenMatch entity resolution as DuckDB SQL functions: score, dedupe, match,
+> auto-config, identity graph, and the native blocking/profiling kernels.
+
+## Install
+
+```bash
+pip install goldenmatch-duckdb          # pulls goldenmatch + duckdb + pyarrow
+pip install goldenmatch-duckdb[embed]   # + the local ONNX-free embedder (goldenmatch-embed)
+```
+
+```python
+import duckdb
+import goldenmatch_duckdb          # auto-registers on the default connection
+
+con = duckdb.connect()
+goldenmatch_duckdb.register(con)   # for a specific connection
+
+con.sql("SELECT goldenmatch_score('John Smith', 'Jon Smyth', 'jaro_winkler')")
+```
+
+## Authoritative sources
+
+Read these instead of inferring behaviour from the UDF wrappers -- they are thin
+marshaling shims over `goldenmatch`, so the semantics you care about live upstream:
+
+- https://docs.bensevern.dev/extensions/sql -- the SQL surface (DuckDB + Postgres).
+- `goldenmatch/llms.txt` -- ships inside the goldenmatch wheel
+  (`Path(goldenmatch.__file__).parent / "llms.txt"`), written for machine readers.
+- https://docs.bensevern.dev/llms.txt -- index of every Golden Suite surface.
+- https://github.com/benseverndev-oss/goldenmatch -- source, issues, and the
+  decision records behind the behaviour.
+
+From inside a SQL session: `SELECT goldenmatch_docs();` returns this file.
+
+## Function families
+
+All UDFs are JSON-in / JSON-out where a scalar will not do, and **fail soft** --
+an error comes back as a `{"error": ...}` string rather than aborting the query.
+
+- **Scoring** -- `goldenmatch_score(a, b, scorer)`, `goldenmatch_score_pair`,
+  `goldenmatch_explain`, `goldenmatch_score_probabilistic`, `goldenmatch_train_em`.
+- **Dedupe / match** -- `goldenmatch_dedupe`, `goldenmatch_dedupe_table`,
+  `goldenmatch_dedupe_full`, `goldenmatch_match`, `goldenmatch_match_tables`.
+- **Auto-config** -- `goldenmatch_autoconfig`, `goldenmatch_autoconfig_telemetry`,
+  `goldenmatch_suggest_threshold`, `goldenmatch_detect_domain`,
+  `goldenmatch_extract_features`.
+- **Quality / evaluation** -- `goldenmatch_profile_table`, `goldenmatch_validate_table`,
+  `goldenmatch_autofix_table`, `goldenmatch_detect_anomalies`, `goldenmatch_preflight`,
+  `goldenmatch_postflight`, `goldenmatch_evaluate`, `goldenmatch_compare_clusters`.
+- **Jobs** -- `gm_configure`, `gm_run`, `gm_jobs`, `gm_golden`, `gm_drop`, `gm_telemetry`.
+- **Identity graph (read-only here)** -- `goldenmatch_identity_resolve`, `_view`,
+  `_history`, `_conflicts`, `_list`.
+- **Learning memory** -- `goldenmatch_correction_add`, `_list`,
+  `goldenmatch_memory_learn`, `goldenmatch_memory_stats`.
+- **Native kernels** -- `goldenmatch_hnsw_pairs` (HNSW ANN blocking),
+  `goldenmatch_lsh_pairs` (MinHash-LSH token blocking), `goldenmatch_perceptual_phash`
+  / `_hamming` (image near-dup), `goldenmatch_pair_dedup`, `_connected_components`,
+  `goldenmatch_record_fingerprint`, `goldenmatch_embed_local`.
+- **GoldenCheck profiling** -- `goldencheck_benford`, `goldencheck_near_duplicates`,
+  `goldencheck_discover_fds`, `goldencheck_discover_approx_fds`,
+  `goldencheck_composite_keys`.
+- **GoldenFlow transforms** -- eight `goldenflow_*` series transforms (fail-open if
+  `goldenflow` is not installed).
+- **Semantic layer** -- `goldenmatch_certify_structural`.
+
+## Things that are decided, not incidental
+
+- **Identity writes are Postgres-only.** DuckDB has no durable multi-connection
+  identity store, so the five identity functions here are reads. Writes go through
+  the Python CLI, the REST API, or MCP. This is a deliberate split, not a gap.
+- **The native kernels are the SAME code as the Postgres, wheel, and WASM surfaces**
+  -- one Rust kernel behind one shared golden fixture, so `goldenmatch_hnsw_pairs`
+  in DuckDB and in Postgres return byte-identical candidate pairs. Where the wheel
+  is absent, a documented fallback runs instead (numpy brute force for HNSW).
+- **A UDF cannot query the connection it was called on** (DuckDB deadlocks), so
+  the table-reading UDFs open `con.cursor()` internally.
+- **`goldenmatch_suggest_threshold` returns SQL NULL** on purpose (unimodal score
+  distribution, or too few scores) -- it registers with `null_handling="special"`.
+  Other UDFs signal failure with a `{"error": ...}` JSON string instead.
+- **A large slice of the Python API is intentionally NOT in SQL** -- PPRL, streaming,
+  the LLM family, boost/rerank, graph ER, sensitivity sweeps. Each is deferred for a
+  documented reason (file-path args, statefulness, network access, model downloads),
+  not because nobody got to it. The table of reasons is in the repo.
+
+## Postgres counterpart
+
+The same capabilities are exposed by the `goldenmatch_pg` pgrx extension, function
+for function, so the two backends are interchangeable. Postgres additionally carries
+the stateful identity write path (`gm_resolve`, `gm_identity_merge`/`_split`, the
+audit chain, and the MDM reads).

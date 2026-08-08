@@ -1,0 +1,32 @@
+# goldenphonetic
+
+> Fast, byte-identical-to-jellyfish phonetic encoders (soundex / metaphone / nysiis / match_rating).
+
+## Install
+
+```bash
+pip install goldenphonetic
+```
+
+## API
+
+- `goldenphonetic.soundex(s)`
+- `goldenphonetic.metaphone(s)`
+- `goldenphonetic.nysiis(s)`
+- `goldenphonetic.match_rating_codex(s)` / `match_rating_comparison(a, b)`
+
+## Authoritative sources
+
+Read these instead of inferring behaviour from the compiled extension:
+
+- https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/rust/extensions/goldenphonetic-py -- README, API surface and parity contract.
+- https://docs.bensevern.dev/llms.txt -- index of every Golden Suite surface.
+- https://github.com/benseverndev-oss/goldenmatch -- source, issues, and the decision records behind the behaviour.
+
+## Notes
+
+- Byte-identical to jellyfish is a CONTRACT, fixture-tested against it. These algorithms have many subtly-different published variants; the one implemented here is deliberately jellyfish's, so a disagreement is a bug.
+- Zero runtime dependencies. A thin PyO3 wheel over the pyo3-free `goldenphonetic-core` crate.
+
+Behaviour here is *decided* and contract-tested against a named reference implementation,
+not incidental. The compiled artefact cannot tell you which guarantees are load-bearing.

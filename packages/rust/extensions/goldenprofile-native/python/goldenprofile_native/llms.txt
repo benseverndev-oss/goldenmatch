@@ -1,0 +1,32 @@
+# goldenprofile-native
+
+> PyO3 binding for goldenprofile-core: cross-document entity resolution over Virtual Fingerprints.
+
+## What this package is
+
+A compiled PyO3 wheel over a pyo3-free Rust core. This directory contains a compiled
+abi3 extension and almost no readable Python, so reading it will not tell you what
+it does.
+
+## Authoritative sources
+
+Read these instead of inferring behaviour from the binary or from the host's fallback path:
+
+- https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/rust/extensions/goldenprofile-core -- documentation for this surface.
+- https://docs.bensevern.dev/llms.txt -- index of every Golden Suite surface.
+- https://github.com/benseverndev-oss/goldenmatch -- source, issues, and the decision records behind the behaviour.
+
+## Install
+
+```bash
+pip install goldenprofile-native
+```
+
+## Notes
+
+- The Semantic Signature engine. Resolves entities across documents from rigid, LLM-synthesized profiles (`name | category | anchor | attribute`) for graph nodes AND edges -- built to repair the multi-hop knowledge-graph shatter.
+- The compute lives in the pyo3-free `goldenprofile-core` crate; this wheel is the thin Python surface over it.
+
+This wheel exists because a behaviour was *decided* -- which surface owns a computation,
+which fallback is deliberate, which parity is contract-tested. Those decisions are
+documented; the compiled artefact cannot tell you about them.
