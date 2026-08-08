@@ -229,7 +229,13 @@ class DedupeResult:
     dupes: Any | None = None  # pa.Table (v3.0.0)
     unique: Any | None = None  # pa.Table (v3.0.0)
     stats: dict = field(default_factory=dict)
-    scored_pairs: list[tuple[int, int, float]] = field(default_factory=list)
+    # Intentional field->property shadow (same idiom as `clusters` above): the
+    # annotation keeps `scored_pairs` a constructor kwarg + dataclass field; the
+    # property below (same name) is the lazy accessor. #2417.
+    scored_pairs: list[tuple[int, int, float]] = field(default_factory=list)  # pyright: ignore[reportRedeclaration, reportAssignmentType]
+    # Arrow backing for the lazy `scored_pairs` (#2417). Set by the B2c FS path;
+    # None elsewhere, where `scored_pairs` is already a real list.
+    _scored_pairs_table: Any = None
     # Probabilistic pairs in [review_threshold, link_threshold). They are
     # attached for stewardship and never participate in clustering.
     review_pairs: list[tuple[int, int, float]] = field(default_factory=list)
@@ -336,6 +342,43 @@ class DedupeResult:
         if value is None or isinstance(value, property):
             value = {}
         self.__dict__["_clusters"] = value
+
+    # `scored_pairs` is the SAME field->property lazy idiom as `clusters` above,
+    # for the same reason at a different scale (#2417). The B2c FS path keeps
+    # the pair stream columnar through scoring and clustering, then used to
+    # rebuild the whole `list[tuple]` post-cluster just to populate this field.
+    # MEASURED: ~168 B/pair resident (~192 B/pair peak) vs ~24 B/pair for the
+    # Arrow table it comes from -- 7x -- and `GOLDENMATCH_FS_SCORED_PAIRS_MAX`
+    # defaults to 50,000,000, so that permitted an ~8.4 GB list. On the
+    # `dedupe_df` + identity path NOTHING reads it (`resolve_clusters` takes it
+    # for signature compatibility only and works off `pair_score_view`), so the
+    # cost was pure waste there.
+    #
+    # The getter caches a REAL `list`, so `isinstance(r.scored_pairs, list)` and
+    # `r.scored_pairs == []` behave exactly as before -- a lazy sequence
+    # stand-in would not (`== []` would read True until first access).
+    @property
+    def scored_pairs(self) -> list[tuple[int, int, float]]:  # noqa: F811  (intentional field->property shadow; see `clusters`)
+        raw = self.__dict__.get("_scored_pairs", None)
+        if type(raw) is list:
+            return raw
+        from goldenmatch.core.pairs import scored_pairs_from_table
+
+        materialized = scored_pairs_from_table(
+            self.__dict__.get("_scored_pairs_table")
+        )
+        self.__dict__["_scored_pairs"] = materialized
+        return materialized
+
+    @scored_pairs.setter
+    def scored_pairs(self, value: Any) -> None:  # noqa: F811  (setter for the field->property shadow above)
+        # Same dataclass-default normalization as `clusters`: with no
+        # `scored_pairs=` kwarg the property object itself arrives as the
+        # "default". `None` means "lazy -- read `_scored_pairs_table`", so it is
+        # deliberately NOT normalized to [].
+        if isinstance(value, property):
+            value = []
+        self.__dict__["_scored_pairs"] = value
 
     def to_csv(self, path: str, which: str = "golden") -> Path:
         """Write results to CSV.
@@ -589,7 +632,10 @@ def dedupe(
         dupes=_to_result_table(result.get("dupes")),
         unique=_to_result_table(result.get("unique")),
         stats=_extract_stats(result),
-        scored_pairs=result.get("scored_pairs", []),
+        # #2417: `scored_pairs` is None on the B2c FS path; the Arrow table
+        # is the backing and the property materializes on first read.
+        scored_pairs=result.get("scored_pairs"),
+        _scored_pairs_table=result.get("scored_pairs_table"),
         review_pairs=result.get("review_pairs", []),
         config=cfg,
         postflight_report=_attach_memory_to_postflight(
@@ -959,7 +1005,10 @@ def dedupe_df(
         dupes=_to_result_table(result.get("dupes")),
         unique=_to_result_table(result.get("unique")),
         stats=_extract_stats(result),
-        scored_pairs=result.get("scored_pairs", []),
+        # #2417: `scored_pairs` is None on the B2c FS path; the Arrow table
+        # is the backing and the property materializes on first read.
+        scored_pairs=result.get("scored_pairs"),
+        _scored_pairs_table=result.get("scored_pairs_table"),
         review_pairs=result.get("review_pairs", []),
         config=config,
         postflight_report=pf,

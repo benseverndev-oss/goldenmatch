@@ -123,7 +123,10 @@ def _execute_run(
         result = run_dedupe_df(df, config, output_clusters=True)
 
     clusters: dict[int, dict] = result.get("clusters") or {}
-    scored_pairs: list[tuple[int, int, float]] = result.get("scored_pairs") or []
+    # #2417: see `materialize_scored_pairs` -- a bare `.get` reads empty on
+    # the B2c FS path.
+    from goldenmatch.core.pairs import materialize_scored_pairs
+    scored_pairs: list[tuple[int, int, float]] = materialize_scored_pairs(result)
 
     enriched = df.with_columns(pl.int_range(0, df.height, dtype=pl.Int64).alias("__row_id__"))
     matchkeys = (config or GoldenMatchConfig()).get_matchkeys()

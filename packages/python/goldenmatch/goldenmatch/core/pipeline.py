@@ -367,6 +367,57 @@ def _finalize_review_pairs(
     ]
 
 
+def _finalize_review_pairs_arrow(
+    review_pairs: list[tuple[int, int, float]],
+    linked_table,
+) -> list[tuple[int, int, float]]:
+    """`_finalize_review_pairs` against an ARROW linked set (#2417).
+
+    Same contract: max-dedupe the candidates, drop anything the linked set
+    already carries. The list version builds `linked_keys` as a Python set over
+    EVERY linked pair -- another O(pairs) driver structure (~100+ B/pair), which
+    is exactly what the lazy `scored_pairs` change exists to avoid. Here the
+    linked side stays the Arrow table (~24 B/pair) and the anti-join runs in
+    Arrow.
+
+    The filter is NOT skippable even though review and linked come from one
+    threshold split: `score_buckets_arrow` can emit the SAME pair on more than
+    one blocking pass with different scores (the dedup runs later), so a pair
+    can legitimately land on both sides of the cut before dedup. That is the
+    case this filter was written for.
+    """
+    from goldenmatch.core.pairs import dedup_pairs_max_score
+
+    deduped = dedup_pairs_max_score(review_pairs)
+    if not deduped or linked_table is None or linked_table.num_rows == 0:
+        return deduped
+
+    import pyarrow as pa
+
+    review_tbl = pa.table({
+        "id_a": pa.array([p[0] for p in deduped], pa.int64()),
+        "id_b": pa.array([p[1] for p in deduped], pa.int64()),
+        "score": pa.array([p[2] for p in deduped], pa.float64()),
+    })
+    # Canonicalize the linked side the way the list path's `linked_keys` does
+    # (min, max); the review side is already canonical out of the pair stream.
+    import pyarrow.compute as pc
+
+    la, lb = linked_table.column("id_a"), linked_table.column("id_b")
+    linked_keys_tbl = pa.table({
+        "id_a": pc.min_element_wise(la, lb),
+        "id_b": pc.max_element_wise(la, lb),
+    })
+    kept = review_tbl.join(
+        linked_keys_tbl, keys=["id_a", "id_b"], join_type="left anti",
+    )
+    # `join` does not promise input order; restore it so the result matches the
+    # list path exactly (dedup_pairs_max_score sorts, so sorting is faithful).
+    kept = kept.sort_by([("id_a", "ascending"), ("id_b", "ascending")])
+    d = kept.to_pydict()
+    return list(zip(d["id_a"], d["id_b"], d["score"]))
+
+
 # Bucket is the DEFAULT fuzzy scorer within a memory-safe row band. It scores all
 # blocks in one batched pass (block-key + bucket assignment off the collected frame,
 # no per-block LazyFrame), where the legacy per-block ``score_blocks_parallel`` spins
@@ -4886,6 +4937,7 @@ def _run_dedupe_pipeline(
     # split). Both pipeline paths normalize identically.
     from goldenmatch.core.pairs import dedup_pairs_max_score
     scored_pairs_shed = False
+    scored_pairs_table = None
     if _use_columnar and _columnar_pairs_df is not None:
         if _use_fs_columnar:
             # B2c (#2006): dedup the pair stream COLUMNAR (arrow-native, no
@@ -4900,10 +4952,25 @@ def _run_dedupe_pipeline(
                 scored_pairs = []
                 scored_pairs_shed = True
             else:
-                _sd = _scored_tbl.to_pydict()
-                scored_pairs = list(
-                    zip(_sd["id_a"], _sd["id_b"], _sd["score"])
-                )
+                # #2417: do NOT materialize the list[tuple] here. Carry the
+                # Arrow table and let the CONSUMER pay, via
+                # `pairs.materialize_scored_pairs` / the lazy
+                # `DedupeResult.scored_pairs` property.
+                #
+                # MEASURED (1M and 4M pair tables, linear in both): the Arrow
+                # form is ~24 B/pair; `to_pydict()` + `list(zip(...))` is
+                # ~168 B/pair resident and peaks at ~192 B/pair -- 7x. The cap
+                # defaults to 50,000,000, so eager materialization permitted an
+                # ~8.4 GB resident / ~9.6 GB transient Python list, built
+                # post-cluster. On the FS + identity path NOTHING reads it:
+                # `resolve_clusters` takes `scored_pairs` for signature
+                # compatibility only (see identity/resolve.py) and works off
+                # `pair_score_view`, so that whole cost was pure waste.
+                #
+                # Every real consumer (TUI, web, REST, cli review/match) reads
+                # it and gets a byte-identical list, cached on first access.
+                scored_pairs_table = _scored_tbl
+                scored_pairs = None
         else:
             # Weighted columnar lane -- unchanged (byte-identical).
             from goldenmatch.core.scorer import pairs_df_to_list
@@ -4974,8 +5041,17 @@ def _run_dedupe_pipeline(
         "postflight_report": postflight_report,
         "memory_stats": memory_stats,
         "identity_summary": identity_summary,
+        # #2417: on the B2c FS path `scored_pairs` is None and the Arrow table
+        # under `scored_pairs_table` is the backing. Read this through
+        # `goldenmatch.core.pairs.materialize_scored_pairs(results)` -- never
+        # `results.get("scored_pairs") or []`, which would silently read empty.
         "scored_pairs": scored_pairs,
-        "review_pairs": _finalize_review_pairs(review_pairs, scored_pairs),
+        "scored_pairs_table": scored_pairs_table,
+        "review_pairs": (
+            _finalize_review_pairs_arrow(review_pairs, scored_pairs_table)
+            if scored_pairs is None
+            else _finalize_review_pairs(review_pairs, scored_pairs)
+        ),
         "llm_cost": llm_budget_summary,
         "throughput_posture": _throughput_posture,
         "golden_fused_used": golden_fused_used,

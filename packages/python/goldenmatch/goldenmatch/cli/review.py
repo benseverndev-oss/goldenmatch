@@ -71,7 +71,10 @@ def review_cmd(
         console.print("[bold]Running pipeline to surface borderline pairs...[/bold]")
         result = run_dedupe(file_specs, cfg)
         df = result.get("_df")
-        scored_pairs = result.get("scored_pairs", []) or []
+        # #2417: see `materialize_scored_pairs` -- a bare `.get` reads empty
+        # on the B2c FS path.
+        from goldenmatch.core.pairs import materialize_scored_pairs
+        scored_pairs = materialize_scored_pairs(result)
         # Door #5: optionally downgrade high-score auto-merges built on
         # GoldenCheck-flagged cells to review (fail-open; OFF unless
         # GOLDENMATCH_QUALITY_GATED_REVIEW=1 and the row-id'd frame is present).
