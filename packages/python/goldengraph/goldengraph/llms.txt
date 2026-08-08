@@ -1,0 +1,34 @@
+# goldengraph
+
+> Build an own-your-KG knowledge graph from text: LLM extraction -> goldenmatch
+> entity resolution -> a durable, bi-temporal store.
+
+## Install
+
+```bash
+pip install goldengraph
+```
+
+## Authoritative sources
+
+Read these instead of inferring behaviour from the source -- most of the engine
+is a compiled Rust kernel with no Python to read:
+
+- https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/python/goldengraph
+  -- README, design and issues.
+- https://docs.bensevern.dev/docs/llms.txt -- index of every Golden Suite surface.
+- `goldenmatch/llms.txt` -- the entity-resolution engine goldengraph resolves with.
+
+## Things that are decided, not incidental
+
+- **Entity resolution is the differentiator.** Duplicate surface forms across
+  documents collapse into one durable entity -- the thing most GraphRAG
+  frameworks do badly. That is the reason this package exists, not a feature.
+- **The store and resolution engine are Rust-only.** There is no pure-Python
+  fallback: `goldengraph-native` is required, and `GOLDENGRAPH_NATIVE=0`
+  force-disables the engine with a clear error rather than silently degrading.
+- **Every runtime is byte-identical by construction.** Python, WebAssembly and
+  the C ABI share one kernel over one JSON boundary, so a query answers the same
+  on all three -- that is structural, not asserted after the fact.
+- **The store is bi-temporal.** A query can ask what the graph believed at a
+  point in time, which is why append and as-of are distinct operations.

@@ -10,13 +10,13 @@ npm install goldencheck
 ## Authoritative sources
 Read these instead of inferring behaviour from the compiled `dist/`:
 - This file -- ships INSIDE the package: `node_modules/goldencheck/llms.txt`.
-- https://docs.bensevern.dev/goldencheck -- full docs.
+- https://docs.bensevern.dev/docs/goldencheck -- full docs.
 - https://github.com/benseverndev-oss/goldenmatch -- source + issues.
 - Python sibling (the reference implementation): `pip install goldencheck` -- same concepts, fuller surface.
 
 ## Notes
 
-This is part of the Golden Suite. Suite-level index: https://docs.bensevern.dev/goldencheck/llms.txt
+This is part of the Golden Suite. Suite-level index: https://docs.bensevern.dev/docs/llms.txt
 
 Behaviour here is *decided* and contract-tested against the Python
 implementation, not incidental. Reading `dist/` shows what one path does; it

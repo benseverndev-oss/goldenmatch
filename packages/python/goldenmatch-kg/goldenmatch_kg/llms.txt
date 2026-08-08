@@ -1,0 +1,36 @@
+# goldenmatch-kg
+
+> Drop-in goldenmatch entity resolution for knowledge-graph frameworks:
+> neo4j-graphrag, LlamaIndex PropertyGraphIndex, and Graphiti.
+
+## Install
+
+```bash
+pip install goldenmatch-kg[neo4j-graphrag]   # or [llama-index], [graphiti]
+```
+
+## Authoritative sources
+
+Read these instead of inferring behaviour from the shims -- they are thin
+bindings, and the resolution quality you care about lives upstream:
+
+- `goldenmatch/llms.txt` -- the engine that actually does the resolving
+  (`Path(goldenmatch.__file__).parent / "llms.txt"`).
+- https://docs.bensevern.dev/docs/goldenmatch -- full documentation for that engine.
+- https://docs.bensevern.dev/docs/llms.txt -- index of every Golden Suite surface.
+- https://github.com/benseverndev-oss/goldenmatch -- source, issues, and the
+  decision record (`context-network/decisions/0021-goldenmatch-kg-integrations.md`).
+
+## Things that are decided, not incidental
+
+- **goldenmatch is an entity-resolution engine, not a KG builder.** This package
+  exists to drop it into the resolve stage of someone else's pipeline, wherever
+  that framework exposes a seam. It does not build graphs.
+- **Each framework gets a different kind of binding, because each exposes a
+  different seam.** neo4j-graphrag takes a real in-pipeline `GoldenMatchResolver`
+  (replacing its built-in `FuzzyMatchResolver`); LlamaIndex gets a transform that
+  canonicalizes entity names before upsert, because LlamaIndex ships no fuzzy
+  resolver at all. These are not inconsistencies.
+- **The framework extras are heavy and conflicting**, which is why this package
+  is excluded from the workspace and installed standalone, and why its CI runs a
+  fresh virtualenv per framework.

@@ -22,7 +22,7 @@ pip install goldenfuzz
 Read these instead of inferring behaviour from the compiled extension:
 
 - https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/rust/extensions/goldenfuzz-py -- README, API surface and parity contract.
-- https://docs.bensevern.dev/llms.txt -- index of every Golden Suite surface.
+- https://docs.bensevern.dev/docs/llms.txt -- index of every Golden Suite surface.
 - https://github.com/benseverndev-oss/goldenmatch -- source, issues, and the decision records behind the behaviour.
 
 ## Notes

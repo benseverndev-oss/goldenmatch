@@ -29,9 +29,9 @@ Read these instead of inferring behaviour from `action.yml`. An input list
 gives you names and types; it cannot tell you which defaults are deliberate
 or what a knob protects against:
 
-- https://docs.bensevern.dev/goldenflow -- full documentation for the underlying tool.
+- https://docs.bensevern.dev/docs/goldenflow -- full documentation for the underlying tool.
 - `goldenflow/llms.txt` -- ships inside the goldenflow wheel this action installs (`Path(goldenflow.__file__).parent / "llms.txt"`), written for machine readers.
-- https://docs.bensevern.dev/llms.txt -- index of every Golden Suite surface.
+- https://docs.bensevern.dev/docs/llms.txt -- index of every Golden Suite surface.
 - https://github.com/benseverndev-oss/goldenmatch -- source, issues, and the decision records.
 
 ## Things that are decided, not incidental

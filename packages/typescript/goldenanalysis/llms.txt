@@ -10,14 +10,14 @@ npm install goldenanalysis
 ## Authoritative sources
 Read these instead of inferring behaviour from the compiled `dist/`:
 - This file -- ships INSIDE the package: `node_modules/goldenanalysis/llms.txt`.
-- https://docs.bensevern.dev/goldenanalysis -- full docs.
+- https://docs.bensevern.dev/docs/goldenanalysis -- full docs.
 - https://github.com/benseverndev-oss/goldenmatch -- source + issues.
 - Python sibling (the reference implementation): `pip install goldenanalysis` -- same concepts, fuller surface.
 
 ## Notes
 Output is byte-identical to the Python-locked `report_frame_summary.json` fixture -- the cross-language parity gate.
 
-This is part of the Golden Suite. Suite-level index: https://docs.bensevern.dev/goldenanalysis/llms.txt
+This is part of the Golden Suite. Suite-level index: https://docs.bensevern.dev/docs/llms.txt
 
 Behaviour here is *decided* and contract-tested against the Python
 implementation, not incidental. Reading `dist/` shows what one path does; it

@@ -82,7 +82,10 @@ def counts(pkg: str) -> dict[str, int | None]:
     return {"mcp": mcp_tools(pkg), "exports": exports(pkg), "skills": a2a_skills(pkg)}
 
 
-_DOCS_LINK = re.compile(r"https://docs\.bensevern\.dev/([A-Za-z0-9/_-]+)")
+# The site is served under a /docs prefix, so the path AFTER that prefix is what
+# maps to a source file. The prefix is required, not optional: a URL without it
+# 404s (see scripts/check_docs_links.py, which gates that repo-wide).
+_DOCS_LINK = re.compile(r"https://docs\.bensevern\.dev/docs/([A-Za-z0-9/_-]+)")
 _DEAD_DOMAIN = re.compile(r"https://[A-Za-z0-9.-]*\.github\.io/[A-Za-z0-9/_-]*")
 
 

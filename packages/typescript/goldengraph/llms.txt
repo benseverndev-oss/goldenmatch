@@ -17,7 +17,7 @@ Read these instead of inferring behaviour from the compiled `dist/`:
 ## Notes
 Edge-safe TypeScript surface over the Rust goldengraph engine (WASM).
 
-This is part of the Golden Suite. Suite-level index: https://docs.bensevern.dev/llms.txt
+This is part of the Golden Suite. Suite-level index: https://docs.bensevern.dev/docs/llms.txt
 
 Behaviour here is *decided* and contract-tested against the Python
 implementation, not incidental. Reading `dist/` shows what one path does; it

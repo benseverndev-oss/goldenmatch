@@ -38,8 +38,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs-site"
 
-# The docs site is served under a /docs prefix: https://docs.bensevern.dev/ 308s
-# to /docs, and a bare https://docs.bensevern.dev/goldenmatch is a 404.
+# The docs site is served under a /docs prefix: the bare host 308s to /docs, and
+# a path without the prefix (host + "/goldenmatch") is a 404. Written without a
+# literal example URL so this comment cannot itself trip the check below.
 _SITE = "docs.bensevern.dev"
 _REQUIRED_PREFIX = f"https://{_SITE}/docs/"
 _SITE_URL_RE = re.compile(rf"https?://{re.escape(_SITE)}/[A-Za-z0-9._/-]*")
@@ -100,31 +101,56 @@ def _is_section_root(rel: str) -> bool:
 
 
 def _tracked_files() -> list[Path]:
-    """Every git-tracked file that mentions the docs host.
+    """Every git-tracked text file, listed rather than content-searched.
 
-    This file is skipped: its own docstring quotes the malformed URLs the check
+    Deliberately NOT `git grep`: `.gitattributes` marks `**/llms.txt` as `-diff`,
+    which makes git treat those files as binary, and `git grep -I` then skips
+    every one of them. That is precisely backwards here -- the llms.txt files ARE
+    the pointers this check exists to validate, so a git-grep-based scan is green
+    because it is blind. It already cost one silent miss: a repo-wide URL rewrite
+    driven by `git grep -lI` updated 89 files and skipped all 31 llms.txt.
+
+    So: enumerate with `git ls-files` and decide text-ness ourselves.
+
+    This file is skipped -- its own docstring quotes the malformed URLs the check
     exists to reject, which would otherwise make the gate fail on itself.
     """
     out = subprocess.run(
-        ["git", "grep", "-lI", _SITE, "--", "."],
+        ["git", "ls-files", "-z"],
         cwd=ROOT, capture_output=True, text=True, check=False,
     )
-    if out.returncode not in (0, 1):  # 1 == no matches, which is not an error
-        raise RuntimeError(f"git grep failed: {out.stderr.strip()}")
+    if out.returncode != 0:
+        raise RuntimeError(f"git ls-files failed: {out.stderr.strip()}")
     self_rel = Path(__file__).resolve().relative_to(ROOT).as_posix()
-    return [ROOT / line for line in out.stdout.split() if line and line != self_rel]
+    files: list[Path] = []
+    for rel in out.stdout.split("\0"):
+        if not rel or rel == self_rel:
+            continue
+        p = ROOT / rel
+        try:
+            if not p.is_file() or p.stat().st_size > 2_000_000:
+                continue
+            if b"\0" in p.read_bytes()[:8192]:  # real binary
+                continue
+        except OSError:
+            continue
+        files.append(p)
+    return files
 
 
 def check_site_urls(nav: set[str]) -> list[str]:
     """Every docs.bensevern.dev URL in the repo must name a real page."""
     problems: list[str] = []
     seen = 0
+    llms_scanned = 0
     for path in _tracked_files():
         try:
             text = path.read_text(encoding="utf-8", errors="ignore")
         except OSError:
             continue
         rel_file = path.relative_to(ROOT).as_posix()
+        if path.name == "llms.txt" and _SITE in text:
+            llms_scanned += 1
         for m in _SITE_URL_RE.finditer(text):
             url = m.group(0).rstrip(".,);:'\"")
             seen += 1
@@ -142,6 +168,14 @@ def check_site_urls(nav: set[str]) -> list[str]:
     if not seen:
         # The pointers ARE the feature; silently finding none means the scan broke.
         problems.append("found no docs.bensevern.dev URLs at all -- the scan is broken")
+    if llms_scanned < 10:
+        # The specific blindness that already happened once (see _tracked_files).
+        # There are ~30 shipped llms.txt files; reading almost none of them means
+        # the file walk is excluding them again, not that the repo shrank.
+        problems.append(
+            f"only {llms_scanned} llms.txt file(s) carried a docs URL -- the scan is "
+            "skipping them (last time: git grep -I treating them as binary)"
+        )
     return problems
 
 
