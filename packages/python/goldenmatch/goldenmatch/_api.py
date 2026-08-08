@@ -232,7 +232,12 @@ class DedupeResult:
     # Intentional field->property shadow (same idiom as `clusters` above): the
     # annotation keeps `scored_pairs` a constructor kwarg + dataclass field; the
     # property below (same name) is the lazy accessor. #2417.
-    scored_pairs: list[tuple[int, int, float]] = field(default_factory=list)  # pyright: ignore[reportRedeclaration, reportAssignmentType]
+    #
+    # The CONSTRUCTOR type is Optional because `None` is a meaningful input --
+    # it means "lazy, read `_scored_pairs_table`", which is what the pipeline
+    # passes on the B2c FS path. The READ type is not: the property below always
+    # returns a real `list`, so consumers never see None.
+    scored_pairs: list[tuple[int, int, float]] | None = field(default_factory=list)  # pyright: ignore[reportRedeclaration, reportAssignmentType]
     # Arrow backing for the lazy `scored_pairs` (#2417). Set by the B2c FS path;
     # None elsewhere, where `scored_pairs` is already a real list.
     _scored_pairs_table: Any = None

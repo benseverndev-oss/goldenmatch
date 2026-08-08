@@ -369,7 +369,7 @@ def _finalize_review_pairs(
 
 def _finalize_review_pairs_arrow(
     review_pairs: list[tuple[int, int, float]],
-    linked_table,
+    linked_table: Any,
 ) -> list[tuple[int, int, float]]:
     """`_finalize_review_pairs` against an ARROW linked set (#2417).
 
@@ -405,8 +405,8 @@ def _finalize_review_pairs_arrow(
 
     la, lb = linked_table.column("id_a"), linked_table.column("id_b")
     linked_keys_tbl = pa.table({
-        "id_a": pc.min_element_wise(la, lb),
-        "id_b": pc.max_element_wise(la, lb),
+        "id_a": pc.min_element_wise(la, lb),  # pyright: ignore[reportAttributeAccessIssue]
+        "id_b": pc.max_element_wise(la, lb),  # pyright: ignore[reportAttributeAccessIssue]
     })
     kept = review_tbl.join(
         linked_keys_tbl, keys=["id_a", "id_b"], join_type="left anti",
