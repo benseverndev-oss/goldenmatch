@@ -21,11 +21,13 @@ from goldenmatch.sail.identity import (
     RECORD_COLUMNS,
     IdentityGraphFrames,
     build_identity_graph,
+    build_identity_graph_incremental,
 )
 
 __all__ = [
     "IdentityGraphFrames",
     "build_identity_graph",
+    "build_identity_graph_incremental",
     "NODE_COLUMNS",
     "RECORD_COLUMNS",
     "EDGE_COLUMNS",

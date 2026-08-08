@@ -6,6 +6,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added
+- **Sail identity Layer 2: incremental resolution against an existing store
+  (#966).** `goldenmatch.sail.build_identity_graph_incremental` resolves a run's
+  clusters against prior state instead of always minting fresh entities. A
+  cluster whose records already belong to one entity **absorbs** into it; one
+  spanning several **merges** them, retiring the losers
+  (`status="merged_into"`, `merged_into=<winner>`) and reassigning their records
+  to the winner. Only a cluster with no overlap **creates**. This is what makes
+  a Sail-tier store converge across runs — the create-only path (shipped in
+  2.0.0 as Layer 1) re-minted an id for a record it had already seen.
+
+  Semantics mirror one-box `identity.resolve.resolve_clusters`, including the
+  winner rule that is easy to invert: the entity holding the most of **this
+  cluster's** records wins, *not* the largest entity overall. Tie-break is
+  oldest `created_at`, then `entity_id` ascending — that last step is ours, so
+  the surviving entity is deterministic (one-box breaks that tie on dict order,
+  and Spark has no stable sort).
+
+  **Additive**: `IdentityGraphFrames` and `build_identity_graph` are unchanged,
+  so every existing consumer of the frozen contract is unaffected. Omitting the
+  prior-state frames delegates to the create path verbatim, so the new entry
+  point is safe to call unconditionally. Design:
+  `docs/superpowers/specs/2026-08-08-sail-identity-layer2-incremental-design.md`.
+
+  Note the `records` frame is a **delta** — a winner's untouched records are not
+  re-emitted, only records this run assigned or moved.
+
 ### Performance
 - **`DedupeResult.scored_pairs` is materialized lazily instead of eagerly
   (#2417).** The B2c Fellegi-Sunter path already keeps the pair stream columnar
