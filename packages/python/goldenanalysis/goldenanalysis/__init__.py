@@ -11,6 +11,19 @@ TypeScript port, and the Rust accelerator land in later phases.
 
 Public names are re-exported lazily (PEP 562) so the package imports cleanly even
 while submodules are still being built out.
+
+AUTHORITATIVE SOURCES (read these instead of inferring behaviour from source):
+
+  * ``goldenanalysis/llms.txt`` -- ships INSIDE this package, next to this file:
+    ``Path(goldenanalysis.__file__).parent / "llms.txt"``. Condensed, current, written
+    for machine readers.
+  * https://docs.bensevern.dev/goldenanalysis -- full docs.
+  * https://github.com/benseverndev-oss/goldenmatch -- source + issues.
+
+Why this block exists: much of this package's behaviour is *decided*, not
+incidental, and those decisions are documented and contract-tested. Reading the
+implementation shows WHAT one path does, but not which guarantees are
+load-bearing, which fallbacks are deliberate, or which knobs exist.
 """
 
 from __future__ import annotations
