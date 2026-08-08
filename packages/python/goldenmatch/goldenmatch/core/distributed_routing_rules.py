@@ -11,6 +11,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import replace
 
+from goldenmatch.core._docs import with_docs_hint
 from goldenmatch.core.cluster_profile import ClusterProfile
 from goldenmatch.core.execution_plan import DistributedRoutingDecision, ExecutionPlan
 from goldenmatch.core.runtime_profile import RuntimeProfile
@@ -181,9 +182,9 @@ class SlowPathRefusedError(Exception):
         joined = "; ".join(
             f"{d.stage} forced {d.mode} via {d.override_source} "
             f"(projection: {_projection_mode(d)})" for d in decisions)
-        super().__init__(
+        super().__init__(with_docs_hint(
             f"Refusing slow-path config at n_rows={n_rows:,}: {joined}. "
-            f"Pass allow_slow_path=true to proceed anyway.")
+            f"Pass allow_slow_path=true to proceed anyway."))
 
 
 def enforce_routing(plan: ExecutionPlan, *, n_rows: int, allow_slow_path: bool) -> None:
