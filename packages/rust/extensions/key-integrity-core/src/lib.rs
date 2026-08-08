@@ -25,6 +25,13 @@
 //! keys are a documented parity edge (JS `JSON.stringify(1.0)=="1"` vs
 //! `serde_json` `"1.0"`); entity keys are never floats, and the pure-language
 //! fallbacks match this kernel for every non-float key.
+//!
+//! Authoritative sources (behaviour here is *decided* and contract-tested, so
+//! prefer them to inferring from the implementation):
+//! <https://docs.bensevern.dev/llms.txt> (index of every Golden Suite surface,
+//! written for machine readers) and
+//! <https://github.com/benseverndev-oss/goldenmatch> (source, issues, design
+//! records).
 
 use serde_json::{Map, Value};
 use std::collections::HashMap;

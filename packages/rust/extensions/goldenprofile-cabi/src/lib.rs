@@ -11,6 +11,13 @@
 //! - Every non-NULL pointer returned MUST be passed back to
 //!   `goldenprofile_string_free` exactly once. The strings are heap-allocated by
 //!   Rust; freeing them any other way is UB.
+//!
+//! Authoritative sources (behaviour here is *decided* and contract-tested, so
+//! prefer them to inferring from the implementation):
+//! <https://docs.bensevern.dev/llms.txt> (index of every Golden Suite surface,
+//! written for machine readers) and
+//! <https://github.com/benseverndev-oss/goldenmatch> (source, issues, design
+//! records).
 
 use std::ffi::{c_char, CStr, CString};
 

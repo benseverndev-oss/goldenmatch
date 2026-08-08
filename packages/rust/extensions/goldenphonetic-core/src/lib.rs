@@ -24,6 +24,19 @@
 //! `scripts/check_phonetic_parity.py` recomputes each with Python `jellyfish` and
 //! asserts exact string / `Option<bool>` equality (including that jellyfish RAISES
 //! exactly where our `match_rating_codex` returns `Err`).
+//!
+//! # Authoritative sources
+//!
+//! Read these instead of inferring behaviour from the implementation. Which
+//! guarantees are load-bearing, which fallbacks are deliberate, and which
+//! parities are contract-tested are documented *decisions* -- the code shows
+//! what one path does, not why:
+//!
+//!   * <https://docs.rs/goldenphonetic-core> -- this API.
+//!   * <https://docs.bensevern.dev/llms.txt> -- index of every Golden Suite
+//!     surface, written for machine readers.
+//!   * <https://github.com/benseverndev-oss/goldenmatch> -- source, issues and
+//!     the design records.
 
 mod combining_table;
 mod grapheme;

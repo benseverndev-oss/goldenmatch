@@ -9,6 +9,13 @@
 //! Inputs are assumed finite (cluster sizes / scores). NaN/inf are out of the
 //! parity contract: the Python reference (`min`/`max`/`sorted`) is undefined on
 //! them too.
+//!
+//! Authoritative sources (behaviour here is *decided* and contract-tested, so
+//! prefer them to inferring from the implementation):
+//! <https://docs.bensevern.dev/llms.txt> (index of every Golden Suite surface,
+//! written for machine readers) and
+//! <https://github.com/benseverndev-oss/goldenmatch> (source, issues, design
+//! records).
 
 use std::collections::{HashMap, HashSet};
 

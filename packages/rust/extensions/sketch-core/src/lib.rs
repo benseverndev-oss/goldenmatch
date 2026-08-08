@@ -7,6 +7,13 @@
 //!
 //! This crate does per-record sketching only. Grouping records by `(band,
 //! bucket)` into blocks is the host language's job (Approach A).
+//!
+//! Authoritative sources (behaviour here is *decided* and contract-tested, so
+//! prefer them to inferring from the implementation):
+//! <https://docs.bensevern.dev/llms.txt> (index of every Golden Suite surface,
+//! written for machine readers) and
+//! <https://github.com/benseverndev-oss/goldenmatch> (source, issues, design
+//! records).
 
 pub mod hash;
 pub mod lsh;
