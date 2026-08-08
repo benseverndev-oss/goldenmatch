@@ -33,7 +33,7 @@
 [![GitHub stars](https://img.shields.io/github/stars/benseverndev-oss/goldenmatch?style=flat&color=d4a017&logo=github)](https://github.com/benseverndev-oss/goldenmatch/stargazers)
 
 <!-- Ecosystem -->
-[![Docs](https://img.shields.io/badge/docs-docs.bensevern.dev-d4a017)](https://docs.bensevern.dev/)
+[![Docs](https://img.shields.io/badge/docs-docs.bensevern.dev-d4a017)](https://docs.bensevern.dev/docs/)
 [![Smithery MCP](https://img.shields.io/badge/MCP-smithery-6e40c9)](https://smithery.ai/servers/benzsevern/goldenmatch)
 [![MCP Registry](https://img.shields.io/badge/MCP%20Registry-io.github.benzsevern%2Fgoldenmatch-0ea5e9)](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.benseverndev-oss/goldenmatch)
 
@@ -95,13 +95,13 @@ GoldenMatch's core workflow is a loop, not a one-shot:
 
 Zero-config gets you most of the way in one pass; the healing loop closes the gap to an expert-tuned config without you having to be the expert.
 
-> **Status:** the healer is opt-in via the Python API (`from goldenmatch.core.suggest import review_config`) and needs `goldenmatch[native]`. It is not yet wired into the default `dedupe_df` pipeline; CLI/MCP surfaces are in progress. Full details: [config-suggestions](https://docs.bensevern.dev/goldenmatch/config-suggestions).
+> **Status:** the healer is opt-in via the Python API (`from goldenmatch.core.suggest import review_config`) and needs `goldenmatch[native]`. It is not yet wired into the default `dedupe_df` pipeline; CLI/MCP surfaces are in progress. Full details: [config-suggestions](https://docs.bensevern.dev/docs/goldenmatch/config-suggestions).
 
 ---
 
 ## Why GoldenMatch?
 
-- **Runs on unstructured input** — extract matchable records from PDFs and images (cards, forms, invoices, scanned directories) against a schema you control, then dedupe them. `pip install goldenmatch[documents]`; see [Document ingest](https://docs.bensevern.dev/goldenmatch/documents).
+- **Runs on unstructured input** — extract matchable records from PDFs and images (cards, forms, invoices, scanned directories) against a schema you control, then dedupe them. `pip install goldenmatch[documents]`; see [Document ingest](https://docs.bensevern.dev/docs/goldenmatch/documents).
 - **Zero-config that beats hand-tuned** — the introspective controller auto-detects columns, picks scorers, iterates on complexity signals, and converges on a defensible config. No training data, no rules to write. (v1.8.0)
 - **96.4% F1 zero-config** on DBLP-ACM (hand-tuned ceiling: 91.8%). [DQBench ER score: 91.04 no-LLM](https://github.com/benseverndev-oss/dqbench)
 - **Learning Memory** — corrections from stewards, unmerges, and LLM votes persist to disk and apply automatically on the next run; survives row reorders via record-hash re-anchoring (v1.6.0)
@@ -128,7 +128,7 @@ result = dedupe_df(df, exclude_columns=["_source_file", "_source_page", "_extrac
 Also available as `goldenmatch ingest-docs {suggest-schema, run}` (CLI), the
 `documents_suggest_schema` / `documents_ingest` MCP tools and A2A skills,
 `POST /api/v1/documents/{suggest-schema, ingest}` (REST), and the `/documents` Web UI page.
-Full guide: [Document ingest](https://docs.bensevern.dev/goldenmatch/documents).
+Full guide: [Document ingest](https://docs.bensevern.dev/docs/goldenmatch/documents).
 
 ### Auto-config & scale safeguards
 
@@ -177,14 +177,14 @@ section documents the durable auto-config and scale-safety behaviour.)
 
 | I want to... | Go here |
 |--------------|---------|
-| Deduplicate a CSV right now | [Quick Start](https://docs.bensevern.dev/goldenmatch/quickstart) |
-| Use from Claude Desktop / AI assistant | [MCP Server](https://docs.bensevern.dev/goldenmatch/mcp) |
-| Build AI agents that deduplicate | [ER Agent (A2A)](https://docs.bensevern.dev/goldenmatch/agent) |
-| Write Python code | [Python API](https://docs.bensevern.dev/goldenmatch/python-api) |
-| Write TypeScript / Node.js | [TypeScript API](https://docs.bensevern.dev/goldenmatch/typescript) |
-| Deploy to Vercel Edge / Cloudflare Workers | [TypeScript API](https://docs.bensevern.dev/goldenmatch/typescript) |
-| Use the interactive TUI | [TUI Guide](https://docs.bensevern.dev/goldenmatch/tui) |
-| Train the system on my corrections | [Learning Memory](https://docs.bensevern.dev/goldenmatch/learning-memory) |
+| Deduplicate a CSV right now | [Quick Start](https://docs.bensevern.dev/docs/goldenmatch/quickstart) |
+| Use from Claude Desktop / AI assistant | [MCP Server](https://docs.bensevern.dev/docs/goldenmatch/mcp) |
+| Build AI agents that deduplicate | [ER Agent (A2A)](https://docs.bensevern.dev/docs/goldenmatch/agent) |
+| Write Python code | [Python API](https://docs.bensevern.dev/docs/goldenmatch/python-api) |
+| Write TypeScript / Node.js | [TypeScript API](https://docs.bensevern.dev/docs/goldenmatch/typescript) |
+| Deploy to Vercel Edge / Cloudflare Workers | [TypeScript API](https://docs.bensevern.dev/docs/goldenmatch/typescript) |
+| Use the interactive TUI | [TUI Guide](https://docs.bensevern.dev/docs/goldenmatch/tui) |
+| Train the system on my corrections | [Learning Memory](https://docs.bensevern.dev/docs/goldenmatch/learning-memory) |
 
 ---
 
@@ -194,7 +194,7 @@ section documents the durable auto-config and scale-safety behaviour.)
 ### Matching
 - **12+ scoring methods** — exact, Jaro-Winkler, Levenshtein, token sort, soundex, ensemble, embedding, record embedding, dice, jaccard, **`name_freq_weighted_jw`** (surname IDF-weighted), **`given_name_aliased_jw`** (alias-aware) + plugin extensible
 - **10+ blocking strategies** — static, adaptive, sorted neighborhood, multi-pass, ANN, ann_pairs, canopy, **learned** (data-driven predicate selection), **`lsh`** (MinHash/LSH), **`simhash`** (semantic SimHash)
-- **Bundled OSS reference data** — five packs ship with the wheel: US Census 2010 surnames, given-name aliases, business legal forms, USPS Pub. 28 addresses, NAICS 2022 industries. Auto-config swaps in the matching scorer / transform when a column name AND its profiled data shape agree. See [Reference Data](https://docs.bensevern.dev/goldenmatch/reference-data).
+- **Bundled OSS reference data** — five packs ship with the wheel: US Census 2010 surnames, given-name aliases, business legal forms, USPS Pub. 28 addresses, NAICS 2022 industries. Auto-config swaps in the matching scorer / transform when a column name AND its profiled data shape agree. See [Reference Data](https://docs.bensevern.dev/docs/goldenmatch/reference-data).
 - **Fellegi-Sunter probabilistic matching** — EM-trained m/u probabilities, automatic threshold estimation
 - **LLM scorer with budget controls** — GPT-4o-mini scores borderline pairs for just $0.04. Budget caps, model tiering, graceful degradation
 - **Cross-encoder reranking** — re-score borderline pairs with a pre-trained cross-encoder for higher precision
@@ -290,7 +290,7 @@ console.log(result.stats);  // { totalRecords: 3, totalClusters: 2, ... }
 - **478 tests, strict TypeScript** (`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`)
 - **Zero-dep install** works — optional peer deps unlock native paths (hnswlib-node, @huggingface/transformers for ONNX cross-encoder, piscina for worker threads, pg/duckdb/snowflake for data connectors)
 
-Full docs: [docs.bensevern.dev/goldenmatch/typescript](https://docs.bensevern.dev/goldenmatch/typescript)
+Full docs: [docs.bensevern.dev/docs/goldenmatch/typescript](https://docs.bensevern.dev/docs/goldenmatch/typescript)
 See [examples/typescript/](../../../examples/typescript/) for runnable usage examples (quickstart, Vercel Edge, MCP client).
 
 ## Web UI
@@ -474,7 +474,7 @@ result = gm.dedupe("huge.parquet", exact=["email"], backend="ray")
 
 ### Learning Memory (v1.6.0)
 
-GoldenMatch can remember past steward decisions and apply them automatically on every subsequent run. Reject a pair once -- it stays rejected. Approve a borderline pair once -- it stays approved. After 10+ corrections accumulate against a matchkey, the learner adjusts its threshold so the system stops needing the same correction twice. Off by default; enable via `config.memory.enabled = True` or a `memory:` block in YAML. Full guide: [Learning Memory docs](https://docs.bensevern.dev/goldenmatch/learning-memory).
+GoldenMatch can remember past steward decisions and apply them automatically on every subsequent run. Reject a pair once -- it stays rejected. Approve a borderline pair once -- it stays approved. After 10+ corrections accumulate against a matchkey, the learner adjusts its threshold so the system stops needing the same correction twice. Off by default; enable via `config.memory.enabled = True` or a `memory:` block in YAML. Full guide: [Learning Memory docs](https://docs.bensevern.dev/docs/goldenmatch/learning-memory).
 
 **`goldenmatch.yml`:**
 
@@ -1208,7 +1208,7 @@ GoldenMatch includes a gold-themed interactive terminal UI:
 
 ## Environment Variables
 
-Key environment variables for tuning and hardening GoldenMatch. This is a curated subset — for **every** `GOLDENMATCH_*` variable with verified defaults and when-to-use guidance, see the [Tuning & opt-ins reference](https://docs.bensevern.dev/goldenmatch/tuning).
+Key environment variables for tuning and hardening GoldenMatch. This is a curated subset — for **every** `GOLDENMATCH_*` variable with verified defaults and when-to-use guidance, see the [Tuning & opt-ins reference](https://docs.bensevern.dev/docs/goldenmatch/tuning).
 
 | Variable | Default | Description |
 |----------|---------|-------------|

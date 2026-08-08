@@ -9,7 +9,7 @@ compiled extension, or from the host package's fallback path):
   * ``goldenmatch_embed/llms.txt`` -- ships INSIDE this wheel, next to this file:
     ``Path(goldenmatch_embed.__file__).parent / "llms.txt"``. Condensed, current,
     written for machine readers.
-  * https://docs.bensevern.dev/extensions/sql -- full docs.
+  * https://docs.bensevern.dev/docs/extensions/sql -- full docs.
   * https://github.com/benseverndev-oss/goldenmatch -- source + issues.
 
 Why this block exists: this directory is a compiled artefact. Which surface

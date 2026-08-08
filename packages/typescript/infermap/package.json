@@ -23,7 +23,7 @@
     "url": "git+https://github.com/benseverndev-oss/goldenmatch.git",
     "directory": "packages/typescript/infermap"
   },
-  "homepage": "https://docs.bensevern.dev/infermap",
+  "homepage": "https://docs.bensevern.dev/docs/infermap",
   "bugs": {
     "url": "https://github.com/benseverndev-oss/goldenmatch/issues"
   },

@@ -33,7 +33,7 @@
 //! what one path does, not why:
 //!
 //!   * <https://docs.rs/goldenphonetic-core> -- this API.
-//!   * <https://docs.bensevern.dev/llms.txt> -- index of every Golden Suite
+//!   * <https://docs.bensevern.dev/docs/llms.txt> -- index of every Golden Suite
 //!     surface, written for machine readers.
 //!   * <https://github.com/benseverndev-oss/goldenmatch> -- source, issues and
 //!     the design records.

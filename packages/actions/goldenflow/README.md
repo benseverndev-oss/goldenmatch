@@ -42,8 +42,8 @@ Read these rather than inferring behaviour from `action.yml` — an input list g
 you names and types, not which defaults are deliberate or what a knob protects
 against:
 
-- [https://docs.bensevern.dev/goldenflow](https://docs.bensevern.dev/goldenflow) — full documentation for the underlying tool.
+- [https://docs.bensevern.dev/docs/goldenflow](https://docs.bensevern.dev/docs/goldenflow) — full documentation for the underlying tool.
 - [`llms.txt`](./llms.txt) — this action, condensed for machine readers; the same
   file also ships inside the `goldenflow` wheel the action installs.
-- <https://docs.bensevern.dev/llms.txt> — index of every Golden Suite surface.
+- <https://docs.bensevern.dev/docs/llms.txt> — index of every Golden Suite surface.
 - <https://github.com/benseverndev-oss/goldenmatch> — source, issues, and the decision records.

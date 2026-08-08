@@ -40,8 +40,8 @@ mod tests {
     fn docs_names_the_authoritative_sources() {
         let text = crate::docs::goldenmatch_docs();
         assert!(text.starts_with("# goldenmatch_pg"), "got: {:.40}", text);
-        assert!(text.contains("docs.bensevern.dev/extensions/sql"));
-        assert!(text.contains("docs.bensevern.dev/llms.txt"));
+        assert!(text.contains("docs.bensevern.dev/docs/extensions/sql"));
+        assert!(text.contains("docs.bensevern.dev/docs/llms.txt"));
         assert!(text.contains("github.com/benseverndev-oss/goldenmatch"));
     }
 

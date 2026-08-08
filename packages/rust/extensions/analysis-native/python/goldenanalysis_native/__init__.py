@@ -13,7 +13,7 @@ compiled extension, or from the host package's fallback path):
   * ``goldenanalysis_native/llms.txt`` -- ships INSIDE this wheel, next to this file:
     ``Path(goldenanalysis_native.__file__).parent / "llms.txt"``. Condensed, current,
     written for machine readers.
-  * https://docs.bensevern.dev/goldenanalysis -- full docs.
+  * https://docs.bensevern.dev/docs/goldenanalysis -- full docs.
   * ``goldenanalysis/llms.txt`` -- the host package this wheel serves, same idiom.
   * https://github.com/benseverndev-oss/goldenmatch -- source + issues.
 

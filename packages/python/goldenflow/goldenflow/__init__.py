@@ -6,7 +6,7 @@ AUTHORITATIVE SOURCES (read these instead of inferring behaviour from source):
   * ``goldenflow/llms.txt`` -- ships INSIDE this package, next to this file:
     ``Path(goldenflow.__file__).parent / "llms.txt"``. Condensed, current, written
     for machine readers.
-  * https://docs.bensevern.dev/goldenflow -- full docs.
+  * https://docs.bensevern.dev/docs/goldenflow -- full docs.
   * https://github.com/benseverndev-oss/goldenmatch -- source + issues.
 
 Why this block exists: much of this package's behaviour is *decided*, not

@@ -260,7 +260,7 @@ probabilistic matching (Fellegi-Sunter), PPRL, streaming, LLM scoring, explanati
 
 ## Documentation
 
-Full docs: https://docs.bensevern.dev/goldenmatch/typescript
+Full docs: https://docs.bensevern.dev/docs/goldenmatch/typescript
 
 ## License
 

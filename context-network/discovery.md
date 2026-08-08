@@ -78,7 +78,7 @@ links rather than reading everything.
 - [planning/security-hardening.md](planning/security-hardening.md) — the 2026-06-05 security-hardening arc: 42-alert remediation (Dependabot + code scanning), Scorecard 6.1->7.3 (Token-Permissions/Signed-Releases/Fuzzing), the CodeQL Autofix incident, property-test bug ledger, and open actions.
 
 ## Reference (operational)
-- **Runtime config / opt-ins:** the single source of truth for every `GOLDENMATCH_*` environment variable — native gate, backend selection, distributed pipeline, perf opt-ins — is the published Mintlify page `docs-site/goldenmatch/tuning.mdx` (`docs.bensevern.dev/goldenmatch/tuning`). Built 2026-06-13 after a day lost to silent pure-Python fallback + `backend="ray"`-doesn't-distribute confusion. Defaults verified against source; keep it in sync when adding an env read. Don't re-derive the flag list from memory — read that page (or re-grep `GOLDENMATCH_` read-sites) instead.
+- **Runtime config / opt-ins:** the single source of truth for every `GOLDENMATCH_*` environment variable — native gate, backend selection, distributed pipeline, perf opt-ins — is the published Mintlify page `docs-site/goldenmatch/tuning.mdx` (`docs.bensevern.dev/docs/goldenmatch/tuning`). Built 2026-06-13 after a day lost to silent pure-Python fallback + `backend="ray"`-doesn't-distribute confusion. Defaults verified against source; keep it in sync when adding an env read. Don't re-derive the flag list from memory — read that page (or re-grep `GOLDENMATCH_` read-sites) instead.
 
 ## Meta (keeping the network alive)
 - [meta/updates.md](meta/updates.md) — chronological change log for the network.

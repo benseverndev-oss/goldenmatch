@@ -13,7 +13,7 @@ compiled extension, or from the host package's fallback path):
   * ``goldencheck_native/llms.txt`` -- ships INSIDE this wheel, next to this file:
     ``Path(goldencheck_native.__file__).parent / "llms.txt"``. Condensed, current,
     written for machine readers.
-  * https://docs.bensevern.dev/goldencheck -- full docs.
+  * https://docs.bensevern.dev/docs/goldencheck -- full docs.
   * ``goldencheck/llms.txt`` -- the host package this wheel serves, same idiom.
   * https://github.com/benseverndev-oss/goldenmatch -- source + issues.
 

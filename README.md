@@ -32,7 +32,7 @@ Zero-config matching that **beats expert-tuned Splink head-to-head on messy cust
 [![GitHub stars](https://img.shields.io/github/stars/benseverndev-oss/goldenmatch?style=flat&color=d4a017&logo=github)](https://github.com/benseverndev-oss/goldenmatch/stargazers)
 
 <!-- Ecosystem -->
-[![Docs](https://img.shields.io/badge/docs-docs.bensevern.dev-d4a017)](https://docs.bensevern.dev/)
+[![Docs](https://img.shields.io/badge/docs-docs.bensevern.dev-d4a017)](https://docs.bensevern.dev/docs/)
 [![Wiki](https://img.shields.io/badge/wiki-github-d4a017)](https://github.com/benseverndev-oss/goldenmatch/wiki)
 [![Web UI](https://img.shields.io/badge/web%20ui-FastAPI%20%2B%20React-d4a017?logo=react&logoColor=white)](https://github.com/benseverndev-oss/goldenmatch/wiki/Web-UI)
 [![Smithery MCP](https://img.shields.io/badge/MCP-smithery-6e40c9)](https://smithery.ai/servers/benzsevern/goldenmatch)
@@ -176,7 +176,7 @@ Surface parity is *not* the same as handing any pipeline phase from one language
 | **Standardize / dates** · embeddings · auto-config controller | 🟠 divergent — not byte-portable |
 | Distributed / Ray · document (VLM) ingest | ⛔ Python-only by architecture |
 
-**Rule of thumb:** hand off at the **cluster** or **identity** boundary and it's seamless; don't split across `standardize`/dates, embeddings, or the controller and expect bit-exact reproduction. Full detail + the runnable harness that keeps these verdicts honest: [Cross-language parity & phase-handoff limits](https://docs.bensevern.dev/concepts/cross-language-parity).
+**Rule of thumb:** hand off at the **cluster** or **identity** boundary and it's seamless; don't split across `standardize`/dates, embeddings, or the controller and expect bit-exact reproduction. Full detail + the runnable harness that keeps these verdicts honest: [Cross-language parity & phase-handoff limits](https://docs.bensevern.dev/docs/concepts/cross-language-parity).
 
 ---
 

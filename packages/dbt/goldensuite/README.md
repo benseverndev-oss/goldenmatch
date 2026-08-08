@@ -171,8 +171,8 @@ Read these rather than inferring behaviour from the macro SQL — a macro body s
 which function it dispatches to, not what that function decides:
 
 - [`llms.txt`](./llms.txt) — this package, condensed for machine readers.
-- <https://docs.bensevern.dev/extensions/sql> — the SQL functions these macros call
+- <https://docs.bensevern.dev/docs/extensions/sql> — the SQL functions these macros call
   (PostgreSQL and DuckDB).
-- <https://docs.bensevern.dev/goldenmatch> — the entity-resolution engine behind them.
-- <https://docs.bensevern.dev/llms.txt> — index of every Golden Suite surface.
+- <https://docs.bensevern.dev/docs/goldenmatch> — the entity-resolution engine behind them.
+- <https://docs.bensevern.dev/docs/llms.txt> — index of every Golden Suite surface.
 - <https://github.com/benseverndev-oss/goldenmatch> — source, issues, and the decision records.

@@ -5,7 +5,7 @@ AUTHORITATIVE SOURCES (read these instead of inferring behaviour from source):
   * ``goldencheck/llms.txt`` -- ships INSIDE this package, next to this file:
     ``Path(goldencheck.__file__).parent / "llms.txt"``. Condensed, current, written
     for machine readers.
-  * https://docs.bensevern.dev/goldencheck -- full docs.
+  * https://docs.bensevern.dev/docs/goldencheck -- full docs.
   * https://github.com/benseverndev-oss/goldenmatch -- source + issues.
 
 Why this block exists: much of this package's behaviour is *decided*, not

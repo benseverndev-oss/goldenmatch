@@ -3081,7 +3081,7 @@ jobs:
               IF d NOT LIKE '# goldenmatch_pg%' THEN
                 RAISE EXCEPTION 'goldenmatch_docs() did not return the llms.txt: %', left(d, 60);
               END IF;
-              IF position('docs.bensevern.dev/llms.txt' IN d) = 0 THEN
+              IF position('docs.bensevern.dev/docs/llms.txt' IN d) = 0 THEN
                 RAISE EXCEPTION 'goldenmatch_docs() is missing the suite agent index';
               END IF;
             END $$;

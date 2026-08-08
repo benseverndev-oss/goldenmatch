@@ -32,8 +32,8 @@ def test_callable_with_no_arguments(con):
 def test_names_the_authoritative_sources(con):
     (text,) = con.sql("SELECT goldenmatch_docs()").fetchone()
     # The three pointers an agent needs: this surface, the suite index, the repo.
-    assert "docs.bensevern.dev/extensions/sql" in text
-    assert "docs.bensevern.dev/llms.txt" in text
+    assert "docs.bensevern.dev/docs/extensions/sql" in text
+    assert "docs.bensevern.dev/docs/llms.txt" in text
     assert "github.com/benseverndev-oss/goldenmatch" in text
 
 
@@ -51,7 +51,7 @@ def test_fallback_still_answers_the_question(monkeypatch):
         "goldenmatch_duckdb.docs._LLMS_TXT", Path("/nonexistent/llms.txt")
     )
     text = goldenmatch_docs()
-    assert "docs.bensevern.dev/llms.txt" in text
+    assert "docs.bensevern.dev/docs/llms.txt" in text
 
 
 def test_registered_by_the_main_register(con):

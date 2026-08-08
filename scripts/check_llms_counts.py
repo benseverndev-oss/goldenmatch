@@ -88,7 +88,7 @@ _DEAD_DOMAIN = re.compile(r"https://[A-Za-z0-9.-]*\.github\.io/[A-Za-z0-9/_-]*")
 
 def doc_link_errors() -> list[str]:
     """Network-free link check for the llms.txt: the canonical docs domain is
-    `docs.bensevern.dev` (docs.json), so a cited `docs.bensevern.dev/<path>` must
+    `docs.bensevern.dev` (docs.json), so a cited `docs.bensevern.dev/docs/<path>` must
     map to a real `docs-site/<path>.mdx`, and the old per-package `*.github.io`
     mkdocs sites (dead post-fold) must not be referenced. Catches link rot without
     a flaky network call."""

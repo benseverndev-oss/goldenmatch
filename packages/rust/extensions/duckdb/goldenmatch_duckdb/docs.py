@@ -29,8 +29,8 @@ GoldenMatch entity resolution as DuckDB SQL functions.
 Authoritative sources (read these instead of inferring behaviour from the
 function signatures):
 
-- https://docs.bensevern.dev/extensions/sql -- the SQL surface (DuckDB + Postgres)
-- https://docs.bensevern.dev/llms.txt -- index of every Golden Suite surface
+- https://docs.bensevern.dev/docs/extensions/sql -- the SQL surface (DuckDB + Postgres)
+- https://docs.bensevern.dev/docs/llms.txt -- index of every Golden Suite surface
 - https://github.com/benseverndev-oss/goldenmatch -- source, issues, decision records
 """
 

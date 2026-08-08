@@ -133,7 +133,7 @@ install — wrong for exactly the contributor-side agent it is meant to help. A
 pointer that lies is worse than no pointer. Moving the file makes it true in all
 three.
 
-**Also shipped per package:** `Documentation` → `docs.bensevern.dev/<pkg>` plus an
+**Also shipped per package:** `Documentation` → `docs.bensevern.dev/docs/<pkg>` plus an
 `AI agents (llms.txt)` URL (PyPI renders and exposes these), and an
 authoritative-sources block opening the `__init__` docstring that says WHY —
 behaviour here is decided and contract-tested, so the implementation shows what one

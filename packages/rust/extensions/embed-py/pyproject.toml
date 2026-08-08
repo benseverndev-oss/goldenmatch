@@ -26,11 +26,11 @@ classifiers = [
 [project.urls]
 Homepage = "https://github.com/benseverndev-oss/goldenmatch"
 Repository = "https://github.com/benseverndev-oss/goldenmatch"
-Documentation = "https://docs.bensevern.dev/extensions/sql"
+Documentation = "https://docs.bensevern.dev/docs/extensions/sql"
 # Agent-facing entry point. PyPI renders these URLs and they are scraped, so
 # this is the discovery path for a tool that never clones the repo. The same
 # file ships INSIDE the wheel at goldenmatch_embed/llms.txt.
-"AI agents (llms.txt)" = "https://docs.bensevern.dev/llms.txt"
+"AI agents (llms.txt)" = "https://docs.bensevern.dev/docs/llms.txt"
 Issues = "https://github.com/benseverndev-oss/goldenmatch/issues"
 
 [tool.maturin]

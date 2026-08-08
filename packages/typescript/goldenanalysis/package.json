@@ -21,7 +21,7 @@
     "url": "git+https://github.com/benseverndev-oss/goldenmatch.git",
     "directory": "packages/typescript/goldenanalysis"
   },
-  "homepage": "https://docs.bensevern.dev/goldenanalysis",
+  "homepage": "https://docs.bensevern.dev/docs/goldenanalysis",
   "bugs": {
     "url": "https://github.com/benseverndev-oss/goldenmatch/issues"
   },

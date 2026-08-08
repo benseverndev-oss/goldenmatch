@@ -8,8 +8,8 @@ function decides):
     (the ``dbt deps`` path) and inside this importable dir at
     ``Path(dbt_goldensuite.__file__).parent / "llms.txt"`` (the pip path).
     Condensed, current, written for machine readers.
-  * https://docs.bensevern.dev/extensions/sql -- the SQL functions the macros call.
-  * https://docs.bensevern.dev/goldenmatch -- the entity-resolution engine behind them.
+  * https://docs.bensevern.dev/docs/extensions/sql -- the SQL functions the macros call.
+  * https://docs.bensevern.dev/docs/goldenmatch -- the entity-resolution engine behind them.
   * https://github.com/benseverndev-oss/goldenmatch -- source + issues.
 
 Notably decided, not incidental: only PostgreSQL and DuckDB are supported, and

@@ -83,7 +83,7 @@
   ],
   "license": "MIT",
   "author": "Ben Severn (https://bensevern.dev)",
-  "homepage": "https://docs.bensevern.dev/goldenmatch",
+  "homepage": "https://docs.bensevern.dev/docs/goldenmatch",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/benseverndev-oss/goldenmatch.git",

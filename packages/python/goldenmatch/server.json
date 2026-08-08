@@ -3,7 +3,7 @@
   "name": "io.github.benseverndev-oss/goldenmatch",
   "title": "GoldenMatch",
   "description": "Find duplicate records in 30 seconds. Zero-config entity resolution, 97.2% F1 out of the box.",
-  "websiteUrl": "https://docs.bensevern.dev/",
+  "websiteUrl": "https://docs.bensevern.dev/docs/",
   "version": "3.12.0",
   "repository": {
     "url": "https://github.com/benseverndev-oss/goldenmatch",

@@ -21,7 +21,7 @@ wrappers -- they are thin marshaling shims, the semantics live upstream):
 
   * ``goldenmatch_duckdb/llms.txt`` -- ships INSIDE this package, next to this
     file. From inside a SQL session: ``SELECT goldenmatch_docs();``.
-  * https://docs.bensevern.dev/extensions/sql -- the SQL surface.
+  * https://docs.bensevern.dev/docs/extensions/sql -- the SQL surface.
   * ``goldenmatch/llms.txt`` -- the engine these UDFs call.
   * https://github.com/benseverndev-oss/goldenmatch -- source + issues.
 

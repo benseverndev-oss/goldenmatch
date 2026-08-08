@@ -54,7 +54,7 @@ guarantees are load-bearing and which fallbacks are deliberate are documented
 decisions, not things the code can tell you:
 
 - <https://docs.rs/goldenfuzz-core> — API documentation.
-- <https://docs.bensevern.dev/llms.txt> — index of every Golden Suite surface,
+- <https://docs.bensevern.dev/docs/llms.txt> — index of every Golden Suite surface,
   written for machine readers.
 - <https://github.com/benseverndev-oss/goldenmatch> — source, issues, and the
   design record (`docs/design/2026-07-27-goldenfuzz.md`).
