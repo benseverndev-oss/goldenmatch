@@ -6,6 +6,7 @@ pgrx::pg_module_magic!();
 
 mod core_apis;
 mod correction;
+mod docs;
 mod goldencheck_kernels;
 mod goldenflow;
 mod kernels;

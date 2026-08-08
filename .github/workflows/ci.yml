@@ -3010,9 +3010,11 @@ jobs:
           cargo pgrx install "--pg-config=/usr/lib/postgresql/${PG_VERSION}/bin/pg_config" --release --features "pg${PG_VERSION}" --no-default-features
           # pgrx 0.12.9 doesn't auto-emit the SQL extension file — copy the
           # handwritten ones into PG's extension dir so `CREATE EXTENSION`
-          # (installs default_version, now 0.17.0) and `ALTER EXTENSION ... UPDATE`
+          # (installs default_version, now 0.18.0) and `ALTER EXTENSION ... UPDATE`
           # find them. The schema files are the canonical declaration of public
           # function signatures.
+          cp sql/goldenmatch_pg--0.18.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
+          cp sql/goldenmatch_pg--0.17.0--0.18.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.17.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.16.0--0.17.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.16.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
@@ -3068,6 +3070,22 @@ jobs:
           # Confirm new v1.7-v1.12 functions registered alongside the originals.
           sudo -u postgres psql -p "${PGPORT}" -c "SELECT proname FROM pg_proc WHERE proname LIKE 'goldenmatch%' OR proname LIKE 'gm_%' ORDER BY proname;"
           sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 -c "SELECT goldenmatch.goldenmatch_score('John Smith'::TEXT, 'Jon Smyth'::TEXT, 'jaro_winkler'::TEXT);"
+          # goldenmatch_docs(): the in-SQL orientation function an agent on a bare
+          # connection calls to find the authoritative docs. Assert it is reachable
+          # with no arguments and that it really carries the pointers -- an empty
+          # or truncated include_str! would otherwise ship silently.
+          sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 <<'EOSQL'
+            DO $$
+            DECLARE d TEXT := goldenmatch.goldenmatch_docs();
+            BEGIN
+              IF d NOT LIKE '# goldenmatch_pg%' THEN
+                RAISE EXCEPTION 'goldenmatch_docs() did not return the llms.txt: %', left(d, 60);
+              END IF;
+              IF position('docs.bensevern.dev/llms.txt' IN d) = 0 THEN
+                RAISE EXCEPTION 'goldenmatch_docs() is missing the suite agent index';
+              END IF;
+            END $$;
+          EOSQL
           # Cross-language determinism: the pure-Rust record fingerprint must
           # equal the pinned vector shared with Python / native C ABI / DuckDB.
           # (RAISE under ON_ERROR_STOP fails the lane on any mismatch.)
