@@ -6,6 +6,47 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Performance
+- **`DedupeResult.scored_pairs` is materialized lazily instead of eagerly
+  (#2417).** The B2c Fellegi-Sunter path already keeps the pair stream columnar
+  through scoring and clustering, then rebuilt the entire `list[tuple]`
+  post-cluster purely to populate this field. Measured across 1M and 4M pair
+  tables (linear in both): the Arrow form is **24 B/pair**, the Python list is
+  **168 B/pair resident and ~192 B/pair at the transient peak** — 7×. Since
+  `GOLDENMATCH_FS_SCORED_PAIRS_MAX` defaults to 50,000,000, that permitted an
+  **~8.4 GB resident / ~9.6 GB transient** allocation, built post-cluster.
+
+  On the `dedupe_df` + identity path nothing reads it. Verified on a real
+  FS + identity + SQLite run: `_resolve_identities` receives an empty
+  `scored_pairs`, and `resolve_clusters` accepts the parameter "for
+  call-signature compatibility" only — evidence edges come from
+  `pair_score_view`. The allocation was pure waste there.
+
+  The pipeline now carries the deduped Arrow table and the consumer pays.
+  `DedupeResult.scored_pairs` became a lazy property over `_scored_pairs_table`
+  (the same field→property idiom `clusters` uses) that **caches a real `list`**,
+  so `isinstance(result.scored_pairs, list)` and `== []` behave exactly as
+  before. Every steward surface that reads it — TUI, web, REST, `cli review`,
+  `cli match` — gets byte-identical output; runs that never touch it stop paying.
+
+  Two supporting changes: dict consumers read through the new
+  `core.pairs.materialize_scored_pairs(results)` (a bare
+  `results.get("scored_pairs")` now returns `None` on this path, so the helper
+  makes that a loud contract rather than a silent empty list), and
+  `_finalize_review_pairs_arrow` does the linked-set anti-join in Arrow — the
+  list version built `linked_keys` as a Python set over every linked pair, a
+  second O(pairs) driver structure that would have forced materialization
+  anyway. That filter is **not** skippable despite review and linked coming from
+  one threshold split: `score_buckets_arrow` can emit the same pair on several
+  blocking passes with different scores and the dedup runs later, so a pair can
+  genuinely land on both sides of the cut.
+
+  Scope: this addresses a *different* term than #2417 describes. The issue
+  expects scoring-time pair streaming to be the remaining cost; measurement
+  shows scoring is already Arrow end-to-end and the cost is this post-cluster
+  result list. The bisected #2250 delta (~1–2 GB) is a separate term, not
+  addressed here. The chunking half of #2417 landed earlier in #2419.
+
 ### Fixed
 - **Arrow lane: GoldenFlow standardization is APPLIED instead of silently skipped
   (#2430).** On a polars-free install, `core/transform.py` bridged the arrow lane

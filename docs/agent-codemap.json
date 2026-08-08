@@ -136,6 +136,7 @@
             "goldenmatch.core.memory.corrections",
             "goldenmatch.core.memory.learner",
             "goldenmatch.core.memory.store",
+            "goldenmatch.core.pairs",
             "goldenmatch.core.pipeline",
             "goldenmatch.core.recall_certificate",
             "goldenmatch.core.scorer",
@@ -918,6 +919,7 @@
             "goldenmatch.cli.dedupe",
             "goldenmatch.config.loader",
             "goldenmatch.core.memory.store",
+            "goldenmatch.core.pairs",
             "goldenmatch.core.pipeline",
             "goldenmatch.core.quality",
             "goldenmatch.core.review_queue"
@@ -3818,7 +3820,9 @@
             "dedup_pairs_max_score",
             "dedup_pairs_max_score_arrow",
             "dedup_pairs_max_score_arrow_table",
-            "dedup_pairs_max_score_columnar"
+            "dedup_pairs_max_score_columnar",
+            "materialize_scored_pairs",
+            "scored_pairs_from_table"
           ],
           "imports": [
             "goldenmatch.core._native_loader",
@@ -3923,6 +3927,7 @@
             "_enqueue_stale_pairs",
             "_extract_matchkey_columns",
             "_finalize_review_pairs",
+            "_finalize_review_pairs_arrow",
             "_frame_lane_eligible",
             "_fs_arrow_stream_eligible",
             "_fs_arrow_stream_enabled",
@@ -8169,6 +8174,7 @@
             "goldenmatch.config.schemas",
             "goldenmatch.core.frame",
             "goldenmatch.core.lineage",
+            "goldenmatch.core.pairs",
             "goldenmatch.core.pipeline",
             "goldenmatch.web.registry",
             "goldenmatch.web.runs"
@@ -8426,6 +8432,7 @@
             "goldenmatch.config.schemas",
             "goldenmatch.core.autoconfig",
             "goldenmatch.core.lineage",
+            "goldenmatch.core.pairs",
             "goldenmatch.core.pipeline",
             "goldenmatch.web.preview",
             "goldenmatch.web.settings"
