@@ -732,6 +732,7 @@
             "goldenmatch.config.loader",
             "goldenmatch.core.autofix",
             "goldenmatch.core.ingest",
+            "goldenmatch.core.pairs",
             "goldenmatch.core.pipeline"
           ]
         },
@@ -3403,6 +3404,7 @@
             "goldenmatch.core.cluster",
             "goldenmatch.core.collective",
             "goldenmatch.core.ingest",
+            "goldenmatch.core.pairs",
             "goldenmatch.core.pipeline"
           ]
         },
