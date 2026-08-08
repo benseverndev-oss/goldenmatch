@@ -14,8 +14,24 @@ warning implied nothing could be done short of installing polars. It was caught
 downstream, where column profiling saw raw values.
 
 The degrade path still exists but is now NARROW -- the columnar engine declines
-an UNCOVERED config, and the known trigger is an all-null column. Both behaviors
-are pinned below so the distinction can't silently regress in either direction.
+an UNCOVERED config. Both behaviors are pinned below so the distinction can't
+silently regress in either direction.
+
+TWO things make a config uncovered, and the second one shapes this file:
+
+1. An ALL-NULL column, which makes zero-config auto-detect decline.
+2. The ``goldenflow-native`` kernel is absent. GoldenFlow's columnar engine has
+   no pure-Python core -- ``transform_columns_public`` gates BOTH its branches
+   on ``native_columns_ready`` -- so with the kernel gone EVERY config declines.
+   It is a BASE dep of goldenflow (so real installs have it), but the CI python
+   matrix strips it (``--no-install-package goldenflow-native``) to skip the
+   maturin build, and so does the ``goldenmatch_nopolars`` lane.
+
+So the standardize-asserting subprocess tests below are skipped when the kernel
+is absent -- they would be asserting something the environment cannot do. To
+keep the #2430 wiring itself guarded EVERYWHERE, ``test_arrow_lane_falls_back_
+to_columnar_engine`` exercises the same ladder in-process with the engines
+stubbed, needing neither a polars-free install nor the native kernel.
 """
 from __future__ import annotations
 
@@ -24,8 +40,35 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
+from types import SimpleNamespace
+
+import pyarrow as pa
+import pytest
 
 _PKG_ROOT = Path(__file__).parent.parent
+
+
+def _columnar_engine_ready() -> bool:
+    """Is GoldenFlow's polars-free columnar engine actually usable here?
+
+    Mirrors the gate ``goldenflow.engine.columnar.transform_columns_public``
+    applies, rather than guessing from whether ``goldenflow_native`` imports."""
+    try:
+        from goldenflow.engine.columnar import native_columns_ready
+        from goldenflow.transforms._native import native_module
+    except Exception:
+        return False
+    nm = native_module()
+    return nm is not None and native_columns_ready(nm)
+
+
+_needs_columnar = pytest.mark.skipif(
+    not _columnar_engine_ready(),
+    reason=(
+        "goldenflow-native is absent, so GoldenFlow's columnar engine declines "
+        "every config and the arrow lane can only degrade (see module docstring)"
+    ),
+)
 
 # Block polars at import time so the subprocess simulates a polars-free install.
 _PRELUDE = (
@@ -51,6 +94,7 @@ def _run_polars_free(body: str, marker: str) -> None:
     assert marker in proc.stdout
 
 
+@_needs_columnar
 def test_run_transform_standardizes_without_polars():
     """SUBPROCESS, polars BLOCKED: the arrow lane APPLIES standardization.
 
@@ -95,6 +139,12 @@ def test_run_transform_degrades_on_uncovered_config_without_polars():
     polars engine, which is absent -- so `run_transform` must return the frame
     unchanged rather than crash. This is the remaining narrow fallback, not the
     whole arrow lane.
+
+    Deliberately NOT gated on the columnar engine: safe degradation is exactly
+    what must hold when the engine is unavailable. With `goldenflow-native`
+    present this pins the all-null trigger; without it, the kernel-absent
+    trigger. Either way the contract under test is the same -- degrade, never
+    crash.
     """
     body = """
         import sys
@@ -117,6 +167,7 @@ def test_run_transform_degrades_on_uncovered_config_without_polars():
     _run_polars_free(body, "TRANSFORM-NO-POLARS-DEGRADE OK")
 
 
+@_needs_columnar
 def test_run_transform_honors_exclude_columns_without_polars():
     """SUBPROCESS, polars BLOCKED: the `exclude_columns` strip/re-attach still
     holds on the columnar engine.
@@ -175,3 +226,83 @@ def test_run_transform_strict_raises_on_uncovered_config_without_polars():
             raise AssertionError("strict=True should have re-raised ImportError")
     """
     _run_polars_free(body, "TRANSFORM-NO-POLARS-STRICT OK")
+
+
+def test_arrow_lane_falls_back_to_columnar_engine(monkeypatch):
+    """IN-PROCESS: the #2430 ladder itself -- arrow lane, polars engine raises
+    ImportError, so the COLUMNAR engine is tried with a `dict[str, list]` and
+    its result is what comes back.
+
+    This is the regression guard that runs EVERYWHERE. The subprocess tests
+    above prove the real end-to-end behavior but need `goldenflow-native`, which
+    the CI python matrix strips -- so on its own the wiring would go unguarded
+    in exactly the lane most likely to break it. Stubbing both engines removes
+    both environment dependencies (no polars-free install, no native kernel)
+    while still exercising the real `run_transform` ladder: the try/except
+    nesting, the arrow-lane discriminator, `to_pydict()` as the columnar input,
+    and the `_engine`-based result branch.
+    """
+    from goldenmatch.config.schemas import TransformConfig
+    from goldenmatch.core import transform as tmod
+
+    seen = {}
+
+    def _polars_engine_unavailable(df):
+        raise ImportError("simulated polars-free install")
+
+    def _fake_columnar(columns, config=None):
+        seen["columns"] = columns
+        return SimpleNamespace(
+            columns={"name": ["Alice", "BOB"], "small": columns["small"]},
+            manifest=SimpleNamespace(records=[]),
+        )
+
+    monkeypatch.setattr(tmod, "_do_transform", _polars_engine_unavailable)
+    monkeypatch.setattr(tmod, "_do_transform_columnar", _fake_columnar)
+
+    tbl = pa.table({
+        "name": pa.array(["  Alice ", "BOB"], pa.string()),
+        "small": pa.array([1, 2], pa.int32()),
+    })
+    out, _ = tmod.run_transform(tbl, TransformConfig(mode="announced"))
+
+    # The columnar engine was reached, with the columnar (dict) input shape.
+    assert isinstance(seen.get("columns"), dict), seen
+    assert seen["columns"]["name"] == ["  Alice ", "BOB"], seen["columns"]
+    # ...and its result -- not the untransformed input -- is what came back.
+    assert isinstance(out, pa.Table), type(out)
+    assert out["name"].to_pylist() == ["Alice", "BOB"], out["name"]
+    # The unchanged column keeps its source arrow type (no int32 -> int64 widen).
+    assert str(out.schema.field("small").type) == "int32", out.schema
+
+
+def test_polars_lane_does_not_fall_back_to_columnar(monkeypatch):
+    """IN-PROCESS: a POLARS-lane caller must NOT be silently rerouted.
+
+    The ladder re-raises for `_is_pl_in` rather than switching engines -- a
+    caller who handed in a `pl.DataFrame` cannot be served a polars-free path,
+    and quietly degrading there would hide a broken install.
+    """
+    pl = pytest.importorskip("polars")
+
+    from goldenmatch.config.schemas import TransformConfig
+    from goldenmatch.core import transform as tmod
+
+    called = []
+
+    def _polars_engine_unavailable(df):
+        raise ImportError("simulated polars-free install")
+
+    monkeypatch.setattr(tmod, "_do_transform", _polars_engine_unavailable)
+    monkeypatch.setattr(
+        tmod, "_do_transform_columnar",
+        lambda *a, **k: called.append(1) or SimpleNamespace(columns={}, manifest=None),
+    )
+
+    df = pl.DataFrame({"name": ["  Alice ", "BOB"]})
+    out, fixes = tmod.run_transform(df, TransformConfig(mode="announced"))
+
+    assert not called, "polars lane must not reroute to the columnar engine"
+    # Degrades (non-strict), returning the frame untouched.
+    assert out["name"].to_list() == ["  Alice ", "BOB"], out["name"]
+    assert fixes == [], fixes

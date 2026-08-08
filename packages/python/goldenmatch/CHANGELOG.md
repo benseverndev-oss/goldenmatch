@@ -29,10 +29,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   strictly more configs. Only the polars-free install changes behavior.
 
   The degrade path remains but is now narrow: the columnar engine declines an
-  **uncovered** config — the known trigger is an all-null column — and the warning
-  text, which used to claim the whole transform engine was polars-native, now says
-  so accurately. `strict=True` still re-raises, so MCP/A2A callers that explicitly
-  requested transforms are never handed unstandardized data silently.
+  **uncovered** config, and the warning text — which used to claim the whole
+  transform engine was polars-native — now names both triggers accurately.
+  `strict=True` still re-raises, so MCP/A2A callers that explicitly requested
+  transforms are never handed unstandardized data silently.
+
+  **Prerequisite worth knowing:** GoldenFlow's columnar engine has no pure-Python
+  core — `transform_columns_public` gates both its zero-config and
+  explicit-config branches on `native_columns_ready` — so the fallback needs the
+  `goldenflow-native` kernel. That is a **base dependency** of goldenflow, so a
+  normal install has it; CI lanes that strip it (`--no-install-package
+  goldenflow-native`, to skip the maturin build) still degrade as before. The
+  end-to-end tests skip there rather than assert something the environment cannot
+  do, and an in-process test with both engines stubbed guards the fallback wiring
+  in every lane.
 - **FS: an un-splittable oversized block is now scored in bounded tiles instead of whole
   (#1826/#2417).** When `_split_oversized` finds no useful split and `skip_oversized=false`
   — the "hub" shape where thousands of rows share one blocking-key value, so no split

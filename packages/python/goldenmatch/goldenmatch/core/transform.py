@@ -19,20 +19,32 @@ def _warn_transform_needs_polars_once() -> None:
     NOTE the narrow scope (#2430). The arrow lane routes through
     ``goldenflow.transform`` (polars-free) and standardizes normally for the
     common shapes -- string / int / float / bool / date columns all run with
-    polars never imported. Only an UNCOVERED config reaches here; the known
-    trigger is an ALL-NULL column, which makes zero-config auto-detect decline
-    to the polars engine. The message used to claim the whole transform engine
-    was polars-native, which was false and made this look unfixable."""
+    polars never imported. Only an UNCOVERED config reaches here. The message
+    used to claim the whole transform engine was polars-native, which was false
+    and made this look unfixable.
+
+    TWO things make a config uncovered, and the distinction matters when
+    diagnosing:
+
+    1. An ALL-NULL column, which makes zero-config auto-detect decline.
+    2. The ``goldenflow-native`` kernel is missing. GoldenFlow's columnar engine
+       has no pure-Python core -- ``transform_columns_public`` gates BOTH its
+       zero-config and explicit-config branches on ``native_columns_ready``, so
+       with the kernel absent EVERY config declines to the polars engine.
+       ``goldenflow-native`` is a BASE dependency of goldenflow, so a normal
+       install has it; CI lanes that strip it (``--no-install-package
+       goldenflow-native``, to skip the maturin build) do not."""
     global _TRANSFORM_POLARS_WARNED
     if _TRANSFORM_POLARS_WARNED:
         return
     _TRANSFORM_POLARS_WARNED = True
     logger.warning(
         "GoldenFlow transforms skipped for this frame: the auto-detected config "
-        "is not covered by GoldenFlow's polars-free columnar engine (a column "
-        "that is entirely null is the usual cause), and polars is not installed "
-        "to fall back to. Standardization is not applied. Install "
-        "goldenmatch[polars] to cover the remaining cases."
+        "is not covered by GoldenFlow's polars-free columnar engine (an "
+        "entirely-null column, or a missing goldenflow-native kernel, are the "
+        "usual causes), and polars is not installed to fall back to. "
+        "Standardization is not applied. Install goldenmatch[polars] to cover "
+        "the remaining cases."
     )
 
 
@@ -151,8 +163,10 @@ def run_transform(
     # imported. It is now the arrow lane's FALLBACK (`_do_transform_columnar`)
     # when the polars bridge is unavailable. The polars engine stays PREFERRED
     # where it works -- it is ~2.6x faster and covers more configs (see the
-    # measurement at the engine-selection ladder below). Residual uncovered case:
-    # an all-null column, which still declines.
+    # measurement at the engine-selection ladder below). Residual uncovered
+    # cases: an all-null column, and a missing `goldenflow-native` kernel (the
+    # columnar engine has no pure-Python core) -- both still decline. See
+    # `_warn_transform_needs_polars_once` for the diagnosis notes.
     import pyarrow as _pa  # noqa: PLC0415
 
     from goldenmatch.core.frame import to_frame as _tf_a2
