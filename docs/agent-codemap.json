@@ -7089,16 +7089,22 @@
           "purpose": "S5: identity-on-Sail — distributed create + edge-emit (Stage S5).",
           "defines": [
             "IdentityGraphFrames",
+            "_golden_record_json",
             "_id_scheme",
             "build_identity_events",
             "build_identity_graph",
+            "build_identity_graph_incremental",
             "build_identity_nodes",
+            "build_incremental_events",
+            "build_incremental_nodes",
+            "build_incremental_records",
             "build_same_as_edges",
             "build_source_records",
             "derive_record_ids",
             "entity_id_for_members",
             "mint_entity_ids",
-            "record_id_for_row"
+            "record_id_for_row",
+            "resolve_cluster_entities"
           ],
           "imports": [
             "goldenmatch.core._hashing",
