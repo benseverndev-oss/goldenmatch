@@ -12,17 +12,27 @@ _TRANSFORM_POLARS_WARNED = False
 
 
 def _warn_transform_needs_polars_once() -> None:
-    """Warn (once) that GoldenFlow transforms are skipped on the arrow lane
-    because polars is absent. GoldenFlow's transform engine is polars-native;
-    install ``goldenmatch[polars]`` (or ``[transform]``) to re-enable them."""
+    """Warn (once) that GoldenFlow transforms were skipped because this frame's
+    auto-detected config is NOT covered by GoldenFlow's polars-free columnar
+    engine, and polars is absent to serve as the fallback.
+
+    NOTE the narrow scope (#2430). The arrow lane routes through
+    ``goldenflow.transform`` (polars-free) and standardizes normally for the
+    common shapes -- string / int / float / bool / date columns all run with
+    polars never imported. Only an UNCOVERED config reaches here; the known
+    trigger is an ALL-NULL column, which makes zero-config auto-detect decline
+    to the polars engine. The message used to claim the whole transform engine
+    was polars-native, which was false and made this look unfixable."""
     global _TRANSFORM_POLARS_WARNED
     if _TRANSFORM_POLARS_WARNED:
         return
     _TRANSFORM_POLARS_WARNED = True
     logger.warning(
-        "GoldenFlow transforms skipped: the transform engine is polars-native "
-        "and polars is not installed. Standardization is not applied on the "
-        "arrow lane; install goldenmatch[polars] to re-enable transforms."
+        "GoldenFlow transforms skipped for this frame: the auto-detected config "
+        "is not covered by GoldenFlow's polars-free columnar engine (a column "
+        "that is entirely null is the usual cause), and polars is not installed "
+        "to fall back to. Standardization is not applied. Install "
+        "goldenmatch[polars] to cover the remaining cases."
     )
 
 
@@ -37,9 +47,54 @@ def _goldenflow_available() -> bool:
 
 
 def _do_transform(df: pl.DataFrame):
-    """Call goldenflow.transform_df. Separated for testability."""
+    """Call goldenflow.transform_df (the POLARS engine). Separated for testability."""
     from goldenflow import transform_df
     return transform_df(df)
+
+
+def _do_transform_columnar(columns: dict, config=None):
+    """Call goldenflow.transform -- the POLARS-FREE columnar engine (#2430).
+
+    Takes ``dict[str, list]``, returns a ``ColumnarResult`` (``.columns`` dict +
+    ``.manifest``). Raises ``ImportError`` when the config is uncovered and
+    polars is absent to fall back to. Separated for testability, mirroring
+    ``_do_transform``."""
+    from goldenflow import transform
+    return transform(columns, config)
+
+
+def _columnar_result_to_arrow(columns: dict, source, source_columns: dict):
+    """Rebuild a ``pa.Table`` from the columnar engine's ``dict[str, list]``.
+
+    Preserves the SOURCE arrow type for any column GoldenFlow left unchanged,
+    instead of letting ``pa.table`` re-infer it. Without this an untouched
+    ``int32`` column silently widens to ``int64`` (measured) -- a schema change
+    the polars lane does not make. Changed columns are inferred, which matches
+    the polars lane's values (verified: identical on string/int/float/bool/date
+    incl. date32 -> ISO string, which BOTH lanes perform).
+
+    ``source_columns`` is the ``to_pydict()`` we already built to feed the
+    engine; comparing against it avoids re-materializing every source column
+    just to detect which ones changed."""
+    import pyarrow as pa  # noqa: PLC0415
+
+    arrays, names = [], []
+    for name, values in columns.items():
+        names.append(name)
+        src = source.column(name) if name in source.column_names else None
+        if src is not None:
+            if source_columns.get(name) == values:
+                arrays.append(src)              # untouched -> keep exact type
+                continue
+            try:
+                arrays.append(pa.array(values, type=src.type))
+                continue
+            except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError):
+                # Transform changed the value DOMAIN (e.g. date32 -> ISO string);
+                # fall through and let pyarrow infer, as the polars lane does.
+                pass
+        arrays.append(pa.array(values))
+    return pa.Table.from_arrays(arrays, names=names)
 
 
 def run_transform(
@@ -87,11 +142,17 @@ def run_transform(
     # ['record_hash'] passes through verbatim even when GoldenFlow has a
     # lowercase/strip rule for it. Column order is preserved.
     # A2 (arrow-native endgame): the adapter is dual-rep. Exclusion strip /
-    # re-attach runs on the CALLER'S lane via the seam; the single remaining
-    # polars surface is goldenflow's zero-config auto-detect engine
-    # (transform_df), bridged around _do_transform only. goldenflow's
-    # polars-free columnar `transform` needs an explicit covered config +
-    # arrow auto-detect -- filed in the endgame plan.
+    # re-attach runs on the CALLER'S lane via the seam.
+    # UPDATED #2430: this used to say goldenflow's polars-free columnar
+    # `transform` "needs an explicit covered config + arrow auto-detect". That is
+    # NOT true for the shapes that matter -- MEASURED, zero-config auto-detect
+    # (config=None) runs polars-free on string / int / float / bool / date
+    # columns, standardizing dates to ISO and phones to E.164 with polars never
+    # imported. It is now the arrow lane's FALLBACK (`_do_transform_columnar`)
+    # when the polars bridge is unavailable. The polars engine stays PREFERRED
+    # where it works -- it is ~2.6x faster and covers more configs (see the
+    # measurement at the engine-selection ladder below). Residual uncovered case:
+    # an all-null column, which still declines.
     import pyarrow as _pa  # noqa: PLC0415
 
     from goldenmatch.core.frame import to_frame as _tf_a2
@@ -143,27 +204,52 @@ def run_transform(
     if _tdbg:
         import time as _time  # noqa: PLC0415
 
+    # #2430: on the ARROW lane, fall back to GoldenFlow's POLARS-FREE columnar
+    # engine (`goldenflow.transform`) when the polars bridge is unavailable.
+    #
+    # Before this, the arrow lane ONLY bridged through `pl.from_arrow`, so on a
+    # polars-free install every arrow-lane run raised ImportError and SILENTLY
+    # skipped standardization -- column profiling then saw unstandardized values
+    # while the warning implied nothing could be done short of installing polars.
+    # That premise was stale: `transform_df` is polars-native, but module-level
+    # `goldenflow.transform` is polars-free and (measured) its zero-config
+    # auto-detect covers string/int/float/bool/date columns, standardizing dates
+    # to ISO and phones to E.164 with polars never imported.
+    #
+    # The polars engine is PREFERRED, not replaced. Measured on a 200K x 5 arrow
+    # frame with polars present: polars bridge 0.70s / 314 MB vs columnar
+    # 1.80s / 531 MB (2.6x slower, +69% RSS) -- `to_pydict()` materializes Python
+    # lists where `pl.from_arrow` is near-zero-copy. The polars engine also covers
+    # strictly MORE configs. So preferring it means installs that work today are
+    # byte-identical AND unregressed; only the polars-free install changes, from
+    # "silently skipped" to "standardized".
+    _engine = "polars"
     try:
         if _tdbg:
             _t0 = _time.perf_counter()
-            _bridge_df = (
+        try:
+            _bridge_in = (
                 _in_frame.native if _is_pl_in else pl.from_arrow(_in_frame.native)
             )
-            _t_bridge_in = _time.perf_counter() - _t0
-            _t0 = _time.perf_counter()
-            result = _do_transform(_bridge_df)
+            if _tdbg:
+                _t_bridge_in = _time.perf_counter() - _t0
+                _t0 = _time.perf_counter()
+            result = _do_transform(_bridge_in)
+        except ImportError:
+            if _is_pl_in:
+                raise          # polars lane genuinely cannot proceed
+            _engine = "columnar"
+            _bridge_in = _in_frame.native.to_pydict()
+            if _tdbg:
+                _t_bridge_in = _time.perf_counter() - _t0
+                _t0 = _time.perf_counter()
+            result = _do_transform_columnar(_bridge_in)
+        if _tdbg:
             _t_do = _time.perf_counter() - _t0
-        else:
-            _bridge_df = (
-                _in_frame.native if _is_pl_in else pl.from_arrow(_in_frame.native)
-            )
-            result = _do_transform(_bridge_df)
     except ImportError:
-        # GoldenFlow's transform engine (_do_transform) is polars-native; on the
-        # arrow lane with polars absent, the `pl.from_arrow` bridge raises
-        # ImportError. Degrade to no-transform (skip standardization) rather than
-        # crashing -- the arrow-eviction "lossy fallback". Byte-identical when
-        # polars is present.
+        # Now a NARROW fallback: BOTH engines are unavailable -- polars is absent
+        # AND the columnar engine declined an UNCOVERED config (known trigger: an
+        # all-null column). Degrade to no-transform rather than crashing.
         _warn_transform_needs_polars_once()
         if strict:
             raise
@@ -176,28 +262,36 @@ def run_transform(
         return _restore(_in_frame).native, []
 
     # Re-attach preserved columns and restore order on the caller's lane.
+    # The two ENGINES return different result shapes -- the polars
+    # `TransformResult` carries `.df`, the columnar `ColumnarResult` carries
+    # `.columns` (dict[str, list]) -- so branch on `_engine`, NOT on the lane.
+    def _result_native():
+        if _engine == "columnar":
+            return _columnar_result_to_arrow(
+                result.columns, _in_frame.native, _bridge_in,
+            )
+        return result.df if _is_pl_in else result.df.to_arrow()
+
     if _tdbg:
         if _is_pl_in:
             _res_frame = _tf_a2(result.df)
         else:
             _t0 = _time.perf_counter()
-            _res_native = result.df.to_arrow()
+            _res_native = _result_native()
             _t_bridge_out = _time.perf_counter() - _t0
             _res_frame = _tf_a2(_res_native)
         print(
             f"[transform][DEBUG] lane={'polars' if _is_pl_in else 'arrow'} "
-            f"rows={_in_frame.height}: "
-            f"bridge_in(from_arrow)={_t_bridge_in:.3f}s  "
+            f"engine={_engine} rows={_in_frame.height}: "
+            f"bridge_in={_t_bridge_in:.3f}s  "
             f"_do_transform={_t_do:.3f}s  "
-            f"bridge_out(to_arrow)={_t_bridge_out:.3f}s  "
+            f"bridge_out={_t_bridge_out:.3f}s  "
             f"bridge_total={_t_bridge_in + _t_bridge_out:.3f}s "
             f"(GOLDENMATCH_TRANSFORM_DEBUG=0 to silence)",
             flush=True,
         )
     else:
-        _res_frame = _tf_a2(
-            result.df if _is_pl_in else result.df.to_arrow()
-        )
+        _res_frame = _tf_a2(_result_native())
     _res_frame = _restore(_res_frame)
 
     # Convert manifest to autofix-compatible format

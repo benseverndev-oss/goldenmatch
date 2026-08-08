@@ -7,6 +7,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Fixed
+- **Arrow lane: GoldenFlow standardization is APPLIED instead of silently skipped
+  (#2430).** On a polars-free install, `core/transform.py` bridged the arrow lane
+  through `pl.from_arrow`, caught the resulting `ImportError`, and degraded to
+  no-transform — so dates, phones and whitespace were never standardized while the
+  run continued and reported success. It surfaced downstream, where column
+  profiling saw unstandardized values. The premise was stale: GoldenFlow's
+  `transform_df` is polars-native, but module-level `goldenflow.transform` is a
+  **polars-free columnar engine**, and (measured) its zero-config auto-detect runs
+  polars-free on string / int / float / bool / date columns — standardizing dates
+  to ISO and phones to E.164 with polars never imported. The arrow lane now falls
+  back to it when the polars bridge is unavailable. Verified the two engines
+  produce **identical values**, and untouched columns keep their exact arrow dtype
+  (a naive `dict`→`pa.table` rebuild silently widens `int32` to `int64`).
+
+  The polars engine stays **preferred** rather than replaced, so installs that
+  work today are unchanged and unregressed: measured on a 200K×5 arrow frame with
+  polars present, the polars bridge is 0.70s / 314 MB vs the columnar engine's
+  1.80s / 531 MB (2.6× slower, +69% RSS — `to_pydict()` materializes Python lists
+  where `pl.from_arrow` is near-zero-copy), and the polars engine also covers
+  strictly more configs. Only the polars-free install changes behavior.
+
+  The degrade path remains but is now narrow: the columnar engine declines an
+  **uncovered** config — the known trigger is an all-null column — and the warning
+  text, which used to claim the whole transform engine was polars-native, now says
+  so accurately. `strict=True` still re-raises, so MCP/A2A callers that explicitly
+  requested transforms are never handed unstandardized data silently.
 - **FS: an un-splittable oversized block is now scored in bounded tiles instead of whole
   (#1826/#2417).** When `_split_oversized` finds no useful split and `skip_oversized=false`
   — the "hub" shape where thousands of rows share one blocking-key value, so no split
