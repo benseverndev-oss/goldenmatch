@@ -10370,6 +10370,7 @@
         {
           "module": "goldenflow",
           "file": "packages/python/goldenflow/goldenflow/__init__.py",
+          "purpose": "GoldenFlow -- data transformation: standardize, clean and normalize messy",
           "defines": [
             "transform",
             "transform_df",

@@ -1,4 +1,5 @@
-"""GoldenFlow.
+"""GoldenFlow -- data transformation: standardize, clean and normalize messy
+data with auto-detection and domain-aware transforms.
 
 AUTHORITATIVE SOURCES (read these instead of inferring behaviour from source):
 
