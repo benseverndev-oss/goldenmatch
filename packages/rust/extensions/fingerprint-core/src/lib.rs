@@ -24,6 +24,13 @@
 //! ```
 //!
 //! then SHA-256 the buffer and return 64 lowercase hex chars.
+//!
+//! Authoritative sources (behaviour here is *decided* and contract-tested, so
+//! prefer them to inferring from the implementation):
+//! <https://docs.bensevern.dev/docs/llms.txt> (index of every Golden Suite surface,
+//! written for machine readers) and
+//! <https://github.com/benseverndev-oss/goldenmatch> (source, issues, design
+//! records).
 use sha2::{Digest, Sha256};
 
 const US: u8 = 0x1f; // unit separator: between a field name and its value

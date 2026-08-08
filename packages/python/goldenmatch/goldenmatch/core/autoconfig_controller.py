@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from goldenmatch._polars_lazy import pl
 from goldenmatch.config.schemas import GoldenMatchConfig
+from goldenmatch.core._docs import AGENT_DOCS_HINT
 from goldenmatch.core.autoconfig_history import RunHistory
 from goldenmatch.core.bench import stage
 from goldenmatch.core.complexity_profile import (
@@ -317,7 +318,7 @@ class ControllerNotConfidentError(Exception):
             f"Options: pass an explicit GoldenMatchConfig, lower the matchkey "
             f"threshold, or re-call with allow_red_config=True (runs the "
             f"degenerate config anyway) / confidence_required=False. See "
-            f"{self.DOCS_URL}."
+            f"{self.DOCS_URL}. {AGENT_DOCS_HINT}"
         )
 
 

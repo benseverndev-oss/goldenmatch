@@ -28,3 +28,13 @@ quality = ["goldencheck>=0.1.0"]
 
 [project.entry-points."goldenmatch.plugins"]
 dbt = "dbt_goldensuite:DbtPlugin"
+
+# The dbt-package consumption path (git clone into dbt_packages/) gets llms.txt
+# at the project root next to dbt_project.yml. The pip path only ships the
+# importable dir, so force-include a copy there too -- that keeps
+# `Path(dbt_goldensuite.__file__).parent / "llms.txt"` resolvable either way.
+# force-include is safe here precisely because the SOURCE is outside the package
+# dir; pointing it at a path already inside would fail the build with
+# "Duplicate filename in local headers".
+[tool.hatch.build.targets.wheel.force-include]
+"llms.txt" = "dbt_goldensuite/llms.txt"

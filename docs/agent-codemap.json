@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 456,
+      "module_count": 457,
       "modules": [
         {
           "module": "goldenmatch",
@@ -1572,6 +1572,14 @@
           ]
         },
         {
+          "module": "goldenmatch.core._docs",
+          "file": "packages/python/goldenmatch/goldenmatch/core/_docs.py",
+          "purpose": "One pointer, appended to the exceptions people most often work around.",
+          "defines": [
+            "with_docs_hint"
+          ]
+        },
+        {
           "module": "goldenmatch.core._hashing",
           "file": "packages/python/goldenmatch/goldenmatch/core/_hashing.py",
           "purpose": "Canonical record fingerprint (cross-surface stable hash).",
@@ -2009,6 +2017,7 @@
           "imports": [
             "goldenmatch._polars_lazy",
             "goldenmatch.config.schemas",
+            "goldenmatch.core._docs",
             "goldenmatch.core._profile_helpers",
             "goldenmatch.core.autoconfig",
             "goldenmatch.core.autoconfig_history",
@@ -2803,6 +2812,9 @@
             "lint",
             "register",
             "slugify"
+          ],
+          "imports": [
+            "goldenmatch.core._docs"
           ]
         },
         {
@@ -2933,6 +2945,7 @@
             "slow_path_overrides"
           ],
           "imports": [
+            "goldenmatch.core._docs",
             "goldenmatch.core.autoconfig_controller",
             "goldenmatch.core.cluster_profile",
             "goldenmatch.core.execution_plan",
@@ -10370,6 +10383,7 @@
         {
           "module": "goldenflow",
           "file": "packages/python/goldenflow/goldenflow/__init__.py",
+          "purpose": "GoldenFlow -- data transformation: standardize, clean and normalize messy",
           "defines": [
             "transform",
             "transform_df",

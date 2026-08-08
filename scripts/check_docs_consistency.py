@@ -414,7 +414,7 @@ def _badge_package_lists() -> tuple[list[str], list[str]] | None:
 _INSTALL_CLAIM_SURFACES = (
     "README.md",
     "packages/python/goldenmatch/README.md",
-    "packages/python/goldenmatch/llms.txt",
+    "packages/python/goldenmatch/goldenmatch/llms.txt",
 )
 # First-party distributions documented but intentionally NOT yet published. Add a
 # name here (with review) to keep an install line for a pre-release package;
@@ -541,6 +541,139 @@ def check_aggregate_badges(res: Result) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# 8. Agent discoverability: every distributable surface ships an llms.txt
+# --------------------------------------------------------------------------- #
+# The problem this gates: an agent that meets a Golden Suite package as an
+# INSTALLED ARTIFACT -- site-packages/goldenmatch/, node_modules/goldenmatch/, a
+# SQL connection, a checked-out action -- has no repo to consult, so it infers
+# behaviour by reading the implementation. Shipping llms.txt INSIDE the artifact
+# is what turns that into a lookup. Docs that only exist in the repo do not help.
+#
+# The rule is per-ecosystem because "inside the artifact" means a different path
+# in each one, and each was verified against a real built artifact:
+#   * Python wheel   -- inside the importable dir (hatchling ships the package dir)
+#   * maturin wheel  -- inside python/<module>/ (maturin copies the whole tree)
+#   * npm            -- package root, and listed in `files`
+#   * action / dbt   -- package root (both are consumed as a checked-out tree)
+#   * pgrx extension -- crate root, compiled in via include_str!
+#
+# Deferrals are DECLARED, not silent, mirroring the parity gate's
+# `scorer_kernels_deferred` convention: reason prefixed `declined --` (will not)
+# or `deferred --` (not yet). A new distributable with neither an llms.txt nor a
+# deferral entry FAILS -- that is the whole point, so the next package added does
+# not quietly reintroduce the gap.
+_LLMS_DEFERRED: dict[str, str] = {
+    "packages/rust/extensions/datafusion-udf": (
+        "declined -- pure-Rust maturin layout with no Python package dir to ship a "
+        "file in, and no publish workflow: it is a CI feasibility gate, not a "
+        "distributed artifact"
+    ),
+    "packages/rust/extensions/graph-layout": (
+        "declined -- standalone demo binary (publish = false), not a distribution"
+    ),
+}
+
+
+def _maturin_module_dir(pkg_dir: Path, cfg: dict) -> Path | None:
+    """Where a maturin wheel's importable dir lives in the source tree."""
+    maturin = cfg.get("tool", {}).get("maturin", {})
+    src = maturin.get("python-source")
+    if not src:
+        return None  # pure-Rust layout: nowhere to put a file
+    module = maturin.get("module-name", "").split(".")[0]
+    if not module:
+        return None
+    return pkg_dir / src / module
+
+
+def _python_dist_targets() -> list[tuple[str, list[Path]]]:
+    """(label, acceptable llms.txt paths) for every pyproject-backed distribution.
+
+    Usually one path -- inside the importable dir, which is what a wheel ships.
+    The dbt package is the exception: it is consumed BOTH as a dbt package (git
+    clone, so the project root is what lands) and via pip, so its source of truth
+    sits at the root and is force-included into the wheel. Either location counts.
+    """
+    targets: list[tuple[str, list[Path]]] = []
+    for pyproject in sorted(
+        list(PY_PKGS.glob("*/pyproject.toml"))
+        + list((ROOT / "packages" / "rust" / "extensions").glob("*/pyproject.toml"))
+        + list((ROOT / "packages" / "dbt").glob("*/pyproject.toml"))
+    ):
+        pkg_dir = pyproject.parent
+        label = pkg_dir.relative_to(ROOT).as_posix()
+        try:
+            cfg = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        mod = _maturin_module_dir(pkg_dir, cfg)
+        if mod is None:
+            # Not maturin (or pure-Rust layout): find the importable dir by name.
+            name = cfg.get("project", {}).get("name", pkg_dir.name)
+            guess = pkg_dir / name.replace("-", "_")
+            mod = guess if guess.is_dir() else None
+        paths = [pkg_dir / "llms.txt"]
+        if mod is not None:
+            paths.insert(0, mod / "llms.txt")
+        targets.append((label, paths))
+    return targets
+
+
+def check_agent_pointers(res: Result) -> None:
+    expected: list[tuple[str, list[Path]]] = list(_python_dist_targets())
+    expected += [
+        (p.parent.relative_to(ROOT).as_posix(), [p.parent / "llms.txt"])
+        for p in sorted((ROOT / "packages" / "typescript").glob("*/package.json"))
+    ]
+    expected += [
+        (p.parent.relative_to(ROOT).as_posix(), [p.parent / "llms.txt"])
+        for p in sorted((ROOT / "packages" / "actions").glob("*/action.yml"))
+    ]
+    pg = ROOT / "packages" / "rust" / "extensions" / "postgres"
+    if (pg / "goldenmatch_pg.control").is_file():
+        expected.append((pg.relative_to(ROOT).as_posix(), [pg / "llms.txt"]))
+
+    missing = [
+        label
+        for label, paths in expected
+        if label not in _LLMS_DEFERRED and not any(p.is_file() for p in paths)
+    ]
+    res.record(
+        "distributable surfaces ship llms.txt",
+        not missing,
+        f"no llms.txt inside the installed artifact (add one, or declare a reason "
+        f"in _LLMS_DEFERRED): {missing}" if missing else "",
+    )
+
+    # A deferral for something that no longer exists is stale bookkeeping.
+    stale = [k for k in _LLMS_DEFERRED if not (ROOT / k).is_dir()]
+    res.record(
+        "llms.txt deferrals are live",
+        not stale,
+        f"_LLMS_DEFERRED names paths that do not exist: {stale}" if stale else "",
+    )
+
+    # npm ships only what `files` lists, so presence on disk is not enough.
+    npm_unshipped = []
+    for pkg_json in sorted((ROOT / "packages" / "typescript").glob("*/package.json")):
+        if not (pkg_json.parent / "llms.txt").is_file():
+            continue  # already reported above
+        try:
+            files = json.loads(pkg_json.read_text(encoding="utf-8")).get("files")
+        except Exception:
+            continue
+        if files is not None and "llms.txt" not in files:
+            npm_unshipped.append(pkg_json.parent.name)
+    res.record(
+        "npm llms.txt listed in package.json files",
+        not npm_unshipped,
+        f"llms.txt exists but is not in `files`, so it is not published: {npm_unshipped}"
+        if npm_unshipped
+        else "",
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", default=True,
@@ -562,6 +695,7 @@ def main(argv: list[str] | None = None) -> int:
     check_changelog_versions(res)
     check_install_claims(res)
     check_aggregate_badges(res)
+    check_agent_pointers(res)
 
     if args.fix:
         print("--fix: no auto-fixable mechanical reconciliations pending; "

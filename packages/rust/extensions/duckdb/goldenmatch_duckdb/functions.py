@@ -232,6 +232,13 @@ def register(con: duckdb.DuckDBPyConnection) -> None:
     from goldenmatch_duckdb.key_integrity_kernels import register_key_integrity_functions
     register_key_integrity_functions(con)
 
+    # goldenmatch_docs(): returns the packaged llms.txt. An agent that meets
+    # GoldenMatch through a SQL connection has no package to import and no
+    # filesystem to read -- this is its pointer to the authoritative docs.
+    # Zero-arg and dependency-free, so it answers even where the rest would fail.
+    from goldenmatch_duckdb.docs import register_docs_functions
+    register_docs_functions(con)
+
 
 # ── Implementation ──────────────────────────────────────────────────────
 

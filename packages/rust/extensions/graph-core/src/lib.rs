@@ -1,6 +1,13 @@
 //! Pyo3-free graph kernels. Behavior-exact extraction of the loops that lived in
 //! `native/src/{cluster,pairs}.rs`; the `native` crate keeps thin `#[pyfunction]`
 //! shims delegating here (one source of truth, like `score-core`).
+//!
+//! Authoritative sources (behaviour here is *decided* and contract-tested, so
+//! prefer them to inferring from the implementation):
+//! <https://docs.bensevern.dev/docs/llms.txt> (index of every Golden Suite surface,
+//! written for machine readers) and
+//! <https://github.com/benseverndev-oss/goldenmatch> (source, issues, design
+//! records).
 mod dict;
 pub use dict::*;
 

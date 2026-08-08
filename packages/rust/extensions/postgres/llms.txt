@@ -1,0 +1,92 @@
+# goldenmatch_pg
+
+> GoldenMatch entity resolution as a PostgreSQL extension (pgrx): score, dedupe,
+> match, auto-config, a stateful identity graph, and the native blocking,
+> profiling and semantic-layer kernels.
+
+## Install
+
+```sql
+CREATE EXTENSION goldenmatch_pg;
+```
+
+Every function lives in the `goldenmatch` schema (the extension is not
+relocatable), so call them qualified -- `SELECT goldenmatch.goldenmatch_score(...)`
+-- or put `goldenmatch` on your `search_path`.
+
+## Authoritative sources
+
+Read these instead of inferring behaviour from the function signatures:
+
+- https://docs.bensevern.dev/docs/extensions/sql -- the SQL surface (Postgres + DuckDB).
+- https://docs.bensevern.dev/docs/llms.txt -- index of every Golden Suite surface.
+- https://github.com/benseverndev-oss/goldenmatch -- source, issues, and the
+  decision records behind the behaviour.
+
+From inside a session: `SELECT goldenmatch.goldenmatch_docs();` returns this file.
+
+## Function families
+
+Roughly eighty functions. JSON in / JSON out wherever a scalar will not do.
+
+- **Scoring** -- `goldenmatch_score`, `_score_pair`, `_explain`,
+  `_score_probabilistic`, `_train_em`.
+- **Dedupe / match** -- `goldenmatch_dedupe`, `_dedupe_table`, `_dedupe_pairs`,
+  `_dedupe_clusters`, `_dedupe_full`, `goldenmatch_match`, `_match_tables`,
+  `_match_pairs`.
+- **Auto-config** -- `goldenmatch_autoconfig`, `_autoconfig_telemetry`,
+  `_suggest_threshold`, `_detect_domain`, `_extract_features`.
+- **Quality / evaluation** -- `goldenmatch_profile_table`, `_validate_table`,
+  `_autofix_table`, `_detect_anomalies`, `_preflight`, `_postflight`, `_evaluate`,
+  `_compare_clusters`.
+- **Jobs** -- `gm_configure`, `gm_run`, `gm_jobs`, `gm_pairs`, `gm_clusters`,
+  `gm_golden`, `gm_drop`, `gm_telemetry`.
+- **Identity graph** -- reads `goldenmatch_identity_resolve`, `_view`, `_history`,
+  `_conflicts`, `_list`; **writes** `gm_resolve`, `gm_identity_merge`, `_split`,
+  `_claim`, `_resolve_conflict`; audit `gm_identity_audit`, `_audit_seal`,
+  `_audit_verify`; MDM reads `gm_identity_profile`, `_stats`, `_worklist`.
+- **Learning memory** -- `correction_add`, `correction_list`, `memory_learn`,
+  `memory_stats`.
+- **Native kernels (no embedded CPython)** -- `goldenmatch_hnsw_pairs`,
+  `goldenmatch_lsh_pairs`, `goldenmatch_perceptual_phash` / `_hamming`,
+  `goldenmatch_pair_dedup` / `_str`, `goldenmatch_connected_components` / `_str`,
+  `goldenmatch_record_fingerprint`, `goldenmatch_embed_local`, `gm_embed`.
+- **GoldenCheck profiling (native)** -- `goldencheck_benford`, `_near_duplicates`,
+  `_discover_fds`, `_discover_approx_fds`, `_composite_keys`.
+- **GoldenFlow transforms** -- eight `goldenflow_*` functions.
+- **Semantic layer (native)** -- `goldenmatch_certify_structural`.
+
+## Things that are decided, not incidental
+
+- **Some functions run native-direct and some go through embedded CPython.**
+  That split is deliberate and per-function: a kernel is de-bridged only once a
+  byte-parity corpus proves the Rust path matches the Python reference. So
+  `goldenmatch_score` on the four rapidfuzz-family scorers is pure Rust, while
+  `soundex_match` / `ensemble` still call the bridge; `goldenflow_strip` is
+  native, `goldenflow_normalize_phone` is not (its core kernel is NANP-only and
+  therefore not a drop-in).
+- **The native kernels are the SAME code as the DuckDB, wheel and WASM surfaces**
+  -- one Rust kernel behind one shared golden fixture. `goldenmatch_hnsw_pairs`
+  here and in DuckDB return byte-identical candidate pairs by construction.
+- **Multi-column kernel arguments are column-major flat arrays plus an `n_cols`**,
+  not `text[][]`. pgrx flattens multidimensional arrays, so the flat-array-plus-dim
+  idiom is the workaround, not a design preference.
+- **Identity writes are Postgres-only.** DuckDB has no durable multi-connection
+  store, so it carries the five reads and nothing else. The write path here uses
+  the `goldenmatch.identity_dsn` GUC (superuser-set) and opens a second libpq
+  connection to that DSN.
+- **The SQL is hand-maintained.** pgrx 0.12.9 does not generate it, so every
+  `#[pg_extern]` must also appear in the base SQL for the current
+  `default_version` -- enforced in CI by `scripts/check_pgrx_sql_sync.py`. A
+  published version is immutable: a new function goes into the NEXT version's
+  base plus a migration script, never retro-added to a released base.
+- **A large slice of the Python API is intentionally NOT in SQL** -- PPRL,
+  streaming, the LLM family, boost/rerank, graph ER, sensitivity sweeps. Each is
+  deferred for a documented reason (file-path arguments, statefulness, network
+  access, model downloads), not because nobody got to it.
+
+## DuckDB counterpart
+
+`goldenmatch-duckdb` exposes the same capabilities as Python UDFs, function for
+function, so the two backends are interchangeable apart from the identity write
+path described above.

@@ -1,0 +1,35 @@
+# goldenfuzz
+
+> Fast, byte-identical-to-rapidfuzz fuzzy-string scorers + one-vs-many extract/cdist.
+
+## Install
+
+```bash
+pip install goldenfuzz
+```
+
+## API
+
+- Edit distances: `jaro_winkler(a, b)`, `levenshtein(a, b)`, `indel(a, b)`
+- Ratios: `ratio`, `partial_ratio`, `q_ratio`/`QRatio`, `w_ratio`/`WRatio`
+- Token ratios: `token_ratio`, `token_sort_ratio`, `token_set_ratio`, and the `partial_token_*` variants
+- `extract(query, choices, ...)` -- one-vs-many, ranked
+- `cdist(queries, choices, ...)` -- many-vs-many matrix
+- `BatchComparator(query)` -- amortize one side across many comparisons
+
+## Authoritative sources
+
+Read these instead of inferring behaviour from the compiled extension:
+
+- https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/rust/extensions/goldenfuzz-py -- README, API surface and parity contract.
+- https://docs.bensevern.dev/docs/llms.txt -- index of every Golden Suite surface.
+- https://github.com/benseverndev-oss/goldenmatch -- source, issues, and the decision records behind the behaviour.
+
+## Notes
+
+- Byte-identical to rapidfuzz on jaro-winkler / levenshtein / indel is a CONTRACT, not a coincidence -- it is fixture-tested. If you find a disagreement, that is a bug worth reporting, not a tolerance to code around.
+- Faster than rapidfuzz on short strings (the record-linkage shape); no advantage claimed on long text.
+- Zero runtime dependencies. A thin PyO3 wheel over the pyo3-free `goldenfuzz-core` crate, which is also what GoldenMatch's own scorers call.
+
+Behaviour here is *decided* and contract-tested against a named reference implementation,
+not incidental. The compiled artefact cannot tell you which guarantees are load-bearing.

@@ -4,6 +4,13 @@
 //! runtime, with load/cache and an optional ONNX fallback) and `goldenembed-wasm`
 //! (the edge surface). Pulls no ONNX/C++/filesystem, so it compiles to wasm32 —
 //! which is what unblocks edge embedding (parity roadmap P10).
+//!
+//! Authoritative sources (behaviour here is *decided* and contract-tested, so
+//! prefer them to inferring from the implementation):
+//! <https://docs.bensevern.dev/docs/llms.txt> (index of every Golden Suite surface,
+//! written for machine readers) and
+//! <https://github.com/benseverndev-oss/goldenmatch> (source, issues, design
+//! records).
 
 mod featurizer;
 pub use featurizer::FeaturizerConfig;

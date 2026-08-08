@@ -21,7 +21,7 @@ Runnable demos for the Golden Suite, organized by host.
 
 ## Running at scale
 
-These scripts use toy data. Before you point one at millions of rows, read the **[Tuning & opt-ins reference](https://docs.bensevern.dev/goldenmatch/tuning)** — it lists every runtime flag (native acceleration, backend selection, the distributed pipeline) with defaults and when-to-use guidance. The two that most often catch people: `GOLDENMATCH_NATIVE=1` (so a missing native wheel fails loudly instead of running 100x slower in pure Python) and the fact that `backend="ray"` alone does *not* distribute (you need `GOLDENMATCH_DISTRIBUTED_PIPELINE=2`).
+These scripts use toy data. Before you point one at millions of rows, read the **[Tuning & opt-ins reference](https://docs.bensevern.dev/docs/goldenmatch/tuning)** — it lists every runtime flag (native acceleration, backend selection, the distributed pipeline) with defaults and when-to-use guidance. The two that most often catch people: `GOLDENMATCH_NATIVE=1` (so a missing native wheel fails loudly instead of running 100x slower in pure Python) and the fact that `backend="ray"` alone does *not* distribute (you need `GOLDENMATCH_DISTRIBUTED_PIPELINE=2`).
 
 ## Convention
 

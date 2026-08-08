@@ -23,7 +23,7 @@
     "./node": { "types": "./dist/node/index.d.ts", "import": "./dist/node/index.js", "require": "./dist/node/index.cjs" }
   },
   "bin": { "goldenmatch-js": "./dist/cli.cjs", "goldenmatch-mcp": "./dist/node/mcp/server.cjs" },
-  "files": ["dist", "README.md", "LICENSE", "CHANGELOG.md"],
+  "files": ["dist", "README.md", "LICENSE", "CHANGELOG.md", "llms.txt"],
   "engines": { "node": ">=20" },
   "scripts": {
     "build": "tsup",
@@ -83,7 +83,7 @@
   ],
   "license": "MIT",
   "author": "Ben Severn (https://bensevern.dev)",
-  "homepage": "https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/typescript/goldenmatch",
+  "homepage": "https://docs.bensevern.dev/docs/goldenmatch",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/benseverndev-oss/goldenmatch.git",

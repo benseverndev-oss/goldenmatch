@@ -98,5 +98,92 @@ still exist under `benseverndev-oss` as **archived**. Two fixes:
   concise `llms.txt` is what crawlers key off); Mintlify nav is thin for
   goldenpipe/infermap (1 entry each).
 
+## Sub-arc: POST-INSTALL agent discoverability (2026-08-08)
+
+The 2026-06-13 pass above covers the surfaces a human or crawler hits **before**
+installing. This is the complement: what an AI agent can reach **after** install,
+working inside someone else's repo.
+
+**The observed problem:** agents consuming GM packages elsewhere reverse-engineer
+behaviour from source rather than reading GM's docs.
+
+**The diagnosis was not "the docs are missing".** `llms.txt` is good. It was
+*unreachable*: it sat BESIDE each package directory, so `packages = [...]` never
+shipped it. An agent in a foreign repo sees only `site-packages/<pkg>/`, cannot
+reach this repo, and finds no pointer in the installed artifact — reverse
+engineering was the only path available, not the lazy one.
+
+**Inventory: 36 distributable surfaces; 8 had an `llms.txt`; none shipped it.**
+(11 PyPI wheels, 10 npm, 10 maturin wheels, 2 crates.io crates, 1 SQL extension
+pair, 3 GitHub Actions, 1 dbt package.)
+
+**The rule, per ecosystem** — "ships inside the artifact" differs by packaging:
+- **PyPI / maturin** — the file must live INSIDE the importable package
+  (`goldenmatch/llms.txt`). Do NOT `force-include` from the package root: that
+  re-adds an already-collected path and triggers the "Duplicate filename in local
+  headers" failure that broke the v1.7.0 publish.
+- **npm** — package root is what ships; add to `files`.
+- **crates.io** — `include = [...]` plus `//!` crate docs (what docs.rs renders).
+- **SQL extensions** — no filesystem; a `goldenmatch_docs()` UDF is the surface.
+- **Actions / dbt** — consumed by ref; `action.yml` description + repo root.
+
+**Why in-package and not wheel-only:** a `force-include` ships correctly but makes
+`Path(pkg.__file__).parent / "llms.txt"` FALSE in a source checkout and an editable
+install — wrong for exactly the contributor-side agent it is meant to help. A
+pointer that lies is worse than no pointer. Moving the file makes it true in all
+three.
+
+**Also shipped per package:** `Documentation` → `docs.bensevern.dev/docs/<pkg>` plus an
+`AI agents (llms.txt)` URL (PyPI renders and exposes these), and an
+authoritative-sources block opening the `__init__` docstring that says WHY —
+behaviour here is decided and contract-tested, so the implementation shows what one
+path does but not which guarantees are load-bearing.
+
+**Gotcha for whoever extends this:** the per-package pointers in the ROOT
+`llms.txt`, `docs/benchmark-claims.json`'s tracked-surface list, and
+`scripts/check_llms_counts.py` all hardcode the per-package path. Moving the file
+breaks all three, and each lives in a different file type — a `*.py`-only grep
+misses the JSON, and a grep excluding `*.txt` misses the root index.
+
+**Status: COMPLETE (PR #2437).** All 36 surfaces plus five more the gate found
+(goldencheck-types, goldengraph, goldenmatch-kg, goldensuite-mcp, and the pgrx
+extension). `goldenmatch_docs()` ships on both SQL backends; the two crates.io
+crates gained READMEs (they had none, so the package page was one line) and
+docs.rs metadata; every other core crate carries a two-line `//!` pointer; three
+refusal-by-design exceptions name the docs in their message.
+
+### Two traps that cost real time — read before extending this
+
+**1. The docs site is served under a `/docs` prefix.** The bare host 308s to
+`/docs`, and a path without it is a 404. Every one of the 135 `docs.bensevern.dev`
+URLs in the repo omitted it, so the entire pointer network was dead links — worse
+than no pointer, since a 404 sends the reader straight back to the source. Mintlify
+does generate the index we want, at `/docs/llms.txt`. Now gated: `check_docs_links.py`
+resolves every such URL in every tracked file against a real docs-site page
+(statically, so CI needs no network).
+
+**2. `.gitattributes` marks `**/llms.txt` as `-diff`, so git treats them as binary
+and `git grep -I` SKIPS EVERY ONE.** This bit twice in one sitting: a repo-wide URL
+rewrite driven by `git grep -lI` updated 89 files and silently skipped all 31
+llms.txt, and the gate written to catch that used the same `git grep` — so it passed
+while being blind to precisely the files the whole arc is about. Two CI failures
+(the DuckDB test and the pgrx psql smoke, both asserting their llms.txt names the
+index) were what surfaced it. Any repo-wide sweep touching llms.txt must enumerate
+with `git ls-files` and decide text-ness itself. The gate now also fails if it reads
+fewer than ten llms.txt carrying a docs URL: a scan that finds nothing must look
+broken, not clean.
+
+### The standing gate
+
+`check_docs_consistency.py::check_agent_pointers` asserts every distributable
+surface ships an `llms.txt` inside the installed artifact, per ecosystem
+(importable dir for a wheel, `python/<module>/` for maturin, package root for
+npm/action/dbt/pgrx — the dbt package accepts either, since it is consumed both
+ways). Exceptions are DECLARED in `_LLMS_DEFERRED` with a `declined --` /
+`deferred --` reason, the `scorer_kernels_deferred` convention. A new
+distributable with neither a pointer nor a stated reason fails, which is the
+point: the next package added cannot quietly reintroduce the gap. It also checks
+npm `files` (present on disk is not shipped) and that deferrals name live paths.
+
 ---
-**Classification:** planning/workstream • **Last updated:** 2026-06-13
+**Classification:** planning/workstream • **Last updated:** 2026-08-08

@@ -417,7 +417,7 @@ Hosted on Railway, registered on Smithery:
 
 ## API + Common Mistakes
 
-Lives in the Mintlify docs at `docs-site/goldenmatch/api-quick-reference.mdx` (published at `docs.bensevern.dev/goldenmatch/api-quick-reference`) -- reference content, not session context. DQBench ER scores live in the package README + CHANGELOG.
+Lives in the Mintlify docs at `docs-site/goldenmatch/api-quick-reference.mdx` (published at `docs.bensevern.dev/docs/goldenmatch/api-quick-reference`) -- reference content, not session context. DQBench ER scores live in the package README + CHANGELOG.
 
 ## Web UI (`goldenmatch[web]`)
 

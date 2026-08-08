@@ -1,5 +1,23 @@
 """GoldenMatch -- entity resolution toolkit.
 
+AUTHORITATIVE SOURCES (read these instead of inferring behaviour from source):
+
+  * ``goldenmatch/llms.txt`` -- ships INSIDE this package, next to this file:
+    ``Path(goldenmatch.__file__).parent / "llms.txt"``. Condensed, current,
+    written for machine readers: the healing loop, every interface, the
+    telemetry contract.
+  * https://docs.bensevern.dev/docs/goldenmatch -- full docs.
+  * MCP (queryable): ``goldenmatch mcp-serve``, or hosted at
+    https://goldenmatch-mcp-production.up.railway.app/mcp/
+  * https://github.com/benseverndev-oss/goldenmatch -- source + issues.
+
+Why this block exists: much of GoldenMatch's behaviour is *decided*, not
+incidental -- threshold guards, blocking-strategy selection, refuse-on-RED,
+scorer-kernel dispatch. Those decisions are documented and contract-tested;
+reading the implementation shows WHAT happens on one path but not which
+guarantees are load-bearing, which fallbacks are deliberate, or which knobs
+exist. Start from llms.txt.
+
 Quick start:
     import goldenmatch as gm
 

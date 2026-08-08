@@ -69,6 +69,19 @@ On pull requests, the action posts a comment with a summary table:
 
 The comment is updated on subsequent pushes (not duplicated).
 
+
+## Authoritative sources
+
+Read these rather than inferring behaviour from `action.yml` — an input list gives
+you names and types, not which defaults are deliberate or what a knob protects
+against:
+
+- [https://docs.bensevern.dev/docs/goldencheck](https://docs.bensevern.dev/docs/goldencheck) — full documentation for the underlying tool.
+- [`llms.txt`](./llms.txt) — this action, condensed for machine readers; the same
+  file also ships inside the `goldencheck` wheel the action installs.
+- <https://docs.bensevern.dev/docs/llms.txt> — index of every Golden Suite surface.
+- <https://github.com/benseverndev-oss/goldenmatch> — source, issues, and the decision records.
+
 ## License
 
 MIT

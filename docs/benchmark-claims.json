@@ -13,7 +13,7 @@
   "surfaces": [
     "llms.txt",
     "README.md",
-    "packages/python/goldenmatch/llms.txt",
+    "packages/python/goldenmatch/goldenmatch/llms.txt",
     "packages/python/goldenmatch/README.md"
   ],
   "claims": [

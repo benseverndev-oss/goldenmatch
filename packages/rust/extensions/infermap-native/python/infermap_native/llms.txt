@@ -1,0 +1,41 @@
+# infermap-native
+
+> Compiled Rust/PyO3 acceleration kernels for InferMap schema mapping.
+
+## What this package is
+
+A compiled companion wheel for **infermap**. You do not import it directly --
+`infermap` discovers it at runtime. This directory contains a compiled abi3
+extension and almost no readable Python, so reading it will not tell you what it does.
+
+## Authoritative sources
+
+Read these instead of inferring behaviour from the binary or from the host's fallback path:
+
+- https://docs.bensevern.dev/docs/infermap -- documentation for this surface.
+- `infermap/llms.txt` -- ships inside the infermap wheel (`Path(infermap.__file__).parent / "llms.txt"`), written for machine readers.
+- https://docs.bensevern.dev/docs/llms.txt -- index of every Golden Suite surface.
+- https://github.com/benseverndev-oss/goldenmatch -- source, issues, and the decision records behind the behaviour.
+
+## Install
+
+```bash
+pip install infermap[native]   # pulls infermap-native
+```
+
+## Runtime gate
+
+- `INFERMAP_NATIVE=auto` (default) -- use the kernel where it exists, fall back otherwise.
+- `INFERMAP_NATIVE=0` -- force the pure-Python fallback.
+- `INFERMAP_NATIVE=1` -- require the kernel; raise if it is missing.
+
+Discovery lives in `infermap._native_loader`.
+
+## Notes
+
+- Covers domain detection, the pure name scorers (exact / fuzzy_name / initialism / pattern_type / profile) and the linear-sum assignment solver. The `alias` scorer is a declared non-kernel (a dictionary lookup); `llm` is model-backed.
+- Assignment is the interesting one: Python, Rust and TypeScript now agree on WHICH equally-optimal assignment is chosen. Before the kernel they picked different (both optimal) answers on ties.
+
+This wheel exists because a behaviour was *decided* -- which surface owns a computation,
+which fallback is deliberate, which parity is contract-tested. Those decisions are
+documented; the compiled artefact cannot tell you about them.

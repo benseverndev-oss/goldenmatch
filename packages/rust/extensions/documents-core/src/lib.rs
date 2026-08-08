@@ -1,6 +1,13 @@
 //! `goldenmatch-documents-core` -- pyo3-free document-ingest kernels. Single source
 //! of truth for schema validation, response parsing, prompt text, and record
 //! normalization. No I/O, no pyo3. String-in / string-out at the boundary.
+//!
+//! Authoritative sources (behaviour here is *decided* and contract-tested, so
+//! prefer them to inferring from the implementation):
+//! <https://docs.bensevern.dev/docs/llms.txt> (index of every Golden Suite surface,
+//! written for machine readers) and
+//! <https://github.com/benseverndev-oss/goldenmatch> (source, issues, design
+//! records).
 pub mod classify;
 pub mod extract_structured;
 pub mod normalize;

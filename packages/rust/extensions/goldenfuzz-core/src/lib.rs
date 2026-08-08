@@ -21,6 +21,19 @@
 //! Byte-identical output is PROVEN, not assumed: the `parity` test module (built
 //! only with the `rapidfuzz` dev-dependency) asserts `f64::to_bits` equality
 //! against the crate over a large randomized + adversarial corpus.
+//!
+//! # Authoritative sources
+//!
+//! Read these instead of inferring behaviour from the implementation. Which
+//! guarantees are load-bearing, which fallbacks are deliberate, and which
+//! parities are contract-tested are documented *decisions* -- the code shows
+//! what one path does, not why:
+//!
+//!   * <https://docs.rs/goldenfuzz-core> -- this API.
+//!   * <https://docs.bensevern.dev/docs/llms.txt> -- index of every Golden Suite
+//!     surface, written for machine readers.
+//!   * <https://github.com/benseverndev-oss/goldenmatch> -- source, issues and
+//!     the design records.
 
 use std::collections::BTreeSet;
 use std::collections::HashMap;

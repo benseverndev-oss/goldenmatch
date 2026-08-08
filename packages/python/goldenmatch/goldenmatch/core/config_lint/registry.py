@@ -18,6 +18,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
+from goldenmatch.core._docs import with_docs_hint
+
 
 def slugify(text: str) -> str:
     """GitHub/Mintlify-compatible heading slug, so a Finding's doc_anchor
@@ -42,8 +44,10 @@ class ConfigLintError(Exception):
         self.findings = list(findings)
         detail = "; ".join(f"{f.rule_id}: {f.message}" for f in self.findings)
         super().__init__(
-            f"config lint refused {len(self.findings)} error finding(s) "
-            f"(GOLDENMATCH_CONFIG_LINT=strict): {detail}"
+            with_docs_hint(
+                f"config lint refused {len(self.findings)} error finding(s) "
+                f"(GOLDENMATCH_CONFIG_LINT=strict): {detail}"
+            )
         )
 
 

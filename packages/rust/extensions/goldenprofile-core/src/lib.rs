@@ -20,6 +20,13 @@
 //! bindings are `goldenprofile-wasm` / `goldenprofile-cabi`. Every signal is
 //! reused from an existing shared core, so the engine is byte-identical across
 //! surfaces by construction.
+//!
+//! Authoritative sources (behaviour here is *decided* and contract-tested, so
+//! prefer them to inferring from the implementation):
+//! <https://docs.bensevern.dev/docs/llms.txt> (index of every Golden Suite surface,
+//! written for machine readers) and
+//! <https://github.com/benseverndev-oss/goldenmatch> (source, issues, design
+//! records).
 
 pub mod model;
 pub mod resolve;

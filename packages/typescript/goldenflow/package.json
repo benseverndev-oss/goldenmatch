@@ -19,7 +19,7 @@
     "url": "git+https://github.com/benseverndev-oss/goldenmatch.git",
     "directory": "packages/typescript/goldenflow"
   },
-  "homepage": "https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/typescript/goldenflow",
+  "homepage": "https://docs.bensevern.dev/docs/goldenflow",
   "bugs": {
     "url": "https://github.com/benseverndev-oss/goldenmatch/issues"
   },
@@ -51,7 +51,8 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "llms.txt"
   ],
   "engines": {
     "node": ">=20"

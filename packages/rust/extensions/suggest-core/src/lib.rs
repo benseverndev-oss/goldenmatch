@@ -4,6 +4,13 @@
 //! Arrow artifacts, reduces them, runs the suggestion rules, generates rationale
 //! text, and ranks. Shared by construction across the `goldenmatch-native` pyo3
 //! shim and (later) the datafusion-udf FFI + TS/WASM surfaces. No I/O, no pyo3.
+//!
+//! Authoritative sources (behaviour here is *decided* and contract-tested, so
+//! prefer them to inferring from the implementation):
+//! <https://docs.bensevern.dev/docs/llms.txt> (index of every Golden Suite surface,
+//! written for machine readers) and
+//! <https://github.com/benseverndev-oss/goldenmatch> (source, issues, design
+//! records).
 
 pub mod api;
 pub mod contract;

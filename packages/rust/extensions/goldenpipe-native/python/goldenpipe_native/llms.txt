@@ -1,0 +1,40 @@
+# goldenpipe-native
+
+> PyO3 binding for the goldenpipe-core planner kernel.
+
+## What this package is
+
+A compiled companion wheel for **goldenpipe**. You do not import it directly --
+`goldenpipe` discovers it at runtime. This directory contains a compiled abi3
+extension and almost no readable Python, so reading it will not tell you what it does.
+
+## Authoritative sources
+
+Read these instead of inferring behaviour from the binary or from the host's fallback path:
+
+- https://docs.bensevern.dev/docs/goldenpipe -- documentation for this surface.
+- `goldenpipe/llms.txt` -- ships inside the goldenpipe wheel (`Path(goldenpipe.__file__).parent / "llms.txt"`), written for machine readers.
+- https://docs.bensevern.dev/docs/llms.txt -- index of every Golden Suite surface.
+- https://github.com/benseverndev-oss/goldenmatch -- source, issues, and the decision records behind the behaviour.
+
+## Install
+
+```bash
+pip install goldenpipe[native]   # pulls goldenpipe-native
+```
+
+## Runtime gate
+
+- `GOLDENPIPE_NATIVE=auto` (default) -- use the kernel where it exists, fall back otherwise.
+- `GOLDENPIPE_NATIVE=0` -- force the pure-Python fallback.
+- `GOLDENPIPE_NATIVE=1` -- require the kernel; raise if it is missing.
+
+Discovery lives in `goldenpipe.core._native_loader`.
+
+## Notes
+
+- Explicitly NOT an accelerator. The pure-Python planner is the runtime; this kernel exists so the planner can be gated against a Rust reference. Installing it does not change how your pipeline runs.
+
+This wheel exists because a behaviour was *decided* -- which surface owns a computation,
+which fallback is deliberate, which parity is contract-tested. Those decisions are
+documented; the compiled artefact cannot tell you about them.

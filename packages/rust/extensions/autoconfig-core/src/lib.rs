@@ -1,5 +1,12 @@
 //! Deterministic auto-config decisions shared across surfaces (no pyo3).
 //! Port oracle: docs/superpowers/specs/2026-06-20-autoconfig-native-core-design.md
+//!
+//! Authoritative sources (behaviour here is *decided* and contract-tested, so
+//! prefer them to inferring from the implementation):
+//! <https://docs.bensevern.dev/docs/llms.txt> (index of every Golden Suite surface,
+//! written for machine readers) and
+//! <https://github.com/benseverndev-oss/goldenmatch> (source, issues, design
+//! records).
 pub mod classify;
 pub mod extrapolate;
 pub mod planner;

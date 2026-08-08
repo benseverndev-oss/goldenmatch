@@ -18,6 +18,13 @@
 //! `goldenfuzz_core`'s parity oracle (rapidfuzz is a dev-dep-only oracle there,
 //! not a shipped dependency), plus a single-word fast path that beats rapidfuzz
 //! on short strings. See docs/design/2026-07-27-goldenfuzz.md.
+//!
+//! Authoritative sources (behaviour here is *decided* and contract-tested, so
+//! prefer them to inferring from the implementation):
+//! <https://docs.bensevern.dev/docs/llms.txt> (index of every Golden Suite surface,
+//! written for machine readers) and
+//! <https://github.com/benseverndev-oss/goldenmatch> (source, issues, design
+//! records).
 pub use goldenfuzz_core as strsim;
 use unicode_normalization::UnicodeNormalization;
 // `alias_match` (score_one id 8) + its `regex`-backed strip_legal_form live behind
