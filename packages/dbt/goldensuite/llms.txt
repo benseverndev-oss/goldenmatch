@@ -1,0 +1,65 @@
+# dbt-goldensuite
+
+> dbt integration for the Golden Suite: entity resolution, data-quality tests
+> and transforms as dbt macros, materializations and generic tests.
+
+## Install
+
+As a dbt package (macros, materializations, tests) — add to `packages.yml`:
+
+```yaml
+packages:
+  - git: "https://github.com/benseverndev-oss/goldenmatch.git"
+    subdirectory: "packages/dbt/goldensuite"
+```
+
+then `dbt deps`. The Python helper is a separate install:
+
+```bash
+pip install "git+https://github.com/benseverndev-oss/goldenmatch.git#subdirectory=packages/dbt/goldensuite"
+```
+
+Not published to PyPI or dbt Hub — it is consumed from the monorepo.
+
+## Authoritative sources
+
+Read these instead of inferring behaviour from the macro SQL. A macro body shows
+you which function it dispatches to; it cannot tell you what that function
+decides, or which adapters it deliberately does not support:
+
+- https://docs.bensevern.dev/extensions/sql — the SQL functions these macros call
+  (PostgreSQL and DuckDB).
+- https://docs.bensevern.dev/goldenmatch — the entity-resolution engine behind them.
+- https://docs.bensevern.dev/llms.txt — index of every Golden Suite surface.
+- https://github.com/benseverndev-oss/goldenmatch — source, issues, and the
+  decision records.
+
+## What is here
+
+- **Materializations** — `macros/materializations/`, including the GoldenMatch
+  dedupe materialization.
+- **Generic tests** — `test_key_integrity`, `test_match_quality`,
+  `quality_assert`, `quality_health_gate`, `quality_not_empty`.
+- **Identity graph** — `identity_resolve`, `identity_view`, `identity_history`,
+  `identity_list`, `identity_conflicts`.
+- **Corrections (Learning Memory)** — `file_field_correction`,
+  `file_pair_correction`.
+- **Transforms and mapping** — `transforms`, `infermap_apply`.
+- **Snowflake Cortex** — `cortex.sql`, plus `spcs/` for Snowpark Container
+  Services.
+- **Python helper** — `dbt_goldensuite.materialize.run_goldenmatch_dedupe` and
+  the correction CRUD functions, for use outside a dbt model.
+
+## Things that are decided, not incidental
+
+- **Only PostgreSQL and DuckDB are supported, and unsupported adapters fail at
+  compile time rather than at runtime.** The macros use `adapter.dispatch()` to
+  route between the two function shapes (`goldenmatch.correction_add` on
+  PostgreSQL, `goldenmatch_correction_add` on DuckDB); any other adapter raises a
+  compile-time error. That is a deliberate loud failure, not a missing branch.
+- **The macros are a thin surface over the SQL extensions**, which are themselves
+  a surface over the `goldenmatch` engine. Behaviour questions — how a threshold
+  is chosen, what a cluster means, why zero-config refuses at scale — are
+  answered in the engine's documentation, not here.
+- **Identity writes need PostgreSQL.** DuckDB has no durable multi-connection
+  identity store, so its identity macros are reads only.

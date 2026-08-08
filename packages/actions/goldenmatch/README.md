@@ -48,3 +48,15 @@ comment. Companion to the GoldenCheck and GoldenFlow actions.
 
 On pull requests the action posts (and updates) a comment summarizing the
 clusters and duplicates found per file.
+
+## Authoritative sources
+
+Read these rather than inferring behaviour from `action.yml` — an input list gives
+you names and types, not which defaults are deliberate or what a knob protects
+against:
+
+- [https://docs.bensevern.dev/goldenmatch](https://docs.bensevern.dev/goldenmatch) — full documentation for the underlying tool.
+- [`llms.txt`](./llms.txt) — this action, condensed for machine readers; the same
+  file also ships inside the `goldenmatch` wheel the action installs.
+- <https://docs.bensevern.dev/llms.txt> — index of every Golden Suite surface.
+- <https://github.com/benseverndev-oss/goldenmatch> — source, issues, and the decision records.
