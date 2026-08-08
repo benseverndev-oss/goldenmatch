@@ -145,11 +145,45 @@ path does but not which guarantees are load-bearing.
 breaks all three, and each lives in a different file type — a `*.py`-only grep
 misses the JSON, and a grep excluding `*.txt` misses the root index.
 
-**Status:** Python wheels done (PR #2437). Remaining: npm ×10, maturin ×10, the
-`goldenmatch_docs()` UDF, crates.io ×2, Actions ×3, dbt, error-message pointers,
-and a discoverability gate extending `check_docs_consistency.py` (which already
-builds the authoritative roster and already REPORTS `llms.txt` presence without
-asserting it) with a per-ecosystem rule + deferral map.
+**Status: COMPLETE (PR #2437).** All 36 surfaces plus five more the gate found
+(goldencheck-types, goldengraph, goldenmatch-kg, goldensuite-mcp, and the pgrx
+extension). `goldenmatch_docs()` ships on both SQL backends; the two crates.io
+crates gained READMEs (they had none, so the package page was one line) and
+docs.rs metadata; every other core crate carries a two-line `//!` pointer; three
+refusal-by-design exceptions name the docs in their message.
+
+### Two traps that cost real time — read before extending this
+
+**1. The docs site is served under a `/docs` prefix.** The bare host 308s to
+`/docs`, and a path without it is a 404. Every one of the 135 `docs.bensevern.dev`
+URLs in the repo omitted it, so the entire pointer network was dead links — worse
+than no pointer, since a 404 sends the reader straight back to the source. Mintlify
+does generate the index we want, at `/docs/llms.txt`. Now gated: `check_docs_links.py`
+resolves every such URL in every tracked file against a real docs-site page
+(statically, so CI needs no network).
+
+**2. `.gitattributes` marks `**/llms.txt` as `-diff`, so git treats them as binary
+and `git grep -I` SKIPS EVERY ONE.** This bit twice in one sitting: a repo-wide URL
+rewrite driven by `git grep -lI` updated 89 files and silently skipped all 31
+llms.txt, and the gate written to catch that used the same `git grep` — so it passed
+while being blind to precisely the files the whole arc is about. Two CI failures
+(the DuckDB test and the pgrx psql smoke, both asserting their llms.txt names the
+index) were what surfaced it. Any repo-wide sweep touching llms.txt must enumerate
+with `git ls-files` and decide text-ness itself. The gate now also fails if it reads
+fewer than ten llms.txt carrying a docs URL: a scan that finds nothing must look
+broken, not clean.
+
+### The standing gate
+
+`check_docs_consistency.py::check_agent_pointers` asserts every distributable
+surface ships an `llms.txt` inside the installed artifact, per ecosystem
+(importable dir for a wheel, `python/<module>/` for maturin, package root for
+npm/action/dbt/pgrx — the dbt package accepts either, since it is consumed both
+ways). Exceptions are DECLARED in `_LLMS_DEFERRED` with a `declined --` /
+`deferred --` reason, the `scorer_kernels_deferred` convention. A new
+distributable with neither a pointer nor a stated reason fails, which is the
+point: the next package added cannot quietly reintroduce the gap. It also checks
+npm `files` (present on disk is not shipped) and that deferrals name live paths.
 
 ---
 **Classification:** planning/workstream • **Last updated:** 2026-08-08
