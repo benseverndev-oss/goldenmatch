@@ -93,7 +93,7 @@ def doc_link_errors() -> list[str]:
     mkdocs sites (dead post-fold) must not be referenced. Catches link rot without
     a flaky network call."""
     errors: list[str] = []
-    files = [ROOT / "llms.txt"] + [ROOT / f"packages/python/{p}/llms.txt" for p in PKGS]
+    files = [ROOT / "llms.txt"] + [ROOT / f"packages/python/{p}/{p.replace('-', '_')}/llms.txt" for p in PKGS]
     for path in files:
         if not path.exists():
             continue
@@ -156,7 +156,7 @@ def main() -> int:
         c = counts(pkg)
         if c["mcp"] is not None:
             suite_total += c["mcp"]
-        llms = f"packages/python/{pkg}/llms.txt"
+        llms = f"packages/python/{pkg}/{pkg.replace('-', '_')}/llms.txt"
 
         # MCP tool count -- llms.txt (local + remote mentions).
         if c["mcp"] is not None:

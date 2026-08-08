@@ -414,7 +414,7 @@ def _badge_package_lists() -> tuple[list[str], list[str]] | None:
 _INSTALL_CLAIM_SURFACES = (
     "README.md",
     "packages/python/goldenmatch/README.md",
-    "packages/python/goldenmatch/llms.txt",
+    "packages/python/goldenmatch/goldenmatch/llms.txt",
 )
 # First-party distributions documented but intentionally NOT yet published. Add a
 # name here (with review) to keep an install line for a pre-release package;

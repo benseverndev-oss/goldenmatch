@@ -51,7 +51,11 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/benseverndev-oss/goldenmatch"
 Repository = "https://github.com/benseverndev-oss/goldenmatch"
-Documentation = "https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/python/goldenmatch#readme"
+Documentation = "https://docs.bensevern.dev/goldenmatch"
+# Agent-facing entry point. PyPI renders these URLs and they are scraped, so
+# this is the discovery path for a tool that never clones the repo. The same
+# file ships INSIDE the wheel at goldenmatch/llms.txt.
+"AI agents (llms.txt)" = "https://docs.bensevern.dev/llms.txt"
 Issues = "https://github.com/benseverndev-oss/goldenmatch/issues"
 Changelog = "https://github.com/benseverndev-oss/goldenmatch/blob/main/packages/python/goldenmatch/CHANGELOG.md"
 Author = "https://bensevern.dev"
@@ -249,10 +253,24 @@ all = [
 [tool.hatch.build.targets.wheel]
 packages = ["goldenmatch"]
 
-# `packages = ["goldenmatch"]` already collects everything inside
-# goldenmatch/, including web/static/. A force-include here would re-add
-# the same files and PyPI rejects the wheel with "Duplicate filename in
-# local headers" (this caused the v1.7.0 publish to fail).
+# AGENT DISCOVERABILITY: llms.txt lives INSIDE the importable package
+# (goldenmatch/llms.txt), so `packages = ["goldenmatch"]` collects it with no
+# force-include -- see the duplicate-filename note below for why that matters.
+#
+# An AI agent working in someone else's repo sees only site-packages/goldenmatch/
+# and cannot reach this repo's docs; with no pointer in the installed artifact
+# its only option is to reverse-engineer behaviour from source. Keeping the file
+# in the package makes `Path(goldenmatch.__file__).parent / "llms.txt"` resolve
+# IDENTICALLY from a source checkout, an editable install and a built wheel --
+# it lived at the package ROOT before, which shipped fine but made that same
+# pointer a lie in-tree, i.e. wrong for exactly the contributor-side agent it
+# was supposed to help.
+#
+# `packages = ["goldenmatch"]` already collects everything inside goldenmatch/,
+# including web/static/ and now llms.txt. A force-include of a path ALREADY
+# inside goldenmatch/ would re-add the same files and PyPI rejects the wheel
+# with "Duplicate filename in local headers" (this caused the v1.7.0 publish to
+# fail) -- so do NOT add one for llms.txt.
 #
 # The publish workflow runs scripts/build_web.py before `python -m build`
 # so the static dir contains the staged frontend at wheel-build time —
