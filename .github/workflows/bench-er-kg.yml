@@ -20,6 +20,15 @@ name: bench-er-kg
 
 on:
   workflow_dispatch:
+  # Nightly backstop. This lane installs goldenmatch from SOURCE but is
+  # path-filtered on its OWN paths, so a goldenmatch change never triggers it --
+  # a break can sit latent until something unrelated happens to fire the lane
+  # (that gap ran 15 days once). The schedule bounds detection to a day, and a
+  # scheduled run is on `main`, so `main-health` sees the red and files the
+  # tracking issue. Symbol-level breaks are caught earlier, on the PR, by
+  # scripts/check_downstream_symbols.py.
+  schedule:
+    - cron: "33 4 * * *"
   push:
     paths:
       - "packages/python/goldenmatch/benchmarks/er-kg-bench/dataset/**"
@@ -170,6 +179,11 @@ jobs:
         run: "$GITHUB_WORKSPACE/.venv/bin/python demo/run_demo.py --check"
 
       - name: Run benchmark (keyed -- emb-openai + auto+llm; prose only)
+        # Skipped on the nightly. The schedule exists to detect BREAKAGE, which the
+        # offline arm above already proves; billing OpenAI every night for prose
+        # numbers nobody reads that morning is not what it is for. Push and manual
+        # dispatch still run it.
+        if: github.event_name != 'schedule'
         working-directory: ${{ env.BENCH_DIR }}
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -194,6 +208,9 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload keyed results (prose source -- do NOT commit)
+        # Same schedule guard as the keyed run: without it the nightly would
+        # publish the OFFLINE results under a "keyed" name.
+        if: github.event_name != 'schedule'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         with:
           name: er-kg-results-keyed
@@ -205,7 +222,9 @@ jobs:
         # artifact and commit the two files (mirrors the results/ download+commit).
         # Upload-only -- never auto-committed, never gated-on-drift (the transcript is
         # non-deterministic). `if-no-files-found: ignore` so key-less runs don't error.
-        if: ${{ always() }}
+        # `always()` keeps the upload on a FAILED keyed run; the schedule clause skips
+        # it on the nightly, where the keyed run never happened.
+        if: ${{ always() && github.event_name != 'schedule' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         with:
           name: er-kg-demo-html

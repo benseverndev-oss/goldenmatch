@@ -121,6 +121,7 @@ jobs:
       quality_gate: ${{ steps.filter.outputs.quality_gate }}
       api_parity: ${{ steps.filter.outputs.api_parity }}
       native_symbols: ${{ steps.filter.outputs.native_symbols }}
+      downstream_symbols: ${{ steps.filter.outputs.downstream_symbols }}
       config_matrix: ${{ steps.filter.outputs.config_matrix }}
       er_matcher: ${{ steps.filter.outputs.er_matcher }}
     steps:
@@ -1033,6 +1034,31 @@ jobs:
   # native-kernel references against the kernel's exports. Box-safe and
   # stdlib-only -- no uv sync / no cargo build (the checker + tests are pure
   # stdlib static analysis), so a bare system Python + pytest is all it needs.
+  # Out-of-workspace consumers (goldengraph, goldenmatch-kg, er-kg-bench) install
+  # goldenmatch from SOURCE on their own path-filtered lanes -- lanes a goldenmatch
+  # change never triggers. This reconciles their references against what goldenmatch
+  # actually exports, so deleting a depended-on symbol fails on the PR that does it
+  # rather than 15 days later when something unrelated happens to fire their lane.
+  downstream_symbols:
+    needs: changes
+    if: needs.changes.outputs.downstream_symbols == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.13"
+      # Resolution imports goldenmatch for real, so it reflects what a consumer gets.
+      - name: Install goldenmatch
+        run: pip install -e packages/python/goldenmatch
+      - name: Reconcile downstream references
+        run: python scripts/check_downstream_symbols.py
+      - name: Gate unit tests
+        run: |
+          pip install pytest
+          python -m pytest scripts/test_downstream_symbols.py -q
+
   native_symbols:
     needs: changes
     if: needs.changes.outputs.native_symbols == 'true' || needs.changes.outputs.force_all == 'true'
@@ -4082,6 +4108,7 @@ jobs:
       # were advisory -- a correct red couldn't block a merge. Now required.
       - api_parity
       - native_symbols
+      - downstream_symbols
       - config_matrix
       - er_matcher
     if: always()

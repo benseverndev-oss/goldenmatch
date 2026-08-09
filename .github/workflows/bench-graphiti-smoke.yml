@@ -6,6 +6,15 @@ name: bench-graphiti-smoke
 
 on:
   workflow_dispatch:
+  # Nightly backstop. This lane installs goldenmatch from SOURCE but is
+  # path-filtered on its OWN paths, so a goldenmatch change never triggers it --
+  # a break can sit latent until something unrelated happens to fire the lane
+  # (that gap ran 15 days once). The schedule bounds detection to a day, and a
+  # scheduled run is on `main`, so `main-health` sees the red and files the
+  # tracking issue. Symbol-level breaks are caught earlier, on the PR, by
+  # scripts/check_downstream_symbols.py.
+  schedule:
+    - cron: "43 4 * * *"
   push:
     paths:
       - "packages/python/goldenmatch/benchmarks/er-kg-bench/erkgbench/qa_e2e/engines/graphiti.py"

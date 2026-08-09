@@ -499,6 +499,16 @@ er_matcher:
 # native-kernel references must not drift from the kernel's exports.
 # Re-run the gate when the kernel crate, the host package, the
 # checker/test tooling, or its parity corpus changes.
+downstream_symbols:
+  # Covers BOTH sides on purpose. Watching only the consumers would rebuild the
+  # very blind spot this gate exists to close: the break comes from a goldenmatch
+  # change, and the consumers' own lanes never see it.
+  - 'packages/python/goldenmatch/goldenmatch/**'
+  - 'packages/python/goldengraph/**'
+  - 'packages/python/goldenmatch-kg/**'
+  - 'packages/python/goldenmatch/benchmarks/er-kg-bench/**'
+  - 'scripts/check_downstream_symbols.py'
+
 native_symbols:
   - 'packages/rust/extensions/native/**'
   - 'packages/rust/extensions/goldencheck-native/**'
