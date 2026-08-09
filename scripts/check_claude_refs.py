@@ -52,6 +52,13 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
+# Directories holding prose EXTRACTED from a CLAUDE.md. Scanned alongside the
+# CLAUDE.md files themselves so a split cannot move dead references out of scope.
+EXTRACTED_CONTEXT_DIRS = (
+    "context-network/operations",
+    "packages/python/goldenmatch/docs/context",
+)
+
 # Extensions that make a slash-containing token a plausible file reference.
 SOURCE_EXT = {
     ".cfg", ".ini", ".js", ".json", ".lock", ".md", ".mdx", ".mjs", ".py",
@@ -108,17 +115,18 @@ def tracked_paths() -> set[str]:
 def claude_files() -> list[pathlib.Path]:
     """Every file that is loaded as, or directly linked from, agent context.
 
-    `context-network/operations/` is included deliberately: the root CLAUDE.md was
-    split into those files, and a gate that stopped at CLAUDE.md would have let the
-    split HIDE the rot it exists to catch -- moving prose out of scope is not the
-    same as fixing it.
+    The extraction targets are included deliberately: the root and goldenmatch
+    CLAUDE.md files were split into them, and a gate that stopped at CLAUDE.md would
+    have let those splits HIDE the rot it exists to catch -- moving prose out of
+    scope is not the same as fixing it. Any future split must add its target here.
     """
     files = [
         p
         for p in ROOT.rglob("CLAUDE.md")
         if "node_modules" not in p.parts and "_archive" not in p.parts
     ]
-    files.extend(sorted((ROOT / "context-network" / "operations").glob("*.md")))
+    for extracted in EXTRACTED_CONTEXT_DIRS:
+        files.extend(sorted((ROOT / extracted).glob("*.md")))
     return sorted(set(files))
 
 

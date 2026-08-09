@@ -32,6 +32,7 @@ any_workflow:
 claude_refs:
   - '**/CLAUDE.md'
   - 'context-network/operations/**'
+  - 'packages/python/goldenmatch/docs/context/**'
   - 'scripts/check_claude_refs.py'
   - 'scripts/test_claude_refs.py'
 python_root:
