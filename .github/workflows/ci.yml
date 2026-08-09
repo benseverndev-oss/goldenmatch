@@ -1090,10 +1090,14 @@ jobs:
           python-version: "3.13"
       - name: Every path a CLAUDE.md names exists
         run: python scripts/check_claude_refs.py
+      # The splits in #2445/#2446 were a one-time cut against a +208/-5-per-month
+      # habit. Without a ceiling they regrow.
+      - name: CLAUDE.md files are within their context budget
+        run: python scripts/check_context_budget.py --show
       - name: Gate unit tests
         run: |
           pip install pytest
-          python -m pytest scripts/test_claude_refs.py -q
+          python -m pytest scripts/test_claude_refs.py scripts/test_context_and_commit_gates.py -q
 
   native_symbols:
     needs: changes
