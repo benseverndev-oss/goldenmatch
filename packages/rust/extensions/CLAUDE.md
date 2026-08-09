@@ -111,9 +111,9 @@ essentially the whole single-record transform surface. Released
 
 ## Identity Graph (v2.0, 2026-05-13)
 
-DuckDB UDFs + Postgres pg_extern functions implementing the contract at
-`docs/superpowers/specs/2026-05-12-identity-graph-duckdb-contract.md`
-(monorepo root). Five read-only functions per backend (the 0.4.0 baseline —
+DuckDB UDFs + Postgres pg_extern functions implementing the identity-graph
+contract. (The design doc that specified it was deleted; the shipped SQL surface
+is the contract, inventoried in `parity/goldenmatch.yaml`.) Five read-only functions per backend (the 0.4.0 baseline —
 PostgreSQL has since added the stateful write + audit/MDM surface, see below):
 
 | Function | Args |

@@ -337,7 +337,7 @@ Hosted on Railway, registered on Smithery:
 - Ruff line length: 100 chars
 - `__version__` is defined ONLY in `goldencheck/__init__.py` — `cli/main.py` imports it, don't add a second copy
 - Wiki repo: `git clone https://github.com/benseverndev-oss/goldencheck.wiki.git /tmp/goldencheck.wiki` — sync with `cp docs/wiki/*.md /tmp/goldencheck.wiki/ && cd /tmp/goldencheck.wiki && git add -A && git commit -m "docs: sync" && git push`
-- GitHub Pages: Jekyll + just-the-docs (dark), source in `docs/`, workflow in `.github/workflows/pages.yml`, live at `benseverndev-oss.github.io/goldencheck`
+- Docs: served from the shared Mintlify site (the pre-fold Jekyll/just-the-docs Pages workflow no longer exists)
 - Jekyll link anchors: `{% link file.md %}#anchor` NOT `{% link file.md#anchor %}`
 - Classifier hint matching: hints ending with `_` are prefix-only (NOT substring) — `is_` matches `is_active` but NOT `diagnosis_desc`
 - `Finding.metadata` dict is used by pattern_consistency for structured pattern data — suppression reads it
@@ -406,7 +406,7 @@ goldencheck scan data.csv --domain ecommerce
 
 ## DQBench Integration
 - **DQBench Detect Score: 88.40**
-- Adapter: `dqbench/adapters/goldencheck.py`
+- Adapter: the goldencheck adapter shipped by the external DQBench harness (not a path in this repo)
 - Run: `pip install dqbench && dqbench run goldencheck`
 
 ## TypeScript Port (packages/typescript/goldencheck/)
@@ -441,7 +441,7 @@ npm run dev                      # tsup --watch
 - **#855 parity ports (2 profilers + 4 relations).** `freshness` (`future_dated` + name-gated `stale_data`) and `fuzzy-values` (`fuzzy_duplicate_values`, trigram+prefix blocking + Levenshtein ratio ≥ 0.82, union-find clusters) join `COLUMN_PROFILERS` (now **12**, fuzzy then freshness after the base 10). `composite-key`, `approx-duplicate`, `functional-dependency`, `approx-fd` join `RELATION_PROFILERS` (now **9**, in Python order after `identity-safe-pk`). All mirror the Python **fallback** path (native kernels are Python-only by design); `composite-key`/`functional-dependency` use the new `TabularData.nUniqueTuple`. **Freshness is unit-test-only** — the CSV golden harness reads dates as `Utf8` (`pl.read_csv` `try_parse_dates=False`), so it can't exercise date-dtype-gated logic. Parity goldens for the other five + the `confidence`/`affected_rows` + fail-on-missing hardening of `tests/parity/parity.test.ts` are a **follow-up** (need a Python run of `scripts/gen_parity_goldens_js.py`, which now emits `affected_rows`).
 
 ### Publishing
-- npm publish: push tag `goldencheck-js-v*` triggers `.github/workflows/npm-publish.yml`
+- npm publish: push tag `goldencheck-js-v*` triggers `.github/workflows/publish-goldencheck-js.yml`
 - Requires `NPM_TOKEN` GitHub secret
 - Root `package.json` is orchestrator only (not a workspace): `npm run build:js`, `npm run test:js`
 

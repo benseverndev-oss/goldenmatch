@@ -706,7 +706,7 @@ GoldenFlowConfig(
 
 ## DQBench Integration
 - **DQBench Transform Score: 100.00**
-- Adapter: `dqbench/adapters/goldenflow.py`
+- Adapter: the goldenflow adapter shipped by the external DQBench harness (not a path in this repo)
 - Run: `pip install dqbench && dqbench run goldenflow`
 
 ## Common Mistakes
