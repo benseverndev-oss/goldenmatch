@@ -52,6 +52,9 @@ jobs:
       action: ${{ steps.filter.outputs.action }}
       dbt: ${{ steps.filter.outputs.dbt }}
       ci_workflow: ${{ steps.filter.outputs.ci_workflow }}
+      # any_workflow gates only workflow_lint's YAML validation. Separate from
+      # ci_workflow so widening it cannot change force_all's merge-queue meaning.
+      any_workflow: ${{ steps.filter.outputs.any_workflow }}
       # force_all: forces the full job matrix + the dynamic python matrix,
       # bypassing the path filters. True on (1) workflow_dispatch run_all=true,
       # and (2) a merge_group entry that edits ci.yml itself (so the filter
@@ -208,16 +211,27 @@ jobs:
   # matrix still re-validates the filter wiring at merge-queue time (force_all).
   workflow_lint:
     needs: changes
-    if: needs.changes.outputs.ci_workflow == 'true' || needs.changes.outputs.force_all == 'true'
+    # any_workflow, not ci_workflow: the YAML validation below must run for an
+    # edit to ANY of the ~118 workflow files, not just ci.yml/filters.yml. It was
+    # gated on ci_workflow and therefore never ran for the other ~115 -- which is
+    # how a duplicate `if:` key reached main unchecked.
+    if: needs.changes.outputs.any_workflow == 'true' || needs.changes.outputs.ci_workflow == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-      - name: Validate workflow YAML + lint
+      # Was an inline `yaml.safe_load` one-liner. safe_load ACCEPTS duplicate
+      # mapping keys and silently keeps the last, so a second `if:` on a step
+      # parsed clean while making the guard inert. The script uses a loader that
+      # rejects duplicates.
+      - name: Validate workflow YAML (parse + no duplicate keys)
         shell: bash
         run: |
-          python3 -m pip install --quiet pyyaml
-          python3 -c "import sys,glob,yaml; [yaml.safe_load(open(f)) for f in glob.glob('.github/workflows/*.yml')]; print('all workflow YAML parses')"
+          python3 -m pip install --quiet pyyaml pytest
+          python3 scripts/check_workflow_yaml.py
+      - name: Gate unit tests (the duplicate-key detector must actually detect)
+        shell: bash
+        run: python3 -m pytest scripts/test_workflow_yaml.py -q
       # #1846: parsing is not meaning. A path filter that lists too few paths
       # makes its job go SILENT on exactly the changes it exists to catch --
       # quality_gate pinned f1_probabilistic while not watching

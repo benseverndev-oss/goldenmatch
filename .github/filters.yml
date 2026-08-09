@@ -14,6 +14,18 @@ ci_workflow:
   # one level up.
   - '.github/filters.yml'
   - 'scripts/check_filter_coverage.py'
+# Every workflow file, for the YAML validation half of `workflow_lint`. Kept
+# SEPARATE from ci_workflow on purpose: ci_workflow also drives `force_all` in
+# the merge queue, so widening it would make any workflow edit re-run the whole
+# matrix. This one only decides whether the lint runs. Before it existed the
+# lint was gated on ci_workflow's three paths, so ~115 of the repo's workflow
+# files could be edited with no YAML validation at all -- a check that existed
+# and did not fire.
+any_workflow:
+  - '.github/workflows/**'
+  - '.github/filters.yml'
+  - 'scripts/check_workflow_yaml.py'
+  - 'scripts/check_filter_coverage.py'
 python_root:
   - 'pyproject.toml'
   - 'uv.lock'
