@@ -4,6 +4,25 @@ All notable changes to GoldenAnalysis are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.5.0] - 2026-08-09
+
+### Added
+
+- **`key.integrity` analyzer** — the semantic-layer key-integrity certificate
+  projection, ported from the TypeScript surface so the two are 1:1 again. Pure
+  projection over an existing certificate (no kernel), registered in both the
+  entry-point table and the import fallback. This closed the last analyzer gap
+  in the cross-language `analyzers` parity surface.
+- **`llms.txt` ships inside the wheel** at `goldenanalysis/llms.txt`, so an agent
+  working against an *installed* GoldenAnalysis can read what the package does
+  instead of reverse-engineering it. `Documentation` and `AI agents (llms.txt)`
+  URLs are now on the PyPI project page, and the module docstring opens with an
+  AUTHORITATIVE SOURCES block. (#2437)
+
+### Changed
+
+- `goldenanalysis[mcp]` requires `mcp>=1.28.1` (was `>=1.0`).
+
 ## [0.4.0] - 2026-07-16
 
 ### Added
