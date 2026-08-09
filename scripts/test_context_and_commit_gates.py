@@ -9,7 +9,6 @@ actually matches -- anywhere in the message, prose included.
 from __future__ import annotations
 
 import sys
-import textwrap
 from pathlib import Path
 
 import pytest
@@ -18,7 +17,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import check_commit_msg as msg  # noqa: E402
 import check_context_budget as budget  # noqa: E402
-
 
 # --------------------------------------------------------------------------
 # context budget
