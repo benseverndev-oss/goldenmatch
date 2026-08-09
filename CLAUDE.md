@@ -106,3 +106,26 @@ section, apply the Tier-1 test: *would an agent do the wrong thing without this,
 on a change anywhere in the repo?* If the answer is "only when touching X", it
 belongs next to X or in `context-network/operations/`, with at most a one-line
 pointer here.
+
+## The context budget is enforced (2026-08-09)
+
+`scripts/check_context_budget.py` caps every `CLAUDE.md` at a declared byte
+budget (`claude_refs` job, `ci-required`). The splits that cut always-loaded
+context 84% were a one-time cleanup against a standing habit — the root file had
+been running +208/−5 lines a month — so the ceiling is what stops the regrowth.
+It is a RATCHET: budgets sit just above current size, growth fails, shrinking is
+reported with a suggested tighter number and never fails. Raising a budget is
+allowed and sometimes right, but it is a visible line in the diff, which is the
+point. `--show` prints every file against its budget.
+
+## A commit message must not contain a CI-skip directive
+
+`[skip ci]` / `[ci skip]` / `[no ci]` / `[skip actions]` anywhere in a commit
+message — **including in prose** — makes GitHub Actions skip the whole run, which
+leaves `ci-required` MISSING rather than failing, so the PR sits in the merge
+queue looking armed and never merges with nothing red to show for it. The
+`no-ci-skip-directive` pre-commit hook (`commit-msg` stage) refuses it. CI cannot
+catch this — there is no run to fail — which is why it lives in a local hook.
+`default_install_hook_types` covers both stages, so a plain `pre-commit install`
+is enough. To write ABOUT the directive, break the literal ("the
+skip-CI-directive trap"); to skip CI deliberately, `git commit --no-verify`.
