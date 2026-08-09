@@ -1,0 +1,16 @@
+# Out-of-workspace consumers: the one-way break
+
+The packages that install goldenmatch from source on their own path-filtered lanes, why a goldenmatch change never triggers them, and the two halves of the fix.
+
+> Extracted from the root `CLAUDE.md` so it is read when relevant rather than
+> loaded into every session. Linked from the map at the bottom of that file.
+
+## Out-of-workspace consumers: the one-way break (2026-08-08)
+Some packages are EXCLUDED from the uv workspace (heavy/conflicting deps) and install `goldenmatch` from monorepo SOURCE on their own lane: **goldengraph, goldenmatch-kg, er-kg-bench** (+ the graphiti/lightrag/msgraphrag smokes). Every one of those lanes is path-filtered on the CONSUMER's paths, so **a goldenmatch change never triggers them** — and goldenmatch is the most-churned package here. A break is therefore one-way and latent: it lands, nothing runs, and it surfaces only when something unrelated happens to touch the consumer's paths.
+- **This is not hypothetical.** goldenmatch replaced its FAISS ANN backend with native HNSW, deleting `core.ann_blocker._HAS_FAISS`. Three goldengraph fixtures did `monkeypatch.setattr(_ab, "_HAS_FAISS", False)`; monkeypatch RAISES on a missing attribute and the fixtures were `autouse`, so 20 tests errored. The lane did not run on `main` for **15 days** (Jul 24 → Aug 8) and only fired because an unrelated PR touched `goldengraph-native/**`.
+- **`main-health` is NOT the gap and does not need changing.** It scans every ACTIVE workflow's latest `main` run and it worked correctly here (issue #2439, filed on the very next 6-hourly scan after the lane first went red on main). It judges runs that HAPPENED — it is blind by construction to a lane that never executes. The Aug-3 reds people remember were on TAG refs, which it deliberately ignores.
+- **Fix, two halves.** (1) `scripts/check_downstream_symbols.py` (+ `test_downstream_symbols.py`), a `ci-required` job: AST-derives every consumer→goldenmatch reference — `from goldenmatch.x import a`, `import goldenmatch.x`, and crucially `monkeypatch.setattr(mod, "NAME", ...)` (the shape that broke us, invisible to an import check) — and reconciles them against the really-installed goldenmatch. References are DERIVED, never hand-listed; a maintained list is the thing that rots. (2) A **nightly schedule** on the six lanes, which bounds detection of BEHAVIOURAL breaks (which a symbol scan cannot see) to a day and puts the red on `main`, where main-health already sees it.
+- **The `downstream_symbols` filter covers BOTH sides on purpose** (goldenmatch source AND the consumers). Watching only the consumers would rebuild the exact blindness the gate exists to close.
+- **`bench-er-kg`'s keyed steps are gated `github.event_name != 'schedule'`** — the nightly exists to detect breakage, which the offline arm proves; billing OpenAI every night for prose numbers is not what it is for.
+- **GOTCHA that bit during this work:** inserting an `if:` above a step that already had one produces a DUPLICATE YAML key, and `yaml.safe_load` silently keeps the last — so the guard is inert and parses clean. Merge the conditions (`always() && github.event_name != 'schedule'`) instead, and check with a strict loader that rejects duplicate keys.
+

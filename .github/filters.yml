@@ -26,6 +26,14 @@ any_workflow:
   - '.github/filters.yml'
   - 'scripts/check_workflow_yaml.py'
   - 'scripts/check_filter_coverage.py'
+# Agent-context docs: the CLAUDE.md files plus the operations notes the root file
+# links to. Its own filter rather than folding into `docs` so a CLAUDE.md edit runs
+# the cheap ref check without also triggering the 8-minute Mintlify render.
+claude_refs:
+  - '**/CLAUDE.md'
+  - 'context-network/operations/**'
+  - 'scripts/check_claude_refs.py'
+  - 'scripts/test_claude_refs.py'
 python_root:
   - 'pyproject.toml'
   - 'uv.lock'

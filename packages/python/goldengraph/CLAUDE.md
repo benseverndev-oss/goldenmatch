@@ -48,7 +48,7 @@ path — hence it is a **blocking** gate, unlike the advisory `infermap_native` 
 
 ## Agent surfaces (MCP / A2A / CLI) — deferred by design
 GoldenGraph ships **no MCP server, no A2A AgentCard, and no CLI** today, and is
-therefore **not in the `api_parity` gate** (no `parity/goldengraph.yaml`; absent
+therefore **not in the `api_parity` gate** (it has no manifest under `parity/`; absent
 from `scripts/emit_ts_surface.mjs`). This is a *sequenced* deferral, not an
 oversight — verified 2026-07-07:
 - No `goldengraph/mcp/` module, no `server.json`, no MCP/FastMCP dep, no
@@ -64,7 +64,7 @@ oversight — verified 2026-07-07:
 When that bar is hit, stand up the agent surfaces together: a `goldengraph/mcp/`
 FastMCP server (`build`/`ask`/`neighborhood`/`communities`) + `server.json` with
 the first-line `mcp-name:` marker (mirror the infermap MCP layout), then add
-`parity/goldengraph.yaml` + the `emit_ts_surface.mjs` roster entry so MCP/CLI/A2A
+a goldengraph manifest under `parity/` + the `emit_ts_surface.mjs` roster entry so MCP/CLI/A2A
 stay Python↔TS in lockstep. (Do NOT wire `api_parity` before a real surface
 exists — the gate has nothing to compare.)
 
