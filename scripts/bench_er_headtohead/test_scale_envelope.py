@@ -98,8 +98,9 @@ def test_generate_biblio_titles_actually_vary(tmp_path):
     gen = _load("generate_fixture")
     out, truth = tmp_path / "b.parquet", tmp_path / "b.truth.parquet"
     gen.generate(3000, 0.3, out, truth, 42, 1000, shape="biblio")
-    import pyarrow.parquet as pq
     from collections import defaultdict
+
+    import pyarrow.parquet as pq
 
     t = pq.read_table(out)
     truth_t = pq.read_table(truth)
@@ -149,8 +150,9 @@ def test_generate_product_titles_actually_vary(tmp_path):
     gen = _load("generate_fixture")
     out, truth = tmp_path / "p.parquet", tmp_path / "p.truth.parquet"
     gen.generate(3000, 0.3, out, truth, 42, 1000, shape="product")
-    import pyarrow.parquet as pq
     from collections import defaultdict
+
+    import pyarrow.parquet as pq
 
     t = pq.read_table(out)
     truth_t = pq.read_table(truth)

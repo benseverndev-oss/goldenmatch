@@ -51,7 +51,6 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_BASELINE = REPO / "scripts" / "baselines" / "qis_scorecard.json"
@@ -133,11 +132,11 @@ class GateResult:
 
 
 def evaluate_gate(
-    rung_f1: dict[int, Optional[float]],
-    baseline: Optional[dict[str, float]],
+    rung_f1: dict[int, float | None],
+    baseline: dict[str, float] | None,
     *,
-    rung_refused: Optional[dict[int, bool]] = None,
-    rung_unmeasurable_reason: Optional[dict[int, Optional[str]]] = None,
+    rung_refused: dict[int, bool] | None = None,
+    rung_unmeasurable_reason: dict[int, str | None] | None = None,
     scale_tol: float = DEFAULT_SCALE_TOL,
     delta_tol: float = DEFAULT_DELTA_TOL,
     abs_floor: float = DEFAULT_ABS_FLOOR,
@@ -290,7 +289,7 @@ def _estimate_candidate_pairs(cfg, df) -> float:
         return 0.0
 
 
-def load_baseline(path: Path) -> Optional[dict]:
+def load_baseline(path: Path) -> dict | None:
     if not path.exists():
         return None
     with open(path, encoding="utf-8") as fh:
@@ -325,8 +324,8 @@ def measure_rungs(rungs: list[int], *, seed: int, shape: str, corruption: str) -
     UNMEASURABLE (``f1=None``); ``evaluate_gate`` then flags it honestly instead of
     fabricating a 0.0 -- never a false green."""
     sys.path.insert(0, str(REPO / "scripts"))
-    import quality_invariant_scale as qis  # noqa: E402
     import goldenmatch  # noqa: E402
+    import quality_invariant_scale as qis  # noqa: E402
     from goldenmatch.core.autoconfig_controller import ControllerNotConfidentError  # noqa: E402
 
     def _score(result) -> dict:
@@ -374,7 +373,7 @@ def measure_rungs(rungs: list[int], *, seed: int, shape: str, corruption: str) -
             return False
         return _pair_explosion(cfg, df)
 
-    def _measure_red(df) -> tuple[Optional[dict], Optional[str]]:
+    def _measure_red(df) -> tuple[dict | None, str | None]:
         """Score the committed RED config via the allow_red_config force-run.
         Returns ``(metrics, None)`` when measured, ``(None, "pair_explosion")`` when
         the committed config's ESTIMATED candidate pairs exceed ``MEASURE_MAX_PAIRS``
@@ -520,7 +519,7 @@ def write_step_summary(result: GateResult, records: dict[int, dict]) -> None:
         fh.write("\n".join(lines) + "\n")
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--tier", choices=sorted(TIERS), default="ci",
                     help="which row-count matrix to run (ci: <=1M, heavy: 5M)")

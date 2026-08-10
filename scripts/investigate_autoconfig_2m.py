@@ -43,7 +43,7 @@ def ensure_fixture(rows: int, dupe_rate: float = 0.15) -> Path:
 
 
 def dump_config(label: str, rows: int) -> None:
-    from goldenmatch.core.autoconfig import auto_configure_df, _LAST_CONTROLLER_RUN
+    from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN, auto_configure_df
 
     fp = ensure_fixture(rows)
     df = pl.read_csv(fp, encoding="utf8-lossy", ignore_errors=True)

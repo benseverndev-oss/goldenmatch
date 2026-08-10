@@ -59,6 +59,21 @@ class ColumnarResult:
 
         return pl.DataFrame(self.columns)
 
+    def to_arrow(self):
+        """Bridge to a ``pyarrow.Table`` (imports pyarrow — opt-in).
+
+        The mirror of :meth:`to_polars`, completing the round trip opened by
+        `transform(pa.Table)` (#2447): an arrow caller can now hand data in and get
+        it back in the same shape rather than unpacking a dict by hand.
+
+        Deferred import, like `to_polars`: pyarrow is an optional extra
+        (``goldenflow[parquet]``) and the Polars-free dict path must never require
+        it. Calling this method is the opt-in.
+        """
+        import pyarrow as pa
+
+        return pa.table(self.columns)
+
 
 def columnar_engine_selected() -> bool:
     """True when ``GOLDENFLOW_ENGINE=columnar`` opts into the Polars-free path."""

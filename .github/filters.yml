@@ -38,6 +38,15 @@ claude_refs:
   - 'scripts/check_context_budget.py'
   - 'scripts/check_commit_msg.py'
   - 'scripts/test_context_and_commit_gates.py'
+# scripts/ is ~100 files including 24 check_*.py gates that ci-required depends
+# on, and NOTHING linted it: the python matrix runs `ruff check
+# packages/python/<pkg>`, which never reaches here. So the repo's own ruff config
+# (F/I/B/UP) was enforced everywhere except the directory enforcing everything
+# else. Found via a code-quality bot flagging an unused import CI could not have
+# caught (#2449).
+scripts_lint:
+  - 'scripts/**'
+  - 'pyproject.toml'
 python_root:
   - 'pyproject.toml'
   - 'uv.lock'

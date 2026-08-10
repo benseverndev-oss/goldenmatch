@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### Added
+- **`ColumnarResult.to_arrow()`** — the mirror of the existing `to_polars()`,
+  completing the round trip opened by `transform(pa.Table)`: an arrow caller hands
+  data in and gets it back in the same shape instead of unpacking a dict by hand.
+  Deferred import like `to_polars`, so the Polars-free dict path still never
+  requires pyarrow; calling the method is the opt-in.
 - **`transform()` accepts a pyarrow `Table`/`RecordBatch` (#2447).** The engine was
   already Polars-free and `transform("<path>.parquet")` already read that file WITH
   pyarrow, but the `pa.Table` you got from reading the same file yourself was

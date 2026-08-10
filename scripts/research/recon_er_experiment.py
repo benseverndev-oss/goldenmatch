@@ -47,9 +47,9 @@ import argparse
 import math
 import random
 import sys
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable
 
 # Make `dqbench_adapters.*` importable when run from the repo root (mirrors the
 # sys.path dance in scripts/run_benchmarks.py — scripts/ is not a package).

@@ -580,7 +580,8 @@ flip remains (drop `polars` from `[project.dependencies]` -> the `[polars]` extr
   `to_pydict()` is the whole conversion; detected by attribute so the check never
   imports pyarrow, an optional extra here), or a path
   (`.csv`/`.parquet`/`.xlsx`) -> `ColumnarResult`. `transform_df` REJECTS an arrow
-  frame with a pointer here rather than becoming a second Polars-free door. Readers: `read_csv_columns` (stdlib
+  frame with a pointer here rather than becoming a second Polars-free door.
+  `ColumnarResult.to_arrow()` mirrors `to_polars()` (both deferred-import). Readers: `read_csv_columns` (stdlib
   csv), `read_parquet_columns` (pyarrow `to_pydict`), `read_excel_columns` (openpyxl),
   `connectors.database.read_database_columns` (any DBAPI). `transform_df(pl.DataFrame)` is
   the Polars-backend adapter (tautologically needs Polars).

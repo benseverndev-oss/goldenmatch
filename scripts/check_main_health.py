@@ -35,7 +35,7 @@ import argparse
 import json
 import subprocess
 import sys
-from typing import Iterable, Optional
+from collections.abc import Iterable
 
 # Trigger events we IGNORE when judging main health. A `workflow_dispatch` run is
 # a human manually kicking a lane (a one-off bench, a retro-publish); its failure
@@ -54,7 +54,7 @@ TRACKER_MARKER = "<!-- main-health-tracker -->"
 TRACKER_LABEL = "main-health"
 
 
-def classify(conclusion: Optional[str]) -> str:
+def classify(conclusion: str | None) -> str:
     """Map a run conclusion to 'red' | 'ok'. Unknown conclusions are red (fail loud)."""
     if conclusion in RED_CONCLUSIONS:
         return "red"
@@ -65,7 +65,7 @@ def classify(conclusion: Optional[str]) -> str:
     return "red"
 
 
-def select_main_run(runs: list[dict]) -> Optional[dict]:
+def select_main_run(runs: list[dict]) -> dict | None:
     """From completed main runs (GitHub returns them newest-first), the latest one
     triggered by an AUTOMATIC event. Manual ``workflow_dispatch`` runs are skipped
     so a stale one-off dispatch failure can't masquerade as a broken main lane.
@@ -120,7 +120,7 @@ def list_active_workflows(repo: str) -> list[dict]:
     return out
 
 
-def latest_main_run(repo: str, workflow_id: int) -> Optional[dict]:
+def latest_main_run(repo: str, workflow_id: int) -> dict | None:
     """Latest COMPLETED, AUTOMATIC run of this workflow on main, or None.
 
     Fetches several recent completed main runs (newest-first) and returns the
@@ -158,7 +158,7 @@ def collect_main_runs(repo: str) -> list[dict]:
 # --------------------------------------------------------------- surfaces (issue)
 
 
-def find_tracker_issue(repo: str) -> Optional[dict]:
+def find_tracker_issue(repo: str) -> dict | None:
     data = _gh_api(
         f"repos/{repo}/issues?state=open&labels={TRACKER_LABEL}&per_page=20"
     )
@@ -255,7 +255,7 @@ def write_step_summary(records: list[dict], reds: list[dict]) -> None:
         fh.write("\n".join(lines) + "\n")
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--repo", default="benseverndev-oss/goldenmatch")
     ap.add_argument(

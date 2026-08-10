@@ -90,7 +90,7 @@ def main() -> int:
         "multi_member_predicted": pred_multi_total,
         "multi_member_gt": gt_multi_total,
     }
-    print("\n=== DISTRIBUTED %d-ROW QUALITY (from assignments) ===" % n_rows)
+    print(f"\n=== DISTRIBUTED {n_rows}-ROW QUALITY (from assignments) ===")
     print(f"pairwise: f1={pf1:.4f}  p={pp:.4f}  r={pr:.4f}")
     print(f"b_cubed:  f1={bf1:.4f}  p={bp:.4f}  r={br:.4f}")
     print(f"cluster:  f1={cf1:.4f}  p={cp:.4f}  r={cr:.4f}  exact={exact_cluster_matches:,}")

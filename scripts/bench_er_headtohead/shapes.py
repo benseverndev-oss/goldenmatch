@@ -12,8 +12,8 @@ guard test (``test_shapes_import_does_not_drag_goldenmatch``) enforces this.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 # Named generator constants (also imported by generate_fixture for pool sizing).
 N_VENUE = 3_500

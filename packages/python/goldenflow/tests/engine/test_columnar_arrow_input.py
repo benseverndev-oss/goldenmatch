@@ -113,3 +113,48 @@ def test_the_rejection_message_lists_arrow_as_accepted():
     with pytest.raises(TypeError) as ei:
         goldenflow.transform(42)
     assert "RecordBatch" in str(ei.value)
+
+
+# ── to_arrow(): the mirror of to_polars(), closing the round trip ────────────
+
+
+def test_to_arrow_round_trips_an_arrow_input():
+    res = goldenflow.transform(pa.table({"city": ["  St. Louis  ", "cincinnati"]}))
+    out = res.to_arrow()
+    assert isinstance(out, pa.Table)
+    assert out.to_pydict() == {"city": ["St. Louis", "cincinnati"]}
+
+
+def test_to_arrow_works_from_a_dict_input_too():
+    """The bridge is on the RESULT, so it does not care how the data arrived."""
+    out = goldenflow.transform({"c": ["  x  "]}).to_arrow()
+    assert out.to_pydict() == {"c": ["x"]}
+
+
+def test_to_arrow_preserves_nulls():
+    out = goldenflow.transform(pa.table({"c": ["  a  ", None]})).to_arrow()
+    assert out.to_pydict() == {"c": ["a", None]}
+
+
+def test_to_arrow_agrees_with_to_polars():
+    """Two bridges over one dict must not disagree about the data."""
+    pl = pytest.importorskip("polars")
+    res = goldenflow.transform({"c": ["  a  ", None], "n": ["1", "2"]})
+    assert res.to_arrow().to_pydict() == res.to_polars().to_dict(as_series=False)
+    assert isinstance(res.to_polars(), pl.DataFrame)
+
+
+def test_to_arrow_is_not_called_on_the_default_path(monkeypatch):
+    """pyarrow is an optional extra; a dict caller who never asks for arrow must
+    not trigger the import. Guards the deferred-import contract."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _boom(name, *a, **k):
+        if name == "pyarrow" or name.startswith("pyarrow."):
+            raise AssertionError("transform() must not import pyarrow on the dict path")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", _boom)
+    assert goldenflow.transform({"c": ["  x  "]}).columns == {"c": ["x"]}

@@ -39,11 +39,10 @@ def _worker(mode: str, backend: str, inp: str, out: str) -> None:
     """Run one dedupe under the pinned mode/backend and write partitions."""
     import pyarrow as pa
     import pyarrow.parquet as pq
-
     from goldenmatch import dedupe_df
     from goldenmatch.core._native_loader import native_module
-    from goldenmatch.core.probabilistic import fs_missing_mode
     from goldenmatch.core.autoconfig import auto_configure_probabilistic_df
+    from goldenmatch.core.probabilistic import fs_missing_mode
 
     df = pq.read_table(inp)
     cfg = auto_configure_probabilistic_df(df)

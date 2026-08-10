@@ -128,14 +128,14 @@ def main() -> int:
 
     print(f"\n  union: found(D)={D}  true-in-union(tp)={tp}  precision={precision:.3f}")
     print(f"  capture overlap (true pairs, decorrelation): {overlap:.2f}")
-    print(f"  capture-count histogram: "
+    print("  capture-count histogram: "
           + " ".join(f"{k}:{sum(1 for v in counts.values() if v==k)}" for k in range(1, K + 1)))
-    print(f"\n  RECALL of the K-system union:")
+    print("\n  RECALL of the K-system union:")
     print(f"    naive Chao2 (FP-contaminated): {naive_recall:.3f}")
     if fpr['recall'] == fpr['recall']:
         print(f"    FP-aware (ignores singleton cell): {fpr['recall']:.3f}  (p={fpr['p']:.3f})")
     else:
-        print(f"    FP-aware: n/a (need f2 and f3 cells)")
+        print("    FP-aware: n/a (need f2 and f3 cells)")
     print(f"    TRUE recall (gold):                {true_recall:.3f}")
 
     print("\n  PHASE-0 VERDICT:")

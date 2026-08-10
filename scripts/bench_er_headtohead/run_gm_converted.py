@@ -121,7 +121,6 @@ def main() -> None:
 
     try:
         import pyarrow.parquet as pq
-
         from goldenmatch.config.from_splink import SplinkConversionError, from_splink
         from goldenmatch.core.bench import bench_capture
 

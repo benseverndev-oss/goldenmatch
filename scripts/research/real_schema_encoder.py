@@ -66,13 +66,13 @@ def _record_ids(field_values: list[str]) -> list[int]:
 
 @dataclass
 class SchemaDataset:
-    input_ids: "torch.Tensor"   # 1D Long, all records' trigram buckets concatenated
-    offsets: "torch.Tensor"     # 1D Long, start index per record
+    input_ids: torch.Tensor   # 1D Long, all records' trigram buckets concatenated
+    offsets: torch.Tensor     # 1D Long, start index per record
     labels: list[int]           # gold entity id per record
     n: int
 
 
-def to_dataset(records: list[list[str]], labels: list[int]) -> "SchemaDataset":
+def to_dataset(records: list[list[str]], labels: list[int]) -> SchemaDataset:
     flat, offsets = [], []
     for fv in records:
         offsets.append(len(flat))
@@ -149,7 +149,7 @@ if _HAVE_TORCH:
             self.recon = _mlp(d, 96, fdim)       # mate-context -> own bag emb (#3)
             self.d = d
 
-        def encode(self, ds: "SchemaDataset"):
+        def encode(self, ds: SchemaDataset):
             bag = self.bag(ds.input_ids, ds.offsets)   # [N, fdim]
             return self.enc(bag), bag                  # e [N,d], bag [N,fdim]
 
@@ -174,7 +174,7 @@ if _HAVE_TORCH:
             U_b = U.unsqueeze(0).expand(feats.size(0), d)
             return self.score(torch.cat([feats, U_b], -1)).squeeze(-1)
 
-        def nll_and_aux(self, ds: "SchemaDataset"):
+        def nll_and_aux(self, ds: SchemaDataset):
             e, bag = self.encode(ds)
             n = e.size(0)
             order = torch.randperm(n)
@@ -218,7 +218,7 @@ if _HAVE_TORCH:
             return nll / n, aux
 
         @torch.no_grad()
-        def decode(self, ds: "SchemaDataset"):
+        def decode(self, ds: SchemaDataset):
             e, _ = self.encode(ds)
             n = e.size(0)
             total = e.sum(0)

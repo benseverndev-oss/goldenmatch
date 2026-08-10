@@ -66,7 +66,7 @@ except Exception:  # pragma: no cover
 # --------------------------------------------------------------------------- #
 @dataclass
 class SimDataset:
-    fields: "torch.Tensor"   # [N, F] record field vectors
+    fields: torch.Tensor   # [N, F] record field vectors
     labels: list[int]        # gold entity id per record (len N)
 
 
@@ -158,7 +158,7 @@ if _HAVE_TORCH:
             U_b = U.unsqueeze(0).expand(feats.size(0), d)
             return self.score(torch.cat([feats, U_b], -1)).squeeze(-1)     # [K+1]
 
-        def nll_and_aux(self, sim: "SimDataset"):
+        def nll_and_aux(self, sim: SimDataset):
             """Teacher-forced NLL of the gold partition + masked-field recon aux."""
             e = self.encode(sim.fields)                  # [N, d]
             n = e.size(0)
@@ -210,7 +210,7 @@ if _HAVE_TORCH:
             return nll / n, aux
 
         @torch.no_grad()
-        def decode(self, sim: "SimDataset"):
+        def decode(self, sim: SimDataset):
             """Greedy MAP-ish partition + per-step confidence (for calibration)."""
             e = self.encode(sim.fields)
             n = e.size(0)
@@ -255,7 +255,7 @@ if _HAVE_TORCH:
             return assign, confidences, corrects
 
         @torch.no_grad()
-        def sample_partition(self, sim: "SimDataset", temp: float = 1.0) -> list[int]:
+        def sample_partition(self, sim: SimDataset, temp: float = 1.0) -> list[int]:
             """Draw ONE partition sample from q(partition | X): sequential
             assignment, sampling each step from softmax(logits / temp) instead of
             argmax. A pool of these is the Monte-Carlo posterior used by step 3.
@@ -311,7 +311,7 @@ def pairwise_f1(assign: list[int], labels: list[int]) -> float:
     return (2 * p * r / (p + r)) if (p + r) else 0.0
 
 
-def cc_threshold_baseline(sim: "SimDataset", thresh: float) -> list[int]:
+def cc_threshold_baseline(sim: SimDataset, thresh: float) -> list[int]:
     """Connected components of records within L2 `thresh` — the classic
     threshold+transitive-closure ER baseline."""
     x = sim.fields
