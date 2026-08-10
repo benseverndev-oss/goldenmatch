@@ -62,12 +62,45 @@ fi
 git config user.name "github-actions[bot]"
 git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-# One rolling branch per data set, always rebuilt from the commit this run
-# checked out, so a stale unmerged PR from last week is replaced rather than
-# stacked on. Force-push is safe precisely because the branch is bot-owned and
-# carries no history anyone else builds on.
-git checkout -B "$branch"
+# Rebase the generated files onto the DEFAULT branch rather than onto whatever
+# ref this run checked out. A scheduled run sits on `main` and would not notice
+# the difference, but a `workflow_dispatch` from a feature branch -- which is how
+# anyone tests this -- would otherwise open a PR carrying that whole branch
+# alongside the data. The PR must contain the data diff and nothing else, from
+# any ref.
+#
+# The files are carried across the checkout by hand instead of relying on the
+# working tree surviving it: they differ from HEAD, so a base switch could
+# conflict on exactly the paths we are trying to preserve.
+_base="${GITHUB_BASE_BRANCH:-main}"
+_stage=$(mktemp -d)
+for _p in "${paths[@]}"; do
+  mkdir -p "${_stage}/$(dirname "$_p")"
+  cp "$_p" "${_stage}/${_p}"
+done
+
+git fetch --depth=1 origin "$_base"
+
+# One rolling branch per data set, always rebuilt from current `main`, so a stale
+# unmerged PR from last week is replaced rather than stacked on. Force-push is
+# safe precisely because the branch is bot-owned and carries no history anyone
+# else builds on.
+git checkout -B "$branch" FETCH_HEAD
+
+for _p in "${paths[@]}"; do
+  mkdir -p "$(dirname "$_p")"
+  cp "${_stage}/${_p}" "$_p"
+done
+rm -rf "$_stage"
+
 git add -- "${paths[@]}"
+# Regenerated output can be byte-identical to what `main` already carries even
+# when it differed from the feature branch we started on -- that is a no-op, not
+# a failure, and `git commit` would exit non-zero on it.
+if git diff --cached --quiet; then
+  echo "Regenerated files match ${_base} -- nothing to land."
+  exit 0
+fi
 git commit -m "$subject"
 
 # Token goes in the URL rather than a persisted credential so it never lands in
