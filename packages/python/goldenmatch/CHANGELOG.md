@@ -6,6 +6,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Fixed
+- **Auto-config no longer reads packed `"lo,hi"` intervals as coordinates
+  (#2443).** `_looks_like_latlong` tested only whether a column's samples PARSE
+  as `lat,long`, which admits any two small comma-separated numbers -- `"25,35"`
+  is a valid coordinate and an ordinary age interval. On a real ~21k-row corpus
+  that put `geo_haversine` on an `age_range` column; the config was well-formed
+  and the distances plausible, so nothing failed and it took a field-by-field
+  diff against a hand-built matchkey to notice. Detection now also requires
+  positive geographic evidence -- a fractional component, `|lon| > 90`, or a
+  negative component -- any one of which an integer-interval column essentially
+  never shows. Whole-degree coordinates in the positive quadrant are declined
+  deliberately: at ~111 km granularity haversine similarity is meaningless
+  anyway. Only reachable under `GOLDENMATCH_FS_DOMAIN_COMPARATORS=1`, so default
+  behaviour is unchanged.
+
 ### Added
 - **Sail identity Layer 2: incremental resolution against an existing store
   (#966).** `goldenmatch.sail.build_identity_graph_incremental` resolves a run's

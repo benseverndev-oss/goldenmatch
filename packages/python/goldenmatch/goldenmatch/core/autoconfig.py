@@ -1108,21 +1108,66 @@ def _fs_atomic_name_blocking_mode() -> str:
 _LATLONG_SAMPLE_FLOOR = 0.8
 
 
+def _has_geographic_evidence(pairs: list[tuple[float, float]]) -> bool:
+    """Whether parsed ``(lat, lon)`` pairs carry POSITIVE evidence of being
+    coordinates, rather than merely two comma-separated numbers that happen to
+    fall in valid coordinate ranges.
+
+    Parseability alone is a much weaker test than it looks: ``"25,35"`` is a
+    perfectly valid coordinate (lat 25, lon 35) AND a perfectly ordinary packed
+    age interval. So are salary bands, size ranges, version pairs and score
+    spans. #2443 hit exactly this -- auto-config emitted ``geo_haversine`` for an
+    ``age_range`` column on a real ~21k-row corpus, producing plausible-looking
+    distances that took a field-by-field diff against a hand-built matchkey to
+    notice. Nothing failed; the config was well-formed and simply wrong.
+
+    Any ONE of these is enough, and each is something an integer-interval column
+    essentially never exhibits:
+
+    * a fractional component -- real coordinates are decimal degrees; whole
+      degrees are ~111 km apart, a granularity at which haversine similarity is
+      meaningless anyway, so declining those is correct rather than a miss;
+    * ``|lon| > 90`` -- outside latitude's valid band, so unambiguously a
+      longitude and not a second small magnitude;
+    * a negative component -- southern or western hemisphere.
+
+    Deliberately data-driven rather than name-driven. A name veto
+    (``*_range``/``*_span``) was the other option in #2443 and would also have
+    caught this case, but it fails on any locale or convention we did not
+    anticipate, whereas "the numbers do not look geographic" holds regardless of
+    what the column is called.
+    """
+    for lat, lon in pairs:
+        if lat % 1 or lon % 1:
+            return True
+        if abs(lon) > 90.0:
+            return True
+        if lat < 0 or lon < 0:
+            return True
+    return False
+
+
 def _looks_like_latlong(profile: ColumnProfile) -> bool:
     """Whether a column holds combined ``"lat,long"`` coordinate strings, judged
     by profiling ``sample_values`` through the same parser the scorer uses. A
     strong majority (>= _LATLONG_SAMPLE_FLOOR) of the non-null sample must parse
-    to valid coordinates -- specific enough that a plain numeric or free-text
-    column (no ``lat,long`` shape) never trips it. Only consulted under the FS
-    domain-comparators flag, so it never runs (and can't shift behavior) by
-    default. Separate lat/long columns are the deferred cross-field comparator."""
+    to valid coordinates AND the parsed values must carry positive geographic
+    evidence (see ``_has_geographic_evidence``) -- the parse-rate floor alone
+    admits any column of two small comma-separated numbers, which is how #2443
+    scored an age-interval column with ``geo_haversine``. Only consulted under
+    the FS domain-comparators flag, so it never runs (and can't shift behavior)
+    by default. Separate lat/long columns are the deferred cross-field
+    comparator."""
     from goldenmatch.core.scorer import _parse_latlong
 
     sample = [v for v in profile.sample_values if v is not None and str(v).strip()]
     if len(sample) < 5:  # too little evidence to claim a coordinate column
         return False
-    ok = sum(1 for v in sample if _parse_latlong(str(v)) is not None)
-    return ok / len(sample) >= _LATLONG_SAMPLE_FLOOR
+    parsed = [_parse_latlong(str(v)) for v in sample]
+    ok = [p for p in parsed if p is not None]
+    if len(ok) / len(sample) < _LATLONG_SAMPLE_FLOOR:
+        return False
+    return _has_geographic_evidence(ok)
 
 
 # Domain-extracted column scorer mapping.
