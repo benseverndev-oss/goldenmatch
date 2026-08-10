@@ -1,5 +1,22 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **`transform()` accepts a pyarrow `Table`/`RecordBatch` (#2447).** The engine was
+  already Polars-free and `transform("<path>.parquet")` already read that file WITH
+  pyarrow, but the `pa.Table` you got from reading the same file yourself was
+  rejected and redirected to `transform_df()` -- the one entry point that cannot
+  serve a Polars-free caller. An Arrow-native pipeline therefore got no
+  standardization at all. An Arrow frame IS a typed column dict, so `to_pydict()` is
+  the whole conversion and every downstream path is unchanged; like the `.parquet`
+  path and unlike `.csv`, the resulting dict is TYPED. Detection is attribute-based
+  (`to_pydict` + `column_names`) so it never imports pyarrow -- an optional extra
+  (`goldenflow[parquet]`) -- and cannot capture a `pl.DataFrame`, which exposes
+  `to_dict`/`columns`. `transform_df()` now raises a `TypeError` pointing at
+  `transform()` instead of dying on `ModuleNotFoundError: No module named 'polars'`
+  deep in the engine; that direction is deliberate, keeping ONE Polars-free door.
+
 ## 2.1.0 (2026-07-13)
 
 ### Owned auto-detect profile kernel

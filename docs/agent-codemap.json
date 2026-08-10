@@ -10827,6 +10827,7 @@
             "_autoconfig_columns",
             "_cast_utf8",
             "_frame_level_blocked",
+            "_is_arrow_frame",
             "_numeric_inmem_ok",
             "_sample3",
             "_scalar_fn",

@@ -571,6 +571,17 @@ def read_excel_columns(path) -> dict[str, list]:
 _TYPED_READERS = {".parquet": read_parquet_columns, ".xlsx": read_excel_columns}
 
 
+def _is_arrow_frame(obj) -> bool:
+    """Whether `obj` quacks like a `pyarrow.Table` / `RecordBatch`.
+
+    Attribute-based rather than `isinstance`, so the check itself never imports
+    pyarrow -- it is an optional extra (`goldenflow[parquet]`), and a caller
+    passing a dict must not pay for it. `pl.DataFrame` exposes `to_dict` and
+    `columns`, not `to_pydict`/`column_names`, so it cannot be captured here.
+    """
+    return hasattr(obj, "to_pydict") and hasattr(obj, "column_names")
+
+
 def transform_columns_public(data, config):
     """Phase 4c/4e public core: transform a ``dict[str, list]`` frame OR a CSV path
     (str/``Path`` ending ``.csv``), returning a :class:`ColumnarResult` (Polars-free).
@@ -608,10 +619,30 @@ def transform_columns_public(data, config):
                 f"transform() reads .csv/.parquet/.xlsx paths Polars-free; "
                 f"{suffix or 'this'} needs transform_df() / read_file() with goldenflow[polars]."
             )
+    elif _is_arrow_frame(data):
+        # An Arrow table IS a typed column dict -- `to_pydict()` is the whole
+        # conversion, and everything below already works on that shape. Accepting
+        # it closes an odd asymmetry: `transform("<path>.parquet")` reads the file
+        # WITH pyarrow (the [parquet] extra) and transforms it Polars-free, but the
+        # `pa.Table` you get from reading that same file yourself was rejected and
+        # redirected to `transform_df()`, the one entry point that cannot serve a
+        # Polars-free caller (#2447).
+        #
+        # Duck-typed on purpose: detecting an Arrow frame must not import pyarrow,
+        # which is an OPTIONAL extra here. A caller holding a pa.Table necessarily
+        # has pyarrow, so `to_pydict()` is safe to call -- but a caller who does not
+        # must never pay an import for the check. `pl.DataFrame` has neither
+        # attribute (it uses `to_dict`/`columns`), so this cannot capture it.
+        #
+        # Dtype regime: like the .parquet path and unlike .csv, an Arrow frame
+        # carries real dtypes, so the resulting dict is TYPED -- no string-inference
+        # gap, and no coercion of "01234" to an int.
+        data = data.to_pydict()
     elif not isinstance(data, dict):
         raise TypeError(
-            "transform() takes a dict[str, list] of columns or a .csv path; pass a "
-            "pl.DataFrame to transform_df() instead."
+            "transform() takes a dict[str, list] of columns, a pyarrow Table/"
+            "RecordBatch, or a .csv/.parquet/.xlsx path; pass a pl.DataFrame to "
+            "transform_df() instead."
         )
 
     nm = native_module()
