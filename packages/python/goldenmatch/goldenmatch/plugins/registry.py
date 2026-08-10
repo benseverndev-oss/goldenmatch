@@ -6,6 +6,8 @@ from importlib.metadata import entry_points
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from goldenmatch.plugins.base import ScorerPlugin, TransformPlugin
 
 logger = logging.getLogger(__name__)
@@ -24,6 +26,16 @@ class PluginRegistry:
 
     _instance: PluginRegistry | None = None
     _discovered: bool = False
+    # Bundled registrations that ran as an import-time side effect (refdata's
+    # scorers + transforms). `reset()` drops the singleton but cannot re-run a
+    # module body -- `sys.modules` already holds it -- so without replay those
+    # plugins were gone for the REST OF THE PROCESS, and the next
+    # `has_transform("refdata_business_canonical")` read False with nothing to
+    # point at. Under xdist that is invisible until a resetting test happens to
+    # land in the same worker ahead of a refdata one, which is why it presented
+    # as shard-membership flake rather than a bug.
+    _bootstraps: list[Callable[[], None]] = []
+    _bootstrapping: bool = False
 
     def __init__(self) -> None:
         self._scorers: dict[str, object] = {}
@@ -32,15 +44,43 @@ class PluginRegistry:
         self._golden_strategies: dict[str, object] = {}
 
     @classmethod
+    def add_bootstrap(cls, fn: Callable[[], None]) -> None:
+        """Record an idempotent registration to replay onto a fresh singleton.
+
+        Callers register their plugins as they always did and then hand the
+        same callable here; nothing new is imported, so this only restores
+        state a `reset()` destroyed.
+        """
+        if fn not in cls._bootstraps:
+            cls._bootstraps.append(fn)
+
+    @classmethod
     def instance(cls) -> PluginRegistry:
         """Get or create the singleton registry."""
         if cls._instance is None:
             cls._instance = cls()
+            # Set _instance FIRST: the bootstraps call instance() themselves,
+            # and must land on the one being built rather than recursing.
+            if not cls._bootstrapping:
+                cls._bootstrapping = True
+                try:
+                    for fn in cls._bootstraps:
+                        try:
+                            fn()
+                        except Exception as e:  # pragma: no cover -- shipped-code bug
+                            logger.warning("Failed to replay plugin bootstrap: %s", e)
+                finally:
+                    cls._bootstrapping = False
         return cls._instance
 
     @classmethod
     def reset(cls) -> None:
-        """Reset the singleton (for testing)."""
+        """Reset the singleton (for testing).
+
+        Bundled bootstraps are replayed on the next `instance()`, so a reset
+        clears user/test registrations without silently stripping the plugins
+        goldenmatch itself ships.
+        """
         cls._instance = None
         cls._discovered = False
 

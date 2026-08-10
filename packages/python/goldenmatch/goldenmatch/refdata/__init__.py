@@ -57,6 +57,7 @@ Provenance + license for every bundled dataset:
 from __future__ import annotations
 
 from goldenmatch.core.acronym import register_transforms as _register_acronym_transforms
+from goldenmatch.plugins.registry import PluginRegistry as _PluginRegistry
 from goldenmatch.refdata.addresses import is_available as addresses_available
 from goldenmatch.refdata.addresses import (
     known_tokens as address_tokens,
@@ -93,12 +94,23 @@ from goldenmatch.refdata.surnames import (
 )
 
 # Register the bundled scorers + transforms on import. Idempotent.
-register_scorers()
-_register_business_transforms()
-_register_business_alias_transforms()
-_register_address_transforms()
-_register_industry_transforms()
-_register_acronym_transforms()
+# Each is ALSO handed to PluginRegistry.add_bootstrap so a `PluginRegistry.reset()`
+# does not strip them for the rest of the process: a reset drops the singleton,
+# but this module body cannot run twice (sys.modules holds it), so without the
+# replay the refdata plugins would be permanently gone.
+_BUNDLED_REGISTRATIONS = (
+    register_scorers,
+    _register_business_transforms,
+    _register_business_alias_transforms,
+    _register_address_transforms,
+    _register_industry_transforms,
+    _register_acronym_transforms,
+)
+
+for _register in _BUNDLED_REGISTRATIONS:
+    _register()
+    _PluginRegistry.add_bootstrap(_register)
+del _register
 
 __all__ = [
     "address_tokens",

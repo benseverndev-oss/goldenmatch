@@ -2976,7 +2976,6 @@
             "normalize_model"
           ],
           "imports": [
-            "goldenmatch._polars_lazy",
             "goldenmatch.core.complexity_profile",
             "goldenmatch.core.frame",
             "goldenmatch.core.profile_emitter"
@@ -6882,6 +6881,7 @@
           "purpose": "Reference data — bundled OSS lookups that lift engine accuracy.",
           "imports": [
             "goldenmatch.core.acronym",
+            "goldenmatch.plugins.registry",
             "goldenmatch.refdata.addresses",
             "goldenmatch.refdata.business",
             "goldenmatch.refdata.business_aliases",

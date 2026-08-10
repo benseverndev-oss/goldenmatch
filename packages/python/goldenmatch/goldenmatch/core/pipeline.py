@@ -3147,6 +3147,27 @@ def _run_dedupe_pipeline(
                         _col, _frame.derive_standardized_column(_col, _std_names)
                     )
 
+        # Domain extraction MUST precede compute_matchkeys: it is what
+        # materializes the `__brand__` / `__model__` / `__title_key__` columns
+        # that auto-config's matchkeys reference, so deriving matchkeys first
+        # sends `derive_matchkey` at a column that does not exist yet
+        # (KeyError: 'Field "__model__" does not exist in schema' -- the
+        # benchmarks Abt-Buy failure). This is the order the classic lane and
+        # the match pipeline's arrow lane already use; keep the three in sync.
+        if config.domain and config.domain.enabled:
+            # A6: domain extraction is seam-driven dual-rep -- lane preserved.
+            with stage("domain_extraction"):
+                _frame = _tf_lane(_apply_domain_extraction(_frame.native, config))
+
+        # ── Learning Memory: pre-scoring learner overlay (parity with the classic
+        # branch's memory_pre_overlay at ~3220). Operates on `matchkeys` +
+        # `memory_store` (opened once above the lane split), not the frame, so it
+        # sits here on the arrow lane before precompute. memory_post is already
+        # shared (below the lane merge), so this closes the last memory gap on the
+        # arrow lane -- arrow-lane migration phase 2.
+        with stage("memory_pre_overlay"):
+            _apply_memory_pre(memory_store, config, matchkeys)
+
         if "compute_matchkeys" not in _eager_stages_done:
             with stage("compute_matchkeys"):
                 for _mk in matchkeys:
@@ -3162,20 +3183,6 @@ def _run_dedupe_pipeline(
                             ]
                         ),
                     )
-
-        if config.domain and config.domain.enabled:
-            # A6: domain extraction is seam-driven dual-rep -- lane preserved.
-            with stage("domain_extraction"):
-                _frame = _tf_lane(_apply_domain_extraction(_frame.native, config))
-
-        # ── Learning Memory: pre-scoring learner overlay (parity with the classic
-        # branch's memory_pre_overlay at ~3220). Operates on `matchkeys` +
-        # `memory_store` (opened once above the lane split), not the frame, so it
-        # sits here on the arrow lane before precompute. memory_post is already
-        # shared (below the lane merge), so this closes the last memory gap on the
-        # arrow lane -- arrow-lane migration phase 2.
-        with stage("memory_pre_overlay"):
-            _apply_memory_pre(memory_store, config, matchkeys)
 
         with stage("precompute_matchkey_transforms"):
             collected_frame = precompute_matchkey_transforms_frame(_frame, matchkeys)

@@ -129,35 +129,20 @@ def _disable_autoconfig_memory(monkeypatch):
         pass
 
 
-@pytest.fixture(autouse=True)
-def _ensure_refdata_plugins_registered():
-    """Re-register refdata plugins before every test.
-
-    Per the xdist gotcha in CLAUDE.md: workers don't share state, and
-    ``test_plugins.py``'s ``reset_registry`` fixture wipes the singleton
-    within a worker. The ``import goldenmatch.refdata`` side-effect
-    registration only fires once per worker process, so refdata tests
-    scheduled after a plugin-test reset would see an empty registry.
-
-    Each ``register_*`` function is idempotent. Skips silently if a
-    refdata submodule isn't importable (slim installs).
-    """
-    try:
-        import goldenmatch.refdata  # noqa: F401  triggers registration
-        from goldenmatch.refdata.scorer import register_scorers
-        register_scorers()
-    except ImportError:
-        return
-    for module_path in (
-        "goldenmatch.refdata.business",
-        "goldenmatch.refdata.addresses",
-        "goldenmatch.refdata.industries",
-    ):
-        try:
-            mod = __import__(module_path, fromlist=["register_transforms"])
-            mod.register_transforms()
-        except (ImportError, AttributeError):
-            continue
+# The autouse `_ensure_refdata_plugins_registered` fixture that used to live
+# here is gone: `PluginRegistry.reset()` now replays the bundled registrations
+# onto the fresh singleton (`PluginRegistry.add_bootstrap`, wired in
+# `goldenmatch/refdata/__init__.py`), so the library no longer loses its own
+# plugins to a reset and the test harness has nothing to paper over.
+#
+# Keeping it would have been worse than redundant. It re-registered a
+# HAND-MAINTAINED list -- business, addresses, industries, scorer -- that had
+# drifted: `business_aliases` and `core.acronym` were never added. So
+# `refdata_business_canonical` alone stayed unregistered after any resetting
+# test, and `test_business_aliases.py::test_alias_transforms_registered` failed
+# if and only if xdist put a resetting test ahead of it in the same worker.
+# That is the "shard-isolation-fragile" flake class the CI --deselect list
+# documents; a fix-list that must be kept in sync by hand is the mechanism.
 
 
 @pytest.fixture
