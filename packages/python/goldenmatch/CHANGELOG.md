@@ -7,6 +7,42 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Fixed
+- **Zero-config dedupe of product data no longer crashes on the arrow lane
+  (`KeyError: 'Field "__model__" does not exist in schema'`).** Bisected from
+  the weekly `benchmarks` Abt-Buy failure to the polars->arrow `dedupe_df`
+  eviction: two separate defects, both only reachable once a polars input
+  started taking the arrow lane. (1) STAGE ORDER -- the dedupe pipeline's arrow
+  lane derived matchkeys BEFORE running domain extraction, but domain
+  extraction is what materializes the `__brand__` / `__model__` /
+  `__title_key__` columns auto-config's matchkeys reference, so
+  `derive_matchkey` reached a column that did not exist yet. The classic lane
+  and the match pipeline's arrow lane already ran domain extraction first; the
+  dedupe arrow lane now matches them. (2) THREE UN-PORTED `df.columns` READS in
+  `core/domain.py` -- `pa.Table.columns` is a list of ChunkedArrays, not names,
+  so `_emit_domain_profile` raised `'ChunkedArray' object has no attribute
+  'startswith'` (only under a profile capture, which is why the existing
+  arrow-lane tests missed it and the auto-config controller always hit it), and
+  the guards in `_detect_product_subdomain` and `_extract_biblio_features_df`
+  SILENTLY answered False for every membership test -- pinning subdomain
+  detection to its "electronics" fallback and skipping bibliographic extraction
+  entirely, with no error either time. All frame access in that module now goes
+  through the seam. Net effect on the benchmark input: the auto-config
+  controller goes from every iteration erroring (fallback to v0 + RED sentinel)
+  to running normally, byte-identical clusters to the classic lane.
+- **`PluginRegistry.reset()` no longer strips the plugins goldenmatch itself
+  ships.** refdata registers its scorers + transforms as an import-time side
+  effect; `reset()` drops the singleton, but a module body cannot run twice
+  (`sys.modules` holds it), so every bundled plugin was gone for the rest of
+  the process and the next `has_transform("refdata_business_canonical")` read
+  False with nothing to point at. `PluginRegistry.add_bootstrap` records those
+  idempotent registrations and replays them onto the fresh singleton, so a
+  reset now clears USER registrations only. Found via the
+  `test_alias_transforms_registered` xdist flake: the test-side workaround for
+  it re-registered a hand-maintained module list that had drifted --
+  `business_aliases` and `core.acronym` were never added to it -- so the
+  failure appeared only when a resetting test happened to precede a refdata one
+  in the same worker. That workaround is deleted; the library no longer needs
+  it.
 - **The suggest/review path now fails at the boundary with a message that names
   the requirement (#2442).** `review_config` / `suggest_from_result` normalise
   `__row_id__` with the polars-only `with_row_index`, so an Arrow caller got

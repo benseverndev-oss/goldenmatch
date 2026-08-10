@@ -12,15 +12,23 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
-from goldenmatch._polars_lazy import pl
 from goldenmatch.core.complexity_profile import DomainProfile as PublicDomainProfile
 from goldenmatch.core.profile_emitter import _emitter_stack, current_emitter
 
 logger = logging.getLogger(__name__)
 
 
-def _tf_dom(df):
+# A6 dual-rep: every frame that reaches this module is a seam frame, a polars
+# DataFrame (classic lane) or a pa.Table (arrow lane). Route ALL frame access
+# through `_tf_dom` -- `pa.Table.columns` is a list of ChunkedArrays, not names,
+# so a bare `df.columns` either raises (`.startswith` on a ChunkedArray) or,
+# worse, silently answers False for every `col in df.columns` membership test.
+_Frameish = Any
+
+
+def _tf_dom(df: _Frameish):
     from goldenmatch.core.frame import to_frame
 
     return to_frame(df)
@@ -421,11 +429,11 @@ def extract_biblio_features(text: str) -> dict[str, str | None]:
 # ── DataFrame-Level Extraction ────────────────────────────────────────────
 
 
-def _emit_domain_profile(domain: DomainProfile, df_after: pl.DataFrame, low_conf_ids) -> None:
+def _emit_domain_profile(domain: DomainProfile, df_after: _Frameish, low_conf_ids) -> None:
     """Emit PublicDomainProfile. No-op when null emitter."""
     if not _emitter_stack.get():
         return
-    derived = [c for c in df_after.columns if c.startswith("__")]
+    derived = [c for c in _tf_dom(df_after).columns if c.startswith("__")]
     current_emitter().set_domain(PublicDomainProfile(
         detected_domain=getattr(domain, "name", None),
         confidence=float(getattr(domain, "confidence", 0.0)),
@@ -435,10 +443,10 @@ def _emit_domain_profile(domain: DomainProfile, df_after: pl.DataFrame, low_conf
 
 
 def extract_features(
-    df: pl.DataFrame,
+    df: _Frameish,
     domain: DomainProfile,
     confidence_threshold: float = 0.3,
-) -> tuple[pl.DataFrame, list[int]]:
+) -> tuple[_Frameish, list[int]]:
     """Extract structured features from text columns, adding derived columns.
 
     Args:
@@ -474,19 +482,17 @@ def extract_features(
     return result_df, low_conf
 
 
-def _detect_product_subdomain(df: pl.DataFrame, domain: DomainProfile) -> str:
+def _detect_product_subdomain(df: _Frameish, domain: DomainProfile) -> str:
     """Auto-detect whether product data is electronics or software.
 
     Samples text columns and counts software-specific signals vs
     electronics-specific signals.
     """
+    _f = _tf_dom(df)
     text_col = domain.text_columns[0] if domain.text_columns else None
-    if not text_col or text_col not in df.columns:
+    if not text_col or text_col not in _f.columns:
         return "electronics"
 
-    from goldenmatch.core.frame import to_frame as _tf_a6
-
-    _f = _tf_a6(df)
     sample = _f.head(min(200, _f.height))
     sw_signals = 0
     hw_signals = 0
@@ -511,10 +517,10 @@ def _detect_product_subdomain(df: pl.DataFrame, domain: DomainProfile) -> str:
 
 
 def _extract_software_features_df(
-    df: pl.DataFrame,
+    df: _Frameish,
     domain: DomainProfile,
     confidence_threshold: float,
-) -> tuple[pl.DataFrame, list[int]]:
+) -> tuple[_Frameish, list[int]]:
     """Extract software product features into derived columns."""
     text_col = domain.text_columns[0]
 
@@ -568,10 +574,10 @@ def _extract_software_features_df(
 
 
 def _extract_product_features_df(
-    df: pl.DataFrame,
+    df: _Frameish,
     domain: DomainProfile,
     confidence_threshold: float,
-) -> tuple[pl.DataFrame, list[int]]:
+) -> tuple[_Frameish, list[int]]:
     """Extract product features into derived columns."""
     text_col = domain.text_columns[0]  # primary text column
 
@@ -632,13 +638,13 @@ def _extract_product_features_df(
 
 
 def _extract_biblio_features_df(
-    df: pl.DataFrame,
+    df: _Frameish,
     domain: DomainProfile,
     confidence_threshold: float,
-) -> tuple[pl.DataFrame, list[int]]:
+) -> tuple[_Frameish, list[int]]:
     """Extract bibliographic features."""
     text_col = domain.text_columns[0] if domain.text_columns else "title"
-    if text_col not in df.columns:
+    if text_col not in _tf_dom(df).columns:
         return df, []
 
     title_keys = []

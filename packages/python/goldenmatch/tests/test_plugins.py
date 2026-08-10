@@ -37,15 +37,21 @@ class TestPluginRegistry:
         r2 = PluginRegistry.instance()
         assert r1 is not r2
 
-    def test_list_empty(self):
+    def test_fresh_registry_has_only_bundled_plugins(self):
+        """A fresh singleton carries the bundled refdata plugins, nothing else.
+
+        This asserted `== {..: [], ..}` while `reset()` silently stripped the
+        bundled registrations for the rest of the process (a module body cannot
+        re-run). Now they are replayed onto the new singleton, so "fresh" means
+        "no USER registrations", not "empty" -- and the connector /
+        golden_strategy groups, which have no bundled entries, still are.
+        """
         r = PluginRegistry.instance()
         plugins = r.list_plugins()
-        assert plugins == {
-            "scorer": [],
-            "transform": [],
-            "connector": [],
-            "golden_strategy": [],
-        }
+        assert plugins["connector"] == []
+        assert plugins["golden_strategy"] == []
+        assert "refdata_business_canonical" in plugins["transform"]
+        assert "my_scorer" not in plugins["scorer"]
 
     def test_register_scorer(self):
         class MyScorer:
