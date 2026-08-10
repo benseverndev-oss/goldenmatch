@@ -52,7 +52,7 @@ class DuckDBBackend:
         """
         sql = query or f"SELECT * FROM {table}"
         arrow_table = self._conn.execute(sql).to_arrow_table()
-        df = pl.from_arrow(arrow_table)
+        df = pl.from_arrow(arrow_table)  # polars-lane: this method's declared contract returns a polars LazyFrame
         logger.info("DuckDB: read %d rows from %s", df.height, table if not query else "query")
         return df.lazy()
 

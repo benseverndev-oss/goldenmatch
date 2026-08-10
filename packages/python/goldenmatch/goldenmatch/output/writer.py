@@ -36,7 +36,7 @@ def write_output(
         pq.write_table(df, path)
         return path
     if not is_pl:
-        df = pl.from_arrow(df)
+        df = pl.from_arrow(df)  # polars-lane: csv/xlsx byte-formatting (quoting, null spelling, xlsx engine) is the PINNED output contract; parquet already returned arrow-native above
 
     if fmt == "csv":
         df.write_csv(path)

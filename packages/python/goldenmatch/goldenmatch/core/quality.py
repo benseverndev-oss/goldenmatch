@@ -57,12 +57,12 @@ def _scan_findings(df, domain: str | None):
             # Installed goldencheck predates its Arrow Flip (scan_dataframe
             # is polars-only there): bridge and retry. Floor bumps to
             # goldencheck>=3.0 remove this at D6.
-            findings, _ = scan_dataframe(pl.from_arrow(df), domain=domain)
+            findings, _ = scan_dataframe(pl.from_arrow(df), domain=domain)  # polars-lane: legacy goldencheck (<3.0) scan_dataframe is polars-only; removed at the >=3.0 floor bump
         return apply_confidence_downgrade(findings, llm_boost=False)
 
     from goldencheck.engine.scanner import scan_file
     if not isinstance(df, pl.DataFrame):  # legacy goldencheck: polars csv path
-        df = pl.from_arrow(df)  # type: ignore[assignment]
+        df = pl.from_arrow(df)  # type: ignore[assignment]  # polars-lane: legacy goldencheck scan_file csv path is polars-only
     with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
         df.write_csv(tmp.name)
         tmp_path = Path(tmp.name)
