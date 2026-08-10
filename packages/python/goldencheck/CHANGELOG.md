@@ -4,6 +4,22 @@ All notable changes to GoldenCheck will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **`apply_fixes` now names the requirement at the Arrow boundary (#2448).**
+  `scan_dataframe` is arrow-native, so `scan_dataframe(pa.Table)` succeeds and
+  reasonably implies `apply_fixes(pa.Table, findings)` will too. It did not --
+  `df.clone()` raised `AttributeError: 'pyarrow.lib.Table' object has no
+  attribute 'clone'`, naming neither polars nor the constraint. It now raises a
+  `TypeError` naming the type received, `goldencheck[polars]`, and the
+  `polars.from_arrow` conversion. Deliberately a guard rather than the Arrow
+  branch #2448 proposes: the fix engine is polars-native throughout -- every
+  entry in `_SAFE_FIXES` is typed `pl.Series -> pl.Series` -- so `.clone()` is
+  the first of dozens of polars calls, and skipping it for an immutable Arrow
+  table would move the `AttributeError` to `result[col_name]` rather than remove
+  it. An arrow-native fix engine means a kernel per fix with parity fixtures, not
+  a branch at the top of the function.
+
+
 ## [3.4.0] - 2026-08-04
 
 - Lockstep suite release (2026-08 GoldenModel frontier cut). No functional changes to

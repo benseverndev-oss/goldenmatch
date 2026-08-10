@@ -108,3 +108,53 @@ def test_trim_whitespace_skips_numeric():
     s = pl.Series("col", [1, 2, 3])
     result = _trim_whitespace(s)
     assert result.to_list() == [1, 2, 3]
+
+
+# ── #2448: the scan/fix asymmetry must name its cause ────────────────────────
+
+
+class TestPolarsFrameGuard:
+    """`scan_dataframe` is arrow-native, so `scan_dataframe(pa.Table)` succeeds
+    and reasonably implies `apply_fixes(pa.Table, findings)` will too. It did
+    not -- `df.clone()` raised `AttributeError: 'pyarrow.lib.Table' object has
+    no attribute 'clone'`, naming neither polars nor the requirement (#2448)."""
+
+    def _arrow(self):
+        import pyarrow as pa
+        return pa.table({"city": ["  St. Louis  ", None]})
+
+    def test_arrow_table_raises_a_typed_error_naming_polars(self):
+        from goldencheck.engine.fixer import apply_fixes
+
+        with pytest.raises(TypeError) as ei:
+            apply_fixes(self._arrow(), [])
+        msg = str(ei.value)
+        assert "requires a polars DataFrame" in msg
+        assert "pyarrow.lib.Table" in msg
+        assert "goldencheck[polars]" in msg
+        assert "from_arrow" in msg
+
+    def test_the_fix_functions_are_polars_typed_not_frame_agnostic(self):
+        """#2448 reads the failure as 'the fixes themselves look frame-agnostic;
+        it is the copy-then-mutate that is polars-shaped', and proposes skipping
+        the clone for an immutable Arrow table. Pinning why that does not work:
+        every fix takes and returns a pl.Series, so `.clone()` is the first of
+        dozens of polars calls, not the only one. Skipping it would move the
+        AttributeError to `result[col_name]`."""
+        import inspect
+
+        from goldencheck.engine.fixer import _SAFE_FIXES
+
+        for name, fn in _SAFE_FIXES:
+            sig = inspect.signature(fn)
+            ann = [p.annotation for p in sig.parameters.values()]
+            assert any("Series" in str(a) for a in ann), f"{name} is not Series-typed"
+            assert "Series" in str(sig.return_annotation), name
+
+    def test_polars_frame_still_works(self):
+        import polars as pl
+        from goldencheck.engine.fixer import apply_fixes
+
+        fixed, report = apply_fixes(pl.DataFrame({"city": ["  St. Louis  "]}), [])
+        assert fixed["city"][0] == "St. Louis"
+        assert any(e.fix_type == "trim_whitespace" for e in report.entries)

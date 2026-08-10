@@ -9451,6 +9451,7 @@
             "_has_match",
             "_normalize_unicode",
             "_remove_invisible_chars",
+            "_require_polars_frame",
             "_standardize_case",
             "_strip_control_chars",
             "_trim_whitespace",
