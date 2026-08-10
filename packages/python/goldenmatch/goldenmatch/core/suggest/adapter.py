@@ -764,6 +764,39 @@ def _verify_suggestions(
 
 # ── Public API ─────────────────────────────────────────────────────────────
 
+def _require_polars_frame(df, fn: str) -> None:
+    """Fail at the boundary when `df` is not a Polars frame, naming the reason.
+
+    The suggest/review path is Polars-native END TO END, not just at the
+    `__row_id__` normalisation below: `MatchEngine._run_pipeline` calls
+    `df.lazy()` on its first line. Without this guard an Arrow caller got
+    `AttributeError: 'pyarrow.lib.Table' object has no attribute
+    'with_row_index'` -- a message that names neither Polars nor the actual
+    requirement (#2442). `pl` in this module is `_LazyPolars`, which imports
+    cleanly without Polars installed and only raises on attribute use, so
+    nothing upstream surfaces the dependency either.
+
+    Note this is deliberately NOT an Arrow branch. #2442 suggested adding one,
+    and supplying `__row_id__` up front is listed there as a workaround -- but
+    both only move the failure three lines down to `.lazy()`. Verified: a
+    `pa.Table` has neither `with_row_index` nor `lazy`. Making this path
+    Arrow-native means porting the pipeline, not the two lines that happen to
+    fail first; claiming otherwise with a local patch would be worse than the
+    honest error.
+    """
+    if hasattr(df, "lazy") and hasattr(df, "with_row_index"):
+        return
+    raise TypeError(
+        f"{fn}() requires a polars DataFrame; got {type(df).__module__}."
+        f"{type(df).__qualname__}. This path runs the full match pipeline, which "
+        f"is polars-native (MatchEngine._run_pipeline calls df.lazy()), so adding "
+        f"a __row_id__ column does NOT make an Arrow table work here. Install "
+        f"goldenmatch[polars] and convert at the call site "
+        f"(polars.from_arrow(table)), or use the arrow-native entry points in "
+        f"goldenmatch._api instead."
+    )
+
+
 def review_config(
     df: pl.DataFrame,
     config: Any,
@@ -811,6 +844,8 @@ def review_config(
 
     # Resolve verify: kwarg AND env flag must both be True
     _do_verify = verify and _verify_enabled_by_env()
+
+    _require_polars_frame(df, "review_config")
 
     # Ensure the df has __row_id__ so collision-rate lookups work
     if "__row_id__" not in df.columns:
@@ -881,6 +916,7 @@ def suggest_from_result(
         nm = _require_kernel()
     except SuggestionsNativeRequired:
         return []
+    _require_polars_frame(df, "suggest_from_result")
     if "__row_id__" not in df.columns:
         df = df.with_row_index("__row_id__").with_columns(pl.col("__row_id__").cast(pl.Int64))
     # Deep-copy + disable rerank (mirror review_config): never mutate the caller's

@@ -410,3 +410,66 @@ def test_build_column_signals_cheap_skips_blocking_risk(monkeypatch):
     # cheap=False (opt-in verified path) -> scan runs
     _build_column_signals_batch(df, config, {}, cheap=False)
     assert calls["n"] == 1
+
+
+# ── #2442: the Arrow boundary must name the requirement, not AttributeError ──
+
+
+class TestPolarsFrameGuard:
+    """`review_config` / `suggest_from_result` run the full match pipeline, which
+    is polars-native end to end -- `MatchEngine._run_pipeline` calls `df.lazy()`
+    on its first line. Before the guard, an Arrow caller got
+    `AttributeError: 'pyarrow.lib.Table' object has no attribute
+    'with_row_index'`, which names neither polars nor the requirement, and `pl`
+    in that module is a lazy proxy so nothing upstream surfaces the dependency
+    either (#2442)."""
+
+    def _arrow(self, **cols):
+        import pyarrow as pa
+        return pa.table(cols or {"name": ["a", "b"], "city": ["x", "y"]})
+
+    def test_arrow_table_raises_a_typed_error_naming_polars(self):
+        from goldenmatch.core.suggest.adapter import _require_polars_frame
+
+        with pytest.raises(TypeError) as ei:
+            _require_polars_frame(self._arrow(), "review_config")
+        msg = str(ei.value)
+        assert "requires a polars DataFrame" in msg
+        assert "pyarrow.lib.Table" in msg          # says what it actually got
+        assert "goldenmatch[polars]" in msg        # says how to fix it
+        assert "from_arrow" in msg                 # and the call-site conversion
+
+    def test_row_id_is_not_a_workaround_for_arrow(self):
+        """#2442 lists 'supply __row_id__ up front' as the workaround. It is not
+        one for an Arrow caller -- it only skips the branch that fails FIRST, and
+        `.lazy()` three lines later fails just the same. A guard that let this
+        through would move the confusing error rather than remove it."""
+        from goldenmatch.core.suggest.adapter import _require_polars_frame
+
+        tbl = self._arrow(name=["a"], __row_id__=[0])
+        assert "__row_id__" in tbl.column_names
+        with pytest.raises(TypeError):
+            _require_polars_frame(tbl, "review_config")
+
+    def test_arrow_table_really_lacks_both_methods(self):
+        """Pins the premise the guard is built on, so it can't rot silently."""
+        tbl = self._arrow()
+        assert not hasattr(tbl, "with_row_index")
+        assert not hasattr(tbl, "lazy")
+
+    def test_polars_frame_passes(self):
+        import polars as pl
+        from goldenmatch.core.suggest.adapter import _require_polars_frame
+
+        _require_polars_frame(pl.DataFrame({"name": ["a"]}), "review_config")
+
+    def test_both_entry_points_are_guarded(self):
+        """A guard on one of the two would leave the other reporting the old
+        AttributeError -- both call sites normalise __row_id__ the same way."""
+        import inspect
+
+        from goldenmatch.core.suggest import adapter
+
+        for fn in (adapter.review_config, adapter.suggest_from_result):
+            src = inspect.getsource(fn)
+            assert "_require_polars_frame(" in src, fn.__name__
