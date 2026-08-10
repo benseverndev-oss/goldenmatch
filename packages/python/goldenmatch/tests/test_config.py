@@ -459,3 +459,102 @@ def test_config_mode_rejects_unknown_value():
 def test_config_mode_round_trips_through_model_dump():
     cfg = GoldenMatchConfig(mode="scale")
     assert GoldenMatchConfig(**cfg.model_dump()).mode == "scale"
+
+
+class TestGoldenRulesSchemaRoundTrip:
+    """#2454: every GoldenRulesConfig schema field must survive dump -> load.
+
+    The loader's protected-name set was hand-transcribed and drifted from the
+    schema, so unlisted schema fields were swept into `field_rules` as if they
+    were data column names. Seven raised on reload; `default` silently loaded
+    as a column rule with `golden_rules.default` left None.
+
+    These tests derive their cases from `GoldenRulesConfig.model_fields`, NOT a
+    literal key list, so they fail the day a field 14 is added without the
+    loader learning about it. That derivation is the actual regression guard --
+    a literal list would drift exactly the way the loader's did.
+    """
+
+    # A non-default value per schema field. Anything absent here is covered by
+    # test_every_schema_field_has_a_roundtrip_case, which fails on omission.
+    NON_DEFAULT: dict = {
+        "adaptive": True,
+        "auto_split": False,
+        "quality_weighting": False,
+        "use_llm_for_ambiguous": True,
+        "weak_cluster_threshold": 0.42,
+        "split_edge_budget": 12345,
+        "max_cluster_size": 999,
+        "field_group_detection": False,
+        "default_strategy": "longest_value",
+        "default": {"strategy": "longest_value"},
+        "field_rules": {"email": {"strategy": "longest_value"}},
+        "field_groups": [
+            {"name": "addr", "columns": ["a", "b"], "strategy": "most_complete"}
+        ],
+        "cluster_overrides": {7: {"email": {"strategy": "most_complete"}}},
+    }
+
+    def test_every_schema_field_has_a_roundtrip_case(self):
+        """Guard on the guard: a new schema field must get a case here."""
+        missing = set(GoldenRulesConfig.model_fields) - set(self.NON_DEFAULT)
+        assert not missing, (
+            f"GoldenRulesConfig gained field(s) {sorted(missing)} with no "
+            "round-trip case. Add a non-default value to NON_DEFAULT."
+        )
+
+    @pytest.mark.parametrize("field_name", sorted(GoldenRulesConfig.model_fields))
+    def test_schema_field_survives_yaml_roundtrip(self, field_name, tmp_path):
+        """Each field set to a non-default value reloads onto the SCHEMA field,
+        not into field_rules as a phantom data column."""
+        value = self.NON_DEFAULT[field_name]
+        raw = {
+            "matchkeys": [
+                {"name": "k", "type": "exact", "fields": [{"field": "a"}]}
+            ],
+            "golden_rules": {"default_strategy": "most_complete", field_name: value},
+        }
+        path = tmp_path / f"{field_name}.yaml"
+        path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+        cfg = load_config(str(path))  # must not raise
+        golden = cfg.golden_rules
+        assert golden is not None
+
+        # The field must not have been swept in as a column rule.
+        swept = golden.field_rules or {}
+        if field_name != "field_rules":
+            assert field_name not in swept, (
+                f"{field_name!r} was swept into field_rules as a data column. "
+                "This is the silent-corruption shape: the config loads and "
+                "means something different."
+            )
+        assert getattr(golden, field_name) is not None
+
+    @pytest.mark.parametrize(
+        "field_name", ["adaptive", "auto_split", "quality_weighting", "split_edge_budget"]
+    )
+    def test_data_column_sharing_a_schema_name_still_sweeps(self, field_name, tmp_path):
+        """BACK-COMPAT: the loader deliberately left these names unprotected so a
+        DATA COLUMN named `adaptive` could carry a survivorship rule. Type-directed
+        routing must preserve that -- a rule-shaped value is still a column rule,
+        even though the name now also matches a schema field."""
+        raw = {
+            "matchkeys": [
+                {"name": "k", "type": "exact", "fields": [{"field": "a"}]}
+            ],
+            "golden_rules": {
+                "default_strategy": "most_complete",
+                field_name: {"strategy": "longest_value"},
+            },
+        }
+        path = tmp_path / f"col_{field_name}.yaml"
+        path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+        cfg = load_config(str(path))
+        rules = cfg.golden_rules.field_rules or {}
+        assert field_name in rules, (
+            f"a rule-shaped {field_name!r} must stay a COLUMN rule; type-directed "
+            "routing stole a name that used to belong to data"
+        )
+        assert rules[field_name].strategy == "longest_value"
