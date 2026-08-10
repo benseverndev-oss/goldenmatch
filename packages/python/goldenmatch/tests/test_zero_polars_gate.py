@@ -19,20 +19,50 @@ _PROBE = Path(__file__).parent / "_zero_polars_probe.py"
 import pytest
 
 
+sys.path.insert(0, str(Path(__file__).parent))
+from _zero_polars_cases import CASES, KNOWN_POLARS_DEPENDENT  # noqa: E402
+
+
+@pytest.mark.parametrize("case_name", sorted(CASES))
 @pytest.mark.parametrize("native", ["0", "1"], ids=["pure", "native"])
-def test_arrow_lane_exact_dedupe_imports_zero_polars(native):
-    # BOTH lanes: the default install is native-ON -- the native kernel
-    # branches have their own polars touchpoints (a raw isinstance in the
-    # bucket fast worker escaped the pure-lane-only gate).
+def test_zero_polars_across_config_matrix(case_name, native):
+    """Every COVERED config runs polars-free on BOTH lanes.
+
+    One subprocess PER CASE so a leak is attributed to the exact config that
+    caused it -- a single shared process would only say "something leaked".
+
+    BOTH lanes: the default install is native-ON, and the native kernel branches
+    have their own polars touchpoints (a raw isinstance in the bucket fast worker
+    escaped the pure-lane-only gate).
+    """
+    if case_name in KNOWN_POLARS_DEPENDENT:
+        pytest.skip(f"declared polars-dependent: {KNOWN_POLARS_DEPENDENT[case_name]}")
+
+    tests_dir = Path(__file__).parent
     env = dict(os.environ)
-    env["PYTHONPATH"] = str(Path(__file__).parent.parent)
+    # PREPEND, don't clobber: a worktree run needs the sibling workspace packages
+    # (goldencheck) to resolve from the worktree, not from an editable install
+    # pointing at another checkout.
+    env["PYTHONPATH"] = os.pathsep.join(
+        p for p in [str(tests_dir.parent), str(tests_dir), env.get("PYTHONPATH", "")] if p
+    )
     env["GOLDENMATCH_NATIVE_GATE"] = native
     proc = subprocess.run(
-        [sys.executable, str(_PROBE)],
+        [sys.executable, str(_PROBE), case_name],
         capture_output=True, text=True, env=env, timeout=300,
     )
-    assert proc.returncode == 0, f"stdout={proc.stdout}\nstderr={proc.stderr[-2000:]}"
+    assert proc.returncode == 0, (
+        f"case={case_name} lane={native}\n"
+        f"stdout={proc.stdout}\nstderr={proc.stderr[-2000:]}"
+    )
     assert "ZERO-POLARS OK" in proc.stdout
+
+
+def test_decline_ledger_entries_are_real_cases():
+    """A decline must name a case that EXISTS, else the ledger rots into a list
+    of excuses for configs nobody runs."""
+    unknown = set(KNOWN_POLARS_DEPENDENT) - set(CASES)
+    assert not unknown, f"declined cases not in the matrix: {sorted(unknown)}"
 
 
 def test_cli_import_zero_polars():
