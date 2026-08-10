@@ -122,7 +122,6 @@ def chao2(capture_counts: dict[tuple[int, int], int], K: int) -> float:
 
 def chao2_var(counts: dict, K: int) -> float:
     """Analytic variance of the Chao2 estimator (Chao 1987, incidence form)."""
-    _D = len(counts)  # richness, unused by this variance form
     Q1 = sum(1 for v in counts.values() if v == 1)
     Q2 = sum(1 for v in counts.values() if v == 2)
     c = (K - 1) / K if K > 1 else 1.0
