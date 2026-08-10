@@ -1889,6 +1889,7 @@
             "_is_strong_identifier_union",
             "_is_text_corpus",
             "_learned_block_cap",
+            "_learned_sample_size",
             "_legacy_auto_configure_v0",
             "_llm_classify_columns",
             "_llm_suggest_blocking_keys",

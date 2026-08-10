@@ -3378,6 +3378,53 @@ def _compute_max_safe_block(height: int, native_scoring: bool) -> int:
     return max(1000, min(ceiling, height // 40))
 
 
+# Learned-blocking training sample. `learned_sample_size` used to be
+# `min(total_rows // 4, 5000)` -- pinned at 5,000 rows from 50K rows upward, no
+# matter how big the frame got.
+#
+# The learner trains on the TRUE PAIRS it finds inside that sample, and the
+# number of pairs whose BOTH members land in a fixed-size sample decays as
+# `s^2 / n`. Measured on the QIS realistic shape, ground-truth pairs contained
+# in a 5,000-row sample:
+#
+#     n = 500K -> 86     n = 1M -> 47     n = 2M -> 25     n = 4M -> 14
+#
+# i.e. the training signal HALVES every time the data doubles. In CI at 5M the
+# learner saw 13 true pairs (against 56 at 1M), learned rules too coarse to
+# separate anything, and emitted 160 blocks of ~31K rows instead of 791 blocks
+# of ~1.3K -- roughly 78 BILLION candidate pairs against 0.6B at 1M. Five times
+# the data, ~124x the pair work; the 5M rung ran 93 minutes without finishing.
+#
+# Holding the signal constant means growing the sample as sqrt(n): pairs scale
+# as `s^2/n`, so `s ∝ sqrt(n)` keeps `s^2/n` flat. Verified against the same
+# measurement -- an 11,180-row sample at 4M recovers 61 pairs, against 14 at
+# 5,000.
+#
+# ANCHORED so this is a pure extension of today's behaviour: below the anchor
+# the floor wins, reproducing `min(total_rows // 4, 5000)` exactly, so every
+# frame under 1M keeps its current sample byte-for-byte and only >1M changes.
+# The ceiling bounds training cost (the sample run is superlinear in `s`); past
+# roughly 100M rows the signal starts decaying again, which is a known limit of
+# this shape of fix rather than something it silently papers over.
+_LEARNED_SAMPLE_FLOOR = 5_000          # the historical fixed value
+_LEARNED_SAMPLE_ANCHOR_ROWS = 1_000_000  # frame size at which the floor is exactly right
+_LEARNED_SAMPLE_CEILING = 50_000       # bound on training cost
+
+
+def _learned_sample_size(total_rows: int) -> int:
+    """Training-sample size for learned blocking, grown as sqrt(rows).
+
+    Keeps the number of true pairs the learner trains on roughly CONSTANT with
+    scale instead of letting it decay as 1/n. Returns the pre-existing
+    ``min(total_rows // 4, 5000)`` for any frame at or below the anchor.
+    """
+    scaled = _LEARNED_SAMPLE_FLOOR * math.sqrt(total_rows / _LEARNED_SAMPLE_ANCHOR_ROWS)
+    target = min(max(_LEARNED_SAMPLE_FLOOR, int(scaled)), _LEARNED_SAMPLE_CEILING)
+    # `total_rows // 4` is the original held-out-data guard: never train on more
+    # than a quarter of the frame, so predicates generalize instead of memorizing.
+    return min(total_rows // 4, target)
+
+
 def _learned_block_cap(total_rows: int, current_cap: int, native_scoring: bool) -> int:
     """Runtime oversized-DROP cap for learned blocking.
 
@@ -5123,7 +5170,7 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
             )
         else:
             blocking.strategy = "learned"
-            blocking.learned_sample_size = min(total_rows // 4, 5000)
+            blocking.learned_sample_size = _learned_sample_size(total_rows)
             blocking.learned_min_recall = 0.95
             blocking.skip_oversized = True
             # skip_oversized DROPS whole blocks above max_block_size, so the cap
