@@ -84,7 +84,24 @@ def transform_file(path, config=None, output_dir=None):
 
 
 def transform_df(df, config=None):
-    """Convenience function: transform a DataFrame."""
+    """Convenience function: transform a ``pl.DataFrame`` (needs ``goldenflow[polars]``).
+
+    An Arrow frame is redirected to :func:`transform`, which handles it Polars-free.
+    That direction is deliberate: `transform` is THE Polars-free door, and making
+    this a second one would duplicate the surface. Before the redirect an Arrow
+    caller got `ModuleNotFoundError: No module named 'polars'` from deep inside the
+    engine, which named the missing package but not the fact that a supported
+    Polars-free path existed two functions away (#2447).
+    """
+    from goldenflow.engine.columnar import _is_arrow_frame
+
+    if _is_arrow_frame(df):
+        raise TypeError(
+            "transform_df() is the polars engine; pass an arrow Table/RecordBatch "
+            "to transform() instead, which handles it polars-free and returns a "
+            "ColumnarResult (.columns dict + .manifest). transform_df() needs "
+            "goldenflow[polars] and a pl.DataFrame."
+        )
     engine = TransformEngine(config=config)
     return engine.transform_df(df)
 
