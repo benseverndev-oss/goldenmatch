@@ -9,6 +9,7 @@ gives the real names a user types (hyphenation like `mcp-serve`, and sub-app gro
 unlike registered_commands whose .name can be None. Only the CLI module path differs per package.
 """
 from __future__ import annotations
+
 import importlib
 import json
 import sys

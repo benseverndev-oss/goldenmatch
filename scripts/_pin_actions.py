@@ -8,6 +8,7 @@ Discarded after the scorecard hardening PR lands — kept only so the
 mapping is reproducible if Dependabot ever needs a fresh round of pins.
 """
 from __future__ import annotations
+
 import re
 from pathlib import Path
 

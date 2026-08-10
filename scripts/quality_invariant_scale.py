@@ -599,8 +599,8 @@ def score_quality(
     br = br_acc / n_rows
     bf1 = (2 * bp * br / (bp + br)) if (bp + br) else 0.0
     # Cluster
-    cfp_cnt = pred_multi_total - exact_cluster_matches
-    cfn_cnt = gt_multi_total - exact_cluster_matches
+    _cfp_cnt = pred_multi_total - exact_cluster_matches  # computed, not yet reported
+    _cfn_cnt = gt_multi_total - exact_cluster_matches  # computed, not yet reported
     cp = exact_cluster_matches / pred_multi_total if pred_multi_total else 0.0
     cr = exact_cluster_matches / gt_multi_total if gt_multi_total else 0.0
     cf1 = (2 * cp * cr / (cp + cr)) if (cp + cr) else 0.0
@@ -1031,7 +1031,6 @@ def _run_phase5_and_collect(
     so it can be oracle-scored (golden records are one row per cluster and can't be).
     """
     import ray  # lazy: the [ray] extra is cluster-only
-
     from goldenmatch.distributed.pipeline import run_dedupe_pipeline_distributed
 
     # Phase-5 contract: a GLOBAL __row_id__. Member ids ARE the row index, so the

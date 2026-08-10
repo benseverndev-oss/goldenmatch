@@ -20,12 +20,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+if TYPE_CHECKING:
+    import pandas as pd
 
 # ── Scoring (mirrors scripts/eval_er_evaluation.py, factored for reuse) ─────
 
@@ -44,8 +45,8 @@ def _resolve_metric(ee, candidates: list[str]):
 
 
 def score_predictions(
-    pred: "pd.Series",
-    ref: "pd.Series",
+    pred: pd.Series,
+    ref: pd.Series,
     label: str,
 ) -> dict[str, Any]:
     """Run er-evaluation metrics on aligned (predictions, reference) Series.
@@ -54,8 +55,8 @@ def score_predictions(
     ``scripts/eval_er_evaluation.py`` so downstream tooling can consume
     either output identically.
     """
-    import pandas as pd
     import er_evaluation as ee  # pyright: ignore[reportMissingImports]
+    import pandas as pd
 
     # Align on intersection of indices; record_ids must appear in both.
     aligned = pd.concat([pred.rename("prediction"), ref.rename("reference")],
@@ -136,7 +137,7 @@ def score_predictions(
 
 # ── Per-benchmark loaders ──────────────────────────────────────────────────
 
-def _clusters_to_series(clusters: dict[int, dict], all_ids: list[int]) -> "pd.Series":
+def _clusters_to_series(clusters: dict[int, dict], all_ids: list[int]) -> pd.Series:
     """Map every member -> cluster_id. Unassigned ids get unique singleton ids."""
     import pandas as pd
     out: dict[int, int] = {}
@@ -157,7 +158,7 @@ def _clusters_to_series(clusters: dict[int, dict], all_ids: list[int]) -> "pd.Se
 def _gt_pairs_to_series(
     pairs: set[tuple[Any, Any]],
     all_ids: list[Any],
-) -> "pd.Series":
+) -> pd.Series:
     """Collapse ground-truth pair set into clusters via union-find, emit Series.
 
     Records not appearing in any pair become singleton clusters with unique ids.
@@ -197,11 +198,10 @@ def _gt_pairs_to_series(
     return s
 
 
-def load_febrl3() -> tuple["pd.Series", "pd.Series", float, dict[str, Any]]:
+def load_febrl3() -> tuple[pd.Series, pd.Series, float, dict[str, Any]]:
     """Run gm.dedupe_df on Febrl3, return (predictions, reference, wall_s, extras)."""
-    import polars as pl
-    import pandas as pd
     import goldenmatch as gm
+    import polars as pl
     from recordlinkage.datasets import load_febrl3 as _load
     df_pd, gt_pairs = _load(return_links=True)
     df_pd = df_pd.reset_index()
@@ -239,7 +239,7 @@ def load_febrl3() -> tuple["pd.Series", "pd.Series", float, dict[str, Any]]:
     return predictions, reference, wall_s, extras
 
 
-def load_dblp_acm(datasets_dir: Path) -> tuple["pd.Series", "pd.Series", float, dict[str, Any]]:
+def load_dblp_acm(datasets_dir: Path) -> tuple[pd.Series, pd.Series, float, dict[str, Any]]:
     """Run gm.match_df on DBLP-ACM, return predictions/reference/wall.
 
     Cross-source match. Both predictions and reference live in the
@@ -251,8 +251,8 @@ def load_dblp_acm(datasets_dir: Path) -> tuple["pd.Series", "pd.Series", float, 
       ``__target_row_id__``, ``__ref_row_id__``, ``__match_score__``,
       ``target_<col>...``, ``ref_<col>...``.
     """
-    import polars as pl
     import goldenmatch as gm
+    import polars as pl
 
     a_path = datasets_dir / "DBLP-ACM" / "DBLP2.csv"
     b_path = datasets_dir / "DBLP-ACM" / "ACM.csv"
@@ -273,7 +273,7 @@ def load_dblp_acm(datasets_dir: Path) -> tuple["pd.Series", "pd.Series", float, 
 
     matched = getattr(result, "matched", None)
     if matched is None or (hasattr(matched, "height") and matched.height == 0):
-        print(f"[dblp-acm] MatchResult.matched is empty")
+        print("[dblp-acm] MatchResult.matched is empty")
         matched_pairs_combined: set[tuple[int, int]] = set()
     else:
         print(f"[dblp-acm] MatchResult.matched columns: {matched.columns}")
@@ -346,15 +346,15 @@ def load_dblp_acm(datasets_dir: Path) -> tuple["pd.Series", "pd.Series", float, 
     return predictions, reference, wall_s, extras
 
 
-def load_ncvr(datasets_dir: Path) -> tuple["pd.Series", "pd.Series", float, dict[str, Any]]:
+def load_ncvr(datasets_dir: Path) -> tuple[pd.Series, pd.Series, float, dict[str, Any]]:
     """Run gm.dedupe_df on the NCVR 10K sample.
 
     Ground truth: per CLAUDE.md, NCVR's ``ncid`` column is the natural key
     that survives across registrations. Rows with the same ``ncid`` are
     the same voter (re-registrations after a move, etc.).
     """
-    import polars as pl
     import goldenmatch as gm
+    import polars as pl
     sample = datasets_dir / "NCVR" / "ncvoter_sample_10k.txt"
     if not sample.exists():
         sys.exit(f"NCVR sample missing: {sample}")

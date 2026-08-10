@@ -46,9 +46,9 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
+import richer_simulator as RR  # noqa: E402
 from amortized_partition_er import pairwise_f1  # noqa: E402
 from real_schema_encoder import _load_real  # noqa: E402
-import richer_simulator as RR  # noqa: E402
 
 
 # --------------------------------------------------------------------------- #
@@ -60,7 +60,6 @@ import richer_simulator as RR  # noqa: E402
 # and the scan predicted is where the ridge-raising mechanism should matter.
 # --------------------------------------------------------------------------- #
 def simulate_conflict(n_entities: int, rng, bridge_rate: float = 0.6):
-    import random
     sizes = RR._sample_cluster_sizes(n_entities, rng)
     # placeholder pool: distinctive multi-token phrases, each shared by a few
     # unrelated entities (moderate frequency -> survives IDF -> a real bridge).
@@ -456,8 +455,8 @@ def main() -> int:
         verdict = (f"landscape LOSES to discrete by {f_land - f_disc:+.3f} F1 — the "
                    "mechanism hurts. Drop it.")
     print(f"   {verdict}")
-    print(f"   (both optimise the SAME cost ledger; lower bits = better-optimised, "
-          f"not necessarily higher F1.)\n")
+    print("   (both optimise the SAME cost ledger; lower bits = better-optimised, "
+          "not necessarily higher F1.)\n")
     return 0
 
 

@@ -30,10 +30,13 @@ import json
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 
-def _build_prediction_series(clusters: dict[int, dict]) -> "pd.Series":
+def _build_prediction_series(clusters: dict[int, dict]) -> pd.Series:
     """Map row_id -> cluster_id as a pandas Series.
 
     ``clusters`` is GoldenMatch's standard shape: ``dict[cluster_id, {"members": [row_id, ...], ...}]``.
@@ -51,7 +54,7 @@ def _build_prediction_series(clusters: dict[int, dict]) -> "pd.Series":
     return s
 
 
-def _build_reference_series(gt_path: Path) -> "pd.Series":
+def _build_reference_series(gt_path: Path) -> pd.Series:
     """Load ground truth ``id,cluster_id`` CSV into a pandas Series.
 
     Mirrors ``scripts/scale_audit_5m.py::_pairs_from_ground_truth``: the
@@ -110,10 +113,10 @@ def main() -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
     # Import after argparse so --help works without the heavy deps.
-    import polars as pl
-    import pandas as pd
-    import goldenmatch as gm
     import er_evaluation as ee  # pyright: ignore[reportMissingImports]
+    import goldenmatch as gm
+    import pandas as pd
+    import polars as pl
     ee_version = getattr(ee, "__version__", "unknown")
 
     print(f"er_evaluation version: {ee_version}")
@@ -279,7 +282,7 @@ def main() -> None:
 
     if args.summary_md is not None:
         with args.summary_md.open("a", encoding="utf-8") as f:
-            f.write(f"# eval-er-evaluation\n\n")
+            f.write("# eval-er-evaluation\n\n")
             f.write(f"- fixture: `{args.fixture}` ({df.height:,} rows)\n")
             f.write(f"- dedupe wall: **{wall_s:.1f}s**\n")
             f.write(f"- predicted clusters: {len(result.clusters):,}\n")

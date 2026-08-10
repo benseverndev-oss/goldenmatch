@@ -188,9 +188,8 @@ def main() -> int:
     evaluate_mod = _import_sibling("evaluate")
 
     import splink.comparison_library as cl
-    from splink import DuckDBAPI, Linker, SettingsCreator, block_on
-
     from goldenmatch.config.from_splink import from_splink
+    from splink import DuckDBAPI, Linker, SettingsCreator, block_on
 
     s = {
         "DuckDBAPI": DuckDBAPI,

@@ -78,7 +78,7 @@ REFERENCE_ORDER = ("config-matrix", "recipes", "cli", "native", "performance", "
 # (v2.0, GPT-4o) are allowed structurally and need not be listed.
 PROPER_NOUNS = frozenset({
     "goldenmatch", "goldencheck", "goldenflow", "goldenpipe", "goldenanalysis",
-    "goldenpipe", "infermap", "goldenschema", "goldengraph", "golden", "suite",
+    "infermap", "goldenschema", "goldengraph", "golden", "suite",
     "python", "typescript", "javascript", "node", "rust", "arrow", "polars",
     "duckdb", "postgresql", "postgres", "sqlite", "ray", "bloom", "claude",
     "gpt", "openai", "anthropic", "docker", "dbt", "neo4j", "llamaindex",

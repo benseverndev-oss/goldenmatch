@@ -33,9 +33,8 @@ from pathlib import Path
 # Make `dqbench_adapters.*` and the sibling bench script importable.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import polars as pl
-
 import goldenmatch
+import polars as pl
 from goldenmatch.config.schemas import (
     BlockingConfig,
     BlockingKeyConfig,

@@ -326,7 +326,9 @@ def _dump_yaml(manifest) -> str:
 def _run_emitter(cmd: list[str]) -> dict:
     """Run an emitter subprocess; return its parsed JSON descriptor.
     Exit code 3 from an emitter = environment gap (missing extra) -> re-raise as SystemExit(3)."""
-    import json, subprocess, sys
+    import json
+    import subprocess
+    import sys
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode == 3:
         sys.stderr.write(proc.stderr)
@@ -338,7 +340,9 @@ def _run_emitter(cmd: list[str]) -> dict:
 
 
 def main(argv=None):
-    import argparse, pathlib, sys
+    import argparse
+    import pathlib
+    import sys
     ap = argparse.ArgumentParser()
     ap.add_argument("package")
     ap.add_argument("--init", action="store_true", help="write a bootstrap manifest from both descriptors")

@@ -24,7 +24,6 @@ import importlib.util
 import inspect
 import json
 import tomllib
-import typing
 from pathlib import Path
 
 from pydantic_core import PydanticUndefined
