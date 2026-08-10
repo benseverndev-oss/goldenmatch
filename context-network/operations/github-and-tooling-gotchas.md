@@ -5,6 +5,13 @@ Small, hard-won specifics about `gh`, the CI UI, pnpm-vs-npm flags, stacked PRs 
 > Extracted from the root `CLAUDE.md` so it is read when relevant rather than
 > loaded into every session. Linked from the map at the bottom of that file.
 
+## A workflow CANNOT `git push` to `main` -- use `scripts/open_data_pr.sh`
+Since the merge queue landed (2026-06-15) `protect-main` rejects every direct push with `GH013: ... Changes must be made through a pull request / the merge queue`, including one from `github-actions[bot]` with `contents: write`. `git log --since=2026-06-15` shows zero bot commits on `main`: every commit-back step written before this was discovered is dead. It fails at the END of the job, so the work runs, burns the minutes, and is thrown away with a red run -- and on a weekly lane nobody notices for a week (the North Star scoreboard's first-ever run, #2466; `benchmarks.yml` had been broken the same way, unnoticed, behind an earlier failure).
+
+Any scheduled job that regenerates committed data calls `scripts/open_data_pr.sh <branch> <commit-subject> <pr-title> <path>...` instead: rolling bot branch, PR, auto-merge, merge queue.
+
+**It needs `secrets.GM_BOT_TOKEN`, a PAT -- NOT `GITHUB_TOKEN`.** A PR opened with `GITHUB_TOKEN` deliberately does not trigger workflow runs, so `ci-required` never reports and the PR wedges in the queue unmergeable forever -- the same "required check that never ran" trap as a skip-CI directive in a commit message. The script hard-fails on an empty token rather than letting that surface as a stuck PR a week later. For the same reason such a commit subject must NOT carry a CI-skip directive: it has to pass `ci-required` to merge at all.
+
 ## CI poll loop pattern
 `gh pr checks <N> | grep -qv pending` is WRONG (returns true on the first non-pending line). Use `while gh pr checks <N> | grep -qE "pending|in_progress"; do sleep 30; done`.
 

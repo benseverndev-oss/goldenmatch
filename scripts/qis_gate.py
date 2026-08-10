@@ -89,6 +89,82 @@ METRIC = "pairwise"       # headline metric; b_cubed/cluster are recorded for co
 # ~40-min runner-reclaim window this shape was hitting.
 MEASURE_MAX_PAIRS = 3_000_000_000
 
+# Heartbeat cadence. The heavy (5M) rung has twice died to
+# "The runner has received a shutdown signal" -- at 28 min and at 58 min, against
+# a 240-min timeout -- with 17+ minutes of total log silence beforehand and no way
+# to tell an OOM from an infra preemption after the fact. Artifacts do NOT survive
+# that death (the `if: always()` upload step is itself skipped when the runner goes
+# down), so the only forensic channel that outlives the runner is the STREAMED LOG.
+# Hence: print, don't collect.
+#
+# `avail` is the discriminator, not `rss`. MemAvailable collapsing toward zero as
+# rss climbs is an OOM; rss flat and avail healthy at the moment the log stops is
+# the infrastructure reclaiming the box out from under us.
+HEARTBEAT_SECONDS = 30.0
+
+_stage = "starting"
+
+
+def _set_stage(stage: str) -> None:
+    """Name what the process is doing, so a heartbeat that turns out to be the LAST
+    line in the log still says where it died."""
+    global _stage
+    _stage = stage
+
+
+def _start_heartbeat(interval: float = HEARTBEAT_SECONDS) -> None:
+    """Emit a periodic one-line RSS/MemAvailable sample on stdout until the process
+    exits. Daemon thread: never blocks teardown, never affects the measurement.
+
+    Deliberately dependency-free (/proc, not psutil) so it cannot itself be the
+    reason a lane fails to start, and best-effort throughout -- an unreadable /proc
+    on a non-Linux dev box degrades to silence rather than an exception."""
+    import threading
+    import time
+
+    page = os.sysconf("SC_PAGE_SIZE")
+    t0 = time.monotonic()
+
+    def _mem_available_gb() -> float | None:
+        try:
+            with open("/proc/meminfo", encoding="utf-8") as fh:
+                for line in fh:
+                    if line.startswith("MemAvailable:"):
+                        return int(line.split()[1]) / 1e6  # kB -> GB
+        except OSError:
+            # /proc absent or unreadable (non-Linux dev box, restricted
+            # container). Deliberately silent: the heartbeat is diagnostics for a
+            # lane that is already dying, and must never be the thing that kills
+            # it. The caller renders None as "?" and keeps sampling rss.
+            pass
+        return None
+
+    def _rss_gb() -> float | None:
+        try:
+            with open("/proc/self/statm", encoding="utf-8") as fh:
+                return int(fh.read().split()[1]) * page / 1e9
+        except (OSError, IndexError, ValueError):
+            # Same best-effort contract as _mem_available_gb, plus the parse
+            # errors: statm's format is stable on Linux but this must not raise
+            # on a platform where it is absent or shaped differently. A None rss
+            # skips the sample entirely rather than printing a misleading 0.0.
+            pass
+        return None
+
+    def _loop() -> None:
+        peak = 0.0
+        while True:
+            time.sleep(interval)
+            rss, avail = _rss_gb(), _mem_available_gb()
+            if rss is None:
+                continue
+            peak = max(peak, rss)
+            avail_s = f"{avail:.1f}GB" if avail is not None else "?"
+            print(f"[qis-gate hb] t={time.monotonic() - t0:>6.0f}s rss={rss:.1f}GB "
+                  f"peak={peak:.1f}GB avail={avail_s} stage={_stage}", flush=True)
+
+    threading.Thread(target=_loop, daemon=True, name="qis-gate-heartbeat").start()
+
 
 @dataclass
 class Violation:
@@ -403,7 +479,9 @@ def measure_rungs(rungs: list[int], *, seed: int, shape: str, corruption: str) -
     _NONE = {"f1": None, "p": None, "r": None}
     out: dict[int, dict] = {}
     for n in rungs:
+        _set_stage(f"n={n}:generate")
         df, gt = qis.generate_with_gt(n, seed=seed, shape=shape, corruption=corruption)
+        _set_stage(f"n={n}:preflight")
         # (#2021) Proactively skip a rung whose committed zero-config config would
         # explode candidate pairs beyond the CI window -- BEFORE dedupe_df(df) runs
         # it. Guards the CONFIDENT-COMMIT path (which ran the exploding config to a
@@ -414,8 +492,10 @@ def measure_rungs(rungs: list[int], *, seed: int, shape: str, corruption: str) -
                       "cluster": dict(_NONE), "unmeasurable_reason": "pair_explosion"}
             continue
         try:
+            _set_stage(f"n={n}:dedupe_df")
             result = goldenmatch.dedupe_df(df)
         except ControllerNotConfidentError:
+            _set_stage(f"n={n}:measure_red")
             # RED config on a >=100K input. Measure the committed config's actual
             # F1 (allow_red_config) rather than treating the refusal as a failure.
             rec, reason = _measure_red(df)
@@ -428,6 +508,7 @@ def measure_rungs(rungs: list[int], *, seed: int, shape: str, corruption: str) -
                 rec["unmeasurable_reason"] = None
                 out[n] = rec
             continue
+        _set_stage(f"n={n}:score")
         predicted: dict[int, list[int]] = {}
         for cid, c in (result.clusters or {}).items():
             members = c.get("members") or []
@@ -538,6 +619,7 @@ def main(argv: list[str] | None = None) -> int:
 
     rungs = args.rows if args.rows else TIERS[args.tier]
     print(f"qis-gate {args.mode}: rungs={rungs} shape={args.shape} corruption={args.corruption}")
+    _start_heartbeat()
 
     records = measure_rungs(rungs, seed=args.seed, shape=args.shape, corruption=args.corruption)
     rung_f1 = {n: records[n][METRIC]["f1"] for n in records}
