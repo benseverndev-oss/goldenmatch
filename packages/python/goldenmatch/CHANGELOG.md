@@ -7,6 +7,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Fixed
+- **The learned-blocking trainer no longer loses its training signal as the
+  dataset grows.** `learned_sample_size` was `min(total_rows // 4, 5000)` --
+  pinned at 5,000 rows from 50K upward however large the frame got. The learner
+  trains on the true pairs found INSIDE that sample, and the number of pairs with
+  both members sampled decays as `s^2 / n`. Measured on the QIS realistic shape,
+  ground-truth pairs inside a 5,000-row sample: 86 at 500K, 47 at 1M, 25 at 2M,
+  14 at 4M -- the signal halves every time the data doubles. At 5M the learner saw
+  13 true pairs against 56 at 1M. The sample now grows as `sqrt(rows)`, which
+  holds `s^2/n` constant; at 5M that is 11,180 rows and restores the trainer to 46
+  true pairs. Anchored at 1M so this is a pure extension: every frame at or below
+  1M keeps its previous sample size byte-for-byte, and only larger frames change.
+  Bounded at 50,000 rows, since the sample run is superlinear in sample size.
+
+  **This is necessary but NOT sufficient for the 5M slowdown, and is not claimed
+  as a fix for it.** With the training signal restored, the learner still emits
+  160 blocks of ~31K rows at 5M. Rule SELECTION is scored on the sample too, and
+  block SIZE is exactly what a sample cannot show: a bounded-cardinality predicate
+  like `first_name:first_3` has ~850 blocks of 13 rows in an 11K sample and ~899
+  blocks of 5,562 rows on the full 5M frame -- about 19.5 billion candidate pairs,
+  reported to the selector as `recall=1.000, reduction=1.000`. That is a separate
+  defect in the same family and is tracked on its own.
 - **Zero-config no longer discards a real identity column as a "surrogate key"
   purely because the dataset got bigger.** The `#876` surrogate-key guard asks
   "does every record carry its own value for this column?", and answered it from
