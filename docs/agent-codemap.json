@@ -4247,6 +4247,7 @@
           "file": "packages/python/goldenmatch/goldenmatch/core/quality.py",
           "purpose": "GoldenCheck integration — enhanced data quality scanning before matching.",
           "defines": [
+            "_as_arrow_table",
             "_goldencheck_available",
             "_scan_and_fix",
             "_scan_findings",
