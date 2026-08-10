@@ -184,4 +184,4 @@ def record_fingerprints_batch_arrow(records_df):  # pl.DataFrame -> list[str]
     # to a Python list[str] via Polars (handles the Arrow -> Python
     # decoding without per-row overhead beyond the final list build).
     import polars as _pl
-    return _pl.from_arrow(arrow_out).to_list()
+    return _pl.from_arrow(arrow_out).to_list()  # polars-lane: this branch only runs when the INPUT was polars; the arrow input takes to_pylist() above

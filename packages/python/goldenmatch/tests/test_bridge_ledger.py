@@ -51,6 +51,12 @@ def test_bridge_call_site_ledger():
 # The counter SKIPS pragma'd lines, so declaring a site is how you remove it
 # from this number honestly -- which makes the number track UNDECLARED re-entry
 # rather than raw occurrences.
+# Task 6 pass 1 (2026-08-10): 71 -> 63. Eight sites across seven files were
+# READ and declared correct via `# polars-lane:` (legacy-goldencheck compat,
+# the measured polars transform engine, polars-declared consumers, and the
+# pinned csv/xlsx output contract), so those files left this dict entirely.
+# The remaining 63 are REAL debt -- see the PR for why clustering/cluster are
+# not a mechanical swap.
 EXPECTED_FROM_ARROW: dict[str, int] = {
     "distributed/clustering.py": 17,
     "core/cluster.py": 10,
@@ -61,20 +67,13 @@ EXPECTED_FROM_ARROW: dict[str, int] = {
     "core/pipeline.py": 3,
     "distributed/golden.py": 3,
     "core/blocker.py": 2,
-    "core/quality.py": 2,
     "identity/block_index.py": 2,
     "identity/fingerprint_batch.py": 2,
     "_api.py": 1,
-    "backends/duckdb_backend.py": 1,
-    "core/_hashing.py": 1,
     "core/autoconfig.py": 1,
     "core/golden_fused.py": 1,
     "core/ingest.py": 1,
-    "core/transform.py": 1,
-    "db/sync.py": 1,
     "distributed/dataset.py": 1,
-    "mcp/server.py": 1,
-    "output/writer.py": 1,
     "semantic/discovery/keys.py": 1,
 }
 

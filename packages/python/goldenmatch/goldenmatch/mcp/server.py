@@ -1672,7 +1672,7 @@ def _tool_match_record(record: dict, threshold: float | None, top_k: int) -> dic
     match_data = rs.data
     if isinstance(match_data, pa.Table):
         import polars as pl
-        match_data = pl.from_arrow(match_data)
+        match_data = pl.from_arrow(match_data)  # polars-lane: core.match_one is declared `df: pl.DataFrame`
 
     for mk in matchkeys:
         if mk.type != "weighted":
