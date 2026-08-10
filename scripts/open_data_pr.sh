@@ -104,19 +104,28 @@ fi
 git commit -m "$subject"
 
 # Drop the credential `actions/checkout` persisted, or the push is NOT made as
-# the PAT. Checkout writes GITHUB_TOKEN into a URL-scoped
-# `http.https://github.com/.extraheader`, and that Authorization HEADER WINS over
-# the `x-access-token:...@` userinfo in the push URL -- so the token below is
-# silently ignored and the push goes out as github-actions[bot], which
+# the PAT. Whatever form it takes, the Authorization header it supplies WINS over
+# the `x-access-token:...@` userinfo in the push URL, so the token below is
+# silently ignored and the push goes out as github-actions[bot] -- which
 # protect-main rejects:
 #
 #   remote: Permission to benseverndev-oss/goldenmatch.git denied to github-actions[bot].
 #
-# It is a silent override, not an error, which is what makes it worth a comment.
-# Unset rather than pre-empt with `persist-credentials: false` on the checkout:
-# the fetch above still wants that credential on a private repo, and this keeps
-# the requirement inside the script instead of in every caller's workflow. This
-# is the same command checkout's own post-job cleanup runs.
+# A silent override rather than an error, which is what makes it worth pinning
+# down. There are TWO mechanisms and the newer one is easy to miss: checkout v6
+# writes the credential into a SEPARATE config file pulled in by `includeIf.gitdir`
+# entries, while older versions wrote `http.<url>.extraheader` into the local
+# config directly. Clearing only the latter looks right, changes nothing on v6,
+# and fails identically -- so clear both. This mirrors checkout's own post-job
+# cleanup, which likewise runs a step for each.
+#
+# Unset rather than pre-empting with `persist-credentials: false` on the
+# checkout: the base-branch fetch above still wants that credential on a private
+# repo, and this keeps the requirement inside the shared script instead of
+# relying on every caller's workflow to remember a flag.
+while IFS= read -r _key; do
+  [[ -z "$_key" ]] || git config --local --unset-all "$_key" 2>/dev/null || true
+done < <(git config --local --name-only --get-regexp '^includeIf\.gitdir:' 2>/dev/null || true)
 git config --local --unset-all 'http.https://github.com/.extraheader' 2>/dev/null || true
 
 # Token goes in the URL rather than a persisted credential so it never lands in
