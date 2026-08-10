@@ -4495,23 +4495,16 @@ def _run_dedupe_pipeline(
         # relevant universe; scoped so cell_quality is not paid over the whole
         # frame on every default dedupe.
         _member_ids = _golden_member_row_ids()
-        from goldenmatch.core.golden import _polars_importable as _pl_ok
-        if _member_ids and not _pl_ok():
-            # Zero-polars env: goldencheck's cell_quality is polars-backed;
-            # quality weighting fails OPEN (None = no weighting), the same
-            # contract as goldencheck-absent. Re-opens when goldencheck
-            # ships an arrow cell_quality.
-            _member_ids = []
         if _member_ids:
             from goldenmatch.core.quality import compute_quality_scores
             with stage("golden_quality_scores"):
-                # GOLDEN BRIDGE: compute_quality_scores is goldencheck-side
-                # polars; quality_weighting defaults True, so bridging (not
-                # declining) keeps the Frame lane live on default configs.
+                # Arrow-native, no bridge: goldencheck's cell_quality takes a
+                # pa.Table, so weighting runs on the seam frame directly and does
+                # NOT depend on the optional [polars] extra. It used to decline
+                # polars-free, which silently changed survivorship between
+                # `pip install goldenmatch` and `goldenmatch[polars]`.
                 quality_scores = compute_quality_scores(
-                    _as_polars_df(
-                        _collected_frame.filter_in("__row_id__", _member_ids).native
-                    )
+                    _collected_frame.filter_in("__row_id__", _member_ids).native
                 )
             if quality_scores:
                 logger.info(

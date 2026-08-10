@@ -14,7 +14,7 @@ PKG = Path(__file__).parent.parent / "goldenmatch"
 # A-series ledger: update DOWNWARD only (see
 # docs/superpowers/plans/2026-07-13-goldenmatch-arrow-native-endgame.md).
 EXPECTED_BRIDGE_CALLS = {
-    "core/pipeline.py": 6,  # A1-A8 + A9-slice-1 retired; rebase onto deep-D2b removed the 2 frames-path sites
+    "core/pipeline.py": 5,  # A1-A8 + A9-slice-1 retired; rebase onto deep-D2b removed the 2 frames-path sites; golden_quality_scores retired (cell_quality is arrow-native)
 }
 
 
