@@ -103,6 +103,22 @@ if git diff --cached --quiet; then
 fi
 git commit -m "$subject"
 
+# Drop the credential `actions/checkout` persisted, or the push is NOT made as
+# the PAT. Checkout writes GITHUB_TOKEN into a URL-scoped
+# `http.https://github.com/.extraheader`, and that Authorization HEADER WINS over
+# the `x-access-token:...@` userinfo in the push URL -- so the token below is
+# silently ignored and the push goes out as github-actions[bot], which
+# protect-main rejects:
+#
+#   remote: Permission to benseverndev-oss/goldenmatch.git denied to github-actions[bot].
+#
+# It is a silent override, not an error, which is what makes it worth a comment.
+# Unset rather than pre-empt with `persist-credentials: false` on the checkout:
+# the fetch above still wants that credential on a private repo, and this keeps
+# the requirement inside the script instead of in every caller's workflow. This
+# is the same command checkout's own post-job cleanup runs.
+git config --local --unset-all 'http.https://github.com/.extraheader' 2>/dev/null || true
+
 # Token goes in the URL rather than a persisted credential so it never lands in
 # .git/config on the runner. Actions masks the secret in any log line.
 git push --force \
