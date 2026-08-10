@@ -219,6 +219,71 @@ def case_zero_config() -> Any:
     return P.run_dedupe_df(_people_table(), cfg)
 
 
+def case_golden_strategies() -> Any:
+    """NON-default survivorship: per-field ``most_recent`` + ``longest_value``.
+
+    The default is ``most_complete``; the fused golden kernel declines some
+    strategies and falls back to the demux, so this covers a different golden
+    route than the other cases.
+    """
+    import goldenmatch.core.pipeline as P
+    import pyarrow as pa
+    from goldenmatch.config.schemas import (
+        GoldenFieldRule,
+        GoldenMatchConfig,
+        GoldenRulesConfig,
+    )
+
+    tbl = _people_table()
+    # Recency column so `most_recent` has something to order by.
+    seen = pa.array([1_600_000_000 + i for i in range(tbl.num_rows)], type=pa.int64())
+    tbl = tbl.append_column("seen_at", seen)
+
+    cfg = GoldenMatchConfig(
+        matchkeys=[_exact_matchkey()],
+        golden_rules=GoldenRulesConfig(
+            default_strategy="most_complete",
+            fields={
+                "city": GoldenFieldRule(strategy="most_recent", date_column="seen_at"),
+                "email": GoldenFieldRule(strategy="longest_value"),
+            },
+        ),
+        **_prep_disabled(),
+    )
+    return P.run_dedupe_df(tbl, cfg)
+
+
+def case_bucket_partitioned() -> Any:
+    """``partitioned_block_scoring`` -- the bucketed-materialize scale path.
+
+    One of the two flows `_arrow_lane_supported` historically declined, and the
+    one whose assignment-table build was polars-native.
+    """
+    import goldenmatch.core.pipeline as P
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+    )
+
+    cfg = GoldenMatchConfig(
+        blocking=BlockingConfig(keys=[BlockingKeyConfig(fields=["city"])]),
+        matchkeys=[
+            MatchkeyConfig(
+                name="k",
+                type="weighted",
+                threshold=0.85,
+                fields=[MatchkeyField(field="name", scorer="jaro_winkler", weight=1.0)],
+            )
+        ],
+        partitioned_block_scoring=True,
+        **_prep_disabled(),
+    )
+    return P.run_dedupe_df(_people_table(), cfg)
+
+
 CASES: dict[str, Callable[[], Any]] = {
     "exact": case_exact,
     "default_prep": case_default_prep,
@@ -226,4 +291,6 @@ CASES: dict[str, Callable[[], Any]] = {
     "probabilistic": case_probabilistic,
     "quality_weighting": case_quality_weighting,
     "zero_config": case_zero_config,
+    "golden_strategies": case_golden_strategies,
+    "bucket_partitioned": case_bucket_partitioned,
 }
