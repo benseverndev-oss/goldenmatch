@@ -1882,6 +1882,7 @@
             "_has_fuzzy_tolerant_transform",
             "_has_geographic_evidence",
             "_is_bibliographic_dataset",
+            "_is_perfect_surrogate",
             "_is_person_name_column",
             "_is_probabilistic_shape",
             "_is_short_code",

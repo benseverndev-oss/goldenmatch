@@ -7,6 +7,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Fixed
+- **Zero-config no longer discards a real identity column as a "surrogate key"
+  purely because the dataset got bigger.** The `#876` surrogate-key guard asks
+  "does every record carry its own value for this column?", and answered it from
+  `ColumnProfile.cardinality_ratio` -- a distinct-FRACTION measured over the
+  ~1,000-row profiling sample -- against an absolute threshold of 1.0. A
+  fixed-size sample of a growing frame drives that fraction toward 1.0 for ANY
+  column whose distinct count grows with the row count, which is every real
+  identifier. On the QIS realistic shape an `email` column whose true full-frame
+  ratio is a flat 0.28 profiles at 0.72 / 0.94 / 0.97 / 0.98 / 1.00 for
+  100K / 500K / 1M / 2M / 5M rows, so at 5M zero-config threw away its ONLY
+  exact identity column, fell back to fuzzy-only matchkeys plus the name-based
+  blocking fallback, and committed a config estimated at 185M candidate pairs.
+  The verdict changed with SCALE rather than with the data. Eight call sites
+  asked the question independently; they now share one authority,
+  `_is_perfect_surrogate`, which reads an EXACT full-frame cardinality and falls
+  back to the sampled value only where no full frame was available (hand-built
+  profiles in tests), so those callers keep their previous verdict. The exact
+  count is computed only for columns the sample calls perfectly unique, which is
+  sound rather than a cost trade: if every value in the full column is distinct
+  then so is every subset, so a sample below 1.0 rules the column out already.
+  Measured at 44-307 ms per column at 5M rows against a ~160s auto-config.
+  Effect at 5M: the committed matchkeys are now identical to those at 1M
+  (`exact(email)`, `exact(first_name+last_name+birth_year)`, `weighted(...)`),
+  while a genuine row PK is still excluded. Found via the `bench-quality-scale`
+  heavy tier, which had never once passed: the degenerate config it produced
+  reached 66 GB RSS and killed the CI runner.
 - **Zero-config dedupe of product data no longer crashes on the arrow lane
   (`KeyError: 'Field "__model__" does not exist in schema'`).** Bisected from
   the weekly `benchmarks` Abt-Buy failure to the polars->arrow `dedupe_df`

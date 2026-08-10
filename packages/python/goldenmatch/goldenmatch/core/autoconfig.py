@@ -155,7 +155,15 @@ class ColumnProfile:
     confidence: float  # 0.0 to 1.0
     sample_values: list[str] = field(default_factory=list)
     null_rate: float = 0.0  # fraction of nulls (0-1)
-    cardinality_ratio: float = 0.0  # unique values / total rows (0-1)
+    cardinality_ratio: float = 0.0  # unique values / total rows (0-1), OVER THE SAMPLE
+    full_cardinality_ratio: float | None = None
+    # EXACT unique/total over the FULL frame, not the ~20K profiling sample. Only
+    # populated for columns the sample calls perfectly unique (see
+    # `profile_columns`); None everywhere else, including hand-built profiles.
+    # Read it through `_is_perfect_surrogate`, never directly -- the surrogate-key
+    # decision is the one place the sampled `cardinality_ratio` is not a usable
+    # estimator, because a fixed-size sample's distinct-FRACTION climbs toward
+    # 1.0 as the frame grows.
     avg_len: float = 0.0  # average string length
     date_parse_rate: float | None = None
     # For col_type=="date": fraction of the profiled non-null sample that parses
@@ -169,6 +177,27 @@ class ColumnProfile:
     coord_parse_rate: float | None = None
     # For a coordinate-shaped column: fraction of the sample that parses as a
     # valid "lat,long" pair (the `geo_haversine` domain). None otherwise.
+
+
+def _is_perfect_surrogate(p: ColumnProfile) -> bool:
+    """True when every record carries its own value for this column -- a row PK,
+    which asserts no shared identity and emits zero pairs under an exact match.
+
+    THE single authority for the "#876 surrogate guard" question; four call sites
+    used to ask it independently of the sampled ratio. Prefers the EXACT
+    full-frame ratio, falling back to the sampled one only when the exact value
+    was never computed (hand-built profiles in tests, callers with no full frame),
+    which keeps the pre-existing verdict for those.
+
+    Why the sampled ratio cannot answer this on its own: `cardinality_ratio` is a
+    distinct-FRACTION over a fixed-size sample, so it rises toward 1.0 as the
+    frame grows for ANY column whose distinct count grows with n -- which is every
+    real identifier. The threshold is absolute, so the verdict flips with SCALE
+    rather than with the data.
+    """
+    if p.full_cardinality_ratio is not None:
+        return p.full_cardinality_ratio >= 1.0
+    return (p.cardinality_ratio or 0.0) >= 1.0
 
 
 @dataclass
@@ -598,6 +627,34 @@ def profile_columns(
     # on the same filtered set the Python path uses — unchanged).
     if llm_provider and profiles:
         profiles = _llm_classify_columns(profiles, llm_provider)
+
+    # EXACT full-frame cardinality for APPARENT surrogate keys (both classify
+    # paths converge here, so the native path is covered too).
+    #
+    # `cardinality_ratio` above is a distinct-FRACTION over the ~20K profiling
+    # sample, and a fixed-size sample of a GROWING frame drives that fraction to
+    # 1.0 for any column whose distinct count grows with n. Measured on the QIS
+    # realistic shape, an `email` column whose true ratio is a flat 0.28 reads
+    # 0.72 / 0.94 / 0.97 / 0.98 / 1.00 at 100K / 500K / 1M / 2M / 5M. Every
+    # "#876 surrogate guard" compares that number to an absolute 1.0, so at 5M
+    # zero-config discarded its ONLY exact identity column as a "perfectly-unique
+    # surrogate key", fell back to fuzzy-only matchkeys and name-based blocking,
+    # and produced a 185M-pair run that took 66 GB and killed the CI runner. The
+    # verdict flipped with SCALE, not with the data -- the exact thing the
+    # scale-invariant-correctness commitment forbids.
+    #
+    # Restricting the exact count to sample-ratio-1.0 columns is SOUND, not a
+    # cost heuristic: if every value in the full column is distinct then so is
+    # every subset of it, hence full == 1.0 implies sample == 1.0. Anything below
+    # 1.0 in the sample cannot be a perfect surrogate and is skipped. (Nulls make
+    # the sampled ratio smaller, so a null-bearing column skips the check and
+    # keeps its previous verdict -- conservative in the safe direction, since the
+    # fallback can only RETAIN a column.) In practice this is one or two columns;
+    # measured 44-307 ms each at 5M rows against a ~160s auto-config.
+    _frame_cols = set(frame.columns)
+    for p in profiles:
+        if p.cardinality_ratio >= 1.0 and p.name in _frame_cols and frame.height > 0:
+            p.full_cardinality_ratio = frame.column(p.name).n_unique() / frame.height
 
     # Per-column date reliability signal (both classify paths converge here, so
     # the native path is covered too). For every `date` column, record the
@@ -1648,9 +1705,14 @@ def build_matchkeys(
         # per-record surrogate key (e.g. a row PK). It is never shared, so an
         # exact match emits zero pairs and asserts no real identity. Exclude
         # it for config hygiene.
-        if scorer == "exact" and p.cardinality_ratio >= 1.0:
+        if scorer == "exact" and _is_perfect_surrogate(p):
+            _measured = (
+                f"full-frame cardinality_ratio={p.full_cardinality_ratio:.4f}"
+                if p.full_cardinality_ratio is not None
+                else f"sampled cardinality_ratio={p.cardinality_ratio:.4f}"
+            )
             reason = (
-                f"cardinality_ratio={p.cardinality_ratio:.4f} >= 1.0 "
+                f"{_measured} >= 1.0 "
                 f"-- perfectly-unique surrogate key, no shared identity to match"
             )
             logger.info(
@@ -2077,11 +2139,13 @@ def _build_strong_identifier_union(
         if p.col_type in _STRONG_EXACT_TYPES and p.name in df.columns:
             if _nonnull(p.name) < _UNION_PASS_MIN_NONNULL:
                 continue
-            # #876 surrogate guard: a perfect-surrogate id (card_ratio >= 1.0)
-            # makes singleton blocks (0 pairs) — exclude. NOTE: do NOT apply
-            # blocking_max_ratio here; the union exists precisely to use
-            # near-unique-but-repeating ids the single-key gate rejects.
-            if (p.cardinality_ratio or 0.0) >= 1.0:
+            # #876 surrogate guard: a perfect-surrogate id makes singleton blocks
+            # (0 pairs) — exclude. NOTE: do NOT apply blocking_max_ratio here; the
+            # union exists precisely to use near-unique-but-repeating ids the
+            # single-key gate rejects — which is also why this must ask
+            # `_is_perfect_surrogate` (exact, full-frame) rather than the sampled
+            # ratio, whose drift toward 1.0 at scale rejects exactly those ids.
+            if _is_perfect_surrogate(p):
                 continue
             candidate_passes.append([p.name])
             strong_id_passes += 1
@@ -2231,7 +2295,7 @@ def _build_compound_blocking(
             # Surrogate-key / near-unique guard: must actually group records.
             if not (
                 _max_block_size(p.name) > 1
-                and p.cardinality_ratio < 1.0
+                and not _is_perfect_surrogate(p)
                 and _nonnull_ratio(p.name) < _grouping_ratio_max
             ):
                 return False
@@ -3608,7 +3672,7 @@ def build_blocking(
         # regressed test_blocks_on_exact_column.
         exact_cols_sorted = [
             p for p in exact_cols_sorted
-            if (p.cardinality_ratio or 0.0) < 1.0
+            if not _is_perfect_surrogate(p)
         ]
         candidates = exact_cols_sorted[:5]
         # #876: keep only scale-safe exact keys (the linear/pairs gate applies to
@@ -5324,14 +5388,14 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
             # through to the conservative v2 default (the column isn't admitted as
             # that comparator). See `_numeric_column_reliable_for_diff` /
             # `_coord_column_reliable_for_haversine`.
-            if (p.cardinality_ratio < 1.0 and _looks_like_latlong(p)
+            if (not _is_perfect_surrogate(p) and _looks_like_latlong(p)
                     and _coord_column_reliable_for_haversine(p)):
                 fields.append(MatchkeyField(
                     field=p.name, scorer="geo_haversine", transforms=["strip"],
                     levels=3, partial_threshold=0.6,
                 ))
                 continue
-            if (p.col_type == "numeric" and p.cardinality_ratio < 1.0
+            if (p.col_type == "numeric" and not _is_perfect_surrogate(p)
                     and _numeric_column_reliable_for_diff(p)):
                 fields.append(MatchkeyField(
                     field=p.name, scorer="numeric_diff:pct:0.1", transforms=["strip"],
@@ -5345,7 +5409,7 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
         # year DOB gap becomes a weak partial rather than a near-match. partial=0.6
         # for date_diff so the 0.60 (<=1y) band lands at level 1, not level 0.
         if v2 and p.col_type == "date":
-            if p.cardinality_ratio >= 1.0:
+            if _is_perfect_surrogate(p):
                 continue  # per-record timestamp surrogate: no shared-identity signal
             # Phase 2 per-column decision: date_diff only on a RELIABLE date
             # column (high parse rate); a messy one keeps levenshtein even under
@@ -5408,7 +5472,7 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
         # (e.g. `record_id`) -- those stay out for config hygiene.
         if (
             scorer == "exact"
-            and p.cardinality_ratio >= 1.0
+            and _is_perfect_surrogate(p)
             and p.col_type not in ("email", "phone")
         ):
             continue
@@ -5736,7 +5800,7 @@ def _diversify_probabilistic_blocking(
             continue
         if p.col_type == "date":
             _add([p.name], ["substring:0:4"])  # birth YEAR — tolerant of day/month errors
-        elif p.col_type in ("zip", "identifier", "phone") and p.cardinality_ratio < 1.0:
+        elif p.col_type in ("zip", "identifier", "phone") and not _is_perfect_surrogate(p):
             _add([p.name], ["strip"])
 
     if not new_passes:
@@ -6391,9 +6455,7 @@ def _bound_probabilistic_blocking_pairs(
     # key would otherwise be chosen first. Measured on the 25M person shape
     # (record_id unique, truth keyed on cluster_id): compounding with record_id
     # dropped recall 1.0 -> 0.49 at scale. Skip them everywhere a reducer is built.
-    _surrogate = {
-        p.name for p in profiles if getattr(p, "cardinality_ratio", 0.0) >= 1.0
-    }
+    _surrogate = {p.name for p in profiles if _is_perfect_surrogate(p)}
     reducers: list[tuple[str, tuple[str, ...]]] = []
     for f in (
         by_type.get("email", [])
