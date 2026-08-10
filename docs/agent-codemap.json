@@ -1149,8 +1149,10 @@
           "file": "packages/python/goldenmatch/goldenmatch/config/loader.py",
           "purpose": "YAML config loader for GoldenMatch.",
           "defines": [
+            "_golden_rules_field_names",
             "_normalize_golden_rules",
             "_normalize_standardization",
+            "_value_matches_schema_field",
             "load_config"
           ],
           "imports": [
