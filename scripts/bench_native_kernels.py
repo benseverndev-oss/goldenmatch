@@ -153,7 +153,7 @@ def bench(n: int) -> None:
     native_call = t_tolist + t_full          # what score_buckets pays today (Vec kernel)
     arrow_ceiling = t_tolist + t_ingest      # theoretical max removable by zero-copy ABI
     arrow_path = t_arrow_build + t_arrow_call  # measured Arrow-native path
-    _py_total = t_tolist + t_pyloop  # kept: documents the pure-Python baseline
+    py_total = t_tolist + t_pyloop           # pure-Python baseline, end to end
 
     print(f"\n=== N={n:,} rows, {len(sizes):,} blocks, {n_pairs:,} candidate pairs ===")
     print(f"  T_tolist   (.to_list materialization) : {t_tolist*1e3:8.1f} ms")
@@ -166,6 +166,7 @@ def bench(n: int) -> None:
     print("  --")
     print(f"  Vec path total   (tolist+full)         : {native_call*1e3:8.1f} ms")
     print(f"  Arrow path total (arrowbuild+arrowcall): {arrow_path*1e3:8.1f} ms")
+    print(f"  Python path total (tolist+pyloop)      : {py_total*1e3:8.1f} ms")
     print(f"  ARROW SPEEDUP vs Vec kernel            : {native_call/arrow_path:8.2f}x"
           f"  ({100*(1-arrow_path/native_call):4.1f}% wall cut)")
     print(f"  Arrow upside ceiling (tolist+ingest)   : {arrow_ceiling*1e3:8.1f} ms"

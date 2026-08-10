@@ -598,9 +598,12 @@ def score_quality(
     bp = bp_acc / n_rows
     br = br_acc / n_rows
     bf1 = (2 * bp * br / (bp + br)) if (bp + br) else 0.0
-    # Cluster
-    _cfp_cnt = pred_multi_total - exact_cluster_matches  # computed, not yet reported
-    _cfn_cnt = gt_multi_total - exact_cluster_matches  # computed, not yet reported
+    # Cluster. NOTE the asymmetry with `pairwise` below: that block returns fp/fn,
+    # this one does not. The counts are `pred_multi_total - exact_cluster_matches`
+    # and `gt_multi_total - exact_cluster_matches` if they are ever wanted; they
+    # were computed here and dropped on the floor. Adding them to the returned dict
+    # is safe (qis_gate.py reads cluster via an explicit f1/p/r allowlist) but is an
+    # output change, so it is not being smuggled into a lint pass.
     cp = exact_cluster_matches / pred_multi_total if pred_multi_total else 0.0
     cr = exact_cluster_matches / gt_multi_total if gt_multi_total else 0.0
     cf1 = (2 * cp * cr / (cp + cr)) if (cp + cr) else 0.0
