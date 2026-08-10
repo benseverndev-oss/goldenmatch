@@ -7,6 +7,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Fixed
+- **The suggest/review path now fails at the boundary with a message that names
+  the requirement (#2442).** `review_config` / `suggest_from_result` normalise
+  `__row_id__` with the polars-only `with_row_index`, so an Arrow caller got
+  `AttributeError: 'pyarrow.lib.Table' object has no attribute 'with_row_index'`
+  -- naming neither polars nor the actual constraint. (`pl` in that module is
+  the `_LazyPolars` proxy, which imports cleanly without polars and only raises
+  on use, so nothing upstream surfaced the dependency either.) Both entry points
+  now raise a `TypeError` naming the type received, `goldenmatch[polars]`, and
+  the `polars.from_arrow` conversion. Deliberately NOT an Arrow branch: the path
+  is polars-native end to end -- `MatchEngine._run_pipeline` calls `df.lazy()`
+  on its first line -- so both the Arrow branch #2442 suggests and its stated
+  `__row_id__` workaround only move the failure three lines down. Making this
+  Arrow-native means porting the pipeline, not the two lines that fail first.
 - **Auto-config no longer reads packed `"lo,hi"` intervals as coordinates
   (#2443).** `_looks_like_latlong` tested only whether a column's samples PARSE
   as `lat,long`, which admits any two small comma-separated numbers -- `"25,35"`
