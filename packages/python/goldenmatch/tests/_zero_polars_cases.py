@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import pathlib
 import tempfile
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 # Configs that legitimately CANNOT run polars-free today. Every entry needs a
 # reason. Adding one is a review conversation; removing one is a win.
@@ -83,12 +84,12 @@ def _prep_disabled() -> dict[str, Any]:
 def case_exact() -> Any:
     """The ORIGINAL probe case, preserved verbatim: CSV front + exact matchkey,
     prep disabled. Keeps the arrow reader under the gate."""
+    import goldenmatch.core.pipeline as P
     from goldenmatch.config.schemas import (
         GoldenMatchConfig,
         MatchkeyConfig,
         MatchkeyField,
     )
-    import goldenmatch.core.pipeline as P
 
     d = pathlib.Path(tempfile.mkdtemp())
     csv = d / "people.csv"
@@ -122,14 +123,107 @@ def case_default_prep() -> Any:
     This is what a real `pip install goldenmatch` user gets, and the config the
     original single-case probe never exercised.
     """
-    from goldenmatch.config.schemas import GoldenMatchConfig
     import goldenmatch.core.pipeline as P
+    from goldenmatch.config.schemas import GoldenMatchConfig
 
     cfg = GoldenMatchConfig(matchkeys=[_exact_matchkey()])
+    return P.run_dedupe_df(_people_table(), cfg)
+
+
+def case_weighted_fuzzy() -> Any:
+    """Weighted matchkey with fuzzy per-field scorers.
+
+    There is no "fuzzy" matchkey TYPE (the literal is exact/weighted/
+    probabilistic); fuzzy comparison rides on ``weighted`` via per-field
+    ``scorer``. This is the scorer path where the #2250 lane divergence lived.
+    """
+    import goldenmatch.core.pipeline as P
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+    )
+
+    cfg = GoldenMatchConfig(
+        blocking=BlockingConfig(keys=[BlockingKeyConfig(fields=["city"])]),
+        matchkeys=[
+            MatchkeyConfig(
+                name="k",
+                type="weighted",
+                threshold=0.85,
+                fields=[
+                    MatchkeyField(field="name", scorer="jaro_winkler", weight=0.7),
+                    MatchkeyField(field="city", scorer="jaro_winkler", weight=0.3),
+                ],
+            )
+        ],
+        **_prep_disabled(),
+    )
+    return P.run_dedupe_df(_people_table(), cfg)
+
+
+def case_probabilistic() -> Any:
+    """Fellegi-Sunter matchkey -- the EM/FS path."""
+    import goldenmatch.core.pipeline as P
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+    )
+
+    cfg = GoldenMatchConfig(
+        blocking=BlockingConfig(keys=[BlockingKeyConfig(fields=["city"])]),
+        matchkeys=[
+            MatchkeyConfig(
+                name="k",
+                type="probabilistic",
+                fields=[
+                    MatchkeyField(field="name", scorer="jaro_winkler"),
+                    MatchkeyField(field="city", scorer="jaro_winkler"),
+                ],
+            )
+        ],
+        **_prep_disabled(),
+    )
+    return P.run_dedupe_df(_people_table(), cfg)
+
+
+def case_quality_weighting() -> Any:
+    """quality_weighting=True over the dirty-city fixture.
+
+    Regression pin for #2462: weighting used to be silently skipped polars-free
+    (and dead on the arrow lane even WITH polars, because
+    ``"col" not in pa_table.columns`` is silently True).
+    """
+    import goldenmatch.core.pipeline as P
+    from goldenmatch.config.schemas import GoldenMatchConfig, GoldenRulesConfig
+
+    cfg = GoldenMatchConfig(
+        matchkeys=[_exact_matchkey()],
+        golden_rules=GoldenRulesConfig(default_strategy="most_complete", quality_weighting=True),
+        **_prep_disabled(),
+    )
+    return P.run_dedupe_df(_people_table(), cfg)
+
+
+def case_zero_config() -> Any:
+    """No matchkeys -- auto-config picks. The most-used entry point."""
+    import goldenmatch.core.pipeline as P
+    from goldenmatch.config.schemas import GoldenMatchConfig
+
+    cfg = GoldenMatchConfig(matchkeys=[], **_prep_disabled())
     return P.run_dedupe_df(_people_table(), cfg)
 
 
 CASES: dict[str, Callable[[], Any]] = {
     "exact": case_exact,
     "default_prep": case_default_prep,
+    "weighted_fuzzy": case_weighted_fuzzy,
+    "probabilistic": case_probabilistic,
+    "quality_weighting": case_quality_weighting,
+    "zero_config": case_zero_config,
 }

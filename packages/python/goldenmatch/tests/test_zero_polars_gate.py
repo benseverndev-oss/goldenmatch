@@ -18,7 +18,6 @@ _PROBE = Path(__file__).parent / "_zero_polars_probe.py"
 
 import pytest
 
-
 sys.path.insert(0, str(Path(__file__).parent))
 from _zero_polars_cases import CASES, KNOWN_POLARS_DEPENDENT  # noqa: E402
 
