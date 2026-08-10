@@ -132,6 +132,10 @@ def _start_heartbeat(interval: float = HEARTBEAT_SECONDS) -> None:
                     if line.startswith("MemAvailable:"):
                         return int(line.split()[1]) / 1e6  # kB -> GB
         except OSError:
+            # /proc absent or unreadable (non-Linux dev box, restricted
+            # container). Deliberately silent: the heartbeat is diagnostics for a
+            # lane that is already dying, and must never be the thing that kills
+            # it. The caller renders None as "?" and keeps sampling rss.
             pass
         return None
 
@@ -140,6 +144,10 @@ def _start_heartbeat(interval: float = HEARTBEAT_SECONDS) -> None:
             with open("/proc/self/statm", encoding="utf-8") as fh:
                 return int(fh.read().split()[1]) * page / 1e9
         except (OSError, IndexError, ValueError):
+            # Same best-effort contract as _mem_available_gb, plus the parse
+            # errors: statm's format is stable on Linux but this must not raise
+            # on a platform where it is absent or shaped differently. A None rss
+            # skips the sample entirely rather than printing a misleading 0.0.
             pass
         return None
 
