@@ -37,9 +37,10 @@ on:
         type: boolean
         default: true
 
-# The job commits the refreshed SoT report back to the branch, so it needs write.
+# The refreshed SoT report lands via a bot PR (scripts/open_data_pr.sh), which
+# authenticates with its own PAT, so GITHUB_TOKEN itself only needs read.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   benchmarks:
@@ -50,7 +51,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
-      contents: write
+      contents: read
     env:
       DATASETS: ${{ inputs.datasets || 'all' }}
       WITH_LLM: ${{ inputs.with_llm || false }}
@@ -130,22 +131,33 @@ jobs:
             --report docs/benchmarks/latest-results.md \
             --summary-md "$GITHUB_STEP_SUMMARY"
 
-      - name: Commit refreshed report to the branch
+      - name: Land the refreshed report via a bot PR
         # Only a full 'all' run is a complete SoT — a single-dataset dispatch must
         # not clobber the doc with a partial table. Scheduled runs always use 'all'.
+        #
+        # This used to `git push` to main, which the protect-main ruleset rejects
+        # (GH013); the step has therefore been dead since the merge queue landed,
+        # silently, because it only runs on the weekly 'all' schedule and sits
+        # behind an earlier failure. Routed through the merge queue like any
+        # other change now. Note the commit subject no longer carries a CI-skip
+        # directive: it must go through ci-required to merge at all.
         if: steps.prereqs.outputs.configured == 'true' && env.DATASETS == 'all'
         shell: bash
+        env:
+          GM_BOT_TOKEN: ${{ secrets.GM_BOT_TOKEN }}
+          PR_BODY: |
+            Refreshed benchmark source-of-truth from the weekly native run
+            (`.github/workflows/benchmarks.yml` → `scripts/run_benchmarks.py`).
+
+            These are the published numbers on the perf path; the report is
+            regenerated wholesale, so read the diff rather than the commit.
         run: |
-          set -euo pipefail
-          if git diff --quiet -- docs/benchmarks/latest-results.md docs/benchmarks/latest-results.json; then
-            echo "No benchmark change."
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/benchmarks/latest-results.md docs/benchmarks/latest-results.json
-          git commit -m "chore(benchmarks): refresh native results [skip ci]"
-          git push
+          bash scripts/open_data_pr.sh \
+            bot/benchmark-results \
+            "chore(benchmarks): refresh native results" \
+            "chore(benchmarks): refresh native benchmark results" \
+            docs/benchmarks/latest-results.md \
+            docs/benchmarks/latest-results.json
 
       - name: Run DQbench (with LLM)
         if: steps.prereqs.outputs.configured == 'true' && env.WITH_LLM == 'true'
