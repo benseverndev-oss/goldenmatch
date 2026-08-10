@@ -11,19 +11,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   (`KeyError: 'Field "__model__" does not exist in schema'`).** Bisected from
   the weekly `benchmarks` Abt-Buy failure to the polars->arrow `dedupe_df`
   eviction: two separate defects, both only reachable once a polars input
-  started taking the arrow lane. (1) STAGE ORDER — the dedupe pipeline's arrow
+  started taking the arrow lane. (1) STAGE ORDER -- the dedupe pipeline's arrow
   lane derived matchkeys BEFORE running domain extraction, but domain
   extraction is what materializes the `__brand__` / `__model__` /
   `__title_key__` columns auto-config's matchkeys reference, so
   `derive_matchkey` reached a column that did not exist yet. The classic lane
   and the match pipeline's arrow lane already ran domain extraction first; the
   dedupe arrow lane now matches them. (2) THREE UN-PORTED `df.columns` READS in
-  `core/domain.py` — `pa.Table.columns` is a list of ChunkedArrays, not names,
+  `core/domain.py` -- `pa.Table.columns` is a list of ChunkedArrays, not names,
   so `_emit_domain_profile` raised `'ChunkedArray' object has no attribute
   'startswith'` (only under a profile capture, which is why the existing
   arrow-lane tests missed it and the auto-config controller always hit it), and
   the guards in `_detect_product_subdomain` and `_extract_biblio_features_df`
-  SILENTLY answered False for every membership test — pinning subdomain
+  SILENTLY answered False for every membership test -- pinning subdomain
   detection to its "electronics" fallback and skipping bibliographic extraction
   entirely, with no error either time. All frame access in that module now goes
   through the seam. Net effect on the benchmark input: the auto-config
