@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 457,
+      "module_count": 458,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7088,6 +7088,18 @@
             "_truncate_lineage",
             "connected_components",
             "connected_components_scale"
+          ]
+        },
+        {
+          "module": "goldenmatch.sail.deps",
+          "file": "packages/python/goldenmatch/goldenmatch/sail/deps.py",
+          "purpose": "Ship the client's Python environment to Spark executors (P1).",
+          "defines": [
+            "executor_probe",
+            "ship_python_environment"
+          ],
+          "imports": [
+            "goldenmatch.core._native_loader"
           ]
         },
         {
