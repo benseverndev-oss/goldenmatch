@@ -84,9 +84,21 @@ jobs:
               if mod is not None:
                   has = hasattr(mod, "score_field_pairwise")
                   print("  PUBLISHED wheel carries score_field_pairwise:", has)
-                  if not has:
-                      print("  ^ P3 condition 1 NOT met: the published wheel predates the"
-                            " symbol; republish before lifting the gate (#688).")
+                  # BEHAVIOUR, not just presence. The symbol exists on the f32
+                  # <= 0.1.20 wheels too, so presence proves nothing: an f32
+                  # result changes match decisions at round thresholds. The gate
+                  # was lifted on 0.1.21's f64 kernel, so assert the width.
+                  if has:
+                      import pyarrow as _pa
+                      _r = mod.score_field_pairwise(
+                          _pa.array(["Jonathan"], type=_pa.large_string()),
+                          _pa.array(["Jonothan"], type=_pa.large_string()), 0)
+                      _w = getattr(getattr(_r, "dtype", None), "itemsize", 0)
+                      print(f"  PUBLISHED wheel score dtype itemsize: {_w} (need 8 = f64)")
+                      if _w < 8:
+                          raise SystemExit(
+                              "published goldenmatch-native returns narrow floats; "
+                              "sail_scoring is enabled and needs >=0.1.21's f64 kernel")
           except Exception as exc:  # noqa: BLE001
               print("  native kernel probe failed (not fatal):", exc)
           print("shipped env OK")

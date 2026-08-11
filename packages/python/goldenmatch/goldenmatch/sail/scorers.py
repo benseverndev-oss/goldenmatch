@@ -26,7 +26,10 @@ A tolerance is fine for a score you report and not for one you THRESHOLD. See
 spec 2026-08-10-spark-native-execution-design section 6."""
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # SQL-callable names (match the matchkey scorer names the spine supports).
 _SUPPORTED = ("jaro_winkler", "levenshtein", "token_sort")
@@ -38,6 +41,30 @@ _NATIVE_SCORER_IDS: dict[str, int] = {
     "levenshtein": 1,
     "token_sort": 2,
 }
+
+
+_NATIVE_SCORER_F32_WARNED = False
+
+
+def _warn_native_scorer_wheel_too_old_once(dtype: Any) -> None:
+    """Warn once when the installed native wheel returns narrow floats.
+
+    goldenmatch-native < 0.1.21 narrowed `score_field_pairwise` to f32, which
+    changes match decisions at round thresholds. We fall back to the pure floor
+    (correct, slower) rather than take the faster wrong answer -- but silence
+    here would look exactly like "native is not installed", so say it once.
+    """
+    global _NATIVE_SCORER_F32_WARNED
+    if _NATIVE_SCORER_F32_WARNED:
+        return
+    _NATIVE_SCORER_F32_WARNED = True
+    logger.warning(
+        "goldenmatch-native returns %s from score_field_pairwise; native Spark "
+        "scoring is DISABLED for this session because narrow floats change match "
+        "decisions at round thresholds. Upgrade to goldenmatch-native>=0.1.21 "
+        "for the f64 kernel.",
+        dtype,
+    )
 
 
 def _pure_scores(scorer_name: str, a: Any, b: Any) -> list[float]:
@@ -85,10 +112,22 @@ def _native_scores(scorer_name: str, a: Any, b: Any) -> Any | None:
 
         aa = pa.array(list(a), type=pa.large_string())
         bb = pa.array(list(b), type=pa.large_string())
-        return native.score_field_pairwise(aa, bb, scorer_id)
+        out = native.score_field_pairwise(aa, bb, scorer_id)
     except Exception:
         # Any FFI / pyarrow hiccup falls through to the pure floor.
         return None
+
+    # BEHAVIOUR guard, not a symbol guard. `score_field_pairwise` exists on the
+    # f32 goldenmatch-native <= 0.1.20 wheels as well, so the loader's
+    # symbol-presence check cannot tell them apart -- and an f32 result changes
+    # MATCH DECISIONS at round thresholds (a pure 0.95 arrives as 0.949999988,
+    # so `>= 0.95` flips; measured on ordinary surname pairs). An older installed
+    # wheel must degrade to the pure floor rather than silently reintroduce that.
+    dtype = getattr(out, "dtype", None)
+    if dtype is not None and getattr(dtype, "itemsize", 0) < 8:
+        _warn_native_scorer_wheel_too_old_once(dtype)
+        return None
+    return out
 
 
 def score_batch(scorer_name: str, a: Any, b: Any) -> Any:

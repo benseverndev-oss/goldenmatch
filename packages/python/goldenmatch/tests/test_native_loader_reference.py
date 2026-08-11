@@ -76,16 +76,32 @@ def test_simhash_shares_the_sketch_kernel(monkeypatch) -> None:
     assert nl.native_enabled("sketch") is True
 
 
-def test_sail_scoring_stays_fallback_even_with_symbol(monkeypatch) -> None:
-    """sail_scoring is f32-vs-f64 divergent -> _FALLBACK_ONLY: never native under
-    auto even when the kernel symbol is present."""
+def test_sail_scoring_is_native_capable_when_the_symbol_is_present(monkeypatch) -> None:
+    """sail_scoring LEFT _FALLBACK_ONLY (2026-08-11).
+
+    It was fallback-only because score_field_pairwise narrowed to f32, which
+    changed match decisions at round thresholds. goldenmatch-native 0.1.21
+    returns f64, so the divergence was removed at the source rather than
+    tolerated, and the loader now treats it like any other component.
+
+    NOTE the loader gate is SYMBOL presence, and the symbol exists on the old f32
+    wheels too -- so this alone is not sufficient. The width check lives at the
+    call site and is pinned by tests/test_sail_native_wheel_guard.py.
+    """
 
     class FakeNative:
         score_field_pairwise = staticmethod(lambda *a, **k: None)
 
     monkeypatch.setattr(nl, "_native", FakeNative)
     monkeypatch.delenv("GOLDENMATCH_NATIVE", raising=False)
-    assert nl.native_enabled("sail_scoring") is False
+    assert nl.native_enabled("sail_scoring") is True
+
+
+def test_fallback_only_is_empty_but_the_mechanism_survives() -> None:
+    """Nothing is fallback-only today. The set must remain the place a proven
+    divergence goes, so a future one is DECLARED rather than quietly enabled."""
+    assert nl._FALLBACK_ONLY == frozenset()
+    assert isinstance(nl._FALLBACK_ONLY, frozenset)
 
 
 def test_env_zero_forces_fallback(monkeypatch) -> None:

@@ -7185,6 +7185,7 @@
           "defines": [
             "_native_scores",
             "_pure_scores",
+            "_warn_native_scorer_wheel_too_old_once",
             "make_scorer_udf",
             "score_batch"
           ],
