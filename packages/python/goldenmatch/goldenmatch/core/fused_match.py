@@ -419,7 +419,7 @@ def run_match_fused_fs_arrow(
         _ensure_fs_name_refdata,
         _field_values_from_list,
         _fs_calibration_mode,
-        compute_thresholds,
+        _fs_link_threshold,
         fs_weight_range,
         prior_weight,
     )
@@ -466,10 +466,16 @@ def run_match_fused_fs_arrow(
     # min/max sum would miss (which would mis-normalize every fused NE score).
     min_w, max_w = fs_weight_range(em_result, mk)
     weight_range = max_w - min_w
-    if mk.link_threshold is not None:
-        link_threshold = float(mk.link_threshold)
-    else:
-        link_threshold, _ = compute_thresholds(em_result, calibrated=calibrated)
+    # #2483: resolve through the shared helper, not a hand-rolled two-step.
+    # `_fs_link_threshold` is the "so they cannot drift" extraction from #1804
+    # item 4 and applies THREE steps -- configured `mk.link_threshold`, then the
+    # EM-calibrated per-dataset cutoff, then the calibration-aware default. This
+    # path implemented only the first and third, so whenever EM produced a
+    # calibrated cutoff (GOLDENMATCH_FS_CALIBRATE_THRESHOLD) the fused route
+    # silently ignored it and used the fixed 0.50 while the scalar/vectorized/
+    # batched routes honoured it -- the same config cutting differently
+    # depending on which scorer the router happened to pick.
+    link_threshold = float(_fs_link_threshold(mk, em_result, calibrated))
     scorer_ids = [_FUSED_FS_SCORER_IDS[f.scorer] for f in mk.fields]
     levels = [int(f.levels) for f in mk.fields]
     partials = [float(f.partial_threshold) for f in mk.fields]

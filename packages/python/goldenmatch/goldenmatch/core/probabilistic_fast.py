@@ -71,7 +71,11 @@ def _resolve_probabilistic_fast_path(
       - mk.negative_evidence is empty.
     """
     from goldenmatch.core.matchkey import _xform_sig
-    from goldenmatch.core.probabilistic import compute_thresholds, fs_weight_range
+    from goldenmatch.core.probabilistic import (
+        _fs_calibration_mode,
+        _fs_link_threshold,
+        fs_weight_range,
+    )
 
     if mk.type != "probabilistic":
         return None
@@ -112,12 +116,16 @@ def _resolve_probabilistic_fast_path(
             [float(w) for w in weights],
         ))
 
-    # Resolve threshold the same way the slow path does.
-    if mk.link_threshold is not None:
-        link_threshold = float(mk.link_threshold)
-    else:
-        link_threshold, _ = compute_thresholds(em_result)
-        link_threshold = float(link_threshold)
+    # Resolve threshold the same way the slow path does -- #2483: which means
+    # THROUGH `_fs_link_threshold`, not a hand-rolled copy of two of its three
+    # steps. The old code went configured -> default and skipped the
+    # EM-calibrated per-dataset cutoff in between, so this path disagreed with
+    # the scalar/vectorized/batched scorers whenever EM produced one.
+    # `calibrated` is derived exactly as `compute_thresholds` defaulted it here,
+    # so the no-calibrated-cutoff case stays byte-identical.
+    link_threshold = float(
+        _fs_link_threshold(mk, em_result, _fs_calibration_mode() == "posterior")
+    )
 
     # Centralized range (fs_weight_range) rather than a hand-rolled sum --
     # this fast path's per-pair loop doesn't score NE fields, but the
