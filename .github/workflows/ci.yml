@@ -3022,9 +3022,41 @@ jobs:
       - name: Confirm Sail is absent
         run: |
           .venv/bin/python -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('pysail') is None else 'pysail present; this lane must exercise real Spark')"
+      # P1: real Spark forks a Python worker with its own env, so the client's
+      # site-packages are absent -- that was P0's entire failure class. Build a
+      # PURPOSE-BUILT runtime venv and pack that, rather than packing
+      # CI's own uv-created .venv. Two reasons:
+      #   1. venv-pack rejects a uv venv outright ("Current environment is not a
+      #      virtual environment"), so `-p` at a stdlib venv is the supported path.
+      #   2. What a user should ship is goldenmatch + its RUNTIME deps, not a dev
+      #      environment carrying pytest and the whole workspace.
+      # CI is Linux, so this matches the executor platform by construction -- the
+      # trap documented in goldenmatch/sail/deps.py.
+      - name: Build + pack a runtime venv for the executors
+        run: |
+          set -euo pipefail
+          python -m venv /tmp/gmenv
+          /tmp/gmenv/bin/pip install --upgrade pip
+          # goldenmatch does NOT depend on pandas, but `pandas_udf` needs it in
+          # the WORKER -- that is why P0 logged `No module named 'pandas'` 13
+          # times alongside the goldenmatch ones. pyarrow is goldenmatch's own
+          # dep but is named here so the worker contract is explicit rather than
+          # transitive. NOT -q: a silent pip failure is how you ship an env that
+          # unpacks fine and imports nothing.
+          /tmp/gmenv/bin/pip install ./packages/python/goldenmatch pandas pyarrow
+          echo "--- shipped env contents ---"
+          /tmp/gmenv/bin/pip list | grep -iE "goldenmatch|goldenphonetic|pandas|pyarrow"
+          # cd out of the repo: its ROOT DIRECTORY is itself named `goldenmatch`,
+          # so a check run from there can import the source tree instead of the
+          # installed package and pass while the env is empty.
+          (cd /tmp && /tmp/gmenv/bin/python -c "import goldenmatch, goldenmatch.core.strsim, pandas, pyarrow; print('shipped env imports OK')")
+          uv pip install venv-pack
+          .venv/bin/venv-pack -p /tmp/gmenv -o gm_env.tar.gz --force
+          ls -lh gm_env.tar.gz
       - name: Sail tests against Apache Spark Connect
         env:
           GOLDENMATCH_SPARK_REMOTE: "local[*]"
+          GOLDENMATCH_SPARK_PYENV: "gm_env.tar.gz"
         run: |
           .venv/bin/python -c "import pyspark; print('pyspark', pyspark.__version__)"
           .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_sail_*.py -v --timeout=600 \
