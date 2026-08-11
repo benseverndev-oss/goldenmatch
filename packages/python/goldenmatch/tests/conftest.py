@@ -205,3 +205,44 @@ def sample_parquet(tmp_path) -> Path:
     })
     pq.write_table(table, path)
     return path
+
+
+@pytest.fixture(scope="module")
+def spark():
+    """A Spark Connect session, from whichever server the env selects.
+
+    Backend-agnostic ON PURPOSE (P0, spec
+    ``2026-08-10-spark-native-execution-design``). ``GOLDENMATCH_SPARK_REMOTE``:
+
+      unset             -> spawn a local pysail ``SparkConnectServer`` (prior behaviour)
+      ``"local[*]"``    -> Apache Spark's own local Connect server (pyspark >= 4)
+      ``"sc://host:p"`` -> an already-running Connect endpoint
+
+    Nine test files each carried a copy of this hardcoding
+    ``pysail.spark.SparkConnectServer``. That is *why* the tier had never been
+    run against real Spark: the tests could not express it. Every import is
+    inside the body, so a suite that never requests this fixture pays nothing.
+    """
+    import os
+
+    from pyspark.sql import SparkSession
+
+    remote = os.environ.get("GOLDENMATCH_SPARK_REMOTE")
+
+    if not remote:
+        pytest.importorskip("pysail")
+        from pysail.spark import SparkConnectServer
+
+        server = SparkConnectServer()
+        server.start()
+        _, port = server.listening_address
+        sess = SparkSession.builder.remote(f"sc://localhost:{port}").getOrCreate()
+        yield sess
+        sess.stop()
+        server.stop()
+        return
+
+    # Real Spark owns its own server lifecycle; nothing to stop but the session.
+    sess = SparkSession.builder.remote(remote).getOrCreate()
+    yield sess
+    sess.stop()

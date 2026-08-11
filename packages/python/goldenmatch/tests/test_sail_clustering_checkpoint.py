@@ -7,22 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("pysail")
 pytest.importorskip("pyspark")
-
-
-@pytest.fixture(scope="module")
-def spark():
-    from pysail.spark import SparkConnectServer
-    from pyspark.sql import SparkSession
-
-    server = SparkConnectServer()
-    server.start()
-    _, port = server.listening_address
-    sess = SparkSession.builder.remote(f"sc://localhost:{port}").getOrCreate()
-    yield sess
-    sess.stop()
-    server.stop()
 
 
 def _partition(out_df):

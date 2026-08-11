@@ -6,7 +6,7 @@ Two test tiers:
     need no Sail server -- they run anywhere (incl. the normal python lane).
   * SERVER tests (the builders, the 3-part parity gate, determinism) use an
     in-process Sail Spark Connect server; the ``spark`` fixture ``importorskip``s
-    ``pysail``/``pyspark`` so they SKIP without the [sail] extra and run in the
+    ``pyspark`` so they SKIP without a Spark client and run in the
     `sail` CI lane.
 
 Parity gate (entity-id-INDEPENDENT, since one-box mints UUIDv7 while S5 mints
@@ -19,6 +19,9 @@ from __future__ import annotations
 from collections import defaultdict
 
 import pytest
+
+pytest.importorskip("pyspark")
+
 from goldenmatch.sail.identity import entity_id_for_members, record_id_for_row
 
 # --------------------------------------------------------------------------
@@ -58,22 +61,6 @@ def test_entity_id_distinct_for_distinct_members():
 # --------------------------------------------------------------------------
 # Tier 2: server-backed tests (in-process Sail Spark Connect server).
 # --------------------------------------------------------------------------
-
-
-@pytest.fixture(scope="module")
-def spark():
-    pytest.importorskip("pysail")
-    pytest.importorskip("pyspark")
-    from pysail.spark import SparkConnectServer
-    from pyspark.sql import SparkSession
-
-    server = SparkConnectServer()
-    server.start()
-    _, port = server.listening_address
-    sess = SparkSession.builder.remote(f"sc://localhost:{port}").getOrCreate()
-    yield sess
-    sess.stop()
-    server.stop()
 
 
 def test_derive_record_ids_pk(spark):
