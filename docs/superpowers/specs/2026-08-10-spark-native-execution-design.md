@@ -95,6 +95,65 @@ can be pointed at.
 
 ---
 
+## 2a. P0 RESULT — the tier runs on real Spark Connect (2026-08-11)
+
+Run [31496638072](https://github.com/benseverndev-oss/goldenmatch/actions/runs/31496638072),
+`spark_connect` lane: pyspark 4 against Spark's own `local[*]` Connect server,
+pysail asserted absent.
+
+```
+20 failed, 36 passed, 8 skipped in 408.49s
+```
+
+The control passed: the `sail` lane (pysail) was **green** on the same commit, so
+the fixture extraction is behaviour-preserving and the delta is the backend.
+
+### The headline: no Spark Connect API gaps were found
+
+36 tests pass. Session creation, DataFrame ops, SQL, config validation, and the
+whole `test_sail_r3_feature_gate.py` surface all work unmodified against real
+Spark. **The "tier is backend-agnostic" inference is confirmed.** P1–P6 are not
+reshaped.
+
+### All 20 failures have ONE cause
+
+```
+ModuleNotFoundError: No module named 'goldenmatch'   (73x)
+ModuleNotFoundError: No module named 'pandas'        (13x)
+```
+
+raised inside the **Python UDF worker**. The correlation is exact: every failing
+test executes the pipeline (and therefore a `pandas_udf`); every passing test
+does not. Failures cluster in `clustering_parity`, `determinism`,
+`golden_parity`, `identity_incremental`, `score_parity`.
+
+**Classification: (c) environment — NOT (a) an API gap, NOT (b) a Sail-ism.**
+
+### What this proves, and it is the important part
+
+**The pysail lane structurally cannot catch this.** Sail's Connect server runs
+**in-process**, so its Python worker shares the client's interpreter and
+`import goldenmatch` simply works. Real Spark **forks a separate Python worker**
+with its own environment. Every "it works distributed" signal from S1–S5 CI was
+produced by a harness that could not exercise the executor dependency path at
+all. (The 2026-06-15 GKE run did exercise it — by baking the deps into the worker
+image.)
+
+So P1 is **not plumbing, it is the blocker**, and P0 has demonstrated that
+empirically rather than by argument. `addArtifacts` is precisely the mechanism
+these 20 failures need.
+
+### Consequences
+
+- **P1 is promoted** to the first real work item, with its exit criterion
+  unchanged and now clearly load-bearing: assert the kernel *loaded on an
+  executor*, do not infer it.
+- **The `spark_connect` lane must stay red until P1 lands.** That is the correct
+  state. It goes into `ci-required` at P2, once P1 makes it green.
+- No spec change is needed to §3–§9: the architecture survives the experiment.
+
+---
+
 ## 3. Decision: Apache Spark Connect is the target; Sail is removed
 
 **Sail's only remaining job is replaceable by Spark itself.**
