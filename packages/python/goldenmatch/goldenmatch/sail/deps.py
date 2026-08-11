@@ -37,9 +37,15 @@ def ship_python_environment(
     **Platform trap.** The archive must be built for the EXECUTOR platform
     (manylinux), not the client's. A venv packed on macOS or Windows will upload
     and unpack happily, then fail to execute on Linux executors. Worse, the
-    scorer falls back to pure rapidfuzz on any error, so a mismatched archive can
-    look like success while delivering none of the native speed. Build it on the
-    target platform (CI is the obvious place).
+    scorer falls back to the pure ``core.strsim`` floor on any error, so a
+    mismatched archive can look like success while delivering none of the native
+    speed. Build it on the target platform (CI is the obvious place).
+
+    **What must be in it.** ``goldenmatch`` plus **pandas** and **pyarrow**.
+    goldenmatch does not depend on pandas, but ``pandas_udf`` requires it in the
+    worker -- installing goldenmatch alone ships an archive that unpacks cleanly
+    and cannot run a single UDF. rapidfuzz is NOT needed: the scorer floor is
+    goldenmatch's own ``core.strsim``, and rapidfuzz is a dev-only extra.
 
     Args:
         spark: an active Spark **Connect** session.
@@ -59,7 +65,7 @@ def executor_probe(spark: Any) -> dict[str, Any]:
     executes in a Python worker, so reaching the probe at all establishes that we
     are off the driver.
 
-    Returns a dict with ``ran_on``, ``goldenmatch``, ``rapidfuzz``, ``pandas``,
+    Returns a dict with ``ran_on``, ``goldenmatch``, ``strsim``, ``pandas``,
     ``pyarrow``, ``native_kernel`` and ``executable``.
 
     ``native_kernel: False`` is **not** a dependency failure on its own --
@@ -94,7 +100,9 @@ def executor_probe(spark: Any) -> dict[str, Any]:
             {
                 "ran_on": "executor",
                 "goldenmatch": _importable("goldenmatch"),
-                "rapidfuzz": _importable("rapidfuzz"),
+                # The scorer floor is goldenmatch's OWN strsim, not rapidfuzz --
+                # rapidfuzz is a dev-only extra and must NOT be shipped.
+                "strsim": _importable("goldenmatch.core.strsim"),
                 "pandas": _importable("pandas"),
                 "pyarrow": _importable("pyarrow"),
                 "native_kernel": native,

@@ -37,7 +37,13 @@ def test_executor_can_import_goldenmatch(spark):
     assert report["goldenmatch"] is True, (
         f"goldenmatch is not importable on the executor: {report}"
     )
-    assert report["rapidfuzz"] is True, f"rapidfuzz missing on the executor: {report}"
+    # The scorer floor is goldenmatch's OWN strsim. rapidfuzz is a dev-only
+    # extra -- asserting it here would force shipping a dependency the product
+    # deliberately removed (it was replaced by owned bit-parallel strsim).
+    assert report["strsim"] is True, f"goldenmatch.core.strsim missing: {report}"
+    assert report["pandas"] is True, (
+        f"pandas missing on the executor -- pandas_udf cannot run: {report}"
+    )
 
 
 @_needs_real_spark

@@ -3047,11 +3047,11 @@ jobs:
           # unpacks fine and imports nothing.
           /tmp/gmenv/bin/pip install ./packages/python/goldenmatch pandas pyarrow
           echo "--- shipped env contents ---"
-          /tmp/gmenv/bin/pip list | grep -iE "goldenmatch|rapidfuzz|pandas|pyarrow"
+          /tmp/gmenv/bin/pip list | grep -iE "goldenmatch|goldenphonetic|pandas|pyarrow"
           # cd out of the repo: its ROOT DIRECTORY is itself named `goldenmatch`,
           # so a check run from there can import the source tree instead of the
           # installed package and pass while the env is empty.
-          (cd /tmp && /tmp/gmenv/bin/python -c "import goldenmatch, rapidfuzz, pandas, pyarrow; print('shipped env imports OK')")
+          (cd /tmp && /tmp/gmenv/bin/python -c "import goldenmatch, goldenmatch.core.strsim, pandas, pyarrow; print('shipped env imports OK')")
           uv pip install venv-pack
           .venv/bin/venv-pack -p /tmp/gmenv -o gm_env.tar.gz --force
           ls -lh gm_env.tar.gz
