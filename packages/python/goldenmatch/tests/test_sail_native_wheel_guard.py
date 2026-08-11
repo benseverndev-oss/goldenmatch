@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from goldenmatch.sail import scorers
+from goldenmatch.spark import scorers
 
 _A = ["Jonathan", "Anderson"]
 _B = ["Jonothan", "Andersen"]

@@ -31,7 +31,7 @@ _needs_real_spark = pytest.mark.skipif(
 @_needs_real_spark
 def test_executor_can_import_goldenmatch(spark):
     """The P1 proof."""
-    from goldenmatch.sail.deps import executor_probe
+    from goldenmatch.spark.deps import executor_probe
 
     report = executor_probe(spark)
     assert report["goldenmatch"] is True, (
@@ -50,7 +50,7 @@ def test_executor_can_import_goldenmatch(spark):
 def test_probe_actually_ran_on_the_executor(spark):
     """Guard on the guard: a probe that silently reported the DRIVER's
     interpreter would pass while proving nothing at all."""
-    from goldenmatch.sail.deps import executor_probe
+    from goldenmatch.spark.deps import executor_probe
 
     report = executor_probe(spark)
     assert report["ran_on"] == "executor", report
@@ -65,7 +65,7 @@ def test_native_kernel_presence_is_reported_not_asserted(spark):
     you the dependency delivery. This test pins the distinction so a `false` here
     is never misread as a P1 regression.
     """
-    from goldenmatch.sail.deps import executor_probe
+    from goldenmatch.spark.deps import executor_probe
 
     report = executor_probe(spark)
     assert "native_kernel" in report, report

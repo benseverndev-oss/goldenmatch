@@ -34,7 +34,7 @@ T0 = "2026-01-01T00:00:00"  # prior-run timestamp for existing nodes
 def test_incremental_is_exported_without_sail_extra():
     """The Layer-2 entry point must be importable with no pyspark, same as the
     create path -- consumers pin the contract without a Spark runtime."""
-    from goldenmatch.sail import build_identity_graph_incremental  # noqa: F401
+    from goldenmatch.spark import build_identity_graph_incremental  # noqa: F401
 
 
 def test_incremental_signature_is_additive():
@@ -43,7 +43,7 @@ def test_incremental_signature_is_additive():
     import dataclasses
     import inspect
 
-    from goldenmatch.sail import (
+    from goldenmatch.spark import (
         IdentityGraphFrames,
         build_identity_graph,
         build_identity_graph_incremental,
@@ -145,7 +145,7 @@ def test_no_prior_state_is_the_create_path(spark):
     """`existing_*=None` must be the create path VERBATIM -- same entity ids as
     build_identity_graph, so calling the incremental entry point
     unconditionally is safe on a fresh store."""
-    from goldenmatch.sail.identity import (
+    from goldenmatch.spark.identity import (
         build_identity_graph,
         build_identity_graph_incremental,
     )
@@ -167,7 +167,7 @@ def test_no_prior_state_is_the_create_path(spark):
 def test_absorb_reuses_the_existing_entity(spark):
     """One overlapping entity -> the cluster joins it. The NEW record lands on
     the SAME entity_id (not a freshly minted one), which is the whole point."""
-    from goldenmatch.sail.identity import build_identity_graph_incremental
+    from goldenmatch.spark.identity import build_identity_graph_incremental
 
     # people:1 already belongs to ent:A. The run clusters it with a new people:2.
     src = _source(spark, [(0, 1), (1, 2)])
@@ -204,7 +204,7 @@ def test_absorb_reuses_the_existing_entity(spark):
 def test_merge_retires_losers_into_the_winner(spark):
     """Two overlapping entities -> merge. Losers go status=merged_into with
     merged_into set, and their OTHER records follow them to the winner."""
-    from goldenmatch.sail.identity import build_identity_graph_incremental
+    from goldenmatch.spark.identity import build_identity_graph_incremental
 
     # ent:A holds people:1; ent:B holds people:2 + people:9 (9 is NOT in this
     # run, so it is the record that must FOLLOW its entity into the winner).
@@ -247,7 +247,7 @@ def test_records_frame_is_a_delta_not_a_restatement(spark):
 
     (Learned by getting a fixture wrong: `records` is what this run CHANGED.)
     """
-    from goldenmatch.sail.identity import build_identity_graph_incremental
+    from goldenmatch.spark.identity import build_identity_graph_incremental
 
     # people:9 belongs to ent:A, which WINS -> unchanged -> absent.
     src = _source(spark, [(0, 1), (1, 2)])
@@ -277,7 +277,7 @@ def test_winner_is_the_entity_holding_MOST_OF_THIS_CLUSTER(spark):
     winner must be ent:SMALL. A "largest entity wins" implementation passes
     every other test in this file and fails only this one.
     """
-    from goldenmatch.sail.identity import build_identity_graph_incremental
+    from goldenmatch.spark.identity import build_identity_graph_incremental
 
     src = _source(spark, [(0, 1), (1, 2), (2, 3)])
     asg = _assignments(spark, [(0, 100), (1, 100), (2, 100)])
@@ -305,7 +305,7 @@ def test_winner_is_the_entity_holding_MOST_OF_THIS_CLUSTER(spark):
 
 def test_merge_tie_breaks_on_oldest_created_at(spark):
     """Equal in-cluster counts -> oldest created_at wins (one-box `_node_age`)."""
-    from goldenmatch.sail.identity import build_identity_graph_incremental
+    from goldenmatch.spark.identity import build_identity_graph_incremental
 
     src = _source(spark, [(0, 1), (1, 2)])
     asg = _assignments(spark, [(0, 100), (1, 100)])
@@ -328,7 +328,7 @@ def test_merge_tie_breaks_on_oldest_created_at(spark):
 def test_unrelated_cluster_still_creates(spark):
     """A cluster with no overlap is a create even when the store is non-empty --
     absorb must not capture unrelated records."""
-    from goldenmatch.sail.identity import build_identity_graph_incremental
+    from goldenmatch.spark.identity import build_identity_graph_incremental
 
     src = _source(spark, [(0, 5), (1, 6)])
     asg = _assignments(spark, [(0, 200), (1, 200)])
@@ -351,7 +351,7 @@ def test_re_observation_is_idempotent(spark):
     """Re-running the SAME clusters against the store they produced changes no
     assignment and emits no absorb/create event -- the convergence property the
     create-only path lacks."""
-    from goldenmatch.sail.identity import build_identity_graph_incremental
+    from goldenmatch.spark.identity import build_identity_graph_incremental
 
     src = _source(spark, [(0, 1), (1, 2)])
     asg = _assignments(spark, [(0, 100), (1, 100)])

@@ -8,11 +8,11 @@ unrecognized WCC (would silently route to label-prop)."""
 from __future__ import annotations
 
 import pytest
-from goldenmatch.sail.pipeline import (
+from goldenmatch.spark.pipeline import (
     _SUPPORTED_WCC,
     _validate_sail_pipeline_supported,
 )
-from goldenmatch.sail.scorers import _SUPPORTED as _SUPPORTED_SCORERS
+from goldenmatch.spark.scorers import _SUPPORTED as _SUPPORTED_SCORERS
 
 
 def test_supported_config_passes():

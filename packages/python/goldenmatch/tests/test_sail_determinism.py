@@ -85,7 +85,7 @@ def test_wcc_partition_invariant_to_shuffle_partitions(spark, wcc_fn_name):
     order-independent by construction; this proves Sail's distribution doesn't
     break that for either the S2 (label-prop) or the scale (pointer-jumping)
     algorithm."""
-    from goldenmatch.sail import clustering
+    from goldenmatch.spark import clustering
 
     fn = getattr(clustering, wcc_fn_name)
     ids = list(range(12))
@@ -112,8 +112,8 @@ def test_pipeline_pair_set_and_partition_invariant_to_shuffle_partitions(spark):
     float-reduction determinism the WCC-only test cannot -- the dedup
     ``max(score)`` GROUP BY runs across partitions, the place a non-deterministic
     parallel reduction would surface."""
-    from goldenmatch.sail.clustering import connected_components_scale
-    from goldenmatch.sail.scoring import score_and_dedup
+    from goldenmatch.spark.clustering import connected_components_scale
+    from goldenmatch.spark.scoring import score_and_dedup
 
     pair_sets = []
     partitions = []

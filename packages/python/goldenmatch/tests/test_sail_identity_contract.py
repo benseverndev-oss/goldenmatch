@@ -17,7 +17,7 @@ import inspect
 
 def test_public_import_path_no_sail_extra():
     # The stable path. Must import without pyspark / the [sail] extra installed.
-    from goldenmatch.sail import (  # noqa: F401
+    from goldenmatch.spark import (  # noqa: F401
         EDGE_COLUMNS,
         EVENT_COLUMNS,
         NODE_COLUMNS,
@@ -28,7 +28,7 @@ def test_public_import_path_no_sail_extra():
 
 
 def test_identity_graph_frames_shape():
-    from goldenmatch.sail import IdentityGraphFrames
+    from goldenmatch.spark import IdentityGraphFrames
 
     assert dataclasses.is_dataclass(IdentityGraphFrames)
     fields = {f.name: f for f in dataclasses.fields(IdentityGraphFrames)}
@@ -41,7 +41,7 @@ def test_identity_graph_frames_shape():
 
 
 def test_build_identity_graph_signature():
-    from goldenmatch.sail import build_identity_graph
+    from goldenmatch.spark import build_identity_graph
 
     sig = inspect.signature(build_identity_graph)
     params = sig.parameters
@@ -57,7 +57,7 @@ def test_build_identity_graph_signature():
 
 
 def test_frozen_wire_schema():
-    from goldenmatch.sail import (
+    from goldenmatch.spark import (
         EDGE_COLUMNS,
         EVENT_COLUMNS,
         NODE_COLUMNS,
