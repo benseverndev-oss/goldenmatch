@@ -3026,11 +3026,23 @@ jobs:
       # site-packages are absent -- that was P0's entire failure class. Pack the
       # venv here (CI is Linux, so it matches the executor platform by
       # construction) and ship it via addArtifact at session time.
-      - name: Pack the client venv for the executors
+      # Build a PURPOSE-BUILT runtime venv and pack that, rather than packing
+      # CI's own uv-created .venv. Two reasons:
+      #   1. venv-pack rejects a uv venv outright ("Current environment is not a
+      #      virtual environment"), so `-p` at a stdlib venv is the supported path.
+      #   2. What a user should ship is goldenmatch + its RUNTIME deps, not a dev
+      #      environment carrying pytest and the whole workspace.
+      # CI is Linux, so this matches the executor platform by construction -- the
+      # trap documented in goldenmatch/sail/deps.py.
+      - name: Build + pack a runtime venv for the executors
         run: |
+          python -m venv /tmp/gmenv
+          /tmp/gmenv/bin/pip install -q --upgrade pip
+          /tmp/gmenv/bin/pip install -q ./packages/python/goldenmatch
           uv pip install venv-pack
-          .venv/bin/python -m venv_pack -o gm_env.tar.gz --force
+          .venv/bin/venv-pack -p /tmp/gmenv -o gm_env.tar.gz --force
           ls -lh gm_env.tar.gz
+          echo "shipped interpreter:"; /tmp/gmenv/bin/python -c "import goldenmatch, rapidfuzz; print('goldenmatch', goldenmatch.__version__ if hasattr(goldenmatch,'__version__') else 'ok')"
       - name: Sail tests against Apache Spark Connect
         env:
           GOLDENMATCH_SPARK_REMOTE: "local[*]"

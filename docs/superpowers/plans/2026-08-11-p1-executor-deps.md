@@ -267,9 +267,14 @@ here, and must be called out in the user docs where it is not.
 ## Notes
 
 - **Do not run locally.** pyspark + JVM OOMs the box.
-- If `venv_pack` cannot pack a `uv`-created venv (absolute-path relocation), fall
-  back to `python -m venv` for the packed env, or PEX. Record which was used —
-  it changes the user-facing instructions.
+- **CONFIRMED (run 31509239089):** `venv-pack` cannot pack a `uv`-created venv.
+  It fails with `VenvPackError: Current environment is not a virtual environment`
+  before any test runs. The lane now builds a **purpose-built stdlib venv**
+  (`python -m venv`), installs only `goldenmatch` into it, and packs that via
+  `venv-pack -p`. That is the better shape anyway: what a user ships is
+  goldenmatch plus its RUNTIME deps, not a dev environment carrying pytest and
+  the whole workspace. **This changes the user-facing instructions** — the docs
+  must not tell people to pack their working venv if they use uv.
 - Do **not** "fix" the lane by setting `spark.sql.execution.pyspark.python` to the
   client's `.venv` interpreter directly. It would go green in `local[*]` and prove
   nothing, because a real cluster has no such path. The archive is the point.
