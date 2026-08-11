@@ -2,6 +2,26 @@
 
 GoldenMatch is benchmarked against the [University of Leipzig entity resolution benchmark datasets](https://dbs.uni-leipzig.de/research/projects/benchmark-datasets-for-entity-resolution).
 
+## Getting the datasets
+
+The datasets are **not committed** (they are third-party data, and they bloat
+the sdist). Fetch them into `tests/benchmarks/datasets/`:
+
+```bash
+python scripts/fetch_benchmark_datasets.py            # DBLP-ACM, Abt-Buy, Amazon-GoogleProducts
+python scripts/fetch_benchmark_datasets.py DBLP-ACM   # just one
+python scripts/fetch_benchmark_datasets.py --list     # what is on disk, and what cannot be fetched
+```
+
+Idempotent, so it is safe to re-run. Each dataset honours a URL override
+(`GOLDENMATCH_DBLP_ACM_URL`, `GOLDENMATCH_ABT_BUY_URL`,
+`GOLDENMATCH_AMAZON_GOOGLE_URL`) for a mirror or a local `file://` copy.
+
+Two sets cannot be fetched this way and `--list` says so: **NCVR** is an NC
+voter roll extract that is not redistributable from a public URL, and **Febrl3**
+is generated rather than downloaded. Benchmark tests needing an absent dataset
+**skip** with a message naming the command to get it -- they do not fail.
+
 ## Leipzig Benchmark Results
 
 ### Best Results Per Dataset

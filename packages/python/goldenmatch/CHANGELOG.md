@@ -7,6 +7,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Fixed
+- **Benchmark tests skip on a missing dataset instead of erroring, and there is
+  now a script to fetch the datasets.** Every dataset under
+  `tests/benchmarks/datasets/` is gitignored on purpose, but three of the five
+  tests in `test_autoconfig_benchmarks.py` read one without first checking it
+  exists, so a clean checkout got a bare polars `FileNotFoundError` rather than
+  a skip (`test_abt_buy_autoconfig_offline` and `test_autoconfig_ncvr_meets_target`
+  already had the guard). They now skip with a reason naming the command that
+  gets the data. `scripts/fetch_benchmark_datasets.py` is that command -- the
+  "downloaded at runtime" half the `.gitignore` comment promised and nothing
+  implemented; the fetch had been hand-inlined as curl+unzip in ten places
+  across the bench workflows. It handles DBLP-ACM, Abt-Buy and
+  Amazon-GoogleProducts, is idempotent, takes a per-dataset URL override, and
+  `--list` reports the two sets it cannot fetch (NCVR, Febrl3) and why. No
+  library behaviour changed.
 - **Learned blocking gates rules on absolute full-frame cost, not on a ratio.**
   A rule was accepted when `reduction_ratio >= learned_min_reduction` (0.90 by
   default). That ratio is `1 - blocked_pairs / total_pairs`, and BOTH terms grow
