@@ -42,8 +42,7 @@ Each component maps to the native kernel symbol(s) its `auto` call site invokes 
 | `pprl_bloom` | `bloom_clk_batch` |  |
 | `perceptual` | `perceptual_phash_image` |  |
 | `documents` | `documents_parse_message_text`, `documents_schema_validate`, `documents_extract_instruction`, `documents_normalize_record`, `documents_template`, `documents_template_list`, `documents_classify_prompt`, `documents_parse_classify`, `documents_parse_structured` |  |
-
-**Kept pure-Python under `auto` (GOLDENMATCH_NATIVE reference-mode):** `sail_scoring`. These carry (or could bind) a native symbol that is known to diverge from the pure-Python reference, so they stay on the fallback path until their parity battery is green — reachable only via `GOLDENMATCH_NATIVE=1`.
+| `sail_scoring` | `score_field_pairwise` |  |
 
 ## How parity stays honest
 
