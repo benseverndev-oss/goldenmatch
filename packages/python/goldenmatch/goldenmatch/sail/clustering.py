@@ -14,6 +14,32 @@ from __future__ import annotations
 from typing import Any
 
 
+def _truncate_plan(df: Any) -> Any:
+    """Reset a DataFrame's query plan in place, cheaply. Returns ``df`` unchanged
+    on any backend that cannot.
+
+    Iterative joins against a frame's own derivatives grow the plan without
+    bound. ``localCheckpoint`` cuts it: in-memory, no shared storage, no config.
+    Where it is unavailable (notably Sail -- lakehq/sail#482 lists
+    persist/localCheckpoint/checkpoint as planned, and ``cache`` is a no-op) this
+    is a NO-OP by design: callers that need a hard barrier there pass a
+    ``checkpoint_dir`` and get the parquet round-trip instead
+    (``_truncate_lineage``).
+
+    Never raises. A backend without the primitive must still produce correct
+    output -- just slower, which is the documented Sail posture.
+    """
+    for attempt in ("localCheckpoint", "checkpoint"):
+        fn = getattr(df, attempt, None)
+        if fn is None:
+            continue
+        try:
+            return fn(eager=True)
+        except Exception:  # noqa: BLE001 - unsupported/unimplemented -> next
+            continue
+    return df
+
+
 def connected_components(
     pairs_df: Any,
     ids_df: Any,
@@ -50,9 +76,29 @@ def connected_components(
     )
 
     # Iterate to fixpoint. Bounded by component diameter; at S2 fixture scale
-    # this is 2-3 rounds. The convergence count is a driver scalar (cheap).
-    # NOTE for S4: cache/checkpoint `labels` each round + swap in large-star/
-    # small-star -- label-prop's O(diameter) won't bind at 100M chains.
+    # this is 2-3 rounds.
+    #
+    # P2a: `labels` MUST have its lineage truncated each round. Every round joins
+    # `labels` against derivatives of itself (nbr_min, then the convergence
+    # compare), so the plan grows ~2 joins per round, and the `changed` count is
+    # an ACTION that re-materializes the whole accumulated plan -- O(rounds^2)
+    # work, plus a plan the optimizer mis-estimates.
+    #
+    # This bit on BOTH backends, differently, which is what makes it the loop's
+    # fault rather than an engine's:
+    #   * Sail: no lineage primitive at all (cache is a no-op, localCheckpoint
+    #     unimplemented, lakehq/sail#482) -> recompute wedge at ~12K rows.
+    #   * real Spark: the deep self-similar plan gets mis-costed and the
+    #     optimizer builds a broadcast that exhausts the JVM heap
+    #     ("Not enough memory to build and broadcast the table").
+    # `autoBroadcastJoinThreshold=-1` only swaps one symptom for the other; the
+    # fix is to stop growing the plan.
+    #
+    # `connected_components_scale` already had this via a parquet barrier
+    # (_truncate_lineage) but it was opt-in and never applied HERE.
+    # `localCheckpoint()` is strictly better where available: in-memory, no
+    # shared storage, no config -- and it is precisely the primitive Sail lacked,
+    # so this is a concrete payoff of targeting real Spark.
     #
     # Spark Connect discipline: every join is on a SHARED COLUMN NAME (auto-
     # coalesced, no duplicate-column ambiguity), and the other side is RENAMED
@@ -90,7 +136,8 @@ def connected_components(
             .limit(1)
             .count()
         )
-        labels = new_labels
+        # Truncate BEFORE the next round consumes it (see the note above).
+        labels = _truncate_plan(new_labels)
         if changed == 0:
             break
 
@@ -223,6 +270,11 @@ def connected_components_scale(
         if changed == 0:
             break
         # Truncate the accumulated pointer-jump lineage on continuing rounds.
+        # P2a: the cheap in-memory cut runs ALWAYS (no config, no storage). The
+        # parquet barrier stays opt-in for backends without the primitive and for
+        # a HARD barrier at 100M, where an in-memory checkpoint can still be
+        # evicted and recomputed.
+        labels = _truncate_plan(labels)
         if checkpoint_dir and checkpoint_interval and (round_idx + 1) % checkpoint_interval == 0:
             labels = _truncate_lineage(labels, checkpoint_dir, f"wcc_round_{round_idx + 1}")
 
