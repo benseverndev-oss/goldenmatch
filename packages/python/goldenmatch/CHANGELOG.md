@@ -7,6 +7,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Fixed
+- **The suggestion verify gate compared its baseline against a different
+  procedure than its candidates.** `_verify_suggestions` keeps a suggestion when
+  `cand_health >= baseline_health - 1e-6`. Candidates always come from
+  `engine._run_pipeline`; the baseline came from whatever clusters the caller
+  passed. For `review_config` those coincide, but `suggest_from_result` passes
+  `DedupeResult.clusters`, produced by `dedupe_df` -- which standardizes the frame
+  first and therefore clusters a different population than the raw frame the
+  candidates run against. Measured on the 80-row person fixture: 39 clusters /
+  health 1.0000 from the artifacts against 8 clusters / health 0.8000 from the
+  engine. The artifacts-in path was then held only by the epsilon (1.0 vs 1.0), so
+  a marginally worse candidate clustering flipped it to DROP and returned nothing
+  while the re-run path kept its 0.2 margin -- the intermittent
+  `[] == ['thr:raise:fuzzy_match']` failure in
+  `test_suggest_from_result_verified_matches_review_config`. The baseline is now
+  re-derived through the same engine path as the candidates, falling back to the
+  caller's clusters only if that run fails. Both paths now report an identical
+  0.8000 baseline.
+- **`GOLDENMATCH_AUTOCONFIG_MEMORY=0` now works when set at runtime.** The gate was
+  a module-level constant evaluated at import, so the documented "useful in CI"
+  opt-out silently did nothing unless the variable was already in the environment
+  before `goldenmatch.core.autoconfig` was imported -- leaving the shared
+  `~/.goldenmatch/autoconfig_memory.db` live. The env is now read at call time. The
+  import-time constant is still checked first, so existing callers (including
+  tests that patch it) are unaffected, and the env read can only ever disable
+  memory, never enable it.
 - **The learned-blocking trainer no longer loses its training signal as the
   dataset grows.** `learned_sample_size` was `min(total_rows // 4, 5000)` --
   pinned at 5,000 rows from 50K upward however large the frame got. The learner

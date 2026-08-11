@@ -318,11 +318,11 @@ def test_verify_suggestions_honors_max_verify(monkeypatch):
                           predicted_effect="", confidence=1.0, patch={}, evidence={})
 
     sugs = [_mk(0), _mk(1), _mk(2)]
-    runs = {"n": 0}
+    seen_configs: list[str] = []
 
     class _Engine:
         def _run_pipeline(self, df, cfg):
-            runs["n"] += 1
+            seen_configs.append(cfg)
             class _R:
                 clusters = {}
             return _R()
@@ -330,15 +330,22 @@ def test_verify_suggestions_honors_max_verify(monkeypatch):
     class _DF:
         height = 10
 
+    # Tag each candidate config so the baseline run and the candidate runs are
+    # distinguishable, rather than asserting on a bare call count.
     monkeypatch.setattr("goldenmatch.core.suggest.apply.apply_suggestion",
-                        lambda cfg, s: cfg)
+                        lambda cfg, s: f"CAND:{s.id}")
     monkeypatch.setattr(
         "goldenmatch.core.suggest.health.suggestion_health_from_clusters",
         lambda clusters, n: 1.0,
     )
 
     out = ad._verify_suggestions(sugs, _DF(), "CFG", {}, _Engine(), max_verify=1)
-    assert runs["n"] == 1              # only the top candidate was re-run
+    # Exactly two runs, and WHICH two matters: the unmodified-config baseline
+    # (#2475 -- the baseline must come from the same path as the candidates, not
+    # from the caller's clusters), then one candidate because max_verify=1.
+    # Asserting the configs rather than a count keeps this from silently
+    # absorbing a third run later.
+    assert seen_configs == ["CFG", "CAND:s0"]
     assert [s.id for s in out] == ["s0", "s1", "s2"]  # tail passes through
 
 

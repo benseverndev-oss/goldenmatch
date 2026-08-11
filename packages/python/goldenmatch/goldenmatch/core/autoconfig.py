@@ -4449,10 +4449,35 @@ _AUTOCONFIG_LLM_ENABLED: bool = (
 _DEFAULT_MEMORY: AutoConfigMemory | None = None
 
 
+def _autoconfig_memory_disabled() -> bool:
+    """Whether cross-run memory is off, read at CALL time.
+
+    ``_AUTOCONFIG_MEMORY_DISABLED`` is evaluated once at import, so
+    ``GOLDENMATCH_AUTOCONFIG_MEMORY=0`` only ever worked when it was already in
+    the environment before ``goldenmatch.core.autoconfig`` was imported. Setting
+    it from Python afterwards -- which is what the docstring's "useful in CI"
+    advice reads like, and what six test modules do via raw ``os.environ`` --
+    silently did nothing, leaving the shared ``~/.goldenmatch/autoconfig_memory.db``
+    live:
+
+        after import,        disabled = False
+        after setting env=0, disabled = False
+
+    Checking the constant FIRST keeps every existing caller intact, including the
+    tests that ``monkeypatch.setattr`` it to True; the env read only ever adds a
+    reason to disable, so this can turn memory off but never on.
+    """
+    if _AUTOCONFIG_MEMORY_DISABLED:
+        return True
+    return os.environ.get("GOLDENMATCH_AUTOCONFIG_MEMORY", "1").strip().lower() in (
+        "0", "false", "disabled",
+    )
+
+
 def _get_default_memory() -> AutoConfigMemory | None:
     """Return the default AutoConfigMemory, or None when disabled via env var."""
     global _DEFAULT_MEMORY
-    if _AUTOCONFIG_MEMORY_DISABLED:
+    if _autoconfig_memory_disabled():
         return None
     if _DEFAULT_MEMORY is None:
         try:
