@@ -7,6 +7,35 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Fixed
+- **Blocking suggestions account for what a key can REACH, not just what it
+  costs.** Two compounding defects in `core/block_analyzer.py`, both measured on
+  the Amazon-Google benchmark frame (#2488). (1) `score_candidate` divided its
+  selectivity term by the records that PRODUCED a key rather than by the frame,
+  so coverage was normalised away: a key able to key only 35% of records scored
+  as though the frame were just that 35% -- maximally selective AND cheap, since
+  `total_comparisons` is summed over survivors too. Compound keys
+  null-propagate, so one sparse component nulls the whole key (Amazon-Google's
+  `manufacturer` is 100% populated on one source and 7.2% on the other, nulling
+  65% of the frame). The denominator is now the full height, which caps the term
+  at coverage; `coverage` is also reported in the metrics. This is a NO-OP for a
+  fully-covered key, so only genuinely partial-coverage keys move. (2)
+  `estimated_recall` was computed for the top candidates, logged, and then left
+  out of the ranking entirely -- the only multiplier was `check_coverage`'s
+  field-membership flag, which asks whether the key's columns are matchkey
+  columns and says nothing about retained pairs. Measured candidates are now
+  ordered by `score x recall`, in a tier ahead of the unmeasured tail so a
+  placeholder 0.0 is never read as "measured as useless". On the Amazon-Google
+  frame this drops the lower-coverage `description` keys from rank 1 to ranks
+  8-10 and promotes the fully-covered `title` keys, taking the chosen plan's
+  estimated recall from 0.05 to 0.07. A plan whose best candidate estimates
+  under 30% recall is now reported with that number rather than committed
+  silently -- a warning, not a rejection, because on a frame where every
+  candidate is below the floor (which is this one) rejecting them all leaves
+  degenerate blocking, and one mega-block is worse than a poor key. NOTE this
+  does not by itself make Amazon-Google a good result: every candidate the
+  generator produces estimates 0.05-0.07 recall there, because it emits only
+  prefix/soundex keys and pairwise compounds and has no token-overlap key for
+  free text. That gap is tracked separately.
 - **Benchmark tests skip on a missing dataset instead of erroring.** Every
   dataset under `tests/benchmarks/datasets/` is gitignored on purpose, but three
   of the five tests in `test_autoconfig_benchmarks.py` read one without first
