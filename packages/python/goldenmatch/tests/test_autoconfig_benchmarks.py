@@ -19,7 +19,27 @@ NCVR_DIR = DATASETS / "NCVR"
 NCVR_SAMPLE = NCVR_DIR / "ncvoter_sample_10k.txt"
 NCVR_AVAILABLE = NCVR_SAMPLE.exists()
 
+# Every dataset here is gitignored on purpose, so a test that reads one without
+# first checking it exists does not fail -- it ERRORS, with a FileNotFoundError
+# out of polars that says nothing about why. Three of the five tests in this
+# file were missing that check (`test_abt_buy_autoconfig_offline` and
+# `test_autoconfig_ncvr_meets_target` already had it), which is the only reason
+# a clean checkout saw red here.
+DBLP_ACM_DIR = DATASETS / "DBLP-ACM"
+DBLP_ACM_FILES = ("DBLP2.csv", "ACM.csv")
+DBLP_ACM_AVAILABLE = all((DBLP_ACM_DIR / f).is_file() for f in DBLP_ACM_FILES)
 
+_FETCH = "python scripts/run_benchmarks.py --download-only --datasets"
+_MISSING_DBLP_ACM = f"DBLP-ACM dataset missing -- fetch it with `{_FETCH} dblp-acm`"
+# NCVR is the one set that cannot be pulled from a public URL: it is an NC voter
+# roll extract. `--download-only --datasets ncvr` needs GOLDENMATCH_NCVR_SAMPLE_URL
+# pointed at a hosted 10k sample.
+_MISSING_NCVR = (
+    f"NCVR sample dataset missing -- `{_FETCH} ncvr` needs GOLDENMATCH_NCVR_SAMPLE_URL"
+)
+
+
+@pytest.mark.skipif(not DBLP_ACM_AVAILABLE, reason=_MISSING_DBLP_ACM)
 def test_dblp_acm_autoconfig_runs():
     """Regression: zero-config dedupe_df on biblio data does not crash."""
     from goldenmatch._api import dedupe_df
@@ -32,6 +52,7 @@ def test_dblp_acm_autoconfig_runs():
     assert result.postflight_report is not None
 
 
+@pytest.mark.skipif(not NCVR_AVAILABLE, reason=_MISSING_NCVR)
 def test_ncvr_autoconfig_no_useless_matchkeys():
     """Auto-config on NCVR 10K must not emit exact matchkeys on
     cardinality-1.0 columns like voter_reg_num."""
@@ -79,6 +100,7 @@ def test_abt_buy_autoconfig_offline():
     # If we can't introspect the config from result, just verify the run completed.
 
 
+@pytest.mark.skipif(not DBLP_ACM_AVAILABLE, reason=_MISSING_DBLP_ACM)
 def test_preflight_domain_repair_frame_shape_stable():
     """Spec risk: when preflight enables config.domain, the pipeline's
     post-extraction frame must have __title_key__ and unchanged height."""

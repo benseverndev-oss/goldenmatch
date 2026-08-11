@@ -207,6 +207,24 @@ def _measure_product(datasets_dir: Path, key: str) -> dict[str, Any] | None:
     }
 
 
+#: Sentinel file proving a file-backed dataset is on disk. Keyed by the same
+#: dataset keys `--datasets` takes. Keys absent here (febrl3, dqbench) are
+#: self-contained -- they come from `recordlinkage` / PyPI, not from a file.
+#: These are the SAME sentinels the fetchers check, so "present" means exactly
+#: what "already downloaded" means to `_ensure_datasets`.
+_DATASET_SENTINELS: dict[str, str] = {
+    "dblp-acm": "DBLP-ACM/DBLP2.csv",
+    "ncvr": "NCVR/ncvoter_sample_10k.txt",
+    **{k: f"{v['subdir']}/{v['sentinel']}" for k, v in _PRODUCT_SPECS.items()},
+}
+
+
+def _dataset_present(datasets_dir: Path, key: str) -> bool:
+    """Is `key` usable from disk? Non-file-backed datasets are always True."""
+    sentinel = _DATASET_SENTINELS.get(key)
+    return True if sentinel is None else (datasets_dir / sentinel).is_file()
+
+
 def _ensure_datasets(datasets_dir: Path, selected: set[str]) -> None:
     """Auto-pull any selected file-backed datasets that aren't already present.
 
@@ -657,6 +675,11 @@ def main() -> int:
                         help="Auto-pull missing file-backed datasets (DBLP-ACM from "
                              "Leipzig; NCVR 10k sample from GOLDENMATCH_NCVR_SAMPLE_URL). "
                              "Default on; --no-download to use only local files.")
+    parser.add_argument("--download-only", action="store_true",
+                        help="Fetch the selected datasets and exit without measuring "
+                             "anything. The datasets are gitignored, so this is how a "
+                             "developer gets the data for `pytest -m benchmark` without "
+                             "sitting through a benchmark run.")
     args = parser.parse_args()
 
     if args.check:
@@ -696,8 +719,25 @@ def main() -> int:
     else:
         selected = {args.datasets}
 
-    if args.download:
+    if args.download or args.download_only:
         _ensure_datasets(args.datasets_dir, selected)
+
+    if args.download_only:
+        # Report per-dataset presence rather than just exiting 0: `_ensure_datasets`
+        # is best-effort by design (a failed pull leaves the per-dataset runner to
+        # emit its own "missing -- skipping"), so a silent success here would be
+        # indistinguishable from a silent failure.
+        missing = [k for k in sorted(selected) if not _dataset_present(args.datasets_dir, k)]
+        for key in sorted(selected):
+            state = "MISSING" if key in missing else "ok"
+            _info(f"  {state:8} {key}")
+        if missing:
+            _info("")
+            _info(f"{len(missing)} dataset(s) unavailable: {', '.join(missing)}. "
+                  "Benchmark tests that need them SKIP rather than fail.")
+            return 1
+        return 0
+
     results: list[dict[str, Any] | None] = []
 
     if "dblp-acm" in selected:

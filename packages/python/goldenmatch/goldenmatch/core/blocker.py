@@ -1389,6 +1389,11 @@ def _build_learned_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[Bloc
         min_recall=config.learned_min_recall,
         min_reduction=config.learned_min_reduction,
         predicate_depth=config.learned_predicate_depth,
+        # Rules are learned on `sample_df` and applied to the FULL frame below.
+        # Without the full height the selector's only cost signal is
+        # `reduction_ratio`, which is scale-invariant and so cannot tell a rule
+        # costing 3M candidate pairs from one costing 67B (#2474).
+        total_rows=df.height,
     )
 
     # Cache rules

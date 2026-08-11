@@ -7,6 +7,76 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Fixed
+- **Benchmark tests skip on a missing dataset instead of erroring.** Every
+  dataset under `tests/benchmarks/datasets/` is gitignored on purpose, but three
+  of the five tests in `test_autoconfig_benchmarks.py` read one without first
+  checking it exists, so a clean checkout got a bare polars `FileNotFoundError`
+  rather than a skip (`test_abt_buy_autoconfig_offline` and
+  `test_autoconfig_ncvr_meets_target` already had the guard). They now skip with
+  a reason naming the command that gets the data.
+- **`run_benchmarks.py --download-only` fetches the benchmark datasets without
+  running a benchmark.** The script has auto-pulled DBLP-ACM, NCVR, Abt-Buy and
+  Amazon-Google since #2386, but only as a side effect of measuring, so a
+  developer running `pytest -m benchmark` had no way to just get the data. The
+  new flag reuses the existing `_ensure_datasets` and the fetchers' own
+  sentinels -- deliberately not a second copy of where each dataset lives --
+  prints each as `ok`/`MISSING`, and exits non-zero if any is absent. No library
+  behaviour changed.
+- **Learned blocking gates rules on absolute full-frame cost, not on a ratio.**
+  A rule was accepted when `reduction_ratio >= learned_min_reduction` (0.90 by
+  default). That ratio is `1 - blocked_pairs / total_pairs`, and BOTH terms grow
+  as n^2, so it is scale-INVARIANT -- measured identical to four decimal places
+  between a 7,071-row sample and the 2M frame it was drawn from. It therefore
+  carries no information about what a rule actually costs. On the QIS realistic
+  shape at 2M every one of these cleared the 0.90 floor:
+  `email:exact` 1.0000 -> 3.3M candidate pairs; `first_name:first_3` 0.9984 ->
+  3.12B; `birth_year:exact` 0.9846 -> 30.8B; `id:first_3` 0.9667 -> 66.7B. The
+  selector had no quantity that could tell the affordable rule from the one four
+  orders of magnitude past it. Rules are now additionally checked against an
+  absolute projected candidate-pair budget at the FULL frame size, projected from
+  the sample's block-size distribution by the same saturation-aware estimator
+  auto-config already uses for static passes (extracted to
+  `core.block_projection` so there is one owner rather than two), and bounded by
+  the same memory-aware `_fs_total_pair_budget` (so `GOLDENMATCH_FS_MAX_PASS_PAIRS`
+  overrides both). Every rejection is logged with the pair count behind it. The
+  budget is applied BEFORE the "did anything pass?" test that gates the depth-2
+  search, so a frame where every single predicate explodes now falls through to
+  looking for a cheaper conjunction instead of returning a rule it cannot afford.
+  The gate is opt-in on a new `total_rows` argument, so callers that do not pass
+  it -- and any frame no larger than its own training sample -- are unchanged.
+- **A learned rule with two predicates on the same field no longer crashes rule
+  evaluation.** `evaluate_rule` selected one column per predicate, so a rule like
+  `last:exact AND last:soundex` named the same column twice and raised polars'
+  `DuplicateError`. `learn_blocking_rules` deliberately generates those (its
+  combo guard compares field AND transform; collapsing them is the #1826 footgun),
+  but the depth-2 search only runs when no single predicate passes, so the crash
+  stayed latent. The pair budget above can empty that set on a narrow frame and
+  reach it. `apply_learned_blocks` already de-duplicated here.
+- **The suggestion verify gate compared its baseline against a different
+  procedure than its candidates.** `_verify_suggestions` keeps a suggestion when
+  `cand_health >= baseline_health - 1e-6`. Candidates always come from
+  `engine._run_pipeline`; the baseline came from whatever clusters the caller
+  passed. For `review_config` those coincide, but `suggest_from_result` passes
+  `DedupeResult.clusters`, produced by `dedupe_df` -- which standardizes the frame
+  first and therefore clusters a different population than the raw frame the
+  candidates run against. Measured on the 80-row person fixture: 39 clusters /
+  health 1.0000 from the artifacts against 8 clusters / health 0.8000 from the
+  engine. The artifacts-in path was then held only by the epsilon (1.0 vs 1.0), so
+  a marginally worse candidate clustering flipped it to DROP and returned nothing
+  while the re-run path kept its 0.2 margin -- the intermittent
+  `[] == ['thr:raise:fuzzy_match']` failure in
+  `test_suggest_from_result_verified_matches_review_config`. The baseline is now
+  re-derived through the same engine path as the candidates, falling back to the
+  caller's clusters only if that run fails. Both paths now report an identical
+  0.8000 baseline.
+- **`GOLDENMATCH_AUTOCONFIG_MEMORY=0` now works when set at runtime.** The gate was
+  a module-level constant evaluated at import, so the documented "useful in CI"
+  opt-out silently did nothing unless the variable was already in the environment
+  before `goldenmatch.core.autoconfig` was imported -- leaving the shared
+  `~/.goldenmatch/autoconfig_memory.db` live. The env is now read at call time. The
+  import-time constant is still checked first, so existing callers (including
+  tests that patch it) are unaffected, and the env read can only ever disable
+  memory, never enable it.
 - **The learned-blocking trainer no longer loses its training signal as the
   dataset grows.** `learned_sample_size` was `min(total_rows // 4, 5000)` --
   pinned at 5,000 rows from 50K upward however large the frame got. The learner

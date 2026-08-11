@@ -678,6 +678,47 @@ def _kernel_suggest(
     return _parse_suggestions(raw_json)
 
 
+def _verify_baseline_clusters(df, config, clusters, engine) -> tuple[dict, str]:
+    """Clusters the verify gate should measure its BASELINE from, and where they
+    came from.
+
+    The baseline must be produced by the same procedure as the candidates,
+    because ``_verify_suggestions`` compares the two directly against a 1e-6
+    epsilon. Candidates always come from ``engine._run_pipeline``, so the
+    baseline is taken from ``engine._run_pipeline`` on the UNMODIFIED config --
+    never from the caller's clusters, however convenient those are.
+
+    That distinction is not academic. ``review_config`` passes its own engine
+    run, so the old caller-supplied baseline was already like-for-like there.
+    ``suggest_from_result`` passes ``DedupeResult.clusters``, produced by
+    ``dedupe_df``, which STANDARDIZES the frame first (titlecase name, lowercase
+    email, zero-padded zip) and therefore clusters a different population than
+    the raw frame the candidates run against. Measured on the 80-row person
+    fixture: 39 clusters / health 1.0000 from the artifacts against 8 clusters /
+    health 0.8000 from the engine -- same suggestion, two incomparable baselines.
+
+    The artifacts-in path was then held only by the epsilon (baseline 1.0 vs
+    candidate 1.0), so any run whose candidate clustering came out marginally
+    worse flipped it to DROP and returned ``[]`` while the re-run path kept its
+    0.2 margin. That is the intermittent
+    ``[] == ['thr:raise:fuzzy_match']`` failure in
+    ``test_suggest_from_result_verified_matches_review_config`` -- not float
+    noise, but a saturated baseline sitting on the boundary.
+
+    Falls back to the caller's clusters when the re-run fails, so a broken
+    baseline degrades to the previous behaviour instead of raising -- matching
+    the rest of this gate, where verification failures keep the suggestion.
+    """
+    try:
+        return (engine._run_pipeline(df, config).clusters or {}), "engine"
+    except Exception:  # noqa: BLE001 -- verification stays conservative
+        logger.debug(
+            "verify: baseline re-run failed; falling back to the caller's clusters",
+            exc_info=True,
+        )
+        return (clusters or {}), "caller"
+
+
 def _verify_suggestions(
     suggestions, df, config, clusters, engine, *, max_verify: int | None = None
 ) -> list[Suggestion]:
@@ -694,10 +735,38 @@ def _verify_suggestions(
     # issue (_run_pipeline returns only pairs >= threshold, so mass_above is
     # always 1.0 in scored_pairs -- the scored-pairs proxy is not useful here).
     n_records = df.height
-    baseline_health = suggestion_health_from_clusters(clusters, n_records)
+
+    # The baseline MUST come from the same procedure as the candidates, because
+    # `keep` compares them directly against a 1e-6 epsilon.
+    #
+    # It used to be computed from the caller's `clusters`. For `review_config`
+    # that is the engine's own run, so the comparison is like-for-like. For
+    # `suggest_from_result` it is `DedupeResult.clusters` -- produced by
+    # `dedupe_df`, which STANDARDIZES the frame first (titlecase name, lowercase
+    # email, zero-padded zip) and so clusters a different population than the raw
+    # frame the candidates are run against. Measured on the 80-row person fixture:
+    # 39 clusters / health 1.0000 from the artifacts, against 8 clusters /
+    # health 0.8000 from the engine. Same suggestion, two different baselines.
+    #
+    # The artifacts-in path was then kept only by the epsilon -- baseline 1.0
+    # against candidate 1.0 -- so any run whose candidate clustering came out
+    # even slightly worse flipped it to DROP and returned [], while the re-run
+    # path kept its 0.2 margin and always returned the suggestion. That is the
+    # intermittent `[] == ['thr:raise:fuzzy_match']` failure in
+    # test_suggest_from_result_verified_matches_review_config: not float noise,
+    # but two incomparable baselines, one of them sitting on the boundary.
+    #
+    # Re-derive it here so both callers are compared identically. Costs one extra
+    # pipeline run on a path that already runs up to `cap` of them, and only on
+    # the opt-in verify=True route. Falls back to the caller's clusters if that
+    # run fails, which keeps the pre-existing behaviour rather than raising.
+    baseline_clusters, baseline_source = _verify_baseline_clusters(
+        df, config, clusters, engine
+    )
+    baseline_health = suggestion_health_from_clusters(baseline_clusters, n_records)
     logger.debug(
-        "review_config verify: baseline_health=%.4f n_records=%d n_clusters=%d",
-        baseline_health, n_records, len(clusters),
+        "review_config verify: baseline_health=%.4f n_records=%d n_clusters=%d source=%s",
+        baseline_health, n_records, len(baseline_clusters), baseline_source,
     )
 
     # Cap verification at the resolved fan-out (cost guard; #1404 makes it tunable)

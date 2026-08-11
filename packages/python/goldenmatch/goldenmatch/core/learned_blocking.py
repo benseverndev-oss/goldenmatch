@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from goldenmatch._polars_lazy import pl
+from goldenmatch.core.block_projection import project_block_counts
 
 if TYPE_CHECKING:
     from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
@@ -51,6 +52,14 @@ class BlockingRule:
     recall: float = 0.0
     reduction_ratio: float = 0.0
     n_blocks: int = 0
+    # Full-frame cost, projected from the sample's block-size distribution.
+    # `reduction_ratio` cannot serve this role: it is a RATIO of two quantities
+    # that both grow as n^2, so it is scale-INVARIANT (measured identical to four
+    # decimal places from a 7,071-row sample to a 2M frame) and therefore blind to
+    # the absolute pair count behind it. 0 means "not projected" -- the caller did
+    # not supply a full-frame row count.
+    projected_pairs: int = 0
+    projected_max_block: int = 0
 
     def key(self) -> str:
         return " AND ".join(p.key() for p in sorted(self.predicates, key=lambda p: p.key()))
@@ -120,11 +129,40 @@ def evaluate_rule(
 
     Returns (recall, reduction_ratio, n_blocks).
     """
+    recall, reduction, n_blocks, _sizes = _evaluate_rule_with_sizes(df, rule, true_pairs)
+    return recall, reduction, n_blocks
+
+
+def _evaluate_rule_with_sizes(
+    df: pl.DataFrame,
+    rule: BlockingRule,
+    true_pairs: set[tuple[int, int]],
+) -> tuple[float, float, int, list[int]]:
+    """``evaluate_rule`` plus the per-block row counts it already computed.
+
+    The sizes are what full-frame cost is projected from (see
+    ``core.block_projection``). They are returned rather than recomputed because
+    the selector needs both the recall/reduction verdict and the cost
+    projection for the same rule, and a second pass over the sample would just
+    rebuild the identical dict.
+    """
     if not true_pairs:
-        return 0.0, 1.0, 0
+        return 0.0, 1.0, 0, []
 
     # Assign block keys + record each row's block for later recall lookup.
-    rows = df.select(["__row_id__"] + [p.field for p in rule.predicates]).to_dicts()
+    #
+    # De-duplicate the projection list. A depth-2 rule may hold two predicates on
+    # the SAME field (`last:exact AND last:soundex`) -- `learn_blocking_rules`
+    # only rejects combos whose field AND transform match, which
+    # `lower_rule_to_key` documents as a shape it can produce. Selecting that
+    # column twice raises polars' DuplicateError, so evaluating such a rule
+    # crashed outright. It stayed latent because the depth-2 search only runs
+    # when no single predicate passes; #2474's pair budget can now empty that
+    # set on a frame with few columns and reach it. `dict.fromkeys` keeps first
+    # -seen order, so single-predicate rules select exactly what they did before.
+    # `apply_learned_blocks` already de-duplicated here.
+    _fields = list(dict.fromkeys(p.field for p in rule.predicates))
+    rows = df.select(["__row_id__"] + _fields).to_dicts()
     blocks: dict[str, list[int]] = {}
     block_of: dict[int, str] = {}
     for row in rows:
@@ -172,10 +210,29 @@ def evaluate_rule(
     else:
         reduction = 1.0
 
-    return recall, reduction, len(blocks)
+    return recall, reduction, len(blocks), [len(m) for m in blocks.values()]
 
 
 # ── Rule Learning ─────────────────────────────────────────────────────────
+
+
+def _pair_budget(total_rows: int) -> int:
+    """Candidate-pair ceiling a learned rule may project at full N.
+
+    Delegates to auto-config's memory-aware FS budget so learned and static
+    blocking are bounded by the same number (and the same
+    ``GOLDENMATCH_FS_MAX_PASS_PAIRS`` override) rather than by two independently
+    drifting constants. Falls back to the documented small-box floor if
+    auto-config is unimportable, which keeps this a pure gate rather than a new
+    way for rule learning to fail.
+    """
+    try:
+        from goldenmatch.core.autoconfig import _fs_total_pair_budget
+
+        return _fs_total_pair_budget(total_rows)
+    except Exception:  # pragma: no cover -- import guard, not a behaviour branch
+        logger.debug("learned blocking: FS pair budget unavailable", exc_info=True)
+        return 300_000_000
 
 
 def learn_blocking_rules(
@@ -186,17 +243,22 @@ def learn_blocking_rules(
     min_reduction: float = 0.90,
     predicate_depth: int = 2,
     threshold: float = 0.7,
+    total_rows: int | None = None,
 ) -> list[BlockingRule]:
     """Learn blocking rules from scored pairs.
 
     Args:
-        df: DataFrame with __row_id__ and data columns.
+        df: DataFrame with __row_id__ and data columns (the training SAMPLE).
         scored_pairs: Pairs from a sample run (row_id_a, row_id_b, score).
         columns: Columns to consider for predicates. Defaults to all non-internal.
         min_recall: Minimum recall requirement for selected rules.
         min_reduction: Minimum reduction ratio requirement.
         predicate_depth: Max predicates per rule (conjunction depth).
         threshold: Score threshold for true positive pairs.
+        total_rows: Height of the FULL frame the rules will be applied to. When
+            given (and larger than the sample), each rule additionally has to
+            clear an absolute projected candidate-pair budget at that size --
+            see ``_reject_exploding_rules``. Omitted, behaviour is unchanged.
 
     Returns:
         List of blocking rules meeting the constraints, best first.
@@ -223,65 +285,137 @@ def learn_blocking_rules(
     # Generate single predicates
     all_predicates = generate_predicates(columns)
 
-    # Evaluate single predicates
-    single_rules: list[BlockingRule] = []
-    for pred in all_predicates:
-        rule = BlockingRule(predicates=[pred])
-        recall, reduction, n_blocks = evaluate_rule(df, rule, true_pairs)
+    sample_n = df.height
+    full_n = total_rows if total_rows and total_rows > sample_n else sample_n
+
+    def _score(rule: BlockingRule) -> BlockingRule:
+        recall, reduction, n_blocks, sizes = _evaluate_rule_with_sizes(df, rule, true_pairs)
         rule.recall = recall
         rule.reduction_ratio = reduction
         rule.n_blocks = n_blocks
-        single_rules.append(rule)
+        if full_n > sample_n:
+            rule.projected_max_block, rule.projected_pairs = project_block_counts(
+                sizes, sample_n, full_n
+            )
+        return rule
+
+    # Evaluate single predicates
+    single_rules = [_score(BlockingRule(predicates=[pred])) for pred in all_predicates]
 
     # Filter to predicates with reasonable recall
     good_singles = [r for r in single_rules if r.recall >= min_recall * 0.5]  # relaxed for combination
     good_singles.sort(key=lambda r: r.recall, reverse=True)
     good_singles = good_singles[:20]  # limit for combinatorial explosion
 
+    # #2474: `min_recall` and `min_reduction` are both SCALE-INVARIANT, so
+    # neither can see what a rule costs at full N. The pair budget is applied
+    # right here, BEFORE the "did anything pass?" question that gates the
+    # depth-2 search -- so a frame where every single predicate explodes falls
+    # through to the combination search (a conjunction is strictly finer than
+    # either of its predicates, so it is exactly the cheaper thing to look for)
+    # instead of returning a rule that cannot be afforded.
+    budget = _pair_budget(full_n) if full_n > sample_n else None
+
     # Check if any single predicate meets both constraints
     passing_rules = [
         r for r in single_rules
         if r.recall >= min_recall and r.reduction_ratio >= min_reduction
     ]
+    if budget is not None:
+        passing_rules = _reject_exploding_rules(passing_rules, budget, full_n, "single")
 
     # Try depth-2 combinations if no single predicate is sufficient
     if not passing_rules and predicate_depth >= 2 and len(good_singles) >= 2:
+        combos: list[BlockingRule] = []
         for r1, r2 in combinations(good_singles, 2):
             p1 = r1.predicates[0]
             p2 = r2.predicates[0]
             # Skip if same field+transform
             if p1.key() == p2.key():
                 continue
-            combo = BlockingRule(predicates=[p1, p2])
-            recall, reduction, n_blocks = evaluate_rule(df, combo, true_pairs)
-            combo.recall = recall
-            combo.reduction_ratio = reduction
-            combo.n_blocks = n_blocks
-            if recall >= min_recall and reduction >= min_reduction:
-                passing_rules.append(combo)
+            combo = _score(BlockingRule(predicates=[p1, p2]))
+            if combo.recall >= min_recall and combo.reduction_ratio >= min_reduction:
+                combos.append(combo)
+        if budget is not None:
+            combos = _reject_exploding_rules(combos, budget, full_n, "combo")
+        passing_rules.extend(combos)
 
     # Sort by recall (highest first), then reduction ratio
     passing_rules.sort(key=lambda r: (r.recall, r.reduction_ratio), reverse=True)
 
     if not passing_rules:
-        # Fallback: pick the single rule with best recall
-        best = max(single_rules, key=lambda r: r.recall) if single_rules else None
+        # Fallback: pick the single rule with best recall. When a budget is in
+        # force, break recall ties toward the CHEAPEST rule -- with nothing
+        # meeting the constraints we are already degrading, and the failure mode
+        # this fallback used to hand back was an unaffordable rule (the #2474
+        # 5M run: 160 blocks of ~31K rows, ~78B candidate pairs, 93 minutes
+        # without finishing).
+        if budget is not None:
+            best = min(
+                single_rules, key=lambda r: (-r.recall, r.projected_pairs)
+            ) if single_rules else None
+        else:
+            best = max(single_rules, key=lambda r: r.recall) if single_rules else None
         if best:
             logger.warning(
                 "No rule meets constraints (min_recall=%.2f, min_reduction=%.2f). "
-                "Best: recall=%.2f, reduction=%.2f",
+                "Best: recall=%.2f, reduction=%.2f, projected_pairs=%s",
                 min_recall, min_reduction, best.recall, best.reduction_ratio,
+                f"{best.projected_pairs:,}" if budget is not None else "n/a",
             )
             passing_rules = [best]
 
     logger.info(
-        "Learned %d blocking rules. Best: recall=%.3f, reduction=%.3f",
+        "Learned %d blocking rules. Best: recall=%.3f, reduction=%.3f, projected_pairs=%s",
         len(passing_rules),
         passing_rules[0].recall if passing_rules else 0,
         passing_rules[0].reduction_ratio if passing_rules else 0,
+        f"{passing_rules[0].projected_pairs:,}" if passing_rules and budget is not None else "n/a",
     )
 
     return passing_rules
+
+
+def _reject_exploding_rules(
+    rules: list[BlockingRule], budget: int, full_n: int, stage: str
+) -> list[BlockingRule]:
+    """Drop rules whose PROJECTED full-frame candidate-pair count busts ``budget``.
+
+    This is the gate `min_reduction` cannot be. A reduction ratio is
+    ``1 - blocked_pairs / total_pairs``; both terms grow as n^2, so the ratio is
+    scale-invariant -- measured identical to four decimal places between a
+    7,071-row sample and the 2M frame it was drawn from. Every one of these
+    clears the default ``min_reduction=0.90`` on the QIS realistic shape at 2M:
+
+        email:exact          reduction 1.0000  ->          3.3M pairs   (fine)
+        first_name:first_3   reduction 0.9984  ->         3.12B pairs
+        birth_year:exact     reduction 0.9846  ->        30.77B pairs
+        id:first_3           reduction 0.9667  ->        66.67B pairs
+
+    The separation between the affordable rule and the catastrophic ones is four
+    orders of magnitude, so this gate needs no delicate tuning -- only a
+    quantity expressed in pairs rather than in a ratio.
+
+    Never silent: every rejection is logged with the number that caused it. A
+    blocking rule dropped without a trace is the #1837 failure mode (recall-only
+    loss, invisible in precision), and this function's whole job is to drop
+    rules.
+    """
+    kept, dropped = [], []
+    for r in rules:
+        (kept if r.projected_pairs <= budget else dropped).append(r)
+    if dropped:
+        logger.warning(
+            "Learned blocking rejected %d/%d %s rule(s) over the %s-pair budget at "
+            "%s rows: %s",
+            len(dropped), len(rules), stage, f"{budget:,}", f"{full_n:,}",
+            "; ".join(
+                f"{r.key()} (recall={r.recall:.3f}, reduction={r.reduction_ratio:.4f}, "
+                f"projected {r.projected_pairs:,} pairs / max block {r.projected_max_block:,})"
+                for r in dropped[:5]
+            ) + (f"; +{len(dropped) - 5} more" if len(dropped) > 5 else ""),
+        )
+    return kept
 
 
 # ── Apply Learned Blocks ──────────────────────────────────────────────────
@@ -473,6 +607,11 @@ def save_learned_rules(rules: list[BlockingRule], path: str | Path) -> None:
             "recall": r.recall,
             "reduction_ratio": r.reduction_ratio,
             "n_blocks": r.n_blocks,
+            # Persisted so a cached rule set carries the cost it was accepted
+            # at. A cache written for one frame size is reused verbatim, so the
+            # only record of "this was affordable at N" is this number.
+            "projected_pairs": r.projected_pairs,
+            "projected_max_block": r.projected_max_block,
         }
         for r in rules
     ]
@@ -494,6 +633,9 @@ def load_learned_rules(path: str | Path) -> list[BlockingRule] | None:
             recall=item["recall"],
             reduction_ratio=item["reduction_ratio"],
             n_blocks=item.get("n_blocks", 0),
+            # `.get` so a cache written before #2474 still loads.
+            projected_pairs=item.get("projected_pairs", 0),
+            projected_max_block=item.get("projected_max_block", 0),
         )
         for item in data
     ]
