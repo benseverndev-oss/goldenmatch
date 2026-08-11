@@ -7,6 +7,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Fixed
+- **Learned blocking gates rules on absolute full-frame cost, not on a ratio.**
+  A rule was accepted when `reduction_ratio >= learned_min_reduction` (0.90 by
+  default). That ratio is `1 - blocked_pairs / total_pairs`, and BOTH terms grow
+  as n^2, so it is scale-INVARIANT -- measured identical to four decimal places
+  between a 7,071-row sample and the 2M frame it was drawn from. It therefore
+  carries no information about what a rule actually costs. On the QIS realistic
+  shape at 2M every one of these cleared the 0.90 floor:
+  `email:exact` 1.0000 -> 3.3M candidate pairs; `first_name:first_3` 0.9984 ->
+  3.12B; `birth_year:exact` 0.9846 -> 30.8B; `id:first_3` 0.9667 -> 66.7B. The
+  selector had no quantity that could tell the affordable rule from the one four
+  orders of magnitude past it. Rules are now additionally checked against an
+  absolute projected candidate-pair budget at the FULL frame size, projected from
+  the sample's block-size distribution by the same saturation-aware estimator
+  auto-config already uses for static passes (extracted to
+  `core.block_projection` so there is one owner rather than two), and bounded by
+  the same memory-aware `_fs_total_pair_budget` (so `GOLDENMATCH_FS_MAX_PASS_PAIRS`
+  overrides both). Every rejection is logged with the pair count behind it. The
+  budget is applied BEFORE the "did anything pass?" test that gates the depth-2
+  search, so a frame where every single predicate explodes now falls through to
+  looking for a cheaper conjunction instead of returning a rule it cannot afford.
+  The gate is opt-in on a new `total_rows` argument, so callers that do not pass
+  it -- and any frame no larger than its own training sample -- are unchanged.
+- **A learned rule with two predicates on the same field no longer crashes rule
+  evaluation.** `evaluate_rule` selected one column per predicate, so a rule like
+  `last:exact AND last:soundex` named the same column twice and raised polars'
+  `DuplicateError`. `learn_blocking_rules` deliberately generates those (its
+  combo guard compares field AND transform; collapsing them is the #1826 footgun),
+  but the depth-2 search only runs when no single predicate passes, so the crash
+  stayed latent. The pair budget above can empty that set on a narrow frame and
+  reach it. `apply_learned_blocks` already de-duplicated here.
 - **The suggestion verify gate compared its baseline against a different
   procedure than its candidates.** `_verify_suggestions` keeps a suggestion when
   `cand_health >= baseline_health - 1e-6`. Candidates always come from

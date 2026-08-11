@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 457,
+      "module_count": 458,
       "modules": [
         {
           "module": "goldenmatch",
@@ -1963,6 +1963,7 @@
             "goldenmatch.core.autoconfig_planner",
             "goldenmatch.core.autoconfig_policy",
             "goldenmatch.core.autoconfig_verify",
+            "goldenmatch.core.block_projection",
             "goldenmatch.core.blocking_candidates",
             "goldenmatch.core.blocking_pass_selection",
             "goldenmatch.core.blocking_union_core",
@@ -2366,6 +2367,15 @@
             "goldenmatch._polars_lazy",
             "goldenmatch.core",
             "goldenmatch.core.frame"
+          ]
+        },
+        {
+          "module": "goldenmatch.core.block_projection",
+          "file": "packages/python/goldenmatch/goldenmatch/core/block_projection.py",
+          "purpose": "Project a sample's block-size distribution to full-frame cost.",
+          "defines": [
+            "project_block_counts",
+            "projected_pair_count"
           ]
         },
         {
@@ -3543,6 +3553,9 @@
             "LoweringUnsupportedError",
             "_apply_predicate",
             "_compute_block_key",
+            "_evaluate_rule_with_sizes",
+            "_pair_budget",
+            "_reject_exploding_rules",
             "_safe_soundex",
             "apply_learned_blocks",
             "evaluate_rule",
@@ -3556,6 +3569,8 @@
           "imports": [
             "goldenmatch._polars_lazy",
             "goldenmatch.config.schemas",
+            "goldenmatch.core.autoconfig",
+            "goldenmatch.core.block_projection",
             "goldenmatch.core.blocker",
             "goldenmatch.utils.transforms"
           ]
