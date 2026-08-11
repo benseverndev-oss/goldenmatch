@@ -177,6 +177,9 @@ datafusion = [
 # bound when pysail ships a Spark-4-Connect-compatible release.
 sail = [
     "pysail>=0.6",
+    # P1: packs the client venv for `addArtifact`, so executors get goldenmatch
+    # without a cluster-side install. See goldenmatch/sail/deps.py.
+    "venv-pack>=0.2",
     "pyspark[connect]>=3.5,<4",
     # pyspark 3.5.x imports the stdlib `distutils`, which Python 3.12 REMOVED.
     # setuptools ships the `distutils` shim (activated by its

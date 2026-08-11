@@ -244,5 +244,17 @@ def spark():
 
     # Real Spark owns its own server lifecycle; nothing to stop but the session.
     sess = SparkSession.builder.remote(remote).getOrCreate()
+
+    # P1: real Spark FORKS a Python worker with its own environment, so the
+    # client's site-packages are not on it. Ship a packed venv when one is
+    # provided. Unset -> unchanged (the pysail path never needs this: its worker
+    # shares the client interpreter, which is exactly why P0's failure class was
+    # invisible until a real backend ran).
+    archive = os.environ.get("GOLDENMATCH_SPARK_PYENV")
+    if archive:
+        from goldenmatch.sail.deps import ship_python_environment
+
+        ship_python_environment(sess, archive)
+
     yield sess
     sess.stop()
