@@ -30,10 +30,16 @@ def _truncate_plan(df: Any) -> Any:
     output -- just slower, which is the documented Sail posture.
     """
     for attempt in ("localCheckpoint", "checkpoint"):
-        fn = getattr(df, attempt, None)
-        if fn is None:
-            continue
+        # getattr is INSIDE the try on purpose. pyspark's Spark Connect
+        # DataFrame raises PySparkNotImplementedError from __getattr__ for
+        # unsupported methods -- `checkpoint` and `localCheckpoint` are both on
+        # that list under pyspark 3.5 Connect (which is what the pysail lane
+        # runs). That is NOT AttributeError, so `getattr(df, name, None)` does
+        # not swallow it and the default is never reached.
         try:
+            fn = getattr(df, attempt, None)
+            if fn is None:
+                continue
             return fn(eager=True)
         except Exception:  # noqa: BLE001 - unsupported/unimplemented -> next
             continue
