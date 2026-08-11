@@ -67,11 +67,26 @@ jobs:
               print(f"  {'OK ' if n not in missing else 'MISSING'}  {n}  -- {why}")
           if missing:
               raise SystemExit(f"shipped env is incomplete: {sorted(missing)}")
-          # The native kernel is OPTIONAL here: sail_scoring is _FALLBACK_ONLY
-          # until P3, so absence is expected and must not fail this lane.
+          # P3 condition 1 (spec 2026-08-10-spark-native-execution-design §6):
+          # the parity battery must hold on the PUBLISHED wheel, not an in-tree
+          # build. This env installs goldenmatch-native from PyPI, so it is the
+          # right place to assert the published artifact actually CARRIES the
+          # symbol the Spark scorer calls. #688's lesson: a caller reaching a
+          # symbol the published wheel lacks falls back silently and forever.
+          #
+          # Reported, not asserted: sail_scoring is still _FALLBACK_ONLY, so a
+          # missing kernel is not a P1 failure. Flip to an assert in the same
+          # change that lifts the gate.
           try:
               from goldenmatch.core._native_loader import native_module
-              print("  native kernel present:", native_module() is not None)
+              mod = native_module()
+              print("  native kernel present:", mod is not None)
+              if mod is not None:
+                  has = hasattr(mod, "score_field_pairwise")
+                  print("  PUBLISHED wheel carries score_field_pairwise:", has)
+                  if not has:
+                      print("  ^ P3 condition 1 NOT met: the published wheel predates the"
+                            " symbol; republish before lifting the gate (#688).")
           except Exception as exc:  # noqa: BLE001
               print("  native kernel probe failed (not fatal):", exc)
           print("shipped env OK")
