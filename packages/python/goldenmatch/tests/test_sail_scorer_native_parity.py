@@ -5,7 +5,7 @@ R1 of ``docs/superpowers/specs/2026-06-13-sail-tier-past-one-box-roadmap.md``:
 the Sail scorer ships a pure-Python rapidfuzz `pandas_udf` FLOOR; benching it
 measures Python-UDF overhead, not the engine. This test locks the native
 backend (`goldenmatch.sail.scorers._native_scores`, via the score-core kernel)
-to the floor at f32 epsilon, so the throughput win (proved in
+to the floor, so the throughput win (proved in
 `scripts/bench_sail_scorer_native.py`) is taken on a faithful number.
 
 Gates on the native kernel, NOT the `sail` extra -- it exercises the scorer
@@ -40,14 +40,20 @@ _B = ["Jonathan", "Jonothan", "smith alice", "abc", "", "x", "cafe", "xyzzy", No
 
 @pytest.mark.parametrize("scorer_name", scorers._SUPPORTED)
 def test_native_matches_pure_floor(scorer_name, monkeypatch):
-    """Native backend == pure rapidfuzz floor at f32 epsilon."""
+    """Native backend == the pure floor, within the stated tolerance.
+
+    NOT bit-equality: the floor is goldenmatch.core.strsim (Python) and the
+    kernel is score_one (Rust) -- two implementations of the same algorithm, so
+    they agree to rounding rather than to the bit. Both are f64 as of the spec
+    section 6 reversal; the tolerance stays because the implementations differ,
+    not because the widths do."""
     monkeypatch.setenv("GOLDENMATCH_NATIVE", "1")
     native = scorers._native_scores(scorer_name, _A, _B)
     assert native is not None, "native backend returned None under GOLDENMATCH_NATIVE=1"
     pure = np.asarray(scorers._pure_scores(scorer_name, _A, _B), dtype=np.float64)
     native = np.asarray(native, dtype=np.float64)
     assert native.shape == pure.shape
-    # f32 kernel vs f64 floor: epsilon, not bit-identical (the documented contract).
+    # Two f64 implementations of one algorithm: epsilon, not bit-identical.
     assert np.max(np.abs(native - pure)) < 1e-6
     # Scores stay in range.
     assert native.min() >= 0.0 and native.max() <= 1.0
@@ -98,7 +104,8 @@ def test_length_mismatch_is_caught(monkeypatch):
 # whether a pair crosses a threshold and changes cluster membership, not whether
 # its score moved in the 7th decimal.
 #
-# Accepting f32 (spec §6, option A) is defensible ONLY with this pinned. The
+# This test REVERSED spec §6 from option A (accept f32) to option B (f64
+# kernel) on its first CI run, and is now option B's acceptance gate. The
 # spec's reversal criterion is explicit: if membership moves at REALISTIC
 # thresholds on realistic data, f32 buys throughput at the cost of
 # reproducibility and option B (an f64 kernel) becomes correct instead.

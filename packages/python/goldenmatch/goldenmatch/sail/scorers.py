@@ -18,9 +18,12 @@ it ships **default-off** (component not in the loader's `_GATED_ON` allowlist, s
 `sail_scoring` into `_GATED_ON` only after the parity battery is green on the
 PUBLISHED wheel (the loader's documented rule). The native path falls back to pure
 per-batch on any FFI/pyarrow hiccup, so a worker without the wheel still scores
-correctly -- just slower. Native returns f32 (the repo convention for the field
-scorers, matching `score_field_matrix` / the DataFusion FFI scorer); parity vs the
-pure f64 floor holds to f32 epsilon."""
+correctly -- just slower. Native returns **f64**, deliberately unlike
+`score_field_matrix` / the DataFusion FFI scorer's f32: `score_one` computes in
+f64 and the old narrowing cast alone changed MATCH DECISIONS at round thresholds
+(a pure 0.95 became 0.949999988, so `>= 0.95` flipped on ordinary surname pairs).
+A tolerance is fine for a score you report and not for one you THRESHOLD. See
+spec 2026-08-10-spark-native-execution-design section 6."""
 from __future__ import annotations
 
 from typing import Any
@@ -62,7 +65,7 @@ def _pure_scores(scorer_name: str, a: Any, b: Any) -> list[float]:
 
 def _native_scores(scorer_name: str, a: Any, b: Any) -> Any | None:
     """The native `score_field_pairwise` path. Returns an ``np.ndarray`` of
-    float32 in [0, 1], or ``None`` when the native kernel isn't enabled /
+    float64 in [0, 1], or ``None`` when the native kernel isn't enabled /
     importable / present -- caller falls back to the pure floor."""
     scorer_id = _NATIVE_SCORER_IDS.get(scorer_name)
     if scorer_id is None:
