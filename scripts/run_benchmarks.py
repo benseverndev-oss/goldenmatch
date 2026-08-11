@@ -40,6 +40,7 @@ from typing import Any
 # Set from --planning-effort in main(); "normal" reproduces the prior numbers.
 _PLANNING_EFFORT = "normal"
 
+
 def _url_env(name: str, default: str) -> str:
     """Dataset URL override, falling back to ``default`` when the variable is
     unset **or empty**.
