@@ -268,9 +268,39 @@ Consider whether the convention itself should change for any scorer whose output
 is thresholded, rather than special-casing this one call site (§6 option C's
 two-return-width shape remains the thing to avoid).
 
+### B LANDED and the test is green (2026-08-11, #2486)
+
+`score_field_pairwise` now returns f64. The fix was nearly free: `score_one`
+already computed in f64 and the old code narrowed one line before handing the
+result to Python. Option B costs 2x FFI payload and nothing else.
+
+### BLOCKER on lifting the gate: the published wheel still narrows to f32
+
+Do NOT take `sail_scoring` out of `_FALLBACK_ONLY` until a native wheel carrying
+the f64 kernel is PUBLISHED.
+
+| | |
+|---|---|
+| source (main) | `0.1.20`, f64 kernel |
+| PyPI | `0.1.20`, **f32** kernel |
+
+Same version number, different behaviour — worse than ordinary skew, because
+nothing signals the change. And `goldenmatch-native>=0.1.0` is a marker-guarded
+**default** dependency, so `pip install goldenmatch` pulls the f32 wheel.
+
+Lifting the gate now would enable native scoring on that wheel for every PyPI
+user and **reintroduce the exact decision flips this section was written to
+prevent**. This is #688's lesson applied to a behaviour change rather than a new
+symbol: republish in the same change that depends on it.
+
+Order: bump `Cargo.toml` + `pyproject.toml` in lockstep (a republish reads the
+version from **pyproject**, and the two have drifted before) -> publish -> then
+lift the gate. Condition 1's published-symbol check in the `pack-executor-env`
+lane should become a published-BEHAVIOUR check at that point.
+
 ### What stays
 
-- The decision-stability test **stays and becomes B's acceptance gate.** It was
+- The decision-stability test **stays and is B's acceptance gate.** It was
   written to catch exactly this and did so on its first run.
 - Condition 1 (parity on the PUBLISHED wheel) still applies to B.
 - `sail_scoring` stays in `_FALLBACK_ONLY` until B lands. The gate was never
