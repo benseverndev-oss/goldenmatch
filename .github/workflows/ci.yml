@@ -3036,13 +3036,25 @@ jobs:
       # trap documented in goldenmatch/sail/deps.py.
       - name: Build + pack a runtime venv for the executors
         run: |
+          set -euo pipefail
           python -m venv /tmp/gmenv
-          /tmp/gmenv/bin/pip install -q --upgrade pip
-          /tmp/gmenv/bin/pip install -q ./packages/python/goldenmatch
+          /tmp/gmenv/bin/pip install --upgrade pip
+          # goldenmatch does NOT depend on pandas, but `pandas_udf` needs it in
+          # the WORKER -- that is why P0 logged `No module named 'pandas'` 13
+          # times alongside the goldenmatch ones. pyarrow is goldenmatch's own
+          # dep but is named here so the worker contract is explicit rather than
+          # transitive. NOT -q: a silent pip failure is how you ship an env that
+          # unpacks fine and imports nothing.
+          /tmp/gmenv/bin/pip install ./packages/python/goldenmatch pandas pyarrow
+          echo "--- shipped env contents ---"
+          /tmp/gmenv/bin/pip list | grep -iE "goldenmatch|rapidfuzz|pandas|pyarrow"
+          # cd out of the repo: its ROOT DIRECTORY is itself named `goldenmatch`,
+          # so a check run from there can import the source tree instead of the
+          # installed package and pass while the env is empty.
+          (cd /tmp && /tmp/gmenv/bin/python -c "import goldenmatch, rapidfuzz, pandas, pyarrow; print('shipped env imports OK')")
           uv pip install venv-pack
           .venv/bin/venv-pack -p /tmp/gmenv -o gm_env.tar.gz --force
           ls -lh gm_env.tar.gz
-          echo "shipped interpreter:"; /tmp/gmenv/bin/python -c "import goldenmatch, rapidfuzz; print('goldenmatch', goldenmatch.__version__ if hasattr(goldenmatch,'__version__') else 'ok')"
       - name: Sail tests against Apache Spark Connect
         env:
           GOLDENMATCH_SPARK_REMOTE: "local[*]"
