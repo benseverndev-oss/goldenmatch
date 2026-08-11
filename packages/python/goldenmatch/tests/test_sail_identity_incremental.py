@@ -7,12 +7,15 @@ docs/superpowers/specs/2026-08-08-sail-identity-layer2-incremental-design.md.
 Two tiers, matching ``test_sail_identity_parity.py``:
   * PURE unit tests (the public import surface) run in the normal python lane.
   * SERVER tests use an in-process Sail Spark Connect server behind an
-    ``importorskip``, so they SKIP without the [sail] extra and run in the
+    ``importorskip`` on ``pyspark``, so they SKIP without a Spark client and run in the
     `sail` CI lane.
 """
 from __future__ import annotations
 
 import pytest
+
+pytest.importorskip("pyspark")
+
 
 RUN = {
     "run_name": "run-2",
@@ -69,22 +72,6 @@ def test_incremental_signature_is_additive():
 # --------------------------------------------------------------------------
 # Tier 2: server tests.
 # --------------------------------------------------------------------------
-
-
-@pytest.fixture(scope="module")
-def spark():
-    pytest.importorskip("pysail")
-    pytest.importorskip("pyspark")
-    from pysail.spark import SparkConnectServer
-    from pyspark.sql import SparkSession
-
-    server = SparkConnectServer()
-    server.start()
-    _, port = server.listening_address
-    sess = SparkSession.builder.remote(f"sc://localhost:{port}").getOrCreate()
-    yield sess
-    sess.stop()
-    server.stop()
 
 
 def _source(spark, rows):

@@ -19,8 +19,8 @@ from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("pysail")
 pytest.importorskip("pyspark")
+
 pytest.importorskip("rapidfuzz")
 
 
@@ -39,20 +39,6 @@ _ROWS = [
     (4, "Brown", "20002"),
     (5, "Carter", "30003"),
 ]
-
-
-@pytest.fixture(scope="module")
-def spark():
-    from pysail.spark import SparkConnectServer
-    from pyspark.sql import SparkSession
-
-    server = SparkConnectServer()
-    server.start()
-    _, port = server.listening_address
-    sess = SparkSession.builder.remote(f"sc://localhost:{port}").getOrCreate()
-    yield sess
-    sess.stop()
-    server.stop()
 
 
 def _reference_partition(ids, edges):

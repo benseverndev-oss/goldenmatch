@@ -2985,6 +2985,57 @@ jobs:
         run: |
           .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_sail_pipeline.py -v --timeout=300
 
+  # P0 (spec docs/superpowers/specs/2026-08-10-spark-native-execution-design.md):
+  # the SAME sail tests against APACHE SPARK's own Connect server, not Sail's.
+  # The tier is believed backend-agnostic -- goldenmatch/sail/session.py is
+  # `SparkSession.builder.remote(url)` and there is no Sail-specific call
+  # anywhere in the package -- and this lane is what turns that belief into a
+  # fact before P1-P6 are built on it.
+  #
+  # NOT in ci-required while P0 runs: a red here is a FINDING to enumerate, not
+  # a merge blocker. Promote to required once green (P2).
+  spark_connect:
+    needs: changes
+    if: needs.changes.outputs.sail == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      # Real Spark's Connect server is JVM-side (unlike Sail's Rust one).
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
+      # NO pysail. goldenmatch[sail] pins pyspark<4 BECAUSE of pysail, so install
+      # the client directly to get Spark 4, whose `local[*]` remote spawns
+      # Spark's own Connect server in-process (no container, no cluster).
+      - name: Install pyspark connect (no Sail)
+        run: uv pip install 'pyspark[connect]>=4'
+      # The load-bearing assertion. A lane that silently picked pysail up from
+      # the lockfile would prove nothing while looking green.
+      - name: Confirm Sail is absent
+        run: |
+          .venv/bin/python -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('pysail') is None else 'pysail present; this lane must exercise real Spark')"
+      - name: Sail tests against Apache Spark Connect
+        env:
+          GOLDENMATCH_SPARK_REMOTE: "local[*]"
+        run: |
+          .venv/bin/python -c "import pyspark; print('pyspark', pyspark.__version__)"
+          .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_sail_*.py -v --timeout=600 \
+            --junitxml=spark-connect-results.xml
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        if: always()
+        with:
+          name: spark-connect-p0-results
+          path: spark-connect-results.xml
+          if-no-files-found: warn
+
   # dbt-goldensuite — restored after #464 dropped the lane that pointed at the
   # since-deleted packages/dbt/goldencheck and never re-pointed it at the merged
   # package. Parses the macro package under an in-memory DuckDB profile and runs
