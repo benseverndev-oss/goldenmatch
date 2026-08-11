@@ -104,3 +104,44 @@ class TestDownloadOnly:
         run_main("--download-only", "--no-download", "--datasets", "dblp-acm",
                  "--datasets-dir", str(tmp_path))
         assert seen == [{"dblp-acm"}]
+
+
+class TestUrlEnvFallback:
+    """`${{ vars.X }}` expands to the EMPTY STRING when the repo variable does
+    not exist, so `os.environ.get(name, default)` returns "" and the override
+    defeats the default instead of falling back to it.
+
+    That silently skipped DBLP-ACM in every scheduled `benchmarks` run --
+    "downloading from  ..." then "unknown url type: ''" -- which is why its
+    quality floor is still `None` ("no trustworthy baseline recorded yet").
+    Observed in run #94 (Aug 3) and still in #97 (Aug 11).
+    """
+
+    def test_unset_falls_back(self, monkeypatch):
+        monkeypatch.delenv("GM_TEST_URL", raising=False)
+        assert rb._url_env("GM_TEST_URL", "https://default/x.zip") == "https://default/x.zip"
+
+    def test_empty_falls_back(self, monkeypatch):
+        """THE regression. `os.environ.get(name, default)` returns "" here."""
+        monkeypatch.setenv("GM_TEST_URL", "")
+        assert rb._url_env("GM_TEST_URL", "https://default/x.zip") == "https://default/x.zip"
+
+    def test_a_real_override_still_wins(self, monkeypatch):
+        monkeypatch.setenv("GM_TEST_URL", "https://mirror/y.zip")
+        assert rb._url_env("GM_TEST_URL", "https://default/x.zip") == "https://mirror/y.zip"
+
+    def test_every_dataset_url_has_a_usable_default(self):
+        """Module-level constants are resolved at import, so this pins that a
+        blank workflow variable can never leave a dataset with no URL."""
+        assert rb._DBLP_ACM_URL.startswith("https://")
+        for spec in rb._PRODUCT_SPECS.values():
+            assert spec["url"].startswith("https://"), spec
+
+    def test_ncvr_keeps_its_empty_default_on_purpose(self):
+        """NCVR's 4.3 GB source is not mirrored, so "unset" legitimately means
+        "skip" and `_fetch_ncvr_sample` branches on the empty string. Routing it
+        through `_url_env` would be a no-op, but pin the intent so nobody
+        "fixes" it into a bogus URL."""
+        import inspect
+        src = inspect.getsource(rb)
+        assert '_NCVR_SAMPLE_URL = os.environ.get("GOLDENMATCH_NCVR_SAMPLE_URL", "")' in src
