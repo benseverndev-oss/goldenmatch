@@ -7103,6 +7103,7 @@
           "purpose": "Weakly-connected components on Sail (Spark Connect) -- the Union-Find",
           "defines": [
             "_truncate_lineage",
+            "_truncate_plan",
             "connected_components",
             "connected_components_scale"
           ]
