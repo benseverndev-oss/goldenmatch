@@ -26,6 +26,11 @@ from goldenmatch.core.block_analyzer import (
     score_candidate,
 )
 
+#: `analyze_blocking` resolves `estimate_recall` from its own module at call
+#: time, so tests stub it there. Addressed by string rather than by importing
+#: the module a second time -- one import style per module in this file.
+_ESTIMATE_RECALL = "goldenmatch.core.block_analyzer.estimate_recall"
+
 
 def _cand(fields, transforms, desc="c"):
     return {"key_fields": fields, "transforms": transforms, "description": desc}
@@ -89,8 +94,6 @@ class TestMeasuredRecallRanksTheSuggestions:
         """Two candidates whose raw scores are close but whose recalls are far
         apart: the higher-recall one must win. Before the fix `estimated_recall`
         never touched the ordering."""
-        import goldenmatch.core.block_analyzer as ba
-
         df = pl.DataFrame({
             "a": [f"a{i}" for i in range(60)],
             "b": [f"b{i}" for i in range(60)],
@@ -98,7 +101,7 @@ class TestMeasuredRecallRanksTheSuggestions:
         # Make recall the only thing that differs meaningfully.
         recalls = {"a": 0.9, "b": 0.1}
         monkeypatch.setattr(
-            ba, "estimate_recall",
+            _ESTIMATE_RECALL,
             lambda d, cand, cols, sample_size=1000: recalls.get(cand["key_fields"][0], 0.5),
         )
         sugs = analyze_blocking(df, ["a", "b"])
@@ -114,9 +117,7 @@ class TestMeasuredRecallRanksTheSuggestions:
         into the tail would rank unmeasured candidates as known-useless, and
         multiplying anywhere would push measured candidates below unmeasured
         ones whenever recall < 1. Tiering avoids both."""
-        import goldenmatch.core.block_analyzer as ba
-
-        monkeypatch.setattr(ba, "estimate_recall",
+        monkeypatch.setattr(_ESTIMATE_RECALL,
                             lambda d, cand, cols, sample_size=1000: 0.4)
         df = pl.DataFrame({c: [f"{c}{i}" for i in range(40)] for c in "abcd"})
         sugs = analyze_blocking(df, list("abcd"))
@@ -135,9 +136,7 @@ class TestMeasuredRecallRanksTheSuggestions:
         them all would leave degenerate blocking, and one mega-block is worse
         than a poor key -- so this warns rather than refuses, and the warning
         has to carry the number."""
-        import goldenmatch.core.block_analyzer as ba
-
-        monkeypatch.setattr(ba, "estimate_recall",
+        monkeypatch.setattr(_ESTIMATE_RECALL,
                             lambda d, cand, cols, sample_size=1000: 0.06)
         df = pl.DataFrame({"a": [f"a{i}" for i in range(30)]})
         with caplog.at_level("WARNING"):
@@ -147,9 +146,7 @@ class TestMeasuredRecallRanksTheSuggestions:
         assert "#2488" in caplog.text
 
     def test_no_warning_when_recall_is_healthy(self, monkeypatch, caplog):
-        import goldenmatch.core.block_analyzer as ba
-
-        monkeypatch.setattr(ba, "estimate_recall",
+        monkeypatch.setattr(_ESTIMATE_RECALL,
                             lambda d, cand, cols, sample_size=1000: 0.95)
         df = pl.DataFrame({"a": [f"a{i}" for i in range(30)]})
         with caplog.at_level("WARNING"):
