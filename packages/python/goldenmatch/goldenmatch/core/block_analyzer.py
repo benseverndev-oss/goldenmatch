@@ -205,6 +205,15 @@ def score_candidate(
         _cfv([k is not None for k in _keys], "bool", backend=_backend)
     )
 
+    # #2488: records this key CANNOT key. A compound key null-propagates (see
+    # `_apply_candidate_transforms`), so one sparse component nulls the whole
+    # key -- e.g. an Amazon-Google `manufacturer` component is 100% populated on
+    # one source and 7.2% on the other, nulling 65% of the frame. Those records
+    # are unblockable by this key, and a pair needs BOTH of its members blocked,
+    # so coverage^2 is a hard ceiling on the recall the key can ever achieve.
+    n_total = df_with_key.height
+    coverage = (df_valid.height / n_total) if n_total else 0.0
+
     if df_valid.height == 0:
         return {
             "group_count": 0,
@@ -212,6 +221,7 @@ def score_candidate(
             "mean_group_size": 0.0,
             "std_group_size": 0.0,
             "total_comparisons": 0,
+            "coverage": 0.0,
             "score": 0.0,
         }
 
@@ -220,7 +230,6 @@ def score_candidate(
     sizes = stats.column("len")
 
     group_count = stats.height
-    total_records = df_valid.height
 
     if group_count == 0:
         return {
@@ -229,6 +238,7 @@ def score_candidate(
             "mean_group_size": 0.0,
             "std_group_size": 0.0,
             "total_comparisons": 0,
+            "coverage": coverage,
             "score": 0.0,
         }
 
@@ -242,12 +252,25 @@ def score_candidate(
     # (same values as the old polars expression).
     total_comparisons = sum(k * (k - 1) // 2 for k in sizes.to_list())
 
-    # Score formula
+    # Score formula. The first term is selectivity -- "how finely does this key
+    # split the data".
+    #
+    # #2488: that term used to divide by `df_valid.height`, the records that
+    # PRODUCED a key, which silently normalises coverage away: a key that can
+    # only key 35% of the frame was scored as though the frame were just that
+    # 35%, so it looked maximally selective AND cheap (`total_comparisons` is
+    # likewise summed over survivors only). Dividing by the full height instead
+    # caps the term at `coverage`, which is the honest bound -- a key cannot be
+    # selective about a record it cannot key.
+    #
+    # This is a NO-OP for a fully-covered key (df_valid.height == n_total), which
+    # is the overwhelming majority, so it only moves the ranking where coverage
+    # is genuinely partial.
     if mean_group_size == 0:
         score = 0.0
     else:
         score = (
-            (group_count / total_records)
+            (group_count / n_total)
             * (1 / (1 + max_group_size / target_block_size))
             * (1 / (1 + std_group_size / mean_group_size))
         )
@@ -258,6 +281,7 @@ def score_candidate(
         "mean_group_size": float(mean_group_size),
         "std_group_size": float(std_group_size),
         "total_comparisons": total_comparisons,
+        "coverage": float(coverage),
         "score": float(score),
     }
 
@@ -365,6 +389,13 @@ class BlockingSuggestion:
 _SCORE_SAMPLE_THRESHOLD = 100_000
 _SCORE_SAMPLE_SIZE = 100_000
 
+#: Below this estimated recall, the chosen blocking plan is reported as
+#: low-recall rather than committed silently (#2488). Deliberately generous --
+#: the point is to catch a collapse (Amazon-Google estimates 0.05-0.07 across
+#: every candidate), not to police a well-tuned plan that trades a little recall
+#: for tractability.
+_LOW_RECALL_WARN = 0.30
+
 
 def analyze_blocking(
     df: pl.DataFrame,
@@ -448,7 +479,44 @@ def analyze_blocking(
             description=cand["description"],
         ))
 
-    # Sort by final score descending
-    suggestions.sort(key=lambda s: s.score, reverse=True)
+    # #2488: rank the MEASURED candidates by score x recall.
+    #
+    # `estimated_recall` was computed here and then thrown away -- the only
+    # thing multiplying the score was `recall_bonus`, which is
+    # `check_coverage`'s field-membership flag (are the key's columns matchkey
+    # columns?) and has nothing to do with how many true pairs the key retains.
+    # So the analyzer measured recall, logged it, and ranked as if it hadn't.
+    # On Amazon-Google every candidate estimates 0.05-0.07 recall and the top
+    # one was picked purely on selectivity.
+    #
+    # Two tiers, deliberately: recall is only MEASURED for the top `top_n`, so
+    # multiplying it into every score would rank an unmeasured candidate
+    # (placeholder 0.0) as if it were known-useless, and would push measured
+    # candidates below unmeasured ones whenever recall < 1. `suggestions` is
+    # built in `scored` order and `scored` is sorted by raw score, so the first
+    # `top_n` are exactly the measured ones. They keep that block and are
+    # reordered within it; the unmeasured tail stays behind them in score order,
+    # exactly where it already was.
+    measured, unmeasured = suggestions[:top_n], suggestions[top_n:]
+    measured.sort(key=lambda s: (s.score * s.estimated_recall, s.score), reverse=True)
+    suggestions = measured + unmeasured
+
+    if suggestions and suggestions[0].estimated_recall < _LOW_RECALL_WARN:
+        # Not a hard reject. On a frame where EVERY candidate is below the floor
+        # -- which is the Amazon-Google case -- rejecting them all leaves
+        # degenerate blocking, and one mega-block is worse than a poor key. The
+        # honest move is to run and say so, loudly, rather than to report a
+        # 5%-recall plan as a normal success.
+        logger.warning(
+            "Auto-suggest: best blocking candidate %r estimates only %.1f%% recall "
+            "(coverage %.1f%%). Every candidate considered was below %.0f%%, so this "
+            "is a low-recall blocking plan, not a tuned one -- expect most true "
+            "matches to be missed. Provide an explicit blocking config if this "
+            "dataset matters. See #2488.",
+            suggestions[0].description,
+            100.0 * suggestions[0].estimated_recall,
+            100.0 * scored[0][1].get("coverage", 0.0),
+            100.0 * _LOW_RECALL_WARN,
+        )
 
     return suggestions
