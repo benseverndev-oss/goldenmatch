@@ -29,12 +29,13 @@ DBLP_ACM_DIR = DATASETS / "DBLP-ACM"
 DBLP_ACM_FILES = ("DBLP2.csv", "ACM.csv")
 DBLP_ACM_AVAILABLE = all((DBLP_ACM_DIR / f).is_file() for f in DBLP_ACM_FILES)
 
-_FETCH = "python scripts/fetch_benchmark_datasets.py"
-_MISSING_DBLP_ACM = f"DBLP-ACM dataset missing -- fetch it with `{_FETCH} DBLP-ACM`"
-# NCVR is the one set the fetch script cannot get: it is an NC voter roll
-# extract, not redistributable from a public URL.
+_FETCH = "python scripts/run_benchmarks.py --download-only --datasets"
+_MISSING_DBLP_ACM = f"DBLP-ACM dataset missing -- fetch it with `{_FETCH} dblp-acm`"
+# NCVR is the one set that cannot be pulled from a public URL: it is an NC voter
+# roll extract. `--download-only --datasets ncvr` needs GOLDENMATCH_NCVR_SAMPLE_URL
+# pointed at a hosted 10k sample.
 _MISSING_NCVR = (
-    f"NCVR sample dataset missing -- not auto-fetchable, see `{_FETCH} --list`"
+    f"NCVR sample dataset missing -- `{_FETCH} ncvr` needs GOLDENMATCH_NCVR_SAMPLE_URL"
 )
 
 

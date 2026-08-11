@@ -1102,10 +1102,9 @@ jobs:
       # This job is gated exactly on `scripts/**`, so it is the right place to
       # RUN the scripts/ unit tests and not merely lint them -- a test that CI
       # only ever lints is the "a check exists and does not fire" class.
-      # Network-free: the fetch tests drive the real download path over
-      # `file://` URLs through each dataset's env override.
+      # Network-free: `_ensure_datasets` is stubbed, so nothing here fetches.
       - name: Pytest (scripts/ unit tests)
-        run: uv run pytest scripts/test_fetch_benchmark_datasets.py -q
+        run: uv run pytest scripts/test_run_benchmarks_download.py -q
 
   # Every repo path a CLAUDE.md names must exist. These files are loaded as
   # authoritative agent context, so a dead pointer does not merely fail to help --
