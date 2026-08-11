@@ -3022,9 +3022,19 @@ jobs:
       - name: Confirm Sail is absent
         run: |
           .venv/bin/python -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('pysail') is None else 'pysail present; this lane must exercise real Spark')"
+      # P1: real Spark forks a Python worker with its own env, so the client's
+      # site-packages are absent -- that was P0's entire failure class. Pack the
+      # venv here (CI is Linux, so it matches the executor platform by
+      # construction) and ship it via addArtifact at session time.
+      - name: Pack the client venv for the executors
+        run: |
+          uv pip install venv-pack
+          .venv/bin/python -m venv_pack -o gm_env.tar.gz --force
+          ls -lh gm_env.tar.gz
       - name: Sail tests against Apache Spark Connect
         env:
           GOLDENMATCH_SPARK_REMOTE: "local[*]"
+          GOLDENMATCH_SPARK_PYENV: "gm_env.tar.gz"
         run: |
           .venv/bin/python -c "import pyspark; print('pyspark', pyspark.__version__)"
           .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_sail_*.py -v --timeout=600 \
