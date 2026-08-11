@@ -4,7 +4,7 @@ equal the pure-Python rapidfuzz floor for the Sail tier scorers.
 R1 of ``docs/superpowers/specs/2026-06-13-sail-tier-past-one-box-roadmap.md``:
 the Sail scorer ships a pure-Python rapidfuzz `pandas_udf` FLOOR; benching it
 measures Python-UDF overhead, not the engine. This test locks the native
-backend (`goldenmatch.sail.scorers._native_scores`, via the score-core kernel)
+backend (`goldenmatch.spark.scorers._native_scores`, via the score-core kernel)
 to the floor, so the throughput win (proved in
 `scripts/bench_sail_scorer_native.py`) is taken on a faithful number.
 
@@ -21,7 +21,7 @@ pytest.importorskip("rapidfuzz")
 pytest.importorskip("pyarrow")
 
 from goldenmatch.core._native_loader import native_module  # noqa: E402
-from goldenmatch.sail import scorers  # noqa: E402
+from goldenmatch.spark import scorers  # noqa: E402
 
 _HAS_KERNEL = (
     native_module() is not None

@@ -22,7 +22,7 @@ def _fixture_rows():
 
 
 def test_sail_scorer_udf_matches_rapidfuzz(spark):
-    from goldenmatch.sail.scorers import make_scorer_udf
+    from goldenmatch.spark.scorers import make_scorer_udf
     from rapidfuzz.distance import JaroWinkler
 
     df = spark.createDataFrame([("Aaaa", "Aaaa"), ("Brown", "Browne")], ["a", "b"])
@@ -57,7 +57,7 @@ def _reference_pairs(rows, threshold):
 
 
 def test_sail_score_dedup_pair_set_parity(spark):
-    from goldenmatch.sail.scoring import score_and_dedup
+    from goldenmatch.spark.scoring import score_and_dedup
 
     rows = _fixture_rows()
     threshold = 0.85

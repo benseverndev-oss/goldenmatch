@@ -29,7 +29,7 @@ def score_and_dedup(
     """
     from pyspark.sql import functions as F
 
-    from goldenmatch.sail.scorers import make_scorer_udf
+    from goldenmatch.spark.scorers import make_scorer_udf
 
     udf = make_scorer_udf(scorer_name)
     a = df.alias("a")

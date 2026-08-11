@@ -252,7 +252,7 @@ def spark():
     # invisible until a real backend ran).
     archive = os.environ.get("GOLDENMATCH_SPARK_PYENV")
     if archive:
-        from goldenmatch.sail.deps import ship_python_environment
+        from goldenmatch.spark.deps import ship_python_environment
 
         ship_python_environment(sess, archive)
 
