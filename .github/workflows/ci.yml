@@ -3023,10 +3023,8 @@ jobs:
         run: |
           .venv/bin/python -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('pysail') is None else 'pysail present; this lane must exercise real Spark')"
       # P1: real Spark forks a Python worker with its own env, so the client's
-      # site-packages are absent -- that was P0's entire failure class. Pack the
-      # venv here (CI is Linux, so it matches the executor platform by
-      # construction) and ship it via addArtifact at session time.
-      # Build a PURPOSE-BUILT runtime venv and pack that, rather than packing
+      # site-packages are absent -- that was P0's entire failure class. Build a
+      # PURPOSE-BUILT runtime venv and pack that, rather than packing
       # CI's own uv-created .venv. Two reasons:
       #   1. venv-pack rejects a uv venv outright ("Current environment is not a
       #      virtual environment"), so `-p` at a stdlib venv is the supported path.
