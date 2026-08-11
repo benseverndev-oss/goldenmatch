@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 459,
+      "module_count": 460,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7092,126 +7092,11 @@
         {
           "module": "goldenmatch.sail",
           "file": "packages/python/goldenmatch/goldenmatch/sail/__init__.py",
-          "purpose": "Sail tier (distributed, Spark Connect) -- the distributed sibling of the",
-          "imports": [
-            "goldenmatch.sail.identity"
-          ]
-        },
-        {
-          "module": "goldenmatch.sail.clustering",
-          "file": "packages/python/goldenmatch/goldenmatch/sail/clustering.py",
-          "purpose": "Weakly-connected components on Sail (Spark Connect) -- the Union-Find",
+          "purpose": "Deprecated alias for :mod:`goldenmatch.spark`.",
           "defines": [
-            "_truncate_lineage",
-            "_truncate_plan",
-            "connected_components",
-            "connected_components_scale"
-          ]
-        },
-        {
-          "module": "goldenmatch.sail.deps",
-          "file": "packages/python/goldenmatch/goldenmatch/sail/deps.py",
-          "purpose": "Ship the client's Python environment to Spark executors (P1).",
-          "defines": [
-            "executor_probe",
-            "ship_python_environment"
-          ],
-          "imports": [
-            "goldenmatch.core._native_loader"
-          ]
-        },
-        {
-          "module": "goldenmatch.sail.golden",
-          "file": "packages/python/goldenmatch/goldenmatch/sail/golden.py",
-          "purpose": "Golden-record survivorship on Sail (Spark Connect), distributed.",
-          "defines": [
-            "build_golden",
-            "make_merge_udf"
-          ],
-          "imports": [
-            "goldenmatch.config.schemas",
-            "goldenmatch.core.golden"
-          ]
-        },
-        {
-          "module": "goldenmatch.sail.identity",
-          "file": "packages/python/goldenmatch/goldenmatch/sail/identity.py",
-          "purpose": "S5: identity-on-Sail — distributed create + edge-emit (Stage S5).",
-          "defines": [
-            "IdentityGraphFrames",
-            "_golden_record_json",
-            "_id_scheme",
-            "build_identity_events",
-            "build_identity_graph",
-            "build_identity_graph_incremental",
-            "build_identity_nodes",
-            "build_incremental_events",
-            "build_incremental_nodes",
-            "build_incremental_records",
-            "build_same_as_edges",
-            "build_source_records",
-            "derive_record_ids",
-            "entity_id_for_members",
-            "mint_entity_ids",
-            "record_id_for_row",
-            "resolve_cluster_entities"
-          ],
-          "imports": [
-            "goldenmatch.core._hashing",
-            "goldenmatch.identity.fingerprint_batch",
-            "goldenmatch.identity.store"
-          ]
-        },
-        {
-          "module": "goldenmatch.sail.pipeline",
-          "file": "packages/python/goldenmatch/goldenmatch/sail/pipeline.py",
-          "purpose": "End-to-end Sail pipeline: load -> block -> score -> dedup -> WCC -> golden,",
-          "defines": [
-            "SailPipelineResult",
-            "_validate_sail_pipeline_supported",
-            "run_sail_pipeline"
-          ],
-          "imports": [
-            "goldenmatch.sail.clustering",
-            "goldenmatch.sail.golden",
-            "goldenmatch.sail.identity",
-            "goldenmatch.sail.scorers",
-            "goldenmatch.sail.scoring"
-          ]
-        },
-        {
-          "module": "goldenmatch.sail.scorers",
-          "file": "packages/python/goldenmatch/goldenmatch/sail/scorers.py",
-          "purpose": "Scorers as Spark pandas UDFs for the Sail tier (Spark Connect).",
-          "defines": [
-            "_native_scores",
-            "_pure_scores",
-            "_warn_native_scorer_wheel_too_old_once",
-            "make_scorer_udf",
-            "score_batch"
-          ],
-          "imports": [
-            "goldenmatch.core",
-            "goldenmatch.core._native_loader"
-          ]
-        },
-        {
-          "module": "goldenmatch.sail.scoring",
-          "file": "packages/python/goldenmatch/goldenmatch/sail/scoring.py",
-          "purpose": "S1 score+dedup on Sail (Spark Connect): a block self-join scored by a",
-          "defines": [
-            "score_and_dedup"
-          ],
-          "imports": [
-            "goldenmatch.sail.scorers"
-          ]
-        },
-        {
-          "module": "goldenmatch.sail.session",
-          "file": "packages/python/goldenmatch/goldenmatch/sail/session.py",
-          "purpose": "Sail (Spark Connect) session helpers. Sail is programmed via PySpark /",
-          "defines": [
-            "connect"
+            "__dir__",
+            "__getattr__",
+            "_warn_once"
           ]
         },
         {
@@ -7764,6 +7649,132 @@
             "goldenflow.transforms.url",
             "goldenmatch.identity.query",
             "goldenmatch.identity.store"
+          ]
+        },
+        {
+          "module": "goldenmatch.spark",
+          "file": "packages/python/goldenmatch/goldenmatch/spark/__init__.py",
+          "purpose": "Sail tier (distributed, Spark Connect) -- the distributed sibling of the",
+          "imports": [
+            "goldenmatch.spark.identity"
+          ]
+        },
+        {
+          "module": "goldenmatch.spark.clustering",
+          "file": "packages/python/goldenmatch/goldenmatch/spark/clustering.py",
+          "purpose": "Weakly-connected components on Sail (Spark Connect) -- the Union-Find",
+          "defines": [
+            "_truncate_lineage",
+            "_truncate_plan",
+            "connected_components",
+            "connected_components_scale"
+          ]
+        },
+        {
+          "module": "goldenmatch.spark.deps",
+          "file": "packages/python/goldenmatch/goldenmatch/spark/deps.py",
+          "purpose": "Ship the client's Python environment to Spark executors (P1).",
+          "defines": [
+            "executor_probe",
+            "ship_python_environment"
+          ],
+          "imports": [
+            "goldenmatch.core._native_loader"
+          ]
+        },
+        {
+          "module": "goldenmatch.spark.golden",
+          "file": "packages/python/goldenmatch/goldenmatch/spark/golden.py",
+          "purpose": "Golden-record survivorship on Sail (Spark Connect), distributed.",
+          "defines": [
+            "build_golden",
+            "make_merge_udf"
+          ],
+          "imports": [
+            "goldenmatch.config.schemas",
+            "goldenmatch.core.golden"
+          ]
+        },
+        {
+          "module": "goldenmatch.spark.identity",
+          "file": "packages/python/goldenmatch/goldenmatch/spark/identity.py",
+          "purpose": "S5: identity-on-Sail — distributed create + edge-emit (Stage S5).",
+          "defines": [
+            "IdentityGraphFrames",
+            "_golden_record_json",
+            "_id_scheme",
+            "build_identity_events",
+            "build_identity_graph",
+            "build_identity_graph_incremental",
+            "build_identity_nodes",
+            "build_incremental_events",
+            "build_incremental_nodes",
+            "build_incremental_records",
+            "build_same_as_edges",
+            "build_source_records",
+            "derive_record_ids",
+            "entity_id_for_members",
+            "mint_entity_ids",
+            "record_id_for_row",
+            "resolve_cluster_entities"
+          ],
+          "imports": [
+            "goldenmatch.core._hashing",
+            "goldenmatch.identity.fingerprint_batch",
+            "goldenmatch.identity.store"
+          ]
+        },
+        {
+          "module": "goldenmatch.spark.pipeline",
+          "file": "packages/python/goldenmatch/goldenmatch/spark/pipeline.py",
+          "purpose": "End-to-end Sail pipeline: load -> block -> score -> dedup -> WCC -> golden,",
+          "defines": [
+            "SailPipelineResult",
+            "_validate_sail_pipeline_supported",
+            "run_sail_pipeline"
+          ],
+          "imports": [
+            "goldenmatch.spark.clustering",
+            "goldenmatch.spark.golden",
+            "goldenmatch.spark.identity",
+            "goldenmatch.spark.scorers",
+            "goldenmatch.spark.scoring"
+          ]
+        },
+        {
+          "module": "goldenmatch.spark.scorers",
+          "file": "packages/python/goldenmatch/goldenmatch/spark/scorers.py",
+          "purpose": "Scorers as Spark pandas UDFs for the Sail tier (Spark Connect).",
+          "defines": [
+            "_native_scores",
+            "_pure_scores",
+            "_warn_native_scorer_wheel_too_old_once",
+            "make_scorer_udf",
+            "score_batch"
+          ],
+          "imports": [
+            "goldenmatch.core",
+            "goldenmatch.core._native_loader"
+          ]
+        },
+        {
+          "module": "goldenmatch.spark.scoring",
+          "file": "packages/python/goldenmatch/goldenmatch/spark/scoring.py",
+          "purpose": "S1 score+dedup on Sail (Spark Connect): a block self-join scored by a",
+          "defines": [
+            "score_and_dedup"
+          ],
+          "imports": [
+            "goldenmatch.spark.scorers"
+          ]
+        },
+        {
+          "module": "goldenmatch.spark.session",
+          "file": "packages/python/goldenmatch/goldenmatch/spark/session.py",
+          "purpose": "Spark Connect session helpers.",
+          "defines": [
+            "_remote_from_env",
+            "connect"
           ]
         },
         {

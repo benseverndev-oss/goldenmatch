@@ -29,7 +29,7 @@ import time
 
 import numpy as np
 from goldenmatch.core._native_loader import native_module
-from goldenmatch.sail import scorers
+from goldenmatch.spark import scorers
 
 
 def _rand_strings(n: int, lo: int, hi: int, seed: int) -> list[str]:

@@ -22,7 +22,7 @@ import pytest
 
 pytest.importorskip("pyspark")
 
-from goldenmatch.sail.identity import entity_id_for_members, record_id_for_row
+from goldenmatch.spark.identity import entity_id_for_members, record_id_for_row
 
 # --------------------------------------------------------------------------
 # Tier 1: pure-helper unit tests (no Sail server needed).
@@ -64,7 +64,7 @@ def test_entity_id_distinct_for_distinct_members():
 
 
 def test_derive_record_ids_pk(spark):
-    from goldenmatch.sail.identity import derive_record_ids
+    from goldenmatch.spark.identity import derive_record_ids
 
     df = spark.createDataFrame(
         [(0, "people", 10, "Jon"), (1, "people", 11, "Marg")],
@@ -78,7 +78,7 @@ def test_derive_record_ids_pk(spark):
 
 
 def test_mint_entity_ids(spark):
-    from goldenmatch.sail.identity import entity_id_for_members, mint_entity_ids
+    from goldenmatch.spark.identity import entity_id_for_members, mint_entity_ids
 
     rows = [(0, "people:10"), (0, "people:11"), (5, "people:15")]
     df = spark.createDataFrame(rows, ["cluster_id", "record_id"])
@@ -97,7 +97,7 @@ def _run_meta():
 
 
 def test_same_as_edges_set(spark):
-    from goldenmatch.sail.identity import build_same_as_edges
+    from goldenmatch.spark.identity import build_same_as_edges
 
     pairs = spark.createDataFrame([(0, 1, 0.97), (2, 3, 0.91)], ["a", "b", "score"])
     assignments = spark.createDataFrame(
@@ -119,7 +119,7 @@ def test_same_as_edges_set(spark):
 
 
 def test_nodes_include_singletons_and_records(spark):
-    from goldenmatch.sail.identity import build_identity_nodes, build_source_records
+    from goldenmatch.spark.identity import build_identity_nodes, build_source_records
 
     assignments = spark.createDataFrame(
         [(0, 0), (0, 1), (5, 5)], ["cluster_id", "member_id"]
@@ -222,7 +222,7 @@ def _clusters(assignments):
 
 
 def test_identity_graph_parity(spark, tmp_path):
-    from goldenmatch.sail.identity import build_identity_graph
+    from goldenmatch.spark.identity import build_identity_graph
 
     rows, pairs, assignments = _fixture()
     edges_ref, part_ref = _one_box_graph(
@@ -256,7 +256,7 @@ def test_identity_graph_parity(spark, tmp_path):
 
 
 def test_identity_graph_deterministic(spark, tmp_path):
-    from goldenmatch.sail.identity import build_identity_graph
+    from goldenmatch.spark.identity import build_identity_graph
 
     rows, pairs, assignments = _fixture()
     source = spark.createDataFrame(rows, ["__row_id__", "__source__", "pk", "name"])

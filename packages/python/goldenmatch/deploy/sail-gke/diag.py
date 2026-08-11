@@ -4,10 +4,10 @@ stage wedges and at what scale. Mounted via ConfigMap (editable, no rebuild)."""
 import os
 import time
 
-from goldenmatch.sail.clustering import connected_components
-from goldenmatch.sail.golden import build_golden
-from goldenmatch.sail.scoring import score_and_dedup
-from goldenmatch.sail.session import connect
+from goldenmatch.spark.clustering import connected_components
+from goldenmatch.spark.golden import build_golden
+from goldenmatch.spark.scoring import score_and_dedup
+from goldenmatch.spark.session import connect
 
 remote = os.environ.get(
     "SAIL_REMOTE", "sc://sail-spark-server.sail.svc.cluster.local:50051"

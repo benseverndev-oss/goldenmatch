@@ -18,7 +18,7 @@ def test_truncate_plan_is_a_noop_when_the_backend_lacks_the_primitive():
     `getattr(df, name, None)` does NOT return the default -- the first version of
     this helper put getattr outside the try and broke every WCC test on pysail.
     """
-    from goldenmatch.sail.clustering import _truncate_plan
+    from goldenmatch.spark.clustering import _truncate_plan
 
     class _RaisesOnAttributeAccess:
         def __getattr__(self, name):
@@ -33,7 +33,7 @@ def test_truncate_plan_is_a_noop_when_the_backend_lacks_the_primitive():
 def test_truncate_plan_uses_local_checkpoint_when_available():
     """And when the primitive IS there, it must actually be used -- a helper that
     silently no-ops everywhere would 'fix' nothing while looking correct."""
-    from goldenmatch.sail.clustering import _truncate_plan
+    from goldenmatch.spark.clustering import _truncate_plan
 
     sentinel = object()
     calls: list[str] = []

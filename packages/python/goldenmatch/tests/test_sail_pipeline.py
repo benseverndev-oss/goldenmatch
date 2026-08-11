@@ -9,7 +9,7 @@ pytest.importorskip("pyspark")
 
 
 def test_run_sail_pipeline_end_to_end(spark):
-    from goldenmatch.sail.pipeline import run_sail_pipeline
+    from goldenmatch.spark.pipeline import run_sail_pipeline
 
     rows = [
         (0, "10001", "Smith", "Jon"),
@@ -30,8 +30,8 @@ def test_run_sail_pipeline_end_to_end(spark):
 
 
 def test_run_sail_pipeline_emit_identity(spark):
-    from goldenmatch.sail.identity import IdentityGraphFrames
-    from goldenmatch.sail.pipeline import SailPipelineResult, run_sail_pipeline
+    from goldenmatch.spark.identity import IdentityGraphFrames
+    from goldenmatch.spark.pipeline import SailPipelineResult, run_sail_pipeline
 
     # same clustering shape as above, with __source__ + pk for record ids.
     rows = [

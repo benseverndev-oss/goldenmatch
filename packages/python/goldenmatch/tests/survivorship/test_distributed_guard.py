@@ -64,7 +64,7 @@ def test_helper_error_message_mentions_where():
 # ---------------------------------------------------------------------------
 
 def test_sail_build_golden_refuses_field_groups():
-    from goldenmatch.sail.golden import build_golden
+    from goldenmatch.spark.golden import build_golden
 
     rules = GoldenRulesConfig(
         default_strategy="most_complete",
@@ -80,7 +80,7 @@ def test_sail_build_golden_refuses_field_groups():
 
 
 def test_sail_build_golden_refuses_conditional():
-    from goldenmatch.sail.golden import build_golden
+    from goldenmatch.spark.golden import build_golden
 
     rules = GoldenRulesConfig(
         default_strategy="most_complete",
@@ -107,7 +107,7 @@ def test_sail_build_golden_noop_without_survivorship():
     import / None args, which is expected (we only care that the guard does
     NOT fire here).
     """
-    from goldenmatch.sail.golden import build_golden
+    from goldenmatch.spark.golden import build_golden
 
     # Without rules=, the guard is a no-op. The function then tries to use
     # PySpark which isn't available in CI, raising ImportError or AttributeError

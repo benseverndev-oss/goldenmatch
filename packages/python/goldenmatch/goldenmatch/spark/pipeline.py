@@ -25,7 +25,7 @@ def _validate_sail_pipeline_supported(*, scorer_name: str, wcc: str) -> None:
     ``wcc`` (otherwise silently routes to label-prop). Survivorship ``strategy``
     is NOT re-checked -- ``core.golden.merge_field`` already raises on unknown.
     """
-    from goldenmatch.sail.scorers import _SUPPORTED as _SUPPORTED_SCORERS
+    from goldenmatch.spark.scorers import _SUPPORTED as _SUPPORTED_SCORERS
 
     if scorer_name not in _SUPPORTED_SCORERS:
         raise NotImplementedError(
@@ -89,13 +89,13 @@ def run_sail_pipeline(
     """
     _validate_sail_pipeline_supported(scorer_name=scorer_name, wcc=wcc)
 
-    from goldenmatch.sail.clustering import (
+    from goldenmatch.spark.clustering import (
         _truncate_lineage,
         connected_components,
         connected_components_scale,
     )
-    from goldenmatch.sail.golden import build_golden
-    from goldenmatch.sail.scoring import score_and_dedup
+    from goldenmatch.spark.golden import build_golden
+    from goldenmatch.spark.scoring import score_and_dedup
 
     pairs = score_and_dedup(
         source_df,
@@ -145,7 +145,7 @@ def run_sail_pipeline(
     if not emit_identity:
         return golden
 
-    from goldenmatch.sail.identity import build_identity_graph
+    from goldenmatch.spark.identity import build_identity_graph
 
     meta = run_meta or {
         "run_name": "sail",

@@ -23,8 +23,8 @@ def main() -> int:
     # "scale" is pointer-jumping (fixed ~log2(N) rounds, more stages).
     wcc = os.environ.get("SMOKE_WCC", "label_prop")
 
-    from goldenmatch.sail.pipeline import run_sail_pipeline
-    from goldenmatch.sail.session import connect
+    from goldenmatch.spark.pipeline import run_sail_pipeline
+    from goldenmatch.spark.session import connect
 
     print(f"[smoke] connecting to {remote}", flush=True)
     spark = connect(remote)
