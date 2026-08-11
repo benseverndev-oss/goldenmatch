@@ -1,0 +1,94 @@
+# Fast feedback loop for the executor-environment packing (P1).
+#
+# `spark_connect` in ci.yml is a ~10 minute round trip (uv sync, Java, pyspark,
+# the full sail suite). Packaging is shell plumbing that needed three of those
+# to shake out: venv-pack rejecting uv venvs, then goldenmatch not depending on
+# pandas, then a test asserting rapidfuzz which the product no longer ships.
+# Each was a real discovery arriving one per ten minutes.
+#
+# This lane does ONLY pack-and-verify: ~1 minute. It proves the archive is
+# well-formed and contains what a UDF worker needs. It does NOT prove Spark can
+# use it -- that stays `spark_connect`'s job.
+#
+# workflow_dispatch only; never a merge gate.
+name: pack-executor-env
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "git ref to pack from"
+        required: false
+        default: "main"
+
+permissions:
+  contents: read
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+        with:
+          ref: ${{ inputs.ref }}
+
+      # Deliberately NO uv sync, NO Java, NO pyspark. Packaging does not need
+      # them, and every second here is iteration latency.
+      - name: Build the runtime venv
+        run: |
+          set -euo pipefail
+          python -m venv /tmp/gmenv
+          /tmp/gmenv/bin/pip install --upgrade pip
+          # goldenmatch + the two the WORKER needs. goldenmatch does not depend
+          # on pandas, but pandas_udf does -- that was P0's second error class.
+          /tmp/gmenv/bin/pip install ./packages/python/goldenmatch pandas pyarrow
+
+      - name: What actually landed in it
+        run: /tmp/gmenv/bin/pip list
+
+      - name: Verify the shipped interpreter can run a UDF's imports
+        # cd out of the repo: its ROOT DIRECTORY is itself named `goldenmatch`,
+        # so a check run from there imports the SOURCE TREE rather than the
+        # installed package, and passes while the env is empty.
+        run: |
+          set -euo pipefail
+          cd /tmp
+          /tmp/gmenv/bin/python - <<'PY'
+          import importlib.util as u
+          need = {
+              "goldenmatch": "the package itself",
+              "goldenmatch.core.strsim": "the pure scorer floor (NOT rapidfuzz -- dev-only)",
+              "pandas": "pandas_udf requires it in the worker",
+              "pyarrow": "the Arrow bridge",
+          }
+          missing = {n: why for n, why in need.items() if u.find_spec(n) is None}
+          for n, why in need.items():
+              print(f"  {'OK ' if n not in missing else 'MISSING'}  {n}  -- {why}")
+          if missing:
+              raise SystemExit(f"shipped env is incomplete: {sorted(missing)}")
+          # The native kernel is OPTIONAL here: sail_scoring is _FALLBACK_ONLY
+          # until P3, so absence is expected and must not fail this lane.
+          try:
+              from goldenmatch.core._native_loader import native_module
+              print("  native kernel present:", native_module() is not None)
+          except Exception as exc:  # noqa: BLE001
+              print("  native kernel probe failed (not fatal):", exc)
+          print("shipped env OK")
+          PY
+
+      - name: Pack it
+        run: |
+          set -euo pipefail
+          pip install venv-pack
+          # `-p` at a stdlib venv: venv-pack REJECTS a uv-created venv outright
+          # ("Current environment is not a virtual environment").
+          venv-pack -p /tmp/gmenv -o gm_env.tar.gz --force
+          ls -lh gm_env.tar.gz
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: gm-executor-env
+          path: gm_env.tar.gz
+          if-no-files-found: error
+          retention-days: 3
