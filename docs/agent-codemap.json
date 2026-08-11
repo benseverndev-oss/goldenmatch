@@ -7108,6 +7108,18 @@
           ]
         },
         {
+          "module": "goldenmatch.sail.deps",
+          "file": "packages/python/goldenmatch/goldenmatch/sail/deps.py",
+          "purpose": "Ship the client's Python environment to Spark executors (P1).",
+          "defines": [
+            "executor_probe",
+            "ship_python_environment"
+          ],
+          "imports": [
+            "goldenmatch.core._native_loader"
+          ]
+        },
+        {
           "module": "goldenmatch.sail.golden",
           "file": "packages/python/goldenmatch/goldenmatch/sail/golden.py",
           "purpose": "Golden-record survivorship on Sail (Spark Connect), distributed.",

@@ -2,8 +2,10 @@
 
 Two backends, identical [0, 1] semantics:
 
-- **PURE floor** -- pure-Python rapidfuzz (rust-rapidfuzz == python-rapidfuzz at
-  1e-9), the exact parity reference. Always available; no native wheel needed.
+- **PURE floor** -- goldenmatch's OWN ``core.strsim`` (bit-parallel LCS/Jaro/
+  Myers), the exact parity reference. Always available; no native wheel and
+  NO third-party scorer dependency needed -- rapidfuzz is a dev-only extra
+  and is not installed at runtime.
 - **NATIVE** -- the shared `score-core` kernel via the vectorized
   `score_field_pairwise` Arrow UDF: one FFI crossing per batch, Arrow zero-copy,
   scored row-parallel in Rust (no per-element Python loop, no N*N matrix). This is
