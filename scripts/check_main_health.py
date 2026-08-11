@@ -180,12 +180,25 @@ def _issue_body(reds: list[dict]) -> str:
         "It is opened/updated when a non-`ci-required` lane goes red on `main` "
         "and closed automatically once `main` is clean again.",
         "",
-        "| Workflow | Conclusion | Latest main run |",
+        # "Latest AUTOMATIC main run", not "Latest main run": manual dispatches
+        # are excluded by `select_main_run`, so a newer passing dispatch can and
+        # does exist alongside the run named here. Saying "latest" flatly is a
+        # false claim -- it reads as a stale or broken query and sends the
+        # reader off to debug one (it did, on #2457, where both listed lanes had
+        # newer green dispatches).
+        "| Workflow | Conclusion | Latest automatic main run |",
         "| --- | --- | --- |",
     ]
     for r in reds:
         run_ref = f"[#{r['run_number']}]({r['html_url']})" if r.get("html_url") else "-"
         lines.append(f"| `{r['name']}` | {r['conclusion']} | {run_ref} |")
+    lines.append("")
+    lines.append(
+        "Manual `workflow_dispatch` runs are deliberately excluded: a dispatch "
+        "can run a narrower scope than the scheduled lane and pass, which would "
+        "mask a real red. So a green dispatch newer than the run above does "
+        "**not** clear this -- only the next automatic (schedule/push) run does."
+    )
     lines.append("")
     lines.append("_Fix the lane, then this issue closes itself on the next scheduled run._")
     return "\n".join(lines)
