@@ -466,6 +466,72 @@ def _run_dqbench(with_llm: bool = False) -> dict[str, Any] | None:
     }
 
 
+# ---------------------------------------------------------------------------
+# Quality floors (#2470)
+# ---------------------------------------------------------------------------
+#
+# Without these the lane reports success on any run that does not CRASH, so a
+# quality collapse is indistinguishable from a healthy run. Run 31414594892 was
+# GREEN with Amazon-Google at f1=0.0697 / recall=0.0419 -- finding 4.2% of true
+# matches -- while the engine itself had logged that it committed a best-effort
+# RED config.
+#
+# Floors are set at roughly the CURRENT HONEST values, deliberately not at
+# aspirational ones: the job of this gate is to catch regressions, not to fail
+# every run until the matcher improves. Raising a floor after a genuine
+# improvement is a reviewable one-line diff, which is the point of committing
+# them next to the datasets.
+#
+# `None` means "no floor yet" -- a dataset nobody has a trustworthy baseline for.
+# That is honest, and it is visible, which an absent entry would not be.
+_F1_FLOORS: dict[str, float | None] = {
+    # measured 0.9912
+    "Febrl3": 0.95,
+    # measured 0.5037 -- product matching is genuinely hard; this pins the floor
+    # just under the observed value so a real regression trips it.
+    "Abt-Buy": 0.45,
+    # KNOWN BAD (#2470). Measured 0.0697 / recall 0.0419. The floor is set at the
+    # observed value ONLY to stop it getting worse; it is not an endorsement, and
+    # this dataset should be treated as an open quality bug rather than a passing
+    # lane. Raise it as the matcher improves.
+    "Amazon-Google": 0.05,
+    # No trustworthy baseline recorded yet -- these have not completed in CI.
+    "DBLP-ACM": None,
+    "NCVR": None,
+}
+
+
+def _check_quality_floors(results: list[dict[str, Any]]) -> list[str]:
+    """Return a list of human-readable breaches. Empty means the run is sound.
+
+    Two independent failure modes, because they fail differently:
+      * a metric below its floor -- the numbers are bad;
+      * a RED controller health -- the numbers are MEANINGLESS, whatever they
+        say, because auto-config never converged on a usable config.
+    """
+    breaches: list[str] = []
+    for r in results:
+        name = r.get("name", "?")
+        floor = _F1_FLOORS.get(name)
+        f1 = r.get("f1")
+        if floor is not None and isinstance(f1, (int, float)) and f1 < floor:
+            breaches.append(
+                f"{name}: f1={f1:.4f} is below the floor {floor:.4f} "
+                f"(precision={r.get('precision')}, recall={r.get('recall')})"
+            )
+        # A RED config means the controller gave up and committed a best-effort
+        # guess. Elsewhere that is a reasonable degradation; in a lane whose only
+        # job is measuring quality it is a FALSE RESULT, so it fails regardless
+        # of the F1 it happens to produce.
+        if str(r.get("health", "")).upper() == "RED":
+            breaches.append(
+                f"{name}: controller health is RED "
+                f"(stop_reason={r.get('stop_reason')}) -- the metrics are not "
+                "trustworthy even if they clear the floor"
+            )
+    return breaches
+
+
 def _emit_markdown_summary(results: list[dict[str, Any] | None], summary_path: Path | None) -> None:
     lines = ["## Benchmark results", "", "| Dataset | F1 | Precision | Recall | Time | Health |",
              "|---|---|---|---|---|---|"]
@@ -582,6 +648,11 @@ def main() -> int:
     parser.add_argument("--check", action="store_true",
                         help="Do not run: render the report from the committed .json and "
                              "fail (exit 1) if the committed .md is stale. Pairs with --report.")
+    parser.add_argument("--enforce-floors", action=argparse.BooleanOptionalAction,
+                        default=True,
+                        help="Fail (exit 1) when a dataset falls below its committed "
+                             "F1 floor or reports RED controller health (#2470). On by "
+                             "default: a benchmark lane that cannot fail measures nothing.")
     parser.add_argument("--download", action=argparse.BooleanOptionalAction, default=True,
                         help="Auto-pull missing file-backed datasets (DBLP-ACM from "
                              "Leipzig; NCVR 10k sample from GOLDENMATCH_NCVR_SAMPLE_URL). "
@@ -655,11 +726,21 @@ def main() -> int:
         },
     }
 
+    # #2470: decide BEFORE publishing. The committed report describes itself as
+    # "the current truth" and a --check gate forces PRs to match it, so putting a
+    # known-bad table there is worse than leaving a stale one.
+    breaches = _check_quality_floors(results)
+
     if args.output:
         args.output.write_text(json.dumps(payload, indent=2))
         _info(f"wrote results to {args.output}")
 
-    if args.report:
+    if args.report and breaches and args.enforce_floors:
+        _info(
+            f"REFUSING to publish {args.report}: {len(breaches)} quality "
+            "breach(es) listed below."
+        )
+    elif args.report:
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.with_suffix(".json").write_text(json.dumps(payload, indent=2) + "\n",
                                                      encoding="utf-8")
@@ -667,6 +748,21 @@ def main() -> int:
         _info(f"wrote committed report to {args.report} (+ .json)")
 
     _emit_markdown_summary(results, args.summary_md)
+
+    if breaches:
+        _info("")
+        _info("QUALITY FLOOR BREACHES (#2470):")
+        for b in breaches:
+            _info(f"  - {b}")
+        if args.enforce_floors:
+            _info("")
+            _info(
+                "Failing the lane. If a floor is genuinely wrong, change it in "
+                "_F1_FLOORS as a reviewable diff -- do NOT pass "
+                "--no-enforce-floors to make a red run look green."
+            )
+            return 1
+        _info("(--no-enforce-floors: reporting only, not failing)")
 
     if not results:
         _info("no datasets produced results (none configured); exiting 0")
