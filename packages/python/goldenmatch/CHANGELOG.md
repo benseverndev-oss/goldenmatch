@@ -7,6 +7,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Fixed
+- **Every FS scoring path now resolves the link cutoff the same way.**
+  `_fs_link_threshold` applies three steps in order -- configured
+  `mk.link_threshold`, then the EM-calibrated per-dataset cutoff, then the
+  calibration-aware default -- and its docstring records that it was extracted
+  "so they cannot drift on how the cutoff is resolved" (#1804 item 4). Four
+  scorers used it; two did not. `fused_match._match_fused_fs` and
+  `probabilistic_fast._resolve_probabilistic_fast_path` hand-rolled only the
+  FIRST and THIRD steps, so whenever EM produced a calibrated cutoff -- what
+  `GOLDENMATCH_FS_CALIBRATE_THRESHOLD` exists to do, worth +0.49 F1 on dblp_acm
+  per that flag's own docstring -- those two routes silently ignored it and cut
+  at the fixed 0.50 while the scalar/vectorized/batched routes honoured it. The
+  same config on the same data cut differently depending on which scorer the
+  router happened to pick. Both now call the shared helper. With no calibrated
+  cutoff present the resolved value is unchanged, so this only moves runs that
+  were already asking for calibration (#2483).
+- **A `threshold` set on a probabilistic matchkey is reported instead of
+  silently ignored.** `threshold` is the weighted matchkey's cutoff; the
+  probabilistic scorers read `link_threshold`. Setting it did nothing and
+  *reading* it raised, so a user swept `threshold` from 0.90 to 0.99, got
+  byte-identical results, and reasonably concluded the cut did not matter on
+  their data -- it was measuring nothing. Config validation now emits a
+  `UserWarning` naming `link_threshold`. A warning rather than a rejection: a
+  stray key is a usage mistake, not a corrupt config (#2483).
 - **Blocking suggestions account for what a key can REACH, not just what it
   costs.** Two compounding defects in `core/block_analyzer.py`, both measured on
   the Amazon-Google benchmark frame (#2488). (1) `score_candidate` divided its

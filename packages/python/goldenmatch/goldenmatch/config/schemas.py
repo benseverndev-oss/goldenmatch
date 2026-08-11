@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import warnings
 from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
@@ -677,6 +678,24 @@ class MatchkeyConfig(BaseModel):
             ):
                 raise ValueError(
                     "review_threshold must be less than or equal to link_threshold."
+                )
+            if self.threshold is not None:
+                # #2483: `threshold` is the WEIGHTED matchkey's cutoff and is
+                # inert here -- the probabilistic scorers read `link_threshold`.
+                # Silently ignoring it is expensive: a user swept `threshold`
+                # 0.90-0.99, got byte-identical results, and concluded the cut
+                # did not matter on their data, when it was measuring nothing.
+                # Warn rather than raise -- rejecting would break configs that
+                # merely carry a stray key, and this is a usage mistake, not a
+                # corrupt config.
+                warnings.warn(
+                    f"MatchkeyConfig {self.name!r} (type='probabilistic') sets "
+                    f"'threshold'={self.threshold}, which is IGNORED. "
+                    "Probabilistic matchkeys cut on 'link_threshold' (and "
+                    "'review_threshold'); 'threshold' applies to weighted "
+                    "matchkeys only. Set 'link_threshold' instead. See #2483.",
+                    UserWarning,
+                    stacklevel=2,
                 )
             for f in self.fields:
                 if f.scorer is None:
