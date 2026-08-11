@@ -224,11 +224,59 @@ seam is one Arrow FFI crossing per batch.
 
 ---
 
-## 6. DECIDED — the f32/f64 gate: **Option A**
+## 6. REVERSED — the f32/f64 gate: **Option B** (was A)
 
-> **Decision (2026-08-11, delegated by Ben):** accept f32 with a stated
-> tolerance, subject to the two conditions below. Recorded here rather than left
-> open, so P3 has a settled premise.
+> **Decision (2026-08-11, delegated by Ben): Option A.**
+> **REVERSED the same day by its own condition 2. Option B — the kernel must
+> return f64.**
+
+### The reversal, and the evidence
+
+Condition 2 (the decision-stability test) failed on its first CI run
+(run 31521331431, `python_goldenmatch` shard 3):
+
+```
+jaro_winkler @ threshold 0.95: 2 pair(s) changed decision
+  ('Jonathan','Jonothan')  pure=0.950000000  native=0.949999988
+  ('Anderson','Andersen')  pure=0.950000000  native=0.949999988
+```
+
+That is exactly the documented reversal trigger: **realistic threshold,
+realistic data, membership moves.** Not a constructed adversarial case — two
+ordinary surname pairs at 0.95, one of the most common thresholds in use.
+
+**Why it is systematic rather than unlucky.** Jaro-Winkler produces exact
+rational values, and those land on round thresholds far more often than intuition
+suggests. Here the f64 floor is **exactly 0.95**; f32 cannot represent it, so the
+nearest value is 0.949999988, and `>= 0.95` flips from True to False. Every
+threshold JW can hit exactly — 0.85, 0.9, 0.95 — is a collision site. The
+1e-6 tolerance was never the problem; the problem is that a threshold comparison
+turns any epsilon into a binary difference.
+
+This is the distinction the original decision leaned on and got wrong: a *stated*
+tolerance is fine for a score you report, and not fine for a score you
+**threshold**. Scoring is thresholded here, so f32 is not acceptable.
+
+### What Option B requires
+
+`score_field_pairwise` returns f64. That breaks the f32 convention shared with
+`score_field_matrix` and the DataFusion FFI scorer, which was the argument
+against B — and the argument is now outweighed: the convention buys FFI payload
+size, and it costs decision reproducibility against the one-box engine.
+
+Consider whether the convention itself should change for any scorer whose output
+is thresholded, rather than special-casing this one call site (§6 option C's
+two-return-width shape remains the thing to avoid).
+
+### What stays
+
+- The decision-stability test **stays and becomes B's acceptance gate.** It was
+  written to catch exactly this and did so on its first run.
+- Condition 1 (parity on the PUBLISHED wheel) still applies to B.
+- `sail_scoring` stays in `_FALLBACK_ONLY` until B lands. The gate was never
+  lifted, so nothing shipped on the wrong premise.
+
+### Original reasoning for A, kept for the record
 
 `sail_scoring` is `_FALLBACK_ONLY` because `score_field_pairwise` returns f32
 where the pure floor returns f64. Until this resolves, **the native kernel does
@@ -385,10 +433,15 @@ lift `pyspark[connect]<4`; delete `_truncate_lineage` once P0 confirms real
 Spark's `localCheckpoint`; retire `deploy/sail-gke/` from the product docs;
 amend ADR-0004.
 
-### P3 — Take `sail_scoring` out of `_FALLBACK_ONLY`
+### P3 — Make the kernel return f64, THEN take `sail_scoring` out of `_FALLBACK_ONLY`
 
-§6 is **decided (Option A)**; this phase executes its two conditions. No longer
-blocked.
+§6 was decided as A and **reversed to B** by its own condition 2 on the first CI
+run: `jaro_winkler` at 0.95 flips two ordinary surname pairs, because the f64
+floor is exactly 0.95 and f32's nearest value is 0.949999988. A tolerance is fine
+for a score you report and not fine for one you **threshold**.
+
+So P3 is no longer "lift the gate"; it is "remove the divergence, then lift the
+gate".
 
 1. Add the threshold-boundary test (§6 condition 2): assert **cluster membership**
    is stable across the native/pure boundary at realistic thresholds, not merely
