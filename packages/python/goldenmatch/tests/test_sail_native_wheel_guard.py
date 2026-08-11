@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-
 from goldenmatch.sail import scorers
 
 _A = ["Jonathan", "Anderson"]
