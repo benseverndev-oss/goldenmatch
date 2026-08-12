@@ -1,7 +1,7 @@
 """P1: the executor's Python worker can import goldenmatch, because the client
 shipped it at session time.
 
-Without this every ``pandas_udf`` dies with ``ModuleNotFoundError`` -- which is
+Without this every UDF dies with ``ModuleNotFoundError`` -- which is
 exactly what P0 measured (run 31496638072: 20 failures, one cause). These tests
 run ON THE EXECUTOR; asking the driver would prove nothing, because the driver
 is where the client venv already lives.
@@ -41,8 +41,23 @@ def test_executor_can_import_goldenmatch(spark):
     # extra -- asserting it here would force shipping a dependency the product
     # deliberately removed (it was replaced by owned bit-parallel strsim).
     assert report["strsim"] is True, f"goldenmatch.core.strsim missing: {report}"
-    assert report["pandas"] is True, (
-        f"pandas missing on the executor -- pandas_udf cannot run: {report}"
+    # pandas must be ABSENT, and this assertion used to say the opposite.
+    #
+    # It was right when the tier's UDFs were `pandas_udf`: the worker genuinely
+    # could not run without it. The tier is now `arrow_udf` over `pa.Array`, so
+    # pandas on the executor would mean an undeclared dependency had crept back
+    # into the shipped environment -- of a package that does not depend on it, in
+    # a repo that evicted polars and made pyarrow the hard dep.
+    #
+    # Inverting a passing assertion is worth doing carefully, so note what still
+    # proves the env is real: `goldenmatch` and `strsim` above, and `pyarrow`
+    # below. An empty environment would fail those, not pass this.
+    assert report["pandas"] is False, (
+        f"pandas is present on the executor; the tier is arrow-native and the "
+        f"shipped env must not carry it: {report}"
+    )
+    assert report["pyarrow"] is True, (
+        f"pyarrow missing on the executor -- arrow_udf cannot run: {report}"
     )
 
 

@@ -42,7 +42,8 @@ def ship_python_environment(
     speed. Build it on the target platform (CI is the obvious place).
 
     **What must be in it.** ``goldenmatch`` plus **pandas** and **pyarrow**.
-    goldenmatch does not depend on pandas, but ``pandas_udf`` requires it in the
+    goldenmatch does not depend on pandas, and the tier no longer needs it: its
+    UDFs are ``arrow_udf`` over ``pa.Array``. Shipping it was required while the
     worker -- installing goldenmatch alone ships an archive that unpacks cleanly
     and cannot run a single UDF. rapidfuzz is NOT needed: the scorer floor is
     goldenmatch's own ``core.strsim``, and rapidfuzz is a dev-only extra.
@@ -103,7 +104,10 @@ def executor_probe(spark: Any) -> dict[str, Any]:
                 # The scorer floor is goldenmatch's OWN strsim, not rapidfuzz --
                 # rapidfuzz is a dev-only extra and must NOT be shipped.
                 "strsim": _importable("goldenmatch.core.strsim"),
-                "pandas": _importable("pandas"),
+                # Reported, not required. The tier moved off pandas_udf, so a shipped env
+        # without pandas is CORRECT -- this stays only so a probe of an older
+        # env still says what is there.
+        "pandas": _importable("pandas"),
                 "pyarrow": _importable("pyarrow"),
                 "native_kernel": native,
                 "executable": _sys.executable,

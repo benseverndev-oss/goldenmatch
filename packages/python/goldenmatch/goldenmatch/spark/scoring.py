@@ -1,5 +1,5 @@
 """S1 score+dedup on Sail (Spark Connect): a block self-join scored by a
-rapidfuzz pandas UDF, threshold-filtered, then deduped via GROUP BY max.
+scorer arrow UDF, threshold-filtered, then deduped via GROUP BY max.
 Returns the RAW above-threshold canonical (a < b) pair set.
 
 This is the same relational shape as the one-box spine's score+dedup, re-

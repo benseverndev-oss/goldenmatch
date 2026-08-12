@@ -2,7 +2,7 @@
 
 Re-expresses Layer 1 of one-box ``identity.resolve.resolve_clusters`` (create +
 ``same_as`` edges — entity-independent + content-deterministic) as relational
-Spark ops + scalar pandas-UDFs. The stateful incremental layer (absorb/merge
+Spark ops + scalar arrow-UDFs. The stateful incremental layer (absorb/merge
 against an existing store) is DEFERRED, honest-null: it stays driver-side, as
 the Ray path left it. Spec: docs/superpowers/specs/2026-06-10-sail-tier-stage
 -s5-identity-design.md.
@@ -95,10 +95,11 @@ def derive_record_ids(
 ) -> Any:
     """Add a ``record_id`` column to ``source_df``. PK path is a pure column
     expression; the no-PK h1 path runs ``record_id_for_row`` in a struct
-    pandas_udf over the payload columns (parity with one-box by construction).
+    arrow_udf over the payload columns (parity with one-box by construction).
     """
     from pyspark.sql import functions as F
-    from pyspark.sql.types import StringType
+
+    from goldenmatch.spark._arrow import arrow_udf, from_pylist, to_pylist
 
     has_source = source_col in source_df.columns
     src_expr = F.col(source_col) if has_source else F.lit("dataframe")
@@ -116,20 +117,23 @@ def derive_record_ids(
     # when __source__ is absent (matches one-box row.get default).
     udf_cols = payload_cols + ([source_col] if has_source else [])
 
-    @F.pandas_udf(StringType())
-    def _rid(*cols):
-        import pandas as pd
-
-        frame = pd.concat(cols, axis=1)
-        frame.columns = udf_cols
+    # ONE struct argument rather than a variadic UDF. The pandas version took
+    # *cols and rebuilt a frame with `pd.concat`; arrow_udf's variadic form is
+    # not part of the documented contract, and a struct is both supported and
+    # self-describing -- `to_pylist()` yields one dict per row with the field
+    # names already attached, so no column-name reassembly is needed.
+    @arrow_udf("string")
+    def _rid(rows):
         out = []
-        for _, row in frame.iterrows():
+        for row in to_pylist(rows):
             payload = {c: row[c] for c in payload_cols}
             source = str(row[source_col]) if has_source else "dataframe"
             out.append(record_id_for_row(payload, source, None))
-        return pd.Series(out)
+        return from_pylist(out, "string")
 
-    return source_df.withColumn("record_id", _rid(*[F.col(c) for c in udf_cols]))
+    return source_df.withColumn(
+        "record_id", _rid(F.struct(*[F.col(c) for c in udf_cols]))
+    )
 
 
 def mint_entity_ids(assignments_with_recid: Any) -> Any:
@@ -139,7 +143,8 @@ def mint_entity_ids(assignments_with_recid: Any) -> Any:
     one-box scheme).
     """
     from pyspark.sql import functions as F
-    from pyspark.sql.types import StringType
+
+    from goldenmatch.spark._arrow import arrow_udf, from_pylist, to_pylist
 
     grouped = assignments_with_recid.groupBy("cluster_id").agg(
         F.collect_list("record_id").alias("__rids__")
@@ -148,18 +153,16 @@ def mint_entity_ids(assignments_with_recid: Any) -> Any:
     if _id_scheme() == "uuid7":
         from goldenmatch.identity.store import new_entity_id
 
-        @F.pandas_udf(StringType())
+        @arrow_udf("string")
         def _eid(col):
-            import pandas as pd
-
-            return pd.Series([new_entity_id() for _ in col])
+            return from_pylist([new_entity_id() for _ in to_pylist(col)], "string")
     else:
 
-        @F.pandas_udf(StringType())
+        @arrow_udf("string")
         def _eid(col):
-            import pandas as pd
-
-            return pd.Series([entity_id_for_members(list(v)) for v in col])
+            return from_pylist(
+                [entity_id_for_members(list(v)) for v in to_pylist(col)], "string"
+            )
 
     return grouped.withColumn("entity_id", _eid(F.col("__rids__"))).select(
         "cluster_id", "entity_id"
@@ -225,26 +228,26 @@ def build_identity_nodes(
     polish, not needed for the create-path graph.)
     """
     from pyspark.sql import functions as F
-    from pyspark.sql.types import StringType
+
+    from goldenmatch.spark._arrow import arrow_udf, from_pylist, to_pylist
 
     # entity -> golden JSON for multi-member clusters.
     gcols = [c for c in golden_df.columns if c != "cluster_id"]
 
-    @F.pandas_udf(StringType())
-    def _as_json(*cols):
-        import pandas as pd
-
-        frame = pd.concat(cols, axis=1)
-        frame.columns = gcols
+    # One struct argument, as in `_rid`. `pd.isna` is gone with it: a pa.Array
+    # carries a validity bitmap, so `to_pylist()` yields None for a null and
+    # there is no NaN to test for.
+    @arrow_udf("string")
+    def _as_json(rows):
         out = []
-        for _, row in frame.iterrows():
-            rec = {c: (None if pd.isna(row[c]) else row[c]) for c in gcols}
+        for row in to_pylist(rows):
+            rec = {c: row[c] for c in gcols}
             out.append(json.dumps(rec, default=str))
-        return pd.Series(out)
+        return from_pylist(out, "string")
 
     golden_json = (
         golden_df.join(entity_ids, on="cluster_id", how="inner")
-        .withColumn("golden_record", _as_json(*[F.col(c) for c in gcols]))
+        .withColumn("golden_record", _as_json(F.struct(*[F.col(c) for c in gcols])))
         .select("entity_id", "golden_record")
     )
 
@@ -505,26 +508,26 @@ def _golden_record_json(entity_ids: Any, golden_df: Any) -> Any:
     projection ``build_identity_nodes`` does inline, factored out so the create
     and incremental node builders cannot drift)."""
     from pyspark.sql import functions as F
-    from pyspark.sql.types import StringType
+
+    from goldenmatch.spark._arrow import arrow_udf, from_pylist, to_pylist
 
     gcols = [c for c in golden_df.columns if c != "cluster_id"]
 
-    @F.pandas_udf(StringType())
-    def _as_json(*cols):
-        import pandas as pd
-
-        frame = pd.concat(cols, axis=1)
-        frame.columns = gcols
+    # One struct argument, as in `_rid`. `pd.isna` is gone with it: a pa.Array
+    # carries a validity bitmap, so `to_pylist()` yields None for a null and
+    # there is no NaN to test for.
+    @arrow_udf("string")
+    def _as_json(rows):
         out = []
-        for _, row in frame.iterrows():
-            rec = {c: (None if pd.isna(row[c]) else row[c]) for c in gcols}
+        for row in to_pylist(rows):
+            rec = {c: row[c] for c in gcols}
             out.append(json.dumps(rec, default=str))
-        return pd.Series(out)
+        return from_pylist(out, "string")
 
     return (
         golden_df.join(entity_ids.select("cluster_id", "entity_id"), on="cluster_id",
                        how="inner")
-        .withColumn("golden_record", _as_json(*[F.col(c) for c in gcols]))
+        .withColumn("golden_record", _as_json(F.struct(*[F.col(c) for c in gcols])))
         .select("entity_id", "golden_record")
     )
 

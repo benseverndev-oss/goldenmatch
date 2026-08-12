@@ -3,10 +3,10 @@
 Joins the S2 ``assignments`` (cluster_id, member_id) to the source records,
 filters to multi-member clusters, then for each field collects the cluster's
 values (``collect_list``) and merges them with the ONE-BOX
-``core.golden.merge_field`` primitive via a scalar pandas UDF -- reusing the
+``core.golden.merge_field`` primitive via a scalar arrow UDF -- reusing the
 exact survivorship logic guarantees semantic parity; Sail distributes the
 group-and-merge. Pure-relational (collect_list + scalar UDF), building on S1's
-proven pandas_udf mechanism (not grouped-map applyInPandas).
+proven arrow_udf mechanism (not grouped-map applyInArrow).
 
 S3 scope: the uniform, order-INDEPENDENT case (default ``most_complete`` over
 multi-member clusters). Order-dependent strategies (most_recent/source_priority),
@@ -18,26 +18,24 @@ from typing import Any
 
 
 def make_merge_udf(strategy: str) -> Any:
-    """A scalar pandas UDF mapping an array-of-values column (one cluster's
+    """A scalar arrow UDF mapping an array-of-values column (one cluster's
     collected field values) to the survivor value via ``merge_field``."""
-    from pyspark.sql.functions import pandas_udf
+    from goldenmatch.spark._arrow import arrow_udf, from_pylist, to_pylist
 
-    @pandas_udf("string")
-    def _udf(col):  # col: pandas Series; each element is the collected list
-        import pandas as pd
-
+    @arrow_udf("string")
+    def _udf(col):  # col: pa.Array; each element is the collected list
         from goldenmatch.config.schemas import GoldenFieldRule
         from goldenmatch.core.golden import merge_field
 
         rule = GoldenFieldRule(strategy=strategy)
         out = []
-        for vals in col:
+        for vals in to_pylist(col):
             # ``vals`` arrives as a python list OR a numpy ndarray (Spark array
             # column); list(...) handles both -- do NOT assume a python list.
             values = list(vals) if vals is not None else []
             merged, _conf, _src = merge_field(values, rule)
             out.append(None if merged is None else str(merged))
-        return pd.Series(out)
+        return from_pylist(out, "string")
 
     return _udf
 
