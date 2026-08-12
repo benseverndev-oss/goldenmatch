@@ -432,9 +432,44 @@ _BUCKET_DEFAULT_MAX_ROWS = 750_000  # == autoconfig_planner_rules.BUCKET_SUGGEST
 _BUCKET_DEFAULT_OPT_OUT = frozenset({"0", "off", "false", "no"})
 
 
+def _bucket_can_express_blocking(blocking: Any) -> bool:
+    """Whether the bucket scorer can reproduce this blocking plan's candidate set.
+
+    Bucket derives FIELD-based block keys from ``blocking.keys`` / ``blocking.passes``
+    in a single eager pass over the frame. Two shapes it cannot express:
+
+      * Strategies that generate candidates from signatures, embeddings or learned
+        predicates (lsh / ann / learned / canopy / sorted_neighborhood / token).
+        These carry no field keys at all -- ``BlockingConfig`` actively REJECTS
+        ``keys`` alongside them -- so bucket derives an empty key and scores an
+        empty candidate set.
+      * An allowlisted strategy that has no keys AND no passes yet, i.e. the
+        degenerate ``static keys=[] auto_suggest=True`` config. With auto-suggest
+        the real plan is chosen mid-pipeline, so a routing decision taken off the
+        provisional plan can land on a strategy bucket cannot express.
+
+    This is a CORRECTNESS gate, not a performance one, so it must hold however
+    ``backend`` came to be ``"bucket"`` -- set by the caller, or written onto the
+    committed config by the execution planner (``ExecutionPlan.apply_to``). #2488.
+    """
+    if blocking is None:
+        return True  # no blocking plan -> nothing for bucket to misread
+    if getattr(blocking, "strategy", None) not in (None, "static", "multi_pass"):
+        return False
+    return bool(getattr(blocking, "keys", None) or getattr(blocking, "passes", None))
+
+
 def _use_bucket_scorer(config: GoldenMatchConfig, collected_df: Any) -> bool:
     """Whether the fuzzy scoring stage should use the bucket scorer (default) vs
     the legacy per-block path. See the module note above the constants."""
+    # Correctness gate FIRST. #2488: the execution planner writes
+    # backend="bucket" onto the committed config, which used to short-circuit
+    # past the strategy check below -- so a token/lsh/... plan silently scored an
+    # empty candidate set (zero pairs, no error) on the final dedupe pass while
+    # the controller's own sample pass, routed before the planner ran, scored it
+    # correctly on the legacy path.
+    if not _bucket_can_express_blocking(getattr(config, "blocking", None)):
+        return False
     backend = getattr(config, "backend", None)
     if backend == "bucket":
         return True  # explicit choice -- honored at any size
@@ -449,16 +484,11 @@ def _use_bucket_scorer(config: GoldenMatchConfig, collected_df: Any) -> bool:
         config, "partitioned_block_scoring", False
     ):
         return False
-    # Bucket derives FIELD-based block keys (blocking.passes/keys). lsh / ann /
-    # learned / canopy / sorted_neighborhood generate candidates from signatures /
-    # embeddings / learned predicates that bucket does not replicate -> it would
-    # split near-dups the legacy path merges. Keep those on legacy (tracked gap:
-    # test_bucket_legacy_parity_matrix). static / multi_pass are validated identical.
-    _blk = getattr(config, "blocking", None)
-    if _blk is not None and getattr(_blk, "strategy", None) not in (
-        None, "static", "multi_pass",
-    ):
-        return False
+    # (The strategy/keys gate that used to live here now runs at the top of this
+    # function as `_bucket_can_express_blocking` -- see #2488. Keeping it below the
+    # `backend == "bucket"` short-circuit made it unreachable for exactly the
+    # configs it existed to protect. Parity gap still tracked by
+    # test_bucket_legacy_parity_matrix; static / multi_pass validated identical.)
     # Controller profiling: keep the legacy per-block path so auto-config reads the
     # SAME block-size distribution signals it always has (bucket emits different
     # profile stages -> would shift the controller's refit decisions / oscillate).
