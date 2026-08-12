@@ -6,6 +6,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added
+- **`strategy="token"`: DF-pruned token blocking for free text (#2488).** Every
+  candidate the block analyzer can generate is an *exact* key -- a prefix, a
+  soundex code, or a compound of two -- so each record lands in exactly one
+  block and any true pair disagreeing on that one derived value is lost before
+  scoring. On free-text product titles that is most of them. Token blocking
+  indexes each record under every token it carries, so two records are
+  candidates when they share *any* token. Cost is controlled by
+  document-frequency pruning rather than a block-size cap: a token in `D`
+  records forms a block of `D` and contributes `D(D-1)/2` pairs, and the
+  frequent tokens ("software", "for") are expensive precisely because they do
+  not discriminate. `max_df` defaults to `max_df_ratio * n` clamped to
+  `[10, 1000]`, so the cap is bounded at any frame size.
+
+  Measured on Amazon-Google (4589 records, 1300 truth pairs), pair recall vs
+  candidate pairs generated:
+
+  | scheme | recall | pairs | RR |
+  |---|---|---|---|
+  | `manufacturer[:5]` (what zero-config committed) | 7.15% | 31,232 | 0.9970 |
+  | `title[:3]` | 45.92% | 99,744 | 0.9905 |
+  | MinHash/LSH word-shingles, best of six settings | 55.85% | 54,554 | 0.9948 |
+  | **`token` defaults** | **98.15%** | 183,221 | 0.9826 |
+  | `token` at `max_df=25` | 87.62% | 52,777 | 0.9950 |
+
+  Note `token` at `max_df=25` dominates `title[:3]` on *both* axes -- nearly
+  double the recall for roughly half the pairs. This complements `lsh` rather
+  than replacing it: MinHash estimates Jaccard over the whole token set, so it
+  needs substantial overlap, while cross-vendor titles often share two or three
+  discriminative tokens out of fifteen.
+
+  Python-only for now (`parity/goldenmatch.yaml`); the TS port is sequencing,
+  not a barrier -- there is no kernel or model involved.
+
 ### Fixed
 - **Every FS scoring path now resolves the link cutoff the same way.**
   `_fs_link_threshold` applies three steps in order -- configured
