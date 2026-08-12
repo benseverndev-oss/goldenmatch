@@ -82,7 +82,12 @@ def test_token_candidates_are_generated_for_free_text_with_a_frame(monkeypatch):
 def test_token_candidates_are_not_compounded_with_exact_keys(monkeypatch):
     """ANDing a token block with a prefix key re-imposes the single-derived-value
     agreement that token blocking exists to avoid."""
+    monkeypatch.setenv("GOLDENMATCH_TOKEN_BLOCKING", "1")
     cands = generate_candidates(["title", "sku"], df=_titles_frame())
+    assert any(c.get("kind") == "token" for c in cands), (
+        "vacuous otherwise: with the flag off there are no token candidates and "
+        "the loop below asserts nothing"
+    )
     for c in cands:
         if c.get("kind") == "token":
             assert len(c["key_fields"]) == 1
