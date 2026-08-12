@@ -146,7 +146,7 @@ Every config object in the pydantic tree(s), generated from the package schema. 
 | `llm_scorer` | LLMScorerConfig \| None | `None` | [`LLMScorerConfig`](#llmscorerconfig) -- LLM pair-scoring configuration for borderline candidates. |
 | `llm_auto` | bool | `False` | Lets auto-config enable and configure the LLM scorer automatically. |
 | `domain` | DomainConfig \| None | `None` | [`DomainConfig`](#domainconfig) -- Domain feature-extraction configuration used before matchkeys. |
-| `backend` | str \| None | `None` | Execution backend: None (default Polars in-memory), 'ray', 'duckdb', 'chunked', or 'bucket'. |
+| `backend` | str \| None | `None` | Execution backend: None (default in-memory), 'ray', 'duckdb', 'datafusion', 'chunked', 'bucket', 'polars-direct', or 'spark'. |
 | `distributed_routing` | DistributedRoutingConfig \| None | `None` | [`DistributedRoutingConfig`](#distributedroutingconfig) -- Per-stage distributed-routing pins; None lets the planner decide every stage. |
 | `semantic_blocking` | SemanticBlockingConfig \| None | `None` | [`SemanticBlockingConfig`](#semanticblockingconfig) -- Opt-in semantic candidate-generation keys (ANN, initialism, alias) unioned into blocking. |
 | `allow_slow_path` | bool | `False` | Permits falling back to a slower non-fused execution path when the fast path is ineligible. |

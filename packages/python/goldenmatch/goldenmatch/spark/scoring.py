@@ -34,6 +34,20 @@ def score_and_dedup(
     udf = make_scorer_udf(scorer_name)
     a = df.alias("a")
     b = df.alias("b")
+    a_val = F.col(f"a.{value_col}")
+    b_val = F.col(f"b.{value_col}")
+    # NULL POLICY. The scorer kernel maps a missing value to "" and therefore
+    # scores null-vs-null as a PERFECT 1.0 -- so two records whose only shared
+    # evidence was that both are missing the scored field passed EVERY threshold
+    # and merged. The one-box disagrees: `core.scorer.score_field` returns None
+    # when either side is missing and `score_pair` drops the field, leaving a
+    # single-field pair at 0.0.
+    #
+    # Comparability is decided from the RAW columns rather than from the UDF's
+    # output, so this stays correct even if the kernel's "" substitution is ever
+    # changed at source. Pinned by tests/test_spark_config_parity.py.
+    comparable = a_val.isNotNull() & b_val.isNotNull()
+    score = F.when(comparable, udf(a_val, b_val)).otherwise(F.lit(0.0))
     pairs = (
         a.join(
             b,
@@ -43,7 +57,7 @@ def score_and_dedup(
         .select(
             F.col(f"a.{id_col}").alias("a"),
             F.col(f"b.{id_col}").alias("b"),
-            udf(F.col(f"a.{value_col}"), F.col(f"b.{value_col}")).alias("score"),
+            score.alias("score"),
         )
         .where(F.col("score") >= F.lit(threshold))
     )

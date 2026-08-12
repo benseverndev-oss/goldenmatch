@@ -165,7 +165,7 @@
               "type": "str | None",
               "required": false,
               "default": "None",
-              "description": "Execution backend: None (default Polars in-memory), 'ray', 'duckdb', 'chunked', or 'bucket'."
+              "description": "Execution backend: None (default in-memory), 'ray', 'duckdb', 'datafusion', 'chunked', 'bucket', 'polars-direct', or 'spark'."
             },
             {
               "name": "distributed_routing",

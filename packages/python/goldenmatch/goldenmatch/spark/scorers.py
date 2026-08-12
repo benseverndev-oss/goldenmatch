@@ -160,7 +160,25 @@ def make_scorer_udf(scorer_name: str) -> Any:
         import numpy as np
         import pandas as pd
 
-        scores = score_batch(scorer_name, a, b)
+        # NaN -> None BEFORE scoring. A string column whose batch is ENTIRELY
+        # null arrives as float64, so iterating it yields NaN floats rather than
+        # None -- and `x or ""` does not rescue that, because NaN is TRUTHY. The
+        # float reached the scorer and raised
+        # `TypeError: 'float' object is not subscriptable`, crashing the whole
+        # job rather than returning a wrong number. Any block where every record
+        # is missing the scored field hit it.
+        #
+        # Normalizing here rather than in `score_batch` keeps the pandas-shaped
+        # problem at the pandas-shaped boundary; `score_batch` takes plain
+        # iterables and should not have to know about NaN.
+        def _clean(s):
+            return [
+                None if (v is None or (isinstance(v, float) and np.isnan(v)))
+                else v
+                for v in s.tolist()
+            ]
+
+        scores = score_batch(scorer_name, _clean(a), _clean(b))
         return pd.Series(np.asarray(scores, dtype="float64"), index=a.index)
 
     return _udf
