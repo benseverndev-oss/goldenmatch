@@ -1106,7 +1106,7 @@ _`BlockingConfig.strategy` -- `BlockingConfig.strategy`._
 | `simhash` | SimHash LSH over embeddings. | Semantic near-duplicate text |
 | `sorted_neighborhood` | Slide a window over sorted records. | Typos in the blocking key |
 | `static` | Group records by an exact blocking key. | Clean data with reliable keys |
-| `token` |  |  |
+| `token` | Inverted index over DF-pruned tokens; a record joins one block per token, so a pair is a candidate when it shares any token. | Free text where no prefix agrees (product titles) |
 
 ### Simple transforms
 _`VALID_SIMPLE_TRANSFORMS` -- `transforms` chains._
