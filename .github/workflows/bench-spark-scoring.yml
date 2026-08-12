@@ -27,6 +27,10 @@ on:
         description: "Timed runs per path; the median is reported"
         required: false
         default: "3"
+      mode:
+        description: "bench (compare paths) | diag (bisect the batched plan to find the OOM)"
+        required: false
+        default: "bench"
       runner:
         description: "Runner label"
         required: false
@@ -93,7 +97,18 @@ jobs:
           .venv/bin/venv-pack -p /tmp/gmenv -o gm_env.tar.gz --force
           ls -lh gm_env.tar.gz
 
+      - name: Diagnose the batched plan (mode=diag)
+        if: inputs.mode == 'diag'
+        env:
+          GOLDENMATCH_SPARK_REMOTE: "local[*]"
+          GOLDENMATCH_SPARK_PYENV: "gm_env.tar.gz"
+          GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
+          GOLDENMATCH_NATIVE: "0"
+        run: |
+          .venv/bin/python scripts/diag_spark_batched_oom.py             --rows '${{ inputs.rows }}' --block-size '${{ inputs.block_size }}'
+
       - name: Bench
+        if: inputs.mode != 'diag'
         env:
           GOLDENMATCH_SPARK_REMOTE: "local[*]"
           GOLDENMATCH_SPARK_PYENV: "gm_env.tar.gz"
