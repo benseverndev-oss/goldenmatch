@@ -50,6 +50,15 @@ DEFAULT_SAMPLE_ROWS = 20_000
 _SEED = 42
 
 
+class SparkAutoConfigUnsupported(RuntimeError):
+    """Zero-config produced a config the Spark tier cannot execute.
+
+    Distinct from :class:`SparkAutoConfigTooLarge` because the remedies differ:
+    that one is answered by `allow_large=True`, this one by supplying a config
+    within the tier's surface (or by widening the tier).
+    """
+
+
 class SparkAutoConfigTooLarge(RuntimeError):
     """Zero-config was asked to configure a dataset large enough that the
     controller's own confidence gate would have refused it -- had the gate been
@@ -183,6 +192,33 @@ def auto_configure_spark(
         allow_red_config=allow_red_config,
         **kwargs,
     )
+    # VALIDATE THE OUTPUT AGAINST THE TIER, HERE.
+    #
+    # Auto-config optimises for quality on the one-box, whose surface is larger
+    # than this tier's: on a name-heavy fixture it picks `given_name_aliased_jw`,
+    # a reference-table-backed scorer that `score_one` (stateless) cannot
+    # dispatch at all. Without this check the caller gets a config that looks
+    # fine and fails several stages later, inside `run_config_pipeline`, with an
+    # error naming a scorer they never chose.
+    #
+    # Raising here says the true thing: zero-config CAN produce a config this
+    # tier cannot execute, and that is a gap in the tier rather than a bad
+    # config. Constraining auto-config's search to the tier's scorer set is the
+    # real fix and is not a one-liner -- it changes which config is optimal, so
+    # it needs its own measurement.
+    from goldenmatch.spark.config_pipeline import _validate_spark_config_supported
+
+    try:
+        _validate_spark_config_supported(config)
+    except (NotImplementedError, ValueError) as exc:
+        raise SparkAutoConfigUnsupported(
+            f"zero-config chose a config this tier cannot execute: {exc}\n"
+            f"Auto-config optimises against the one-box surface, which is wider "
+            f"than the Spark tier's. Supply an explicit GoldenMatchConfig using "
+            f"only the tier's supported features, or run this dataset on the "
+            f"one-box path."
+        ) from exc
+
     provenance = {
         "source": "spark-sample",
         "n_full": n_full,

@@ -263,9 +263,16 @@ def test_per_field_golden_strategy_is_applied(source):
         assert row["city"] in {"york", "leeds", "hull", "derby"}
 
 
-def test_probabilistic_config_is_refused_on_spark(source):
-    """What a Splink import lands on today. from_splink always emits a
-    probabilistic matchkey, so this is the real cutover message until P5."""
+def test_probabilistic_without_a_model_is_refused_with_the_remedy(source):
+    """What a Splink import lands on. from_splink always emits a probabilistic
+    matchkey, so this is the real cutover message.
+
+    P4a refused this outright ("P5 will bring Fellegi-Sunter"). P5 executes it --
+    given a TRAINED model, because EM learns from a driver-side sample of blocked
+    pairs and the tier does not train on demand. So the refusal moved from "not
+    implemented" to "give me the model", and the message must carry that remedy
+    rather than just declining.
+    """
     from goldenmatch.spark.config_pipeline import run_config_pipeline
 
     cfg = GoldenMatchConfig(
@@ -278,5 +285,5 @@ def test_probabilistic_config_is_refused_on_spark(source):
         ],
         blocking=BlockingConfig(keys=[BlockingKeyConfig(fields=["city"])]),
     )
-    with pytest.raises(NotImplementedError, match="P5"):
+    with pytest.raises(ValueError, match="model_path"):
         run_config_pipeline(source, cfg, id_col=_ID, golden_cols=["first"])

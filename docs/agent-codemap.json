@@ -7667,13 +7667,15 @@
           "purpose": "P6: zero-config on Spark.",
           "defines": [
             "SparkAutoConfigTooLarge",
+            "SparkAutoConfigUnsupported",
             "_refuse_at_n",
             "auto_configure_spark",
             "sample_to_driver"
           ],
           "imports": [
             "goldenmatch.core.autoconfig",
-            "goldenmatch.core.autoconfig_controller"
+            "goldenmatch.core.autoconfig_controller",
+            "goldenmatch.spark.config_pipeline"
           ]
         },
         {
