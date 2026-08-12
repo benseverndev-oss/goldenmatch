@@ -6069,6 +6069,9 @@
         "SKIP": [
           "GOLDENMATCH_SKIP_MATCH_LOG"
         ],
+        "SPARK": [
+          "GOLDENMATCH_SPARK_JAR"
+        ],
         "STANDARDIZE": [
           "GOLDENMATCH_STANDARDIZE_STAGED"
         ],
@@ -9835,6 +9838,10 @@
     {
       "name": "goldenmatch-perceptual-wasm",
       "path": "packages/rust/extensions/perceptual-wasm"
+    },
+    {
+      "name": "goldenmatch-score-cabi",
+      "path": "packages/rust/extensions/score-cabi"
     },
     {
       "name": "goldenmatch-score-core",
