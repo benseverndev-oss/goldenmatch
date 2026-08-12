@@ -868,6 +868,60 @@ class CanopyConfig(BaseModel):
     )
 
 
+class TokenBlockingConfig(BaseModel):
+    """DF-pruned token blocking on a free-text column (#2488).
+
+    Classic inverted-index blocking: tokenize the column, index each record
+    under every token it contains, and treat each token as a block. A record
+    lands in many blocks, so two records are candidates when they share ANY
+    token -- unlike the prefix/soundex keys, which need agreement on one
+    derived value and therefore miss any pair that disagrees on the prefix.
+
+    Why this exists alongside ``lsh``: MinHash/LSH approximates JACCARD
+    similarity of the whole token set, so it needs the two strings to overlap
+    substantially. Cross-vendor product titles routinely share two or three
+    discriminative tokens out of fifteen, which is low Jaccard and high
+    evidence. Measured on Amazon-Google (4589 records, 1300 truth pairs), LSH
+    word-shingles peak at 55.9% pair recall while DF-pruned token blocking
+    reaches 98.4%.
+
+    The cost control is ``max_df``: a token in D records forms a block of D and
+    contributes D(D-1)/2 pairs, so pruning high-document-frequency tokens
+    ("software", "for", "the") removes nearly all the cost and almost none of
+    the recall -- those tokens are common precisely because they do not
+    discriminate.
+    """
+
+    column: str = Field(
+        description="Free-text column tokenized to build the inverted index.",
+    )
+    min_token_length: int = Field(
+        default=3,
+        description="Tokens shorter than this are dropped; short tokens are mostly noise ('1', 'w/') and form large low-evidence blocks.",
+    )
+    max_df_ratio: float = Field(
+        default=0.02,
+        description="Drop tokens appearing in more than this fraction of records. Used to derive the cap when max_df is unset.",
+    )
+    max_df: int | None = Field(
+        default=None,
+        description="Absolute document-frequency cap. When unset it is derived from max_df_ratio and clamped to [10, 1000] so the cap stays bounded at any frame size.",
+    )
+
+    @model_validator(mode="after")
+    def _validate(self) -> TokenBlockingConfig:
+        if self.min_token_length < 1:
+            raise ValueError("TokenBlockingConfig 'min_token_length' must be >= 1.")
+        if not 0.0 < self.max_df_ratio <= 1.0:
+            raise ValueError("TokenBlockingConfig 'max_df_ratio' must be in (0, 1].")
+        if self.max_df is not None and self.max_df < 2:
+            raise ValueError(
+                "TokenBlockingConfig 'max_df' must be >= 2 (a token in one record "
+                "blocks nothing)."
+            )
+        return self
+
+
 class LSHKeyConfig(BaseModel):
     """MinHash/LSH blocking on a text column (#1081).
 
@@ -1056,7 +1110,7 @@ class BlockingConfig(BaseModel):
         default=False,
         description="When true, blocks exceeding max_block_size are dropped rather than scored, guarding against mega-block blowups.",
     )
-    strategy: Literal["static", "adaptive", "sorted_neighborhood", "multi_pass", "ann", "canopy", "ann_pairs", "learned", "lsh", "simhash", "perceptual"] = Field(
+    strategy: Literal["static", "adaptive", "sorted_neighborhood", "multi_pass", "ann", "canopy", "ann_pairs", "learned", "lsh", "simhash", "perceptual", "token"] = Field(
         default="static",
         description="Candidate-generation method that selects how pairs are proposed for scoring.",
     )
@@ -1132,6 +1186,10 @@ class BlockingConfig(BaseModel):
         default=None,
         description="MinHash/LSH configuration required when the strategy is 'lsh'.",
     )
+    token: TokenBlockingConfig | None = Field(
+        default=None,
+        description="DF-pruned token-blocking configuration required when the strategy is 'token'.",
+    )
     simhash: SimHashKeyConfig | None = Field(
         default=None,
         description="SimHash/LSH configuration required when the strategy is 'simhash'.",
@@ -1166,6 +1224,14 @@ class BlockingConfig(BaseModel):
                 raise ValueError(
                     "BlockingConfig with strategy='lsh' must not set 'keys'/'passes' "
                     "(it uses the 'lsh' config block)."
+                )
+        if self.strategy == "token":
+            if self.token is None:
+                raise ValueError("BlockingConfig with strategy='token' requires 'token'.")
+            if self.keys or self.passes:
+                raise ValueError(
+                    "BlockingConfig with strategy='token' must not set 'keys'/'passes' "
+                    "(it uses the 'token' config block)."
                 )
         if self.strategy == "simhash":
             if self.simhash is None:

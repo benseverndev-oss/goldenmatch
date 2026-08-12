@@ -329,6 +329,14 @@ transforms:
 # (buildLshBlocks/buildPerceptualBlocks, cross-language fixture
 # blocking-strategies.json) -> shared. simhash stays python_only (see the
 # blocking_kernels_deferred reason: model-backed, not edge-portable).
+# token (DF-pruned inverted-index token blocking, #2488) is python_only FOR NOW:
+# it is pure string/dict work with no kernel and no model, so it is portable in
+# principle -- the deferral is sequencing, not a barrier. It lands first on the
+# Python analyzer path it was written for (auto-suggest blocking selection);
+# porting it to TS means a buildTokenBlocks + a cross-language fixture in
+# blocking-strategies.json, and is tracked to follow once the analyzer side has
+# settled its defaults (max_df derivation in particular, which the fixture would
+# otherwise pin prematurely).
 blocking_strategies:
   shared:
   - adaptive
@@ -343,6 +351,7 @@ blocking_strategies:
   - static
   python_only:
   - simhash
+  - token
   ts_only: []
 # scorer_kernels surface: the scorers with a Rust/-core kernel (the REFERENCE fast
 # path) -- Python `_NATIVE_SCORER_IDS` (backends.score_buckets) vs TS
@@ -443,6 +452,7 @@ scorer_kernels_deferred:
 # `declined --` = won't port (with why); `deferred --` = will (with the blocker).
 blocking_kernels_deferred:
   simhash: "declined -- model-backed: SimHash blocking embeds every record via a model (numpy + get_embedder); TS ships only the embedding kernel (goldenembed-wasm), no bundled edge model -- the same boundary that makes retrieve_similar require a caller-supplied embedder. Dense-vector blocking is already served by the shared ann/ann_pairs strategies. sketch-core provides the SimHash signature kernel, but the strategy is not edge-portable. (lsh + perceptual, the other two kernel-backed blockers, ARE ported -> shared.)"
+  token: "deferred -- portable, not yet ported (#2488). DF-pruned inverted-index token blocking is pure string/dict work: tokenize (sketch._word_tokens, already ported as part of the shared lsh word-shingle path), count document frequency, keep tokens with 2 <= df <= max_df, emit one block per token. No kernel, no model, no numpy -- nothing about it is edge-hostile, which is why this is deferred rather than declined. The blocker is that the TS port needs a cross-language fixture in blocking-strategies.json, and pinning one now would freeze the max_df derivation (max_df_ratio * n clamped to [10, 1000]) before the Python analyzer side has settled it -- the auto-suggest integration is what tunes those defaults, and re-cutting the fixture on every tweak is the cost this avoids. Port once the defaults stop moving."
 # ─────────────────────────────────────────────────────────────────────────────
 # ADVISORY (non-gating) SQL surfaces — VISIBILITY ONLY. Added 2026-07-25.
 # These record the goldenmatch SQL function inventory so the parity gate can

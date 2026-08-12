@@ -88,6 +88,7 @@ REGISTRY: dict[str, PackageSpec] = {
                 "lsh": {"meaning": "MinHash / LSH sketching on a text column.", "best_for": "Near-duplicate text"},
                 "simhash": {"meaning": "SimHash LSH over embeddings.", "best_for": "Semantic near-duplicate text"},
                 "perceptual": {"meaning": "Banded-Hamming LSH over perceptual image hashes.", "best_for": "Near-duplicate images"},
+                "token": {"meaning": "Inverted index over DF-pruned tokens; a record joins one block per token, so a pair is a candidate when it shares any token.", "best_for": "Free text where no prefix agrees (product titles)"},
             }),
             ("Simple transforms", "goldenmatch.config.schemas:VALID_SIMPLE_TRANSFORMS", "`transforms` chains", {
                 "lowercase": "Lowercase the value.", "uppercase": "Uppercase the value.",

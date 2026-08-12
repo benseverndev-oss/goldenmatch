@@ -214,7 +214,7 @@ _A matchkey: rule for declaring two records 'the same' on a field/field-set._
 | `keys` | list[BlockingKeyConfig] | `[]` | [`BlockingKeyConfig`](#blockingkeyconfig) -- Blocking keys that generate candidate pairs; records sharing any key are compared. |
 | `max_block_size` | int | `5000` | Ceiling on how many records one block may hold before it is treated as oversized. |
 | `skip_oversized` | bool | `False` | When true, blocks exceeding max_block_size are dropped rather than scored, guarding against mega-block blowups. |
-| `strategy` | Literal | `'static'` | `static`, `adaptive`, `sorted_neighborhood`, `multi_pass`, `ann`, `canopy`, `ann_pairs`, `learned`, `lsh`, `simhash`, `perceptual` -- Candidate-generation method that selects how pairs are proposed for scoring. |
+| `strategy` | Literal | `'static'` | `static`, `adaptive`, `sorted_neighborhood`, `multi_pass`, `ann`, `canopy`, `ann_pairs`, `learned`, `lsh`, `simhash`, `perceptual`, `token` -- Candidate-generation method that selects how pairs are proposed for scoring. |
 | `learned_sample_size` | int | `5000` | Number of sampled records the learned-predicate miner trains its blocking rules on. |
 | `learned_min_recall` | float | `0.95` | Minimum pair recall a learned predicate must retain to be accepted. |
 | `learned_min_reduction` | float | `0.9` | Minimum fraction of the full comparison space a learned predicate must eliminate. |
@@ -233,6 +233,7 @@ _A matchkey: rule for declaring two records 'the same' on a field/field-set._
 | `ann_top_k` | int | `20` | Number of nearest neighbors retrieved per record in ANN blocking. |
 | `canopy` | CanopyConfig \| None | `None` | [`CanopyConfig`](#canopyconfig) -- Configuration for canopy clustering when the strategy is 'canopy'. |
 | `lsh` | LSHKeyConfig \| None | `None` | [`LSHKeyConfig`](#lshkeyconfig) -- MinHash/LSH configuration required when the strategy is 'lsh'. |
+| `token` | TokenBlockingConfig \| None | `None` | [`TokenBlockingConfig`](#tokenblockingconfig) -- DF-pruned token-blocking configuration required when the strategy is 'token'. |
 | `simhash` | SimHashKeyConfig \| None | `None` | [`SimHashKeyConfig`](#simhashkeyconfig) -- SimHash/LSH configuration required when the strategy is 'simhash'. |
 | `perceptual` | PerceptualKeyConfig \| None | `None` | [`PerceptualKeyConfig`](#perceptualkeyconfig) -- Perceptual-hash LSH configuration used when the strategy is 'perceptual'. |
 
@@ -471,6 +472,16 @@ _MinHash/LSH blocking on a text column (#1081)._
 | `seed` | int | `0` | Random seed making the MinHash permutations reproducible. |
 | `threshold` | float \| None | `None` | Target Jaccard similarity from which the band/row split is derived when num_bands is unset. |
 | `num_bands` | int \| None | `None` | Explicit LSH band count (must divide num_perms); overrides threshold when set. |
+
+### `TokenBlockingConfig`
+_DF-pruned token blocking on a free-text column (#2488)._
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `column` | str | **required** | Free-text column tokenized to build the inverted index. |
+| `min_token_length` | int | `3` | Tokens shorter than this are dropped; short tokens are mostly noise ('1', 'w/') and form large low-evidence blocks. |
+| `max_df_ratio` | float | `0.02` | Drop tokens appearing in more than this fraction of records. Used to derive the cap when max_df is unset. |
+| `max_df` | int \| None | `None` | Absolute document-frequency cap. When unset it is derived from max_df_ratio and clamped to [10, 1000] so the cap stays bounded at any frame size. |
 
 ### `SimHashKeyConfig`
 _SimHash/LSH blocking on a text column via dense embeddings (#1082)._
@@ -1095,6 +1106,7 @@ _`BlockingConfig.strategy` -- `BlockingConfig.strategy`._
 | `simhash` | SimHash LSH over embeddings. | Semantic near-duplicate text |
 | `sorted_neighborhood` | Slide a window over sorted records. | Typos in the blocking key |
 | `static` | Group records by an exact blocking key. | Clean data with reliable keys |
+| `token` | Inverted index over DF-pruned tokens; a record joins one block per token, so a pair is a candidate when it shares any token. | Free text where no prefix agrees (product titles) |
 
 ### Simple transforms
 _`VALID_SIMPLE_TRANSFORMS` -- `transforms` chains._
@@ -1197,7 +1209,7 @@ _`_PLANNING_EFFORTS` -- `planning_effort`._
 
 ## Environment variables (index)
 
-197 `GOLDENMATCH_*` runtime knob(s) read by the package, scanned from source so this is complete. Details in [Tuning & opt-ins](/goldenmatch/tuning). Grouped by area:
+198 `GOLDENMATCH_*` runtime knob(s) read by the package, scanned from source so this is complete. Details in [Tuning & opt-ins](/goldenmatch/tuning). Grouped by area:
 
 - **AGENT** (1): `GOLDENMATCH_AGENT_TOKEN`
 - **ALLOWED** (1): `GOLDENMATCH_ALLOWED_ROOT`
@@ -1259,6 +1271,7 @@ _`_PLANNING_EFFORTS` -- `planning_effort`._
 - **SYNC** (1): `GOLDENMATCH_SYNC_STREAMING_THRESHOLD`
 - **TF** (1): `GOLDENMATCH_TF_NAME_WEIGHTING`
 - **THROUGHPUT** (3): `GOLDENMATCH_THROUGHPUT`, `GOLDENMATCH_THROUGHPUT_RECALL`, `GOLDENMATCH_THROUGHPUT_SIMILARITY`
+- **TOKEN** (1): `GOLDENMATCH_TOKEN_BLOCKING`
 - **TRANSFORM** (1): `GOLDENMATCH_TRANSFORM_DEBUG`
 - **TRANSITIVE** (2): `GOLDENMATCH_TRANSITIVE_POSTFLIGHT`, `GOLDENMATCH_TRANSITIVE_WEAK_MARGIN`
 - **UDF** (1): `GOLDENMATCH_UDF_IMPORTS`
