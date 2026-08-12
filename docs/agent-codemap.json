@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 464,
+      "module_count": 465,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7800,6 +7800,17 @@
             "goldenmatch.core._hashing",
             "goldenmatch.identity.fingerprint_batch",
             "goldenmatch.identity.store"
+          ]
+        },
+        {
+          "module": "goldenmatch.spark.jvm",
+          "file": "packages/python/goldenmatch/goldenmatch/spark/jvm.py",
+          "purpose": "J0: ship the JVM scorer jar to a Spark session and register it.",
+          "defines": [
+            "JvmScorerUnavailable",
+            "find_jar",
+            "install",
+            "scorer_id"
           ]
         },
         {

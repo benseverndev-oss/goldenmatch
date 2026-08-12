@@ -705,6 +705,7 @@ Within whichever path is chosen, the per-block math runs on the native Rust FS k
 | `GOLDENMATCH_ALLOWED_ROOT` | unset | Opt-in path sandbox root. |
 | `GOLDENMATCH_DATABASE_URL` / `GOLDENMATCH_IDENTITY_DSN` | unset | DB connection / migration DSN. |
 | `GOLDENMATCH_SAIL_IDENTITY_ID_SCHEME` | `h1` | Identity record-id scheme on the Sail (Spark Connect) tier. |
+| `GOLDENMATCH_SPARK_JAR` | unset | Path to the JVM scorer jar shipped to Spark executors via `addArtifact`. Unset means "look for the build output"; the jar is built rather than vendored, so a source checkout has none until you build it. |
 | `GOLDENMATCH_PREPARED_RECORD_STORE_DIR` / `_PERSIST` | unset / `0` | Prepared-record store path / persistence. |
 | `GOLDENMATCH_LLM_MODEL` | provider default | Override the LLM scorer model. |
 | `GOLDENMATCH_EMBEDDING_PROVIDER` / `GOLDENMATCH_INHOUSE_MODEL` | unset | Embedding provider / in-house model id. |

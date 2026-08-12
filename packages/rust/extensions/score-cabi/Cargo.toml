@@ -1,0 +1,36 @@
+# score-cabi -- the C ABI over the canonical string scorers. The C analogue of
+# `native` (pyo3), `datafusion-udf` (DataFusion FFI) and `score-wasm`
+# (wasm-bindgen): all four wrap the SAME pyo3-free `goldenmatch-score-core`, so
+# a score is byte-identical across Python, DataFusion, WASM and C by
+# construction rather than by four implementations being kept in step.
+#
+# Its reason to exist is a JVM binding. Spark executors run on the JVM, and the
+# tier currently reaches Rust by forking a Python worker per batch (pandas_udf)
+# -- an Arrow IPC hop plus an interpreter, plus the whole executor-environment
+# shipping apparatus that exists only to feed that worker. A C ABI is what
+# Panama (FFM) and JNI both consume, so this crate is the seam that lets the
+# kernel run *in* the executor JVM.
+#
+# Standalone workspace -- same isolation rationale as goldengraph-cabi and
+# goldenprofile-cabi: score-core is a path dependency of several crates that own
+# their own workspaces, and none of them may claim it.
+[workspace]
+
+[package]
+name = "goldenmatch-score-cabi"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "C ABI over goldenmatch-score-core: batch string scoring over Arrow-layout buffers, for JVM (Panama/JNI) and other FFI hosts"
+
+[lib]
+name = "goldenmatch_score_cabi"
+# cdylib: the .so/.dll/.dylib a JVM dlopens. staticlib: for hosts that link.
+# rlib: in-crate tests.
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+# The canonical scorer dispatcher (`score_one`, ids 0..=14). NOT re-implemented
+# here -- this crate is marshaling only.
+goldenmatch-score-core = { path = "../score-core" }

@@ -896,6 +896,10 @@ spark:
   # Both lanes install VIA THE EXTRAS, so an extras edit must re-run them --
   # that is the only place the [spark]/[sail] dependency split is exercised.
   - 'packages/python/goldenmatch/pyproject.toml'
+  # J0: the JVM scorer jar is built and self-tested INSIDE the spark_connect
+  # lane, so a Java edit that never triggered that lane would ship untested --
+  # the same staleness the P2 rename introduced, one language over.
+  - 'packages/jvm/**'
 action:
   - 'packages/actions/**'
 dbt:

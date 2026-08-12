@@ -63,6 +63,10 @@ REQUIRED: dict[str, list[tuple[str, str]]] = {
             "packages/python/goldenmatch/pyproject.toml",
             "both lanes install via the [spark]/[sail] extras defined here",
         ),
+        (
+            "packages/jvm/goldenmatch-spark/src/dev/goldensuite/spark/GoldenScoreUdf.java",
+            "J0: the JVM scorer jar is built + self-tested in the spark_connect lane",
+        ),
     ],
 }
 
