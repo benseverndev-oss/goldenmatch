@@ -6,6 +6,61 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added
+- **`strategy="token"`: DF-pruned token blocking for free text (#2488).** Every
+  candidate the block analyzer can generate is an *exact* key -- a prefix, a
+  soundex code, or a compound of two -- so each record lands in exactly one
+  block and any true pair disagreeing on that one derived value is lost before
+  scoring. On free-text product titles that is most of them. Token blocking
+  indexes each record under every token it carries, so two records are
+  candidates when they share *any* token. Cost is controlled by
+  document-frequency pruning rather than a block-size cap: a token in `D`
+  records forms a block of `D` and contributes `D(D-1)/2` pairs, and the
+  frequent tokens ("software", "for") are expensive precisely because they do
+  not discriminate. `max_df` defaults to `max_df_ratio * n` clamped to
+  `[10, 1000]`, so the cap is bounded at any frame size.
+
+  Measured on Amazon-Google (4589 records, 1300 truth pairs), pair recall vs
+  candidate pairs generated:
+
+  | scheme | recall | pairs | RR |
+  |---|---|---|---|
+  | `manufacturer[:5]` (what zero-config committed) | 7.15% | 31,232 | 0.9970 |
+  | `title[:3]` | 45.92% | 99,744 | 0.9905 |
+  | MinHash/LSH word-shingles, best of six settings | 55.85% | 54,554 | 0.9948 |
+  | **`token` defaults** | **98.15%** | 183,221 | 0.9826 |
+  | `token` at `max_df=25` | 87.62% | 52,777 | 0.9950 |
+
+  Note `token` at `max_df=25` dominates `title[:3]` on *both* axes -- nearly
+  double the recall for roughly half the pairs. This complements `lsh` rather
+  than replacing it: MinHash estimates Jaccard over the whole token set, so it
+  needs substantial overlap, while cross-vendor titles often share two or three
+  discriminative tokens out of fifteen.
+
+  Python-only for now (`parity/goldenmatch.yaml`); the TS port is sequencing,
+  not a barrier -- there is no kernel or model involved.
+
+  **Auto-suggest can propose it, but that is OPT-IN and default OFF**
+  (`GOLDENMATCH_TOKEN_BLOCKING=1`). Committing a token plan automatically took
+  Amazon-Google's end-to-end F1 from 0.1014 to **0.0000**, below the #2470
+  quality floor. Measured across three runs in one environment:
+
+  | run | iteration 0 | failing subprofile | F1 |
+  |---|---|---|---|
+  | clean `main` | 430.7s | scoring | 0.1014 |
+  | token candidates on | 424.1s | blocking | 0.0000 |
+  | + total-pair cost term | 429.3s | blocking | 0.0000 |
+
+  Two things follow, and they point in opposite directions. The auto-config
+  time-budget blowout at iteration 0 is **pre-existing on `main`** (~430s in
+  all three, baseline included), so it is not caused by this work. But the F1
+  collapse is: the baseline reproduces 0.1014 exactly, and enabling token
+  candidates takes it to zero -- the failing auto-config subprofile flips from
+  `scoring` to `blocking`, `build_token_blocks` never runs, and the committed
+  RED config yields no candidate pairs. That integration gap is not diagnosed,
+  and a plan that finds nothing is strictly worse than a 7%-recall key, so the
+  default stays off until the benchmark says otherwise.
+
 ### Fixed
 - **Every FS scoring path now resolves the link cutoff the same way.**
   `_fs_link_threshold` applies three steps in order -- configured
