@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 465,
+      "module_count": 466,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7702,6 +7702,16 @@
             "goldenmatch.core.autoconfig",
             "goldenmatch.core.autoconfig_controller",
             "goldenmatch.spark.config_pipeline"
+          ]
+        },
+        {
+          "module": "goldenmatch.spark.batched",
+          "file": "packages/python/goldenmatch/goldenmatch/spark/batched.py",
+          "purpose": "J1: reshape scoring from one call per PAIR to one call per BATCH.",
+          "defines": [
+            "batch_key",
+            "dedup_max",
+            "score_pairs_batched"
           ]
         },
         {
