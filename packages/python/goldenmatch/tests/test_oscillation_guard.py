@@ -6,7 +6,7 @@ Spec: docs/superpowers/specs/2026-05-21-oscillation-guard-design.md
 from __future__ import annotations
 
 import pytest
-from goldenmatch.config.schemas import GoldenMatchConfig
+from goldenmatch.config.schemas import GoldenMatchConfig, OutputConfig
 from goldenmatch.core.autoconfig_history import PolicyDecision, RunHistory
 from goldenmatch.core.autoconfig_policy import HeuristicRefitPolicy
 from goldenmatch.core.complexity_profile import (
@@ -55,7 +55,10 @@ def test_oscillation_guard_skips_repeat_rule_same_rationale():
         fire_count["n"] += 1
         # Distinguishing new_config so the bug-guard ("new_config == current"
         # → return None) doesn't preempt the oscillation guard under test.
-        new_cfg = GoldenMatchConfig(backend=f"alt_{fire_count['n']}")
+        # NOT `backend`: it is a closed set now (VALID_BACKENDS), because an
+        # unrecognised value used to run single-box in silence. `output.path`
+        # takes an arbitrary string and is a real config difference.
+        new_cfg = GoldenMatchConfig(output=OutputConfig(path=f"alt_{fire_count['n']}"))
         decision = PolicyDecision(
             rule_name="rule_oscillates",
             rationale="same_rationale_always",
@@ -86,7 +89,7 @@ def test_oscillation_guard_allows_repeat_rule_with_different_rationale():
 
     def _vary_rationale(profile, current, history):
         call_count["n"] += 1
-        return GoldenMatchConfig(backend=f"alt_{call_count['n']}"), PolicyDecision(
+        return GoldenMatchConfig(output=OutputConfig(path=f"alt_{call_count['n']}")), PolicyDecision(
             rule_name="rule_varies",
             rationale=f"different_rationale_{call_count['n']}",  # different each call
             config_diff={},
@@ -107,14 +110,14 @@ def test_oscillation_guard_allows_repeat_rule_with_different_rationale():
 def test_oscillation_guard_falls_through_to_next_rule_when_first_blocked():
     """When rule A is guard-blocked, the policy advances to rule B."""
     def _rule_a_fires_same(profile, current, history):
-        return GoldenMatchConfig(backend="a"), PolicyDecision(
+        return GoldenMatchConfig(output=OutputConfig(path="a")), PolicyDecision(
             rule_name="rule_a",
             rationale="repeating",
             config_diff={},
         )
 
     def _rule_b_fires_once(profile, current, history):
-        return GoldenMatchConfig(backend="b"), PolicyDecision(
+        return GoldenMatchConfig(output=OutputConfig(path="b")), PolicyDecision(
             rule_name="rule_b",
             rationale="ran_at_least_once",
             config_diff={},
@@ -140,7 +143,7 @@ def test_oscillation_guard_falls_through_to_next_rule_when_first_blocked():
 def test_oscillation_guard_first_call_never_blocks():
     """No prior fire → first call always proceeds."""
     def _rule(profile, current, history):
-        return GoldenMatchConfig(backend="x"), PolicyDecision(
+        return GoldenMatchConfig(output=OutputConfig(path="x")), PolicyDecision(
             rule_name="any_rule",
             rationale="any_rationale",
             config_diff={},

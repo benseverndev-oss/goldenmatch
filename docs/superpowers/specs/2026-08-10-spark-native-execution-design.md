@@ -566,16 +566,166 @@ Make the tier consume a `GoldenMatchConfig`: multi-matchkey, multi-blocking-rule
 golden rules. Wire `backend="spark"` into the public API so `import-splink`
 output runs unchanged.
 
-### P5 — Fellegi-Sunter on Spark
+#### P4a — config-driven execution ✅ DONE
 
-The largest piece and the one that makes a Splink user's model executable at all.
-`fs-core` exists; the model must be re-expressed against the DataFrame API — the
-same shape as the DataFusion spine work, not a research problem.
+`goldenmatch/spark/config_pipeline.py`: `run_config_pipeline(df, config)`.
+Multiple blocking passes (unioned and de-duplicated), multi-field weighted
+matchkeys, exact matchkeys, per-field survivorship rules, and a hard feature
+gate mirroring `_validate_scale_mode_supported`.
 
-### P6 — Zero-config on Spark
+**The acceptance criterion as written is not reachable in P4.**
+`config/from_splink.py` emits `type="probabilistic"` unconditionally — one
+Fellegi-Sunter matchkey, every time. There is no `m_prob` / `u_prob` /
+`match_weight` anywhere in this tier, so "`import-splink` output runs unchanged"
+depends on **P5**, not on P4. P4a therefore refuses a probabilistic config with a
+message naming P5, and the Splink cutover claim moves to P5's exit criteria.
+That is a phase-ordering error in this spec, found by execution: P5 is the
+load-bearing phase for the product goal, and P4 is its precondition.
 
-Distributed auto-config, so `backend="spark"` supports both driver modes (Ben,
-2026-08-10: "both, user picks per run").
+**Two defects found while building it**, both in the shipped tier, both measured
+on the P4 fixture (threshold 0.85, weights first=1.0 last=3.0):
+
+1. **null-vs-null scored a perfect 1.0.** The scorer kernel maps a missing value
+   to `""`, and `""` vs `""` is an exact match — so two records whose only shared
+   evidence was that both are missing the compared field merged at *every*
+   threshold. The one-box excludes the field instead
+   (`score_field` → `None` → dropped by `score_pair`). On the fixture: a pair
+   that should score 0.4365 scored 0.8591 and merged. Fixed on both the new path
+   and the shipped single-field `score_and_dedup`, by deciding comparability from
+   the raw columns rather than from the kernel's output — so it stays correct
+   even if the `""` substitution is later changed at source.
+2. **The weighted denominator is per-pair, not per-matchkey.** `score_pair` drops
+   an uncomparable field from the numerator *and* the denominator. Using the
+   matchkey's total weight instead scores a pair that agrees perfectly on its one
+   comparable field at 0.7500 rather than 1.0000 — losing it. `weighted_pair_score`
+   states this as pure Python, unit-tested directly against `score_pair`.
+
+#### P4b — `backend="spark"` in the public API ✅ DONE
+
+**The seam in the spec was the wrong one, and the wiring is deliberately not
+what P4 proposed.** `dedupe_df(backend=...)` selects a block *scorer* for a
+**local** dataset — that is what `ray`, `duckdb`, `datafusion`, `bucket` and
+`chunked` all do. `spark` is categorically different: the whole pipeline runs on
+a cluster, over data the cluster already holds. Accepting it on `dedupe_df` would
+mean shipping a driver-side frame out and back, which is the opposite of the
+product goal in §1.
+
+So `spark` is a *recognized* backend that declares intent, `_get_block_scorer`
+raises for it with the call that does work, and the public entry point is
+`goldenmatch.spark.run_config_pipeline(spark_df, config)` — exported in P4a.
+
+**A third silent-degradation defect, found on the way.** `backend` was free text
+and the dispatcher returns the default scorer for anything unrecognized, so:
+
+```
+backend="rayy"   -> ordinary single-box run, no warning
+backend="spark"  -> ordinary single-box run, no warning  (before this)
+```
+
+A user who meant to distribute simply did not, and nothing said so. `backend` is
+now a closed set (`VALID_BACKENDS`), validated at config construction where the
+name is still attached to the thing that named it, with an error that names the
+whole valid set. This is the same family as the two P4a defects and the P2 filter
+staleness: **a check that exists and does not fire.**
+
+### P5 — Fellegi-Sunter on Spark ✅ DONE (scoring)
+
+The piece that makes a Splink user's model executable at all, and — per P4a's
+finding — the one the Splink cutover claim actually depends on.
+
+`goldenmatch/spark/probabilistic.py` re-expresses the model against the DataFrame
+API. Per pair:
+
+```
+sim_f     = scorer(a.f, b.f)                  # null if either side missing
+level_f   = threshold assignment over sim_f
+weight_f  = match_weights[f][level_f]         # skipped when unobserved
+total     = Σ weight_f
+posterior = 1 / (1 + 2^-(prior_weight + total))
+```
+
+All of it is arithmetic over a handful of per-field constants, so the model rides
+in the query plan as inlined `CASE` expressions — no broadcast join, no lookup
+table, no UDF beyond the per-field similarity kernel the tier already had.
+
+**Scoring distributes; training does not, and that is the existing semantics
+rather than a compromise.** `train_em` learns from a **sample** of blocked pairs
+(`n_sample_pairs=10000`), so the training set is small by construction at any
+dataset size. A Splink user brings weights trained elsewhere; a GoldenMatch user
+trains once and reuses via `model_path`. Neither needs a distributed E-step, and
+building one would *change* the numbers rather than reproduce them. The tier
+therefore requires a trained model and says so, rather than training on demand
+and quietly pulling a sample back through the driver.
+
+**Both missing-value modes are honoured.** `unobserved` (textbook FS: absence of
+evidence, level `-1`, contributes zero bits) and `disagree` (level 0, evidence
+against). The one-box makes this a config choice because whether missingness is
+informative depends on the data, so a distributed path implementing only one
+would be right for half its users.
+
+**A threshold bug written and caught here**, worth recording because it is
+invisible in output: `resolve_thresholds` returns `(link, review)` — link
+**first**. Destructured the other way, the cut happens at the review threshold,
+which is clamped `<= link` by construction, so every pair the one-box would have
+queued for a human is auto-linked instead. It does not look like a defect; it
+looks like a slightly generous run. Pinned by a test that asserts the order.
+
+Deliberately out of scope and refused loudly: term-frequency (Winkler)
+adjustment, negative evidence, and model-backed (`embedding` /
+`record_embedding`) scorers — each contributes to the one-box score and has no
+expression here, so running without them would return a plausible number that is
+not the model's answer.
+
+### P6 — Zero-config on Spark ✅ DONE
+
+`run_config_pipeline(df)` with no config auto-configures, so the tier supports
+both driver modes and the user picks per run (Ben, 2026-08-10: "both, user picks
+per run"). `goldenmatch.spark.auto_configure_spark` is the standalone entry.
+
+**Auto-config already runs on a sample**, exactly as EM does in P5 —
+`auto_configure_df` profiles and runs blocking → score → cluster on a stratified
+sub-sample. So sampling is the existing mechanism, not a concession made for
+Spark. What is *not* already handled is that the controller infers dataset size
+from the frame it is handed:
+
+```python
+# autoconfig_controller.py:609
+n_rows = _to_frame_gate(df).height
+```
+
+and then uses that number for two things that must see the full population:
+
+1. **The confidence gate.** `n_rows >= REFUSE_AT_N (100_000)` with a RED config
+   raises `ControllerNotConfidentError`. Hand it a 20k sample drawn from 500M
+   rows and the gate reads 20k, so **it never fires** — the run that most needs
+   the refusal is precisely the one that skips it. Verified against the real
+   function: a 200-row frame declaring 99,999 rows commits a **RED** config with
+   only a warning, because it is below the threshold.
+2. **Chao1 cardinality extrapolation.** The controller's own comment says this
+   "depend[s] on this being the FULL data count, not the sample size". At sample
+   scale a real mid-cardinality column (zip) looks near-unique — and near-unique
+   columns get chosen as blocking keys, which on the full data produces blocks of
+   one and finds nothing.
+
+`auto_configure_df(n_rows_full=…)` addresses only (2), and only for the v0
+heuristic; it does not move the controller's gate. So `spark/autoconfig.py`
+applies the scale check **itself**, against the true `count()`, before handing
+anything over — and `allow_large=True` is the explicit opt-in, because a config
+chosen from 20k rows and applied to 500M is a real risk the caller should accept
+knowingly.
+
+Two smaller decisions worth keeping: the sample is **Bernoulli via
+`DataFrame.sample`, never `limit`** (partitions are usually ordered by ingestion,
+source or date, so a `limit` sample of a partitioned table is a sample of its
+oldest rows or of one source); and the run returns a **provenance** record
+(sample size, full count, fraction, seed) because a config whose origin is not
+recorded gets treated as though someone chose it deliberately.
+
+**Not done:** distributed *profiling*. Everything here samples to the driver and
+reuses the one-box controller unchanged, which keeps every heuristic and health
+signal identical. Profiling on the cluster would be a different estimator with
+different numbers, and should be justified by a measurement rather than by
+symmetry with the rest of the tier.
 
 ---
 

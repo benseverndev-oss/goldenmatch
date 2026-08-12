@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 461,
+      "module_count": 464,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7680,9 +7680,28 @@
         {
           "module": "goldenmatch.spark",
           "file": "packages/python/goldenmatch/goldenmatch/spark/__init__.py",
-          "purpose": "Sail tier (distributed, Spark Connect) -- the distributed sibling of the",
+          "purpose": "The Spark tier (distributed, Spark Connect) -- the distributed sibling of the",
           "imports": [
+            "goldenmatch.spark.autoconfig",
+            "goldenmatch.spark.config_pipeline",
             "goldenmatch.spark.identity"
+          ]
+        },
+        {
+          "module": "goldenmatch.spark.autoconfig",
+          "file": "packages/python/goldenmatch/goldenmatch/spark/autoconfig.py",
+          "purpose": "P6: zero-config on Spark.",
+          "defines": [
+            "SparkAutoConfigTooLarge",
+            "SparkAutoConfigUnsupported",
+            "_refuse_at_n",
+            "auto_configure_spark",
+            "sample_to_driver"
+          ],
+          "imports": [
+            "goldenmatch.core.autoconfig",
+            "goldenmatch.core.autoconfig_controller",
+            "goldenmatch.spark.config_pipeline"
           ]
         },
         {
@@ -7694,6 +7713,39 @@
             "_truncate_plan",
             "connected_components",
             "connected_components_scale"
+          ]
+        },
+        {
+          "module": "goldenmatch.spark.config_pipeline",
+          "file": "packages/python/goldenmatch/goldenmatch/spark/config_pipeline.py",
+          "purpose": "P4: run the Spark tier from a ``GoldenMatchConfig`` instead of scalars.",
+          "defines": [
+            "_block_key_column",
+            "_default_golden_cols",
+            "_field_score_parts",
+            "_field_strategy",
+            "_matchkey_score_expr",
+            "_matchkey_threshold",
+            "_resolve_fs_models",
+            "_transformed",
+            "_valid_key",
+            "_validate_spark_config_supported",
+            "blocking_passes",
+            "build_golden_from_rules",
+            "generate_candidates",
+            "run_config_pipeline",
+            "score_candidates",
+            "weighted_pair_score"
+          ],
+          "imports": [
+            "goldenmatch.config.schemas",
+            "goldenmatch.core.probabilistic",
+            "goldenmatch.spark.autoconfig",
+            "goldenmatch.spark.clustering",
+            "goldenmatch.spark.golden",
+            "goldenmatch.spark.probabilistic",
+            "goldenmatch.spark.scorers",
+            "goldenmatch.utils.transforms"
           ]
         },
         {
@@ -7765,6 +7817,30 @@
             "goldenmatch.spark.identity",
             "goldenmatch.spark.scorers",
             "goldenmatch.spark.scoring"
+          ]
+        },
+        {
+          "module": "goldenmatch.spark.probabilistic",
+          "file": "packages/python/goldenmatch/goldenmatch/spark/probabilistic.py",
+          "purpose": "P5: Fellegi-Sunter scoring on Spark.",
+          "defines": [
+            "FSSparkUnsupported",
+            "_field_similarity_and_observed",
+            "_validate_fs_spark_supported",
+            "_weight_lookup_expr",
+            "fs_level_expr",
+            "fs_match_weight_expr",
+            "fs_pair_weight",
+            "fs_posterior",
+            "fs_posterior_expr",
+            "fs_score_expr",
+            "level_thresholds_for",
+            "resolve_fs_model"
+          ],
+          "imports": [
+            "goldenmatch.core.probabilistic",
+            "goldenmatch.spark.config_pipeline",
+            "goldenmatch.spark.scorers"
           ]
         },
         {
