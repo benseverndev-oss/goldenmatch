@@ -1,37 +1,34 @@
-"""S2 gate: Sail connected_components produces a cluster PARTITION identical
-to a reference Union-Find on fixtures including a chain, a multi-merge
-junction, and a singleton. Self-contained; skips where the sail extra is
-absent; runs in the `sail` lane."""
-from __future__ import annotations
+"""S2 gate: connected_components produces a cluster PARTITION identical to a
+reference Union-Find on fixtures including a chain, a multi-merge junction, and
+a singleton. Self-contained; skips where no Spark Connect client is installed.
 
-import os
+Runs in BOTH Spark lanes: `spark_connect` (Apache Spark, blocking) and `sail`
+(pysail, advisory cross-check). The two servers plan differently, which is the
+point -- these tests failed on each for a DIFFERENT reason, and both causes
+turned out to be the same tier defect. See the P2a note below."""
+from __future__ import annotations
 
 import pytest
 
 pytest.importorskip("pyspark")
 
-# P1 (run 31516855744): on REAL Spark the two long-chain WCC tests exhaust the
-# JVM heap building a broadcast join --
-#   "Not enough memory to build and broadcast the table to all worker nodes"
-#   OutOfMemoryError: Java heap space
-# They pass under pysail, whose in-process server plans differently.
+# RESOLVED (P2a). These two long-chain WCC tests carried a non-strict xfail on
+# real Spark: the iterative join loop exhausted the JVM heap building a broadcast
+# join ("Not enough memory to build and broadcast the table to all worker nodes"
+# / OutOfMemoryError: Java heap space). They passed under pysail, whose
+# in-process server plans differently.
 #
-# NOT a dependency or API problem (P1 fixed 18 of P0's 20 failures; these are the
-# other 2). The open question is whether this is a small-CI-runner artifact or a
-# genuine tier defect: an iterative join loop that relies on broadcast will hurt
-# on any cluster, and this same WCC loop already wedged on Sail at 12K rows for a
-# DIFFERENT reason (no lineage truncation). A loop that fails on both backends
-# for different reasons is usually itself the problem.
+# The reading recorded at the time -- that a loop failing on BOTH backends for
+# different reasons is usually itself the problem -- held. It was one defect, not
+# a small-runner artifact: the loop never truncated plan lineage, so the query
+# plan grew every iteration until Spark chose a broadcast it could not afford
+# (and until Sail wedged at 12K rows). `_truncate_plan` in goldenmatch/spark/
+# clustering.py fixed both.
 #
-# Tracked as a P2 item in 2026-08-10-spark-native-execution-design. xfail is
-# NON-STRICT on purpose: on a larger runner these may pass, and that must not
-# fail the lane either.
-_ON_REAL_SPARK = bool(os.environ.get("GOLDENMATCH_SPARK_REMOTE"))
-_wcc_broadcast_oom = pytest.mark.xfail(
-    _ON_REAL_SPARK,
-    reason="WCC broadcast join OOMs the JVM heap on real Spark (P2: spark-native-execution)",
-    strict=False,
-)
+# The marker is REMOVED rather than left to xpass. A non-strict xfail that passes
+# reports XPASS and asserts nothing, so these would not have failed if the fix
+# regressed -- the exact hole the fix closed would have reopened silently. They
+# have passed on three consecutive main runs; they are ordinary tests now.
 
 
 def _reference_partition(ids, edges):
@@ -76,7 +73,6 @@ def test_sail_wcc_partition_parity(spark):
     assert _sail_partition(out) == _reference_partition(ids, edges)
 
 
-@_wcc_broadcast_oom
 def test_sail_wcc_deep_chain_converges(spark):
     """A longer chain 0-1-2-...-9 must collapse to ONE component (label-prop
     across many hops -- the correctness analog of the chain concern)."""
@@ -132,7 +128,6 @@ def test_sail_wcc_scale_partition_parity(spark):
     assert _sail_partition(out) == _reference_partition(ids, edges)
 
 
-@_wcc_broadcast_oom
 def test_sail_wcc_scale_long_chain(spark):
     """A 30-node chain: pointer-jumping converges in O(log 30) rounds where
     label-prop would need ~30. Must collapse to ONE component."""

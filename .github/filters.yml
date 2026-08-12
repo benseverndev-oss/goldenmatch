@@ -875,13 +875,27 @@ distributed:
   - 'packages/python/goldenmatch/tests/test_distributed_*.py'
   - 'packages/python/goldenmatch/goldenmatch/core/cluster.py'
   - 'packages/python/goldenmatch/goldenmatch/backends/ray_backend.py'
-sail:
-  # Sail tier (distributed, Spark Connect). The main `python` job
-  # installs without the `sail` extra, so tests/test_sail_*.py SKIP
-  # there (pytest.importorskip). The `sail` job installs
-  # goldenmatch[sail] (pysail + pyspark[connect]) so they run.
+spark:
+  # Spark Connect tier (distributed). The main `python` job installs without
+  # the `spark` extra, so the tier's tests SKIP there (pytest.importorskip);
+  # the `spark_connect` (required) and `sail` (advisory) jobs install it.
+  #
+  # This filter was named `sail` and watched `goldenmatch/sail/**` only. P2
+  # (#2494) renamed the package to `goldenmatch/spark/`, which left the filter
+  # watching a directory holding nothing but the back-compat shim -- so an edit
+  # to the tier itself triggered NEITHER lane. Exactly the #1846 class the
+  # coverage checker exists for, which is why `spark` is now in its REQUIRED
+  # table: the next rename fails workflow_lint instead of going quiet.
+  - 'packages/python/goldenmatch/goldenmatch/spark/**'
+  # The deprecated alias still ships and still has its own tests.
   - 'packages/python/goldenmatch/goldenmatch/sail/**'
+  # Both prefixes: the package renamed, the test files did not (deliberately --
+  # renaming them shifts pytest-split shard boundaries, see CLAUDE.md).
   - 'packages/python/goldenmatch/tests/test_sail_*.py'
+  - 'packages/python/goldenmatch/tests/test_spark_*.py'
+  # Both lanes install VIA THE EXTRAS, so an extras edit must re-run them --
+  # that is the only place the [spark]/[sail] dependency split is exercised.
+  - 'packages/python/goldenmatch/pyproject.toml'
 action:
   - 'packages/actions/**'
 dbt:

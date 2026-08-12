@@ -99,7 +99,7 @@ jobs:
       goldenhnsw: ${{ steps.filter.outputs.goldenhnsw }}
       hnsw: ${{ steps.filter.outputs.hnsw }}
       distributed: ${{ steps.filter.outputs.distributed }}
-      sail: ${{ steps.filter.outputs.sail }}
+      spark: ${{ steps.filter.outputs.spark }}
       readme_callouts: ${{ steps.filter.outputs.readme_callouts }}
       docs: ${{ steps.filter.outputs.docs }}
       wasm_score: ${{ steps.filter.outputs.wasm_score }}
@@ -2935,17 +2935,32 @@ jobs:
             --ignore=packages/python/goldenmatch/tests/test_distributed_randomized_contraction_wcc.py \
             --timeout=300 --durations=20 -v
 
-  # Sail tier (distributed, Spark Connect). The Sail tier re-expresses the
-  # one-box DataFusion spine's relational plan against PySpark/Spark Connect.
-  # This lane installs goldenmatch[sail] (pysail + pyspark[connect]) and runs
-  # tests/test_sail_*.py against an in-process Sail Spark Connect server (they
-  # SKIP everywhere else via pytest.importorskip). Spec:
-  # docs/superpowers/specs/2026-06-03-sail-tier-design.md (Stage S1).
+  # LEGACY / ADVISORY cross-check backend. This lane runs the tier against
+  # PYSAIL's Spark Connect server (Rust, in-process) rather than Apache Spark's.
+  #
+  # P2 moved the AUTHORITY to `spark_connect`: the product goal is running on the
+  # Spark cluster a customer already operates, so real Spark is what must gate a
+  # merge. Sail is one Connect server implementation among several.
+  #
+  # It is kept, rather than deleted as the plan proposed, because a SECOND
+  # independent backend has demonstrable value: during P2a it was the lane that
+  # caught a regression the author introduced in `_truncate_plan` (getattr placed
+  # outside the try, so pyspark's PySparkNotImplementedError escaped instead of
+  # falling through to the default). Two servers that plan differently catch
+  # different bugs. Deleting the only cross-check right after it earned its keep
+  # would be the wrong call.
+  #
+  # continue-on-error: pysail tracks the Spark 3.5 Connect protocol, so this lane
+  # can go red for reasons that say nothing about goldenmatch. A red here is a
+  # SIGNAL TO READ, not a merge blocker -- and it is deliberately absent from
+  # ci-required. Spec: docs/superpowers/specs/2026-06-03-sail-tier-design.md,
+  # superseded for gating purposes by 2026-08-10-spark-native-execution-design.md.
   sail:
     needs: changes
-    if: needs.changes.outputs.sail == 'true' || needs.changes.outputs.force_all == 'true'
+    if: needs.changes.outputs.spark == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    continue-on-error: true
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
@@ -2991,21 +3006,32 @@ jobs:
         run: |
           .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_sail_pipeline.py -v --timeout=300
 
-  # P0 (spec docs/superpowers/specs/2026-08-10-spark-native-execution-design.md):
-  # the SAME sail tests against APACHE SPARK's own Connect server, not Sail's.
-  # The tier is believed backend-agnostic -- goldenmatch/sail/session.py is
-  # `SparkSession.builder.remote(url)` and there is no Sail-specific call
-  # anywhere in the package -- and this lane is what turns that belief into a
-  # fact before P1-P6 are built on it.
+  # THE gating lane for the tier (spec: 2026-08-10-spark-native-execution-design).
+  # Runs the tier's tests against APACHE SPARK's own Connect server -- the thing
+  # customers actually operate -- rather than Sail's.
   #
-  # NOT in ci-required while P0 runs: a red here is a FINDING to enumerate, not
-  # a merge blocker. Promote to required once green (P2).
+  # P0 opened this lane advisory to find out whether the tier was genuinely
+  # backend-agnostic (goldenmatch/spark/session.py is `builder.remote(url)` with
+  # no Sail-specific call anywhere). It wasn't, quite: P0 surfaced 20 failures,
+  # P1 fixed 18 by shipping a Python environment to the executors, and P2a fixed
+  # the last 2 by truncating WCC plan lineage. It has since been green on three
+  # consecutive main runs (62 passed / 14 skipped / 0 failed).
+  #
+  # So it is now BLOCKING and in ci-required, as its P0 comment promised:
+  # "promote to required once green (P2)". `continue-on-error` is gone -- while
+  # it was set, both the job conclusion and `gh run view --json` reported success
+  # regardless of the real exit code (see CLAUDE.md), so a genuine red could not
+  # have blocked a merge and would have been easy to misread as passing.
+  #
+  # The 14 skips are test_sail_scorer_native_parity.py: they need the compiled
+  # kernel, which this lane deliberately does not install. That f32/f64 decision
+  # guard is gated by native_wheel_drift, not here -- this lane is NOT a gate on
+  # the native scorer, and promoting it does not make it one.
   spark_connect:
     needs: changes
-    if: needs.changes.outputs.sail == 'true' || needs.changes.outputs.force_all == 'true'
+    if: needs.changes.outputs.spark == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    continue-on-error: true
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
@@ -3018,11 +3044,21 @@ jobs:
           distribution: temurin
           java-version: '17'
       - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
-      # NO pysail. goldenmatch[sail] pins pyspark<4 BECAUSE of pysail, so install
-      # the client directly to get Spark 4, whose `local[*]` remote spawns
-      # Spark's own Connect server in-process (no container, no cluster).
-      - name: Install pyspark connect (no Sail)
-        run: uv pip install 'pyspark[connect]>=4'
+      # Install VIA THE EXTRA, matching the `sail` lane's discipline: [spark] is
+      # what a customer runs `pip install goldenmatch[spark]` to get, and this is
+      # the only place that entry is exercised. Before P2 this lane had to bypass
+      # the extra (`pyspark[connect]>=4` directly) because the only extra on offer
+      # was [sail], whose `<4` ceiling came from pysail's protocol target. Splitting
+      # the extras removed that ceiling, so the lane can now install the real thing.
+      - name: Install the spark extra (no Sail)
+        run: uv pip install -e 'packages/python/goldenmatch[spark]'
+      # [spark] is `>=3.5`, deliberately unbounded, so the RESOLVED version is not
+      # pinned by the extra. Assert it anyway: this lane exists to test Spark 4's
+      # Connect server, and a silent resolve back to 3.5 would leave it green while
+      # testing something else entirely.
+      - name: Confirm the resolved client is Spark 4
+        run: |
+          .venv/bin/python -c "import pyspark,sys; v=int(pyspark.__version__.split('.')[0]); print('pyspark', pyspark.__version__); sys.exit(0 if v >= 4 else f'expected pyspark >= 4, resolved {pyspark.__version__}')"
       # The load-bearing assertion. A lane that silently picked pysail up from
       # the lockfile would prove nothing while looking green.
       - name: Confirm Sail is absent
@@ -3056,17 +3092,27 @@ jobs:
           # so a check run from there can import the source tree instead of the
           # installed package and pass while the env is empty.
           (cd /tmp && /tmp/gmenv/bin/python -c "import goldenmatch, goldenmatch.core.strsim, pandas, pyarrow; print('shipped env imports OK')")
-          uv pip install venv-pack
+          # venv-pack comes from the [spark] extra installed above -- NOT a
+          # separate `uv pip install` as before. Shipping executor deps is the
+          # whole reason the extra carries it, so resolving it from the extra is
+          # what proves a user following the docs gets a working tool.
           .venv/bin/venv-pack -p /tmp/gmenv -o gm_env.tar.gz --force
           ls -lh gm_env.tar.gz
-      - name: Sail tests against Apache Spark Connect
+      # BOTH prefixes. The package renamed in P2 but the test files did not, so
+      # the tier's suite is split across test_sail_*.py (pre-rename) and
+      # test_spark_*.py (P1's executor-dependency tests, which this lane was NOT
+      # running -- the glob predated them). Renaming the files to match the
+      # package would shift pytest-split shard boundaries (CLAUDE.md), so the
+      # glob covers both instead.
+      - name: Tier tests against Apache Spark Connect
         env:
           GOLDENMATCH_SPARK_REMOTE: "local[*]"
           GOLDENMATCH_SPARK_PYENV: "gm_env.tar.gz"
         run: |
-          .venv/bin/python -c "import pyspark; print('pyspark', pyspark.__version__)"
-          .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_sail_*.py -v --timeout=600 \
-            --junitxml=spark-connect-results.xml
+          .venv/bin/python -m pytest \
+            packages/python/goldenmatch/tests/test_sail_*.py \
+            packages/python/goldenmatch/tests/test_spark_*.py \
+            -v --timeout=600 --junitxml=spark-connect-results.xml
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         if: always()
         with:
@@ -4251,7 +4297,12 @@ jobs:
       - distributed_wcc
       # NB: distributed_broad is deliberately ABSENT -- it's continue-on-error
       # (known-fragile fixtures) and must not gate the merge queue.
-      - sail
+      # P2: the Spark tier gates on APACHE SPARK, not on Sail. `sail` is
+      # deliberately ABSENT -- it is continue-on-error and advisory (pysail
+      # tracks the 3.5 Connect protocol, so it can redden for reasons that say
+      # nothing about goldenmatch). `spark_connect` is the lane that speaks to
+      # the product goal, and it has been green on three consecutive main runs.
+      - spark_connect
       - pyright
       - version_consistency
       - readme_callouts
