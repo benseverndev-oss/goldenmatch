@@ -566,6 +566,46 @@ Make the tier consume a `GoldenMatchConfig`: multi-matchkey, multi-blocking-rule
 golden rules. Wire `backend="spark"` into the public API so `import-splink`
 output runs unchanged.
 
+#### P4a — config-driven execution ✅ DONE
+
+`goldenmatch/spark/config_pipeline.py`: `run_config_pipeline(df, config)`.
+Multiple blocking passes (unioned and de-duplicated), multi-field weighted
+matchkeys, exact matchkeys, per-field survivorship rules, and a hard feature
+gate mirroring `_validate_scale_mode_supported`.
+
+**The acceptance criterion as written is not reachable in P4.**
+`config/from_splink.py` emits `type="probabilistic"` unconditionally — one
+Fellegi-Sunter matchkey, every time. There is no `m_prob` / `u_prob` /
+`match_weight` anywhere in this tier, so "`import-splink` output runs unchanged"
+depends on **P5**, not on P4. P4a therefore refuses a probabilistic config with a
+message naming P5, and the Splink cutover claim moves to P5's exit criteria.
+That is a phase-ordering error in this spec, found by execution: P5 is the
+load-bearing phase for the product goal, and P4 is its precondition.
+
+**Two defects found while building it**, both in the shipped tier, both measured
+on the P4 fixture (threshold 0.85, weights first=1.0 last=3.0):
+
+1. **null-vs-null scored a perfect 1.0.** The scorer kernel maps a missing value
+   to `""`, and `""` vs `""` is an exact match — so two records whose only shared
+   evidence was that both are missing the compared field merged at *every*
+   threshold. The one-box excludes the field instead
+   (`score_field` → `None` → dropped by `score_pair`). On the fixture: a pair
+   that should score 0.4365 scored 0.8591 and merged. Fixed on both the new path
+   and the shipped single-field `score_and_dedup`, by deciding comparability from
+   the raw columns rather than from the kernel's output — so it stays correct
+   even if the `""` substitution is later changed at source.
+2. **The weighted denominator is per-pair, not per-matchkey.** `score_pair` drops
+   an uncomparable field from the numerator *and* the denominator. Using the
+   matchkey's total weight instead scores a pair that agrees perfectly on its one
+   comparable field at 0.7500 rather than 1.0000 — losing it. `weighted_pair_score`
+   states this as pure Python, unit-tested directly against `score_pair`.
+
+#### P4b — `backend="spark"` in the public API
+
+Still to do. Note `dedupe_df` coerces its input to a local Frame, so the wiring
+has to dispatch on a Spark DataFrame *before* that coercion — collecting a
+cluster-sized frame to the driver would defeat the tier entirely.
+
 ### P5 — Fellegi-Sunter on Spark
 
 The largest piece and the one that makes a Splink user's model executable at all.

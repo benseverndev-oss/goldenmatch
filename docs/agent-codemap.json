@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 460,
+      "module_count": 461,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7668,6 +7668,33 @@
             "_truncate_plan",
             "connected_components",
             "connected_components_scale"
+          ]
+        },
+        {
+          "module": "goldenmatch.spark.config_pipeline",
+          "file": "packages/python/goldenmatch/goldenmatch/spark/config_pipeline.py",
+          "purpose": "P4: run the Spark tier from a ``GoldenMatchConfig`` instead of scalars.",
+          "defines": [
+            "_block_key_column",
+            "_default_golden_cols",
+            "_field_score_parts",
+            "_field_strategy",
+            "_matchkey_score_expr",
+            "_transformed",
+            "_valid_key",
+            "_validate_spark_config_supported",
+            "build_golden_from_rules",
+            "generate_candidates",
+            "run_config_pipeline",
+            "score_candidates",
+            "weighted_pair_score"
+          ],
+          "imports": [
+            "goldenmatch.config.schemas",
+            "goldenmatch.spark.clustering",
+            "goldenmatch.spark.golden",
+            "goldenmatch.spark.scorers",
+            "goldenmatch.utils.transforms"
           ]
         },
         {
