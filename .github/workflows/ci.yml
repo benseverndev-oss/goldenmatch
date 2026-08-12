@@ -1870,6 +1870,18 @@ jobs:
       - run: cargo clippy --manifest-path goldenphonetic-core/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --manifest-path score-core/Cargo.toml
       - run: cargo clippy --manifest-path score-core/Cargo.toml -- -D warnings
+      # score-cabi: the C ABI over score-core, for JVM (Panama/JNI) hosts. Its
+      # own [workspace] like every other pyo3-free sibling, so it needs its own
+      # lines here -- and it gets them in the BLOCKING `rust` job rather than an
+      # informational lane, because it wraps the canonical scorer dispatcher and
+      # its whole claim is that a score is identical across bindings. An
+      # unbuilt binding cannot make that claim.
+      - run: cargo test --manifest-path score-cabi/Cargo.toml
+      - run: cargo clippy --manifest-path score-cabi/Cargo.toml --all-targets -- -D warnings
+      # Build the cdylib too: `cargo test` links the rlib, so a cdylib-only
+      # failure (a symbol that does not export, a link error) would pass the
+      # tests and ship a library no host can load.
+      - run: cargo build --release --manifest-path score-cabi/Cargo.toml
       # fs-core (2026-07-17) is the pyo3-free single source of truth for the
       # Fellegi-Sunter block-scoring math (name/ensemble/tf scorers + normalize),
       # its own [workspace] path-dep of `native`. Exercised indirectly by the
