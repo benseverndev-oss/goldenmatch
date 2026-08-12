@@ -560,12 +560,13 @@ def _resolve_fs_models(config: Any, fs_model_path: str | None) -> dict[str, Any]
 
 def run_config_pipeline(
     source_df: Any,
-    config: Any,
+    config: Any = None,
     *,
     id_col: str = "__row_id__",
     golden_cols: list[str] | None = None,
     wcc: str = "scale",
     fs_model_path: str | None = None,
+    allow_large_autoconfig: bool = False,
 ) -> Any:
     """Run the Spark tier from a ``GoldenMatchConfig``.
 
@@ -578,6 +579,16 @@ def run_config_pipeline(
     parameter because "which columns end up in the golden record" is a product
     decision the config does not always state.
     """
+    if config is None:
+        # P6 zero-config. Deriving the config costs a driver-side sample plus a
+        # cluster-wide count, so it happens once here rather than being folded
+        # into the scoring path.
+        from goldenmatch.spark.autoconfig import auto_configure_spark
+
+        config, _provenance = auto_configure_spark(
+            source_df, allow_large=allow_large_autoconfig
+        )
+
     _validate_spark_config_supported(config)
 
     from goldenmatch.spark.clustering import (

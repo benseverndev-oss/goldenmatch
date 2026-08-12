@@ -23,6 +23,7 @@ from __future__ import annotations
 # (pyspark is imported lazily inside the builders), so a downstream consumer can
 # pin the contract via `from goldenmatch.spark import IdentityGraphFrames,
 # build_identity_graph` and a `inspect.signature` test, without a Spark runtime.
+from goldenmatch.spark.autoconfig import auto_configure_spark
 from goldenmatch.spark.config_pipeline import run_config_pipeline
 from goldenmatch.spark.identity import (
     EDGE_COLUMNS,
@@ -39,6 +40,7 @@ __all__ = [
     "build_identity_graph",
     "build_identity_graph_incremental",
     "run_config_pipeline",
+    "auto_configure_spark",
     "NODE_COLUMNS",
     "RECORD_COLUMNS",
     "EDGE_COLUMNS",

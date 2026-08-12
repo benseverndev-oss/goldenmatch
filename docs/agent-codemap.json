@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 462,
+      "module_count": 463,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7656,8 +7656,24 @@
           "file": "packages/python/goldenmatch/goldenmatch/spark/__init__.py",
           "purpose": "The Spark tier (distributed, Spark Connect) -- the distributed sibling of the",
           "imports": [
+            "goldenmatch.spark.autoconfig",
             "goldenmatch.spark.config_pipeline",
             "goldenmatch.spark.identity"
+          ]
+        },
+        {
+          "module": "goldenmatch.spark.autoconfig",
+          "file": "packages/python/goldenmatch/goldenmatch/spark/autoconfig.py",
+          "purpose": "P6: zero-config on Spark.",
+          "defines": [
+            "SparkAutoConfigTooLarge",
+            "_refuse_at_n",
+            "auto_configure_spark",
+            "sample_to_driver"
+          ],
+          "imports": [
+            "goldenmatch.core.autoconfig",
+            "goldenmatch.core.autoconfig_controller"
           ]
         },
         {
@@ -7695,6 +7711,7 @@
           "imports": [
             "goldenmatch.config.schemas",
             "goldenmatch.core.probabilistic",
+            "goldenmatch.spark.autoconfig",
             "goldenmatch.spark.clustering",
             "goldenmatch.spark.golden",
             "goldenmatch.spark.probabilistic",

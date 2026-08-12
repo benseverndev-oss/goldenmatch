@@ -676,10 +676,56 @@ adjustment, negative evidence, and model-backed (`embedding` /
 expression here, so running without them would return a plausible number that is
 not the model's answer.
 
-### P6 — Zero-config on Spark
+### P6 — Zero-config on Spark ✅ DONE
 
-Distributed auto-config, so `backend="spark"` supports both driver modes (Ben,
-2026-08-10: "both, user picks per run").
+`run_config_pipeline(df)` with no config auto-configures, so the tier supports
+both driver modes and the user picks per run (Ben, 2026-08-10: "both, user picks
+per run"). `goldenmatch.spark.auto_configure_spark` is the standalone entry.
+
+**Auto-config already runs on a sample**, exactly as EM does in P5 —
+`auto_configure_df` profiles and runs blocking → score → cluster on a stratified
+sub-sample. So sampling is the existing mechanism, not a concession made for
+Spark. What is *not* already handled is that the controller infers dataset size
+from the frame it is handed:
+
+```python
+# autoconfig_controller.py:609
+n_rows = _to_frame_gate(df).height
+```
+
+and then uses that number for two things that must see the full population:
+
+1. **The confidence gate.** `n_rows >= REFUSE_AT_N (100_000)` with a RED config
+   raises `ControllerNotConfidentError`. Hand it a 20k sample drawn from 500M
+   rows and the gate reads 20k, so **it never fires** — the run that most needs
+   the refusal is precisely the one that skips it. Verified against the real
+   function: a 200-row frame declaring 99,999 rows commits a **RED** config with
+   only a warning, because it is below the threshold.
+2. **Chao1 cardinality extrapolation.** The controller's own comment says this
+   "depend[s] on this being the FULL data count, not the sample size". At sample
+   scale a real mid-cardinality column (zip) looks near-unique — and near-unique
+   columns get chosen as blocking keys, which on the full data produces blocks of
+   one and finds nothing.
+
+`auto_configure_df(n_rows_full=…)` addresses only (2), and only for the v0
+heuristic; it does not move the controller's gate. So `spark/autoconfig.py`
+applies the scale check **itself**, against the true `count()`, before handing
+anything over — and `allow_large=True` is the explicit opt-in, because a config
+chosen from 20k rows and applied to 500M is a real risk the caller should accept
+knowingly.
+
+Two smaller decisions worth keeping: the sample is **Bernoulli via
+`DataFrame.sample`, never `limit`** (partitions are usually ordered by ingestion,
+source or date, so a `limit` sample of a partitioned table is a sample of its
+oldest rows or of one source); and the run returns a **provenance** record
+(sample size, full count, fraction, seed) because a config whose origin is not
+recorded gets treated as though someone chose it deliberately.
+
+**Not done:** distributed *profiling*. Everything here samples to the driver and
+reuses the one-box controller unchanged, which keeps every heuristic and health
+signal identical. Profiling on the cluster would be a different estimator with
+different numbers, and should be justified by a measurement rather than by
+symmetry with the rest of the tier.
 
 ---
 
