@@ -3116,10 +3116,42 @@ jobs:
       # running -- the glob predated them). Renaming the files to match the
       # package would shift pytest-split shard boundaries (CLAUDE.md), so the
       # glob covers both instead.
+      # J0: build the JVM scorer jar here rather than in a separate job. This
+      # lane already has the JDK and the Spark jars, and the alternative is
+      # building it twice or passing it between jobs as an artifact -- both of
+      # which add a way for the tested jar and the shipped jar to differ.
+      #
+      # `--release 17` matters: Spark supports Java 17, 21 and 25, and the
+      # runner's JDK is only one of them. Compiling without it would produce a
+      # jar that runs here and fails on a 17 executor with UnsupportedClassVersionError.
+      - name: Build the JVM scorer jar
+        run: |
+          set -euo pipefail
+          SPARK_JARS="$(.venv/bin/python -c 'import pyspark, os; print(os.path.join(os.path.dirname(pyspark.__file__), "jars"))')"
+          JVM=packages/jvm/goldenmatch-spark
+          mkdir -p "$JVM/build/classes"
+          javac --release 17 -cp "$SPARK_JARS/*" -d "$JVM/build/classes" \
+            "$JVM"/src/dev/goldensuite/spark/*.java
+          jar --create --file "$JVM/build/goldenmatch-spark.jar" -C "$JVM/build/classes" .
+          echo "--- jar contents ---"
+          jar --list --file "$JVM/build/goldenmatch-spark.jar"
+      # The Spark-free half of the jar, gated before anything ships it. No JUnit:
+      # a test framework would mean a dependency resolver, and this package has
+      # no build system on purpose (one small jar does not justify a fourth
+      # toolchain). A main() that exits non-zero is enough to gate on.
+      - name: JVM scorer self-test
+        run: |
+          set -euo pipefail
+          JVM=packages/jvm/goldenmatch-spark
+          javac --release 17 -d "$JVM/build/test-classes" -cp "$JVM/build/classes" \
+            "$JVM"/test/dev/goldensuite/spark/*.java
+          java -cp "$JVM/build/classes:$JVM/build/test-classes" \
+            dev.goldensuite.spark.SelfTest
       - name: Tier tests against Apache Spark Connect
         env:
           GOLDENMATCH_SPARK_REMOTE: "local[*]"
           GOLDENMATCH_SPARK_PYENV: "gm_env.tar.gz"
+          GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
         run: |
           .venv/bin/python -m pytest \
             packages/python/goldenmatch/tests/test_sail_*.py \
