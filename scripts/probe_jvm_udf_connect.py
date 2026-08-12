@@ -52,6 +52,8 @@ import sys
 import traceback
 
 CLASS_NAME = "dev.goldensuite.probe.GoldenScoreProbeUdf"
+CLASS_ARRAY = "dev.goldensuite.probe.GoldenScoreArrayProbeUdf"
+CLASS_TYPE = "dev.goldensuite.probe.GoldenTypeProbeUdf"
 JAR_ENV = "GOLDENMATCH_PROBE_JAR"
 
 _results: list[tuple[str, bool, str]] = []
@@ -131,6 +133,62 @@ def main() -> int:
     except Exception as e:  # noqa: BLE001
         _record("CREATE TEMPORARY FUNCTION ... AS", False, _exc(e))
 
+    # ── Step 2c: what Java type does Spark hand us for an ARRAY column? ──
+    # Version-dependent (WrappedArray historically, java.util.List in some
+    # builds), and guessing wrong gives a ClassCastException that says nothing
+    # about feasibility. Measure it instead.
+    arr_df = spark.createDataFrame(
+        [(["a", "b", "c"], ["a", "x", "c"])], ["xs", "ys"]
+    )
+    try:
+        spark.udf.registerJavaFunction("probe_type", CLASS_TYPE, "string")
+        observed = arr_df.selectExpr("probe_type(xs) AS t").collect()[0]["t"]
+        _record(
+            "ARRAY arg type (observed)",
+            True,
+            f"Spark passes: {observed}",
+        )
+    except Exception as e:  # noqa: BLE001
+        _record("ARRAY arg type (observed)", False, _exc(e))
+
+    # ── Step 2d: the ARRAY-SHAPED UDF -- the one that matters ────────
+    # Connect only permits row-shaped UDFs, and a per-row FFM downcall into Rust
+    # would be dominated by call overhead. Passing arrays amortises the downcall
+    # across a batch, which is what decides whether going native is worth it.
+    try:
+        spark.udf.registerJavaFunction("probe_arr", CLASS_ARRAY, "array<double>")
+        got = arr_df.selectExpr("probe_arr(xs, ys) AS s").collect()[0]["s"]
+        ok = list(got) == [1.0, 0.0, 1.0]
+        _record(
+            "ARRAY-shaped UDF (batched)",
+            ok,
+            f"one call scored {len(got) if got else 0} pairs; got {got} "
+            f"(expected [1.0, 0.0, 1.0])",
+        )
+    except Exception as e:  # noqa: BLE001
+        _record("ARRAY-shaped UDF (batched)", False, _exc(e))
+
+    # ── Step 2e: does the array path survive a REAL batch? ───────────
+    # A 3-element array proves the signature; it does not prove Spark will carry
+    # a batch worth amortising over. If this fails where 2d passed, the shape
+    # works and the batch SIZE is the constraint -- a completely different
+    # finding, and one worth knowing before designing around it.
+    try:
+        n = 10_000
+        big = spark.createDataFrame(
+            [([f"v{i}" for i in range(n)], [f"v{i}" for i in range(n)])],
+            ["xs", "ys"],
+        )
+        got = big.selectExpr("probe_arr(xs, ys) AS s").collect()[0]["s"]
+        ok = len(got) == n and all(v == 1.0 for v in got)
+        _record(
+            f"ARRAY-shaped UDF at n={n:,}",
+            ok,
+            f"returned {len(got):,} scores, all 1.0: {ok}",
+        )
+    except Exception as e:  # noqa: BLE001
+        _record(f"ARRAY-shaped UDF at n={n:,}", False, _exc(e))
+
     # ── Step 3: control ──────────────────────────────────────────────
     # A Python UDF must work. If it does not, the session is broken and every
     # FAIL above is meaningless -- the probe would otherwise report a confident
@@ -157,6 +215,7 @@ def main() -> int:
         ok for p, ok, _ in _results if p in
         ("spark.udf.registerJavaFunction", "CREATE TEMPORARY FUNCTION ... AS")
     )
+    array_ok = any(ok for p, ok, _ in _results if p.startswith("ARRAY-shaped UDF"))
 
     print()
     if not control_ok:
@@ -168,6 +227,17 @@ def main() -> int:
         print("=> the JVM binding can be a DROP-IN: ship the jar per session via")
         print("   addArtifact, exactly as P1 ships the Python env. The customer's")
         print("   cluster needs nothing installed.")
+        if array_ok:
+            print()
+            print("An ARRAY-shaped UDF also works, so one call can cover a whole")
+            print("batch. That is what makes an FFM downcall into Rust worth it:")
+            print("Connect only permits row-shaped UDFs, and a per-row downcall")
+            print("would be dominated by call overhead.")
+        else:
+            print()
+            print("BUT the array-shaped UDF did NOT work, so every call is one")
+            print("pair. Measure the row-shaped version before assuming native")
+            print("scoring pays for itself through a per-row downcall.")
         return 0
     print("A Java UDF is NOT registrable over Spark Connect by any probed path.")
     print("=> the JVM binding needs the jar on the CLUSTER classpath. That")

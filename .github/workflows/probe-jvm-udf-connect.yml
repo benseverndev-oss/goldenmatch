@@ -77,8 +77,12 @@ jobs:
             exit 2
           fi
           mkdir -p build/classes
-          javac -cp "$SPARK_JARS/*" -d build/classes \
-            scripts/jvm_probe/GoldenScoreProbeUdf.java
+          # Compile EVERY probe UDF, not one named file: the array-shaped and
+          # type-reporting probes were added later, and a hard-coded filename
+          # would have silently left them out of the jar -- the probe would then
+          # report ClassNotFound, which reads as a Connect refusal rather than a
+          # missing compile step.
+          javac -cp "$SPARK_JARS/*" -d build/classes scripts/jvm_probe/*.java
           jar --create --file build/goldenmatch-probe.jar -C build/classes .
           echo "--- jar contents ---"
           jar --list --file build/goldenmatch-probe.jar
