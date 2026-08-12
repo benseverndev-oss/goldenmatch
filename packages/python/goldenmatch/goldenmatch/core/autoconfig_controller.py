@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from goldenmatch._polars_lazy import pl
-from goldenmatch.config.schemas import GoldenMatchConfig
+from goldenmatch.config.schemas import BlockingConfig, GoldenMatchConfig
 from goldenmatch.core._docs import AGENT_DOCS_HINT
 from goldenmatch.core.autoconfig_history import RunHistory
 from goldenmatch.core.bench import stage
@@ -327,7 +327,7 @@ class ControllerNotConfidentError(Exception):
 _SUBPROFILE_PRIORITY_ORDER = ("data", "blocking", "scoring", "matchkey", "cluster")
 
 
-def _carries_own_blocking_plan(blocking) -> bool:
+def _carries_own_blocking_plan(blocking: BlockingConfig | None) -> bool:
     """True when this config's blocking plan lives OUTSIDE ``keys`` (#2488).
 
     ``token``/``lsh``/``simhash``/``perceptual``/``canopy`` carry their plan in a
@@ -343,7 +343,7 @@ def _carries_own_blocking_plan(blocking) -> bool:
     return getattr(blocking, "strategy", None) not in KEYS_DRIVEN_BLOCKING_STRATEGIES
 
 
-def _blocking_is_keyless(blocking) -> bool:
+def _blocking_is_keyless(blocking: BlockingConfig | None) -> bool:
     """True when the committed config really has NO blocking plan.
 
     Was ``not blocking.keys``, which is only correct for the keys-driven
