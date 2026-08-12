@@ -67,9 +67,36 @@ jobs:
             "$JVM"/src/dev/goldensuite/spark/*.java
           jar --create --file "$JVM/build/goldenmatch-spark.jar" -C "$JVM/build/classes" .
 
+      # P1's executor environment. The row_python path forks a Python worker,
+      # which has NO access to the client's site-packages -- the first run of
+      # this bench died with `ModuleNotFoundError: No module named 'goldenmatch'`
+      # inside the worker, which is P0's original failure, rediscovered by
+      # forgetting the step that exists to fix it.
+      #
+      # Worth stating plainly because it is part of the result: the batched_jvm
+      # path needs NONE of this. Its scorer is already in the executor JVM, so
+      # there is no interpreter to feed and no environment to ship. That is a
+      # deployment difference the timings do not show.
+      - name: Build + pack a runtime venv for the executors (row_python only)
+        run: |
+          set -euo pipefail
+          python -m venv /tmp/gmenv
+          /tmp/gmenv/bin/pip install --upgrade pip
+          # pandas is not a goldenmatch dependency but `pandas_udf` needs it in
+          # the WORKER. NOT -q: a silent pip failure ships an env that unpacks
+          # fine and imports nothing.
+          /tmp/gmenv/bin/pip install ./packages/python/goldenmatch pandas pyarrow
+          # cd out of the repo: its root directory is itself named `goldenmatch`,
+          # so a check run from here can import the source tree and pass while
+          # the env is empty.
+          (cd /tmp && /tmp/gmenv/bin/python -c "import goldenmatch, pandas, pyarrow; print('shipped env imports OK')")
+          .venv/bin/venv-pack -p /tmp/gmenv -o gm_env.tar.gz --force
+          ls -lh gm_env.tar.gz
+
       - name: Bench
         env:
           GOLDENMATCH_SPARK_REMOTE: "local[*]"
+          GOLDENMATCH_SPARK_PYENV: "gm_env.tar.gz"
           GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
           GOLDENMATCH_NATIVE: "0"
         run: |
