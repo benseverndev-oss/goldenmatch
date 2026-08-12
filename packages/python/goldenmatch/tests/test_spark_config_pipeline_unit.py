@@ -136,14 +136,37 @@ def test_two_records_missing_the_field_are_not_a_perfect_match():
 
 # ── the feature gate ─────────────────────────────────────────────────
 
-def test_probabilistic_matchkey_is_refused_and_says_why():
-    """The gate a Splink import lands on. from_splink ALWAYS emits a
-    probabilistic matchkey, so this is the message that user sees."""
+def test_probabilistic_matchkey_is_accepted_since_p5():
+    """P4a refused this; P5 executes it. The config gate now passes it, and the
+    remaining requirement -- a TRAINED model -- is enforced separately, because
+    only the model can tell you whether it matches the field set."""
     cfg = _cfg([
         _mk([MatchkeyField(field="first", scorer="jaro_winkler")],
             type="probabilistic", threshold=None)
     ])
-    with pytest.raises(NotImplementedError, match="P5"):
+    _validate_spark_config_supported(cfg)  # must not raise
+
+
+def test_probabilistic_field_without_a_scorer_is_refused():
+    """Defence in depth. MatchkeyConfig's own validator already requires a
+    scorer on probabilistic fields, so this is only reachable when a caller has
+    bypassed it -- `model_construct`, or mutation after construction. The
+    one-box guards the same invariant the same way (its typed accessors assert
+    rather than assume), and the payoff is identical: the crash names the
+    matchkey and field instead of surfacing as a None deep inside a UDF on a
+    worker.
+    """
+    mk = MatchkeyConfig.model_construct(
+        name="mk",
+        type="probabilistic",
+        threshold=None,
+        fields=[MatchkeyField.model_construct(field="first", scorer=None)],
+    )
+    cfg = GoldenMatchConfig.model_construct(
+        matchkeys=[mk],
+        blocking=BlockingConfig(keys=[BlockingKeyConfig(fields=["city"])]),
+    )
+    with pytest.raises(ValueError, match="needs a scorer"):
         _validate_spark_config_supported(cfg)
 
 

@@ -39,8 +39,9 @@ logger = logging.getLogger(__name__)
 # Spark expression here; running one silently as `static` would change recall.
 _SUPPORTED_BLOCKING = ("static",)
 
-# Matchkey types P4 executes. "probabilistic" is P5's whole subject.
-_SUPPORTED_MATCHKEY_TYPES = ("weighted", "exact")
+# Matchkey types the tier executes. "probabilistic" arrived in P5 and needs a
+# TRAINED model (see spark/probabilistic.py: scoring distributes, EM does not).
+_SUPPORTED_MATCHKEY_TYPES = ("weighted", "exact", "probabilistic")
 
 _BLOCK_KEY_SEP = "||"
 
@@ -116,18 +117,10 @@ def _validate_spark_config_supported(config: Any) -> None:
     for mk in matchkeys:
         mk_type = getattr(mk, "type", None) or getattr(mk, "comparison", None)
         if mk_type not in _SUPPORTED_MATCHKEY_TYPES:
-            extra = (
-                " Fellegi-Sunter on Spark is P5 of "
-                "docs/superpowers/specs/2026-08-10-spark-native-execution-"
-                "design.md; no m_prob/u_prob/match_weight exists in this tier "
-                "yet, so a probabilistic matchkey cannot be executed here."
-                if mk_type == "probabilistic"
-                else ""
-            )
             raise NotImplementedError(
                 f"The Spark tier supports matchkey types "
                 f"{_SUPPORTED_MATCHKEY_TYPES}; matchkey {mk.name!r} has "
-                f"type={mk_type!r}.{extra}"
+                f"type={mk_type!r}."
             )
         if getattr(mk, "negative_evidence", None):
             raise NotImplementedError(
@@ -150,6 +143,16 @@ def _validate_spark_config_supported(config: Any) -> None:
                 f"{mk.name!r}); it needs the full score distribution on the "
                 f"driver. Set an explicit threshold."
             )
+        if mk_type == "probabilistic":
+            # Field-shape and model-compatibility checks live in
+            # spark/probabilistic.py, which needs the trained model to make
+            # them; here only the scorer-presence invariant is checkable.
+            for f in mk.fields:
+                if f.scorer is None:
+                    raise ValueError(
+                        f"probabilistic matchkey {mk.name!r}: every field needs "
+                        f"a scorer; {f.resolved_field!r} has none."
+                    )
         if mk_type == "weighted":
             if mk.threshold is None:
                 raise ValueError(
@@ -336,11 +339,20 @@ def _transformed(col: Any, chain: list[str]) -> Any:
     return _udf(col.cast("string"))
 
 
-def _matchkey_score_expr(mk: Any, a_prefix: str, b_prefix: str) -> Any:
+def _matchkey_score_expr(
+    mk: Any, a_prefix: str, b_prefix: str, *, fs_model: Any = None
+) -> Any:
     """The Spark twin of ``weighted_pair_score`` for one matchkey."""
     from pyspark.sql import functions as F
 
     mk_type = getattr(mk, "type", None) or getattr(mk, "comparison", None)
+    if mk_type == "probabilistic":
+        # P5. The score is P(match) from the trained model, not a weighted
+        # similarity average -- a different quantity on a different scale, which
+        # is why the threshold below is `link_threshold` and not `threshold`.
+        from goldenmatch.spark.probabilistic import fs_score_expr
+
+        return fs_score_expr(mk, fs_model, a_prefix, b_prefix)
     if mk_type == "exact":
         # An exact matchkey is agreement on every field. Null is not agreement:
         # `a IS NULL AND b IS NULL` must not read as a match, which is the same
@@ -369,8 +381,41 @@ def _matchkey_score_expr(mk: Any, a_prefix: str, b_prefix: str) -> Any:
     return F.when(den > F.lit(0.0), num / den).otherwise(F.lit(0.0))
 
 
+def _matchkey_threshold(mk: Any, em: Any) -> float:
+    """The accept cutoff for one matchkey, on ITS OWN scale.
+
+    A probabilistic matchkey scores P(match) and cuts at `link_threshold`; a
+    weighted one scores a similarity average and cuts at `threshold`. Reusing
+    `threshold` for both would silently compare a probability against a
+    similarity cutoff -- numbers in the same range, meaning different things.
+
+    `resolve_thresholds` is the one-box authority for the probabilistic default
+    (including a model's calibrated cutoff when EM picked one), so it is called
+    rather than re-deriving the precedence here.
+    """
+    mk_type = getattr(mk, "type", None) or getattr(mk, "comparison", None)
+    if mk_type == "exact":
+        return 1.0
+    if mk_type == "probabilistic":
+        from goldenmatch.core.probabilistic import resolve_thresholds
+
+        # ORDER MATTERS AND IS (link, review), NOT (review, link). Taking the
+        # second element would cut at the REVIEW threshold -- lower than link by
+        # construction -- and silently auto-link every pair the one-box would
+        # have sent to a human. Pinned by
+        # tests/test_spark_fs_unit.py::test_threshold_is_the_link_not_the_review.
+        link, _review = resolve_thresholds(mk, em)
+        return float(link)
+    return float(mk.threshold)
+
+
 def score_candidates(
-    candidates: Any, source_df: Any, config: Any, *, id_col: str
+    candidates: Any,
+    source_df: Any,
+    config: Any,
+    *,
+    id_col: str,
+    fs_models: dict[str, Any] | None = None,
 ) -> Any:
     """Score candidate pairs under every matchkey; return ``(a, b, score)``.
 
@@ -394,15 +439,15 @@ def score_candidates(
         .join(b, F.col(f"{rhs}.{id_col}") == F.col("__cand__.b"))
     )
 
+    models = fs_models or {}
     per_mk = []
     for mk in config.get_matchkeys():
-        mk_type = getattr(mk, "type", None) or getattr(mk, "comparison", None)
-        threshold = 1.0 if mk_type == "exact" else float(mk.threshold)
+        em = models.get(mk.name)
         scored = joined.select(
             F.col("__cand__.a").alias("a"),
             F.col("__cand__.b").alias("b"),
-            _matchkey_score_expr(mk, lhs, rhs).alias("score"),
-        ).where(F.col("score") >= F.lit(threshold))
+            _matchkey_score_expr(mk, lhs, rhs, fs_model=em).alias("score"),
+        ).where(F.col("score") >= F.lit(_matchkey_threshold(mk, em)))
         per_mk.append(scored)
 
     out = per_mk[0]
@@ -495,6 +540,24 @@ def build_golden_from_rules(
 
 # ── entry point ──────────────────────────────────────────────────────
 
+def _resolve_fs_models(config: Any, fs_model_path: str | None) -> dict[str, Any]:
+    """Trained FS model per probabilistic matchkey, resolved BEFORE any Spark
+    work starts.
+
+    Up front on purpose: a missing model is a config error, and discovering it
+    after the blocking self-join has been submitted turns a one-line message
+    into a failed distributed job.
+    """
+    from goldenmatch.spark.probabilistic import resolve_fs_model
+
+    models: dict[str, Any] = {}
+    for mk in config.get_matchkeys():
+        mk_type = getattr(mk, "type", None) or getattr(mk, "comparison", None)
+        if mk_type == "probabilistic":
+            models[mk.name] = resolve_fs_model(mk, model_path=fs_model_path)
+    return models
+
+
 def run_config_pipeline(
     source_df: Any,
     config: Any,
@@ -502,6 +565,7 @@ def run_config_pipeline(
     id_col: str = "__row_id__",
     golden_cols: list[str] | None = None,
     wcc: str = "scale",
+    fs_model_path: str | None = None,
 ) -> Any:
     """Run the Spark tier from a ``GoldenMatchConfig``.
 
@@ -524,8 +588,12 @@ def run_config_pipeline(
     if golden_cols is None:
         golden_cols = _default_golden_cols(config)
 
+    fs_models = _resolve_fs_models(config, fs_model_path)
+
     candidates = generate_candidates(source_df, config, id_col=id_col)
-    pairs = score_candidates(candidates, source_df, config, id_col=id_col)
+    pairs = score_candidates(
+        candidates, source_df, config, id_col=id_col, fs_models=fs_models
+    )
 
     ids_df = source_df.select(id_col)
     if wcc == "scale":

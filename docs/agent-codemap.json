@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 461,
+      "module_count": 462,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7681,6 +7681,8 @@
             "_field_score_parts",
             "_field_strategy",
             "_matchkey_score_expr",
+            "_matchkey_threshold",
+            "_resolve_fs_models",
             "_transformed",
             "_valid_key",
             "_validate_spark_config_supported",
@@ -7692,8 +7694,10 @@
           ],
           "imports": [
             "goldenmatch.config.schemas",
+            "goldenmatch.core.probabilistic",
             "goldenmatch.spark.clustering",
             "goldenmatch.spark.golden",
+            "goldenmatch.spark.probabilistic",
             "goldenmatch.spark.scorers",
             "goldenmatch.utils.transforms"
           ]
@@ -7767,6 +7771,30 @@
             "goldenmatch.spark.identity",
             "goldenmatch.spark.scorers",
             "goldenmatch.spark.scoring"
+          ]
+        },
+        {
+          "module": "goldenmatch.spark.probabilistic",
+          "file": "packages/python/goldenmatch/goldenmatch/spark/probabilistic.py",
+          "purpose": "P5: Fellegi-Sunter scoring on Spark.",
+          "defines": [
+            "FSSparkUnsupported",
+            "_field_similarity_and_observed",
+            "_validate_fs_spark_supported",
+            "_weight_lookup_expr",
+            "fs_level_expr",
+            "fs_match_weight_expr",
+            "fs_pair_weight",
+            "fs_posterior",
+            "fs_posterior_expr",
+            "fs_score_expr",
+            "level_thresholds_for",
+            "resolve_fs_model"
+          ],
+          "imports": [
+            "goldenmatch.core.probabilistic",
+            "goldenmatch.spark.config_pipeline",
+            "goldenmatch.spark.scorers"
           ]
         },
         {

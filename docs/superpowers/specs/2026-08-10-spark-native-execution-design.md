@@ -628,11 +628,53 @@ name is still attached to the thing that named it, with an error that names the
 whole valid set. This is the same family as the two P4a defects and the P2 filter
 staleness: **a check that exists and does not fire.**
 
-### P5 — Fellegi-Sunter on Spark
+### P5 — Fellegi-Sunter on Spark ✅ DONE (scoring)
 
-The largest piece and the one that makes a Splink user's model executable at all.
-`fs-core` exists; the model must be re-expressed against the DataFrame API — the
-same shape as the DataFusion spine work, not a research problem.
+The piece that makes a Splink user's model executable at all, and — per P4a's
+finding — the one the Splink cutover claim actually depends on.
+
+`goldenmatch/spark/probabilistic.py` re-expresses the model against the DataFrame
+API. Per pair:
+
+```
+sim_f     = scorer(a.f, b.f)                  # null if either side missing
+level_f   = threshold assignment over sim_f
+weight_f  = match_weights[f][level_f]         # skipped when unobserved
+total     = Σ weight_f
+posterior = 1 / (1 + 2^-(prior_weight + total))
+```
+
+All of it is arithmetic over a handful of per-field constants, so the model rides
+in the query plan as inlined `CASE` expressions — no broadcast join, no lookup
+table, no UDF beyond the per-field similarity kernel the tier already had.
+
+**Scoring distributes; training does not, and that is the existing semantics
+rather than a compromise.** `train_em` learns from a **sample** of blocked pairs
+(`n_sample_pairs=10000`), so the training set is small by construction at any
+dataset size. A Splink user brings weights trained elsewhere; a GoldenMatch user
+trains once and reuses via `model_path`. Neither needs a distributed E-step, and
+building one would *change* the numbers rather than reproduce them. The tier
+therefore requires a trained model and says so, rather than training on demand
+and quietly pulling a sample back through the driver.
+
+**Both missing-value modes are honoured.** `unobserved` (textbook FS: absence of
+evidence, level `-1`, contributes zero bits) and `disagree` (level 0, evidence
+against). The one-box makes this a config choice because whether missingness is
+informative depends on the data, so a distributed path implementing only one
+would be right for half its users.
+
+**A threshold bug written and caught here**, worth recording because it is
+invisible in output: `resolve_thresholds` returns `(link, review)` — link
+**first**. Destructured the other way, the cut happens at the review threshold,
+which is clamped `<= link` by construction, so every pair the one-box would have
+queued for a human is auto-linked instead. It does not look like a defect; it
+looks like a slightly generous run. Pinned by a test that asserts the order.
+
+Deliberately out of scope and refused loudly: term-frequency (Winkler)
+adjustment, negative evidence, and model-backed (`embedding` /
+`record_embedding`) scorers — each contributes to the one-box score and has no
+expression here, so running without them would return a plausible number that is
+not the model's answer.
 
 ### P6 — Zero-config on Spark
 
