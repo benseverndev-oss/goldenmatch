@@ -133,6 +133,30 @@ def main(argv=None) -> int:
     remote = os.environ.get("GOLDENMATCH_SPARK_REMOTE", "local[*]")
     spark = SparkSession.builder.remote(remote).getOrCreate()
 
+    # P1's executor environment, needed by the ROW_PYTHON path only. Real Spark
+    # forks a Python worker with its own environment, so the client's
+    # site-packages are absent -- the first run of this bench died with
+    # `ModuleNotFoundError: No module named 'goldenmatch'` inside the worker,
+    # which is P0's original failure rediscovered by omitting the step that
+    # exists to fix it.
+    #
+    # Part of the result rather than a footnote: the batched_jvm path needs NONE
+    # of this. Its scorer is already in the executor JVM, so there is no
+    # interpreter to feed and no environment to ship -- a deployment difference
+    # the timings below do not capture.
+    pyenv = os.environ.get("GOLDENMATCH_SPARK_PYENV")
+    if pyenv:
+        from goldenmatch.spark.deps import ship_python_environment
+
+        ship_python_environment(spark, pyenv)
+        print(f"shipped executor env: {pyenv}", flush=True)
+    else:
+        print(
+            "WARNING: no GOLDENMATCH_SPARK_PYENV -- the row_python path will "
+            "fail on a real Spark backend",
+            flush=True,
+        )
+
     rows = _rows(args.rows, args.block_size)
     df = spark.createDataFrame(rows, _SCHEMA).cache()
     n_pairs = _candidate_pairs(df).count()
