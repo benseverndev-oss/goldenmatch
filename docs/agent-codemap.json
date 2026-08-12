@@ -7654,8 +7654,9 @@
         {
           "module": "goldenmatch.spark",
           "file": "packages/python/goldenmatch/goldenmatch/spark/__init__.py",
-          "purpose": "Sail tier (distributed, Spark Connect) -- the distributed sibling of the",
+          "purpose": "The Spark tier (distributed, Spark Connect) -- the distributed sibling of the",
           "imports": [
+            "goldenmatch.spark.config_pipeline",
             "goldenmatch.spark.identity"
           ]
         },

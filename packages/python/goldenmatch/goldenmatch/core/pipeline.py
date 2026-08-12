@@ -1123,6 +1123,24 @@ def _get_block_scorer(config: GoldenMatchConfig):
             score_blocks_datafusion,
         )
         return score_blocks_datafusion
+    if backend == "spark":
+        # NOT a block scorer. Every other backend here swaps the pair-scoring
+        # implementation inside this one-box pipeline over a LOCAL dataset;
+        # `spark` means the whole pipeline runs on a cluster, over data the
+        # cluster already holds. There is no local seam to plug it into, and
+        # falling through to the default would run single-box while the user
+        # believed they were distributing -- the exact silence
+        # `_reject_unknown_backend` exists to end.
+        raise NotImplementedError(
+            "backend='spark' runs the distributed tier, which takes a SPARK "
+            "DataFrame -- it is not a block scorer for a local dataset, so it "
+            "cannot run from dedupe()/dedupe_df(). Use:\n"
+            "    from goldenmatch.spark import run_config_pipeline\n"
+            "    run_config_pipeline(spark_df, config)\n"
+            "Reading a local frame back through the driver would defeat the "
+            "point of the tier. See docs/superpowers/specs/"
+            "2026-08-10-spark-native-execution-design.md."
+        )
     return score_blocks_parallel
 from goldenmatch.core.cluster import (
     ClusterFrames,

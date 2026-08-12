@@ -2137,6 +2137,27 @@ class SemanticBlockingConfig(BaseModel):
 #: config_fingerprint() so a no-op schema bump doesn't change a config's id.
 CONFIG_SCHEMA_VERSION = 1
 
+# Every value `GoldenMatchConfig.backend` accepts. Closed on purpose: the field
+# was free text, so a typo ran the default in-memory path silently (see
+# `_reject_unknown_backend`).
+#
+# `spark` is the odd one out and is documented as such: the others swap the
+# block SCORER inside the one-box pipeline over a local dataset, while `spark`
+# declares that the config targets the distributed tier, whose entry point
+# (`goldenmatch.spark.run_config_pipeline`) takes a Spark DataFrame. It is
+# accepted here so a config can carry the intent, and refused loudly by the
+# local block-scorer dispatcher rather than silently ignored there.
+VALID_BACKENDS: frozenset[str] = frozenset({
+    "ray",
+    "duckdb",
+    "duckdb-backend",
+    "datafusion",
+    "bucket",
+    "chunked",
+    "polars-direct",
+    "spark",
+})
+
 
 class GoldenMatchConfig(BaseModel):
     schema_version: int = Field(
@@ -2201,8 +2222,8 @@ class GoldenMatchConfig(BaseModel):
     )
     backend: str | None = Field(
         default=None,
-        description="Execution backend: None (default Polars in-memory), 'ray', 'duckdb', 'chunked', or 'bucket'.",
-    )  # None (default Polars), "ray", "duckdb"
+        description="Execution backend: None (default in-memory), 'ray', 'duckdb', 'datafusion', 'chunked', 'bucket', 'polars-direct', or 'spark'.",
+    )
     distributed_routing: DistributedRoutingConfig | None = Field(
         default=None,
         description="Per-stage distributed-routing pins; None lets the planner decide every stage.",
@@ -2315,6 +2336,32 @@ class GoldenMatchConfig(BaseModel):
     # to short-circuit block->score->cluster. Default-False keeps every plan
     # byte-identical when unset. Mirrors _throughput_plan's hand-off contract.
     _use_fused_match: bool = PrivateAttr(default=False)
+
+    @field_validator("backend")
+    @classmethod
+    def _reject_unknown_backend(cls, v: str | None) -> str | None:
+        """`backend` was free text, and an unrecognized value SILENTLY ran the
+        default in-memory path.
+
+        So `backend="rayy"` (or `"spark"`, before it existed) produced an
+        ordinary single-box run with no warning: the user believed they were
+        distributing and were not. `_get_block_scorer` returns the default
+        scorer for anything it does not recognize, which is the right shape for
+        a dispatcher and the wrong place to catch a typo. Catch it here, at
+        construction, where the name is still attached to the thing that named
+        it.
+        """
+        if v is None:
+            return v
+        name = v.strip()
+        if name not in VALID_BACKENDS:
+            raise ValueError(
+                f"Unknown backend {v!r}. Valid backends: "
+                f"{', '.join(sorted(VALID_BACKENDS))} (or omit for the default "
+                f"in-memory path). An unrecognized value used to run "
+                f"single-box silently."
+            )
+        return name
 
     @model_validator(mode="after")
     def _validate_fuzzy_needs_blocking(self) -> GoldenMatchConfig:
