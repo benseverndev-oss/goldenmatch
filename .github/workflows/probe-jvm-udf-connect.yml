@@ -1,0 +1,83 @@
+# PROBE (workflow_dispatch only, NOT ci-required): can a Java UDF be registered
+# and called from a Spark CONNECT client?
+#
+# This decides the SHAPE of the JVM binding for the scoring kernel, not whether
+# to build it. Spark Connect does not expose Catalyst, so a custom Expression is
+# out; what might still work is a plain Java UDF shipped per session via
+# addArtifact. If it works the binding is a drop-in; if it does not, the jar has
+# to live on the customer's cluster classpath, which reinstates the friction
+# P0-P6 removed.
+#
+# Same posture as the P0 probe that opened this arc: a red here is a FINDING to
+# read, not a merge blocker.
+name: probe-jvm-udf-connect
+
+on:
+  workflow_dispatch:
+    inputs:
+      pyspark_spec:
+        description: "pyspark requirement to install (probe the version you care about)"
+        required: false
+        default: "pyspark[connect]>=4"
+      java_version:
+        description: "Temurin JDK version"
+        required: false
+        default: "17"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+
+      # Real Spark's Connect server is JVM-side, and we need javac anyway to
+      # build the probe UDF.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java_version || '17' }}
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.13"
+
+      - name: Install the Spark Connect client
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install '${{ inputs.pyspark_spec || format(''pyspark[connect]>=4'') }}'
+          python -c "import pyspark; print('pyspark', pyspark.__version__)"
+
+      # Compile against Spark's own jars so `org.apache.spark.sql.api.java.UDF2`
+      # resolves. Taking them from the installed pyspark keeps the compile and
+      # the runtime on the SAME Spark version -- compiling against a different
+      # one is its own failure mode and would confound the probe.
+      - name: Build the probe jar
+        run: |
+          set -euo pipefail
+          SPARK_JARS="$(python -c 'import pyspark, os; print(os.path.join(os.path.dirname(pyspark.__file__), "jars"))')"
+          echo "spark jars: $SPARK_JARS"
+          ls "$SPARK_JARS" | head -3
+          mkdir -p build/classes
+          javac -cp "$SPARK_JARS/*" -d build/classes \
+            scripts/jvm_probe/GoldenScoreProbeUdf.java
+          jar --create --file build/goldenmatch-probe.jar -C build/classes .
+          echo "--- jar contents ---"
+          jar --list --file build/goldenmatch-probe.jar
+
+      - name: Probe registration paths
+        env:
+          GOLDENMATCH_PROBE_JAR: ${{ github.workspace }}/build/goldenmatch-probe.jar
+          GOLDENMATCH_SPARK_REMOTE: "local[*]"
+        run: python scripts/probe_jvm_udf_connect.py
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        if: always()
+        with:
+          name: jvm-udf-connect-probe-jar
+          path: build/goldenmatch-probe.jar
+          if-no-files-found: warn
