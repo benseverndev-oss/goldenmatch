@@ -600,11 +600,33 @@ on the P4 fixture (threshold 0.85, weights first=1.0 last=3.0):
    comparable field at 0.7500 rather than 1.0000 — losing it. `weighted_pair_score`
    states this as pure Python, unit-tested directly against `score_pair`.
 
-#### P4b — `backend="spark"` in the public API
+#### P4b — `backend="spark"` in the public API ✅ DONE
 
-Still to do. Note `dedupe_df` coerces its input to a local Frame, so the wiring
-has to dispatch on a Spark DataFrame *before* that coercion — collecting a
-cluster-sized frame to the driver would defeat the tier entirely.
+**The seam in the spec was the wrong one, and the wiring is deliberately not
+what P4 proposed.** `dedupe_df(backend=...)` selects a block *scorer* for a
+**local** dataset — that is what `ray`, `duckdb`, `datafusion`, `bucket` and
+`chunked` all do. `spark` is categorically different: the whole pipeline runs on
+a cluster, over data the cluster already holds. Accepting it on `dedupe_df` would
+mean shipping a driver-side frame out and back, which is the opposite of the
+product goal in §1.
+
+So `spark` is a *recognized* backend that declares intent, `_get_block_scorer`
+raises for it with the call that does work, and the public entry point is
+`goldenmatch.spark.run_config_pipeline(spark_df, config)` — exported in P4a.
+
+**A third silent-degradation defect, found on the way.** `backend` was free text
+and the dispatcher returns the default scorer for anything unrecognized, so:
+
+```
+backend="rayy"   -> ordinary single-box run, no warning
+backend="spark"  -> ordinary single-box run, no warning  (before this)
+```
+
+A user who meant to distribute simply did not, and nothing said so. `backend` is
+now a closed set (`VALID_BACKENDS`), validated at config construction where the
+name is still attached to the thing that named it, with an error that names the
+whole valid set. This is the same family as the two P4a defects and the P2 filter
+staleness: **a check that exists and does not fire.**
 
 ### P5 — Fellegi-Sunter on Spark
 
