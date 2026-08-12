@@ -1,0 +1,99 @@
+# J4: the measurement this arc has never had.
+#
+# P0-P6 built the Spark tier and score-cabi/J0/J1 built the JVM path, and not one
+# wall-clock number has been produced. Section 1 of the spark-native spec claims
+# "vectorized Rust beats Spark SQL per core" -- unmeasured. This lane compares the
+# two scoring MECHANISMS that exist today:
+#
+#   row_python   pandas_udf -> forked Python worker (the shipped path)
+#   batched_jvm  J1's array UDF, in the executor JVM (J0's jar)
+#
+# workflow_dispatch only and NOT ci-required: it is a measurement, not a gate. A
+# number that fails to meet an expectation is a finding, not a broken build.
+name: bench-spark-scoring
+
+on:
+  workflow_dispatch:
+    inputs:
+      rows:
+        description: "Rows in the synthetic dataset"
+        required: false
+        default: "200000"
+      block_size:
+        description: "Records per block (pair count is QUADRATIC in this)"
+        required: false
+        default: "20"
+      repeats:
+        description: "Timed runs per path; the median is reported"
+        required: false
+        default: "3"
+      runner:
+        description: "Runner label"
+        required: false
+        default: "large-new-64GB"
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
+      - name: Install the spark extra
+        run: uv pip install -e 'packages/python/goldenmatch[spark]'
+
+      # Same build the spark_connect lane does, and for the same reason:
+      # `--release 17` so the jar runs on Spark's oldest supported JDK rather
+      # than only on whatever the runner happens to have.
+      - name: Build the JVM scorer jar
+        run: |
+          set -euo pipefail
+          SPARK_JARS="$(.venv/bin/python -c 'import pyspark, os; print(os.path.join(os.path.dirname(pyspark.__file__), "jars"))')"
+          JVM=packages/jvm/goldenmatch-spark
+          mkdir -p "$JVM/build/classes"
+          javac --release 17 -cp "$SPARK_JARS/*" -d "$JVM/build/classes" \
+            "$JVM"/src/dev/goldensuite/spark/*.java
+          jar --create --file "$JVM/build/goldenmatch-spark.jar" -C "$JVM/build/classes" .
+
+      - name: Bench
+        env:
+          GOLDENMATCH_SPARK_REMOTE: "local[*]"
+          GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
+          GOLDENMATCH_NATIVE: "0"
+        run: |
+          .venv/bin/python scripts/bench_spark_scoring.py \
+            --rows '${{ inputs.rows }}' \
+            --block-size '${{ inputs.block_size }}' \
+            --repeats '${{ inputs.repeats }}' \
+            --out spark-scoring-bench.json
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ -f spark-scoring-bench.json ]; then
+            {
+              echo '## Spark scoring bench'
+              echo '```json'
+              cat spark-scoring-bench.json
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        if: always()
+        with:
+          name: spark-scoring-bench
+          path: spark-scoring-bench.json
+          if-no-files-found: warn
