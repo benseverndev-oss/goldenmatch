@@ -39,7 +39,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: ${{ inputs.java_version || '17' }}
+          java-version: ${{ inputs.java_version }}
 
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
@@ -49,7 +49,11 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          python -m pip install '${{ inputs.pyspark_spec || format(''pyspark[connect]>=4'') }}'
+          # workflow_dispatch applies the input's `default:` when it is not supplied,
+          # so no `||` fallback is needed here -- and the one that was here was a
+          # GitHub EXPRESSION error that `check_workflow_yaml` cannot see, because
+          # it validates YAML parsing rather than ${{ }} syntax.
+          python -m pip install '${{ inputs.pyspark_spec }}'
           python -c "import pyspark; print('pyspark', pyspark.__version__)"
 
       # Compile against Spark's own jars so `org.apache.spark.sql.api.java.UDF2`
