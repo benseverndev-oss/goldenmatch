@@ -55,6 +55,14 @@ def test_missing_column_is_not_free_text():
 # ---- candidate generation ----
 
 
+def test_token_candidates_are_off_by_default(monkeypatch):
+    """Default OFF: auto-suggest must not propose token blocking until the
+    integration bug that zeroed Amazon-Google F1 is resolved (#2488)."""
+    monkeypatch.delenv("GOLDENMATCH_TOKEN_BLOCKING", raising=False)
+    cands = generate_candidates(["title", "sku"], df=_titles_frame())
+    assert all(c.get("kind") != "token" for c in cands)
+
+
 def test_no_token_candidates_without_a_frame():
     """`df` is optional so the name-only callers keep working; they just get no
     token candidates rather than an error."""
@@ -62,7 +70,8 @@ def test_no_token_candidates_without_a_frame():
     assert all(c.get("kind") != "token" for c in cands)
 
 
-def test_token_candidates_are_generated_for_free_text_with_a_frame():
+def test_token_candidates_are_generated_for_free_text_with_a_frame(monkeypatch):
+    monkeypatch.setenv("GOLDENMATCH_TOKEN_BLOCKING", "1")
     cands = generate_candidates(["title", "sku"], df=_titles_frame())
     tok = [c for c in cands if c.get("kind") == "token"]
     assert tok, "expected token candidates for the free-text column"
@@ -70,7 +79,7 @@ def test_token_candidates_are_generated_for_free_text_with_a_frame():
     assert len({c["token"]["max_df"] for c in tok}) > 1, "should offer a DF spread"
 
 
-def test_token_candidates_are_not_compounded_with_exact_keys():
+def test_token_candidates_are_not_compounded_with_exact_keys(monkeypatch):
     """ANDing a token block with a prefix key re-imposes the single-derived-value
     agreement that token blocking exists to avoid."""
     cands = generate_candidates(["title", "sku"], df=_titles_frame())
@@ -213,7 +222,7 @@ def test_auto_suggest_still_commits_exact_keys_unchanged(monkeypatch):
     assert [k.fields for k in cfg.blocking.keys] == [["title"]]
 
 
-def test_person_shaped_data_gets_no_token_candidates():
+def test_person_shaped_data_gets_no_token_candidates(monkeypatch):
     """Regression guard on the blast radius. Token blocking must not reach the
     person benchmarks (Febrl3/NCVR sit at ~0.99 F1 on prefix/soundex keys).
     Street addresses are the boundary case -- the longest person field -- and
@@ -227,6 +236,7 @@ def test_person_shaped_data_gets_no_token_candidates():
     })
     cols = ["first_name", "last_name", "res_street_address", "zip_code"]
     assert free_text_columns(df, cols) == []
+    monkeypatch.setenv("GOLDENMATCH_TOKEN_BLOCKING", "1")  # on, and still none
     assert all(c.get("kind") != "token" for c in generate_candidates(cols, df=df))
 
 

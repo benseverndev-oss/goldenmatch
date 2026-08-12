@@ -40,6 +40,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   Python-only for now (`parity/goldenmatch.yaml`); the TS port is sequencing,
   not a barrier -- there is no kernel or model involved.
 
+  **Auto-suggest can propose it, but that is OPT-IN and default OFF**
+  (`GOLDENMATCH_TOKEN_BLOCKING=1`). Committing a token plan automatically took
+  Amazon-Google's end-to-end F1 from 0.1014 to **0.0000**, below the #2470
+  quality floor. Measured across three runs in one environment:
+
+  | run | iteration 0 | failing subprofile | F1 |
+  |---|---|---|---|
+  | clean `main` | 430.7s | scoring | 0.1014 |
+  | token candidates on | 424.1s | blocking | 0.0000 |
+  | + total-pair cost term | 429.3s | blocking | 0.0000 |
+
+  Two things follow, and they point in opposite directions. The auto-config
+  time-budget blowout at iteration 0 is **pre-existing on `main`** (~430s in
+  all three, baseline included), so it is not caused by this work. But the F1
+  collapse is: the baseline reproduces 0.1014 exactly, and enabling token
+  candidates takes it to zero -- the failing auto-config subprofile flips from
+  `scoring` to `blocking`, `build_token_blocks` never runs, and the committed
+  RED config yields no candidate pairs. That integration gap is not diagnosed,
+  and a plan that finds nothing is strictly worse than a 7%-recall key, so the
+  default stays off until the benchmark says otherwise.
+
 ### Fixed
 - **Every FS scoring path now resolves the link cutoff the same way.**
   `_fs_link_threshold` applies three steps in order -- configured

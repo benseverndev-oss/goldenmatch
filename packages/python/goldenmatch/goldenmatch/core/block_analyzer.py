@@ -118,6 +118,37 @@ _TOKEN_DF_CAPS = (10, 25, 50, 100, 200)
 _TOKEN_PAIR_BUDGET_PER_ROW = 10
 
 
+def _token_candidates_enabled() -> bool:
+    """Whether auto-suggest may propose token blocking. Default OFF (#2488).
+
+    The strategy itself is sound and measured -- on Amazon-Google it reaches
+    98.2% blocking recall against the committed key's 7.15%. What is NOT yet
+    sound is committing it from auto-suggest. Measured end-to-end on that
+    benchmark, three runs in one environment:
+
+        clean main          iter0 430.7s  failing_subprofile=scoring   F1 0.1014
+        token candidates    iter0 424.1s  failing_subprofile=blocking  F1 0.0000
+        + pair-cost term    iter0 429.3s  failing_subprofile=blocking  F1 0.0000
+
+    So the auto-config time-budget blowout at iteration 0 is PRE-EXISTING on
+    main (~430s in all three, including baseline) and is not caused by this
+    work -- but the F1 collapse is: the baseline reproduces 0.1014 exactly, and
+    turning token candidates on takes it to zero. The auto-config subprofile
+    that fails flips from `scoring` to `blocking`, `build_token_blocks` never
+    logs, and the committed RED config yields no candidate pairs at all.
+
+    That integration gap is not diagnosed yet, and a plan that finds no pairs
+    is strictly worse than a 7%-recall key, so the default stays off until the
+    benchmark says otherwise. Set GOLDENMATCH_TOKEN_BLOCKING=1 to opt in.
+    Reading the env at call time (not import) keeps it settable per-test.
+    """
+    import os  # noqa: PLC0415
+
+    return os.environ.get("GOLDENMATCH_TOKEN_BLOCKING", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
 def _mean_token_count(df, column: str, sample: int = 2000) -> float:
     """Mean whitespace-token count over non-empty values of ``column``."""
     from goldenmatch.core.frame import to_frame
@@ -195,7 +226,10 @@ def generate_candidates(matchkey_columns: list[str], df=None) -> list[dict]:
     # Token candidates for free text. NOT compounded with the exact keys: a
     # token block ANDed with a prefix key re-imposes the single-derived-value
     # agreement that token blocking exists to avoid.
-    if df is not None:
+    #
+    # OPT-IN (default OFF) pending an unresolved integration bug -- see
+    # `_token_candidates_enabled`.
+    if df is not None and _token_candidates_enabled():
         for col in free_text_columns(df, matchkey_columns):
             all_candidates.extend(_token_candidates(col))
 
