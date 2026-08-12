@@ -18,17 +18,38 @@ Each path is probed independently and its exact exception recorded, because
 "it failed" is not an answer -- `AnalysisException: cannot resolve` and
 `PySparkNotImplementedError` mean opposite things about whether to keep trying.
 
-RESULT (run 31609185942, 2026-08-12; pyspark 4.2.0, Temurin 17, remote=local[*])
+RESULT (run 31611464914, 2026-08-12; pyspark 4.2.0, Temurin 17, remote=local[*])
 
     PASS  addArtifact(jar)                  jar accepted by the session
     PASS  spark.udf.registerJavaFunction    registered AND called -> [1.0, 0.0]
     FAIL  CREATE TEMPORARY FUNCTION ... AS  AnalysisException [NO_HANDLER_FOR_UDAF]:
           "No handler for UDAF '<class>'. Use sparkSession.udf.register(...) instead."
+    PASS  ARRAY arg type (observed)         scala.collection.immutable.ArraySeq$ofRef
+    PASS  ARRAY-shaped UDF (batched)        one call scored 3 pairs -> [1.0, 0.0, 1.0]
+    PASS  ARRAY-shaped UDF at n=10,000      10,000 scores in ONE call, all correct
     PASS  CONTROL: python udf               [1.0, 0.0]
 
 => A Java UDF IS registrable over Spark Connect. The JVM binding can be a
    DROP-IN: ship the jar per session via addArtifact, exactly as P1 ships the
    Python env, and the customer's cluster needs NOTHING installed.
+
+=> The ARRAY shape works, at a batch size worth amortising over. Connect only
+   permits row-shaped UDFs, so this is what makes an FFM downcall into Rust pay
+   for itself: one downcall per batch instead of one per row.
+
+The arg type is the result that earned the probe. Spark passes
+`scala.collection.immutable.ArraySeq$ofRef` -- a SCALA Seq, not a
+`java.util.List`. Declaring `java.util.List` (the obvious guess, and what the
+Spark Java UDF docs' examples suggest) throws ClassCastException at runtime,
+which reads as "the array shape does not work" when the shape is fine and only
+the declaration was wrong. `ofRef` wraps an Object[], so the real binding can
+reach the backing array cheaply rather than iterating a Scala collection.
+
+Still NOT proven, and deliberately out of this probe's scope: zero-copy. Nothing
+here hands the UDF an Arrow buffer -- Arrow Java exists and is on Spark's
+classpath, but the batch entry points that would expose it (ColumnarBatch /
+ArrowColumnVector) sit behind Catalyst, which Connect does not expose. The array
+path amortises the CALL; it still copies the strings.
 
 The one failure is not a Connect restriction: the SQL DDL path resolves the
 class as a UDAF and says so, pointing at the API that works. Recorded rather
