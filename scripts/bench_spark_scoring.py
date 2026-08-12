@@ -140,6 +140,14 @@ def main(argv=None) -> int:
     ap.add_argument("--repeats", type=int, default=3)
     ap.add_argument("--out", default="spark-scoring-bench.json")
     ap.add_argument(
+        "--native",
+        choices=["0", "1"],
+        default="0",
+        help="GOLDENMATCH_NATIVE for this arm. The Rust kernel runs ON THE "
+             "EXECUTOR, so the shipped env must also carry the wheel -- setting "
+             "this on the driver alone changes nothing.",
+    )
+    ap.add_argument(
         "--path",
         choices=["row_python", "batched_jvm"],
         required=True,
@@ -147,6 +155,11 @@ def main(argv=None) -> int:
              "one session let the first arm's residue OOM the second.",
     )
     args = ap.parse_args(argv)
+
+    # Set BEFORE goldenmatch.spark.scorers is imported anywhere: the loader
+    # reads the flag when it resolves the component, and an import that already
+    # happened would have resolved it under the old value.
+    os.environ["GOLDENMATCH_NATIVE"] = args.native
 
     from goldenmatch.spark.jvm import JvmScorerUnavailable, find_jar, install
     from pyspark.sql import SparkSession
@@ -193,6 +206,7 @@ def main(argv=None) -> int:
         "repeats": args.repeats,
         "remote": remote,
         "path": args.path,
+        "native": args.native,
     }
 
     if args.path == "row_python":
@@ -208,6 +222,20 @@ def main(argv=None) -> int:
         print("[batched_jvm] array UDF, in the executor JVM", flush=True)
         results["timing"] = _time(lambda: _batched_jvm(spark, df, udf_name),
                                   repeats=args.repeats)
+
+    # Report what the kernel ACTUALLY resolved to, not what was asked for. A
+    # missing wheel silently yields the pure floor, and a bench that reports the
+    # requested flag rather than the resolved one would label pure-Python
+    # numbers as native -- which is exactly how this harness misreported its
+    # first result.
+    try:
+        from goldenmatch.core._native_loader import native_enabled
+
+        results["native_resolved"] = bool(native_enabled("sail_scoring"))
+    except Exception:  # noqa: BLE001
+        results["native_resolved"] = False
+    print(f"  native requested={args.native} resolved={results['native_resolved']}",
+          flush=True)
 
     r = results["timing"]
     print(
