@@ -107,7 +107,15 @@ _FREE_TEXT_MIN_MEAN_TOKENS = 5.0
 #: DF caps offered as token candidates. Spread so the scorer can trade recall
 #: against cost on the actual frame instead of one hard-coded guess; on
 #: Amazon-Google these span 87.6% recall / 52,777 pairs to 99.0% / 387,183.
-_TOKEN_DF_CAPS = (25, 50, 100, 200)
+_TOKEN_DF_CAPS = (10, 25, 50, 100, 200)
+
+#: Candidate pairs per row a token plan may propose before the score starts
+#: discounting it. Free-text pairs are EXPENSIVE to score -- on Amazon-Google a
+#: 115,650-pair plan cost 424s on 4589 rows, ~3.6ms/pair -- so an unbounded
+#: recall-maximising plan does not finish inside the auto-config time budget and
+#: the run falls back to degenerate blocking. Expressed per row so it tracks the
+#: frame rather than pinning one absolute number.
+_TOKEN_PAIR_BUDGET_PER_ROW = 10
 
 
 def _mean_token_count(df, column: str, sample: int = 2000) -> float:
@@ -280,20 +288,34 @@ def _score_token_candidate(df, candidate: dict, target_block_size: int) -> dict:
         std_group_size = 0.0
     total_comparisons = sum(s * (s - 1) // 2 for s in sizes)
 
-    # Same formula as the exact-key path, with one substitution. The first term
-    # there is `group_count / n_total` -- selectivity, "how finely does this key
-    # split the frame" -- which relies on one block per record, so more groups
-    # means smaller groups. Token blocking breaks that: a record joins many
-    # blocks, so group_count can exceed n_total and the term stops being a
-    # fraction (Amazon-Google: 2750 blocks over 4589 rows, but ~16k memberships).
-    # `coverage` is the honest analogue -- the share of the frame this key can
-    # actually place -- and it keeps the term in [0, 1] and comparable across
-    # both candidate shapes, which is the only reason the two can be ranked
-    # against each other at all.
+    # Same formula as the exact-key path, with two changes.
+    #
+    # (1) The first term there is `group_count / n_total` -- selectivity, "how
+    # finely does this key split the frame" -- which relies on one block per
+    # record, so more groups means smaller groups. Token blocking breaks that:
+    # a record joins many blocks, so group_count can exceed n_total and the term
+    # stops being a fraction (Amazon-Google: 2750 blocks over 4589 rows, but
+    # ~16k memberships). `coverage` is the honest analogue -- the share of the
+    # frame this key can actually place -- and it keeps the term in [0, 1] and
+    # comparable across both candidate shapes, which is the only reason the two
+    # can be ranked against each other at all.
+    #
+    # (2) A TOTAL-pair term, which the exact-key formula does not have and does
+    # not need. There, `max_group_size` stands in for cost, because one block
+    # per record means the biggest block dominates the pair count. Under
+    # multi-key blocking that correlation breaks completely: `tokens(title,
+    # df<=50)` has a max block of 50 -- tiny -- and 115,650 total pairs, 24x the
+    # exact key it displaced. Ranking on max_group_size alone therefore scored
+    # it as cheap, the pipeline then spent 424s scoring those pairs on a 4589-row
+    # sample, blew the auto-config time budget at iteration 0, and the run ended
+    # on the degenerate RED config with F1 0.0 -- WORSE than the 7%-recall key it
+    # replaced. Recall is worthless if the plan carrying it never finishes.
+    pair_budget = max(1, _TOKEN_PAIR_BUDGET_PER_ROW * n_total)
     score = (
         coverage
         * (1 / (1 + max_group_size / target_block_size))
         * (1 / (1 + std_group_size / mean_group_size))
+        * (1 / (1 + total_comparisons / pair_budget))
     ) if mean_group_size else 0.0
 
     return {

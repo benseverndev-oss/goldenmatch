@@ -228,3 +228,36 @@ def test_person_shaped_data_gets_no_token_candidates():
     cols = ["first_name", "last_name", "res_street_address", "zip_code"]
     assert free_text_columns(df, cols) == []
     assert all(c.get("kind") != "token" for c in generate_candidates(cols, df=df))
+
+
+def test_score_discounts_a_plan_that_proposes_too_many_pairs():
+    """The regression that made Amazon-Google F1 0.0 (#2488).
+
+    `max_group_size` is the exact-key cost proxy, and it works there because one
+    block per record means the biggest block dominates the pair count. Under
+    multi-key blocking that breaks: a plan can have tiny blocks and an enormous
+    total. Scored on max_group_size alone such a plan looks cheap, the pipeline
+    then blows the auto-config time budget scoring its pairs, and the run falls
+    back to degenerate blocking -- worse than the key it replaced.
+
+    Both frames below give blocks of exactly 10, full coverage and zero size
+    variance, so every other term in the score is identical. The only
+    difference is fan-out: 1 token per record (10 blocks, 450 pairs) versus 5
+    (50 blocks, 2250 pairs). Without a total-pair term the two score the same.
+    """
+    def frame(tokens_per_record: int) -> pl.DataFrame:
+        return pl.DataFrame({"title": [
+            " ".join(f"tok{t}grp{i // 10}" for t in range(tokens_per_record))
+            for i in range(100)
+        ]})
+
+    cheap = score_candidate(frame(1), _token_cand(max_df=200))
+    costly = score_candidate(frame(5), _token_cand(max_df=200))
+
+    assert cheap["max_group_size"] == costly["max_group_size"] == 10
+    assert cheap["coverage"] == costly["coverage"] == 1.0
+    assert costly["total_comparisons"] == 5 * cheap["total_comparisons"]
+    assert costly["score"] < cheap["score"], (
+        "more total pairs at identical block size must score lower "
+        f"(cheap={cheap}, costly={costly})"
+    )
