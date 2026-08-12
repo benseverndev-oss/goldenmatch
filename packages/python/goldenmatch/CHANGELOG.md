@@ -62,6 +62,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   default stays off until the benchmark says otherwise.
 
 ### Fixed
+- **Bucket routing no longer bypasses the blocking-expressibility gate (#2488).**
+  The bucket scorer derives FIELD-based block keys from `blocking.keys` /
+  `blocking.passes`; a guard kept strategies with no field keys (lsh / ann /
+  learned / canopy / sorted_neighborhood / token) on the legacy per-block path.
+  That guard sat *below* the `backend == "bucket"` short-circuit in
+  `_use_bucket_scorer`, and `ExecutionPlan.apply_to` writes `backend="bucket"`
+  onto the committed config -- so the guard was unreachable for exactly the
+  configs it protected. On a zero-config run the controller's sample pass routed
+  before the planner ran and scored the plan correctly on the legacy path, then
+  the final dedupe pass took bucket with the same plan, derived an empty block
+  key, and emitted zero pairs with no error and no warning: every record came
+  back a singleton. Measured on Amazon-Google (4589 records, 1300 truth pairs),
+  identical configs differing only in `backend`: 16,545 pairs / F1 0.0864 with
+  `backend` unset, 0 pairs / F1 0.0000 with `backend="bucket"`. The check now
+  runs first, as `_bucket_can_express_blocking`, so it holds however `backend`
+  was set. It also covers an allowlisted strategy carrying neither keys nor
+  passes (the degenerate `static keys=[] auto_suggest=True` config), since
+  auto-suggest chooses the real plan mid-pipeline and a routing decision taken
+  off the provisional plan can land on a strategy bucket cannot express; both
+  paths already yielded zero pairs for that shape, so only the routing changes.
+  An explicit `backend="bucket"` on a field-keyed plan is still honored at any
+  size.
 - **Every FS scoring path now resolves the link cutoff the same way.**
   `_fs_link_threshold` applies three steps in order -- configured
   `mk.link_threshold`, then the EM-calibrated per-dataset cutoff, then the

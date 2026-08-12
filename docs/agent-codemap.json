@@ -3963,6 +3963,7 @@
             "_apply_postflight",
             "_arrow_lane_supported",
             "_as_polars_df",
+            "_bucket_can_express_blocking",
             "_build_em_blocks",
             "_cast_user_cols_to_str",
             "_collect_guard_columns",
