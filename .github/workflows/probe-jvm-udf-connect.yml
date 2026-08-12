@@ -52,7 +52,9 @@ jobs:
           # workflow_dispatch applies the input's `default:` when it is not supplied,
           # so no `||` fallback is needed here -- and the one that was here was a
           # GitHub EXPRESSION error that `check_workflow_yaml` cannot see, because
-          # it validates YAML parsing rather than ${{ }} syntax.
+          # it validates YAML parsing rather than expression syntax. (Careful: a
+          # shell COMMENT inside `run:` is still interpolated, so writing an empty
+          # expression here to illustrate the point is itself a parse error.)
           python -m pip install '${{ inputs.pyspark_spec }}'
           python -c "import pyspark; print('pyspark', pyspark.__version__)"
 
