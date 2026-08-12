@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 466,
+      "module_count": 467,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7690,6 +7690,16 @@
           ]
         },
         {
+          "module": "goldenmatch.spark._arrow",
+          "file": "packages/python/goldenmatch/goldenmatch/spark/_arrow.py",
+          "purpose": "Arrow-native UDF plumbing for the Spark tier.",
+          "defines": [
+            "arrow_udf",
+            "from_pylist",
+            "to_pylist"
+          ]
+        },
+        {
           "module": "goldenmatch.spark.autoconfig",
           "file": "packages/python/goldenmatch/goldenmatch/spark/autoconfig.py",
           "purpose": "P6: zero-config on Spark.",
@@ -7752,6 +7762,7 @@
           "imports": [
             "goldenmatch.config.schemas",
             "goldenmatch.core.probabilistic",
+            "goldenmatch.spark._arrow",
             "goldenmatch.spark.autoconfig",
             "goldenmatch.spark.clustering",
             "goldenmatch.spark.golden",
@@ -7782,7 +7793,8 @@
           ],
           "imports": [
             "goldenmatch.config.schemas",
-            "goldenmatch.core.golden"
+            "goldenmatch.core.golden",
+            "goldenmatch.spark._arrow"
           ]
         },
         {
@@ -7811,7 +7823,8 @@
           "imports": [
             "goldenmatch.core._hashing",
             "goldenmatch.identity.fingerprint_batch",
-            "goldenmatch.identity.store"
+            "goldenmatch.identity.store",
+            "goldenmatch.spark._arrow"
           ]
         },
         {
@@ -7869,7 +7882,7 @@
         {
           "module": "goldenmatch.spark.scorers",
           "file": "packages/python/goldenmatch/goldenmatch/spark/scorers.py",
-          "purpose": "Scorers as Spark pandas UDFs for the Sail tier (Spark Connect).",
+          "purpose": "Scorers as Spark ARROW UDFs for the Spark tier (Spark Connect).",
           "defines": [
             "_native_scores",
             "_pure_scores",
@@ -7879,7 +7892,8 @@
           ],
           "imports": [
             "goldenmatch.core",
-            "goldenmatch.core._native_loader"
+            "goldenmatch.core._native_loader",
+            "goldenmatch.spark._arrow"
           ]
         },
         {

@@ -354,20 +354,18 @@ def _field_score_parts(field: Any, a_prefix: str, b_prefix: str) -> tuple[Any, A
 
 def _transformed(col: Any, chain: list[str]) -> Any:
     """Apply a one-box transform chain to a column via ``apply_transforms``."""
-    from pyspark.sql.functions import pandas_udf
+    from goldenmatch.spark._arrow import arrow_udf, from_pylist, to_pylist
 
-    @pandas_udf("string")
+    @arrow_udf("string")
     def _udf(c):
-        import pandas as pd
-
         from goldenmatch.utils.transforms import apply_transforms
 
-        return pd.Series(
+        return from_pylist(
             [
                 None if v is None else apply_transforms(str(v), chain)
-                for v in c.tolist()
+                for v in to_pylist(c)
             ],
-            dtype="object",
+            "string",
         )
 
     return _udf(col.cast("string"))

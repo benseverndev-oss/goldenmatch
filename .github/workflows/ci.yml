@@ -3091,19 +3091,32 @@ jobs:
           set -euo pipefail
           python -m venv /tmp/gmenv
           /tmp/gmenv/bin/pip install --upgrade pip
-          # goldenmatch does NOT depend on pandas, but `pandas_udf` needs it in
-          # the WORKER -- that is why P0 logged `No module named 'pandas'` 13
-          # times alongside the goldenmatch ones. pyarrow is goldenmatch's own
-          # dep but is named here so the worker contract is explicit rather than
-          # transitive. NOT -q: a silent pip failure is how you ship an env that
-          # unpacks fine and imports nothing.
-          /tmp/gmenv/bin/pip install ./packages/python/goldenmatch pandas pyarrow
+          # NO PANDAS. The tier's UDFs are `arrow_udf` over `pa.Array`, so the
+          # executor needs pyarrow (goldenmatch's own hard dependency) and
+          # nothing else. Shipping pandas was an UNDECLARED runtime dependency
+          # of a package that does not depend on it -- in a repo that evicted
+          # polars and made pyarrow the hard dep. pyarrow is named explicitly so
+          # the worker contract is stated rather than transitive. NOT -q: a
+          # silent pip failure is how you ship an env that unpacks fine and
+          # imports nothing.
+          /tmp/gmenv/bin/pip install ./packages/python/goldenmatch pyarrow
           echo "--- shipped env contents ---"
           /tmp/gmenv/bin/pip list | grep -iE "goldenmatch|goldenphonetic|pandas|pyarrow"
           # cd out of the repo: its ROOT DIRECTORY is itself named `goldenmatch`,
           # so a check run from there can import the source tree instead of the
           # installed package and pass while the env is empty.
-          (cd /tmp && /tmp/gmenv/bin/python -c "import goldenmatch, goldenmatch.core.strsim, pandas, pyarrow; print('shipped env imports OK')")
+          (cd /tmp && /tmp/gmenv/bin/python -c "import goldenmatch, goldenmatch.core.strsim, pyarrow; print('shipped env imports OK')")
+          # The gate: pandas must NOT be in the shipped environment. Without
+          # this the dependency creeps back the first time someone reaches for
+          # `pandas_udf`, and nothing would notice -- the env would simply grow.
+          # One-line python on purpose: a multi-line script inside `run:` has to
+          # survive YAML block parsing too, and the first attempt at this did not.
+          if /tmp/gmenv/bin/python -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('pandas') is None else 1)"; then
+            echo "shipped env is pandas-free"
+          else
+            echo "::error::pandas is in the shipped executor env; the tier is arrow-native (arrow_udf over pa.Array) and must not need it"
+            exit 1
+          fi
           # venv-pack comes from the [spark] extra installed above -- NOT a
           # separate `uv pip install` as before. Shipping executor deps is the
           # whole reason the extra carries it, so resolving it from the extra is

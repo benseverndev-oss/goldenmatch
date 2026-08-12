@@ -1,6 +1,6 @@
 """J0: ship the JVM scorer jar to a Spark session and register it.
 
-The tier scores by forking a Python worker per batch (`pandas_udf`): an Arrow IPC
+The tier scores by forking a Python worker per batch (`arrow_udf`): an Arrow IPC
 hop plus an interpreter, and the sole reason P1 ships a Python environment to
 executors at all. Executors are JVMs and can call the Rust kernel directly. This
 module is the client half of that -- deliver the jar, register the UDF.
@@ -57,7 +57,7 @@ SCORER_IDS: dict[str, int] = {
 class JvmScorerUnavailable(RuntimeError):
     """The jar could not be found, shipped, or registered.
 
-    Its own type so callers can fall back to the `pandas_udf` path rather than
+    Its own type so callers can fall back to the in-Python UDF path rather than
     catching a bare Exception. A distributed run must not fail because one
     executor could not load a library -- correctness first, speed second.
     """

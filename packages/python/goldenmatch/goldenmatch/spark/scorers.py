@@ -1,4 +1,4 @@
-"""Scorers as Spark pandas UDFs for the Sail tier (Spark Connect).
+"""Scorers as Spark ARROW UDFs for the Spark tier (Spark Connect).
 
 Two backends, identical [0, 1] semantics:
 
@@ -147,38 +147,22 @@ def score_batch(scorer_name: str, a: Any, b: Any) -> Any:
 
 
 def make_scorer_udf(scorer_name: str) -> Any:
-    """Return a Spark ``pandas_udf`` (double) scoring two string columns in
-    [0, 1] -- native Arrow kernel when enabled, pure rapidfuzz otherwise."""
+    """Return a Spark ``arrow_udf`` (double) scoring two string columns in
+    [0, 1] -- native Arrow kernel when enabled, pure floor otherwise."""
     if scorer_name not in _SUPPORTED:
         raise NotImplementedError(
             f"Sail supports scorers {_SUPPORTED}; got {scorer_name!r}."
         )
-    from pyspark.sql.functions import pandas_udf
+    from goldenmatch.spark._arrow import arrow_udf, from_pylist, to_pylist
 
-    @pandas_udf("double")
-    def _udf(a, b):  # a, b: pandas Series[str]
-        import numpy as np
-        import pandas as pd
-
-        # NaN -> None BEFORE scoring. A string column whose batch is ENTIRELY
-        # null arrives as float64, so iterating it yields NaN floats rather than
-        # None -- and `x or ""` does not rescue that, because NaN is TRUTHY. The
-        # float reached the scorer and raised
-        # `TypeError: 'float' object is not subscriptable`, crashing the whole
-        # job rather than returning a wrong number. Any block where every record
-        # is missing the scored field hit it.
-        #
-        # Normalizing here rather than in `score_batch` keeps the pandas-shaped
-        # problem at the pandas-shaped boundary; `score_batch` takes plain
-        # iterables and should not have to know about NaN.
-        def _clean(s):
-            return [
-                None if (v is None or (isinstance(v, float) and np.isnan(v)))
-                else v
-                for v in s.tolist()
-            ]
-
-        scores = score_batch(scorer_name, _clean(a), _clean(b))
-        return pd.Series(np.asarray(scores, dtype="float64"), index=a.index)
+    @arrow_udf("double")
+    def _udf(a, b):  # a, b: pa.Array[string]
+        # `to_pylist` yields None for nulls, from the validity bitmap. The
+        # pandas version had to defend against NaN here: an all-null batch
+        # inferred float64, and NaN is TRUTHY, so `x or ""` let a float reach
+        # the scorer as `TypeError: 'float' object is not subscriptable`. Arrow
+        # removes the bug class rather than guarding it.
+        scores = score_batch(scorer_name, to_pylist(a), to_pylist(b))
+        return from_pylist([float(s) for s in scores], "double")
 
     return _udf

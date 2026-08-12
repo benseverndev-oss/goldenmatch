@@ -1,6 +1,6 @@
 """End-to-end Sail pipeline: load -> block -> score -> dedup -> WCC -> golden,
 all distributed on Sail (Spark Connect). The bench entrypoint (S4). Blocking is
-a single pre-existing column (S1 scope); the scorer is the rapidfuzz pandas UDF;
+a single pre-existing column (S1 scope); the scorer is the arrow UDF;
 WCC defaults to the chain-robust pointer-jumping algorithm (scale).
 
 R3 (coverage / feature-gate honesty): unsupported config fails LOUDLY up front
