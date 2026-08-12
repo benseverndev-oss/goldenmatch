@@ -54,7 +54,10 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
 
-      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
+      - run: uv sync --all-packages --no-install-package goldenflow-native
+      # goldenmatch-native IS installed here: the whole point of the native
+      # arm is to run the Rust kernel, and excluding the wheel is how the
+      # first version of this bench reported pure-Python numbers.
       - name: Install the spark extra
         run: uv pip install -e 'packages/python/goldenmatch[spark]'
 
@@ -121,7 +124,18 @@ jobs:
           GOLDENMATCH_SPARK_PYENV: "gm_env.tar.gz"
           GOLDENMATCH_NATIVE: "0"
         run: |
-          .venv/bin/python scripts/bench_spark_scoring.py --path row_python             --rows '${{ inputs.rows }}' --block-size '${{ inputs.block_size }}'             --repeats '${{ inputs.repeats }}' --out bench-row_python.json
+          .venv/bin/python scripts/bench_spark_scoring.py --path row_python             --native 0             --rows '${{ inputs.rows }}' --block-size '${{ inputs.block_size }}'             --repeats '${{ inputs.repeats }}' --out bench-row_python.json
+
+      # The arm that speaks to spec section 1. Without it the bench measures UDF
+      # plumbing with the kernel switched off and says nothing about "vectorized
+      # Rust beats Spark SQL per core".
+      - name: Bench row_python (NATIVE kernel)
+        if: inputs.mode != 'diag'
+        env:
+          GOLDENMATCH_SPARK_REMOTE: "local[*]"
+          GOLDENMATCH_SPARK_PYENV: "gm_env.tar.gz"
+        run: |
+          .venv/bin/python scripts/bench_spark_scoring.py --path row_python             --native 1             --rows '${{ inputs.rows }}' --block-size '${{ inputs.block_size }}'             --repeats '${{ inputs.repeats }}' --out bench-row_python_native.json
 
       - name: Bench batched_jvm
         if: inputs.mode != 'diag'
@@ -139,7 +153,7 @@ jobs:
       - name: Compare
         if: inputs.mode != 'diag'
         run: |
-          .venv/bin/python scripts/bench_spark_compare.py             bench-row_python.json bench-batched_jvm.json spark-scoring-bench.json
+          .venv/bin/python scripts/bench_spark_compare.py             bench-row_python.json bench-row_python_native.json \n            bench-batched_jvm.json spark-scoring-bench.json
 
       - name: Summary
         if: always()
