@@ -40,14 +40,44 @@ from typing import Any
 # Set from --planning-effort in main(); "normal" reproduces the prior numbers.
 _PLANNING_EFFORT = "normal"
 
+
+def _url_env(name: str, default: str) -> str:
+    """Dataset URL override, falling back to ``default`` when the variable is
+    unset **or empty**.
+
+    `os.environ.get(name, default)` is wrong here. `benchmarks.yml` passes
+    ``GOLDENMATCH_DBLP_ACM_URL: ${{ vars.DBLP_ACM_URL }}``, and a GitHub
+    workflow expands an undefined repo variable to the EMPTY STRING rather than
+    leaving the variable unset -- so `.get` returns `""` and the empty override
+    defeats the default instead of falling back to it.
+
+    That silently skipped DBLP-ACM in every scheduled `benchmarks` run:
+
+        DBLP-ACM: downloading from  ...
+        DBLP-ACM: download failed (unknown url type: ''); ... Skipping.
+
+    which is why its quality floor is still recorded as `None` / "no
+    trustworthy baseline recorded yet -- these have not completed in CI". The
+    dataset was never the problem; the URL was blank. Present in run #94 (Aug 3)
+    and still in #97 (Aug 11).
+
+    The product datasets escaped only because the workflow does not set their
+    variables at all -- the same hazard, one `env:` line away.
+    """
+    return os.environ.get(name) or default
+
+
 # Dataset sources for --download (auto-pull missing datasets). DBLP-ACM is small
 # + public (Leipzig); the Magellan mirror carries identical CSVs when Leipzig
 # 404s. NCVR's full source is a 4.3 GB NC SBE extract we do NOT mirror — the
 # runner pulls only the small derived 10k sample from a controlled mirror URL
 # (host it once on a release asset and point GOLDENMATCH_NCVR_SAMPLE_URL at it).
-_DBLP_ACM_URL = os.environ.get(
+_DBLP_ACM_URL = _url_env(
     "GOLDENMATCH_DBLP_ACM_URL", "https://dbs.uni-leipzig.de/file/DBLP-ACM.zip"
 )
+# NCVR keeps an empty default ON PURPOSE: the 4.3 GB NC SBE source is not
+# mirrored, so "unset" legitimately means "skip", and `_fetch_ncvr_sample`
+# branches on the empty string. `_url_env` would be a no-op here anyway.
 _NCVR_SAMPLE_URL = os.environ.get("GOLDENMATCH_NCVR_SAMPLE_URL", "")
 
 # Make `dqbench_adapters.*` importable when this file is invoked as
@@ -137,14 +167,14 @@ def _fetch_ncvr_sample(datasets_dir: Path) -> bool:
 # blocking (see #715) -- so the benchmark tracks them as an improvement target.
 _PRODUCT_SPECS: dict[str, dict[str, Any]] = {
     "abt-buy": {
-        "url": os.environ.get("GOLDENMATCH_ABT_BUY_URL", "https://dbs.uni-leipzig.de/file/Abt-Buy.zip"),
+        "url": _url_env("GOLDENMATCH_ABT_BUY_URL", "https://dbs.uni-leipzig.de/file/Abt-Buy.zip"),
         "subdir": "Abt-Buy", "sentinel": "Abt.csv",
         "file_a": "Abt.csv", "file_b": "Buy.csv",
         "gt_file": "abt_buy_perfectMapping.csv", "gt_cols": ("idAbt", "idBuy"),
         "src_a": "abt", "src_b": "buy", "rename": None, "label": "Abt-Buy",
     },
     "amazon-google": {
-        "url": os.environ.get("GOLDENMATCH_AMAZON_GOOGLE_URL", "https://dbs.uni-leipzig.de/file/Amazon-GoogleProducts.zip"),
+        "url": _url_env("GOLDENMATCH_AMAZON_GOOGLE_URL", "https://dbs.uni-leipzig.de/file/Amazon-GoogleProducts.zip"),
         "subdir": "Amazon-Google", "sentinel": "Amazon.csv",
         "file_a": "Amazon.csv", "file_b": "GoogleProducts.csv",
         "gt_file": "Amzon_GoogleProducts_perfectMapping.csv", "gt_cols": ("idAmazon", "idGoogleBase"),
