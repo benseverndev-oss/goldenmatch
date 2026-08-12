@@ -18,6 +18,30 @@ Each path is probed independently and its exact exception recorded, because
 "it failed" is not an answer -- `AnalysisException: cannot resolve` and
 `PySparkNotImplementedError` mean opposite things about whether to keep trying.
 
+RESULT (run 31609185942, 2026-08-12; pyspark 4.2.0, Temurin 17, remote=local[*])
+
+    PASS  addArtifact(jar)                  jar accepted by the session
+    PASS  spark.udf.registerJavaFunction    registered AND called -> [1.0, 0.0]
+    FAIL  CREATE TEMPORARY FUNCTION ... AS  AnalysisException [NO_HANDLER_FOR_UDAF]:
+          "No handler for UDAF '<class>'. Use sparkSession.udf.register(...) instead."
+    PASS  CONTROL: python udf               [1.0, 0.0]
+
+=> A Java UDF IS registrable over Spark Connect. The JVM binding can be a
+   DROP-IN: ship the jar per session via addArtifact, exactly as P1 ships the
+   Python env, and the customer's cluster needs NOTHING installed.
+
+The one failure is not a Connect restriction: the SQL DDL path resolves the
+class as a UDAF and says so, pointing at the API that works. Recorded rather
+than dropped, because "the SQL path does not work" is a thing a future reader
+will otherwise rediscover -- and because if it ever starts working, a scorer
+becomes callable from plain SQL, which is a different and useful surface.
+
+The CONTROL passing is what makes the FAIL trustworthy: the session was healthy,
+so that row is a real capability answer rather than a broken run.
+
+Re-run this before assuming the answer still holds on a new Spark version -- the
+`pyspark_spec` input exists for exactly that.
+
 Run in CI (never locally -- a Spark install is not something to put on a laptop):
     .github/workflows/probe-jvm-udf-connect.yml
 """
