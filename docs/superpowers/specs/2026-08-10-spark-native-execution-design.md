@@ -150,6 +150,11 @@ these 20 failures need.
   executor*, do not infer it.
 - **The `spark_connect` lane must stay red until P1 lands.** That is the correct
   state. It goes into `ci-required` at P2, once P1 makes it green.
+  **DONE (#2498).** P1 fixed 18 of the 20, P2a the last 2, and the lane then ran
+  green on three consecutive main runs (62 passed / 14 skipped / 0 failed) before
+  it was promoted. The 14 skips are the native-scorer parity tests, which need the
+  compiled kernel this lane does not install — that guard belongs to
+  `native_wheel_drift`, and promoting this lane does not make it a native gate.
 - No spec change is needed to §3–§9: the architecture survives the experiment.
 
 ---
@@ -190,6 +195,42 @@ findings stand). **No tier code is lost** — it was never Sail-coupled.
 
 **Ray is untouched.** It remains the distributed path for non-Spark users. This
 spec does not revisit it.
+
+### AMENDED IN EXECUTION (P2, 2026-08-11): Sail is demoted, not removed
+
+Everything above stands as the reasoning for why **Apache Spark is the target**,
+and that part shipped in full: `spark_connect` is now the blocking lane and is in
+`ci-required`, Spark 4 is unblocked, the tier is `goldenmatch.spark`.
+
+What did **not** happen is the deletion of pysail. It is kept as an **advisory,
+non-blocking cross-check backend**, for one reason that only emerged during
+execution: **during P2a it caught a regression this spec's own author introduced.**
+`_truncate_plan` placed its `getattr` outside the `try`, and pyspark's Connect
+DataFrame raises `PySparkNotImplementedError` — not `AttributeError` — from
+`__getattr__`, so the intended fallthrough never ran. The pysail lane went red on
+every WCC test while `spark_connect` was red for unrelated reasons and hid it.
+
+Two servers that plan differently catch different bugs. These same two tests had
+already failed on each backend for a *different* symptom (Sail wedged on
+recompute, Spark OOM'd on broadcast) traced to one cause. That is the argument for
+a second implementation, made twice, in evidence.
+
+So the cost/benefit changed after the decision was written: deleting the only
+independent backend immediately after it demonstrated its value would be wrong.
+The gating authority moved to Apache Spark, which is what the decision was
+actually *for*; the cross-check is cheap and stays.
+
+Two consequences of that, recorded so they are not read as oversights:
+
+- **`_truncate_lineage` was not deleted.** Item 1 above says real Spark's
+  `localCheckpoint` makes the parquet write/read barrier "unnecessary overhead to
+  delete". P2a instead generalized it into `_truncate_plan`, which prefers
+  `localCheckpoint`/`checkpoint` and falls back. Keeping a backend without those
+  primitives is precisely what the fallback is for.
+- **The `[sail]` extra survives**, carrying the `pyspark[connect]<4` pin. The pin
+  is pysail's protocol ceiling, not a pyspark defect — so it is scoped to `[sail]`
+  alone and `[spark]` is unbounded. A user installing `goldenmatch[spark]` is
+  never capped.
 
 ---
 
@@ -455,13 +496,44 @@ refusing.
 
 Resolve before P4/P5 put real workloads through it.
 
-### P2 — Drop Sail, rename the tier
+### P2 — Rename the tier, move the gate to Apache Spark ✅ DONE (2026-08-11)
 
-`goldenmatch/sail/` → `goldenmatch/spark/`; `SAIL_REMOTE` → `SPARK_REMOTE` (keep
-the old name as a deprecated alias); remove the `[sail]` extra's `pysail` dep;
-lift `pyspark[connect]<4`; delete `_truncate_lineage` once P0 confirms real
-Spark's `localCheckpoint`; retire `deploy/sail-gke/` from the product docs;
-amend ADR-0004.
+Landed in two PRs. **#2494** did the rename: `goldenmatch/sail/` →
+`goldenmatch/spark/` (via `git mv`, history preserved), `SAIL_REMOTE` →
+`SPARK_REMOTE`, a PEP 562 forwarding shim at `goldenmatch.sail` that warns once
+and resolves to the *same* module objects, and the extras split that lifted
+`pyspark[connect]<4` off `[spark]`. **#2498** moved the CI gate.
+
+The gating change, which is the part that matters:
+
+| | before | after |
+|---|---|---|
+| `spark_connect` (Apache Spark) | advisory, `continue-on-error` | **blocking, in `ci-required`** |
+| `sail` (pysail) | blocking, in `ci-required` | advisory, `continue-on-error` |
+
+Three things were found while doing it, none of them in the plan:
+
+1. **The rename left the path filter stale.** It still watched
+   `goldenmatch/sail/**` — which by then held only the shim — so an edit to the
+   tier triggered *neither* lane. Both Spark lanes were silent on exactly the
+   changes they exist to gate. Fixed, and `spark` is now in
+   `check_filter_coverage.py`'s REQUIRED table so the next rename fails
+   `workflow_lint` loudly instead of going quiet. This is the #1846 class again.
+2. **`spark_connect` never ran P1's own tests.** Its glob was `test_sail_*.py`,
+   written before `test_spark_executor_deps.py` existed. Now globs both prefixes.
+3. **Two xfails had been silently xpassing** since P2a fixed them. A non-strict
+   xfail that passes asserts nothing, so the hole P2a closed would have reopened
+   unnoticed. Markers removed; they are ordinary tests now.
+
+Deviations from the plan as written, both deliberate and argued in §3:
+**pysail is kept** as the advisory cross-check, and `_truncate_lineage` was
+generalized rather than deleted. `deploy/sail-gke/` and ADR-0004 were already
+handled — ADR-0004's Amendment 2 records the reframing and scopes Sail to the
+dev/CI server role.
+
+Test filenames stay `test_sail_*.py` for now: renaming 14 files shifts
+`pytest-split` shard boundaries (CLAUDE.md), and the filter globs both prefixes,
+so the drift is contained rather than load-bearing.
 
 ### P3 — Make the kernel return f64, THEN take `sail_scoring` out of `_FALLBACK_ONLY`
 
