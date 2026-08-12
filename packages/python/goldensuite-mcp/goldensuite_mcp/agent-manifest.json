@@ -548,7 +548,8 @@
                 "learned",
                 "lsh",
                 "simhash",
-                "perceptual"
+                "perceptual",
+                "token"
               ],
               "description": "Candidate-generation method that selects how pairs are proposed for scoring."
             },
@@ -692,6 +693,16 @@
                 "LSHKeyConfig"
               ],
               "description": "MinHash/LSH configuration required when the strategy is 'lsh'."
+            },
+            {
+              "name": "token",
+              "type": "TokenBlockingConfig | None",
+              "required": false,
+              "default": "None",
+              "nested": [
+                "TokenBlockingConfig"
+              ],
+              "description": "DF-pruned token-blocking configuration required when the strategy is 'token'."
             },
             {
               "name": "simhash",
@@ -1811,6 +1822,39 @@
             }
           ],
           "doc": "MinHash/LSH blocking on a text column (#1081)."
+        },
+        {
+          "name": "TokenBlockingConfig",
+          "fields": [
+            {
+              "name": "column",
+              "type": "str",
+              "required": true,
+              "description": "Free-text column tokenized to build the inverted index."
+            },
+            {
+              "name": "min_token_length",
+              "type": "int",
+              "required": false,
+              "default": "3",
+              "description": "Tokens shorter than this are dropped; short tokens are mostly noise ('1', 'w/') and form large low-evidence blocks."
+            },
+            {
+              "name": "max_df_ratio",
+              "type": "float",
+              "required": false,
+              "default": "0.02",
+              "description": "Drop tokens appearing in more than this fraction of records. Used to derive the cap when max_df is unset."
+            },
+            {
+              "name": "max_df",
+              "type": "int | None",
+              "required": false,
+              "default": "None",
+              "description": "Absolute document-frequency cap. When unset it is derived from max_df_ratio and clamped to [10, 1000] so the cap stays bounded at any frame size."
+            }
+          ],
+          "doc": "DF-pruned token blocking on a free-text column (#2488)."
         },
         {
           "name": "SimHashKeyConfig",
@@ -5497,6 +5541,11 @@
               "value": "static",
               "meaning": "Group records by an exact blocking key.",
               "best_for": "Clean data with reliable keys"
+            },
+            {
+              "value": "token",
+              "meaning": "Inverted index over DF-pruned tokens; a record joins one block per token, so a pair is a candidate when it shares any token.",
+              "best_for": "Free text where no prefix agrees (product titles)"
             }
           ]
         },
@@ -6100,6 +6149,9 @@
           "GOLDENMATCH_THROUGHPUT",
           "GOLDENMATCH_THROUGHPUT_RECALL",
           "GOLDENMATCH_THROUGHPUT_SIMILARITY"
+        ],
+        "TOKEN": [
+          "GOLDENMATCH_TOKEN_BLOCKING"
         ],
         "TRANSFORM": [
           "GOLDENMATCH_TRANSFORM_DEBUG"

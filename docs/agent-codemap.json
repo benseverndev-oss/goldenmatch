@@ -1200,6 +1200,7 @@
             "StandardizationConfig",
             "SurvivorshipConfig",
             "ThroughputConfig",
+            "TokenBlockingConfig",
             "TransformConfig",
             "ValidationConfig",
             "ValidationRuleConfig",
@@ -2355,18 +2356,26 @@
           "defines": [
             "BlockingSuggestion",
             "_apply_candidate_transforms",
+            "_mean_token_count",
+            "_score_token_candidate",
             "_single_column_candidates",
+            "_token_candidates",
+            "_token_candidates_enabled",
+            "_token_index",
             "analyze_blocking",
             "check_coverage",
             "detect_column_type",
             "estimate_recall",
+            "free_text_columns",
             "generate_candidates",
             "score_candidate"
           ],
           "imports": [
             "goldenmatch._polars_lazy",
+            "goldenmatch.config.schemas",
             "goldenmatch.core",
-            "goldenmatch.core.frame"
+            "goldenmatch.core.frame",
+            "goldenmatch.core.token_blocker"
           ]
         },
         {
@@ -2424,6 +2433,7 @@
             "goldenmatch.core.profile_emitter",
             "goldenmatch.core.scorer",
             "goldenmatch.core.simhash_blocker",
+            "goldenmatch.core.token_blocker",
             "goldenmatch.utils.transforms"
           ]
         },
@@ -5045,6 +5055,22 @@
           "imports": [
             "goldenmatch.config.schemas",
             "goldenmatch.core"
+          ]
+        },
+        {
+          "module": "goldenmatch.core.token_blocker",
+          "file": "packages/python/goldenmatch/goldenmatch/core/token_blocker.py",
+          "purpose": "DF-pruned token blocking (#2488).",
+          "defines": [
+            "TokenBlocker",
+            "build_token_blocks",
+            "resolve_max_df"
+          ],
+          "imports": [
+            "goldenmatch._polars_lazy",
+            "goldenmatch.config.schemas",
+            "goldenmatch.core.blocker",
+            "goldenmatch.core.sketch"
           ]
         },
         {

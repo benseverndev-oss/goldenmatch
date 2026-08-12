@@ -1618,6 +1618,13 @@ def build_blocks(lf: Any, config: BlockingConfig) -> list[BlockResult]:
         _emit_blocking_profile(blocks, config, lf)
         return blocks
 
+    if config.strategy == "token":
+        from goldenmatch.core.token_blocker import build_token_blocks
+
+        blocks = build_token_blocks(lf, config)
+        _emit_blocking_profile(blocks, config, lf)
+        return blocks
+
     if config.strategy == "simhash":
         from goldenmatch.core.simhash_blocker import build_simhash_blocks
 
