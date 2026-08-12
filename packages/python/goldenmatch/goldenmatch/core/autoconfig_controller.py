@@ -327,6 +327,38 @@ class ControllerNotConfidentError(Exception):
 _SUBPROFILE_PRIORITY_ORDER = ("data", "blocking", "scoring", "matchkey", "cluster")
 
 
+def _carries_own_blocking_plan(blocking) -> bool:
+    """True when this config's blocking plan lives OUTSIDE ``keys`` (#2488).
+
+    ``token``/``lsh``/``simhash``/``perceptual``/``canopy`` carry their plan in a
+    dedicated config block, and ``learned``/``ann``/``sorted_neighborhood``
+    derive theirs at run time. For all of them an empty ``keys`` is the normal,
+    valid shape -- several validators actively REJECT ``keys`` -- so it must not
+    be read as "no blocking configured".
+    """
+    from goldenmatch.config.schemas import KEYS_DRIVEN_BLOCKING_STRATEGIES
+
+    if blocking is None:
+        return False
+    return getattr(blocking, "strategy", None) not in KEYS_DRIVEN_BLOCKING_STRATEGIES
+
+
+def _blocking_is_keyless(blocking) -> bool:
+    """True when the committed config really has NO blocking plan.
+
+    Was ``not blocking.keys``, which is only correct for the keys-driven
+    strategies. On a ``strategy="token"`` config -- empty ``keys`` by
+    construction -- it read as degenerate, flipped the failing sub-profile to
+    `blocking`, and sent the estimator off to measure the matchkey fields
+    instead (#2488).
+    """
+    if blocking is None:
+        return True
+    if getattr(blocking, "keys", None):
+        return False
+    return not _carries_own_blocking_plan(blocking)
+
+
 def _identify_failing_subprofile(profile: ComplexityProfile) -> str:  # pyright: ignore[reportUnusedFunction]
     """Walk the ComplexityProfile sub-profiles in priority order; return
     the name of the first one reporting RED. Returns '' when none are
@@ -1055,9 +1087,7 @@ class AutoConfigController:
             # a data failure, not a blocking one.
             failing = _identify_failing_subprofile(best_entry.profile)
             _blocking = best_entry.config.blocking
-            _no_blocking_keys = (
-                _blocking is None or not getattr(_blocking, "keys", None)
-            )
+            _no_blocking_keys = _blocking_is_keyless(_blocking)
             if failing == "blocking" and _no_blocking_keys:
                 _stop_reason = StopReason.BLOCKING_DEGENERATE.name
             else:
@@ -1124,10 +1154,7 @@ class AutoConfigController:
             # real block-size distribution from the iteration sample;
             # config.blocking might be empty because the matchkey path
             # didn't need it).
-            _no_blocking_keys = (
-                _blocking is None
-                or not getattr(_blocking, "keys", None)
-            )
+            _no_blocking_keys = _blocking_is_keyless(_blocking)
             if _no_blocking_keys and _profile_red:
                 logger.warning(
                     "BLOCKING_DEGENERATE guard fired: committed config has "
@@ -1159,9 +1186,16 @@ class AutoConfigController:
                 for _key in _blocking.keys:
                     if _key.fields:
                         _block_fields.extend(_key.fields)
-            elif _profile_red:
+            elif _profile_red and not _carries_own_blocking_plan(_blocking):
                 # No explicit blocking.keys; fall back to matchkeys[0]
                 # so we catch the implicit-blocking degenerate case.
+                #
+                # #2488: ONLY for keys-driven strategies. A `token`/`lsh`/
+                # `simhash`/`perceptual` config legitimately has empty `keys`
+                # (their validators reject `keys`), and estimating their block
+                # size from the MATCHKEY fields measures a blocking plan that is
+                # not the configured one -- which condemned a working token plan
+                # on Amazon-Google.
                 _mks = best_entry.config.get_matchkeys() or []
                 if _mks and _mks[0].fields:
                     _block_fields = [

@@ -1097,6 +1097,24 @@ class ThroughputConfig(BaseModel):
     )
 
 
+#: Strategies whose candidate generation is driven by ``keys`` / ``passes``.
+#:
+#: For every OTHER strategy an empty ``keys`` is NORMAL, not degenerate: the plan
+#: lives in its own config block (``token``, ``lsh``, ``simhash``, ``perceptual``,
+#: ``canopy``) or is derived at run time (``learned``, ``ann``, ``ann_pairs``,
+#: ``sorted_neighborhood``). Several of those validators actively REJECT ``keys``.
+#:
+#: This exists because the #417 degenerate-blocking guard used to infer "no
+#: blocking configured" from ``not blocking.keys`` alone, which condemns every
+#: self-configured strategy on sight -- it marked a working ``token`` plan RED and
+#: then estimated block size from the MATCHKEY fields, judging a blocking plan
+#: that was not the configured one (#2488). Read by that guard and by
+#: ``_validate_keys_or_passes`` below so there is one list, not two.
+KEYS_DRIVEN_BLOCKING_STRATEGIES: frozenset[str] = frozenset({
+    "static", "adaptive", "multi_pass",
+})
+
+
 class BlockingConfig(BaseModel):
     keys: list[BlockingKeyConfig] = Field(
         default_factory=list,
@@ -1207,6 +1225,8 @@ class BlockingConfig(BaseModel):
         # Strategies that don't need keys: ann, ann_pairs, canopy, learned,
         # sorted_neighborhood (uses sort_key instead). "lsh" carries its own
         # LSHKeyConfig and is validated positively below.
+        # Subset of KEYS_DRIVEN_BLOCKING_STRATEGIES: multi_pass accepts
+        # `passes` instead, handled on the next line.
         needs_keys = self.strategy in ("static", "adaptive")
         needs_passes = self.strategy == "multi_pass"
         if needs_keys and not self.keys and not self.sub_block_keys:
