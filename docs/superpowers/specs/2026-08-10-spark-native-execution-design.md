@@ -150,7 +150,7 @@ these 20 failures need.
   executor*, do not infer it.
 - **The `spark_connect` lane must stay red until P1 lands.** That is the correct
   state. It goes into `ci-required` at P2, once P1 makes it green.
-  **DONE (#2497).** P1 fixed 18 of the 20, P2a the last 2, and the lane then ran
+  **DONE (#2498).** P1 fixed 18 of the 20, P2a the last 2, and the lane then ran
   green on three consecutive main runs (62 passed / 14 skipped / 0 failed) before
   it was promoted. The 14 skips are the native-scorer parity tests, which need the
   compiled kernel this lane does not install — that guard belongs to
@@ -502,7 +502,7 @@ Landed in two PRs. **#2494** did the rename: `goldenmatch/sail/` →
 `goldenmatch/spark/` (via `git mv`, history preserved), `SAIL_REMOTE` →
 `SPARK_REMOTE`, a PEP 562 forwarding shim at `goldenmatch.sail` that warns once
 and resolves to the *same* module objects, and the extras split that lifted
-`pyspark[connect]<4` off `[spark]`. **#2497** moved the CI gate.
+`pyspark[connect]<4` off `[spark]`. **#2498** moved the CI gate.
 
 The gating change, which is the part that matters:
 
