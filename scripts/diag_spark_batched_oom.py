@@ -105,6 +105,18 @@ def _exploded(df, pairs, batch_size, udf_name, scorer_id):
     return s.select(F.explode(F.arrays_zip(F.col("rows"), F.col("scores"))).alias("z"))
 
 
+def _deduped(df, pairs, batch_size, udf_name, scorer_id):
+    from pyspark.sql import functions as F
+
+    e = _exploded(df, pairs, batch_size, udf_name, scorer_id)
+    flat = e.select(
+        F.col("z.rows.a").alias("a"),
+        F.col("z.rows.b").alias("b"),
+        F.col("z.scores").alias("score"),
+    )
+    return flat.groupBy("a", "b").agg(F.max("score").alias("score"))
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--rows", type=int, default=200_000)
@@ -137,6 +149,12 @@ def main(argv=None) -> int:
          lambda: _scored(df, pairs, args.batch_size, udf_name, sid).count()),
         ("5 + zip/explode",
          lambda: _exploded(df, pairs, args.batch_size, udf_name, sid).count()),
+        # The bench does this and the earlier bisect did not, so it was the one
+        # untested difference between a plan that completes and a bench that
+        # OOMs. Testing it here rules it in or out independently of the harness
+        # isolation fix, rather than fixing two things and learning nothing.
+        ("6 + dedup_max (groupBy a,b)",
+         lambda: _deduped(df, pairs, args.batch_size, udf_name, sid).count()),
     ]
 
     print(f"\nrows={args.rows:,} block_size={args.block_size} "
@@ -171,6 +189,10 @@ def main(argv=None) -> int:
     elif first_failure.startswith("4"):
         print("  Grouping is fine; the UDF call is where it goes. The derived")
         print("  `transform` arrays duplicate every string in the batch.")
+    elif first_failure.startswith("6"):
+        print("  The batched plan is fine; the MAX dedup over 1.9M exploded rows")
+        print("  is the cost. That is shared with the row-shaped path, which does")
+        print("  the same groupBy -- so it is not what makes this plan special.")
     elif first_failure.startswith("5"):
         print("  Scoring is fine; `arrays_zip` building a second array of structs")
         print("  is the cost.")

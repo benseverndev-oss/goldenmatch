@@ -107,7 +107,23 @@ jobs:
         run: |
           .venv/bin/python scripts/diag_spark_batched_oom.py             --rows '${{ inputs.rows }}' --block-size '${{ inputs.block_size }}'
 
-      - name: Bench
+      # ONE ARM PER PROCESS. Both used to run in one script against one
+      # `local[*]` session, where the driver and executor SHARE A JVM -- so the
+      # second arm started with the first's cached DataFrame and shuffles still
+      # resident, and OOM'd. Three rounds of CI went into "fixing" a batched path
+      # that a plan bisect then ran end to end in 21s (run 31649168548): the
+      # benchmark was measuring itself. Separate processes share nothing, and it
+      # is the only fair shape anyway -- whichever arm ran second was penalised.
+      - name: Bench row_python
+        if: inputs.mode != 'diag'
+        env:
+          GOLDENMATCH_SPARK_REMOTE: "local[*]"
+          GOLDENMATCH_SPARK_PYENV: "gm_env.tar.gz"
+          GOLDENMATCH_NATIVE: "0"
+        run: |
+          .venv/bin/python scripts/bench_spark_scoring.py --path row_python             --rows '${{ inputs.rows }}' --block-size '${{ inputs.block_size }}'             --repeats '${{ inputs.repeats }}' --out bench-row_python.json
+
+      - name: Bench batched_jvm
         if: inputs.mode != 'diag'
         env:
           GOLDENMATCH_SPARK_REMOTE: "local[*]"
@@ -115,11 +131,15 @@ jobs:
           GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
           GOLDENMATCH_NATIVE: "0"
         run: |
-          .venv/bin/python scripts/bench_spark_scoring.py \
-            --rows '${{ inputs.rows }}' \
-            --block-size '${{ inputs.block_size }}' \
-            --repeats '${{ inputs.repeats }}' \
-            --out spark-scoring-bench.json
+          .venv/bin/python scripts/bench_spark_scoring.py --path batched_jvm             --rows '${{ inputs.rows }}' --block-size '${{ inputs.block_size }}'             --repeats '${{ inputs.repeats }}' --out bench-batched_jvm.json
+
+      # A SCRIPT, not inline Python: an embedded multi-line program inside a
+      # YAML `run:` block must survive block-scalar parsing too, and this repo
+      # has now broken that twice.
+      - name: Compare
+        if: inputs.mode != 'diag'
+        run: |
+          .venv/bin/python scripts/bench_spark_compare.py             bench-row_python.json bench-batched_jvm.json spark-scoring-bench.json
 
       - name: Summary
         if: always()

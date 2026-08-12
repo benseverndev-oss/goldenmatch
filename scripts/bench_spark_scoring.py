@@ -27,6 +27,20 @@ better to know that before writing it.
 `exact` being cheap makes the comparison HARSHER on the JVM path, not kinder:
 with almost no work per pair, per-call overhead is the whole signal.
 
+## One arm per PROCESS, and why
+
+Both arms used to run in one script against one `local[*]` session, where the
+DRIVER AND EXECUTOR SHARE A JVM. The second arm therefore started with whatever
+the first had left resident -- a cached DataFrame plus three 1.9M-row shuffles --
+and OOM'd. Three rounds of CI went into "fixing" a batched path that a plan
+bisect later ran end to end in 21 seconds (run 31649168548): the benchmark was
+measuring itself.
+
+So each arm now runs in its own process, invoked separately, and the results are
+combined afterwards. Nothing survives between them. It is also the only fair
+shape for a comparison: whichever arm ran second was being systematically
+penalised.
+
 ## Reading the result
 
 A ratio near 1.0 means the Python-worker hop is not where the time goes, and the
@@ -125,6 +139,13 @@ def main(argv=None) -> int:
     ap.add_argument("--block-size", type=int, default=20)
     ap.add_argument("--repeats", type=int, default=3)
     ap.add_argument("--out", default="spark-scoring-bench.json")
+    ap.add_argument(
+        "--path",
+        choices=["row_python", "batched_jvm"],
+        required=True,
+        help="ONE arm per process -- see the module docstring. Running both in "
+             "one session let the first arm's residue OOM the second.",
+    )
     args = ap.parse_args(argv)
 
     from goldenmatch.spark.jvm import JvmScorerUnavailable, find_jar, install
@@ -171,56 +192,29 @@ def main(argv=None) -> int:
         "candidate_pairs": n_pairs,
         "repeats": args.repeats,
         "remote": remote,
-        "paths": {},
+        "path": args.path,
     }
 
-    print("\n[1/2] row_python (pandas_udf -> forked Python worker)", flush=True)
-    results["paths"]["row_python"] = _time(
-        lambda: _row_python(spark, df), repeats=args.repeats
-    )
-
-    try:
-        udf_name = install(spark, jar=find_jar())
-    except JvmScorerUnavailable as exc:
-        print(f"::error::no JVM scorer jar: {exc}")
-        return 2
-
-    print("\n[2/2] batched_jvm (array UDF, in the executor JVM)", flush=True)
-    results["paths"]["batched_jvm"] = _time(
-        lambda: _batched_jvm(spark, df, udf_name), repeats=args.repeats
-    )
-
-    rp = results["paths"]["row_python"]["median_s"]
-    bj = results["paths"]["batched_jvm"]["median_s"]
-    results["speedup_row_python_over_batched_jvm"] = round(rp / bj, 3) if bj else None
-
-    print("\n" + "=" * 68)
-    print("RESULT")
-    print("=" * 68)
-    for name, r in results["paths"].items():
-        print(
-            f"  {name:14} median {r['median_s']:8.3f}s   "
-            f"(min {r['min_s']:.3f} max {r['max_s']:.3f})  rows_out={r['rows_out']:,}"
-        )
-    ratio = results["speedup_row_python_over_batched_jvm"]
-    print(f"\n  batched_jvm is {ratio}x the row_python path")
-    print()
-    if ratio is None:
-        print("  INCONCLUSIVE.")
-    elif ratio < 1.2:
-        print("  The Python-worker hop is NOT where the time goes. J2's JNI work")
-        print("  should be re-justified on grounds other than throughput -- the")
-        print("  one-kernel argument still stands, the speed one does not.")
+    if args.path == "row_python":
+        print("[row_python] arrow_udf -> forked Python worker", flush=True)
+        results["timing"] = _time(lambda: _row_python(spark, df),
+                                  repeats=args.repeats)
     else:
-        print("  The Python-worker hop dominates. Removing it is worth doing, and")
-        print("  J2 (JNI into score-cabi) is the way to remove the interpreter as")
-        print("  well as the hop.")
-    print()
-    print("  CAVEAT, and it is load-bearing: the JVM path scores `exact` while")
-    print("  the Python path scores jaro_winkler. This measures the CALLING")
-    print("  MECHANISM, not the kernels -- and it flatters the Python path least,")
-    print("  since `exact` does almost no work and leaves per-call overhead as the")
-    print("  whole signal. A like-for-like kernel comparison needs J2.")
+        try:
+            udf_name = install(spark, jar=find_jar())
+        except JvmScorerUnavailable as exc:
+            print(f"::error::no JVM scorer jar: {exc}")
+            return 2
+        print("[batched_jvm] array UDF, in the executor JVM", flush=True)
+        results["timing"] = _time(lambda: _batched_jvm(spark, df, udf_name),
+                                  repeats=args.repeats)
+
+    r = results["timing"]
+    print(
+        f"  {args.path:14} median {r['median_s']:8.3f}s  "
+        f"(min {r['min_s']:.3f} max {r['max_s']:.3f})  rows_out={r['rows_out']:,}",
+        flush=True,
+    )
 
     with open(args.out, "w", encoding="utf-8") as fh:
         json.dump(results, fh, indent=2)
