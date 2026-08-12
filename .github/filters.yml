@@ -878,7 +878,9 @@ distributed:
 spark:
   # Spark Connect tier (distributed). The main `python` job installs without
   # the `spark` extra, so the tier's tests SKIP there (pytest.importorskip);
-  # the `spark_connect` (required) and `sail` (advisory) jobs install it.
+  # the `spark_connect` job installs it. (The `sail` lane was retired on
+  # 2026-08-12: pysail pins pyspark 3.5, which has no `arrow_udf`, so it could
+  # no longer run the tier it existed to cross-check.)
   #
   # This filter was named `sail` and watched `goldenmatch/sail/**` only. P2
   # (#2494) renamed the package to `goldenmatch/spark/`, which left the filter
