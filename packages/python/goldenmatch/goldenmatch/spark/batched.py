@@ -32,6 +32,14 @@ this look natural and are both wrong:
 Neither mistake crashes. Both silently attach pair *i*'s score to pair *j*,
 which is the failure mode this project keeps finding -- so the safe construction
 is used even where the unsafe one would probably work.
+
+## And the batch has to be bounded
+
+A third mistake, which DOES crash, and did: grouping by partition alone. The
+group is materialised as an array in JVM heap, so its size is a memory
+commitment rather than a throughput knob. 1.9M candidate pairs over a handful of
+partitions gave `java.lang.OutOfMemoryError` (bench run 31625487603). See
+`batch_key`.
 """
 from __future__ import annotations
 
@@ -46,29 +54,52 @@ _ROWS = "__batch_rows__"
 _SCORES = "__batch_scores__"
 
 
-def batch_key(strategy: str = "partition") -> Any:
+#: Pairs per UDF call. Bounded, because the batch is materialised as an array
+#: in JVM heap -- see `batch_key`. 10,000 is what the Connect probe carried
+#: comfortably in one call (run 31611464914), and it is large enough that the
+#: per-call cost the batching exists to amortise is spread over ten thousand
+#: pairs.
+DEFAULT_BATCH_SIZE = 10_000
+
+
+def batch_key(strategy: str = "partition", batch_size: int = DEFAULT_BATCH_SIZE) -> Any:
     """The expression pairs are grouped by before scoring.
 
-    ``partition`` groups by ``spark_partition_id()``: one UDF call per Spark
-    partition, which is as large a batch as can be formed without a shuffle. The
-    batch is therefore whatever the upstream plan already co-located, and no data
-    moves to make it.
+    **The batch must be BOUNDED.** ``groupBy`` + ``collect_list`` materialises
+    each group as an array in JVM heap, so the group size is a memory
+    commitment, not a throughput knob. Grouping by ``spark_partition_id()``
+    alone -- one call per partition, "as large a batch as can be formed without
+    a shuffle" -- means the array is however many pairs the partition holds.
+    Measured: 1.9M candidate pairs over a handful of partitions gives
+    ``java.lang.OutOfMemoryError: Java heap space`` (bench run 31625487603).
+    That was not a slow path; it was no path.
 
-    Batch SIZE is deliberately not tuned here. It is a throughput question and
-    belongs with the measurement in J4; picking a number now would be picking it
-    without evidence.
+    So the key is ``(partition, chunk)``. ``monotonically_increasing_id()``
+    encodes the partition in its high bits and a row counter in its low bits, so
+    dividing it by ``batch_size`` yields chunks that are already
+    partition-scoped: rows of different partitions can never share a chunk id,
+    and within a partition consecutive rows fall into chunks of at most
+    ``batch_size``. No window, no shuffle, no second pass to number the rows.
+
+    The id is not contiguous across partitions, so chunk ids are sparse. That is
+    irrelevant -- they are group keys, never counters.
     """
-    # Validate BEFORE importing pyspark: rejecting an unknown strategy is not a
-    # Spark question, and requiring Spark to say so would make the error
+    # Validate BEFORE importing pyspark: rejecting bad arguments is not a Spark
+    # question, and requiring Spark to say so would make these errors
     # unreachable anywhere the tier is not installed.
     if strategy != "partition":
         raise ValueError(
-            f"unknown batch strategy {strategy!r}; only 'partition' exists. "
-            f"Batch sizing is a J4 (measurement) question, not a J1 one."
+            f"unknown batch strategy {strategy!r}; only 'partition' exists."
+        )
+    if batch_size <= 0:
+        raise ValueError(
+            f"batch_size must be positive; got {batch_size}. An unbounded batch "
+            f"is what OOM'd the executor heap -- the group is materialised as an "
+            f"array, so its size is a memory commitment."
         )
     from pyspark.sql import functions as F
 
-    return F.spark_partition_id()
+    return F.floor(F.monotonically_increasing_id() / F.lit(int(batch_size)))
 
 
 def score_pairs_batched(
@@ -80,6 +111,7 @@ def score_pairs_batched(
     scorer_id: int,
     udf_name: str,
     batch_strategy: str = "partition",
+    batch_size: int = DEFAULT_BATCH_SIZE,
 ) -> Any:
     """Score ``(a, b)`` pairs through a batched array UDF; return
     ``(a, b, score)``.
@@ -109,7 +141,9 @@ def score_pairs_batched(
     # collect_lists in one aggregation are separate aggregate expressions with
     # no shared order guarantee, and they agree often enough to pass a test and
     # skew under a different plan.
-    grouped = joined.groupBy(batch_key(batch_strategy).alias("__batch__")).agg(
+    grouped = joined.groupBy(
+        batch_key(batch_strategy, batch_size).alias("__batch__")
+    ).agg(
         F.collect_list(F.struct("a", "b", "x", "y")).alias(_ROWS)
     )
 

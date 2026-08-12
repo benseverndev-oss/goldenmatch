@@ -199,3 +199,63 @@ def test_dedup_max_matches_the_row_shaped_contract(spark, registered):
 
     assert set(deduped) == set(raw), "dedup changed the pair set"
     assert deduped == raw, "no duplicate pairs here, so dedup must be a no-op"
+
+
+def test_many_pairs_do_not_exhaust_the_heap(spark, registered):
+    """The regression the bench found.
+
+    J1 keyed the batch on `spark_partition_id()` alone, so the group was however
+    many pairs a partition held and `collect_list` materialised all of them as
+    one array in JVM heap. 1.9M pairs gave
+    `java.lang.OutOfMemoryError: Java heap space` (bench run 31625487603) --
+    not a slow path, no path.
+
+    A small `batch_size` here forces MANY batches over a modest fixture, which is
+    the same shape as a large fixture with the default size and runs in seconds.
+    The assertion is that every pair still comes back correctly scored: bounding
+    the batch must not drop or duplicate rows.
+    """
+    from goldenmatch.spark.batched import score_pairs_batched
+    from goldenmatch.spark.jvm import scorer_id
+
+    df = spark.createDataFrame(_rows(20, 10), _SCHEMA)
+    pairs = _candidate_pairs(spark, df)
+    want = _row_shaped(df, pairs)
+
+    scored = score_pairs_batched(
+        pairs, df, id_col=_ID, value_col="name",
+        scorer_id=scorer_id("exact"), udf_name=registered,
+        batch_size=7,  # deliberately tiny: forces many batches
+    )
+    got = {(int(r["a"]), int(r["b"])): r["score"] for r in scored.collect()}
+
+    assert len(got) == len(want), (
+        f"bounding the batch changed the row count: {len(got)} vs {len(want)}"
+    )
+    assert got == want, "scores changed when the batch was split"
+
+
+def test_batch_size_does_not_change_the_answer(spark, registered):
+    """Batch size is a memory/throughput choice and must be answer-invariant.
+
+    If it were not, the number would be a correctness parameter -- and nobody
+    would know which value was the correct one.
+    """
+    from goldenmatch.spark.batched import score_pairs_batched
+    from goldenmatch.spark.jvm import scorer_id
+
+    df = spark.createDataFrame(_rows(8, 8), _SCHEMA)
+    pairs = _candidate_pairs(spark, df)
+
+    answers = []
+    for size in (3, 11, 10_000):
+        scored = score_pairs_batched(
+            pairs, df, id_col=_ID, value_col="name",
+            scorer_id=scorer_id("exact"), udf_name=registered, batch_size=size,
+        )
+        answers.append(
+            {(int(r["a"]), int(r["b"])): r["score"] for r in scored.collect()}
+        )
+    assert answers[0] == answers[1] == answers[2], (
+        "batch size changed the answer; it is a memory knob, not a semantic one"
+    )

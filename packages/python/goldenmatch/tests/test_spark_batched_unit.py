@@ -19,16 +19,54 @@ from goldenmatch.spark import batched
 
 
 def test_only_the_partition_strategy_exists():
-    with pytest.raises(ValueError, match="J4"):
+    with pytest.raises(ValueError, match="only 'partition' exists"):
         batched.batch_key("by_block")
 
 
-def test_the_error_points_at_where_sizing_belongs():
-    """Batch sizing is a throughput question; answering it without measurement
-    is how a number gets baked in and never revisited."""
+def test_the_batch_must_be_bounded():
+    """The bug the bench found, pinned.
+
+    J1 shipped with the batch keyed on `spark_partition_id()` alone -- one call
+    per partition, described in its own docstring as "as large a batch as can be
+    formed without a shuffle". True, and exactly the problem: groupBy +
+    collect_list materialises the group as an array in JVM heap, so group size is
+    a MEMORY COMMITMENT, not a throughput knob. 1.9M candidate pairs gave
+    `java.lang.OutOfMemoryError: Java heap space` (bench run 31625487603).
+
+    Sizing was deferred as "a J4 measurement question". It is a
+    correctness-at-scale question, and a non-positive size is refused rather than
+    treated as "unlimited".
+    """
+    for bad in (0, -1, -10_000):
+        with pytest.raises(ValueError, match="must be positive"):
+            batched.batch_key("partition", bad)
+
+
+def test_the_refusal_explains_why_size_is_not_a_tuning_knob():
+    """A reader who sees the error must learn WHY, or they will raise the number
+    until it stops failing rather than understand what it costs."""
     with pytest.raises(ValueError) as err:
-        batched.batch_key("nope")
-    assert "measurement" in str(err.value)
+        batched.batch_key("partition", 0)
+    msg = str(err.value)
+    assert "memory" in msg and "array" in msg
+
+
+def test_the_default_batch_size_is_bounded_and_probe_backed():
+    """10,000 is not a guess: the Connect probe carried that many pairs in one
+    call (run 31611464914). Unbounded or trivially small are both wrong -- one
+    OOMs, the other reinstates the per-call overhead batching exists to remove.
+    """
+    assert 1_000 <= batched.DEFAULT_BATCH_SIZE <= 100_000
+
+
+def test_score_pairs_batched_exposes_the_size():
+    """A default that cannot be overridden is a constant with extra steps, and
+    the right value depends on row width and executor heap."""
+    import inspect
+
+    sig = inspect.signature(batched.score_pairs_batched)
+    assert "batch_size" in sig.parameters
+    assert sig.parameters["batch_size"].default == batched.DEFAULT_BATCH_SIZE
 
 
 # ── structural guards on the two silent-misalignment constructions ───
