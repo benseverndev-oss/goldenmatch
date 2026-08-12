@@ -285,3 +285,96 @@ def test_per_field_strategy_resolves_and_falls_back_to_default():
     )
     assert _field_strategy(rules, "name") == "longest_value"
     assert _field_strategy(rules, "other") == "most_complete"
+
+
+# ── multi_pass blocking ──────────────────────────────────────────────
+
+def test_multi_pass_reads_passes_not_keys():
+    """The recall-loss case, found by P6's lane test against a REAL auto-config
+    output: `strategy=multi_pass` with ONE entry in `keys` and FIVE in `passes`.
+
+    Reading `keys` would generate candidates from one pass out of five and
+    silently drop the rest -- a large recall loss that looks like a clean run.
+    """
+    from goldenmatch.spark.config_pipeline import blocking_passes
+
+    cfg = _cfg(
+        [_mk([MatchkeyField(field="first", scorer="jaro_winkler", weight=1.0)])],
+        blocking=BlockingConfig(
+            strategy="multi_pass",
+            keys=[BlockingKeyConfig(fields=["city"])],
+            passes=[
+                BlockingKeyConfig(fields=["city"]),
+                BlockingKeyConfig(fields=["last"], transforms=["lowercase", "soundex"]),
+                BlockingKeyConfig(fields=["first"], transforms=["lowercase"]),
+            ],
+        ),
+    )
+    got = blocking_passes(cfg)
+    assert len(got) == 3, f"expected all 3 passes, got {len(got)}"
+    assert [p.fields for p in got] == [["city"], ["last"], ["first"]]
+
+
+def test_static_still_reads_keys():
+    """A guard that always read `passes` would break every static config."""
+    from goldenmatch.spark.config_pipeline import blocking_passes
+
+    cfg = _cfg(
+        [_mk([MatchkeyField(field="first", scorer="jaro_winkler", weight=1.0)])],
+        blocking=BlockingConfig(
+            keys=[BlockingKeyConfig(fields=["city"]),
+                  BlockingKeyConfig(fields=["email"])],
+        ),
+    )
+    assert [p.fields for p in blocking_passes(cfg)] == [["city"], ["email"]]
+
+
+def test_multi_pass_without_passes_falls_back_to_keys():
+    """The schema permits a multi_pass config carrying only `keys`."""
+    from goldenmatch.spark.config_pipeline import blocking_passes
+
+    cfg = _cfg(
+        [_mk([MatchkeyField(field="first", scorer="jaro_winkler", weight=1.0)])],
+        blocking=BlockingConfig(
+            strategy="multi_pass", keys=[BlockingKeyConfig(fields=["city"])]
+        ),
+    )
+    assert [p.fields for p in blocking_passes(cfg)] == [["city"]]
+
+
+def test_multi_pass_passes_the_gate():
+    """It is what auto-config emits; refusing it made zero-config unusable on
+    the tier (P6's lane test caught exactly that)."""
+    cfg = _cfg(
+        [_mk([MatchkeyField(field="first", scorer="jaro_winkler", weight=1.0)])],
+        blocking=BlockingConfig(
+            strategy="multi_pass",
+            keys=[BlockingKeyConfig(fields=["city"])],
+            passes=[BlockingKeyConfig(fields=["city"])],
+        ),
+    )
+    _validate_spark_config_supported(cfg)  # must not raise
+
+
+def test_nan_is_not_a_string_and_must_not_reach_the_scorer():
+    """The crash an all-null batch caused, pinned at value level.
+
+    A string column whose batch is entirely null arrives from Spark as float64,
+    so iterating yields NaN rather than None -- and `x or ""` does not rescue it
+    because NaN is TRUTHY. The float reached the scorer and raised
+    `TypeError: 'float' object is not subscriptable`, failing the whole job.
+
+    No pandas needed to state the invariant: NaN must never be handed to the
+    scorer. `make_scorer_udf` normalizes it at the pandas boundary.
+    """
+    from goldenmatch.core import strsim
+
+    nan = float("nan")
+    assert bool(nan) is True, "NaN is truthy, which is why `x or ''` fails"
+    with pytest.raises(TypeError):
+        strsim.jaro_winkler_normalized_similarity(nan, nan)
+    # None IS handled by the pure floor (mapped to ""), so normalizing to None
+    # is sufficient -- no separate null branch is needed downstream.
+    from goldenmatch.spark.scorers import score_batch
+
+    assert score_batch("jaro_winkler", [None], [None])[0] == 1.0

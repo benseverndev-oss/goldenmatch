@@ -37,7 +37,15 @@ logger = logging.getLogger(__name__)
 # Blocking strategies the config pipeline can execute. Everything else in
 # BlockingConfig.strategy's Literal is a candidate-generation algorithm with no
 # Spark expression here; running one silently as `static` would change recall.
-_SUPPORTED_BLOCKING = ("static",)
+#
+# `multi_pass` is here because it is what AUTO-CONFIG EMITS, and because a union
+# of independent key sets is exactly what `generate_candidates` already does.
+# The catch is WHERE the key sets live: a multi_pass config carries them in
+# `blocking.passes`, and its `blocking.keys` holds only one of them. Reading
+# `keys` on such a config generates candidates from one pass out of N and
+# silently drops the rest -- observed on a real auto-config output with 1 key
+# and 5 passes. `_blocking_passes` is the single place that resolves this.
+_SUPPORTED_BLOCKING = ("static", "multi_pass")
 
 # Matchkey types the tier executes. "probabilistic" arrived in P5 and needs a
 # TRAINED model (see spark/probabilistic.py: scoring distributes, EM does not).
@@ -89,12 +97,14 @@ def _validate_spark_config_supported(config: Any) -> None:
         )
 
     blocking = getattr(config, "blocking", None)
-    if blocking is None or not getattr(blocking, "keys", None):
+    if blocking is None or not (
+        getattr(blocking, "keys", None) or getattr(blocking, "passes", None)
+    ):
         raise ValueError(
-            "The Spark tier requires explicit blocking keys "
-            "(config.blocking.keys). Without candidate generation the tier "
-            "would self-join every record against every other -- refused "
-            "rather than attempted."
+            "The Spark tier requires explicit blocking (config.blocking.keys "
+            "or, for multi_pass, config.blocking.passes). Without candidate "
+            "generation the tier would self-join every record against every "
+            "other -- refused rather than attempted."
         )
     strategy = getattr(blocking, "strategy", "static")
     if strategy not in _SUPPORTED_BLOCKING:
@@ -245,6 +255,30 @@ def _valid_key(col: Any) -> Any:
     return col.isNotNull() & (~F.lower(F.trim(col)).isin(list(_KEY_SENTINELS)))
 
 
+def blocking_passes(config: Any) -> list[Any]:
+    """Every key set whose blocks must be unioned into the candidate set.
+
+    A ``static`` config expresses its passes as ``blocking.keys``. A
+    ``multi_pass`` config expresses them as ``blocking.passes`` and leaves
+    ``keys`` holding a single one -- so reading ``keys`` on a multi_pass config
+    silently generates candidates from ONE pass out of N. Auto-config emits
+    exactly that shape (measured: 1 key, 5 passes), which is a recall loss that
+    looks like a clean run.
+
+    ``passes`` wins when present; ``keys`` is the fallback, because the schema
+    permits a multi_pass config that carries only ``keys``.
+    """
+    blocking = config.blocking
+    if getattr(blocking, "strategy", "static") == "multi_pass":
+        passes = list(getattr(blocking, "passes", None) or [])
+        if passes:
+            logger.info(
+                "Spark tier: multi_pass blocking over %d pass(es)", len(passes)
+            )
+            return passes
+    return list(blocking.keys or [])
+
+
 def generate_candidates(source_df: Any, config: Any, *, id_col: str) -> Any:
     """Candidate pairs ``(a, b)`` with ``a < b``, unioned over every blocking
     pass and de-duplicated.
@@ -256,7 +290,7 @@ def generate_candidates(source_df: Any, config: Any, *, id_col: str) -> Any:
     from pyspark.sql import functions as F
 
     per_pass = []
-    for i, key_config in enumerate(config.blocking.keys):
+    for i, key_config in enumerate(blocking_passes(config)):
         key_col, _fields = _block_key_column(key_config)
         keyed = source_df.withColumn("__block_key__", key_col)
         keyed = keyed.where(_valid_key(F.col("__block_key__")))

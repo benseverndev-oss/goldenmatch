@@ -138,19 +138,39 @@ def auto_configure_spark(
     """
     from goldenmatch.core.autoconfig import auto_configure_df
 
-    table, n_full = sample_to_driver(spark_df, n_target=n_sample, seed=seed)
-    n_sampled = table.num_rows
-    refuse_at = _refuse_at_n()
+    # COUNT, REFUSE, THEN SAMPLE -- in that order. Sampling first pulled rows to
+    # the driver that were about to be thrown away, and worse, it let a sampling
+    # failure mask the refusal: a large declared count makes the fraction tiny,
+    # the sample can come back empty, and the caller then sees "the sample came
+    # back empty" instead of "this dataset is too large to zero-config".
+    # A refusal must not depend on the success of work done only to be discarded.
+    n_full = int(spark_df.count())
+    if n_full <= 0:
+        raise ValueError("cannot auto-configure an empty DataFrame")
 
+    refuse_at = _refuse_at_n()
     if n_full >= refuse_at and not allow_large:
         raise SparkAutoConfigTooLarge(
             f"zero-config would derive a config for {n_full:,} rows from a "
-            f"{n_sampled:,}-row sample. The controller refuses a RED config at "
-            f">= {refuse_at:,} rows, but it infers the row count from the frame "
-            f"it is given -- so on a sample it would see {n_sampled:,} and skip "
-            f"that check entirely.\n"
+            f"~{min(n_sample, n_full):,}-row sample. The controller refuses a "
+            f"RED config at >= {refuse_at:,} rows, but it infers the row count "
+            f"from the frame it is given -- so on a sample it would see the "
+            f"SAMPLE size and skip that check entirely.\n"
             f"Pass allow_large=True to accept a sample-derived config at this "
             f"scale, or supply an explicit GoldenMatchConfig."
+        )
+
+    table, sampled_n_full = sample_to_driver(
+        spark_df, n_target=n_sample, seed=seed
+    )
+    n_sampled = table.num_rows
+    # `sample_to_driver` counts again; if the two disagree the DataFrame is not
+    # stable under repeated evaluation and every number below is suspect.
+    if sampled_n_full != n_full:
+        logger.warning(
+            "Spark zero-config: row count changed between the scale check (%d) "
+            "and sampling (%d); the source is not stable under re-evaluation",
+            n_full, sampled_n_full,
         )
 
     logger.info(

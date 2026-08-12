@@ -7702,6 +7702,7 @@
             "_transformed",
             "_valid_key",
             "_validate_spark_config_supported",
+            "blocking_passes",
             "build_golden_from_rules",
             "generate_candidates",
             "run_config_pipeline",

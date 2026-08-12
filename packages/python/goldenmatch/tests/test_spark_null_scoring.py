@@ -21,11 +21,18 @@ pytest.importorskip("pyspark")
 _ID = "__row_id__"
 _COLS = [_ID, "blk", "name"]
 
+# An EXPLICIT schema, not inference. Several fixtures here are all-null in
+# `name` -- that is the whole point of the file -- and Spark cannot infer a type
+# from a column of nothing but None (`CANNOT_DETERMINE_TYPE`). Inference would
+# work on the fixtures that happen to carry a value and fail on exactly the ones
+# that matter.
+_SCHEMA = "__row_id__ long, blk string, name string"
+
 
 def _pairs(spark, rows, *, threshold=0.85):
     from goldenmatch.spark.scoring import score_and_dedup
 
-    df = spark.createDataFrame(rows, _COLS)
+    df = spark.createDataFrame(rows, _SCHEMA)
     out = score_and_dedup(
         df,
         block_col="blk",
