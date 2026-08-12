@@ -57,7 +57,11 @@ jobs:
         # completed with exit code 5" -- no mention of the ImportError, so the
         # log gave no way to tell "dependency broken" from "job misconfigured".
         # Asserting the import here names the real cause on the failing step.
-        run: python -c "import graphiti_core; print('graphiti_core', graphiti_core.__version__)"
+        # importlib.metadata, NOT graphiti_core.__version__ -- the package does
+        # not define that attribute, and reaching for it turns a passing import
+        # into an AttributeError (which is exactly what the first cut of this
+        # step did).
+        run: python -c "import graphiti_core, importlib.metadata as m; print('graphiti_core', m.version('graphiti-core'))"
       - name: Graphiti adapter smoke (protocol + synthesis cost seam, DB-free)
         working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
         env:
