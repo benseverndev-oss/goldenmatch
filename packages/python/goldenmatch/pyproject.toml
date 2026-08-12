@@ -170,10 +170,10 @@ datafusion = [
 # Connect (NOT datafusion-python).
 #
 # The Spark Connect tier. THIS is the one to install: it targets the Apache
-# Spark cluster you already run, and carries no pysail, so it is NOT pinned to
-# pyspark < 4 (that ceiling existed only because pysail needed it).
+# Spark cluster you already run. No upper pyspark bound: the `<4` ceiling only
+# ever existed for pysail, which is gone (see below).
 spark = [
-    # NO upper bound: the `<4` ceiling existed only because pysail needed it.
+    # NO upper bound. `arrow_udf` needs Spark 4 anyway -- see the note below.
     "pyspark[connect]>=3.5",
     # P1: packs the client venv for `addArtifact`, so executors get goldenmatch
     # without a cluster-side install. See goldenmatch/spark/deps.py.
@@ -184,23 +184,15 @@ spark = [
     "setuptools>=83.0.0; python_version >= '3.12'",
 ]
 
-# WHY `<4` HERE AND NOT ON `[spark]`: pysail 0.6.x targets the Spark 3.5 Connect
-# protocol. An unbounded `>=3.5` resolved to pyspark 4.2.0, whose Connect client
-# does `int(local_relation_size_limit)` on a size-suffixed config ("3GB") and
-# raises ValueError -- breaking the sail lane (test_sail_score_parity). That is a
-# CLIENT/SERVER protocol mismatch, not a pyspark 4 defect: the spark_connect lane
-# runs pyspark 4 against a real Spark server and is fine. So the ceiling belongs
-# to pysail, and only pysail.
-# LEGACY. The pysail (LakeSail) in-process server, kept ONLY as a transitional
-# cross-check backend for CI -- it caught a real regression during the Spark
-# retarget, so it is not dead weight yet. It forces `pyspark[connect]<4`, which
-# is exactly why it is no longer what `[spark]` installs.
-# Prefer `goldenmatch[spark]`.
-sail = [
-    "goldenmatch[spark]",
-    "pysail>=0.6",
-    "pyspark[connect]>=3.5,<4",
-]
+# `[sail]` was REMOVED (2026-08-12). pysail pins pyspark 3.5, which has no
+# `arrow_udf` -- and the tier's UDFs are all arrow_udf now, so pysail can no
+# longer execute the tier at all. The extra installed a backend that could not
+# run the thing it existed to cross-check, and its `pyspark[connect]<4` ceiling
+# was the only reason `[spark]` ever had to be split from it.
+#
+# `import goldenmatch.sail` still works: the deprecated module alias is a public
+# back-compat surface and is unaffected. What is gone is the pysail dependency
+# and the CI lane that used it.
 agent = [
     "aiohttp>=3.14.3",
 ]
