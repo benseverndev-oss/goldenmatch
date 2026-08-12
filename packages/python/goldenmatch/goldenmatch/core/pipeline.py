@@ -1758,7 +1758,21 @@ def _run_auto_suggest(df: pl.DataFrame, config: GoldenMatchConfig) -> None:
     # If no user-configured keys, use the top suggestion
     if not config.blocking.keys:
         top = suggestions[0]
-        from goldenmatch.config.schemas import BlockingKeyConfig
+        from goldenmatch.config.schemas import BlockingKeyConfig, TokenBlockingConfig
+
+        # #2488: a token candidate is not a key -- it is its own strategy, and
+        # `BlockingConfig` rejects `keys` alongside it. Committing it means
+        # switching the strategy, which is why this branch exists rather than
+        # squeezing token blocking into the key list.
+        if len(top.keys) == 1 and top.keys[0].get("kind") == "token":
+            config.blocking.strategy = "token"
+            config.blocking.token = TokenBlockingConfig(**top.keys[0]["token"])
+            logger.info(
+                "Auto-suggest: using top suggestion '%s' -> strategy='token' "
+                "(recall=%.2f, coverage over %d blocks)",
+                top.description, top.estimated_recall, top.group_count,
+            )
+            return
 
         new_keys = []
         for cand in top.keys:
