@@ -127,9 +127,8 @@ def main(argv=None) -> int:
     ap.add_argument("--out", default="spark-scoring-bench.json")
     args = ap.parse_args(argv)
 
-    from pyspark.sql import SparkSession
-
     from goldenmatch.spark.jvm import JvmScorerUnavailable, find_jar, install
+    from pyspark.sql import SparkSession
 
     remote = os.environ.get("GOLDENMATCH_SPARK_REMOTE", "local[*]")
     spark = SparkSession.builder.remote(remote).getOrCreate()
