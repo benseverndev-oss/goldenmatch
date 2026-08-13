@@ -1205,6 +1205,132 @@ def _training_pair_conditioning(
     return fallback_pairs, [frozenset(blocking_fields)] * len(fallback_pairs)
 
 
+def train_em_per_pass(
+    df: pl.DataFrame,
+    mk: MatchkeyConfig,
+    blocks: list,
+    *,
+    blocking_fields: list[str] | None = None,
+    **kw: object,
+) -> EMResult:
+    """One EM session per BLOCKING PASS, combined -- Splink's decomposition.
+
+    ``train_em`` pools every pass into a single run and masks per (pair, field):
+    a pair emitted by a pass that blocks on ``zip`` carries no ``zip``
+    likelihood, but ``zip`` is still learnable from pairs emitted by other
+    passes. That is correct and it is one pass over the data.
+
+    Splink decomposes the same problem differently: it runs a separate EM
+    session per ``blocking_rule_for_training``, records which comparisons
+    ``cannot_be_estimated`` under that rule (the ones the rule blocks on), and
+    combines the sessions. Two properties follow, and they are the reason to
+    have this alongside the pooled run:
+
+    1. **Each session is independent**, so they can be trained anywhere --
+       including one per executor, or one per SQL engine round trip. The pooled
+       run couples every pass into one convergence loop.
+    2. **The aggregation key loses the pass.** Within a session the conditioning
+       is constant, so counting comparison vectors needs no pass column: it is
+       ``GROUP BY <gammas>``, exactly the shape ``count_agreement_patterns_sql``
+       produces. That is what makes the counts computable by a cluster and the
+       iteration cheap, -- see ``pair_weights`` on :func:`train_em`.
+
+    Combination: a field's ``m`` is the pair-count-weighted mean of the sessions
+    that could estimate it (those whose pass does NOT block on it). A field no
+    session can estimate keeps whatever the sessions gave it, which is the fixed
+    prior -- the same treatment the pooled run's ``always_conditioned`` applies,
+    rather than a different answer for the same situation.
+
+    Weighted by pair count, not a plain mean: a pass contributing 10 pairs and
+    one contributing 10,000 are not equal evidence, and an unweighted mean would
+    let a tiny pass swing a field it barely observed.
+
+    Args:
+        blocks: ``BlockResult``s carrying ``blocking_fields`` provenance. Blocks
+            are grouped by that tuple; each distinct value is one pass.
+        blocking_fields: legacy union, forwarded to :func:`train_em` for block
+            producers that carry no provenance.
+        **kw: forwarded verbatim to :func:`train_em`.
+    """
+    by_pass: dict[tuple[str, ...], list] = {}
+    for b in blocks or []:
+        by_pass.setdefault(tuple(getattr(b, "blocking_fields", ()) or ()), []).append(b)
+
+    # One pass (or none, or no provenance at all) -- there is nothing to
+    # decompose, and delegating keeps a single-pass config bit-identical to the
+    # pooled run rather than routing it through a combination step that would
+    # have to be proven a no-op.
+    if len(by_pass) <= 1:
+        return train_em(df, mk, blocks=blocks, blocking_fields=blocking_fields, **kw)
+
+    sessions: list[tuple[tuple[str, ...], EMResult, float]] = []
+    for fields, pass_blocks in sorted(by_pass.items()):
+        # `n_rows()` rather than a pair count: the sampler decides how many
+        # pairs it draws, and weighting by block size is the honest proxy for
+        # "how much evidence this pass brought" without training twice to
+        # find out.
+        weight = float(sum(max(int(b.n_rows()), 0) for b in pass_blocks))
+        if weight <= 0:
+            continue
+        em = train_em(
+            df, mk, blocks=pass_blocks, blocking_fields=list(fields), **kw
+        )
+        sessions.append((fields, em, weight))
+        logger.info(
+            "EM session: pass=%s blocks=%d rows=%.0f converged=%s",
+            fields or "(none)", len(pass_blocks), weight, em.converged,
+        )
+
+    if not sessions:
+        return train_em(df, mk, blocks=blocks, blocking_fields=blocking_fields, **kw)
+
+    base = sessions[0][1]
+    m_probs: dict[str, list[float]] = {}
+    for f in mk.fields:
+        name = f.field
+        estimable = [
+            (em, w) for fields, em, w in sessions
+            if name not in fields and name in em.m_probs
+        ]
+        if not estimable:
+            # No pass leaves this field free. Every session fell back to the
+            # fixed prior for it, so they agree and the first is as good as any
+            # -- and this is exactly the pooled run's `always_conditioned` case.
+            m_probs[name] = list(base.m_probs[name])
+            continue
+        total = sum(w for _, w in estimable)
+        n_levels = len(estimable[0][0].m_probs[name])
+        m_probs[name] = [
+            sum(em.m_probs[name][k] * w for em, w in estimable) / total
+            for k in range(n_levels)
+        ]
+
+    # u is estimated from RANDOM pairs, which do not depend on the pass, so the
+    # sessions agree by construction; taking the first states that rather than
+    # averaging identical numbers and implying they might differ.
+    u_probs = {k: list(v) for k, v in base.u_probs.items()}
+    total_w = sum(w for _, _, w in sessions)
+    proportion = sum(em.proportion_matched * w for _, em, w in sessions) / total_w
+
+    match_weights = {
+        name: [
+            math.log2(max(m, 1e-10) / max(u, 1e-10))
+            for m, u in zip(m_probs[name], u_probs.get(name, m_probs[name]))
+        ]
+        for name in m_probs
+    }
+    return EMResult(
+        m_probs=m_probs,
+        u_probs=u_probs,
+        match_weights=match_weights,
+        converged=all(em.converged for _, em, _ in sessions),
+        iterations=max(em.iterations for _, em, _ in sessions),
+        proportion_matched=proportion,
+        tf_freqs=base.tf_freqs,
+        tf_collision=base.tf_collision,
+    )
+
+
 def train_em(
     df: pl.DataFrame,
     mk: MatchkeyConfig,
