@@ -7,6 +7,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Fixed
+- **The blocking-recall warnings now claim only what the estimate supports, and
+  surface the trade-off the ranking makes silently (#2540).**
+  `estimated_recall` is measured against the pairs the matchkey emits over an
+  *unblocked* sample, so its denominator includes the scorer's false positives -
+  pairs blocking is right to drop. Its ceiling is therefore that population's
+  true-match fraction rather than 100% (measured on DBLP-ACM: 40.5% true). The
+  low-recall warning compared that estimate against an absolute 30% floor and
+  asserted *"expect most true matches to be missed"*, which the estimate cannot
+  support: on DBLP-ACM `title[:5]` scores 0.037 while genuinely retaining
+  **98.2%** of true pairs, so the warning fired while an excellent candidate sat
+  in the list. It now reports the figure as a lower bound and says why.
+
+  A second, **relative** warning carries the actionable signal. Ranking is
+  `score x estimated_recall` with no recall floor, so a key that drops most
+  matchable pairs can win on comparison count alone and nothing said so. When the
+  ranked pick retains materially less than the best candidate measured, both are
+  now named with their costs — on DBLP-ACM: *chosen `title[:5] + authors[:5]` at
+  23.5% and 1,667 comparisons, versus `title[:3]` at 59.5% and 117,348* — so a
+  2.5x retention trade for 70x fewer comparisons is visible rather than implicit.
+  Comparing two estimates over the same target population cancels the estimator
+  bias above, which is exactly what an absolute floor cannot do.
+
+  Ranking behaviour is unchanged; these are log-only. The underlying objective
+  problem (no recall floor) and the biased denominator are tracked on #2540.
 - **`build_resolved_crosswalk` respects the caller's `config.identity` instead
   of replacing it (#2521).** It constructed a fresh `IdentityConfig` with
   `backend="sqlite"` hardcoded and `emit_singletons` omitted, so a
