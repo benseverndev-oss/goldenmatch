@@ -7920,6 +7920,19 @@
           ]
         },
         {
+          "module": "goldenmatch.spark.em",
+          "file": "packages/python/goldenmatch/goldenmatch/spark/em.py",
+          "purpose": "Count agreement patterns on the cluster, so FS training need not sample.",
+          "defines": [
+            "agreement_pattern_counts",
+            "gamma_columns"
+          ],
+          "imports": [
+            "goldenmatch.core.probabilistic",
+            "goldenmatch.spark.probabilistic"
+          ]
+        },
+        {
           "module": "goldenmatch.spark.golden",
           "file": "packages/python/goldenmatch/goldenmatch/spark/golden.py",
           "purpose": "Golden-record survivorship on Sail (Spark Connect), distributed.",
