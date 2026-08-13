@@ -634,3 +634,95 @@ def test_the_probe_says_which_process_it_ran_in(spark, registered):
         f"gate cannot distinguish a real executor from local mode."
     )
     print(f"\n  ran on executor {tokens['exec']!r}")
+# ── identity, pure Spark SQL (no kernel, no worker) ──────────────────
+
+def test_entity_id_expr_matches_the_python_helper(spark, registered):
+    """`entity_id_for_members` re-expressed as a column expression.
+
+    Needed no kernel at all: it is sha256 over sorted, newline-joined ids, and
+    every piece has a Spark equivalent. The orderings agree because Python sorts
+    `str` by code point and Spark sorts by UTF-8 bytes, which for UTF-8 is the
+    same order -- but "agree in principle" is what this test exists to replace.
+
+    An entity_id that differs is not a wrong number; it is a DIFFERENT ENTITY,
+    so exact equality is the only meaningful bar.
+    """
+    from goldenmatch.spark.identity import entity_id_expr, entity_id_for_members
+    from pyspark.sql import functions as F
+
+    clusters = {
+        1: ["src:b", "src:a"],            # unsorted input
+        2: ["src:a"],                     # singleton
+        3: ["src:z", "src:a", "src:m"],   # 3 members
+        4: ["src:é", "src:a"],            # multi-byte
+        5: ["src:a", "src:a"],            # duplicate member ids
+    }
+    rows = [(cid, rid) for cid, rids in clusters.items() for rid in rids]
+    df = spark.createDataFrame(rows, "cluster_id long, record_id string")
+    got = {
+        r["cluster_id"]: r["eid"]
+        for r in df.groupBy("cluster_id")
+        .agg(F.collect_list("record_id").alias("rids"))
+        .select("cluster_id", entity_id_expr(F.col("rids")).alias("eid"))
+        .collect()
+    }
+    want = {cid: entity_id_for_members(rids) for cid, rids in clusters.items()}
+    assert got == want, (
+        f"entity_id differs between Spark SQL and Python -- that is a different "
+        f"ENTITY, not a rounding difference: "
+        f"{ {k: (want[k], got.get(k)) for k in want if got.get(k) != want[k]} }"
+    )
+
+
+def test_golden_json_expr_keeps_null_fields(spark, registered):
+    """`to_json` OMITS null fields by default; `json.dumps` emits them.
+
+    Without `ignoreNullFields=false` a golden record silently loses every null
+    column -- the row still looks like a golden record, just a smaller one. This
+    pins the option rather than the whole encoding.
+    """
+    import json
+
+    from goldenmatch.spark.identity import golden_json_expr
+
+    df = spark.createDataFrame(
+        [("a", None, 1), (None, "b", 2)], "x string, y string, n long"
+    )
+    got = [r[0] for r in df.select(golden_json_expr(["x", "y", "n"])).collect()]
+    want = [
+        json.dumps({"x": "a", "y": None, "n": 1}),
+        json.dumps({"x": None, "y": "b", "n": 2}),
+    ]
+    assert [json.loads(g) for g in got] == [json.loads(w) for w in want], (
+        f"null fields were dropped or reordered: {got}"
+    )
+    for g in got:
+        assert "null" in g, f"a null field vanished from {g}"
+
+
+def test_mint_entity_ids_pure_sql_matches_the_udf_path(spark, registered):
+    """The whole function, both paths, on one frame."""
+    from goldenmatch.spark.identity import mint_entity_ids
+
+    df = spark.createDataFrame(
+        [(1, "src:b"), (1, "src:a"), (2, "src:c"), (3, "src:z"), (3, "src:y")],
+        "cluster_id long, record_id string",
+    )
+    udf_path = {r["cluster_id"]: r["entity_id"] for r in mint_entity_ids(df).collect()}
+    sql_path = {
+        r["cluster_id"]: r["entity_id"]
+        for r in mint_entity_ids(df, pure_sql=True).collect()
+    }
+    assert sql_path == udf_path, f"{udf_path} vs {sql_path}"
+    assert all(v.startswith("ent:h1:") for v in sql_path.values()), sql_path
+
+
+def test_uuid7_is_refused_on_the_pure_sql_path(spark, registered, monkeypatch):
+    """uuid7 mints a per-cluster UUIDv7 -- deliberately non-deterministic, and
+    Spark's uuid() is v4. Refusing beats silently minting different ids."""
+    from goldenmatch.spark.identity import mint_entity_ids
+
+    monkeypatch.setenv("GOLDENMATCH_SAIL_IDENTITY_ID_SCHEME", "uuid7")
+    df = spark.createDataFrame([(1, "src:a")], "cluster_id long, record_id string")
+    with pytest.raises(ValueError, match="uuid7"):
+        mint_entity_ids(df, pure_sql=True)
