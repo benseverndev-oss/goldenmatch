@@ -866,10 +866,15 @@ def _score_candidates_jvm(
 
 
 def _refuse_probabilistic(matchkeys: list) -> None:
-    """Both JVM shapes refuse a probabilistic matchkey, for one reason.
+    """The BATCHED JVM shape refuses a probabilistic matchkey.
 
-    Shared rather than duplicated: two copies of a refusal drift, and the shape
-    a caller picked is not a reason to accept work the JVM cannot do.
+    Not the row-shaped one, which runs Fellegi-Sunter -- see
+    :func:`_score_candidates_jvm_rowwise`. The batched shape scores per-SLOT
+    into flat arrays and reshapes them back, and FS is not a per-slot quantity:
+    a level is a threshold ladder over ONE field's similarity, and the weights
+    are summed across fields into a single bit total. Expressing that over the
+    reshaped arrays would be a second implementation of the FS combine, which
+    is exactly the duplication that drifts silently.
     """
     for mk in matchkeys:
         mk_type = getattr(mk, "type", None) or getattr(mk, "comparison", None)
@@ -934,8 +939,12 @@ def _score_candidates_jvm_rowwise(
     from goldenmatch.spark.jvm import scorer_id
 
     matchkeys = list(config.get_matchkeys())
-    _refuse_probabilistic(matchkeys)
-
+    # NO refusal here. Probabilistic matchkeys run on this path: FS levels, the
+    # weight lookup, the bit sum and the posterior are ALREADY Spark SQL, and
+    # the one part that ever needed a Python worker was the per-field
+    # similarity call. Handing that to the jar's row-shaped kernel makes
+    # Fellegi-Sunter -- the thing Splink does -- run with nothing installed on
+    # the executors.
     slots, index = _weighted_scorer_slots(config)
 
     parts = [F.col("__cand__.a").alias("a"), F.col("__cand__.b").alias("b")]
@@ -970,6 +979,26 @@ def _score_candidates_jvm_rowwise(
         mk_type = getattr(mk, "type", None) or getattr(mk, "comparison", None)
         if mk_type == "exact":
             parts.append(_matchkey_score_expr(mk, lhs, rhs).alias(f"e{m}"))
+        elif mk_type == "probabilistic":
+            # P(match) from the trained model, projected here rather than built
+            # in the combine below so the FS expression is evaluated ONCE per
+            # pair -- the same reason the per-slot scores are projected by name.
+            from goldenmatch.spark.probabilistic import fs_score_expr
+
+            em = (fs_models or {}).get(mk.name)
+            if em is None:
+                raise ValueError(
+                    f"matchkey {mk.name!r} is probabilistic but no trained "
+                    f"model was resolved for it. FS scoring distributes; EM "
+                    f"training does not -- train on the one-box and pass the "
+                    f"model via fs_model_path."
+                )
+            parts.append(
+                fs_score_expr(
+                    mk, em, lhs, rhs,
+                    scorer_udf=scorer_udf, transform_udf=transform_udf,
+                ).alias(f"p{m}")
+            )
 
     scored = joined.select(*parts)
 
@@ -984,6 +1013,11 @@ def _score_candidates_jvm_rowwise(
         mk_type = getattr(mk, "type", None) or getattr(mk, "comparison", None)
         if mk_type == "exact":
             score = F.col(f"e{m}")
+        elif mk_type == "probabilistic":
+            # P(match), NOT a weighted similarity average -- a different
+            # quantity on a different scale, which is why `_matchkey_threshold`
+            # cuts it at `link_threshold` rather than `threshold`.
+            score = F.col(f"p{m}")
         else:
             nums, dens = [], []
             for f in mk.fields:
@@ -1172,8 +1206,14 @@ def run_config_pipeline(
     Connect sees one row and must be handed its batch explicitly. See
     :func:`_score_candidates_jvm`.
 
-    Probabilistic matchkeys are refused under ``scorer_udf`` rather than left on
-    the Python path, so "no error" cannot mean "still needs a virtualenv".
+    Probabilistic matchkeys run under ``scorer_udf`` on the ROW shape and are
+    refused on the batch one. FS levels, the weight lookup, the bit sum and the
+    posterior were always Spark SQL; the only part needing a Python worker was
+    the per-field similarity call, and the jar's row-shaped kernel takes that.
+    So Fellegi-Sunter -- the thing Splink does -- now runs with nothing
+    installed on the executors. EM TRAINING still does not distribute: it reads
+    a driver-side sample of blocked pairs, so a trained model must be supplied
+    via ``fs_model_path``.
     """
     if config is None:
         # P6 zero-config. Deriving the config costs a driver-side sample plus a

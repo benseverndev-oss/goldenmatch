@@ -156,7 +156,9 @@ def fs_posterior(total_weight: float, prior_w: float) -> float:
 # ── Spark expressions ────────────────────────────────────────────────
 
 def _field_similarity_and_observed(
-    field: Any, lhs: str, rhs: str
+    field: Any, lhs: str, rhs: str, *,
+    scorer_udf: str | None = None,
+    transform_udf: str | None = None,
 ) -> tuple[Any, Any]:
     """``(similarity, observed)`` for one comparison field.
 
@@ -164,24 +166,44 @@ def _field_similarity_and_observed(
     either value is None" -- and deliberately NOT from the similarity kernel,
     which substitutes ``""`` for a missing value and therefore reports
     null-vs-null as a perfect 1.0.
+
+    **This is the only part of Spark FS that ever needed Python.** Everything
+    above it -- levels, the weight lookup, the sum, the posterior -- is already
+    Spark SQL. So passing ``scorer_udf`` (and ``transform_udf``) is the whole of
+    what it takes to run Fellegi-Sunter with nothing installed on the executors:
+    the similarity call moves to the jar's row-shaped kernel and the rest was
+    never leaving the JVM in the first place.
     """
     from pyspark.sql import functions as F
 
     from goldenmatch.spark.config_pipeline import _transformed
-    from goldenmatch.spark.scorers import make_scorer_udf
 
     col = field.resolved_field
     a_raw, b_raw = F.col(f"{lhs}.{col}"), F.col(f"{rhs}.{col}")
 
     chain = list(getattr(field, "transforms", None) or [])
     if chain:
-        a_val, b_val = _transformed(a_raw, chain), _transformed(b_raw, chain)
+        a_val = _transformed(a_raw, chain, transform_udf=transform_udf)
+        b_val = _transformed(b_raw, chain, transform_udf=transform_udf)
     else:
         a_val, b_val = a_raw.cast("string"), b_raw.cast("string")
 
     if field.scorer == "exact":
+        # No kernel either way: the agreement IS the similarity, in SQL.
         sim = F.when(a_val == b_val, F.lit(1.0)).otherwise(F.lit(0.0))
+    elif scorer_udf is not None:
+        from goldenmatch.spark.jvm import scorer_id
+
+        # `scorer_id` RAISES for a scorer the jar cannot run, and that is the
+        # right behaviour: silently falling back to the arrow_udf would mean a
+        # caller who asked for a jar-only run still needs an executor
+        # virtualenv, and would find out from a ModuleNotFoundError mid-job.
+        sim = F.call_udf(
+            scorer_udf, F.lit(int(scorer_id(field.scorer))), a_val, b_val
+        )
     else:
+        from goldenmatch.spark.scorers import make_scorer_udf
+
         sim = make_scorer_udf(field.scorer)(a_val, b_val)
 
     return sim, (a_raw.isNotNull() & b_raw.isNotNull())
@@ -225,14 +247,20 @@ def _weight_lookup_expr(level: Any, weights: list[float]) -> Any:
     return expr.otherwise(F.lit(_UNOBSERVED_WEIGHT))
 
 
-def fs_match_weight_expr(mk: Any, em: Any, lhs: str, rhs: str) -> Any:
+def fs_match_weight_expr(
+    mk: Any, em: Any, lhs: str, rhs: str, *,
+    scorer_udf: str | None = None,
+    transform_udf: str | None = None,
+) -> Any:
     """Total FS match weight in bits for a pair, as a Spark expression."""
     from goldenmatch.core.probabilistic import fs_missing_mode
 
     missing_mode = fs_missing_mode(mk)
     total = None
     for f in mk.fields:
-        sim, observed = _field_similarity_and_observed(f, lhs, rhs)
+        sim, observed = _field_similarity_and_observed(
+            f, lhs, rhs, scorer_udf=scorer_udf, transform_udf=transform_udf
+        )
         level = fs_level_expr(f, sim, observed, missing_mode=missing_mode)
         w = _weight_lookup_expr(level, em.match_weights[f.resolved_field])
         total = w if total is None else (total + w)
@@ -257,8 +285,15 @@ def fs_posterior_expr(total_weight: Any, prior_w: float) -> Any:
     )
 
 
-def fs_score_expr(mk: Any, em: Any, lhs: str, rhs: str) -> Any:
-    """P(match) for a pair under a trained FS model, as a Spark expression."""
+def fs_score_expr(
+    mk: Any, em: Any, lhs: str, rhs: str, *,
+    scorer_udf: str | None = None,
+    transform_udf: str | None = None,
+) -> Any:
+    """P(match) for a pair under a trained FS model, as a Spark expression.
+
+    With ``scorer_udf`` set, every part of this runs in the executor JVM.
+    """
     from goldenmatch.core.probabilistic import prior_weight
 
     _validate_fs_spark_supported(mk, em)
@@ -268,7 +303,12 @@ def fs_score_expr(mk: Any, em: Any, lhs: str, rhs: str) -> Any:
         "(proportion_matched=%.6g)",
         mk.name, len(mk.fields), prior_w, em.proportion_matched,
     )
-    return fs_posterior_expr(fs_match_weight_expr(mk, em, lhs, rhs), prior_w)
+    return fs_posterior_expr(
+        fs_match_weight_expr(
+            mk, em, lhs, rhs, scorer_udf=scorer_udf, transform_udf=transform_udf
+        ),
+        prior_w,
+    )
 
 
 # ── model resolution ─────────────────────────────────────────────────
