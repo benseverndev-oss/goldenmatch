@@ -463,3 +463,132 @@ def test_a_conditioned_field_reports_the_NEUTRAL_u_not_the_one_passed_in():
     assert em.u_probs["first"] == pytest.approx([0.9, 0.1], abs=1e-12), (
         "a free field must keep the u it was given"
     )
+
+
+# ── Phase 1: the Rust kernel is the one that runs ────────────────────
+
+def _native_em_available() -> bool:
+    from goldenmatch.core._native_loader import native_module
+
+    mod = native_module()
+    return mod is not None and hasattr(mod, "train_em_from_counts_native")
+
+
+def _counted_case():
+    """A case with a learnable field AND a conditioned one.
+
+    Both calibration rules the Rust port had to reproduce (`_neutral_u_for`,
+    `_fixed_blocking_weights`) only fire for a conditioned field, so a fixture
+    without one would compare the two paths on the half that never diverged.
+    """
+    from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+
+    mk = MatchkeyConfig(
+        name="fs", type="probabilistic",
+        fields=[
+            MatchkeyField(field="first", scorer="jaro_winkler", levels=2,
+                          partial_threshold=0.8),
+            MatchkeyField(field="city", scorer="jaro_winkler", levels=3,
+                          partial_threshold=0.7),
+        ],
+    )
+    patterns = [((1, 2), 500), ((0, 2), 300), ((1, 0), 150), ((0, 1), 50)]
+    u = {"first": [0.9, 0.1], "city": [0.8, 0.15, 0.05]}
+    return mk, patterns, u
+
+
+@pytest.mark.skipif(not _native_em_available(),
+                    reason="the native FS-EM kernel is not built here")
+@pytest.mark.parametrize("conditioned", [(), ("city",)])
+def test_the_native_kernel_and_the_python_fallback_agree(monkeypatch, conditioned):
+    """THE Phase 1 gate: which path ran must not change the model.
+
+    Decision-level, not bitwise. libm's ln/log2/exp differ from CPython's in the
+    low mantissa bits, so 1e-9 on probabilities and 1e-7 on match weights -- the
+    same tolerances the Rust-side fixture carries, and for the same reason.
+    Asserting equality would fail on the first machine with a different libm and
+    teach everyone to loosen it, which is how a real divergence gets waved
+    through.
+    """
+    from goldenmatch.core.probabilistic import train_em_from_counts
+
+    mk, patterns, u = _counted_case()
+    native = train_em_from_counts(mk, patterns, u, conditioned_fields=conditioned)
+
+    # Force the fallback by gating the component off, which is the same switch
+    # an operator has. Patching the module out would test a code path no
+    # deployment can reach.
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "0")
+    fallback = train_em_from_counts(mk, patterns, u, conditioned_fields=conditioned)
+
+    for f in mk.fields:
+        n = f.field
+        assert native.m_probs[n] == pytest.approx(fallback.m_probs[n], abs=1e-9), n
+        assert native.u_probs[n] == pytest.approx(fallback.u_probs[n], abs=1e-9), n
+        assert native.match_weights[n] == pytest.approx(
+            fallback.match_weights[n], abs=1e-7
+        ), n
+    assert native.proportion_matched == pytest.approx(
+        fallback.proportion_matched, abs=1e-9
+    )
+    assert native.converged == fallback.converged
+    assert native.iterations == fallback.iterations, (
+        "the two loops took a different number of iterations, so they are not "
+        "the same loop even if the numbers landed close"
+    )
+
+
+@pytest.mark.skipif(not _native_em_available(),
+                    reason="the native FS-EM kernel is not built here")
+def test_the_native_path_is_actually_taken_when_available(monkeypatch):
+    """A skipif-guarded parity test proves nothing if the native path never ran.
+
+    This asserts the dispatch, not the numbers: without it, a call site that
+    quietly returned `None` on every input would leave the test above comparing
+    the fallback against itself and passing forever.
+    """
+    from goldenmatch.core._native_loader import (
+        native_dispatch_report,
+        reset_native_dispatch_log,
+    )
+    from goldenmatch.core.probabilistic import train_em_from_counts
+
+    mk, patterns, u = _counted_case()
+    monkeypatch.delenv("GOLDENMATCH_NATIVE", raising=False)
+    reset_native_dispatch_log()
+    train_em_from_counts(mk, patterns, u, conditioned_fields=("city",))
+
+    report = native_dispatch_report().get("fs_em", {})
+    assert report.get("native", 0) >= 1, (
+        f"fs_em did not dispatch native: {report}. The parity test above is "
+        f"comparing the fallback with itself."
+    )
+
+
+@pytest.mark.skipif(not _native_em_available(),
+                    reason="the native FS-EM kernel is not built here")
+def test_the_kernel_refuses_a_level_outside_the_field_range():
+    """A corrupt vector must raise, not index the wrong weight.
+
+    The kernel range-checks rather than casting: a level of 7 on a 2-level field
+    would otherwise read past the weight table or wrap, and both produce a
+    number rather than an error.
+    """
+    from goldenmatch.core._native_loader import native_module
+
+    fn = native_module().train_em_from_counts_native
+    with pytest.raises(ValueError, match="outside"):
+        fn([2, 2], [[1, 7]], [10.0], [[0.9, 0.1], [0.9, 0.1]], [False, False],
+           20, 0.001)
+
+
+@pytest.mark.skipif(not _native_em_available(),
+                    reason="the native FS-EM kernel is not built here")
+def test_the_kernel_refuses_a_non_positive_count():
+    """A zero-count pattern is a row that should not have been emitted."""
+    from goldenmatch.core._native_loader import native_module
+
+    fn = native_module().train_em_from_counts_native
+    with pytest.raises(ValueError, match="non-positive"):
+        fn([2, 2], [[1, 1]], [0.0], [[0.9, 0.1], [0.9, 0.1]], [False, False],
+           20, 0.001)

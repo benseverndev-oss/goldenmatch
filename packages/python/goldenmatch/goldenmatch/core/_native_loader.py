@@ -199,6 +199,18 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     # DTYPE is f64 and falls back otherwise -- an older installed wheel must not
     # silently reintroduce the flips.
     "sail_scoring": ("score_field_pairwise",),
+    # fs_em: the COUNTED Fellegi-Sunter trainer (spec
+    # 2026-08-13-fs-em-rust-single-source-design). The kernel is
+    # `score-core::em_core`, which until Phase 1 had no callers at all while the
+    # same loop was maintained separately in Python and TypeScript.
+    #
+    # Parity is DECISION-LEVEL, not bitwise: libm's ln/log2/exp differ from
+    # CPython's in the low mantissa bits, so a model trained native and one
+    # trained pure-Python agree to ~1e-9 on probabilities rather than exactly.
+    # That is the same posture every other float kernel here takes, and the
+    # per-case tolerances are pinned in
+    # packages/rust/extensions/score-core/tests/fixtures/em_counts_parity.json.
+    "fs_em": ("train_em_from_counts_native", "estimate_u_from_counts_native"),
 }
 
 # Components with a native symbol that is KNOWN to diverge from the Python

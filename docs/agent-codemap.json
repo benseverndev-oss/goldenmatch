@@ -4211,6 +4211,7 @@
             "_scalar_tf_contribution",
             "_score_distribution_valley",
             "_score_fs_native_frame",
+            "_train_em_from_counts_native",
             "_training_config_manifest",
             "_training_pair_conditioning",
             "_transform_field_value",
