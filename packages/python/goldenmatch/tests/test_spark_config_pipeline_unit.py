@@ -382,48 +382,6 @@ def test_nan_is_not_a_string_and_must_not_reach_the_scorer():
 
 # ── the jar's kernels reach the ENTRY POINTS, not just the internals ──
 
-def test_block_key_normalization_routes_to_the_jar_when_asked():
-    """`_block_key_column` hands `transform_udf` down to `_transformed`.
-
-    Threading matters more here than the word "plumbing" suggests. A kernel
-    reachable only from an internal is, from a caller's side, not reachable at
-    all -- there is no argument to pass. `transform_udf` existed on
-    `_transformed` for a while before any entry point could supply one, so a
-    user running the documented pipeline got the Python path no matter what the
-    jar could do.
-
-    Blocking is also where a normalization divergence does its damage: a value
-    normalized differently lands in a different BLOCK and is never compared to
-    its own duplicate, so the failure is a missing match that nothing
-    downstream can detect.
-    """
-    # Unlike the rest of this file, building a column expression needs pyspark
-    # (not a session). It runs in the `spark_connect` lane, which has it.
-    pytest.importorskip("pyspark")
-
-    from goldenmatch.spark import config_pipeline
-
-    seen = []
-    real = config_pipeline._transformed
-
-    def spy(col, chain, transform_udf=None):
-        seen.append(transform_udf)
-        return real(col, chain, transform_udf=transform_udf)
-
-    config_pipeline._transformed = spy
-    try:
-        key = BlockingKeyConfig(fields=["city"], transforms=["lowercase"])
-        config_pipeline._block_key_column(key, "golden_transform")
-        config_pipeline._block_key_column(key)
-    finally:
-        config_pipeline._transformed = real
-
-    assert seen == ["golden_transform", None], (
-        "the block-key builder must pass the UDF name through, and must still "
-        "default to the Python path when not given one"
-    )
-
-
 def test_run_config_pipeline_routes_all_three_kernels():
     """The entry point exposes every kernel the jar carries that it can use.
 

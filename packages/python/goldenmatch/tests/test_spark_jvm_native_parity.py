@@ -564,3 +564,48 @@ def test_end_to_end_dedupe_runs_with_every_kernel_in_the_jar(spark, registered):
         f"the jar-only run produced different golden records:\n"
         f"  jvm={got}\n  python={want}"
     )
+
+
+def test_block_key_normalization_routes_to_the_jar_when_asked(spark, registered):
+    """`_block_key_column` hands `transform_udf` down to `_transformed`.
+
+    Threading matters more than the word "plumbing" suggests. A kernel
+    reachable only from an internal is, from a caller's side, not reachable at
+    all -- there is no argument to pass. `transform_udf` existed on
+    `_transformed` for a while before any entry point could supply one, so a
+    user running the documented pipeline got the Python path no matter what the
+    jar could do.
+
+    Blocking is where a normalization divergence does its damage: a value
+    normalized differently lands in a different BLOCK and is never compared to
+    its own duplicate, so the failure is a missing match that nothing
+    downstream can detect.
+
+    Lives HERE rather than in the session-free unit file because building a
+    column expression needs an active session, not merely an importable
+    pyspark: `pyspark.sql.functions` asserts `SparkContext._active_spark_context
+    is not None`. `importorskip("pyspark")` passed locally, where the whole file
+    skipped, and failed in the lane that actually has pyspark installed.
+    """
+    from goldenmatch.config.schemas import BlockingKeyConfig
+    from goldenmatch.spark import config_pipeline
+
+    seen = []
+    real = config_pipeline._transformed
+
+    def spy(col, chain, transform_udf=None):
+        seen.append(transform_udf)
+        return real(col, chain, transform_udf=transform_udf)
+
+    config_pipeline._transformed = spy
+    try:
+        key = BlockingKeyConfig(fields=["city"], transforms=["lowercase"])
+        config_pipeline._block_key_column(key, "golden_transform")
+        config_pipeline._block_key_column(key)
+    finally:
+        config_pipeline._transformed = real
+
+    assert seen == ["golden_transform", None], (
+        "the block-key builder must pass the UDF name through, and must still "
+        "default to the Python path when not given one"
+    )
