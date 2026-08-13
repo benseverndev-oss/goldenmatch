@@ -49,18 +49,11 @@
               "lowercase",
               "strip"
             ]
-          }
-        ]
-      },
-      {
-        "name": "domain_exact_title_key",
-        "type": "exact",
-        "threshold": 0.5,
-        "fields": [
+          },
           {
             "field": "__title_key__",
-            "scorer": null,
-            "weight": null,
+            "scorer": "exact",
+            "weight": 0.8,
             "transforms": [
               "lowercase"
             ]
