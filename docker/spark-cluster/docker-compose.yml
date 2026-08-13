@@ -61,12 +61,17 @@ x-spark: &spark
   # no Python environment. Adding any of that here to make a test pass would
   # delete the reason the lane exists.
   #
-  # The workflow does ship a packed venv at SESSION scope for the parity step,
-  # and that is not a contradiction -- it is the supported user path
-  # (`addArtifact`), applied per session, and it is what lets the Python arm run
-  # so there is an oracle to compare the JVM against. The inventory step ships
-  # nothing at all, which is where the jar-only claim is actually tested. Two
-  # questions, two setups; both need a real cluster.
+  # The workflow ships NOTHING to these either -- no packed venv, no site
+  # packages. An earlier version tried to ship one so the Python arm could act
+  # as an oracle for the JVM arm; three runs of chasing that ended at the fact
+  # that this image's Python is 3.10.12 and goldenmatch needs >= 3.11. The
+  # official Spark image cannot run this package's Python path at all, which is
+  # a point in the jar's favour rather than a problem to route around.
+  #
+  # So the two-path comparisons stay in `spark_connect` under `local[*]`, where
+  # both arms run and where what they exercise (batching, reshape, positional
+  # alignment) actually lives -- plan construction does not change shape with
+  # the host count. This lane keeps only what NEEDS a separate executor.
   environment:
     SPARK_NO_DAEMONIZE: "true"
   networks: [spark]

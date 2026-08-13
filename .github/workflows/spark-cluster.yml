@@ -250,18 +250,40 @@ jobs:
           print(f"OK: executor {exec_id} loaded the native kernel from the shipped jar")
           PY
 
-      # The parity tests need a Python environment on the executors, and that is
-      # not a contradiction -- it is two different questions needing two
-      # different setups, both of which require a real cluster:
+      # NO oracle venv, after three runs spent trying to build one.
       #
-      #   "Does the JVM path work on real executors, and agree with Python?"
-      #     -> needs BOTH arms runnable, so the oracle must exist. THIS step.
-      #   "Is Python actually unnecessary?"
-      #     -> needs the executors genuinely bare. The inventory step below.
+      # The chase went: pack it on the runner (venv-pack's `bin/python` is a
+      # symlink into the runner's toolcache, dangling in a container -- issue
+      # #2531); pack it inside the image instead (`ensurepip` is not in Ubuntu's
+      # base python3); install `python3-venv` (the image ships Python **3.10.12**
+      # and goldenmatch requires >= 3.11).
       #
-      # Running the parity tests bare would not prove the jar-only claim; it
-      # would just delete the oracle and leave the JVM path compared against
-      # nothing. (That is what the first run did, by accident.)
+      # That last one is not an obstacle to work around. It says the official
+      # Spark image cannot run this package's Python path AT ALL without
+      # installing a newer interpreter -- which is a point in the jar's favour,
+      # and a fact worth having rather than papering over.
+      #
+      # It also showed the split was wrong. The two-path parity tests compare
+      # two DISTRIBUTED runs, and on a cluster with no Python that comparison is
+      # impossible by construction. They already run in `spark_connect` under
+      # `local[*]`, which is exactly where a both-arms comparison belongs.
+      #
+      # So the division of labour is by what each environment can actually
+      # prove:
+      #
+      #   local[*]  -> JVM path vs Python path. Both arms runnable, and the
+      #                machinery under test (batching, reshape, alignment) is
+      #                plan construction, which does not care how many hosts it
+      #                lands on.
+      #   cluster   -> everything that needs a SEPARATE executor: the jar
+      #                arriving, the .so loading there, kernel results from a
+      #                real executor against a client-side oracle, and the
+      #                jar-only pipeline running with nothing installed.
+      #
+      # The end-to-end jar-only run is not lost with the venv: the inventory's
+      # ENTRY dedupe probe drives `run_config_pipeline` with all three UDFs
+      # against these bare workers, which is the strongest form of that test
+      # available anywhere.
       # Built INSIDE the executor image, not on the runner.
       #
       # The first attempt built it on the runner with venv-pack, exactly as
@@ -284,41 +306,30 @@ jobs:
       # Building against the interpreter the venv will actually run on is the
       # fix, and it is also what a user shipping to this cluster would have to
       # do. `--user root` because the Spark images run as uid 185.
-      - name: Pack a runtime venv INSIDE the executor image (the parity ORACLE)
-        run: |
-          set -euo pipefail
-          docker run --rm --user root -v "$PWD:/w" -w /w \
-            "apache/spark:${SPARK_IMAGE_TAG}-python3" bash -lc '
-              set -euo pipefail
-              # `ensurepip is not available` otherwise: Debian and Ubuntu strip
-              # it out of the base python3 into `python3-venv`. The Spark images
-              # are Ubuntu-based, so this is the documented fix for that exact
-              # message rather than a workaround.
-              apt-get update -qq
-              apt-get install -y -qq --no-install-recommends python3-venv >/dev/null
-              python3 -m venv /tmp/gmenv
-              /tmp/gmenv/bin/pip install --quiet --upgrade pip venv-pack
-              # pyarrow named explicitly: the tier is Arrow-native (arrow_udf
-              # over pa.Array), so the worker contract is stated rather than
-              # transitive. NO pandas -- ci.yml gates on its absence.
-              /tmp/gmenv/bin/pip install --quiet ./packages/python/goldenmatch pyarrow
-              /tmp/gmenv/bin/venv-pack -o /w/gm_env.tar.gz --force
-            '
-          ls -lh gm_env.tar.gz
-
       - name: JVM parity + scoring, on the cluster
         env:
           GOLDENMATCH_SPARK_REMOTE: "sc://localhost:15002"
           GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
-          # The `spark` fixture ships this to the executors -- its own comment
-          # notes that real Spark forks a Python worker with its own
-          # environment, which is the failure class `local[*]` cannot show.
-          GOLDENMATCH_SPARK_PYENV: "gm_env.tar.gz"
+          # No GOLDENMATCH_SPARK_PYENV: the executors stay bare.
         run: |
           set -euo pipefail
+          # Deselected BY NAME, with the reason: these four compare the JVM path
+          # against the PYTHON path, and both arms have to run distributed.
+          # These workers have no goldenmatch (and ship a Python too old for it),
+          # so that comparison cannot exist here. Deselecting says so; letting
+          # them fail would read as a defect in the scoring path.
+          #
+          # They are not skipped anywhere -- `spark_connect` runs them under
+          # local[*], which is where a both-arms comparison belongs. What they
+          # exercise (batching, the n*k reshape, positional alignment) is plan
+          # construction, and a plan does not change shape with the number of
+          # hosts it lands on.
+          #
+          # Everything left DOES need a real executor and now gets one: kernel
+          # results from executor 1, against a client-side oracle.
           python -m pytest -v --timeout=600 --timeout-method=thread \
             packages/python/goldenmatch/tests/test_spark_jvm_native_parity.py \
-            packages/python/goldenmatch/tests/test_spark_jvm_parity.py
+            packages/python/goldenmatch/tests/test_spark_jvm_parity.py \n            --deselect 'packages/python/goldenmatch/tests/test_spark_jvm_native_parity.py::test_jvm_scoring_matches_the_python_path_exactly' \n            --deselect 'packages/python/goldenmatch/tests/test_spark_jvm_native_parity.py::test_end_to_end_dedupe_runs_with_every_kernel_in_the_jar' \n            --deselect 'packages/python/goldenmatch/tests/test_spark_jvm_native_parity.py::test_block_key_normalization_routes_to_the_jar_when_asked' \n            --deselect 'packages/python/goldenmatch/tests/test_spark_jvm_native_parity.py::test_derive_record_ids_matches_the_python_path'
 
       # The inventory against REAL workers. Note there is no
       # GOLDENMATCH_SPARK_PYENV here and that is the point: these containers are
