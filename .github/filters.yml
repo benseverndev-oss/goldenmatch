@@ -913,6 +913,15 @@ spark:
   # The tier's own Python scorer is the ORACLE that gate compares against, so a
   # change to it moves the reference the JVM is measured by.
   - 'packages/python/goldenmatch/goldenmatch/core/strsim.py'
+  # The lane no longer contains the jar build -- it CALLS these. They are shared
+  # with publish-goldenmatch-spark-jar.yml precisely so the tested jar and the
+  # shipped jar cannot be built differently, which only holds while an edit to
+  # either script still re-runs the lane that tests it. Same staleness class as
+  # the P2 rename above, one directory over.
+  - 'scripts/build_spark_jar.sh'
+  - 'scripts/spark_jni_selftest.sh'
+  # The jar-only inventory runs in this lane and nowhere else.
+  - 'scripts/spark_jar_only_inventory.py'
 action:
   - 'packages/actions/**'
 dbt:

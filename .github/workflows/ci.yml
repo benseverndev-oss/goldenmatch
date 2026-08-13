@@ -3045,29 +3045,13 @@ jobs:
             || { echo "::error::the JNI entry points are not exported"; exit 1; }
       # The whole point: RUN it here. Spark-free classes only -- the two UDF
       # classes need a Spark classpath and nothing in this job touches Spark.
+      # The source list this needs lives in the script: `ScorerSelection` gained
+      # a reference to `JarVersion` and this lane -- which nobody associates
+      # with a jar-packaging change -- was the thing that broke.
       - name: Native scorer self-test ON aarch64
-        run: |
-          set -euo pipefail
-          JVM=packages/jvm/goldenmatch-spark
-          mkdir -p "$JVM/build/classes/native/linux-aarch64" "$JVM/build/test-classes"
-          javac --release 17 -encoding UTF-8 -d "$JVM/build/classes" \
-            "$JVM"/src/dev/goldensuite/spark/GoldenScorer.java \
-            "$JVM"/src/dev/goldensuite/spark/ExactScorer.java \
-            "$JVM"/src/dev/goldensuite/spark/SeqCoercion.java \
-            "$JVM"/src/dev/goldensuite/spark/Utf8Batch.java \
-            "$JVM"/src/dev/goldensuite/spark/NativeLibrary.java \
-            "$JVM"/src/dev/goldensuite/spark/NativeScorer.java \
-            "$JVM"/src/dev/goldensuite/spark/NativeFingerprint.java \
-            "$JVM"/src/dev/goldensuite/spark/NativeTransform.java \
-            "$JVM"/src/dev/goldensuite/spark/NativeSurvivorship.java \
-            "$JVM"/src/dev/goldensuite/spark/ScorerSelection.java
-          cp packages/rust/extensions/score-jni/target/release/libgoldenmatch_score_jni.so \
-            "$JVM/build/classes/native/linux-aarch64/"
-          javac --release 17 -encoding UTF-8 -d "$JVM/build/test-classes" \
-            -cp "$JVM/build/classes" \
-            "$JVM"/test/dev/goldensuite/spark/NativeSelfTest.java
-          java -cp "$JVM/build/classes:$JVM/build/test-classes" \
-            dev.goldensuite.spark.NativeSelfTest
+        env:
+          ARCH: linux-aarch64
+        run: bash scripts/spark_jni_selftest.sh
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         with:
           name: goldenmatch-score-jni-linux-aarch64
@@ -3203,42 +3187,21 @@ jobs:
         with:
           name: goldenmatch-score-jni-linux-aarch64
           path: /tmp/jni-aarch64
+      # The build itself lives in `scripts/build_spark_jar.sh` because it now has
+      # a SECOND caller: `publish-goldenmatch-spark-jar.yml`. Publishing forces a
+      # second build (a release runs on its own tag, and CI artifacts are per-run
+      # and expire), which is exactly the "tested jar vs shipped jar" gap this
+      # lane's single-job build exists to close. Sharing the script means the two
+      # jars are separate builds that cannot be built DIFFERENTLY, and the
+      # release re-runs the self-tests below before it publishes anything.
       - name: Build the JVM scorer jar (x86-64 + aarch64)
+        env:
+          SO_X86_64: packages/rust/extensions/score-jni/target/release/libgoldenmatch_score_jni.so
+          SO_AARCH64: /tmp/jni-aarch64/libgoldenmatch_score_jni.so
         run: |
           set -euo pipefail
-          SPARK_JARS="$(.venv/bin/python -c 'import pyspark, os; print(os.path.join(os.path.dirname(pyspark.__file__), "jars"))')"
-          JVM=packages/jvm/goldenmatch-spark
-          mkdir -p "$JVM/build/classes/native/linux-x86-64" \
-                   "$JVM/build/classes/native/linux-aarch64"
-          # -encoding UTF-8: the sources carry multi-byte literals (the parity
-          # fixtures) and javac otherwise reads them in the platform default,
-          # which is not UTF-8 everywhere.
-          javac --release 17 -encoding UTF-8 -cp "$SPARK_JARS/*" -d "$JVM/build/classes" \
-            "$JVM"/src/dev/goldensuite/spark/*.java
-          cp packages/rust/extensions/score-jni/target/release/libgoldenmatch_score_jni.so \
-            "$JVM/build/classes/native/linux-x86-64/"
-          cp /tmp/jni-aarch64/libgoldenmatch_score_jni.so \
-            "$JVM/build/classes/native/linux-aarch64/"
-          # Assert each library IS the architecture its resource path claims.
-          # Swapping them yields a jar that loads on neither -- dlopen fails on
-          # every executor and both platforms fall back silently.
-          readelf -h "$JVM/build/classes/native/linux-x86-64/libgoldenmatch_score_jni.so" \
-            | grep -q "X86-64" || { echo "::error::the linux-x86-64 resource is not an x86-64 object"; exit 1; }
-          readelf -h "$JVM/build/classes/native/linux-aarch64/libgoldenmatch_score_jni.so" \
-            | grep -q "AArch64" || { echo "::error::the linux-aarch64 resource is not an AArch64 object"; exit 1; }
-          jar --create --file "$JVM/build/goldenmatch-spark.jar" -C "$JVM/build/classes" .
-          echo "--- jar contents ---"
-          jar --list --file "$JVM/build/goldenmatch-spark.jar"
-          # The jar without a library still RUNS -- it falls back to the
-          # `exact`-only scorer so a job survives -- which is exactly why an
-          # absence has to be an error here rather than a surprise on somebody's
-          # cluster. BOTH arches: a Graviton fleet finding no aarch64 resource is
-          # precisely the failure this ships to prevent.
-          for arch in linux-x86-64 linux-aarch64; do
-            jar --list --file "$JVM/build/goldenmatch-spark.jar" \
-              | grep -qx "native/$arch/libgoldenmatch_score_jni.so" \
-              || { echo "::error::no $arch library in the jar; that platform would silently fall back to the J0 scorer"; exit 1; }
-          done
+          export SPARK_JARS="$(.venv/bin/python -c 'import pyspark, os; print(os.path.join(os.path.dirname(pyspark.__file__), "jars"))')"
+          bash scripts/build_spark_jar.sh
       # The Spark-free half of the jar, gated before anything ships it. No JUnit:
       # a test framework would mean a dependency resolver, and this package has
       # no build system on purpose (one small jar does not justify a fourth
@@ -3265,6 +3228,26 @@ jobs:
           JVM=packages/jvm/goldenmatch-spark
           java -cp "$JVM/build/classes:$JVM/build/test-classes" \
             dev.goldensuite.spark.NativeSelfTest
+      # `java -jar` is the preflight check the README tells operators to run on
+      # a box that resembles an executor, before submitting anything. It is
+      # gated HERE rather than only in the publish workflow for two reasons:
+      # every PR touching the jar exercises it, and it is the only test that
+      # runs against the ASSEMBLED jar -- the self-tests above use loose
+      # classes, where JarVersion cannot find a manifest and NativeLibrary
+      # extracts from a build directory rather than from jar resources.
+      #
+      # Exit 0 means the native kernel resolved; a fallback exits 1. That is the
+      # silent-fallback class this arc keeps paying for, made loud.
+      - name: The assembled jar runs its own preflight check
+        run: |
+          set -euo pipefail
+          JAR=packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
+          java -jar "$JAR"
+          # CI stamps no tag, so the version is the script's default. Assert it
+          # anyway: an empty or absent Implementation-Version reads as "unknown"
+          # and would go unnoticed until a release shipped an anonymous jar.
+          java -jar "$JAR" | head -1 | grep -qx "goldenmatch-spark 0.0.0-dev" \
+            || { echo "::error::the jar did not report its stamped version"; exit 1; }
       # The J-arc's actual justification, measured rather than argued.
       #
       # Throughput was measured and the JVM path LOST (2.4x slower than the
