@@ -3457,9 +3457,11 @@ jobs:
           cargo pgrx install "--pg-config=/usr/lib/postgresql/${PG_VERSION}/bin/pg_config" --release --features "pg${PG_VERSION}" --no-default-features
           # pgrx 0.12.9 doesn't auto-emit the SQL extension file — copy the
           # handwritten ones into PG's extension dir so `CREATE EXTENSION`
-          # (installs default_version, now 0.18.0) and `ALTER EXTENSION ... UPDATE`
+          # (installs default_version, now 0.19.0) and `ALTER EXTENSION ... UPDATE`
           # find them. The schema files are the canonical declaration of public
           # function signatures.
+          cp sql/goldenmatch_pg--0.19.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
+          cp sql/goldenmatch_pg--0.18.0--0.19.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.18.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.17.0--0.18.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.17.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
@@ -4011,6 +4013,83 @@ jobs:
   # packages/rust/extensions/duckdb/ alongside the Rust crates but the
   # main `python` matrix job doesn't see it (its dynamic-matrix only
   # enumerates packages/python/<pkg>). This lane fills that gap.
+
+      # FS training with NO embedded CPython (0.19.0, spec
+      # 2026-08-13-fs-em-rust-single-source-design). goldenmatch_train_em still
+      # bridges to Python because pair sampling + binning were never ported;
+      # this function starts from vectors the ENGINE counted, so it reaches the
+      # pyo3-free score-core::em_core kernel directly.
+      #
+      # A psql smoke and not a `#[pg_test]`: `cargo pgrx test` cannot run for
+      # this crate, so a pg_test compiles and never executes. These numbers are
+      # the SAME anchors score-core/tests/fixtures/em_counts_parity.json carries,
+      # so the SQL surface cannot drift from the wheel's trainer.
+      - name: psql smoke (FS EM from counts, no CPython)
+        run: |
+          set -euo pipefail
+          # PGPORT is a SHELL variable in the step above, not an env var, so it
+          # does not cross the step boundary -- `set -u` turned that into an
+          # unbound-variable exit rather than a silent default. Re-derived from
+          # pg_lsclusters exactly as that step does, NOT defaulted to 5432: the
+          # matrix runs three PG versions side by side and only one of them can
+          # own the default port, so a default would point this smoke at another
+          # version's cluster and test the wrong extension build.
+          PG_PORT=$(pg_lsclusters -h | grep "^${PG_VERSION}" | awk '{print $3}')
+          export PGPORT="${PG_PORT:-5432}"
+          sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 <<'EOSQL'
+            DO $$
+            DECLARE
+              j JSONB;
+            BEGIN
+              -- Case `two_level_learnable_only`: both fields free, so both
+              -- weights are log2(m/u) and neither takes the fixed ramp.
+              j := goldenmatch.goldenmatch_train_em_from_counts(
+                     ARRAY[2,2], ARRAY[1,1, 0,1, 1,0, 0,0],
+                     ARRAY[500,300,150,50]::float8[],
+                     ARRAY[0.9,0.1, 0.85,0.15]::float8[],
+                     ARRAY[false,false])::JSONB;
+              IF j ? 'error' THEN
+                RAISE EXCEPTION 'train_em_from_counts errored: %', j;
+              END IF;
+              IF abs((j->'match_weights'->0->>1)::float8 - 2.706681) > 1e-5
+                 OR abs((j->'match_weights'->1->>0)::float8 - (-2.111677)) > 1e-5 THEN
+                RAISE EXCEPTION 'learnable weights drifted from the score-core fixture: %',
+                  j->'match_weights';
+              END IF;
+
+              -- Case `near_unique_blocking_field_1836`: field 1 is conditioned,
+              -- so it must take the BOUNDED -3..+3 ramp and neutral u -- NOT an
+              -- estimate from the near-unique u it was handed. That is the
+              -- calibration failure that took F1 0.83 -> 0.57, and every wrong
+              -- variant of it still returns a valid-looking model.
+              j := goldenmatch.goldenmatch_train_em_from_counts(
+                     ARRAY[2,2], ARRAY[1,1, 0,1],
+                     ARRAY[500,300]::float8[],
+                     ARRAY[0.9,0.1, 0.999,0.001]::float8[],
+                     ARRAY[false,true])::JSONB;
+              IF (j->'match_weights'->1->>0)::float8 <> -3.0
+                 OR (j->'match_weights'->1->>1)::float8 <> 3.0 THEN
+                RAISE EXCEPTION 'a conditioned field did not take the fixed ramp: %',
+                  j->'match_weights'->1;
+              END IF;
+              IF (j->'u_probs'->1->>0)::float8 <> 0.5 THEN
+                RAISE EXCEPTION 'a conditioned field kept its random-pair u: %',
+                  j->'u_probs'->1;
+              END IF;
+
+              -- Bad input fails SOFT: an error envelope, not an aborted
+              -- transaction, because this runs inside larger queries.
+              j := goldenmatch.goldenmatch_train_em_from_counts(
+                     ARRAY[2,2], ARRAY[1,7], ARRAY[10]::float8[],
+                     ARRAY[0.9,0.1, 0.9,0.1]::float8[],
+                     ARRAY[false,false])::JSONB;
+              IF NOT (j ? 'error') THEN
+                RAISE EXCEPTION 'an out-of-range level was accepted: %', j;
+              END IF;
+
+              RAISE NOTICE 'FS EM from counts: OK (no CPython in this path)';
+            END $$;
+          EOSQL
   duckdb_extensions:
     needs: changes
     if: needs.changes.outputs.duckdb_extensions == 'true' || needs.changes.outputs.force_all == 'true'

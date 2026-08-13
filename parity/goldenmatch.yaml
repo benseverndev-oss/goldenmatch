@@ -544,6 +544,7 @@ postgres:
   - goldenmatch_score_probabilistic
   - goldenmatch_suggest_threshold
   - goldenmatch_train_em
+  - goldenmatch_train_em_from_counts
   - goldenmatch_validate_table
   - memory_learn
   - memory_stats
