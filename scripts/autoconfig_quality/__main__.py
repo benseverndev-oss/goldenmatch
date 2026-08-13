@@ -19,6 +19,12 @@ from pathlib import Path
 # Polars CPU probe can hang on Windows; set before anything imports polars.
 os.environ.setdefault("POLARS_SKIP_CPU_CHECK", "1")
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+# #2532: this scorecard pins auto-config output, so the search must not stop on
+# the clock -- otherwise which config gets committed (and therefore the blessed
+# number) depends on runner speed and load, and the gate can go red with no code
+# change or green while masking a real one. Iteration caps become the only
+# stopping rule; the run takes as long as it takes.
+os.environ.setdefault("GOLDENMATCH_AUTOCONFIG_DETERMINISTIC", "1")
 
 _BASELINE = Path(__file__).resolve().parent / "baselines" / "scorecard.json"
 

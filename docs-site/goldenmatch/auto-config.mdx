@@ -78,6 +78,7 @@ When you point auto-config at the **local in-house embedding model** (a matchkey
 | Variable | Effect |
 |----------|--------|
 | `GOLDENMATCH_AUTOCONFIG_MEMORY=0` | Disable cross-run memory (default on; stored at `~/.goldenmatch/autoconfig_memory.db`). |
+| `GOLDENMATCH_AUTOCONFIG_DETERMINISTIC=1` | Drop the search's wall-clock budgets so iteration caps are the only stopping rule. Without it the committed config depends on host speed and load. Runtime becomes unbounded — set it for anything that pins or gates auto-config output, not for interactive runs. |
 | `GOLDENMATCH_AUTOCONFIG_LLM=1` | Enable the LLM fallback policy (requires `OPENAI_API_KEY`). |
 | `GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET=fast\|full` | Run the cheap or the full indicator set (default `fast`). |
 | `GOLDENMATCH_PLANNING_EFFORT=fast\|normal\|thinking\|einstein` | Planning-effort tier (default `normal`). Higher tiers search wider and measure full-frame blocking. |
