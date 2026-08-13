@@ -1,0 +1,272 @@
+# The J-arc's claim, tested on a REAL cluster instead of `local[*]`.
+#
+# Every Spark test in this repo runs under `local[*]`, where the executor IS the
+# driver -- Spark attributes a failed task there to `executor driver`. So the
+# assertions that matter were self-certifying: `ScorerSelection` resolves the
+# native library once per JVM, and under `local[*]` that JVM already has the jar
+# on its classpath. "The executor resolved the native kernel" was true and
+# proved nothing.
+#
+# This lane stands up a standalone master, TWO workers and a Connect server in
+# separate containers, and points the existing suite at it. No test changes: the
+# `spark` fixture already takes `GOLDENMATCH_SPARK_REMOTE=sc://host:port`, and
+# its docstring says it was made backend-agnostic on purpose.
+#
+# ## Not in ci.yml, deliberately
+#
+# `workflow_dispatch` and a nightly schedule, NOT a required gate. It pulls
+# ~1.5GB of images and stands up four containers, which is the category where
+# flaky lanes live, and a flaky required gate blocks every merge in the repo.
+# Promote it into `ci.yml` once it has a run history that earns it -- and not
+# before.
+#
+# ## The failure it must not have
+#
+# A cluster lane that silently degrades to a working `local[*]` session would be
+# worse than no lane: it would report the same green as today while claiming
+# more. So the run asserts, from an EXECUTOR, that `exec=` is not `driver`,
+# before it runs anything else.
+name: spark-cluster
+
+on:
+  workflow_dispatch:
+    inputs:
+      spark_image_tag:
+        description: "apache/spark image tag (the client pyspark is pinned to match)"
+        required: false
+        type: string
+        default: "4.0.0"
+  schedule:
+    # Nightly, after the usual working day. Cheap insurance that the topology
+    # still works; nothing here gates a merge.
+    - cron: "0 6 * * *"
+  # Scoped to THIS lane's own files, for two reasons.
+  #
+  # Practically: `workflow_dispatch` only works for workflows already on the
+  # DEFAULT branch, so without this trigger a new cluster lane could not be
+  # exercised until after it merged -- which is the wrong order for the one kind
+  # of lane most likely to need iteration.
+  #
+  # And on the merits: a change to the compose topology or the jar build is
+  # exactly what breaks executor-side loading, so those are the diffs worth
+  # spending 1.5GB of image pull on. It stays OUT of `ci-required`, so a red
+  # result here is information rather than a blocked merge.
+  pull_request:
+    paths:
+      - 'docker/spark-cluster/**'
+      - '.github/workflows/spark-cluster.yml'
+      - 'scripts/build_spark_jar.sh'
+      - 'scripts/spark_jni_selftest.sh'
+      - 'packages/jvm/goldenmatch-spark/**'
+
+permissions:
+  contents: read
+
+env:
+  SPARK_IMAGE_TAG: ${{ inputs.spark_image_tag || '4.0.0' }}
+
+jobs:
+  # The aarch64 half of the jar. Present because `build_spark_jar.sh` REFUSES a
+  # jar missing either architecture, and that refusal is absolute on purpose --
+  # a Graviton fleet finding no `linux-aarch64` resource falls back to the
+  # exact-only scorer silently. Adding a single-arch escape hatch for a test
+  # lane is exactly how such a hatch ends up in the release path, so this lane
+  # pays the ~5 minutes instead.
+  aarch64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Build + self-test the aarch64 kernel
+        run: |
+          set -euo pipefail
+          cargo build --release \
+            --manifest-path packages/rust/extensions/score-jni/Cargo.toml
+          ARCH=linux-aarch64 bash scripts/spark_jni_selftest.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: score-jni-linux-aarch64
+          path: packages/rust/extensions/score-jni/target/release/libgoldenmatch_score_jni.so
+          if-no-files-found: error
+
+  cluster:
+    needs: aarch64
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: '3.12'
+
+      - name: Build the native kernel (linux-x86-64)
+        run: |
+          set -euo pipefail
+          cargo build --release \
+            --manifest-path packages/rust/extensions/score-jni/Cargo.toml
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          name: score-jni-linux-aarch64
+          path: /tmp/jni-aarch64
+
+      # The client, on the RUNNER -- not in any container. The jar is uploaded
+      # over Connect by `addArtifact`, so it only ever exists host-side. That is
+      # the deployment story being tested: one file, from the client, nothing
+      # installed on the cluster.
+      #
+      # pyspark pinned to the image tag. A client/server version skew across
+      # Connect fails in ways that read like a bug in this repo.
+      - name: Install the client (pyspark pinned to the cluster's version)
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet "pyspark[connect]==${SPARK_IMAGE_TAG}"
+          python -m pip install --quiet -e 'packages/python/goldenmatch[spark]'
+          python -m pip install --quiet pytest pytest-timeout
+          python -c "import pyspark; print('client pyspark', pyspark.__version__)"
+
+      - name: Build the jar
+        env:
+          SO_X86_64: packages/rust/extensions/score-jni/target/release/libgoldenmatch_score_jni.so
+          SO_AARCH64: /tmp/jni-aarch64/libgoldenmatch_score_jni.so
+        run: |
+          set -euo pipefail
+          export SPARK_JARS="$(python -c 'import pyspark, os; print(os.path.join(os.path.dirname(pyspark.__file__), "jars"))')"
+          bash scripts/build_spark_jar.sh
+
+      - name: Start the cluster
+        run: docker compose -f docker/spark-cluster/docker-compose.yml up -d
+
+      # Readiness is polled HERE rather than by a container healthcheck, so a
+      # failure names the condition that was never met instead of surfacing as a
+      # compose timeout. Two separate conditions, because they fail for
+      # different reasons and have different fixes.
+      - name: Wait for both workers to REGISTER with the master
+        run: |
+          set -euo pipefail
+          # Not "is the port open" -- a standalone master with zero registered
+          # workers accepts a job and QUEUES IT FOREVER. That is a hung lane,
+          # which is strictly worse than a failed one, and this repo already
+          # carries a pytest --timeout for exactly that lesson.
+          for i in $(seq 1 60); do
+            n="$(curl -sf http://localhost:8080/json/ | python -c 'import json,sys; print(json.load(sys.stdin).get("aliveworkers", 0))' 2>/dev/null || echo 0)"
+            echo "  attempt $i: aliveworkers=$n"
+            [ "$n" -ge 2 ] && { echo "cluster ready with $n workers"; exit 0; }
+            sleep 5
+          done
+          echo "::error::the master never registered 2 workers"
+          docker compose -f docker/spark-cluster/docker-compose.yml logs --tail=80
+          exit 1
+
+      - name: Wait for the Spark Connect server
+        run: |
+          set -euo pipefail
+          # One line on purpose. A multi-line `python -c "..."` inside an `if`
+          # has to survive YAML block-scalar dedent AND shell quoting, and this
+          # file already carries two bugs from that class.
+          PROBE="from pyspark.sql import SparkSession; s=SparkSession.builder.remote('sc://localhost:15002').getOrCreate(); print('connect up, rows:', s.range(1).count())"
+          for i in $(seq 1 60); do
+            if python -c "$PROBE"; then
+              exit 0
+            fi
+            echo "  attempt $i: connect server not up yet"
+            sleep 5
+          done
+          echo "::error::the Spark Connect server never accepted a session"
+          docker compose -f docker/spark-cluster/docker-compose.yml logs spark-connect --tail=120
+          exit 1
+
+      # THE assertion that this lane is testing something the local one cannot.
+      # Runs before anything else: if the executor turns out to be the driver,
+      # every result below would be a `local[*]` result wearing a cluster's name.
+      - name: Assert the executor is NOT the driver
+        env:
+          GOLDENMATCH_SPARK_REMOTE: "sc://localhost:15002"
+          GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pyspark.sql import SparkSession
+          from goldenmatch.spark.jvm import find_jar, implementation, install
+
+          spark = SparkSession.builder.remote("sc://localhost:15002").getOrCreate()
+          install(spark, jar=find_jar())
+          impl, diagnostics, runtime = implementation(spark)
+          print(f"impl={impl}\nruntime={runtime}\ndiagnostics={diagnostics}")
+
+          tokens = dict(
+              t.split("=", 1) for t in runtime.split() if "=" in t
+          )
+          exec_id = tokens.get("exec", "?")
+          if exec_id in ("driver", "?"):
+              raise SystemExit(
+                  f"::error::the probe answered from exec={exec_id!r}. This lane "
+                  f"exists to test a real executor; a driver answer means the "
+                  f"session degraded to local mode and every result below would "
+                  f"be a local[*] result under a cluster's name."
+              )
+          if impl != "NativeScorer":
+              raise SystemExit(
+                  f"::error::executor {exec_id} resolved {impl!r}, not NativeScorer. "
+                  f"The jar reached the executor but its native library did not "
+                  f"load THERE: {diagnostics}"
+              )
+          print(f"OK: executor {exec_id} loaded the native kernel from the shipped jar")
+          PY
+
+      - name: JVM parity + scoring, on the cluster
+        env:
+          GOLDENMATCH_SPARK_REMOTE: "sc://localhost:15002"
+          GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
+        run: |
+          set -euo pipefail
+          python -m pytest -v --timeout=600 --timeout-method=thread \
+            packages/python/goldenmatch/tests/test_spark_jvm_native_parity.py \
+            packages/python/goldenmatch/tests/test_spark_jvm_parity.py
+
+      # The inventory against REAL workers. Note there is no
+      # GOLDENMATCH_SPARK_PYENV here and that is the point: these containers are
+      # stock Spark images with no goldenmatch and no pyarrow, so "needs a
+      # Python worker" fails on its own rather than because an empty virtualenv
+      # was shipped to make it fail. The local lane can only simulate this.
+      - name: Inventory -- what runs with no Python on REAL executors
+        continue-on-error: true
+        env:
+          GOLDENMATCH_SPARK_REMOTE: "sc://localhost:15002"
+          GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
+          GOLDENMATCH_SPARK_PYENV: "none"
+        run: |
+          python scripts/spark_jar_only_inventory.py \
+            --out spark-cluster-inventory.json
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo '## Spark cluster lane'
+            echo ''
+            echo "image: \`apache/spark:${SPARK_IMAGE_TAG}\`, 1 master + 2 workers + Connect"
+            if [ -f spark-cluster-inventory.json ]; then
+              echo ''
+              echo '```json'
+              cat spark-cluster-inventory.json
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Always, and BEFORE teardown. A cluster lane that fails without its logs
+      # costs a full re-run to learn anything, and each re-run is a 1.5GB pull.
+      - name: Container logs
+        if: always()
+        run: docker compose -f docker/spark-cluster/docker-compose.yml logs --tail=200
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker/spark-cluster/docker-compose.yml down -v
