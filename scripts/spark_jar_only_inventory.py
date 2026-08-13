@@ -54,6 +54,28 @@ def _rows():
     ]
 
 
+def _consume(df, col: str) -> list:
+    """Collect ``col`` and return its values, forcing whatever produced it to run.
+
+    **A probe must never end in ``.count()``.** Counting rows does not need any
+    particular column, so Catalyst prunes the ones nobody reads -- and a
+    deterministic side-effect-free UDF is exactly what it is entitled to prune.
+    A probe that counts therefore reports WORKS for a Python UDF that never
+    executed, which is the opposite of what this inventory exists to find.
+
+    That is not hypothetical. The first run of this script reported 6 of 7
+    probes working with an empty executor env, including normalization,
+    survivorship and identity -- all three of which define ``arrow_udf``s and
+    cannot possibly work without a Python worker. They were pruned. (The same
+    mistake had already been found and fixed one file over, in the batched-plan
+    bisect, hours earlier.)
+
+    So every probe routes through here: collect the values and hand them back,
+    so the column is load-bearing and the UDF has to run.
+    """
+    return [r[0] for r in df.select(col).collect()]
+
+
 def _probe_pure_spark_sql(spark, df, ctx):
     """A block self-join: no UDF of any kind. The control -- if this fails, the
     session is broken and every other result here is meaningless."""
@@ -99,7 +121,8 @@ def _probe_python_scoring(spark, df, ctx):
         df, block_col="blk", value_col="name", id_col="__row_id__",
         scorer_name="jaro_winkler", threshold=0.0,
     )
-    return f"{out.count()} scored pairs"
+    scores = _consume(out, "score")
+    return f"{len(scores)} scored pairs, max={max(scores):.4f}"
 
 
 def _probe_clustering(spark, df, ctx):
@@ -109,7 +132,8 @@ def _probe_clustering(spark, df, ctx):
 
     edges = spark.createDataFrame([(0, 1), (1, 2), (3, 4)], "a long, b long")
     out = connected_components(edges, df, id_col="__row_id__")
-    return f"{out.count()} labelled nodes"
+    labels = _consume(out, out.columns[-1])
+    return f"{len(labels)} labelled nodes, {len(set(labels))} components"
 
 
 def _probe_normalization(spark, df, ctx):
@@ -117,8 +141,11 @@ def _probe_normalization(spark, df, ctx):
     transform chain. Needs a Python worker."""
     from goldenmatch.spark.config_pipeline import _transformed
 
-    out = df.select(_transformed(df["name"], ["lowercase", "strip_punctuation"]))
-    return f"{out.count()} normalized values"
+    out = df.select(
+        _transformed(df["name"], ["lowercase", "strip_punctuation"]).alias("v")
+    )
+    vals = _consume(out, "v")
+    return f"{len(vals)} normalized values, e.g. {vals[0]!r}"
 
 
 def _probe_survivorship(spark, df, ctx):
@@ -127,8 +154,9 @@ def _probe_survivorship(spark, df, ctx):
     from pyspark.sql import functions as F
 
     merge = make_merge_udf("most_common")
-    out = df.groupBy("blk").agg(F.collect_list("city").alias("city"))
-    return f"{out.select(merge(F.col('city'))).count()} merged groups"
+    grouped = df.groupBy("blk").agg(F.collect_list("city").alias("city"))
+    vals = _consume(grouped.select(merge(F.col("city")).alias("v")), "v")
+    return f"{len(vals)} merged groups, e.g. {vals[0]!r}"
 
 
 def _probe_identity_record_ids(spark, df, ctx):
@@ -141,7 +169,8 @@ def _probe_identity_record_ids(spark, df, ctx):
     # true but misleading result.
     src = df.withColumn("__source__", F.lit("probe"))
     out = derive_record_ids(src, id_col="__row_id__")
-    return f"{out.count()} record ids"
+    ids = _consume(out, "record_id")
+    return f"{len(ids)} record ids, e.g. {ids[0]!r}"
 
 
 #: name -> (callable, what a failure MEANS). The second half matters: a failure
