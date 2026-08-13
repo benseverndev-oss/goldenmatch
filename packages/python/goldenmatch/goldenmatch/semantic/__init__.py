@@ -103,6 +103,16 @@ from goldenmatch.semantic.metricflow import (
     emit_semantic_model,
     parse_semantic_models,
 )
+from goldenmatch.semantic.ontology import (
+    Ontology,
+    OntologyClass,
+    OntologyProperty,
+    certify_ontology_keys,
+    emit_identity_shacl,
+    emit_sameas_graph,
+    ontology_identity_keys,
+    parse_ontology,
+)
 from goldenmatch.semantic.osi import (
     OsiDataset,
     OsiField,
@@ -184,6 +194,15 @@ __all__ = [
     "CubeDimension",
     "CubeMeasure",
     "CubeJoin",
+    # ontology layer — RDF/OWL/SHACL native identity provider (bidirectional)
+    "parse_ontology",
+    "ontology_identity_keys",
+    "certify_ontology_keys",
+    "emit_sameas_graph",
+    "emit_identity_shacl",
+    "Ontology",
+    "OntologyClass",
+    "OntologyProperty",
     # semantic-model discovery (Phase 1) — certified key discovery per table
     "discover_keys",
     "KeyCandidate",

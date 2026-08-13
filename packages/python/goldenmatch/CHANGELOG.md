@@ -7,6 +7,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **Ontology-layer (RDF/OWL/SHACL) native identity provider
+  (`goldenmatch.semantic.ontology`).** The semantic-layer wedge one level up: an
+  ontology *asserts* identity (`owl:hasKey`, `owl:InverseFunctionalProperty`,
+  `owl:sameAs`) but resolves it only by brittle exact-match. GoldenMatch fills
+  the gap bidirectionally — **consume** an OWL/RDF ontology to extract its
+  declared identifying keys (`parse_ontology`, `ontology_identity_keys`) and
+  certify exactly those keys against instance data
+  (`certify_ontology_keys`, bridging the key-integrity certifier); **emit** the
+  resolved identity as RDF (`emit_sameas_graph`: `owl:sameAs` + W3C PROV-O
+  provenance) and a conformance shape (`emit_identity_shacl`). `rdflib` is an
+  optional dependency (`pip install goldenmatch[ontology]`), lazy-imported so
+  `from goldenmatch.semantic import …` never requires it; GoldenMatch does not
+  reimplement an OWL reasoner or triple store — it is the identity provider for
+  them. Library-only, advisory. See ADR 0053.
 - **`strategy="token"`: DF-pruned token blocking for free text (#2488).** Every
   candidate the block analyzer can generate is an *exact* key -- a prefix, a
   soundex code, or a compound of two -- so each record lands in exactly one

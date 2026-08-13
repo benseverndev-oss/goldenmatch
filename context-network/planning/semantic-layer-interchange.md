@@ -1,12 +1,24 @@
-# Semantic Layering (MetricFlow / Cube / OSI) — brainstorm / planning
+# Semantic Layering (MetricFlow / Cube / OSI / Ontology) — brainstorm / planning
 
 > **Status:** wedges **A + B + C** SHIPPED + **follow-ons** (Cube dialect, OSI
-> conformance validation) — decisions
+> conformance validation) + the **ontology layer** (RDF/OWL/SHACL) — decisions
 > [0049](../decisions/0049-metric-aware-key-certification.md) (certify) +
 > [0050](../decisions/0050-resolved-crosswalk-emit.md) (resolve once + emit) +
 > [0051](../decisions/0051-osi-ossie-native-provider.md) (OSI/Ossie provider) +
 > [0052](../decisions/0052-cube-dialect-and-osi-validation.md) (Cube dialect +
-> OSI validation).
+> OSI validation) +
+> [0053](../decisions/0053-ontology-layer-rdf-owl-provider.md) (ontology layer:
+> RDF/OWL/SHACL native identity provider).
+>
+> **Ontology layer (0053)** — the semantic-layer thesis one level up (TBox/ABox):
+> an ontology *asserts* identity (`owl:hasKey`, `owl:InverseFunctionalProperty`,
+> `owl:sameAs`) but resolves it only by brittle exact-match. `parse_ontology` +
+> `ontology_identity_keys` (consume the declared identifying keys),
+> `certify_ontology_keys` (bridge to A — certify exactly those keys),
+> `emit_sameas_graph` (bridge to B — `owl:sameAs` + PROV-O), `emit_identity_shacl`
+> (conformance shape). `rdflib` optional (`goldenmatch[ontology]`); GoldenMatch is
+> the identity provider FOR the reasoner/triple store, never a reimplementation of
+> one.
 > Captures the framing for how GoldenMatch relates to the semantic-layer /
 > metrics-layer ecosystem (dbt Semantic Layer + MetricFlow, Cube, and the Open
 > Semantic Interchange spec), and a crawl→walk→run plan. Problem **A**

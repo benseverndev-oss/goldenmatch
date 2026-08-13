@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 467,
+      "module_count": 468,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7151,6 +7151,7 @@
             "goldenmatch.semantic.discovery",
             "goldenmatch.semantic.key_integrity",
             "goldenmatch.semantic.metricflow",
+            "goldenmatch.semantic.ontology",
             "goldenmatch.semantic.osi",
             "goldenmatch.semantic.serving"
           ]
@@ -7590,6 +7591,28 @@
           ],
           "imports": [
             "goldenmatch.core.key_integrity_certificate"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.ontology",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/ontology.py",
+          "purpose": "Ontology-layer (RDF / OWL / SHACL) native identity provider.",
+          "defines": [
+            "Ontology",
+            "OntologyClass",
+            "OntologyProperty",
+            "_crosswalk_rows",
+            "_load_graph",
+            "_local",
+            "_require_rdflib",
+            "certify_ontology_keys",
+            "emit_identity_shacl",
+            "emit_sameas_graph",
+            "ontology_identity_keys",
+            "parse_ontology"
+          ],
+          "imports": [
+            "goldenmatch.semantic.key_integrity"
           ]
         },
         {
