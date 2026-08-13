@@ -3145,8 +3145,24 @@ jobs:
           # separate `uv pip install` as before. Shipping executor deps is the
           # whole reason the extra carries it, so resolving it from the extra is
           # what proves a user following the docs gets a working tool.
-          .venv/bin/venv-pack -p /tmp/gmenv -o gm_env.tar.gz --force
-          ls -lh gm_env.tar.gz
+          #
+          # .zip, NOT .tar.gz, and the extension is load-bearing (#2531).
+          # `bin/python` in a venv is a SYMLINK to the interpreter the venv was
+          # built against. venv-pack's tar preserves that symlink, so the
+          # archive unpacks on an executor and then cannot execute -- it points
+          # at /opt/hostedtoolcache on this runner. Its zip writer dereferences
+          # the link instead (`ZipArchive.add_link` only preserves one under
+          # --zip-symlinks), so the interpreter travels BY VALUE.
+          #
+          # The exec bit survives: venv-pack stamps create_system=3 with the
+          # unix mode, Spark routes .zip to Hadoop's FileUtil.unZip, and that
+          # restores POSIX permissions for UNIX-platform entries (HADOOP-18145).
+          #
+          # This lane ran on tar.gz for months without noticing, because under
+          # local[*] the executor IS the driver and the symlink resolves. Do not
+          # switch it back.
+          .venv/bin/venv-pack -p /tmp/gmenv -o gm_env.zip --force
+          ls -lh gm_env.zip
       # BOTH prefixes. The package renamed in P2 but the test files did not, so
       # the tier's suite is split across test_sail_*.py (pre-rename) and
       # test_spark_*.py (P1's executor-dependency tests, which this lane was NOT
@@ -3284,13 +3300,13 @@ jobs:
             echo "::error::the bare env can import goldenmatch; the inventory would be meaningless"
             exit 1
           fi
-          .venv/bin/venv-pack -p /tmp/bare-env -o bare_env.tar.gz --force
-          ls -lh bare_env.tar.gz
+          .venv/bin/venv-pack -p /tmp/bare-env -o bare_env.zip --force
+          ls -lh bare_env.zip
       - name: Inventory -- what runs with NO Python on the executors
         continue-on-error: true
         env:
           GOLDENMATCH_SPARK_REMOTE: "local[*]"
-          GOLDENMATCH_SPARK_PYENV: "bare_env.tar.gz"
+          GOLDENMATCH_SPARK_PYENV: "bare_env.zip"
           GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
         run: |
           .venv/bin/python scripts/spark_jar_only_inventory.py \
@@ -3309,7 +3325,7 @@ jobs:
       - name: Tier tests against Apache Spark Connect
         env:
           GOLDENMATCH_SPARK_REMOTE: "local[*]"
-          GOLDENMATCH_SPARK_PYENV: "gm_env.tar.gz"
+          GOLDENMATCH_SPARK_PYENV: "gm_env.zip"
           GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
         run: |
           .venv/bin/python -m pytest \

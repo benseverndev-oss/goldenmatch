@@ -135,15 +135,15 @@ jobs:
           # silently if this is ever untrue.
           (cd /tmp && /tmp/gmenv/bin/python -c "import goldenmatch_native, goldenmatch_native._native; print('worker HAS the Rust kernel')") \
             || { echo "::error::the shipped executor env has no goldenmatch-native; the NATIVE row_python arm would score with the pure floor and be labelled native"; exit 1; }
-          .venv/bin/venv-pack -p /tmp/gmenv -o gm_env.tar.gz --force
-          ls -lh gm_env.tar.gz
+          .venv/bin/venv-pack -p /tmp/gmenv -o gm_env.zip --force
+          ls -lh gm_env.zip
 
       - name: Diagnose the batched plan (mode=diag)
         if: inputs.mode == 'diag'
         env:
           GOLDENMATCH_SPARK_REMOTE: "local[*]"
           SPARK_DRIVER_MEMORY: "${{ inputs.driver_memory }}"
-          GOLDENMATCH_SPARK_PYENV: "gm_env.tar.gz"
+          GOLDENMATCH_SPARK_PYENV: "gm_env.zip"
           GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
           GOLDENMATCH_NATIVE: "0"
         run: |
@@ -161,7 +161,7 @@ jobs:
         env:
           GOLDENMATCH_SPARK_REMOTE: "local[*]"
           SPARK_DRIVER_MEMORY: "${{ inputs.driver_memory }}"
-          GOLDENMATCH_SPARK_PYENV: "gm_env.tar.gz"
+          GOLDENMATCH_SPARK_PYENV: "gm_env.zip"
           GOLDENMATCH_NATIVE: "0"
         run: |
           .venv/bin/python scripts/bench_spark_scoring.py --path row_python --scorer jaro_winkler --native 0             --rows '${{ inputs.rows }}' --block-size '${{ inputs.block_size }}'             --repeats '${{ inputs.repeats }}' --out bench-row_python.json
@@ -174,7 +174,7 @@ jobs:
         env:
           GOLDENMATCH_SPARK_REMOTE: "local[*]"
           SPARK_DRIVER_MEMORY: "${{ inputs.driver_memory }}"
-          GOLDENMATCH_SPARK_PYENV: "gm_env.tar.gz"
+          GOLDENMATCH_SPARK_PYENV: "gm_env.zip"
         run: |
           .venv/bin/python scripts/bench_spark_scoring.py --path row_python --scorer jaro_winkler --native 1             --rows '${{ inputs.rows }}' --block-size '${{ inputs.block_size }}'             --repeats '${{ inputs.repeats }}' --out bench-row_python_native.json
 
@@ -183,7 +183,7 @@ jobs:
         env:
           GOLDENMATCH_SPARK_REMOTE: "local[*]"
           SPARK_DRIVER_MEMORY: "${{ inputs.driver_memory }}"
-          GOLDENMATCH_SPARK_PYENV: "gm_env.tar.gz"
+          GOLDENMATCH_SPARK_PYENV: "gm_env.zip"
           GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
           GOLDENMATCH_NATIVE: "0"
         run: |

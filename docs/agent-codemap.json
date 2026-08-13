@@ -7867,7 +7867,14 @@
           "file": "packages/python/goldenmatch/goldenmatch/spark/deps.py",
           "purpose": "Ship the client's Python environment to Spark executors (P1).",
           "defines": [
+            "ExternalInterpreterError",
+            "_archive_members",
+            "_external_interpreter_message",
+            "_find_interpreter",
+            "_is_absolute",
+            "_normalise",
             "executor_probe",
+            "inspect_environment_archive",
             "ship_python_environment"
           ],
           "imports": [
