@@ -117,6 +117,28 @@ def _deduped(df, pairs, batch_size, udf_name, scorer_id):
     return flat.groupBy("a", "b").agg(F.max("score").alias("score"))
 
 
+def _shipped(df, pairs, batch_size, udf_name, scorer_id):
+    """Stages 1-6 rebuilt through the SHIPPED functions, not this file's copies.
+
+    Everything above is a reimplementation. That is deliberate -- rebuilding the
+    plan locally is what lets a single operator be isolated -- but it makes every
+    stage above a LOOKALIKE, and this project's own lesson from the last round of
+    this investigation was to measure the shipped basis rather than something
+    adjacent to it.
+
+    So if stage 6 passes and this fails, the difference is not in the plan at
+    all: it is in `batched.py`, and the bisect above has been exonerating code
+    that never ran.
+    """
+    from goldenmatch.spark.batched import dedup_max, score_pairs_batched
+
+    scored = score_pairs_batched(
+        pairs, df, id_col=_ID, value_col="name",
+        scorer_id=scorer_id, udf_name=udf_name, batch_size=batch_size,
+    )
+    return dedup_max(scored)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--rows", type=int, default=200_000)
@@ -155,7 +177,27 @@ def main(argv=None) -> int:
         # isolation fix, rather than fixing two things and learning nothing.
         ("6 + dedup_max (groupBy a,b)",
          lambda: _deduped(df, pairs, args.batch_size, udf_name, sid).count()),
+        # The whole thing through the SHIPPED functions. If 6 passes and this
+        # fails, the plan is innocent and `batched.py` differs from the copy
+        # above in some way this bisect has been blind to.
+        ("7 SHIPPED score_pairs_batched + dedup_max",
+         lambda: _shipped(df, pairs, args.batch_size, udf_name, sid).count()),
     ]
+
+    # The heap ceiling, before anything else. An OOM at an unknown heap size
+    # measures a configuration rather than a design, and `local[*]` takes
+    # Spark's default (1g) unless SPARK_DRIVER_MEMORY was set before the JVM
+    # launched -- a client-side `spark.driver.memory` is too late to change -Xmx.
+    # A Connect client has no SparkContext to ask, but the jar's probe runs IN
+    # the JVM that knows.
+    try:
+        from goldenmatch.spark.jvm import implementation
+
+        impl, diagnostics, runtime = implementation(spark)
+        print(f"\nexecutor JVM: {runtime}\nscorer: {impl}\n  {diagnostics}",
+              flush=True)
+    except Exception as exc:  # noqa: BLE001 - diagnostics must never be fatal
+        print(f"\ncould not read the executor JVM info: {exc}", flush=True)
 
     print(f"\nrows={args.rows:,} block_size={args.block_size} "
           f"batch_size={args.batch_size:,}", flush=True)

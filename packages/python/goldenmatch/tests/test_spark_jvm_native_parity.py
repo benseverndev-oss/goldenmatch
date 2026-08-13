@@ -120,13 +120,18 @@ def test_the_executor_resolved_the_native_scorer(spark, registered):
     from an EXECUTOR -- a driver that loads the library says nothing about a
     cluster whose executors cannot.
     """
-    name, diagnostics = implementation(spark)
+    name, diagnostics, runtime = implementation(spark)
+    print(f"\n  executor: {name} | {runtime}\n  {diagnostics}")
     assert name == NATIVE_IMPL, (
         f"the executor resolved {name!r}, not {NATIVE_IMPL!r}. Diagnostics: "
         f"{diagnostics}. A {FALLBACK_IMPL} here means the native library did not "
         f"load, and every parity assertion below would be testing the J0 jar."
     )
     assert diagnostics, "the probe returned no diagnostics"
+    # The heap ceiling decides how a batched-path result is read -- that path
+    # materialises groups in JVM heap -- and a Connect client cannot ask any
+    # other way.
+    assert "heap_max=" in runtime, f"no heap ceiling reported: {runtime!r}"
 
 
 @pytest.mark.parametrize("scorer", SCORERS)

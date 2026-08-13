@@ -26,12 +26,16 @@ import org.apache.spark.sql.api.java.UDF1;
 public final class GoldenScoreImplUdf implements UDF1<Integer, String> {
 
   /** @param ignored a column reference, present only to defeat constant folding
-   *  @return {@code "<ImplementationName>|<diagnostics>"} -- one string because
-   *      a UDF returns one value, and the two are useless apart: the name says
-   *      what ran, the diagnostics say why */
+   *  @return {@code "<name>|<diagnostics>|<runtime>"} -- one string because a
+   *      UDF returns one value, and the three are useless apart: the name says
+   *      what ran, the diagnostics say why, and the runtime says on what. The
+   *      last is not decoration: the batched scoring path materialises groups in
+   *      JVM heap, so a result is uninterpretable without knowing the heap
+   *      ceiling, and a Connect client has no other way to ask. */
   @Override
   public String call(Integer ignored) {
     return GoldenScoreUdf.implementationName() + "|"
-        + GoldenScoreUdf.implementationDiagnostics();
+        + GoldenScoreUdf.implementationDiagnostics() + "|"
+        + ScorerSelection.runtimeInfo();
   }
 }

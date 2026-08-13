@@ -55,15 +55,35 @@ def main(argv: list[str] | None = None) -> int:
         print("   so this is the section-1 differentiator on its own.)")
 
     rj = jvm["timing"]["median_s"]
-    if rj:
+    # The comparison this arc was built for. Both arms now run the same scorer
+    # (J2 removed the `exact`-only restriction), so the ONLY difference left is
+    # where the kernel runs: in a forked Python worker behind an Arrow
+    # serialisation hop, or in the executor JVM behind a JNI downcall.
+    like_for_like = pure.get("scorer") == jvm.get("scorer")
+    if rj and like_for_like:
+        print(f"  batched_jvm vs row_python (pure):   {rp / rj:.2f}x")
+        if rn:
+            print(f"  batched_jvm vs row_python (NATIVE): {rn / rj:.2f}x")
+            print("  (the honest one: same kernel both sides, so the ratio is")
+            print("   the HOP -- Arrow serialise + fork + interpreter -- alone.)")
+    elif rj:
         print(f"  batched_jvm vs pure row_python: {rp / rj:.2f}x")
-    print()
-    print("  CAVEAT, load-bearing: batched_jvm scores `exact` while both")
-    print("  row_python arms score jaro_winkler, because the J0 jar carries no")
-    print("  algorithms of its own. The JVM comparison is CALLING MECHANISM only")
-    print("  and flatters the JVM arm; like-for-like needs J2. The pure-vs-native")
-    print("  comparison above has no such caveat -- it is the same code path")
-    print("  twice with one flag changed.")
+        print(f"  NOT like-for-like: batched_jvm ran {jvm.get('scorer')!r}, "
+              f"row_python ran {pure.get('scorer')!r}.")
+
+    impl = jvm.get("jvm_impl")
+    if impl and impl != "NativeScorer":
+        print()
+        print(f"  WARNING: the JVM arm resolved {impl}, not NativeScorer -- it")
+        print("  fell back to the J0 `exact`-only scorer and this ratio is not")
+        print("  measuring the kernel.")
+    if jvm.get("jvm_runtime"):
+        print()
+        print(f"  executor JVM: {jvm['jvm_runtime']}")
+        print("  (heap matters: the batched path materialises each group as an")
+        print("   array in JVM heap, so its ceiling is a property of the")
+        print("   executor rather than of the design. An OOM at an unknown heap")
+        print("   size measures a configuration, not an architecture.)")
 
     with open(out_path, "w", encoding="utf-8") as fh:
         json.dump(
@@ -71,8 +91,10 @@ def main(argv: list[str] | None = None) -> int:
                 "row_python_pure": pure,
                 "row_python_native": native,
                 "batched_jvm": jvm,
+                "like_for_like": like_for_like,
                 "native_speedup": (rp / rn) if rn else None,
                 "jvm_vs_pure": (rp / rj) if rj else None,
+                "jvm_vs_native": (rn / rj) if (rj and rn) else None,
             },
             fh,
             indent=2,

@@ -10,22 +10,37 @@ is the harness that stops that being an assertion.
     row_python    the shipped path: `score_and_dedup`, a pandas_udf. Spark
                   serialises an Arrow batch to a FORKED PYTHON WORKER, which
                   calls the scorer and sends results back.
-    batched_jvm   J1's plan through J0's jar: pairs grouped into arrays, one
-                  Java UDF call per batch, IN the executor JVM.
+    batched_jvm   J1's plan through the J2 jar: pairs grouped into arrays, one
+                  Java UDF call per batch, scored by the Rust kernel over JNI,
+                  IN the executor JVM. No Python worker at all.
 
 Both compute the same thing over the same pairs, so the delta is the mechanism.
 
-## What it does NOT yet compare
+## Like-for-like, at last
 
-Native scoring. J0's jar implements `exact` only, deliberately -- a Java
-jaro-winkler would be a fourth implementation of a kernel that exists once in
-Rust. So this measures the CALLING MECHANISM (Python worker vs in-JVM) with the
-scoring held trivial, which is the honest question at this stage: if crossing to
-a Python worker is not the bottleneck, J2's JNI work buys little, and it is
-better to know that before writing it.
+This bench used to carry a load-bearing caveat: J0's jar implemented `exact`
+only -- deliberately, because a Java jaro-winkler would have been a fourth
+implementation of a kernel that exists once in Rust -- so the arms could not run
+the same scorer. It measured the CALLING MECHANISM with the work held trivial,
+and every reading of it had to be hedged.
 
-`exact` being cheap makes the comparison HARSHER on the JVM path, not kinder:
-with almost no work per pair, per-call overhead is the whole signal.
+J2 removed that. Both arms now run `jaro_winkler` by default (`--scorer`), and
+the difference between them is the mechanism alone:
+
+    row_python    Arrow batch -> serialise -> FORKED PYTHON WORKER -> Rust
+                  (via the pyo3 wheel, when GOLDENMATCH_NATIVE=1 and the
+                  shipped executor env carries it) -> serialise back
+    batched_jvm   array UDF -> Rust, in the same JVM, no hop
+
+Same kernel at the bottom of both. `score_one` either way.
+
+## The arm asserts what it is
+
+The jar falls back to the `exact`-only scorer when its native library will not
+load. Benching that against a native row_python arm would produce a number for
+the wrong thing, which is worse than no number because it looks like one -- so
+the arm asks the EXECUTOR what it resolved and refuses to run if it is not the
+kernel.
 
 ## One arm per PROCESS, and why
 
@@ -110,25 +125,33 @@ def _candidate_pairs(df):
     ).select(F.col(f"a.{_ID}").alias("a"), F.col(f"b.{_ID}").alias("b"))
 
 
-def _row_python(spark, df):
-    """The shipped path: pandas_udf -> forked Python worker."""
+def _row_python(df, scorer_name: str):
+    """The shipped path: arrow_udf -> forked Python worker."""
     from goldenmatch.spark.scoring import score_and_dedup
 
     out = score_and_dedup(
         df, block_col="blk", value_col="name", id_col=_ID,
-        scorer_name="jaro_winkler", threshold=0.0,
+        scorer_name=scorer_name, threshold=0.0,
     )
     return out.count()
 
 
-def _batched_jvm(spark, df, udf_name):
-    """J1's plan through J0's jar: one call per batch, in the executor JVM."""
+def _batched_jvm(spark, df, udf_name, scorer_name: str):
+    """J1's plan through the J2 jar: one call per batch, in the executor JVM,
+    scoring with the Rust kernel over JNI.
+
+    ``scorer_name`` is ``jaro_winkler`` by default now, NOT ``exact``. J0's jar
+    carried no algorithms, so the only scorer both arms could run was string
+    equality -- which measured the calling mechanism with the work held trivial
+    and left "like-for-like needs J2" as this bench's load-bearing caveat. J2
+    removed it, so the arms can finally do the same work.
+    """
     from goldenmatch.spark.batched import dedup_max, score_pairs_batched
     from goldenmatch.spark.jvm import scorer_id
 
     scored = score_pairs_batched(
         _candidate_pairs(df), df, id_col=_ID, value_col="name",
-        scorer_id=scorer_id("exact"), udf_name=udf_name,
+        scorer_id=scorer_id(scorer_name), udf_name=udf_name,
     )
     return dedup_max(scored).count()
 
@@ -148,6 +171,14 @@ def main(argv=None) -> int:
              "this on the driver alone changes nothing.",
     )
     ap.add_argument(
+        "--scorer",
+        default="jaro_winkler",
+        help="Scorer BOTH arms run. Defaults to jaro_winkler now that J2 exists: "
+             "J0's jar carried no algorithms, so the only scorer both arms could "
+             "run was `exact`, and this bench's load-bearing caveat was that "
+             "like-for-like needed J2.",
+    )
+    ap.add_argument(
         "--path",
         choices=["row_python", "batched_jvm"],
         required=True,
@@ -161,7 +192,13 @@ def main(argv=None) -> int:
     # happened would have resolved it under the old value.
     os.environ["GOLDENMATCH_NATIVE"] = args.native
 
-    from goldenmatch.spark.jvm import JvmScorerUnavailable, find_jar, install
+    from goldenmatch.spark.jvm import (
+        NATIVE_IMPL,
+        JvmScorerUnavailable,
+        find_jar,
+        implementation,
+        install,
+    )
     from pyspark.sql import SparkSession
 
     remote = os.environ.get("GOLDENMATCH_SPARK_REMOTE", "local[*]")
@@ -209,9 +246,12 @@ def main(argv=None) -> int:
         "native": args.native,
     }
 
+    results["scorer"] = args.scorer
+
     if args.path == "row_python":
-        print("[row_python] arrow_udf -> forked Python worker", flush=True)
-        results["timing"] = _time(lambda: _row_python(spark, df),
+        print(f"[row_python] arrow_udf -> forked Python worker, "
+              f"scorer={args.scorer}", flush=True)
+        results["timing"] = _time(lambda: _row_python(df, args.scorer),
                                   repeats=args.repeats)
     else:
         try:
@@ -219,9 +259,30 @@ def main(argv=None) -> int:
         except JvmScorerUnavailable as exc:
             print(f"::error::no JVM scorer jar: {exc}")
             return 2
-        print("[batched_jvm] array UDF, in the executor JVM", flush=True)
-        results["timing"] = _time(lambda: _batched_jvm(spark, df, udf_name),
-                                  repeats=args.repeats)
+
+        # REFUSE to bench the fallback. The jar drops to the `exact`-only J0
+        # scorer when its native library will not load, which keeps a job alive
+        # and would leave this arm reporting a number for the wrong thing --
+        # against an arm doing real jaro-winkler work. That is worse than no
+        # number, because it looks like one.
+        impl, diagnostics, runtime = implementation(spark)
+        results["jvm_impl"] = impl
+        results["jvm_runtime"] = runtime
+        print(f"  executor: {impl} | {runtime}\n  {diagnostics}", flush=True)
+        if impl != NATIVE_IMPL:
+            print(
+                f"::error::the executor resolved {impl}, not {NATIVE_IMPL}. "
+                f"This arm would be measuring the J0 fallback against a native "
+                f"row_python arm. Diagnostics: {diagnostics}"
+            )
+            return 3
+
+        print(f"[batched_jvm] array UDF, in the executor JVM, "
+              f"scorer={args.scorer}", flush=True)
+        results["timing"] = _time(
+            lambda: _batched_jvm(spark, df, udf_name, args.scorer),
+            repeats=args.repeats,
+        )
 
     # Report what the kernel ACTUALLY resolved to, not what was asked for. A
     # missing wheel silently yields the pure floor, and a bench that reports the

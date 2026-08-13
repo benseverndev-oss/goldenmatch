@@ -58,4 +58,33 @@ public final class ScorerSelection {
   public static String diagnostics() {
     return NativeLibrary.diagnostics();
   }
+
+  /** The JVM this scorer is running in: version, heap ceiling, CPU count.
+   *
+   * <h2>Why a scorer reports heap</h2>
+   *
+   * Because nothing else can, and the number decides how results are read. The
+   * batched path materialises each group as an array in JVM heap, so its memory
+   * ceiling is a property of the executor, not of the algorithm -- and a
+   * benchmark that OOMs at an unknown heap size has measured a configuration
+   * rather than a design.
+   *
+   * <p>That is not hypothetical here: the batched arm of this arc's benchmark
+   * died with {@code java.lang.OutOfMemoryError: Java heap space} while the
+   * row-shaped arm completed the same workload on the same box, and nobody knew
+   * what heap either had. A Spark Connect client cannot ask -- there is no
+   * {@code SparkContext} to interrogate -- but a UDF is already running in the
+   * JVM that has the answer.
+   *
+   * <p>{@code maxMemory()} is the ceiling the JVM will grow to (i.e. {@code -Xmx}),
+   * which is the number that matters; {@code totalMemory()} is only what it has
+   * committed so far and would read as a much smaller, misleading limit.
+   */
+  public static String runtimeInfo() {
+    Runtime rt = Runtime.getRuntime();
+    long maxMb = rt.maxMemory() / (1024L * 1024L);
+    return "java=" + System.getProperty("java.version", "?")
+        + " heap_max=" + maxMb + "MB"
+        + " cpus=" + rt.availableProcessors();
+  }
 }

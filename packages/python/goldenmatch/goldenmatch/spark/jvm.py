@@ -147,11 +147,18 @@ def install(spark: object, *, jar: str | os.PathLike[str] | None = None,
     return name
 
 
-def implementation(spark: object) -> tuple[str, str]:
-    """Ask an **executor** which scorer it resolved, and why.
+def implementation(spark: object) -> tuple[str, str, str]:
+    """Ask an **executor** which scorer it resolved, why, and on what.
 
-    Returns ``(implementation_name, diagnostics)`` -- see :data:`NATIVE_IMPL` and
-    :data:`FALLBACK_IMPL`.
+    Returns ``(implementation_name, diagnostics, runtime)`` -- see
+    :data:`NATIVE_IMPL` and :data:`FALLBACK_IMPL`. ``runtime`` carries the
+    executor JVM's version, **heap ceiling** and CPU count.
+
+    The heap is there because the batched scoring path materialises each group as
+    an array in JVM heap, so its ceiling is a property of the executor rather
+    than of the algorithm -- and a Connect client has no ``SparkContext`` to ask.
+    A benchmark that OOMs at an unknown heap size has measured a configuration,
+    not a design; this arc has already produced one.
 
     The jar falls back to the `exact`-only scorer when the native library will
     not load, which keeps a distributed job alive but is otherwise invisible: the
@@ -171,8 +178,11 @@ def implementation(spark: object) -> tuple[str, str]:
     raw = df.select(
         F.call_udf(IMPL_UDF_NAME, F.col("id").cast("int")).alias("impl")
     ).collect()[0]["impl"]
-    name, _, diagnostics = str(raw).partition("|")
-    return name, diagnostics
+    # Fixed-width split, padded: an older jar returns two fields, and unpacking
+    # that into three would raise a ValueError that reads as "the probe is
+    # broken" rather than "the jar predates the runtime field".
+    parts = (str(raw).split("|", 2) + ["", ""])[:3]
+    return parts[0], parts[1], parts[2]
 
 
 def scorer_id(name: str) -> int:
