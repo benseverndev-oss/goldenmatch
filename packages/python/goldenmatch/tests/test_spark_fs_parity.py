@@ -100,8 +100,13 @@ def source(spark):
     return spark.createDataFrame(_ROWS, _COLS)
 
 
-def _spark_scores(spark_df, cfg) -> dict[tuple[int, int], float]:
-    """Every candidate pair's FS posterior, unthresholded."""
+def _spark_scores(spark_df, cfg, *, scorer_udf=None, transform_udf=None) -> dict[tuple[int, int], float]:
+    """Every candidate pair's FS posterior, unthresholded.
+
+    ``scorer_udf`` routes the per-field similarity to the jar's row-shaped
+    kernel instead of the arrow_udf, which is the ONLY part of Spark FS that
+    ever needed a Python worker.
+    """
     from goldenmatch.spark.config_pipeline import generate_candidates
     from goldenmatch.spark.probabilistic import fs_score_expr
     from pyspark.sql import functions as F
@@ -117,7 +122,10 @@ def _spark_scores(spark_df, cfg) -> dict[tuple[int, int], float]:
     out = joined.select(
         F.col("__cand__.a").alias("a"),
         F.col("__cand__.b").alias("b"),
-        fs_score_expr(mk, _em(), lhs, rhs).alias("p"),
+        fs_score_expr(
+            mk, _em(), lhs, rhs,
+            scorer_udf=scorer_udf, transform_udf=transform_udf,
+        ).alias("p"),
     )
     return {(int(r["a"]), int(r["b"])): float(r["p"]) for r in out.collect()}
 
@@ -212,3 +220,134 @@ def test_probabilistic_without_a_model_fails_before_any_spark_work(source):
 
     with pytest.raises(ValueError, match="model_path"):
         run_config_pipeline(source, _config(), id_col=_ID, golden_cols=["first"])
+
+
+# ── Fellegi-Sunter, in the executor JVM ──────────────────────────────
+#
+# The Spark tier ran FS with the per-field similarity on an arrow_udf, which
+# means a Python worker on every executor. Everything AROUND that call -- the
+# level ladder, the weight lookup, the bit sum, the posterior -- was already
+# Spark SQL. So routing one call to the jar is the whole of what it takes to run
+# the thing Splink does with nothing installed on the cluster.
+#
+# EM TRAINING still does not distribute (driver-side sample of blocked pairs);
+# these tests supply a trained model, which is the shipped contract.
+
+def _jar():
+    from goldenmatch.spark.jvm import JvmScorerUnavailable, find_jar
+
+    try:
+        return find_jar()
+    except JvmScorerUnavailable as exc:
+        pytest.skip(f"no JVM scorer jar built: {exc}")
+
+
+@pytest.fixture()
+def jvm_registered(spark):
+    from goldenmatch.spark.jvm import JvmScorerUnavailable, install
+
+    try:
+        return install(spark, jar=_jar())
+    except JvmScorerUnavailable as exc:
+        pytest.skip(f"cannot register the JVM scorer: {exc}")
+
+
+@pytest.mark.parametrize("missing", ["unobserved", "disagree"])
+def test_fs_in_the_jvm_matches_the_python_path_exactly(source, jvm_registered, missing):
+    """THE gate. Same posterior, pair for pair, with no Python on the executor.
+
+    Exact equality, no tolerance: both sides run the same Rust `score_one` over
+    the same bytes and everything downstream of it is the same SQL. A tolerance
+    would hide the class of bug this exists to catch, because those bugs produce
+    PLAUSIBLE probabilities -- a level ladder read one threshold off still
+    yields a number in [0, 1] for every pair.
+    """
+    from goldenmatch.spark.jvm import ROW_UDF_NAME, TRANSFORM_UDF_NAME
+
+    cfg = _config(missing)
+    want = _spark_scores(source, cfg)
+    got = _spark_scores(
+        source, cfg, scorer_udf=ROW_UDF_NAME, transform_udf=TRANSFORM_UDF_NAME
+    )
+
+    assert set(got) == set(want), (
+        f"different pair sets: only-jvm={sorted(set(got) - set(want))} "
+        f"only-python={sorted(set(want) - set(got))}"
+    )
+    mismatched = {k: (got[k], want[k]) for k in want if got[k] != want[k]}
+    assert not mismatched, (
+        f"missing={missing}: JVM and Python FS disagree. Both reach the same "
+        f"score_one and the level/weight/posterior arithmetic is the same SQL, "
+        f"so a difference is a level read at the wrong threshold or a weight "
+        f"from the wrong index -- (jvm, python): {mismatched}"
+    )
+    assert want, "no pairs scored; the fixture proves nothing"
+
+
+@pytest.mark.parametrize("missing", ["unobserved", "disagree"])
+def test_fs_in_the_jvm_matches_the_ONE_BOX(source, jvm_registered, missing):
+    """And against the one-box directly, not only against the Spark path.
+
+    Transitivity would give this, but stating it means a change that moved the
+    Spark FS expression and the JVM route together -- they share every line
+    except the similarity call -- cannot pass while both have drifted off the
+    reference implementation.
+    """
+    from goldenmatch.spark.jvm import ROW_UDF_NAME, TRANSFORM_UDF_NAME
+
+    cfg = _config(missing)
+    mk = cfg.get_matchkeys()[0]
+    got = _spark_scores(
+        source, cfg, scorer_udf=ROW_UDF_NAME, transform_udf=TRANSFORM_UDF_NAME
+    )
+
+    by_id = {r[0]: dict(zip(_COLS, r)) for r in _ROWS}
+    for (a, b), p in got.items():
+        want = _reference_posterior(by_id[a], by_id[b], mk)
+        assert p == pytest.approx(want, abs=1e-12), (
+            f"pair ({a}, {b}): JVM FS returned {p!r}, the one-box {want!r}"
+        )
+
+
+def test_the_end_to_end_probabilistic_pipeline_runs_jar_only(source, jvm_registered, tmp_path):
+    """A whole FS dedupe with the scorer, transforms and survivorship in the jar.
+
+    This is the claim in one test: Fellegi-Sunter, distributed, with nothing
+    goldenmatch-shaped installed on an executor.
+    """
+    import json
+
+    from goldenmatch.spark.config_pipeline import run_config_pipeline
+    from goldenmatch.spark.jvm import SURVIVORSHIP_UDF_NAME, TRANSFORM_UDF_NAME, UDF_NAME
+
+    model = tmp_path / "fs_model.json"
+    model.write_text(json.dumps(_em().to_dict()), encoding="utf-8")
+
+    out = run_config_pipeline(
+        source, _config(), id_col=_ID,
+        golden_cols=["first", "last", "city"],
+        fs_model_path=str(model),
+        scorer_udf=UDF_NAME, transform_udf=TRANSFORM_UDF_NAME,
+        survivorship_udf=SURVIVORSHIP_UDF_NAME,
+    )
+    rows = out.collect()
+    assert rows, "the FS pipeline produced no golden records"
+
+
+def test_the_batched_shape_still_refuses_fs(source, jvm_registered):
+    """The batch shape has no FS combine and must say so rather than guess.
+
+    Its scores are per-SLOT in flat arrays; a level is a threshold ladder over
+    ONE field's similarity and the weights sum across fields. Expressing that
+    over the reshaped arrays would be a second implementation of the FS combine.
+    """
+    from goldenmatch.spark.config_pipeline import generate_candidates, score_candidates
+    from goldenmatch.spark.jvm import UDF_NAME
+
+    cfg = _config()
+    cands = generate_candidates(source, cfg, id_col=_ID)
+    with pytest.raises(NotImplementedError, match="Fellegi-Sunter"):
+        score_candidates(
+            cands, source, cfg, id_col=_ID, scorer_udf=UDF_NAME,
+            scorer_shape="batch",
+        )
