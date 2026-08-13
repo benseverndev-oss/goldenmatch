@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 473,
+      "module_count": 474,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7179,6 +7179,7 @@
             "goldenmatch.semantic.key_integrity",
             "goldenmatch.semantic.malloy",
             "goldenmatch.semantic.metricflow",
+            "goldenmatch.semantic.odcs",
             "goldenmatch.semantic.ontology",
             "goldenmatch.semantic.ontology_catalog",
             "goldenmatch.semantic.osi",
@@ -7203,6 +7204,7 @@
             "goldenmatch.semantic.key_integrity",
             "goldenmatch.semantic.malloy",
             "goldenmatch.semantic.metricflow",
+            "goldenmatch.semantic.odcs",
             "goldenmatch.semantic.osi"
           ]
         },
@@ -7242,6 +7244,7 @@
             "goldenmatch.semantic.key_integrity",
             "goldenmatch.semantic.malloy",
             "goldenmatch.semantic.metricflow",
+            "goldenmatch.semantic.odcs",
             "goldenmatch.semantic.osi"
           ]
         },
@@ -7682,6 +7685,33 @@
           ],
           "imports": [
             "goldenmatch.core.key_integrity_certificate"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.odcs",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/odcs.py",
+          "purpose": "ODCS (Open Data Contract Standard) reader + emitter — the data-contract dialect.",
+          "defines": [
+            "ODCSContract",
+            "ODCSProperty",
+            "ODCSSchemaObject",
+            "_as_bool",
+            "_object_from_dict",
+            "_property_from_dict",
+            "certify_odcs_contract",
+            "emit_odcs",
+            "emit_odcs_from_crosswalk",
+            "emit_odcs_object",
+            "emit_odcs_property",
+            "emit_odcs_yaml",
+            "odcs_identity_keys",
+            "parse_odcs_contract"
+          ],
+          "imports": [
+            "goldenmatch.core.key_integrity_certificate",
+            "goldenmatch.semantic.blocking",
+            "goldenmatch.semantic.key_integrity",
+            "goldenmatch.semantic.metricflow"
           ]
         },
         {

@@ -103,6 +103,25 @@
 > auto-detects a top-level `sources:` as `"malloy"`, parity-free like Cube/Feast.
 > Remaining from the filter: **LookML / Power BI** (messier parse) and **data
 > contracts (ODCS)**.
+>
+> **Data-contract surface (ODCS,
+> [0062](../decisions/0062-odcs-data-contract-dialect.md)).** A data contract is the
+> most literal statement of the thesis: it *asserts* identity right in the schema
+> (`primaryKey: true`, ordered by `primaryKeyPosition`; `unique: true`) and nobody
+> checks the assertion against the data — so a duplicated PK makes the contract's own
+> uniqueness promise false. ODCS's `primaryKey` maps one-to-one onto MetricFlow
+> `entity (primary)` / Cube / Malloy `primary_key`, so the certifier applies
+> unchanged. `goldenmatch.semantic.odcs`: `parse_odcs_contract` (v3 `schema:`/
+> `properties:` canonically, tolerant of the legacy v2 `dataset:`/`columns:`/
+> `isPrimary` spelling on read — no `open-data-contract-standard` dependency),
+> `odcs_identity_keys` (the composite PK **plus each standalone `unique` property**),
+> `certify_odcs_contract` (bridge A — one certificate per declared key, numeric
+> properties as the fan-out measures), `emit_odcs_from_crosswalk` (bridge B —
+> resolved key as `primaryKey`, provenance embedded in `customProperties` since ODCS
+> has a metadata slot). `certify_semantic_model` auto-detects `kind: DataContract`
+> as the `"odcs"` dialect, parity-free like Cube/Feast/Malloy. **Remaining from the
+> filter: LookML / Power BI** (messier parse) — the BI-Malloy and data-contract lanes
+> are now landed.
 > Greenfield when written: no prior repo code, doc, or decision referenced this
 > ecosystem (grep, 2026-07-30).
 

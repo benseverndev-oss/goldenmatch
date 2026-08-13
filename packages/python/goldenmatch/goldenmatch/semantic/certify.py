@@ -22,6 +22,7 @@ from goldenmatch.semantic.feast import certify_feast_feature_views
 from goldenmatch.semantic.key_integrity import certify_key_integrity
 from goldenmatch.semantic.malloy import certify_malloy_joins
 from goldenmatch.semantic.metricflow import _load, parse_semantic_models
+from goldenmatch.semantic.odcs import certify_odcs_contract
 from goldenmatch.semantic.osi import certify_osi_relationships
 
 
@@ -41,7 +42,7 @@ class SemanticCertification:
     """The result of certifying a whole semantic model: the detected dialect and
     one `KeyCertification` per declared key that had a supplied frame."""
 
-    dialect: str                         # "metricflow" | "cube" | "osi" | "feast" | "malloy"
+    dialect: str                         # "metricflow" | "cube" | "osi" | "feast" | "malloy" | "odcs"
     entries: list[KeyCertification] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)  # targets with no frame
     note: str = ""
@@ -65,9 +66,14 @@ def detect_dialect(data: dict[str, Any]) -> str:
     """Detect the semantic-layer dialect from a loaded document's top-level shape.
 
     Cube uses a `cubes:` list, MetricFlow a `semantic_models:` list, OSI/Ossie a
-    `semantic_model` list (singular) + `version`, Feast a `feature_views:` list.
+    `semantic_model` list (singular) + `version`, Feast a `feature_views:` list,
+    Malloy a `sources:` list, and ODCS a `kind: DataContract` + a `schema:` list.
     Raises if none match.
     """
+    # ODCS is detected on its unambiguous `kind: DataContract` marker first, so a
+    # contract that also happens to carry a generic key can't be misread.
+    if str(data.get("kind", "")).strip() == "DataContract":
+        return "odcs"
     if "cubes" in data:
         return "cube"
     if "semantic_models" in data:
@@ -78,11 +84,15 @@ def detect_dialect(data: dict[str, Any]) -> str:
         return "feast"
     if "sources" in data:
         return "malloy"
+    # ODCS v2 (pre-Bitol) had no `kind`; a top-level `schema:`/`dataset:` list with
+    # an `apiVersion` is the data-contract shape.
+    if "apiVersion" in data and isinstance(data.get("schema") or data.get("dataset"), list):
+        return "odcs"
     raise ValueError(
         "certify_semantic_model: could not detect a semantic-layer dialect; "
         "expected a top-level 'cubes' (Cube), 'semantic_models' (dbt/MetricFlow), "
-        "'semantic_model' (OSI/Ossie), 'feature_views' (Feast), or 'sources' "
-        "(Malloy) key"
+        "'semantic_model' (OSI/Ossie), 'feature_views' (Feast), 'sources' "
+        "(Malloy), or 'kind: DataContract' (ODCS) key"
     )
 
 
@@ -164,6 +174,15 @@ def certify_semantic_model(
             entries.append(KeyCertification(
                 target=rep["to_source"], key=list(rep["key"]), certificate=rep["certificate"],
                 context=f"join from {rep['from_source']}",
+            ))
+    elif dialect == "odcs":
+        # certify_odcs_contract certifies each schema object's declared identity
+        # key — the composite primary key plus each standalone `unique` property.
+        for rep in certify_odcs_contract(data, frames, resolve=resolve, roles=roles):
+            ctx = "primary key" if rep["kind"] == "primary_key" else f"unique: {rep['key'][0]}"
+            entries.append(KeyCertification(
+                target=rep["object"], key=list(rep["key"]), certificate=rep["certificate"],
+                context=ctx,
             ))
     else:  # osi
         for rep in certify_osi_relationships(data, frames, resolve=resolve, roles=roles):

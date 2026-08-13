@@ -124,6 +124,16 @@ from goldenmatch.semantic.metricflow import (
     emit_semantic_model,
     parse_semantic_models,
 )
+from goldenmatch.semantic.odcs import (
+    ODCSContract,
+    ODCSProperty,
+    ODCSSchemaObject,
+    certify_odcs_contract,
+    emit_odcs_from_crosswalk,
+    emit_odcs_yaml,
+    odcs_identity_keys,
+    parse_odcs_contract,
+)
 from goldenmatch.semantic.ontology import (
     DiscoveredOntology,
     Ontology,
@@ -248,6 +258,15 @@ __all__ = [
     "MalloyModel",
     "MalloySource",
     "MalloyJoin",
+    # follow-on — ODCS (Open Data Contract Standard) dialect (reader + emitter + bridges)
+    "parse_odcs_contract",
+    "odcs_identity_keys",
+    "certify_odcs_contract",
+    "emit_odcs_yaml",
+    "emit_odcs_from_crosswalk",
+    "ODCSContract",
+    "ODCSSchemaObject",
+    "ODCSProperty",
     # ontology layer — RDF/OWL/SHACL native identity provider (bidirectional)
     "parse_ontology",
     "ontology_identity_keys",
