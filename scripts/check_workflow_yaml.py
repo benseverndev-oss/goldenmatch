@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import pathlib
+import re
 import sys
 
 import yaml
@@ -97,7 +98,109 @@ def check(directory: pathlib.Path) -> tuple[list[tuple[pathlib.Path, str]], int]
             )
         except yaml.YAMLError as exc:
             problems.append((path, f"does not parse: {exc}"))
+            continue
+        problems.extend(_bad_run_scripts(path))
     return problems, len(files)
+
+
+def _bad_run_scripts(path: pathlib.Path) -> list[tuple[pathlib.Path, str]]:
+    """Every ``run:`` block must be syntactically valid bash.
+
+    A workflow can parse as YAML and still contain a shell script that cannot
+    run, because the two layers escape differently and a `run: |` block has to
+    survive BOTH.
+
+    Two checks, because the most common failure is NOT a syntax error:
+
+    1. ``bash -n`` for genuine syntax errors (unbalanced quotes, unterminated
+       heredocs -- the latter being easy to produce, since a heredoc terminator
+       must land at column 0 only AFTER YAML strips the block indent).
+
+    2. A mid-line literal ``\\n``, which is the shape that actually keeps
+       happening: a line continuation collapses into the two characters
+       backslash-n, and bash receives ``n`` as an argument.
+
+           ERROR: file or directory not found: n
+
+       ``bash -n`` reports that as VALID, because ``\\n`` is a perfectly legal
+       escaped character -- so syntax checking alone would have caught none of
+       the three times this repo has paid for it (a bench Compare step, and
+       twice in the Spark cluster lane), each costing a full CI round trip.
+
+    The ``\\n`` rule requires whitespace on BOTH sides, which is what a mangled
+    continuation looks like (`` \\n            --deselect``). A deliberate
+    escape is almost always adjacent to non-space (``f"{a}\\nb"``,
+    ``printf 'x\\ny'``) and is not flagged.
+
+    Nothing is executed. ``${{ }}`` expressions are left alone -- GitHub
+    substitutes them before bash sees them.
+    """
+    import shutil
+    import subprocess
+    import tempfile
+
+    bash = shutil.which("bash")
+    if bash is None:  # pragma: no cover - CI is Linux and dev is git-bash
+        return []
+
+    out: list[tuple[pathlib.Path, str]] = []
+    try:
+        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError:
+        return []
+    if not isinstance(doc, dict):
+        return []
+
+    for job_name, job in (doc.get("jobs") or {}).items():
+        if not isinstance(job, dict):
+            continue
+        for i, step in enumerate(job.get("steps") or []):
+            if not isinstance(step, dict) or "run" not in step:
+                continue
+            script = step["run"]
+            if not isinstance(script, str):
+                continue
+            # A step can select another shell; only bash is checkable here.
+            shell = str(step.get("shell") or job.get("defaults", {})
+                        .get("run", {}).get("shell") or "bash")
+            if not shell.startswith("bash") and shell != "sh":
+                continue
+            with tempfile.NamedTemporaryFile(
+                "w", suffix=".sh", delete=False, encoding="utf-8", newline="\n"
+            ) as fh:
+                fh.write(script)
+                tmp = fh.name
+            try:
+                proc = subprocess.run(
+                    [bash, "-n", tmp], capture_output=True, text=True
+                )
+            finally:
+                pathlib.Path(tmp).unlink(missing_ok=True)
+            label = step.get("name") or f"step {i}"
+            if proc.returncode != 0:
+                detail = (proc.stderr or "").strip().replace(tmp, "<step>")
+                out.append((
+                    path,
+                    f"job `{job_name}` step `{label}`: `run:` is not valid bash "
+                    f"-- {detail}",
+                ))
+            for lineno, line in enumerate(script.splitlines(), 1):
+                m = _MANGLED_CONTINUATION.search(line)
+                if m:
+                    out.append((
+                        path,
+                        f"job `{job_name}` step `{label}` line {lineno}: a literal "
+                        f"`\\n` with whitespace on both sides -- almost certainly a "
+                        f"line continuation that collapsed, so bash gets `n` as an "
+                        f"argument. `bash -n` calls this VALID. In: "
+                        f"{line.strip()[:70]!r}",
+                    ))
+    return out
+
+
+#: Backslash-n with whitespace both sides: a collapsed line continuation.
+#: A deliberate escape sits next to non-space (``f"{a}\nb"``) and is not matched.
+_MANGLED_CONTINUATION = re.compile(r"\s\\n\s")
 
 
 def main(argv: list[str] | None = None) -> int:

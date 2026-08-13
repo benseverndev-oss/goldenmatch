@@ -329,7 +329,11 @@ jobs:
           # results from executor 1, against a client-side oracle.
           python -m pytest -v --timeout=600 --timeout-method=thread \
             packages/python/goldenmatch/tests/test_spark_jvm_native_parity.py \
-            packages/python/goldenmatch/tests/test_spark_jvm_parity.py \n            --deselect 'packages/python/goldenmatch/tests/test_spark_jvm_native_parity.py::test_jvm_scoring_matches_the_python_path_exactly' \n            --deselect 'packages/python/goldenmatch/tests/test_spark_jvm_native_parity.py::test_end_to_end_dedupe_runs_with_every_kernel_in_the_jar' \n            --deselect 'packages/python/goldenmatch/tests/test_spark_jvm_native_parity.py::test_block_key_normalization_routes_to_the_jar_when_asked' \n            --deselect 'packages/python/goldenmatch/tests/test_spark_jvm_native_parity.py::test_derive_record_ids_matches_the_python_path'
+            packages/python/goldenmatch/tests/test_spark_jvm_parity.py \
+            --deselect 'packages/python/goldenmatch/tests/test_spark_jvm_native_parity.py::test_jvm_scoring_matches_the_python_path_exactly' \
+            --deselect 'packages/python/goldenmatch/tests/test_spark_jvm_native_parity.py::test_end_to_end_dedupe_runs_with_every_kernel_in_the_jar' \
+            --deselect 'packages/python/goldenmatch/tests/test_spark_jvm_native_parity.py::test_block_key_normalization_routes_to_the_jar_when_asked' \
+            --deselect 'packages/python/goldenmatch/tests/test_spark_jvm_native_parity.py::test_derive_record_ids_matches_the_python_path'
 
       # The inventory against REAL workers. Note there is no
       # GOLDENMATCH_SPARK_PYENV here and that is the point: these containers are
