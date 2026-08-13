@@ -867,6 +867,66 @@ _BASE_TOOLS = [
             "required": ["frames"],
         },
     ),
+    Tool(
+        name="ontology_certify",
+        description=(
+            "Ontology-layer front door (consume): certify the identity keys an "
+            "OWL/RDF ontology DECLARES (owl:hasKey, inverse-functional properties) "
+            "against real instance data. The ontology asserts identity but resolves "
+            "it only by brittle exact-match; this returns a per-key verdict "
+            "(unique-at-grain + fan-out) so an over-merging IFP/key is caught before "
+            "a reasoner trusts it. Advisory. Needs the goldenmatch[ontology] extra."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "ontology": {
+                    "type": "string",
+                    "description": "Path to an OWL/RDF ontology file (Turtle/RDF-XML/JSON-LD/N-Triples).",
+                },
+                "frames": {
+                    "type": "object",
+                    "description": (
+                        "Map of class local-name -> instance data file path, e.g. "
+                        "{\"Patient\": \"patients.csv\"}."
+                    ),
+                },
+            },
+            "required": ["ontology", "frames"],
+        },
+    ),
+    Tool(
+        name="ontology_discover",
+        description=(
+            "Ontology-layer front door (generate): point GoldenMatch at a set of "
+            "class instance tables and it PROPOSES a draft OWL ontology -- one "
+            "owl:Class per frame whose owl:hasKey is chosen and PRE-GRADED by the "
+            "certifier (gm:keyTrustworthy / gm:keyUniquenessEstimate). Discovery is "
+            "hypothesis; certification is the falsification test. Returns the "
+            "discovery result + the Turtle. Needs the goldenmatch[ontology] extra."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "frames": {
+                    "type": "object",
+                    "description": (
+                        "Map of class name -> instance data file path, e.g. "
+                        "{\"Customer\": \"customers.csv\"}."
+                    ),
+                },
+                "base_iri": {
+                    "type": "string",
+                    "description": "Base IRI for the emitted terms (optional).",
+                },
+                "ontology_iri": {
+                    "type": "string",
+                    "description": "IRI for the ontology node (optional).",
+                },
+            },
+            "required": ["frames"],
+        },
+    ),
 ]
 
 # --- Cross-language naming aliases (Python<->TS MCP parity) -----------------
@@ -1417,6 +1477,12 @@ def _handle_tool(name: str, args: dict) -> dict:
             args.get("name", False),
             args.get("apply_names", False),
         )
+    elif name == "ontology_certify":
+        return _tool_ontology_certify(args.get("ontology", ""), args.get("frames", {}))
+    elif name == "ontology_discover":
+        return _tool_ontology_discover(
+            args.get("frames", {}), args.get("base_iri"), args.get("ontology_iri")
+        )
     else:
         return {"error": f"Unknown tool: {name}"}
 
@@ -1493,6 +1559,72 @@ def _tool_discover_semantic_model(
         return {"error": str(exc)}
 
     return model.to_dict()
+
+
+def _load_class_frames(frames: dict) -> tuple[dict[str, object] | None, dict | None]:
+    """Shared loader for the ontology tools: `{class: path}` -> `{class: table}`.
+    Returns `(loaded, None)` on success or `(None, error_dict)` on a bad input."""
+    if not isinstance(frames, dict) or not frames:
+        return None, {"error": "frames must map a class name to a data file path."}
+    from goldenmatch.core.io_arrow import read_table_arrow
+
+    loaded: dict[str, object] = {}
+    for cls, path in frames.items():
+        try:
+            loaded[str(cls)] = read_table_arrow(str(path))
+        except FileNotFoundError:
+            return None, {"error": f"data file not found for {cls!r}: {path}"}
+        except Exception as exc:  # noqa: BLE001 - surface a clean tool error
+            return None, {"error": f"could not read data for {cls!r} ({path}): {exc}"}
+    return loaded, None
+
+
+def _tool_ontology_certify(ontology: str, frames: dict) -> dict:
+    """Certify an ontology's declared identity keys against instance data.
+
+    ``ontology`` is a path to an OWL/RDF file; ``frames`` maps class local-name ->
+    data file path. Returns ``OntologyCertification.to_dict()``. Needs the
+    ``goldenmatch[ontology]`` extra (rdflib)."""
+    if not ontology:
+        return {"error": "ontology must be a path to an OWL/RDF file."}
+    loaded, err = _load_class_frames(frames)
+    if err is not None:
+        return err
+
+    from goldenmatch.semantic import certify_ontology
+
+    try:
+        report = certify_ontology(str(ontology), loaded)
+    except ImportError as exc:
+        return {"error": str(exc)}
+    except (FileNotFoundError, OSError) as exc:
+        return {"error": f"could not read ontology {ontology!r}: {exc}"}
+    return report.to_dict()
+
+
+def _tool_ontology_discover(frames: dict, base_iri, ontology_iri) -> dict:
+    """Discover a draft OWL ontology from class instance tables, keys pre-graded.
+
+    ``frames`` maps class name -> data file path. Returns
+    ``DiscoveredOntology.to_dict()`` plus the emitted ``turtle``. Needs the
+    ``goldenmatch[ontology]`` extra (rdflib)."""
+    loaded, err = _load_class_frames(frames)
+    if err is not None:
+        return err
+
+    from goldenmatch.semantic import discover_ontology
+    from goldenmatch.semantic.ontology import DEFAULT_BASE_IRI
+
+    try:
+        disc = discover_ontology(
+            loaded, base_iri=str(base_iri) if base_iri else DEFAULT_BASE_IRI,
+            ontology_iri=str(ontology_iri) if ontology_iri else None,
+        )
+    except ImportError as exc:
+        return {"error": str(exc)}
+    out = disc.to_dict()
+    out["turtle"] = disc.turtle
+    return out
 
 
 def _tool_get_stats() -> dict:

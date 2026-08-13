@@ -28,8 +28,11 @@
 > from data, `owl:hasKey` pre-graded by the certifier — the generative half).
 > `rdflib` optional (`goldenmatch[ontology]`); GoldenMatch is the identity provider
 > FOR the reasoner/triple store, never a reimplementation of one. **The ontology
-> arc is complete** (0053 v1 + 0054 consume/audit + 0055 produce/discover); a
-> CLI/MCP front door + live-catalog write-back stay deferred (parity surface).
+> arc is complete** (0053 v1 + 0054 consume/audit + 0055 produce/discover) and now
+> has a **CLI + MCP front door** ([0056](../decisions/0056-ontology-cli-mcp-front-door.md):
+> `goldenmatch ontology certify|discover`, `ontology_certify`/`ontology_discover`
+> MCP tools); **live-catalog write-back** (RDF → triple store) is the last deferred
+> piece.
 > Captures the framing for how GoldenMatch relates to the semantic-layer /
 > metrics-layer ecosystem (dbt Semantic Layer + MetricFlow, Cube, and the Open
 > Semantic Interchange spec), and a crawl→walk→run plan. Problem **A**

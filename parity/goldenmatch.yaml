@@ -147,6 +147,8 @@ mcp_tools:
   - explain_routing
   - lint_routing
   - list_plugins
+  - ontology_certify
+  - ontology_discover
   - plan_routing
   - pprl_auto_config
   ts_only: []
@@ -191,6 +193,7 @@ cli_commands:
   - ingest-docs
   - llm
   - migrate-splink
+  - ontology
   - serve-ui
   - setup
   - sync

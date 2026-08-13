@@ -33,6 +33,7 @@ from goldenmatch.cli.match import match_cmd
 from goldenmatch.cli.mcp_serve import mcp_serve_cmd
 from goldenmatch.cli.memory import memory_app
 from goldenmatch.cli.migrate_splink import migrate_splink_cmd
+from goldenmatch.cli.ontology import ontology_app
 from goldenmatch.cli.pprl import pprl_app
 from goldenmatch.cli.review import review_cmd
 from goldenmatch.cli.rollback import rollback_cmd, runs_cmd, unmerge_cmd
@@ -136,6 +137,7 @@ app.add_typer(llm_app, name="llm")
 app.add_typer(pprl_app, name="pprl")
 app.add_typer(memory_app, name="memory")
 app.add_typer(identity_app, name="identity")
+app.add_typer(ontology_app, name="ontology")
 app.add_typer(ingest_docs_app, name="ingest-docs")
 app.command("label", help="Build ground truth by labeling record pairs interactively.")(label_cmd)
 app.command("review", help="Review borderline pairs interactively; decisions feed Learning Memory.")(review_cmd)

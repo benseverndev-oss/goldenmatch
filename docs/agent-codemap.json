@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 468,
+      "module_count": 469,
       "modules": [
         {
           "module": "goldenmatch",
@@ -809,6 +809,7 @@
             "goldenmatch.cli.mcp_serve",
             "goldenmatch.cli.memory",
             "goldenmatch.cli.migrate_splink",
+            "goldenmatch.cli.ontology",
             "goldenmatch.cli.pprl",
             "goldenmatch.cli.review",
             "goldenmatch.cli.rollback",
@@ -892,6 +893,21 @@
             "goldenmatch.cli.import_splink",
             "goldenmatch.config.from_splink",
             "goldenmatch.config.splink_upgrade"
+          ]
+        },
+        {
+          "module": "goldenmatch.cli.ontology",
+          "file": "packages/python/goldenmatch/goldenmatch/cli/ontology.py",
+          "purpose": "CLI `ontology` command group — the ontology-layer (RDF/OWL/SHACL) front door.",
+          "defines": [
+            "_read_frames",
+            "certify_cmd",
+            "discover_cmd"
+          ],
+          "imports": [
+            "goldenmatch.core.io_arrow",
+            "goldenmatch.semantic",
+            "goldenmatch.semantic.ontology"
           ]
         },
         {
@@ -6645,6 +6661,7 @@
             "_golden_as_table",
             "_handle_tool",
             "_initialize",
+            "_load_class_frames",
             "_load_clusters_json",
             "_load_rows_with_ids",
             "_resolve_alias",
@@ -6676,6 +6693,8 @@
             "_tool_list_strategies",
             "_tool_list_transforms",
             "_tool_match_record",
+            "_tool_ontology_certify",
+            "_tool_ontology_discover",
             "_tool_pprl_auto_config",
             "_tool_pprl_link",
             "_tool_profile_data",
@@ -6734,6 +6753,7 @@
             "goldenmatch.pprl.autoconfig",
             "goldenmatch.pprl.protocol",
             "goldenmatch.semantic",
+            "goldenmatch.semantic.ontology",
             "goldenmatch.tui.engine"
           ]
         },
