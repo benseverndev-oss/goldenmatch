@@ -351,7 +351,12 @@ weaknesses:
       + the DuckDB UDF. There is NO second source of truth: the whole join-cardinality family that
       sits on top -- certify_serving_joins / certify_cube_joins / certify_osi_relationships -- are
       thin wrappers that DELEGATE to certify_key_integrity on BOTH Python and TS, so cardinality
-      trust inherits the one kernel rather than re-implementing group-by. Conformance is a single
+      trust inherits the one kernel rather than re-implementing group-by. The ontology layer
+      (0053-0057) rides the same owner: certify_ontology_keys / certify_ontology delegate to
+      certify_key_integrity and discover_ontology reuses the certifier-backed discover_keys, while
+      its rdflib RDF/OWL/SHACL emit+parse surface is python_only by design (no edge rdflib; a
+      Rust/WASM RDF port would reimplement a triple store -- the conform-don''t-reimplement
+      anti-pattern 0053 avoids). Conformance is a single
       shared golden oracle (key-integrity-core/golden/key_integrity_golden.json, GENERATED from the
       Python reference by scripts/emit_key_integrity_golden.py) asserted by all three surfaces:
       Rust include_str! (golden.rs), Python direct-read (test_key_integrity_native_parity.py, which
