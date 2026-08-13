@@ -378,3 +378,73 @@ def test_nan_is_not_a_string_and_must_not_reach_the_scorer():
     from goldenmatch.spark.scorers import score_batch
 
     assert score_batch("jaro_winkler", [None], [None])[0] == 1.0
+
+
+# ── the jar's kernels reach the ENTRY POINTS, not just the internals ──
+
+def test_block_key_normalization_routes_to_the_jar_when_asked():
+    """`_block_key_column` hands `transform_udf` down to `_transformed`.
+
+    Threading matters more here than the word "plumbing" suggests. A kernel
+    reachable only from an internal is, from a caller's side, not reachable at
+    all -- there is no argument to pass. `transform_udf` existed on
+    `_transformed` for a while before any entry point could supply one, so a
+    user running the documented pipeline got the Python path no matter what the
+    jar could do.
+
+    Blocking is also where a normalization divergence does its damage: a value
+    normalized differently lands in a different BLOCK and is never compared to
+    its own duplicate, so the failure is a missing match that nothing
+    downstream can detect.
+    """
+    # Unlike the rest of this file, building a column expression needs pyspark
+    # (not a session). It runs in the `spark_connect` lane, which has it.
+    pytest.importorskip("pyspark")
+
+    from goldenmatch.spark import config_pipeline
+
+    seen = []
+    real = config_pipeline._transformed
+
+    def spy(col, chain, transform_udf=None):
+        seen.append(transform_udf)
+        return real(col, chain, transform_udf=transform_udf)
+
+    config_pipeline._transformed = spy
+    try:
+        key = BlockingKeyConfig(fields=["city"], transforms=["lowercase"])
+        config_pipeline._block_key_column(key, "golden_transform")
+        config_pipeline._block_key_column(key)
+    finally:
+        config_pipeline._transformed = real
+
+    assert seen == ["golden_transform", None], (
+        "the block-key builder must pass the UDF name through, and must still "
+        "default to the Python path when not given one"
+    )
+
+
+def test_run_config_pipeline_accepts_both_kernels_but_offers_no_scorer_udf():
+    """The entry point exposes exactly the kernels it can actually route.
+
+    `transform_udf` and `survivorship_udf` are real; there is deliberately no
+    `scorer_udf`. Scoring here is per-field and row-shaped, while the jar's
+    scorer is a batched array-shaped UDF over one value column -- different call
+    structures, so routing it is a design change rather than a parameter.
+
+    Pinned as a test because the asymmetry is the kind of thing someone
+    "completes" for consistency, and a `scorer_udf` that quietly did nothing
+    would be far worse than its absence: a caller would believe an end-to-end
+    run was jar-only when its scoring stage still forks a Python worker.
+    """
+    import inspect
+
+    from goldenmatch.spark.config_pipeline import run_config_pipeline
+
+    params = inspect.signature(run_config_pipeline).parameters
+    assert "transform_udf" in params
+    assert "survivorship_udf" in params
+    assert "scorer_udf" not in params, (
+        "scoring has no jar-only shape yet; see scripts/spark_jar_only_inventory.py, "
+        "whose end-to-end dedupe probe measures exactly this gap"
+    )

@@ -31,6 +31,22 @@ SQL, and is genuinely jar-only.
 
 Failures here are the POINT. This is an inventory, not a gate: it turns "which
 parts need Python on executors" from a reading of the source into a list.
+
+## Representative calls vs entry points
+
+The first pass of this measured INTERNALS -- ``_transformed``, ``merge_expr``,
+``derive_record_ids``. That answers "is the kernel reachable", which is not the
+question a user has. A kernel routed at the internals but not threaded through
+the entry point is, from outside, not routed at all: there is no argument to
+pass. Both were true here until ``run_config_pipeline`` and its stages grew
+``transform_udf`` / ``survivorship_udf``.
+
+So the probes come in two halves. The originals stay because they localize a
+failure to one kernel; the ``ENTRY`` probes call what a user calls, and one of
+them runs a whole dedupe -- block, score, cluster, golden.
+
+Two probes must never pass, and :data:`MUST_NOT_PASS` names them so the score
+has a stated ceiling rather than an implied denominator.
 """
 from __future__ import annotations
 
@@ -194,6 +210,103 @@ def _probe_identity_record_ids(spark, df, ctx):
     return f"{len(ids)} record ids, e.g. {ids[0]!r}"
 
 
+def _probe_entry_blocking(spark, df, ctx):
+    """`config_pipeline.generate_candidates` -- the blocking ENTRY POINT, not
+    the `_transformed` internal the normalization probe calls.
+
+    Blocking is where a normalization divergence does its damage: a value
+    normalized differently lands in a DIFFERENT BLOCK and is never compared to
+    its own duplicate. The failure is a missing match, and nothing downstream
+    can detect it."""
+    from goldenmatch.spark.config_pipeline import generate_candidates
+
+    cfg = _probe_config()
+    pairs = generate_candidates(
+        df, cfg, id_col="__row_id__", transform_udf=ctx["transform_udf"]
+    )
+    ids = _consume(pairs, "a")
+    return f"{len(ids)} candidate pairs from {len(cfg.get_matchkeys())} matchkey(s)"
+
+
+def _probe_entry_golden(spark, df, ctx):
+    """`config_pipeline.build_golden_from_rules` -- the golden-record ENTRY
+    POINT, rather than `merge_expr` directly."""
+    from goldenmatch.spark.config_pipeline import build_golden_from_rules
+
+    cfg = _probe_config()
+    assignments = spark.createDataFrame(
+        [(0, 0), (0, 1), (1, 3), (1, 4)], "cluster_id long, member_id long"
+    )
+    golden = build_golden_from_rules(
+        assignments, df, cfg,
+        golden_cols=["name", "city"], id_col="__row_id__",
+        survivorship_udf=ctx["survivorship_udf"],
+    )
+    rows = golden.select("cluster_id", "name", "city").collect()
+    return f"{len(rows)} golden records, e.g. {rows[0]['name']!r}"
+
+
+def _probe_entry_dedupe(spark, df, ctx):
+    """The whole thing: `run_config_pipeline` -- block, score, cluster, golden.
+
+    THE question this inventory exists to answer. Every probe above is one
+    stage; a user runs this. Passing the two kernel names it accepts is the
+    most jar-only a real dedupe can currently be.
+
+    Expected to FAIL, and the failure is the finding: `score_candidates` builds
+    one row-shaped Python UDF per field of each matchkey, while the jar's
+    scorer is a batched array-shaped UDF over a single value column. Different
+    call structures, so there is no `scorer_udf` to pass -- routing that stage
+    is a design change, not a parameter. Until it lands, an end-to-end dedupe
+    needs a Python environment on the executors for scoring alone, however
+    thoroughly the other stages are routed."""
+    from goldenmatch.spark.config_pipeline import run_config_pipeline
+
+    golden = run_config_pipeline(
+        df, _probe_config(), id_col="__row_id__", wcc="label_prop",
+        golden_cols=["name", "city"],
+        transform_udf=ctx["transform_udf"],
+        survivorship_udf=ctx["survivorship_udf"],
+    )
+    rows = golden.collect()
+    return f"{len(rows)} golden records end to end"
+
+
+def _probe_config():
+    """A minimal config the probe rows actually match under.
+
+    Built in code rather than loaded from a fixture so the probes stay readable
+    next to what they assert, and so a config-schema change breaks this loudly
+    here rather than silently changing what is being measured."""
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        GoldenRulesConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+    )
+
+    return GoldenMatchConfig(
+        # `lowercase` on the block key is the point: it is the only transform
+        # chain in this config, so the blocking probe genuinely exercises
+        # `golden_transform` rather than passing because there was nothing to
+        # normalize.
+        blocking=BlockingConfig(
+            keys=[BlockingKeyConfig(fields=["blk"], transforms=["lowercase"])]
+        ),
+        matchkeys=[
+            MatchkeyConfig(
+                name="mk_name",
+                type="weighted",
+                fields=[MatchkeyField(field="name", scorer="jaro_winkler", weight=1.0)],
+                threshold=0.85,
+            )
+        ],
+        golden_rules=GoldenRulesConfig(default_strategy="most_complete"),
+    )
+
+
 #: name -> (callable, what a failure MEANS). The second half matters: a failure
 #: here is a fact about deployment, not a bug, and labelling it as such stops the
 #: inventory being read as a broken build.
@@ -212,7 +325,45 @@ PROBES = [
      "survivorship needs Python on executors"),
     ("identity (record fingerprints)", _probe_identity_record_ids,
      "the identity graph needs Python on executors"),
+    # Everything above calls an INTERNAL -- `_transformed`, `merge_expr`,
+    # `derive_record_ids`. That measures whether a kernel is reachable, which is
+    # not the same as whether a user can reach it: a kernel routed at the
+    # internals but not threaded through the entry point is, from outside, not
+    # routed at all. Both were true here until the entry points grew
+    # `transform_udf` / `survivorship_udf` arguments.
+    ("ENTRY blocking (generate_candidates)", _probe_entry_blocking,
+     "blocking needs Python on executors -- a differently-normalized value lands "
+     "in a different block and is never compared"),
+    ("ENTRY golden (build_golden_from_rules)", _probe_entry_golden,
+     "golden records need Python on executors"),
+    ("ENTRY dedupe (run_config_pipeline)", _probe_entry_dedupe,
+     "EXPECTED: scoring is per-field and row-shaped here while the jar's scorer "
+     "is batched and array-shaped, so there is no scorer_udf to pass. An "
+     "end-to-end dedupe still needs Python on the executors for scoring alone"),
 ]
+
+#: Probes that must NEVER pass, so the score has an honest ceiling.
+#:
+#: One is a negative control -- the Python scoring path is precisely what J2
+#: replaces, and it working with an empty executor env would mean the env was
+#: not actually empty and every other result here is worthless. The other is a
+#: real, named gap: the end-to-end dedupe cannot be jar-only while its scoring
+#: stage has no jar-shaped call. It is listed rather than omitted because a
+#: missing probe reads as "not thought about" while a failing one reads as
+#: "measured, and here is what it costs".
+MUST_NOT_PASS = frozenset({
+    "Python scoring (the shipped path)",
+    "ENTRY dedupe (run_config_pipeline)",
+})
+
+# A typo here would not raise -- it would silently raise the ceiling by one and
+# reclassify a real gap as a genuine pass. Bind it to the actual names.
+_unknown = MUST_NOT_PASS - {name for name, _, _ in PROBES}
+if _unknown:
+    raise AssertionError(
+        f"MUST_NOT_PASS names no such probe: {sorted(_unknown)}. Renaming a "
+        f"probe without updating this set silently changes the ceiling."
+    )
 
 
 def main(argv=None) -> int:
@@ -279,13 +430,29 @@ def main(argv=None) -> int:
 
     works = [r["probe"] for r in results if r["works"]]
     needs = [r["probe"] for r in results if not r["works"]]
+    unexpected = [p for p in needs if p not in MUST_NOT_PASS]
     print("=" * 74)
-    print(f"  jar-only today: {len(works)}/{len(results)}")
-    print(f"  still needs a Python worker: {', '.join(needs) if needs else 'nothing'}")
+    # The ceiling, stated. Two probes must NEVER pass: the Python-scoring
+    # negative control, and the end-to-end dedupe whose scoring stage has no
+    # jar-only shape yet. Printing a bare "8/10" invites reading it as 80% of
+    # the way there, when 8 IS the top of the scale.
+    print(f"  jar-only today: {len(works)}/{len(PROBES) - len(MUST_NOT_PASS)}"
+          f"  (of {len(PROBES)} probes; {len(MUST_NOT_PASS)} must never pass)")
+    if unexpected:
+        print(f"  still needs a Python worker: {', '.join(unexpected)}")
+    else:
+        print("  still needs a Python worker: nothing that could be routed today")
+    for p in needs:
+        if p in MUST_NOT_PASS:
+            print(f"  (expected failure, not a gap in the jar: {p})")
 
     payload = {
         "jvm_impl": impl, "jvm_runtime": runtime,
-        "works": works, "needs_python": needs, "results": results,
+        "ceiling": len(PROBES) - len(MUST_NOT_PASS),
+        "works": works, "needs_python": needs,
+        "expected_failures": sorted(MUST_NOT_PASS),
+        "unexpected_failures": unexpected,
+        "results": results,
     }
     with open(args.out, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, indent=2)
