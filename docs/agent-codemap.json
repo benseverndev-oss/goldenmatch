@@ -7909,7 +7909,9 @@
             "build_same_as_edges",
             "build_source_records",
             "derive_record_ids",
+            "entity_id_expr",
             "entity_id_for_members",
+            "golden_json_expr",
             "mint_entity_ids",
             "record_id_for_row",
             "resolve_cluster_entities"
