@@ -50,7 +50,13 @@ x-spark: &spark
   # `[spark]` extra resolves -- the cluster follows the CLIENT, not the
   # other way round, or the lane tests a Spark version no user runs. The
   # default here is only for running this compose file by hand.
-  image: apache/spark:${SPARK_IMAGE_TAG:-4.2.0}
+  # The `-python3` variant, which models a real cluster better than the bare
+  # one: production clusters generally DO have a Python interpreter, what they
+  # lack is your package. So the inventory's failures come back as
+  # `ModuleNotFoundError` -- the realistic shape -- rather than "no python at
+  # all", and the parity step has an interpreter to build its oracle venv
+  # against. Neither goldenmatch nor pyarrow is present either way.
+  image: apache/spark:${SPARK_IMAGE_TAG:-4.2.0}-python3
   # Stock image, and nothing is ever BAKED into it: no goldenmatch, no pyarrow,
   # no Python environment. Adding any of that here to make a test pass would
   # delete the reason the lane exists.

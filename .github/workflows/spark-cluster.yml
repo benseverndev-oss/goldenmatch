@@ -262,16 +262,42 @@ jobs:
       # Running the parity tests bare would not prove the jar-only claim; it
       # would just delete the oracle and leave the JVM path compared against
       # nothing. (That is what the first run did, by accident.)
-      - name: Pack a runtime venv for the executors (the parity ORACLE)
+      # Built INSIDE the executor image, not on the runner.
+      #
+      # The first attempt built it on the runner with venv-pack, exactly as
+      # `ci.yml` does, and every executor died with:
+      #
+      #   Cannot run program "./environment/bin/python": No such file or directory
+      #
+      # `bin/python` in a venv is a SYMLINK to the interpreter it was created
+      # against -- on a GitHub runner, `/opt/hostedtoolcache/Python/...`. That
+      # path does not exist in a Spark container, so the archive unpacks fine
+      # and then cannot be executed.
+      #
+      # Under `local[*]` the symlink resolves, because the "executor" is the
+      # same machine as the driver. Which means the tier's shipped
+      # `ship_python_environment` helper -- P1's whole "pack a venv and
+      # addArtifact it" story -- has only ever been exercised where relocating
+      # it is a no-op. That is a real finding about the product, not just this
+      # lane, and it is filed on the PR rather than papered over here.
+      #
+      # Building against the interpreter the venv will actually run on is the
+      # fix, and it is also what a user shipping to this cluster would have to
+      # do. `--user root` because the Spark images run as uid 185.
+      - name: Pack a runtime venv INSIDE the executor image (the parity ORACLE)
         run: |
           set -euo pipefail
-          python -m venv /tmp/gmenv
-          /tmp/gmenv/bin/pip install --quiet --upgrade pip
-          # pyarrow named explicitly: the tier's UDFs are `arrow_udf` over
-          # `pa.Array`, so the worker contract is stated rather than transitive.
-          # NO pandas -- ci.yml gates on its absence and the reason holds here.
-          /tmp/gmenv/bin/pip install --quiet ./packages/python/goldenmatch pyarrow
-          venv-pack -p /tmp/gmenv -o gm_env.tar.gz --force
+          docker run --rm --user root -v "$PWD:/w" -w /w \
+            "apache/spark:${SPARK_IMAGE_TAG}-python3" bash -lc '
+              set -euo pipefail
+              python3 -m venv /tmp/gmenv
+              /tmp/gmenv/bin/pip install --quiet --upgrade pip venv-pack
+              # pyarrow named explicitly: the tier is Arrow-native (arrow_udf
+              # over pa.Array), so the worker contract is stated rather than
+              # transitive. NO pandas -- ci.yml gates on its absence.
+              /tmp/gmenv/bin/pip install --quiet ./packages/python/goldenmatch pyarrow
+              /tmp/gmenv/bin/venv-pack -o /w/gm_env.tar.gz --force
+            '
           ls -lh gm_env.tar.gz
 
       - name: JVM parity + scoring, on the cluster
