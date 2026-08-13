@@ -225,7 +225,39 @@ def derive_record_ids(
     )
 
 
-def mint_entity_ids(assignments_with_recid: Any) -> Any:
+def entity_id_expr(rids_col: Any) -> Any:
+    """``entity_id_for_members`` as a Spark SQL expression -- no UDF, no worker.
+
+    The Python version is
+    ``sha256("\\n".join(sorted(record_ids)))[:N]`` with a prefix, and every
+    piece of that has a Spark equivalent:
+
+    ==========================  ==================================
+    ``sorted(record_ids)``      ``sort_array``
+    ``"\\n".join(...)``           ``concat_ws('\\n', ...)``
+    ``sha256(...).hexdigest()`` ``sha2(..., 256)``
+    ``[:N]``                    ``substring(..., 1, N)``
+    ==========================  ==================================
+
+    The orderings agree: Python sorts ``str`` by code point, Spark sorts strings
+    by UTF-8 bytes, and for UTF-8 those are the same order. ``sha2`` returns
+    lowercase hex like ``hexdigest()``.
+
+    Worth stating because the map for this work assumed a fourth JNI binding:
+    the entity id needed no kernel at all. The fingerprint did, because its
+    canonical form is a field-by-field encoding; this one is a plain join of
+    strings the engine already has.
+    """
+    from pyspark.sql import functions as F
+
+    canonical = F.concat_ws("\n", F.sort_array(rids_col))
+    return F.concat(
+        F.lit(_ENT_PREFIX),
+        F.substring(F.sha2(canonical, 256), 1, _ENT_HASH_LEN),
+    )
+
+
+def mint_entity_ids(assignments_with_recid: Any, *, pure_sql: bool = False) -> Any:
     """``(cluster_id, record_id)`` -> ``(cluster_id, entity_id)``: collect each
     cluster's member record_ids and hash them deterministically. ``uuid7``
     scheme mints a per-cluster UUIDv7 instead (non-deterministic; matches the
@@ -238,6 +270,19 @@ def mint_entity_ids(assignments_with_recid: Any) -> Any:
     grouped = assignments_with_recid.groupBy("cluster_id").agg(
         F.collect_list("record_id").alias("__rids__")
     )
+
+    if pure_sql:
+        # No Python worker: the whole id is a column expression.
+        if _id_scheme() == "uuid7":
+            raise ValueError(
+                "the uuid7 id scheme mints a per-cluster UUIDv7, which is "
+                "deliberately NON-DETERMINISTIC and has no Spark SQL "
+                "equivalent -- Spark's uuid() is v4. Use the default h1 scheme "
+                "for a jar-only run, or ship a Python environment."
+            )
+        return grouped.withColumn(
+            "entity_id", entity_id_expr(F.col("__rids__"))
+        ).select("cluster_id", "entity_id")
 
     if _id_scheme() == "uuid7":
         from goldenmatch.identity.store import new_entity_id
@@ -303,11 +348,32 @@ def build_same_as_edges(
     )
 
 
+def golden_json_expr(gcols: list[str]) -> Any:
+    """``json.dumps({c: row[c] for c in gcols}, default=str)`` as Spark SQL.
+
+    ``ignoreNullFields=false`` is load-bearing. Spark's ``to_json`` OMITS null
+    fields by default, while ``json.dumps`` emits ``"c": null`` -- so without the
+    option the two produce different JSON for any row with a missing value, and
+    a golden record would silently lose its null columns.
+
+    ``default=str`` in the Python version coerces anything unserializable
+    (dates, decimals) with ``str()``; Spark formats those its own way. Same
+    divergence class as the fingerprint's type gate, so callers keep the Python
+    path when the golden frame is not string/number/bool typed.
+    """
+    from pyspark.sql import functions as F
+
+    return F.to_json(
+        F.struct(*[F.col(c) for c in gcols]), {"ignoreNullFields": "false"}
+    )
+
+
 def build_identity_nodes(
     entity_ids: Any,
     golden_df: Any,
     *,
     run_meta: dict[str, Any],
+    pure_sql: bool = False,
 ) -> Any:
     """One node per entity (incl. singletons). ``golden_record`` LEFT-joins
     ``build_golden`` (multi-member only); SINGLETON ``golden_record`` is NULL by
@@ -323,6 +389,15 @@ def build_identity_nodes(
     # entity -> golden JSON for multi-member clusters.
     gcols = [c for c in golden_df.columns if c != "cluster_id"]
 
+    if pure_sql:
+        # `json.dumps({c: row[c]})` IS `to_json(struct(*gcols))` -- no kernel,
+        # no worker. See `golden_json_expr` for why ignoreNullFields matters.
+        def _json_expr(cols: list[str]) -> Any:
+            return golden_json_expr(cols)
+    else:
+        def _json_expr(cols: list[str]) -> Any:
+            return _as_json(F.struct(*[F.col(c) for c in cols]))
+
     # One struct argument, as in `_rid`. `pd.isna` is gone with it: a pa.Array
     # carries a validity bitmap, so `to_pylist()` yields None for a null and
     # there is no NaN to test for.
@@ -336,7 +411,7 @@ def build_identity_nodes(
 
     golden_json = (
         golden_df.join(entity_ids, on="cluster_id", how="inner")
-        .withColumn("golden_record", _as_json(F.struct(*[F.col(c) for c in gcols])))
+        .withColumn("golden_record", _json_expr(gcols))
         .select("entity_id", "golden_record")
     )
 
@@ -592,7 +667,9 @@ def build_incremental_nodes(
     return live.unionByName(retired)
 
 
-def _golden_record_json(entity_ids: Any, golden_df: Any) -> Any:
+def _golden_record_json(
+    entity_ids: Any, golden_df: Any, *, pure_sql: bool = False
+) -> Any:
     """``entity_id -> golden_record`` JSON for multi-member clusters (the same
     projection ``build_identity_nodes`` does inline, factored out so the create
     and incremental node builders cannot drift)."""
@@ -601,6 +678,13 @@ def _golden_record_json(entity_ids: Any, golden_df: Any) -> Any:
     from goldenmatch.spark._arrow import arrow_udf, from_pylist, to_pylist
 
     gcols = [c for c in golden_df.columns if c != "cluster_id"]
+
+    if pure_sql:
+        def _json_expr(cols: list[str]) -> Any:
+            return golden_json_expr(cols)
+    else:
+        def _json_expr(cols: list[str]) -> Any:
+            return _as_json(F.struct(*[F.col(c) for c in cols]))
 
     # One struct argument, as in `_rid`. `pd.isna` is gone with it: a pa.Array
     # carries a validity bitmap, so `to_pylist()` yields None for a null and
@@ -616,7 +700,7 @@ def _golden_record_json(entity_ids: Any, golden_df: Any) -> Any:
     return (
         golden_df.join(entity_ids.select("cluster_id", "entity_id"), on="cluster_id",
                        how="inner")
-        .withColumn("golden_record", _as_json(F.struct(*[F.col(c) for c in gcols])))
+        .withColumn("golden_record", _json_expr(gcols))
         .select("entity_id", "golden_record")
     )
 
