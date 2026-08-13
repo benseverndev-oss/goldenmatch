@@ -61,10 +61,15 @@ stands on.
   `certify_ontology_keys` certifies are Arrow.
 
 ## Consequences / honest flags
-- **`rdflib`-gated tests skip in the default CI lane.** `uv sync` does not install
-  optional extras, so the ontology tests `importorskip` there (verified locally,
-  6 passing). A dedicated `[ontology]` CI lane is a possible follow-on; the
-  optional-dep-skip matches the ray/lance/torch precedent.
+- **`rdflib`-gated tests run in the required `python_goldenmatch` lane
+  (2026-08-13 follow-on).** The tests `importorskip("rdflib")`, so absent the extra
+  they SKIP (a false green). Rather than leave that, the required `python_goldenmatch`
+  job now installs `goldenmatch[ontology]` (one step, mirroring how it already
+  installs the `datafusion` / `documents` extras "so tests RUN rather than
+  importorskip-SKIP"), so `tests/test_ontology.py` executes for real inside the
+  merge gate. The default `uv sync` still omits optional extras (a plain
+  `pip install goldenmatch` stays rdflib-free); coverage comes from the extra
+  installed in that one lane, not a separate job.
 - **Reasoning is out of scope by design.** `owl:sameAs` transitive closure, OWL DL
   inference and SHACL *execution* belong to a reasoner/triple store; GoldenMatch
   emits the shapes and triples, it does not evaluate them.
