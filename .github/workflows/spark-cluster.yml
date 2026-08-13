@@ -32,10 +32,10 @@ on:
   workflow_dispatch:
     inputs:
       spark_image_tag:
-        description: "apache/spark image tag (the client pyspark is pinned to match)"
+        description: "Override the apache/spark image tag (default: match whatever the [spark] extra resolves)"
         required: false
         type: string
-        default: "4.0.0"
+        default: ""
   schedule:
     # Nightly, after the usual working day. Cheap insurance that the topology
     # still works; nothing here gates a merge.
@@ -62,8 +62,9 @@ on:
 permissions:
   contents: read
 
-env:
-  SPARK_IMAGE_TAG: ${{ inputs.spark_image_tag || '4.0.0' }}
+# SPARK_IMAGE_TAG is DERIVED from the resolved client below, not set here. See
+# the install step: the product's `[spark]` extra decides the Spark version, and
+# the cluster follows it.
 
 jobs:
   # The aarch64 half of the jar. Present because `build_spark_jar.sh` REFUSES a
@@ -122,15 +123,43 @@ jobs:
       # the deployment story being tested: one file, from the client, nothing
       # installed on the cluster.
       #
-      # pyspark pinned to the image tag. A client/server version skew across
-      # Connect fails in ways that read like a bug in this repo.
-      - name: Install the client (pyspark pinned to the cluster's version)
+      # Installed UNPINNED, via the extra, exactly as `ci.yml` does and exactly
+      # as a user would -- then the CLUSTER is pinned to whatever that resolved.
+      #
+      # The first version of this lane had it backwards: it pinned the client to
+      # the image tag. That makes the image the source of truth for a version
+      # the product does not choose, so the lane would happily test a Spark no
+      # user of this package runs. It failed immediately and usefully -- pinned
+      # to 4.0.0, which has no `arrow_udf`, so the Python path (the ORACLE every
+      # parity test compares against) could not run at all while the JVM path
+      # was fine.
+      - name: Install the client, then pin the cluster to what it resolved
         run: |
           set -euo pipefail
-          python -m pip install --quiet "pyspark[connect]==${SPARK_IMAGE_TAG}"
           python -m pip install --quiet -e 'packages/python/goldenmatch[spark]'
           python -m pip install --quiet pytest pytest-timeout
-          python -c "import pyspark; print('client pyspark', pyspark.__version__)"
+          V="$(python -c 'import pyspark; print(pyspark.__version__)')"
+          echo "client pyspark: $V"
+          TAG="${{ inputs.spark_image_tag }}"
+          if [ -n "$TAG" ]; then
+            echo "image tag OVERRIDDEN to $TAG (client is $V)"
+          else
+            TAG="$V"
+          fi
+          echo "SPARK_IMAGE_TAG=$TAG" >> "$GITHUB_ENV"
+          # `arrow_udf` is what the tier's Python path is built on, and its
+          # absence is a version problem that surfaces deep inside a UDF rather
+          # than at setup. Check it HERE, where the message can say so.
+          python -c "
+          from pyspark.sql import functions as F
+          import sys
+          if not hasattr(F, 'arrow_udf'):
+              sys.exit('::error::pyspark ' + __import__('pyspark').__version__ +
+                       ' has no arrow_udf. The tier is Arrow-native, so the Python '
+                       'path -- the oracle every parity test compares against -- '
+                       'cannot run. Nothing below would be measuring parity.')
+          print('arrow_udf present')
+          "
 
       - name: Build the jar
         env:
@@ -221,10 +250,38 @@ jobs:
           print(f"OK: executor {exec_id} loaded the native kernel from the shipped jar")
           PY
 
+      # The parity tests need a Python environment on the executors, and that is
+      # not a contradiction -- it is two different questions needing two
+      # different setups, both of which require a real cluster:
+      #
+      #   "Does the JVM path work on real executors, and agree with Python?"
+      #     -> needs BOTH arms runnable, so the oracle must exist. THIS step.
+      #   "Is Python actually unnecessary?"
+      #     -> needs the executors genuinely bare. The inventory step below.
+      #
+      # Running the parity tests bare would not prove the jar-only claim; it
+      # would just delete the oracle and leave the JVM path compared against
+      # nothing. (That is what the first run did, by accident.)
+      - name: Pack a runtime venv for the executors (the parity ORACLE)
+        run: |
+          set -euo pipefail
+          python -m venv /tmp/gmenv
+          /tmp/gmenv/bin/pip install --quiet --upgrade pip
+          # pyarrow named explicitly: the tier's UDFs are `arrow_udf` over
+          # `pa.Array`, so the worker contract is stated rather than transitive.
+          # NO pandas -- ci.yml gates on its absence and the reason holds here.
+          /tmp/gmenv/bin/pip install --quiet ./packages/python/goldenmatch pyarrow
+          venv-pack -p /tmp/gmenv -o gm_env.tar.gz --force
+          ls -lh gm_env.tar.gz
+
       - name: JVM parity + scoring, on the cluster
         env:
           GOLDENMATCH_SPARK_REMOTE: "sc://localhost:15002"
           GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
+          # The `spark` fixture ships this to the executors -- its own comment
+          # notes that real Spark forks a Python worker with its own
+          # environment, which is the failure class `local[*]` cannot show.
+          GOLDENMATCH_SPARK_PYENV: "gm_env.tar.gz"
         run: |
           set -euo pipefail
           python -m pytest -v --timeout=600 --timeout-method=thread \
