@@ -56,6 +56,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   it never mutates a feature or a key.
 
 ### Fixed
+- **The auto-config search can now be made host-independent, so gates that pin
+  its output stop being unstable by construction (#2532).** Two layers of the
+  search stop on a WALL CLOCK: the controller's `ControllerBudget.max_seconds`
+  (which ends the iteration loop with `StopReason.BUDGET_TIME`) and the five
+  per-indicator budgets in `core/indicators.py` (which make an indicator return
+  `None` or a default, silently changing what the indicator-aware rules decide).
+  Either one makes the committed config a function of **machine speed and load**
+  rather than of the code and the data — the same input on the same commit can
+  commit a different config on a slow runner. Anything pinning controller output
+  therefore has a check that can go red with no code change, and green while
+  masking a real one; observed directly on `dblp_acm`, which flipped between
+  `BUDGET_ITERATIONS` (4 iterations) and `BUDGET_TIME` (3 iterations) across
+  runs of identical code on one machine.
+
+  New `GOLDENMATCH_AUTOCONFIG_DETERMINISTIC=1` (`core/autoconfig_determinism.py`)
+  drops every elapsed-time cut from the search, leaving the iteration caps as the
+  only stopping rule: same code + same data give the same config on any host, at
+  the cost of an unbounded runtime. Off by default — an interactive run wants a
+  bounded wait more than a bit-reproducible search. It is deliberately **not** a
+  config field: it describes the harness running auto-config, not the dataset
+  being configured. Two behaviours are load-bearing and tested: the env var is
+  read at CALL time (never cached in a module constant, the stale-import trap),
+  and a budget of `<= 0.0` still means "this indicator is switched OFF" — a
+  semantic switch, not a time limit — so deterministic mode never re-enables a
+  disabled indicator.
+
+  Both surfaces that pin controller output now go through it. The parity-pin
+  harness owns the mode inside `pin_config` itself, so the regenerate side and
+  `test_autoconfig_parity_pins_unchanged` pin the same thing, and it *refuses*
+  to pin a run that reports `BUDGET_TIME` anyway — unreachable in deterministic
+  mode, so it can only fire if the flag failed to reach the controller, which is
+  precisely the silent failure this change removes. The `autoconfig_quality`
+  scorecard and the `suggest_quality` gate set it alongside their existing
+  `GOLDENMATCH_AUTOCONFIG_MEMORY=0` / `PYTHONHASHSEED=0` determinism pins.
 - **The blocking-recall warnings now claim only what the estimate supports, and
   surface the trade-off the ranking makes silently (#2540).**
   `estimated_recall` is measured against the pairs the matchkey emits over an

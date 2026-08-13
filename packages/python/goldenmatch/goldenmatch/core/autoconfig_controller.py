@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 from goldenmatch._polars_lazy import pl
 from goldenmatch.config.schemas import BlockingConfig, GoldenMatchConfig
 from goldenmatch.core._docs import AGENT_DOCS_HINT
+from goldenmatch.core.autoconfig_determinism import over_budget
 from goldenmatch.core.autoconfig_history import RunHistory
 from goldenmatch.core.bench import stage
 from goldenmatch.core.complexity_profile import (
@@ -830,8 +831,13 @@ class AutoConfigController:
         try:
             _diag("entering iteration loop")
             for iteration in range(self.budget.max_iterations + 1):
-                elapsed = time.time() - start
-                if elapsed > self.budget.max_seconds and iteration > 0:
+                # #2532: the wall-clock stop makes the committed config a
+                # function of host speed and load -- how many iterations get
+                # explored depends on how busy the machine is. Anything that
+                # PINS controller output must therefore run with
+                # GOLDENMATCH_AUTOCONFIG_DETERMINISTIC=1, which drops this cut
+                # and leaves max_iterations as the only stopping rule.
+                if over_budget(start, self.budget.max_seconds) and iteration > 0:
                     history.stop_reason = StopReason.BUDGET_TIME
                     break
                 iter_start = time.time()

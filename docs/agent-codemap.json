@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 474,
+      "module_count": 475,
       "modules": [
         {
           "module": "goldenmatch",
@@ -2050,6 +2050,7 @@
             "goldenmatch.core._docs",
             "goldenmatch.core._profile_helpers",
             "goldenmatch.core.autoconfig",
+            "goldenmatch.core.autoconfig_determinism",
             "goldenmatch.core.autoconfig_history",
             "goldenmatch.core.autoconfig_memory",
             "goldenmatch.core.autoconfig_negative_evidence",
@@ -2076,6 +2077,15 @@
             "goldenmatch.distributed.record_store",
             "goldenmatch.distributed.sample",
             "goldenmatch.utils.transforms"
+          ]
+        },
+        {
+          "module": "goldenmatch.core.autoconfig_determinism",
+          "file": "packages/python/goldenmatch/goldenmatch/core/autoconfig_determinism.py",
+          "purpose": "Deterministic-search mode for auto-config (#2532).",
+          "defines": [
+            "deterministic_search_enabled",
+            "over_budget"
           ]
         },
         {
@@ -3526,6 +3536,7 @@
           "imports": [
             "goldenmatch._polars_lazy",
             "goldenmatch.core._native_loader",
+            "goldenmatch.core.autoconfig_determinism",
             "goldenmatch.core.complexity_profile",
             "goldenmatch.core.frame",
             "goldenmatch.distributed",

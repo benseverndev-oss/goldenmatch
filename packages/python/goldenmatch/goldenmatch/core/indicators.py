@@ -14,6 +14,7 @@ import time
 from typing import Any
 
 from goldenmatch._polars_lazy import pl
+from goldenmatch.core.autoconfig_determinism import over_budget
 from goldenmatch.core.complexity_profile import (
     ColumnPrior,
     SparsityVerdict,
@@ -23,6 +24,13 @@ logger = logging.getLogger(__name__)
 
 # Wall-clock budgets (seconds). Indicators returning None on budget
 # exhaustion are documented in the spec § Error handling.
+#
+# #2532: every elapsed-time comparison below goes through `over_budget`, which
+# is a no-op under GOLDENMATCH_AUTOCONFIG_DETERMINISTIC=1. An indicator that
+# gives up on time makes the surrounding rule's decision -- and so the committed
+# config -- a function of how loaded the host is. The `<= 0.0` pre-flight checks
+# are NOT time comparisons (they mean "this indicator is switched off") and stay
+# in force in deterministic mode.
 BUDGET_COLUMN_PRIORS = 5.0
 BUDGET_SPARSE_MATCH = 2.0
 BUDGET_FULL_POP_HITS = 15.0
@@ -71,7 +79,7 @@ def compute_column_priors(df: pl.DataFrame) -> dict[str, ColumnPrior]:
     sample = frame.head(1000).native if frame.height > 1000 else df
 
     for col in frame.columns:  # arrow-port: pa.Table.columns is arrays, not names
-        if (time.time() - start) > BUDGET_COLUMN_PRIORS:
+        if over_budget(start, BUDGET_COLUMN_PRIORS):
             logger.info(
                 "compute_column_priors: budget %ss exceeded; "
                 "remaining %d columns get default priors",
@@ -137,7 +145,7 @@ def _compute_corruption_score_inline(sample: pl.DataFrame, col: str) -> float:
         vals = to_frame(sample).column(col).cast_str().fill_null("").to_list()
     except Exception:
         return 0.0
-    if (time.time() - start) > BUDGET_CORRUPTION:
+    if over_budget(start, BUDGET_CORRUPTION):
         return 0.0
     if not vals:
         return 0.0
@@ -259,13 +267,13 @@ def estimate_full_pop_hits(df: pl.DataFrame, blocking_col: str) -> int | None:
     _guard_frame = to_frame(df)  # arrow-port: seam guards
     if blocking_col not in _guard_frame.columns or _guard_frame.height == 0:
         return 0
-    if (time.time() - start) > BUDGET_FULL_POP_HITS:
+    if over_budget(start, BUDGET_FULL_POP_HITS):
         return None
     try:
         from goldenmatch.core.frame import to_frame
 
         sizes = to_frame(df).group_len([blocking_col]).column("len").to_list()
-        if (time.time() - start) > BUDGET_FULL_POP_HITS:
+        if over_budget(start, BUDGET_FULL_POP_HITS):
             return None
         n_pairs = sum(k * (k - 1) // 2 for k in sizes if k > 1)
         return n_pairs
@@ -303,7 +311,7 @@ def compute_cross_blocking_overlap(
         or _guard_frame.height == 0
     ):
         return None
-    if (time.time() - start) > BUDGET_CROSS_BLOCKING:
+    if over_budget(start, BUDGET_CROSS_BLOCKING):
         return None
     try:
         # Co-blocked pairs per key (W3b: seam row-index + hash-grouped
@@ -331,7 +339,7 @@ def compute_cross_blocking_overlap(
 
         indexed = framed.with_row_index("__row__")
 
-        if (time.time() - start) > BUDGET_CROSS_BLOCKING:
+        if over_budget(start, BUDGET_CROSS_BLOCKING):
             return None
 
         def _pairs_set(key: str) -> set[tuple[int, int]] | None:
@@ -344,7 +352,7 @@ def compute_cross_blocking_overlap(
                 for i in range(len(rows)):
                     for j in range(i + 1, len(rows)):
                         pairs.add((rows[i], rows[j]))
-                        if (time.time() - start) > BUDGET_CROSS_BLOCKING:
+                        if over_budget(start, BUDGET_CROSS_BLOCKING):
                             return None
             return pairs
 
