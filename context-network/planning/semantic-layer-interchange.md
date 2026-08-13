@@ -55,6 +55,22 @@
 > Ossie `0.2.0.dev0` required-field + enum constraints that also flags the
 > non-Ossie keys (`cardinality`/`foreign_key`/`aggregation`) hand-written docs
 > tend to invent. The arc is complete — the whole crawl→walk→run is landed.
+>
+> **Cross-language single-sourcing (ratified,
+> [0059](../decisions/0059-semantic-key-integrity-single-sourced-kernel.md)).** The
+> one clean columnar primitive under all of this — the **structural** key-integrity
+> certifier (uniqueness-at-grain + fan-out) — is authored ONCE in the Rust crate
+> `key-integrity-core` and bound by every surface (TS via `key-integrity-wasm`,
+> Python via the `certify_structural_json` native shim, SQL via pgrx + DuckDB), with
+> one Python-generated golden asserted on all three. The join-cardinality wrappers
+> (`certify_serving_joins`/`certify_cube_joins`/`certify_osi_relationships`) delegate
+> to it on both Python and TS — no second source of truth. The shared kernel is
+> **opt-in by design** (pyarrow's `group_by` IS the Arrow-at-bulk boundary and is
+> measurably faster; the kernel exists for the single-owner guarantee, not speed).
+> Recorded on the thesis-conformance board as
+> `semantic-key-integrity-single-sourced-kernel` (`default_routed: opt-in`). The rest
+> of the semantic layer (discovery, resolution tier, namer, warehouse introspection)
+> is orchestration/stateful and correctly stays Python-authoritative.
 > Greenfield when written: no prior repo code, doc, or decision referenced this
 > ecosystem (grep, 2026-07-30).
 

@@ -65,6 +65,7 @@ default_routing:
       - enableClusterWasm
       - enableFingerprintWasm
       - enableGraphWasm
+      - enableKeyIntegrityWasm  # key-integrity-core structural certifier; opt-in by design (pyarrow/pure-TS is the measured-faster default)
       - enablePerceptualWasm
       - enableSketchWasm
       - enableSuggestWasm
@@ -332,6 +333,51 @@ weaknesses:
       - packages/typescript/goldenanalysis/tests/parity/wasm-frame-kernels.parity.test.ts   # kernel == fixture
       - parity/goldenanalysis.yaml
       - docs/superpowers/specs/2026-07-06-goldenanalysis-wave1b-deferred.md
+
+  - id: semantic-key-integrity-single-sourced-kernel
+    tenet: T1
+    severity: low
+    declared: true
+    default_routed: opt-in
+    title: 'Semantic-layer structural certification (uniqueness-at-grain + fan-out) is single-sourced
+      through key-integrity-core; Python-native + TS-wasm + SQL all bind that one kernel'
+    detail: 'SINGLE-SOURCED. The semantic layer''s structural key-integrity certifier -- distinct
+      key groups, duplicate_key_groups, max_fan_out, is_unique_at_grain, and per-measure fan-out
+      (SUM(all)/SUM(per-group max)) -- is authored ONCE in the pyo3/pgrx/wasm-free Rust crate
+      `key-integrity-core` (certify_structural / certify_structural_json). Every non-Rust surface
+      binds that SAME core over its JSON-in/JSON-out boundary: TS via `key-integrity-wasm`
+      (certifyStructural, the 5-line wasm-bindgen re-export), Python via the `certify_structural_json`
+      shim in `goldenmatch-native` (_structural_native), and SQL via pgrx `goldenmatch_certify_structural`
+      + the DuckDB UDF. There is NO second source of truth: the whole join-cardinality family that
+      sits on top -- certify_serving_joins / certify_cube_joins / certify_osi_relationships -- are
+      thin wrappers that DELEGATE to certify_key_integrity on BOTH Python and TS, so cardinality
+      trust inherits the one kernel rather than re-implementing group-by. Conformance is a single
+      shared golden oracle (key-integrity-core/golden/key_integrity_golden.json, GENERATED from the
+      Python reference by scripts/emit_key_integrity_golden.py) asserted by all three surfaces:
+      Rust include_str! (golden.rs), Python direct-read (test_key_integrity_native_parity.py, which
+      also asserts native == pyarrow), and TS toBeCloseTo (key-integrity-wasm.parity.test.ts); a
+      fixture_drift CI job regenerates the TS copy from the live core so it cannot drift.
+      DEFAULT IS DELIBERATELY OPT-IN (default_routed: opt-in), and this is the CORRECT frame call,
+      not a latent second source: the kernel path is JSON-marshaled and MEASURABLY SLOWER than the
+      pyarrow group_by, which already IS the Arrow-at-bulk boundary (T5) and is the reference the
+      golden is generated from -- so per T3 (kernelize on measurement) the pure-Arrow/pure-TS path
+      stays the default and the shared kernel exists for the single-owner GUARANTEE (T1), enforced by
+      the golden gate, not for speed. Python opt-in: GOLDENMATCH_KEY_INTEGRITY_NATIVE; TS opt-in:
+      enableKeyIntegrityWasm() (edge-bundle discipline, sibling to every other opt-in wasm reroute).
+      Decision: 0059.'
+    evidence:
+      - packages/rust/extensions/key-integrity-core/src/lib.rs   # the one authoritative kernel
+      - packages/rust/extensions/key-integrity-core/golden/key_integrity_golden.json   # shared oracle (Python-generated)
+      - packages/rust/extensions/key-integrity-wasm/src/lib.rs   # TS binding (5-line re-export)
+      - packages/rust/extensions/native/src/key_integrity.rs   # Python-native shim (certify_structural_json)
+      - packages/python/goldenmatch/goldenmatch/semantic/key_integrity.py   # _structural_native / _structural_pyarrow (reference)
+      - packages/python/goldenmatch/goldenmatch/semantic/serving.py   # certify_serving_joins delegates
+      - packages/python/goldenmatch/goldenmatch/semantic/cube.py   # certify_cube_joins delegates
+      - packages/typescript/goldenmatch/src/core/semantic/keyIntegrity.ts   # computeStructural: wasm backend, pure-TS fallback
+      - packages/typescript/goldenmatch/src/core/keyIntegrityWasm.ts   # enableKeyIntegrityWasm (opt-in)
+      - packages/python/goldenmatch/tests/test_key_integrity_native_parity.py   # native == pyarrow == golden
+      - packages/typescript/goldenmatch/tests/parity/key-integrity-wasm.parity.test.ts   # wasm == golden
+      - context-network/decisions/0059-semantic-key-integrity-single-sourced-kernel.md
 
   - id: a2a-skills-bidirectional-fracture
     tenet: T1
