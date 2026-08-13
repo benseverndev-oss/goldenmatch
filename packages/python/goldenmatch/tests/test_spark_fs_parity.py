@@ -700,3 +700,67 @@ def test_a_blocking_field_keeps_the_neutral_u_prior(train_source):
         "`first` blocks nothing and must still be LEARNED -- if it also came "
         "back neutral, the guard is neutralising everything"
     )
+
+
+def _random_pair_ids(train_source, **kw):
+    from goldenmatch.spark.config_pipeline import CAND_LHS, CAND_RHS
+    from goldenmatch.spark.em import random_pairs
+    from pyspark.sql import functions as F
+
+    joined = random_pairs(train_source, id_col=_ID, **kw)
+    rows = joined.select(
+        F.col(f"{CAND_LHS}.{_ID}").alias("a"), F.col(f"{CAND_RHS}.{_ID}").alias("b")
+    ).collect()
+    return {(int(r["a"]), int(r["b"])) for r in rows}
+
+
+def test_both_sides_of_the_u_self_join_draw_the_SAME_sample(train_source):
+    """The pairs must be every combination of ONE sample, not a cross of two.
+
+    Both sides of the self-join reference the same plan, so whatever selects the
+    sample is evaluated twice. `DataFrame.sample` seeds per PARTITION, so its two
+    evaluations agree only while the two scans partition identically -- true in
+    practice, not guaranteed, and a mismatch would pair rows from two different
+    samples and still return a full set of plausible probabilities.
+
+    `k` distinct ids can form exactly `k(k-1)/2` ordered pairs. Asserting that
+    identity is what catches a mismatch: two different samples of the same size
+    produce a different count, and the intersection would be smaller.
+
+    `max_pairs` is forced low enough to actually trigger sampling -- the fixture
+    is otherwise below the default target and the whole frame is taken, which
+    would make this pass without exercising anything.
+    """
+    pairs = _random_pair_ids(train_source, max_pairs=10)
+    assert pairs, "no random pairs at all"
+
+    ids = {i for p in pairs for i in p}
+    k = len(ids)
+    assert k < len(_TRAIN_ROWS), (
+        f"all {k} records were taken, so no sampling happened and this test "
+        f"exercises nothing -- lower max_pairs"
+    )
+    assert len(pairs) == k * (k - 1) // 2, (
+        f"{len(pairs)} pairs over {k} distinct ids; one sample of {k} yields "
+        f"{k * (k - 1) // 2}. The two sides of the join drew different rows."
+    )
+    assert all(a < b for a, b in pairs), "pairs are not canonically ordered"
+
+
+def test_the_u_sample_is_reproducible_across_runs(train_source):
+    """Same seed, same rows -- so a model retrained tomorrow has the same u.
+
+    A per-row hash gives this; drawing from a PRNG whose state depends on how
+    the scan happened to be partitioned does not, and the difference only shows
+    up as two runs disagreeing slightly for no visible reason.
+    """
+    assert _random_pair_ids(train_source, max_pairs=10) == _random_pair_ids(
+        train_source, max_pairs=10
+    )
+
+
+def test_a_different_seed_draws_a_different_sample(train_source):
+    """Otherwise the seed is decoration and the previous test proves nothing."""
+    a = _random_pair_ids(train_source, max_pairs=10, seed=1)
+    b = _random_pair_ids(train_source, max_pairs=10, seed=99)
+    assert a != b, "the seed does not reach the sample selection"

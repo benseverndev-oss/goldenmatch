@@ -173,15 +173,30 @@ def random_pairs(
 ) -> Any:
     """A joined frame of RANDOM record pairs, for estimating ``u``.
 
-    Sampled and then cross-joined, rather than cross-joined and then sampled:
-    the full cross join is quadratic in the table and is not something to
-    materialise on the way to a sample of it.
+    Sampled and then self-joined, rather than joined and then sampled: the full
+    cross join is quadratic in the table and is not something to materialise on
+    the way to a sample of it.
 
-    ``sample`` and not ``limit``: ``limit`` takes whatever rows the scan reaches
-    first, which correlates with input order. On a file sorted by name that
-    draws every pair from one corner of the data, and ``u`` -- the level
-    distribution among non-matches -- would be measured on a population that is
-    unusually likely to agree. It would look like a working estimate.
+    Not ``limit``: ``limit`` takes whatever rows the scan reaches first, which
+    correlates with input order. On a file sorted by name that draws every pair
+    from one corner of the data, and ``u`` -- the level distribution among
+    NON-matches -- would be measured on a population unusually likely to agree.
+    It would look like a working estimate.
+
+    Not ``DataFrame.sample`` either, and this one is subtler. Both sides of the
+    self-join reference the same plan, so the sampler is evaluated twice; it is
+    seeded per partition, so the two evaluations agree **as long as the two
+    scans partition identically**. That holds in practice and is not guaranteed
+    -- AQE, a differing shuffle, or one side being cached would break it. If it
+    ever did break, the join would pair rows from two different samples and
+    still return a complete, plausible set of probabilities.
+
+    A hash of the id is deterministic per ROW rather than per partition, so the
+    question does not arise. ``xxhash64`` is uniform enough to select on
+    directly, and folding the seed in keeps the sample reproducible and
+    steerable. The cost is that the size is binomial around the target rather
+    than exact -- about +/-3% of the rows at the default budget, so +/-5% of the
+    pairs, which is noise against a level distribution.
     """
     total = source_df.count()
     if total < 2:
@@ -199,12 +214,14 @@ def random_pairs(
     if want >= total:
         sample = source_df
     else:
-        # Oversample by 10% then cap: `sample` draws each row independently, so
-        # the size is binomial around the fraction and a bare fraction lands
-        # under target about half the time.
-        fraction = min(1.0, (want / total) * 1.1)
-        sample = source_df.sample(withReplacement=False, fraction=fraction, seed=seed)
-        sample = sample.limit(want)
+        # `pmod` and not `abs`: hashing can return the minimum int64, whose
+        # absolute value is not representable and comes back negative -- which
+        # would silently exclude those rows from every sample.
+        buckets = 1 << 31
+        h = F.pmod(
+            F.xxhash64(F.col(id_col), F.lit(int(seed))), F.lit(buckets)
+        )
+        sample = source_df.where(h < F.lit(float(want) / total * buckets))
 
     a = sample.alias(lhs)
     b = sample.alias(rhs)
