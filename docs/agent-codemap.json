@@ -4143,6 +4143,7 @@
             "_build_tf_tables",
             "_calibrate_link_threshold",
             "_deconvolve_post_blocking_u",
+            "_em_iterate",
             "_em_ne_fields",
             "_embedding_pair_sims",
             "_emit_triu_pairs",
@@ -4233,6 +4234,7 @@
             "set_fs_label_anchors",
             "train_em",
             "train_em_continuous",
+            "train_em_from_counts",
             "train_em_per_pass",
             "vectorized_scorer_supported"
           ],

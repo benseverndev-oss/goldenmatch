@@ -187,3 +187,102 @@ def test_the_smoothing_moves_low_probability_cells_the_most():
         f"explains sensitivity in near-zero cells; if it has moved elsewhere, "
         f"the explanation is wrong."
     )
+
+
+# ── the last link: counts in, model out ──────────────────────────────
+
+def _patterns_and_matrix(df, mk, n=400, seed=7):
+    """The comparison rows `train_em` would build, plus their counted form."""
+    from collections import Counter
+
+    from goldenmatch.core.probabilistic import (
+        _build_comparison_matrix,
+        _row_lookup_for_pairs,
+    )
+    ids = df["__row_id__"].to_list()
+    pairs = [(a, b) for i, a in enumerate(ids) for b in ids[i + 1:]][:n]
+    cols = [f.field for f in mk.fields]
+    lookup = _row_lookup_for_pairs(df, cols, [pairs])
+    matrix = _build_comparison_matrix(pairs, lookup, mk)
+    counts = Counter(tuple(int(v) for v in row) for row in matrix)
+    return matrix, sorted(counts.items())
+
+
+def _u_from(matrix, mk):
+    """A fixed u, so the comparison isolates the m estimation."""
+    out = {}
+    for j, f in enumerate(mk.fields):
+        col = matrix[:, j]
+        obs = float((col >= 0).sum())
+        out[f.field] = [
+            (float((col == lvl).sum()) + 1e-6) / (obs + f.levels * 1e-6)
+            for lvl in range(f.levels)
+        ]
+    return out
+
+
+def test_counts_train_the_same_model_as_the_rows_they_stand_for():
+    """THE gate for distributed training.
+
+    `train_em_from_counts` over collapsed vectors must equal `_em_iterate` over
+    the full row set, because collapsing regroups the terms of each sum without
+    changing the total. Exact, not approximate -- if this drifts, a model
+    trained on a cluster is quietly not the model the one-box would have built.
+    """
+    import numpy as np
+    from goldenmatch.core.probabilistic import _em_iterate, train_em_from_counts
+
+    df, mk = _frame(), _make_probabilistic_mk()
+    matrix, patterns = _patterns_and_matrix(df, mk)
+    u = _u_from(matrix, mk)
+
+    n = matrix.shape[0]
+    full_m, _, full_p, _, _ = _em_iterate(
+        mk, matrix, np.zeros((n, 0), dtype=np.int64),
+        np.zeros((n, len(mk.fields)), dtype=bool), np.zeros((n, 0), dtype=bool),
+        np.ones(n), float(n), [], u, {}, set(), set(), None, None, 20, 0.001,
+    )
+    counted = train_em_from_counts(mk, patterns, u)
+
+    assert len(patterns) < n, (
+        f"{len(patterns)} patterns for {n} rows -- nothing collapsed, so this "
+        f"would pass with the weighting removed"
+    )
+    for f in mk.fields:
+        assert counted.m_probs[f.field] == pytest.approx(
+            full_m[f.field], abs=1e-12
+        ), f"{f.field}: counted and row-wise EM disagree"
+    assert counted.proportion_matched == pytest.approx(full_p, abs=1e-12)
+
+
+def test_a_vector_of_the_wrong_width_is_refused():
+    from goldenmatch.core.probabilistic import train_em_from_counts
+
+    mk = _make_probabilistic_mk()
+    with pytest.raises(ValueError, match="ordered by mk.fields"):
+        train_em_from_counts(mk, [((0, 1), 5)], _u_from(*_patterns_and_matrix(_frame(), mk)[:1], mk))
+
+
+def test_empty_counts_are_refused():
+    from goldenmatch.core.probabilistic import train_em_from_counts
+
+    mk = _make_probabilistic_mk()
+    matrix, _ = _patterns_and_matrix(_frame(), mk)
+    with pytest.raises(ValueError, match="nothing to train on"):
+        train_em_from_counts(mk, [], _u_from(matrix, mk))
+
+
+def test_negative_evidence_is_refused_not_silently_dropped():
+    """NE needs a per-pair matrix the counts do not carry. Training without it
+    would produce a model the config did not ask for, and it would look fine."""
+    from goldenmatch.config.schemas import NegativeEvidenceField
+    from goldenmatch.core.probabilistic import train_em_from_counts
+
+    mk = _make_probabilistic_mk(
+        negative_evidence=[
+            NegativeEvidenceField(field="zip", scorer="exact", threshold=0.9)
+        ]
+    )
+    matrix, patterns = _patterns_and_matrix(_frame(), _make_probabilistic_mk())
+    with pytest.raises(NotImplementedError, match="negative-evidence"):
+        train_em_from_counts(mk, patterns, _u_from(matrix, _make_probabilistic_mk()))
