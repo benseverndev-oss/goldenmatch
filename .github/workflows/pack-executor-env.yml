@@ -110,12 +110,12 @@ jobs:
           pip install venv-pack
           # `-p` at a stdlib venv: venv-pack REJECTS a uv-created venv outright
           # ("Current environment is not a virtual environment").
-          venv-pack -p /tmp/gmenv -o gm_env.tar.gz --force
-          ls -lh gm_env.tar.gz
+          venv-pack -p /tmp/gmenv -o gm_env.zip --force
+          ls -lh gm_env.zip
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         with:
           name: gm-executor-env
-          path: gm_env.tar.gz
+          path: gm_env.zip
           if-no-files-found: error
           retention-days: 3
