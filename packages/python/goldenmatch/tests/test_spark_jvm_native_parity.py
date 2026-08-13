@@ -609,3 +609,28 @@ def test_block_key_normalization_routes_to_the_jar_when_asked(spark, registered)
         "the block-key builder must pass the UDF name through, and must still "
         "default to the Python path when not given one"
     )
+
+
+def test_the_probe_says_which_process_it_ran_in(spark, registered):
+    """The runtime string must carry `exec=<id>`.
+
+    Without it the file's central assertion cannot be made at all. Everything
+    here talks about what an EXECUTOR resolved, and under `local[*]` the
+    executor IS the driver -- Spark attributes a failed task there to
+    `executor driver`. So `test_the_executor_resolved_the_native_scorer` was
+    true and proved nothing about a cluster, and no care in the UDF could have
+    distinguished the two.
+
+    This pins the token's presence, so a jar that stops reporting it fails here
+    rather than silently disarming the containerized-cluster lane, whose
+    not-the-driver gate reads exactly this value. The lane asserts the VALUE;
+    this asserts it exists to be asserted on.
+    """
+    _impl, _diagnostics, runtime = implementation(spark)
+    tokens = dict(t.split("=", 1) for t in runtime.split() if "=" in t)
+    assert "exec" in tokens, (
+        f"no exec= in the runtime string {runtime!r}. The cluster lane's "
+        f"'executor is not the driver' gate reads this token; without it that "
+        f"gate cannot distinguish a real executor from local mode."
+    )
+    print(f"\n  ran on executor {tokens['exec']!r}")

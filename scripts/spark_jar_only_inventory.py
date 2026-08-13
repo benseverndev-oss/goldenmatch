@@ -384,13 +384,29 @@ def main(argv=None) -> int:
             "worker forks from the DRIVER's interpreter, which HAS goldenmatch "
             "-- so every UDF would work and this inventory would report that "
             "nothing needs Python on executors, which is false. Ship the "
-            "deliberately-empty env."
+            "deliberately-empty env, or set it to 'none' on a real cluster."
         )
         return 2
-    from goldenmatch.spark.deps import ship_python_environment
+    if pyenv == "none":
+        # Only valid where the executors are genuinely separate processes that
+        # genuinely have no goldenmatch -- the containerized-cluster lane, whose
+        # workers are stock Spark images. There the emptiness is REAL and
+        # shipping a packed empty virtualenv would be theatre.
+        #
+        # It stays an explicit opt-in rather than "unset means bare", because
+        # unset is overwhelmingly likely to mean `local[*]` and a forgotten
+        # flag, which is the case that silently reports full jar-only support
+        # the tier does not have.
+        print(
+            "executor env: NONE shipped -- the executors are expected to be "
+            "genuinely bare (real cluster, stock images).",
+            flush=True,
+        )
+    else:
+        from goldenmatch.spark.deps import ship_python_environment
 
-    ship_python_environment(spark, pyenv)
-    print(f"shipped executor env: {pyenv}", flush=True)
+        ship_python_environment(spark, pyenv)
+        print(f"shipped executor env: {pyenv}", flush=True)
 
     udf_name = install(spark, jar=find_jar())
     impl, diagnostics, runtime = implementation(spark)
