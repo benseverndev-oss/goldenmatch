@@ -102,6 +102,25 @@ def batch_key(strategy: str = "partition", batch_size: int = DEFAULT_BATCH_SIZE)
     return F.floor(F.monotonically_increasing_id() / F.lit(int(batch_size)))
 
 
+def _above(threshold: float):
+    """``arrays_zip`` element -> does its score clear ``threshold``?
+
+    A module-level factory, not an inline lambda, for the reason pinned in
+    ``test_spark_config_pipeline_unit``: **PySpark reads a higher-order lambda's
+    meaning from its PARAMETER COUNT.** One parameter is ``(element)``; two is
+    ``(element, index)``. So the obvious `lambda z, t=threshold:` is read as an
+    indexed callback and ``t`` silently receives the ELEMENT INDEX -- no error,
+    just a filter comparing a score against a row number. Closing over the value
+    keeps the arity at one and lets a test assert it.
+    """
+    def f(z):
+        from pyspark.sql import functions as F
+
+        return z[_SCORES] >= F.lit(float(threshold))
+
+    return f
+
+
 def score_pairs_batched(
     pairs_df: Any,
     source_df: Any,
@@ -112,6 +131,7 @@ def score_pairs_batched(
     udf_name: str,
     batch_strategy: str = "partition",
     batch_size: int = DEFAULT_BATCH_SIZE,
+    threshold: float | None = None,
 ) -> Any:
     """Score ``(a, b)`` pairs through a batched array UDF; return
     ``(a, b, score)``.
@@ -121,6 +141,31 @@ def score_pairs_batched(
 
     The result is the same shape the row-shaped ``score_and_dedup`` produces, so
     the two can be compared directly. That comparison is the J1 gate.
+
+    ## ``threshold``, and why it is applied HERE
+
+    Filtering after the explode and filtering inside the array give the same
+    rows. They do not cost the same, and on this path the difference is the
+    whole story.
+
+    J4 measured the batched JVM arm at **2.4x SLOWER** than the row-shaped
+    Python one, and the plan bisect put the blame precisely: scoring 1.9M pairs
+    over JNI took ~0.2s, while ``arrays_zip``/``explode`` added **~1.2s** -- six
+    times the scoring. An infinitely fast kernel would move 3.5s to 3.3s. The
+    batched path cannot win by scoring faster, because its cost is the
+    un-batching that Spark Connect forces (Connect permits only row-shaped UDFs,
+    so reaching a native kernel means group -> array -> score -> zip -> explode;
+    the row-shaped path never groups and so has nothing to un-batch).
+
+    That bench ran with ``threshold=0.0``: nothing was filtered, so the explode
+    emitted every candidate pair -- the worst case for batching, and the one
+    case where this argument is decided. A real config cuts at a real threshold
+    and keeps a small fraction of candidates, so a filter placed BEFORE the
+    generator shrinks the exploded row count, and the shuffle after it, by
+    roughly the reject ratio. That is the only lever the bisect leaves open.
+
+    ``None`` (the default) adds no filter node at all, so the plan is
+    byte-identical to the pre-threshold one.
     """
     from pyspark.sql import functions as F
 
@@ -160,9 +205,14 @@ def score_pairs_batched(
 
     # arrays_zip pairs positionally BEFORE the explode, so one generator walks
     # already-paired structs. Two explodes would be two independent generators.
-    exploded = scored.select(
-        F.explode(F.arrays_zip(F.col(_ROWS), F.col(_SCORES))).alias("__z__")
-    )
+    zipped = F.arrays_zip(F.col(_ROWS), F.col(_SCORES))
+    if threshold is not None:
+        # BEFORE the explode, on purpose -- see the docstring. `where` after the
+        # generator returns the same rows and pays the generator for every
+        # rejected pair, which is the cost the J4 bisect attributed the whole
+        # 2.4x to.
+        zipped = F.filter(zipped, _above(threshold))
+    exploded = scored.select(F.explode(zipped).alias("__z__"))
     return exploded.select(
         F.col(f"__z__.{_ROWS}.a").alias("a"),
         F.col(f"__z__.{_ROWS}.b").alias("b"),

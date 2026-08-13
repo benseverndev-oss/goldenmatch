@@ -259,3 +259,69 @@ def test_batch_size_does_not_change_the_answer(spark, registered):
     assert answers[0] == answers[1] == answers[2], (
         "batch size changed the answer; it is a memory knob, not a semantic one"
     )
+
+
+def test_the_threshold_returns_exactly_what_a_post_filter_would(spark, registered):
+    """Filtering inside the array must be answer-identical to filtering rows.
+
+    The parameter exists for a PLAN reason -- keep rejected pairs out of the
+    generator, because J4's bisect attributed the batched arm's 2.4x to the
+    explode rather than the kernel -- so the one thing it must not do is change
+    the answer. `exact` scores are 0.0 or 1.0, so a threshold of 0.5 splits them
+    cleanly and an off-by-one in the predicate shows up as a whole class
+    vanishing.
+    """
+    from goldenmatch.spark.batched import score_pairs_batched
+    from goldenmatch.spark.jvm import scorer_id
+
+    df = spark.createDataFrame(_rows(6, 8), _SCHEMA)
+    pairs = _candidate_pairs(spark, df)
+
+    def _run(threshold):
+        return score_pairs_batched(
+            pairs, df, id_col=_ID, value_col="name",
+            scorer_id=scorer_id("exact"), udf_name=registered,
+            threshold=threshold,
+        )
+
+    from pyspark.sql import functions as F
+
+    want = {
+        (int(r["a"]), int(r["b"])): r["score"]
+        for r in _run(None).where(F.col("score") >= F.lit(0.5)).collect()
+    }
+    got = {(int(r["a"]), int(r["b"])): r["score"] for r in _run(0.5).collect()}
+
+    assert got == want, (
+        f"array-filter and row-filter disagree: only-array={set(got) - set(want)}, "
+        f"only-row={set(want) - set(got)}"
+    )
+    # The test is only meaningful if the threshold actually rejected something.
+    assert want, "no pair cleared 0.5; the fixture proves nothing"
+    everything = {(int(r["a"]), int(r["b"])) for r in _run(None).collect()}
+    assert len(want) < len(everything), (
+        "nothing was rejected, so this would pass with the filter removed"
+    )
+
+
+def test_a_null_score_does_not_survive_the_threshold(spark, registered):
+    """Comparability nulls must not leak through the array predicate.
+
+    `null >= 0.5` is NULL, not false, and `filter` keeps only elements where the
+    predicate is TRUE -- so nulls drop. That is the same thing `where` does, but
+    it is worth pinning: a null score reaching the output would be a pair the
+    scorer declined to judge, presented as a match.
+    """
+    from goldenmatch.spark.batched import score_pairs_batched
+    from goldenmatch.spark.jvm import scorer_id
+
+    rows = [(0, "b", None), (1, "b", None), (2, "b", "x"), (3, "b", "x")]
+    df = spark.createDataFrame(rows, _SCHEMA)
+    pairs = _candidate_pairs(spark, df)
+
+    scored = score_pairs_batched(
+        pairs, df, id_col=_ID, value_col="name",
+        scorer_id=scorer_id("exact"), udf_name=registered, threshold=0.5,
+    )
+    scores = [r["score"] for r in scored.collect()]
+    assert None not in scores, f"a null score cleared the threshold: {scores}"

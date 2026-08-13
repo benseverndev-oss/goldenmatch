@@ -102,6 +102,60 @@ def test_arrays_are_zipped_before_exploding():
     )
 
 
+# ── J4's only open lever: filter BEFORE the generator ────────────────
+
+def test_the_threshold_filter_is_applied_before_the_explode():
+    """The entire point of the parameter, and invisible to an output check.
+
+    Filtering after the explode returns the SAME ROWS as filtering inside the
+    array, so no behavioural test can tell the two apart -- and the difference
+    is the whole reason the parameter exists. J4's plan bisect attributed the
+    batched arm's 2.4x to `arrays_zip`/`explode` (~1.2s for 1.9M pairs, six
+    times the ~0.2s of actual JNI scoring), so a filter that runs after the
+    generator has already paid for every rejected pair buys nothing.
+
+    Structural, therefore, in the same spirit as the two guards above.
+    """
+    src = inspect.getsource(batched.score_pairs_batched)
+    assert "F.filter(" in src, "the threshold must filter the ARRAY"
+    assert src.index("F.filter(") < src.index("F.explode("), (
+        "the filter must come before the explode; after it, every rejected pair "
+        "has already been materialised as a row and the filter saves nothing"
+    )
+    # A post-generator row filter would be the natural regression -- it reads
+    # identically at the call site and passes every parity test.
+    for after_the_fact in (".where(", ".filter(F.col"):
+        assert after_the_fact not in src, (
+            f"{after_the_fact!r} filters rows after the generator; filter the "
+            f"array instead"
+        )
+
+
+def test_the_threshold_predicate_takes_ONE_parameter():
+    """PySpark reads a higher-order lambda's meaning from its parameter count.
+
+    One parameter is `(element)`; two is `(element, index)`. So
+    `lambda z, t=threshold:` is read as an indexed callback and `t` receives the
+    ELEMENT INDEX -- a filter comparing a score against a row number, with no
+    error and no crash. This repo has already paid for that trap once, in the
+    JVM scoring reshape.
+    """
+    import inspect as _inspect
+
+    predicate = batched._above(0.5)
+    assert len(_inspect.signature(predicate).parameters) == 1, (
+        "a two-parameter predicate is read as (element, index) and silently "
+        "compares the score against the index"
+    )
+
+
+def test_no_threshold_means_no_filter_node():
+    """The default must leave the plan byte-identical to the pre-threshold one,
+    so this parameter cannot be blamed for a change in the J1 parity gate."""
+    sig = inspect.signature(batched.score_pairs_batched)
+    assert sig.parameters["threshold"].default is None
+
+
 def test_dedup_is_separable_from_scoring():
     """Kept apart so the two paths can be compared BEFORE dedup as well as
     after -- a misalignment that dedup happens to mask would otherwise be
