@@ -10,7 +10,9 @@
 > [0053](../decisions/0053-ontology-layer-rdf-owl-provider.md) (ontology layer:
 > RDF/OWL/SHACL native identity provider) +
 > [0054](../decisions/0054-ontology-layer-consume-audit.md) (deeper consume +
-> certification report + reconciliation).
+> certification report + reconciliation) +
+> [0055](../decisions/0055-ontology-layer-produce-discover.md) (richer emit +
+> ontology discovery).
 >
 > **Ontology layer (0053 + 0054)** — the semantic-layer thesis one level up
 > (TBox/ABox): an ontology *asserts* identity (`owl:hasKey`,
@@ -20,11 +22,14 @@
 > `certify_ontology_keys` / `certify_ontology` (bridge to A — certify exactly those
 > keys, whole-ontology roll-up), `reconcile_ontology_identity` (diff asserted
 > `owl:sameAs` vs resolved identity — over-merge / fragmentation),
-> `emit_sameas_graph` (bridge to B — `owl:sameAs` + PROV-O), `emit_identity_shacl`
-> (conformance shape). `rdflib` optional (`goldenmatch[ontology]`); GoldenMatch is
-> the identity provider FOR the reasoner/triple store, never a reimplementation of
-> one. **Still open (0055):** richer emit (`rdf:type` + per-class SHACL) + ontology
-> discovery (draft OWL from data + crosswalk).
+> `emit_sameas_graph` (bridge to B — `owl:sameAs` + PROV-O, optional `rdf:type`),
+> `emit_golden_triples` (typed individuals + conformed values), `emit_identity_shacl`
+> / `emit_ontology_shapes` (conformance shapes), and `discover_ontology` (draft OWL
+> from data, `owl:hasKey` pre-graded by the certifier — the generative half).
+> `rdflib` optional (`goldenmatch[ontology]`); GoldenMatch is the identity provider
+> FOR the reasoner/triple store, never a reimplementation of one. **The ontology
+> arc is complete** (0053 v1 + 0054 consume/audit + 0055 produce/discover); a
+> CLI/MCP front door + live-catalog write-back stay deferred (parity surface).
 > Captures the framing for how GoldenMatch relates to the semantic-layer /
 > metrics-layer ecosystem (dbt Semantic Layer + MetricFlow, Cube, and the Open
 > Semantic Interchange spec), and a crawl→walk→run plan. Problem **A**
