@@ -7,6 +7,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Fixed
+- **`build_resolved_crosswalk` respects the caller's `config.identity` instead
+  of replacing it (#2521).** It constructed a fresh `IdentityConfig` with
+  `backend="sqlite"` hardcoded and `emit_singletons` omitted, so a
+  caller-supplied identity section was discarded wholesale -- silently, with no
+  diagnostic. Those two settings are the only single-node scale levers the
+  identity docs describe (`emit_singletons: false`, and moving the store to
+  Postgres for its bulk `COPY` write path), which made the documented scale
+  guidance unreachable through this entry point. A user who set
+  `identity.backend: postgres` and called this function still got SQLite with
+  singletons on, and at ~2x the documented ~100k-row SQLite ceiling the runtime
+  advisory would name a fix the entry point could not apply.
+
+  The function now merges rather than replaces, overriding only what it is
+  inherently deciding -- `enabled`, `source_pk_column`, `dataset`, and the
+  sqlite `path` when a `store_path` was passed. `backend`, `connection` and
+  `emit_singletons` are left to the caller, and the identity store is opened
+  with the configured backend rather than a second hardcoded
+  `IdentityStore(backend="sqlite", ...)`.
+
+  Backward compatible by construction: `IdentityConfig`'s defaults are
+  `backend="sqlite"` and `emit_singletons=True`, exactly the behaviour that was
+  hardcoded, so a config whose `identity` was never touched resolves to an
+  identical run. Two related sharp edges are also closed -- passing
+  `store_path` alongside a non-sqlite backend now warns instead of silently
+  ignoring the path, and the returned `ResolvedCrosswalk.store_path` reports
+  `None` in that case rather than a file the run never wrote.
 - **Auto-config no longer scores a field that every candidate pair agrees on by
   construction (#2526).** Blocking makes its key constant inside each block, so
   when the same column is also a scored field in the weighted matchkey it

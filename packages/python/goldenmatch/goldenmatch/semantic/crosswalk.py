@@ -15,6 +15,7 @@ runs (the whole point of "resolve once"); omit it for an ephemeral run.
 """
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
 from dataclasses import dataclass
@@ -23,6 +24,8 @@ from typing import Any
 import pyarrow as pa
 
 from goldenmatch.semantic.key_integrity import _to_arrow
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -74,8 +77,17 @@ def build_resolved_crosswalk(
         dataset: identity-graph dataset scope (defaults to `source_name`).
         store_path: SQLite path for the identity graph. Pass a stable path to make
             entity ids durable across runs ("resolve once"); omit for an ephemeral
-            temp store.
+            temp store. Ignored (with a warning) when `config.identity.backend` is
+            not sqlite, since a postgres store is addressed by its connection.
         config: an explicit GoldenMatchConfig; zero-config auto-config otherwise.
+            Its `identity` section is RESPECTED, not replaced: `backend`,
+            `connection` and `emit_singletons` are the caller's to set. This
+            function overrides only what it is inherently deciding -- `enabled`,
+            `source_pk_column`, `dataset`, and the sqlite `path` when a
+            `store_path` was given. `emit_singletons=False` and
+            `backend="postgres"` are the two documented single-node scale levers
+            (see `docs-site/goldenmatch/identity-graph.mdx`); both reach the
+            resolver through here.
 
     Returns:
         A `ResolvedCrosswalk`. The resolved key is the control plane's stable id.
@@ -90,10 +102,6 @@ def build_resolved_crosswalk(
         raise ValueError(f"build_resolved_crosswalk: source_pk column not in table: {source_pk!r}")
 
     dataset = dataset or source_name
-    ephemeral = store_path is None
-    if ephemeral:
-        fd, store_path = tempfile.mkstemp(prefix="gm_crosswalk_", suffix=".db")
-        os.close(fd)
 
     # Zero-config (or the caller's config), with the identity graph enabled so the
     # pipeline assigns durable stable ids. Disable rerank so certification never
@@ -102,18 +110,52 @@ def build_resolved_crosswalk(
     for mk in cfg.get_matchkeys():
         if getattr(mk, "rerank", False):
             mk.rerank = False
-    cfg.identity = IdentityConfig(
-        enabled=True,
-        backend="sqlite",
-        path=store_path,
-        source_pk_column=source_pk,
-        dataset=dataset,
-    )
+
+    # MERGE the caller's identity settings rather than replacing them (#2521).
+    # This function owns only what it is inherently deciding -- it is resolving
+    # THIS frame into THIS dataset -- and must leave the storage and cost levers
+    # (`backend`, `connection`, `emit_singletons`) to the caller. Those are the
+    # only two single-node scale controls the identity docs describe, and
+    # hardcoding them here made the documented guidance unreachable through this
+    # entry point, silently.
+    #
+    # Backward compatible by construction: `IdentityConfig`'s defaults are
+    # `backend="sqlite"` and `emit_singletons=True`, which is exactly the
+    # behaviour this used to hardcode. A config whose `identity` was never
+    # touched resolves to the same run as before.
+    supplied = getattr(cfg, "identity", None)
+    identity = IdentityConfig() if supplied is None else supplied.model_copy(deep=True)
+    identity.enabled = True
+    identity.source_pk_column = source_pk
+    identity.dataset = dataset
+
+    # The ephemeral temp store is a SQLite-only concept; a postgres store is
+    # durable by definition and has no file to create or clean up.
+    ephemeral = identity.backend == "sqlite" and store_path is None
+    if identity.backend == "sqlite":
+        if store_path is None:
+            fd, store_path = tempfile.mkstemp(prefix="gm_crosswalk_", suffix=".db")
+            os.close(fd)
+        identity.path = store_path
+    elif store_path is not None:
+        # Don't drop it silently -- that is the failure mode this fixes.
+        logger.warning(
+            "build_resolved_crosswalk: store_path=%r is ignored because "
+            "config.identity.backend is %r, not 'sqlite'. The identity graph will "
+            "use the configured connection; pass backend='sqlite' if you meant to "
+            "write to that file.",
+            store_path, identity.backend,
+        )
+    cfg.identity = identity
 
     try:
         dedupe_df(df, config=cfg, source_name=source_name, confidence_required=False)
 
-        store = IdentityStore(backend="sqlite", path=store_path)
+        store = IdentityStore(
+            backend=identity.backend,
+            path=identity.path,
+            connection=identity.connection,
+        )
         pks = table.column(source_pk).to_pylist()
         record_ids = [f"{source_name}:{pk}" for pk in pks]
         mapping = store.lookup_entity_ids(record_ids)
@@ -150,6 +192,10 @@ def build_resolved_crosswalk(
         n_records=len(pks),
         n_entities=n_entities,
         unmapped=unmapped,
-        store_path=None if ephemeral else store_path,
+        # Only report a path the run actually used: it is None for an ephemeral
+        # store, and for a non-sqlite backend where any `store_path` was ignored.
+        store_path=(
+            store_path if (identity.backend == "sqlite" and not ephemeral) else None
+        ),
         note=note,
     )
