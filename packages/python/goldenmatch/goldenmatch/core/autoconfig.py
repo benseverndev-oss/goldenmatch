@@ -1269,6 +1269,94 @@ _DOMAIN_IDENTITY_WEIGHT = 1.0
 _DOMAIN_IDENTITY_MIN_CARDINALITY = 0.5
 
 
+# Transforms that only normalise (case, surrounding whitespace) and so preserve
+# equality: if two values land in the same block under these, the values
+# themselves still compare equal. Everything else -- soundex, substring:N:M,
+# metaphone, token_sort -- is LOSSY: "Sony" and "Sonny" share a soundex block
+# while being different strings, so the raw field still discriminates inside the
+# block and must not be treated as constant. The list is deliberately a
+# whitelist: an unrecognised transform is assumed lossy.
+_EQUALITY_PRESERVING_TRANSFORMS = frozenset({
+    "lowercase", "uppercase", "lower", "upper", "strip", "trim",
+})
+
+
+def _always_agreeing_blocking_fields(blocking) -> set[str]:
+    """Fields on which EVERY candidate pair is guaranteed to agree.
+
+    Two conditions, both necessary:
+
+    * **Every pass must key on the field.** A blocking key is constant inside its
+      own block, but under ``multi_pass`` a pair produced by pass 2 can disagree
+      on pass 1's key -- so the field still carries signal. Hence the INTERSECTION
+      across passes, not the union.
+    * **Every transform on that key must preserve equality.** Sharing a block
+      under a LOSSY transform does not mean sharing a value (measured: abt_buy
+      keys all three passes on ``manufacturer``, but via ``soundex`` and
+      ``substring:0:5``, so ``manufacturer`` genuinely discriminates within a
+      block and dropping it would be wrong)."""
+    if blocking is None:
+        return set()
+    keys = list(getattr(blocking, "passes", None) or [])
+    if not keys:
+        keys = list(getattr(blocking, "keys", None) or [])
+    if not keys:
+        return set()
+    groups = []
+    for k in keys:
+        if not set(k.transforms or []).issubset(_EQUALITY_PRESERVING_TRANSFORMS):
+            return set()  # a lossy pass -> no field is guaranteed constant
+        groups.append(set(k.fields))
+    return set.intersection(*groups)
+
+
+def _drop_uninformative_blocking_fields(matchkeys, blocking) -> None:
+    """Drop scored fields that every candidate pair agrees on by construction.
+
+    Such a field contributes its full weight to every pair as a constant OFFSET
+    with zero discriminative power -- it cannot separate a match from a non-match,
+    it only shifts the whole score distribution up and flattens the threshold's
+    effect. Measured on DBLP-ACM (#2526), where blocking is static on
+    ``__title_key__`` and the same column was also scored at weight 0.8: it
+    supplied **18.6%** of the weighted score to 100% of candidates while
+    distinguishing none of them.
+
+    The matchkey's ``threshold`` is rescaled by the surviving weight share so the
+    decision boundary lands in the same place on the fields that actually
+    discriminate. Without that, removing an 18.6% constant makes the SAME nominal
+    threshold materially stricter and recall drops -- measured: dropping the field
+    at an unchanged 0.70 scored F1 0.6855 vs 0.6894 before, a small REGRESSION,
+    while the same field set at its rescaled boundary scored 0.7029.
+
+    Mutates ``matchkeys`` in place. A matchkey is left untouched if the rule would
+    empty it, since a matchkey with no fields cannot score anything."""
+    dead = _always_agreeing_blocking_fields(blocking)
+    if not dead:
+        return
+    for mk in matchkeys:
+        if getattr(mk, "type", None) != "weighted":
+            continue
+        fields = list(getattr(mk, "fields", None) or [])
+        keep = [f for f in fields if f.field not in dead]
+        if not keep or len(keep) == len(fields):
+            continue
+        total = sum(float(f.weight or 0) for f in fields)
+        kept = sum(float(f.weight or 0) for f in keep)
+        dropped = [f.field for f in fields if f.field in dead]
+        if total > 0 and kept > 0 and mk.threshold is not None:
+            # Same absolute score bar, expressed over the surviving weight.
+            rescaled = (float(mk.threshold) * total - (total - kept)) / kept
+            mk.threshold = round(min(max(rescaled, 0.05), 0.99), 4)
+        mk.fields = keep
+        logger.info(
+            "auto-config: dropped %s from matchkey %r -- blocking guarantees every "
+            "candidate pair agrees on %s, so it was a constant %.1f%% of the score "
+            "with no discriminative power; threshold rescaled to %.4f",
+            ", ".join(dropped), mk.name, "them" if len(dropped) > 1 else "it",
+            100.0 * (total - kept) / total if total else 0.0, mk.threshold,
+        )
+
+
 def _is_identity_claim(col: str, weight: float, cardinality_ratio: float) -> bool:
     """Whether a domain-extracted ``exact`` field may stand alone as its own
     exact matchkey, versus being folded into the weighted matchkey at its
@@ -5390,6 +5478,8 @@ def _rebuild_from_decisions(
             "keys": decisions.blocking_keys,
             "passes": decisions.blocking_passes,
         })
+
+    _drop_uninformative_blocking_fields(decisions.matchkeys, final_blocking)
 
     return GoldenMatchConfig(
         matchkeys=decisions.matchkeys,
