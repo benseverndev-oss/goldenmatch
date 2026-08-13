@@ -131,6 +131,15 @@ def semantic_field_roles(source: str | Any) -> SemanticFieldRoles:
             keys.extend(src.primary_key)
             dimensions.extend(src.dimensions)
             measures.extend(src.measures)
+    elif dialect == "odcs":
+        from goldenmatch.semantic.odcs import parse_odcs_contract
+
+        for obj in parse_odcs_contract(data).schema_objects:
+            keys.extend(obj.identity_key())
+            # numeric properties are aggregation targets (never identity evidence);
+            # the descriptive columns are the dimensions to resolve on.
+            measures.extend(obj.numeric_measures())
+            dimensions.extend(obj.dimensions())
     else:  # osi
         from goldenmatch.semantic.osi import parse_osi_models
 

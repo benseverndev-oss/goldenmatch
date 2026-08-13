@@ -7,6 +7,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **ODCS (Open Data Contract Standard) dialect for the semantic-layer certifier
+  (`goldenmatch.semantic.odcs`).** A data contract declares its identity right in
+  the schema — `primaryKey: true` (ordered by `primaryKeyPosition` for a composite
+  key) and `unique: true` — and nothing checks that promise against the data, so a
+  duplicated key makes the contract's own uniqueness guarantee false. ODCS
+  `primaryKey` maps one-to-one onto MetricFlow `entity (primary)` / Cube / Malloy
+  `primary_key`, so the same certifier applies. New: `parse_odcs_contract` (reads
+  the v3 `schema:`/`properties:` shape, tolerant of the legacy v2
+  `dataset:`/`columns:`/`isPrimary` spelling on read — no
+  `open-data-contract-standard` dependency), `odcs_identity_keys` (the composite
+  primary key **plus each standalone `unique` property**), `certify_odcs_contract`
+  (bridge to wedge A — one certificate per declared key, with the object's numeric
+  properties as the fan-out measures) and `emit_odcs_from_crosswalk` (bridge to
+  wedge B — declares the resolved key as `primaryKey`, provenance embedded in
+  `customProperties`). `certify_semantic_model` auto-detects `kind: DataContract`
+  as the `"odcs"` dialect. Library-only, advisory, parity-free.
 - **Malloy (malloydata.dev) BI dialect for the semantic-layer certifier
   (`goldenmatch.semantic.malloy`).** Malloy's unit is a `source` whose identity is
   its declared `primary_key`, with `join_one`/`join_many`/`join_cross` riding on it
