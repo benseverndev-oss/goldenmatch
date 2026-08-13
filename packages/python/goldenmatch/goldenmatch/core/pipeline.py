@@ -2871,6 +2871,12 @@ def _fused_result_from_clusters(
                 c.get("size", 0) for c in clusters.values() if c.get("size", 0) > 1
             ),
         },
+        # #2483: always empty here -- the fused short-circuit never runs the FS
+        # scorer, so there is no link cutoff to report. Present so this dict
+        # keeps the SAME key set as the classic path's
+        # (test_result_dict_keys_match_classic); a key on one and not the other
+        # KeyErrors downstream in _api.py DedupeResult assembly.
+        "fs_link_thresholds": {},
         "golden": _dict_frame_to_arrow(golden_df),
         "unique": _dict_frame_to_arrow(unique_df),
         "dupes": _dict_frame_to_arrow(dupes_df),
