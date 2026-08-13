@@ -147,7 +147,7 @@ jobs:
           GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
           GOLDENMATCH_NATIVE: "0"
         run: |
-          .venv/bin/python scripts/diag_spark_batched_oom.py             --rows '${{ inputs.rows }}' --block-size '${{ inputs.block_size }}'
+          .venv/bin/python scripts/diag_spark_batched_oom.py --scorer jaro_winkler --rows '${{ inputs.rows }}' --block-size '${{ inputs.block_size }}'
 
       # ONE ARM PER PROCESS. Both used to run in one script against one
       # `local[*]` session, where the driver and executor SHARE A JVM -- so the

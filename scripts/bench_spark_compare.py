@@ -30,12 +30,20 @@ def main(argv: list[str] | None = None) -> int:
     arms = [
         ("row_python (pure)", pure),
         ("row_python (NATIVE)", native),
-        ("batched_jvm (exact)", jvm),
+        (f"batched_jvm ({jvm.get('scorer', '?')})", jvm),
     ]
     for name, a in arms:
         r = a["timing"]
-        res = a.get("native_resolved")
-        tag = "" if res is None else f"  native_resolved={res}"
+        # `native_resolved` is the pyo3 loader's state ON THE DRIVER, which says
+        # something about the row_python arms and NOTHING about the JVM arm --
+        # that one reaches the kernel through JNI, and printing `False` next to
+        # it reads as "the kernel did not run" when it did. Report what actually
+        # answers the question for each arm.
+        if a.get("path") == "batched_jvm":
+            tag = f"  impl={a.get('jvm_impl', '?')}"
+        else:
+            res = a.get("native_resolved")
+            tag = "" if res is None else f"  native_resolved={res}"
         print(f"  {name:22} median {r['median_s']:8.3f}s   "
               f"(min {r['min_s']:.3f} max {r['max_s']:.3f})   "
               f"rows_out={r['rows_out']:,}{tag}")

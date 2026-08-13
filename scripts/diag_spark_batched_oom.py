@@ -144,6 +144,16 @@ def main(argv=None) -> int:
     ap.add_argument("--rows", type=int, default=200_000)
     ap.add_argument("--block-size", type=int, default=20)
     ap.add_argument("--batch-size", type=int, default=10_000)
+    ap.add_argument(
+        "--scorer",
+        default="exact",
+        help="Scorer for the UDF stages. Use the BENCH's scorer (jaro_winkler) "
+             "when the question is attribution rather than the OOM: stage 3 runs "
+             "no UDF at all, so `stage 3 vs stage 7` splits the wall between the "
+             "PLAN (shuffle + collect_list + explode, which Connect forces on "
+             "any batched UDF) and the SCORING. With a different scorer the two "
+             "halves are not comparable to the bench number.",
+    )
     args = ap.parse_args(argv)
 
     from goldenmatch.spark.jvm import find_jar, install, scorer_id
@@ -160,7 +170,7 @@ def main(argv=None) -> int:
 
     df = spark.createDataFrame(_rows(args.rows, args.block_size), _SCHEMA).cache()
     pairs = _candidates(df)
-    sid = scorer_id("exact")
+    sid = scorer_id(args.scorer)
 
     stages = [
         ("1 candidates", lambda: pairs.count()),

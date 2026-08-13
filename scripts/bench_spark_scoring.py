@@ -289,6 +289,10 @@ def main(argv=None) -> int:
     # requested flag rather than the resolved one would label pure-Python
     # numbers as native -- which is exactly how this harness misreported its
     # first result.
+    # NOTE this is the pyo3 loader's state on the DRIVER, and it answers the
+    # question only for the row_python arms (whose worker env is built from the
+    # same package set). It says nothing about batched_jvm, which reaches the
+    # kernel through JNI in the executor JVM -- `jvm_impl` is that arm's answer.
     try:
         from goldenmatch.core._native_loader import native_enabled
 
