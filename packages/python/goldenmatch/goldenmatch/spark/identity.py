@@ -86,16 +86,68 @@ def _id_scheme() -> str:
 # --- Spark frame builders (lazy pyspark imports) ---
 
 
+#: Spark types whose `to_json` encoding is proven to fingerprint identically to
+#: the Python path. Deliberately narrow -- see `_jvm_fingerprint_types_ok`.
+_JVM_FINGERPRINT_TYPES = frozenset(
+    {"string", "boolean", "byte", "short", "integer", "long", "null"}
+)
+
+
+def _jvm_fingerprint_types_ok(source_df: Any, payload_cols: list[str]) -> list[str]:
+    """Payload columns whose type is NOT proven safe for the JVM path.
+
+    The JVM path fingerprints ``to_json(struct(...))``; the Python path
+    fingerprints a dict that has been through ``_canonical_payload``. Those agree
+    for strings, integers, booleans and nulls, and are NOT proven to agree for:
+
+    - **floats** -- Python hands the kernel a float value; Spark hands it a JSON
+      literal, and the two only fingerprint alike if every float renders
+      identically. Round-tripping through text is exactly where that breaks.
+    - **non-finite floats** -- ``_canonical_payload`` turns them into the STRINGS
+      ``"nan"``/``"inf"``/``"-inf"``. Spark's ``to_json`` emits bare ``NaN`` /
+      ``Infinity`` tokens, which are not even valid JSON.
+    - **dates and timestamps** -- Python calls ``.isoformat()``; Spark applies its
+      own session-dependent format. Same instant, different bytes, different id.
+    - **binary, arrays, maps, structs** -- ``_canonical_payload`` reduces these
+      with ``str()``, which is a Python repr and has no JSON analogue.
+
+    A wrong fingerprint does not fail; it silently splits one identity into two
+    or merges two into one. So an unproven type is REFUSED rather than guessed
+    at, and the message names the columns so the caller can cast them or keep
+    the Python path for this dataset.
+    """
+    bad = []
+    for f in source_df.schema.fields:
+        if f.name not in payload_cols:
+            continue
+        if f.dataType.typeName().lower() not in _JVM_FINGERPRINT_TYPES:
+            bad.append(f"{f.name}:{f.dataType.simpleString()}")
+    return bad
+
+
 def derive_record_ids(
     source_df: Any,
     *,
     source_col: str = "__source__",
     source_pk_col: str | None = None,
     id_col: str = "__row_id__",
+    fingerprint_udf: str | None = None,
 ) -> Any:
     """Add a ``record_id`` column to ``source_df``. PK path is a pure column
     expression; the no-PK h1 path runs ``record_id_for_row`` in a struct
     arrow_udf over the payload columns (parity with one-box by construction).
+
+    ``fingerprint_udf`` is the SQL name of the jar's ``golden_fingerprint``
+    (see :func:`goldenmatch.spark.jvm.install`). When given, the no-PK path is
+    computed **entirely in the executor JVM** -- Spark builds the JSON with
+    ``to_json(struct(...))`` and the same Rust ``fingerprint-core`` that Python
+    uses hashes it -- so no Python worker is involved and no executor virtualenv
+    is needed. The jar-only inventory measures exactly this.
+
+    Passed explicitly rather than auto-detected, matching
+    :func:`goldenmatch.spark.batched.score_pairs_batched`: whether a run needs
+    Python on its executors is a deployment decision, and a path that silently
+    switched itself would make identities depend on which jar happened to load.
     """
     from pyspark.sql import functions as F
 
@@ -116,6 +168,43 @@ def derive_record_ids(
     # no-PK h1 id matches one-box per-row. Falls back to "dataframe" per row
     # when __source__ is absent (matches one-box row.get default).
     udf_cols = payload_cols + ([source_col] if has_source else [])
+
+    if fingerprint_udf is not None:
+        bad = _jvm_fingerprint_types_ok(source_df, payload_cols)
+        if bad:
+            raise ValueError(
+                f"the JVM fingerprint path cannot be used for {source_df} because "
+                f"these columns have types whose JSON encoding is not proven to "
+                f"fingerprint identically to the Python path: {', '.join(bad)}. "
+                f"A differing fingerprint does not fail -- it silently splits one "
+                f"identity in two -- so it is refused. Cast them to string, or "
+                f"omit fingerprint_udf and ship a Python environment for this "
+                f"dataset. Proven-safe types: {sorted(_JVM_FINGERPRINT_TYPES)}."
+            )
+        # `__`-prefixed keys are dropped INSIDE fingerprint-core, so the struct
+        # is built from payload_cols only and the two surfaces cannot disagree
+        # about which fields count. `to_json` runs in the engine: no Python.
+        # `ignoreNullFields=false` is LOAD-BEARING. Spark's `to_json` omits null
+        # fields by default, so a row with a missing value produced JSON without
+        # that key at all -- while the Python path hands the kernel a dict that
+        # still carries `city: None`. Different fields in, different fingerprint
+        # out, and the two ids simply disagree.
+        #
+        # Caught by `test_derive_record_ids_matches_the_python_path`, which is
+        # exactly the row it was written for: name="" / city=None. The type gate
+        # above cannot see this -- every column was a proven-safe type; the
+        # divergence was in the ENCODING, not the types.
+        h1 = F.call_udf(
+            fingerprint_udf,
+            F.to_json(
+                F.struct(*[F.col(c) for c in payload_cols]),
+                {"ignoreNullFields": "false"},
+            ),
+        )
+        return source_df.withColumn(
+            "record_id",
+            F.concat(src_expr, F.lit(":h1:"), F.substring(h1, 1, 12)),
+        )
 
     # ONE struct argument rather than a variadic UDF. The pandas version took
     # *cols and rebuilt a frame with `pd.concat`; arrow_udf's variadic form is

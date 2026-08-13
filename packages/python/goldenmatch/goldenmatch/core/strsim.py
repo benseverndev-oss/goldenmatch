@@ -34,6 +34,7 @@ __all__ = [
     "levenshtein_normalized_similarity",
     "indel_normalized_similarity",
     "ratio",
+    "token_sort_similarity",
     "token_sort_ratio",
     "partial_ratio",
     "damerau_levenshtein_distance",
@@ -255,14 +256,45 @@ def ratio(s1: str, s2: str) -> float:
     return indel_normalized_similarity(s1, s2) * 100.0
 
 
+def token_sort_similarity(s1: str, s2: str) -> float:
+    """Token-sort similarity on ``[0, 1]``.
+
+    == ``score_one(2, s1, s2)`` in score-core, which is
+    ``indel_ratio(token_sort_string(a), token_sort_string(b))``. Rust's
+    ``split_whitespace`` + ``sort_unstable`` + ``join(" ")`` is this function's
+    ``" ".join(sorted(s.split()))``: same tokens, and UTF-8 byte order is
+    code-point order, so the sorts agree.
+
+    Exists because callers that want ``[0, 1]`` were reaching for
+    :func:`token_sort_ratio` and dividing by 100 -- and ``(x * 100) / 100`` is
+    not ``x`` in binary floating point. That cost one ULP against the kernel, for
+    nothing. Consumers on the ``[0, 1]`` scale should call this; the 0-100
+    :func:`token_sort_ratio` stays exactly as it was for rapidfuzz parity.
+
+    .. note::
+       ``token_sort_ratio(...) / 100.0`` is still written at roughly eight other
+       call sites (``core.scorer``, ``core.boost``, ``core.explainer``,
+       ``backends.score_buckets``, ``native``, ``backends.datafusion_backend``).
+       They carry the same one-ULP deviation from ``score_one``. Moving them is a
+       repo-wide change to scores that are THRESHOLDED, with pinned expectations
+       across several suites, so it is deliberately NOT bundled with the J2 work
+       that found it -- it wants its own change and its own gate run.
+    """
+    a = " ".join(sorted(s1.split()))
+    b = " ".join(sorted(s2.split()))
+    return indel_normalized_similarity(a, b)
+
+
 def token_sort_ratio(s1: str, s2: str) -> float:
     """== rapidfuzz ``fuzz.token_sort_ratio`` (0-100 scale): Indel ratio over
     whitespace-split, code-point-sorted, space-joined tokens. No case
     normalization (rapidfuzz's default processor here is a no-op), so
-    ``Foo``/``foo`` scores 66.67, matching the crate."""
-    a = " ".join(sorted(s1.split()))
-    b = " ".join(sorted(s2.split()))
-    return indel_normalized_similarity(a, b) * 100.0
+    ``Foo``/``foo`` scores 66.67, matching the crate.
+
+    The scaled form of :func:`token_sort_similarity`, not a second
+    implementation -- byte-identical to what it computed before that function was
+    split out (same expression, same order of operations)."""
+    return token_sort_similarity(s1, s2) * 100.0
 
 
 def partial_ratio(s1: str, s2: str) -> float:

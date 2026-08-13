@@ -31,16 +31,24 @@ import org.apache.spark.sql.api.java.UDF3;
  */
 public final class GoldenScoreUdf implements UDF3<Integer, Object, Object, List<Double>> {
 
-  /** J0 carries no algorithms of its own. J2 swaps this for a JNI-backed
-   * implementation and the refusals in {@link ExactScorer} go away. */
-  private static final GoldenScorer SCORER = new ExactScorer();
-
   /** Names the implementation actually in use, so a caller can tell a J0 jar
-   * from a J2 one without reading version strings. Callable from SQL once
-   * registered, which is how the Python side asserts the jar it shipped is the
-   * jar that loaded. */
+   * from a J2 one without reading version strings. Callable from SQL via
+   * {@link GoldenScoreImplUdf}, which is how the Python side asserts the jar it
+   * shipped is the jar that loaded -- and, since a UDF runs on an EXECUTOR, that
+   * the library loaded there rather than merely on the driver.
+   *
+   * <p>Delegates to {@link ScorerSelection} rather than holding its own static:
+   * two sources for "which scorer is running" could disagree, and the one Spark
+   * calls would not be the one the tests read. */
   public static String implementationName() {
-    return SCORER.getClass().getSimpleName();
+    return ScorerSelection.implementationName();
+  }
+
+  /** Why the native library did or did not load, verbatim. Paired with
+   * {@link #implementationName()} so a fallback reports its own cause instead of
+   * leaving it in an executor log nobody collects. */
+  public static String implementationDiagnostics() {
+    return ScorerSelection.diagnostics();
   }
 
   @Override
@@ -53,7 +61,7 @@ public final class GoldenScoreUdf implements UDF3<Integer, Object, Object, List<
     if (as == null || bs == null) {
       return null;
     }
-    Double[] scores = SCORER.score(scorerId, as, bs);
+    Double[] scores = ScorerSelection.scorer().score(scorerId, as, bs);
     // A fixed-size list from Arrays.asList is fine as a UDF return; Spark reads
     // it and does not mutate. Copying it would allocate a second list per batch
     // for no benefit.

@@ -35,6 +35,14 @@ on:
         description: "Runner label"
         required: false
         default: "large-new-64GB"
+      driver_memory:
+        description: >-
+          Heap for the local[*] JVM, which IS the executor. Set EQUALLY for both
+          arms. The batched path materialises each group as an array in JVM heap,
+          so an unset ceiling (Spark's 1g default) measures a configuration
+          rather than a design -- and that is what OOM'd the JVM arm.
+        required: false
+        default: "12g"
 
 permissions:
   contents: read
@@ -64,15 +72,33 @@ jobs:
       # Same build the spark_connect lane does, and for the same reason:
       # `--release 17` so the jar runs on Spark's oldest supported JDK rather
       # than only on whatever the runner happens to have.
+      # J2: the kernel's JNI door, built BEFORE the jar because it ships inside
+      # it. Without this step the jar loads, falls back to J0's `exact`-only
+      # scorer, and this bench silently measures the wrong thing against a
+      # native row_python arm. The arm asserts on it too -- belt and braces,
+      # because a silent fallback here produces a NUMBER, and a number is
+      # believed.
+      - name: Build the native scorer library (JNI)
+        run: |
+          set -euo pipefail
+          cargo build --release \
+            --manifest-path packages/rust/extensions/score-jni/Cargo.toml
+          ls -lh packages/rust/extensions/score-jni/target/release/libgoldenmatch_score_jni.so
+
       - name: Build the JVM scorer jar
         run: |
           set -euo pipefail
           SPARK_JARS="$(.venv/bin/python -c 'import pyspark, os; print(os.path.join(os.path.dirname(pyspark.__file__), "jars"))')"
           JVM=packages/jvm/goldenmatch-spark
-          mkdir -p "$JVM/build/classes"
-          javac --release 17 -cp "$SPARK_JARS/*" -d "$JVM/build/classes" \
+          mkdir -p "$JVM/build/classes/native/linux-x86-64"
+          javac --release 17 -encoding UTF-8 -cp "$SPARK_JARS/*" -d "$JVM/build/classes" \
             "$JVM"/src/dev/goldensuite/spark/*.java
+          cp packages/rust/extensions/score-jni/target/release/libgoldenmatch_score_jni.so \
+            "$JVM/build/classes/native/linux-x86-64/"
           jar --create --file "$JVM/build/goldenmatch-spark.jar" -C "$JVM/build/classes" .
+          jar --list --file "$JVM/build/goldenmatch-spark.jar" \
+            | grep -qx "native/linux-x86-64/libgoldenmatch_score_jni.so" \
+            || { echo "::error::the native library is not in the jar; the JVM arm would bench the J0 fallback"; exit 1; }
 
       # P1's executor environment. The row_python path forks a Python worker,
       # which has NO access to the client's site-packages -- the first run of
@@ -89,14 +115,26 @@ jobs:
           set -euo pipefail
           python -m venv /tmp/gmenv
           /tmp/gmenv/bin/pip install --upgrade pip
-          # pandas is not a goldenmatch dependency but `pandas_udf` needs it in
-          # the WORKER. NOT -q: a silent pip failure ships an env that unpacks
-          # fine and imports nothing.
-          /tmp/gmenv/bin/pip install ./packages/python/goldenmatch pandas pyarrow
+          # NO PANDAS. The tier's UDFs are `arrow_udf` over `pa.Array` now, so
+          # the worker needs pyarrow (goldenmatch's own hard dependency) and
+          # nothing else. This step still installed pandas after the tier stopped
+          # using it -- which would have made the row_python arm carry a
+          # dependency the shipped path does not have. NOT -q: a silent pip
+          # failure ships an env that unpacks fine and imports nothing.
+          #
+          /tmp/gmenv/bin/pip install ./packages/python/goldenmatch pyarrow
           # cd out of the repo: its root directory is itself named `goldenmatch`,
           # so a check run from here can import the source tree and pass while
           # the env is empty.
-          (cd /tmp && /tmp/gmenv/bin/python -c "import goldenmatch, pandas, pyarrow; print('shipped env imports OK')")
+          (cd /tmp && /tmp/gmenv/bin/python -c "import goldenmatch, pyarrow; print('shipped env imports OK')")
+          # ASSERT the Rust kernel reached the WORKER. `goldenmatch` depends on
+          # goldenmatch-native, so it arrives transitively -- but the native
+          # row_python arm is only native if the worker has it, and setting
+          # GOLDENMATCH_NATIVE on the driver alone changes nothing. Verified
+          # rather than assumed, because the arm's whole purpose evaporates
+          # silently if this is ever untrue.
+          (cd /tmp && /tmp/gmenv/bin/python -c "import goldenmatch_native, goldenmatch_native._native; print('worker HAS the Rust kernel')") \
+            || { echo "::error::the shipped executor env has no goldenmatch-native; the NATIVE row_python arm would score with the pure floor and be labelled native"; exit 1; }
           .venv/bin/venv-pack -p /tmp/gmenv -o gm_env.tar.gz --force
           ls -lh gm_env.tar.gz
 
@@ -104,11 +142,12 @@ jobs:
         if: inputs.mode == 'diag'
         env:
           GOLDENMATCH_SPARK_REMOTE: "local[*]"
+          SPARK_DRIVER_MEMORY: "${{ inputs.driver_memory }}"
           GOLDENMATCH_SPARK_PYENV: "gm_env.tar.gz"
           GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
           GOLDENMATCH_NATIVE: "0"
         run: |
-          .venv/bin/python scripts/diag_spark_batched_oom.py             --rows '${{ inputs.rows }}' --block-size '${{ inputs.block_size }}'
+          .venv/bin/python scripts/diag_spark_batched_oom.py --scorer jaro_winkler --rows '${{ inputs.rows }}' --block-size '${{ inputs.block_size }}'
 
       # ONE ARM PER PROCESS. Both used to run in one script against one
       # `local[*]` session, where the driver and executor SHARE A JVM -- so the
@@ -121,10 +160,11 @@ jobs:
         if: inputs.mode != 'diag'
         env:
           GOLDENMATCH_SPARK_REMOTE: "local[*]"
+          SPARK_DRIVER_MEMORY: "${{ inputs.driver_memory }}"
           GOLDENMATCH_SPARK_PYENV: "gm_env.tar.gz"
           GOLDENMATCH_NATIVE: "0"
         run: |
-          .venv/bin/python scripts/bench_spark_scoring.py --path row_python             --native 0             --rows '${{ inputs.rows }}' --block-size '${{ inputs.block_size }}'             --repeats '${{ inputs.repeats }}' --out bench-row_python.json
+          .venv/bin/python scripts/bench_spark_scoring.py --path row_python --scorer jaro_winkler --native 0             --rows '${{ inputs.rows }}' --block-size '${{ inputs.block_size }}'             --repeats '${{ inputs.repeats }}' --out bench-row_python.json
 
       # The arm that speaks to spec section 1. Without it the bench measures UDF
       # plumbing with the kernel switched off and says nothing about "vectorized
@@ -133,19 +173,21 @@ jobs:
         if: inputs.mode != 'diag'
         env:
           GOLDENMATCH_SPARK_REMOTE: "local[*]"
+          SPARK_DRIVER_MEMORY: "${{ inputs.driver_memory }}"
           GOLDENMATCH_SPARK_PYENV: "gm_env.tar.gz"
         run: |
-          .venv/bin/python scripts/bench_spark_scoring.py --path row_python             --native 1             --rows '${{ inputs.rows }}' --block-size '${{ inputs.block_size }}'             --repeats '${{ inputs.repeats }}' --out bench-row_python_native.json
+          .venv/bin/python scripts/bench_spark_scoring.py --path row_python --scorer jaro_winkler --native 1             --rows '${{ inputs.rows }}' --block-size '${{ inputs.block_size }}'             --repeats '${{ inputs.repeats }}' --out bench-row_python_native.json
 
       - name: Bench batched_jvm
         if: inputs.mode != 'diag'
         env:
           GOLDENMATCH_SPARK_REMOTE: "local[*]"
+          SPARK_DRIVER_MEMORY: "${{ inputs.driver_memory }}"
           GOLDENMATCH_SPARK_PYENV: "gm_env.tar.gz"
           GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
           GOLDENMATCH_NATIVE: "0"
         run: |
-          .venv/bin/python scripts/bench_spark_scoring.py --path batched_jvm             --rows '${{ inputs.rows }}' --block-size '${{ inputs.block_size }}'             --repeats '${{ inputs.repeats }}' --out bench-batched_jvm.json
+          .venv/bin/python scripts/bench_spark_scoring.py --path batched_jvm --scorer jaro_winkler --rows '${{ inputs.rows }}' --block-size '${{ inputs.block_size }}'             --repeats '${{ inputs.repeats }}' --out bench-batched_jvm.json
 
       # A SCRIPT, not inline Python: an embedded multi-line program inside a
       # YAML `run:` block must survive block-scalar parsing too, and this repo
@@ -153,7 +195,7 @@ jobs:
       - name: Compare
         if: inputs.mode != 'diag'
         run: |
-          .venv/bin/python scripts/bench_spark_compare.py             bench-row_python.json bench-row_python_native.json \n            bench-batched_jvm.json spark-scoring-bench.json
+          .venv/bin/python scripts/bench_spark_compare.py             bench-row_python.json bench-row_python_native.json bench-batched_jvm.json spark-scoring-bench.json
 
       - name: Summary
         if: always()

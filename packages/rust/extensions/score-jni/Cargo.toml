@@ -1,0 +1,66 @@
+# score-jni -- the JNI binding over `score-cabi`, so a Spark executor JVM calls
+# the canonical Rust scorers directly.
+#
+# # Why this exists on top of score-cabi rather than instead of it
+#
+# `score-cabi` already exposes the kernel over a C ABI in Arrow's string layout.
+# A JVM cannot call a plain C function without a `Java_*`-named entry point
+# unless it uses Panama (FFM), which was only finalized in JDK 22 -- and Spark
+# supports JDK 17, 21 and 25. So a cluster on 17 or 21 has no FFM, and JNI is
+# the only door.
+#
+# This crate is that door and nothing else: it pins the JVM's primitive arrays,
+# hands their addresses to `goldenmatch_score_pairwise_utf8`, and returns its
+# code. It re-implements no marshaling and no scoring -- score-cabi already
+# validates offsets and UTF-8, and score-core already owns `score_one`. Every
+# binding in this repo (pyo3 `native`, `datafusion-udf`, `score-wasm`,
+# `score-cabi`) wraps that same core, which is what makes a score identical
+# across surfaces by construction rather than by four implementations being kept
+# in step. This adds a fifth host, not a fifth implementation.
+#
+# # One .so, both ABIs
+#
+# Linking score-cabi as an rlib into this cdylib re-exports its `#[no_mangle]`
+# C symbols alongside the JNI ones, so the same shared library serves a JNI host
+# today and an FFM host later with no second build. That is deliberate.
+#
+# Standalone workspace -- same isolation rationale as score-cabi,
+# goldengraph-cabi and goldenprofile-cabi.
+[workspace]
+
+[package]
+name = "goldenmatch-score-jni"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "JNI binding over goldenmatch-score-cabi: batch string scoring inside a JVM (Spark executors) with no Python worker"
+
+[lib]
+name = "goldenmatch_score_jni"
+# cdylib only. Nothing links this as a Rust library -- its entire purpose is to
+# be `System.load`ed by a JVM. `rlib` is added back only under test.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# The C ABI this crate marshals into. Path dep on the sibling binding, NOT on
+# score-core: routing through score-cabi means its offset/UTF-8 validation is
+# the one implementation, so a malformed batch is refused identically whether it
+# arrives from C or from the JVM.
+goldenmatch-score-cabi = { path = "../score-cabi" }
+# Record fingerprints, for the identity graph. A SECOND kernel in this one
+# library on purpose: the jar carries exactly one `.so` per platform, extracted
+# and dlopen'd once per executor JVM, so a second library would mean a second
+# extraction and a second load for no benefit. `fingerprint-core` is pyo3-free
+# and its `fingerprint_json` was written for exactly this -- "non-Python callers
+# (pgrx / DuckDB / C ABI)", per its own manifest.
+goldenmatch-fingerprint-core = { path = "../fingerprint-core" }
+# The transform chain (normalization). Third kernel in the same library -- one
+# `.so` per platform, one extraction, one dlopen per executor JVM.
+goldenmatch-transforms-core = { path = "../transforms-core" }
+# Golden-record survivorship. Fourth kernel in the same library.
+goldenmatch-survivorship-core = { path = "../survivorship-core" }
+# jni-rs: the de-facto binding. Chosen over hand-writing the JNINativeInterface
+# function-table offsets because getting those wrong is a segfault inside an
+# executor, not a compile error.
+jni = "0.21"

@@ -1882,6 +1882,32 @@ jobs:
       # failure (a symbol that does not export, a link error) would pass the
       # tests and ship a library no host can load.
       - run: cargo build --release --manifest-path score-cabi/Cargo.toml
+      # score-jni: the JNI binding over score-cabi, so a Spark executor JVM calls
+      # the kernel directly instead of forking a Python worker per batch. Its own
+      # [workspace] again, so its own lines. Gated HERE as well as in the
+      # spark_connect lane because that lane is path-filtered: a change to
+      # score-core or score-cabi that broke this binding would otherwise not be
+      # compiled by anything until someone touched a Spark file.
+      # transforms-core (2026-08-13): the pyo3-free transform chain. Written
+      # because there was NO Rust implementation -- verified against origin/main,
+      # not one file under packages/rust/ mentioned apply_transform or any
+      # sibling -- so normalization was Python-only and a Spark cluster needed a
+      # packed virtualenv to lowercase a column. Its unit tests pin the parity
+      # decisions (Python counts U+001C..U+001F as whitespace and Rust does not;
+      # slicing is by code point; honorifics include POST-nominals).
+      # survivorship-core (2026-08-13): the pyo3-free golden-record merge.
+      # Written because `merge_field` existed in Rust only inside native/, which
+      # is pyo3+pyarrow AND is the fused columnar INDICES kernel, not this. Its
+      # unit tests pin the TIE-BREAKS -- Python keeps the first maximum and
+      # Rust's max_by_key keeps the last, and a tie resolved the other way is a
+      # different golden record with no error attached.
+      - run: cargo test --manifest-path survivorship-core/Cargo.toml
+      - run: cargo clippy --manifest-path survivorship-core/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --manifest-path transforms-core/Cargo.toml
+      - run: cargo clippy --manifest-path transforms-core/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --manifest-path score-jni/Cargo.toml
+      - run: cargo clippy --manifest-path score-jni/Cargo.toml --all-targets -- -D warnings
+      - run: cargo build --release --manifest-path score-jni/Cargo.toml
       # fs-core (2026-07-17) is the pyo3-free single source of truth for the
       # Fellegi-Sunter block-scoring math (name/ensemble/tf scorers + normalize),
       # its own [workspace] path-dep of `native`. Exercised indirectly by the
@@ -2968,8 +2994,89 @@ jobs:
   # kernel, which this lane deliberately does not install. That f32/f64 decision
   # guard is gated by native_wheel_drift, not here -- this lane is NOT a gate on
   # the native scorer, and promoting it does not make it one.
-  spark_connect:
+  # J3: the aarch64 half of the jar, built and SELF-TESTED on real ARM hardware.
+  #
+  # The jar carries the Rust kernel as a resource per platform, and CI built
+  # linux-x86-64 only. A Graviton cluster -- which is most of the cheap capacity
+  # on AWS now, and increasingly the default -- would have found no resource for
+  # `linux-aarch64`, fallen back to the `exact`-only J0 scorer, and kept running.
+  # Slower and narrower, silently, on the exact deployment the JVM path exists to
+  # serve. That is the silent-fallback class this repo keeps paying for.
+  #
+  # NATIVE, not cross-compiled. Cross-compiling and checking the ELF header
+  # proves the file is aarch64-shaped; it does not prove the kernel RUNS there.
+  # This repo has a live example of a binary that built and loaded fine and then
+  # parked on a futex for 190s on one specific CPU (#688). So the library is
+  # built on an ARM runner and NativeSelfTest is executed on it -- 10,000 pairs
+  # across the JNI boundary, on the architecture in question.
+  #
+  # The artifact this job tests is the artifact `spark_connect` puts in the jar.
+  # Rebuilding it there would reintroduce the way "the tested jar" and "the
+  # shipped jar" can differ, which is the reason the jar is built inside the lane
+  # that tests it in the first place.
+  #
+  # No pyspark, no uv sync: NativeSelfTest exercises the Spark-FREE classes, so
+  # this job needs a JDK, cargo and nothing else.
+  spark_jvm_aarch64:
     needs: changes
+    if: needs.changes.outputs.spark == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Build the native scorer library for aarch64
+        run: |
+          set -euo pipefail
+          cargo build --release \
+            --manifest-path packages/rust/extensions/score-jni/Cargo.toml
+          SO=packages/rust/extensions/score-jni/target/release/libgoldenmatch_score_jni.so
+          file "$SO"
+          # Assert the machine type rather than trusting the runner label. A
+          # mislabelled runner would otherwise ship an x86 library under the
+          # aarch64 resource path -- which fails at dlopen on every ARM executor,
+          # and falls back silently.
+          readelf -h "$SO" | grep -q "AArch64" \
+            || { echo "::error::$SO is not an AArch64 object"; exit 1; }
+          nm -D --defined-only "$SO" | grep -qE "Java_dev_goldensuite_spark_NativeScorer_scorePairwiseUtf8$" \
+            || { echo "::error::the JNI entry points are not exported"; exit 1; }
+      # The whole point: RUN it here. Spark-free classes only -- the two UDF
+      # classes need a Spark classpath and nothing in this job touches Spark.
+      - name: Native scorer self-test ON aarch64
+        run: |
+          set -euo pipefail
+          JVM=packages/jvm/goldenmatch-spark
+          mkdir -p "$JVM/build/classes/native/linux-aarch64" "$JVM/build/test-classes"
+          javac --release 17 -encoding UTF-8 -d "$JVM/build/classes" \
+            "$JVM"/src/dev/goldensuite/spark/GoldenScorer.java \
+            "$JVM"/src/dev/goldensuite/spark/ExactScorer.java \
+            "$JVM"/src/dev/goldensuite/spark/SeqCoercion.java \
+            "$JVM"/src/dev/goldensuite/spark/Utf8Batch.java \
+            "$JVM"/src/dev/goldensuite/spark/NativeLibrary.java \
+            "$JVM"/src/dev/goldensuite/spark/NativeScorer.java \
+            "$JVM"/src/dev/goldensuite/spark/NativeFingerprint.java \
+            "$JVM"/src/dev/goldensuite/spark/NativeTransform.java \
+            "$JVM"/src/dev/goldensuite/spark/NativeSurvivorship.java \
+            "$JVM"/src/dev/goldensuite/spark/ScorerSelection.java
+          cp packages/rust/extensions/score-jni/target/release/libgoldenmatch_score_jni.so \
+            "$JVM/build/classes/native/linux-aarch64/"
+          javac --release 17 -encoding UTF-8 -d "$JVM/build/test-classes" \
+            -cp "$JVM/build/classes" \
+            "$JVM"/test/dev/goldensuite/spark/NativeSelfTest.java
+          java -cp "$JVM/build/classes:$JVM/build/test-classes" \
+            dev.goldensuite.spark.NativeSelfTest
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: goldenmatch-score-jni-linux-aarch64
+          path: packages/rust/extensions/score-jni/target/release/libgoldenmatch_score_jni.so
+          if-no-files-found: error
+          retention-days: 1
+
+  spark_connect:
+    needs: [changes, spark_jvm_aarch64]
     if: needs.changes.outputs.spark == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -3066,17 +3173,72 @@ jobs:
       # `--release 17` matters: Spark supports Java 17, 21 and 25, and the
       # runner's JDK is only one of them. Compiling without it would produce a
       # jar that runs here and fails on a 17 executor with UnsupportedClassVersionError.
-      - name: Build the JVM scorer jar
+      # J2: the Rust kernel's JNI door, built BEFORE the jar because it ships
+      # INSIDE it. Riding in the jar is what keeps `addArtifact` sufficient --
+      # one file, nothing installed on the cluster, no `java.library.path`. A
+      # library the operator has to place on every executor would just replace
+      # the packed-virtualenv apparatus this arc exists to remove.
+      #
+      # This step builds `linux-x86-64` -- the runner's own architecture.
+      # `linux-aarch64` is built AND self-tested on real ARM hardware by
+      # `spark_jvm_aarch64` and downloaded below, so the binary that was tested
+      # is the binary that ships (J3).
+      - name: Build the native scorer library (JNI)
+        run: |
+          set -euo pipefail
+          cargo build --release \
+            --manifest-path packages/rust/extensions/score-jni/Cargo.toml
+          SO=packages/rust/extensions/score-jni/target/release/libgoldenmatch_score_jni.so
+          ls -lh "$SO"
+          # The kernel really is in there -- a library missing the symbol would
+          # load and then fail on first call, inside an executor.
+          nm -D --defined-only "$SO" | grep -E "Java_dev_goldensuite_spark_NativeScorer_(abiVersion|scorerIdCount|scorePairwiseUtf8)$" \
+            || { echo "::error::the JNI entry points are not exported from $SO"; exit 1; }
+      # J3: the aarch64 library, built AND self-tested on real ARM hardware by
+      # `spark_jvm_aarch64`. Downloaded rather than cross-compiled here, so the
+      # binary that was tested is the binary that ships -- rebuilding it would
+      # reintroduce exactly the "tested jar vs shipped jar" gap this lane's
+      # single-job jar build exists to close.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          name: goldenmatch-score-jni-linux-aarch64
+          path: /tmp/jni-aarch64
+      - name: Build the JVM scorer jar (x86-64 + aarch64)
         run: |
           set -euo pipefail
           SPARK_JARS="$(.venv/bin/python -c 'import pyspark, os; print(os.path.join(os.path.dirname(pyspark.__file__), "jars"))')"
           JVM=packages/jvm/goldenmatch-spark
-          mkdir -p "$JVM/build/classes"
-          javac --release 17 -cp "$SPARK_JARS/*" -d "$JVM/build/classes" \
+          mkdir -p "$JVM/build/classes/native/linux-x86-64" \
+                   "$JVM/build/classes/native/linux-aarch64"
+          # -encoding UTF-8: the sources carry multi-byte literals (the parity
+          # fixtures) and javac otherwise reads them in the platform default,
+          # which is not UTF-8 everywhere.
+          javac --release 17 -encoding UTF-8 -cp "$SPARK_JARS/*" -d "$JVM/build/classes" \
             "$JVM"/src/dev/goldensuite/spark/*.java
+          cp packages/rust/extensions/score-jni/target/release/libgoldenmatch_score_jni.so \
+            "$JVM/build/classes/native/linux-x86-64/"
+          cp /tmp/jni-aarch64/libgoldenmatch_score_jni.so \
+            "$JVM/build/classes/native/linux-aarch64/"
+          # Assert each library IS the architecture its resource path claims.
+          # Swapping them yields a jar that loads on neither -- dlopen fails on
+          # every executor and both platforms fall back silently.
+          readelf -h "$JVM/build/classes/native/linux-x86-64/libgoldenmatch_score_jni.so" \
+            | grep -q "X86-64" || { echo "::error::the linux-x86-64 resource is not an x86-64 object"; exit 1; }
+          readelf -h "$JVM/build/classes/native/linux-aarch64/libgoldenmatch_score_jni.so" \
+            | grep -q "AArch64" || { echo "::error::the linux-aarch64 resource is not an AArch64 object"; exit 1; }
           jar --create --file "$JVM/build/goldenmatch-spark.jar" -C "$JVM/build/classes" .
           echo "--- jar contents ---"
           jar --list --file "$JVM/build/goldenmatch-spark.jar"
+          # The jar without a library still RUNS -- it falls back to the
+          # `exact`-only scorer so a job survives -- which is exactly why an
+          # absence has to be an error here rather than a surprise on somebody's
+          # cluster. BOTH arches: a Graviton fleet finding no aarch64 resource is
+          # precisely the failure this ships to prevent.
+          for arch in linux-x86-64 linux-aarch64; do
+            jar --list --file "$JVM/build/goldenmatch-spark.jar" \
+              | grep -qx "native/$arch/libgoldenmatch_score_jni.so" \
+              || { echo "::error::no $arch library in the jar; that platform would silently fall back to the J0 scorer"; exit 1; }
+          done
       # The Spark-free half of the jar, gated before anything ships it. No JUnit:
       # a test framework would mean a dependency resolver, and this package has
       # no build system on purpose (one small jar does not justify a fourth
@@ -3085,10 +3247,78 @@ jobs:
         run: |
           set -euo pipefail
           JVM=packages/jvm/goldenmatch-spark
-          javac --release 17 -d "$JVM/build/test-classes" -cp "$JVM/build/classes" \
+          javac --release 17 -encoding UTF-8 -d "$JVM/build/test-classes" -cp "$JVM/build/classes" \
             "$JVM"/test/dev/goldensuite/spark/*.java
           java -cp "$JVM/build/classes:$JVM/build/test-classes" \
             dev.goldensuite.spark.SelfTest
+      # J2's end-to-end gate with no Spark in the picture: extract the library
+      # from the classpath, dlopen it, cross the JNI boundary, score 10,000
+      # pairs. Separate from the step above because it REQUIRES the library --
+      # SelfTest must stay runnable with nothing built, and a test that learns to
+      # skip is how a lane goes green while testing nothing.
+      #
+      # It refuses to skip: CI built that library one step ago, so "not loadable"
+      # here means the build produced something the JVM cannot use.
+      - name: JVM native scorer self-test (JNI into score-cabi)
+        run: |
+          set -euo pipefail
+          JVM=packages/jvm/goldenmatch-spark
+          java -cp "$JVM/build/classes:$JVM/build/test-classes" \
+            dev.goldensuite.spark.NativeSelfTest
+      # The J-arc's actual justification, measured rather than argued.
+      #
+      # Throughput was measured and the JVM path LOST (2.4x slower than the
+      # Python-worker path -- run 31656227516). What is left is deployment: a jar
+      # that `addArtifact` delivers, against a virtualenv that must be built for
+      # the executor platform and shipped. "No Python on the executors."
+      #
+      # That claim is unproven and, read against the source, only partly true:
+      # J2 moved SCORING into the JVM, but normalization, survivorship and the
+      # identity graph still define Python UDFs. Clustering defines none.
+      #
+      # Omitting the executor env cannot test this. Under `local[*]` the Python
+      # worker forks from the DRIVER's interpreter, which HAS goldenmatch -- so
+      # everything would pass and report that nothing needs Python on executors,
+      # which is false. So an env is shipped and it is deliberately EMPTY: any
+      # operation needing a Python worker now fails with ModuleNotFoundError
+      # exactly as it would on a cluster with no cluster-side install.
+      #
+      # continue-on-error: this is an INVENTORY, not a gate. Its failures are
+      # facts about the tier, and a red build would say "something broke" when
+      # what it found is where the work still is.
+      - name: Build a deliberately EMPTY executor env
+        run: |
+          set -euo pipefail
+          python -m venv /tmp/bare-env
+          # No goldenmatch, no pyarrow, nothing. Assert the emptiness -- an env
+          # that accidentally carried goldenmatch would make the inventory
+          # report jar-only support the tier does not have.
+          if /tmp/bare-env/bin/python -c "import goldenmatch" 2>/dev/null; then
+            echo "::error::the bare env can import goldenmatch; the inventory would be meaningless"
+            exit 1
+          fi
+          .venv/bin/venv-pack -p /tmp/bare-env -o bare_env.tar.gz --force
+          ls -lh bare_env.tar.gz
+      - name: Inventory -- what runs with NO Python on the executors
+        continue-on-error: true
+        env:
+          GOLDENMATCH_SPARK_REMOTE: "local[*]"
+          GOLDENMATCH_SPARK_PYENV: "bare_env.tar.gz"
+          GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
+        run: |
+          .venv/bin/python scripts/spark_jar_only_inventory.py \
+            --out spark-jar-only-inventory.json
+      - name: Inventory summary
+        if: always()
+        run: |
+          if [ -f spark-jar-only-inventory.json ]; then
+            {
+              echo '## Spark: what runs with no Python on the executors'
+              echo '```json'
+              cat spark-jar-only-inventory.json
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Tier tests against Apache Spark Connect
         env:
           GOLDENMATCH_SPARK_REMOTE: "local[*]"
@@ -4289,6 +4519,11 @@ jobs:
       # nothing about goldenmatch). `spark_connect` is the lane that speaks to
       # the product goal, and it has been green on three consecutive main runs.
       - spark_connect
+      # J3: listed DIRECTLY, not left to `spark_connect`'s `needs`. This summary
+      # treats `skipped` as a pass, and a job whose dependency FAILED is skipped
+      # -- so a broken aarch64 build would skip spark_connect and sail through
+      # here reporting nothing wrong. The jar it produces is half of what ships.
+      - spark_jvm_aarch64
       - pyright
       - version_consistency
       - readme_callouts

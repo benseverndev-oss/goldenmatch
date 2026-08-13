@@ -4792,7 +4792,8 @@
             "partial_ratio",
             "pure_field_matrix",
             "ratio",
-            "token_sort_ratio"
+            "token_sort_ratio",
+            "token_sort_similarity"
           ]
         },
         {
@@ -7799,6 +7800,7 @@
             "goldenmatch.spark.autoconfig",
             "goldenmatch.spark.clustering",
             "goldenmatch.spark.golden",
+            "goldenmatch.spark.jvm",
             "goldenmatch.spark.probabilistic",
             "goldenmatch.spark.scorers",
             "goldenmatch.utils.transforms"
@@ -7822,12 +7824,14 @@
           "purpose": "Golden-record survivorship on Sail (Spark Connect), distributed.",
           "defines": [
             "build_golden",
-            "make_merge_udf"
+            "make_merge_udf",
+            "merge_expr"
           ],
           "imports": [
             "goldenmatch.config.schemas",
             "goldenmatch.core.golden",
-            "goldenmatch.spark._arrow"
+            "goldenmatch.spark._arrow",
+            "goldenmatch.spark.jvm"
           ]
         },
         {
@@ -7838,6 +7842,7 @@
             "IdentityGraphFrames",
             "_golden_record_json",
             "_id_scheme",
+            "_jvm_fingerprint_types_ok",
             "build_identity_events",
             "build_identity_graph",
             "build_identity_graph_incremental",
@@ -7863,12 +7868,17 @@
         {
           "module": "goldenmatch.spark.jvm",
           "file": "packages/python/goldenmatch/goldenmatch/spark/jvm.py",
-          "purpose": "J0: ship the JVM scorer jar to a Spark session and register it.",
+          "purpose": "Ship the JVM scorer jar to a Spark session and register it (J0), now backed",
           "defines": [
             "JvmScorerUnavailable",
+            "_is_int",
             "find_jar",
+            "implementation",
             "install",
-            "scorer_id"
+            "jvm_supports_strategy",
+            "jvm_supports_transform",
+            "scorer_id",
+            "unsupported_transforms"
           ]
         },
         {

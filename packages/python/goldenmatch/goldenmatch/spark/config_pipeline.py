@@ -352,8 +352,38 @@ def _field_score_parts(field: Any, a_prefix: str, b_prefix: str) -> tuple[Any, A
     )
 
 
-def _transformed(col: Any, chain: list[str]) -> Any:
-    """Apply a one-box transform chain to a column via ``apply_transforms``."""
+def _transformed(
+    col: Any, chain: list[str], transform_udf: str | None = None
+) -> Any:
+    """Apply a one-box transform chain to a column via ``apply_transforms``.
+
+    ``transform_udf`` is the SQL name of the jar's ``golden_transform``. When
+    given, the chain runs ENTIRELY IN THE EXECUTOR JVM over the same pyo3-free
+    ``transforms-core`` Python uses, so no Python worker is involved and no
+    executor virtualenv is needed.
+
+    The chain is validated on the DRIVER first. ``bloom_filter`` and plugin
+    transforms are Python-only by design, and a chain containing one is
+    refused here -- at plan time, naming the transform -- rather than
+    returning nulls from every row of an already-distributed job.
+    """
+    if transform_udf is not None:
+        from pyspark.sql import functions as F
+
+        from goldenmatch.spark.jvm import unsupported_transforms
+
+        bad = unsupported_transforms(chain)
+        if bad:
+            raise ValueError(
+                f"the JVM transform path cannot run {bad}. `bloom_filter` is "
+                f"HMAC-keyed PPRL and plugin transforms are arbitrary Python; "
+                f"both are Python-only by design. Drop them from the chain, "
+                f"or omit transform_udf and ship a Python environment."
+            )
+        return F.call_udf(
+            transform_udf, col.cast("string"), F.lit(",".join(chain))
+        )
+
     from goldenmatch.spark._arrow import arrow_udf, from_pylist, to_pylist
 
     @arrow_udf("string")

@@ -80,9 +80,19 @@ def _pure_scores(scorer_name: str, a: Any, b: Any) -> list[float]:
         def score(x: Any, y: Any) -> float:
             return strsim.levenshtein_normalized_similarity(x or "", y or "")
     elif scorer_name == "token_sort":
-        # repo convention: normalize the 0-100 ratio scorer to [0, 1].
+        # The [0, 1] scorer DIRECTLY, not `token_sort_ratio(...) / 100`. That
+        # round trip is not lossless -- `(x * 100) / 100` differs from `x` in the
+        # last bit -- so the floor used to disagree with `score_one` (and so with
+        # the native kernel, the DataFusion UDF, the WASM scorer and the JVM one)
+        # by one ULP on ordinary inputs. Measured while building the J2 JNI
+        # parity gate: 0.923076923076923 here against 0.9230769230769231 from the
+        # kernel, for a pair whose exact answer is 12/13.
+        #
+        # One ULP is ignorable for a score you REPORT. This tier THRESHOLDS
+        # these, and the argument is the one this module's own docstring makes
+        # about f32 narrowing -- same argument, smaller number.
         def score(x: Any, y: Any) -> float:
-            return strsim.token_sort_ratio(x or "", y or "") / 100.0
+            return strsim.token_sort_similarity(x or "", y or "")
     else:
         raise NotImplementedError(
             f"Sail supports scorers {_SUPPORTED}; got {scorer_name!r}."
