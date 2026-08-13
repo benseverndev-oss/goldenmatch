@@ -84,6 +84,20 @@ decision tests actively say *keep it opt-in* here:
   warehouse introspection are orchestration / stateful capabilities, not clean columnar
   cores; kernelizing them would force stateful logic into a columnar kernel (the T4
   anti-pattern). They are correctly `python_only`, not a parity gap.
+- **The ontology layer (0053-0057) is the same case, and a clean one.** Where it does
+  identity work it *inherits* this kernel: `certify_ontology_keys` / `certify_ontology`
+  delegate to `certify_key_integrity` (so ontology key-certification rides the one
+  `key-integrity-core` owner, no second source), and `discover_ontology` reuses the
+  certifier-backed `discover_keys`. Everything else — `parse_ontology`,
+  `emit_sameas_graph` / `emit_identity_shacl` / `emit_ontology_shapes` /
+  `emit_golden_triples`, `reconcile_ontology_identity` — is `rdflib` (RDF/OWL/SHACL/PROV-O)
+  orchestration with no columnar primitive to kernelize. Its `python_only` surfaces
+  (`ontology_certify` / `ontology_discover` / the `ontology` CLI) are by-design: there is
+  no edge `rdflib` (standing intentional-asymmetry principle), and porting the RDF surface
+  to Rust/WASM would *reimplement a triple store* — the exact "conform to backends, don't
+  reimplement" anti-pattern 0053 was written to avoid (GoldenMatch is the identity provider
+  FOR the reasoner/triple store, not a reimplementation of one). Not a parity gap; not a
+  kernel candidate.
 
 ---
 **Classification:** decision/accepted • **Last updated:** 2026-08-13
