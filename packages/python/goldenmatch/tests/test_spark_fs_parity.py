@@ -351,3 +351,92 @@ def test_the_batched_shape_still_refuses_fs(source, jvm_registered):
             cands, source, cfg, id_col=_ID, scorer_udf=UDF_NAME,
             scorer_shape="batch",
         )
+
+
+# ── agreement-pattern counts, computed on the cluster ────────────────
+
+def _driver_pattern_counts(spark_df, cfg):
+    """The same counts, derived on the driver with the ONE-BOX's functions.
+
+    `comparison_vector` is what `_build_comparison_matrix` calls, so this is the
+    reference the trained model would have been built from -- not a
+    reimplementation of the level ladder, which would only prove the two
+    reimplementations agree.
+    """
+    from collections import Counter
+
+    from goldenmatch.core.probabilistic import comparison_vector
+    from goldenmatch.spark.config_pipeline import generate_candidates
+
+    mk = cfg.get_matchkeys()[0]
+    by_id = {r[0]: dict(zip(_COLS, r)) for r in _ROWS}
+    counts = Counter()
+    for r in generate_candidates(spark_df, cfg, id_col=_ID).collect():
+        vec = comparison_vector(by_id[int(r["a"])], by_id[int(r["b"])], mk)
+        counts[tuple(int(v) for v in vec)] += 1
+    return sorted(counts.items())
+
+
+def _spark_pattern_counts(spark_df, cfg, **kw):
+    from goldenmatch.spark.config_pipeline import generate_candidates
+    from goldenmatch.spark.em import agreement_pattern_counts
+    from pyspark.sql import functions as F
+
+    lhs, rhs = "__lhs__", "__rhs__"
+    joined = (
+        generate_candidates(spark_df, cfg, id_col=_ID).alias("__cand__")
+        .join(spark_df.alias(lhs), F.col(f"{lhs}.{_ID}") == F.col("__cand__.a"))
+        .join(spark_df.alias(rhs), F.col(f"{rhs}.{_ID}") == F.col("__cand__.b"))
+    )
+    return agreement_pattern_counts(
+        joined, cfg.get_matchkeys()[0], lhs=lhs, rhs=rhs, **kw
+    )
+
+
+@pytest.mark.parametrize("missing", ["unobserved", "disagree"])
+def test_pattern_counts_match_the_one_box_comparison_vectors(source, missing):
+    """THE gate for distributed training input.
+
+    If these counts are wrong, `train_em(pair_weights=counts)` trains on a
+    population that does not exist -- and it would converge happily and produce
+    a plausible model, because a wrong count is still a positive integer.
+    """
+    cfg = _config(missing)
+    assert _spark_pattern_counts(source, cfg) == _driver_pattern_counts(source, cfg)
+
+
+def test_the_counts_sum_to_the_candidate_pair_count(source):
+    """No pair may be dropped or double-counted by the GROUP BY.
+
+    Stated separately from the vector comparison above because the two fail
+    differently: a wrong LEVEL shows up there, a lost PAIR shows up here, and a
+    pair lost to a null-handling bug in the ladder could leave every surviving
+    pattern correct.
+    """
+    from goldenmatch.spark.config_pipeline import generate_candidates
+
+    cfg = _config()
+    want = generate_candidates(source, cfg, id_col=_ID).count()
+    got = sum(c for _, c in _spark_pattern_counts(source, cfg))
+    assert got == want
+
+
+def test_pattern_counts_are_identical_jar_only(source, jvm_registered):
+    """And with no Python on the executors, which is the point of computing
+    them out there at all: a training run that needed an executor virtualenv
+    would leave the jar-only claim only half true."""
+    from goldenmatch.spark.jvm import ROW_UDF_NAME, TRANSFORM_UDF_NAME
+
+    cfg = _config()
+    assert _spark_pattern_counts(
+        source, cfg, scorer_udf=ROW_UDF_NAME, transform_udf=TRANSFORM_UDF_NAME
+    ) == _driver_pattern_counts(source, cfg)
+
+
+def test_an_oversized_pattern_space_is_refused_not_collected(source):
+    """`collect()` of an unexpectedly large frame is a driver OOM, which is the
+    failure this whole path exists to avoid -- so the bound is checked against
+    the real row count before anything is materialised."""
+    cfg = _config()
+    with pytest.raises(ValueError, match="max_patterns"):
+        _spark_pattern_counts(source, cfg, max_patterns=1)

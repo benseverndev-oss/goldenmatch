@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 472,
+      "module_count": 473,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7949,6 +7949,19 @@
           ],
           "imports": [
             "goldenmatch.core._native_loader"
+          ]
+        },
+        {
+          "module": "goldenmatch.spark.em",
+          "file": "packages/python/goldenmatch/goldenmatch/spark/em.py",
+          "purpose": "Count agreement patterns on the cluster, so FS training need not sample.",
+          "defines": [
+            "agreement_pattern_counts",
+            "gamma_columns"
+          ],
+          "imports": [
+            "goldenmatch.core.probabilistic",
+            "goldenmatch.spark.probabilistic"
           ]
         },
         {
