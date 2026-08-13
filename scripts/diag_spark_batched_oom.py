@@ -98,6 +98,29 @@ def _scored(df, pairs, batch_size, udf_name, scorer_id):
     )
 
 
+def _scored_forced(df, pairs, batch_size, udf_name, scorer_id):
+    """Stage 4 with the UDF's output actually CONSUMED.
+
+    Stage 4 ends in ``.count()``, and counting rows does not need the `scores`
+    column -- Catalyst prunes unused columns, and a deterministic UDF with no
+    side effects is exactly what it is entitled to prune. So stage 4 measuring
+    the same wall as stage 3 does NOT mean scoring is free; it may mean scoring
+    never happened. Reporting that as "the JNI call costs nothing" would be a
+    confident claim built on an optimisation.
+
+    So reduce each batch's score array to one number. The UDF's result is now
+    load-bearing and cannot be pruned, while the row count stays at one per
+    batch -- no explode, so this isolates SCORING from UN-BATCHING, which is the
+    split that decides whether a faster kernel could move the number at all.
+    """
+    from pyspark.sql import functions as F
+
+    s = _scored(df, pairs, batch_size, udf_name, scorer_id)
+    return s.select(
+        F.aggregate(F.col("scores"), F.lit(0.0), lambda acc, x: acc + x).alias("total")
+    ).agg(F.sum("total"))
+
+
 def _exploded(df, pairs, batch_size, udf_name, scorer_id):
     from pyspark.sql import functions as F
 
@@ -177,8 +200,15 @@ def main(argv=None) -> int:
         ("2 + join to source", lambda: _joined(df, pairs).count()),
         ("3 + groupBy/collect (NO UDF)",
          lambda: _grouped(df, pairs, args.batch_size).count()),
-        ("4 + UDF",
+        ("4 + UDF (count only)",
          lambda: _scored(df, pairs, args.batch_size, udf_name, sid).count()),
+        # THE attribution stage. 4 counts rows, which does not need the scores
+        # column -- so Catalyst is free to prune the UDF and 4 can match 3 while
+        # scoring nothing. 4b consumes every score, without exploding, so
+        # (4b - 3) is SCORING and (5 - 4b) is UN-BATCHING. That split decides
+        # whether a faster kernel could move this number at all.
+        ("4b + UDF (scores CONSUMED)",
+         lambda: _scored_forced(df, pairs, args.batch_size, udf_name, sid).count()),
         ("5 + zip/explode",
          lambda: _exploded(df, pairs, args.batch_size, udf_name, sid).count()),
         # The bench does this and the earlier bisect did not, so it was the one
