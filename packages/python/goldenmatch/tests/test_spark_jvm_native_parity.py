@@ -313,3 +313,96 @@ def test_unproven_column_types_are_refused_not_guessed(spark, registered):
         derive_record_ids(
             df, id_col="__row_id__", fingerprint_udf=FINGERPRINT_UDF_NAME
         )
+
+
+# ── survivorship (golden records) ────────────────────────────────────
+
+#: Clusters chosen for TIE-BREAKS, which is where this port could silently
+#: diverge: Python's `Counter.most_common` keeps insertion order and `max()`
+#: keeps the FIRST maximum, while Rust's `max_by_key` keeps the LAST. A tie
+#: resolved the other way is a different golden record with no error attached.
+SURVIVORSHIP_CLUSTERS: list[list[str | None]] = [
+    ["a", "b"],
+    ["b", "a", "a"],
+    ["a", "a", "b", "b"],
+    [None, "x", "y"],
+    [None, None],
+    ["a", None, "a"],
+    ["ab", "abcd"],
+    ["ab", "cd"],
+    ["café", "abcde"],
+    ["", "x"],
+    ["same", "same", "same"],
+    ["日本語", "ab"],
+]
+
+#: Every strategy the Spark call site can reach. `source_priority` and
+#: `most_recent` are absent because Python RAISES for them without a sources or
+#: dates list, which this call site does not pass.
+SURVIVORSHIP_STRATEGIES = [
+    "most_complete", "majority_vote", "first_non_null", "longest_value",
+    "unanimous_or_null", "confidence_majority",
+]
+
+
+@pytest.mark.parametrize("strategy", SURVIVORSHIP_STRATEGIES)
+def test_jvm_survivorship_matches_python_exactly(spark, registered, strategy):
+    """The survivor chosen in the JVM must be the one Python chooses.
+
+    ``survivorship-core`` had a committed differential dump from the day it was
+    written, but that harness is MANUAL -- it needs cargo and a person to run
+    it. Nothing in the suite re-checked it, so the port could drift from
+    ``merge_field`` and CI would stay green. This is the automatic half.
+
+    Exact equality, and no tolerance is meaningful here anyway: the result is a
+    value, not a number. A survivor chosen by a different tie-break is a wrong
+    golden record that raises nothing and looks right.
+    """
+    from goldenmatch.config.schemas import GoldenFieldRule
+    from goldenmatch.core.golden import merge_field
+    from goldenmatch.spark.golden import merge_expr
+    from goldenmatch.spark.jvm import SURVIVORSHIP_UDF_NAME
+    from pyspark.sql import functions as F
+
+    rows = [(i, list(vals)) for i, vals in enumerate(SURVIVORSHIP_CLUSTERS)]
+    df = spark.createDataFrame(rows, "cid long, vals array<string>")
+    got = {
+        r["cid"]: r["v"]
+        for r in df.select(
+            "cid",
+            merge_expr(F.col("vals"), strategy, SURVIVORSHIP_UDF_NAME).alias("v"),
+        ).collect()
+    }
+    want = {
+        i: (lambda m: None if m is None else str(m))(
+            merge_field(list(vals), GoldenFieldRule(strategy=strategy))[0]
+        )
+        for i, vals in enumerate(SURVIVORSHIP_CLUSTERS)
+    }
+    mismatches = {
+        i: (SURVIVORSHIP_CLUSTERS[i], want[i], got.get(i))
+        for i in want
+        if got.get(i) != want[i]
+    }
+    assert not mismatches, (
+        f"{strategy}: JVM and Python chose different survivors. Both call the "
+        f"same merge semantics, so a difference is a TIE-BREAK divergence: "
+        f"{mismatches}"
+    )
+
+
+def test_strategies_python_refuses_are_refused_here_too(spark, registered):
+    """The refusals are the load-bearing part.
+
+    ``source_priority`` needs a sources list and ``most_recent`` needs dates --
+    neither of which the Spark call site passes, so Python raises. The JVM path
+    must refuse them at PLAN time rather than emitting a plausible survivor from
+    every cluster, and it must name the strategy so the failure is actionable.
+    """
+    from goldenmatch.spark.golden import merge_expr
+    from goldenmatch.spark.jvm import SURVIVORSHIP_UDF_NAME
+    from pyspark.sql import functions as F
+
+    for strategy in ("source_priority", "most_recent", "custom:whatever"):
+        with pytest.raises(ValueError, match=strategy.split(":")[0]):
+            merge_expr(F.col("vals"), strategy, SURVIVORSHIP_UDF_NAME)
