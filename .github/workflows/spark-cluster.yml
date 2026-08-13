@@ -330,10 +330,27 @@ jobs:
           python -m pytest -v --timeout=600 --timeout-method=thread \
             packages/python/goldenmatch/tests/test_spark_jvm_native_parity.py \
             packages/python/goldenmatch/tests/test_spark_jvm_parity.py \
-            --deselect 'packages/python/goldenmatch/tests/test_spark_jvm_native_parity.py::test_jvm_scoring_matches_the_python_path_exactly' \
-            --deselect 'packages/python/goldenmatch/tests/test_spark_jvm_native_parity.py::test_end_to_end_dedupe_runs_with_every_kernel_in_the_jar' \
-            --deselect 'packages/python/goldenmatch/tests/test_spark_jvm_native_parity.py::test_block_key_normalization_routes_to_the_jar_when_asked' \
-            --deselect 'packages/python/goldenmatch/tests/test_spark_jvm_native_parity.py::test_derive_record_ids_matches_the_python_path'
+            --deselect 'tests/test_spark_jvm_native_parity.py::test_jvm_scoring_matches_the_python_path_exactly' \
+            --deselect 'tests/test_spark_jvm_native_parity.py::test_end_to_end_dedupe_runs_with_every_kernel_in_the_jar' \
+            --deselect 'tests/test_spark_jvm_native_parity.py::test_block_key_normalization_routes_to_the_jar_when_asked' \
+            --deselect 'tests/test_spark_jvm_native_parity.py::test_derive_record_ids_matches_the_python_path' \
+            | tee pytest.out && rc=0 || rc=$?
+          # pytest IGNORES a --deselect that matches nothing, so a wrong node id
+          # means the tests simply RUN. That is how run 6 failed: the ids were
+          # repo-root-relative while pytest's rootdir is
+          # packages/python/goldenmatch (its pyproject.toml is the configfile),
+          # so the real ids start at `tests/`. Nothing warned; the four just ran
+          # and failed, reading like a defect in the scoring path.
+          #
+          # Checked BEFORE propagating pytest's exit code, so that when the ids
+          # drift again this says so instead of the failure looking like a
+          # scoring bug. Hence `rc` capture rather than relying on `set -e`,
+          # which would exit here first and never print the explanation.
+          if ! grep -qE '[0-9]+ deselected' pytest.out; then
+            echo "::error::no tests were deselected. The --deselect node ids no longer match -- pytest's rootdir is packages/python/goldenmatch, so ids start at 'tests/', not 'packages/python/goldenmatch/tests/'. The four two-path tests ran on a cluster that cannot host their Python arm."
+            exit 1
+          fi
+          exit "$rc"
 
       # The inventory against REAL workers. Note there is no
       # GOLDENMATCH_SPARK_PYENV here and that is the point: these containers are
