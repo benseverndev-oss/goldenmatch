@@ -133,9 +133,17 @@ public final class NativeLibrary {
    * {@code /native/linux-x86-64/libgoldenmatch_score_jni.so}.
    *
    * <p>Package-private and deterministic so a test can assert the mapping
-   * without a library present. The jar built in CI carries linux-x86-64 only,
-   * because that is what a Spark executor runs; the other names resolve so that
-   * adding an arch is a build change and not a code change.
+   * without a library present -- and {@code SelfTest} asserts it for platforms
+   * it is NOT running on, because otherwise the aarch64 mapping would only ever
+   * be checked on aarch64, which is precisely the platform nobody was testing
+   * when the jar shipped x86-only.
+   *
+   * <p>The CI jar carries <b>linux-x86-64 and linux-aarch64</b>. Both, because
+   * a Graviton fleet is most of the cheap capacity on AWS now: an ARM executor
+   * finding no resource does not fail, it falls back to the {@code exact}-only
+   * scorer and runs slower and narrower without saying so. The darwin and
+   * windows names resolve for in-tree developer builds; adding a platform to
+   * the jar is a build change, not a code change.
    */
   static String resourcePath() {
     return "/native/" + platform() + "/" + fileName();

@@ -33,6 +33,7 @@ public final class SelfTest {
     utf8DistinguishesNullFromEmptyString();
     utf8OffsetsAreNonDecreasingAndEndAtDataLength();
     utf8RoundTripsEveryValue();
+    theResourcePathMatchesWhatTheBuildStages();
 
     if (failures > 0) {
       System.err.println("\n" + failures + " assertion(s) FAILED");
@@ -237,7 +238,69 @@ public final class SelfTest {
     eq("round trip", Arrays.asList(in), got);
   }
 
+  // ── NativeLibrary resource resolution (J3) ─────────────────────────
+
+  static void theResourcePathMatchesWhatTheBuildStages() {
+    // The loader computes a resource path from os.name/os.arch; CI stages files
+    // at literal paths. Nothing connects the two but this assertion, and a
+    // mismatch does not crash -- the resource is simply not found, the jar
+    // falls back to the `exact`-only scorer, and a cluster runs slower and
+    // narrower without saying so. That is the failure mode J3 exists to
+    // prevent, so the two spellings are pinned against each other here.
+    //
+    // The names are asserted for the platforms CI BUILDS, independently of the
+    // platform this test runs on -- otherwise the aarch64 mapping would only
+    // ever be checked on aarch64, which is exactly the platform nobody was
+    // testing when the jar shipped x86-only.
+    eqStr("x86-64 linux resource",
+        "/native/linux-x86-64/libgoldenmatch_score_jni.so",
+        resourceFor("Linux", "amd64"));
+    eqStr("aarch64 linux resource",
+        "/native/linux-aarch64/libgoldenmatch_score_jni.so",
+        resourceFor("Linux", "aarch64"));
+    // A Graviton JVM may report either spelling depending on vendor.
+    eqStr("arm64 is the same as aarch64",
+        "/native/linux-aarch64/libgoldenmatch_score_jni.so",
+        resourceFor("Linux", "arm64"));
+    // x86_64 is what some JVMs report instead of amd64.
+    eqStr("x86_64 is the same as amd64",
+        "/native/linux-x86-64/libgoldenmatch_score_jni.so",
+        resourceFor("Linux", "x86_64"));
+    // Not built by CI, but the mapping must still be stable -- these are the
+    // paths an in-tree developer build stages to.
+    eqStr("macOS arm resource",
+        "/native/darwin-aarch64/libgoldenmatch_score_jni.dylib",
+        resourceFor("Mac OS X", "aarch64"));
+    eqStr("windows resource",
+        "/native/windows-x86-64/goldenmatch_score_jni.dll",
+        resourceFor("Windows 11", "amd64"));
+  }
+
+  /** {@link NativeLibrary#resourcePath()} as it would resolve on another
+   * platform. The properties are restored afterwards so this cannot leak into a
+   * later test -- and into the LOADER, which reads the same properties. */
+  static String resourceFor(String osName, String osArch) {
+    String oldOs = System.getProperty("os.name");
+    String oldArch = System.getProperty("os.arch");
+    try {
+      System.setProperty("os.name", osName);
+      System.setProperty("os.arch", osArch);
+      return NativeLibrary.resourcePath();
+    } finally {
+      System.setProperty("os.name", oldOs);
+      System.setProperty("os.arch", oldArch);
+    }
+  }
+
   // ── tiny assertion helpers ─────────────────────────────────────────
+
+  static void eqStr(String what, String want, String got) {
+    if (want.equals(got)) {
+      pass(what);
+    } else {
+      fail(what, "want " + want + ", got " + got);
+    }
+  }
 
   static void eq(String what, int want, int got) {
     if (want == got) {
