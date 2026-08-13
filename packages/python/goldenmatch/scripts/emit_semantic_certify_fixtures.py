@@ -68,10 +68,11 @@ def _bootstrap() -> object:
     _load("goldenmatch.semantic.metricflow", "semantic/metricflow.py")
     _load("goldenmatch.semantic.cube", "semantic/cube.py")
     _load("goldenmatch.semantic.osi", "semantic/osi.py")
-    # certify_semantic_model imports the feast dialect unconditionally (feast is
-    # Python-only / has no TS port, so it adds no fixture case — but the module
-    # must resolve for certify.py to import in this isolated bootstrap).
+    # certify_semantic_model imports the feast + malloy dialects unconditionally
+    # (both are Python-only / have no TS port, so they add no fixture case — but the
+    # modules must resolve for certify.py to import in this isolated bootstrap).
     _load("goldenmatch.semantic.feast", "semantic/feast.py")
+    _load("goldenmatch.semantic.malloy", "semantic/malloy.py")
     return _load("goldenmatch.semantic.certify", "semantic/certify.py").certify_semantic_model
 
 

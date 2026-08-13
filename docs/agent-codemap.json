@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 471,
+      "module_count": 472,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7176,6 +7176,7 @@
             "goldenmatch.semantic.discovery",
             "goldenmatch.semantic.feast",
             "goldenmatch.semantic.key_integrity",
+            "goldenmatch.semantic.malloy",
             "goldenmatch.semantic.metricflow",
             "goldenmatch.semantic.ontology",
             "goldenmatch.semantic.ontology_catalog",
@@ -7199,6 +7200,7 @@
             "goldenmatch.semantic.cube",
             "goldenmatch.semantic.feast",
             "goldenmatch.semantic.key_integrity",
+            "goldenmatch.semantic.malloy",
             "goldenmatch.semantic.metricflow",
             "goldenmatch.semantic.osi"
           ]
@@ -7237,6 +7239,7 @@
             "goldenmatch.semantic.cube",
             "goldenmatch.semantic.feast",
             "goldenmatch.semantic.key_integrity",
+            "goldenmatch.semantic.malloy",
             "goldenmatch.semantic.metricflow",
             "goldenmatch.semantic.osi"
           ]
@@ -7631,6 +7634,35 @@
             "goldenmatch.core._native_loader",
             "goldenmatch.core.autoconfig",
             "goldenmatch.core.key_integrity_certificate"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.malloy",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/malloy.py",
+          "purpose": "Malloy (malloydata.dev) semantic-model reader + emitter — the BI dialect.",
+          "defines": [
+            "MalloyJoin",
+            "MalloyModel",
+            "MalloySource",
+            "_from_structured",
+            "_looks_like_dsl",
+            "_match_braces",
+            "_normalize_pk",
+            "_on_refs",
+            "_parse_dsl",
+            "_parse_join_dict",
+            "_parse_source_dict",
+            "certify_malloy_joins",
+            "emit_malloy_from_crosswalk",
+            "emit_malloy_source",
+            "malloy_join_keys",
+            "parse_malloy_models"
+          ],
+          "imports": [
+            "goldenmatch.core.key_integrity_certificate",
+            "goldenmatch.semantic.blocking",
+            "goldenmatch.semantic.key_integrity",
+            "goldenmatch.semantic.metricflow"
           ]
         },
         {

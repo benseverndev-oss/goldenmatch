@@ -89,6 +89,20 @@
 > next missing provider surfaces from the same filter: **BI semantic-model dialects
 > (Malloy/LookML)** and **data contracts (ODCS)**; the CDP/activation lane is
 > competitive prior art, not a plug-under gap.
+>
+> **BI surface (Malloy,
+> [0061](../decisions/0061-malloy-bi-dialect.md)).** Malloy (Google's open semantic
+> modeling language) is the cleanest BI reader/emitter: a `source`'s identity is its
+> declared `primary_key`, and `join_one`/`join_many`/`join_cross` ride on it —
+> structurally the same as Cube, so the certifier applies unchanged.
+> `goldenmatch.semantic.malloy`: `parse_malloy_models` (structured `{sources: [...]}`
+> projection OR raw `.malloy` DSL text via a focused declaration parser),
+> `malloy_join_keys`, `certify_malloy_joins` (bridge A — one-side-key direction,
+> skips `join_cross`), `emit_malloy_from_crosswalk` (bridge B, returns
+> `(text, provenance)` as Malloy has no metadata slot). `certify_semantic_model`
+> auto-detects a top-level `sources:` as `"malloy"`, parity-free like Cube/Feast.
+> Remaining from the filter: **LookML / Power BI** (messier parse) and **data
+> contracts (ODCS)**.
 > Greenfield when written: no prior repo code, doc, or decision referenced this
 > ecosystem (grep, 2026-07-30).
 
