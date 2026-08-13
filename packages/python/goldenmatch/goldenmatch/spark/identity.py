@@ -184,8 +184,22 @@ def derive_record_ids(
         # `__`-prefixed keys are dropped INSIDE fingerprint-core, so the struct
         # is built from payload_cols only and the two surfaces cannot disagree
         # about which fields count. `to_json` runs in the engine: no Python.
+        # `ignoreNullFields=false` is LOAD-BEARING. Spark's `to_json` omits null
+        # fields by default, so a row with a missing value produced JSON without
+        # that key at all -- while the Python path hands the kernel a dict that
+        # still carries `city: None`. Different fields in, different fingerprint
+        # out, and the two ids simply disagree.
+        #
+        # Caught by `test_derive_record_ids_matches_the_python_path`, which is
+        # exactly the row it was written for: name="" / city=None. The type gate
+        # above cannot see this -- every column was a proven-safe type; the
+        # divergence was in the ENCODING, not the types.
         h1 = F.call_udf(
-            fingerprint_udf, F.to_json(F.struct(*[F.col(c) for c in payload_cols]))
+            fingerprint_udf,
+            F.to_json(
+                F.struct(*[F.col(c) for c in payload_cols]),
+                {"ignoreNullFields": "false"},
+            ),
         )
         return source_df.withColumn(
             "record_id",
