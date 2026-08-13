@@ -264,31 +264,36 @@ class TestMaybeRefitAcrossRoutes:
         assert t_list == t_tbl
         assert t_list > 0.50
 
-    def test_flag_off_is_noop_both_forms(self, monkeypatch):
-        # Reverted to DEFAULT-OFF (#2387). Both the explicit `=0` kill-switch and
-        # an UNSET env must leave the fixed cutoff alone on both pair
-        # representations, even on an over-merge shape the refit would otherwise
-        # fire on -- default-off has to be byte-identical to the fixed path.
+    def test_kill_switch_is_noop_both_forms(self, monkeypatch):
+        # DEFAULT-ON since #2518. `=0` is the kill-switch and must leave the fixed
+        # cutoff alone on both pair representations, even on an over-merge shape
+        # the refit would otherwise fire on -- `=0` has to stay byte-identical to
+        # the fixed path, since that is the documented rollback.
         from goldenmatch.core.pipeline import _maybe_refit_link_threshold
         pairs = self._over_merge_pairs()
-        for value in ("0", None):
+        monkeypatch.setenv("GOLDENMATCH_FS_REFIT_THRESHOLD", "0")
+        assert _maybe_refit_link_threshold(self._MK(), 0.50, pairs=pairs) == 0.50
+        assert (
+            _maybe_refit_link_threshold(self._MK(), 0.50, table=self._table(pairs))
+            == 0.50
+        )
+
+    def test_default_and_opt_in_both_fire_on_over_merge(self, monkeypatch):
+        # An over-merge valley raises the cutoff BOTH when opted in explicitly and
+        # when the env is UNSET -- the unset case is the #2518 default flip, and it
+        # is the assertion that would catch a silent revert to default-off.
+        from goldenmatch.core.pipeline import _maybe_refit_link_threshold
+        pairs = self._over_merge_pairs()
+        for value in ("1", None):
             if value is None:
                 monkeypatch.delenv("GOLDENMATCH_FS_REFIT_THRESHOLD", raising=False)
             else:
                 monkeypatch.setenv("GOLDENMATCH_FS_REFIT_THRESHOLD", value)
-            assert _maybe_refit_link_threshold(self._MK(), 0.50, pairs=pairs) == 0.50
+            assert _maybe_refit_link_threshold(self._MK(), 0.50, pairs=pairs) > 0.50
             assert (
                 _maybe_refit_link_threshold(self._MK(), 0.50, table=self._table(pairs))
-                == 0.50
+                > 0.50
             )
-
-    def test_opt_in_fires_on_over_merge(self, monkeypatch):
-        # Opting IN (=1) still refits: an over-merge valley raises the cutoff. The
-        # capability is intact; only the DEFAULT changed (#2387).
-        from goldenmatch.core.pipeline import _maybe_refit_link_threshold
-        monkeypatch.setenv("GOLDENMATCH_FS_REFIT_THRESHOLD", "1")
-        pairs = self._over_merge_pairs()
-        assert _maybe_refit_link_threshold(self._MK(), 0.50, pairs=pairs) > 0.50
 
     def test_explicit_user_threshold_is_respected(self, monkeypatch):
         # A caller-set mk.link_threshold must never be overridden by the refit.

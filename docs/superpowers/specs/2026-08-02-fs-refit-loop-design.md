@@ -1,11 +1,16 @@
 # FS-aware refit loop — design (Phase 3, threshold-refit first slice)
 
-Status: **IMPLEMENTED, DEFAULT-OFF — the 2026-08-02 default flip was REVERTED on
-2026-08-07 (#2387).** The objective below was CORRECTED by measurement during
-implementation (see "Implemented objective"); the *guard* it settled on then
-turned out to be defective (see "Default flip reverted" immediately below).
-`GOLDENMATCH_FS_REFIT_THRESHOLD=1` opts in. Wired across ALL FS routes
-(route-extension) and auditable (3c observability logging).
+Status: **IMPLEMENTED, DEFAULT-ON as of 2026-08-13 (#2518).** History: flipped on
+2026-08-02, REVERTED 2026-08-07 (#2387) because the cluster-shape guard was
+defective, then re-flipped once that guard was fixed and the change was validated
+on the panel that GATES it rather than the panels that motivated it. The
+objective below was CORRECTED by measurement during implementation (see
+"Implemented objective"); the *guard* it settled on was then found defective (see
+"Default flip reverted") and repaired in #2518 by pairing the single-outlier
+max-cluster test with a global `_expelled_share` criterion.
+`GOLDENMATCH_FS_REFIT_THRESHOLD=0` is now the kill-switch (byte-identical to the
+fixed cutoff). Wired across ALL FS routes (route-extension) and auditable (3c
+observability logging).
 
 ## Default flip reverted (2026-08-07, #2387)
 
@@ -200,6 +205,9 @@ demands it.
 - Ships default-OFF behind a flag (`GOLDENMATCH_FS_REFIT_THRESHOLD` or similar);
   default byte-identical. Flip only after the panel + household gate prove it,
   per the domain-comparators / v2 precedent.
+  *(Superseded 2026-08-13, #2518: default is now ON, `=0` is the kill-switch.
+  The "flip only after the panel proves it" rule held — what #2377 got wrong was
+  WHICH panel. The gating panel is `bench-suggest-quality`, not `ab_lever`.)*
 
 ## Phasing
 

@@ -101,7 +101,11 @@ jobs:
             echo "datasets=" >> "$GITHUB_OUTPUT"        # empty -> ab_lever default (whole panel)
             echo "label=full panel" >> "$GITHUB_OUTPUT"
           else
-            echo "datasets=--datasets person,household_hardneg,cotenant_hardneg" >> "$GITHUB_OUTPUT"
+            # ncvr_synthetic is in the PR tier deliberately (#2518): it is the
+            # dataset that CAUGHT the #2387 regression, and leaving it to the
+            # nightly is what turned a catchable defect into five red nights. It
+            # is 7.5k rows (~30s/arm), so the "fast tier" claim still holds.
+            echo "datasets=--datasets person,household_hardneg,cotenant_hardneg,ncvr_synthetic" >> "$GITHUB_OUTPUT"
             echo "label=synthetic over-merge panel" >> "$GITHUB_OUTPUT"
           fi
       - name: FS refit-threshold lever A/B (${{ steps.scope.outputs.label }})

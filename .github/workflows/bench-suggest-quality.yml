@@ -45,6 +45,17 @@ on:
       - "packages/rust/extensions/native/src/suggest.rs"
       - "packages/python/goldenmatch/goldenmatch/core/suggest/**"
       - "scripts/suggest_quality/**"
+      # The FS link-cutoff refit (#2387, #2518). This gate's convergence_final_f1
+      # is the ONLY signal that caught the #2377 default flip -- and it did so a
+      # night LATE, because these paths were absent here: a probabilistic.py edit
+      # ran no suggester gate at all, so the flip went green on push and only the
+      # nightly reddened (five nights). pipeline.py is included because
+      # `_maybe_refit_link_threshold`, the helper every FS route resolves its
+      # cutoff through, lives there. Both are hot files and this fires the fast
+      # `gate` tier (minutes) on their pushes -- that cost is the point: an
+      # absent check is strictly worse than a chatty one.
+      - "packages/python/goldenmatch/goldenmatch/core/probabilistic.py"
+      - "packages/python/goldenmatch/goldenmatch/core/pipeline.py"
       - ".github/workflows/bench-suggest-quality.yml"
 
 permissions:
