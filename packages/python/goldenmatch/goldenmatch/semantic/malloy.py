@@ -24,13 +24,11 @@ is the exact, dependency-free path the front door detects.
 """
 from __future__ import annotations
 
-import os
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
-import yaml
+from goldenmatch.semantic.metricflow import _load
 
 # join_one -> to-one (joined source is the one-side), join_many -> to-many
 # (declaring source is the one-side), join_cross -> cross (no key to certify).
@@ -111,33 +109,32 @@ def _parse_source_dict(s: dict[str, Any]) -> MalloySource:
     )
 
 
+# Leading whitespace is [ \t] only (never \s) so it can't overlap the ^ line
+# anchor on a newline -- keeps every DSL regex linear on user-provided model text
+# (no polynomial backtracking).
 def _looks_like_dsl(text: str) -> bool:
-    return bool(re.search(r"(^|\n)\s*source:\s*\w+\s+is\b", text))
+    return bool(re.search(r"^[ \t]*source:[ \t]*\w+[ \t]+is\b", text, re.MULTILINE))
 
 
 def parse_malloy_models(source: str | Any) -> MalloyModel:
     """Parse a Malloy model into a `MalloyModel`.
 
     Accepts a structured `{sources: [...]}` projection (dict / YAML string / path)
-    OR raw Malloy `.malloy` DSL text (or a path to it). The structured form is the
-    exact, dependency-free path; the DSL reader handles the common declaration
-    shape (`source: N is table('t') { primary_key: k; join_one: J on ...; measure:
-    m is ...; dimension: d is ... }`).
+    OR raw Malloy DSL **text**. The structured form is the exact, dependency-free
+    path; the DSL reader handles the common declaration shape (`source: N is
+    table('t') { primary_key: k; join_one: J on ...; measure: m is ...; dimension:
+    d is ... }`). A raw `.malloy` FILE is read by the caller —
+    `parse_malloy_models(Path('m.malloy').read_text())` — so this function opens no
+    file itself; structured YAML/dict/path goes through the shared dialect loader.
     """
-    if isinstance(source, dict):
-        data = source
-    elif isinstance(source, (str, Path)) and os.path.exists(source):
-        text = Path(source).read_text(encoding="utf-8")
-        return _parse_dsl(text) if (str(source).endswith(".malloy") or _looks_like_dsl(text)) \
-            else _from_structured(yaml.safe_load(text) or {})
-    elif isinstance(source, str) and _looks_like_dsl(source):
+    if isinstance(source, str) and _looks_like_dsl(source):
         return _parse_dsl(source)
-    else:
-        data = yaml.safe_load(str(source)) or {}
-    return _from_structured(data)
+    return _from_structured(_load(source))
 
 
-def _from_structured(data: dict[str, Any]) -> MalloyModel:
+def _from_structured(data: Any) -> MalloyModel:
+    if not isinstance(data, dict):
+        return MalloyModel()
     return MalloyModel(
         sources=[_parse_source_dict(s) for s in (data.get("sources") or []) if isinstance(s, dict)]
     )
@@ -156,44 +153,54 @@ def _match_braces(text: str, open_idx: int) -> int:
     return len(text)
 
 
-_SOURCE_HEAD = re.compile(r"source:\s*(\w+)\s+is\s+([^\{\n]+?)\s*(\{|$|\n)", re.MULTILINE)
+# Head = source name + rest-of-head up to `{` or newline. `[^\n{]*` is one greedy
+# negated class (linear, no backtracking); leading ws is [ \t]. The body braces are
+# located by a bounded string scan, not a regex, so nothing here is polynomial.
+_SOURCE_HEAD = re.compile(r"^[ \t]*source:[ \t]*(\w+)[ \t]+is[ \t]+([^\n{]*)", re.MULTILINE)
+_TABLE = re.compile(r"table\([ \t]*['\"]([^'\"]+)['\"]")
+_JOIN_LINE = re.compile(r"(join_one|join_many|join_cross):[ \t]*(\w+)([^\n]*)")
+_ON_CLAUSE = re.compile(r"\b(?:on|with)[ \t]+(.+)$")
+_PRIMARY_KEY = re.compile(r"primary_key:[ \t]*(\w+)")
+_MEASURE = re.compile(r"measure:[ \t]*(\w+)[ \t]+is\b")
+_DIMENSION = re.compile(r"dimension:[ \t]*(\w+)[ \t]+is\b")
 
 
 def _parse_dsl(text: str) -> MalloyModel:
     """A focused parser for well-formed Malloy source declarations. Extracts each
     `source:`'s name, `table('...')`/base, `primary_key`, joins and measures/
-    dimensions. Not a full Malloy grammar — the declaration constructs only."""
+    dimensions. Not a full Malloy grammar — the declaration constructs only. Every
+    regex matches over `[ \t]` / negated classes on a bounded span, so parsing is
+    linear on any (user-provided) input."""
+    heads = list(_SOURCE_HEAD.finditer(text))
     sources: list[MalloySource] = []
-    for m in _SOURCE_HEAD.finditer(text):
+    for i, m in enumerate(heads):
         name = m.group(1)
         head = m.group(2).strip()
         table = None
         base = None
-        tbl = re.search(r"table\(\s*['\"]([^'\"]+)['\"]\s*\)", head)
+        tbl = _TABLE.search(head)
         if tbl:
             table = tbl.group(1)
-        else:  # `is other_source` / `is other_source extend`
-            base = head.split()[0] if head else None
-        body = ""
-        if m.group(3) == "{":
-            close = _match_braces(text, m.end() - 1)
-            body = text[m.end():close]
+        elif head:  # `is other_source` / `is other_source extend`
+            base = head.split()[0]
+        # body = between the first `{` after the head and its matching `}`, bounded
+        # so it can't spill past the next `source:` head (a linear string scan).
+        next_start = heads[i + 1].start() if i + 1 < len(heads) else len(text)
+        brace_open = text.find("{", m.end(), next_start)
+        body = text[brace_open + 1:_match_braces(text, brace_open)] if brace_open != -1 else ""
         src = MalloySource(name=name, table=table, base=base)
-        pk = re.search(r"primary_key:\s*(\w+)", body)
+        pk = _PRIMARY_KEY.search(body)
         if pk:
             src.primary_key = [pk.group(1)]
-        for jm in re.finditer(
-            r"(join_one|join_many|join_cross):\s*(\w+)(?:\s+is\s+[^\n]*?)?"
-            r"(?:\s+(?:on|with)\s+([^\n]+))?(?=\n|$)",
-            body,
-        ):
+        for jm in _JOIN_LINE.finditer(body):
+            on = _ON_CLAUSE.search(jm.group(3))
             src.joins.append(MalloyJoin(
                 name=jm.group(2),
                 relationship=_JOIN_KINDS[jm.group(1)],
-                on=(jm.group(3) or "").strip(),
+                on=(on.group(1).strip() if on else ""),
             ))
-        src.measures = [mm.group(1) for mm in re.finditer(r"measure:\s*(\w+)\s+is\b", body)]
-        src.dimensions = [dm.group(1) for dm in re.finditer(r"dimension:\s*(\w+)\s+is\b", body)]
+        src.measures = [mm.group(1) for mm in _MEASURE.finditer(body)]
+        src.dimensions = [dm.group(1) for dm in _DIMENSION.finditer(body)]
         sources.append(src)
     return MalloyModel(sources=sources)
 
