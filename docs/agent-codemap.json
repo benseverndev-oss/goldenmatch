@@ -4166,6 +4166,7 @@
             "_field_score_matrix_dedup",
             "_field_values_for_block",
             "_field_values_from_list",
+            "_fixed_blocking_weights",
             "_fs_arrow_column",
             "_fs_batch_rows",
             "_fs_calibrate_threshold_enabled",
