@@ -1895,6 +1895,14 @@ jobs:
       # packed virtualenv to lowercase a column. Its unit tests pin the parity
       # decisions (Python counts U+001C..U+001F as whitespace and Rust does not;
       # slicing is by code point; honorifics include POST-nominals).
+      # survivorship-core (2026-08-13): the pyo3-free golden-record merge.
+      # Written because `merge_field` existed in Rust only inside native/, which
+      # is pyo3+pyarrow AND is the fused columnar INDICES kernel, not this. Its
+      # unit tests pin the TIE-BREAKS -- Python keeps the first maximum and
+      # Rust's max_by_key keeps the last, and a tie resolved the other way is a
+      # different golden record with no error attached.
+      - run: cargo test --manifest-path survivorship-core/Cargo.toml
+      - run: cargo clippy --manifest-path survivorship-core/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --manifest-path transforms-core/Cargo.toml
       - run: cargo clippy --manifest-path transforms-core/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --manifest-path score-jni/Cargo.toml

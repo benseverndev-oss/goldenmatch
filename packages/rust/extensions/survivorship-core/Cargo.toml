@@ -1,0 +1,26 @@
+# survivorship-core -- the pyo3-free golden-record merge, so a survivor is
+# chosen identically on every surface.
+#
+# Written because there was NO pyo3-free implementation: verified against
+# origin/main, `merge_field` appeared only in
+# `packages/rust/extensions/native/src/golden.rs`, which is pyo3 + pyarrow
+# throughout AND is a different thing -- the fused columnar kernel that returns
+# INDICES for the one-box path, not the per-cluster value merge the Spark tier
+# calls.
+#
+# Scope is the SPARK call site: `spark/golden.py` passes values and a strategy
+# and nothing else -- no sources, dates, quality weights or pair scores. The
+# strategies that need those are REFUSED rather than half-implemented, because a
+# survivor chosen by a different rule is a wrong golden record that looks right.
+[workspace]
+
+[package]
+name = "goldenmatch-survivorship-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "Pyo3-free golden-record survivorship (merge_field) shared across surfaces"
+
+[lib]
+name = "goldenmatch_survivorship_core"
