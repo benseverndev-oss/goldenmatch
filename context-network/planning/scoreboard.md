@@ -5,7 +5,7 @@
 [north-star-roadmap.md](./north-star-roadmap.md): *is GoldenMatch becoming the
 tool developers reach for by default?* Trend > snapshot.
 
-**Latest: 2026-08-11** (vs previous snapshot)
+**Latest: 2026-08-13** (vs previous snapshot)
 
 | Signal | Now | WoW | North Star reading |
 |---|---|---|---|
@@ -13,7 +13,7 @@ tool developers reach for by default?* Trend > snapshot.
 | Forks | 13 | 13 (▬0) | intent-to-use |
 | PyPI downloads (30d, suite) | — | — | actual reach |
 | npm downloads (30d, suite) | 4.9k | 4.9k (▬0) | actual reach (TS) |
-| Open issues, non-maintainer | 2 | 2 (▬0) | "someone reached for it"† |
+| Open issues, non-maintainer | 1 | 1 (▼-1) | "someone reached for it"† |
 
 † Raw count — still needs human triage to exclude badge-marketing bots
 (e.g. MCP-marketplace "live badge" issues). The roadmap's true gate is **≥1
@@ -23,6 +23,7 @@ GENUINE inbound issue from a stranger**; a bot filing a promo badge does not cou
 
 | Date | Stars | Forks | PyPI 30d | npm 30d | Ext. issues |
 |---|---|---|---|---|---|
+| 2026-08-13 | 128 | 13 | — | 4.9k | 1 |
 | 2026-08-11 | 128 | 13 | — | 4.9k | 2 |
 | 2026-08-10 | 128 | 13 | 96.4k | 4.9k | 2 |
 | 2026-07-29 | 126 | 14 | — | 3.5k | 1 |
