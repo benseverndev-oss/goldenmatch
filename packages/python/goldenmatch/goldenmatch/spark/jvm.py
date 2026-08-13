@@ -44,8 +44,12 @@ UDF_NAME = "golden_score_batch"
 #: The SQL name of the probe reporting which scorer an EXECUTOR resolved.
 IMPL_UDF_NAME = "golden_score_impl"
 
+#: The SQL name of the record-fingerprint kernel (identity graph).
+FINGERPRINT_UDF_NAME = "golden_fingerprint"
+
 _UDF_CLASS = "dev.goldensuite.spark.GoldenScoreUdf"
 _IMPL_UDF_CLASS = "dev.goldensuite.spark.GoldenScoreImplUdf"
+_FINGERPRINT_UDF_CLASS = "dev.goldensuite.spark.GoldenFingerprintUdf"
 
 #: What ``implementation()`` reports when the Rust kernel loaded.
 NATIVE_IMPL = "NativeScorer"
@@ -134,6 +138,11 @@ def install(spark: object, *, jar: str | os.PathLike[str] | None = None,
         # BEFORE anything is scored, or the first thing a caller can check is
         # whether the results they already trusted came from the kernel.
         (IMPL_UDF_NAME, _IMPL_UDF_CLASS, "string"),
+        # The identity graph's fingerprint, over the SAME `fingerprint-core`
+        # Python uses. Registered here so one `install` call gives a session
+        # every capability the jar has -- a caller should not have to know which
+        # kernels exist to get them.
+        (FINGERPRINT_UDF_NAME, _FINGERPRINT_UDF_CLASS, "string"),
     ):
         try:
             spark.udf.registerJavaFunction(sql_name, cls, ret)  # type: ignore[attr-defined]

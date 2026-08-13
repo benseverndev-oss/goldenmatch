@@ -229,3 +229,87 @@ def test_a_ten_thousand_pair_batch_crosses_in_one_call(spark, registered):
     ).collect()[0]["s"]
     assert len(got) == n
     assert sum(1 for v in got if v == 1.0) == len(range(0, n, 3))
+
+
+# ── record fingerprints (identity graph) ─────────────────────────────
+
+def test_jvm_fingerprints_match_python_exactly(spark, registered):
+    """The identity graph's ids, computed with no Python on the executor.
+
+    Same `fingerprint-core` on both sides, so equality is exact. It has to be:
+    a fingerprint that differs by one byte does not fail, it silently splits one
+    identity into two -- there is no threshold to absorb it and no test that
+    would notice downstream.
+    """
+    from goldenmatch.core._hashing import record_fingerprint
+    from goldenmatch.spark.jvm import FINGERPRINT_UDF_NAME
+    from pyspark.sql import functions as F
+
+    rows = [
+        ("jonathan smith", "boston", 42),
+        ("", "", 0),
+        ("Zoë Müller", "münchen", -1),
+        ("O'Brien", "st. john's", 999999),
+        ("日本語", "東京", 7),
+    ]
+    df = spark.createDataFrame(rows, "name string, city string, n long")
+    got = [
+        r[0]
+        for r in df.select(
+            F.call_udf(
+                FINGERPRINT_UDF_NAME, F.to_json(F.struct("name", "city", "n"))
+            )
+        ).collect()
+    ]
+    want = [record_fingerprint({"name": a, "city": b, "n": c}) for a, b, c in rows]
+    assert got == want, (
+        f"JVM and Python fingerprints disagree. Both call fingerprint-core, so "
+        f"a difference is the JSON encoding, not the hash: "
+        f"{[(i, w, g) for i, (w, g) in enumerate(zip(want, got)) if w != g]}"
+    )
+
+
+def test_derive_record_ids_matches_the_python_path(spark, registered):
+    """The whole function, JVM path against Python path, on one DataFrame."""
+    from goldenmatch.spark.identity import derive_record_ids
+    from goldenmatch.spark.jvm import FINGERPRINT_UDF_NAME
+    from pyspark.sql import functions as F
+
+    df = spark.createDataFrame(
+        [("a", "x", 1), ("b", "y", 2), ("", None, 3)],
+        "name string, city string, n long",
+    ).withColumn("__source__", F.lit("probe"))
+
+    py = {
+        r["name"]: r["record_id"]
+        for r in derive_record_ids(df, id_col="__row_id__").collect()
+    }
+    jvm = {
+        r["name"]: r["record_id"]
+        for r in derive_record_ids(
+            df, id_col="__row_id__", fingerprint_udf=FINGERPRINT_UDF_NAME
+        ).collect()
+    }
+    assert jvm == py, f"record_id differs between the two paths: {py} vs {jvm}"
+    assert all(v.startswith("probe:h1:") for v in jvm.values()), jvm
+
+
+def test_unproven_column_types_are_refused_not_guessed(spark, registered):
+    """A float column must be REFUSED by the JVM path, not silently fingerprinted.
+
+    Python hands the kernel a float value; Spark hands it a JSON literal, and the
+    two only agree if every float renders identically. Guessing produces ids that
+    are wrong in a way nothing downstream can detect, so the path refuses and
+    names the column.
+    """
+    from goldenmatch.spark.identity import derive_record_ids
+    from goldenmatch.spark.jvm import FINGERPRINT_UDF_NAME
+    from pyspark.sql import functions as F
+
+    df = spark.createDataFrame(
+        [("a", 1.5)], "name string, score double"
+    ).withColumn("__source__", F.lit("probe"))
+    with pytest.raises(ValueError, match="score:double"):
+        derive_record_ids(
+            df, id_col="__row_id__", fingerprint_udf=FINGERPRINT_UDF_NAME
+        )

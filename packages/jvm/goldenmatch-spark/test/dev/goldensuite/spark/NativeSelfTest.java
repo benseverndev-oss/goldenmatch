@@ -52,6 +52,7 @@ public final class NativeSelfTest {
     unknownScorerIdsAreRefused(scorer);
     mismatchedLengthsAreRefused(scorer);
     aLargeBatchSurvivesInOneCall(scorer);
+    recordFingerprintsRunHereToo();
 
     if (failures > 0) {
       System.err.println("\n" + failures + " assertion(s) FAILED");
@@ -201,6 +202,55 @@ public final class NativeSelfTest {
     } else {
       fail("large batch", "length " + got.length + ", " + matches + " matches, want "
           + want);
+    }
+  }
+
+  static void recordFingerprintsRunHereToo() {
+    // The identity graph's kernel, in the same library. Pinned vectors rather
+    // than a computed oracle -- there is no second implementation on this side
+    // to compare against, and these exact values are pinned in
+    // fingerprint-core's own tests AND verified against Python's
+    // record_fingerprint, so agreeing with them is agreeing with both.
+    //
+    // On aarch64 this is the only thing that checks the fingerprint kernel at
+    // all: SHA-256 has no architecture-specific paths in this build, but that
+    // is a claim worth one assertion rather than an assumption.
+    eqStr("empty record",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        NativeFingerprint.of("{}"));
+    eqStr("a real record",
+        "a052f98b58d306db41c5672d7f5c5950895db304d2b4c4008ce1b4f649500b72",
+        NativeFingerprint.of(
+            "{\"name\":\"jonathan smith\",\"city\":\"boston\",\"n\":42}"));
+    // Field ORDER must not matter -- the kernel sorts. A fingerprint that
+    // depended on column order would split identities across two DataFrames
+    // holding the same data.
+    eqStr("field order is irrelevant",
+        NativeFingerprint.of("{\"a\":1,\"b\":2}"),
+        NativeFingerprint.of("{\"b\":2,\"a\":1}"));
+    // `__`-prefixed keys are dropped INSIDE the kernel, so both surfaces agree
+    // on which fields count without either having to remember to strip them.
+    eqStr("__ keys are dropped",
+        NativeFingerprint.of("{\"a\":1}"),
+        NativeFingerprint.of("{\"a\":1,\"__row_id__\":7}"));
+    // Unreadable input is REFUSED, not hashed into something plausible.
+    if (NativeFingerprint.of("not json") == null) {
+      pass("invalid JSON refused");
+    } else {
+      fail("invalid JSON", "expected null, got a fingerprint");
+    }
+    if (NativeFingerprint.of(null) == null) {
+      pass("null input yields null");
+    } else {
+      fail("null input", "expected null");
+    }
+  }
+
+  static void eqStr(String what, String want, String got) {
+    if (want != null && want.equals(got)) {
+      pass(what);
+    } else {
+      fail(what, "want " + want + ", got " + got);
     }
   }
 

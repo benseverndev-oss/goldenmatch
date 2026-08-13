@@ -48,6 +48,13 @@ crate-type = ["cdylib", "rlib"]
 # the one implementation, so a malformed batch is refused identically whether it
 # arrives from C or from the JVM.
 goldenmatch-score-cabi = { path = "../score-cabi" }
+# Record fingerprints, for the identity graph. A SECOND kernel in this one
+# library on purpose: the jar carries exactly one `.so` per platform, extracted
+# and dlopen'd once per executor JVM, so a second library would mean a second
+# extraction and a second load for no benefit. `fingerprint-core` is pyo3-free
+# and its `fingerprint_json` was written for exactly this -- "non-Python callers
+# (pgrx / DuckDB / C ABI)", per its own manifest.
+goldenmatch-fingerprint-core = { path = "../fingerprint-core" }
 # jni-rs: the de-facto binding. Chosen over hand-writing the JNINativeInterface
 # function-table offsets because getting those wrong is a segfault inside an
 # executor, not a compile error.

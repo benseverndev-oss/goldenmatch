@@ -44,7 +44,7 @@
 //! handed pointers, not arrays, so it cannot know an array was too short).
 
 use goldenmatch_score_cabi::goldenmatch_score_pairwise_utf8;
-use jni::objects::{JByteArray, JClass, JDoubleArray, JIntArray, ReleaseMode};
+use jni::objects::{JByteArray, JClass, JDoubleArray, JIntArray, JString, ReleaseMode};
 use jni::sys::jint;
 use jni::JNIEnv;
 
@@ -243,5 +243,51 @@ mod tests {
                 "code {added} is already a score-cabi code"
             );
         }
+    }
+}
+
+// ── record fingerprints (identity graph) ────────────────────────────
+//
+// A second kernel in the same library. The jar carries one `.so` per platform,
+// extracted and dlopen'd once per executor JVM, so a second library would buy a
+// second extraction and a second load and nothing else.
+//
+// The boundary here is a JSON STRING, not Arrow buffers, and that is a
+// deliberate difference from the scorer. Scoring is quadratic in block size --
+// millions of calls -- so its per-call cost had to be amortised over a batch.
+// Fingerprinting is once per RECORD: linear, and orders of magnitude fewer
+// calls. `fingerprint_core::fingerprint_json` already accepts exactly this shape
+// (its manifest names "non-Python callers (pgrx / DuckDB / C ABI)" as the
+// reason), and Spark can build the JSON with `to_json(struct(*))` in the engine
+// with no Python anywhere. Inventing an Arrow protocol here would add a
+// marshaling layer to save a cost that is not being paid.
+
+/// Canonical record fingerprint of a JSON object, as 64 lowercase hex chars.
+///
+/// Returns `null` on any failure -- invalid JSON, a non-object, an unsupported
+/// value -- rather than throwing. A JNI exception must be checked for after
+/// every call and a missed check detonates somewhere unrelated; a null is
+/// visible in the result column and the Java side turns it into a message.
+#[no_mangle]
+pub extern "system" fn Java_dev_goldensuite_spark_NativeFingerprint_fingerprintJson<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    json: JString<'local>,
+) -> jni::sys::jstring {
+    let null = std::ptr::null_mut();
+    let Ok(s) = env.get_string(&json) else {
+        return null;
+    };
+    let Ok(text) = s.to_str() else {
+        // Not valid UTF-8. JNI hands back modified UTF-8, so this is reachable
+        // for lone surrogates -- refuse rather than hash something else.
+        return null;
+    };
+    match goldenmatch_fingerprint_core::fingerprint_json(text) {
+        Ok(hex) => match env.new_string(hex) {
+            Ok(js) => js.into_raw(),
+            Err(_) => null,
+        },
+        Err(_) => null,
     }
 }

@@ -160,7 +160,11 @@ def _probe_survivorship(spark, df, ctx):
 
 
 def _probe_identity_record_ids(spark, df, ctx):
-    """`identity.derive_record_ids`: stable fingerprints, an arrow_udf."""
+    """`identity.derive_record_ids` through the JAR's fingerprint kernel.
+
+    Was an arrow_udf and therefore Python-only; now routed to
+    `golden_fingerprint`, which hashes `to_json(struct(...))` with the same
+    pyo3-free `fingerprint-core` the Python path uses."""
     from goldenmatch.spark.identity import derive_record_ids
     from pyspark.sql import functions as F
 
@@ -168,7 +172,9 @@ def _probe_identity_record_ids(spark, df, ctx):
     # PK it is a pure column expression and would pass here, which would be a
     # true but misleading result.
     src = df.withColumn("__source__", F.lit("probe"))
-    out = derive_record_ids(src, id_col="__row_id__")
+    out = derive_record_ids(
+        src, id_col="__row_id__", fingerprint_udf=ctx["fingerprint_udf"]
+    )
     ids = _consume(out, "record_id")
     return f"{len(ids)} record ids, e.g. {ids[0]!r}"
 
@@ -225,7 +231,9 @@ def main(argv=None) -> int:
     print(f"executor JVM: {runtime}\nscorer: {impl}\n  {diagnostics}\n", flush=True)
 
     df = spark.createDataFrame(_rows(), _SCHEMA).cache()
-    ctx = {"udf_name": udf_name}
+    from goldenmatch.spark.jvm import FINGERPRINT_UDF_NAME
+
+    ctx = {"udf_name": udf_name, "fingerprint_udf": FINGERPRINT_UDF_NAME}
 
     print("=" * 74, flush=True)
     print("  WHAT RUNS WITH NO PYTHON ON THE EXECUTORS", flush=True)

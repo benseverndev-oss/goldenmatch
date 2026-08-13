@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import pytest
 from goldenmatch.spark.jvm import (
+    FINGERPRINT_UDF_NAME,
     IMPL_UDF_NAME,
     SCORER_IDS,
     UDF_NAME,
@@ -100,7 +101,27 @@ def test_install_ships_then_registers(jar):
     assert spark.registered == [
         (UDF_NAME, "dev.goldensuite.spark.GoldenScoreUdf", "array<double>"),
         (IMPL_UDF_NAME, "dev.goldensuite.spark.GoldenScoreImplUdf", "string"),
+        (
+            FINGERPRINT_UDF_NAME,
+            "dev.goldensuite.spark.GoldenFingerprintUdf",
+            "string",
+        ),
     ]
+
+
+def test_every_kernel_the_jar_carries_is_registered_by_install(jar):
+    """One `install` call gives a session everything the jar can do.
+
+    A caller should not have to know which kernels exist to get them -- and a
+    capability that has to be registered separately is one that silently is not
+    there, which for the fingerprint means falling back to a Python worker on a
+    cluster that was supposed to need none.
+    """
+    spark = _FakeSession()
+    install(spark, jar=jar)
+    names = [r[0] for r in spark.registered]
+    for expected in (UDF_NAME, IMPL_UDF_NAME, FINGERPRINT_UDF_NAME):
+        assert expected in names, f"{expected} not registered; got {names}"
 
 
 def test_the_implementation_probe_registers_alongside_the_scorer(jar):
