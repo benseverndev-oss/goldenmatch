@@ -24,6 +24,15 @@ export function score_block_pairs_fs(
   ne_thresholds: Float64Array,
   ne_weights: Float64Array,
 ): string;
+export function train_em_from_counts(
+  n_levels: Uint32Array,
+  patterns_flat: Int32Array,
+  counts: Float64Array,
+  u_flat: Float64Array,
+  conditioned: Uint8Array,
+  max_iterations: number,
+  convergence: number,
+): string;
 export type SyncInitInput = BufferSource | WebAssembly.Module;
 export function initSync(
   module: { module: SyncInitInput } | SyncInitInput,

@@ -123,7 +123,7 @@ fn train_json(
             conditioned.len()
         ));
     }
-    if patterns_i.len() % nf != 0 {
+    if !patterns_i.len().is_multiple_of(nf) {
         return Err(format!(
             "patterns has {} entries, not a multiple of the {nf} fields -- it \
              must be row-major n_patterns x n_fields",
