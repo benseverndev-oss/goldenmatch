@@ -9920,6 +9920,14 @@
       "path": "packages/rust/extensions/suggest-wasm"
     },
     {
+      "name": "goldenmatch-survivorship-core",
+      "path": "packages/rust/extensions/survivorship-core"
+    },
+    {
+      "name": "goldenmatch-transforms-core",
+      "path": "packages/rust/extensions/transforms-core"
+    },
+    {
       "name": "goldenmatch_pg",
       "path": "packages/rust/extensions/postgres"
     },

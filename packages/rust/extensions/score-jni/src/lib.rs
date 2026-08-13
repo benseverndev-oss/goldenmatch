@@ -184,68 +184,6 @@ pub extern "system" fn Java_dev_goldensuite_spark_NativeScorer_scorePairwiseUtf8
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The JNI entry points need a JVM, so what is testable here is the code
-    /// table and the fact that this crate reports the SAME kernel identity as
-    /// the C ABI it wraps. A skew between them would mean the load-time gate is
-    /// checking one library and the scoring is done by another.
-    #[test]
-    fn abi_identity_matches_the_c_abi_it_wraps() {
-        assert_eq!(goldenmatch_score_cabi::goldenmatch_score_abi_version(), 1);
-        assert_eq!(
-            goldenmatch_score_cabi::goldenmatch_score_scorer_id_count(),
-            15
-        );
-    }
-
-    #[test]
-    fn every_code_this_layer_can_return_has_a_description() {
-        for code in [
-            0,
-            -1,
-            -2,
-            -3,
-            -4,
-            error::BAD_ARRAY_LENGTH,
-            error::SCORER_ID_OUT_OF_RANGE,
-            error::JNI_ERROR,
-        ] {
-            assert_ne!(
-                describe(code),
-                "unknown error code",
-                "code {code} has no description; a real failure would be \
-                 diagnosed as 'unknown'"
-            );
-        }
-        assert_eq!(describe(-99), "unknown error code");
-    }
-
-    /// The codes this layer adds must not collide with score-cabi's, because
-    /// they are returned through the same `int` and read from one table.
-    #[test]
-    fn added_codes_do_not_collide_with_the_c_abi_codes() {
-        let cabi = [
-            goldenmatch_score_cabi::error::NULL_POINTER,
-            goldenmatch_score_cabi::error::BAD_LENGTH,
-            goldenmatch_score_cabi::error::BAD_OFFSETS,
-            goldenmatch_score_cabi::error::INVALID_UTF8,
-        ];
-        for added in [
-            error::BAD_ARRAY_LENGTH,
-            error::SCORER_ID_OUT_OF_RANGE,
-            error::JNI_ERROR,
-        ] {
-            assert!(
-                !cabi.contains(&added),
-                "code {added} is already a score-cabi code"
-            );
-        }
-    }
-}
-
 // ── record fingerprints (identity graph) ────────────────────────────
 //
 // A second kernel in the same library. The jar carries one `.so` per platform,
@@ -461,4 +399,66 @@ pub extern "system" fn Java_dev_goldensuite_spark_NativeSurvivorship_supportsStr
         return 0;
     };
     u8::from(goldenmatch_survivorship_core::supports(name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The JNI entry points need a JVM, so what is testable here is the code
+    /// table and the fact that this crate reports the SAME kernel identity as
+    /// the C ABI it wraps. A skew between them would mean the load-time gate is
+    /// checking one library and the scoring is done by another.
+    #[test]
+    fn abi_identity_matches_the_c_abi_it_wraps() {
+        assert_eq!(goldenmatch_score_cabi::goldenmatch_score_abi_version(), 1);
+        assert_eq!(
+            goldenmatch_score_cabi::goldenmatch_score_scorer_id_count(),
+            15
+        );
+    }
+
+    #[test]
+    fn every_code_this_layer_can_return_has_a_description() {
+        for code in [
+            0,
+            -1,
+            -2,
+            -3,
+            -4,
+            error::BAD_ARRAY_LENGTH,
+            error::SCORER_ID_OUT_OF_RANGE,
+            error::JNI_ERROR,
+        ] {
+            assert_ne!(
+                describe(code),
+                "unknown error code",
+                "code {code} has no description; a real failure would be \
+                 diagnosed as 'unknown'"
+            );
+        }
+        assert_eq!(describe(-99), "unknown error code");
+    }
+
+    /// The codes this layer adds must not collide with score-cabi's, because
+    /// they are returned through the same `int` and read from one table.
+    #[test]
+    fn added_codes_do_not_collide_with_the_c_abi_codes() {
+        let cabi = [
+            goldenmatch_score_cabi::error::NULL_POINTER,
+            goldenmatch_score_cabi::error::BAD_LENGTH,
+            goldenmatch_score_cabi::error::BAD_OFFSETS,
+            goldenmatch_score_cabi::error::INVALID_UTF8,
+        ];
+        for added in [
+            error::BAD_ARRAY_LENGTH,
+            error::SCORER_ID_OUT_OF_RANGE,
+            error::JNI_ERROR,
+        ] {
+            assert!(
+                !cabi.contains(&added),
+                "code {added} is already a score-cabi code"
+            );
+        }
+    }
 }
