@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 470,
+      "module_count": 471,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7174,6 +7174,7 @@
             "goldenmatch.semantic.crosswalk",
             "goldenmatch.semantic.cube",
             "goldenmatch.semantic.discovery",
+            "goldenmatch.semantic.feast",
             "goldenmatch.semantic.key_integrity",
             "goldenmatch.semantic.metricflow",
             "goldenmatch.semantic.ontology",
@@ -7196,6 +7197,7 @@
           "imports": [
             "goldenmatch.semantic.certify",
             "goldenmatch.semantic.cube",
+            "goldenmatch.semantic.feast",
             "goldenmatch.semantic.key_integrity",
             "goldenmatch.semantic.metricflow",
             "goldenmatch.semantic.osi"
@@ -7233,6 +7235,7 @@
             "goldenmatch.core.key_integrity_certificate",
             "goldenmatch.semantic.blocking",
             "goldenmatch.semantic.cube",
+            "goldenmatch.semantic.feast",
             "goldenmatch.semantic.key_integrity",
             "goldenmatch.semantic.metricflow",
             "goldenmatch.semantic.osi"
@@ -7575,6 +7578,35 @@
           ],
           "imports": [
             "goldenmatch.semantic.discovery.model"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.feast",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/feast.py",
+          "purpose": "Feast (feature-store) reader + emitter — the feature-store dialect.",
+          "defines": [
+            "FeastEntity",
+            "FeastFeatureView",
+            "FeastRepo",
+            "_as_name_list",
+            "_entity_join_keys",
+            "_parse_entity",
+            "_parse_feature_view",
+            "certify_feast_feature_views",
+            "emit_feast",
+            "emit_feast_entity",
+            "emit_feast_feature_view",
+            "emit_feast_from_crosswalk",
+            "emit_feast_yaml",
+            "feast_join_keys",
+            "parse_feast_models",
+            "parse_feast_objects"
+          ],
+          "imports": [
+            "goldenmatch.core.key_integrity_certificate",
+            "goldenmatch.semantic.blocking",
+            "goldenmatch.semantic.key_integrity",
+            "goldenmatch.semantic.metricflow"
           ]
         },
         {

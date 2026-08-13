@@ -92,6 +92,17 @@ from goldenmatch.semantic.discovery import (
     score_model,
     score_naming,
 )
+from goldenmatch.semantic.feast import (
+    FeastEntity,
+    FeastFeatureView,
+    FeastRepo,
+    certify_feast_feature_views,
+    emit_feast_from_crosswalk,
+    emit_feast_yaml,
+    feast_join_keys,
+    parse_feast_models,
+    parse_feast_objects,
+)
 from goldenmatch.semantic.key_integrity import (
     certify_key_integrity,
     certify_structural_json,
@@ -208,6 +219,16 @@ __all__ = [
     "CubeDimension",
     "CubeMeasure",
     "CubeJoin",
+    # follow-on — Feast (feature-store) dialect (reader + emitter + bridges)
+    "parse_feast_models",
+    "parse_feast_objects",
+    "feast_join_keys",
+    "certify_feast_feature_views",
+    "emit_feast_yaml",
+    "emit_feast_from_crosswalk",
+    "FeastEntity",
+    "FeastFeatureView",
+    "FeastRepo",
     # ontology layer — RDF/OWL/SHACL native identity provider (bidirectional)
     "parse_ontology",
     "ontology_identity_keys",
