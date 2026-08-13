@@ -325,3 +325,97 @@ def test_a_null_score_does_not_survive_the_threshold(spark, registered):
     )
     scores = [r["score"] for r in scored.collect()]
     assert None not in scores, f"a null score cleared the threshold: {scores}"
+
+
+# ── the row-shaped JVM path ──────────────────────────────────────────
+
+def test_rowwise_matches_the_batched_answer_pair_for_pair(spark, registered):
+    """One kernel, two plan shapes, one answer.
+
+    `score_pairs_rowwise` exists to measure whether J1's batching pays for
+    itself, and a performance experiment is worthless if the arms compute
+    different things. Both reach the same `ScorerSelection.scorer()`, so any
+    disagreement here is the PLAN -- which is exactly the class of bug the
+    batched path's construction guards against (a score attached to the wrong
+    pair does not crash).
+    """
+    from goldenmatch.spark.batched import score_pairs_batched, score_pairs_rowwise
+    from goldenmatch.spark.jvm import ROW_UDF_NAME, scorer_id
+
+    df = spark.createDataFrame(_rows(6, 8), _SCHEMA)
+    pairs = _candidate_pairs(spark, df)
+
+    batched = {
+        (int(r["a"]), int(r["b"])): r["score"]
+        for r in score_pairs_batched(
+            pairs, df, id_col=_ID, value_col="name",
+            scorer_id=scorer_id("exact"), udf_name=registered,
+        ).collect()
+    }
+    rowwise = {
+        (int(r["a"]), int(r["b"])): r["score"]
+        for r in score_pairs_rowwise(
+            pairs, df, id_col=_ID, value_col="name",
+            scorer_id=scorer_id("exact"), udf_name=ROW_UDF_NAME,
+        ).collect()
+    }
+
+    assert set(rowwise) == set(batched), (
+        f"pair sets differ: only-rowwise={set(rowwise) - set(batched)}, "
+        f"only-batched={set(batched) - set(rowwise)}"
+    )
+    mismatched = {k: (rowwise[k], batched[k]) for k in batched if rowwise[k] != batched[k]}
+    assert not mismatched, f"scores differ for {len(mismatched)} pair(s): {mismatched}"
+    assert batched, "no pairs scored; the fixture proves nothing"
+
+
+def test_rowwise_matches_the_row_shaped_python_answer(spark, registered):
+    """And against the reference the batched path is also gated on.
+
+    Transitivity would give this, but stating it directly means a future change
+    to `score_pairs_batched` cannot quietly move BOTH JVM arms off the Python
+    answer together while the test above still passes.
+    """
+    from goldenmatch.spark.batched import score_pairs_rowwise
+    from goldenmatch.spark.jvm import ROW_UDF_NAME, scorer_id
+
+    df = spark.createDataFrame(_rows(4, 6), _SCHEMA)
+    pairs = _candidate_pairs(spark, df)
+
+    want = _row_shaped(df, pairs)
+    got = {
+        (int(r["a"]), int(r["b"])): r["score"]
+        for r in score_pairs_rowwise(
+            pairs, df, id_col=_ID, value_col="name",
+            scorer_id=scorer_id("exact"), udf_name=ROW_UDF_NAME,
+        ).collect()
+    }
+    assert set(got) == set(want)
+    mismatched = {k: (got[k], want[k]) for k in want if got[k] != want[k]}
+    assert not mismatched, f"scores misaligned for {len(mismatched)} pair(s): {mismatched}"
+
+
+def test_rowwise_keeps_nulls_null_rather_than_scoring_them_1(spark, registered):
+    """A missing value must not become a perfect match.
+
+    The kernel maps a missing value to "" and would score null-vs-null as 1.0,
+    merging two records whose only shared evidence is that both are missing the
+    field. The batched UDF returns null for such a pair; the row-shaped one has
+    to do the same, and it is a fresh code path so it gets its own assertion.
+    """
+    from goldenmatch.spark.batched import score_pairs_rowwise
+    from goldenmatch.spark.jvm import ROW_UDF_NAME, scorer_id
+
+    rows = [(0, "b", None), (1, "b", None), (2, "b", "x"), (3, "b", "x")]
+    df = spark.createDataFrame(rows, _SCHEMA)
+    pairs = _candidate_pairs(spark, df)
+
+    got = {
+        (int(r["a"]), int(r["b"])): r["score"]
+        for r in score_pairs_rowwise(
+            pairs, df, id_col=_ID, value_col="name",
+            scorer_id=scorer_id("exact"), udf_name=ROW_UDF_NAME,
+        ).collect()
+    }
+    assert got[(0, 1)] is None, f"null-vs-null scored {got[(0, 1)]!r}, not None"
+    assert got[(2, 3)] == 1.0

@@ -511,6 +511,10 @@ def test_jvm_scoring_matches_the_python_path_exactly(spark, registered, batch_si
     got = collect(
         scorer_udf=UDF_NAME, transform_udf=TRANSFORM_UDF_NAME,
         batch_size=batch_size,
+        # EXPLICIT: `scorer_shape` now defaults to "row", which has no reshape
+        # at all -- so without this the batch_size parametrize above would be
+        # exercising nothing and the test would keep passing.
+        scorer_shape="batch",
     )
 
     assert set(got) == set(want), (
@@ -726,3 +730,91 @@ def test_uuid7_is_refused_on_the_pure_sql_path(spark, registered, monkeypatch):
     df = spark.createDataFrame([(1, "src:a")], "cluster_id long, record_id string")
     with pytest.raises(ValueError, match="uuid7"):
         mint_entity_ids(df, pure_sql=True)
+
+
+# ── the row-shaped scorer, in the config pipeline ────────────────────
+
+def test_rowwise_config_scoring_matches_the_python_path_exactly(spark, registered):
+    """The default JVM shape must equal the Python path, pair for pair.
+
+    `scorer_shape="row"` is the default because it measured 1.95x faster than
+    the batched shape (run 31714236735: J1's reshape +1.997s, the JNI downcall
+    it avoids +0.747s). A faster wrong answer is worthless, and the failure mode
+    here is PLAUSIBLE -- a slot read from the wrong column still yields a score
+    in [0, 1] for every pair -- so equality is exact, with no tolerance.
+    """
+    from goldenmatch.spark.config_pipeline import generate_candidates, score_candidates
+    from goldenmatch.spark.jvm import TRANSFORM_UDF_NAME, UDF_NAME
+
+    src = _parity_source(spark)
+    cfg = _parity_config()
+    cands = generate_candidates(src, cfg, id_col="__row_id__")
+
+    def collect(**kw):
+        out = score_candidates(cands, src, cfg, id_col="__row_id__", **kw)
+        return {(r["a"], r["b"]): r["score"] for r in out.collect()}
+
+    want = collect()
+    got = collect(scorer_udf=UDF_NAME, transform_udf=TRANSFORM_UDF_NAME)
+
+    assert set(got) == set(want), (
+        f"the row-shaped JVM path scored a different SET of pairs: "
+        f"only-jvm={sorted(set(got) - set(want))} "
+        f"only-python={sorted(set(want) - set(got))}"
+    )
+    mismatches = {k: (got[k], want[k]) for k in want if got[k] != want[k]}
+    assert not mismatches, (
+        f"row-shaped JVM and Python scored the same pair differently. Both call "
+        f"the same score_one over the same bytes, so this is a slot read from "
+        f"the wrong column -- (jvm, python): {mismatches}"
+    )
+    assert want, "no pairs scored; the fixture proves nothing"
+
+
+def test_the_two_jvm_shapes_agree(spark, registered):
+    """Row and batch must be interchangeable, or `scorer_shape` is a correctness
+    switch rather than a performance one -- and nobody would know which value
+    was the right one.
+
+    Stated directly rather than left to transitivity through the Python path: a
+    change that moved BOTH shapes together would pass the two parity tests above
+    and be caught here only if they are compared to each other.
+    """
+    from goldenmatch.spark.config_pipeline import generate_candidates, score_candidates
+    from goldenmatch.spark.jvm import TRANSFORM_UDF_NAME, UDF_NAME
+
+    src = _parity_source(spark)
+    cfg = _parity_config()
+    cands = generate_candidates(src, cfg, id_col="__row_id__")
+
+    def collect(shape):
+        out = score_candidates(
+            cands, src, cfg, id_col="__row_id__", scorer_udf=UDF_NAME,
+            transform_udf=TRANSFORM_UDF_NAME, scorer_shape=shape,
+        )
+        return {(r["a"], r["b"]): r["score"] for r in out.collect()}
+
+    row, batch = collect("row"), collect("batch")
+    assert set(row) == set(batch), (
+        f"only-row={sorted(set(row) - set(batch))} "
+        f"only-batch={sorted(set(batch) - set(row))}"
+    )
+    mismatches = {k: (row[k], batch[k]) for k in batch if row[k] != batch[k]}
+    assert not mismatches, f"the two JVM shapes disagree: {mismatches}"
+
+
+def test_an_unknown_scorer_shape_is_refused(spark):
+    """Not silently treated as the default: a typo'd shape would otherwise run
+    the row path while the caller believed they had pinned the batch one."""
+    from goldenmatch.spark.config_pipeline import generate_candidates, score_candidates
+    from goldenmatch.spark.jvm import UDF_NAME
+
+    src = _parity_source(spark)
+    cfg = _parity_config()
+    cands = generate_candidates(src, cfg, id_col="__row_id__")
+
+    with pytest.raises(ValueError, match="scorer_shape"):
+        score_candidates(
+            cands, src, cfg, id_col="__row_id__", scorer_udf=UDF_NAME,
+            scorer_shape="batched",
+        )

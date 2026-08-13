@@ -7808,7 +7808,8 @@
             "_above",
             "batch_key",
             "dedup_max",
-            "score_pairs_batched"
+            "score_pairs_batched",
+            "score_pairs_rowwise"
           ]
         },
         {
@@ -7834,9 +7835,11 @@
             "_matchkey_score_expr",
             "_matchkey_threshold",
             "_pick_fields",
+            "_refuse_probabilistic",
             "_reshape_scores",
             "_resolve_fs_models",
             "_score_candidates_jvm",
+            "_score_candidates_jvm_rowwise",
             "_slot_key",
             "_transformed",
             "_valid_key",

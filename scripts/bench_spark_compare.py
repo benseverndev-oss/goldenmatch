@@ -18,10 +18,19 @@ import sys
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     pure_path, native_path, jvm_path, out_path = argv[0], argv[1], argv[2], argv[3]
+    # Optional 5th arm: the row-shaped JVM control. Optional because it was
+    # added after the fact and a dispatch of an older ref must still compare.
+    row_jvm_path = argv[4] if len(argv) > 4 else None
 
     pure = json.load(open(pure_path, encoding="utf-8"))
     native = json.load(open(native_path, encoding="utf-8"))
     jvm = json.load(open(jvm_path, encoding="utf-8"))
+    row_jvm = None
+    if row_jvm_path:
+        try:
+            row_jvm = json.load(open(row_jvm_path, encoding="utf-8"))
+        except FileNotFoundError:
+            row_jvm = None
 
     print("=" * 70)
     print(f"RESULT   rows={pure['rows']:,}   "
@@ -106,6 +115,28 @@ def main(argv: list[str] | None = None) -> int:
         print("  about it. Raise the threshold until pairs are actually")
         print("  rejected, or the comparison is the threshold=0 one again.")
 
+    # THE decomposition. batched_jvm and row_jvm run the same kernel in the same
+    # JVM and differ only in plan shape, so the gap between them is J1's reshape
+    # (collect_list + arrays_zip + explode) and nothing else. The gap between
+    # row_jvm and row_python is then the mechanism alone -- JNI downcall per
+    # pair versus a columnar Arrow hop to a forked worker -- measured on
+    # identical plans.
+    #
+    # J1 batched on the assertion that a per-row downcall "would be dominated by
+    # call overhead". These two numbers are what that assertion was missing.
+    if row_jvm:
+        rr = row_jvm["timing"]["median_s"]
+        print()
+        print(f"  row_jvm (same plan as row_python, scorer in the JVM): {rr:.3f}s")
+        if rj:
+            print(f"    J1's reshape costs:      {rj - rr:+.3f}s  "
+                  f"(batched_jvm {rj:.3f}s - row_jvm {rr:.3f}s)")
+        if rn:
+            print(f"    the JVM mechanism costs: {rr - rn:+.3f}s  "
+                  f"(row_jvm {rr:.3f}s - row_python NATIVE {rn:.3f}s)")
+        if rn and rr < rn:
+            print("    row_jvm BEATS the native Python arm: batching was the cost.")
+
     impl = jvm.get("jvm_impl")
     if impl and impl != "NativeScorer":
         print()
@@ -126,12 +157,19 @@ def main(argv: list[str] | None = None) -> int:
                 "row_python_pure": pure,
                 "row_python_native": native,
                 "batched_jvm": jvm,
+                "row_jvm": row_jvm,
                 "like_for_like": like_for_like,
                 "threshold": thr,
                 "kept_fraction": kept,
                 "native_speedup": (rp / rn) if rn else None,
                 "jvm_vs_pure": (rp / rj) if rj else None,
                 "jvm_vs_native": (rn / rj) if (rj and rn) else None,
+                "row_jvm_vs_native": (
+                    rn / row_jvm["timing"]["median_s"] if row_jvm and rn else None
+                ),
+                "reshape_cost_s": (
+                    rj - row_jvm["timing"]["median_s"] if row_jvm and rj else None
+                ),
             },
             fh,
             indent=2,

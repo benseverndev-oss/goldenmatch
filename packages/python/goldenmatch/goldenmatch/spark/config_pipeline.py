@@ -497,6 +497,7 @@ def score_candidates(
     scorer_udf: str | None = None,
     transform_udf: str | None = None,
     batch_size: int = 10_000,
+    scorer_shape: str = "row",
 ) -> Any:
     """Score candidate pairs under every matchkey; return ``(a, b, score)``.
 
@@ -521,6 +522,17 @@ def score_candidates(
     )
 
     if scorer_udf is not None:
+        if scorer_shape not in ("row", "batch"):
+            raise ValueError(
+                f"scorer_shape must be 'row' or 'batch'; got {scorer_shape!r}"
+            )
+        if scorer_shape == "row":
+            from goldenmatch.spark.jvm import ROW_UDF_NAME
+
+            return _score_candidates_jvm_rowwise(
+                joined, config, lhs=lhs, rhs=rhs, scorer_udf=ROW_UDF_NAME,
+                transform_udf=transform_udf, fs_models=fs_models,
+            )
         return _score_candidates_jvm(
             joined, config, lhs=lhs, rhs=rhs, scorer_udf=scorer_udf,
             transform_udf=transform_udf, fs_models=fs_models,
@@ -704,22 +716,10 @@ def _score_candidates_jvm(
     from goldenmatch.spark.jvm import scorer_id
 
     matchkeys = list(config.get_matchkeys())
-    for mk in matchkeys:
-        mk_type = getattr(mk, "type", None) or getattr(mk, "comparison", None)
-        if mk_type == "probabilistic":
-            # Refused rather than silently routed to the Python path. A
-            # probabilistic matchkey scores P(match) from a trained model
-            # through its own expression builder; quietly leaving it on the
-            # Python worker would mean a caller who passed `scorer_udf` and got
-            # no error still needs an executor virtualenv, and would only find
-            # out from a ModuleNotFoundError mid-job.
-            raise NotImplementedError(
-                f"matchkey {mk.name!r} is probabilistic, and the JVM scoring "
-                f"path does not run Fellegi-Sunter -- it scores fields, while "
-                f"a probabilistic matchkey combines EM-learned weights into "
-                f"P(match). Omit scorer_udf for this config and ship a Python "
-                f"environment, or use weighted/exact matchkeys."
-            )
+    # Refused rather than silently routed to the Python path: a caller who
+    # passed `scorer_udf` and got no error would still need an executor
+    # virtualenv, and would only find out from a ModuleNotFoundError mid-job.
+    _refuse_probabilistic(matchkeys)
 
     slots, index = _weighted_scorer_slots(config)
 
@@ -865,6 +865,153 @@ def _score_candidates_jvm(
     ).where(F.col("score").isNotNull())
 
 
+def _refuse_probabilistic(matchkeys: list) -> None:
+    """Both JVM shapes refuse a probabilistic matchkey, for one reason.
+
+    Shared rather than duplicated: two copies of a refusal drift, and the shape
+    a caller picked is not a reason to accept work the JVM cannot do.
+    """
+    for mk in matchkeys:
+        mk_type = getattr(mk, "type", None) or getattr(mk, "comparison", None)
+        if mk_type == "probabilistic":
+            raise NotImplementedError(
+                f"matchkey {mk.name!r} is probabilistic, and the JVM scoring "
+                f"path does not run Fellegi-Sunter -- it scores fields, while "
+                f"a probabilistic matchkey combines EM-learned weights into "
+                f"P(match). Omit scorer_udf for this config and ship a Python "
+                f"environment, or use weighted/exact matchkeys."
+            )
+
+
+def _score_candidates_jvm_rowwise(
+    joined: Any,
+    config: Any,
+    *,
+    lhs: str,
+    rhs: str,
+    scorer_udf: str,
+    transform_udf: str | None,
+    fs_models: dict[str, Any] | None,
+) -> Any:
+    """``score_candidates``'s body with a ROW-shaped JVM scorer. No batching.
+
+    Returns ``(a, b, score)``, identical in shape and semantics to
+    :func:`_score_candidates_jvm` and to the Python path.
+
+    ## Why this replaced the batched shape as the default
+
+    J1 grouped pairs into arrays because Spark Connect permits only row-shaped
+    UDFs, and asserted that a per-row downcall "would be dominated by call
+    overhead". Measured (run 31714236735, 200k rows -> 1.9M pairs):
+
+        J1's reshape        +1.997s   (73% of the gap to the Python path)
+        the JNI mechanism   +0.747s   (27%)  = 393 ns/pair
+
+    The batching cost 2.7x more than the downcall it avoided. Removing it made
+    the JVM arm **1.95x faster** and brought it level with the pure Python path
+    (0.98x), because Spark's arrays are ``ArrayData`` of ``InternalRow``, not
+    columnar vectors: batching in the SQL layer materialises every pair three
+    times (``collect_list`` struct, ``arrays_zip``, ``explode``) to avoid one
+    columnar Arrow transfer that is cheaper than the churn.
+
+    So this plan is the Python path's plan -- one projection, one UDF call per
+    field per pair, one filter -- with the scorer call landing in the executor
+    JVM. No ``collect_list``, no ``arrays_zip``, no ``explode``, and therefore
+    no ``batch_size``: nothing is materialised as an array, so there is no heap
+    commitment to bound.
+
+    ## One evaluation per slot
+
+    The per-slot score is projected to a named column and the weighted combine
+    reads that name. Spark's ``CollapseProject`` declines to inline an
+    expression that is referenced more than once and is not cheap, and a UDF is
+    not cheap -- so a slot shared by several matchkeys is called ONCE, which is
+    the same de-duplication :func:`_weighted_scorer_slots` gives the batched
+    shape.
+    """
+    from pyspark.sql import functions as F
+
+    from goldenmatch.spark.jvm import scorer_id
+
+    matchkeys = list(config.get_matchkeys())
+    _refuse_probabilistic(matchkeys)
+
+    slots, index = _weighted_scorer_slots(config)
+
+    parts = [F.col("__cand__.a").alias("a"), F.col("__cand__.b").alias("b")]
+    for s in slots:
+        a_col = F.col(f"{lhs}.{s['col']}")
+        b_col = F.col(f"{rhs}.{s['col']}")
+        if s["chain"]:
+            a_val = _transformed(a_col, s["chain"], transform_udf=transform_udf)
+            b_val = _transformed(b_col, s["chain"], transform_udf=transform_udf)
+        else:
+            a_val, b_val = a_col.cast("string"), b_col.cast("string")
+        if s["scorer"] == "exact":
+            # No kernel: the agreement IS the score, computed here in SQL --
+            # identical to the batched shape, which also keeps `exact` out of
+            # the UDF.
+            parts.append(
+                F.when(a_val == b_val, F.lit(1.0)).otherwise(F.lit(0.0))
+                .alias(f"r{s['i']}")
+            )
+        else:
+            parts.append(
+                F.call_udf(
+                    scorer_udf, F.lit(int(scorer_id(s["scorer"]))), a_val, b_val
+                ).alias(f"s{s['i']}")
+            )
+        # Comparability from the RAW columns, as everywhere else: the kernel
+        # maps a missing value to "" and would score null-vs-null as a PERFECT
+        # 1.0, merging two records whose only shared evidence is that both are
+        # missing the field.
+        parts.append((a_col.isNotNull() & b_col.isNotNull()).alias(f"c{s['i']}"))
+    for m, mk in enumerate(matchkeys):
+        mk_type = getattr(mk, "type", None) or getattr(mk, "comparison", None)
+        if mk_type == "exact":
+            parts.append(_matchkey_score_expr(mk, lhs, rhs).alias(f"e{m}"))
+
+    scored = joined.select(*parts)
+
+    # ── the weighted combine, per matchkey ────────────────────────────
+    #
+    # Deliberately the same arithmetic as the batched shape, reading plain
+    # column names instead of exploded struct fields. Any divergence here would
+    # be a scoring difference between two paths that must agree, which is what
+    # the parity gate exists to catch.
+    accepted = []
+    for m, mk in enumerate(matchkeys):
+        mk_type = getattr(mk, "type", None) or getattr(mk, "comparison", None)
+        if mk_type == "exact":
+            score = F.col(f"e{m}")
+        else:
+            nums, dens = [], []
+            for f in mk.fields:
+                weight = float(f.weight)
+                idx = index[_slot_key(f)]
+                raw = F.col(f"r{idx}" if f.scorer == "exact" else f"s{idx}")
+                comparable = F.col(f"c{idx}")
+                nums.append(F.when(comparable, raw * F.lit(weight)).otherwise(F.lit(0.0)))
+                dens.append(F.when(comparable, F.lit(weight)).otherwise(F.lit(0.0)))
+            num, den = nums[0], dens[0]
+            for n in nums[1:]:
+                num = num + n
+            for d in dens[1:]:
+                den = den + d
+            # den == 0 means no field was comparable -> score_pair returns 0.0.
+            score = F.when(den > F.lit(0.0), num / den).otherwise(F.lit(0.0))
+
+        em = (fs_models or {}).get(mk.name)
+        # NULL where this matchkey rejects the pair; `greatest` skips nulls, so
+        # a pair no matchkey accepted comes out null and is dropped.
+        accepted.append(F.when(score >= F.lit(_matchkey_threshold(mk, em)), score))
+
+    best = F.greatest(*accepted) if len(accepted) > 1 else accepted[0]
+    return scored.select(
+        F.col("a"), F.col("b"), best.alias("score")
+    ).where(F.col("score").isNotNull())
+
+
 # ── golden ───────────────────────────────────────────────────────────
 
 def _field_strategy(golden_rules: Any, column: str) -> str:
@@ -988,6 +1135,7 @@ def run_config_pipeline(
     transform_udf: str | None = None,
     survivorship_udf: str | None = None,
     scorer_udf: str | None = None,
+    scorer_shape: str = "row",
 ) -> Any:
     """Run the Spark tier from a ``GoldenMatchConfig``.
 
@@ -999,6 +1147,15 @@ def run_config_pipeline(
     the config declares none -- every matchkey field. It is an explicit
     parameter because "which columns end up in the golden record" is a product
     decision the config does not always state.
+
+    ``scorer_shape`` picks how the JVM scorer is CALLED, and defaults to
+    ``"row"`` because that is 1.95x faster (measured, run 31714236735). J1
+    batched pairs into arrays on the assertion that a per-row downcall "would
+    be dominated by call overhead"; the bisect put +1.997s on the reshape that
+    batching requires and +0.747s (393 ns/pair) on the downcall itself, so the
+    cure was 2.7x the disease. ``"batch"`` keeps the array shape reachable --
+    it amortises string marshalling per call and could still win on long
+    values, and the parity gate compares the two.
 
     ``transform_udf``, ``survivorship_udf`` and ``scorer_udf`` route
     normalization, survivorship and scoring into the jar's kernels. **Passing
@@ -1046,6 +1203,7 @@ def run_config_pipeline(
     pairs = score_candidates(
         candidates, source_df, config, id_col=id_col, fs_models=fs_models,
         scorer_udf=scorer_udf, transform_udf=transform_udf,
+        scorer_shape=scorer_shape,
     )
 
     ids_df = source_df.select(id_col)
