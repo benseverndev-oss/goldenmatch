@@ -12,11 +12,15 @@ pytest.importorskip("rdflib")
 
 from goldenmatch.semantic import (  # noqa: E402
     Ontology,
+    asserted_sameas_pairs,
+    certify_ontology,
     certify_ontology_keys,
+    effective_has_keys,
     emit_identity_shacl,
     emit_sameas_graph,
     ontology_identity_keys,
     parse_ontology,
+    reconcile_ontology_identity,
 )
 
 # A real-shaped OWL ontology in Turtle: a Patient class with a composite
@@ -140,3 +144,109 @@ def test_emit_identity_shacl_asserts_single_resolved_key():
     # the property shape pins the resolved key to exactly one value
     assert any(int(o) == 1 for o in g.objects(predicate=SH.minCount))
     assert any(int(o) == 1 for o in g.objects(predicate=SH.maxCount))
+
+
+# --- PR1: deeper consume + certification report + reconciliation --------------
+
+# Patient is a subclass of Person; Person carries the owl:hasKey, and a
+# cardinality-1 restriction marks mrn single-valued on Patient.
+_TTL_INHERIT = """
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix ex:   <https://example.org/clinic#> .
+
+ex:Person a owl:Class ;
+    owl:hasKey ( ex:ssn ) .
+
+ex:Patient a owl:Class ;
+    rdfs:subClassOf ex:Person ;
+    rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:mrn ; owl:maxCardinality 1 ] .
+"""
+
+
+def test_subclass_inherits_haskey():
+    onto = parse_ontology(_TTL_INHERIT)
+    patient = next(c for c in onto.classes if c.name == "Patient")
+    assert patient.parents == ["Person"]
+    # the composite (here single) key is inherited from Person
+    assert effective_has_keys(onto, "Patient") == [["ssn"]]
+    # ...and surfaces as an identity key tagged inherited
+    keys = {(k["class"], tuple(k["key"]), k["source"]) for k in ontology_identity_keys(onto)}
+    assert ("Patient", ("ssn",), "owl:hasKey(inherited)") in keys
+    assert ("Person", ("ssn",), "owl:hasKey") in keys
+
+
+def test_cardinality_one_restriction_parsed():
+    onto = parse_ontology(_TTL_INHERIT)
+    patient = next(c for c in onto.classes if c.name == "Patient")
+    assert patient.max_one_properties == ["mrn"]
+
+
+def test_certify_ontology_rolls_up_safe_and_unsafe():
+    onto = parse_ontology(_TTL)  # Patient: hasKey(firstName,lastName,birthDate) + mrn/ssn IFPs
+    frames = {"Patient": pa.table({
+        "mrn": ["m1", "m1", "m2"],       # duplicate -> unsafe
+        "ssn": ["a", "b", "c"],          # unique -> safe
+        "firstName": ["Bob", "Bob", "Amy"],
+        "lastName": ["Smith", "Smith", "Jones"],
+        "birthDate": ["1990-01-01", "1990-01-01", "1985-05-05"],
+    })}
+    report = certify_ontology(onto, frames)
+    assert report.n_keys == 3 and report.n_unsafe >= 1
+    assert report.all_safe is False
+    d = report.to_dict()
+    assert d["n_keys"] == 3 and "certificate" not in d["keys"][0]
+    mrn = next(k for k in report.keys if k["key"] == ["mrn"])
+    assert mrn["is_unique"] is False
+
+
+def test_certify_ontology_all_safe_when_every_key_unique():
+    onto = parse_ontology(_TTL)
+    frames = {"Patient": pa.table({
+        "mrn": ["m1", "m2", "m3"], "ssn": ["a", "b", "c"],
+        "firstName": ["A", "B", "C"], "lastName": ["x", "y", "z"],
+        "birthDate": ["2000-01-01", "2000-01-02", "2000-01-03"],
+    })}
+    report = certify_ontology(onto, frames)
+    assert report.all_safe is True and report.n_unsafe == 0
+
+
+class _RXW:
+    """Crosswalk: 4 crm records -> entities e1 (1,2,3) and e2 (4)."""
+    resolved_key = "resolved_entity_id"
+
+    def to_arrow(self):
+        return pa.table({
+            "source": ["crm"] * 4,
+            "source_pk": ["1", "2", "3", "4"],
+            "resolved_entity_id": ["e1", "e1", "e1", "e2"],
+        })
+
+
+_ASSERTED = """
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+<https://ex.test/id/record/crm/1> owl:sameAs <https://ex.test/id/record/crm/2> .
+<https://ex.test/id/record/crm/3> owl:sameAs <https://ex.test/id/record/crm/4> .
+"""
+
+
+def test_asserted_sameas_pairs_reads_links():
+    pairs = asserted_sameas_pairs(_ASSERTED)
+    assert ("https://ex.test/id/record/crm/1", "https://ex.test/id/record/crm/2") in pairs
+    assert len(pairs) == 2
+
+
+def test_reconcile_flags_over_merge_and_fragmentation():
+    rec = reconcile_ontology_identity(_ASSERTED, _RXW(), base_iri="https://ex.test/id/")
+    # (1,2): asserted same, both resolved e1 -> agreement
+    assert rec.agreements == 1
+    # (3,4): asserted same but e1 != e2 -> over-merge
+    assert rec.over_merges == [("https://ex.test/id/record/crm/3",
+                                "https://ex.test/id/record/crm/4")]
+    # e1 spans the {1,2} component and the unasserted 3 -> fragmentation bridge
+    assert rec.fragmentations == [("https://ex.test/id/record/crm/1",
+                                   "https://ex.test/id/record/crm/3")]
+    assert rec.n_asserted_links == 2 and rec.n_resolved_records == 4
+    d = rec.to_dict()
+    assert d["agreements"] == 1 and d["n_over_merges"] == 1 and d["n_fragmentations"] == 1

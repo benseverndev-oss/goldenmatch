@@ -105,13 +105,19 @@ from goldenmatch.semantic.metricflow import (
 )
 from goldenmatch.semantic.ontology import (
     Ontology,
+    OntologyCertification,
     OntologyClass,
     OntologyProperty,
+    OntologyReconciliation,
+    asserted_sameas_pairs,
+    certify_ontology,
     certify_ontology_keys,
+    effective_has_keys,
     emit_identity_shacl,
     emit_sameas_graph,
     ontology_identity_keys,
     parse_ontology,
+    reconcile_ontology_identity,
 )
 from goldenmatch.semantic.osi import (
     OsiDataset,
@@ -197,12 +203,18 @@ __all__ = [
     # ontology layer — RDF/OWL/SHACL native identity provider (bidirectional)
     "parse_ontology",
     "ontology_identity_keys",
+    "effective_has_keys",
     "certify_ontology_keys",
+    "certify_ontology",
+    "asserted_sameas_pairs",
+    "reconcile_ontology_identity",
     "emit_sameas_graph",
     "emit_identity_shacl",
     "Ontology",
     "OntologyClass",
     "OntologyProperty",
+    "OntologyCertification",
+    "OntologyReconciliation",
     # semantic-model discovery (Phase 1) — certified key discovery per table
     "discover_keys",
     "KeyCandidate",

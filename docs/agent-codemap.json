@@ -7600,17 +7600,24 @@
           "purpose": "Ontology-layer (RDF / OWL / SHACL) native identity provider.",
           "defines": [
             "Ontology",
+            "OntologyCertification",
             "OntologyClass",
             "OntologyProperty",
+            "OntologyReconciliation",
+            "_components",
             "_crosswalk_rows",
             "_load_graph",
             "_local",
             "_require_rdflib",
+            "asserted_sameas_pairs",
+            "certify_ontology",
             "certify_ontology_keys",
+            "effective_has_keys",
             "emit_identity_shacl",
             "emit_sameas_graph",
             "ontology_identity_keys",
-            "parse_ontology"
+            "parse_ontology",
+            "reconcile_ontology_identity"
           ],
           "imports": [
             "goldenmatch.semantic.key_integrity"
