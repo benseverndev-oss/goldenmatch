@@ -653,12 +653,22 @@ def test_train_em_distributed_equals_the_one_box_over_the_same_pairs(train_sourc
     )
 
 
-def test_distributed_training_is_jar_only(train_source, jvm_registered):
-    """No Python on the executors, which is the whole claim of this tier.
+def test_the_jar_route_trains_the_same_model_as_the_arrow_route(
+    train_source, jvm_registered
+):
+    """Routing the similarity call to the jar must not move the model.
 
-    Training that needed an executor virtualenv would leave the jar-only story
-    half true in the place it is hardest to notice -- scoring would be jar-only
-    and the model it scores with would not be.
+    This does NOT establish "no Python on the executors", and naming it that
+    way would be a lie a green lane would keep telling. This lane runs under
+    `local[*]`, where the Python worker forks from the DRIVER's interpreter --
+    which has goldenmatch installed -- so the arrow route works here and would
+    work here even if it could never work on a cluster.
+
+    What it does establish is the precondition: the two routes agree, so the
+    jar route is a real alternative rather than a differently-wrong one. The
+    executor claim is tested where it can be, on the two-worker cluster lane,
+    by `test_fs_training_runs_with_no_python_on_the_executors` in
+    test_spark_jvm_native_parity.py.
     """
     from goldenmatch.spark.em import train_em_distributed
     from goldenmatch.spark.jvm import ROW_UDF_NAME, TRANSFORM_UDF_NAME

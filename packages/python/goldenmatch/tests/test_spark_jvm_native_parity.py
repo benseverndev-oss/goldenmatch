@@ -818,3 +818,155 @@ def test_an_unknown_scorer_shape_is_refused(spark):
             cands, src, cfg, id_col="__row_id__", scorer_udf=UDF_NAME,
             scorer_shape="batched",
         )
+
+
+# ── FS training, on a real executor ──────────────────────────────────
+#
+# `train_em_distributed` computes comparison vectors IN the engine and counts
+# them there. Every other test of it runs under `local[*]`, where a Python
+# worker forks from the driver's interpreter -- which has goldenmatch -- so the
+# arrow-udf route works and proves nothing about executors. Here the executors
+# are separate hosts with no goldenmatch, so a training path that still needed a
+# Python worker fails with ModuleNotFoundError instead of quietly passing.
+#
+# The oracle is client-side: `pass_candidates` and `random_pairs` are pure Spark
+# SQL, so collecting their output needs nothing on the executor, and the levels
+# are then derived with `comparison_vector` -- the one-box's own function, which
+# is what a locally-trained model is built from.
+
+
+def _fs_config():
+    """Two passes, one of them keyed on a COMPARISON field.
+
+    `last` is both a comparison field and pass 2's blocking key, so it is
+    conditioned in one session and free in the other. A config whose passes
+    blocked only on non-comparison columns would exercise the plumbing without
+    exercising the conditioning that makes per-pass sessions necessary.
+    """
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+    )
+
+    return GoldenMatchConfig(
+        blocking=BlockingConfig(
+            strategy="multi_pass",
+            passes=[
+                BlockingKeyConfig(fields=["blk"]),
+                BlockingKeyConfig(fields=["last"]),
+            ],
+        ),
+        matchkeys=[
+            MatchkeyConfig(
+                name="fs", type="probabilistic",
+                fields=[
+                    MatchkeyField(field="first", scorer="jaro_winkler",
+                                  levels=2, partial_threshold=0.8),
+                    MatchkeyField(field="last", scorer="jaro_winkler",
+                                  levels=2, partial_threshold=0.8),
+                ],
+            ),
+        ],
+    )
+
+
+def _client_side_model(source, mk, cfg):
+    """The model the one-box builds from the same pairs, derived on the client.
+
+    Only pure-SQL frames are collected (`random_pairs`, `pass_candidates`), so
+    this side needs nothing installed on an executor -- which is the point: if
+    the ORACLE needed a Python worker, this test could not distinguish "training
+    is jar-only" from "both sides need the same missing thing".
+    """
+    from collections import Counter
+
+    from goldenmatch.core.probabilistic import (
+        _combine_em_sessions,
+        comparison_vector,
+        estimate_u_from_counts,
+        train_em_from_counts,
+    )
+    from goldenmatch.spark.config_pipeline import (
+        CAND_LHS,
+        CAND_RHS,
+        blocking_passes,
+        pass_candidates,
+    )
+    from goldenmatch.spark.em import random_pairs
+    from pyspark.sql import functions as F
+
+    cols = ["__row_id__", "blk", "first", "last", "city"]
+    by_id = {int(r["__row_id__"]): {c: r[c] for c in cols}
+             for r in source.select(*cols).collect()}
+
+    def counts(pairs):
+        c = Counter()
+        for a, b in pairs:
+            vec = comparison_vector(by_id[a], by_id[b], mk)
+            c[tuple(int(v) for v in vec)] += 1
+        return sorted(c.items())
+
+    rp = random_pairs(source, id_col="__row_id__").select(
+        F.col(f"{CAND_LHS}.__row_id__").alias("a"),
+        F.col(f"{CAND_RHS}.__row_id__").alias("b"),
+    ).collect()
+    u = estimate_u_from_counts(mk, counts([(int(r["a"]), int(r["b"])) for r in rp]))
+
+    sessions = []
+    for key_config in blocking_passes(cfg):
+        rows = pass_candidates(
+            source, key_config, id_col="__row_id__"
+        ).collect()
+        pairs = [(int(r["a"]), int(r["b"])) for r in rows]
+        if not pairs:
+            continue
+        em = train_em_from_counts(
+            mk, counts(pairs), u, conditioned_fields=tuple(key_config.fields)
+        )
+        sessions.append((tuple(key_config.fields), em, float(len(pairs))))
+    return _combine_em_sessions(mk, sessions)
+
+
+def test_fs_training_runs_with_no_python_on_the_executors(spark, registered):
+    """THE gate for distributed FS training on a cluster.
+
+    Fellegi-Sunter training is the last thing in this tier that was only ever
+    exercised where a Python worker happened to be available. Scoring being
+    jar-only while the model it scores with is not would leave the claim half
+    true in the place hardest to notice -- nothing about a model trained through
+    a Python worker looks different from one that was not.
+
+    Exact, not approximate: both sides reach the same Rust `score_one` and
+    everything above it is the same arithmetic. A tolerance would hide the class
+    of bug this catches, since a model trained on subtly wrong levels is still a
+    model.
+    """
+    from goldenmatch.spark.em import train_em_distributed
+    from goldenmatch.spark.jvm import ROW_UDF_NAME, TRANSFORM_UDF_NAME
+
+    source = _parity_source(spark)
+    cfg = _fs_config()
+    mk = cfg.get_matchkeys()[0]
+
+    got = train_em_distributed(
+        source, cfg, mk, id_col="__row_id__",
+        scorer_udf=ROW_UDF_NAME, transform_udf=TRANSFORM_UDF_NAME,
+    )
+    want = _client_side_model(source, mk, cfg)
+
+    for f in mk.fields:
+        assert got.m_probs[f.field] == pytest.approx(
+            want.m_probs[f.field], abs=1e-12
+        ), f"{f.field}: the executor-trained m differs from the client oracle"
+        assert got.u_probs[f.field] == pytest.approx(
+            want.u_probs[f.field], abs=1e-12
+        ), f"{f.field}: the executor-estimated u differs from the client oracle"
+    assert got.proportion_matched == pytest.approx(
+        want.proportion_matched, abs=1e-12
+    )
+    # `last` keys pass 2, so it must carry the #1835 neutral prior rather than
+    # an estimate the blocking made unrepresentative.
+    assert got.u_probs["last"] == pytest.approx([0.5, 0.5], abs=1e-12)
