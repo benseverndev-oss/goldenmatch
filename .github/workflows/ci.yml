@@ -1888,6 +1888,15 @@ jobs:
       # spark_connect lane because that lane is path-filtered: a change to
       # score-core or score-cabi that broke this binding would otherwise not be
       # compiled by anything until someone touched a Spark file.
+      # transforms-core (2026-08-13): the pyo3-free transform chain. Written
+      # because there was NO Rust implementation -- verified against origin/main,
+      # not one file under packages/rust/ mentioned apply_transform or any
+      # sibling -- so normalization was Python-only and a Spark cluster needed a
+      # packed virtualenv to lowercase a column. Its unit tests pin the parity
+      # decisions (Python counts U+001C..U+001F as whitespace and Rust does not;
+      # slicing is by code point; honorifics include POST-nominals).
+      - run: cargo test --manifest-path transforms-core/Cargo.toml
+      - run: cargo clippy --manifest-path transforms-core/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --manifest-path score-jni/Cargo.toml
       - run: cargo clippy --manifest-path score-jni/Cargo.toml --all-targets -- -D warnings
       - run: cargo build --release --manifest-path score-jni/Cargo.toml

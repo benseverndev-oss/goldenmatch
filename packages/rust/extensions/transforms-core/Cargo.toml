@@ -1,0 +1,35 @@
+# transforms-core -- the pyo3-free transform chain, so a value normalizes
+# identically on every surface.
+#
+# Written because there was NO Rust implementation: verified against origin/main,
+# not one file under packages/rust/ mentioned `apply_transform`,
+# `normalize_whitespace`, `strip_honorifics` or any sibling. The transform chain
+# was Python-only, which is why `config_pipeline._transformed` is an `arrow_udf`
+# and why a Spark cluster still needed a packed virtualenv to normalize a column.
+#
+# **Only the transforms that can be byte-identical live here.** `bloom_filter`
+# (PPRL CLK, HMAC-keyed) and plugin transforms (arbitrary Python) are absent on
+# purpose -- see `apply_transform`'s docs. A transform that ALMOST matches is
+# worse than one that is missing: normalization feeds blocking and scoring, so a
+# one-character difference silently changes which records are compared at all.
+[workspace]
+
+[package]
+name = "goldenmatch-transforms-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "Pyo3-free transform chain (normalization) shared across surfaces"
+
+[lib]
+name = "goldenmatch_transforms_core"
+
+[dependencies]
+# soundex / metaphone, already pyo3-free and already byte-identical to
+# jellyfish. Not reimplemented here -- that is the whole point.
+# soundex: `canonical_soundex` documents itself as byte-identical to SCORE-CORE's
+# soundex, not goldenphonetic's. Both are pyo3-free; binding the wrong one is a
+# silent divergence, so both are declared and each transform names its source.
+goldenmatch-score-core = { path = "../score-core" }
+goldenphonetic-core = { path = "../goldenphonetic-core" }
