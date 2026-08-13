@@ -7661,7 +7661,8 @@
           "imports": [
             "goldenmatch.core.key_integrity_certificate",
             "goldenmatch.semantic.blocking",
-            "goldenmatch.semantic.key_integrity"
+            "goldenmatch.semantic.key_integrity",
+            "goldenmatch.semantic.metricflow"
           ]
         },
         {
