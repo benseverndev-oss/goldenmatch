@@ -250,16 +250,17 @@ def _probe_entry_dedupe(spark, df, ctx):
     """The whole thing: `run_config_pipeline` -- block, score, cluster, golden.
 
     THE question this inventory exists to answer. Every probe above is one
-    stage; a user runs this. Passing the two kernel names it accepts is the
-    most jar-only a real dedupe can currently be.
+    stage; a user runs this. All three kernels are passed, and clustering is
+    already pure Spark SQL, so a pass here means the entire pipeline ran with
+    no Python worker on any executor.
 
-    Expected to FAIL, and the failure is the finding: `score_candidates` builds
-    one row-shaped Python UDF per field of each matchkey, while the jar's
-    scorer is a batched array-shaped UDF over a single value column. Different
-    call structures, so there is no `scorer_udf` to pass -- routing that stage
-    is a design change, not a parameter. Until it lands, an end-to-end dedupe
-    needs a Python environment on the executors for scoring alone, however
-    thoroughly the other stages are routed."""
+    This probe was added while it still FAILED -- scoring had no jar-shaped
+    call, and the failure was the finding. It is worth remembering what the
+    finding turned out to be, because the first reading of it was wrong: the
+    apparent mismatch was "per-field row-shaped vs batched array-shaped", but
+    the Python scorer is an ARROW udf and was already batched. The real
+    difference was only WHO forms the batch. Spark does it implicitly for an
+    arrow_udf; a Java UDF over Connect must be handed an explicit array."""
     from goldenmatch.spark.config_pipeline import run_config_pipeline
 
     golden = run_config_pipeline(
@@ -267,9 +268,10 @@ def _probe_entry_dedupe(spark, df, ctx):
         golden_cols=["name", "city"],
         transform_udf=ctx["transform_udf"],
         survivorship_udf=ctx["survivorship_udf"],
+        scorer_udf=ctx["udf_name"],
     )
     rows = golden.collect()
-    return f"{len(rows)} golden records end to end"
+    return f"{len(rows)} golden records end to end, NO Python on the executors"
 
 
 def _probe_config():
@@ -337,9 +339,8 @@ PROBES = [
     ("ENTRY golden (build_golden_from_rules)", _probe_entry_golden,
      "golden records need Python on executors"),
     ("ENTRY dedupe (run_config_pipeline)", _probe_entry_dedupe,
-     "EXPECTED: scoring is per-field and row-shaped here while the jar's scorer "
-     "is batched and array-shaped, so there is no scorer_udf to pass. An "
-     "end-to-end dedupe still needs Python on the executors for scoring alone"),
+     "a whole dedupe still needs Python on the executors -- the arc's central "
+     "claim, and the one result here that is not about a single stage"),
 ]
 
 #: Probes that must NEVER pass, so the score has an honest ceiling.
@@ -353,7 +354,6 @@ PROBES = [
 #: "measured, and here is what it costs".
 MUST_NOT_PASS = frozenset({
     "Python scoring (the shipped path)",
-    "ENTRY dedupe (run_config_pipeline)",
 })
 
 # A typo here would not raise -- it would silently raise the ceiling by one and

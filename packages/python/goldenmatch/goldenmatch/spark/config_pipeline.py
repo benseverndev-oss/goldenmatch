@@ -494,6 +494,9 @@ def score_candidates(
     *,
     id_col: str,
     fs_models: dict[str, Any] | None = None,
+    scorer_udf: str | None = None,
+    transform_udf: str | None = None,
+    batch_size: int = 10_000,
 ) -> Any:
     """Score candidate pairs under every matchkey; return ``(a, b, score)``.
 
@@ -517,6 +520,13 @@ def score_candidates(
         .join(b, F.col(f"{rhs}.{id_col}") == F.col("__cand__.b"))
     )
 
+    if scorer_udf is not None:
+        return _score_candidates_jvm(
+            joined, config, lhs=lhs, rhs=rhs, scorer_udf=scorer_udf,
+            transform_udf=transform_udf, fs_models=fs_models,
+            batch_size=batch_size,
+        )
+
     models = fs_models or {}
     per_mk = []
     for mk in config.get_matchkeys():
@@ -532,6 +542,327 @@ def score_candidates(
     for nxt in per_mk[1:]:
         out = out.unionByName(nxt)
     return out.groupBy("a", "b").agg(F.max("score").alias("score"))
+
+
+# ── scoring, in the JVM ──────────────────────────────────────────────
+#
+# The gap this closes, stated precisely, because the obvious reading of it is
+# wrong.
+#
+# It looks like a shape mismatch: the config pipeline scores "per field, row
+# shaped" and the jar's scorer is "batched, array shaped". But
+# `make_scorer_udf` is an ARROW udf -- Spark hands it a whole batch and it
+# returns a whole batch of scores. Its real signature is already
+# ``(a[], b[]) -> double[]``, which is exactly `golden_score_batch`. The two
+# compute the same function at the same granularity.
+#
+# The actual difference is who forms the batch. Spark forms it IMPLICITLY for an
+# arrow_udf, invisibly in the plan. A Java UDF registered over Spark Connect only
+# ever sees one row, so its batch must be formed EXPLICITLY -- an `array<string>`
+# column, which only `collect_list` can build.
+#
+# That is why a naive port is a disaster rather than a small regression. Calling
+# the jar per row means ~10,000 JNI crossings where there is currently ONE
+# Python call, and it would look like "native scoring is slow" while measuring
+# nothing but call overhead.
+#
+# So the batch is built once, explicitly, and every scorer call rides it:
+#
+#   joined -> groupBy(batch_key).agg(collect_list(struct(...)))   ONE list
+#          -> one UDF call per distinct SCORER (not per field, not per row)
+#          -> reshape n*k scores back to n rows of k
+#          -> arrays_zip + explode                                ONE generator
+#
+# One call per scorer rather than per field because the UDF takes a single
+# scorer id for the whole array: a matchkey mixing jaro_winkler and levenshtein
+# needs two calls, not one, and not one per field.
+#
+# The alignment discipline is `batched.py`'s, for its reasons: exactly one
+# `collect_list` (several are separate aggregates with no shared order
+# guarantee, and they agree often enough to pass a test and skew under a
+# different plan), and `arrays_zip` before a single `explode` (two explodes are
+# two independent generators pairing nothing). Neither mistake crashes; both
+# silently attach pair i's score to pair j.
+
+#: Column holding the collected pairs of one scoring batch.
+_SROWS = "__score_rows__"
+
+
+# The two higher-order lambdas this path needs, built by FACTORIES rather than
+# written inline with default arguments.
+#
+# PySpark decides what a higher-order lambda MEANS from its parameter count:
+# one parameter is ``(element)``, two is ``(element, index)``. So the natural
+# way to capture a loop variable --
+#
+#     F.transform(rows, lambda r, g=group: ...)
+#
+# -- is read as a two-argument lambda, and ``g`` receives the array INDEX. The
+# captured value is silently discarded and every row is built from an integer.
+# It does not raise. It MISALIGNS, which is the one failure this construction
+# exists to prevent. (Four parameters does raise, which is the lucky case.)
+#
+# Module level rather than nested so the arity contract is testable without a
+# Spark session -- see test_spark_config_pipeline_unit.py.
+
+def _pick_fields(group: list[dict], prefix: str):
+    """``r -> array(r.<prefix><i>, ...)`` over one scorer's slots, in order."""
+    def f(r):
+        from pyspark.sql import functions as F
+
+        return F.array(*[r[f"{prefix}{s['i']}"] for s in group])
+    return f
+
+
+def _reshape_scores(raw_name: str, k: int):
+    """``(r, i) -> raw[i*k : i*k+k]`` -- one row's k scores out of the flat
+    ``n*k`` array the kernel returned.
+
+    ``slice`` rather than ``array(raw[i*k], raw[i*k+1], ...)``: both are
+    correct, but indexing mentions the UDF call k times inside the lambda and
+    nothing guarantees Spark folds those back into one invocation. That would be
+    k native calls per batch instead of one -- exactly the overhead the batching
+    exists to remove. ``slice`` names it once. (1-indexed.)
+    """
+    def f(r, i):
+        from pyspark.sql import functions as F
+
+        return F.slice(F.col(raw_name), i * k + 1, k)
+    return f
+
+
+def _weighted_scorer_slots(config: Any) -> tuple[list[dict], dict[tuple, int]]:
+    """Every distinct ``(column, transform chain, scorer)`` a weighted matchkey
+    needs, and the map from a field to its slot.
+
+    Deduplicated because two matchkeys naming the same field with the same chain
+    and scorer are the same comparison, and scoring it twice would double both
+    the JNI work and the width of the collected struct.
+
+    Keyed on all THREE parts: the same column can appear under a different
+    chain (a substring key in one matchkey, the raw value in another) or a
+    different scorer, and those are genuinely different comparisons. Keying on
+    the column alone would silently score one of them with the other's settings.
+    """
+    slots: list[dict] = []
+    index: dict[tuple, int] = {}
+    for mk in config.get_matchkeys():
+        mk_type = getattr(mk, "type", None) or getattr(mk, "comparison", None)
+        if mk_type != "weighted":
+            continue
+        for f in mk.fields:
+            # `exact`-scored fields get a slot too, even though they need no
+            # kernel. Their agreement is computed in pure Spark SQL BEFORE the
+            # batch and carried in the struct, because the alternative is
+            # recomputing it after `collect_list` -- where the raw columns no
+            # longer exist. Skipping them here was the first shape of this
+            # function and it made a weighted matchkey with one exact field
+            # unrepresentable.
+            key = _slot_key(f)
+            if key not in index:
+                index[key] = len(slots)
+                slots.append({
+                    "col": key[0], "chain": list(key[1]), "scorer": key[2],
+                    "i": len(slots),
+                })
+    return slots, index
+
+
+def _slot_key(field: Any) -> tuple:
+    """A field's slot identity: ``(column, chain, scorer)``.
+
+    One function so the build side and the read side cannot compute it
+    differently -- a mismatch would raise a KeyError at plan time rather than
+    misalign silently, but only because they are the same call.
+    """
+    return (
+        field.resolved_field,
+        tuple(getattr(field, "transforms", None) or []),
+        field.scorer,
+    )
+
+
+def _score_candidates_jvm(
+    joined: Any,
+    config: Any,
+    *,
+    lhs: str,
+    rhs: str,
+    scorer_udf: str,
+    transform_udf: str | None,
+    fs_models: dict[str, Any] | None,
+    batch_size: int,
+) -> Any:
+    """``score_candidates``'s body with every scorer call in the executor JVM.
+
+    Returns ``(a, b, score)``, identical in shape and semantics to the Python
+    path -- which is what lets the parity gate compare them directly.
+    """
+    from pyspark.sql import functions as F
+
+    from goldenmatch.spark.batched import batch_key
+    from goldenmatch.spark.jvm import scorer_id
+
+    matchkeys = list(config.get_matchkeys())
+    for mk in matchkeys:
+        mk_type = getattr(mk, "type", None) or getattr(mk, "comparison", None)
+        if mk_type == "probabilistic":
+            # Refused rather than silently routed to the Python path. A
+            # probabilistic matchkey scores P(match) from a trained model
+            # through its own expression builder; quietly leaving it on the
+            # Python worker would mean a caller who passed `scorer_udf` and got
+            # no error still needs an executor virtualenv, and would only find
+            # out from a ModuleNotFoundError mid-job.
+            raise NotImplementedError(
+                f"matchkey {mk.name!r} is probabilistic, and the JVM scoring "
+                f"path does not run Fellegi-Sunter -- it scores fields, while "
+                f"a probabilistic matchkey combines EM-learned weights into "
+                f"P(match). Omit scorer_udf for this config and ship a Python "
+                f"environment, or use weighted/exact matchkeys."
+            )
+
+    slots, index = _weighted_scorer_slots(config)
+
+    # ── the ONE struct, and the ONE collect_list ──────────────────────
+    parts = [F.col("__cand__.a").alias("a"), F.col("__cand__.b").alias("b")]
+    for s in slots:
+        a_col = F.col(f"{lhs}.{s['col']}")
+        b_col = F.col(f"{rhs}.{s['col']}")
+        if s["chain"]:
+            a_val = _transformed(a_col, s["chain"], transform_udf=transform_udf)
+            b_val = _transformed(b_col, s["chain"], transform_udf=transform_udf)
+        else:
+            a_val, b_val = a_col.cast("string"), b_col.cast("string")
+        if s["scorer"] == "exact":
+            # No kernel: the agreement IS the score, computed here in SQL.
+            parts.append(
+                F.when(a_val == b_val, F.lit(1.0)).otherwise(F.lit(0.0))
+                .alias(f"r{s['i']}")
+            )
+        else:
+            parts += [a_val.alias(f"x{s['i']}"), b_val.alias(f"y{s['i']}")]
+        # Comparability is decided from the RAW columns, exactly as the Python
+        # path does, and it must be carried INTO the batch: after
+        # `collect_list` the raw columns are gone, and re-deriving it from the
+        # transformed value would be wrong anyway. The kernel maps a missing
+        # value to "" and therefore scores null-vs-null as a PERFECT 1.0, which
+        # would merge two records whose only shared evidence is that both are
+        # missing the field.
+        parts.append((a_col.isNotNull() & b_col.isNotNull()).alias(f"c{s['i']}"))
+    # Exact matchkeys need no kernel, so their score is computed BEFORE the
+    # batch and carried along rather than round-tripping through it.
+    for m, mk in enumerate(matchkeys):
+        mk_type = getattr(mk, "type", None) or getattr(mk, "comparison", None)
+        if mk_type == "exact":
+            parts.append(_matchkey_score_expr(mk, lhs, rhs).alias(f"e{m}"))
+
+    grouped = joined.groupBy(
+        batch_key("partition", batch_size).alias("__batch__")
+    ).agg(F.collect_list(F.struct(*parts)).alias(_SROWS))
+
+    # ── one UDF call per distinct scorer ──────────────────────────────
+    by_scorer: dict[str, list[dict]] = {}
+    for s in slots:
+        if s["scorer"] == "exact":
+            continue  # already scored in SQL, carried as r{i}
+        by_scorer.setdefault(s["scorer"], []).append(s)
+
+    raw_cols = []
+    for si, (name, group) in enumerate(sorted(by_scorer.items())):
+        # `flatten(transform(rows, r -> array(r.x_a, r.x_b, ...)))` lays the
+        # batch out as pair-major: row 0's k values, then row 1's, and so on.
+        # The kernel sees one flat array and the reshape below relies on that
+        # ordering, so both sides are built from the SAME slot list in the same
+        # order rather than from two iterations that could drift.
+        xs = F.flatten(F.transform(F.col(_SROWS), _pick_fields(group, "x")))
+        ys = F.flatten(F.transform(F.col(_SROWS), _pick_fields(group, "y")))
+        raw_cols.append(
+            F.call_udf(scorer_udf, F.lit(int(scorer_id(name))), xs, ys)
+            .alias(f"__raw{si}")
+        )
+    with_scores = grouped.select(F.col(_SROWS), *raw_cols)
+
+    # ── reshape n*k back to n rows of k ───────────────────────────────
+    reshaped = []
+    for si, (_name, group) in enumerate(sorted(by_scorer.items())):
+        k = len(group)
+        # `slice` rather than indexing k times. Both are correct, but building
+        # `array(raw[i*k], raw[i*k+1], ...)` mentions the UDF call k times
+        # inside the lambda, and nothing guarantees Spark folds those back into
+        # one invocation -- k native calls per batch instead of one, which is
+        # precisely the overhead this whole construction exists to avoid.
+        # `slice` names it once. (1-indexed.)
+        reshaped.append(
+            F.transform(F.col(_SROWS), _reshape_scores(f"__raw{si}", k)).alias(f"__sc{si}")
+        )
+    shaped = with_scores.select(F.col(_SROWS), *reshaped)
+
+    # arrays_zip pairs positionally BEFORE the explode, so ONE generator walks
+    # already-paired structs.
+    zipped = shaped.select(
+        F.explode(
+            F.arrays_zip(F.col(_SROWS), *[F.col(f"__sc{i}") for i in range(len(by_scorer))])
+        ).alias("__z__")
+    )
+
+    # ── the weighted combine, per matchkey ────────────────────────────
+    pos: dict[int, tuple[int, int]] = {}
+    for si, (_name, group) in enumerate(sorted(by_scorer.items())):
+        for p, s in enumerate(group):
+            pos[s["i"]] = (si, p)
+
+    row = f"__z__.{_SROWS}"
+    accepted = []
+    for m, mk in enumerate(matchkeys):
+        mk_type = getattr(mk, "type", None) or getattr(mk, "comparison", None)
+        if mk_type == "exact":
+            score = F.col(f"{row}.e{m}")
+        else:
+            nums, dens = [], []
+            for f in mk.fields:
+                weight = float(f.weight)
+                idx = index[_slot_key(f)]
+                if f.scorer == "exact":
+                    raw = F.col(f"{row}.r{idx}")
+                else:
+                    si, p = pos[idx]
+                    raw = F.col(f"__z__.__sc{si}")[p]
+                comparable = F.col(f"{row}.c{idx}")
+                nums.append(F.when(comparable, raw * F.lit(weight)).otherwise(F.lit(0.0)))
+                dens.append(F.when(comparable, F.lit(weight)).otherwise(F.lit(0.0)))
+            num, den = nums[0], dens[0]
+            for n in nums[1:]:
+                num = num + n
+            for d in dens[1:]:
+                den = den + d
+            # den == 0 means no field was comparable -> score_pair returns 0.0.
+            score = F.when(den > F.lit(0.0), num / den).otherwise(F.lit(0.0))
+
+        em = (fs_models or {}).get(mk.name)
+        # NULL where this matchkey rejects the pair. `greatest` skips nulls, so
+        # a pair no matchkey accepted comes out null and is dropped.
+        accepted.append(
+            F.when(score >= F.lit(_matchkey_threshold(mk, em)), score)
+        )
+
+    # ONE pass, not a union of one select per matchkey.
+    #
+    # The Python path unions N per-matchkey frames and takes `max(score)` per
+    # pair. Doing that here would re-derive `zipped` once per matchkey -- and
+    # `zipped` is where the kernel calls live, so N matchkeys would mean N times
+    # the native work and N times the shuffle, for a result that is identical.
+    #
+    # `greatest` over the per-matchkey accepted scores IS that max: each
+    # matchkey contributes at most one score per pair, so the maximum over the
+    # union equals the greatest of the accepted values, and a pair with no
+    # accepted matchkey has all-null inputs and drops out. It also removes the
+    # final groupBy entirely -- there is nothing left to aggregate.
+    best = F.greatest(*accepted) if len(accepted) > 1 else accepted[0]
+    return zipped.select(
+        F.col(f"{row}.a").alias("a"),
+        F.col(f"{row}.b").alias("b"),
+        best.alias("score"),
+    ).where(F.col("score").isNotNull())
 
 
 # ── golden ───────────────────────────────────────────────────────────
@@ -656,6 +987,7 @@ def run_config_pipeline(
     allow_large_autoconfig: bool = False,
     transform_udf: str | None = None,
     survivorship_udf: str | None = None,
+    scorer_udf: str | None = None,
 ) -> Any:
     """Run the Spark tier from a ``GoldenMatchConfig``.
 
@@ -668,21 +1000,23 @@ def run_config_pipeline(
     parameter because "which columns end up in the golden record" is a product
     decision the config does not always state.
 
-    ``transform_udf`` and ``survivorship_udf`` route normalization and
-    survivorship into the jar's kernels, so those two stages need no Python
-    worker.
+    ``transform_udf``, ``survivorship_udf`` and ``scorer_udf`` route
+    normalization, survivorship and scoring into the jar's kernels. **Passing
+    all three runs the whole pipeline with no Python worker on the executors**,
+    which is what the jar exists for -- clustering is already pure Spark SQL, so
+    those three are the entire surface.
 
-    **Passing both does NOT make this run jar-only, and there is deliberately no
-    ``scorer_udf`` to pass.** Scoring here is per-field and row-shaped
-    (:func:`_field_score_parts` builds one Python UDF per field of each
-    matchkey), while the jar's scorer is a batched, array-shaped UDF over a
-    single value column -- the shape Spark Connect forces. They are different
-    call structures, not the same call with a different backend, so routing this
-    stage is a design change rather than a parameter. Until that lands, a
-    ``run_config_pipeline`` call still needs a Python environment on the
-    executors for scoring alone, whatever the other two arguments say.
-    ``scripts/spark_jar_only_inventory.py`` probes this end to end and reports
-    it rather than leaving it to be read off the source.
+    ``scorer_udf`` arrived last and was the hard one. The obvious reading of the
+    gap -- "the config pipeline scores per-field and row-shaped, the jar scores
+    batched and array-shaped" -- is wrong: :func:`make_scorer_udf` is an ARROW
+    udf, so it already receives a whole batch and returns a whole batch. The two
+    compute the same function at the same granularity. The real difference is
+    that Spark forms an arrow_udf's batch implicitly, while a Java UDF over
+    Connect sees one row and must be handed its batch explicitly. See
+    :func:`_score_candidates_jvm`.
+
+    Probabilistic matchkeys are refused under ``scorer_udf`` rather than left on
+    the Python path, so "no error" cannot mean "still needs a virtualenv".
     """
     if config is None:
         # P6 zero-config. Deriving the config costs a driver-side sample plus a
@@ -710,7 +1044,8 @@ def run_config_pipeline(
         source_df, config, id_col=id_col, transform_udf=transform_udf
     )
     pairs = score_candidates(
-        candidates, source_df, config, id_col=id_col, fs_models=fs_models
+        candidates, source_df, config, id_col=id_col, fs_models=fs_models,
+        scorer_udf=scorer_udf, transform_udf=transform_udf,
     )
 
     ids_df = source_df.select(id_col)
