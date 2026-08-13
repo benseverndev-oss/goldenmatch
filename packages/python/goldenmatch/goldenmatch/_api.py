@@ -1788,12 +1788,66 @@ def _extract_stats(result: dict) -> dict:
         )
     match_rate = matched_records / total_records if total_records > 0 else 0.0
 
-    return {
+    stats = {
         "total_records": total_records,
         "total_clusters": total_clusters,
         "matched_records": matched_records,
         "match_rate": match_rate,
     }
+
+    # #2483: surface the FS link cutoff that was actually applied, and warn when
+    # a fallback cutoff -- one nothing about this dataset chose -- linked an
+    # implausible share of the records.
+    _fs_thresholds = result.get("fs_link_thresholds") or {}
+    if _fs_thresholds:
+        stats["fs_link_thresholds"] = _fs_thresholds
+        _warn_on_implausible_fallback_match_rate(_fs_thresholds, match_rate)
+    return stats
+
+
+#: A dedupe run that puts more than this share of records into a multi-member
+#: cluster is reported when the cutoff behind it was a fallback (#2483). The
+#: reporter there saw 94.4%. Deliberately generous -- 0.5 is already very high
+#: for a dedupe workload, and the point is to catch a collapse, not to police a
+#: legitimately duplicate-heavy frame.
+_IMPLAUSIBLE_FALLBACK_MATCH_RATE = 0.5
+
+
+def _warn_on_implausible_fallback_match_rate(
+    fs_thresholds: dict, match_rate: float
+) -> None:
+    """Name `link_threshold` when a fallback cutoff produced a runaway match rate.
+
+    The failure this addresses is silent by construction: the fixed default is a
+    plausible-looking number, the run completes, and the only symptom is a match
+    rate the caller has no baseline for. Nothing in the config or the result says
+    that no decision was ever made about where to cut -- so #2483's reporter swept
+    unrelated knobs across a 16-cell matrix before finding it.
+
+    Only fires for `source == "fallback"`. A configured or EM-calibrated cutoff
+    that happens to link a lot is the caller's call, not a defect.
+    """
+    if match_rate <= _IMPLAUSIBLE_FALLBACK_MATCH_RATE:
+        return
+    fallback = [
+        name for name, info in fs_thresholds.items()
+        if info.get("source") == "fallback"
+    ]
+    if not fallback:
+        return
+    cut = fs_thresholds[fallback[0]].get("link_threshold")
+    logger.warning(
+        "Probabilistic matchkey(s) %s linked %.1f%% of records into multi-member "
+        "clusters using a FALLBACK link cutoff of %.4f -- a fixed default, not a "
+        "value chosen from this data (no 'link_threshold' was set and EM produced "
+        "no calibrated cutoff). A match rate above %.0f%% is implausible for most "
+        "dedupe workloads and usually means the cut is too permissive. Set "
+        "'link_threshold' on the matchkey to choose it explicitly. See #2483.",
+        ", ".join(repr(n) for n in fallback),
+        100.0 * match_rate,
+        cut if cut is not None else float("nan"),
+        100.0 * _IMPLAUSIBLE_FALLBACK_MATCH_RATE,
+    )
 
 
 # ── Learning Memory API ──

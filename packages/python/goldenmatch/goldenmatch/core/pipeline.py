@@ -781,6 +781,7 @@ def _score_probabilistic_matchkey(
     em_results: dict | None = None,
     use_columnar: bool = False,
     columnar_out: list | None = None,
+    threshold_out: dict | None = None,
 ) -> None:
     """Score one probabilistic (Fellegi-Sunter) matchkey, folding results into
     ``all_pairs`` / ``review_pairs`` and updating ``matched_pairs`` in place.
@@ -895,6 +896,16 @@ def _score_probabilistic_matchkey(
     scoring_mk, link_threshold = _prepare_probabilistic_review_scoring(
         mk, em_result
     )
+    if threshold_out is not None:
+        # #2483: record the cutoff AND where it came from, so the result can
+        # report it. Without this a run gives no way to tell a deliberate
+        # threshold from a fixed default nothing about the data chose.
+        from goldenmatch.core.probabilistic import link_threshold_source
+
+        threshold_out[mk.name] = {
+            "link_threshold": float(link_threshold),
+            "source": link_threshold_source(mk, em_result),
+        }
     if em_results is not None:
         em_results[mk.name] = em_result
     if log_em:
@@ -2860,6 +2871,12 @@ def _fused_result_from_clusters(
                 c.get("size", 0) for c in clusters.values() if c.get("size", 0) > 1
             ),
         },
+        # #2483: always empty here -- the fused short-circuit never runs the FS
+        # scorer, so there is no link cutoff to report. Present so this dict
+        # keeps the SAME key set as the classic path's
+        # (test_result_dict_keys_match_classic); a key on one and not the other
+        # KeyErrors downstream in _api.py DedupeResult assembly.
+        "fs_link_thresholds": {},
         "golden": _dict_frame_to_arrow(golden_df),
         "unique": _dict_frame_to_arrow(unique_df),
         "dupes": _dict_frame_to_arrow(dupes_df),
@@ -3972,6 +3989,8 @@ def _run_dedupe_pipeline(
     _bench_dump_dir = os.environ.get("GOLDENMATCH_BENCH_DUMP_PAIRS")
     _bench_candidate_pairs: set[tuple[int, int]] = set()
     _bench_emitted_pairs: set[tuple[int, int]] = set()
+    # #2483: the applied FS link cutoff + how it was chosen, surfaced on the result.
+    _fs_thresholds: dict[str, dict] = {}
     for mk in matchkeys:
         if mk.type == "probabilistic":
             if config.blocking is None:
@@ -3991,6 +4010,7 @@ def _run_dedupe_pipeline(
                 log_em=True,
                 use_columnar=_use_fs_columnar,
                 columnar_out=_fs_columnar_sink,
+                threshold_out=_fs_thresholds,
             )
 
     # B2c: fold the FS columnar pair frame into the shipped columnar downstream.
@@ -5106,6 +5126,9 @@ def _run_dedupe_pipeline(
             "multi_member_cluster_count": _multi_member,
             "matched_record_count": _matched_records,
         },
+        # #2483: {matchkey_name: {"link_threshold": float, "source": str}}.
+        # Empty for non-probabilistic runs.
+        "fs_link_thresholds": _fs_thresholds,
         "golden": _dict_frame_to_arrow(golden_df),
         "unique": _dict_frame_to_arrow(unique_df),
         "dupes": _dict_frame_to_arrow(dupes_df),
