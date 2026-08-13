@@ -1205,6 +1205,165 @@ def _training_pair_conditioning(
     return fallback_pairs, [frozenset(blocking_fields)] * len(fallback_pairs)
 
 
+def estimate_u_from_counts(
+    mk: MatchkeyConfig,
+    pattern_counts: list[tuple[tuple[int, ...], int]],
+) -> dict[str, list[float]]:
+    """``u`` from COUNTED comparison vectors over random pairs.
+
+    ``u`` is the level distribution among NON-matches. Random pairs are
+    overwhelmingly non-matches, so their observed level distribution estimates
+    it directly -- no EM, which is why ``u`` is a separate computation from
+    ``m`` here and in Splink (``estimate_u.py``).
+
+    The estimator is ``train_em``'s, reached from counts instead of a matrix::
+
+        u[level] = (count(level) + 1e-6) / (observed + n_levels * 1e-6)
+
+    Both parts are sums over pairs, so collapsing identical vectors regroups the
+    terms without changing the totals -- the same aggregation property that lets
+    ``m`` be trained from counts.
+
+    ``observed`` excludes unobserved (``-1``) entries. A field null on one side
+    is missing data, not a disagreement, and putting those pairs in the
+    denominator would shrink every level of a sparse field toward zero and
+    inflate its ``log2(m/u)`` in proportion to how little data supports it.
+
+    ``pattern_counts`` must come from RANDOM (unblocked) pairs. Counts from
+    blocked candidates estimate the level distribution among pairs that already
+    agree on a blocking key, which is not ``u``, and the resulting weights would
+    be wrong with nothing about them looking wrong.
+    """
+    if not pattern_counts:
+        raise ValueError("pattern_counts is empty; nothing to estimate u from")
+
+    n_fields = len(mk.fields)
+    for vec, count in pattern_counts:
+        if len(vec) != n_fields:
+            raise ValueError(
+                f"comparison vector {vec} has {len(vec)} entries but the "
+                f"matchkey has {n_fields} fields -- the vectors must be ordered "
+                f"by mk.fields"
+            )
+        if count <= 0:
+            raise ValueError(f"pattern {vec} has non-positive count {count}")
+
+    u_probs: dict[str, list[float]] = {}
+    for j, f in enumerate(mk.fields):
+        counts = [0.0] * f.levels
+        observed = 0.0
+        for vec, c in pattern_counts:
+            level = vec[j]
+            if level < 0:
+                continue
+            observed += c
+            if level < f.levels:
+                counts[level] += c
+        total = observed + f.levels * 1e-6
+        u_probs[f.field] = [(c + 1e-6) / total for c in counts]
+    return u_probs
+
+
+def _neutral_u_for(field) -> list[float]:
+    """The fixed ``u`` prior for a field EM must not learn from random pairs.
+
+    A configured blocking field carries a deliberate prior (#1835): a
+    disagreement penalty that drives precision, and a BOUNDED agreement weight
+    that preserves recall. Estimating it from random pairs instead collapses a
+    near-unique key's ``u`` toward the smoothing floor, which explodes
+    ``log2(m/u)`` -- 28 bits on historical_50k -- and lets one field dominate
+    the score (measured F1 0.83 -> 0.57).
+
+    One definition, because both the pooled run and the per-pass combination
+    apply it, and two copies that drifted would differ only in the numbers a
+    blocking field's weights are built from.
+
+    The 3-level case is ``[0.34, 0.33, 0.33]`` rather than exact thirds: it is
+    the legacy prior, preserved so adopting this helper moves no model.
+    """
+    if field.levels == 2:
+        return [0.50, 0.50]  # neutral
+    if field.levels == 3:
+        return [0.34, 0.33, 0.33]
+    return [1.0 / field.levels] * field.levels
+
+
+def _combine_em_sessions(
+    mk: MatchkeyConfig,
+    sessions: list[tuple[tuple[str, ...], EMResult, float]],
+) -> EMResult:
+    """Combine independent per-pass EM sessions into one model.
+
+    ``sessions`` is ``(conditioned_fields, result, weight)``. Shared by
+    :func:`train_em_per_pass` and the distributed caller, which differ only in
+    HOW a session is trained -- from a sampled pair list or from counted
+    comparison vectors computed by a cluster. The combination itself is the same
+    question either way, and a second copy would drift silently: every variant
+    of it still returns valid probability vectors.
+
+    **m** is the pair-weighted mean over the sessions that could estimate the
+    field (those whose pass does not block on it), weighted because a pass
+    contributing 10 pairs and one contributing 10,000 are not equal evidence.
+    A field no session can estimate keeps the fixed prior every session gave it.
+
+    **u** is neutralised for the UNION of every pass's blocking fields, matching
+    ``train_em``'s ``always_conditioned |= set(blocking_fields)``. Taking one
+    session's ``u`` wholesale is wrong even though the sessions were all trained
+    against the same random-pair sample: each one neutralises only its OWN
+    blocking fields, so lifting the vector from session 0 leaves every other
+    pass's blocking field carrying the random-pair estimate and re-opens #1835
+    for it.
+    """
+    base = sessions[0][1]
+    blocking_union = {name for fields, _, _ in sessions for name in fields}
+
+    m_probs: dict[str, list[float]] = {}
+    for f in mk.fields:
+        name = f.field
+        estimable = [
+            (em, w) for fields, em, w in sessions
+            if name not in fields and name in em.m_probs
+        ]
+        if not estimable:
+            # No pass leaves this field free. Every session fell back to the
+            # fixed prior for it, so they agree and the first is as good as any
+            # -- and this is exactly the pooled run's `always_conditioned` case.
+            m_probs[name] = list(base.m_probs[name])
+            continue
+        total = sum(w for _, w in estimable)
+        n_levels = len(estimable[0][0].m_probs[name])
+        m_probs[name] = [
+            sum(em.m_probs[name][k] * w for em, w in estimable) / total
+            for k in range(n_levels)
+        ]
+
+    u_probs = {k: list(v) for k, v in base.u_probs.items()}
+    for f in mk.fields:
+        if f.field in blocking_union:
+            u_probs[f.field] = _neutral_u_for(f)
+
+    total_w = sum(w for _, _, w in sessions)
+    proportion = sum(em.proportion_matched * w for _, em, w in sessions) / total_w
+
+    match_weights = {
+        name: [
+            math.log2(max(m, 1e-10) / max(u, 1e-10))
+            for m, u in zip(m_probs[name], u_probs.get(name, m_probs[name]))
+        ]
+        for name in m_probs
+    }
+    return EMResult(
+        m_probs=m_probs,
+        u_probs=u_probs,
+        match_weights=match_weights,
+        converged=all(em.converged for _, em, _ in sessions),
+        iterations=max(em.iterations for _, em, _ in sessions),
+        proportion_matched=proportion,
+        tf_freqs=base.tf_freqs,
+        tf_collision=base.tf_collision,
+    )
+
+
 def train_em_from_counts(
     mk: MatchkeyConfig,
     pattern_counts: list[tuple[tuple[int, ...], int]],
@@ -1341,15 +1500,8 @@ def train_em_per_pass(
        produces. That is what makes the counts computable by a cluster and the
        iteration cheap, -- see ``pair_weights`` on :func:`train_em`.
 
-    Combination: a field's ``m`` is the pair-count-weighted mean of the sessions
-    that could estimate it (those whose pass does NOT block on it). A field no
-    session can estimate keeps whatever the sessions gave it, which is the fixed
-    prior -- the same treatment the pooled run's ``always_conditioned`` applies,
-    rather than a different answer for the same situation.
-
-    Weighted by pair count, not a plain mean: a pass contributing 10 pairs and
-    one contributing 10,000 are not equal evidence, and an unweighted mean would
-    let a tiny pass swing a field it barely observed.
+    Combination is :func:`_combine_em_sessions`, shared with the distributed
+    caller so the two cannot drift on what combining means.
 
     Args:
         blocks: ``BlockResult``s carrying ``blocking_fields`` provenance. Blocks
@@ -1390,51 +1542,7 @@ def train_em_per_pass(
     if not sessions:
         return train_em(df, mk, blocks=blocks, blocking_fields=blocking_fields, **kw)
 
-    base = sessions[0][1]
-    m_probs: dict[str, list[float]] = {}
-    for f in mk.fields:
-        name = f.field
-        estimable = [
-            (em, w) for fields, em, w in sessions
-            if name not in fields and name in em.m_probs
-        ]
-        if not estimable:
-            # No pass leaves this field free. Every session fell back to the
-            # fixed prior for it, so they agree and the first is as good as any
-            # -- and this is exactly the pooled run's `always_conditioned` case.
-            m_probs[name] = list(base.m_probs[name])
-            continue
-        total = sum(w for _, w in estimable)
-        n_levels = len(estimable[0][0].m_probs[name])
-        m_probs[name] = [
-            sum(em.m_probs[name][k] * w for em, w in estimable) / total
-            for k in range(n_levels)
-        ]
-
-    # u is estimated from RANDOM pairs, which do not depend on the pass, so the
-    # sessions agree by construction; taking the first states that rather than
-    # averaging identical numbers and implying they might differ.
-    u_probs = {k: list(v) for k, v in base.u_probs.items()}
-    total_w = sum(w for _, _, w in sessions)
-    proportion = sum(em.proportion_matched * w for _, em, w in sessions) / total_w
-
-    match_weights = {
-        name: [
-            math.log2(max(m, 1e-10) / max(u, 1e-10))
-            for m, u in zip(m_probs[name], u_probs.get(name, m_probs[name]))
-        ]
-        for name in m_probs
-    }
-    return EMResult(
-        m_probs=m_probs,
-        u_probs=u_probs,
-        match_weights=match_weights,
-        converged=all(em.converged for _, em, _ in sessions),
-        iterations=max(em.iterations for _, em, _ in sessions),
-        proportion_matched=proportion,
-        tf_freqs=base.tf_freqs,
-        tf_collision=base.tf_collision,
-    )
+    return _combine_em_sessions(mk, sessions)
 
 
 def _em_iterate(
@@ -1821,12 +1929,7 @@ def train_em(
     # which EM can learn it, so retain the legacy neutral-u/fixed-weight prior.
     for f in mk.fields:
         if f.field in always_conditioned:
-            if f.levels == 2:
-                u_probs[f.field] = [0.50, 0.50]  # neutral
-            elif f.levels == 3:
-                u_probs[f.field] = [0.34, 0.33, 0.33]
-            else:
-                u_probs[f.field] = [1.0 / f.levels] * f.levels
+            u_probs[f.field] = _neutral_u_for(f)
 
     logger.info("u-probabilities estimated from %d random pairs", len(random_pairs))
 

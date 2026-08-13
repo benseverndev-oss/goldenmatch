@@ -440,3 +440,263 @@ def test_an_oversized_pattern_space_is_refused_not_collected(source):
     cfg = _config()
     with pytest.raises(ValueError, match="max_patterns"):
         _spark_pattern_counts(source, cfg, max_patterns=1)
+
+
+# ── distributed training: u, the per-pass sessions, the combination ──
+#
+# The fixture is deliberately blockable on BOTH `city` and `last`. Two passes
+# are the point: `last` is a comparison field AND pass 2's blocking key, so it
+# is conditioned in one session and free in the other -- the situation the
+# decomposition exists for, and the one where the #1835 neutral-u prior has to
+# survive the combination.
+#
+# It is also deliberately SMALL enough that the u sample takes the whole frame
+# (`_rows_needed_for_n_pairs(1e6)` is 1,414 rows). Spark's `sample` cannot be
+# reproduced on the driver, so a fixture that triggered it would leave the u
+# gate unable to state an expected value -- it could only assert that some
+# numbers came back.
+
+_TRAIN_ROWS = [
+    (0, "jon", "smith", "york"),
+    (1, "john", "smith", "york"),
+    (2, "jonathan", "smyth", "york"),
+    (3, "jon", "smith", "leeds"),
+    (4, "amy", "wong", "leeds"),
+    (5, "amie", "wong", "leeds"),
+    (6, "amy", "wong", "york"),
+    (7, "pat", "jones", "hull"),
+    (8, "patrick", "jones", "hull"),
+    (9, "pat", "jonas", "hull"),
+    (10, "sam", "brown", "hull"),
+    (11, "samuel", "brown", "york"),
+    (12, "sam", "browne", "leeds"),
+    (13, "kim", "smith", "hull"),
+    (14, "kimberly", "smith", "leeds"),
+    (15, "kim", "wong", "york"),
+]
+
+
+def _train_config() -> GoldenMatchConfig:
+    return GoldenMatchConfig(
+        matchkeys=[_mk()],
+        blocking=BlockingConfig(
+            strategy="multi_pass",
+            passes=[
+                BlockingKeyConfig(fields=["city"]),
+                BlockingKeyConfig(fields=["last"]),
+            ],
+        ),
+    )
+
+
+@pytest.fixture()
+def train_source(spark):
+    return spark.createDataFrame(_TRAIN_ROWS, _COLS)
+
+
+def _by_id():
+    return {r[0]: dict(zip(_COLS, r)) for r in _TRAIN_ROWS}
+
+
+def _driver_counts(pairs, mk):
+    """Counted comparison vectors, via the ONE-BOX's `comparison_vector`."""
+    from collections import Counter
+
+    from goldenmatch.core.probabilistic import comparison_vector
+
+    by_id = _by_id()
+    counts = Counter()
+    for a, b in pairs:
+        vec = comparison_vector(by_id[int(a)], by_id[int(b)], mk)
+        counts[tuple(int(v) for v in vec)] += 1
+    return sorted(counts.items())
+
+
+def _all_driver_pairs():
+    ids = sorted(r[0] for r in _TRAIN_ROWS)
+    return [(a, b) for i, a in enumerate(ids) for b in ids[i + 1:]]
+
+
+def test_training_blocks_exactly_as_scoring_blocks(train_source):
+    """The per-pass candidate sets must union to the scoring candidate set.
+
+    Training on a different population from the one scoring sees produces a
+    model fitted to pairs that never get scored -- weights that are not wrong
+    about anything you can point at, just about the wrong data. Splitting
+    `generate_candidates` into `pass_candidates` is what makes this hold by
+    construction, and this pins that it stayed true.
+    """
+    from goldenmatch.spark.config_pipeline import (
+        blocking_passes,
+        generate_candidates,
+        pass_candidates,
+    )
+
+    cfg = _train_config()
+    union = set()
+    for key_config in blocking_passes(cfg):
+        rows = pass_candidates(train_source, key_config, id_col=_ID).collect()
+        union |= {(int(r["a"]), int(r["b"])) for r in rows}
+
+    scoring = {
+        (int(r["a"]), int(r["b"]))
+        for r in generate_candidates(train_source, cfg, id_col=_ID).collect()
+    }
+    assert union == scoring, (
+        f"per-pass candidates and scoring candidates differ: "
+        f"only-training={sorted(union - scoring)} "
+        f"only-scoring={sorted(scoring - union)}"
+    )
+    assert scoring, "no candidates at all; the fixture proves nothing"
+
+
+def test_distributed_u_is_the_one_box_u_over_random_pairs(train_source):
+    """u must be the level distribution over RANDOM pairs, not blocked ones.
+
+    Blocked candidates already agree on a blocking key, so their level
+    distribution is not u -- it is u conditioned on agreement, which is exactly
+    the quantity u must NOT be. Using it would shrink the denominator of
+    log2(m/u) for every field correlated with the key and inflate its weight.
+
+    The fixture is smaller than the u sample target, so `random_pairs` takes
+    every record and the expected value is computable here exactly.
+    """
+    from goldenmatch.core.probabilistic import estimate_u_from_counts
+    from goldenmatch.spark.em import estimate_u_distributed
+
+    mk = _train_config().get_matchkeys()[0]
+    want = estimate_u_from_counts(mk, _driver_counts(_all_driver_pairs(), mk))
+    got = estimate_u_distributed(train_source, mk, id_col=_ID)
+
+    assert got == pytest.approx(want, abs=1e-12), (
+        "distributed u differs from the one-box estimate over the same pairs"
+    )
+
+
+def test_u_over_random_pairs_differs_from_u_over_blocked_pairs(train_source):
+    """And the distinction is not academic on this fixture.
+
+    If blocked and random pairs gave the same u here, the test above would pass
+    with `estimate_u_distributed` reading the wrong frame entirely.
+    """
+    from goldenmatch.core.probabilistic import estimate_u_from_counts
+    from goldenmatch.spark.config_pipeline import generate_candidates
+    from goldenmatch.spark.em import estimate_u_distributed
+
+    mk = _train_config().get_matchkeys()[0]
+    cfg = _train_config()
+    blocked = [
+        (int(r["a"]), int(r["b"]))
+        for r in generate_candidates(train_source, cfg, id_col=_ID).collect()
+    ]
+    u_blocked = estimate_u_from_counts(mk, _driver_counts(blocked, mk))
+    u_random = estimate_u_distributed(train_source, mk, id_col=_ID)
+
+    assert u_blocked != pytest.approx(u_random, abs=1e-9), (
+        "blocked and random pairs give the same u on this fixture, so it "
+        "cannot distinguish the two and the u gate above proves less than it "
+        "appears to"
+    )
+
+
+def _driver_trained(train_source, mk, cfg):
+    """The model the one-box builds from the same counts, session by session."""
+    from goldenmatch.core.probabilistic import (
+        _combine_em_sessions,
+        estimate_u_from_counts,
+        train_em_from_counts,
+    )
+    from goldenmatch.spark.config_pipeline import blocking_passes, pass_candidates
+
+    u = estimate_u_from_counts(mk, _driver_counts(_all_driver_pairs(), mk))
+    sessions = []
+    for key_config in blocking_passes(cfg):
+        rows = pass_candidates(train_source, key_config, id_col=_ID).collect()
+        pairs = [(int(r["a"]), int(r["b"])) for r in rows]
+        counts = _driver_counts(pairs, mk)
+        em = train_em_from_counts(
+            mk, counts, u, conditioned_fields=tuple(key_config.fields)
+        )
+        sessions.append((tuple(key_config.fields), em, float(len(pairs))))
+    return _combine_em_sessions(mk, sessions)
+
+
+def test_train_em_distributed_equals_the_one_box_over_the_same_pairs(train_source):
+    """THE end-to-end gate.
+
+    Every level in the reference comes from `comparison_vector` -- the one-box's
+    own function, the one a locally-trained model is built from -- so this
+    compares the distributed model against the reference implementation and not
+    against a second copy of the Spark expressions.
+
+    Exact, not approximate: both sides run the same `_em_iterate` over counts
+    that must be identical. A tolerance would hide the failure this exists to
+    catch, since a model trained on subtly wrong counts is still a valid model.
+    """
+    from goldenmatch.spark.em import train_em_distributed
+
+    cfg = _train_config()
+    mk = cfg.get_matchkeys()[0]
+
+    want = _driver_trained(train_source, mk, cfg)
+    got = train_em_distributed(train_source, cfg, mk, id_col=_ID)
+
+    for f in mk.fields:
+        assert got.m_probs[f.field] == pytest.approx(
+            want.m_probs[f.field], abs=1e-12
+        ), f"{f.field}: distributed m differs from the one-box"
+        assert got.u_probs[f.field] == pytest.approx(
+            want.u_probs[f.field], abs=1e-12
+        ), f"{f.field}: distributed u differs from the one-box"
+    assert got.proportion_matched == pytest.approx(
+        want.proportion_matched, abs=1e-12
+    )
+
+
+def test_distributed_training_is_jar_only(train_source, jvm_registered):
+    """No Python on the executors, which is the whole claim of this tier.
+
+    Training that needed an executor virtualenv would leave the jar-only story
+    half true in the place it is hardest to notice -- scoring would be jar-only
+    and the model it scores with would not be.
+    """
+    from goldenmatch.spark.em import train_em_distributed
+    from goldenmatch.spark.jvm import ROW_UDF_NAME, TRANSFORM_UDF_NAME
+
+    cfg = _train_config()
+    mk = cfg.get_matchkeys()[0]
+
+    want = train_em_distributed(train_source, cfg, mk, id_col=_ID)
+    got = train_em_distributed(
+        train_source, cfg, mk, id_col=_ID,
+        scorer_udf=ROW_UDF_NAME, transform_udf=TRANSFORM_UDF_NAME,
+    )
+    for f in mk.fields:
+        assert got.m_probs[f.field] == pytest.approx(
+            want.m_probs[f.field], abs=1e-12
+        ), f"{f.field}: the jar-only route trained a different model"
+
+
+def test_a_blocking_field_keeps_the_neutral_u_prior(train_source):
+    """`last` is pass 2's blocking key, so it must not carry a learned u.
+
+    #1835: a near-unique blocking key's u collapses toward the smoothing floor,
+    exploding its agreement weight until it dominates the score (F1 0.83 ->
+    0.57). `train_em` guards this over the UNION of blocking fields, and the
+    distributed route has to arrive at the same guard through a different path
+    -- per-pass sessions that each neutralise only their own key.
+    """
+    from goldenmatch.spark.em import train_em_distributed
+
+    cfg = _train_config()
+    mk = cfg.get_matchkeys()[0]
+    em = train_em_distributed(train_source, cfg, mk, id_col=_ID)
+
+    assert em.u_probs["last"] == pytest.approx([0.5, 0.5], abs=1e-12), (
+        "`last` is a blocking field of pass 2, so it must carry the neutral "
+        "prior, not an estimate from random pairs"
+    )
+    assert em.u_probs["first"] != pytest.approx([0.5, 0.5], abs=1e-9), (
+        "`first` blocks nothing and must still be LEARNED -- if it also came "
+        "back neutral, the guard is neutralising everything"
+    )
