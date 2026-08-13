@@ -4233,6 +4233,7 @@
             "set_fs_label_anchors",
             "train_em",
             "train_em_continuous",
+            "train_em_per_pass",
             "vectorized_scorer_supported"
           ],
           "imports": [
@@ -7978,6 +7979,19 @@
           ],
           "imports": [
             "goldenmatch.core._native_loader"
+          ]
+        },
+        {
+          "module": "goldenmatch.spark.em",
+          "file": "packages/python/goldenmatch/goldenmatch/spark/em.py",
+          "purpose": "Count agreement patterns on the cluster, so FS training need not sample.",
+          "defines": [
+            "agreement_pattern_counts",
+            "gamma_columns"
+          ],
+          "imports": [
+            "goldenmatch.core.probabilistic",
+            "goldenmatch.spark.probabilistic"
           ]
         },
         {
