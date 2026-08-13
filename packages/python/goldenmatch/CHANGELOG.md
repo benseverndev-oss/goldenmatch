@@ -56,6 +56,45 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   it never mutates a feature or a key.
 
 ### Fixed
+- **The config healer no longer goes silent on distributions with exact
+  duplicates (#2497).** `ScoreDiagnostics::dip()` anchors on the RIGHTMOST
+  prominent peak and walks left to the adjacent minimum. When a corpus contains
+  genuine exact duplicates, their hard spike at 1.0 sits in the top bin behind a
+  near-empty notch — and that spike *is* the rightmost prominent peak (on the
+  measured NCVR-synthetic shape its left trough is 8 against a peak of 1468, so
+  the 3x prominence test passes comfortably). The "valley" therefore collapsed
+  onto the notch just below the spike instead of the real bimodal boundary:
+  `dip()` returned 0.9583 against a threshold of 0.98, `threshold_rule`'s
+  `DIP_MIN_GAP` check saw a gap of 0.0217, and `review_config` emitted **zero
+  suggestions** — the healer said nothing about a threshold that was plainly
+  wrong. The heuristic was working as written; the written heuristic had no
+  notion that a degenerate one-bin spike at the top of the range is not a mode.
+
+  `dip()` now skips a qualifying peak whose valley sits within
+  `MIN_VALLEY_HEADROOM_FRAC` (6%) of the top of the **observed range**, falling
+  back to the next qualifying peak below it. On the measured shape that yields
+  0.8542 — the real boundary — which clears `DIP_MIN_GAP` and fires. A fraction
+  rather than an absolute distance because the histogram bins over `[min, max]`
+  of the *data*: on a corpus whose scores all sit in `[0.92, 0.99]` an absolute
+  0.05 would be 71% of the entire range and reject nearly every valley. The
+  constant sits at the geometric midpoint of the two measured neighbours, which
+  are one and two bin-widths of a 24-bin histogram (0.0436 must be rejected,
+  0.0869 must be kept).
+
+  The two rejected alternatives are recorded because both look right and are
+  not: preferring the *deepest* valley returns the 0.04 left-tail sliver on the
+  right-skewed shape, regressing the very test that motivated right-anchoring;
+  and requiring the peak to carry a shoulder rejects the textbook bimodal
+  `(0.0, 100), (0.5, 2), (0.9, 100)`, whose 2% neighbour is on the same side of
+  any workable cutoff as the degenerate spike.
+
+  A new `exact_match_spike` golden joins the cross-surface fixture set. None of
+  the existing six has a top-bin spike, so without it the TS/wasm surface could
+  have kept an unfixed kernel with every parity test still green — the same
+  "a check exists and does not fire" shape as the bug. Against the pre-fix
+  kernel the new case yields no suggestions at all, so Rust, Python-native and
+  TS/wasm parity on it is what proves the fix crossed each surface boundary; the
+  embedded wasm is rebuilt in this change accordingly.
 - **The auto-config search can now be made host-independent, so gates that pin
   its output stop being unstable by construction (#2532).** Two layers of the
   search stop on a WALL CLOCK: the controller's `ControllerBudget.max_seconds`
