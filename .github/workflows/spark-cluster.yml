@@ -348,13 +348,28 @@ jobs:
           # scoring bug. Hence `rc` capture rather than relying on `set -e`,
           # which would exit here first and never print the explanation.
           # The COUNT, not just "some": adding a two-path test without adding
-          # its deselect would leave the others matching, print "4 deselected"
-          # and let the new one fail on a cluster that cannot host its Python
-          # arm -- reading as a defect in the path under test. That is exactly
-          # how test_rowwise_config_scoring... and test_mint_entity_ids... first
-          # reddened this lane.
-          if ! grep -qE ' 6 deselected' pytest.out; then
-            echo "::error::expected 6 deselected. Either a --deselect node id no longer matches (pytest IGNORES one that matches nothing) or a two-path test was added without one. pytest's rootdir is packages/python/goldenmatch, so ids start at 'tests/', NOT 'packages/python/goldenmatch/tests/'. Either way, a test needing a Python worker just ran on a cluster that has none, and its failure reads as a defect in the path under test."
+          # its deselect would leave the others matching, print a smaller
+          # number, and let the new one fail on a cluster that cannot host its
+          # Python arm -- reading as a defect in the path under test. That is
+          # exactly how test_rowwise_config_scoring... and
+          # test_mint_entity_ids... first reddened this lane.
+          #
+          # 8, and it is NOT the number of --deselect flags. pytest counts TEST
+          # ITEMS, so a parametrized test contributes one per case:
+          #
+          #   test_jvm_scoring_matches_the_python_path_exactly   3  (batch_size)
+          #   test_end_to_end_dedupe_runs_with_every_kernel...   1
+          #   test_block_key_normalization_routes_to_the_jar...  1
+          #   test_derive_record_ids_matches_the_python_path     1
+          #   test_rowwise_config_scoring_matches_the_python...  1
+          #   test_mint_entity_ids_pure_sql_matches_the_udf...   1
+          #                                                     --
+          #                                                      8
+          #
+          # Six flags, eight items. Counting the flags is how this guard shipped
+          # saying 6 and would have failed the lane on its own error message.
+          if ! grep -qE ' 8 deselected' pytest.out; then
+            echo "::error::expected 8 deselected (six --deselect flags, but the batch_size test contributes three items). Either a --deselect node id no longer matches (pytest IGNORES one that matches nothing) or a two-path test was added without one. pytest's rootdir is packages/python/goldenmatch, so ids start at 'tests/', NOT 'packages/python/goldenmatch/tests/'. Either way, a test needing a Python worker just ran on a cluster that has none, and its failure reads as a defect in the path under test."
             exit 1
           fi
           exit "$rc"
