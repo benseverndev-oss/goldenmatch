@@ -290,6 +290,12 @@ jobs:
           docker run --rm --user root -v "$PWD:/w" -w /w \
             "apache/spark:${SPARK_IMAGE_TAG}-python3" bash -lc '
               set -euo pipefail
+              # `ensurepip is not available` otherwise: Debian and Ubuntu strip
+              # it out of the base python3 into `python3-venv`. The Spark images
+              # are Ubuntu-based, so this is the documented fix for that exact
+              # message rather than a workaround.
+              apt-get update -qq
+              apt-get install -y -qq --no-install-recommends python3-venv >/dev/null
               python3 -m venv /tmp/gmenv
               /tmp/gmenv/bin/pip install --quiet --upgrade pip venv-pack
               # pyarrow named explicitly: the tier is Arrow-native (arrow_udf
