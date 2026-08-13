@@ -1246,6 +1246,37 @@ _DOMAIN_SCORER_MAP = {
     "__title_key__": ("exact", 0.8, ["lowercase"]),
 }
 
+# A domain-extracted `exact` field becomes a STANDALONE exact matchkey -- "same
+# value implies same entity", on its own, with nothing else consulted -- only if
+# it is a genuine identifier. `_DOMAIN_SCORER_MAP` already states that: the weight
+# is the author's own confidence, 1.0 for identifiers (`__model_norm__`,
+# `__sw_part_num__`) and lower for partial signals (`__color__` 0.2,
+# `__title_key__` 0.8). That weight used to be read and then DISCARDED when the
+# standalone matchkey was built, so every exact entry made a full-strength
+# identity claim regardless.
+#
+# Measured on DBLP-ACM (#2526): `__title_key__` is the first significant WORD of
+# the title, so `domain_exact_title_key` asserted "two papers whose titles start
+# with the same word are the same paper" -- 33,563 pairs against 2,224 in ground
+# truth, clusters up to 96, precision 0.068. It cleared the old `< 0.01`
+# cardinality floor 29x over (ratio 0.29), because that floor only rejects
+# NEAR-CONSTANT columns; an identity claim needs cardinality near 1.0.
+_DOMAIN_IDENTITY_WEIGHT = 1.0
+# Belt-and-braces on top of the declared weight: even a 1.0-weighted extractor
+# cannot be an identity claim on data where the column is coarse in practice. A
+# real identifier is near-unique; this rejects the degenerate case where an
+# extractor collapses a column on some dataset it was not tuned for.
+_DOMAIN_IDENTITY_MIN_CARDINALITY = 0.5
+
+
+def _is_identity_claim(col: str, weight: float, cardinality_ratio: float) -> bool:
+    """Whether a domain-extracted ``exact`` field may stand alone as its own
+    exact matchkey, versus being folded into the weighted matchkey at its
+    declared weight. See `_DOMAIN_IDENTITY_WEIGHT` for why the weight decides."""
+    if weight < _DOMAIN_IDENTITY_WEIGHT:
+        return False
+    return cardinality_ratio >= _DOMAIN_IDENTITY_MIN_CARDINALITY
+
 
 # Free-text col_types where data-entry corruption is common and `token_sort`
 # (word-order-robust but character-noise-fragile) underperforms. Surfaced by the
@@ -5072,8 +5103,13 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
             if scorer == "exact" and cardinality_ratio < 0.01:
                 continue
             mf = MatchkeyField(field=col, scorer=scorer, weight=weight, transforms=transforms)
-            if scorer == "exact":
+            if scorer == "exact" and _is_identity_claim(col, weight, cardinality_ratio):
                 domain_exact.append(mf)
+            elif scorer == "exact":
+                # A weak exact signal: still compared, but as a WEIGHTED field
+                # carrying its declared weight -- never as a standalone identity
+                # claim. See `_is_identity_claim`.
+                domain_fuzzy.append(mf)
             else:
                 domain_fuzzy.append(mf)
 
