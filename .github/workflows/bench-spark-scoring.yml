@@ -31,6 +31,15 @@ on:
         description: "bench (compare paths) | diag (bisect the batched plan to find the OOM)"
         required: false
         default: "bench"
+      threshold:
+        description: >-
+          Score cut for BOTH arms. 0.0 reproduces J4's original measurement,
+          where nothing was filtered and the batched arm exploded every
+          candidate pair. The batched arm applies the cut INSIDE the array, so a
+          realistic cut (0.85) keeps rejected pairs out of the generator -- which
+          the plan bisect said was the whole 2.4x. Run this lane at both.
+        required: false
+        default: "0.0"
       runner:
         description: "Runner label"
         required: false
@@ -164,7 +173,7 @@ jobs:
           GOLDENMATCH_SPARK_PYENV: "gm_env.zip"
           GOLDENMATCH_NATIVE: "0"
         run: |
-          .venv/bin/python scripts/bench_spark_scoring.py --path row_python --scorer jaro_winkler --native 0             --rows '${{ inputs.rows }}' --block-size '${{ inputs.block_size }}'             --repeats '${{ inputs.repeats }}' --out bench-row_python.json
+          .venv/bin/python scripts/bench_spark_scoring.py --path row_python --scorer jaro_winkler --native 0             --rows '${{ inputs.rows }}' --block-size '${{ inputs.block_size }}'             --repeats '${{ inputs.repeats }}' --threshold '${{ inputs.threshold }}' --out bench-row_python.json
 
       # The arm that speaks to spec section 1. Without it the bench measures UDF
       # plumbing with the kernel switched off and says nothing about "vectorized
@@ -176,7 +185,7 @@ jobs:
           SPARK_DRIVER_MEMORY: "${{ inputs.driver_memory }}"
           GOLDENMATCH_SPARK_PYENV: "gm_env.zip"
         run: |
-          .venv/bin/python scripts/bench_spark_scoring.py --path row_python --scorer jaro_winkler --native 1             --rows '${{ inputs.rows }}' --block-size '${{ inputs.block_size }}'             --repeats '${{ inputs.repeats }}' --out bench-row_python_native.json
+          .venv/bin/python scripts/bench_spark_scoring.py --path row_python --scorer jaro_winkler --native 1             --rows '${{ inputs.rows }}' --block-size '${{ inputs.block_size }}'             --repeats '${{ inputs.repeats }}' --threshold '${{ inputs.threshold }}' --out bench-row_python_native.json
 
       - name: Bench batched_jvm
         if: inputs.mode != 'diag'
@@ -187,7 +196,7 @@ jobs:
           GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
           GOLDENMATCH_NATIVE: "0"
         run: |
-          .venv/bin/python scripts/bench_spark_scoring.py --path batched_jvm --scorer jaro_winkler --rows '${{ inputs.rows }}' --block-size '${{ inputs.block_size }}'             --repeats '${{ inputs.repeats }}' --out bench-batched_jvm.json
+          .venv/bin/python scripts/bench_spark_scoring.py --path batched_jvm --scorer jaro_winkler --rows '${{ inputs.rows }}' --block-size '${{ inputs.block_size }}'             --repeats '${{ inputs.repeats }}' --threshold '${{ inputs.threshold }}' --out bench-batched_jvm.json
 
       # A SCRIPT, not inline Python: an embedded multi-line program inside a
       # YAML `run:` block must survive block-scalar parsing too, and this repo

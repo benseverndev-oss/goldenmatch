@@ -125,18 +125,23 @@ def _candidate_pairs(df):
     ).select(F.col(f"a.{_ID}").alias("a"), F.col(f"b.{_ID}").alias("b"))
 
 
-def _row_python(df, scorer_name: str):
-    """The shipped path: arrow_udf -> forked Python worker."""
+def _row_python(df, scorer_name: str, threshold: float):
+    """The shipped path: arrow_udf -> forked Python worker.
+
+    Row-shaped, so its threshold is an ordinary `where` on rows the UDF already
+    produced. There is no generator here to keep pairs out of -- which is the
+    asymmetry the whole comparison turns on.
+    """
     from goldenmatch.spark.scoring import score_and_dedup
 
     out = score_and_dedup(
         df, block_col="blk", value_col="name", id_col=_ID,
-        scorer_name=scorer_name, threshold=0.0,
+        scorer_name=scorer_name, threshold=threshold,
     )
     return out.count()
 
 
-def _batched_jvm(spark, df, udf_name, scorer_name: str):
+def _batched_jvm(spark, df, udf_name, scorer_name: str, threshold: float):
     """J1's plan through the J2 jar: one call per batch, in the executor JVM,
     scoring with the Rust kernel over JNI.
 
@@ -152,6 +157,7 @@ def _batched_jvm(spark, df, udf_name, scorer_name: str):
     scored = score_pairs_batched(
         _candidate_pairs(df), df, id_col=_ID, value_col="name",
         scorer_id=scorer_id(scorer_name), udf_name=udf_name,
+        threshold=threshold,
     )
     return dedup_max(scored).count()
 
@@ -177,6 +183,19 @@ def main(argv=None) -> int:
              "J0's jar carried no algorithms, so the only scorer both arms could "
              "run was `exact`, and this bench's load-bearing caveat was that "
              "like-for-like needed J2.",
+    )
+    ap.add_argument(
+        "--threshold",
+        type=float,
+        default=0.0,
+        help="Score cut, applied to BOTH arms. The default of 0.0 reproduces "
+             "J4's original measurement, where nothing was filtered and the "
+             "batched arm exploded every candidate pair -- the worst case for "
+             "batching and the only case that has ever been measured. A real "
+             "config cuts high, and the batched arm applies the cut INSIDE the "
+             "array, so the generator never sees a rejected pair. Sweeping this "
+             "is how you find out whether the 2.4x is a property of the plan or "
+             "of one unrepresentative threshold.",
     )
     ap.add_argument(
         "--path",
@@ -247,12 +266,15 @@ def main(argv=None) -> int:
     }
 
     results["scorer"] = args.scorer
+    results["threshold"] = args.threshold
 
     if args.path == "row_python":
         print(f"[row_python] arrow_udf -> forked Python worker, "
               f"scorer={args.scorer}", flush=True)
-        results["timing"] = _time(lambda: _row_python(df, args.scorer),
-                                  repeats=args.repeats)
+        results["timing"] = _time(
+            lambda: _row_python(df, args.scorer, args.threshold),
+            repeats=args.repeats,
+        )
     else:
         try:
             udf_name = install(spark, jar=find_jar())
@@ -280,7 +302,7 @@ def main(argv=None) -> int:
         print(f"[batched_jvm] array UDF, in the executor JVM, "
               f"scorer={args.scorer}", flush=True)
         results["timing"] = _time(
-            lambda: _batched_jvm(spark, df, udf_name, args.scorer),
+            lambda: _batched_jvm(spark, df, udf_name, args.scorer, args.threshold),
             repeats=args.repeats,
         )
 

@@ -79,6 +79,33 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  NOT like-for-like: batched_jvm ran {jvm.get('scorer')!r}, "
               f"row_python ran {pure.get('scorer')!r}.")
 
+    # A threshold that rejects NOTHING makes the batched arm's whole reason for
+    # having one inert, and says so in a number nobody would look at.
+    #
+    # Run 31709489001 was dispatched at 0.85 to test exactly that lever and came
+    # back with `rows_out` unchanged at 1,900,000 -- 100% kept. The synthetic
+    # fixture puts near-identical strings in a block ("v5_3" vs "v5_7"), which
+    # jaro-winkler scores around 0.88, so 0.85 rejects nothing and the run
+    # measured the un-filtered plan twice. The medians looked plausible and the
+    # comparison was meaningless.
+    #
+    # So the harness states the reject ratio rather than leaving it to be
+    # inferred from a row count.
+    thr = jvm.get("threshold") or 0.0
+    kept = None
+    pairs = jvm.get("candidate_pairs") or 0
+    out_rows = (jvm.get("timing") or {}).get("rows_out")
+    if pairs and out_rows is not None:
+        kept = out_rows / pairs
+        print()
+        print(f"  threshold={thr}: kept {out_rows:,}/{pairs:,} pairs ({kept:.1%})")
+    if thr > 0 and kept is not None and kept > 0.999:
+        print()
+        print("  WARNING: the threshold rejected nothing, so the batched arm's")
+        print("  filter-before-explode did no work and this run says NOTHING")
+        print("  about it. Raise the threshold until pairs are actually")
+        print("  rejected, or the comparison is the threshold=0 one again.")
+
     impl = jvm.get("jvm_impl")
     if impl and impl != "NativeScorer":
         print()
@@ -100,6 +127,8 @@ def main(argv: list[str] | None = None) -> int:
                 "row_python_native": native,
                 "batched_jvm": jvm,
                 "like_for_like": like_for_like,
+                "threshold": thr,
+                "kept_fraction": kept,
                 "native_speedup": (rp / rn) if rn else None,
                 "jvm_vs_pure": (rp / rj) if rj else None,
                 "jvm_vs_native": (rn / rj) if (rj and rn) else None,
