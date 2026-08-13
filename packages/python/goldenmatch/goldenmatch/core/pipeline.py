@@ -1785,7 +1785,14 @@ def _run_auto_suggest(df: pl.DataFrame, config: GoldenMatchConfig) -> None:
     if not matchkey_columns:
         return
 
-    suggestions = analyze_blocking(df, matchkey_columns)
+    # #2513: hand the analyzer the matchkey the pipeline will actually score
+    # with, so recall is measured against the pairs that matchkey emits rather
+    # than a character-similarity stand-in for "duplicate". First weighted
+    # matchkey -- the fallback proxy still applies if there isn't one.
+    _scoring_mk = next(
+        (m for m in config.get_matchkeys() if m.type == "weighted"), None
+    )
+    suggestions = analyze_blocking(df, matchkey_columns, matchkey=_scoring_mk)
     if not suggestions:
         logger.info("Auto-suggest: no blocking suggestions found")
         return

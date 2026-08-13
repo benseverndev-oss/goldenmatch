@@ -26,10 +26,12 @@ from goldenmatch.core.block_analyzer import (
     score_candidate,
 )
 
-#: `analyze_blocking` resolves `estimate_recall` from its own module at call
-#: time, so tests stub it there. Addressed by string rather than by importing
+#: `analyze_blocking` builds the recall target ONCE and then measures each
+#: candidate with `_retention` (#2513 -- it used to call `estimate_recall` per
+#: candidate, which rebuilt the same seeded pair population every time). Tests
+#: stub the per-candidate seam. Addressed by string rather than by importing
 #: the module a second time -- one import style per module in this file.
-_ESTIMATE_RECALL = "goldenmatch.core.block_analyzer.estimate_recall"
+_RETENTION = "goldenmatch.core.block_analyzer._retention"
 
 
 def _cand(fields, transforms, desc="c"):
@@ -101,8 +103,8 @@ class TestMeasuredRecallRanksTheSuggestions:
         # Make recall the only thing that differs meaningfully.
         recalls = {"a": 0.9, "b": 0.1}
         monkeypatch.setattr(
-            _ESTIMATE_RECALL,
-            lambda d, cand, cols, sample_size=1000: recalls.get(cand["key_fields"][0], 0.5),
+            _RETENTION,
+            lambda frame, cand, pairs: recalls.get(cand["key_fields"][0], 0.5),
         )
         sugs = analyze_blocking(df, ["a", "b"])
         assert sugs
@@ -112,32 +114,70 @@ class TestMeasuredRecallRanksTheSuggestions:
             "a high-recall candidate should outrank a low-recall one"
         )
 
-    def test_the_unmeasured_tail_stays_behind_the_measured_block(self, monkeypatch):
-        """Recall is only estimated for the top N. Multiplying a placeholder 0.0
-        into the tail would rank unmeasured candidates as known-useless, and
-        multiplying anywhere would push measured candidates below unmeasured
-        ones whenever recall < 1. Tiering avoids both."""
-        monkeypatch.setattr(_ESTIMATE_RECALL,
-                            lambda d, cand, cols, sample_size=1000: 0.4)
+    def test_every_candidate_is_measured(self, monkeypatch):
+        """#2513 replaced the two-tier sort. Recall used to be measured only for
+        the top 10 by score, with 0.0 standing in for "unmeasured" on the tail --
+        but 0.0 is also a real recall, and it was multiplied into the rank, so a
+        tail candidate could never be selected however good it was. Tiering kept
+        that placeholder from doing damage; measuring everything removes the
+        need for it. No suggestion may carry an unmeasured placeholder."""
+        seen: list[str] = []
+
+        def _spy(frame, cand, pairs):
+            seen.append(cand["description"])
+            return 0.4
+
+        monkeypatch.setattr(_RETENTION, _spy)
         df = pl.DataFrame({c: [f"{c}{i}" for i in range(40)] for c in "abcd"})
         sugs = analyze_blocking(df, list("abcd"))
-        measured = [s for s in sugs if s.estimated_recall > 0.0]
-        assert measured, "expected some candidates to have measured recall"
-        # every measured suggestion precedes every unmeasured one
-        last_measured = max(i for i, s in enumerate(sugs) if s.estimated_recall > 0.0)
-        first_unmeasured = min(
-            (i for i, s in enumerate(sugs) if s.estimated_recall == 0.0),
-            default=len(sugs),
+        assert len(sugs) > 10, "need more than one tier's worth to be meaningful"
+        assert len(seen) == len(sugs), (
+            f"measured {len(seen)} candidates but returned {len(sugs)} suggestions"
         )
-        assert last_measured < first_unmeasured
+        assert all(s.estimated_recall == 0.4 for s in sugs), (
+            "some suggestion carries a placeholder rather than its measured recall"
+        )
+
+    def test_a_low_score_candidate_can_win_on_recall(self, monkeypatch):
+        """THE #2513 REGRESSION. On Amazon-Google the candidate with the highest
+        true pair recall of any generated (`tokens(title, df<=100)`, 98.2%) fell
+        outside the top 10 by score, was assigned the 0.0 placeholder, and so
+        had rank value `score * 0 == 0` -- unselectable by construction."""
+        df = pl.DataFrame({c: [f"{c}{i % 20}" for i in range(40)] for c in "abcd"})
+        baseline = analyze_blocking(df, list("abcd"))
+        assert len(baseline) > 10
+        # Pick a candidate the score-ordered pass puts well into the tail.
+        tail_desc = baseline[-1].description
+
+        monkeypatch.setattr(
+            _RETENTION,
+            lambda frame, cand, pairs: 1.0 if cand["description"] == tail_desc else 0.01,
+        )
+        sugs = analyze_blocking(df, list("abcd"))
+        assert sugs[0].description == tail_desc, (
+            f"{tail_desc!r} has by far the best recall but ranked "
+            f"{[s.description for s in sugs].index(tail_desc)}"
+        )
+
+    def test_measurement_failure_does_not_read_as_zero_recall(self, monkeypatch):
+        """The same confusion in its other form: if measuring a candidate raises,
+        it must not be recorded as "retains nothing". Fail open and let `score`
+        rank it, rather than silently removing it from contention."""
+        def _boom(frame, cand, pairs):
+            raise RuntimeError("scorer exploded")
+
+        monkeypatch.setattr(_RETENTION, _boom)
+        df = pl.DataFrame({"a": [f"a{i % 10}" for i in range(30)]})
+        sugs = analyze_blocking(df, ["a"])
+        assert sugs, "a measurement failure must not empty the suggestion list"
+        assert all(s.estimated_recall == 1.0 for s in sugs)
 
     def test_low_recall_is_reported_not_silently_committed(self, monkeypatch, caplog):
         """On Amazon-Google EVERY candidate is below the floor. Hard-rejecting
         them all would leave degenerate blocking, and one mega-block is worse
         than a poor key -- so this warns rather than refuses, and the warning
         has to carry the number."""
-        monkeypatch.setattr(_ESTIMATE_RECALL,
-                            lambda d, cand, cols, sample_size=1000: 0.06)
+        monkeypatch.setattr(_RETENTION, lambda frame, cand, pairs: 0.06)
         df = pl.DataFrame({"a": [f"a{i}" for i in range(30)]})
         with caplog.at_level("WARNING"):
             sugs = analyze_blocking(df, ["a"])
@@ -146,8 +186,7 @@ class TestMeasuredRecallRanksTheSuggestions:
         assert "#2488" in caplog.text
 
     def test_no_warning_when_recall_is_healthy(self, monkeypatch, caplog):
-        monkeypatch.setattr(_ESTIMATE_RECALL,
-                            lambda d, cand, cols, sample_size=1000: 0.95)
+        monkeypatch.setattr(_RETENTION, lambda frame, cand, pairs: 0.95)
         df = pl.DataFrame({"a": [f"a{i}" for i in range(30)]})
         with caplog.at_level("WARNING"):
             analyze_blocking(df, ["a"])

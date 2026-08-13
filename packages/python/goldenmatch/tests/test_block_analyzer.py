@@ -204,9 +204,13 @@ class TestAnalyzeBlocking:
         suggestions = analyze_blocking(df, ["last_name", "state", "zip"], sample_size=200)
         assert len(suggestions) > 0
         assert all(isinstance(s, BlockingSuggestion) for s in suggestions)
-        # Should be sorted by score (descending)
-        for i in range(len(suggestions) - 1):
-            assert suggestions[i].score >= suggestions[i + 1].score
+        # Sorted by score x estimated_recall descending, with raw score as the
+        # tie-break -- the ranking key #2488 introduced. (This asserted plain
+        # score order until #2513; that held only because recall was measured
+        # for the top 10 alone and the tail kept its score ordering, so a
+        # high-recall/low-score candidate never got to overtake.)
+        keys = [(s.score * s.estimated_recall, s.score) for s in suggestions]
+        assert keys == sorted(keys, reverse=True)
 
     def test_suggestion_fields(self):
         import random
