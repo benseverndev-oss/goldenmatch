@@ -7,6 +7,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Fixed
+- **Auto-config no longer scores a field that every candidate pair agrees on by
+  construction (#2526).** Blocking makes its key constant inside each block, so
+  when the same column is also a scored field in the weighted matchkey it
+  contributes its full weight to every pair as an *offset* with zero
+  discriminative power: it cannot separate a match from a non-match, it only
+  shifts the score distribution up and flattens the threshold's effect. Measured
+  on DBLP-ACM, where blocking is static on `__title_key__` and the same column
+  was scored at weight 0.8, it supplied 18.6% of the weighted score to 100% of
+  candidates while distinguishing none of them -- F1 0.4593 -> **0.5645**
+  (precision 0.3010 -> 0.3984, recall held at 0.9685, largest cluster 43 -> 35).
+
+  The matchkey threshold is rescaled by the surviving weight share so the
+  decision boundary stays at the same absolute score. That is load-bearing
+  rather than cosmetic: dropping the field at an unchanged threshold measured
+  F1 0.6855 against 0.6894 before it, a small regression, because removing an
+  18.6% constant makes the same nominal bar materially stricter.
+
+  Two conditions gate the rule and both are necessary. Every *pass* must key on
+  the field -- under `multi_pass` a pair produced by pass 2 can disagree on pass
+  1's key, so the field still carries signal. And every *transform* on that key
+  must preserve equality: sharing a block under a lossy transform does not mean
+  sharing a value. The second condition is what keeps the electronics benchmark
+  correct, since all three of `abt_buy`'s passes key on `manufacturer` but do so
+  via `soundex` and `substring:0:5` -- "Sony" and "Sonny" share a soundex block
+  while being different strings, so `manufacturer` genuinely discriminates
+  inside the block. The transform list is a whitelist, so an unrecognised
+  transform is assumed lossy rather than assumed safe.
 - **A domain-extracted field no longer becomes a standalone identity claim
   unless it is actually an identifier (#2526).** Auto-config promoted every
   `exact` entry in `_DOMAIN_SCORER_MAP` to its own exact matchkey -- "same value

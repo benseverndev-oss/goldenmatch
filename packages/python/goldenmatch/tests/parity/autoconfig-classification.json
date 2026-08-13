@@ -21,7 +21,7 @@
       {
         "name": "fuzzy_match",
         "type": "weighted",
-        "threshold": 0.7,
+        "threshold": 0.6467,
         "fields": [
           {
             "field": "title",
@@ -48,14 +48,6 @@
             "transforms": [
               "lowercase",
               "strip"
-            ]
-          },
-          {
-            "field": "__title_key__",
-            "scorer": "exact",
-            "weight": 0.8,
-            "transforms": [
-              "lowercase"
             ]
           }
         ]

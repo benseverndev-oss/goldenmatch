@@ -14,12 +14,16 @@ wrong silently changes behaviour on a benchmark:
 """
 from __future__ import annotations
 
-from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
+from goldenmatch.config.schemas import (
+    BlockingConfig,
+    BlockingKeyConfig,
+    MatchkeyConfig,
+    MatchkeyField,
+)
 from goldenmatch.core.autoconfig import (
     _always_agreeing_blocking_fields,
     _drop_uninformative_blocking_fields,
 )
-from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
 
 
 def _blocking(strategy, keys=(), passes=()):
