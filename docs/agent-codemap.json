@@ -4783,7 +4783,8 @@
             "partial_ratio",
             "pure_field_matrix",
             "ratio",
-            "token_sort_ratio"
+            "token_sort_ratio",
+            "token_sort_similarity"
           ]
         },
         {
@@ -7831,10 +7832,11 @@
         {
           "module": "goldenmatch.spark.jvm",
           "file": "packages/python/goldenmatch/goldenmatch/spark/jvm.py",
-          "purpose": "J0: ship the JVM scorer jar to a Spark session and register it.",
+          "purpose": "Ship the JVM scorer jar to a Spark session and register it (J0), now backed",
           "defines": [
             "JvmScorerUnavailable",
             "find_jar",
+            "implementation",
             "install",
             "scorer_id"
           ]
