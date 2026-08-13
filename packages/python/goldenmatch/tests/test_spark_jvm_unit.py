@@ -14,6 +14,7 @@ import pytest
 from goldenmatch.spark.jvm import (
     FINGERPRINT_UDF_NAME,
     IMPL_UDF_NAME,
+    ROW_UDF_NAME,
     SCORER_IDS,
     SURVIVORSHIP_UDF_NAME,
     TRANSFORM_UDF_NAME,
@@ -102,6 +103,10 @@ def test_install_ships_then_registers(jar):
     assert spark.artifacts == [str(jar)]
     assert spark.registered == [
         (UDF_NAME, "dev.goldensuite.spark.GoldenScoreUdf", "array<double>"),
+        # The row-shaped scorer, ALONGSIDE the batched one rather than instead
+        # of it: which shape is faster is a J4 measurement, not a design
+        # principle, and both have to be reachable for that to be taken.
+        (ROW_UDF_NAME, "dev.goldensuite.spark.GoldenScoreRowUdf", "double"),
         (IMPL_UDF_NAME, "dev.goldensuite.spark.GoldenScoreImplUdf", "string"),
         (
             FINGERPRINT_UDF_NAME,

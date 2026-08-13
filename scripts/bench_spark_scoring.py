@@ -162,6 +162,28 @@ def _batched_jvm(spark, df, udf_name, scorer_name: str, threshold: float):
     return dedup_max(scored).count()
 
 
+def _row_jvm(spark, df, udf_name, scorer_name: str, threshold: float):
+    """The control arm: the PYTHON path's plan, with the scorer call in the JVM.
+
+    One join, one UDF call per pair, one filter, one groupBy. No collect_list,
+    no arrays_zip, no explode -- so this isolates the thing J4 could not
+    separate: how much of the batched arm's 3x is the JVM/JNI mechanism, and how
+    much is the reshape J1 built to reach it.
+
+    J1 asserted a per-row downcall "would be dominated by call overhead". No
+    number was ever attached. This is that number.
+    """
+    from goldenmatch.spark.batched import dedup_max, score_pairs_rowwise
+    from goldenmatch.spark.jvm import ROW_UDF_NAME, scorer_id
+
+    scored = score_pairs_rowwise(
+        _candidate_pairs(df), df, id_col=_ID, value_col="name",
+        scorer_id=scorer_id(scorer_name), udf_name=ROW_UDF_NAME,
+        threshold=threshold,
+    )
+    return dedup_max(scored).count()
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--rows", type=int, default=200_000)
@@ -199,10 +221,14 @@ def main(argv=None) -> int:
     )
     ap.add_argument(
         "--path",
-        choices=["row_python", "batched_jvm"],
+        choices=["row_python", "batched_jvm", "row_jvm"],
         required=True,
         help="ONE arm per process -- see the module docstring. Running both in "
-             "one session let the first arm's residue OOM the second.",
+             "one session let the first arm's residue OOM the second. "
+             "`row_jvm` is the control: the row_python PLAN with the scorer in "
+             "the JVM, so batched_jvm minus row_jvm is the cost of J1's "
+             "reshape and row_jvm minus row_python is the cost of the "
+             "mechanism.",
     )
     args = ap.parse_args(argv)
 
@@ -299,10 +325,15 @@ def main(argv=None) -> int:
             )
             return 3
 
-        print(f"[batched_jvm] array UDF, in the executor JVM, "
+        shape = "row UDF (no batching)" if args.path == "row_jvm" else "array UDF"
+        print(f"[{args.path}] {shape}, in the executor JVM, "
               f"scorer={args.scorer}", flush=True)
         results["timing"] = _time(
-            lambda: _batched_jvm(spark, df, udf_name, args.scorer, args.threshold),
+            lambda: (
+                _row_jvm(spark, df, udf_name, args.scorer, args.threshold)
+                if args.path == "row_jvm"
+                else _batched_jvm(spark, df, udf_name, args.scorer, args.threshold)
+            ),
             repeats=args.repeats,
         )
 

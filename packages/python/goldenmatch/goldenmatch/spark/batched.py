@@ -220,6 +220,70 @@ def score_pairs_batched(
     )
 
 
+def score_pairs_rowwise(
+    pairs_df: Any,
+    source_df: Any,
+    *,
+    id_col: str,
+    value_col: str,
+    scorer_id: int,
+    udf_name: str,
+    threshold: float | None = None,
+) -> Any:
+    """Score ``(a, b)`` pairs ONE PER CALL through a row-shaped Java UDF.
+
+    Same inputs, same output shape and same kernel as
+    :func:`score_pairs_batched` -- what differs is that nothing is batched, so
+    the plan has no ``collect_list``, no ``arrays_zip`` and no ``explode``.
+
+    ## Why this exists
+
+    J1 batched because Spark Connect permits only row-shaped UDFs and it assumed
+    a per-row downcall "would be dominated by call overhead". That premise was
+    never measured. J4 then measured the batched path at ~3x SLOWER than the
+    row-shaped PYTHON path, and the bisect attributed ~0.1s to scoring 1.9M
+    pairs over JNI and **+1.4s to the un-batching** (~740ns/row, which is object
+    allocation, not compute).
+
+    The asymmetry is columnar vs object domain. ``make_scorer_udf`` is an
+    ``arrow_udf`` over ``pa.Array``: Spark hands the Python worker a columnar
+    Arrow batch and takes one back, and no pair is ever an object. Spark's
+    arrays are ``ArrayData`` of ``InternalRow``, not vectors, so batching in the
+    SQL layer materialises every pair three times to avoid one columnar
+    transfer that costs less than the churn.
+
+    This function is the control: the SAME plan the Python path builds, with the
+    scorer call landing in the executor JVM instead of a forked Python worker.
+    The only cost it reintroduces is one JNI downcall per pair -- exactly the
+    quantity J1 asserted was fatal.
+
+    Which shape is faster is a measurement, not a design principle, and it may
+    depend on the workload: batching amortises string marshalling per call
+    (better as values get longer), while this avoids the reshape entirely
+    (better as pairs multiply).
+    """
+    from pyspark.sql import functions as F
+
+    lhs, rhs = "__lhs__", "__rhs__"
+    a_val = F.col(f"{lhs}.{value_col}").cast("string")
+    b_val = F.col(f"{rhs}.{value_col}").cast("string")
+    scored = (
+        pairs_df.alias("__p__")
+        .join(source_df.alias(lhs), F.col(f"{lhs}.{id_col}") == F.col("__p__.a"))
+        .join(source_df.alias(rhs), F.col(f"{rhs}.{id_col}") == F.col("__p__.b"))
+        .select(
+            F.col("__p__.a").alias("a"),
+            F.col("__p__.b").alias("b"),
+            F.call_udf(udf_name, F.lit(int(scorer_id)), a_val, b_val).alias("score"),
+        )
+    )
+    if threshold is not None:
+        # An ordinary row filter, and correctly so: there is no generator here
+        # to keep rejected pairs out of. That is the whole point of the shape.
+        scored = scored.where(F.col("score") >= F.lit(float(threshold)))
+    return scored
+
+
 def dedup_max(scored_df: Any) -> Any:
     """``max(score)`` per canonical pair -- the tier's existing MAX contract.
 

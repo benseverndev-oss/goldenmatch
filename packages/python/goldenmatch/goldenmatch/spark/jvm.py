@@ -47,7 +47,17 @@ IMPL_UDF_NAME = "golden_score_impl"
 #: The SQL name of the record-fingerprint kernel (identity graph).
 FINGERPRINT_UDF_NAME = "golden_fingerprint"
 
+#: The SQL name of the ROW-shaped scorer: one pair per call, no batching.
+#:
+#: Registered alongside the batch scorer, not instead of it. J1 batched because
+#: it assumed a per-row downcall "would be dominated by call overhead"; J4 then
+#: measured the batched path ~3x slower than the row-shaped PYTHON one, with
+#: ~0.1s in the kernel and +1.4s in `arrays_zip`/`explode`. Which shape wins is
+#: a measurement, and this is the arm that lets it be taken.
+ROW_UDF_NAME = "golden_score_row"
+
 _UDF_CLASS = "dev.goldensuite.spark.GoldenScoreUdf"
+_ROW_UDF_CLASS = "dev.goldensuite.spark.GoldenScoreRowUdf"
 _IMPL_UDF_CLASS = "dev.goldensuite.spark.GoldenScoreImplUdf"
 _FINGERPRINT_UDF_CLASS = "dev.goldensuite.spark.GoldenFingerprintUdf"
 
@@ -202,6 +212,12 @@ def install(spark: object, *, jar: str | os.PathLike[str] | None = None,
 
     for sql_name, cls, ret in (
         (name, _UDF_CLASS, "array<double>"),
+        # The row-shaped scorer, registered alongside the batched one. Same
+        # kernel, one pair per call: no collect_list, no arrays_zip, no explode.
+        # J1's batching amortises a downcall cost nobody measured, and J4 put
+        # +1.4s on the un-batching it requires against ~0.1s on the scoring, so
+        # both shapes are available and the bench decides.
+        (ROW_UDF_NAME, _ROW_UDF_CLASS, "double"),
         # Registered alongside, not on demand: the probe has to be available
         # BEFORE anything is scored, or the first thing a caller can check is
         # whether the results they already trusted came from the kernel.
