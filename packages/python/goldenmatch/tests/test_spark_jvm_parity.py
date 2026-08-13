@@ -7,10 +7,18 @@ This is the half the unit tests cannot reach: `addArtifact` against a real
 session, `registerJavaFunction` against a real catalog, and the array marshaling
 that the probe measured but this code now depends on.
 
-J0 deliberately proves the PLUMBING with no native call in the picture. The jar
-implements `exact` only -- string equality, identical by inspection in any
-language -- so nothing here can be a kernel divergence. When the plan reshape
-lands in J1, a misaligned score cannot be blamed on the scorer.
+J0 deliberately proved the PLUMBING with no native call in the picture: the jar
+implemented `exact` only -- string equality, identical by inspection in any
+language -- so nothing here could be a kernel divergence, and a misalignment
+found by J1's plan reshape could not be blamed on the scorer.
+
+That separation has done its job and this file stays on the plumbing side of it.
+J2 put the Rust kernel behind the same UDF (JNI -> `score-cabi` -> `score_one`),
+but whether the JVM's number EQUALS Python's is a different question with a
+different oracle, and it lives in `test_spark_jvm_native_parity.py`. Here the
+questions are still: does the jar ship, does the UDF register, does a batch come
+back aligned, and does a bad request fail loudly instead of returning a plausible
+number.
 """
 from __future__ import annotations
 
@@ -110,16 +118,44 @@ def test_a_large_batch_survives(spark, registered):
     assert all(v == 1.0 for v in got)
 
 
-def test_an_unsupported_scorer_fails_loudly(spark, registered):
-    """J0 carries no scoring algorithms. A Java jaro-winkler would be a fourth
-    implementation of a kernel that exists once in Rust; the jar refuses instead,
-    and the refusal must survive the Spark boundary rather than becoming a
-    plausible number."""
+def test_a_scorer_j0_refused_now_runs(spark, registered):
+    """J0 refused every scorer but `exact`, on purpose: a Java jaro-winkler would
+    have been a fourth implementation of a kernel that exists once in Rust.
+
+    This test used to assert that refusal, and asserting it now would pin the jar
+    to the limitation J2 exists to remove -- so it is inverted rather than
+    deleted. The refusal is gone because the kernel ARRIVED (JNI ->
+    ``score-cabi`` -> ``score_one``), not because the restriction was relaxed;
+    the jar still carries no algorithms of its own.
+
+    Exact agreement with the Python answer is
+    ``test_spark_jvm_native_parity.py``'s job. What matters here is only that the
+    call crosses the boundary and comes back with real work done.
+    """
+    df = spark.createDataFrame([(["jonathan"], ["jonothan"])], ["xs", "ys"])
+    got = df.selectExpr(
+        f"{registered}({scorer_id('jaro_winkler')}, xs, ys) AS s"
+    ).collect()[0]["s"]
+    assert len(got) == 1
+    # A partial similarity: not `exact`'s 0.0, and not a trivially perfect 1.0.
+    assert 0.0 < got[0] < 1.0, (
+        f"expected a real jaro-winkler score, got {got[0]}. A 0.0 here would "
+        f"mean the id fell through to the kernel's catch-all arm."
+    )
+
+
+def test_an_id_the_kernel_does_not_know_is_still_refused(spark, registered):
+    """The refusal that must NOT go away.
+
+    ``score_one``'s catch-all returns 0.0 for an unknown id -- a confident wrong
+    answer rather than an error. J2 widened what the jar accepts to the loaded
+    kernel's own id range; anything outside it still has to fail loudly, and the
+    failure has to survive the Spark boundary rather than arriving as a plausible
+    number.
+    """
     df = spark.createDataFrame([(["a"], ["b"])], ["xs", "ys"])
     with pytest.raises(Exception) as err:  # noqa: PT011 - Spark wraps the cause
-        df.selectExpr(
-            f"{registered}({scorer_id('jaro_winkler')}, xs, ys) AS s"
-        ).collect()
-    assert "score-cabi" in str(err.value) or "ExactScorer" in str(err.value), (
+        df.selectExpr(f"{registered}(9999, xs, ys) AS s").collect()
+    assert "9999" in str(err.value), (
         f"the refusal did not survive the boundary: {err.value}"
     )
