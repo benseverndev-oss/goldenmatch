@@ -356,3 +356,110 @@ def test_u_from_counts_excludes_unobserved_from_the_denominator():
     assert u[first.field][0] == pytest.approx(
         (10 + 1e-6) / (10 + first.levels * 1e-6), abs=1e-12
     ), "the 90 unobserved pairs must not be in the denominator"
+
+
+def test_a_conditioned_field_gets_the_FIXED_weights_not_log2_m_over_u():
+    """A blocking field's weights are the bounded -3..+3 ramp, not log2(m/u).
+
+    `train_em` does this (probabilistic.py, "Fixed weights: linearly increasing
+    from -3 to +3"), `estimate_m_from_labels` mirrors it, and the Rust
+    `em_core.rs` implements it. The counted path did not, and the two halves of
+    #1835 both broke:
+
+      * the DISAGREEMENT PENALTY, which drives precision, was more than halved
+        (-1.54 against -3.0 on the fixture below);
+      * the AGREEMENT WEIGHT, bounded at +3.0 to preserve recall, ran to +4.47.
+
+    A conditioned field's `m` is never updated -- it keeps the exponential
+    init -- so `log2(m/u)` there is the ratio of an arbitrary initialisation to
+    a random-pair estimate. It is not a quantity, and it lands in the model
+    looking exactly like every other weight.
+    """
+    from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+    from goldenmatch.core.probabilistic import train_em_from_counts
+
+    mk = MatchkeyConfig(
+        name="fs", type="probabilistic",
+        fields=[
+            MatchkeyField(field="first", scorer="jaro_winkler", levels=2,
+                          partial_threshold=0.8),
+            MatchkeyField(field="zip", scorer="exact", levels=2),
+        ],
+    )
+    patterns = [((0, 1), 500), ((1, 1), 300), ((0, 0), 150), ((1, 0), 50)]
+    u = {"first": [0.9, 0.1], "zip": [0.97, 0.03]}
+
+    em = train_em_from_counts(mk, patterns, u, conditioned_fields=("zip",))
+
+    assert em.match_weights["zip"] == pytest.approx([-3.0, 3.0], abs=1e-12), (
+        "a conditioned field must carry the bounded fixed ramp; got "
+        f"{em.match_weights['zip']}"
+    )
+    # `first` is free, so it must still be LEARNED -- if it also came back
+    # [-3, 3] the rule is being applied to everything.
+    assert em.match_weights["first"] != pytest.approx([-3.0, 3.0], abs=1e-9)
+
+
+def test_a_three_level_conditioned_field_ramps_across_its_levels():
+    """The ramp is `-3 + 6k/(n-1)`, so 3 levels give -3, 0, +3.
+
+    Hard-coding two levels would pass the test above and silently give a
+    3-level blocking field a 2-element weight vector, which indexes out of
+    range at scoring time or, worse, reads the wrong level's weight.
+    """
+    from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+    from goldenmatch.core.probabilistic import train_em_from_counts
+
+    mk = MatchkeyConfig(
+        name="fs", type="probabilistic",
+        fields=[
+            MatchkeyField(field="first", scorer="jaro_winkler", levels=2,
+                          partial_threshold=0.8),
+            MatchkeyField(field="city", scorer="jaro_winkler", levels=3,
+                          partial_threshold=0.7),
+        ],
+    )
+    patterns = [((0, 2), 400), ((1, 2), 300), ((0, 0), 200), ((1, 1), 100)]
+    u = {"first": [0.9, 0.1], "city": [0.8, 0.15, 0.05]}
+
+    em = train_em_from_counts(mk, patterns, u, conditioned_fields=("city",))
+    assert em.match_weights["city"] == pytest.approx([-3.0, 0.0, 3.0], abs=1e-12)
+
+
+def test_a_conditioned_field_reports_the_NEUTRAL_u_not_the_one_passed_in():
+    """`train_em` neutralises u for conditioned fields; the counted path must too.
+
+    Found by the Rust parity gate (Phase 0), which is the point of having one:
+    `em_core.rs` neutralised and Python did not, and the disagreement is
+    invisible from either side alone.
+
+    It does not change the E-step -- a conditioned field is skipped there -- so
+    nothing about the trained m moves. What it changes is the u vector the
+    persisted EMResult carries, which is half the model: a caller reading
+    `em.u_probs["zip"]` off a model trained this way would see a near-unique
+    random-pair estimate where `train_em` reports the fixed prior.
+    """
+    from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+    from goldenmatch.core.probabilistic import train_em_from_counts
+
+    mk = MatchkeyConfig(
+        name="fs", type="probabilistic",
+        fields=[
+            MatchkeyField(field="first", scorer="jaro_winkler", levels=2,
+                          partial_threshold=0.8),
+            MatchkeyField(field="zip", scorer="exact", levels=2),
+        ],
+    )
+    em = train_em_from_counts(
+        mk, [((1, 1), 500), ((0, 1), 300)],
+        {"first": [0.9, 0.1], "zip": [0.999, 0.001]},
+        conditioned_fields=("zip",),
+    )
+
+    assert em.u_probs["zip"] == pytest.approx([0.5, 0.5], abs=1e-12), (
+        "the near-unique u handed in must not survive into the model for a "
+        "field the blocking made unrepresentative"
+    )
+    assert em.u_probs["first"] == pytest.approx([0.9, 0.1], abs=1e-12), (
+        "a free field must keep the u it was given"
+    )

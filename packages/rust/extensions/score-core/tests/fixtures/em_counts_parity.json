@@ -1,0 +1,491 @@
+{
+  "_generated_by": "scripts/gen_fs_em_parity_fixture.py",
+  "_reference": "goldenmatch.core.probabilistic",
+  "_tolerances": {
+    "probabilities": 1e-09,
+    "match_weights": 1e-07
+  },
+  "_tolerance_reason": "libm ln/log2/exp differ from CPython in the low mantissa bits, so parity is decision-level rather than bitwise. Weights get the looser bound because they amplify small m near the 1e-10 floor.",
+  "cases": [
+    {
+      "name": "two_level_learnable_only",
+      "why": "the base case: both fields free, so every weight is log2(m/u)",
+      "fields": [
+        {
+          "name": "first",
+          "n_levels": 2
+        },
+        {
+          "name": "last",
+          "n_levels": 2
+        }
+      ],
+      "patterns": [
+        [
+          1,
+          1
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          0,
+          0
+        ]
+      ],
+      "counts": [
+        500,
+        300,
+        150,
+        50
+      ],
+      "u_probs_in": [
+        [
+          0.9,
+          0.1
+        ],
+        [
+          0.85,
+          0.15
+        ]
+      ],
+      "conditioned": [
+        false,
+        false
+      ],
+      "expect": {
+        "m_probs": [
+          [
+            0.34718191289321637,
+            0.6528180871067837
+          ],
+          [
+            0.1966712071449673,
+            0.8033287928550328
+          ]
+        ],
+        "u_probs": [
+          [
+            0.9,
+            0.1
+          ],
+          [
+            0.85,
+            0.15
+          ]
+        ],
+        "match_weights": [
+          [
+            -1.3742332116638434,
+            2.706681029456731
+          ],
+          [
+            -2.111677080124582,
+            2.4210280856960886
+          ]
+        ],
+        "proportion_matched": 0.9944466076137125,
+        "converged": true,
+        "iterations": 15
+      },
+      "expect_u_from_counts": [
+        [
+          0.3500000003,
+          0.6499999997
+        ],
+        [
+          0.2000000006,
+          0.7999999994
+        ]
+      ]
+    },
+    {
+      "name": "near_unique_blocking_field_1836",
+      "why": "THE #1836 case. `zip` is near-unique, so a learned u collapses toward the smoothing floor and log2(m/u) explodes past 20 bits, letting one field dominate every other. It must come back neutral-u with the bounded -3..+3 ramp instead. This is the case that fails silently.",
+      "fields": [
+        {
+          "name": "first",
+          "n_levels": 2
+        },
+        {
+          "name": "zip",
+          "n_levels": 2
+        }
+      ],
+      "patterns": [
+        [
+          1,
+          1
+        ],
+        [
+          0,
+          1
+        ]
+      ],
+      "counts": [
+        500,
+        300
+      ],
+      "u_probs_in": [
+        [
+          0.9,
+          0.1
+        ],
+        [
+          0.999,
+          0.001
+        ]
+      ],
+      "conditioned": [
+        false,
+        true
+      ],
+      "expect": {
+        "m_probs": [
+          [
+            0.001068680567278574,
+            0.9989313194327214
+          ],
+          [
+            0.3333333333333333,
+            0.6666666666666666
+          ]
+        ],
+        "u_probs": [
+          [
+            0.9,
+            0.1
+          ],
+          [
+            0.5,
+            0.5
+          ]
+        ],
+        "match_weights": [
+          [
+            -9.717950500806209,
+            3.3203854903099943
+          ],
+          [
+            -3.0,
+            3.0
+          ]
+        ],
+        "proportion_matched": 0.5683114341681318,
+        "converged": true,
+        "iterations": 4
+      },
+      "expect_u_from_counts": [
+        [
+          0.3750000003125,
+          0.6249999996875
+        ],
+        [
+          1.249999996875e-09,
+          0.99999999875
+        ]
+      ]
+    },
+    {
+      "name": "three_level_conditioned",
+      "why": "a 3-level conditioned field must ramp -3, 0, +3 across ITS levels; a hard-coded two-element ramp would index wrong at scoring time",
+      "fields": [
+        {
+          "name": "first",
+          "n_levels": 2
+        },
+        {
+          "name": "city",
+          "n_levels": 3
+        }
+      ],
+      "patterns": [
+        [
+          1,
+          2
+        ],
+        [
+          0,
+          2
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          0,
+          1
+        ]
+      ],
+      "counts": [
+        400,
+        300,
+        200,
+        100
+      ],
+      "u_probs_in": [
+        [
+          0.9,
+          0.1
+        ],
+        [
+          0.8,
+          0.15,
+          0.05
+        ]
+      ],
+      "conditioned": [
+        false,
+        true
+      ],
+      "expect": {
+        "m_probs": [
+          [
+            0.0013403384468370417,
+            0.998659661553163
+          ],
+          [
+            0.14285714285714285,
+            0.2857142857142857,
+            0.5714285714285714
+          ]
+        ],
+        "u_probs": [
+          [
+            0.9,
+            0.1
+          ],
+          [
+            0.34,
+            0.33,
+            0.33
+          ]
+        ],
+        "match_weights": [
+          [
+            -9.391183851786712,
+            3.3199930981918846
+          ],
+          [
+            -3.0,
+            0.0,
+            3.0
+          ]
+        ],
+        "proportion_matched": 0.5396783640662413,
+        "converged": true,
+        "iterations": 4
+      },
+      "expect_u_from_counts": [
+        [
+          0.4000000002,
+          0.5999999998
+        ],
+        [
+          0.2000000004,
+          0.1000000007,
+          0.6999999989
+        ]
+      ]
+    },
+    {
+      "name": "unobserved_entries",
+      "why": "-1 is UNOBSERVED: it must carry no evidence and stay out of the denominator, not be read as level -1 or as a disagreement",
+      "fields": [
+        {
+          "name": "first",
+          "n_levels": 2
+        },
+        {
+          "name": "last",
+          "n_levels": 2
+        }
+      ],
+      "patterns": [
+        [
+          1,
+          -1
+        ],
+        [
+          -1,
+          1
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          0,
+          0
+        ]
+      ],
+      "counts": [
+        400,
+        300,
+        200,
+        100
+      ],
+      "u_probs_in": [
+        [
+          0.9,
+          0.1
+        ],
+        [
+          0.85,
+          0.15
+        ]
+      ],
+      "conditioned": [
+        false,
+        false
+      ],
+      "expect": {
+        "m_probs": [
+          [
+            1.7454676659281926e-09,
+            0.9999999982545325
+          ],
+          [
+            2.124773663420994e-09,
+            0.9999999978752263
+          ]
+        ],
+        "u_probs": [
+          [
+            0.9,
+            0.1
+          ],
+          [
+            0.85,
+            0.15
+          ]
+        ],
+        "match_weights": [
+          [
+            -28.94173612873626,
+            3.321928092369185
+          ],
+          [
+            -28.575578430652385,
+            2.7369655911008057
+          ]
+        ],
+        "proportion_matched": 0.8455727647293606,
+        "converged": true,
+        "iterations": 3
+      },
+      "expect_u_from_counts": [
+        [
+          0.14285714387755102,
+          0.857142856122449
+        ],
+        [
+          0.16666666777777778,
+          0.8333333322222223
+        ]
+      ]
+    },
+    {
+      "name": "weights_are_counts_not_proportions",
+      "why": "the same shape as case 1 at 1/100th the counts. The 1e-6 smoothing is ADDITIVE, so this must NOT equal case 1 -- if a port normalises the weights it will, and the difference lands in the low-probability cells where FS weights are largest",
+      "fields": [
+        {
+          "name": "first",
+          "n_levels": 2
+        },
+        {
+          "name": "last",
+          "n_levels": 2
+        }
+      ],
+      "patterns": [
+        [
+          1,
+          1
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          0,
+          0
+        ]
+      ],
+      "counts": [
+        5,
+        3,
+        1,
+        1
+      ],
+      "u_probs_in": [
+        [
+          0.9,
+          0.1
+        ],
+        [
+          0.85,
+          0.15
+        ]
+      ],
+      "conditioned": [
+        false,
+        false
+      ],
+      "expect": {
+        "m_probs": [
+          [
+            0.36570669826296015,
+            0.63429330173704
+          ],
+          [
+            0.1553117994961843,
+            0.8446882005038158
+          ]
+        ],
+        "u_probs": [
+          [
+            0.9,
+            0.1
+          ],
+          [
+            0.85,
+            0.15
+          ]
+        ],
+        "match_weights": [
+          [
+            -1.2992379502012152,
+            2.6651501071057044
+          ],
+          [
+            -2.4522954015575333,
+            2.493456397360316
+          ]
+        ],
+        "proportion_matched": 0.9352765747639333,
+        "converged": true,
+        "iterations": 18
+      },
+      "expect_u_from_counts": [
+        [
+          0.400000019999996,
+          0.599999980000004
+        ],
+        [
+          0.20000005999998802,
+          0.799999940000012
+        ]
+      ]
+    }
+  ]
+}

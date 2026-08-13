@@ -52,3 +52,11 @@ alias = ["dep:regex"]
 # The strsim primitives + their rapidfuzz parity oracle moved to the
 # `goldenfuzz-core` crate (see [dependencies]); the rapidfuzz dev-dep went with
 # them. score-core no longer references rapidfuzz at all.
+
+[dev-dependencies]
+# Reads the committed FS-EM parity fixture (tests/fixtures/em_counts_parity.json,
+# emitted by scripts/gen_fs_em_parity_fixture.py). A DEV-dependency on purpose:
+# it never reaches the shipped rlib, so the wasm surface's bundle budget and this
+# crate's minimal-dependency posture are both untouched. Same version the rest of
+# the workspace already pins.
+serde_json = "1"

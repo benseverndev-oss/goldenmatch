@@ -1264,6 +1264,32 @@ def estimate_u_from_counts(
     return u_probs
 
 
+def _fixed_blocking_weights(field) -> list[float]:
+    """The bounded ``-3..+3`` ramp a conditioned field's weights take.
+
+    The other half of the #1835 prior (see :func:`_neutral_u_for`, which supplies
+    the ``u`` side). A conditioned field's ``m`` is never updated -- it keeps the
+    exponential initialisation -- so ``log2(m/u)`` for one of these is the ratio
+    of an arbitrary init to a random-pair estimate. It is not a quantity, and it
+    lands in the model looking exactly like every other weight.
+
+    The ramp supplies both properties the estimate would destroy: a real
+    DISAGREEMENT PENALTY at the bottom (drives precision) and an agreement
+    weight BOUNDED at +3 (preserves recall, by denying a near-unique key the
+    20-plus bits that let it dominate every other field).
+
+    One definition, because :func:`train_em`, :func:`train_em_from_counts`,
+    :func:`_combine_em_sessions` and :func:`estimate_m_from_labels` all need it,
+    and it is already implemented a fifth time in Rust
+    (``score-core/src/em_core.rs``). Copies of a calibration rule diverge
+    silently: every variant still produces a plausible weight vector.
+    """
+    n = field.levels
+    if n <= 1:
+        return [3.0]
+    return [-3.0 + 6.0 * k / (n - 1) for k in range(n)]
+
+
 def _neutral_u_for(field) -> list[float]:
     """The fixed ``u`` prior for a field EM must not learn from random pairs.
 
@@ -1345,13 +1371,21 @@ def _combine_em_sessions(
     total_w = sum(w for _, _, w in sessions)
     proportion = sum(em.proportion_matched * w for _, em, w in sessions) / total_w
 
-    match_weights = {
-        name: [
-            math.log2(max(m, 1e-10) / max(u, 1e-10))
-            for m, u in zip(m_probs[name], u_probs.get(name, m_probs[name]))
-        ]
-        for name in m_probs
-    }
+    # Recomputed from the COMBINED m/u rather than averaged from the sessions:
+    # log2 of a mean is not the mean of the log2s, and averaging the weights
+    # would give a model whose weights do not match its own probabilities.
+    match_weights = {}
+    for f in mk.fields:
+        name = f.field
+        if name not in m_probs:
+            continue
+        if name in blocking_union:
+            match_weights[name] = _fixed_blocking_weights(f)
+        else:
+            match_weights[name] = [
+                math.log2(max(m, 1e-10) / max(u, 1e-10))
+                for m, u in zip(m_probs[name], u_probs.get(name, m_probs[name]))
+            ]
     return EMResult(
         m_probs=m_probs,
         u_probs=u_probs,
@@ -1440,6 +1474,16 @@ def train_em_from_counts(
     # from evidence the blocking removed.
     always_conditioned = {f.field for f in mk.fields if f.field in conditioned}
 
+    # The #1835 prior, same as `train_em` applies. This does NOT move the
+    # trained m -- a conditioned field is skipped in the E-step either way --
+    # but `u_probs` is half the persisted model, and a caller reading it off a
+    # model trained here would otherwise see a near-unique random-pair estimate
+    # where `train_em` reports the fixed prior. Found by the Rust parity gate.
+    u_probs = dict(u_probs)
+    for f in mk.fields:
+        if f.field in always_conditioned:
+            u_probs[f.field] = _neutral_u_for(f)
+
     empty_ne = np.zeros((len(pattern_counts), 0), dtype=np.int64)
     m_probs, _m_ne, p_match, converged, iterations = _em_iterate(
         mk, comp_matrix, empty_ne, conditioned_mask,
@@ -1448,14 +1492,15 @@ def train_em_from_counts(
         None, None, max_iterations, convergence,
     )
 
-    match_weights = {
-        f.field: [
-            math.log2(max(m, 1e-10) / max(u, 1e-10))
-            for m, u in zip(m_probs[f.field], u_probs[f.field])
-        ]
-        for f in mk.fields
-        if f.field in m_probs and f.field in u_probs
-    }
+    match_weights = {}
+    for f in mk.fields:
+        if f.field in always_conditioned:
+            match_weights[f.field] = _fixed_blocking_weights(f)
+        elif f.field in m_probs and f.field in u_probs:
+            match_weights[f.field] = [
+                math.log2(max(m, 1e-10) / max(u, 1e-10))
+                for m, u in zip(m_probs[f.field], u_probs[f.field])
+            ]
     logger.info(
         "EM from counts: %d patterns, %.0f pairs, converged=%s in %d iterations",
         len(pattern_counts), total_weight, converged, iterations,
@@ -2010,12 +2055,7 @@ def train_em(
     match_weights = {}
     for f in mk.fields:
         if f.field in always_conditioned:
-            # Fixed weights: linearly increasing from -3 to +3
-            n = f.levels
-            match_weights[f.field] = [
-                -3.0 + 6.0 * k / (n - 1) if n > 1 else 3.0
-                for k in range(n)
-            ]
+            match_weights[f.field] = _fixed_blocking_weights(f)
             logger.debug("Using fixed weights for blocking field '%s'", f.field)
             continue
 
@@ -2304,10 +2344,7 @@ def estimate_m_from_labels(
     match_weights: dict[str, list[float]] = {}
     for f in mk.fields:
         if f.field in blocking_fields:
-            n = f.levels
-            match_weights[f.field] = [
-                -3.0 + 6.0 * k / (n - 1) if n > 1 else 3.0 for k in range(n)
-            ]
+            match_weights[f.field] = _fixed_blocking_weights(f)
             continue
         match_weights[f.field] = [
             math.log2(max(m_probs[f.field][k], 1e-10) / max(u_probs[f.field][k], 1e-10))
