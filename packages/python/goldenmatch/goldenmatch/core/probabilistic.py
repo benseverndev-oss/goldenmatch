@@ -1205,6 +1205,112 @@ def _training_pair_conditioning(
     return fallback_pairs, [frozenset(blocking_fields)] * len(fallback_pairs)
 
 
+def train_em_from_counts(
+    mk: MatchkeyConfig,
+    pattern_counts: list[tuple[tuple[int, ...], int]],
+    u_probs: dict[str, list[float]],
+    *,
+    conditioned_fields: Sequence[str] = (),
+    max_iterations: int = 20,
+    convergence: float = 0.001,
+) -> EMResult:
+    """Train FS from COUNTED comparison vectors instead of a pair sample.
+
+    The last link of ``compute gammas distributed -> GROUP BY them ->
+    train_em(pair_weights=counts)``. ``pattern_counts`` is what
+    :func:`goldenmatch.spark.em.agreement_pattern_counts` returns: one row per
+    distinct comparison vector, with how many pairs had it.
+
+    Calls the SAME :func:`_em_iterate` as :func:`train_em`, so this is not a
+    second EM -- it is the same loop reached without a sampler. The vectors are
+    ordered by ``mk.fields``, matching ``_build_comparison_matrix``.
+
+    Args:
+        u_probs: estimated from RANDOM (unblocked) pairs, which this function
+            does not see. Required rather than defaulted: u is half the
+            likelihood ratio, and inventing it here would produce a model whose
+            weights are wrong in a direction nobody could spot from the m
+            estimates. Splink keeps the same separation (``estimate_u.py``).
+        conditioned_fields: fields the blocking pass makes uninformative -- the
+            pass conditioning, constant within a session, which is exactly why
+            the counts needed no pass column.
+
+    Not supported here, and refused rather than ignored: negative evidence and
+    term-frequency adjustment. Both need per-pair inputs this function is not
+    given (an NE matrix, and the value frequencies), and silently dropping them
+    would train a different model from the one the config asks for.
+    """
+    if not pattern_counts:
+        raise ValueError("pattern_counts is empty; nothing to train on")
+    if _em_ne_fields(mk):
+        raise NotImplementedError(
+            f"matchkey {mk.name!r} has negative-evidence fields, which need a "
+            f"per-pair NE matrix that counted comparison vectors do not carry. "
+            f"Train it with train_em() on sampled pairs."
+        )
+    if any(getattr(f, "tf_adjustment", False) for f in mk.fields):
+        raise NotImplementedError(
+            f"matchkey {mk.name!r} uses term-frequency adjustment, which needs "
+            f"per-value frequencies that counted comparison vectors do not "
+            f"carry. Train it with train_em() on sampled pairs."
+        )
+
+    n_fields = len(mk.fields)
+    for vec, count in pattern_counts:
+        if len(vec) != n_fields:
+            raise ValueError(
+                f"comparison vector {vec} has {len(vec)} entries but the "
+                f"matchkey has {n_fields} fields -- the vectors must be ordered "
+                f"by mk.fields"
+            )
+        if count <= 0:
+            raise ValueError(f"pattern {vec} has non-positive count {count}")
+
+    comp_matrix = np.asarray([v for v, _ in pattern_counts], dtype=np.int64)
+    w = np.asarray([float(c) for _, c in pattern_counts], dtype=np.float64)
+    total_weight = float(w.sum())
+
+    conditioned = set(conditioned_fields)
+    conditioned_mask = np.asarray(
+        [[f.field in conditioned for f in mk.fields]] * len(pattern_counts),
+        dtype=bool,
+    )
+    # Constant across rows within a session, so a field conditioned by this
+    # pass is conditioned for every row -- the `always_conditioned` case, and
+    # the reason those fields keep the fixed prior rather than being learned
+    # from evidence the blocking removed.
+    always_conditioned = {f.field for f in mk.fields if f.field in conditioned}
+
+    empty_ne = np.zeros((len(pattern_counts), 0), dtype=np.int64)
+    m_probs, _m_ne, p_match, converged, iterations = _em_iterate(
+        mk, comp_matrix, empty_ne, conditioned_mask,
+        np.zeros((len(pattern_counts), 0), dtype=bool),
+        w, total_weight, [], u_probs, {}, always_conditioned, set(),
+        None, None, max_iterations, convergence,
+    )
+
+    match_weights = {
+        f.field: [
+            math.log2(max(m, 1e-10) / max(u, 1e-10))
+            for m, u in zip(m_probs[f.field], u_probs[f.field])
+        ]
+        for f in mk.fields
+        if f.field in m_probs and f.field in u_probs
+    }
+    logger.info(
+        "EM from counts: %d patterns, %.0f pairs, converged=%s in %d iterations",
+        len(pattern_counts), total_weight, converged, iterations,
+    )
+    return EMResult(
+        m_probs=m_probs,
+        u_probs={k: list(v) for k, v in u_probs.items()},
+        match_weights=match_weights,
+        converged=converged,
+        iterations=iterations,
+        proportion_matched=p_match,
+    )
+
+
 def train_em_per_pass(
     df: pl.DataFrame,
     mk: MatchkeyConfig,
@@ -1329,6 +1435,197 @@ def train_em_per_pass(
         tf_freqs=base.tf_freqs,
         tf_collision=base.tf_collision,
     )
+
+
+def _em_iterate(
+    mk: MatchkeyConfig,
+    comp_matrix,
+    ne_matrix,
+    conditioned_mask,
+    ne_conditioned_mask,
+    w,
+    total_weight: float,
+    ne_fields_em: list,
+    u_probs: dict[str, list[float]],
+    u_probs_ne: dict[str, list[float]],
+    always_conditioned: set,
+    always_conditioned_ne: set,
+    label_clamp_idx,
+    label_clamp_val,
+    max_iterations: int,
+    convergence: float,
+):
+    """The EM loop itself: seed m, iterate to convergence, return the estimates.
+
+    Extracted so there is ONE implementation of the iteration and two ways to
+    reach it -- from sampled pairs (:func:`train_em`) and from precomputed
+    comparison rows carrying counts (:func:`train_em_from_counts`). A second
+    copy would drift, and the drift would be invisible: both copies would go on
+    producing valid probability vectors.
+
+    It reads nothing it is not handed. Every input is a matrix over rows, a mask
+    over rows, or a fixed parameter -- which is exactly why the rows can be
+    counted somewhere else (a cluster) and passed in as ``w``.
+
+    Returns ``(m_probs, m_probs_ne, p_match, converged, iterations)``.
+    """
+    n_pairs = comp_matrix.shape[0]
+    # Initialize m with strong priors (matches mostly agree at highest level)
+    p_match = 0.02  # conservative prior
+    m_probs = {}
+    for j, f in enumerate(mk.fields):
+        n_levels = f.levels
+        # Exponential prior: highest level gets most mass
+        raw = [2 ** k for k in range(n_levels)]
+        total = sum(raw)
+        m_probs[f.field] = [r / total for r in raw]
+
+    # NE dims: fired is rare in matches (a true match usually agrees on the
+    # NE field), so seed m with a low fired-probability prior.
+    m_probs_ne: dict[str, list[float]] = {ne.field: [0.05, 0.95] for ne in ne_fields_em}
+
+    # Pair weights. `None` -> all ones, which is the pair-wise caller and is
+    # bit-identical to the unweighted arithmetic it replaces (x*1.0 == x).
+    # An aggregated caller passes one row per DISTINCT (comparison vector,
+    # conditioning, NE vector) with its count, which is exact rather than a
+    # sample: the E-step reads only those three things, so identical rows have
+    # identical posteriors and every M-step sum is linear in the count.
+    #
+    # Bounded, too: the number of distinct rows is at most the product over
+    # fields of (levels + 1), times the number of blocking passes -- thousands,
+    # not millions -- which is what lets the comparison vectors be counted
+    # anywhere (a cluster, say) and the iteration run on the result.
+    #
+    # WEIGHTS ARE COUNTS, and the scale is load-bearing. The M-step smoothing
+    #
+    #     new_m[level] = (sum + 1e-6) / (eligible_match + n_levels * 1e-6)
+    #
+    # is additive and unscaled, so its influence shrinks as the weighted totals
+    # grow -- correct for a prior, and it means doubling every weight is NOT a
+    # no-op. Aggregation is exact only because collapsing identical rows
+    # regroups the terms of each sum WITHOUT changing the total: the represented
+    # population is the same, so the smoothing constant weighs the same. Pass
+    # normalised or rescaled weights and the low-probability cells shift, which
+    # is where log2(m/u) is largest and the shift is least visible.
+    # Pinned by tests/test_fs_em_weighted_pairs.py.
+    # ── Step 3: EM iterations — only update m, fix u ──
+    converged = False
+    for iteration in range(max_iterations):
+        old_m = {k: list(v) for k, v in m_probs.items()}
+        old_m_ne = {k: list(v) for k, v in m_probs_ne.items()}
+
+        # E-step: compute posterior P(match | comparison vector).
+        # Vectorized over pairs (this was the FS-training bottleneck: a
+        # per-pair Python loop with math.log/exp -- ~1.1s of a 1.46s
+        # train_em at n_sample_pairs=10000). Per-field log-prob lookup tables
+        # are gathered by level and summed left-to-right (j = 0..n_fields-1),
+        # matching the scalar accumulation order so results stay
+        # bit-identical to the loop it replaces.
+        log_m = np.zeros(n_pairs)
+        log_u = np.zeros(n_pairs)
+        for j, f in enumerate(mk.fields):
+            levels_j = comp_matrix[:, j]
+            observed = levels_j >= 0
+            m_table = np.log(np.maximum(np.asarray(m_probs[f.field], dtype=np.float64), 1e-10))
+            u_table = np.log(np.maximum(np.asarray(u_probs[f.field], dtype=np.float64), 1e-10))
+            # Compose #1819 (unobserved: level -1 carries no evidence) with
+            # #1835 (pass-conditioned pairs carry no evidence for this field).
+            eligible = observed & ~conditioned_mask[:, j]
+            log_m[eligible] += m_table[levels_j[eligible]]
+            log_u[eligible] += u_table[levels_j[eligible]]
+
+        # NE dims: same E-step accumulation, 2-entry [fired, not_fired]
+        # lookup tables indexed by the NE matrix's {0, 1} columns.
+        for j, ne in enumerate(ne_fields_em):
+            levels_j = ne_matrix[:, j]
+            m_table = np.log(np.maximum(np.asarray(m_probs_ne[ne.field], dtype=np.float64), 1e-10))
+            u_table = np.log(np.maximum(np.asarray(u_probs_ne[ne.field], dtype=np.float64), 1e-10))
+            eligible = ~ne_conditioned_mask[:, j]
+            log_m[eligible] += m_table[levels_j[eligible]]
+            log_u[eligible] += u_table[levels_j[eligible]]
+
+        log_match = math.log(max(p_match, 1e-10)) + log_m
+        log_nonmatch = math.log(max(1 - p_match, 1e-10)) + log_u
+
+        max_log = np.maximum(log_match, log_nonmatch)
+        e_match = np.exp(log_match - max_log)
+        e_nonmatch = np.exp(log_nonmatch - max_log)
+        posteriors = e_match / (e_match + e_nonmatch)
+
+        # Semi-supervised clamp: pin labeled anchors' responsibility to the
+        # label so the M-step re-estimates m (and p_match) with those pairs as
+        # ground truth. u stays fixed from the random-pair estimate, exactly as
+        # in unsupervised EM. No-op when no anchors were supplied.
+        if label_clamp_idx is not None:
+            posteriors[label_clamp_idx] = label_clamp_val
+
+        # M-step: update ONLY m_probs and p_match (u is fixed)
+        #
+        # Every quantity below is a SUM OVER PAIRS, which is the whole reason
+        # `pair_weights` can exist: two pairs with the same comparison vector,
+        # the same pass conditioning and the same NE vector contribute
+        # identically to every one of them, so they can be collapsed into one
+        # row carrying a count. `w` is all-ones for the pair-wise caller, and
+        # the aggregated caller passes the counts. Same arithmetic either way.
+        wp = posteriors * w
+        total_match = wp.sum()
+        p_match = max(total_match / total_weight, 1e-6)
+
+        for j, f in enumerate(mk.fields):
+            if f.field in always_conditioned:
+                continue  # skip blocked fields
+            n_levels = f.levels
+            # Compose #1819 + #1835: a pair contributes to this field's m
+            # only when the comparison was OBSERVED (level >= 0) and the pair
+            # is not conditioned out of this field for its pass.
+            observed = comp_matrix[:, j] >= 0
+            eligible = observed & ~conditioned_mask[:, j]
+            eligible_match = wp[eligible].sum()
+            new_m = [0.0] * n_levels
+            for level in range(n_levels):
+                mask = eligible & (comp_matrix[:, j] == level)
+                new_m[level] = (wp[mask].sum() + 1e-6) / (
+                    eligible_match + n_levels * 1e-6
+                )
+            m_probs[f.field] = new_m
+
+        # NE dimensions use the same pair-level conditioning. A field that
+        # blocks one pass can still learn its veto from the other passes.
+        for j, ne in enumerate(ne_fields_em):
+            if ne.field in always_conditioned_ne:
+                continue
+            new_m_ne = [0.0, 0.0]
+            eligible = ~ne_conditioned_mask[:, j]
+            eligible_match = wp[eligible].sum()
+            for level in range(2):
+                mask = eligible & (ne_matrix[:, j] == level)
+                new_m_ne[level] = (wp[mask].sum() + 1e-6) / (
+                    eligible_match + 2 * 1e-6
+                )
+            m_probs_ne[ne.field] = new_m_ne
+
+        # Check convergence (only m changes)
+        max_delta = 0.0
+        for f in mk.fields:
+            if f.field in always_conditioned:
+                continue
+            for k in range(f.levels):
+                max_delta = max(max_delta, abs(m_probs[f.field][k] - old_m[f.field][k]))
+        for ne in ne_fields_em:
+            if ne.field in always_conditioned_ne:
+                continue
+            for k in range(2):
+                max_delta = max(max_delta, abs(m_probs_ne[ne.field][k] - old_m_ne[ne.field][k]))
+
+        if max_delta < convergence:
+            converged = True
+            logger.info("EM converged after %d iterations (delta=%.6f)", iteration + 1, max_delta)
+            break
+
+    if not converged:
+        logger.warning("EM did not converge after %d iterations (delta=%.6f)", max_iterations, max_delta)
+
+    return m_probs, m_probs_ne, p_match, converged, iteration + 1
 
 
 def train_em(
@@ -1573,44 +1870,6 @@ def train_em(
             label_clamp_val = np.asarray(vals, dtype=np.float64)
             logger.info("EM using %d semi-supervised label anchors", len(idxs))
 
-    # Initialize m with strong priors (matches mostly agree at highest level)
-    p_match = 0.02  # conservative prior
-    m_probs = {}
-    for j, f in enumerate(mk.fields):
-        n_levels = f.levels
-        # Exponential prior: highest level gets most mass
-        raw = [2 ** k for k in range(n_levels)]
-        total = sum(raw)
-        m_probs[f.field] = [r / total for r in raw]
-
-    # NE dims: fired is rare in matches (a true match usually agrees on the
-    # NE field), so seed m with a low fired-probability prior.
-    m_probs_ne: dict[str, list[float]] = {ne.field: [0.05, 0.95] for ne in ne_fields_em}
-
-    # Pair weights. `None` -> all ones, which is the pair-wise caller and is
-    # bit-identical to the unweighted arithmetic it replaces (x*1.0 == x).
-    # An aggregated caller passes one row per DISTINCT (comparison vector,
-    # conditioning, NE vector) with its count, which is exact rather than a
-    # sample: the E-step reads only those three things, so identical rows have
-    # identical posteriors and every M-step sum is linear in the count.
-    #
-    # Bounded, too: the number of distinct rows is at most the product over
-    # fields of (levels + 1), times the number of blocking passes -- thousands,
-    # not millions -- which is what lets the comparison vectors be counted
-    # anywhere (a cluster, say) and the iteration run on the result.
-    #
-    # WEIGHTS ARE COUNTS, and the scale is load-bearing. The M-step smoothing
-    #
-    #     new_m[level] = (sum + 1e-6) / (eligible_match + n_levels * 1e-6)
-    #
-    # is additive and unscaled, so its influence shrinks as the weighted totals
-    # grow -- correct for a prior, and it means doubling every weight is NOT a
-    # no-op. Aggregation is exact only because collapsing identical rows
-    # regroups the terms of each sum WITHOUT changing the total: the represented
-    # population is the same, so the smoothing constant weighs the same. Pass
-    # normalised or rescaled weights and the low-probability cells shift, which
-    # is where log2(m/u) is largest and the shift is least visible.
-    # Pinned by tests/test_fs_em_weighted_pairs.py.
     if pair_weights is None:
         w = np.ones(n_pairs, dtype=np.float64)
     else:
@@ -1624,122 +1883,14 @@ def train_em(
             raise ValueError("pair_weights must all be positive")
     total_weight = float(w.sum())
 
-    # ── Step 3: EM iterations — only update m, fix u ──
-    converged = False
-    for iteration in range(max_iterations):
-        old_m = {k: list(v) for k, v in m_probs.items()}
-        old_m_ne = {k: list(v) for k, v in m_probs_ne.items()}
-
-        # E-step: compute posterior P(match | comparison vector).
-        # Vectorized over pairs (this was the FS-training bottleneck: a
-        # per-pair Python loop with math.log/exp -- ~1.1s of a 1.46s
-        # train_em at n_sample_pairs=10000). Per-field log-prob lookup tables
-        # are gathered by level and summed left-to-right (j = 0..n_fields-1),
-        # matching the scalar accumulation order so results stay
-        # bit-identical to the loop it replaces.
-        log_m = np.zeros(n_pairs)
-        log_u = np.zeros(n_pairs)
-        for j, f in enumerate(mk.fields):
-            levels_j = comp_matrix[:, j]
-            observed = levels_j >= 0
-            m_table = np.log(np.maximum(np.asarray(m_probs[f.field], dtype=np.float64), 1e-10))
-            u_table = np.log(np.maximum(np.asarray(u_probs[f.field], dtype=np.float64), 1e-10))
-            # Compose #1819 (unobserved: level -1 carries no evidence) with
-            # #1835 (pass-conditioned pairs carry no evidence for this field).
-            eligible = observed & ~conditioned_mask[:, j]
-            log_m[eligible] += m_table[levels_j[eligible]]
-            log_u[eligible] += u_table[levels_j[eligible]]
-
-        # NE dims: same E-step accumulation, 2-entry [fired, not_fired]
-        # lookup tables indexed by the NE matrix's {0, 1} columns.
-        for j, ne in enumerate(ne_fields_em):
-            levels_j = ne_matrix[:, j]
-            m_table = np.log(np.maximum(np.asarray(m_probs_ne[ne.field], dtype=np.float64), 1e-10))
-            u_table = np.log(np.maximum(np.asarray(u_probs_ne[ne.field], dtype=np.float64), 1e-10))
-            eligible = ~ne_conditioned_mask[:, j]
-            log_m[eligible] += m_table[levels_j[eligible]]
-            log_u[eligible] += u_table[levels_j[eligible]]
-
-        log_match = math.log(max(p_match, 1e-10)) + log_m
-        log_nonmatch = math.log(max(1 - p_match, 1e-10)) + log_u
-
-        max_log = np.maximum(log_match, log_nonmatch)
-        e_match = np.exp(log_match - max_log)
-        e_nonmatch = np.exp(log_nonmatch - max_log)
-        posteriors = e_match / (e_match + e_nonmatch)
-
-        # Semi-supervised clamp: pin labeled anchors' responsibility to the
-        # label so the M-step re-estimates m (and p_match) with those pairs as
-        # ground truth. u stays fixed from the random-pair estimate, exactly as
-        # in unsupervised EM. No-op when no anchors were supplied.
-        if label_clamp_idx is not None:
-            posteriors[label_clamp_idx] = label_clamp_val
-
-        # M-step: update ONLY m_probs and p_match (u is fixed)
-        #
-        # Every quantity below is a SUM OVER PAIRS, which is the whole reason
-        # `pair_weights` can exist: two pairs with the same comparison vector,
-        # the same pass conditioning and the same NE vector contribute
-        # identically to every one of them, so they can be collapsed into one
-        # row carrying a count. `w` is all-ones for the pair-wise caller, and
-        # the aggregated caller passes the counts. Same arithmetic either way.
-        wp = posteriors * w
-        total_match = wp.sum()
-        p_match = max(total_match / total_weight, 1e-6)
-
-        for j, f in enumerate(mk.fields):
-            if f.field in always_conditioned:
-                continue  # skip blocked fields
-            n_levels = f.levels
-            # Compose #1819 + #1835: a pair contributes to this field's m
-            # only when the comparison was OBSERVED (level >= 0) and the pair
-            # is not conditioned out of this field for its pass.
-            observed = comp_matrix[:, j] >= 0
-            eligible = observed & ~conditioned_mask[:, j]
-            eligible_match = wp[eligible].sum()
-            new_m = [0.0] * n_levels
-            for level in range(n_levels):
-                mask = eligible & (comp_matrix[:, j] == level)
-                new_m[level] = (wp[mask].sum() + 1e-6) / (
-                    eligible_match + n_levels * 1e-6
-                )
-            m_probs[f.field] = new_m
-
-        # NE dimensions use the same pair-level conditioning. A field that
-        # blocks one pass can still learn its veto from the other passes.
-        for j, ne in enumerate(ne_fields_em):
-            if ne.field in always_conditioned_ne:
-                continue
-            new_m_ne = [0.0, 0.0]
-            eligible = ~ne_conditioned_mask[:, j]
-            eligible_match = wp[eligible].sum()
-            for level in range(2):
-                mask = eligible & (ne_matrix[:, j] == level)
-                new_m_ne[level] = (wp[mask].sum() + 1e-6) / (
-                    eligible_match + 2 * 1e-6
-                )
-            m_probs_ne[ne.field] = new_m_ne
-
-        # Check convergence (only m changes)
-        max_delta = 0.0
-        for f in mk.fields:
-            if f.field in always_conditioned:
-                continue
-            for k in range(f.levels):
-                max_delta = max(max_delta, abs(m_probs[f.field][k] - old_m[f.field][k]))
-        for ne in ne_fields_em:
-            if ne.field in always_conditioned_ne:
-                continue
-            for k in range(2):
-                max_delta = max(max_delta, abs(m_probs_ne[ne.field][k] - old_m_ne[ne.field][k]))
-
-        if max_delta < convergence:
-            converged = True
-            logger.info("EM converged after %d iterations (delta=%.6f)", iteration + 1, max_delta)
-            break
-
-    if not converged:
-        logger.warning("EM did not converge after %d iterations (delta=%.6f)", max_iterations, max_delta)
+    (
+        m_probs, m_probs_ne, p_match, converged, _em_iterations
+    ) = _em_iterate(
+        mk, comp_matrix, ne_matrix, conditioned_mask, ne_conditioned_mask,
+        w, total_weight, ne_fields_em, u_probs, u_probs_ne,
+        always_conditioned, always_conditioned_ne,
+        label_clamp_idx, label_clamp_val, max_iterations, convergence,
+    )
 
     # Compute match weights: log2(m/u)
     # For blocking fields, use fixed priors since EM can't learn from
@@ -1834,7 +1985,7 @@ def train_em(
         u_probs=u_probs,
         match_weights=match_weights,
         converged=converged,
-        iterations=min(iteration + 1, max_iterations) if not converged else iteration + 1,
+        iterations=_em_iterations,
         proportion_matched=p_match,
         tf_freqs=tf_freqs,
         tf_collision=tf_collision,
