@@ -286,3 +286,73 @@ def test_negative_evidence_is_refused_not_silently_dropped():
     matrix, patterns = _patterns_and_matrix(_frame(), _make_probabilistic_mk())
     with pytest.raises(NotImplementedError, match="negative-evidence"):
         train_em_from_counts(mk, patterns, _u_from(matrix, _make_probabilistic_mk()))
+
+
+# ── u, the other half of the likelihood ratio ────────────────────────
+
+def test_u_from_counts_equals_the_u_train_em_estimates():
+    """THE gate for distributed u.
+
+    `train_em` estimates u from a RANDOM pair sample:
+
+        u[level] = (count(level) + 1e-6) / (observed + n_levels * 1e-6)
+
+    which is a per-level count and a denominator that excludes unobserved
+    (-1) entries. Both are sums over pairs, so counted vectors carry everything
+    it needs -- and this asserts that against `train_em`'s ACTUAL output rather
+    than against the formula rewritten in the test, which would pass even if
+    both copies were wrong together.
+
+    The sample is reproduced with the same seeded `_sample_pairs` call
+    `train_em` makes, so the two see the same pairs.
+    """
+    from collections import Counter
+
+    from goldenmatch.core.probabilistic import (
+        _build_comparison_matrix,
+        _row_lookup_for_pairs,
+        _sample_pairs,
+        estimate_u_from_counts,
+    )
+
+    df, mk = _frame(), _make_probabilistic_mk()
+    n, seed = 400, 7
+
+    # No blocks and no blocking_fields, so nothing is `always_conditioned` and
+    # train_em applies no neutral-u override -- this compares the ESTIMATE, not
+    # the blocking-field prior, which has its own test.
+    trained = train_em(df, mk, n_sample_pairs=n, max_iterations=25, seed=seed)
+
+    pairs = _sample_pairs(df, min(n, 5000), seed)
+    lookup = _row_lookup_for_pairs(df, [f.field for f in mk.fields], [pairs])
+    matrix = _build_comparison_matrix(pairs, lookup, mk)
+    counts = sorted(Counter(tuple(int(v) for v in r) for r in matrix).items())
+    assert len(counts) < len(matrix), "nothing collapsed; the test proves nothing"
+
+    from_counts = estimate_u_from_counts(mk, counts)
+    for f in mk.fields:
+        assert from_counts[f.field] == pytest.approx(
+            trained.u_probs[f.field], abs=1e-12
+        ), f"{f.field}: counted u differs from the u train_em estimated"
+
+
+def test_u_from_counts_excludes_unobserved_from_the_denominator():
+    """A field null on one side is UNOBSERVED (-1), not a disagreement.
+
+    Dividing by every pair instead of the observed ones would shrink every level
+    of a sparsely-populated field toward zero in proportion to its missingness,
+    inflating log2(m/u) for exactly the fields the data supports least.
+    """
+    from goldenmatch.core.probabilistic import estimate_u_from_counts
+
+    mk = _make_probabilistic_mk()
+    n_fields = len(mk.fields)
+    # 10 pairs observed at level 0, 90 pairs unobserved, on the first field.
+    obs = tuple([0] + [0] * (n_fields - 1))
+    unobs = tuple([-1] + [0] * (n_fields - 1))
+    u = estimate_u_from_counts(mk, [(obs, 10), (unobs, 90)])
+
+    first = mk.fields[0]
+    assert u[first.field][0] == pytest.approx(
+        (10 + 1e-6) / (10 + first.levels * 1e-6), abs=1e-12
+    ), "the 90 unobserved pairs must not be in the denominator"

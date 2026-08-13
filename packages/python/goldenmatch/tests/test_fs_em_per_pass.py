@@ -174,3 +174,36 @@ def test_blocks_without_provenance_fall_back_to_the_pooled_run():
     fell_back = _train(train_em_per_pass, df, blocks, blocking_fields=["zip"])
 
     assert fell_back.m_probs == pooled.m_probs
+
+
+# ── u for blocking fields: the #1835 prior, across sessions ──────────
+
+def test_every_pass_blocking_field_keeps_the_neutral_u_prior():
+    """The combination must neutralise the UNION of blocking fields.
+
+    A configured blocking field carries a deliberate fixed prior that EM cannot
+    recover from random pairs (#1835): a near-unique key's `u` collapses toward
+    the smoothing floor, which EXPLODES its agreement weight and lets one field
+    dominate the score. `train_em` guards this with
+    `always_conditioned |= set(blocking_fields)` over the union of every pass.
+
+    Each per-pass session neutralises only ITS OWN pass's fields, so lifting `u`
+    from one session leaves every other pass's blocking field carrying the
+    random-pair estimate. Measured on this fixture: `zip` came back
+    [0.977, 0.023] instead of [0.5, 0.5], a 4.4-bit swing in its agreement
+    weight. On a near-unique key it is the ~28-bit collapse #1835 records.
+
+    Nothing about the result looks wrong -- it is a valid probability vector,
+    and only a comparison against the pooled run reveals it.
+    """
+    df = _frame()
+    blocks = _blocks(df, _cfg(["zip"], ["last_name"]))
+
+    pooled = _train(train_em, df, blocks, blocking_fields=["zip", "last_name"])
+    combined = _train(train_em_per_pass, df, blocks)
+
+    for name in ("zip", "last_name"):
+        assert combined.u_probs[name] == pytest.approx(pooled.u_probs[name]), (
+            f"{name} is a blocking field of some pass, so it must carry the "
+            f"neutral prior the pooled run gives it, not a random-pair estimate"
+        )

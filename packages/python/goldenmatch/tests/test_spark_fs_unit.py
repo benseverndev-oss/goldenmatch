@@ -271,3 +271,151 @@ def test_a_saved_model_round_trips(tmp_path):
     loaded = resolve_fs_model(mk, model_path=str(p))
     assert loaded.match_weights == em.match_weights
     assert loaded.proportion_matched == pytest.approx(em.proportion_matched)
+
+
+# ── distributed EM: what it refuses, and how it sizes the u sample ───
+#
+# No Spark, so these run on every PR. They cover the checks that must fire
+# BEFORE a cluster job is submitted -- the ones whose whole value is being
+# cheap, and which a Spark-lane-only test would never prove were cheap.
+
+
+class _ExplodingFrame:
+    """Any use of this as a DataFrame raises.
+
+    A refusal that only happens after the frame is touched still costs a
+    distributed count over every blocking pass to discover a config error. This
+    makes "nothing was submitted" a testable claim rather than a code-reading
+    one.
+    """
+
+    def __getattr__(self, name):
+        raise AssertionError(
+            f"the source frame was used ({name!r}) before the config was "
+            f"refused; the check must fire before any job is submitted"
+        )
+
+
+def _ne_matchkey():
+    from goldenmatch.config.schemas import NegativeEvidenceField
+
+    mk = _fs_matchkey()
+    mk.negative_evidence = [
+        NegativeEvidenceField(field="dob", scorer="exact", threshold=0.9)
+    ]
+    return mk
+
+
+def _fs_matchkey():
+    return MatchkeyConfig(
+        name="fs",
+        type="probabilistic",
+        fields=[
+            MatchkeyField(field="first", scorer="jaro_winkler", levels=2,
+                          partial_threshold=0.8),
+            MatchkeyField(field="last", scorer="jaro_winkler", levels=2,
+                          partial_threshold=0.8),
+        ],
+    )
+
+
+def _static_config(mk, keys):
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+    )
+
+    return GoldenMatchConfig(
+        matchkeys=[mk],
+        blocking=BlockingConfig(
+            keys=[BlockingKeyConfig(fields=list(k)) for k in keys]
+        ),
+    )
+
+
+def test_negative_evidence_is_refused_before_a_job_is_submitted():
+    """NE needs a per-pair matrix counted vectors do not carry.
+
+    Refused rather than dropped: training without the NE dimensions produces a
+    model the config did not ask for, and every number in it looks reasonable.
+    """
+    from goldenmatch.spark.em import train_em_distributed
+
+    mk = _ne_matchkey()
+    with pytest.raises(NotImplementedError, match="negative-evidence"):
+        train_em_distributed(
+            _ExplodingFrame(), _static_config(mk, [["city"]]), mk, id_col="id"
+        )
+
+
+def test_term_frequency_adjustment_is_refused_before_a_job_is_submitted():
+    """TF needs per-value frequencies the counts do not carry."""
+    from goldenmatch.spark.em import train_em_distributed
+
+    mk = _fs_matchkey()
+    mk.fields[0].tf_adjustment = True
+    with pytest.raises(NotImplementedError, match="term-frequency"):
+        train_em_distributed(
+            _ExplodingFrame(), _static_config(mk, [["city"]]), mk, id_col="id"
+        )
+
+
+def test_a_config_with_no_blocking_pass_is_refused():
+    """Without a pass there are no candidate pairs, so there is no m to train.
+
+    Returning a fixed-prior model instead would be a trained-looking result from
+    a config that trained on nothing.
+    """
+    from types import SimpleNamespace
+
+    from goldenmatch.spark.em import train_em_distributed
+
+    cfg = SimpleNamespace(
+        blocking=SimpleNamespace(strategy="static", keys=[], passes=[])
+    )
+    with pytest.raises(ValueError, match="at least one blocking pass"):
+        train_em_distributed(
+            _ExplodingFrame(), cfg, _fs_matchkey(), id_col="id"
+        )
+
+
+@pytest.mark.parametrize("pairs", [10, 1_000, 1_000_000, 100_000_000])
+def test_the_u_sample_is_sized_by_the_pair_budget(pairs):
+    """`r` rows self-pair into `r(r-1)/2`, so the row count inverts that.
+
+    A cross join is quadratic, so the knob worth exposing is the pair budget;
+    picking a row count directly makes the cost a surprise.
+
+    `max_pairs` is a CEILING, so the chosen `r` must not exceed it -- and must
+    be the largest that does not, or the budget silently buys a smaller sample
+    than it paid for. Both directions asserted, because only checking the
+    ceiling would pass for `r = 2`.
+
+    Round-tripped through the forward formula rather than compared to
+    hard-coded numbers, which would pin whatever the implementation happened to
+    return rather than what it owes.
+    """
+    from goldenmatch.spark.em import _rows_needed_for_n_pairs
+
+    r = _rows_needed_for_n_pairs(pairs)
+    assert r * (r - 1) / 2 <= pairs, (
+        f"{r} rows produce {r * (r - 1) / 2:.0f} pairs, over the {pairs} budget"
+    )
+    assert (r + 1) * r / 2 > pairs, (
+        f"{r} rows leave room for more: {r + 1} rows still fit in {pairs}"
+    )
+
+
+def test_a_source_too_small_to_form_a_pair_is_refused():
+    """One record has no pairs, so u would be estimated from nothing.
+
+    The smoothing floor would still return a full set of probabilities.
+    """
+    from types import SimpleNamespace
+
+    from goldenmatch.spark.em import random_pairs
+
+    frame = SimpleNamespace(count=lambda: 1)
+    with pytest.raises(ValueError, match="at least 2 records"):
+        random_pairs(frame, id_col="id")

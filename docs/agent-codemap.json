@@ -4142,6 +4142,7 @@
             "_build_ne_matrix",
             "_build_tf_tables",
             "_calibrate_link_threshold",
+            "_combine_em_sessions",
             "_deconvolve_post_blocking_u",
             "_em_iterate",
             "_em_ne_fields",
@@ -4187,6 +4188,7 @@
             "_ne_scalar_contribution",
             "_ne_scorer_vectorizable",
             "_ne_u_probs_from_matrix",
+            "_neutral_u_for",
             "_otsu_threshold",
             "_record_concat_value",
             "_record_concat_values",
@@ -4206,6 +4208,7 @@
             "continuous_scores",
             "enforce_weight_monotonicity",
             "estimate_m_from_labels",
+            "estimate_u_from_counts",
             "explain_pair_fs",
             "fs_missing_mode",
             "fs_model_preloaded",
@@ -7916,6 +7919,8 @@
             "blocking_passes",
             "build_golden_from_rules",
             "generate_candidates",
+            "join_candidates_to_sources",
+            "pass_candidates",
             "run_config_pipeline",
             "score_candidates",
             "weighted_pair_score"
@@ -7956,13 +7961,19 @@
         {
           "module": "goldenmatch.spark.em",
           "file": "packages/python/goldenmatch/goldenmatch/spark/em.py",
-          "purpose": "Count agreement patterns on the cluster, so FS training need not sample.",
+          "purpose": "Fellegi-Sunter training on the cluster, with no pair sample anywhere.",
           "defines": [
+            "_refuse_unsupported",
+            "_rows_needed_for_n_pairs",
             "agreement_pattern_counts",
-            "gamma_columns"
+            "estimate_u_distributed",
+            "gamma_columns",
+            "random_pairs",
+            "train_em_distributed"
           ],
           "imports": [
             "goldenmatch.core.probabilistic",
+            "goldenmatch.spark.config_pipeline",
             "goldenmatch.spark.probabilistic"
           ]
         },

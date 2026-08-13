@@ -285,6 +285,71 @@ def blocking_passes(config: Any) -> list[Any]:
     return list(blocking.keys or [])
 
 
+def pass_candidates(
+    source_df: Any,
+    key_config: Any,
+    *,
+    id_col: str,
+    transform_udf: str | None = None,
+) -> Any:
+    """Candidate pairs ``(a, b)``, ``a < b``, from ONE blocking pass.
+
+    Split out of :func:`generate_candidates` because FS training needs the
+    passes separately -- a per-pass EM session is defined by the pass whose
+    conditioning it carries, and a union has lost that. Training against a
+    different candidate set from the one scoring uses would fit a model to a
+    population scoring never sees, so both go through this.
+    """
+    from pyspark.sql import functions as F
+
+    key_col, _fields = _block_key_column(key_config, transform_udf)
+    keyed = source_df.withColumn("__block_key__", key_col)
+    keyed = keyed.where(_valid_key(F.col("__block_key__")))
+    a = keyed.alias("a")
+    b = keyed.alias("b")
+    return a.join(
+        b,
+        (F.col("a.__block_key__") == F.col("b.__block_key__"))
+        & (F.col(f"a.{id_col}") < F.col(f"b.{id_col}")),
+    ).select(
+        F.col(f"a.{id_col}").alias("a"),
+        F.col(f"b.{id_col}").alias("b"),
+    )
+
+
+#: The source aliases a joined candidate frame carries. NOT "a"/"b": the
+#: candidate frame's own columns are named `a` and `b`, so `F.col("a.first")`
+#: would be ambiguous between "alias a, column first" and a field of a
+#: struct-ish `a`. Distinct sentinel aliases remove the question rather than
+#: relying on resolution order.
+CAND_LHS, CAND_RHS = "__lhs__", "__rhs__"
+
+
+def join_candidates_to_sources(
+    candidates: Any, source_df: Any, *, id_col: str
+) -> Any:
+    """Join ``(a, b)`` candidates back to both record sides.
+
+    Shared by scoring and FS training: the field expressions both build resolve
+    against these aliases, so a second copy of this join that named its sides
+    differently would not fail -- it would silently resolve columns to the wrong
+    side of the pair.
+    """
+    from pyspark.sql import functions as F
+
+    return (
+        candidates.alias("__cand__")
+        .join(
+            source_df.alias(CAND_LHS),
+            F.col(f"{CAND_LHS}.{id_col}") == F.col("__cand__.a"),
+        )
+        .join(
+            source_df.alias(CAND_RHS),
+            F.col(f"{CAND_RHS}.{id_col}") == F.col("__cand__.b"),
+        )
+    )
+
+
 def generate_candidates(
     source_df: Any, config: Any, *, id_col: str, transform_udf: str | None = None
 ) -> Any:
@@ -303,22 +368,10 @@ def generate_candidates(
     it. Hence the kernel refuses any chain it cannot run identically instead of
     falling back.
     """
-    from pyspark.sql import functions as F
-
     per_pass = []
     for i, key_config in enumerate(blocking_passes(config)):
-        key_col, _fields = _block_key_column(key_config, transform_udf)
-        keyed = source_df.withColumn("__block_key__", key_col)
-        keyed = keyed.where(_valid_key(F.col("__block_key__")))
-        a = keyed.alias("a")
-        b = keyed.alias("b")
-        pairs = a.join(
-            b,
-            (F.col("a.__block_key__") == F.col("b.__block_key__"))
-            & (F.col(f"a.{id_col}") < F.col(f"b.{id_col}")),
-        ).select(
-            F.col(f"a.{id_col}").alias("a"),
-            F.col(f"b.{id_col}").alias("b"),
+        pairs = pass_candidates(
+            source_df, key_config, id_col=id_col, transform_udf=transform_udf
         )
         logger.debug("Spark tier: blocking pass %d on %s", i, key_config.fields)
         per_pass.append(pairs)
@@ -508,18 +561,8 @@ def score_candidates(
     """
     from pyspark.sql import functions as F
 
-    # The source aliases must NOT be "a"/"b": the candidate frame's own columns
-    # are named `a` and `b`, so `F.col("a.first")` would be ambiguous between
-    # "alias a, column first" and a field of a struct-ish `a`. Distinct sentinel
-    # aliases remove the question rather than relying on resolution order.
-    lhs, rhs = "__lhs__", "__rhs__"
-    a = source_df.alias(lhs)
-    b = source_df.alias(rhs)
-    joined = (
-        candidates.alias("__cand__")
-        .join(a, F.col(f"{lhs}.{id_col}") == F.col("__cand__.a"))
-        .join(b, F.col(f"{rhs}.{id_col}") == F.col("__cand__.b"))
-    )
+    lhs, rhs = CAND_LHS, CAND_RHS
+    joined = join_candidates_to_sources(candidates, source_df, id_col=id_col)
 
     if scorer_udf is not None:
         if scorer_shape not in ("row", "batch"):
