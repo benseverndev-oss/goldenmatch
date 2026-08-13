@@ -25,9 +25,15 @@ Bidirectional, mirroring the OSI wedge:
 - **emit** the resolved identity as RDF (`emit_sameas_graph`, bridging wedge B):
   `owl:sameAs` linking each source individual to its resolved canonical
   individual, with W3C **PROV-O** provenance — point a triple store / reasoner at
-  resolved individuals and every SPARQL query inherits correct identity;
-- **conform** (`emit_identity_shacl`): a SHACL shape asserting the post-resolution
-  invariant (each individual carries exactly one resolved id).
+  resolved individuals and every SPARQL query inherits correct identity; and the
+  golden records as typed individuals (`emit_golden_triples`: `rdf:type` + the
+  conformed attribute values);
+- **conform** (`emit_identity_shacl`, `emit_ontology_shapes`): SHACL shapes —
+  the post-resolution invariant, and a per-class shape derived from the ontology's
+  own `owl:hasKey`;
+- **discover** (`discover_ontology`): draft an OWL ontology from data, one
+  `owl:Class` per frame with an `owl:hasKey` the certifier already GRADED — the
+  generative half, keys shipped falsified, not guessed.
 
 `rdflib` is the parser/serializer and an OPTIONAL dependency (`goldenmatch[ontology]`);
 it is imported lazily inside each function, so `from goldenmatch.semantic import …`
@@ -488,6 +494,7 @@ def emit_sameas_graph(
     base_iri: str = DEFAULT_BASE_IRI,
     run_name: str = "resolution",
     resolved_field: str | None = None,
+    target_class: str | None = None,
     fmt: str = "turtle",
 ) -> str:
     """Emit the resolved identity of a `ResolvedCrosswalk` (wedge B) as RDF:
@@ -496,6 +503,10 @@ def emit_sameas_graph(
     `prov:wasDerivedFrom` each source record and `prov:wasGeneratedBy` a single
     resolution activity carrying GoldenMatch run metadata). Point a triple store
     or reasoner at the canonical individuals and identity is conformed.
+
+    When `target_class` is given, each canonical entity is also typed
+    `rdf:type <base>class/<target_class>` so the resolved individuals slot into
+    the ontology's class hierarchy.
     """
     from urllib.parse import quote
 
@@ -507,6 +518,7 @@ def emit_sameas_graph(
     resolved_field = resolved_field or rf
     EX = Namespace(base_iri)
     GM = Namespace(GM_NS)
+    class_uri = URIRef(f"{base_iri}class/{target_class}") if target_class else None
 
     g = Graph()
     g.bind("owl", OWL)
@@ -539,6 +551,8 @@ def emit_sameas_graph(
         canon = URIRef(f"{base_iri}entity/{quote(str(rid), safe='')}")
         g.add((src, RDF.type, PROV.Entity))
         g.add((canon, RDF.type, PROV.Entity))
+        if class_uri is not None:
+            g.add((canon, RDF.type, class_uri))
         g.add((src, OWL.sameAs, canon))
         g.add((canon, PROV.wasDerivedFrom, src))
         g.add((canon, PROV.wasGeneratedBy, activity))
@@ -584,3 +598,183 @@ def emit_identity_shacl(
     g.add((prop, SH.name, Literal(resolved_field)))
 
     return g.serialize(format=fmt)
+
+
+def _property_iri(class_iri: str, class_name: str, prop: str) -> str:
+    """Reconstruct a key property's IRI in the class's namespace (the common
+    single-namespace ontology shape); falls back to the GoldenMatch namespace."""
+    if class_iri.endswith(class_name):
+        return class_iri[: len(class_iri) - len(class_name)] + prop
+    return f"{GM_NS}{prop}"
+
+
+def emit_ontology_shapes(onto: Ontology | str | Any, *, fmt: str = "turtle") -> str:
+    """Emit a SHACL shape PER CLASS derived from a parsed ontology: each class
+    with an (effective, inheritance-aware) `owl:hasKey` gets a `sh:NodeShape`
+    targeting it, with a property shape per key property asserting the property is
+    present (`sh:minCount 1`) — i.e. the individual is actually identifiable. The
+    richer, ontology-derived counterpart to the single generic
+    `emit_identity_shacl`. GoldenMatch produces the shapes; a SHACL engine runs them.
+    """
+    parsed = onto if isinstance(onto, Ontology) else parse_ontology(onto)
+    _require_rdflib()
+    from rdflib import RDF, RDFS, Graph, Literal, Namespace, URIRef
+    from rdflib.namespace import SH, XSD
+
+    GM = Namespace(GM_NS)
+    g = Graph()
+    g.bind("sh", SH)
+    g.bind("gm", GM)
+
+    for c in parsed.classes:
+        keys = effective_has_keys(parsed, c.name)
+        if not keys:
+            continue
+        shape = URIRef(f"{GM_NS}shape/{c.name}")
+        g.add((shape, RDF.type, SH.NodeShape))
+        g.add((shape, SH.targetClass, URIRef(c.iri)))
+        g.add((shape, RDFS.comment, Literal(
+            f"Each {c.name} must carry its identifying key(s): "
+            + "; ".join(", ".join(k) for k in keys))))
+        seen: set[str] = set()
+        for key in keys:
+            for prop in key:
+                if prop in seen:
+                    continue
+                seen.add(prop)
+                pshape = URIRef(f"{GM_NS}shape/{c.name}/{prop}")
+                g.add((shape, SH.property, pshape))
+                g.add((pshape, SH.path, URIRef(_property_iri(c.iri, c.name, prop))))
+                g.add((pshape, SH.minCount, Literal(1, datatype=XSD.integer)))
+                g.add((pshape, SH.name, Literal(prop)))
+
+    return g.serialize(format=fmt)
+
+
+def emit_golden_triples(
+    golden: Any,
+    *,
+    class_name: str,
+    id_column: str,
+    base_iri: str = DEFAULT_BASE_IRI,
+    properties: list[str] | None = None,
+    fmt: str = "turtle",
+) -> str:
+    """Emit the resolved GOLDEN records as RDF individuals: each row becomes
+    `<base>entity/<id> rdf:type <base>class/<class_name>` with its attribute
+    values as `<base>prop/<col>` triples. This puts the resolved entities — with
+    their conformed canonical values — into the graph as typed individuals a
+    reasoner can query, not just `owl:sameAs` links.
+    """
+    from urllib.parse import quote
+
+    _require_rdflib()
+    from rdflib import RDF, RDFS, Graph, Literal, Namespace, URIRef
+
+    table = golden.to_arrow() if hasattr(golden, "to_arrow") else golden
+    rows = table.to_pylist() if hasattr(table, "to_pylist") else list(table)
+    cols = [c for c in (rows[0].keys() if rows else []) if c != id_column]
+    if properties is not None:
+        cols = [c for c in cols if c in properties]
+
+    EX = Namespace(base_iri)
+    g = Graph()
+    g.bind("rdfs", RDFS)
+    g.bind("id", EX)
+    class_uri = URIRef(f"{base_iri}class/{class_name}")
+
+    for row in rows:
+        rid = row.get(id_column)
+        if rid is None:
+            continue
+        subj = URIRef(f"{base_iri}entity/{quote(str(rid), safe='')}")
+        g.add((subj, RDF.type, class_uri))
+        for col in cols:
+            val = row.get(col)
+            if val is None:
+                continue
+            g.add((subj, URIRef(f"{base_iri}prop/{col}"), Literal(val)))
+    return g.serialize(format=fmt)
+
+
+# --- discover: draft an OWL ontology from data, keys pre-graded ---------------
+
+
+@dataclass
+class DiscoveredOntology:
+    """A draft OWL ontology proposed from data — one `owl:Class` per input frame,
+    each with an `owl:hasKey` that the key-integrity certifier already GRADED
+    (`is_trustworthy`/`estimate`), so the identity axioms ship falsified, not
+    guessed. `turtle` round-trips through `parse_ontology`."""
+
+    ontology_iri: str | None
+    classes: list[dict[str, Any]]        # {class, key, is_trustworthy, estimate}
+    turtle: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ontology_iri": self.ontology_iri,
+            "n_classes": len(self.classes),
+            "n_trustworthy": sum(1 for c in self.classes if c["is_trustworthy"]),
+            "classes": self.classes,
+        }
+
+
+def discover_ontology(
+    frames: dict[str, Any],
+    *,
+    base_iri: str = DEFAULT_BASE_IRI,
+    ontology_iri: str | None = None,
+    fmt: str = "turtle",
+) -> DiscoveredOntology:
+    """Discover a draft OWL ontology from `{class_name: table}`: for each frame,
+    reuse the semantic layer's certifier-backed `discover_keys` to propose the
+    best entity key, and emit an `owl:Class` whose `owl:hasKey` is that key —
+    PRE-GRADED with the certificate (a `gm:keyTrustworthy` / `gm:keyUniquenessEstimate`
+    annotation). A frame with no clean key still yields a class, flagged untrustworthy
+    — the loud signal that a reasoner keyed on this grain would over-merge.
+    """
+    _require_rdflib()
+    from rdflib import OWL, RDF, RDFS, BNode, Graph, Literal, Namespace, URIRef
+    from rdflib.collection import Collection
+
+    from goldenmatch.semantic.discovery.keys import discover_keys
+
+    GM = Namespace(GM_NS)
+    g = Graph()
+    g.bind("owl", OWL)
+    g.bind("rdfs", RDFS)
+    g.bind("gm", GM)
+
+    onto_iri = ontology_iri or f"{base_iri}ontology"
+    g.add((URIRef(onto_iri), RDF.type, OWL.Ontology))
+
+    classes: list[dict[str, Any]] = []
+    for name, frame in frames.items():
+        candidates = discover_keys(frame)
+        if not candidates:
+            continue
+        best = candidates[0]  # ranked trustworthy-first, then cleaner
+        cls = URIRef(f"{base_iri}class/{name}")
+        g.add((cls, RDF.type, OWL.Class))
+        g.add((cls, RDFS.label, Literal(name)))
+        prop_uris = []
+        for col in best.columns:
+            p = URIRef(f"{base_iri}prop/{col}")
+            g.add((p, RDF.type, OWL.DatatypeProperty))
+            g.add((p, RDFS.domain, cls))
+            g.add((p, RDFS.label, Literal(col)))
+            prop_uris.append(p)
+        key_node = BNode()
+        Collection(g, key_node, prop_uris)
+        g.add((cls, OWL.hasKey, key_node))
+        estimate = float(best.certificate.estimate)
+        trustworthy = bool(best.is_trustworthy)
+        g.add((cls, GM.keyUniquenessEstimate, Literal(round(estimate, 6))))
+        g.add((cls, GM.keyTrustworthy, Literal(trustworthy)))
+        classes.append({
+            "class": name, "key": list(best.columns),
+            "is_trustworthy": trustworthy, "estimate": estimate,
+        })
+
+    return DiscoveredOntology(ontology_iri=onto_iri, classes=classes, turtle=g.serialize(format=fmt))

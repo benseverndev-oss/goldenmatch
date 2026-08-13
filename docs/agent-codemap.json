@@ -7599,6 +7599,7 @@
           "file": "packages/python/goldenmatch/goldenmatch/semantic/ontology.py",
           "purpose": "Ontology-layer (RDF / OWL / SHACL) native identity provider.",
           "defines": [
+            "DiscoveredOntology",
             "Ontology",
             "OntologyCertification",
             "OntologyClass",
@@ -7608,18 +7609,23 @@
             "_crosswalk_rows",
             "_load_graph",
             "_local",
+            "_property_iri",
             "_require_rdflib",
             "asserted_sameas_pairs",
             "certify_ontology",
             "certify_ontology_keys",
+            "discover_ontology",
             "effective_has_keys",
+            "emit_golden_triples",
             "emit_identity_shacl",
+            "emit_ontology_shapes",
             "emit_sameas_graph",
             "ontology_identity_keys",
             "parse_ontology",
             "reconcile_ontology_identity"
           ],
           "imports": [
+            "goldenmatch.semantic.discovery.keys",
             "goldenmatch.semantic.key_integrity"
           ]
         },

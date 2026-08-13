@@ -15,8 +15,11 @@ from goldenmatch.semantic import (  # noqa: E402
     asserted_sameas_pairs,
     certify_ontology,
     certify_ontology_keys,
+    discover_ontology,
     effective_has_keys,
+    emit_golden_triples,
     emit_identity_shacl,
+    emit_ontology_shapes,
     emit_sameas_graph,
     ontology_identity_keys,
     parse_ontology,
@@ -250,3 +253,94 @@ def test_reconcile_flags_over_merge_and_fragmentation():
     assert rec.n_asserted_links == 2 and rec.n_resolved_records == 4
     d = rec.to_dict()
     assert d["agreements"] == 1 and d["n_over_merges"] == 1 and d["n_fragmentations"] == 1
+
+
+# --- PR2: richer emit (typed individuals + per-class SHACL) + discovery --------
+
+
+def test_emit_sameas_graph_types_canonical_entities_to_class():
+    import rdflib
+
+    ttl = emit_sameas_graph(_XW(), base_iri="https://ex.test/id/", target_class="Patient")
+    g = rdflib.Graph()
+    g.parse(data=ttl, format="turtle")
+    e1 = rdflib.URIRef("https://ex.test/id/entity/e1")
+    patient = rdflib.URIRef("https://ex.test/id/class/Patient")
+    assert (e1, rdflib.RDF.type, patient) in g
+    # prov:Entity typing is still present (additive)
+    from rdflib.namespace import PROV
+    assert (e1, rdflib.RDF.type, PROV.Entity) in g
+    # no target_class -> no class typing (backward compatible)
+    g2 = rdflib.Graph()
+    g2.parse(data=emit_sameas_graph(_XW(), base_iri="https://ex.test/id/"), format="turtle")
+    assert (e1, rdflib.RDF.type, patient) not in g2
+
+
+def test_emit_ontology_shapes_per_class_from_haskey():
+    import rdflib
+    from rdflib.namespace import SH
+
+    ttl = emit_ontology_shapes(_TTL)
+    g = rdflib.Graph()
+    g.parse(data=ttl, format="turtle")
+    shapes = list(g.subjects(rdflib.RDF.type, SH.NodeShape))
+    assert len(shapes) == 1
+    # targets the Patient class by its real IRI
+    assert (shapes[0], SH.targetClass,
+            rdflib.URIRef("https://example.org/clinic#Patient")) in g
+    # one property shape per key property, path reconstructed in the class namespace
+    paths = {str(o) for o in g.objects(predicate=SH.path)}
+    assert "https://example.org/clinic#firstName" in paths
+    assert "https://example.org/clinic#birthDate" in paths
+    assert all(int(o) == 1 for o in g.objects(predicate=SH.minCount))
+
+
+def test_emit_golden_triples_typed_individuals_with_values():
+    import rdflib
+
+    golden = pa.table({
+        "resolved_entity_id": ["e1", "e2"],
+        "name": ["Bob Smith", "Amy Jones"],
+        "city": ["NY", "LA"],
+    })
+    ttl = emit_golden_triples(golden, class_name="Patient", id_column="resolved_entity_id",
+                              base_iri="https://ex.test/id/")
+    g = rdflib.Graph()
+    g.parse(data=ttl, format="turtle")
+    e1 = rdflib.URIRef("https://ex.test/id/entity/e1")
+    assert (e1, rdflib.RDF.type, rdflib.URIRef("https://ex.test/id/class/Patient")) in g
+    assert (e1, rdflib.URIRef("https://ex.test/id/prop/name"),
+            rdflib.Literal("Bob Smith")) in g
+    # id column is not re-emitted as an attribute
+    assert not list(g.objects(e1, rdflib.URIRef("https://ex.test/id/prop/resolved_entity_id")))
+
+
+def test_discover_ontology_emits_pregraded_haskey():
+    frames = {"Customer": pa.table({
+        "customer_id": [1, 2, 3, 4],       # unique -> the trustworthy key
+        "email": ["a@x", "a@x", "b@x", "c@x"],
+        "city": ["NY", "NY", "LA", "LA"],
+    })}
+    disc = discover_ontology(frames, base_iri="https://ex.test/id/")
+    assert len(disc.classes) == 1
+    entry = disc.classes[0]
+    assert entry["class"] == "Customer" and entry["key"] == ["customer_id"]
+    assert entry["is_trustworthy"] is True and entry["estimate"] == 1.0
+    # the emitted OWL round-trips: the class carries owl:hasKey (customer_id)
+    onto = parse_ontology(disc.turtle)
+    customer = next(c for c in onto.classes if c.name == "Customer")
+    assert customer.has_keys == [["customer_id"]]
+    d = disc.to_dict()
+    assert d["n_classes"] == 1 and d["n_trustworthy"] == 1
+
+
+def test_discover_ontology_flags_untrustworthy_when_no_clean_key():
+    # every column fans out -> best candidate is flagged untrustworthy, still emitted
+    frames = {"Event": pa.table({
+        "kind": ["click", "click", "view", "view"],
+        "channel": ["web", "web", "app", "app"],
+    })}
+    disc = discover_ontology(frames, base_iri="https://ex.test/id/")
+    assert len(disc.classes) == 1
+    assert disc.classes[0]["is_trustworthy"] is False
+    assert disc.to_dict()["n_trustworthy"] == 0

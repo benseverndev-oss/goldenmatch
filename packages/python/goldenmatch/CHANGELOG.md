@@ -1234,6 +1234,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **Ontology layer, produce + discover (`goldenmatch.semantic.ontology`).**
+  Completes the flesh-out with the generative half: `emit_golden_triples` emits
+  resolved golden records as typed RDF individuals (`rdf:type` + conformed
+  attribute values), `emit_sameas_graph` can type canonical entities to a class
+  (`target_class`), `emit_ontology_shapes` derives a per-class SHACL shape from the
+  ontology's own `owl:hasKey`, and `discover_ontology` proposes a draft OWL
+  ontology — one `owl:Class` per frame — whose `owl:hasKey` is chosen by reusing
+  the certifier-backed `discover_keys` and ships PRE-GRADED
+  (`gm:keyTrustworthy`/`gm:keyUniquenessEstimate`); the Turtle round-trips through
+  `parse_ontology`. See ADR 0055.
 - **Ontology layer, deeper consume + audit (`goldenmatch.semantic.ontology`).**
   Builds on the v1 provider: `parse_ontology` now inherits `owl:hasKey` down
   `rdfs:subClassOf` (`effective_has_keys`) and reads cardinality-1 restrictions;
