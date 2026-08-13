@@ -85,6 +85,7 @@ public final class ScorerSelection {
     long maxMb = rt.maxMemory() / (1024L * 1024L);
     return "java=" + System.getProperty("java.version", "?")
         + " heap_max=" + maxMb + "MB"
-        + " cpus=" + rt.availableProcessors();
+        + " cpus=" + rt.availableProcessors()
+        + " jar=" + JarVersion.version();
   }
 }

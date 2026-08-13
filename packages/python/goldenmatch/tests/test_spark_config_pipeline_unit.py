@@ -378,3 +378,125 @@ def test_nan_is_not_a_string_and_must_not_reach_the_scorer():
     from goldenmatch.spark.scorers import score_batch
 
     assert score_batch("jaro_winkler", [None], [None])[0] == 1.0
+
+
+# ── the jar's kernels reach the ENTRY POINTS, not just the internals ──
+
+def test_run_config_pipeline_routes_all_three_kernels():
+    """The entry point exposes every kernel the jar carries that it can use.
+
+    Clustering is already pure Spark SQL, so normalization, survivorship and
+    scoring are the whole surface: passing all three means no Python worker on
+    the executors for any stage.
+    """
+    import inspect
+
+    from goldenmatch.spark.config_pipeline import run_config_pipeline
+
+    params = inspect.signature(run_config_pipeline).parameters
+    for p in ("transform_udf", "survivorship_udf", "scorer_udf"):
+        assert p in params, f"{p} is how a caller reaches that kernel"
+
+
+def test_scorer_slots_dedupe_on_column_chain_AND_scorer():
+    """Two matchkeys naming the same field the same way share one slot; naming
+    it differently do not.
+
+    The slot is the unit of work in the scoring batch, so this decides both how
+    much the kernel is asked to do and how wide the collected struct is.
+
+    Keying on the column alone is the tempting simplification and it is a
+    correctness bug, not an efficiency one: the same column can appear under a
+    different transform chain (a substring key in one matchkey, the raw value in
+    another) or a different scorer, and collapsing those would silently score
+    one comparison with the other's settings.
+    """
+    from goldenmatch.spark.config_pipeline import _weighted_scorer_slots
+
+    cfg = _cfg([
+        _mk([MatchkeyField(field="first", scorer="jaro_winkler", weight=1.0)],
+            name="mk1"),
+        # identical in all three parts -> the same slot
+        _mk([MatchkeyField(field="first", scorer="jaro_winkler", weight=2.0)],
+            name="mk2"),
+        # same column, different SCORER -> its own slot
+        _mk([MatchkeyField(field="first", scorer="levenshtein", weight=1.0)],
+            name="mk3"),
+    ])
+    slots, index = _weighted_scorer_slots(cfg)
+    assert len(slots) == 2, [s["scorer"] for s in slots]
+    assert index[("first", (), "jaro_winkler")] == 0
+    assert index[("first", (), "levenshtein")] == 1
+
+
+def test_exact_scored_fields_still_get_a_slot():
+    """An `exact` field needs no kernel, but it DOES need a slot.
+
+    Its agreement is computed in SQL before the batch and carried in the
+    collected struct, because after `collect_list` the raw columns are gone and
+    there is nothing left to compare. The first shape of this skipped exact
+    fields entirely, which made a weighted matchkey containing one
+    unrepresentable on the JVM path.
+    """
+    from goldenmatch.spark.config_pipeline import _weighted_scorer_slots
+
+    cfg = _cfg([
+        _mk([
+            MatchkeyField(field="first", scorer="jaro_winkler", weight=1.0),
+            MatchkeyField(field="last", scorer="exact", weight=2.0),
+        ])
+    ])
+    slots, index = _weighted_scorer_slots(cfg)
+    assert len(slots) == 2
+    assert index[("last", (), "exact")] == 1
+
+
+def test_probabilistic_matchkeys_are_refused_on_the_jvm_scoring_path():
+    """Refused, not silently left on the Python path.
+
+    A probabilistic matchkey combines EM-learned weights into P(match) through
+    its own expression builder; the jar scores fields. Quietly falling back
+    would mean a caller who passed `scorer_udf` and saw no error still needs an
+    executor virtualenv, and would discover it from a ModuleNotFoundError in the
+    middle of a distributed job.
+    """
+    pytest.importorskip("pyspark")
+
+    from goldenmatch.spark.config_pipeline import _score_candidates_jvm
+
+    cfg = _cfg([
+        _mk([MatchkeyField(field="first", scorer="jaro_winkler")],
+            type="probabilistic", threshold=None)
+    ])
+    with pytest.raises(NotImplementedError, match="probabilistic"):
+        _score_candidates_jvm(
+            None, cfg, lhs="l", rhs="r", scorer_udf="golden_score_batch",
+            transform_udf=None, fs_models=None, batch_size=10,
+        )
+
+
+def test_higher_order_lambdas_have_the_arity_pyspark_expects():
+    """The batch builders must take exactly 1 and exactly 2 parameters.
+
+    PySpark decides what a higher-order lambda MEANS from its parameter count:
+    one is `(element)`, two is `(element, index)`. So the obvious way to capture
+    a loop variable --
+
+        F.transform(rows, lambda r, g=group: ...)
+
+    -- is read as a two-argument lambda and `g` receives the array INDEX. The
+    captured value is silently discarded and every row is built from an integer.
+    It does not raise. It misaligns, attaching one pair's scores to another,
+    which is the exact failure the one-collect_list/one-explode discipline in
+    that module exists to prevent.
+
+    Both were written that way first. This pins the contract rather than
+    trusting a comment, because the correct form (a closure factory) looks
+    strictly more verbose than the broken one and invites being "simplified".
+    """
+    import inspect
+
+    from goldenmatch.spark.config_pipeline import _pick_fields, _reshape_scores
+
+    assert len(inspect.signature(_pick_fields([], "x")).parameters) == 1
+    assert len(inspect.signature(_reshape_scores("__raw0", 3)).parameters) == 2

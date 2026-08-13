@@ -1,0 +1,327 @@
+# Publish the Spark JVM jar as a GitHub Release asset.
+#
+# ## Why this workflow exists
+#
+# The J-arc built four Rust kernels into a jar that Spark Connect's
+# `addArtifact` delivers to a cluster -- scoring, fingerprints, transforms and
+# survivorship, no Python on the executors. Until this workflow, that jar was
+# built inside `ci.yml` and thrown away with the run. Nobody outside this repo
+# could obtain it, which made the whole "one file, nothing installed on the
+# cluster" claim untestable by anyone who did not have a checkout and a JDK.
+#
+# ## Not Maven Central
+#
+# A GitHub Release asset, deliberately. Maven Central means GPG keys, a Sonatype
+# account and a staging dance, and buys nothing here: the jar is not a compile
+# dependency anybody declares. It is a file you hand to `addArtifact` at
+# runtime. A URL is the whole interface.
+#
+# ## The tested jar and the shipped jar
+#
+# This is a SECOND build of a jar `ci.yml` also builds, which is exactly the
+# gap the CI lane's single-job build exists to close. Two things keep it honest:
+#
+#   1. Both callers run `scripts/build_spark_jar.sh`. Separate builds, but they
+#      cannot be built differently.
+#   2. This workflow re-runs BOTH self-tests -- SelfTest and NativeSelfTest,
+#      the latter on each architecture natively -- before it publishes. Nothing
+#      ships that has not crossed the JNI boundary on the hardware it targets.
+#
+# ## Immutable releases
+#
+# This repo has immutable releases enabled, which SEALS assets at publish time.
+# So the release is created as a DRAFT, the assets are attached, and only then
+# is it published. Creating a published release first and uploading afterwards
+# fails, and -- worse -- a tag consumed by an immutable release is burned
+# permanently: `gh release delete --cleanup-tag` does not free it. Hence also
+# no `gh release create` by hand. This workflow owns the release.
+name: publish-goldenmatch-spark-jar
+
+on:
+  push:
+    tags:
+      - "goldenmatch-spark-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing goldenmatch-spark-v* tag to publish (leave blank for a dry run)"
+        required: false
+        type: string
+        default: ""
+      dry_run:
+        description: "Build + test + upload as a run artifact, publish nothing"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  # The aarch64 half, built AND self-tested on real ARM hardware -- not
+  # cross-compiled. Cross-compiling and checking the ELF header proves the file
+  # is aarch64-shaped; it does not prove the kernel RUNS there. This repo has a
+  # live example of a binary that built and loaded fine and then parked on a
+  # futex for 190s on one specific CPU (#688).
+  aarch64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Build the native scorer library for aarch64
+        run: |
+          set -euo pipefail
+          cargo build --release \
+            --manifest-path packages/rust/extensions/score-jni/Cargo.toml
+          SO=packages/rust/extensions/score-jni/target/release/libgoldenmatch_score_jni.so
+          # Assert the machine type rather than trusting the runner label. A
+          # mislabelled runner would ship an x86 library under the aarch64
+          # resource path, which fails at dlopen on every ARM executor and falls
+          # back silently.
+          readelf -h "$SO" | grep -q "AArch64" \
+            || { echo "::error::$SO is not an AArch64 object"; exit 1; }
+      # The point of building here: RUN it here. Spark-free classes only -- the
+      # UDF classes need a Spark classpath and nothing in this job has one.
+      # Same script `ci.yml`'s aarch64 lane runs, so the release cannot test the
+      # ARM kernel differently from the way CI does.
+      - name: Native scorer self-test ON aarch64
+        env:
+          ARCH: linux-aarch64
+        run: bash scripts/spark_jni_selftest.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: score-jni-linux-aarch64
+          path: packages/rust/extensions/score-jni/target/release/libgoldenmatch_score_jni.so
+          if-no-files-found: error
+
+  publish:
+    needs: aarch64
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write  # create the release and attach the jar
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: '3.12'
+
+      # Resolve the version ONCE, from the tag, and refuse to guess. A release
+      # whose asset disagrees with its tag is worse than no release: the jar
+      # reports Implementation-Version through `golden_score_impl`, and that
+      # string is how an operator identifies a jar found on a cluster.
+      - name: Resolve the version
+        id: v
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          TAG=""
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            TAG="${GITHUB_REF_NAME}"
+          elif [ -n "$INPUT_TAG" ]; then
+            TAG="$INPUT_TAG"
+          fi
+          if [ -z "$TAG" ]; then
+            # No tag: dry run only. Publishing would require CREATING the tag
+            # ref, which this repo's tag protection blocks for GITHUB_TOKEN
+            # (422 pre_receive). Push the tag first, then this fires on its own.
+            if [ "$DRY_RUN" != "true" ]; then
+              echo "::error::no tag given and dry_run=false. Push a goldenmatch-spark-vX.Y.Z tag (this workflow fires on it), or pass an existing tag. Publishing cannot create the tag: tag creation is restricted for GITHUB_TOKEN."
+              exit 1
+            fi
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            echo "version=0.0.0-dev" >> "$GITHUB_OUTPUT"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            case "$TAG" in
+              goldenmatch-spark-v*) ;;
+              *) echo "::error::tag '$TAG' is not a goldenmatch-spark-v* tag"; exit 1 ;;
+            esac
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+            echo "version=${TAG#goldenmatch-spark-v}" >> "$GITHUB_OUTPUT"
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "publish=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "publish=true" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+          cat "$GITHUB_OUTPUT"
+
+      - name: Build the native scorer library for x86-64
+        run: |
+          set -euo pipefail
+          cargo build --release \
+            --manifest-path packages/rust/extensions/score-jni/Cargo.toml
+          SO=packages/rust/extensions/score-jni/target/release/libgoldenmatch_score_jni.so
+          readelf -h "$SO" | grep -q "X86-64" \
+            || { echo "::error::$SO is not an x86-64 object"; exit 1; }
+          nm -D --defined-only "$SO" \
+            | grep -qE "Java_dev_goldensuite_spark_NativeScorer_scorePairwiseUtf8$" \
+            || { echo "::error::the JNI entry points are not exported from $SO"; exit 1; }
+
+      # Downloaded, not rebuilt: the binary that was self-tested on ARM hardware
+      # is the binary that ships.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          name: score-jni-linux-aarch64
+          path: /tmp/jni-aarch64
+
+      # pyspark only for its bundled jars -- the two UDF classes implement
+      # org.apache.spark.sql.api.java.UDF*, so the compile needs a Spark
+      # classpath. Version-matched to the CI lane, which asserts Spark 4.
+      - name: Install pyspark for the compile classpath
+        run: python -m pip install --quiet 'pyspark>=4'
+
+      - name: Build the jar
+        env:
+          SO_X86_64: packages/rust/extensions/score-jni/target/release/libgoldenmatch_score_jni.so
+          SO_AARCH64: /tmp/jni-aarch64/libgoldenmatch_score_jni.so
+          JAR_VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          export SPARK_JARS="$(python -c 'import pyspark, os; print(os.path.join(os.path.dirname(pyspark.__file__), "jars"))')"
+          bash scripts/build_spark_jar.sh
+
+      # The same two gates the CI lane runs, re-run here because THIS jar is the
+      # one that ships. SelfTest covers the Spark-free logic; NativeSelfTest
+      # requires the library and refuses to skip -- a test that learns to skip is
+      # how a lane goes green while testing nothing.
+      - name: JVM self-tests (x86-64)
+        run: |
+          set -euo pipefail
+          JVM=packages/jvm/goldenmatch-spark
+          javac --release 17 -encoding UTF-8 -d "$JVM/build/test-classes" \
+            -cp "$JVM/build/classes" "$JVM"/test/dev/goldensuite/spark/*.java
+          java -cp "$JVM/build/classes:$JVM/build/test-classes" dev.goldensuite.spark.SelfTest
+          java -cp "$JVM/build/classes:$JVM/build/test-classes" dev.goldensuite.spark.NativeSelfTest
+
+      # Prove the stamp works from INSIDE the assembled jar rather than trusting
+      # that the manifest was written. JarVersion reads the manifest of its own
+      # archive, and that lookup has a real failure mode (it returns "unknown"
+      # for loose classes), so it is asserted against the jar itself.
+      # Run the ASSEMBLED jar, which exercises three things at once: that
+      # `java -jar` works (the preflight check operators are told to run), that
+      # the native kernel loads out of the jar's own resources rather than a
+      # build directory, and that JarVersion reads the manifest of its own
+      # archive. That last one has a real failure mode -- it returns "unknown"
+      # for loose classes -- so the check has to run against the jar, not the
+      # classes the self-tests above used.
+      #
+      # A non-zero exit means the kernel fell back to exact-only, which is the
+      # silent failure this whole arc exists to make loud. It must never ship.
+      - name: The assembled jar runs and reports itself
+        env:
+          WANT: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          JAR=packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
+          java -jar "$JAR"
+          GOT="$(java -jar "$JAR" | head -1 | awk '{print $2}')"
+          echo "jar reports version '$GOT', tag says '$WANT'"
+          [ "$GOT" = "$WANT" ] \
+            || { echo "::error::the jar reports version '$GOT' but the tag says '$WANT'"; exit 1; }
+
+      - name: Checksums
+        id: sums
+        run: |
+          set -euo pipefail
+          cd packages/jvm/goldenmatch-spark/build
+          sha256sum goldenmatch-spark.jar > goldenmatch-spark.jar.sha256
+          cat goldenmatch-spark.jar.sha256
+
+      # A dry run stops here with the jar as a run artifact, so the build and
+      # every gate above are exercisable without consuming a tag. Tags are
+      # exhaustible in this repo -- an immutable release burns one permanently.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: goldenmatch-spark-jar
+          path: |
+            packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
+            packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar.sha256
+          if-no-files-found: error
+
+      # DRAFT first, assets second, publish last. Immutable releases seal assets
+      # at publish time, so any other order loses the assets -- and the tag with
+      # them, permanently.
+      - name: Create the draft release and attach the jar
+        if: steps.v.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.v.outputs.tag }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          B=packages/jvm/goldenmatch-spark/build
+          # A committed --notes-file, not an inline --notes. Prose inside a
+          # `run: |` block has to survive YAML block-scalar parsing AND, if it
+          # is a heredoc, shell parsing -- an inline multi-line string dedents
+          # out of the block, and an indented heredoc terminator is not
+          # recognised at all (`<<` needs it at column 0; `<<-` strips only
+          # tabs). A file dodges both and is reviewable in the diff.
+          NOTES=packages/jvm/goldenmatch-spark/RELEASE_NOTES.md
+          # ASCII only: the release API rejects em dashes with a 422, and it
+          # does so AFTER the draft exists, leaving a half-made release.
+          #
+          # Checked in python, not `grep -P`: that fails outright under LC_ALL=C
+          # on some grep builds ("-P supports only unibyte and UTF-8 locales"),
+          # and a non-zero grep inside `if` reads as "clean". The gate would
+          # then never run while looking like it had.
+          python - "$NOTES" <<'PY'
+          import sys
+          p = sys.argv[1]
+          raw = open(p, "rb").read()
+          bad = [(i, b) for i, b in enumerate(raw) if b > 0x7F]
+          if bad:
+              i, b = bad[0]
+              sys.exit(f"::error::{p} byte {i} is 0x{b:02x}; release notes must be "
+                       f"ASCII or the release API 422s ({len(bad)} non-ASCII bytes)")
+          print(f"{p}: ASCII clean ({len(raw)} bytes)")
+          PY
+          gh release create "$TAG" \
+            --draft \
+            --title "goldenmatch-spark $VERSION" \
+            --notes-file "$NOTES" \
+            "$B/goldenmatch-spark.jar" \
+            "$B/goldenmatch-spark.jar.sha256"
+
+      - name: Publish the release (seals it)
+        if: steps.v.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.v.outputs.tag }}
+        run: gh release edit "$TAG" --draft=false
+
+      - name: Summary
+        if: always()
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+          TAG: ${{ steps.v.outputs.tag }}
+          PUBLISH: ${{ steps.v.outputs.publish }}
+        run: |
+          {
+            echo "## goldenmatch-spark jar"
+            echo ""
+            echo "- version: \`$VERSION\`"
+            echo "- tag: \`${TAG:-<none, dry run>}\`"
+            echo "- published: \`$PUBLISH\`"
+            echo ""
+            if [ -f packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar.sha256 ]; then
+              echo '```'
+              cat packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar.sha256
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

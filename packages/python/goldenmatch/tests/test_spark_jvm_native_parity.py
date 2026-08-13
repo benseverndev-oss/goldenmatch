@@ -406,3 +406,206 @@ def test_strategies_python_refuses_are_refused_here_too(spark, registered):
     for strategy in ("source_priority", "most_recent", "custom:whatever"):
         with pytest.raises(ValueError, match=strategy.split(":")[0]):
             merge_expr(F.col("vals"), strategy, SURVIVORSHIP_UDF_NAME)
+
+
+# ── the whole scoring stage, JVM vs Python ───────────────────────────
+
+def _parity_source(spark):
+    """Rows chosen for the ways the BATCH construction breaks, not for realism.
+
+    Nulls on one side and on both (comparability must be decided from the raw
+    columns -- the kernel scores null-vs-null as a perfect 1.0), case that only
+    a transform chain resolves, near-misses that still score high when a value
+    is truncated, and multi-byte text whose byte length differs from its char
+    length.
+    """
+    rows = [
+        (0, "b", "jonathan", "smith", "boston"),
+        (1, "b", "jonathon", "smyth", "Boston"),
+        (2, "b", "jonathan", None, "boston"),
+        (3, "b", None, None, "boston"),
+        (4, "b", "Zoë", "Müller", "boston"),
+        (5, "b", "Zoe", "Muller", "BOSTON"),
+        (6, "b", "", "smith", "boston"),
+        (7, "b", "alice", "smith", "boston"),
+    ]
+    return spark.createDataFrame(
+        rows, "__row_id__ long, blk string, first string, last string, city string"
+    )
+
+
+def _parity_config():
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+    )
+
+    return GoldenMatchConfig(
+        blocking=BlockingConfig(keys=[BlockingKeyConfig(fields=["blk"])]),
+        matchkeys=[
+            # Two scorers in ONE matchkey: the batch must issue one UDF call per
+            # SCORER and put each field's score back in the right place. A
+            # single-scorer config would pass with the grouping logic inverted.
+            MatchkeyConfig(
+                name="mk_mixed", type="weighted", threshold=0.0,
+                fields=[
+                    MatchkeyField(field="first", scorer="jaro_winkler", weight=1.0),
+                    MatchkeyField(field="last", scorer="levenshtein", weight=2.0),
+                ],
+            ),
+            # An `exact` field inside a WEIGHTED matchkey: it carries no kernel
+            # call but still needs a slot, because after `collect_list` there is
+            # no raw column left to compare.
+            MatchkeyConfig(
+                name="mk_exact_field", type="weighted", threshold=0.0,
+                fields=[
+                    MatchkeyField(field="city", scorer="exact", weight=1.0),
+                    MatchkeyField(field="first", scorer="jaro_winkler", weight=1.0),
+                ],
+            ),
+            # Same column as mk_mixed but a DIFFERENT chain -> a different slot.
+            # Collapsing these would score one comparison with the other's
+            # settings, which is a wrong number rather than a crash.
+            MatchkeyConfig(
+                name="mk_chained", type="weighted", threshold=0.0,
+                fields=[
+                    MatchkeyField(field="city", scorer="jaro_winkler", weight=1.0,
+                                  transforms=["lowercase"]),
+                ],
+            ),
+        ],
+    )
+
+
+@pytest.mark.parametrize("batch_size", [1, 3, 10_000])
+def test_jvm_scoring_matches_the_python_path_exactly(spark, registered, batch_size):
+    """``score_candidates`` scored in the executor JVM equals the Python path.
+
+    THE gate for the JVM scoring path. Both sides run the same Rust ``score_one``
+    over the same bytes, so equality is exact -- a tolerance would hide the
+    entire class of bug this exists to catch, because those bugs produce
+    PLAUSIBLE scores. A batch whose scores drifted one position still returns
+    numbers in [0, 1] for every pair.
+
+    ``batch_size`` is parametrized because the reshape from a flat ``n*k`` score
+    array back to ``n`` rows of ``k`` is the one piece with no analogue in the
+    Python path, and it is trivially correct for a single batch. ``1`` puts
+    every pair in its own batch, ``3`` forces several partial batches, ``10_000``
+    is the production default and puts everything in one.
+    """
+    from goldenmatch.spark.config_pipeline import generate_candidates, score_candidates
+    from goldenmatch.spark.jvm import TRANSFORM_UDF_NAME, UDF_NAME
+
+    src = _parity_source(spark)
+    cfg = _parity_config()
+    cands = generate_candidates(src, cfg, id_col="__row_id__")
+
+    def collect(**kw):
+        out = score_candidates(cands, src, cfg, id_col="__row_id__", **kw)
+        return {(r["a"], r["b"]): r["score"] for r in out.collect()}
+
+    want = collect()
+    got = collect(
+        scorer_udf=UDF_NAME, transform_udf=TRANSFORM_UDF_NAME,
+        batch_size=batch_size,
+    )
+
+    assert set(got) == set(want), (
+        "the JVM path scored a different SET of pairs. Same candidates and same "
+        "thresholds, so this is the batch losing or duplicating rows rather "
+        "than a scoring difference: "
+        f"only-jvm={sorted(set(got) - set(want))} "
+        f"only-python={sorted(set(want) - set(got))}"
+    )
+    mismatches = {k: (got[k], want[k]) for k in want if got[k] != want[k]}
+    assert not mismatches, (
+        f"batch_size={batch_size}: JVM and Python scored the same pair "
+        f"differently. Both call the same score_one over the same bytes, so a "
+        f"difference means the batch drifted out of alignment or a slot was "
+        f"read from the wrong position -- (jvm, python): {mismatches}"
+    )
+
+
+def test_end_to_end_dedupe_runs_with_every_kernel_in_the_jar(spark, registered):
+    """`run_config_pipeline` with all three UDFs equals the pure-Python run.
+
+    The claim the arc exists for, end to end: blocking, scoring and survivorship
+    in the executor JVM, clustering already pure Spark SQL. Compared against the
+    Python path rather than asserted to "work", because a golden record that
+    merely looks right is this project's recurring failure.
+    """
+    from goldenmatch.spark.config_pipeline import run_config_pipeline
+    from goldenmatch.spark.jvm import (
+        SURVIVORSHIP_UDF_NAME,
+        TRANSFORM_UDF_NAME,
+        UDF_NAME,
+    )
+
+    src = _parity_source(spark)
+    cfg = _parity_config()
+
+    def golden(**kw):
+        out = run_config_pipeline(
+            src, cfg, id_col="__row_id__", wcc="label_prop",
+            golden_cols=["first", "last", "city"], **kw
+        )
+        return sorted(tuple(r) for r in out.collect())
+
+    want = golden()
+    got = golden(
+        scorer_udf=UDF_NAME,
+        transform_udf=TRANSFORM_UDF_NAME,
+        survivorship_udf=SURVIVORSHIP_UDF_NAME,
+    )
+    assert got == want, (
+        f"the jar-only run produced different golden records:\n"
+        f"  jvm={got}\n  python={want}"
+    )
+
+
+def test_block_key_normalization_routes_to_the_jar_when_asked(spark, registered):
+    """`_block_key_column` hands `transform_udf` down to `_transformed`.
+
+    Threading matters more than the word "plumbing" suggests. A kernel
+    reachable only from an internal is, from a caller's side, not reachable at
+    all -- there is no argument to pass. `transform_udf` existed on
+    `_transformed` for a while before any entry point could supply one, so a
+    user running the documented pipeline got the Python path no matter what the
+    jar could do.
+
+    Blocking is where a normalization divergence does its damage: a value
+    normalized differently lands in a different BLOCK and is never compared to
+    its own duplicate, so the failure is a missing match that nothing
+    downstream can detect.
+
+    Lives HERE rather than in the session-free unit file because building a
+    column expression needs an active session, not merely an importable
+    pyspark: `pyspark.sql.functions` asserts `SparkContext._active_spark_context
+    is not None`. `importorskip("pyspark")` passed locally, where the whole file
+    skipped, and failed in the lane that actually has pyspark installed.
+    """
+    from goldenmatch.config.schemas import BlockingKeyConfig
+    from goldenmatch.spark import config_pipeline
+
+    seen = []
+    real = config_pipeline._transformed
+
+    def spy(col, chain, transform_udf=None):
+        seen.append(transform_udf)
+        return real(col, chain, transform_udf=transform_udf)
+
+    config_pipeline._transformed = spy
+    try:
+        key = BlockingKeyConfig(fields=["city"], transforms=["lowercase"])
+        config_pipeline._block_key_column(key, "golden_transform")
+        config_pipeline._block_key_column(key)
+    finally:
+        config_pipeline._transformed = real
+
+    assert seen == ["golden_transform", None], (
+        "the block-key builder must pass the UDF name through, and must still "
+        "default to the Python path when not given one"
+    )

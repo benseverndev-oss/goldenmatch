@@ -493,7 +493,13 @@ _PEPY_RE = re.compile(r"pepy\.tech/projects\?q=(?P<q>[A-Za-z0-9+._-]+)")
 # like goldenmatch-pg it has a publish workflow but is excluded from the download
 # badge totals on purpose. (goldenmatch-hnsw published its first release 2026-07-29
 # and graduated into PYPI_PACKAGES + the README pepy list.)
-_PYPI_PUBLISH_BADGE_EXCEPTIONS = {"goldenmatch-pg", "infermap-native", "er-matcher"}
+# goldenmatch-spark-jar publishes a JVM .jar to a GitHub Release -- there is
+# no PyPI dist and no pypistats download API, and it is not a compile
+# dependency anybody declares (you hand it to Spark's `addArtifact` at
+# runtime). Same shape as goldenmatch-pg and er-matcher above.
+_PYPI_PUBLISH_BADGE_EXCEPTIONS = {
+    "goldenmatch-pg", "infermap-native", "er-matcher", "goldenmatch-spark-jar",
+}
 
 
 def check_aggregate_badges(res: Result) -> None:
