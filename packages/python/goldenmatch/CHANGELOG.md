@@ -1234,6 +1234,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **Ontology layer, deeper consume + audit (`goldenmatch.semantic.ontology`).**
+  Builds on the v1 provider: `parse_ontology` now inherits `owl:hasKey` down
+  `rdfs:subClassOf` (`effective_has_keys`) and reads cardinality-1 restrictions;
+  `certify_ontology` rolls every declared identity key into one
+  `OntologyCertification` verdict (the analogue of `certify_semantic_model`); and
+  `reconcile_ontology_identity` diffs the ontology's asserted `owl:sameAs`
+  (`asserted_sameas_pairs`) against a GoldenMatch `ResolvedCrosswalk`, flagging
+  where exact-match identity **over-merged** (asserted same, resolved different)
+  or **fragmented** (resolved same, never asserted). Reuses the key-integrity
+  certifier; no reasoner. See ADR 0054.
 
 - **Registry-introspection tools/skills on MCP + A2A (TS-parity).** `list_scorers`,
   `list_transforms`, and `list_strategies` are now exposed on the Python MCP server

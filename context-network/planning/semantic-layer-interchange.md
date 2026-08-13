@@ -8,17 +8,23 @@
 > [0052](../decisions/0052-cube-dialect-and-osi-validation.md) (Cube dialect +
 > OSI validation) +
 > [0053](../decisions/0053-ontology-layer-rdf-owl-provider.md) (ontology layer:
-> RDF/OWL/SHACL native identity provider).
+> RDF/OWL/SHACL native identity provider) +
+> [0054](../decisions/0054-ontology-layer-consume-audit.md) (deeper consume +
+> certification report + reconciliation).
 >
-> **Ontology layer (0053)** — the semantic-layer thesis one level up (TBox/ABox):
-> an ontology *asserts* identity (`owl:hasKey`, `owl:InverseFunctionalProperty`,
-> `owl:sameAs`) but resolves it only by brittle exact-match. `parse_ontology` +
-> `ontology_identity_keys` (consume the declared identifying keys),
-> `certify_ontology_keys` (bridge to A — certify exactly those keys),
+> **Ontology layer (0053 + 0054)** — the semantic-layer thesis one level up
+> (TBox/ABox): an ontology *asserts* identity (`owl:hasKey`,
+> `owl:InverseFunctionalProperty`, `owl:sameAs`) but resolves it only by brittle
+> exact-match. `parse_ontology` + `ontology_identity_keys` (consume the declared
+> identifying keys, with `owl:hasKey` inheritance down `rdfs:subClassOf`),
+> `certify_ontology_keys` / `certify_ontology` (bridge to A — certify exactly those
+> keys, whole-ontology roll-up), `reconcile_ontology_identity` (diff asserted
+> `owl:sameAs` vs resolved identity — over-merge / fragmentation),
 > `emit_sameas_graph` (bridge to B — `owl:sameAs` + PROV-O), `emit_identity_shacl`
 > (conformance shape). `rdflib` optional (`goldenmatch[ontology]`); GoldenMatch is
 > the identity provider FOR the reasoner/triple store, never a reimplementation of
-> one.
+> one. **Still open (0055):** richer emit (`rdf:type` + per-class SHACL) + ontology
+> discovery (draft OWL from data + crosswalk).
 > Captures the framing for how GoldenMatch relates to the semantic-layer /
 > metrics-layer ecosystem (dbt Semantic Layer + MetricFlow, Cube, and the Open
 > Semantic Interchange spec), and a crawl→walk→run plan. Problem **A**
