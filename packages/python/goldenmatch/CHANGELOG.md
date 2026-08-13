@@ -6,6 +6,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Fixed
+- **A domain-extracted field no longer becomes a standalone identity claim
+  unless it is actually an identifier (#2526).** Auto-config promoted every
+  `exact` entry in `_DOMAIN_SCORER_MAP` to its own exact matchkey -- "same value
+  implies same entity", on its own, with nothing else consulted. On DBLP-ACM
+  that produced `domain_exact_title_key` over `__title_key__`, which is the
+  first significant *word* of the title, so zero-config asserted that two papers
+  whose titles start with the same word are the same paper: 33,563 asserted
+  pairs against 2,224 in ground truth, clusters up to 96 members, precision
+  0.068.
+
+  Two mechanisms combined. The eligibility floor was `cardinality_ratio < 0.01`,
+  which only rejects *near-constant* columns -- `__title_key__` sits at 0.29 and
+  cleared it by 29x, where an identity claim needs cardinality near 1.0. And the
+  per-column weight in `_DOMAIN_SCORER_MAP`, which is the author's own statement
+  of confidence (0.2 for `__color__`, 0.8 for `__title_key__`, 1.0 for
+  `__model_norm__` and `__sw_part_num__`), was read and then discarded when the
+  standalone matchkey was built -- so a weak partial signal became a
+  full-strength identity claim regardless.
+
+  A domain `exact` field now stands alone only when its declared weight says it
+  is an identifier and its cardinality agrees; anything weaker folds into the
+  weighted matchkey *at its declared weight*, so the signal is still compared,
+  just not trusted on its own. Measured on DBLP-ACM zero-config: F1
+  **0.1277 -> 0.4593**, precision 0.068 -> 0.301, largest cluster 96 -> 43.
+  Retaining the signal beats dropping the matchkey outright, which scored
+  0.2815.
+
+  This does not close the DBLP-ACM gap to the ~0.92 configured runs reach. The
+  remainder is a separate recall problem that the controller already reports
+  (`failing_subprofile=scoring`, best-effort RED) and is tracked apart from this.
+
 ### Changed
 - **The FS link-threshold refit is ON by default (#2518 follow-up).** The FS
   path is otherwise non-iterated: it commits a fixed 0.50 link cutoff, which
