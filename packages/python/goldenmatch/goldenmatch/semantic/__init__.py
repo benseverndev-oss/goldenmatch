@@ -107,6 +107,16 @@ from goldenmatch.semantic.key_integrity import (
     certify_key_integrity,
     certify_structural_json,
 )
+from goldenmatch.semantic.malloy import (
+    MalloyJoin,
+    MalloyModel,
+    MalloySource,
+    certify_malloy_joins,
+    emit_malloy_from_crosswalk,
+    emit_malloy_source,
+    malloy_join_keys,
+    parse_malloy_models,
+)
 from goldenmatch.semantic.metricflow import (
     DeclaredKeySpec,
     emit_from_crosswalk,
@@ -229,6 +239,15 @@ __all__ = [
     "FeastEntity",
     "FeastFeatureView",
     "FeastRepo",
+    # follow-on — Malloy (malloydata.dev) BI dialect (reader + emitter + bridges)
+    "parse_malloy_models",
+    "malloy_join_keys",
+    "certify_malloy_joins",
+    "emit_malloy_source",
+    "emit_malloy_from_crosswalk",
+    "MalloyModel",
+    "MalloySource",
+    "MalloyJoin",
     # ontology layer — RDF/OWL/SHACL native identity provider (bidirectional)
     "parse_ontology",
     "ontology_identity_keys",

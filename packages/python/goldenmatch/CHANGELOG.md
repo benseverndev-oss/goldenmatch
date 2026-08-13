@@ -7,6 +7,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **Malloy (malloydata.dev) BI dialect for the semantic-layer certifier
+  (`goldenmatch.semantic.malloy`).** Malloy's unit is a `source` whose identity is
+  its declared `primary_key`, with `join_one`/`join_many`/`join_cross` riding on it
+  — structurally the same as Cube's `primary_key` + joins, so the same certifier
+  applies. New: `parse_malloy_models` (a structured `{sources: [...]}` projection
+  OR raw `.malloy` DSL text via a focused declaration parser), `malloy_join_keys`,
+  `certify_malloy_joins` (bridge to wedge A — certifies the one-side key of each
+  join, picking the declaring side for `join_many` and skipping `join_cross`),
+  `emit_malloy_source` (round-trips through the DSL parser) and
+  `emit_malloy_from_crosswalk` (bridge to wedge B — declares the resolved key as a
+  `primary_key` + a `join_one` to it, returning `(malloy_text, provenance)` since
+  Malloy has no metadata slot in this subset). `certify_semantic_model` auto-detects
+  a top-level `sources:` as the `"malloy"` dialect. Library-only, advisory,
+  parity-free.
 - **Feast (feature-store) dialect for the semantic-layer certifier
   (`goldenmatch.semantic.feast`).** A feature store is a join graph one layer over
   into ML: a `FeatureView` is keyed on an `Entity`'s `join_keys`, and a duplicated

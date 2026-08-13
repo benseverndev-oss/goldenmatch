@@ -20,6 +20,7 @@ from goldenmatch.core.key_integrity_certificate import KeyIntegrityCertificate
 from goldenmatch.semantic.cube import certify_cube_joins
 from goldenmatch.semantic.feast import certify_feast_feature_views
 from goldenmatch.semantic.key_integrity import certify_key_integrity
+from goldenmatch.semantic.malloy import certify_malloy_joins
 from goldenmatch.semantic.metricflow import _load, parse_semantic_models
 from goldenmatch.semantic.osi import certify_osi_relationships
 
@@ -40,7 +41,7 @@ class SemanticCertification:
     """The result of certifying a whole semantic model: the detected dialect and
     one `KeyCertification` per declared key that had a supplied frame."""
 
-    dialect: str                         # "metricflow" | "cube" | "osi" | "feast"
+    dialect: str                         # "metricflow" | "cube" | "osi" | "feast" | "malloy"
     entries: list[KeyCertification] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)  # targets with no frame
     note: str = ""
@@ -75,10 +76,13 @@ def detect_dialect(data: dict[str, Any]) -> str:
         return "osi"
     if "feature_views" in data:
         return "feast"
+    if "sources" in data:
+        return "malloy"
     raise ValueError(
         "certify_semantic_model: could not detect a semantic-layer dialect; "
         "expected a top-level 'cubes' (Cube), 'semantic_models' (dbt/MetricFlow), "
-        "'semantic_model' (OSI/Ossie), or 'feature_views' (Feast) key"
+        "'semantic_model' (OSI/Ossie), 'feature_views' (Feast), or 'sources' "
+        "(Malloy) key"
     )
 
 
@@ -153,6 +157,13 @@ def certify_semantic_model(
             entries.append(KeyCertification(
                 target=rep["feature_view"], key=list(rep["key"]), certificate=rep["certificate"],
                 context=f"entity {rep['entity']}",
+            ))
+    elif dialect == "malloy":
+        # certify_malloy_joins certifies the one-side key of each source join.
+        for rep in certify_malloy_joins(data, frames, resolve=resolve, roles=roles):
+            entries.append(KeyCertification(
+                target=rep["to_source"], key=list(rep["key"]), certificate=rep["certificate"],
+                context=f"join from {rep['from_source']}",
             ))
     else:  # osi
         for rep in certify_osi_relationships(data, frames, resolve=resolve, roles=roles):

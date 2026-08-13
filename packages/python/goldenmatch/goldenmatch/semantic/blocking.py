@@ -124,6 +124,13 @@ def semantic_field_roles(source: str | Any) -> SemanticFieldRoles:
         # because they share a churn score), so features are measures.
         for fv in repo.feature_views:
             measures.extend(fv.features)
+    elif dialect == "malloy":
+        from goldenmatch.semantic.malloy import parse_malloy_models
+
+        for src in parse_malloy_models(data).sources:
+            keys.extend(src.primary_key)
+            dimensions.extend(src.dimensions)
+            measures.extend(src.measures)
     else:  # osi
         from goldenmatch.semantic.osi import parse_osi_models
 
