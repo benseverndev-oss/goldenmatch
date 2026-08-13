@@ -1281,7 +1281,7 @@ _EQUALITY_PRESERVING_TRANSFORMS = frozenset({
 })
 
 
-def _always_agreeing_blocking_fields(blocking) -> set[str]:
+def _always_agreeing_blocking_fields(blocking: BlockingConfig | None) -> set[str]:
     """Fields on which EVERY candidate pair is guaranteed to agree.
 
     Two conditions, both necessary:
@@ -1310,7 +1310,9 @@ def _always_agreeing_blocking_fields(blocking) -> set[str]:
     return set.intersection(*groups)
 
 
-def _drop_uninformative_blocking_fields(matchkeys, blocking) -> None:
+def _drop_uninformative_blocking_fields(
+    matchkeys: list[MatchkeyConfig], blocking: BlockingConfig | None,
+) -> None:
     """Drop scored fields that every candidate pair agrees on by construction.
 
     Such a field contributes its full weight to every pair as a constant OFFSET
