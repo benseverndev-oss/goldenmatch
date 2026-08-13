@@ -62,6 +62,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   default stays off until the benchmark says otherwise.
 
 ### Fixed
+- **Blocking-candidate recall is measured against the pairs the scorer would
+  match, and for every candidate (#2513).** Three defects in `estimate_recall` /
+  `analyze_blocking`, all in how the recall number was produced and consumed.
+
+  1. *Wrong denominator.* Candidates were scored against pairs whose
+     Jaro-Winkler similarity on the highest-cardinality matchkey column was
+     `>= 0.7`. On Amazon-Google that population is 98.5% non-duplicates (2,355
+     sample pairs, 35 truly matching), so a candidate was judged largely on how
+     many NON-matches it co-blocked — a specificity penalty reported as recall,
+     and worst for the most discriminative candidate. `analyze_blocking` now
+     accepts the weighted `matchkey` the pipeline will score with and takes the
+     target set from `find_fuzzy_matches`, the one authoritative pair scorer.
+     Blocking is accountable for retaining what the scorer would match, so that
+     is the right denominator. Estimated vs true pair recall on Amazon-Google:
+     `tokens(title, df<=10)` 26.0% → 68.7% (true 65.9%), `df<=25` 46.1% → 87.3%
+     (87.6%), `df<=50` 73.6% → 96.8% (95.3%). Callers with only column names
+     (CLI / MCP / A2A) keep the old proxy, now documented as the weak fallback
+     it is.
+  2. *A sentinel used as a value.* Recall was measured only for the top 10 by
+     score; the rest were assigned `0.0` meaning "unmeasured" — then multiplied
+     into the rank, making them unselectable however good they were. On
+     Amazon-Google that zeroed `tokens(title, df<=100)`, the candidate with the
+     highest true pair recall of any generated (98.2%). Every candidate is
+     measured now, the placeholder is gone, and the two-tier sort that existed
+     to contain it collapses to one. A measurement failure fails open to `1.0`
+     (rank on score alone) rather than to `0.0`.
+  3. *Repeated work.* The sample is seeded, so all ten measured candidates saw
+     an identical pair population — and rebuilt it from scratch each time. The
+     target is now built once. `analyze_blocking` on Amazon-Google: **195.9s →
+     1.6s**, while measuring 53 candidates instead of 10.
+
+  Net effect on the shipped ranking: the top suggestion changes from
+  `tokens(title, df<=25)` to `tokens(title, df<=10)`, which measures F1 0.1697
+  end-to-end against 0.0864 for the previous pick.
 - **Bucket routing no longer bypasses the blocking-expressibility gate (#2488).**
   The bucket scorer derives FIELD-based block keys from `blocking.keys` /
   `blocking.passes`; a guard kept strategies with no field keys (lsh / ann /

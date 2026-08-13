@@ -2358,9 +2358,13 @@
           "defines": [
             "BlockingSuggestion",
             "_apply_candidate_transforms",
+            "_build_recall_target",
             "_mean_token_count",
+            "_retention",
             "_score_token_candidate",
             "_single_column_candidates",
+            "_target_pairs_from_matchkey",
+            "_target_pairs_from_similarity",
             "_token_candidates",
             "_token_candidates_enabled",
             "_token_index",
@@ -2377,6 +2381,7 @@
             "goldenmatch.config.schemas",
             "goldenmatch.core",
             "goldenmatch.core.frame",
+            "goldenmatch.core.scorer",
             "goldenmatch.core.token_blocker"
           ]
         },

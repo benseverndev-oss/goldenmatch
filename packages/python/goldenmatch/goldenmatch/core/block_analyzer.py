@@ -6,6 +6,7 @@ import logging
 import re
 from dataclasses import dataclass
 from itertools import combinations
+from typing import Any
 
 from goldenmatch._polars_lazy import pl
 
@@ -501,90 +502,161 @@ def check_coverage(candidate: dict, matchkey_columns: list[str]) -> bool:
 # ── Recall estimation ────────────────────────────────────────────────────────
 
 
-def estimate_recall(
-    df: pl.DataFrame,
-    candidate: dict,
-    matchkey_columns: list[str],
-    sample_size: int = 1000,
-) -> float:
-    """Estimate recall for a blocking candidate using pair sampling.
+def _target_pairs_from_matchkey(sample_frame: Any, matchkey: Any) -> set[tuple[int, int]]:
+    """Pairs the CONFIGURED matchkey would emit above its threshold (#2513).
 
-    Takes a random sample, finds fuzzy-similar pairs via JaroWinkler on the
-    highest-cardinality matchkey column, then checks what fraction would land
-    in the same block under this candidate.
+    This is the right denominator for blocking recall. Blocking's job is not to
+    find true duplicates -- that is the scorer's job -- it is to avoid losing
+    pairs the scorer would have matched. So "what fraction of the pairs the
+    matchkey emits does this candidate retain?" is the question, and anything
+    the scorer would reject anyway is not blocking's failure to retain.
+
+    Reuses ``find_fuzzy_matches``, the one authoritative pair scorer, rather
+    than rebuilding a second scoring path here (which would also have to
+    reimplement composite scorers like ``ensemble`` that the NxN matrix helper
+    does not expose).
+
+    Row ids are positional into ``sample_frame`` so callers can index parallel
+    per-row lists directly.
+    """
+    from goldenmatch.core.scorer import find_fuzzy_matches
+
+    height = sample_frame.height
+    block = sample_frame.native.with_columns(
+        pl.Series("__row_id__", list(range(height)), dtype=pl.Int64)
+    )
+    emitted = find_fuzzy_matches(block, matchkey)
+    return {(min(a, b), max(a, b)) for a, b, _ in emitted}
+
+
+def _target_pairs_from_similarity(
+    sample_frame: Any, matchkey_columns: list[str]
+) -> set[tuple[int, int]]:
+    """Fallback denominator when no weighted matchkey is available.
+
+    Character similarity on the highest-cardinality matchkey column. Retained
+    only for callers that have column names but no matchkey (CLI / MCP / A2A
+    entry points). It is a WEAK proxy -- on Amazon-Google, JW >= 0.7 selects
+    2,355 sample pairs of which 35 are true matches (1.5% precision), so a
+    candidate is judged largely on how many NON-matches it co-blocks. Prefer
+    passing a matchkey; see `_target_pairs_from_matchkey`.
     """
     from goldenmatch.core import strsim
 
-    n = len(df)
-    if n < 2:
-        return 0.0
-
-    from goldenmatch.core.frame import to_frame
-
-    actual_sample = min(sample_size, n)
-    sample_frame = to_frame(df).sample(actual_sample, seed=42)
-
-    # Pick highest-cardinality matchkey column
     valid_cols = [c for c in matchkey_columns if c in sample_frame.columns]
     if not valid_cols:
-        return 0.0
-
+        return set()
     best_col = max(valid_cols, key=lambda c: sample_frame.column(c).n_unique())
-
-    # Prepare string values for cdist
-    values = (
-        sample_frame.column(best_col)
-        .cast_str()
-        .fill_null("")
-        .to_list()
-    )
-    values = [str(v).lower().strip() for v in values]
-
-    # Compute pairwise JaroWinkler scores
+    values = [
+        str(v).lower().strip()
+        for v in sample_frame.column(best_col).cast_str().fill_null("").to_list()
+    ]
     scores = strsim.pure_field_matrix(values, "jaro_winkler")
+    height = sample_frame.height
+    return {
+        (i, j)
+        for i in range(height)
+        for j in range(i + 1, height)
+        if scores[i][j] >= 0.7
+    }
 
-    # Find pairs above threshold (upper triangle only)
-    threshold = 0.7
-    pairs_above = set()
-    for i in range(actual_sample):
-        for j in range(i + 1, actual_sample):
-            if scores[i][j] >= threshold:
-                pairs_above.add((i, j))
 
-    if not pairs_above:
-        return 1.0  # No pairs to miss
+def _build_recall_target(
+    df: pl.DataFrame,
+    matchkey_columns: list[str],
+    sample_size: int,
+    matchkey: Any = None,
+) -> tuple[Any, set[tuple[int, int]]]:
+    """The fixed sample and the pairs blocking must not lose, computed ONCE.
 
-    # Apply candidate transforms to sample and get block keys. The helper
-    # returns a seam Frame (not a raw frame), so read the column through the
-    # seam -- a raw `["__block_key__"]` subscript raises on the arrow-native
-    # lane ('PolarsFrame'/'ArrowFrame' object is not subscriptable).
+    Hoisted out of the per-candidate loop deliberately (#2513): the sample is
+    seeded, so every candidate saw an identical population and the analyzer
+    rebuilt it from scratch each time. On Amazon-Google that was ~19.6s of
+    O(n^2) work repeated for all ten measured candidates -- essentially the
+    whole 196s runtime of `analyze_blocking`.
+    """
+    from goldenmatch.core.frame import to_frame
+
+    actual_sample = min(sample_size, len(df))
+    sample_frame = to_frame(df).sample(actual_sample, seed=42)
+
+    if matchkey is not None:
+        try:
+            return sample_frame, _target_pairs_from_matchkey(sample_frame, matchkey)
+        except Exception:
+            logger.warning(
+                "Recall target: scoring the sample with matchkey %r failed; falling "
+                "back to the character-similarity proxy",
+                getattr(matchkey, "name", "?"), exc_info=True,
+            )
+    return sample_frame, _target_pairs_from_similarity(sample_frame, matchkey_columns)
+
+
+def _retention(
+    sample_frame: Any, candidate: dict, target_pairs: set[tuple[int, int]]
+) -> float:
+    """Fraction of ``target_pairs`` this candidate keeps in a shared block."""
+    from goldenmatch.core.frame import to_frame
+
+    if not target_pairs:
+        return 1.0  # nothing to lose
+
+    height = sample_frame.height
     if candidate.get("kind") == "token":
         # Token blocking is multi-key: a pair is retained when it shares AT
         # LEAST ONE surviving token, so membership is a set-intersection test
-        # rather than a key equality. Built on the sample, so the DF cap is
-        # resolved against the sample size the same way scoring did.
+        # rather than a key equality.
         index, _ = _token_index(sample_frame.native, candidate)
-        row_tokens: list[set[str]] = [set() for _ in range(actual_sample)]
+        row_tokens: list[set[str]] = [set() for _ in range(height)]
         for token, members in index.items():
             if len(members) < 2:
                 continue
             for r in members:
                 row_tokens[r].add(token)
-        pairs_in_same_block = sum(
-            1 for i, j in pairs_above if row_tokens[i] & row_tokens[j]
-        )
-        return pairs_in_same_block / len(pairs_above)
+        kept = sum(1 for i, j in target_pairs if row_tokens[i] & row_tokens[j])
+        return kept / len(target_pairs)
 
+    # `_apply_candidate_transforms` returns a seam Frame (not a raw frame), so
+    # read the column through the seam -- a raw `["__block_key__"]` subscript
+    # raises on the arrow-native lane ('PolarsFrame' object is not subscriptable).
     sample_with_key = _apply_candidate_transforms(sample_frame.native, candidate)
     block_keys = to_frame(sample_with_key).column("__block_key__").to_list()
-
-    # Check how many pairs share the same block key
-    pairs_in_same_block = sum(
-        1 for i, j in pairs_above
+    kept = sum(
+        1 for i, j in target_pairs
         if block_keys[i] is not None and block_keys[i] == block_keys[j]
     )
+    return kept / len(target_pairs)
 
-    return pairs_in_same_block / len(pairs_above)
+
+def estimate_recall(
+    df: pl.DataFrame,
+    candidate: dict,
+    matchkey_columns: list[str],
+    sample_size: int = 1000,
+    matchkey: Any = None,
+) -> float:
+    """Estimate what fraction of matchable pairs a blocking candidate retains.
+
+    Takes a seeded sample, builds the set of pairs blocking must not lose, then
+    checks how many of them this candidate co-blocks.
+
+    When ``matchkey`` is supplied the target set is the pairs that matchkey
+    actually emits -- the correct denominator, since blocking is accountable
+    for retaining what the scorer would match and nothing else. Without one it
+    falls back to a character-similarity proxy that is substantially weaker;
+    see `_target_pairs_from_similarity`.
+
+    Single-candidate entry point. `analyze_blocking` builds the target once and
+    calls `_retention` directly, so it does not pay for this per candidate.
+    """
+    if len(df) < 2:
+        return 0.0
+    sample_frame, target = _build_recall_target(
+        df, matchkey_columns, sample_size, matchkey
+    )
+    if not target and not matchkey_columns:
+        return 0.0
+    return _retention(sample_frame, candidate, target)
 
 
 # ── BlockingSuggestion ───────────────────────────────────────────────────────
@@ -623,8 +695,15 @@ def analyze_blocking(
     matchkey_columns: list[str],
     sample_size: int = 1000,
     target_block_size: int = 5000,
+    matchkey: Any = None,
 ) -> list[BlockingSuggestion]:
     """Analyze data and return ranked blocking strategy suggestions.
+
+    ``matchkey`` (optional, #2513) is the weighted matchkey the pipeline will
+    score with. Supplying it makes recall estimation measure the right thing --
+    what fraction of the pairs that matchkey emits each candidate retains --
+    instead of a character-similarity stand-in for "duplicate". Callers that
+    only have column names may omit it and get the weaker proxy.
 
     Pipeline:
     1. Generate candidates from matchkey_columns
@@ -664,23 +743,32 @@ def analyze_blocking(
     if not scored:
         return []
 
-    # Sort by score descending to pick top candidates for recall estimation
+    # Sort by score descending -- the tie-break for equal score*recall below.
     scored.sort(key=lambda x: x[1]["score"], reverse=True)
 
-    # Estimate recall for top 10
-    top_n = min(10, len(scored))
-    for i in range(top_n):
-        cand, metrics = scored[i]
+    # #2513: build the target pair set ONCE, then measure EVERY candidate
+    # against it. Previously only the top 10 by score were measured and the
+    # rest were assigned 0.0 as an "unmeasured" placeholder -- but 0.0 is also
+    # a real recall value, and it was multiplied into the rank, so an unmeasured
+    # candidate could never be selected however good it was. On Amazon-Google
+    # that zeroed `tokens(title, df<=100)`, which had the HIGHEST true pair
+    # recall of every candidate generated (98.2%).
+    sample_frame, target_pairs = _build_recall_target(
+        df, matchkey_columns, sample_size, matchkey
+    )
+    for cand, metrics in scored:
         try:
-            recall = estimate_recall(df, cand, matchkey_columns, sample_size=sample_size)
+            metrics["estimated_recall"] = _retention(sample_frame, cand, target_pairs)
         except Exception:
-            logger.warning(f"Recall estimation failed for {cand['description']}", exc_info=True)
-            recall = 0.0
-        metrics["estimated_recall"] = recall
-
-    # For the rest, set recall to 0.0
-    for i in range(top_n, len(scored)):
-        scored[i][1]["estimated_recall"] = 0.0
+            # Fail-open to 1.0, NOT 0.0: a measurement failure must not be
+            # indistinguishable from a measured "retains nothing", which is
+            # exactly the confusion the placeholder above caused. Leaving the
+            # candidate ranked on `score` alone is the neutral outcome.
+            logger.warning(
+                "Recall estimation failed for %s; ranking it on score alone",
+                cand["description"], exc_info=True,
+            )
+            metrics["estimated_recall"] = 1.0
 
     # Build suggestions with coverage-based ranking
     suggestions = []
@@ -700,27 +788,22 @@ def analyze_blocking(
             description=cand["description"],
         ))
 
-    # #2488: rank the MEASURED candidates by score x recall.
+    # #2488: rank by score x recall.
     #
     # `estimated_recall` was computed here and then thrown away -- the only
     # thing multiplying the score was `recall_bonus`, which is
     # `check_coverage`'s field-membership flag (are the key's columns matchkey
     # columns?) and has nothing to do with how many true pairs the key retains.
     # So the analyzer measured recall, logged it, and ranked as if it hadn't.
-    # On Amazon-Google every candidate estimates 0.05-0.07 recall and the top
-    # one was picked purely on selectivity.
     #
-    # Two tiers, deliberately: recall is only MEASURED for the top `top_n`, so
-    # multiplying it into every score would rank an unmeasured candidate
-    # (placeholder 0.0) as if it were known-useless, and would push measured
-    # candidates below unmeasured ones whenever recall < 1. `suggestions` is
-    # built in `scored` order and `scored` is sorted by raw score, so the first
-    # `top_n` are exactly the measured ones. They keep that block and are
-    # reordered within it; the unmeasured tail stays behind them in score order,
-    # exactly where it already was.
-    measured, unmeasured = suggestions[:top_n], suggestions[top_n:]
-    measured.sort(key=lambda s: (s.score * s.estimated_recall, s.score), reverse=True)
-    suggestions = measured + unmeasured
+    # #2513: this was a two-tier sort while recall was measured only for the top
+    # 10 -- the tail carried a 0.0 placeholder that would have zeroed its rank.
+    # Every candidate is measured now, so the tiers are gone and one sort covers
+    # the list. `score` stays as the tie-break, and it still carries the
+    # tractability half of the trade-off (a key that retains everything by
+    # putting everything in one block scores badly on comparison count), so
+    # ranking is not a race to maximise recall alone.
+    suggestions.sort(key=lambda s: (s.score * s.estimated_recall, s.score), reverse=True)
 
     if suggestions and suggestions[0].estimated_recall < _LOW_RECALL_WARN:
         # Not a hard reject. On a frame where EVERY candidate is below the floor
