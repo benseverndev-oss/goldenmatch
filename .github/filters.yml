@@ -991,3 +991,18 @@ pyright_slice:
   - 'packages/python/goldenmatch/goldenmatch/_api.py'
   - 'packages/python/goldenmatch/goldenmatch/utils/transforms.py'
   - 'packages/python/goldenmatch/goldenmatch/config/**'
+# docs_regen: any source that feeds a committed generated doc (the regen_docs.py
+# battery). A change here means the derived docs may need regenerating, so the
+# single `docs_regen` gate (regen + `git diff` fail) must run. Broad on purpose --
+# the regen is idempotent, so an over-trigger is a cheap no-op, while an
+# under-trigger would let a stale doc through (the failure class this replaces).
+docs_regen:
+  - 'packages/python/**'
+  - 'parity/**'
+  - 'scripts/gen_*.py'
+  - 'scripts/agent_codemap.py'
+  - 'scripts/check_llms_counts.py'
+  - 'scripts/regen_docs.py'
+  - 'docs-site/**'
+  - 'docs/agent-manifest.json'
+  - 'docs/agent-codemap.json'
