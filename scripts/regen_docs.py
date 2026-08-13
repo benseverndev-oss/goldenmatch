@@ -48,6 +48,17 @@ PROSE_CHECKS: list[list[str]] = [
     ["scripts/gen_api_surface.py", "--check"],        # api-surface.mdx inline figures (block already fresh)
 ]
 
+# The ONLY paths a generator writes. The drift check is scoped to these so an
+# unrelated CI-mutated tracked file (notably `uv.lock`, which `uv sync` re-resolves
+# in the runner) can't false-trip the gate -- we assert the GENERATED DOCS are
+# current, nothing else.
+GENERATED_PATHS: list[str] = [
+    "docs-site",                                              # config-matrix / api-surface / suite-matrix / thesis / native
+    "docs/agent-manifest.json",
+    "docs/agent-codemap.json",
+    "packages/python/goldensuite-mcp/goldensuite_mcp/agent-manifest.json",
+]
+
 
 def _run(argv: list[str]) -> int:
     print(f"  $ {' '.join(argv)}")
@@ -55,10 +66,13 @@ def _run(argv: list[str]) -> int:
 
 
 def _git_diff_is_clean() -> bool:
-    # `git diff --quiet` = tracked modifications only (exit 0 clean, 1 dirty). Every
-    # generated doc is already tracked, so a stale one shows as modified; untracked
-    # files (e.g. unrelated scratch) don't falsely trip the check.
-    return subprocess.run(["git", "diff", "--quiet"], cwd=ROOT).returncode == 0
+    # `git diff --quiet -- <generated paths>` = tracked modifications to the
+    # GENERATED DOCS only (exit 0 clean, 1 dirty). Scoped so an unrelated
+    # CI-mutated tracked file (e.g. `uv.lock` from `uv sync`) can't false-trip it;
+    # untracked scratch is ignored too.
+    return subprocess.run(
+        ["git", "diff", "--quiet", "--", *GENERATED_PATHS], cwd=ROOT
+    ).returncode == 0
 
 
 def main() -> int:
@@ -81,8 +95,8 @@ def main() -> int:
         if not _git_diff_is_clean():
             print("\nDOC DRIFT: committed generated docs were stale. The diff below is the fix "
                   "-- run `python scripts/regen_docs.py` and commit it:\n", file=sys.stderr)
-            subprocess.run(["git", "--no-pager", "diff", "--stat"], cwd=ROOT)
-            subprocess.run(["git", "--no-pager", "diff"], cwd=ROOT)
+            subprocess.run(["git", "--no-pager", "diff", "--stat", "--", *GENERATED_PATHS], cwd=ROOT)
+            subprocess.run(["git", "--no-pager", "diff", "--", *GENERATED_PATHS], cwd=ROOT)
             ok = False
         if prose_failed:
             print("\nDOC DRIFT: hand-authored count figures are stale (see the checks above); "
