@@ -7805,6 +7805,7 @@
           "file": "packages/python/goldenmatch/goldenmatch/spark/batched.py",
           "purpose": "J1: reshape scoring from one call per PAIR to one call per BATCH.",
           "defines": [
+            "_above",
             "batch_key",
             "dedup_max",
             "score_pairs_batched"
