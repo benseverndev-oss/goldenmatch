@@ -104,3 +104,26 @@ def test_mcp_ontology_discover_returns_turtle(tmp_path):
 def test_mcp_ontology_certify_input_guards():
     assert "error" in _tool_ontology_certify("", {"Patient": "x.csv"})
     assert "error" in _tool_ontology_certify("o.ttl", {})
+
+
+def test_cli_ontology_discover_endpoint_write_back(tmp_path, monkeypatch):
+    captured = {}
+
+    class _Resp:
+        status = 204
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def getcode(self): return 204
+
+    def fake(req, timeout=None):
+        captured["method"] = req.get_method()
+        captured["url"] = req.full_url
+        return _Resp()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake)
+    csv = _customers_csv(tmp_path)
+    res = runner.invoke(app, ["ontology", "discover", "-d", f"Customer={csv}",
+                              "--endpoint", "http://ts/data", "--graph-iri", "urn:g"])
+    assert res.exit_code == 0, res.output
+    assert captured["method"] == "PUT" and "graph=urn%3Ag" in captured["url"]
+    assert "HTTP 204" in res.output

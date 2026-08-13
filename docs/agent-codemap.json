@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 469,
+      "module_count": 470,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7174,6 +7174,7 @@
             "goldenmatch.semantic.key_integrity",
             "goldenmatch.semantic.metricflow",
             "goldenmatch.semantic.ontology",
+            "goldenmatch.semantic.ontology_catalog",
             "goldenmatch.semantic.osi",
             "goldenmatch.semantic.serving"
           ]
@@ -7648,6 +7649,19 @@
           "imports": [
             "goldenmatch.semantic.discovery.keys",
             "goldenmatch.semantic.key_integrity"
+          ]
+        },
+        {
+          "module": "goldenmatch.semantic.ontology_catalog",
+          "file": "packages/python/goldenmatch/goldenmatch/semantic/ontology_catalog.py",
+          "purpose": "Live-catalog write-back for the ontology layer — persist emitted RDF.",
+          "defines": [
+            "_as_rdf_string",
+            "write_ontology_catalog",
+            "write_resolved_identity_graph"
+          ],
+          "imports": [
+            "goldenmatch.semantic.ontology"
           ]
         },
         {

@@ -31,8 +31,10 @@
 > arc is complete** (0053 v1 + 0054 consume/audit + 0055 produce/discover) and now
 > has a **CLI + MCP front door** ([0056](../decisions/0056-ontology-cli-mcp-front-door.md):
 > `goldenmatch ontology certify|discover`, `ontology_certify`/`ontology_discover`
-> MCP tools); **live-catalog write-back** (RDF → triple store) is the last deferred
-> piece.
+> MCP tools) and **live-catalog write-back** ([0057](../decisions/0057-ontology-live-catalog-writeback.md):
+> `write_ontology_catalog` / `write_resolved_identity_graph` → file or a live
+> SPARQL 1.1 Graph Store endpoint; `ontology discover --endpoint`). **The ontology
+> arc is fully complete — no deferred items remain.**
 > Captures the framing for how GoldenMatch relates to the semantic-layer /
 > metrics-layer ecosystem (dbt Semantic Layer + MetricFlow, Cube, and the Open
 > Semantic Interchange spec), and a crawl→walk→run plan. Problem **A**

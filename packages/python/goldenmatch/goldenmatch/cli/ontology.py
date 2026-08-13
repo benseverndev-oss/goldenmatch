@@ -107,6 +107,16 @@ def discover_cmd(
     ),
     base_iri: str | None = typer.Option(None, "--base-iri", help="Base IRI for the emitted terms."),
     ontology_iri: str | None = typer.Option(None, "--ontology-iri", help="IRI for the ontology node."),
+    endpoint: str | None = typer.Option(
+        None, "--endpoint",
+        help="Write the OWL to a live SPARQL 1.1 Graph Store endpoint (a triple store).",
+    ),
+    graph_iri: str | None = typer.Option(
+        None, "--graph-iri", help="Named graph for --endpoint (default graph if omitted).",
+    ),
+    mode: str = typer.Option(
+        "replace", "--mode", help="--endpoint write mode: replace (PUT) or merge (POST).",
+    ),
     as_json: bool = typer.Option(False, "--json", help="Emit the discovery result as JSON."),
     fail_untrustworthy: bool = typer.Option(
         False, "--fail-untrustworthy",
@@ -116,7 +126,7 @@ def discover_cmd(
     """Discover a draft OWL ontology from data, every owl:hasKey pre-graded."""
     import json
 
-    from goldenmatch.semantic import discover_ontology
+    from goldenmatch.semantic import discover_ontology, write_ontology_catalog
     from goldenmatch.semantic.ontology import DEFAULT_BASE_IRI
 
     frames = _read_frames(data)
@@ -131,6 +141,16 @@ def discover_cmd(
     if output:
         with open(output, "w", encoding="utf-8") as fh:
             fh.write(disc.turtle)
+
+    endpoint_status: dict | None = None
+    if endpoint:
+        try:
+            endpoint_status = write_ontology_catalog(
+                disc.turtle, endpoint=endpoint, graph_iri=graph_iri, mode=mode,
+            )
+        except (RuntimeError, ValueError) as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=4) from exc
 
     all_trustworthy = all(c["is_trustworthy"] for c in disc.classes) if disc.classes else True
     if as_json:
@@ -156,6 +176,11 @@ def discover_cmd(
             console.print(tbl)
         if output:
             console.print(f"[dim]wrote {output}[/dim]")
+        if endpoint_status:
+            console.print(
+                f"[dim]{endpoint_status['method']} -> {endpoint_status['endpoint']} "
+                f"(graph {endpoint_status['graph']}): HTTP {endpoint_status['status']}[/dim]"
+            )
 
     if fail_untrustworthy and not all_trustworthy:
         raise typer.Exit(code=1)

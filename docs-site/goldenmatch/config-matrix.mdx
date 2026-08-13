@@ -885,6 +885,9 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `ontology discover` | `--output` | text | `None` | Write the draft OWL ontology (Turtle) to this path. |
 | `ontology discover` | `--base-iri` | text | `None` | Base IRI for the emitted terms. |
 | `ontology discover` | `--ontology-iri` | text | `None` | IRI for the ontology node. |
+| `ontology discover` | `--endpoint` | text | `None` | Write the OWL to a live SPARQL 1.1 Graph Store endpoint (a triple store). |
+| `ontology discover` | `--graph-iri` | text | `None` | Named graph for --endpoint (default graph if omitted). |
+| `ontology discover` | `--mode` | text | `'replace'` | --endpoint write mode: replace (PUT) or merge (POST). |
 | `ontology discover` | `--json` | boolean | `False` | Emit the discovery result as JSON. |
 | `ontology discover` | `--fail-untrustworthy` | boolean | `False` | Exit non-zero if any discovered class key is not unique at grain (CI gate). |
 | `pprl auto-config` | `file` | path | **required** | Data file to analyze (CSV) |
