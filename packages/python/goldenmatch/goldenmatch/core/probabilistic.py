@@ -1216,6 +1216,7 @@ def train_em(
     blocking_fields: list[str] | None = None,
     target_ids: set[int] | None = None,
     label_pairs: dict[tuple[int, int], int] | None = None,
+    pair_weights: Sequence[float] | None = None,
 ) -> EMResult:
     """Train Fellegi-Sunter model using Expectation-Maximization.
 
@@ -1460,6 +1461,43 @@ def train_em(
     # NE field), so seed m with a low fired-probability prior.
     m_probs_ne: dict[str, list[float]] = {ne.field: [0.05, 0.95] for ne in ne_fields_em}
 
+    # Pair weights. `None` -> all ones, which is the pair-wise caller and is
+    # bit-identical to the unweighted arithmetic it replaces (x*1.0 == x).
+    # An aggregated caller passes one row per DISTINCT (comparison vector,
+    # conditioning, NE vector) with its count, which is exact rather than a
+    # sample: the E-step reads only those three things, so identical rows have
+    # identical posteriors and every M-step sum is linear in the count.
+    #
+    # Bounded, too: the number of distinct rows is at most the product over
+    # fields of (levels + 1), times the number of blocking passes -- thousands,
+    # not millions -- which is what lets the comparison vectors be counted
+    # anywhere (a cluster, say) and the iteration run on the result.
+    #
+    # WEIGHTS ARE COUNTS, and the scale is load-bearing. The M-step smoothing
+    #
+    #     new_m[level] = (sum + 1e-6) / (eligible_match + n_levels * 1e-6)
+    #
+    # is additive and unscaled, so its influence shrinks as the weighted totals
+    # grow -- correct for a prior, and it means doubling every weight is NOT a
+    # no-op. Aggregation is exact only because collapsing identical rows
+    # regroups the terms of each sum WITHOUT changing the total: the represented
+    # population is the same, so the smoothing constant weighs the same. Pass
+    # normalised or rescaled weights and the low-probability cells shift, which
+    # is where log2(m/u) is largest and the shift is least visible.
+    # Pinned by tests/test_fs_em_weighted_pairs.py.
+    if pair_weights is None:
+        w = np.ones(n_pairs, dtype=np.float64)
+    else:
+        w = np.asarray(pair_weights, dtype=np.float64)
+        if w.shape != (n_pairs,):
+            raise ValueError(
+                f"pair_weights has shape {w.shape}, expected ({n_pairs},) -- "
+                f"one weight per comparison row"
+            )
+        if not np.all(w > 0):
+            raise ValueError("pair_weights must all be positive")
+    total_weight = float(w.sum())
+
     # ── Step 3: EM iterations — only update m, fix u ──
     converged = False
     for iteration in range(max_iterations):
@@ -1512,8 +1550,16 @@ def train_em(
             posteriors[label_clamp_idx] = label_clamp_val
 
         # M-step: update ONLY m_probs and p_match (u is fixed)
-        total_match = posteriors.sum()
-        p_match = max(total_match / n_pairs, 1e-6)
+        #
+        # Every quantity below is a SUM OVER PAIRS, which is the whole reason
+        # `pair_weights` can exist: two pairs with the same comparison vector,
+        # the same pass conditioning and the same NE vector contribute
+        # identically to every one of them, so they can be collapsed into one
+        # row carrying a count. `w` is all-ones for the pair-wise caller, and
+        # the aggregated caller passes the counts. Same arithmetic either way.
+        wp = posteriors * w
+        total_match = wp.sum()
+        p_match = max(total_match / total_weight, 1e-6)
 
         for j, f in enumerate(mk.fields):
             if f.field in always_conditioned:
@@ -1524,11 +1570,11 @@ def train_em(
             # is not conditioned out of this field for its pass.
             observed = comp_matrix[:, j] >= 0
             eligible = observed & ~conditioned_mask[:, j]
-            eligible_match = posteriors[eligible].sum()
+            eligible_match = wp[eligible].sum()
             new_m = [0.0] * n_levels
             for level in range(n_levels):
                 mask = eligible & (comp_matrix[:, j] == level)
-                new_m[level] = (posteriors[mask].sum() + 1e-6) / (
+                new_m[level] = (wp[mask].sum() + 1e-6) / (
                     eligible_match + n_levels * 1e-6
                 )
             m_probs[f.field] = new_m
@@ -1540,10 +1586,10 @@ def train_em(
                 continue
             new_m_ne = [0.0, 0.0]
             eligible = ~ne_conditioned_mask[:, j]
-            eligible_match = posteriors[eligible].sum()
+            eligible_match = wp[eligible].sum()
             for level in range(2):
                 mask = eligible & (ne_matrix[:, j] == level)
-                new_m_ne[level] = (posteriors[mask].sum() + 1e-6) / (
+                new_m_ne[level] = (wp[mask].sum() + 1e-6) / (
                     eligible_match + 2 * 1e-6
                 )
             m_probs_ne[ne.field] = new_m_ne
