@@ -1,4 +1,5 @@
-"""J0: ship the JVM scorer jar to a Spark session and register it.
+"""Ship the JVM scorer jar to a Spark session and register it (J0), now backed
+by the Rust kernel over JNI (J2).
 
 The tier scores by forking a Python worker per batch (`arrow_udf`): an Arrow IPC
 hop plus an interpreter, and the sole reason P1 ships a Python environment to
@@ -11,16 +12,19 @@ an array-shaped UDF carries 10,000 pairs in one call. That last one is what make
 the approach worth anything: Connect only permits row-shaped UDFs, so without
 batching every pair would cost a downcall into native code.
 
-**J0 carries no scoring algorithms.** The jar implements `exact` only, and
-refuses every other scorer loudly. A Java jaro-winkler would be a fourth
-implementation of a kernel that already exists once in Rust, which is the thing
-this whole arc argues against; `exact` escapes that because string equality is
-identical by inspection in any language. The kernel arrives in J2 via JNI into
-`score-cabi`.
+**The jar carries no scoring algorithms of its own -- it calls the Rust one.**
+J0 shipped `exact` only and refused everything else, deliberately: a Java
+jaro-winkler would have been a fourth implementation of a kernel that already
+exists once in Rust, which is the thing this whole arc argues against. J2 lifts
+the restriction the right way round, by reaching the kernel rather than copying
+it -- `NativeScorer` -> JNI -> `score-cabi` -> `score_one`, the same dispatcher
+behind pyo3 `native`, `datafusion-udf` and `score-wasm`.
 
-So nothing routes through here yet by default. J0's job is to prove the plumbing
-with no native call in the picture, so that when the plan reshape lands in J1 a
-misalignment cannot be confused with a kernel bug.
+The library rides inside the jar and is extracted per JVM, so `addArtifact`
+delivers everything: one file, nothing installed on the cluster, no
+`java.library.path` flags. When it will not load the jar falls back to the
+`exact`-only scorer so a distributed job survives -- and :func:`implementation`
+exists so that fallback can never pass for a native run.
 """
 from __future__ import annotations
 
@@ -37,7 +41,17 @@ JAR_ENV = "GOLDENMATCH_SPARK_JAR"
 #: The SQL name the batch scorer registers under.
 UDF_NAME = "golden_score_batch"
 
+#: The SQL name of the probe reporting which scorer an EXECUTOR resolved.
+IMPL_UDF_NAME = "golden_score_impl"
+
 _UDF_CLASS = "dev.goldensuite.spark.GoldenScoreUdf"
+_IMPL_UDF_CLASS = "dev.goldensuite.spark.GoldenScoreImplUdf"
+
+#: What ``implementation()`` reports when the Rust kernel loaded.
+NATIVE_IMPL = "NativeScorer"
+
+#: ...and when it did not, and the jar fell back to `exact`-only.
+FALLBACK_IMPL = "ExactScorer"
 
 #: Where the build puts the jar, relative to the repo root.
 _BUILT_JAR = Path("packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar")
@@ -114,18 +128,51 @@ def install(spark: object, *, jar: str | os.PathLike[str] | None = None,
             f"session, so check the session was built with `.remote(...)`."
         ) from exc
 
-    try:
-        spark.udf.registerJavaFunction(  # type: ignore[attr-defined]
-            name, _UDF_CLASS, "array<double>"
-        )
-    except Exception as exc:  # noqa: BLE001
-        raise JvmScorerUnavailable(
-            f"could not register {_UDF_CLASS} as {name!r}: "
-            f"{type(exc).__name__}: {exc}"
-        ) from exc
+    for sql_name, cls, ret in (
+        (name, _UDF_CLASS, "array<double>"),
+        # Registered alongside, not on demand: the probe has to be available
+        # BEFORE anything is scored, or the first thing a caller can check is
+        # whether the results they already trusted came from the kernel.
+        (IMPL_UDF_NAME, _IMPL_UDF_CLASS, "string"),
+    ):
+        try:
+            spark.udf.registerJavaFunction(sql_name, cls, ret)  # type: ignore[attr-defined]
+        except Exception as exc:  # noqa: BLE001
+            raise JvmScorerUnavailable(
+                f"could not register {cls} as {sql_name!r}: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
 
     logger.info("Spark JVM scorer: shipped %s and registered %r", path, name)
     return name
+
+
+def implementation(spark: object) -> tuple[str, str]:
+    """Ask an **executor** which scorer it resolved, and why.
+
+    Returns ``(implementation_name, diagnostics)`` -- see :data:`NATIVE_IMPL` and
+    :data:`FALLBACK_IMPL`.
+
+    The jar falls back to the `exact`-only scorer when the native library will
+    not load, which keeps a distributed job alive but is otherwise invisible: the
+    query still returns numbers, from a narrower path, and every version string
+    still looks right. This project has already lost time to that shape of
+    failure, so the resolution is queryable and the lane asserts on it.
+
+    **The answer must come from an executor, not the driver.** A driver that
+    loads the library says nothing about a cluster whose executors cannot -- and
+    a zero-argument deterministic UDF would be constant-folded onto the driver at
+    planning time, answering the wrong question perfectly. Hence the probe takes
+    a column and this passes it one.
+    """
+    from pyspark.sql import functions as F
+
+    df = spark.range(1)  # type: ignore[attr-defined]
+    raw = df.select(
+        F.call_udf(IMPL_UDF_NAME, F.col("id").cast("int")).alias("impl")
+    ).collect()[0]["impl"]
+    name, _, diagnostics = str(raw).partition("|")
+    return name, diagnostics
 
 
 def scorer_id(name: str) -> int:

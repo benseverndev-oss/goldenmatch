@@ -1,0 +1,247 @@
+//! JNI entry points for `dev.goldensuite.spark.NativeScorer`.
+//!
+//! # What crosses the boundary, and why
+//!
+//! Not `String[]`. The obvious JNI signature takes two `jobjectArray`s of
+//! `jstring` and calls `GetStringUTFChars` on each element -- which is a JNI
+//! transition and usually a copy **per string**. At the batch size this arc
+//! settled on (10,000 pairs) that is 20,000 JNI calls to avoid one, which
+//! defeats the entire reason the plan was reshaped into batches in J1.
+//!
+//! So the Java side flattens to **Arrow's string layout** first (see
+//! `Utf8Batch.java`) and passes primitive arrays: an `int[]` of `n + 1` offsets
+//! and a `byte[]` of packed UTF-8, per side. This function then pins five
+//! primitive arrays -- a fixed cost per *batch*, independent of how many pairs
+//! it holds -- and hands their addresses straight to
+//! [`goldenmatch_score_pairwise_utf8`], which is the exact layout that ABI was
+//! designed around.
+//!
+//! # Pinning: non-critical, deliberately
+//!
+//! `GetPrimitiveArrayCritical` avoids a copy but suspends GC for the duration
+//! and forbids any other JNI call inside the region. The copy it saves is one
+//! `memcpy` per array per batch -- five memcpys of a few hundred KB against ten
+//! thousand string comparisons. That is not where the time goes, and stalling
+//! an executor's collector to save it is a bad trade. `get_array_elements`
+//! (non-critical) it is.
+//!
+//! # Nulls
+//!
+//! Absent here, exactly as in `score-cabi`. Null slots arrive as zero-length
+//! slices and the Java caller overwrites their scores with `null` afterwards,
+//! because it holds the presence mask. Encoding "missing" as `""` down here is
+//! the substitution that once made null-vs-null score a perfect 1.0, merging
+//! records whose only shared evidence was a shared absence.
+//!
+//! # Errors are return codes, not exceptions
+//!
+//! Throwing from JNI means the caller must check `ExceptionOccurred` after
+//! every call, and a missed check leaves a pending exception that detonates
+//! somewhere unrelated. A negative `int` return cannot be ignored silently by
+//! the Java side, because `NativeScorer` turns it into a message naming the
+//! code. Codes `-1..=-4` are score-cabi's own, passed through unchanged; this
+//! layer adds `-10..=-12` for faults it can detect and score-cabi cannot (it is
+//! handed pointers, not arrays, so it cannot know an array was too short).
+
+use goldenmatch_score_cabi::goldenmatch_score_pairwise_utf8;
+use jni::objects::{JByteArray, JClass, JDoubleArray, JIntArray, ReleaseMode};
+use jni::sys::jint;
+use jni::JNIEnv;
+
+/// Error codes added by this layer. score-cabi's own codes (`-1..=-4`) pass
+/// through unchanged, so a caller reads one table.
+pub mod error {
+    /// An array was shorter than `n` requires. score-cabi validates offset
+    /// *contents* but is handed raw pointers, so only this layer can see that
+    /// the `int[]` holding them has fewer than `n + 1` slots.
+    pub const BAD_ARRAY_LENGTH: i32 = -10;
+    /// `scorer_id` did not fit in the `u8` the kernel dispatches on.
+    pub const SCORER_ID_OUT_OF_RANGE: i32 = -11;
+    /// A JNI array could not be pinned.
+    pub const JNI_ERROR: i32 = -12;
+}
+
+/// [`error`] code as a human-readable reason, for the Java side's message.
+///
+/// A free function on the Rust side rather than a table in Java so the codes
+/// and their meanings live next to each other; drift between the two would
+/// produce a confident, wrong diagnosis of a real failure.
+pub fn describe(code: i32) -> &'static str {
+    match code {
+        0 => "ok",
+        -1 => "a required buffer pointer was NULL",
+        -2 => "batch length was negative or unrepresentable",
+        -3 => "offsets were decreasing, negative, or ran past the data buffer",
+        -4 => "a slice was not valid UTF-8",
+        error::BAD_ARRAY_LENGTH => "an array was too short for the batch length",
+        error::SCORER_ID_OUT_OF_RANGE => "scorer id outside 0..=255",
+        error::JNI_ERROR => "a JNI array could not be pinned",
+        _ => "unknown error code",
+    }
+}
+
+/// `goldenmatch_score_abi_version()`, for the load-time skew gate.
+///
+/// The host refuses a library whose ABI it does not recognise rather than
+/// calling it and reading the result wrongly -- this repo has already paid once
+/// for a caller silently disagreeing with the kernel it loaded.
+#[no_mangle]
+pub extern "system" fn Java_dev_goldensuite_spark_NativeScorer_abiVersion(
+    _env: JNIEnv,
+    _class: JClass,
+) -> jint {
+    goldenmatch_score_cabi::goldenmatch_score_abi_version() as jint
+}
+
+/// `goldenmatch_score_scorer_id_count()`: how many ids `score_one` dispatches.
+///
+/// The host gates on this so an id the loaded kernel does not know is refused
+/// instead of falling to the catch-all arm and scoring a confident 0.0.
+#[no_mangle]
+pub extern "system" fn Java_dev_goldensuite_spark_NativeScorer_scorerIdCount(
+    _env: JNIEnv,
+    _class: JClass,
+) -> jint {
+    goldenmatch_score_cabi::goldenmatch_score_scorer_id_count() as jint
+}
+
+/// Score `n` pairs from Arrow-layout primitive arrays into `out`.
+///
+/// Returns `0` on success or a negative code (see [`error`] and [`describe`]).
+/// On any error `out` is left as the caller allocated it -- a caller that
+/// ignores the code gets zeros, not a plausible-looking wrong score.
+#[no_mangle]
+pub extern "system" fn Java_dev_goldensuite_spark_NativeScorer_scorePairwiseUtf8<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    scorer_id: jint,
+    a_offsets: JIntArray<'local>,
+    a_data: JByteArray<'local>,
+    b_offsets: JIntArray<'local>,
+    b_data: JByteArray<'local>,
+    n: jint,
+    out: JDoubleArray<'local>,
+) -> jint {
+    if n < 0 {
+        return -2; // score-cabi's BAD_LENGTH, reported before we pin anything.
+    }
+    let scorer_id = match u8::try_from(scorer_id) {
+        Ok(v) => v,
+        Err(_) => return error::SCORER_ID_OUT_OF_RANGE,
+    };
+    let n_usize = n as usize;
+
+    // SAFETY: the arrays are live for the call (the JVM holds the references
+    // that were passed in), and every `AutoElements` releases on drop. Held
+    // simultaneously on purpose -- the kernel reads all four inputs and writes
+    // `out` in one pass.
+    unsafe {
+        let ao = match env.get_array_elements(&a_offsets, ReleaseMode::NoCopyBack) {
+            Ok(v) => v,
+            Err(_) => return error::JNI_ERROR,
+        };
+        let ad = match env.get_array_elements(&a_data, ReleaseMode::NoCopyBack) {
+            Ok(v) => v,
+            Err(_) => return error::JNI_ERROR,
+        };
+        let bo = match env.get_array_elements(&b_offsets, ReleaseMode::NoCopyBack) {
+            Ok(v) => v,
+            Err(_) => return error::JNI_ERROR,
+        };
+        let bd = match env.get_array_elements(&b_data, ReleaseMode::NoCopyBack) {
+            Ok(v) => v,
+            Err(_) => return error::JNI_ERROR,
+        };
+        // CopyBack: this is the only array written, and without it the scores
+        // would be computed into a JVM-side copy that is then discarded --
+        // a silent all-zeros result rather than a failure.
+        let mut o = match env.get_array_elements(&out, ReleaseMode::CopyBack) {
+            Ok(v) => v,
+            Err(_) => return error::JNI_ERROR,
+        };
+
+        // Extents, which score-cabi cannot check: it receives pointers.
+        // Without this an `n` larger than the arrays reads past them, and the
+        // whole reason that ABI validates offsets is to keep a JIT-compiled
+        // host from doing exactly that.
+        if ao.len() < n_usize + 1 || bo.len() < n_usize + 1 || o.len() < n_usize {
+            return error::BAD_ARRAY_LENGTH;
+        }
+
+        goldenmatch_score_pairwise_utf8(
+            scorer_id,
+            ao.as_ptr(),
+            // jbyte is i8; Arrow's data buffer is bytes either way. This is a
+            // reinterpret of the same address, not a conversion.
+            ad.as_ptr() as *const u8,
+            ad.len() as i64,
+            bo.as_ptr(),
+            bd.as_ptr() as *const u8,
+            bd.len() as i64,
+            n as i64,
+            o.as_mut_ptr(),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The JNI entry points need a JVM, so what is testable here is the code
+    /// table and the fact that this crate reports the SAME kernel identity as
+    /// the C ABI it wraps. A skew between them would mean the load-time gate is
+    /// checking one library and the scoring is done by another.
+    #[test]
+    fn abi_identity_matches_the_c_abi_it_wraps() {
+        assert_eq!(goldenmatch_score_cabi::goldenmatch_score_abi_version(), 1);
+        assert_eq!(
+            goldenmatch_score_cabi::goldenmatch_score_scorer_id_count(),
+            15
+        );
+    }
+
+    #[test]
+    fn every_code_this_layer_can_return_has_a_description() {
+        for code in [
+            0,
+            -1,
+            -2,
+            -3,
+            -4,
+            error::BAD_ARRAY_LENGTH,
+            error::SCORER_ID_OUT_OF_RANGE,
+            error::JNI_ERROR,
+        ] {
+            assert_ne!(
+                describe(code),
+                "unknown error code",
+                "code {code} has no description; a real failure would be \
+                 diagnosed as 'unknown'"
+            );
+        }
+        assert_eq!(describe(-99), "unknown error code");
+    }
+
+    /// The codes this layer adds must not collide with score-cabi's, because
+    /// they are returned through the same `int` and read from one table.
+    #[test]
+    fn added_codes_do_not_collide_with_the_c_abi_codes() {
+        let cabi = [
+            goldenmatch_score_cabi::error::NULL_POINTER,
+            goldenmatch_score_cabi::error::BAD_LENGTH,
+            goldenmatch_score_cabi::error::BAD_OFFSETS,
+            goldenmatch_score_cabi::error::INVALID_UTF8,
+        ];
+        for added in [
+            error::BAD_ARRAY_LENGTH,
+            error::SCORER_ID_OUT_OF_RANGE,
+            error::JNI_ERROR,
+        ] {
+            assert!(
+                !cabi.contains(&added),
+                "code {added} is already a score-cabi code"
+            );
+        }
+    }
+}

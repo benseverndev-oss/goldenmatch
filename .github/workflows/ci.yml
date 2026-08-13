@@ -1882,6 +1882,15 @@ jobs:
       # failure (a symbol that does not export, a link error) would pass the
       # tests and ship a library no host can load.
       - run: cargo build --release --manifest-path score-cabi/Cargo.toml
+      # score-jni: the JNI binding over score-cabi, so a Spark executor JVM calls
+      # the kernel directly instead of forking a Python worker per batch. Its own
+      # [workspace] again, so its own lines. Gated HERE as well as in the
+      # spark_connect lane because that lane is path-filtered: a change to
+      # score-core or score-cabi that broke this binding would otherwise not be
+      # compiled by anything until someone touched a Spark file.
+      - run: cargo test --manifest-path score-jni/Cargo.toml
+      - run: cargo clippy --manifest-path score-jni/Cargo.toml --all-targets -- -D warnings
+      - run: cargo build --release --manifest-path score-jni/Cargo.toml
       # fs-core (2026-07-17) is the pyo3-free single source of truth for the
       # Fellegi-Sunter block-scoring math (name/ensemble/tf scorers + normalize),
       # its own [workspace] path-dep of `native`. Exercised indirectly by the
@@ -3066,17 +3075,48 @@ jobs:
       # `--release 17` matters: Spark supports Java 17, 21 and 25, and the
       # runner's JDK is only one of them. Compiling without it would produce a
       # jar that runs here and fails on a 17 executor with UnsupportedClassVersionError.
+      # J2: the Rust kernel's JNI door, built BEFORE the jar because it ships
+      # INSIDE it. Riding in the jar is what keeps `addArtifact` sufficient --
+      # one file, nothing installed on the cluster, no `java.library.path`. A
+      # library the operator has to place on every executor would just replace
+      # the packed-virtualenv apparatus this arc exists to remove.
+      #
+      # `linux-x86-64` only, because that is what a Spark executor runs. The
+      # loader resolves other os/arch names already, so adding one is a build
+      # change and not a code change (J3).
+      - name: Build the native scorer library (JNI)
+        run: |
+          set -euo pipefail
+          cargo build --release \
+            --manifest-path packages/rust/extensions/score-jni/Cargo.toml
+          SO=packages/rust/extensions/score-jni/target/release/libgoldenmatch_score_jni.so
+          ls -lh "$SO"
+          # The kernel really is in there -- a library missing the symbol would
+          # load and then fail on first call, inside an executor.
+          nm -D --defined-only "$SO" | grep -E "Java_dev_goldensuite_spark_NativeScorer_(abiVersion|scorerIdCount|scorePairwiseUtf8)$" \
+            || { echo "::error::the JNI entry points are not exported from $SO"; exit 1; }
       - name: Build the JVM scorer jar
         run: |
           set -euo pipefail
           SPARK_JARS="$(.venv/bin/python -c 'import pyspark, os; print(os.path.join(os.path.dirname(pyspark.__file__), "jars"))')"
           JVM=packages/jvm/goldenmatch-spark
-          mkdir -p "$JVM/build/classes"
-          javac --release 17 -cp "$SPARK_JARS/*" -d "$JVM/build/classes" \
+          mkdir -p "$JVM/build/classes/native/linux-x86-64"
+          # -encoding UTF-8: the sources carry multi-byte literals (the parity
+          # fixtures) and javac otherwise reads them in the platform default,
+          # which is not UTF-8 everywhere.
+          javac --release 17 -encoding UTF-8 -cp "$SPARK_JARS/*" -d "$JVM/build/classes" \
             "$JVM"/src/dev/goldensuite/spark/*.java
+          cp packages/rust/extensions/score-jni/target/release/libgoldenmatch_score_jni.so \
+            "$JVM/build/classes/native/linux-x86-64/"
           jar --create --file "$JVM/build/goldenmatch-spark.jar" -C "$JVM/build/classes" .
           echo "--- jar contents ---"
           jar --list --file "$JVM/build/goldenmatch-spark.jar"
+          # The jar without the library still RUNS -- it falls back to the
+          # `exact`-only scorer so a job survives -- which is exactly why its
+          # absence has to be an error here rather than a surprise later.
+          jar --list --file "$JVM/build/goldenmatch-spark.jar" \
+            | grep -qx "native/linux-x86-64/libgoldenmatch_score_jni.so" \
+            || { echo "::error::the native library is not in the jar; the tier would silently fall back to the J0 scorer"; exit 1; }
       # The Spark-free half of the jar, gated before anything ships it. No JUnit:
       # a test framework would mean a dependency resolver, and this package has
       # no build system on purpose (one small jar does not justify a fourth
@@ -3085,10 +3125,24 @@ jobs:
         run: |
           set -euo pipefail
           JVM=packages/jvm/goldenmatch-spark
-          javac --release 17 -d "$JVM/build/test-classes" -cp "$JVM/build/classes" \
+          javac --release 17 -encoding UTF-8 -d "$JVM/build/test-classes" -cp "$JVM/build/classes" \
             "$JVM"/test/dev/goldensuite/spark/*.java
           java -cp "$JVM/build/classes:$JVM/build/test-classes" \
             dev.goldensuite.spark.SelfTest
+      # J2's end-to-end gate with no Spark in the picture: extract the library
+      # from the classpath, dlopen it, cross the JNI boundary, score 10,000
+      # pairs. Separate from the step above because it REQUIRES the library --
+      # SelfTest must stay runnable with nothing built, and a test that learns to
+      # skip is how a lane goes green while testing nothing.
+      #
+      # It refuses to skip: CI built that library one step ago, so "not loadable"
+      # here means the build produced something the JVM cannot use.
+      - name: JVM native scorer self-test (JNI into score-cabi)
+        run: |
+          set -euo pipefail
+          JVM=packages/jvm/goldenmatch-spark
+          java -cp "$JVM/build/classes:$JVM/build/test-classes" \
+            dev.goldensuite.spark.NativeSelfTest
       - name: Tier tests against Apache Spark Connect
         env:
           GOLDENMATCH_SPARK_REMOTE: "local[*]"

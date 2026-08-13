@@ -902,6 +902,17 @@ spark:
   # lane, so a Java edit that never triggered that lane would ship untested --
   # the same staleness the P2 rename introduced, one language over.
   - 'packages/jvm/**'
+  # J2: the jar carries the Rust kernel, reached through score-jni -> score-cabi
+  # -> score-core. The lane BUILDS all three, and the cross-language parity gate
+  # (test_spark_jvm_native_parity.py) is the only place a divergence between the
+  # JVM's score and Python's would surface. A kernel edit that skipped this lane
+  # would ship a jar nothing had compared against.
+  - 'packages/rust/extensions/score-jni/**'
+  - 'packages/rust/extensions/score-cabi/**'
+  - 'packages/rust/extensions/score-core/**'
+  # The tier's own Python scorer is the ORACLE that gate compares against, so a
+  # change to it moves the reference the JVM is measured by.
+  - 'packages/python/goldenmatch/goldenmatch/core/strsim.py'
 action:
   - 'packages/actions/**'
 dbt:
