@@ -6,6 +6,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Changed
+- **The FS link-threshold refit is ON by default (#2518 follow-up).** The FS
+  path is otherwise non-iterated: it commits a fixed 0.50 link cutoff, which
+  over-merges on shapes where a shared attribute co-blocks non-matches (distinct
+  households sharing a surname; co-tenants sharing an address). With the refit
+  on, the cutoff is chosen from the actual scored-pair distribution -- a
+  bimodality-gated valley, accepted only when it both reduces the largest
+  cluster and strands under 1% of matched records as singletons. On the lever
+  panel that recovers `household_hardneg` 0.9687 -> 1.0000 and
+  `cotenant_hardneg` 0.4193 -> 0.9963, and is a no-op everywhere else.
+  `GOLDENMATCH_FS_REFIT_THRESHOLD=0` is the kill-switch, byte-identical to the
+  fixed cutoff.
+
+  This default was flipped on once before (#2377) and reverted after five red
+  nights (#2387), so the evidence bar here is the specific one that failure
+  established: **validate on the panel that gates the change, not the panel that
+  motivated it.** #2377 rested on `ab_lever` + QIS while the gating panel went
+  unrun. This flip was measured with that gate itself -- `scripts.suggest_quality`,
+  single-variable `=0` vs `=1` on one sha, native kernel present. The fast tier
+  is byte-identical on every metric with both arms PASS; `ncvr_synthetic`
+  `convergence_final_f1`, the metric that reddened the nightly, reads **0.9847 in
+  both arms** -- exactly its `=0` value in the #2387 A/B, where default-on scored
+  0.8881. The heavy `gym-gate` tier was run with `=1` against a baseline blessed
+  with `=0`. Mechanically the flip is a no-op on that dataset because the valley
+  detector no longer finds any candidate above 0.50 there.
+
+  The same change widens the two gates that failed to fire in #2387, since a
+  check that exists and does not run is what turned a catchable defect into a
+  five-night red. `bench-suggest-quality`'s push filter now includes
+  `probabilistic.py` and `pipeline.py` -- it listed only the suggest paths, so a
+  refit edit ran no suggester gate at all. `fs-lever-gate`'s PR tier now includes
+  `ncvr_synthetic`, the dataset that caught the regression, which had been left
+  to the nightly.
+
 ### Added
 - **`strategy="token"`: DF-pruned token blocking for free text (#2488).** Every
   candidate the block analyzer can generate is an *exact* key -- a prefix, a

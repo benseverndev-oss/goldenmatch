@@ -2601,13 +2601,14 @@ _REFIT_MAX_EXPELLED_SHARE = 0.01
 
 
 def _fs_refit_threshold_enabled() -> bool:
-    """Health-gated FS link-threshold refit. **Default OFF again (2026-08-07).**
+    """Health-gated FS link-threshold refit. **Default ON (2026-08-13, #2518).**
 
     When ``GOLDENMATCH_FS_REFIT_THRESHOLD`` is truthy, the FS path picks the link
     cutoff from the actual scored-pair distribution (bimodality-gated valley +
-    cluster-shape guard) instead of the fixed default, correcting the over-merge
-    the non-iterated path can't see. Default-off is byte-identical to the fixed
-    cutoff.
+    cluster-shape guard + expelled-share guard) instead of the fixed default,
+    correcting the over-merge the non-iterated path can't see.
+    ``GOLDENMATCH_FS_REFIT_THRESHOLD=0`` is the kill-switch and is byte-identical
+    to the fixed cutoff.
 
     **Why it was flipped back (#2387).** #2377 turned this ON after validating on
     the `ab_lever` panel + QIS. Neither covers `ncvr_synthetic`, and the
@@ -2627,16 +2628,38 @@ def _fs_refit_threshold_enabled() -> bool:
     across the other ~2500 correct size-2 clusters. It works on household_hardneg
     (0.947 -> 1.000) only because there over-merge IS the dominant error mode.
 
-    **The guard defect is FIXED (#2518), the default is still OFF.** The
-    single-outlier max test is now paired with a GLOBAL one -- `_expelled_share`,
-    the share of matched records a candidate would strand as singletons -- which
-    separates over-merge repair from cluster-shattering by ~160x on the panel and
-    rejects the person-shaped regression the max alone accepts. (The linked-pair
-    bound suggested here originally does NOT work; see `fs_refit_link_threshold`
-    for the numbers.) `ab_lever`'s panel now DOES include ncvr_synthetic. Flipping
-    the default remains a separate decision requiring a green nightly
-    `bench-suggest-quality`, which no PR gate runs."""
-    return os.environ.get("GOLDENMATCH_FS_REFIT_THRESHOLD", "0").lower() in (
+    **The guard defect was fixed in #2518**: the single-outlier max test is paired
+    with a GLOBAL one -- `_expelled_share`, the share of matched records a
+    candidate would strand as singletons -- which separates over-merge repair from
+    cluster-shattering by ~160x on the panel. (The linked-pair bound #2387
+    suggested does NOT work; see `fs_refit_link_threshold` for the numbers.)
+
+    **Why the re-flip is safe this time -- validated on the panel that GATES it.**
+    #2377's mistake was evidence from `ab_lever` + QIS, the panels that MOTIVATED
+    the change, while the panel that gated it went unrun. So this flip was measured
+    with the gate itself, `scripts.suggest_quality`, single-variable `=0` vs `=1` on
+    one sha, native kernel present:
+
+    * fast `gate` (FULL_DIST=0): **byte-identical on every metric**, both arms
+      PASS. The number that reddened the nightly -- ncvr_synthetic
+      `convergence_final_f1` -- is **0.9847 in BOTH arms**, exactly its `=0` value
+      from the #2387 A/B (where default-on scored 0.8881).
+    * heavy `gym-gate` (FULL_DIST=1, catalog recovery): run with `=1` against the
+      `=0`-blessed `gym_scorecard.json` baseline.
+
+    Mechanically the flip is a no-op on ncvr_synthetic because the valley detector
+    now finds NO candidate above 0.50 there at all, so the accept criterion is
+    never reached -- the guard fix and a shift in the scorer set the controller
+    picks both point the same way.
+
+    **The two gates that failed to fire in #2387 are widened in the same change**,
+    since "a check exists and does not fire" is what made this a five-night red
+    rather than a caught regression: `bench-suggest-quality`'s push filter now
+    includes the FS refit paths (it listed only `suggest/**` +
+    `scripts/suggest_quality/**`, so a `probabilistic.py` edit ran NO suggester
+    gate), and `fs-lever-gate`'s PR tier now includes ncvr_synthetic -- the dataset
+    that caught the regression belongs on the per-PR tier, not only the nightly."""
+    return os.environ.get("GOLDENMATCH_FS_REFIT_THRESHOLD", "1").lower() in (
         "1", "true", "on", "yes", "enabled",
     )
 
