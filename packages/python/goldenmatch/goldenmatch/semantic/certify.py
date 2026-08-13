@@ -18,6 +18,7 @@ from typing import Any
 
 from goldenmatch.core.key_integrity_certificate import KeyIntegrityCertificate
 from goldenmatch.semantic.cube import certify_cube_joins
+from goldenmatch.semantic.feast import certify_feast_feature_views
 from goldenmatch.semantic.key_integrity import certify_key_integrity
 from goldenmatch.semantic.metricflow import _load, parse_semantic_models
 from goldenmatch.semantic.osi import certify_osi_relationships
@@ -39,7 +40,7 @@ class SemanticCertification:
     """The result of certifying a whole semantic model: the detected dialect and
     one `KeyCertification` per declared key that had a supplied frame."""
 
-    dialect: str                         # "metricflow" | "cube" | "osi"
+    dialect: str                         # "metricflow" | "cube" | "osi" | "feast"
     entries: list[KeyCertification] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)  # targets with no frame
     note: str = ""
@@ -63,7 +64,8 @@ def detect_dialect(data: dict[str, Any]) -> str:
     """Detect the semantic-layer dialect from a loaded document's top-level shape.
 
     Cube uses a `cubes:` list, MetricFlow a `semantic_models:` list, OSI/Ossie a
-    `semantic_model` list (singular) + `version`. Raises if none match.
+    `semantic_model` list (singular) + `version`, Feast a `feature_views:` list.
+    Raises if none match.
     """
     if "cubes" in data:
         return "cube"
@@ -71,10 +73,12 @@ def detect_dialect(data: dict[str, Any]) -> str:
         return "metricflow"
     if "semantic_model" in data:
         return "osi"
+    if "feature_views" in data:
+        return "feast"
     raise ValueError(
         "certify_semantic_model: could not detect a semantic-layer dialect; "
         "expected a top-level 'cubes' (Cube), 'semantic_models' (dbt/MetricFlow), "
-        "or 'semantic_model' (OSI/Ossie) key"
+        "'semantic_model' (OSI/Ossie), or 'feature_views' (Feast) key"
     )
 
 
@@ -141,6 +145,14 @@ def certify_semantic_model(
             entries.append(KeyCertification(
                 target=rep["to_cube"], key=list(rep["key"]), certificate=rep["certificate"],
                 context=f"join from {rep['from_cube']}",
+            ))
+    elif dialect == "feast":
+        # certify_feast_feature_views certifies the entity join key each feature
+        # view rides on, with the view's features as the fan-out measures.
+        for rep in certify_feast_feature_views(data, frames, resolve=resolve, roles=roles):
+            entries.append(KeyCertification(
+                target=rep["feature_view"], key=list(rep["key"]), certificate=rep["certificate"],
+                context=f"entity {rep['entity']}",
             ))
     else:  # osi
         for rep in certify_osi_relationships(data, frames, resolve=resolve, roles=roles):

@@ -71,6 +71,24 @@
 > `semantic-key-integrity-single-sourced-kernel` (`default_routed: opt-in`). The rest
 > of the semantic layer (discovery, resolution tier, namer, warehouse introspection)
 > is orchestration/stateful and correctly stays Python-authoritative.
+>
+> **Feature-store surface (Feast,
+> [0060](../decisions/0060-feast-feature-store-provider.md)).** The wedge one layer
+> over into ML: a Feast `FeatureView` is keyed on an `Entity`'s `join_keys`, and a
+> duplicated join key fans out every aggregated feature (a `sum`/`count`
+> double-counts), a fragmented entity splits its own feature history
+> (training-serving skew), non-conformed keys can't join. Feast's
+> `Entity(join_keys=[...])` maps one-to-one onto MetricFlow `entity (primary)` /
+> Cube `primary_key`, so the same certifier applies. `goldenmatch.semantic.feast`:
+> `parse_feast_models` / `parse_feast_objects` (declarative doc or duck-typed Feast
+> SDK objects — no `feast` dependency), `feast_join_keys`,
+> `certify_feast_feature_views` (bridge A — features are the fan-out measures),
+> `emit_feast_from_crosswalk` (bridge B). `certify_semantic_model` auto-detects a
+> top-level `feature_views:` as the `"feast"` dialect, so the CLI/MCP/REST front
+> doors certify a feature repo with no new surface (parity-free, like Cube). The
+> next missing provider surfaces from the same filter: **BI semantic-model dialects
+> (Malloy/LookML)** and **data contracts (ODCS)**; the CDP/activation lane is
+> competitive prior art, not a plug-under gap.
 > Greenfield when written: no prior repo code, doc, or decision referenced this
 > ecosystem (grep, 2026-07-30).
 

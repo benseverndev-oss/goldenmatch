@@ -6,6 +6,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added
+- **Feast (feature-store) dialect for the semantic-layer certifier
+  (`goldenmatch.semantic.feast`).** A feature store is a join graph one layer over
+  into ML: a `FeatureView` is keyed on an `Entity`'s `join_keys`, and a duplicated
+  join key fans out every aggregated feature (a `sum`/`count` double-counts), a
+  fragmented entity splits its own feature history (training-serving skew), and
+  non-conformed keys can't join. Feast's `Entity(join_keys=[...])` maps one-to-one
+  onto MetricFlow `entity (primary)` / Cube `primary_key`, so the same certifier
+  applies. New: `parse_feast_models` / `parse_feast_objects` (declarative doc or
+  duck-typed Feast SDK objects -- no `feast` dependency), `feast_join_keys`,
+  `certify_feast_feature_views` (bridge to wedge A -- certifies each view's entity
+  join key with the view's **features as the fan-out measures**),
+  `emit_feast_from_crosswalk` (bridge to wedge B -- declares the resolved key as the
+  entity `join_keys`), and `emit_feast_yaml` (round-trips through
+  `parse_feast_models`). `certify_semantic_model` now auto-detects a top-level
+  `feature_views:` as the `"feast"` dialect, so the CLI / MCP / REST front doors
+  certify a feature repo with no new surface. Library-only, advisory, parity-free --
+  it never mutates a feature or a key.
+
 ### Fixed
 - **`build_resolved_crosswalk` respects the caller's `config.identity` instead
   of replacing it (#2521).** It constructed a fresh `IdentityConfig` with
