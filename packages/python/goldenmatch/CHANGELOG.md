@@ -1266,6 +1266,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **Ontology-layer live-catalog write-back.** `write_ontology_catalog(rdf, dest=…)`
+  writes emitted RDF to a file, or (`endpoint=…`) PUTs/POSTs it to a live SPARQL
+  1.1 Graph Store endpoint (a triple store — `mode="replace"`/`"merge"`,
+  `graph_iri`); `write_resolved_identity_graph(crosswalk, …)` emits a crosswalk's
+  `owl:sameAs`/PROV-O graph and writes it in one call. `goldenmatch ontology
+  discover` gains `--endpoint` / `--graph-iri` / `--mode` to push a discovered
+  ontology to a triple store. Stdlib-only (`urllib`, no new dependency); the write
+  path needs no rdflib. GoldenMatch conforms to the Graph Store protocol, it does
+  not implement a triple store. Completes the ontology arc. See ADR 0057.
 - **Ontology-layer CLI + MCP front door.** `goldenmatch ontology certify
   <ontology.ttl> --data Class=path` and `goldenmatch ontology discover --data
   Class=path [-o out.ttl]` surface the ontology-layer certify/discover

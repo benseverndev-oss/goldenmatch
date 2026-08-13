@@ -4416,6 +4416,27 @@
               "help": "IRI for the ontology node."
             },
             {
+              "name": "--endpoint",
+              "type": "text",
+              "required": false,
+              "default": "None",
+              "help": "Write the OWL to a live SPARQL 1.1 Graph Store endpoint (a triple store)."
+            },
+            {
+              "name": "--graph-iri",
+              "type": "text",
+              "required": false,
+              "default": "None",
+              "help": "Named graph for --endpoint (default graph if omitted)."
+            },
+            {
+              "name": "--mode",
+              "type": "text",
+              "required": false,
+              "default": "'replace'",
+              "help": "--endpoint write mode: replace (PUT) or merge (POST)."
+            },
+            {
               "name": "--json",
               "type": "boolean",
               "required": false,

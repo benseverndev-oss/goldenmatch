@@ -123,6 +123,10 @@ from goldenmatch.semantic.ontology import (
     parse_ontology,
     reconcile_ontology_identity,
 )
+from goldenmatch.semantic.ontology_catalog import (
+    write_ontology_catalog,
+    write_resolved_identity_graph,
+)
 from goldenmatch.semantic.osi import (
     OsiDataset,
     OsiField,
@@ -223,6 +227,8 @@ __all__ = [
     "OntologyCertification",
     "OntologyReconciliation",
     "DiscoveredOntology",
+    "write_ontology_catalog",
+    "write_resolved_identity_graph",
     # semantic-model discovery (Phase 1) — certified key discovery per table
     "discover_keys",
     "KeyCandidate",
