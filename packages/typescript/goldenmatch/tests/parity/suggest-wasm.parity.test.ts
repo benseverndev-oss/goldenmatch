@@ -20,6 +20,7 @@ import type { SuggestKernelInput } from "../../src/core/suggestWasmBackend.js";
 import emptyCase from "./fixtures/suggest/empty.json" with { type: "json" };
 import lowerThreshold from "./fixtures/suggest/lower_threshold.json" with { type: "json" };
 import raiseThreshold from "./fixtures/suggest/raise_threshold.json" with { type: "json" };
+import exactMatchSpike from "./fixtures/suggest/exact_match_spike.json" with { type: "json" };
 import swapScorer from "./fixtures/suggest/swap_scorer.json" with { type: "json" };
 import addNegativeEvidence from "./fixtures/suggest/add_negative_evidence.json" with { type: "json" };
 import dropMatchkey from "./fixtures/suggest/drop_matchkey.json" with { type: "json" };
@@ -33,6 +34,11 @@ const CASES: readonly [string, Fixture][] = [
   ["empty", emptyCase as unknown as Fixture],
   ["lower_threshold", lowerThreshold as unknown as Fixture],
   ["raise_threshold", raiseThreshold as unknown as Fixture],
+  // #2497: the exact-duplicate spike. The ONLY fixture with a top-bin spike, so
+  // it is the only one that can catch a TS/wasm surface still running the
+  // pre-fix dip() -- against the unfixed kernel this case yields no suggestions
+  // at all, so parity here is what proves the fix crossed the surface boundary.
+  ["exact_match_spike", exactMatchSpike as unknown as Fixture],
   ["swap_scorer", swapScorer as unknown as Fixture],
   ["add_negative_evidence", addNegativeEvidence as unknown as Fixture],
   ["drop_matchkey", dropMatchkey as unknown as Fixture],
