@@ -17,6 +17,38 @@ from __future__ import annotations
 from typing import Any
 
 
+def merge_expr(col: Any, strategy: str, survivorship_udf: str) -> Any:
+    """Survivorship in the EXECUTOR JVM, over the same pyo3-free
+    ``survivorship-core`` the Python path uses.
+
+    ``col`` is one cluster's collected field values (a ``collect_list``).
+
+    The strategy is validated on the DRIVER first. ``source_priority`` needs a
+    sources list and ``most_recent`` needs dates -- neither of which this call
+    site passes, so Python RAISES for them and the kernel refuses. ``custom:*``
+    is arbitrary Python. Refusing at plan time with the strategy named beats
+    emitting a plausible wrong survivor from every cluster, because a golden
+    record chosen by a different rule raises nothing and looks right.
+    """
+    from pyspark.sql import functions as F
+
+    from goldenmatch.spark.jvm import (
+        JVM_SURVIVORSHIP_STRATEGIES,
+        jvm_supports_strategy,
+    )
+
+    if not jvm_supports_strategy(strategy):
+        raise ValueError(
+            f"the JVM survivorship path cannot run strategy {strategy!r}. "
+            f"`source_priority` needs a sources list and `most_recent` needs "
+            f"dates, neither of which this call site passes -- Python raises for "
+            f"them too. `custom:` strategies are arbitrary Python. Available: "
+            f"{sorted(JVM_SURVIVORSHIP_STRATEGIES)}. Omit survivorship_udf to "
+            f"use the Python path with an executor environment."
+        )
+    return F.call_udf(survivorship_udf, col, F.lit(strategy))
+
+
 def make_merge_udf(strategy: str) -> Any:
     """A scalar arrow UDF mapping an array-of-values column (one cluster's
     collected field values) to the survivor value via ``merge_field``."""

@@ -56,6 +56,30 @@ TRANSFORM_UDF_NAME = "golden_transform"
 
 _TRANSFORM_UDF_CLASS = "dev.goldensuite.spark.GoldenTransformUdf"
 
+#: The SQL name of the golden-record survivorship kernel.
+SURVIVORSHIP_UDF_NAME = "golden_survivorship"
+
+_SURVIVORSHIP_UDF_CLASS = "dev.goldensuite.spark.GoldenSurvivorshipUdf"
+
+#: Survivorship strategies the JVM can run, mirroring
+#: ``survivorship_core::SUPPORTED``.
+#:
+#: The Spark call site passes values and a strategy and nothing else, so
+#: ``source_priority`` (needs sources) and ``most_recent`` (needs dates) are
+#: absent -- Python RAISES for them on that call, and so does the kernel.
+#: ``custom:*`` is arbitrary Python. All three are refused on the DRIVER so a
+#: job fails at plan time with the strategy named, rather than emitting a
+#: plausible wrong survivor from every cluster.
+JVM_SURVIVORSHIP_STRATEGIES = frozenset({
+    "most_complete", "majority_vote", "first_non_null", "longest_value",
+    "unanimous_or_null", "confidence_majority",
+})
+
+
+def jvm_supports_strategy(strategy: str) -> bool:
+    """Whether the JVM can run one survivorship strategy."""
+    return strategy in JVM_SURVIVORSHIP_STRATEGIES
+
 #: Transforms the JVM can run, mirroring ``transforms_core::supports``.
 #:
 #: The RUST side is authoritative -- it is what actually runs -- and this set
@@ -191,6 +215,9 @@ def install(spark: object, *, jar: str | os.PathLike[str] | None = None,
         # `transforms-core`; this is what lets a cluster normalize a
         # column without an executor virtualenv.
         (TRANSFORM_UDF_NAME, _TRANSFORM_UDF_CLASS, "string"),
+        # Golden-record survivorship, the last of the four kernels the jar
+        # carries.
+        (SURVIVORSHIP_UDF_NAME, _SURVIVORSHIP_UDF_CLASS, "string"),
     ):
         try:
             spark.udf.registerJavaFunction(sql_name, cls, ret)  # type: ignore[attr-defined]

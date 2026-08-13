@@ -156,13 +156,21 @@ def _probe_normalization(spark, df, ctx):
 
 
 def _probe_survivorship(spark, df, ctx):
-    """`golden.make_merge_udf`: survivorship merge, an arrow_udf."""
-    from goldenmatch.spark.golden import make_merge_udf
+    """`golden` survivorship through the JAR's kernel.
+
+    Was an arrow_udf and therefore Python-only; now routed to
+    `golden_survivorship`, which runs the same pyo3-free `survivorship-core`
+    the Python path uses."""
+    from goldenmatch.spark.golden import merge_expr
     from pyspark.sql import functions as F
 
-    merge = make_merge_udf("most_common")
     grouped = df.groupBy("blk").agg(F.collect_list("city").alias("city"))
-    vals = _consume(grouped.select(merge(F.col("city")).alias("v")), "v")
+    vals = _consume(
+        grouped.select(
+            merge_expr(F.col("city"), "majority_vote", ctx["survivorship_udf"]).alias("v")
+        ),
+        "v",
+    )
     return f"{len(vals)} merged groups, e.g. {vals[0]!r}"
 
 
@@ -238,12 +246,17 @@ def main(argv=None) -> int:
     print(f"executor JVM: {runtime}\nscorer: {impl}\n  {diagnostics}\n", flush=True)
 
     df = spark.createDataFrame(_rows(), _SCHEMA).cache()
-    from goldenmatch.spark.jvm import FINGERPRINT_UDF_NAME, TRANSFORM_UDF_NAME
+    from goldenmatch.spark.jvm import (
+        FINGERPRINT_UDF_NAME,
+        SURVIVORSHIP_UDF_NAME,
+        TRANSFORM_UDF_NAME,
+    )
 
     ctx = {
         "udf_name": udf_name,
         "fingerprint_udf": FINGERPRINT_UDF_NAME,
         "transform_udf": TRANSFORM_UDF_NAME,
+        "survivorship_udf": SURVIVORSHIP_UDF_NAME,
     }
 
     print("=" * 74, flush=True)

@@ -58,6 +58,8 @@ goldenmatch-fingerprint-core = { path = "../fingerprint-core" }
 # The transform chain (normalization). Third kernel in the same library -- one
 # `.so` per platform, one extraction, one dlopen per executor JVM.
 goldenmatch-transforms-core = { path = "../transforms-core" }
+# Golden-record survivorship. Fourth kernel in the same library.
+goldenmatch-survivorship-core = { path = "../survivorship-core" }
 # jni-rs: the de-facto binding. Chosen over hand-writing the JNINativeInterface
 # function-table offsets because getting those wrong is a segfault inside an
 # executor, not a compile error.

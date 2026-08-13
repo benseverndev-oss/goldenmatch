@@ -361,3 +361,104 @@ pub extern "system" fn Java_dev_goldensuite_spark_NativeTransform_applyChain<'lo
         Ok(None) | Err(_) => null,
     }
 }
+
+// ── survivorship (golden records) ───────────────────────────────────
+//
+// Fourth kernel in the same library. The values reuse `Utf8Batch`'s Arrow
+// layout rather than arriving as a `String[]`: the marshaling is already
+// written, already tested, and already handles the multi-byte case that a
+// per-element `GetStringUTFChars` loop gets wrong. A presence mask rides
+// alongside because a null MEMBER is not an empty value -- survivorship ignores
+// absent members rather than voting for "".
+
+/// Choose the surviving value for one cluster.
+///
+/// Returns `null` when there is no survivor (no non-null members, or
+/// `unanimous_or_null` on a disagreement) and when the strategy is refused.
+/// The host gates on [`Java_dev_goldensuite_spark_NativeSurvivorship_supportsStrategy`]
+/// at plan time, so a refusal is unreachable in practice.
+#[no_mangle]
+pub extern "system" fn Java_dev_goldensuite_spark_NativeSurvivorship_mergeField<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    offsets: JIntArray<'local>,
+    data: JByteArray<'local>,
+    present: jni::objects::JBooleanArray<'local>,
+    n: jint,
+    strategy: JString<'local>,
+) -> jni::sys::jstring {
+    let null = std::ptr::null_mut();
+    if n < 0 {
+        return null;
+    }
+    let Ok(strat) = env.get_string(&strategy) else {
+        return null;
+    };
+    let Ok(strat) = strat.to_str().map(str::to_owned) else {
+        return null;
+    };
+
+    let n = n as usize;
+    // SAFETY: the arrays are live for the call; every AutoElements releases on
+    // drop. Values are copied out before scoring because `merge_field` borrows
+    // them and the pins must not outlive this scope.
+    let values: Vec<Option<String>> = unsafe {
+        let (Ok(off), Ok(dat), Ok(pres)) = (
+            env.get_array_elements(&offsets, ReleaseMode::NoCopyBack),
+            env.get_array_elements(&data, ReleaseMode::NoCopyBack),
+            env.get_array_elements(&present, ReleaseMode::NoCopyBack),
+        ) else {
+            return null;
+        };
+        if off.len() < n + 1 || pres.len() < n {
+            return null;
+        }
+        let bytes: &[u8] = std::slice::from_raw_parts(dat.as_ptr() as *const u8, dat.len());
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            if pres[i] == 0 {
+                out.push(None);
+                continue;
+            }
+            let (s, e) = (off[i] as usize, off[i + 1] as usize);
+            if s > e || e > bytes.len() {
+                return null;
+            }
+            match std::str::from_utf8(&bytes[s..e]) {
+                Ok(v) => out.push(Some(v.to_owned())),
+                Err(_) => return null,
+            }
+        }
+        out
+    };
+
+    let refs: Vec<Option<&str>> = values.iter().map(|v| v.as_deref()).collect();
+    match goldenmatch_survivorship_core::merge_field(&refs, &strat) {
+        Ok(Some(v)) => match env.new_string(v) {
+            Ok(js) => js.into_raw(),
+            Err(_) => null,
+        },
+        Ok(None) | Err(_) => null,
+    }
+}
+
+/// Whether the loaded kernel can run `strategy`.
+///
+/// So a host refuses at PLAN time with the strategy named. `source_priority`
+/// and `most_recent` need arguments the Spark path does not pass, and `custom:*`
+/// is arbitrary Python -- discovering that per row, mid-job, would be strictly
+/// worse than refusing before the plan is built.
+#[no_mangle]
+pub extern "system" fn Java_dev_goldensuite_spark_NativeSurvivorship_supportsStrategy<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    strategy: JString<'local>,
+) -> jni::sys::jboolean {
+    let Ok(s) = env.get_string(&strategy) else {
+        return 0;
+    };
+    let Ok(name) = s.to_str() else {
+        return 0;
+    };
+    u8::from(goldenmatch_survivorship_core::supports(name))
+}

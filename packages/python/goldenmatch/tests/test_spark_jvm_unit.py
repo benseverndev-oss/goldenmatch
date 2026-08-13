@@ -15,6 +15,7 @@ from goldenmatch.spark.jvm import (
     FINGERPRINT_UDF_NAME,
     IMPL_UDF_NAME,
     SCORER_IDS,
+    SURVIVORSHIP_UDF_NAME,
     TRANSFORM_UDF_NAME,
     UDF_NAME,
     JvmScorerUnavailable,
@@ -108,6 +109,11 @@ def test_install_ships_then_registers(jar):
             "string",
         ),
         (TRANSFORM_UDF_NAME, "dev.goldensuite.spark.GoldenTransformUdf", "string"),
+        (
+            SURVIVORSHIP_UDF_NAME,
+            "dev.goldensuite.spark.GoldenSurvivorshipUdf",
+            "string",
+        ),
     ]
 
 
