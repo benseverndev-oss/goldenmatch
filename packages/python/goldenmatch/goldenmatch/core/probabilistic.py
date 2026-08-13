@@ -2592,6 +2592,12 @@ _REFIT_BINS = 20
 _REFIT_VALLEY_MAX = 0.10
 _REFIT_MIN_MODE_MASS = 0.02  # each side of the valley must hold >= 2% of scored pairs
 _REFIT_MIN_PAIRS = 200     # too few pairs -> histogram is noise, don't refit
+# Ceiling on the share of already-matched records a raised cutoff may strand as
+# SINGLETONS (see `_expelled_share`). Over-merge repair regroups records without
+# stranding them, so the two regimes separate by ~160x on the panel: accept-correct
+# household_hardneg 0.0000 / cotenant_hardneg 0.0006 vs reject-correct person
+# 0.1020. 0.01 sits an order of magnitude clear of BOTH sides of that gap.
+_REFIT_MAX_EXPELLED_SHARE = 0.01
 
 
 def _fs_refit_threshold_enabled() -> bool:
@@ -2621,9 +2627,15 @@ def _fs_refit_threshold_enabled() -> bool:
     across the other ~2500 correct size-2 clusters. It works on household_hardneg
     (0.947 -> 1.000) only because there over-merge IS the dominant error mode.
 
-    Re-flipping needs a GLOBAL accept criterion (e.g. bound the drop in linked
-    pairs, or compare the whole cluster-size distribution rather than its max),
-    plus a panel that includes ncvr_synthetic -- see `fs_refit_link_threshold`."""
+    **The guard defect is FIXED (#2518), the default is still OFF.** The
+    single-outlier max test is now paired with a GLOBAL one -- `_expelled_share`,
+    the share of matched records a candidate would strand as singletons -- which
+    separates over-merge repair from cluster-shattering by ~160x on the panel and
+    rejects the person-shaped regression the max alone accepts. (The linked-pair
+    bound suggested here originally does NOT work; see `fs_refit_link_threshold`
+    for the numbers.) `ab_lever`'s panel now DOES include ncvr_synthetic. Flipping
+    the default remains a separate decision requiring a green nightly
+    `bench-suggest-quality`, which no PR gate runs."""
     return os.environ.get("GOLDENMATCH_FS_REFIT_THRESHOLD", "0").lower() in (
         "1", "true", "on", "yes", "enabled",
     )
@@ -2702,6 +2714,48 @@ def _max_cluster_size(id_a, id_b, score, threshold: float) -> int:
     return max((c["size"] for c in clusters.values()), default=0)
 
 
+def _matched_records(id_a, id_b, score, threshold: float) -> set[int]:
+    """Records that land in a MULTI-MEMBER cluster when linking at ``threshold``.
+
+    The complement (within the linked-pair id space) is the set of records the
+    cutoff leaves unmatched, which is what ``_expelled_share`` measures."""
+    from goldenmatch.core.cluster import build_clusters  # noqa: PLC0415
+    linked = [
+        (int(a), int(b), float(s))
+        for a, b, s in zip(id_a, id_b, score) if s >= threshold
+    ]
+    if not linked:
+        return set()
+    out: set[int] = set()
+    for c in build_clusters(linked).values():
+        if c.get("size", 0) > 1:
+            out.update(int(m) for m in c["members"])
+    return out
+
+
+def _expelled_share(id_a, id_b, score, default_link: float, candidate: float) -> float:
+    """Share of records matched at ``default_link`` that become SINGLETONS at
+    ``candidate`` -- the GLOBAL statistic the max-cluster-size guard lacks.
+
+    This is the asymmetry that separates the two ways a raised cutoff changes
+    clustering, which a maximum cannot tell apart:
+
+    * **Over-merge repair** REGROUPS records. Splitting a surname-collapsed
+      cluster of 8 into three clusters of ~3 moves every record into a smaller
+      cluster, but leaves them all still matched -- so the expelled share stays
+      at ~0 (measured: household_hardneg 0.0000, cotenant_hardneg 0.0006).
+    * **Shattering correct clusters** EXPELS records. Cutting a true size-2
+      cluster leaves BOTH of its records as singletons, so the damage shows up
+      directly (measured: person 0.1020, where the refit costs -0.0616 F1).
+
+    Returns 0.0 when nothing was matched at the default (no baseline to lose)."""
+    matched_default = _matched_records(id_a, id_b, score, default_link)
+    if not matched_default:
+        return 0.0
+    matched_candidate = _matched_records(id_a, id_b, score, candidate)
+    return len(matched_default - matched_candidate) / len(matched_default)
+
+
 def fs_refit_link_threshold(id_a, id_b, score, default_link: float) -> float:
     """Guarded FS threshold refit: the distributional valley candidate, ACCEPTED
     only when re-clustering at it actually REDUCES over-merge (max cluster size)
@@ -2714,23 +2768,46 @@ def fs_refit_link_threshold(id_a, id_b, score, default_link: float) -> float:
     already-separated datasets (person/ncvr/historical_50k) are a no-op. Re-cluster
     only -- scores are not recomputed.
 
-    **KNOWN DEFECT (#2387) -- the reason this ships default-OFF.** The "ncvr is a
-    no-op" claim above is FALSE, and it is what the default flip (#2377) rested on.
-    ``max_candidate < max_default`` is a SINGLE-OUTLIER statistic: it compares one
-    scalar over the whole dataset, so a candidate that fixes the one genuinely
-    over-merged cluster is accepted no matter how many CORRECT clusters the raised
-    cutoff shatters. Measured on ncvr_synthetic: this guard commits
-    ``0.50 -> 0.70 (max cluster 5 -> 2)`` -- yet every gold cluster there is
-    exactly size 2 (2500 disjoint pairs), so the guard's own objective is MET while
-    F1 drops 0.0966. The damage sits entirely BELOW the max, where a max cannot see
-    it. It works on household_hardneg (0.947 -> 1.000) only because over-merge IS
-    the dominant error mode there.
+    **TWO guards, both required (#2518).** The max-cluster-size test alone is a
+    SINGLE-OUTLIER statistic -- one scalar over the whole dataset -- so a candidate
+    that fixes the one genuinely over-merged cluster is accepted no matter how many
+    CORRECT clusters the raised cutoff shatters, because that damage sits BELOW the
+    max where a max cannot see it. That is the #2387 defect. It is now paired with
+    ``_expelled_share``, a GLOBAL criterion: the share of already-matched records the
+    candidate would strand as singletons, capped at ``_REFIT_MAX_EXPELLED_SHARE``.
+    The two are complementary and neither is sufficient alone -- the max supplies the
+    positive evidence (over-merge is really being repaired), the expelled share the
+    negative (correct clusters are not being shattered).
 
-    A correct guard needs a GLOBAL criterion -- e.g. reject when the linked-pair
-    count drops more than some bound, or compare the full cluster-size distribution
-    rather than its maximum. Whatever replaces it must be validated on a panel that
-    INCLUDES ncvr_synthetic: `ab_lever` and QIS both omit it, which is exactly how
-    this reached main and sat red for five nights."""
+    Measured on the FS lever panel (flag ON, valley candidate vs default):
+
+    ==================  ========  ========  =======  =======
+    dataset             expelled  linked_d      dF1  correct
+    ==================  ========  ========  =======  =======
+    person                0.1020    0.1161  -0.0616   reject
+    household_hardneg     0.0000    0.0608  +0.0313   accept
+    cotenant_hardneg      0.0006    0.7341  +0.5770   accept
+    ncvr_synthetic          n/a       n/a      n/a    no valley
+    ==================  ========  ========  =======  =======
+
+    ``expelled`` separates the regimes by ~160x. Note what this does and does NOT
+    change: the max test alone already calls all three of these correctly, so no
+    LIVE panel decision moves -- person is the shattering shape the cap is
+    calibrated against, not a regression being fixed here. The case the two
+    criteria actually disagree on is ncvr-shaped, and ncvr_synthetic no longer
+    produces a valley above 0.50 at all (F1 0.9913 either way), so that shape is
+    covered by a unit test rather than a panel dataset:
+    ``test_rejects_when_correct_clusters_would_be_shattered``.
+
+    **The linked-pair-count bound that #2387 proposed as the alternative remedy is
+    FALSIFIED** -- person's 0.1161 drop sits BETWEEN the two correct accepts
+    (0.0608 / 0.7341), so no bound on it can classify all three.
+
+    **Still default-OFF.** This fixes the accept criterion; flipping the default is a
+    separate decision that needs a green nightly `bench-suggest-quality` panel, which
+    `ci-required` does not run. Residual known blind spot: a candidate that splits a
+    correct cluster into two multi-member clusters expels nobody, so neither guard
+    sees it; no panel dataset exhibits that shape."""
     candidate = fs_refit_threshold(np.asarray(score, dtype=np.float64), default_link)
     if candidate <= default_link:
         # No valley above the default -> the loop is a no-op (the common case on
@@ -2742,22 +2819,32 @@ def fs_refit_link_threshold(id_a, id_b, score, default_link: float) -> float:
         return default_link
     max_default = _max_cluster_size(id_a, id_b, score, default_link)
     max_candidate = _max_cluster_size(id_a, id_b, score, candidate)
-    if max_candidate < max_default:
-        # Committed: the same observability discipline the controller uses for its
-        # weighted-path commit decision, so the FS refit is auditable on one surface
-        # (this is the non-iterated FS path's analogue of a RunHistory decision).
-        logger.info(
-            "FS link-threshold refit: %.4f -> %.4f (valley candidate; max cluster "
-            "%d -> %d, over-merge reduced)",
-            default_link, candidate, max_default, max_candidate,
+    if max_candidate >= max_default:
+        logger.debug(
+            "FS link-threshold refit: declined candidate %.4f (max cluster %d -> %d, no "
+            "over-merge reduction) -> keeping %.4f",
+            candidate, max_default, max_candidate, default_link,
         )
-        return candidate
-    logger.debug(
-        "FS link-threshold refit: declined candidate %.4f (max cluster %d -> %d, no "
-        "over-merge reduction) -> keeping %.4f",
-        candidate, max_default, max_candidate, default_link,
+        return default_link
+    expelled = _expelled_share(id_a, id_b, score, default_link, candidate)
+    if expelled > _REFIT_MAX_EXPELLED_SHARE:
+        logger.debug(
+            "FS link-threshold refit: declined candidate %.4f despite max cluster "
+            "%d -> %d (%.2f%% of matched records would be stranded as singletons, "
+            "cap %.2f%%) -> keeping %.4f",
+            candidate, max_default, max_candidate, expelled * 100.0,
+            _REFIT_MAX_EXPELLED_SHARE * 100.0, default_link,
+        )
+        return default_link
+    # Committed: the same observability discipline the controller uses for its
+    # weighted-path commit decision, so the FS refit is auditable on one surface
+    # (this is the non-iterated FS path's analogue of a RunHistory decision).
+    logger.info(
+        "FS link-threshold refit: %.4f -> %.4f (valley candidate; max cluster "
+        "%d -> %d, over-merge reduced; %.2f%% of matched records stranded)",
+        default_link, candidate, max_default, max_candidate, expelled * 100.0,
     )
-    return default_link
+    return candidate
 
 
 def _calibrate_link_threshold(comp_matrix, mk, match_weights, p_match) -> float | None:
