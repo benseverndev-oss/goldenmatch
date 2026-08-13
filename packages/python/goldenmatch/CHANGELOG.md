@@ -62,6 +62,37 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   default stays off until the benchmark says otherwise.
 
 ### Fixed
+- **The FS threshold-refit guard no longer accepts a cutoff that shatters
+  correct clusters (#2518).** `fs_refit_link_threshold` accepted a valley
+  candidate whenever it reduced the largest cluster -- a single-outlier
+  statistic. One scalar over the whole dataset cannot see damage below the
+  maximum, so a candidate that fixed the one genuinely over-merged cluster was
+  accepted no matter how many correct clusters the raised cutoff broke apart.
+  That is why `GOLDENMATCH_FS_REFIT_THRESHOLD` has shipped default-OFF since
+  #2387. The max test is now ANDed with a global one, `_expelled_share`: the
+  share of records matched at the default that the candidate would strand as
+  singletons, capped at 1%. The two regimes are asymmetric, which is what makes
+  this separable -- over-merge repair *regroups* records (splitting a
+  surname-collapsed cluster of 8 into 3s leaves everyone matched) while
+  shattering a correct size-2 cluster *expels* both of its members. Measured on
+  the FS lever panel, valley candidate vs default: `person` 0.1020 expelled /
+  ΔF1 −0.0616 (reject), `household_hardneg` 0.0000 / +0.0313 and
+  `cotenant_hardneg` 0.0006 / +0.5770 (accept) -- a ~160× separation.
+  **This changes no decision the live panel currently makes**: the max test
+  already calls all three correctly, so the guard picks the F1-optimal cutoff
+  on every panel dataset both before and after. What the second criterion buys
+  is the ncvr-shaped case the max is structurally blind to, which no panel
+  dataset exhibits today -- `person` is the live cluster-shattering shape the
+  1% cap is calibrated against, not a regression this fixes. The case that
+  actually separates the two criteria is carried by a unit test,
+  `test_rejects_when_correct_clusters_would_be_shattered`, which asserts the
+  max test alone WOULD accept and that the shipped guard declines. The
+  linked-pair-count bound proposed in #2387
+  as the alternative remedy is falsified: person's drop (0.1161) falls between
+  the two correct accepts (0.0608 / 0.7341), so no bound on it can classify all
+  three. The flag stays default-OFF -- this fixes the criterion; flipping the
+  default is a separate decision that needs a green nightly
+  `bench-suggest-quality`, which no PR gate runs.
 - **A probabilistic run now reports the link cutoff it applied, and says when
   nothing chose it (#2483).** The FS link cutoff is resolved through three
   precedence steps -- configured `mk.link_threshold`, the EM-calibrated

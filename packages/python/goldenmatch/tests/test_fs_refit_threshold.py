@@ -18,7 +18,10 @@ from __future__ import annotations
 
 import numpy as np
 from goldenmatch.core.probabilistic import (
+    _REFIT_MAX_EXPELLED_SHARE,
     _REFIT_MIN_PAIRS,
+    _expelled_share,
+    _max_cluster_size,
     _score_distribution_valley,
     fs_refit_link_threshold,
     fs_refit_threshold,
@@ -111,6 +114,29 @@ class TestFsRefitThreshold:
         assert fs_refit_threshold(_arr_from_hist(hist), default_link=0.50) == 0.50
 
 
+def _over_merge_pairs(n_groups=40):
+    """Pairs whose shape is REAL over-merge: independent groups, each three true
+    triples (tight 0.92 edges) glued into one 9-cluster by weak 0.55 edges -- the
+    household_hardneg shape, where a shared surname co-blocks distinct households.
+
+    Cutting at the valley dissolves the glue and leaves the triples intact: max
+    cluster 9 -> 3 while EVERY record stays matched (expelled share 0.0, matching
+    the measured household 0.0000 / cotenant 0.0006).
+
+    The weak band must be the glue INSIDE clusters, not a band of standalone weak
+    pairs: those would be records the cut strands as singletons, which is the
+    cluster-shattering regime `_expelled_share` is built to reject (#2518)."""
+    pairs = []
+    for g in range(n_groups):
+        base = 100 * g
+        for t in range(3):                       # three true triples
+            a, b, c = base + 3 * t, base + 3 * t + 1, base + 3 * t + 2
+            pairs += [(a, b, 0.92), (b, c, 0.92), (a, c, 0.92)]
+        pairs.append((base, base + 3, 0.55))     # weak glue chaining triple 0-1
+        pairs.append((base + 3, base + 6, 0.55))  # ... and 1-2 -> one 9-cluster
+    return pairs
+
+
 class TestClusterShapeGuard:
     """fs_refit_link_threshold accepts the valley candidate ONLY when re-clustering
     there reduces over-merge (max cluster size). This distinguishes a real
@@ -118,20 +144,39 @@ class TestClusterShapeGuard:
     low-scoring true matches and the rest (cutting removes real links)."""
 
     def test_accepts_when_over_merge_reduced(self):
-        # A giant over-merged cluster held by LOW-score edges (0.60) + many tight
-        # high-score true pairs (0.95), with a clean gap between. Cutting at the
-        # valley shatters the giant cluster (max size 15 -> 2) -> accept. (>=200
-        # pairs so the refit engages.)
-        pairs = []
-        for i in range(15):                  # 15-node clique = 105 weak 0.55 edges
-            for j in range(i + 1, 15):
-                pairs.append((i, j, 0.55))
-        for k in range(150):                 # 150 tight true 2-node pairs at 0.92
-            a = 1000 + 2 * k
-            pairs.append((a, a + 1, 0.92))
+        pairs = _over_merge_pairs()
         ia = [p[0] for p in pairs]; ib = [p[1] for p in pairs]; sc = [p[2] for p in pairs]
+        assert _max_cluster_size(ia, ib, sc, 0.50) == 9
         t = fs_refit_link_threshold(ia, ib, sc, default_link=0.50)
-        assert t > 0.50  # valley between the 0.60 band and 0.95 mass, over-merge reduced
+        assert t > 0.50  # valley between the 0.55 glue and the 0.92 mass
+        assert _max_cluster_size(ia, ib, sc, t) == 3   # over-merge reduced ...
+        assert _expelled_share(ia, ib, sc, 0.50, t) == 0.0  # ... and nobody stranded
+
+    def test_rejects_when_correct_clusters_would_be_shattered(self):
+        # #2387/#2518: the max-cluster-size test ALONE accepts this -- one genuinely
+        # over-merged 5-clique is dissolved, so max drops 5 -> 2. But the same cut
+        # also shatters 100 CORRECT size-2 clusters sitting in the low band, which a
+        # maximum cannot see. This is the ncvr_synthetic failure shape in miniature.
+        pairs = []
+        for i in range(5):                   # one over-merged 5-clique on weak edges
+            for j in range(i + 1, 5):
+                pairs.append((i, j, 0.55))
+        for k in range(100):                 # 100 CORRECT pairs in the same low band
+            a = 1000 + 2 * k
+            pairs.append((a, a + 1, 0.55))
+        for k in range(150):                 # the high true mass
+            a = 5000 + 2 * k
+            pairs.append((a, a + 1, 0.95))
+        ia = [p[0] for p in pairs]; ib = [p[1] for p in pairs]; sc = [p[2] for p in pairs]
+
+        # The valley candidate exists and the max-only test would accept it ...
+        cand = fs_refit_threshold(np.asarray(sc, dtype=np.float64), 0.50)
+        assert cand > 0.50
+        assert _max_cluster_size(ia, ib, sc, cand) < _max_cluster_size(ia, ib, sc, 0.50)
+        # ... but it would strand 205 of 505 matched records as singletons.
+        assert _expelled_share(ia, ib, sc, 0.50, cand) > _REFIT_MAX_EXPELLED_SHARE
+        # ... so the shipped guard declines and keeps the default.
+        assert fs_refit_link_threshold(ia, ib, sc, default_link=0.50) == 0.50
 
     def test_rejects_when_no_over_merge_reduction(self):
         # All clusters already tight 2-node entities across two score bands; a gap
@@ -147,6 +192,40 @@ class TestClusterShapeGuard:
         assert fs_refit_link_threshold(ia, ib, sc, default_link=0.50) == 0.50
 
 
+class TestExpelledShare:
+    """`_expelled_share` is the GLOBAL half of the guard (#2518): the share of
+    already-matched records a raised cutoff would strand as SINGLETONS. It exists
+    because max-cluster-size is a single-outlier statistic, blind to damage that
+    happens below the maximum."""
+
+    def test_regrouping_expels_nobody(self):
+        # Over-merge repair: two true triples glued into one 6-cluster by a weak
+        # edge. Cutting the glue leaves two triples -- everyone still matched.
+        pairs = [(0, 1, 0.9), (1, 2, 0.9), (0, 2, 0.9),
+                 (3, 4, 0.9), (4, 5, 0.9), (3, 5, 0.9),
+                 (2, 3, 0.55)]
+        ia = [p[0] for p in pairs]; ib = [p[1] for p in pairs]; sc = [p[2] for p in pairs]
+        assert _max_cluster_size(ia, ib, sc, 0.50) == 6
+        assert _max_cluster_size(ia, ib, sc, 0.75) == 3
+        assert _expelled_share(ia, ib, sc, 0.50, 0.75) == 0.0
+
+    def test_shattering_expels_both_members(self):
+        # Cutting a true size-2 cluster strands BOTH of its records.
+        pairs = [(0, 1, 0.9), (2, 3, 0.55)]
+        ia = [p[0] for p in pairs]; ib = [p[1] for p in pairs]; sc = [p[2] for p in pairs]
+        assert _expelled_share(ia, ib, sc, 0.50, 0.75) == 0.5  # 2 of 4 records
+
+    def test_no_baseline_matches_is_zero_not_a_divide_by_zero(self):
+        pairs = [(0, 1, 0.2), (2, 3, 0.3)]
+        ia = [p[0] for p in pairs]; ib = [p[1] for p in pairs]; sc = [p[2] for p in pairs]
+        assert _expelled_share(ia, ib, sc, 0.50, 0.75) == 0.0
+
+    def test_cap_is_clear_of_both_measured_regimes(self):
+        # The panel measurement this constant is derived from: accept-correct
+        # household 0.0000 / cotenant 0.0006, reject-correct person 0.1020.
+        assert 0.0006 < _REFIT_MAX_EXPELLED_SHARE < 0.1020
+
+
 # ── Route-uniformity: the shared pipeline helper all FS routes call ────────────
 
 
@@ -157,18 +236,7 @@ class TestMaybeRefitAcrossRoutes:
     uniformly regardless of route. These lock the helper's route-agnostic contract
     for BOTH pair representations (list of tuples + pa.Table) and the guards."""
 
-    @staticmethod
-    def _over_merge_pairs():
-        # 15-node weak clique (0.55) + 150 tight true pairs (0.92): a valley
-        # between the bands that cutting shatters -> refit raises the cutoff.
-        pairs = []
-        for i in range(15):
-            for j in range(i + 1, 15):
-                pairs.append((i, j, 0.55))
-        for k in range(150):
-            a = 1000 + 2 * k
-            pairs.append((a, a + 1, 0.92))
-        return pairs
+    _over_merge_pairs = staticmethod(_over_merge_pairs)
 
     class _MK:  # minimal matchkey stand-in: no explicit user threshold
         link_threshold = None
@@ -247,13 +315,7 @@ class TestRefitDecisionLogged:
     footgun. Return values are unchanged (log-only)."""
 
     def _over_merge(self):
-        pairs = []
-        for i in range(15):
-            for j in range(i + 1, 15):
-                pairs.append((i, j, 0.55))
-        for k in range(150):
-            a = 1000 + 2 * k
-            pairs.append((a, a + 1, 0.92))
+        pairs = _over_merge_pairs()
         return [p[0] for p in pairs], [p[1] for p in pairs], [p[2] for p in pairs]
 
     def _no_over_merge(self):
