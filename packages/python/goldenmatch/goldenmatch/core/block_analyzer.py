@@ -688,6 +688,15 @@ _SCORE_SAMPLE_SIZE = 100_000
 #: every candidate), not to police a well-tuned plan that trades a little recall
 #: for tractability.
 _LOW_RECALL_WARN = 0.30
+# The ranked pick is flagged when it retains less than this share of what the
+# best-recall candidate in the same list retains. Compares two estimates measured
+# against the SAME target population, so the estimator's own bias cancels -- which
+# is exactly what `_LOW_RECALL_WARN` cannot do, since an absolute floor is compared
+# against an estimate whose ceiling is the target's true-match fraction (#2540).
+# 0.75 measured: DBLP-ACM's ratio is 0.395 (rank 1 at 0.235 vs `title[:3]` at
+# 0.595) and fires; a plan within a quarter of the best available is not a
+# trade-off worth interrupting anyone over.
+_RECALL_TRADEOFF_RATIO = 0.75
 
 
 def analyze_blocking(
@@ -805,22 +814,72 @@ def analyze_blocking(
     # ranking is not a race to maximise recall alone.
     suggestions.sort(key=lambda s: (s.score * s.estimated_recall, s.score), reverse=True)
 
-    if suggestions and suggestions[0].estimated_recall < _LOW_RECALL_WARN:
+    if suggestions:
+        _warn_on_recall(suggestions, scored[0][1].get("coverage", 0.0))
+
+    return suggestions
+
+
+def _warn_on_recall(suggestions: list, coverage: float) -> None:
+    """Surface a low-recall blocking plan, and any higher-recall plan it outranked.
+
+    Two separate signals, because they mean different things and the absolute one
+    alone was misleading (#2540):
+
+    **Relative** -- the ranked pick retains materially less than the best candidate
+    measured. `rank = score x estimated_recall` has no recall floor, so a key that
+    drops most matchable pairs can win purely on comparison count, and nothing said
+    so. Measured on DBLP-ACM: rank 1 is `title[:5] + authors[:5]` at 0.235 estimated
+    recall and 1,667 comparisons, while `title[:3]` sits in the same list at 0.595
+    and 117,348 -- 2.5x the retention traded away for 70x fewer comparisons,
+    silently. This is the actionable one: the alternative is named, so the choice
+    can be overridden.
+
+    **Absolute** -- every candidate is under `_LOW_RECALL_WARN`. This one is a
+    weaker claim than it used to make. `estimated_recall` is measured against the
+    pairs the matchkey emits over an *unblocked* sample, which includes the
+    scorer's false positives, so its ceiling is that population's true-match
+    fraction rather than 1.0 (measured on DBLP-ACM: 40.5% true, so no candidate
+    could exceed ~0.4 however good). The old text asserted "expect most true
+    matches to be missed", which the estimate cannot support -- `title[:5]` scores
+    0.037 there while genuinely retaining 98.2% of true pairs. It is a lower bound
+    on true-match retention, and is phrased as one.
+    """
+    top = suggestions[0]
+    best_recall = max(suggestions, key=lambda s: s.estimated_recall)
+
+    if (
+        best_recall.description != top.description
+        and top.estimated_recall < _RECALL_TRADEOFF_RATIO * best_recall.estimated_recall
+    ):
+        logger.warning(
+            "Auto-suggest: the chosen blocking plan %r retains an estimated %.1f%% "
+            "of matchable pairs (%s comparisons), but candidate %r retains %.1f%% "
+            "(%s comparisons). Ranking is score x recall with no recall floor, so "
+            "the cheaper plan won on comparison count. If recall matters more than "
+            "cost here, set that key explicitly. See #2540.",
+            top.description, 100.0 * top.estimated_recall,
+            f"{top.total_comparisons:,}",
+            best_recall.description, 100.0 * best_recall.estimated_recall,
+            f"{best_recall.total_comparisons:,}",
+        )
+
+    if top.estimated_recall < _LOW_RECALL_WARN:
         # Not a hard reject. On a frame where EVERY candidate is below the floor
         # -- which is the Amazon-Google case -- rejecting them all leaves
         # degenerate blocking, and one mega-block is worse than a poor key. The
-        # honest move is to run and say so, loudly, rather than to report a
-        # 5%-recall plan as a normal success.
+        # honest move is to run and say so rather than report it as a clean success.
         logger.warning(
-            "Auto-suggest: best blocking candidate %r estimates only %.1f%% recall "
-            "(coverage %.1f%%). Every candidate considered was below %.0f%%, so this "
-            "is a low-recall blocking plan, not a tuned one -- expect most true "
-            "matches to be missed. Provide an explicit blocking config if this "
-            "dataset matters. See #2488.",
-            suggestions[0].description,
-            100.0 * suggestions[0].estimated_recall,
-            100.0 * scored[0][1].get("coverage", 0.0),
+            "Auto-suggest: best blocking candidate %r estimates %.1f%% recall "
+            "(coverage %.1f%%), below the %.0f%% floor. Treat this as a LOWER BOUND "
+            "on true-match retention, not a measurement of it: the denominator is "
+            "the pairs the matchkey emits over an unblocked sample, so it includes "
+            "scorer false positives that blocking is right to drop, and its ceiling "
+            "is that population's true-match fraction rather than 100%%. Blocking "
+            "may still be weak here -- verify against known duplicates, or provide "
+            "an explicit blocking config, before trusting the plan. See #2488, #2540.",
+            top.description,
+            100.0 * top.estimated_recall,
+            100.0 * coverage,
             100.0 * _LOW_RECALL_WARN,
         )
-
-    return suggestions

@@ -2388,6 +2388,7 @@
             "_token_candidates",
             "_token_candidates_enabled",
             "_token_index",
+            "_warn_on_recall",
             "analyze_blocking",
             "check_coverage",
             "detect_column_type",
