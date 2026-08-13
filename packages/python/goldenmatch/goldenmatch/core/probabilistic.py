@@ -2487,6 +2487,34 @@ def resolve_thresholds(
     return link, min(review, link)
 
 
+#: How the FS link cutoff was arrived at, for reporting (#2483).
+LINK_THRESHOLD_CONFIGURED = "configured"
+LINK_THRESHOLD_CALIBRATED = "calibrated"
+LINK_THRESHOLD_FALLBACK = "fallback"
+
+
+def link_threshold_source(mk: MatchkeyConfig, em_result: EMResult) -> str:
+    """Which of the three precedence steps supplied the link cutoff (#2483).
+
+    Mirrors -- and must keep mirroring -- the precedence in `resolve_thresholds`
+    and `_fs_link_threshold`: explicit `mk.link_threshold`, then the
+    EM-calibrated per-dataset cutoff, then the fixed default. Derived here
+    rather than re-inferred at the reporting site so the two cannot drift; a
+    reporting layer that disagrees with the resolver about where the number
+    came from is worse than no report at all.
+
+    ``"fallback"`` means nothing about THIS dataset chose the cut. That is the
+    case worth surfacing: the reporter in #2483 had a 94.4% match rate from the
+    fixed 0.50 default, with nothing in the config or the result saying a
+    decision had never been made.
+    """
+    if mk.link_threshold is not None:
+        return LINK_THRESHOLD_CONFIGURED
+    if getattr(em_result, "calibrated_link_threshold", None) is not None:
+        return LINK_THRESHOLD_CALIBRATED
+    return LINK_THRESHOLD_FALLBACK
+
+
 def _fs_calibrate_threshold_enabled() -> bool:
     """Unsupervised per-dataset link-threshold calibration. **Default OFF.**
 

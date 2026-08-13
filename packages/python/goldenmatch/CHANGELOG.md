@@ -62,6 +62,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   default stays off until the benchmark says otherwise.
 
 ### Fixed
+- **A probabilistic run now reports the link cutoff it applied, and says when
+  nothing chose it (#2483).** The FS link cutoff is resolved through three
+  precedence steps -- configured `mk.link_threshold`, the EM-calibrated
+  per-dataset cutoff, then a fixed default -- and the run reported none of it.
+  A caller could not tell a deliberate threshold from a default, which is how
+  the reporter got a 94.4% match rate (2,554 distinct names fused into one
+  entity) with no thread to pull: `mk.threshold` is the *weighted* matchkey's
+  field and inert here, so sweeping it changed nothing, and they went through a
+  16-cell matrix of unrelated FS env knobs before finding the cause.
+  - `DedupeResult.stats["fs_link_thresholds"]` now carries
+    `{matchkey: {"link_threshold": float, "source": ...}}`, where `source` is
+    `configured` / `calibrated` / `fallback`. Absent on non-probabilistic runs.
+    Provenance is derived by `probabilistic.link_threshold_source`, next to the
+    resolver, so the report cannot drift from the precedence it describes.
+  - A `fallback` cutoff that links more than 50% of records into multi-member
+    clusters now emits a warning naming `link_threshold` and carrying the cutoff
+    and the rate. A warning, not a rejection, and only for `fallback` -- a
+    configured or EM-calibrated cutoff that links a lot is the caller's call.
+    Measured on DBLP-ACM: the fallback run reports `0.5 / fallback` at a 25.3%
+    match rate (correctly silent); an explicit `0.95` reports `configured` at
+    1.24%.
+
+  This makes the failure legible; it does not change which cutoff is chosen.
+  Picking the cutoff from the scored-pair distribution already exists as
+  `fs_refit_link_threshold` (`GOLDENMATCH_FS_REFIT_THRESHOLD`) and stays default
+  OFF: enabling it cost -0.0966 F1 on `ncvr_synthetic` (#2387) through a defect
+  in its cluster-shape accept criterion, tracked separately.
 - **Blocking-candidate recall is measured against the pairs the scorer would
   match, and for every candidate (#2513).** Three defects in `estimate_recall` /
   `analyze_blocking`, all in how the recall number was produced and consumed.
