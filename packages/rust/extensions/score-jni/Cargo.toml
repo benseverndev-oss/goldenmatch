@@ -55,6 +55,9 @@ goldenmatch-score-cabi = { path = "../score-cabi" }
 # and its `fingerprint_json` was written for exactly this -- "non-Python callers
 # (pgrx / DuckDB / C ABI)", per its own manifest.
 goldenmatch-fingerprint-core = { path = "../fingerprint-core" }
+# The transform chain (normalization). Third kernel in the same library -- one
+# `.so` per platform, one extraction, one dlopen per executor JVM.
+goldenmatch-transforms-core = { path = "../transforms-core" }
 # jni-rs: the de-facto binding. Chosen over hand-writing the JNINativeInterface
 # function-table offsets because getting those wrong is a segfault inside an
 # executor, not a compile error.

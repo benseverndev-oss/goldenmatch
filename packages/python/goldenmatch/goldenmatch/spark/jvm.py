@@ -51,6 +51,50 @@ _UDF_CLASS = "dev.goldensuite.spark.GoldenScoreUdf"
 _IMPL_UDF_CLASS = "dev.goldensuite.spark.GoldenScoreImplUdf"
 _FINGERPRINT_UDF_CLASS = "dev.goldensuite.spark.GoldenFingerprintUdf"
 
+#: The SQL name of the transform chain (normalization).
+TRANSFORM_UDF_NAME = "golden_transform"
+
+_TRANSFORM_UDF_CLASS = "dev.goldensuite.spark.GoldenTransformUdf"
+
+#: Transforms the JVM can run, mirroring ``transforms_core::supports``.
+#:
+#: The RUST side is authoritative -- it is what actually runs -- and this set
+#: exists so a chain is refused on the DRIVER, at plan time, with the offending
+#: name in hand. Discovering it mid-job, after the plan is distributed, is
+#: strictly worse. ``bloom_filter`` (HMAC-keyed PPRL) and plugin transforms are
+#: absent on purpose, not pending.
+JVM_TRANSFORMS = frozenset({
+    "lowercase", "uppercase", "strip", "strip_all", "soundex", "metaphone",
+    "digits_only", "alpha_only", "normalize_whitespace", "token_sort",
+    "first_token", "last_token", "strip_honorifics",
+})
+
+
+def _is_int(s: str) -> bool:
+    try:
+        int(s)
+    except ValueError:
+        return False
+    return True
+
+
+def jvm_supports_transform(name: str) -> bool:
+    """Whether the JVM can run one transform. Mirrors ``transforms_core::supports``."""
+    if name in JVM_TRANSFORMS:
+        return True
+    parts = name.split(":")
+    if name.startswith("substring:"):
+        return len(parts) == 3 and all(_is_int(p) for p in parts[1:])
+    if name.startswith("qgram:"):
+        return len(parts) == 2 and _is_int(parts[1]) and int(parts[1]) > 0
+    return False
+
+
+def unsupported_transforms(chain: list[str]) -> list[str]:
+    """The transforms in ``chain`` the JVM cannot run. Empty means the whole
+    chain normalizes with no Python on the executors."""
+    return [t for t in chain if not jvm_supports_transform(t)]
+
 #: What ``implementation()`` reports when the Rust kernel loaded.
 NATIVE_IMPL = "NativeScorer"
 
@@ -143,6 +187,10 @@ def install(spark: object, *, jar: str | os.PathLike[str] | None = None,
         # every capability the jar has -- a caller should not have to know which
         # kernels exist to get them.
         (FINGERPRINT_UDF_NAME, _FINGERPRINT_UDF_CLASS, "string"),
+        # The transform chain. Normalization was Python-only until
+        # `transforms-core`; this is what lets a cluster normalize a
+        # column without an executor virtualenv.
+        (TRANSFORM_UDF_NAME, _TRANSFORM_UDF_CLASS, "string"),
     ):
         try:
             spark.udf.registerJavaFunction(sql_name, cls, ret)  # type: ignore[attr-defined]

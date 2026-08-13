@@ -3050,6 +3050,7 @@ jobs:
             "$JVM"/src/dev/goldensuite/spark/NativeLibrary.java \
             "$JVM"/src/dev/goldensuite/spark/NativeScorer.java \
             "$JVM"/src/dev/goldensuite/spark/NativeFingerprint.java \
+            "$JVM"/src/dev/goldensuite/spark/NativeTransform.java \
             "$JVM"/src/dev/goldensuite/spark/ScorerSelection.java
           cp packages/rust/extensions/score-jni/target/release/libgoldenmatch_score_jni.so \
             "$JVM/build/classes/native/linux-aarch64/"

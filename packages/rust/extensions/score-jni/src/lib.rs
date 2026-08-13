@@ -291,3 +291,73 @@ pub extern "system" fn Java_dev_goldensuite_spark_NativeFingerprint_fingerprintJ
         Err(_) => null,
     }
 }
+
+// ── transform chain (normalization) ─────────────────────────────────
+//
+// Third kernel in the same library. The chain arrives as ONE comma-separated
+// string rather than a `String[]`: transform names contain `:` (`substring:0:3`)
+// but never `,`, and a per-row `jobjectArray` would be a JNI transition per
+// element to deliver a value that is the same on every row of the query.
+
+fn split_chain(spec: &str) -> Vec<&str> {
+    spec.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// Whether every transform in a comma-separated chain can run here.
+///
+/// Exists so a host can refuse at PLAN time with the offending name, rather
+/// than per row. `bloom_filter` and plugin transforms are Python-only by
+/// design, and discovering that mid-job -- after the plan is distributed -- is
+/// strictly worse than refusing before it starts.
+#[no_mangle]
+pub extern "system" fn Java_dev_goldensuite_spark_NativeTransform_supportsChain<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    chain: JString<'local>,
+) -> jni::sys::jboolean {
+    let Ok(s) = env.get_string(&chain) else {
+        return 0;
+    };
+    let Ok(spec) = s.to_str() else {
+        return 0;
+    };
+    let all = split_chain(spec)
+        .iter()
+        .all(|t| goldenmatch_transforms_core::supports(t));
+    u8::from(all)
+}
+
+/// Apply a comma-separated transform chain to one value.
+///
+/// Returns `null` when the value is missing, when a transform legitimately
+/// yields a missing value (`strip_honorifics` on an honorific-only name -- an
+/// ABSENCE, not an empty string, because Fellegi-Sunter reads empty as an
+/// agreement on nothing), or when the chain contains something this kernel
+/// cannot run. The last case is unreachable in practice: the host gates on
+/// `supportsChain` before the plan is built.
+#[no_mangle]
+pub extern "system" fn Java_dev_goldensuite_spark_NativeTransform_applyChain<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    value: JString<'local>,
+    chain: JString<'local>,
+) -> jni::sys::jstring {
+    let null = std::ptr::null_mut();
+    let (Ok(v), Ok(c)) = (env.get_string(&value), env.get_string(&chain)) else {
+        return null;
+    };
+    let (Ok(text), Ok(spec)) = (v.to_str(), c.to_str()) else {
+        return null;
+    };
+    let names = split_chain(spec);
+    match goldenmatch_transforms_core::apply_transforms(Some(text), &names) {
+        Ok(Some(out)) => match env.new_string(out) {
+            Ok(js) => js.into_raw(),
+            Err(_) => null,
+        },
+        Ok(None) | Err(_) => null,
+    }
+}

@@ -137,12 +137,19 @@ def _probe_clustering(spark, df, ctx):
 
 
 def _probe_normalization(spark, df, ctx):
-    """`config_pipeline._transformed`: an arrow_udf running goldenmatch's
-    transform chain. Needs a Python worker."""
+    """`config_pipeline._transformed` through the JAR's transform kernel.
+
+    Was an arrow_udf and therefore Python-only; now routed to
+    `golden_transform`, which runs the same pyo3-free `transforms-core` the
+    Python path uses."""
     from goldenmatch.spark.config_pipeline import _transformed
 
     out = df.select(
-        _transformed(df["name"], ["lowercase", "strip_punctuation"]).alias("v")
+        _transformed(
+            df["name"],
+            ["lowercase", "normalize_whitespace"],
+            transform_udf=ctx["transform_udf"],
+        ).alias("v")
     )
     vals = _consume(out, "v")
     return f"{len(vals)} normalized values, e.g. {vals[0]!r}"
@@ -231,9 +238,13 @@ def main(argv=None) -> int:
     print(f"executor JVM: {runtime}\nscorer: {impl}\n  {diagnostics}\n", flush=True)
 
     df = spark.createDataFrame(_rows(), _SCHEMA).cache()
-    from goldenmatch.spark.jvm import FINGERPRINT_UDF_NAME
+    from goldenmatch.spark.jvm import FINGERPRINT_UDF_NAME, TRANSFORM_UDF_NAME
 
-    ctx = {"udf_name": udf_name, "fingerprint_udf": FINGERPRINT_UDF_NAME}
+    ctx = {
+        "udf_name": udf_name,
+        "fingerprint_udf": FINGERPRINT_UDF_NAME,
+        "transform_udf": TRANSFORM_UDF_NAME,
+    }
 
     print("=" * 74, flush=True)
     print("  WHAT RUNS WITH NO PYTHON ON THE EXECUTORS", flush=True)

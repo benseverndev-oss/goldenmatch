@@ -15,6 +15,7 @@ from goldenmatch.spark.jvm import (
     FINGERPRINT_UDF_NAME,
     IMPL_UDF_NAME,
     SCORER_IDS,
+    TRANSFORM_UDF_NAME,
     UDF_NAME,
     JvmScorerUnavailable,
     find_jar,
@@ -106,6 +107,29 @@ def test_install_ships_then_registers(jar):
             "dev.goldensuite.spark.GoldenFingerprintUdf",
             "string",
         ),
+        (TRANSFORM_UDF_NAME, "dev.goldensuite.spark.GoldenTransformUdf", "string"),
+    ]
+
+
+def test_the_jvm_transform_set_refuses_what_is_python_only():
+    """`bloom_filter` and plugin transforms are Python-only BY DESIGN.
+
+    They are refused on the driver so a chain fails at plan time with the name
+    in hand, rather than returning nulls from every row of a job that is already
+    distributed. Absent on purpose, not pending.
+    """
+    from goldenmatch.spark.jvm import jvm_supports_transform, unsupported_transforms
+
+    for name in ("lowercase", "soundex", "substring:0:3", "qgram:2"):
+        assert jvm_supports_transform(name), name
+    for name in ("bloom_filter", "bloom_filter:high", "legal_form_strip"):
+        assert not jvm_supports_transform(name), name
+    # A malformed parameterised spec must not read as supported and then
+    # silently become a no-op on the executor.
+    for name in ("substring:", "substring:a:b", "qgram:x", "qgram:0"):
+        assert not jvm_supports_transform(name), name
+    assert unsupported_transforms(["lowercase", "bloom_filter", "strip"]) == [
+        "bloom_filter"
     ]
 
 
