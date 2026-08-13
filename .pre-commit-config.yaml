@@ -59,3 +59,20 @@ repos:
         entry: python scripts/check_commit_msg.py
         language: system
         stages: [commit-msg]
+
+      # Regenerate the derived-docs battery (config-matrix, agent-manifest/codemap,
+      # api-surface, suite-matrix, thesis-weaknesses, native docs) so a surface
+      # change (new MCP tool / CLI command / scorer / config knob) can't land with
+      # a stale committed doc -- the `docs_regen` CI gate would otherwise redden.
+      # Writes in place; if it changed files pre-commit fails, so `git add` +
+      # recommit. SCOPED with `files:` so it only fires on doc-affecting source
+      # (idempotent no-op otherwise) -- respecting the fast-commit principle above.
+      # Needs the workspace importable (activate the dev venv, or run
+      # `pre-commit run regen-docs` after `uv sync`).
+      - id: regen-docs
+        name: derived docs are regenerated (no drift)
+        entry: python scripts/regen_docs.py
+        language: system
+        pass_filenames: false
+        files: '^(packages/python/|parity/.*\.ya?ml$|scripts/(gen_|agent_codemap|check_llms_counts|regen_docs))'
+        stages: [pre-commit]

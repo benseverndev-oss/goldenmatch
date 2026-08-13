@@ -57,6 +57,7 @@ jobs:
       any_workflow: ${{ steps.filter.outputs.any_workflow }}
       claude_refs: ${{ steps.filter.outputs.claude_refs }}
       scripts_lint: ${{ steps.filter.outputs.scripts_lint }}
+      docs_regen: ${{ steps.filter.outputs.docs_regen }}
       # force_all: forces the full job matrix + the dynamic python matrix,
       # bypassing the path filters. True on (1) workflow_dispatch run_all=true,
       # and (2) a merge_group entry that edits ci.yml itself (so the filter
@@ -4214,6 +4215,37 @@ jobs:
           INFERMAP_NATIVE: "0"
           GOLDENANALYSIS_NATIVE: "0"
 
+  # Single authoritative doc-drift gate (in ci-required). Regenerates the WHOLE
+  # derived-docs battery -- config-matrix, agent-manifest, agent-codemap,
+  # api-surface, suite-matrix, thesis-weaknesses, native docs + the prose count
+  # checks -- via ONE command and fails if the working tree drifted, printing the
+  # exact diff to commit. Collapses "did you regenerate all N artifacts?" (a chore
+  # that reddened this repo's config_matrix gate repeatedly) into `make docs` /
+  # `python scripts/regen_docs.py`. The per-artifact `--check`s in config_matrix
+  # remain (they also assert non-drift invariants); slimming those is a follow-up.
+  docs_regen:
+    needs: changes
+    if: needs.changes.outputs.docs_regen == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
+      - name: Regenerate the derived-docs battery; fail if the tree drifted
+        run: uv run python scripts/regen_docs.py --check
+        env:
+          POLARS_SKIP_CPU_CHECK: "1"
+          GOLDENMATCH_NATIVE: "0"
+          GOLDENCHECK_NATIVE: "0"
+          GOLDENFLOW_NATIVE: "0"
+          GOLDENPIPE_NATIVE: "0"
+          INFERMAP_NATIVE: "0"
+          GOLDENANALYSIS_NATIVE: "0"
+
   # Tier-2 doc-staleness ADVISORY. Diff-aware: flags a GOLDENMATCH_* env-flag
   # change with no tuning.mdx update (gating), and an __all__/re-export change
   # with no doc surface touched (warning). continue-on-error => never blocks
@@ -4526,6 +4558,7 @@ jobs:
       - claude_refs
       - scripts_lint
       - config_matrix
+      - docs_regen
       - er_matcher
     if: always()
     runs-on: ubuntu-latest
