@@ -77,6 +77,12 @@ dev = [
 embeddings = [
     "sentence-transformers>=2.2",
 ]
+# Ontology-layer identity provider (goldenmatch.semantic.ontology): parse OWL/RDF
+# to certify owl:hasKey / IFP identity keys, emit owl:sameAs + PROV-O + SHACL.
+# rdflib is optional — the module lazy-imports it; tests skip when it is absent.
+ontology = [
+    "rdflib>=7.0",
+]
 # Decode adapters for the multimodal-ER crawl tier (ADR 0022). The perceptual
 # kernel itself is dependency-free (operates on decoded luma grids / PCM); these
 # only back core.perceptual.decode_image_to_luma / decode_audio_to_mono so an
