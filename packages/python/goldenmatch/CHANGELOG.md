@@ -1266,6 +1266,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **Ontology-layer CLI + MCP front door.** `goldenmatch ontology certify
+  <ontology.ttl> --data Class=path` and `goldenmatch ontology discover --data
+  Class=path [-o out.ttl]` surface the ontology-layer certify/discover
+  capabilities on the command line (mirroring `certify-keys` / `discover-model`),
+  and MCP tools `ontology_certify` / `ontology_discover` expose the same to
+  agents. `python_only` in the parity gate; `rdflib`-optional (fail-clean install
+  hint without the `goldenmatch[ontology]` extra). See ADR 0056.
 - **Ontology layer, produce + discover (`goldenmatch.semantic.ontology`).**
   Completes the flesh-out with the generative half: `emit_golden_triples` emits
   resolved golden records as typed RDF individuals (`rdf:type` + conformed

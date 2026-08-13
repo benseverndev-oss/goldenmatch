@@ -4355,6 +4355,83 @@
           ]
         },
         {
+          "command": "ontology certify",
+          "options": [
+            {
+              "name": "ontology",
+              "type": "text",
+              "required": true,
+              "help": "OWL/RDF ontology file (Turtle / RDF-XML / JSON-LD / N-Triples)."
+            },
+            {
+              "name": "--data",
+              "type": "text",
+              "required": true,
+              "help": "Instance data for a class as Class=path (repeatable), e.g. -d Patient=patients.csv"
+            },
+            {
+              "name": "--json",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Emit the certification report as JSON."
+            },
+            {
+              "name": "--fail-untrustworthy",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Exit non-zero if any declared identity key is not unique at grain (CI gate)."
+            }
+          ]
+        },
+        {
+          "command": "ontology discover",
+          "options": [
+            {
+              "name": "--data",
+              "type": "text",
+              "required": true,
+              "help": "A class's instance data as Class=path (repeatable), e.g. -d Customer=customers.csv"
+            },
+            {
+              "name": "--output",
+              "type": "text",
+              "required": false,
+              "default": "None",
+              "help": "Write the draft OWL ontology (Turtle) to this path."
+            },
+            {
+              "name": "--base-iri",
+              "type": "text",
+              "required": false,
+              "default": "None",
+              "help": "Base IRI for the emitted terms."
+            },
+            {
+              "name": "--ontology-iri",
+              "type": "text",
+              "required": false,
+              "default": "None",
+              "help": "IRI for the ontology node."
+            },
+            {
+              "name": "--json",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Emit the discovery result as JSON."
+            },
+            {
+              "name": "--fail-untrustworthy",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Exit non-zero if any discovered class key is not unique at grain (CI gate)."
+            }
+          ]
+        },
+        {
           "command": "pprl auto-config",
           "options": [
             {
@@ -5236,6 +5313,14 @@
         {
           "name": "memory_stats",
           "description": "Return Learning Memory status: total correction count, last learn time, and current learned adjustments. Cheap; safe for status checks."
+        },
+        {
+          "name": "ontology_certify",
+          "description": "Ontology-layer front door (consume): certify the identity keys an OWL/RDF ontology DECLARES (owl:hasKey, inverse-functional properties) against real instance data. The ontology asserts identity but resolves it only by brittle exact-match; this returns a per-key verdict (unique-at-grain + fan-out) so an over-merging IFP/key is caught before a reasoner trusts it. Advisory. Needs the goldenmatch[ontology] extra."
+        },
+        {
+          "name": "ontology_discover",
+          "description": "Ontology-layer front door (generate): point GoldenMatch at a set of class instance tables and it PROPOSES a draft OWL ontology -- one owl:Class per frame whose owl:hasKey is chosen and PRE-GRADED by the certifier (gm:keyTrustworthy / gm:keyUniquenessEstimate). Discovery is hypothesis; certification is the falsification test. Returns the discovery result + the Turtle. Needs the goldenmatch[ontology] extra."
         },
         {
           "name": "plan_routing",
