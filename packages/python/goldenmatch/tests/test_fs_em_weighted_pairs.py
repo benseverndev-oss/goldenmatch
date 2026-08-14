@@ -710,3 +710,70 @@ def test_the_tf_table_survives_BOTH_the_kernel_and_the_fallback(monkeypatch, nat
     )
     assert em.tf_freqs == tf_freqs, f"tf_freqs dropped under NATIVE={native}"
     assert em.tf_collision == tf_collision
+
+
+# ── the calibrated link cut has to be on the ACTIVE scale ────────────
+
+def _calib_mk():
+    from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+
+    return MatchkeyConfig(
+        name="fs", type="probabilistic",
+        fields=[
+            MatchkeyField(field="first", scorer="jaro_winkler", levels=2,
+                          partial_threshold=0.8),
+            MatchkeyField(field="last", scorer="jaro_winkler", levels=2,
+                          partial_threshold=0.8),
+        ],
+    )
+
+
+def test_the_calibrated_cut_is_expressed_on_the_scale_that_consumes_it(
+    monkeypatch,
+):
+    """A cut chosen on the LINEAR scale must not be applied as a POSTERIOR one.
+
+    `_calibrate_link_threshold` normalises `(total - min) / (max - min)` -- the
+    linear weight envelope -- and `resolve_thresholds` then uses that number
+    directly as the cut, whichever calibration mode is active. Under
+    `GOLDENMATCH_FS_CALIBRATED=posterior` the score being thresholded is a
+    PROBABILITY, so the two are different quantities that happen to share the
+    [0, 1] range: measured on a 20K person fixture, Otsu picked 0.11 on the
+    linear scale while the posterior default for the same data is 0.99.
+
+    Nothing about that fails loudly. The linear value lands inside [0, 1], the
+    run reports `source: "calibrated"`, and the model quietly cuts in the wrong
+    place -- which is the same class of error as the fixed 0.99 this
+    calibration exists to replace.
+    """
+    import numpy as np
+    from goldenmatch.core.probabilistic import _calibrate_link_threshold
+
+    mk = _calib_mk()
+    weights = {"first": [-3.0, 4.0], "last": [-3.0, 4.0]}
+    # A clean bimodal split: half the pairs disagree on both fields, half agree.
+    comp = np.array([[0, 0]] * 400 + [[1, 1]] * 400, dtype=np.int64)
+
+    monkeypatch.setenv("GOLDENMATCH_FS_CALIBRATE_THRESHOLD", "1")
+    monkeypatch.setenv("GOLDENMATCH_FS_CALIBRATED", "posterior")
+
+    # Same comparison vectors, very different PRIORS. A posterior cut has to
+    # move, because every posterior moves with the prior; a linear-envelope cut
+    # cannot, because the envelope does not depend on the prior at all. That
+    # invariance is the sharpest available tell, and it needs no tolerance.
+    #
+    # An earlier version of this test asserted only that the cut fell between
+    # the two clusters' posteriors. On this fixture that band is
+    # [0.0008, 0.93] -- wide enough that the WRONG answer passed. A test whose
+    # bounds admit the bug is worse than none, because it reads as coverage.
+    rare = _calibrate_link_threshold(comp, mk, weights, 0.001)
+    common = _calibrate_link_threshold(comp, mk, weights, 0.400)
+
+    assert rare is not None and common is not None, (
+        "the calibrator declined on a cleanly bimodal input"
+    )
+    assert rare != common, (
+        f"the calibrated cut is {rare} at a 0.1% match rate and {common} at "
+        f"40% -- identical, so it is not a posterior at all. It is the linear "
+        f"weight envelope being handed to a posterior-scale comparison."
+    )

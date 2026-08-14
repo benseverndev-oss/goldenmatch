@@ -4219,6 +4219,7 @@
             "_ne_u_probs_from_matrix",
             "_neutral_u_for",
             "_otsu_threshold",
+            "_posterior_split",
             "_record_concat_value",
             "_record_concat_values",
             "_row_lookup_for_pairs",
