@@ -53,23 +53,6 @@
       ],
       "suggester_prec": 1.0
     },
-    "dblp_acm": {
-      "baseline_f1": 0.564539,
-      "convergence_final_f1": 0.729595,
-      "convergence_steps": 1,
-      "error": null,
-      "gt_pairs": 2224,
-      "kind": "real",
-      "n_suggestions": 1,
-      "name": "dblp_acm",
-      "native_available": true,
-      "rank_corr": null,
-      "rows": 4910,
-      "suggested_order_lifts": [
-        0.165055
-      ],
-      "suggester_prec": 1.0
-    },
     "historical_50k": {
       "baseline_f1": 0.812209,
       "convergence_final_f1": 0.812209,
