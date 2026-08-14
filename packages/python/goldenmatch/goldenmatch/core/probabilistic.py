@@ -1903,6 +1903,125 @@ def _em_iterate(
     return m_probs, m_probs_ne, p_match, converged, iteration + 1
 
 
+
+def _fs_em_counted_budget() -> int | None:
+    """Pair budget for the counted one-box trainer, or ``None`` when off.
+
+    ``GOLDENMATCH_FS_EM_COUNTED`` unset/``0`` -> off (the sampler runs).
+    ``1`` -> on at the default budget. Any integer -> on at that budget.
+    """
+    raw = os.environ.get("GOLDENMATCH_FS_EM_COUNTED", "").strip().lower()
+    if raw in ("", "0", "false", "no"):
+        return None
+    if raw in ("1", "true", "yes"):
+        return 2_000_000
+    try:
+        n = int(raw)
+    except ValueError:
+        logger.warning(
+            "GOLDENMATCH_FS_EM_COUNTED=%r is not an integer; counted EM stays off",
+            raw,
+        )
+        return None
+    return n if n > 0 else None
+
+
+def train_em_counted(
+    df: pl.DataFrame,
+    mk: MatchkeyConfig,
+    blocks: list,
+    *,
+    n_pairs: int = 2_000_000,
+    seed: int = 42,
+    max_iterations: int = 20,
+    convergence: float = 0.001,
+) -> EMResult:
+    """Train on COLLAPSED comparison vectors over a large blocked-pair budget.
+
+    The one-box analogue of ``spark.em.train_em_distributed``, and the thing
+    that makes the arc's claim measurable without a cluster.
+
+    ``train_em`` samples ``n_sample_pairs`` (10,000 by default) blocked pairs
+    and iterates over that matrix, so its EM cost is proportional to the SAMPLE
+    and its estimates carry that sample's noise. Here the budget is ~200x
+    larger and the matrix is collapsed to distinct vectors first, so the
+    iteration cost stops tracking the pair count and starts tracking
+    ``prod(levels + 1)``. Collapsing is EXACT, not an approximation -- every
+    M-step quantity is a sum linear in how many pairs share a vector.
+
+    **Per pass, because conditioning is per pass.** Two pairs with the same
+    comparison vector are only interchangeable if the same fields were
+    conditioned out for both, and that is constant WITHIN a blocking pass and
+    not across passes. Collapsing the pooled matrix would merge rows whose
+    conditioning differs and quietly train on a population that never existed.
+    So this groups blocks by their pass, collapses inside each, and combines
+    with the same ``_combine_em_sessions`` the distributed caller uses.
+    """
+    from collections import Counter
+
+    cols = _fs_projection_cols(mk)
+    _fs_ne_extend_cols(cols, mk)
+
+    if _em_ne_fields(mk):
+        raise NotImplementedError(
+            "counted EM does not support negative-evidence fields; they need a "
+            "per-pair NE matrix collapsing discards. Unset "
+            "GOLDENMATCH_FS_EM_COUNTED for this config."
+        )
+
+    by_pass: dict[tuple[str, ...], list] = {}
+    for b in blocks or []:
+        by_pass.setdefault(tuple(getattr(b, "blocking_fields", ()) or ()), []).append(b)
+    if not by_pass:
+        raise ValueError("counted EM needs blocks; none were supplied")
+
+    # u from RANDOM pairs, exactly as train_em estimates it -- the counted path
+    # changes how m is estimated, not what u means.
+    random_pairs = _sample_pairs(df, min(10_000, 5000 * len(mk.fields)), seed)
+    if len(random_pairs) < 10:
+        return _fallback_result(mk)
+    lookup = _row_lookup_for_pairs(df, cols, [random_pairs])
+    u_probs = estimate_u_from_counts(
+        mk,
+        sorted(
+            Counter(
+                tuple(int(v) for v in row)
+                for row in _build_comparison_matrix(random_pairs, lookup, mk)
+            ).items()
+        ),
+    )
+
+    tf_freqs, tf_collision = _build_tf_tables(df, mk)
+    sessions: list[tuple[tuple[str, ...], EMResult, float]] = []
+    per_pass_budget = max(1000, n_pairs // max(len(by_pass), 1))
+
+    for fields, pass_blocks in sorted(by_pass.items()):
+        pairs, _cond = _sample_blocked_pairs_with_fields(
+            pass_blocks, per_pass_budget, seed
+        )
+        if len(pairs) < 10:
+            continue
+        pair_lookup = _row_lookup_for_pairs(df, cols, [pairs])
+        matrix = _build_comparison_matrix(pairs, pair_lookup, mk)
+        counts = sorted(
+            Counter(tuple(int(v) for v in row) for row in matrix).items()
+        )
+        em = train_em_from_counts(
+            mk, counts, u_probs, conditioned_fields=fields,
+            tf_freqs=tf_freqs, tf_collision=tf_collision,
+            max_iterations=max_iterations, convergence=convergence,
+        )
+        sessions.append((fields, em, float(len(pairs))))
+        logger.info(
+            "counted EM: pass=%s pairs=%d -> %d distinct vectors (%.3g%%)",
+            fields or "(none)", len(pairs), len(counts),
+            100.0 * len(counts) / max(len(pairs), 1),
+        )
+
+    if not sessions:
+        return _fallback_result(mk)
+    return _combine_em_sessions(mk, sessions)
+
 def train_em(
     df: pl.DataFrame,
     mk: MatchkeyConfig,
@@ -1963,6 +2082,26 @@ def train_em(
 
     ne_fields_em = _em_ne_fields(mk)
     _warn_ne_blocking_overlap(ne_fields_em, blocking_fields)
+
+    # Counted mode (GOLDENMATCH_FS_EM_COUNTED) trades the 10k sampler for a
+    # ~200x larger blocked-pair budget collapsed to distinct vectors. Opt-in and
+    # env-gated so it can be A/B'd as a bench LANE against the default sampler
+    # without touching any call site -- the same lever the FS_NATIVE lanes use.
+    # Only when blocks exist and no per-pair overrides are in play: label
+    # anchors and caller-supplied weights are per-PAIR, and collapsing is what
+    # discards the identity of the pair they attach to.
+    _counted_budget = _fs_em_counted_budget()
+    if (
+        _counted_budget
+        and blocks
+        and label_pairs is None
+        and pair_weights is None
+        and not _em_ne_fields(mk)
+    ):
+        return train_em_counted(
+            df, mk, blocks, n_pairs=_counted_budget, seed=seed,
+            max_iterations=max_iterations, convergence=convergence,
+        )
 
     cols = [f.field for f in mk.fields
             if f.field != "__record__" and f.scorer != "record_embedding"]

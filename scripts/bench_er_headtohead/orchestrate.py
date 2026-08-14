@@ -50,7 +50,8 @@ class Lane:
 # RAISES under the default require-native when the kernel is absent -- so all
 # four need --allow-pure-python locally (CI builds native and passes False).
 _GM_RUN_LANES = {"gm_hand_built", "gm_probabilistic",
-                 "gm_probabilistic_native", "gm_zeroconfig"}
+                 "gm_probabilistic_native", "gm_probabilistic_counted",
+                 "gm_zeroconfig"}
 
 LANES: dict[str, Lane] = {
     "splink": Lane("splink", "run_splink.py"),
@@ -72,6 +73,25 @@ LANES: dict[str, Lane] = {
                                     env={"GOLDENMATCH_FS_NATIVE": "1",
                                          "GOLDENMATCH_FS_CALIBRATED": "posterior"},
                                     extra_args=("--fs-basic-scorers",)),
+    # The FS-EM single-source arc's payoff lane, and the only one that trains on
+    # something other than a 10,000-pair sample. GOLDENMATCH_FS_EM_COUNTED swaps
+    # the sampler for a ~200x larger blocked-pair budget COLLAPSED to distinct
+    # comparison vectors, so the EM loop's cost tracks prod(levels + 1) instead
+    # of the pair count. Identical to `gm_probabilistic_native` in every other
+    # respect -- same native kernel, same posterior calibration, same basic
+    # scorers -- so the delta against it isolates the trainer and nothing else.
+    #
+    # What it is FOR: the arc removed the sampler from distributed training and
+    # nothing has measured whether that buys accuracy. If F1 does not move, the
+    # sampler was never the binding constraint on these datasets and the honest
+    # payoff is scale, not quality.
+    "gm_probabilistic_counted": Lane("gm_probabilistic_counted",
+                                     "run_goldenmatch.py",
+                                     mode="probabilistic",
+                                     env={"GOLDENMATCH_FS_NATIVE": "1",
+                                          "GOLDENMATCH_FS_CALIBRATED": "posterior",
+                                          "GOLDENMATCH_FS_EM_COUNTED": "1"},
+                                     extra_args=("--fs-basic-scorers",)),
     "gm_zeroconfig": Lane("gm_zeroconfig", "run_goldenmatch.py", mode="zeroconfig"),
     "gm_converted_splink": Lane("gm_converted_splink", "run_gm_converted.py"),
 }

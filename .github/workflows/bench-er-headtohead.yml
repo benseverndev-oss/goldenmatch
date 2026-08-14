@@ -4,13 +4,19 @@
 # machine with an identical per-scale parquet fixture, so wall + peak-RSS are
 # comparable across engines.
 #
-# Lanes (6, selectable via the `lanes` input):
-#   splink                  - Fellegi-Sunter reference engine (pinned version)
-#   gm_hand_built           - GM fast weighted bucket+native path (speed reference)
-#   gm_probabilistic        - EM-trained FS, numpy fallback (GOLDENMATCH_FS_NATIVE=0)
-#   gm_probabilistic_native - same, Rust FS kernel (GOLDENMATCH_FS_NATIVE=1)
-#   gm_zeroconfig           - zero-effort controller
-#   gm_converted_splink     - GM running Splink's own spec via from_splink
+# Lanes (7, selectable via the `lanes` input):
+#   splink                    - Fellegi-Sunter reference engine (pinned version)
+#   gm_hand_built             - GM fast weighted bucket+native path (speed reference)
+#   gm_probabilistic          - EM-trained FS, numpy fallback (GOLDENMATCH_FS_NATIVE=0)
+#   gm_probabilistic_native   - same, Rust FS kernel (GOLDENMATCH_FS_NATIVE=1)
+#   gm_probabilistic_counted  - same again, but trained on COLLAPSED comparison
+#                               vectors over a ~200x larger blocked-pair budget
+#                               instead of the 10,000-pair sampler
+#                               (GOLDENMATCH_FS_EM_COUNTED=1). Differs from
+#                               gm_probabilistic_native ONLY in the trainer, so
+#                               the delta isolates it.
+#   gm_zeroconfig             - zero-effort controller
+#   gm_converted_splink       - GM running Splink's own spec via from_splink
 #
 # Shapes: person + biblio (default) + product (opt-in). The `shapes` input becomes a job matrix
 # (fail-fast: false), so each shape runs on its own runner and uploads its own
@@ -38,7 +44,7 @@ on:
       lanes:
         description: "Space-separated lanes to run"
         required: false
-        default: "splink gm_hand_built gm_probabilistic gm_probabilistic_native gm_zeroconfig gm_converted_splink"
+        default: "splink gm_hand_built gm_probabilistic gm_probabilistic_native gm_probabilistic_counted gm_zeroconfig gm_converted_splink"
       shapes:
         description: "Space-separated fixture shapes (person biblio product)"
         required: false

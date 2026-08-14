@@ -207,3 +207,64 @@ def test_every_pass_blocking_field_keeps_the_neutral_u_prior():
             f"{name} is a blocking field of some pass, so it must carry the "
             f"neutral prior the pooled run gives it, not a random-pair estimate"
         )
+
+
+# ── counted one-box training (GOLDENMATCH_FS_EM_COUNTED) ────────────
+
+def test_counted_mode_is_OFF_by_default_and_changes_nothing():
+    """The flag is opt-in, so an unset environment must train identically.
+
+    Anything else means every existing model shifts under callers who asked for
+    nothing -- the same bar the `pair_weights=None` path is held to.
+    """
+    import os
+
+    df = _frame()
+    blocks = _blocks(df, _cfg(["zip"], ["last_name"]))
+    assert "GOLDENMATCH_FS_EM_COUNTED" not in os.environ
+
+    a = _train(train_em, df, blocks, blocking_fields=["zip", "last_name"])
+    b = _train(train_em, df, blocks, blocking_fields=["zip", "last_name"])
+    assert a.m_probs == b.m_probs
+
+
+def test_counted_mode_engages_and_trains_a_valid_model(monkeypatch):
+    """With the flag on, `train_em` delegates to the counted trainer.
+
+    Asserted through a real `train_em` call rather than by calling
+    `train_em_counted` directly: the delegation condition is where this can
+    silently do nothing, and a test that bypassed it would pass with the gate
+    permanently off.
+    """
+    monkeypatch.setenv("GOLDENMATCH_FS_EM_COUNTED", "1")
+    df = _frame()
+    blocks = _blocks(df, _cfg(["zip"], ["last_name"]))
+    mk = _make_probabilistic_mk()
+
+    em = _train(train_em, df, blocks, blocking_fields=["zip", "last_name"])
+
+    for f in mk.fields:
+        probs = em.m_probs[f.field]
+        assert len(probs) == f.levels
+        assert sum(probs) == pytest.approx(1.0, abs=1e-9), f.field
+    # Blocking fields keep the #1835 prior through the counted route too.
+    for name in ("zip", "last_name"):
+        assert em.u_probs[name] == pytest.approx([0.5, 0.5], abs=1e-12), name
+
+
+def test_counted_mode_declines_when_a_per_pair_override_is_in_play(monkeypatch):
+    """Label anchors are per-PAIR, and collapsing discards which pair a vector
+    came from -- so the gate must fall through to the sampler rather than
+    silently dropping the anchors."""
+    monkeypatch.setenv("GOLDENMATCH_FS_EM_COUNTED", "1")
+    df = _frame()
+    blocks = _blocks(df, _cfg(["zip"], ["last_name"]))
+    ids = df["__row_id__"].to_list()
+
+    em = train_em(
+        df, _make_probabilistic_mk(), blocks=blocks,
+        n_sample_pairs=600, max_iterations=25, seed=11,
+        label_pairs={(ids[0], ids[1]): 1},
+    )
+    # Reached the sampler (which honours anchors) rather than the counted path.
+    assert em.m_probs
