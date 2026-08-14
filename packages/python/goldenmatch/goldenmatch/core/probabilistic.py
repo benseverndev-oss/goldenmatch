@@ -3394,7 +3394,24 @@ def _fs_refit_threshold_enabled() -> bool:
     )
 
 
-def _score_distribution_valley(hist) -> float | None:
+#: Minimum-mode mass for the CALIBRATOR's population, which is not the refit
+#: loop's. `_REFIT_MIN_MODE_MASS` (2%) is tuned for SCORED pairs -- already past
+#: a threshold, so match-rich. The calibrator reads TRAINING pairs: blocked
+#: candidates, overwhelmingly non-matches, where the true-match mode is a thin
+#: sliver by construction. Measured on the 20K person fixture, its posterior
+#: histogram is cleanly bimodal (9,905 pairs in bin 0, 82 in the top two, every
+#: bin between empty) and the match side is 0.82% -- so the 2% floor rejects a
+#: textbook separation and the calibrator falls back to a cut that scores F1
+#: 0.0000.
+#:
+#: 0.2% admits that shape while still refusing a handful of stray pairs as a
+#: "mode". It is a floor on EVIDENCE, not a claim about match rates: below it
+#: the smaller flank is too small for its maximum to mean anything, and the
+#: trough ratio it anchors becomes noise.
+_CALIBRATE_MIN_MODE_MASS = 0.002
+
+
+def _score_distribution_valley(hist, min_mode_mass: float | None = None) -> float | None:
     """Locate the class-separating VALLEY of a [0,1] score histogram: a deep
     density trough with substantial mass on BOTH sides. Returns the valley's cut
     point (the low edge of the deepest qualifying bin, in [0,1]) when the
@@ -3414,14 +3431,18 @@ def _score_distribution_valley(hist) -> float | None:
     total = hist.sum()
     if total <= 0:
         return None
+    # Default preserves the refit loop's behaviour exactly; the calibrator
+    # passes its own floor because it reads a different population (see
+    # `_CALIBRATE_MIN_MODE_MASS`).
+    floor = _REFIT_MIN_MODE_MASS if min_mode_mass is None else min_mode_mass
     nb = len(hist)
     best_idx: int | None = None
     best_ratio = _REFIT_VALLEY_MAX
     for v in range(1, nb - 1):
         left, right = hist[:v], hist[v + 1:]
-        if left.sum() / total < _REFIT_MIN_MODE_MASS:
+        if left.sum() / total < floor:
             continue
-        if right.sum() / total < _REFIT_MIN_MODE_MASS:
+        if right.sum() / total < floor:
             continue
         smaller = min(left.max(), right.max())
         if smaller <= 0:
@@ -3692,18 +3713,40 @@ def _posterior_split(scores) -> float | None:
     from noise, which is the failure mode the refit loop's valley gate exists
     to prevent.
     """
-    x = np.unique(np.asarray(scores, dtype=np.float64))
-    if x.shape[0] < 2:
+    arr = np.asarray(scores, dtype=np.float64)
+    if arr.shape[0] < 2:
         return None
-    gaps = np.diff(x)
-    k = int(np.argmax(gaps))
-    widest = float(gaps[k])
-    # The gap has to dominate the spread, or this is a continuum and any cut is
-    # arbitrary. 0.10 of the full [0,1] range is deliberately coarse: it admits
-    # the clean two-cluster case this exists for and declines the rest.
-    if widest < 0.10:
+
+    # BIMODALITY GATE, not a gap rule. The first version of this took the
+    # midpoint of the widest gap between sorted scores, which finds *a*
+    # separation in any distribution -- including one that has none. The
+    # cross-dataset sweep (run 31844730947) measured the cost: on
+    # `historical_50k` it cut at 0.348 where that dataset's optimum is 0.99,
+    # taking F1 0.7462 -> 0.0005 while reporting `source: "calibrated"` and
+    # returning clusters the whole way. Its shape is one non-match mass
+    # decaying into the matches -- no valley, so the widest gap sits inside the
+    # tail.
+    #
+    # `_score_distribution_valley` is the refit loop's answer to exactly this
+    # problem, and its own comment names the same dataset as the reason it
+    # exists ("historical_50k ... valley_ratio 0.55 (NO valley) -> keep 0.50").
+    # Reusing it means one bimodality rule rather than two that can disagree
+    # about what a class boundary is.
+    #
+    # It is deliberately reused rather than reimplemented on the posterior
+    # scale: the detector reads a [0, 1] histogram and both scales are [0, 1],
+    # so the only thing that changes is which quantity fills the bins.
+    hist, _ = np.histogram(arr, bins=_REFIT_BINS, range=(0.0, 1.0))
+    valley = _score_distribution_valley(
+        hist.astype(np.float64), min_mode_mass=_CALIBRATE_MIN_MODE_MASS
+    )
+    if valley is None:
         return None
-    return float((x[k] + x[k + 1]) / 2.0)
+
+    # The valley is the LOW EDGE of the trough bin. Return the bin's midpoint so
+    # the cut sits inside the empty region rather than on the shoulder of the
+    # mass below it.
+    return float(valley + 0.5 / _REFIT_BINS)
 
 
 def _fs_link_threshold(

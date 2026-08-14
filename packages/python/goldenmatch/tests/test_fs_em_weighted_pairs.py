@@ -747,7 +747,11 @@ def test_the_calibrated_cut_is_expressed_on_the_scale_that_consumes_it(
     calibration exists to replace.
     """
     import numpy as np
-    from goldenmatch.core.probabilistic import _calibrate_link_threshold
+    from goldenmatch.core.probabilistic import (
+        _calibrate_link_threshold,
+        posterior_from_weight,
+        prior_weight,
+    )
 
     mk = _calib_mk()
     weights = {"first": [-3.0, 4.0], "last": [-3.0, 4.0]}
@@ -757,23 +761,97 @@ def test_the_calibrated_cut_is_expressed_on_the_scale_that_consumes_it(
     monkeypatch.setenv("GOLDENMATCH_FS_CALIBRATE_THRESHOLD", "1")
     monkeypatch.setenv("GOLDENMATCH_FS_CALIBRATED", "posterior")
 
-    # Same comparison vectors, very different PRIORS. A posterior cut has to
-    # move, because every posterior moves with the prior; a linear-envelope cut
-    # cannot, because the envelope does not depend on the prior at all. That
-    # invariance is the sharpest available tell, and it needs no tolerance.
+    # The cut must SEPARATE the posterior clusters, and the posteriors move
+    # with the prior -- so the test is that the cut tracks them.
     #
-    # An earlier version of this test asserted only that the cut fell between
-    # the two clusters' posteriors. On this fixture that band is
-    # [0.0008, 0.93] -- wide enough that the WRONG answer passed. A test whose
-    # bounds admit the bug is worse than none, because it reads as coverage.
-    rare = _calibrate_link_threshold(comp, mk, weights, 0.001)
-    common = _calibrate_link_threshold(comp, mk, weights, 0.400)
+    # Two earlier versions of this assertion were wrong in opposite ways, and
+    # both are worth recording:
+    #
+    #   1. "cut falls between the clusters" -- on this fixture that band is
+    #      [0.0008, 0.93], wide enough that the WRONG answer passed.
+    #   2. "cut differs between two priors" -- sharper, and it did catch the
+    #      linear-scale bug. But it asserts an implementation detail, not the
+    #      property: the split is now histogram-based over 20 bins, and a
+    #      two-point fixture puts the low mass in bin 0 under BOTH priors, so
+    #      the trough bin is identical and the cut is legitimately the same.
+    #      That version failed on correct code.
+    #
+    # What actually distinguishes right from wrong is whether the cut lands
+    # between THIS prior's two masses. A linear-envelope number cannot, because
+    # it knows nothing about the prior that produced them.
+    for p_match in (0.001, 0.400):
+        cut = _calibrate_link_threshold(comp, mk, weights, p_match)
+        assert cut is not None, (
+            f"the calibrator declined on a cleanly bimodal input at "
+            f"prior={p_match}"
+        )
+        prior_w = prior_weight(p_match)
+        lo = posterior_from_weight(-6.0, prior_w)   # both fields disagree
+        hi = posterior_from_weight(8.0, prior_w)    # both fields agree
+        assert lo < cut < hi, (
+            f"prior={p_match}: cut {cut} does not separate the posterior "
+            f"masses [{lo:.6f}, {hi:.6f}] -- a linear-envelope cut cannot "
+            f"track a prior it never saw"
+        )
 
-    assert rare is not None and common is not None, (
-        "the calibrator declined on a cleanly bimodal input"
+
+def test_the_calibrator_DECLINES_on_a_unimodal_with_tail_distribution():
+    """No genuine class boundary -> keep the fixed default, do not invent a cut.
+
+    The cross-dataset sweep (run 31844730947) measured what happens without this
+    guard. Calibration tied or beat a per-dataset ORACLE on three of six
+    datasets, and then destroyed `historical_50k`:
+
+        oracle 0.99 -> F1 0.7462     calibrated chose 0.348 -> F1 0.0005
+
+    A -0.7457 delta, reported as `source: "calibrated"`, returning clusters the
+    whole way. That shape is one non-match mass with a declining tail into the
+    matches -- there is no valley, so the widest-gap rule finds *a* gap inside
+    the tail and cuts there.
+
+    The refit loop already solved this exact problem with a bimodality gate, and
+    its own comment records the same dataset as the reason
+    (`historical_50k ... valley_ratio 0.55 (NO valley) -> keep 0.50`). So the
+    calibrator now uses that detector: it must return None on a distribution
+    with no deep trough, whatever gap happens to exist inside the tail.
+    """
+    import numpy as np
+    from goldenmatch.core.probabilistic import _posterior_split
+
+    rng = np.random.default_rng(11)
+    # A CONTINUUM: one dominant low mass decaying smoothly all the way up, with
+    # no empty band anywhere. That is the historical_50k shape -- its calibrated
+    # run cut at 0.348 and returned precision 0.0003 at recall 0.9796, i.e. it
+    # linked essentially everything.
+    #
+    # My first version of this fixture put a hard empty gap at 0.45-0.60 and
+    # then asserted the calibrator must decline. That fixture is BIMODAL: bins
+    # 9 and 10 were genuinely empty with mass on both sides, so declining would
+    # have been the wrong answer and the test was demanding a bug. Modelling
+    # the failing shape means no gap at all.
+    scores = np.clip(rng.exponential(0.12, 4000), 0.0, 1.0)
+
+    assert _posterior_split(scores) is None, (
+        "the calibrator found a cut in a unimodal-with-tail distribution; that "
+        "is the historical_50k shape that took F1 0.7462 -> 0.0005"
     )
-    assert rare != common, (
-        f"the calibrated cut is {rare} at a 0.1% match rate and {common} at "
-        f"40% -- identical, so it is not a posterior at all. It is the linear "
-        f"weight envelope being handed to a posterior-scale comparison."
-    )
+
+
+def test_the_calibrator_still_fires_on_a_genuinely_bimodal_distribution():
+    """The gate must not turn calibration into a no-op everywhere.
+
+    Stated separately because a guard that declines on EVERYTHING would also
+    make the test above pass, and would silently revert the datasets where
+    calibration matched the oracle exactly (synthetic_person +0.0000,
+    febrl3 +0.0001, febrl4 +0.0012).
+    """
+    import numpy as np
+    from goldenmatch.core.probabilistic import _posterior_split
+
+    rng = np.random.default_rng(11)
+    lo = np.clip(rng.normal(0.05, 0.02, 2000), 0.0, 1.0)
+    hi = np.clip(rng.normal(0.95, 0.02, 2000), 0.0, 1.0)
+    cut = _posterior_split(np.concatenate([lo, hi]))
+
+    assert cut is not None, "declined on a cleanly bimodal distribution"
+    assert 0.10 < cut < 0.90, f"cut {cut} is not between the two modes"
