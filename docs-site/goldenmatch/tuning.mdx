@@ -651,6 +651,12 @@ Within whichever path is chosen, the per-block math runs on the native Rust FS k
 | `GOLDENMATCH_FS_WORKERS` | `min(16, cpu)` | Thread-pool size for the batched FS scorer (both kernels release the GIL). `1` forces the deterministic sequential reference loop. |
 | `GOLDENMATCH_DISTRIBUTED_FS_TRAIN_ROWS` | `200000` | EM training-sample row cap on the distributed FS path. |
 
+**EM training**
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `GOLDENMATCH_FS_EM_COUNTED` | `0` (off) | Train the FS model on **collapsed comparison vectors** over a ~200x larger blocked-pair budget instead of the 10,000-pair sampler. `1` = on at the default 2,000,000-pair budget; any integer sets the budget. Identical vectors are counted rather than iterated, so the EM loop's cost tracks `prod(levels + 1)` (thousands of rows) rather than the pair count — the collapse is EXACT, not an approximation, because every M-step quantity is a sum linear in how many pairs share a vector. Collapsing happens **per blocking pass**: two pairs are only interchangeable if the same fields were conditioned out for both, which is constant within a pass and not across them. **Declines to the sampler** when a per-pair override is in play (`label_pairs`, caller `pair_weights`, negative-evidence fields), since collapsing is exactly what discards which pair a vector came from. Default off is byte-identical. The distributed twin is `spark.em.train_em_distributed`. |
+
 **Model & math**
 
 | Variable | Default | Effect |
