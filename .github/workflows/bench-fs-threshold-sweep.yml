@@ -22,7 +22,7 @@ on:
       tune:
         description: "Tuning datasets (space separated)"
         required: false
-        default: "historical_50k dblp_acm febrl3 ncvr synthetic_person"
+        default: "historical_50k dblp_acm febrl3 synthetic_person"
       holdout:
         description: "Held-out datasets, two points only"
         required: false
@@ -71,6 +71,43 @@ jobs:
         run: |
           uv pip install splink==4.0.16
           uv pip install duckdb
+
+      # febrl3/febrl4 ship INSIDE recordlinkage, which is not a goldenmatch
+      # dependency (`benchmarks.yml` installs it the same way). Without it both
+      # the tuning panel and the holdout lose a dataset each.
+      - name: Install recordlinkage (febrl3 / febrl4 fixtures)
+        continue-on-error: true
+        run: uv pip install recordlinkage
+
+      # The Leipzig benchmarks are gitignored; fetch them best-effort, exactly
+      # as `bench-probabilistic.yml` does. A failure here costs one dataset,
+      # not the run -- but silently losing all three (as the first run did)
+      # empties the holdout, so the sweep step below hard-fails on an empty
+      # holdout rather than reporting a recommendation nothing checked.
+      - name: Fetch Leipzig benchmarks (best-effort)
+        continue-on-error: true
+        run: |
+          BASE=packages/python/goldenmatch/tests/benchmarks/datasets
+          fetch() {
+            local name="$1" url="$2"; shift 2
+            local dest="$BASE/$name"
+            mkdir -p "$dest"
+            if curl -fsSL --retry 3 -o "/tmp/$name.zip" "$url"; then
+              mkdir -p "/tmp/$name" && unzip -o "/tmp/$name.zip" -d "/tmp/$name"
+              for f in "$@"; do
+                found=$(find "/tmp/$name" -name "$f" | head -1)
+                if [ -n "$found" ]; then cp "$found" "$dest/$f"
+                else echo "::warning::$name: $f not in archive"; fi
+              done
+              ls -la "$dest"
+            else
+              echo "::warning::$name download failed; it will be skipped"
+            fi
+          }
+          L=https://dbs.uni-leipzig.de/file
+          fetch DBLP-ACM "$L/DBLP-ACM.zip" DBLP2.csv ACM.csv DBLP-ACM_perfectMapping.csv
+          fetch DBLP-Scholar "$L/DBLP-Scholar.zip" DBLP1.csv Scholar.csv DBLP-Scholar_perfectMapping.csv
+          fetch Amazon-GoogleProducts "$L/Amazon-GoogleProducts.zip" Amazon.csv GoogleProducts.csv Amzon_GoogleProducts_perfectMapping.csv
 
       - name: Sweep
         env:

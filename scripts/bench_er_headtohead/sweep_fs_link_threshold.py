@@ -25,8 +25,10 @@ generalises.
 
 So the panel is split the way `datasets.py` already splits it:
 
-* **tune**    -- historical_50k, dblp_acm, febrl3, ncvr, synthetic_person.
-  The full grid runs here, and the recommended constant is chosen here.
+* **tune**    -- historical_50k, dblp_acm, febrl3, synthetic_person. The full
+  grid runs here, and the recommended constant is chosen here. NCVR is NOT in
+  this list: its loader refuses by design (the raw sample's `ncid` is unique
+  per row, so there is no true-entity grouping and it will not fabricate one).
 * **holdout** -- febrl4, dblp_scholar, amazon_google, marked in `datasets.py`
   as "never in the FS-lever tuning panel". Only TWO points run here: the
   incumbent 0.99 and whatever the tuning panel recommended. Sweeping the
@@ -57,7 +59,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-TUNE = ["historical_50k", "dblp_acm", "febrl3", "ncvr", "synthetic_person"]
+# NCVR omitted deliberately -- see the module docstring; its loader refuses.
+TUNE = ["historical_50k", "dblp_acm", "febrl3", "synthetic_person"]
 HOLDOUT = ["febrl4", "dblp_scholar", "amazon_google"]
 GRID = [0.50, 0.70, 0.80, 0.85, 0.90, 0.95, 0.99]
 INCUMBENT = 0.99
@@ -209,6 +212,10 @@ def main() -> int:
     ap.add_argument("--work", default="fs_sweep_work")
     ap.add_argument("--summary-md", default="",
                     help="also render a markdown table here (CI job summary)")
+    # Floors, not preferences. Below these the run cannot answer the question
+    # it was dispatched to answer.
+    ap.add_argument("--min-tune", type=int, default=3)
+    ap.add_argument("--min-holdout", type=int, default=2)
     args = ap.parse_args()
 
     os.environ.setdefault("GOLDENMATCH_FS_CALIBRATED", "posterior")
@@ -253,6 +260,31 @@ def main() -> int:
     if args.summary_md:
         Path(args.summary_md).write_text(render_markdown(report), encoding="utf-8")
         print(f"[sweep] wrote {args.summary_md}", flush=True)
+
+    # A recommendation nothing checked is worse than no recommendation: the
+    # FIRST run of this sweep lost six of eight datasets to missing loaders and
+    # still printed "recommended 0.5", fitted on two datasets that disagreed
+    # with each other, with an EMPTY holdout. The artifact looked like a result.
+    #
+    # So the exit code now reflects whether the methodology held, not whether
+    # the process crashed. `--min-tune` / `--min-holdout` are the floor; the
+    # numbers stay in the artifact either way for diagnosis.
+    ok_tune = {r["dataset"] for r in report["tune"] if r.get("f1") is not None}
+    ok_hold = {r["dataset"] for r in report["holdout"] if r.get("f1") is not None}
+    report["usable_tune_datasets"] = sorted(ok_tune)
+    report["usable_holdout_datasets"] = sorted(ok_hold)
+    Path(args.out).write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+    if len(ok_tune) < args.min_tune or len(ok_hold) < args.min_holdout:
+        print(
+            f"[sweep] REFUSING the recommendation: {len(ok_tune)} usable tuning "
+            f"dataset(s) (need {args.min_tune}) and {len(ok_hold)} usable "
+            f"holdout dataset(s) (need {args.min_holdout}). A constant chosen "
+            f"on too few datasets, or with nothing held out to check it, is "
+            f"how the incumbent 0.99 happened in the first place.",
+            flush=True,
+        )
+        return 1
     return 0
 
 
