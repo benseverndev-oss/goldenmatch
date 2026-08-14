@@ -4171,6 +4171,7 @@
             "_fs_batch_rows",
             "_fs_calibrate_threshold_enabled",
             "_fs_calibration_mode",
+            "_fs_em_counted_budget",
             "_fs_embedding_vectors",
             "_fs_evidence_cut",
             "_fs_link_threshold",
@@ -4250,6 +4251,7 @@
             "set_fs_label_anchors",
             "train_em",
             "train_em_continuous",
+            "train_em_counted",
             "train_em_from_counts",
             "train_em_per_pass",
             "vectorized_scorer_supported"
