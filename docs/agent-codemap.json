@@ -12969,7 +12969,7 @@
     },
     "infermap": {
       "root": "packages/python/infermap/infermap",
-      "module_count": 31,
+      "module_count": 32,
       "modules": [
         {
           "module": "infermap",
@@ -12985,6 +12985,7 @@
             "infermap.engine",
             "infermap.errors",
             "infermap.identity",
+            "infermap.layers",
             "infermap.providers",
             "infermap.scorers",
             "infermap.types"
@@ -13157,6 +13158,27 @@
           "imports": [
             "goldenmatch.identity",
             "infermap.types"
+          ]
+        },
+        {
+          "module": "infermap.layers",
+          "file": "packages/python/infermap/infermap/layers.py",
+          "purpose": "Identity-layer detection — which *parties* a frame refers to.",
+          "defines": [
+            "_build_layers",
+            "_candidate_groups",
+            "_candidates",
+            "_group_is_viable",
+            "_load_pack",
+            "_reason",
+            "_role_token_index",
+            "_score_group",
+            "_stop_tokens",
+            "_type_corroboration",
+            "detect_identity_layers"
+          ],
+          "imports": [
+            "infermap.detect"
           ]
         },
         {
