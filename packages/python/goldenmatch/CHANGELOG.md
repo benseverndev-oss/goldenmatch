@@ -7,6 +7,43 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **Zero-config now says when a frame looks like several sources concatenated
+  together, and routes to `match_df` (#2540).** `dedupe_df` compares candidate
+  pairs WITHIN one frame. When that frame is two catalogues stacked with
+  `pl.concat`, most of the candidate set is wrong by construction -- pairs drawn
+  from a single source, which a cross-source ground truth can never mark correct.
+  Measured on the repo's own benchmarks: **48.3%** of DBLP-ACM's candidate pairs
+  and **73.4%** of Abt-Buy's are within-source. The failure was entirely silent.
+
+  New `core/concat_sources.py` detects the shape and logs a warning naming
+  `match_df`. It deliberately does **not** constrain matching: `match_df` already
+  owns cross-source linkage, so a source constraint in dedupe would be a second
+  authoritative owner for one capability, against the architecture frame -- this
+  routes rather than duplicates. Inferring a source and silently dropping pairs
+  would also turn a heuristic into a correctness dependency; a warning costs a
+  log line when wrong, a dropped true match costs recall invisibly.
+
+  **Contiguity is the entire signal.** `pl.concat` lays source A's rows down
+  first, so a genuine concatenation leaves a step -- a column goes null, or
+  changes value-shape, at one row boundary and stays that way. Real single-source
+  messiness is scattered, not contiguous, which is what keeps this from being
+  another plausible-but-wrong heuristic. The step test is tolerant (97% purity),
+  because an exact two-run test missed abt_buy: `manufacturer` is null for all
+  1081 Abt rows AND 6 Buy rows.
+
+  Validated against the benchmark corpus before shipping -- it fires on all three
+  known concatenated benchmarks at exactly the true source boundary, and stays
+  silent on all four genuine single-source corpora:
+
+  | corpus | result | boundary | true split |
+  |---|---|---|---|
+  | `dblp_acm` | fires (format step on `id`) | 2616 | DBLP2 = 2616 rows |
+  | `abt_buy` | fires (null step on `manufacturer`) | 1081 | Abt = 1081 rows |
+  | `amazon_google` | fires (null step on `title`/`name`) | 1363 | Amazon = 1363 rows |
+  | `person` / `household_hardneg` / `cotenant_hardneg` / `ncvr_synthetic` | silent | -- | genuine single-source |
+
+  Advisory and fail-open: any error returns `None`, and large frames are strided
+  (a step survives uniform striding; head-sampling would see only one source).
 - **ODCS (Open Data Contract Standard) dialect for the semantic-layer certifier
   (`goldenmatch.semantic.odcs`).** A data contract declares its identity right in
   the schema — `primaryKey: true` (ordered by `primaryKeyPosition` for a composite

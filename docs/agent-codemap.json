@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 475,
+      "module_count": 476,
       "modules": [
         {
           "module": "goldenmatch",
@@ -1989,6 +1989,7 @@
             "goldenmatch.core.blocking_pass_selection",
             "goldenmatch.core.blocking_union_core",
             "goldenmatch.core.complexity_profile",
+            "goldenmatch.core.concat_sources",
             "goldenmatch.core.domain",
             "goldenmatch.core.embedder",
             "goldenmatch.core.execution_plan",
@@ -2758,6 +2759,21 @@
           "imports": [
             "goldenmatch.core._native_loader",
             "goldenmatch.core.autoconfig_native"
+          ]
+        },
+        {
+          "module": "goldenmatch.core.concat_sources",
+          "file": "packages/python/goldenmatch/goldenmatch/core/concat_sources.py",
+          "purpose": "Detect a frame that is several sources concatenated together (#2540).",
+          "defines": [
+            "ConcatenationEvidence",
+            "_best_step",
+            "_signature",
+            "detect_concatenated_sources",
+            "warn_if_concatenated_sources"
+          ],
+          "imports": [
+            "goldenmatch.core.frame"
           ]
         },
         {

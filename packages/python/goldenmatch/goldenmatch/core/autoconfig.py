@@ -4863,6 +4863,15 @@ def auto_configure_df(
         force_exclude_list, force_include_list = (
             _resolve_effective_exclusion_overrides(config=None)
         )
+        # #2540: a frame that is several sources CONCATENATED (no source column)
+        # is a different shape from #858's below, which needs a source-indicator
+        # column to key on -- measured: `_detect_source_partition` returns None
+        # on abt_buy even though it is Abt+Buy stacked. Report it and route to
+        # `match_df`; deliberately do NOT constrain matching here, since
+        # `match_df` already owns cross-source linkage and a second owner for
+        # one capability is against the architecture frame. Advisory + fail-open.
+        from goldenmatch.core.concat_sources import warn_if_concatenated_sources
+        warn_if_concatenated_sources(df)
         # #858: multi-source source-correlated over-merge guard (spec §0-§4).
         # Detect the source partition on the FULL frame, then exclude the
         # source-indicator column + every 0-cross-source-overlap column from
