@@ -188,6 +188,57 @@ def inspect(
 
 
 @app.command()
+def layers(
+    source: str = typer.Argument(..., help="Source data to inspect (CSV path, schema YAML, etc.)"),
+    domain: str | None = typer.Option(
+        None, "--domain", help="Domain pack to use (auto-detected when omitted)"
+    ),
+    table: str | None = typer.Option(None, "--table", help="Table name for DB sources"),
+    verbose: bool = typer.Option(False, "--verbose/--no-verbose", help="Enable verbose logging"),
+) -> None:
+    """Detect the identity layers (parties) a source refers to.
+
+    Distinct from domain detection: a loan tape is one `finance` domain but TWO
+    parties — a lender and a borrower — that must never be resolved against each
+    other. Each layer is the group of columns describing one party.
+    """
+    _setup_logging(verbose, False)
+
+    from types import SimpleNamespace
+
+    from infermap.layers import detect_identity_layers
+    from infermap.providers import extract_schema
+
+    kwargs: dict = {}
+    if table:
+        kwargs["table"] = table
+
+    try:
+        schema = extract_schema(source, **kwargs)
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1)
+
+    columns = [f.name for f in schema.fields]
+    result = detect_identity_layers(SimpleNamespace(columns=columns), domain=domain)
+
+    typer.echo(f"Source: {schema.source_name or source}")
+    typer.echo(f"Domain: {result.domain or '(none detected)'}")
+    typer.echo(f"Layers: {len(result.layers)}")
+    typer.echo("")
+    typer.echo(f"{'ROLE':<18} {'KIND':<14} {'SCORE':>6}  {'WHY':<16} COLUMNS")
+    typer.echo("-" * 96)
+    for layer in result.layers:
+        typer.echo(
+            f"{layer.role:<18} {layer.kind:<14} {layer.score:>6.3f}  "
+            f"{layer.reason:<16} {', '.join(layer.columns)}"
+        )
+    if result.unassigned:
+        typer.echo("")
+        typer.echo(f"Unassigned (belong to no party): {', '.join(result.unassigned)}")
+
+
+@app.command()
 def validate(
     source: str = typer.Argument(..., help="Source data to validate (CSV path, etc.)"),
     config: str = typer.Option(..., "--config", help="Path to mapping config YAML (required)"),

@@ -13053,6 +13053,7 @@
             "_setup_logging",
             "apply",
             "inspect",
+            "layers",
             "main",
             "map",
             "mcp_serve",
@@ -13062,6 +13063,7 @@
             "infermap.config",
             "infermap.engine",
             "infermap.errors",
+            "infermap.layers",
             "infermap.mcp.server",
             "infermap.providers"
           ]
@@ -13193,6 +13195,7 @@
           "defines": [
             "_handle_apply",
             "_handle_inspect",
+            "_handle_layers",
             "_handle_map",
             "_handle_validate",
             "create_server",
@@ -13204,6 +13207,7 @@
             "infermap.config",
             "infermap.dictionaries",
             "infermap.engine",
+            "infermap.layers",
             "infermap.providers",
             "infermap.scorers"
           ]

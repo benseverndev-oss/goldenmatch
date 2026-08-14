@@ -191,3 +191,34 @@ class TestValidateCommand:
         )
         assert result.exit_code == 0
         assert "nonexistent_col" in result.output or "Missing" in result.output
+
+
+class TestLayersCommand:
+    """The `layers` command — identity layers (parties), not domain detection."""
+
+    def test_separates_two_parties_in_one_source(self, tmp_path):
+        csv = tmp_path / "loan.csv"
+        csv.write_text(
+            "lender_name,lender_id,borrower_name,borrower_ssn,loan_id\nA,1,B,2,3\n",
+            encoding="utf-8",
+        )
+        result = runner.invoke(app, ["layers", str(csv), "--domain", "finance"])
+        assert result.exit_code == 0, f"Output:\n{result.output}"
+        assert "lender" in result.output
+        assert "organization" in result.output
+        assert "borrower" in result.output
+        assert "person" in result.output
+        # A record-level column belongs to no party.
+        assert "loan_id" in result.output
+
+    def test_runs_without_a_domain(self, tmp_path):
+        """Affix detection is domain-free — no pack needed."""
+        csv = tmp_path / "unknown.csv"
+        csv.write_text("shipper_name,shipper_code,widget_owner_name,widget_owner_id\na,b,c,d\n", encoding="utf-8")
+        result = runner.invoke(app, ["layers", str(csv)])
+        assert result.exit_code == 0, f"Output:\n{result.output}"
+        assert "Layers: 2" in result.output
+
+    def test_missing_source_exits_nonzero(self, tmp_path):
+        result = runner.invoke(app, ["layers", str(tmp_path / "nope.csv")])
+        assert result.exit_code != 0

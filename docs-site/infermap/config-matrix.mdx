@@ -58,6 +58,10 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `inspect` | `source` | text | **required** | Source data to inspect (CSV path, schema YAML, etc.) |
 | `inspect` | `--table` | text | `None` | Table name for DB sources |
 | `inspect` | `--verbose` | boolean | `False` | Enable verbose logging |
+| `layers` | `source` | text | **required** | Source data to inspect (CSV path, schema YAML, etc.) |
+| `layers` | `--domain` | text | `None` | Domain pack to use (auto-detected when omitted) |
+| `layers` | `--table` | text | `None` | Table name for DB sources |
+| `layers` | `--verbose` | boolean | `False` | Enable verbose logging |
 | `map` | `source` | text | **required** | Source data (CSV path, DataFrame, DB URI, schema YAML) |
 | `map` | `target` | text | **required** | Target data (same variety of inputs) |
 | `map` | `--table` | text | `None` | Optional table name for DB sources |
@@ -79,12 +83,13 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 
 ## MCP tools
 
-4 MCP tool(s) exposed by `infermap.mcp.server` -- the programmatic / agent surface. Config-bearing tools take the same knobs as above.
+5 MCP tool(s) exposed by `infermap.mcp.server` -- the programmatic / agent surface. Config-bearing tools take the same knobs as above.
 
 | Tool | Description |
 |---|---|
 | `apply` | Apply a saved mapping config to a source CSV, renaming columns according to the mapping and writing the result to an output file. |
 | `inspect` | Inspect a data source — show fields, types, sample values, null rates, unique rates, and statistics. |
+| `layers` | Detect the identity layers (parties) a data source refers to — e.g. a loan tape's lender AND borrower, or a claims file's patient, provider and payer. Distinct from domain detection, which returns one industry vertical for the whole source. Each layer is the group of columns describing one party, with its kind (person/organization/asset/place), a score, and the evidence behind it. Unrecognised parties are reported with role 'unknown' rather than dropped; columns belonging to no party land in 'unassigned'. |
 | `map` | Map source columns to target schema using a weighted scorer pipeline with optimal 1:1 assignment. Returns mappings with confidence scores and human-readable reasoning. |
 | `validate` | Validate that a source file's columns satisfy a saved mapping config. Reports missing source columns and unmapped required fields. |
 

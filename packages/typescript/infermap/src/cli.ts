@@ -15,6 +15,7 @@ import { pathToFileURL } from "node:url";
 
 import { MapEngine } from "./core/engine.js";
 import { fromConfig, mapResultToConfigJson, ConfigError } from "./core/config.js";
+import { detectIdentityLayers } from "./core/layers.js";
 import { mapResultToJson, mapResultToReport } from "./core/types.js";
 import type { MapResult, SchemaInfo } from "./core/types.js";
 import { extractSchemaFromFile } from "./node/fs.js";
@@ -27,6 +28,7 @@ Usage:
   infermap map <source> <target> [options]
   infermap apply <source> --config <file> --output <file>
   infermap inspect <source> [--table <name>]
+  infermap layers <source> [--domain <name>] [--table <name>]
   infermap validate <source> --config <file> [--required <fields>] [--strict]
   infermap mcp-serve
   infermap --help
@@ -219,6 +221,43 @@ async function cmdInspect(argv: string[]): Promise<number> {
   return 0;
 }
 
+/** Detect the identity layers (parties) a source refers to.
+ *
+ *  Distinct from domain detection: a loan tape is one `finance` domain but TWO
+ *  parties — a lender and a borrower — that must never be resolved against each
+ *  other. Each layer is the group of columns describing one party. */
+async function cmdLayers(argv: string[]): Promise<number> {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: { table: { type: "string" }, domain: { type: "string" } },
+  });
+  const [source] = positionals;
+  if (!source) die("layers requires <source> positional argument");
+
+  const schema = await resolveSchema(source, values.table);
+  const columns = schema.fields.map((f) => f.name);
+  const result = detectIdentityLayers({ columns }, values.domain);
+
+  process.stdout.write(`Source: ${schema.sourceName || source}\n`);
+  process.stdout.write(`Domain: ${result.domain ?? "(none detected)"}\n`);
+  process.stdout.write(`Layers: ${result.layers.length}\n\n`);
+  const header = `${"ROLE".padEnd(18)} ${"KIND".padEnd(14)} ${"SCORE".padStart(6)}  ${"WHY".padEnd(16)} COLUMNS`;
+  process.stdout.write(`${header}\n${"-".repeat(96)}\n`);
+  for (const l of result.layers) {
+    process.stdout.write(
+      `${l.role.padEnd(18)} ${l.kind.padEnd(14)} ${l.score.toFixed(3).padStart(6)}  ` +
+        `${l.reason.padEnd(16)} ${l.columns.join(", ")}\n`,
+    );
+  }
+  if (result.unassigned.length > 0) {
+    process.stdout.write(
+      `\nUnassigned (belong to no party): ${result.unassigned.join(", ")}\n`,
+    );
+  }
+  return 0;
+}
+
 async function cmdValidate(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv,
@@ -273,7 +312,7 @@ async function cmdValidate(argv: string[]): Promise<number> {
 // ---------- entrypoint ----------
 
 // Canonical CLI command set (mirrors the main() dispatch); read by the API-parity emitter.
-export const COMMANDS = ["apply", "inspect", "map", "mcp-serve", "validate"];
+export const COMMANDS = ["apply", "inspect", "layers", "map", "mcp-serve", "validate"];
 
 async function main(): Promise<number> {
   const [, , cmd, ...rest] = process.argv;
@@ -294,6 +333,8 @@ async function main(): Promise<number> {
         return await cmdApply(rest);
       case "inspect":
         return await cmdInspect(rest);
+      case "layers":
+        return await cmdLayers(rest);
       case "validate":
         return await cmdValidate(rest);
       case "mcp-serve": {
