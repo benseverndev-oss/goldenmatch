@@ -1314,6 +1314,77 @@ def _neutral_u_for(field) -> list[float]:
     return [1.0 / field.levels] * field.levels
 
 
+def _train_em_from_counts_native(
+    mk: MatchkeyConfig,
+    pattern_counts: list[tuple[tuple[int, ...], int]],
+    u_probs: dict[str, list[float]],
+    *,
+    conditioned_fields: Sequence[str],
+    max_iterations: int,
+    convergence: float,
+) -> EMResult | None:
+    """Run the counted trainer in the Rust kernel, or ``None`` to fall back.
+
+    Phase 1 of the FS-EM single-source spec. The same loop was maintained in
+    Python, TypeScript and Rust; this is what makes the Rust one load-bearing
+    for Python rather than a fourth copy nothing runs.
+
+    Returns ``None`` -- never a partial result -- when the kernel is absent, the
+    component is gated off, or the symbol is missing from an older published
+    wheel. Symbol presence is checked at the call site and not only through the
+    component gate, because a wheel predating this symbol is the normal state of
+    every environment until the wheel is republished (#688's secondary bug).
+
+    Parity is DECISION-LEVEL, not bitwise: libm's ``ln``/``log2``/``exp`` differ
+    from CPython's in the low mantissa bits, so which path ran moves the trained
+    numbers in the last ~1e-9. That is the same posture every other float kernel
+    here takes; it is stated because "the model differs by environment" is
+    otherwise a surprising thing to discover.
+    """
+    from goldenmatch.core._native_loader import native_enabled, native_module
+
+    if not native_enabled("fs_em", "train_em_from_counts_native"):
+        return None
+    mod = native_module()
+    fn = getattr(mod, "train_em_from_counts_native", None)
+    if fn is None:
+        return None
+
+    conditioned = set(conditioned_fields)
+    n_levels = [f.levels for f in mk.fields]
+    try:
+        u_in = [list(u_probs[f.field]) for f in mk.fields]
+    except KeyError as exc:
+        raise ValueError(
+            f"u_probs is missing field {exc.args[0]!r}; the counted trainer "
+            f"needs one u vector per matchkey field"
+        ) from None
+
+    m_tab, u_tab, w_tab, converged, iterations, p_match = fn(
+        n_levels,
+        [list(vec) for vec, _ in pattern_counts],
+        [float(c) for _, c in pattern_counts],
+        u_in,
+        [f.field in conditioned for f in mk.fields],
+        int(max_iterations),
+        float(convergence),
+    )
+
+    names = [f.field for f in mk.fields]
+    logger.info(
+        "EM from counts (native): %d patterns, converged=%s in %d iterations",
+        len(pattern_counts), converged, iterations,
+    )
+    return EMResult(
+        m_probs={n: list(v) for n, v in zip(names, m_tab)},
+        u_probs={n: list(v) for n, v in zip(names, u_tab)},
+        match_weights={n: list(v) for n, v in zip(names, w_tab)},
+        converged=bool(converged),
+        iterations=int(iterations),
+        proportion_matched=float(p_match),
+    )
+
+
 def _combine_em_sessions(
     mk: MatchkeyConfig,
     sessions: list[tuple[tuple[str, ...], EMResult, float]],
@@ -1458,6 +1529,14 @@ def train_em_from_counts(
             )
         if count <= 0:
             raise ValueError(f"pattern {vec} has non-positive count {count}")
+
+    native = _train_em_from_counts_native(
+        mk, pattern_counts, u_probs,
+        conditioned_fields=conditioned_fields,
+        max_iterations=max_iterations, convergence=convergence,
+    )
+    if native is not None:
+        return native
 
     comp_matrix = np.asarray([v for v, _ in pattern_counts], dtype=np.int64)
     w = np.asarray([float(c) for _, c in pattern_counts], dtype=np.float64)

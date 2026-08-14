@@ -32,6 +32,20 @@ const outWasmDir = resolve(tsPkg, "src/core/_wasm");
 
 function run(cmd, args, cwd) {
   console.log(`$ ${cmd} ${args.join(" ")}`);
+  // npm installs `wasm-pack` on Windows as `wasm-pack.cmd`, and `execFileSync`
+  // neither applies PATHEXT (bare name -> ENOENT) nor will spawn a `.cmd`
+  // directly since Node 18.20/20.12/22 hardened against CVE-2024-27980
+  // (-> EINVAL). So this regen step has never been runnable on a Windows box.
+  // Going through ComSpec is the documented way to launch a batch shim; args
+  // are quoted because cmd re-parses the line.
+  if (process.platform === "win32") {
+    // `shell: true` re-parses the line, so quote any arg containing a space
+    // ourselves -- Node does not. Every input here is a repo constant, never
+    // user data, which is what makes opting into a shell acceptable.
+    const quoted = args.map((a) => (/\s/.test(a) ? `"${a}"` : a));
+    execFileSync(cmd, quoted, { cwd, stdio: "inherit", shell: true });
+    return;
+  }
   execFileSync(cmd, args, { cwd, stdio: "inherit" });
 }
 
@@ -100,6 +114,15 @@ export function score_block_pairs_fs(
   ne_scorer_ids: Uint8Array,
   ne_thresholds: Float64Array,
   ne_weights: Float64Array,
+): string;
+export function train_em_from_counts(
+  n_levels: Uint32Array,
+  patterns_flat: Int32Array,
+  counts: Float64Array,
+  u_flat: Float64Array,
+  conditioned: Uint8Array,
+  max_iterations: number,
+  convergence: number,
 ): string;
 export type SyncInitInput = BufferSource | WebAssembly.Module;
 export function initSync(

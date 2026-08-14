@@ -20,6 +20,12 @@ crate-type = ["cdylib", "rlib"] # cdylib for wasm; rlib so host unit tests link
 
 [dependencies]
 goldenmatch-fs-core = { path = "../fs-core" }
+# `em_core` (the Fellegi-Sunter trainer) lives in score-core, which fs-core
+# already pulls transitively -- but a transitive dep is not usable, so it is
+# named directly. `default-features = false` for the same reason fs-core does it:
+# it drops the `alias` feature and its `regex` engine, which must not reach an
+# edge bundle. em_core itself is dependency-free f64 arithmetic.
+goldenmatch-score-core = { path = "../score-core", default-features = false }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"

@@ -12,6 +12,7 @@ mod block;
 mod bloom;
 mod cluster;
 mod documents;
+mod em;
 mod featurize;
 mod fused;
 mod golden;
@@ -125,6 +126,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fused::match_fused, m)?)?;
     m.add_function(wrap_pyfunction!(fused::match_fused_fs, m)?)?;
     m.add_function(wrap_pyfunction!(golden::golden_fused, m)?)?;
+    m.add_function(wrap_pyfunction!(em::train_em_from_counts_native, m)?)?;
+    m.add_function(wrap_pyfunction!(em::estimate_u_from_counts_native, m)?)?;
     m.add_function(wrap_pyfunction!(featurize::char_ngram_features, m)?)?;
     m.add_function(wrap_pyfunction!(featurize::char_ngram_project, m)?)?;
     m.add_function(wrap_pyfunction!(score::jaro_winkler_similarity, m)?)?;
