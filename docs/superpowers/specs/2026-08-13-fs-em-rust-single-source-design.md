@@ -166,12 +166,36 @@ The one-box builds the same dict from its own frame.
 a different problem -- it needs a per-pair matrix nothing outside the pair loop
 can reconstruct.
 
-### Phase 3 -- backends
+### Phase 3 -- backends *(partially done; the premise was wrong)*
 
-Once the numerics are one kernel, counting is the only per-engine piece, and
-`spark/em.py::agreement_pattern_counts` is ~40 lines of SQL. DataFusion and
-DuckDB versions are the same `GROUP BY` over the same gamma expressions.
-Splink's five backends stop being five ports of a trainer.
+**Correction to this spec.** Phase 3 was written as "counting is the only
+per-engine piece, and `agreement_pattern_counts` is ~40 lines of SQL --
+DataFusion and DuckDB versions are the same `GROUP BY` over the same gamma
+expressions". Checked 2026-08-14: **the gamma expressions do not exist outside
+Spark.** `fs_level_expr` and `_field_similarity_and_observed` live only in
+`goldenmatch/spark/probabilistic.py`; there is no engine-neutral SQL form of the
+level ladder anywhere in the repo.
+
+So porting the counting to another engine is not a `GROUP BY` -- it is writing a
+**second implementation of what a level MEANS**, which is exactly what
+`gamma_columns`'s own docstring warns against ("a training run that disagreed
+with scoring about levels would produce weights for a partition of the data that
+scoring never reproduces"). That is the duplication this whole arc exists to
+remove, so doing it per engine would be self-defeating.
+
+**Delivered instead:** the counted TRAINER on DuckDB
+(`goldenmatch_train_em_from_counts`), matching the Postgres surface from Phase
+1c. Both SQL backends now train from vectors their own engine counted, using
+whatever `GROUP BY` the caller writes. The DuckDB UDF is Python (every UDF in
+that package is, by construction) -- what it gains is the counted SHAPE, an
+input that is not a sample, not freedom from the interpreter.
+
+**What a full Phase 3 still needs**, and it is a design job rather than a port:
+extract the level ladder + per-field similarity into an engine-neutral form both
+`spark/probabilistic.py` and a DuckDB/DataFusion emitter can render, so
+`gamma_columns` has one definition per surface instead of one per engine. Until
+that exists, "counting on N backends" means N copies of the calibration rules
+this arc keeps finding bugs in.
 
 ### Phase 4 -- the benchmark
 
