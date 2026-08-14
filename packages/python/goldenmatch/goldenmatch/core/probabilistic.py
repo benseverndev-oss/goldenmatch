@@ -3265,6 +3265,12 @@ def _fs_calibrate_threshold_enabled() -> bool:
 # Clamp the calibrated cutoff to a sane band (mirrors compute_thresholds' own
 # [0.40, 0.95] clamp; 0.90 upper keeps recall from collapsing on odd shapes).
 _CALIBRATE_MIN, _CALIBRATE_MAX = 0.40, 0.90
+#: Posterior-scale bounds. Wider than the linear pair because a posterior is a
+#: probability: well-separated pairs sit at ~0 and ~1, so a legitimate split can
+#: land far from 0.5 (the fixed posterior default is 0.99). The bounds still
+#: refuse the degenerate ends -- a cut at 0.0 links everything and one at 1.0
+#: links nothing, and either would be a silent disaster rather than a bad model.
+_CALIBRATE_POSTERIOR_MIN, _CALIBRATE_POSTERIOR_MAX = 0.05, 0.995
 
 
 def _otsu_threshold(scores) -> float | None:
@@ -3615,13 +3621,89 @@ def _calibrate_link_threshold(comp_matrix, mk, match_weights, p_match) -> float 
         lv = comp_matrix[:, j]
         obs = lv >= 0
         total[obs] += weights[f.field][lv[obs]]
-    norm = np.clip((total - pair_min) / (pair_max - pair_min), 0.0, 1.0)
-    if norm.shape[0] <= 50:
+    if total.shape[0] <= 50:
         return None
-    t = _otsu_threshold(norm)
+
+    # Calibrate on the scale the cut will be COMPARED against, or the number is
+    # a different quantity that merely shares the [0, 1] range.
+    #
+    # `resolve_thresholds` hands this value straight to the scorer, and under
+    # posterior calibration the scorer is comparing PROBABILITIES. Splitting the
+    # linear weight envelope and applying the result as a posterior was the
+    # original bug: measured on a 20K person fixture, Otsu picked 0.11 on the
+    # linear scale while the posterior default for the same data is 0.99, and
+    # nothing failed -- the linear value is inside [0, 1], the run reports
+    # `source: "calibrated"`, and the model quietly cuts in the wrong place.
+    #
+    # The tell is prior-invariance: the linear envelope does not depend on the
+    # match rate, so the same comparison vectors gave the same cut at a 0.1% and
+    # a 40% prior. A posterior cut must move with the prior.
+    posterior = _fs_calibration_mode() == "posterior"
+    if posterior:
+        prior_w = prior_weight(p_match)
+        norm = np.asarray(
+            [posterior_from_weight(float(w), prior_w) for w in total],
+            dtype=np.float64,
+        )
+    else:
+        norm = np.clip((total - pair_min) / (pair_max - pair_min), 0.0, 1.0)
+
+    # Otsu histograms over a FIXED [0, 1] range, which is right for the linear
+    # scale (min-max normalised scores spread across it) and wrong for
+    # posteriors: a well-separated pair sits at ~0 or ~1, so both masses land in
+    # end bins and the between-class variance peaks at the FIRST occupied bin --
+    # BELOW the low cluster rather than between the two. Measured on the two
+    # posterior clusters of the fixture below (0.0103 and 0.9942), Otsu returns
+    # 0.02, which links everything.
+    #
+    # So on the posterior scale the split is taken between the two masses
+    # directly. `_otsu_threshold` is left untouched: it is also used by the
+    # refit loop, whose scores ARE linear, and changing it there would move a
+    # separately-validated behaviour.
+    t = _posterior_split(norm) if posterior else _otsu_threshold(norm)
     if t is None:
         return None
-    return round(float(np.clip(t, _CALIBRATE_MIN, _CALIBRATE_MAX)), 4)
+    # The [0.40, 0.90] clamp is a LINEAR-scale guard: it bounds how far a
+    # min-max normalised cut may stray from the 0.50 midpoint. Posterior scores
+    # pile up against both ends (a well-separated pair is ~0 or ~1), so the same
+    # clamp there would force every dataset to 0.40 or 0.90 -- which is exactly
+    # what it did: the 0.11 split above was clamped to 0.40 and scored well by
+    # accident, because 0.40 happened to sit between this fixture's two
+    # posterior clusters.
+    if posterior:
+        lo, hi = _CALIBRATE_POSTERIOR_MIN, _CALIBRATE_POSTERIOR_MAX
+    else:
+        lo, hi = _CALIBRATE_MIN, _CALIBRATE_MAX
+    return round(float(np.clip(t, lo, hi)), 4)
+
+
+def _posterior_split(scores) -> float | None:
+    """A cut between the two posterior masses, rather than an Otsu bin edge.
+
+    Posterior scores are not spread over [0, 1] -- they pile up near 0 and 1 --
+    so a fixed-range histogram puts both classes in end bins and Otsu's split
+    lands below the low mass instead of between them (measured: 0.02 for
+    clusters at 0.0103 and 0.9942).
+
+    This finds the widest GAP between consecutive sorted scores and cuts at its
+    midpoint. On a genuinely bimodal set that gap is the class boundary. It
+    returns None when the widest gap is not a real separation -- a set with no
+    meaningful split should keep the fixed default rather than invent a cut
+    from noise, which is the failure mode the refit loop's valley gate exists
+    to prevent.
+    """
+    x = np.unique(np.asarray(scores, dtype=np.float64))
+    if x.shape[0] < 2:
+        return None
+    gaps = np.diff(x)
+    k = int(np.argmax(gaps))
+    widest = float(gaps[k])
+    # The gap has to dominate the spread, or this is a continuum and any cut is
+    # arbitrary. 0.10 of the full [0,1] range is deliberately coarse: it admits
+    # the clean two-cluster case this exists for and declines the rest.
+    if widest < 0.10:
+        return None
+    return float((x[k] + x[k + 1]) / 2.0)
 
 
 def _fs_link_threshold(
