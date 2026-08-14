@@ -37,6 +37,7 @@ except Exception:  # noqa: BLE001 - any import/load failure falls back below
 _GATED_ON: frozenset[str] = frozenset(
     {
         "detect_domain",
+        "detect_identity_layers",
         "exact_score",
         "fuzzy_name_score",
         "initialism_score",
@@ -50,6 +51,7 @@ _GATED_ON: frozenset[str] = frozenset(
 # component is only usable when its symbol is present on the loaded module.
 _COMPONENT_SYMBOLS: dict[str, str] = {
     "detect_domain": "detect_domain",
+    "detect_identity_layers": "detect_identity_layers",
     "exact_score": "exact_score",
     "fuzzy_name_score": "fuzzy_name_score",
     "initialism_score": "initialism_score",

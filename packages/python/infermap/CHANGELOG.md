@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Identity-layer detection** — `detect_identity_layers(df)` reports which *parties* a frame refers to (lender, borrower, payor, machine, patient…), as distinct from `detect_domain`, which reports the single industry vertical. A layer is a **group of columns describing one party**, so detection is column-grouping rather than per-column classification and never touches the deliberately 1:1 mapping assignment. Two signals: affix clustering (primary, domain-free — works on schemas no pack has seen) corroborated by an optional `roles:` block in domain packs. Unrecognised parties are reported with `role="unknown"` and their evidence rather than dropped or force-fit; columns in no layer land in `unassigned`. Reads column names only. `detect_domain` behaviour is unchanged.
+- **The layers kernel is Rust-authoritative.** `infermap-core::detect_identity_layers` owns every semantic choice (attribute stop-list, role-override precedence, viability guards, scoring, assignment, singleton fallback); Python (`infermap[native]`) and TypeScript (`enableInfermapWasm()`) are thin callers over the same kernel, with byte-identical pure implementations as classified fallbacks — the arrangement `detect_domain` already uses. Hosts do domain-pack loading and result mapping only. Plain-list signature rather than Arrow: a few hundred column names is the small-call case. Scores are returned unrounded on every surface, because Python/Rust/JS rounding disagree at exactly the midpoints a 4-decimal score lands on. Parity is pinned by a kernel-generated oracle (`tests/fixtures/layers_parity.json`) that the Python and TypeScript fallbacks are both asserted against.
+- Domain packs gained an optional `roles:` block (`finance`, `insurance`, `healthcare`, `manufacturing` declare them). `goldencheck-types` `SCHEMA_VERSION` 3 -> 4: new `RoleSpec`, `IdentityLayer`, `LayerDetectionResult`, `IDENTITY_KINDS`, `LAYER_REASONS`, `UNKNOWN_ROLE`, and `DomainPack.roles`, mirrored in the TypeScript sibling. The block is additive — packs without it load unchanged.
+
 ## [0.6.0] - 2026-07-16
 
 ### Added

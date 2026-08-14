@@ -41,6 +41,84 @@ pub fn detect_domain_json_impl(input_json: &str) -> String {
     serde_json::to_string(&out).expect("serialize detect output")
 }
 
+#[derive(Deserialize)]
+struct LayerRoleInput {
+    name: String,
+    kind: String,
+    name_hints: Vec<String>,
+    typical_type_hints: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct LayersInput {
+    columns: Vec<String>,
+    roles: Vec<LayerRoleInput>,
+    type_hints: Vec<String>,
+    min_score: f64,
+}
+
+#[derive(Serialize)]
+struct LayerOutput {
+    role: String,
+    kind: String,
+    columns: Vec<String>,
+    score: f64,
+    reason: String,
+    qualifier: String,
+    positions: Vec<String>,
+    role_matched: bool,
+    type_corroboration: f64,
+}
+
+#[derive(Serialize)]
+struct LayersOutput {
+    layers: Vec<LayerOutput>,
+    unassigned: Vec<String>,
+}
+
+/// Host-testable core of the identity-layers boundary. The TS host resolves the
+/// domain pack into plain lists; this crosses JSON once and delegates to the
+/// pyo3-free kernel, so the TS surface is byte-identical to Python + the FFI.
+pub fn detect_identity_layers_json_impl(input_json: &str) -> String {
+    let inp: LayersInput =
+        serde_json::from_str(input_json).expect("valid layers input json");
+    let roles: Vec<infermap_core::RoleInput> = inp
+        .roles
+        .into_iter()
+        .map(|r| infermap_core::RoleInput {
+            name: r.name,
+            kind: r.kind,
+            name_hints: r.name_hints,
+            typical_type_hints: r.typical_type_hints,
+        })
+        .collect();
+    let d = infermap_core::detect_identity_layers(
+        &inp.columns,
+        &roles,
+        &inp.type_hints,
+        inp.min_score,
+    );
+    let out = LayersOutput {
+        layers: d
+            .layers
+            .into_iter()
+            .map(|l| LayerOutput {
+                role: l.role,
+                kind: l.kind,
+                columns: l.columns,
+                score: l.score,
+                reason: l.reason,
+                qualifier: l.qualifier,
+                positions: l.positions,
+                role_matched: l.role_matched,
+                type_corroboration: l.type_corroboration,
+            })
+            .collect(),
+        unassigned: d.unassigned,
+    };
+    serde_json::to_string(&out).expect("serialize layers output")
+}
+
 // wasm-only surface: the free `detect_domain_json` export the TS glue calls.
 // Mirrors analysis-wasm's `#[cfg(target_arch="wasm32")] mod` re-export.
 #[cfg(target_arch = "wasm32")]
@@ -50,6 +128,11 @@ mod wasm {
     #[wasm_bindgen]
     pub fn detect_domain_json(input_json: &str) -> String {
         super::detect_domain_json_impl(input_json)
+    }
+
+    #[wasm_bindgen]
+    pub fn detect_identity_layers_json(input_json: &str) -> String {
+        super::detect_identity_layers_json_impl(input_json)
     }
 
     #[wasm_bindgen]

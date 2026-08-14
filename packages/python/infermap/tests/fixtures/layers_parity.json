@@ -1,0 +1,1857 @@
+[
+  {
+    "name": "loan_tape",
+    "domain": "finance",
+    "columns": [
+      "loan_id",
+      "origination_date",
+      "lender_name",
+      "lender_id",
+      "lender_address",
+      "borrower_name",
+      "borrower_ssn",
+      "borrower_dob"
+    ],
+    "roles": [
+      {
+        "name": "financial_institution",
+        "kind": "organization",
+        "name_hints": [
+          "bank",
+          "institution",
+          "depository",
+          "custodian"
+        ],
+        "typical_type_hints": [
+          "routing_number",
+          "routing",
+          "aba",
+          "swift",
+          "bic",
+          "account_number",
+          "account_number",
+          "acct_num",
+          "account_id",
+          "acct_id"
+        ]
+      },
+      {
+        "name": "lender",
+        "kind": "organization",
+        "name_hints": [
+          "lender",
+          "originator",
+          "creditor",
+          "issuer",
+          "servicer"
+        ],
+        "typical_type_hints": [
+          "account_number",
+          "account_number",
+          "acct_num",
+          "account_id",
+          "acct_id",
+          "routing_number",
+          "routing",
+          "aba",
+          "swift",
+          "bic"
+        ]
+      },
+      {
+        "name": "borrower",
+        "kind": "person",
+        "name_hints": [
+          "borrower",
+          "debtor",
+          "obligor",
+          "applicant"
+        ],
+        "typical_type_hints": [
+          "account_number",
+          "account_number",
+          "acct_num",
+          "account_id",
+          "acct_id"
+        ]
+      },
+      {
+        "name": "payor",
+        "kind": "organization",
+        "name_hints": [
+          "payor",
+          "payer",
+          "remitter"
+        ],
+        "typical_type_hints": [
+          "account_number",
+          "account_number",
+          "acct_num",
+          "account_id",
+          "acct_id",
+          "routing_number",
+          "routing",
+          "aba",
+          "swift",
+          "bic",
+          "transaction_amount",
+          "transaction_amount",
+          "txn_amount",
+          "debit",
+          "credit"
+        ]
+      },
+      {
+        "name": "payee",
+        "kind": "organization",
+        "name_hints": [
+          "payee",
+          "beneficiary",
+          "recipient"
+        ],
+        "typical_type_hints": [
+          "account_number",
+          "account_number",
+          "acct_num",
+          "account_id",
+          "acct_id",
+          "routing_number",
+          "routing",
+          "aba",
+          "swift",
+          "bic"
+        ]
+      },
+      {
+        "name": "merchant",
+        "kind": "organization",
+        "name_hints": [
+          "merchant",
+          "vendor",
+          "counterparty",
+          "acquirer"
+        ],
+        "typical_type_hints": [
+          "merchant",
+          "merchant",
+          "vendor",
+          "payee",
+          "counterparty",
+          "transaction_amount",
+          "transaction_amount",
+          "txn_amount",
+          "debit",
+          "credit"
+        ]
+      }
+    ],
+    "type_hints": [
+      "account_number",
+      "acct_num",
+      "account_id",
+      "acct_id",
+      "account_number",
+      "routing",
+      "aba",
+      "swift",
+      "bic",
+      "routing_number",
+      "cusip",
+      "isin",
+      "sedol",
+      "ticker",
+      "symbol",
+      "cusip",
+      "currency",
+      "ccy",
+      "currency_code",
+      "currency_code",
+      "transaction_type",
+      "txn_type",
+      "tx_type",
+      "payment_method",
+      "transaction_type",
+      "merchant",
+      "vendor",
+      "payee",
+      "counterparty",
+      "merchant",
+      "transaction_amount",
+      "txn_amount",
+      "debit",
+      "credit",
+      "transaction_amount",
+      "reference",
+      "ref_number",
+      "confirmation",
+      "trace",
+      "reference_number"
+    ],
+    "min_score": 0.3,
+    "expected": {
+      "layers": [
+        {
+          "role": "lender",
+          "kind": "organization",
+          "columns": [
+            "lender_name",
+            "lender_id",
+            "lender_address"
+          ],
+          "score": 0.9333333333333332,
+          "reason": "affix+role_hint",
+          "qualifier": "lender",
+          "positions": [
+            "prefix"
+          ],
+          "role_matched": true,
+          "type_corroboration": 0.3333333333333333
+        },
+        {
+          "role": "borrower",
+          "kind": "person",
+          "columns": [
+            "borrower_name",
+            "borrower_ssn",
+            "borrower_dob"
+          ],
+          "score": 0.8999999999999999,
+          "reason": "affix+role_hint",
+          "qualifier": "borrower",
+          "positions": [
+            "prefix"
+          ],
+          "role_matched": true,
+          "type_corroboration": 0.0
+        }
+      ],
+      "unassigned": [
+        "loan_id",
+        "origination_date"
+      ]
+    }
+  },
+  {
+    "name": "claims",
+    "domain": "healthcare",
+    "columns": [
+      "claim_id",
+      "patient_name",
+      "patient_dob",
+      "provider_npi",
+      "provider_name",
+      "payer_name",
+      "payer_id"
+    ],
+    "roles": [
+      {
+        "name": "patient",
+        "kind": "person",
+        "name_hints": [
+          "patient"
+        ],
+        "typical_type_hints": [
+          "patient_name",
+          "patient_name",
+          "patient_first",
+          "patient_last",
+          "patient_id",
+          "patient",
+          "attending_physician",
+          "medical_record",
+          "record_number",
+          "mrn",
+          "medical_record",
+          "chart_number",
+          "insurance_id",
+          "insurance_id",
+          "policy_number",
+          "member_id",
+          "subscriber_id"
+        ]
+      },
+      {
+        "name": "subscriber",
+        "kind": "person",
+        "name_hints": [
+          "subscriber",
+          "guarantor"
+        ],
+        "typical_type_hints": [
+          "insurance_id",
+          "insurance_id",
+          "policy_number",
+          "member_id",
+          "subscriber_id"
+        ]
+      },
+      {
+        "name": "provider",
+        "kind": "person",
+        "name_hints": [
+          "provider",
+          "physician",
+          "practitioner",
+          "prescriber",
+          "attending",
+          "referring"
+        ],
+        "typical_type_hints": [
+          "npi",
+          "npi",
+          "npi_number",
+          "provider_npi",
+          "referring_npi"
+        ]
+      },
+      {
+        "name": "facility",
+        "kind": "organization",
+        "name_hints": [
+          "facility",
+          "hospital",
+          "clinic"
+        ],
+        "typical_type_hints": [
+          "facility_code",
+          "facility_code",
+          "place_of_service",
+          "service_type",
+          "npi",
+          "npi",
+          "npi_number",
+          "provider_npi",
+          "referring_npi"
+        ]
+      },
+      {
+        "name": "payer",
+        "kind": "organization",
+        "name_hints": [
+          "payer",
+          "insurer",
+          "plan"
+        ],
+        "typical_type_hints": [
+          "insurance_id",
+          "insurance_id",
+          "policy_number",
+          "member_id",
+          "subscriber_id",
+          "claim_status",
+          "claim_status",
+          "adjudication",
+          "auth_status"
+        ]
+      }
+    ],
+    "type_hints": [
+      "npi",
+      "npi_number",
+      "provider_npi",
+      "referring_npi",
+      "npi",
+      "diagnosis",
+      "dx",
+      "icd",
+      "icd9",
+      "icd10",
+      "primary_dx",
+      "secondary_dx",
+      "procedure_code",
+      "icd_code",
+      "insurance_id",
+      "policy_number",
+      "member_id",
+      "subscriber_id",
+      "insurance_id",
+      "patient_name",
+      "patient_first",
+      "patient_last",
+      "patient_id",
+      "patient",
+      "attending_physician",
+      "patient_name",
+      "record_number",
+      "mrn",
+      "medical_record",
+      "chart_number",
+      "medical_record",
+      "cpt",
+      "procedure",
+      "hcpcs",
+      "cpt_code",
+      "drg",
+      "drg_code",
+      "drg_code",
+      "facility_code",
+      "place_of_service",
+      "service_type",
+      "facility_code",
+      "claim_status",
+      "adjudication",
+      "auth_status",
+      "claim_status",
+      "claim_notes",
+      "clinical_notes",
+      "diagnosis_desc",
+      "provider_notes",
+      "clinical_notes"
+    ],
+    "min_score": 0.3,
+    "expected": {
+      "layers": [
+        {
+          "role": "patient",
+          "kind": "person",
+          "columns": [
+            "patient_name",
+            "patient_dob"
+          ],
+          "score": 0.775,
+          "reason": "affix+role_hint",
+          "qualifier": "patient",
+          "positions": [
+            "prefix"
+          ],
+          "role_matched": true,
+          "type_corroboration": 0.5
+        },
+        {
+          "role": "payer",
+          "kind": "organization",
+          "columns": [
+            "payer_name",
+            "payer_id"
+          ],
+          "score": 0.775,
+          "reason": "affix+role_hint",
+          "qualifier": "payer",
+          "positions": [
+            "prefix"
+          ],
+          "role_matched": true,
+          "type_corroboration": 0.5
+        },
+        {
+          "role": "provider",
+          "kind": "person",
+          "columns": [
+            "provider_npi",
+            "provider_name"
+          ],
+          "score": 0.775,
+          "reason": "affix+role_hint",
+          "qualifier": "provider",
+          "positions": [
+            "prefix"
+          ],
+          "role_matched": true,
+          "type_corroboration": 0.5
+        }
+      ],
+      "unassigned": [
+        "claim_id"
+      ]
+    }
+  },
+  {
+    "name": "telemetry",
+    "domain": "manufacturing",
+    "columns": [
+      "reading_ts",
+      "machine_id",
+      "machine_model",
+      "machine_serial",
+      "operator_name",
+      "operator_badge",
+      "plant_code"
+    ],
+    "roles": [
+      {
+        "name": "machine",
+        "kind": "asset",
+        "name_hints": [
+          "machine",
+          "equipment",
+          "asset",
+          "device",
+          "press",
+          "workcenter"
+        ],
+        "typical_type_hints": [
+          "production",
+          "work_order",
+          "batch_number",
+          "lot_number",
+          "serial_number"
+        ]
+      },
+      {
+        "name": "component",
+        "kind": "asset",
+        "name_hints": [
+          "part",
+          "component",
+          "sku",
+          "item"
+        ],
+        "typical_type_hints": [
+          "part",
+          "part_number",
+          "part_id",
+          "bom",
+          "bom",
+          "bill_of_materials",
+          "assembly_id"
+        ]
+      },
+      {
+        "name": "supplier",
+        "kind": "organization",
+        "name_hints": [
+          "supplier",
+          "vendor",
+          "manufacturer",
+          "oem"
+        ],
+        "typical_type_hints": [
+          "part",
+          "part_number",
+          "part_id"
+        ]
+      },
+      {
+        "name": "plant",
+        "kind": "place",
+        "name_hints": [
+          "plant",
+          "factory",
+          "site"
+        ],
+        "typical_type_hints": [
+          "production",
+          "work_order",
+          "batch_number",
+          "lot_number",
+          "serial_number"
+        ]
+      },
+      {
+        "name": "operator",
+        "kind": "person",
+        "name_hints": [
+          "operator",
+          "technician",
+          "inspector"
+        ],
+        "typical_type_hints": [
+          "quality",
+          "defect_rate",
+          "yield_rate",
+          "production_date",
+          "machine_id",
+          "shift"
+        ]
+      }
+    ],
+    "type_hints": [
+      "part_number",
+      "part_id",
+      "part",
+      "work_order",
+      "batch_number",
+      "lot_number",
+      "serial_number",
+      "production",
+      "bom",
+      "bill_of_materials",
+      "assembly_id",
+      "bom",
+      "defect_rate",
+      "yield_rate",
+      "production_date",
+      "machine_id",
+      "shift",
+      "quality"
+    ],
+    "min_score": 0.3,
+    "expected": {
+      "layers": [
+        {
+          "role": "machine",
+          "kind": "asset",
+          "columns": [
+            "machine_id",
+            "machine_model",
+            "machine_serial"
+          ],
+          "score": 0.9333333333333332,
+          "reason": "affix+role_hint",
+          "qualifier": "machine",
+          "positions": [
+            "prefix"
+          ],
+          "role_matched": true,
+          "type_corroboration": 0.3333333333333333
+        },
+        {
+          "role": "operator",
+          "kind": "person",
+          "columns": [
+            "operator_name",
+            "operator_badge"
+          ],
+          "score": 0.725,
+          "reason": "affix+role_hint",
+          "qualifier": "operator",
+          "positions": [
+            "prefix"
+          ],
+          "role_matched": true,
+          "type_corroboration": 0.0
+        },
+        {
+          "role": "plant",
+          "kind": "place",
+          "columns": [
+            "plant_code"
+          ],
+          "score": 0.55,
+          "reason": "role_hint",
+          "qualifier": "plant",
+          "positions": [
+            "prefix"
+          ],
+          "role_matched": true,
+          "type_corroboration": 0.0
+        }
+      ],
+      "unassigned": [
+        "reading_ts"
+      ]
+    }
+  },
+  {
+    "name": "insurance_parties",
+    "domain": "insurance",
+    "columns": [
+      "policyholder_name",
+      "policyholder_id",
+      "underwriter_name",
+      "underwriter_code",
+      "claimant_name",
+      "claimant_ssn"
+    ],
+    "roles": [
+      {
+        "name": "policyholder",
+        "kind": "person",
+        "name_hints": [
+          "policyholder",
+          "insured",
+          "member",
+          "subscriber"
+        ],
+        "typical_type_hints": [
+          "policy",
+          "policy_number",
+          "policy_id",
+          "policy_no",
+          "coverage",
+          "coverage",
+          "coverage_amount",
+          "coverage_type",
+          "sum_insured",
+          "premium",
+          "premium",
+          "premium_amount",
+          "annual_premium"
+        ]
+      },
+      {
+        "name": "beneficiary",
+        "kind": "person",
+        "name_hints": [
+          "beneficiary",
+          "dependent"
+        ],
+        "typical_type_hints": [
+          "policy",
+          "policy_number",
+          "policy_id",
+          "policy_no"
+        ]
+      },
+      {
+        "name": "claimant",
+        "kind": "person",
+        "name_hints": [
+          "claimant"
+        ],
+        "typical_type_hints": [
+          "claim",
+          "claim_number",
+          "claim_id",
+          "claim_no",
+          "claim_status"
+        ]
+      },
+      {
+        "name": "adjuster",
+        "kind": "person",
+        "name_hints": [
+          "adjuster",
+          "examiner"
+        ],
+        "typical_type_hints": [
+          "claim",
+          "claim_number",
+          "claim_id",
+          "claim_no",
+          "claim_status"
+        ]
+      },
+      {
+        "name": "underwriter",
+        "kind": "organization",
+        "name_hints": [
+          "underwriter",
+          "carrier",
+          "insurer"
+        ],
+        "typical_type_hints": [
+          "policy",
+          "policy_number",
+          "policy_id",
+          "policy_no",
+          "premium",
+          "premium",
+          "premium_amount",
+          "annual_premium"
+        ]
+      },
+      {
+        "name": "broker",
+        "kind": "organization",
+        "name_hints": [
+          "broker",
+          "agency",
+          "producer"
+        ],
+        "typical_type_hints": [
+          "policy",
+          "policy_number",
+          "policy_id",
+          "policy_no",
+          "premium",
+          "premium",
+          "premium_amount",
+          "annual_premium"
+        ]
+      }
+    ],
+    "type_hints": [
+      "policy_number",
+      "policy_id",
+      "policy_no",
+      "policy",
+      "claim_number",
+      "claim_id",
+      "claim_no",
+      "claim_status",
+      "claim",
+      "premium",
+      "premium_amount",
+      "annual_premium",
+      "premium",
+      "deductible",
+      "deductible",
+      "coverage",
+      "coverage_amount",
+      "coverage_type",
+      "sum_insured",
+      "coverage",
+      "policyholder",
+      "insured",
+      "policyholder",
+      "underwriter",
+      "underwriter",
+      "beneficiary",
+      "beneficiary",
+      "insurance_type",
+      "policy_type",
+      "insurance_type"
+    ],
+    "min_score": 0.3,
+    "expected": {
+      "layers": [
+        {
+          "role": "policyholder",
+          "kind": "person",
+          "columns": [
+            "policyholder_name",
+            "policyholder_id"
+          ],
+          "score": 0.775,
+          "reason": "affix+role_hint",
+          "qualifier": "policyholder",
+          "positions": [
+            "prefix"
+          ],
+          "role_matched": true,
+          "type_corroboration": 0.5
+        },
+        {
+          "role": "claimant",
+          "kind": "person",
+          "columns": [
+            "claimant_name",
+            "claimant_ssn"
+          ],
+          "score": 0.725,
+          "reason": "affix+role_hint",
+          "qualifier": "claimant",
+          "positions": [
+            "prefix"
+          ],
+          "role_matched": true,
+          "type_corroboration": 0.0
+        },
+        {
+          "role": "underwriter",
+          "kind": "organization",
+          "columns": [
+            "underwriter_name",
+            "underwriter_code"
+          ],
+          "score": 0.725,
+          "reason": "affix+role_hint",
+          "qualifier": "underwriter",
+          "positions": [
+            "prefix"
+          ],
+          "role_matched": true,
+          "type_corroboration": 0.0
+        }
+      ],
+      "unassigned": []
+    }
+  },
+  {
+    "name": "single_party_bare",
+    "domain": null,
+    "columns": [
+      "id",
+      "name",
+      "email",
+      "city"
+    ],
+    "roles": [],
+    "type_hints": [],
+    "min_score": 0.3,
+    "expected": {
+      "layers": [
+        {
+          "role": "unknown",
+          "kind": "unknown",
+          "columns": [
+            "id",
+            "name",
+            "email",
+            "city"
+          ],
+          "score": 0.5,
+          "reason": "singleton",
+          "qualifier": "",
+          "positions": [],
+          "role_matched": false,
+          "type_corroboration": 0.0
+        }
+      ],
+      "unassigned": []
+    }
+  },
+  {
+    "name": "single_party_uniform",
+    "domain": null,
+    "columns": [
+      "customer_id",
+      "customer_name",
+      "customer_email"
+    ],
+    "roles": [],
+    "type_hints": [],
+    "min_score": 0.3,
+    "expected": {
+      "layers": [
+        {
+          "role": "unknown",
+          "kind": "unknown",
+          "columns": [
+            "customer_id",
+            "customer_name",
+            "customer_email"
+          ],
+          "score": 0.6499999999999999,
+          "reason": "affix",
+          "qualifier": "customer",
+          "positions": [
+            "prefix"
+          ],
+          "role_matched": false,
+          "type_corroboration": 0.0
+        }
+      ],
+      "unassigned": []
+    }
+  },
+  {
+    "name": "type_tokens_refuse",
+    "domain": "finance",
+    "columns": [
+      "account_number",
+      "account_id",
+      "txn_amount"
+    ],
+    "roles": [
+      {
+        "name": "financial_institution",
+        "kind": "organization",
+        "name_hints": [
+          "bank",
+          "institution",
+          "depository",
+          "custodian"
+        ],
+        "typical_type_hints": [
+          "routing_number",
+          "routing",
+          "aba",
+          "swift",
+          "bic",
+          "account_number",
+          "account_number",
+          "acct_num",
+          "account_id",
+          "acct_id"
+        ]
+      },
+      {
+        "name": "lender",
+        "kind": "organization",
+        "name_hints": [
+          "lender",
+          "originator",
+          "creditor",
+          "issuer",
+          "servicer"
+        ],
+        "typical_type_hints": [
+          "account_number",
+          "account_number",
+          "acct_num",
+          "account_id",
+          "acct_id",
+          "routing_number",
+          "routing",
+          "aba",
+          "swift",
+          "bic"
+        ]
+      },
+      {
+        "name": "borrower",
+        "kind": "person",
+        "name_hints": [
+          "borrower",
+          "debtor",
+          "obligor",
+          "applicant"
+        ],
+        "typical_type_hints": [
+          "account_number",
+          "account_number",
+          "acct_num",
+          "account_id",
+          "acct_id"
+        ]
+      },
+      {
+        "name": "payor",
+        "kind": "organization",
+        "name_hints": [
+          "payor",
+          "payer",
+          "remitter"
+        ],
+        "typical_type_hints": [
+          "account_number",
+          "account_number",
+          "acct_num",
+          "account_id",
+          "acct_id",
+          "routing_number",
+          "routing",
+          "aba",
+          "swift",
+          "bic",
+          "transaction_amount",
+          "transaction_amount",
+          "txn_amount",
+          "debit",
+          "credit"
+        ]
+      },
+      {
+        "name": "payee",
+        "kind": "organization",
+        "name_hints": [
+          "payee",
+          "beneficiary",
+          "recipient"
+        ],
+        "typical_type_hints": [
+          "account_number",
+          "account_number",
+          "acct_num",
+          "account_id",
+          "acct_id",
+          "routing_number",
+          "routing",
+          "aba",
+          "swift",
+          "bic"
+        ]
+      },
+      {
+        "name": "merchant",
+        "kind": "organization",
+        "name_hints": [
+          "merchant",
+          "vendor",
+          "counterparty",
+          "acquirer"
+        ],
+        "typical_type_hints": [
+          "merchant",
+          "merchant",
+          "vendor",
+          "payee",
+          "counterparty",
+          "transaction_amount",
+          "transaction_amount",
+          "txn_amount",
+          "debit",
+          "credit"
+        ]
+      }
+    ],
+    "type_hints": [
+      "account_number",
+      "acct_num",
+      "account_id",
+      "acct_id",
+      "account_number",
+      "routing",
+      "aba",
+      "swift",
+      "bic",
+      "routing_number",
+      "cusip",
+      "isin",
+      "sedol",
+      "ticker",
+      "symbol",
+      "cusip",
+      "currency",
+      "ccy",
+      "currency_code",
+      "currency_code",
+      "transaction_type",
+      "txn_type",
+      "tx_type",
+      "payment_method",
+      "transaction_type",
+      "merchant",
+      "vendor",
+      "payee",
+      "counterparty",
+      "merchant",
+      "transaction_amount",
+      "txn_amount",
+      "debit",
+      "credit",
+      "transaction_amount",
+      "reference",
+      "ref_number",
+      "confirmation",
+      "trace",
+      "reference_number"
+    ],
+    "min_score": 0.3,
+    "expected": {
+      "layers": [
+        {
+          "role": "unknown",
+          "kind": "unknown",
+          "columns": [
+            "account_number",
+            "account_id",
+            "txn_amount"
+          ],
+          "score": 0.5,
+          "reason": "singleton",
+          "qualifier": "",
+          "positions": [],
+          "role_matched": false,
+          "type_corroboration": 0.0
+        }
+      ],
+      "unassigned": []
+    }
+  },
+  {
+    "name": "numeric_remainders_refuse",
+    "domain": null,
+    "columns": [
+      "col_1",
+      "col_2",
+      "col_3"
+    ],
+    "roles": [],
+    "type_hints": [],
+    "min_score": 0.3,
+    "expected": {
+      "layers": [
+        {
+          "role": "unknown",
+          "kind": "unknown",
+          "columns": [
+            "col_1",
+            "col_2",
+            "col_3"
+          ],
+          "score": 0.5,
+          "reason": "singleton",
+          "qualifier": "",
+          "positions": [],
+          "role_matched": false,
+          "type_corroboration": 0.0
+        }
+      ],
+      "unassigned": []
+    }
+  },
+  {
+    "name": "attribute_suffix_regression",
+    "domain": null,
+    "columns": [
+      "widget_owner_name",
+      "widget_owner_id",
+      "shipper_name",
+      "shipper_code"
+    ],
+    "roles": [],
+    "type_hints": [],
+    "min_score": 0.3,
+    "expected": {
+      "layers": [
+        {
+          "role": "unknown",
+          "kind": "unknown",
+          "columns": [
+            "shipper_name",
+            "shipper_code"
+          ],
+          "score": 0.475,
+          "reason": "affix",
+          "qualifier": "shipper",
+          "positions": [
+            "prefix"
+          ],
+          "role_matched": false,
+          "type_corroboration": 0.0
+        },
+        {
+          "role": "unknown",
+          "kind": "unknown",
+          "columns": [
+            "widget_owner_name",
+            "widget_owner_id"
+          ],
+          "score": 0.475,
+          "reason": "affix",
+          "qualifier": "widget",
+          "positions": [
+            "prefix"
+          ],
+          "role_matched": false,
+          "type_corroboration": 0.0
+        }
+      ],
+      "unassigned": []
+    }
+  },
+  {
+    "name": "suffix_qualifiers",
+    "domain": "finance",
+    "columns": [
+      "name_of_lender",
+      "id_of_lender",
+      "borrower_name",
+      "borrower_ssn"
+    ],
+    "roles": [
+      {
+        "name": "financial_institution",
+        "kind": "organization",
+        "name_hints": [
+          "bank",
+          "institution",
+          "depository",
+          "custodian"
+        ],
+        "typical_type_hints": [
+          "routing_number",
+          "routing",
+          "aba",
+          "swift",
+          "bic",
+          "account_number",
+          "account_number",
+          "acct_num",
+          "account_id",
+          "acct_id"
+        ]
+      },
+      {
+        "name": "lender",
+        "kind": "organization",
+        "name_hints": [
+          "lender",
+          "originator",
+          "creditor",
+          "issuer",
+          "servicer"
+        ],
+        "typical_type_hints": [
+          "account_number",
+          "account_number",
+          "acct_num",
+          "account_id",
+          "acct_id",
+          "routing_number",
+          "routing",
+          "aba",
+          "swift",
+          "bic"
+        ]
+      },
+      {
+        "name": "borrower",
+        "kind": "person",
+        "name_hints": [
+          "borrower",
+          "debtor",
+          "obligor",
+          "applicant"
+        ],
+        "typical_type_hints": [
+          "account_number",
+          "account_number",
+          "acct_num",
+          "account_id",
+          "acct_id"
+        ]
+      },
+      {
+        "name": "payor",
+        "kind": "organization",
+        "name_hints": [
+          "payor",
+          "payer",
+          "remitter"
+        ],
+        "typical_type_hints": [
+          "account_number",
+          "account_number",
+          "acct_num",
+          "account_id",
+          "acct_id",
+          "routing_number",
+          "routing",
+          "aba",
+          "swift",
+          "bic",
+          "transaction_amount",
+          "transaction_amount",
+          "txn_amount",
+          "debit",
+          "credit"
+        ]
+      },
+      {
+        "name": "payee",
+        "kind": "organization",
+        "name_hints": [
+          "payee",
+          "beneficiary",
+          "recipient"
+        ],
+        "typical_type_hints": [
+          "account_number",
+          "account_number",
+          "acct_num",
+          "account_id",
+          "acct_id",
+          "routing_number",
+          "routing",
+          "aba",
+          "swift",
+          "bic"
+        ]
+      },
+      {
+        "name": "merchant",
+        "kind": "organization",
+        "name_hints": [
+          "merchant",
+          "vendor",
+          "counterparty",
+          "acquirer"
+        ],
+        "typical_type_hints": [
+          "merchant",
+          "merchant",
+          "vendor",
+          "payee",
+          "counterparty",
+          "transaction_amount",
+          "transaction_amount",
+          "txn_amount",
+          "debit",
+          "credit"
+        ]
+      }
+    ],
+    "type_hints": [
+      "account_number",
+      "acct_num",
+      "account_id",
+      "acct_id",
+      "account_number",
+      "routing",
+      "aba",
+      "swift",
+      "bic",
+      "routing_number",
+      "cusip",
+      "isin",
+      "sedol",
+      "ticker",
+      "symbol",
+      "cusip",
+      "currency",
+      "ccy",
+      "currency_code",
+      "currency_code",
+      "transaction_type",
+      "txn_type",
+      "tx_type",
+      "payment_method",
+      "transaction_type",
+      "merchant",
+      "vendor",
+      "payee",
+      "counterparty",
+      "merchant",
+      "transaction_amount",
+      "txn_amount",
+      "debit",
+      "credit",
+      "transaction_amount",
+      "reference",
+      "ref_number",
+      "confirmation",
+      "trace",
+      "reference_number"
+    ],
+    "min_score": 0.3,
+    "expected": {
+      "layers": [
+        {
+          "role": "lender",
+          "kind": "organization",
+          "columns": [
+            "name_of_lender",
+            "id_of_lender"
+          ],
+          "score": 0.775,
+          "reason": "affix+role_hint",
+          "qualifier": "lender",
+          "positions": [
+            "suffix"
+          ],
+          "role_matched": true,
+          "type_corroboration": 0.5
+        },
+        {
+          "role": "borrower",
+          "kind": "person",
+          "columns": [
+            "borrower_name",
+            "borrower_ssn"
+          ],
+          "score": 0.725,
+          "reason": "affix+role_hint",
+          "qualifier": "borrower",
+          "positions": [
+            "prefix"
+          ],
+          "role_matched": true,
+          "type_corroboration": 0.0
+        }
+      ],
+      "unassigned": []
+    }
+  },
+  {
+    "name": "role_overrides_stop_list",
+    "domain": "finance",
+    "columns": [
+      "payee_name",
+      "payee_account",
+      "payor_name",
+      "payor_account"
+    ],
+    "roles": [
+      {
+        "name": "financial_institution",
+        "kind": "organization",
+        "name_hints": [
+          "bank",
+          "institution",
+          "depository",
+          "custodian"
+        ],
+        "typical_type_hints": [
+          "routing_number",
+          "routing",
+          "aba",
+          "swift",
+          "bic",
+          "account_number",
+          "account_number",
+          "acct_num",
+          "account_id",
+          "acct_id"
+        ]
+      },
+      {
+        "name": "lender",
+        "kind": "organization",
+        "name_hints": [
+          "lender",
+          "originator",
+          "creditor",
+          "issuer",
+          "servicer"
+        ],
+        "typical_type_hints": [
+          "account_number",
+          "account_number",
+          "acct_num",
+          "account_id",
+          "acct_id",
+          "routing_number",
+          "routing",
+          "aba",
+          "swift",
+          "bic"
+        ]
+      },
+      {
+        "name": "borrower",
+        "kind": "person",
+        "name_hints": [
+          "borrower",
+          "debtor",
+          "obligor",
+          "applicant"
+        ],
+        "typical_type_hints": [
+          "account_number",
+          "account_number",
+          "acct_num",
+          "account_id",
+          "acct_id"
+        ]
+      },
+      {
+        "name": "payor",
+        "kind": "organization",
+        "name_hints": [
+          "payor",
+          "payer",
+          "remitter"
+        ],
+        "typical_type_hints": [
+          "account_number",
+          "account_number",
+          "acct_num",
+          "account_id",
+          "acct_id",
+          "routing_number",
+          "routing",
+          "aba",
+          "swift",
+          "bic",
+          "transaction_amount",
+          "transaction_amount",
+          "txn_amount",
+          "debit",
+          "credit"
+        ]
+      },
+      {
+        "name": "payee",
+        "kind": "organization",
+        "name_hints": [
+          "payee",
+          "beneficiary",
+          "recipient"
+        ],
+        "typical_type_hints": [
+          "account_number",
+          "account_number",
+          "acct_num",
+          "account_id",
+          "acct_id",
+          "routing_number",
+          "routing",
+          "aba",
+          "swift",
+          "bic"
+        ]
+      },
+      {
+        "name": "merchant",
+        "kind": "organization",
+        "name_hints": [
+          "merchant",
+          "vendor",
+          "counterparty",
+          "acquirer"
+        ],
+        "typical_type_hints": [
+          "merchant",
+          "merchant",
+          "vendor",
+          "payee",
+          "counterparty",
+          "transaction_amount",
+          "transaction_amount",
+          "txn_amount",
+          "debit",
+          "credit"
+        ]
+      }
+    ],
+    "type_hints": [
+      "account_number",
+      "acct_num",
+      "account_id",
+      "acct_id",
+      "account_number",
+      "routing",
+      "aba",
+      "swift",
+      "bic",
+      "routing_number",
+      "cusip",
+      "isin",
+      "sedol",
+      "ticker",
+      "symbol",
+      "cusip",
+      "currency",
+      "ccy",
+      "currency_code",
+      "currency_code",
+      "transaction_type",
+      "txn_type",
+      "tx_type",
+      "payment_method",
+      "transaction_type",
+      "merchant",
+      "vendor",
+      "payee",
+      "counterparty",
+      "merchant",
+      "transaction_amount",
+      "txn_amount",
+      "debit",
+      "credit",
+      "transaction_amount",
+      "reference",
+      "ref_number",
+      "confirmation",
+      "trace",
+      "reference_number"
+    ],
+    "min_score": 0.3,
+    "expected": {
+      "layers": [
+        {
+          "role": "payee",
+          "kind": "organization",
+          "columns": [
+            "payee_name",
+            "payee_account"
+          ],
+          "score": 0.775,
+          "reason": "affix+role_hint",
+          "qualifier": "payee",
+          "positions": [
+            "prefix"
+          ],
+          "role_matched": true,
+          "type_corroboration": 0.5
+        },
+        {
+          "role": "payor",
+          "kind": "organization",
+          "columns": [
+            "payor_name",
+            "payor_account"
+          ],
+          "score": 0.775,
+          "reason": "affix+role_hint",
+          "qualifier": "payor",
+          "positions": [
+            "prefix"
+          ],
+          "role_matched": true,
+          "type_corroboration": 0.5
+        }
+      ],
+      "unassigned": []
+    }
+  },
+  {
+    "name": "bare_role_column",
+    "domain": "finance",
+    "columns": [
+      "bank"
+    ],
+    "roles": [
+      {
+        "name": "financial_institution",
+        "kind": "organization",
+        "name_hints": [
+          "bank",
+          "institution",
+          "depository",
+          "custodian"
+        ],
+        "typical_type_hints": [
+          "routing_number",
+          "routing",
+          "aba",
+          "swift",
+          "bic",
+          "account_number",
+          "account_number",
+          "acct_num",
+          "account_id",
+          "acct_id"
+        ]
+      },
+      {
+        "name": "lender",
+        "kind": "organization",
+        "name_hints": [
+          "lender",
+          "originator",
+          "creditor",
+          "issuer",
+          "servicer"
+        ],
+        "typical_type_hints": [
+          "account_number",
+          "account_number",
+          "acct_num",
+          "account_id",
+          "acct_id",
+          "routing_number",
+          "routing",
+          "aba",
+          "swift",
+          "bic"
+        ]
+      },
+      {
+        "name": "borrower",
+        "kind": "person",
+        "name_hints": [
+          "borrower",
+          "debtor",
+          "obligor",
+          "applicant"
+        ],
+        "typical_type_hints": [
+          "account_number",
+          "account_number",
+          "acct_num",
+          "account_id",
+          "acct_id"
+        ]
+      },
+      {
+        "name": "payor",
+        "kind": "organization",
+        "name_hints": [
+          "payor",
+          "payer",
+          "remitter"
+        ],
+        "typical_type_hints": [
+          "account_number",
+          "account_number",
+          "acct_num",
+          "account_id",
+          "acct_id",
+          "routing_number",
+          "routing",
+          "aba",
+          "swift",
+          "bic",
+          "transaction_amount",
+          "transaction_amount",
+          "txn_amount",
+          "debit",
+          "credit"
+        ]
+      },
+      {
+        "name": "payee",
+        "kind": "organization",
+        "name_hints": [
+          "payee",
+          "beneficiary",
+          "recipient"
+        ],
+        "typical_type_hints": [
+          "account_number",
+          "account_number",
+          "acct_num",
+          "account_id",
+          "acct_id",
+          "routing_number",
+          "routing",
+          "aba",
+          "swift",
+          "bic"
+        ]
+      },
+      {
+        "name": "merchant",
+        "kind": "organization",
+        "name_hints": [
+          "merchant",
+          "vendor",
+          "counterparty",
+          "acquirer"
+        ],
+        "typical_type_hints": [
+          "merchant",
+          "merchant",
+          "vendor",
+          "payee",
+          "counterparty",
+          "transaction_amount",
+          "transaction_amount",
+          "txn_amount",
+          "debit",
+          "credit"
+        ]
+      }
+    ],
+    "type_hints": [
+      "account_number",
+      "acct_num",
+      "account_id",
+      "acct_id",
+      "account_number",
+      "routing",
+      "aba",
+      "swift",
+      "bic",
+      "routing_number",
+      "cusip",
+      "isin",
+      "sedol",
+      "ticker",
+      "symbol",
+      "cusip",
+      "currency",
+      "ccy",
+      "currency_code",
+      "currency_code",
+      "transaction_type",
+      "txn_type",
+      "tx_type",
+      "payment_method",
+      "transaction_type",
+      "merchant",
+      "vendor",
+      "payee",
+      "counterparty",
+      "merchant",
+      "transaction_amount",
+      "txn_amount",
+      "debit",
+      "credit",
+      "transaction_amount",
+      "reference",
+      "ref_number",
+      "confirmation",
+      "trace",
+      "reference_number"
+    ],
+    "min_score": 0.3,
+    "expected": {
+      "layers": [
+        {
+          "role": "financial_institution",
+          "kind": "organization",
+          "columns": [
+            "bank"
+          ],
+          "score": 0.55,
+          "reason": "role_hint",
+          "qualifier": "bank",
+          "positions": [
+            "whole"
+          ],
+          "role_matched": true,
+          "type_corroboration": 0.0
+        }
+      ],
+      "unassigned": []
+    }
+  },
+  {
+    "name": "empty",
+    "domain": null,
+    "columns": [],
+    "roles": [],
+    "type_hints": [],
+    "min_score": 0.3,
+    "expected": {
+      "layers": [],
+      "unassigned": []
+    }
+  }
+]
