@@ -1,0 +1,102 @@
+# Cross-dataset sweep of the FS link threshold.
+#
+# The posterior-calibrated link cut is a hardcoded 0.99 whose own docstring
+# says it was measured on DBLP-ACM, and which every dataset then inherits as
+# `fs_link_thresholds: {source: "fallback"}`. On a person-shaped fixture that
+# cut costs F1 0.8772 -> 0.5406 with precision pinned at 1.0000 the whole way
+# down (scripts/bench_er_headtohead/diagnose_fs_recall.py).
+#
+# This decides whether the fix is a BETTER CONSTANT or a dataset-derived cut,
+# and it is deliberately split tune/holdout: choosing a constant by sweeping
+# every dataset and taking the argmax is how 0.99 happened in the first place.
+# The full grid runs on the tuning panel; the holdout sees exactly two points
+# (the incumbent and the recommendation) so it stays an unbiased check.
+#
+# Dispatch-only. It is a measurement, not a gate, and it pip-installs Splink
+# purely because `datasets.py` loads several fixtures through `splink_datasets`.
+name: bench-fs-threshold-sweep
+
+on:
+  workflow_dispatch:
+    inputs:
+      tune:
+        description: "Tuning datasets (space separated)"
+        required: false
+        default: "historical_50k dblp_acm febrl3 ncvr synthetic_person"
+      holdout:
+        description: "Held-out datasets, two points only"
+        required: false
+        default: "febrl4 dblp_scholar amazon_google"
+      grid:
+        description: "Link thresholds to sweep on the tuning panel"
+        required: false
+        default: "0.50 0.70 0.80 0.85 0.90 0.95 0.99"
+
+permissions:
+  contents: read
+
+jobs:
+  sweep:
+    runs-on: large-new-64GB
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/native
+
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      # The sweep runs the FS lanes' operating point, which is the NATIVE
+      # kernel. Sweeping the numpy fallback would tune a threshold for a path
+      # the product does not take by default.
+      - name: Build native extension
+        run: uv run python scripts/build_native.py
+
+      # Not a repo dependency -- `datasets.py` reaches several fixtures through
+      # `splink_datasets`, so the loader needs it even though no Splink lane
+      # runs here.
+      - name: Install Splink (dataset loader only) + DuckDB (evaluator)
+        run: |
+          uv pip install splink==4.0.16
+          uv pip install duckdb
+
+      - name: Sweep
+        env:
+          GOLDENMATCH_FS_CALIBRATED: posterior
+          GOLDENMATCH_FS_NATIVE: "1"
+        run: |
+          set -euo pipefail
+          uv run python scripts/bench_er_headtohead/sweep_fs_link_threshold.py \
+            --tune ${{ inputs.tune }} \
+            --holdout ${{ inputs.holdout }} \
+            --grid ${{ inputs.grid }} \
+            --out fs-threshold-sweep.json \
+            --summary-md fs-threshold-sweep.md
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ -f fs-threshold-sweep.md ]; then
+            cat fs-threshold-sweep.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'sweep produced no summary - see the job log' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        if: always()
+        with:
+          name: fs-threshold-sweep
+          path: fs-threshold-sweep.json
+          if-no-files-found: warn
