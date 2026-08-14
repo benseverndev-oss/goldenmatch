@@ -22,6 +22,13 @@ Two signals:
 2. **Role hints** (corroborating, pack-declared). A pack's ``roles:`` block
    names the parties its vertical expects and their ``kind``.
 
+**The Rust kernel is the source of truth.** ``infermap-core::detect_identity_layers``
+owns the scoring and decision; ``_layers_core_pure`` below is the byte-identical
+classified fallback for environments without the compiled wheel — the same
+smart-pipe / dumb-kernel split ``detect.py`` uses for ``detect_domain``. The
+host's job is loading the domain pack and flattening it into plain lists; every
+semantic choice lives in the kernel so the surfaces cannot drift.
+
 ``detect_domain`` behaviour is untouched — ``goldenpipe.stages.infer_schema``
 depends on it.
 """
@@ -32,24 +39,24 @@ from goldencheck_types import (
     DomainPack,
     IdentityLayer,
     LayerDetectionResult,
-    RoleSpec,
     load_domain,
 )
 
+from infermap._native_loader import native_enabled, native_module
 from infermap.detect import DEFAULT_MIN_SCORE, _tokens, detect_domain
 
 #: A qualifier shorter than this is noise (`f_`, `x_`), not a party name.
+#: Mirrors ``infermap-core::MIN_QUALIFIER_LEN``.
 _MIN_QUALIFIER_LEN = 3
 
-#: Universal ATTRIBUTE tokens — they describe a property of an entity, never
-#: the identity of one, in any vertical.
+#: Universal ATTRIBUTE tokens — they describe a property of an entity, never the
+#: identity of one, in any vertical. **Mirror of ``infermap-core::ATTRIBUTE_TOKENS``**;
+#: the kernel owns the list, this copy exists only for the pure fallback and must
+#: not drift (``test_native_parity.py`` pins it).
 #:
-#: This is the domain-free half of the stop-list, and it is load-bearing: a
-#: pack's ``name_hints`` suppress vertical-specific type tokens, but when no
-#: pack resolves (the unfamiliar-schema case the affix signal exists to serve)
-#: nothing would stop ``name`` from grouping ``widget_owner_name`` with
-#: ``shipper_name`` — two unrelated parties fused on a shared attribute suffix.
-#: Kept deliberately small: only tokens that are attributes in every domain.
+#: Load-bearing when no pack resolves (the unfamiliar-schema case the affix
+#: signal exists to serve): without it, ``name`` groups ``widget_owner_name``
+#: with ``shipper_name``, fusing two unrelated parties.
 _ATTRIBUTE_TOKENS: frozenset[str] = frozenset(
     {
         "name", "names", "id", "ids", "key", "code", "codes", "num", "number",
@@ -62,13 +69,11 @@ _ATTRIBUTE_TOKENS: frozenset[str] = frozenset(
     }
 )
 
-# Score weights. Deliberately interpretable rather than tuned: a layer's score
-# is "how much evidence backs this party", and each term is one kind of
-# evidence. They sum to 1.0 at full strength.
-_W_BASE = 0.30  # a real qualifier group exists at all
-_W_AFFIX = 0.35  # how many columns back it
-_W_ROLE = 0.25  # the pack recognises this party
-_W_TYPES = 0.10  # the layer's fields look like the role's typical types
+# Score weights — mirror of the kernel's W_* constants.
+_W_BASE = 0.30
+_W_AFFIX = 0.35
+_W_ROLE = 0.25
+_W_TYPES = 0.10
 
 
 def detect_identity_layers(
@@ -94,40 +99,44 @@ def detect_identity_layers(
     columns = [str(c) for c in df.columns]
     resolved_domain = domain if domain is not None else detect_domain(df)
     pack = _load_pack(resolved_domain)
+    roles, type_hints = _pack_inputs(pack)
 
-    if not columns:
-        return LayerDetectionResult(layers=[], unassigned=[], domain=resolved_domain)
+    raw_layers, unassigned = _layers_core(columns, roles, type_hints, min_score)
 
-    role_tokens = _role_token_index(pack)
-    stop_tokens = _stop_tokens(pack, role_tokens)
-
-    groups = _candidate_groups(columns, stop_tokens, role_tokens)
-    layers = _build_layers(groups, pack, role_tokens, min_score)
-
-    if not layers:
-        # No party qualifiers anywhere. The honest reading is one homogeneous
-        # population, not "no entities" — a plain customer table is the common
-        # case, not a degenerate one.
-        return LayerDetectionResult(
-            layers=[
-                IdentityLayer(
-                    role=UNKNOWN_ROLE,
-                    kind="unknown",
-                    columns=list(columns),
-                    score=0.5,
-                    reason="singleton",
-                    evidence={"note": "no party qualifiers found; treating frame as one population"},
-                )
-            ],
-            unassigned=[],
-            domain=resolved_domain,
+    layers = [
+        IdentityLayer(
+            role=role,
+            kind=kind,
+            columns=list(cols),
+            score=score,
+            reason=reason,
+            evidence=_evidence(qualifier, positions, len(cols), role_matched, corroboration),
         )
-
-    assigned = {col for layer in layers for col in layer.columns}
-    unassigned = [c for c in columns if c not in assigned]
+        for (role, kind, cols, score, reason, qualifier, positions, role_matched, corroboration)
+        in raw_layers
+    ]
     return LayerDetectionResult(
-        layers=layers, unassigned=unassigned, domain=resolved_domain
+        layers=layers, unassigned=list(unassigned), domain=resolved_domain
     )
+
+
+def _evidence(
+    qualifier: str,
+    positions: list[str],
+    n_columns: int,
+    role_matched: bool,
+    corroboration: float,
+) -> dict:
+    if not qualifier:
+        # The whole-frame singleton fallback: there is no qualifier to report.
+        return {"note": "no party qualifiers found; treating frame as one population"}
+    return {
+        "qualifier": qualifier,
+        "positions": list(positions),
+        "n_columns": n_columns,
+        "role_matched": role_matched,
+        "type_corroboration": corroboration,
+    }
 
 
 def _load_pack(domain: str | None) -> DomainPack | None:
@@ -141,62 +150,162 @@ def _load_pack(domain: str | None) -> DomainPack | None:
         return None
 
 
-def _role_token_index(pack: DomainPack | None) -> dict[str, RoleSpec]:
-    """Map every token of every role hint -> that role.
+def _pack_inputs(
+    pack: DomainPack | None,
+) -> tuple[list[tuple[str, str, list[str], list[str]]], list[str]]:
+    """Flatten a pack into the kernel's plain-list inputs.
 
-    Multi-token hints index under each of their tokens; a qualifier is a single
-    token by construction, so single-token indexing is what the matcher needs.
-    First declaration wins on collision, keeping the result deterministic in
-    pack order.
+    Host-side work by design: pack loading and ``typical_types`` resolution are
+    host concerns, so the kernel never learns about YAML. Roles are emitted in
+    pack-declaration order because the kernel resolves token collisions
+    first-declaration-wins.
     """
-    index: dict[str, RoleSpec] = {}
     if pack is None:
-        return index
+        return [], []
+
+    roles: list[tuple[str, str, list[str], list[str]]] = []
     for role in pack.roles.values():
-        for hint in role.name_hints:
-            for tok in _tokens(hint):
-                index.setdefault(tok, role)
-    return index
+        typical_hints: list[str] = []
+        for type_name in role.typical_types:
+            spec = pack.types.get(type_name)
+            if spec is None:
+                continue
+            typical_hints.append(spec.name)
+            typical_hints.extend(spec.name_hints)
+        roles.append((role.name, role.kind, list(role.name_hints), typical_hints))
+
+    type_hints: list[str] = []
+    for spec in pack.types.values():
+        type_hints.extend(spec.name_hints)
+        type_hints.append(spec.name)
+    return roles, type_hints
 
 
-def _stop_tokens(pack: DomainPack | None, role_tokens: dict[str, RoleSpec]) -> set[str]:
-    """Tokens that must not open a layer because they name a FIELD TYPE.
+def _layers_core(
+    columns: list[str],
+    roles: list[tuple[str, str, list[str], list[str]]],
+    type_hints: list[str],
+    min_score: float,
+):
+    """Dispatch the layer scoring+decision to the native kernel when gated, else pure."""
+    if native_enabled("detect_identity_layers"):
+        return native_module().detect_identity_layers(columns, roles, type_hints, min_score)
+    return _layers_core_pure(columns, roles, type_hints, min_score)
 
-    ``account_number`` and ``account_id`` share ``account``, but ``account`` is
-    a field-type token — it must not open an "account party". The pack's own
-    ``name_hints`` supply the stop-list, so the guard sharpens as packs improve
-    instead of needing a hand-maintained list of its own.
 
-    **Role declarations win.** A token that a pack explicitly declares as a role
-    hint is a party name even if some field type also mentions it — e.g.
-    finance's ``merchant`` type lists ``payee`` among its hints while ``payee``
-    is also a declared role. Without this precedence the explicit declaration
-    would be silently overridden by an incidental hint overlap.
+def _layers_core_pure(
+    columns: list[str],
+    roles: list[tuple[str, str, list[str], list[str]]],
+    type_hints: list[str],
+    min_score: float,
+):
+    """Byte-identical reference for ``infermap-core::detect_identity_layers``.
 
-    The pack-derived half is unioned with :data:`_ATTRIBUTE_TOKENS`, which
-    covers the no-pack case.
+    Returns ``(layers, unassigned)`` where each layer is the 9-tuple
+    ``(role, kind, columns, score, reason, qualifier, positions, role_matched,
+    type_corroboration)``.
+
+    Scores are UNROUNDED on purpose: ``round()`` differs between Python's
+    banker's rounding, Rust's half-away-from-zero and JS ``Math.round``, so
+    rounding here would manufacture a cross-language divergence.
     """
-    stop: set[str] = set(_ATTRIBUTE_TOKENS)
-    if pack is not None:
-        for spec in pack.types.values():
-            for hint in spec.name_hints:
-                stop.update(_tokens(hint))
-            stop.update(_tokens(spec.name))
-    return stop - set(role_tokens)
+    if not columns:
+        return [], []
+
+    # token -> index into `roles`; first declaration wins.
+    role_tokens: dict[str, int] = {}
+    for i, (_name, _kind, name_hints, _typical) in enumerate(roles):
+        for hint in name_hints:
+            for tok in _tokens(hint):
+                role_tokens.setdefault(tok, i)
+
+    # Field-type tokens must not open a party (`account_number`/`account_id`
+    # share `account`). ROLE DECLARATIONS WIN — finance lists `payee` among the
+    # `merchant` type's hints while `payee` is also a declared role, and without
+    # this precedence the explicit declaration loses to an incidental overlap.
+    stop = set(_ATTRIBUTE_TOKENS)
+    for hint in type_hints:
+        stop.update(_tokens(hint))
+    stop -= set(role_tokens)
+
+    groups: dict[str, list[tuple[int, str, tuple[str, ...]]]] = {}
+    for idx, col in enumerate(columns):
+        for tok, position, remainder in _candidates(_tokens(col)):
+            if len(tok) < _MIN_QUALIFIER_LEN or tok in stop:
+                continue
+            groups.setdefault(tok, []).append((idx, position, remainder))
+
+    scored = []
+    for token, members in groups.items():
+        if not _group_is_viable(token, members, role_tokens):
+            continue
+        role_idx = role_tokens.get(token)
+        role = roles[role_idx] if role_idx is not None else None
+        corroboration = _type_corroboration(members, role)
+        affix_strength = min(1.0, (len(members) - 1) / 2.0)
+        score = min(
+            1.0,
+            _W_BASE
+            + _W_AFFIX * affix_strength
+            + (_W_ROLE if role is not None else 0.0)
+            + _W_TYPES * corroboration,
+        )
+        scored.append((score, token, role, members, corroboration))
+
+    scored.sort(key=lambda s: (-s[0], -len(s[3]), s[1]))
+
+    layers = []
+    claimed: set[int] = set()
+    for score, token, role, members, corroboration in scored:
+        kept = [m for m in members if m[0] not in claimed]
+        if not kept:
+            continue
+        # Re-check viability after losing columns to a stronger layer.
+        if len(kept) < 2 and token not in role_tokens:
+            continue
+        claimed.update(m[0] for m in kept)
+        n = len(kept)
+        affix_strength = min(1.0, (n - 1) / 2.0)
+        layers.append(
+            (
+                role[0] if role else UNKNOWN_ROLE,
+                role[1] if role else "unknown",
+                [columns[m[0]] for m in kept],
+                score,
+                _reason(affix_strength, role is not None, score, min_score),
+                token,
+                sorted({m[1] for m in kept}),
+                role is not None,
+                corroboration,
+            )
+        )
+
+    if not layers:
+        # No party qualifiers anywhere. The honest reading is one homogeneous
+        # population, not "no entities".
+        return (
+            [(UNKNOWN_ROLE, "unknown", list(columns), 0.5, "singleton", "", [], False, 0.0)],
+            [],
+        )
+
+    layers.sort(key=lambda t: (-t[3], t[0], t[5]))
+    assigned = {col for layer in layers for col in layer[2]}
+    unassigned = [c for c in columns if c not in assigned]
+    return layers, unassigned
 
 
 def _candidates(tokens: list[str]) -> list[tuple[str, str, tuple[str, ...]]]:
     """Qualifier candidates for one column: ``(token, position, remainder)``.
 
-    Leading and trailing tokens only. A party qualifier sits at one end in
+    Leading and trailing tokens only — a party qualifier sits at one end in
     practice (``lender_name``, ``name_of_lender``); scanning interior tokens
     buys little and costs precision.
     """
     if not tokens:
         return []
     if len(tokens) == 1:
-        # A column that IS just the qualifier (`bank`). Only ever accepted as a
-        # layer when a role hint recognises it — see _build_layers.
+        # A column that IS just the qualifier (`bank`). Only ever accepted when
+        # a role hint recognises it — see _group_is_viable.
         return [(tokens[0], "whole", ())]
     return [
         (tokens[0], "prefix", tuple(tokens[1:])),
@@ -204,52 +313,21 @@ def _candidates(tokens: list[str]) -> list[tuple[str, str, tuple[str, ...]]]:
     ]
 
 
-def _candidate_groups(
-    columns: list[str],
-    stop_tokens: set[str],
-    role_tokens: dict[str, RoleSpec],
-) -> dict[str, list[tuple[str, str, tuple[str, ...]]]]:
-    """Group columns by shared qualifier token -> [(column, position, remainder)].
-
-    Prefix and suffix uses of the same token merge deliberately:
-    ``lender_name`` and ``name_of_lender`` are the same party.
-    """
-    groups: dict[str, list[tuple[str, str, tuple[str, ...]]]] = {}
-    for col in columns:
-        for tok, position, remainder in _candidates(_tokens(col)):
-            if len(tok) < _MIN_QUALIFIER_LEN:
-                continue
-            if tok in stop_tokens:
-                continue
-            groups.setdefault(tok, []).append((col, position, remainder))
-    return {
-        tok: members
-        for tok, members in groups.items()
-        if _group_is_viable(tok, members, role_tokens)
-    }
-
-
 def _group_is_viable(
     token: str,
-    members: list[tuple[str, str, tuple[str, ...]]],
-    role_tokens: dict[str, RoleSpec],
+    members: list[tuple[int, str, tuple[str, ...]]],
+    role_tokens: dict[str, int],
 ) -> bool:
     """Reject groups that share a token without sharing a party.
 
-    Two rejections, both earning their place:
-
-    * **Single-column groups**, unless a role hint recognises the token —
-      otherwise every column becomes its own layer.
-    * **Trivial remainders.** ``col_1``/``col_2``/``col_3`` share ``col`` but
-      their remainders are bare numbers: a table-wide prefix, not a party. A
-      real party's columns differ by *what they say about it*
-      (``customer_id``/``customer_name``), so we require at least two distinct
-      non-numeric remainders.
+    Single-column groups unless a role hint recognises the token (otherwise
+    every column becomes its own layer), and trivial remainders —
+    ``col_1``/``col_2``/``col_3`` share ``col`` but differ only by number: a
+    table-wide prefix, not a party.
     """
     recognised = token in role_tokens
     if len(members) < 2:
         return recognised
-
     distinct = {
         remainder
         for _, _, remainder in members
@@ -258,104 +336,22 @@ def _group_is_viable(
     return len(distinct) >= 2 or recognised
 
 
-def _build_layers(
-    groups: dict[str, list[tuple[str, str, tuple[str, ...]]]],
-    pack: DomainPack | None,
-    role_tokens: dict[str, RoleSpec],
-    min_score: float,
-) -> list[IdentityLayer]:
-    """Score candidate groups and assign each column to exactly one layer.
-
-    A column can qualify for two groups (its leading and trailing token). It is
-    awarded to the better-evidenced one; ties break on group size then token
-    text, so the result is deterministic regardless of dict ordering.
-    """
-    scored: list[tuple[float, str, RoleSpec | None, list, float]] = []
-    for token, members in groups.items():
-        role = role_tokens.get(token)
-        score, corroborated = _score_group(members, role, pack)
-        scored.append((score, token, role, members, corroborated))
-
-    scored.sort(key=lambda s: (-s[0], -len(s[3]), s[1]))
-
-    layers: list[IdentityLayer] = []
-    claimed: set[str] = set()
-    for score, token, role, members, corroborated in scored:
-        cols = [col for col, _, _ in members if col not in claimed]
-        if not cols:
-            continue
-        # Re-check viability after losing columns to a stronger layer: a group
-        # reduced to one unrecognised column is no longer evidence of a party.
-        if len(cols) < 2 and token not in role_tokens:
-            continue
-
-        claimed.update(cols)
-        n = len(cols)
-        affix_strength = min(1.0, (n - 1) / 2.0)
-        reason = _reason(affix_strength, role is not None, score, min_score)
-        layers.append(
-            IdentityLayer(
-                role=role.name if role else UNKNOWN_ROLE,
-                kind=role.kind if role else "unknown",
-                columns=cols,
-                score=round(score, 4),
-                reason=reason,
-                evidence={
-                    "qualifier": token,
-                    "positions": sorted({pos for c, pos, _ in members if c in cols}),
-                    "n_columns": n,
-                    "role_matched": role is not None,
-                    "type_corroboration": round(corroborated, 4),
-                },
-            )
-        )
-
-    layers.sort(key=lambda layer: (-layer.score, layer.role, layer.evidence["qualifier"]))
-    return layers
-
-
-def _score_group(
-    members: list[tuple[str, str, tuple[str, ...]]],
-    role: RoleSpec | None,
-    pack: DomainPack | None,
-) -> tuple[float, float]:
-    """Return ``(score, type_corroboration)`` for one candidate group."""
-    n = len(members)
-    affix_strength = min(1.0, (n - 1) / 2.0)
-    corroborated = _type_corroboration(members, role, pack)
-    score = (
-        _W_BASE
-        + _W_AFFIX * affix_strength
-        + (_W_ROLE if role is not None else 0.0)
-        + _W_TYPES * corroborated
-    )
-    return min(1.0, score), corroborated
-
-
 def _type_corroboration(
-    members: list[tuple[str, str, tuple[str, ...]]],
-    role: RoleSpec | None,
-    pack: DomainPack | None,
+    members: list[tuple[int, str, tuple[str, ...]]],
+    role: tuple[str, str, list[str], list[str]] | None,
 ) -> float:
-    """Fraction of a layer's columns whose remainder looks like a typical type.
+    """Fraction of a group's columns whose remainder looks like a typical type.
 
     Corroboration only — a role with no ``typical_types``, or a layer whose
-    fields are unusual, simply scores 0.0 here and is never vetoed for it.
+    fields are unusual, scores 0.0 here and is never vetoed for it.
     """
-    if role is None or pack is None or not role.typical_types:
+    if role is None or not role[3]:
         return 0.0
-
     expected: set[str] = set()
-    for type_name in role.typical_types:
-        spec = pack.types.get(type_name)
-        if spec is None:
-            continue
-        expected.update(_tokens(spec.name))
-        for hint in spec.name_hints:
-            expected.update(_tokens(hint))
+    for hint in role[3]:
+        expected.update(_tokens(hint))
     if not expected:
         return 0.0
-
     hits = sum(1 for _, _, remainder in members if expected.intersection(remainder))
     return hits / len(members)
 
@@ -366,7 +362,7 @@ def _reason(
     """Why this layer was proposed, or that it fell short.
 
     ``low_confidence`` overrides the evidence reason so a marginal layer is
-    visible as marginal — it is still returned, with its columns and evidence
+    visible as marginal — it is still returned, with columns and evidence
     intact, rather than being dropped.
     """
     if score < min_score:

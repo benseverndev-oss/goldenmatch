@@ -224,24 +224,23 @@ second source of truth for the other.
 
 ## Waves
 
-**Wave 1 — types + detector (Python), the load-bearing wave.**
-`RoleSpec` + `IdentityLayer` + `LayerDetectionResult` in `goldencheck-types`;
-**`SCHEMA_VERSION` 3 → 4**; optional `roles:` blocks for an initial 3–4 verticals
-(finance, insurance, healthcare, manufacturing); `infermap/layers.py` implementing
-both signals; `detect_identity_layers` public API; fixture corpus + tests.
-
-> The cross-language parity contract (`goldencheck-types/CLAUDE.md`) requires the
-> TS type mirror in the **same PR** as any `SCHEMA_VERSION` bump. That is
-> non-negotiable and is scoped into Wave 1 — types only, not the detector.
-
-**Wave 2 — TS detector + surfaces.** Port `layers.ts`, barrel-export it from
+**Wave 1 — the Rust kernel + both thin callers, the load-bearing wave.**
+`infermap-core::detect_identity_layers` as the authoritative implementation;
+`RoleSpec` + `IdentityLayer` + `LayerDetectionResult` in `goldencheck-types` with
+**`SCHEMA_VERSION` 3 → 4**; optional `roles:` blocks for an initial four verticals
+(finance, insurance, healthcare, manufacturing); the pyo3 shim + Python dispatch
+(`layers.py`); the wasm shim + TS dispatch (`layers.ts`), barrel-exported from
 `core/index.ts` (`detectDomainDetailed` once shipped in `detect.ts` without a
 barrel export and cross-package consumers could not reach it — the documented
-lesson to not repeat),
-cross-surface fixture locking Python == TS. Then MCP tool + CLI command **and**
-the `parity/infermap.yaml` declaration — the `api_parity` gate requires the tool,
-the command, and the manifest entry to move together, so surfaces land as one PR,
-never piecemeal.
+lesson to not repeat); byte-identical pure fallbacks on both hosts; a
+kernel-generated cross-surface fixture; corpus + tests.
+
+> The cross-language parity contract (`goldencheck-types/CLAUDE.md`) requires the
+> TS type mirror in the **same PR** as any `SCHEMA_VERSION` bump.
+
+**Wave 2 — surfaces.** MCP tool + CLI command **and** the `parity/infermap.yaml`
+declaration — the `api_parity` gate requires the tool, the command, and the
+manifest entry to move together, so surfaces land as one PR, never piecemeal.
 
 **Wave 3 — value signals.** Second stage that runs **only on ambiguity**, so the
 common path stays name-only and free: a 9-digit numeric column named `aba`
@@ -250,10 +249,42 @@ common path stays name-only and free: a 9-digit numeric column named `aba`
 **Wave 4 — consumers.** `goldenpipe.stages.infer_schema` emits layers into
 `InferredSchema`; goldenmatch consumes them as the segment labels for #2575.
 
-Kernelization (`infermap-core::detect_identity_layers`) is **deferred on
-purpose**, per decision 0047's *kernelize on measurement* test: this is
-tokenizing a few hundred column names, not a bulk path. It earns a kernel when a
-measurement says so, and not before.
+### Why the kernel is Wave 1, not a deferred optimization
+
+An earlier draft of this spec deferred kernelization, reading decision 0047's
+*kernelize on measurement* test as a **perf** question — and answering it
+correctly for perf: this tokenizes a few hundred column names, so there is no
+throughput case. That was the wrong lens. The rule names five motivation classes,
+and the one that applies here is **semantic single-sourcing**.
+
+`detect_domain` — this capability's immediate sibling, in the same module, over
+the same tokenizer — is *already* an `infermap-core` kernel with Python and TS as
+byte-identical fallbacks. Shipping layer detection as a Python implementation
+plus an independently hand-written TS port would create a **second source of
+truth** for behaviour whose sibling already has one: precisely what 0047's first
+decision test forbids. Two hand-written ports of a scoring algorithm do not stay
+equal — they drift on the first bug fix that lands in one language and not the
+other.
+
+So the kernel owns every semantic choice: the attribute stop-list, the
+role-override precedence, the viability guards, the scoring weights, the greedy
+assignment, the singleton fallback. The hosts do pack loading and result mapping,
+nothing else.
+
+**Rust, but deliberately not Arrow.** 0047's data-plane test is *Arrow at bulk
+boundaries, not the universal calling convention — smallest stable primitive for
+scalar/small calls.* The input here is a few hundred column names plus a
+flattened role list; the output is a handful of small records. That is the
+small-call case, and it takes the same plain-strings signature `detect_domain`
+already uses. Paying Arrow marshaling on it would fail the very test that governs
+the choice.
+
+**One consequence worth recording: no rounding, anywhere.** Python's banker's
+rounding, Rust's half-away-from-zero and JS `Math.round` disagree on exactly the
+midpoints a 4-decimal score lands on, so rounding a score would *manufacture* a
+cross-language divergence at the boundary this design exists to eliminate. Scores
+are returned at full `f64` precision on all three surfaces; consumers round for
+display if they want to.
 
 ## How we know it works
 

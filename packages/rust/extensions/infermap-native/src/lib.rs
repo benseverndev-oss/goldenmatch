@@ -20,6 +20,55 @@ fn detect_domain(
     Ok((d.domain, d.score, d.runner_up, d.runner_up_score, d.reason))
 }
 
+/// Identity-layer detection. `columns`: df column names. `roles`: list of
+/// (name, kind, name_hints, typical_type_hints) IN PACK ORDER. `type_hints`:
+/// every field-type name + name_hint the pack declares (the pack-derived half
+/// of the stop-list). Returns (layers, unassigned), where each layer is
+/// (role, kind, columns, score, reason, qualifier, positions, role_matched,
+/// type_corroboration) -- the wire shape the Python host maps to IdentityLayer.
+///
+/// Plain lists, not Arrow: a few hundred column names is the small-call case.
+#[allow(clippy::type_complexity)]
+#[pyfunction]
+fn detect_identity_layers(
+    columns: Vec<String>,
+    roles: Vec<(String, String, Vec<String>, Vec<String>)>,
+    type_hints: Vec<String>,
+    min_score: f64,
+) -> PyResult<(
+    Vec<(String, String, Vec<String>, f64, String, String, Vec<String>, bool, f64)>,
+    Vec<String>,
+)> {
+    let roles: Vec<infermap_core::RoleInput> = roles
+        .into_iter()
+        .map(|(name, kind, name_hints, typical_type_hints)| infermap_core::RoleInput {
+            name,
+            kind,
+            name_hints,
+            typical_type_hints,
+        })
+        .collect();
+    let d = infermap_core::detect_identity_layers(&columns, &roles, &type_hints, min_score);
+    let layers = d
+        .layers
+        .into_iter()
+        .map(|l| {
+            (
+                l.role,
+                l.kind,
+                l.columns,
+                l.score,
+                l.reason,
+                l.qualifier,
+                l.positions,
+                l.role_matched,
+                l.type_corroboration,
+            )
+        })
+        .collect();
+    Ok((layers, d.unassigned))
+}
+
 /// Wave 2 name-scorer shims (return the score; the Python class keeps its reasoning).
 #[pyfunction]
 fn exact_score(a: &str, b: &str) -> PyResult<f64> {
@@ -78,6 +127,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // `wrap_pyfunction!\(\s*(?:\w+::)+(\w+)` -- the bare `wrap_pyfunction!(detect_domain, m)`
     // form (used by analysis-native) would NOT be scanned, red-ing the gate.
     m.add_function(wrap_pyfunction!(self::detect_domain, m)?)?;
+    m.add_function(wrap_pyfunction!(self::detect_identity_layers, m)?)?;
     m.add_function(wrap_pyfunction!(self::exact_score, m)?)?;
     m.add_function(wrap_pyfunction!(self::fuzzy_name_score, m)?)?;
     m.add_function(wrap_pyfunction!(self::initialism_score, m)?)?;

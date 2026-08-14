@@ -223,3 +223,113 @@ def test_linear_sum_assignment_parity_random():
                 for _ in range(r)]
         native = [tuple(p) for p in native_module().linear_sum_assignment(cost)]
         assert native == _lsa_pure(cost), cost
+
+
+# ---------------------------------------------------------------------------
+# detect_identity_layers parity (the layers kernel is the source of truth)
+# ---------------------------------------------------------------------------
+
+from goldencheck_types import load_domain  # noqa: E402
+from infermap.layers import (  # noqa: E402
+    _ATTRIBUTE_TOKENS,
+    _layers_core_pure,
+    _load_pack,
+    _pack_inputs,
+)
+
+# (columns, domain) over the hand-labelled corpus + the guards that bound it:
+# multi-party (loan / claims / telemetry / insurance), single-party controls,
+# the field-type and numeric-remainder refusals, the attribute-suffix regression,
+# the role-hint-overrides-stop-list precedence, suffix qualifiers, no-pack, empty.
+_LAYER_CASES = [
+    (["loan_id", "origination_date", "lender_name", "lender_id", "lender_address",
+      "borrower_name", "borrower_ssn", "borrower_dob"], "finance"),
+    (["claim_id", "patient_name", "patient_dob", "provider_npi", "provider_name",
+      "payer_name", "payer_id"], "healthcare"),
+    (["reading_ts", "machine_id", "machine_model", "machine_serial",
+      "operator_name", "operator_badge", "plant_code"], "manufacturing"),
+    (["policyholder_name", "policyholder_id", "underwriter_name", "underwriter_code",
+      "claimant_name", "claimant_ssn"], "insurance"),
+    (["id", "name", "email", "city"], None),
+    (["customer_id", "customer_name", "customer_email"], None),
+    (["account_number", "account_id", "txn_amount"], "finance"),   # type tokens refuse
+    (["col_1", "col_2", "col_3"], None),                            # numeric remainders refuse
+    (["widget_owner_name", "widget_owner_id", "shipper_name", "shipper_code"], None),
+    (["name_of_lender", "id_of_lender", "borrower_name", "borrower_ssn"], "finance"),
+    (["payee_name", "payee_account", "payor_name", "payor_account"], "finance"),
+    (["bank"], "finance"),                                          # bare role-hint column
+    ([], None),                                                     # empty frame
+]
+
+
+def _normalize(result):
+    """Rust returns lists where Python returns tuples; compare structurally."""
+    layers, unassigned = result
+    return (
+        [(r, k, list(c), s, rs, q, list(p), rm, tc)
+         for (r, k, c, s, rs, q, p, rm, tc) in layers],
+        list(unassigned),
+    )
+
+
+@native_only
+@pytest.mark.parametrize("columns,domain", _LAYER_CASES)
+def test_detect_identity_layers_parity(columns, domain):
+    """Byte-identical native == pure, including the UNROUNDED float scores.
+
+    Scores are deliberately not rounded anywhere: Python's banker's rounding,
+    Rust's half-away-from-zero and JS `Math.round` disagree, so rounding would
+    manufacture the very divergence this gate exists to catch.
+    """
+    roles, type_hints = _pack_inputs(_load_pack(domain))
+    native = _normalize(
+        native_module().detect_identity_layers(columns, roles, type_hints, 0.3)
+    )
+    assert native == _normalize(_layers_core_pure(columns, roles, type_hints, 0.3))
+
+
+@native_only
+def test_layers_attribute_token_list_matches_the_kernel():
+    """The pure fallback's ATTRIBUTE_TOKENS mirror must not drift from the kernel's.
+
+    The kernel owns the list; this copy exists only for the no-wheel path. A
+    drift would be invisible on the native path and change results on the pure
+    one — so probe it behaviourally: every attribute token must be refused as a
+    qualifier by BOTH paths, with no domain pack loaded.
+    """
+    for token in sorted(_ATTRIBUTE_TOKENS):
+        columns = [f"{token}_alpha", f"{token}_beta"]
+        native = _normalize(native_module().detect_identity_layers(columns, [], [], 0.3))
+        pure = _normalize(_layers_core_pure(columns, [], [], 0.3))
+        assert native == pure, token
+        # Refused as a qualifier => the whole-frame singleton fallback.
+        assert native[0][0][4] == "singleton", token
+
+
+@native_only
+def test_layers_parity_over_every_shipped_pack():
+    """Sweep every domain pack, so a pack gaining roles later stays gated."""
+    from goldencheck_types import list_domains
+
+    columns = ["alpha_name", "alpha_id", "beta_name", "beta_code", "gamma"]
+    for domain in list_domains():
+        roles, type_hints = _pack_inputs(load_domain(domain))
+        native = _normalize(
+            native_module().detect_identity_layers(columns, roles, type_hints, 0.3)
+        )
+        assert native == _normalize(
+            _layers_core_pure(columns, roles, type_hints, 0.3)
+        ), domain
+
+
+def test_layers_pure_stands_alone_without_wheel():
+    """Box-runnable: the pure reference works regardless of the native ext."""
+    layers, unassigned = _layers_core_pure(
+        ["lender_name", "lender_id"],
+        [("lender", "organization", ["lender"], [])],
+        [],
+        0.3,
+    )
+    assert len(layers) == 1
+    assert layers[0][0] == "lender"
+    assert unassigned == []

@@ -3,6 +3,11 @@ export * from "./types.js";
 export * from "./assignment/hungarian.js";
 export { DomainPackTarget, isDomainPackTarget } from "./domainPack.js";
 export { detectDomain, detectDomainDetailed, DEFAULT_MIN_SCORE } from "./detect.js";
+// Barrel-exported deliberately: cross-package consumers import from here, and a
+// re-export that only lives in its own module is unreachable to them (the
+// detectDomainDetailed lesson).
+export { detectIdentityLayers, computeLayers, packInputs, toResult } from "./layers.js";
+export type { LayersInput } from "./layers.js";
 export type { Scorer } from "./scorers/base.js";
 export { ExactScorer } from "./scorers/exact.js";
 export { AliasScorer, DEFAULT_ALIASES } from "./scorers/alias.js";

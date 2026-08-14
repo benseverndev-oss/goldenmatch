@@ -13165,19 +13165,19 @@
           "file": "packages/python/infermap/infermap/layers.py",
           "purpose": "Identity-layer detection — which *parties* a frame refers to.",
           "defines": [
-            "_build_layers",
-            "_candidate_groups",
             "_candidates",
+            "_evidence",
             "_group_is_viable",
+            "_layers_core",
+            "_layers_core_pure",
             "_load_pack",
+            "_pack_inputs",
             "_reason",
-            "_role_token_index",
-            "_score_group",
-            "_stop_tokens",
             "_type_corroboration",
             "detect_identity_layers"
           ],
           "imports": [
+            "infermap._native_loader",
             "infermap.detect"
           ]
         },

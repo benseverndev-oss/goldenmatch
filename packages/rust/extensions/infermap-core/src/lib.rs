@@ -9,6 +9,7 @@
 //! records).
 
 use regex::Regex;
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -111,6 +112,431 @@ pub fn detect_domain(
         runner_up_score,
         reason: "confident".to_string(),
     }
+}
+
+// ===========================================================================
+// Identity-layer detection: which PARTIES a frame refers to.
+//
+// `detect_domain` above answers "how finance-y is this table". This answers
+// "who is in it" -- a loan tape refers to a lender AND a borrower, two
+// populations that must never be resolved against each other.
+//
+// A layer is a GROUP OF COLUMNS describing one party, not a per-column label.
+// That makes this a labelling pass (many-to-many by construction), which is why
+// it does not and must not route through `linear_sum_assignment`: that model is
+// deliberately 1:1 and cannot express one role spanning many columns.
+//
+// This kernel is the single source of truth; `infermap/layers.py` and the TS
+// `layers.ts` are byte-identical fallbacks, exactly like `detect_domain`.
+// Signature is plain strings, NOT Arrow: a few hundred column names is the
+// small-call case where Arrow marshaling is the wrong trade (see the
+// smallest-stable-primitive rule).
+// ===========================================================================
+
+/// Universal ATTRIBUTE tokens -- they describe a property of an entity, never
+/// the identity of one, in any vertical.
+///
+/// Lives in the kernel rather than the host because it is algorithm-intrinsic:
+/// splitting it per-language is exactly how the surfaces would drift. It is the
+/// domain-free half of the stop-list and is load-bearing when NO domain pack
+/// resolves (the unfamiliar-schema case the affix signal exists to serve) --
+/// without it, `name` groups `widget_owner_name` with `shipper_name`, fusing two
+/// unrelated parties. Kept small: only tokens that are attributes everywhere.
+const ATTRIBUTE_TOKENS: &[&str] = &[
+    "name",
+    "names",
+    "id",
+    "ids",
+    "key",
+    "code",
+    "codes",
+    "num",
+    "number",
+    "date",
+    "dt",
+    "time",
+    "ts",
+    "timestamp",
+    "year",
+    "month",
+    "day",
+    "type",
+    "status",
+    "flag",
+    "amount",
+    "amt",
+    "value",
+    "val",
+    "total",
+    "count",
+    "qty",
+    "quantity",
+    "desc",
+    "description",
+    "note",
+    "notes",
+    "address",
+    "addr",
+    "email",
+    "phone",
+    "city",
+    "state",
+    "zip",
+    "country",
+    "first",
+    "last",
+    "middle",
+    "full",
+    "line",
+    "row",
+    "col",
+    "column",
+    "created",
+    "updated",
+    "modified",
+    "version",
+    "source",
+    "record",
+];
+
+/// A qualifier shorter than this is noise (`f_`, `x_`), not a party name.
+const MIN_QUALIFIER_LEN: usize = 3;
+
+/// One column's membership in a qualifier group:
+/// `(column index, affix position, remainder tokens)`.
+type LayerMember = (usize, &'static str, Vec<String>);
+
+/// A qualifier candidate drawn from one column:
+/// `(qualifier token, affix position, remainder tokens)`.
+type LayerCandidate = (String, &'static str, Vec<String>);
+
+// Score weights. Interpretable rather than tuned: each term is one kind of
+// evidence, and they sum to 1.0 at full strength.
+const W_BASE: f64 = 0.30; // a real qualifier group exists at all
+const W_AFFIX: f64 = 0.35; // how many columns back it
+const W_ROLE: f64 = 0.25; // the pack recognises this party
+const W_TYPES: f64 = 0.10; // the layer's fields look like the role's typical types
+
+/// One role a domain pack declares, flattened by the host.
+///
+/// `typical_type_hints` is the union of the role's `typical_types`' names and
+/// name_hints -- the host resolves those against the pack so the kernel stays
+/// free of pack-loading concerns (the same smart-pipe / dumb-kernel split
+/// `detect_domain` uses).
+#[derive(Debug, Clone)]
+pub struct RoleInput {
+    pub name: String,
+    pub kind: String,
+    pub name_hints: Vec<String>,
+    pub typical_type_hints: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Layer {
+    pub role: String,
+    pub kind: String,
+    pub columns: Vec<String>,
+    pub score: f64,
+    pub reason: String,
+    pub qualifier: String,
+    pub positions: Vec<String>,
+    pub role_matched: bool,
+    pub type_corroboration: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LayerDetection {
+    pub layers: Vec<Layer>,
+    pub unassigned: Vec<String>,
+}
+
+/// Qualifier candidates for one column: `(token, position, remainder)`.
+///
+/// Leading and trailing tokens only -- a party qualifier sits at one end in
+/// practice (`lender_name`, `name_of_lender`); scanning interior tokens buys
+/// little and costs precision. A single-token column is a candidate only so a
+/// bare `bank` can be recognised by a role hint; it is rejected otherwise.
+fn layer_candidates(toks: &[String]) -> Vec<LayerCandidate> {
+    if toks.is_empty() {
+        return Vec::new();
+    }
+    if toks.len() == 1 {
+        return vec![(toks[0].clone(), "whole", Vec::new())];
+    }
+    vec![
+        (toks[0].clone(), "prefix", toks[1..].to_vec()),
+        (
+            toks[toks.len() - 1].clone(),
+            "suffix",
+            toks[..toks.len() - 1].to_vec(),
+        ),
+    ]
+}
+
+/// True when a remainder is purely numeric (`col_1` -> `["1"]`).
+///
+/// Uses ASCII digits; Python's `str.isdigit()` also accepts some non-ASCII
+/// digit characters. Real column names are ASCII, where all surfaces agree --
+/// the same documented parity edge as `tokens()` above.
+fn remainder_is_numeric(remainder: &[String]) -> bool {
+    remainder
+        .iter()
+        .all(|t| t.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// Reject groups that share a token without sharing a party.
+///
+/// Two rejections, both earning their place: single-column groups (unless a
+/// role hint recognises the token -- otherwise every column becomes its own
+/// layer), and trivial remainders (`col_1`/`col_2`/`col_3` share `col` but
+/// differ only by number: a table-wide prefix, not a party).
+fn layer_group_is_viable(
+    token: &str,
+    members: &[LayerMember],
+    role_tokens: &HashMap<String, usize>,
+) -> bool {
+    let recognised = role_tokens.contains_key(token);
+    if members.len() < 2 {
+        return recognised;
+    }
+    let distinct: HashSet<&[String]> = members
+        .iter()
+        .filter(|(_, _, rem)| !rem.is_empty() && !remainder_is_numeric(rem))
+        .map(|(_, _, rem)| rem.as_slice())
+        .collect();
+    distinct.len() >= 2 || recognised
+}
+
+/// Fraction of a group's columns whose remainder looks like a typical type.
+/// Corroboration only -- never a veto.
+fn layer_type_corroboration(members: &[LayerMember], role: Option<&RoleInput>) -> f64 {
+    let Some(r) = role else { return 0.0 };
+    if r.typical_type_hints.is_empty() {
+        return 0.0;
+    }
+    let mut expected: HashSet<String> = HashSet::new();
+    for hint in &r.typical_type_hints {
+        for t in tokens(hint) {
+            expected.insert(t);
+        }
+    }
+    if expected.is_empty() {
+        return 0.0;
+    }
+    let hits = members
+        .iter()
+        .filter(|(_, _, rem)| rem.iter().any(|t| expected.contains(t)))
+        .count();
+    hits as f64 / members.len() as f64
+}
+
+/// Why a layer was proposed, or that it fell short. `low_confidence` overrides
+/// the evidence reason so a marginal layer is visible as marginal -- it is still
+/// returned, with columns and evidence intact, rather than dropped.
+fn layer_reason(affix_strength: f64, role_matched: bool, score: f64, min_score: f64) -> String {
+    if score < min_score {
+        return "low_confidence".to_string();
+    }
+    if affix_strength > 0.0 {
+        return if role_matched {
+            "affix+role_hint".to_string()
+        } else {
+            "affix".to_string()
+        };
+    }
+    if role_matched {
+        "role_hint".to_string()
+    } else {
+        "singleton".to_string()
+    }
+}
+
+/// Detect the identity layers (parties) in a frame.
+///
+/// `columns`: the frame's column names. `roles`: the pack's declared roles IN
+/// HOST ORDER (first declaration wins on token collision). `type_hints`: every
+/// field-type name and name_hint the pack declares -- the pack-derived half of
+/// the stop-list. Empty `roles`/`type_hints` is the no-pack case: affix
+/// clustering still runs, parties are just unnamed.
+///
+/// Scores are returned UNROUNDED on purpose: `round()` differs between Python's
+/// banker's rounding, Rust's half-away-from-zero, and JS `Math.round`, so
+/// rounding here would manufacture a cross-language divergence.
+pub fn detect_identity_layers(
+    columns: &[String],
+    roles: &[RoleInput],
+    type_hints: &[String],
+    min_score: f64,
+) -> LayerDetection {
+    if columns.is_empty() {
+        return LayerDetection {
+            layers: Vec::new(),
+            unassigned: Vec::new(),
+        };
+    }
+
+    // token -> index into `roles`; first declaration wins (mirrors the Python
+    // host's dict.setdefault over pack-declaration order).
+    let mut role_tokens: HashMap<String, usize> = HashMap::new();
+    for (i, r) in roles.iter().enumerate() {
+        for hint in &r.name_hints {
+            for tok in tokens(hint) {
+                role_tokens.entry(tok).or_insert(i);
+            }
+        }
+    }
+
+    // Field-type tokens must not open a party (`account_number`/`account_id`
+    // share `account`). ROLE DECLARATIONS WIN: a token a pack explicitly
+    // declares as a role is a party name even if some field type also mentions
+    // it -- finance lists `payee` among the `merchant` type's hints while
+    // `payee` is also a declared role, and without this precedence the explicit
+    // declaration would lose to an incidental overlap.
+    let mut stop: HashSet<String> = ATTRIBUTE_TOKENS.iter().map(|s| (*s).to_string()).collect();
+    for hint in type_hints {
+        for tok in tokens(hint) {
+            stop.insert(tok);
+        }
+    }
+    stop.retain(|t| !role_tokens.contains_key(t));
+
+    // Group columns by shared qualifier. Prefix and suffix uses of the same
+    // token merge deliberately: `lender_name` and `name_of_lender` are one party.
+    let mut groups: HashMap<String, Vec<LayerMember>> = HashMap::new();
+    for (idx, col) in columns.iter().enumerate() {
+        for (tok, position, remainder) in layer_candidates(&tokens(col)) {
+            if tok.chars().count() < MIN_QUALIFIER_LEN || stop.contains(&tok) {
+                continue;
+            }
+            groups
+                .entry(tok)
+                .or_default()
+                .push((idx, position, remainder));
+        }
+    }
+
+    // Score every viable group. The sort key is total (token is unique per
+    // group), so ordering is deterministic without relying on map iteration.
+    struct Scored<'a> {
+        token: String,
+        role: Option<&'a RoleInput>,
+        members: Vec<LayerMember>,
+        score: f64,
+        corroboration: f64,
+    }
+    let mut scored: Vec<Scored> = Vec::new();
+    for (token, members) in groups {
+        if !layer_group_is_viable(&token, &members, &role_tokens) {
+            continue;
+        }
+        let role = role_tokens.get(&token).map(|i| &roles[*i]);
+        let corroboration = layer_type_corroboration(&members, role);
+        let affix_strength = (((members.len() - 1) as f64) / 2.0).min(1.0);
+        let score = (W_BASE
+            + W_AFFIX * affix_strength
+            + if role.is_some() { W_ROLE } else { 0.0 }
+            + W_TYPES * corroboration)
+            .min(1.0);
+        scored.push(Scored {
+            token,
+            role,
+            members,
+            score,
+            corroboration,
+        });
+    }
+    scored.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap()
+            .then(b.members.len().cmp(&a.members.len()))
+            .then(a.token.cmp(&b.token))
+    });
+
+    // A column can qualify for two groups (its leading and trailing token). It
+    // is awarded to the better-evidenced one.
+    let mut layers: Vec<Layer> = Vec::new();
+    let mut claimed: HashSet<usize> = HashSet::new();
+    for s in &scored {
+        let kept: Vec<&LayerMember> = s
+            .members
+            .iter()
+            .filter(|(idx, _, _)| !claimed.contains(idx))
+            .collect();
+        if kept.is_empty() {
+            continue;
+        }
+        // Re-check viability after losing columns to a stronger layer: a group
+        // reduced to one unrecognised column is no longer evidence of a party.
+        if kept.len() < 2 && !role_tokens.contains_key(&s.token) {
+            continue;
+        }
+        for (idx, _, _) in &kept {
+            claimed.insert(*idx);
+        }
+        let n = kept.len();
+        let affix_strength = (((n - 1) as f64) / 2.0).min(1.0);
+        let mut positions: Vec<String> = kept.iter().map(|(_, p, _)| (*p).to_string()).collect();
+        positions.sort();
+        positions.dedup();
+        layers.push(Layer {
+            role: s
+                .role
+                .map(|r| r.name.clone())
+                .unwrap_or_else(|| "unknown".to_string()),
+            kind: s
+                .role
+                .map(|r| r.kind.clone())
+                .unwrap_or_else(|| "unknown".to_string()),
+            columns: kept
+                .iter()
+                .map(|(idx, _, _)| columns[*idx].clone())
+                .collect(),
+            score: s.score,
+            reason: layer_reason(affix_strength, s.role.is_some(), s.score, min_score),
+            qualifier: s.token.clone(),
+            positions,
+            role_matched: s.role.is_some(),
+            type_corroboration: s.corroboration,
+        });
+    }
+
+    if layers.is_empty() {
+        // No party qualifiers anywhere. The honest reading is one homogeneous
+        // population, not "no entities" -- a plain customer table is the common
+        // case, not a degenerate one.
+        return LayerDetection {
+            layers: vec![Layer {
+                role: "unknown".to_string(),
+                kind: "unknown".to_string(),
+                columns: columns.to_vec(),
+                score: 0.5,
+                reason: "singleton".to_string(),
+                qualifier: String::new(),
+                positions: Vec::new(),
+                role_matched: false,
+                type_corroboration: 0.0,
+            }],
+            unassigned: Vec::new(),
+        };
+    }
+
+    layers.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap()
+            .then(a.role.cmp(&b.role))
+            .then(a.qualifier.cmp(&b.qualifier))
+    });
+
+    let assigned: HashSet<&String> = layers.iter().flat_map(|l| l.columns.iter()).collect();
+    let unassigned: Vec<String> = columns
+        .iter()
+        .filter(|c| !assigned.contains(c))
+        .cloned()
+        .collect();
+
+    LayerDetection { layers, unassigned }
 }
 
 // ===========================================================================
@@ -487,6 +913,220 @@ pub fn linear_sum_assignment(cost: &[Vec<f64>]) -> Vec<(usize, usize)> {
 }
 
 #[cfg(test)]
+mod layer_tests {
+    use super::*;
+
+    fn cols(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    fn role(name: &str, kind: &str, hints: &[&str], typical: &[&str]) -> RoleInput {
+        RoleInput {
+            name: name.to_string(),
+            kind: kind.to_string(),
+            name_hints: cols(hints),
+            typical_type_hints: cols(typical),
+        }
+    }
+
+    fn finance_roles() -> Vec<RoleInput> {
+        vec![
+            role(
+                "lender",
+                "organization",
+                &["lender", "originator"],
+                &["account_number"],
+            ),
+            role("borrower", "person", &["borrower", "debtor"], &[]),
+            role("payee", "organization", &["payee"], &[]),
+        ]
+    }
+
+    /// The load-bearing case: two parties in one frame.
+    #[test]
+    fn separates_lender_from_borrower() {
+        let d = detect_identity_layers(
+            &cols(&[
+                "loan_id",
+                "lender_name",
+                "lender_id",
+                "lender_address",
+                "borrower_name",
+                "borrower_ssn",
+            ]),
+            &finance_roles(),
+            &cols(&["account_number", "account_id", "loan"]),
+            0.3,
+        );
+        let lender = d.layers.iter().find(|l| l.role == "lender").unwrap();
+        assert_eq!(lender.kind, "organization");
+        assert_eq!(lender.columns.len(), 3);
+        let borrower = d.layers.iter().find(|l| l.role == "borrower").unwrap();
+        assert_eq!(borrower.kind, "person");
+        assert_eq!(borrower.columns, cols(&["borrower_name", "borrower_ssn"]));
+        assert_eq!(d.unassigned, cols(&["loan_id"]));
+    }
+
+    /// A field-type token must not invent a party.
+    #[test]
+    fn field_type_tokens_do_not_open_a_party() {
+        let d = detect_identity_layers(
+            &cols(&["account_number", "account_id", "txn_amount"]),
+            &finance_roles(),
+            &cols(&["account_number", "account_id", "account"]),
+            0.3,
+        );
+        assert_eq!(d.layers.len(), 1);
+        assert_eq!(d.layers[0].reason, "singleton");
+    }
+
+    /// An explicit role declaration outranks an incidental field-type overlap.
+    #[test]
+    fn role_declaration_overrides_the_type_stop_list() {
+        // `payee` appears BOTH as a merchant-type hint and as a declared role.
+        let d = detect_identity_layers(
+            &cols(&["payee_name", "payee_account"]),
+            &finance_roles(),
+            &cols(&["merchant", "payee", "vendor"]),
+            0.3,
+        );
+        assert_eq!(d.layers.len(), 1);
+        assert_eq!(d.layers[0].role, "payee");
+    }
+
+    /// Without a pack, `name` must not fuse two unrelated parties.
+    #[test]
+    fn shared_attribute_suffix_does_not_fuse_unrelated_parties() {
+        let d = detect_identity_layers(
+            &cols(&[
+                "widget_owner_name",
+                "widget_owner_id",
+                "shipper_name",
+                "shipper_code",
+            ]),
+            &[],
+            &[],
+            0.3,
+        );
+        let mut grouped: Vec<Vec<String>> = d.layers.iter().map(|l| l.columns.clone()).collect();
+        grouped.sort();
+        assert_eq!(
+            grouped,
+            vec![
+                cols(&["shipper_name", "shipper_code"]),
+                cols(&["widget_owner_name", "widget_owner_id"]),
+            ]
+        );
+    }
+
+    /// A table-wide prefix over numeric remainders is not a party.
+    #[test]
+    fn numeric_remainders_are_not_a_party() {
+        let d = detect_identity_layers(&cols(&["col_1", "col_2", "col_3"]), &[], &[], 0.3);
+        assert_eq!(d.layers.len(), 1);
+        assert_eq!(d.layers[0].reason, "singleton");
+    }
+
+    /// One homogeneous population is the common case, not a degenerate one.
+    #[test]
+    fn single_population_yields_exactly_one_layer() {
+        let d = detect_identity_layers(&cols(&["id", "name", "email", "city"]), &[], &[], 0.3);
+        assert_eq!(d.layers.len(), 1);
+        assert_eq!(d.layers[0].columns.len(), 4);
+        assert!(d.unassigned.is_empty());
+    }
+
+    /// Prefix and suffix uses of a token are the same party.
+    #[test]
+    fn suffix_qualifiers_group_with_prefix_ones() {
+        let d = detect_identity_layers(
+            &cols(&["name_of_lender", "id_of_lender"]),
+            &finance_roles(),
+            &[],
+            0.3,
+        );
+        assert_eq!(d.layers.len(), 1);
+        assert_eq!(d.layers[0].role, "lender");
+    }
+
+    /// A bare role-hint column is a singleton layer; an unrecognised one is not.
+    #[test]
+    fn single_column_group_needs_a_role_hint() {
+        let recognised = detect_identity_layers(&cols(&["lender"]), &finance_roles(), &[], 0.3);
+        assert_eq!(recognised.layers[0].role, "lender");
+        assert_eq!(recognised.layers[0].reason, "role_hint");
+
+        let unrecognised = detect_identity_layers(&cols(&["sprocket"]), &[], &[], 0.3);
+        assert_eq!(unrecognised.layers[0].reason, "singleton");
+    }
+
+    #[test]
+    fn empty_frame_yields_no_layers() {
+        let d = detect_identity_layers(&[], &[], &[], 0.3);
+        assert!(d.layers.is_empty());
+        assert!(d.unassigned.is_empty());
+    }
+
+    /// Column order must not change the partition, and no column may be double-assigned.
+    #[test]
+    fn deterministic_and_each_column_assigned_once() {
+        let forward = cols(&[
+            "lender_name",
+            "lender_id",
+            "borrower_name",
+            "borrower_ssn",
+            "loan_id",
+        ]);
+        let mut reversed = forward.clone();
+        reversed.reverse();
+        let hints = cols(&["loan"]);
+
+        let a = detect_identity_layers(&forward, &finance_roles(), &hints, 0.3);
+        let b = detect_identity_layers(&reversed, &finance_roles(), &hints, 0.3);
+
+        let mut sa: Vec<Vec<String>> = a
+            .layers
+            .iter()
+            .map(|l| {
+                let mut c = l.columns.clone();
+                c.sort();
+                c
+            })
+            .collect();
+        let mut sb: Vec<Vec<String>> = b
+            .layers
+            .iter()
+            .map(|l| {
+                let mut c = l.columns.clone();
+                c.sort();
+                c
+            })
+            .collect();
+        sa.sort();
+        sb.sort();
+        assert_eq!(sa, sb);
+
+        let assigned: Vec<&String> = a.layers.iter().flat_map(|l| l.columns.iter()).collect();
+        let unique: HashSet<&&String> = assigned.iter().collect();
+        assert_eq!(assigned.len(), unique.len());
+    }
+
+    /// Below min_score a layer is still returned, marked as marginal.
+    #[test]
+    fn marginal_layers_are_reported_not_dropped() {
+        let d = detect_identity_layers(
+            &cols(&["shipper_alpha", "shipper_beta"]),
+            &[],
+            &[],
+            0.9, // forces the group under the bar
+        );
+        assert_eq!(d.layers.len(), 1);
+        assert_eq!(d.layers[0].reason, "low_confidence");
+        assert_eq!(d.layers[0].columns.len(), 2);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -534,16 +1174,15 @@ mod tests {
     #[test]
     fn profile_identical_and_dtype_mismatch() {
         // identical profiles -> all 5 terms = 1.0
-        let s = profile_score("string", "string", 0.1, 0.1, 0.5, 0.5,
-                              100.0, 100.0, 8.0, 8.0);
+        let s = profile_score(
+            "string", "string", 0.1, 0.1, 0.5, 0.5, 100.0, 100.0, 8.0, 8.0,
+        );
         assert_eq!(s, 1.0);
         // dtype mismatch only -> 1.0 - 0.4 = 0.6
-        let s2 = profile_score("string", "int", 0.1, 0.1, 0.5, 0.5,
-                               100.0, 100.0, 8.0, 8.0);
+        let s2 = profile_score("string", "int", 0.1, 0.1, 0.5, 0.5, 100.0, 100.0, 8.0, 8.0);
         assert_eq!(s2, 0.6);
         // avg_len 0/0 floors denom to 1.0 -> len term stays 1.0 (no div-by-zero)
-        let s3 = profile_score("string", "string", 0.0, 0.0, 0.0, 0.0,
-                               1.0, 1.0, 0.0, 0.0);
+        let s3 = profile_score("string", "string", 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0);
         assert_eq!(s3, 1.0);
     }
 
@@ -577,7 +1216,10 @@ mod tests {
     }
 
     fn d(name: &str, hints: &[&str]) -> (String, Vec<String>) {
-        (name.to_string(), hints.iter().map(|s| s.to_string()).collect())
+        (
+            name.to_string(),
+            hints.iter().map(|s| s.to_string()).collect(),
+        )
     }
     fn cols(xs: &[&str]) -> Vec<String> {
         xs.iter().map(|s| s.to_string()).collect()
@@ -602,7 +1244,10 @@ mod tests {
 
     #[test]
     fn no_hints_no_data() {
-        assert_eq!(detect_domain(&cols(&["a"]), &[d("h", &[])], 0.3).reason, "no_data");
+        assert_eq!(
+            detect_domain(&cols(&["a"]), &[d("h", &[])], 0.3).reason,
+            "no_data"
+        );
     }
 
     #[test]

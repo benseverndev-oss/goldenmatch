@@ -349,6 +349,43 @@ def test_role_name_must_agree_with_its_key(pack_dir):
         load_domain("testdom")
 
 
+def test_pure_python_matches_the_shared_kernel_oracle():
+    """The pure fallback must reproduce the Rust kernel exactly.
+
+    Reads the SAME committed `layers_parity.json` the TypeScript surface reads
+    (generated from `infermap-core::detect_identity_layers`), so all three
+    surfaces are pinned to one oracle rather than to each other. Runs without
+    the native wheel — that is the point: the fallback is what needs gating.
+    """
+    import json
+    import pathlib
+
+    from infermap.layers import _layers_core_pure
+
+    fixture = pathlib.Path(__file__).parent / "fixtures" / "layers_parity.json"
+    cases = json.loads(fixture.read_text(encoding="utf-8"))
+    assert len(cases) >= 10, "oracle looks truncated"
+
+    for case in cases:
+        roles = [
+            (r["name"], r["kind"], r["name_hints"], r["typical_type_hints"])
+            for r in case["roles"]
+        ]
+        layers, unassigned = _layers_core_pure(
+            case["columns"], roles, case["type_hints"], case["min_score"]
+        )
+        got = [
+            {
+                "role": r, "kind": k, "columns": list(c), "score": s, "reason": rs,
+                "qualifier": q, "positions": list(p), "role_matched": rm,
+                "type_corroboration": tc,
+            }
+            for (r, k, c, s, rs, q, p, rm, tc) in layers
+        ]
+        assert got == case["expected"]["layers"], case["name"]
+        assert list(unassigned) == case["expected"]["unassigned"], case["name"]
+
+
 def test_shipped_packs_declare_loadable_roles():
     """The four packs this wave declares roles for must parse and be consistent."""
     from goldencheck_types import IDENTITY_KINDS, load_domain
