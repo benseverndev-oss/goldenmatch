@@ -60,3 +60,30 @@ types:
     value_signals:
       avg_length_min: 15
     suppress: ["pattern_consistency", "cardinality", "type_inference", "drift_detection"]
+
+# Entity roles (schema v4) — see finance.yaml for the roles-vs-types contract.
+roles:
+  patient:
+    kind: person
+    name_hints: ["patient"]
+    typical_types: ["patient_name", "medical_record", "insurance_id"]
+
+  subscriber:
+    kind: person
+    name_hints: ["subscriber", "guarantor"]
+    typical_types: ["insurance_id"]
+
+  provider:
+    kind: person
+    name_hints: ["provider", "physician", "practitioner", "prescriber", "attending", "referring"]
+    typical_types: ["npi"]
+
+  facility:
+    kind: organization
+    name_hints: ["facility", "hospital", "clinic"]
+    typical_types: ["facility_code", "npi"]
+
+  payer:
+    kind: organization
+    name_hints: ["payer", "insurer", "plan"]
+    typical_types: ["insurance_id", "claim_status"]

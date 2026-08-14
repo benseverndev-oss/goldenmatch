@@ -27,6 +27,7 @@ from infermap.errors import ApplyError, ConfigError, InferMapError
 # without reaching into a submodule. The helper itself raises ImportError
 # with a clear remediation message if goldenmatch isn't installed.
 from infermap.identity import AliasWriteResult, write_aliases_from_mapping
+from infermap.layers import detect_identity_layers
 from infermap.providers import extract_schema
 from infermap.scorers import default_scorers, scorer
 from infermap.types import FieldInfo, FieldMapping, MapResult, SchemaInfo, ScorerResult
@@ -64,6 +65,7 @@ __all__ = [
     "DomainPackTarget",
     "detect_domain",
     "detect_domain_detailed",
+    "detect_identity_layers",
     "MapEngine",
     "from_config",
     "default_scorers",

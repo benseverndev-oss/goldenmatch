@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Identity-layer detection** — `detect_identity_layers(df)` reports which *parties* a frame refers to (lender, borrower, payor, machine, patient…), as distinct from `detect_domain`, which reports the single industry vertical. A layer is a **group of columns describing one party**, so detection is column-grouping rather than per-column classification and never touches the deliberately 1:1 mapping assignment. Two signals: affix clustering (primary, domain-free — works on schemas no pack has seen) corroborated by an optional `roles:` block in domain packs. Unrecognised parties are reported with `role="unknown"` and their evidence rather than dropped or force-fit; columns in no layer land in `unassigned`. Reads column names only. `detect_domain` behaviour is unchanged.
+- Domain packs gained an optional `roles:` block (`finance`, `insurance`, `healthcare`, `manufacturing` declare them). `goldencheck-types` `SCHEMA_VERSION` 3 -> 4: new `RoleSpec`, `IdentityLayer`, `LayerDetectionResult`, `IDENTITY_KINDS`, `LAYER_REASONS`, `UNKNOWN_ROLE`, and `DomainPack.roles`, mirrored in the TypeScript sibling. The block is additive — packs without it load unchanged.
+
 ## [0.6.0] - 2026-07-16
 
 ### Added
