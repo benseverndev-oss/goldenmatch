@@ -113,6 +113,12 @@ jobs:
         env:
           GOLDENMATCH_FS_CALIBRATED: posterior
           GOLDENMATCH_FS_NATIVE: "1"
+          # The calibrated arm needs the per-dataset calibrator ON. It is
+          # default-off in the product, and this sweep exists to produce the
+          # evidence for or against flipping that -- so it must be enabled HERE
+          # rather than assumed. The fixed-threshold arms are unaffected: an
+          # explicit `mk.link_threshold` outranks the calibrated cut.
+          GOLDENMATCH_FS_CALIBRATE_THRESHOLD: "1"
         run: |
           set -euo pipefail
           uv run python scripts/bench_er_headtohead/sweep_fs_link_threshold.py \

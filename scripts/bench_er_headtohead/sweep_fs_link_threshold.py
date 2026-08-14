@@ -77,8 +77,15 @@ def _write_truth(truth, path: Path):
     pq.write_table(t, path, compression="zstd")
 
 
-def run_one(records, truth_path: Path, out_dir: Path, thr: float) -> dict:
-    """One full dedupe at `thr`, scored by the shared evaluator."""
+def run_one(records, truth_path: Path, out_dir: Path, thr: float | None) -> dict:
+    """One full dedupe at `thr`, scored by the shared evaluator.
+
+    ``thr=None`` is the CALIBRATED arm: `link_threshold` is left unset so the
+    engine derives the cut per dataset (`GOLDENMATCH_FS_CALIBRATE_THRESHOLD=1`),
+    and the cut it actually chose is read back off the result and reported. That
+    read-back is the point -- a calibrated run that silently fell back to the
+    fixed default would otherwise look like a calibration result.
+    """
     import evaluate as evaluate_mod
     import numpy as np
     import pyarrow as pa
@@ -94,7 +101,8 @@ def run_one(records, truth_path: Path, out_dir: Path, thr: float) -> dict:
         for f in getattr(mk, "fields", None) or []:
             if f.scorer and f.scorer not in _BASIC:
                 f.scorer = "jaro_winkler"
-        mk.link_threshold = thr
+        if thr is not None:
+            mk.link_threshold = thr
 
     t0 = time.perf_counter()
     ded = dedupe_df(records, config=cfg)
@@ -107,7 +115,7 @@ def run_one(records, truth_path: Path, out_dir: Path, thr: float) -> dict:
             rec_ids.append(str(rid[m]))
             pred_cids.append(cid)
 
-    pred_path = out_dir / f"pred_{thr}.parquet"
+    pred_path = out_dir / f"pred_{'calibrated' if thr is None else thr}.parquet"
     pq.write_table(
         pa.table({
             "record_id": pa.array(rec_ids, pa.string()),
@@ -117,11 +125,22 @@ def run_one(records, truth_path: Path, out_dir: Path, thr: float) -> dict:
     )
     m = evaluate_mod.evaluate(pred_path, truth_path)
     pw = m.get("pairwise") or {}
-    return {
-        "threshold": thr, "wall_seconds": round(wall, 2),
+    row = {
+        "threshold": "calibrated" if thr is None else thr,
+        "wall_seconds": round(wall, 2),
         "precision": pw.get("precision"), "recall": pw.get("recall"),
         "f1": pw.get("f1"),
     }
+    if thr is None:
+        # What the engine CHOSE, and whether it chose at all. `source` is the
+        # engine's own report: "calibrated" means this dataset picked a cut,
+        # "fallback" means nothing about it did and the number below is the
+        # fixed default wearing a calibration label.
+        stats = (getattr(ded, "stats", None) or {}).get("fs_link_thresholds") or {}
+        first = next(iter(stats.values()), {}) if isinstance(stats, dict) else {}
+        row["chosen_threshold"] = first.get("link_threshold")
+        row["threshold_source"] = first.get("source")
+    return row
 
 
 def sweep(name: str, thresholds: list[float], out_dir: Path) -> list[dict]:
@@ -146,6 +165,9 @@ def sweep(name: str, thresholds: list[float], out_dir: Path) -> list[dict]:
         else:
             note = (f"F1={r['f1']:.4f} P={r['precision']:.4f} "
                     f"R={r['recall']:.4f} ({r['wall_seconds']}s)")
+            if r.get("chosen_threshold") is not None:
+                note += (f"  [chose {r['chosen_threshold']} "
+                         f"src={r.get('threshold_source')}]")
         print(f"[sweep] {name} thr={thr}: {note}", flush=True)
     return rows
 
@@ -160,13 +182,58 @@ def best_constant(rows: list[dict]) -> tuple[float, float]:
     """
     by_thr: dict[float, list[float]] = {}
     for r in rows:
-        if r.get("f1") is not None:
-            by_thr.setdefault(r["threshold"], []).append(float(r["f1"]))
+        # Skip the calibrated rows: "calibrated" is not a constant, and letting
+        # it into this argmax would report a per-dataset policy as if it were
+        # one number every dataset could be given.
+        if r.get("f1") is not None and isinstance(r.get("threshold"), (int, float)):
+            by_thr.setdefault(float(r["threshold"]), []).append(float(r["f1"]))
     if not by_thr:
         return INCUMBENT, 0.0
     scored = {t: sum(v) / len(v) for t, v in by_thr.items()}
     best = max(scored, key=lambda t: scored[t])
     return best, scored[best]
+
+
+def calibrated_verdict(rows: list[dict]) -> list[dict]:
+    """Per dataset: the calibrated cut vs the BEST FIXED cut that dataset could
+    have had.
+
+    This is the honest bar, and it is deliberately harsh. The best fixed cut per
+    dataset is an ORACLE -- it is chosen with knowledge of that dataset's own
+    ground truth, which no real deployment has. If calibration merely ties it,
+    calibration wins in practice, because the oracle is not available and the
+    shipped alternative is one global constant that (measured, run 31837064581)
+    is wrong for most datasets.
+
+    So the number to read is `delta_vs_oracle`: at or near zero means
+    calibration recovers a per-dataset optimum without being told the answer.
+    """
+    by_ds: dict[str, dict] = {}
+    for r in rows:
+        if r.get("f1") is None:
+            continue
+        d = by_ds.setdefault(r["dataset"], {"fixed": {}, "cal": None})
+        if isinstance(r.get("threshold"), (int, float)):
+            d["fixed"][float(r["threshold"])] = float(r["f1"])
+        else:
+            d["cal"] = r
+    out = []
+    for ds, d in sorted(by_ds.items()):
+        if not d["fixed"] or d["cal"] is None:
+            continue
+        best_thr = max(d["fixed"], key=lambda t: d["fixed"][t])
+        out.append({
+            "dataset": ds,
+            "oracle_threshold": best_thr,
+            "oracle_f1": round(d["fixed"][best_thr], 4),
+            "calibrated_f1": round(float(d["cal"]["f1"]), 4),
+            "chosen_threshold": d["cal"].get("chosen_threshold"),
+            "threshold_source": d["cal"].get("threshold_source"),
+            "incumbent_f1": (round(d["fixed"][INCUMBENT], 4)
+                             if INCUMBENT in d["fixed"] else None),
+            "delta_vs_oracle": round(float(d["cal"]["f1"]) - d["fixed"][best_thr], 4),
+        })
+    return out
 
 
 def render_markdown(report: dict) -> str:
@@ -185,11 +252,27 @@ def render_markdown(report: dict) -> str:
         f"`{report.get('recommended_mean_f1')}`"
     )
     out.append("")
+    for section in ("verdict_tune", "verdict_holdout"):
+        vs = report.get(section) or []
+        if not vs:
+            continue
+        out += [f"### {section.replace('verdict_', '')}: calibrated vs the "
+                f"best fixed cut that dataset could have had", "",
+                "| dataset | oracle thr | oracle F1 | calibrated F1 | chose | src | delta |",
+                "|---|---|---|---|---|---|---|"]
+        for v in vs:
+            out.append(
+                f"| {v['dataset']} | {v['oracle_threshold']} | {v['oracle_f1']} "
+                f"| {v['calibrated_f1']} | {v['chosen_threshold']} "
+                f"| {v['threshold_source']} | {v['delta_vs_oracle']:+.4f} |"
+            )
+        out.append("")
+
     for section in ("tune", "holdout"):
         rows = report.get(section) or []
         if not rows:
             continue
-        out += [f"### {section}", "", "| dataset | thr | P | R | F1 |",
+        out += [f"### {section} (full grid)", "", "| dataset | thr | P | R | F1 |",
                 "|---|---|---|---|---|"]
         for r in rows:
             if r.get("f1") is None:
@@ -214,6 +297,9 @@ def main() -> int:
                     help="also render a markdown table here (CI job summary)")
     # Floors, not preferences. Below these the run cannot answer the question
     # it was dispatched to answer.
+    ap.add_argument("--calibrated", action="store_true", default=True,
+                    help="also run the per-dataset calibrated cut (default on)")
+    ap.add_argument("--no-calibrated", dest="calibrated", action="store_false")
     ap.add_argument("--min-tune", type=int, default=3)
     ap.add_argument("--min-holdout", type=int, default=2)
     args = ap.parse_args()
@@ -226,9 +312,14 @@ def main() -> int:
     report: dict = {"grid": args.grid, "incumbent": INCUMBENT,
                     "tune": [], "holdout": []}
 
+    # `None` = the calibrated arm. It runs on EVERY dataset, tune and holdout
+    # alike, because the question is not "which constant" any more -- it is
+    # "does a per-dataset cut beat the best constant that dataset could have
+    # had". That comparison needs the calibrated point beside the full grid.
+    grid = list(args.grid) + ([None] if args.calibrated else [])
     for name in args.tune:
         try:
-            report["tune"].extend(sweep(name, args.grid, out_dir))
+            report["tune"].extend(sweep(name, grid, out_dir))
         except Exception as exc:  # noqa: BLE001
             print(f"[sweep] {name}: LOAD FAILED {exc}", flush=True)
             report["tune"].append({"dataset": name, "error": str(exc)[:200]})
@@ -247,13 +338,22 @@ def main() -> int:
 
     # Holdout: TWO points only. Sweeping here would spend the only unbiased
     # estimate available and leave nothing to check the recommendation against.
-    hold_grid = sorted({INCUMBENT, rec})
+    hold_grid = sorted({INCUMBENT, rec}) + ([None] if args.calibrated else [])
     for name in args.holdout:
         try:
             report["holdout"].extend(sweep(name, hold_grid, out_dir))
         except Exception as exc:  # noqa: BLE001
             print(f"[sweep] {name}: LOAD FAILED {exc}", flush=True)
             report["holdout"].append({"dataset": name, "error": str(exc)[:200]})
+
+    report["verdict_tune"] = calibrated_verdict(report["tune"])
+    report["verdict_holdout"] = calibrated_verdict(report["holdout"])
+    for section in ("verdict_tune", "verdict_holdout"):
+        for v in report[section]:
+            print(f"[verdict] {v['dataset']:<16} oracle {v['oracle_threshold']} "
+                  f"F1={v['oracle_f1']}  calibrated F1={v['calibrated_f1']} "
+                  f"(chose {v['chosen_threshold']}, {v['threshold_source']})  "
+                  f"delta={v['delta_vs_oracle']:+.4f}", flush=True)
 
     Path(args.out).write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(f"[sweep] wrote {args.out}", flush=True)
