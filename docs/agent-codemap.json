@@ -8012,6 +8012,7 @@
             "estimate_u_distributed",
             "gamma_columns",
             "random_pairs",
+            "tf_value_frequencies",
             "train_em_distributed"
           ],
           "imports": [

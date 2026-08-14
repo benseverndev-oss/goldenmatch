@@ -124,21 +124,47 @@ matching PR-C's stated posture.
 Three implementations become one here. Phase 0 without Phase 1 is strictly worse
 than doing neither.
 
-### Phase 2 -- term-frequency adjustment on the distributed path
+### Phase 2 -- term-frequency adjustment on the distributed path *(done)*
 
-The largest real gap against Splink. Verified against Splink's
-`internals/term_frequencies.py` on 2026-08-13: a TF table per column
-(`count(*) / total`), left-joined to the input, then
-`log2(u_probability/tf) * tf_adjustment_weight AS log2_bf_tf` -- **all backend
-SQL**. `train_em_distributed` currently refuses TF outright.
+**The open question is resolved, and not the way this spec first guessed.**
+Verified 2026-08-14 against both sources rather than inferred:
 
-**Open question, to settle before designing:** TF is per-*value*, so it does not
-fit the counted-vector key -- collapsing identical vectors discards the values
-the adjustment needs. Splink appears to apply TF as a **scoring-time** Bayes-factor
-term rather than folding it into training, which would make it orthogonal to
-counted training and far cheaper than it looks. **Verify this against their
-source before designing**; if it is wrong, the counting key has to carry
-frequency bands and the cost changes completely.
+* **Splink** (`em_training_session.py`): `estimate_without_term_frequencies`
+  defaults to **`False`**, so by default TF *does* join its E-step, through
+  `predict_from_comparison_vectors_sqls(training_mode=True)`. Its
+  agreement-pattern-counts path is the `True` branch. So counted training and
+  TF-in-training are **mutually exclusive there too** -- that flag is the
+  switch between them.
+* **GoldenMatch** (`core/probabilistic.py::_em_iterate`): contains **zero**
+  references to tf. TF is a purely SCORING-time adjustment here; training only
+  *builds* the table (`_build_tf_tables`) and stores it on the `EMResult`,
+  where `backends/score_buckets.py` reads it.
+
+So the earlier framing -- "Splink applies TF at scoring time, which would make
+it orthogonal" -- was half right for the wrong reason. It is not orthogonal for
+Splink. It is orthogonal **for us**, because we never put TF in training at all.
+
+What the counted path actually could not do was narrower than the refusal
+claimed: it cannot *derive* a TF table, because collapsing identical comparison
+vectors is exactly what discards the values. It never needed to. The table is a
+property of the SOURCE column, so `spark.em.tf_value_frequencies` recovers it
+with a separate `GROUP BY` -- the distributed twin of `_build_tf_tables`,
+mirroring `core.tf_tables.value_frequencies` including the detail that the
+denominator counts SURVIVING values, not rows.
+
+`train_em_from_counts` now takes `tf_freqs` / `tf_collision` rather than
+refusing, and refuses only when TF is configured and no table is supplied (and
+rejects a table for a field that never opted in). `train_em_distributed`
+computes them once and carries them onto every session.
+
+**Bound:** a TF table has no `prod(levels + 1)` ceiling -- one entry per
+distinct VALUE -- so it gets its own `MAX_TF_VALUES` (1,000,000) with a message
+saying plainly that this is a driver-memory limit, not a property of the field.
+The one-box builds the same dict from its own frame.
+
+**Still not supported:** negative evidence, which sat in the same guard and is
+a different problem -- it needs a per-pair matrix nothing outside the pair loop
+can reconstruct.
 
 ### Phase 3 -- backends
 
@@ -174,5 +200,10 @@ README, or a release note.
   field's `u` collapsing toward the smoothing floor explodes `log2(m/u)` and
   produces a model that is wrong only in the cells hardest to eyeball
   (measured F1 0.83 -> 0.57). Every fixture matrix carries that case.
-- **TF may not be orthogonal.** See the open question in Phase 2. If it is not,
-  Phase 2's cost estimate is wrong by a lot.
+- ~~**TF may not be orthogonal.**~~ RESOLVED 2026-08-14, and the risk was real:
+  TF is NOT orthogonal for Splink (its `estimate_without_term_frequencies`
+  defaults to `False`, putting TF in the E-step). It is orthogonal for us only
+  because `_em_iterate` never touches tf. Had that not held, the counting key
+  would have needed frequency bands and Phase 2 would have been a different
+  piece of work. Verified against both sources before designing, which is the
+  only reason the cheap answer was trustworthy.
