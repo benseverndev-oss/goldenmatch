@@ -272,6 +272,117 @@ def estimate_u_distributed(
     return estimate_u_from_counts(mk, counts)
 
 
+
+# ── term-frequency tables: a GROUP BY over VALUES, not vectors ───────
+
+#: A TF table is one entry per DISTINCT VALUE, so unlike the agreement-pattern
+#: space it has no `prod(levels + 1)` ceiling -- a surname column can carry
+#: millions. Collecting one is the same driver-OOM class `MAX_PATTERNS` guards,
+#: and it is worth a separate, larger bound because the one-box builds exactly
+#: the same dict from its own frame: the ceiling here is the driver's memory,
+#: not a property of the distributed path.
+MAX_TF_VALUES = 1_000_000
+
+
+def tf_value_frequencies(
+    source_df: Any,
+    mk: Any,
+    *,
+    transform_udf: str | None = None,
+    max_tf_values: int = MAX_TF_VALUES,
+) -> tuple[dict[str, dict[str, float]] | None, dict[str, float] | None]:
+    """Per-value relative frequencies for every ``tf_adjustment`` field.
+
+    The distributed twin of ``core.probabilistic._build_tf_tables``. Mirrors
+    ``core.tf_tables.value_frequencies`` exactly: apply the field's transform
+    chain, drop nulls and empties, then ``count / total`` per distinct value --
+    where ``total`` counts the SURVIVING values, not the rows, so a sparse
+    column's frequencies still sum to 1.
+
+    ``tf_collision[field] = sum(freq^2)`` is the expected exact-match collision
+    rate, the baseline an agreement weight is adjusted against.
+
+    ## Why this is separable from the counted trainer
+
+    TF is a SCORING-time adjustment in this engine -- ``_em_iterate`` contains
+    no reference to it -- so the table never enters the E-step. It only has to
+    reach the ``EMResult`` that scoring reads. That is what lets counted
+    training and TF coexist here: the counts discard the values, and this
+    recovers them from the SOURCE, where they were never discarded.
+
+    Splink is the other way round by default (``estimate_without_term_frequencies``
+    is ``False``, so TF joins its E-step through the per-pair path, and its
+    agreement-pattern-counts path is the ``True`` branch). Counted training and
+    TF-in-training are mutually exclusive there too; the difference is that we
+    never put TF in training at all.
+
+    Returns ``(None, None)`` when no field opts in, matching the one-box.
+    """
+    from pyspark.sql import functions as F
+
+    from goldenmatch.spark.config_pipeline import _transformed
+
+    tf_fields = [f for f in mk.fields if getattr(f, "tf_adjustment", False)]
+    if not tf_fields:
+        return None, None
+
+    cols = set(source_df.columns)
+    tf_freqs: dict[str, dict[str, float]] = {}
+    tf_collision: dict[str, float] = {}
+
+    for f in tf_fields:
+        name = f.resolved_field if hasattr(f, "resolved_field") else f.field
+        if name not in cols:
+            # The one-box skips an absent column rather than raising; a matchkey
+            # naming a column this frame lacks is a config problem the scorer
+            # reports, not something to fail training over.
+            continue
+        chain = list(getattr(f, "transforms", None) or [])
+        raw = F.col(name)
+        val = (
+            _transformed(raw, chain, transform_udf=transform_udf)
+            if chain
+            else raw.cast("string")
+        )
+        # Nulls and empties are dropped BEFORE counting, and the transform runs
+        # first: a chain may map a real value to empty (null_if_empty), and the
+        # one-box drops those too. Counting them would put mass on a value no
+        # pair can ever agree on.
+        grouped = (
+            source_df.select(val.alias("__tf_val__"))
+            .where(F.col("__tf_val__").isNotNull() & (F.col("__tf_val__") != F.lit("")))
+            .groupBy("__tf_val__")
+            .agg(F.count(F.lit(1)).alias("__n__"))
+        )
+
+        n_distinct = grouped.count()
+        if n_distinct > max_tf_values:
+            raise ValueError(
+                f"field {name!r} has {n_distinct} distinct values, over "
+                f"max_tf_values={max_tf_values}. A TF table is collected to the "
+                f"driver and stored in the model, so this is a driver-memory "
+                f"bound rather than a property of the field. Raise max_tf_values "
+                f"if the driver can hold it, or drop tf_adjustment for this "
+                f"field."
+            )
+
+        rows = grouped.collect()
+        total = float(sum(int(r["__n__"]) for r in rows))
+        if total <= 0:
+            continue
+        freqs = {str(r["__tf_val__"]): int(r["__n__"]) / total for r in rows}
+        tf_freqs[name] = freqs
+        tf_collision[name] = sum(p * p for p in freqs.values())
+        logger.info(
+            "FS TF: %s -> %d distinct values over %.0f observations "
+            "(collision %.6g)",
+            name, len(freqs), total, tf_collision[name],
+        )
+
+    if not tf_freqs:
+        return None, None
+    return tf_freqs, tf_collision
+
 # ── the caller: every link, strung together ──────────────────────────
 
 
@@ -288,6 +399,9 @@ def train_em_distributed(
     max_iterations: int = 20,
     convergence: float = 0.001,
     max_patterns: int = MAX_PATTERNS,
+    max_tf_values: int = MAX_TF_VALUES,
+    tf_freqs: dict[str, dict[str, float]] | None = None,
+    tf_collision: dict[str, float] | None = None,
 ) -> Any:
     """Train one matchkey's FS model with no pair sample anywhere.
 
@@ -343,6 +457,13 @@ def train_em_distributed(
         max_patterns=max_patterns,
     )
 
+    # A GROUP BY over VALUES, not comparison vectors -- the one thing the counts
+    # threw away. Computed once and carried onto every session, because it is a
+    # property of the source population and not of any blocking pass.
+    tf_freqs, tf_collision = tf_value_frequencies(
+        source_df, mk, transform_udf=transform_udf, max_tf_values=max_tf_values
+    ) if tf_freqs is None else (tf_freqs, tf_collision)
+
     sessions = []
     for i, key_config in enumerate(passes):
         fields = tuple(key_config.fields)
@@ -369,6 +490,7 @@ def train_em_distributed(
             continue
         em = train_em_from_counts(
             mk, counts, u_probs, conditioned_fields=fields,
+            tf_freqs=tf_freqs, tf_collision=tf_collision,
             max_iterations=max_iterations, convergence=convergence,
         )
         # Weighted by the EXACT pair count, which the counts already carry --
@@ -401,9 +523,6 @@ def _refuse_unsupported(mk: Any) -> None:
             f"per-pair NE matrix that counted comparison vectors do not carry. "
             f"Train it with train_em() on sampled pairs."
         )
-    if any(getattr(f, "tf_adjustment", False) for f in mk.fields):
-        raise NotImplementedError(
-            f"matchkey {mk.name!r} uses term-frequency adjustment, which needs "
-            f"per-value frequencies that counted comparison vectors do not "
-            f"carry. Train it with train_em() on sampled pairs."
-        )
+    # NOT refused any more: term-frequency adjustment. The counts cannot derive
+    # a TF table, but `tf_value_frequencies` recovers it from the SOURCE with a
+    # separate GROUP BY, and TF never enters the E-step here anyway.

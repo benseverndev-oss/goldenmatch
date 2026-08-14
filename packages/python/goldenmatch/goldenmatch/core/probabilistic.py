@@ -1320,6 +1320,8 @@ def _train_em_from_counts_native(
     u_probs: dict[str, list[float]],
     *,
     conditioned_fields: Sequence[str],
+    tf_freqs: dict[str, dict[str, float]] | None,
+    tf_collision: dict[str, float] | None,
     max_iterations: int,
     convergence: float,
 ) -> EMResult | None:
@@ -1382,6 +1384,12 @@ def _train_em_from_counts_native(
         converged=bool(converged),
         iterations=int(iterations),
         proportion_matched=float(p_match),
+        # Carried through the kernel path too. The kernel computes only the
+        # numeric half; forgetting these here would drop the TF tables from
+        # every model trained on a box that has the wheel installed, and the
+        # model would look complete.
+        tf_freqs=tf_freqs,
+        tf_collision=tf_collision,
     )
 
 
@@ -1475,6 +1483,8 @@ def train_em_from_counts(
     u_probs: dict[str, list[float]],
     *,
     conditioned_fields: Sequence[str] = (),
+    tf_freqs: dict[str, dict[str, float]] | None = None,
+    tf_collision: dict[str, float] | None = None,
     max_iterations: int = 20,
     convergence: float = 0.001,
 ) -> EMResult:
@@ -1499,10 +1509,27 @@ def train_em_from_counts(
             pass conditioning, constant within a session, which is exactly why
             the counts needed no pass column.
 
-    Not supported here, and refused rather than ignored: negative evidence and
-    term-frequency adjustment. Both need per-pair inputs this function is not
-    given (an NE matrix, and the value frequencies), and silently dropping them
-    would train a different model from the one the config asks for.
+        tf_freqs / tf_collision: per-value frequency tables for fields with
+            ``tf_adjustment``. **Supplied, never derived** -- collapsing
+            identical comparison vectors is exactly what discards the values a
+            TF table is built from. On the one box ``_build_tf_tables`` computes
+            them from the source frame; on a cluster
+            ``spark.em.tf_value_frequencies`` computes the same thing as a
+            distributed ``GROUP BY``. Either way they only have to reach the
+            EMResult, because **TF is a SCORING-time adjustment here**:
+            ``_em_iterate`` contains no reference to tf, so the table never
+            enters the E-step.
+
+            Splink is the other way round by default -- its
+            ``estimate_without_term_frequencies`` is ``False``, so TF joins its
+            E-step via the per-pair path, and its agreement-pattern-counts path
+            is the ``True`` branch. Counted training and TF-in-training are
+            mutually exclusive there too; the difference is that we never put TF
+            in training at all, which is what makes the table separable here.
+
+    Negative evidence remains unsupported and refused rather than ignored: it
+    needs a per-pair NE matrix this function is not given, and silently dropping
+    it would train a different model from the one the config asks for.
     """
     if not pattern_counts:
         raise ValueError("pattern_counts is empty; nothing to train on")
@@ -1512,11 +1539,24 @@ def train_em_from_counts(
             f"per-pair NE matrix that counted comparison vectors do not carry. "
             f"Train it with train_em() on sampled pairs."
         )
-    if any(getattr(f, "tf_adjustment", False) for f in mk.fields):
+    tf_fields = {f.field for f in mk.fields if getattr(f, "tf_adjustment", False)}
+    if tf_fields and not tf_freqs:
         raise NotImplementedError(
-            f"matchkey {mk.name!r} uses term-frequency adjustment, which needs "
-            f"per-value frequencies that counted comparison vectors do not "
-            f"carry. Train it with train_em() on sampled pairs."
+            f"matchkey {mk.name!r} uses term-frequency adjustment on "
+            f"{sorted(tf_fields)}, and counted comparison vectors do not carry "
+            f"the per-value frequencies to build the table from -- collapsing "
+            f"identical vectors is what discards those values. Pass tf_freqs "
+            f"(spark.em.tf_value_frequencies computes it distributed), or train "
+            f"with train_em() on sampled pairs."
+        )
+    # A table for a field that did not opt in means the caller and the config
+    # disagree about which fields are adjusted. The surplus entry would sit in
+    # the persisted model doing nothing until some later scorer honoured it.
+    surplus = set(tf_freqs or {}) - tf_fields
+    if surplus:
+        raise ValueError(
+            f"tf_freqs carries {sorted(surplus)}, which did not opt in to "
+            f"tf_adjustment on matchkey {mk.name!r}"
         )
 
     n_fields = len(mk.fields)
@@ -1533,6 +1573,7 @@ def train_em_from_counts(
     native = _train_em_from_counts_native(
         mk, pattern_counts, u_probs,
         conditioned_fields=conditioned_fields,
+        tf_freqs=tf_freqs, tf_collision=tf_collision,
         max_iterations=max_iterations, convergence=convergence,
     )
     if native is not None:
@@ -1591,6 +1632,8 @@ def train_em_from_counts(
         converged=converged,
         iterations=iterations,
         proportion_matched=p_match,
+        tf_freqs=tf_freqs,
+        tf_collision=tf_collision,
     )
 
 

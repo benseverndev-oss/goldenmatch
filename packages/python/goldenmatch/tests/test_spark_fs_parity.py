@@ -774,3 +774,152 @@ def test_a_different_seed_draws_a_different_sample(train_source):
     a = _random_pair_ids(train_source, max_pairs=10, seed=1)
     b = _random_pair_ids(train_source, max_pairs=10, seed=99)
     assert a != b, "the seed does not reach the sample selection"
+
+
+# ── Phase 2: term-frequency tables, computed distributed ─────────────
+#
+# TF is a SCORING-time adjustment in this engine (`_em_iterate` has no
+# reference to it), so the counted trainer does not need it -- but the MODEL
+# does, and the counts are exactly what discards the values it is built from.
+# `tf_value_frequencies` recovers them from the SOURCE with a separate GROUP BY.
+
+def _tf_config():
+    """`last` opts in to tf_adjustment; `first` does not.
+
+    One of each is the point: a builder that adjusted every field, or none,
+    would pass a test that only had opted-in fields in it.
+    """
+    mk = _mk()
+    mk.fields[1].tf_adjustment = True
+    return GoldenMatchConfig(
+        matchkeys=[mk],
+        blocking=BlockingConfig(
+            strategy="multi_pass",
+            passes=[
+                BlockingKeyConfig(fields=["city"]),
+                BlockingKeyConfig(fields=["last"]),
+            ],
+        ),
+    )
+
+
+def test_distributed_tf_tables_equal_the_one_box_tables(train_source):
+    """THE gate: the same numbers `core.tf_tables.value_frequencies` produces.
+
+    That function is the reference a locally-trained model's TF table comes
+    from, so comparing against it -- rather than against a re-derived count --
+    is what makes the distributed table the SAME table. A TF adjustment built
+    on a different denominator still yields weights in a plausible range.
+    """
+    import polars as pl
+    from goldenmatch.core.tf_tables import value_frequencies
+    from goldenmatch.spark.em import tf_value_frequencies
+
+    cfg = _tf_config()
+    mk = cfg.get_matchkeys()[0]
+    got_freqs, got_collision = tf_value_frequencies(train_source, mk)
+
+    pdf = pl.DataFrame(
+        {c: [r[i] for r in _TRAIN_ROWS] for i, c in enumerate(_COLS)}
+    )
+    want = value_frequencies(pdf, "last", list(mk.fields[1].transforms or []))
+
+    assert got_freqs is not None
+    assert set(got_freqs) == {"last"}, (
+        f"only the opted-in field may get a table; got {sorted(got_freqs)}"
+    )
+    assert got_freqs["last"] == pytest.approx(want, abs=1e-12)
+    assert got_collision["last"] == pytest.approx(
+        sum(p * p for p in want.values()), abs=1e-12
+    )
+
+
+def test_a_matchkey_with_no_tf_field_builds_no_tables(train_source):
+    """`(None, None)`, matching the one-box -- not an empty dict, which would
+    read as 'computed, and everything is uniform'."""
+    from goldenmatch.spark.em import tf_value_frequencies
+
+    freqs, collision = tf_value_frequencies(train_source, _mk())
+    assert freqs is None and collision is None
+
+
+def test_the_tf_denominator_counts_SURVIVING_values_not_rows(spark):
+    """Nulls and empties are dropped before the division.
+
+    Dividing by the row count instead would make every frequency smaller in
+    proportion to the column's missingness, so the table would no longer sum to
+    1 and every TF adjustment would be scaled by an arbitrary factor -- in the
+    same direction for every value, which is exactly the kind of error that
+    looks like a tuning choice.
+    """
+    from goldenmatch.spark.em import tf_value_frequencies
+
+    rows = [(0, "a", "smith", "x"), (1, "b", "smith", "x"),
+            (2, "c", None, "x"), (3, "d", "", "x")]
+    df = spark.createDataFrame(rows, _COLS)
+    mk = _mk()
+    mk.fields[1].tf_adjustment = True
+
+    freqs, _ = tf_value_frequencies(df, mk)
+    assert freqs is not None
+    # 2 surviving values, both "smith" -> frequency 1.0, not 2/4.
+    assert freqs["last"] == {"smith": pytest.approx(1.0, abs=1e-12)}
+
+
+def test_an_oversized_tf_table_is_refused_not_collected(train_source):
+    """A TF table has no `prod(levels + 1)` ceiling -- one entry per distinct
+    VALUE -- so collecting one is the driver-OOM class `max_patterns` guards,
+    and it needs its own bound."""
+    from goldenmatch.spark.em import tf_value_frequencies
+
+    mk = _mk()
+    mk.fields[1].tf_adjustment = True
+    with pytest.raises(ValueError, match="max_tf_values"):
+        tf_value_frequencies(train_source, mk, max_tf_values=1)
+
+
+def test_train_em_distributed_no_longer_refuses_tf_and_carries_the_table(
+    train_source,
+):
+    """The end of the Phase 2 gap: a TF config trains distributed.
+
+    It used to raise before submitting anything. Now the table is computed by a
+    separate GROUP BY over the source and carried onto the model, while the EM
+    itself still runs on collapsed vectors that never saw the values.
+    """
+    import polars as pl
+    from goldenmatch.core.tf_tables import value_frequencies
+    from goldenmatch.spark.em import train_em_distributed
+
+    cfg = _tf_config()
+    mk = cfg.get_matchkeys()[0]
+    em = train_em_distributed(train_source, cfg, mk, id_col=_ID)
+
+    pdf = pl.DataFrame(
+        {c: [r[i] for r in _TRAIN_ROWS] for i, c in enumerate(_COLS)}
+    )
+    want = value_frequencies(pdf, "last", list(mk.fields[1].transforms or []))
+    assert em.tf_freqs is not None, "the trained model carries no TF table"
+    assert em.tf_freqs["last"] == pytest.approx(want, abs=1e-12)
+    # And it is still a trained model, not just a table carrier.
+    assert em.m_probs["first"] and em.match_weights["first"]
+
+
+def test_the_tf_table_is_jar_only_too(train_source, jvm_registered):
+    """The transform chain a TF field carries must reach the jar as well.
+
+    Building the table needs the field TRANSFORMED exactly as scoring
+    transforms it -- a value normalised one way here and another way at scoring
+    time gets a frequency that belongs to a different string.
+    """
+    from goldenmatch.spark.em import tf_value_frequencies
+    from goldenmatch.spark.jvm import TRANSFORM_UDF_NAME
+
+    mk = _mk()
+    mk.fields[1].tf_adjustment = True
+    want, _ = tf_value_frequencies(train_source, mk)
+    got, _ = tf_value_frequencies(
+        train_source, mk, transform_udf=TRANSFORM_UDF_NAME
+    )
+    assert got is not None and want is not None
+    assert got["last"] == pytest.approx(want["last"], abs=1e-12)

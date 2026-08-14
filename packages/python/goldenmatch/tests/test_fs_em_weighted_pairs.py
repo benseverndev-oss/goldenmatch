@@ -592,3 +592,121 @@ def test_the_kernel_refuses_a_non_positive_count():
     with pytest.raises(ValueError, match="non-positive"):
         fn([2, 2], [[1, 1]], [0.0], [[0.9, 0.1], [0.9, 0.1]], [False, False],
            20, 0.001)
+
+
+# ── Phase 2: term-frequency tables, supplied rather than derived ─────
+
+def _tf_matchkey():
+    from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+
+    mk = MatchkeyConfig(
+        name="fs", type="probabilistic",
+        fields=[
+            MatchkeyField(field="first", scorer="jaro_winkler", levels=2,
+                          partial_threshold=0.8),
+            MatchkeyField(field="last", scorer="jaro_winkler", levels=2,
+                          partial_threshold=0.8),
+        ],
+    )
+    mk.fields[1].tf_adjustment = True
+    return mk
+
+
+def test_tf_is_still_refused_when_no_table_is_supplied():
+    """The counted vectors cannot DERIVE per-value frequencies.
+
+    Collapsing identical comparison vectors is exactly what discards the values
+    a TF table is built from, so a counted trainer asked for TF with nothing to
+    build it from must refuse. Training without the adjustment would produce a
+    model the config did not ask for, and every weight in it would look normal.
+    """
+    from goldenmatch.core.probabilistic import train_em_from_counts
+
+    with pytest.raises(NotImplementedError, match="term-frequency"):
+        train_em_from_counts(
+            _tf_matchkey(), [((1, 1), 500), ((0, 1), 300)],
+            {"first": [0.9, 0.1], "last": [0.85, 0.15]},
+        )
+
+
+def test_a_supplied_tf_table_is_accepted_and_carried_onto_the_model():
+    """TF is a SCORING-time adjustment here, so a table computed elsewhere is
+    all the counted trainer needs.
+
+    `_em_iterate` contains no reference to tf at all -- verified, not assumed --
+    so the table never enters the E-step. It is built by `_build_tf_tables` on
+    the one-box and by a distributed GROUP BY on a cluster, and either way it
+    only has to reach the EMResult that scoring reads.
+    """
+    from goldenmatch.core.probabilistic import train_em_from_counts
+
+    tf_freqs = {"last": {"smith": 0.4, "jones": 0.35, "wong": 0.25}}
+    tf_collision = {"last": sum(p * p for p in tf_freqs["last"].values())}
+
+    em = train_em_from_counts(
+        _tf_matchkey(), [((1, 1), 500), ((0, 1), 300)],
+        {"first": [0.9, 0.1], "last": [0.85, 0.15]},
+        tf_freqs=tf_freqs, tf_collision=tf_collision,
+    )
+
+    assert em.tf_freqs == tf_freqs
+    assert em.tf_collision == tf_collision
+    # And the model is otherwise a normal trained model.
+    assert em.m_probs["first"] and em.match_weights["first"]
+
+
+def test_a_tf_table_for_a_field_that_did_not_ask_for_it_is_refused():
+    """A table keyed on a non-TF field means the caller and the config disagree
+    about which fields are adjusted, and the surplus entry would sit in the
+    persisted model doing nothing -- until some later scorer honoured it."""
+    from goldenmatch.core.probabilistic import train_em_from_counts
+
+    with pytest.raises(ValueError, match="did not opt in"):
+        train_em_from_counts(
+            _tf_matchkey(), [((1, 1), 500), ((0, 1), 300)],
+            {"first": [0.9, 0.1], "last": [0.85, 0.15]},
+            tf_freqs={"first": {"ann": 1.0}}, tf_collision={"first": 1.0},
+        )
+
+
+def test_tf_tables_are_refused_when_the_matchkey_has_no_tf_field():
+    """Supplying tables nothing asked for is a caller error, not a no-op."""
+    from goldenmatch.core.probabilistic import train_em_from_counts
+
+    with pytest.raises(ValueError, match="did not opt in"):
+        train_em_from_counts(
+            _make_probabilistic_mk(), [((1, 1, 1), 5)],
+            {"first_name": [0.5, 0.3, 0.2], "last_name": [0.9, 0.1],
+             "zip": [0.9, 0.1]},
+            tf_freqs={"last_name": {"lee": 1.0}}, tf_collision={"last_name": 1.0},
+        )
+
+
+@pytest.mark.parametrize("native", ["0", "auto"])
+def test_the_tf_table_survives_BOTH_the_kernel_and_the_fallback(monkeypatch, native):
+    """The kernel path returns early, so it must carry the tables too.
+
+    Written after finding that it did not: `_train_em_from_counts_native`
+    builds its own EMResult and returned before the tf arguments were read, so
+    on any box with the wheel installed the tables were silently dropped and
+    the model still looked complete. The earlier TF test passed only because it
+    ran under GOLDENMATCH_NATIVE=0 -- which is precisely the environment skew
+    that hides this class of bug.
+
+    Parametrized rather than skipped: `auto` is a no-op where the kernel is
+    absent, so this always exercises at least the fallback and exercises both
+    wherever the kernel is built.
+    """
+    from goldenmatch.core.probabilistic import train_em_from_counts
+
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", native)
+    tf_freqs = {"last": {"smith": 0.4, "jones": 0.35, "wong": 0.25}}
+    tf_collision = {"last": sum(p * p for p in tf_freqs["last"].values())}
+
+    em = train_em_from_counts(
+        _tf_matchkey(), [((1, 1), 500), ((0, 1), 300)],
+        {"first": [0.9, 0.1], "last": [0.85, 0.15]},
+        tf_freqs=tf_freqs, tf_collision=tf_collision,
+    )
+    assert em.tf_freqs == tf_freqs, f"tf_freqs dropped under NATIVE={native}"
+    assert em.tf_collision == tf_collision

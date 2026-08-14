@@ -349,13 +349,42 @@ def test_negative_evidence_is_refused_before_a_job_is_submitted():
         )
 
 
-def test_term_frequency_adjustment_is_refused_before_a_job_is_submitted():
-    """TF needs per-value frequencies the counts do not carry."""
+def test_term_frequency_adjustment_is_NO_LONGER_refused(monkeypatch):
+    """Phase 2 lifted this refusal, so the pre-flight must let TF through.
+
+    It used to raise NotImplementedError before touching the frame. It cannot
+    any more: the counts still cannot DERIVE a TF table, but the table is not
+    derived from them -- `tf_value_frequencies` recovers it from the SOURCE
+    with a separate GROUP BY, and TF never enters the E-step in this engine
+    anyway (`_em_iterate` has no reference to it).
+
+    Asserted by the frame being USED: `_ExplodingFrame` raises on any attribute
+    access, so reaching it proves the config was accepted rather than refused.
+    A `pytest.raises(NotImplementedError)` that had simply been deleted would
+    leave nothing pinning which way this now goes.
+    """
     from goldenmatch.spark.em import train_em_distributed
 
     mk = _fs_matchkey()
     mk.fields[0].tf_adjustment = True
-    with pytest.raises(NotImplementedError, match="term-frequency"):
+    with pytest.raises(AssertionError, match="before the config was refused"):
+        train_em_distributed(
+            _ExplodingFrame(), _static_config(mk, [["city"]]), mk, id_col="id"
+        )
+
+
+def test_negative_evidence_is_STILL_refused_alongside_tf():
+    """Lifting the TF refusal must not have lifted the NE one with it.
+
+    They sat in the same guard and are not the same problem: NE needs a
+    per-pair matrix that nothing outside the pair loop can reconstruct, whereas
+    a TF table is a property of the source column.
+    """
+    from goldenmatch.spark.em import train_em_distributed
+
+    mk = _ne_matchkey()
+    mk.fields[0].tf_adjustment = True
+    with pytest.raises(NotImplementedError, match="negative-evidence"):
         train_em_distributed(
             _ExplodingFrame(), _static_config(mk, [["city"]]), mk, id_col="id"
         )
