@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 476,
+      "module_count": 477,
       "modules": [
         {
           "module": "goldenmatch",
@@ -4685,6 +4685,23 @@
             "goldenmatch.config.schemas",
             "goldenmatch.core.match_one",
             "goldenmatch.core.scorer"
+          ]
+        },
+        {
+          "module": "goldenmatch.core.segments",
+          "file": "packages/python/goldenmatch/goldenmatch/core/segments.py",
+          "purpose": "Segment labels — which *party* each column describes.",
+          "defines": [
+            "Segment",
+            "_to_segment",
+            "column_segments",
+            "detect_segments",
+            "is_heterogeneous",
+            "segments_from_layers",
+            "segments_from_schema"
+          ],
+          "imports": [
+            "infermap"
           ]
         },
         {

@@ -7,6 +7,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **Segment labels: which party each column describes (#2574).**
+  `goldenmatch.core.segments` is a read-only consumer of InferMap's identity
+  layers — `segments_from_schema` reads them off an `InferredSchema` GoldenPipe
+  already produced (free), `detect_segments` detects on demand, and
+  `column_segments` / `is_heterogeneous` are the helpers per-block configuration
+  (#2575) needs as its input. Deliberately inert with respect to matching: it
+  labels, it does not vary scorers, thresholds or blocking, and nothing here
+  reaches the vectorized fast paths or the global-EM assumptions. InferMap stays
+  an optional dependency (lazy import, structural adaptation, fail-open to `[]`).
 - **Zero-config now says when a frame looks like several sources concatenated
   together, and routes to `match_df` (#2540).** `dedupe_df` compares candidate
   pairs WITHIN one frame. When that frame is two catalogues stacked with

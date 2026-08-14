@@ -154,12 +154,20 @@ class FieldMapping:
 
 @dataclass(frozen=True)
 class InferredSchema:
-    """Result of running InferMap with a domain pack as target."""
+    """Result of running InferMap with a domain pack as target.
+
+    ``layers`` carries the identity layers (parties) detected over the same
+    frame — the *who is in this table* axis, orthogonal to ``fields``' *what
+    is this column* axis. It is empty when layer detection was skipped or
+    found nothing, so consumers that predate layers are unaffected: absence
+    means "no layer information", never "one anonymous population".
+    """
 
     domain: str
     fields: dict[str, FieldMapping]
     confidence: float
     schema_version: int = SCHEMA_VERSION
+    layers: list[IdentityLayer] = field(default_factory=list)
 
     @property
     def unmapped(self) -> list[str]:
