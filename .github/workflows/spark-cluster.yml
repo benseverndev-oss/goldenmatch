@@ -36,6 +36,11 @@ on:
         required: false
         type: string
         default: ""
+      train_rows:
+        description: "Rows for the distributed FS training scale run (0 = skip)"
+        required: false
+        type: string
+        default: "1000000"
   schedule:
     # Nightly, after the usual working day. Cheap insurance that the topology
     # still works; nothing here gates a merge.
@@ -377,6 +382,43 @@ jobs:
       # The inventory against REAL workers. Note there is no
       # GOLDENMATCH_SPARK_PYENV here and that is the point: these containers are
       # stock Spark images with no goldenmatch and no pyarrow, so "needs a
+      # Distributed FS TRAINING at scale, on the real workers.
+      #
+      # Everything else in this lane runs on an eight-row fixture: correctness
+      # and the jar-only property, nothing about size. This is the first thing
+      # that asks whether `train_em_distributed` works at a scale one box would
+      # struggle with, which is the central claim of the distributed tier.
+      #
+      # The fixture is generated IN SPARK (`spark.range` + SQL), never through
+      # `createDataFrame`, because the driver is where this tier's scale wall
+      # has historically been -- a driver-materialised fixture would hit the
+      # driver's ceiling and report it as a training limit.
+      #
+      # continue-on-error: this is a MEASUREMENT, not a gate. Its failure is a
+      # fact about how far the tier scales on a 2-worker CI cluster, and a red
+      # X here would say "something broke" when what it found is the ceiling.
+      # The wall/pattern numbers land in the job summary either way.
+      - name: Distributed FS training at scale
+        if: inputs.train_rows != '0' && inputs.train_rows != ''
+        continue-on-error: true
+        timeout-minutes: 25
+        env:
+          GOLDENMATCH_SPARK_REMOTE: "sc://localhost:15002"
+          GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
+          # No GOLDENMATCH_SPARK_PYENV: the executors stay bare, so this also
+          # proves the scale path is jar-only and not merely the 8-row one.
+        run: |
+          set -euo pipefail
+          ROWS="${{ inputs.train_rows || '1000000' }}"
+          python scripts/spark_fs_train_scale.py --rows "$ROWS" --out spark-fs-train-scale.json
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        if: always()
+        with:
+          name: spark-fs-train-scale
+          path: spark-fs-train-scale.json
+          if-no-files-found: ignore
+
       # Python worker" fails on its own rather than because an empty virtualenv
       # was shipped to make it fail. The local lane can only simulate this.
       - name: Inventory -- what runs with no Python on REAL executors
