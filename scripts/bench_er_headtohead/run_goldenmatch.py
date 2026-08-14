@@ -227,6 +227,22 @@ def main() -> None:
             from goldenmatch.core.autoconfig import auto_configure_probabilistic_df
 
             cfg = auto_configure_probabilistic_df(df)
+            # Cut where the bench SAYS it cuts. `--threshold` was parsed and
+            # written into the result JSON but never applied on this path, so
+            # every FS datapoint was produced at GoldenMatch's internal
+            # fallback link cut (a fixed 0.99 under posterior calibration,
+            # `source: "fallback"` -- nothing about the dataset chose it) while
+            # the file claimed 0.85 and `run_splink.py` really did cluster at
+            # 0.85 via `cluster_pairwise_predictions_at_threshold`.
+            #
+            # So the two engines were compared ~14 points apart on the same
+            # probability scale, which is the opposite of what this lane's
+            # `GOLDENMATCH_FS_CALIBRATED=posterior` exists to guarantee.
+            # Measured on a 20K person fixture, the cut alone is worth
+            # F1 0.5406 (at 0.95) -> 0.8772 (at 0.85) with precision staying
+            # 1.0000 throughout -- see `diagnose_fs_recall.py`.
+            for mk in cfg.get_matchkeys():
+                mk.link_threshold = args.threshold
             # Force rerank off so a 3+ field weighted matchkey can't pull a
             # cross-encoder model down from HuggingFace at dedupe time.
             for mk in cfg.get_matchkeys():
