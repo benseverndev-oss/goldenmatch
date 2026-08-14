@@ -5,7 +5,7 @@
 ## Interfaces
 - Python API: `import infermap` — `map()`, `from_config()`, `extract_schema()`, `MapEngine`, `default_scorers`, `@infermap.scorer` (custom scorer), `detect_domain`
 - CLI: `infermap map`, `infermap apply`, `infermap inspect`, `infermap validate`, `infermap mcp-serve`
-- MCP Server: `infermap mcp-serve` (4 tools: `map`, `inspect`, `validate`, `apply`; stdio or `--transport http`). Also aggregated through `goldensuite-mcp`.
+- MCP Server: `infermap mcp-serve` (5 tools: `map`, `inspect`, `layers`, `validate`, `apply`; stdio or `--transport http`). Also aggregated through `goldensuite-mcp`.
 - TypeScript / Edge: `npm install infermap` — `map()`, `MapEngine`, `defineScorer()`; zero runtime deps, runs on Vercel/Next.js Edge Runtime, Cloudflare Workers, Deno, browsers
 
 ## Install

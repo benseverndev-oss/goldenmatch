@@ -402,3 +402,24 @@ def test_shipped_packs_declare_loadable_roles():
                 assert type_name in pack.types, (
                     f"{name}.{role_name}.typical_types references unknown type {type_name!r}"
                 )
+
+
+def test_mcp_layers_tool_is_registered_and_returns_layers(tmp_path):
+    """The MCP `layers` tool mirrors the CLI command (api_parity gates the pair)."""
+    from infermap.mcp.server import HANDLERS, TOOLS
+
+    assert "layers" in {t.name for t in TOOLS}
+    assert "layers" in HANDLERS
+
+    csv = tmp_path / "loan.csv"
+    csv.write_text(
+        "lender_name,lender_id,borrower_name,borrower_ssn,loan_id\nA,1,B,2,3\n",
+        encoding="utf-8",
+    )
+    result = HANDLERS["layers"]({"source": str(csv), "domain": "finance"})
+    assert result["domain"] == "finance"
+    assert {(layer["role"], layer["kind"]) for layer in result["layers"]} == {
+        ("lender", "organization"),
+        ("borrower", "person"),
+    }
+    assert result["unassigned"] == ["loan_id"]

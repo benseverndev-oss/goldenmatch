@@ -84,6 +84,39 @@ TOOLS = [
         },
     ),
     Tool(
+        name="layers",
+        description=(
+            "Detect the identity layers (parties) a data source refers to — e.g. a loan "
+            "tape's lender AND borrower, or a claims file's patient, provider and payer. "
+            "Distinct from domain detection, which returns one industry vertical for the "
+            "whole source. Each layer is the group of columns describing one party, with "
+            "its kind (person/organization/asset/place), a score, and the evidence behind "
+            "it. Unrecognised parties are reported with role 'unknown' rather than dropped; "
+            "columns belonging to no party land in 'unassigned'."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "source": {
+                    "type": "string",
+                    "description": "Path to data source (CSV, Parquet, Excel, DB URI, schema YAML)",
+                },
+                "domain": {
+                    "type": "string",
+                    "description": (
+                        "Domain pack to use (e.g. finance, healthcare). Optional — "
+                        "auto-detected when omitted; affix detection still works with no pack."
+                    ),
+                },
+                "table": {
+                    "type": "string",
+                    "description": "Table name for DB sources (optional)",
+                },
+            },
+            "required": ["source"],
+        },
+    ),
+    Tool(
         name="validate",
         description=(
             "Validate that a source file's columns satisfy a saved mapping config. "
@@ -186,6 +219,40 @@ def _handle_inspect(args: dict) -> dict:
     }
 
 
+def _handle_layers(args: dict) -> dict:
+    from types import SimpleNamespace
+
+    from infermap.layers import detect_identity_layers
+    from infermap.providers import extract_schema
+
+    kwargs: dict = {}
+    if args.get("table"):
+        kwargs["table"] = args["table"]
+
+    schema = extract_schema(args["source"], **kwargs)
+    columns = [f.name for f in schema.fields]
+    result = detect_identity_layers(
+        SimpleNamespace(columns=columns), domain=args.get("domain")
+    )
+    return {
+        "source_name": schema.source_name or args["source"],
+        "domain": result.domain,
+        "layer_count": len(result.layers),
+        "layers": [
+            {
+                "role": layer.role,
+                "kind": layer.kind,
+                "columns": layer.columns,
+                "score": layer.score,
+                "reason": layer.reason,
+                "evidence": layer.evidence,
+            }
+            for layer in result.layers
+        ],
+        "unassigned": result.unassigned,
+    }
+
+
 def _handle_validate(args: dict) -> dict:
     from infermap.config import from_config
     from infermap.providers import extract_schema
@@ -229,6 +296,7 @@ def _handle_apply(args: dict) -> dict:
 HANDLERS = {
     "map": _handle_map,
     "inspect": _handle_inspect,
+    "layers": _handle_layers,
     "validate": _handle_validate,
     "apply": _handle_apply,
 }

@@ -9313,6 +9313,38 @@
           ]
         },
         {
+          "command": "layers",
+          "options": [
+            {
+              "name": "source",
+              "type": "text",
+              "required": true,
+              "help": "Source data to inspect (CSV path, schema YAML, etc.)"
+            },
+            {
+              "name": "--domain",
+              "type": "text",
+              "required": false,
+              "default": "None",
+              "help": "Domain pack to use (auto-detected when omitted)"
+            },
+            {
+              "name": "--table",
+              "type": "text",
+              "required": false,
+              "default": "None",
+              "help": "Table name for DB sources"
+            },
+            {
+              "name": "--verbose",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Enable verbose logging"
+            }
+          ]
+        },
+        {
           "command": "map",
           "options": [
             {
@@ -9458,6 +9490,10 @@
         {
           "name": "inspect",
           "description": "Inspect a data source — show fields, types, sample values, null rates, unique rates, and statistics."
+        },
+        {
+          "name": "layers",
+          "description": "Detect the identity layers (parties) a data source refers to — e.g. a loan tape's lender AND borrower, or a claims file's patient, provider and payer. Distinct from domain detection, which returns one industry vertical for the whole source. Each layer is the group of columns describing one party, with its kind (person/organization/asset/place), a score, and the evidence behind it. Unrecognised parties are reported with role 'unknown' rather than dropped; columns belonging to no party land in 'unassigned'."
         },
         {
           "name": "map",

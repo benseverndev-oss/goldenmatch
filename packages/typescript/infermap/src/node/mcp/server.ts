@@ -4,7 +4,7 @@
  *
  * Node-only: uses node:fs, node:path, node:readline. NOT edge-safe.
  *
- * Exposes 4 tools (`map`, `inspect`, `validate`, `apply`) wired to the
+ * Exposes 5 tools (`map`, `inspect`, `layers`, `validate`, `apply`) wired to the
  * existing InferMap TS core/node APIs (MapEngine, file/DB providers,
  * fromConfig). Also exposes resources (Supported Domains, Scorer Pipeline,
  * Last Mapping Report) and prompts (map-walkthrough, compare-schemas,
@@ -25,6 +25,7 @@ import { createInterface } from "node:readline";
 
 import { MapEngine } from "../../core/engine.js";
 import { fromConfig } from "../../core/config.js";
+import { detectIdentityLayers } from "../../core/layers.js";
 import { mapResultToReport } from "../../core/types.js";
 import type { MapResultReport } from "../../core/types.js";
 import type { SchemaInfo } from "../../core/types.js";
@@ -99,6 +100,37 @@ export const TOOLS: readonly Tool[] = [
         source: {
           type: "string",
           description: "Path to data source (CSV, JSON, DB URI, schema definition)",
+        },
+        table: {
+          type: "string",
+          description: "Table name for DB sources (optional)",
+        },
+      },
+      required: ["source"],
+    },
+  },
+  {
+    name: "layers",
+    description:
+      "Detect the identity layers (parties) a data source refers to — e.g. a loan " +
+      "tape's lender AND borrower, or a claims file's patient, provider and payer. " +
+      "Distinct from domain detection, which returns one industry vertical for the " +
+      "whole source. Each layer is the group of columns describing one party, with " +
+      "its kind (person/organization/asset/place), a score, and the evidence behind " +
+      "it. Unrecognised parties are reported with role 'unknown' rather than dropped; " +
+      "columns belonging to no party land in 'unassigned'.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        source: {
+          type: "string",
+          description: "Path to data source (CSV, JSON, DB URI, schema definition)",
+        },
+        domain: {
+          type: "string",
+          description:
+            "Domain pack to use (e.g. finance, healthcare). Optional — auto-detected " +
+            "when omitted; affix detection still works with no pack.",
         },
         table: {
           type: "string",
@@ -246,6 +278,29 @@ async function handleInspect(args: Record<string, unknown>): Promise<unknown> {
   };
 }
 
+async function handleLayers(args: Record<string, unknown>): Promise<unknown> {
+  const source = String(args["source"]);
+  const table = typeof args["table"] === "string" ? (args["table"] as string) : undefined;
+  const domain = typeof args["domain"] === "string" ? (args["domain"] as string) : undefined;
+  const schema = await resolveSchema(source, table);
+  const columns = schema.fields.map((f) => f.name);
+  const result = detectIdentityLayers({ columns }, domain);
+  return {
+    source_name: schema.sourceName || source,
+    domain: result.domain,
+    layer_count: result.layers.length,
+    layers: result.layers.map((l) => ({
+      role: l.role,
+      kind: l.kind,
+      columns: l.columns,
+      score: l.score,
+      reason: l.reason,
+      evidence: l.evidence,
+    })),
+    unassigned: result.unassigned,
+  };
+}
+
 async function handleValidate(args: Record<string, unknown>): Promise<unknown> {
   const cfgText = await readFile(sanitizePath(args["config"]), "utf8");
   const mappingResult = fromConfig(cfgText);
@@ -311,6 +366,7 @@ type Handler = (args: Record<string, unknown>) => Promise<unknown>;
 const HANDLERS: Record<string, Handler> = {
   map: handleMap,
   inspect: handleInspect,
+  layers: handleLayers,
   validate: handleValidate,
   apply: handleApply,
 };

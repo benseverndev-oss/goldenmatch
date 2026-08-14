@@ -16,6 +16,7 @@ mcp_tools:
   shared:
   - apply
   - inspect
+  - layers
   - map
   - validate
   python_only: []
@@ -24,6 +25,7 @@ cli_commands:
   shared:
   - apply
   - inspect
+  - layers
   - map
   - mcp-serve
   - validate
