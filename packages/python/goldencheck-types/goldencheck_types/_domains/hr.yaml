@@ -64,3 +64,26 @@ types:
     value_signals:
       numeric: true
     suppress: ["pattern_consistency"]
+
+# Four suppressed party names rescued here: `employee` and `staff` (via the
+# `employee_id` and `employment_status` types) and `manager` / `supervisor`
+# (via the `manager` type). An HR dataset whose two parties are employee and
+# manager could previously detect neither.
+roles:
+  employee:
+    kind: person
+    name_hints: ["employee", "worker", "personnel", "associate", "staff"]
+    typical_types: ["employee_id", "job_title", "salary", "hire_date"]
+
+  manager:
+    kind: person
+    name_hints: ["manager", "supervisor", "reports_to"]
+    typical_types: ["manager"]
+
+  employer:
+    kind: organization
+    name_hints: ["employer", "company", "firm"]
+
+  candidate:
+    kind: person
+    name_hints: ["candidate", "applicant", "recruit"]

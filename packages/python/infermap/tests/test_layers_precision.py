@@ -7,13 +7,17 @@ CONVENTION instead, independent of how the detector scores it, and this module
 pins the result.
 
 **The floors below are a ratchet, not a target.** They record what the detector
-does TODAY. Specificity started at 56% -- it invented a party on nearly half of
-all single-entity tables -- and the lineage/audit/aggregate stop-list took it to
-100%. Sensitivity is still 71% and the two misses are a known bug, not noise: a
-field type's ``name_hints`` can suppress a party qualifier outright (see
-``test_partition_sensitivity_does_not_regress``). The floors exist so these
-numbers cannot quietly get worse while other work lands. Raising one is the
-point; lowering one is a regression that needs a reason in the diff.
+does TODAY, and both are now at 1.0 on this corpus. Specificity started at 56%
+-- it invented a party on nearly half of all single-entity tables -- and the
+lineage/audit/aggregate stop-list took it to 100%. Sensitivity started at 71%,
+held back by field-type ``name_hints`` suppressing party qualifiers outright,
+and declaring those parties as pack roles took it to 100%. The floors exist so
+neither can quietly get worse while other work lands; lowering one is a
+regression that needs a reason in the diff.
+
+A corpus both floors sit at 1.0 on has stopped discriminating, which is a
+reason to grow it rather than to celebrate -- ``test_layers_fk_groundtruth.py``
+scores the same detector against labels nobody here wrote, and is at 92%.
 
 Both directions are pinned deliberately. A negatives-only corpus is scored 100%
 by a detector that never splits anything, so specificity is only meaningful
@@ -38,7 +42,7 @@ from layers_precision import run  # noqa: E402
 #: is the property that decides whether per-block configuration (#2575) can
 #: trust a segmentation at all.
 MIN_SPECIFICITY = 1.0
-MIN_SENSITIVITY_PARTITION = 0.71
+MIN_SENSITIVITY_PARTITION = 1.0
 
 
 def _summary():

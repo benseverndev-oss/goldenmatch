@@ -24,3 +24,40 @@ types:
     value_signals:
       max_unique: 100
     suppress: ["uniqueness"]
+
+# The starkest case of the suppression bug. The `parties` field type lists
+# `plaintiff`, `defendant`, `attorney` and `counsel` among its name_hints, and
+# `court` is its own type -- so every party this vertical has was in the
+# stop-list and none could open a layer. Declaring them as roles is what lifts
+# that, since a role declaration overrides the type stop-list.
+roles:
+  plaintiff:
+    kind: person
+    name_hints: ["plaintiff", "claimant", "petitioner", "complainant"]
+    typical_types: ["parties"]
+
+  defendant:
+    kind: person
+    name_hints: ["defendant", "respondent", "accused"]
+    typical_types: ["parties"]
+
+  counsel:
+    kind: person
+    name_hints: ["counsel", "attorney", "lawyer", "solicitor"]
+
+  judge:
+    kind: person
+    name_hints: ["judge", "justice", "magistrate"]
+
+  court:
+    kind: organization
+    name_hints: ["court", "tribunal"]
+    typical_types: ["court"]
+
+  firm:
+    kind: organization
+    name_hints: ["firm", "practice", "chambers"]
+
+  client:
+    kind: person
+    name_hints: ["client", "principal"]

@@ -20,3 +20,24 @@ types:
   billing:
     name_hints: ["nights", "occupancy", "rate_per_night", "confirmation_number"]
     suppress: ["pattern_consistency"]
+
+# `guest` is declared to lift its suppression (it appears in the `room` type's
+# name_hints) -- the central party of the vertical was undetectable.
+roles:
+  guest:
+    kind: person
+    name_hints: ["guest", "occupant", "traveler", "patron"]
+    typical_types: ["reservation", "stay"]
+
+  property:
+    kind: place
+    name_hints: ["hotel", "property", "resort", "lodge", "venue"]
+    typical_types: ["room"]
+
+  agency:
+    kind: organization
+    name_hints: ["agency", "ota", "channel"]
+
+  staff:
+    kind: person
+    name_hints: ["concierge", "housekeeper"]
