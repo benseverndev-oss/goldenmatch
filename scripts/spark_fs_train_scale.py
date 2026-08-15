@@ -50,32 +50,70 @@ import time
 def build_fixture(spark, rows: int, dup: int, blocks_per_key: int):
     """A person-shaped frame with a known duplicate structure, built in-engine.
 
-    ``dup`` rows per entity, so the true-match count is known:
-    ``n_entities * C(dup, 2)``. Blocking keys are derived from the entity id so
-    duplicates land in the same block -- a fixture whose duplicates never block
-    together would measure an empty candidate set very quickly and prove
-    nothing.
+    ``dup`` rows per entity, so the true-match count is known. Blocking keys are
+    derived from the entity id so duplicates land in the same block -- a fixture
+    whose duplicates never block together would measure an empty candidate set
+    very quickly and prove nothing.
+
+    ## Entropy is the point, and the first version of this had none
+
+    The original generator perturbed ONE field with ONE of two spellings, so
+    9.5M candidate pairs collapsed to **3 and 2 distinct comparison vectors**.
+    That measured the collapse mechanism working on data with nothing to
+    collapse -- it proved `prod(levels + 1)` bounds the driver-side EM without
+    ever approaching the bound.
+
+    Every field is now perturbed INDEPENDENTLY, by a per-(row, field) hash:
+
+      * a character dropped (a truncation typo),
+      * a character appended (a fat-finger typo),
+      * nulled entirely (missing data -> the `-1` unobserved level),
+      * left alone.
+
+    Independence is what produces variety: with five fields each landing on
+    agree / partial / unobserved, the reachable vector space is in the hundreds,
+    and which of them actually occur is a property of the data rather than of
+    the generator's single knob.
+
+    Deterministic despite being pseudo-random: `xxhash64(id, field_seed)` is a
+    pure function of the row, so two runs at the same scale produce byte-
+    identical fixtures and a regression is a real change rather than a reroll.
     """
     from pyspark.sql import functions as F
 
     n_entities = max(rows // max(dup, 1), 1)
     ent = F.col("id") % F.lit(n_entities)
-    # A cheap deterministic perturbation: one row in `dup` gets a variant
-    # spelling, so comparison vectors are not all "agree on everything".
-    variant = (F.col("id") / F.lit(n_entities)).cast("int") % F.lit(max(dup, 1))
+    ent_s = ent.cast("string")
+
+    def perturbed(base, seed: int):
+        h = F.pmod(F.xxhash64(F.col("id"), F.lit(seed)), F.lit(10))
+        return (
+            F.when(h < F.lit(6), base)                                    # 60% clean
+             .when(h < F.lit(8), F.substring(base, 1, 3))                 # 20% truncated
+             .when(h < F.lit(9), F.concat(base, F.lit("x")))              # 10% typo
+             .otherwise(F.lit(None).cast("string"))                       # 10% missing
+        )
+
+    first = F.concat(F.lit("ann"), ent_s)
+    last = F.concat(F.lit("lee"), (ent % F.lit(max(n_entities // 3, 1))).cast("string"))
+    dob = F.concat(F.lit("19"), F.lpad((ent % F.lit(80)).cast("string"), 2, "0"),
+                   F.lit("-01-01"))
+    zipc = F.concat(F.lit("z"), F.lpad((ent % F.lit(500)).cast("string"), 3, "0"))
+    city = F.concat(F.lit("city"), (ent % F.lit(40)).cast("string"))
 
     return spark.range(rows).select(
         F.col("id").alias("__row_id__"),
-        F.when(variant == 0, F.concat(F.lit("ann"), ent.cast("string")))
-         .otherwise(F.concat(F.lit("anna"), ent.cast("string"))).alias("first"),
-        F.concat(F.lit("lee"), (ent % F.lit(max(n_entities // 3, 1))).cast("string"))
-         .alias("last"),
-        # The blocking key: `blocks_per_key` entities share one value, so block
-        # size is about `dup * blocks_per_key` and the candidate count stays
-        # linear in rows rather than quadratic.
-        F.concat(F.lit("k"), (ent / F.lit(max(blocks_per_key, 1))).cast("int").cast("string"))
+        perturbed(first, 101).alias("first"),
+        perturbed(last, 202).alias("last"),
+        perturbed(dob, 303).alias("dob"),
+        perturbed(zipc, 404).alias("zip"),
+        perturbed(city, 505).alias("city"),
+        # The blocking key is NEVER perturbed: it decides which pairs are
+        # compared at all, so corrupting it would silently shrink the candidate
+        # set and make a smaller run look like a faster one.
+        F.concat(F.lit("k"),
+                 (ent / F.lit(max(blocks_per_key, 1))).cast("int").cast("string"))
          .alias("blk"),
-        F.concat(F.lit("z"), (ent % F.lit(500)).cast("string")).alias("zip"),
     )
 
 
@@ -100,13 +138,24 @@ def make_config():
             ],
         ),
         matchkeys=[
+            # FIVE fields at three levels each. The comparison-vector space is
+            # `prod(levels + 1)` = 4^5 = 1,024, so the driver-side EM has a
+            # bound worth testing. The previous two-field / two-level config
+            # capped it at 9 -- the run reported 3 and 2 distinct patterns and
+            # could not have reported more than 9 whatever the data looked like.
             MatchkeyConfig(
                 name="fs", type="probabilistic",
                 fields=[
                     MatchkeyField(field="first", scorer="jaro_winkler",
-                                  levels=2, partial_threshold=0.8),
+                                  levels=3, partial_threshold=0.7),
                     MatchkeyField(field="last", scorer="jaro_winkler",
-                                  levels=2, partial_threshold=0.8),
+                                  levels=3, partial_threshold=0.7),
+                    MatchkeyField(field="dob", scorer="levenshtein",
+                                  levels=3, partial_threshold=0.7),
+                    MatchkeyField(field="zip", scorer="jaro_winkler",
+                                  levels=3, partial_threshold=0.7),
+                    MatchkeyField(field="city", scorer="jaro_winkler",
+                                  levels=3, partial_threshold=0.7),
                 ],
             ),
         ],
