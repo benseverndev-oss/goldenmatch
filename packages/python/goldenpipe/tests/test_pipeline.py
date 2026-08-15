@@ -56,4 +56,15 @@ class TestImports:
         assert hasattr(gp, "PipeResult")
         assert hasattr(gp, "stage")
         assert hasattr(gp, "__version__")
-        assert gp.__version__ == "1.4.0"
+        # NOT a hardcoded literal. That asserted "1.4.0", so it broke on every
+        # release (it failed the 2026-08-15 repo-wide cut), and it tested
+        # nothing -- restating the version rather than checking a relationship.
+        # What is worth asserting is that __version__ tracks pyproject.toml,
+        # the drift scripts/check_version_consistency.py exists to catch
+        # repo-wide. That needs no edit at release time.
+        import tomllib
+        from pathlib import Path
+
+        pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+        declared = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["version"]
+        assert gp.__version__ == declared
