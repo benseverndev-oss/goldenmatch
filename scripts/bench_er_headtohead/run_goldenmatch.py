@@ -36,13 +36,24 @@ def _score_histogram(ded, bins: int = 100) -> dict:
     this same file reports two lines later. Telemetry that moves the number it
     is printed next to is worse than no telemetry.
 
-    ``largest_gap`` is the point of this. Linear and posterior calibration are
-    both monotone in total match weight, so they rank pairs IDENTICALLY and
-    differ only in where a fixed threshold cuts. Two calibrations therefore
-    agree exactly when the cut falls inside an empty band and diverge when it
-    does not -- which is the difference between a dataset where the threshold
-    choice is free and one where it decides the answer. The bench has been
-    reporting the consequence (F1) without ever measuring the cause.
+    **This is the RETAINED-pair distribution, truncated at the cut.** It is not
+    the distribution the calibrator sees and it CANNOT answer whether a dataset
+    is separable. `DedupeResult.scored_pairs` holds the pairs the scorer
+    emitted, which are the ones that already passed; the first version of this
+    docstring claimed `largest_gap` measured separability, and the first run
+    disproved it -- `gm_probabilistic` on biblio carries `link_threshold=0.85`
+    and a minimum retained score of 0.9917, so all 22,767 pairs land in one
+    0.01-wide bin. A gap detector fed a truncated distribution reports the
+    truncation, not the structure.
+
+    Separability is answered by `dump_fs_score_histograms.py`, which spies on
+    `_posterior_split` to capture the untruncated training-pair scores AND
+    splits them by ground truth. Use that; this is not a substitute.
+
+    What this DOES show is where the retained mass sits relative to the cut,
+    which is how the posterior scale's saturation became visible: everything
+    accepted piles into [0.9917, 1.0] with nothing between it and the nominal
+    0.85 threshold.
     """
     try:
         import numpy as np
@@ -121,8 +132,25 @@ def _config_telemetry(cfg) -> dict:
     except Exception as e:  # noqa: BLE001
         out["matchkeys_error"] = f"{type(e).__name__}: {e}"
     try:
-        passes = getattr(getattr(cfg, "blocking", None), "passes", None) or []
-        out["blocking_passes"] = [list(getattr(p, "fields", []) or []) for p in passes]
+        # `BlockingConfig.keys`, NOT `.passes`. The first version of this read
+        # `.passes` and got `[]` for every lane at both scales -- a plausible
+        # empty list rather than an error, which is the worst way for telemetry
+        # to be wrong. `.passes` is kept as a fallback only because some callers
+        # construct with that alias.
+        blocking = getattr(cfg, "blocking", None)
+        keys = getattr(blocking, "keys", None)
+        if keys is None:
+            keys = getattr(blocking, "passes", None)
+        if keys is None:
+            out["blocking_error"] = (
+                "resolved config exposed neither blocking.keys nor .passes"
+            )
+        else:
+            out["blocking_passes"] = [
+                list(getattr(k, "fields", []) or []) for k in keys
+            ]
+            out["blocking_strategy"] = getattr(blocking, "strategy", None)
+            out["blocking_max_block_size"] = getattr(blocking, "max_block_size", None)
     except Exception as e:  # noqa: BLE001
         out["blocking_error"] = f"{type(e).__name__}: {e}"
     return out
