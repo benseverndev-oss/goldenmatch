@@ -423,3 +423,59 @@ def test_mcp_layers_tool_is_registered_and_returns_layers(tmp_path):
         ("borrower", "person"),
     }
     assert result["unassigned"] == ["loan_id"]
+
+
+# ── Generic party vocabulary (union with the detected vertical) ────────────
+#
+# `detect_domain` finds no vertical for most real schemas, and a detected
+# vertical still omits cross-vertical parties. Both left layers `unknown` on
+# frames whose columns were grouped correctly.
+
+
+def test_generic_roles_name_a_party_when_no_vertical_is_detected():
+    result = detect_identity_layers(
+        frame(["employee_id", "employee_name", "employee_email"]), domain=None
+    )
+    assert "employee" in {layer.role for layer in result.layers}
+
+
+def test_generic_roles_union_with_a_detected_vertical():
+    """finance declares lender/borrower/merchant but no plain `customer`."""
+    result = detect_identity_layers(
+        frame(["customer_id", "customer_name", "vendor_id", "vendor_name"]),
+        domain="finance",
+    )
+    by_role = {layer.role: layer.columns for layer in result.layers}
+    assert by_role.get("customer") == ["customer_id", "customer_name"]
+    assert "merchant" in by_role          # the vertical still wins `vendor`
+    assert "vendor" not in by_role
+
+
+def test_vertical_roles_win_name_collisions():
+    """A generic role whose NAME the pack already declares is dropped."""
+    from goldencheck_types import load_domain
+    from infermap.layers import _pack_inputs, _with_generic_roles
+
+    pack_roles, _ = _pack_inputs(load_domain("finance"))
+    names = [r[0] for r in _with_generic_roles(pack_roles)]
+    assert len(names) == len(set(names))
+    assert names[: len(pack_roles)] == [r[0] for r in pack_roles]
+
+
+def test_generic_roles_do_not_widen_the_stop_list():
+    """generic declares no field types, so it cannot suppress a qualifier."""
+    from goldencheck_types import load_domain
+    from infermap.layers import _pack_inputs
+
+    _roles, type_hints = _pack_inputs(load_domain("generic"))
+    assert type_hints == []
+
+
+def test_attribute_tokens_are_never_declared_as_generic_roles():
+    """Declaring one would re-open the cross-party fusion the stop-list fixed."""
+    from goldencheck_types import load_domain
+    from infermap.layers import _ATTRIBUTE_TOKENS, _pack_inputs, _tokens
+
+    roles, _ = _pack_inputs(load_domain("generic"))
+    declared = {tok for (_n, _k, hints, _t) in roles for h in hints for tok in _tokens(h)}
+    assert not (declared & _ATTRIBUTE_TOKENS)
