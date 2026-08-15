@@ -1,0 +1,190 @@
+{
+  "_doc": [
+    "Precision corpus for identity-layer detection.",
+    "",
+    "PURPOSE. The hand-labelled corpus in test_layers.py was authored alongside",
+    "the detector's semantics, so it cannot measure precision -- it encodes the",
+    "same assumptions it tests. This corpus is built the other way round: every",
+    "case is a schema shape whose party count is known from the NAMING",
+    "CONVENTION it uses, independent of how the detector happens to score it.",
+    "",
+    "NEGATIVES are single-entity tables. Their columns share a qualifier for a",
+    "reason that is NOT a second party -- data-warehouse lineage, the table's own",
+    "name, audit trails, units of measure. Correct output is ONE party.",
+    "",
+    "POSITIVES are genuinely multi-party tables and are load-bearing: a negative",
+    "corpus on its own is passed perfectly by a detector that never splits",
+    "anything. Specificity is only meaningful reported next to sensitivity.",
+    "",
+    "`expected_parties` counts REAL-WORLD parties. `expected_groups` (positives",
+    "only) pins which columns belong together, so grouping can be scored as a",
+    "partition rather than just a count."
+  ],
+
+  "negatives": [
+    {
+      "name": "stg_provenance_prefix",
+      "class": "provenance",
+      "note": "Staging table: src_* columns are lineage, not a party.",
+      "columns": ["src_id", "src_system", "src_loaded_at", "customer_id", "customer_name", "customer_email"],
+      "expected_parties": 1
+    },
+    {
+      "name": "etl_lineage_columns",
+      "class": "provenance",
+      "note": "etl_* are pipeline bookkeeping.",
+      "columns": ["etl_batch_id", "etl_run_id", "etl_inserted_at", "invoice_id", "invoice_total"],
+      "expected_parties": 1
+    },
+    {
+      "name": "dw_warehouse_prefix",
+      "class": "provenance",
+      "note": "dw_* marks warehouse-generated surrogates.",
+      "columns": ["dw_surrogate_key", "dw_load_date", "dw_current_flag", "policy_id", "policy_premium"],
+      "expected_parties": 1
+    },
+    {
+      "name": "raw_landing_prefix",
+      "class": "provenance",
+      "columns": ["raw_payload", "raw_ingested_at", "raw_checksum", "device_serial", "device_model"],
+      "expected_parties": 1
+    },
+    {
+      "name": "source_target_mapping",
+      "class": "provenance",
+      "note": "The ChEMBL shape that motivated this corpus: src_id / src_assay_id are a source-system reference, not a party.",
+      "columns": ["assay_id", "assay_type", "assay_organism", "assay_tissue", "src_id", "src_assay_id"],
+      "expected_parties": 1
+    },
+
+    {
+      "name": "table_name_prefix_assay",
+      "class": "table_prefix",
+      "note": "Single-entity table where every column repeats the entity name.",
+      "columns": ["assay_id", "assay_type", "assay_category", "assay_organism", "assay_strain", "assay_tissue"],
+      "expected_parties": 1
+    },
+    {
+      "name": "table_name_prefix_product",
+      "class": "table_prefix",
+      "columns": ["product_id", "product_name", "product_category", "product_price", "product_weight"],
+      "expected_parties": 1
+    },
+    {
+      "name": "table_name_prefix_shipment",
+      "class": "table_prefix",
+      "columns": ["shipment_id", "shipment_status", "shipment_weight", "shipment_carrier_code", "shipment_eta"],
+      "expected_parties": 1
+    },
+    {
+      "name": "table_name_suffix_style",
+      "class": "table_prefix",
+      "note": "Same idea, suffix convention.",
+      "columns": ["id_account", "status_account", "balance_account", "opened_account"],
+      "expected_parties": 1
+    },
+
+    {
+      "name": "audit_by_columns",
+      "class": "audit",
+      "note": "created_by / updated_by are audit trail, not a party population.",
+      "columns": ["record_id", "amount", "created_by", "created_at", "updated_by", "updated_at"],
+      "expected_parties": 1
+    },
+    {
+      "name": "approval_audit_columns",
+      "class": "audit",
+      "columns": ["request_id", "request_amount", "approved_by", "approved_at", "reviewed_by", "reviewed_at"],
+      "expected_parties": 1
+    },
+
+    {
+      "name": "currency_unit_prefix",
+      "class": "unit_measure",
+      "note": "usd_* is a unit, not an entity.",
+      "columns": ["txn_id", "usd_amount", "usd_fee", "usd_tax", "posted_date"],
+      "expected_parties": 1
+    },
+    {
+      "name": "percentage_unit_prefix",
+      "class": "unit_measure",
+      "columns": ["loan_id", "pct_rate", "pct_ltv", "pct_dti", "term_months"],
+      "expected_parties": 1
+    },
+    {
+      "name": "aggregate_measure_prefix",
+      "class": "unit_measure",
+      "columns": ["store_id", "avg_basket", "avg_visits", "avg_spend", "period"],
+      "expected_parties": 1
+    },
+
+    {
+      "name": "mangled_abbreviated_names",
+      "class": "noise",
+      "note": "Deliberately corrupted headers from a dedup benchmark. Nothing here is a party.",
+      "columns": ["src_d", "src_ss_d", "ss_tss", "tss_d", "crtd_b", "dc_d"],
+      "expected_parties": 1
+    },
+    {
+      "name": "opaque_coded_columns",
+      "class": "noise",
+      "columns": ["f_001", "f_002", "f_003", "f_004", "label"],
+      "expected_parties": 1
+    }
+  ],
+
+  "positives": [
+    {
+      "name": "loan_tape_two_parties",
+      "class": "multi_party",
+      "domain": "finance",
+      "columns": ["loan_id", "lender_name", "lender_id", "borrower_name", "borrower_ssn"],
+      "expected_parties": 2,
+      "expected_groups": [["lender_name", "lender_id"], ["borrower_name", "borrower_ssn"]]
+    },
+    {
+      "name": "invoice_ap_two_parties",
+      "class": "multi_party",
+      "columns": ["invoice_id", "supplier_name", "supplier_tax_id", "buyer_name", "buyer_address"],
+      "expected_parties": 2,
+      "expected_groups": [["supplier_name", "supplier_tax_id"], ["buyer_name", "buyer_address"]]
+    },
+    {
+      "name": "claim_three_parties",
+      "class": "multi_party",
+      "domain": "insurance",
+      "columns": ["claim_id", "insurer_name", "insurer_code", "provider_name", "provider_npi", "patient_name", "patient_dob"],
+      "expected_parties": 3,
+      "expected_groups": [["insurer_name", "insurer_code"], ["provider_name", "provider_npi"], ["patient_name", "patient_dob"]]
+    },
+    {
+      "name": "shipment_shipper_consignee",
+      "class": "multi_party",
+      "columns": ["waybill_id", "shipper_name", "shipper_address", "consignee_name", "consignee_address"],
+      "expected_parties": 2,
+      "expected_groups": [["shipper_name", "shipper_address"], ["consignee_name", "consignee_address"]]
+    },
+    {
+      "name": "order_customer_and_seller",
+      "class": "multi_party",
+      "columns": ["order_id", "customer_name", "customer_email", "seller_name", "seller_rating"],
+      "expected_parties": 2,
+      "expected_groups": [["customer_name", "customer_email"], ["seller_name", "seller_rating"]]
+    },
+    {
+      "name": "employment_employee_manager",
+      "class": "multi_party",
+      "columns": ["employee_id", "employee_name", "manager_id", "manager_name", "department"],
+      "expected_parties": 2,
+      "expected_groups": [["employee_id", "employee_name"], ["manager_id", "manager_name"]]
+    },
+    {
+      "name": "single_party_control",
+      "class": "single_party",
+      "note": "The common case. One party is the RIGHT answer, not a degenerate one.",
+      "columns": ["customer_id", "customer_name", "customer_email", "customer_city"],
+      "expected_parties": 1,
+      "expected_groups": [["customer_id", "customer_name", "customer_email", "customer_city"]]
+    }
+  ]
+}
