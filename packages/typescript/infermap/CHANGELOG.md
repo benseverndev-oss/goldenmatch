@@ -10,6 +10,8 @@ follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-08-15
+
 ### Changed
 
 - **String-distance primitives are now single-sourced from goldenmatch's

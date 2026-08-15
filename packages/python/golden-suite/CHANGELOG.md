@@ -4,6 +4,19 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.5.0] - 2026-08-15
+
+Floor bumps for the 2026-08-15 repo-wide cut. Every suite member was
+released together, so the floors move with them: `goldenpipe>=1.5`,
+`goldenmatch[polars]>=3.13`, `goldencheck[polars]>=3.5`, `goldenflow>=2.2.0`,
+`infermap>=0.7`, `goldenanalysis>=0.5`, `goldencheck-types>=0.3`, and the
+native floors `goldenmatch-native>=0.2.0`, `goldencheck-native>=0.2`,
+`goldenflow-native>=0.28.0`, `goldenanalysis-native>=0.2`.
+
+The headline member change is goldenmatch 3.13.0: Fellegi-Sunter training
+runs distributed on a Spark cluster with no Python on the executors, off the
+same Rust kernel every other surface uses.
+
 ## [0.4.0] - 2026-08-04
 
 - Floor bumps for the 2026-08 GoldenModel frontier cut: `goldenmatch[polars]>=3.12` (was

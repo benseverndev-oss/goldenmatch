@@ -15,7 +15,7 @@ load-bearing, which fallbacks are deliberate, or which knobs exist.
 """
 from __future__ import annotations
 
-__version__ = "3.4.0"
+__version__ = "3.5.0"
 
 # Core: scanner + models
 from goldencheck.cell_quality import cell_quality

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [1.5.0] - 2026-08-15
+
 ### Added
 
 - **`infer_schema` emits identity layers (#2574).** The stage now runs InferMap's

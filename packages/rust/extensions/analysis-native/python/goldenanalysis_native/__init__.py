@@ -34,4 +34,4 @@ from importlib.metadata import PackageNotFoundError, version as _pkg_version
 try:
     __version__ = _pkg_version("goldenanalysis-native")
 except PackageNotFoundError:  # source checkout without installed dist metadata
-    __version__ = "0.1.0"
+    __version__ = "0.2.0"

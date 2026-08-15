@@ -33,4 +33,4 @@ from importlib.metadata import PackageNotFoundError, version as _pkg_version
 try:
     __version__ = _pkg_version("goldenflow-native")
 except PackageNotFoundError:  # source checkout without installed dist metadata
-    __version__ = "0.27.0"
+    __version__ = "0.28.0"

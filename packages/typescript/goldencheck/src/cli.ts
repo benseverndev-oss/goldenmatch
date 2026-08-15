@@ -27,7 +27,7 @@ export const program = new Command();
 program
   .name("goldencheck-js")
   .description("Data validation that discovers rules from your data")
-  .version("0.8.0");
+  .version("0.9.0");
 
 // --- scan ---
 program

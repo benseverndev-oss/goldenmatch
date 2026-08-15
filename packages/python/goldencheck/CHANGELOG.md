@@ -4,6 +4,8 @@ All notable changes to GoldenCheck will be documented in this file.
 
 ## [Unreleased]
 
+## [3.5.0] - 2026-08-15
+
 ### Fixed
 - **`apply_fixes` now names the requirement at the Arrow boundary (#2448).**
   `scan_dataframe` is arrow-native, so `scan_dataframe(pa.Table)` succeeds and

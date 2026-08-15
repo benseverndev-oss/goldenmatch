@@ -13,7 +13,7 @@ incidental, and those decisions are documented and contract-tested. Reading the
 implementation shows WHAT one path does, but not which guarantees are
 load-bearing, which fallbacks are deliberate, or which knobs exist.
 """
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 
 from goldenpipe._api import run, run_df, run_stages
 from goldenpipe.config.loader import load_config

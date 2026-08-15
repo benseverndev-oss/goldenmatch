@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "goldenmatch-kg"
-version = "0.1.0"
+version = "0.2.0"
 description = "Drop-in goldenmatch entity resolution for knowledge-graph frameworks (neo4j-graphrag, LlamaIndex, Graphiti)."
 readme = "README.md"
 requires-python = ">=3.11"

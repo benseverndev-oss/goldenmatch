@@ -14,7 +14,7 @@ incidental, and those decisions are documented and contract-tested. Reading the
 implementation shows WHAT one path does, but not which guarantees are
 load-bearing, which fallbacks are deliberate, or which knobs exist.
 """
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 
 import goldenflow.notebook  # noqa: F401 — register Jupyter _repr_html_ methods
 import goldenflow.transforms.address  # noqa: F401

@@ -14,7 +14,7 @@ implementation shows WHAT one path does, but not which guarantees are
 load-bearing, which fallbacks are deliberate, or which knobs exist.
 """
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 from infermap.config import from_config
 from infermap.detect import detect_domain, detect_domain_detailed
