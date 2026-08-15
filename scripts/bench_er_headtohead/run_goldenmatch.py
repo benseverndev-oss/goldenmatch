@@ -25,6 +25,109 @@ except ImportError:  # pragma: no cover - Windows fallback path
     resource = None
 
 
+def _score_histogram(ded, bins: int = 100) -> dict:
+    """Histogram of the scores this run ACTUALLY produced.
+
+    Reads the Arrow pair table out of ``__dict__`` rather than the
+    ``DedupeResult.scored_pairs`` property. That property calls
+    ``scored_pairs_from_table``, which materialises a ``list[tuple]`` at a
+    MEASURED ~168 B/pair; the 1M-row person shape scores ~1.5M pairs, so
+    reading it here would add ~250 MB resident to a run whose ``peak_rss_mb``
+    this same file reports two lines later. Telemetry that moves the number it
+    is printed next to is worse than no telemetry.
+
+    ``largest_gap`` is the point of this. Linear and posterior calibration are
+    both monotone in total match weight, so they rank pairs IDENTICALLY and
+    differ only in where a fixed threshold cuts. Two calibrations therefore
+    agree exactly when the cut falls inside an empty band and diverge when it
+    does not -- which is the difference between a dataset where the threshold
+    choice is free and one where it decides the answer. The bench has been
+    reporting the consequence (F1) without ever measuring the cause.
+    """
+    try:
+        import numpy as np
+
+        tbl = ded.__dict__.get("_scored_pairs_table")
+        if tbl is not None and getattr(tbl, "num_rows", 0):
+            scores = tbl.column("score").to_numpy(zero_copy_only=False)
+        else:
+            raw = ded.__dict__.get("_scored_pairs")
+            if type(raw) is not list or not raw:
+                return {"available": False, "reason": "no scored pairs retained"}
+            scores = np.fromiter((s for _, _, s in raw), np.float64, len(raw))
+        if scores.size == 0:
+            return {"available": False, "reason": "empty"}
+
+        counts, edges = np.histogram(scores, bins=bins, range=(0.0, 1.0))
+        # Longest run of empty bins strictly INSIDE the observed range. Bins
+        # below the minimum or above the maximum are empty for a trivial
+        # reason and would report a gap that no threshold could ever sit in.
+        lo_bin = int(np.searchsorted(edges, scores.min(), "right") - 1)
+        hi_bin = int(np.searchsorted(edges, scores.max(), "right") - 1)
+        best_len = best_start = 0
+        run_len = run_start = 0
+        for i in range(max(lo_bin, 0), min(hi_bin + 1, len(counts))):
+            if counts[i] == 0:
+                if run_len == 0:
+                    run_start = i
+                run_len += 1
+                if run_len > best_len:
+                    best_len, best_start = run_len, run_start
+            else:
+                run_len = 0
+        return {
+            "available": True,
+            "n_pairs": int(scores.size),
+            "min": round(float(scores.min()), 6),
+            "max": round(float(scores.max()), 6),
+            "mean": round(float(scores.mean()), 6),
+            "quantiles": {
+                q: round(float(np.quantile(scores, q / 100)), 6)
+                for q in (1, 5, 25, 50, 75, 95, 99)
+            },
+            "bin_edges": [round(float(e), 4) for e in edges],
+            "counts": [int(c) for c in counts],
+            "largest_gap": {
+                "bins": int(best_len),
+                "lo": round(float(edges[best_start]), 4) if best_len else None,
+                "hi": round(float(edges[best_start + best_len]), 4) if best_len else None,
+                "width": round(float(best_len / bins), 4),
+            },
+        }
+    except Exception as e:  # noqa: BLE001 - diagnostics must never fail a lane
+        return {"available": False, "error": f"{type(e).__name__}: {e}"}
+
+
+def _config_telemetry(cfg) -> dict:
+    """The RESOLVED thresholds and blocking passes the run actually used.
+
+    `link_threshold` and `blocking` were already in the emitted JSON as literal
+    `null` for every lane at both scales -- present enough to look recorded,
+    empty enough to be useless. Auto-config decides both, so without them a
+    reader cannot tell an over-merge caused by a low cut from one caused by
+    loose blocking.
+    """
+    out: dict = {"matchkeys": [], "blocking_passes": None}
+    try:
+        for mk in cfg.get_matchkeys():
+            out["matchkeys"].append({
+                "name": getattr(mk, "name", None),
+                "type": getattr(mk, "type", None),
+                "link_threshold": getattr(mk, "link_threshold", None),
+                "review_threshold": getattr(mk, "review_threshold", None),
+                "fields": [getattr(f, "field", None) for f in getattr(mk, "fields", [])],
+                "scorers": [getattr(f, "scorer", None) for f in getattr(mk, "fields", [])],
+            })
+    except Exception as e:  # noqa: BLE001
+        out["matchkeys_error"] = f"{type(e).__name__}: {e}"
+    try:
+        passes = getattr(getattr(cfg, "blocking", None), "passes", None) or []
+        out["blocking_passes"] = [list(getattr(p, "fields", []) or []) for p in passes]
+    except Exception as e:  # noqa: BLE001
+        out["blocking_error"] = f"{type(e).__name__}: {e}"
+    return out
+
+
 def _load_shapes_module():
     """Import the sibling shapes.py whether run as a script or from elsewhere."""
     try:
@@ -390,6 +493,17 @@ def main() -> None:
             duplicate_rows_found=getattr(getattr(ded, "dupes", None), "num_rows", None),
             unique_records=getattr(getattr(ded, "unique", None), "num_rows", None),
             bench=bench_blob,
+        )
+        # AFTER the result.update above, so a diagnostics bug cannot cost the
+        # measurement -- the numbers are already recorded by the time these run.
+        result["score_histogram"] = _score_histogram(ded)
+        # `ded.config` deliberately, NOT the `cfg` handed to dedupe_df: on the
+        # auto-config modes the resolved config is what auto-config committed,
+        # and the pre-run object can carry thresholds it overwrote.
+        _resolved = getattr(ded, "config", None)
+        result["config_resolved"] = (
+            _config_telemetry(_resolved) if _resolved is not None
+            else {"available": False, "reason": "DedupeResult carried no config"}
         )
     except MemoryError as e:
         result.update(status="OOM", error=f"{type(e).__name__}: {e}")
