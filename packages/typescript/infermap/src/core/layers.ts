@@ -276,6 +276,46 @@ export function computeLayers(
  *  concerns, so the kernel never learns about YAML. Roles are emitted in
  *  declaration order because the kernel resolves token collisions
  *  first-declaration-wins. */
+/** Pack consulted for role vocabulary in addition to the detected vertical.
+ *  Host-side policy, not a kernel concern — the kernel is handed a role list
+ *  and does not know where it came from. */
+const FALLBACK_DOMAIN = "generic";
+
+/** Append the cross-vertical party vocabulary to a pack's own roles.
+ *
+ *  A union, not a fallback. Two gaps closed at once, both measured on real
+ *  schemas:
+ *
+ *  - `detectDomain` finds no vertical for the overwhelming majority of frames,
+ *    which loaded NO pack at all — detection grouped columns into parties
+ *    correctly and then had nothing to NAME them with.
+ *  - A frame that DOES resolve to a vertical still contains parties that
+ *    vertical never enumerates: `finance` declares lender / borrower / payee
+ *    but no plain `customer`, so `customer_id`/`customer_name` came back
+ *    `unknown` on a table the pack otherwise understood well.
+ *
+ *  Generic parties are cross-vertical by definition — a finance table still has
+ *  customers — so they are additive everywhere rather than a substitute for a
+ *  vertical vocabulary.
+ *
+ *  **The vertical wins collisions.** Pack roles keep their position at the
+ *  front, and a generic role whose NAME the pack already declares is dropped;
+ *  the kernel resolves token collisions first-declaration-wins over this order.
+ *
+ *  Mirrors `infermap.layers._with_generic_roles`. */
+export function withGenericRoles(roles: LayerRoleInput[]): LayerRoleInput[] {
+  let generic: DomainPack | null = null;
+  try {
+    generic = loadDomain(FALLBACK_DOMAIN);
+  } catch {
+    return roles;
+  }
+  if (!generic) return roles;
+  const declared = new Set(roles.map((r) => r.name));
+  const { roles: genericRoles } = packInputs(generic);
+  return roles.concat(genericRoles.filter((r) => !declared.has(r.name)));
+}
+
 export function packInputs(
   pack: DomainPack | null,
 ): { roles: LayerRoleInput[]; typeHints: string[] } {
@@ -335,11 +375,12 @@ export function detectIdentityLayers(
     }
   }
   const { roles, typeHints } = packInputs(pack);
+  const allRoles = withGenericRoles(roles);
 
   const backend = getInfermapBackend();
   const raw = backend
-    ? backend.detectIdentityLayers(columns, roles, typeHints, minScore)
-    : computeLayers(columns, roles, typeHints, minScore);
+    ? backend.detectIdentityLayers(columns, allRoles, typeHints, minScore)
+    : computeLayers(columns, allRoles, typeHints, minScore);
 
   return toResult(raw, resolvedDomain ?? null);
 }

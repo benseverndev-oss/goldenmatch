@@ -1,2 +1,59 @@
 description: "Generic — placeholder pack with no canonical types. Used when no domain matches."
 types: {}
+
+# Cross-vertical party vocabulary.
+#
+# `generic` carries no field TYPES on purpose (nothing canonical is true of
+# every vertical), but parties are the exception: "customer", "vendor" and
+# "employee" mean the same thing in every industry, which is precisely what
+# makes them safe to declare here and nowhere else.
+#
+# This block is load-bearing for unfamiliar data. `detect_domain` returns no
+# vertical for the overwhelming majority of real schemas, so without a role
+# vocabulary here, layer detection groups a frame's columns into parties
+# correctly and then has nothing to NAME them with — every layer comes back
+# `role=unknown`.
+#
+# Two rules govern what may be added:
+#   1. The token must name a PARTY in any vertical, not an attribute of one.
+#   2. It must not appear in the kernel's ATTRIBUTE_TOKENS stop-list. A role
+#      declaration OVERRIDES that stop-list, so declaring e.g. `name` or
+#      `source` here would re-open the exact cross-party fusion the stop-list
+#      was added to fix (`widget_owner_name` + `shipper_name` becoming one
+#      bogus layer).
+roles:
+  customer:
+    kind: person
+    name_hints: ["customer", "client", "buyer", "purchaser", "subscriber"]
+
+  user:
+    kind: person
+    name_hints: ["user", "login", "profile"]
+
+  employee:
+    kind: person
+    name_hints: ["employee", "staff", "worker", "personnel", "operator"]
+
+  person:
+    kind: person
+    name_hints: ["person", "individual", "contact", "member"]
+
+  owner:
+    kind: person
+    name_hints: ["owner", "holder", "proprietor"]
+
+  organization:
+    kind: organization
+    name_hints: ["company", "organization", "org", "business", "firm", "corporation", "employer"]
+
+  vendor:
+    kind: organization
+    name_hints: ["vendor", "supplier", "seller", "merchant", "provider"]
+
+  location:
+    kind: place
+    name_hints: ["location", "site", "facility", "branch", "store", "warehouse", "premises"]
+
+  product:
+    kind: asset
+    name_hints: ["product", "item", "sku", "asset", "equipment", "device"]
