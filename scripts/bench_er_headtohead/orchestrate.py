@@ -442,12 +442,31 @@ def _load_resume_state(agg_path: Path) -> tuple[dict | None, list[dict], set[tup
     the workflow restores the workdir across runner attempts/dispatches (the cache
     step in bench-er-headtohead.yml), and the per-datapoint flush below means we
     resume from the last datapoint that completed before the runner was reclaimed.
-    A corrupt/half-written aggregate is treated as no prior state (start clean)."""
+    A corrupt/half-written aggregate is treated as no prior state (start clean).
+
+    A prior aggregate built from a DIFFERENT commit is discarded, loudly. Resume
+    means "the same code was interrupted", never "reuse results from other code":
+    every recorded datapoint would be skipped, so a sweep dispatched to measure a
+    bench change comes back reporting the numbers it was meant to replace. That
+    happened -- the workflow's cache key was (shape, tag) with no SHA, so a
+    re-dispatch on new code restored the previous dispatch's workdir and skipped
+    all 16 datapoints. The run was green, the artifact had none of the new fields,
+    and the only tell was a `git_sha` in the header naming the older commit."""
     if not agg_path.exists():
         return None, [], set()
     try:
         obj = json.loads(agg_path.read_text())
     except Exception:
+        return None, [], set()
+    prior_header = obj.get("header") or {}
+    prior_sha, now_sha = prior_header.get("git_sha"), _git_sha()
+    if prior_sha and now_sha and prior_sha != now_sha:
+        print(
+            f"[orchestrate] DISCARDING resume state: it was built at "
+            f"{prior_sha[:12]}, this is {now_sha[:12]}. Resume never spans a "
+            f"code change -- re-running all datapoints from scratch.",
+            flush=True,
+        )
         return None, [], set()
     results = [r for r in (obj.get("results") or [])
                if _datapoint_key(r) != (None, None, None)]

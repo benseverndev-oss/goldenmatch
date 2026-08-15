@@ -170,17 +170,28 @@ jobs:
       # signal"); orchestrate.py flushes bench_results.json after every datapoint
       # and skips datapoints already recorded, so restoring .bench_er lets a
       # re-run continue instead of recomputing from zero. Unique primary key per
-      # (shape, tag, run, attempt) => the post-job save always writes; the
-      # prefix restore-keys pick up the most recent partial for this shape+tag
-      # (previous attempt first, then any earlier dispatch with the same tag).
+      # (shape, tag, sha, run, attempt) => the post-job save always writes; the
+      # prefix restore-keys pick up the most recent partial for this
+      # shape+tag+SHA (previous attempt first, then any earlier dispatch of the
+      # SAME COMMIT with the same tag).
+      #
+      # `github.sha` is load-bearing, not decoration. Without it the resume key
+      # was (shape, tag) alone, so a dispatch on new code with the default tag
+      # restored the PREVIOUS dispatch's `.bench_er` and orchestrate.py skipped
+      # every datapoint as "already recorded". A run added to measure new
+      # per-lane telemetry came back with none of it and a `git_sha` in the
+      # header naming a commit from before the change -- a green run reporting
+      # stale numbers, with the only tell buried in a field nobody reads.
+      # Resume is for the same code being interrupted; it must never span a
+      # code change.
       - name: Restore partial sweep progress
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25  # v5.1.0
         with:
           path: .bench_er
-          key: er-h2h-${{ matrix.shape }}-${{ inputs.run_tag }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: er-h2h-${{ matrix.shape }}-${{ inputs.run_tag }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            er-h2h-${{ matrix.shape }}-${{ inputs.run_tag }}-${{ github.run_id }}-
-            er-h2h-${{ matrix.shape }}-${{ inputs.run_tag }}-
+            er-h2h-${{ matrix.shape }}-${{ inputs.run_tag }}-${{ github.sha }}-${{ github.run_id }}-
+            er-h2h-${{ matrix.shape }}-${{ inputs.run_tag }}-${{ github.sha }}-
 
       - name: Run head-to-head sweep
         run: |
