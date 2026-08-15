@@ -51,7 +51,7 @@ class Lane:
 # four need --allow-pure-python locally (CI builds native and passes False).
 _GM_RUN_LANES = {"gm_hand_built", "gm_probabilistic",
                  "gm_probabilistic_native", "gm_probabilistic_counted",
-                 "gm_zeroconfig"}
+                 "gm_probabilistic_shipped", "gm_zeroconfig"}
 
 LANES: dict[str, Lane] = {
     "splink": Lane("splink", "run_splink.py"),
@@ -92,6 +92,25 @@ LANES: dict[str, Lane] = {
                                           "GOLDENMATCH_FS_CALIBRATED": "posterior",
                                           "GOLDENMATCH_FS_EM_COUNTED": "1"},
                                      extra_args=("--fs-basic-scorers",)),
+    # GM AS SHIPPED. Every other FS lane is deliberately handicapped for
+    # comparability -- `--fs-basic-scorers` forces the specialised name scorers
+    # (given_name_aliased_jw, name_freq_weighted_jw) down to plain jaro_winkler
+    # so GM and Splink run the same comparison model, and
+    # GOLDENMATCH_FS_CALIBRATED=posterior overrides GM's `linear` default so a
+    # shared --threshold means the same thing to both engines.
+    #
+    # Both are RIGHT for a Splink comparison and WRONG as a statement of what
+    # GoldenMatch does. Without this lane the panel's only FS numbers are
+    # handicapped ones, and they read as GM's accuracy -- which is exactly how
+    # I misread them: on a 20K person fixture the handicapped config scores
+    # F1 0.0000 where the shipped default scores 0.9964, same data, same engine.
+    #
+    # So this lane runs the probabilistic path with NO rewrite and NO
+    # calibration override. It is not comparable to Splink and is not meant to
+    # be; it is the control that keeps the handicapped lanes honest.
+    "gm_probabilistic_shipped": Lane("gm_probabilistic_shipped",
+                                     "run_goldenmatch.py",
+                                     mode="probabilistic"),
     "gm_zeroconfig": Lane("gm_zeroconfig", "run_goldenmatch.py", mode="zeroconfig"),
     "gm_converted_splink": Lane("gm_converted_splink", "run_gm_converted.py"),
 }
