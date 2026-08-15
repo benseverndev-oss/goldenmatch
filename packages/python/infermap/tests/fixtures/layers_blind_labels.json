@@ -1,0 +1,231 @@
+{
+  "_instructions": [
+    "HOW TO LABEL. For each schema below, group the columns by WHICH PARTY they",
+    "describe, and give each party a short name of your choosing.",
+    "",
+    "A party is a real-world entity the table refers to -- a customer, a lender,",
+    "a supplier, a device, a site. `lender_name` and `lender_id` are one party;",
+    "`borrower_name` is another.",
+    "",
+    "Rules that matter for the result:",
+    "  1. A single-entity table has exactly ONE party. That is the common case,",
+    "     not a degenerate one -- do not feel obliged to find several.",
+    "  2. Columns that describe no party (audit timestamps, lineage columns,",
+    "     free-text notes, measures) go in `unassigned`. Leaving a column out is",
+    "     a real answer, not an omission.",
+    "  3. Name parties however you naturally would. Names are scored separately",
+    "     from grouping and loosely; the GROUPING is the thing under test.",
+    "  4. If a schema is unintelligible (mangled or coded column names), set",
+    "     `skip: true` rather than guessing. A guess is worse than no label.",
+    "",
+    "Do NOT run the detector on these before labelling, and do not consult its",
+    "output. The entire value of this corpus is that its labels are independent."
+  ],
+  "_sampled_from": "<repo>",
+  "labelled_by": "",
+  "schemas": [
+    {
+      "id": "s01",
+      "source": "./packages/python/infermap/benchmark/cases/valentine/chembl/assays_both_0_30_ac4_ev_022/target.csv",
+      "columns": [
+        "assays_ASSI",
+        "assays_CONSC",
+        "assays_VARI",
+        "assays_TISI",
+        "assays_RELATIT",
+        "assays_CURAB",
+        "assays_ASSTIS",
+        "assays_ASSCET",
+        "assays_ASSSUBCELFR",
+        "assays_Ti",
+        "assays_SI",
+        "assays_SRASI",
+        "assays_CHEI",
+        "assays_CEI",
+        "assays_BFO"
+      ],
+      "skip": false,
+      "parties": {},
+      "unassigned": []
+    },
+    {
+      "id": "s02",
+      "source": "./packages/python/infermap/benchmark/cases/valentine/chembl/assays_both_50_30_ac4_av_009/target.csv",
+      "columns": [
+        "assays_ASI",
+        "assays_CHEI",
+        "assays_ASORGA",
+        "assays_ASSTIS",
+        "assays_ASSTY",
+        "assays_CURB",
+        "assays_T",
+        "assays_RELATY",
+        "assays_CONFSCO",
+        "assays_SI",
+        "assays_SASI",
+        "assays_CI",
+        "assays_BFO",
+        "assays_TII",
+        "assays_VAI"
+      ],
+      "skip": false,
+      "parties": {},
+      "unassigned": []
+    },
+    {
+      "id": "s03",
+      "source": "./packages/typescript/goldencheck/tests/fixtures/denial_constraints.csv",
+      "columns": [
+        "order_id",
+        "status",
+        "region",
+        "order_day",
+        "ship_day"
+      ],
+      "skip": false,
+      "parties": {},
+      "unassigned": []
+    },
+    {
+      "id": "s04",
+      "source": "./packages/python/goldenmatch/benchmarks/er-kg-bench/dataset/records_ghsuite.csv",
+      "columns": [
+        "record_id",
+        "mention",
+        "entity_type",
+        "context",
+        "entity_id",
+        "failure_class",
+        "source"
+      ],
+      "skip": false,
+      "parties": {},
+      "unassigned": []
+    },
+    {
+      "id": "s05",
+      "source": "./tests/fixtures/finance_clean.csv",
+      "columns": [
+        "account_number",
+        "routing_number",
+        "currency",
+        "amount"
+      ],
+      "skip": false,
+      "parties": {},
+      "unassigned": []
+    },
+    {
+      "id": "s06",
+      "source": "./tests/fixtures/healthcare_clean.csv",
+      "columns": [
+        "patient_id",
+        "diagnosis",
+        "icd10",
+        "visit_date"
+      ],
+      "skip": false,
+      "parties": {},
+      "unassigned": []
+    },
+    {
+      "id": "s07",
+      "source": "./scripts/er_matcher/tests/fixtures/febrl_mini/febrl_sample.csv",
+      "columns": [
+        "rec_id",
+        "given_name",
+        "surname",
+        "street",
+        "suburb",
+        "postcode",
+        "phone",
+        "soc_sec_id"
+      ],
+      "skip": false,
+      "parties": {},
+      "unassigned": []
+    },
+    {
+      "id": "s08",
+      "source": "./packages/python/goldencheck/tests/fixtures/messy.csv",
+      "columns": [
+        "id",
+        "name",
+        "email",
+        "age",
+        "status",
+        "phone",
+        "price",
+        "start_date",
+        "end_date",
+        "notes"
+      ],
+      "skip": false,
+      "parties": {},
+      "unassigned": []
+    },
+    {
+      "id": "s09",
+      "source": "./packages/python/goldenflow/benchmarks/datasets/goldenflow_bench/data.csv",
+      "columns": [
+        "full_name",
+        "email",
+        "phone",
+        "address",
+        "city",
+        "state",
+        "zip",
+        "signup_date",
+        "price",
+        "active",
+        "country",
+        "gender",
+        "ssn",
+        "notes",
+        "pct"
+      ],
+      "skip": false,
+      "parties": {},
+      "unassigned": []
+    },
+    {
+      "id": "s10",
+      "source": "./.venv/lib/python3.11/site-packages/numpy/_core/tests/data/umath-validation-set-tanh.csv",
+      "columns": [
+        "dtype",
+        "input",
+        "output",
+        "ulperrortol"
+      ],
+      "skip": false,
+      "parties": {},
+      "unassigned": []
+    },
+    {
+      "id": "s11",
+      "source": "./packages/python/goldenmatch/tests/fixtures/autoconfig/t1_synthetic.csv",
+      "columns": [
+        "id",
+        "name",
+        "email",
+        "city"
+      ],
+      "skip": false,
+      "parties": {},
+      "unassigned": []
+    },
+    {
+      "id": "s12",
+      "source": "./scripts/er_matcher/tests/fixtures/magellan_mini/tableB.csv",
+      "columns": [
+        "id",
+        "title",
+        "manufacturer",
+        "price"
+      ],
+      "skip": false,
+      "parties": {},
+      "unassigned": []
+    }
+  ]
+}
