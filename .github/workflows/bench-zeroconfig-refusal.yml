@@ -1,0 +1,98 @@
+# Why the zero-config controller refuses, per shape and scale.
+#
+# The head-to-head panel records `gm_zeroconfig` as `refused` with one sentence
+# of error text, which reads as a single behaviour ("zero-config gives up at
+# 100k rows"). The four refusals observed disagree with each other:
+#
+#   biblio 100k  sub-profile=cluster   stop_reason=BUDGET_ITERATIONS
+#   biblio 1M    sub-profile=blocking  stop_reason=BLOCKING_DEGENERATE
+#   person 100k  sub-profile=blocking  stop_reason=POLICY_SATISFIED
+#   person 1M    timed out before reporting
+#
+# Three sub-profiles, three stop reasons -- and POLICY_SATISFIED is the SUCCESS
+# reason, so that search converged and the committed config still graded RED.
+# REFUSE_AT_N = 100_000 is the ESCALATION point (below it a RED config
+# warn-and-runs), not the cause. This reports the field values behind each RED
+# verdict so the causes can be separated.
+#
+# Dispatch-only. A measurement, not a gate.
+name: bench-zeroconfig-refusal
+
+on:
+  workflow_dispatch:
+    inputs:
+      shapes:
+        description: "Fixture shapes (space separated)"
+        required: false
+        default: "person biblio"
+      rows:
+        description: "Row counts (space separated)"
+        required: false
+        default: "100000"
+      runner:
+        description: "Runner label"
+        required: false
+        default: "large-new-64GB"
+
+permissions:
+  contents: read
+
+env:
+  ARROW_DEFAULT_MEMORY_POOL: system
+  GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+
+jobs:
+  diagnose:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/native
+
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      # The controller's blocking/scoring profilers have a native path
+      # (native_enabled("autoconfig")). Diagnosing the numpy fallback would
+      # describe a route the product does not take by default.
+      - name: Build native extension
+        run: uv run python scripts/build_native.py
+
+      - name: Diagnose
+        run: |
+          set -euo pipefail
+          uv run python scripts/bench_er_headtohead/diagnose_zeroconfig_refusal.py \
+            --shapes ${{ inputs.shapes }} \
+            --rows ${{ inputs.rows }} \
+            --out zeroconfig-refusal.json \
+            --summary-md zeroconfig-refusal.md
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ -f zeroconfig-refusal.md ]; then
+            cat zeroconfig-refusal.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'no summary produced - see the job log' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        if: always()
+        with:
+          name: zeroconfig-refusal
+          path: zeroconfig-refusal.json
+          # NOT `ignore`: a silent empty upload is how a wedged step reported
+          # success earlier in this repo's history.
+          if-no-files-found: error
