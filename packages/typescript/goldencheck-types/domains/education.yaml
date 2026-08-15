@@ -30,3 +30,28 @@ types:
     value_signals:
       max_unique: 100
     suppress: ["uniqueness"]
+
+# `student` is declared to lift its suppression -- it is also a field type, so
+# without this no student party could ever be detected.
+roles:
+  student:
+    kind: person
+    name_hints: ["student", "learner", "pupil", "enrollee"]
+    typical_types: ["student", "grades"]
+
+  instructor:
+    kind: person
+    name_hints: ["instructor", "teacher", "professor", "faculty", "lecturer"]
+
+  institution:
+    kind: organization
+    name_hints: ["school", "institution", "university", "college", "campus"]
+
+  guardian:
+    kind: person
+    name_hints: ["guardian", "parent", "caregiver"]
+
+  course:
+    kind: asset
+    name_hints: ["course", "class", "module", "subject"]
+    typical_types: ["course", "term", "program"]

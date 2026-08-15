@@ -22,3 +22,25 @@ types:
   account:
     name_hints: ["utility_account", "billing_period", "peak_demand", "service_point"]
     suppress: ["pattern_consistency"]
+
+# `utility` is declared to lift its suppression (it appears in the `account`
+# type's name_hints).
+roles:
+  customer:
+    kind: person
+    name_hints: ["customer", "consumer", "ratepayer"]
+    typical_types: ["account"]
+
+  utility:
+    kind: organization
+    name_hints: ["utility", "supplier", "retailer", "distributor"]
+    typical_types: ["tariff"]
+
+  meter:
+    kind: asset
+    name_hints: ["meter", "register"]
+    typical_types: ["meter", "consumption"]
+
+  site:
+    kind: place
+    name_hints: ["site", "premise", "premises", "facility"]
