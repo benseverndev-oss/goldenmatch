@@ -51,7 +51,7 @@ class Lane:
 # four need --allow-pure-python locally (CI builds native and passes False).
 _GM_RUN_LANES = {"gm_hand_built", "gm_probabilistic",
                  "gm_probabilistic_native", "gm_probabilistic_counted",
-                 "gm_zeroconfig"}
+                 "gm_probabilistic_shipped", "gm_zeroconfig"}
 
 LANES: dict[str, Lane] = {
     "splink": Lane("splink", "run_splink.py"),
@@ -92,6 +92,25 @@ LANES: dict[str, Lane] = {
                                           "GOLDENMATCH_FS_CALIBRATED": "posterior",
                                           "GOLDENMATCH_FS_EM_COUNTED": "1"},
                                      extra_args=("--fs-basic-scorers",)),
+    # GM AS SHIPPED. Every other FS lane is deliberately handicapped for
+    # comparability -- `--fs-basic-scorers` forces the specialised name scorers
+    # (given_name_aliased_jw, name_freq_weighted_jw) down to plain jaro_winkler
+    # so GM and Splink run the same comparison model, and
+    # GOLDENMATCH_FS_CALIBRATED=posterior overrides GM's `linear` default so a
+    # shared --threshold means the same thing to both engines.
+    #
+    # Both are RIGHT for a Splink comparison and WRONG as a statement of what
+    # GoldenMatch does. Without this lane the panel's only FS numbers are
+    # handicapped ones, and they read as GM's accuracy -- which is exactly how
+    # I misread them: on a 20K person fixture the handicapped config scores
+    # F1 0.0000 where the shipped default scores 0.9964, same data, same engine.
+    #
+    # So this lane runs the probabilistic path with NO rewrite and NO
+    # calibration override. It is not comparable to Splink and is not meant to
+    # be; it is the control that keeps the handicapped lanes honest.
+    "gm_probabilistic_shipped": Lane("gm_probabilistic_shipped",
+                                     "run_goldenmatch.py",
+                                     mode="probabilistic"),
     "gm_zeroconfig": Lane("gm_zeroconfig", "run_goldenmatch.py", mode="zeroconfig"),
     "gm_converted_splink": Lane("gm_converted_splink", "run_gm_converted.py"),
 }
@@ -423,12 +442,31 @@ def _load_resume_state(agg_path: Path) -> tuple[dict | None, list[dict], set[tup
     the workflow restores the workdir across runner attempts/dispatches (the cache
     step in bench-er-headtohead.yml), and the per-datapoint flush below means we
     resume from the last datapoint that completed before the runner was reclaimed.
-    A corrupt/half-written aggregate is treated as no prior state (start clean)."""
+    A corrupt/half-written aggregate is treated as no prior state (start clean).
+
+    A prior aggregate built from a DIFFERENT commit is discarded, loudly. Resume
+    means "the same code was interrupted", never "reuse results from other code":
+    every recorded datapoint would be skipped, so a sweep dispatched to measure a
+    bench change comes back reporting the numbers it was meant to replace. That
+    happened -- the workflow's cache key was (shape, tag) with no SHA, so a
+    re-dispatch on new code restored the previous dispatch's workdir and skipped
+    all 16 datapoints. The run was green, the artifact had none of the new fields,
+    and the only tell was a `git_sha` in the header naming the older commit."""
     if not agg_path.exists():
         return None, [], set()
     try:
         obj = json.loads(agg_path.read_text())
     except Exception:
+        return None, [], set()
+    prior_header = obj.get("header") or {}
+    prior_sha, now_sha = prior_header.get("git_sha"), _git_sha()
+    if prior_sha and now_sha and prior_sha != now_sha:
+        print(
+            f"[orchestrate] DISCARDING resume state: it was built at "
+            f"{prior_sha[:12]}, this is {now_sha[:12]}. Resume never spans a "
+            f"code change -- re-running all datapoints from scratch.",
+            flush=True,
+        )
         return None, [], set()
     results = [r for r in (obj.get("results") or [])
                if _datapoint_key(r) != (None, None, None)]

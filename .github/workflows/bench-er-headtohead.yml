@@ -4,7 +4,7 @@
 # machine with an identical per-scale parquet fixture, so wall + peak-RSS are
 # comparable across engines.
 #
-# Lanes (7, selectable via the `lanes` input):
+# Lanes (8, selectable via the `lanes` input):
 #   splink                    - Fellegi-Sunter reference engine (pinned version)
 #   gm_hand_built             - GM fast weighted bucket+native path (speed reference)
 #   gm_probabilistic          - EM-trained FS, numpy fallback (GOLDENMATCH_FS_NATIVE=0)
@@ -15,6 +15,11 @@
 #                               (GOLDENMATCH_FS_EM_COUNTED=1). Differs from
 #                               gm_probabilistic_native ONLY in the trainer, so
 #                               the delta isolates it.
+#   gm_probabilistic_shipped  - the SAME probabilistic path with NO handicap:
+#                               no scorer rewrite, no calibration override, no
+#                               forced threshold. Not comparable to Splink and
+#                               not meant to be -- it is the control that stops
+#                               a handicapped F1 being read as GM's accuracy.
 #   gm_zeroconfig             - zero-effort controller
 #   gm_converted_splink       - GM running Splink's own spec via from_splink
 #
@@ -44,7 +49,7 @@ on:
       lanes:
         description: "Space-separated lanes to run"
         required: false
-        default: "splink gm_hand_built gm_probabilistic gm_probabilistic_native gm_probabilistic_counted gm_zeroconfig gm_converted_splink"
+        default: "splink gm_hand_built gm_probabilistic gm_probabilistic_native gm_probabilistic_counted gm_probabilistic_shipped gm_zeroconfig gm_converted_splink"
       shapes:
         description: "Space-separated fixture shapes (person biblio product)"
         required: false
@@ -165,17 +170,28 @@ jobs:
       # signal"); orchestrate.py flushes bench_results.json after every datapoint
       # and skips datapoints already recorded, so restoring .bench_er lets a
       # re-run continue instead of recomputing from zero. Unique primary key per
-      # (shape, tag, run, attempt) => the post-job save always writes; the
-      # prefix restore-keys pick up the most recent partial for this shape+tag
-      # (previous attempt first, then any earlier dispatch with the same tag).
+      # (shape, tag, sha, run, attempt) => the post-job save always writes; the
+      # prefix restore-keys pick up the most recent partial for this
+      # shape+tag+SHA (previous attempt first, then any earlier dispatch of the
+      # SAME COMMIT with the same tag).
+      #
+      # `github.sha` is load-bearing, not decoration. Without it the resume key
+      # was (shape, tag) alone, so a dispatch on new code with the default tag
+      # restored the PREVIOUS dispatch's `.bench_er` and orchestrate.py skipped
+      # every datapoint as "already recorded". A run added to measure new
+      # per-lane telemetry came back with none of it and a `git_sha` in the
+      # header naming a commit from before the change -- a green run reporting
+      # stale numbers, with the only tell buried in a field nobody reads.
+      # Resume is for the same code being interrupted; it must never span a
+      # code change.
       - name: Restore partial sweep progress
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25  # v5.1.0
         with:
           path: .bench_er
-          key: er-h2h-${{ matrix.shape }}-${{ inputs.run_tag }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: er-h2h-${{ matrix.shape }}-${{ inputs.run_tag }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            er-h2h-${{ matrix.shape }}-${{ inputs.run_tag }}-${{ github.run_id }}-
-            er-h2h-${{ matrix.shape }}-${{ inputs.run_tag }}-
+            er-h2h-${{ matrix.shape }}-${{ inputs.run_tag }}-${{ github.sha }}-${{ github.run_id }}-
+            er-h2h-${{ matrix.shape }}-${{ inputs.run_tag }}-${{ github.sha }}-
 
       - name: Run head-to-head sweep
         run: |

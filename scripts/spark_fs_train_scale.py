@@ -50,33 +50,111 @@ import time
 def build_fixture(spark, rows: int, dup: int, blocks_per_key: int):
     """A person-shaped frame with a known duplicate structure, built in-engine.
 
-    ``dup`` rows per entity, so the true-match count is known:
-    ``n_entities * C(dup, 2)``. Blocking keys are derived from the entity id so
-    duplicates land in the same block -- a fixture whose duplicates never block
-    together would measure an empty candidate set very quickly and prove
-    nothing.
+    ``dup`` rows per entity, so the true-match count is known. Blocking keys are
+    derived from the entity id so duplicates land in the same block -- a fixture
+    whose duplicates never block together would measure an empty candidate set
+    very quickly and prove nothing.
+
+    ## Entropy is the point, and the first version of this had none
+
+    The original generator perturbed ONE field with ONE of two spellings, so
+    9.5M candidate pairs collapsed to **3 and 2 distinct comparison vectors**.
+    That measured the collapse mechanism working on data with nothing to
+    collapse -- it proved `prod(levels + 1)` bounds the driver-side EM without
+    ever approaching the bound.
+
+    Every field is now perturbed INDEPENDENTLY, by a per-(row, field) hash:
+
+      * a character dropped (a truncation typo),
+      * a character appended (a fat-finger typo),
+      * nulled entirely (missing data -> the `-1` unobserved level),
+      * left alone.
+
+    Independence is what produces variety: with five fields each landing on
+    agree / partial / unobserved, the reachable vector space is in the hundreds,
+    and which of them actually occur is a property of the data rather than of
+    the generator's single knob.
+
+    Deterministic despite being pseudo-random: `xxhash64(id, field_seed)` is a
+    pure function of the row, so two runs at the same scale produce byte-
+    identical fixtures and a regression is a real change rather than a reroll.
     """
     from pyspark.sql import functions as F
 
     n_entities = max(rows // max(dup, 1), 1)
     ent = F.col("id") % F.lit(n_entities)
-    # A cheap deterministic perturbation: one row in `dup` gets a variant
-    # spelling, so comparison vectors are not all "agree on everything".
-    variant = (F.col("id") / F.lit(n_entities)).cast("int") % F.lit(max(dup, 1))
+    ent_s = ent.cast("string")
+
+    def perturbed(base, seed: int):
+        h = F.pmod(F.xxhash64(F.col("id"), F.lit(seed)), F.lit(10))
+        # The truncation drops the LAST character, not everything after the
+        # third. `substring(base, 1, 3)` collapsed every truncated value to the
+        # field's shared literal prefix -- every truncated `last` became "lee",
+        # so blocking pass 1 (keyed on `last`) put 20% of the table in ONE
+        # block: 200k rows at 1M => ~20 BILLION pairs, and the run wedged for
+        # 24 minutes before the step timeout killed it. Dropping the trailing
+        # character is the typo the docstring above describes and preserves the
+        # field's cardinality.
+        return (
+            F.when(h < F.lit(6), base)                                    # 60% clean
+             .when(h < F.lit(8), F.regexp_replace(base, ".$", ""))        # 20% truncated
+             .when(h < F.lit(9), F.concat(base, F.lit("x")))              # 10% typo
+             .otherwise(F.lit(None).cast("string"))                       # 10% missing
+        )
+
+    first = F.concat(F.lit("ann"), ent_s)
+    last = F.concat(F.lit("lee"), (ent % F.lit(max(n_entities // 3, 1))).cast("string"))
+    dob = F.concat(F.lit("19"), F.lpad((ent % F.lit(80)).cast("string"), 2, "0"),
+                   F.lit("-01-01"))
+    zipc = F.concat(F.lit("z"), F.lpad((ent % F.lit(500)).cast("string"), 3, "0"))
+    city = F.concat(F.lit("city"), (ent % F.lit(40)).cast("string"))
 
     return spark.range(rows).select(
         F.col("id").alias("__row_id__"),
-        F.when(variant == 0, F.concat(F.lit("ann"), ent.cast("string")))
-         .otherwise(F.concat(F.lit("anna"), ent.cast("string"))).alias("first"),
-        F.concat(F.lit("lee"), (ent % F.lit(max(n_entities // 3, 1))).cast("string"))
-         .alias("last"),
-        # The blocking key: `blocks_per_key` entities share one value, so block
-        # size is about `dup * blocks_per_key` and the candidate count stays
-        # linear in rows rather than quadratic.
-        F.concat(F.lit("k"), (ent / F.lit(max(blocks_per_key, 1))).cast("int").cast("string"))
+        perturbed(first, 101).alias("first"),
+        perturbed(last, 202).alias("last"),
+        perturbed(dob, 303).alias("dob"),
+        perturbed(zipc, 404).alias("zip"),
+        perturbed(city, 505).alias("city"),
+        # The blocking key is NEVER perturbed: it decides which pairs are
+        # compared at all, so corrupting it would silently shrink the candidate
+        # set and make a smaller run look like a faster one.
+        F.concat(F.lit("k"),
+                 (ent / F.lit(max(blocks_per_key, 1))).cast("int").cast("string"))
          .alias("blk"),
-        F.concat(F.lit("z"), (ent % F.lit(500)).cast("string")).alias("zip"),
     )
+
+
+def largest_block(source_df, key_config, transform_udf=None):
+    """``(key, rows)`` for the biggest block one pass would build.
+
+    Blocking skew is the failure mode this harness is least able to report on
+    its own: a skewed key does not raise, it just makes the self-join quadratic
+    in the size of one block and the run sits there producing nothing. The
+    fixture's own truncation bug did exactly that (see `perturbed`), and the
+    only evidence was a 24-minute gap between two log lines.
+
+    Deliberately reuses the product's `_block_key_column` / `_valid_key` rather
+    than grouping by the raw fields. Those privates are what `pass_candidates`
+    joins on, so a guard built on anything else could measure a key the join
+    never uses and clear a pass that then hangs anyway.
+    """
+    from goldenmatch.spark.config_pipeline import _block_key_column, _valid_key
+    from pyspark.sql import functions as F
+
+    key_col, _fields = _block_key_column(key_config, transform_udf)
+    top = (
+        source_df.withColumn("__block_key__", key_col)
+        .where(_valid_key(F.col("__block_key__")))
+        .groupBy("__block_key__")
+        .agg(F.count(F.lit(1)).alias("n"))
+        .orderBy(F.col("n").desc())
+        .limit(1)
+        .collect()
+    )
+    if not top:
+        return None, 0
+    return top[0]["__block_key__"], int(top[0]["n"])
 
 
 def make_config():
@@ -100,13 +178,24 @@ def make_config():
             ],
         ),
         matchkeys=[
+            # FIVE fields at three levels each. The comparison-vector space is
+            # `prod(levels + 1)` = 4^5 = 1,024, so the driver-side EM has a
+            # bound worth testing. The previous two-field / two-level config
+            # capped it at 9 -- the run reported 3 and 2 distinct patterns and
+            # could not have reported more than 9 whatever the data looked like.
             MatchkeyConfig(
                 name="fs", type="probabilistic",
                 fields=[
                     MatchkeyField(field="first", scorer="jaro_winkler",
-                                  levels=2, partial_threshold=0.8),
+                                  levels=3, partial_threshold=0.7),
                     MatchkeyField(field="last", scorer="jaro_winkler",
-                                  levels=2, partial_threshold=0.8),
+                                  levels=3, partial_threshold=0.7),
+                    MatchkeyField(field="dob", scorer="levenshtein",
+                                  levels=3, partial_threshold=0.7),
+                    MatchkeyField(field="zip", scorer="jaro_winkler",
+                                  levels=3, partial_threshold=0.7),
+                    MatchkeyField(field="city", scorer="jaro_winkler",
+                                  levels=3, partial_threshold=0.7),
                 ],
             ),
         ],
@@ -122,6 +211,14 @@ def main() -> int:
     ap.add_argument("--remote", default=os.environ.get(
         "GOLDENMATCH_SPARK_REMOTE", "sc://localhost:15002"))
     ap.add_argument("--u-max-pairs", type=int, default=1_000_000)
+    ap.add_argument(
+        "--max-block-pairs", type=int, default=50_000_000,
+        help="refuse a pass whose LARGEST single block would emit more pairs "
+             "than this. A skewed blocking key does not fail, it hangs -- the "
+             "constant-prefix truncation bug put 20%% of the table in one "
+             "block and the run sat in the join for 24 minutes until the step "
+             "timeout killed it, with no output naming the cause. This turns "
+             "that into a fast, specific refusal.")
     ap.add_argument("--out", default="")
     args = ap.parse_args()
 
@@ -194,6 +291,26 @@ def main() -> int:
     train_wall = 0.0
     for i, key_config in enumerate(blocking_passes(cfg)):
         fields = tuple(key_config.fields)
+
+        # Skew check BEFORE the join, because after it there is nothing to
+        # report -- the join is where a skewed key spends forever.
+        t = time.perf_counter()
+        top_key, top_rows = largest_block(df, key_config)
+        skew_dt = time.perf_counter() - t
+        top_pairs = top_rows * (top_rows - 1) // 2
+        print(f"[scale] pass {i} on {list(fields)}: largest block "
+              f"{top_key!r} has {top_rows:,} rows -> {top_pairs:,} pairs "
+              f"({skew_dt:.2f}s)", flush=True)
+        if top_pairs > args.max_block_pairs:
+            raise SystemExit(
+                f"[scale] pass {i} on {list(fields)} REFUSED: block "
+                f"{top_key!r} holds {top_rows:,} rows, which is "
+                f"{top_pairs:,} pairs on its own -- over --max-block-pairs="
+                f"{args.max_block_pairs:,}. This is a skewed blocking key, "
+                f"not a scale limit. Raise the flag only if the skew is the "
+                f"thing under test."
+            )
+
         cands = pass_candidates(df, key_config, id_col="__row_id__")
         joined = join_candidates_to_sources(cands, df, id_col="__row_id__")
 
@@ -215,6 +332,12 @@ def main() -> int:
             "pass": i, "blocking_fields": list(fields),
             "pairs": n_pairs, "distinct_patterns": len(counts),
             "count_seconds": round(dt, 2),
+            # Recorded even when it passes the guard: skew that is merely bad
+            # is invisible in the totals, and this is the number that moves
+            # when a fixture change quietly reshapes the candidate set.
+            "largest_block_rows": top_rows,
+            "largest_block_key": top_key,
+            "largest_block_pairs": top_pairs,
         })
         print(f"[scale] pass {i} on {list(fields)}: {n_pairs:,} pairs -> "
               f"{len(counts)} distinct patterns in {dt:.2f}s", flush=True)
