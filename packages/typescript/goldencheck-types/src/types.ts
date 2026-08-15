@@ -168,6 +168,11 @@ export interface InferredSchema {
   readonly fields: Record<string, FieldMapping>;
   readonly confidence: number;
   readonly schema_version?: number;
+  /** Identity layers (parties) detected over the same frame — the *who is in
+   *  this table* axis, orthogonal to `fields`' *what is this column* axis.
+   *  Empty/absent when layer detection was skipped or found nothing: that
+   *  means "no layer information", never "one anonymous population". */
+  readonly layers?: readonly IdentityLayer[];
 }
 
 export const isUnknown = (m: FieldMapping): boolean => m.type === UNMAPPED_TYPE;

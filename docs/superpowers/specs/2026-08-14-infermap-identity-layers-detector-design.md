@@ -1,8 +1,8 @@
 # Identity-layers detector — detect the entity roles present in a dataset
 
 **Date:** 2026-08-14
-**Status:** Design (draft, pre-approval). Tracks [#2574](https://github.com/benseverndev-oss/goldenmatch/issues/2574).
-**Scope:** `packages/python/infermap/` + `packages/python/goldencheck-types/` (and their TS mirrors).
+**Status:** Approved; Waves 1, 2 and 4 landed (#2578, #2581, and this change). Wave 3 open. Tracks [#2574](https://github.com/benseverndev-oss/goldenmatch/issues/2574).
+**Scope:** `packages/python/infermap/` + `packages/python/goldencheck-types/` (and their TS mirrors), plus the Wave 4 consumers in `goldenpipe/` and `goldenmatch/`.
 **Feeds:** [#2575](https://github.com/benseverndev-oss/goldenmatch/issues/2575) (per-block / per-partition config) — you cannot vary matching config per segment until you can detect the segments.
 
 ## The gap
@@ -248,6 +248,17 @@ common path stays name-only and free: a 9-digit numeric column named `aba`
 
 **Wave 4 — consumers.** `goldenpipe.stages.infer_schema` emits layers into
 `InferredSchema`; goldenmatch consumes them as the segment labels for #2575.
+
+> **Landed.** `InferredSchema` gained `layers` (inside the v4 contract, which
+> already declared that layers travel InferMap → GoldenPipe → GoldenMatch, so no
+> further bump); the stage detects unconditionally because name-only detection
+> costs what `detect_domain` costs. `goldenmatch.core.segments` is the consumer:
+> read-only, structurally adapted (no `goldencheck_types` import, so that stays
+> an optional dependency), fail-open to `[]`. It **labels and stops** — it does
+> not vary scorers, thresholds or blocking, and touches neither the vectorized
+> fast paths nor the global-EM / single-score-space assumptions. Those are
+> #2575's subject, behind its measured-quality-win gate; landing the labels
+> separately is what makes that work testable.
 
 ### Why the kernel is Wave 1, not a deferred optimization
 
