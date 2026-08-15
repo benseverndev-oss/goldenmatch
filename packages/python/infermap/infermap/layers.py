@@ -49,6 +49,11 @@ from infermap.detect import DEFAULT_MIN_SCORE, _tokens, detect_domain
 #: Mirrors ``infermap-core::MIN_QUALIFIER_LEN``.
 _MIN_QUALIFIER_LEN = 3
 
+#: Pack consulted for role vocabulary when ``detect_domain`` finds no vertical.
+#: Host-side policy, not a kernel concern -- the kernel is handed a role list and
+#: does not know where it came from.
+_FALLBACK_DOMAIN = "generic"
+
 #: Universal ATTRIBUTE tokens — they describe a property of an entity, never the
 #: identity of one, in any vertical. **Mirror of ``infermap-core::ATTRIBUTE_TOKENS``**;
 #: the kernel owns the list, this copy exists only for the pure fallback and must
@@ -100,6 +105,7 @@ def detect_identity_layers(
     resolved_domain = domain if domain is not None else detect_domain(df)
     pack = _load_pack(resolved_domain)
     roles, type_hints = _pack_inputs(pack)
+    roles = _with_generic_roles(roles)
 
     raw_layers, unassigned = _layers_core(columns, roles, type_hints, min_score)
 
@@ -148,6 +154,42 @@ def _load_pack(domain: str | None) -> DomainPack | None:
         # An unknown domain name degrades to affix-only detection rather than
         # failing the call — the primary signal does not need a pack.
         return None
+
+
+def _with_generic_roles(
+    roles: list[tuple[str, str, list[str], list[str]]],
+) -> list[tuple[str, str, list[str], list[str]]]:
+    """Append the cross-vertical party vocabulary to a pack's own roles.
+
+    A union, not a fallback. Two gaps closed at once, both measured on real
+    schemas:
+
+    * ``detect_domain`` finds no vertical for the overwhelming majority of
+      frames, which loaded NO pack at all -- detection grouped columns into
+      parties correctly and then had nothing to NAME them with.
+    * A frame that DOES resolve to a vertical still contains parties that
+      vertical never enumerates: ``finance`` declares lender / borrower / payee
+      but no plain ``customer``, so ``customer_id``/``customer_name`` came back
+      ``unknown`` on a table the pack otherwise understood well.
+
+    Generic parties are cross-vertical by definition -- a finance table still
+    has customers -- so they are additive everywhere rather than a substitute
+    for a vertical vocabulary.
+
+    **The vertical wins collisions.** Pack roles keep their position at the
+    front, and a generic role whose NAME the pack already declares is dropped;
+    the kernel resolves token collisions first-declaration-wins over this
+    order, so a vertical's reading of a shared token always takes precedence.
+
+    Generic contributes role names only -- it declares no field types -- so this
+    cannot widen the kernel's stop-list.
+    """
+    generic = _load_pack(_FALLBACK_DOMAIN)
+    if generic is None:
+        return roles
+    generic_roles, _ = _pack_inputs(generic)
+    declared = {name for (name, _kind, _hints, _types) in roles}
+    return roles + [r for r in generic_roles if r[0] not in declared]
 
 
 def _pack_inputs(

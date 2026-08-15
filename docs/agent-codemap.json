@@ -13194,6 +13194,7 @@
             "_pack_inputs",
             "_reason",
             "_type_corroboration",
+            "_with_generic_roles",
             "detect_identity_layers"
           ],
           "imports": [
