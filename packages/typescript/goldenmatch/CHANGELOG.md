@@ -6,6 +6,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.29.0] - 2026-08-15
+
 ### Added
 - **`goldenmatch/core/string-distance` subpath** — the edit-distance primitives
   (`jaro`, `jaroWinkler`, `levenshteinDistance`, `levenshteinSimilarity`,

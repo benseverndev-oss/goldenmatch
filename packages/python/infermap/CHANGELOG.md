@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-15
+
 ### Added
 - **A blind-labelling corpus for layer detection** (`scripts/layers_blind_label.py`, `tests/fixtures/layers_blind_labels.json`). The two existing corpora were both built inside this workstream -- one hand-authored by whoever tuned the detector, one mechanically labelled but from generated tables -- and both now score at or near ceiling, which means they have stopped discriminating. This is the third instrument and the only one whose labels come from outside: real column names, grouped by a human who has not seen what the detector says about them. `worksheet` samples real schemas (diversity-filtered by token-set Jaccard and capped per source directory, after two earlier filters both produced a sheet dominated by one benchmark generator) and **never imports the detector** -- enforced by a test, because a worksheet carrying predicted groupings would anchor the labeller and turn this into a third measure of self-agreement. `score` reuses the FK harness's partition metrics so all three corpora stay commensurable. Ships unlabelled: scoring reports "awaiting labels" and the test skips, which is a normal state rather than a failure. `--from-dir` points the sampler at real schemas elsewhere, which is how it earns its keep -- sampled from this repo it draws on library test fixtures, a deliberately weak substitute for production data.
 

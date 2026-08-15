@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-08-15
+
 ### Added
 - **`ColumnarResult.to_arrow()`** — the mirror of the existing `to_polars()`,
   completing the round trip opened by `transform(pa.Table)`: an arrow caller hands

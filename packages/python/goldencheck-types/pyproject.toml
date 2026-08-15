@@ -1,6 +1,6 @@
 [project]
 name = "goldencheck-types"
-version = "0.2.0"
+version = "0.3.0"
 description = "Shared canonical field types for the Golden Suite"
 readme = "README.md"
 license = "MIT"

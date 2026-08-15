@@ -8,7 +8,7 @@ build-backend = "maturin"
 
 [project]
 name = "goldenfuzz"
-version = "0.1.1"
+version = "0.2.0"
 description = "Fast, byte-identical-to-rapidfuzz fuzzy-string scorers (jaro-winkler / levenshtein / indel) + one-vs-many extract/cdist"
 readme = "README.md"
 requires-python = ">=3.11"

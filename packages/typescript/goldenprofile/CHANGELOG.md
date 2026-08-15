@@ -2,6 +2,10 @@
 
 All notable changes to `goldenprofile` are documented here.
 
+## [0.2.0] - 2026-08-15
+
+Maintenance release; version aligned with the 2026-08-15 repo-wide cut.
+
 ## [0.1.0] - 2026-06-28
 
 Initial release: edge-safe TypeScript surface for the GoldenProfile Virtual

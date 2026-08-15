@@ -1222,7 +1222,7 @@ export async function handleTool(
       case "server_info":
         return {
           name: "goldenmatch-js",
-          version: "1.28.0",
+          version: "1.29.0",
           tool_count: TOOLS.length,
           description:
             "Node-only GoldenMatch MCP server over stdio (JSON-RPC 2.0)",
@@ -1714,7 +1714,7 @@ export function startMcpServer(): void {
             id,
             result: {
               protocolVersion: "2024-11-05",
-              serverInfo: { name: "goldenmatch-js", version: "1.28.0" },
+              serverInfo: { name: "goldenmatch-js", version: "1.29.0" },
               capabilities: { tools: {} },
             },
           });

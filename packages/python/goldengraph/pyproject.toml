@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "goldengraph"
-version = "0.1.0"
+version = "0.2.0"
 description = "Build an own-your-KG knowledge graph from text: LLM extraction -> goldenmatch entity resolution -> a durable bi-temporal store (goldengraph engine)."
 readme = "README.md"
 requires-python = ">=3.11"

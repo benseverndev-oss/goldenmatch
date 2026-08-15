@@ -9,7 +9,7 @@ build-backend = "maturin"
 
 [project]
 name = "goldenmatch-embed"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local ONNX embedder (goldenembed-rs) for goldenmatch SQL UDFs"
 readme = "README.md"
 requires-python = ">=3.11"

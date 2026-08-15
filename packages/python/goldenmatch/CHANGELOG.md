@@ -6,6 +6,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [3.13.0] - 2026-08-15
+
 ### Added
 - **Segment labels: which party each column describes (#2574).**
   `goldenmatch.core.segments` is a read-only consumer of InferMap's identity

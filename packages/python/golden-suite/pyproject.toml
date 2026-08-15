@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "golden-suite"
-version = "0.4.0"
+version = "0.5.0"
 description = "One-line, perf-optimized install for the entire Golden Suite — goldenmatch, goldencheck, goldenflow, goldenpipe, GoldenSchema (infermap), goldenanalysis, native acceleration on by default"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
@@ -36,18 +36,18 @@ classifiers = [
 # it; `golden-suite optimize` repairs it.
 dependencies = [
     # --- suite (floors track the current majors) ---
-    "goldenpipe[golden-suite]>=1.4",    # orchestrator + check/flow/match/analysis
-    "goldenmatch[polars]>=3.12",        # entity resolution: dedupe, match, golden records (>=3.10: MCP surface parity both directions -- +8 MCP tools across 3.9/3.10 (82->90), mcp_tools.ts_only now empty; retains the >=3.7 zero-config FS scale-recall fix + out-of-core streaming FS for the >=40M path; [polars] keeps the wall-optimization paths + the classic lane on for suite installs)
-    "goldencheck[polars]>=3.4",       # data validation (>=3.0.0 = Arrow-native Polars-free default scan; [polars] kept for the scan_dataframe(pl.DataFrame) overload goldenmatch's quality bridge uses, also pulled transitively by goldenmatch)
-    "goldenflow>=2.1.0",                 # transform / standardize / normalize (>=2.1.0 = owned auto-detect profile kernel; native floor >=0.27.0)
-    "infermap>=0.6",                  # GoldenSchema: inference-driven schema mapping
-    "goldenanalysis>=0.4",              # read-only cross-cutting metrics + reporting
-    "goldencheck-types>=0.2",           # shared canonical field-type contracts
+    "goldenpipe[golden-suite]>=1.5",    # orchestrator + check/flow/match/analysis
+    "goldenmatch[polars]>=3.13",        # entity resolution: dedupe, match, golden records (>=3.10: MCP surface parity both directions -- +8 MCP tools across 3.9/3.10 (82->90), mcp_tools.ts_only now empty; retains the >=3.7 zero-config FS scale-recall fix + out-of-core streaming FS for the >=40M path; [polars] keeps the wall-optimization paths + the classic lane on for suite installs)
+    "goldencheck[polars]>=3.5",       # data validation (>=3.0.0 = Arrow-native Polars-free default scan; [polars] kept for the scan_dataframe(pl.DataFrame) overload goldenmatch's quality bridge uses, also pulled transitively by goldenmatch)
+    "goldenflow>=2.2.0",                 # transform / standardize / normalize (>=2.1.0 = owned auto-detect profile kernel; native floor >=0.27.0)
+    "infermap>=0.7",                  # GoldenSchema: inference-driven schema mapping
+    "goldenanalysis>=0.5",              # read-only cross-cutting metrics + reporting
+    "goldencheck-types>=0.3",           # shared canonical field-type contracts
     # --- native acceleration (on by default; see note above) ---
-    "goldenmatch-native>=0.1.20",       # >=0.1.19 adds the `FS_SUPPORTS_REQUIRE_POSITIVE_EVIDENCE` capability so the net-zero-evidence FS link filter (default-on, kills the scale-growing over-merge) actually runs on the native kernel; 0.1.18 added the native `date_similarity` kernel
-    "goldencheck-native>=0.1",
-    "goldenflow-native>=0.26.0",        # >=0.26.0 = the full columnar surface (format_f64 + AsFloat numeric-input); now a BASE dep of goldenflow 2.0
-    "goldenanalysis-native>=0.1",
+    "goldenmatch-native>=0.2.0",       # >=0.1.19 adds the `FS_SUPPORTS_REQUIRE_POSITIVE_EVIDENCE` capability so the net-zero-evidence FS link filter (default-on, kills the scale-growing over-merge) actually runs on the native kernel; 0.1.18 added the native `date_similarity` kernel
+    "goldencheck-native>=0.2",
+    "goldenflow-native>=0.28.0",        # >=0.26.0 = the full columnar surface (format_f64 + AsFloat numeric-input); now a BASE dep of goldenflow 2.0
+    "goldenanalysis-native>=0.2",
     # --- CLI (doctor / optimize) ---
     "typer>=0.12",
     "rich>=13.0",
@@ -57,7 +57,7 @@ dependencies = [
 # One MCP server exposing every tool — the agent front door.
 mcp = ["goldensuite-mcp>=0.5"]
 # GoldenPipe serving surfaces (A2A + async transports + TUI + REST).
-agent = ["goldenpipe[tui,api,agent]>=1.4"]
+agent = ["goldenpipe[tui,api,agent]>=1.5"]
 # Everything: full suite + native + MCP + serving.
 all = ["golden-suite[mcp,agent]"]
 dev = ["pytest>=8", "ruff>=0.6"]
