@@ -169,9 +169,9 @@ def test_heterogeneity_needs_more_than_one_segment():
 def test_module_imports_without_goldencheck_types():
     """The structural adapter is what keeps that dependency optional."""
     import pathlib
+    import sys
 
-    import goldenmatch.core.segments as mod
-
+    mod = sys.modules[detect_segments.__module__]
     src = pathlib.Path(mod.__file__).read_text(encoding="utf-8")
     assert "import goldencheck_types" not in src
     assert "from goldencheck_types" not in src
