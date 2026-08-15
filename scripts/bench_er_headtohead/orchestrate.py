@@ -59,10 +59,16 @@ LANES: dict[str, Lane] = {
     # Both FS lanes score in POSTERIOR calibration so GM's match score is a true
     # probability on the SAME scale as Splink's, making the shared --threshold a
     # fair cut for both engines. GM's default is `linear` (min-max of the weight
-    # envelope); at a fixed high threshold that scale mismatch admits a mass of
-    # weak-but-positive person-shape pairs and catastrophically over-merges
-    # (person 1M linear -> F1 0.00), which is a bench artifact, not a model gap.
-    # Posterior recovers precision 1.0 / zero FP at the same 0.85 cut.
+    # envelope), and at a fixed high threshold that scale mismatch over-merges
+    # the person shape -- a bench artifact, not a model gap. Posterior gives
+    # precision 1.0 / zero FP at the same 0.85 cut.
+    #
+    # `--fs-basic-scorers` does a SECOND thing this comment used to omit: it
+    # forces `mk.link_threshold = --threshold`. Without it the cut resolves
+    # through `compute_thresholds` to 0.60, so these lanes and
+    # `gm_probabilistic_shipped` are not cutting at the same place. See the
+    # three-way-confound note on that lane -- the threshold gap turned out to be
+    # the DOMINANT term in the over-merge this comment blames on calibration.
     "gm_probabilistic": Lane("gm_probabilistic", "run_goldenmatch.py",
                              mode="probabilistic",
                              env={"GOLDENMATCH_FS_NATIVE": "0",
@@ -108,6 +114,36 @@ LANES: dict[str, Lane] = {
     # So this lane runs the probabilistic path with NO rewrite and NO
     # calibration override. It is not comparable to Splink and is not meant to
     # be; it is the control that keeps the handicapped lanes honest.
+    #
+    # THREE differences, not two. `--fs-basic-scorers` also FORCES
+    # `mk.link_threshold = --threshold` (0.85), and this lane does not pass it,
+    # so `mk.link_threshold` stays None and `_fs_link_threshold` falls through
+    # to `compute_thresholds`. MEASURED on the person shape at both 100k and 1M:
+    # this lane's minimum retained score is 0.60 where every handicapped lane
+    # sits at 0.85.
+    #
+    # That third difference is the dominant one, and it was invisible until the
+    # panel recorded per-lane thresholds. At 1M it admits 276,836 pairs against
+    # `gm_probabilistic_native`'s 184,285; connected components chains the extra
+    # links until non-singleton clusters average 7.98 members against a truth of
+    # 2.40, and pairwise precision falls to 0.2627 (bcubed stays 0.979 -- closure
+    # metrics are quadratic in cluster size). I first read that collapse as
+    # linear calibration being brittle at scale. It is mostly a lower cut.
+    #
+    # Calibration is still real but SECOND-ORDER, and only on some shapes:
+    # linear and posterior are both monotone in match weight, so they rank
+    # identically and can differ only where the cut lands. MEASURED by
+    # `dump_fs_score_histograms.py` at 100k, under BOTH scorer configurations:
+    # biblio is separable (non-match max 3e-06, match min 1.0) so any cut in
+    # that range decides the same -- which is why this lane and the posterior
+    # ones are byte-identical there. person is NOT (non-match max 0.999994 vs
+    # match min 0.999990): the classes touch exactly where a high cut sits, so
+    # the cut choice decides the answer. Separability tracked the SHAPE, not the
+    # scorers.
+    #
+    # So the shipped-vs-handicapped delta this lane exists to expose is a
+    # THREE-way confound. Read it as "shipped differs" and not as an
+    # attribution to the scorer rewrite alone.
     "gm_probabilistic_shipped": Lane("gm_probabilistic_shipped",
                                      "run_goldenmatch.py",
                                      mode="probabilistic"),
