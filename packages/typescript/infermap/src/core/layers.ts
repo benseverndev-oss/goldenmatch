@@ -42,6 +42,13 @@ const ATTRIBUTE_TOKENS: ReadonlySet<string> = new Set([
   "address", "addr", "email", "phone", "city", "state", "zip", "country",
   "first", "last", "middle", "full", "line", "row", "col", "column",
   "created", "updated", "modified", "version", "source", "record",
+  // Lineage / provenance — warehouse plumbing, never a party.
+  "src", "etl", "stg", "raw", "batch", "ingested", "extracted", "loaded",
+  // Audit trail — siblings of created/updated/modified above.
+  "approved", "reviewed", "submitted", "verified", "deleted", "inserted",
+  "processed",
+  // Aggregate / unit qualifiers — a measure, not an entity.
+  "avg", "mean", "median", "sum", "pct", "usd", "eur", "gbp",
 ]);
 
 // Score weights — mirror of the kernel's W_* constants.

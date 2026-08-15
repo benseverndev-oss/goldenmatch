@@ -7,11 +7,13 @@ CONVENTION instead, independent of how the detector scores it, and this module
 pins the result.
 
 **The floors below are a ratchet, not a target.** They record what the detector
-does TODAY, and today it is not good: 56% specificity means it invents a party
-on nearly half of single-entity tables. The floors exist so that number cannot
-quietly get worse while other work lands, and so a genuine fix shows up as a
-test that must be re-blessed upward. Raising them is the point; lowering one is
-a regression that needs a reason in the diff.
+does TODAY. Specificity started at 56% -- it invented a party on nearly half of
+all single-entity tables -- and the lineage/audit/aggregate stop-list took it to
+100%. Sensitivity is still 71% and the two misses are a known bug, not noise: a
+field type's ``name_hints`` can suppress a party qualifier outright (see
+``test_partition_sensitivity_does_not_regress``). The floors exist so these
+numbers cannot quietly get worse while other work lands. Raising one is the
+point; lowering one is a regression that needs a reason in the diff.
 
 Both directions are pinned deliberately. A negatives-only corpus is scored 100%
 by a detector that never splits anything, so specificity is only meaningful
@@ -30,7 +32,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "scripts"))
 from layers_precision import run  # noqa: E402
 
 #: Current measured behaviour. See the module docstring: floors, not goals.
-MIN_SPECIFICITY = 0.56
+#:
+#: Specificity is pinned at 1.0 deliberately. Having reached "never invents a
+#: party on a single-entity table", ANY regression is worth failing on -- this
+#: is the property that decides whether per-block configuration (#2575) can
+#: trust a segmentation at all.
+MIN_SPECIFICITY = 1.0
 MIN_SENSITIVITY_PARTITION = 0.71
 
 
