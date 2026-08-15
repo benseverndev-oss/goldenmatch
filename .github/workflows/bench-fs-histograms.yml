@@ -23,6 +23,15 @@ on:
         description: "Datasets to dump (space separated)"
         required: false
         default: "historical_50k dblp_scholar dblp_acm febrl3"
+      shipped:
+        description: "Probe the SHIPPED config (keep specialised name scorers) instead of the Splink-comparable rewrite"
+        required: false
+        type: boolean
+        default: false
+      synthetic_rows:
+        description: "Row count for synthetic_person / synthetic_biblio (other datasets ignore it)"
+        required: false
+        default: "5000"
 
 permissions:
   contents: read
@@ -106,9 +115,16 @@ jobs:
           GOLDENMATCH_FS_CALIBRATED: posterior
           GOLDENMATCH_FS_NATIVE: "1"
           GOLDENMATCH_FS_CALIBRATE_THRESHOLD: "1"
+          GOLDENMATCH_BENCH_SYNTHETIC_ROWS: ${{ inputs.synthetic_rows }}
         run: |
           set -euo pipefail
-          uv run python scripts/bench_er_headtohead/dump_fs_score_histograms.py             --datasets ${{ inputs.datasets }}             --out fs-histograms.json             --summary-md fs-histograms.md
+          SHIPPED=""
+          if [ "${{ inputs.shipped }}" = "true" ]; then SHIPPED="--shipped"; fi
+          uv run python scripts/bench_er_headtohead/dump_fs_score_histograms.py \
+            --datasets ${{ inputs.datasets }} \
+            $SHIPPED \
+            --out fs-histograms.json \
+            --summary-md fs-histograms.md
 
       - name: Summary
         if: always()

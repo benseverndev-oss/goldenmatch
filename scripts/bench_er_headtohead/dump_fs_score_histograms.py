@@ -73,8 +73,17 @@ def truth_pairs(truth) -> set[tuple[str, str]]:
     return out
 
 
-def collect(name: str) -> dict:
-    """Score every blocked training pair, and label it against ground truth."""
+def collect(name: str, *, basic_scorers: bool = True) -> dict:
+    """Score every blocked training pair, and label it against ground truth.
+
+    ``basic_scorers`` rewrites the specialised name scorers down to plain
+    ``jaro_winkler``, which is right for a Splink-comparable measurement and
+    WRONG as a statement of what GoldenMatch does -- on the head-to-head panel
+    that rewrite alone costs the person shape 0.078 F1, all of it recall. Pass
+    ``False`` to probe the distribution the shipped configuration actually
+    produces. Recorded in the output either way so a reader never has to infer
+    which one they are looking at.
+    """
     import datasets as datasets_mod
     import numpy as np
     from goldenmatch.core import probabilistic as P
@@ -85,9 +94,12 @@ def collect(name: str) -> dict:
 
     cfg = auto_configure_probabilistic_df(records)
     mk = cfg.get_matchkeys()[0]
-    for f in getattr(mk, "fields", None) or []:
-        if f.scorer and f.scorer not in _BASIC:
-            f.scorer = "jaro_winkler"
+    rewritten = []
+    if basic_scorers:
+        for f in getattr(mk, "fields", None) or []:
+            if f.scorer and f.scorer not in _BASIC:
+                rewritten.append(f"{f.field}:{f.scorer}->jaro_winkler")
+                f.scorer = "jaro_winkler"
 
     # Intercept the exact array the calibrator is handed. Reaching in like this
     # is deliberate: re-deriving the scores here would measure a lookalike, and
@@ -108,7 +120,10 @@ def collect(name: str) -> dict:
         P._posterior_split = orig
 
     out: dict = {"dataset": name, "n_records": records.num_rows,
-                 "n_true_pairs": len(tp)}
+                 "n_true_pairs": len(tp),
+                 "basic_scorers": bool(basic_scorers),
+                 "scorers_rewritten": rewritten,
+                 "comparable_to_splink": bool(basic_scorers)}
     stats = (getattr(res, "stats", None) or {}).get("fs_link_thresholds") or {}
     first = next(iter(stats.values()), {}) if isinstance(stats, dict) else {}
     out["chosen_threshold"] = first.get("link_threshold")
@@ -276,18 +291,30 @@ def main() -> int:
                     default=["historical_50k", "dblp_scholar"])
     ap.add_argument("--out", default="fs-histograms.json")
     ap.add_argument("--summary-md", default="")
+    ap.add_argument(
+        "--shipped", action="store_true",
+        help="probe the SHIPPED configuration: keep the specialised name "
+             "scorers instead of rewriting them to jaro_winkler. The rewrite "
+             "is right for a Splink-comparable number and wrong as a statement "
+             "of what GoldenMatch does; on the head-to-head panel it alone "
+             "costs the person shape 0.078 F1, all of it recall.")
     args = ap.parse_args()
 
     os.environ.setdefault("GOLDENMATCH_FS_CALIBRATED", "posterior")
     os.environ.setdefault("GOLDENMATCH_FS_NATIVE", "1")
     os.environ.setdefault("GOLDENMATCH_FS_CALIBRATE_THRESHOLD", "1")
 
-    reports = []
+    mode = "SHIPPED" if args.shipped else "splink-comparable"
+    print(f"[hist] scorer mode: {mode}", flush=True)
+
+    reports: list[dict] = []
     for name in args.datasets:
+        r: dict
         try:
-            r = collect(name)
+            r = collect(name, basic_scorers=not args.shipped)
         except Exception as exc:  # noqa: BLE001 - one dataset must not lose the rest
-            r = {"dataset": name, "error": str(exc)[:300]}
+            r = {"dataset": name, "error": str(exc)[:300],
+                 "basic_scorers": not args.shipped}
         reports.append(r)
         if r.get("error"):
             print(f"[hist] {name}: ERROR {r['error']}", flush=True)
