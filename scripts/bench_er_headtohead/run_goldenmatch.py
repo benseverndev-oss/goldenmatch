@@ -241,8 +241,16 @@ def main() -> None:
             # Measured on a 20K person fixture, the cut alone is worth
             # F1 0.5406 (at 0.95) -> 0.8772 (at 0.85) with precision staying
             # 1.0000 throughout -- see `diagnose_fs_recall.py`.
-            for mk in cfg.get_matchkeys():
-                mk.link_threshold = args.threshold
+            #
+            # Tied to `--fs-basic-scorers` because both adjustments serve the
+            # SAME purpose -- making this lane comparable to Splink -- and a
+            # lane that is not being compared to Splink should not inherit
+            # either. `gm_probabilistic_shipped` runs without the flag and so
+            # keeps GM's own threshold decision, which is the point of having
+            # it: a control that shows what GoldenMatch actually does.
+            if args.fs_basic_scorers:
+                for mk in cfg.get_matchkeys():
+                    mk.link_threshold = args.threshold
             # Force rerank off so a 3+ field weighted matchkey can't pull a
             # cross-encoder model down from HuggingFace at dedupe time.
             for mk in cfg.get_matchkeys():
@@ -275,6 +283,20 @@ def main() -> None:
                             rewritten.append((getattr(f, "field", None), sc))
                             f.scorer = "jaro_winkler"
             result["fs_basic_scorers_rewritten"] = rewritten
+            # ALWAYS recorded, present or absent, so a reader never has to infer
+            # from a missing key whether this number is comparable-to-Splink or
+            # as-shipped. Reading a handicapped F1 as "GoldenMatch's accuracy"
+            # is a real failure mode -- it cost this repo a five-session detour
+            # on a 20K person fixture where the handicapped config scores
+            # F1 0.0000 and the shipped default scores 0.9964.
+            result["handicaps"] = {
+                "fs_basic_scorers": bool(args.fs_basic_scorers),
+                "forced_link_threshold": (
+                    args.threshold if args.fs_basic_scorers else None
+                ),
+                "fs_calibrated": os.environ.get("GOLDENMATCH_FS_CALIBRATED"),
+                "comparable_to_splink": bool(args.fs_basic_scorers),
+            }
             # FS-native per-matchkey eligibility telemetry (spec section 8): count
             # how many resolved matchkeys the native FS kernel could score. Under
             # the numpy lane (GOLDENMATCH_FS_NATIVE=0) _fs_native_enabled()

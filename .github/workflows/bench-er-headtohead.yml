@@ -4,7 +4,7 @@
 # machine with an identical per-scale parquet fixture, so wall + peak-RSS are
 # comparable across engines.
 #
-# Lanes (7, selectable via the `lanes` input):
+# Lanes (8, selectable via the `lanes` input):
 #   splink                    - Fellegi-Sunter reference engine (pinned version)
 #   gm_hand_built             - GM fast weighted bucket+native path (speed reference)
 #   gm_probabilistic          - EM-trained FS, numpy fallback (GOLDENMATCH_FS_NATIVE=0)
@@ -15,6 +15,11 @@
 #                               (GOLDENMATCH_FS_EM_COUNTED=1). Differs from
 #                               gm_probabilistic_native ONLY in the trainer, so
 #                               the delta isolates it.
+#   gm_probabilistic_shipped  - the SAME probabilistic path with NO handicap:
+#                               no scorer rewrite, no calibration override, no
+#                               forced threshold. Not comparable to Splink and
+#                               not meant to be -- it is the control that stops
+#                               a handicapped F1 being read as GM's accuracy.
 #   gm_zeroconfig             - zero-effort controller
 #   gm_converted_splink       - GM running Splink's own spec via from_splink
 #
@@ -44,7 +49,7 @@ on:
       lanes:
         description: "Space-separated lanes to run"
         required: false
-        default: "splink gm_hand_built gm_probabilistic gm_probabilistic_native gm_probabilistic_counted gm_zeroconfig gm_converted_splink"
+        default: "splink gm_hand_built gm_probabilistic gm_probabilistic_native gm_probabilistic_counted gm_probabilistic_shipped gm_zeroconfig gm_converted_splink"
       shapes:
         description: "Space-separated fixture shapes (person biblio product)"
         required: false
