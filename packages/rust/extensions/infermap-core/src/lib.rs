@@ -142,6 +142,26 @@ pub fn detect_domain(
 /// resolves (the unfamiliar-schema case the affix signal exists to serve) --
 /// without it, `name` groups `widget_owner_name` with `shipper_name`, fusing two
 /// unrelated parties. Kept small: only tokens that are attributes everywhere.
+///
+/// Three later groups were added from a measured corpus rather than guessed
+/// (`layers_precision_corpus.json`), because each was observed opening a party
+/// that does not exist on single-entity tables:
+///
+/// * **Lineage** (`src`, `etl`, `stg`, `raw`, `batch`, `ingested`, `extracted`,
+///   `loaded`) -- data-warehouse plumbing. `src_id`/`src_assay_id` sitting
+///   beside a real entity produced a phantom "src party" on every staging
+///   table, the single worst class at 1 of 5 cases correct.
+/// * **Audit** (`approved`, `reviewed`, `submitted`, `verified`, `deleted`,
+///   `inserted`, `processed`) -- siblings of the `created`/`updated`/`modified`
+///   already here. `approved_by`/`approved_at` was becoming a party.
+/// * **Aggregate/unit** (`avg`, `mean`, `median`, `sum`, `pct`, `usd`, `eur`,
+///   `gbp`) -- a measure or currency qualifier, never an entity. Joins the
+///   `total`/`count`/`qty` already present.
+///
+/// A role declaration still OVERRIDES this list (`stop.retain` below), so a
+/// pack that genuinely means one of these as a party can say so. Grow this list
+/// on corpus evidence, not on intuition -- every token added here is a party
+/// that can never be detected without an explicit role declaration.
 const ATTRIBUTE_TOKENS: &[&str] = &[
     "name",
     "names",
@@ -197,6 +217,32 @@ const ATTRIBUTE_TOKENS: &[&str] = &[
     "version",
     "source",
     "record",
+    // Lineage / provenance -- warehouse plumbing, never a party.
+    "src",
+    "etl",
+    "stg",
+    "raw",
+    "batch",
+    "ingested",
+    "extracted",
+    "loaded",
+    // Audit trail -- siblings of created/updated/modified above.
+    "approved",
+    "reviewed",
+    "submitted",
+    "verified",
+    "deleted",
+    "inserted",
+    "processed",
+    // Aggregate / unit qualifiers -- a measure, not an entity.
+    "avg",
+    "mean",
+    "median",
+    "sum",
+    "pct",
+    "usd",
+    "eur",
+    "gbp",
 ];
 
 /// A qualifier shorter than this is noise (`f_`, `x_`), not a party name.
