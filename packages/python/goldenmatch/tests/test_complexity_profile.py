@@ -23,10 +23,15 @@ def _green_data():
 
 
 def _green_blocking():
+    # Sizes are coherent with total_comparisons: 10 near-equal blocks of ~11
+    # rows give ~50 pairs each, so the biggest owns ~11% of the 500 and no
+    # block is a straggler. The old fixture claimed a 25-row block (300 pairs)
+    # inside a 500-pair total, which the skew rule now reads -- and correctly
+    # grades RED, because 60% of the work in one of ten blocks IS skew.
     return BlockingProfile(
         keys_used=[["a"]], n_blocks=10, total_comparisons=500,
-        reduction_ratio=0.95, block_sizes_p50=10, block_sizes_p95=15,
-        block_sizes_p99=20, block_sizes_max=25,
+        reduction_ratio=0.95, block_sizes_p50=10, block_sizes_p95=11,
+        block_sizes_p99=11, block_sizes_max=11,
         singleton_block_count=0, oversized_block_count=0,
     )
 
@@ -109,13 +114,18 @@ def test_matchkey_yellow_when_field_nearly_unique():
 
 
 def test_blocking_red_when_one_block_dominates():
+    # 100 rows in 10 blocks, one holding 60 of them: 1,770 of the 1,842
+    # candidate pairs, so 96% of the scoring work sits in a single block.
+    # reduction_ratio is 0.63, comfortably above its own RED bar, so this
+    # isolates the skew rule. The previous fixture put a 200-row block inside
+    # a 100-row dataset -- it fired the old percentile rule, but on numbers no
+    # profiler could ever emit.
     bp = BlockingProfile(
-        keys_used=[["a"]], n_blocks=10, total_comparisons=500,
-        reduction_ratio=0.95, block_sizes_p50=5, block_sizes_p95=15,
-        block_sizes_p99=200, block_sizes_max=200,
-        singleton_block_count=0, oversized_block_count=0,
+        keys_used=[["a"]], n_blocks=10, total_comparisons=1_842,
+        reduction_ratio=0.628, block_sizes_p50=4, block_sizes_p95=60,
+        block_sizes_p99=60, block_sizes_max=60,
+        singleton_block_count=0, oversized_block_count=1,
     )
-    # n_rows / n_blocks = 100/10 = 10; p99=200 > 10 * 10 = 100 → RED
     assert bp.health(n_rows=100) == HealthVerdict.RED
 
 

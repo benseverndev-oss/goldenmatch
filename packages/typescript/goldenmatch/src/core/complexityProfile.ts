@@ -179,10 +179,38 @@ export function makeBlockingProfile(p: Partial<BlockingProfile> = {}): BlockingP
   };
 }
 
-export function blockingHealth(b: BlockingProfile, nRows: number): HealthVerdict {
+/** Blocking-skew RED thresholds. Parity with the Python
+ *  `complexity_profile._LARGEST_BLOCK_*` constants -- both surfaces must grade
+ *  the same profile identically. */
+const LARGEST_BLOCK_PAIR_SHARE_RED = 0.1;
+const LARGEST_BLOCK_FAIR_SHARE_MULTIPLE = 4.0;
+
+/** Fraction of all candidate pairs contributed by the biggest block.
+ *
+ * Within-block pairs are quadratic in block size, so this measures straggler
+ * risk: a block at 0.5 owns half the scoring work of the entire run. */
+export function largestBlockPairShare(b: BlockingProfile): number {
+  if (b.totalComparisons <= 0 || b.blockSizesMax < 2) return 0.0;
+  const biggest = Math.floor((b.blockSizesMax * (b.blockSizesMax - 1)) / 2);
+  return biggest / b.totalComparisons;
+}
+
+// `nRows` is retained for signature stability with clusterHealth and the
+// existing call sites; the skew rule no longer needs it.
+export function blockingHealth(b: BlockingProfile, _nRows: number): HealthVerdict {
   if (b.nBlocks === 0) return HealthVerdict.RED;
-  const avg = nRows / Math.max(b.nBlocks, 1);
-  if (b.blockSizesP99 > 10 * avg) return HealthVerdict.RED;
+  // Skew is WORK CONCENTRATION, not a size percentile. The previous rule --
+  // `blockSizesP99 > 10 * (nRows / nBlocks)` -- divided a tail percentile by
+  // the MEAN block size, which is pinned near 1 whenever blocking is
+  // fine-grained, so the bar collapsed toward "any block over ~12 rows".
+  // Measured at 100k rows it graded a shape RED whose largest block owned 1.9%
+  // of the candidate pairs, and MISSED a single block owning 98.5% (which sits
+  // above p99, not at it). See the Python twin and issue #2628.
+  const bar = Math.max(
+    LARGEST_BLOCK_PAIR_SHARE_RED,
+    LARGEST_BLOCK_FAIR_SHARE_MULTIPLE / b.nBlocks,
+  );
+  if (largestBlockPairShare(b) > bar) return HealthVerdict.RED;
   if (b.reductionRatio < 0.5) return HealthVerdict.RED;
   if (b.singletonBlockCount / b.nBlocks > 0.5) return HealthVerdict.YELLOW;
   return HealthVerdict.GREEN;

@@ -250,6 +250,20 @@ class MatchkeyProfile:
         return _max_severity(*verdicts) if verdicts else HealthVerdict.GREEN
 
 
+# Blocking-skew RED thresholds (see BlockingProfile.health).
+#
+# 0.10: a block owning more than a tenth of all candidate pairs is a straggler
+# no realistic worker pool can absorb -- 8 to 16 workers is the common case, so
+# a 1/10 share already sets the floor on wall time by itself. It is also ~5x
+# above the 0.019 measured on the healthiest fine-grained shape in the
+# head-to-head panel, so the rule has room before it starts false-positiving.
+#
+# 4.0: the same block must ALSO hold more than 4x its fair share (1/n_blocks)
+# before this counts as skew rather than coarseness. Inert above 40 blocks.
+_LARGEST_BLOCK_PAIR_SHARE_RED: float = 0.10
+_LARGEST_BLOCK_FAIR_SHARE_MULTIPLE: float = 4.0
+
+
 @dataclass(frozen=True)
 class BlockingProfile:
     _version: int = 1
@@ -345,11 +359,51 @@ class BlockingProfile:
             singleton_block_count=self.singleton_block_count * n_rows_full // n_rows_sample,
         )
 
+    @property
+    def largest_block_pair_share(self) -> float:
+        """Fraction of all candidate pairs contributed by the biggest block.
+
+        Within-block pairs are quadratic in block size, so this is the measure
+        of straggler risk: a block at 0.5 owns half the scoring work of the
+        whole run and no amount of parallelism can hide it.
+
+        Both terms are measured on the same profile, so the ratio is
+        scale-free. Note that ``extrapolate_to`` scales ``total_comparisons``
+        but NOT ``block_sizes_max`` -- an extrapolated profile would understate
+        this. That is not a live hazard: the extrapolated profile feeds the
+        PLANNER (``profile_for_planner`` in autoconfig_controller), while
+        ``health`` is called on the committed sample-scale profile.
+        """
+        if self.total_comparisons <= 0 or self.block_sizes_max < 2:
+            return 0.0
+        biggest = self.block_sizes_max * (self.block_sizes_max - 1) // 2
+        return biggest / self.total_comparisons
+
     def health(self, n_rows: int) -> HealthVerdict:
+        # `n_rows` is retained for signature stability with ClusterProfile.health
+        # and the existing call sites; the skew rule below no longer needs it.
         if self.n_blocks == 0:
             return HealthVerdict.RED
-        avg = n_rows / max(self.n_blocks, 1)
-        if self.block_sizes_p99 > 10 * avg:
+        # Skew is WORK CONCENTRATION, not a size percentile. The previous rule
+        # -- `block_sizes_p99 > 10 * (n_rows / n_blocks)` -- divided a tail
+        # percentile by the MEAN block size, which is pinned near 1 whenever
+        # blocking is fine-grained, so the bar collapsed toward "any block over
+        # ~12 rows". Measured at 100k rows it graded the person shape RED
+        # (avg 1.19, p99 72) while that shape's largest block owned 1.9% of the
+        # candidate pairs, reduction was 0.976 and there were no singletons --
+        # and a RED blocking profile at n_rows >= REFUSE_AT_N REFUSES the run.
+        # It also MISSED the case it exists for: one block of 10,000 rows among
+        # 5,000 blocks owns 98.5% of the work yet sits above p99 rather than at
+        # it, so the percentile never sees it. See #2628 and
+        # tests/test_blocking_skew_pair_share.py for both fixtures.
+        #
+        # The fair-share term keeps the rule off coarse-but-UNIFORM layouts,
+        # where a 1/n_blocks share is simply what having few blocks looks like.
+        # It costs no coverage: at small n_blocks a dominating block has to hold
+        # most of the rows, which craters reduction_ratio below.
+        skew_bar = max(_LARGEST_BLOCK_PAIR_SHARE_RED,
+                       _LARGEST_BLOCK_FAIR_SHARE_MULTIPLE / self.n_blocks)
+        if self.largest_block_pair_share > skew_bar:
             return HealthVerdict.RED
         if self.reduction_ratio < 0.5:
             return HealthVerdict.RED
