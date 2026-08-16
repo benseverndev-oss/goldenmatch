@@ -87,6 +87,7 @@ def _fixture_module():
 
 def build_session(master: str, driver_host: str | None, wait_s: int):
     from pyspark.sql import SparkSession
+    from splink.backends.spark import similarity_jar_location
 
     b = (
         SparkSession.builder.master(master)
@@ -95,10 +96,39 @@ def build_session(master: str, driver_host: str | None, wait_s: int):
         # partitions on a small cluster is pure scheduling overhead.
         .config("spark.sql.shuffle.partitions", "8")
         .config("spark.driver.bindAddress", "0.0.0.0")
+        # Splink ships its own similarity UDFs (jaro_winkler, damerau
+        # levenshtein) as a JVM jar, and WITHOUT IT THE COMPARISON IS INVALID
+        # rather than merely degraded: Splink warns "Unable to load custom Spark
+        # SQL functions such as jaro_winkler ... You will not be able to use
+        # these functions in your linkage" and carries on, so the run completes
+        # having compared something other than what GM compares. `spark.jars`
+        # also ships it to the executors, which is where the UDFs evaluate.
+        .config("spark.jars", similarity_jar_location())
     )
     if driver_host:
         b = b.config("spark.driver.host", driver_host)
     spark = b.getOrCreate()
+
+    # Splink's Spark backend breaks lineage with `Dataset.checkpoint()`, which
+    # needs a checkpoint dir, and a checkpoint dir on THIS topology has nowhere
+    # to live. Spark says so itself:
+    #
+    #   WARN SparkContext: Spark is not running in local mode, therefore the
+    #   checkpoint directory must not be on the local filesystem.
+    #
+    # A bind-mounted host path gets the driver and executors to the same inode
+    # but not to the same identity: the driver (runner user) creates the
+    # per-application subdirectory at 755 and the executors (non-root user in
+    # the container) then fail with "Mkdirs failed to create
+    # file:/tmp/spark-checkpoint/<uuid>/.../_temporary/...". chmod on the base
+    # directory does not reach the subdirectories Spark makes later. Fixing it
+    # properly means HDFS/S3, which this lane does not have.
+    #
+    # So `persist` instead, and RECORDED as a deviation rather than quietly
+    # taken -- see `break_lineage_method` in the output. It does not
+    # disadvantage Splink: persist materialises to executor memory/disk and
+    # skips the distributed-filesystem write that checkpointing would pay, so
+    # if it biases the wall at all it biases it in Splink's favour.
 
     # Refuse to measure a cluster that never gave us executors. Without this the
     # run "works" -- it just runs everything on the driver and reports a wall
@@ -148,6 +178,17 @@ def main() -> int:
             "GM runs over Spark Connect (addArtifact is Connect-only); Splink "
             "cannot (it uses sparkContext). Same cluster, different front door."
         ),
+        # Recorded, not buried. Splink's default lineage break is `checkpoint`,
+        # which needs a distributed filesystem this lane has no way to provide.
+        # `persist` skips that write, so if it moves the wall it moves it in
+        # SPLINK's favour -- the deviation cannot manufacture a GM win.
+        "break_lineage_method": "persist",
+        "break_lineage_deviation": (
+            "Splink's Spark default is `checkpoint`; it requires a checkpoint "
+            "dir on a non-local filesystem (Spark refuses local paths outside "
+            "local mode) and this cluster has only container-local disk. "
+            "`persist` materialises to executor memory/disk instead."
+        ),
     }
     t_all = time.perf_counter()
 
@@ -175,6 +216,13 @@ def main() -> int:
     # cut; both give three informative levels per field.
     settings = SettingsCreator(
         link_type="dedupe_only",
+        # The fixture's id column. Without this Splink looks for a literal
+        # `unique_id`, does not find it, and prints "SETTINGS VALIDATION:
+        # Errors were identified in your settings dictionary ... Missing
+        # column(s) from input dataframe(s): `unique_id`" -- then continues.
+        # A validation error it recovers from is exactly the kind of defect
+        # that produces a number nobody can trust.
+        unique_id_column_name="record_id",
         blocking_rules_to_generate_predictions=[block_on("blk"), block_on("last")],
         comparisons=[
             cl.JaroWinklerAtThresholds("first", [0.9, 0.7]),
@@ -184,7 +232,14 @@ def main() -> int:
             cl.JaroWinklerAtThresholds("city", [0.9, 0.7]),
         ],
     )
-    linker = Linker(df, settings, db_api=SparkAPI(spark_session=spark))
+    # See the note in build_session: `checkpoint` needs a distributed
+    # filesystem this lane does not have. Declared here, and echoed into the
+    # artifact below, so no reader has to infer it from the absence of a
+    # checkpoint dir.
+    linker = Linker(
+        df, settings,
+        db_api=SparkAPI(spark_session=spark, break_lineage_method="persist"),
+    )
 
     # u, from random pairs -- the same quantity the GM harness times as `u`.
     t = time.perf_counter()
