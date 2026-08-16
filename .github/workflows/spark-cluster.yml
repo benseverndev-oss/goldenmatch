@@ -492,8 +492,42 @@ jobs:
           path: spark-fs-train-scale.json
           if-no-files-found: ignore
 
-      # Splink on the SAME cluster. Deliberately AFTER the GM run so both see an
-      # identical warm cluster, and gated so the correctness lane is unaffected.
+
+      # Python worker" fails on its own rather than because an empty virtualenv
+      # was shipped to make it fail. The local lane can only simulate this.
+      - name: Inventory -- what runs with no Python on REAL executors
+        continue-on-error: true
+        env:
+          GOLDENMATCH_SPARK_REMOTE: "sc://localhost:15002"
+          GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
+          GOLDENMATCH_SPARK_PYENV: "none"
+        run: |
+          python scripts/spark_jar_only_inventory.py \
+            --out spark-cluster-inventory.json
+
+      # Splink on the SAME cluster -- LAST, and with the Connect server stopped.
+      #
+      # Standalone Spark hands an application every free core unless
+      # `spark.cores.max` says otherwise, and the Connect server IS an
+      # application: it registers when the cluster starts and holds all 16 cores
+      # for the life of the lane. A second app then queues for resources that
+      # never free. Run 31978493018 shows it in four lines:
+      #
+      #     Master: Registering worker 172.18.0.4 with 8 cores, 16.0 GiB RAM
+      #     Master: Registering worker 172.18.0.3 with 8 cores, 16.0 GiB RAM
+      #     Master: Registering app Spark Connect server
+      #     Master: Registering app splink-train-scale      <- no cores left
+      #
+      # The symptom is "no executor registered within 120s", which reads like a
+      # connectivity fault and is not one. That misread cost a run: the driver
+      # host WAS also wrong (default bridge 172.17.0.1 against a cluster on
+      # 172.18.x), fixing it changed nothing, and core starvation was the cause
+      # both times.
+      #
+      # Capping the Connect app instead would split the cluster and leave both
+      # engines' numbers unrepresentative. Stopping it gives each engine the
+      # WHOLE cluster in turn, which is the comparison worth having. This runs
+      # last so nothing downstream needs Connect back.
       - name: Splink FS training on the same cluster
         if: inputs.splink_compare && inputs.train_rows != '0' && inputs.train_rows != ''
         # NOT continue-on-error. This step exists to produce ONE number, and it
@@ -505,6 +539,8 @@ jobs:
         run: |
           set -euo pipefail
           pip install "splink==4.0.16" >/dev/null
+          # Free the cores. See the note above the step.
+          docker compose -f docker/spark-cluster/docker-compose.yml stop spark-connect
           # The driver runs HERE; the executors are containers. They must route
           # back to the driver, so `spark.driver.host` has to be an address they
           # can reach, not localhost. Getting this wrong does not error -- the
@@ -539,18 +575,6 @@ jobs:
           # cannot turn a good run red -- it just stops a MISSING measurement
           # from being quieter than a bad one.
           if-no-files-found: error
-
-      # Python worker" fails on its own rather than because an empty virtualenv
-      # was shipped to make it fail. The local lane can only simulate this.
-      - name: Inventory -- what runs with no Python on REAL executors
-        continue-on-error: true
-        env:
-          GOLDENMATCH_SPARK_REMOTE: "sc://localhost:15002"
-          GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
-          GOLDENMATCH_SPARK_PYENV: "none"
-        run: |
-          python scripts/spark_jar_only_inventory.py \
-            --out spark-cluster-inventory.json
 
       - name: Summary
         if: always()
