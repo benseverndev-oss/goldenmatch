@@ -476,6 +476,7 @@ jobs:
         with:
           name: spark-fs-train-scale
           path: spark-fs-train-scale.json
+          if-no-files-found: ignore
 
       # Splink on the SAME cluster. Deliberately AFTER the GM run so both see an
       # identical warm cluster, and gated so the correctness lane is unaffected.
@@ -491,9 +492,10 @@ jobs:
           # bridge gateway, not localhost. Getting this wrong does not error --
           # the job hangs on "Initial job has not accepted any resources" -- so
           # it is resolved explicitly and printed.
-          GW=$(docker network inspect spark-cluster_spark                  --format '{{ (index .IPAM.Config 0).Gateway }}' 2>/dev/null || true)
+          FMT='{{ (index .IPAM.Config 0).Gateway }}'
+          GW=$(docker network inspect spark-cluster_spark --format "$FMT" 2>/dev/null || true)
           if [ -z "$GW" ]; then
-            GW=$(docker network inspect bridge                    --format '{{ (index .IPAM.Config 0).Gateway }}')
+            GW=$(docker network inspect bridge --format "$FMT")
           fi
           echo "driver host (docker bridge gateway): $GW"
           python scripts/spark_splink_train_scale.py             --rows "${{ inputs.train_rows || '1000000' }}"             --master spark://localhost:7077             --driver-host "$GW"             --out splink-train-scale.json
@@ -504,7 +506,6 @@ jobs:
           name: splink-train-scale
           path: splink-train-scale.json
           if-no-files-found: warn
-          if-no-files-found: ignore
 
       # Python worker" fails on its own rather than because an empty virtualenv
       # was shipped to make it fail. The local lane can only simulate this.
