@@ -61,6 +61,11 @@ on:
         required: false
         type: string
         default: "1g"
+      scorer:
+        description: "Force every comparison field onto one scorer (e.g. exact). Required for a valid value_pad experiment - padding only preserves gammas under exact."
+        required: false
+        type: string
+        default: ""
       value_pad:
         description: "Append N chars to every comparison value. Same crossing COUNT, more bytes per crossing - the arm that separates per-CALL from per-BYTE scoring cost."
         required: false
@@ -469,7 +474,9 @@ jobs:
           if [ "${{ inputs.profile_counts }}" = "true" ]; then PROFILE="--profile-counts"; fi
           FIELDS="${{ inputs.train_fields || '5' }}"
           PAD="${{ inputs.value_pad || '0' }}"
-          python scripts/spark_fs_train_scale.py --rows "$ROWS" --fields "$FIELDS" --value-pad "$PAD" $PROFILE --out spark-fs-train-scale.json
+          SCORER=""
+          if [ -n "${{ inputs.scorer }}" ]; then SCORER="--scorer ${{ inputs.scorer }}"; fi
+          python scripts/spark_fs_train_scale.py --rows "$ROWS" --fields "$FIELDS"             --value-pad "$PAD" $SCORER $PROFILE --out spark-fs-train-scale.json
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         if: always()
