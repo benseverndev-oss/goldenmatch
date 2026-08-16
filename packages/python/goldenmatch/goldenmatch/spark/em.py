@@ -96,6 +96,24 @@ def gamma_columns(mk: Any, lhs: str, rhs: str, *,
     return out
 
 
+def _vector_scorer_enabled() -> bool:
+    """Is the one-call-per-pair scorer on? OPT-IN, default OFF.
+
+    It was briefly default-on, which was wrong twice over. It changes how every
+    similarity on the Spark FS path is computed, and it was merged with no
+    measurement -- so it would have become the default for every user on the
+    strength of an argument. And with no switch there was no way to run the
+    per-field arm, so the very comparison it exists for could not be taken.
+
+    `GOLDENMATCH_SPARK_VECTOR_SCORER=1` turns it on. It flips to default-on when
+    a measurement says it is faster, and not before.
+    """
+    import os
+
+    raw = os.environ.get("GOLDENMATCH_SPARK_VECTOR_SCORER", "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
 def _vector_similarities(mk: Any, lhs: str, rhs: str, *,
                          scorer_udf: str | None,
                          transform_udf: str | None) -> Any | None:
@@ -128,6 +146,8 @@ def _vector_similarities(mk: Any, lhs: str, rhs: str, *,
     paths in order to save nothing.
     """
     if not scorer_udf:
+        return None
+    if not _vector_scorer_enabled():
         return None
     from pyspark.sql import functions as F
 

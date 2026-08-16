@@ -455,7 +455,24 @@ def test_the_vector_scorer_gives_THE_SAME_pattern_counts(source, jvm_registered)
     assert row == _driver_pattern_counts(source, cfg)
 
 
-def test_the_vector_scorer_falls_back_rather_than_guessing(source):
+def test_the_vector_scorer_is_off_unless_asked_for(monkeypatch):
+    """Default OFF. It changes how every similarity on this path is computed
+    and has no measurement behind it yet, so it must not be what a user gets by
+    accident -- and the per-field arm has to stay reachable or the comparison it
+    exists for cannot be run."""
+    from goldenmatch.spark.em import _vector_scorer_enabled
+
+    monkeypatch.delenv("GOLDENMATCH_SPARK_VECTOR_SCORER", raising=False)
+    assert _vector_scorer_enabled() is False
+    for on in ("1", "true", "YES", "on"):
+        monkeypatch.setenv("GOLDENMATCH_SPARK_VECTOR_SCORER", on)
+        assert _vector_scorer_enabled() is True
+    for off in ("0", "false", "", "no"):
+        monkeypatch.setenv("GOLDENMATCH_SPARK_VECTOR_SCORER", off)
+        assert _vector_scorer_enabled() is False
+
+
+def test_the_vector_scorer_falls_back_rather_than_guessing(source, monkeypatch):
     """`exact` fields, too many fields, or an unknown scorer -> per-field path.
 
     Each condition is a case where the vector path would be wrong or wasteful,
@@ -465,6 +482,9 @@ def test_the_vector_scorer_falls_back_rather_than_guessing(source):
     from goldenmatch.spark.em import _vector_similarities
     from goldenmatch.spark.jvm import ROW_UDF_NAME
 
+    # Enable it, or every assertion below passes for the wrong reason -- the
+    # default-off gate would return None regardless of the condition under test.
+    monkeypatch.setenv("GOLDENMATCH_SPARK_VECTOR_SCORER", "1")
     cfg = _config()
     mk = cfg.get_matchkeys()[0]
 
