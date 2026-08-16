@@ -157,6 +157,92 @@ def largest_block(source_df, key_config, transform_udf=None):
     return top[0]["__block_key__"], int(top[0]["n"])
 
 
+def profile_counts(joined, mk, *, scorer_udf, transform_udf, cands):
+    """Attribute the counts stage: pair generation vs join vs scoring vs shuffle.
+
+    ## Why this exists
+
+    At 5M rows the counts stage is 443.32s of a 471.53s wall -- 94.0%. Every
+    design option for making it faster (pre-aggregating patterns in the JVM,
+    pushing gammas into Catalyst, leaving Spark Connect) is a bet on WHICH part
+    of those 443s is the cost, and nothing measured that. The kernel is known to
+    be ~0.1s and the row-shaped UDF already beat the batched arm, so the money
+    is somewhere else -- most likely the `GROUP BY` shuffle over every candidate
+    pair. "Most likely" is exactly what this replaces.
+
+    ## How
+
+    Spark has no per-operator timer reachable over Connect, so this times
+    PREFIXES of the same DAG, each forced by its own action, and reports the
+    deltas. Each prefix is a full independent evaluation (nothing is cached):
+    four prefixes plus the real counts run that follows, so the pass costs
+    roughly FIVE times a normal one, not the "3x" a first draft of this comment
+    claimed. At 5M rows that is ~35 minutes against a 25-minute step timeout,
+    which is why the workflow's timeout moved with this flag.
+
+    Profile at 1M, not 5M. The output is an ATTRIBUTION -- which fraction of the
+    stage each part owns -- and that ratio is what picks the design. Paying 5x
+    at 5M to learn the same ratio is waste.
+
+    ## The trap this avoids
+
+    A naive ``.agg(count(1))`` to "force the UDF" does NOT force it: Catalyst
+    prunes columns an aggregate does not read, so the gamma expressions -- the
+    scoring being measured -- get optimised away and the stage times as if
+    scoring were free. So the forcing aggregate SUMS EVERY GAMMA COLUMN, which
+    Catalyst cannot satisfy without evaluating all of them.
+    """
+    import time
+
+    from goldenmatch.spark.em import gamma_columns
+    from pyspark.sql import functions as F
+
+    gammas = gamma_columns(
+        mk, CAND_LHS, CAND_RHS, scorer_udf=scorer_udf, transform_udf=transform_udf
+    )
+    names = [f"gamma_{f.resolved_field}" for f in mk.fields]
+    out = {}
+
+    # 1. Candidate generation alone: the blocking self-join, no record columns.
+    t = time.perf_counter()
+    n_pairs = cands.count()
+    out["candidates_seconds"] = round(time.perf_counter() - t, 2)
+    out["candidate_pairs"] = int(n_pairs)
+
+    # 2. + joining both record sides. Counting the joined frame forces the join
+    #    without evaluating any gamma.
+    t = time.perf_counter()
+    joined.count()
+    out["joined_seconds"] = round(time.perf_counter() - t, 2)
+
+    # 3. + scoring every gamma. Global agg => a 1-row shuffle, so this adds the
+    #    UDF work and almost no exchange. Summing every gamma is what stops
+    #    Catalyst pruning the scoring away (see the docstring).
+    t = time.perf_counter()
+    joined.select(*gammas).agg(*[F.sum(F.col(n)) for n in names]).collect()
+    out["scored_seconds"] = round(time.perf_counter() - t, 2)
+
+    # 4. + the wide GROUP BY over every pair: the exchange this whole question
+    #    is about.
+    t = time.perf_counter()
+    (joined.select(*gammas)
+        .groupBy(*[F.col(n) for n in names])
+        .agg(F.count(F.lit(1)))
+        .collect())
+    out["grouped_seconds"] = round(time.perf_counter() - t, 2)
+
+    # Deltas. Each prefix contains the ones before it, so the attribution is the
+    # difference. Reported alongside the raw prefixes so a negative delta (noise,
+    # or a prefix Spark optimised differently) is visible rather than hidden.
+    out["attribution"] = {
+        "pair_generation": out["candidates_seconds"],
+        "record_join": round(out["joined_seconds"] - out["candidates_seconds"], 2),
+        "scoring_udf": round(out["scored_seconds"] - out["joined_seconds"], 2),
+        "groupby_exchange": round(out["grouped_seconds"] - out["scored_seconds"], 2),
+    }
+    return out
+
+
 def make_config():
     from goldenmatch.config.schemas import (
         BlockingConfig,
@@ -211,6 +297,14 @@ def main() -> int:
     ap.add_argument("--remote", default=os.environ.get(
         "GOLDENMATCH_SPARK_REMOTE", "sc://localhost:15002"))
     ap.add_argument("--u-max-pairs", type=int, default=1_000_000)
+    ap.add_argument(
+        "--profile-counts", action="store_true",
+        help="Attribute the counts stage across pair generation / record "
+             "join / scoring UDF / GROUP BY exchange. Times PREFIXES of the "
+             "same DAG, so it costs ~3x a normal counts stage -- a "
+             "diagnostic, not something to leave on. Without it, every "
+             "optimisation of a stage that is 94%% of the wall is a guess "
+             "about which part of it is expensive.")
     ap.add_argument(
         "--max-block-pairs", type=int, default=50_000_000,
         help="refuse a pass whose LARGEST single block would emit more pairs "
@@ -314,6 +408,18 @@ def main() -> int:
         cands = pass_candidates(df, key_config, id_col="__row_id__")
         joined = join_candidates_to_sources(cands, df, id_col="__row_id__")
 
+        prof = None
+        if args.profile_counts:
+            prof = profile_counts(
+                joined, mk, scorer_udf=ROW_UDF_NAME,
+                transform_udf=TRANSFORM_UDF_NAME, cands=cands,
+            )
+            a = prof["attribution"]
+            print(f"[scale] pass {i} counts attribution: "
+                  f"pairs={a['pair_generation']}s join={a['record_join']}s "
+                  f"scoring={a['scoring_udf']}s groupby={a['groupby_exchange']}s",
+                  flush=True)
+
         t = time.perf_counter()
         counts = agreement_pattern_counts(
             joined, mk, lhs=CAND_LHS, rhs=CAND_RHS,
@@ -338,6 +444,9 @@ def main() -> int:
             "largest_block_rows": top_rows,
             "largest_block_key": top_key,
             "largest_block_pairs": top_pairs,
+            # None unless --profile-counts. Present as an explicit null so a
+            # reader can tell "not profiled" from "profiled and found nothing".
+            "counts_profile": prof,
         })
         print(f"[scale] pass {i} on {list(fields)}: {n_pairs:,} pairs -> "
               f"{len(counts)} distinct patterns in {dt:.2f}s", flush=True)
