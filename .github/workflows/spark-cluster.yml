@@ -233,14 +233,6 @@ jobs:
           SPARK_EXECUTOR_CORES: ${{ inputs.worker_cores || '1' }}
           SPARK_EXECUTOR_MEMORY: ${{ inputs.worker_memory || '1g' }}
         run: |
-          # BEFORE `up`, and world-writable on purpose. The workers bind-mount
-          # this path (see the compose file) and the Spark image runs as a
-          # non-root user, so a directory Docker auto-creates at mount time is
-          # root-owned and the executors cannot write their checkpoints into it.
-          # Creating it here as the runner user with an open mode is the one
-          # ordering that works for both sides.
-          mkdir -p /tmp/spark-checkpoint
-          chmod 777 /tmp/spark-checkpoint
           docker compose -f docker/spark-cluster/docker-compose.yml up -d
           echo "cluster sized: 2 workers x ${SPARK_WORKER_CORES} core(s) / ${SPARK_WORKER_MEMORY}" >> "$GITHUB_STEP_SUMMARY"
 

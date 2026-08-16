@@ -85,8 +85,7 @@ def _fixture_module():
     return mod
 
 
-def build_session(master: str, driver_host: str | None, wait_s: int,
-                  checkpoint_dir: str):
+def build_session(master: str, driver_host: str | None, wait_s: int):
     from pyspark.sql import SparkSession
     from splink.backends.spark import similarity_jar_location
 
@@ -110,16 +109,26 @@ def build_session(master: str, driver_host: str | None, wait_s: int,
         b = b.config("spark.driver.host", driver_host)
     spark = b.getOrCreate()
 
-    # Splink's Spark backend truncates lineage with `Dataset.checkpoint()`,
-    # which raises "Checkpoint directory has not been set in the SparkContext"
-    # unless one is set. The path has to resolve to the SAME storage from the
-    # driver (this host) and the executors (containers), so the compose file
-    # bind-mounts a host directory at an identical path inside the workers.
-    # Left as Splink's default `checkpoint` break-lineage method deliberately:
-    # switching to `persist` would dodge the mount but would also stop measuring
-    # the configuration Splink actually recommends on Spark.
-    Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
-    spark.sparkContext.setCheckpointDir(f"file://{checkpoint_dir}")
+    # Splink's Spark backend breaks lineage with `Dataset.checkpoint()`, which
+    # needs a checkpoint dir, and a checkpoint dir on THIS topology has nowhere
+    # to live. Spark says so itself:
+    #
+    #   WARN SparkContext: Spark is not running in local mode, therefore the
+    #   checkpoint directory must not be on the local filesystem.
+    #
+    # A bind-mounted host path gets the driver and executors to the same inode
+    # but not to the same identity: the driver (runner user) creates the
+    # per-application subdirectory at 755 and the executors (non-root user in
+    # the container) then fail with "Mkdirs failed to create
+    # file:/tmp/spark-checkpoint/<uuid>/.../_temporary/...". chmod on the base
+    # directory does not reach the subdirectories Spark makes later. Fixing it
+    # properly means HDFS/S3, which this lane does not have.
+    #
+    # So `persist` instead, and RECORDED as a deviation rather than quietly
+    # taken -- see `break_lineage_method` in the output. It does not
+    # disadvantage Splink: persist materialises to executor memory/disk and
+    # skips the distributed-filesystem write that checkpointing would pay, so
+    # if it biases the wall at all it biases it in Splink's favour.
 
     # Refuse to measure a cluster that never gave us executors. Without this the
     # run "works" -- it just runs everything on the driver and reports a wall
@@ -159,11 +168,6 @@ def main() -> int:
     ap.add_argument("--max-pairs", type=int, default=1_000_000,
                     help="Splink's u-estimation sample. Matches the GM harness's "
                          "--u-max-pairs so the u stage is comparable.")
-    ap.add_argument("--checkpoint-dir", default=os.environ.get(
-        "SPLINK_CHECKPOINT_DIR", "/tmp/spark-checkpoint"),
-        help="Shared between this driver and the container executors. Must be "
-             "the SAME path inside the workers -- see the bind mount in "
-             "docker/spark-cluster/docker-compose.yml.")
     ap.add_argument("--out", default="splink-train-scale.json")
     args = ap.parse_args()
 
@@ -174,13 +178,23 @@ def main() -> int:
             "GM runs over Spark Connect (addArtifact is Connect-only); Splink "
             "cannot (it uses sparkContext). Same cluster, different front door."
         ),
+        # Recorded, not buried. Splink's default lineage break is `checkpoint`,
+        # which needs a distributed filesystem this lane has no way to provide.
+        # `persist` skips that write, so if it moves the wall it moves it in
+        # SPLINK's favour -- the deviation cannot manufacture a GM win.
+        "break_lineage_method": "persist",
+        "break_lineage_deviation": (
+            "Splink's Spark default is `checkpoint`; it requires a checkpoint "
+            "dir on a non-local filesystem (Spark refuses local paths outside "
+            "local mode) and this cluster has only container-local disk. "
+            "`persist` materialises to executor memory/disk instead."
+        ),
     }
     t_all = time.perf_counter()
 
     spark, n_exec = build_session(args.master, args.driver_host or None,
-                                  args.executor_wait, args.checkpoint_dir)
+                                  args.executor_wait)
     out["executors"] = n_exec
-    out["checkpoint_dir"] = args.checkpoint_dir
 
     fx = _fixture_module()
     t = time.perf_counter()
@@ -218,7 +232,14 @@ def main() -> int:
             cl.JaroWinklerAtThresholds("city", [0.9, 0.7]),
         ],
     )
-    linker = Linker(df, settings, db_api=SparkAPI(spark_session=spark))
+    # See the note in build_session: `checkpoint` needs a distributed
+    # filesystem this lane does not have. Declared here, and echoed into the
+    # artifact below, so no reader has to infer it from the absence of a
+    # checkpoint dir.
+    linker = Linker(
+        df, settings,
+        db_api=SparkAPI(spark_session=spark, break_lineage_method="persist"),
+    )
 
     # u, from random pairs -- the same quantity the GM harness times as `u`.
     t = time.perf_counter()
