@@ -46,6 +46,21 @@ on:
         required: false
         type: boolean
         default: false
+      runner:
+        description: "Runner for the cluster job. ubuntu-latest is 4 CPU - a TOPOLOGY rig. Use large-new-64GB to measure throughput."
+        required: false
+        type: string
+        default: "ubuntu-latest"
+      worker_cores:
+        description: "Cores per Spark worker (there are 2). Default 1 = 2 executor cores TOTAL, which is correctness sizing, not throughput."
+        required: false
+        type: string
+        default: "1"
+      worker_memory:
+        description: "Memory per Spark worker, e.g. 1g / 6g."
+        required: false
+        type: string
+        default: "1g"
   schedule:
     # Nightly, after the usual working day. Cheap insurance that the topology
     # still works; nothing here gates a merge.
@@ -106,7 +121,11 @@ jobs:
 
   cluster:
     needs: aarch64
-    runs-on: ubuntu-latest
+    # ubuntu-latest (4 CPU) is the DEFAULT because this lane's original job is
+    # proving topology on an 8-row fixture. A throughput run must pass a bigger
+    # runner AND bigger workers -- see `runner` / `worker_cores` above and the
+    # sizing note in docker/spark-cluster/docker-compose.yml.
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
@@ -181,7 +200,16 @@ jobs:
           bash scripts/build_spark_jar.sh
 
       - name: Start the cluster
-        run: docker compose -f docker/spark-cluster/docker-compose.yml up -d
+        env:
+          # Compose reads these; unset they default to the 1-core / 1g topology
+          # sizing baked into the file, so an unparameterised run is unchanged.
+          SPARK_WORKER_CORES: ${{ inputs.worker_cores || '1' }}
+          SPARK_WORKER_MEMORY: ${{ inputs.worker_memory || '1g' }}
+          SPARK_EXECUTOR_CORES: ${{ inputs.worker_cores || '1' }}
+          SPARK_EXECUTOR_MEMORY: ${{ inputs.worker_memory || '1g' }}
+        run: |
+          docker compose -f docker/spark-cluster/docker-compose.yml up -d
+          echo "cluster sized: 2 workers x ${SPARK_WORKER_CORES} core(s) / ${SPARK_WORKER_MEMORY}" >> "$GITHUB_STEP_SUMMARY"
 
       # Readiness is polled HERE rather than by a container healthcheck, so a
       # failure names the condition that was never met instead of surfacing as a
