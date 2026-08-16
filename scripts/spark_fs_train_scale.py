@@ -248,7 +248,37 @@ def profile_counts(joined, mk, *, scorer_udf, transform_udf, cands):
     return out
 
 
-def make_config():
+def make_config(n_fields: int = 5):
+    """The scale config. ``n_fields`` trims the COMPARISON fields only.
+
+    ## Why this is a knob
+
+    The counts stage is ~87% scoring, and scoring is the ONE thing that crosses
+    into the kernel -- `_field_similarity_and_observed` is explicit that levels,
+    the weight lookup, the sum and the posterior are all already Spark SQL. So
+    the question that picks the next optimisation is whether that 87% scales
+    with the NUMBER of calls or with the BYTES marshalled:
+
+      per-CALL  -> one call per pair instead of one per field is a ~5x cut, and
+                   no columnar/FFI rewrite is needed to get most of it.
+      per-BYTE  -> fewer, fatter calls move nothing, and the Arrow C Data
+                   Interface (or leaving Spark Connect) is the only real lever.
+
+    That matters because the jar's own `GoldenScoreRowUdf` documents why the
+    previous batching attempt LOST: Spark arrays are `ArrayData` of
+    `InternalRow`, so array-shaped UDF I/O pays row-wise object churn. A fatter
+    UDF would reintroduce some of that, and is only worth building if the cost
+    is per-call.
+
+    Varying the field count over the SAME pairs separates the two, and costs a
+    config change instead of a JNI rewrite. Blocking is untouched, so the
+    candidate set is identical across arms and only the per-pair crossing count
+    moves.
+
+    Trimming from the END keeps `first` and `last` -- the high-cardinality
+    jaro-winkler fields -- in every arm, so a smaller arm is never accidentally
+    cheaper because it dropped the expensive scorers.
+    """
     from goldenmatch.config.schemas import (
         BlockingConfig,
         BlockingKeyConfig,
@@ -257,6 +287,19 @@ def make_config():
         MatchkeyField,
     )
 
+    cfg = _build_config(GoldenMatchConfig, BlockingConfig, BlockingKeyConfig,
+                        MatchkeyConfig, MatchkeyField)
+    mk = cfg.get_matchkeys()[0]
+    if n_fields < len(mk.fields):
+        # Trim in place. Rebuilding a shorter literal risks the arms differing
+        # in something other than field count, which is the one variable this
+        # experiment must isolate.
+        mk.fields = mk.fields[:n_fields]
+    return cfg
+
+
+def _build_config(GoldenMatchConfig, BlockingConfig, BlockingKeyConfig,
+                  MatchkeyConfig, MatchkeyField):
     return GoldenMatchConfig(
         blocking=BlockingConfig(
             strategy="multi_pass",
@@ -302,6 +345,13 @@ def main() -> int:
     ap.add_argument("--remote", default=os.environ.get(
         "GOLDENMATCH_SPARK_REMOTE", "sc://localhost:15002"))
     ap.add_argument("--u-max-pairs", type=int, default=1_000_000)
+    ap.add_argument(
+        "--fields", type=int, default=5,
+        help="Number of COMPARISON fields (max 5). Same blocking, same "
+             "candidate pairs -- only the per-pair crossing count changes. "
+             "Run 5 vs 2 and compare `scoring_udf`: linear in field count "
+             "means the cost is per-CALL (fewer, fatter calls win); flat means "
+             "per-BYTE (only columnar/FFI moves it).")
     ap.add_argument(
         "--profile-counts", action="store_true",
         help="Attribute the counts stage across pair generation / record "
@@ -350,7 +400,7 @@ def main() -> int:
         "rows": args.rows, "dup": args.dup,
         "blocks_per_key": args.blocks_per_key,
         "kernel_impl": impl, "kernel_runtime": runtime,
-        "stages": {}, "passes": [],
+        "stages": {}, "passes": [], "n_fields": args.fields,
     }
 
     t0 = time.perf_counter()
@@ -364,7 +414,7 @@ def main() -> int:
     print(f"[scale] fixture: {actual:,} rows in "
           f"{out['stages']['fixture_seconds']}s", flush=True)
 
-    cfg = make_config()
+    cfg = make_config(args.fields)
     mk = cfg.get_matchkeys()[0]
 
     # ── u: sampled self-join. Cost tracks the SAMPLE, not the table. ──
