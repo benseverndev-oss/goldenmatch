@@ -83,15 +83,38 @@ def _blocking_report(bp, n_rows: int) -> dict:
         fired.append(f"block_sizes_p99 {p99} > 10*avg {10 * avg:.1f}  [SKEW]")
     if rr < 0.5:
         fired.append(f"reduction_ratio {rr:.4f} < 0.5")
+    # Pair-share of the biggest block: the measure the RED rule arguably should
+    # be using. `p99 > 10 * avg` compares a tail percentile to a MEAN that is
+    # pinned near 1 whenever blocking is fine-grained (n_blocks -> n_rows), so
+    # it fires on configs with excellent reduction and no singletons. What
+    # actually makes skew dangerous is that a few blocks own most of the WORK,
+    # and work is quadratic in block size -- so the honest question is what
+    # fraction of total candidate pairs the largest block contributes.
+    #
+    # Recorded, not acted on: changing a RED rule needs this number first, and
+    # the first version of this diagnostic did not capture it.
+    total_pairs = getattr(bp, "total_comparisons", 0) or 0
+    biggest = getattr(bp, "block_sizes_max", 0) or 0
+    biggest_pairs = biggest * (biggest - 1) // 2
     return {
         "n_blocks": n_blocks, "avg_block_size": round(avg, 2),
         "block_sizes_p50": getattr(bp, "block_sizes_p50", 0),
         "block_sizes_p95": getattr(bp, "block_sizes_p95", 0),
         "block_sizes_p99": p99,
-        "block_sizes_max": getattr(bp, "block_sizes_max", 0),
+        "block_sizes_max": biggest,
         "reduction_ratio": round(rr, 6),
         "singleton_block_count": singles,
         "singleton_fraction": round(singles / max(n_blocks, 1), 4),
+        "total_comparisons": int(total_pairs),
+        "largest_block_pairs": int(biggest_pairs),
+        "largest_block_pair_share": (
+            round(biggest_pairs / total_pairs, 6) if total_pairs else None
+        ),
+        "p99_over_avg": round(p99 / avg, 2) if avg else None,
+        "p99_over_p50": (
+            round(p99 / getattr(bp, "block_sizes_p50", 0), 2)
+            if getattr(bp, "block_sizes_p50", 0) else None
+        ),
         "red_rules_fired": fired,
     }
 
