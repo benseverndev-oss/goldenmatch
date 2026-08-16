@@ -72,16 +72,123 @@ def gamma_columns(mk: Any, lhs: str, rhs: str, *,
     )
 
     missing_mode = fs_missing_mode(mk)
+
+    sims = _vector_similarities(mk, lhs, rhs, scorer_udf=scorer_udf,
+                                transform_udf=transform_udf)
     out = []
-    for f in mk.fields:
-        sim, observed = _field_similarity_and_observed(
-            f, lhs, rhs, scorer_udf=scorer_udf, transform_udf=transform_udf
-        )
+    for i, f in enumerate(mk.fields):
+        if sims is not None:
+            # `observed` still comes from the RAW columns, exactly as the
+            # per-field path computes it: the kernel substitutes "" for a
+            # missing value and would score null-vs-null as a perfect 1.0.
+            _sim, observed = _field_similarity_and_observed(
+                f, lhs, rhs, scorer_udf=None, transform_udf=transform_udf
+            )
+            sim = sims[i]
+        else:
+            sim, observed = _field_similarity_and_observed(
+                f, lhs, rhs, scorer_udf=scorer_udf, transform_udf=transform_udf
+            )
         out.append(
             fs_level_expr(f, sim, observed, missing_mode=missing_mode)
             .alias(f"gamma_{f.resolved_field}")
         )
     return out
+
+
+def _vector_similarities(mk: Any, lhs: str, rhs: str, *,
+                         scorer_udf: str | None,
+                         transform_udf: str | None) -> Any | None:
+    """One UDF call per PAIR returning every field's similarity, or None.
+
+    Returns None -- and the caller keeps the per-field path -- unless every
+    condition holds, because this is an optimisation and a wrong answer costs
+    more than a slow one:
+
+    * the caller asked for the jar path at all (`scorer_udf` set);
+    * that path is the ROW scorer. `golden_score_batch` has a different plan
+      shape and is not what this replaces;
+    * no field uses `exact`, which never crosses into the kernel (it is
+      `a = b` in Catalyst) and would waste a slot;
+    * every scorer is one the jar can run, and the field count fits the UDF's
+      slots.
+
+    ## Why one call per pair
+
+    The counts stage is ~87% scoring against a ~0.1s kernel, and the row scorer
+    is called once per FIELD. Five fields over 5.5M pairs is ~27M Spark UDF
+    dispatches and ~27M JNI transitions for a single blocking pass. This makes
+    it one dispatch, and -- because `GoldenScorer.score` takes arrays -- one
+    native transition per DISTINCT SCORER rather than per field.
+
+    Deliberately returns SIMILARITIES, leaving `fs_level_expr` to bucket in
+    Catalyst. Bucketing is `when(sim >= t, 1)` summed: already codegen'd, and
+    measured inside a cheap baseline. Moving it into Java would duplicate the
+    one piece of FS logic that must agree across the one-box, Spark and SQL
+    paths in order to save nothing.
+    """
+    if not scorer_udf:
+        return None
+    from pyspark.sql import functions as F
+
+    from goldenmatch.spark.jvm import (
+        ROW_UDF_NAME,
+        VECTOR_UDF_MAX_FIELDS,
+        VECTOR_UDF_NAME,
+        scorer_id,
+    )
+    fields = list(mk.fields)
+    if scorer_udf != ROW_UDF_NAME or not fields:
+        return None
+    if len(fields) > VECTOR_UDF_MAX_FIELDS:
+        return None
+    if any(f.scorer == "exact" for f in fields):
+        return None
+    try:
+        ids = [int(scorer_id(f.scorer)) for f in fields]
+    except Exception:  # noqa: BLE001 - a scorer the jar cannot run
+        return None
+
+    # `_transformed_operands` mirrors the operand half of
+    # `_field_similarity_and_observed`. Rebuilding the transform chain inline
+    # would be a second implementation of how a value is normalised before
+    # comparison, and a training run that normalised differently from scoring
+    # would train on a population scoring never sees.
+    vals = [_transformed_operands(f, lhs, rhs, transform_udf) for f in fields]
+
+    args: list[Any] = [F.lit(",".join(str(i) for i in ids))]
+    for a_val, b_val in vals:
+        args.extend([a_val, b_val])
+    # Null-pad the unused slots: the UDF is fixed-arity because Connect
+    # registers scalar UDFs, and an array-typed parameter would reintroduce the
+    # ArrayData churn that made the batched scorer lose.
+    while len(args) < 1 + 2 * VECTOR_UDF_MAX_FIELDS:
+        args.append(F.lit(None).cast("string"))
+
+    vec = F.call_udf(VECTOR_UDF_NAME, *args)
+    return [vec.getItem(i) for i in range(len(fields))]
+
+
+def _transformed_operands(field: Any, lhs: str, rhs: str,
+                          transform_udf: str | None):
+    """``(a_value, b_value)`` for one field, after its transform chain.
+
+    Split out of `_field_similarity_and_observed` rather than duplicated: that
+    function decides how a value is normalised before comparison, and two
+    answers to that question is how a training population drifts from a scoring
+    one.
+    """
+    from pyspark.sql import functions as F
+
+    from goldenmatch.spark.config_pipeline import _transformed
+
+    col = field.resolved_field
+    a_raw, b_raw = F.col(f"{lhs}.{col}"), F.col(f"{rhs}.{col}")
+    chain = list(getattr(field, "transforms", None) or [])
+    if chain:
+        return (_transformed(a_raw, chain, transform_udf=transform_udf),
+                _transformed(b_raw, chain, transform_udf=transform_udf))
+    return a_raw.cast("string"), b_raw.cast("string")
 
 
 def agreement_pattern_counts(

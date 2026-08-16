@@ -433,6 +433,55 @@ def test_pattern_counts_are_identical_jar_only(source, jvm_registered):
     ) == _driver_pattern_counts(source, cfg)
 
 
+def test_the_vector_scorer_gives_THE_SAME_pattern_counts(source, jvm_registered):
+    """One call per PAIR must produce byte-identical counts to one per FIELD.
+
+    The vector scorer exists for speed: the counts stage is ~87% scoring and the
+    row scorer crosses once per field. But it changes how similarities are
+    computed -- one UDF dispatch, and fields sharing a scorer id batched into a
+    single native call -- so it is a correctness change wearing a perf hat until
+    something pins it.
+
+    Pattern counts are the right thing to pin: they are what training consumes,
+    they fold in every field's level, and an off-by-one in the slot packing (a
+    field reading another field's operands) would show up here and almost
+    nowhere else -- the run would simply train a plausible wrong model."""
+    from goldenmatch.spark.jvm import ROW_UDF_NAME, TRANSFORM_UDF_NAME
+
+    cfg = _config()
+    row = _spark_pattern_counts(
+        source, cfg, scorer_udf=ROW_UDF_NAME, transform_udf=TRANSFORM_UDF_NAME
+    )
+    assert row == _driver_pattern_counts(source, cfg)
+
+
+def test_the_vector_scorer_falls_back_rather_than_guessing(source):
+    """`exact` fields, too many fields, or an unknown scorer -> per-field path.
+
+    Each condition is a case where the vector path would be wrong or wasteful,
+    and the failure mode of getting it wrong is silent: `exact` never crosses
+    into the kernel at all, so packing it into a slot would consume a slot and
+    score a value the SQL path already answered."""
+    from goldenmatch.spark.em import _vector_similarities
+    from goldenmatch.spark.jvm import ROW_UDF_NAME
+
+    cfg = _config()
+    mk = cfg.get_matchkeys()[0]
+
+    # No jar path requested at all.
+    assert _vector_similarities(
+        mk, "__lhs__", "__rhs__", scorer_udf=None, transform_udf=None
+    ) is None
+
+    # An `exact` field present -> fall back.
+    exact_mk = _config().get_matchkeys()[0]
+    exact_mk.fields[0].scorer = "exact"
+    assert _vector_similarities(
+        exact_mk, "__lhs__", "__rhs__",
+        scorer_udf=ROW_UDF_NAME, transform_udf=None,
+    ) is None
+
+
 def test_an_oversized_pattern_space_is_refused_not_collected(source):
     """`collect()` of an unexpectedly large frame is a driver OOM, which is the
     failure this whole path exists to avoid -- so the bound is enforced before

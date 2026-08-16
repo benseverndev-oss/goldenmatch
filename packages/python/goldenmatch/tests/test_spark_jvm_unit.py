@@ -19,6 +19,7 @@ from goldenmatch.spark.jvm import (
     SURVIVORSHIP_UDF_NAME,
     TRANSFORM_UDF_NAME,
     UDF_NAME,
+    VECTOR_UDF_NAME,
     JvmScorerUnavailable,
     find_jar,
     install,
@@ -107,6 +108,15 @@ def test_install_ships_then_registers(jar):
         # of it: which shape is faster is a J4 measurement, not a design
         # principle, and both have to be reachable for that to be taken.
         (ROW_UDF_NAME, "dev.goldensuite.spark.GoldenScoreRowUdf", "double"),
+        # The VECTOR scorer, alongside both. Same reason as the row scorer: the
+        # counts stage is ~87% scoring against a ~0.1s kernel, and whether one
+        # call per PAIR beats one per FIELD is a measurement that needs both
+        # arms registered to be taken.
+        (
+            VECTOR_UDF_NAME,
+            "dev.goldensuite.spark.GoldenScoreVectorUdf",
+            "array<double>",
+        ),
         (IMPL_UDF_NAME, "dev.goldensuite.spark.GoldenScoreImplUdf", "string"),
         (
             FINGERPRINT_UDF_NAME,

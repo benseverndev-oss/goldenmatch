@@ -8046,6 +8046,8 @@
           "defines": [
             "_refuse_unsupported",
             "_rows_needed_for_n_pairs",
+            "_transformed_operands",
+            "_vector_similarities",
             "agreement_pattern_counts",
             "estimate_u_distributed",
             "gamma_columns",
@@ -8056,6 +8058,7 @@
           "imports": [
             "goldenmatch.core.probabilistic",
             "goldenmatch.spark.config_pipeline",
+            "goldenmatch.spark.jvm",
             "goldenmatch.spark.probabilistic"
           ]
         },
