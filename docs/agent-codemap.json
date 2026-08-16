@@ -1221,6 +1221,7 @@
             "TransformConfig",
             "ValidationConfig",
             "ValidationRuleConfig",
+            "_inert_threshold_message",
             "_is_valid_scorer"
           ],
           "imports": [
@@ -5278,7 +5279,8 @@
             "threshold_perturbations"
           ],
           "imports": [
-            "goldenmatch.core.complexity_profile"
+            "goldenmatch.core.complexity_profile",
+            "goldenmatch.core.config_edits"
           ]
         },
         {

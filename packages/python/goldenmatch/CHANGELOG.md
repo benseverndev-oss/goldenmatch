@@ -1512,7 +1512,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Fixed
+- **Threshold perturbation no longer shifts an inert field on probabilistic matchkeys (#2483).** `zero_label_confidence.threshold_perturbations` and `config_edits.ThresholdShift` both shifted `mk.threshold` to build "variant" configs. A probabilistic matchkey cuts on `link_threshold`, so those variants matched **identically** to the baseline -- and the zero-label stability signal derived from them saw zero change and reported maximum confidence. A falsely confident number is worse than none. Both now perturb `mk.cutoff_field`, and a matchkey whose operative cutoff was never set is correctly reported NOT perturbable rather than perturbed through a field that does nothing. Weighted matchkeys are unaffected.
+- **Setting `threshold` on a probabilistic matchkey warns on assignment, not just at construction (#2483).** The constructor-time guard could not see `mk.threshold = 0.95` because `validate_assignment` is off -- and that assignment is precisely the reported workflow (build the config with `auto_configure_probabilistic_df`, then sweep `threshold` and get byte-identical results). `MatchkeyConfig.__setattr__` now emits the same warning, sharing one message with the constructor guard so the two cannot drift. Narrow interception rather than `validate_assignment=True`, which would re-run every validator on every write.
+
 ### Added
+- **`MatchkeyConfig.cutoff` / `.cutoff_field`** -- which attribute actually decides a link for this matchkey type (`link_threshold` for probabilistic, `threshold` otherwise), and its value. `cutoff is None` means no decision was recorded in the config, which is the #2483 state: the cut comes from a runtime fallback. Callers that read or perturb "the cutoff" should use these rather than hardcoding a field name.
 - **Ontology-layer live-catalog write-back.** `write_ontology_catalog(rdf, dest=…)`
   writes emitted RDF to a file, or (`endpoint=…`) PUTs/POSTs it to a live SPARQL
   1.1 Graph Store endpoint (a triple store — `mode="replace"`/`"merge"`,

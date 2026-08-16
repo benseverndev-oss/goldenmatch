@@ -500,6 +500,23 @@ class RulesPayload(BaseModel):
 # ── MatchkeyConfig ──────────────────────────────────────────────────────────
 
 
+def _inert_threshold_message(name: str | None, value: float) -> str:
+    """The one wording for 'you set the field that does not cut'.
+
+    Shared by the construction-time validator and the assignment-time guard so
+    the two cannot drift -- the whole point of #2483 is that a user trusted a
+    field that was measuring nothing, and two half-matching warnings would be a
+    smaller version of the same problem.
+    """
+    return (
+        f"MatchkeyConfig {name!r} (type='probabilistic') sets "
+        f"'threshold'={value}, which is IGNORED. "
+        "Probabilistic matchkeys cut on 'link_threshold' (and "
+        "'review_threshold'); 'threshold' applies to weighted "
+        "matchkeys only. Set 'link_threshold' instead. See #2483."
+    )
+
+
 _VALID_MK_TYPES = ("exact", "weighted", "probabilistic")
 
 
@@ -689,11 +706,7 @@ class MatchkeyConfig(BaseModel):
                 # merely carry a stray key, and this is a usage mistake, not a
                 # corrupt config.
                 warnings.warn(
-                    f"MatchkeyConfig {self.name!r} (type='probabilistic') sets "
-                    f"'threshold'={self.threshold}, which is IGNORED. "
-                    "Probabilistic matchkeys cut on 'link_threshold' (and "
-                    "'review_threshold'); 'threshold' applies to weighted "
-                    "matchkeys only. Set 'link_threshold' instead. See #2483.",
+                    _inert_threshold_message(self.name, self.threshold),
                     UserWarning,
                     stacklevel=2,
                 )
@@ -773,6 +786,53 @@ class MatchkeyConfig(BaseModel):
     # invariant the validator promised — if a property raises, a caller has
     # mutated the model after construction (or skipped validation) and the
     # crash points at the bug.
+    #: Which attribute actually decides a link, per matchkey type. Probabilistic
+    #: matchkeys cut on ``link_threshold``; ``threshold`` is inert on them
+    #: (#2483). Kept as data next to the accessors below so every caller that
+    #: needs to READ or PERTURB "the cutoff" agrees on which field that is --
+    #: two call sites each hardcoding `threshold` is how the library ended up
+    #: perturbing an inert field and calling the result a stability signal.
+    _CUTOFF_FIELD_BY_TYPE = {"probabilistic": "link_threshold"}
+
+    @property
+    def cutoff_field(self) -> str:
+        """Name of the attribute that actually cuts for this matchkey's type."""
+        return self._CUTOFF_FIELD_BY_TYPE.get(self.type or "", "threshold")
+
+    @property
+    def cutoff(self) -> float | None:
+        """The operative decision cutoff, or None when none has been chosen.
+
+        ``None`` means no cutoff was set on the field that this matchkey type
+        actually reads -- which for a probabilistic matchkey is the situation
+        #2483 reported: a runtime fallback picks the cut and nothing in the
+        config says so. Callers that perturb a cutoff must treat ``None`` as
+        NOT PERTURBABLE rather than falling back to ``threshold``: shifting an
+        inert field produces variants that match identically, and any stability
+        or sensitivity number computed from them is false confidence.
+        """
+        return getattr(self, self.cutoff_field, None)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        # Pydantic model-validators only fire at construction, and
+        # `validate_assignment` is off, so the constructor-time guard against
+        # setting `threshold` on a probabilistic matchkey never saw the workflow
+        # that actually cost the #2483 reporter their afternoon: build a config
+        # via `auto_configure_probabilistic_df`, then assign `mk.threshold` and
+        # sweep it. That path warned NOTHING and changed NOTHING.
+        #
+        # Narrow interception rather than `validate_assignment=True`: the latter
+        # re-runs every validator on every assignment, and internal code mutates
+        # these models freely (`mk.rerank = False`, threshold sweeps) in ways
+        # that would pay that cost on every write.
+        super().__setattr__(name, value)
+        if name == "threshold" and value is not None and self.type == "probabilistic":
+            warnings.warn(
+                _inert_threshold_message(self.name, value),
+                UserWarning,
+                stacklevel=2,
+            )
+
     @property
     def fuzzy_threshold(self) -> float:
         """``threshold`` narrowed to ``float`` for weighted matchkeys.

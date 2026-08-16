@@ -275,24 +275,43 @@ def compute_zero_label_confidence(
 # GOLDENMATCH_AUTOCONFIG_ZERO_LABEL_STABILITY.
 # ---------------------------------------------------------------------------
 
+from goldenmatch.core.config_edits import _PERTURBABLE_TYPES
+
 _PERTURB_DELTAS = (0.05, -0.05)
 
 
 def threshold_perturbations(config: Any, deltas: tuple[float, ...] = _PERTURB_DELTAS) -> list[Any]:
-    """Deep-copied config variants with each weighted/probabilistic matchkey
-    threshold shifted by ``±delta`` (clamped to [0, 1]). Returns only variants
-    that actually changed a threshold; empty when nothing is perturbable
-    (e.g. an exact-only config)."""
+    """Deep-copied config variants with each weighted/probabilistic matchkey's
+    OPERATIVE cutoff shifted by ``±delta`` (clamped to [0, 1]). Returns only
+    variants that actually changed a cutoff; empty when nothing is perturbable
+    (e.g. an exact-only config).
+
+    Perturbs ``mk.cutoff_field``, not ``threshold`` (#2483). A probabilistic
+    matchkey cuts on ``link_threshold``; shifting its ``threshold`` produced
+    variants that matched IDENTICALLY to the baseline, so the stability signal
+    derived from them saw zero change and reported maximum confidence. A
+    falsely confident number is worse than none.
+
+    A probabilistic matchkey with no ``link_threshold`` is therefore NOT
+    perturbable, and is skipped rather than perturbed through the inert field.
+    That is the #2483 configuration itself -- the cut comes from a runtime
+    fallback, so there is nothing in the config to shift.
+    """
     variants: list[Any] = []
     for delta in deltas:
         cfg = config.model_copy(deep=True)
         touched = False
         for mk in cfg.get_matchkeys():
-            if getattr(mk, "type", None) in ("weighted", "probabilistic") and mk.threshold is not None:
-                new_t = _clamp(mk.threshold + delta)
-                if new_t != mk.threshold:
-                    mk.threshold = new_t
-                    touched = True
+            if getattr(mk, "type", None) not in _PERTURBABLE_TYPES:
+                continue
+            field = mk.cutoff_field
+            current = mk.cutoff
+            if current is None:
+                continue
+            new_t = _clamp(current + delta)
+            if new_t != current:
+                setattr(mk, field, new_t)
+                touched = True
         if touched:
             variants.append(cfg)
     return variants
