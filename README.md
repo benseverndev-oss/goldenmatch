@@ -45,28 +45,27 @@ Zero-config matching that **beats expert-tuned Splink head-to-head on messy cust
 <p align="center"><sub><em>Pair drilldown in the web workbench: cluster members, field-level diff, and a one-line NL explanation per pair. <code>pip install goldenmatch[web]</code> then <code>goldenmatch serve-ui &lt;project&gt;</code>. <a href="https://github.com/benseverndev-oss/goldenmatch/wiki/Web-UI">More screenshots →</a></em></sub></p>
 
 <!-- README-callouts:start  (auto-synced from packages/python/goldenmatch/CHANGELOG.md by scripts/sync_readme_callouts.py — edit the CHANGELOG, not this block) -->
-> **v3.5.0** — **New `date` scorer for date fields (#1858).** `jaro_winkler` scores unrelated
-ISO birthdays 0.80+ (the fixed `YYYY-MM-DD` shape + shared digit alphabet
-dominate), so it can't tell a typo from a different person. The `date` scorer
-compares dates by Damerau-Levenshtein over the canonical digits — a typo scores
-0.90, an unrelated date 0.00 — with a `levenshtein` fallback for non-ISO input.
-Cross-surface (Python, native kernel, TypeScript), and a preflight check warns
-when a name-oriented scorer sits on a date field.
+> **v3.13.0** — **Fellegi-Sunter training runs distributed on Spark.** The E-step reads only the
+comparison vector, so identical vectors collapse to one counted row and the whole
+step becomes a Spark `GROUP BY` over agreement patterns -- the cluster counts, the
+driver only fits. Training cost tracks DISTINCT vectors (bounded by
+`prod(levels + 1)`), not pairs: 1M -> 5M rows grew candidate pairs 5.00x and the
+distributed counting stage 5.25x, while distinct patterns grew 3.0% (433 -> 446)
+and driver-side EM stayed at 0.01s. Runs on jar-only executors via
+`goldenmatch-spark`, off the same Rust kernel every other surface uses.
 >
-> **v3.4.0** — **Embeddings are first-class on Fellegi-Sunter matchkeys.** `embedding` and
-`record_embedding` field scorers now train (EM) and score end-to-end on the
-probabilistic path via the vectorized matrix — previously they raised
-`Unknown scorer` on both training and scoring. They are matrix-only, so a
-matchkey carrying one always runs vectorized, and the TUI now routes FS through
-the same native/vectorized selector.
+> **v3.12.0** — **Semantic-model discovery reaches warehouse scale.** Model derivation now runs
+off `information_schema` instead of a sampled frame, plus catalog reconciliation
+and a real-LLM namer validation harness -- so a warehouse's existing model can be
+discovered, reconciled against what is really there, and named without hand
+curation.
 >
-> **v3.3.0** — **3.3.0 — negative evidence on Fellegi-Sunter matchkeys.** `negative_evidence`
-now works on `type: probabilistic` matchkeys as EM-learned `__ne__` dimensions
-(no labels needed; `penalty_bits` as a fixed override), and the Splink
-migration upgrade pass gains a **fan-out lever** — a risk-gated NE suggestion
-plus cluster-guard tuning from your reference clusters. `goldenmatch-native`
-0.1.15 scores NE in the Rust kernels (`FS_SUPPORTS_NE`; older wheels keep the
-pure-Python fallback automatically).
+> **v3.11.0** — **Customer 360 serving surface, and a fused FS kernel that covers the
+reference-data name scorers.** `customer_360` composes the golden record,
+per-field provenance, linked source records, the event timeline and the
+relationship neighborhood into one read, with semantic-layer drill-through; the
+fused Fellegi-Sunter kernel now covers the reference-data name scorers and an
+in-RAM sequential Arrow-native batch scorer with end-WCC.
 <!-- README-callouts:end -->
 
 ---
@@ -128,7 +127,7 @@ flowchart LR
 | **Shape** | Arrow at bulk boundaries, Rust-authoritative kernels | Transaction-native state machine (SQLite default · Postgres) |
 | **Job** | Block, score, cluster — throughput, vectorized, deterministic per run | Stable ids, survivorship, merge/split, provenance, append-only audit |
 | **State** | Stateless per call; measurement-driven kernelization | Durable, transactional, replayable, auditable |
-| **Backends** | DataFusion · Ray · Sail are *replaceable* execution backends, none synonymous with GoldenMatch | Storage backends conform to one externally-observable semantics |
+| **Backends** | DataFusion · Ray · Sail · Spark are *replaceable* execution backends, none synonymous with GoldenMatch | Storage backends conform to one externally-observable semantics |
 
 **Many surfaces, one answer.** The same capabilities reach Python, edge-safe TypeScript (with an opt-in WASM backend running the *same* Rust kernels), SQL inside PostgreSQL and DuckDB, and MCP / REST / A2A — governed by **specification + conformance**, not copy-paste. There is one authoritative owner per capability; pure-Python / standalone-TS paths are classified, conformance-tested fallbacks. Where a boundary can't cross byte-for-byte, we [measure and label it](#cross-language-parity) rather than claim parity.
 
@@ -160,6 +159,7 @@ The engine and the identity layer reach your stack through the surface you alrea
 - **SQL-native, at parity.** The same functions run inside **PostgreSQL** (pgrx extension) and **DuckDB**: dedupe · match · score · auto-config + telemetry · identity-graph reads · profiling · `evaluate` · Fellegi-Sunter scoring · GoldenFlow transforms. Resolve without moving data out of the warehouse.
 - **Python and edge-safe TypeScript.** The full suite ships on **npm** alongside PyPI. The TS cores are dependency-free and `node:*`-free (browsers, Cloudflare Workers, Vercel Edge, Deno); an opt-in WebAssembly backend (`await enableWasm()`) swaps in the *same* pyo3-free Rust kernels the Python wheels and SQL UDFs use, with pure-TS as the byte-identical default.
 - **AI-native by default.** Every package ships an MCP server, a REST API, and an A2A agent surface (70+ MCP tools across the suite), all exposing the *same* JSON telemetry shape across web, TUI, CLI, Postgres, DuckDB, and MCP.
+- **Spark, with no Python on the executors.** The Rust kernels ride into a Spark cluster in one jar (`spark.addArtifact("goldenmatch-spark.jar")`) and are called over JNI, so executors need no goldenmatch virtualenv, no packed env, nothing installed. **Fellegi-Sunter training runs distributed on that path** -- the E-step is a Spark `GROUP BY` over agreement patterns, so the cluster does the counting and the driver only fits the model. Deployment story, not a throughput one: the JVM scoring path measured ~2.4x *slower* than the Python-worker path, and the reason to use it is that there is nothing to install.
 - **Pipeline-native.** A dbt package (dedupe/match materializations, quality tests, identity-graph reads), a GitHub Action (fail PRs on data-quality regressions), and 13 drop-in Airflow DAGs ([Deploy](#deploy)).
 - **Production paths.** Postgres sync, daemon mode, lineage tracking, review queues.
 
@@ -235,11 +235,13 @@ Entity resolution is the stage most GraphRAG pipelines do worst — duplicate su
 
 Every headline number maps back to a single committed runner (`scripts/run_benchmarks.py`); see [`docs/reproducing-benchmarks.md`](docs/reproducing-benchmarks.md) for per-number commands, dataset URLs, and expected output with tolerance.
 
-- **Accuracy on customer-shaped data** — NC Voter **0.9719** F1, Febrl3 **0.9443** F1, DQbench composite **91.04**; the opt-in Fellegi-Sunter path beats hand-tuned Splink head-to-head on every dataset Splink scores ([bake-off](docs/benchmarks/2026-06-09-splink-bakeoff.md)). (Bibliographic DBLP-ACM lands **96.4%** F1 for the record-linkage crowd, but customer identity is the focus.)
+- **Accuracy on customer-shaped data** — NC Voter **0.9719** F1 (real-data sample), Febrl3 **0.9912** F1; the opt-in Fellegi-Sunter path beats hand-tuned Splink head-to-head on every dataset Splink scores ([bake-off](docs/benchmarks/2026-06-09-splink-bakeoff.md)). (Bibliographic DBLP-ACM lands **96.4%** F1 for the record-linkage crowd, but customer identity is the focus.)
 - **Privacy-preserving** — PPRL **92.4%** F1 on FEBRL4, matching across parties with no shared raw data.
 - **Scale envelope** ([`docs/scale-envelope.md`](docs/scale-envelope.md)) — per-backend ranges (in-memory/bucket to a few M · DuckDB out-of-core to ~50M · Ray distributed ≥ 50M), block-size failure modes, and a decision tree for picking a backend.
 
 **Verified at the top end:** a full **100M-row** dedupe on a 5-node Ray cluster in **9.2 min** (554 s), **20,000,000 golden records recovered exactly**, driver peak **0.36 GB RSS**. The default distributed path is **recall-complete** — duplicates merge correctly *no matter how the input is partitioned* (blocking-key shuffle scoring + distributed randomized-contraction WCC), and it stays driver-collect-free end to end. Recipe: [`configs/distributed-100m.yaml`](packages/python/goldenmatch/configs/distributed-100m.yaml).
+
+**Fellegi-Sunter training, distributed on Spark:** the E-step collapses to one Spark `GROUP BY` over agreement patterns, so training cost tracks the number of DISTINCT comparison vectors (bounded by `prod(levels + 1)`), not the pair count. Measured on a real 2-worker Spark cluster (jar-only executors, no Python installed), 1M -> 5M rows: candidate pairs grew **5.00x** and the distributed counting stage **5.25x**, while distinct patterns grew **3.0%** (433 -> 446) and driver-side EM stayed at **0.01s**. That is the property the tier rests on -- the cluster absorbs the data, the driver's work stays flat.
 
 Three reproducible real-world pipelines run this on public data at scale:
 

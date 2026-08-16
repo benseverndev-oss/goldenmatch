@@ -8,6 +8,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [3.13.0] - 2026-08-15
 
+<!-- README-callout
+**Fellegi-Sunter training runs distributed on Spark.** The E-step reads only the
+comparison vector, so identical vectors collapse to one counted row and the whole
+step becomes a Spark `GROUP BY` over agreement patterns -- the cluster counts, the
+driver only fits. Training cost tracks DISTINCT vectors (bounded by
+`prod(levels + 1)`), not pairs: 1M -> 5M rows grew candidate pairs 5.00x and the
+distributed counting stage 5.25x, while distinct patterns grew 3.0% (433 -> 446)
+and driver-side EM stayed at 0.01s. Runs on jar-only executors via
+`goldenmatch-spark`, off the same Rust kernel every other surface uses.
+-->
+
 ### Added
 - **Segment labels: which party each column describes (#2574).**
   `goldenmatch.core.segments` is a read-only consumer of InferMap's identity
@@ -861,7 +872,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   score-whole parity hatch). Blocks at or under `max_block_size`, and any block under the
   budget, take the untouched single call. Tests: `tests/test_fs_oversized_chunked.py`.
 
-## [3.12.0] - 2026-08-04
+## [3.12.0]
+
+<!-- README-callout
+**Semantic-model discovery reaches warehouse scale.** Model derivation now runs
+off `information_schema` instead of a sampled frame, plus catalog reconciliation
+and a real-LLM namer validation harness -- so a warehouse's existing model can be
+discovered, reconciled against what is really there, and named without hand
+curation.
+--> - 2026-08-04
 
 ### Added
 - **Semantic-model discovery — real-LLM namer validation / eval harness (Phase 19).** New
@@ -1007,7 +1026,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
   `tests/test_semantic_discovery_completeness.py`.
 
-## [3.11.0] - 2026-08-03
+## [3.11.0]
+
+<!-- README-callout
+**Customer 360 serving surface, and a fused FS kernel that covers the
+reference-data name scorers.** `customer_360` composes the golden record,
+per-field provenance, linked source records, the event timeline and the
+relationship neighborhood into one read, with semantic-layer drill-through; the
+fused Fellegi-Sunter kernel now covers the reference-data name scorers and an
+in-RAM sequential Arrow-native batch scorer with end-WCC.
+--> - 2026-08-03
 
 ### Added
 - **Fused Fellegi-Sunter kernel now covers the reference-data name scorers +
