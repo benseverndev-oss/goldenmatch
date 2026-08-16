@@ -497,8 +497,13 @@ _PEPY_RE = re.compile(r"pepy\.tech/projects\?q=(?P<q>[A-Za-z0-9+._-]+)")
 # no PyPI dist and no pypistats download API, and it is not a compile
 # dependency anybody declares (you hand it to Spark's `addArtifact` at
 # runtime). Same shape as goldenmatch-pg and er-matcher above.
+# (infermap-native was listed here while it was unpublished. It shipped to PyPI
+# -- 0.1.0, then 0.2.0 alongside the identity-layers kernel -- so it is a real
+# wheel with a pypistats API and does NOT match the criterion the three entries
+# above share. Graduated into PYPI_PACKAGES + the README pepy list, the same
+# path goldenmatch-hnsw took.)
 _PYPI_PUBLISH_BADGE_EXCEPTIONS = {
-    "goldenmatch-pg", "infermap-native", "er-matcher", "goldenmatch-spark-jar",
+    "goldenmatch-pg", "er-matcher", "goldenmatch-spark-jar",
 }
 
 
