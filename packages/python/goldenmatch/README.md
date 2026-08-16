@@ -56,8 +56,8 @@ npm install goldenmatch
 > is an edge-safe subset (no Ray/GPU distributed engine, no web UI); everything else is at
 > core parity. Version map + rationale: [`docs/versioning-policy.md`](docs/versioning-policy.md).
 
-<!-- README-callouts:start  (auto-synced from CHANGELOG.md by scripts/sync_readme_callouts.py — edit the CHANGELOG, not this block) -->
-> **v3.13.0** — **Fellegi-Sunter training runs distributed on Spark.** The E-step reads only the
+<!-- README-callouts:start  (auto-synced from CHANGELOG.md by scripts/sync_readme_callouts.py; edit the CHANGELOG, not this block) -->
+> **v3.13.0: Fellegi-Sunter training runs distributed on Spark.** The E-step reads only the
 comparison vector, so identical vectors collapse to one counted row and the whole
 step becomes a Spark `GROUP BY` over agreement patterns -- the cluster counts, the
 driver only fits. Training cost tracks DISTINCT vectors (bounded by
@@ -66,13 +66,13 @@ distributed counting stage 5.25x, while distinct patterns grew 3.0% (433 -> 446)
 and driver-side EM stayed at 0.01s. Runs on jar-only executors via
 `goldenmatch-spark`, off the same Rust kernel every other surface uses.
 >
-> **v3.12.0** — **Semantic-model discovery reaches warehouse scale.** Model derivation now runs
+> **v3.12.0: Semantic-model discovery reaches warehouse scale.** Model derivation now runs
 off `information_schema` instead of a sampled frame, plus catalog reconciliation
 and a real-LLM namer validation harness -- so a warehouse's existing model can be
 discovered, reconciled against what is really there, and named without hand
 curation.
 >
-> **v3.11.0** — **Customer 360 serving surface, and a fused FS kernel that covers the
+> **v3.11.0: Customer 360 serving surface, and a fused FS kernel that covers the
 reference-data name scorers.** `customer_360` composes the golden record,
 per-field provenance, linked source records, the event timeline and the
 relationship neighborhood into one read, with semantic-layer drill-through; the
