@@ -6,6 +6,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Fixed
+
+- **Zero-config no longer refuses healthy fine-grained blocking.** The blocking
+  RED rule graded skew with `block_sizes_p99 > 10 * (n_rows / n_blocks)`, whose
+  denominator is the mean block size -- pinned near 1 whenever blocking is
+  fine-grained, so the bar collapsed toward "any block over ~12 rows". Measured
+  at 100,000 rows, a shape with 84,293 blocks, 0.976 reduction and no singletons
+  graded RED, and at `n_rows >= 100_000` a RED blocking profile refuses the run.
+  Its largest block owned **1.9%** of the candidate pairs. The rule now measures
+  work concentration -- the largest block's share of `total_comparisons` against
+  `max(0.10, 4 / n_blocks)` -- which also catches a case the percentile missed
+  entirely: one block of 10,000 rows among 5,000 blocks owns 98.5% of the work
+  but sits *above* p99 rather than at it. New `BlockingProfile.
+  largest_block_pair_share`; ported to the TypeScript surface in lockstep.
+
 ## [3.13.0] - 2026-08-15
 
 <!-- README-callout

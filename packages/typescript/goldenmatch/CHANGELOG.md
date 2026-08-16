@@ -6,6 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Fixed
+- **`blockingHealth` grades skew by work concentration, not by a size
+  percentile.** Parity port of the Python fix: `blockSizesP99 > 10 * (nRows /
+  nBlocks)` divides a tail percentile by the mean block size, which is pinned
+  near 1 under fine-grained blocking, so it graded a measured 84,293-block
+  profile RED while its largest block owned 1.9% of the candidate pairs -- and
+  missed a single block owning 98.5%, because that block sits above p99 rather
+  than at it. Now compares `largestBlockPairShare` (exported) against
+  `max(0.10, 4 / nBlocks)`.
+
 ## [1.29.0] - 2026-08-15
 
 ### Added

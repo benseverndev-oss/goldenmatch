@@ -55,13 +55,71 @@ describe("complexityProfile — health rollups (Python parity)", () => {
     expect(blockingHealth(makeBlockingProfile(), 100)).toBe(HealthVerdict.RED);
   });
 
-  it("blockingHealth: skewed p99 → RED", () => {
+  // Skew fixtures mirror the Python ones in
+  // tests/test_blocking_skew_pair_share.py -- same numbers, same verdicts, so
+  // the two surfaces cannot drift apart on a rule that refuses user runs.
+  it("blockingHealth: one block owning 96% of the pairs → RED", () => {
     expect(
       blockingHealth(
-        makeBlockingProfile({ nBlocks: 10, blockSizesP99: 1000, reductionRatio: 0.9 }),
+        makeBlockingProfile({
+          nBlocks: 10,
+          totalComparisons: 1842,
+          reductionRatio: 0.628,
+          blockSizesP99: 60,
+          blockSizesMax: 60,
+        }),
         100,
       ),
     ).toBe(HealthVerdict.RED);
+  });
+
+  it("blockingHealth: one giant block a percentile cannot see → RED", () => {
+    // 10,000 rows in one of 5,000 blocks: 98.5% of the work, but p99 is 18
+    // because the giant sits ABOVE the 99th percentile rather than at it.
+    expect(
+      blockingHealth(
+        makeBlockingProfile({
+          nBlocks: 5000,
+          totalComparisons: 50_759_847,
+          reductionRatio: 0.989848,
+          blockSizesP99: 18,
+          blockSizesMax: 10_000,
+        }),
+        100_000,
+      ),
+    ).toBe(HealthVerdict.RED);
+  });
+
+  it("blockingHealth: fine-grained blocking with a 1.9% largest block → GREEN", () => {
+    // The measured person@100k shape. Graded RED by the old percentile rule.
+    expect(
+      blockingHealth(
+        makeBlockingProfile({
+          nBlocks: 84_293,
+          totalComparisons: 121_372_923,
+          reductionRatio: 0.975725,
+          blockSizesP50: 2,
+          blockSizesP99: 72,
+          blockSizesMax: 2170,
+        }),
+        100_000,
+      ),
+    ).toBe(HealthVerdict.GREEN);
+  });
+
+  it("blockingHealth: 8 uniform blocks at a 12.5% share each → GREEN", () => {
+    expect(
+      blockingHealth(
+        makeBlockingProfile({
+          nBlocks: 8,
+          totalComparisons: 39_600,
+          reductionRatio: 0.876,
+          blockSizesP99: 100,
+          blockSizesMax: 100,
+        }),
+        800,
+      ),
+    ).toBe(HealthVerdict.GREEN);
   });
 
   it("blockingHealth: low reduction → RED", () => {

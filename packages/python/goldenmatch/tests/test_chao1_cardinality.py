@@ -182,8 +182,8 @@ class TestComplexityProfileHealthThreads:
             }),
             blocking=BlockingProfile(
                 keys_used=[["a"]], n_blocks=10, total_comparisons=500,
-                reduction_ratio=0.95, block_sizes_p50=10, block_sizes_p95=15,
-                block_sizes_p99=20, block_sizes_max=25,
+                reduction_ratio=0.95, block_sizes_p50=10, block_sizes_p95=11,
+                block_sizes_p99=11, block_sizes_max=11,
             ),
             scoring=ScoringProfile(
                 n_pairs_scored=500, score_histogram=[0]*15 + [100]*5,

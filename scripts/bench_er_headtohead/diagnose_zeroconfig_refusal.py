@@ -29,7 +29,8 @@ prints each sub-profile's health verdict beside THE FIELD VALUES THAT DECIDE IT,
 and names the rule that fired. The rules (complexity_profile.py):
 
     blocking RED  <- n_blocks == 0
-                  <- block_sizes_p99 > 10 * (n_rows / n_blocks)   [skew]
+                  <- largest block's share of total_comparisons
+                     > max(0.10, 4 / n_blocks)                    [skew, #2628]
                   <- reduction_ratio < 0.5
     cluster  RED  <- cluster_size_max > 0.1 * n_rows
                   <- transitivity_rate < 0.85
@@ -76,26 +77,29 @@ def _blocking_report(bp, n_rows: int) -> dict:
     p99 = getattr(bp, "block_sizes_p99", 0)
     rr = getattr(bp, "reduction_ratio", 0.0)
     singles = getattr(bp, "singleton_block_count", 0)
+    # Pair-share of the biggest block: what the skew RED rule reads as of
+    # #2628. The old rule was `p99 > 10 * avg`, which compares a tail
+    # percentile to a MEAN pinned near 1 whenever blocking is fine-grained
+    # (n_blocks -> n_rows) -- it fired on person@100k, whose largest block owned
+    # 1.9% of the work with reduction 0.9757 and no singletons, and it missed a
+    # single block owning 98.5% (which sits ABOVE p99, not at it). Skew is
+    # dangerous when one block owns most of the WORK, and work is quadratic in
+    # block size, so that is what the rule now measures. `p99_over_avg` stays
+    # in the output as the retired signal, for comparison across runs.
+    total_pairs = getattr(bp, "total_comparisons", 0) or 0
+    biggest = getattr(bp, "block_sizes_max", 0) or 0
+    biggest_pairs = biggest * (biggest - 1) // 2 if biggest >= 2 else 0
+    share = biggest_pairs / total_pairs if total_pairs else 0.0
+    skew_bar = max(0.10, 4.0 / n_blocks) if n_blocks else 0.10
     fired = []
     if n_blocks == 0:
         fired.append("n_blocks == 0")
-    if p99 > 10 * avg:
-        fired.append(f"block_sizes_p99 {p99} > 10*avg {10 * avg:.1f}  [SKEW]")
+    if share > skew_bar:
+        fired.append(
+            f"largest_block_pair_share {share:.4f} > bar {skew_bar:.4f}  [SKEW]"
+        )
     if rr < 0.5:
         fired.append(f"reduction_ratio {rr:.4f} < 0.5")
-    # Pair-share of the biggest block: the measure the RED rule arguably should
-    # be using. `p99 > 10 * avg` compares a tail percentile to a MEAN that is
-    # pinned near 1 whenever blocking is fine-grained (n_blocks -> n_rows), so
-    # it fires on configs with excellent reduction and no singletons. What
-    # actually makes skew dangerous is that a few blocks own most of the WORK,
-    # and work is quadratic in block size -- so the honest question is what
-    # fraction of total candidate pairs the largest block contributes.
-    #
-    # Recorded, not acted on: changing a RED rule needs this number first, and
-    # the first version of this diagnostic did not capture it.
-    total_pairs = getattr(bp, "total_comparisons", 0) or 0
-    biggest = getattr(bp, "block_sizes_max", 0) or 0
-    biggest_pairs = biggest * (biggest - 1) // 2
     return {
         "n_blocks": n_blocks, "avg_block_size": round(avg, 2),
         "block_sizes_p50": getattr(bp, "block_sizes_p50", 0),
@@ -107,9 +111,8 @@ def _blocking_report(bp, n_rows: int) -> dict:
         "singleton_fraction": round(singles / max(n_blocks, 1), 4),
         "total_comparisons": int(total_pairs),
         "largest_block_pairs": int(biggest_pairs),
-        "largest_block_pair_share": (
-            round(biggest_pairs / total_pairs, 6) if total_pairs else None
-        ),
+        "largest_block_pair_share": round(share, 6) if total_pairs else None,
+        "skew_bar": round(skew_bar, 6),
         "p99_over_avg": round(p99 / avg, 2) if avg else None,
         "p99_over_p50": (
             round(p99 / getattr(bp, "block_sizes_p50", 0), 2)
