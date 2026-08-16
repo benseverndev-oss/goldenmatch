@@ -714,6 +714,7 @@ Within whichever path is chosen, the per-block math runs on the native Rust FS k
 | `GOLDENMATCH_DATABASE_URL` / `GOLDENMATCH_IDENTITY_DSN` | unset | DB connection / migration DSN. |
 | `GOLDENMATCH_SAIL_IDENTITY_ID_SCHEME` | `h1` | Identity record-id scheme on the Sail (Spark Connect) tier. |
 | `GOLDENMATCH_SPARK_JAR` | unset | Path to the JVM scorer jar shipped to Spark executors via `addArtifact`. Unset means "look for the build output"; the jar is built rather than vendored, so a source checkout has none until you build it. |
+| `GOLDENMATCH_SPARK_VECTOR_SCORER` | `0` | Score every comparison field of a pair in ONE UDF call instead of one call per field. The distributed FS counts stage is ~87% scoring against a ~0.1s kernel, so the per-call overhead dominates; this also lets fields sharing a scorer cross into native together (4 jaro-winkler + 1 levenshtein becomes 2 transitions, not 5). **Opt-in and unmeasured** -- it changes how every similarity on the Spark FS path is computed, and stays off until a measurement says it is faster. Falls back to the per-field path for `exact` fields (they never cross), unknown scorers, or more than 10 fields. |
 | `GOLDENMATCH_PREPARED_RECORD_STORE_DIR` / `_PERSIST` | unset / `0` | Prepared-record store path / persistence. |
 | `GOLDENMATCH_LLM_MODEL` | provider default | Override the LLM scorer model. |
 | `GOLDENMATCH_EMBEDDING_PROVIDER` / `GOLDENMATCH_INHOUSE_MODEL` | unset | Embedding provider / in-house model id. |
