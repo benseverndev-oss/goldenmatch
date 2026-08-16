@@ -57,6 +57,10 @@ PYPI_PACKAGES = [
     # Optional Semantic-Signature accelerator (goldengraph gates on it). Gained its
     # PyPI publisher in publish-goldenprofile-native.yml; a *-native extra like the rest.
     "goldenprofile-native",
+    # Gained its PyPI publisher in #2598 without being added here, which turned
+    # the publisher<->badge gate red on main. Every other `*-native` sibling is
+    # listed, so this is the consistent home for it.
+    "goldenpipe-native",
     "goldenmatch-embed",
     # goldengraph gained its PyPI publisher (publish-goldengraph.yml), so the
     # publisher<->badge gate now requires it here. First release is pending, so

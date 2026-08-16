@@ -13,13 +13,29 @@ name: Publish goldenmatch_pg release artifacts
 # No Docker / .deb / .rpm in v1 -- tarballs are enough to unblock
 # downstream consumers. Promote to package formats once there's demand.
 
+# ## Immutable releases (why this workflow owns the release)
+#
+# This repo has immutable releases enabled: assets are SEALED at publish time.
+# The old design fired on `release: published` and then attached assets, which
+# CANNOT work here -- GitHub answers:
+#
+#   Cannot upload asset ... to an immutable release. GitHub only allows asset
+#   uploads before a release is published, so upload assets to a draft release
+#   before you publish it.
+#
+# So this workflow now fires on the TAG, creates a DRAFT, attaches, and only
+# then publishes -- the same shape `publish-goldenmatch-spark-jar.yml` uses.
+# Do NOT hand-create the release with `gh release create`: a tag consumed by a
+# published immutable release is burned permanently (`--cleanup-tag` does not
+# free it). `goldenmatch-pg-v0.19.0` was burned exactly that way.
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - 'goldenmatch-pg-v*'
   workflow_dispatch:
     inputs:
       ref:
-        description: "Tag or commit to build (default: HEAD of main)"
+        description: "Tag or commit to build (default: HEAD of main). Build only; no release."
         required: false
         default: ""
 
@@ -28,8 +44,8 @@ permissions:
 
 jobs:
   build:
-    # Only fire for goldenmatch-pg release tags.
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'goldenmatch-pg-v')
+    # Tag pushes are already filtered by the `on:` trigger; dispatch builds
+    # without releasing.
     runs-on: ubuntu-latest
     permissions:
       contents: write      # upload release assets
@@ -105,32 +121,11 @@ jobs:
           # canonical SQL file there. Path layout: <PKG_DIR>/usr/share/postgresql/<N>/extension/
           EXT_DIR="${PKG_DIR}/usr/share/postgresql/${PG_VERSION}/extension"
           mkdir -p "${EXT_DIR}"
-          cp sql/goldenmatch_pg--0.18.0.sql "${EXT_DIR}/"
-          cp sql/goldenmatch_pg--0.17.0--0.18.0.sql "${EXT_DIR}/"
-          cp sql/goldenmatch_pg--0.17.0.sql "${EXT_DIR}/"
-          cp sql/goldenmatch_pg--0.16.0--0.17.0.sql "${EXT_DIR}/"
-          cp sql/goldenmatch_pg--0.16.0.sql "${EXT_DIR}/"
-          cp sql/goldenmatch_pg--0.15.0--0.16.0.sql "${EXT_DIR}/"
-          cp sql/goldenmatch_pg--0.15.0.sql "${EXT_DIR}/"
-          cp sql/goldenmatch_pg--0.14.0--0.15.0.sql "${EXT_DIR}/"
-          cp sql/goldenmatch_pg--0.14.0.sql "${EXT_DIR}/"
-          cp sql/goldenmatch_pg--0.13.0--0.14.0.sql "${EXT_DIR}/"
-          cp sql/goldenmatch_pg--0.13.0.sql "${EXT_DIR}/"
-          cp sql/goldenmatch_pg--0.12.0--0.13.0.sql "${EXT_DIR}/"
-          cp sql/goldenmatch_pg--0.12.0.sql "${EXT_DIR}/"
-          cp sql/goldenmatch_pg--0.11.0--0.12.0.sql "${EXT_DIR}/"
-          cp sql/goldenmatch_pg--0.11.0.sql "${EXT_DIR}/"
-          cp sql/goldenmatch_pg--0.10.0--0.11.0.sql "${EXT_DIR}/"
-          cp sql/goldenmatch_pg--0.10.0.sql "${EXT_DIR}/"
-          cp sql/goldenmatch_pg--0.9.0--0.10.0.sql "${EXT_DIR}/"
-          cp sql/goldenmatch_pg--0.9.0.sql "${EXT_DIR}/"
-          cp sql/goldenmatch_pg--0.8.0--0.9.0.sql "${EXT_DIR}/"
-          cp sql/goldenmatch_pg--0.8.0.sql "${EXT_DIR}/"
-          cp sql/goldenmatch_pg--0.7.0--0.8.0.sql "${EXT_DIR}/"
-          cp sql/goldenmatch_pg--0.7.0.sql "${EXT_DIR}/"
-          cp sql/goldenmatch_pg--0.6.0--0.7.0.sql "${EXT_DIR}/"
-          cp sql/goldenmatch_pg--0.6.0.sql "${EXT_DIR}/"
-          cp sql/goldenmatch_pg--0.5.0--0.6.0.sql "${EXT_DIR}/"
+          # GLOB, not a hand-maintained list. The list had drifted: it
+          # stopped at 0.18.0 while the control file declared
+          # default_version = '0.19.0', so the tarball would have shipped
+          # without the SQL for its own version and failed to install.
+          cp sql/*.sql "${EXT_DIR}/"
           echo "PKG_DIR=${PKG_DIR}" >> "$GITHUB_ENV"
 
       - name: Tar artifact
@@ -152,62 +147,90 @@ jobs:
       # cosign keyless: OIDC identity = this workflow on this ref; verifiers
       # run `cosign verify-blob --bundle <asset>.sigstore <asset>` with
       # --certificate-identity-regexp pinned to this repo's workflow path.
+      # --- Signing + provenance (Scorecard Signed-Releases) ---------------
+      # cosign keyless: OIDC identity = this workflow on this ref; verifiers
+      # run `cosign verify-blob --bundle <asset>.sigstore <asset>` with
+      # --certificate-identity-regexp pinned to this repo's workflow path.
       - name: Install cosign
-        if: github.event_name == 'release'
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
 
       - name: Sign artifact (cosign keyless)
-        if: github.event_name == 'release'
         working-directory: packages/rust/extensions/postgres
         run: cosign sign-blob --yes --bundle "${ASSET}.sigstore" "${ASSET}"
 
       - name: Attest build provenance
-        if: github.event_name == 'release'
         id: attest
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32  # v4.1.0
         with:
           subject-path: packages/rust/extensions/postgres/${{ env.ASSET }}
 
-      - name: Stage provenance bundle as a release asset
-        if: github.event_name == 'release'
-        # The attestation lives in GitHub's attestation store; also attach it
-        # to the release so consumers (and Scorecard) see it next to the
-        # artifact.
-        #
-        # `working-directory` is REQUIRED here. The job defaults to
-        # `packages/rust/extensions`, and this step used to omit the override
-        # while writing a repo-root-relative destination -- so the path
-        # resolved to `packages/rust/extensions/packages/rust/extensions/
-        # postgres/...`, which does not exist. Every OTHER step in this job
-        # sets the directory explicitly; this one was missed, and it failed
-        # the whole build matrix at the last step before upload:
-        #
-        #   cp: cannot create regular file '...pg15-linux-x86_64.tar.gz
-        #   .intoto.jsonl': No such file or directory
-        #
-        # That is why goldenmatch-pg has published NO release assets: the
-        # tarballs built fine, then this killed the job before `Upload to
-        # release` ran. `goldenmatch-pg-v0.13.0` is a published release with
-        # zero assets, and it is the only non-skipped run this workflow has
-        # ever had that was not a success.
+      - name: Stage provenance bundle beside the artifact
+        # `working-directory` is REQUIRED: the job defaults to
+        # `packages/rust/extensions`, and writing a repo-root-relative path here
+        # resolved to `packages/rust/extensions/packages/rust/extensions/...`,
+        # which does not exist. That killed the job before upload and is why
+        # v0.13.0 shipped with zero assets (#2601).
         working-directory: packages/rust/extensions/postgres
         run: cp "${{ steps.attest.outputs.bundle-path }}" "${ASSET}.intoto.jsonl"
 
-      - name: Upload to release
-        if: github.event_name == 'release'
-        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda  # v2
+      # Assets go to the workflow, NOT straight to a release: under immutable
+      # releases they can only be attached while the release is still a draft,
+      # so the `release` job below collects them and does draft -> attach ->
+      # publish in order.
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          files: |
+          name: pg${{ matrix.pg }}-assets
+          path: |
             packages/rust/extensions/postgres/${{ env.ASSET }}
             packages/rust/extensions/postgres/${{ env.ASSET }}.sigstore
             packages/rust/extensions/postgres/${{ env.ASSET }}.intoto.jsonl
-          tag_name: ${{ github.event.release.tag_name }}
+          if-no-files-found: error
 
-      - name: Upload artifact (workflow_dispatch only)
-        # workflow_dispatch has no release to attach to; expose the tarball
-        # as a workflow artifact so the user can grab it from the run page.
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+  release:
+    # Only a tag push releases. A dispatch build stops after `build`, so the
+    # matrix stays runnable for a smoke test without consuming a tag.
+    if: startsWith(github.ref, 'refs/tags/goldenmatch-pg-v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the draft, attach assets, publish
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
-          name: ${{ env.ASSET }}
-          path: packages/rust/extensions/postgres/${{ env.ASSET }}
+          pattern: pg*-assets
+          path: dist
+          merge-multiple: true
+
+      - name: Refuse an empty release
+        run: |
+          set -euo pipefail
+          n=$(find dist -type f | wc -l)
+          echo "collected $n files"
+          find dist -type f | sort
+          # Three PG versions x (tarball + sigstore + intoto) = 9. A release
+          # that publishes fewer has silently lost a build, which is exactly
+          # the failure this workflow is being fixed for -- v0.13.0 and
+          # v0.19.0 are both published releases carrying zero assets.
+          if [ "$n" -lt 9 ]; then
+            echo "::error::expected 9 assets (3 PG versions x 3 files), got $n"
+            exit 1
+          fi
+
+      - name: Create the DRAFT release and attach every asset
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#goldenmatch-pg-v}"
+          # ASCII only: the release API 422s on non-ASCII, and it does so AFTER
+          # the draft exists, leaving a half-made release behind.
+          gh release create "$TAG" --draft --title "goldenmatch_pg $VERSION"             --notes "pgrx extension for PostgreSQL 15, 16 and 17. Untar into PostgreSQL's lib + extension dirs, then CREATE EXTENSION goldenmatch_pg;"
+          gh release upload "$TAG" dist/* --clobber
+
+      - name: Publish (seal) the release
+        # Last, and only once the assets are attached. Immutable releases seal
+        # at THIS step; anything not uploaded above can never be added.
+        run: gh release edit "$TAG" --draft=false --latest=false
