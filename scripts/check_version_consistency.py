@@ -15,6 +15,21 @@ agree:
       Cargo.toml and a pyproject.toml):
       Cargo.toml ``[package].version`` == pyproject.toml ``[project].version``
       == any ``__init__.py`` ``__version__`` fallback under the crate.
+  - Committed ``Cargo.lock`` files: every LOCAL crate a lock describes must be
+      pinned at the version its ``Cargo.toml`` declares.
+
+``Cargo.lock`` was the spot this gate did not look at, and it drifted on five
+crates at once (goldenmatch-native pinned 0.1.21 against a declared 0.2.0, plus
+analysis-native, goldencheck-native, goldengraph-native, goldenflow-native).
+Bumping ``version`` in a Cargo.toml does not rewrite the lock, and nothing
+forced a regeneration: every ``--locked`` in ``.github/workflows/`` is a
+``cargo install`` of a TOOL, never a build of our own crates. So a stale pin
+survives until a consumer builds with ``--locked`` and hard-errors. Five at
+once is the tell that it was never checked, not that someone slipped.
+
+This is a textual check on purpose. ``cargo metadata --locked`` proves the same
+thing but needs a toolchain and a warm registry cache for every crate tree,
+which is exactly why no lane runs it.
 
 Exit 1 (listing every drift) if any package is inconsistent; 0 otherwise.
 Run: ``python scripts/check_version_consistency.py``
@@ -23,6 +38,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -42,6 +58,41 @@ def _cargo_version(path: Path) -> str | None:
 def _init_version(path: Path) -> str | None:
     m = _VERSION_RE.search(path.read_text(encoding="utf-8"))
     return m.group(1) if m else None
+
+
+# A Cargo.lock `[[package]]` entry. Matched textually rather than via tomllib so
+# the check stays independent of lock format version quirks.
+_LOCK_ENTRY_RE = re.compile(r'^name = "([^"]+)"\nversion = "([^"]+)"', re.M)
+
+# A lock describing no local crate would pass vacuously, so a scan that finds
+# almost nothing means discovery broke rather than that the repo is clean.
+# Same posture as check_workflow_yaml.py's file-count floor.
+_MIN_TRACKED_LOCKS = 10
+
+
+def _tracked_cargo_locks() -> list[Path]:
+    """Committed Cargo.lock files. Untracked locks are build artefacts."""
+    out = subprocess.run(
+        ["git", "ls-files", "*Cargo.lock"],
+        cwd=ROOT, capture_output=True, text=True, check=True,
+    ).stdout.split()
+    return [ROOT / p for p in out]
+
+
+def _local_crate_versions(lock_dir: Path) -> dict[str, tuple[str, Path]]:
+    """Crates declared under ``lock_dir``: name -> (declared version, manifest)."""
+    found: dict[str, tuple[str, Path]] = {}
+    for toml in sorted(lock_dir.rglob("Cargo.toml")):
+        if "target" in toml.parts:
+            continue
+        try:
+            pkg = tomllib.loads(toml.read_text(encoding="utf-8")).get("package", {})
+        except tomllib.TOMLDecodeError:
+            continue
+        name, version = pkg.get("name"), pkg.get("version")
+        if name and version:
+            found[name] = (version, toml)
+    return found
 
 
 # TS package-version declarations we enforce against package.json:
@@ -135,6 +186,31 @@ def main() -> int:
         if src.is_dir():
             sources.extend(_ts_src_versions(src))
         _check(f"ts/{pkg_dir.name}", sources, errors)
+        checked += 1
+
+    # --- Committed Cargo.lock pins vs declared crate versions ---
+    locks = _tracked_cargo_locks()
+    if len(locks) < _MIN_TRACKED_LOCKS:
+        print(
+            f"ERROR: found only {len(locks)} tracked Cargo.lock files (expected "
+            f">= {_MIN_TRACKED_LOCKS}). The scan is broken, not the repo.",
+            file=sys.stderr,
+        )
+        return 2
+    for lock in locks:
+        pinned = dict(_LOCK_ENTRY_RE.findall(lock.read_text(encoding="utf-8")))
+        for name, (declared, toml) in _local_crate_versions(lock.parent).items():
+            # Only crates the lock actually describes; a lock legitimately omits
+            # crates outside its own dependency graph.
+            if name in pinned:
+                _check(
+                    f"cargo-lock/{toml.parent.relative_to(ROOT)}",
+                    [
+                        (str(toml.relative_to(ROOT)), declared),
+                        (str(lock.relative_to(ROOT)), pinned[name]),
+                    ],
+                    errors,
+                )
         checked += 1
 
     if errors:
