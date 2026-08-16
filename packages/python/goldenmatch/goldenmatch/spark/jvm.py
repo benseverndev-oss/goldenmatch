@@ -56,8 +56,28 @@ FINGERPRINT_UDF_NAME = "golden_fingerprint"
 #: a measurement, and this is the arm that lets it be taken.
 ROW_UDF_NAME = "golden_score_row"
 
+#: The SQL name of the VECTOR scorer: one call per PAIR, every field at once.
+#:
+#: The counts stage is ~87% scoring against a ~0.1s kernel, and the row scorer is
+#: called once per FIELD -- 5 fields over 5.5M pairs is ~27M UDF dispatches and
+#: ~27M JNI transitions per blocking pass. This collapses both: one dispatch per
+#: pair, and fields sharing a scorer id cross into native together because
+#: `GoldenScorer.score` already takes arrays (4 jaro-winkler + 1 levenshtein
+#: becomes 2 transitions, not 5).
+#:
+#: NOT the batched scorer: the row shape is unchanged (one pair in, one row out),
+#: so there is no `collect_list`/`arrays_zip`/`explode` -- the machinery J4
+#: measured at ~14x the kernel it was avoiding.
+VECTOR_UDF_NAME = "golden_score_vector"
+
+#: Value slots the vector UDF carries (2 per field). Mirrors
+#: GoldenScoreVectorUdf.MAX_FIELDS; a matchkey with more fields falls back to
+#: the row-shaped path rather than failing.
+VECTOR_UDF_MAX_FIELDS = 10
+
 _UDF_CLASS = "dev.goldensuite.spark.GoldenScoreUdf"
 _ROW_UDF_CLASS = "dev.goldensuite.spark.GoldenScoreRowUdf"
+_VECTOR_UDF_CLASS = "dev.goldensuite.spark.GoldenScoreVectorUdf"
 _IMPL_UDF_CLASS = "dev.goldensuite.spark.GoldenScoreImplUdf"
 _FINGERPRINT_UDF_CLASS = "dev.goldensuite.spark.GoldenFingerprintUdf"
 
@@ -218,6 +238,11 @@ def install(spark: object, *, jar: str | os.PathLike[str] | None = None,
         # +1.4s on the un-batching it requires against ~0.1s on the scoring, so
         # both shapes are available and the bench decides.
         (ROW_UDF_NAME, _ROW_UDF_CLASS, "double"),
+        # The vector scorer: one call per pair, every field. Registered
+        # alongside the row scorer rather than replacing it -- which shape wins
+        # is a measurement, and the row arm is the control it is measured
+        # against.
+        (VECTOR_UDF_NAME, _VECTOR_UDF_CLASS, "array<double>"),
         # Registered alongside, not on demand: the probe has to be available
         # BEFORE anything is scored, or the first thing a caller can check is
         # whether the results they already trusted came from the kernel.
