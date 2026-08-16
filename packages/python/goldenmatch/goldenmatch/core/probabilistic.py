@@ -3170,6 +3170,29 @@ def compute_thresholds(
         # Link at the (1 - match_rate) percentile — top match_rate% of pairs
         # But clamp to reasonable range
         match_pct = max(em_result.proportion_matched, 0.001)
+
+        # `match_pct * 2` is a WINDOW over the top of the distribution, and the
+        # percentile below is only meaningful while that window is a minority of
+        # it. At proportion_matched >= 0.5 the window covers everything:
+        # `1 - match_pct*2` goes <= 0, link_idx clamps to 0, and the
+        # "data-driven" cut becomes `sorted_w[0]` -- the MINIMUM observed score.
+        # The cut is then not chosen from the data, it is the floor of the data,
+        # and every scored pair is admitted.
+        #
+        # MEASURED, person shape: EM reported proportion_matched 0.638477, which
+        # is percentile 0.0. The bench measured the shipped lane's minimum
+        # retained score at exactly 0.60 -- the two corroborate. Against
+        # comparison lanes cutting at 0.85 that admitted 276,836 pairs vs
+        # 184,285, and connected components chained the extra links until
+        # non-singleton clusters averaged 7.98 members against a truth of 2.40.
+        # Pairwise precision 0.2627.
+        #
+        # A high match rate on blocked pairs is not absurd -- good blocking
+        # concentrates duplicates -- so this does NOT try to correct EM. It only
+        # refuses to read a percentile that carries no information, and falls
+        # back to the same fixed default the no-weights path uses.
+        if match_pct * 2 >= 1.0:
+            return 0.50, 0.35
         link_idx = int(n * (1 - match_pct * 2))  # 2x match rate for headroom
         link_idx = max(0, min(link_idx, n - 1))
         link_norm = sorted_w[link_idx]
