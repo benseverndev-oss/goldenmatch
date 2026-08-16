@@ -194,6 +194,11 @@ def profile_counts(joined, mk, *, scorer_udf, transform_udf, cands):
     """
     import time
 
+    # CAND_LHS / CAND_RHS are imported HERE, not read from module scope: the
+    # harness imports them lazily inside `main()`, so referencing them from this
+    # function was a NameError the first time --profile-counts was used. ruff
+    # (F821) caught it before the cluster did.
+    from goldenmatch.spark.config_pipeline import CAND_LHS, CAND_RHS
     from goldenmatch.spark.em import gamma_columns
     from pyspark.sql import functions as F
 
