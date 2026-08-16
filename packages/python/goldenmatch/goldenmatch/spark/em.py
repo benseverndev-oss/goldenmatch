@@ -105,8 +105,29 @@ def _vector_scorer_enabled() -> bool:
     strength of an argument. And with no switch there was no way to run the
     per-field arm, so the very comparison it exists for could not be taken.
 
-    `GOLDENMATCH_SPARK_VECTOR_SCORER=1` turns it on. It flips to default-on when
-    a measurement says it is faster, and not before.
+    `GOLDENMATCH_SPARK_VECTOR_SCORER=1` turns it on. It was to flip to
+    default-on when a measurement said it was faster. THE MEASUREMENT SAID THE
+    OPPOSITE, so it stays off permanently unless the shape changes.
+
+    1M rows / 5.5M pairs, same cluster, arms validated identical (same pairs,
+    same 433/186 pattern counts, same m_probs):
+
+        pass 0 scoring   26.11s -> 59.75s   (2.29x SLOWER)
+        pass 1 scoring   17.13s -> 40.38s   (2.36x)
+        counts stage     45.42s -> 101.37s
+
+    Two mechanisms, both pointing the same way. Spark arrays are `ArrayData` of
+    `InternalRow`, so returning a similarity vector pays row-wise object churn
+    -- the same reason `GoldenScoreUdf`'s pair-batching lost. And `getItem(i)`
+    per field appears not to be common-subexpression-eliminated, which would
+    mean the UDF is evaluated once per field REGARDLESS, plus the array
+    allocation on top: strictly worse than calling it once per field directly.
+
+    The useful conclusion is not about this flag. It is that batching inside
+    Spark SQL cannot beat the per-field path, because the container costs more
+    than the calls it saves. Reducing crossings requires leaving the row-shaped
+    UDF domain entirely (columnar / Arrow C Data Interface), which is a
+    different and much larger change.
     """
     import os
 
