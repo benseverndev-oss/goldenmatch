@@ -76,6 +76,31 @@ jobs:
       # `packages = ["goldenmatch"]` picks them up. Without this step the
       # wheel ships only `.gitkeep` and `goldenmatch[web]` users can't
       # serve the UI without running build_web.py themselves.
+      # TAG falls back to `github.ref_name` when a dispatch passes no `tag`,
+      # and on a branch dispatch that is the BRANCH ("main"), not a version tag.
+      # Run 31916544559 did exactly that: it published to PyPI and only then
+      # failed at the release step, trying to cut a GitHub Release named `main`
+      # (403 "Resource not accessible by integration"). A published wheel with
+      # no release is the worst outcome of the three, so refuse BEFORE the
+      # publish rather than after it. Mirrors the resolve-the-version step in
+      # publish-goldenmatch-spark-jar.yml.
+      - name: Refuse a ref that is not a version tag
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TAG:-}" ]; then
+            echo "::error::No tag resolved. Push a vX.Y.Z tag (this workflow fires on it) or pass 'tag' to the dispatch."
+            exit 1
+          fi
+          case "$TAG" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *)
+              echo "::error::TAG='${TAG}' is not a version tag (expected vX.Y.Z). A workflow_dispatch with no 'tag' input falls back to the branch name, which publishes to PyPI and then fails cutting a release named '${TAG}'. Re-run with tag=vX.Y.Z."
+              exit 1
+              ;;
+          esac
+          echo "Publishing tag: $TAG"
+
       - name: Install pnpm workspace deps
         working-directory: ${{ github.workspace }}
         run: pnpm install --frozen-lockfile
