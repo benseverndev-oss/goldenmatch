@@ -42,9 +42,14 @@ def _clamp(x: float, lo: float = 0.0, hi: float = 1.0) -> float:
 
 
 def _perturbable_matchkeys(config: GoldenMatchConfig) -> list:
+    # Gates on the OPERATIVE cutoff (#2483), matching what the perturbation
+    # below actually shifts. Gating on `threshold` here while shifting
+    # `cutoff` there would let the two disagree: a probabilistic matchkey with
+    # a `link_threshold` and no `threshold` would be reported non-perturbable
+    # and then perturbed anyway.
     return [
         mk for mk in config.get_matchkeys()
-        if getattr(mk, "type", None) in _PERTURBABLE_TYPES and mk.threshold is not None
+        if getattr(mk, "type", None) in _PERTURBABLE_TYPES and mk.cutoff is not None
     ]
 
 
@@ -78,11 +83,20 @@ class ThresholdShift:
         cfg = config.model_copy(deep=True)
         changed = False
         for mk in cfg.get_matchkeys():
-            if getattr(mk, "type", None) in _PERTURBABLE_TYPES and mk.threshold is not None:
-                new_t = _clamp(mk.threshold + self.delta)
-                if new_t != mk.threshold:
-                    mk.threshold = new_t
-                    changed = True
+            # Perturb the OPERATIVE cutoff, not `threshold` (#2483): a
+            # probabilistic matchkey cuts on `link_threshold`, so shifting its
+            # `threshold` yields a "variant" that matches identically to the
+            # baseline. `cutoff` is None when this type's cutoff was never set,
+            # which makes the matchkey genuinely non-perturbable.
+            if getattr(mk, "type", None) not in _PERTURBABLE_TYPES:
+                continue
+            current = mk.cutoff
+            if current is None:
+                continue
+            new_t = _clamp(current + self.delta)
+            if new_t != current:
+                setattr(mk, mk.cutoff_field, new_t)
+                changed = True
         if self.delta == 0.0:
             return cfg  # baseline: valid, no change
         return cfg if changed else None
