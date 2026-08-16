@@ -41,6 +41,11 @@ on:
         required: false
         type: string
         default: "1000000"
+      profile_counts:
+        description: "Attribute the counts stage (pair-gen / join / scoring UDF / GROUP BY exchange). ~3x slower - diagnostic only."
+        required: false
+        type: boolean
+        default: false
   schedule:
     # Nightly, after the usual working day. Cheap insurance that the topology
     # still works; nothing here gates a merge.
@@ -401,7 +406,14 @@ jobs:
       - name: Distributed FS training at scale
         if: inputs.train_rows != '0' && inputs.train_rows != ''
         continue-on-error: true
-        timeout-minutes: 25
+        # 45, not 25: `--profile-counts` times four DAG prefixes plus the real
+        # counts run, so a profiled pass costs ~5x a normal one. The 25-minute
+        # cap was sized for the unprofiled run and would kill a profiled 5M
+        # sweep mid-measurement. (The wedge that cap once caught -- a skewed
+        # blocking key spending 24 minutes in a join -- is now refused up front
+        # by the harness's `--max-block-pairs` guard, so the cap is no longer
+        # the thing standing between us and a silent hang.)
+        timeout-minutes: 45
         env:
           GOLDENMATCH_SPARK_REMOTE: "sc://localhost:15002"
           GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
@@ -410,7 +422,9 @@ jobs:
         run: |
           set -euo pipefail
           ROWS="${{ inputs.train_rows || '1000000' }}"
-          python scripts/spark_fs_train_scale.py --rows "$ROWS" --out spark-fs-train-scale.json
+          PROFILE=""
+          if [ "${{ inputs.profile_counts }}" = "true" ]; then PROFILE="--profile-counts"; fi
+          python scripts/spark_fs_train_scale.py --rows "$ROWS" $PROFILE --out spark-fs-train-scale.json
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         if: always()
