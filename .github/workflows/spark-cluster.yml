@@ -61,6 +61,11 @@ on:
         required: false
         type: string
         default: "1g"
+      train_fields:
+        description: "Comparison fields for the FS scale run (max 5). Run 5 vs 2 with profile_counts to separate per-CALL from per-BYTE scoring cost."
+        required: false
+        type: string
+        default: "5"
   schedule:
     # Nightly, after the usual working day. Cheap insurance that the topology
     # still works; nothing here gates a merge.
@@ -452,7 +457,8 @@ jobs:
           ROWS="${{ inputs.train_rows || '1000000' }}"
           PROFILE=""
           if [ "${{ inputs.profile_counts }}" = "true" ]; then PROFILE="--profile-counts"; fi
-          python scripts/spark_fs_train_scale.py --rows "$ROWS" $PROFILE --out spark-fs-train-scale.json
+          FIELDS="${{ inputs.train_fields || '5' }}"
+          python scripts/spark_fs_train_scale.py --rows "$ROWS" --fields "$FIELDS" $PROFILE --out spark-fs-train-scale.json
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         if: always()
