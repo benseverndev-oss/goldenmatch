@@ -99,11 +99,23 @@ services:
     depends_on: [spark-master]
     command: >
       /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker
-      spark://spark-master:7077 --cores 1 --memory 1g
-    # Modest, and deliberately so: a GitHub-hosted runner is 4 CPU / 16 GB and
-    # has to hold the master, both workers, the Connect server AND the client.
-    # The point here is topology, not throughput -- the data is a handful of
-    # rows.
+      spark://spark-master:7077
+      --cores ${SPARK_WORKER_CORES:-1} --memory ${SPARK_WORKER_MEMORY:-1g}
+    # Defaults stay 1 core / 1g: the ORIGINAL point of this cluster is topology,
+    # not throughput -- an 8-row fixture proving the jar-only property on real
+    # executors, on a 4 CPU / 16 GB GitHub runner that also holds the master,
+    # both workers, the Connect server AND the client.
+    #
+    # They are now env-overridable because that default silently became a
+    # PERFORMANCE claim. The FS scale harness runs 5M rows here and its numbers
+    # were being read as throughput; on 2 total executor cores they are not.
+    # Worse, both workers are containers on ONE host, so a shuffle never touches
+    # a network -- which is why a counts-stage profile attributed ~0% to the
+    # GROUP BY exchange. That number is honest for this topology and misleading
+    # as a general claim.
+    #
+    # Set SPARK_WORKER_CORES / SPARK_WORKER_MEMORY (and a bigger runner) when
+    # measuring throughput. Leave them alone when proving topology.
 
   spark-worker-2:
     <<: *worker
@@ -128,8 +140,8 @@ services:
       --conf spark.connect.grpc.binding.address=0.0.0.0
       --conf spark.connect.grpc.binding.port=15002
       --conf spark.driver.host=spark-connect
-      --conf spark.executor.memory=1g
-      --conf spark.executor.cores=1
+      --conf spark.executor.memory=${SPARK_EXECUTOR_MEMORY:-1g}
+      --conf spark.executor.cores=${SPARK_EXECUTOR_CORES:-1}
 
 networks:
   spark:
