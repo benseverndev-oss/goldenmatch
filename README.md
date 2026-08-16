@@ -3,7 +3,7 @@
 
 # Golden Suite
 
-Your customer data lives in a CRM, a billing system, and three spreadsheets nobody owns. Some records are duplicates. Some are the same company spelled four different ways. Nobody can answer *how many customers do we actually have* — and every dashboard built on top inherits the doubt.
+Your customer data lives in a CRM, a billing system, and three spreadsheets nobody owns. Some records are duplicates. Some are the same company spelled four different ways. Nobody can answer *how many customers do we actually have*, and every dashboard built on top inherits the doubt.
 
 **Splink-beating entity resolution — Arrow-native, Rust-fast, zero-tuning — feeding a durable identity layer, so messy records from every source become stable golden entities with whole-record, Customer-360 provenance.**
 
