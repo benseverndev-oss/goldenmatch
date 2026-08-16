@@ -41,6 +41,42 @@ Platforms: `linux-x86-64` and `linux-aarch64`. Both are built **and self-tested
 on their own architecture** before release; the aarch64 library is built on real
 ARM hardware rather than cross-compiled.
 
+## What it unlocks: distributed Fellegi-Sunter training
+
+The kernel table above is the SCORING story, and it is the part this README used
+to be entirely about. The bigger consequence is that **Fellegi-Sunter model
+training now runs distributed**, on the same jar-only executors.
+
+FS training is an EM loop over comparison vectors. The expensive half is the
+E-step, which reads only the comparison vector -- so identical vectors collapse
+to one row carrying a count, and the whole E-step becomes a single Spark
+`GROUP BY` over agreement patterns. The cluster does the counting; the driver
+only fits the model over the collapsed rows.
+
+That makes training cost track the number of DISTINCT comparison vectors,
+bounded by `prod(levels + 1)`, instead of the pair count. Measured on a real
+two-worker cluster with no Python installed on the executors:
+
+| rows | candidate pairs | distinct patterns | distributed counting | driver-side EM |
+| ---: | ---: | ---: | ---: | ---: |
+| 1M | 9,838,610 | 433 / 186 | 84.42s | 0.00s |
+| 5M | 49,191,275 | 446 / 191 | 443.32s | 0.01s |
+
+Pairs grew **5.00x** and the counting stage **5.25x** (near-linear -- that is the
+work a cluster exists to absorb), while distinct patterns grew **3.0%** and the
+driver's EM stayed at the timer floor. 446 against a ceiling of 1,024 for that
+config, with five times the data.
+
+The measurable claim is the pattern count, not the wall clock: two unmeasurably
+small training times would prove nothing, whereas patterns staying flat while
+pairs quintuple is the collapse actually holding.
+
+Driven from Python (`goldenmatch.spark`); the executors run the jar. For what
+the executors do and do not still need, read the measured inventory rather
+than this section -- see [What still needs Python on the
+executors](#what-still-needs-python-on-the-executors), which exists because
+"no Python on the executors" was a claim before it was a measurement.
+
 ## Get it
 
 Download `goldenmatch-spark.jar` from a
