@@ -3,6 +3,8 @@
 
 # Golden Suite
 
+Your customer data lives in a CRM, a billing system, and three spreadsheets nobody owns. Some records are duplicates. Some are the same company spelled four different ways. Nobody can answer *how many customers do we actually have* — and every dashboard built on top inherits the doubt.
+
 **Splink-beating entity resolution — Arrow-native, Rust-fast, zero-tuning — feeding a durable identity layer, so messy records from every source become stable golden entities with whole-record, Customer-360 provenance.**
 
 Zero-config matching that **beats expert-tuned Splink head-to-head on messy customer records**, in an **Arrow-native, Rust-authoritative** engine verified from a laptop CSV to a **100M-row dedupe in 9.2 minutes**. The identities it produces live in a **transaction-native control plane** — stable `entity_id`s, per-field provenance, merge/split, and a tamper-evident audit log — one call away as a Customer 360. It even **owns its primitives**: byte-identical, faster-than-`rapidfuzz` / `jellyfish` / FAISS Rust kernels, not rented dependencies.
