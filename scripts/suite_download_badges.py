@@ -61,6 +61,10 @@ PYPI_PACKAGES = [
     # the publisher<->badge gate red on main. Every other `*-native` sibling is
     # listed, so this is the consistent home for it.
     "goldenpipe-native",
+    # Published 0.1.0, then 0.2.0 with the identity-layers kernel. Was carried
+    # as a badge EXCEPTION while unpublished; a real wheel belongs in the
+    # counted roster like every other `*-native` sibling.
+    "infermap-native",
     "goldenmatch-embed",
     # goldengraph gained its PyPI publisher (publish-goldengraph.yml), so the
     # publisher<->badge gate now requires it here. First release is pending, so
