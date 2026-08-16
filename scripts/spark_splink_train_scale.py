@@ -85,8 +85,10 @@ def _fixture_module():
     return mod
 
 
-def build_session(master: str, driver_host: str | None, wait_s: int):
+def build_session(master: str, driver_host: str | None, wait_s: int,
+                  checkpoint_dir: str):
     from pyspark.sql import SparkSession
+    from splink.backends.spark import similarity_jar_location
 
     b = (
         SparkSession.builder.master(master)
@@ -95,10 +97,29 @@ def build_session(master: str, driver_host: str | None, wait_s: int):
         # partitions on a small cluster is pure scheduling overhead.
         .config("spark.sql.shuffle.partitions", "8")
         .config("spark.driver.bindAddress", "0.0.0.0")
+        # Splink ships its own similarity UDFs (jaro_winkler, damerau
+        # levenshtein) as a JVM jar, and WITHOUT IT THE COMPARISON IS INVALID
+        # rather than merely degraded: Splink warns "Unable to load custom Spark
+        # SQL functions such as jaro_winkler ... You will not be able to use
+        # these functions in your linkage" and carries on, so the run completes
+        # having compared something other than what GM compares. `spark.jars`
+        # also ships it to the executors, which is where the UDFs evaluate.
+        .config("spark.jars", similarity_jar_location())
     )
     if driver_host:
         b = b.config("spark.driver.host", driver_host)
     spark = b.getOrCreate()
+
+    # Splink's Spark backend truncates lineage with `Dataset.checkpoint()`,
+    # which raises "Checkpoint directory has not been set in the SparkContext"
+    # unless one is set. The path has to resolve to the SAME storage from the
+    # driver (this host) and the executors (containers), so the compose file
+    # bind-mounts a host directory at an identical path inside the workers.
+    # Left as Splink's default `checkpoint` break-lineage method deliberately:
+    # switching to `persist` would dodge the mount but would also stop measuring
+    # the configuration Splink actually recommends on Spark.
+    Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
+    spark.sparkContext.setCheckpointDir(f"file://{checkpoint_dir}")
 
     # Refuse to measure a cluster that never gave us executors. Without this the
     # run "works" -- it just runs everything on the driver and reports a wall
@@ -138,6 +159,11 @@ def main() -> int:
     ap.add_argument("--max-pairs", type=int, default=1_000_000,
                     help="Splink's u-estimation sample. Matches the GM harness's "
                          "--u-max-pairs so the u stage is comparable.")
+    ap.add_argument("--checkpoint-dir", default=os.environ.get(
+        "SPLINK_CHECKPOINT_DIR", "/tmp/spark-checkpoint"),
+        help="Shared between this driver and the container executors. Must be "
+             "the SAME path inside the workers -- see the bind mount in "
+             "docker/spark-cluster/docker-compose.yml.")
     ap.add_argument("--out", default="splink-train-scale.json")
     args = ap.parse_args()
 
@@ -152,8 +178,9 @@ def main() -> int:
     t_all = time.perf_counter()
 
     spark, n_exec = build_session(args.master, args.driver_host or None,
-                                  args.executor_wait)
+                                  args.executor_wait, args.checkpoint_dir)
     out["executors"] = n_exec
+    out["checkpoint_dir"] = args.checkpoint_dir
 
     fx = _fixture_module()
     t = time.perf_counter()
@@ -175,6 +202,13 @@ def main() -> int:
     # cut; both give three informative levels per field.
     settings = SettingsCreator(
         link_type="dedupe_only",
+        # The fixture's id column. Without this Splink looks for a literal
+        # `unique_id`, does not find it, and prints "SETTINGS VALIDATION:
+        # Errors were identified in your settings dictionary ... Missing
+        # column(s) from input dataframe(s): `unique_id`" -- then continues.
+        # A validation error it recovers from is exactly the kind of defect
+        # that produces a number nobody can trust.
+        unique_id_column_name="record_id",
         blocking_rules_to_generate_predictions=[block_on("blk"), block_on("last")],
         comparisons=[
             cl.JaroWinklerAtThresholds("first", [0.9, 0.7]),

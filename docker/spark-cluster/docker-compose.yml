@@ -101,6 +101,18 @@ services:
       /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker
       spark://spark-master:7077
       --cores ${SPARK_WORKER_CORES:-1} --memory ${SPARK_WORKER_MEMORY:-1g}
+    volumes:
+      # Shared checkpoint storage for the Splink comparison lane ONLY. Splink's
+      # Spark backend truncates lineage with `Dataset.checkpoint()`, which the
+      # EXECUTORS write and the driver reads -- and the driver runs on the host
+      # while the executors are containers, so without an identical path on both
+      # sides the job dies with "Checkpoint directory has not been set" or, once
+      # set, cannot find what it wrote. Same path on both sides is the point of
+      # the identical source and target here.
+      #
+      # Nothing else in this lane uses it: GM never checkpoints, so the GM
+      # numbers are unaffected by its presence.
+      - /tmp/spark-checkpoint:/tmp/spark-checkpoint
     # Defaults stay 1 core / 1g: the ORIGINAL point of this cluster is topology,
     # not throughput -- an 8-row fixture proving the jar-only property on real
     # executors, on a 4 CPU / 16 GB GitHub runner that also holds the master,
