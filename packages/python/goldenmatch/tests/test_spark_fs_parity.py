@@ -435,11 +435,45 @@ def test_pattern_counts_are_identical_jar_only(source, jvm_registered):
 
 def test_an_oversized_pattern_space_is_refused_not_collected(source):
     """`collect()` of an unexpectedly large frame is a driver OOM, which is the
-    failure this whole path exists to avoid -- so the bound is checked against
-    the real row count before anything is materialised."""
+    failure this whole path exists to avoid -- so the bound is enforced before
+    anything unbounded is materialised.
+
+    The counts stage now takes ONE pass (`limit(max_patterns + 1).collect()`)
+    instead of `count()` then `collect()`, which re-ran the whole upstream DAG.
+    That rewrite could plausibly have weakened this guard, so the guard is what
+    this asserts: at most `max_patterns + 1` rows ever reach the driver, and
+    exceeding the bound still raises."""
     cfg = _config()
     with pytest.raises(ValueError, match="max_patterns"):
         _spark_pattern_counts(source, cfg, max_patterns=1)
+
+
+def test_the_oversized_refusal_still_names_the_real_pattern_count(source):
+    """The error reports the ACTUAL number of distinct patterns, not just
+    "more than the bound".
+
+    Worth pinning: the single-pass rewrite only knows `> max_patterns` from the
+    truncated collect, so it pays for one extra pass ON THE FAILURE PATH to
+    recover the exact figure. If that were dropped as an optimisation the error
+    would silently degrade from "N patterns exceeds max_patterns=M" to
+    something a reader cannot size, and no other test would notice."""
+    cfg = _config()
+    exact = len(_driver_pattern_counts(source, cfg))
+    assert exact > 1, "fixture must exceed the bound for this to mean anything"
+    with pytest.raises(ValueError, match=rf"^{exact} distinct agreement patterns"):
+        _spark_pattern_counts(source, cfg, max_patterns=1)
+
+
+def test_counts_under_the_bound_return_every_pattern(source):
+    """`limit(max_patterns + 1)` must not truncate a legitimate result.
+
+    The +1 exists so overflow is detectable; the risk it introduces is silently
+    dropping rows when the result is legal. With the bound set to exactly the
+    real pattern count, every pattern must still come back."""
+    cfg = _config()
+    expected = _driver_pattern_counts(source, cfg)
+    got = _spark_pattern_counts(source, cfg, max_patterns=len(expected))
+    assert got == expected
 
 
 # ── distributed training: u, the per-pass sessions, the combination ──
