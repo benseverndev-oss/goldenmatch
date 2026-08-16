@@ -269,7 +269,7 @@ def profile_counts(joined, mk, *, scorer_udf, transform_udf, cands):
     return out
 
 
-def make_config(n_fields: int = 5):
+def make_config(n_fields: int = 5, scorer: str | None = None):
     """The scale config. ``n_fields`` trims the COMPARISON fields only.
 
     ## Why this is a knob
@@ -311,6 +311,20 @@ def make_config(n_fields: int = 5):
     cfg = _build_config(GoldenMatchConfig, BlockingConfig, BlockingKeyConfig,
                         MatchkeyConfig, MatchkeyField)
     mk = cfg.get_matchkeys()[0]
+    if scorer:
+        # Force every comparison field onto one scorer. This exists for the
+        # `--value-pad` experiment: padding is only workload-neutral under
+        # `exact`, where `a+pad == b+pad` iff `a == b`, so the gammas -- and
+        # therefore the pattern counts and the trained model -- are untouched
+        # while the marshalled bytes move.
+        #
+        # It is NOT neutral under jaro_winkler or levenshtein, which was a real
+        # error: a shared 40-char suffix dominates the similarity, every pair
+        # clears the 0.9 threshold, and the vector space collapsed 433 -> 65
+        # patterns with m_probs for `last` going to [0, 0, 1]. Those arms were
+        # measuring different workloads, so their timings meant nothing.
+        for f in mk.fields:
+            f.scorer = scorer
     if n_fields < len(mk.fields):
         # Trim in place. Rebuilding a shorter literal risks the arms differing
         # in something other than field count, which is the one variable this
@@ -366,6 +380,12 @@ def main() -> int:
     ap.add_argument("--remote", default=os.environ.get(
         "GOLDENMATCH_SPARK_REMOTE", "sc://localhost:15002"))
     ap.add_argument("--u-max-pairs", type=int, default=1_000_000)
+    ap.add_argument(
+        "--scorer", default="",
+        help="Force every comparison field onto one scorer. Use `exact` with "
+             "--value-pad: padding preserves equality, so gammas are unchanged "
+             "and only the marshalled bytes move. Under jaro_winkler/levenshtein "
+             "padding CHANGES similarity and the arms stop being comparable.")
     ap.add_argument(
         "--value-pad", type=int, default=0,
         help="Append N filler chars to every COMPARISON value. Crossing COUNT "
@@ -428,7 +448,7 @@ def main() -> int:
         "rows": args.rows, "dup": args.dup,
         "blocks_per_key": args.blocks_per_key,
         "kernel_impl": impl, "kernel_runtime": runtime,
-        "stages": {}, "passes": [], "n_fields": args.fields, "value_pad": args.value_pad,
+        "stages": {}, "passes": [], "n_fields": args.fields, "value_pad": args.value_pad, "scorer_override": args.scorer or None,
     }
 
     t0 = time.perf_counter()
@@ -443,7 +463,7 @@ def main() -> int:
     print(f"[scale] fixture: {actual:,} rows in "
           f"{out['stages']['fixture_seconds']}s", flush=True)
 
-    cfg = make_config(args.fields)
+    cfg = make_config(args.fields, args.scorer or None)
     mk = cfg.get_matchkeys()[0]
 
     # ── u: sampled self-join. Cost tracks the SAMPLE, not the table. ──
