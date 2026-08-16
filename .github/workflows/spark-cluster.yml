@@ -61,6 +61,11 @@ on:
         required: false
         type: string
         default: "1g"
+      value_pad:
+        description: "Append N chars to every comparison value. Same crossing COUNT, more bytes per crossing - the arm that separates per-CALL from per-BYTE scoring cost."
+        required: false
+        type: string
+        default: "0"
       train_fields:
         description: "Comparison fields for the FS scale run (max 5). Run 5 vs 2 with profile_counts to separate per-CALL from per-BYTE scoring cost."
         required: false
@@ -458,7 +463,8 @@ jobs:
           PROFILE=""
           if [ "${{ inputs.profile_counts }}" = "true" ]; then PROFILE="--profile-counts"; fi
           FIELDS="${{ inputs.train_fields || '5' }}"
-          python scripts/spark_fs_train_scale.py --rows "$ROWS" --fields "$FIELDS" $PROFILE --out spark-fs-train-scale.json
+          PAD="${{ inputs.value_pad || '0' }}"
+          python scripts/spark_fs_train_scale.py --rows "$ROWS" --fields "$FIELDS" --value-pad "$PAD" $PROFILE --out spark-fs-train-scale.json
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         if: always()
