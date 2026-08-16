@@ -173,7 +173,25 @@ jobs:
         # The attestation lives in GitHub's attestation store; also attach it
         # to the release so consumers (and Scorecard) see it next to the
         # artifact.
-        run: cp "${{ steps.attest.outputs.bundle-path }}" "packages/rust/extensions/postgres/${ASSET}.intoto.jsonl"
+        #
+        # `working-directory` is REQUIRED here. The job defaults to
+        # `packages/rust/extensions`, and this step used to omit the override
+        # while writing a repo-root-relative destination -- so the path
+        # resolved to `packages/rust/extensions/packages/rust/extensions/
+        # postgres/...`, which does not exist. Every OTHER step in this job
+        # sets the directory explicitly; this one was missed, and it failed
+        # the whole build matrix at the last step before upload:
+        #
+        #   cp: cannot create regular file '...pg15-linux-x86_64.tar.gz
+        #   .intoto.jsonl': No such file or directory
+        #
+        # That is why goldenmatch-pg has published NO release assets: the
+        # tarballs built fine, then this killed the job before `Upload to
+        # release` ran. `goldenmatch-pg-v0.13.0` is a published release with
+        # zero assets, and it is the only non-skipped run this workflow has
+        # ever had that was not a success.
+        working-directory: packages/rust/extensions/postgres
+        run: cp "${{ steps.attest.outputs.bundle-path }}" "${ASSET}.intoto.jsonl"
 
       - name: Upload to release
         if: github.event_name == 'release'
