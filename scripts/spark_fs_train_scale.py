@@ -47,7 +47,7 @@ import os
 import time
 
 
-def build_fixture(spark, rows: int, dup: int, blocks_per_key: int):
+def build_fixture(spark, rows: int, dup: int, blocks_per_key: int, value_pad: int = 0):
     """A person-shaped frame with a known duplicate structure, built in-engine.
 
     ``dup`` rows per entity, so the true-match count is known. Blocking keys are
@@ -109,13 +109,34 @@ def build_fixture(spark, rows: int, dup: int, blocks_per_key: int):
     zipc = F.concat(F.lit("z"), F.lpad((ent % F.lit(500)).cast("string"), 3, "0"))
     city = F.concat(F.lit("city"), (ent % F.lit(40)).cast("string"))
 
+    # `value_pad` lengthens every COMPARISON value by a constant suffix without
+    # changing cardinality, which fields exist, or which pairs block together.
+    # It is the knob that separates per-CALL from per-BYTE scoring cost:
+    # crossing COUNT is identical across pad settings, only the bytes marshalled
+    # per crossing move. (Varying the FIELD COUNT cannot do this -- adding a
+    # field adds a call AND its bytes, so both hypotheses predict the same
+    # scaling. That was a design error in the first version of this experiment.)
+    #
+    # The pad is a constant string, so it cannot change a similarity ORDERING:
+    # jaro-winkler and levenshtein both see the same suffix on each side of
+    # every pair, so gammas -- and therefore the pattern counts and the trained
+    # model -- are unchanged. Only the marshalled length moves.
+    pad = F.lit("z" * value_pad) if value_pad > 0 else None
+
+    def padded(col):
+        if pad is None:
+            return col
+        # Concat only when the value is present; a padded NULL would become a
+        # non-null and silently change the unobserved level.
+        return F.when(col.isNull(), col).otherwise(F.concat(col, pad))
+
     return spark.range(rows).select(
         F.col("id").alias("__row_id__"),
-        perturbed(first, 101).alias("first"),
-        perturbed(last, 202).alias("last"),
-        perturbed(dob, 303).alias("dob"),
-        perturbed(zipc, 404).alias("zip"),
-        perturbed(city, 505).alias("city"),
+        padded(perturbed(first, 101)).alias("first"),
+        padded(perturbed(last, 202)).alias("last"),
+        padded(perturbed(dob, 303)).alias("dob"),
+        padded(perturbed(zipc, 404)).alias("zip"),
+        padded(perturbed(city, 505)).alias("city"),
         # The blocking key is NEVER perturbed: it decides which pairs are
         # compared at all, so corrupting it would silently shrink the candidate
         # set and make a smaller run look like a faster one.
@@ -346,6 +367,13 @@ def main() -> int:
         "GOLDENMATCH_SPARK_REMOTE", "sc://localhost:15002"))
     ap.add_argument("--u-max-pairs", type=int, default=1_000_000)
     ap.add_argument(
+        "--value-pad", type=int, default=0,
+        help="Append N filler chars to every COMPARISON value. Crossing COUNT "
+             "is unchanged; only the bytes marshalled per crossing move. This "
+             "is the arm that separates per-CALL from per-BYTE scoring cost -- "
+             "`--fields` CANNOT, because adding a field adds a call AND its "
+             "bytes, so both hypotheses predict the same scaling.")
+    ap.add_argument(
         "--fields", type=int, default=5,
         help="Number of COMPARISON fields (max 5). Same blocking, same "
              "candidate pairs -- only the per-pair crossing count changes. "
@@ -400,11 +428,12 @@ def main() -> int:
         "rows": args.rows, "dup": args.dup,
         "blocks_per_key": args.blocks_per_key,
         "kernel_impl": impl, "kernel_runtime": runtime,
-        "stages": {}, "passes": [], "n_fields": args.fields,
+        "stages": {}, "passes": [], "n_fields": args.fields, "value_pad": args.value_pad,
     }
 
     t0 = time.perf_counter()
-    df = build_fixture(spark, args.rows, args.dup, args.blocks_per_key)
+    df = build_fixture(spark, args.rows, args.dup, args.blocks_per_key,
+                       value_pad=args.value_pad)
     # Materialise once so the fixture build is not re-run inside every stage
     # and charged to whichever stage happened to trigger it.
     df.cache()
