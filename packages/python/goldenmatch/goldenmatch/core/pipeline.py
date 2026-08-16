@@ -978,15 +978,22 @@ def _score_probabilistic_matchkey(
                 n_buckets=config.n_buckets,
                 em_result=em_result,
             )
-            # Phase 3a threshold refit (GOLDENMATCH_FS_REFIT_THRESHOLD, default off):
+            # Phase 3a threshold refit (GOLDENMATCH_FS_REFIT_THRESHOLD, default ON
+            # since #2522; `=0` is the byte-identical kill-switch):
             # pick the link cutoff from the actual scored-pair distribution -- the
             # class-separating valley -- but COMMIT it only when re-clustering there
-            # reduces over-merge (max cluster size), correcting the over-merge the
-            # non-iterated FS path can't see WITHOUT regressing clean data (a bare
-            # valley cut removes low-scoring true matches on person/ncvr; the
-            # cluster-shape guard rejects it there). No-op unless the flag is on and
-            # no explicit user threshold. Scores are already computed (re-cluster
-            # only, no re-scoring); only the cutoff used for the split moves.
+            # both (a) reduces over-merge (max cluster size) AND (b) strands at most
+            # `_REFIT_MAX_EXPELLED_SHARE` of already-matched records as singletons.
+            # Criterion (b) is not decoration: (a) alone is a single-outlier
+            # statistic, so it accepts a cutoff that shatters many correct
+            # clusters as long as the largest shrinks -- the #2387 ncvr regression.
+            # See `_expelled_share` in probabilistic.py for why the two regimes
+            # separate (repair regroups records; shattering expels them).
+            #
+            # No-op unless the flag is on and no explicit user threshold -- note
+            # that a caller-set `link_threshold` short-circuits this, which is why
+            # #2483 declined to have auto-config write one in. Scores are already
+            # computed (re-cluster only, no re-scoring); only the cutoff moves.
             link_threshold = _maybe_refit_link_threshold(
                 mk, link_threshold, table=_pair_table
             )
