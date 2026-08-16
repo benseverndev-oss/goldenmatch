@@ -6227,7 +6227,8 @@
           "GOLDENMATCH_SKIP_MATCH_LOG"
         ],
         "SPARK": [
-          "GOLDENMATCH_SPARK_JAR"
+          "GOLDENMATCH_SPARK_JAR",
+          "GOLDENMATCH_SPARK_VECTOR_SCORER"
         ],
         "STANDARDIZE": [
           "GOLDENMATCH_STANDARDIZE_STAGED"

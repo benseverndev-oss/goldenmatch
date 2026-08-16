@@ -8047,6 +8047,7 @@
             "_refuse_unsupported",
             "_rows_needed_for_n_pairs",
             "_transformed_operands",
+            "_vector_scorer_enabled",
             "_vector_similarities",
             "agreement_pattern_counts",
             "estimate_u_distributed",

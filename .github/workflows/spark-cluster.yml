@@ -61,6 +61,11 @@ on:
         required: false
         type: string
         default: "1g"
+      vector_scorer:
+        description: "Score every field of a pair in ONE UDF call (GOLDENMATCH_SPARK_VECTOR_SCORER). Default off - this is the arm under measurement, not the shipped default."
+        required: false
+        type: boolean
+        default: false
       scorer:
         description: "Force every comparison field onto one scorer (e.g. exact). Required for a valid value_pad experiment - padding only preserves gammas under exact."
         required: false
@@ -465,6 +470,8 @@ jobs:
         env:
           GOLDENMATCH_SPARK_REMOTE: "sc://localhost:15002"
           GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
+          # Opt-in, so the row-shaped arm stays runnable as the control.
+          GOLDENMATCH_SPARK_VECTOR_SCORER: ${{ inputs.vector_scorer && '1' || '0' }}
           # No GOLDENMATCH_SPARK_PYENV: the executors stay bare, so this also
           # proves the scale path is jar-only and not merely the 8-row one.
         run: |
