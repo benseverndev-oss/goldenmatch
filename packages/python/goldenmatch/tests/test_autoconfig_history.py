@@ -25,8 +25,8 @@ def _profile(*, scoring: ScoringProfile | None = None,
                          column_types={"a": "text", "b": "id-like", "c": "text", "d": "date"}),
         blocking=blocking or BlockingProfile(
             keys_used=[["a"]], n_blocks=10, total_comparisons=500,
-            reduction_ratio=0.95, block_sizes_p50=10, block_sizes_p95=15,
-            block_sizes_p99=20, block_sizes_max=25,
+            reduction_ratio=0.95, block_sizes_p50=10, block_sizes_p95=11,
+            block_sizes_p99=11, block_sizes_max=11,
             singleton_block_count=0, oversized_block_count=0,
         ),
         scoring=scoring or ScoringProfile(
@@ -111,8 +111,8 @@ def test_pick_committed_prefers_green_over_yellow():
                          column_types={"a": "text", "b": "id-like", "c": "text", "d": "date"}),
         blocking=BlockingProfile(
             keys_used=[["a"]], n_blocks=10, total_comparisons=500,
-            reduction_ratio=0.95, block_sizes_p50=10, block_sizes_p95=15,
-            block_sizes_p99=20, block_sizes_max=25,
+            reduction_ratio=0.95, block_sizes_p50=10, block_sizes_p95=11,
+            block_sizes_p99=11, block_sizes_max=11,
         ),
         scoring=ScoringProfile(
             n_pairs_scored=500, score_histogram=[0]*15 + [100]*5,
