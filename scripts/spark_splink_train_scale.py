@@ -85,6 +85,25 @@ def _fixture_module():
     return mod
 
 
+def _metrics_module():
+    """The SHARED ranking metric, imported by file path.
+
+    Both arms score with this one implementation. Two hand-written average
+    precisions that disagree by a percent would look exactly like a model that
+    is a percent better, which is the distinction the whole comparison exists
+    to make.
+    """
+    import importlib.util
+
+    path = Path(__file__).resolve().parent / "_fs_quality_metrics.py"
+    spec = importlib.util.spec_from_file_location("_fs_quality_metrics", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"cannot load {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def build_session(master: str, driver_host: str | None, wait_s: int):
     """A session tuned NO differently from the one GM gets.
 
@@ -187,6 +206,12 @@ def main() -> int:
                     help="Seeds Splink's u random sampling. Unseeded, the EM "
                          "iteration count -- and therefore the wall -- varies "
                          "by more than half between identical runs.")
+    ap.add_argument("--eval-quality", action="store_true",
+                    help="After training, score the candidate pairs and report "
+                         "ranking quality against the fixture's known entity "
+                         "structure. The speed number means nothing without it: "
+                         "the goal is match-or-better accuracy, not a faster "
+                         "arrival at a worse model.")
     ap.add_argument("--out", default="splink-train-scale.json")
     args = ap.parse_args()
 
@@ -326,6 +351,30 @@ def main() -> int:
     out["seed"] = args.seed
     print(f"[splink] EM in {out['stages']['em_seconds']}s over {sum(iters)} "
           f"iteration(s) {iters}", flush=True)
+
+    if args.eval_quality:
+        # Ground truth is a pure function of the row id and needs no extra
+        # column: `build_fixture` assigns entity = id % n_entities with
+        # n_entities = rows // dup, so two rows are a true pair exactly when
+        # their ids are congruent. Deriving it here rather than carrying a
+        # label column means the fixture the engines TRAIN on is byte-identical
+        # to the one the speed runs use -- a label column would change the
+        # frame and quietly make the two experiments different.
+        from pyspark.sql import functions as F
+
+        n_entities = max(args.rows // max(args.dup, 1), 1)
+        t = time.perf_counter()
+        preds = linker.inference.predict().as_spark_dataframe()
+        truth = (F.col("record_id_l") % F.lit(n_entities)
+                 == F.col("record_id_r") % F.lit(n_entities))
+        rows_ = (preds.select(F.col("match_weight").alias("w"),
+                              truth.alias("is_true"))
+                      .collect())
+        out["stages"]["predict_seconds"] = round(time.perf_counter() - t, 2)
+        out["quality"] = _metrics_module().ranking_metrics(
+            [(float(r["w"]), bool(r["is_true"])) for r in rows_]
+        )
+        print(f"[splink] quality {out['quality']}", flush=True)
 
     out["stages"]["total_seconds"] = round(time.perf_counter() - t_all, 2)
     # `train_total` is the number to put beside GM's u + counts + train. The

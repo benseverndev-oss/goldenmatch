@@ -81,6 +81,11 @@ on:
         required: false
         type: boolean
         default: false
+      eval_quality:
+        description: "Score both engines' trained models against the fixture's known entity structure and report average precision. The bar is match-or-better accuracy for GM, not a faster arrival at a worse model. Adds a scoring pass to each arm - keep train_rows modest."
+        required: false
+        type: boolean
+        default: false
       train_fields:
         description: "Comparison fields for the FS scale run (max 5). Run 5 vs 2 with profile_counts to separate per-CALL from per-BYTE scoring cost."
         required: false
@@ -479,11 +484,13 @@ jobs:
           ROWS="${{ inputs.train_rows || '1000000' }}"
           PROFILE=""
           if [ "${{ inputs.profile_counts }}" = "true" ]; then PROFILE="--profile-counts"; fi
+          EVAL=""
+          if [ "${{ inputs.eval_quality }}" = "true" ]; then EVAL="--eval-quality"; fi
           FIELDS="${{ inputs.train_fields || '5' }}"
           PAD="${{ inputs.value_pad || '0' }}"
           SCORER=""
           if [ -n "${{ inputs.scorer }}" ]; then SCORER="--scorer ${{ inputs.scorer }}"; fi
-          python scripts/spark_fs_train_scale.py --rows "$ROWS" --fields "$FIELDS"             --value-pad "$PAD" $SCORER $PROFILE --out spark-fs-train-scale.json
+          python scripts/spark_fs_train_scale.py --rows "$ROWS" --fields "$FIELDS"             --value-pad "$PAD" $SCORER $PROFILE $EVAL --out spark-fs-train-scale.json
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         if: always()
@@ -562,7 +569,9 @@ jobs:
             exit 1
           fi
           echo "driver host (spark-master's network gateway): $GW"
-          python scripts/spark_splink_train_scale.py             --rows "${{ inputs.train_rows || '1000000' }}"             --master spark://localhost:7077             --driver-host "$GW"             --out splink-train-scale.json
+          EVAL=""
+          if [ "${{ inputs.eval_quality }}" = "true" ]; then EVAL="--eval-quality"; fi
+          python scripts/spark_splink_train_scale.py             --rows "${{ inputs.train_rows || '1000000' }}"             --master spark://localhost:7077             --driver-host "$GW"             $EVAL --out splink-train-scale.json
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         if: always() && inputs.splink_compare

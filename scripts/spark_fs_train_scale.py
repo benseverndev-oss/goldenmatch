@@ -45,6 +45,7 @@ import argparse
 import json
 import os
 import time
+from pathlib import Path
 
 
 def build_fixture(spark, rows: int, dup: int, blocks_per_key: int, value_pad: int = 0):
@@ -371,6 +372,25 @@ def _build_config(GoldenMatchConfig, BlockingConfig, BlockingKeyConfig,
     )
 
 
+def _metrics_module():
+    """The SHARED ranking metric, imported by file path.
+
+    Both arms of the comparison score with this one implementation. Two
+    hand-written average precisions that disagreed by a percent would look
+    exactly like a model that is a percent better, which is the distinction the
+    comparison exists to make.
+    """
+    import importlib.util
+
+    path = Path(__file__).resolve().parent / "_fs_quality_metrics.py"
+    spec = importlib.util.spec_from_file_location("_fs_quality_metrics", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"cannot load {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--rows", type=int, default=1_000_000)
@@ -416,6 +436,13 @@ def main() -> int:
              "block and the run sat in the join for 24 minutes until the step "
              "timeout killed it, with no output naming the cause. This turns "
              "that into a fast, specific refusal.")
+    ap.add_argument("--eval-quality", action="store_true",
+                    help="After training, score the SAME candidate pairs with "
+                         "the trained model and report ranking quality against "
+                         "the fixture's known entity structure. The speed "
+                         "number means nothing without it: the bar is "
+                         "match-or-better accuracy, not a faster arrival at a "
+                         "worse model.")
     ap.add_argument("--out", default="")
     args = ap.parse_args()
 
@@ -564,6 +591,54 @@ def main() -> int:
         k: [round(x, 4) for x in v] for k, v in model.match_weights.items()
     }
     out["proportion_matched"] = round(model.proportion_matched, 6)
+
+    if args.eval_quality:
+        # Score the SAME candidate pairs the training used, with the model just
+        # trained, and rank them against the fixture's known entity structure.
+        #
+        # Truth needs no label column: `build_fixture` assigns
+        # entity = id % n_entities with n_entities = rows // dup, so two rows
+        # are a true pair exactly when their ids are congruent. Carrying a label
+        # column instead would change the frame and make the quality fixture
+        # differ from the one the speed runs measure.
+        #
+        # Weights come from `gamma_columns` -- the same expressions the SCORING
+        # path builds -- so this measures the shipped model on the shipped
+        # ladder, not a re-derivation of what a level means.
+        from goldenmatch.spark.em import gamma_columns
+        from pyspark.sql import functions as F
+
+        n_entities = max(args.rows // max(args.dup, 1), 1)
+        t = time.perf_counter()
+        scored: list[tuple[float, bool]] = []
+        for key_config in blocking_passes(cfg):
+            cands = pass_candidates(df, key_config, id_col="__row_id__")
+            joined = join_candidates_to_sources(cands, df, id_col="__row_id__")
+            gammas = gamma_columns(mk, CAND_LHS, CAND_RHS,
+                                   scorer_udf=ROW_UDF_NAME,
+                                   transform_udf=TRANSFORM_UDF_NAME)
+            # Match weight = the per-field log2(m/u) for the level the pair
+            # landed on, summed. `match_weights[field][level]` IS that table,
+            # so this is a lookup rather than a second derivation of the weight.
+            weight = F.lit(0.0)
+            for col, f in zip(gammas, mk.fields):
+                per_level = model.match_weights[f.resolved_field]
+                expr = F.lit(0.0)
+                for level, val in enumerate(per_level):
+                    expr = F.when(col == F.lit(level),
+                                  F.lit(float(val))).otherwise(expr)
+                weight = weight + expr
+            truth = (F.col(f"{CAND_LHS}.__row_id__") % F.lit(n_entities)
+                     == F.col(f"{CAND_RHS}.__row_id__") % F.lit(n_entities))
+            scored.extend(
+                (float(r["w"]), bool(r["is_true"]))
+                for r in joined.select(weight.alias("w"),
+                                       truth.alias("is_true")).collect()
+            )
+        out["stages"]["score_seconds"] = round(time.perf_counter() - t, 2)
+        out["quality"] = _metrics_module().ranking_metrics(scored)
+        print(f"[scale] quality {out['quality']}", flush=True)
+
     out["total_seconds"] = round(sum(out["stages"].values()), 2)
 
     print(f"[scale] DONE rows={actual:,} total={out['total_seconds']}s "
