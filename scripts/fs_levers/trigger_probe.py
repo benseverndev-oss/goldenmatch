@@ -22,10 +22,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import re
 import sys
 import time
-import logging
 import warnings
 from pathlib import Path
 
@@ -126,6 +126,7 @@ def main() -> int:
     args = ap.parse_args()
 
     from goldenmatch.core.autoconfig import auto_configure_probabilistic_df
+
     from scripts.suggest_quality.datasets import REGISTRY
     by_name = {d.name: d for d in REGISTRY}
 

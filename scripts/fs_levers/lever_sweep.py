@@ -28,7 +28,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import polars as pl  # noqa: E402
 
 
 def _f1(result, gt_pairs) -> dict:
@@ -141,6 +140,7 @@ def main() -> int:
     args = ap.parse_args()
 
     from goldenmatch.core.autoconfig import auto_configure_probabilistic_df
+
     from scripts.suggest_quality.datasets import REGISTRY
 
     by_name = {d.name: d for d in REGISTRY}
