@@ -352,6 +352,30 @@ def main() -> int:
     print(f"[splink] EM in {out['stages']['em_seconds']}s over {sum(iters)} "
           f"iteration(s) {iters}", flush=True)
 
+    # The trained model itself, not just how long it took to train. GM records
+    # m_probs / u_probs / match_weights and this side recorded neither, so when
+    # the two engines disagreed on accuracy there was no way to ask WHERE --
+    # which field, which level. A per-level m/u table makes the next question
+    # answerable from the artifact instead of another run.
+    try:
+        model = linker.misc.save_model_to_json()
+        out["model"] = {
+            c["output_column_name"]: [
+                {"label": lv.get("comparison_vector_value"),
+                 "sql": lv.get("sql_condition"),
+                 "m": lv.get("m_probability"),
+                 "u": lv.get("u_probability")}
+                for lv in c.get("comparison_levels", [])
+            ]
+            for c in model.get("comparisons", [])
+        }
+        out["probability_two_random_records_match"] = model.get(
+            "probability_two_random_records_match")
+    except Exception as e:  # noqa: BLE001 - diagnostic, never fatal
+        # Recorded rather than swallowed: an absent `model` key must read as
+        # "the export broke", not as "the model was empty".
+        out["model_export_error"] = f"{type(e).__name__}: {str(e)[:200]}"
+
     if args.eval_quality:
         # Ground truth is a pure function of the row id and needs no extra
         # column: `build_fixture` assigns entity = id % n_entities with
