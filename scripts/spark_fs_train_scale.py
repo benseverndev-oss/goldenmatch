@@ -12,6 +12,35 @@ question this script exists for:
 So the central claim of the distributed tier -- that FS training works at a size
 one box cannot hold -- has never been tested. This script is that test.
 
+## What --eval-quality is FOR, and what it is not
+
+It is a REGRESSION GUARD on the distributed path: does Spark-trained FS rank
+pairs about as well as it did last time. It is NOT a GoldenMatch-vs-Splink
+accuracy verdict, and a run of it must not be quoted as one.
+
+That question is already answered, better, elsewhere.
+`docs/benchmarks/2026-06-09-splink-bakeoff.md` puts GM's ZERO-TUNING auto-config
+against an expert hand-rolled Splink spec on real datasets under one shared
+evaluator, and GM matches or beats it everywhere Splink scores:
+
+    historical_50k    GM 0.778  Splink 0.757   +0.021
+    febrl3            GM 0.991  Splink 0.965   +0.026
+    synthetic_person  GM 0.998  Splink 0.996   +0.001
+
+This harness measured the opposite (Splink +0.021 average precision) and the
+difference is the CONFIG, not the engines. The comparison config here exists to
+exercise the `prod(levels + 1)` bound for a SCALE test -- its own comment says
+"FIVE fields at three levels each ... so the driver-side EM has a bound worth
+testing" -- and was never chosen for accuracy. Running it against Splink's
+comparison-library defaults measures that choice.
+
+The tell was that the two comparisons inverted on BOTH axes: the bakeoff has
+Splink 3-19x FASTER single-box and less accurate; this lane has Splink ~22x
+slower and more accurate. When both flip, the harness is the variable.
+
+So: use this to catch a regression in the distributed trainer. Use the bakeoff
+for accuracy claims.
+
 ## The fixture is generated IN SPARK, deliberately
 
 Every column comes from ``spark.range(n)`` and SQL expressions, so no row ever
