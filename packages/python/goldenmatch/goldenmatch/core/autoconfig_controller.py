@@ -2077,7 +2077,14 @@ class AutoConfigController:
         """
         from goldenmatch.core.autoconfig_rules import _llm_api_key_available
         sp = profile.scoring
-        if sp.candidates_compared == 0:
+        # Only bail on a MEASURED zero (#2639). `candidates_compared` is 0
+        # whenever scoring skipped its count loop -- which it does above 10,000
+        # blocks -- so this early return was firing on every fine-grained shape
+        # and the escalation was silently dead at exactly the scale it exists
+        # for. When the count is unknown the `mass_in_borderline` check below
+        # decides, and that one is computed over pairs that were actually
+        # scored, so it cannot be satisfied by a run where nothing happened.
+        if sp.candidates_counted and sp.candidates_compared == 0:
             return config
         if sp.mass_in_borderline < 0.10:
             return config

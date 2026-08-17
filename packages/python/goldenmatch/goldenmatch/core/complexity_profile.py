@@ -426,6 +426,23 @@ class ScoringProfile:
     _version: int = 1
     n_pairs_scored: int = 0
     candidates_compared: int = 0
+    # Was `candidates_compared` actually MEASURED? (#2639)
+    #
+    # `scorer.py` skips the candidate-count loop above 10,000 blocks -- counting
+    # calls `Block.n_rows()`, which materialises, and doing that serially for
+    # tens of thousands of blocks is real time. The skip is deliberate and
+    # logged, but it leaves a 0 that means "not counted" and is indistinguishable
+    # from a measured zero. Measured at 100k rows: person had 84,293 blocks and
+    # biblio 22,151, so BOTH were past the gate, and biblio reported
+    # candidates_compared=0 having scored 1,493,182 pairs.
+    #
+    # Consumers must branch on this rather than on `candidates_compared == 0`,
+    # because the two readings lead to opposite actions -- see
+    # tests/test_candidates_counted_2639.py.
+    #
+    # Defaults False: a default-constructed profile is the all-zero fallback the
+    # emitter yields when scoring never ran, which has no measurement behind it.
+    candidates_counted: bool = False
     score_histogram: list[int] = field(default_factory=lambda: [0] * 20)
     dip_statistic: float = 0.0
     mass_above_threshold: float = 0.0
