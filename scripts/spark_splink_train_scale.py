@@ -35,6 +35,35 @@ ships. A reader wanting to isolate "is our kernel slower" needs a different
 experiment; a reader asking "should I use GM or Splink on my cluster" wants
 exactly this one.
 
+## What --eval-quality is FOR, and what it is not
+
+It is a REGRESSION GUARD on the distributed path: does Spark-trained FS rank
+pairs about as well as it did last time. It is NOT a GoldenMatch-vs-Splink
+accuracy verdict, and a run of it must not be quoted as one.
+
+That question is already answered, better, elsewhere.
+`docs/benchmarks/2026-06-09-splink-bakeoff.md` puts GM's ZERO-TUNING auto-config
+against an expert hand-rolled Splink spec on real datasets under one shared
+evaluator, and GM matches or beats it everywhere Splink scores:
+
+    historical_50k    GM 0.778  Splink 0.757   +0.021
+    febrl3            GM 0.991  Splink 0.965   +0.026
+    synthetic_person  GM 0.998  Splink 0.996   +0.001
+
+This harness measured the opposite (Splink +0.021 average precision) and the
+difference is the CONFIG, not the engines. The comparison config here exists to
+exercise the `prod(levels + 1)` bound for a SCALE test -- its own comment says
+"FIVE fields at three levels each ... so the driver-side EM has a bound worth
+testing" -- and was never chosen for accuracy. Running it against Splink's
+comparison-library defaults measures that choice.
+
+The tell was that the two comparisons inverted on BOTH axes: the bakeoff has
+Splink 3-19x FASTER single-box and less accurate; this lane has Splink ~22x
+slower and more accurate. When both flip, the harness is the variable.
+
+So: use this to catch a regression in the distributed trainer. Use the bakeoff
+for accuracy claims.
+
 ## Read the cluster sizing before reading the number
 
 The default rig is two workers at one core each on a 4-CPU runner -- two
@@ -209,11 +238,12 @@ def main() -> int:
                          "iteration count -- and therefore the wall -- varies "
                          "by more than half between identical runs.")
     ap.add_argument("--eval-quality", action="store_true",
-                    help="After training, score the candidate pairs and report "
-                         "ranking quality against the fixture's known entity "
-                         "structure. The speed number means nothing without it: "
-                         "the goal is match-or-better accuracy, not a faster "
-                         "arrival at a worse model.")
+                    help="REGRESSION GUARD on the distributed trainer: score "
+                         "the candidate pairs and report ranking quality "
+                         "against the fixture's known entity structure. NOT a "
+                         "GM-vs-Splink accuracy verdict -- this fixture's "
+                         "config was chosen to stress prod(levels+1) for a "
+                         "scale test. See the bakeoff for accuracy.")
     ap.add_argument("--out", default="splink-train-scale.json")
     args = ap.parse_args()
 
