@@ -3577,7 +3577,25 @@ def _expelled_share(id_a, id_b, score, default_link: float, candidate: float) ->
     return len(matched_default - matched_candidate) / len(matched_default)
 
 
-def fs_refit_link_threshold(id_a, id_b, score, default_link: float) -> float:
+def _record(out: dict | None, reason: str, default_link: float,
+            candidate: float, **extra) -> None:
+    """Record the refit decision as DATA, not only as a log line.
+
+    Three times in the person@1M investigation the thing that unblocked it was a
+    recorded FIELD -- `route`, `candidates_counted`, `em_iterations_total` --
+    and never a log. Logs are lossy: this function's DECLINE paths sat at DEBUG
+    while its COMMIT path sat at INFO, and even after promoting them the bench
+    printed nothing because nothing configured a handler above WARNING. A field
+    in the result cannot be lost to a level nobody set.
+    """
+    if out is None:
+        return
+    out.update({"reason": reason, "default_link": float(default_link),
+                "candidate": float(candidate), **extra})
+
+
+def fs_refit_link_threshold(id_a, id_b, score, default_link: float,
+                            *, decision_out: dict | None = None) -> float:
     """Guarded FS threshold refit: the distributional valley candidate, ACCEPTED
     only when re-clustering at it actually REDUCES over-merge (max cluster size)
     vs the default. This is the guard that a pure distributional valley needs: a
@@ -3640,6 +3658,7 @@ def fs_refit_link_threshold(id_a, id_b, score, default_link: float) -> float:
             "valley above %.4f -> keeping %.4f",
             default_link, default_link,
         )
+        _record(decision_out, "no-valley", default_link, candidate)
         return default_link
     max_default = _max_cluster_size(id_a, id_b, score, default_link)
     max_candidate = _max_cluster_size(id_a, id_b, score, candidate)
@@ -3652,6 +3671,8 @@ def fs_refit_link_threshold(id_a, id_b, score, default_link: float) -> float:
             "so this decline does not mean there is no over-merge.",
             candidate, max_default, max_candidate, default_link,
         )
+        _record(decision_out, "no-max-reduction", default_link, candidate,
+                max_default=max_default, max_candidate=max_candidate)
         return default_link
     expelled = _expelled_share(id_a, id_b, score, default_link, candidate)
     if expelled > _REFIT_MAX_EXPELLED_SHARE:
@@ -3662,6 +3683,9 @@ def fs_refit_link_threshold(id_a, id_b, score, default_link: float) -> float:
             candidate, max_default, max_candidate, expelled * 100.0,
             _REFIT_MAX_EXPELLED_SHARE * 100.0, default_link,
         )
+        _record(decision_out, "expelled-share", default_link, candidate,
+                max_default=max_default, max_candidate=max_candidate,
+                expelled=expelled)
         return default_link
     # Committed: the same observability discipline the controller uses for its
     # weighted-path commit decision, so the FS refit is auditable on one surface
@@ -3671,6 +3695,9 @@ def fs_refit_link_threshold(id_a, id_b, score, default_link: float) -> float:
         "%d -> %d, over-merge reduced; %.2f%% of matched records stranded)",
         default_link, candidate, max_default, max_candidate, expelled * 100.0,
     )
+    _record(decision_out, "committed", default_link, candidate,
+            max_default=max_default, max_candidate=max_candidate,
+            expelled=expelled)
     return candidate
 
 

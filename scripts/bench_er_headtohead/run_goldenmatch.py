@@ -557,6 +557,16 @@ def main() -> None:
         # `ded.config` deliberately, NOT the `cfg` handed to dedupe_df: on the
         # auto-config modes the resolved config is what auto-config committed,
         # and the pre-run object can carry thresholds it overwrote.
+        # The cutoff the run ACTUALLY applied, its provenance, and what the
+        # threshold refit decided about it. `config_resolved` records only what
+        # was CONFIGURED -- on this lane `link_threshold` is null, which says
+        # nothing about where the cut landed or why. That gap is what made the
+        # person@1M over-merge unanswerable from the artifact: three separate
+        # changes were aimed at the wrong branch because no run recorded which
+        # decision was in force.
+        _stats = getattr(ded, "stats", None) or {}
+        result["fs_link_thresholds"] = _stats.get("fs_link_thresholds")
+
         _resolved = getattr(ded, "config", None)
         result["config_resolved"] = (
             _config_telemetry(_resolved) if _resolved is not None
