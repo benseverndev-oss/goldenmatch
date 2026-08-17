@@ -196,12 +196,43 @@ def collect(shape: str, rows: int, seed: int, workdir: Path) -> dict:
     out["iterations"] = len(getattr(history, "entries", []) or [])
     out["blocking"] = _blocking_report(profile.blocking, n)
     out["cluster"] = _cluster_report(profile.cluster, n)
+    # `candidates_compared` is the field that tells the two scoring-RED causes
+    # apart, and the first version of this report omitted it -- so a person@100k
+    # run showed `n_pairs_scored=0` with no way to say which had happened:
+    #
+    #   candidates_compared == 0  -> the emitter never received a ScoringProfile,
+    #       so `emitter.scoring or ScoringProfile()` fell back to the all-zero
+    #       default. Scoring never ran. That RED is DOWNSTREAM of whatever
+    #       stopped the sample pipeline.
+    #   candidates_compared > 0   -> pairs were compared and NONE cleared the
+    #       threshold. That RED is a real, independent signal about the
+    #       threshold or the scorers, and fixing blocking will not clear it.
+    #
+    # Note `n_pairs_scored` counts pairs ABOVE the threshold, not pairs scored
+    # (scorer.py builds it from `find_fuzzy_matches` output, which is already
+    # filtered; autoconfig_policy.py renders the same field as
+    # `n_pairs_above_threshold`). The name reads like the denominator and is
+    # actually the numerator, which is what made the ambiguity above easy to
+    # miss. Reported here under both names rather than silently renamed.
+    sc = profile.scoring
+    compared = getattr(sc, "candidates_compared", 0)
+    above = getattr(sc, "n_pairs_scored", 0)
     out["scoring"] = {
-        "n_pairs_scored": getattr(profile.scoring, "n_pairs_scored", 0),
-        "dip_statistic": round(getattr(profile.scoring, "dip_statistic", 0.0), 6),
-        "mass_above_threshold": round(getattr(profile.scoring, "mass_above_threshold", 0.0), 6),
+        "candidates_compared": compared,
+        "n_pairs_scored": above,
+        "n_pairs_above_threshold": above,  # the same field, under its true name
+        "above_threshold_rate": round(above / compared, 8) if compared else None,
+        "scoring_ran": compared > 0,
+        "dip_statistic": round(getattr(sc, "dip_statistic", 0.0), 6),
+        "mass_above_threshold": round(getattr(sc, "mass_above_threshold", 0.0), 6),
+        "mass_in_borderline": round(getattr(sc, "mass_in_borderline", 0.0), 6),
         "random_pair_above_threshold_rate":
-            getattr(profile.scoring, "random_pair_above_threshold_rate", None),
+            getattr(sc, "random_pair_above_threshold_rate", None),
+        "red_cause": (
+            None if (compared > 0 and getattr(sc, "mass_above_threshold", 0.0) > 0.0)
+            else "scoring-never-ran (candidates_compared == 0)" if compared == 0
+            else "nothing-cleared-threshold (candidates compared, mass == 0)"
+        ),
     }
     return out
 
