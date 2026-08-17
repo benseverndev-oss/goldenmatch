@@ -270,7 +270,8 @@ def profile_counts(joined, mk, *, scorer_udf, transform_udf, cands):
     return out
 
 
-def make_config(n_fields: int = 5, scorer: str | None = None):
+def make_config(n_fields: int = 5, scorer: str | None = None,
+                match_splink_levels: bool = False):
     """The scale config. ``n_fields`` trims the COMPARISON fields only.
 
     ## Why this is a knob
@@ -326,6 +327,35 @@ def make_config(n_fields: int = 5, scorer: str | None = None):
         # measuring different workloads, so their timings meant nothing.
         for f in mk.fields:
             f.scorer = scorer
+    if match_splink_levels:
+        # Mirror Splink's comparison ladder EXACTLY, because the accuracy
+        # comparison was otherwise measuring a config difference and calling it
+        # an engine difference.
+        #
+        # Splink's `JaroWinklerAtThresholds(f, [0.9, 0.7])` yields five states:
+        # null, EXACT, jw >= 0.9, jw >= 0.7, else. This harness's default is
+        # three -- agree / partial >= 0.7 / disagree -- which lumps "identical",
+        # "jw 0.95" and "jw 0.75" together and is strictly less discriminating.
+        # Measured at 200k rows on an identical pair population (1,854,038
+        # pairs, 200,004 true): GM 0.7557 average precision against Splink's
+        # 0.7911. A coarser ladder is also a cheaper one, so the speed advantage
+        # was partly bought with it.
+        #
+        # `level_thresholds` are DESCENDING cutoffs and the level is the count
+        # cleared, so [1.0, 0.9, 0.7] gives exact -> 3, >= 0.9 -> 2, >= 0.7 -> 1,
+        # else 0, plus -1 unobserved: the same four informative levels Splink
+        # has.
+        #
+        # `dob` is the odd one out. Splink compares it with
+        # `DamerauLevenshteinAtThresholds([1, 2])` -- an EDIT DISTANCE -- while
+        # this field is scored by a similarity ratio. The dates are a fixed ten
+        # characters ("19xx-01-01"), so one edit is 0.9 and two is 0.8; the
+        # thresholds below are that conversion, and they are only equivalent
+        # because the width is fixed.
+        for f in mk.fields:
+            f.levels = 4
+            f.level_thresholds = ([1.0, 0.9, 0.8] if f.field == "dob"
+                                  else [1.0, 0.9, 0.7])
     if n_fields < len(mk.fields):
         # Trim in place. Rebuilding a shorter literal risks the arms differing
         # in something other than field count, which is the one variable this
@@ -436,6 +466,12 @@ def main() -> int:
              "block and the run sat in the join for 24 minutes until the step "
              "timeout killed it, with no output naming the cause. This turns "
              "that into a fast, specific refusal.")
+    ap.add_argument("--match-splink-levels", action="store_true",
+                    help="Give every comparison field the same four informative "
+                         "levels Splink uses (exact / 0.9 / 0.7 / else) instead "
+                         "of this harness's default three. Without it an "
+                         "accuracy comparison measures a ladder difference and "
+                         "reports it as an engine difference.")
     ap.add_argument("--eval-quality", action="store_true",
                     help="After training, score the SAME candidate pairs with "
                          "the trained model and report ranking quality against "
@@ -490,7 +526,8 @@ def main() -> int:
     print(f"[scale] fixture: {actual:,} rows in "
           f"{out['stages']['fixture_seconds']}s", flush=True)
 
-    cfg = make_config(args.fields, args.scorer or None)
+    cfg = make_config(args.fields, args.scorer or None,
+                      match_splink_levels=args.match_splink_levels)
     mk = cfg.get_matchkeys()[0]
 
     # ── u: sampled self-join. Cost tracks the SAMPLE, not the table. ──
