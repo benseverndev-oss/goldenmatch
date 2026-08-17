@@ -45,8 +45,19 @@ probabilistic_df` never sets it, so `mk.cutoff` is `None`,
 Verified INERT on all four available datasets, so it is structural rather than
 data-dependent. Meanwhile the engine emits a precise diagnosis at runtime
 ("linked N% ... using a FALLBACK link cutoff of 0.5000 ... Set 'link_threshold'").
-The detector works, the actuator is disconnected, and the same emptiness leaves
+The detector works, the actuator was disconnected, and the same emptiness leaves
 `perturbation_stability` permanently unmeasured on the FS path.
+
+> **Partly fixed, and this harness will not show it.** #2645 makes the
+> controller stamp the resolved cutoff onto the committed config, so
+> `ThresholdShift` is live on the zero-config `auto_configure_df` /
+> `dedupe_df` path. It does NOT reach `auto_configure_probabilistic_df`,
+> which is non-iterative by design: it never runs the controller, so it
+> never trains, so there is no resolved cutoff to record. Since the sweeps
+> below build their baseline from `auto_configure_probabilistic_df`, they
+> still report `ThresholdShift: INERT` — that is the entry point's inherent
+> limit, not the fix failing. Check the zero-config path if you want to see
+> the lever live.
 
 **EM non-convergence is a second one.** "EM did not converge after 20
 iterations" fired on exactly one cell of six -- the -0.34 F1 collapse -- and
