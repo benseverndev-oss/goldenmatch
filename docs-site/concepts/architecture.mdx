@@ -34,7 +34,7 @@ flowchart LR
     Runs the whole chain with adaptive logic. It skips transformation if no issues are found and explains every decision.
   </Step>
   <Step title="GoldenAnalysis reports">
-    Runs read-only analyzers over any stage's outputs — match rates, cluster distribution, quality rollups — with cross-run trend and regression detection.
+    Runs read-only analyzers over any stage's outputs, match rates, cluster distribution, quality rollups, with cross-run trend and regression detection.
   </Step>
 </Steps>
 
@@ -47,7 +47,7 @@ The same engine is implemented across languages so you can run it wherever your 
 | Python | Headline runtime. Full feature set, `pip install`, native Postgres and DuckDB support. |
 | TypeScript | Parity core. Edge-safe (Vercel Edge, Cloudflare Workers, Deno). Matches Python scorer outputs to four decimals. |
 | Rust | Postgres extension (pgrx) and DuckDB UDFs for SQL-native matching. |
-| dbt | `dbt-goldensuite` package — entity-resolution materialization, quality-gate tests, transforms, and identity-graph reads for warehouse models. |
+| dbt | `dbt-goldensuite` package: entity-resolution materialization, quality-gate tests, transforms, and identity-graph reads for warehouse models. |
 | GitHub Actions | `goldencheck-action` gates pull requests on data-quality regressions. |
 
 Every surface is exercised in CI: the Python test matrix (3.11 to 3.13), the TypeScript parity suite (scorer outputs matched to four decimals), and the Rust extension crates. The Postgres extension is built and smoke-tested against PostgreSQL 15, 16, and 17, the native acceleration kernels are parity-checked against the pure-Python path, and per-crate Rust line coverage is measured in CI.

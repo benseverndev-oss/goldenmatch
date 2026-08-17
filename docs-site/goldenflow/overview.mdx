@@ -137,7 +137,7 @@ print(f"Processed {processor.batches_processed} batches")
 ## SQL (DuckDB)
 
 GoldenFlow's transforms also ship as a **zero-Python DuckDB extension**
-(`goldenflow-duckdb`) — a compiled Rust extension that links the same reference
+(`goldenflow-duckdb`): a compiled Rust extension that links the same reference
 kernels straight into DuckDB, so the transforms run natively in the query engine,
 byte-identical to the Python / TypeScript / WASM surfaces. 98 transforms are
 exposed as `goldenflow_<kernel>` SQL functions:

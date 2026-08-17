@@ -198,7 +198,7 @@ Cache the learned rules to skip re-training on subsequent runs.
 *New in #1081.* Probabilistic sketching for near-duplicate text. Each record's
 text column is shingled (char- or word-grams), MinHashed into a signature, and
 the signature is split into LSH bands; records that share at least one band
-bucket become candidates. This is the set-similarity (Jaccard) path — the right
+bucket become candidates. This is the set-similarity (Jaccard) path, the right
 tool for document/corpus-scale near-duplicate detection, where keyed-predicate
 strategies (static/multi-pass) are a poor fit.
 
@@ -222,7 +222,7 @@ higher one yields fewer (more precision, fewer pairs).
   **LSH measures *lexical* overlap, not *semantic* similarity.** It excels at
   near-duplicates that share words/characters (boilerplate, reposts, lightly
   edited copies). It does **not** catch paraphrases that mean the same thing in
-  different words — on the Quora Question Pairs benchmark (semantic duplicates)
+  different words: on the Quora Question Pairs benchmark (semantic duplicates)
   it recovers only ~21% of labeled pairs at `threshold: 0.5`, versus ~98% on a
   lexical-near-duplicate set. For semantic matching, use the `ann` strategy
   (embedding nearest-neighbor).
@@ -259,7 +259,7 @@ blocking:
 
 Cost is controlled by **document-frequency pruning**, not a block-size cap. A
 token in `D` records forms a block of `D` and contributes `D(D-1)/2` pairs, so
-the expensive tokens are the frequent ones — and frequency is exactly what makes
+the expensive tokens are the frequent ones: and frequency is exactly what makes
 a token non-discriminative. Dropping them removes nearly all the cost and almost
 none of the recall. When `max_df` is unset it is derived as `max_df_ratio * n`
 clamped to `[10, 1000]`, so the cap stays bounded at any frame size.
@@ -278,15 +278,15 @@ Measured on Amazon-Google (4589 records, 1300 ground-truth pairs):
   **Token blocking complements `lsh`; it does not replace it.** MinHash/LSH
   estimates **Jaccard** similarity over the whole token set, so it needs the two
   strings to overlap substantially. Cross-vendor product titles routinely share
-  two or three discriminative tokens out of fifteen — strong evidence, low
-  Jaccard — which is why LSH peaks at 55.85% on the table above. Use `lsh` for
+  two or three discriminative tokens out of fifteen, strong evidence, low
+  Jaccard, which is why LSH peaks at 55.85% on the table above. Use `lsh` for
   near-duplicate documents, `token` for short free text where only a few tokens
   agree.
 </Note>
 
 <Warning>
   Blocking **auto-suggest will not choose `token` by default.** Committing it
-  automatically took Amazon-Google's end-to-end F1 from 0.1014 to 0.0000 — the
+  automatically took Amazon-Google's end-to-end F1 from 0.1014 to 0.0000, the
   failing auto-config subprofile flips to `blocking` and the committed config
   yields no candidate pairs. That is undiagnosed (#2488), so the strategy is
   available from an explicit config as shown above, while auto-suggest stays

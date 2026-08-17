@@ -4,7 +4,7 @@ description: "Full YAML reference for GoldenMatch: matchkeys, blocking, golden r
 keywords: ["configuration", "yaml", "matchkeys", "blocking", "golden rules", "standardization", "validation", "llm scorer", "learning memory", "backend"]
 ---
 
-GoldenMatch uses YAML config files with Pydantic validation. Every section is optional — GoldenMatch auto-configures what you leave out.
+GoldenMatch uses YAML config files with Pydantic validation. Every section is optional, GoldenMatch auto-configures what you leave out.
 
 ## Full YAML reference
 
@@ -246,9 +246,9 @@ Applied to field values before scoring.
 | `substring:start:end` | Substring extraction |
 | `qgram:n` | Q-gram tokenization |
 | `bloom_filter` or `bloom_filter:ngram:k:size` | Bloom filter (for PPRL) |
-| `legal_form_strip` | Strip corporate legal-form suffixes (Inc, LLC, Ltd, GmbH, S.A., ...) — bundled refdata |
-| `address_normalize` | USPS Pub. 28 street-suffix + unit-abbrev canonicalization (Avenue→AVE, Apartment→APT) — bundled refdata |
-| `naics_normalize` | NAICS 2022 industry-code canonicalization (code-or-title input → canonical code) — bundled refdata |
+| `legal_form_strip` | Strip corporate legal-form suffixes (Inc, LLC, Ltd, GmbH, S.A., ...): bundled refdata |
+| `address_normalize` | USPS Pub. 28 street-suffix + unit-abbrev canonicalization (Avenue→AVE, Apartment→APT): bundled refdata |
+| `naics_normalize` | NAICS 2022 industry-code canonicalization (code-or-title input → canonical code): bundled refdata |
 
 Refdata transforms are auto-prepended by the controller when a column name matches the relevant pattern AND its profiled `col_type` agrees. See [Reference Data](/goldenmatch/reference-data).
 
@@ -266,8 +266,8 @@ Refdata transforms are auto-prepended by the controller when a column name match
 | `record_embedding` | Concatenated multi-field embeddings | Cross-field semantic |
 | `dice` | Dice coefficient on bloom filters | PPRL |
 | `jaccard` | Jaccard similarity on bloom filters | PPRL |
-| `name_freq_weighted_jw` | Surname IDF-weighted Jaro-Winkler — bundled refdata | `last_name` / `surname` |
-| `given_name_aliased_jw` | Alias-aware Jaro-Winkler — bundled refdata | `first_name` / `given_name` |
+| `name_freq_weighted_jw` | Surname IDF-weighted Jaro-Winkler: bundled refdata | `last_name` / `surname` |
+| `given_name_aliased_jw` | Alias-aware Jaro-Winkler: bundled refdata | `first_name` / `given_name` |
 
 ### Cross-encoder reranking
 
@@ -468,11 +468,11 @@ validation:
 ```
 
 Rule types: `regex`, `min_length`, `max_length`, `not_null`, `in_set`, `format`.
-Actions: `flag` (mark but keep), `"null"` (set to null — quote it so YAML keeps the string; bare `null` parses as None and fails validation), `quarantine` (remove from matching).
+Actions: `flag` (mark but keep), `"null"` (set to null: quote it so YAML keeps the string; bare `null` parses as None and fails validation), `quarantine` (remove from matching).
 
 ## Environment variables
 
-The table below covers the security/sandbox variables most relevant to a YAML config. **For the complete, verified reference of every `GOLDENMATCH_*` variable** — the native gate, backend selection, the distributed pipeline, perf opt-ins, and when to set or avoid each — see [Tuning & opt-ins](/goldenmatch/tuning).
+The table below covers the security/sandbox variables most relevant to a YAML config. **For the complete, verified reference of every `GOLDENMATCH_*` variable**, the native gate, backend selection, the distributed pipeline, perf opt-ins, and when to set or avoid each, see [Tuning & opt-ins](/goldenmatch/tuning).
 
 | Variable | Default | Description |
 |---|---|---|
@@ -499,7 +499,7 @@ export GOLDENMATCH_ALLOWED_ROOT=/data
 goldenmatch mcp-serve --transport http --port 8200
 ```
 
-Unset (the default) means no containment check — any accessible path is
+Unset (the default) means no containment check: any accessible path is
 valid. This is the correct default for a local-first desktop tool.
 
 <Info>
@@ -510,8 +510,8 @@ data volume. See [MCP Server](/goldenmatch/mcp#path-sandbox).
 
 ## Settings persistence
 
-- **Global**: `~/.goldenmatch/settings.yaml` — output mode, default model, API keys
-- **Project**: `.goldenmatch.yaml` — column mappings, thresholds, blocking config
+- **Global**: `~/.goldenmatch/settings.yaml`: output mode, default model, API keys
+- **Project**: `.goldenmatch.yaml`: column mappings, thresholds, blocking config
 
 Settings tuned in the TUI can be saved to the project file. Next run picks them up automatically.
 
@@ -546,9 +546,9 @@ config = gm.auto_configure([("data.csv", "source")])
 
 ## Verification (v1.5.0)
 
-`auto_configure_df` runs **preflight** at the end of config generation — 6 checks that auto-repair missing domain-extracted columns, drop useless-cardinality exact matchkeys, flag oversized blocks, demote remote-asset scorers, and cap low-confidence weights. Unrepairable issues raise `ConfigValidationError`; the full report is attached to the exception as `err.report`.
+`auto_configure_df` runs **preflight** at the end of config generation: 6 checks that auto-repair missing domain-extracted columns, drop useless-cardinality exact matchkeys, flag oversized blocks, demote remote-asset scorers, and cap low-confidence weights. Unrepairable issues raise `ConfigValidationError`; the full report is attached to the exception as `err.report`.
 
-The pipeline runs **postflight** after scoring and before clustering — 4 signals (score histogram + bimodality, blocking recall, cluster sizes + bottleneck pairs, threshold-band overlap) that can auto-nudge the threshold on clear bimodality and attach the report to `DedupeResult.postflight_report` / `MatchResult.postflight_report`.
+The pipeline runs **postflight** after scoring and before clustering, 4 signals (score histogram + bimodality, blocking recall, cluster sizes + bottleneck pairs, threshold-band overlap) that can auto-nudge the threshold on clear bimodality and attach the report to `DedupeResult.postflight_report` / `MatchResult.postflight_report`.
 
 Two new kwargs on `auto_configure_df`:
 
@@ -587,7 +587,7 @@ The optional `memory:` section enables persistent corrections. Once a steward, a
 | `reanchor` | `true` | Re-anchor by `record_hash` when row IDs miss; ambiguous re-anchors report `stale_ambiguous`. |
 | `dataset` | `null` | Tag corrections; isolates per-table memory in shared DBs. |
 | `learning.threshold_min_corrections` | `10` | Trust-weighted grid search runs once a matchkey crosses this floor. |
-| `learning.weights_min_corrections` | `50` | Field-weight learning is not yet implemented — the learner returns `null` until per-field scores are persisted with corrections. Threshold tuning (above) is the active learning mechanism. |
+| `learning.weights_min_corrections` | `50` | Field-weight learning is not yet implemented: the learner returns `null` until per-field scores are persisted with corrections. Threshold tuning (above) is the active learning mechanism. |
 
 Full guide: [Learning Memory](/goldenmatch/learning-memory).
 

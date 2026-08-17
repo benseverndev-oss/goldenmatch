@@ -53,10 +53,10 @@ The **planning-effort tier** controls how hard the controller searches for a con
 
 | Tier | What it does |
 |------|--------------|
-| `fast` | A single cheap pass — no refit breadth, tight wall budget. |
+| `fast` | A single cheap pass: no refit breadth, tight wall budget. |
 | `normal` *(default)* | Today's interactive budget: sqrt-scaled sample, a few refit iterations, linear pair-count extrapolation. |
 | `thinking` | Larger sample + more iterations + a longer budget, and **measures real blocking on the full frame** to pick the backend instead of extrapolating from the sample. |
-| `einstein` | The widest search — the largest sample, the most iterations, and the longest budget. |
+| `einstein` | The widest search: the largest sample, the most iterations, and the longest budget. |
 
 ```python
 import goldenmatch as gm
@@ -66,7 +66,7 @@ result = gm.dedupe_df(df, planning_effort="thinking")
 ```
 
 <Note>
-  Because block scoring is now ~5x faster (bucket+native), the higher tiers measure the true candidate-pair count on the full data rather than projecting it from a 2K–20K sample — which removes the wrong-backend-on-skewed-data failure. Any measurement failure falls back to extrapolation.
+  Because block scoring is now ~5x faster (bucket+native), the higher tiers measure the true candidate-pair count on the full data rather than projecting it from a 2K–20K sample, which removes the wrong-backend-on-skewed-data failure. Any measurement failure falls back to extrapolation.
 </Note>
 
 ### In-house embeddings
@@ -78,7 +78,7 @@ When you point auto-config at the **local in-house embedding model** (a matchkey
 | Variable | Effect |
 |----------|--------|
 | `GOLDENMATCH_AUTOCONFIG_MEMORY=0` | Disable cross-run memory (default on; stored at `~/.goldenmatch/autoconfig_memory.db`). |
-| `GOLDENMATCH_AUTOCONFIG_DETERMINISTIC=1` | Drop the search's wall-clock budgets so iteration caps are the only stopping rule. Without it the committed config depends on host speed and load. Runtime becomes unbounded — set it for anything that pins or gates auto-config output, not for interactive runs. |
+| `GOLDENMATCH_AUTOCONFIG_DETERMINISTIC=1` | Drop the search's wall-clock budgets so iteration caps are the only stopping rule. Without it the committed config depends on host speed and load. Runtime becomes unbounded: set it for anything that pins or gates auto-config output, not for interactive runs. |
 | `GOLDENMATCH_AUTOCONFIG_LLM=1` | Enable the LLM fallback policy (requires `OPENAI_API_KEY`). |
 | `GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET=fast\|full` | Run the cheap or the full indicator set (default `fast`). |
 | `GOLDENMATCH_PLANNING_EFFORT=fast\|normal\|thinking\|einstein` | Planning-effort tier (default `normal`). Higher tiers search wider and measure full-frame blocking. |

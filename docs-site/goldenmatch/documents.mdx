@@ -1,6 +1,6 @@
 ---
 title: "Document ingest"
-description: "Run GoldenMatch on unstructured input — extract matchable records from PDFs and images, then dedupe them."
+description: "Run GoldenMatch on unstructured input: extract matchable records from PDFs and images, then dedupe them."
 keywords: ["document ingest", "pdf", "image", "unstructured", "extraction", "vlm", "ocr", "records"]
 ---
 
@@ -19,7 +19,7 @@ image loading):
 pip install "goldenmatch[documents]"
 ```
 
-The default backend calls an OpenAI vision model (`gpt-4o`). Set an API key — the personal
+The default backend calls an OpenAI vision model (`gpt-4o`). Set an API key, the personal
 key is preferred so a work-scoped key is never used by accident:
 
 ```bash
@@ -27,7 +27,7 @@ export OPENAI_API_KEY_PERSONAL=sk-...   # or OPENAI_API_KEY
 ```
 
 `import goldenmatch.documents` and the MCP server both degrade gracefully when the extra or
-the key is absent — nothing else in GoldenMatch requires them.
+the key is absent: nothing else in GoldenMatch requires them.
 
 ## The two-step workflow
 
@@ -57,7 +57,7 @@ result = dedupe_df(
 
 Every extracted row carries three sidecar columns: `_source_file`, `_source_page`, and
 `_extract_confidence`. Pass `return_report=True` to `ingest_documents` to also get an
-`IngestReport` (`n_files`, `n_rows`, and per-file `errors` — a bad file is recorded and the
+`IngestReport` (`n_files`, `n_rows`, and per-file `errors`: a bad file is recorded and the
 batch continues rather than aborting).
 
 You can define a schema by hand instead of suggesting one:
@@ -98,7 +98,7 @@ The same capability is exposed everywhere GoldenMatch runs:
 | **MCP** (Claude Desktop / Code) | tools `documents_suggest_schema`, `documents_ingest` |
 | **A2A** (agent-to-agent) | skills `documents_suggest_schema`, `documents_ingest` |
 | **REST** | `POST /api/v1/documents/suggest-schema`, `POST /api/v1/documents/ingest` |
-| **Web UI** | the `/documents` "Ingest" page — upload, AI-suggest a schema, edit it, extract, review + export |
+| **Web UI** | the `/documents` "Ingest" page: upload, AI-suggest a schema, edit it, extract, review + export |
 | **TypeScript** | the deterministic `documents-core` kernels (schema/parse/prompt/normalize) via `goldenmatch/core/documents-wasm`, byte-parity with Python |
 
 MCP, A2A, and REST are **path-based** (the caller passes server-accessible file paths or, for
@@ -119,7 +119,7 @@ REST/Web, uploads); the Web UI handles browser uploads.
 
 - Extraction quality tracks the vision model. On clean documents it is near-perfect and never
   fabricates a value for a field that is absent; on genuinely hard inputs (unusual proper
-  nouns, heavy scan degradation) it can misread — those errors are the model's ceiling, not the
+  nouns, heavy scan degradation) it can misread: those errors are the model's ceiling, not the
   pipeline's.
 - `kind: date` / `kind: number` are advisory hints to the extractor, not post-hoc coercion.
 - Each page is one vision API call; cost and latency scale with page count. Ingest is

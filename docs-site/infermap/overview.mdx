@@ -25,7 +25,7 @@ Python database extras: `infermap[postgres]`, `infermap[mysql]`, `infermap[duckd
 <Note>
 **Native acceleration.** The scorers + domain detection share a pyo3-free Rust
 core (`infermap-core`). Install `infermap[native]` to auto-dispatch to the
-compiled kernels — byte-identical output (CI parity-gated), governed by
+compiled kernels: byte-identical output (CI parity-gated), governed by
 `INFERMAP_NATIVE` (`auto` / `1` / `0`). The TypeScript package runs the same
 kernels via an opt-in WASM backend (`enableInfermapWasm()`); the MCP
 `infermap://scorer-info` resource reports the active backend.
@@ -108,7 +108,7 @@ def prefix_scorer(source: FieldInfo, target: FieldInfo) -> ScorerResult | None:
 ## Scorer weights
 
 The default pipeline (`default_scorers()`) is the six scorers below. `LLMScorer` is
-**not** in the default set — it is opt-in (and stubbed until you wire a provider).
+**not** in the default set: it is opt-in (and stubbed until you wire a provider).
 
 | Scorer | Weight | Default? |
 |--------|--------|----------|

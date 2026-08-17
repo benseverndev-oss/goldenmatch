@@ -1,10 +1,10 @@
 ---
 title: "Semantic-layer key integrity"
-description: "Certify the entity keys a semantic model (dbt/MetricFlow, Cube, OSI) declares — quantify metric fan-out and entity undercount before you trust a SUM or COUNT(DISTINCT). Advisory, never mutating."
+description: "Certify the entity keys a semantic model (dbt/MetricFlow, Cube, OSI) declares. Quantify metric fan-out and entity undercount before you trust a SUM or COUNT(DISTINCT). Advisory, never mutating."
 keywords: ["semantic layer", "metricflow", "cube", "dbt", "entity key", "fan-out", "key integrity", "metric double-count", "count distinct"]
 ---
 
-A semantic layer — dbt/MetricFlow, Cube, or OSI — is a **join graph**, and every
+A semantic layer, dbt/MetricFlow, Cube, or OSI, is a **join graph**, and every
 measure is defined *relative to* an entity key. A per-customer `SUM(revenue)`,
 a `COUNT(DISTINCT customer_id)`: each is only correct if the declared key
 **uniquely identifies one real-world entity**. The semantic layer *assumes* that.
@@ -13,15 +13,15 @@ It never resolves it.
 `certify_key_integrity` is the advisory artifact GoldenMatch emits over a
 declared key. It answers two questions a semantic layer can't:
 
-1. **Structural** — is the key unique at grain, and how much does a duplicated key
+1. **Structural.** Is the key unique at grain, and how much does a duplicated key
    inflate a measure (**fan-out**)?
-2. **Resolution** (opt-in) — would entity resolution collapse *distinct* declared
+2. **Resolution** (opt-in): would entity resolution collapse *distinct* declared
    keys onto one real entity (**fragmentation / undercount**)?
 
 It **reports and quantifies trust; it never mutates a number.**
 
 <Note>
-  Import it explicitly — the `semantic` subpackage is kept out of `import
+  Import it explicitly: the `semantic` subpackage is kept out of `import
   goldenmatch` so the top-level import stays lightweight:
   `from goldenmatch.semantic import certify_key_integrity`.
 </Note>
@@ -54,9 +54,9 @@ orders = pa.table({
 cert = certify_key_integrity(orders, key="customer_id", measures=["revenue"])
 
 cert.is_unique_at_grain     # False
-cert.max_fan_out            # 2.0   — c1's two rows
-cert.measure_fan_out        # {"revenue": 1.4}  — SUM(revenue) is inflated 1.4x
-cert.estimate               # 0.75  — fraction of key groups that are clean
+cert.max_fan_out            # 2.0: c1's two rows
+cert.measure_fan_out        # {"revenue": 1.4}: SUM(revenue) is inflated 1.4x
+cert.estimate               # 0.75: fraction of key groups that are clean
 cert.is_trustworthy()       # False
 ```
 
@@ -74,17 +74,17 @@ cert = certify_key_integrity(
     orders, key="customer_id", measures=["revenue"], resolve=True,
 )
 
-cert.resolved_entities      # 2   — multi-member clusters ER found
-cert.fragmented_entities    # 1   — entities spanning >1 declared key
-cert.undercount_estimate    # 0.5 — fragmented / resolved
+cert.resolved_entities      # 2: multi-member clusters ER found
+cert.fragmented_entities    # 1: entities spanning >1 declared key
+cert.undercount_estimate    # 0.5: fragmented / resolved
 cert.undercount_ci_low      # 0.0945   ┐ 95% Wilson interval on the
 cert.undercount_ci_high     # 0.9055   ┘ fragmentation rate
-cert.safe_bound             # 0.5    — discounts the point-estimate undercount
-cert.safe_bound_conservative# 0.0945 — discounts the CI-UPPER undercount
+cert.safe_bound             # 0.5: discounts the point-estimate undercount
+cert.safe_bound_conservative# 0.0945: discounts the CI-UPPER undercount
 ```
 
 `undercount_estimate` is a point estimate; the **95% Wilson confidence interval**
-(`undercount_ci_low` / `undercount_ci_high`) bounds its **sampling uncertainty** —
+(`undercount_ci_low` / `undercount_ci_high`) bounds its **sampling uncertainty**:
 few resolved entities means a wide interval. `safe_bound_conservative` discounts
 the *worst plausible* undercount at the CI upper bound, so a fragmentation rate
 measured from a handful of entities is penalized more than one measured from many.
@@ -99,7 +99,7 @@ measured from a handful of entities is penalized more than one measured from man
 
 | Field | Meaning |
 |-------|---------|
-| `is_unique_at_grain` | `n_key_groups == n_rows` — the key is a true key |
+| `is_unique_at_grain` | `n_key_groups == n_rows`: the key is a true key |
 | `max_fan_out` | worst-case row multiplicity for one key group |
 | `measure_fan_out` | per-measure `SUM` inflation ratio |
 | `estimate` | fraction of key groups that are clean (unique at grain) |
@@ -108,7 +108,7 @@ measured from a handful of entities is penalized more than one measured from man
 | `undercount_ci_low` / `undercount_ci_high` | 95% Wilson interval on the undercount |
 | `safe_bound` | conservative score discounting the point-estimate undercount |
 | `safe_bound_conservative` | trust floor discounting the CI-upper undercount |
-| `is_trustworthy()` | advisory pass/fail — never enforced |
+| `is_trustworthy()` | advisory pass/fail: never enforced |
 
 The `{estimate, safe_bound}` shape mirrors `RecallCertificate`, so a downstream
 reporter (the goldenanalysis `key.integrity` analyzer) consumes it uniformly.
@@ -129,13 +129,13 @@ fcert.is_trustworthy()      # True
 ```
 
 The structural double-count is gone. The `c3`/`c4` fragmentation stays a
-resolution-tier finding for a steward to merge — the certificate keeps the two
+resolution-tier finding for a steward to merge: the certificate keeps the two
 tiers distinct so you know *which* kind of defect you're looking at.
 
 ## Certifying a whole semantic model
 
 Point `certify_semantic_model` at a dbt/MetricFlow, Cube, or OSI model (the
-dialect is auto-detected) plus the frames backing each target — it certifies
+dialect is auto-detected) plus the frames backing each target: it certifies
 every declared key and reports which ones a metric silently depends on that
 would miscount:
 
@@ -153,8 +153,8 @@ result.all_trustworthy      # bool
 
 ## Runnable demo
 
-A complete, self-contained walkthrough — planting both defects, certifying,
-and fixing — ships in the examples:
+A complete, self-contained walkthrough, planting both defects, certifying,
+and fixing, ships in the examples:
 
 ```bash
 python examples/semantic_key_integrity.py
@@ -162,7 +162,7 @@ python examples/semantic_key_integrity.py
 
 ## Writing the verdict back to the catalog
 
-The certificate isn't only a return value — its trust **verdict** can be written
+The certificate isn't only a return value: its trust **verdict** can be written
 back into the catalog the semantic layer reads, so "resolve once, the verdict
 travels with the join." The Cube, OSI, and MetricFlow crosswalk emitters accept a
 `certificate=` and embed a single-sourced `key_integrity` block:
@@ -191,8 +191,8 @@ meta:
 
 It rides in `meta.goldenmatch` (MetricFlow / Cube) or `custom_extensions.goldenmatch`
 (OSI). The same block is produced by `certificate_verdict(cert)` in Python and
-`certificateVerdict(cert)` in TypeScript — field-identical, locked by a
-cross-language fixture — so a downstream tool reads one trust contract regardless
+`certificateVerdict(cert)` in TypeScript, field-identical, locked by a
+cross-language fixture, so a downstream tool reads one trust contract regardless
 of which surface emitted the catalog.
 
 ## Certifying keys as a build gate (CLI / MCP / REST)
@@ -201,7 +201,7 @@ The verdict is exposed on three surfaces, all emitting the **same JSON** (a shar
 `certification_report_dict`) so a CI gate reads `n_untrustworthy` / `all_trustworthy`
 identically wherever it runs.
 
-**CLI** — point `certify-keys` at a semantic model + its data; `--fail-untrustworthy`
+**CLI.** Point `certify-keys` at a semantic model + its data; `--fail-untrustworthy`
 exits non-zero when any declared key is untrustworthy for metric use:
 
 ```bash
@@ -210,11 +210,11 @@ goldenmatch certify-keys models/orders.yml -d orders=orders.csv --fail-untrustwo
 goldenmatch certify-keys models/orders.yml -d orders=orders.csv --json
 ```
 
-**MCP** — the `certify_semantic_model` tool returns the per-key verdict block
+**MCP.** The `certify_semantic_model` tool returns the per-key verdict block
 (`{dialect, n_certified, n_untrustworthy, all_trustworthy, keys:[{target, key,
 key_integrity}]}`), so an agent can certify a model and act on the verdict.
 
-**REST** — `POST /semantic/certify` with `{"model": <path>, "frames": {name: path},
+**REST.** `POST /semantic/certify` with `{"model": <path>, "frames": {name: path},
 "resolve": bool}` returns the same report:
 
 ```json
@@ -231,12 +231,12 @@ key_integrity}]}`), so an agent can certify a model and act on the verdict.
 ```
 
 Each key's `key_integrity` is the same trust-verdict block the catalog emitters write
-back — so certifying, gating, and the catalog tag all speak one contract.
+back: so certifying, gating, and the catalog tag all speak one contract.
 
 ## Cross-surface
 
 The **structural** certifier is one Rust kernel (`key-integrity-core`) behind
-every surface — Python-native, TS/WASM, DuckDB (`goldenmatch_certify_structural`
+every surface: Python-native, TS/WASM, DuckDB (`goldenmatch_certify_structural`
 via the DuckDB UDF), and Postgres (`goldenmatch_certify_structural` via pgrx).
 The dbt `goldenmatch_key_integrity` test macro is conformance-locked to the same
 shared golden, so a semantic model certified in SQL returns the identical verdict

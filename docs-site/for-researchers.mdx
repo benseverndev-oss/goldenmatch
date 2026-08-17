@@ -22,7 +22,7 @@ Every published headline number maps back to a committed runner
 (`scripts/run_benchmarks.py`) with a pinned environment and a stated tolerance. The
 canonical guide is
 [`docs/reproducing-benchmarks.md`](https://github.com/benseverndev-oss/goldenmatch/blob/main/docs/reproducing-benchmarks.md)
-— it gives the dataset source, drop location, and expected output per number.
+for the dataset source, drop location, and expected output per number.
 
 ```bash
 pip install -e packages/python/goldenmatch
@@ -44,7 +44,7 @@ python scripts/run_benchmarks.py --datasets all --output results.json
 <Note>
   No-LLM numbers are deterministic given fixed seeds and a fixed dataset (allow
   sub-0.1 pp drift from `rapidfuzz` reduction order). `--with-llm` runs are **not**
-  re-runnable targets — treat them as single observations.
+  re-runnable targets: treat them as single observations.
 </Note>
 
 ## The Splink head-to-head (and its honest framing)
@@ -65,7 +65,7 @@ Read the caveats before quoting these:
 - **These are *pairwise* F1 under one shared evaluator** (`evaluate.evaluate`), so all
   engines are judged by identical code. The often-cited ~0.97 Splink number on
   `historical_50k` is a *cluster/entity* metric, not exhaustive within-cluster
-  pairwise F1 — under this harness Splink scores ~0.757 *pairwise* (recall-bound; no
+  pairwise F1: under this harness Splink scores ~0.757 *pairwise* (recall-bound; no
   single field exceeds 0.60 recall → ~0.93 pairwise ceiling for any engine). The
   honest claim is "matches/beats Splink on the same evaluator," not "0.97 pairwise."
 - **Reproducible as of the determinism fix (#829).** The earlier figures rested on a
@@ -80,7 +80,7 @@ Read the caveats before quoting these:
 
 ## Evaluation methodology
 
-The same primitives are available to you for your own measurements — pairwise
+The same primitives are available to you for your own measurements, pairwise
 precision / recall / F1 against a ground-truth pair set, cluster-level B³, and
 ground-truth-free run comparison (CCMS / Talburt-Wang Index). See the
 [Evaluation guide](/goldenmatch/evaluation) for the `evaluate`, `evaluate_clusters`,
@@ -89,14 +89,14 @@ ground-truth-free run comparison (CCMS / Talburt-Wang Index). See the
 ## Research arcs (documented negative results)
 
 Two exploratory ER designs are written up honestly, including where they *didn't*
-pan out — useful as prior art:
+pan out, and are useful as prior art:
 
 <CardGroup cols={2}>
   <Card title="Amortized Bayesian ER" icon="brain" href="/research/amortized-bayesian-er">
     A calibrated neural posterior over the partition with EIG-driven active labelling. Mechanisms validated, not accuracy-competitive.
   </Card>
   <Card title="Landscape-sculpting ER" icon="mountain" href="/research/landscape-sculpting-er">
-    ER reframed as sculpting an attractor landscape. Novel framing, but cosmetic — same partition as a calibrated discrete split/merge loop.
+    ER reframed as sculpting an attractor landscape. Novel framing, but cosmetic. Same partition as a calibrated discrete split/merge loop.
   </Card>
 </CardGroup>
 
@@ -104,9 +104,9 @@ pan out — useful as prior art:
 
 <CardGroup cols={2}>
   <Card title="Vendor & tool comparison" icon="table-columns" href="/reference/vendor-comparison">
-    GoldenMatch vs Splink, Dedupe, Senzing, and others — feature and accuracy axes.
+    GoldenMatch vs Splink, Dedupe, Senzing, and others, feature and accuracy axes.
   </Card>
   <Card title="Entity resolution concepts" icon="diagram-project" href="/concepts/entity-resolution">
-    Blocking, scoring, clustering, survivorship — the model the benchmarks exercise.
+    Blocking, scoring, clustering, survivorship, the model the benchmarks exercise.
   </Card>
 </CardGroup>

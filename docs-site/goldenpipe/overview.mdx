@@ -33,7 +33,7 @@ import goldenpipe as gp
 result = gp.run("customers.csv")
 
 print(result.status)     # PipeStatus.SUCCESS
-print(result.stages)     # dict[str, StageResult] — per-stage status + output
+print(result.stages)     # dict[str, StageResult]: per-stage status + output
 print(result.artifacts)  # dict, e.g. {"golden": ..., "manifest": ...}
 print(result.reasoning)  # why each decision was made
 print(result.skipped)    # stages that were skipped, and why
@@ -64,12 +64,12 @@ goldenpipe serve | mcp-serve | agent-serve   # REST / MCP / A2A servers
 ## Key features
 
 - **Orchestrates the full pipeline** (Check → Flow → Match) in one call.
-- **Wiring validation** that auto-prepends the `load` stage, checks each stage's declared `consumes` against the artifacts produced by earlier stages (in declared order), and raises a typed `WiringError` when an input isn't available — or errors on an unknown stage `use`.
+- **Wiring validation** that auto-prepends the `load` stage, checks each stage's declared `consumes` against the artifacts produced by earlier stages (in declared order), and raises a typed `WiringError` when an input isn't available. Or errors on an unknown stage `use`.
 - **Adaptive logic** that skips transformation when there are no quality issues.
 - **Privacy-preserving routing** that detects sensitive fields and routes to PPRL.
 - **Reasoning transparency** that reports why each stage ran or was skipped.
 - **Column-context enrichment** that builds targeted dedupe config from GoldenCheck profiles and column-name heuristics.
-- **Polyglot planner, one source of truth.** The planner (stage ordering, decision routing, auto-config, `skip_if`) is a pyo3-free `goldenpipe-core` Rust kernel; Python and edge-TS compute it identically, locked byte-for-byte by a CI parity gate. TypeScript opts into the WASM kernel with `enableWasm()`; pure-TS is the default. Only the planner is in Rust — stage execution and IO stay a per-language host.
+- **Polyglot planner, one source of truth.** The planner (stage ordering, decision routing, auto-config, `skip_if`) is a pyo3-free `goldenpipe-core` Rust kernel; Python and edge-TS compute it identically, locked byte-for-byte by a CI parity gate. TypeScript opts into the WASM kernel with `enableWasm()`; pure-TS is the default. Only the planner is in Rust, stage execution and IO stay a per-language host.
 - **Four server surfaces**: MCP (`goldenpipe mcp-serve`, 4 tools), REST (`goldenpipe serve`), and A2A (`goldenpipe agent-serve`), plus the local CLI.
 
 GoldenPipe scores 88.07 on the DQBench Pipeline category.
@@ -115,10 +115,10 @@ result.skipped     # list[str]
 
 ## Servers
 
-GoldenPipe ships three server surfaces. MCP and A2A expose all four operations —
+GoldenPipe ships three server surfaces. MCP and A2A expose all four operations:
 `list_stages`, `validate_pipeline`, `run_pipeline`, `explain_pipeline`; REST
 exposes list / validate / run (no explain):
 
-- **MCP** — remote `https://goldenpipe-mcp-production.up.railway.app/mcp/` or local `goldenpipe mcp-serve --transport http --port 8250` (4 tools).
-- **REST** — `goldenpipe serve` (`GET /stages`, `POST /validate`, `POST /run`).
-- **A2A** — `goldenpipe agent-serve` (agent card at `/.well-known/agent.json`, 4 skills).
+- **MCP.** Remote `https://goldenpipe-mcp-production.up.railway.app/mcp/` or local `goldenpipe mcp-serve --transport http --port 8250` (4 tools).
+- **REST.** `goldenpipe serve` (`GET /stages`, `POST /validate`, `POST /run`).
+- **A2A.** `goldenpipe agent-serve` (agent card at `/.well-known/agent.json`, 4 skills).
