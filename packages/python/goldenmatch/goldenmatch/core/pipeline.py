@@ -1138,6 +1138,35 @@ def _score_probabilistic_matchkey(
     for a, b, _s in pairs:
         matched_pairs.add((min(a, b), max(a, b)))
 
+    # Report to the auto-config emitter. THIS is the path that scores a
+    # probabilistic matchkey, and it emitted nothing -- so the emitter kept the
+    # all-zero `ScoringProfile()` default, `health()` read it as "nothing
+    # happened" -> RED, and at `n_rows >= REFUSE_AT_N` the controller REFUSED
+    # the run. person@100k was refused that way while its clustering produced
+    # 91,527 clusters from 100,000 rows at transitivity 1.0.
+    #
+    # Six earlier emit sites did not cover it: `core/scorer.py` (x2),
+    # `score_buckets`, `score_duckdb`, `ray_backend` and the four
+    # `fs_out_of_core` orchestrators. The route field (#2649) found this one by
+    # ELIMINATION -- person reported `route=""` while biblio reported
+    # `scorer.parallel` -- rather than by a fourth guess.
+    #
+    # `pairs` are this matchkey's above-cut pairs and `link_threshold` is the
+    # cut, both already computed above, so unlike the bucket emit (#2648) this
+    # needs no fallback for either. `candidates_compared` stays absent rather
+    # than fabricated: the candidate total is not carried here, and #2644 added
+    # `candidates_counted` precisely so absence is sayable.
+    #
+    # Emitted per matchkey, so with several probabilistic matchkeys the last
+    # wins -- the same last-writer contract every other emit site has.
+    from goldenmatch.core.scorer import _emit_scoring_profile
+
+    _emit_scoring_profile(
+        pairs, link_threshold,
+        candidates_compared=0, candidates_counted=False,
+        route="pipeline.probabilistic",
+    )
+
 
 def _get_block_scorer(config: GoldenMatchConfig):
     """Return the block scoring function based on configured backend."""
