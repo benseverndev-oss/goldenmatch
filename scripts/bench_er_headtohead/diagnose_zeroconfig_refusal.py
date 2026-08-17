@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -142,7 +143,25 @@ def _cluster_report(cp, n_rows: int) -> dict:
     }
 
 
+def _force_candidate_counting() -> None:
+    """Buy back `candidates_compared` for this diagnostic (#2639).
+
+    Scoring skips its candidate-count loop above 10,000 blocks, which is right
+    for production and fatal for this report: person@100k has 84,293 blocks, so
+    the one field that separates "no candidate pairs" from "candidates, none
+    passed" is unavailable at exactly the scale being diagnosed. Raising the
+    gate costs a serial pass over the blocks, which a diagnostic can afford and
+    a dedupe run cannot.
+
+    Set explicitly rather than left to the caller: a report whose central field
+    depends on an env var someone remembered to export is a report that will
+    silently go back to UNDETERMINED.
+    """
+    os.environ.setdefault("GOLDENMATCH_CANDIDATE_COUNT_MAX_BLOCKS", "1000000000")
+
+
 def collect(shape: str, rows: int, seed: int, workdir: Path) -> dict:
+    _force_candidate_counting()
     import polars as pl
     from goldenmatch.core.autoconfig_controller import (
         REFUSE_AT_N,
@@ -214,24 +233,50 @@ def collect(shape: str, rows: int, seed: int, workdir: Path) -> dict:
     # `n_pairs_above_threshold`). The name reads like the denominator and is
     # actually the numerator, which is what made the ambiguity above easy to
     # miss. Reported here under both names rather than silently renamed.
+    #
+    # AND `candidates_compared == 0` did not mean "no candidates" either (#2639).
+    # `scorer.py` skips the count above 10,000 blocks, so at any real scale the
+    # field was 0 regardless: this report's own previous run had biblio@100k at
+    # 22,151 blocks saying `scoring-never-ran` while it had scored 1,493,182
+    # pairs with 99.9998% of the mass above threshold. `candidates_counted` is
+    # now the field that separates "not measured" from "measured zero", and a
+    # THIRD cause is reported rather than folding the unknown into one of the
+    # two real ones.
     sc = profile.scoring
     compared = getattr(sc, "candidates_compared", 0)
+    counted = getattr(sc, "candidates_counted", False)
     above = getattr(sc, "n_pairs_scored", 0)
+    mass = getattr(sc, "mass_above_threshold", 0.0)
     out["scoring"] = {
         "candidates_compared": compared,
+        "candidates_counted": counted,
         "n_pairs_scored": above,
         "n_pairs_above_threshold": above,  # the same field, under its true name
-        "above_threshold_rate": round(above / compared, 8) if compared else None,
-        "scoring_ran": compared > 0,
+        "above_threshold_rate": (
+            round(above / compared, 8) if (counted and compared) else None
+        ),
+        # Evidence that scoring ran does NOT require the counter: pairs above
+        # the threshold, or mass above it, both prove work happened. The old
+        # `compared > 0` reported False for a run that scored 1.49M pairs.
+        "scoring_ran": bool(counted and compared > 0) or above > 0 or mass > 0.0,
         "dip_statistic": round(getattr(sc, "dip_statistic", 0.0), 6),
         "mass_above_threshold": round(getattr(sc, "mass_above_threshold", 0.0), 6),
         "mass_in_borderline": round(getattr(sc, "mass_in_borderline", 0.0), 6),
         "random_pair_above_threshold_rate":
             getattr(sc, "random_pair_above_threshold_rate", None),
         "red_cause": (
-            None if (compared > 0 and getattr(sc, "mass_above_threshold", 0.0) > 0.0)
-            else "scoring-never-ran (candidates_compared == 0)" if compared == 0
-            else "nothing-cleared-threshold (candidates compared, mass == 0)"
+            None if mass > 0.0
+            # Work provably happened -- pairs cleared the threshold -- so
+            # whatever else is true, scoring ran.
+            else "nothing-cleared-threshold (pairs scored, mass == 0)" if above > 0
+            else "nothing-cleared-threshold (candidates measured, mass == 0)"
+            if (counted and compared > 0)
+            else "scoring-never-ran (measured zero candidates)"
+            if (counted and compared == 0)
+            # The honest third answer, and the common one at scale: the count
+            # was skipped, nothing cleared the threshold, and those two facts
+            # cannot distinguish "no candidates" from "candidates, none passed".
+            else "UNDETERMINED (count skipped above 10k blocks; see #2639)"
         ),
     }
     return out
