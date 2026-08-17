@@ -116,6 +116,23 @@ def _fixture_module():
     return mod
 
 
+def _shuffle_module():
+    """The SHARED shuffle-metrics reader, imported by file path.
+
+    Same reasoning as the ranking metric: one implementation, so a difference
+    between the two engines' numbers is a difference between the ENGINES.
+    """
+    import importlib.util
+
+    path = Path(__file__).resolve().parent / "_spark_shuffle_metrics.py"
+    spec = importlib.util.spec_from_file_location("_spark_shuffle_metrics", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"cannot load {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def _metrics_module():
     """The SHARED ranking metric, imported by file path.
 
@@ -244,6 +261,9 @@ def main() -> int:
                          "GM-vs-Splink accuracy verdict -- this fixture's "
                          "config was chosen to stress prod(levels+1) for a "
                          "scale test. See the bakeoff for accuracy.")
+    ap.add_argument("--spark-ui", default="http://localhost:4040",
+                    help="Spark UI of THIS classic driver (it runs on the host "
+                         "and binds 4040). Read for stage-level shuffle bytes.")
     ap.add_argument("--out", default="splink-train-scale.json")
     args = ap.parse_args()
 
@@ -428,6 +448,12 @@ def main() -> int:
             [(float(r["w"]), bool(r["is_true"])) for r in rows_]
         )
         print(f"[splink] quality {out['quality']}", flush=True)
+
+    # Same instrument, same reasoning as the GM arm -- see there. Splink
+    # re-scans pairs once per EM iteration, so its exchange should scale with
+    # PAIRS and repeat ~26 times, against GM's bounded pattern output.
+    out["shuffle"] = _shuffle_module().fetch(args.spark_ui)
+    print(f"[splink] shuffle {out['shuffle']}", flush=True)
 
     out["stages"]["total_seconds"] = round(time.perf_counter() - t_all, 2)
     # `train_total` is the number to put beside GM's u + counts + train. The

@@ -618,6 +618,19 @@ jobs:
                 echo '|---|---:|---:|'
                 jq -r '"| goldenmatch | \(.actual_rows) | \(.total_seconds)s |"' spark-fs-train-scale.json
                 jq -r '"| splink | \(.actual_rows) | \(.total_seconds)s |"' splink-train-scale.json
+                echo ''
+                echo '### Shuffle bytes (topology-independent)'
+                echo ''
+                echo 'Network cost on ANY cluster is a function of what crosses the exchange, so this transfers to a real multi-node topology while a wall measured on one host does not.'
+                echo ''
+                echo '| engine | shuffle write | shuffle read | stages |'
+                echo '|---|---:|---:|---:|'
+                jq -r '"| goldenmatch | \(.shuffle.shuffle_write_bytes // "n/a") | \(.shuffle.shuffle_read_bytes // "n/a") | \(.shuffle.n_stages // "n/a") |"' spark-fs-train-scale.json
+                jq -r '"| splink | \(.shuffle.shuffle_write_bytes // "n/a") | \(.shuffle.shuffle_read_bytes // "n/a") | \(.shuffle.n_stages // "n/a") |"' splink-train-scale.json
+                for f in spark-fs-train-scale.json splink-train-scale.json; do
+                  ERR=$(jq -r '.shuffle.error // .shuffle.note // empty' "$f")
+                  if [ -n "$ERR" ]; then echo ''; echo "> \`$f\`: $ERR"; fi
+                done
                 CONFOUND=$(jq -r '.session_confound // empty' splink-train-scale.json)
                 if [ -n "$CONFOUND" ]; then
                   echo ''
