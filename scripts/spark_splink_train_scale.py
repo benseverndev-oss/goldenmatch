@@ -86,15 +86,30 @@ def _fixture_module():
 
 
 def build_session(master: str, driver_host: str | None, wait_s: int):
+    """A session tuned NO differently from the one GM gets.
+
+    This used to set `spark.sql.shuffle.partitions=8`, with the rationale that
+    "the default 200 on a small cluster is pure scheduling overhead". That was
+    written for the original 2-executor-core topology rig, where it was true.
+    When the lane grew a `worker_cores` input and started running on 16 cores,
+    the constant did not grow with it and quietly became a HANDICAP that GM
+    never paid: the GM harness sets no partition count at all, so it ran on
+    Spark's default 200 while Splink was pinned to 8. Eight partitions on
+    sixteen cores leaves most of the cluster idle through every shuffle, and
+    makes each partition large enough to push an executor over -- which is how
+    the 5M run died, with `MetadataFetchFailedException: Missing an output
+    location for shuffle 13 partition 3` after an executor was lost.
+
+    Nothing is tuned here now. Both engines get Spark's defaults, which is the
+    only setting that needs no justification to a reader who suspects the
+    benchmark was rigged.
+    """
     from pyspark.sql import SparkSession
     from splink.backends.spark import similarity_jar_location
 
     b = (
         SparkSession.builder.master(master)
         .appName("splink-train-scale")
-        # Splink materialises many intermediate tables; the default 200 shuffle
-        # partitions on a small cluster is pure scheduling overhead.
-        .config("spark.sql.shuffle.partitions", "8")
         .config("spark.driver.bindAddress", "0.0.0.0")
         # Splink ships its own similarity UDFs (jaro_winkler, damerau
         # levenshtein) as a JVM jar, and WITHOUT IT THE COMPARISON IS INVALID
