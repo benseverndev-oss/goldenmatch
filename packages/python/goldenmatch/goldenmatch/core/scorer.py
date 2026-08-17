@@ -81,6 +81,27 @@ def _candidate_count_gate() -> int:
     return v if v >= 0 else 10_000
 
 
+def profile_threshold(mk: Any, pairs: list[tuple[int, int, float]]) -> float:
+    """The cut this run actually applied, safe for ANY matchkey type (#2647).
+
+    `mk.fuzzy_threshold` RAISES for probabilistic matchkeys -- *"fuzzy_threshold
+    accessed but threshold is None. Only weighted matchkeys are guaranteed to
+    have a threshold"* -- so the emitter's threshold contract silently assumed
+    weighted. That held only because probabilistic routes to the bucket backend,
+    which emitted nothing at all; making that backend report exposed it.
+
+    The fallback is the LOWEST RETURNED SCORE, which is the operative admission
+    boundary rather than a guess: `find_fuzzy_matches` returns only pairs at or
+    above the cut, so the minimum of what came back is where the cut effectively
+    sat for this run. `mass_above_threshold` is then 1.0, which is true -- every
+    returned pair did clear it.
+    """
+    try:
+        return mk.fuzzy_threshold
+    except ValueError:
+        return min((s for _a, _b, s in pairs), default=0.0)
+
+
 def _emit_scoring_profile(
     pairs: list[tuple[int, int, float]],
     threshold: float,
