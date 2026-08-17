@@ -32,11 +32,11 @@ Nothing else in the public API changed. `dedupe()`, `match()`, `pprl_link()`, `e
 | Distributed | Ray backend (basic) | **Phase-5 streaming pipeline**: 100M rows end-to-end, ~0.3 GB driver RSS; validated on a real 5-node cluster |
 | Probabilistic matching | Scorer-level | **Splink-class Fellegi-Sunter** that beats hand-rolled Splink on every shared-evaluator dataset (zero training) |
 | Acceleration | Pure Python / Polars | Optional `goldenmatch[native]` Rust/Arrow kernels; bit-parity to the Python reference |
-| SQL | — | **In-database UDFs** for DuckDB / Postgres / DataFusion |
+| SQL |: | **In-database UDFs** for DuckDB / Postgres / DataFusion |
 | Other engines | Ray only | Opt-in **Sail (Spark Connect)** tier; opt-in **WASM** acceleration for the TypeScript port |
 
 ## See also
 
-- [What changed from 1.0 to 2.0](/goldenmatch/v1-to-v2) — the full story behind this table.
-- [Migrating to v2](/goldenmatch/migrating-to-v2) — the upgrade steps.
-- [Tuning & opt-ins](/goldenmatch/tuning) — every `GOLDENMATCH_*` knob in 2.0.
+- [What changed from 1.0 to 2.0](/goldenmatch/v1-to-v2): the full story behind this table.
+- [Migrating to v2](/goldenmatch/migrating-to-v2): the upgrade steps.
+- [Tuning & opt-ins](/goldenmatch/tuning): every `GOLDENMATCH_*` knob in 2.0.

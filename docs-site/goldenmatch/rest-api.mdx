@@ -71,7 +71,7 @@ curl http://localhost:8080/health
 ```
 
 Returns `503` with `"status": "initializing"` until the initial matching run
-has populated results — readiness, not just liveness.
+has populated results: readiness, not just liveness.
 
 ## Stats
 
@@ -248,7 +248,7 @@ reviews = client.reviews()
 
 ## AutoConfigController telemetry (v1.7-v1.12)
 
-Two endpoints expose what the controller decides and why. Same JSON shape as the workbench `GET /api/v1/controller/telemetry`, the CLI `goldenmatch autoconfig` output, and the SQL `goldenmatch_autoconfig_telemetry()` function — write a parser once and reuse across surfaces.
+Two endpoints expose what the controller decides and why. Same JSON shape as the workbench `GET /api/v1/controller/telemetry`, the CLI `goldenmatch autoconfig` output, and the SQL `goldenmatch_autoconfig_telemetry()` function. Write a parser once and reuse across surfaces.
 
 ### POST /autoconfig
 

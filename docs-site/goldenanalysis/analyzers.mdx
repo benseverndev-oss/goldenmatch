@@ -16,7 +16,7 @@ The flagship surface is the **analyzer catalog**. Each analyzer takes a typed in
 | `match.rates` | A GoldenMatch result (`scored_pairs`, `match_stats`, optional `recall_certificate` + `match_threshold`) | Pair count, match rate, match threshold, recall estimate + safe bound (from a recall certificate), mean pair score, and a 10-bin `score_histogram` table. |
 | `cluster.distribution` | A GoldenMatch result (`clusters`, optional `match_stats`) | Cluster count, record count, singleton ratio, size p50 / p95 / max, reduction ratio, and a `cluster_size_histogram` table (sizes 1 / 2 / 3 / 4+). |
 | `quality.rollup` | GoldenCheck + GoldenFlow artifacts (`findings`, optional `profile`, `manifest`) | Findings total, columns-with-findings, a 0-1 health score (when a profile is present), GoldenFlow rows-changed and rules-fired, and a `findings_by_class` table. |
-| `key.integrity` | A GoldenMatch `KeyIntegrityCertificate` (`key_certificate`) | Key uniqueness-at-grain, duplicate-key groups, max fan-out, and — when the certificate's resolution tier ran — the fragmented-entity count and undercount estimate, plus a `measure_fan_out` table. The read-side of the semantic-layer key-integrity wedge (produced by `goldenmatch.semantic.certify_key_integrity`). Python-only in v1. |
+| `key.integrity` | A GoldenMatch `KeyIntegrityCertificate` (`key_certificate`) | Key uniqueness-at-grain, duplicate-key groups, max fan-out, and: when the certificate's resolution tier ran, the fragmented-entity count and undercount estimate, plus a `measure_fan_out` table. The read-side of the semantic-layer key-integrity wedge (produced by `goldenmatch.semantic.certify_key_integrity`). Python-only in v1. |
 
 Every analyzer **degrades gracefully**: it emits the metrics its present artifacts support and simply omits the rest. `match.rates` with no certificate skips the recall metrics; `quality.rollup` with only a manifest skips the `quality.*` keys and keeps the `flow.*` keys. Requested names that are not discoverable are recorded in `report.source["unavailable"]` rather than raising, so the report says what it could and could not compute.
 
@@ -113,8 +113,8 @@ import goldenanalysis as ga
 
 report = ga.analyze(df, dataset="customers")
 
-report.metrics          # list[Metric] — key, value, unit, direction
-report.tables           # list[AnalysisTable] — e.g. the per_column table
+report.metrics          # list[Metric]: key, value, unit, direction
+report.tables           # list[AnalysisTable]: e.g. the per_column table
 report.analyzers_run    # which analyzers actually ran
 report.source           # {"dataset": ..., "producer": ..., "unavailable": ...}
 
@@ -131,6 +131,6 @@ report.to_json("report.json")
 
 ## More
 
-- [Overview](/goldenanalysis/overview) — where GoldenAnalysis sits in the suite and how it differs from GoldenCheck.
-- [Config matrix](/goldenanalysis/config-matrix) — the full option surface across the analyze entry points.
-- [Cross-run analysis](/goldenanalysis/cross-run) — trend metrics over a run history and detect regressions vs a baseline.
+- [Overview](/goldenanalysis/overview): where GoldenAnalysis sits in the suite and how it differs from GoldenCheck.
+- [Config matrix](/goldenanalysis/config-matrix): the full option surface across the analyze entry points.
+- [Cross-run analysis](/goldenanalysis/cross-run): trend metrics over a run history and detect regressions vs a baseline.

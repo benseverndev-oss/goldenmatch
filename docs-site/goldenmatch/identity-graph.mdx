@@ -7,7 +7,7 @@ keywords: ["identity graph", "entity resolution", "stable ids", "entity_id", "de
 GoldenMatch v1.15 turns the run-local cluster output of `dedupe_df()` into a **durable, queryable identity graph**. Stable `entity_id`s survive re-runs, every match has provenance, and the same answer comes back from Python, SQL, REST, MCP, A2A, and the web UI.
 
 <Note>
-  Shipped in v1.15.0 (2026-05-12). Off by default — the zero-config posture is preserved. Enable via `config.identity.enabled = True` or an `identity:` block in YAML.
+  Shipped in v1.15.0 (2026-05-12). Off by default: the zero-config posture is preserved. Enable via `config.identity.enabled = True` or an `identity:` block in YAML.
 </Note>
 
 ## What problem this solves
@@ -71,7 +71,7 @@ Five tables. SQLite default at `.goldenmatch/identity.db`; Postgres optional.
 | Table | What it stores |
 |---|---|
 | `identity_nodes` | One row per identity: `entity_id` (UUIDv7), status, rolled-up golden record, confidence, dataset. |
-| `source_records` | One row per `{source}:{source_pk}` — the raw observation, current owning identity, payload, first/last seen. |
+| `source_records` | One row per `{source}:{source_pk}`: the raw observation, current owning identity, payload, first/last seen. |
 | `evidence_edges` | One row per scored pair that supports an identity. Score, matchkey, per-field breakdown, NE penalties, controller telemetry, run name. |
 | `identity_events` | Append-only log: `created` / `absorbed_record` / `merged_with` / `split_from` / `retired` / `manual_*`. |
 | `identity_aliases` | Optional cross-source convenience lookups (e.g. `salesforce:003abc` -> entity). |
@@ -84,17 +84,17 @@ After clustering, the pipeline takes each cluster and:
 
 1. **Look up existing identities** that already own any record in the cluster.
 2. **Decide what happened:**
-   - No overlap — mint a new identity (UUIDv7), emit `created`.
-   - One existing identity covers all overlapping records — absorb the new records, emit `absorbed_record` per addition.
-   - Multiple existing identities overlap — merge them. Winner = most members (tie-break: oldest `created_at`). Emit `merged_with` on winner, retire losers with `status='merged_into', merged_into=<winner>`.
+   - No overlap, mint a new identity (UUIDv7), emit `created`.
+   - One existing identity covers all overlapping records, absorb the new records, emit `absorbed_record` per addition.
+   - Multiple existing identities overlap, merge them. Winner = most members (tie-break: oldest `created_at`). Emit `merged_with` on winner, retire losers with `status='merged_into', merged_into=<winner>`.
 3. **Upsert** every cluster record under the chosen identity.
-4. **Record evidence** — one row in `evidence_edges` for every scored within-cluster pair, including matchkey name, per-field scores, negative-evidence penalties, and a controller-telemetry snapshot.
+4. **Record evidence**, one row in `evidence_edges` for every scored within-cluster pair, including matchkey name, per-field scores, negative-evidence penalties, and a controller-telemetry snapshot.
 
-The result: `entity_id` is **stable across runs**. The same Alice Smith on a Tuesday run and a Wednesday run with one extra record both resolve to the same UUID — evidence in `evidence_edges` shows which run added which edge.
+The result: `entity_id` is **stable across runs**. The same Alice Smith on a Tuesday run and a Wednesday run with one extra record both resolve to the same UUID, evidence in `evidence_edges` shows which run added which edge.
 
 Resolution is **idempotent**: replaying the same `run_name` is a no-op. Edges deduplicate on `(entity_id, record_a_id, record_b_id, run_name)`. Events deduplicate on `(run_name, kind, entity_id)`.
 
-## Surfaces — one shape, many faces
+## Surfaces: one shape, many faces
 
 Every surface returns the same JSON (the `IdentityView.to_dict()` shape). The cross-surface contract test at `tests/identity/test_cross_surface_contract.py` enforces this byte-for-byte across all six.
 
@@ -144,16 +144,16 @@ The "Identities" tab in `goldenmatch serve-ui` lists identities with dataset/sta
 
 Fifteen tools on the standard MCP server (`goldenmatch mcp-serve`):
 
-- `identity_resolve` — look up by `record_id`
-- `identity_show` — full payload by `entity_id`
-- `identity_list` — list with filters
-- `identity_history` — event log
-- `identity_conflicts` — list `conflicts_with` edges
-- `identity_merge` / `identity_split` — steward operations
-- `identity_claim` — assign a record to a durable identity
-- `identity_resolve_conflict` — resolve a flagged `conflicts_with` edge
-- `identity_profile` / `identity_stats` / `identity_worklist` — inspection + steward triage
-- `identity_audit` / `identity_audit_seal` / `identity_audit_verify` — tamper-evident audit log
+- `identity_resolve`: look up by `record_id`
+- `identity_show`: full payload by `entity_id`
+- `identity_list`: list with filters
+- `identity_history`: event log
+- `identity_conflicts`: list `conflicts_with` edges
+- `identity_merge` / `identity_split`: steward operations
+- `identity_claim`: assign a record to a durable identity
+- `identity_resolve_conflict`: resolve a flagged `conflicts_with` edge
+- `identity_profile` / `identity_stats` / `identity_worklist`: inspection + steward triage
+- `identity_audit` / `identity_audit_seal` / `identity_audit_verify`: tamper-evident audit log
 
 ### A2A
 
@@ -171,9 +171,9 @@ SELECT goldenmatch_identity_conflicts('customers', '/path/to/identity.db');
 SELECT goldenmatch_identity_list('customers', 'active', '/path/to/identity.db');
 ```
 
-All five return JSON in the same shape the Python `IdentityView.to_dict()` returns. SQL is read-only — writes go through the Python CLI, REST endpoints, or MCP tools.
+All five return JSON in the same shape the Python `IdentityView.to_dict()` returns. SQL is read-only, writes go through the Python CLI, REST endpoints, or MCP tools.
 
-## "Why did these link?" — reading the evidence
+## "Why did these link?": reading the evidence
 
 Every link decision is auditable. Pull an entity's edges:
 
@@ -227,12 +227,12 @@ Or let the Python store create it on first connect:
 gm.IdentityStore(backend="postgres", connection="postgres://user:pass@host/db")
 ```
 
-Both paths produce identical schemas. The migration script also creates three analytical views (`v_identities`, `v_identity_pairs`, `v_identity_timeline`) that the bare `IdentityStore` does not — prefer the migration file for shared/team setups.
+Both paths produce identical schemas. The migration script also creates three analytical views (`v_identities`, `v_identity_pairs`, `v_identity_timeline`) that the bare `IdentityStore` does not. Prefer the migration file for shared/team setups.
 
 ## Performance notes
 
-- Resolve runs after clustering, before output. It is dominated by write throughput, and its cost tracks **the identity graph, not the input frame** — roughly the number of identities created plus records upserted. A 1M-row dedupe that yields 50k multi-record identities does far less resolve work than a 200k-row dedupe that yields 200k.
-- **`emit_singletons` is the single biggest cost lever, and it defaults to `true`.** With it on, every single-record cluster becomes its own identity, so resolve work scales with **row count** rather than with the number of real multi-record entities — on a 14M-row dedupe that is 14M identities, not ~500k. Turn it off unless you specifically need a durable id for records that matched nothing:
+- Resolve runs after clustering, before output. It is dominated by write throughput, and its cost tracks **the identity graph, not the input frame**. Roughly the number of identities created plus records upserted. A 1M-row dedupe that yields 50k multi-record identities does far less resolve work than a 200k-row dedupe that yields 200k.
+- **`emit_singletons` is the single biggest cost lever, and it defaults to `true`.** With it on, every single-record cluster becomes its own identity, so resolve work scales with **row count** rather than with the number of real multi-record entities: on a 14M-row dedupe that is 14M identities, not ~500k. Turn it off unless you specifically need a durable id for records that matched nothing:
 
   ```yaml
   identity:
@@ -241,18 +241,18 @@ Both paths produce identical schemas. The migration script also creates three an
 
   With `emit_singletons: false` the resolver also skips preparing rows no multi-record cluster references, so both wall time and resident memory drop with it.
 
-  **Concrete ceiling.** On the SQLite backend, `emit_singletons: true` becomes impractical around **~100k rows** — every row is prepped and written one statement at a time, so resolve tracks the whole input frame. Measured on a single box: 250k rows with singletons on is already slow, while `emit_singletons: false` resolves a 1M-row dedupe in ~6 minutes because it only touches the multi-record identity graph. Above ~100k rows with singletons on, the resolver logs a one-time advisory pointing at `emit_singletons: false` and Postgres. (The advisory is SQLite-only and never blocks the run; Postgres's bulk `COPY` write path makes the singleton row count a non-issue there.)
+  **Concrete ceiling.** On the SQLite backend, `emit_singletons: true` becomes impractical around **~100k rows**. Every row is prepped and written one statement at a time, so resolve tracks the whole input frame. Measured on a single box: 250k rows with singletons on is already slow, while `emit_singletons: false` resolves a 1M-row dedupe in ~6 minutes because it only touches the multi-record identity graph. Above ~100k rows with singletons on, the resolver logs a one-time advisory pointing at `emit_singletons: false` and Postgres. (The advisory is SQLite-only and never blocks the run; Postgres's bulk `COPY` write path makes the singleton row count a non-issue there.)
 - **SQLite ceiling.** SQLite is the right default through the low millions of rows on a single box. Past that, prefer Postgres: brand-new identities take a bulk `COPY` fast path there, and it is the only backend the distributed (Ray) resolver supports. The tradeoff is network latency per run, not a throughput cliff.
-- **The per-partition (distributed) resolver is not reachable from a single-node in-memory run.** `resolve_identities_distributed` needs *both* Ray *and* `backend: postgres` — it materializes cluster aggregates driver-side and resolves them against a pooled Postgres connection (true per-partition `map_batches` is still on the roadmap; see the Phase 6 notes). A plain single-node run on SQLite therefore has exactly two scale levers: `emit_singletons: false`, and — once you are past the low millions of rows — moving the store to Postgres. Adding Ray without a Postgres store does not change the single-node path.
+- **The per-partition (distributed) resolver is not reachable from a single-node in-memory run.** `resolve_identities_distributed` needs *both* Ray *and* `backend: postgres`, it materializes cluster aggregates driver-side and resolves them against a pooled Postgres connection (true per-partition `map_batches` is still on the roadmap; see the Phase 6 notes). A plain single-node run on SQLite therefore has exactly two scale levers: `emit_singletons: false`, and, once you are past the low millions of rows, moving the store to Postgres. Adding Ray without a Postgres store does not change the single-node path.
 
-  The SQLite gap is in *our* write path, not in SQLite: the stdlib `sqlite3` driver has no `COPY` equivalent, so resolve writes go row-at-a-time (batched into transactions) rather than as columnar bulk ingest. Arrow-native bulk ingest into SQLite *is* available — the [Apache Arrow ADBC SQLite driver](https://arrow.apache.org/adbc/current/driver/sqlite.html) supports `adbc_ingest` from Python and can be driven from Rust via `adbc_core` + `adbc_driver_manager` — and adopting it would let the SQLite backend share the same staging-table-then-upsert shape the Postgres bulk path uses. That is a planned follow-up, not something GoldenMatch does today.
-- Resolution is **gated and additive** — if the store fails to open, the pipeline logs a warning and continues. Identity never blocks a dedupe.
+  The SQLite gap is in *our* write path, not in SQLite: the stdlib `sqlite3` driver has no `COPY` equivalent, so resolve writes go row-at-a-time (batched into transactions) rather than as columnar bulk ingest. Arrow-native bulk ingest into SQLite *is* available, the [Apache Arrow ADBC SQLite driver](https://arrow.apache.org/adbc/current/driver/sqlite.html) supports `adbc_ingest` from Python and can be driven from Rust via `adbc_core` + `adbc_driver_manager`, and adopting it would let the SQLite backend share the same staging-table-then-upsert shape the Postgres bulk path uses. That is a planned follow-up, not something GoldenMatch does today.
+- Resolution is **gated and additive**: if the store fails to open, the pipeline logs a warning and continues. Identity never blocks a dedupe.
 - For multi-process writers, the SQLite store uses WAL + a 5s `busy_timeout`. Postgres relies on row-level locks. Single-tenant web UI / CLI invocations are the assumed model; for high-write multi-tenant graphs use Postgres.
 
 ## When NOT to use it
 
 - Single-shot ad-hoc dedupe where you only want golden records out and don't care about the next run.
-- Pipelines whose source has no stable PK and whose rows are duplicated character-for-character — the hash fallback will fold them together.
+- Pipelines whose source has no stable PK and whose rows are duplicated character-for-character, the hash fallback will fold them together.
 
 ## Migration / backfill
 
@@ -260,11 +260,11 @@ Existing projects without an identity graph don't get retroactive `entity_id` st
 
 ## Migrating legacy record ids
 
-When `source_pk_column` is unset, GoldenMatch originally keyed records with a JSON-hash fingerprint: `{source}:hash:{12 hex}`. Starting in v1.26, the canonical scheme is `{source}:h1:{12 hex}` — a stable, cross-surface fingerprint computed by the `goldenmatch-fingerprint-core` kernel (the same hash used in Python, Rust, SQL, and WASM surfaces).
+When `source_pk_column` is unset, GoldenMatch originally keyed records with a JSON-hash fingerprint: `{source}:hash:{12 hex}`. Starting in v1.26, the canonical scheme is `{source}:h1:{12 hex}`. A stable, cross-surface fingerprint computed by the `goldenmatch-fingerprint-core` kernel (the same hash used in Python, Rust, SQL, and WASM surfaces).
 
 **1.x back-compat (removed in 2.0):** through the 1.x series the store resolved legacy `:hash:` ids by trying the canonical `:h1:` lookup first and falling back to `:hash:` automatically, emitting a once-per-process deprecation warning when the fallback fired.
 
-**Removed in GoldenMatch 2.0:** the dual-candidate fallback and the `GOLDENMATCH_IDENTITY_ID_SCHEME=hash` kill-switch are gone. Fingerprintable rows now resolve to a single `:h1:` candidate — a store still holding `:hash:`-keyed records from a fingerprintable source will no longer match them, and those clusters will split on the next run. Un-fingerprintable rows (where no stable fingerprint can be derived) keep their `:hash:` id as their only key. **If you persist an identity DB, run the migration below BEFORE upgrading to 2.0.**
+**Removed in GoldenMatch 2.0:** the dual-candidate fallback and the `GOLDENMATCH_IDENTITY_ID_SCHEME=hash` kill-switch are gone. Fingerprintable rows now resolve to a single `:h1:` candidate, a store still holding `:hash:`-keyed records from a fingerprintable source will no longer match them, and those clusters will split on the next run. Un-fingerprintable rows (where no stable fingerprint can be derived) keep their `:hash:` id as their only key. **If you persist an identity DB, run the migration below BEFORE upgrading to 2.0.**
 
 ### Running the migration
 
@@ -279,7 +279,7 @@ goldenmatch identity migrate-ids --dsn postgres://user:pass@host/db
 goldenmatch identity migrate-ids --path .goldenmatch/identity.db --dry-run
 ```
 
-The command rewrites every `{source}:hash:{12}` record id in `source_records`, `evidence_edges`, `identity_aliases`, and `identity_events` to the canonical `{source}:h1:{12}` form. It reports the number of rows rewritten per table. On a large store, run during a maintenance window — the rewrite takes an exclusive table lock for the duration.
+The command rewrites every `{source}:hash:{12}` record id in `source_records`, `evidence_edges`, `identity_aliases`, and `identity_events` to the canonical `{source}:h1:{12}` form. It reports the number of rows rewritten per table. On a large store, run during a maintenance window. The rewrite takes an exclusive table lock for the duration.
 
 ### Python API
 
@@ -295,7 +295,7 @@ with gm.IdentityStore(path=".goldenmatch/identity.db") as store:
 
 ## See also
 
-- `examples/python/08_identity_graph.py` — end-to-end demo (two-run stability + absorb + merge + split + conflict)
-- [Pipeline architecture](/concepts/architecture) — where identity sits in the dedupe flow
-- [Learning Memory](/goldenmatch/learning-memory) — the other persistent-state layer; complementary, not competing
-- [Configuration](/goldenmatch/configuration) — full schema reference
+- `examples/python/08_identity_graph.py`: end-to-end demo (two-run stability + absorb + merge + split + conflict)
+- [Pipeline architecture](/concepts/architecture): where identity sits in the dedupe flow
+- [Learning Memory](/goldenmatch/learning-memory): the other persistent-state layer; complementary, not competing
+- [Configuration](/goldenmatch/configuration): full schema reference

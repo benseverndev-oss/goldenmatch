@@ -11,10 +11,10 @@ GoldenMatch is built around one workflow, not a pile of knobs:
     `dedupe_df(df)` runs with **no rules and no training**. Auto-config profiles your data, picks a defensible matching config, and you get good results immediately.
   </Step>
   <Step title="You get the config it chose">
-    The chosen config is **returned to you**, inspectable and versionable — never a hidden black box. Keep it, diff it, check it into git.
+    The chosen config is **returned to you**, inspectable and versionable, never a hidden black box. Keep it, diff it, check it into git.
   </Step>
   <Step title="The healer suggests tweaks">
-    `review_config(df, config)` reviews the *results* against the *config that produced them* and emits ranked, explainable edits — lower this threshold, swap that scorer, add negative evidence. Each suggestion is **self-verified**: it is simulated and kept only if it does not worsen an unsupervised health proxy, so a suggestion never makes your results worse.
+    `review_config(df, config)` reviews the *results* against the *config that produced them* and emits ranked, explainable edits, lower this threshold, swap that scorer, add negative evidence. Each suggestion is **self-verified**: it is simulated and kept only if it does not worsen an unsupervised health proxy, so a suggestion never makes your results worse.
   </Step>
   <Step title="You apply the tweaks">
     Accept the ones you want with `apply_suggestion(config, suggestion)` → an improved config.
@@ -27,7 +27,7 @@ GoldenMatch is built around one workflow, not a pile of knobs:
 **Zero-config gets you most of the way in one pass; the healing loop closes the gap to an expert-tuned config without you having to be the expert.** It is the user-facing expression of two project commitments: *zero-config should embarrass the alternatives*, and *out-of-the-box should approach the hand-tuned expert*.
 
 <Note>
-  The healer is **wired into the default pipeline**. Every `dedupe_df(df)` run now checks a free controller signal (RED/YELLOW health or a score dip) and, only when it fires, attaches cheap raw candidate suggestions to `result.suggestions` — no extra pipeline run on a healthy result. Opt into the expensive verified path with `dedupe_df(df, suggest=True)`, or run the full apply-and-re-run loop with `dedupe_df(df, heal=True)`. The same surface is on CLI (`--suggest` / `--heal`), MCP (`review_config`), A2A, REST, web, and the TUI (Suggestions tab). It requires `goldenmatch[native]` (the suggestion kernel is compiled); without the native wheel every surface **degrades gracefully** — it attaches no suggestions and never raises. Kill-switch: `GOLDENMATCH_SUGGEST_ON_DEDUPE=0`. On the TypeScript surface the same healer is the opt-in `goldenmatch/core/suggest-wasm` subpath (see [TypeScript and WASM](#typescript-and-wasm) below); without the WASM kernel TS degrades gracefully to empty suggestions.
+  The healer is **wired into the default pipeline**. Every `dedupe_df(df)` run now checks a free controller signal (RED/YELLOW health or a score dip) and, only when it fires, attaches cheap raw candidate suggestions to `result.suggestions`, no extra pipeline run on a healthy result. Opt into the expensive verified path with `dedupe_df(df, suggest=True)`, or run the full apply-and-re-run loop with `dedupe_df(df, heal=True)`. The same surface is on CLI (`--suggest` / `--heal`), MCP (`review_config`), A2A, REST, web, and the TUI (Suggestions tab). It requires `goldenmatch[native]` (the suggestion kernel is compiled); without the native wheel every surface **degrades gracefully**, it attaches no suggestions and never raises. Kill-switch: `GOLDENMATCH_SUGGEST_ON_DEDUPE=0`. On the TypeScript surface the same healer is the opt-in `goldenmatch/core/suggest-wasm` subpath (see [TypeScript and WASM](#typescript-and-wasm) below); without the WASM kernel TS degrades gracefully to empty suggestions.
 </Note>
 
 ## The loop in code
@@ -36,7 +36,7 @@ GoldenMatch is built around one workflow, not a pile of knobs:
 from goldenmatch import dedupe_df
 from goldenmatch.core.suggest import review_config, apply_suggestion
 
-# 1. Zero-config first pass — good results, no rules.
+# 1. Zero-config first pass: good results, no rules.
 result = dedupe_df(df)
 
 # 2. You get the config it chose.
@@ -78,7 +78,7 @@ for step in result.heal_trail or []:
 result.config   # the healed config, ready to persist
 ```
 
-The default attach is **free on a healthy result** — the free controller signal short-circuits before the kernel is ever called. Set `GOLDENMATCH_SUGGEST_ON_DEDUPE=0` to turn the surface off entirely.
+The default attach is **free on a healthy result**: the free controller signal short-circuits before the kernel is ever called. Set `GOLDENMATCH_SUGGEST_ON_DEDUPE=0` to turn the surface off entirely.
 
 ## What the healer suggests
 
@@ -95,9 +95,9 @@ Blocking-pass and field-weight suggestions are staged for a later kernel version
 
 ## The self-verify gate (why a suggestion never makes things worse)
 
-At suggestion time there is **no ground truth**, so the healer cannot peek at F1. Instead, for each candidate it simulates the edit (apply → re-run) and keeps it only if an **unsupervised health proxy** does not get worse than the current config. That structural guarantee — "no net-negative suggestion" — is what makes the loop safe to run unattended.
+At suggestion time there is **no ground truth**, so the healer cannot peek at F1. Instead, for each candidate it simulates the edit (apply → re-run) and keeps it only if an **unsupervised health proxy** does not get worse than the current config. That structural guarantee, "no net-negative suggestion", is what makes the loop safe to run unattended.
 
-The default proxy is **cohesion** (`min_edge` × saturating coverage, cap `0.50`): it rewards clusters held together by strong intra-cluster edges and is sensitive to over-merge, so it correctly keeps precision-improving fixes that a recall-biased proxy would discard. Measured on the suggester gym, switching the gate to this proxy lifted live recovery from **0.15 → 0.54** (matching the raw kernel ceiling — the gate stops discarding correct fixes) with zero net-negatives on real perturbations.
+The default proxy is **cohesion** (`min_edge` × saturating coverage, cap `0.50`): it rewards clusters held together by strong intra-cluster edges and is sensitive to over-merge, so it correctly keeps precision-improving fixes that a recall-biased proxy would discard. Measured on the suggester gym, switching the gate to this proxy lifted live recovery from **0.15 → 0.54** (matching the raw kernel ceiling, the gate stops discarding correct fixes) with zero net-negatives on real perturbations.
 
 You can change or disable the gate:
 
@@ -126,7 +126,7 @@ bounded heal loop. Every TS surface (core, CLI, MCP `review_config`, A2A
 import { dedupe } from "goldenmatch";
 import { enableSuggestWasm } from "goldenmatch/core/suggest-wasm";
 
-// The WASM kernel is OPT-IN — the analog of `pip install goldenmatch[native]`.
+// The WASM kernel is OPT-IN: the analog of `pip install goldenmatch[native]`.
 // Until you enable it the healer is gracefully empty (see below).
 enableSuggestWasm();
 
@@ -138,11 +138,11 @@ const healed = await dedupe(rows, { heal: true });       // healed.config + heal
 - **Opt-in kernel.** The always-on healer surface reaches the kernel through a tiny
   lean registry; the heavy WASM module is behind the opt-in subpath
   `goldenmatch/core/suggest-wasm`. Importing it and calling `enableSuggestWasm()`
-  registers the backend. This is the exact TS analog of the Python `[native]` extra —
+  registers the backend. This is the exact TS analog of the Python `[native]` extra:
   it keeps default bundles lean (no inlined wasm) and edge-safe. `disableSuggestWasm()`
   unregisters it again.
 - **Graceful-empty without the kernel.** With no backend registered, every TS healer
-  surface returns `[]` / `undefined` and never throws — `dedupe()` works exactly as
+  surface returns `[]` / `undefined` and never throws: `dedupe()` works exactly as
   before, just without suggestions. There is no hard failure for not opting in.
 - **Kill-switch / explicit options.** The default suggestion pass honors
   `GOLDENMATCH_SUGGEST_ON_DEDUPE` (set `0` to disable) where a Node-style `process.env`
@@ -155,6 +155,6 @@ WASM in the TS parity suite and against the Python native path, so a suggestion'
 
 ## Related
 
-- [Auto-config](/goldenmatch/auto-config) — how the zero-config first pass converges on a defensible config.
-- [Learning Memory](/goldenmatch/learning-memory) — persists steward accept/reject decisions across runs (the durable layer beneath the loop).
-- [Evaluation](/goldenmatch/evaluation) — measure F1 once you have labels.
+- [Auto-config](/goldenmatch/auto-config): how the zero-config first pass converges on a defensible config.
+- [Learning Memory](/goldenmatch/learning-memory): persists steward accept/reject decisions across runs (the durable layer beneath the loop).
+- [Evaluation](/goldenmatch/evaluation): measure F1 once you have labels.

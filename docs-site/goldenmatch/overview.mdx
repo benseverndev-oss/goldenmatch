@@ -8,7 +8,7 @@ GoldenMatch is the headline package of the Golden Suite. It finds duplicate reco
 
 ## The healing loop
 
-The core workflow is a loop: (1) a **zero-config first pass** — `dedupe_df(df)` runs with no rules or training, auto-config picks a defensible config, and you get good results immediately; (2) **you get the config it chose** — returned, inspectable, versionable, not a black box; (3) **the healer suggests tweaks** — `review_config(df, config)` reviews results against the config and emits ranked, explainable, self-verified edits (kept only if they don't worsen an unsupervised health proxy, so a suggestion never makes results worse); (4) **you apply the tweaks** — `apply_suggestion` produces an improved config; (5) **results improve, and you repeat.** Zero-config gets you most of the way in one pass; the healing loop closes the gap to an expert-tuned config without you having to be the expert. The healer is opt-in today (Python API `from goldenmatch.core.suggest import review_config`, needs `goldenmatch[native]`). See [Config suggestions](/goldenmatch/config-suggestions) for detail.
+The core workflow is a loop: (1) a **zero-config first pass**: `dedupe_df(df)` runs with no rules or training, auto-config picks a defensible config, and you get good results immediately; (2) **you get the config it chose**, returned, inspectable, versionable, not a black box; (3) **the healer suggests tweaks**, `review_config(df, config)` reviews results against the config and emits ranked, explainable, self-verified edits (kept only if they don't worsen an unsupervised health proxy, so a suggestion never makes results worse); (4) **you apply the tweaks**, where `apply_suggestion` produces an improved config; (5) **results improve, and you repeat.** Zero-config gets you most of the way in one pass; the healing loop closes the gap to an expert-tuned config without you having to be the expert. The healer is opt-in today (Python API `from goldenmatch.core.suggest import review_config`, needs `goldenmatch[native]`). See [Config suggestions](/goldenmatch/config-suggestions) for detail.
 
 <CardGroup cols={2}>
   <Card title="Quickstart" icon="rocket" href="/goldenmatch/quickstart">
@@ -79,7 +79,7 @@ Zero-config accuracy, quoted from the package README:
 | Febrl4 (PII, PPRL) | 0.924 | Bloom-filter PPRL |
 | DQBench ER composite | 91.04 | No LLM (v1.12.0) |
 
-These are the zero-config (weighted-path) numbers. On the separate **probabilistic (Fellegi-Sunter)** path, auto-config v2 beats Splink head-to-head under the shared `bench_er_headtohead` evaluator on every dataset Splink scores (historical_50k 0.827 vs 0.757, febrl3 0.996 vs 0.965, synthetic_person 1.000 vs 0.996) — deterministic as of #829 (refreshed 2026-08-06). See [Scoring → Probabilistic auto-config v2](/goldenmatch/scoring#probabilistic-auto-config-v2-beats-splink-head-to-head) for the full panel and the honest pairwise-vs-cluster caveat.
+These are the zero-config (weighted-path) numbers. On the separate **probabilistic (Fellegi-Sunter)** path, auto-config v2 beats Splink head-to-head under the shared `bench_er_headtohead` evaluator on every dataset Splink scores (historical_50k 0.827 vs 0.757, febrl3 0.996 vs 0.965, synthetic_person 1.000 vs 0.996). Deterministic as of #829 (refreshed 2026-08-06). See [Scoring → Probabilistic auto-config v2](/goldenmatch/scoring#probabilistic-auto-config-v2-beats-splink-head-to-head) for the full panel and the honest pairwise-vs-cluster caveat.
 
 ## A minimal example
 

@@ -34,8 +34,8 @@ console.log(result.stats);
 
 The package ships with two separate entry points so the core stays edge-safe and dependency-free:
 
-- **`goldenmatch`** — edge-safe core. Works in browsers, Cloudflare Workers, Vercel Edge Runtime, Deno, Bun, and Node.
-- **`goldenmatch/node`** — adds Node-only features: file I/O (CSV, JSON), HTTP servers, DB connectors.
+- **`goldenmatch`.** Edge-safe core. Works in browsers, Cloudflare Workers, Vercel Edge Runtime, Deno, Bun, and Node.
+- **`goldenmatch/node`.** Adds Node-only features: file I/O (CSV, JSON), HTTP servers, DB connectors.
 
 ```typescript
 // Edge-safe core (pure TS, no Node APIs)
@@ -113,14 +113,14 @@ All scorers implement the same interface as Python `goldenmatch.core.scorer`:
 | **dice**, **jaccard** | Set-based similarity for hex-encoded bloom filters (PPRL) |
 | **embedding** | Cosine similarity of embeddings |
 | **record_embedding** | Cosine similarity across whole records |
-| **given_name_aliased_jw** | First names — alias-aware JW (William/Bill -> 1.0), bundled given-name table |
-| **name_freq_weighted_jw** | Surnames — JW reweighted by US Census surname IDF in the borderline zone |
+| **given_name_aliased_jw** | First names: alias-aware JW (William/Bill -> 1.0), bundled given-name table |
+| **name_freq_weighted_jw** | Surnames: JW reweighted by US Census surname IDF in the borderline zone |
 
 The two `*_jw` scorers are refdata-aware and edge-safe: their bundled lookup tables (a given-name alias corpus and the US Census 2010 top-10k surname table) ship inside the npm package, generated from the Python source of truth and drift-guarded in CI. Auto-config swaps them in automatically for first-name and last-name columns. See [Reference Data](/goldenmatch/reference-data) for the algorithms.
 
 ## Optional WASM acceleration
 
-The pure-TS scorers run everywhere (browser, Workers, edge, Node) with zero dependencies — that's the default. For workloads that score large blocks you can **optionally** swap in a WebAssembly backend that wraps the same Rust `score-core` kernel the Python package and the SQL UDFs use:
+The pure-TS scorers run everywhere (browser, Workers, edge, Node) with zero dependencies. That's the default. For workloads that score large blocks you can **optionally** swap in a WebAssembly backend that wraps the same Rust `score-core` kernel the Python package and the SQL UDFs use:
 
 ```ts
 import { dedupe, enableWasm, disableWasm } from "goldenmatch";
@@ -131,29 +131,29 @@ disableWasm();             // back to pure-TS (e.g. for test isolation)
 ```
 
 - **Opt-in; pure-TS stays the default and the fallback.** Default users download and parse **zero** wasm bytes (the loader/glue/bytes load only on `enableWasm()`). It returns `false` (pure-TS stays active) on any load failure; pass `{ require: true }` to throw instead.
-- **Covered scorers:** `jaro_winkler` / `levenshtein` / `token_sort` / `exact` — the ops `score-core` implements. Every other scorer always stays pure-TS, even when WASM is enabled. The swap is at the NxN block boundary (one JS↔WASM crossing per block, never per pair).
+- **Covered scorers:** `jaro_winkler` / `levenshtein` / `token_sort` / `exact`: the ops `score-core` implements. Every other scorer always stays pure-TS, even when WASM is enabled. The swap is at the NxN block boundary (one JS↔WASM crossing per block, never per pair).
 - **Edge-safe + portable:** Node, browsers, and Workers. The `.wasm` ships inside the npm package; the loader resolves it at runtime.
-- **Parity-guaranteed:** the WASM kernel *is* rapidfuzz, and the pure-TS scorers are aligned with rapidfuzz to 4 decimals — so enabling WASM does not change results, it just runs them faster.
+- **Parity-guaranteed:** the WASM kernel *is* rapidfuzz, and the pure-TS scorers are aligned with rapidfuzz to 4 decimals. So enabling WASM does not change results, it just runs them faster.
 
-`goldenanalysis` exposes the same opt-in pattern for its aggregation primitives via `enableAnalysisWasm()` — see [GoldenAnalysis › Native accelerator](/goldenanalysis/native).
+`goldenanalysis` exposes the same opt-in pattern for its aggregation primitives via `enableAnalysisWasm()`, see [GoldenAnalysis › Native accelerator](/goldenanalysis/native).
 
 ## Blocking Strategies
 
-- `static` — single blocking key with transforms
-- `multi_pass` — multiple blocking keys, union of blocks
-- `sorted_neighborhood` — sliding window over sorted data
-- `adaptive` — static + auto-split oversized blocks
-- `ann` — approximate nearest neighbor (requires `hnswlib-node` peer dep)
-- `canopy` — TF-IDF canopy clustering
-- `learned` — data-driven predicate selection
+- `static`: single blocking key with transforms
+- `multi_pass`: multiple blocking keys, union of blocks
+- `sorted_neighborhood`: sliding window over sorted data
+- `adaptive`: static + auto-split oversized blocks
+- `ann`: approximate nearest neighbor (requires `hnswlib-node` peer dep)
+- `canopy`: TF-IDF canopy clustering
+- `learned`: data-driven predicate selection
 
 ## Golden Record Strategies
 
-- `most_complete` — pick longest string
-- `majority_vote` — pick most frequent
-- `source_priority` — pick first non-null from priority list
-- `most_recent` — pick value with most recent date
-- `first_non_null` — pick first non-null
+- `most_complete`: pick longest string
+- `majority_vote`: pick most frequent
+- `source_priority`: pick first non-null from priority list
+- `most_recent`: pick value with most recent date
+- `first_non_null`: pick first non-null
 
 ## Transforms
 
@@ -232,7 +232,7 @@ All peer deps are optional. Install only what you need:
 | `better-sqlite3` | SQLite-backed Learning Memory / review-queue persistence |
 | `ink`, `react`, `ink-table`, `ink-select-input`, `ink-text-input`, `ink-spinner`, `ink-gradient` | Interactive TUI |
 
-The database connectors below are **not declared peers** — they are loaded via
+The database connectors below are **not declared peers**: they are loaded via
 runtime dynamic `import()` only when you use the matching Node connector, so
 install whichever you need directly: `pg` (Postgres), `@duckdb/node-api`
 (DuckDB), `snowflake-sdk` (Snowflake), `@google-cloud/bigquery` (BigQuery),
@@ -240,15 +240,15 @@ install whichever you need directly: `pg` (Postgres), `@duckdb/node-api`
 
 ## Advanced Features
 
-- **Probabilistic matching** — Fellegi-Sunter with Splink-style EM
-- **Splink config converter** — `import-splink` CLI / `convert_splink_config` MCP tool / `fromSplink()` API converts a Splink settings (or trained-model) JSON into a GoldenMatch config, importing trained m/u probabilities directly
-- **Negative evidence on Fellegi-Sunter matchkeys** — goldenmatch-js 1.3.0 is a full FS-NE mirror of Python (trainEM / scoring / validation / loader matrix; new exports `neFired`, `fsWeightRange`, `NegativeEvidenceUnsupportedError`; the loader now parses `negative_evidence` for all matchkey types instead of silently dropping it). The TS pipeline (`dedupe` / `matchRecords`) throws on probabilistic+NE (its probabilistic scoring is a simplified weighted-style average), the continuous path rejects NE, and `derive_from` NE is rejected in TS — materialize the column first, or use Python
-- **PPRL** — Privacy-preserving record linkage with SHA-256 bloom filters (3 security levels: standard, high, paranoid)
-- **Graph ER** — Multi-table entity resolution with evidence propagation
-- **Streaming** — Incremental single-record matching
-- **Memory** — Persistent corrections + threshold learning
-- **Sensitivity analysis** — Parameter sweep with CCMS / TWI cluster comparison
-- **Lineage tracking** — Full provenance per field per golden record
+- **Probabilistic matching.** Fellegi-Sunter with Splink-style EM
+- **Splink config converter.** `import-splink` CLI / `convert_splink_config` MCP tool / `fromSplink()` API converts a Splink settings (or trained-model) JSON into a GoldenMatch config, importing trained m/u probabilities directly
+- **Negative evidence on Fellegi-Sunter matchkeys.** Goldenmatch-js 1.3.0 is a full FS-NE mirror of Python (trainEM / scoring / validation / loader matrix; new exports `neFired`, `fsWeightRange`, `NegativeEvidenceUnsupportedError`; the loader now parses `negative_evidence` for all matchkey types instead of silently dropping it). The TS pipeline (`dedupe` / `matchRecords`) throws on probabilistic+NE (its probabilistic scoring is a simplified weighted-style average), the continuous path rejects NE, and `derive_from` NE is rejected in TS, materialize the column first, or use Python
+- **PPRL**, Privacy-preserving record linkage with SHA-256 bloom filters (3 security levels: standard, high, paranoid)
+- **Graph ER.** Multi-table entity resolution with evidence propagation
+- **Streaming.** Incremental single-record matching
+- **Memory.** Persistent corrections + threshold learning
+- **Sensitivity analysis.** Parameter sweep with CCMS / TWI cluster comparison
+- **Lineage tracking.** Full provenance per field per golden record
 
 ## Examples
 

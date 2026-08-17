@@ -52,7 +52,7 @@ goldenanalysis report report.json --format markdown  # re-render a saved report
 
 ## Analyzers
 
-Analyzers are a registry (mirroring GoldenPipe's stage entry-points). Each computes a typed `Metric` set plus optional tables, and **degrades gracefully** — it emits what its present artifacts support and records what it could not compute in `report.source`.
+Analyzers are a registry (mirroring GoldenPipe's stage entry-points). Each computes a typed `Metric` set plus optional tables, and **degrades gracefully**. It emits what its present artifacts support and records what it could not compute in `report.source`.
 
 | Analyzer | Consumes | Emits |
 |----------|----------|-------|
@@ -71,7 +71,7 @@ Every analyze entrypoint returns one `AnalysisReport`:
 report.schema_version   # cross-surface contract anchor
 report.run_id
 report.source           # {"dataset": ..., "producer": ..., "unavailable": ...}
-report.metrics          # list[Metric] — key, value, unit, direction
+report.metrics          # list[Metric]: key, value, unit, direction
 report.tables           # list[AnalysisTable]
 report.narrative        # one-paragraph NL summary (cross-run)
 report.analyzers_run    # which analyzers actually ran
@@ -88,8 +88,8 @@ They are easy to confuse and deliberately distinct:
 |---|---|---|
 | **Scope** | Profiles a *single input dataset at ingest* | *Cross-cutting* over any stage's outputs |
 | **Direction** | A **producer** of artifacts (scan findings) | A **consumer** of artifacts (including GoldenCheck's) |
-| **Across runs?** | No — one dataset, one scan | Yes — trend / drift / regression over a run history |
-| **Writes data?** | Suggests/applies fixes | **Never** — read-only by construction |
+| **Across runs?** | No: one dataset, one scan | Yes: trend / drift / regression over a run history |
+| **Writes data?** | Suggests/applies fixes | **Never**: read-only by construction |
 
 The hard line: **GoldenAnalysis depends on other packages' types; never the reverse.**
 
@@ -124,4 +124,4 @@ import { analyze, analyzeMatch, analyzePipeline, toMarkdown } from "goldenanalys
 
 ## MCP
 
-`goldenanalysis mcp-serve` exposes four read-only tools — `list_analyzers`, `analyze_frame`, `get_trend`, `detect_regressions` — and they surface transitively through the aggregated `goldensuite-mcp` server.
+`goldenanalysis mcp-serve` exposes four read-only tools, `list_analyzers`, `analyze_frame`, `get_trend`, `detect_regressions`, and they surface transitively through the aggregated `goldensuite-mcp` server.

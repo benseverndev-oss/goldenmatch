@@ -5,8 +5,8 @@ keywords: ["goldenflow", "performance", "polars", "vectorized", "rust", "arrow",
 ---
 
 GoldenFlow is Polars-native, so most transforms already run in vectorized Rust.
-The two transforms that historically dominated a run — date and phone
-normalization — used to call a Python library (`dateutil` / `phonenumbers`) once
+The two transforms that historically dominated a run, date and phone
+normalization, used to call a Python library (`dateutil` / `phonenumbers`) once
 per row. They are now resolved with a vectorized fast path and a per-row
 fallback, with an optional compiled kernel for the phone tail.
 
@@ -15,39 +15,39 @@ fallback, with an optional compiled kernel for the phone tail.
 Date and phone transforms resolve each value with the cheapest tier that can,
 falling through only for the rows it can't:
 
-1. **Vectorized Polars fast path** — resolves the well-formed common case in
+1. **Vectorized Polars fast path.** Resolves the well-formed common case in
    Rust (multi-format `str.to_date` for dates; a NANP-shape regex for phones),
    leaving anything it isn't certain about unresolved.
-2. **Native kernel** *(optional, phone only)* — the `goldenflow-native` Rust
+2. **Native kernel** *(optional, phone only)*: the `goldenflow-native` Rust
    kernel runs on just the residual rows.
-3. **Per-row reference** — the original `dateutil` / `phonenumbers` path settles
+3. **Per-row reference.** The original `dateutil` / `phonenumbers` path settles
    whatever the first two tiers left.
 
 On clean data the residual is empty, so tiers 2–3 never run. The output is
-**byte-identical** to applying the per-row reference to every row — each tier
+**byte-identical** to applying the per-row reference to every row, each tier
 only claims rows it resolves exactly the same way.
 
 <Note>
   Measured on a realistic messy 1M-row frame: `date_iso8601` **76×** faster,
-  `phone_e164` **19×**, `phone_digits` **4.9×** — roughly **14× end-to-end** on
+  `phone_e164` **19×**, `phone_digits` **4.9×**: roughly **14× end-to-end** on
   a mixed date/phone/text run, with no change to the cleaned values.
 </Note>
 
 ## Optional native kernel
 
 The kernels live in `goldenflow-core` (a pyo3-free Rust crate); `goldenflow-native`
-is a thin PyO3 shim over it, shipped as a separate compiled runtime (abi3) — the
+is a thin PyO3 shim over it, shipped as a separate compiled runtime (abi3). The
 same split as `polars` / `polars-runtime`. The pure-Python `goldenflow` wheel
 works on its own; the native kernel is opt-in and accelerates:
 
 - the **phone** residual the Polars fast path can't reach (alpha numbers like
   `1-800-FLOWERS`, extensions, `+1`-prefixed forms), and
-- the **checksummed / structural identifiers** — payment card (Luhn), IBAN
-  (mod-97), ISBN, EAN/UPC, EU VAT, SWIFT/BIC, US ABA routing, and IMEI — via owned
+- the **checksummed / structural identifiers**: payment card (Luhn), IBAN
+  (mod-97), ISBN, EAN/UPC, EU VAT, SWIFT/BIC, US ABA routing, and IMEI, via owned
   Rust kernels with pure-Python fallbacks proven byte-identical over a committed
   corpus. In `auto` mode the native kernel also backs the email, URL, numeric,
   categorical, name (incl. `name_transliterate` / `name_script`), and US-address
-  families — anywhere a component kernel exists.
+  families, anywhere a component kernel exists.
 
 <CodeGroup>
 
@@ -73,10 +73,10 @@ mirroring `GOLDENMATCH_NATIVE`):
 |---|---|
 | unset / `auto` | Use the native kernel wherever a component's kernel symbol exists (identifiers, email, URL, numeric, categorical, name, and US-address families), except known-divergent components (e.g. `phone_validate` stays pure-Python). **Default.** |
 | `0` | Force the pure-Python path everywhere. |
-| `1` | Require native; raise if the kernel isn't importable. Runs every component with no NANP restriction — a benchmarking/parity lane that **can** differ from Python on international phone numbers. |
+| `1` | Require native; raise if the kernel isn't importable. Runs every component with no NANP restriction: a benchmarking/parity lane that **can** differ from Python on international phone numbers. |
 
 <Note>
-  Dates are intentionally **not** a native kernel — the Polars fast path already
+  Dates are intentionally **not** a native kernel: the Polars fast path already
   resolves them in vectorized Rust, so a per-row compiled parser would be
   slower. `phone_national` stays pure Python, and `phone_validate` stays
   pure-Python by design (its only native symbol implements `is_valid`, not the
@@ -118,7 +118,7 @@ families); older wheels fall back gracefully.
   column's dtype mid-chain (e.g. `currency_strip`: str→f64) lets the string head
   and the numeric tail each fuse; a nullable run may also mix in the total string
   ops. Only `*_validate` (boolean), multi-column split/merge, and residual-tier
-  (`phone`/date) transforms stay on the per-transform path — automatically, no
+  (`phone`/date) transforms stay on the per-transform path: automatically, no
   configuration needed.
 </Note>
 
@@ -127,7 +127,7 @@ families); older wheels fall back gracefully.
 The identifier kernels also compile to WebAssembly (`goldenflow-wasm`). The
 TypeScript package keeps pure-TS as the default and permanent fallback; an
 opt-in `enableWasm()` (async, stays pure-TS on failure) routes the identifier
-transforms through the WASM kernel — the TS analog of `goldenflow[native]`. One
+transforms through the WASM kernel: the TS analog of `goldenflow[native]`. One
 shared oracle corpus is asserted byte-identical across native, WASM-TS, and
 pure-Python.
 
