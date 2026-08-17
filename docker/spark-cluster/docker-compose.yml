@@ -127,6 +127,11 @@ services:
     depends_on: [spark-master]
     ports:
       - "15002:15002"
+      # The Connect server IS the driver, so its Spark UI carries the stage
+      # metrics for every GM query. Mapped to 4041 because Splink's classic
+      # driver runs on the HOST and binds 4040 itself -- a clash there would be
+      # silent and the two engines' numbers would swap.
+      - "4041:4040"
     # `addArtifact` is Connect-only, so the whole tier requires this server --
     # it is not an alternative front end, it is the only door.
     #

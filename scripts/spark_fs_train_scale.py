@@ -431,6 +431,23 @@ def _build_config(GoldenMatchConfig, BlockingConfig, BlockingKeyConfig,
     )
 
 
+def _shuffle_module():
+    """The SHARED shuffle-metrics reader, imported by file path.
+
+    Same reasoning as the ranking metric: one implementation, so a difference
+    between the two engines' numbers is a difference between the ENGINES.
+    """
+    import importlib.util
+
+    path = Path(__file__).resolve().parent / "_spark_shuffle_metrics.py"
+    spec = importlib.util.spec_from_file_location("_spark_shuffle_metrics", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"cannot load {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def _metrics_module():
     """The SHARED ranking metric, imported by file path.
 
@@ -508,6 +525,10 @@ def main() -> int:
                          "number means nothing without it: the bar is "
                          "match-or-better accuracy, not a faster arrival at a "
                          "worse model.")
+    ap.add_argument("--spark-ui", default="http://localhost:4041",
+                    help="Spark UI of the CONNECT driver (compose maps its 4040 "
+                         "to 4041, because Splink's classic driver binds 4040 on "
+                         "the host). Read for stage-level shuffle bytes.")
     ap.add_argument("--out", default="")
     args = ap.parse_args()
 
@@ -741,6 +762,18 @@ def main() -> int:
                   f"the other engine's.", flush=True)
         out["quality"] = q
         print(f"[scale] quality {out['quality']}", flush=True)
+
+    # Shuffle BYTES, the topology-independent half of the multi-node question.
+    # A wall measured on two containers sharing one host says nothing about a
+    # real cluster, because the exchange never crosses a network here. What
+    # crosses it does transfer: network cost on any topology is a function of
+    # bytes. The prediction under test is that GM's counting stage moves
+    # ~partitions x distinct patterns regardless of pair count, because the
+    # GROUP BY output is bounded by prod(levels + 1) and Spark combines
+    # map-side. Never fatal -- a metrics endpoint that is down must not take the
+    # measurement with it, so a failure is RECORDED rather than raised.
+    out["shuffle"] = _shuffle_module().fetch(args.spark_ui)
+    print(f"[scale] shuffle {out['shuffle']}", flush=True)
 
     out["total_seconds"] = round(sum(out["stages"].values()), 2)
 
