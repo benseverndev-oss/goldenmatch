@@ -183,6 +183,10 @@ def main() -> int:
     ap.add_argument("--max-pairs", type=int, default=1_000_000,
                     help="Splink's u-estimation sample. Matches the GM harness's "
                          "--u-max-pairs so the u stage is comparable.")
+    ap.add_argument("--seed", type=int, default=42,
+                    help="Seeds Splink's u random sampling. Unseeded, the EM "
+                         "iteration count -- and therefore the wall -- varies "
+                         "by more than half between identical runs.")
     ap.add_argument("--out", default="splink-train-scale.json")
     args = ap.parse_args()
 
@@ -225,6 +229,43 @@ def main() -> int:
     from splink import comparison_library as cl
     from splink.backends.spark import SparkAPI
 
+    # Count EM iterations, because the wall is roughly linear in them and a
+    # seed only makes the count REPRODUCIBLE, not equal across configurations.
+    # Reporting seconds without iterations invites reading a convergence
+    # difference as a speed difference -- which is exactly the mistake the
+    # unseeded runs produced. Splink does not expose the count as an attribute,
+    # so it is taken from its own log records; `iterations` staying 0 in the
+    # artifact means the log format moved and the number should not be trusted
+    # rather than silently reading as "no work".
+    import logging
+    import re
+
+    class _EMIterationCounter(logging.Handler):
+        _PAT = re.compile(r"^Iteration (\d+):")
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.per_session: list[int] = []
+            self._current = 0
+
+        def emit(self, record: logging.LogRecord) -> None:
+            m = self._PAT.match(str(record.getMessage()))
+            if not m:
+                return
+            n = int(m.group(1))
+            if n <= self._current and self._current:
+                self.per_session.append(self._current)
+            self._current = n
+
+        def finish(self) -> list[int]:
+            if self._current:
+                self.per_session.append(self._current)
+                self._current = 0
+            return self.per_session
+
+    em_counter = _EMIterationCounter()
+    logging.getLogger("splink").addHandler(em_counter)
+
     # The SAME five fields the GM harness compares, at the same shape: two
     # jaro-winkler name fields, a levenshtein date, and two more jaro-winkler.
     # Splink expresses levels as thresholds and GM as `levels=3` with a partial
@@ -258,7 +299,16 @@ def main() -> int:
 
     # u, from random pairs -- the same quantity the GM harness times as `u`.
     t = time.perf_counter()
-    linker.training.estimate_u_using_random_sampling(max_pairs=args.max_pairs)
+    # SEEDED, and this is the difference between a measurement and a lottery
+    # ticket. Unseeded, each run draws a different random pair sample, gets
+    # different u estimates, starts EM somewhere else and converges in a
+    # different number of iterations -- and every iteration is a distributed
+    # Spark job, so the wall follows. Two runs of the IDENTICAL configuration
+    # (31983859191, 31983866350) logged 33 and 16 iterations and came out at
+    # 321.12s and 197.29s: a 63% spread, against GM's 1.4% across the same pair
+    # of runs. Any single unseeded Splink number is drawn from that.
+    linker.training.estimate_u_using_random_sampling(
+        max_pairs=args.max_pairs, seed=args.seed)
     out["stages"]["u_seconds"] = round(time.perf_counter() - t, 2)
     print(f"[splink] u in {out['stages']['u_seconds']}s", flush=True)
 
@@ -267,7 +317,15 @@ def main() -> int:
     for rule in (block_on("blk"), block_on("last")):
         linker.training.estimate_parameters_using_expectation_maximisation(rule)
     out["stages"]["em_seconds"] = round(time.perf_counter() - t, 2)
-    print(f"[splink] EM in {out['stages']['em_seconds']}s", flush=True)
+    iters = em_counter.finish()
+    out["em_iterations_per_session"] = iters
+    out["em_iterations_total"] = sum(iters)
+    out["em_seconds_per_iteration"] = (
+        round(out["stages"]["em_seconds"] / sum(iters), 3) if sum(iters) else None
+    )
+    out["seed"] = args.seed
+    print(f"[splink] EM in {out['stages']['em_seconds']}s over {sum(iters)} "
+          f"iteration(s) {iters}", flush=True)
 
     out["stages"]["total_seconds"] = round(time.perf_counter() - t_all, 2)
     # `train_total` is the number to put beside GM's u + counts + train. The
