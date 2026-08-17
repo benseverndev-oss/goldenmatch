@@ -62,7 +62,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
+import re
 import time
 from pathlib import Path
 
@@ -262,9 +264,6 @@ def main() -> int:
     # so it is taken from its own log records; `iterations` staying 0 in the
     # artifact means the log format moved and the number should not be trusted
     # rather than silently reading as "no work".
-    import logging
-    import re
-
     class _EMIterationCounter(logging.Handler):
         _PAT = re.compile(r"^Iteration (\d+):")
 
