@@ -342,13 +342,26 @@ class TestRefitDecisionLogged:
         assert any("FS link-threshold refit: 0.5000 ->" in m and "over-merge reduced" in m
                    for m in msgs), msgs
 
-    def test_decline_logs_debug_not_info(self, caplog):
+    def test_decline_is_explained_without_a_commit_line(self, caplog):
+        """Was `test_decline_logs_debug_not_info`, and the old name is now the
+        wrong requirement.
+
+        Declines were DEBUG while the commit was INFO, so a normal run said
+        nothing about the case that matters most -- the cutoff STAYING at the
+        default. That asymmetry is what made person@1M's `no-max-reduction`
+        invisible for two rounds of investigation, so the declines were promoted
+        to INFO with named reasons.
+
+        The assertion worth keeping is unchanged and is asserted below: a decline
+        must not emit a commit line, and it must explain itself. Only the level
+        moved. `test_fs_refit_decline_observable.py` pins the promotion itself.
+        """
         ia, ib, sc = self._no_over_merge()
         with caplog.at_level("DEBUG", logger="goldenmatch.core.probabilistic"):
             t = fs_refit_link_threshold(ia, ib, sc, default_link=0.50)
         assert t == 0.50
-        # No INFO commit line; a DEBUG line explains the decline.
-        infos = [r.getMessage() for r in caplog.records if r.levelname == "INFO"]
-        assert not any("over-merge reduced" in m for m in infos)
-        debugs = [r.getMessage() for r in caplog.records if r.levelname == "DEBUG"]
-        assert any("refit" in m for m in debugs), debugs
+        msgs = [r.getMessage() for r in caplog.records]
+        assert not any("over-merge reduced" in m for m in msgs), (
+            "a decline must never log the commit line"
+        )
+        assert any("refit DECLINED" in m for m in msgs), msgs

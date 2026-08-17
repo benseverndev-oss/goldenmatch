@@ -3521,9 +3521,25 @@ def fs_refit_threshold(scores, default_link: float) -> float:
 
 
 def _max_cluster_size(id_a, id_b, score, threshold: float) -> int:
-    """Largest cluster size when linking pairs with score >= threshold. Singletons
-    can't be the max cluster, so ``build_clusters`` infers ids from the pairs (no
-    need for the full row-id set)."""
+    """Largest RAW connected component when linking pairs with score >= threshold.
+
+    ``auto_split=False`` is load-bearing, not a default being restated. The
+    signature is ``build_clusters(pairs, all_ids=None, max_cluster_size=100,
+    auto_split=True, ...)``, so the default MST-splits anything above 100 and this
+    function could never return more than the clamp. The caller compares
+    ``max_candidate >= max_default``, so once over-merge is severe enough to
+    exceed 100 at BOTH cutoffs the comparison is 100 against 100 and the refit
+    declines -- most confidently on the shape it exists to repair.
+
+    Measured, person @ 1M (run 32075000216): ``max_default 100 -> max_candidate
+    100`` with the candidate stranding ZERO records, while the true components
+    were nothing like equal.
+
+    Auto-split is a downstream MITIGATION -- it chops an over-merged cluster into
+    presentable pieces. The question here is whether the CUTOFF reduced
+    over-merge, which is a property of the raw components the cutoff produces,
+    not of how they are later presented. Singletons can't be the max, so ids are
+    inferred from the pairs."""
     from goldenmatch.core.cluster import build_clusters  # noqa: PLC0415
     linked = [
         (int(a), int(b), float(s))
@@ -3531,7 +3547,7 @@ def _max_cluster_size(id_a, id_b, score, threshold: float) -> int:
     ]
     if not linked:
         return 0
-    clusters = build_clusters(linked)
+    clusters = build_clusters(linked, auto_split=False)
     return max((c["size"] for c in clusters.values()), default=0)
 
 
@@ -3539,7 +3555,16 @@ def _matched_records(id_a, id_b, score, threshold: float) -> set[int]:
     """Records that land in a MULTI-MEMBER cluster when linking at ``threshold``.
 
     The complement (within the linked-pair id space) is the set of records the
-    cutoff leaves unmatched, which is what ``_expelled_share`` measures."""
+    cutoff leaves unmatched, which is what ``_expelled_share`` measures.
+
+    ``auto_split=False`` for the same reason as :func:`_max_cluster_size`: MST
+    splitting can leave a weakly-attached member as a size-1 piece, which reads
+    here as "this record is unmatched" when the cutoff in fact linked it.
+    Measured on the 8x-over-merge fixture in
+    ``test_fs_refit_max_saturates.py``: 800 of 1200 records counted as matched
+    with splitting on, 1200 with it off. There the distortion happened to be
+    equal at both cutoffs and cancelled in the ratio, but nothing makes that
+    general -- and this is the SAFETY guard, so it must not depend on luck."""
     from goldenmatch.core.cluster import build_clusters  # noqa: PLC0415
     linked = [
         (int(a), int(b), float(s))
@@ -3548,7 +3573,7 @@ def _matched_records(id_a, id_b, score, threshold: float) -> set[int]:
     if not linked:
         return set()
     out: set[int] = set()
-    for c in build_clusters(linked).values():
+    for c in build_clusters(linked, auto_split=False).values():
         if c.get("size", 0) > 1:
             out.update(int(m) for m in c["members"])
     return out
@@ -3641,6 +3666,37 @@ def fs_refit_link_threshold(id_a, id_b, score, default_link: float,
     **The linked-pair-count bound that #2387 proposed as the alternative remedy is
     FALSIFIED** -- person's 0.1161 drop sits BETWEEN the two correct accepts
     (0.0608 / 0.7341), so no bound on it can classify all three.
+
+    **The max statistic used to SATURATE, so this guard refused hardest on the
+    shape it exists to repair.** ``_max_cluster_size`` called ``build_clusters``
+    with its defaults, and the signature is ``(pairs, all_ids=None,
+    max_cluster_size=100, auto_split=True, ...)`` -- auto-split MST-chops
+    anything above 100, so the function could never return more than the clamp.
+    The accept condition is ``max_candidate < max_default``, so as soon as
+    over-merge exceeded 100 at BOTH cutoffs the comparison was 100 against 100
+    and the candidate was declined. The worse the over-merge, the more certain
+    the refusal.
+
+    Measured, person @ 1M (run 32075000216), recorded by ``_record`` rather than
+    inferred: ``reason no-max-reduction, max_default 100, max_candidate 100,
+    expelled_if_taken 0.0`` -- a candidate stranding ZERO records, refused by a
+    statistic pinned at its own ceiling. Both statistics now measure the RAW
+    components (``auto_split=False``): auto-split is a downstream mitigation, and
+    whether the CUTOFF reduced over-merge is a property of the components the
+    cutoff produces, not of how they are later presented.
+
+    This does not move the panel. Auto-split fires only above 100 members and
+    every panel cluster is far below that (household's over-merge is max 8 -> 3),
+    so the change is confined to datasets with components over 100 -- the
+    population the panel does not contain. Pinned in
+    ``test_fs_refit_max_saturates.py``.
+
+    The alternative considered was deleting the max requirement and letting
+    ``_expelled_share`` carry the accept alone, since it classifies all three
+    panel datasets correctly on its own. It was rejected: the blind spot named at
+    the end of this docstring is exactly what the max test guards, and the defect
+    was that the max was measuring the wrong thing, not that requiring it was
+    wrong.
 
     **Default ON since #2518** -- this docstring said "Still default-OFF" long
     after `_fs_refit_threshold_enabled` began returning True by default
