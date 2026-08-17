@@ -110,6 +110,21 @@ jobs:
           print("OK: suggest_config present in native ext")
           PY
 
+      # The real datasets live under a gitignored path, so CI has never had
+      # them and `dblp_acm` has always reported `skipped: dblp_acm (absent)`.
+      # That is why it cannot be blessed: blessing a dataset CI cannot load
+      # turns a legitimate skip into a permanent MISSING failure (#2566 tried,
+      # the gate caught it, it was reverted). The gate is right; the data was
+      # the missing piece. See #2635.
+      #
+      # Deliberately NOT fatal: the fetcher exits 0 whether or not the download
+      # worked, so a Leipzig outage degrades to exactly today's behaviour rather
+      # than reddening a quality gate on someone else's downtime. Once a dataset
+      # is blessed, its absence becomes a MISSING failure in the gate itself,
+      # which is the right place for that to be enforced.
+      - name: Fetch skip-when-absent datasets (best-effort)
+        run: uv run python -m scripts.suggest_quality.fetch_datasets
+
       - name: Run suggest_quality ${{ inputs.mode || 'gate' }}
         env:
           GOLDENMATCH_SUGGEST_FULL_DIST: ${{ (startsWith(inputs.mode, 'gym') || inputs.mode == 'bakeoff') && '1' || '0' }}
