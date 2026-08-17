@@ -20,6 +20,29 @@ from pathlib import Path
 import polars as pl
 
 
+def _as_polars(frame):
+    """Normalise a result frame to polars, whichever lane produced it.
+
+    `match_df` returns a `pyarrow.Table` on the arrow lane and a
+    `pl.DataFrame` on the classic one. This module reads `.height` and
+    `.iter_rows(named=True)`, which are polars-only, so an arrow result
+    raised `AttributeError: 'pyarrow.lib.Table' object has no attribute
+    'height'` and took the whole scheduled `benchmarks` lane red (#2457).
+
+    Converted here rather than by importing `goldenmatch.core.frame`: this
+    module deliberately takes `match_df` / `dedupe_df` by injection so it
+    stays free of goldenmatch import cost, and reaching into the package for
+    a two-line coercion would undo that.
+    """
+    if frame is None:
+        return None
+    if hasattr(frame, "height"):  # already polars
+        return frame
+    if hasattr(frame, "num_rows"):  # pyarrow.Table
+        return pl.from_arrow(frame)
+    return frame
+
+
 @dataclass
 class LeipzigResult:
     found_pairs: int
@@ -123,7 +146,7 @@ def run_dblp_acm_zeroconfig(
     n_dblp = len(dblp_ids)
 
     found: set[tuple[str, str]] = set()
-    matched = getattr(result, "matched", None)
+    matched = _as_polars(getattr(result, "matched", None))
     if matched is not None and matched.height > 0:
         # match_df stamps target_row_id (from the first arg) and
         # ref_row_id (from the second arg). They're positional indices
