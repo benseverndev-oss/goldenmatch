@@ -362,7 +362,8 @@
             "goldenmatch.core.golden",
             "goldenmatch.core.pairs",
             "goldenmatch.core.pipeline",
-            "goldenmatch.core.probabilistic"
+            "goldenmatch.core.probabilistic",
+            "goldenmatch.core.scorer"
           ]
         },
         {
@@ -4642,6 +4643,7 @@
             "find_exact_matches",
             "find_fuzzy_matches",
             "find_fuzzy_matches_columnar",
+            "note_scoring_route",
             "pairs_df_to_list",
             "pairs_list_to_df",
             "profile_threshold",

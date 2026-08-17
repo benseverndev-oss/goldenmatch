@@ -256,7 +256,8 @@ def score_blocks_duckdb(
         )
 
         _emit_scoring_profile(result, profile_threshold(mk, result),
-                              candidates_compared=0, candidates_counted=False)
+                              candidates_compared=0, candidates_counted=False,
+                              route="duckdb")
         return result
     finally:
         con.close()

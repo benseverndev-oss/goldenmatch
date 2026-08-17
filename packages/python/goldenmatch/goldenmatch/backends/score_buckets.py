@@ -1344,7 +1344,7 @@ def score_probabilistic_external_blocks(
     return out
 
 
-def _emit_profile(pairs: Any, mk: Any) -> None:
+def _emit_profile(pairs: Any, mk: Any, route: str = "buckets") -> None:
     """Report this backend's scoring to the auto-config emitter (#2647).
 
     `core/scorer.py` emits from its own entry points; this backend calls
@@ -1372,7 +1372,7 @@ def _emit_profile(pairs: Any, mk: Any) -> None:
 
     _emit_scoring_profile(
         pairs, profile_threshold(mk, pairs),
-        candidates_compared=0, candidates_counted=False,
+        candidates_compared=0, candidates_counted=False, route=route,
     )
 
 
@@ -2768,10 +2768,10 @@ def score_buckets(
                     list(zip(_tbl.column("id_a").to_pylist(),
                              _tbl.column("id_b").to_pylist(),
                              _tbl.column("score").to_pylist(), strict=True)),
-                    mk,
+                    mk, route="buckets.arrow",
                 )
             return _tbl
-        _emit_profile([], mk)
+        _emit_profile([], mk, route="buckets.arrow.empty")
         return pairs_to_pair_stream([])
     _emit_profile(all_pairs, mk)
     return all_pairs
