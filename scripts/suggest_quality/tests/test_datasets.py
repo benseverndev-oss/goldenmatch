@@ -61,3 +61,59 @@ def test_historical_50k_registered_full_scan():
     by_name = {d.name: d for d in REGISTRY}
     h = by_name["historical_50k"]
     assert h.full_scan is True
+
+
+# ── vendored DBLP-ACM (#2635) ────────────────────────────────────────────────
+#
+# These are the durable guard for the reason the corpus is committed at all: the
+# suggest-quality gate blesses a per-dataset scorecard, and a blessed dataset
+# that cannot be LOADED becomes a permanent MISSING failure (#2566). A
+# fetched-at-runtime corpus is absent whenever upstream is unreachable, so
+# "dblp_acm loads with no network" is a gate precondition, not a nicety.
+# If someone deletes the vendored copy to save 852 KB, these fail loudly here
+# rather than silently turning the gate red on main.
+
+
+def test_dblp_acm_is_vendored_and_loads():
+    """The committed corpus resolves and parses without any network access."""
+    from scripts.suggest_quality.datasets import _dblp_acm, _dblp_acm_dir
+
+    d = _dblp_acm_dir()
+    assert d is not None, (
+        "DBLP-ACM not found. The vendored copy under "
+        "scripts/suggest_quality/vendored/DBLP-ACM/ is committed on purpose "
+        "(#2635) so the gate can run this dataset offline -- see its "
+        "PROVENANCE.md before removing it."
+    )
+    loaded = _dblp_acm()
+    assert loaded is not None, f"DBLP-ACM present at {d} but failed to parse"
+    df, gt = loaded
+    # 2616 DBLP + 2294 ACM records, 2224 cross-source ground-truth pairs.
+    assert df.height == 4910, f"expected 4910 rows, got {df.height}"
+    assert len(gt) == 2224, f"expected 2224 gt pairs, got {len(gt)}"
+
+
+def test_dblp_acm_vendored_copy_is_preferred():
+    """Vendored path wins over the gitignored runtime-download location.
+
+    Ordering is load-bearing: a stale/partial local download must not shadow the
+    committed corpus the gate is blessed against.
+    """
+    from scripts.suggest_quality.datasets import _VENDORED_ROOT, _dblp_acm_dir
+
+    assert _dblp_acm_dir() == _VENDORED_ROOT / "DBLP-ACM"
+
+
+def test_dblp_acm_carries_year_but_is_not_a_matchkey_column():
+    """`year` is present on the frame -- the premise of #2633.
+
+    The candidate-set ceiling there is caused by auto-suggest drawing blocking
+    candidates only from matchkey columns (title/authors/venue), so `year` can
+    never be proposed even though every ground-truth pair agrees on it. If this
+    assertion ever fails the corpus changed shape and #2633's analysis needs
+    re-deriving.
+    """
+    from scripts.suggest_quality.datasets import _dblp_acm
+
+    df, _ = _dblp_acm()
+    assert "year" in df.columns
