@@ -56,6 +56,42 @@ def reset_ne_broken() -> None:
         _NE_BROKEN.clear()
 
 
+def cheap_n_rows(block: Any) -> int | None:
+    """Row count IF reading it costs nothing; ``None`` when it would collect.
+
+    The candidate-count loop is gated on BLOCK COUNT because `Block.n_rows()`
+    goes through `materialize()`. But materialising is only expensive for one
+    of the shapes a block can take:
+
+      * `RowIdBlock` carries an int array -- `len(_ids)`, free;
+      * `Block.df` already a seam `Frame` or an eager native frame -- `.height`,
+        free (`materialize()` returns it unchanged);
+      * `Block.df` a polars LazyFrame -- `.collect()`, NOT free.
+
+    Only the last deserves the gate. Returning None for it, and a real number
+    otherwise, lets the caller count without ever paying to count.
+    """
+    ids = getattr(block, "_ids", None)
+    if ids is not None:
+        try:
+            return len(ids)
+        except TypeError:  # pragma: no cover - an array without __len__
+            return None
+
+    d = getattr(block, "df", None)
+    if d is None:
+        return None
+
+    from goldenmatch.core.frame import Frame, is_polars_lazyframe
+
+    if is_polars_lazyframe(d):
+        return None  # would collect -- decline
+    if isinstance(d, Frame):
+        return d.height
+    h = getattr(d, "height", None)
+    return int(h) if isinstance(h, int) else None
+
+
 def _candidate_count_gate() -> int:
     """Max blocks for which the candidate-count loop runs. Default 10,000.
 
@@ -2336,7 +2372,15 @@ def score_blocks_parallel(
     # to serve a diagnostic would be the wrong trade.
     _CANDIDATE_COUNT_SKIP_THRESHOLD = _candidate_count_gate()
     _n_blocks_for_count_gate = len(blocks)
-    if _n_blocks_for_count_gate <= _CANDIDATE_COUNT_SKIP_THRESHOLD:
+    # Count when it is FREE, whatever the block count. `cheap_n_rows` declines
+    # only for blocks that would have to collect, so this pays nothing and
+    # rescues the common case: above the gate the profile used to report
+    # `candidates_compared=0` even when every count was an attribute read.
+    _free = [cheap_n_rows(b) for b in blocks]
+    if blocks and all(n is not None for n in _free):
+        total_candidates = sum(n * (n - 1) // 2 for n in _free)  # type: ignore[operator]
+        _candidates_counted = True
+    elif _n_blocks_for_count_gate <= _CANDIDATE_COUNT_SKIP_THRESHOLD:
         total_candidates = 0
         _candidates_counted = True
         for block in blocks:
