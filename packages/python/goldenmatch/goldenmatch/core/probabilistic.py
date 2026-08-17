@@ -3602,6 +3602,56 @@ def _expelled_share(id_a, id_b, score, default_link: float, candidate: float) ->
     return len(matched_default - matched_candidate) / len(matched_default)
 
 
+_SWEEP_MAX_CUTS = 12
+
+
+def _threshold_sweep(id_a, id_b, score, default_link: float,
+                     *, limit: int = _SWEEP_MAX_CUTS) -> list[dict]:
+    """What the clustering would look like at each candidate cut above the default.
+
+    The valley detector answers "is there a trough" over ``_REFIT_BINS = 20``
+    bins. On person@1M that was the wrong instrument: FS scores there take five
+    distinct values (five fields, mostly binary agreement levels), so five bins
+    are occupied and the trough search settled on 0.60 -- the bottom of the
+    support, a cut identical to the 0.50 already in force. The separation that
+    matters was the measured gap at 0.70 -> 0.80, which no 20-bin trough was
+    going to find.
+
+    This reports the consequences directly instead of inferring them from a
+    histogram: per cut, how many pairs survive, the largest RAW component, and
+    the share of currently-matched records the cut would strand.
+
+    Bounded at ``limit`` clustering passes. Discrete scores contribute their
+    distinct values; a continuous distribution is sampled at quantiles, so this
+    stays usable on the shape it is most needed for.
+    """
+    arr = np.asarray(score, dtype=np.float64)
+    above = arr[arr > default_link]
+    if above.size == 0:
+        return []
+    distinct = np.unique(above)
+    if distinct.size <= limit:
+        cuts = distinct
+    else:
+        qs = np.linspace(0.0, 1.0, limit)
+        cuts = np.unique(np.quantile(above, qs))
+    matched_default = _matched_records(id_a, id_b, score, default_link)
+    base = len(matched_default)
+    rows: list[dict] = []
+    for cut in cuts:
+        cut = float(cut)
+        kept = int((arr >= cut).sum())
+        matched_cut = _matched_records(id_a, id_b, score, cut)
+        expelled = (len(matched_default - matched_cut) / base) if base else 0.0
+        rows.append({
+            "cut": round(cut, 4),
+            "linked_pairs": kept,
+            "max_component": _max_cluster_size(id_a, id_b, score, cut),
+            "expelled": round(float(expelled), 6),
+        })
+    return rows
+
+
 def _record(out: dict | None, reason: str, default_link: float,
             candidate: float, **extra) -> None:
     """Record the refit decision as DATA, not only as a log line.
@@ -3705,7 +3755,22 @@ def fs_refit_link_threshold(id_a, id_b, score, default_link: float,
     saying anything, so: it ships. Residual known blind spot: a candidate that splits a
     correct cluster into two multi-member clusters expels nobody, so neither guard
     sees it; no panel dataset exhibits that shape."""
-    candidate = fs_refit_threshold(np.asarray(score, dtype=np.float64), default_link)
+    _arr = np.asarray(score, dtype=np.float64)
+    # A cut below the whole distribution is not a threshold -- it admits every
+    # scored pair. Costs one min(); recorded on every path because a decline
+    # reporting equal maxima is otherwise ambiguous between "the candidate does
+    # not help" and "the candidate does nothing at all", which call for
+    # opposite responses. person@1M was the second and read as the first.
+    _score_min = float(_arr.min()) if _arr.size else float("nan")
+    _inert = bool(_arr.size and default_link <= _score_min)
+    if decision_out is not None:
+        decision_out["score_min"] = round(_score_min, 6) if _arr.size else None
+        decision_out["cut_is_inert"] = _inert
+        if os.environ.get("GOLDENMATCH_FS_REFIT_SWEEP", "").lower() in (
+            "1", "true", "yes", "on",
+        ):
+            decision_out["sweep"] = _threshold_sweep(id_a, id_b, score, default_link)
+    candidate = fs_refit_threshold(_arr, default_link)
     if candidate <= default_link:
         # No valley above the default -> the loop is a no-op (the common case on
         # 0.50-optimal data). DEBUG so an opt-in run can confirm it engaged.

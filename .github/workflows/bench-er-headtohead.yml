@@ -96,6 +96,14 @@ permissions:
 # This lane pip-installs splink/duckdb from PyPI and runs the pipeline, so it
 # needs the documented mimalloc-SIGSEGV guard (ARROW_DEFAULT_MEMORY_POOL=system).
 env:
+  # Record what the clustering would look like at each candidate cut, not just
+  # the one the valley picked. person@1M declined its refit with `max 618 ->
+  # 618, expelled 0.0`, which reads as "no repair available" and was actually
+  # "the candidate is identical to the cut already in force" -- nothing there
+  # scores below 0.60 while the cut is 0.50. A histogram could not tell those
+  # apart; the sweep reports the consequences directly. Bounded at 12
+  # clustering passes, bench-only.
+  GOLDENMATCH_FS_REFIT_SWEEP: "1"
   ARROW_DEFAULT_MEMORY_POOL: system
   # jemalloc page-decay tuning for polars (its allocator is jemalloc, `_RJEM_`
   # prefix). Default jemalloc holds freed dirty/muzzy pages ~10s for reuse; a
