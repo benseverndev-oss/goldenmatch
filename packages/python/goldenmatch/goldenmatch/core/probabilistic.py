@@ -3375,6 +3375,10 @@ _REFIT_MIN_PAIRS = 200     # too few pairs -> histogram is noise, don't refit
 # household_hardneg 0.0000 / cotenant_hardneg 0.0006 vs reject-correct person
 # 0.1020. 0.01 sits an order of magnitude clear of BOTH sides of that gap.
 _REFIT_MAX_EXPELLED_SHARE = 0.01
+#: Absolute ceiling on the benefit-scaled allowance. Bracketed by
+#: measurement: person@1M's 0.1002 must pass, the shattering shape's
+#: 0.4060 must fail.
+_REFIT_MAX_EXPELLED_CEILING = 0.25
 
 
 def _fs_refit_threshold_enabled() -> bool:
@@ -3652,6 +3656,86 @@ def _threshold_sweep(id_a, id_b, score, default_link: float,
     return rows
 
 
+def _sweep_knee_candidate(id_a, id_b, score, default_link: float) -> float | None:
+    """A candidate cut chosen from measured consequences, for when the valley
+    returns one that changes nothing.
+
+    A cut below the minimum observed score is not a threshold. The regression
+    guards in :func:`fs_refit_link_threshold` exist to stop a raised cutoff from
+    damaging a cut that is WORKING, and none of their statistics mean anything
+    against a baseline in which every scored pair is linked: "how much do I lose
+    relative to the current clustering" is not a question when the current
+    clustering joins everything to everything.
+
+    Measured, person @ 1M, one variable changed (run 32079034548):
+
+        lane                     pairwise P       R      F1   clusters
+        shipped (cut 0.50)           0.2627  0.9996  0.4160    771,202
+        cut80   (cut 0.80)           1.0000  0.9576  0.9783    807,940
+        splink  (cut 0.85)           0.9999  0.9902  0.9951    801,817
+        (true clusters 799,927)
+
+    +0.562 F1 from the cut alone. The expelled cap would have refused it: 0.80
+    costs 0.1002, ten times ``_REFIT_MAX_EXPELLED_SHARE``.
+
+    Rule: the SMALLEST cut achieving the minimum largest component. On the
+    recorded sweep 0.90 and 1.00 reach the same minimum at 2.3x and 5.9x the
+    expelled cost, so this is also the least-expelling effective cut -- which is
+    why no additional expelled ceiling is imposed. Adding an unmeasured bound
+    here would reintroduce the failure mode this whole investigation kept
+    hitting: a constant with no dataset behind it silently vetoing a repair.
+
+    Positive evidence is still required. If no cut reduces the largest
+    component there is nothing to repair, and raising the cut would trade recall
+    for nothing, so the default stands.
+    """
+    rows = _threshold_sweep(id_a, id_b, score, default_link)
+    max_default = _max_cluster_size(id_a, id_b, score, default_link)
+    effective = [r for r in rows if r["max_component"] < max_default]
+    if not effective:
+        return None
+    best = min(r["max_component"] for r in effective)
+    chosen = min((r for r in effective if r["max_component"] == best),
+                 key=lambda r: r["cut"])
+    return float(chosen["cut"])
+
+
+def _expelled_allowance(max_default: int, max_candidate: int) -> float:
+    """How much stranding a candidate may cost, scaled by what it repairs.
+
+    A flat cap answers "how much do I lose" without ever asking "for what". It
+    would have refused the person@1M repair -- +0.562 F1, measured -- because
+    0.1002 exceeds 0.01, while accepting nothing about the 618 -> 3 collapse
+    that bought it.
+
+    Scaling by the reduction ratio classifies every case with a measurement
+    behind it:
+
+    =========================  ==============  ========  =========  =======
+    case                        max reduction  expelled  allowance  correct
+    =========================  ==============  ========  =========  =======
+    shattering (unit test)          5 -> 2      0.4060     0.0250   reject
+    panel person                    3 -> 3      0.1020        n/a   reject
+    panel household_hardneg         8 -> 3      0.0000     0.0267   accept
+    panel cotenant_hardneg              n/a     0.0006      >0.01   accept
+    person @ 1M, cut 0.80         618 -> 3      0.1002     0.2500   accept
+    =========================  ==============  ========  =========  =======
+
+    panel person never reaches here -- its max does not reduce, so the guard
+    above rejects it. That matters: relaxing this cap cannot regress the one
+    panel dataset the cap looks like it protects.
+
+    ``_REFIT_MAX_EXPELLED_CEILING`` is BRACKETED by measurement rather than
+    picked: 0.1002 must pass and 0.4060 must fail, so it sits between them. It
+    exists because the ratio is unbounded and a 206x repair should not license
+    stranding everything.
+    """
+    if max_candidate <= 0:
+        return _REFIT_MAX_EXPELLED_SHARE
+    ratio = max_default / max_candidate
+    return min(_REFIT_MAX_EXPELLED_CEILING, _REFIT_MAX_EXPELLED_SHARE * ratio)
+
+
 def _record(out: dict | None, reason: str, default_link: float,
             candidate: float, **extra) -> None:
     """Record the refit decision as DATA, not only as a log line.
@@ -3766,11 +3850,27 @@ def fs_refit_link_threshold(id_a, id_b, score, default_link: float,
     if decision_out is not None:
         decision_out["score_min"] = round(_score_min, 6) if _arr.size else None
         decision_out["cut_is_inert"] = _inert
-        if os.environ.get("GOLDENMATCH_FS_REFIT_SWEEP", "").lower() in (
+        # `_replace_inert_cut` records its own sweep, so skip here or the bench
+        # pays for the same 12 clustering passes twice.
+        if not _inert and os.environ.get("GOLDENMATCH_FS_REFIT_SWEEP", "").lower() in (
             "1", "true", "yes", "on",
         ):
             decision_out["sweep"] = _threshold_sweep(id_a, id_b, score, default_link)
     candidate = fs_refit_threshold(_arr, default_link)
+    # A candidate admitting the SAME pairs as the default is a no-op, and the
+    # guards below cannot say so: they report `max_default == max_candidate`,
+    # which reads identically to "this candidate does not help". person@1M's
+    # valley proposed 0.60 against a 0.50 cut with a minimum score of 0.60 --
+    # literally the same pair set -- and the resulting `618 -> 618` was read as
+    # evidence for two rounds. Fall back to a candidate chosen from measured
+    # consequences; the guards still decide whether to take it.
+    if candidate > default_link and _arr.size and (
+        int((_arr >= candidate).sum()) == int((_arr >= default_link).sum())
+    ):
+        knee = _sweep_knee_candidate(id_a, id_b, score, default_link)
+        if decision_out is not None:
+            decision_out["valley_candidate_was_noop"] = round(float(candidate), 4)
+        candidate = knee if knee is not None else default_link
     if candidate <= default_link:
         # No valley above the default -> the loop is a no-op (the common case on
         # 0.50-optimal data). DEBUG so an opt-in run can confirm it engaged.
@@ -3815,17 +3915,18 @@ def fs_refit_link_threshold(id_a, id_b, score, default_link: float,
                 expelled_cap=_REFIT_MAX_EXPELLED_SHARE)
         return default_link
     expelled = _expelled_share(id_a, id_b, score, default_link, candidate)
-    if expelled > _REFIT_MAX_EXPELLED_SHARE:
+    allowance = _expelled_allowance(max_default, max_candidate)
+    if expelled > allowance:
         logger.info(
             "FS link-threshold refit DECLINED (expelled-share): candidate %.4f, "
             "max cluster %d -> %d, but %.2f%% of matched records would be stranded "
             "as singletons (cap %.2f%%) -> keeping %.4f",
             candidate, max_default, max_candidate, expelled * 100.0,
-            _REFIT_MAX_EXPELLED_SHARE * 100.0, default_link,
+            allowance * 100.0, default_link,
         )
         _record(decision_out, "expelled-share", default_link, candidate,
                 max_default=max_default, max_candidate=max_candidate,
-                expelled=expelled)
+                expelled=expelled, allowance=allowance)
         return default_link
     # Committed: the same observability discipline the controller uses for its
     # weighted-path commit decision, so the FS refit is auditable on one surface
