@@ -587,6 +587,9 @@ class AutoConfigController:
         self.policy = policy
         self.budget = budget
         self._memory = memory
+        # {matchkey_name: {"link_threshold": float, "source": str}} from the most
+        # recent sample pipeline run (#2637). Empty for non-probabilistic runs.
+        self._last_fs_link_thresholds: dict[str, dict] = {}
 
     # ---- Public entry point ------------------------------------------------
     def run(
@@ -1341,6 +1344,9 @@ class AutoConfigController:
             best_entry.config, best_entry.profile,
         )
 
+        # #2637: write the RESOLVED FS link cutoff onto the committed config.
+        self._stamp_resolved_link_thresholds(committed_config)
+
         # ── Controller v3 planner (phase 2): pick execution plan based on the
         # committed profile + runtime introspection. Phase 2 lands with an
         # empty rule list (no behavior change); phases 3-6 register rules.
@@ -1760,9 +1766,77 @@ class AutoConfigController:
         # the sample profile. A polars / ray sample is untouched (byte-identical).
         config = self._maybe_bucket_route_arrow(sample, config)
         if reference is None:
-            run_dedupe_df(sample, config=config, _prep_store=_prep_store)
+            _res = run_dedupe_df(sample, config=config, _prep_store=_prep_store)
         else:
-            run_match_df(sample, reference, config=config)
+            _res = run_match_df(sample, reference, config=config)
+        # #2637: keep the RESOLVED FS link cutoff and its provenance from this
+        # sample run. `_stamp_resolved_link_thresholds` writes it onto the
+        # committed config so the cutoff stops being implicit. Reading it here
+        # is the only place it is available: `resolve_thresholds` runs inside
+        # the pipeline, after auto-config has already produced the config, so
+        # nothing upstream can know the number.
+        try:
+            self._last_fs_link_thresholds = dict(
+                (_res or {}).get("fs_link_thresholds") or {}
+            )
+        except Exception:  # noqa: BLE001 - telemetry must never fail a run
+            self._last_fs_link_thresholds = {}
+
+    def _stamp_resolved_link_thresholds(self, config: GoldenMatchConfig) -> None:
+        """Write the resolved FS link cutoff onto the committed config (#2637).
+
+        A probabilistic matchkey cuts on ``link_threshold``. Auto-config never
+        set it, so the number was resolved three layers down at scoring time by
+        ``resolve_thresholds`` (explicit > EM-calibrated > fixed default) and the
+        config it handed back was SILENT about the single most consequential
+        Fellegi-Sunter decision. Two costs, both measured in #2636:
+
+        - ``mk.cutoff`` was ``None``, so ``_perturbable_matchkeys`` was empty and
+          ``ThresholdShift`` returned ``None``. The healer's only FS-specific
+          lever was inert on every auto-config FS config (verified on 4 of 4
+          datasets), and ``threshold_perturbations`` yielded nothing, leaving
+          ``perturbation_stability`` permanently unmeasured on this path.
+        - the user in #2483 swept a field that does not cut and measured nothing,
+          with no way to see that no decision had ever been made.
+
+        This does NOT change the cutoff. It records the value the run already
+        used, so behaviour is byte-identical and the lever becomes reachable.
+        Only ``fallback`` / ``calibrated`` sources are stamped: ``configured``
+        means the user set it and must not be overwritten.
+
+        Silent no-op when the sample run recorded nothing (non-probabilistic
+        configs, or a path that never reached FS scoring) -- a missing
+        measurement must not invent a cutoff, which would be exactly the
+        fabricated-default problem this exists to remove.
+        """
+        recorded = getattr(self, "_last_fs_link_thresholds", None)
+        if not recorded:
+            return
+        from goldenmatch.core.probabilistic import (
+            LINK_THRESHOLD_CALIBRATED,
+            LINK_THRESHOLD_FALLBACK,
+        )
+        stampable = (LINK_THRESHOLD_FALLBACK, LINK_THRESHOLD_CALIBRATED)
+        for mk in config.get_matchkeys():
+            if getattr(mk, "type", None) != "probabilistic":
+                continue
+            if mk.link_threshold is not None:
+                continue  # user's own value; never overwrite
+            entry = recorded.get(mk.name)
+            if not isinstance(entry, dict) or entry.get("source") not in stampable:
+                continue
+            value = entry.get("link_threshold")
+            if value is None:
+                continue
+            try:
+                mk.link_threshold = float(value)
+            except (TypeError, ValueError):
+                continue
+            logger.info(
+                "auto-config: recorded resolved link_threshold=%.4f on matchkey "
+                "%r (source=%s) so the cutoff is explicit and tunable (#2637)",
+                float(value), mk.name, entry.get("source"),
+            )
 
     @staticmethod
     def _maybe_bucket_route_arrow(
