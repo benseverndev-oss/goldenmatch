@@ -198,7 +198,36 @@ def _atomic_write(path: Path, payload: dict) -> None:
     os.replace(tmp, path)
 
 
+def _enable_info_logging() -> None:
+    """Let the library's INFO diagnostics reach the run log.
+
+    Nothing configures logging here, so Python falls back to `lastResort`, which
+    emits at WARNING -- every `logger.info` in the library produced NOTHING. That
+    silently defeated the decisions this bench exists to explain: the FS
+    link-threshold refit logs which of its three guards declined a candidate, and
+    on person@1M that line was the answer to why the cut stayed at the default
+    while precision sat at 0.263 with 673,277 false positives.
+
+    A bench is exactly where verbosity is cheap, so INFO is the right floor. This
+    is a HARNESS change, not a library one -- production keeps its own logging
+    policy.
+
+    Not a substitute for recording the decision as DATA in the result. A log line
+    is lossy, order-dependent and easy to lose to a level change -- which is what
+    happened here. This makes the next run answerable; persisting the refit
+    decision alongside `fs_link_thresholds` makes every run answerable.
+    """
+    import logging
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s %(name)s: %(message)s",
+        stream=sys.stderr,
+    )
+
+
 def main() -> None:
+    _enable_info_logging()
     ap = argparse.ArgumentParser()
     ap.add_argument("--input", type=Path, required=True)
     ap.add_argument("--rows", type=int, required=True)
@@ -206,6 +235,16 @@ def main() -> None:
     ap.add_argument("--pred-out", type=Path, default=None,
                     help="write {record_id, pred_cluster_id} parquet for accuracy eval")
     ap.add_argument("--threshold", type=float, default=0.85)
+    ap.add_argument(
+        "--force-link-threshold", type=float, default=None,
+        help=(
+            "Force the FS link cut WITHOUT the --fs-basic-scorers scorer "
+            "rewrite. `gm_probabilistic` couples the two, so its delta against "
+            "`gm_probabilistic_shipped` is a three-way confound (cut + scorers "
+            "+ calibration) and cannot say which term dominates. This isolates "
+            "the cut."
+        ),
+    )
     ap.add_argument("--mode", choices=["hand_built", "zeroconfig", "probabilistic"],
                     default="hand_built",
                     help="hand_built = explicit bucket+native config (default); "
@@ -382,6 +421,16 @@ def main() -> None:
             if args.fs_basic_scorers:
                 for mk in cfg.get_matchkeys():
                     mk.link_threshold = args.threshold
+            # The cut alone, nothing else touched. person@1M's shipped cut is
+            # 0.50 while its MINIMUM score is 0.60 (run 32078393523,
+            # `cut_is_inert: true`), so it admits every scored pair and the
+            # 0.2627 precision follows from that plus transitive closure. The
+            # recorded sweep puts the knee at 0.80 -- largest component
+            # 618 -> 3, expelled 0.1002 -- and going higher buys no further
+            # reduction at 2-6x the expelled cost.
+            if args.force_link_threshold is not None:
+                for mk in cfg.get_matchkeys():
+                    mk.link_threshold = args.force_link_threshold
             # Force rerank off so a 3+ field weighted matchkey can't pull a
             # cross-encoder model down from HuggingFace at dedupe time.
             for mk in cfg.get_matchkeys():
@@ -528,6 +577,16 @@ def main() -> None:
         # `ded.config` deliberately, NOT the `cfg` handed to dedupe_df: on the
         # auto-config modes the resolved config is what auto-config committed,
         # and the pre-run object can carry thresholds it overwrote.
+        # The cutoff the run ACTUALLY applied, its provenance, and what the
+        # threshold refit decided about it. `config_resolved` records only what
+        # was CONFIGURED -- on this lane `link_threshold` is null, which says
+        # nothing about where the cut landed or why. That gap is what made the
+        # person@1M over-merge unanswerable from the artifact: three separate
+        # changes were aimed at the wrong branch because no run recorded which
+        # decision was in force.
+        _stats = getattr(ded, "stats", None) or {}
+        result["fs_link_thresholds"] = _stats.get("fs_link_thresholds")
+
         _resolved = getattr(ded, "config", None)
         result["config_resolved"] = (
             _config_telemetry(_resolved) if _resolved is not None

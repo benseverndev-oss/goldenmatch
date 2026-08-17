@@ -3375,6 +3375,10 @@ _REFIT_MIN_PAIRS = 200     # too few pairs -> histogram is noise, don't refit
 # household_hardneg 0.0000 / cotenant_hardneg 0.0006 vs reject-correct person
 # 0.1020. 0.01 sits an order of magnitude clear of BOTH sides of that gap.
 _REFIT_MAX_EXPELLED_SHARE = 0.01
+#: Absolute ceiling on the benefit-scaled allowance. Bracketed by
+#: measurement: person@1M's 0.1002 must pass, the shattering shape's
+#: 0.4060 must fail.
+_REFIT_MAX_EXPELLED_CEILING = 0.25
 
 
 def _fs_refit_threshold_enabled() -> bool:
@@ -3521,9 +3525,25 @@ def fs_refit_threshold(scores, default_link: float) -> float:
 
 
 def _max_cluster_size(id_a, id_b, score, threshold: float) -> int:
-    """Largest cluster size when linking pairs with score >= threshold. Singletons
-    can't be the max cluster, so ``build_clusters`` infers ids from the pairs (no
-    need for the full row-id set)."""
+    """Largest RAW connected component when linking pairs with score >= threshold.
+
+    ``auto_split=False`` is load-bearing, not a default being restated. The
+    signature is ``build_clusters(pairs, all_ids=None, max_cluster_size=100,
+    auto_split=True, ...)``, so the default MST-splits anything above 100 and this
+    function could never return more than the clamp. The caller compares
+    ``max_candidate >= max_default``, so once over-merge is severe enough to
+    exceed 100 at BOTH cutoffs the comparison is 100 against 100 and the refit
+    declines -- most confidently on the shape it exists to repair.
+
+    Measured, person @ 1M (run 32075000216): ``max_default 100 -> max_candidate
+    100`` with the candidate stranding ZERO records, while the true components
+    were nothing like equal.
+
+    Auto-split is a downstream MITIGATION -- it chops an over-merged cluster into
+    presentable pieces. The question here is whether the CUTOFF reduced
+    over-merge, which is a property of the raw components the cutoff produces,
+    not of how they are later presented. Singletons can't be the max, so ids are
+    inferred from the pairs."""
     from goldenmatch.core.cluster import build_clusters  # noqa: PLC0415
     linked = [
         (int(a), int(b), float(s))
@@ -3531,7 +3551,7 @@ def _max_cluster_size(id_a, id_b, score, threshold: float) -> int:
     ]
     if not linked:
         return 0
-    clusters = build_clusters(linked)
+    clusters = build_clusters(linked, auto_split=False)
     return max((c["size"] for c in clusters.values()), default=0)
 
 
@@ -3539,7 +3559,16 @@ def _matched_records(id_a, id_b, score, threshold: float) -> set[int]:
     """Records that land in a MULTI-MEMBER cluster when linking at ``threshold``.
 
     The complement (within the linked-pair id space) is the set of records the
-    cutoff leaves unmatched, which is what ``_expelled_share`` measures."""
+    cutoff leaves unmatched, which is what ``_expelled_share`` measures.
+
+    ``auto_split=False`` for the same reason as :func:`_max_cluster_size`: MST
+    splitting can leave a weakly-attached member as a size-1 piece, which reads
+    here as "this record is unmatched" when the cutoff in fact linked it.
+    Measured on the 8x-over-merge fixture in
+    ``test_fs_refit_max_saturates.py``: 800 of 1200 records counted as matched
+    with splitting on, 1200 with it off. There the distortion happened to be
+    equal at both cutoffs and cancelled in the ratio, but nothing makes that
+    general -- and this is the SAFETY guard, so it must not depend on luck."""
     from goldenmatch.core.cluster import build_clusters  # noqa: PLC0415
     linked = [
         (int(a), int(b), float(s))
@@ -3548,7 +3577,7 @@ def _matched_records(id_a, id_b, score, threshold: float) -> set[int]:
     if not linked:
         return set()
     out: set[int] = set()
-    for c in build_clusters(linked).values():
+    for c in build_clusters(linked, auto_split=False).values():
         if c.get("size", 0) > 1:
             out.update(int(m) for m in c["members"])
     return out
@@ -3577,7 +3606,176 @@ def _expelled_share(id_a, id_b, score, default_link: float, candidate: float) ->
     return len(matched_default - matched_candidate) / len(matched_default)
 
 
-def fs_refit_link_threshold(id_a, id_b, score, default_link: float) -> float:
+_SWEEP_MAX_CUTS = 12
+
+
+def _threshold_sweep(id_a, id_b, score, default_link: float,
+                     *, limit: int = _SWEEP_MAX_CUTS) -> list[dict]:
+    """What the clustering would look like at each candidate cut above the default.
+
+    The valley detector answers "is there a trough" over ``_REFIT_BINS = 20``
+    bins. On person@1M that was the wrong instrument: FS scores there take five
+    distinct values (five fields, mostly binary agreement levels), so five bins
+    are occupied and the trough search settled on 0.60 -- the bottom of the
+    support, a cut identical to the 0.50 already in force. The separation that
+    matters was the measured gap at 0.70 -> 0.80, which no 20-bin trough was
+    going to find.
+
+    This reports the consequences directly instead of inferring them from a
+    histogram: per cut, how many pairs survive, the largest RAW component, and
+    the share of currently-matched records the cut would strand.
+
+    Bounded at ``limit`` clustering passes. Discrete scores contribute their
+    distinct values; a continuous distribution is sampled at quantiles, so this
+    stays usable on the shape it is most needed for.
+    """
+    arr = np.asarray(score, dtype=np.float64)
+    above = arr[arr > default_link]
+    if above.size == 0:
+        return []
+    distinct = np.unique(above)
+    if distinct.size <= limit:
+        cuts = distinct
+    else:
+        qs = np.linspace(0.0, 1.0, limit)
+        cuts = np.unique(np.quantile(above, qs))
+    from goldenmatch.core.cluster import build_clusters  # noqa: PLC0415
+
+    def _one_pass(threshold: float) -> tuple[set[int], int]:
+        """Matched-record set AND largest component from a SINGLE clustering
+        pass. Calling `_matched_records` and `_max_cluster_size` separately
+        doubles the cost of the sweep, which is the dominant term: measured on
+        person@1M, the sweep took the shipped lane from 56.7s to 146.2s."""
+        linked = [
+            (int(a), int(b), float(v))
+            for a, b, v in zip(id_a, id_b, score) if v >= threshold
+        ]
+        if not linked:
+            return set(), 0
+        matched: set[int] = set()
+        largest = 0
+        for c in build_clusters(linked, auto_split=False).values():
+            size = c.get("size", 0)
+            largest = max(largest, size)
+            if size > 1:
+                matched.update(int(m) for m in c["members"])
+        return matched, largest
+
+    matched_default, _ = _one_pass(default_link)
+    base = len(matched_default)
+    rows: list[dict] = []
+    for cut in cuts:
+        cut = float(cut)
+        matched_cut, largest = _one_pass(cut)
+        expelled = (len(matched_default - matched_cut) / base) if base else 0.0
+        rows.append({
+            "cut": round(cut, 4),
+            "linked_pairs": int((arr >= cut).sum()),
+            "max_component": largest,
+            "expelled": round(float(expelled), 6),
+        })
+    return rows
+
+
+def _sweep_knee_candidate(id_a, id_b, score, default_link: float) -> float | None:
+    """A candidate cut chosen from measured consequences, for when the valley
+    returns one that changes nothing.
+
+    A cut below the minimum observed score is not a threshold. The regression
+    guards in :func:`fs_refit_link_threshold` exist to stop a raised cutoff from
+    damaging a cut that is WORKING, and none of their statistics mean anything
+    against a baseline in which every scored pair is linked: "how much do I lose
+    relative to the current clustering" is not a question when the current
+    clustering joins everything to everything.
+
+    Measured, person @ 1M, one variable changed (run 32079034548):
+
+        lane                     pairwise P       R      F1   clusters
+        shipped (cut 0.50)           0.2627  0.9996  0.4160    771,202
+        cut80   (cut 0.80)           1.0000  0.9576  0.9783    807,940
+        splink  (cut 0.85)           0.9999  0.9902  0.9951    801,817
+        (true clusters 799,927)
+
+    +0.562 F1 from the cut alone. The expelled cap would have refused it: 0.80
+    costs 0.1002, ten times ``_REFIT_MAX_EXPELLED_SHARE``.
+
+    Rule: the SMALLEST cut achieving the minimum largest component. On the
+    recorded sweep 0.90 and 1.00 reach the same minimum at 2.3x and 5.9x the
+    expelled cost, so this is also the least-expelling effective cut -- which is
+    why no additional expelled ceiling is imposed. Adding an unmeasured bound
+    here would reintroduce the failure mode this whole investigation kept
+    hitting: a constant with no dataset behind it silently vetoing a repair.
+
+    Positive evidence is still required. If no cut reduces the largest
+    component there is nothing to repair, and raising the cut would trade recall
+    for nothing, so the default stands.
+    """
+    rows = _threshold_sweep(id_a, id_b, score, default_link)
+    max_default = _max_cluster_size(id_a, id_b, score, default_link)
+    effective = [r for r in rows if r["max_component"] < max_default]
+    if not effective:
+        return None
+    best = min(r["max_component"] for r in effective)
+    chosen = min((r for r in effective if r["max_component"] == best),
+                 key=lambda r: r["cut"])
+    return float(chosen["cut"])
+
+
+def _expelled_allowance(max_default: int, max_candidate: int) -> float:
+    """How much stranding a candidate may cost, scaled by what it repairs.
+
+    A flat cap answers "how much do I lose" without ever asking "for what". It
+    would have refused the person@1M repair -- +0.562 F1, measured -- because
+    0.1002 exceeds 0.01, while accepting nothing about the 618 -> 3 collapse
+    that bought it.
+
+    Scaling by the reduction ratio classifies every case with a measurement
+    behind it:
+
+    =========================  ==============  ========  =========  =======
+    case                        max reduction  expelled  allowance  correct
+    =========================  ==============  ========  =========  =======
+    shattering (unit test)          5 -> 2      0.4060     0.0250   reject
+    panel person                    3 -> 3      0.1020        n/a   reject
+    panel household_hardneg         8 -> 3      0.0000     0.0267   accept
+    panel cotenant_hardneg              n/a     0.0006      >0.01   accept
+    person @ 1M, cut 0.80         618 -> 3      0.1002     0.2500   accept
+    =========================  ==============  ========  =========  =======
+
+    panel person never reaches here -- its max does not reduce, so the guard
+    above rejects it. That matters: relaxing this cap cannot regress the one
+    panel dataset the cap looks like it protects.
+
+    ``_REFIT_MAX_EXPELLED_CEILING`` is BRACKETED by measurement rather than
+    picked: 0.1002 must pass and 0.4060 must fail, so it sits between them. It
+    exists because the ratio is unbounded and a 206x repair should not license
+    stranding everything.
+    """
+    if max_candidate <= 0:
+        return _REFIT_MAX_EXPELLED_SHARE
+    ratio = max_default / max_candidate
+    return min(_REFIT_MAX_EXPELLED_CEILING, _REFIT_MAX_EXPELLED_SHARE * ratio)
+
+
+def _record(out: dict | None, reason: str, default_link: float,
+            candidate: float, **extra) -> None:
+    """Record the refit decision as DATA, not only as a log line.
+
+    Three times in the person@1M investigation the thing that unblocked it was a
+    recorded FIELD -- `route`, `candidates_counted`, `em_iterations_total` --
+    and never a log. Logs are lossy: this function's DECLINE paths sat at DEBUG
+    while its COMMIT path sat at INFO, and even after promoting them the bench
+    printed nothing because nothing configured a handler above WARNING. A field
+    in the result cannot be lost to a level nobody set.
+    """
+    if out is None:
+        return
+    out.update({"reason": reason, "default_link": float(default_link),
+                "candidate": float(candidate), **extra})
+
+
+def fs_refit_link_threshold(id_a, id_b, score, default_link: float,
+                            *, decision_out: dict | None = None) -> float:
     """Guarded FS threshold refit: the distributional valley candidate, ACCEPTED
     only when re-clustering at it actually REDUCES over-merge (max cluster size)
     vs the default. This is the guard that a pure distributional valley needs: a
@@ -3624,38 +3822,132 @@ def fs_refit_link_threshold(id_a, id_b, score, default_link: float) -> float:
     FALSIFIED** -- person's 0.1161 drop sits BETWEEN the two correct accepts
     (0.0608 / 0.7341), so no bound on it can classify all three.
 
-    **Still default-OFF.** This fixes the accept criterion; flipping the default is a
-    separate decision that needs a green nightly `bench-suggest-quality` panel, which
-    `ci-required` does not run. Residual known blind spot: a candidate that splits a
+    **The max statistic used to SATURATE, so this guard refused hardest on the
+    shape it exists to repair.** ``_max_cluster_size`` called ``build_clusters``
+    with its defaults, and the signature is ``(pairs, all_ids=None,
+    max_cluster_size=100, auto_split=True, ...)`` -- auto-split MST-chops
+    anything above 100, so the function could never return more than the clamp.
+    The accept condition is ``max_candidate < max_default``, so as soon as
+    over-merge exceeded 100 at BOTH cutoffs the comparison was 100 against 100
+    and the candidate was declined. The worse the over-merge, the more certain
+    the refusal.
+
+    Measured, person @ 1M (run 32075000216), recorded by ``_record`` rather than
+    inferred: ``reason no-max-reduction, max_default 100, max_candidate 100,
+    expelled_if_taken 0.0`` -- a candidate stranding ZERO records, refused by a
+    statistic pinned at its own ceiling. Both statistics now measure the RAW
+    components (``auto_split=False``): auto-split is a downstream mitigation, and
+    whether the CUTOFF reduced over-merge is a property of the components the
+    cutoff produces, not of how they are later presented.
+
+    This does not move the panel. Auto-split fires only above 100 members and
+    every panel cluster is far below that (household's over-merge is max 8 -> 3),
+    so the change is confined to datasets with components over 100 -- the
+    population the panel does not contain. Pinned in
+    ``test_fs_refit_max_saturates.py``.
+
+    The alternative considered was deleting the max requirement and letting
+    ``_expelled_share`` carry the accept alone, since it classifies all three
+    panel datasets correctly on its own. It was rejected: the blind spot named at
+    the end of this docstring is exactly what the max test guards, and the defect
+    was that the max was measuring the wrong thing, not that requiring it was
+    wrong.
+
+    **Default ON since #2518** -- this docstring said "Still default-OFF" long
+    after `_fs_refit_threshold_enabled` began returning True by default
+    (`os.environ.get("GOLDENMATCH_FS_REFIT_THRESHOLD", "1")`). Two docstrings in
+    one file disagreeing about whether a behaviour ships is worse than neither
+    saying anything, so: it ships. Residual known blind spot: a candidate that splits a
     correct cluster into two multi-member clusters expels nobody, so neither guard
     sees it; no panel dataset exhibits that shape."""
-    candidate = fs_refit_threshold(np.asarray(score, dtype=np.float64), default_link)
+    _arr = np.asarray(score, dtype=np.float64)
+    # A cut below the whole distribution is not a threshold -- it admits every
+    # scored pair. Costs one min(); recorded on every path because a decline
+    # reporting equal maxima is otherwise ambiguous between "the candidate does
+    # not help" and "the candidate does nothing at all", which call for
+    # opposite responses. person@1M was the second and read as the first.
+    _score_min = float(_arr.min()) if _arr.size else float("nan")
+    _inert = bool(_arr.size and default_link <= _score_min)
+    if decision_out is not None:
+        decision_out["score_min"] = round(_score_min, 6) if _arr.size else None
+        decision_out["cut_is_inert"] = _inert
+        # `_replace_inert_cut` records its own sweep, so skip here or the bench
+        # pays for the same 12 clustering passes twice.
+        if not _inert and os.environ.get("GOLDENMATCH_FS_REFIT_SWEEP", "").lower() in (
+            "1", "true", "yes", "on",
+        ):
+            decision_out["sweep"] = _threshold_sweep(id_a, id_b, score, default_link)
+    candidate = fs_refit_threshold(_arr, default_link)
+    # A candidate admitting the SAME pairs as the default is a no-op, and the
+    # guards below cannot say so: they report `max_default == max_candidate`,
+    # which reads identically to "this candidate does not help". person@1M's
+    # valley proposed 0.60 against a 0.50 cut with a minimum score of 0.60 --
+    # literally the same pair set -- and the resulting `618 -> 618` was read as
+    # evidence for two rounds. Fall back to a candidate chosen from measured
+    # consequences; the guards still decide whether to take it.
+    if candidate > default_link and _arr.size and (
+        int((_arr >= candidate).sum()) == int((_arr >= default_link).sum())
+    ):
+        knee = _sweep_knee_candidate(id_a, id_b, score, default_link)
+        if decision_out is not None:
+            decision_out["valley_candidate_was_noop"] = round(float(candidate), 4)
+        candidate = knee if knee is not None else default_link
     if candidate <= default_link:
         # No valley above the default -> the loop is a no-op (the common case on
         # 0.50-optimal data). DEBUG so an opt-in run can confirm it engaged.
-        logger.debug(
-            "FS link-threshold refit: no distributional valley above %.4f -> keeping %.4f",
+        logger.info(
+            "FS link-threshold refit DECLINED (no-valley): no distributional "
+            "valley above %.4f -> keeping %.4f",
             default_link, default_link,
         )
+        _record(decision_out, "no-valley", default_link, candidate)
         return default_link
     max_default = _max_cluster_size(id_a, id_b, score, default_link)
     max_candidate = _max_cluster_size(id_a, id_b, score, candidate)
     if max_candidate >= max_default:
-        logger.debug(
-            "FS link-threshold refit: declined candidate %.4f (max cluster %d -> %d, no "
-            "over-merge reduction) -> keeping %.4f",
+        logger.info(
+            "FS link-threshold refit DECLINED (no-max-reduction): candidate %.4f, "
+            "max cluster %d -> %d -> keeping %.4f. NOTE: max cluster size is a "
+            "single-outlier statistic; a shape whose over-merge is DIFFUSE (many "
+            "slightly-oversized clusters rather than one giant one) cannot move it, "
+            "so this decline does not mean there is no over-merge.",
             candidate, max_default, max_candidate, default_link,
         )
+        # Compute the expelled share EVEN THOUGH we are declining, because it is
+        # the number the next decision needs and returning without it is what
+        # made this branch unanswerable.
+        #
+        # The panel in this docstring shows `expelled` separating all three
+        # datasets cleanly (person 0.1020 reject, household 0.0000 accept,
+        # cotenant 0.0006 accept) where `linked_d` provably cannot -- person's
+        # 0.1161 sits BETWEEN the two accepts. So the open question is whether
+        # the max-reduction requirement is load-bearing at all, or whether
+        # expelled-share alone would do the job. That cannot be answered while
+        # this path returns before measuring it.
+        #
+        # Recorded, NOT acted on: this still declines exactly as before. Changing
+        # an accept criterion that gates a user's cluster shape needs the number
+        # first -- the same discipline that turned the blocking-skew rule from a
+        # guess into #2629.
+        expelled_if_taken = _expelled_share(id_a, id_b, score, default_link, candidate)
+        _record(decision_out, "no-max-reduction", default_link, candidate,
+                max_default=max_default, max_candidate=max_candidate,
+                expelled_if_taken=round(float(expelled_if_taken), 6),
+                expelled_cap=_REFIT_MAX_EXPELLED_SHARE)
         return default_link
     expelled = _expelled_share(id_a, id_b, score, default_link, candidate)
-    if expelled > _REFIT_MAX_EXPELLED_SHARE:
-        logger.debug(
-            "FS link-threshold refit: declined candidate %.4f despite max cluster "
-            "%d -> %d (%.2f%% of matched records would be stranded as singletons, "
-            "cap %.2f%%) -> keeping %.4f",
+    allowance = _expelled_allowance(max_default, max_candidate)
+    if expelled > allowance:
+        logger.info(
+            "FS link-threshold refit DECLINED (expelled-share): candidate %.4f, "
+            "max cluster %d -> %d, but %.2f%% of matched records would be stranded "
+            "as singletons (cap %.2f%%) -> keeping %.4f",
             candidate, max_default, max_candidate, expelled * 100.0,
-            _REFIT_MAX_EXPELLED_SHARE * 100.0, default_link,
+            allowance * 100.0, default_link,
         )
+        _record(decision_out, "expelled-share", default_link, candidate,
+                max_default=max_default, max_candidate=max_candidate,
+                expelled=expelled, allowance=allowance)
         return default_link
     # Committed: the same observability discipline the controller uses for its
     # weighted-path commit decision, so the FS refit is auditable on one surface
@@ -3665,6 +3957,9 @@ def fs_refit_link_threshold(id_a, id_b, score, default_link: float) -> float:
         "%d -> %d, over-merge reduced; %.2f%% of matched records stranded)",
         default_link, candidate, max_default, max_candidate, expelled * 100.0,
     )
+    _record(decision_out, "committed", default_link, candidate,
+            max_default=max_default, max_candidate=max_candidate,
+            expelled=expelled)
     return candidate
 
 

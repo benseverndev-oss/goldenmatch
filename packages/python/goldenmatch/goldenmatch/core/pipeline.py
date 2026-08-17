@@ -729,6 +729,7 @@ def _maybe_refit_link_threshold(
     *,
     pairs: list | None = None,
     table: Any = None,
+    decision_out: dict | None = None,
 ) -> float:
     """Phase 3a threshold refit, applied UNIFORMLY across every FS scoring route.
 
@@ -748,17 +749,28 @@ def _maybe_refit_link_threshold(
     )
 
     if mk.link_threshold is not None or not _fs_refit_threshold_enabled():
+        # Record the SKIP as well. "no refit decision" and "refit declined" are
+        # indistinguishable in an artifact that only records declines, and they
+        # mean opposite things: the caller's explicit cutoff versus the guard's.
+        if decision_out is not None:
+            decision_out["reason"] = (
+                "explicit-link-threshold" if mk.link_threshold is not None
+                else "refit-disabled"
+            )
         return link_threshold
     if table is not None:
         if table.num_rows < _REFIT_MIN_PAIRS:
             return link_threshold
         d = table.to_pydict()
-        return fs_refit_link_threshold(d["id_a"], d["id_b"], d["score"], link_threshold)
+        return fs_refit_link_threshold(d["id_a"], d["id_b"], d["score"],
+                                       link_threshold, decision_out=decision_out)
     if pairs is not None and len(pairs) >= _REFIT_MIN_PAIRS:
         return fs_refit_link_threshold(
             [p[0] for p in pairs], [p[1] for p in pairs], [p[2] for p in pairs],
-            link_threshold,
+            link_threshold, decision_out=decision_out,
         )
+    if decision_out is not None:
+        decision_out["reason"] = "below-min-pairs"
     return link_threshold
 
 
@@ -896,6 +908,12 @@ def _score_probabilistic_matchkey(
     scoring_mk, link_threshold = _prepare_probabilistic_review_scoring(
         mk, em_result
     )
+    # One dict, recorded by reference below and mutated by the refit later --
+    # so the artifact carries the refit's verdict without the recording site
+    # having to run after it. The six refit call sites are at three indent
+    # levels across three scoring routes; threading a return value through all
+    # of them would be six chances to miss one.
+    _refit_decision: dict = {}
     if threshold_out is not None:
         # #2483: record the cutoff AND where it came from, so the result can
         # report it. Without this a run gives no way to tell a deliberate
@@ -905,6 +923,7 @@ def _score_probabilistic_matchkey(
         threshold_out[mk.name] = {
             "link_threshold": float(link_threshold),
             "source": link_threshold_source(mk, em_result),
+            "refit": _refit_decision,
         }
     if em_results is not None:
         em_results[mk.name] = em_result
@@ -946,7 +965,8 @@ def _score_probabilistic_matchkey(
                 score_frame, config.blocking, scoring_mk, matched_pairs, em_result,
                 target_ids=target_ids, db_path="auto",
             )
-            link_threshold = _maybe_refit_link_threshold(mk, link_threshold, pairs=pairs)
+            link_threshold = _maybe_refit_link_threshold(mk, link_threshold, pairs=pairs,
+                                                 decision_out=_refit_decision)
             pairs, candidates = _split_probabilistic_pairs(pairs, link_threshold)
             review_pairs.extend(candidates)
             all_pairs.extend(pairs)
@@ -995,7 +1015,7 @@ def _score_probabilistic_matchkey(
             # #2483 declined to have auto-config write one in. Scores are already
             # computed (re-cluster only, no re-scoring); only the cutoff moves.
             link_threshold = _maybe_refit_link_threshold(
-                mk, link_threshold, table=_pair_table
+                mk, link_threshold, table=_pair_table, decision_out=_refit_decision
             )
             # Stay Arrow end-to-end (NO polars): split link/review on the pa.Table
             # itself. score_buckets_arrow already floors the table at the review
@@ -1041,7 +1061,7 @@ def _score_probabilistic_matchkey(
                 em_result=em_result,
             )
             link_threshold = _maybe_refit_link_threshold(
-                mk, link_threshold, table=_pair_table
+                mk, link_threshold, table=_pair_table, decision_out=_refit_decision
             )
             pairs, candidates = _split_pair_stream(_pair_table, link_threshold)
             del _pair_table
@@ -1062,7 +1082,8 @@ def _score_probabilistic_matchkey(
             target_ids=target_ids,
             em_result=em_result,
         )
-        link_threshold = _maybe_refit_link_threshold(mk, link_threshold, pairs=pairs)
+        link_threshold = _maybe_refit_link_threshold(mk, link_threshold, pairs=pairs,
+                                                 decision_out=_refit_decision)
         pairs, candidates = _split_probabilistic_pairs(pairs, link_threshold)
         review_pairs.extend(candidates)
         all_pairs.extend(pairs)
@@ -1096,7 +1117,8 @@ def _score_probabilistic_matchkey(
             em_result, target_ids=target_ids,
         )
         pairs = _across_files_filter(pairs)
-        link_threshold = _maybe_refit_link_threshold(mk, link_threshold, pairs=pairs)
+        link_threshold = _maybe_refit_link_threshold(mk, link_threshold, pairs=pairs,
+                                                 decision_out=_refit_decision)
         pairs, candidates = _split_probabilistic_pairs(pairs, link_threshold)
         review_pairs.extend(candidates)
         all_pairs.extend(pairs)
@@ -1131,7 +1153,8 @@ def _score_probabilistic_matchkey(
         target_ids=target_ids,
     )
     pairs = _across_files_filter(pairs)
-    link_threshold = _maybe_refit_link_threshold(mk, link_threshold, pairs=pairs)
+    link_threshold = _maybe_refit_link_threshold(mk, link_threshold, pairs=pairs,
+                                                 decision_out=_refit_decision)
     pairs, candidates = _split_probabilistic_pairs(pairs, link_threshold)
     review_pairs.extend(candidates)
     all_pairs.extend(pairs)

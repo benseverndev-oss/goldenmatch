@@ -51,7 +51,8 @@ class Lane:
 # four need --allow-pure-python locally (CI builds native and passes False).
 _GM_RUN_LANES = {"gm_hand_built", "gm_probabilistic",
                  "gm_probabilistic_native", "gm_probabilistic_counted",
-                 "gm_probabilistic_shipped", "gm_zeroconfig"}
+                 "gm_probabilistic_shipped", "gm_probabilistic_cut80",
+                 "gm_zeroconfig"}
 
 LANES: dict[str, Lane] = {
     "splink": Lane("splink", "run_splink.py"),
@@ -147,6 +148,32 @@ LANES: dict[str, Lane] = {
     "gm_probabilistic_shipped": Lane("gm_probabilistic_shipped",
                                      "run_goldenmatch.py",
                                      mode="probabilistic"),
+    # `gm_probabilistic_shipped` with ONE variable changed: the link cut.
+    #
+    # The shipped lane cuts at 0.50 while its minimum score is 0.60, so the cut
+    # admits every scored pair (run 32078393523 records `cut_is_inert: true`,
+    # `score_min: 0.6`). The threshold sweep in the same artifact:
+    #
+    #     cut   linked_pairs   max_component   expelled
+    #     0.6      1,512,249             618     0.0000   <- == the applied 0.50
+    #     0.7      1,428,680              93     0.0671
+    #     0.8      1,380,824               3     0.1002   <- knee
+    #     0.9      1,186,804               3     0.2343
+    #     1.0        662,380               3     0.5862
+    #
+    # 0.80 is the smallest cut that fully resolves the over-merge (largest
+    # component 618 -> 3, the true entity size); 0.90 achieves the same max at
+    # 2.3x the expelled cost.
+    #
+    # This is NOT `gm_probabilistic`, which reaches a forced cut only via
+    # `--fs-basic-scorers` and therefore also rewrites the scorers -- a
+    # three-way confound (cut + scorers + calibration) that cannot attribute
+    # the delta. Here the config is byte-identical to shipped except the cut,
+    # so whatever moves is the cut.
+    "gm_probabilistic_cut80": Lane("gm_probabilistic_cut80",
+                                   "run_goldenmatch.py",
+                                   mode="probabilistic",
+                                   extra_args=("--force-link-threshold", "0.80")),
     "gm_zeroconfig": Lane("gm_zeroconfig", "run_goldenmatch.py", mode="zeroconfig"),
     "gm_converted_splink": Lane("gm_converted_splink", "run_gm_converted.py"),
 }
