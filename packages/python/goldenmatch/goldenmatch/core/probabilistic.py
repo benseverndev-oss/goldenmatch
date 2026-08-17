@@ -3671,8 +3671,27 @@ def fs_refit_link_threshold(id_a, id_b, score, default_link: float,
             "so this decline does not mean there is no over-merge.",
             candidate, max_default, max_candidate, default_link,
         )
+        # Compute the expelled share EVEN THOUGH we are declining, because it is
+        # the number the next decision needs and returning without it is what
+        # made this branch unanswerable.
+        #
+        # The panel in this docstring shows `expelled` separating all three
+        # datasets cleanly (person 0.1020 reject, household 0.0000 accept,
+        # cotenant 0.0006 accept) where `linked_d` provably cannot -- person's
+        # 0.1161 sits BETWEEN the two accepts. So the open question is whether
+        # the max-reduction requirement is load-bearing at all, or whether
+        # expelled-share alone would do the job. That cannot be answered while
+        # this path returns before measuring it.
+        #
+        # Recorded, NOT acted on: this still declines exactly as before. Changing
+        # an accept criterion that gates a user's cluster shape needs the number
+        # first -- the same discipline that turned the blocking-skew rule from a
+        # guess into #2629.
+        expelled_if_taken = _expelled_share(id_a, id_b, score, default_link, candidate)
         _record(decision_out, "no-max-reduction", default_link, candidate,
-                max_default=max_default, max_candidate=max_candidate)
+                max_default=max_default, max_candidate=max_candidate,
+                expelled_if_taken=round(float(expelled_if_taken), 6),
+                expelled_cap=_REFIT_MAX_EXPELLED_SHARE)
         return default_link
     expelled = _expelled_share(id_a, id_b, score, default_link, candidate)
     if expelled > _REFIT_MAX_EXPELLED_SHARE:
