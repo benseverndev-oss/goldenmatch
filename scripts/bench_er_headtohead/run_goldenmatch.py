@@ -198,7 +198,36 @@ def _atomic_write(path: Path, payload: dict) -> None:
     os.replace(tmp, path)
 
 
+def _enable_info_logging() -> None:
+    """Let the library's INFO diagnostics reach the run log.
+
+    Nothing configures logging here, so Python falls back to `lastResort`, which
+    emits at WARNING -- every `logger.info` in the library produced NOTHING. That
+    silently defeated the decisions this bench exists to explain: the FS
+    link-threshold refit logs which of its three guards declined a candidate, and
+    on person@1M that line was the answer to why the cut stayed at the default
+    while precision sat at 0.263 with 673,277 false positives.
+
+    A bench is exactly where verbosity is cheap, so INFO is the right floor. This
+    is a HARNESS change, not a library one -- production keeps its own logging
+    policy.
+
+    Not a substitute for recording the decision as DATA in the result. A log line
+    is lossy, order-dependent and easy to lose to a level change -- which is what
+    happened here. This makes the next run answerable; persisting the refit
+    decision alongside `fs_link_thresholds` makes every run answerable.
+    """
+    import logging
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s %(name)s: %(message)s",
+        stream=sys.stderr,
+    )
+
+
 def main() -> None:
+    _enable_info_logging()
     ap = argparse.ArgumentParser()
     ap.add_argument("--input", type=Path, required=True)
     ap.add_argument("--rows", type=int, required=True)
