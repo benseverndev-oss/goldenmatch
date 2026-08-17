@@ -4581,6 +4581,7 @@
             "_audio_fp_score_matrix",
             "_audio_fp_score_single",
             "_build_null_mask",
+            "_candidate_count_gate",
             "_concat_pair_frames",
             "_cosine_similarity_py",
             "_cross_source_filter_df",
