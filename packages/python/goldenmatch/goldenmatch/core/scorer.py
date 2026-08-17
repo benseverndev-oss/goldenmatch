@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as _dt
 import logging
 import math
+import os
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
@@ -53,6 +54,31 @@ def reset_ne_broken() -> None:
     from a prior dedupe doesn't silently skip a valid one in the next."""
     with _NE_BROKEN_LOCK:
         _NE_BROKEN.clear()
+
+
+def _candidate_count_gate() -> int:
+    """Max blocks for which the candidate-count loop runs. Default 10,000.
+
+    `GOLDENMATCH_CANDIDATE_COUNT_MAX_BLOCKS` raises it. Above the gate the count
+    is skipped and `ScoringProfile.candidates_counted` is False, which is
+    correct for production -- counting calls `Block.n_rows()`, which
+    materialises -- but leaves the auto-config diagnostics unable to say whether
+    a shape had any candidate pairs at all. A garbage value falls back to the
+    default rather than raising: this is a diagnostic knob, and a typo in it
+    must not take down a scoring run.
+    """
+    raw = os.environ.get("GOLDENMATCH_CANDIDATE_COUNT_MAX_BLOCKS", "")
+    if not raw:
+        return 10_000
+    try:
+        v = int(raw)
+    except ValueError:
+        logger.warning(
+            "GOLDENMATCH_CANDIDATE_COUNT_MAX_BLOCKS=%r is not an integer; "
+            "using the default 10000", raw,
+        )
+        return 10_000
+    return v if v >= 0 else 10_000
 
 
 def _emit_scoring_profile(
@@ -2238,7 +2264,18 @@ def score_blocks_parallel(
     # not literally zero candidates." For small-N workloads (the actual
     # use case for the stat -- debugging, diagnostics) we still compute
     # it cheaply because there are few blocks.
-    _CANDIDATE_COUNT_SKIP_THRESHOLD = 10_000
+    # Overridable so a DIAGNOSTIC can buy the number back (#2639). The count is
+    # skipped above this many blocks because `Block.n_rows()` materialises and
+    # doing that serially for tens of thousands of blocks is real time -- a
+    # correct default for production, and the reason `candidates_compared` is
+    # unavailable at exactly the scale where "were there any candidates at all"
+    # is the question. A diagnostic run does not care about the seconds, so it
+    # can raise the gate and get a measured answer instead of an UNDETERMINED.
+    #
+    # Env, not a parameter: the callers between here and the auto-config
+    # controller do not thread scoring knobs, and adding one to every signature
+    # to serve a diagnostic would be the wrong trade.
+    _CANDIDATE_COUNT_SKIP_THRESHOLD = _candidate_count_gate()
     _n_blocks_for_count_gate = len(blocks)
     if _n_blocks_for_count_gate <= _CANDIDATE_COUNT_SKIP_THRESHOLD:
         total_candidates = 0
