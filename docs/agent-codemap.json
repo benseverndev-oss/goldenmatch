@@ -4640,6 +4640,7 @@
             "_score_one_block_columnar",
             "_soundex_score_matrix",
             "_soundex_score_single",
+            "cheap_n_rows",
             "find_exact_matches",
             "find_fuzzy_matches",
             "find_fuzzy_matches_columnar",
