@@ -3193,7 +3193,31 @@ def compute_thresholds(
         # back to the same fixed default the no-weights path uses.
         if match_pct * 2 >= 1.0:
             return 0.50, 0.35
-        link_idx = int(n * (1 - match_pct * 2))  # 2x match rate for headroom
+        # Admit about as many pairs as EM says are MATCHES -- not a multiple.
+        #
+        # This was `1 - match_pct * 2`, "2x match rate for headroom". That
+        # deliberately admitted twice the estimated match rate, so by the
+        # model's own estimate half of what it admitted was a non-match: a
+        # precision ceiling of ~0.5 BY CONSTRUCTION, before connected components
+        # chained anything.
+        #
+        # Measured, person @ 1M (run 32063484894, `gm_probabilistic_shipped`,
+        # which sets no link_threshold and so lands here):
+        #
+        #     pairwise  P 0.263  R 1.000  F1 0.416   TP 239,829 FP 673,277 FN 89
+        #     splink, same fixture, cutting at 0.85:  F1 0.995, EIGHT false pos
+        #
+        # Recall 1.000 at precision 0.263 is the signature of a cut chosen for
+        # headroom: it finds everything and pays in false positives.
+        #
+        # The model is the only thing here that knows how many matches to
+        # expect, so its own estimate is the defensible bound. The change is
+        # self-limiting: at low match rates both rules sit above the 0.95 clamp
+        # ceiling and nothing moves, while at high match rates 2x drove the
+        # percentile BELOW the 0.40 floor (match_pct 0.30 -> percentile 0.40,
+        # 0.45 -> 0.10), which is how a "data-driven" cut ended up admitting 60%
+        # of pairs regardless of the data.
+        link_idx = int(n * (1 - match_pct))
         link_idx = max(0, min(link_idx, n - 1))
         link_norm = sorted_w[link_idx]
 
