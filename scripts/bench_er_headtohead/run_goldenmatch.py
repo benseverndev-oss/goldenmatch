@@ -235,6 +235,16 @@ def main() -> None:
     ap.add_argument("--pred-out", type=Path, default=None,
                     help="write {record_id, pred_cluster_id} parquet for accuracy eval")
     ap.add_argument("--threshold", type=float, default=0.85)
+    ap.add_argument(
+        "--force-link-threshold", type=float, default=None,
+        help=(
+            "Force the FS link cut WITHOUT the --fs-basic-scorers scorer "
+            "rewrite. `gm_probabilistic` couples the two, so its delta against "
+            "`gm_probabilistic_shipped` is a three-way confound (cut + scorers "
+            "+ calibration) and cannot say which term dominates. This isolates "
+            "the cut."
+        ),
+    )
     ap.add_argument("--mode", choices=["hand_built", "zeroconfig", "probabilistic"],
                     default="hand_built",
                     help="hand_built = explicit bucket+native config (default); "
@@ -411,6 +421,16 @@ def main() -> None:
             if args.fs_basic_scorers:
                 for mk in cfg.get_matchkeys():
                     mk.link_threshold = args.threshold
+            # The cut alone, nothing else touched. person@1M's shipped cut is
+            # 0.50 while its MINIMUM score is 0.60 (run 32078393523,
+            # `cut_is_inert: true`), so it admits every scored pair and the
+            # 0.2627 precision follows from that plus transitive closure. The
+            # recorded sweep puts the knee at 0.80 -- largest component
+            # 618 -> 3, expelled 0.1002 -- and going higher buys no further
+            # reduction at 2-6x the expelled cost.
+            if args.force_link_threshold is not None:
+                for mk in cfg.get_matchkeys():
+                    mk.link_threshold = args.force_link_threshold
             # Force rerank off so a 3+ field weighted matchkey can't pull a
             # cross-encoder model down from HuggingFace at dedupe time.
             for mk in cfg.get_matchkeys():
