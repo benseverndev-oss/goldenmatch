@@ -3639,18 +3639,39 @@ def _threshold_sweep(id_a, id_b, score, default_link: float,
     else:
         qs = np.linspace(0.0, 1.0, limit)
         cuts = np.unique(np.quantile(above, qs))
-    matched_default = _matched_records(id_a, id_b, score, default_link)
+    from goldenmatch.core.cluster import build_clusters  # noqa: PLC0415
+
+    def _one_pass(threshold: float) -> tuple[set[int], int]:
+        """Matched-record set AND largest component from a SINGLE clustering
+        pass. Calling `_matched_records` and `_max_cluster_size` separately
+        doubles the cost of the sweep, which is the dominant term: measured on
+        person@1M, the sweep took the shipped lane from 56.7s to 146.2s."""
+        linked = [
+            (int(a), int(b), float(v))
+            for a, b, v in zip(id_a, id_b, score) if v >= threshold
+        ]
+        if not linked:
+            return set(), 0
+        matched: set[int] = set()
+        largest = 0
+        for c in build_clusters(linked, auto_split=False).values():
+            size = c.get("size", 0)
+            largest = max(largest, size)
+            if size > 1:
+                matched.update(int(m) for m in c["members"])
+        return matched, largest
+
+    matched_default, _ = _one_pass(default_link)
     base = len(matched_default)
     rows: list[dict] = []
     for cut in cuts:
         cut = float(cut)
-        kept = int((arr >= cut).sum())
-        matched_cut = _matched_records(id_a, id_b, score, cut)
+        matched_cut, largest = _one_pass(cut)
         expelled = (len(matched_default - matched_cut) / base) if base else 0.0
         rows.append({
             "cut": round(cut, 4),
-            "linked_pairs": kept,
-            "max_component": _max_cluster_size(id_a, id_b, score, cut),
+            "linked_pairs": int((arr >= cut).sum()),
+            "max_component": largest,
             "expelled": round(float(expelled), 6),
         })
     return rows
