@@ -1108,8 +1108,20 @@ jobs:
       # RUN the scripts/ unit tests and not merely lint them -- a test that CI
       # only ever lints is the "a check exists and does not fire" class.
       # Network-free: `_ensure_datasets` is stubbed, so nothing here fetches.
+      # dqbench_adapters: the DBLP-ACM adapter read `.height` on whatever
+      # `match_df` returned, which is polars-only, so the arrow lane took the
+      # weekly `benchmarks` run red for a week (#2457). That lane is not in
+      # ci-required and runs on a schedule, so nothing caught it at PR time.
+      # `--with polars pyarrow`: this job syncs with --no-install-workspace, so
+      # neither is present, and the leipzig test is ABOUT polars/arrow interop --
+      # it cannot be written to skip when they are missing without becoming the
+      # check that does not fire. Added ephemerally, same idiom as er_matcher's
+      # `uv run --with scikit-learn`.
       - name: Pytest (scripts/ unit tests)
-        run: uv run pytest scripts/test_run_benchmarks_download.py -q
+        run: |
+          uv run --with polars --with pyarrow \
+            pytest scripts/test_run_benchmarks_download.py \
+                   scripts/dqbench_adapters/test_leipzig_eval.py -q
 
   # Every repo path a CLAUDE.md names must exist. These files are loaded as
   # authoritative agent context, so a dead pointer does not merely fail to help --
