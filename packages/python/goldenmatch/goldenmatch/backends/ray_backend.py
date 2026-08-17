@@ -283,7 +283,8 @@ def score_blocks_ray(
     )
 
     _emit_scoring_profile(all_pairs, profile_threshold(mk, all_pairs),
-                          candidates_compared=0, candidates_counted=False)
+                          candidates_compared=0, candidates_counted=False,
+                              route="ray")
     return all_pairs
 
 

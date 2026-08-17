@@ -1498,6 +1498,14 @@ def run_fs_dedupe_streaming(
     ``_prepare_probabilistic_review_scoring`` alongside a review-cut ``scoring_mk``
     to match the in-memory clustering outcome exactly. ``None`` clusters every
     returned pair (the kernel scored at ``mk``'s own threshold)."""
+    # Stamp WHICH orchestration ran (#2647 follow-up). This layer chooses
+    # the branch and then delegates scoring, so without it an empty scoring
+    # profile says only "nobody emitted" -- not which of these four ran, nor
+    # which internal branch. Route-only; it never overwrites a measured field.
+    from goldenmatch.core.scorer import note_scoring_route
+
+    note_scoring_route("fs.streaming")
+
     import os as _os
     import tempfile
 
@@ -1584,6 +1592,14 @@ def run_fs_dedupe_sequential(
     polars core primitive fed only the multi-member subset). The fast single-box
     path for frames that FIT in RAM; ``run_fs_dedupe_streaming`` is the
     DuckDB-spilled variant past RAM."""
+    # Stamp WHICH orchestration ran (#2647 follow-up). This layer chooses
+    # the branch and then delegates scoring, so without it an empty scoring
+    # profile says only "nobody emitted" -- not which of these four ran, nor
+    # which internal branch. Route-only; it never overwrites a measured field.
+    from goldenmatch.core.scorer import note_scoring_route
+
+    note_scoring_route("fs.sequential")
+
     from goldenmatch.core.frame import is_polars_lazyframe
     from goldenmatch.core.frame import to_frame as _tf
 
@@ -1690,6 +1706,14 @@ def run_fs_dedupe_spill(
     inside ``_score_single_pass``), a native array-UF ``FsExternalWcc`` kernel, and
     frame-residency streaming during prep (this path keeps the frame resident — the edge
     term is what it bounds)."""
+    # Stamp WHICH orchestration ran (#2647 follow-up). This layer chooses
+    # the branch and then delegates scoring, so without it an empty scoring
+    # profile says only "nobody emitted" -- not which of these four ran, nor
+    # which internal branch. Route-only; it never overwrites a measured field.
+    from goldenmatch.core.scorer import note_scoring_route
+
+    note_scoring_route("fs.spill")
+
     import shutil as _shutil
     import tempfile as _tempfile
 
@@ -1902,6 +1926,14 @@ def run_fs_dedupe_bucketed(
     blocking + one probabilistic matchkey by
     the ``_fs_streaming_dedupe_eligible`` gate (per-pass hash-bucketing is unsound
     for SN/adaptive/ann; the single matchkey means no cross-bucket exclude set)."""
+    # Stamp WHICH orchestration ran (#2647 follow-up). This layer chooses
+    # the branch and then delegates scoring, so without it an empty scoring
+    # profile says only "nobody emitted" -- not which of these four ran, nor
+    # which internal branch. Route-only; it never overwrites a measured field.
+    from goldenmatch.core.scorer import note_scoring_route
+
+    note_scoring_route("fs.bucketed")
+
     import shutil as _shutil
     import tempfile as _tempfile
 

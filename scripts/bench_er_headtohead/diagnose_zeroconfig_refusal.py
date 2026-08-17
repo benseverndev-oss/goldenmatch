@@ -248,6 +248,10 @@ def collect(shape: str, rows: int, seed: int, workdir: Path) -> dict:
     above = getattr(sc, "n_pairs_scored", 0)
     mass = getattr(sc, "mass_above_threshold", 0.0)
     out["scoring"] = {
+        # WHICH path produced this. An empty route on a run whose clustering
+        # plainly worked means nothing emitted, and names nothing -- which is
+        # exactly the state that cost three CI rounds of guessing.
+        "route": getattr(sc, "route", "") or "(none -- nothing emitted)",
         "candidates_compared": compared,
         "candidates_counted": counted,
         "n_pairs_scored": above,

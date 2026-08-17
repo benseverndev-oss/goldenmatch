@@ -81,6 +81,41 @@ def _candidate_count_gate() -> int:
     return v if v >= 0 else 10_000
 
 
+def note_scoring_route(route: str) -> None:
+    """Record WHICH orchestration ran, even when it emits no profile itself.
+
+    The FS orchestrators in `backends/fs_out_of_core.py` delegate scoring, so
+    they have no pairs to report -- but they are the layer that chose the
+    branch, and that choice is exactly what has been unknown. This stamps the
+    route without touching any measured field:
+
+      * no profile captured yet -> store a route-only profile (all zeros, route
+        set). An empty scoring profile that NAMES its producer is strictly more
+        informative than an empty one that does not.
+      * a profile already captured -> keep every measured value and prefix the
+        outer route, giving `fs.sequential>buckets.arrow`. The inner emitter
+        knows what it scored; the outer one knows how it was reached.
+
+    A no-op when no capture is open, like every other emit on this path.
+    """
+    from goldenmatch.core.complexity_profile import ScoringProfile
+    from goldenmatch.core.profile_emitter import current_emitter, has_active_emitter
+
+    if not has_active_emitter():
+        return
+    em = current_emitter()
+    existing = getattr(em, "scoring", None)
+    if existing is None:
+        em.set_scoring(ScoringProfile(route=route))
+        return
+    import dataclasses
+
+    inner = existing.route
+    em.set_scoring(dataclasses.replace(
+        existing, route=f"{route}>{inner}" if inner else route
+    ))
+
+
 def profile_threshold(mk: Any, pairs: list[tuple[int, int, float]]) -> float:
     """The cut this run actually applied, safe for ANY matchkey type (#2647).
 
@@ -108,6 +143,7 @@ def _emit_scoring_profile(
     *,
     candidates_compared: int = 0,
     candidates_counted: bool = False,
+    route: str = "",
     per_field_variance: dict[str, float] | None = None,
 ) -> None:
     """Emit ScoringProfile to current emitter. No-op when emitter is null.
@@ -138,6 +174,7 @@ def _emit_scoring_profile(
         n_pairs_scored=len(scores),
         candidates_compared=candidates_compared,
         candidates_counted=candidates_counted,
+        route=route,
         score_histogram=histogram_20(scores),
         dip_statistic=hartigan_dip(scores),
         mass_above_threshold=mass_above(scores, threshold),
@@ -2257,7 +2294,8 @@ def score_blocks_parallel(
                     matched_pairs.add((min(a, b), max(a, b)))
         _emit_scoring_profile(all_pairs, mk.fuzzy_threshold,
                               candidates_compared=total_candidates,
-                              candidates_counted=True)
+                              candidates_counted=True,
+                              route="scorer.small")
         return all_pairs
 
     # Snapshot exclude_pairs so threads see a frozen copy
@@ -2360,7 +2398,8 @@ def score_blocks_parallel(
     )
     _emit_scoring_profile(all_pairs, mk.fuzzy_threshold,
                           candidates_compared=total_candidates,
-                          candidates_counted=_candidates_counted)
+                          candidates_counted=_candidates_counted,
+                          route="scorer.parallel")
     return all_pairs
 
 

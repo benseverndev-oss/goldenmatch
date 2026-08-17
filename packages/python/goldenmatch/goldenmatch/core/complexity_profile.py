@@ -443,6 +443,16 @@ class ScoringProfile:
     # Defaults False: a default-constructed profile is the all-zero fallback the
     # emitter yields when scoring never ran, which has no measurement behind it.
     candidates_counted: bool = False
+    # WHICH code path produced this profile (#2647 follow-up). Empty means
+    # nobody claimed it -- the all-zero default nothing ever wrote to.
+    #
+    # There are at least five scoring entry points (core/scorer.py's two,
+    # score_buckets, score_duckdb, ray_backend) plus the FS orchestrators in
+    # backends/fs_out_of_core.py, and "which one scored this run?" has been
+    # answered by INFERENCE three times, wrongly twice. A profile that names its
+    # own producer ends that: an empty route on a run whose clustering clearly
+    # worked localises the gap immediately instead of costing a CI round.
+    route: str = ""
     score_histogram: list[int] = field(default_factory=lambda: [0] * 20)
     dip_statistic: float = 0.0
     mass_above_threshold: float = 0.0
