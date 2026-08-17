@@ -610,33 +610,70 @@ def main() -> int:
 
         n_entities = max(args.rows // max(args.dup, 1), 1)
         t = time.perf_counter()
-        scored: list[tuple[float, bool]] = []
+
+        # DEDUPLICATE ACROSS BLOCKING PASSES before scoring. A pair that blocks
+        # on both keys is one pair, and scoring it twice puts it in the ranking
+        # twice. The first version of this concatenated the passes and reported
+        # 282,247 true pairs where the fixture contains 200,004 (66,666
+        # entities x 3), a 41% overlap counted as extra data -- which raised the
+        # base rate from 0.108 to 0.143 and flattered GM's average precision,
+        # since AP is bounded below by the base rate. Splink's `predict()`
+        # dedupes across its blocking rules, so the arms were being scored on
+        # different populations.
+        cands = None
         for key_config in blocking_passes(cfg):
-            cands = pass_candidates(df, key_config, id_col="__row_id__")
-            joined = join_candidates_to_sources(cands, df, id_col="__row_id__")
-            gammas = gamma_columns(mk, CAND_LHS, CAND_RHS,
-                                   scorer_udf=ROW_UDF_NAME,
-                                   transform_udf=TRANSFORM_UDF_NAME)
-            # Match weight = the per-field log2(m/u) for the level the pair
-            # landed on, summed. `match_weights[field][level]` IS that table,
-            # so this is a lookup rather than a second derivation of the weight.
-            weight = F.lit(0.0)
-            for col, f in zip(gammas, mk.fields):
-                per_level = model.match_weights[f.resolved_field]
-                expr = F.lit(0.0)
-                for level, val in enumerate(per_level):
-                    expr = F.when(col == F.lit(level),
-                                  F.lit(float(val))).otherwise(expr)
-                weight = weight + expr
-            truth = (F.col(f"{CAND_LHS}.__row_id__") % F.lit(n_entities)
-                     == F.col(f"{CAND_RHS}.__row_id__") % F.lit(n_entities))
-            scored.extend(
-                (float(r["w"]), bool(r["is_true"]))
-                for r in joined.select(weight.alias("w"),
-                                       truth.alias("is_true")).collect()
-            )
+            one = pass_candidates(df, key_config, id_col="__row_id__")
+            cands = one if cands is None else cands.unionByName(one)
+        cands = cands.dropDuplicates(["a", "b"])
+
+        joined = join_candidates_to_sources(cands, df, id_col="__row_id__")
+        gammas = gamma_columns(mk, CAND_LHS, CAND_RHS,
+                               scorer_udf=ROW_UDF_NAME,
+                               transform_udf=TRANSFORM_UDF_NAME)
+        # Match weight = the per-field log2(m/u) for the level the pair landed
+        # on, summed. `match_weights[field][level]` IS that table, so this is a
+        # lookup rather than a second derivation of the weight.
+        weight = F.lit(0.0)
+        for col, f in zip(gammas, mk.fields):
+            per_level = model.match_weights[f.resolved_field]
+            expr = F.lit(0.0)
+            for level, val in enumerate(per_level):
+                expr = F.when(col == F.lit(level),
+                              F.lit(float(val))).otherwise(expr)
+            weight = weight + expr
+        truth = (F.col(f"{CAND_LHS}.__row_id__") % F.lit(n_entities)
+                 == F.col(f"{CAND_RHS}.__row_id__") % F.lit(n_entities))
+        scored = [
+            (float(r["w"]), bool(r["is_true"]))
+            for r in joined.select(weight.alias("w"),
+                                   truth.alias("is_true")).collect()
+        ]
         out["stages"]["score_seconds"] = round(time.perf_counter() - t, 2)
-        out["quality"] = _metrics_module().ranking_metrics(scored)
+        q = _metrics_module().ranking_metrics(scored)
+        # `dup` rows per entity give dup*(dup-1)/2 true pairs each, and every
+        # entity's rows share a blocking key by construction, so the candidate
+        # set must contain ALL of them and no duplicates. Checked rather than
+        # assumed: the un-deduplicated first version reported 282,247 true pairs
+        # against an expected 200,004 and the inflated base rate raised average
+        # precision, which is exactly the kind of error that reads as a result.
+        # Exact, including the remainder. `rows` is rarely a multiple of
+        # n_entities, so a few entities carry one extra row and contribute
+        # C(q+1, 2) rather than C(q, 2). The naive n_entities*C(dup,2) gives
+        # 199,998 at 200k/dup=3 where the truth is 200,004 -- and a guard that
+        # is wrong by six fires on every correct run, gets read as noise, and
+        # then gets deleted.
+        _n_ent = max(args.rows // max(args.dup, 1), 1)
+        _q, _r = divmod(args.rows, _n_ent)
+        expected_true = (_r * ((_q + 1) * _q // 2)
+                         + (_n_ent - _r) * (_q * (_q - 1) // 2))
+        q["expected_true_pairs"] = expected_true
+        q["true_pairs_match_expected"] = (q["n_true"] == expected_true)
+        if not q["true_pairs_match_expected"]:
+            print(f"[scale] WARNING quality population is wrong: found "
+                  f"{q['n_true']:,} true pairs, fixture contains "
+                  f"{expected_true:,}. The metric below is NOT comparable to "
+                  f"the other engine's.", flush=True)
+        out["quality"] = q
         print(f"[scale] quality {out['quality']}", flush=True)
 
     out["total_seconds"] = round(sum(out["stages"].values()), 2)
