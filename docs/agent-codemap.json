@@ -389,6 +389,7 @@
           "defines": [
             "_bkt_debug_on",
             "_default_n_buckets",
+            "_emit_profile",
             "_ensure_alias_tables_installed",
             "_ensure_legal_forms_installed",
             "_ensure_name_tables_installed",
@@ -423,6 +424,7 @@
             "goldenmatch.core.frame",
             "goldenmatch.core.matchkey",
             "goldenmatch.core.probabilistic",
+            "goldenmatch.core.profile_emitter",
             "goldenmatch.core.scorer",
             "goldenmatch.plugins.registry",
             "goldenmatch.refdata",
@@ -4642,6 +4644,7 @@
             "find_fuzzy_matches_columnar",
             "pairs_df_to_list",
             "pairs_list_to_df",
+            "profile_threshold",
             "rerank_top_pairs",
             "reset_ne_broken",
             "score_blocks_columnar",

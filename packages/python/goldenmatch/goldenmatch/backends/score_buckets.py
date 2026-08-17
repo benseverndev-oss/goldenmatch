@@ -1344,6 +1344,38 @@ def score_probabilistic_external_blocks(
     return out
 
 
+def _emit_profile(pairs: Any, mk: Any) -> None:
+    """Report this backend's scoring to the auto-config emitter (#2647).
+
+    `core/scorer.py` emits from its own entry points; this backend calls
+    `_score_one_block` directly and bypassed that wrapper entirely, so any run
+    routed here left the emitter holding the all-zero `ScoringProfile()`
+    default. `health()` reads that as "nothing happened" -> RED, and at
+    `n_rows >= REFUSE_AT_N` the controller REFUSES the run. Bucket is the
+    DEFAULT scorer (#526) and is chosen at exactly those sizes, so person@100k
+    was refused on a config whose blocking graded GREEN and whose clustering
+    produced 91,527 clusters with transitivity 1.0.
+
+    `candidates_counted=False` deliberately: this path never accumulates bucket
+    sizes (`_pair_count` serves only the oversized-tile budget), so the count is
+    genuinely ABSENT rather than zero, and #2644 added the flag so that is
+    sayable. The pair-derived signals are all real, and the "nothing happened"
+    clause needs BOTH counters zero -- so this clears the refusal without
+    inventing a number.
+
+    A no-op when no capture is open, so production pays nothing.
+    """
+    from goldenmatch.core.scorer import (
+        _emit_scoring_profile,
+        profile_threshold,
+    )
+
+    _emit_scoring_profile(
+        pairs, profile_threshold(mk, pairs),
+        candidates_compared=0, candidates_counted=False,
+    )
+
+
 def score_buckets(
     prepared_df: pl.DataFrame,
     blocking_config: BlockingConfig,
@@ -2725,8 +2757,23 @@ def score_buckets(
         import pyarrow as _pa
 
         if pass_tables:
-            return _pa.concat_tables(pass_tables)
+            _tbl = _pa.concat_tables(pass_tables)
+            # Arrow mode still has to report. Zipping three columns is O(pairs)
+            # and only runs when a capture is open -- `_emit_scoring_profile`
+            # returns immediately otherwise, so the zip is behind that guard.
+            from goldenmatch.core.profile_emitter import has_active_emitter
+
+            if has_active_emitter():
+                _emit_profile(
+                    list(zip(_tbl.column("id_a").to_pylist(),
+                             _tbl.column("id_b").to_pylist(),
+                             _tbl.column("score").to_pylist(), strict=True)),
+                    mk,
+                )
+            return _tbl
+        _emit_profile([], mk)
         return pairs_to_pair_stream([])
+    _emit_profile(all_pairs, mk)
     return all_pairs
 
 
