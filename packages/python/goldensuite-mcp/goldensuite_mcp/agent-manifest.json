@@ -6011,6 +6011,9 @@
           "GOLDENMATCH_BUCKET_VEC_MAX",
           "GOLDENMATCH_BUCKET_VEC_MIN"
         ],
+        "CANDIDATE": [
+          "GOLDENMATCH_CANDIDATE_COUNT_MAX_BLOCKS"
+        ],
         "CLUSTER": [
           "GOLDENMATCH_CLUSTER_SPLIT_EDGE_BUDGET"
         ],
