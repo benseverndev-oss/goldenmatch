@@ -8,6 +8,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ### Fixed
 
+- **`candidates_compared` was structurally 0 at scale, and two auto-config
+  decisions read it as a signal (#2639).** `scorer.py` skips the candidate-count
+  loop above 10,000 blocks -- counting calls `Block.n_rows()`, which
+  materialises -- leaving a 0 that means *not counted*, indistinguishable from a
+  measured zero. At 100k rows person had 84,293 blocks and biblio 22,151, so both
+  were past the gate: **biblio reported `candidates_compared=0` having scored
+  1,493,182 pairs at 99.9998% above threshold.** The two consumers failed in
+  opposite directions -- `rule_blocking_singleton_trap` treated every
+  fine-grained shape as the trap and offered to *coarsen* its blocking, while the
+  controller's LLM escalation early-returned on the same zero and was silently
+  dead at scale. New `ScoringProfile.candidates_counted` separates the cases and
+  each consumer now states which one it means. `health()` is deliberately
+  unchanged: its clause needs both counters zero, where `mass_above_threshold` is
+  necessarily 0.0 and the next clause returns RED anyway. TypeScript gets the
+  field for shape parity only -- it has no skip gate, so no bug, and mirroring
+  the guard would change behaviour for a state it never produces.
+
 - **Zero-config no longer refuses healthy fine-grained blocking.** The blocking
   RED rule graded skew with `block_sizes_p99 > 10 * (n_rows / n_blocks)`, whose
   denominator is the mean block size -- pinned near 1 whenever blocking is

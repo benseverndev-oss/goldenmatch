@@ -493,7 +493,9 @@ def test_rule_singleton_trap_fires_on_mostly_singleton_blocks_with_no_pairs():
             oversized_block_count=0,
         ),
         scoring=ScoringProfile(
-            n_pairs_scored=0, candidates_compared=0,  # no candidates compared
+            # A MEASURED zero -- the real trap. See #2639: an uncounted 0 now
+            # makes the rule abstain rather than coarsen healthy blocking.
+            n_pairs_scored=0, candidates_compared=0, candidates_counted=True,
             mass_above_threshold=0.0,
             dip_statistic=0.0,
         ),
@@ -568,7 +570,12 @@ def test_rule_singleton_trap_fires_when_no_candidates_even_with_dense_blocks():
             block_sizes_p50=10, block_sizes_p99=15, block_sizes_max=15,
             singleton_block_count=2,  # only 20% singletons but candidates_compared=0
         ),
+        # candidates_counted=True: these fixtures mean a MEASURED zero, which
+        # is the actual singleton trap. Since #2639 an uncounted 0 makes the
+        # rule abstain, because `scorer.py` skips the count above 10,000 blocks
+        # and every fine-grained shape looked like the trap.
         scoring=ScoringProfile(n_pairs_scored=0, candidates_compared=0,
+                                candidates_counted=True,
                                 mass_above_threshold=0.0, dip_statistic=0.0),
         cluster=ClusterProfile(transitivity_rate=1.0),
     )
@@ -603,7 +610,12 @@ def test_rule_singleton_trap_returns_none_when_no_text_field_in_matchkey():
             block_sizes_p50=2, block_sizes_p99=3, block_sizes_max=3,
             singleton_block_count=18,
         ),
+        # candidates_counted=True: these fixtures mean a MEASURED zero, which
+        # is the actual singleton trap. Since #2639 an uncounted 0 makes the
+        # rule abstain, because `scorer.py` skips the count above 10,000 blocks
+        # and every fine-grained shape looked like the trap.
         scoring=ScoringProfile(n_pairs_scored=0, candidates_compared=0,
+                                candidates_counted=True,
                                 mass_above_threshold=0.0, dip_statistic=0.0),
         cluster=ClusterProfile(transitivity_rate=1.0),
     )

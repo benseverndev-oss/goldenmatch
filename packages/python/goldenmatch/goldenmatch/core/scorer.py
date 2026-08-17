@@ -60,6 +60,7 @@ def _emit_scoring_profile(
     threshold: float,
     *,
     candidates_compared: int = 0,
+    candidates_counted: bool = False,
     per_field_variance: dict[str, float] | None = None,
 ) -> None:
     """Emit ScoringProfile to current emitter. No-op when emitter is null.
@@ -89,6 +90,7 @@ def _emit_scoring_profile(
     profile = ScoringProfile(
         n_pairs_scored=len(scores),
         candidates_compared=candidates_compared,
+        candidates_counted=candidates_counted,
         score_histogram=histogram_20(scores),
         dip_statistic=hartigan_dip(scores),
         mass_above_threshold=mass_above(scores, threshold),
@@ -2206,7 +2208,9 @@ def score_blocks_parallel(
             if track_matched:
                 for a, b, _s in pairs:
                     matched_pairs.add((min(a, b), max(a, b)))
-        _emit_scoring_profile(all_pairs, mk.fuzzy_threshold, candidates_compared=total_candidates)
+        _emit_scoring_profile(all_pairs, mk.fuzzy_threshold,
+                              candidates_compared=total_candidates,
+                              candidates_counted=True)
         return all_pairs
 
     # Snapshot exclude_pairs so threads see a frozen copy
@@ -2238,6 +2242,7 @@ def score_blocks_parallel(
     _n_blocks_for_count_gate = len(blocks)
     if _n_blocks_for_count_gate <= _CANDIDATE_COUNT_SKIP_THRESHOLD:
         total_candidates = 0
+        _candidates_counted = True
         for block in blocks:
             try:
                 n = block.n_rows()
@@ -2252,6 +2257,10 @@ def score_blocks_parallel(
             _n_blocks_for_count_gate, _CANDIDATE_COUNT_SKIP_THRESHOLD,
         )
         total_candidates = 0
+        # NOT counted, and said so rather than left as an ambiguous 0 (#2639).
+        # Consumers that read `candidates_compared == 0` as "no candidates"
+        # were firing on every shape past this gate.
+        _candidates_counted = False
 
     all_pairs = []
     total_blocks = len(blocks)
@@ -2291,7 +2300,9 @@ def score_blocks_parallel(
         "Parallel scoring: %d blocks, %d workers, %d pairs found",
         total_blocks, max_workers, len(all_pairs),
     )
-    _emit_scoring_profile(all_pairs, mk.fuzzy_threshold, candidates_compared=total_candidates)
+    _emit_scoring_profile(all_pairs, mk.fuzzy_threshold,
+                          candidates_compared=total_candidates,
+                          candidates_counted=_candidates_counted)
     return all_pairs
 
 

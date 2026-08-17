@@ -469,6 +469,8 @@ export class AutoConfigController {
 
     return makeScoringProfile({
       candidatesCompared: total,
+      // This surface counts unconditionally, so the count is always real.
+      candidatesCounted: true,
       nPairsScored: total,
       scoreHistogram: histogram,
       dipStatistic: dipStat,

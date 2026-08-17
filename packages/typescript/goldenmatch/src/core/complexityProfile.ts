@@ -219,6 +219,16 @@ export function blockingHealth(b: BlockingProfile, _nRows: number): HealthVerdic
 export interface ScoringProfile {
   readonly nPairsScored: number;
   readonly candidatesCompared: number;
+  /** Was `candidatesCompared` actually MEASURED? (#2639)
+   *
+   * Shape parity with Python, where `scorer.py` skips the candidate-count loop
+   * above 10,000 blocks and leaves a 0 that means "not counted" -- which two
+   * consumers there read as "no candidates". THIS surface has no such skip:
+   * `computeScoringProfile` always sets a real `candidatesCompared`, so the
+   * rules here are deliberately NOT given the abstain guard the Python ones
+   * needed. Mirroring a fix for a bug this surface does not have would change
+   * behaviour for a state it never produces. */
+  readonly candidatesCounted: boolean;
   readonly scoreHistogram: readonly number[];
   readonly dipStatistic: number;
   readonly massAboveThreshold: number;
@@ -231,6 +241,7 @@ export function makeScoringProfile(p: Partial<ScoringProfile> = {}): ScoringProf
   return {
     nPairsScored: p.nPairsScored ?? 0,
     candidatesCompared: p.candidatesCompared ?? 0,
+    candidatesCounted: p.candidatesCounted ?? false,
     scoreHistogram: p.scoreHistogram ?? new Array(20).fill(0),
     dipStatistic: p.dipStatistic ?? 0.0,
     massAboveThreshold: p.massAboveThreshold ?? 0.0,

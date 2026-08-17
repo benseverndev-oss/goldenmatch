@@ -221,6 +221,17 @@ def rule_blocking_singleton_trap(
         return None
     bp = profile.blocking
     sp = profile.scoring
+    # This rule's whole premise is "the scorer saw zero candidate pairs", and
+    # its action COARSENS blocking. Firing it on a healthy shape is the
+    # expensive direction, so it abstains unless the count is real (#2639).
+    #
+    # `candidates_compared` is 0 whenever scoring skipped its count loop, which
+    # it does above 10,000 blocks -- so before this guard, EVERY fine-grained
+    # shape looked like the trap. biblio@100k scored 1,493,182 pairs with 99.99%
+    # of the mass above threshold and was still eligible to have its blocking
+    # coarsened to `first_token`.
+    if not sp.candidates_counted:
+        return None
     # If candidates were actually compared, this is not the singleton trap.
     if sp.candidates_compared > 0:
         return None
