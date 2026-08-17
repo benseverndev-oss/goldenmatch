@@ -2070,6 +2070,7 @@
             "goldenmatch.core.fused_routing",
             "goldenmatch.core.indicators",
             "goldenmatch.core.pipeline",
+            "goldenmatch.core.probabilistic",
             "goldenmatch.core.profile_emitter",
             "goldenmatch.core.runtime_profile",
             "goldenmatch.core.scorer",
