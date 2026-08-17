@@ -3624,35 +3624,41 @@ def fs_refit_link_threshold(id_a, id_b, score, default_link: float) -> float:
     FALSIFIED** -- person's 0.1161 drop sits BETWEEN the two correct accepts
     (0.0608 / 0.7341), so no bound on it can classify all three.
 
-    **Still default-OFF.** This fixes the accept criterion; flipping the default is a
-    separate decision that needs a green nightly `bench-suggest-quality` panel, which
-    `ci-required` does not run. Residual known blind spot: a candidate that splits a
+    **Default ON since #2518** -- this docstring said "Still default-OFF" long
+    after `_fs_refit_threshold_enabled` began returning True by default
+    (`os.environ.get("GOLDENMATCH_FS_REFIT_THRESHOLD", "1")`). Two docstrings in
+    one file disagreeing about whether a behaviour ships is worse than neither
+    saying anything, so: it ships. Residual known blind spot: a candidate that splits a
     correct cluster into two multi-member clusters expels nobody, so neither guard
     sees it; no panel dataset exhibits that shape."""
     candidate = fs_refit_threshold(np.asarray(score, dtype=np.float64), default_link)
     if candidate <= default_link:
         # No valley above the default -> the loop is a no-op (the common case on
         # 0.50-optimal data). DEBUG so an opt-in run can confirm it engaged.
-        logger.debug(
-            "FS link-threshold refit: no distributional valley above %.4f -> keeping %.4f",
+        logger.info(
+            "FS link-threshold refit DECLINED (no-valley): no distributional "
+            "valley above %.4f -> keeping %.4f",
             default_link, default_link,
         )
         return default_link
     max_default = _max_cluster_size(id_a, id_b, score, default_link)
     max_candidate = _max_cluster_size(id_a, id_b, score, candidate)
     if max_candidate >= max_default:
-        logger.debug(
-            "FS link-threshold refit: declined candidate %.4f (max cluster %d -> %d, no "
-            "over-merge reduction) -> keeping %.4f",
+        logger.info(
+            "FS link-threshold refit DECLINED (no-max-reduction): candidate %.4f, "
+            "max cluster %d -> %d -> keeping %.4f. NOTE: max cluster size is a "
+            "single-outlier statistic; a shape whose over-merge is DIFFUSE (many "
+            "slightly-oversized clusters rather than one giant one) cannot move it, "
+            "so this decline does not mean there is no over-merge.",
             candidate, max_default, max_candidate, default_link,
         )
         return default_link
     expelled = _expelled_share(id_a, id_b, score, default_link, candidate)
     if expelled > _REFIT_MAX_EXPELLED_SHARE:
-        logger.debug(
-            "FS link-threshold refit: declined candidate %.4f despite max cluster "
-            "%d -> %d (%.2f%% of matched records would be stranded as singletons, "
-            "cap %.2f%%) -> keeping %.4f",
+        logger.info(
+            "FS link-threshold refit DECLINED (expelled-share): candidate %.4f, "
+            "max cluster %d -> %d, but %.2f%% of matched records would be stranded "
+            "as singletons (cap %.2f%%) -> keeping %.4f",
             candidate, max_default, max_candidate, expelled * 100.0,
             _REFIT_MAX_EXPELLED_SHARE * 100.0, default_link,
         )
