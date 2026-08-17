@@ -45,6 +45,7 @@ import argparse
 import json
 import os
 import time
+from pathlib import Path
 
 
 def build_fixture(spark, rows: int, dup: int, blocks_per_key: int, value_pad: int = 0):
@@ -269,7 +270,8 @@ def profile_counts(joined, mk, *, scorer_udf, transform_udf, cands):
     return out
 
 
-def make_config(n_fields: int = 5, scorer: str | None = None):
+def make_config(n_fields: int = 5, scorer: str | None = None,
+                match_splink_levels: bool = False):
     """The scale config. ``n_fields`` trims the COMPARISON fields only.
 
     ## Why this is a knob
@@ -325,6 +327,35 @@ def make_config(n_fields: int = 5, scorer: str | None = None):
         # measuring different workloads, so their timings meant nothing.
         for f in mk.fields:
             f.scorer = scorer
+    if match_splink_levels:
+        # Mirror Splink's comparison ladder EXACTLY, because the accuracy
+        # comparison was otherwise measuring a config difference and calling it
+        # an engine difference.
+        #
+        # Splink's `JaroWinklerAtThresholds(f, [0.9, 0.7])` yields five states:
+        # null, EXACT, jw >= 0.9, jw >= 0.7, else. This harness's default is
+        # three -- agree / partial >= 0.7 / disagree -- which lumps "identical",
+        # "jw 0.95" and "jw 0.75" together and is strictly less discriminating.
+        # Measured at 200k rows on an identical pair population (1,854,038
+        # pairs, 200,004 true): GM 0.7557 average precision against Splink's
+        # 0.7911. A coarser ladder is also a cheaper one, so the speed advantage
+        # was partly bought with it.
+        #
+        # `level_thresholds` are DESCENDING cutoffs and the level is the count
+        # cleared, so [1.0, 0.9, 0.7] gives exact -> 3, >= 0.9 -> 2, >= 0.7 -> 1,
+        # else 0, plus -1 unobserved: the same four informative levels Splink
+        # has.
+        #
+        # `dob` is the odd one out. Splink compares it with
+        # `DamerauLevenshteinAtThresholds([1, 2])` -- an EDIT DISTANCE -- while
+        # this field is scored by a similarity ratio. The dates are a fixed ten
+        # characters ("19xx-01-01"), so one edit is 0.9 and two is 0.8; the
+        # thresholds below are that conversion, and they are only equivalent
+        # because the width is fixed.
+        for f in mk.fields:
+            f.levels = 4
+            f.level_thresholds = ([1.0, 0.9, 0.8] if f.field == "dob"
+                                  else [1.0, 0.9, 0.7])
     if n_fields < len(mk.fields):
         # Trim in place. Rebuilding a shorter literal risks the arms differing
         # in something other than field count, which is the one variable this
@@ -369,6 +400,25 @@ def _build_config(GoldenMatchConfig, BlockingConfig, BlockingKeyConfig,
             ),
         ],
     )
+
+
+def _metrics_module():
+    """The SHARED ranking metric, imported by file path.
+
+    Both arms of the comparison score with this one implementation. Two
+    hand-written average precisions that disagreed by a percent would look
+    exactly like a model that is a percent better, which is the distinction the
+    comparison exists to make.
+    """
+    import importlib.util
+
+    path = Path(__file__).resolve().parent / "_fs_quality_metrics.py"
+    spec = importlib.util.spec_from_file_location("_fs_quality_metrics", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"cannot load {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def main() -> int:
@@ -416,6 +466,19 @@ def main() -> int:
              "block and the run sat in the join for 24 minutes until the step "
              "timeout killed it, with no output naming the cause. This turns "
              "that into a fast, specific refusal.")
+    ap.add_argument("--match-splink-levels", action="store_true",
+                    help="Give every comparison field the same four informative "
+                         "levels Splink uses (exact / 0.9 / 0.7 / else) instead "
+                         "of this harness's default three. Without it an "
+                         "accuracy comparison measures a ladder difference and "
+                         "reports it as an engine difference.")
+    ap.add_argument("--eval-quality", action="store_true",
+                    help="After training, score the SAME candidate pairs with "
+                         "the trained model and report ranking quality against "
+                         "the fixture's known entity structure. The speed "
+                         "number means nothing without it: the bar is "
+                         "match-or-better accuracy, not a faster arrival at a "
+                         "worse model.")
     ap.add_argument("--out", default="")
     args = ap.parse_args()
 
@@ -463,7 +526,8 @@ def main() -> int:
     print(f"[scale] fixture: {actual:,} rows in "
           f"{out['stages']['fixture_seconds']}s", flush=True)
 
-    cfg = make_config(args.fields, args.scorer or None)
+    cfg = make_config(args.fields, args.scorer or None,
+                      match_splink_levels=args.match_splink_levels)
     mk = cfg.get_matchkeys()[0]
 
     # ── u: sampled self-join. Cost tracks the SAMPLE, not the table. ──
@@ -564,6 +628,91 @@ def main() -> int:
         k: [round(x, 4) for x in v] for k, v in model.match_weights.items()
     }
     out["proportion_matched"] = round(model.proportion_matched, 6)
+
+    if args.eval_quality:
+        # Score the SAME candidate pairs the training used, with the model just
+        # trained, and rank them against the fixture's known entity structure.
+        #
+        # Truth needs no label column: `build_fixture` assigns
+        # entity = id % n_entities with n_entities = rows // dup, so two rows
+        # are a true pair exactly when their ids are congruent. Carrying a label
+        # column instead would change the frame and make the quality fixture
+        # differ from the one the speed runs measure.
+        #
+        # Weights come from `gamma_columns` -- the same expressions the SCORING
+        # path builds -- so this measures the shipped model on the shipped
+        # ladder, not a re-derivation of what a level means.
+        from goldenmatch.spark.em import gamma_columns
+        from pyspark.sql import functions as F
+
+        n_entities = max(args.rows // max(args.dup, 1), 1)
+        t = time.perf_counter()
+
+        # DEDUPLICATE ACROSS BLOCKING PASSES before scoring. A pair that blocks
+        # on both keys is one pair, and scoring it twice puts it in the ranking
+        # twice. The first version of this concatenated the passes and reported
+        # 282,247 true pairs where the fixture contains 200,004 (66,666
+        # entities x 3), a 41% overlap counted as extra data -- which raised the
+        # base rate from 0.108 to 0.143 and flattered GM's average precision,
+        # since AP is bounded below by the base rate. Splink's `predict()`
+        # dedupes across its blocking rules, so the arms were being scored on
+        # different populations.
+        cands = None
+        for key_config in blocking_passes(cfg):
+            one = pass_candidates(df, key_config, id_col="__row_id__")
+            cands = one if cands is None else cands.unionByName(one)
+        cands = cands.dropDuplicates(["a", "b"])
+
+        joined = join_candidates_to_sources(cands, df, id_col="__row_id__")
+        gammas = gamma_columns(mk, CAND_LHS, CAND_RHS,
+                               scorer_udf=ROW_UDF_NAME,
+                               transform_udf=TRANSFORM_UDF_NAME)
+        # Match weight = the per-field log2(m/u) for the level the pair landed
+        # on, summed. `match_weights[field][level]` IS that table, so this is a
+        # lookup rather than a second derivation of the weight.
+        weight = F.lit(0.0)
+        for col, f in zip(gammas, mk.fields):
+            per_level = model.match_weights[f.resolved_field]
+            expr = F.lit(0.0)
+            for level, val in enumerate(per_level):
+                expr = F.when(col == F.lit(level),
+                              F.lit(float(val))).otherwise(expr)
+            weight = weight + expr
+        truth = (F.col(f"{CAND_LHS}.__row_id__") % F.lit(n_entities)
+                 == F.col(f"{CAND_RHS}.__row_id__") % F.lit(n_entities))
+        scored = [
+            (float(r["w"]), bool(r["is_true"]))
+            for r in joined.select(weight.alias("w"),
+                                   truth.alias("is_true")).collect()
+        ]
+        out["stages"]["score_seconds"] = round(time.perf_counter() - t, 2)
+        q = _metrics_module().ranking_metrics(scored)
+        # `dup` rows per entity give dup*(dup-1)/2 true pairs each, and every
+        # entity's rows share a blocking key by construction, so the candidate
+        # set must contain ALL of them and no duplicates. Checked rather than
+        # assumed: the un-deduplicated first version reported 282,247 true pairs
+        # against an expected 200,004 and the inflated base rate raised average
+        # precision, which is exactly the kind of error that reads as a result.
+        # Exact, including the remainder. `rows` is rarely a multiple of
+        # n_entities, so a few entities carry one extra row and contribute
+        # C(q+1, 2) rather than C(q, 2). The naive n_entities*C(dup,2) gives
+        # 199,998 at 200k/dup=3 where the truth is 200,004 -- and a guard that
+        # is wrong by six fires on every correct run, gets read as noise, and
+        # then gets deleted.
+        _n_ent = max(args.rows // max(args.dup, 1), 1)
+        _q, _r = divmod(args.rows, _n_ent)
+        expected_true = (_r * ((_q + 1) * _q // 2)
+                         + (_n_ent - _r) * (_q * (_q - 1) // 2))
+        q["expected_true_pairs"] = expected_true
+        q["true_pairs_match_expected"] = (q["n_true"] == expected_true)
+        if not q["true_pairs_match_expected"]:
+            print(f"[scale] WARNING quality population is wrong: found "
+                  f"{q['n_true']:,} true pairs, fixture contains "
+                  f"{expected_true:,}. The metric below is NOT comparable to "
+                  f"the other engine's.", flush=True)
+        out["quality"] = q
+        print(f"[scale] quality {out['quality']}", flush=True)
+
     out["total_seconds"] = round(sum(out["stages"].values()), 2)
 
     print(f"[scale] DONE rows={actual:,} total={out['total_seconds']}s "

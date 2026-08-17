@@ -62,7 +62,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
+import re
 import time
 from pathlib import Path
 
@@ -85,16 +87,50 @@ def _fixture_module():
     return mod
 
 
+def _metrics_module():
+    """The SHARED ranking metric, imported by file path.
+
+    Both arms score with this one implementation. Two hand-written average
+    precisions that disagree by a percent would look exactly like a model that
+    is a percent better, which is the distinction the whole comparison exists
+    to make.
+    """
+    import importlib.util
+
+    path = Path(__file__).resolve().parent / "_fs_quality_metrics.py"
+    spec = importlib.util.spec_from_file_location("_fs_quality_metrics", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"cannot load {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def build_session(master: str, driver_host: str | None, wait_s: int):
+    """A session tuned NO differently from the one GM gets.
+
+    This used to set `spark.sql.shuffle.partitions=8`, with the rationale that
+    "the default 200 on a small cluster is pure scheduling overhead". That was
+    written for the original 2-executor-core topology rig, where it was true.
+    When the lane grew a `worker_cores` input and started running on 16 cores,
+    the constant did not grow with it and quietly became a HANDICAP that GM
+    never paid: the GM harness sets no partition count at all, so it ran on
+    Spark's default 200 while Splink was pinned to 8. Eight partitions on
+    sixteen cores leaves most of the cluster idle through every shuffle, and
+    makes each partition large enough to push an executor over -- which is how
+    the 5M run died, with `MetadataFetchFailedException: Missing an output
+    location for shuffle 13 partition 3` after an executor was lost.
+
+    Nothing is tuned here now. Both engines get Spark's defaults, which is the
+    only setting that needs no justification to a reader who suspects the
+    benchmark was rigged.
+    """
     from pyspark.sql import SparkSession
     from splink.backends.spark import similarity_jar_location
 
     b = (
         SparkSession.builder.master(master)
         .appName("splink-train-scale")
-        # Splink materialises many intermediate tables; the default 200 shuffle
-        # partitions on a small cluster is pure scheduling overhead.
-        .config("spark.sql.shuffle.partitions", "8")
         .config("spark.driver.bindAddress", "0.0.0.0")
         # Splink ships its own similarity UDFs (jaro_winkler, damerau
         # levenshtein) as a JVM jar, and WITHOUT IT THE COMPARISON IS INVALID
@@ -168,6 +204,16 @@ def main() -> int:
     ap.add_argument("--max-pairs", type=int, default=1_000_000,
                     help="Splink's u-estimation sample. Matches the GM harness's "
                          "--u-max-pairs so the u stage is comparable.")
+    ap.add_argument("--seed", type=int, default=42,
+                    help="Seeds Splink's u random sampling. Unseeded, the EM "
+                         "iteration count -- and therefore the wall -- varies "
+                         "by more than half between identical runs.")
+    ap.add_argument("--eval-quality", action="store_true",
+                    help="After training, score the candidate pairs and report "
+                         "ranking quality against the fixture's known entity "
+                         "structure. The speed number means nothing without it: "
+                         "the goal is match-or-better accuracy, not a faster "
+                         "arrival at a worse model.")
     ap.add_argument("--out", default="splink-train-scale.json")
     args = ap.parse_args()
 
@@ -210,6 +256,40 @@ def main() -> int:
     from splink import comparison_library as cl
     from splink.backends.spark import SparkAPI
 
+    # Count EM iterations, because the wall is roughly linear in them and a
+    # seed only makes the count REPRODUCIBLE, not equal across configurations.
+    # Reporting seconds without iterations invites reading a convergence
+    # difference as a speed difference -- which is exactly the mistake the
+    # unseeded runs produced. Splink does not expose the count as an attribute,
+    # so it is taken from its own log records; `iterations` staying 0 in the
+    # artifact means the log format moved and the number should not be trusted
+    # rather than silently reading as "no work".
+    class _EMIterationCounter(logging.Handler):
+        _PAT = re.compile(r"^Iteration (\d+):")
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.per_session: list[int] = []
+            self._current = 0
+
+        def emit(self, record: logging.LogRecord) -> None:
+            m = self._PAT.match(str(record.getMessage()))
+            if not m:
+                return
+            n = int(m.group(1))
+            if n <= self._current and self._current:
+                self.per_session.append(self._current)
+            self._current = n
+
+        def finish(self) -> list[int]:
+            if self._current:
+                self.per_session.append(self._current)
+                self._current = 0
+            return self.per_session
+
+    em_counter = _EMIterationCounter()
+    logging.getLogger("splink").addHandler(em_counter)
+
     # The SAME five fields the GM harness compares, at the same shape: two
     # jaro-winkler name fields, a levenshtein date, and two more jaro-winkler.
     # Splink expresses levels as thresholds and GM as `levels=3` with a partial
@@ -243,7 +323,16 @@ def main() -> int:
 
     # u, from random pairs -- the same quantity the GM harness times as `u`.
     t = time.perf_counter()
-    linker.training.estimate_u_using_random_sampling(max_pairs=args.max_pairs)
+    # SEEDED, and this is the difference between a measurement and a lottery
+    # ticket. Unseeded, each run draws a different random pair sample, gets
+    # different u estimates, starts EM somewhere else and converges in a
+    # different number of iterations -- and every iteration is a distributed
+    # Spark job, so the wall follows. Two runs of the IDENTICAL configuration
+    # (31983859191, 31983866350) logged 33 and 16 iterations and came out at
+    # 321.12s and 197.29s: a 63% spread, against GM's 1.4% across the same pair
+    # of runs. Any single unseeded Splink number is drawn from that.
+    linker.training.estimate_u_using_random_sampling(
+        max_pairs=args.max_pairs, seed=args.seed)
     out["stages"]["u_seconds"] = round(time.perf_counter() - t, 2)
     print(f"[splink] u in {out['stages']['u_seconds']}s", flush=True)
 
@@ -252,7 +341,63 @@ def main() -> int:
     for rule in (block_on("blk"), block_on("last")):
         linker.training.estimate_parameters_using_expectation_maximisation(rule)
     out["stages"]["em_seconds"] = round(time.perf_counter() - t, 2)
-    print(f"[splink] EM in {out['stages']['em_seconds']}s", flush=True)
+    iters = em_counter.finish()
+    out["em_iterations_per_session"] = iters
+    out["em_iterations_total"] = sum(iters)
+    out["em_seconds_per_iteration"] = (
+        round(out["stages"]["em_seconds"] / sum(iters), 3) if sum(iters) else None
+    )
+    out["seed"] = args.seed
+    print(f"[splink] EM in {out['stages']['em_seconds']}s over {sum(iters)} "
+          f"iteration(s) {iters}", flush=True)
+
+    # The trained model itself, not just how long it took to train. GM records
+    # m_probs / u_probs / match_weights and this side recorded neither, so when
+    # the two engines disagreed on accuracy there was no way to ask WHERE --
+    # which field, which level. A per-level m/u table makes the next question
+    # answerable from the artifact instead of another run.
+    try:
+        model = linker.misc.save_model_to_json()
+        out["model"] = {
+            c["output_column_name"]: [
+                {"label": lv.get("comparison_vector_value"),
+                 "sql": lv.get("sql_condition"),
+                 "m": lv.get("m_probability"),
+                 "u": lv.get("u_probability")}
+                for lv in c.get("comparison_levels", [])
+            ]
+            for c in model.get("comparisons", [])
+        }
+        out["probability_two_random_records_match"] = model.get(
+            "probability_two_random_records_match")
+    except Exception as e:  # noqa: BLE001 - diagnostic, never fatal
+        # Recorded rather than swallowed: an absent `model` key must read as
+        # "the export broke", not as "the model was empty".
+        out["model_export_error"] = f"{type(e).__name__}: {str(e)[:200]}"
+
+    if args.eval_quality:
+        # Ground truth is a pure function of the row id and needs no extra
+        # column: `build_fixture` assigns entity = id % n_entities with
+        # n_entities = rows // dup, so two rows are a true pair exactly when
+        # their ids are congruent. Deriving it here rather than carrying a
+        # label column means the fixture the engines TRAIN on is byte-identical
+        # to the one the speed runs use -- a label column would change the
+        # frame and quietly make the two experiments different.
+        from pyspark.sql import functions as F
+
+        n_entities = max(args.rows // max(args.dup, 1), 1)
+        t = time.perf_counter()
+        preds = linker.inference.predict().as_spark_dataframe()
+        truth = (F.col("record_id_l") % F.lit(n_entities)
+                 == F.col("record_id_r") % F.lit(n_entities))
+        rows_ = (preds.select(F.col("match_weight").alias("w"),
+                              truth.alias("is_true"))
+                      .collect())
+        out["stages"]["predict_seconds"] = round(time.perf_counter() - t, 2)
+        out["quality"] = _metrics_module().ranking_metrics(
+            [(float(r["w"]), bool(r["is_true"])) for r in rows_]
+        )
+        print(f"[splink] quality {out['quality']}", flush=True)
 
     out["stages"]["total_seconds"] = round(time.perf_counter() - t_all, 2)
     # `train_total` is the number to put beside GM's u + counts + train. The
