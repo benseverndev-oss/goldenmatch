@@ -35,7 +35,7 @@
 #
 # ## Cost
 #
-# ~$1-2 per run: 3 x n2-standard-16 PREEMPTIBLE for well under an hour,
+# ~$0.60 per run: 3 x n2-standard-16 ON-DEMAND (~$2.33/hr) for ~15 min,
 # dominated by ~5 minutes of provisioning rather than the ~16s of compute. The
 # teardown step runs `if: always()`, so a failed bench still releases the
 # instances -- the same discipline bench-ray-cluster.yml uses.
@@ -84,6 +84,11 @@ on:
         required: false
         type: boolean
         default: true
+      spot:
+        description: "Use SPOT VMs. OFF by default: PREEMPTIBLE_CPUS quota in golden-490919/us-central1 is 0, so SPOT provisioning FAILS. Enable only after raising it."
+        required: false
+        type: boolean
+        default: false
       keep_cluster:
         description: "SKIP teardown (leaves VMs BILLING -- for debugging only, delete them yourself)"
         required: false
@@ -160,13 +165,28 @@ jobs:
           for i in $(seq 1 "$N"); do NAMES="$NAMES $CLUSTER-w$i"; done
           echo "NODE_NAMES=$NAMES" >> $GITHUB_ENV
 
+          # ON-DEMAND by default, and that is MEASURED, not caution.
+          # `gcloud compute regions describe us-central1` on golden-490919:
+          #     PREEMPTIBLE_CPUS  limit=0    usage=0
+          #     CPUS              limit=200  usage=2
+          #     N2_CPUS           limit=200  usage=0
+          # SPOT consumes PREEMPTIBLE_CPUS and the limit is ZERO, so an earlier
+          # draft defaulting to SPOT would have failed at `instances create`
+          # after paying for provisioning and proving nothing. On-demand has 200
+          # vCPUs against the 48 this needs.
+          PROV=""
+          if [ "${{ inputs.spot }}" = "true" ]; then
+            PROV="--provisioning-model=SPOT --instance-termination-action=DELETE"
+            echo "::warning::SPOT requested, but PREEMPTIBLE_CPUS quota was 0 when this lane was written -- expect a quota error."
+          fi
+
           # Container-Optimized OS: docker is already present, so no apt round
           # trip per node and no image drift between the master and the workers.
           gcloud compute instances create $NAMES \
             --machine-type="$MT" \
             --image-family=cos-stable --image-project=cos-cloud \
             --boot-disk-size=100GB \
-            --provisioning-model=SPOT --instance-termination-action=DELETE \
+            $PROV \
             --labels=bench=gm-spark,run-id=${{ github.run_id }} \
             --scopes=cloud-platform \
             --quiet
