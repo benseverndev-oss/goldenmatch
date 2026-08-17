@@ -110,6 +110,22 @@ def test_emitting_does_not_change_the_result():
     with profile_capture():
         within = dedupe_df(_df(), config=_config())
 
-    # Compare the assignments themselves, not a shape: a telemetry change that
-    # moved a record BETWEEN clusters would keep the count identical.
-    assert without.clusters == within.clusters
+    # Compare MEMBERSHIP, order-insensitively.
+    #
+    # Not a shape: a change that moved a record between clusters would leave any
+    # count identical, so a shape check would not catch the failure this test
+    # exists for.
+    #
+    # Not raw equality either. CI caught `[4, 5] != [5, 4]` -- the same members
+    # in a different order, which comes from parallel completion order and is
+    # not part of the contract. It passed locally because a single-threaded run
+    # happened to be stable, which is exactly how an order-sensitive assertion
+    # becomes a flaky test that gets deleted rather than fixed.
+    def _members(clusters):
+        return {
+            cid: {k: (sorted(v) if isinstance(v, list) else v)
+                  for k, v in rec.items()}
+            for cid, rec in clusters.items()
+        }
+
+    assert _members(without.clusters) == _members(within.clusters)
