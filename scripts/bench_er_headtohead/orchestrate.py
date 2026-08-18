@@ -52,7 +52,7 @@ class Lane:
 _GM_RUN_LANES = {"gm_hand_built", "gm_probabilistic",
                  "gm_probabilistic_native", "gm_probabilistic_counted",
                  "gm_probabilistic_shipped", "gm_probabilistic_cut80",
-                 "gm_zeroconfig"}
+                 "gm_zeroconfig", "gm_zeroconfig_replay"}
 
 LANES: dict[str, Lane] = {
     "splink": Lane("splink", "run_splink.py"),
@@ -174,6 +174,12 @@ LANES: dict[str, Lane] = {
                                    "run_goldenmatch.py",
                                    mode="probabilistic",
                                    extra_args=("--force-link-threshold", "0.80")),
+    # Zero-config's OWN committed config, replayed through the EXPLICIT path.
+    # Separates CONFIG from PATH: ~0.997 means the config is fine and the
+    # zero-config path is the bug; ~0.554 means the config carries something the
+    # telemetry cannot see. See the mode branch in run_goldenmatch.py.
+    "gm_zeroconfig_replay": Lane("gm_zeroconfig_replay", "run_goldenmatch.py",
+                                 mode="zeroconfig_replay"),
     "gm_zeroconfig": Lane("gm_zeroconfig", "run_goldenmatch.py", mode="zeroconfig"),
     "gm_converted_splink": Lane("gm_converted_splink", "run_gm_converted.py"),
 }

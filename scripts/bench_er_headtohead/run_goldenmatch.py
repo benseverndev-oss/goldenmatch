@@ -245,7 +245,7 @@ def main() -> None:
             "the cut."
         ),
     )
-    ap.add_argument("--mode", choices=["hand_built", "zeroconfig", "probabilistic"],
+    ap.add_argument("--mode", choices=["hand_built", "zeroconfig", "zeroconfig_replay", "probabilistic"],
                     default="hand_built",
                     help="hand_built = explicit bucket+native config (default); "
                          "zeroconfig = auto_configure_df controller; "
@@ -344,6 +344,37 @@ def main() -> None:
             t0 = time.perf_counter()
             with bench_capture() as bench:
                 ded = dedupe_df(df, config=config)
+            dedupe_wall = time.perf_counter() - t0
+        elif args.mode == "zeroconfig_replay":
+            # CONFIG vs PATH, isolated.
+            #
+            # gm_zeroconfig and gm_probabilistic_shipped commit configs that are
+            # identical on every field the telemetry can see -- same 8 blocking
+            # passes, same matchkeys/scorers, and `backend` (the one field that
+            # differed) is inert because _use_bucket_scorer already returns True
+            # with backend=None. Both even run the same bucket_* stages. Yet
+            # zero-config retains 9,250 pairs to the other's 142,933 and scores
+            # pairwise F1 0.5536 vs 0.9970, with bucket_score 0.38s vs 3.67s --
+            # roughly 10x less scoring work.
+            #
+            # Blocking is deterministic given (config, frame), so an identical
+            # config that behaves differently means the FRAME or the PATH
+            # differs, not the plan. This lane takes zero-config's OWN committed
+            # config and runs it through the EXPLICIT path, exactly as the
+            # probabilistic lane does:
+            #
+            #   ~0.997 -> the config is fine; the zero-config PATH is the bug
+            #   ~0.554 -> the config carries something the telemetry cannot see
+            from goldenmatch.core.autoconfig import auto_configure_df
+
+            t0 = time.perf_counter()
+            cfg = auto_configure_df(df, confidence_required=False)
+            for mk in cfg.get_matchkeys():
+                if getattr(mk, "type", None) == "weighted":
+                    mk.rerank = False
+            result["config_resolved"] = _config_telemetry(cfg)
+            with bench_capture() as bench:
+                ded = dedupe_df(df, config=cfg)
             dedupe_wall = time.perf_counter() - t0
         elif args.mode == "zeroconfig":
             # ControllerNotConfidentError lives in autoconfig_controller (NOT
