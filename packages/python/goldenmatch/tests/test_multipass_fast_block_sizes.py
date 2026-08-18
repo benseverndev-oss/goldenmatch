@@ -43,7 +43,6 @@ pins.
 from __future__ import annotations
 
 import pyarrow as pa
-
 from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
 from goldenmatch.core.blocker import (
     _fast_multi_pass_block_sizes,
