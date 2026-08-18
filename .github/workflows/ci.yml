@@ -447,18 +447,26 @@ jobs:
             --ignore=packages/python/goldenmatch/tests/test_qis_harness.py \
             --ignore=packages/python/goldenmatch/tests/test_controller_adaptive_e2e.py \
             --ignore=packages/python/goldenmatch/tests/test_memory_e2e.py \
-            --ignore=packages/python/goldenmatch/tests/test_suggest_full_dist.py \
             --deselect 'tests/test_memory_pipeline.py::test_pipeline_applies_seeded_correction' \
             --deselect 'tests/test_memory_pipeline.py::test_pipeline_persists_stale_pairs_to_review_queue' \
-            --deselect 'tests/test_memory_postflight.py::test_postflight_renders_memory_section'
-        # ^ test_suggest_full_dist is --ignored above and runs SERIALLY further
-        # down instead. It was OOM-killed under `-n auto`: PYTHONFAULTHANDLER=1
-        # produced NO dump, and faulthandler catches every fatal signal EXCEPT
-        # the uncatchable SIGKILL, so the kernel took it -- the same
-        # silent-'node down'-no-traceback signature the heavy-lane note below
-        # already documents. Root cause is understood; details and the
-        # ruled-out alternatives are in
-        # docs/superpowers/notes/2026-08-18-suggest-full-dist-shard-crash.md.
+            --deselect 'tests/test_memory_postflight.py::test_postflight_renders_memory_section' \
+            --deselect 'tests/test_suggest_full_dist.py::test_full_dist_on_lowers_to_high_side_valley_when_threshold_far_above'
+        # ^ The last deselect: that test is OOM-killed under -n auto and runs
+        # SERIALLY further down instead (see the step below).
+        #
+        # DESELECT, NOT --ignore, and the distinction is load-bearing: --ignore
+        # drops the file from COLLECTION, which changes the durations pytest-split
+        # groups by and reshuffles every shard. Tried it -- shard 3 went 4,533 ->
+        # 5,088 tests and 410 of them died on a polars lazy-import recursion
+        # (polars-python py_modules.rs:19) that the previous grouping never hit.
+        # --deselect happens AFTER collection, so the groups stay byte-identical
+        # and only this one test is removed here.
+        #
+        # The OOM is established, not assumed: PYTHONFAULTHANDLER=1 produced NO
+        # dump, and faulthandler catches every fatal signal EXCEPT the uncatchable
+        # SIGKILL -- the same silent-'node down'-no-traceback signature the
+        # heavy-lane note below already documents. Details and ruled-out
+        # alternatives: docs/superpowers/notes/2026-08-18-suggest-full-dist-shard-crash.md
 
         # ^ Shard-isolation-fragile (same class as the already-ignored
         # test_memory_e2e.py): a test co-located in the shard clobbers a core
@@ -494,7 +502,8 @@ jobs:
         env:
           COVERAGE_FILE: coverage_shard${{ matrix.shard }}_serial.dat
         run: |
-          uv run pytest packages/python/goldenmatch/tests/test_suggest_full_dist.py \
+          uv run pytest \
+            'packages/python/goldenmatch/tests/test_suggest_full_dist.py::test_full_dist_on_lowers_to_high_side_valley_when_threshold_far_above' \
             --timeout=300 --timeout-method=thread \
             --cov=goldenmatch --cov-report=
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4

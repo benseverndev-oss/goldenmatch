@@ -1,8 +1,20 @@
 # `test_suggest_full_dist` was OOM-killed under `-n auto`
 
-**Status: root-caused and fixed.** The file is `--ignore`d from the parallel
-`python_goldenmatch` shards and runs SERIALLY in the same job (shard 1 only),
-which keeps native available. No coverage is lost.
+**Status: root-caused and fixed.** The single crashing test is `--deselect`ed
+from the parallel `python_goldenmatch` shards and re-run SERIALLY in the same
+job (shard 1 only), which keeps native available. No coverage is lost.
+
+## Use --deselect, never --ignore
+
+`--ignore` drops the file from COLLECTION, so pytest-split sees different
+durations and reshuffles every shard. That was tried first and was far worse
+than the bug: shard 3 went from 4,533 to 5,088 tests and **410** of them died
+on a polars lazy-import recursion (`polars-python py_modules.rs:19`,
+`polars/__init__.py __getattr__` re-entering `import polars.datatypes.group`
+~957 times) that the previous grouping never triggered. `--deselect` is applied
+AFTER collection, so the groups stay byte-identical and only the one test is
+removed. The serial step re-runs that one test id, not the whole file, so the
+other five keep running in the shards exactly where they were.
 
 ## Symptom
 
