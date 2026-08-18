@@ -1886,6 +1886,7 @@
             "_degenerate_blocking_config",
             "_detect_source_partition",
             "_detect_standardization_config",
+            "_diversify_pair_budget_enabled",
             "_diversify_probabilistic_blocking",
             "_diversify_unused_orthogonal_blocking",
             "_drop_uninformative_blocking_fields",

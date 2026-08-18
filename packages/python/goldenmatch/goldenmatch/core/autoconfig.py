@@ -5293,7 +5293,6 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
     # Opt-in (GOLDENMATCH_BLOCKING_PRUNE_PASSES=1): drop redundant/all-noise
     # multi-pass passes by likely-match yield.
     blocking = _maybe_prune_blocking_passes(blocking, df)
-
     # ── Data-driven strategy selection ──
 
     # 1. Learned blocking for large datasets.
@@ -5911,10 +5910,27 @@ def auto_configure_probabilistic_df(
     )
 
 
+def _diversify_pair_budget_enabled() -> bool:
+    """Kill-switch for the pairs/row bound on diversified passes.
+
+    Default ON. ``GOLDENMATCH_BLOCKING_DIVERSIFY_PAIR_BUDGET=0`` restores the
+    row-cap-only behaviour without a revert, because the measurement behind the
+    bound is person-shaped and the lever's stated purpose is error-heavy PII
+    (historical_50k), where an anchor that looks wasteful on clean data may be
+    the only thing co-blocking corrupted names.
+    """
+    return os.environ.get(
+        "GOLDENMATCH_BLOCKING_DIVERSIFY_PAIR_BUDGET", "1",
+    ).strip().lower() in ("1", "true", "yes", "on", "enabled")
+
+
 def _diversify_probabilistic_blocking(
     blocking: BlockingConfig | None,
     profiles: list[ColumnProfile],
     df: Any = None,
+    *,
+    n_rows_full: int | None = None,
+    max_null_rate: float = 0.6,
 ) -> BlockingConfig | None:
     """Add orthogonal stable-key blocking passes for the probabilistic path.
 
@@ -5939,6 +5955,27 @@ def _diversify_probabilistic_blocking(
     scales where it helps (a birth-year block is ~1.5K rows at 100K) and is
     dropped only where it would be pathological. Without ``df`` (older callers)
     the guard is a no-op, preserving prior behavior.
+
+    ``n_rows_full`` scale-corrects that guard for callers handing us a SAMPLE.
+    The zero-config controller does: it builds its initial config from a ~5-6K
+    sample (measured: 6,324 rows for a 100K frame). Uncorrected, every anchor
+    looks tiny on a sample and is kept -- including birth-YEAR, ~1.5K rows at
+    100K but ~15K at 1M, which is the exact OOM #1857 added this guard for.
+    Block size grows ~linearly with N (``project_max_block_size``). Full-frame
+    callers pass None and are byte-identical.
+
+    ``max_null_rate`` defaults to the 0.6 this lever has always used -- additive
+    passes tolerate more nulls than a primary key, because the static blocker
+    filters null/sentinel block keys so a null row is simply absent from THIS
+    pass while still covered by the name passes, and error-heavy PII
+    (historical_50k dob/postcode ~24% null) is where these anchors matter most.
+    The v0 caller passes ``build_blocking``'s stricter 0.20 instead. That is
+    deliberately conservative: v0's Tier-2 contract
+    (``test_legacy_v0_skips_high_null_blocking_candidate``) is that a >20%-null
+    column is not a blocking field, and whether additive passes should be exempt
+    is a real question but an UNMEASURED one. Relaxing it here would be an
+    argument, not evidence, so v0 keeps its gate and the question is left for a
+    panel run that can actually answer it.
     """
     if blocking is None or not _fs_autoconfig_v2_enabled():
         return blocking
@@ -5960,23 +5997,44 @@ def _diversify_probabilistic_blocking(
         pass
 
     def _projected_max_block(field: str, transforms: list[str]) -> int:
-        """Exact max block size this single-field pass would produce (0 if
-        unknown / uncomputable — treated as safe so the pass is kept)."""
+        """Max block size this single-field pass would produce at FULL scale
+        (0 if unknown / uncomputable -- treated as safe so the pass is kept).
+
+        Runs on the Frame seam rather than raw polars expressions. It used to
+        build ``pl.col(field)`` and call ``df.select(expr)``, which raises on a
+        ``pyarrow.Table`` and landed in the ``except`` below -- returning 0,
+        which this guard reads as SAFE. Post-Polars-eviction most callers hand
+        this a pa.Table, so the #1857 scale guard was silently disabled on the
+        arrow lane that is now the default. Found while wiring this lever into
+        the controller path: the guard could not drop a birth-YEAR anchor even
+        when the projection asked it to.
+
+        It also derives the key through ``derive_block_key``, so the measured
+        key matches what the blocker will actually compute (the old code only
+        handled a leading ``substring:`` and ignored every other transform).
+        """
         if df is None:
             return 0
         try:
-            col = pl.col(field).cast(pl.Utf8)
-            if transforms and transforms[0].startswith("substring:"):
-                _, start, length = transforms[0].split(":")
-                col = col.str.slice(int(start), int(length))
-            sizes = (
-                df.select(col.alias("__k__"))
+            from goldenmatch.core.frame import to_frame as _to_frame  # noqa: PLC0415
+
+            frame = _to_frame(df)
+            counts = (
+                frame.derive_block_key([field], list(transforms or []))
                 .drop_nulls()
-                .group_by("__k__")
-                .len()
-                .get_column("len")
+                .value_counts_desc()
             )
-            return int(sizes.max()) if sizes.len() else 0
+            measured = int(counts[0][1]) if counts else 0
+            if measured and n_rows_full:
+                from goldenmatch.core.blocking_candidates import (  # noqa: PLC0415
+                    project_max_block_size,
+                )
+                sample_n = int(frame.height)
+                if int(n_rows_full) > sample_n:
+                    return int(project_max_block_size(
+                        measured, sample_n, int(n_rows_full),
+                    ))
+            return measured
         except Exception:
             return 0
 
@@ -5988,6 +6046,37 @@ def _diversify_probabilistic_blocking(
             return
         if len(fields) == 1:
             projected = _projected_max_block(fields[0], transforms)
+            # PAIR budget, not just the per-block ROW cap. The row cap bounds the
+            # scorer's per-block memory; it says nothing about how much WORK the
+            # pass creates, and those diverge badly for a low-cardinality anchor.
+            #
+            # Measured, person @ 100,000 rows (run 32138842887), dropping one pass
+            # at a time from the 8-pass plan:
+            #
+            #     dropped pass              comparisons saved      dF1
+            #     [dob] substring:0:4              71,337,394   +0.0000
+            #     [first_name] soundex             31,321,187   +0.0000
+            #     [surname] soundex                12,286,109   +0.0000
+            #     [postcode]                           47,022   -0.0269
+            #
+            # Birth-YEAR is 59% of every comparison in the run and buys NOTHING,
+            # while postcode carries all the recall for 47K comparisons. Both
+            # clear the row cap easily (1,549 and 9 rows), so the cap cannot tell
+            # them apart -- but in pairs/row they are 774 vs 4 against a budget of
+            # 50. Same verdict at 4K and 10K, so it is not a scale artifact.
+            #
+            # `_blocking_pairs_per_row_budget` is the engine's OWN knob (default
+            # 50, "keeps the total pair count linear"), already applied when
+            #selecting a primary key and never to these additive passes.
+            ppr = _project_pairs_per_row(projected)
+            budget = _blocking_pairs_per_row_budget()
+            if projected and ppr > budget and _diversify_pair_budget_enabled():
+                logger.debug(
+                    "probabilistic diversify: dropping pass %s%s -- projects %d "
+                    "pairs/row (max block %d) against a budget of %d",
+                    fields, transforms, ppr, projected, budget,
+                )
+                return
             if projected > row_cap:
                 logger.debug(
                     "probabilistic diversify: dropping oversized pass %s%s "
@@ -6005,7 +6094,7 @@ def _diversify_probabilistic_blocking(
         # null-valued row is simply absent from THIS pass (no giant null block)
         # while still covered by the name passes. Error-heavy PII (historical_50k
         # dob/postcode ~24% null) is exactly where these keys matter most.
-        if p.null_rate > 0.6:
+        if p.null_rate > max_null_rate:
             continue
         if p.col_type == "date":
             _add([p.name], ["substring:0:4"])  # birth YEAR — tolerant of day/month errors
