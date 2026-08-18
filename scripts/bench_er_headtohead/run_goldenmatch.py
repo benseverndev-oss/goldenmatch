@@ -174,6 +174,28 @@ def _config_telemetry(cfg) -> dict:
             out["blocking_max_block_size"] = getattr(blocking, "max_block_size", None)
     except Exception as e:  # noqa: BLE001
         out["blocking_error"] = f"{type(e).__name__}: {e}"
+    # Everything ELSE the resolved config carries, minus the two blocks already
+    # reported above. Two lanes on the same fixture were found committing an
+    # IDENTICAL 8-pass blocking plan and identical matchkeys while producing
+    # 3,287 vs 83,436 blocks and pairwise F1 0.5536 vs 0.9970 -- so the
+    # difference lives in a config field neither of those blocks covers, and
+    # naming candidates one at a time has already cost several CI rounds.
+    # Dump the rest wholesale (scalars/short reprs only, so the artifact stays
+    # readable) rather than guessing which field matters.
+    try:
+        dump = cfg.model_dump() if hasattr(cfg, "model_dump") else dict(vars(cfg))
+        rest = {}
+        for k, v in sorted(dump.items()):
+            if k in ("matchkeys", "blocking"):
+                continue
+            if v is None or isinstance(v, (bool, int, float, str)):
+                rest[k] = v
+            else:
+                r = repr(v)
+                rest[k] = r if len(r) <= 300 else r[:300] + "...<truncated>"
+        out["config_other"] = rest
+    except Exception as e:  # noqa: BLE001
+        out["config_other_error"] = f"{type(e).__name__}: {e}"
     return out
 
 
