@@ -479,12 +479,45 @@ jobs:
         # On the master, not the runner: Splink's classic driver must be
         # reachable BY the workers, and a runner behind NAT is not. This also
         # keeps the two engines symmetric.
+        env:
+          # For `gh release download` of the JVM scorer jar below. The job's
+          # `permissions: contents: read` already covers reading a release
+          # asset, so this needs no new secret.
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           MASTER="$CLUSTER-master"
+          # The FS harness needs the JVM scorer jar, and pip does not carry it:
+          #
+          #   goldenmatch.spark.jvm.JvmScorerUnavailable: JVM scorer jar not
+          #   found. ... The jar is built in CI rather than vendored, so a
+          #   source checkout will not have one until you build it.
+          #
+          # `spark_fs_train_scale.py` calls `install(spark, jar=find_jar())`
+          # unconditionally, so this is required rather than a fast path.
+          #
+          # Downloaded from the release rather than built here: the jar is a
+          # Rust-JNI + Scala build (`scripts/build_spark_jar.sh`), so building
+          # it in this lane would add a cargo and JDK toolchain to a job whose
+          # point is measuring a cluster, and would measure a DIFFERENT jar than
+          # the one that ships. `publish-goldenmatch-spark-jar.yml` already
+          # produces a tested artifact; use that.
+          #
+          # Checksum verified. A silently truncated download would surface as a
+          # confusing JVM error on the master, minutes and five VMs later.
+          JAR_TAG=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 60 \
+            --json tagName -q '.[].tagName' | grep '^goldenmatch-spark-v' | head -1)
+          [ -n "$JAR_TAG" ] || { echo "::error::no goldenmatch-spark-v* release found"; exit 1; }
+          echo "JVM scorer jar: $JAR_TAG"
+          gh release download "$JAR_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'goldenmatch-spark.jar*' --dir . --clobber
+          sha256sum -c goldenmatch-spark.jar.sha256 \
+            || { echo "::error::jar checksum mismatch"; exit 1; }
+
           gcloud compute scp --quiet \
             scripts/spark_fs_train_scale.py scripts/spark_splink_train_scale.py \
             scripts/_fs_quality_metrics.py scripts/_spark_shuffle_metrics.py \
+            goldenmatch-spark.jar \
             "$MASTER:~/"
 
           gcloud compute ssh "$MASTER" --quiet --command "
@@ -494,7 +527,8 @@ jobs:
               -e SPARK_LOCAL_DIRS=/scratch \
               python:3.12-slim sleep infinity
             docker exec pyenv pip install --quiet 'goldenmatch[spark]' splink==4.0.16
-            docker exec pyenv python spark_fs_train_scale.py \
+            docker exec -e GOLDENMATCH_SPARK_JAR=/w/goldenmatch-spark.jar \
+              pyenv python spark_fs_train_scale.py \
               --rows ${{ inputs.rows || '1000000' }} \
               --remote sc://$MASTER_IP:15002 \
               --spark-ui http://$MASTER_IP:4040 \
