@@ -317,6 +317,40 @@ jobs:
           echo "MASTER_IP=$MASTER_IP" >> $GITHUB_ENV
           CORES=$(( $(echo "${{ inputs.machine_type || 'n2-standard-16' }}" | grep -oE '[0-9]+$') ))
 
+          # Open the COS HOST firewall to intra-VPC traffic.
+          #
+          # Container-Optimized OS ships a default-DENY iptables INPUT policy.
+          # The GCP VPC firewall being permissive is not enough -- the packet is
+          # dropped after it arrives. Diagnosed from a run where every process
+          # was healthy and the connection still failed:
+          #
+          #     master:  Successfully started service 'sparkMaster' on port 7077
+          #     worker:  Connecting to /10.142.0.23:7077 timed out (120000 ms)
+          #
+          # TIMED OUT, not connection-refused, is the tell: a closed port refuses
+          # immediately, a DROP rule produces exactly this silence. And
+          # `default-allow-internal` carries NO target tags and allows
+          # tcp:0-65535 from 10.128.0.0/9, so GCP was never the blocker.
+          #
+          # The single-host lane never hit this because master, workers and
+          # Connect were containers on ONE host talking over localhost. It is
+          # the one thing that could only appear once the topology became real,
+          # which is the whole reason this lane exists.
+          #
+          # Whole subnet rather than a port list, deliberately: Spark's
+          # executor/driver/BlockManager ports are EPHEMERAL, so an allowlist of
+          # 7077/8080/15002/4040 would clear registration and then fail during
+          # the shuffle -- a far more expensive place to discover it. The VPC
+          # firewall remains the real boundary; this only stops COS
+          # second-guessing traffic GCP has already allowed.
+          for n in $NODE_NAMES; do
+            gcloud compute ssh "$n" --quiet --command \
+              "sudo iptables -w -C INPUT -s 10.128.0.0/9 -j ACCEPT 2>/dev/null || \
+               sudo iptables -w -I INPUT 1 -s 10.128.0.0/9 -j ACCEPT" &
+          done
+          wait
+          echo "COS host firewall opened to 10.128.0.0/9 on every node"
+
           gcloud compute ssh "$MASTER" --quiet --command "
             docker run -d --name spark-master --network host \
               -e SPARK_NO_DAEMONIZE=true $SPARK_IMAGE \
