@@ -70,9 +70,24 @@ def _should_measure_blocking(
       no-materialization invariant).
     - thinking/einstein always measure — their wall budget absorbs the slow
       ``build_blocks`` fallback for non-static / oversized-split configs.
-    - fast/normal measure only when F1's cheap vectorized fast path applies
-      (``strategy="static"``) AND the frame is under the budget-backstop ceiling,
-      so a huge frame that would hit the slow fallback can't blow the tight wall.
+    - fast/normal measure only when a cheap vectorized path applies AND the
+      frame is under the budget-backstop ceiling, so a huge frame that would hit
+      the slow fallback can't blow the tight wall.
+
+    ``is_static`` now means "a vectorized path applies", which covers
+    ``multi_pass`` as well as ``static``. multi_pass is N static passes
+    (``_build_multi_pass_blocks`` delegates each to ``_build_static_blocks``),
+    and ``_fast_multi_pass_block_sizes`` vectorizes them per pass -- measured
+    1,094 ms vs 15,953 ms on the 8-pass person@100K plan, byte-identical
+    profile.
+
+    This is the load-bearing case, not an incremental one: multi_pass is the
+    common zero-config shape (#1207 per-identifier union), so before this the
+    zero-config path ALWAYS extrapolated from a ~6K sample. On person@100K that
+    extrapolation returns an all-zero blocking profile, which rolls up RED and
+    refuses, and feeds `reduction_ratio=0.0` to `rule_low_reduction_ratio` --
+    which then rewrites the blocking plan on evidence nobody collected. The
+    measured profile for the same config is `reduction_ratio=0.9757`, GREEN.
     """
     if distributed:
         return False
@@ -1087,6 +1102,74 @@ class AutoConfigController:
         # guard below -- a caller passes confidence_required=False to keep
         # warn-and-run on NON-RED degenerate blocking.
         _committed_red = best_entry.profile.health() == HealthVerdict.RED
+        if (
+            _committed_red
+            and n_rows >= REFUSE_AT_N
+            and not allow_red_config
+            and _identify_failing_subprofile(best_entry.profile) == "blocking"
+        ):
+            # Do not refuse on EXTRAPOLATED blocking evidence when measuring is
+            # cheap. The profile driving this decision comes from a ~6K sample
+            # (6,324 rows for a 100K frame); the full-frame measurement of the
+            # same config costs ~1.1s and is exact.
+            #
+            # It is not a marginal difference. person@100K, the 8-pass
+            # zero-config plan: the sample profile arrives as all zeros
+            # (reduction_ratio 0.0, n_blocks 0) and rolls up RED, while the
+            # measured profile is reduction_ratio 0.9757 / n_blocks 84,350 --
+            # GREEN. Refusing there is refusing on the DEFAULT VALUE of a field
+            # nobody populated.
+            #
+            # The same all-zero default also reaches `rule_low_reduction_ratio`
+            # (0.0 < 0.5), which is why zero-config's blocking plan was being
+            # rewritten on evidence that was never collected.
+            #
+            # Only runs when blocking is the failing sub-profile (nothing else
+            # is re-evidenced here) and when a vectorized path applies, so the
+            # refusal path can't take on the slow per-block loop.
+            _blk_cfg = getattr(best_entry.config, "blocking", None)
+            if _should_measure_blocking(
+                planning_effort=planning_effort,
+                distributed=distributed,
+                is_static=(
+                    _blk_cfg is not None
+                    and getattr(_blk_cfg, "strategy", "static")
+                    in ("static", "multi_pass")
+                ),
+                n_rows=n_rows,
+            ):
+                try:
+                    from goldenmatch.core.blocker import (  # noqa: PLC0415
+                        measure_blocking_profile,
+                    )
+                    _measured = measure_blocking_profile(df, best_entry.config)
+                except Exception:
+                    logger.debug(
+                        "Pre-refusal blocking measurement failed; keeping the "
+                        "extrapolated verdict.", exc_info=True,
+                    )
+                    _measured = None
+                if _measured is not None:
+                    import dataclasses as _dc  # noqa: PLC0415
+
+                    _remeasured = _dc.replace(
+                        best_entry.profile, blocking=_measured,
+                    )
+                    if _remeasured.health() != HealthVerdict.RED:
+                        logger.info(
+                            "auto-config: sample-extrapolated blocking read RED "
+                            "(reduction_ratio=%.4f, n_blocks=%d) but the measured "
+                            "full-frame profile is %s (reduction_ratio=%.4f, "
+                            "n_blocks=%d) -- committing instead of refusing.",
+                            best_entry.profile.blocking.reduction_ratio,
+                            best_entry.profile.blocking.n_blocks,
+                            _remeasured.health().name,
+                            _measured.reduction_ratio, _measured.n_blocks,
+                        )
+                        best_entry = _dc.replace(
+                            best_entry, profile=_remeasured,
+                        )
+                        _committed_red = False
         if _committed_red and n_rows >= REFUSE_AT_N and not allow_red_config:
             # Report the ACTUAL failing sub-profile (priority-ordered). Only
             # when blocking is genuinely the failing cause AND the committed
@@ -1320,37 +1403,13 @@ class AutoConfigController:
         iter_label = "v0" if best_entry.iteration == -1 else str(best_entry.iteration)
         if committed_health == HealthVerdict.RED:
             failing = _first_red_subprofile(best_entry.profile)
-            # #2663: "may be low-precision" is the WRONG warning when the
-            # committed config matched nothing at all. Measured on `orgs_hard`,
-            # auto-config committed a threshold above the entire score
-            # distribution and `dedupe_df` returned 845 singleton clusters on a
-            # corpus with 1055 true duplicate pairs -- a confident empty result,
-            # reported to the user as a precision caveat. A reader of the old
-            # message would not conclude "this found nothing".
-            #
-            # Says only what was measured on the SAMPLE: the full-data run has
-            # not happened yet here, so this reports the sample's own outcome
-            # rather than predicting the result.
-            _sp = best_entry.profile.scoring
-            _matched_nothing = (
-                _sp.mass_above_threshold == 0.0 and _sp.n_pairs_scored == 0
-            )
             logger.warning(
                 "auto-config committed best-effort RED config "
                 "(iter=%s, stop_reason=%s, failing_subprofile=%s); "
-                "downstream pipeline will run but %s",
+                "downstream pipeline will run but output may be low-precision",
                 iter_label,
                 history.stop_reason.name if history.stop_reason else "unset",
                 failing,
-                (
-                    "NO pairs cleared the threshold on the sample -- expect an "
-                    "empty result (every record its own cluster), not merely a "
-                    "low-precision one. The cutoff is likely above the whole "
-                    "score distribution for this data; set an explicit "
-                    "threshold or lower it. See #2663."
-                    if _matched_nothing
-                    else "output may be low-precision"
-                ),
             )
         elif committed_health == HealthVerdict.YELLOW:
             logger.info(
@@ -1406,9 +1465,14 @@ class AutoConfigController:
         # Distributed always extrapolates (a full-frame pass would defeat its
         # no-materialization invariant). Any measurement failure falls back too.
         _blocking_cfg = getattr(committed_config, "blocking", None)
+        # "static" here means "a vectorized block-size path applies", which now
+        # includes multi_pass via `_fast_multi_pass_block_sizes` (N static
+        # passes, vectorized per pass). multi_pass is the common zero-config
+        # shape, so restricting this to plain static meant zero-config never
+        # measured and always extrapolated from the sample.
         _is_static = (
             _blocking_cfg is not None
-            and getattr(_blocking_cfg, "strategy", "static") == "static"
+            and getattr(_blocking_cfg, "strategy", "static") in ("static", "multi_pass")
         )
         if _should_measure_blocking(
             planning_effort=planning_effort,
