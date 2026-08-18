@@ -882,6 +882,46 @@ class AutoConfigController:
                         emitter, df=sample, iteration=iteration,
                         reference=sample_ref, config=config_n,
                     )
+                    # Measure blocking on the FULL frame for THIS iteration's
+                    # own config, not just at commit time (>=REFUSE_AT_N) or
+                    # post-commit for planner backend selection. Below
+                    # REFUSE_AT_N, profile_n.blocking was always the
+                    # sample-extrapolated all-zero default for a multi_pass
+                    # config -- the same unmeasured shape that caused the
+                    # zero-config recall incident, just never surfaced
+                    # because refusal never fires below 100K rows (#2663).
+                    # `_should_measure_blocking`'s own row ceiling (20M) is
+                    # the real cost gate here; REFUSE_AT_N was never about
+                    # cost, so it is not repeated on this call site.
+                    _blk_cfg_n = getattr(config_n, "blocking", None)
+                    _is_static_n = (
+                        _blk_cfg_n is not None
+                        and getattr(_blk_cfg_n, "strategy", "static")
+                        in ("static", "multi_pass")
+                    )
+                    if _should_measure_blocking(
+                        planning_effort=planning_effort,
+                        distributed=distributed,
+                        is_static=_is_static_n,
+                        n_rows=n_rows,
+                    ):
+                        try:
+                            from goldenmatch.core.blocker import (
+                                measure_blocking_profile,
+                            )
+                            _measured_n = measure_blocking_profile(df, config_n)
+                        except Exception:
+                            logger.debug(
+                                "Per-iteration blocking measurement failed; "
+                                "keeping the extrapolated profile.",
+                                exc_info=True,
+                            )
+                            _measured_n = None
+                        if _measured_n is not None:
+                            import dataclasses as _dc_iter  # noqa: PLC0415
+                            profile_n = _dc_iter.replace(
+                                profile_n, blocking=_measured_n,
+                            )
                     wall_ms = int((time.time() - iter_start) * 1000)
                     from goldenmatch.core.autoconfig_history import HistoryEntry
                     history.entries.append(HistoryEntry(
