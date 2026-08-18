@@ -606,6 +606,15 @@ def main() -> None:
             dedupe_wall_seconds=round(dedupe_wall, 2),
             scored_pairs=metrics.get("scored_pair_count"),
             block_count=metrics.get("block_count_scored") or metrics.get("block_count"),
+            # Both raw counters, unmerged: `block_count_scored or block_count` is
+            # two different quantities behind one name, and reading the merged
+            # value as if it were one number produced an apparent "8 passes ->
+            # fewer blocks than 2 passes" that cost real time to unpick.
+            block_count_scored_raw=metrics.get("block_count_scored"),
+            block_count_raw=metrics.get("block_count"),
+            # Per-pass blocking decision trace (see _build_multi_pass_blocks).
+            blocking_pass_trace=metrics.get("blocking_pass_trace"),
+            blocking_pass_trace_total_pairs=metrics.get("blocking_pass_trace_total_pairs"),
             # cluster_count = total resolved entities incl. singletons, to match
             # Splink's `count(distinct cluster_id)`. multi-member tracked separately.
             cluster_count=metrics.get("cluster_count"),

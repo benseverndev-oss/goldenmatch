@@ -1286,6 +1286,15 @@ def _build_multi_pass_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[B
     # fields+transforms+value, e.g. two passes that happen to share a key) while
     # keeping distinct-field blocks that merely share a value string.
     seen_keys: set[tuple] = set()
+    # Per-pass decision trace. Two lanes committing the SAME plan on the SAME
+    # fixture produced 3,218 blocks vs 83,367 at person@100K (pairwise F1 0.5536
+    # vs 0.9970), and no existing telemetry could say which pass lost them --
+    # `block_count` is a single post-hoc total, and the bench reads
+    # `block_count_scored or block_count`, two different quantities behind one
+    # name. Chasing that by hypothesis cost eight wrong guesses; this records
+    # what each pass actually produced so the next question is a diff, not a
+    # theory.
+    _trace: list[dict] = []
 
     for pass_config in config.passes or []:
         temp_config = BlockingConfig(
@@ -1298,13 +1307,43 @@ def _build_multi_pass_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[B
         )
         pass_sig = (tuple(pass_config.fields), tuple(pass_config.transforms or []))
         blocks = _build_static_blocks(lf, temp_config)
+        _kept = 0
+        _dup = 0
+        _rows = 0
+        _pairs = 0
         for block in blocks:
             dedup_key = (pass_sig, block.block_key)
             if dedup_key not in seen_keys:
                 block.strategy = "multi_pass"
                 all_blocks.append(block)
                 seen_keys.add(dedup_key)
+                _kept += 1
+                try:
+                    n = int(block.n_rows())
+                except Exception:
+                    n = 0
+                _rows += n
+                _pairs += n * (n - 1) // 2
+            else:
+                _dup += 1
+        _trace.append({
+            "fields": list(pass_config.fields),
+            "transforms": list(pass_config.transforms or []),
+            "blocks_built": len(blocks),
+            "blocks_kept": _kept,
+            "blocks_deduped": _dup,
+            "rows_in_kept_blocks": _rows,
+            "candidate_pairs": _pairs,
+        })
 
+    try:
+        from goldenmatch.core.bench import record_metric  # noqa: PLC0415
+
+        record_metric("blocking_pass_trace", _trace)
+        record_metric("blocking_pass_trace_total_pairs",
+                      sum(t["candidate_pairs"] for t in _trace))
+    except Exception:  # noqa: BLE001 - telemetry must never fail a run
+        pass
     return all_blocks
 
 

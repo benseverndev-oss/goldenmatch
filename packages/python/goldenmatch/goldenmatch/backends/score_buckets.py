@@ -2659,14 +2659,42 @@ def score_buckets(
     total_blocks_scored = 0
     total_non_empty = 0
     slim_cols = set(slim_frame.columns)
+    # Per-pass decision trace. Two lanes committing the SAME plan on the SAME
+    # fixture produced 3,218 vs 83,367 blocks at person@100K (pairwise F1 0.5536
+    # vs 0.9970) and nothing could say which pass lost them: `block_count_scored`
+    # is one post-hoc total, and the `continue` below drops a whole pass on a
+    # WARNING alone. Recording per pass turns that into a diff instead of a
+    # guess.
+    _pass_trace: list[dict] = []
     for key in pass_keys:
         if not set(key.fields) <= slim_cols:
+            missing = sorted(set(key.fields) - slim_cols)
             logger.warning(
                 "score_buckets: skipping pass %s -- field(s) %s absent from prepared_df",
-                key.fields, sorted(set(key.fields) - slim_cols),
+                key.fields, missing,
             )
+            _pass_trace.append({
+                "fields": list(key.fields),
+                "transforms": list(key.transforms or []),
+                "skipped": "fields_absent_from_prepared_df",
+                "missing_fields": missing,
+                "blocks_scored": 0,
+                "non_empty_buckets": 0,
+                "pairs_emitted": 0,
+            })
             continue
         pass_result, blocks_scored, n_non_empty = _score_single_pass(key)
+        _n_pass_pairs = (
+            int(pass_result.num_rows) if _arrow else len(pass_result)
+        )
+        _pass_trace.append({
+            "fields": list(key.fields),
+            "transforms": list(key.transforms or []),
+            "skipped": None,
+            "blocks_scored": int(blocks_scored),
+            "non_empty_buckets": int(n_non_empty),
+            "pairs_emitted": _n_pass_pairs,
+        })
         if _arrow:
             # _score_single_pass already returns a PAIR_STREAM_SCHEMA pa.Table
             # (converted per BUCKET, B2c) -- accumulate it directly; no per-pass
@@ -2696,6 +2724,10 @@ def score_buckets(
             matched_pairs.add((min(a, b), max(a, b)))
 
     record_metrics({
+        "blocking_pass_trace": _pass_trace,
+        "blocking_pass_trace_skipped": sum(
+            1 for t in _pass_trace if t.get("skipped")
+        ),
         "bucket_count": total_non_empty,
         "bucket_n_target": n_buckets,
         "block_count_scored": total_blocks_scored,
