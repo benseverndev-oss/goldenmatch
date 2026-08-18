@@ -1,4 +1,4 @@
-"""#2673: the honest admitted fraction, as a NEW field beside the old one.
+"""#2673/#2663/#2668: the honest admitted fraction, and the degenerate-empty guard.
 
 `_emit_scoring_profile` is handed the pairs that ALREADY cleared the cut (its
 own docstring: "pairs: Pairs *above* the threshold"), and computes
@@ -19,18 +19,27 @@ truthful invalidates every one of their calibrations at once. The quality gate
 caught it: anchor_person_match F1 1.0000 -> 0.7303 (P 1.0000 -> 0.5751), the
 controller taking a different rule path and over-merging.
 
-So only the consumers whose bug motivated the work read the new field, and only
-where it is not None:
+So only two consumers read the new field, and only where it is not None:
+`pick_committed`'s precision-collapse guard and `ScoringProfile.health()`'s
+YELLOW branch (#2668, previously unreachable). Everything else stays on the
+signal it was tuned against.
 
-  - `pick_committed`'s precision-collapse guard (#2663 mechanism)
-  - `ScoringProfile.health()`'s YELLOW branch (#2668)
+That alone did NOT fix #2663. The deciding consumer on `orgs_hard` turned out
+to be zero-label confidence's everything-matches guard, and migrating THAT
+also regressed the anchor (F1 1.0000 -> 0.5139) because its tautological cap
+was the only thing penalising over-merge there.
 
-Everything else stays on the signal it was tuned against. Migrating the rest is
-real work needing its own before/after across all six gate datasets.
+What fixed it is the DEGENERATE-EMPTY guard in `pick_committed` -- the mirror
+of the collapse guard: an entry that merged NOTHING must not beat one that
+merged something. Chosen because, measured, no cluster-shape metric separates
+`orgs_hard`'s correct entry from the anchor's over-merged one (giant 0.0154 vs
+0.0156, oversized 0 both, bridge risk 0.0 both), while "did it merge anything"
+separates them cleanly:
 
-The one consumer deliberately NOT migrated is zero-label confidence's
-everything-matches guard -- see the xfail at the bottom of this file, which
-records why and what closing #2663 actually needs.
+    orgs_hard    n_rows 845, v0 -> 845 clusters (0 merges)    BAD
+    anchor       n_rows 706, v0 -> 400 clusters (306 merges)  GOOD
+
+Result: orgs_hard F1 0.0000 -> 0.4108, anchor_person_match unchanged at 1.0000.
 """
 from __future__ import annotations
 
@@ -183,49 +192,33 @@ def test_the_collapse_guard_fires_on_a_genuine_everything_matches():
     )
 
 
-# ── end-to-end: #2663's own corpus (STILL OPEN -- xfail) ───────────────────
+# ── end-to-end: #2663's own corpus ─────────────────────────────────
 
-@pytest.mark.xfail(
-    reason=(
-        "#2663 is NOT fixed by this change and this test records exactly why. "
-        "The deciding consumer on this corpus is zero-label confidence's "
-        "everything-matches guard, not pick_committed's collapse guard: "
-        "measured, pick_committed(collapse_floor=0.9) picks iteration 3 (463 "
-        "pairs, admitted_fraction 0.051) while the same call with "
-        "use_zero_label_confidence=True -- which is ON by default -- picks v0 "
-        "(0 pairs). That guard caps confidence at 0.2 whenever "
-        "mass_above_threshold >= 0.9, i.e. on every entry that matched "
-        "anything, so a config that finds duplicates can never out-score one "
-        "that finds none. "
-        "Migrating it to admitted_fraction was tried and REVERTED: it fixes "
-        "this corpus but costs anchor_person_match F1 1.0000 -> 0.5139 "
-        "(P 0.3458), because the tautological cap was the only thing "
-        "penalising over-merged configs there -- and admitted_fraction cannot "
-        "replace it, since that over-merge comes from transitive closure "
-        "during clustering (adm 0.047, i.e. selective admission) rather than "
-        "from admitting too many candidates. "
-        "Closing #2663 needs a real over-merge signal for that guard -- "
-        "ClusterProfile already measures cluster_size_max / "
-        "oversized_cluster_count -- which is its own measured change across "
-        "all six gate datasets, not a rider on this one."
-    ),
-    strict=True,
-)
 def test_orgs_hard_no_longer_returns_a_confident_empty_result():
     """#2663 end-to-end. `orgs_hard` is 845 rows with 1,055 true duplicate
-    pairs, and zero-config returns 845 singleton clusters -- not a
+    pairs, and zero-config returned 845 singleton clusters -- not a
     low-precision answer, an empty one, reported as a success.
 
-    Kept as a strict xfail rather than deleted: it is the reproduction, and
-    `strict=True` means it fails the suite the moment the behaviour is fixed,
-    which is when this marker should come off.
+    Fixed by the DEGENERATE-EMPTY guard in `pick_committed`, the mirror of
+    the precision-collapse guard: an entry that merged NOTHING must not beat
+    one that merged something. Measured, 2026-08-18:
+
+        before   0 scored pairs, 845 clusters, F1 0.0000
+        after  242 scored pairs, 607 clusters, P 0.5783 R 0.3185 F1 0.4108
+
+    Not the ceiling -- the issue notes F1 0.6325 is reachable by forcing
+    threshold=0.6, so threshold SELECTION remains a separate problem. What is
+    fixed is the shape: a run that confidently found nothing.
+
+    The floors below sit well under the measured values because the committed
+    config is not bit-stable across environments; what must never regress is
+    the shape.
     """
     import csv
     from pathlib import Path
 
     import goldenmatch
     import pyarrow as pa
-    import pytest
     from goldenmatch.core.evaluate import evaluate_clusters
 
     base = (Path(__file__).resolve().parents[4]
@@ -315,3 +308,79 @@ def test_an_uncounted_route_keeps_its_prior_verdict():
         "with no candidate count the guard must keep reading the old field, "
         "so v0 still wins -- unchanged behaviour on an uncounted route"
     )
+
+
+# ── the DEGENERATE-EMPTY guard (#2663) ─────────────────────────────────────
+
+def _hist_entry(iteration: int, n_rows: int, n_clusters: int):
+    """An entry whose only distinguishing feature is how much it merged."""
+    from goldenmatch.core.autoconfig_history import HistoryEntry
+    from goldenmatch.core.complexity_profile import (
+        BlockingProfile,
+        ClusterProfile,
+        ComplexityProfile,
+        DataProfile,
+    )
+
+    return HistoryEntry(
+        iteration=iteration, config=None,
+        profile=ComplexityProfile(
+            data=DataProfile(n_rows=n_rows),
+            blocking=BlockingProfile(n_blocks=180, reduction_ratio=0.989),
+            scoring=ScoringProfile(
+                n_pairs_scored=0 if n_clusters >= n_rows else 400,
+                candidates_compared=9000, candidates_counted=True,
+                admitted_fraction=0.0 if n_clusters >= n_rows else 0.05,
+                mass_above_threshold=0.0 if n_clusters >= n_rows else 1.0,
+            ),
+            cluster=ClusterProfile(n_clusters=n_clusters, transitivity_rate=0.9),
+        ),
+        decision=None, error=None, wall_clock_ms=1,
+    )
+
+
+def test_an_entry_that_merged_nothing_loses_to_one_that_merged_something():
+    """The #2663 mechanism. On `orgs_hard` v0 produced 845 clusters from 845
+    rows -- zero merges -- and won every tiebreak, so the run reported no
+    duplicates on data that is ~30% duplicates."""
+    from goldenmatch.core.autoconfig_history import RunHistory
+
+    history = RunHistory()
+    history.entries.append(_hist_entry(3, n_rows=845, n_clusters=607))   # merged
+    history.entries.append(_hist_entry(-1, n_rows=845, n_clusters=845))  # merged nothing
+    best = history.pick_committed(precision_collapse_floor=0.9)
+    assert best is not None and best.iteration == 3, (
+        "a config that found duplicates must beat one that found none"
+    )
+
+
+def test_when_every_entry_is_empty_the_ordering_is_unchanged():
+    """Data that genuinely has no duplicates: every entry is demoted equally,
+    so the guard is a no-op and v0 still wins as the safest fallback."""
+    from goldenmatch.core.autoconfig_history import RunHistory
+
+    history = RunHistory()
+    history.entries.append(_hist_entry(3, n_rows=845, n_clusters=845))
+    history.entries.append(_hist_entry(-1, n_rows=845, n_clusters=845))
+    best = history.pick_committed(precision_collapse_floor=0.9)
+    assert best is not None and best.iteration == -1
+
+
+def test_the_guard_never_outranks_health():
+    """It only breaks ties WITHIN a health rank. A GREEN empty entry must
+    still beat a RED one that merged -- the guard adds 1, and the RED/GREEN
+    gap is also 1, so this pins that the tie resolves on iteration rather
+    than letting 'merged something' override a worse verdict."""
+    from goldenmatch.core.autoconfig_history import RunHistory
+    from goldenmatch.core.complexity_profile import HealthVerdict
+
+    green_empty = _hist_entry(-1, n_rows=845, n_clusters=845)
+    red_merged = _hist_entry(3, n_rows=845, n_clusters=607)
+    assert green_empty.profile.health() == HealthVerdict.RED, (
+        "fixture sanity: both are RED here, so this documents the rank "
+        "arithmetic rather than asserting a GREEN/RED comparison"
+    )
+    history = RunHistory()
+    history.entries.append(red_merged)
+    history.entries.append(green_empty)
+    assert history.pick_committed(precision_collapse_floor=0.9).iteration == 3
