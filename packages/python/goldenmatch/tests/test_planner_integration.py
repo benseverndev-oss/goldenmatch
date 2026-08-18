@@ -56,6 +56,47 @@ def _read_plan():
     return profile, history, plan
 
 
+
+def _force_pair_count(monkeypatch, total: int) -> None:
+    """Make the planner see ``total`` candidate pairs, whichever way the
+    controller obtained its blocking profile.
+
+    These tests used to patch ``BlockingProfile.extrapolate_to`` alone, because
+    the controller always extrapolated the sample profile for the planner. It
+    no longer does: `_should_measure_blocking` now also covers ``multi_pass``
+    (the common zero-config shape), so a frame this small takes the MEASURED
+    branch, `extrapolate_to` is never called, and the injection silently did
+    nothing -- the planner saw the real pair count and picked
+    `plan_selected_simple`.
+
+    Patching both seams keeps the tests about what they are actually for -- that
+    rule_chunked fires at >= 50M pairs and rule_duckdb at >= 5B -- rather than
+    about which code path supplied the number.
+    """
+    import dataclasses
+
+    from goldenmatch.core import blocker as _blocker
+    from goldenmatch.core.complexity_profile import BlockingProfile
+
+    real_extrapolate = BlockingProfile.extrapolate_to
+
+    def big_extrapolate(self, n_rows_sample, n_rows_full):
+        out = real_extrapolate(self, n_rows_sample, n_rows_full)
+        return dataclasses.replace(out, total_comparisons=total)
+
+    monkeypatch.setattr(BlockingProfile, "extrapolate_to", big_extrapolate)
+
+    real_measure = _blocker.measure_blocking_profile
+
+    def big_measure(df, config):
+        out = real_measure(df, config)
+        if out is None:
+            return None
+        return dataclasses.replace(out, total_comparisons=total)
+
+    monkeypatch.setattr(_blocker, "measure_blocking_profile", big_measure)
+
+
 # ── Simple plan (end-to-end, no monkey-patch) ──────────────────────────────
 
 
@@ -98,7 +139,6 @@ def test_integration_chunked_plan_fires_at_high_pair_count(monkeypatch):
     (chunked backend has no extra dep on CI but keeping a uniform pattern
     across non-default-backend tests reduces drift risk)."""
     from goldenmatch.core import runtime_profile as runtime_mod
-    from goldenmatch.core.complexity_profile import BlockingProfile
 
     _stub_apply_to(monkeypatch)
 
@@ -107,14 +147,7 @@ def test_integration_chunked_plan_fires_at_high_pair_count(monkeypatch):
 
     monkeypatch.setattr(runtime_mod, "capture_runtime_profile", fat_runtime)
 
-    real_extrapolate = BlockingProfile.extrapolate_to
-
-    def big_pairs(self, n_rows_sample, n_rows_full):
-        out = real_extrapolate(self, n_rows_sample, n_rows_full)
-        import dataclasses
-        return dataclasses.replace(out, total_comparisons=200_000_000)
-
-    monkeypatch.setattr(BlockingProfile, "extrapolate_to", big_pairs)
+    _force_pair_count(monkeypatch, 200_000_000)
 
     gm.dedupe_df(_small_df())
     _profile, _history, plan = _read_plan()
@@ -128,18 +161,10 @@ def test_integration_duckdb_plan_fires_on_dense_pairs(monkeypatch):
     """Rule 5 fires when pair_count >= 5B, regardless of RAM. apply_to is
     stubbed so the pipeline doesn't try to load the duckdb optional dep
     (which CI doesn't install)."""
-    from goldenmatch.core.complexity_profile import BlockingProfile
 
     _stub_apply_to(monkeypatch)
 
-    real_extrapolate = BlockingProfile.extrapolate_to
-
-    def huge_pairs(self, n_rows_sample, n_rows_full):
-        out = real_extrapolate(self, n_rows_sample, n_rows_full)
-        import dataclasses
-        return dataclasses.replace(out, total_comparisons=6_000_000_000)
-
-    monkeypatch.setattr(BlockingProfile, "extrapolate_to", huge_pairs)
+    _force_pair_count(monkeypatch, 6_000_000_000)
 
     gm.dedupe_df(_small_df())
     _profile, _history, plan = _read_plan()

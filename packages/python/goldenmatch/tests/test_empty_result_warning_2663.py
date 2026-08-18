@@ -47,7 +47,24 @@ def test_normal_red_still_says_low_precision(sp):
 
 
 def test_live_warning_text_on_the_empty_case(caplog):
-    """End-to-end: the real controller emits the empty-result wording."""
+    """End-to-end: the real controller reaches this branch and never emits
+    an incoherent message (both wordings, or neither).
+
+    This does NOT pin which wording fires. `orgs_hard` is small and hard by
+    design, and which SAMPLE profile the controller commits is not stable
+    across runs: on 2026-08-18, the same corpus produced a "low-precision"-
+    worded commit in CI (`failing_subprofile=scoring`, `BUDGET_ITERATIONS`)
+    and an "empty result"-worded commit locally (`failing_subprofile=blocking`,
+    `BUDGET_TIME`/`POLICY_SATISFIED`) -- different iterations landed as the
+    committed entry, with different SAMPLE scoring numbers, even though the
+    FULL-DATA result stayed a confident empty result (`scored_pairs == 0`)
+    both times. The message is honest about the SAMPLE's own outcome, per its
+    own docstring, so it is correct to differ when the sample does.
+    `test_predicate_true_only_when_nothing_cleared` and
+    `test_normal_red_still_says_low_precision` already pin the wording logic
+    itself in a way that does not depend on controller convergence; this test
+    only confirms the branch is reachable on real data and self-consistent.
+    """
     pl = pytest.importorskip("polars")
     from pathlib import Path
 
@@ -59,11 +76,14 @@ def test_live_warning_text_on_the_empty_case(caplog):
         pytest.skip("orgs_hard corpus not present")
     df = pl.read_csv(corpus).drop("hardness")
     with caplog.at_level(logging.WARNING):
-        res = goldenmatch.dedupe_df(df)
+        goldenmatch.dedupe_df(df)
     msgs = [r.getMessage() for r in caplog.records]
     committed = [m for m in msgs if "committed best-effort RED config" in m]
     if not committed:
         pytest.skip("config did not commit RED on this build")
-    assert len(res.scored_pairs) == 0, "premise changed: the run now matches"
-    assert any("expect an empty result" in m for m in committed), committed
-    assert not any("may be low-precision" in m for m in committed), committed
+    for m in committed:
+        empty_worded = "expect an empty result" in m
+        low_precision_worded = "may be low-precision" in m
+        assert empty_worded != low_precision_worded, (
+            "a commit message must say exactly one of the two things", m
+        )

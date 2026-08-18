@@ -68,15 +68,35 @@ def _cfg(mtype: str = "probabilistic", **mk_kw) -> GoldenMatchConfig:
 
 # ── the stamp writes what the run resolved ─────────────────────────────────
 
-@pytest.mark.parametrize("source", [LINK_THRESHOLD_FALLBACK, LINK_THRESHOLD_CALIBRATED])
-def test_stamps_resolved_cutoff(source):
-    """Both non-user sources are recorded: neither was chosen by the config."""
+def test_stamps_a_calibrated_cutoff():
+    """A calibrated source is a real decision the data made -- record it."""
     ctrl = _controller()
-    ctrl._last_fs_link_thresholds = {"p": {"link_threshold": 0.62, "source": source}}
+    ctrl._last_fs_link_thresholds = {
+        "p": {"link_threshold": 0.62, "source": LINK_THRESHOLD_CALIBRATED}
+    }
     cfg = _cfg()
     assert cfg.get_matchkeys()[0].link_threshold is None
     ctrl._stamp_resolved_link_thresholds(cfg)
     assert cfg.get_matchkeys()[0].link_threshold == pytest.approx(0.62)
+
+
+def test_does_not_stamp_a_fallback_cutoff():
+    """A fallback is a fixed default, not a decision (zero-config recall
+    incident, defect 4, 2026-08-18). Stamping it sets `link_threshold`, which
+    makes the matchkey's source read as `configured` and skips the full-data
+    threshold refit -- pinning behaviour to a number resolved from whatever
+    sample happened to run first. Measured cost at person@100K: precision
+    0.9308 (fallback stamped, refit skipped) vs 0.9992 (left None, refit
+    runs). Leaving it `None` here is what lets the refit still happen; see
+    `docs/superpowers/notes/2026-08-18-zeroconfig-recall-incident.md`.
+    """
+    ctrl = _controller()
+    ctrl._last_fs_link_thresholds = {
+        "p": {"link_threshold": 0.62, "source": LINK_THRESHOLD_FALLBACK}
+    }
+    cfg = _cfg()
+    ctrl._stamp_resolved_link_thresholds(cfg)
+    assert cfg.get_matchkeys()[0].link_threshold is None
 
 
 def test_never_overwrites_a_user_value():
@@ -143,6 +163,10 @@ def test_malformed_telemetry_is_a_no_op(entry):
 
 
 # ── what the stamp unlocks (the point of #2637) ────────────────────────────
+#
+# Only a CALIBRATED source unlocks the lever below -- a fallback is not a
+# decision, so it must stay dark rather than pinning the healer to a number
+# nothing chose. See `test_does_not_stamp_a_fallback_cutoff` above.
 
 def test_the_healers_only_fs_lever_goes_live():
     """Before: ThresholdShift returned None on every auto-config FS config."""
@@ -152,7 +176,7 @@ def test_the_healers_only_fs_lever_goes_live():
     assert ThresholdShift(0.05).apply(cfg) is None
 
     ctrl._last_fs_link_thresholds = {
-        "p": {"link_threshold": 0.50, "source": LINK_THRESHOLD_FALLBACK}
+        "p": {"link_threshold": 0.50, "source": LINK_THRESHOLD_CALIBRATED}
     }
     ctrl._stamp_resolved_link_thresholds(cfg)
 
@@ -162,15 +186,30 @@ def test_the_healers_only_fs_lever_goes_live():
     assert shifted.get_matchkeys()[0].link_threshold == pytest.approx(0.55)
 
 
+def test_the_healers_lever_stays_dark_on_a_fallback():
+    """The other half of #2637, left open deliberately (2026-08-18 follow-up
+    comment on the issue): a fallback-sourced run gets no working FS lever
+    either, same as before this fix existed. Stamping it would repeat defect
+    4 of the zero-config recall incident."""
+    ctrl = _controller()
+    cfg = _cfg()
+    ctrl._last_fs_link_thresholds = {
+        "p": {"link_threshold": 0.50, "source": LINK_THRESHOLD_FALLBACK}
+    }
+    ctrl._stamp_resolved_link_thresholds(cfg)
+    assert _perturbable_matchkeys(cfg) == []
+    assert ThresholdShift(0.05).apply(cfg) is None
+
+
 def test_perturbation_stability_stops_being_dark():
     """`threshold_perturbations` yielded 0 variants on the FS path, so the
     zero-label stability signal was never measured (correctly `None`, but
-    never computed). It has inputs now."""
+    never computed). It has inputs now -- for a calibrated cutoff."""
     ctrl = _controller()
     cfg = _cfg()
     assert threshold_perturbations(cfg) == []
     ctrl._last_fs_link_thresholds = {
-        "p": {"link_threshold": 0.50, "source": LINK_THRESHOLD_FALLBACK}
+        "p": {"link_threshold": 0.50, "source": LINK_THRESHOLD_CALIBRATED}
     }
     ctrl._stamp_resolved_link_thresholds(cfg)
     variants = threshold_perturbations(cfg)
@@ -180,12 +219,16 @@ def test_perturbation_stability_stops_being_dark():
 
 
 def test_stamped_config_reports_a_cutoff():
-    """#2483's user-facing complaint: the config said nothing about the cut."""
+    """#2483's user-facing complaint: the config said nothing about the cut.
+    Resolved for the calibrated case; the fallback case still says nothing
+    (see `test_the_healers_lever_stays_dark_on_a_fallback`) -- reporting a
+    fallback without pinning it needs a state beyond configured/calibrated/
+    fallback, which is not built yet (2026-08-18 #2637 follow-up)."""
     ctrl = _controller()
     cfg = _cfg()
     assert cfg.get_matchkeys()[0].cutoff is None
     ctrl._last_fs_link_thresholds = {
-        "p": {"link_threshold": 0.50, "source": LINK_THRESHOLD_FALLBACK}
+        "p": {"link_threshold": 0.50, "source": LINK_THRESHOLD_CALIBRATED}
     }
     ctrl._stamp_resolved_link_thresholds(cfg)
     mk = cfg.get_matchkeys()[0]
@@ -209,15 +252,23 @@ def _person_df(n: int = 240) -> pl.DataFrame:
     return pl.DataFrame(rows)
 
 
-def test_stamping_the_resolved_value_does_not_change_results():
+def test_stamping_the_resolved_value_does_not_change_results(monkeypatch):
     """The load-bearing assertion.
 
     A run whose config carries the cutoff it resolved must produce exactly the
     output of the run that resolved it implicitly. Verified here on a synthetic
     frame; also checked out-of-test on ncvr_synthetic (F1 0.966000 both ways),
     historical_50k @8k (0.858600) and the synthetic anchor (1.000000).
+
+    Forces `GOLDENMATCH_FS_CALIBRATE_THRESHOLD=1` so the resolved source is
+    `calibrated`, not the default `fallback` -- only a calibrated cutoff is
+    stamped since the zero-config recall incident (defect 4), so this test's
+    own premise (something got stamped) needs calibration to hold in the
+    first place. See `test_does_not_stamp_a_fallback_cutoff`.
     """
     import goldenmatch
+
+    monkeypatch.setenv("GOLDENMATCH_FS_CALIBRATE_THRESHOLD", "1")
 
     df = _person_df()
     cfg = _cfg(link_threshold=None)
@@ -226,9 +277,14 @@ def test_stamping_the_resolved_value_does_not_change_results():
         base = goldenmatch.dedupe_df(df, config=cfg)
         resolved = (base.stats or {}).get("fs_link_thresholds") or {}
 
-        # Nothing to compare if this path never reached FS scoring.
-        if not resolved:
-            pytest.skip("no FS cutoff resolved on this path")
+        # Nothing to compare if this path never reached FS scoring, or if EM
+        # didn't produce a calibrated cutoff on this frame (only calibrated
+        # values are stamped -- a fallback here would correctly stay None).
+        if not resolved or not any(
+            v.get("source") == LINK_THRESHOLD_CALIBRATED
+            for v in resolved.values() if isinstance(v, dict)
+        ):
+            pytest.skip("no calibrated FS cutoff resolved on this path")
 
         stamped_cfg = cfg.model_copy(deep=True)
         ctrl = _controller()

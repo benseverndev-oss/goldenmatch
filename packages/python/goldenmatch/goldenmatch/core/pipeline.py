@@ -554,7 +554,23 @@ def _fs_use_bucket_route(config: GoldenMatchConfig, mk: Any) -> bool:
     # (partitions internally), so it is the strictly-safer AND path-consistent
     # choice for FS. The genuinely-DISTRIBUTED backends (ray / datafusion) keep
     # their own routing.
-    if backend not in (None, "polars-direct", "duckdb"):
+    # `chunked` joins duckdb here for the same stated reason: it is a MEMORY
+    # strategy, not a distinct FS scoring route, and bucket is MORE
+    # memory-bounded than the batched path it was falling back to, not less.
+    #
+    # Excluding it was silently costing recall the moment anything routed there.
+    # Measured, person@100K zero-config: the planner sees a MEASURED 121M
+    # candidate pairs (it previously saw a tiny extrapolated count), fires
+    # rule_chunked at its >= 50M threshold, sets backend='chunked' -- and FS then
+    # fell to the legacy batched scorer, retaining 9,250 pairs where bucket
+    # retains 120,269. Same 7-pass plan, same candidates, pairwise F1 0.5536 vs
+    # 0.9970. A per-pass blocking trace showed blocking itself was healthy and
+    # identical in both lanes; the loss was entirely in which scorer ran.
+    #
+    # The bucket/legacy parity matrix that would have caught this
+    # (test_bucket_legacy_parity_matrix) covers `weighted` matchkeys three times
+    # and `probabilistic` zero times.
+    if backend not in (None, "polars-direct", "duckdb", "chunked"):
         return False
     if (
         os.environ.get("GOLDENMATCH_FS_DEFAULT_BUCKET", "1").strip().lower()

@@ -102,6 +102,35 @@ def _weighted(scorer: str, blocking: str = "static") -> GoldenMatchConfig:
     return GoldenMatchConfig(matchkeys=[MatchkeyConfig(name="k", type="weighted", threshold=0.85, fields=fields)], blocking=blk)
 
 
+def _probabilistic(blocking: str = "static") -> GoldenMatchConfig:
+    """A Fellegi-Sunter matchkey -- the type this matrix never covered.
+
+    Zero-config on person data resolves to `probabilistic`, and
+    `_fs_use_bucket_route` decides bucket-vs-legacy for it independently of
+    `_use_bucket_scorer`. Covering only `weighted` meant the FS scorers could
+    diverge indefinitely with this gate green: measured at person@100K, a
+    committed backend='chunked' fell to the legacy batched FS scorer and
+    retained 9,250 pairs where bucket retained 120,269 (pairwise F1 0.5536 vs
+    0.9970) on an identical blocking plan.
+    """
+    fields = [
+        MatchkeyField(field="first", scorer="jaro_winkler"),
+        MatchkeyField(field="last", scorer="jaro_winkler"),
+    ]
+    if blocking == "multi_pass":
+        blk = BlockingConfig(strategy="multi_pass", passes=[
+            BlockingKeyConfig(fields=["zip"], transforms=["strip"]),
+            BlockingKeyConfig(fields=["last"], transforms=["lowercase"]),
+        ])
+    else:
+        blk = BlockingConfig(strategy="static", keys=[
+            BlockingKeyConfig(fields=["zip"], transforms=["strip"])])
+    return GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(name="k", type="probabilistic", fields=fields)],
+        blocking=blk,
+    )
+
+
 # ── Safe envelope: bucket MUST equal legacy (what `_use_bucket_scorer` defaults on) ──
 
 
@@ -192,3 +221,22 @@ def test_bucket_equals_legacy_negative_evidence():
     )
     legacy, bucket = _bucket_vs_legacy(cfg, df)
     assert bucket == legacy
+
+
+# ── Probabilistic (Fellegi-Sunter): the type this matrix never covered ──
+
+
+@pytest.mark.parametrize("blocking", ["static", "multi_pass"])
+def test_bucket_equals_legacy_probabilistic(blocking):
+    """The gap that let a real regression through.
+
+    `_fs_use_bucket_route` sends probabilistic matchkeys to bucket or to the
+    legacy batched scorer, and NOTHING compared the two. A backend the route
+    excluded silently changed the scorer -- and therefore the answer -- while
+    this matrix stayed green on `weighted` alone.
+    """
+    legacy, bucket = _bucket_vs_legacy(_probabilistic(blocking), _fixture())
+    assert bucket == legacy, (
+        f"bucket != legacy for probabilistic/{blocking}: "
+        f"only-legacy={len(legacy - bucket)} only-bucket={len(bucket - legacy)}"
+    )
