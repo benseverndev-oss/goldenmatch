@@ -6,7 +6,7 @@
 gate fails any PR whose doc drifts from its JSON, so these numbers are the
 current truth, not a stale copy pasted from a case study.
 
-**Run date:** 2026-08-11 &nbsp;·&nbsp; **path:** native (GOLDENMATCH_NATIVE=1) &nbsp;·&nbsp; **planning_effort:** normal &nbsp;·&nbsp; **LLM features:** off
+**Run date:** 2026-08-11 &nbsp;·&nbsp; **path:** native (GOLDENMATCH_NATIVE=1) &nbsp;·&nbsp; **planning_effort:** normal &nbsp;·&nbsp; **LLM features:** not recorded (run predates the ambient-key guard)
 
 | Dataset | Domain | F1 | Precision | Recall | Time |
 |---|---|---|---|---|---|
