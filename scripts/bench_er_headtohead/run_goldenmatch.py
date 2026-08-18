@@ -236,6 +236,15 @@ def main() -> None:
                     help="write {record_id, pred_cluster_id} parquet for accuracy eval")
     ap.add_argument("--threshold", type=float, default=0.85)
     ap.add_argument(
+        "--force-backend", default=None,
+        help=(
+            "Set config.backend explicitly. The zero-config controller's planner "
+            "commits backend='bucket' while the explicit-config path leaves it "
+            "None, and that is the ONLY one of 26 resolved-config fields that "
+            "differs between the two lanes -- so this isolates it."
+        ),
+    )
+    ap.add_argument(
         "--force-link-threshold", type=float, default=None,
         help=(
             "Force the FS link cut WITHOUT the --fs-basic-scorers scorer "
@@ -431,6 +440,18 @@ def main() -> None:
             if args.force_link_threshold is not None:
                 for mk in cfg.get_matchkeys():
                     mk.link_threshold = args.force_link_threshold
+            # Backend as the single isolated variable. person@100K, same
+            # fixture: gm_zeroconfig and gm_probabilistic_shipped commit an
+            # IDENTICAL 8-pass blocking plan, identical matchkeys and scorers,
+            # and zero-config cuts LOWER (0.50 vs the refit's 0.70) -- yet it
+            # produces 3,287 blocks to the other's 83,436 and pairwise F1 0.5536
+            # to 0.9970. A full 26-field config dump (run 32140460251) shows
+            # exactly ONE field differing: backend, 'bucket' vs None. The
+            # controller's planner sets it; the explicit-config path has no
+            # planner. #1846 separately recorded probabilistic quality collapsing
+            # 0.83 -> 0.33 on the native/bucket path.
+            if args.force_backend is not None:
+                cfg.backend = args.force_backend
             # Force rerank off so a 3+ field weighted matchkey can't pull a
             # cross-encoder model down from HuggingFace at dedupe time.
             for mk in cfg.get_matchkeys():

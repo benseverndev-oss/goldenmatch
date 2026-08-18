@@ -174,6 +174,20 @@ LANES: dict[str, Lane] = {
                                    "run_goldenmatch.py",
                                    mode="probabilistic",
                                    extra_args=("--force-link-threshold", "0.80")),
+    # `gm_probabilistic_shipped` with ONE variable changed: the backend.
+    #
+    # zero-config and the probabilistic lane commit an IDENTICAL 8-pass blocking
+    # plan, identical matchkeys/scorers, and zero-config cuts LOWER (0.50 vs the
+    # refit's 0.70) -- yet it yields 3,287 blocks to the other's 83,436 and
+    # pairwise F1 0.5536 to 0.9970. A 26-field resolved-config dump (run
+    # 32140460251) leaves exactly ONE candidate: backend, `bucket` (set by the
+    # controller's planner) vs None (no planner on the explicit-config path).
+    # If bucket is the cause, this lane reproduces the collapse while differing
+    # from `gm_probabilistic_shipped` in nothing else.
+    "gm_probabilistic_bucket": Lane("gm_probabilistic_bucket",
+                                    "run_goldenmatch.py",
+                                    mode="probabilistic",
+                                    extra_args=("--force-backend", "bucket")),
     "gm_zeroconfig": Lane("gm_zeroconfig", "run_goldenmatch.py", mode="zeroconfig"),
     "gm_converted_splink": Lane("gm_converted_splink", "run_gm_converted.py"),
 }
