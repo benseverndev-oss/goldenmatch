@@ -1,9 +1,14 @@
 # Incident: zero-config lost half its matches, silently
 
-**Status:** fixed and verified. person@100K pairwise **F1 0.554 -> 0.964**,
-recall **0.383 -> 0.9995**. A fourth defect closing the residual precision gap
-(0.9308 -> 1.0000 at 10K) is verified locally; the 100K confirmation is in
-flight.
+**Status:** fixed, verified, merged (#2671). person@100K pairwise
+**F1 0.554 -> 0.9970**, recall **0.383 -> 0.9949**, precision **0.9992** --
+matching the expert-configured `gm_probabilistic_shipped` lane exactly
+(120,269 pairs). All four defects below are on `main`.
+
+**There is an addendum at the bottom** covering a FIFTH instance of the same
+pattern one layer down (#2673), found while closing these out. It took three
+designs; the quality gate rejected the first two. Read it before touching
+`ScoringProfile` or `pick_committed`.
 
 **Severity:** high. Zero-config is the path a user with no ER expertise takes,
 and it was the worst-performing of the three lanes. Every unit test was green
@@ -178,9 +183,128 @@ first hour.
 
 ## Open
 
-* 100K confirmation of defect 4 is in flight (expected P ~0.999 against the
-  current 0.9308). If precision does not move there, the 10K result means the
-  100K gap has a second cause.
+* ~~100K confirmation of defect 4~~ **CONFIRMED.** Precision moved 0.9308 ->
+  0.9992 at 100K, matching the probabilistic lane. No second cause.
 * The legacy batched FS scorer genuinely diverges from bucket at scale on
   probabilistic matchkeys. Routing now avoids it; the divergence itself is
   unexplained, and small-fixture parity passes.
+* **#2668 is NOT closed by any of this.** Its stated mechanism (`health()`
+  could never return YELLOW) is real and fixed in the addendum's work, but
+  `goldengraph-pipeline` -- the lane it actually reports -- fails IDENTICALLY
+  with those fixes applied (dispatched on the branch to check, rather than
+  inferred). Its over-merge has another cause. The lane went green->red between
+  2026-08-17 and 2026-08-18; #2648 is in that window per the issue's own bisect,
+  but so are #2655 ("the data-driven cut admitted TWICE the match rate EM
+  estimated"), #2650, #2646, #2645 and #2644, and bucket's emitted profile has
+  changed again since. That bisect wants re-running against the current tree.
+
+---
+
+# Addendum: the same pattern, one layer down (#2673)
+
+The four defects above were all "a non-decision read as evidence". Closing them
+surfaced a fifth instance in the layer underneath, and it took three designs to
+fix because the first two were rejected by the quality gate.
+
+## The defect
+
+`_emit_scoring_profile` is handed pairs that have ALREADY cleared the cut --
+its own docstring says so -- and computed `mass_above(scores, threshold)` over
+exactly those. That is **1.0 by construction** for any non-empty result, at all
+six emit sites, for every matchkey type. The field carried one bit ("did
+anything match") while about a dozen consumers read it as a fraction.
+
+Verified before touching anything, on two unrelated datasets:
+
+    orgs_hard, WEIGHTED mk, real threshold=0.8    3 pairs, 0 below, mass 1.0000
+    healthy high-recall synthetic                8,343 pairs, 0 below, mass 1.0000
+
+The first is a weighted matchkey with a genuine configured cutoff, so this is
+NOT the probabilistic `min(scores)` fallback #2668 blamed. That fallback makes
+it worse; it is not the cause.
+
+## Two consumers, two user-visible bugs
+
+| consumer | what it asks | what it got |
+|---|---|---|
+| `pick_committed` precision-collapse guard | "did EVERYTHING match?" | 1.0 always -> demoted every RED entry that matched anything -> v0 (which matched nothing) won -> **confident empty result** (#2663) |
+| `health()` YELLOW branch | "is borderline mass swamping the tail?" | needs `mass_in_borderline > 1.0` -> **unreachable**, so any matching run was GREEN or RED with no "looks marginal" (#2668) |
+
+## Three designs; the gate rejected two
+
+**1. Rebase `mass_above_threshold` itself.** Correct about the field, wrong
+about blast radius. The rules gate on hardcoded cuts (`< 0.5` in
+`rule_blocking_too_coarse`, `>= 0.95` in the precision anchor, `>= 1.0` in
+`rule_recall_gap_suspected`) every one of which was chosen while that input was
+a CONSTANT. Gate: `anchor_person_match` **F1 1.0000 -> 0.7303** (P -> 0.5751),
+the controller taking a different rule path and over-merging.
+
+**2. Also migrate zero-label's everything-matches guard.** That guard turned
+out to be the ACTUAL deciding consumer on `orgs_hard` --
+`pick_committed(collapse_floor)` picks iteration 3 (463 pairs) while the same
+call with `use_zero_label_confidence=True` (on by default) picks v0 (0 pairs).
+Migrating it fixed `orgs_hard` and cost the anchor **F1 1.0000 -> 0.5139**: its
+tautological cap was the only thing penalising over-merge there.
+
+**3. What shipped.** The honest fraction as a NEW field,
+`ScoringProfile.admitted_fraction`, read by exactly two consumers and only
+where it is not None. Everything else stays on the signal it was calibrated
+against. Plus the mirror of the collapse guard: **DEGENERATE-EMPTY** -- an
+entry that merged nothing must not beat one that merged something.
+
+## The measurement that picked the third design
+
+Design 3's over-merge signal was chosen by ruling out the obvious one. No
+cluster metric separates `orgs_hard`'s CORRECT entry from the anchor's
+OVER-MERGED one:
+
+| signal | orgs_hard it3 (good) | anchor it1 (over-merged) |
+|---|---|---|
+| `cluster_size_max / n_rows` | 0.0154 | 0.0156 |
+| `oversized_cluster_count` | 0 | 0 |
+| `measured_bridge_risk` | 0.0 | 0.0 |
+| `transitivity_rate` | 0.005 | 0.085 |
+
+"Did it merge anything at all" separates them cleanly, and is the pathology
+rather than a proxy for it:
+
+    orgs_hard   n_rows 845, v0 -> 845 clusters (0 merges)    BAD
+    anchor      n_rows 706, v0 -> 400 clusters (306 merges)  GOOD
+
+Result: `orgs_hard` F1 0.0000 -> 0.4108, `anchor_person_match` unchanged at
+1.0000.
+
+## Rules taken forward, added to the five above
+
+6. **A field that is constant is not a signal, and the rules calibrated against
+   it are load-bearing on the constant.** Fixing the field breaks them all at
+   once. Ship the honest value BESIDE the old one and migrate consumers with
+   measurement, one at a time.
+7. **Before proposing a replacement signal, check it actually discriminates.**
+   Design 3's first draft named `ClusterProfile` as the over-merge signal; a
+   five-minute probe showed the good and bad cases are indistinguishable on
+   every one of its metrics. That probe was cheaper than the design would have
+   been.
+8. **A guard that looks broken may be load-bearing by accident.** Zero-label's
+   everything-matches cap is tautological AND the only over-merge protection on
+   one gate dataset. "This is wrong" does not imply "removing it is safe".
+9. **Local gate numbers are invalid without the CI env.** `anchor_person_match`
+   read 0.9384 locally and 0.7303 in CI until `GOLDENMATCH_AUTOCONFIG_MEMORY=0`
+   was matched. An A/B against the branch's own base in a FIXED env is valid
+   even when the absolute numbers are not.
+
+## The instrument lied again, and this time in the shell
+
+Two GitHub issues (#2674, #2675) were filed claiming fixes were missing from
+`main`. Both were wrong. The check was:
+
+    git cat-file -e origin/main:$f 2>/dev/null && echo ON MAIN || echo MISSING
+
+On Git Bash, `rev:path` is path-mangled, so `git` errors for EVERY file,
+`2>/dev/null` hides it, and the `else` branch reports MISSING uniformly. Same
+absent-vs-zero collapse as the four defects above -- a failed command's empty
+output scoring as a measured zero -- just in a shell pipeline instead of the
+engine. Both issues closed as invalid.
+
+Rule 10: **a `grep -c` of 0, or a uniform "missing", is a claim about the
+pipeline before it is a claim about the repo.** Check the upstream command ran.
