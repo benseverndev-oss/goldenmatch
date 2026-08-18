@@ -21,15 +21,10 @@ not prove it would be a check that does not fire.
 """
 from __future__ import annotations
 
-import sys
-from pathlib import Path
+import os
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-import run_benchmarks as rb  # noqa: E402
-
+import run_benchmarks as rb
 
 # ── the keys are actually removed ─────────────────────────────────────────
 
@@ -37,7 +32,6 @@ import run_benchmarks as rb  # noqa: E402
 def test_ambient_key_is_removed_by_default(monkeypatch, var):
     monkeypatch.setenv(var, "sk-not-a-real-key")
     assert rb._neutralize_ambient_llm_keys(with_llm=False) is True
-    import os
     assert os.environ.get(var) is None
 
 
@@ -45,7 +39,6 @@ def test_with_llm_keeps_the_key(monkeypatch):
     """--with-llm is a deliberate request; it must still reach the provider."""
     monkeypatch.setenv("OPENAI_API_KEY", "sk-not-a-real-key")
     assert rb._neutralize_ambient_llm_keys(with_llm=True) is False
-    import os
     assert os.environ["OPENAI_API_KEY"] == "sk-not-a-real-key"
 
 
@@ -58,7 +51,6 @@ def test_no_key_present_reports_nothing_suppressed(monkeypatch):
 def test_both_keys_removed_together(monkeypatch):
     """Anthropic is the fallback provider, so stripping only OpenAI leaves the
     extraction path live on a different vendor -- same defect, quieter."""
-    import os
     monkeypatch.setenv("OPENAI_API_KEY", "sk-a")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-b")
     assert rb._neutralize_ambient_llm_keys(with_llm=False) is True
