@@ -1,0 +1,372 @@
+# Spark FS training on a REAL multi-node cluster, over a REAL network.
+#
+# ## The question this exists for
+#
+# `spark-cluster.yml` runs a standalone master + two workers + Connect as four
+# CONTAINERS ON ONE HOST. Every wall measured there is honest about topology and
+# silent about networking: the shuffle exchange never crosses a wire. That
+# limitation is written into docker/spark-cluster/docker-compose.yml, and it is
+# why #2613 had to retract a "~0% of the counts stage is the GROUP BY exchange"
+# reading.
+#
+# The shuffle-BYTE proxy (#2652) answered as much as one host can. Measured at
+# 1M rows on a sized single-host rig:
+#
+#     GoldenMatch   832 MB write / 832 MB read   120 stages
+#     Splink     16,784 MB write / 21,164 MB read  940 stages
+#
+# ~20x fewer bytes across the exchange. Bytes transfer to any topology; seconds
+# do not. This lane converts that ratio into measured NETWORK time, on separate
+# machines, which is the one thing the byte count cannot tell you.
+#
+# ## Why GCE standalone and not Dataproc
+#
+# Two reasons, and the second matters more.
+#
+# The bench service account holds `roles/compute.admin` and
+# `roles/iam.serviceAccountUser` (see bench-ray-cluster.yml). Dataproc needs
+# `roles/dataproc.editor`, a grant nobody has made.
+#
+# And Dataproc runs YARN with its own Spark defaults. The number we want is
+# comparable to the single-host rig, so the topology has to be the SAME
+# standalone master/worker/Connect shape with only the network changed. A
+# managed cluster would change two variables at once and the comparison would
+# mean nothing.
+#
+# ## Cost
+#
+# ~$0.60 per run: 3 x n2-standard-16 ON-DEMAND (~$2.33/hr) for ~15 min,
+# dominated by ~5 minutes of provisioning rather than the ~16s of compute. The
+# teardown step runs `if: always()`, so a failed bench still releases the
+# instances -- the same discipline bench-ray-cluster.yml uses.
+#
+# Preemptible on purpose: a bench that loses its VMs mid-run should be re-run,
+# not paid for at on-demand rates.
+#
+# ## Both engines run ON the master VM, deliberately
+#
+# Splink drives a CLASSIC session, so its driver must be reachable BY the
+# workers. A driver on the GitHub runner cannot be: the workers are inside GCP
+# and the runner is behind NAT with no route back. Running both harnesses on
+# the master VM puts both drivers inside the cluster's own network and keeps
+# the two engines symmetric -- which is the whole point of a comparison.
+#
+# Required GitHub secrets: INFISICAL_CLIENT_ID / INFISICAL_CLIENT_SECRET.
+# Everything GCP is pulled from Infisical at runtime, exactly as
+# bench-ray-cluster.yml does it -- no new GH secrets.
+name: bench-spark-gce-cluster
+
+on:
+  workflow_dispatch:
+    inputs:
+      rows:
+        description: "Rows for the FS training run"
+        required: false
+        type: string
+        default: "1000000"
+      machine_type:
+        description: "GCE machine type per node"
+        required: false
+        type: string
+        default: "n2-standard-16"
+      workers:
+        description: "Worker VMs (the master VM runs master + Connect + both drivers)"
+        required: false
+        type: string
+        default: "2"
+      zone:
+        description: "GCE zone"
+        required: false
+        type: string
+        default: "us-central1-a"
+      splink_compare:
+        description: "Also run Splink on the same cluster"
+        required: false
+        type: boolean
+        default: true
+      spot:
+        description: "Use SPOT VMs. OFF by default: PREEMPTIBLE_CPUS quota in golden-490919/us-central1 is 0, so SPOT provisioning FAILS. Enable only after raising it."
+        required: false
+        type: boolean
+        default: false
+      keep_cluster:
+        description: "SKIP teardown (leaves VMs BILLING -- for debugging only, delete them yourself)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  # Stamped into every instance name so a leaked VM is traceable to the run
+  # that made it, and so two concurrent dispatches cannot collide.
+  CLUSTER: gm-spark-${{ github.run_id }}
+  SPARK_IMAGE: apache/spark:4.2.0-python3
+
+jobs:
+  cluster:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+
+      - name: Install the Infisical CLI
+        run: |
+          set -euo pipefail
+          curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | sudo -E bash
+          sudo apt-get update && sudo apt-get install -y infisical
+
+      - name: Fetch GCP creds from Infisical
+        # Identical mechanism to bench-ray-cluster.yml -- same Machine Identity,
+        # same project, same masking. Reusing it rather than adding GH secrets
+        # keeps one auth path to audit.
+        env:
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${INFISICAL_CLIENT_ID:-}" ] || [ -z "${INFISICAL_CLIENT_SECRET:-}" ]; then
+            echo "::error::INFISICAL_CLIENT_ID / INFISICAL_CLIENT_SECRET not set; see docs/distributed/ray-gce-cluster.md"
+            exit 1
+          fi
+          TOKEN=$(infisical login --silent --plain --method=universal-auth \
+            --client-id="$INFISICAL_CLIENT_ID" --client-secret="$INFISICAL_CLIENT_SECRET")
+          echo "::add-mask::$TOKEN"
+
+          PROJ=$(infisical secrets get GCP_RAY_BENCH_PROJECT_ID \
+            --projectId=a99885f0-c5af-4ae1-9dc8-255cc60aa129 --env=dev --plain --token="$TOKEN")
+          echo "::add-mask::$PROJ"
+
+          infisical secrets get GCP_SA_KEY_B64 \
+            --projectId=a99885f0-c5af-4ae1-9dc8-255cc60aa129 --env=dev --plain --token="$TOKEN" \
+            | base64 -d --ignore-garbage > "$HOME/gcp-sa.json"
+          chmod 600 "$HOME/gcp-sa.json"
+          python3 -c "import json; json.load(open('$HOME/gcp-sa.json'))"
+
+          echo "GCP_PROJECT_ID=$PROJ" >> $GITHUB_ENV
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$HOME/gcp-sa.json" >> $GITHUB_ENV
+
+      - name: Authenticate gcloud
+        run: |
+          set -euo pipefail
+          gcloud auth activate-service-account --key-file="$HOME/gcp-sa.json"
+          gcloud config set project "$GCP_PROJECT_ID" --quiet
+          gcloud config set compute/zone "${{ inputs.zone || 'us-central1-a' }}" --quiet
+
+      - name: Provision the VMs
+        # PREEMPTIBLE, and every instance carries the run id in its name plus a
+        # `bench=gm-spark` label -- so a leaked VM can be traced and swept.
+        run: |
+          set -euo pipefail
+          N=${{ inputs.workers || '2' }}
+          MT="${{ inputs.machine_type || 'n2-standard-16' }}"
+          NAMES="$CLUSTER-master"
+          for i in $(seq 1 "$N"); do NAMES="$NAMES $CLUSTER-w$i"; done
+          echo "NODE_NAMES=$NAMES" >> $GITHUB_ENV
+
+          # ON-DEMAND by default, and that is MEASURED, not caution.
+          # `gcloud compute regions describe us-central1` on golden-490919:
+          #     PREEMPTIBLE_CPUS  limit=0    usage=0
+          #     CPUS              limit=200  usage=2
+          #     N2_CPUS           limit=200  usage=0
+          # SPOT consumes PREEMPTIBLE_CPUS and the limit is ZERO, so an earlier
+          # draft defaulting to SPOT would have failed at `instances create`
+          # after paying for provisioning and proving nothing. On-demand has 200
+          # vCPUs against the 48 this needs.
+          PROV=""
+          if [ "${{ inputs.spot }}" = "true" ]; then
+            PROV="--provisioning-model=SPOT --instance-termination-action=DELETE"
+            echo "::warning::SPOT requested, but PREEMPTIBLE_CPUS quota was 0 when this lane was written -- expect a quota error."
+          fi
+
+          # Container-Optimized OS: docker is already present, so no apt round
+          # trip per node and no image drift between the master and the workers.
+          gcloud compute instances create $NAMES \
+            --machine-type="$MT" \
+            --image-family=cos-stable --image-project=cos-cloud \
+            --boot-disk-size=100GB \
+            $PROV \
+            --labels=bench=gm-spark,run-id=${{ github.run_id }} \
+            --scopes=cloud-platform \
+            --quiet
+          echo "provisioned: $NAMES"
+
+      # SSH goes over the instance's EXTERNAL IP rather than IAP.
+      # `--tunnel-through-iap` would be tidier, but it needs
+      # `roles/iap.tunnelResourceAccessor` and the bench SA is documented with
+      # only `compute.admin` + `iam.serviceAccountUser`. Assuming a role nobody
+      # granted is how a lane fails 5 minutes and $1 into a run. Plain SSH needs
+      # only the `default-allow-ssh` rule a default VPC ships with.
+      - name: Wait for SSH on every node
+        run: |
+          set -euo pipefail
+          for n in $NODE_NAMES; do
+            for i in $(seq 1 30); do
+              if gcloud compute ssh "$n" --command="true" --quiet 2>/dev/null; then
+                echo "$n: ssh ok"; break
+              fi
+              if [ "$i" = "30" ]; then echo "::error::$n never accepted ssh"; exit 1; fi
+              sleep 10
+            done
+          done
+
+      - name: Start the Spark cluster across the VMs
+        # THE POINT OF THE LANE: the master and the workers are on separate
+        # machines, so every shuffle byte crosses a real network. Same standalone
+        # topology as docker/spark-cluster/docker-compose.yml, one variable
+        # changed.
+        run: |
+          set -euo pipefail
+          MASTER="$CLUSTER-master"
+          MASTER_IP=$(gcloud compute instances describe "$MASTER" \
+            --format='get(networkInterfaces[0].networkIP)')
+          echo "MASTER_IP=$MASTER_IP" >> $GITHUB_ENV
+          CORES=$(( $(echo "${{ inputs.machine_type || 'n2-standard-16' }}" | grep -oE '[0-9]+$') ))
+
+          gcloud compute ssh "$MASTER" --quiet --command "
+            docker run -d --name spark-master --network host \
+              -e SPARK_NO_DAEMONIZE=true $SPARK_IMAGE \
+              /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master \
+                --host $MASTER_IP --port 7077 --webui-port 8080
+          "
+
+          for n in $NODE_NAMES; do
+            case "$n" in *-master) continue;; esac
+            gcloud compute ssh "$n" --quiet --command "
+              docker run -d --name spark-worker --network host \
+                -e SPARK_NO_DAEMONIZE=true $SPARK_IMAGE \
+                /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker \
+                  spark://$MASTER_IP:7077 --cores $CORES --memory 48g
+            " &
+          done
+          wait
+
+          gcloud compute ssh "$MASTER" --quiet --command "
+            docker run -d --name spark-connect --network host \
+              -e SPARK_NO_DAEMONIZE=true $SPARK_IMAGE \
+              /opt/spark/sbin/start-connect-server.sh \
+                --master spark://$MASTER_IP:7077 \
+                --conf spark.connect.grpc.binding.address=0.0.0.0 \
+                --conf spark.connect.grpc.binding.port=15002 \
+                --conf spark.driver.host=$MASTER_IP \
+                --conf spark.executor.cores=$CORES \
+                --conf spark.executor.memory=48g
+          "
+
+      - name: Refuse to measure a cluster with no registered workers
+        # The failure this lane must not have: a master with zero workers
+        # ACCEPTS a job and queues it forever, so the run would look slow rather
+        # than broken. Same refusal the single-host lane makes.
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            N=$(gcloud compute ssh "$CLUSTER-master" --quiet --command \
+              "curl -s http://$MASTER_IP:8080/json/ | python3 -c 'import sys,json; print(len(json.load(sys.stdin)[\"workers\"]))'" 2>/dev/null || echo 0)
+            echo "registered workers: $N"
+            [ "${N:-0}" -ge 1 ] && exit 0
+            sleep 10
+          done
+          echo "::error::no worker registered with the master -- every timing below would be a queue wait, not a measurement"
+          exit 1
+
+      - name: Run both harnesses ON the master VM
+        # On the master, not the runner: Splink's classic driver must be
+        # reachable BY the workers, and a runner behind NAT is not. This also
+        # keeps the two engines symmetric.
+        run: |
+          set -euo pipefail
+          MASTER="$CLUSTER-master"
+          gcloud compute scp --quiet \
+            scripts/spark_fs_train_scale.py scripts/spark_splink_train_scale.py \
+            scripts/_fs_quality_metrics.py scripts/_spark_shuffle_metrics.py \
+            "$MASTER:~/"
+
+          gcloud compute ssh "$MASTER" --quiet --command "
+            set -euo pipefail
+            docker run -d --name pyenv --network host -v \$HOME:/w -w /w \
+              python:3.12-slim sleep infinity
+            docker exec pyenv pip install --quiet 'goldenmatch[spark]' splink==4.0.16
+            docker exec pyenv python spark_fs_train_scale.py \
+              --rows ${{ inputs.rows || '1000000' }} \
+              --remote sc://$MASTER_IP:15002 \
+              --spark-ui http://$MASTER_IP:4040 \
+              --out /w/spark-fs-train-scale.json
+          "
+
+      - name: Splink on the same cluster
+        if: inputs.splink_compare
+        # Connect is stopped first: standalone Spark hands an application every
+        # free core unless `spark.cores.max` says otherwise, and the Connect
+        # server IS an application holding them all. Splink would queue forever.
+        # Learned the hard way on the single-host lane (#2630).
+        run: |
+          set -euo pipefail
+          MASTER="$CLUSTER-master"
+          gcloud compute ssh "$MASTER" --quiet --command "
+            set -euo pipefail
+            docker stop spark-connect
+            docker exec pyenv python spark_splink_train_scale.py \
+              --rows ${{ inputs.rows || '1000000' }} \
+              --master spark://$MASTER_IP:7077 \
+              --driver-host $MASTER_IP \
+              --spark-ui http://$MASTER_IP:4040 \
+              --out /w/splink-train-scale.json
+          "
+
+      - name: Pull the artifacts back
+        if: always()
+        run: |
+          set -euo pipefail
+          for f in spark-fs-train-scale.json splink-train-scale.json; do
+            gcloud compute scp --quiet \
+              "$CLUSTER-master:~/$f" "./$f" || echo "no $f (arm skipped or failed)"
+          done
+          ls -la ./*.json || true
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        if: always()
+        with:
+          name: spark-gce-multinode
+          path: "*.json"
+          if-no-files-found: warn
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo '## Spark FS on a REAL multi-node cluster'
+            echo ''
+            echo "${{ inputs.workers || '2' }} worker VM(s) + 1 master, \`${{ inputs.machine_type || 'n2-standard-16' }}\`, SPOT, zone \`${{ inputs.zone || 'us-central1-a' }}\`."
+            echo ''
+            echo 'Every shuffle byte here crosses a real network, which the single-host lane cannot test.'
+            echo ''
+            if [ -f spark-fs-train-scale.json ] && [ -f splink-train-scale.json ]; then
+              echo '| engine | train wall | shuffle write | shuffle read |'
+              echo '|---|---:|---:|---:|'
+              jq -r '"| goldenmatch | \(.stages.u_seconds + .stages.counts_seconds + .stages.train_seconds)s | \(.shuffle.shuffle_write_bytes // "n/a") | \(.shuffle.shuffle_read_bytes // "n/a") |"' spark-fs-train-scale.json
+              jq -r '"| splink | \(.train_total_seconds)s | \(.shuffle.shuffle_write_bytes // "n/a") | \(.shuffle.shuffle_read_bytes // "n/a") |"' splink-train-scale.json
+            else
+              echo 'NO COMPARISON -- one or both arms produced no artifact:'
+              [ -f spark-fs-train-scale.json ] && echo '- goldenmatch: ok' || echo '- goldenmatch: MISSING'
+              [ -f splink-train-scale.json ] && echo '- splink: ok' || echo '- splink: MISSING'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Tear down
+        # `always()`, because a failed bench that leaves 3 x n2-standard-16
+        # running is a bill, not a debugging aid. `keep_cluster` is the explicit
+        # opt-out and says in its own description that YOU must delete them.
+        if: always() && !inputs.keep_cluster
+        run: |
+          set -euo pipefail
+          gcloud compute instances delete $NODE_NAMES --quiet --zone="${{ inputs.zone || 'us-central1-a' }}" || true
+          echo "deleted: $NODE_NAMES"
+
+      - name: Leaked-instance warning
+        if: always() && inputs.keep_cluster
+        run: |
+          echo "::warning::keep_cluster was set. These VMs are STILL BILLING:"
+          echo "  $NODE_NAMES"
+          echo "Delete them with:"
+          echo "  gcloud compute instances delete $NODE_NAMES --zone=${{ inputs.zone || 'us-central1-a' }}"
