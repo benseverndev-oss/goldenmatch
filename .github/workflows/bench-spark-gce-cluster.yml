@@ -323,6 +323,13 @@ jobs:
           # by default. `nodiscard` skips the TRIM pass over a fresh device,
           # which on 750GB is minutes of provisioning for no benefit on a disk
           # that gets thrown away.
+          #
+          # /mnt/disks, NOT /mnt. Container-Optimized OS has a READ-ONLY root,
+          # and `/mnt` is part of it -- the first attempt used /mnt/scratch and
+          # died on `mkdir: cannot create directory '/mnt/scratch': Read-only
+          # file system` AFTER provisioning five VMs. /mnt/disks is the writable
+          # mountpoint COS provides for exactly this, and is what GCP's own
+          # "formatting and mounting a local SSD" guide uses.
           # The MASTER is mounted too, not just the workers: it runs the Connect
           # server and BOTH drivers, and Splink's classic driver does real
           # driver-side work. Leaving its scratch on the 50GB boot disk would
@@ -333,7 +340,7 @@ jobs:
               DEVS=\$(ls /dev/nvme0n* 2>/dev/null | tr '\n' ' ')
               [ -n \"\$DEVS\" ] || { echo 'NO LOCAL SSD DEVICES FOUND'; exit 1; }
               N=\$(echo \$DEVS | wc -w)
-              sudo mkdir -p /mnt/scratch
+              sudo mkdir -p /mnt/disks/scratch
               if [ \"\$N\" -gt 1 ]; then
                 sudo mdadm --create /dev/md0 --level=0 --raid-devices=\$N \$DEVS --force
                 TARGET=/dev/md0
@@ -341,9 +348,9 @@ jobs:
                 TARGET=\$DEVS
               fi
               sudo mkfs.ext4 -F -m 0 -E lazy_itable_init=0,lazy_journal_init=0,nodiscard \$TARGET
-              sudo mount -o discard,defaults,nobarrier \$TARGET /mnt/scratch
-              sudo chmod 1777 /mnt/scratch
-              df -h /mnt/scratch
+              sudo mount -o discard,defaults,nobarrier \$TARGET /mnt/disks/scratch
+              sudo chmod 1777 /mnt/disks/scratch
+              df -h /mnt/disks/scratch
             "
           done
 
@@ -351,7 +358,7 @@ jobs:
             case "$n" in *-master) continue;; esac
             gcloud compute ssh "$n" --quiet --command "
               docker run -d --name spark-worker --network host \
-                -v /mnt/scratch:/scratch \
+                -v /mnt/disks/scratch:/scratch \
                 -e SPARK_LOCAL_DIRS=/scratch \
                 -e SPARK_NO_DAEMONIZE=true $SPARK_IMAGE \
                 /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker \
@@ -362,7 +369,7 @@ jobs:
 
           gcloud compute ssh "$MASTER" --quiet --command "
             docker run -d --name spark-connect --network host \
-              -v /mnt/scratch:/scratch \
+              -v /mnt/disks/scratch:/scratch \
               -e SPARK_LOCAL_DIRS=/scratch \
               -e SPARK_NO_DAEMONIZE=true $SPARK_IMAGE \
               /opt/spark/sbin/start-connect-server.sh \
@@ -405,7 +412,7 @@ jobs:
           gcloud compute ssh "$MASTER" --quiet --command "
             set -euo pipefail
             docker run -d --name pyenv --network host -v \$HOME:/w -w /w \
-              -v /mnt/scratch:/scratch \
+              -v /mnt/disks/scratch:/scratch \
               -e SPARK_LOCAL_DIRS=/scratch \
               python:3.12-slim sleep infinity
             docker exec pyenv pip install --quiet 'goldenmatch[spark]' splink==4.0.16
