@@ -132,23 +132,44 @@ def _config_telemetry(cfg) -> dict:
     except Exception as e:  # noqa: BLE001
         out["matchkeys_error"] = f"{type(e).__name__}: {e}"
     try:
-        # `BlockingConfig.keys`, NOT `.passes`. The first version of this read
-        # `.passes` and got `[]` for every lane at both scales -- a plausible
-        # empty list rather than an error, which is the worst way for telemetry
-        # to be wrong. `.passes` is kept as a fallback only because some callers
-        # construct with that alias.
+        # `.passes` FIRST, `.keys` only as the fallback -- and the order is the
+        # whole point. For a `multi_pass` config the plan lives in `.passes`
+        # while `.keys` holds just the primary key, so reading `.keys` first
+        # reported ONE pass for an eight-pass plan. That is not a cosmetic
+        # under-report: it is why `blocking_passes: [["city","first_name"]]`
+        # appeared identical for `gm_zeroconfig` and `gm_probabilistic_shipped`
+        # in run 32084546976, and why the two lanes looked like they differed
+        # only in threshold when they actually differed 2-passes-vs-8.
+        #
+        # The original comment justified `.keys` because a first version read
+        # `.passes` and got `[]` for every lane. Empty-vs-absent is the real
+        # distinction there: `or` on an EMPTY list falls through to keys, while
+        # `is None` does not. Same keys-vs-passes confusion that
+        # `_carries_own_blocking_plan` (#2488) exists for and that
+        # `rule_low_reduction_ratio` had.
+        #
+        # Transforms are recorded too: `[city, first_name]` appears twice in the
+        # probabilistic plan differing ONLY by transform (strip vs
+        # substring:0:5), so fields alone cannot tell two passes apart.
         blocking = getattr(cfg, "blocking", None)
-        keys = getattr(blocking, "keys", None)
-        if keys is None:
-            keys = getattr(blocking, "passes", None)
-        if keys is None:
+        keys = list(getattr(blocking, "passes", None) or []) or list(
+            getattr(blocking, "keys", None) or []
+        )
+        if blocking is None:
+            out["blocking_error"] = "resolved config exposed no blocking at all"
+        elif not keys:
             out["blocking_error"] = (
-                "resolved config exposed neither blocking.keys nor .passes"
+                "resolved config exposed neither blocking.passes nor .keys"
             )
         else:
             out["blocking_passes"] = [
-                list(getattr(k, "fields", []) or []) for k in keys
+                {
+                    "fields": list(getattr(k, "fields", []) or []),
+                    "transforms": list(getattr(k, "transforms", []) or []),
+                }
+                for k in keys
             ]
+            out["blocking_n_passes"] = len(keys)
             out["blocking_strategy"] = getattr(blocking, "strategy", None)
             out["blocking_max_block_size"] = getattr(blocking, "max_block_size", None)
     except Exception as e:  # noqa: BLE001
