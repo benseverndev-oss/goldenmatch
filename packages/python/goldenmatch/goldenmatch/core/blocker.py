@@ -200,6 +200,77 @@ def _fast_static_block_sizes(
     return all_sizes, f1, f2
 
 
+def _fast_multi_pass_block_sizes(
+    lf: Any, config: Any
+) -> tuple[list[int], int | None, int | None] | None:
+    """Block-size distribution for ``multi_pass``, vectorized PER PASS.
+
+    ``_fast_static_block_sizes`` bails on any non-static strategy, so a
+    multi_pass config -- the common zero-config shape (#1207 per-identifier
+    union) -- falls to the exact ``build_blocks`` loop, which materializes one
+    frame per block. That cost is why ``_should_measure_blocking`` only lets the
+    lower planning tiers measure the full frame for ``static`` configs, and it
+    is why zero-config always reasons over an EXTRAPOLATED sample instead.
+
+    Measured, person @ 100,000 rows, the 8-pass zero-config plan:
+
+        exact build_blocks loop      15,953 ms
+        per-pass vectorized             762 ms      20.9x
+
+    A multi_pass config IS N static passes -- ``_build_multi_pass_blocks``
+    delegates each to ``_build_static_blocks`` -- so the same per-key group-by
+    applies once per pass.
+
+    Falls back PER PASS, not for the whole config. ``_fast_static_block_sizes``
+    returns None when any block is oversized (``_build_static_blocks``
+    sub-splits those, so raw group-by sizes would diverge); on the person plan
+    exactly one pass of eight trips that, and forfeiting the other seven to it
+    would give most of the cost back. Parity with the exact loop on a config
+    mixing both kinds is pinned in
+    ``tests/test_multipass_fast_block_sizes.py``.
+
+    Cross-pass dedup is not a concern: ``_build_multi_pass_blocks`` keys its
+    dedup on ``(pass_signature, block_key)``, so it only ever removes truly
+    identical blocks from the SAME pass, and within a pass the group-by already
+    yields unique keys.
+
+    Returns ``None`` (caller uses the exact loop) for non-multi_pass configs or
+    when there are no passes. Chao1 inputs are returned as ``None``: they are
+    only defined for a single-key richness estimate, so the caller falls back to
+    the linear ``n_blocks`` extrapolation, exactly as the exact path does.
+    """
+    if getattr(config, "strategy", None) != "multi_pass":
+        return None
+    passes = list(getattr(config, "passes", None) or [])
+    if not passes:
+        return None
+
+    from goldenmatch.core.frame import is_polars_lazyframe, to_frame
+
+    frame = to_frame(lf.collect()) if is_polars_lazyframe(lf) else to_frame(lf)
+
+    all_sizes: list[int] = []
+    for pass_config in passes:
+        temp_config = config.model_copy(update={
+            "strategy": "static",
+            "keys": [pass_config],
+            "passes": None,
+            "auto_select": False,
+        })
+        fast = _fast_static_block_sizes(frame, temp_config)
+        if fast is not None:
+            all_sizes.extend(fast[0])
+            continue
+        # This pass has an oversized block (or otherwise can't be vectorized
+        # byte-identically); build only THIS pass exactly.
+        for b in _build_static_blocks(frame, temp_config):
+            try:
+                all_sizes.append(b.n_rows())
+            except Exception:
+                all_sizes.append(0)
+    return all_sizes, None, None
+
+
 def measure_blocking_profile(
     df: pl.DataFrame | pl.LazyFrame,
     config: Any,
@@ -245,6 +316,11 @@ def measure_blocking_profile(
             keys_used = []
 
         fast = _fast_static_block_sizes(frame, blocking_cfg)
+        if fast is None:
+            # multi_pass is N static passes; vectorize each one rather than
+            # dropping the whole config to the per-block materialization loop
+            # (measured 762 ms vs 15,953 ms on the 8-pass person@100K plan).
+            fast = _fast_multi_pass_block_sizes(frame, blocking_cfg)
         if fast is None:
             # Exact fallback: build every block and collect its length. This path
             # cannot recover the pre-drop singleton/doubleton counts, so the Chao1
