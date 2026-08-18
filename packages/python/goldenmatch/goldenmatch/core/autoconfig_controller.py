@@ -1320,13 +1320,37 @@ class AutoConfigController:
         iter_label = "v0" if best_entry.iteration == -1 else str(best_entry.iteration)
         if committed_health == HealthVerdict.RED:
             failing = _first_red_subprofile(best_entry.profile)
+            # #2663: "may be low-precision" is the WRONG warning when the
+            # committed config matched nothing at all. Measured on `orgs_hard`,
+            # auto-config committed a threshold above the entire score
+            # distribution and `dedupe_df` returned 845 singleton clusters on a
+            # corpus with 1055 true duplicate pairs -- a confident empty result,
+            # reported to the user as a precision caveat. A reader of the old
+            # message would not conclude "this found nothing".
+            #
+            # Says only what was measured on the SAMPLE: the full-data run has
+            # not happened yet here, so this reports the sample's own outcome
+            # rather than predicting the result.
+            _sp = best_entry.profile.scoring
+            _matched_nothing = (
+                _sp.mass_above_threshold == 0.0 and _sp.n_pairs_scored == 0
+            )
             logger.warning(
                 "auto-config committed best-effort RED config "
                 "(iter=%s, stop_reason=%s, failing_subprofile=%s); "
-                "downstream pipeline will run but output may be low-precision",
+                "downstream pipeline will run but %s",
                 iter_label,
                 history.stop_reason.name if history.stop_reason else "unset",
                 failing,
+                (
+                    "NO pairs cleared the threshold on the sample -- expect an "
+                    "empty result (every record its own cluster), not merely a "
+                    "low-precision one. The cutoff is likely above the whole "
+                    "score distribution for this data; set an explicit "
+                    "threshold or lower it. See #2663."
+                    if _matched_nothing
+                    else "output may be low-precision"
+                ),
             )
         elif committed_health == HealthVerdict.YELLOW:
             logger.info(
