@@ -1887,10 +1887,12 @@ class AutoConfigController:
         - the user in #2483 swept a field that does not cut and measured nothing,
           with no way to see that no decision had ever been made.
 
-        This does NOT change the cutoff. It records the value the run already
-        used, so behaviour is byte-identical and the lever becomes reachable.
-        Only ``fallback`` / ``calibrated`` sources are stamped: ``configured``
-        means the user set it and must not be overwritten.
+        Only ``calibrated`` is stamped. ``configured`` means the user set it
+        and must not be overwritten; ``fallback`` means NOTHING decided the
+        value, and stamping it is not behaviour-neutral -- see the note on
+        ``stampable`` below, which cost pairwise precision 0.9308 vs 0.9992 at
+        person@100K by pinning the cutoff to a sample-derived default and
+        skipping the full-data refit.
 
         Silent no-op when the sample run recorded nothing (non-probabilistic
         configs, or a path that never reached FS scoring) -- a missing
@@ -1902,9 +1904,25 @@ class AutoConfigController:
             return
         from goldenmatch.core.probabilistic import (
             LINK_THRESHOLD_CALIBRATED,
-            LINK_THRESHOLD_FALLBACK,
         )
-        stampable = (LINK_THRESHOLD_FALLBACK, LINK_THRESHOLD_CALIBRATED)
+        # CALIBRATED only. Stamping a FALLBACK is stamping "nothing decided
+        # this" as though it were a decision, and it is not behaviour-neutral:
+        # once `link_threshold` is set the value counts as `configured`, so the
+        # full-data run SKIPS the threshold refit (`reason:
+        # explicit-link-threshold`) and is pinned to a number derived from a ~6K
+        # sample.
+        #
+        # Measured, person@10K zero-config, identical in every other respect:
+        #
+        #     stamped fallback 0.50   P 0.9947  R 1.0000  F1 0.9973
+        #     left None (refit runs)  P 1.0000  R 0.9979  F1 0.9990
+        #
+        # The second is byte-identical to the probabilistic lane. At 100K the
+        # same pin costs precision 0.9308 vs 0.9992. A calibrated value IS a
+        # real data-driven decision and is still stamped, so #2637's lever
+        # (mk.cutoff reachable -> ThresholdShift / perturbation_stability live)
+        # survives wherever a decision actually happened.
+        stampable = (LINK_THRESHOLD_CALIBRATED,)
         for mk in config.get_matchkeys():
             if getattr(mk, "type", None) != "probabilistic":
                 continue
