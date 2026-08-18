@@ -18,9 +18,9 @@ Datasets:
 
 Environment:
   GOLDENMATCH_AUTOCONFIG_MEMORY=0  recommended (cross-run cache off for clean numbers)
-  OPENAI_API_KEY                   required for --with-llm; IGNORED otherwise (see
-                                   `_neutralize_ambient_llm_keys` -- an ambient key
-                                   silently changed the published numbers once)
+  OPENAI_API_KEY                   required for --with-llm; IGNORED otherwise, so
+                                   an ambient key cannot quietly change the numbers
+                                   (see `_neutralize_ambient_llm_keys`)
 """
 from __future__ import annotations
 
@@ -540,17 +540,28 @@ def _run_dqbench(with_llm: bool = False) -> dict[str, Any] | None:
 _F1_FLOORS: dict[str, float | None] = {
     # measured 0.9912
     "Febrl3": 0.95,
-    # DISPUTED, deliberately left at its original value pending a decision.
-    # This was set "just under the observed 0.5037", but that 0.5037 was measured
-    # with an ambient OPENAI_API_KEY routing 959 of 2173 records through LLM
-    # extraction, while the run labelled itself "LLM features: off" (#2457).
-    # Keyless -- what CI can actually reproduce, on either the native or the
-    # fallback path, and on the very commit that published the baseline -- Abt-Buy
-    # scores f1=0.1723 (P=0.1068, R=0.4463). So this floor currently tests whether
-    # a key is in the environment, not whether matching regressed.
+    # DISPUTED. Set "just under the observed 0.5037" -- but that 0.5037 is
+    # UNREPRODUCED, and until someone reproduces it this floor is not known to
+    # describe anything. Measured 2026-08-18, all on the same 1118 ground-truth
+    # pairs, every cell f1=0.17-0.18 against the baseline's 0.5037 / P=0.8219:
+    #
+    #   committed baseline (2026-08-11, native=1)  0.5037  P 0.8219   494 pairs
+    #   CI nightly, native=0, no key               0.1723  P 0.1068
+    #   local HEAD, native=0, no key               0.1723  P 0.1068  4673 pairs
+    #   local HEAD, native=1, no key               0.1723  P 0.1068
+    #   local 8145b498 (the baseline's OWN commit) 0.1723  P 0.1068
+    #   local HEAD, native=0, WITH an LLM key      0.1838  P 0.1132
+    #
+    # So it is not a code regression (the publishing commit scores 0.1723), not
+    # the kernel-vs-fallback split, and not the ambient LLM key -- each was
+    # measured and ruled out. The baseline emitted 494 pairs where every
+    # reproduction emits ~4673, so whatever produced it was configured very
+    # differently. Cause still unknown; do not re-derive this floor from a number
+    # nobody can reproduce.
+    #
     # NOT lowered here to make the lane green: Abt-Buy also commits a RED config,
     # which fails the lane on its own, so the honest fix is a quality fix rather
-    # than a smaller number. Re-derive this from a keyless run when that lands.
+    # than a smaller number.
     "Abt-Buy": 0.45,
     # KNOWN BAD (#2470). Measured 0.0697 / recall 0.0419. The floor is set at the
     # observed value ONLY to stop it getting worse; it is not an endorsement, and
@@ -605,23 +616,20 @@ def _neutralize_ambient_llm_keys(with_llm: bool) -> bool:
 
     `llm_extract.llm_extract_features` reads `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`
     straight out of `os.environ` with no opt-in flag, so *merely having a key
-    exported* rewrites what this lane measures. On Abt-Buy that path handles 959
-    of 2173 records (44%), and the difference is not marginal:
+    exported* changes what this lane measures. On Abt-Buy that path handles 959 of
+    2173 records (44%), and it is worth a real, if modest, shift:
 
-        no key   f1=0.1723  precision=0.1068   <- what CI has always measured
-        (a key present routes 44% of records through paid extraction instead)
-
-    The committed `docs/benchmarks/latest-results.json` was produced on a machine
-    with a key exported, so it published an LLM-assisted 0.5037 while its own
-    generated header said "LLM features: off" -- that label reads `--with-llm`,
-    which only ever controlled the DQbench lane. #2470 then set Abt-Buy's F1 floor
-    to 0.45 "just under the observed value", which made the floor a test of whether
-    a key happened to be in the environment. The nightly, which has no key, cannot
-    pass it (#2457).
+        no key   f1=0.1723  P=0.1068  R=0.4463   <- what CI measures
+        key      f1=0.1838  P=0.1132  R=0.4875   (+0.0115 F1, ~50x the wall clock)
 
     A benchmark's whole job is a number that means the same thing on a laptop and
     in CI, so the key is dropped rather than merely reported. Returns True when
     something was actually removed, so the run can record that it happened.
+
+    Scope note, because the measurement above corrected an earlier guess of mine:
+    this does NOT explain the committed 0.5037 Abt-Buy baseline. That number is
+    unreproduced -- see the `Abt-Buy` entry in `_F1_FLOORS`. The guard is
+    justified on determinism alone, not as a fix for that.
     """
     if with_llm:
         return False

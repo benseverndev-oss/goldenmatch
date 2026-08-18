@@ -2,18 +2,20 @@
 
 `goldenmatch.core.llm_extract` reads `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`
 straight out of `os.environ` with no opt-in flag, so merely having a key
-exported rewrote what this lane reported. On Abt-Buy that path handles 959 of
-2173 records, and the gap is not marginal:
+exported changes what this lane reports. On Abt-Buy that path handles 959 of
+2173 records, and it moves the score:
 
-    no key   f1=0.1723  precision=0.1068   <- what CI has always measured
-    a key    routes 44% of records through paid extraction instead
+    no key   f1=0.1723  P=0.1068  R=0.4463   <- what CI measures
+    key      f1=0.1838  P=0.1132  R=0.4875
 
-The committed `docs/benchmarks/latest-results.json` was produced on a machine
-with a key exported. It published 0.5037 under a generated header reading
-"LLM features: off" -- that label read `--with-llm`, which only ever controlled
-the DQbench lane. #2470 then pinned Abt-Buy's floor at 0.45 "just under the
-observed value", so the floor became a test of whether a key was in the
-environment, and the keyless nightly could never pass it.
+A benchmark whose answer depends on an unrelated env var cannot be compared
+across machines, which is the whole reason the lane exists. So the key is
+dropped rather than merely reported.
+
+Note the guard is justified by determinism alone. It does NOT explain the
+committed 0.5037 Abt-Buy baseline: that was the first hypothesis, and the keyed
+measurement above refuted it. See the `Abt-Buy` entry in `_F1_FLOORS` for the
+full matrix and what remains unexplained.
 
 Two properties are pinned here, and the second is the one with teeth: a guard
 that strips the key but still lets the report claim "off" for a run that could
