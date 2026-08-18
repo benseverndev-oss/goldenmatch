@@ -86,3 +86,89 @@ def ranking_metrics(scored: list[tuple[float, bool]]) -> dict:
         "n_true": n_true,
         "base_rate": round(n_true / n, 6),
     }
+
+
+def ranking_metrics_grouped(groups: list[tuple[float, int, int]]) -> dict:
+    """Identical metrics, from PRE-GROUPED (score, n_true, n_total) rows.
+
+    ## Why this exists: `ranking_metrics` cannot reach 50M
+
+    The caller built its input by collecting one `(score, is_true)` tuple PER
+    CANDIDATE PAIR to the driver. At the 1M scale that harness was written for
+    this is 5.5M tuples and merely wasteful. At 50M rows it is **275M** tuples
+    -- tens of GB of Python objects on a driver running in a container -- so the
+    quality arm cannot run at the scale the comparison is actually about, and a
+    head-to-head with no accuracy number is not a head-to-head.
+
+    ## Why grouping is EXACT here, not an approximation
+
+    `ranking_metrics` already consumes its input in tie-groups: it advances to
+    the next distinct score, admits every pair at that score, and only then
+    computes precision/recall. So the per-pair identity of the rows inside a tie
+    group is never used -- only how many there are and how many are true. That
+    is precisely `(score, n_true, n_total)`.
+
+    And the distinct-score count is SMALL by construction. A pair's weight is a
+    sum of per-field match weights over a bounded set of gamma levels, so the
+    reachable score set is bounded by `prod(levels + 1)` -- the same bound that
+    makes GoldenMatch's counting GROUP BY small, which is the property this
+    whole benchmark exists to demonstrate. Grouping in the engine turns a 275M
+    collect into a few hundred rows.
+
+    Floating-point equality is the grouping key, matching the `==` tie-check in
+    `ranking_metrics`. Two scores that differ in the last bit are two groups
+    here and two tie-groups there, so the two functions agree exactly rather
+    than approximately -- `test_fs_quality_metrics_grouped.py` asserts that on
+    shared inputs.
+
+    Args:
+        groups: `(score, n_true, n_total)` per DISTINCT score, any order.
+            `n_total` counts every pair at that score, true and false.
+    """
+    if not groups:
+        return {"average_precision": None, "best_f1": None,
+                "best_f1_threshold": None, "n_pairs": 0, "n_true": 0,
+                "base_rate": None}
+
+    n = sum(int(g[2]) for g in groups)
+    n_true = sum(int(g[1]) for g in groups)
+    if n == 0:
+        return {"average_precision": None, "best_f1": None,
+                "best_f1_threshold": None, "n_pairs": 0, "n_true": 0,
+                "base_rate": None}
+    if n_true == 0:
+        return {"average_precision": None, "best_f1": None,
+                "best_f1_threshold": None, "n_pairs": n, "n_true": 0,
+                "base_rate": 0.0}
+
+    # Descending by score -- the same order the ungrouped walk induces.
+    rows = sorted(groups, key=lambda g: -g[0])
+
+    tp = fp = 0
+    prev_recall = 0.0
+    ap = 0.0
+    best_f1 = 0.0
+    best_thr = None
+
+    for thr, g_true, g_total in rows:
+        g_true = int(g_true)
+        tp += g_true
+        fp += int(g_total) - g_true
+        # Precision/recall AFTER admitting the whole tie group -- the only
+        # defensible point, since a threshold cannot separate equal scores.
+        precision = tp / (tp + fp)
+        recall = tp / n_true
+        ap += precision * (recall - prev_recall)
+        prev_recall = recall
+        f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
+        if f1 > best_f1:
+            best_f1, best_thr = f1, thr
+
+    return {
+        "average_precision": round(ap, 6),
+        "best_f1": round(best_f1, 6),
+        "best_f1_threshold": (round(best_thr, 6) if best_thr is not None else None),
+        "n_pairs": n,
+        "n_true": n_true,
+        "base_rate": round(n_true / n, 6),
+    }

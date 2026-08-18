@@ -35,13 +35,20 @@
 #
 # ## Cost
 #
-# ~$0.60 per run: 3 x n2-standard-16 ON-DEMAND (~$2.33/hr) for ~15 min,
-# dominated by ~5 minutes of provisioning rather than the ~16s of compute. The
-# teardown step runs `if: always()`, so a failed bench still releases the
-# instances -- the same discipline bench-ray-cluster.yml uses.
+# Scales with the run. The 1M default is ~$0.60: 5 x n2-standard-16 ON-DEMAND
+# for ~15 min, dominated by ~5 minutes of provisioning rather than the ~16s of
+# compute. A 50M head-to-head is hours, not minutes, and the wall is unknown
+# until one has been run -- so read the `timeout-minutes` below as the cost
+# ceiling, not the expected spend.
 #
-# Preemptible on purpose: a bench that loses its VMs mid-run should be re-run,
-# not paid for at on-demand rates.
+# The teardown step runs `if: always()`, so a failed bench still releases the
+# instances -- the same discipline bench-ray-cluster.yml uses. `keep_cluster`
+# defeats that ON PURPOSE and leaves the VMs billing; it is for debugging and
+# the operator deletes them by hand.
+#
+# ON-DEMAND, not preemptible: PREEMPTIBLE_CPUS quota in this project is 0 (see
+# the provisioning step). A multi-hour 50M run is also the worst case for
+# preemption -- losing the cluster at hour two wastes the whole spend.
 #
 # ## Both engines run ON the master VM, deliberately
 #
@@ -73,7 +80,12 @@ on:
         description: "Worker VMs (the master VM runs master + Connect + both drivers)"
         required: false
         type: string
-        default: "2"
+        default: "4"
+      disk_gb:
+        description: "Boot disk per node, in GB. This is SHUFFLE SPILL space, not OS space -- Splink projects to ~840GB of cumulative shuffle at 50M. Do not lower it for a large run."
+        required: false
+        type: string
+        default: "500"
       zone:
         description: "GCE zone"
         required: false
@@ -81,6 +93,11 @@ on:
         default: "us-central1-a"
       splink_compare:
         description: "Also run Splink on the same cluster"
+        required: false
+        type: boolean
+        default: true
+      eval_quality:
+        description: "Also measure ACCURACY (average precision / best F1) on both arms. Adds a predict + grouped-collect pass to each; without it the run reports speed and bytes but no quality, which is not a head-to-head."
         required: false
         type: boolean
         default: true
@@ -107,7 +124,7 @@ env:
 jobs:
   cluster:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
 
@@ -159,7 +176,8 @@ jobs:
         # `bench=gm-spark` label -- so a leaked VM can be traced and swept.
         run: |
           set -euo pipefail
-          N=${{ inputs.workers || '2' }}
+          N=${{ inputs.workers || '4' }}
+          DISK_GB=${{ inputs.disk_gb || '500' }}
           MT="${{ inputs.machine_type || 'n2-standard-16' }}"
           NAMES="$CLUSTER-master"
           for i in $(seq 1 "$N"); do NAMES="$NAMES $CLUSTER-w$i"; done
@@ -182,15 +200,31 @@ jobs:
 
           # Container-Optimized OS: docker is already present, so no apt round
           # trip per node and no image drift between the master and the workers.
+          #
+          # Disk is sized for SHUFFLE SPILL, not for the OS. Spark spills to the
+          # worker's local dirs, which here is the boot disk, and 100GB does not
+          # survive a 50M head-to-head. Projected from the measured 1M run
+          # (#2652), scaling linearly because the fixture's block size is pinned
+          # at 12 rows (dup=3 x blocks_per_key=4) so pairs grow with rows:
+          #
+          #     engine        shuffle write @1M   projected @50M
+          #     GoldenMatch          832 MB            ~41 GB
+          #     Splink            16,784 MB           ~840 GB
+          #
+          # Cumulative is not concurrent peak (Spark reclaims between stages),
+          # but 840 GB across 940 stages against 100 GB is the single most
+          # likely way a paid multi-hour run dies. 500 GB is a few dollars of
+          # PD-balanced against the cost of re-running the cluster.
           gcloud compute instances create $NAMES \
             --machine-type="$MT" \
             --image-family=cos-stable --image-project=cos-cloud \
-            --boot-disk-size=100GB \
+            --boot-disk-size="${DISK_GB}GB" \
+            --boot-disk-type=pd-balanced \
             $PROV \
             --labels=bench=gm-spark,run-id=${{ github.run_id }} \
             --scopes=cloud-platform \
             --quiet
-          echo "provisioned: $NAMES"
+          echo "provisioned: $NAMES (disk ${DISK_GB}GB pd-balanced)"
 
       # SSH goes over the instance's EXTERNAL IP rather than IAP.
       # `--tunnel-through-iap` would be tidier, but it needs
@@ -291,11 +325,23 @@ jobs:
               --rows ${{ inputs.rows || '1000000' }} \
               --remote sc://$MASTER_IP:15002 \
               --spark-ui http://$MASTER_IP:4040 \
+              ${{ inputs.eval_quality && '--eval-quality' || '' }} \
               --out /w/spark-fs-train-scale.json
           "
 
       - name: Splink on the same cluster
         if: inputs.splink_compare
+        # `continue-on-error`: Splink is the side expected to fail first at
+        # scale -- it shuffles ~20x the bytes (#2652) and re-scans pairs per EM
+        # iteration across ~940 stages. If it dies on disk or memory at 50M,
+        # that outcome is ITSELF the measurement, and losing GoldenMatch's
+        # completed numbers to a red step would waste the whole cluster spend.
+        #
+        # The failure is NOT swallowed: the summary step below prints
+        # `splink: MISSING` and the run is re-dispatched larger. Making it
+        # explicit there rather than auto-retrying in-workflow is deliberate --
+        # an automatic retry reprovisions a bigger paid cluster unattended.
+        continue-on-error: true
         # Connect is stopped first: standalone Spark hands an application every
         # free core unless `spark.cores.max` says otherwise, and the Connect
         # server IS an application holding them all. Splink would queue forever.
@@ -311,6 +357,7 @@ jobs:
               --master spark://$MASTER_IP:7077 \
               --driver-host $MASTER_IP \
               --spark-ui http://$MASTER_IP:4040 \
+              ${{ inputs.eval_quality && '--eval-quality' || '' }} \
               --out /w/splink-train-scale.json
           "
 
@@ -337,19 +384,83 @@ jobs:
           {
             echo '## Spark FS on a REAL multi-node cluster'
             echo ''
-            echo "${{ inputs.workers || '2' }} worker VM(s) + 1 master, \`${{ inputs.machine_type || 'n2-standard-16' }}\`, SPOT, zone \`${{ inputs.zone || 'us-central1-a' }}\`."
+            echo "${{ inputs.workers || '4' }} worker VM(s) + 1 master, \`${{ inputs.machine_type || 'n2-standard-16' }}\`, ${{ inputs.disk_gb || '500' }}GB/node, ${{ inputs.rows || '1000000' }} rows, zone \`${{ inputs.zone || 'us-central1-a' }}\`."
             echo ''
             echo 'Every shuffle byte here crosses a real network, which the single-host lane cannot test.'
             echo ''
-            if [ -f spark-fs-train-scale.json ] && [ -f splink-train-scale.json ]; then
-              echo '| engine | train wall | shuffle write | shuffle read |'
-              echo '|---|---:|---:|---:|'
-              jq -r '"| goldenmatch | \(.stages.u_seconds + .stages.counts_seconds + .stages.train_seconds)s | \(.shuffle.shuffle_write_bytes // "n/a") | \(.shuffle.shuffle_read_bytes // "n/a") |"' spark-fs-train-scale.json
-              jq -r '"| splink | \(.train_total_seconds)s | \(.shuffle.shuffle_write_bytes // "n/a") | \(.shuffle.shuffle_read_bytes // "n/a") |"' splink-train-scale.json
+            # PER-ARM, not all-or-nothing. The previous version printed the
+            # table only when BOTH artifacts existed, so the most likely
+            # outcome of a large run -- GoldenMatch completes, Splink dies on
+            # disk or memory -- rendered NO numbers at all, and the completed
+            # arm's measurements were lost to a formatting branch. Splink is
+            # `continue-on-error` precisely so its failure does not cost the
+            # cluster spend; the summary has to honour that.
+            echo '### Wall and shuffle'
+            echo ''
+            echo '| engine | train wall | shuffle write | shuffle read | stages | tasks |'
+            echo '|---|---:|---:|---:|---:|---:|'
+            if [ -f spark-fs-train-scale.json ]; then
+              jq -r '"| goldenmatch | \(.stages.u_seconds + .stages.counts_seconds + .stages.train_seconds)s | \(.shuffle.shuffle_write_bytes // "n/a") | \(.shuffle.shuffle_read_bytes // "n/a") | \(.shuffle.n_stages // "n/a") | \(.shuffle.num_tasks // "n/a") |"' spark-fs-train-scale.json
             else
-              echo 'NO COMPARISON -- one or both arms produced no artifact:'
-              [ -f spark-fs-train-scale.json ] && echo '- goldenmatch: ok' || echo '- goldenmatch: MISSING'
-              [ -f splink-train-scale.json ] && echo '- splink: ok' || echo '- splink: MISSING'
+              echo '| goldenmatch | **MISSING** | | | | |'
+            fi
+            if [ -f splink-train-scale.json ]; then
+              jq -r '"| splink | \(.train_total_seconds)s | \(.shuffle.shuffle_write_bytes // "n/a") | \(.shuffle.shuffle_read_bytes // "n/a") | \(.shuffle.n_stages // "n/a") | \(.shuffle.num_tasks // "n/a") |"' splink-train-scale.json
+            elif [ "${{ inputs.splink_compare }}" = "true" ]; then
+              echo '| splink | **MISSING** | | | | |'
+            fi
+            echo ''
+
+            # Accuracy: the half a speed table cannot answer. `quality_score_groups`
+            # is printed because it is the number that says whether the bounded
+            # collect held -- an unbounded group count is a finding, not noise.
+            echo '### Accuracy'
+            echo ''
+            echo '| engine | avg precision | best F1 | @threshold | base rate | pairs | score groups |'
+            echo '|---|---:|---:|---:|---:|---:|---:|'
+            for pair in "goldenmatch:spark-fs-train-scale.json" "splink:splink-train-scale.json"; do
+              nm="${pair%%:*}"; fp="${pair#*:}"
+              if [ -f "$fp" ]; then
+                jq -r --arg nm "$nm" '"| \($nm) | \(.quality.average_precision // "n/a") | \(.quality.best_f1 // "n/a") | \(.quality.best_f1_threshold // "n/a") | \(.quality.base_rate // "n/a") | \(.quality.n_pairs // "n/a") | \(.quality_score_groups // "n/a") |"' "$fp"
+              fi
+            done
+            echo ''
+
+            # Where the time actually went. A slower engine is CPU, GC, spill or
+            # skew, and the shuffle totals alone cannot tell those apart.
+            echo '### CPU, GC, spill'
+            echo ''
+            echo '| engine | executor run | executor CPU | JVM GC | mem spill | disk spill | peak exec mem |'
+            echo '|---|---:|---:|---:|---:|---:|---:|'
+            for pair in "goldenmatch:spark-fs-train-scale.json" "splink:splink-train-scale.json"; do
+              nm="${pair%%:*}"; fp="${pair#*:}"
+              if [ -f "$fp" ]; then
+                jq -r --arg nm "$nm" '"| \($nm) | \(.shuffle.executor_run_time_ms // "n/a")ms | \(.shuffle.executor_cpu_time_ns // "n/a")ns | \(.shuffle.jvm_gc_time_ms // "n/a")ms | \(.shuffle.memory_spill_bytes // "n/a") | \(.shuffle.disk_spill_bytes // "n/a") | \(.shuffle.peak_execution_memory_max // "n/a") |"' "$fp"
+              fi
+            done
+            echo ''
+            echo 'An `n/a` above means Spark did not report the field, NOT that the value was zero.'
+            echo ''
+
+            # Executor health. At scale the likely failure is ONE node, and a
+            # cluster-wide total hides it -- so a death is surfaced, loudly.
+            echo '### Executor health'
+            echo ''
+            echo '| engine | executors | died | failed tasks | max disk used | max JVM heap |'
+            echo '|---|---:|---|---:|---:|---:|'
+            for pair in "goldenmatch:spark-fs-train-scale.json" "splink:splink-train-scale.json"; do
+              nm="${pair%%:*}"; fp="${pair#*:}"
+              if [ -f "$fp" ]; then
+                jq -r --arg nm "$nm" '.shuffle.executor_metrics as $e | "| \($nm) | \($e.n_executors // "n/a") | \(if $e.any_executor_died then "**YES** \($e.dead_executor_ids|tostring)" else "no" end) | \($e.failed_tasks_total // "n/a") | \($e.disk_used_max // "n/a") | \($e.peak_jvm_heap_max // "n/a") |"' "$fp" 2>/dev/null || echo "| $nm | (executor metrics unavailable) | | | | |"
+              fi
+            done
+            echo ''
+
+            if [ ! -f splink-train-scale.json ] && [ "${{ inputs.splink_compare }}" = "true" ]; then
+              echo '> **Splink produced no artifact.** That is a RESULT, not a lost run --'
+              echo '> it is the side expected to fail first at scale (~20x the bytes, ~940'
+              echo '> stages, re-scanning pairs per EM iteration). GoldenMatch numbers above'
+              echo '> stand. Re-dispatch larger (`workers`, `disk_gb`) to get the comparison.'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 

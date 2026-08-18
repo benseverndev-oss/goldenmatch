@@ -730,13 +730,43 @@ def main() -> int:
             weight = weight + expr
         truth = (F.col(f"{CAND_LHS}.__row_id__") % F.lit(n_entities)
                  == F.col(f"{CAND_RHS}.__row_id__") % F.lit(n_entities))
-        scored = [
-            (float(r["w"]), bool(r["is_true"]))
-            for r in joined.select(weight.alias("w"),
-                                   truth.alias("is_true")).collect()
+        # GROUP BY the weight in the ENGINE, and collect the groups.
+        #
+        # This used to collect one `(score, is_true)` tuple PER CANDIDATE PAIR.
+        # At the 1M scale this harness was written for that is 5.5M tuples and
+        # merely wasteful; at 50M rows it is 275M -- tens of GB of Python
+        # objects on a driver running inside a container -- so the quality arm
+        # could not run at the scale the comparison is actually about, and a
+        # head-to-head with no accuracy number is not a head-to-head.
+        #
+        # Grouping is EXACT, not a sample. `ranking_metrics` already consumes
+        # its input in tie-groups: it advances to the next distinct score,
+        # admits every pair at that score, and only then computes
+        # precision/recall -- so the per-pair identity inside a group is never
+        # used, only the counts. `ranking_metrics_grouped` takes exactly those
+        # counts and `test_fs_quality_metrics_grouped.py` pins the two to agree
+        # on shared inputs, including ties that span both classes.
+        #
+        # And the group count is small BY THE PROPERTY THIS BENCHMARK IS ABOUT:
+        # a pair's weight is a sum of per-field match weights over bounded gamma
+        # levels, so the reachable score set is bounded by `prod(levels + 1)` --
+        # the same bound that keeps GoldenMatch's counting GROUP BY small. 275M
+        # pairs collapse to a few hundred rows.
+        groups = [
+            (float(r["w"]), int(r["n_true"]), int(r["n_all"]))
+            for r in (
+                joined.select(weight.alias("w"), truth.alias("is_true"))
+                .groupBy("w")
+                .agg(F.sum(F.col("is_true").cast("long")).alias("n_true"),
+                     F.count(F.lit(1)).alias("n_all"))
+                .collect()
+            )
         ]
         out["stages"]["score_seconds"] = round(time.perf_counter() - t, 2)
-        q = _metrics_module().ranking_metrics(scored)
+        # Recorded so a reader can see the collect stayed bounded, rather than
+        # trusting the argument above.
+        out["quality_score_groups"] = len(groups)
+        q = _metrics_module().ranking_metrics_grouped(groups)
         # `dup` rows per entity give dup*(dup-1)/2 true pairs each, and every
         # entity's rows share a blocking key by construction, so the candidate
         # set must contain ALL of them and no duplicates. Checked rather than
