@@ -47,8 +47,39 @@ job.
 * Run with the native kernel available. Pure Python scores 121M comparisons in
   well over 500 s; CI does the same work in ~27 s.
 
+## Measured
+
+Two scales so far, both pure-Python (native unavailable locally), deltas vs the
+full 8-pass plan. Negative dF1 means the pass was earning its keep.
+
+    4,001 rows / 973 true pairs           cmp saved       dF1        dR
+    [dob] substring:0:4                     114,831   +0.0000   +0.0000
+    [first_name] soundex                     69,273   +0.0011   +0.0000
+    [surname] soundex                        20,147   +0.0000   +0.0000
+    [surname] substring5                     10,653   +0.0000   +0.0000
+    [postcode]                                  953   -0.0157   -0.0328
+
+    10,001 rows / 2,428 true pairs         cmp saved       dF1        dR
+    [dob] substring:0:4                     716,613   +0.0000   +0.0000
+    [first_name] soundex                    388,266   +0.0000   +0.0000
+    [surname] soundex                       118,088   -0.0004   +0.0021
+    [surname] substring5                     59,694   +0.0000   +0.0000
+    [postcode]                                2,520   -0.0142   -0.0247
+    in-budget passes only                 1,282,661   -0.0025   -0.0020
+
+The over-budget passes are ~free to remove at both scales, and the single pass
+carrying recall is `postcode` -- IN budget, 2,520 comparisons. The bulk arm
+drops 99.3% of all comparisons for dF1 -0.0025.
+
+**Do not generalize this to 100K/1M yet.** Small frames are exactly where
+phonetic keys have least to do: names collide as N grows, so `[first_name]
+soundex` and `[surname] soundex` may start paying for themselves at a scale
+these runs cannot see. Birth-year is the one result that looks scale-stable so
+far (53% of comparisons at 4K, 55% at 10K, 59% at 100K, zero F1 either way at
+the two scales measured). The 100K arm decides.
+
 Usage:
-    python scripts/bench_er_headtohead/ablate_blocking_passes.py \\
+    python scripts/bench_er_headtohead/ablate_blocking_passes.py \
         --input fixtures/bench_100000.parquet \\
         --ground-truth fixtures/bench_100000.truth.parquet \\
         --out ablation.json
