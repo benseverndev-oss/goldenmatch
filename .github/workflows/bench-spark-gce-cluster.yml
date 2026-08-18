@@ -388,15 +388,79 @@ jobs:
             echo ''
             echo 'Every shuffle byte here crosses a real network, which the single-host lane cannot test.'
             echo ''
-            if [ -f spark-fs-train-scale.json ] && [ -f splink-train-scale.json ]; then
-              echo '| engine | train wall | shuffle write | shuffle read |'
-              echo '|---|---:|---:|---:|'
-              jq -r '"| goldenmatch | \(.stages.u_seconds + .stages.counts_seconds + .stages.train_seconds)s | \(.shuffle.shuffle_write_bytes // "n/a") | \(.shuffle.shuffle_read_bytes // "n/a") |"' spark-fs-train-scale.json
-              jq -r '"| splink | \(.train_total_seconds)s | \(.shuffle.shuffle_write_bytes // "n/a") | \(.shuffle.shuffle_read_bytes // "n/a") |"' splink-train-scale.json
+            # PER-ARM, not all-or-nothing. The previous version printed the
+            # table only when BOTH artifacts existed, so the most likely
+            # outcome of a large run -- GoldenMatch completes, Splink dies on
+            # disk or memory -- rendered NO numbers at all, and the completed
+            # arm's measurements were lost to a formatting branch. Splink is
+            # `continue-on-error` precisely so its failure does not cost the
+            # cluster spend; the summary has to honour that.
+            echo '### Wall and shuffle'
+            echo ''
+            echo '| engine | train wall | shuffle write | shuffle read | stages | tasks |'
+            echo '|---|---:|---:|---:|---:|---:|'
+            if [ -f spark-fs-train-scale.json ]; then
+              jq -r '"| goldenmatch | \(.stages.u_seconds + .stages.counts_seconds + .stages.train_seconds)s | \(.shuffle.shuffle_write_bytes // "n/a") | \(.shuffle.shuffle_read_bytes // "n/a") | \(.shuffle.n_stages // "n/a") | \(.shuffle.num_tasks // "n/a") |"' spark-fs-train-scale.json
             else
-              echo 'NO COMPARISON -- one or both arms produced no artifact:'
-              [ -f spark-fs-train-scale.json ] && echo '- goldenmatch: ok' || echo '- goldenmatch: MISSING'
-              [ -f splink-train-scale.json ] && echo '- splink: ok' || echo '- splink: MISSING'
+              echo '| goldenmatch | **MISSING** | | | | |'
+            fi
+            if [ -f splink-train-scale.json ]; then
+              jq -r '"| splink | \(.train_total_seconds)s | \(.shuffle.shuffle_write_bytes // "n/a") | \(.shuffle.shuffle_read_bytes // "n/a") | \(.shuffle.n_stages // "n/a") | \(.shuffle.num_tasks // "n/a") |"' splink-train-scale.json
+            elif [ "${{ inputs.splink_compare }}" = "true" ]; then
+              echo '| splink | **MISSING** | | | | |'
+            fi
+            echo ''
+
+            # Accuracy: the half a speed table cannot answer. `quality_score_groups`
+            # is printed because it is the number that says whether the bounded
+            # collect held -- an unbounded group count is a finding, not noise.
+            echo '### Accuracy'
+            echo ''
+            echo '| engine | avg precision | best F1 | @threshold | base rate | pairs | score groups |'
+            echo '|---|---:|---:|---:|---:|---:|---:|'
+            for pair in "goldenmatch:spark-fs-train-scale.json" "splink:splink-train-scale.json"; do
+              nm="${pair%%:*}"; fp="${pair#*:}"
+              if [ -f "$fp" ]; then
+                jq -r --arg nm "$nm" '"| \($nm) | \(.quality.average_precision // "n/a") | \(.quality.best_f1 // "n/a") | \(.quality.best_f1_threshold // "n/a") | \(.quality.base_rate // "n/a") | \(.quality.n_pairs // "n/a") | \(.quality_score_groups // "n/a") |"' "$fp"
+              fi
+            done
+            echo ''
+
+            # Where the time actually went. A slower engine is CPU, GC, spill or
+            # skew, and the shuffle totals alone cannot tell those apart.
+            echo '### CPU, GC, spill'
+            echo ''
+            echo '| engine | executor run | executor CPU | JVM GC | mem spill | disk spill | peak exec mem |'
+            echo '|---|---:|---:|---:|---:|---:|---:|'
+            for pair in "goldenmatch:spark-fs-train-scale.json" "splink:splink-train-scale.json"; do
+              nm="${pair%%:*}"; fp="${pair#*:}"
+              if [ -f "$fp" ]; then
+                jq -r --arg nm "$nm" '"| \($nm) | \(.shuffle.executor_run_time_ms // "n/a")ms | \(.shuffle.executor_cpu_time_ns // "n/a")ns | \(.shuffle.jvm_gc_time_ms // "n/a")ms | \(.shuffle.memory_spill_bytes // "n/a") | \(.shuffle.disk_spill_bytes // "n/a") | \(.shuffle.peak_execution_memory_max // "n/a") |"' "$fp"
+              fi
+            done
+            echo ''
+            echo 'An `n/a` above means Spark did not report the field, NOT that the value was zero.'
+            echo ''
+
+            # Executor health. At scale the likely failure is ONE node, and a
+            # cluster-wide total hides it -- so a death is surfaced, loudly.
+            echo '### Executor health'
+            echo ''
+            echo '| engine | executors | died | failed tasks | max disk used | max JVM heap |'
+            echo '|---|---:|---|---:|---:|---:|'
+            for pair in "goldenmatch:spark-fs-train-scale.json" "splink:splink-train-scale.json"; do
+              nm="${pair%%:*}"; fp="${pair#*:}"
+              if [ -f "$fp" ]; then
+                jq -r --arg nm "$nm" '.shuffle.executor_metrics as $e | "| \($nm) | \($e.n_executors // "n/a") | \(if $e.any_executor_died then "**YES** \($e.dead_executor_ids|tostring)" else "no" end) | \($e.failed_tasks_total // "n/a") | \($e.disk_used_max // "n/a") | \($e.peak_jvm_heap_max // "n/a") |"' "$fp" 2>/dev/null || echo "| $nm | (executor metrics unavailable) | | | | |"
+              fi
+            done
+            echo ''
+
+            if [ ! -f splink-train-scale.json ] && [ "${{ inputs.splink_compare }}" = "true" ]; then
+              echo '> **Splink produced no artifact.** That is a RESULT, not a lost run --'
+              echo '> it is the side expected to fail first at scale (~20x the bytes, ~940'
+              echo '> stages, re-scanning pairs per EM iteration). GoldenMatch numbers above'
+              echo '> stand. Re-dispatch larger (`workers`, `disk_gb`) to get the comparison.'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
