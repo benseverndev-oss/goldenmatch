@@ -179,10 +179,9 @@ def test_orgs_hard_no_longer_returns_a_confident_empty_result():
     import csv
     from pathlib import Path
 
+    import goldenmatch
     import pyarrow as pa
     import pytest
-
-    import goldenmatch
     from goldenmatch.core.evaluate import evaluate_clusters
 
     base = (Path(__file__).resolve().parents[4]
