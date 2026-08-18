@@ -2450,6 +2450,7 @@
             "_build_sorted_neighborhood_blocks",
             "_build_static_blocks",
             "_emit_blocking_profile",
+            "_fast_multi_pass_block_sizes",
             "_fast_static_block_sizes",
             "_memoized_transform",
             "_percentile",

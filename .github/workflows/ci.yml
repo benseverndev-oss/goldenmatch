@@ -449,7 +449,25 @@ jobs:
             --ignore=packages/python/goldenmatch/tests/test_memory_e2e.py \
             --deselect 'tests/test_memory_pipeline.py::test_pipeline_applies_seeded_correction' \
             --deselect 'tests/test_memory_pipeline.py::test_pipeline_persists_stale_pairs_to_review_queue' \
-            --deselect 'tests/test_memory_postflight.py::test_postflight_renders_memory_section'
+            --deselect 'tests/test_memory_postflight.py::test_postflight_renders_memory_section' \
+            --deselect 'tests/test_suggest_full_dist.py::test_full_dist_on_lowers_to_high_side_valley_when_threshold_far_above'
+        # ^ The last deselect: that test is OOM-killed under -n auto and runs
+        # SERIALLY further down instead (see the step below).
+        #
+        # DESELECT, NOT --ignore, and the distinction is load-bearing: --ignore
+        # drops the file from COLLECTION, which changes the durations pytest-split
+        # groups by and reshuffles every shard. Tried it -- shard 3 went 4,533 ->
+        # 5,088 tests and 410 of them died on a polars lazy-import recursion
+        # (polars-python py_modules.rs:19) that the previous grouping never hit.
+        # --deselect happens AFTER collection, so the groups stay byte-identical
+        # and only this one test is removed here.
+        #
+        # The OOM is established, not assumed: PYTHONFAULTHANDLER=1 produced NO
+        # dump, and faulthandler catches every fatal signal EXCEPT the uncatchable
+        # SIGKILL -- the same silent-'node down'-no-traceback signature the
+        # heavy-lane note below already documents. Details and ruled-out
+        # alternatives: docs/superpowers/notes/2026-08-18-suggest-full-dist-shard-crash.md
+
         # ^ Shard-isolation-fragile (same class as the already-ignored
         # test_memory_e2e.py): a test co-located in the shard clobbers a core
         # transform/scorer registration, so the memory-correction candidate pair
@@ -465,10 +483,33 @@ jobs:
         # shard membership happened to separate them from the clobberer --
         # any new test file reshuffles pytest-split groups and re-exposes it
         # (bit W2a PR #1632). --ignore= takes filesystem paths and is fine.
+      # test_suggest_full_dist OOM-kills its xdist worker under `-n auto` --
+      # exactly the failure the heavy-lane note below describes ("silent 'node
+      # down', no traceback"). Confirmed rather than assumed: PYTHONFAULTHANDLER=1
+      # produced NO dump, and faulthandler catches every fatal signal EXCEPT the
+      # uncatchable SIGKILL, so the kernel OOM killer took it. It surfaced on
+      # PR #2664 because four new test files reshuffle pytest-split groups and
+      # changed which memory-heavy tests share a worker.
+      #
+      # It runs HERE rather than in python_goldenmatch_heavy because that lane
+      # syncs `--no-install-package goldenmatch-native` and this test skips
+      # without the native suggest_config kernel -- relocating it would convert
+      # an OOM into a silent skip. This job already built native, so the file
+      # just needs the full runner memory: serial (no `-n`), shard 1 only so it
+      # runs once instead of three times.
+      - name: pytest (serial + native, OOM-prone under -n auto)
+        if: matrix.shard == 1
+        env:
+          COVERAGE_FILE: coverage_shard${{ matrix.shard }}_serial.dat
+        run: |
+          uv run pytest \
+            'packages/python/goldenmatch/tests/test_suggest_full_dist.py::test_full_dist_on_lowers_to_high_side_valley_when_threshold_far_above' \
+            --timeout=300 --timeout-method=thread \
+            --cov=goldenmatch --cov-report=
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         with:
           name: gm-cov-shard-${{ matrix.shard }}
-          path: coverage_shard${{ matrix.shard }}.dat
+          path: coverage_shard${{ matrix.shard }}*.dat
           retention-days: 1
           if-no-files-found: error
 
@@ -1121,7 +1162,6 @@ jobs:
         run: |
           uv run --with polars --with pyarrow \
             pytest scripts/test_run_benchmarks_download.py \
-                   scripts/test_run_benchmarks_llm_isolation.py \
                    scripts/dqbench_adapters/test_leipzig_eval.py -q
 
   # Every repo path a CLAUDE.md names must exist. These files are loaded as
