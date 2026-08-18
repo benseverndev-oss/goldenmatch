@@ -449,10 +449,14 @@ def rule_no_matches(
     indicator priors. Falls back to today's behavior when ctx is None.
     """
     sp = profile.scoring
-    # Only fires when the fuzzy scorer actually compared candidates but none
-    # reached the threshold.  When candidates_compared == 0, the singleton-trap
-    # rule should fire instead (blocking never produced comparable pairs).
-    if sp.candidates_compared == 0:
+    # Only decline into singleton-trap territory on a MEASURED zero (#2663).
+    # `candidates_compared` is 0 whenever the bucket scorer routed this run --
+    # bucket honestly reports candidates_counted=False rather than a
+    # fabricated zero (#2644) -- so reading the bare value here meant this
+    # rule could never fire on the default scorer path, at any priority, on
+    # any iteration budget. When the count is absent rather than measured,
+    # fall through and let mass_above_threshold decide as usual.
+    if sp.candidates_counted and sp.candidates_compared == 0:
         return None  # singleton trap territory; let rule_blocking_singleton_trap handle it
     if sp.mass_above_threshold > 0:
         return None

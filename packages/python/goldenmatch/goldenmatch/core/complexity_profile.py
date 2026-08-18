@@ -461,6 +461,36 @@ class ScoringProfile:
     # Tier 1a: fraction of random non-blocked pairs whose weighted score >= threshold.
     # None = probe not run (older paths that don't invoke the probe stay valid).
     random_pair_above_threshold_rate: float | None = None
+    # Fraction of CANDIDATE pairs that cleared the cut (#2673).
+    #
+    # `mass_above_threshold` above cannot answer this. It is computed over the
+    # pairs handed to `_emit_scoring_profile`, which have ALREADY cleared the
+    # cut, so it is 1.0 by construction for any non-empty result -- one bit
+    # ("did anything match"), never a fraction, at every emit site and for
+    # every matchkey type. Two consumers needed a real fraction and silently
+    # got the constant instead:
+    #
+    #   - `pick_committed`'s precision-collapse guard (`mass_above > 0.9` =>
+    #     "everything matches") demoted EVERY red entry that matched anything,
+    #     so v0 -- which matched nothing -- won, and the run returned a
+    #     confident empty result (#2663).
+    #   - `health()`'s only YELLOW branch needs
+    #     `mass_in_borderline > mass_above_threshold`, i.e. `> 1.0`.
+    #     Unreachable, so a run that matched anything could only be GREEN or
+    #     RED, with no way to say "matched something, looks marginal" (#2668).
+    #
+    # Deliberately a NEW field rather than a repair of the old one. Rebasing
+    # `mass_above_threshold` itself was tried and reverted: about a dozen rules
+    # gate on hardcoded cuts chosen while that input was a constant, and making
+    # it truthful invalidates all of their calibration simultaneously
+    # (measured: anchor_person_match F1 1.0000 -> 0.7303, over-merging).
+    # Migrating the rest is a separate, measured change.
+    #
+    # ``None`` means the scorer had no candidate count to divide by -- the
+    # #2639/#2644 idiom. Consumers MUST treat None as "cannot answer" and fall
+    # back to their prior behaviour rather than substituting 0.0, which would
+    # read as "nothing matched".
+    admitted_fraction: float | None = None
 
     def health(self) -> HealthVerdict:
         # No candidates compared and no pairs scored → RED (nothing happened)
@@ -482,7 +512,22 @@ class ScoringProfile:
         # instead: when above-tail mass dominates the borderline band, the
         # config is fine; only flip YELLOW when borderline genuinely
         # swamps confident matches.
-        if self.mass_in_borderline > 0.3 and self.mass_in_borderline > self.mass_above_threshold:
+        #
+        # #2668: `mass_above_threshold` is 1.0 whenever anything matched (see
+        # `admitted_fraction`), so `mass_in_borderline > mass_above_threshold`
+        # required `> 1.0` -- unreachable. This branch could never fire, and a
+        # run that matched anything could only be GREEN or RED, with no way to
+        # say "matched something, but it looks marginal". Compare against the
+        # admitted fraction when the scorer gave one; fall back to the old
+        # (unreachable) comparison when it did not, so a route with no
+        # candidate count keeps exactly its prior verdict rather than acquiring
+        # a new one on evidence nobody collected.
+        _tail = (
+            self.admitted_fraction
+            if self.admitted_fraction is not None
+            else self.mass_above_threshold
+        )
+        if self.mass_in_borderline > 0.3 and self.mass_in_borderline > _tail:
             return HealthVerdict.YELLOW
         return HealthVerdict.GREEN
 

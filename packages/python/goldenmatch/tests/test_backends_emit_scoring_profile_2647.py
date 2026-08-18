@@ -103,13 +103,53 @@ def test_bucket_backend_profile_does_not_read_as_nothing_happened():
 
 
 def test_bucket_backend_is_honest_about_the_candidate_count():
-    """`candidates_counted` must be False here rather than claiming a measured
-    zero. The bucket path never accumulates bucket sizes, so the count is
-    genuinely absent -- and #2644 exists so that absence is sayable."""
+    """`candidates_counted` is now True here, and the count is real (#2673).
+
+    This test previously asserted False, on the reasoning that "the bucket path
+    never accumulates bucket sizes, so the count is genuinely absent." That was
+    an accurate description of the code, not a constraint on it: the bucket
+    workers already hold their block run-lengths as plain ints for their own
+    dispatch, so summing C(n,2) over them costs arithmetic on data in hand --
+    not the re-materialisation #2639 was avoiding.
+
+    The absence was not free. It is the denominator `admitted_fraction` needs
+    to answer "what fraction of CANDIDATES cleared the cut" -- a question
+    `mass_above_threshold` cannot answer, being 1.0 by construction whenever
+    anything matched (the pairs handed to the emitter have already cleared the
+    cut). Without it, `pick_committed`'s collapse guard demotes every RED entry
+    that matched anything as the "everything matches" pathology and commits v0
+    (#2663).
+
+    Absence is still sayable, and still said, where a route genuinely has no
+    count to give: `_emit_profile(candidates=None)` keeps `candidates_counted`
+    False rather than reporting `sum([]) == 0` as a measured zero.
+    """
     with profile_capture() as emitter:
         score_buckets(_prepared(), _blocking(), _mk(), matched_pairs=set())
 
+    sp = emitter.scoring
+    assert sp.candidates_counted is True
+    assert sp.candidates_compared > 0
+    # A real denominator makes the NEW field real. `mass_above_threshold`
+    # deliberately KEEPS its tautological meaning -- about a dozen rules are
+    # calibrated against it as a constant, and rebasing it regressed the
+    # quality gate (anchor_person_match F1 1.0 -> 0.7303). See #2673.
+    assert sp.admitted_fraction == pytest.approx(
+        sp.n_pairs_scored / sp.candidates_compared
+    )
+    assert sp.mass_above_threshold == 1.0
+
+
+def test_an_uncounted_route_still_reports_absence_not_a_measured_zero():
+    """Guard the guard. `sum([])` is 0, and reporting that as counted would
+    recreate the absent-vs-zero collapse #2673 exists to remove."""
+    from goldenmatch.backends.score_buckets import _emit_profile
+
+    with profile_capture() as emitter:
+        _emit_profile([], _mk(), route="test.uncounted", candidates=None)
+
     assert emitter.scoring.candidates_counted is False
+    assert emitter.scoring.candidates_compared == 0
 
 
 def test_emitting_does_not_change_the_pairs():

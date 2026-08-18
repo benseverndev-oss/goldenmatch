@@ -206,6 +206,32 @@ def _emit_scoring_profile(
     if not has_active_emitter():
         return
     scores = [s for _, _, s in pairs]
+    # `mass_above_threshold` and `mass_in_borderline` keep their ORIGINAL
+    # computation, over the already-above-cut `pairs`. That makes
+    # `mass_above_threshold` 1.0 by construction for any non-empty result --
+    # a known tautology (#2673), left in place deliberately.
+    #
+    # The first attempt at #2673 rebased this field onto `candidates_compared`.
+    # It is the honest denominator and the field reads correctly afterwards,
+    # but a dozen rules gate on hardcoded cuts (`< 0.5` in
+    # rule_blocking_too_coarse, `>= 0.95` in the precision anchor, `>= 1.0` in
+    # rule_recall_gap_suspected) that were all chosen while this input was a
+    # CONSTANT. Making it truthful invalidates their calibration at once.
+    # Measured on the quality gate, anchor_person_match: F1 1.0000 -> 0.7303
+    # (P 1.0000 -> 0.5751, recall unchanged), because the controller took a
+    # different rule path -- `low_transitivity` x3 became
+    # `blocking_too_coarse` -- and over-merged.
+    #
+    # So the honest fraction ships as a SEPARATE field, `admitted_fraction`,
+    # and only the two consumers whose bug motivated #2663/#2668 read it. The
+    # remaining consumers stay on the signal they were tuned against.
+    # Re-calibrating them is real work and needs its own before/after across
+    # all six gate datasets; it is not smuggled in here.
+    _admitted = (
+        min(1.0, len(scores) / candidates_compared)
+        if candidates_counted and candidates_compared > 0
+        else None
+    )
     profile = ScoringProfile(
         n_pairs_scored=len(scores),
         candidates_compared=candidates_compared,
@@ -215,6 +241,7 @@ def _emit_scoring_profile(
         dip_statistic=hartigan_dip(scores),
         mass_above_threshold=mass_above(scores, threshold),
         mass_in_borderline=mass_borderline(scores, threshold),
+        admitted_fraction=_admitted,
         per_field_score_variance=per_field_variance or {},
     )
     current_emitter().set_scoring(profile)

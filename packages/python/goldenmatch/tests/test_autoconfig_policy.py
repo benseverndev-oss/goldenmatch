@@ -408,22 +408,27 @@ def test_rule_no_matches_resets_threshold_and_broadens_blocking():
 
 
 def test_rule_no_matches_does_not_fire_on_zero_candidates_compared():
-    """When candidates_compared==0 (singleton trap), rule_no_matches should NOT
-    fire — that's rule_blocking_singleton_trap's territory."""
+    """When candidates_compared==0 is a MEASURED zero (singleton trap),
+    rule_no_matches should NOT fire — that's rule_blocking_singleton_trap's
+    territory. `candidates_counted=True` is required to say this zero was
+    actually measured rather than merely absent (#2663) -- an absent count
+    (e.g. the bucket scorer, which never accumulates one, #2644) must NOT
+    take this branch; see test_rule_no_matches_bucket_route.py."""
     cfg = _config_with_blocking(threshold=0.85)
     profile = ComplexityProfile(
         data=DataProfile(n_rows=100, n_cols=2),
         blocking=BlockingProfile(reduction_ratio=0.99, n_blocks=100,
                                  block_sizes_p99=1, singleton_block_count=100),
         scoring=ScoringProfile(
-            n_pairs_scored=0, candidates_compared=0,  # blocking trapped everything
+            n_pairs_scored=0, candidates_compared=0, candidates_counted=True,
+            # blocking trapped everything, and we know it because it was measured
             mass_above_threshold=0.0,
             dip_statistic=0.0,
         ),
         cluster=ClusterProfile(transitivity_rate=1.0),
     )
     out = rule_no_matches(profile, cfg, RunHistory())
-    # candidates_compared=0 → singleton trap → rule_no_matches defers
+    # candidates_compared=0 (measured) → singleton trap → rule_no_matches defers
     assert out is None
 
 

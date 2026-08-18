@@ -1198,6 +1198,18 @@ def _score_probabilistic_matchkey(
     #
     # Emitted per matchkey, so with several probabilistic matchkeys the last
     # wins -- the same last-writer contract every other emit site has.
+    #
+    # #2673 made the bucket path count its candidates, so `mass_above_threshold`
+    # is a real admitted fraction there. This site STAYS absent, deliberately.
+    # The tempting denominator is `len(pairs)` before `_split_probabilistic_pairs`
+    # above -- but the FS scorer already emits only pairs above the REVIEW cut,
+    # so that ratio is "fraction of above-review pairs that are above link",
+    # not "fraction of candidates admitted". Reporting it as the latter would
+    # put a different quantity behind the same field name on a different route,
+    # which is the `block_count_scored or block_count` mistake from the
+    # zero-config recall incident. A true candidate count here needs the FS
+    # scorer to carry one; until it does, absent is the honest answer and
+    # `candidates_counted=False` says so.
     from goldenmatch.core.scorer import _emit_scoring_profile
 
     _emit_scoring_profile(
