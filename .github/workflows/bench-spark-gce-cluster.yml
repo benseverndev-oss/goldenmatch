@@ -82,10 +82,10 @@ on:
         type: string
         default: "4"
       disk_gb:
-        description: "Boot disk per node, in GB. This is SHUFFLE SPILL space, not OS space -- Splink projects to ~840GB of cumulative shuffle at 50M. Do not lower it for a large run."
+        description: "Local NVMe scratch per node, in GB, ROUNDED UP to 375GB devices (500 -> 750). This is SHUFFLE SPILL space, not OS space -- Splink projects to ~840GB of cumulative shuffle at 50M. Local SSD, not persistent disk: unbounded quota and faster. Do not lower it for a large run."
         required: false
         type: string
-        default: "500"
+        default: "750"
       zone:
         description: "GCE zone"
         required: false
@@ -177,7 +177,7 @@ jobs:
         run: |
           set -euo pipefail
           N=${{ inputs.workers || '4' }}
-          DISK_GB=${{ inputs.disk_gb || '500' }}
+          DISK_GB=${{ inputs.disk_gb || '750' }}
           MT="${{ inputs.machine_type || 'n2-standard-16' }}"
           NAMES="$CLUSTER-master"
           for i in $(seq 1 "$N"); do NAMES="$NAMES $CLUSTER-w$i"; done
@@ -215,16 +215,57 @@ jobs:
           # but 840 GB across 940 stages against 100 GB is the single most
           # likely way a paid multi-hour run dies. 500 GB is a few dollars of
           # PD-balanced against the cost of re-running the cluster.
+          # LOCAL SSD for shuffle spill, boot disk left small and default.
+          #
+          # The first attempt at sizing this raised the BOOT disk to 500GB on
+          # pd-balanced, and that failed on quota rather than capacity:
+          #
+          #     SSD_TOTAL_GB        limit=500     <- what pd-balanced consumes
+          #     DISKS_TOTAL_GB      limit=4096    <- pd-standard
+          #     LOCAL_SSD_TOTAL_GB  limit=9.2e18  <- effectively unbounded
+          #
+          # 5 nodes x 500GB = 2500GB of pd-balanced against a 500GB regional
+          # SSD limit. Local SSD is not merely the way around that quota, it is
+          # the BETTER disk for this job: physically-attached NVMe rather than
+          # network-attached PD, so it is faster than the pd-balanced that was
+          # being asked for.
+          #
+          # Ephemeral is the right trade here. Local SSD is wiped when the VM
+          # stops, and Spark shuffle spill is scratch that is meaningless once
+          # the job ends -- nothing we need to keep ever lands on it.
+          #
+          # Sized in fixed 375GB devices, so `disk_gb` is rounded UP to the next
+          # multiple: 500 -> 2 devices -> 750GB per node. More scratch than the
+          # pd-balanced plan asked for, and faster.
+          #
+          # pd-standard (DISKS_TOTAL_GB=4096) would also clear the quota, and is
+          # deliberately NOT used: ~60 MB/s at 500GB penalises Splink's ~20x
+          # heavier spill for reasons that have nothing to do with the engine,
+          # which is precisely the comparison this lane exists to make.
+          SSD_DEVICES=$(( (DISK_GB + 374) / 375 ))
+          [ "$SSD_DEVICES" -lt 1 ] && SSD_DEVICES=1
+          SSD_FLAGS=""
+          for _ in $(seq 1 "$SSD_DEVICES"); do
+            SSD_FLAGS="$SSD_FLAGS --local-ssd=interface=NVME"
+          done
+          echo "local SSD: $SSD_DEVICES x 375GB = $((SSD_DEVICES * 375))GB per node"
+
+          # Boot disk stays small and on pd-standard: it holds the OS and the
+          # two container images (~3GB), nothing else, now that scratch lives on
+          # the NVMe. 50GB x 5 = 250GB against DISKS_TOTAL_GB=4096, so it needs
+          # no quota anyone has to raise. COS defaults to 10GB, which is tight
+          # once both images are pulled, so it is set rather than defaulted.
           gcloud compute instances create $NAMES \
             --machine-type="$MT" \
             --image-family=cos-stable --image-project=cos-cloud \
-            --boot-disk-size="${DISK_GB}GB" \
-            --boot-disk-type=pd-balanced \
+            --boot-disk-size=50GB \
+            --boot-disk-type=pd-standard \
+            $SSD_FLAGS \
             $PROV \
             --labels=bench=gm-spark,run-id=${{ github.run_id }} \
             --scopes=cloud-platform \
             --quiet
-          echo "provisioned: $NAMES (disk ${DISK_GB}GB pd-balanced)"
+          echo "provisioned: $NAMES ($((SSD_DEVICES * 375))GB local NVMe per node, 50GB boot)"
 
       # SSH goes over the instance's EXTERNAL IP rather than IAP.
       # `--tunnel-through-iap` would be tidier, but it needs
@@ -265,10 +306,53 @@ jobs:
                 --host $MASTER_IP --port 7077 --webui-port 8080
           "
 
+          # Mount the local NVMe and point Spark's scratch at it.
+          #
+          # Attaching the devices is not enough: without SPARK_LOCAL_DIRS the
+          # worker spills to the container's filesystem, which is the small
+          # default BOOT disk, and the whole point of the local SSD is missed.
+          # That failure would not be loud -- it would present as a slow run or
+          # a disk-full hours in -- so the mount is verified here rather than
+          # assumed, and a node that cannot mount fails the step immediately.
+          #
+          # RAID0 across devices when there is more than one, so the worker sees
+          # a single scratch volume of the full size rather than N separate
+          # 375GB mounts it would have to be told about individually.
+          #
+          # COS ships the NVMe devices at /dev/nvme0n{1..N} and mounts nothing
+          # by default. `nodiscard` skips the TRIM pass over a fresh device,
+          # which on 750GB is minutes of provisioning for no benefit on a disk
+          # that gets thrown away.
+          # The MASTER is mounted too, not just the workers: it runs the Connect
+          # server and BOTH drivers, and Splink's classic driver does real
+          # driver-side work. Leaving its scratch on the 50GB boot disk would
+          # reintroduce the disk wall on one node.
+          for n in $NODE_NAMES; do
+            gcloud compute ssh "$n" --quiet --command "
+              set -euo pipefail
+              DEVS=\$(ls /dev/nvme0n* 2>/dev/null | tr '\n' ' ')
+              [ -n \"\$DEVS\" ] || { echo 'NO LOCAL SSD DEVICES FOUND'; exit 1; }
+              N=\$(echo \$DEVS | wc -w)
+              sudo mkdir -p /mnt/scratch
+              if [ \"\$N\" -gt 1 ]; then
+                sudo mdadm --create /dev/md0 --level=0 --raid-devices=\$N \$DEVS --force
+                TARGET=/dev/md0
+              else
+                TARGET=\$DEVS
+              fi
+              sudo mkfs.ext4 -F -m 0 -E lazy_itable_init=0,lazy_journal_init=0,nodiscard \$TARGET
+              sudo mount -o discard,defaults,nobarrier \$TARGET /mnt/scratch
+              sudo chmod 1777 /mnt/scratch
+              df -h /mnt/scratch
+            "
+          done
+
           for n in $NODE_NAMES; do
             case "$n" in *-master) continue;; esac
             gcloud compute ssh "$n" --quiet --command "
               docker run -d --name spark-worker --network host \
+                -v /mnt/scratch:/scratch \
+                -e SPARK_LOCAL_DIRS=/scratch \
                 -e SPARK_NO_DAEMONIZE=true $SPARK_IMAGE \
                 /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker \
                   spark://$MASTER_IP:7077 --cores $CORES --memory 48g
@@ -278,6 +362,8 @@ jobs:
 
           gcloud compute ssh "$MASTER" --quiet --command "
             docker run -d --name spark-connect --network host \
+              -v /mnt/scratch:/scratch \
+              -e SPARK_LOCAL_DIRS=/scratch \
               -e SPARK_NO_DAEMONIZE=true $SPARK_IMAGE \
               /opt/spark/sbin/start-connect-server.sh \
                 --master spark://$MASTER_IP:7077 \
@@ -319,6 +405,8 @@ jobs:
           gcloud compute ssh "$MASTER" --quiet --command "
             set -euo pipefail
             docker run -d --name pyenv --network host -v \$HOME:/w -w /w \
+              -v /mnt/scratch:/scratch \
+              -e SPARK_LOCAL_DIRS=/scratch \
               python:3.12-slim sleep infinity
             docker exec pyenv pip install --quiet 'goldenmatch[spark]' splink==4.0.16
             docker exec pyenv python spark_fs_train_scale.py \
@@ -384,7 +472,7 @@ jobs:
           {
             echo '## Spark FS on a REAL multi-node cluster'
             echo ''
-            echo "${{ inputs.workers || '4' }} worker VM(s) + 1 master, \`${{ inputs.machine_type || 'n2-standard-16' }}\`, ${{ inputs.disk_gb || '500' }}GB/node, ${{ inputs.rows || '1000000' }} rows, zone \`${{ inputs.zone || 'us-central1-a' }}\`."
+            echo "${{ inputs.workers || '4' }} worker VM(s) + 1 master, \`${{ inputs.machine_type || 'n2-standard-16' }}\`, ${{ inputs.disk_gb || '750' }}GB local NVMe scratch/node, ${{ inputs.rows || '1000000' }} rows, zone \`${{ inputs.zone || 'us-central1-a' }}\`."
             echo ''
             echo 'Every shuffle byte here crosses a real network, which the single-host lane cannot test.'
             echo ''
