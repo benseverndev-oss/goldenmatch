@@ -18,7 +18,9 @@ Datasets:
 
 Environment:
   GOLDENMATCH_AUTOCONFIG_MEMORY=0  recommended (cross-run cache off for clean numbers)
-  OPENAI_API_KEY                   required for --with-llm
+  OPENAI_API_KEY                   required for --with-llm; IGNORED otherwise, so
+                                   an ambient key cannot quietly change the numbers
+                                   (see `_neutralize_ambient_llm_keys`)
 """
 from __future__ import annotations
 
@@ -211,7 +213,19 @@ def _measure_product(datasets_dir: Path, key: str) -> dict[str, Any] | None:
     from goldenmatch import dedupe_df
 
     spec = _PRODUCT_SPECS[key]
-    _dedupe = functools.partial(dedupe_df, planning_effort=_PLANNING_EFFORT)
+    # The shared helper returns only the score, so the controller verdict would be
+    # lost -- and this function used to hardcode `health: "n/a"`, which made the
+    # RED-config check in `_check_quality_floors` unable to fire on the two
+    # datasets in the worst shape. Both committed RED configs in the 2026-08-18
+    # nightly and neither tripped it (#2457). Capture it off the result instead of
+    # widening the helper's contract for one caller.
+    captured: dict[str, Any] = {}
+
+    def _dedupe(frame):
+        res = dedupe_df(frame, planning_effort=_PLANNING_EFFORT)
+        captured["result"] = res
+        return res
+
     start = time.time()
     res = run_two_source_dedupe_zeroconfig(
         datasets_dir, _dedupe,
@@ -223,16 +237,18 @@ def _measure_product(datasets_dir: Path, key: str) -> dict[str, Any] | None:
     if res is None:
         _info(f"  {spec['label']}: dataset files missing — skipping")
         return None
+    health, stop_reason = _controller_health(captured.get("result"))
     _info(
         f"  {spec['label']}: f1={res.f1:.4f} precision={res.precision:.4f} "
-        f"recall={res.recall:.4f} elapsed={elapsed:.2f}s"
+        f"recall={res.recall:.4f} elapsed={elapsed:.2f}s health={health} "
+        f"stop_reason={stop_reason}"
     )
     return {
         "name": spec["label"], "f1": round(res.f1, 4),
         "precision": round(res.precision, 4), "recall": round(res.recall, 4),
         "tp": res.true_positives, "fp": res.false_positives, "fn": res.false_negatives,
         "elapsed_seconds": round(elapsed, 2),
-        "health": "n/a", "stop_reason": "n/a", "domain": "product",
+        "health": health, "stop_reason": stop_reason, "domain": "product",
         "planning_effort": _PLANNING_EFFORT,
     }
 
@@ -300,18 +316,7 @@ def _measure_with_polars(
     recall = tp / (tp + fn) if (tp + fn) else 0.0
     f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
 
-    health = "unknown"
-    stop_reason = "unknown"
-    if hasattr(result, "postflight_report") and result.postflight_report:
-        prof = getattr(result.postflight_report, "controller_profile", None)
-        if prof is not None and hasattr(prof, "health"):
-            try:
-                health = prof.health().value
-            except Exception:
-                pass
-        hist = getattr(result.postflight_report, "controller_history", None)
-        if hist is not None and getattr(hist, "stop_reason", None) is not None:
-            stop_reason = hist.stop_reason.value
+    health, stop_reason = _controller_health(result)
 
     backend = "unknown"
     plan = getattr(getattr(result, "postflight_report", None), "controller_history", None)
@@ -535,8 +540,28 @@ def _run_dqbench(with_llm: bool = False) -> dict[str, Any] | None:
 _F1_FLOORS: dict[str, float | None] = {
     # measured 0.9912
     "Febrl3": 0.95,
-    # measured 0.5037 -- product matching is genuinely hard; this pins the floor
-    # just under the observed value so a real regression trips it.
+    # DISPUTED. Set "just under the observed 0.5037" -- but that 0.5037 is
+    # UNREPRODUCED, and until someone reproduces it this floor is not known to
+    # describe anything. Measured 2026-08-18, all on the same 1118 ground-truth
+    # pairs, every cell f1=0.17-0.18 against the baseline's 0.5037 / P=0.8219:
+    #
+    #   committed baseline (2026-08-11, native=1)  0.5037  P 0.8219   494 pairs
+    #   CI nightly, native=0, no key               0.1723  P 0.1068
+    #   local HEAD, native=0, no key               0.1723  P 0.1068  4673 pairs
+    #   local HEAD, native=1, no key               0.1723  P 0.1068
+    #   local 8145b498 (the baseline's OWN commit) 0.1723  P 0.1068
+    #   local HEAD, native=0, WITH an LLM key      0.1838  P 0.1132
+    #
+    # So it is not a code regression (the publishing commit scores 0.1723), not
+    # the kernel-vs-fallback split, and not the ambient LLM key -- each was
+    # measured and ruled out. The baseline emitted 494 pairs where every
+    # reproduction emits ~4673, so whatever produced it was configured very
+    # differently. Cause still unknown; do not re-derive this floor from a number
+    # nobody can reproduce.
+    #
+    # NOT lowered here to make the lane green: Abt-Buy also commits a RED config,
+    # which fails the lane on its own, so the honest fix is a quality fix rather
+    # than a smaller number.
     "Abt-Buy": 0.45,
     # KNOWN BAD (#2470). Measured 0.0697 / recall 0.0419. The floor is set at the
     # observed value ONLY to stop it getting worse; it is not an endorsement, and
@@ -547,6 +572,74 @@ _F1_FLOORS: dict[str, float | None] = {
     "DBLP-ACM": None,
     "NCVR": None,
 }
+
+
+def _llm_label(meta: dict[str, Any]) -> str:
+    """How to describe a run's LLM exposure, honestly, from its metadata."""
+    if meta.get("with_llm"):
+        return "on"
+    if meta.get("llm_keys_suppressed") is None:
+        # Pre-guard payload: we cannot tell whether a key was in the environment.
+        return "not recorded (run predates the ambient-key guard)"
+    return "off"
+
+
+def _controller_health(result: Any) -> tuple[str, str]:
+    """Pull (health, stop_reason) off a pipeline result, or ("unknown", ...).
+
+    Returning "unknown" rather than "n/a" matters: `_check_quality_floors` fails
+    a RED run outright, so a dataset that cannot report its health must not be
+    able to look like one that has none to report.
+    """
+    health = stop_reason = "unknown"
+    report = getattr(result, "postflight_report", None)
+    if not report:
+        return health, stop_reason
+    prof = getattr(report, "controller_profile", None)
+    if prof is not None and hasattr(prof, "health"):
+        try:
+            health = prof.health().value
+        except Exception:  # noqa: BLE001 - a health probe must never fail a run
+            pass
+    hist = getattr(report, "controller_history", None)
+    if hist is not None and getattr(hist, "stop_reason", None) is not None:
+        stop_reason = hist.stop_reason.value
+    return health, stop_reason
+
+
+#: Env vars `goldenmatch.core.llm_extract` auto-detects with no opt-in.
+_LLM_KEY_VARS = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY")
+
+
+def _neutralize_ambient_llm_keys(with_llm: bool) -> bool:
+    """Remove ambient LLM keys unless the run explicitly asked for them.
+
+    `llm_extract.llm_extract_features` reads `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`
+    straight out of `os.environ` with no opt-in flag, so *merely having a key
+    exported* changes what this lane measures. On Abt-Buy that path handles 959 of
+    2173 records (44%), and it is worth a real, if modest, shift:
+
+        no key   f1=0.1723  P=0.1068  R=0.4463   <- what CI measures
+        key      f1=0.1838  P=0.1132  R=0.4875   (+0.0115 F1, ~50x the wall clock)
+
+    A benchmark's whole job is a number that means the same thing on a laptop and
+    in CI, so the key is dropped rather than merely reported. Returns True when
+    something was actually removed, so the run can record that it happened.
+
+    Scope note, because the measurement above corrected an earlier guess of mine:
+    this does NOT explain the committed 0.5037 Abt-Buy baseline. That number is
+    unreproduced -- see the `Abt-Buy` entry in `_F1_FLOORS`. The guard is
+    justified on determinism alone, not as a fix for that.
+    """
+    if with_llm:
+        return False
+    present = [k for k in _LLM_KEY_VARS if os.environ.get(k)]
+    for k in present:
+        del os.environ[k]
+    if present:
+        _info(f"  ignoring ambient {', '.join(present)} (pass --with-llm to use it): "
+              "an LLM-assisted number is not comparable with CI's.")
+    return bool(present)
 
 
 def _check_quality_floors(results: list[dict[str, Any]]) -> list[str]:
@@ -623,7 +716,13 @@ def _render_report(payload: dict[str, Any]) -> str:
         "",
         f"**Run date:** {date} &nbsp;·&nbsp; **path:** {native_label} &nbsp;·&nbsp; "
         f"**planning_effort:** {meta.get('planning_effort', '—')} &nbsp;·&nbsp; "
-        f"**LLM features:** {'on' if meta.get('with_llm') else 'off'}",
+        # "off" here has to mean the run could not have used an LLM, not merely
+        # that it did not ask for one. The old label read `with_llm` alone, so a
+        # run with an ambient OPENAI_API_KEY published LLM-assisted numbers under
+        # an "off" header (#2457). `llm_keys_suppressed` proves the key was
+        # removed; its ABSENCE in an older payload means the run predates the
+        # guard and cannot make that claim.
+        f"**LLM features:** {_llm_label(meta)}",
         "",
     ]
     if not results:
@@ -738,6 +837,10 @@ def main() -> int:
     # Force it off unless the caller has deliberately overridden it.
     os.environ.setdefault("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
 
+    # Same class of leak, and the one that actually bit us (#2457). See the
+    # function's docstring for the incident.
+    llm_keys_suppressed = _neutralize_ambient_llm_keys(args.with_llm)
+
     global _PLANNING_EFFORT
     _PLANNING_EFFORT = args.planning_effort
     _info(f"planning_effort={_PLANNING_EFFORT} memory={os.environ.get('GOLDENMATCH_AUTOCONFIG_MEMORY')}")
@@ -789,6 +892,10 @@ def main() -> int:
         "metadata": {
             "date": datetime.date.today().isoformat(),
             "with_llm": args.with_llm,
+            # Distinct from `with_llm`, which is the *request*. This is whether a
+            # key was on the machine and had to be suppressed to keep the run
+            # comparable -- the thing that silently moved Abt-Buy by 33 F1 points.
+            "llm_keys_suppressed": llm_keys_suppressed,
             "planning_effort": _PLANNING_EFFORT,
             "native": os.environ.get("GOLDENMATCH_NATIVE"),
             "datasets_dir": str(args.datasets_dir),

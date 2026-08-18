@@ -1121,6 +1121,7 @@ jobs:
         run: |
           uv run --with polars --with pyarrow \
             pytest scripts/test_run_benchmarks_download.py \
+                   scripts/test_run_benchmarks_llm_isolation.py \
                    scripts/dqbench_adapters/test_leipzig_eval.py -q
 
   # Every repo path a CLAUDE.md names must exist. These files are loaded as
