@@ -242,13 +242,31 @@ jobs:
           # deliberately NOT used: ~60 MB/s at 500GB penalises Splink's ~20x
           # heavier spill for reasons that have nothing to do with the engine,
           # which is precisely the comparison this lane exists to make.
-          SSD_DEVICES=$(( (DISK_GB + 374) / 375 ))
-          [ "$SSD_DEVICES" -lt 1 ] && SSD_DEVICES=1
+          # Device count must SNAP to a machine-family-legal value, not merely
+          # round up to a multiple of 375. n2 rejects odd counts:
+          #
+          #   Number of local SSDs for an instance of type n2-standard-16 should
+          #   be one of [0, 2, 4, 8, 16, 24], while [1] is requested.
+          #
+          # So the legal sizes are 750 / 1500 / 3000 / 6000 / 9000 GB. A naive
+          # ceil(disk_gb/375) asks for 1 device at anything <= 375 and 3 at
+          # 751-1125, both of which fail AT PROVISIONING -- after the run has
+          # authenticated and started paying for the runner. The 750 default
+          # worked only because it happens to land on 2.
+          RAW=$(( (DISK_GB + 374) / 375 ))
+          SSD_DEVICES=0
+          for allowed in 2 4 8 16 24; do
+            if [ "$RAW" -le "$allowed" ]; then SSD_DEVICES=$allowed; break; fi
+          done
+          if [ "$SSD_DEVICES" -eq 0 ]; then
+            echo "::error::disk_gb=$DISK_GB needs $RAW local SSDs; the largest n2 supports is 24 (9000GB)"
+            exit 1
+          fi
           SSD_FLAGS=""
           for _ in $(seq 1 "$SSD_DEVICES"); do
             SSD_FLAGS="$SSD_FLAGS --local-ssd=interface=NVME"
           done
-          echo "local SSD: $SSD_DEVICES x 375GB = $((SSD_DEVICES * 375))GB per node"
+          echo "local SSD: disk_gb=$DISK_GB -> $RAW device(s) requested -> snapped to $SSD_DEVICES x 375GB = $((SSD_DEVICES * 375))GB per node"
 
           # Boot disk stays small and on pd-standard: it holds the OS and the
           # two container images (~3GB), nothing else, now that scratch lives on
