@@ -893,13 +893,26 @@ class AutoConfigController:
                     # `_should_measure_blocking`'s own row ceiling (20M) is
                     # the real cost gate here; REFUSE_AT_N was never about
                     # cost, so it is not repeated on this call site.
+                    #
+                    # ONLY fills an ABSENT profile (`n_blocks == 0`). An earlier
+                    # version replaced unconditionally, which CLOBBERS a
+                    # populated one -- and a populated blocking profile is a
+                    # real observation from the run that just happened, not a
+                    # worse version of this measurement. It broke
+                    # `test_stop_reason_budget_iterations_when_max_iter_reached`
+                    # and `..._oscillating_when_policy_loops`, which inject
+                    # deliberately-RED profiles (`reduction_ratio=0.01`) to
+                    # drive the loop and had them silently overwritten with a
+                    # healthy measurement, ending the loop at GREEN. Those
+                    # tests were right. The defect was always ABSENCE, so
+                    # absence is what this fills -- narrower and more correct.
                     _blk_cfg_n = getattr(config_n, "blocking", None)
                     _is_static_n = (
                         _blk_cfg_n is not None
                         and getattr(_blk_cfg_n, "strategy", "static")
                         in ("static", "multi_pass")
                     )
-                    if _should_measure_blocking(
+                    if profile_n.blocking.n_blocks == 0 and _should_measure_blocking(
                         planning_effort=planning_effort,
                         distributed=distributed,
                         is_static=_is_static_n,
