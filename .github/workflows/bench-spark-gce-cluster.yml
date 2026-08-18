@@ -96,6 +96,11 @@ on:
         required: false
         type: boolean
         default: true
+      eval_quality:
+        description: "Also measure ACCURACY (average precision / best F1) on both arms. Adds a predict + grouped-collect pass to each; without it the run reports speed and bytes but no quality, which is not a head-to-head."
+        required: false
+        type: boolean
+        default: true
       spot:
         description: "Use SPOT VMs. OFF by default: PREEMPTIBLE_CPUS quota in golden-490919/us-central1 is 0, so SPOT provisioning FAILS. Enable only after raising it."
         required: false
@@ -320,6 +325,7 @@ jobs:
               --rows ${{ inputs.rows || '1000000' }} \
               --remote sc://$MASTER_IP:15002 \
               --spark-ui http://$MASTER_IP:4040 \
+              ${{ inputs.eval_quality && '--eval-quality' || '' }} \
               --out /w/spark-fs-train-scale.json
           "
 
@@ -351,6 +357,7 @@ jobs:
               --master spark://$MASTER_IP:7077 \
               --driver-host $MASTER_IP \
               --spark-ui http://$MASTER_IP:4040 \
+              ${{ inputs.eval_quality && '--eval-quality' || '' }} \
               --out /w/splink-train-scale.json
           "
 

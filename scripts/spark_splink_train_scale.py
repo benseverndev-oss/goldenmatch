@@ -440,12 +440,27 @@ def main() -> int:
         preds = linker.inference.predict().as_spark_dataframe()
         truth = (F.col("record_id_l") % F.lit(n_entities)
                  == F.col("record_id_r") % F.lit(n_entities))
-        rows_ = (preds.select(F.col("match_weight").alias("w"),
-                              truth.alias("is_true"))
-                      .collect())
+        # GROUP BY in the engine, exactly as the GM arm does. Both sides must
+        # use the same reduction or the comparison measures the harness: this
+        # collected one tuple per PREDICTED PAIR, which at 50M is hundreds of
+        # millions of Python objects on a driver in a container.
+        #
+        # Splink's match_weight is a real-valued log-odds sum, so its distinct
+        # count is larger than the GM arm's bounded-gamma weight -- grouping
+        # buys less here. It is still exact and still strictly smaller, and
+        # `quality_score_groups` below records how much it actually collapsed,
+        # so an unbounded group count shows up as a number rather than as an
+        # OOM. See `ranking_metrics_grouped` for why grouping is exact.
+        grouped = (preds.select(F.col("match_weight").alias("w"),
+                                truth.alias("is_true"))
+                        .groupBy("w")
+                        .agg(F.sum(F.col("is_true").cast("long")).alias("n_true"),
+                             F.count(F.lit(1)).alias("n_all"))
+                        .collect())
         out["stages"]["predict_seconds"] = round(time.perf_counter() - t, 2)
-        out["quality"] = _metrics_module().ranking_metrics(
-            [(float(r["w"]), bool(r["is_true"])) for r in rows_]
+        out["quality_score_groups"] = len(grouped)
+        out["quality"] = _metrics_module().ranking_metrics_grouped(
+            [(float(r["w"]), int(r["n_true"]), int(r["n_all"])) for r in grouped]
         )
         print(f"[splink] quality {out['quality']}", flush=True)
 
