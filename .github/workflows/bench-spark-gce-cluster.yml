@@ -394,7 +394,33 @@ jobs:
             [ "${N:-0}" -ge 1 ] && exit 0
             sleep 10
           done
-          echo "::error::no worker registered with the master -- every timing below would be a queue wait, not a measurement"
+          # The refusal is right, but "0 workers" is a SYMPTOM and the evidence
+          # lives in containers that the `if: always()` teardown is about to
+          # delete. The first time this fired it cost a whole run to learn
+          # nothing except that it fired.
+          #
+          # So dump what actually happened before giving up: whether each
+          # container is even running, and its logs. A worker that crashed on
+          # startup and a worker that cannot reach the master look identical
+          # from the master's `/json/` endpoint and completely different here.
+          echo "::group::master container"
+          gcloud compute ssh "$CLUSTER-master" --quiet --command \
+            "docker ps -a --filter name=spark-master --format '{{.Names}} {{.Status}}'; \
+             echo '--- logs ---'; docker logs --tail 60 spark-master 2>&1 || true" || true
+          echo "::endgroup::"
+
+          for n in $NODE_NAMES; do
+            case "$n" in *-master) continue;; esac
+            echo "::group::worker $n"
+            gcloud compute ssh "$n" --quiet --command \
+              "docker ps -a --filter name=spark-worker --format '{{.Names}} {{.Status}}'; \
+               echo '--- mount ---'; df -h /mnt/disks/scratch 2>&1 || true; \
+               ls -ld /mnt/disks/scratch 2>&1 || true; \
+               echo '--- logs ---'; docker logs --tail 60 spark-worker 2>&1 || true" || true
+            echo "::endgroup::"
+          done
+
+          echo "::error::no worker registered with the master -- every timing below would be a queue wait, not a measurement. Container status and logs are in the groups above."
           exit 1
 
       - name: Run both harnesses ON the master VM
