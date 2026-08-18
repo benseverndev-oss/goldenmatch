@@ -195,9 +195,24 @@ class RunHistory:
             demoted = 1 if (demote_suspect is not None and demote_suspect(e)) else 0
             sp = e.profile.scoring
             sep = sp.mass_above_threshold - sp.mass_in_borderline
+            # #2663: this guard asks "did EVERYTHING match?", and
+            # `mass_above_threshold` cannot answer it -- it is 1.0 whenever
+            # anything matched at all (see ScoringProfile.admitted_fraction).
+            # So every RED entry that found any pairs was demoted as
+            # precision-collapsed, v0 (which found none) won, and the run
+            # returned a confident empty result on data that was ~30%
+            # duplicates. Use the real admitted fraction where the scorer
+            # supplied one; keep the old field where it did not, so an
+            # uncounted route behaves exactly as before rather than changing
+            # verdict on evidence nobody collected.
+            _collapse_signal = (
+                sp.admitted_fraction
+                if sp.admitted_fraction is not None
+                else sp.mass_above_threshold
+            )
             if (precision_collapse_floor is not None
                     and verdict == HealthVerdict.RED
-                    and sp.mass_above_threshold > precision_collapse_floor):
+                    and _collapse_signal > precision_collapse_floor):
                 # Precision-collapsed regime ("everything matches"). Within
                 # this regime, `-sep` is mechanically biased toward lower
                 # thresholds: a lower threshold narrows the borderline band,

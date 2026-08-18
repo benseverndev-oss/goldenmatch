@@ -112,12 +112,13 @@ def test_bucket_backend_is_honest_about_the_candidate_count():
     dispatch, so summing C(n,2) over them costs arithmetic on data in hand --
     not the re-materialisation #2639 was avoiding.
 
-    The absence was not free. `_emit_scoring_profile` needs this denominator to
-    report a truthful `mass_above_threshold`; without it that field stays
-    tautologically 1.0 (the pairs handed to it have already cleared the cut),
-    and `pick_committed` then demotes every RED entry that matched anything as
-    the "everything matches" pathology and commits v0 -- the confident empty
-    result in #2663.
+    The absence was not free. It is the denominator `admitted_fraction` needs
+    to answer "what fraction of CANDIDATES cleared the cut" -- a question
+    `mass_above_threshold` cannot answer, being 1.0 by construction whenever
+    anything matched (the pairs handed to the emitter have already cleared the
+    cut). Without it, `pick_committed`'s collapse guard demotes every RED entry
+    that matched anything as the "everything matches" pathology and commits v0
+    (#2663).
 
     Absence is still sayable, and still said, where a route genuinely has no
     count to give: `_emit_profile(candidates=None)` keeps `candidates_counted`
@@ -129,10 +130,14 @@ def test_bucket_backend_is_honest_about_the_candidate_count():
     sp = emitter.scoring
     assert sp.candidates_counted is True
     assert sp.candidates_compared > 0
-    # The whole point: a real denominator makes the fraction real.
-    assert sp.mass_above_threshold == pytest.approx(
+    # A real denominator makes the NEW field real. `mass_above_threshold`
+    # deliberately KEEPS its tautological meaning -- about a dozen rules are
+    # calibrated against it as a constant, and rebasing it regressed the
+    # quality gate (anchor_person_match F1 1.0 -> 0.7303). See #2673.
+    assert sp.admitted_fraction == pytest.approx(
         sp.n_pairs_scored / sp.candidates_compared
     )
+    assert sp.mass_above_threshold == 1.0
 
 
 def test_an_uncounted_route_still_reports_absence_not_a_measured_zero():

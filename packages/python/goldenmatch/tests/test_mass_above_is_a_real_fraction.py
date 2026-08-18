@@ -1,26 +1,40 @@
-"""#2673: mass_above_threshold must be a fraction of CANDIDATES, not of matches.
+"""#2673: the honest admitted fraction, as a NEW field beside the old one.
 
 `_emit_scoring_profile` is handed the pairs that ALREADY cleared the cut (its
-own docstring: "pairs: Pairs *above* the threshold"), and computed
+own docstring: "pairs: Pairs *above* the threshold"), and computes
 `mass_above(scores, threshold)` over exactly those. That is 1.0 by
 construction for any non-empty result, at all six emit sites, for every
-matchkey type -- so the field carried one bit ("did anything match") while a
-dozen consumers read it as a fraction.
+matchkey type -- so `mass_above_threshold` carries one bit ("did anything
+match") while about a dozen consumers read it as a fraction.
 
-The damage is at commit time: `pick_committed` demotes any RED entry whose
-`mass_above > 0.9` as the "everything matches" pathology, which -- given the
-tautology -- is every RED entry that matched anything at all. v0, which
-matched nothing, wins. That is the confident-empty-result in #2663.
+`ScoringProfile.admitted_fraction` is the real thing: n_pairs_scored over
+candidates_compared, or None when the scorer had no count to divide by.
 
-`candidates_compared` is the denominator this always wanted, and
-`_emit_scoring_profile` already takes it as a parameter. When it is real
-(`candidates_counted=True`) the honest fraction is
-`n_pairs_scored / candidates_compared`. When it is absent, the old bit is
-still the best available answer and is kept -- but consumers that need a
-fraction must branch on `candidates_counted` rather than trusting it.
+It is a NEW field rather than a repair of the old one, and that was decided by
+measurement, not taste. Rebasing `mass_above_threshold` itself was implemented
+and reverted: the rules gate on hardcoded cuts (`< 0.5` in
+rule_blocking_too_coarse, `>= 0.95` in the precision anchor, `>= 1.0` in
+rule_recall_gap_suspected) chosen while that input was a CONSTANT, so making it
+truthful invalidates every one of their calibrations at once. The quality gate
+caught it: anchor_person_match F1 1.0000 -> 0.7303 (P 1.0000 -> 0.5751), the
+controller taking a different rule path and over-merging.
+
+So only the consumers whose bug motivated the work read the new field, and only
+where it is not None:
+
+  - `pick_committed`'s precision-collapse guard (#2663 mechanism)
+  - `ScoringProfile.health()`'s YELLOW branch (#2668)
+
+Everything else stays on the signal it was tuned against. Migrating the rest is
+real work needing its own before/after across all six gate datasets.
+
+The one consumer deliberately NOT migrated is zero-label confidence's
+everything-matches guard -- see the xfail at the bottom of this file, which
+records why and what closing #2663 actually needs.
 """
 from __future__ import annotations
 
+import pytest
 from goldenmatch.core.complexity_profile import ScoringProfile
 from goldenmatch.core.profile_emitter import profile_capture
 
@@ -38,7 +52,8 @@ def test_mass_is_the_admitted_fraction_when_candidates_were_counted():
     pairs = [(0, 1, 0.91), (0, 2, 0.95), (1, 2, 0.99)]
     sp = _emit(pairs, 0.9, candidates_compared=100, candidates_counted=True)
     assert sp.n_pairs_scored == 3
-    assert sp.mass_above_threshold == 0.03
+    assert sp.admitted_fraction == 0.03
+    assert sp.mass_above_threshold == 1.0, "the old field keeps its old (tautological) meaning"
 
 
 def test_a_genuinely_permissive_run_still_reads_high():
@@ -47,34 +62,37 @@ def test_a_genuinely_permissive_run_still_reads_high():
     detectable again only because the denominator is now real."""
     pairs = [(i, i + 1, 0.99) for i in range(98)]
     sp = _emit(pairs, 0.5, candidates_compared=100, candidates_counted=True)
-    assert sp.mass_above_threshold == 0.98
+    assert sp.admitted_fraction == 0.98
 
 
-def test_absent_candidate_count_keeps_the_old_bit():
-    """No denominator available -> no fraction can be invented. The old
-    behaviour (1.0 when something matched) is retained as the honest bit,
-    and `candidates_counted=False` is what tells consumers not to read it
-    as a fraction (the #2639/#2644 idiom)."""
+def test_absent_candidate_count_reports_none_not_zero():
+    """No denominator available -> no fraction can be invented, and ``None``
+    is the only honest answer. ``0.0`` would read as "nothing matched", which
+    is the absent-vs-zero collapse this whole change exists to remove
+    (#2639/#2644)."""
     pairs = [(0, 1, 0.91)]
     sp = _emit(pairs, 0.9, candidates_compared=0, candidates_counted=False)
     assert sp.candidates_counted is False
+    assert sp.admitted_fraction is None
     assert sp.mass_above_threshold == 1.0
 
 
-def test_nothing_matched_is_still_zero():
-    """The zero end is load-bearing for rule_no_matches and health()."""
+def test_nothing_matched_is_zero_not_none():
+    """A MEASURED zero is a real answer and must be distinguishable from the
+    absent case above. Load-bearing for rule_no_matches and health()."""
     sp = _emit([], 0.9, candidates_compared=100, candidates_counted=True)
+    assert sp.admitted_fraction == 0.0
     assert sp.mass_above_threshold == 0.0
     assert sp.n_pairs_scored == 0
 
 
 def test_the_fraction_is_clamped_to_one():
     """Defensive: a candidate count smaller than the emitted pair count is a
-    bug upstream, but it must not produce mass > 1.0 and silently trip every
-    `>= 1.0` consumer."""
+    bug upstream, but it must not exceed 1.0 and silently trip every
+    `>= 1.0` / `> 0.9` consumer -- the exact failure being fixed."""
     pairs = [(i, i + 1, 0.99) for i in range(10)]
     sp = _emit(pairs, 0.5, candidates_compared=4, candidates_counted=True)
-    assert sp.mass_above_threshold == 1.0
+    assert sp.admitted_fraction == 1.0
 
 
 # ── the consumer this was breaking ─────────────────────────────────────────
@@ -101,7 +119,8 @@ def test_precision_collapse_guard_no_longer_demotes_a_selective_run():
                     n_pairs_scored=n_pairs,
                     candidates_compared=cand,
                     candidates_counted=True,
-                    mass_above_threshold=(min(1.0, n_pairs / cand) if cand else 0.0),
+                    admitted_fraction=(min(1.0, n_pairs / cand) if cand else 0.0),
+                    mass_above_threshold=1.0 if n_pairs else 0.0,  # the old tautology, unchanged
                 ),
             ),
             decision=None, error=None, wall_clock_ms=1,
@@ -135,13 +154,15 @@ def test_health_can_reach_yellow_again():
 
     borderline_heavy = ScoringProfile(
         n_pairs_scored=40, candidates_compared=1000, candidates_counted=True,
-        mass_above_threshold=0.04, mass_in_borderline=0.35, dip_statistic=0.02,
+        admitted_fraction=0.04, mass_above_threshold=1.0,
+        mass_in_borderline=0.35, dip_statistic=0.02,
     )
     assert borderline_heavy.health() == HealthVerdict.YELLOW
 
     clean = ScoringProfile(
         n_pairs_scored=40, candidates_compared=1000, candidates_counted=True,
-        mass_above_threshold=0.04, mass_in_borderline=0.01, dip_statistic=0.02,
+        admitted_fraction=0.04, mass_above_threshold=1.0,
+        mass_in_borderline=0.01, dip_statistic=0.02,
     )
     assert clean.health() == HealthVerdict.GREEN
 
@@ -152,29 +173,52 @@ def test_the_collapse_guard_fires_on_a_genuine_everything_matches():
     as 0.99 rather than being indistinguishable from a 3-in-1000 run."""
     permissive = ScoringProfile(
         n_pairs_scored=990, candidates_compared=1000, candidates_counted=True,
-        mass_above_threshold=0.99, mass_in_borderline=0.0, dip_statistic=0.02,
+        admitted_fraction=0.99, mass_above_threshold=1.0,
+        mass_in_borderline=0.0, dip_statistic=0.02,
     )
-    assert permissive.mass_above_threshold > 0.9, (
+    assert permissive.admitted_fraction > 0.9, (
         "precision_collapse_floor=0.9 must still trip on a genuinely "
         "permissive config -- the fix restores the signal, it does not "
         "disable the guard"
     )
 
 
-# ── end-to-end: #2663's own corpus ─────────────────────────────────────────
+# ── end-to-end: #2663's own corpus (STILL OPEN -- xfail) ───────────────────
 
+@pytest.mark.xfail(
+    reason=(
+        "#2663 is NOT fixed by this change and this test records exactly why. "
+        "The deciding consumer on this corpus is zero-label confidence's "
+        "everything-matches guard, not pick_committed's collapse guard: "
+        "measured, pick_committed(collapse_floor=0.9) picks iteration 3 (463 "
+        "pairs, admitted_fraction 0.051) while the same call with "
+        "use_zero_label_confidence=True -- which is ON by default -- picks v0 "
+        "(0 pairs). That guard caps confidence at 0.2 whenever "
+        "mass_above_threshold >= 0.9, i.e. on every entry that matched "
+        "anything, so a config that finds duplicates can never out-score one "
+        "that finds none. "
+        "Migrating it to admitted_fraction was tried and REVERTED: it fixes "
+        "this corpus but costs anchor_person_match F1 1.0000 -> 0.5139 "
+        "(P 0.3458), because the tautological cap was the only thing "
+        "penalising over-merged configs there -- and admitted_fraction cannot "
+        "replace it, since that over-merge comes from transitive closure "
+        "during clustering (adm 0.047, i.e. selective admission) rather than "
+        "from admitting too many candidates. "
+        "Closing #2663 needs a real over-merge signal for that guard -- "
+        "ClusterProfile already measures cluster_size_max / "
+        "oversized_cluster_count -- which is its own measured change across "
+        "all six gate datasets, not a rider on this one."
+    ),
+    strict=True,
+)
 def test_orgs_hard_no_longer_returns_a_confident_empty_result():
     """#2663 end-to-end. `orgs_hard` is 845 rows with 1,055 true duplicate
-    pairs, and zero-config returned 845 singleton clusters -- not a
+    pairs, and zero-config returns 845 singleton clusters -- not a
     low-precision answer, an empty one, reported as a success.
 
-    Measured on this fix (2026-08-18): 242 scored pairs, 607 clusters,
-    P 0.5783 / R 0.3185 / F1 0.4108. The issue notes F1 0.6325 is reachable
-    on this corpus by forcing threshold=0.6, so this is not the ceiling --
-    threshold SELECTION is a separate problem. The floors below are set well
-    under the measured values because the controller's committed config is
-    not bit-stable across environments; what must never regress is the shape
-    -- a run that finds nothing at all.
+    Kept as a strict xfail rather than deleted: it is the reproduction, and
+    `strict=True` means it fails the suite the moment the behaviour is fixed,
+    which is when this marker should come off.
     """
     import csv
     from pathlib import Path
@@ -212,3 +256,62 @@ def test_orgs_hard_no_longer_returns_a_confident_empty_result():
     ev = evaluate_clusters(res.clusters, truth).summary()
     assert ev["recall"] >= 0.15, f"recall collapsed: {ev}"
     assert ev["precision"] >= 0.35, f"precision collapsed: {ev}"
+
+
+def test_an_uncounted_route_keeps_its_prior_verdict():
+    """The blast-radius guard, and the reason `admitted_fraction` is a NEW
+    field instead of a repair of `mass_above_threshold`.
+
+    Rebasing the old field was tried and reverted: about a dozen rules gate on
+    hardcoded cuts (`< 0.5` in rule_blocking_too_coarse, `>= 0.95` in the
+    precision anchor, `>= 1.0` in rule_recall_gap_suspected) that were all
+    chosen while that input was a CONSTANT 1.0. Making it truthful invalidates
+    their calibration at once -- measured on the quality gate,
+    anchor_person_match went F1 1.0000 -> 0.7303 (P 1.0000 -> 0.5751) because
+    the controller took a different rule path and over-merged.
+
+    So a route that supplies no candidate count must behave EXACTLY as before:
+    `admitted_fraction` is None, and both migrated consumers fall back to the
+    old field rather than substituting a value.
+    """
+    from goldenmatch.core.autoconfig_history import HistoryEntry, RunHistory
+    from goldenmatch.core.complexity_profile import (
+        BlockingProfile,
+        ComplexityProfile,
+        DataProfile,
+        HealthVerdict,
+    )
+
+    uncounted = ScoringProfile(
+        n_pairs_scored=40, candidates_compared=0, candidates_counted=False,
+        admitted_fraction=None, mass_above_threshold=1.0,
+        mass_in_borderline=0.35, dip_statistic=0.02,
+    )
+    # Old comparison (0.35 > 1.0) is False -> GREEN, exactly as before #2668.
+    assert uncounted.health() == HealthVerdict.GREEN
+
+    # And the collapse guard still demotes it on the old field, as before.
+    def _entry(iteration: int, sp: ScoringProfile) -> HistoryEntry:
+        return HistoryEntry(
+            iteration=iteration, config=None,
+            profile=ComplexityProfile(
+                data=DataProfile(n_rows=845),
+                blocking=BlockingProfile(n_blocks=1, reduction_ratio=0.01),
+                scoring=sp,
+            ),
+            decision=None, error=None, wall_clock_ms=1,
+        )
+
+    red_uncounted = ScoringProfile(
+        n_pairs_scored=40, candidates_compared=0, candidates_counted=False,
+        admitted_fraction=None, mass_above_threshold=1.0,
+        mass_in_borderline=0.0, dip_statistic=0.0,
+    )
+    history = RunHistory()
+    history.entries.append(_entry(2, red_uncounted))
+    history.entries.append(_entry(-1, red_uncounted))
+    best = history.pick_committed(precision_collapse_floor=0.9)
+    assert best is not None and best.iteration == -1, (
+        "with no candidate count the guard must keep reading the old field, "
+        "so v0 still wins -- unchanged behaviour on an uncounted route"
+    )

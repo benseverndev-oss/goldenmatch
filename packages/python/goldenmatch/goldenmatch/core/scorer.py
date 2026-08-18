@@ -206,46 +206,32 @@ def _emit_scoring_profile(
     if not has_active_emitter():
         return
     scores = [s for _, _, s in pairs]
-    # `pairs` are ALREADY above the cut (see the docstring above), so
-    # `mass_above(scores, threshold)` is 1.0 by construction for any non-empty
-    # result -- at every emit site, for every matchkey type (#2673). The field
-    # then carried one bit while a dozen consumers read it as a fraction; the
-    # worst of them, `pick_committed`'s precision-collapse guard, demoted every
-    # RED entry that matched ANYTHING as the "everything matches" pathology and
-    # committed v0 instead, which is the confident empty result in #2663.
+    # `mass_above_threshold` and `mass_in_borderline` keep their ORIGINAL
+    # computation, over the already-above-cut `pairs`. That makes
+    # `mass_above_threshold` 1.0 by construction for any non-empty result --
+    # a known tautology (#2673), left in place deliberately.
     #
-    # `candidates_compared` is the denominator the field always wanted. When it
-    # is real, report the honest admitted fraction. When it is absent, no
-    # fraction can be invented -- keep the old bit and let `candidates_counted`
-    # tell consumers not to read it as a fraction (the #2639/#2644 idiom).
+    # The first attempt at #2673 rebased this field onto `candidates_compared`.
+    # It is the honest denominator and the field reads correctly afterwards,
+    # but a dozen rules gate on hardcoded cuts (`< 0.5` in
+    # rule_blocking_too_coarse, `>= 0.95` in the precision anchor, `>= 1.0` in
+    # rule_recall_gap_suspected) that were all chosen while this input was a
+    # CONSTANT. Making it truthful invalidates their calibration at once.
+    # Measured on the quality gate, anchor_person_match: F1 1.0000 -> 0.7303
+    # (P 1.0000 -> 0.5751, recall unchanged), because the controller took a
+    # different rule path -- `low_transitivity` x3 became
+    # `blocking_too_coarse` -- and over-merged.
     #
-    # `mass_in_borderline` MUST move to the same denominator in the same
-    # branch. Several consumers compare the two directly -- `health()`'s
-    # `mass_in_borderline > mass_above_threshold`, `pick_committed`'s
-    # `sep = mass_above - mass_in_borderline`, `f1_proxy`, zero-label's
-    # `match_ish` sum -- and rebasing only one of them would silently turn
-    # every such comparison into apples-to-oranges. That would trade this bug
-    # for a subtler one.
-    if candidates_counted and candidates_compared > 0:
-        # min(): a candidate count below the emitted pair count is an upstream
-        # bug, but it must not yield mass > 1.0 and silently trip every
-        # `>= 1.0` / `> 0.9` consumer -- the exact failure being fixed here.
-        _mass_above = min(1.0, len(scores) / candidates_compared)
-        # A LOWER BOUND, and deliberately so: the band is
-        # [threshold - 0.1, threshold + 0.1], but every score here is already
-        # >= threshold, so only the upper half is observable. The below-cut
-        # half is discarded by the kernels before this point (that is why the
-        # cut exists) and is not reconstructable here. Understating borderline
-        # mass is the safe direction for every consumer -- it can only make a
-        # config look cleaner, never flip a healthy one to YELLOW on evidence
-        # that was never collected.
-        _band_lo, _band_hi = threshold - 0.1, threshold + 0.1
-        _mass_border = min(1.0, sum(
-            1 for s in scores if _band_lo <= s <= _band_hi
-        ) / candidates_compared)
-    else:
-        _mass_above = mass_above(scores, threshold)
-        _mass_border = mass_borderline(scores, threshold)
+    # So the honest fraction ships as a SEPARATE field, `admitted_fraction`,
+    # and only the two consumers whose bug motivated #2663/#2668 read it. The
+    # remaining consumers stay on the signal they were tuned against.
+    # Re-calibrating them is real work and needs its own before/after across
+    # all six gate datasets; it is not smuggled in here.
+    _admitted = (
+        min(1.0, len(scores) / candidates_compared)
+        if candidates_counted and candidates_compared > 0
+        else None
+    )
     profile = ScoringProfile(
         n_pairs_scored=len(scores),
         candidates_compared=candidates_compared,
@@ -253,8 +239,9 @@ def _emit_scoring_profile(
         route=route,
         score_histogram=histogram_20(scores),
         dip_statistic=hartigan_dip(scores),
-        mass_above_threshold=_mass_above,
-        mass_in_borderline=_mass_border,
+        mass_above_threshold=mass_above(scores, threshold),
+        mass_in_borderline=mass_borderline(scores, threshold),
+        admitted_fraction=_admitted,
         per_field_score_variance=per_field_variance or {},
     )
     current_emitter().set_scoring(profile)
