@@ -103,13 +103,48 @@ def test_bucket_backend_profile_does_not_read_as_nothing_happened():
 
 
 def test_bucket_backend_is_honest_about_the_candidate_count():
-    """`candidates_counted` must be False here rather than claiming a measured
-    zero. The bucket path never accumulates bucket sizes, so the count is
-    genuinely absent -- and #2644 exists so that absence is sayable."""
+    """`candidates_counted` is now True here, and the count is real (#2673).
+
+    This test previously asserted False, on the reasoning that "the bucket path
+    never accumulates bucket sizes, so the count is genuinely absent." That was
+    an accurate description of the code, not a constraint on it: the bucket
+    workers already hold their block run-lengths as plain ints for their own
+    dispatch, so summing C(n,2) over them costs arithmetic on data in hand --
+    not the re-materialisation #2639 was avoiding.
+
+    The absence was not free. `_emit_scoring_profile` needs this denominator to
+    report a truthful `mass_above_threshold`; without it that field stays
+    tautologically 1.0 (the pairs handed to it have already cleared the cut),
+    and `pick_committed` then demotes every RED entry that matched anything as
+    the "everything matches" pathology and commits v0 -- the confident empty
+    result in #2663.
+
+    Absence is still sayable, and still said, where a route genuinely has no
+    count to give: `_emit_profile(candidates=None)` keeps `candidates_counted`
+    False rather than reporting `sum([]) == 0` as a measured zero.
+    """
     with profile_capture() as emitter:
         score_buckets(_prepared(), _blocking(), _mk(), matched_pairs=set())
 
+    sp = emitter.scoring
+    assert sp.candidates_counted is True
+    assert sp.candidates_compared > 0
+    # The whole point: a real denominator makes the fraction real.
+    assert sp.mass_above_threshold == pytest.approx(
+        sp.n_pairs_scored / sp.candidates_compared
+    )
+
+
+def test_an_uncounted_route_still_reports_absence_not_a_measured_zero():
+    """Guard the guard. `sum([])` is 0, and reporting that as counted would
+    recreate the absent-vs-zero collapse #2673 exists to remove."""
+    from goldenmatch.backends.score_buckets import _emit_profile
+
+    with profile_capture() as emitter:
+        _emit_profile([], _mk(), route="test.uncounted", candidates=None)
+
     assert emitter.scoring.candidates_counted is False
+    assert emitter.scoring.candidates_compared == 0
 
 
 def test_emitting_does_not_change_the_pairs():

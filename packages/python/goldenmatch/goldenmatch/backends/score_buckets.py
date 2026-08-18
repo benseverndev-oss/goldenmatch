@@ -1344,7 +1344,9 @@ def score_probabilistic_external_blocks(
     return out
 
 
-def _emit_profile(pairs: Any, mk: Any, route: str = "buckets") -> None:
+def _emit_profile(
+    pairs: Any, mk: Any, route: str = "buckets", candidates: int | None = None,
+) -> None:
     """Report this backend's scoring to the auto-config emitter (#2647).
 
     `core/scorer.py` emits from its own entry points; this backend calls
@@ -1356,12 +1358,24 @@ def _emit_profile(pairs: Any, mk: Any, route: str = "buckets") -> None:
     was refused on a config whose blocking graded GREEN and whose clustering
     produced 91,527 clusters with transitivity 1.0.
 
-    `candidates_counted=False` deliberately: this path never accumulates bucket
-    sizes (`_pair_count` serves only the oversized-tile budget), so the count is
-    genuinely ABSENT rather than zero, and #2644 added the flag so that is
-    sayable. The pair-derived signals are all real, and the "nothing happened"
-    clause needs BOTH counters zero -- so this clears the refusal without
-    inventing a number.
+    ``candidates`` (#2673): total candidate pairs the buckets handed the
+    scorer, or ``None`` when this call site has no count to give (the external
+    -blocks path). Originally hardcoded to absent, on the reasoning that this
+    path "never accumulates bucket sizes". That was true of the code, not of
+    what the code COULD do -- the workers already hold their block run-lengths
+    as plain ints for their own dispatch, so summing C(n,2) over them is
+    arithmetic on data in hand, not a re-materialisation.
+
+    Making it real matters beyond telemetry: ``_emit_scoring_profile`` needs
+    this denominator to report a truthful ``mass_above_threshold``. Without it
+    the field is tautologically 1.0 (the pairs passed here have already cleared
+    the cut), and ``pick_committed`` then demotes every RED entry that matched
+    anything as the "everything matches" pathology -- committing v0 and
+    returning an empty result (#2663).
+
+    When ``candidates`` is None the old absent-count contract stands: #2644's
+    flag says so, and the "nothing happened" clause needs BOTH counters zero,
+    so the refusal is still cleared without inventing a number.
 
     A no-op when no capture is open, so production pays nothing.
     """
@@ -1372,7 +1386,9 @@ def _emit_profile(pairs: Any, mk: Any, route: str = "buckets") -> None:
 
     _emit_scoring_profile(
         pairs, profile_threshold(mk, pairs),
-        candidates_compared=0, candidates_counted=False, route=route,
+        candidates_compared=int(candidates) if candidates is not None else 0,
+        candidates_counted=candidates is not None,
+        route=route,
     )
 
 
@@ -1809,6 +1825,31 @@ def score_buckets(
             if all(i is not None for i in ids) and not _skew_block:
                 native_scorer_ids = ids  # type: ignore[assignment]
 
+    # #2673: candidate-pair count, accumulated per scored bucket.
+    #
+    # This path previously reported `candidates_compared=0, candidates_counted=
+    # False` -- honestly absent, since nothing accumulated it. But absence has a
+    # cost: `_emit_scoring_profile` needs this denominator to report a real
+    # `mass_above_threshold`, and without it the field stays the tautological
+    # 1.0 that made `pick_committed` demote every RED entry that matched
+    # anything (#2663).
+    #
+    # It is now free to collect. The #2639 note that counting "calls
+    # Block.n_rows(), which materialises" describes the CONTROLLER's pre-scoring
+    # count, not this: the workers below already hold the block-sorted run
+    # lengths (`size_list`) as a plain list of ints, computed for their own
+    # dispatch. Summing C(n,2) over them is arithmetic on data already in hand.
+    #
+    # A plain list + `.append` rather than a lock: workers run in a
+    # ThreadPoolExecutor and list.append is atomic under the GIL. Summed once
+    # after every pass completes.
+    #
+    # Multi-pass double-counts a pair that is a candidate in more than one pass.
+    # That matches the legacy scorer's own definition of the field ("sum of
+    # n*(n-1)//2 for each block processed") and is the conservative direction
+    # for every consumer -- it can only make the admitted fraction look smaller.
+    _cand_pair_counts: list[int] = []
+
     # Track 1 Fix B: build the native ExcludeSet ONCE here, BEFORE the bucket
     # worker loop. Previously _score_one_bucket_fast called
     # list(frozen_exclude) + passed it positionally, which forced the kernel
@@ -1880,6 +1921,17 @@ def score_buckets(
         size_list = sorted_frame.run_lengths("__block_key__")
         if not size_list:
             return [], 0
+        # #2673: candidate pairs this bucket hands the scorer. Counted HERE, at
+        # the top, rather than inside the native-kernel branch below -- this
+        # worker also has a vectorized-numpy and a per-pair Python branch, and
+        # counting in only one of them leaves the accumulator empty on every
+        # run that takes another (which is then correctly, but uselessly,
+        # reported as an absent count). Predicate mirrors the `keep` masks
+        # below.
+        _cand_pair_counts.append(sum(
+            _pair_count(s) for s in size_list
+            if s >= 2 and not (skip_oversized and s > max_block_size)
+        ))
         weights = [w for _col, w, _fn, _name in field_specs]
 
         # Native Arrow kernel: hand the block-sorted __row_id__ + field columns
@@ -2121,6 +2173,15 @@ def score_buckets(
         size_list = sorted_frame.run_lengths("__block_key__")
         if not size_list:
             return [], 0
+        # #2673: candidate pairs this bucket hands the scorer. Counted once
+        # here rather than per-branch (this worker has a batched-native, a
+        # split-oversized and a plain branch, all fed from `size_list`). The
+        # predicate mirrors the `keep` masks below: a block under 2 rows has no
+        # pairs, and an oversized block under skip_oversized is never scored.
+        _cand_pair_counts.append(sum(
+            _pair_count(s) for s in size_list
+            if s >= 2 and not (skip_oversized and s > max_block_size)
+        ))
 
         def _split_oversized(block_df, size: int) -> list:
             """Auto-split an oversized block -- #1790 parity on the bucket
@@ -2769,11 +2830,22 @@ def score_buckets(
                              _tbl.column("id_b").to_pylist(),
                              _tbl.column("score").to_pylist(), strict=True)),
                     mk, route="buckets.arrow",
+                    candidates=(sum(_cand_pair_counts) if _cand_pair_counts else None),
                 )
             return _tbl
-        _emit_profile([], mk, route="buckets.arrow.empty")
+        _emit_profile(
+            [], mk, route="buckets.arrow.empty",
+            candidates=(sum(_cand_pair_counts) if _cand_pair_counts else None),
+        )
         return pairs_to_pair_stream([])
-    _emit_profile(all_pairs, mk)
+    # `sum([])` is 0, and reporting that as a COUNTED zero would recreate the
+    # exact absent-vs-zero collapse this change exists to remove -- an empty
+    # accumulator means no worker counted anything (a route that bypasses both
+    # bucket workers), not that zero pairs were compared. Stay absent.
+    _emit_profile(
+        all_pairs, mk,
+        candidates=(sum(_cand_pair_counts) if _cand_pair_counts else None),
+    )
     return all_pairs
 
 
