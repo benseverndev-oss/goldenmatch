@@ -430,6 +430,13 @@ jobs:
       - name: pytest (shard ${{ matrix.shard }} of ${{ env.GM_SPLITS }})
         env:
           COVERAGE_FILE: coverage_shard${{ matrix.shard }}.dat
+          # DEBUG BRANCH ONLY -- do not merge.
+          # The worker death in test_suggest_full_dist prints no signal at all,
+          # which is itself suspicious: xdist may simply be swallowing the dying
+          # child's stderr. faulthandler installs the SIGSEGV/SIGABRT handler
+          # that dumps a C+Python stack from the worker as it dies.
+          PYTHONFAULTHANDLER: "1"
+          PYTHONUNBUFFERED: "1"
         run: |
           uv run --with pytest-split pytest packages/python/goldenmatch \
             -n auto --splits "${GM_SPLITS}" --group ${{ matrix.shard }} \
@@ -449,7 +456,7 @@ jobs:
             --ignore=packages/python/goldenmatch/tests/test_memory_e2e.py \
             --deselect 'tests/test_memory_pipeline.py::test_pipeline_applies_seeded_correction' \
             --deselect 'tests/test_memory_pipeline.py::test_pipeline_persists_stale_pairs_to_review_queue' \
-            --deselect 'tests/test_memory_postflight.py::test_postflight_renders_memory_section'             --deselect 'tests/test_suggest_full_dist.py::test_full_dist_on_lowers_to_high_side_valley_when_threshold_far_above'
+            --deselect 'tests/test_memory_postflight.py::test_postflight_renders_memory_section'
         # ^ The last deselect is a HARD WORKER CRASH, not an assertion:
         # `worker 'gw0' crashed while running ...test_full_dist_on_lowers_to_high
         # _side_valley_when_threshold_far_above`, with no OOM / SIGKILL / panic
