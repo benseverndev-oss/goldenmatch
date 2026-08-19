@@ -527,6 +527,28 @@ jobs:
               -e SPARK_LOCAL_DIRS=/scratch \
               python:3.12-slim sleep infinity
             docker exec pyenv pip install --quiet 'goldenmatch[spark]' splink==4.0.16
+
+            # A JVM, for SPLINK only. GoldenMatch does not need one here: it
+            # talks to the cluster over Spark CONNECT (`sc://`), which is a gRPC
+            # client. Splink drives a CLASSIC session, which launches a local
+            # JVM driver process -- and `python:3.12-slim` has no Java, so the
+            # first run that got this far died on:
+            #
+            #   PySparkRuntimeError: [JAVA_GATEWAY_EXITED] Java gateway process
+            #   exited before sending its port number.
+            #
+            # Java 17 (bookworm's default-jre-headless) rather than matching the
+            # cluster's 21: Spark 4.x requires 17 OR LATER, and driver/executor
+            # do not have to share a JDK major -- they have to share a SPARK
+            # version, which they do. 21 is only in bookworm-backports and the
+            # extra apt source buys nothing.
+            #
+            # VERIFIED right here rather than trusted. A silently failed apt
+            # would resurface as the same opaque JAVA_GATEWAY_EXITED on the
+            # master, five VMs and several minutes later.
+            docker exec pyenv sh -c \
+              'apt-get update -qq && apt-get install -y -qq --no-install-recommends default-jre-headless >/dev/null'
+            docker exec pyenv java -version
             docker exec -e GOLDENMATCH_SPARK_JAR=/w/goldenmatch-spark.jar \
               pyenv python spark_fs_train_scale.py \
               --rows ${{ inputs.rows || '1000000' }} \
