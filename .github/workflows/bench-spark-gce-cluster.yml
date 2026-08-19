@@ -139,66 +139,6 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
 
-      - name: Install the Infisical CLI
-        # BOUNDED, because this step wedged twice in a row on 2026-08-19 (runs
-        # 32271581601 and 32273435168), each time sitting >10 minutes on a step
-        # that normally takes seconds, on two different runners. The vendor's
-        # `setup.deb.sh` bootstraps pip and runs its own `apt-get` before ours,
-        # so the hang is inside a third-party script this lane cannot see into.
-        #
-        # Unbounded, that hang inherits the JOB's `timeout-minutes: 360` -- a
-        # dependency outage silently converts into six hours of billed runner
-        # before anyone learns anything. `timeout` turns it into a legible
-        # failure in four minutes. The retry covers the transient case; it does
-        # NOT paper over a real outage, because three bounded attempts still
-        # fail fast and say so.
-        timeout-minutes: 15
-        run: |
-          set -euo pipefail
-
-          # THE ACTUAL CAUSE, from run 32276315793:
-          #
-          #   E: Could not get lock /var/lib/apt/lists/lock.
-          #      It is held by process 2356 (apt-get)
-          #
-          # Not an upstream outage. GitHub-hosted runners run their own apt work
-          # (unattended-upgrades and friends) shortly after boot, and the
-          # vendor's setup script calls `apt-get update` internally, where it
-          # cannot be given lock options. Whether this step passes is a race
-          # against the runner's own housekeeping, which is why it passed three
-          # times this morning and then failed three times in a row.
-          #
-          # So: WAIT for the lock rather than race it.
-          wait_for_apt() {
-            for _ in $(seq 1 90); do
-              if sudo fuser /var/lib/apt/lists/lock /var/lib/dpkg/lock-frontend \
-                            /var/lib/dpkg/lock >/dev/null 2>&1; then
-                sleep 5
-              else
-                return 0
-              fi
-            done
-            echo "::warning::apt lock still held after 450s"
-            return 1
-          }
-
-          ok=""
-          for attempt in 1 2 3; do
-            wait_for_apt || true
-            # `DPkg::Lock::Timeout` makes OUR apt calls wait for the lock
-            # instead of erroring. It cannot be passed into the vendor script,
-            # which is what `wait_for_apt` above is for.
-            if timeout 240 bash -c "curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | sudo -E bash" \
-               && timeout 240 sudo apt-get -o DPkg::Lock::Timeout=180 update \
-               && timeout 240 sudo apt-get -o DPkg::Lock::Timeout=180 install -y infisical; then
-              ok=1; break
-            fi
-            echo "::warning::Infisical CLI install attempt $attempt failed or timed out; retrying"
-            sleep 20
-          done
-          [ -n "$ok" ] || { echo "::error::Infisical CLI install failed 3x. Check the log for 'Could not get lock' (runner apt contention) vs a genuine network/repo error before assuming an upstream outage"; exit 1; }
-          infisical --version
-
       - name: Fetch GCP creds from Infisical
         # Identical mechanism to bench-ray-cluster.yml -- same Machine Identity,
         # same project, same masking. Reusing it rather than adding GH secrets
@@ -212,16 +152,68 @@ jobs:
             echo "::error::INFISICAL_CLIENT_ID / INFISICAL_CLIENT_SECRET not set; see docs/distributed/ray-gce-cluster.md"
             exit 1
           fi
-          TOKEN=$(infisical login --silent --plain --method=universal-auth \
-            --client-id="$INFISICAL_CLIENT_ID" --client-secret="$INFISICAL_CLIENT_SECRET")
+          # Infisical's REST API directly, NOT the CLI. Installing the CLI needs
+          # apt, and apt on a GitHub-hosted runner needs a lock the runner's own
+          # housekeeping holds: runs 32271581601, 32273435168, 32276315793 and
+          # 32278438000 all died there, the last one with
+          #
+          #     apt lock still held after 450s
+          #     E: Could not get lock /var/lib/apt/lists/lock.
+          #        It is held by process 2199 (apt-get)
+          #
+          # after waiting for it and retrying three times. There is no published
+          # standalone binary to fall back to (checked: the CLI's releases carry
+          # no assets), so the way to stop losing runs to a package manager is
+          # to stop needing one. `curl` and `jq` are preinstalled.
+          #
+          # Same Machine Identity, same project, same secrets, same masking --
+          # only the transport changes. Routes verified against the live API
+          # before this was written, using NO credentials: an empty POST to the
+          # login route returns 422 and a bogus one returns 401 "Invalid
+          # credentials", which proves both the path and the field names; the
+          # secret routes return 401 rather than 404, which proves they exist.
+          API="${INFISICAL_API:-https://app.infisical.com}"
+          PROJECT_ID=a99885f0-c5af-4ae1-9dc8-255cc60aa129
+          ENV_SLUG=dev
+
+          # Built with jq rather than string interpolation so a quote or
+          # backslash in the client secret cannot break the JSON.
+          LOGIN_BODY=$(jq -nc --arg id "$INFISICAL_CLIENT_ID" \
+                              --arg sec "$INFISICAL_CLIENT_SECRET" \
+                              '{clientId:$id, clientSecret:$sec}')
+          LOGIN=$(curl -sS --max-time 60 -X POST "$API/api/v1/auth/universal-auth/login" \
+                    -H 'Content-Type: application/json' -d "$LOGIN_BODY")
+          TOKEN=$(jq -r '.accessToken // empty' <<<"$LOGIN")
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Infisical login failed: $(jq -r '.message // "no accessToken in response"' <<<"$LOGIN")"
+            exit 1
+          fi
           echo "::add-mask::$TOKEN"
 
-          PROJ=$(infisical secrets get GCP_RAY_BENCH_PROJECT_ID \
-            --projectId=a99885f0-c5af-4ae1-9dc8-255cc60aa129 --env=dev --plain --token="$TOKEN")
+          # v3-raw first, v4 as fallback: both are live today and the pair
+          # survives either being retired. Only the VALUE goes to stdout, so a
+          # diagnostic can never be captured as a secret.
+          get_secret() {
+            local name="$1" out val
+            out=$(curl -sS --max-time 60 -H "Authorization: Bearer $TOKEN" \
+                  "$API/api/v3/secrets/raw/$name?workspaceId=$PROJECT_ID&environment=$ENV_SLUG&secretPath=%2F") || true
+            val=$(jq -r '.secret.secretValue // empty' <<<"$out")
+            if [ -z "$val" ]; then
+              out=$(curl -sS --max-time 60 -H "Authorization: Bearer $TOKEN" \
+                    "$API/api/v4/secrets/$name?projectId=$PROJECT_ID&environment=$ENV_SLUG&secretPath=%2F") || true
+              val=$(jq -r '.secret.secretValue // empty' <<<"$out")
+            fi
+            if [ -z "$val" ]; then
+              echo "::error::could not read $name from Infisical: $(jq -r '.message // "empty value from both v3 and v4"' <<<"$out")" >&2
+              return 1
+            fi
+            printf '%s' "$val"
+          }
+
+          PROJ=$(get_secret GCP_RAY_BENCH_PROJECT_ID)
           echo "::add-mask::$PROJ"
 
-          infisical secrets get GCP_SA_KEY_B64 \
-            --projectId=a99885f0-c5af-4ae1-9dc8-255cc60aa129 --env=dev --plain --token="$TOKEN" \
+          get_secret GCP_SA_KEY_B64 \
             | base64 -d --ignore-garbage > "$HOME/gcp-sa.json"
           chmod 600 "$HOME/gcp-sa.json"
           python3 -c "import json; json.load(open('$HOME/gcp-sa.json'))"
