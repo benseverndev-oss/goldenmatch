@@ -6,7 +6,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [3.13.1] - 2026-08-19
+
+
 ### Fixed
+
+- **`u` estimation cost the TABLE, not the sample, on the distributed Spark
+  path.** `random_pairs` draws ~1,415 rows regardless of source size (the
+  inverse of r(r-1)/2 for a 1M-pair budget), but getting them cost THREE full
+  passes over the source: a `count()` purely to turn the pair budget into a
+  sampling fraction, plus a self-join whose two sides both referenced the
+  UNMATERIALISED sample, so the scan and hash filter ran twice. Measured on a
+  50M-row Spark cluster the stage took 98.63s where Splink's took 43.29s, while
+  at 1M it was FASTER than Splink (8.48s vs 13.69s) -- 50x the rows made it
+  11.6x slower, which a fixed-size sample should not do. The sample is now
+  cached before the self-join, and `estimate_u_distributed` /
+  `train_em_distributed` accept an optional `total_rows` so a caller that has
+  already counted the frame does not pay for a second count. Three passes become
+  one. `total_rows` is optional and omitting it keeps the previous behaviour, so
+  this is not a breaking change.
 
 - **`candidates_compared` was structurally 0 at scale, and two auto-config
   decisions read it as a signal (#2639).** `scorer.py` skips the candidate-count
