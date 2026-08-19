@@ -613,14 +613,22 @@ jobs:
             docker exec pyenv sh -c \
               'apt-get update -qq && apt-get install -y -qq --no-install-recommends default-jre-headless >/dev/null'
             docker exec pyenv java -version
-            docker exec -e GOLDENMATCH_SPARK_JAR=/w/goldenmatch-spark.jar \
-              pyenv python spark_fs_train_scale.py \
-              --rows ${{ inputs.rows || '1000000' }} \
-              --remote sc://$MASTER_IP:15002 \
-              --spark-ui http://$MASTER_IP:4040 \
-              ${{ inputs.eval_quality && '--eval-quality' || '' }} \
-              --out /w/spark-fs-train-scale.json
           "
+
+          # DETACHED, not inside the ssh --command above. Run 32259409214 lost
+          # its SSH session 11 minutes into this exact call with the harness
+          # healthy and mid-pass, and took the run and five VMs with it.
+          # scripts/gce_detached.sh carries the mechanism and the log.
+          source scripts/gce_detached.sh
+          gce_detached "$MASTER" fs <<REMOTE
+          export GOLDENMATCH_SPARK_JAR=/w/goldenmatch-spark.jar
+          python spark_fs_train_scale.py \
+            --rows ${{ inputs.rows || '1000000' }} \
+            --remote sc://$MASTER_IP:15002 \
+            --spark-ui http://$MASTER_IP:4040 \
+            ${{ inputs.eval_quality && '--eval-quality' || '' }} \
+            --out /w/spark-fs-train-scale.json
+          REMOTE
 
       - name: Splink on the same cluster
         if: inputs.splink_compare
@@ -642,18 +650,24 @@ jobs:
         run: |
           set -euo pipefail
           MASTER="$CLUSTER-master"
-          gcloud compute ssh "$MASTER" --quiet --command "
-            set -euo pipefail
-            docker stop spark-connect
-            docker exec pyenv python spark_splink_train_scale.py \
-              --rows ${{ inputs.rows || '1000000' }} \
-              --master spark://$MASTER_IP:7077 \
-              --driver-host $MASTER_IP \
-              --spark-ui http://$MASTER_IP:4040 \
-              --checkpoint-dir '${{ inputs.splink_checkpoint_dir || 'gs://goldenmatch-spark-bench-us-east1' }}/run-${{ github.run_id }}' \
-              ${{ inputs.eval_quality && '--eval-quality' || '' }} \
-              --out /w/splink-train-scale.json
-          "
+          gcloud compute ssh "$MASTER" --quiet --command "docker stop spark-connect"
+
+          # DETACHED, and this arm needs it more than the FS one. The step is
+          # `continue-on-error: true`, so a dropped SSH here does NOT fail the
+          # job -- it prints `splink: MISSING` and reads as "Splink could not do
+          # 50M". Publishing a transport failure as an engine limit is the exact
+          # unfairness this comparison exists to avoid.
+          source scripts/gce_detached.sh
+          gce_detached "$MASTER" splink <<REMOTE
+          python spark_splink_train_scale.py \
+            --rows ${{ inputs.rows || '1000000' }} \
+            --master spark://$MASTER_IP:7077 \
+            --driver-host $MASTER_IP \
+            --spark-ui http://$MASTER_IP:4040 \
+            --checkpoint-dir '${{ inputs.splink_checkpoint_dir || 'gs://goldenmatch-spark-bench-us-east1' }}/run-${{ github.run_id }}' \
+            ${{ inputs.eval_quality && '--eval-quality' || '' }} \
+            --out /w/splink-train-scale.json
+          REMOTE
 
       - name: Pull the artifacts back
         if: always()
