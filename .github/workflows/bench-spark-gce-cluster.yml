@@ -683,7 +683,24 @@ jobs:
         if: always()
         with:
           name: spark-gce-multinode
-          path: "*.json"
+          # The two results BY NAME. This globbed `*.json` at the repo root,
+          # which always matches `package.json`, `turbo.json` and
+          # `pyrightconfig.json` -- so on run 32259409214 the upload "succeeded"
+          # carrying three repo files and zero results, and `if-no-files-found`
+          # could never fire because the glob is never empty. "Artifact present"
+          # has to mean "results present" or it is not a signal.
+          #
+          # Named rather than moved to a results/ dir on purpose: the Summary
+          # step below reads both files from the repo root in seven places, and
+          # relocating them would make it print MISSING for both arms. That is
+          # the same class of silent loss this is fixing.
+          path: |
+            spark-fs-train-scale.json
+            splink-train-scale.json
+          # `warn`, not `error`: this step is `if: always()`, so a run that died
+          # before either harness produced anything arrives here legitimately
+          # empty and the real failure is already red upstream. The warning is
+          # meaningful now that nothing else can satisfy the path.
           if-no-files-found: warn
 
       - name: Summary
