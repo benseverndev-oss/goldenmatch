@@ -134,10 +134,36 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
 
       - name: Install the Infisical CLI
+        # BOUNDED, because this step wedged twice in a row on 2026-08-19 (runs
+        # 32271581601 and 32273435168), each time sitting >10 minutes on a step
+        # that normally takes seconds, on two different runners. The vendor's
+        # `setup.deb.sh` bootstraps pip and runs its own `apt-get` before ours,
+        # so the hang is inside a third-party script this lane cannot see into.
+        #
+        # Unbounded, that hang inherits the JOB's `timeout-minutes: 360` -- a
+        # dependency outage silently converts into six hours of billed runner
+        # before anyone learns anything. `timeout` turns it into a legible
+        # failure in four minutes. The retry covers the transient case; it does
+        # NOT paper over a real outage, because three bounded attempts still
+        # fail fast and say so.
+        timeout-minutes: 15
         run: |
           set -euo pipefail
-          curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | sudo -E bash
-          sudo apt-get update && sudo apt-get install -y infisical
+          ok=""
+          for attempt in 1 2 3; do
+            # `apt-get update` is kept rather than left to the vendor script.
+            # The script does appear to run one, but the original step did not
+            # rely on that and neither will this.
+            if timeout 240 bash -c "curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | sudo -E bash" \
+               && timeout 240 sudo apt-get update \
+               && timeout 240 sudo apt-get install -y infisical; then
+              ok=1; break
+            fi
+            echo "::warning::Infisical CLI install attempt $attempt failed or timed out; retrying"
+            sleep 15
+          done
+          [ -n "$ok" ] || { echo "::error::Infisical CLI install failed 3x -- upstream apt repo is unreachable, this is not a repo change"; exit 1; }
+          infisical --version
 
       - name: Fetch GCP creds from Infisical
         # Identical mechanism to bench-ray-cluster.yml -- same Machine Identity,
