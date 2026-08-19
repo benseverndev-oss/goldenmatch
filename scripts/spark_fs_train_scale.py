@@ -622,6 +622,7 @@ def main() -> int:
         # None means Spark's default was left alone. Recorded so an artifact
         # can never be read without knowing which partition count produced it.
         "shuffle_partitions": _applied_partitions,
+        "u_max_pairs": args.u_max_pairs,
         "stages": {},
         "passes": [],
         "n_fields": args.fields,
@@ -653,6 +654,9 @@ def main() -> int:
         scorer_udf=ROW_UDF_NAME,
         transform_udf=TRANSFORM_UDF_NAME,
         max_pairs=args.u_max_pairs,
+        # The harness counted the fixture moments ago; re-counting 50M rows to
+        # derive a sampling fraction is a full pass for arithmetic we have.
+        total_rows=actual,
     )
     out["stages"]["u_seconds"] = round(time.perf_counter() - t, 2)
     out["u_probs"] = {k: [round(x, 6) for x in v] for k, v in u_probs.items()}

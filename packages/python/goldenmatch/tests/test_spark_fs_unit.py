@@ -448,3 +448,40 @@ def test_a_source_too_small_to_form_a_pair_is_refused():
     frame = SimpleNamespace(count=lambda: 1)
     with pytest.raises(ValueError, match="at least 2 records"):
         random_pairs(frame, id_col="id")
+
+
+def test_random_pairs_does_not_count_when_total_is_known():
+    """`u`'s sample must not cost a full pass the caller already paid for.
+
+    Measured on the 50M GCE cluster (run 32292243875): the `u` stage took
+    98.63s against Splink's 43.29s, while at 1M it was FASTER than Splink
+    (8.48s vs 13.69s). 50x the rows made it 11.6x slower, which is not what a
+    fixed-size sample should do -- the docstring's claim that "cost tracks the
+    SAMPLE, not the table" did not hold.
+
+    One reason is this `count()`. It is a full pass over the source purely to
+    turn a pair budget into a sampling fraction, and every caller in this repo
+    already knows the row count. Passing it in removes the pass.
+    """
+    from types import SimpleNamespace
+
+    from goldenmatch.spark.em import random_pairs
+
+    calls = []
+    frame = SimpleNamespace(count=lambda: calls.append("count") or 10)
+    with pytest.raises(ValueError, match="at least 2 records"):
+        random_pairs(frame, id_col="id", total_rows=1)
+    assert calls == [], "count() was called even though total_rows was supplied"
+
+
+def test_random_pairs_still_counts_when_total_is_unknown():
+    """The parameter is an optimisation, not a new requirement on callers."""
+    from types import SimpleNamespace
+
+    from goldenmatch.spark.em import random_pairs
+
+    calls = []
+    frame = SimpleNamespace(count=lambda: calls.append("count") or 1)
+    with pytest.raises(ValueError, match="at least 2 records"):
+        random_pairs(frame, id_col="id")
+    assert calls == ["count"]
