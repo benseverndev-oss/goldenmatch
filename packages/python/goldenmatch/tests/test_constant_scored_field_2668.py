@@ -27,10 +27,11 @@ from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
 from goldenmatch.core.autoconfig import ColumnProfile, _drop_constant_scored_fields
 
 
-def _prof(name: str, n_distinct: int | None) -> ColumnProfile:
+def _prof(name: str, full_n_distinct: int | None, n_distinct: int | None = 1) -> ColumnProfile:
+    """`full_n_distinct` is the verdict; `n_distinct` is only the sample flag."""
     return ColumnProfile(
         name=name, dtype="String", col_type="string", confidence=1.0,
-        n_distinct=n_distinct,
+        n_distinct=n_distinct, full_n_distinct=full_n_distinct,
     )
 
 
@@ -73,13 +74,42 @@ def test_varying_column_is_kept():
     assert [f.field for f in mks[0].fields] == ["name", "city"]
 
 
-def test_unknown_n_distinct_is_left_alone():
+def test_unknown_full_count_is_left_alone():
     """"Cannot answer" must not become "assumed constant". Hand-built profiles
     and any future producer that does not populate the field keep their prior
     behaviour rather than acquiring a verdict on evidence nobody collected."""
     mks = [_mk([("name", 1.0), ("type", 1.0)])]
     _drop_constant_scored_fields(mks, [_prof("name", None), _prof("type", None)])
     assert [f.field for f in mks[0].fields] == ["name", "type"]
+
+
+# ── the sample proposes, the full frame disposes ──────────────────────────
+
+def test_near_constant_column_is_NOT_dropped():
+    """The scale trap. `n_distinct` is a 1,000-row sample statistic, so a column
+    that is 99.99% one value reads 1 there -- a value at frequency 1e-4 is missed
+    ~90% of the time. Acting on the sample would drop the field on a 5M-row frame
+    and keep it on a 2,000-row one: a verdict that flips with SCALE rather than
+    with the data, which is what `full_cardinality_ratio` already exists to stop.
+
+    It also fails in the same direction as the bug this rule fixes. A field that
+    agrees on nearly every pair and disagrees only on the rare ones carries its
+    whole signal in exactly those rare pairs, so dropping it removes the penalty
+    precisely where it discriminates and the rare cross-entity pair merges."""
+    mks = [_mk([("name", 1.0), ("tenant", 1.0)])]
+    # sample saw one value; the full frame has two.
+    _drop_constant_scored_fields(
+        mks, [_prof("name", 10), _prof("tenant", 2, n_distinct=1)])
+    assert [f.field for f in mks[0].fields] == ["name", "tenant"]
+
+
+def test_sample_flag_alone_never_decides():
+    """Belt and braces: a sampled n_distinct of 1 with NO full-frame count is
+    "cannot answer", not "constant"."""
+    mks = [_mk([("name", 1.0), ("tenant", 1.0)])]
+    _drop_constant_scored_fields(
+        mks, [_prof("name", 10), _prof("tenant", None, n_distinct=1)])
+    assert [f.field for f in mks[0].fields] == ["name", "tenant"]
 
 
 def test_never_empties_a_matchkey():

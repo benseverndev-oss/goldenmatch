@@ -166,14 +166,25 @@ class ColumnProfile:
     # 1.0 as the frame grows.
     avg_len: float = 0.0  # average string length
     n_distinct: int | None = None
-    # EXACT count of distinct non-blank values in the profiling sample. Distinct
-    # from `cardinality_ratio`, which is that count divided by the row total and
-    # so cannot answer "is this column CONSTANT?" -- a single-valued column reads
+    # Count of distinct non-blank values IN THE PROFILING SAMPLE. Distinct from
+    # `cardinality_ratio`, which is that count divided by the row total and so
+    # cannot answer "is this column CONSTANT?" -- a single-valued column reads
     # 1/n, which shrinks with the frame and is indistinguishable from a merely
-    # low-cardinality one. `_drop_constant_scored_fields` needs the exact count.
-    # ``None`` means the profile was built without value access (hand-built
-    # profiles in tests, the #2639/#2644 idiom): consumers MUST treat it as
-    # "cannot answer" and leave behaviour unchanged rather than assuming 1.
+    # low-cardinality one.
+    #
+    # This is a CANDIDATE signal only, never a verdict: the sample is 1,000 rows,
+    # so a column that is 99.99% one value reads 1 here. Read `full_n_distinct`
+    # to decide anything. ``None`` means the profile was built without value
+    # access (hand-built profiles in tests, the #2639/#2644 idiom).
+    full_n_distinct: int | None = None
+    # EXACT distinct count over the FULL frame, computed only for columns the
+    # sample flags as apparently-constant (`n_distinct <= 1`). Same shape as
+    # `full_cardinality_ratio` and for the same reason: a sampled statistic
+    # compared against an absolute cut makes the verdict flip with SCALE rather
+    # than with the data, which the scale-invariant-correctness commitment
+    # forbids. A value at frequency 1e-4 is missed by a 1,000-row sample ~90% of
+    # the time, so without this a 2,000-row frame keeps a field that a 5M-row
+    # frame drops. None everywhere else, including hand-built profiles.
     date_parse_rate: float | None = None
     # For col_type=="date": fraction of the profiled non-null sample that parses
     # as a well-formed date (the same parser `date_diff` uses). A per-column
@@ -675,6 +686,30 @@ def profile_columns(
     for p in profiles:
         if p.cardinality_ratio >= 1.0 and p.name in _frame_cols and frame.height > 0:
             p.full_cardinality_ratio = frame.column(p.name).n_unique() / frame.height
+
+    # EXACT full-frame distinct count for APPARENTLY-CONSTANT columns (#2668).
+    # The mirror image of the pass above, and forbidden by the same commitment:
+    # `n_distinct` is a 1,000-row sample statistic, so a column that is 99.99%
+    # one value reads 1 and `_drop_constant_scored_fields` would drop its field
+    # from the matchkey. A value at frequency 1e-4 is missed by that sample ~90%
+    # of the time, so the verdict would flip with scale -- a small frame samples
+    # the column fully and keeps the field, a large one reads it constant and
+    # drops it.
+    #
+    # The damage runs the same direction as the bug this rule exists to fix. A
+    # field that agrees on nearly every pair and disagrees only on the rare ones
+    # is carrying its whole signal in exactly those rare pairs; dropping it
+    # removes the penalty where it discriminates and the rare cross-entity pair
+    # merges.
+    #
+    # Restricting the exact count to sample-flagged columns is sound rather than
+    # a cost heuristic: a column with >1 distinct value in the sample has >1 in
+    # the full frame, so it cannot be constant and is skipped. In practice this
+    # is a handful of columns, one `n_unique()` pass each.
+    for p in profiles:
+        if (p.n_distinct is not None and p.n_distinct <= 1
+                and p.name in _frame_cols and frame.height > 0):
+            p.full_n_distinct = int(frame.column(p.name).n_unique())
 
     # Per-column date reliability signal (both classify paths converge here, so
     # the native path is covered too). For every `date` column, record the
@@ -1406,13 +1441,21 @@ def _drop_constant_scored_fields(
     useless column not been in the frame. It picks 0.8 on `name` alone there, and
     that config makes no cross-entity merge on this fixture.
 
-    A field whose profile carries no `n_distinct` is LEFT ALONE: "cannot answer"
-    must not become "assumed constant". Same for a rule that would empty a
-    matchkey, since a matchkey with no fields cannot score anything.
+    Reads `full_n_distinct`, the EXACT full-frame count, never the sampled
+    `n_distinct`. The sample is 1,000 rows, so a column that is 99.99% one value
+    reads 1 there; acting on that would drop a field on a large frame and keep it
+    on a small one -- the scale-flipping verdict `full_cardinality_ratio` exists
+    to prevent, and it would fail in the same direction as the bug this rule
+    fixes, since a field that disagrees only on rare pairs carries its whole
+    signal in exactly those pairs.
+
+    A field whose profile carries no `full_n_distinct` is LEFT ALONE: "cannot
+    answer" must not become "assumed constant". Same for a rule that would empty
+    a matchkey, since a matchkey with no fields cannot score anything.
     """
     const = {
         p.name for p in profiles
-        if p.n_distinct is not None and p.n_distinct <= 1
+        if p.full_n_distinct is not None and p.full_n_distinct <= 1
     }
     if not const:
         return
