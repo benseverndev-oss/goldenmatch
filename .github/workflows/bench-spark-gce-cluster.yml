@@ -19,6 +19,38 @@
 # do not. This lane converts that ratio into measured NETWORK time, on separate
 # machines, which is the one thing the byte count cannot tell you.
 #
+# ## THAT ~20x IS WRONG, and this lane is what found out (2026-08-19)
+#
+# The proxy ran Splink misconfigured in four separate ways, each of which this
+# lane hit and fixed in turn:
+#
+#   1. `break_lineage_method="persist"`, which caches WITHOUT truncating the
+#      DAG. Splink's documented default is `parquet`.
+#   2. No distributed filesystem, so `parquet` had nowhere to write. This
+#      cluster now stands up HDFS.
+#   3. Splink starting before the master released Connect's cores, and its own
+#      wait returning on the FIRST executor to register.
+#   4. **`spark.executor.memory` left at Spark's 1g default while GoldenMatch's
+#      Connect server got 48g.** A 48x heap disadvantage.
+#
+# Measured at 1M with both arms on the same cluster, the same 48g executors,
+# the same 320 shuffle partitions (5x cores, per Splink's own guide), and the
+# same shared metric implementations (run 32290866436):
+#
+#     wall            35.82s   vs   90.89s      2.5x
+#     shuffle write   2.71 GB  vs   4.15 GB     1.5x
+#     stages          197      vs   449         2.3x
+#     spill           0 / 0    vs   0 / 0       equal
+#     GC              31.6s    vs   37.6s       1.19x
+#     avg precision   0.71524  vs   0.703386
+#     best F1         0.685667 vs   0.646975
+#
+# GoldenMatch wins every axis. The margin is SINGLE-DIGIT, not an order of
+# magnitude, and the earlier "Splink spills 4 GB where we spill zero" was an
+# artefact of the 1g heap: with equal memory BOTH spill nothing.
+#
+# Do not quote the 20x. It measured our configuration, not the engines.
+#
 # ## Why GCE standalone and not Dataproc
 #
 # Two reasons, and the second matters more.
@@ -101,6 +133,11 @@ on:
         required: false
         type: boolean
         default: true
+      shuffle_partitions:
+        description: "spark.sql.shuffle.partitions for BOTH arms. `-1` (default) derives 5x total executor cores, which is what Splink's performance guide recommends. `0` leaves Spark's default 200, which is what both engines ran on before and is a number NEITHER vendor recommends. Applied to both engines from one shared implementation (scripts/_spark_tuning.py) so the comparison can never measure a tuning difference."
+        required: false
+        type: string
+        default: "-1"
       splink_checkpoint_fs:
         description: "Shared filesystem for Splink's lineage break. `hdfs` stands up a real HDFS across the cluster nodes (Spark speaks hdfs:// through the Hadoop client pyspark already bundles, so no connector is involved). `gcs` uses the bucket in splink_checkpoint_dir via the gcs-connector. `none` forces `persist`, which keeps lineage and OOMs at scale -- debugging only."
         required: false
@@ -432,6 +469,10 @@ jobs:
             --format='get(networkInterfaces[0].networkIP)')
           echo "MASTER_IP=$MASTER_IP" >> $GITHUB_ENV
           CORES=$(( $(echo "${{ inputs.machine_type || 'n2-standard-16' }}" | grep -oE '[0-9]+$') ))
+          # ONE definition of executor memory, used by the Connect server below
+          # and exported for the Splink arm. Two literals drift, and a drifted
+          # heap size is indistinguishable from an engine that needs more memory.
+          EXEC_MEM=48g
 
           # Open the COS HOST firewall to intra-VPC traffic.
           #
@@ -546,8 +587,14 @@ jobs:
                 --conf spark.connect.grpc.binding.port=15002 \
                 --conf spark.driver.host=$MASTER_IP \
                 --conf spark.executor.cores=$CORES \
-                --conf spark.executor.memory=48g
+                --conf spark.executor.memory=$EXEC_MEM
           "
+          # Exported so the SPLINK arm is launched with the SAME sizing. It was
+          # not, and took Spark's default `spark.executor.memory=1g` against
+          # GoldenMatch's 48g -- a 48x heap disadvantage that reads as an engine
+          # limit. See the Splink step.
+          echo "EXEC_MEM=$EXEC_MEM" >> $GITHUB_ENV
+          echo "EXEC_CORES=$CORES" >> $GITHUB_ENV
 
       - name: Refuse to measure a cluster with no registered workers
         # The failure this lane must not have: a master with zero workers
@@ -790,9 +837,44 @@ jobs:
           echo "$(curl -sSfL --retry 3 "${GCS_BASE}/gcs-connector-${GCS_VER}-shaded.jar.sha1")  gcs-connector-shaded.jar" \
             | sha1sum -c - || { echo "::error::gcs-connector jar checksum mismatch"; exit 1; }
 
+          # The helper list is DERIVED from what the harnesses actually import,
+          # not maintained by hand. Run 32286853831 died at session build with
+          #
+          #     FileNotFoundError: '/w/_spark_tuning.py'
+          #
+          # because a new shared module was added to the repo and not to this
+          # list -- the whole run lost, GoldenMatch's arm included, to a copy
+          # step. A hand-kept list of a growing set is the same bug waiting to
+          # recur; both harnesses name their helpers as string literals, so ask
+          # the source.
+          DEPS=$(grep -ho '"_[a-z_]*\.py"' \
+                   scripts/spark_fs_train_scale.py scripts/spark_splink_train_scale.py \
+                 | tr -d '"' | sort -u | sed 's|^|scripts/|')
+          echo "harness helpers: $(echo $DEPS | tr '\n' ' ')"
+          [ -n "$DEPS" ] || { echo "::error::could not derive the harness helper list"; exit 1; }
+          for f in $DEPS; do
+            [ -f "$f" ] || { echo "::error::harness imports $f but it does not exist"; exit 1; }
+          done
+
+          # Build the goldenmatch wheel FROM THIS CHECKOUT so the lane measures
+          # the tree under test rather than the last release. See the install
+          # line below for what this cost before.
+          python -m pip install --quiet build
+          python -m build --wheel --outdir wheelhouse packages/python/goldenmatch >/dev/null
+          WHEEL=$(ls wheelhouse/goldenmatch-*.whl | head -1)
+          [ -n "$WHEEL" ] || { echo "::error::no goldenmatch wheel was built"; exit 1; }
+          # Resolved HERE and interpolated as a plain name. Doing the lookup
+          # inside the ssh command needed a `$( )` nested in two layers of
+          # quoting, and run 32299878830 evaluated it on the wrong side of the
+          # boundary: pip ran on the runner and its output was executed as a
+          # command (`bash: line 13: Collecting: command not found`).
+          WHEEL_BASE=$(basename "$WHEEL")
+          echo "built $WHEEL_BASE"
+
           gcloud compute scp --quiet \
             scripts/spark_fs_train_scale.py scripts/spark_splink_train_scale.py \
-            scripts/_fs_quality_metrics.py scripts/_spark_shuffle_metrics.py \
+            $DEPS \
+            "$WHEEL" \
             goldenmatch-spark.jar gcs-connector-shaded.jar \
             "$MASTER:~/"
 
@@ -802,7 +884,21 @@ jobs:
               -v /mnt/disks/scratch:/scratch \
               -e SPARK_LOCAL_DIRS=/scratch \
               python:3.12-slim sleep infinity
-            docker exec pyenv pip install --quiet 'goldenmatch[spark]' splink==4.0.16
+            # The wheel built from THIS CHECKOUT, not PyPI.
+            #
+            # Run 32298929875 died with
+            #
+            #     TypeError: estimate_u_distributed() got an unexpected
+            #     keyword argument 'total_rows'
+            #
+            # because the harness is copied from the repo while the LIBRARY came
+            # from `pip install goldenmatch[spark]` -- the published 3.13.0,
+            # without the change being measured. This lane could therefore only
+            # ever measure ALREADY-RELEASED code, so any performance fix had to
+            # ship before it could be tested. Same family as the #688 stale-wheel
+            # footgun, except that one degraded silently and this one errored.
+            docker exec pyenv pip install --quiet '/w/$WHEEL_BASE[spark]' splink==4.0.16
+            docker exec pyenv python -c 'import goldenmatch, inspect; from goldenmatch.spark.em import estimate_u_distributed as f; print(\"[env] goldenmatch\", goldenmatch.__version__, \"total_rows:\", \"total_rows\" in inspect.signature(f).parameters)'
 
             # A JVM, for SPLINK only. GoldenMatch does not need one here: it
             # talks to the cluster over Spark CONNECT (`sc://`), which is a gRPC
@@ -836,6 +932,7 @@ jobs:
           export GOLDENMATCH_SPARK_JAR=/w/goldenmatch-spark.jar
           python spark_fs_train_scale.py \
             --rows ${{ inputs.rows || '1000000' }} \
+            --shuffle-partitions ${{ inputs.shuffle_partitions || '-1' }} \
             --remote sc://$MASTER_IP:15002 \
             --spark-ui http://$MASTER_IP:4040 \
             ${{ inputs.eval_quality && '--eval-quality' || '' }} \
@@ -864,6 +961,41 @@ jobs:
           MASTER="$CLUSTER-master"
           gcloud compute ssh "$MASTER" --quiet --command "docker stop spark-connect"
 
+          # WAIT for the master to reclaim the cores Connect was holding.
+          #
+          # Run 32283966821 did not, and Splink built its session with
+          #
+          #     [splink] 2 executor(s) registered
+          #
+          # against GoldenMatch's 4 -- then died with
+          # `OutOfMemoryError: Java heap space` and `exited with code 52` at
+          # 50M. Splink ran the comparison on HALF the cluster's memory, and
+          # without this check that reads as "Splink cannot do 50M" when what
+          # was measured is "Splink got two executors".
+          #
+          # `docker stop` returns when the CONTAINER is gone, not when the
+          # standalone master has released the application's cores; the two are
+          # seconds to a minute apart, and the gap is invisible unless you look
+          # for it. At 1M it happened to close in time, which is why this only
+          # appeared at 50M -- a race that resolves itself on small runs is the
+          # worst kind, because it looks like a size-dependent engine limit.
+          #
+          # Polled ON THE MASTER: the standalone UI is not reachable from the
+          # runner, only from inside the VPC.
+          echo "waiting for the master to release Connect's cores"
+          for i in $(seq 1 30); do
+            USED=$(gcloud compute ssh "$MASTER" --quiet --command \
+              "curl -s http://localhost:8080/json/ | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get(\"coresused\",-1))'" 2>/dev/null | tr -dc '0-9-')
+            echo "  attempt $i: coresused=${USED:-unknown}"
+            [ "${USED:-1}" = "0" ] && break
+            sleep 10
+          done
+          # Not fatal on its own: the harness reports the executor count it
+          # actually saw, and the summary carries it, so a short-changed run is
+          # legible rather than silent. Failing here would throw away a
+          # GoldenMatch arm that already succeeded.
+          [ "${USED:-1}" = "0" ] || echo "::warning::master still reports coresused=${USED:-unknown}; Splink may start under-provisioned"
+
           # DETACHED, and this arm needs it more than the FS one. The step is
           # `continue-on-error: true`, so a dropped SSH here does NOT fail the
           # job -- it prints `splink: MISSING` and reads as "Splink could not do
@@ -883,6 +1015,10 @@ jobs:
           gce_detached "$MASTER" splink <<REMOTE
           python spark_splink_train_scale.py \
             --rows ${{ inputs.rows || '1000000' }} \
+            --shuffle-partitions ${{ inputs.shuffle_partitions || '-1' }} \
+            --executor-memory $EXEC_MEM \
+            --executor-cores $EXEC_CORES \
+            --expect-executors ${{ inputs.workers || '4' }} \
             --master spark://$MASTER_IP:7077 \
             --driver-host $MASTER_IP \
             --spark-ui http://$MASTER_IP:4040 \

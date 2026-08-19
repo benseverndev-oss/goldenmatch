@@ -333,6 +333,7 @@ def random_pairs(
     seed: int = 42,
     lhs: str | None = None,
     rhs: str | None = None,
+    total_rows: int | None = None,
 ) -> Any:
     """A joined frame of RANDOM record pairs, for estimating ``u``.
 
@@ -361,7 +362,14 @@ def random_pairs(
     than exact -- about +/-3% of the rows at the default budget, so +/-5% of the
     pairs, which is noise against a level distribution.
     """
-    total = source_df.count()
+    # `total_rows` skips a FULL PASS over the source. The count exists only to
+    # turn a pair budget into a sampling fraction, and every caller in this repo
+    # already knows the row count -- paying for a second scan to rediscover it
+    # is the sample costing what the table costs. Measured at 50M (run
+    # 32292243875), this stage ran 98.63s against Splink's 43.29s while at 1M it
+    # BEAT Splink (8.48s vs 13.69s): 50x the rows made it 11.6x slower, which a
+    # fixed-size sample should not do.
+    total = source_df.count() if total_rows is None else total_rows
     if total < 2:
         raise ValueError(
             f"u needs at least 2 records to form a pair; the source has {total}"
@@ -386,6 +394,22 @@ def random_pairs(
         )
         sample = source_df.where(h < F.lit(float(want) / total * buckets))
 
+    # MATERIALISED before the self-join. Both sides of the join reference the
+    # same plan, so an unmaterialised `sample` makes Spark evaluate the source
+    # scan and the hash filter TWICE -- and with `count()` above, three full
+    # passes over the table to produce a sample of ~1,415 rows out of 50M
+    # (0.0028% of it). Caching collapses that to one.
+    #
+    # The frame is tiny by construction: `_rows_needed_for_n_pairs` is the
+    # inverse of r(r-1)/2, so a 1M-pair budget is ~1,415 rows regardless of how
+    # large the source is. Caching it costs nothing and is not a memory risk at
+    # any source size.
+    #
+    # Guarded: `cache` is absent on the hand-built frames some callers and tests
+    # pass, and an optimisation must not become a new requirement on the input.
+    if hasattr(sample, "cache"):
+        sample = sample.cache()
+
     a = sample.alias(lhs)
     b = sample.alias(rhs)
     return a.join(b, F.col(f"{lhs}.{id_col}") < F.col(f"{rhs}.{id_col}"))
@@ -401,6 +425,7 @@ def estimate_u_distributed(
     max_pairs: int = 1_000_000,
     seed: int = 42,
     max_patterns: int = MAX_PATTERNS,
+    total_rows: int | None = None,
 ) -> dict[str, list[float]]:
     """``u`` estimated on the cluster, from random pairs.
 
@@ -418,7 +443,7 @@ def estimate_u_distributed(
     from goldenmatch.core.probabilistic import estimate_u_from_counts
 
     joined = random_pairs(
-        source_df, id_col=id_col, max_pairs=max_pairs, seed=seed
+        source_df, id_col=id_col, max_pairs=max_pairs, seed=seed, total_rows=total_rows
     )
     from goldenmatch.spark.config_pipeline import CAND_LHS, CAND_RHS
 
@@ -564,6 +589,7 @@ def train_em_distributed(
     max_patterns: int = MAX_PATTERNS,
     max_tf_values: int = MAX_TF_VALUES,
     tf_freqs: dict[str, dict[str, float]] | None = None,
+    total_rows: int | None = None,
     tf_collision: dict[str, float] | None = None,
 ) -> Any:
     """Train one matchkey's FS model with no pair sample anywhere.
@@ -614,10 +640,14 @@ def train_em_distributed(
             "without one there are no candidate pairs to estimate m from"
         )
 
+    # `total_rows` forwarded so the SHIPPED path gets the same saving the
+    # benchmark harness does. Without it `u` pays a full count over the source
+    # purely to turn a pair budget into a sampling fraction, and a caller that
+    # has just counted the frame -- most of them have -- should not pay twice.
     u_probs = estimate_u_distributed(
         source_df, mk, id_col=id_col, scorer_udf=scorer_udf,
         transform_udf=transform_udf, max_pairs=u_max_pairs, seed=seed,
-        max_patterns=max_patterns,
+        max_patterns=max_patterns, total_rows=total_rows,
     )
 
     # A GROUP BY over VALUES, not comparison vectors -- the one thing the counts

@@ -68,6 +68,7 @@ Usage (from the repo root, against a running Connect endpoint):
 
     python scripts/spark_fs_train_scale.py --rows 1000000 --out scale.json
 """
+
 from __future__ import annotations
 
 import argparse
@@ -126,16 +127,15 @@ def build_fixture(spark, rows: int, dup: int, blocks_per_key: int, value_pad: in
         # character is the typo the docstring above describes and preserves the
         # field's cardinality.
         return (
-            F.when(h < F.lit(6), base)                                    # 60% clean
-             .when(h < F.lit(8), F.regexp_replace(base, ".$", ""))        # 20% truncated
-             .when(h < F.lit(9), F.concat(base, F.lit("x")))              # 10% typo
-             .otherwise(F.lit(None).cast("string"))                       # 10% missing
+            F.when(h < F.lit(6), base)  # 60% clean
+            .when(h < F.lit(8), F.regexp_replace(base, ".$", ""))  # 20% truncated
+            .when(h < F.lit(9), F.concat(base, F.lit("x")))  # 10% typo
+            .otherwise(F.lit(None).cast("string"))  # 10% missing
         )
 
     first = F.concat(F.lit("ann"), ent_s)
     last = F.concat(F.lit("lee"), (ent % F.lit(max(n_entities // 3, 1))).cast("string"))
-    dob = F.concat(F.lit("19"), F.lpad((ent % F.lit(80)).cast("string"), 2, "0"),
-                   F.lit("-01-01"))
+    dob = F.concat(F.lit("19"), F.lpad((ent % F.lit(80)).cast("string"), 2, "0"), F.lit("-01-01"))
     zipc = F.concat(F.lit("z"), F.lpad((ent % F.lit(500)).cast("string"), 3, "0"))
     city = F.concat(F.lit("city"), (ent % F.lit(40)).cast("string"))
 
@@ -170,9 +170,9 @@ def build_fixture(spark, rows: int, dup: int, blocks_per_key: int, value_pad: in
         # The blocking key is NEVER perturbed: it decides which pairs are
         # compared at all, so corrupting it would silently shrink the candidate
         # set and make a smaller run look like a faster one.
-        F.concat(F.lit("k"),
-                 (ent / F.lit(max(blocks_per_key, 1))).cast("int").cast("string"))
-         .alias("blk"),
+        F.concat(
+            F.lit("k"), (ent / F.lit(max(blocks_per_key, 1))).cast("int").cast("string")
+        ).alias("blk"),
     )
 
 
@@ -281,10 +281,7 @@ def profile_counts(joined, mk, *, scorer_udf, transform_udf, cands):
     # 4. + the wide GROUP BY over every pair: the exchange this whole question
     #    is about.
     t = time.perf_counter()
-    (joined.select(*gammas)
-        .groupBy(*[F.col(n) for n in names])
-        .agg(F.count(F.lit(1)))
-        .collect())
+    (joined.select(*gammas).groupBy(*[F.col(n) for n in names]).agg(F.count(F.lit(1))).collect())
     out["grouped_seconds"] = round(time.perf_counter() - t, 2)
 
     # Deltas. Each prefix contains the ones before it, so the attribution is the
@@ -299,8 +296,7 @@ def profile_counts(joined, mk, *, scorer_udf, transform_udf, cands):
     return out
 
 
-def make_config(n_fields: int = 5, scorer: str | None = None,
-                match_splink_levels: bool = False):
+def make_config(n_fields: int = 5, scorer: str | None = None, match_splink_levels: bool = False):
     """The scale config. ``n_fields`` trims the COMPARISON fields only.
 
     ## Why this is a knob
@@ -339,8 +335,9 @@ def make_config(n_fields: int = 5, scorer: str | None = None,
         MatchkeyField,
     )
 
-    cfg = _build_config(GoldenMatchConfig, BlockingConfig, BlockingKeyConfig,
-                        MatchkeyConfig, MatchkeyField)
+    cfg = _build_config(
+        GoldenMatchConfig, BlockingConfig, BlockingKeyConfig, MatchkeyConfig, MatchkeyField
+    )
     mk = cfg.get_matchkeys()[0]
     if scorer:
         # Force every comparison field onto one scorer. This exists for the
@@ -383,8 +380,7 @@ def make_config(n_fields: int = 5, scorer: str | None = None,
         # because the width is fixed.
         for f in mk.fields:
             f.levels = 4
-            f.level_thresholds = ([1.0, 0.9, 0.8] if f.field == "dob"
-                                  else [1.0, 0.9, 0.7])
+            f.level_thresholds = [1.0, 0.9, 0.8] if f.field == "dob" else [1.0, 0.9, 0.7]
     if n_fields < len(mk.fields):
         # Trim in place. Rebuilding a shorter literal risks the arms differing
         # in something other than field count, which is the one variable this
@@ -393,8 +389,9 @@ def make_config(n_fields: int = 5, scorer: str | None = None,
     return cfg
 
 
-def _build_config(GoldenMatchConfig, BlockingConfig, BlockingKeyConfig,
-                  MatchkeyConfig, MatchkeyField):
+def _build_config(
+    GoldenMatchConfig, BlockingConfig, BlockingKeyConfig, MatchkeyConfig, MatchkeyField
+):
     return GoldenMatchConfig(
         blocking=BlockingConfig(
             strategy="multi_pass",
@@ -413,18 +410,24 @@ def _build_config(GoldenMatchConfig, BlockingConfig, BlockingKeyConfig,
             # capped it at 9 -- the run reported 3 and 2 distinct patterns and
             # could not have reported more than 9 whatever the data looked like.
             MatchkeyConfig(
-                name="fs", type="probabilistic",
+                name="fs",
+                type="probabilistic",
                 fields=[
-                    MatchkeyField(field="first", scorer="jaro_winkler",
-                                  levels=3, partial_threshold=0.7),
-                    MatchkeyField(field="last", scorer="jaro_winkler",
-                                  levels=3, partial_threshold=0.7),
-                    MatchkeyField(field="dob", scorer="levenshtein",
-                                  levels=3, partial_threshold=0.7),
-                    MatchkeyField(field="zip", scorer="jaro_winkler",
-                                  levels=3, partial_threshold=0.7),
-                    MatchkeyField(field="city", scorer="jaro_winkler",
-                                  levels=3, partial_threshold=0.7),
+                    MatchkeyField(
+                        field="first", scorer="jaro_winkler", levels=3, partial_threshold=0.7
+                    ),
+                    MatchkeyField(
+                        field="last", scorer="jaro_winkler", levels=3, partial_threshold=0.7
+                    ),
+                    MatchkeyField(
+                        field="dob", scorer="levenshtein", levels=3, partial_threshold=0.7
+                    ),
+                    MatchkeyField(
+                        field="zip", scorer="jaro_winkler", levels=3, partial_threshold=0.7
+                    ),
+                    MatchkeyField(
+                        field="city", scorer="jaro_winkler", levels=3, partial_threshold=0.7
+                    ),
                 ],
             ),
         ],
@@ -441,6 +444,24 @@ def _shuffle_module():
 
     path = Path(__file__).resolve().parent / "_spark_shuffle_metrics.py"
     spec = importlib.util.spec_from_file_location("_spark_shuffle_metrics", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"cannot load {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _tuning_module():
+    """The SHARED Spark tuning, imported by file path.
+
+    Same reasoning as the shuffle reader and the ranking metric: both arms have
+    to be tuned by ONE implementation, or the benchmark measures the tuning
+    rather than the engines.
+    """
+    import importlib.util
+
+    path = Path(__file__).resolve().parent / "_spark_tuning.py"
+    spec = importlib.util.spec_from_file_location("_spark_tuning", path)
     if spec is None or spec.loader is None:
         raise SystemExit(f"cannot load {path}")
     mod = importlib.util.module_from_spec(spec)
@@ -471,64 +492,96 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--rows", type=int, default=1_000_000)
     ap.add_argument("--dup", type=int, default=3, help="rows per entity")
-    ap.add_argument("--blocks-per-key", type=int, default=4,
-                    help="entities sharing one blocking value")
-    ap.add_argument("--remote", default=os.environ.get(
-        "GOLDENMATCH_SPARK_REMOTE", "sc://localhost:15002"))
+    ap.add_argument(
+        "--blocks-per-key", type=int, default=4, help="entities sharing one blocking value"
+    )
+    ap.add_argument(
+        "--remote", default=os.environ.get("GOLDENMATCH_SPARK_REMOTE", "sc://localhost:15002")
+    )
     ap.add_argument("--u-max-pairs", type=int, default=1_000_000)
     ap.add_argument(
-        "--scorer", default="",
+        "--scorer",
+        default="",
         help="Force every comparison field onto one scorer. Use `exact` with "
-             "--value-pad: padding preserves equality, so gammas are unchanged "
-             "and only the marshalled bytes move. Under jaro_winkler/levenshtein "
-             "padding CHANGES similarity and the arms stop being comparable.")
+        "--value-pad: padding preserves equality, so gammas are unchanged "
+        "and only the marshalled bytes move. Under jaro_winkler/levenshtein "
+        "padding CHANGES similarity and the arms stop being comparable.",
+    )
     ap.add_argument(
-        "--value-pad", type=int, default=0,
+        "--value-pad",
+        type=int,
+        default=0,
         help="Append N filler chars to every COMPARISON value. Crossing COUNT "
-             "is unchanged; only the bytes marshalled per crossing move. This "
-             "is the arm that separates per-CALL from per-BYTE scoring cost -- "
-             "`--fields` CANNOT, because adding a field adds a call AND its "
-             "bytes, so both hypotheses predict the same scaling.")
+        "is unchanged; only the bytes marshalled per crossing move. This "
+        "is the arm that separates per-CALL from per-BYTE scoring cost -- "
+        "`--fields` CANNOT, because adding a field adds a call AND its "
+        "bytes, so both hypotheses predict the same scaling.",
+    )
     ap.add_argument(
-        "--fields", type=int, default=5,
+        "--fields",
+        type=int,
+        default=5,
         help="Number of COMPARISON fields (max 5). Same blocking, same "
-             "candidate pairs -- only the per-pair crossing count changes. "
-             "Run 5 vs 2 and compare `scoring_udf`: linear in field count "
-             "means the cost is per-CALL (fewer, fatter calls win); flat means "
-             "per-BYTE (only columnar/FFI moves it).")
+        "candidate pairs -- only the per-pair crossing count changes. "
+        "Run 5 vs 2 and compare `scoring_udf`: linear in field count "
+        "means the cost is per-CALL (fewer, fatter calls win); flat means "
+        "per-BYTE (only columnar/FFI moves it).",
+    )
     ap.add_argument(
-        "--profile-counts", action="store_true",
+        "--profile-counts",
+        action="store_true",
         help="Attribute the counts stage across pair generation / record "
-             "join / scoring UDF / GROUP BY exchange. Times PREFIXES of the "
-             "same DAG, so it costs ~3x a normal counts stage -- a "
-             "diagnostic, not something to leave on. Without it, every "
-             "optimisation of a stage that is 94%% of the wall is a guess "
-             "about which part of it is expensive.")
+        "join / scoring UDF / GROUP BY exchange. Times PREFIXES of the "
+        "same DAG, so it costs ~3x a normal counts stage -- a "
+        "diagnostic, not something to leave on. Without it, every "
+        "optimisation of a stage that is 94%% of the wall is a guess "
+        "about which part of it is expensive.",
+    )
     ap.add_argument(
-        "--max-block-pairs", type=int, default=50_000_000,
+        "--max-block-pairs",
+        type=int,
+        default=50_000_000,
         help="refuse a pass whose LARGEST single block would emit more pairs "
-             "than this. A skewed blocking key does not fail, it hangs -- the "
-             "constant-prefix truncation bug put 20%% of the table in one "
-             "block and the run sat in the join for 24 minutes until the step "
-             "timeout killed it, with no output naming the cause. This turns "
-             "that into a fast, specific refusal.")
-    ap.add_argument("--match-splink-levels", action="store_true",
-                    help="Give every comparison field the same four informative "
-                         "levels Splink uses (exact / 0.9 / 0.7 / else) instead "
-                         "of this harness's default three. Without it an "
-                         "accuracy comparison measures a ladder difference and "
-                         "reports it as an engine difference.")
-    ap.add_argument("--eval-quality", action="store_true",
-                    help="After training, score the SAME candidate pairs with "
-                         "the trained model and report ranking quality against "
-                         "the fixture's known entity structure. The speed "
-                         "number means nothing without it: the bar is "
-                         "match-or-better accuracy, not a faster arrival at a "
-                         "worse model.")
-    ap.add_argument("--spark-ui", default="http://localhost:4041",
-                    help="Spark UI of the CONNECT driver (compose maps its 4040 "
-                         "to 4041, because Splink's classic driver binds 4040 on "
-                         "the host). Read for stage-level shuffle bytes.")
+        "than this. A skewed blocking key does not fail, it hangs -- the "
+        "constant-prefix truncation bug put 20%% of the table in one "
+        "block and the run sat in the join for 24 minutes until the step "
+        "timeout killed it, with no output naming the cause. This turns "
+        "that into a fast, specific refusal.",
+    )
+    ap.add_argument(
+        "--match-splink-levels",
+        action="store_true",
+        help="Give every comparison field the same four informative "
+        "levels Splink uses (exact / 0.9 / 0.7 / else) instead "
+        "of this harness's default three. Without it an "
+        "accuracy comparison measures a ladder difference and "
+        "reports it as an engine difference.",
+    )
+    ap.add_argument(
+        "--eval-quality",
+        action="store_true",
+        help="After training, score the SAME candidate pairs with "
+        "the trained model and report ranking quality against "
+        "the fixture's known entity structure. The speed "
+        "number means nothing without it: the bar is "
+        "match-or-better accuracy, not a faster arrival at a "
+        "worse model.",
+    )
+    ap.add_argument(
+        "--spark-ui",
+        default="http://localhost:4041",
+        help="Spark UI of the CONNECT driver (compose maps its 4040 "
+        "to 4041, because Splink's classic driver binds 4040 on "
+        "the host). Read for stage-level shuffle bytes.",
+    )
+    ap.add_argument(
+        "--shuffle-partitions",
+        type=int,
+        default=0,
+        help="spark.sql.shuffle.partitions. 0 leaves Spark's default, "
+        "-1 derives 5x total executor cores per Splink's guide. "
+        "Applied IDENTICALLY to both arms via scripts/_spark_tuning.py.",
+    )
     ap.add_argument("--out", default="")
     args = ap.parse_args()
 
@@ -553,44 +606,61 @@ def main() -> int:
     from pyspark.sql import SparkSession
 
     spark = SparkSession.builder.remote(args.remote).getOrCreate()
+    _applied_partitions = _tuning_module().apply_shuffle_partitions(
+        spark, args.shuffle_partitions, spark_ui=args.spark_ui
+    )
     install(spark, jar=find_jar())
     impl, _diagnostics, runtime = implementation(spark)
     print(f"[scale] kernel impl={impl} runtime={runtime}", flush=True)
 
     out: dict = {
-        "rows": args.rows, "dup": args.dup,
+        "rows": args.rows,
+        "dup": args.dup,
         "blocks_per_key": args.blocks_per_key,
-        "kernel_impl": impl, "kernel_runtime": runtime,
-        "stages": {}, "passes": [], "n_fields": args.fields, "value_pad": args.value_pad, "scorer_override": args.scorer or None,
+        "kernel_impl": impl,
+        "kernel_runtime": runtime,
+        # None means Spark's default was left alone. Recorded so an artifact
+        # can never be read without knowing which partition count produced it.
+        "shuffle_partitions": _applied_partitions,
+        "u_max_pairs": args.u_max_pairs,
+        "stages": {},
+        "passes": [],
+        "n_fields": args.fields,
+        "value_pad": args.value_pad,
+        "scorer_override": args.scorer or None,
     }
 
     t0 = time.perf_counter()
-    df = build_fixture(spark, args.rows, args.dup, args.blocks_per_key,
-                       value_pad=args.value_pad)
+    df = build_fixture(spark, args.rows, args.dup, args.blocks_per_key, value_pad=args.value_pad)
     # Materialise once so the fixture build is not re-run inside every stage
     # and charged to whichever stage happened to trigger it.
     df.cache()
     actual = df.count()
     out["stages"]["fixture_seconds"] = round(time.perf_counter() - t0, 2)
     out["actual_rows"] = actual
-    print(f"[scale] fixture: {actual:,} rows in "
-          f"{out['stages']['fixture_seconds']}s", flush=True)
+    print(f"[scale] fixture: {actual:,} rows in {out['stages']['fixture_seconds']}s", flush=True)
 
-    cfg = make_config(args.fields, args.scorer or None,
-                      match_splink_levels=args.match_splink_levels)
+    cfg = make_config(
+        args.fields, args.scorer or None, match_splink_levels=args.match_splink_levels
+    )
     mk = cfg.get_matchkeys()[0]
 
     # ── u: sampled self-join. Cost tracks the SAMPLE, not the table. ──
     t = time.perf_counter()
     u_probs = estimate_u_distributed(
-        df, mk, id_col="__row_id__",
-        scorer_udf=ROW_UDF_NAME, transform_udf=TRANSFORM_UDF_NAME,
+        df,
+        mk,
+        id_col="__row_id__",
+        scorer_udf=ROW_UDF_NAME,
+        transform_udf=TRANSFORM_UDF_NAME,
         max_pairs=args.u_max_pairs,
+        # The harness counted the fixture moments ago; re-counting 50M rows to
+        # derive a sampling fraction is a full pass for arithmetic we have.
+        total_rows=actual,
     )
     out["stages"]["u_seconds"] = round(time.perf_counter() - t, 2)
     out["u_probs"] = {k: [round(x, 6) for x in v] for k, v in u_probs.items()}
-    print(f"[scale] u in {out['stages']['u_seconds']}s -> {out['u_probs']}",
-          flush=True)
+    print(f"[scale] u in {out['stages']['u_seconds']}s -> {out['u_probs']}", flush=True)
 
     # ── counts: the stage that scales with the data. ──
     from goldenmatch.core.probabilistic import (
@@ -610,9 +680,12 @@ def main() -> int:
         top_key, top_rows = largest_block(df, key_config)
         skew_dt = time.perf_counter() - t
         top_pairs = top_rows * (top_rows - 1) // 2
-        print(f"[scale] pass {i} on {list(fields)}: largest block "
-              f"{top_key!r} has {top_rows:,} rows -> {top_pairs:,} pairs "
-              f"({skew_dt:.2f}s)", flush=True)
+        print(
+            f"[scale] pass {i} on {list(fields)}: largest block "
+            f"{top_key!r} has {top_rows:,} rows -> {top_pairs:,} pairs "
+            f"({skew_dt:.2f}s)",
+            flush=True,
+        )
         if top_pairs > args.max_block_pairs:
             raise SystemExit(
                 f"[scale] pass {i} on {list(fields)} REFUSED: block "
@@ -629,19 +702,28 @@ def main() -> int:
         prof = None
         if args.profile_counts:
             prof = profile_counts(
-                joined, mk, scorer_udf=ROW_UDF_NAME,
-                transform_udf=TRANSFORM_UDF_NAME, cands=cands,
+                joined,
+                mk,
+                scorer_udf=ROW_UDF_NAME,
+                transform_udf=TRANSFORM_UDF_NAME,
+                cands=cands,
             )
             a = prof["attribution"]
-            print(f"[scale] pass {i} counts attribution: "
-                  f"pairs={a['pair_generation']}s join={a['record_join']}s "
-                  f"scoring={a['scoring_udf']}s groupby={a['groupby_exchange']}s",
-                  flush=True)
+            print(
+                f"[scale] pass {i} counts attribution: "
+                f"pairs={a['pair_generation']}s join={a['record_join']}s "
+                f"scoring={a['scoring_udf']}s groupby={a['groupby_exchange']}s",
+                flush=True,
+            )
 
         t = time.perf_counter()
         counts = agreement_pattern_counts(
-            joined, mk, lhs=CAND_LHS, rhs=CAND_RHS,
-            scorer_udf=ROW_UDF_NAME, transform_udf=TRANSFORM_UDF_NAME,
+            joined,
+            mk,
+            lhs=CAND_LHS,
+            rhs=CAND_RHS,
+            scorer_udf=ROW_UDF_NAME,
+            transform_udf=TRANSFORM_UDF_NAME,
         )
         dt = time.perf_counter() - t
         count_wall += dt
@@ -652,31 +734,36 @@ def main() -> int:
         train_wall += time.perf_counter() - t
         sessions.append((fields, em, float(n_pairs)))
 
-        out["passes"].append({
-            "pass": i, "blocking_fields": list(fields),
-            "pairs": n_pairs, "distinct_patterns": len(counts),
-            "count_seconds": round(dt, 2),
-            # Recorded even when it passes the guard: skew that is merely bad
-            # is invisible in the totals, and this is the number that moves
-            # when a fixture change quietly reshapes the candidate set.
-            "largest_block_rows": top_rows,
-            "largest_block_key": top_key,
-            "largest_block_pairs": top_pairs,
-            # None unless --profile-counts. Present as an explicit null so a
-            # reader can tell "not profiled" from "profiled and found nothing".
-            "counts_profile": prof,
-        })
-        print(f"[scale] pass {i} on {list(fields)}: {n_pairs:,} pairs -> "
-              f"{len(counts)} distinct patterns in {dt:.2f}s", flush=True)
+        out["passes"].append(
+            {
+                "pass": i,
+                "blocking_fields": list(fields),
+                "pairs": n_pairs,
+                "distinct_patterns": len(counts),
+                "count_seconds": round(dt, 2),
+                # Recorded even when it passes the guard: skew that is merely bad
+                # is invisible in the totals, and this is the number that moves
+                # when a fixture change quietly reshapes the candidate set.
+                "largest_block_rows": top_rows,
+                "largest_block_key": top_key,
+                "largest_block_pairs": top_pairs,
+                # None unless --profile-counts. Present as an explicit null so a
+                # reader can tell "not profiled" from "profiled and found nothing".
+                "counts_profile": prof,
+            }
+        )
+        print(
+            f"[scale] pass {i} on {list(fields)}: {n_pairs:,} pairs -> "
+            f"{len(counts)} distinct patterns in {dt:.2f}s",
+            flush=True,
+        )
 
     out["stages"]["counts_seconds"] = round(count_wall, 2)
     out["stages"]["train_seconds"] = round(train_wall, 2)
 
     model = _combine_em_sessions(mk, sessions)
     out["m_probs"] = {k: [round(x, 6) for x in v] for k, v in model.m_probs.items()}
-    out["match_weights"] = {
-        k: [round(x, 4) for x in v] for k, v in model.match_weights.items()
-    }
+    out["match_weights"] = {k: [round(x, 4) for x in v] for k, v in model.match_weights.items()}
     out["proportion_matched"] = round(model.proportion_matched, 6)
 
     if args.eval_quality:
@@ -714,9 +801,9 @@ def main() -> int:
         cands = cands.dropDuplicates(["a", "b"])
 
         joined = join_candidates_to_sources(cands, df, id_col="__row_id__")
-        gammas = gamma_columns(mk, CAND_LHS, CAND_RHS,
-                               scorer_udf=ROW_UDF_NAME,
-                               transform_udf=TRANSFORM_UDF_NAME)
+        gammas = gamma_columns(
+            mk, CAND_LHS, CAND_RHS, scorer_udf=ROW_UDF_NAME, transform_udf=TRANSFORM_UDF_NAME
+        )
         # Match weight = the per-field log2(m/u) for the level the pair landed
         # on, summed. `match_weights[field][level]` IS that table, so this is a
         # lookup rather than a second derivation of the weight.
@@ -725,11 +812,11 @@ def main() -> int:
             per_level = model.match_weights[f.resolved_field]
             expr = F.lit(0.0)
             for level, val in enumerate(per_level):
-                expr = F.when(col == F.lit(level),
-                              F.lit(float(val))).otherwise(expr)
+                expr = F.when(col == F.lit(level), F.lit(float(val))).otherwise(expr)
             weight = weight + expr
-        truth = (F.col(f"{CAND_LHS}.__row_id__") % F.lit(n_entities)
-                 == F.col(f"{CAND_RHS}.__row_id__") % F.lit(n_entities))
+        truth = F.col(f"{CAND_LHS}.__row_id__") % F.lit(n_entities) == F.col(
+            f"{CAND_RHS}.__row_id__"
+        ) % F.lit(n_entities)
         # GROUP BY the weight in the ENGINE, and collect the groups.
         #
         # This used to collect one `(score, is_true)` tuple PER CANDIDATE PAIR.
@@ -757,8 +844,10 @@ def main() -> int:
             for r in (
                 joined.select(weight.alias("w"), truth.alias("is_true"))
                 .groupBy("w")
-                .agg(F.sum(F.col("is_true").cast("long")).alias("n_true"),
-                     F.count(F.lit(1)).alias("n_all"))
+                .agg(
+                    F.sum(F.col("is_true").cast("long")).alias("n_true"),
+                    F.count(F.lit(1)).alias("n_all"),
+                )
                 .collect()
             )
         ]
@@ -781,15 +870,17 @@ def main() -> int:
         # then gets deleted.
         _n_ent = max(args.rows // max(args.dup, 1), 1)
         _q, _r = divmod(args.rows, _n_ent)
-        expected_true = (_r * ((_q + 1) * _q // 2)
-                         + (_n_ent - _r) * (_q * (_q - 1) // 2))
+        expected_true = _r * ((_q + 1) * _q // 2) + (_n_ent - _r) * (_q * (_q - 1) // 2)
         q["expected_true_pairs"] = expected_true
-        q["true_pairs_match_expected"] = (q["n_true"] == expected_true)
+        q["true_pairs_match_expected"] = q["n_true"] == expected_true
         if not q["true_pairs_match_expected"]:
-            print(f"[scale] WARNING quality population is wrong: found "
-                  f"{q['n_true']:,} true pairs, fixture contains "
-                  f"{expected_true:,}. The metric below is NOT comparable to "
-                  f"the other engine's.", flush=True)
+            print(
+                f"[scale] WARNING quality population is wrong: found "
+                f"{q['n_true']:,} true pairs, fixture contains "
+                f"{expected_true:,}. The metric below is NOT comparable to "
+                f"the other engine's.",
+                flush=True,
+            )
         out["quality"] = q
         print(f"[scale] quality {out['quality']}", flush=True)
 
@@ -807,10 +898,11 @@ def main() -> int:
 
     out["total_seconds"] = round(sum(out["stages"].values()), 2)
 
-    print(f"[scale] DONE rows={actual:,} total={out['total_seconds']}s "
-          f"stages={out['stages']}", flush=True)
-    print(f"[scale] model m={out['m_probs']} weights={out['match_weights']}",
-          flush=True)
+    print(
+        f"[scale] DONE rows={actual:,} total={out['total_seconds']}s stages={out['stages']}",
+        flush=True,
+    )
+    print(f"[scale] model m={out['m_probs']} weights={out['match_weights']}", flush=True)
 
     if args.out:
         with open(args.out, "w", encoding="utf-8") as fh:

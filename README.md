@@ -245,6 +245,18 @@ Every headline number maps back to a single committed runner (`scripts/run_bench
 
 **Fellegi-Sunter training, distributed on Spark:** the E-step collapses to one Spark `GROUP BY` over agreement patterns, so training cost tracks the number of DISTINCT comparison vectors (bounded by `prod(levels + 1)`), not the pair count. Measured on a real 2-worker Spark cluster (jar-only executors, no Python installed), 1M -> 5M rows: candidate pairs grew **5.00x** and the distributed counting stage **5.25x**, while distinct patterns grew **3.0%** (433 -> 446) and driver-side EM stayed at **0.01s**. That is the property the tier rests on -- the cluster absorbs the data, the driver's work stays flat.
 
+**Head-to-head vs Splink on a real Spark cluster, at 50M rows.** Both engines on the *same* 5-node cluster, the same fixture, the same shared metric implementation, and Splink configured the way its own performance guide prescribes -- `break_lineage_method="parquet"` onto a real distributed filesystem, shuffle partitions at 5x cluster cores, and identical 48 GB executors. Over **463,923,179 candidate pairs**, scored identically by both:
+
+| | GoldenMatch | Splink | ratio |
+| --- | ---: | ---: | ---: |
+| wall | **862s** | 1,248s | 1.45x |
+| shuffle write | **128.5 GB** | 212.1 GB | 1.65x |
+| stages | **197** | 394 | 2.00x |
+| executor CPU | **47,121s** | 63,759s | 1.35x |
+| spill | 0 | 0 | -- |
+
+Reported with it, because a benchmark that only publishes its wins is not evidence: **Splink's `u` estimation is 2.3x faster than ours**, the margin **narrows with scale** (2.54x at 1M -> 1.45x at 50M, so do not extrapolate upward), the run is **N=1** on a synthetic fixture, and the accuracy figures in it are *not* an accuracy verdict -- for that, see the [bake-off](docs/benchmarks/2026-06-09-splink-bakeoff.md). Four earlier attempts at this comparison were invalid because *we* had misconfigured Splink; each defect and its effect is documented alongside the results. [Full method, caveats and reproduce command](docs/benchmarks/2026-08-19-spark-50m-head-to-head.md).
+
 Three reproducible real-world pipelines run this on public data at scale:
 
 - **[shell-company-network](https://github.com/benseverndev-oss/goldenmatch-shell-company-network)**: investigative ER across ICIJ Offshore Leaks + OpenSanctions + GLEIF + UK PSC. **−62.5% analyst-hours to triage** vs single-source baselines.

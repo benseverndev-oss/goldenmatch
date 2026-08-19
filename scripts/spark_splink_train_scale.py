@@ -97,6 +97,7 @@ import os
 import re
 import time
 from pathlib import Path
+from typing import Any
 
 
 def _fixture_module():
@@ -134,6 +135,24 @@ def _shuffle_module():
     return mod
 
 
+def _tuning_module():
+    """The SHARED Spark tuning, imported by file path.
+
+    Same reasoning as the shuffle reader and the ranking metric: both arms have
+    to be tuned by ONE implementation, or the benchmark measures the tuning
+    rather than the engines.
+    """
+    import importlib.util
+
+    path = Path(__file__).resolve().parent / "_spark_tuning.py"
+    spec = importlib.util.spec_from_file_location("_spark_tuning", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"cannot load {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def _metrics_module():
     """The SHARED ranking metric, imported by file path.
 
@@ -156,7 +175,7 @@ def _metrics_module():
 _SIZE_SUFFIX = re.compile(r"^\s*(\d+)\s*([kKmMgGtT])[bB]?\s*$")
 
 
-def _normalize_gs_size_props(spark: object) -> None:
+def _normalize_gs_size_props(spark: Any) -> None:
     """Rewrite suffixed `fs.gs.*` sizes to plain bytes, and say what it found.
 
     Runs 32269692605 and 32277069612 both died initializing the filesystem with
@@ -211,7 +230,13 @@ def _normalize_gs_size_props(spark: object) -> None:
 
 
 def build_session(
-    master: str, driver_host: str | None, wait_s: int, checkpoint_dir: str | None = None
+    master: str,
+    driver_host: str | None,
+    wait_s: int,
+    checkpoint_dir: str | None = None,
+    executor_memory: str | None = None,
+    executor_cores: int | None = None,
+    expect_executors: int = 0,
 ):
     """A session tuned NO differently from the one GM gets.
 
@@ -247,6 +272,22 @@ def build_session(
         # also ships it to the executors, which is where the UDFs evaluate.
         .config("spark.jars", similarity_jar_location())
     )
+    # EXECUTOR SIZING, matched to GoldenMatch's. This session set neither, so it
+    # took Spark's DEFAULT `spark.executor.memory=1g` while GM's Connect server
+    # is launched by the workflow with
+    #
+    #     --conf spark.executor.cores=16 --conf spark.executor.memory=48g
+    #
+    # A 48x memory disadvantage is not a comparison. It explains the OOM
+    # (`exited with code 52`) at 50M, the executors lost and relaunched into the
+    # teens, and -- at 1M, where Splink completed -- the 4.09 GB memory / 1.88 GB
+    # disk spill against GoldenMatch's zero. That spill was previously read as a
+    # structural property of the engines; on this evidence it is an artefact of
+    # how much heap each arm was given.
+    if executor_memory:
+        b = b.config("spark.executor.memory", executor_memory)
+    if executor_cores:
+        b = b.config("spark.executor.cores", str(executor_cores))
     if driver_host:
         b = b.config("spark.driver.host", driver_host)
     if checkpoint_dir and checkpoint_dir.startswith("gs://"):
@@ -348,6 +389,14 @@ def build_session(
     # run "works" -- it just runs everything on the driver and reports a wall
     # that has nothing to do with the cluster, which is a worse outcome than a
     # failure because it looks like data.
+    # Waits for the EXPECTED count, not merely for one. `n > 0` returned on the
+    # first executor to check in, so run 32287895819 reported "2 executor(s)
+    # registered" -- a SNAPSHOT of a cluster still filling up, not its size.
+    # That number is not cosmetic: it is recorded in the artifact as the
+    # cluster Splink ran on, and the shuffle-partition tuning derives from the
+    # cores behind it, which is how that run tuned to 160 partitions instead of
+    # 320. A count taken too early under-provisions the arm and then documents
+    # the wrong reason for it.
     deadline = time.time() + wait_s
     n = 0
     while time.time() < deadline:
@@ -355,9 +404,21 @@ def build_session(
             n = spark.sparkContext._jsc.sc().getExecutorMemoryStatus().size() - 1
         except Exception:  # noqa: BLE001 - probe only
             n = 0
-        if n > 0:
+        if n >= expect_executors > 0:
+            break
+        if expect_executors <= 0 and n > 0:
             break
         time.sleep(2)
+    if 0 < n < expect_executors:
+        # Not fatal: a short cluster is still measurable, and refusing would
+        # throw away the GoldenMatch arm that already ran. But it must be LOUD,
+        # because a quietly under-provisioned arm reads as an engine limit.
+        print(
+            f"::warning::only {n}/{expect_executors} executors registered within "
+            f"{wait_s}s; this arm is under-provisioned and its wall is not "
+            f"comparable to the other's",
+            flush=True,
+        )
     if n <= 0:
         raise SystemExit(
             f"::error::no executor registered within {wait_s}s on {master}. "
@@ -380,6 +441,16 @@ def main() -> int:
     )
     ap.add_argument("--driver-host", default=os.environ.get("SPLINK_DRIVER_HOST", ""))
     ap.add_argument("--executor-wait", type=int, default=120)
+    ap.add_argument("--expect-executors", type=int, default=0,
+                    help="Wait for this many executors before proceeding. 0 waits for one. "
+                         "A snapshot taken while the cluster is still filling up both "
+                         "under-provisions this arm and mis-derives the partition count.")
+    ap.add_argument("--executor-memory", default="",
+                    help="spark.executor.memory. MUST match what the workflow gives the "
+                         "Connect server for GoldenMatch, or the arms differ by heap size "
+                         "rather than by engine. Empty leaves Spark's 1g default.")
+    ap.add_argument("--executor-cores", type=int, default=0,
+                    help="spark.executor.cores. Same symmetry requirement as memory.")
     ap.add_argument(
         "--max-pairs",
         type=int,
@@ -419,6 +490,14 @@ def main() -> int:
         "documented `parquet` default; without one this falls "
         "back to `persist`, which does NOT truncate lineage "
         "and OOMs at scale.",
+    )
+    ap.add_argument(
+        "--shuffle-partitions",
+        type=int,
+        default=0,
+        help="spark.sql.shuffle.partitions. 0 leaves Spark's default, "
+        "-1 derives 5x total executor cores per Splink's guide. "
+        "Applied IDENTICALLY to both arms via scripts/_spark_tuning.py.",
     )
     ap.add_argument("--out", default="splink-train-scale.json")
     args = ap.parse_args()
@@ -467,9 +546,24 @@ def main() -> int:
     t_all = time.perf_counter()
 
     spark, n_exec = build_session(
-        args.master, args.driver_host or None, args.executor_wait, args.checkpoint_dir or None
+        args.master,
+        args.driver_host or None,
+        args.executor_wait,
+        args.checkpoint_dir or None,
+        executor_memory=args.executor_memory or None,
+        executor_cores=args.executor_cores or None,
+        expect_executors=args.expect_executors,
     )
     out["executors"] = n_exec
+    out["expected_executors"] = args.expect_executors or None
+    out["executor_memory"] = args.executor_memory or "(spark default 1g)"
+    out["executor_cores"] = args.executor_cores or None
+    # Applied AFTER build_session, which waits for executors to register: the
+    # core count is read from the running cluster, and reading it before
+    # registration would derive the partition count from zero cores.
+    out["shuffle_partitions"] = _tuning_module().apply_shuffle_partitions(
+        spark, args.shuffle_partitions, spark_ui=args.spark_ui
+    )
 
     fx = _fixture_module()
     t = time.perf_counter()
