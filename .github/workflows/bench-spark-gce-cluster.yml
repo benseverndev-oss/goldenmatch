@@ -101,6 +101,12 @@ on:
         required: false
         type: boolean
         default: true
+      splink_checkpoint_fs:
+        description: "Shared filesystem for Splink's lineage break. `hdfs` stands up a real HDFS across the cluster nodes (Spark speaks hdfs:// through the Hadoop client pyspark already bundles, so no connector is involved). `gcs` uses the bucket in splink_checkpoint_dir via the gcs-connector. `none` forces `persist`, which keeps lineage and OOMs at scale -- debugging only."
+        required: false
+        type: choice
+        default: "hdfs"
+        options: ["hdfs", "gcs", "none"]
       splink_checkpoint_dir:
         description: "GCS prefix for Splink's lineage break (its documented `parquet` default). Splink OOMs at scale without a distributed FS -- persist caches but does NOT truncate the DAG. Must be in the SAME REGION as the cluster or Splink pays cross-region I/O GoldenMatch does not."
         required: false
@@ -593,6 +599,125 @@ jobs:
           echo "::error::no worker registered with the master -- every timing below would be a queue wait, not a measurement. Container status and logs are in the groups above."
           exit 1
 
+      - name: Stand up HDFS across the cluster
+        # Splink's lineage break writes a parquet FROM THE EXECUTORS and reads
+        # it back, so it needs storage every executor can reach. Confirmed in
+        # Splink's own source rather than assumed:
+        #
+        #     checkpoint_dir = self._get_checkpoint_dir_path(spark_df)
+        #     spark_df.write.mode("overwrite").parquet(write_path)
+        #     spark_df = self.spark.read.parquet(write_path)
+        #
+        # This lane had NO distributed filesystem at all. That is the real
+        # defect: Splink's documented 100M+ deployments run on Databricks / EMR
+        # / Dataproc where a shared FS is native, and bolting a GCS connector
+        # onto bare standalone Spark was the unusual part, not Splink. Three
+        # runs died on connector configuration before the filesystem was ever
+        # reached.
+        #
+        # HDFS removes the connector from the question entirely: pyspark already
+        # bundles hadoop-client-api/runtime, so `hdfs://` needs NO extra jar on
+        # driver or executors, and it is the filesystem Spark is built around.
+        #
+        # `dfs.replication=1` ON PURPOSE. This is scratch for a lineage break
+        # that lives minutes, and replication would tax Splink with write
+        # amplification GoldenMatch does not pay. Giving the engine under test
+        # its cheapest correct configuration is the fair choice; the risk is a
+        # lost datanode failing the run, not a wrong number.
+        if: inputs.splink_compare && (inputs.splink_checkpoint_fs || 'hdfs') == 'hdfs'
+        run: |
+          set -euo pipefail
+          HADOOP_IMAGE=apache/hadoop:3.4.1
+
+          # Config written on the RUNNER and copied, rather than heredoc'd
+          # through ssh: XML inside a remote shell string is a quoting trap and
+          # a silently mangled config would surface as a filesystem that half
+          # works.
+          mkdir -p hdfs-conf
+          cat > hdfs-conf/core-site.xml <<XML
+          <?xml version="1.0"?>
+          <configuration>
+            <property><name>fs.defaultFS</name><value>hdfs://${MASTER_IP}:9000</value></property>
+            <property><name>hadoop.tmp.dir</name><value>/hadoop/tmp</value></property>
+          </configuration>
+          XML
+          cat > hdfs-conf/hdfs-site.xml <<XML
+          <?xml version="1.0"?>
+          <configuration>
+            <property><name>dfs.replication</name><value>1</value></property>
+            <property><name>dfs.namenode.name.dir</name><value>/hadoop/dfs/name</value></property>
+            <property><name>dfs.datanode.data.dir</name><value>/hadoop/dfs/data</value></property>
+            <property><name>dfs.permissions.enabled</name><value>false</value></property>
+            <property><name>dfs.namenode.rpc-bind-host</name><value>0.0.0.0</value></property>
+            <property><name>dfs.namenode.servicerpc-bind-host</name><value>0.0.0.0</value></property>
+            <property><name>dfs.namenode.http-bind-host</name><value>0.0.0.0</value></property>
+            <property><name>dfs.datanode.use.datanode.hostname</name><value>false</value></property>
+            <property><name>dfs.client.use.datanode.hostname</name><value>false</value></property>
+          </configuration>
+          XML
+          # The heredocs above are indented for YAML, so strip the leading
+          # spaces the block scalar leaves behind. `<?xml` MUST start at column
+          # 0 or the parser rejects the declaration.
+          sed -i 's/^ *//' hdfs-conf/core-site.xml hdfs-conf/hdfs-site.xml
+
+          MASTER="$CLUSTER-master"
+          for n in $NODE_NAMES; do
+            gcloud compute scp --quiet --recurse hdfs-conf "$n:~/" &
+          done
+          wait
+
+          MOUNTS="-v \$HOME/hdfs-conf/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml -v \$HOME/hdfs-conf/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml"
+
+          # Namenode: format, then run. The dirs are chmod 777 because the
+          # image runs as its own `hadoop` user and the host path is created by
+          # root.
+          gcloud compute ssh "$MASTER" --quiet --command "
+            set -euo pipefail
+            sudo mkdir -p /mnt/disks/scratch/hdfs-nn && sudo chmod 777 /mnt/disks/scratch/hdfs-nn
+            docker run --rm --network host $MOUNTS \
+              -v /mnt/disks/scratch/hdfs-nn:/hadoop/dfs/name \
+              $HADOOP_IMAGE hdfs namenode -format -force -nonInteractive
+            docker run -d --name hdfs-nn --network host --restart unless-stopped $MOUNTS \
+              -v /mnt/disks/scratch/hdfs-nn:/hadoop/dfs/name \
+              $HADOOP_IMAGE hdfs namenode
+          "
+
+          # A datanode on EVERY node, master included: its disk is as good as
+          # any other and the master is otherwise idle during the Splink arm.
+          for n in $NODE_NAMES; do
+            gcloud compute ssh "$n" --quiet --command "
+              set -euo pipefail
+              sudo mkdir -p /mnt/disks/scratch/hdfs-dn && sudo chmod 777 /mnt/disks/scratch/hdfs-dn
+              docker run -d --name hdfs-dn --network host --restart unless-stopped $MOUNTS \
+                -v /mnt/disks/scratch/hdfs-dn:/hadoop/dfs/data \
+                $HADOOP_IMAGE hdfs datanode
+            " &
+          done
+          wait
+
+          # VERIFIED, not assumed. A namenode with zero live datanodes accepts
+          # a mkdir and then fails every write with UnreplicatedBlocks, minutes
+          # later, inside Splink -- which would read as a Splink failure.
+          echo "waiting for datanodes to register"
+          EXPECT=$(echo $NODE_NAMES | wc -w)
+          for i in $(seq 1 40); do
+            LIVE=$(gcloud compute ssh "$MASTER" --quiet --command \
+              "docker exec hdfs-nn hdfs dfsadmin -report 2>/dev/null | grep -c '^Name:' || true" 2>/dev/null | tr -dc '0-9') || true
+            echo "  attempt $i: ${LIVE:-0}/$EXPECT live datanodes"
+            [ "${LIVE:-0}" -ge "$EXPECT" ] && break
+            sleep 10
+          done
+          [ "${LIVE:-0}" -ge 1 ] || {
+            echo "::error::no HDFS datanode registered; Splink's lineage break would fail mid-run"
+            gcloud compute ssh "$MASTER" --quiet --command "docker logs --tail 40 hdfs-nn 2>&1; docker logs --tail 40 hdfs-dn 2>&1" || true
+            exit 1
+          }
+          echo "HDFS up with ${LIVE} live datanode(s)"
+
+          gcloud compute ssh "$MASTER" --quiet --command \
+            "docker exec hdfs-nn hdfs dfs -mkdir -p /splink-ckpt && docker exec hdfs-nn hdfs dfs -chmod 777 /splink-ckpt"
+          echo "HDFS_CKPT=hdfs://${MASTER_IP}:9000/splink-ckpt/run-${{ github.run_id }}" >> $GITHUB_ENV
+
       - name: Run both harnesses ON the master VM
         # On the master, not the runner: Splink's classic driver must be
         # reachable BY the workers, and a runner behind NAT is not. This also
@@ -730,6 +855,16 @@ jobs:
           # job -- it prints `splink: MISSING` and reads as "Splink could not do
           # 50M". Publishing a transport failure as an engine limit is the exact
           # unfairness this comparison exists to avoid.
+          # Which shared filesystem Splink breaks lineage onto. `none` leaves
+          # the flag off entirely, which makes the harness fall back to
+          # `persist` -- correct output, keeps lineage, OOMs at scale.
+          case "${{ inputs.splink_checkpoint_fs || 'hdfs' }}" in
+            hdfs) CKPT="${HDFS_CKPT:?HDFS was selected but the HDFS step did not export HDFS_CKPT}" ;;
+            gcs)  CKPT="${{ inputs.splink_checkpoint_dir || 'gs://goldenmatch-spark-bench-us-east1' }}/run-${{ github.run_id }}" ;;
+            none) CKPT="" ;;
+          esac
+          echo "splink lineage break -> ${CKPT:-persist (no shared FS)}"
+
           source scripts/gce_detached.sh
           gce_detached "$MASTER" splink <<REMOTE
           python spark_splink_train_scale.py \
@@ -737,7 +872,7 @@ jobs:
             --master spark://$MASTER_IP:7077 \
             --driver-host $MASTER_IP \
             --spark-ui http://$MASTER_IP:4040 \
-            --checkpoint-dir '${{ inputs.splink_checkpoint_dir || 'gs://goldenmatch-spark-bench-us-east1' }}/run-${{ github.run_id }}' \
+            ${CKPT:+--checkpoint-dir $CKPT} \
             ${{ inputs.eval_quality && '--eval-quality' || '' }} \
             --out /w/splink-train-scale.json
           REMOTE
