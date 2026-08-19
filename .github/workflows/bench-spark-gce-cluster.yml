@@ -660,12 +660,34 @@ jobs:
 
           MOUNTS="-v \$HOME/hdfs-conf/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml -v \$HOME/hdfs-conf/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml"
 
-          # Namenode: format, then run. The dirs are chmod 777 because the
-          # image runs as its own `hadoop` user and the host path is created by
-          # root.
+          # CHOWN, not chmod. Run 32280604422 gave the host dirs mode 777 and
+          # the datanode still refused every volume:
+          #
+          #     WARN StorageLocationChecker: Exception checking
+          #     StorageLocation [DISK]file:/hadoop/dfs/data
+          #     EPERM: Operation not permitted
+          #       at NativeIO$POSIX.chmodImpl
+          #       at DiskChecker.mkdirsWithExistsAndPermissionCheck
+          #     Too many failed volumes - current valid volumes: 0
+          #
+          # The datanode chmods its data dir to `dfs.datanode.data.dir.perm`
+          # (0700) on startup. `sudo mkdir` leaves the dir owned by ROOT while
+          # the image runs as its own `hadoop` user, and chmod requires
+          # OWNERSHIP -- write permission is not enough. Mode 777 grants the
+          # wrong thing.
+          #
+          # The uid is read FROM THE IMAGE rather than hardcoded to 1000: it is
+          # a property of the image, and a wrong guess reproduces this exact
+          # failure one cluster later.
+          HUID=$(gcloud compute ssh "$MASTER" --quiet --command \
+            "docker run --rm --entrypoint id $HADOOP_IMAGE -u" 2>/dev/null | tr -dc '0-9')
+          [ -n "$HUID" ] || { echo "::error::could not read the hadoop uid from $HADOOP_IMAGE"; exit 1; }
+          echo "hadoop image runs as uid $HUID"
+
+          # Namenode: format, then run.
           gcloud compute ssh "$MASTER" --quiet --command "
             set -euo pipefail
-            sudo mkdir -p /mnt/disks/scratch/hdfs-nn && sudo chmod 777 /mnt/disks/scratch/hdfs-nn
+            sudo mkdir -p /mnt/disks/scratch/hdfs-nn && sudo chown -R $HUID:$HUID /mnt/disks/scratch/hdfs-nn
             docker run --rm --network host $MOUNTS \
               -v /mnt/disks/scratch/hdfs-nn:/hadoop/dfs/name \
               $HADOOP_IMAGE hdfs namenode -format -force -nonInteractive
@@ -679,7 +701,7 @@ jobs:
           for n in $NODE_NAMES; do
             gcloud compute ssh "$n" --quiet --command "
               set -euo pipefail
-              sudo mkdir -p /mnt/disks/scratch/hdfs-dn && sudo chmod 777 /mnt/disks/scratch/hdfs-dn
+              sudo mkdir -p /mnt/disks/scratch/hdfs-dn && sudo chown -R $HUID:$HUID /mnt/disks/scratch/hdfs-dn
               docker run -d --name hdfs-dn --network host --restart unless-stopped $MOUNTS \
                 -v /mnt/disks/scratch/hdfs-dn:/hadoop/dfs/data \
                 $HADOOP_IMAGE hdfs datanode
