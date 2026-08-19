@@ -19,6 +19,38 @@
 # do not. This lane converts that ratio into measured NETWORK time, on separate
 # machines, which is the one thing the byte count cannot tell you.
 #
+# ## THAT ~20x IS WRONG, and this lane is what found out (2026-08-19)
+#
+# The proxy ran Splink misconfigured in four separate ways, each of which this
+# lane hit and fixed in turn:
+#
+#   1. `break_lineage_method="persist"`, which caches WITHOUT truncating the
+#      DAG. Splink's documented default is `parquet`.
+#   2. No distributed filesystem, so `parquet` had nowhere to write. This
+#      cluster now stands up HDFS.
+#   3. Splink starting before the master released Connect's cores, and its own
+#      wait returning on the FIRST executor to register.
+#   4. **`spark.executor.memory` left at Spark's 1g default while GoldenMatch's
+#      Connect server got 48g.** A 48x heap disadvantage.
+#
+# Measured at 1M with both arms on the same cluster, the same 48g executors,
+# the same 320 shuffle partitions (5x cores, per Splink's own guide), and the
+# same shared metric implementations (run 32290866436):
+#
+#     wall            35.82s   vs   90.89s      2.5x
+#     shuffle write   2.71 GB  vs   4.15 GB     1.5x
+#     stages          197      vs   449         2.3x
+#     spill           0 / 0    vs   0 / 0       equal
+#     GC              31.6s    vs   37.6s       1.19x
+#     avg precision   0.71524  vs   0.703386
+#     best F1         0.685667 vs   0.646975
+#
+# GoldenMatch wins every axis. The margin is SINGLE-DIGIT, not an order of
+# magnitude, and the earlier "Splink spills 4 GB where we spill zero" was an
+# artefact of the 1g heap: with equal memory BOTH spill nothing.
+#
+# Do not quote the 20x. It measured our configuration, not the engines.
+#
 # ## Why GCE standalone and not Dataproc
 #
 # Two reasons, and the second matters more.
