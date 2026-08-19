@@ -795,9 +795,28 @@ jobs:
           echo "$(curl -sSfL --retry 3 "${GCS_BASE}/gcs-connector-${GCS_VER}-shaded.jar.sha1")  gcs-connector-shaded.jar" \
             | sha1sum -c - || { echo "::error::gcs-connector jar checksum mismatch"; exit 1; }
 
+          # The helper list is DERIVED from what the harnesses actually import,
+          # not maintained by hand. Run 32286853831 died at session build with
+          #
+          #     FileNotFoundError: '/w/_spark_tuning.py'
+          #
+          # because a new shared module was added to the repo and not to this
+          # list -- the whole run lost, GoldenMatch's arm included, to a copy
+          # step. A hand-kept list of a growing set is the same bug waiting to
+          # recur; both harnesses name their helpers as string literals, so ask
+          # the source.
+          DEPS=$(grep -ho '"_[a-z_]*\.py"' \
+                   scripts/spark_fs_train_scale.py scripts/spark_splink_train_scale.py \
+                 | tr -d '"' | sort -u | sed 's|^|scripts/|')
+          echo "harness helpers: $(echo $DEPS | tr '\n' ' ')"
+          [ -n "$DEPS" ] || { echo "::error::could not derive the harness helper list"; exit 1; }
+          for f in $DEPS; do
+            [ -f "$f" ] || { echo "::error::harness imports $f but it does not exist"; exit 1; }
+          done
+
           gcloud compute scp --quiet \
             scripts/spark_fs_train_scale.py scripts/spark_splink_train_scale.py \
-            scripts/_fs_quality_metrics.py scripts/_spark_shuffle_metrics.py \
+            $DEPS \
             goldenmatch-spark.jar gcs-connector-shaded.jar \
             "$MASTER:~/"
 
