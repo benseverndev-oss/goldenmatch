@@ -101,6 +101,11 @@ on:
         required: false
         type: boolean
         default: true
+      splink_checkpoint_dir:
+        description: "GCS prefix for Splink's lineage break (its documented `parquet` default). Splink OOMs at scale without a distributed FS -- persist caches but does NOT truncate the DAG. Must be in the SAME REGION as the cluster or Splink pays cross-region I/O GoldenMatch does not."
+        required: false
+        type: string
+        default: "gs://goldenmatch-spark-bench-us-east1"
       spot:
         description: "Use SPOT VMs. OFF by default: PREEMPTIBLE_CPUS quota in golden-490919/us-central1 is 0, so SPOT provisioning FAILS. Enable only after raising it."
         required: false
@@ -645,6 +650,7 @@ jobs:
               --master spark://$MASTER_IP:7077 \
               --driver-host $MASTER_IP \
               --spark-ui http://$MASTER_IP:4040 \
+              --checkpoint-dir '${{ inputs.splink_checkpoint_dir || 'gs://goldenmatch-spark-bench-us-east1' }}/run-${{ github.run_id }}' \
               ${{ inputs.eval_quality && '--eval-quality' || '' }} \
               --out /w/splink-train-scale.json
           "
@@ -761,6 +767,16 @@ jobs:
           set -euo pipefail
           gcloud compute instances delete $NODE_NAMES --quiet --zone="$ZONE" || true
           echo "deleted: $NODE_NAMES"
+
+          # Splink's lineage-break parquet for THIS run. The bucket carries a
+          # 1-day lifecycle rule as a backstop, but a 50M run writes real volume
+          # and there is no reason to pay a day of storage for scratch nobody
+          # will read. Scoped to the run's own prefix so a concurrent dispatch
+          # is untouched, and `|| true` because losing the bench to a storage
+          # cleanup would be absurd.
+          CKPT='${{ inputs.splink_checkpoint_dir || 'gs://goldenmatch-spark-bench-us-east1' }}/run-${{ github.run_id }}'
+          gcloud storage rm -r "$CKPT" --quiet 2>/dev/null || true
+          echo "cleared: $CKPT"
 
       - name: Leaked-instance warning
         if: always() && inputs.keep_cluster

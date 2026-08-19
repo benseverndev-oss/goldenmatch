@@ -152,7 +152,8 @@ def _metrics_module():
     return mod
 
 
-def build_session(master: str, driver_host: str | None, wait_s: int):
+def build_session(master: str, driver_host: str | None, wait_s: int,
+                  checkpoint_dir: str | None = None):
     """A session tuned NO differently from the one GM gets.
 
     This used to set `spark.sql.shuffle.partitions=8`, with the rationale that
@@ -189,7 +190,32 @@ def build_session(master: str, driver_host: str | None, wait_s: int):
     )
     if driver_host:
         b = b.config("spark.driver.host", driver_host)
+    if checkpoint_dir and checkpoint_dir.startswith("gs://"):
+        # The GCS Hadoop connector, so `gs://` resolves at all. The Spark image
+        # does not bundle it, and without it a gs:// checkpoint dir fails with
+        # "No FileSystem for scheme: gs".
+        #
+        # Auth comes from the VM's metadata server: the nodes are created with
+        # `--scopes=cloud-platform` and run as the default compute service
+        # account, which holds roles/editor. No key material is passed here.
+        b = (
+            b.config("spark.jars.packages",
+                     "com.google.cloud.bigdataoss:gcs-connector:hadoop3-2.2.21")
+            .config("spark.hadoop.fs.gs.impl",
+                    "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem")
+            .config("spark.hadoop.fs.AbstractFileSystem.gs.impl",
+                    "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFS")
+            .config("spark.hadoop.google.cloud.auth.service.account.enable", "true")
+        )
     spark = b.getOrCreate()
+
+    # `parquet` -- Splink's ACTUAL default -- reads its write path from
+    # `sc.setCheckpointDir`, so the dir has to be set even though nothing calls
+    # `.checkpoint()`. See `_get_checkpoint_dir_path` in
+    # splink/internals/spark/database_api.py.
+    if checkpoint_dir:
+        spark.sparkContext.setCheckpointDir(checkpoint_dir)
+        print(f"[splink] checkpoint dir {checkpoint_dir}", flush=True)
 
     # Splink's Spark backend breaks lineage with `Dataset.checkpoint()`, which
     # needs a checkpoint dir, and a checkpoint dir on THIS topology has nowhere
@@ -264,6 +290,12 @@ def main() -> int:
     ap.add_argument("--spark-ui", default="http://localhost:4040",
                     help="Spark UI of THIS classic driver (it runs on the host "
                          "and binds 4040). Read for stage-level shuffle bytes.")
+    ap.add_argument("--checkpoint-dir", default=os.environ.get("SPLINK_CHECKPOINT_DIR", ""),
+                    help="Distributed-filesystem path for Splink's lineage "
+                         "break (e.g. gs://bucket/prefix). REQUIRED for the "
+                         "documented `parquet` default; without one this falls "
+                         "back to `persist`, which does NOT truncate lineage "
+                         "and OOMs at scale.")
     ap.add_argument("--out", default="splink-train-scale.json")
     args = ap.parse_args()
 
@@ -274,22 +306,42 @@ def main() -> int:
             "GM runs over Spark Connect (addArtifact is Connect-only); Splink "
             "cannot (it uses sparkContext). Same cluster, different front door."
         ),
-        # Recorded, not buried. Splink's default lineage break is `checkpoint`,
-        # which needs a distributed filesystem this lane has no way to provide.
-        # `persist` skips that write, so if it moves the wall it moves it in
-        # SPLINK's favour -- the deviation cannot manufacture a GM win.
-        "break_lineage_method": "persist",
-        "break_lineage_deviation": (
-            "Splink's Spark default is `checkpoint`; it requires a checkpoint "
-            "dir on a non-local filesystem (Spark refuses local paths outside "
-            "local mode) and this cluster has only container-local disk. "
-            "`persist` materialises to executor memory/disk instead."
+        # `parquet` is Splink's ACTUAL default -- verified in
+        # splink/internals/spark/database_api.py:
+        #     elif not self.break_lineage_method:
+        #         self.break_lineage_method = "parquet"
+        #
+        # An earlier version of this harness ran `persist` and recorded that
+        # Splink's default was `checkpoint`. Both were wrong, and the second
+        # error hid the first: `persist()` CACHES but keeps the lineage for
+        # fault recovery, while `checkpoint`/`parquet` materialise and CUT it.
+        # Splink's performance guide is explicit that without breaking lineage
+        # "big jobs fail to complete", and at 50M that is exactly what happened
+        # -- executors died with exit 52 (JVM OOM) after 33 EM iterations built
+        # an unbounded DAG.
+        #
+        # The old note argued the deviation "biases the wall in Splink's
+        # favour". True of wall-clock, false of MEMORY, which is the axis it
+        # died on. A configuration that cannot finish is not a favour.
+        "break_lineage_method": ("parquet" if args.checkpoint_dir else "persist"),
+        "break_lineage_note": (
+            "parquet == Splink's own default, backed by a distributed "
+            "filesystem, which is what its docs assume. Splink pays real "
+            "GCS write+read per lineage break; GoldenMatch pays none because "
+            "its counting stage has no iterative DAG to truncate. That "
+            "asymmetry is a property of the engines, not of this harness."
+            if args.checkpoint_dir else
+            "NO --checkpoint-dir given, so this fell back to `persist`, which "
+            "does NOT truncate lineage. Expect OOM at scale. This is a "
+            "misconfiguration, not a Splink limit."
         ),
+        "checkpoint_dir": args.checkpoint_dir or None,
     }
     t_all = time.perf_counter()
 
     spark, n_exec = build_session(args.master, args.driver_host or None,
-                                  args.executor_wait)
+                                  args.executor_wait,
+                                  args.checkpoint_dir or None)
     out["executors"] = n_exec
 
     fx = _fixture_module()
@@ -368,7 +420,8 @@ def main() -> int:
     # checkpoint dir.
     linker = Linker(
         df, settings,
-        db_api=SparkAPI(spark_session=spark, break_lineage_method="persist"),
+        db_api=SparkAPI(spark_session=spark,
+                        break_lineage_method=out["break_lineage_method"]),
     )
 
     # u, from random pairs -- the same quantity the GM harness times as `u`.
