@@ -59,6 +59,9 @@ gce_detached() {
   local wd="${GCE_DETACHED_WORKDIR:-/w}"
 
   {
+    # The pid is recorded so liveness can be a `kill -0` on a KNOWN process.
+    # `$$` at top level is the script's own pid and survives the subshell below.
+    printf 'echo $$ > %s/%s.pid\n' "$wd" "$tag"
     echo '('
     echo 'set -e'
     cat
@@ -68,7 +71,7 @@ gce_detached() {
 
   gcloud compute scp --quiet "$script" "$host:~/$script"
   gcloud compute ssh "$host" --quiet --command \
-    "rm -f ~/${tag}.rc ~/${tag}.log && docker exec -d pyenv sh -c 'sh ${wd}/${script} > ${wd}/${tag}.log 2>&1' && echo '[gce_detached] launched ${tag}'"
+    "rm -f ~/${tag}.rc ~/${tag}.log ~/${tag}.pid && docker exec -d pyenv sh -c 'sh ${wd}/${script} > ${wd}/${tag}.log 2>&1' && echo '[gce_detached] launched ${tag}'"
 
   local last=0 rc="" n alive
   while true; do
@@ -86,9 +89,30 @@ gce_detached() {
     rc=$(gcloud compute ssh "$host" --quiet --command "cat ~/${tag}.rc 2>/dev/null" 2>/dev/null | tr -dc '0-9') || true
     [ -n "${rc:-}" ] && break
 
-    # No exit code yet: still running, or dead without writing one?
-    alive=$(gcloud compute ssh "$host" --quiet --command "docker exec pyenv pgrep -f '${script}' >/dev/null 2>&1 && echo 1 || echo 0" 2>/dev/null | tr -dc '01') || true
-    if [ "${alive:-1}" = "0" ]; then
+    # No exit code yet: still running, or dead without writing one? THREE
+    # answers, not two. Run 32267837230 failed here because the probe was
+    # `pgrep ... || echo 0`, and `python:3.12-slim` ships no procps -- so
+    # "pgrep is not installed" and "the process is gone" produced the same `0`.
+    # The FS harness was declared dead at 30 seconds, ran happily to completion,
+    # and wrote its results anyway. Same absent-vs-zero shape as #2639/#2644:
+    # a missing answer must not read as a negative one.
+    #
+    # `kill -0` on a recorded pid rather than pgrep: `kill` is a shell builtin,
+    # so it cannot be missing from any image, and it interrogates the process we
+    # actually launched instead of pattern-matching a command line.
+    # The container check comes FIRST and runs on the host, where docker always
+    # is. A vanished container is an unambiguous death, and without this branch
+    # it would fall into `unknown` and idle the cluster until the job's
+    # timeout-minutes expired, billing five VMs for nothing.
+    alive=$(gcloud compute ssh "$host" --quiet --command \
+      "if ! docker inspect -f '{{.State.Running}}' pyenv 2>/dev/null | grep -q true; then echo dead; elif [ ! -f ~/${tag}.pid ]; then echo unknown; elif docker exec pyenv sh -c 'kill -0 \$(cat ${wd}/${tag}.pid) 2>/dev/null' 2>/dev/null; then echo alive; else echo dead; fi" 2>/dev/null | tr -dc 'a-z') || true
+    if [ "${alive:-unknown}" = "unknown" ]; then
+      # Cannot answer (pid not written yet, container not reachable this poll).
+      # Keep waiting: the job's own `timeout-minutes` is the real backstop, and
+      # a false death is far more expensive than a late one.
+      continue
+    fi
+    if [ "$alive" = "dead" ]; then
       # The process can exit between that pgrep and the rc write.
       sleep 5
       rc=$(gcloud compute ssh "$host" --quiet --command "cat ~/${tag}.rc 2>/dev/null" 2>/dev/null | tr -dc '0-9') || true

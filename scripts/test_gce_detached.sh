@@ -4,16 +4,21 @@
 # The helper exists because a real SSH drop killed run 32259409214, and the
 # failure it guards against is by nature not reproducible on demand. So the
 # logic is tested here instead: a `gcloud` / `docker` stub stands in for the
-# node, and the three outcomes that matter are asserted.
+# node, and the outcomes that matter are asserted.
 #
-#   1. success  -- streams output INCLUDING the last line, returns 0
-#   2. failure  -- the body's exit code is the function's exit code
-#   3. killed   -- process gone with no exit code written -> ::error:: and rc 1
+#   1. success   -- streams output INCLUDING the last line, returns 0
+#   2. failure   -- the body's exit code is the function's exit code
+#   3. killed    -- process gone, no exit code written -> ::error:: and rc 1
+#   4. no probe  -- liveness UNANSWERABLE is not death; the body still finishes
+#   5. no container -- a vanished container IS death, and is caught promptly
 #
-# Case 1's last line is not a formality. The loop breaks the moment the rc file
-# appears, which is normally before the poll that would stream the closing
-# chunk, and on these harnesses the closing lines ARE the measurements. An
-# earlier draft of the helper dropped them; this test is why that was caught.
+# Cases 1 and 4 are the ones written in blood. Case 1's last line is not a
+# formality: the loop breaks the moment the rc file appears, normally before the
+# poll that would stream the closing chunk, and on these harnesses the closing
+# lines ARE the measurements. Case 4 is run 32267837230, where the probe was
+# `pgrep ... || echo 0` and `python:3.12-slim` ships no procps -- so "cannot
+# answer" and "dead" produced the same value, and a healthy 1M run was declared
+# dead at 30 seconds while it went on to finish and write its results.
 #
 # Run: bash scripts/test_gce_detached.sh
 set -uo pipefail
@@ -32,7 +37,19 @@ gcloud() {
 }
 docker() {
   if [ "$1" = "exec" ] && [ "$2" = "-d" ]; then ( HOME="$WD" sh -c "$6" ) & return 0; fi
-  if [ "$1" = "exec" ] && [ "$3" = "pgrep" ]; then [ "${STUB_DEAD:-0}" = "1" ] && return 1 || return 0; fi
+  # `docker inspect -f '{{.State.Running}}' pyenv` -- the host-side container
+  # check. STUB_NO_CONTAINER simulates the container having vanished.
+  if [ "$1" = "inspect" ]; then
+    [ "${STUB_NO_CONTAINER:-0}" = "1" ] && return 1
+    echo true; return 0
+  fi
+  # The liveness probe: `docker exec pyenv sh -c '<probe>'`. STUB_NO_PROBE
+  # simulates a container where the probe itself cannot run, which is the
+  # condition that broke run 32267837230 (no procps, so no pgrep).
+  if [ "$1" = "exec" ] && [ "$2" = "pyenv" ] && [ "$3" = "sh" ]; then
+    [ "${STUB_NO_PROBE:-0}" = "1" ] && return 127
+    sh -c "$5"; return $?
+  fi
   return 0
 }
 export -f gcloud docker
@@ -66,17 +83,46 @@ REMOTE
 check "rc" 42 "$rc"
 
 echo "case 3: killed without an exit code"
-rm -f "$WD"/*.rc "$WD"/*.log
+rm -f "$WD"/*.rc "$WD"/*.log "$WD"/*.pid
+# A faithful kill rather than a fake pid: the wrapper records its OWN pid before
+# running the body, so planting a stale one would just be overwritten. `kill -9
+# $$` takes the script down before it can write its rc, which is exactly what an
+# OOM kill looks like from the poller's side.
 # Output goes to a FILE, not `$(...)`: command substitution waits for every
-# writer on the pipe, and the stub's backgrounded job is one of them, so
-# capturing this case inline blocks for the body's full sleep.
-(cd "$TMP" && STUB_DEAD=1 gce_detached h dead <<'REMOTE'
+# writer on the pipe, and the stub's backgrounded job is one of them.
+(cd "$TMP" && gce_detached h dead <<'REMOTE'
 echo starting
-sleep 8
+kill -9 $$
 REMOTE
 ) > "$TMP/case3.out" 2>&1; rc=$?
 check "rc" 1 "$rc"
 if grep -q '::error::' "$TMP/case3.out"; then echo "  ok   emitted ::error::";
+else echo "  FAIL no ::error:: annotation"; fails=$((fails + 1)); fi
+
+echo "case 4: probe unavailable is NOT death"
+# The regression from run 32267837230. The old probe collapsed "pgrep is not
+# installed" into "process is dead" and killed a healthy 1M run at 30 seconds.
+# An unanswerable probe must keep waiting, so this body still returns 0.
+rm -f "$WD"/*.rc "$WD"/*.log "$WD"/*.pid
+(cd "$TMP" && STUB_NO_PROBE=1 gce_detached h noprobe <<'REMOTE'
+sleep 3
+echo survived
+REMOTE
+) > "$TMP/case4.out" 2>&1; rc=$?
+check "rc" 0 "$rc"
+if grep -q 'survived' "$TMP/case4.out"; then echo "  ok   ran to completion despite an unanswerable probe";
+else echo "  FAIL body did not complete"; fails=$((fails + 1)); fi
+
+echo "case 5: vanished container is an unambiguous death"
+# Without this branch a dead container falls into `unknown` and the poller idles
+# until the job timeout, billing the whole cluster for nothing.
+rm -f "$WD"/*.rc "$WD"/*.log "$WD"/*.pid
+(cd "$TMP" && STUB_NO_CONTAINER=1 gce_detached h gone <<'REMOTE'
+sleep 30
+REMOTE
+) > "$TMP/case5.out" 2>&1; rc=$?
+check "rc" 1 "$rc"
+if grep -q '::error::' "$TMP/case5.out"; then echo "  ok   emitted ::error:: promptly";
 else echo "  FAIL no ::error:: annotation"; fails=$((fails + 1)); fi
 
 [ "$fails" -eq 0 ] && { echo "PASS"; exit 0; } || { echo "FAILED: $fails"; exit 1; }
