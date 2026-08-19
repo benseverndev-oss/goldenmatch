@@ -149,20 +149,48 @@ jobs:
         timeout-minutes: 15
         run: |
           set -euo pipefail
+
+          # THE ACTUAL CAUSE, from run 32276315793:
+          #
+          #   E: Could not get lock /var/lib/apt/lists/lock.
+          #      It is held by process 2356 (apt-get)
+          #
+          # Not an upstream outage. GitHub-hosted runners run their own apt work
+          # (unattended-upgrades and friends) shortly after boot, and the
+          # vendor's setup script calls `apt-get update` internally, where it
+          # cannot be given lock options. Whether this step passes is a race
+          # against the runner's own housekeeping, which is why it passed three
+          # times this morning and then failed three times in a row.
+          #
+          # So: WAIT for the lock rather than race it.
+          wait_for_apt() {
+            for _ in $(seq 1 90); do
+              if sudo fuser /var/lib/apt/lists/lock /var/lib/dpkg/lock-frontend \
+                            /var/lib/dpkg/lock >/dev/null 2>&1; then
+                sleep 5
+              else
+                return 0
+              fi
+            done
+            echo "::warning::apt lock still held after 450s"
+            return 1
+          }
+
           ok=""
           for attempt in 1 2 3; do
-            # `apt-get update` is kept rather than left to the vendor script.
-            # The script does appear to run one, but the original step did not
-            # rely on that and neither will this.
+            wait_for_apt || true
+            # `DPkg::Lock::Timeout` makes OUR apt calls wait for the lock
+            # instead of erroring. It cannot be passed into the vendor script,
+            # which is what `wait_for_apt` above is for.
             if timeout 240 bash -c "curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | sudo -E bash" \
-               && timeout 240 sudo apt-get update \
-               && timeout 240 sudo apt-get install -y infisical; then
+               && timeout 240 sudo apt-get -o DPkg::Lock::Timeout=180 update \
+               && timeout 240 sudo apt-get -o DPkg::Lock::Timeout=180 install -y infisical; then
               ok=1; break
             fi
             echo "::warning::Infisical CLI install attempt $attempt failed or timed out; retrying"
-            sleep 15
+            sleep 20
           done
-          [ -n "$ok" ] || { echo "::error::Infisical CLI install failed 3x -- upstream apt repo is unreachable, this is not a repo change"; exit 1; }
+          [ -n "$ok" ] || { echo "::error::Infisical CLI install failed 3x. Check the log for 'Could not get lock' (runner apt contention) vs a genuine network/repo error before assuming an upstream outage"; exit 1; }
           infisical --version
 
       - name: Fetch GCP creds from Infisical
@@ -841,8 +869,19 @@ jobs:
         if: always() && !inputs.keep_cluster
         run: |
           set -euo pipefail
-          gcloud compute instances delete $NODE_NAMES --quiet --zone="$ZONE" || true
-          echo "deleted: $NODE_NAMES"
+          # `${NODE_NAMES:-}`, because this step is `always()` and a job that
+          # fails BEFORE provisioning never sets it. Under `set -u` the bare
+          # expansion aborts the step on line 1, which also skipped the GCS
+          # cleanup below -- teardown failing open is the one thing it must
+          # never do. Surfaced by run 32276315793, where the Infisical step
+          # failed early for the first time and teardown died with
+          # `NODE_NAMES: unbound variable`.
+          if [ -z "${NODE_NAMES:-}" ]; then
+            echo "no instances were provisioned; nothing to delete"
+          else
+            gcloud compute instances delete $NODE_NAMES --quiet --zone="${ZONE:-}" || true
+            echo "deleted: $NODE_NAMES"
+          fi
 
           # Splink's lineage-break parquet for THIS run. The bucket carries a
           # 1-day lifecycle rule as a backstop, but a 50M run writes real volume
