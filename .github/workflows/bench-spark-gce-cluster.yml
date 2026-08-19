@@ -437,6 +437,10 @@ jobs:
             --format='get(networkInterfaces[0].networkIP)')
           echo "MASTER_IP=$MASTER_IP" >> $GITHUB_ENV
           CORES=$(( $(echo "${{ inputs.machine_type || 'n2-standard-16' }}" | grep -oE '[0-9]+$') ))
+          # ONE definition of executor memory, used by the Connect server below
+          # and exported for the Splink arm. Two literals drift, and a drifted
+          # heap size is indistinguishable from an engine that needs more memory.
+          EXEC_MEM=48g
 
           # Open the COS HOST firewall to intra-VPC traffic.
           #
@@ -551,8 +555,14 @@ jobs:
                 --conf spark.connect.grpc.binding.port=15002 \
                 --conf spark.driver.host=$MASTER_IP \
                 --conf spark.executor.cores=$CORES \
-                --conf spark.executor.memory=48g
+                --conf spark.executor.memory=$EXEC_MEM
           "
+          # Exported so the SPLINK arm is launched with the SAME sizing. It was
+          # not, and took Spark's default `spark.executor.memory=1g` against
+          # GoldenMatch's 48g -- a 48x heap disadvantage that reads as an engine
+          # limit. See the Splink step.
+          echo "EXEC_MEM=$EXEC_MEM" >> $GITHUB_ENV
+          echo "EXEC_CORES=$CORES" >> $GITHUB_ENV
 
       - name: Refuse to measure a cluster with no registered workers
         # The failure this lane must not have: a master with zero workers
@@ -944,6 +954,9 @@ jobs:
           python spark_splink_train_scale.py \
             --rows ${{ inputs.rows || '1000000' }} \
             --shuffle-partitions ${{ inputs.shuffle_partitions || '-1' }} \
+            --executor-memory $EXEC_MEM \
+            --executor-cores $EXEC_CORES \
+            --expect-executors ${{ inputs.workers || '4' }} \
             --master spark://$MASTER_IP:7077 \
             --driver-host $MASTER_IP \
             --spark-ui http://$MASTER_IP:4040 \
