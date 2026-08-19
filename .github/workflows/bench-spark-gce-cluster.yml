@@ -856,9 +856,19 @@ jobs:
             [ -f "$f" ] || { echo "::error::harness imports $f but it does not exist"; exit 1; }
           done
 
+          # Build the goldenmatch wheel FROM THIS CHECKOUT so the lane measures
+          # the tree under test rather than the last release. See the install
+          # line below for what this cost before.
+          python -m pip install --quiet build
+          python -m build --wheel --outdir wheelhouse packages/python/goldenmatch >/dev/null
+          WHEEL=$(ls wheelhouse/goldenmatch-*.whl | head -1)
+          [ -n "$WHEEL" ] || { echo "::error::no goldenmatch wheel was built"; exit 1; }
+          echo "built $(basename "$WHEEL")"
+
           gcloud compute scp --quiet \
             scripts/spark_fs_train_scale.py scripts/spark_splink_train_scale.py \
             $DEPS \
+            "$WHEEL" \
             goldenmatch-spark.jar gcs-connector-shaded.jar \
             "$MASTER:~/"
 
@@ -868,7 +878,20 @@ jobs:
               -v /mnt/disks/scratch:/scratch \
               -e SPARK_LOCAL_DIRS=/scratch \
               python:3.12-slim sleep infinity
-            docker exec pyenv pip install --quiet 'goldenmatch[spark]' splink==4.0.16
+            # The wheel built from THIS CHECKOUT, not PyPI.
+            #
+            # Run 32298929875 died with
+            #
+            #     TypeError: estimate_u_distributed() got an unexpected
+            #     keyword argument 'total_rows'
+            #
+            # because the harness is copied from the repo while the LIBRARY came
+            # from `pip install goldenmatch[spark]` -- the published 3.13.0,
+            # without the change being measured. This lane could therefore only
+            # ever measure ALREADY-RELEASED code, so any performance fix had to
+            # ship before it could be tested. Same family as the #688 stale-wheel
+            # footgun, except that one degraded silently and this one errored.
+            docker exec pyenv pip install --quiet \"/w/\$(ls /w | grep -m1 '^goldenmatch-.*\\.whl$')[spark]\" splink==4.0.16
 
             # A JVM, for SPLINK only. GoldenMatch does not need one here: it
             # talks to the cluster over Spark CONNECT (`sc://`), which is a gRPC

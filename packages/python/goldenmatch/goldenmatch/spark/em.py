@@ -589,6 +589,7 @@ def train_em_distributed(
     max_patterns: int = MAX_PATTERNS,
     max_tf_values: int = MAX_TF_VALUES,
     tf_freqs: dict[str, dict[str, float]] | None = None,
+    total_rows: int | None = None,
     tf_collision: dict[str, float] | None = None,
 ) -> Any:
     """Train one matchkey's FS model with no pair sample anywhere.
@@ -639,10 +640,14 @@ def train_em_distributed(
             "without one there are no candidate pairs to estimate m from"
         )
 
+    # `total_rows` forwarded so the SHIPPED path gets the same saving the
+    # benchmark harness does. Without it `u` pays a full count over the source
+    # purely to turn a pair budget into a sampling fraction, and a caller that
+    # has just counted the frame -- most of them have -- should not pay twice.
     u_probs = estimate_u_distributed(
         source_df, mk, id_col=id_col, scorer_udf=scorer_udf,
         transform_udf=transform_udf, max_pairs=u_max_pairs, seed=seed,
-        max_patterns=max_patterns,
+        max_patterns=max_patterns, total_rows=total_rows,
     )
 
     # A GROUP BY over VALUES, not comparison vectors -- the one thing the counts
