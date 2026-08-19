@@ -165,6 +165,26 @@ class ColumnProfile:
     # estimator, because a fixed-size sample's distinct-FRACTION climbs toward
     # 1.0 as the frame grows.
     avg_len: float = 0.0  # average string length
+    n_distinct: int | None = None
+    # Count of distinct non-blank values IN THE PROFILING SAMPLE. Distinct from
+    # `cardinality_ratio`, which is that count divided by the row total and so
+    # cannot answer "is this column CONSTANT?" -- a single-valued column reads
+    # 1/n, which shrinks with the frame and is indistinguishable from a merely
+    # low-cardinality one.
+    #
+    # This is a CANDIDATE signal only, never a verdict: the sample is 1,000 rows,
+    # so a column that is 99.99% one value reads 1 here. Read `full_n_distinct`
+    # to decide anything. ``None`` means the profile was built without value
+    # access (hand-built profiles in tests, the #2639/#2644 idiom).
+    full_n_distinct: int | None = None
+    # EXACT distinct count over the FULL frame, computed only for columns the
+    # sample flags as apparently-constant (`n_distinct <= 1`). Same shape as
+    # `full_cardinality_ratio` and for the same reason: a sampled statistic
+    # compared against an absolute cut makes the verdict flip with SCALE rather
+    # than with the data, which the scale-invariant-correctness commitment
+    # forbids. A value at frequency 1e-4 is missed by a 1,000-row sample ~90% of
+    # the time, so without this a 2,000-row frame keeps a field that a 5M-row
+    # frame drops. None everywhere else, including hand-built profiles.
     date_parse_rate: float | None = None
     # For col_type=="date": fraction of the profiled non-null sample that parses
     # as a well-formed date (the same parser `date_diff` uses). A per-column
@@ -575,6 +595,16 @@ def profile_columns(
         profiles: list[ColumnProfile] = column_profiles_from_json(
             native_json, names_to_sample_values
         )
+        # `n_distinct` is stamped here rather than carried through the Rust
+        # classify contract: it is a property of the sample the caller already
+        # holds, not a classification result, so widening the JSON schema for it
+        # would couple the kernel to a field it has no opinion about. Stamping
+        # both branches from the same `values` keeps native and fallback
+        # byte-identical on this field, which the parity rules require.
+        for _p in profiles:
+            _vals = names_to_sample_values.get(_p.name)
+            if _vals is not None:
+                _p.n_distinct = len({v for v in _vals if v.strip()})
     else:
         # Pure-Python classification path (unchanged).
         profiles = []
@@ -621,6 +651,7 @@ def profile_columns(
                 null_rate=null_rate,
                 cardinality_ratio=cardinality_ratio,
                 avg_len=avg_len,
+                n_distinct=len(set(values)),
             ))
 
     # LLM correction pass for ambiguous columns (runs AFTER native classify,
@@ -655,6 +686,30 @@ def profile_columns(
     for p in profiles:
         if p.cardinality_ratio >= 1.0 and p.name in _frame_cols and frame.height > 0:
             p.full_cardinality_ratio = frame.column(p.name).n_unique() / frame.height
+
+    # EXACT full-frame distinct count for APPARENTLY-CONSTANT columns (#2668).
+    # The mirror image of the pass above, and forbidden by the same commitment:
+    # `n_distinct` is a 1,000-row sample statistic, so a column that is 99.99%
+    # one value reads 1 and `_drop_constant_scored_fields` would drop its field
+    # from the matchkey. A value at frequency 1e-4 is missed by that sample ~90%
+    # of the time, so the verdict would flip with scale -- a small frame samples
+    # the column fully and keeps the field, a large one reads it constant and
+    # drops it.
+    #
+    # The damage runs the same direction as the bug this rule exists to fix. A
+    # field that agrees on nearly every pair and disagrees only on the rare ones
+    # is carrying its whole signal in exactly those rare pairs; dropping it
+    # removes the penalty where it discriminates and the rare cross-entity pair
+    # merges.
+    #
+    # Restricting the exact count to sample-flagged columns is sound rather than
+    # a cost heuristic: a column with >1 distinct value in the sample has >1 in
+    # the full frame, so it cannot be constant and is skipped. In practice this
+    # is a handful of columns, one `n_unique()` pass each.
+    for p in profiles:
+        if (p.n_distinct is not None and p.n_distinct <= 1
+                and p.name in _frame_cols and frame.height > 0):
+            p.full_n_distinct = int(frame.column(p.name).n_unique())
 
     # Per-column date reliability signal (both classify paths converge here, so
     # the native path is covered too). For every `date` column, record the
@@ -1356,6 +1411,73 @@ def _drop_uninformative_blocking_fields(
             "with no discriminative power; threshold rescaled to %.4f",
             ", ".join(dropped), mk.name, "them" if len(dropped) > 1 else "it",
             100.0 * (total - kept) / total if total else 0.0, mk.threshold,
+        )
+
+
+def _drop_constant_scored_fields(
+    matchkeys: list[MatchkeyConfig], profiles: list[ColumnProfile],
+) -> None:
+    """Drop scored fields that are CONSTANT in the data (#2668).
+
+    Sibling of `_drop_uninformative_blocking_fields`, for the other way a scored
+    field can carry no information. There the field varies in the data but
+    blocking guarantees agreement WITHIN a block; here it does not vary at all,
+    so no pair can ever disagree on it. Either way it is a constant offset with
+    zero discriminative power.
+
+    **It does not rescale the threshold, and that difference is the whole point.**
+    A constant field at equal weight does not merely shift scores; it HALVES the
+    effective bar on the field that actually discriminates. Measured on the
+    goldengraph TINY fixture, whose `type` column is `'concept'` on every row:
+
+        score = (name + 1.0) / 2      threshold 0.8  =>  the real bar on `name` is 0.6
+        ensemble("Beta Corp", "Delta LLC") = 0.7037  =>  0.8519, a false merge
+
+    Rescaling preserves the same absolute bar, so it would preserve that merge
+    exactly -- it is a no-op on every decision. The sibling rule rescales because
+    a blocking-agreeing field is genuinely informative elsewhere and its
+    calibrated contribution should survive; a data-constant column is informative
+    NOWHERE, so the honest config is the one auto-config would have built had the
+    useless column not been in the frame. It picks 0.8 on `name` alone there, and
+    that config makes no cross-entity merge on this fixture.
+
+    Reads `full_n_distinct`, the EXACT full-frame count, never the sampled
+    `n_distinct`. The sample is 1,000 rows, so a column that is 99.99% one value
+    reads 1 there; acting on that would drop a field on a large frame and keep it
+    on a small one -- the scale-flipping verdict `full_cardinality_ratio` exists
+    to prevent, and it would fail in the same direction as the bug this rule
+    fixes, since a field that disagrees only on rare pairs carries its whole
+    signal in exactly those pairs.
+
+    A field whose profile carries no `full_n_distinct` is LEFT ALONE: "cannot
+    answer" must not become "assumed constant". Same for a rule that would empty
+    a matchkey, since a matchkey with no fields cannot score anything.
+    """
+    const = {
+        p.name for p in profiles
+        if p.full_n_distinct is not None and p.full_n_distinct <= 1
+    }
+    if not const:
+        return
+    for mk in matchkeys:
+        if getattr(mk, "type", None) != "weighted":
+            continue
+        fields = list(getattr(mk, "fields", None) or [])
+        keep = [f for f in fields if f.field not in const]
+        if not keep or len(keep) == len(fields):
+            continue
+        dropped = [f.field for f in fields if f.field in const]
+        mk.fields = keep
+        logger.info(
+            "auto-config: dropped %s from matchkey %r -- %s constant in the data, "
+            "so every pair agreed on %s by construction and %s only relaxed the "
+            "effective bar on the fields that do discriminate. Threshold left at "
+            "%s, which is now the bar on those fields.",
+            ", ".join(dropped), mk.name,
+            "they are" if len(dropped) > 1 else "it is",
+            "them" if len(dropped) > 1 else "it",
+            "they" if len(dropped) > 1 else "it",
+            mk.threshold,
         )
 
 
@@ -5472,9 +5594,9 @@ def _rebuild_from_decisions(
     and re-call `_rebuild_from_decisions` without re-running profile_columns /
     build_matchkeys / build_blocking.
 
-    ``_profiles`` is reserved (underscore-prefix unused parameter) for future
-    iterative-tuning hooks that may re-examine column stats without rethreading
-    them through the call chain.
+    ``_profiles`` keeps its underscore for call-compatibility, but is no longer
+    unused: `_drop_constant_scored_fields` reads `n_distinct` off it to find
+    scored columns that cannot discriminate anything (#2668).
     """
     # Rebuild final blocking from decisions, preserving runtime-only attrs
     # (learned_sample_size, learned_min_recall, skip_oversized, etc.) from
@@ -5490,6 +5612,7 @@ def _rebuild_from_decisions(
         })
 
     _drop_uninformative_blocking_fields(decisions.matchkeys, final_blocking)
+    _drop_constant_scored_fields(decisions.matchkeys, _profiles)
 
     return GoldenMatchConfig(
         matchkeys=decisions.matchkeys,
