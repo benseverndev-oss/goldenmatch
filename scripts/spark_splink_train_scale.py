@@ -153,6 +153,63 @@ def _metrics_module():
     return mod
 
 
+_SIZE_SUFFIX = re.compile(r"^\s*(\d+)\s*([kKmMgGtT])[bB]?\s*$")
+
+
+def _normalize_gs_size_props(spark: object) -> None:
+    """Rewrite suffixed `fs.gs.*` sizes to plain bytes, and say what it found.
+
+    Runs 32269692605 and 32277069612 both died initializing the filesystem with
+
+        java.lang.NumberFormatException: For input string: "64m"
+
+    under gcs-connector `hadoop3-2.2.21` AND `3.1.17`. Two unrelated connector
+    versions failing identically means the value is not a connector default: it
+    is in this environment's Hadoop configuration, and the connector reads it
+    with `getInt`/`getLong`, which reject unit suffixes.
+
+    Nothing in this repo sets it, checked before writing this. So it arrives
+    from the image or from Spark itself -- exactly the situation where guessing
+    a key costs a five-VM cluster per guess. Enumerate instead of guessing.
+
+    Every `fs.gs.*` value shaped like `64m` is rewritten to its byte count,
+    which is what the connector expects and what the suffix means. Suffixed
+    values under OTHER prefixes are PRINTED but not touched: they belong to
+    components that may well accept suffixes, and silently rewriting config
+    this script does not own would be a worse bug than the one it fixes.
+    """
+    try:
+        hconf = spark.sparkContext._jsc.hadoopConfiguration()  # noqa: SLF001
+        it = hconf.iterator()
+    except Exception as exc:  # pragma: no cover - diagnostic path only
+        print(f"[splink] could not inspect hadoop conf: {exc}", flush=True)
+        return
+
+    fixed: list[str] = []
+    seen: list[str] = []
+    while it.hasNext():
+        entry = it.next()
+        key, val = str(entry.getKey()), str(entry.getValue())
+        m = _SIZE_SUFFIX.match(val)
+        if not m:
+            continue
+        seen.append(f"{key}={val}")
+        if key.startswith("fs.gs."):
+            mult = {"k": 1024, "m": 1024**2, "g": 1024**3, "t": 1024**4}[m.group(2).lower()]
+            as_bytes = int(m.group(1)) * mult
+            hconf.set(key, str(as_bytes))
+            fixed.append(f"{key}: {val} -> {as_bytes}")
+
+    if seen:
+        print(f"[splink] suffixed size props: {', '.join(sorted(seen))}", flush=True)
+    print(
+        f"[splink] normalized for the GCS connector: {', '.join(fixed)}"
+        if fixed
+        else "[splink] no suffixed fs.gs.* props found",
+        flush=True,
+    )
+
+
 def build_session(
     master: str, driver_host: str | None, wait_s: int, checkpoint_dir: str | None = None
 ):
@@ -262,6 +319,7 @@ def build_session(
     # `.checkpoint()`. See `_get_checkpoint_dir_path` in
     # splink/internals/spark/database_api.py.
     if checkpoint_dir:
+        _normalize_gs_size_props(spark)
         spark.sparkContext.setCheckpointDir(checkpoint_dir)
         print(f"[splink] checkpoint dir {checkpoint_dir}", flush=True)
 
