@@ -103,13 +103,25 @@ def test_real_resolution_clusters_variants_and_is_not_oracle():
     the surface universe -- it merges >=1 entity's distinct surfaces into one shared key
     (variants resolved), it is NOT the oracle km (a conservative real resolver keeps more
     keys than the entity count), and on this clean fixture it makes no wrong cross-entity
-    merge."""
+    merge.
+#
+# FIXTURE (#2668): HARD, not TINY. The two assertions below need real ER to leave
+# something unresolved, and on TINY the only thing it could ever leave unresolved
+# was "Acme" vs "Acme Holdings" -- ensemble 0.8615 against a 0.8 cut, so it merges
+# or not depending on whether blocking happened to make the pair a candidate. That
+# flipped between environments on one commit (fragmented locally, resolved in CI),
+# which made these tests measure the environment rather than the resolver. HARD
+# gives every entity one alias string similarity CANNOT close (an acronym: 0.58
+# against the same cut, 0.21 clear) plus a suffix variant that plainly should
+# resolve (0.94-0.96, 0.14+ clear). Every decision now sits far from the boundary,
+# so the oracle-vs-real gap is structural and does not erode as matching improves.
+    """
     _wheel_or_skip()
     from collections import defaultdict
 
     from erkgbench.qa_e2e.realworld import _realworld_entity_surfaces, _resolution_km
 
-    rows = _realworld_entity_surfaces(_FIXTURE_DIR / "wikidata_companies_TINY.json")
+    rows = _realworld_entity_surfaces(_FIXTURE_DIR / "wikidata_companies_HARD.json")
     real = _resolution_km(rows, resolve_mode="real")
     oracle = _resolution_km(rows, resolve_mode="oracle")
 
@@ -164,16 +176,28 @@ def test_real_mode_imperfect_er_dips_gg_below_oracle():
     """1.5a (the ER contribution is real): on a seed where the anchor renders two variant
     surfaces the zero-config resolver leaves in separate clusters, the anchor FRAGMENTS in
     the real arm -> GG recall drops below the oracle arm (which pre-merges variants). This
-    dip IS the honest ER signal the oracle-vs-real delta measures."""
+    dip IS the honest ER signal the oracle-vs-real delta measures.
+#
+# FIXTURE (#2668): HARD, not TINY. The two assertions below need real ER to leave
+# something unresolved, and on TINY the only thing it could ever leave unresolved
+# was "Acme" vs "Acme Holdings" -- ensemble 0.8615 against a 0.8 cut, so it merges
+# or not depending on whether blocking happened to make the pair a candidate. That
+# flipped between environments on one commit (fragmented locally, resolved in CI),
+# which made these tests measure the environment rather than the resolver. HARD
+# gives every entity one alias string similarity CANNOT close (an acronym: 0.58
+# against the same cut, 0.21 clear) plus a suffix variant that plainly should
+# resolve (0.94-0.96, 0.14+ clear). Every decision now sits far from the boundary,
+# so the oracle-vs-real gap is structural and does not erode as matching improves.
+    """
     _wheel_or_skip()
     from erkgbench.qa_e2e.aggregation import goldengraph_aggregate, set_f1
     from erkgbench.qa_e2e.realworld import _build_realworld_store_for_mode
 
-    tiny = _FIXTURE_DIR / "wikidata_companies_TINY.json"
+    hard = _FIXTURE_DIR / "wikidata_companies_HARD.json"
 
     def gg_f1(mode):
         sg, cov, _docs, qs, _a, _s = _build_realworld_store_for_mode(
-            tiny, ambiguity=1.0, seed=0, resolve_mode=mode)
+            hard, ambiguity=1.0, seed=0, resolve_mode=mode)
         q = next(q for q in qs if q.kind == "list")
         got = goldengraph_aggregate(sg, cov, q.anchor_id, q.relation)
         return set_f1(got, set(q.gold_members))["f1"]
