@@ -97,6 +97,7 @@ import os
 import re
 import time
 from pathlib import Path
+from typing import Any
 
 
 def _fixture_module():
@@ -134,6 +135,24 @@ def _shuffle_module():
     return mod
 
 
+def _tuning_module():
+    """The SHARED Spark tuning, imported by file path.
+
+    Same reasoning as the shuffle reader and the ranking metric: both arms have
+    to be tuned by ONE implementation, or the benchmark measures the tuning
+    rather than the engines.
+    """
+    import importlib.util
+
+    path = Path(__file__).resolve().parent / "_spark_tuning.py"
+    spec = importlib.util.spec_from_file_location("_spark_tuning", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"cannot load {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def _metrics_module():
     """The SHARED ranking metric, imported by file path.
 
@@ -156,7 +175,7 @@ def _metrics_module():
 _SIZE_SUFFIX = re.compile(r"^\s*(\d+)\s*([kKmMgGtT])[bB]?\s*$")
 
 
-def _normalize_gs_size_props(spark: object) -> None:
+def _normalize_gs_size_props(spark: Any) -> None:
     """Rewrite suffixed `fs.gs.*` sizes to plain bytes, and say what it found.
 
     Runs 32269692605 and 32277069612 both died initializing the filesystem with
@@ -420,6 +439,14 @@ def main() -> int:
         "back to `persist`, which does NOT truncate lineage "
         "and OOMs at scale.",
     )
+    ap.add_argument(
+        "--shuffle-partitions",
+        type=int,
+        default=0,
+        help="spark.sql.shuffle.partitions. 0 leaves Spark's default, "
+        "-1 derives 5x total executor cores per Splink's guide. "
+        "Applied IDENTICALLY to both arms via scripts/_spark_tuning.py.",
+    )
     ap.add_argument("--out", default="splink-train-scale.json")
     args = ap.parse_args()
 
@@ -470,6 +497,12 @@ def main() -> int:
         args.master, args.driver_host or None, args.executor_wait, args.checkpoint_dir or None
     )
     out["executors"] = n_exec
+    # Applied AFTER build_session, which waits for executors to register: the
+    # core count is read from the running cluster, and reading it before
+    # registration would derive the partition count from zero cores.
+    out["shuffle_partitions"] = _tuning_module().apply_shuffle_partitions(
+        spark, args.shuffle_partitions, spark_ui=args.spark_ui
+    )
 
     fx = _fixture_module()
     t = time.perf_counter()

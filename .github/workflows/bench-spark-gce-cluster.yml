@@ -101,6 +101,11 @@ on:
         required: false
         type: boolean
         default: true
+      shuffle_partitions:
+        description: "spark.sql.shuffle.partitions for BOTH arms. `-1` (default) derives 5x total executor cores, which is what Splink's performance guide recommends. `0` leaves Spark's default 200, which is what both engines ran on before and is a number NEITHER vendor recommends. Applied to both engines from one shared implementation (scripts/_spark_tuning.py) so the comparison can never measure a tuning difference."
+        required: false
+        type: string
+        default: "-1"
       splink_checkpoint_fs:
         description: "Shared filesystem for Splink's lineage break. `hdfs` stands up a real HDFS across the cluster nodes (Spark speaks hdfs:// through the Hadoop client pyspark already bundles, so no connector is involved). `gcs` uses the bucket in splink_checkpoint_dir via the gcs-connector. `none` forces `persist`, which keeps lineage and OOMs at scale -- debugging only."
         required: false
@@ -836,6 +841,7 @@ jobs:
           export GOLDENMATCH_SPARK_JAR=/w/goldenmatch-spark.jar
           python spark_fs_train_scale.py \
             --rows ${{ inputs.rows || '1000000' }} \
+            --shuffle-partitions ${{ inputs.shuffle_partitions || '-1' }} \
             --remote sc://$MASTER_IP:15002 \
             --spark-ui http://$MASTER_IP:4040 \
             ${{ inputs.eval_quality && '--eval-quality' || '' }} \
@@ -883,6 +889,7 @@ jobs:
           gce_detached "$MASTER" splink <<REMOTE
           python spark_splink_train_scale.py \
             --rows ${{ inputs.rows || '1000000' }} \
+            --shuffle-partitions ${{ inputs.shuffle_partitions || '-1' }} \
             --master spark://$MASTER_IP:7077 \
             --driver-host $MASTER_IP \
             --spark-ui http://$MASTER_IP:4040 \
