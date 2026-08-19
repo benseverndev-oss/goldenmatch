@@ -1889,6 +1889,7 @@
             "_diversify_pair_budget_enabled",
             "_diversify_probabilistic_blocking",
             "_diversify_unused_orthogonal_blocking",
+            "_drop_constant_scored_fields",
             "_drop_uninformative_blocking_fields",
             "_embedder_available",
             "_emit_data_profile",
