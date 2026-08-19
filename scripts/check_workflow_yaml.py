@@ -70,15 +70,11 @@ def _no_duplicates(loader: yaml.Loader, node: yaml.MappingNode, deep: bool = Fal
     return mapping
 
 
-StrictLoader.add_constructor(
-    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_duplicates
-)
+StrictLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_duplicates)
 
 
 def workflow_files(directory: pathlib.Path) -> list[pathlib.Path]:
-    return sorted(
-        p for p in directory.iterdir() if p.suffix in (".yml", ".yaml") and p.is_file()
-    )
+    return sorted(p for p in directory.iterdir() if p.suffix in (".yml", ".yaml") and p.is_file())
 
 
 def check(directory: pathlib.Path) -> tuple[list[tuple[pathlib.Path, str]], int]:
@@ -161,8 +157,9 @@ def _bad_run_scripts(path: pathlib.Path) -> list[tuple[pathlib.Path, str]]:
             if not isinstance(script, str):
                 continue
             # A step can select another shell; only bash is checkable here.
-            shell = str(step.get("shell") or job.get("defaults", {})
-                        .get("run", {}).get("shell") or "bash")
+            shell = str(
+                step.get("shell") or job.get("defaults", {}).get("run", {}).get("shell") or "bash"
+            )
             if not shell.startswith("bash") and shell != "sh":
                 continue
             with tempfile.NamedTemporaryFile(
@@ -171,36 +168,95 @@ def _bad_run_scripts(path: pathlib.Path) -> list[tuple[pathlib.Path, str]]:
                 fh.write(script)
                 tmp = fh.name
             try:
-                proc = subprocess.run(
-                    [bash, "-n", tmp], capture_output=True, text=True
-                )
+                proc = subprocess.run([bash, "-n", tmp], capture_output=True, text=True)
             finally:
                 pathlib.Path(tmp).unlink(missing_ok=True)
             label = step.get("name") or f"step {i}"
             if proc.returncode != 0:
                 detail = (proc.stderr or "").strip().replace(tmp, "<step>")
-                out.append((
-                    path,
-                    f"job `{job_name}` step `{label}`: `run:` is not valid bash "
-                    f"-- {detail}",
-                ))
+                out.append(
+                    (
+                        path,
+                        f"job `{job_name}` step `{label}`: `run:` is not valid bash -- {detail}",
+                    )
+                )
             for lineno, line in enumerate(script.splitlines(), 1):
                 m = _MANGLED_CONTINUATION.search(line)
                 if m:
-                    out.append((
-                        path,
-                        f"job `{job_name}` step `{label}` line {lineno}: a literal "
-                        f"`\\n` with whitespace on both sides -- almost certainly a "
-                        f"line continuation that collapsed, so bash gets `n` as an "
-                        f"argument. `bash -n` calls this VALID. In: "
-                        f"{line.strip()[:70]!r}",
-                    ))
+                    out.append(
+                        (
+                            path,
+                            f"job `{job_name}` step `{label}` line {lineno}: a literal "
+                            f"`\\n` with whitespace on both sides -- almost certainly a "
+                            f"line continuation that collapsed, so bash gets `n` as an "
+                            f"argument. `bash -n` calls this VALID. In: "
+                            f"{line.strip()[:70]!r}",
+                        )
+                    )
     return out
 
 
 #: Backslash-n with whitespace both sides: a collapsed line continuation.
 #: A deliberate escape sits next to non-space (``f"{a}\nb"``) and is not matched.
 _MANGLED_CONTINUATION = re.compile(r"\s\\n\s")
+
+
+def _backticks_in_remote_commands(path: pathlib.Path) -> list[str]:
+    """Backticks inside an ssh ``--command "..."`` string, which the RUNNER runs.
+
+    Everything between ``--command "`` and its closing quote is a double-quoted
+    string evaluated on the RUNNER, so backticks and ``$( )`` inside it are
+    command substitutions. That INCLUDES lines beginning with ``#``, because the
+    comment marker means nothing to the runner's string parsing.
+
+    Run 32312785745 died on a comment written to explain an earlier failure. It
+    quoted a pip invocation in backticks; the runner executed it and spliced
+    pip's stdout into the command sent to the remote host, which then tried to
+    run ``Collecting`` and exited 127.
+
+    The insidious part is that most such mistakes are SILENT. A backticked
+    ``sc://`` substitutes to nothing and only prints to stderr, so the same
+    block had carried backticks for months without incident. Only a
+    substitution that SUCCEEDS corrupts the command, which is why this cannot be
+    caught by "it worked last time" and is worth a gate.
+
+    Detection tracks QUOTE STATE rather than line shapes. A first attempt
+    matched the closing quote as a line of its own, which silently leaked: real
+    blocks here also close with ``" &`` and ``" || true``, so the scanner stayed
+    "inside" for hundreds of lines and flagged ordinary runner-side comments.
+    A gate with false positives is worse than no gate.
+    """
+    problems: list[str] = []
+    inside = False
+    for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not inside:
+            m = re.search(r'--command "\s*$', line)
+            if m:
+                inside = True
+            continue
+
+        # Walk the line and close on the first UNESCAPED double quote.
+        closed_at = None
+        k = 0
+        while k < len(line):
+            c = line[k]
+            if c == "\\":
+                k += 2
+                continue
+            if c == '"':
+                closed_at = k
+                break
+            k += 1
+
+        segment = line if closed_at is None else line[:closed_at]
+        if "`" in segment:
+            problems.append(
+                f"line {n}: backtick inside an ssh --command string. The RUNNER "
+                f"substitutes it, even in a # comment: {line.strip()[:80]}"
+            )
+        if closed_at is not None:
+            inside = False
+    return problems
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -232,6 +288,10 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+
+    for wf in sorted(pathlib.Path(args.dir).glob("*.yml")):
+        for problem in _backticks_in_remote_commands(wf):
+            problems.append((wf, problem))
 
     print(f"workflow YAML: {scanned} file(s) scanned for parse errors + duplicate keys")
     if problems:

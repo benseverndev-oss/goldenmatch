@@ -892,7 +892,7 @@ jobs:
             #     keyword argument 'total_rows'
             #
             # because the harness is copied from the repo while the LIBRARY came
-            # from `pip install goldenmatch[spark]` -- the published 3.13.0,
+            # from pip install goldenmatch[spark] -- the published 3.13.0,
             # without the change being measured. This lane could therefore only
             # ever measure ALREADY-RELEASED code, so any performance fix had to
             # ship before it could be tested. Same family as the #688 stale-wheel
@@ -901,9 +901,9 @@ jobs:
             docker exec pyenv python -c 'import goldenmatch, inspect; from goldenmatch.spark.em import estimate_u_distributed as f; print(\"[env] goldenmatch\", goldenmatch.__version__, \"total_rows:\", \"total_rows\" in inspect.signature(f).parameters)'
 
             # A JVM, for SPLINK only. GoldenMatch does not need one here: it
-            # talks to the cluster over Spark CONNECT (`sc://`), which is a gRPC
+            # talks to the cluster over Spark CONNECT (sc://), which is a gRPC
             # client. Splink drives a CLASSIC session, which launches a local
-            # JVM driver process -- and `python:3.12-slim` has no Java, so the
+            # JVM driver process -- and python:3.12-slim has no Java, so the
             # first run that got this far died on:
             #
             #   PySparkRuntimeError: [JAVA_GATEWAY_EXITED] Java gateway process
