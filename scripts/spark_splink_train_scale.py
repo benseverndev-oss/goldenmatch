@@ -218,8 +218,34 @@ def build_session(
         # the equivalent. It resolves through the metadata server exactly as
         # before, so this is the same credential path under a new key, not a
         # new grant.
+        # **The SHADED jar, shipped as a file, not `spark.jars.packages`.**
+        # Run 32274795307 used the Maven coordinate and got further, then died:
+        #
+        #     NoClassDefFoundError:
+        #     com/google/cloud/hadoop/util/interceptors/LoggingInterceptor
+        #
+        # `spark.jars.packages` resolves the PLAIN artifact (155 KB, classes
+        # only) and leaves Ivy to find its transitive deps, which it did not do
+        # compatibly against this image. The `-shaded` classifier is the
+        # self-contained 38 MB jar that carries them. Ivy cannot express a
+        # classifier through `spark.jars.packages` at all, so the coordinate
+        # form CANNOT reach the artifact that works -- shipping the file is not
+        # a workaround here, it is the only route.
+        #
+        # Shipping it also removes Maven resolution from the critical path of a
+        # paid cluster: the earlier run was fetching grpc-xds and friends at
+        # session build.
+        gcs_jar = os.environ.get("GCS_CONNECTOR_JAR", "/w/gcs-connector-shaded.jar")
+        if not os.path.exists(gcs_jar):
+            # Loudly, rather than falling back to a session that cannot reach
+            # gs:// -- a silent fallback here would restate itself minutes later
+            # as an unreadable checkpoint failure on a five-VM cluster.
+            raise SystemExit(
+                f"gs:// checkpoint dir requested but the GCS connector jar is missing at {gcs_jar}. "
+                "Set GCS_CONNECTOR_JAR, or the workflow's jar download did not land."
+            )
         b = (
-            b.config("spark.jars.packages", "com.google.cloud.bigdataoss:gcs-connector:3.1.17")
+            b.config("spark.jars", f"{similarity_jar_location()},{gcs_jar}")
             .config(
                 "spark.hadoop.fs.gs.impl", "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem"
             )

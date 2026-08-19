@@ -604,10 +604,29 @@ jobs:
           sha256sum -c goldenmatch-spark.jar.sha256 \
             || { echo "::error::jar checksum mismatch"; exit 1; }
 
+          # The SHADED GCS connector, for SPLINK's lineage break to gs://.
+          # GoldenMatch never touches it: it has no iterative DAG to truncate.
+          #
+          # Shipped as a file rather than `spark.jars.packages` because Ivy
+          # cannot express a classifier, and the PLAIN artifact the coordinate
+          # resolves to is 155 KB of classes whose transitive deps did not
+          # resolve compatibly against this image -- run 32274795307 died on
+          # `NoClassDefFoundError: .../interceptors/LoggingInterceptor`. The
+          # `-shaded` jar is the self-contained 38 MB build.
+          GCS_VER=3.1.17
+          GCS_BASE="https://repo1.maven.org/maven2/com/google/cloud/bigdataoss/gcs-connector/${GCS_VER}"
+          curl -sSfL --retry 3 --retry-delay 5 -o gcs-connector-shaded.jar \
+            "${GCS_BASE}/gcs-connector-${GCS_VER}-shaded.jar"
+          # Checksummed for the same reason the scorer jar is: a truncated
+          # download resurfaces as a baffling JVM error minutes and five VMs
+          # later, not as a download failure.
+          echo "$(curl -sSfL --retry 3 "${GCS_BASE}/gcs-connector-${GCS_VER}-shaded.jar.sha1")  gcs-connector-shaded.jar" \
+            | sha1sum -c - || { echo "::error::gcs-connector jar checksum mismatch"; exit 1; }
+
           gcloud compute scp --quiet \
             scripts/spark_fs_train_scale.py scripts/spark_splink_train_scale.py \
             scripts/_fs_quality_metrics.py scripts/_spark_shuffle_metrics.py \
-            goldenmatch-spark.jar \
+            goldenmatch-spark.jar gcs-connector-shaded.jar \
             "$MASTER:~/"
 
           gcloud compute ssh "$MASTER" --quiet --command "
