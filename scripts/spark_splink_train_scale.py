@@ -87,6 +87,7 @@ Usage:
         --master spark://localhost:7077 --driver-host 172.17.0.1 \\
         --out splink-train-scale.json
 """
+
 from __future__ import annotations
 
 import argparse
@@ -152,8 +153,9 @@ def _metrics_module():
     return mod
 
 
-def build_session(master: str, driver_host: str | None, wait_s: int,
-                  checkpoint_dir: str | None = None):
+def build_session(
+    master: str, driver_host: str | None, wait_s: int, checkpoint_dir: str | None = None
+):
     """A session tuned NO differently from the one GM gets.
 
     This used to set `spark.sql.shuffle.partitions=8`, with the rationale that
@@ -198,14 +200,34 @@ def build_session(master: str, driver_host: str | None, wait_s: int,
         # Auth comes from the VM's metadata server: the nodes are created with
         # `--scopes=cloud-platform` and run as the default compute service
         # account, which holds roles/editor. No key material is passed here.
+        #
+        # **The 3.x line, not `hadoop3-2.2.x`.** Run 32269692605 pinned
+        # `hadoop3-2.2.21` and died initializing the filesystem:
+        #
+        #     WARN FileSystem: Failed to initialize filesystem gs://...:
+        #     java.lang.NumberFormatException: For input string: "64m"
+        #
+        # The 2.2.x connector reads its size properties through Hadoop's
+        # `getLong`, which rejects unit suffixes; the 3.x line reads them with
+        # `getLongBytes`, which accepts them. 2.2.x also predates Spark 4 (it
+        # targets the Hadoop 3.3 era), so pinning it against this image was
+        # asking a Hadoop-3.3 connector to parse Hadoop-3.4 defaults.
+        #
+        # 3.x also REPLACED the auth switch: `google.cloud.auth.service.account
+        # .enable=true` is gone, and `fs.gs.auth.type=APPLICATION_DEFAULT` is
+        # the equivalent. It resolves through the metadata server exactly as
+        # before, so this is the same credential path under a new key, not a
+        # new grant.
         b = (
-            b.config("spark.jars.packages",
-                     "com.google.cloud.bigdataoss:gcs-connector:hadoop3-2.2.21")
-            .config("spark.hadoop.fs.gs.impl",
-                    "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem")
-            .config("spark.hadoop.fs.AbstractFileSystem.gs.impl",
-                    "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFS")
-            .config("spark.hadoop.google.cloud.auth.service.account.enable", "true")
+            b.config("spark.jars.packages", "com.google.cloud.bigdataoss:gcs-connector:3.1.17")
+            .config(
+                "spark.hadoop.fs.gs.impl", "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem"
+            )
+            .config(
+                "spark.hadoop.fs.AbstractFileSystem.gs.impl",
+                "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFS",
+            )
+            .config("spark.hadoop.fs.gs.auth.type", "APPLICATION_DEFAULT")
         )
     spark = b.getOrCreate()
 
@@ -269,39 +291,60 @@ def main() -> int:
     ap.add_argument("--rows", type=int, default=1_000_000)
     ap.add_argument("--dup", type=int, default=3, help="rows per entity")
     ap.add_argument("--blocks-per-key", type=int, default=4)
-    ap.add_argument("--master", default=os.environ.get(
-        "SPLINK_SPARK_MASTER", "spark://localhost:7077"))
+    ap.add_argument(
+        "--master", default=os.environ.get("SPLINK_SPARK_MASTER", "spark://localhost:7077")
+    )
     ap.add_argument("--driver-host", default=os.environ.get("SPLINK_DRIVER_HOST", ""))
     ap.add_argument("--executor-wait", type=int, default=120)
-    ap.add_argument("--max-pairs", type=int, default=1_000_000,
-                    help="Splink's u-estimation sample. Matches the GM harness's "
-                         "--u-max-pairs so the u stage is comparable.")
-    ap.add_argument("--seed", type=int, default=42,
-                    help="Seeds Splink's u random sampling. Unseeded, the EM "
-                         "iteration count -- and therefore the wall -- varies "
-                         "by more than half between identical runs.")
-    ap.add_argument("--eval-quality", action="store_true",
-                    help="REGRESSION GUARD on the distributed trainer: score "
-                         "the candidate pairs and report ranking quality "
-                         "against the fixture's known entity structure. NOT a "
-                         "GM-vs-Splink accuracy verdict -- this fixture's "
-                         "config was chosen to stress prod(levels+1) for a "
-                         "scale test. See the bakeoff for accuracy.")
-    ap.add_argument("--spark-ui", default="http://localhost:4040",
-                    help="Spark UI of THIS classic driver (it runs on the host "
-                         "and binds 4040). Read for stage-level shuffle bytes.")
-    ap.add_argument("--checkpoint-dir", default=os.environ.get("SPLINK_CHECKPOINT_DIR", ""),
-                    help="Distributed-filesystem path for Splink's lineage "
-                         "break (e.g. gs://bucket/prefix). REQUIRED for the "
-                         "documented `parquet` default; without one this falls "
-                         "back to `persist`, which does NOT truncate lineage "
-                         "and OOMs at scale.")
+    ap.add_argument(
+        "--max-pairs",
+        type=int,
+        default=1_000_000,
+        help="Splink's u-estimation sample. Matches the GM harness's "
+        "--u-max-pairs so the u stage is comparable.",
+    )
+    ap.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Seeds Splink's u random sampling. Unseeded, the EM "
+        "iteration count -- and therefore the wall -- varies "
+        "by more than half between identical runs.",
+    )
+    ap.add_argument(
+        "--eval-quality",
+        action="store_true",
+        help="REGRESSION GUARD on the distributed trainer: score "
+        "the candidate pairs and report ranking quality "
+        "against the fixture's known entity structure. NOT a "
+        "GM-vs-Splink accuracy verdict -- this fixture's "
+        "config was chosen to stress prod(levels+1) for a "
+        "scale test. See the bakeoff for accuracy.",
+    )
+    ap.add_argument(
+        "--spark-ui",
+        default="http://localhost:4040",
+        help="Spark UI of THIS classic driver (it runs on the host "
+        "and binds 4040). Read for stage-level shuffle bytes.",
+    )
+    ap.add_argument(
+        "--checkpoint-dir",
+        default=os.environ.get("SPLINK_CHECKPOINT_DIR", ""),
+        help="Distributed-filesystem path for Splink's lineage "
+        "break (e.g. gs://bucket/prefix). REQUIRED for the "
+        "documented `parquet` default; without one this falls "
+        "back to `persist`, which does NOT truncate lineage "
+        "and OOMs at scale.",
+    )
     ap.add_argument("--out", default="splink-train-scale.json")
     args = ap.parse_args()
 
     out: dict = {
-        "engine": "splink", "rows_requested": args.rows, "master": args.master,
-        "stages": {}, "session_type": "classic",
+        "engine": "splink",
+        "rows_requested": args.rows,
+        "master": args.master,
+        "stages": {},
+        "session_type": "classic",
         "session_confound": (
             "GM runs over Spark Connect (addArtifact is Connect-only); Splink "
             "cannot (it uses sparkContext). Same cluster, different front door."
@@ -330,8 +373,8 @@ def main() -> int:
             "GCS write+read per lineage break; GoldenMatch pays none because "
             "its counting stage has no iterative DAG to truncate. That "
             "asymmetry is a property of the engines, not of this harness."
-            if args.checkpoint_dir else
-            "NO --checkpoint-dir given, so this fell back to `persist`, which "
+            if args.checkpoint_dir
+            else "NO --checkpoint-dir given, so this fell back to `persist`, which "
             "does NOT truncate lineage. Expect OOM at scale. This is a "
             "misconfiguration, not a Splink limit."
         ),
@@ -339,9 +382,9 @@ def main() -> int:
     }
     t_all = time.perf_counter()
 
-    spark, n_exec = build_session(args.master, args.driver_host or None,
-                                  args.executor_wait,
-                                  args.checkpoint_dir or None)
+    spark, n_exec = build_session(
+        args.master, args.driver_host or None, args.executor_wait, args.checkpoint_dir or None
+    )
     out["executors"] = n_exec
 
     fx = _fixture_module()
@@ -351,8 +394,7 @@ def main() -> int:
     actual = df.count()
     out["stages"]["fixture_seconds"] = round(time.perf_counter() - t, 2)
     out["actual_rows"] = int(actual)
-    print(f"[splink] fixture: {actual:,} rows in "
-          f"{out['stages']['fixture_seconds']}s", flush=True)
+    print(f"[splink] fixture: {actual:,} rows in {out['stages']['fixture_seconds']}s", flush=True)
 
     from splink import Linker, SettingsCreator, block_on
     from splink import comparison_library as cl
@@ -419,9 +461,9 @@ def main() -> int:
     # artifact below, so no reader has to infer it from the absence of a
     # checkpoint dir.
     linker = Linker(
-        df, settings,
-        db_api=SparkAPI(spark_session=spark,
-                        break_lineage_method=out["break_lineage_method"]),
+        df,
+        settings,
+        db_api=SparkAPI(spark_session=spark, break_lineage_method=out["break_lineage_method"]),
     )
 
     # u, from random pairs -- the same quantity the GM harness times as `u`.
@@ -434,8 +476,7 @@ def main() -> int:
     # (31983859191, 31983866350) logged 33 and 16 iterations and came out at
     # 321.12s and 197.29s: a 63% spread, against GM's 1.4% across the same pair
     # of runs. Any single unseeded Splink number is drawn from that.
-    linker.training.estimate_u_using_random_sampling(
-        max_pairs=args.max_pairs, seed=args.seed)
+    linker.training.estimate_u_using_random_sampling(max_pairs=args.max_pairs, seed=args.seed)
     out["stages"]["u_seconds"] = round(time.perf_counter() - t, 2)
     print(f"[splink] u in {out['stages']['u_seconds']}s", flush=True)
 
@@ -451,8 +492,10 @@ def main() -> int:
         round(out["stages"]["em_seconds"] / sum(iters), 3) if sum(iters) else None
     )
     out["seed"] = args.seed
-    print(f"[splink] EM in {out['stages']['em_seconds']}s over {sum(iters)} "
-          f"iteration(s) {iters}", flush=True)
+    print(
+        f"[splink] EM in {out['stages']['em_seconds']}s over {sum(iters)} iteration(s) {iters}",
+        flush=True,
+    )
 
     # The trained model itself, not just how long it took to train. GM records
     # m_probs / u_probs / match_weights and this side recorded neither, so when
@@ -463,16 +506,19 @@ def main() -> int:
         model = linker.misc.save_model_to_json()
         out["model"] = {
             c["output_column_name"]: [
-                {"label": lv.get("comparison_vector_value"),
-                 "sql": lv.get("sql_condition"),
-                 "m": lv.get("m_probability"),
-                 "u": lv.get("u_probability")}
+                {
+                    "label": lv.get("comparison_vector_value"),
+                    "sql": lv.get("sql_condition"),
+                    "m": lv.get("m_probability"),
+                    "u": lv.get("u_probability"),
+                }
                 for lv in c.get("comparison_levels", [])
             ]
             for c in model.get("comparisons", [])
         }
         out["probability_two_random_records_match"] = model.get(
-            "probability_two_random_records_match")
+            "probability_two_random_records_match"
+        )
     except Exception as e:  # noqa: BLE001 - diagnostic, never fatal
         # Recorded rather than swallowed: an absent `model` key must read as
         # "the export broke", not as "the model was empty".
@@ -491,8 +537,7 @@ def main() -> int:
         n_entities = max(args.rows // max(args.dup, 1), 1)
         t = time.perf_counter()
         preds = linker.inference.predict().as_spark_dataframe()
-        truth = (F.col("record_id_l") % F.lit(n_entities)
-                 == F.col("record_id_r") % F.lit(n_entities))
+        truth = F.col("record_id_l") % F.lit(n_entities) == F.col("record_id_r") % F.lit(n_entities)
         # GROUP BY in the engine, exactly as the GM arm does. Both sides must
         # use the same reduction or the comparison measures the harness: this
         # collected one tuple per PREDICTED PAIR, which at 50M is hundreds of
@@ -504,12 +549,15 @@ def main() -> int:
         # `quality_score_groups` below records how much it actually collapsed,
         # so an unbounded group count shows up as a number rather than as an
         # OOM. See `ranking_metrics_grouped` for why grouping is exact.
-        grouped = (preds.select(F.col("match_weight").alias("w"),
-                                truth.alias("is_true"))
-                        .groupBy("w")
-                        .agg(F.sum(F.col("is_true").cast("long")).alias("n_true"),
-                             F.count(F.lit(1)).alias("n_all"))
-                        .collect())
+        grouped = (
+            preds.select(F.col("match_weight").alias("w"), truth.alias("is_true"))
+            .groupBy("w")
+            .agg(
+                F.sum(F.col("is_true").cast("long")).alias("n_true"),
+                F.count(F.lit(1)).alias("n_all"),
+            )
+            .collect()
+        )
         out["stages"]["predict_seconds"] = round(time.perf_counter() - t, 2)
         out["quality_score_groups"] = len(grouped)
         out["quality"] = _metrics_module().ranking_metrics_grouped(
@@ -526,11 +574,12 @@ def main() -> int:
     out["stages"]["total_seconds"] = round(time.perf_counter() - t_all, 2)
     # `train_total` is the number to put beside GM's u + counts + train. The
     # fixture build is excluded from BOTH: it is the harness, not the engine.
-    out["train_total_seconds"] = round(
-        out["stages"]["u_seconds"] + out["stages"]["em_seconds"], 2
+    out["train_total_seconds"] = round(out["stages"]["u_seconds"] + out["stages"]["em_seconds"], 2)
+    print(
+        f"[splink] DONE rows={actual:,} executors={n_exec} train_total="
+        f"{out['train_total_seconds']}s stages={out['stages']}",
+        flush=True,
     )
-    print(f"[splink] DONE rows={actual:,} executors={n_exec} train_total="
-          f"{out['train_total_seconds']}s stages={out['stages']}", flush=True)
 
     Path(args.out).write_text(json.dumps(out, indent=2), encoding="utf-8")
     print(f"[splink] wrote {args.out}", flush=True)
