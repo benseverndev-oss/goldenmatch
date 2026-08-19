@@ -870,6 +870,41 @@ jobs:
           MASTER="$CLUSTER-master"
           gcloud compute ssh "$MASTER" --quiet --command "docker stop spark-connect"
 
+          # WAIT for the master to reclaim the cores Connect was holding.
+          #
+          # Run 32283966821 did not, and Splink built its session with
+          #
+          #     [splink] 2 executor(s) registered
+          #
+          # against GoldenMatch's 4 -- then died with
+          # `OutOfMemoryError: Java heap space` and `exited with code 52` at
+          # 50M. Splink ran the comparison on HALF the cluster's memory, and
+          # without this check that reads as "Splink cannot do 50M" when what
+          # was measured is "Splink got two executors".
+          #
+          # `docker stop` returns when the CONTAINER is gone, not when the
+          # standalone master has released the application's cores; the two are
+          # seconds to a minute apart, and the gap is invisible unless you look
+          # for it. At 1M it happened to close in time, which is why this only
+          # appeared at 50M -- a race that resolves itself on small runs is the
+          # worst kind, because it looks like a size-dependent engine limit.
+          #
+          # Polled ON THE MASTER: the standalone UI is not reachable from the
+          # runner, only from inside the VPC.
+          echo "waiting for the master to release Connect's cores"
+          for i in $(seq 1 30); do
+            USED=$(gcloud compute ssh "$MASTER" --quiet --command \
+              "curl -s http://localhost:8080/json/ | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get(\"coresused\",-1))'" 2>/dev/null | tr -dc '0-9-')
+            echo "  attempt $i: coresused=${USED:-unknown}"
+            [ "${USED:-1}" = "0" ] && break
+            sleep 10
+          done
+          # Not fatal on its own: the harness reports the executor count it
+          # actually saw, and the summary carries it, so a short-changed run is
+          # legible rather than silent. Failing here would throw away a
+          # GoldenMatch arm that already succeeded.
+          [ "${USED:-1}" = "0" ] || echo "::warning::master still reports coresused=${USED:-unknown}; Splink may start under-provisioned"
+
           # DETACHED, and this arm needs it more than the FS one. The step is
           # `continue-on-error: true`, so a dropped SSH here does NOT fail the
           # job -- it prints `splink: MISSING` and reads as "Splink could not do
