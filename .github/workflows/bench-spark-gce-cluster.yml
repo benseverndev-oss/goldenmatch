@@ -101,6 +101,12 @@ on:
         required: false
         type: boolean
         default: true
+      splink_checkpoint_fs:
+        description: "Shared filesystem for Splink's lineage break. `hdfs` stands up a real HDFS across the cluster nodes (Spark speaks hdfs:// through the Hadoop client pyspark already bundles, so no connector is involved). `gcs` uses the bucket in splink_checkpoint_dir via the gcs-connector. `none` forces `persist`, which keeps lineage and OOMs at scale -- debugging only."
+        required: false
+        type: choice
+        default: "hdfs"
+        options: ["hdfs", "gcs", "none"]
       splink_checkpoint_dir:
         description: "GCS prefix for Splink's lineage break (its documented `parquet` default). Splink OOMs at scale without a distributed FS -- persist caches but does NOT truncate the DAG. Must be in the SAME REGION as the cluster or Splink pays cross-region I/O GoldenMatch does not."
         required: false
@@ -133,12 +139,6 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
 
-      - name: Install the Infisical CLI
-        run: |
-          set -euo pipefail
-          curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | sudo -E bash
-          sudo apt-get update && sudo apt-get install -y infisical
-
       - name: Fetch GCP creds from Infisical
         # Identical mechanism to bench-ray-cluster.yml -- same Machine Identity,
         # same project, same masking. Reusing it rather than adding GH secrets
@@ -152,16 +152,68 @@ jobs:
             echo "::error::INFISICAL_CLIENT_ID / INFISICAL_CLIENT_SECRET not set; see docs/distributed/ray-gce-cluster.md"
             exit 1
           fi
-          TOKEN=$(infisical login --silent --plain --method=universal-auth \
-            --client-id="$INFISICAL_CLIENT_ID" --client-secret="$INFISICAL_CLIENT_SECRET")
+          # Infisical's REST API directly, NOT the CLI. Installing the CLI needs
+          # apt, and apt on a GitHub-hosted runner needs a lock the runner's own
+          # housekeeping holds: runs 32271581601, 32273435168, 32276315793 and
+          # 32278438000 all died there, the last one with
+          #
+          #     apt lock still held after 450s
+          #     E: Could not get lock /var/lib/apt/lists/lock.
+          #        It is held by process 2199 (apt-get)
+          #
+          # after waiting for it and retrying three times. There is no published
+          # standalone binary to fall back to (checked: the CLI's releases carry
+          # no assets), so the way to stop losing runs to a package manager is
+          # to stop needing one. `curl` and `jq` are preinstalled.
+          #
+          # Same Machine Identity, same project, same secrets, same masking --
+          # only the transport changes. Routes verified against the live API
+          # before this was written, using NO credentials: an empty POST to the
+          # login route returns 422 and a bogus one returns 401 "Invalid
+          # credentials", which proves both the path and the field names; the
+          # secret routes return 401 rather than 404, which proves they exist.
+          API="${INFISICAL_API:-https://app.infisical.com}"
+          PROJECT_ID=a99885f0-c5af-4ae1-9dc8-255cc60aa129
+          ENV_SLUG=dev
+
+          # Built with jq rather than string interpolation so a quote or
+          # backslash in the client secret cannot break the JSON.
+          LOGIN_BODY=$(jq -nc --arg id "$INFISICAL_CLIENT_ID" \
+                              --arg sec "$INFISICAL_CLIENT_SECRET" \
+                              '{clientId:$id, clientSecret:$sec}')
+          LOGIN=$(curl -sS --max-time 60 -X POST "$API/api/v1/auth/universal-auth/login" \
+                    -H 'Content-Type: application/json' -d "$LOGIN_BODY")
+          TOKEN=$(jq -r '.accessToken // empty' <<<"$LOGIN")
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Infisical login failed: $(jq -r '.message // "no accessToken in response"' <<<"$LOGIN")"
+            exit 1
+          fi
           echo "::add-mask::$TOKEN"
 
-          PROJ=$(infisical secrets get GCP_RAY_BENCH_PROJECT_ID \
-            --projectId=a99885f0-c5af-4ae1-9dc8-255cc60aa129 --env=dev --plain --token="$TOKEN")
+          # v3-raw first, v4 as fallback: both are live today and the pair
+          # survives either being retired. Only the VALUE goes to stdout, so a
+          # diagnostic can never be captured as a secret.
+          get_secret() {
+            local name="$1" out val
+            out=$(curl -sS --max-time 60 -H "Authorization: Bearer $TOKEN" \
+                  "$API/api/v3/secrets/raw/$name?workspaceId=$PROJECT_ID&environment=$ENV_SLUG&secretPath=%2F") || true
+            val=$(jq -r '.secret.secretValue // empty' <<<"$out")
+            if [ -z "$val" ]; then
+              out=$(curl -sS --max-time 60 -H "Authorization: Bearer $TOKEN" \
+                    "$API/api/v4/secrets/$name?projectId=$PROJECT_ID&environment=$ENV_SLUG&secretPath=%2F") || true
+              val=$(jq -r '.secret.secretValue // empty' <<<"$out")
+            fi
+            if [ -z "$val" ]; then
+              echo "::error::could not read $name from Infisical: $(jq -r '.message // "empty value from both v3 and v4"' <<<"$out")" >&2
+              return 1
+            fi
+            printf '%s' "$val"
+          }
+
+          PROJ=$(get_secret GCP_RAY_BENCH_PROJECT_ID)
           echo "::add-mask::$PROJ"
 
-          infisical secrets get GCP_SA_KEY_B64 \
-            --projectId=a99885f0-c5af-4ae1-9dc8-255cc60aa129 --env=dev --plain --token="$TOKEN" \
+          get_secret GCP_SA_KEY_B64 \
             | base64 -d --ignore-garbage > "$HOME/gcp-sa.json"
           chmod 600 "$HOME/gcp-sa.json"
           python3 -c "import json; json.load(open('$HOME/gcp-sa.json'))"
@@ -539,6 +591,147 @@ jobs:
           echo "::error::no worker registered with the master -- every timing below would be a queue wait, not a measurement. Container status and logs are in the groups above."
           exit 1
 
+      - name: Stand up HDFS across the cluster
+        # Splink's lineage break writes a parquet FROM THE EXECUTORS and reads
+        # it back, so it needs storage every executor can reach. Confirmed in
+        # Splink's own source rather than assumed:
+        #
+        #     checkpoint_dir = self._get_checkpoint_dir_path(spark_df)
+        #     spark_df.write.mode("overwrite").parquet(write_path)
+        #     spark_df = self.spark.read.parquet(write_path)
+        #
+        # This lane had NO distributed filesystem at all. That is the real
+        # defect: Splink's documented 100M+ deployments run on Databricks / EMR
+        # / Dataproc where a shared FS is native, and bolting a GCS connector
+        # onto bare standalone Spark was the unusual part, not Splink. Three
+        # runs died on connector configuration before the filesystem was ever
+        # reached.
+        #
+        # HDFS removes the connector from the question entirely: pyspark already
+        # bundles hadoop-client-api/runtime, so `hdfs://` needs NO extra jar on
+        # driver or executors, and it is the filesystem Spark is built around.
+        #
+        # `dfs.replication=1` ON PURPOSE. This is scratch for a lineage break
+        # that lives minutes, and replication would tax Splink with write
+        # amplification GoldenMatch does not pay. Giving the engine under test
+        # its cheapest correct configuration is the fair choice; the risk is a
+        # lost datanode failing the run, not a wrong number.
+        if: inputs.splink_compare && (inputs.splink_checkpoint_fs || 'hdfs') == 'hdfs'
+        run: |
+          set -euo pipefail
+          HADOOP_IMAGE=apache/hadoop:3.4.1
+
+          # Config written on the RUNNER and copied, rather than heredoc'd
+          # through ssh: XML inside a remote shell string is a quoting trap and
+          # a silently mangled config would surface as a filesystem that half
+          # works.
+          mkdir -p hdfs-conf
+          cat > hdfs-conf/core-site.xml <<XML
+          <?xml version="1.0"?>
+          <configuration>
+            <property><name>fs.defaultFS</name><value>hdfs://${MASTER_IP}:9000</value></property>
+            <property><name>hadoop.tmp.dir</name><value>/hadoop/tmp</value></property>
+          </configuration>
+          XML
+          cat > hdfs-conf/hdfs-site.xml <<XML
+          <?xml version="1.0"?>
+          <configuration>
+            <property><name>dfs.replication</name><value>1</value></property>
+            <property><name>dfs.namenode.name.dir</name><value>/hadoop/dfs/name</value></property>
+            <property><name>dfs.datanode.data.dir</name><value>/hadoop/dfs/data</value></property>
+            <property><name>dfs.permissions.enabled</name><value>false</value></property>
+            <property><name>dfs.namenode.rpc-bind-host</name><value>0.0.0.0</value></property>
+            <property><name>dfs.namenode.servicerpc-bind-host</name><value>0.0.0.0</value></property>
+            <property><name>dfs.namenode.http-bind-host</name><value>0.0.0.0</value></property>
+            <property><name>dfs.datanode.use.datanode.hostname</name><value>false</value></property>
+            <property><name>dfs.client.use.datanode.hostname</name><value>false</value></property>
+          </configuration>
+          XML
+          # The heredocs above are indented for YAML, so strip the leading
+          # spaces the block scalar leaves behind. `<?xml` MUST start at column
+          # 0 or the parser rejects the declaration.
+          sed -i 's/^ *//' hdfs-conf/core-site.xml hdfs-conf/hdfs-site.xml
+
+          MASTER="$CLUSTER-master"
+          for n in $NODE_NAMES; do
+            gcloud compute scp --quiet --recurse hdfs-conf "$n:~/" &
+          done
+          wait
+
+          MOUNTS="-v \$HOME/hdfs-conf/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml -v \$HOME/hdfs-conf/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml"
+
+          # CHOWN, not chmod. Run 32280604422 gave the host dirs mode 777 and
+          # the datanode still refused every volume:
+          #
+          #     WARN StorageLocationChecker: Exception checking
+          #     StorageLocation [DISK]file:/hadoop/dfs/data
+          #     EPERM: Operation not permitted
+          #       at NativeIO$POSIX.chmodImpl
+          #       at DiskChecker.mkdirsWithExistsAndPermissionCheck
+          #     Too many failed volumes - current valid volumes: 0
+          #
+          # The datanode chmods its data dir to `dfs.datanode.data.dir.perm`
+          # (0700) on startup. `sudo mkdir` leaves the dir owned by ROOT while
+          # the image runs as its own `hadoop` user, and chmod requires
+          # OWNERSHIP -- write permission is not enough. Mode 777 grants the
+          # wrong thing.
+          #
+          # The uid is read FROM THE IMAGE rather than hardcoded to 1000: it is
+          # a property of the image, and a wrong guess reproduces this exact
+          # failure one cluster later.
+          HUID=$(gcloud compute ssh "$MASTER" --quiet --command \
+            "docker run --rm --entrypoint id $HADOOP_IMAGE -u" 2>/dev/null | tr -dc '0-9')
+          [ -n "$HUID" ] || { echo "::error::could not read the hadoop uid from $HADOOP_IMAGE"; exit 1; }
+          echo "hadoop image runs as uid $HUID"
+
+          # Namenode: format, then run.
+          gcloud compute ssh "$MASTER" --quiet --command "
+            set -euo pipefail
+            sudo mkdir -p /mnt/disks/scratch/hdfs-nn && sudo chown -R $HUID:$HUID /mnt/disks/scratch/hdfs-nn
+            docker run --rm --network host $MOUNTS \
+              -v /mnt/disks/scratch/hdfs-nn:/hadoop/dfs/name \
+              $HADOOP_IMAGE hdfs namenode -format -force -nonInteractive
+            docker run -d --name hdfs-nn --network host --restart unless-stopped $MOUNTS \
+              -v /mnt/disks/scratch/hdfs-nn:/hadoop/dfs/name \
+              $HADOOP_IMAGE hdfs namenode
+          "
+
+          # A datanode on EVERY node, master included: its disk is as good as
+          # any other and the master is otherwise idle during the Splink arm.
+          for n in $NODE_NAMES; do
+            gcloud compute ssh "$n" --quiet --command "
+              set -euo pipefail
+              sudo mkdir -p /mnt/disks/scratch/hdfs-dn && sudo chown -R $HUID:$HUID /mnt/disks/scratch/hdfs-dn
+              docker run -d --name hdfs-dn --network host --restart unless-stopped $MOUNTS \
+                -v /mnt/disks/scratch/hdfs-dn:/hadoop/dfs/data \
+                $HADOOP_IMAGE hdfs datanode
+            " &
+          done
+          wait
+
+          # VERIFIED, not assumed. A namenode with zero live datanodes accepts
+          # a mkdir and then fails every write with UnreplicatedBlocks, minutes
+          # later, inside Splink -- which would read as a Splink failure.
+          echo "waiting for datanodes to register"
+          EXPECT=$(echo $NODE_NAMES | wc -w)
+          for i in $(seq 1 40); do
+            LIVE=$(gcloud compute ssh "$MASTER" --quiet --command \
+              "docker exec hdfs-nn hdfs dfsadmin -report 2>/dev/null | grep -c '^Name:' || true" 2>/dev/null | tr -dc '0-9') || true
+            echo "  attempt $i: ${LIVE:-0}/$EXPECT live datanodes"
+            [ "${LIVE:-0}" -ge "$EXPECT" ] && break
+            sleep 10
+          done
+          [ "${LIVE:-0}" -ge 1 ] || {
+            echo "::error::no HDFS datanode registered; Splink's lineage break would fail mid-run"
+            gcloud compute ssh "$MASTER" --quiet --command "docker logs --tail 40 hdfs-nn 2>&1; docker logs --tail 40 hdfs-dn 2>&1" || true
+            exit 1
+          }
+          echo "HDFS up with ${LIVE} live datanode(s)"
+
+          gcloud compute ssh "$MASTER" --quiet --command \
+            "docker exec hdfs-nn hdfs dfs -mkdir -p /splink-ckpt && docker exec hdfs-nn hdfs dfs -chmod 777 /splink-ckpt"
+          echo "HDFS_CKPT=hdfs://${MASTER_IP}:9000/splink-ckpt/run-${{ github.run_id }}" >> $GITHUB_ENV
+
       - name: Run both harnesses ON the master VM
         # On the master, not the runner: Splink's classic driver must be
         # reachable BY the workers, and a runner behind NAT is not. This also
@@ -578,10 +771,29 @@ jobs:
           sha256sum -c goldenmatch-spark.jar.sha256 \
             || { echo "::error::jar checksum mismatch"; exit 1; }
 
+          # The SHADED GCS connector, for SPLINK's lineage break to gs://.
+          # GoldenMatch never touches it: it has no iterative DAG to truncate.
+          #
+          # Shipped as a file rather than `spark.jars.packages` because Ivy
+          # cannot express a classifier, and the PLAIN artifact the coordinate
+          # resolves to is 155 KB of classes whose transitive deps did not
+          # resolve compatibly against this image -- run 32274795307 died on
+          # `NoClassDefFoundError: .../interceptors/LoggingInterceptor`. The
+          # `-shaded` jar is the self-contained 38 MB build.
+          GCS_VER=3.1.17
+          GCS_BASE="https://repo1.maven.org/maven2/com/google/cloud/bigdataoss/gcs-connector/${GCS_VER}"
+          curl -sSfL --retry 3 --retry-delay 5 -o gcs-connector-shaded.jar \
+            "${GCS_BASE}/gcs-connector-${GCS_VER}-shaded.jar"
+          # Checksummed for the same reason the scorer jar is: a truncated
+          # download resurfaces as a baffling JVM error minutes and five VMs
+          # later, not as a download failure.
+          echo "$(curl -sSfL --retry 3 "${GCS_BASE}/gcs-connector-${GCS_VER}-shaded.jar.sha1")  gcs-connector-shaded.jar" \
+            | sha1sum -c - || { echo "::error::gcs-connector jar checksum mismatch"; exit 1; }
+
           gcloud compute scp --quiet \
             scripts/spark_fs_train_scale.py scripts/spark_splink_train_scale.py \
             scripts/_fs_quality_metrics.py scripts/_spark_shuffle_metrics.py \
-            goldenmatch-spark.jar \
+            goldenmatch-spark.jar gcs-connector-shaded.jar \
             "$MASTER:~/"
 
           gcloud compute ssh "$MASTER" --quiet --command "
@@ -613,14 +825,22 @@ jobs:
             docker exec pyenv sh -c \
               'apt-get update -qq && apt-get install -y -qq --no-install-recommends default-jre-headless >/dev/null'
             docker exec pyenv java -version
-            docker exec -e GOLDENMATCH_SPARK_JAR=/w/goldenmatch-spark.jar \
-              pyenv python spark_fs_train_scale.py \
-              --rows ${{ inputs.rows || '1000000' }} \
-              --remote sc://$MASTER_IP:15002 \
-              --spark-ui http://$MASTER_IP:4040 \
-              ${{ inputs.eval_quality && '--eval-quality' || '' }} \
-              --out /w/spark-fs-train-scale.json
           "
+
+          # DETACHED, not inside the ssh --command above. Run 32259409214 lost
+          # its SSH session 11 minutes into this exact call with the harness
+          # healthy and mid-pass, and took the run and five VMs with it.
+          # scripts/gce_detached.sh carries the mechanism and the log.
+          source scripts/gce_detached.sh
+          gce_detached "$MASTER" fs <<REMOTE
+          export GOLDENMATCH_SPARK_JAR=/w/goldenmatch-spark.jar
+          python spark_fs_train_scale.py \
+            --rows ${{ inputs.rows || '1000000' }} \
+            --remote sc://$MASTER_IP:15002 \
+            --spark-ui http://$MASTER_IP:4040 \
+            ${{ inputs.eval_quality && '--eval-quality' || '' }} \
+            --out /w/spark-fs-train-scale.json
+          REMOTE
 
       - name: Splink on the same cluster
         if: inputs.splink_compare
@@ -642,18 +862,34 @@ jobs:
         run: |
           set -euo pipefail
           MASTER="$CLUSTER-master"
-          gcloud compute ssh "$MASTER" --quiet --command "
-            set -euo pipefail
-            docker stop spark-connect
-            docker exec pyenv python spark_splink_train_scale.py \
-              --rows ${{ inputs.rows || '1000000' }} \
-              --master spark://$MASTER_IP:7077 \
-              --driver-host $MASTER_IP \
-              --spark-ui http://$MASTER_IP:4040 \
-              --checkpoint-dir '${{ inputs.splink_checkpoint_dir || 'gs://goldenmatch-spark-bench-us-east1' }}/run-${{ github.run_id }}' \
-              ${{ inputs.eval_quality && '--eval-quality' || '' }} \
-              --out /w/splink-train-scale.json
-          "
+          gcloud compute ssh "$MASTER" --quiet --command "docker stop spark-connect"
+
+          # DETACHED, and this arm needs it more than the FS one. The step is
+          # `continue-on-error: true`, so a dropped SSH here does NOT fail the
+          # job -- it prints `splink: MISSING` and reads as "Splink could not do
+          # 50M". Publishing a transport failure as an engine limit is the exact
+          # unfairness this comparison exists to avoid.
+          # Which shared filesystem Splink breaks lineage onto. `none` leaves
+          # the flag off entirely, which makes the harness fall back to
+          # `persist` -- correct output, keeps lineage, OOMs at scale.
+          case "${{ inputs.splink_checkpoint_fs || 'hdfs' }}" in
+            hdfs) CKPT="${HDFS_CKPT:?HDFS was selected but the HDFS step did not export HDFS_CKPT}" ;;
+            gcs)  CKPT="${{ inputs.splink_checkpoint_dir || 'gs://goldenmatch-spark-bench-us-east1' }}/run-${{ github.run_id }}" ;;
+            none) CKPT="" ;;
+          esac
+          echo "splink lineage break -> ${CKPT:-persist (no shared FS)}"
+
+          source scripts/gce_detached.sh
+          gce_detached "$MASTER" splink <<REMOTE
+          python spark_splink_train_scale.py \
+            --rows ${{ inputs.rows || '1000000' }} \
+            --master spark://$MASTER_IP:7077 \
+            --driver-host $MASTER_IP \
+            --spark-ui http://$MASTER_IP:4040 \
+            ${CKPT:+--checkpoint-dir $CKPT} \
+            ${{ inputs.eval_quality && '--eval-quality' || '' }} \
+            --out /w/splink-train-scale.json
+          REMOTE
 
       - name: Pull the artifacts back
         if: always()
@@ -669,7 +905,24 @@ jobs:
         if: always()
         with:
           name: spark-gce-multinode
-          path: "*.json"
+          # The two results BY NAME. This globbed `*.json` at the repo root,
+          # which always matches `package.json`, `turbo.json` and
+          # `pyrightconfig.json` -- so on run 32259409214 the upload "succeeded"
+          # carrying three repo files and zero results, and `if-no-files-found`
+          # could never fire because the glob is never empty. "Artifact present"
+          # has to mean "results present" or it is not a signal.
+          #
+          # Named rather than moved to a results/ dir on purpose: the Summary
+          # step below reads both files from the repo root in seven places, and
+          # relocating them would make it print MISSING for both arms. That is
+          # the same class of silent loss this is fixing.
+          path: |
+            spark-fs-train-scale.json
+            splink-train-scale.json
+          # `warn`, not `error`: this step is `if: always()`, so a run that died
+          # before either harness produced anything arrives here legitimately
+          # empty and the real failure is already red upstream. The warning is
+          # meaningful now that nothing else can satisfy the path.
           if-no-files-found: warn
 
       - name: Summary
@@ -765,8 +1018,19 @@ jobs:
         if: always() && !inputs.keep_cluster
         run: |
           set -euo pipefail
-          gcloud compute instances delete $NODE_NAMES --quiet --zone="$ZONE" || true
-          echo "deleted: $NODE_NAMES"
+          # `${NODE_NAMES:-}`, because this step is `always()` and a job that
+          # fails BEFORE provisioning never sets it. Under `set -u` the bare
+          # expansion aborts the step on line 1, which also skipped the GCS
+          # cleanup below -- teardown failing open is the one thing it must
+          # never do. Surfaced by run 32276315793, where the Infisical step
+          # failed early for the first time and teardown died with
+          # `NODE_NAMES: unbound variable`.
+          if [ -z "${NODE_NAMES:-}" ]; then
+            echo "no instances were provisioned; nothing to delete"
+          else
+            gcloud compute instances delete $NODE_NAMES --quiet --zone="${ZONE:-}" || true
+            echo "deleted: $NODE_NAMES"
+          fi
 
           # Splink's lineage-break parquet for THIS run. The bucket carries a
           # 1-day lifecycle rule as a backstop, but a 50M run writes real volume
