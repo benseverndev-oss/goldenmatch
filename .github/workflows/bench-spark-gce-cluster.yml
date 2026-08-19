@@ -170,6 +170,11 @@ jobs:
           gcloud auth activate-service-account --key-file="$HOME/gcp-sa.json"
           gcloud config set project "$GCP_PROJECT_ID" --quiet
           gcloud config set compute/zone "${{ inputs.zone || 'us-central1-a' }}" --quiet
+          # The REQUESTED zone. Provisioning may fall back to another in the
+          # same region (capacity for this shape moves), and will overwrite this
+          # with the one that actually worked -- so every later step, teardown
+          # included, targets the real location rather than the request.
+          echo "ZONE=${{ inputs.zone || 'us-central1-a' }}" >> $GITHUB_ENV
 
       - name: Provision the VMs
         # PREEMPTIBLE, and every instance carries the run id in its name plus a
@@ -273,17 +278,71 @@ jobs:
           # the NVMe. 50GB x 5 = 250GB against DISKS_TOTAL_GB=4096, so it needs
           # no quota anyone has to raise. COS defaults to 10GB, which is tight
           # once both images are pulled, so it is set rather than defaulted.
-          gcloud compute instances create $NAMES \
-            --machine-type="$MT" \
-            --image-family=cos-stable --image-project=cos-cloud \
-            --boot-disk-size=50GB \
-            --boot-disk-type=pd-standard \
-            $SSD_FLAGS \
-            $PROV \
-            --labels=bench=gm-spark,run-id=${{ github.run_id }} \
-            --scopes=cloud-platform \
-            --quiet
-          echo "provisioned: $NAMES ($((SSD_DEVICES * 375))GB local NVMe per node, 50GB boot)"
+          # Try the requested zone, then fall back through the rest of its
+          # region. Capacity for this shape is genuinely scarce and MOVES:
+          # across two days this lane hit ZONE_RESOURCE_POOL_EXHAUSTED five
+          # times, including twice in us-east1-c AFTER two successful runs
+          # there. Attaching local SSD narrows the pool further -- the error is
+          # specifically "n2-standard-16 VM instance WITH 2 LOCAL SSD(s) is
+          # currently unavailable", not the bare machine type.
+          #
+          # Hand-picking a zone per dispatch was costing a round trip each time
+          # and is not knowledge anyone can hold: there is no API for "which
+          # zone has capacity right now", you find out by asking. So ask here,
+          # in a loop, instead of making a human do it.
+          #
+          # PARTIAL provisions are cleaned up between attempts. A failed create
+          # can still leave instances behind (this run created w2 before
+          # failing), and carrying them into the next zone would leave a
+          # split-brain cluster billing in two places.
+          # `tr -d '\r'` and the dedupe are not cargo-cult: testing this list
+          # locally produced `us-east1-c us-east1-b us-east1-c us-east1-d` --
+          # the requested zone twice, because gcloud on that host emitted CRLF
+          # so `us-east1-c\r` never equalled `us-east1-c`. A Linux runner emits
+          # LF and would not have shown it, which is exactly why the duplicate
+          # is worth defending against rather than reasoning away: a duplicate
+          # silently burns one of a small number of capacity attempts.
+          ZONE_LIST="$ZONE"
+          REGION="${ZONE%-*}"
+          for z in $(gcloud compute zones list --project "$GCP_PROJECT_ID" \
+                       --filter="region~${REGION}$ AND status=UP" \
+                       --format="value(name)" 2>/dev/null | tr -d '\r'); do
+            case " $ZONE_LIST " in *" $z "*) continue;; esac
+            ZONE_LIST="$ZONE_LIST $z"
+          done
+          echo "zone order: $ZONE_LIST"
+
+          PROVISIONED=""
+          for z in $ZONE_LIST; do
+            echo "--- attempting $z ---"
+            if gcloud compute instances create $NAMES \
+                 --zone="$z" \
+                 --machine-type="$MT" \
+                 --image-family=cos-stable --image-project=cos-cloud \
+                 --boot-disk-size=50GB \
+                 --boot-disk-type=pd-standard \
+                 $SSD_FLAGS \
+                 $PROV \
+                 --labels=bench=gm-spark,run-id=${{ github.run_id }} \
+                 --scopes=cloud-platform \
+                 --quiet; then
+              PROVISIONED="$z"
+              break
+            fi
+            echo "$z did not have capacity; cleaning up any partial create"
+            gcloud compute instances delete $NAMES --zone="$z" --quiet 2>/dev/null || true
+          done
+
+          if [ -z "$PROVISIONED" ]; then
+            echo "::error::no zone in $REGION had capacity for $MT with $SSD_DEVICES local SSD(s). Tried: $ZONE_LIST"
+            exit 1
+          fi
+
+          # Every later step resolves the zone from config, so pin it to the one
+          # that actually worked rather than the one that was requested.
+          gcloud config set compute/zone "$PROVISIONED" --quiet
+          echo "ZONE=$PROVISIONED" >> $GITHUB_ENV
+          echo "provisioned in $PROVISIONED: $NAMES ($((SSD_DEVICES * 375))GB local NVMe per node, 50GB boot)"
 
       # SSH goes over the instance's EXTERNAL IP rather than IAP.
       # `--tunnel-through-iap` would be tidier, but it needs
@@ -613,7 +672,7 @@ jobs:
           {
             echo '## Spark FS on a REAL multi-node cluster'
             echo ''
-            echo "${{ inputs.workers || '4' }} worker VM(s) + 1 master, \`${{ inputs.machine_type || 'n2-standard-16' }}\`, ${{ inputs.disk_gb || '750' }}GB local NVMe scratch/node, ${{ inputs.rows || '1000000' }} rows, zone \`${{ inputs.zone || 'us-central1-a' }}\`."
+            echo "${{ inputs.workers || '4' }} worker VM(s) + 1 master, \`${{ inputs.machine_type || 'n2-standard-16' }}\`, ${{ inputs.disk_gb || '750' }}GB local NVMe scratch/node, ${{ inputs.rows || '1000000' }} rows, zone \`${ZONE:-unknown}\` (requested \`${{ inputs.zone || 'us-central1-a' }}\`)."
             echo ''
             echo 'Every shuffle byte here crosses a real network, which the single-host lane cannot test.'
             echo ''
@@ -700,7 +759,7 @@ jobs:
         if: always() && !inputs.keep_cluster
         run: |
           set -euo pipefail
-          gcloud compute instances delete $NODE_NAMES --quiet --zone="${{ inputs.zone || 'us-central1-a' }}" || true
+          gcloud compute instances delete $NODE_NAMES --quiet --zone="$ZONE" || true
           echo "deleted: $NODE_NAMES"
 
       - name: Leaked-instance warning
@@ -709,4 +768,4 @@ jobs:
           echo "::warning::keep_cluster was set. These VMs are STILL BILLING:"
           echo "  $NODE_NAMES"
           echo "Delete them with:"
-          echo "  gcloud compute instances delete $NODE_NAMES --zone=${{ inputs.zone || 'us-central1-a' }}"
+          echo "  gcloud compute instances delete $NODE_NAMES --zone=$ZONE"
