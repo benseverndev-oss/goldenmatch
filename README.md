@@ -249,13 +249,13 @@ Every headline number maps back to a single committed runner (`scripts/run_bench
 
 | | GoldenMatch | Splink | ratio |
 | --- | ---: | ---: | ---: |
-| wall | **862s** | 1,248s | 1.45x |
-| shuffle write | **128.5 GB** | 212.1 GB | 1.65x |
-| stages | **197** | 394 | 2.00x |
-| executor CPU | **47,121s** | 63,759s | 1.35x |
-| spill | 0 | 0 | -- |
+| wall | **552s** | 1,054s | 1.91x |
+| u / estimate | **3.5s** | 30.8s | 8.78x |
+| shuffle write | **86.8 GB** | 212.1 GB | 2.44x |
+| stages | **119** | 394 | 3.31x |
+| executor CPU | **31,300s** | 51,572s | 1.65x |
 
-Reported with it, because a benchmark that only publishes its wins is not evidence: **Splink's `u` estimation is 2.3x faster than ours**, the margin **narrows with scale** (2.54x at 1M -> 1.45x at 50M, so do not extrapolate upward), the run is **N=1** on a synthetic fixture, and the accuracy figures in it are *not* an accuracy verdict -- for that, see the [bake-off](docs/benchmarks/2026-06-09-splink-bakeoff.md). Four earlier attempts at this comparison were invalid because *we* had misconfigured Splink; each defect and its effect is documented alongside the results. [Full method, caveats and reproduce command](docs/benchmarks/2026-08-19-spark-50m-head-to-head.md).
+Reported with it, because a benchmark that only publishes its wins is not evidence: the margin still **narrows with scale** (2.54x at 1M -> 1.91x at 50M), single runs on this lane move **~16%** so no one ratio should carry much weight, **zero spill is scale-bounded** (true at 50M, but GoldenMatch spills 56.4 GB at 100M and 201.3 GB at 250M), the fixture is **synthetic**, and the accuracy figures in it are *not* an accuracy verdict -- for that, see the [bake-off](docs/benchmarks/2026-06-09-splink-bakeoff.md). **Measured further since:** 100M rows in 958s and **250M rows / 2.32 billion pairs in 2,766s** on the same 5-node cluster, no executor deaths and zero failed tasks, at a flat **~1.19 seconds per million pairs** across the whole 5x range. Four earlier attempts at this comparison were invalid because *we* had misconfigured Splink; each defect and its effect is documented alongside the results. [Full method, caveats and reproduce command](docs/benchmarks/2026-08-19-spark-50m-head-to-head.md).
 
 Three reproducible real-world pipelines run this on public data at scale:
 

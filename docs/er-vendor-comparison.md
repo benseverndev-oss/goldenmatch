@@ -29,7 +29,7 @@ Before comparing, the column we're comparing *against*. Numbers are as of `golde
 | **License** | MIT (every package in the suite) |
 | **Languages** | Python (headline) + TypeScript (parity) + Rust (Postgres/DuckDB extension) |
 | **Runtimes** | Polars (≤500K), DuckDB (500K–50M), Ray + DataFusion/Sail distributed tier (≥50M); Postgres via pgrx; DuckDB UDFs; edge JS (Vercel Edge / Cloudflare Workers / Deno) |
-| **Throughput** | 1M dedupe in 12.3 min on 4-core / 16 GB Linux (Round 5, 2026-05-12); **100M distributed dedupe in 9.2 min on a 5-node Ray cluster** (block-shuffle scoring + randomized-contraction WCC, byte-exact 20M-cluster recovery, #844); **distributed Fellegi-Sunter training at 50M in 551s on a 5-node Spark cluster** (463.9M pairs, zero spill; 1.45x faster than Splink on the same cluster when measured, before the v3.13.1 `u` fix) [^spark50m]; 100K fuzzy ~39 s |
+| **Throughput** | 1M dedupe in 12.3 min on 4-core / 16 GB Linux (Round 5, 2026-05-12); **100M distributed dedupe in 9.2 min on a 5-node Ray cluster** (block-shuffle scoring + randomized-contraction WCC, byte-exact 20M-cluster recovery, #844); **distributed Fellegi-Sunter training at 50M in 552s and 250M in 2,766s on a 5-node Spark cluster** (463.9M and 2.32B pairs; ~1.19 s per million pairs, flat across 5x; 1.91x faster than Splink at 50M on the same cluster) [^spark50m]; 100K fuzzy ~39 s |
 | **Accuracy, PII (Febrl)** | F1 0.971 (zero-config 0.944 on Febrl3) [^bench] |
 | **Accuracy, bibliographic (DBLP-ACM)** | F1 0.964 zero-config (hand-tuned ceiling 0.918) [^bench] |
 | **Accuracy, product (Abt-Buy)** | F1 0.722 +$0.04 LLM; 0.817 with Vertex AI + GPT-4o-mini [^bench] |
@@ -81,8 +81,8 @@ Observations from the matrix:
 1. **Nobody else publishes zero-config benchmark numbers.** Every "GM" in that row reflects that this is currently uncontested ground.
 2. **Throughput at ≥10M on a *single node* is still the universal "V" against us.** Almost every paid vendor and several OSS engines (Splink/DuckDB, Zingg/Spark, Senzing) win here. Distributed has closed fast — **100M dedupe now runs in 9.2 min on a 5-node Ray cluster** (block-shuffle scoring + randomized-contraction WCC, #844) — but the single-node ≥10M column is unmoved. Closing it remains direction #1 of the strategy review.
    **Distributed has now gone further than "closed":** on a like-for-like Spark
-   cluster at 50M, GoldenMatch is 1.45x faster than Splink on wall and moves
-   1.65x fewer bytes, with both engines correctly configured [^spark50m]. That
+   cluster at 50M, GoldenMatch is 1.91x faster than Splink on wall and moves
+   2.44x fewer bytes, with both engines correctly configured [^spark50m]. That
    is the first axis where we beat Splink on *speed* rather than on tuning
    effort — but note the shape of it: **single-node throughput remains their
    win, distributed is ours, and the margin narrows as scale grows.** The
@@ -127,10 +127,11 @@ by both**:
 
 | | GoldenMatch | Splink | ratio |
 |---|---:|---:|---:|
-| wall | **862s** | 1,248s | 1.45x |
-| shuffle write | **128.5 GB** | 212.1 GB | 1.65x |
-| stages | **197** | 394 | 2.00x |
-| executor CPU | **47,121s** | 63,759s | 1.35x |
+| wall | **552s** | 1,054s | 1.91x |
+| u / estimate | **3.5s** | 30.8s | 8.78x |
+| shuffle write | **86.8 GB** | 212.1 GB | 2.44x |
+| stages | **119** | 394 | 3.31x |
+| executor CPU | **31,300s** | 51,572s | 1.65x |
 | spill | 0 | 0 | — |
 
 This is the first evidence that the "Splink is faster" line does **not** hold on
@@ -138,8 +139,34 @@ the distributed tier, on Splink's own strongest runtime. Read it with its
 limits: **N=1**, a synthetic fixture, and an unavoidable session-type confound
 (GM runs Spark Connect because `addArtifact` is Connect-only; Splink drives a
 classic session because it needs `sparkContext`). The margin also **narrows with
-scale** — 2.54x at 1M, 1.45x at 50M — so it must not be extrapolated upward.
+scale** — 2.54x at 1M, 1.91x at 50M — and single runs move ~16%, so no one ratio should carry much weight.
 Full method and caveats: [50M head-to-head][^spark50m].
+
+**Re-measured 2026-08-20 after the v3.13.1 `u` fix, both arms re-run** (run
+`32372957870`) rather than mixing builds. A prediction of 2.26x from holding
+Splink constant was WRONG: Splink also got ~16% faster on the re-run, so the
+real figure is 1.91x. Single runs on this lane move ~16%, which is worth
+remembering before reading much into any one ratio.
+
+**Largest measured GoldenMatch run is now 250M rows / 2.32 BILLION pairs**
+(2,765s on the same 5-node cluster, no executor deaths, zero failed tasks).
+Seconds per million pairs is flat at 1.19 / 1.03 / 1.19 across 50M / 100M /
+250M, so cost is linear in PAIRS. Splink publicly demos 1B-row Spark runs; the
+gap between our measured range and their demonstrated one is now 4x rather than
+20x, and is still untested by us rather than disproven.
+
+**"Zero spill" is scale-bounded and must be quoted with a size.** True at 50M
+for both engines; at 100M GoldenMatch spills 56.4 GB and at 250M 201.3 GB. It
+never failed -- Spark spilled and continued -- but spill grows 3.57x per 2.5x of
+data, faster than the data does.
+
+**Whether that spill is the CEILING is size-dependent, and this document
+previously asserted it was, flatly.** Removing the pair-sized shuffles that
+feed it changes total wall by **+1.8% at 100M** and **-20.8% at 250M** -- the
+score stage flips from 11% slower to 17% faster on identical code. So spill is
+a ceiling above a threshold between those two sizes and close to free below it.
+The measurement, its caveats, and the attribution it does NOT settle are in
+[the benchmark doc](benchmarks/2026-08-19-spark-50m-head-to-head.md).
 
 Two honest footnotes to that table. **The accuracy figures from that run are not
 an accuracy verdict** (both harnesses say so in their own docstrings; the config
@@ -728,7 +755,7 @@ Splink (MIT) and dedupe (BSD) have outgrown Zingg (AGPL) and Senzing (closed cor
 
 [^bench]: GoldenMatch zero-config numbers come from `docs/reproducing-benchmarks.md` (per-dataset runner + expected output) and the entries in `packages/python/goldenmatch/CHANGELOG.md` for v1.8 through v1.30. Verified-stamp dates accompany each row in the reproducing-benchmarks doc (DBLP-ACM 0.9641, Febrl3 0.9443, NCVR 0.9719, all verified 2026-05-11 and flat since).
 
-[^spark50m]: The distributed Spark head-to-head lives at `docs/benchmarks/2026-08-19-spark-50m-head-to-head.md` -- both engines on ONE 5-node GCE cluster (4x `n2-standard-16` + master), the same fixture built by the same function, the same shared metric implementation, the same 48 GB executors and 320 shuffle partitions, and Splink configured per its own performance guide (`parquet` lineage breaks onto HDFS). Run `32292243875`, 50M rows / 463,923,179 pairs scored identically by both, zero spill and zero failed tasks on either side. Limits stated in the doc rather than implied: N=1, synthetic fixture, an unavoidable Connect-vs-classic session confound, a margin that NARROWS with scale (2.54x at 1M to 1.45x at 50M), and accuracy figures that are explicitly not an accuracy verdict. It also documents the four misconfigurations of OURS that invalidated the four preceding attempts.
+[^spark50m]: The distributed Spark head-to-head lives at `docs/benchmarks/2026-08-19-spark-50m-head-to-head.md` -- both engines on ONE 5-node GCE cluster (4x `n2-standard-16` + master), the same fixture built by the same function, the same shared metric implementation, the same 48 GB executors and 320 shuffle partitions, and Splink configured per its own performance guide (`parquet` lineage breaks onto HDFS). Run `32292243875`, 50M rows / 463,923,179 pairs scored identically by both, zero spill and zero failed tasks on either side. Limits stated in the doc rather than implied: N=1, synthetic fixture, an unavoidable Connect-vs-classic session confound, a margin that NARROWS with scale (2.54x at 1M to 1.91x at 50M), single-run variance of ~16%, and accuracy figures that are explicitly not an accuracy verdict. Re-measured 2026-08-20 with BOTH arms re-run after the v3.13.1 `u` fix (run 32372957870); the scale curve to 250M is in the same doc. It also documents the four misconfigurations of OURS that invalidated the four preceding attempts.
 
 [^bakeoff]: The autoconfig-vs-hand-rolled bake-off lives at `docs/benchmarks/2026-06-09-splink-bakeoff.md` — three engines (GM zero-config, GM probabilistic auto-config, hand-rolled Splink) per dataset, each self-timed in its own subprocess, all judged by ONE shared `evaluate.evaluate` pairwise evaluator on the same `record_id` key space. Run on `large-new-64GB` at commit `970aab61` (deterministic EM training-pair sampling, #829), reproduces run-to-run within 0.002. Honest framing in that doc: Splink stays 3-19x faster per node, retains 1B-row Spark + the m/u comparison-viewer UI; GM's edge is zero tuning at accuracy parity.
 
