@@ -131,19 +131,49 @@ Three properties hold across the whole range: `u` stays nearly flat (3.5s to
 3.57x for 2.5x the data, growing faster than the data does. Nothing failed:
 Spark spilled and continued, no executor died, no task failed.
 
-**It is NOT the ceiling, and an earlier version of this document said it was.**
-That claim has since been tested directly rather than inferred, and it is
-false. On the 100M lane (run `32393456488`), an engine change cut memory spill
-from 56.4 GB to 4.29 GB and disk spill from 5.0 GB to 0.23 GB -- 92% and 95% --
-while also cutting shuffle write 43% (174.9 -> 99.0 GB), stages 119 -> 74 and
-tasks 11,198 -> 6,665. Total wall moved from 958.31s to 975.30s: nothing, or
-very slightly worse.
+**Whether it is the CEILING was tested, and the answer is "not linearly".**
+This section first asserted flatly that spill was the ceiling. It then, on one
+run's evidence, retracted that just as flatly. Both statements were too strong,
+and the sequence is left visible here because the correction is the finding.
 
-So spill was a symptom of how the candidate frame was moved, not the thing
-setting the clock. What sets it is narrower: **one stage held 62% of all
-executor time**, the join of the candidate frame back to both record sides.
-Resource consumption and wall are close to decoupled on this workload, and any
-future claim about the ceiling has to name the stage it is about.
+The test: an engine change that removes the pair-sized shuffles feeding the
+spill (branch `perf/fuse-block-join-counts`, PR #2698 -- not in `main` at the
+time of writing), run on the same cluster shape at two sizes.
+
+| | 100M (`32393456488`) | 250M (`32400918792`) |
+|---|---|---|
+| memory spill | 56.4 -> 4.29 GB | 201.3 GB -> **0** |
+| disk spill | 5.0 -> 0.23 GB | 17.4 GB -> **0** |
+| shuffle write | 174.9 -> 99.0 GB | 438.1 -> 113.8 GB |
+| stages | 119 -> 74 | 119 -> 52 |
+| **total wall** | 958.31 -> 975.30s (**+1.8%**) | 2,765.8 -> **2,189.3s** (**-20.8%**) |
+| score stage | 651.9 -> 722.4s (**+10.8%**) | 1,888.8 -> **1,574.6s** (**-16.6%**) |
+| average precision / best F1 | unchanged | unchanged |
+
+**The score stage changes SIGN between the two sizes.** Same code, same cluster
+shape, 11% slower at 100M and 17% faster at 250M. That is not run-to-run
+variance -- this lane moves ~2% between runs of the same code -- it is a real
+scale threshold. Below it the cluster absorbs the spill and paying to avoid it
+is a net loss; above it the spill dominates and avoiding it wins.
+
+So the honest statement is neither of the first two. Spill is **a** ceiling
+above a threshold that sits between 100M and 250M on this cluster shape, and
+below that threshold it is close to free. Any claim about it has to name a
+size, exactly as the "zero spill" claim does.
+
+**One attribution this does NOT settle.** The same change removes 74% of the
+shuffle write as well as all of the spill, so the 250M win cannot be assigned
+to spill alone from these runs. Separating them needs a variant that removes
+one without the other, which has not been run.
+
+**And a methodological note worth more than the numbers.** Every comparison
+above is one arm against a baseline banked from a DIFFERENT job -- different
+VMs, different JVM, different shuffle files. That is worth ~2% run-to-run and
+up to ~16% across a re-run, which is the same order as several of the effects
+being measured. `scripts/spark_fs_train_scale.py --ab N` now runs both arms in
+one session over one cached fixture, alternating so warm-up drift cancels, and
+reports each arm's spread as the noise floor. Comparisons made the old way --
+including the 100M row above -- carry that confound.
 
 **"Zero spill" is therefore a SCALE-BOUNDED claim.** It is true at 50M and
 false at 100M. Any comparison quoting it must say at what size.

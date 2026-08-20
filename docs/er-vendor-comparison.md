@@ -158,7 +158,15 @@ gap between our measured range and their demonstrated one is now 4x rather than
 **"Zero spill" is scale-bounded and must be quoted with a size.** True at 50M
 for both engines; at 100M GoldenMatch spills 56.4 GB and at 250M 201.3 GB. It
 never failed -- Spark spilled and continued -- but spill grows 3.57x per 2.5x of
-data, faster than the data, and is the real ceiling rather than row count.
+data, faster than the data does.
+
+**Whether that spill is the CEILING is size-dependent, and this document
+previously asserted it was, flatly.** Removing the pair-sized shuffles that
+feed it changes total wall by **+1.8% at 100M** and **-20.8% at 250M** -- the
+score stage flips from 11% slower to 17% faster on identical code. So spill is
+a ceiling above a threshold between those two sizes and close to free below it.
+The measurement, its caveats, and the attribution it does NOT settle are in
+[the benchmark doc](benchmarks/2026-08-19-spark-50m-head-to-head.md).
 
 Two honest footnotes to that table. **The accuracy figures from that run are not
 an accuracy verdict** (both harnesses say so in their own docstrings; the config
