@@ -8076,6 +8076,7 @@
             "agreement_pattern_counts",
             "estimate_u_distributed",
             "gamma_columns",
+            "gamma_frame",
             "random_pairs",
             "tf_value_frequencies",
             "train_em_distributed"
