@@ -127,10 +127,11 @@ by both**:
 
 | | GoldenMatch | Splink | ratio |
 |---|---:|---:|---:|
-| wall | **862s** | 1,248s | 1.45x |
-| shuffle write | **128.5 GB** | 212.1 GB | 1.65x |
-| stages | **197** | 394 | 2.00x |
-| executor CPU | **47,121s** | 63,759s | 1.35x |
+| wall | **552s** | 1,054s | 1.91x |
+| u / estimate | **3.5s** | 30.8s | 8.78x |
+| shuffle write | **86.8 GB** | 212.1 GB | 2.44x |
+| stages | **119** | 394 | 3.31x |
+| executor CPU | **31,300s** | 51,572s | 1.65x |
 | spill | 0 | 0 | — |
 
 This is the first evidence that the "Splink is faster" line does **not** hold on
@@ -140,6 +141,24 @@ limits: **N=1**, a synthetic fixture, and an unavoidable session-type confound
 classic session because it needs `sparkContext`). The margin also **narrows with
 scale** — 2.54x at 1M, 1.45x at 50M — so it must not be extrapolated upward.
 Full method and caveats: [50M head-to-head][^spark50m].
+
+**Re-measured 2026-08-20 after the v3.13.1 `u` fix, both arms re-run** (run
+`32372957870`) rather than mixing builds. A prediction of 2.26x from holding
+Splink constant was WRONG: Splink also got ~16% faster on the re-run, so the
+real figure is 1.91x. Single runs on this lane move ~16%, which is worth
+remembering before reading much into any one ratio.
+
+**Largest measured GoldenMatch run is now 250M rows / 2.32 BILLION pairs**
+(2,765s on the same 5-node cluster, no executor deaths, zero failed tasks).
+Seconds per million pairs is flat at 1.19 / 1.03 / 1.19 across 50M / 100M /
+250M, so cost is linear in PAIRS. Splink publicly demos 1B-row Spark runs; the
+gap between our measured range and their demonstrated one is now 4x rather than
+20x, and is still untested by us rather than disproven.
+
+**"Zero spill" is scale-bounded and must be quoted with a size.** True at 50M
+for both engines; at 100M GoldenMatch spills 56.4 GB and at 250M 201.3 GB. It
+never failed -- Spark spilled and continued -- but spill grows 3.57x per 2.5x of
+data, faster than the data, and is the real ceiling rather than row count.
 
 Two honest footnotes to that table. **The accuracy figures from that run are not
 an accuracy verdict** (both harnesses say so in their own docstrings; the config
