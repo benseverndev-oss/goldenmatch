@@ -517,6 +517,7 @@ def score_narrow(df, cfg, mk, model, n_entities: int):
     )
     from goldenmatch.spark.em import gamma_columns
     from goldenmatch.spark.jvm import ROW_UDF_NAME, TRANSFORM_UDF_NAME
+    from goldenmatch.spark.probabilistic import _weight_lookup_expr
     from pyspark.sql import functions as F
 
     gammas = gamma_columns(
@@ -524,15 +525,19 @@ def score_narrow(df, cfg, mk, model, n_entities: int):
         scorer_udf=ROW_UDF_NAME, transform_udf=TRANSFORM_UDF_NAME,
     )
     # Match weight = the per-field log2(m/u) for the level the pair landed on,
-    # summed. `match_weights[field][level]` IS that table, so this is a lookup
-    # rather than a second derivation of the weight.
+    # summed. Built by the SHIPPED `_weight_lookup_expr`, not a hand-rolled copy.
+    #
+    # The copy this replaces nested a CASE per level, naming the gamma -- and so
+    # the jar scorer inside it -- once per level. That is the defect
+    # `--attribute-score` found (weight layer 2.71x the gamma layer at 50M), and
+    # a bench carrying its own version of the expression under test would have
+    # kept paying for it after the shipped one was fixed, while reporting a
+    # number nobody could act on.
     weight = F.lit(0.0)
     for col, f in zip(gammas, mk.fields):
-        per_level = model.match_weights[f.resolved_field]
-        expr = F.lit(0.0)
-        for level, val in enumerate(per_level):
-            expr = F.when(col == F.lit(level), F.lit(float(val))).otherwise(expr)
-        weight = weight + expr
+        weight = weight + _weight_lookup_expr(
+            col, list(model.match_weights[f.resolved_field])
+        )
     truth = F.col(f"{CAND_LHS}.__row_id__") % F.lit(n_entities) == F.col(
         f"{CAND_RHS}.__row_id__"
     ) % F.lit(n_entities)
@@ -581,6 +586,7 @@ def attribute_score(df, cfg, mk, model, n_entities: int):
     from goldenmatch.spark.config_pipeline import CAND_LHS, CAND_RHS, fused_pass_frames
     from goldenmatch.spark.em import gamma_columns
     from goldenmatch.spark.jvm import ROW_UDF_NAME, TRANSFORM_UDF_NAME
+    from goldenmatch.spark.probabilistic import _weight_lookup_expr
     from pyspark.sql import functions as F
 
     frames = fused_pass_frames(df, cfg, id_col="__row_id__")
@@ -591,10 +597,9 @@ def attribute_score(df, cfg, mk, model, n_entities: int):
     names = [f"gamma_{f.resolved_field}" for f in mk.fields]
     weight = F.lit(0.0)
     for col, f in zip(gammas, mk.fields):
-        expr = F.lit(0.0)
-        for level, val in enumerate(model.match_weights[f.resolved_field]):
-            expr = F.when(col == F.lit(level), F.lit(float(val))).otherwise(expr)
-        weight = weight + expr
+        weight = weight + _weight_lookup_expr(
+            col, list(model.match_weights[f.resolved_field])
+        )
     # No `truth` expression built here: the `full` layer calls `score_groups`,
     # the function the real run uses, so the last layer measures the shipped
     # path rather than a reconstruction of it. Its cost still lands in the
