@@ -237,114 +237,12 @@ def test_default_sample_size_is_in_the_controllers_own_range():
     assert 1_000 <= DEFAULT_SAMPLE_ROWS <= 50_000
 
 
-# --- Exact distributed profiling (spec 2026-08-20) ------------------------
+# --- Exact distributed profiling: the COST decision (spec 2026-08-20) ---
 #
-# The two shapes below are the bugs this exists for, both already documented in
-# the source. Each is measured at MORE THAN ONE SCALE on purpose: the defect is
-# that the verdict moves with scale, so a single-scale assertion cannot see it.
-
-
-def _prof(name: str, *, cardinality_ratio: float, n_distinct=None, null_rate=0.0, avg_len=8.0):
-    from goldenmatch.core.autoconfig import ColumnProfile
-
-    return ColumnProfile(
-        name=name, dtype="str", col_type="identifier", confidence=0.9,
-        sample_values=["a", "b"], null_rate=null_rate,
-        cardinality_ratio=cardinality_ratio, avg_len=avg_len, n_distinct=n_distinct,
-    )
-
-
-def test_876_cardinality_ratio_is_scale_invariant_once_exact():
-    """The #876 surrogate guard: a flat 0.28 read as 0.72 -> 1.00 across scale.
-
-    `autoconfig.py` records an `email` column whose TRUE distinct-fraction is a
-    flat 0.28 reading 0.72 / 0.94 / 0.97 / 0.98 / 1.00 at 100K / 500K / 1M / 2M
-    / 5M, because a fixed-size sample of a growing frame drives the fraction to
-    1.0. Every surrogate guard compares that to an absolute 1.0, so at 5M
-    zero-config discarded its only exact identity column and produced a 185M-pair
-    run that killed the runner.
-
-    Exact stats must read ~0.28 at EVERY scale.
-    """
-    from goldenmatch.spark.autoconfig import ExactStats, merge_exact_stats
-
-    sampled_ratio_by_scale = {100_000: 0.72, 500_000: 0.94, 1_000_000: 0.97,
-                              2_000_000: 0.98, 5_000_000: 1.00}
-    for n_full, sampled in sampled_ratio_by_scale.items():
-        profiles = [_prof("email", cardinality_ratio=sampled)]
-        exact = {"email": ExactStats(
-            n_rows=n_full, n_non_null=n_full,
-            n_distinct=int(0.28 * n_full), avg_len=18.0,
-        )}
-        out = merge_exact_stats(profiles, exact, n_full=n_full)
-        assert abs(out[0].cardinality_ratio - 0.28) < 0.01, (
-            f"at n={n_full:,} the ratio must be the TRUE 0.28, "
-            f"not the sampled {sampled}"
-        )
-
-
-def test_2687_a_nearly_constant_column_is_not_reported_constant():
-    """A 99.99% constant column must not read `n_distinct == 1`.
-
-    PR #2687 drops a scored field when `n_distinct <= 1`, and that count came
-    from a 1,000-row sample: a value at frequency 1e-4 is missed 90% of the
-    time. The field then gets dropped at 5M and kept at 2,000 rows -- same data,
-    different config.
-    """
-    from goldenmatch.spark.autoconfig import ExactStats, merge_exact_stats
-
-    n_full = 5_000_000
-    profiles = [_prof("status", cardinality_ratio=1 / 1000, n_distinct=1)]
-    exact = {"status": ExactStats(n_rows=n_full, n_non_null=n_full, n_distinct=2, avg_len=6.0)}
-
-    out = merge_exact_stats(profiles, exact, n_full=n_full)
-    assert out[0].n_distinct == 2, "the rare second value must survive profiling"
-
-
-def test_exact_and_sampled_agree_when_the_sample_IS_the_frame():
-    """The control. If they disagree here, the exact path is wrong, not the sample."""
-    from goldenmatch.spark.autoconfig import ExactStats, merge_exact_stats
-
-    n_full = 500
-    profiles = [_prof("city", cardinality_ratio=40 / 500, n_distinct=40, null_rate=0.1, avg_len=7.0)]
-    exact = {"city": ExactStats(n_rows=500, n_non_null=450, n_distinct=40, avg_len=7.0)}
-
-    out = merge_exact_stats(profiles, exact, n_full=n_full)
-    assert out[0].n_distinct == 40
-    assert abs(out[0].cardinality_ratio - 40 / 500) < 1e-9
-    assert abs(out[0].null_rate - 0.1) < 1e-9
-
-
-def test_classification_fields_are_NEVER_overwritten():
-    """Only distribution stats go exact. Type detection stays on the sample.
-
-    `col_type`, `confidence` and `sample_values` answer "what kind of column is
-    this", which a sample answers correctly by construction. Overwriting them
-    from an aggregate would be a different (and wrong) change.
-    """
-    from goldenmatch.spark.autoconfig import ExactStats, merge_exact_stats
-
-    profiles = [_prof("email", cardinality_ratio=1.0)]
-    before = (profiles[0].col_type, profiles[0].confidence, list(profiles[0].sample_values))
-    exact = {"email": ExactStats(n_rows=1_000_000, n_non_null=999_000, n_distinct=280_000, avg_len=18.0)}
-
-    out = merge_exact_stats(profiles, exact, n_full=1_000_000)
-    assert (out[0].col_type, out[0].confidence, list(out[0].sample_values)) == before
-
-
-def test_a_column_with_no_exact_stats_is_left_untouched():
-    """Absent is not zero. A column the exact pass skipped keeps its sampled
-    values rather than being rewritten to 0 -- the same absent-vs-zero
-    discipline as `candidates_counted` and the gce_detached liveness probe."""
-    from goldenmatch.spark.autoconfig import ExactStats, merge_exact_stats
-
-    profiles = [_prof("email", cardinality_ratio=0.9, n_distinct=900),
-                _prof("notes", cardinality_ratio=0.5, n_distinct=500)]
-    exact = {"email": ExactStats(n_rows=1000, n_non_null=1000, n_distinct=280, avg_len=18.0)}
-
-    out = merge_exact_stats(profiles, exact, n_full=1000)
-    assert out[1].n_distinct == 500, "the skipped column must keep its sampled stats"
-    assert abs(out[1].cardinality_ratio - 0.5) < 1e-9
+# The merge rules themselves live in `core.autoconfig` and are tested through
+# the real `profile_columns` path in test_exact_profiling_override.py -- the
+# shipped basis, not a lookalike of it. What is unit-tested here is the part
+# that is Spark's own: which columns are worth an exact count_distinct.
 
 
 def test_only_boundary_columns_pay_for_an_exact_count_distinct():
@@ -392,3 +290,30 @@ def test_exact_stats_returns_empty_rather_than_raising_without_pyspark(monkeypat
             raise RuntimeError("cluster went away")
 
     assert sac.exact_column_stats(_Boom(), ["email"]) == {}
+
+
+def test_exact_profiling_is_OFF_by_default(monkeypatch):
+    """Default OFF is the whole safety property of this slice.
+
+    Several rules compare these fields to cuts chosen while the inputs were
+    sample-derived, so making them truthful can move quality scores -- as
+    rebasing `mass_above_threshold` took `anchor_person_match` from 1.0000 to
+    0.7303. It flips on quality-gate evidence, not on being more correct.
+    """
+    from goldenmatch.spark.autoconfig import _exact_profiling_enabled
+
+    monkeypatch.delenv("GOLDENMATCH_SPARK_EXACT_PROFILING", raising=False)
+    assert _exact_profiling_enabled(None) is False
+
+
+def test_the_argument_overrides_the_environment_both_ways(monkeypatch):
+    """A caller or a test must be able to pin it without touching process state."""
+    from goldenmatch.spark.autoconfig import _exact_profiling_enabled
+
+    monkeypatch.setenv("GOLDENMATCH_SPARK_EXACT_PROFILING", "1")
+    assert _exact_profiling_enabled(None) is True
+    assert _exact_profiling_enabled(False) is False, "explicit False must win"
+
+    monkeypatch.setenv("GOLDENMATCH_SPARK_EXACT_PROFILING", "0")
+    assert _exact_profiling_enabled(None) is False
+    assert _exact_profiling_enabled(True) is True, "explicit True must win"

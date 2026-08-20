@@ -8,6 +8,7 @@ import math
 import os
 import re
 from collections.abc import Callable
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -485,6 +486,85 @@ def _concrete_dtype_spelling(frame: Any, col_name: str) -> str:
     return _arrow_to_polars_dtype_spelling(raw)
 
 
+@dataclass(frozen=True)
+class ExactStats:
+    """Column statistics measured over the FULL population, not a sample.
+
+    Supplied by a caller that can see the whole dataset when `profile_columns`
+    cannot -- the Spark path, which hands it a 20,000-row driver sample.
+
+    ``n_distinct`` and ``avg_len`` are ``None`` when the measurement was not
+    taken. Absent is NOT zero: a consumer must keep the sampled value rather
+    than read a missing measurement as a measured one.
+    """
+
+    n_rows: int
+    n_non_null: int
+    n_distinct: int | None = None
+    avg_len: float | None = None
+
+
+#: Cluster-computed statistics for the frame currently being profiled.
+#:
+#: `profile_columns` runs an exact confirm pass over the frame it is HANDED and
+#: stores it as `full_n_distinct`, documented as "the EXACT full-frame count".
+#: On the Spark path that label is false: the frame is a 20,000-row sample of a
+#: possibly 500M-row table, and the drop-constant rule reads the result as
+#: though it described the population.
+#:
+#: A ContextVar rather than a parameter because `profile_columns` has four call
+#: sites inside the controller and threading an optional argument through all of
+#: them would touch far more surface than the behaviour warrants. Same idiom as
+#: `_LAST_CONTROLLER_RUN` above and the profile-emitter stack.
+_EXACT_COLUMN_STATS: ContextVar = ContextVar("_EXACT_COLUMN_STATS", default=None)
+
+
+@contextmanager
+def exact_column_stats_applied(stats: dict) -> Any:
+    """Apply cluster-measured column statistics for the duration of the block.
+
+    Scoped and reset on exit including on exception, so one run's population
+    statistics can never leak onto the next caller's frame.
+    """
+    token = _EXACT_COLUMN_STATS.set(stats)
+    try:
+        yield
+    finally:
+        _EXACT_COLUMN_STATS.reset(token)
+
+
+def _apply_exact_stats(profiles: list) -> None:
+    """Overwrite the DISTRIBUTION statistics from the cluster's measurement.
+
+    Four fields move: `null_rate`, `avg_len`, `n_distinct` / `full_n_distinct`
+    and the `cardinality_ratio` derived from it. Those are the ones compared
+    against ABSOLUTE thresholds, so a sample measures them wrong in a way that
+    worsens with scale -- #876 (a flat 0.28 reading 0.72 -> 1.00 across
+    100K..5M) and #2687 (a 99.99%-constant column read as constant).
+
+    `col_type`, `confidence` and `sample_values` are never touched: they answer
+    "what kind of column is this", which a sample answers correctly.
+    """
+    stats = _EXACT_COLUMN_STATS.get()
+    if not stats:
+        return
+    for p in profiles:
+        st = stats.get(p.name)
+        if st is None:
+            continue
+        if st.n_rows > 0:
+            p.null_rate = (st.n_rows - st.n_non_null) / st.n_rows
+        if st.avg_len is not None:
+            p.avg_len = float(st.avg_len)
+        if st.n_distinct is not None:
+            p.n_distinct = int(st.n_distinct)
+            # `full_n_distinct` is what the drop-constant rule reads, and it is
+            # the field whose "full-frame" contract the Spark path breaks.
+            p.full_n_distinct = int(st.n_distinct)
+            if st.n_rows > 0:
+                p.cardinality_ratio = st.n_distinct / st.n_rows
+
+
 def profile_columns(
     df: pl.DataFrame, sample_size: int = 1000, max_columns: int = 40,
     llm_provider: str | None = None,
@@ -710,6 +790,11 @@ def profile_columns(
         if (p.n_distinct is not None and p.n_distinct <= 1
                 and p.name in _frame_cols and frame.height > 0):
             p.full_n_distinct = int(frame.column(p.name).n_unique())
+
+    # The CLUSTER's measurement wins over anything derived from this frame --
+    # on the Spark path this frame is a 20k sample and the confirm above is
+    # exact over the sample, not the population.
+    _apply_exact_stats(profiles)
 
     # Per-column date reliability signal (both classify paths converge here, so
     # the native path is covered too). For every `date` column, record the

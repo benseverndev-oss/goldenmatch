@@ -36,7 +36,6 @@ recommendations for 500M rows from a 50k glance.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -72,20 +71,38 @@ def _refuse_at_n() -> int:
     return int(REFUSE_AT_N)
 
 
-@dataclass(frozen=True)
-class ExactStats:
-    """Column statistics computed over the FULL frame, not a sample.
+# `ExactStats` and the merge live in `core.autoconfig`, next to
+# `profile_columns` which consumes them -- core must never import spark.
+# Re-exported here so a caller on the Spark path has one import site.
+from goldenmatch.core.autoconfig import (  # noqa: E402
+    ExactStats,
+    exact_column_stats_applied,
+)
 
-    ``n_distinct`` and ``avg_len`` are ``None`` when the exact pass did not
-    compute them for this column -- absent, not zero. A consumer must leave the
-    sampled value alone rather than reading a missing measurement as a measured
-    one, the same discipline `candidates_counted` exists for.
+__all__ = [
+    "ExactStats",
+    "SparkAutoConfigTooLarge",
+    "SparkAutoConfigUnsupported",
+    "auto_configure_spark",
+    "exact_column_stats",
+    "exact_column_stats_applied",
+    "sample_to_driver",
+]
+
+
+def _exact_profiling_enabled(explicit: bool | None) -> bool:
+    """Whether to measure column statistics on the CLUSTER instead of the sample.
+
+    Default OFF. `GOLDENMATCH_SPARK_EXACT_PROFILING=1` turns it on globally; the
+    ``exact_profiling`` argument overrides the environment either way, so a test
+    or a caller can pin it without touching process state.
     """
+    if explicit is not None:
+        return bool(explicit)
+    import os
 
-    n_rows: int
-    n_non_null: int
-    n_distinct: int | None = None
-    avg_len: float | None = None
+    raw = os.environ.get("GOLDENMATCH_SPARK_EXACT_PROFILING", "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
 
 
 def _boundary_columns(
@@ -186,53 +203,6 @@ def exact_column_stats(
     }
 
 
-def merge_exact_stats(
-    profiles: list[Any], stats: dict[str, ExactStats], *, n_full: int
-) -> list[Any]:
-    """Overwrite the DISTRIBUTION statistics on each profile with exact values.
-
-    Only four fields move: `null_rate`, `avg_len`, `n_distinct` and the
-    `cardinality_ratio` derived from it. Those are the ones compared against
-    ABSOLUTE thresholds, and therefore the ones a fixed-size sample of a growing
-    frame gets wrong in a way that worsens with scale:
-
-    * `cardinality_ratio` -- the #876 surrogate guard. An `email` column whose
-      true fraction is a flat 0.28 read 0.72 / 0.94 / 0.97 / 0.98 / 1.00 at
-      100K / 500K / 1M / 2M / 5M, so at 5M zero-config discarded its only exact
-      identity column and produced a 185M-pair run that killed the runner.
-    * `n_distinct` -- PR #2687 drops a scored field at `<= 1`, and a value at
-      frequency 1e-4 is missed by a 1,000-row sample 90% of the time.
-
-    `col_type`, `confidence` and `sample_values` are NEVER touched. They answer
-    "what kind of column is this", which a sample answers correctly by
-    construction; rewriting them from an aggregate would be a different change.
-
-    A column absent from ``stats`` keeps every sampled value.
-    """
-    import dataclasses as _dc
-
-    out: list[Any] = []
-    for p in profiles:
-        st = stats.get(p.name)
-        if st is None:
-            out.append(p)
-            continue
-
-        changes: dict[str, Any] = {}
-        if st.n_rows > 0:
-            changes["null_rate"] = (st.n_rows - st.n_non_null) / st.n_rows
-        if st.avg_len is not None:
-            changes["avg_len"] = float(st.avg_len)
-        if st.n_distinct is not None:
-            changes["n_distinct"] = int(st.n_distinct)
-            denom = n_full or st.n_rows
-            if denom > 0:
-                changes["cardinality_ratio"] = st.n_distinct / denom
-
-        out.append(_dc.replace(p, **changes) if changes else p)
-    return out
-
-
 def sample_to_driver(
     spark_df: Any,
     *,
@@ -287,6 +257,7 @@ def auto_configure_spark(
     seed: int = _SEED,
     allow_large: bool = False,
     allow_red_config: bool = False,
+    exact_profiling: bool | None = None,
     **kwargs: Any,
 ) -> tuple[Any, dict]:
     """``(config, provenance)`` -- zero-config for a Spark DataFrame.
@@ -348,12 +319,46 @@ def auto_configure_spark(
         "Spark zero-config: profiling %d sampled rows, n_rows_full=%d",
         n_sampled, n_full,
     )
-    config = auto_configure_df(
-        table,
-        n_rows_full=n_full,
-        allow_red_config=allow_red_config,
-        **kwargs,
-    )
+    # EXACT column statistics from the cluster, default OFF.
+    #
+    # `profile_columns` runs a confirm pass over the frame it is handed and
+    # stores it as `full_n_distinct`, documented as "the EXACT full-frame
+    # count". On this path that frame is the 20k driver sample, so the label is
+    # false and the drop-constant rule reads a sample as the population.
+    #
+    # Default OFF because several rules compare these fields to cuts chosen
+    # while the inputs were sample-derived. Making them truthful can move
+    # quality scores exactly as rebasing `mass_above_threshold` took
+    # `anchor_person_match` from 1.0000 to 0.7303 -- so this flips on evidence
+    # from the quality gate, not on the argument that it is more correct.
+    if _exact_profiling_enabled(exact_profiling):
+        stats = exact_column_stats(spark_df, [str(c) for c in table.column_names])
+        if stats:
+            logger.info(
+                "exact profiling: %d column(s) measured across %s rows",
+                len(stats), f"{n_full:,}",
+            )
+            with exact_column_stats_applied(stats):
+                config = auto_configure_df(
+                    table,
+                    n_rows_full=n_full,
+                    allow_red_config=allow_red_config,
+                    **kwargs,
+                )
+        else:
+            # The pass failed and said so. Proceed on sampled statistics rather
+            # than refuse: that is the behaviour every caller had yesterday.
+            config = auto_configure_df(
+                table, n_rows_full=n_full,
+                allow_red_config=allow_red_config, **kwargs,
+            )
+    else:
+        config = auto_configure_df(
+            table,
+            n_rows_full=n_full,
+            allow_red_config=allow_red_config,
+            **kwargs,
+        )
     # VALIDATE THE OUTPUT AGAINST THE TIER, HERE.
     #
     # Auto-config optimises for quality on the one-box, whose surface is larger
