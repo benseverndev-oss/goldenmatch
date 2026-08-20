@@ -578,11 +578,10 @@ def attribute_score(df, cfg, mk, model, n_entities: int):
     codegen block, so `gammas - join` is the marginal cost of adding gammas to
     that block rather than a standalone number. Differences, not shares.
     """
-    from pyspark.sql import functions as F
-
     from goldenmatch.spark.config_pipeline import CAND_LHS, CAND_RHS, fused_pass_frames
     from goldenmatch.spark.em import gamma_columns
     from goldenmatch.spark.jvm import ROW_UDF_NAME, TRANSFORM_UDF_NAME
+    from pyspark.sql import functions as F
 
     frames = fused_pass_frames(df, cfg, id_col="__row_id__")
     gammas = gamma_columns(
@@ -596,9 +595,10 @@ def attribute_score(df, cfg, mk, model, n_entities: int):
         for level, val in enumerate(model.match_weights[f.resolved_field]):
             expr = F.when(col == F.lit(level), F.lit(float(val))).otherwise(expr)
         weight = weight + expr
-    truth = F.col(f"{CAND_LHS}.__row_id__") % F.lit(n_entities) == F.col(
-        f"{CAND_RHS}.__row_id__"
-    ) % F.lit(n_entities)
+    # No `truth` expression built here: the `full` layer calls `score_groups`,
+    # the function the real run uses, so the last layer measures the shipped
+    # path rather than a reconstruction of it. Its cost still lands in the
+    # marginal column as `full - weight`.
 
     def _union(project):
         out = None
@@ -852,6 +852,14 @@ def main() -> int:
         "fused/legacy per repeat. Removes the run-to-run variance that made "
         "single-arm comparisons against a banked baseline unreadable, so it "
         "discriminates at a size small enough to iterate on. 0 disables.",
+    )
+    ap.add_argument(
+        "--attribute-score",
+        action="store_true",
+        help="Split the score stage into join / +gammas / +weight / +truth "
+        "and report each layer's MARGINAL cost. Needs --eval-quality (it "
+        "scores with the trained model). Costs ~4x a score stage because "
+        "every layer re-runs the join beneath it, so it is off by default.",
     )
     ap.add_argument(
         "--profile-counts",
@@ -1126,6 +1134,11 @@ def main() -> int:
         t = time.perf_counter()
         groups = score_groups(df, cfg, mk, model, n_entities)
         out["stages"]["score_seconds"] = round(time.perf_counter() - t, 2)
+
+        if args.attribute_score:
+            out["score_attribution"] = attribute_score(
+                df, cfg, mk, model, n_entities
+            )
 
         if args.ab:
             out["ab"] = run_ab(
