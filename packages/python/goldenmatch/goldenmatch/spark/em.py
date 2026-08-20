@@ -623,8 +623,7 @@ def train_em_distributed(
         CAND_LHS,
         CAND_RHS,
         blocking_passes,
-        join_candidates_to_sources,
-        pass_candidates,
+        pass_joined,
     )
 
     # Refuse BEFORE submitting anything. `train_em_from_counts` rejects these
@@ -660,11 +659,13 @@ def train_em_distributed(
     sessions = []
     for i, key_config in enumerate(passes):
         fields = tuple(key_config.fields)
-        candidates = pass_candidates(
+        # `pass_joined`, not pass_candidates + join_candidates_to_sources: the
+        # block self-join has already co-located both records of every pair, and
+        # projecting them away only to fetch them back costs two more shuffles
+        # and two more SORTS of a frame with O(pairs) rows. See
+        # `pass_candidates_joined`.
+        joined = pass_joined(
             source_df, key_config, id_col=id_col, transform_udf=transform_udf
-        )
-        joined = join_candidates_to_sources(
-            candidates, source_df, id_col=id_col
         )
         counts = agreement_pattern_counts(
             joined, mk, lhs=CAND_LHS, rhs=CAND_RHS,
