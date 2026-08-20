@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
+import secrets
 import sys
 
 
@@ -20,6 +22,34 @@ def _serve_stdio() -> None:
     asyncio.run(main())
 
 
+def resolve_http_auth_token(host: str) -> str | None:
+    """Return the MCP HTTP bearer token, enforcing the fail-closed bind rule.
+
+    Raises ``RuntimeError`` when binding to a non-loopback host without
+    ``GOLDENSUITE_MCP_TOKEN`` set, so an exposed server is never started
+    unauthenticated by accident. Returns the token (or ``None`` for an
+    intentionally-open loopback bind). Escape hatch: set
+    ``GOLDENSUITE_MCP_ALLOW_PUBLIC=1`` to intentionally run an open public server.
+
+    This server matters more than its siblings, not less: it aggregates EVERY
+    Golden Suite tool -- goldenmatch, goldencheck, goldenflow, goldenpipe,
+    infermap -- behind one endpoint, so an unauthenticated bind exposes the
+    union of five tool surfaces rather than one.
+    """
+    token = os.environ.get("GOLDENSUITE_MCP_TOKEN")
+    is_loopback = host in ("127.0.0.1", "localhost", "::1")
+    allow_public = os.environ.get("GOLDENSUITE_MCP_ALLOW_PUBLIC", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+    if not token and not is_loopback and not allow_public:
+        raise RuntimeError(
+            f"Refusing to start an unauthenticated MCP HTTP server on host {host!r}. "
+            "Set GOLDENSUITE_MCP_TOKEN, bind to 127.0.0.1 for local use, or set "
+            "GOLDENSUITE_MCP_ALLOW_PUBLIC=1 to intentionally run an open public server."
+        )
+    return token
+
+
 def _serve_http(host: str, port: int) -> None:
     import contextlib
     from collections.abc import AsyncIterator
@@ -27,11 +57,14 @@ def _serve_http(host: str, port: int) -> None:
     import uvicorn
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
     from starlette.applications import Starlette
+    from starlette.middleware import Middleware
+    from starlette.middleware.base import BaseHTTPMiddleware
     from starlette.responses import JSONResponse
     from starlette.routing import Mount, Route
 
     from goldensuite_mcp.server import create_server
 
+    token = resolve_http_auth_token(host)  # fail closed before any server setup
     server = create_server()
     # Stateful sessions (NOT stateless): the 8 stateful goldenmatch tools
     # (list_clusters/get_cluster/get_golden_record/explain_match/evaluate/
@@ -65,12 +98,27 @@ def _serve_http(host: str, port: int) -> None:
             }
         )
 
+    class _BearerAuthMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request, call_next):
+            # `/.well-known/` stays public: it is the discovery card, and health
+            # checks read it. Everything else needs the bearer.
+            if request.url.path.startswith("/.well-known/"):
+                return await call_next(request)
+            if token:
+                header = request.headers.get("Authorization", "")
+                if not header.startswith("Bearer ") or not secrets.compare_digest(
+                    header[7:], token
+                ):
+                    return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            return await call_next(request)
+
     app = Starlette(
         lifespan=lifespan,
         routes=[
             Route("/.well-known/mcp/server-card.json", server_card),
             Mount("/mcp", app=session_manager.handle_request),
         ],
+        middleware=[Middleware(_BearerAuthMiddleware)],
     )
 
     uvicorn.run(app, host=host, port=port)
