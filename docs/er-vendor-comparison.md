@@ -29,7 +29,7 @@ Before comparing, the column we're comparing *against*. Numbers are as of `golde
 | **License** | MIT (every package in the suite) |
 | **Languages** | Python (headline) + TypeScript (parity) + Rust (Postgres/DuckDB extension) |
 | **Runtimes** | Polars (≤500K), DuckDB (500K–50M), Ray + DataFusion/Sail distributed tier (≥50M); Postgres via pgrx; DuckDB UDFs; edge JS (Vercel Edge / Cloudflare Workers / Deno) |
-| **Throughput** | 1M dedupe in 12.3 min on 4-core / 16 GB Linux (Round 5, 2026-05-12); **100M distributed dedupe in 9.2 min on a 5-node Ray cluster** (block-shuffle scoring + randomized-contraction WCC, byte-exact 20M-cluster recovery, #844); **distributed Fellegi-Sunter training at 50M in 552s and 250M in 2,766s on a 5-node Spark cluster** (463.9M and 2.32B pairs; ~1.19 s per million pairs, flat across 5x; 1.91x faster than Splink at 50M on the same cluster) [^spark50m]; 100K fuzzy ~39 s |
+| **Throughput** | 1M dedupe in 12.3 min on 4-core / 16 GB Linux (Round 5, 2026-05-12); **100M distributed dedupe in 9.2 min on a 5-node Ray cluster** (block-shuffle scoring + randomized-contraction WCC, byte-exact 20M-cluster recovery, #844); **distributed Fellegi-Sunter training at 250M in 670s on a 5-node Spark cluster** (2.32B pairs, **0.289 s per million pairs**, zero spill, byte-identical model to the 2,766s build it replaces) [^spark50m]; 100K fuzzy ~39 s |
 | **Accuracy, PII (Febrl)** | F1 0.971 (zero-config 0.944 on Febrl3) [^bench] |
 | **Accuracy, bibliographic (DBLP-ACM)** | F1 0.964 zero-config (hand-tuned ceiling 0.918) [^bench] |
 | **Accuracy, product (Abt-Buy)** | F1 0.722 +$0.04 LLM; 0.817 with Vertex AI + GPT-4o-mini [^bench] |
@@ -149,16 +149,21 @@ real figure is 1.91x. Single runs on this lane move ~16%, which is worth
 remembering before reading much into any one ratio.
 
 **Largest measured GoldenMatch run is now 250M rows / 2.32 BILLION pairs**
-(2,765s on the same 5-node cluster, no executor deaths, zero failed tasks).
-Seconds per million pairs is flat at 1.19 / 1.03 / 1.19 across 50M / 100M /
-250M, so cost is linear in PAIRS. Splink publicly demos 1B-row Spark runs; the
-gap between our measured range and their demonstrated one is now 4x rather than
-20x, and is still untested by us rather than disproven.
+(**669.96s** on a 5-node cluster, no executor deaths, zero failed tasks; 2,765s
+on the build the scale curve below measured).
+Seconds per million pairs was flat at 1.19 / 1.03 / 1.19 across 50M / 100M /
+250M on the build that curve measured. It is now **0.289** at 250M: the
+similarity kernel was being evaluated several times per pair -- once per level
+in the weight lookup, once per threshold in the level ladder -- and removing
+both took 250M from 2,765.8s to **669.96s (4.13x)** with 3.1x less executor CPU
+and a byte-identical trained model. Cost is still linear in PAIRS rather than
+rows; the constant is four times smaller.
 
-**"Zero spill" is scale-bounded and must be quoted with a size.** True at 50M
-for both engines; at 100M GoldenMatch spills 56.4 GB and at 250M 201.3 GB. It
-never failed -- Spark spilled and continued -- but spill grows 3.57x per 2.5x of
-data, faster than the data does.
+**"Zero spill" needs a size AND a build.** On the build the curve measured it
+was true at 50M for both engines, while GoldenMatch spilled 56.4 GB at 100M and
+201.3 GB at 250M -- growing 3.57x per 2.5x of data, faster than the data does.
+It never failed; Spark spilled and continued. On the CURRENT build GoldenMatch
+spills **zero at 250M**, because the pair-sized shuffles that fed it are gone.
 
 **Whether that spill is the CEILING is size-dependent, and this document
 previously asserted it was, flatly.** Removing the pair-sized shuffles that
