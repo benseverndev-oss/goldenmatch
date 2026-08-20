@@ -461,6 +461,48 @@ def _blocked_by_an_earlier_pass(key_names: list[str], i: int, lhs: str, rhs: str
     return out
 
 
+def _fused_pass_join(keyed: Any, key_names: list[str], i: int, id_col: str) -> Any:
+    """Pass ``i``'s block self-join over a frame that already carries every key.
+
+    Shared by candidate generation and scoring so the two cannot disagree about
+    which pairs a pass produces -- a scoring path that blocked differently from
+    the training path would fit a model to a population scoring never sees.
+    """
+    from pyspark.sql import functions as F
+
+    name = key_names[i]
+    side = keyed.where(_valid_key(F.col(name)))
+    a, b = side.alias(CAND_LHS), side.alias(CAND_RHS)
+    cond = (F.col(f"{CAND_LHS}.{name}") == F.col(f"{CAND_RHS}.{name}")) & (
+        F.col(f"{CAND_LHS}.{id_col}") < F.col(f"{CAND_RHS}.{id_col}")
+    )
+    earlier = _blocked_by_an_earlier_pass(key_names, i, CAND_LHS, CAND_RHS)
+    if earlier is not None:
+        # Pass priority IN the join condition, not a filter after a union: this
+        # is what makes the per-pass sets disjoint, so nothing downstream needs
+        # a `distinct()` over a frame with O(pairs) rows.
+        cond = cond & ~earlier
+    return a.join(b, cond)
+
+
+def _pair_id_parts(pair_id_col: str | None) -> list[Any]:
+    """The ``(a, b)`` id columns of a joined frame, by which route built it.
+
+    ``None`` -- the LEGACY frame, which carries the candidate frame's own
+    ``a``/``b`` under ``__cand__``. Otherwise the frame came from a FUSED pass,
+    which never built a candidate frame at all, so the pair's ids are the record
+    ids on each side.
+    """
+    from pyspark.sql import functions as F
+
+    if pair_id_col is None:
+        return [F.col("__cand__.a").alias("a"), F.col("__cand__.b").alias("b")]
+    return [
+        F.col(f"{CAND_LHS}.{pair_id_col}").alias("a"),
+        F.col(f"{CAND_RHS}.{pair_id_col}").alias("b"),
+    ]
+
+
 def fused_block_join_enabled() -> bool:
     """Is the fused blocking join on? DEFAULT ON.
 
@@ -529,7 +571,6 @@ def generate_candidates(
     it. Hence the kernel refuses any chain it cannot run identically instead of
     falling back.
     """
-    from pyspark.sql import functions as F
 
     passes = blocking_passes(config)
     if len(passes) == 1:
@@ -545,23 +586,11 @@ def generate_candidates(
     keyed, key_names = _pass_key_columns(source_df, passes, transform_udf)
 
     per_pass = []
-    for i, name in enumerate(key_names):
-        side = keyed.where(_valid_key(F.col(name)))
-        a, b = side.alias(CAND_LHS), side.alias(CAND_RHS)
-        cond = (F.col(f"{CAND_LHS}.{name}") == F.col(f"{CAND_RHS}.{name}")) & (
-            F.col(f"{CAND_LHS}.{id_col}") < F.col(f"{CAND_RHS}.{id_col}")
-        )
-        earlier = _blocked_by_an_earlier_pass(key_names, i, CAND_LHS, CAND_RHS)
-        if earlier is not None:
-            # Pass priority IN the join condition, not a filter after the union:
-            # this is what makes the per-pass sets disjoint, so the union below
-            # needs no `distinct()` over a frame with O(pairs) rows.
-            cond = cond & ~earlier
+    for i in range(len(key_names)):
         logger.debug("Spark tier: blocking pass %d on %s", i, passes[i].fields)
         per_pass.append(
-            a.join(b, cond).select(
-                F.col(f"{CAND_LHS}.{id_col}").alias("a"),
-                F.col(f"{CAND_RHS}.{id_col}").alias("b"),
+            _fused_pass_join(keyed, key_names, i, id_col).select(
+                *_pair_id_parts(id_col)
             )
         )
 
@@ -740,6 +769,8 @@ def score_candidates(
     transform_udf: str | None = None,
     batch_size: int = 10_000,
     scorer_shape: str = "row",
+    joined: Any = None,
+    pair_id_col: str | None = None,
 ) -> Any:
     """Score candidate pairs under every matchkey; return ``(a, b, score)``.
 
@@ -751,7 +782,8 @@ def score_candidates(
     from pyspark.sql import functions as F
 
     lhs, rhs = CAND_LHS, CAND_RHS
-    joined = join_candidates_to_sources(candidates, source_df, id_col=id_col)
+    if joined is None:
+        joined = join_candidates_to_sources(candidates, source_df, id_col=id_col)
 
     if scorer_udf is not None:
         if scorer_shape not in ("row", "batch"):
@@ -764,28 +796,141 @@ def score_candidates(
             return _score_candidates_jvm_rowwise(
                 joined, config, lhs=lhs, rhs=rhs, scorer_udf=ROW_UDF_NAME,
                 transform_udf=transform_udf, fs_models=fs_models,
+                pair_id_col=pair_id_col,
             )
         return _score_candidates_jvm(
             joined, config, lhs=lhs, rhs=rhs, scorer_udf=scorer_udf,
             transform_udf=transform_udf, fs_models=fs_models,
-            batch_size=batch_size,
+            batch_size=batch_size, pair_id_col=pair_id_col,
         )
 
     models = fs_models or {}
     per_mk = []
     for mk in config.get_matchkeys():
         em = models.get(mk.name)
-        scored = joined.select(
-            F.col("__cand__.a").alias("a"),
-            F.col("__cand__.b").alias("b"),
-            _matchkey_score_expr(mk, lhs, rhs, fs_model=em).alias("score"),
-        ).where(F.col("score") >= F.lit(_matchkey_threshold(mk, em)))
-        per_mk.append(scored)
+        # NULL where this matchkey rejects; `greatest` skips nulls, so a pair
+        # no matchkey accepted comes out null and is dropped below.
+        #
+        # This replaces a union of per-matchkey frames followed by
+        # `groupBy("a", "b").agg(max(score))`. That groupBy shuffled a frame
+        # with O(pairs) rows to combine values every matchkey computes from the
+        # SAME joined row, so the answer was already local. Same set, same
+        # score, no exchange. The jar-backed path has always done it this way
+        # (`_score_candidates_jvm_rowwise`); this makes the pure-Python
+        # fallback agree rather than pay for the difference.
+        per_mk.append(
+            F.when(
+                _matchkey_score_expr(mk, lhs, rhs, fs_model=em)
+                >= F.lit(_matchkey_threshold(mk, em)),
+                _matchkey_score_expr(mk, lhs, rhs, fs_model=em),
+            )
+        )
 
-    out = per_mk[0]
-    for nxt in per_mk[1:]:
+    best = F.greatest(*per_mk) if len(per_mk) > 1 else per_mk[0]
+    return joined.select(
+        *_pair_id_parts(pair_id_col), best.alias("score")
+    ).where(F.col("score").isNotNull())
+
+
+def fused_pass_frames(
+    source_df: Any,
+    config: Any,
+    *,
+    id_col: str,
+    transform_udf: str | None = None,
+) -> list[Any]:
+    """One JOINED frame per blocking pass, disjoint by pass priority.
+
+    The seam for callers that want to project their own expressions over the
+    pairs -- quality harnesses, ad-hoc analysis -- without rebuilding the
+    blocking. Each frame carries both record sides under ``CAND_LHS``/
+    ``CAND_RHS``, so any expression the scoring path builds resolves against it
+    unchanged.
+
+    Disjoint means the caller can union the results with no dedup: a pair is
+    produced by exactly one pass, the lowest-indexed one that blocks it.
+    """
+    passes = blocking_passes(config)
+    if not passes:
+        raise ValueError("no blocking passes: nothing to generate pairs from")
+    keyed, key_names = _pass_key_columns(source_df, passes, transform_udf)
+    return [
+        _fused_pass_join(keyed, key_names, i, id_col)
+        for i in range(len(key_names))
+    ]
+
+
+def score_source(
+    source_df: Any,
+    config: Any,
+    *,
+    id_col: str,
+    fs_models: dict[str, Any] | None = None,
+    scorer_udf: str | None = None,
+    transform_udf: str | None = None,
+    batch_size: int = 10_000,
+    scorer_shape: str = "row",
+) -> Any:
+    """Score every candidate pair WITHOUT ever materialising a candidate frame.
+
+    ``(a, b, score)``, the same rows :func:`score_candidates` returns over
+    :func:`generate_candidates`, reached without the pair frame in between.
+
+    ## Why this exists
+
+    `generate_candidates` builds the block self-join, projects it to `(a, b)`,
+    and `score_candidates` then joins both sides back to the source to recover
+    the columns that projection dropped. Every one of those steps moves a frame
+    with O(pairs) rows -- 2.32B of them at 250M records -- and MEASURED on the
+    100M lane, the resulting join stage holds **62% of all executor time** in
+    the job. It is the single largest thing this tier does.
+
+    Scoring inside the block join skips it. Both records are already in the same
+    task, so the score is computed where they sit and only `(a, b, score)`
+    leaves -- three columns instead of two whole records.
+
+    Two earlier pieces are what make this possible, and neither is incidental:
+    pass priority (`_blocked_by_an_earlier_pass`) removed the cross-pass
+    `distinct()` that used to force the pair frame into existence, and the
+    matchkey combine is a `greatest` over per-matchkey nulls rather than a
+    `groupBy("a", "b")`, so nothing downstream needs the pairs co-located
+    either.
+
+    ``id_col`` must be unique -- see :func:`pass_candidates_joined` for why that
+    is a documented precondition rather than a guard.
+    """
+    passes = blocking_passes(config)
+    if not passes:
+        raise ValueError(
+            "score_source needs at least one blocking pass "
+            "(config.blocking.keys, or config.blocking.passes for multi_pass)"
+        )
+    per_pass = []
+    for joined in fused_pass_frames(
+        source_df, config, id_col=id_col, transform_udf=transform_udf
+    ):
+        per_pass.append(
+            score_candidates(
+                None,
+                source_df,
+                config,
+                id_col=id_col,
+                fs_models=fs_models,
+                scorer_udf=scorer_udf,
+                transform_udf=transform_udf,
+                batch_size=batch_size,
+                scorer_shape=scorer_shape,
+                joined=joined,
+                pair_id_col=id_col,
+            )
+        )
+
+    # A plain union, with no dedup: pass priority already made the per-pass sets
+    # disjoint, and this union carries `(a, b, score)` rather than records.
+    out = per_pass[0]
+    for nxt in per_pass[1:]:
         out = out.unionByName(nxt)
-    return out.groupBy("a", "b").agg(F.max("score").alias("score"))
+    return out
 
 
 # ── scoring, in the JVM ──────────────────────────────────────────────
@@ -936,6 +1081,7 @@ def _score_candidates_jvm(
     transform_udf: str | None,
     fs_models: dict[str, Any] | None,
     batch_size: int,
+    pair_id_col: str | None = None,
 ) -> Any:
     """``score_candidates``'s body with every scorer call in the executor JVM.
 
@@ -956,7 +1102,7 @@ def _score_candidates_jvm(
     slots, index = _weighted_scorer_slots(config)
 
     # ── the ONE struct, and the ONE collect_list ──────────────────────
-    parts = [F.col("__cand__.a").alias("a"), F.col("__cand__.b").alias("b")]
+    parts = list(_pair_id_parts(pair_id_col))
     for s in slots:
         a_col = F.col(f"{lhs}.{s['col']}")
         b_col = F.col(f"{rhs}.{s['col']}")
@@ -1129,6 +1275,7 @@ def _score_candidates_jvm_rowwise(
     scorer_udf: str,
     transform_udf: str | None,
     fs_models: dict[str, Any] | None,
+    pair_id_col: str | None = None,
 ) -> Any:
     """``score_candidates``'s body with a ROW-shaped JVM scorer. No batching.
 
@@ -1179,7 +1326,7 @@ def _score_candidates_jvm_rowwise(
     # the executors.
     slots, index = _weighted_scorer_slots(config)
 
-    parts = [F.col("__cand__.a").alias("a"), F.col("__cand__.b").alias("b")]
+    parts = list(_pair_id_parts(pair_id_col))
     for s in slots:
         a_col = F.col(f"{lhs}.{s['col']}")
         b_col = F.col(f"{rhs}.{s['col']}")

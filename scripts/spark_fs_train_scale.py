@@ -590,7 +590,7 @@ def main() -> int:
         CAND_RHS,
         blocking_passes,
         fused_block_join_enabled,
-        generate_candidates,
+        fused_pass_frames,
         join_candidates_to_sources,
         pass_candidates,
         pass_joined,
@@ -819,9 +819,17 @@ def main() -> int:
         # aggregate over a frame with O(pairs) rows. Calling the shipped
         # function rather than rebuilding the union here also means the bench
         # measures the path users get.
-        cands = generate_candidates(df, cfg, id_col="__row_id__")
-
-        joined = join_candidates_to_sources(cands, df, id_col="__row_id__")
+        # SCORE INSIDE THE BLOCK JOIN. `fused_pass_frames` returns one joined
+        # frame per blocking pass, already disjoint by pass priority, so the
+        # candidate frame is never built: no `(a, b)` projection, no join back
+        # to either side, no cross-pass dedup. MEASURED on the 100M lane, the
+        # join this removes held 62% of all executor time in the job.
+        #
+        # The scoring expressions below are unchanged and resolve against
+        # CAND_LHS/CAND_RHS exactly as they did over the pair-frame join, so
+        # this changes where the pairs come from and nothing about what is
+        # computed on them.
+        pass_frames = fused_pass_frames(df, cfg, id_col="__row_id__")
         gammas = gamma_columns(
             mk, CAND_LHS, CAND_RHS, scorer_udf=ROW_UDF_NAME, transform_udf=TRANSFORM_UDF_NAME
         )
@@ -860,10 +868,18 @@ def main() -> int:
         # levels, so the reachable score set is bounded by `prod(levels + 1)` --
         # the same bound that keeps GoldenMatch's counting GROUP BY small. 275M
         # pairs collapse to a few hundred rows.
+        # Union the NARROW per-pass projections -- two columns, not two whole
+        # records -- then group once. Pass priority already made the passes
+        # disjoint, so this needs no dedup.
+        narrow = None
+        for _frame in pass_frames:
+            _part = _frame.select(weight.alias("w"), truth.alias("is_true"))
+            narrow = _part if narrow is None else narrow.unionByName(_part)
+
         groups = [
             (float(r["w"]), int(r["n_true"]), int(r["n_all"]))
             for r in (
-                joined.select(weight.alias("w"), truth.alias("is_true"))
+                narrow
                 .groupBy("w")
                 .agg(
                     F.sum(F.col("is_true").cast("long")).alias("n_true"),
