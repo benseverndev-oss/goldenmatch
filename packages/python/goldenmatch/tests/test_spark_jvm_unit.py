@@ -300,3 +300,70 @@ def test_token_sort_similarity_and_ratio_stay_in_lockstep():
         ("Foo", "foo"),
     ]:
         assert strsim.token_sort_ratio(a, b) == strsim.token_sort_similarity(a, b) * 100.0
+
+
+def test_optional_kernel_missing_from_jar_does_not_break_install():
+    """A jar older than this goldenmatch must not take the whole tier down.
+
+    Run 32315586317 failed at `install()` with
+
+        JvmScorerUnavailable: could not register
+        dev.goldensuite.spark.GoldenScoreVectorUdf as 'golden_score_vector'
+
+    because the vector scorer landed in #2619 twenty hours AFTER
+    `goldenmatch-spark-v0.2.0` was cut, so the published jar cannot carry it.
+    Python and the jar version independently and users pin them separately, so
+    a jar one release behind is a normal state, not a corrupt one.
+
+    It is also the least defensible kernel to hard-fail on: opt-in, default
+    OFF, and measured 2.29x slower than the row path beside it.
+    """
+    from goldenmatch.spark import jvm
+
+    registered: list[str] = []
+
+    class _Udf:
+        def registerJavaFunction(self, sql_name, cls, ret):  # noqa: N802
+            if cls == jvm._VECTOR_UDF_CLASS:
+                raise RuntimeError("Can not load class ... please make sure it is on the classpath")
+            registered.append(sql_name)
+
+    class _Spark:
+        udf = _Udf()
+
+        def addArtifact(self, path):  # noqa: N802
+            pass
+
+    jvm.install(_Spark(), jar=__file__)
+
+    assert jvm.VECTOR_UDF_NAME not in registered, "the missing kernel must be skipped"
+    for required in (
+        jvm.UDF_NAME, jvm.ROW_UDF_NAME, jvm.IMPL_UDF_NAME,
+        jvm.FINGERPRINT_UDF_NAME, jvm.TRANSFORM_UDF_NAME, jvm.SURVIVORSHIP_UDF_NAME,
+    ):
+        assert required in registered, f"{required} must still register"
+
+
+def test_a_REQUIRED_kernel_missing_still_fails_loudly():
+    """Tolerance is scoped to the optional kernel, not to everything.
+
+    Silently losing the scorer or the impl probe would produce wrong answers
+    rather than an error, which is worse than refusing to start.
+    """
+    import pytest as _pytest
+
+    from goldenmatch.spark import jvm
+
+    class _Udf:
+        def registerJavaFunction(self, sql_name, cls, ret):  # noqa: N802
+            if cls == jvm._IMPL_UDF_CLASS:
+                raise RuntimeError("Can not load class")
+
+    class _Spark:
+        udf = _Udf()
+
+        def addArtifact(self, path):  # noqa: N802
+            pass
+
+    with _pytest.raises(jvm.JvmScorerUnavailable, match="golden_score_impl"):
+        jvm.install(_Spark(), jar=__file__)
