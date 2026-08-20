@@ -590,6 +590,7 @@ def main() -> int:
         CAND_RHS,
         blocking_passes,
         fused_block_join_enabled,
+        generate_candidates,
         join_candidates_to_sources,
         pass_candidates,
         pass_joined,
@@ -811,11 +812,14 @@ def main() -> int:
         # since AP is bounded below by the base rate. Splink's `predict()`
         # dedupes across its blocking rules, so the arms were being scored on
         # different populations.
-        cands = None
-        for key_config in blocking_passes(cfg):
-            one = pass_candidates(df, key_config, id_col="__row_id__")
-            cands = one if cands is None else cands.unionByName(one)
-        cands = cands.dropDuplicates(["a", "b"])
+        # `generate_candidates` now does this de-duplication by PASS PRIORITY --
+        # each pair assigned to the lowest-indexed pass that produces it, tested
+        # inside the join from the two records themselves. Same set as the
+        # `dropDuplicates(["a", "b"])` this replaces, without the shuffle and
+        # aggregate over a frame with O(pairs) rows. Calling the shipped
+        # function rather than rebuilding the union here also means the bench
+        # measures the path users get.
+        cands = generate_candidates(df, cfg, id_col="__row_id__")
 
         joined = join_candidates_to_sources(cands, df, id_col="__row_id__")
         gammas = gamma_columns(
