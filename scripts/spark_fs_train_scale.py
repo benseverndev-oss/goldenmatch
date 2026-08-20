@@ -686,10 +686,23 @@ def attribute_score(df, cfg, mk, model, n_entities: int):
             for i, (f, n) in enumerate(zip(mk.fields, names))
         ])
 
+    def _join_only():
+        return _union(lambda fr: fr.select(F.lit(1).alias("x"))).count()
+
     layers = {}
-    layers["join"] = _time(
-        "join", lambda: _union(lambda fr: fr.select(F.lit(1).alias("x"))).count()
-    )
+    layers["join"] = _time("join", _join_only)
+
+    # The same join as a SHUFFLED HASH join instead of sort-merge. SMJ sorts
+    # both sides; the blocks here are tiny (45 rows at 250M, no skew), so the
+    # sort may be pure overhead. A conf, not a code change -- which is why it is
+    # measured here rather than argued about.
+    sess = df.sparkSession
+    prior_smj = sess.conf.get("spark.sql.join.preferSortMergeJoin", "true")
+    try:
+        sess.conf.set("spark.sql.join.preferSortMergeJoin", "false")
+        layers["join_hash"] = _time("join_hash", _join_only)
+    finally:
+        sess.conf.set("spark.sql.join.preferSortMergeJoin", prior_smj)
     layers["sims"] = _time(
         "sims",
         lambda: _union(
@@ -735,6 +748,8 @@ def attribute_score(df, cfg, mk, model, n_entities: int):
 
     marginal = {
         "sims_over_join": round(layers["sims"] - layers["join"], 2),
+        # Negative means the hash join beat sort-merge.
+        "hash_join_delta": round(layers["join_hash"] - layers["join"], 2),
         # THE number: same aggregate on both sides, so this is bucketing.
         "bucketing_over_sims": round(layers["gammas_summed"] - layers["sims"], 2),
         # The candidate fix, measured against the same baseline. Near zero means
@@ -752,6 +767,185 @@ def attribute_score(df, cfg, mk, model, n_entities: int):
     }
     print(f"[attr] marginal: {marginal}", flush=True)
     return {"layers": layers, "marginal": marginal}
+
+
+def attribute_cache(df, cfg, mk, model, n_entities: int):
+    """Compute the gamma frame ONCE and cache it, or compute it twice?
+
+    The counts stage and the score stage do the same expensive half -- the block
+    join and five scorer calls per pair -- and the 250M stage data shows it:
+    stages 19 and 32 read 500M and 450M records for counts, stage 45 reads 950M
+    for score, re-doing BOTH passes' joins. At 50M that shared work is ~76s of
+    the 163s the two stages take together.
+
+    Caching it means materialising ~2.46B rows at 250M. That is a large write
+    deliberately reintroduced right after 201 GB of spill was removed, so the
+    question is whether writing and re-reading it beats recomputing ~11.6B
+    scorer calls. Arithmetic says caching wins by about 2x; arithmetic has been
+    wrong three times in this arc, hence this.
+
+    ## Why the cache needs a pass id AND a first-pass flag
+
+    The two stages use DIFFERENT populations. Counts trains a per-pass session
+    on that pass's FULL set (2.46B pairs across both passes, no cross-pass
+    dedup, because a pass's conditioning defines its session). Scoring uses the
+    pass-priority DEDUPED set (2.32B), since a pair scored twice lands in the
+    ranking twice. One cached frame serves both only if it carries the
+    distinction: filter `pass_id` for counts, filter `is_first` for scoring.
+
+    Arms are timed in one session over the same cached fixture, so the only
+    difference is the strategy.
+    """
+    from goldenmatch.spark.config_pipeline import (
+        CAND_LHS,
+        CAND_RHS,
+        _blocked_by_an_earlier_pass,
+        _pass_key_columns,
+        _valid_key,
+        blocking_passes,
+        pass_joined,
+    )
+    from goldenmatch.spark.em import agreement_pattern_counts, gamma_frame
+    from goldenmatch.spark.jvm import ROW_UDF_NAME, TRANSFORM_UDF_NAME
+    from goldenmatch.spark.probabilistic import _weight_lookup_expr
+    from pyspark import StorageLevel
+    from pyspark.sql import functions as F
+
+    passes = blocking_passes(cfg)
+    names = [f"gamma_{f.resolved_field}" for f in mk.fields]
+    truth = F.col(f"{CAND_LHS}.__row_id__") % F.lit(n_entities) == F.col(
+        f"{CAND_RHS}.__row_id__"
+    ) % F.lit(n_entities)
+    weight = F.lit(0.0)
+    for f in mk.fields:
+        weight = weight + _weight_lookup_expr(
+            F.col(f"gamma_{f.resolved_field}"),
+            list(model.match_weights[f.resolved_field]),
+        )
+
+    def _time(label, fn):
+        t = time.perf_counter()
+        out = fn()
+        dt = time.perf_counter() - t
+        print(f"[cache] {label:16s} {dt:8.2f}s  (result={out})", flush=True)
+        return round(dt, 2)
+
+    out = {}
+
+    # ── arm A: today. Counts per pass from scratch, then score from scratch. ──
+    def _recompute_counts():
+        n = 0
+        for kc in passes:
+            joined = pass_joined(df, kc, id_col="__row_id__")
+            n += sum(
+                c for _v, c in agreement_pattern_counts(
+                    joined, mk, lhs=CAND_LHS, rhs=CAND_RHS,
+                    scorer_udf=ROW_UDF_NAME, transform_udf=TRANSFORM_UDF_NAME,
+                )
+            )
+        return n
+
+    _rec = {}
+    out["recompute_counts"] = _time(
+        "recompute_cnt", lambda: _rec.setdefault("pairs", _recompute_counts())
+    )
+    out["recompute_score"] = _time(
+        "recompute_scr",
+        lambda: _rec.setdefault(
+            "groups", len(score_groups(df, cfg, mk, model, n_entities))
+        ),
+    )
+    _rec_pairs, _rec_groups = _rec["pairs"], _rec["groups"]
+
+    # ── arm B: build the gamma frame once, carrying both selectors. ──
+    keyed, key_names = _pass_key_columns(df, passes, None)
+    parts = []
+    for i, key_name in enumerate(key_names):
+        # The FULL per-pass join, built here rather than via `_fused_pass_join`:
+        # that helper applies pass priority as a JOIN CONDITION, which drops
+        # exactly the rows the counts stage needs. The flag has to be a COLUMN
+        # so each consumer filters for itself.
+        side = keyed.where(_valid_key(F.col(key_name)))
+        lhs_side, rhs_side = side.alias(CAND_LHS), side.alias(CAND_RHS)
+        src = lhs_side.join(
+            rhs_side,
+            (F.col(f"{CAND_LHS}.{key_name}") == F.col(f"{CAND_RHS}.{key_name}"))
+            & (F.col(f"{CAND_LHS}.__row_id__") < F.col(f"{CAND_RHS}.__row_id__")),
+        )
+        earlier = _blocked_by_an_earlier_pass(key_names, i, CAND_LHS, CAND_RHS)
+        is_first = F.lit(True) if earlier is None else ~earlier
+        parts.append(
+            gamma_frame(
+                src, mk, lhs=CAND_LHS, rhs=CAND_RHS,
+                scorer_udf=ROW_UDF_NAME, transform_udf=TRANSFORM_UDF_NAME,
+                keep=[
+                    (truth, "is_true"),
+                    (F.lit(i), "pass_id"),
+                    (is_first, "is_first"),
+                ],
+            )
+        )
+    cached = parts[0]
+    for nxt in parts[1:]:
+        cached = cached.unionByName(nxt)
+    # DISK_ONLY would be the safe choice for a frame this size, but the cluster
+    # holds 192 GB of executor memory against ~25-40 GB of cache at 250M, so
+    # MEMORY_AND_DISK lets Spark use memory where it has it and spill the rest
+    # rather than forcing every read through disk.
+    cached = cached.persist(StorageLevel.MEMORY_AND_DISK)
+
+    out["cache_build"] = _time("cache_build", lambda: cached.count())
+    _cch = {}
+    out["cache_counts"] = _time(
+        "cache_cnt",
+        lambda: _cch.setdefault("pairs", sum(
+            r["n"]
+            for i in range(len(passes))
+            for r in cached.where(F.col("pass_id") == F.lit(i))
+            .groupBy(*names).agg(F.count(F.lit(1)).alias("n")).collect()
+        )),
+    )
+    out["cache_score"] = _time(
+        "cache_scr",
+        lambda: _cch.setdefault("groups", len(
+            cached.where(F.col("is_first"))
+            .select(weight.alias("w"), "is_true")
+            .groupBy("w")
+            .agg(
+                F.sum(F.col("is_true").cast("long")).alias("n_true"),
+                F.count(F.lit(1)).alias("n_all"),
+            )
+            .collect()
+        )),
+    )
+    _cache_pairs, _cache_groups = _cch["pairs"], _cch["groups"]
+    cached.unpersist()
+
+    # The cache is only a win if it answers the same question. A cached frame
+    # whose `pass_id` or `is_first` were wrong would be FASTER and wrong, and
+    # nothing else in this mode would notice: both arms would report a time.
+    out["same_counts_pairs"] = _rec_pairs == _cache_pairs
+    out["same_score_groups"] = _rec_groups == _cache_groups
+    out["counts_pairs"] = [_rec_pairs, _cache_pairs]
+    out["score_groups"] = [_rec_groups, _cache_groups]
+    if not (out["same_counts_pairs"] and out["same_score_groups"]):
+        print(
+            f"[cache] WARNING arms disagree -- pairs {_rec_pairs} vs "
+            f"{_cache_pairs}, groups {_rec_groups} vs {_cache_groups}. "
+            f"The timings are not comparable.",
+            flush=True,
+        )
+
+    a = out["recompute_counts"] + out["recompute_score"]
+    b = out["cache_build"] + out["cache_counts"] + out["cache_score"]
+    out["recompute_total"] = round(a, 2)
+    out["cache_total"] = round(b, 2)
+    out["speedup"] = round(a / b, 3) if b else None
+    print(
+        f"[cache] recompute={a:.2f}s  cached={b:.2f}s  speedup={out['speedup']}",
+        flush=True,
+    )
+    return out
 
 
 def run_ab(df, cfg, mk, model, n_entities: int, *, repeats: int):
@@ -963,6 +1157,15 @@ def main() -> int:
         "fused/legacy per repeat. Removes the run-to-run variance that made "
         "single-arm comparisons against a banked baseline unreadable, so it "
         "discriminates at a size small enough to iterate on. 0 disables.",
+    )
+    ap.add_argument(
+        "--attribute-cache",
+        action="store_true",
+        help="Compute the gamma frame ONCE and cache it, or twice? The counts "
+        "and score stages share their expensive half -- the block join and "
+        "five scorer calls per pair -- and today each pays for it. Times both "
+        "strategies in one session and checks they answer the same question. "
+        "Needs --eval-quality. Off by default: it runs the workload twice.",
     )
     ap.add_argument(
         "--attribute-score",
@@ -1245,6 +1448,11 @@ def main() -> int:
         t = time.perf_counter()
         groups = score_groups(df, cfg, mk, model, n_entities)
         out["stages"]["score_seconds"] = round(time.perf_counter() - t, 2)
+
+        if args.attribute_cache:
+            out["cache_attribution"] = attribute_cache(
+                df, cfg, mk, model, n_entities
+            )
 
         if args.attribute_score:
             out["score_attribution"] = attribute_score(

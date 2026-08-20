@@ -138,6 +138,11 @@ on:
         required: false
         type: boolean
         default: false
+      attribute_cache:
+        description: "Time computing the gamma frame ONCE and caching it against computing it twice (counts stage, then score stage). Needs eval_quality. Runs the workload twice, so leave OFF unless that comparison is the point of the run."
+        required: false
+        type: boolean
+        default: false
       shuffle_partitions:
         description: "spark.sql.shuffle.partitions for BOTH arms. `-1` (default) derives 5x total executor cores, which is what Splink's performance guide recommends. `0` leaves Spark's default 200, which is what both engines ran on before and is a number NEITHER vendor recommends. Applied to both engines from one shared implementation (scripts/_spark_tuning.py) so the comparison can never measure a tuning difference."
         required: false
@@ -942,6 +947,7 @@ jobs:
             --spark-ui http://$MASTER_IP:4040 \
             ${{ inputs.eval_quality && '--eval-quality' || '' }} \
             ${{ inputs.attribute_score && '--attribute-score' || '' }} \
+            ${{ inputs.attribute_cache && '--attribute-cache' || '' }} \
             --out /w/spark-fs-train-scale.json
           REMOTE
 
