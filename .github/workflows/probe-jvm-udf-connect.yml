@@ -23,6 +23,10 @@ on:
         description: "Temurin JDK version"
         required: false
         default: "17"
+      python_version:
+        description: "Python for the client. Use 3.11 to probe a pyspark 3.5 client: 3.5.x imports the stdlib `distutils`, which Python 3.12 REMOVED, so a 3.5 client on 3.13 dies at import with ModuleNotFoundError before any capability is exercised. (Also the ceiling that matters downstream: snowpark-connect requires Python <3.13.)"
+        required: false
+        default: "3.13"
 
 permissions:
   contents: read
@@ -43,7 +47,7 @@ jobs:
 
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
-          python-version: "3.13"
+          python-version: "${{ inputs.python_version }}"
 
       - name: Install the Spark Connect client
         run: |
