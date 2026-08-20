@@ -363,11 +363,26 @@ def cluster_pairs(
     block that the one-box path split into 8 clusters came back as a single
     107-member cluster here -- 721 pairs of difference, all of it this.
 
-    Union-find is idempotent over repeated edges, so a pair emitted by two
-    passes needs no de-duplication first. Ids are interned to ints because the
-    kernel is integer union-find; the mapping is restored on the way out.
+    **Pairs are de-duplicated first, and that is not optional.** Union-find IS
+    idempotent over repeated edges, and an earlier version said so and skipped
+    the step -- but the auto-split above it is an MST, which is sensitive to
+    both the edge SET and the edge ORDER. A pair emitted by two blocking passes
+    arrived twice, in `UNION ALL` order, and the split came out different:
+    measured on one 209k relation, identical cluster COUNT and identical pair
+    COUNT but 579 pairs placed differently in each direction (f1 0.971 instead
+    of 1.000). Reasoning about union-find while `build_clusters` does more is
+    the same mistake twice.
+
+    ``dedup_pairs_max_score`` is the engine's own canonicalization -- max score
+    per unordered pair, sorted ascending by ``(a, b)``, first-occurrence
+    tie-break matching the native kernel -- so the edge list handed to the MST
+    is the one the one-box path would hand it.
+
+    Ids are interned to ints because the kernel is integer union-find; the
+    mapping is restored on the way out.
     """
     from goldenmatch.core.cluster import build_clusters
+    from goldenmatch.core.pairs import dedup_pairs_max_score
 
     index: dict[Any, int] = {}
 
@@ -376,9 +391,17 @@ def cluster_pairs(
             index[value] = len(index)
         return index[value]
 
-    edges = [(idx(a), idx(b), float(s)) for a, b, s in pairs]
+    # Intern ``all_ids`` FIRST, in the caller's order. The interned integers are
+    # this path's equivalent of the one-box ``__row_id__``, and the MST
+    # auto-split breaks weight ties on them -- so an id space built in
+    # pair-ARRIVAL order picks a different, equally-valid split from one built in
+    # ROW order. On a 100-member hub of near-identical records (one first name,
+    # one zip, an empty last name) ties are everywhere: both paths split it 7
+    # ways and disagreed on 579 pairs, with identical cluster and pair COUNTS.
+    # Interning rows first makes the id space the same one the engine used.
     for value in all_ids or []:
         idx(value)
+    edges = dedup_pairs_max_score([(idx(a), idx(b), float(s)) for a, b, s in pairs])
 
     # Mirror core/pipeline.py's Step 4 defaults and overrides. Reading them off
     # the same place the one-box path does is what keeps the two in step when a

@@ -240,6 +240,42 @@ def test_a_duplicate_edge_from_two_passes_changes_nothing():
     assert len(twice) == 2
 
 
+def test_pairs_are_DEDUPED_before_clustering_so_the_split_is_deterministic():
+    """Union-find shrugs at duplicate edges; the MST auto-split above it does not.
+
+    A pair emitted by two blocking passes arrives twice, in UNION ALL order, and
+    an un-deduped edge list made the split order-dependent: measured on one 209k
+    relation, identical cluster COUNT and identical pair COUNT but 579 pairs
+    placed differently in each direction. So the property under test is not
+    "clusters are right" -- it is that edge ORDER and MULTIPLICITY cannot change
+    the answer.
+    """
+
+    class _Rules:
+        max_cluster_size = 4
+        weak_cluster_threshold = 0.3
+        auto_split = True
+        split_edge_budget = None
+
+    class _WithRules:
+        golden_rules = _Rules()
+
+    ids = [f"r{i}" for i in range(12)]
+    chain = [(ids[i], ids[i + 1], 0.9 + i / 100) for i in range(len(ids) - 1)]
+    plain = cluster_pairs(chain, all_ids=ids, config=_WithRules())
+    shuffled = cluster_pairs(list(reversed(chain)), all_ids=ids, config=_WithRules())
+    duplicated = cluster_pairs(chain + chain, all_ids=ids, config=_WithRules())
+
+    def shape(m):
+        groups = {}
+        for k, v in m.items():
+            groups.setdefault(v, set()).add(k)
+        return sorted(sorted(g) for g in groups.values())
+
+    assert shape(plain) == shape(shuffled), "edge ORDER changed the split"
+    assert shape(plain) == shape(duplicated), "edge MULTIPLICITY changed the split"
+
+
 def test_unpaired_ids_survive_as_singletons_when_declared():
     out = cluster_pairs([("a", "b", 1.0)], all_ids=["a", "b", "lonely"])
     assert out["a"] == out["b"]
