@@ -571,6 +571,7 @@ def attribute_score(df, cfg, mk, model, n_entities: int):
     each adding one layer:
 
         join     the block self-join alone, pairs counted
+        sims     + the raw per-field similarities, before level bucketing
         gammas   + the comparison vector, grouped like the counts stage
         weight   + the per-field weight lookup and sum
         full     + the truth column and the two-aggregate group
@@ -619,9 +620,39 @@ def attribute_score(df, cfg, mk, model, n_entities: int):
         print(f"[attr] {label:8s} {dt:8.2f}s  (result={n})", flush=True)
         return round(dt, 2)
 
+    # The RAW similarities, before any level bucketing. `fs_level_expr` sums
+    # `when(sim >= t, 1)` once per threshold, so it names `sim` -- and the jar
+    # scorer inside it -- once per threshold. Whether that costs N evaluations
+    # depends on where the repeats sit: the weight lookup's were in
+    # CONDITIONALLY-evaluated branches of one chained CaseWhen, which Catalyst
+    # declines to hoist, while these are in the ALWAYS-evaluated condition of N
+    # separate CaseWhens, which it may well handle.
+    #
+    # This layer answers that instead of arguing it. `gammas - sims` is the cost
+    # of bucketing; if it is near zero the levels are free and there is nothing
+    # to fix, and if it is near the sims layer itself the scorer is running once
+    # per threshold.
+    from goldenmatch.spark.probabilistic import _field_similarity_and_observed
+
+    sims = [
+        _field_similarity_and_observed(
+            f, CAND_LHS, CAND_RHS,
+            scorer_udf=ROW_UDF_NAME, transform_udf=TRANSFORM_UDF_NAME,
+        )[0]
+        for f in mk.fields
+    ]
+
     layers = {}
     layers["join"] = _time(
         "join", lambda: _union(lambda fr: fr.select(F.lit(1).alias("x"))).count()
+    )
+    layers["sims"] = _time(
+        "sims",
+        lambda: _union(
+            lambda fr: fr.select(
+                *[c.alias(f"s{i}") for i, c in enumerate(sims)]
+            )
+        ).agg(*[F.sum(F.col(f"s{i}")) for i in range(len(sims))]).collect()[0][0],
     )
     layers["gammas"] = _time(
         "gammas",
@@ -640,6 +671,8 @@ def attribute_score(df, cfg, mk, model, n_entities: int):
     )
 
     marginal = {
+        "sims_over_join": round(layers["sims"] - layers["join"], 2),
+        "gammas_over_sims": round(layers["gammas"] - layers["sims"], 2),
         "gammas_over_join": round(layers["gammas"] - layers["join"], 2),
         "weight_over_gammas": round(layers["weight"] - layers["gammas"], 2),
         "truth_and_agg_over_weight": round(layers["full"] - layers["weight"], 2),
