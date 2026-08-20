@@ -488,6 +488,229 @@ def _metrics_module():
     return mod
 
 
+def score_narrow(df, cfg, mk, model, n_entities: int):
+    """The ``(weight, is_true)`` frame the quality arm groups, both routes.
+
+    ONE implementation, used by the real run and by ``--ab``. A separate copy
+    for the A/B would measure a lookalike of the scoring path rather than the
+    scoring path, which is the failure mode this benchmark exists to avoid.
+
+    Which route builds the pairs is `GOLDENMATCH_SPARK_FUSED_BLOCK_JOIN`:
+
+    * fused -- `fused_pass_frames` returns one joined frame per blocking pass,
+      already disjoint by pass priority, so the candidate frame is never built.
+      No `(a, b)` projection, no join back to either side, no cross-pass dedup.
+    * legacy -- `generate_candidates` then `join_candidates_to_sources`, the
+      three-join shape.
+
+    The scoring expressions are identical either way and resolve against
+    CAND_LHS/CAND_RHS, so the flag changes where the pairs come from and
+    nothing about what is computed on them.
+    """
+    from goldenmatch.spark.config_pipeline import (
+        CAND_LHS,
+        CAND_RHS,
+        fused_block_join_enabled,
+        fused_pass_frames,
+        generate_candidates,
+        join_candidates_to_sources,
+    )
+    from goldenmatch.spark.em import gamma_columns
+    from goldenmatch.spark.jvm import ROW_UDF_NAME, TRANSFORM_UDF_NAME
+    from pyspark.sql import functions as F
+
+    gammas = gamma_columns(
+        mk, CAND_LHS, CAND_RHS,
+        scorer_udf=ROW_UDF_NAME, transform_udf=TRANSFORM_UDF_NAME,
+    )
+    # Match weight = the per-field log2(m/u) for the level the pair landed on,
+    # summed. `match_weights[field][level]` IS that table, so this is a lookup
+    # rather than a second derivation of the weight.
+    weight = F.lit(0.0)
+    for col, f in zip(gammas, mk.fields):
+        per_level = model.match_weights[f.resolved_field]
+        expr = F.lit(0.0)
+        for level, val in enumerate(per_level):
+            expr = F.when(col == F.lit(level), F.lit(float(val))).otherwise(expr)
+        weight = weight + expr
+    truth = F.col(f"{CAND_LHS}.__row_id__") % F.lit(n_entities) == F.col(
+        f"{CAND_RHS}.__row_id__"
+    ) % F.lit(n_entities)
+
+    if fused_block_join_enabled():
+        # Union the NARROW per-pass projections -- two columns, not two whole
+        # records. Pass priority already made the passes disjoint, so no dedup.
+        narrow = None
+        for frame in fused_pass_frames(df, cfg, id_col="__row_id__"):
+            part = frame.select(weight.alias("w"), truth.alias("is_true"))
+            narrow = part if narrow is None else narrow.unionByName(part)
+        return narrow
+
+    cands = generate_candidates(df, cfg, id_col="__row_id__")
+    joined = join_candidates_to_sources(cands, df, id_col="__row_id__")
+    return joined.select(weight.alias("w"), truth.alias("is_true"))
+
+
+def run_ab(df, cfg, mk, model, n_entities: int, *, repeats: int):
+    """PAIRED A/B of the fused vs legacy candidate route, in ONE session.
+
+    ## Why paired, and why in one session
+
+    Every comparison in this arc until now was a run against a BANKED baseline
+    from a different job: different VMs, different JVM, different shuffle
+    files. On this lane that is worth ~2% between two runs of the same code and
+    up to ~16% across a re-run, which is the same order as the effects being
+    measured -- so a 2% difference meant nothing and a 24% one had to be argued
+    for. Running both arms over the same cached fixture in the same session
+    removes that entirely: the only difference left IS the code path.
+
+    ## Why the order alternates
+
+    A first arm pays for whatever the session has not warmed -- JIT, the
+    broadcast of the model, page cache on the shuffle dirs. Running
+    ``A B B A`` and pairing (A1,B1) with (A2,B2) makes any monotone drift
+    cancel rather than land on whichever arm went first. With ``repeats=1``
+    the order is still ``A B B A``; repeats multiplies the palindrome.
+
+    ## What it does NOT do
+
+    It does not rebuild the fixture, re-estimate ``u`` or re-train. Those are
+    identical across arms by construction -- the parity tests pin it -- so
+    timing them again would add variance without adding information.
+    """
+    import os
+
+    from goldenmatch.spark.config_pipeline import CAND_LHS, CAND_RHS, blocking_passes, pass_joined
+    from goldenmatch.spark.em import agreement_pattern_counts
+    from goldenmatch.spark.jvm import ROW_UDF_NAME, TRANSFORM_UDF_NAME
+
+    flag = "GOLDENMATCH_SPARK_FUSED_BLOCK_JOIN"
+    prior = os.environ.get(flag)
+    # A palindrome per repeat: legacy, fused, fused, legacy.
+    order = []
+    for _ in range(max(repeats, 1)):
+        order += ["legacy", "fused", "fused", "legacy"]
+
+    arms: dict[str, list[dict]] = {"legacy": [], "fused": []}
+    try:
+        for arm in order:
+            os.environ[flag] = "0" if arm == "legacy" else "1"
+
+            t = time.perf_counter()
+            n_pairs = 0
+            for key_config in blocking_passes(cfg):
+                joined = pass_joined(df, key_config, id_col="__row_id__")
+                counts = agreement_pattern_counts(
+                    joined, mk, lhs=CAND_LHS, rhs=CAND_RHS,
+                    scorer_udf=ROW_UDF_NAME, transform_udf=TRANSFORM_UDF_NAME,
+                )
+                n_pairs += sum(c for _, c in counts)
+            counts_s = time.perf_counter() - t
+
+            t = time.perf_counter()
+            groups = score_groups(df, cfg, mk, model, n_entities)
+            score_s = time.perf_counter() - t
+
+            arms[arm].append(
+                {
+                    "counts_seconds": round(counts_s, 2),
+                    "score_seconds": round(score_s, 2),
+                    "pairs": n_pairs,
+                    # Carried so a reader can confirm the two arms scored the
+                    # SAME population. Identical group counts and identical
+                    # pair counts are what make the timing comparable at all.
+                    "score_groups": len(groups),
+                }
+            )
+            print(
+                f"[ab] {arm:6s} counts={counts_s:8.2f}s score={score_s:8.2f}s "
+                f"pairs={n_pairs:,} groups={len(groups)}",
+                flush=True,
+            )
+    finally:
+        if prior is None:
+            os.environ.pop(flag, None)
+        else:
+            os.environ[flag] = prior
+
+    def _med(vals):
+        v = sorted(vals)
+        n = len(v)
+        return v[n // 2] if n % 2 else (v[n // 2 - 1] + v[n // 2]) / 2.0
+
+    out = {"order": order, "arms": arms, "verdict": {}}
+    for stage in ("counts_seconds", "score_seconds"):
+        a = _med([r[stage] for r in arms["legacy"]])
+        b = _med([r[stage] for r in arms["fused"]])
+        out["verdict"][stage] = {
+            "legacy_median": round(a, 2),
+            "fused_median": round(b, 2),
+            "speedup": round(a / b, 3) if b else None,
+            # The spread WITHIN an arm is the noise floor. A speedup smaller
+            # than this is not a result, and reporting it without this number
+            # would invite exactly the over-reading this mode exists to stop.
+            "legacy_spread_pct": round(
+                100.0 * (max(r[stage] for r in arms["legacy"])
+                         - min(r[stage] for r in arms["legacy"])) / a, 1
+            ) if a else None,
+            "fused_spread_pct": round(
+                100.0 * (max(r[stage] for r in arms["fused"])
+                         - min(r[stage] for r in arms["fused"])) / b, 1
+            ) if b else None,
+        }
+    # Same pairs on both arms or the comparison is void, not merely noisy.
+    pairs = {r["pairs"] for rs in arms.values() for r in rs}
+    groups = {r["score_groups"] for rs in arms.values() for r in rs}
+    out["same_population"] = len(pairs) == 1 and len(groups) == 1
+    if not out["same_population"]:
+        print(
+            f"[ab] WARNING arms scored DIFFERENT populations: pairs={pairs} "
+            f"groups={groups}. The timings are not comparable.",
+            flush=True,
+        )
+    return out
+
+
+def score_groups(df, cfg, mk, model, n_entities: int):
+    """``[(weight, n_true, n_all)]`` -- the quality arm's exact input.
+
+    GROUP BY the weight in the ENGINE and collect the groups. This used to
+    collect one `(score, is_true)` tuple PER CANDIDATE PAIR: 5.5M at the 1M
+    scale this harness was written for and merely wasteful, but 275M at 50M
+    rows -- tens of GB of Python objects on a driver inside a container -- so
+    the quality arm could not run at the scale the comparison is about, and a
+    head-to-head with no accuracy number is not a head-to-head.
+
+    Grouping is EXACT, not a sample. `ranking_metrics` already consumes its
+    input in tie-groups: it advances to the next distinct score, admits every
+    pair at that score, and only then computes precision/recall, so the
+    per-pair identity inside a group is never used, only the counts.
+    `ranking_metrics_grouped` takes exactly those counts and
+    `test_fs_quality_metrics_grouped.py` pins the two to agree on shared
+    inputs, including ties that span both classes.
+
+    The group count is small BY THE PROPERTY THIS BENCHMARK IS ABOUT: a pair's
+    weight is a sum of per-field match weights over bounded gamma levels, so
+    the reachable score set is bounded by `prod(levels + 1)` -- the same bound
+    that keeps the counting GROUP BY small. 275M pairs collapse to a few
+    hundred rows.
+    """
+    from pyspark.sql import functions as F
+
+    return [
+        (float(r["w"]), int(r["n_true"]), int(r["n_all"]))
+        for r in (
+            score_narrow(df, cfg, mk, model, n_entities)
+            .groupBy("w")
+            .agg(
+                F.sum(F.col("is_true").cast("long")).alias("n_true"),
+                F.count(F.lit(1)).alias("n_all"),
+            )
+            .collect()
+        )
+    ]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--rows", type=int, default=1_000_000)
@@ -526,6 +749,17 @@ def main() -> int:
         "Run 5 vs 2 and compare `scoring_udf`: linear in field count "
         "means the cost is per-CALL (fewer, fatter calls win); flat means "
         "per-BYTE (only columnar/FFI moves it).",
+    )
+    ap.add_argument(
+        "--ab",
+        type=int,
+        default=0,
+        metavar="REPEATS",
+        help="PAIRED A/B of the fused vs legacy candidate route in one "
+        "session over the same cached fixture, alternating legacy/fused/"
+        "fused/legacy per repeat. Removes the run-to-run variance that made "
+        "single-arm comparisons against a banked baseline unreadable, so it "
+        "discriminates at a size small enough to iterate on. 0 disables.",
     )
     ap.add_argument(
         "--profile-counts",
@@ -590,7 +824,6 @@ def main() -> int:
         CAND_RHS,
         blocking_passes,
         fused_block_join_enabled,
-        fused_pass_frames,
         join_candidates_to_sources,
         pass_candidates,
         pass_joined,
@@ -797,98 +1030,15 @@ def main() -> int:
         # Weights come from `gamma_columns` -- the same expressions the SCORING
         # path builds -- so this measures the shipped model on the shipped
         # ladder, not a re-derivation of what a level means.
-        from goldenmatch.spark.em import gamma_columns
-        from pyspark.sql import functions as F
-
         n_entities = max(args.rows // max(args.dup, 1), 1)
         t = time.perf_counter()
-
-        # DEDUPLICATE ACROSS BLOCKING PASSES before scoring. A pair that blocks
-        # on both keys is one pair, and scoring it twice puts it in the ranking
-        # twice. The first version of this concatenated the passes and reported
-        # 282,247 true pairs where the fixture contains 200,004 (66,666
-        # entities x 3), a 41% overlap counted as extra data -- which raised the
-        # base rate from 0.108 to 0.143 and flattered GM's average precision,
-        # since AP is bounded below by the base rate. Splink's `predict()`
-        # dedupes across its blocking rules, so the arms were being scored on
-        # different populations.
-        # `generate_candidates` now does this de-duplication by PASS PRIORITY --
-        # each pair assigned to the lowest-indexed pass that produces it, tested
-        # inside the join from the two records themselves. Same set as the
-        # `dropDuplicates(["a", "b"])` this replaces, without the shuffle and
-        # aggregate over a frame with O(pairs) rows. Calling the shipped
-        # function rather than rebuilding the union here also means the bench
-        # measures the path users get.
-        # SCORE INSIDE THE BLOCK JOIN. `fused_pass_frames` returns one joined
-        # frame per blocking pass, already disjoint by pass priority, so the
-        # candidate frame is never built: no `(a, b)` projection, no join back
-        # to either side, no cross-pass dedup. MEASURED on the 100M lane, the
-        # join this removes held 62% of all executor time in the job.
-        #
-        # The scoring expressions below are unchanged and resolve against
-        # CAND_LHS/CAND_RHS exactly as they did over the pair-frame join, so
-        # this changes where the pairs come from and nothing about what is
-        # computed on them.
-        pass_frames = fused_pass_frames(df, cfg, id_col="__row_id__")
-        gammas = gamma_columns(
-            mk, CAND_LHS, CAND_RHS, scorer_udf=ROW_UDF_NAME, transform_udf=TRANSFORM_UDF_NAME
-        )
-        # Match weight = the per-field log2(m/u) for the level the pair landed
-        # on, summed. `match_weights[field][level]` IS that table, so this is a
-        # lookup rather than a second derivation of the weight.
-        weight = F.lit(0.0)
-        for col, f in zip(gammas, mk.fields):
-            per_level = model.match_weights[f.resolved_field]
-            expr = F.lit(0.0)
-            for level, val in enumerate(per_level):
-                expr = F.when(col == F.lit(level), F.lit(float(val))).otherwise(expr)
-            weight = weight + expr
-        truth = F.col(f"{CAND_LHS}.__row_id__") % F.lit(n_entities) == F.col(
-            f"{CAND_RHS}.__row_id__"
-        ) % F.lit(n_entities)
-        # GROUP BY the weight in the ENGINE, and collect the groups.
-        #
-        # This used to collect one `(score, is_true)` tuple PER CANDIDATE PAIR.
-        # At the 1M scale this harness was written for that is 5.5M tuples and
-        # merely wasteful; at 50M rows it is 275M -- tens of GB of Python
-        # objects on a driver running inside a container -- so the quality arm
-        # could not run at the scale the comparison is actually about, and a
-        # head-to-head with no accuracy number is not a head-to-head.
-        #
-        # Grouping is EXACT, not a sample. `ranking_metrics` already consumes
-        # its input in tie-groups: it advances to the next distinct score,
-        # admits every pair at that score, and only then computes
-        # precision/recall -- so the per-pair identity inside a group is never
-        # used, only the counts. `ranking_metrics_grouped` takes exactly those
-        # counts and `test_fs_quality_metrics_grouped.py` pins the two to agree
-        # on shared inputs, including ties that span both classes.
-        #
-        # And the group count is small BY THE PROPERTY THIS BENCHMARK IS ABOUT:
-        # a pair's weight is a sum of per-field match weights over bounded gamma
-        # levels, so the reachable score set is bounded by `prod(levels + 1)` --
-        # the same bound that keeps GoldenMatch's counting GROUP BY small. 275M
-        # pairs collapse to a few hundred rows.
-        # Union the NARROW per-pass projections -- two columns, not two whole
-        # records -- then group once. Pass priority already made the passes
-        # disjoint, so this needs no dedup.
-        narrow = None
-        for _frame in pass_frames:
-            _part = _frame.select(weight.alias("w"), truth.alias("is_true"))
-            narrow = _part if narrow is None else narrow.unionByName(_part)
-
-        groups = [
-            (float(r["w"]), int(r["n_true"]), int(r["n_all"]))
-            for r in (
-                narrow
-                .groupBy("w")
-                .agg(
-                    F.sum(F.col("is_true").cast("long")).alias("n_true"),
-                    F.count(F.lit(1)).alias("n_all"),
-                )
-                .collect()
-            )
-        ]
+        groups = score_groups(df, cfg, mk, model, n_entities)
         out["stages"]["score_seconds"] = round(time.perf_counter() - t, 2)
+
+        if args.ab:
+            out["ab"] = run_ab(
+                df, cfg, mk, model, n_entities, repeats=args.ab
+            )
         # Recorded so a reader can see the collect stayed bounded, rather than
         # trusting the argument above.
         out["quality_score_groups"] = len(groups)
