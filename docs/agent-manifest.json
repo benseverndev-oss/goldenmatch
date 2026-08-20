@@ -6232,6 +6232,7 @@
           "GOLDENMATCH_SKIP_MATCH_LOG"
         ],
         "SPARK": [
+          "GOLDENMATCH_SPARK_FUSED_BLOCK_JOIN",
           "GOLDENMATCH_SPARK_JAR",
           "GOLDENMATCH_SPARK_VECTOR_SCORER"
         ],
