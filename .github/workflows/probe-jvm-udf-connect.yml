@@ -23,6 +23,10 @@ on:
         description: "Temurin JDK version"
         required: false
         default: "17"
+      submit_args:
+        description: "PYSPARK_SUBMIT_ARGS. A pyspark<4 client cannot start a local Connect server on its own -- the server lives in a separate jar, so `.remote(local[*])` dies with ClassNotFoundException: org.apache.spark.sql.connect.SparkConnectPlugin. Spark 4 bundles it; 3.5 needs e.g. `--packages org.apache.spark:spark-connect_2.12:3.5.9 pyspark-shell`. Blank = leave unset (Spark 4 path)."
+        required: false
+        default: ""
       python_version:
         description: "Python for the client. Use 3.11 to probe a pyspark 3.5 client: 3.5.x imports the stdlib `distutils`, which Python 3.12 REMOVED, so a 3.5 client on 3.13 dies at import with ModuleNotFoundError before any capability is exercised. (Also the ceiling that matters downstream: snowpark-connect requires Python <3.13.)"
         required: false
@@ -95,7 +99,13 @@ jobs:
         env:
           GOLDENMATCH_PROBE_JAR: ${{ github.workspace }}/build/goldenmatch-probe.jar
           GOLDENMATCH_SPARK_REMOTE: "local[*]"
-        run: python scripts/probe_jvm_udf_connect.py
+          PYSPARK_SUBMIT_ARGS: ${{ inputs.submit_args }}
+        run: |
+          # An EMPTY PYSPARK_SUBMIT_ARGS is not the same as an unset one: pyspark
+          # splits it and passes the result to spark-submit, so "" loses the
+          # implicit `pyspark-shell` and the gateway never starts. Unset it.
+          if [ -z "${PYSPARK_SUBMIT_ARGS:-}" ]; then unset PYSPARK_SUBMIT_ARGS; fi
+          python scripts/probe_jvm_udf_connect.py
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         if: always()
