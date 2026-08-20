@@ -230,39 +230,70 @@ def install(spark: object, *, jar: str | os.PathLike[str] | None = None,
             f"session, so check the session was built with `.remote(...)`."
         ) from exc
 
-    for sql_name, cls, ret in (
-        (name, _UDF_CLASS, "array<double>"),
+    # `optional` marks a kernel whose ABSENCE must not break the session.
+    #
+    # Every entry was fatal, so a jar older than the Python side took the whole
+    # Spark tier down at `install()`. Run 32315586317 hit exactly that:
+    #
+    #     JvmScorerUnavailable: could not register
+    #     dev.goldensuite.spark.GoldenScoreVectorUdf as 'golden_score_vector':
+    #     Can not load class ... please make sure it is on the classpath
+    #
+    # The vector scorer landed in #2619 on 2026-08-16 20:31, twenty hours AFTER
+    # `goldenmatch-spark-v0.2.0` was cut, so the published jar cannot have it.
+    # The Python and the jar version independently, users pin them separately,
+    # and a jar one release behind is a NORMAL deployment state -- not a
+    # corrupt one worth refusing to start over.
+    #
+    # It is also the least defensible thing to hard-fail on: the vector scorer
+    # is OPT-IN, default OFF, and measured 2.29x SLOWER than the row path it
+    # sits beside. A kernel nothing uses by default took down every session
+    # that had an older jar.
+    #
+    # The four kernels the tier actually runs on stay FATAL. Silently losing
+    # the scorer, the impl probe, the fingerprint, the transform chain or
+    # survivorship would produce wrong answers rather than an error.
+    for sql_name, cls, ret, optional in (
+        (name, _UDF_CLASS, "array<double>", False),
         # The row-shaped scorer, registered alongside the batched one. Same
         # kernel, one pair per call: no collect_list, no arrays_zip, no explode.
         # J1's batching amortises a downcall cost nobody measured, and J4 put
         # +1.4s on the un-batching it requires against ~0.1s on the scoring, so
         # both shapes are available and the bench decides.
-        (ROW_UDF_NAME, _ROW_UDF_CLASS, "double"),
+        (ROW_UDF_NAME, _ROW_UDF_CLASS, "double", False),
         # The vector scorer: one call per pair, every field. Registered
         # alongside the row scorer rather than replacing it -- which shape wins
         # is a measurement, and the row arm is the control it is measured
         # against.
-        (VECTOR_UDF_NAME, _VECTOR_UDF_CLASS, "array<double>"),
+        (VECTOR_UDF_NAME, _VECTOR_UDF_CLASS, "array<double>", True),
         # Registered alongside, not on demand: the probe has to be available
         # BEFORE anything is scored, or the first thing a caller can check is
         # whether the results they already trusted came from the kernel.
-        (IMPL_UDF_NAME, _IMPL_UDF_CLASS, "string"),
+        (IMPL_UDF_NAME, _IMPL_UDF_CLASS, "string", False),
         # The identity graph's fingerprint, over the SAME `fingerprint-core`
         # Python uses. Registered here so one `install` call gives a session
         # every capability the jar has -- a caller should not have to know which
         # kernels exist to get them.
-        (FINGERPRINT_UDF_NAME, _FINGERPRINT_UDF_CLASS, "string"),
+        (FINGERPRINT_UDF_NAME, _FINGERPRINT_UDF_CLASS, "string", False),
         # The transform chain. Normalization was Python-only until
         # `transforms-core`; this is what lets a cluster normalize a
         # column without an executor virtualenv.
-        (TRANSFORM_UDF_NAME, _TRANSFORM_UDF_CLASS, "string"),
+        (TRANSFORM_UDF_NAME, _TRANSFORM_UDF_CLASS, "string", False),
         # Golden-record survivorship, the last of the four kernels the jar
         # carries.
-        (SURVIVORSHIP_UDF_NAME, _SURVIVORSHIP_UDF_CLASS, "string"),
+        (SURVIVORSHIP_UDF_NAME, _SURVIVORSHIP_UDF_CLASS, "string", False),
     ):
         try:
             spark.udf.registerJavaFunction(sql_name, cls, ret)  # type: ignore[attr-defined]
         except Exception as exc:  # noqa: BLE001
+            if optional:
+                logger.warning(
+                    "Spark JVM: optional kernel %s (%s) is not in this jar (%s); "
+                    "continuing without it. The jar is older than this "
+                    "goldenmatch, which is a normal pinned-version state.",
+                    sql_name, cls, type(exc).__name__,
+                )
+                continue
             raise JvmScorerUnavailable(
                 f"could not register {cls} as {sql_name!r}: "
                 f"{type(exc).__name__}: {exc}"
