@@ -632,15 +632,45 @@ def attribute_score(df, cfg, mk, model, n_entities: int):
     # of bucketing; if it is near zero the levels are free and there is nothing
     # to fix, and if it is near the sims layer itself the scorer is running once
     # per threshold.
-    from goldenmatch.spark.probabilistic import _field_similarity_and_observed
+    from goldenmatch.core.probabilistic import fs_missing_mode
+    from goldenmatch.spark.probabilistic import (
+        _field_similarity_and_observed,
+        fs_level_expr,
+    )
 
-    sims = [
+    so = [
         _field_similarity_and_observed(
             f, CAND_LHS, CAND_RHS,
             scorer_udf=ROW_UDF_NAME, transform_udf=TRANSFORM_UDF_NAME,
-        )[0]
+        )
         for f in mk.fields
     ]
+    sims = [x[0] for x in so]
+    missing_mode = fs_missing_mode(mk)
+
+    def _project_then_bucket(fr):
+        """The CANDIDATE FIX: name the similarity, then bucket from the name.
+
+        `fs_level_expr` sums `when(sim >= t, 1)` once per threshold, so the
+        inline form names `sim` -- and the jar scorer inside it -- once per
+        threshold. Projecting it first gives the bucketing a plain column to
+        read, which is the same move `_score_candidates_jvm_rowwise` already
+        makes for its per-slot scores.
+
+        Measured as a LAYER rather than shipped on the strength of the argument:
+        Catalyst may collapse the two projections back together and re-inline
+        the similarity, in which case this costs the same and the idea is dead.
+        """
+        proj = fr.select(
+            *[sim.alias(f"__s{i}") for i, (sim, _o) in enumerate(so)],
+            *[obs.alias(f"__o{i}") for i, (_s, obs) in enumerate(so)],
+        )
+        return proj.select(*[
+            fs_level_expr(
+                f, F.col(f"__s{i}"), F.col(f"__o{i}"), missing_mode=missing_mode
+            ).alias(n)
+            for i, (f, n) in enumerate(zip(mk.fields, names))
+        ])
 
     layers = {}
     layers["join"] = _time(
@@ -654,6 +684,25 @@ def attribute_score(df, cfg, mk, model, n_entities: int):
             )
         ).agg(*[F.sum(F.col(f"s{i}")) for i in range(len(sims))]).collect()[0][0],
     )
+    # SAME aggregate as the sims layer, deliberately. The first version of this
+    # ended `sims` in a global `agg(sum)` and `gammas` in a `groupBy` over five
+    # int columns, so their difference mixed the cost of BUCKETING with the cost
+    # of a different aggregation -- an upper bound on bucketing, not a
+    # measurement of it. Summing both makes the difference the bucketing alone.
+    layers["gammas_summed"] = _time(
+        "gam_sum",
+        lambda: _union(
+            lambda fr: fr.select(*[g.alias(n) for g, n in zip(gammas, names)])
+        ).agg(*[F.sum(F.col(n)) for n in names]).collect()[0][0],
+    )
+    layers["gammas_projected"] = _time(
+        "gam_proj",
+        lambda: _union(_project_then_bucket)
+        .agg(*[F.sum(F.col(n)) for n in names]).collect()[0][0],
+    )
+    # Kept as well, and under its old name, because three prior runs recorded
+    # `gammas` as the grouped shape and dropping it would break the comparison
+    # to them.
     layers["gammas"] = _time(
         "gammas",
         lambda: _union(
@@ -672,6 +721,16 @@ def attribute_score(df, cfg, mk, model, n_entities: int):
 
     marginal = {
         "sims_over_join": round(layers["sims"] - layers["join"], 2),
+        # THE number: same aggregate on both sides, so this is bucketing.
+        "bucketing_over_sims": round(layers["gammas_summed"] - layers["sims"], 2),
+        # The candidate fix, measured against the same baseline. Near zero means
+        # projecting removes the re-evaluation; near `bucketing_over_sims` means
+        # Catalyst collapsed the projections and the idea is dead.
+        "bucketing_projected_over_sims": round(
+            layers["gammas_projected"] - layers["sims"], 2
+        ),
+        # Confounded by the aggregation change; kept only to compare with runs
+        # that predate the summed layer.
         "gammas_over_sims": round(layers["gammas"] - layers["sims"], 2),
         "gammas_over_join": round(layers["gammas"] - layers["join"], 2),
         "weight_over_gammas": round(layers["weight"] - layers["gammas"], 2),
