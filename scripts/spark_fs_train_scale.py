@@ -551,6 +551,98 @@ def score_narrow(df, cfg, mk, model, n_entities: int):
     return joined.select(weight.alias("w"), truth.alias("is_true"))
 
 
+def attribute_score(df, cfg, mk, model, n_entities: int):
+    """Split the score stage into its layers, by DIFFERENCE between actions.
+
+    At 250M the score stage holds 70% of all executor time (stage 45: 93,781s
+    of 133,584s) while the counts stages do the SAME join over the SAME shuffle
+    inputs for 31,857s. A 2.9x gap between two stages that share their
+    expensive half is not explained by anything visible in the plan, and it has
+    now survived two wrong guesses -- the weight lookup re-evaluating per level
+    (Catalyst's subexpression elimination removes it) and the harness's nested
+    CASE shape (same).
+
+    So this measures instead of guessing. Four actions over the SAME frames,
+    each adding one layer:
+
+        join     the block self-join alone, pairs counted
+        gammas   + the comparison vector, grouped like the counts stage
+        weight   + the per-field weight lookup and sum
+        full     + the truth column and the two-aggregate group
+
+    Each layer's cost is the difference from the one before. Costs ~4x a normal
+    score stage because every layer re-runs the join beneath it -- the same
+    trade `--profile-counts` makes, and the reason neither is on by default.
+
+    The layers are NOT independent: Catalyst fuses them into one whole-stage
+    codegen block, so `gammas - join` is the marginal cost of adding gammas to
+    that block rather than a standalone number. Differences, not shares.
+    """
+    from pyspark.sql import functions as F
+
+    from goldenmatch.spark.config_pipeline import CAND_LHS, CAND_RHS, fused_pass_frames
+    from goldenmatch.spark.em import gamma_columns
+    from goldenmatch.spark.jvm import ROW_UDF_NAME, TRANSFORM_UDF_NAME
+
+    frames = fused_pass_frames(df, cfg, id_col="__row_id__")
+    gammas = gamma_columns(
+        mk, CAND_LHS, CAND_RHS,
+        scorer_udf=ROW_UDF_NAME, transform_udf=TRANSFORM_UDF_NAME,
+    )
+    names = [f"gamma_{f.resolved_field}" for f in mk.fields]
+    weight = F.lit(0.0)
+    for col, f in zip(gammas, mk.fields):
+        expr = F.lit(0.0)
+        for level, val in enumerate(model.match_weights[f.resolved_field]):
+            expr = F.when(col == F.lit(level), F.lit(float(val))).otherwise(expr)
+        weight = weight + expr
+    truth = F.col(f"{CAND_LHS}.__row_id__") % F.lit(n_entities) == F.col(
+        f"{CAND_RHS}.__row_id__"
+    ) % F.lit(n_entities)
+
+    def _union(project):
+        out = None
+        for fr in frames:
+            part = project(fr)
+            out = part if out is None else out.unionByName(part)
+        return out
+
+    def _time(label, build):
+        t = time.perf_counter()
+        n = build()
+        dt = time.perf_counter() - t
+        print(f"[attr] {label:8s} {dt:8.2f}s  (result={n})", flush=True)
+        return round(dt, 2)
+
+    layers = {}
+    layers["join"] = _time(
+        "join", lambda: _union(lambda fr: fr.select(F.lit(1).alias("x"))).count()
+    )
+    layers["gammas"] = _time(
+        "gammas",
+        lambda: _union(
+            lambda fr: fr.select(*[g.alias(n) for g, n in zip(gammas, names)])
+        ).groupBy(*names).agg(F.count(F.lit(1))).count(),
+    )
+    layers["weight"] = _time(
+        "weight",
+        lambda: _union(lambda fr: fr.select(weight.alias("w")))
+        .groupBy("w").agg(F.count(F.lit(1))).count(),
+    )
+    layers["full"] = _time(
+        "full",
+        lambda: len(score_groups(df, cfg, mk, model, n_entities)),
+    )
+
+    marginal = {
+        "gammas_over_join": round(layers["gammas"] - layers["join"], 2),
+        "weight_over_gammas": round(layers["weight"] - layers["gammas"], 2),
+        "truth_and_agg_over_weight": round(layers["full"] - layers["weight"], 2),
+    }
+    print(f"[attr] marginal: {marginal}", flush=True)
+    return {"layers": layers, "marginal": marginal}
+
+
 def run_ab(df, cfg, mk, model, n_entities: int, *, repeats: int):
     """PAIRED A/B of the fused vs legacy candidate route, in ONE session.
 
