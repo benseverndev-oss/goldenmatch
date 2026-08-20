@@ -133,6 +133,11 @@ on:
         required: false
         type: boolean
         default: true
+      attribute_score:
+        description: "Split the GoldenMatch score stage into join / +gammas / +weight / +truth and report each layer's MARGINAL cost. Needs eval_quality. Costs ~4x a score stage because every layer re-runs the join beneath it, so leave it OFF unless attributing that stage is the point of the run."
+        required: false
+        type: boolean
+        default: false
       shuffle_partitions:
         description: "spark.sql.shuffle.partitions for BOTH arms. `-1` (default) derives 5x total executor cores, which is what Splink's performance guide recommends. `0` leaves Spark's default 200, which is what both engines ran on before and is a number NEITHER vendor recommends. Applied to both engines from one shared implementation (scripts/_spark_tuning.py) so the comparison can never measure a tuning difference."
         required: false
@@ -936,6 +941,7 @@ jobs:
             --remote sc://$MASTER_IP:15002 \
             --spark-ui http://$MASTER_IP:4040 \
             ${{ inputs.eval_quality && '--eval-quality' || '' }} \
+            ${{ inputs.attribute_score && '--attribute-score' || '' }} \
             --out /w/spark-fs-train-scale.json
           REMOTE
 

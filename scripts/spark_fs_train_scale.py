@@ -515,40 +515,243 @@ def score_narrow(df, cfg, mk, model, n_entities: int):
         generate_candidates,
         join_candidates_to_sources,
     )
-    from goldenmatch.spark.em import gamma_columns
+    from goldenmatch.spark.em import gamma_frame
     from goldenmatch.spark.jvm import ROW_UDF_NAME, TRANSFORM_UDF_NAME
+    from goldenmatch.spark.probabilistic import _weight_lookup_expr
     from pyspark.sql import functions as F
 
-    gammas = gamma_columns(
-        mk, CAND_LHS, CAND_RHS,
-        scorer_udf=ROW_UDF_NAME, transform_udf=TRANSFORM_UDF_NAME,
-    )
-    # Match weight = the per-field log2(m/u) for the level the pair landed on,
-    # summed. `match_weights[field][level]` IS that table, so this is a lookup
-    # rather than a second derivation of the weight.
-    weight = F.lit(0.0)
-    for col, f in zip(gammas, mk.fields):
-        per_level = model.match_weights[f.resolved_field]
-        expr = F.lit(0.0)
-        for level, val in enumerate(per_level):
-            expr = F.when(col == F.lit(level), F.lit(float(val))).otherwise(expr)
-        weight = weight + expr
     truth = F.col(f"{CAND_LHS}.__row_id__") % F.lit(n_entities) == F.col(
         f"{CAND_RHS}.__row_id__"
     ) % F.lit(n_entities)
+
+    def _levels(joined):
+        """`joined` -> one gamma column per field, plus `is_true`.
+
+        `gamma_frame` NAMES each per-field similarity before the level ladder
+        reads it, and the ladder reads it once per threshold. MEASURED at 50M
+        with the layer aggregates matched: bucketing costs 38.57s inline and
+        2.21s projected, so the projection is worth 36.4s of it.
+
+        `truth` rides through as a `keep` pair rather than being applied after,
+        because it reads the pair's ids and the projection consumes the source
+        aliases it needs.
+        """
+        return gamma_frame(
+            joined, mk, lhs=CAND_LHS, rhs=CAND_RHS,
+            scorer_udf=ROW_UDF_NAME, transform_udf=TRANSFORM_UDF_NAME,
+            keep=[(truth, "is_true")],
+        )
+
+    # Match weight = the per-field log2(m/u) for the level the pair landed on,
+    # summed. Built by the SHIPPED `_weight_lookup_expr`, not a hand-rolled copy.
+    # The copy this replaces nested a CASE per level, naming the gamma -- and so
+    # the jar scorer inside it -- once per level: the defect `--attribute-score`
+    # found (weight layer 2.71x the gamma layer at 50M). A bench carrying its own
+    # version of the expression under test would have kept paying after the
+    # shipped one was fixed, while reporting a number nobody could act on.
+    weight = F.lit(0.0)
+    for f in mk.fields:
+        weight = weight + _weight_lookup_expr(
+            F.col(f"gamma_{f.resolved_field}"),
+            list(model.match_weights[f.resolved_field]),
+        )
 
     if fused_block_join_enabled():
         # Union the NARROW per-pass projections -- two columns, not two whole
         # records. Pass priority already made the passes disjoint, so no dedup.
         narrow = None
         for frame in fused_pass_frames(df, cfg, id_col="__row_id__"):
-            part = frame.select(weight.alias("w"), truth.alias("is_true"))
+            part = _levels(frame).select(weight.alias("w"), "is_true")
             narrow = part if narrow is None else narrow.unionByName(part)
         return narrow
 
     cands = generate_candidates(df, cfg, id_col="__row_id__")
     joined = join_candidates_to_sources(cands, df, id_col="__row_id__")
-    return joined.select(weight.alias("w"), truth.alias("is_true"))
+    return _levels(joined).select(weight.alias("w"), "is_true")
+
+
+def attribute_score(df, cfg, mk, model, n_entities: int):
+    """Split the score stage into its layers, by DIFFERENCE between actions.
+
+    At 250M the score stage holds 70% of all executor time (stage 45: 93,781s
+    of 133,584s) while the counts stages do the SAME join over the SAME shuffle
+    inputs for 31,857s. A 2.9x gap between two stages that share their
+    expensive half is not explained by anything visible in the plan, and it has
+    now survived two wrong guesses -- the weight lookup re-evaluating per level
+    (Catalyst's subexpression elimination removes it) and the harness's nested
+    CASE shape (same).
+
+    So this measures instead of guessing. Four actions over the SAME frames,
+    each adding one layer:
+
+        join     the block self-join alone, pairs counted
+        sims     + the raw per-field similarities, before level bucketing
+        gammas   + the comparison vector, grouped like the counts stage
+        weight   + the per-field weight lookup and sum
+        full     + the truth column and the two-aggregate group
+
+    Each layer's cost is the difference from the one before. Costs ~4x a normal
+    score stage because every layer re-runs the join beneath it -- the same
+    trade `--profile-counts` makes, and the reason neither is on by default.
+
+    The layers are NOT independent: Catalyst fuses them into one whole-stage
+    codegen block, so `gammas - join` is the marginal cost of adding gammas to
+    that block rather than a standalone number. Differences, not shares.
+    """
+    from goldenmatch.spark.config_pipeline import CAND_LHS, CAND_RHS, fused_pass_frames
+    from goldenmatch.spark.em import gamma_columns
+    from goldenmatch.spark.jvm import ROW_UDF_NAME, TRANSFORM_UDF_NAME
+    from goldenmatch.spark.probabilistic import _weight_lookup_expr
+    from pyspark.sql import functions as F
+
+    frames = fused_pass_frames(df, cfg, id_col="__row_id__")
+    gammas = gamma_columns(
+        mk, CAND_LHS, CAND_RHS,
+        scorer_udf=ROW_UDF_NAME, transform_udf=TRANSFORM_UDF_NAME,
+    )
+    names = [f"gamma_{f.resolved_field}" for f in mk.fields]
+    weight = F.lit(0.0)
+    for col, f in zip(gammas, mk.fields):
+        weight = weight + _weight_lookup_expr(
+            col, list(model.match_weights[f.resolved_field])
+        )
+    # No `truth` expression built here: the `full` layer calls `score_groups`,
+    # the function the real run uses, so the last layer measures the shipped
+    # path rather than a reconstruction of it. Its cost still lands in the
+    # marginal column as `full - weight`.
+
+    def _union(project):
+        out = None
+        for fr in frames:
+            part = project(fr)
+            out = part if out is None else out.unionByName(part)
+        return out
+
+    def _time(label, build):
+        t = time.perf_counter()
+        n = build()
+        dt = time.perf_counter() - t
+        print(f"[attr] {label:8s} {dt:8.2f}s  (result={n})", flush=True)
+        return round(dt, 2)
+
+    # The RAW similarities, before any level bucketing. `fs_level_expr` sums
+    # `when(sim >= t, 1)` once per threshold, so it names `sim` -- and the jar
+    # scorer inside it -- once per threshold. Whether that costs N evaluations
+    # depends on where the repeats sit: the weight lookup's were in
+    # CONDITIONALLY-evaluated branches of one chained CaseWhen, which Catalyst
+    # declines to hoist, while these are in the ALWAYS-evaluated condition of N
+    # separate CaseWhens, which it may well handle.
+    #
+    # This layer answers that instead of arguing it. `gammas - sims` is the cost
+    # of bucketing; if it is near zero the levels are free and there is nothing
+    # to fix, and if it is near the sims layer itself the scorer is running once
+    # per threshold.
+    from goldenmatch.core.probabilistic import fs_missing_mode
+    from goldenmatch.spark.probabilistic import (
+        _field_similarity_and_observed,
+        fs_level_expr,
+    )
+
+    so = [
+        _field_similarity_and_observed(
+            f, CAND_LHS, CAND_RHS,
+            scorer_udf=ROW_UDF_NAME, transform_udf=TRANSFORM_UDF_NAME,
+        )
+        for f in mk.fields
+    ]
+    sims = [x[0] for x in so]
+    missing_mode = fs_missing_mode(mk)
+
+    def _project_then_bucket(fr):
+        """The CANDIDATE FIX: name the similarity, then bucket from the name.
+
+        `fs_level_expr` sums `when(sim >= t, 1)` once per threshold, so the
+        inline form names `sim` -- and the jar scorer inside it -- once per
+        threshold. Projecting it first gives the bucketing a plain column to
+        read, which is the same move `_score_candidates_jvm_rowwise` already
+        makes for its per-slot scores.
+
+        Measured as a LAYER rather than shipped on the strength of the argument:
+        Catalyst may collapse the two projections back together and re-inline
+        the similarity, in which case this costs the same and the idea is dead.
+        """
+        proj = fr.select(
+            *[sim.alias(f"__s{i}") for i, (sim, _o) in enumerate(so)],
+            *[obs.alias(f"__o{i}") for i, (_s, obs) in enumerate(so)],
+        )
+        return proj.select(*[
+            fs_level_expr(
+                f, F.col(f"__s{i}"), F.col(f"__o{i}"), missing_mode=missing_mode
+            ).alias(n)
+            for i, (f, n) in enumerate(zip(mk.fields, names))
+        ])
+
+    layers = {}
+    layers["join"] = _time(
+        "join", lambda: _union(lambda fr: fr.select(F.lit(1).alias("x"))).count()
+    )
+    layers["sims"] = _time(
+        "sims",
+        lambda: _union(
+            lambda fr: fr.select(
+                *[c.alias(f"s{i}") for i, c in enumerate(sims)]
+            )
+        ).agg(*[F.sum(F.col(f"s{i}")) for i in range(len(sims))]).collect()[0][0],
+    )
+    # SAME aggregate as the sims layer, deliberately. The first version of this
+    # ended `sims` in a global `agg(sum)` and `gammas` in a `groupBy` over five
+    # int columns, so their difference mixed the cost of BUCKETING with the cost
+    # of a different aggregation -- an upper bound on bucketing, not a
+    # measurement of it. Summing both makes the difference the bucketing alone.
+    layers["gammas_summed"] = _time(
+        "gam_sum",
+        lambda: _union(
+            lambda fr: fr.select(*[g.alias(n) for g, n in zip(gammas, names)])
+        ).agg(*[F.sum(F.col(n)) for n in names]).collect()[0][0],
+    )
+    layers["gammas_projected"] = _time(
+        "gam_proj",
+        lambda: _union(_project_then_bucket)
+        .agg(*[F.sum(F.col(n)) for n in names]).collect()[0][0],
+    )
+    # Kept as well, and under its old name, because three prior runs recorded
+    # `gammas` as the grouped shape and dropping it would break the comparison
+    # to them.
+    layers["gammas"] = _time(
+        "gammas",
+        lambda: _union(
+            lambda fr: fr.select(*[g.alias(n) for g, n in zip(gammas, names)])
+        ).groupBy(*names).agg(F.count(F.lit(1))).count(),
+    )
+    layers["weight"] = _time(
+        "weight",
+        lambda: _union(lambda fr: fr.select(weight.alias("w")))
+        .groupBy("w").agg(F.count(F.lit(1))).count(),
+    )
+    layers["full"] = _time(
+        "full",
+        lambda: len(score_groups(df, cfg, mk, model, n_entities)),
+    )
+
+    marginal = {
+        "sims_over_join": round(layers["sims"] - layers["join"], 2),
+        # THE number: same aggregate on both sides, so this is bucketing.
+        "bucketing_over_sims": round(layers["gammas_summed"] - layers["sims"], 2),
+        # The candidate fix, measured against the same baseline. Near zero means
+        # projecting removes the re-evaluation; near `bucketing_over_sims` means
+        # Catalyst collapsed the projections and the idea is dead.
+        "bucketing_projected_over_sims": round(
+            layers["gammas_projected"] - layers["sims"], 2
+        ),
+        # Confounded by the aggregation change; kept only to compare with runs
+        # that predate the summed layer.
+        "gammas_over_sims": round(layers["gammas"] - layers["sims"], 2),
+        "gammas_over_join": round(layers["gammas"] - layers["join"], 2),
+        "weight_over_gammas": round(layers["weight"] - layers["gammas"], 2),
+        "truth_and_agg_over_weight": round(layers["full"] - layers["weight"], 2),
+    }
+    print(f"[attr] marginal: {marginal}", flush=True)
+    return {"layers": layers, "marginal": marginal}
 
 
 def run_ab(df, cfg, mk, model, n_entities: int, *, repeats: int):
@@ -760,6 +963,14 @@ def main() -> int:
         "fused/legacy per repeat. Removes the run-to-run variance that made "
         "single-arm comparisons against a banked baseline unreadable, so it "
         "discriminates at a size small enough to iterate on. 0 disables.",
+    )
+    ap.add_argument(
+        "--attribute-score",
+        action="store_true",
+        help="Split the score stage into join / +gammas / +weight / +truth "
+        "and report each layer's MARGINAL cost. Needs --eval-quality (it "
+        "scores with the trained model). Costs ~4x a score stage because "
+        "every layer re-runs the join beneath it, so it is off by default.",
     )
     ap.add_argument(
         "--profile-counts",
@@ -1034,6 +1245,11 @@ def main() -> int:
         t = time.perf_counter()
         groups = score_groups(df, cfg, mk, model, n_entities)
         out["stages"]["score_seconds"] = round(time.perf_counter() - t, 2)
+
+        if args.attribute_score:
+            out["score_attribution"] = attribute_score(
+                df, cfg, mk, model, n_entities
+            )
 
         if args.ab:
             out["ab"] = run_ab(

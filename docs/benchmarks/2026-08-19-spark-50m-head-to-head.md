@@ -123,6 +123,12 @@ Runs `32372957870`, `32376766045`, `32379345610`. Same cluster shape
 Cost is linear in PAIRS, not in rows, and the wall growing 2.89x for 2.5x rows
 is that pairs grew 2.5x plus a spill tax -- not a scaling break.
 
+**These are the numbers as of this curve. They have since been beaten by 4.1x
+-- see "The scorer was being evaluated several times per pair" below, which
+takes 250M from 2,765.8s to 669.96s and the per-million-pairs figure from 1.192
+to 0.289.** The curve is kept as measured rather than restated, because the
+three defects that closed that gap are only legible against it.
+
 Three properties hold across the whole range: `u` stays nearly flat (3.5s to
 5.4s for 5x the rows, which is what the fix was for), the plan does not grow
 (119 stages at every scale), and quality is stable or slightly better.
@@ -177,6 +183,73 @@ including the 100M row above -- carry that confound.
 
 **"Zero spill" is therefore a SCALE-BOUNDED claim.** It is true at 50M and
 false at 100M. Any comparison quoting it must say at what size.
+
+## The scorer was being evaluated several times per pair
+
+Everything above measures a build that called the similarity kernel more times
+than it needed to, in two places, on the SHIPPED path. Both were found by
+splitting the score stage into layers (`--attribute-score`) rather than by
+reading the plan -- three attempts at reasoning from plan shape had already
+failed.
+
+**The weight lookup named the level once per level.** `_weight_lookup_expr`
+built `when(level == 0, w0).when(level == 1, w1)...`, and `level` is the whole
+gamma expression with the jar scorer call inside it. Catalyst's subexpression
+elimination does not hoist a UDF out of conditionally-evaluated CASE branches.
+
+**The level ladder named the similarity once per threshold.** `fs_level_expr`
+sums `when(sim >= t, 1)` per threshold. Same class, different position --
+always-evaluated conditions of separate CASEs rather than conditional branches
+of one -- so it was measured beside a projected variant instead of being assumed
+to cost the same.
+
+Layer split at 50M, each layer adding one thing to the one before:
+
+| layer | before | after |
+|---|---:|---:|
+| join | 13.47s | 12.64s |
+| + raw similarities | -- | 73.30s |
+| + level bucketing | 125.79s | 75.16s |
+| + weight lookup | **340.75s** | **~81s** |
+| **score stage** | **347.07s** | **82.20s** |
+
+### 250M, both fixes, same cluster shape (run `32423691696`)
+
+| | legacy | fused (#2698) | + scorer fixes |
+|---|---:|---:|---:|
+| **wall** | **2,765.8s** | 2,189.3s | **669.96s** |
+| counts | 835.7s | 575.4s | **317.04s** |
+| score | 1,888.8s | 1,574.6s | **319.31s** |
+| u | 5.4s | 4.7s | 4.06s |
+| shuffle write | 438.1 GB | 113.8 GB | 113.8 GB |
+| memory spill | 201.3 GB | **0** | **0** |
+| stages | 119 | 52 | 52 |
+| executor CPU | -- | 133,584s | **42,503s** |
+| average precision | 0.704939 | 0.704939 | 0.704939 |
+| best F1 | 0.686126 | 0.686126 | 0.686126 |
+
+**4.13x on wall, and 3.1x less executor CPU.** CPU falling in step with wall is
+the tell that this removes work rather than moving it: the fused join (#2698)
+cut bytes without cutting CPU, and cut wall only above the spill threshold.
+These cut the work itself, so they pay at every size.
+
+**Seconds per million pairs: 1.192 -> 0.289.**
+
+Correctness is checked rather than asserted: trained `match_weights` and
+`m_probs` are **byte-identical** to the run above, the score-group count matches
+(372), pair counts match, and average precision and best F1 agree to six
+decimals. The group count differs between 50M (399) and 250M (372) because
+different data sizes reach different level combinations -- the comparison that
+matters is 250M against 250M, and it is exact.
+
+### What is left
+
+The 82.2s score stage at 50M is now the join (12.6s) plus the kernel itself
+(60.7s, about **25ns per scorer call**). Everything layered above the kernel has
+been removed. Going further means fewer pairs, a faster kernel, or fewer calls
+per pair -- and batching calls into one vector UDF was already measured **2.3x
+SLOWER** (`GOLDENMATCH_SPARK_VECTOR_SCORER`, kept off as a recorded negative
+result).
 
 ## Results: 1M rows (the same run configuration, for scaling)
 
