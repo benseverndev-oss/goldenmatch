@@ -351,7 +351,6 @@ def test_a_REQUIRED_kernel_missing_still_fails_loudly():
     rather than an error, which is worse than refusing to start.
     """
     import pytest as _pytest
-
     from goldenmatch.spark import jvm
 
     class _Udf:
