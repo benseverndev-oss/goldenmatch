@@ -15,7 +15,6 @@ the statistics it would return.
 from __future__ import annotations
 
 import polars as pl
-import pytest
 
 
 def test_full_n_distinct_comes_from_the_CLUSTER_not_the_local_frame():
@@ -26,8 +25,11 @@ def test_full_n_distinct_comes_from_the_CLUSTER_not_the_local_frame():
     rule fires on a field that does discriminate, and it fires only at the
     scales where the sample stops covering the rare value.
     """
-    from goldenmatch.core.autoconfig import exact_column_stats_applied, profile_columns
-    from goldenmatch.core.autoconfig import ExactStats
+    from goldenmatch.core.autoconfig import (
+        ExactStats,
+        exact_column_stats_applied,
+        profile_columns,
+    )
 
     # Locally constant: every row says "active".
     frame = pl.DataFrame({
