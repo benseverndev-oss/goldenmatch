@@ -127,12 +127,23 @@ Three properties hold across the whole range: `u` stays nearly flat (3.5s to
 5.4s for 5x the rows, which is what the fix was for), the plan does not grow
 (119 stages at every scale), and quality is stable or slightly better.
 
-**The growing term is SPILL, and it is the real ceiling.** Zero at 50M, then
-56.4 GB, then 201.3 GB -- 3.57x for 2.5x the data, so it grows faster than the
-data does. Nothing failed: Spark spilled and continued, no executor died, no
-task failed. But it is a throughput tax that compounds, and extrapolating puts
-500M near ~700 GB of memory spill on this cluster shape. Row count is not the
-wall; spill is.
+**The growing term is SPILL** -- zero at 50M, then 56.4 GB, then 201.3 GB, so
+3.57x for 2.5x the data, growing faster than the data does. Nothing failed:
+Spark spilled and continued, no executor died, no task failed.
+
+**It is NOT the ceiling, and an earlier version of this document said it was.**
+That claim has since been tested directly rather than inferred, and it is
+false. On the 100M lane (run `32393456488`), an engine change cut memory spill
+from 56.4 GB to 4.29 GB and disk spill from 5.0 GB to 0.23 GB -- 92% and 95% --
+while also cutting shuffle write 43% (174.9 -> 99.0 GB), stages 119 -> 74 and
+tasks 11,198 -> 6,665. Total wall moved from 958.31s to 975.30s: nothing, or
+very slightly worse.
+
+So spill was a symptom of how the candidate frame was moved, not the thing
+setting the clock. What sets it is narrower: **one stage held 62% of all
+executor time**, the join of the candidate frame back to both record sides.
+Resource consumption and wall are close to decoupled on this workload, and any
+future claim about the ceiling has to name the stage it is about.
 
 **"Zero spill" is therefore a SCALE-BOUNDED claim.** It is true at 50M and
 false at 100M. Any comparison quoting it must say at what size.
