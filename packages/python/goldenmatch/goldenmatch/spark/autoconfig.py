@@ -36,6 +36,7 @@ recommendations for 500M rows from a 50k glance.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -69,6 +70,167 @@ def _refuse_at_n() -> int:
     from goldenmatch.core.autoconfig_controller import REFUSE_AT_N
 
     return int(REFUSE_AT_N)
+
+
+@dataclass(frozen=True)
+class ExactStats:
+    """Column statistics computed over the FULL frame, not a sample.
+
+    ``n_distinct`` and ``avg_len`` are ``None`` when the exact pass did not
+    compute them for this column -- absent, not zero. A consumer must leave the
+    sampled value alone rather than reading a missing measurement as a measured
+    one, the same discipline `candidates_counted` exists for.
+    """
+
+    n_rows: int
+    n_non_null: int
+    n_distinct: int | None = None
+    avg_len: float | None = None
+
+
+def _boundary_columns(
+    approx: dict[str, int], n_full: int, *, near_unique: float = 0.98
+) -> list[str]:
+    """Columns whose DECISION sits on a boundary, so approximation is not enough.
+
+    `approx_count_distinct` is HyperLogLog: cheap, and a few percent out. That is
+    fine for a column in the middle of the range and useless at exactly the two
+    cuts auto-config turns on:
+
+    * ``<= 1`` -- "is this column constant?" (#2687 drops the field)
+    * near ``n_full`` -- "is this a unique surrogate key?" (#876 discards it)
+
+    A 2% error either side of those flips the verdict, so those columns get an
+    exact `count_distinct` and nothing else does. Same shape as the exact
+    full-frame pass `core/autoconfig.py` already runs for apparent surrogate
+    keys: the cheap statistic nominates, the exact one decides.
+    """
+    if n_full <= 0:
+        return []
+    out = []
+    for name, n in approx.items():
+        if n <= 2 or (n / n_full) >= near_unique:
+            out.append(name)
+    return out
+
+
+def exact_column_stats(
+    spark_df: Any, columns: list[str], *, near_unique: float = 0.98
+) -> dict[str, ExactStats]:
+    """One distributed pass for the statistics a sample gets wrong at scale.
+
+    `count`, `count(col)` and `avg(length(col))` are free -- they ride the same
+    scan. `count_distinct` is a SHUFFLE PER COLUMN and is the entire cost, so it
+    is not run for every column: `approx_count_distinct` runs for all of them in
+    the first pass, and only the columns :func:`_boundary_columns` nominates pay
+    for an exact count.
+
+    Never raises. Profiling is instrumentation for a configuration decision, and
+    a failed aggregate must leave the sampled value in place rather than take the
+    run down -- an ABSENT statistic, which `merge_exact_stats` already treats as
+    "leave it alone".
+    """
+    try:
+        from pyspark.sql import functions as F
+    except Exception:  # pragma: no cover - no pyspark in this env
+        return {}
+
+    try:
+        aggs: list[Any] = [F.count(F.lit(1)).alias("__n_rows__")]
+        for c in columns:
+            aggs += [
+                F.count(F.col(c)).alias(f"__nn__{c}"),
+                F.avg(F.length(F.col(c).cast("string"))).alias(f"__len__{c}"),
+                F.approx_count_distinct(F.col(c)).alias(f"__ad__{c}"),
+            ]
+        row = spark_df.agg(*aggs).collect()[0]
+    except Exception as exc:  # noqa: BLE001 - instrumentation, never fatal
+        logger.warning(
+            "exact column profiling failed (%s); falling back to the sampled "
+            "statistics for every column", type(exc).__name__,
+        )
+        return {}
+
+    n_rows = int(row["__n_rows__"] or 0)
+    approx = {c: int(row[f"__ad__{c}"] or 0) for c in columns}
+
+    exact_distinct: dict[str, int] = {}
+    boundary = _boundary_columns(approx, n_rows, near_unique=near_unique)
+    if boundary:
+        try:
+            row2 = spark_df.agg(
+                *[F.count_distinct(F.col(c)).alias(f"__cd__{c}") for c in boundary]
+            ).collect()[0]
+            exact_distinct = {c: int(row2[f"__cd__{c}"] or 0) for c in boundary}
+            logger.info(
+                "exact count_distinct for %d boundary column(s): %s",
+                len(boundary), ", ".join(boundary),
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Named, not swallowed: these are precisely the columns whose
+            # verdict the approximation cannot be trusted for.
+            logger.warning(
+                "exact count_distinct failed for %s (%s); those columns keep an "
+                "APPROXIMATE distinct count and their boundary verdict is not "
+                "reliable", ", ".join(boundary), type(exc).__name__,
+            )
+
+    return {
+        c: ExactStats(
+            n_rows=n_rows,
+            n_non_null=int(row[f"__nn__{c}"] or 0),
+            n_distinct=exact_distinct.get(c, approx[c]),
+            avg_len=(float(row[f"__len__{c}"]) if row[f"__len__{c}"] is not None else None),
+        )
+        for c in columns
+    }
+
+
+def merge_exact_stats(
+    profiles: list[Any], stats: dict[str, ExactStats], *, n_full: int
+) -> list[Any]:
+    """Overwrite the DISTRIBUTION statistics on each profile with exact values.
+
+    Only four fields move: `null_rate`, `avg_len`, `n_distinct` and the
+    `cardinality_ratio` derived from it. Those are the ones compared against
+    ABSOLUTE thresholds, and therefore the ones a fixed-size sample of a growing
+    frame gets wrong in a way that worsens with scale:
+
+    * `cardinality_ratio` -- the #876 surrogate guard. An `email` column whose
+      true fraction is a flat 0.28 read 0.72 / 0.94 / 0.97 / 0.98 / 1.00 at
+      100K / 500K / 1M / 2M / 5M, so at 5M zero-config discarded its only exact
+      identity column and produced a 185M-pair run that killed the runner.
+    * `n_distinct` -- PR #2687 drops a scored field at `<= 1`, and a value at
+      frequency 1e-4 is missed by a 1,000-row sample 90% of the time.
+
+    `col_type`, `confidence` and `sample_values` are NEVER touched. They answer
+    "what kind of column is this", which a sample answers correctly by
+    construction; rewriting them from an aggregate would be a different change.
+
+    A column absent from ``stats`` keeps every sampled value.
+    """
+    import dataclasses as _dc
+
+    out: list[Any] = []
+    for p in profiles:
+        st = stats.get(p.name)
+        if st is None:
+            out.append(p)
+            continue
+
+        changes: dict[str, Any] = {}
+        if st.n_rows > 0:
+            changes["null_rate"] = (st.n_rows - st.n_non_null) / st.n_rows
+        if st.avg_len is not None:
+            changes["avg_len"] = float(st.avg_len)
+        if st.n_distinct is not None:
+            changes["n_distinct"] = int(st.n_distinct)
+            denom = n_full or st.n_rows
+            if denom > 0:
+                changes["cardinality_ratio"] = st.n_distinct / denom
+
+        out.append(_dc.replace(p, **changes) if changes else p)
+    return out
 
 
 def sample_to_driver(
