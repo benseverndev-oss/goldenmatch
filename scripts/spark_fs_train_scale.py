@@ -589,8 +589,10 @@ def main() -> int:
         CAND_LHS,
         CAND_RHS,
         blocking_passes,
+        fused_block_join_enabled,
         join_candidates_to_sources,
         pass_candidates,
+        pass_joined,
     )
     from goldenmatch.spark.em import (
         agreement_pattern_counts,
@@ -628,6 +630,11 @@ def main() -> int:
         "n_fields": args.fields,
         "value_pad": args.value_pad,
         "scorer_override": args.scorer or None,
+        # Which candidate-join route ran. Recorded rather than inferred: the
+        # two produce identical counts, so nothing else in the artifact says
+        # which one produced them, and an A/B whose arms are indistinguishable
+        # after the fact is not an A/B.
+        "fused_block_join": fused_block_join_enabled(),
     }
 
     t0 = time.perf_counter()
@@ -696,13 +703,23 @@ def main() -> int:
                 f"thing under test."
             )
 
-        cands = pass_candidates(df, key_config, id_col="__row_id__")
-        joined = join_candidates_to_sources(cands, df, id_col="__row_id__")
+        # ONE join, not three: the block self-join already holds both records
+        # of every pair, so `pass_joined` keeps them instead of projecting them
+        # away and paying two more pair-sized shuffles to fetch them back.
+        joined = pass_joined(df, key_config, id_col="__row_id__")
 
         prof = None
         if args.profile_counts:
+            # Profiles the LEGACY frame on purpose. The attribution's whole
+            # shape -- pair generation, THEN the record join, then scoring -- is
+            # a property of the three-join path; the fused path has no separate
+            # record join to attribute time to, so running it here would report
+            # a negative number for a step that no longer exists. What this arm
+            # measures is therefore the path it names, and the fused wall is the
+            # `count_seconds` below rather than anything in here.
+            cands = pass_candidates(df, key_config, id_col="__row_id__")
             prof = profile_counts(
-                joined,
+                join_candidates_to_sources(cands, df, id_col="__row_id__"),
                 mk,
                 scorer_udf=ROW_UDF_NAME,
                 transform_udf=TRANSFORM_UDF_NAME,

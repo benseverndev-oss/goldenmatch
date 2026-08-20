@@ -350,6 +350,107 @@ def join_candidates_to_sources(
     )
 
 
+def pass_candidates_joined(
+    source_df: Any,
+    key_config: Any,
+    *,
+    id_col: str,
+    transform_udf: str | None = None,
+) -> Any:
+    """One blocking pass, ALREADY joined to both record sides.
+
+    Same pairs, same aliases, same columns as ``pass_candidates`` followed by
+    :func:`join_candidates_to_sources` -- but in one shuffle rather than three,
+    because it never discards the records it has already co-located.
+
+    ## Why this exists
+
+    The block self-join puts both records of every candidate pair in the same
+    task. ``pass_candidates`` then projects that down to ``(a, b)`` ids, and
+    ``join_candidates_to_sources`` pays two more joins to fetch back the very
+    columns that projection dropped. MEASURED on the plan, one counts pass::
+
+        unfused   7 Exchange, 3 SortMergeJoin   (2 of them PAIR-sized)
+        fused     3 Exchange, 1 SortMergeJoin   (none of them pair-sized)
+
+    The two exchanges that disappear are the expensive ones: they repartition
+    and SORT the candidate frame, which has O(pairs) rows, not O(rows). At 250M
+    records that frame is 2.32B rows, and sorting it twice is where the measured
+    483 GB of peak execution memory and 201 GB of spill come from. The
+    surviving exchanges are all record-sized.
+
+    Catalyst does not do this itself, and cannot: eliminating a join back to a
+    table on its own key requires knowing that key is unique, which Spark has no
+    constraint to express.
+
+    ## When it is NOT equivalent
+
+    ``id_col`` must be unique. The unfused path fans a candidate out across
+    every source row sharing an id; this path cannot, because a self-join under
+    ``a < b`` never pairs an id with itself. Every caller here generates
+    ``__row_id__`` precisely to be unique, so this is a documented precondition
+    rather than a guard -- checking it would cost a distinct count over the
+    source on a property the caller established by construction.
+    """
+    from pyspark.sql import functions as F
+
+    key_col, _fields = _block_key_column(key_config, transform_udf)
+    keyed = source_df.withColumn("__block_key__", key_col)
+    keyed = keyed.where(_valid_key(F.col("__block_key__")))
+    a = keyed.alias(CAND_LHS)
+    b = keyed.alias(CAND_RHS)
+    return a.join(
+        b,
+        (F.col(f"{CAND_LHS}.__block_key__") == F.col(f"{CAND_RHS}.__block_key__"))
+        & (F.col(f"{CAND_LHS}.{id_col}") < F.col(f"{CAND_RHS}.{id_col}")),
+    )
+
+
+def fused_block_join_enabled() -> bool:
+    """Is the fused blocking join on? DEFAULT ON.
+
+    ``GOLDENMATCH_SPARK_FUSED_BLOCK_JOIN=0`` forces the legacy three-join path.
+    The switch exists so the A/B can be taken in BOTH directions from one build
+    -- a default that cannot be turned off is a default nobody can measure --
+    not because the fused path is provisional.
+
+    Default-on because the evidence is structural rather than a stopwatch: the
+    fused plan runs one join where the legacy plan runs three, and the two it
+    drops are the ones that repartition and sort a frame with O(pairs) rows.
+    There is no shape in which three shuffles of the pair frame beat none.
+    """
+    import os
+
+    return os.environ.get(
+        "GOLDENMATCH_SPARK_FUSED_BLOCK_JOIN", "1"
+    ).strip().lower() not in ("0", "false", "no", "off")
+
+
+def pass_joined(
+    source_df: Any,
+    key_config: Any,
+    *,
+    id_col: str,
+    transform_udf: str | None = None,
+) -> Any:
+    """One blocking pass joined to both record sides, by whichever route.
+
+    The seam every caller that wants a joined single pass should use, so the
+    switch lives in one place rather than at each call site.
+    """
+    if fused_block_join_enabled():
+        return pass_candidates_joined(
+            source_df, key_config, id_col=id_col, transform_udf=transform_udf
+        )
+    return join_candidates_to_sources(
+        pass_candidates(
+            source_df, key_config, id_col=id_col, transform_udf=transform_udf
+        ),
+        source_df,
+        id_col=id_col,
+    )
+
+
 def generate_candidates(
     source_df: Any, config: Any, *, id_col: str, transform_udf: str | None = None
 ) -> Any:
