@@ -141,7 +141,13 @@ def block_key_sql(key_config: Any, quote: bool = False) -> tuple[str, list[str]]
     :func:`plan_passes` with the reason named, rather than approximated.
     """
     fields = list(key_config.fields)
-    parts = ["NULLIF(TO_VARCHAR(" + _sql_ident(f, quote) + "), '')" for f in fields]
+    # TO_VARCHAR and nothing else. An earlier version wrapped each part in
+    # NULLIF(x, ''), which maps the EMPTY STRING to null -- and the empty string
+    # is a real key value here (#390), so that silently deleted every block whose
+    # key was empty. Measured cost of getting this wrong on one 209k relation:
+    # a 100-member block vanished entirely, 4,950 pairs, the whole equivalence
+    # gap against the single-node path.
+    parts = ["TO_VARCHAR(" + _sql_ident(f, quote) + ")" for f in fields]
     any_null = " OR ".join(p + " IS NULL" for p in parts)
     sep = " || '" + BLOCK_KEY_SEP + "' || "
     joined = parts[0] if len(parts) == 1 else sep.join(parts)
@@ -339,19 +345,29 @@ def score_partition(
 
 
 def cluster_pairs(
-    pairs: list[tuple[Any, Any, float]], all_ids: list[Any] | None = None
+    pairs: list[tuple[Any, Any, float]],
+    all_ids: list[Any] | None = None,
+    config: Any = None,
 ) -> dict[Any, int]:
     """``id -> cluster_id`` over the union of every pass's pairs.
 
-    Delegates to ``core.pairs.connected_components`` -- the same native
-    union-find ``build_clusters`` uses -- so a partitioned run and a one-box run
-    agree on what a cluster IS. Union-find is idempotent over repeated edges, so
-    a pair emitted by two passes needs no de-duplication first.
+    Delegates to ``core.cluster.build_clusters`` -- the engine's own clustering,
+    parameterised from ``config.golden_rules`` exactly as ``core/pipeline.py``
+    does it -- so a partitioned run and a one-box run agree on what a cluster IS.
 
-    Ids are interned to ints because the kernel is integer union-find; the
-    mapping is restored on the way out.
+    **Union-find alone is not enough, and getting this wrong is measurable.** An
+    earlier version called ``core.pairs.connected_components``, which is the
+    union-find primitive ``build_clusters`` is built on but is NOT the whole of
+    it: ``build_clusters`` also auto-splits clusters above ``max_cluster_size``
+    via MST and grades cluster quality. On one 209k relation a 107-member hub
+    block that the one-box path split into 8 clusters came back as a single
+    107-member cluster here -- 721 pairs of difference, all of it this.
+
+    Union-find is idempotent over repeated edges, so a pair emitted by two
+    passes needs no de-duplication first. Ids are interned to ints because the
+    kernel is integer union-find; the mapping is restored on the way out.
     """
-    from goldenmatch.core.pairs import connected_components
+    from goldenmatch.core.cluster import build_clusters
 
     index: dict[Any, int] = {}
 
@@ -363,10 +379,33 @@ def cluster_pairs(
     edges = [(idx(a), idx(b), float(s)) for a, b, s in pairs]
     for value in all_ids or []:
         idx(value)
-    components = connected_components(edges, list(range(len(index))))
+
+    # Mirror core/pipeline.py's Step 4 defaults and overrides. Reading them off
+    # the same place the one-box path does is what keeps the two in step when a
+    # default changes upstream.
+    max_cluster_size = 100
+    weak_threshold = 0.3
+    auto_split = True
+    split_edge_budget = None
+    rules = getattr(config, "golden_rules", None) if config is not None else None
+    if rules is not None:
+        max_cluster_size = getattr(rules, "max_cluster_size", max_cluster_size)
+        weak_threshold = getattr(rules, "weak_cluster_threshold", weak_threshold)
+        auto_split = getattr(rules, "auto_split", auto_split)
+        split_edge_budget = getattr(rules, "split_edge_budget", None)
+
+    clusters = build_clusters(
+        edges,
+        list(range(len(index))),
+        max_cluster_size=max_cluster_size,
+        weak_cluster_threshold=weak_threshold,
+        auto_split=auto_split,
+        split_edge_budget=split_edge_budget,
+    )
     back = {v: k for k, v in index.items()}
     out: dict[Any, int] = {}
-    for cid, members in enumerate(components):
-        for m in members:
-            out[back[m]] = cid
+    for cid, info in clusters.items():
+        for m in info.get("members", []):
+            if m in back:
+                out[back[m]] = cid
     return out

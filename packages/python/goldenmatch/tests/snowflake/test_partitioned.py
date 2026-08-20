@@ -92,10 +92,28 @@ def test_valid_key_drops_the_stringified_missing_sentinels():
         assert "'" + sentinel + "'" in pred
 
 
-def test_valid_key_keeps_the_empty_string():
-    """Empty string is a real value (#390); only missing sentinels are dropped."""
+def test_the_empty_string_is_a_REAL_KEY_not_a_null():
+    """#390: the empty string is a real key value, and blocks on it must survive.
+
+    This is a regression guard with a measured cost. An earlier version wrapped
+    every part in ``NULLIF(x, '')``, which maps '' to NULL; the any-null guard
+    then nulled the whole key and ``valid_key_sql`` dropped it. On one 209k
+    relation that silently deleted a 100-member block -- 4,950 pairs, and the
+    entire equivalence gap against the single-node path.
+
+    Asserted on the KEY expression, not on the predicate. The predicate-only
+    version of this test passed throughout, because the emptiness was already
+    destroyed upstream of it.
+    """
+    sql, _ = block_key_sql(BlockingKeyConfig(fields=["last_name"]))
+    assert "NULLIF" not in sql.upper()
+
+
+def test_valid_key_drops_only_the_missing_sentinels():
+    """The predicate half: sentinels go, everything else -- '' included -- stays."""
     pred = valid_key_sql("K")
-    assert "''" not in pred.replace("'nan'", "").replace("'null'", "").replace("'none'", "")
+    assert "IS NOT NULL" in pred
+    assert pred.count("'") == 6  # exactly the three sentinels, nothing more
 
 
 # ── the pass plan ───────────────────────────────────────────────────────────
@@ -244,3 +262,33 @@ def test_string_ids_round_trip_through_the_integer_kernel():
     """
     out = cluster_pairs([("id-xyz", "id-abc", 1.0)])
     assert set(out) == {"id-xyz", "id-abc"}
+
+
+def test_oversized_clusters_are_SPLIT_like_the_one_box_path():
+    """``build_clusters`` auto-splits above ``max_cluster_size``; plain
+    union-find does not, and that difference is the whole remaining equivalence
+    gap if you get it wrong.
+
+    Measured: a 107-member hub block the one-box path split into 8 clusters came
+    back as ONE cluster while this delegated to ``connected_components``.
+    """
+
+    class _Rules:
+        max_cluster_size = 4
+        weak_cluster_threshold = 0.3
+        auto_split = True
+        split_edge_budget = None
+
+    class _WithRules:
+        golden_rules = _Rules()
+
+    ids = [f"r{i}" for i in range(12)]
+    chain = [(ids[i], ids[i + 1], 0.99) for i in range(len(ids) - 1)]
+    out = cluster_pairs(chain, all_ids=ids, config=_WithRules())
+    assert len(set(out.values())) > 1, "a 12-member chain must split at size 4"
+
+
+def test_clustering_without_a_config_still_works():
+    """``config`` is optional; the pipeline's own defaults apply."""
+    out = cluster_pairs([("a", "b", 1.0)], all_ids=["a", "b"])
+    assert out["a"] == out["b"]
