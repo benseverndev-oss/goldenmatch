@@ -37,10 +37,8 @@ fn f32s(b64: &str) -> Vec<f32> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(b64)
         .expect("valid base64");
-    bytes
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect()
+    let (words, _tail) = bytes.as_chunks::<4>();
+    words.iter().copied().map(f32::from_le_bytes).collect()
 }
 
 #[test]

@@ -1,9 +1,10 @@
 """Snowflake handler functions for goldenmatch UDFs and Stored Procedures.
 
-The ``goldenmatch snowflake init`` CLI registers UDFs with
-``HANDLER = 'goldenmatch_udfs.<func>'`` (or, equivalently,
-``goldenmatch.snowflake.udfs.<func>``). This module IS that handler
-catalog.
+There is no ``goldenmatch snowflake init`` CLI yet -- UDFs registered
+against this module use ``HANDLER = 'goldenmatch_udfs.<func>'`` (or,
+equivalently, ``goldenmatch.snowflake.udfs.<func>``) via a manual
+``CREATE FUNCTION`` / ``CREATE PROCEDURE`` today. This module IS that
+handler catalog.
 
 ## Phase 1: scalar UDFs (this module, working)
 
@@ -25,9 +26,13 @@ the empty string as ``db_path`` to pick up the default file
 
 Operations that need a Snowpark ``Session`` -- because they read
 or write Snowflake tables -- are scaffolded with clear
-NotImplementedError messages and inline TODO markers. These ship
-in a follow-up PR once the Snowflake-native ``MemoryStore`` and
-``IdentityStore`` backends land.
+NotImplementedError messages and inline TODO markers. The
+Snowflake-native ``IdentityStore`` backend has landed; ``correction_add``
+still awaits a Snowflake-native ``MemoryStore`` backend. The other five
+(``scan_table`` / ``health_score`` / the three ``Dedupe*`` handlers) were
+never blocked on a store at all -- see
+``packages/dbt/goldensuite/docs/snowflake-handlers.md`` for what each
+one is actually waiting on.
 
   - ``correction_add`` (writes a Correction to MemoryStore)
   - ``scan_table`` / ``health_score`` (run GoldenCheck against a
@@ -327,7 +332,7 @@ def correction_add(decision: str, dataset: str, memory_path: str,
          ``goldenmatch.core.memory.store.Correction``.
       3. Return the Correction's UUID7 as the procedure result.
 
-    Tracking issue: see ``docs/snowflake-handlers.md``.
+    Tracking issue: see ``packages/dbt/goldensuite/docs/snowflake-handlers.md``.
     """
     raise NotImplementedError(
         "correction_add ships in Phase 2 of the Snowflake handler module. "
@@ -340,11 +345,11 @@ def scan_table(relation_name: str, domain: str) -> str:
     """Stored Procedure: ``goldenmatch.goldencheck_scan_table(...)``.
 
     Run GoldenCheck against a Snowflake relation. Phase 2 -- needs
-    a Snowpark Session to read the table into a Polars frame for
-    ``goldencheck.engine.scanner.scan_file`` (which currently
-    expects a file path).
+    a Snowpark Session to read the table into a Polars frame and
+    hand it to ``goldencheck.engine.scanner.scan_dataframe``, which
+    already accepts an in-memory table.
 
-    Tracking issue: ``docs/snowflake-handlers.md``.
+    Tracking issue: ``packages/dbt/goldensuite/docs/snowflake-handlers.md``.
     """
     raise NotImplementedError(
         "scan_table ships in Phase 2. Run `goldencheck scan <export>` "
@@ -370,7 +375,7 @@ class DedupeFull:
     Snowpark, calls ``goldenmatch.dedupe_df(df, config)``, writes
     the golden output back as the procedure result table.
 
-    Tracking issue: ``docs/snowflake-handlers.md``.
+    Tracking issue: ``packages/dbt/goldensuite/docs/snowflake-handlers.md``.
     """
 
     def process(self, input_table: str, config_json: str):  # noqa: D401

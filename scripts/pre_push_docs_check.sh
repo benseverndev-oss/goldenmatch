@@ -46,8 +46,18 @@ zero=0000000000000000000000000000000000000000
 # A brand-new branch has no remote_sha; origin/main is then the honest base.
 base=""
 head=""
-while read -r _local_ref local_sha _remote_ref remote_sha; do
+while read -r _local_ref local_sha remote_ref remote_sha; do
   [ "$local_sha" = "$zero" ] && continue          # branch deletion -- nothing to check
+  # Tags introduce no commits. Whatever a tag points at was already gated when
+  # the branch carrying it was pushed, so re-running the generators here only
+  # costs 30s. Worse, a tag is frequently cut at an OLDER commit -- the release
+  # back-fill tags each package at its version-bump commit -- and the flag rule
+  # below would then diff origin/main..<older sha> BACKWARDS and block the push
+  # over flags that main added after the tagged commit. Skip the ref entirely
+  # rather than trying to pick a base for it.
+  case "$remote_ref" in
+    refs/tags/*) continue ;;
+  esac
   head="$local_sha"
   if [ "$remote_sha" = "$zero" ]; then
     base=$(git rev-parse origin/main 2>/dev/null || echo "")
@@ -56,8 +66,17 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
   fi
 done
 
-# Nothing being pushed (all deletions, or empty stdin) -> nothing to gate.
+# Nothing being pushed (all deletions, all tags, or empty stdin) -> nothing to
+# gate.
 [ -n "$head" ] || exit 0
+
+# Test seam: report the range this push resolved to and stop, so the ref-parsing
+# rules above can be exercised without paying for the generators. Not read by
+# the hook.
+if [ "${GM_PREPUSH_PRINT_PLAN:-0}" = "1" ]; then
+  echo "base=$base head=$head"
+  exit 0
+fi
 
 echo "pre-push: checking derived docs (~30s; SKIP_DOCS_CHECK=1 to bypass)..." >&2
 

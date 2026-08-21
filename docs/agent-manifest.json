@@ -1303,7 +1303,7 @@
               "type": "str",
               "required": false,
               "default": "'sqlite'",
-              "description": "Storage backend for the identity graph ('sqlite' or 'postgres')."
+              "description": "Storage backend for the identity graph ('sqlite', 'postgres', 'mongo' or 'snowflake')."
             },
             {
               "name": "path",
@@ -1314,10 +1314,25 @@
             },
             {
               "name": "connection",
-              "type": "str | None",
+              "type": "str | dict | None",
               "required": false,
               "default": "None",
-              "description": "Database connection string used when the backend is postgres."
+              "description": "Connection for non-sqlite backends: a DSN string for postgres, a URI for mongo, or an account name / connector-kwargs dict for snowflake. A Snowpark Session is passed programmatically, not through config."
+            },
+            {
+              "name": "database",
+              "type": "str",
+              "required": false,
+              "default": "'goldenmatch'",
+              "description": "Database holding the identity tables for the snowflake backend, and the database name for the mongo backend."
+            },
+            {
+              "name": "schema_",
+              "type": "str",
+              "required": false,
+              "default": "'PUBLIC'",
+              "description": "Snowflake schema holding the identity tables.",
+              "alias": "schema"
             },
             {
               "name": "dataset",
