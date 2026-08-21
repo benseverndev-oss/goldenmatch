@@ -32,6 +32,12 @@ class _TxnRecordingStore:
     and every write call so a test can assert writes are transaction-scoped."""
 
     _backend = "postgres"
+    # resolve.py's bulk-fast-path gate is a capability check
+    # (``getattr(store, "supports_bulk", False)``), not a backend-name
+    # allowlist -- this fake implements the full bulk_* surface, so it must
+    # advertise the capability the same way the real postgres/sqlite/snowflake
+    # stores do.
+    supports_bulk = True
 
     def __init__(self, preexisting: dict[str, str] | None = None):
         self.events: list[str] = []

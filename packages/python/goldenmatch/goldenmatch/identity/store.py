@@ -896,6 +896,10 @@ class IdentityStore:
             with self._conn.transaction():
                 yield
             return
+        if self._backend == "snowflake":
+            with self._sf.bulk_writes():
+                yield
+            return
         if (
             self._backend != "sqlite"
             or not _sqlite_batch_writes_enabled()
@@ -1021,6 +1025,9 @@ class IdentityStore:
             self._sqlite_pending = 0
 
     def bulk_upsert_identities(self, df: Any) -> None:
+        if self._backend == "snowflake":
+            self._sf.bulk_upsert_identities(df)
+            return
         if self._backend == "sqlite":
             if df.height == 0:
                 return
@@ -1115,6 +1122,9 @@ class IdentityStore:
             cur.execute("DROP TABLE IF EXISTS _stage_identity_nodes")
 
     def bulk_upsert_records(self, df: Any) -> None:
+        if self._backend == "snowflake":
+            self._sf.bulk_upsert_records(df)
+            return
         if self._backend == "sqlite":
             if df.height == 0:
                 return
@@ -1200,6 +1210,9 @@ class IdentityStore:
             cur.execute("DROP TABLE IF EXISTS _stage_source_records")
 
     def bulk_add_edges(self, df: Any) -> None:
+        if self._backend == "snowflake":
+            self._sf.bulk_add_edges(df)
+            return
         if self._backend == "sqlite":
             if df.height == 0:
                 return
@@ -1299,6 +1312,9 @@ class IdentityStore:
             cur.execute("DROP TABLE IF EXISTS _stage_evidence_edges")
 
     def bulk_emit_events(self, df: Any) -> None:
+        if self._backend == "snowflake":
+            self._sf.bulk_emit_events(df)
+            return
         if self._backend == "sqlite":
             if df.height == 0:
                 return

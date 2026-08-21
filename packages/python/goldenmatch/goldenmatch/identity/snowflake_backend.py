@@ -9,6 +9,7 @@ no-op the resolver relies on.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 from collections.abc import Iterable
 from datetime import datetime
@@ -41,12 +42,29 @@ from goldenmatch.snowflake._store_sql import (
     stage_and_merge,
 )
 
+_NODE_COLS = [
+    "entity_id", "status", "merged_into", "golden_record", "confidence",
+    "dataset", "created_at", "updated_at",
+]
 _NODE_UPDATE = [
     "status", "merged_into", "golden_record", "confidence", "dataset",
     "updated_at",
 ]
+_RECORD_COLS = [
+    "record_id", "source", "source_pk", "record_hash", "entity_id",
+    "payload", "dataset", "first_seen_at", "last_seen_at",
+]
 _RECORD_UPDATE = ["record_hash", "entity_id", "payload", "last_seen_at"]
+_EDGE_COLS = [
+    "entity_id", "record_a_id", "record_b_id", "kind", "score",
+    "matchkey_name", "controller_snapshot", "run_name", "dataset",
+    "actor", "trust", "recorded_at",
+]
 _EDGE_KEY = ["entity_id", "record_a_id", "record_b_id", "kind", "run_name"]
+_EVENT_COLS = [
+    "entity_id", "kind", "payload", "run_name", "dataset",
+    "actor", "trust", "recorded_at",
+]
 
 
 def _dumps(value: Any) -> str | None:
@@ -1075,6 +1093,122 @@ class SnowflakeIdentityStore:
                 (dataset,),
             )
         return [IdentityStore._row_to_seal(r) for r in rows]
+
+    # ----- bulk / batching (#2699) -----------------------------------------
+
+    def bulk_upsert_identities(self, df: Any) -> None:
+        """Staged MERGE, the Snowflake analogue of the Postgres COPY fast path.
+
+        Mirrors ``IdentityStore.bulk_upsert_identities`` (store.py:1023):
+        missing columns are filled with None so callers need not carry all
+        eight.
+        """
+        if df.height == 0:
+            return
+        import polars as pl  # noqa: PLC0415
+
+        missing = [c for c in _NODE_COLS if c not in df.columns]
+        if missing:
+            df = df.with_columns([pl.lit(None).alias(c) for c in missing])
+        rows = df.select(_NODE_COLS).to_dicts()
+        stage_and_merge(
+            self._conn, "identity_nodes", rows, ["entity_id"],
+            update_cols=_NODE_UPDATE, json_cols=["golden_record"],
+            database=self._database, schema=self._schema,
+        )
+
+    def bulk_upsert_records(self, df: Any) -> None:
+        """Staged MERGE for ``source_records``, carrying ``payload`` like the
+        SQLite/Postgres bulk paths (store.py:1117) so a brand-new cluster's
+        source-record payloads are not silently dropped on the bulk route."""
+        if df.height == 0:
+            return
+        import polars as pl  # noqa: PLC0415
+
+        missing = [c for c in _RECORD_COLS if c not in df.columns]
+        if missing:
+            df = df.with_columns([pl.lit(None).alias(c) for c in missing])
+        rows = df.select(_RECORD_COLS).to_dicts()
+        stage_and_merge(
+            self._conn, "source_records", rows, ["record_id"],
+            update_cols=_RECORD_UPDATE, json_cols=["payload"],
+            database=self._database, schema=self._schema,
+        )
+
+    def bulk_add_edges(self, df: Any) -> None:
+        """Staged insert-if-absent MERGE for ``evidence_edges``.
+
+        ``update_cols=None`` matches the per-row ``add_edge``: no ``WHEN
+        MATCHED`` branch, so a replayed edge is skipped rather than
+        overwritten. Rows are expected pre-canonicalized (``record_a_id`` <
+        ``record_b_id``) by the caller, same as the SQLite/Postgres bulk
+        paths (store.py:1202) -- this method does not call
+        ``canon_record_pair`` itself.
+        """
+        if df.height == 0:
+            return
+        import polars as pl  # noqa: PLC0415
+
+        missing = [c for c in _EDGE_COLS if c not in df.columns]
+        if missing:
+            df = df.with_columns([pl.lit(None).alias(c) for c in missing])
+        rows = df.select(_EDGE_COLS).to_dicts()
+        stage_and_merge(
+            self._conn, "evidence_edges", rows, _EDGE_KEY,
+            update_cols=None, json_cols=["controller_snapshot"],
+            database=self._database, schema=self._schema,
+        )
+
+    def bulk_emit_events(self, df: Any) -> None:
+        """Append-only bulk write for ``identity_events``.
+
+        No dedupe key -- ``identity_events`` has nothing for a MERGE to key
+        on (see ``emit_event``) -- so this writes straight through with
+        ``write_pandas`` rather than via ``stage_and_merge``. ``entry_hash``
+        is left NULL, matching the SQLite/Postgres bulk paths
+        (store.py:1301): the seal/verify path already hashes NULL-entry_hash
+        rows on the fly, so the tamper-evidence guarantee holds without
+        computing a per-row hash on this hot path.
+        """
+        if df.height == 0:
+            return
+        import pandas as pd  # noqa: PLC0415
+        import polars as pl  # noqa: PLC0415
+        import snowflake.connector.pandas_tools as pandas_tools  # noqa: PLC0415
+
+        missing = [c for c in _EVENT_COLS if c not in df.columns]
+        if missing:
+            df = df.with_columns([pl.lit(None).alias(c) for c in missing])
+        rows = df.select(_EVENT_COLS).to_dicts()
+        pdf = pd.DataFrame(
+            [[r.get(c) for c in _EVENT_COLS] for r in rows],
+            columns=[c.upper() for c in _EVENT_COLS],
+        )
+        pandas_tools.write_pandas(
+            self._conn, pdf, "IDENTITY_EVENTS",
+            database=self._database, schema=self._schema,
+            auto_create_table=False,
+        )
+
+    @contextlib.contextmanager
+    def bulk_writes(self):
+        """One transaction around a batch of writes.
+
+        Snowflake autocommits per statement otherwise, so a per-record
+        resolve pays a commit per write -- the same cost ``bulk_writes`` was
+        added to remove on Postgres (#1886) and SQLite (#2105).
+        """
+        execute(self._conn, "BEGIN")
+        try:
+            yield
+        except BaseException:
+            execute(self._conn, "ROLLBACK")
+            raise
+        execute(self._conn, "COMMIT")
+
+    def bulk_flush_checkpoint(self) -> None:
+        """No-op: there is no client-side accumulator to flush."""
+        return None
 
 
 _REL_KEY = ["entity_a_id", "entity_b_id", "kind", "shared_value"]
