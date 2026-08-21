@@ -4,6 +4,16 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.5.1] - 2026-08-20
+
+### Changed
+
+- **`goldenmatch` floor raised to `>=3.14`.** 3.14.0 takes distributed
+  Fellegi-Sunter training and scoring at 250M from 2,765.8s to 669.96s (4.13x)
+  with 3.1x less executor CPU and zero spill, and the trained model is
+  byte-identical -- so there is nothing for a suite install to weigh up and no
+  reason to leave users on the slower path.
+
 ## [0.5.0] - 2026-08-15
 
 Floor bumps for the 2026-08-15 repo-wide cut. Every suite member was

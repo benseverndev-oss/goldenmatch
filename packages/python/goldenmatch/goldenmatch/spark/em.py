@@ -96,6 +96,83 @@ def gamma_columns(mk: Any, lhs: str, rhs: str, *,
     return out
 
 
+def gamma_frame(joined: Any, mk: Any, *, lhs: str, rhs: str,
+                scorer_udf: str | None = None,
+                transform_udf: str | None = None,
+                keep: list[tuple[Any, str]] | None = None) -> Any:
+    """``joined`` projected to one ``gamma_<field>`` column per field.
+
+    The same levels :func:`gamma_columns` produces, in the same order, from the
+    same functions -- but the per-field SIMILARITY is projected by name before
+    the level ladder reads it.
+
+    ## Why the extra projection
+
+    ``fs_level_expr`` sums ``when(sim >= t, 1)`` once per threshold, so an
+    inline ``sim`` is named once per threshold, and ``sim`` contains the jar
+    scorer call. MEASURED at 50M, with the layer aggregates matched so the
+    difference is bucketing alone:
+
+        raw similarities        71.10s
+        + bucketing, inline    109.67s   (+38.57)
+        + bucketing, projected  73.31s   (+2.21)
+
+    Projecting removes 36.4s of 38.57s -- 94% of it. Catalyst does NOT collapse
+    the two projections and re-inline the similarity, which was the way this
+    could have failed; it was measured beside the inline form rather than
+    assumed. The same move `_score_candidates_jvm_rowwise` already makes for its
+    per-slot scores.
+
+    This pays twice over: the gamma layer is the dominant cost of the SCORE
+    stage and of the COUNTS stage, and both read their levels from here.
+
+    ``keep`` carries extra columns through the projection as ``(expr, name)``
+    pairs. A caller that needs the pair's ids alongside the levels cannot add
+    them afterwards, because by then the source aliases the expression referred
+    to have been consumed. Names are passed EXPLICITLY rather than recovered
+    from the column: rendering a Column back to a string to find its alias is
+    different under Spark Connect than under a classic session, and a name-
+    sniffing helper would work in tests and fail on the tier this is for.
+    """
+    from pyspark.sql import functions as F
+
+    from goldenmatch.core.probabilistic import fs_missing_mode
+    from goldenmatch.spark.probabilistic import (
+        _field_similarity_and_observed,
+        fs_level_expr,
+    )
+
+    missing_mode = fs_missing_mode(mk)
+    vec = _vector_similarities(mk, lhs, rhs, scorer_udf=scorer_udf,
+                               transform_udf=transform_udf)
+
+    sim_parts = []
+    extra = [(e, n) for e, n in (keep or [])]
+    for i, f in enumerate(mk.fields):
+        if vec is not None:
+            _sim, observed = _field_similarity_and_observed(
+                f, lhs, rhs, scorer_udf=None, transform_udf=transform_udf
+            )
+            sim = vec[i]
+        else:
+            sim, observed = _field_similarity_and_observed(
+                f, lhs, rhs, scorer_udf=scorer_udf, transform_udf=transform_udf
+            )
+        sim_parts.append(sim.alias(f"__sim_{i}"))
+        sim_parts.append(observed.alias(f"__obs_{i}"))
+
+    projected = joined.select(
+        *sim_parts, *[e.alias(n) for e, n in extra]
+    )
+    levels = [
+        fs_level_expr(
+            f, F.col(f"__sim_{i}"), F.col(f"__obs_{i}"), missing_mode=missing_mode
+        ).alias(f"gamma_{f.resolved_field}")
+        for i, f in enumerate(mk.fields)
+    ]
+    return projected.select(*levels, *[F.col(n) for _e, n in extra])
+
+
 def _vector_scorer_enabled() -> bool:
     """Is the one-call-per-pair scorer on? OPT-IN, default OFF.
 
@@ -254,12 +331,17 @@ def agreement_pattern_counts(
     """
     from pyspark.sql import functions as F
 
-    gammas = gamma_columns(
-        mk, lhs, rhs, scorer_udf=scorer_udf, transform_udf=transform_udf
-    )
     names = [f"gamma_{f.resolved_field}" for f in mk.fields]
+    # `gamma_frame`, not `gamma_columns` + select: it names the per-field
+    # similarity before the level ladder reads it, and the ladder reads it once
+    # per threshold. MEASURED at 50M, that projection is worth 36.4s of the
+    # 38.57s the bucketing costs -- and this stage is gamma-dominated, so it is
+    # most of what the stage does that is not the join.
     grouped = (
-        joined.select(*gammas)
+        gamma_frame(
+            joined, mk, lhs=lhs, rhs=rhs,
+            scorer_udf=scorer_udf, transform_udf=transform_udf,
+        )
         .groupBy(*[F.col(n) for n in names])
         .agg(F.count(F.lit(1)).alias("agreement_pattern_count"))
     )
@@ -623,8 +705,7 @@ def train_em_distributed(
         CAND_LHS,
         CAND_RHS,
         blocking_passes,
-        join_candidates_to_sources,
-        pass_candidates,
+        pass_joined,
     )
 
     # Refuse BEFORE submitting anything. `train_em_from_counts` rejects these
@@ -660,11 +741,13 @@ def train_em_distributed(
     sessions = []
     for i, key_config in enumerate(passes):
         fields = tuple(key_config.fields)
-        candidates = pass_candidates(
+        # `pass_joined`, not pass_candidates + join_candidates_to_sources: the
+        # block self-join has already co-located both records of every pair, and
+        # projecting them away only to fetch them back costs two more shuffles
+        # and two more SORTS of a frame with O(pairs) rows. See
+        # `pass_candidates_joined`.
+        joined = pass_joined(
             source_df, key_config, id_col=id_col, transform_udf=transform_udf
-        )
-        joined = join_candidates_to_sources(
-            candidates, source_df, id_col=id_col
         )
         counts = agreement_pattern_counts(
             joined, mk, lhs=CAND_LHS, rhs=CAND_RHS,

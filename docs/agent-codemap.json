@@ -7996,11 +7996,15 @@
           "purpose": "P4: run the Spark tier from a ``GoldenMatchConfig`` instead of scalars.",
           "defines": [
             "_block_key_column",
+            "_blocked_by_an_earlier_pass",
             "_default_golden_cols",
             "_field_score_parts",
             "_field_strategy",
+            "_fused_pass_join",
             "_matchkey_score_expr",
             "_matchkey_threshold",
+            "_pair_id_parts",
+            "_pass_key_columns",
             "_pick_fields",
             "_refuse_probabilistic",
             "_reshape_scores",
@@ -8014,11 +8018,16 @@
             "_weighted_scorer_slots",
             "blocking_passes",
             "build_golden_from_rules",
+            "fused_block_join_enabled",
+            "fused_pass_frames",
             "generate_candidates",
             "join_candidates_to_sources",
             "pass_candidates",
+            "pass_candidates_joined",
+            "pass_joined",
             "run_config_pipeline",
             "score_candidates",
+            "score_source",
             "weighted_pair_score"
           ],
           "imports": [
@@ -8067,6 +8076,7 @@
             "agreement_pattern_counts",
             "estimate_u_distributed",
             "gamma_columns",
+            "gamma_frame",
             "random_pairs",
             "tf_value_frequencies",
             "train_em_distributed"
@@ -10322,6 +10332,7 @@
             "_tool_scan",
             "_tool_validate",
             "create_server",
+            "resolve_http_auth_token",
             "run_server",
             "run_server_http"
           ],
@@ -12820,6 +12831,7 @@
             "create_server",
             "explain_pipeline_tool",
             "list_stages_tool",
+            "resolve_http_auth_token",
             "run_pipeline_tool",
             "run_server",
             "run_server_http",
@@ -13238,6 +13250,7 @@
             "_handle_map",
             "_handle_validate",
             "create_server",
+            "resolve_http_auth_token",
             "run_server",
             "run_server_http"
           ],
@@ -13794,6 +13807,7 @@
             "detect_regressions_tool",
             "get_trend_tool",
             "list_analyzers_tool",
+            "resolve_http_auth_token",
             "run_server",
             "run_server_http"
           ],
