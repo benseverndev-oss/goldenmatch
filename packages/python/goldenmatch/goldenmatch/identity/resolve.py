@@ -715,8 +715,11 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
     # negative_evidence are left NULL on a brand-new same_as edge, because the
     # per-row path does not set them there either.
     _bulk_backend = getattr(store, "_backend", None)
+    # Capability, not a backend-name allowlist: a backend opts into the staged
+    # fast path by implementing bulk_*. Without this a Snowflake store takes
+    # the per-row path and every write is a warehouse round-trip (#2699).
     use_bulk_fast_path = (
-        _bulk_backend in ("postgres", "sqlite") and _bulk_fast_path_enabled()
+        getattr(store, "supports_bulk", False) and _bulk_fast_path_enabled()
     )
     bulk_flush_threshold = batch.flush_rows
     bulk_node_rows: list[dict[str, Any]] = []
@@ -744,9 +747,15 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
     # entities ONCE; the guard becomes an in-memory set test. Empty (instant) on a
     # from-empty build; kept exact as CREATED events are added in-loop. SQL backends
     # only -- mongo / minimal fake stores fall back to ``has_run_event``.
+    # Snowflake included (#2699 task 7): ``run_event_entities`` is a plain
+    # ``SELECT DISTINCT entity_id ... WHERE run_name = %s AND kind = %s``
+    # (snowflake_backend.py) with no Postgres/SQLite-specific behaviour, so
+    # the preload is exactly as safe there and closes the same O(n^2)
+    # ``has_run_event``-per-cluster gap the SQLite/Postgres branches already
+    # avoid.
     _created_events: set[str] | None = (
         store.run_event_entities(run_name, EventKind.CREATED.value)
-        if getattr(store, "_backend", None) in ("sqlite", "postgres")
+        if getattr(store, "_backend", None) in ("sqlite", "postgres", "snowflake")
         and hasattr(store, "run_event_entities") else None
     )
 

@@ -1480,6 +1480,8 @@ def _open_identity_store(config: GoldenMatchConfig):
             backend=config.identity.backend,
             path=config.identity.path,
             connection=config.identity.connection,
+            database=config.identity.database,
+            schema=config.identity.schema_,
         )
     except Exception as e:
         logger.warning("Identity store init failed, continuing without: %s", e)
@@ -1534,10 +1536,16 @@ def _resolve_identities(
                 config.identity.backend,
             )
             return None
-        if not config.identity.connection:
+        # ``connection`` is str | dict | None -- the dict form is the Snowflake
+        # connector-kwargs shape. The distributed path takes a Postgres DSN
+        # string only, so narrow here rather than letting a dict reach
+        # ``resolve_identities_distributed(dsn=...)`` and fail deep inside it.
+        dsn = config.identity.connection
+        if not isinstance(dsn, str) or not dsn:
             logger.warning(
                 "Distributed identity resolution requires identity.connection "
-                "(Postgres DSN). Skipping identity."
+                "to be a Postgres DSN string; got %r. Skipping identity.",
+                type(dsn).__name__ if dsn else None,
             )
             return None
         try:
@@ -1547,7 +1555,7 @@ def _resolve_identities(
             mk_name = matchkeys[0].name if matchkeys else None
             summary = resolve_identities_distributed(
                 clusters, _as_polars_df(df), scored_pairs, mk_name,
-                dsn=config.identity.connection,
+                dsn=dsn,
                 run_name=run_name,
                 dataset=config.identity.dataset,
                 source_pk_col=config.identity.source_pk_column,

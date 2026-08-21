@@ -4,10 +4,12 @@ The Snowflake-side surface in this package ships in two halves:
 
 | Half | Where it lives | What it does |
 |---|---|---|
-| **Outside** | `dbt-goldensuite/macros/`, `cli/snowflake.py` | How Snowflake calls into goldenmatch (CREATE FUNCTION DDL, dbt macros). |
+| **Outside** | `dbt-goldensuite/macros/` | How Snowflake calls into goldenmatch (CREATE FUNCTION DDL, dbt macros). |
 | **Inside** | `goldenmatch.snowflake.udfs` | The Python functions Snowflake's UDF / Stored Procedure HANDLER clauses point at. |
 
-PR #553 shipped the outside. This module ships the inside.
+PR #553 shipped the dbt macros half of the outside; `cli/snowflake.py`
+(the registration CLI that would `CREATE FUNCTION`/`CREATE PROCEDURE`
+against a live account) has not shipped. This module ships the inside.
 
 ## Phase 1 -- scalar UDFs (working)
 
@@ -54,6 +56,20 @@ sandboxed and the IMPORTS filesystem is read-only anyway, so any
 write attempt errors fast. Writes happen via Phase 2 stored
 procedures.
 
+### Identity backends
+
+`goldenmatch.identity.store.IdentityStore` supports four backends;
+the UDF handlers above are the SQLite-on-stage read path specifically.
+A Snowpark stored-procedure caller with a live `Session` can instead
+open the identity graph directly against Snowflake tables:
+
+| Backend | Storage | Notes |
+|---|---|---|
+| `sqlite` | Local file | Default. What the Phase 1 UDF handlers above read from a staged IMPORTS file. |
+| `postgres` | Postgres | `psycopg`-based; supports pipeline mode and bulk COPY. |
+| `mongo` | MongoDB | Document store; no `bulk_*` fast path. |
+| `snowflake` | Snowflake tables | `IdentityStore(backend="snowflake", connection=..., database=..., schema=...)`. `MERGE`-based writes (Snowflake enforces neither `PRIMARY KEY` nor `UNIQUE`), and a `bulk_*` staged-write fast path via `write_pandas` + `MERGE`. See `goldenmatch.identity.snowflake_backend.SnowflakeIdentityStore`. |
+
 ## Phase 2 -- stored procedures (scaffolds + NotImplementedError)
 
 Operations that read or write Snowflake tables can't run as pure
@@ -63,9 +79,9 @@ get. Phase 2 ships the SP variants in a follow-up.
 | Scaffold | Reason it's deferred |
 |---|---|
 | `correction_add` | Writes to MemoryStore -- needs a Snowflake-native MemoryStore backend (writes via Session, not SQLite-on-stage). |
-| `scan_table` | Reads a Snowflake relation into a Polars frame for `goldencheck.engine.scanner.scan_file` (which currently expects a file path). |
-| `health_score` | Same Session requirement as `scan_table`. |
-| `DedupeFull` / `DedupeClusters` / `DedupePairs` | Read the input relation, call `goldenmatch.dedupe_df(df, cfg)`, write the output back -- all Session-bound. |
+| `scan_table` | No longer blocked on a store: needs only a Snowpark Session to read the relation into a Polars frame and hand it to `goldencheck.engine.scanner.scan_dataframe`, which already accepts an in-memory table. |
+| `health_score` | No longer blocked on a store: same Session-to-profile path as `scan_table`. |
+| `DedupeFull` / `DedupeClusters` / `DedupePairs` | Read the input relation, call `goldenmatch.dedupe_df(df, cfg)`, write the output back. Wait on the registration CLI (`cli/snowflake.py`, not yet shipped) to expose them as callable Stored Procedures. |
 
 Each scaffold raises `NotImplementedError("... ships in Phase 2 ...")`
 with a workable remediation hint pointing at out-of-band paths today.

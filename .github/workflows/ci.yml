@@ -364,6 +364,14 @@ jobs:
       # optional `ontology` extra; install it so tests/test_ontology.py RUN rather
       # than importorskip-SKIP (a false green). Same rationale as the extras above.
       - run: uv pip install -e 'packages/python/goldenmatch[ontology]'
+      # The Snowflake IdentityStore backend (goldenmatch.identity.snowflake_backend
+      # / goldenmatch.snowflake) imports snowflake-connector-python from the
+      # optional `snowflake` extra, and tests/snowflake/ runs it against the
+      # fakesnow fake (root dev group -- a member extra would never be installed
+      # by `uv sync --all-packages`). Install the extra so those six suites RUN
+      # rather than importorskip-SKIP (a false green). Same rationale as the
+      # extras above.
+      - run: uv pip install -e 'packages/python/goldenmatch[snowflake]'
       # Suite-wide lints run once (shard 1), not per shard.
       - if: matrix.shard == 1
         run: uv run ruff check packages/python/goldenmatch

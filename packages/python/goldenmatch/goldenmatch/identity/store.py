@@ -309,10 +309,14 @@ class IdentityStore:
         self,
         backend: str = "sqlite",
         path: str = ".goldenmatch/identity.db",
-        connection: str | None = None,
+        # str for the DSN backends (postgres, mongo); the snowflake backend
+        # also accepts a dict of connector kwargs, which is why this is wider
+        # than a DSN. Each backend narrows it in its own branch below.
+        connection: str | dict[str, Any] | None = None,
         pool: Any = None,
         database: str = "goldenmatch",
         client: Any = None,
+        schema: str = "PUBLIC",
     ) -> None:
         self._backend = backend
         # SQLite write batching (#2105). ``_sqlite_batch`` is 0 outside a
@@ -338,6 +342,12 @@ class IdentityStore:
         # returns below. The SQL paths see ``self._mongo is None`` and skip
         # the dispatch.
         self._mongo: Any = None
+        # SnowflakeIdentityStore holds a warehouse connection. Delegated by the
+        # per-method ``if self._backend == "snowflake"`` early returns below,
+        # exactly as the Mongo backend is. Set alongside ``self._mongo`` (ahead
+        # of both backend-specific ``return``s) so every other backend still
+        # has the attribute.
+        self._sf: Any = None
         if backend == "mongo":
             # Defer the import so the SQL backends don't pay for pymongo.
             from goldenmatch.identity.mongo_backend import (
@@ -349,6 +359,19 @@ class IdentityStore:
             # No SQL connection for mongo -- _conn stays unset and any SQL
             # method that gets called without a dispatch branch hits the
             # AttributeError fast, signaling a missing branch.
+            return
+        if backend == "snowflake":
+            from goldenmatch.identity.snowflake_backend import (  # noqa: PLC0415
+                SnowflakeIdentityStore,
+            )
+            # ``database`` is shared with the mongo branch above, which is
+            # case-SENSITIVE, so the default stays lowercase here.
+            # ``SnowflakeIdentityStore`` folds it to the case Snowflake
+            # actually stores (see ``normalize_identifier``), which is what
+            # reconciles this default with that constructor's own.
+            self._sf = SnowflakeIdentityStore(
+                connection=connection, database=database, schema=schema,
+            )
             return
         if backend == "sqlite":
             import sqlite3  # noqa: PLC0415 -- lazy, see #364
@@ -389,7 +412,19 @@ class IdentityStore:
         if self._backend == "mongo":
             self._mongo.close()
             return
+        if self._backend == "snowflake":
+            self._sf.close()
+            return
         self._conn.close()
+
+    @property
+    def supports_bulk(self) -> bool:
+        """True when the backend implements the ``bulk_*`` staged-write path.
+
+        ``resolve_clusters`` branches on this rather than on a backend-name
+        allowlist, so a new backend opts into the fast path by implementing it.
+        """
+        return self._backend in ("postgres", "sqlite", "snowflake")
 
     def __enter__(self) -> IdentityStore:
         return self
@@ -864,9 +899,22 @@ class IdentityStore:
         partially-committed graph -- an improvement over the autocommit path,
         which the caller already treats as all-or-nothing (it has no per-cluster
         recovery).
+
+        Also a no-op for Snowflake -- deliberately, not by omission. See
+        ``SnowflakeIdentityStore.bulk_writes``'s own docstring: Snowflake DDL
+        (the ``CREATE``/``DROP TRANSIENT TABLE`` inside the staged bulk
+        methods) commits any open transaction implicitly, so an explicit
+        ``BEGIN`` spanning both the per-record writes and the bulk flushes in
+        this scope cannot deliver the atomicity this docstring promises for
+        Postgres/SQLite. The guarantee there is convergence via idempotent
+        MERGE, not atomicity.
         """
         if self._backend == "postgres":
             with self._conn.transaction():
+                yield
+            return
+        if self._backend == "snowflake":
+            with self._sf.bulk_writes():
                 yield
             return
         if (
@@ -994,6 +1042,9 @@ class IdentityStore:
             self._sqlite_pending = 0
 
     def bulk_upsert_identities(self, df: Any) -> None:
+        if self._backend == "snowflake":
+            self._sf.bulk_upsert_identities(df)
+            return
         if self._backend == "sqlite":
             if df.height == 0:
                 return
@@ -1088,6 +1139,9 @@ class IdentityStore:
             cur.execute("DROP TABLE IF EXISTS _stage_identity_nodes")
 
     def bulk_upsert_records(self, df: Any) -> None:
+        if self._backend == "snowflake":
+            self._sf.bulk_upsert_records(df)
+            return
         if self._backend == "sqlite":
             if df.height == 0:
                 return
@@ -1173,6 +1227,9 @@ class IdentityStore:
             cur.execute("DROP TABLE IF EXISTS _stage_source_records")
 
     def bulk_add_edges(self, df: Any) -> None:
+        if self._backend == "snowflake":
+            self._sf.bulk_add_edges(df)
+            return
         if self._backend == "sqlite":
             if df.height == 0:
                 return
@@ -1272,6 +1329,9 @@ class IdentityStore:
             cur.execute("DROP TABLE IF EXISTS _stage_evidence_edges")
 
     def bulk_emit_events(self, df: Any) -> None:
+        if self._backend == "snowflake":
+            self._sf.bulk_emit_events(df)
+            return
         if self._backend == "sqlite":
             if df.height == 0:
                 return
@@ -1369,6 +1429,9 @@ class IdentityStore:
         if self._backend == "mongo":
             self._mongo.upsert_identity(node)
             return
+        if self._backend == "snowflake":
+            self._sf.upsert_identity(node)
+            return
         gr = json.dumps(node.golden_record) if node.golden_record is not None else None
         self._exec(
             """
@@ -1394,6 +1457,8 @@ class IdentityStore:
     def get_identity(self, entity_id: str) -> IdentityNode | None:
         if self._backend == "mongo":
             return self._mongo.get_identity(entity_id)
+        if self._backend == "snowflake":
+            return self._sf.get_identity(entity_id)
         row = self._fetchone(
             "SELECT * FROM identity_nodes WHERE entity_id = ?", (entity_id,)
         )
@@ -1418,6 +1483,8 @@ class IdentityStore:
                 if node is not None:
                     out[eid] = node
             return out
+        if self._backend == "snowflake":
+            return self._sf.get_identities(ids)
         # Chunk the IN-list (SQLite host-parameter cap; harmless on postgres).
         out = {}
         _CHUNK = 900
@@ -1443,6 +1510,10 @@ class IdentityStore:
             return self._mongo.list_identities(
                 dataset=dataset, status=status, limit=limit, offset=offset,
             )
+        if self._backend == "snowflake":
+            return self._sf.list_identities(
+                dataset=dataset, status=status, limit=limit, offset=offset,
+            )
         clauses: list[str] = []
         params: list[Any] = []
         if dataset is not None:
@@ -1463,6 +1534,8 @@ class IdentityStore:
     def count_identities(self, dataset: str | None = None) -> int:
         if self._backend == "mongo":
             return self._mongo.count_identities(dataset=dataset)
+        if self._backend == "snowflake":
+            return self._sf.count_identities(dataset=dataset)
         if dataset is None:
             row = self._fetchone("SELECT COUNT(*) AS n FROM identity_nodes", ())
         else:
@@ -1480,6 +1553,11 @@ class IdentityStore:
     ) -> None:
         if self._backend == "mongo":
             self._mongo.retire_identity(entity_id, merged_into=merged_into)
+            return
+        if self._backend == "snowflake":
+            self._sf.retire_identity(
+                entity_id, merged_into=merged_into, run_name=run_name,
+            )
             return
         new_status = (
             IdentityStatus.MERGED_INTO.value
@@ -1517,6 +1595,8 @@ class IdentityStore:
         giant components the way a pre-cluster record-level merge does."""
         if self._backend == "mongo":
             raise NotImplementedError("merge_by_shared_field: not supported on mongo")
+        if self._backend == "snowflake":
+            return self._sf.merge_by_shared_field(dataset, field, max_group)
         fields = [field] if isinstance(field, str) else list(field)
         if not fields:
             raise ValueError("merge_by_shared_field: no fields given")
@@ -1604,6 +1684,9 @@ class IdentityStore:
         if self._backend == "mongo":
             self._mongo.upsert_record(rec)
             return
+        if self._backend == "snowflake":
+            self._sf.upsert_record(rec)
+            return
         payload = json.dumps(rec.payload) if rec.payload is not None else None
         self._exec(
             """
@@ -1627,6 +1710,8 @@ class IdentityStore:
     def get_record(self, record_id: str) -> SourceRecord | None:
         if self._backend == "mongo":
             return self._mongo.get_record(record_id)
+        if self._backend == "snowflake":
+            return self._sf.get_record(record_id)
         row = self._fetchone(
             "SELECT * FROM source_records WHERE record_id = ?", (record_id,)
         )
@@ -1635,6 +1720,8 @@ class IdentityStore:
     def get_records_for_entity(self, entity_id: str) -> list[SourceRecord]:
         if self._backend == "mongo":
             return self._mongo.get_records_for_entity(entity_id)
+        if self._backend == "snowflake":
+            return self._sf.get_records_for_entity(entity_id)
         rows = self._fetchall(
             "SELECT * FROM source_records WHERE entity_id = ? ORDER BY first_seen_at",
             (entity_id,),
@@ -1644,6 +1731,8 @@ class IdentityStore:
     def find_entity_by_record(self, record_id: str) -> str | None:
         if self._backend == "mongo":
             return self._mongo.find_entity_by_record(record_id)
+        if self._backend == "snowflake":
+            return self._sf.find_entity_by_record(record_id)
         row = self._fetchone(
             "SELECT entity_id FROM source_records WHERE record_id = ?", (record_id,)
         )
@@ -1652,6 +1741,8 @@ class IdentityStore:
     def lookup_entity_ids(self, record_ids: Iterable[str]) -> dict[str, str]:
         if self._backend == "mongo":
             return self._mongo.lookup_entity_ids(record_ids)
+        if self._backend == "snowflake":
+            return self._sf.lookup_entity_ids(record_ids)
         ids = list(record_ids)
         if not ids:
             return {}
@@ -1700,6 +1791,9 @@ class IdentityStore:
             raise NotImplementedError(
                 "block-key index is not supported on the mongo backend"
             )
+        if self._backend == "snowflake":
+            self._sf.index_record_block_keys(record_id, entity_id, keys)
+            return
         rows = [
             (record_id, entity_id, str(bk), str(ps))
             for ps, bk in keys
@@ -1747,6 +1841,8 @@ class IdentityStore:
             raise NotImplementedError(
                 "block-key index is not supported on the mongo backend"
             )
+        if self._backend == "snowflake":
+            return self._sf.candidates_by_block_keys(keys)
         pairs = [(str(ps), str(bk)) for ps, bk in keys if bk is not None]
         if not pairs:
             return set()
@@ -1771,6 +1867,8 @@ class IdentityStore:
     def add_edge(self, edge: EvidenceEdge, *, return_id: bool = True) -> int | None:
         if self._backend == "mongo":
             return self._mongo.add_edge(edge)
+        if self._backend == "snowflake":
+            return self._sf.add_edge(edge, return_id=return_id)
         a, b = canon_record_pair(edge.record_a_id, edge.record_b_id)
         fs = json.dumps(edge.field_scores) if edge.field_scores else None
         ne = json.dumps(edge.negative_evidence) if edge.negative_evidence else None
@@ -1822,6 +1920,8 @@ class IdentityStore:
     def edges_for_entity(self, entity_id: str) -> list[EvidenceEdge]:
         if self._backend == "mongo":
             return self._mongo.edges_for_entity(entity_id)
+        if self._backend == "snowflake":
+            return self._sf.edges_for_entity(entity_id)
         rows = self._fetchall(
             "SELECT * FROM evidence_edges WHERE entity_id = ? ORDER BY recorded_at",
             (entity_id,),
@@ -1836,6 +1936,8 @@ class IdentityStore:
         -- used by the mediation workflow to list steward verdict edges."""
         if self._backend == "mongo":
             return self._mongo.edges_by_kind(kind, dataset=dataset)
+        if self._backend == "snowflake":
+            return self._sf.edges_by_kind(kind, dataset)
         if dataset is None:
             rows = self._fetchall(
                 "SELECT * FROM evidence_edges WHERE kind = ? "
@@ -1853,6 +1955,8 @@ class IdentityStore:
     def find_conflicts(self, dataset: str | None = None) -> list[EvidenceEdge]:
         if self._backend == "mongo":
             return self._mongo.find_conflicts(dataset=dataset)
+        if self._backend == "snowflake":
+            return self._sf.find_conflicts(dataset)
         if dataset is None:
             rows = self._fetchall(
                 "SELECT * FROM evidence_edges WHERE kind = 'conflicts_with' "
@@ -1874,6 +1978,8 @@ class IdentityStore:
         (#2198). Raises on mongo so the caller keeps its paged fallback."""
         if self._backend == "mongo":
             raise NotImplementedError("status_counts: mongo uses the paged fallback")
+        if self._backend == "snowflake":
+            return self._sf.status_counts(dataset)
         if dataset is None:
             rows = self._fetchall(
                 "SELECT status, COUNT(*) AS n FROM identity_nodes GROUP BY status", (),
@@ -1900,6 +2006,8 @@ class IdentityStore:
             raise NotImplementedError(
                 "active_record_stats: mongo uses the paged fallback"
             )
+        if self._backend == "snowflake":
+            return self._sf.active_record_stats(dataset)
         ds = "" if dataset is None else " AND n.dataset = ?"
         params: tuple = () if dataset is None else (dataset,)
         per_entity_rows = self._fetchall(
@@ -1941,6 +2049,10 @@ class IdentityStore:
         literal field. ``None`` groups on the raw value (SQL byte-identical)."""
         if self._backend == "mongo":
             raise NotImplementedError("relationship_groups: not supported on mongo")
+        if self._backend == "snowflake":
+            return self._sf.relationship_groups(
+                field, dataset, min_entities, max_entities, transform,
+            )
         if not _SAFE_FIELD.fullmatch(field):
             raise ValueError(f"unsafe relationship field name: {field!r}")
         # Perf (#2226-followup): the old shape extracted the payload field 3x per
@@ -1989,6 +2101,8 @@ class IdentityStore:
         we avoid -- so callers get a cheap, approximate view of the payload shape."""
         if self._backend == "mongo":
             raise NotImplementedError("sample_records: not supported on mongo")
+        if self._backend == "snowflake":
+            return self._sf.sample_records(dataset, limit)
         ds = "" if dataset is None else " AND dataset = ?"
         params: tuple = () if dataset is None else (dataset,)
         rows = self._fetchall(
@@ -2036,6 +2150,10 @@ class IdentityStore:
         cap and it masquerades as a good edge field."""
         if self._backend == "mongo":
             raise NotImplementedError("relationship_field_stats: not on mongo")
+        if self._backend == "snowflake":
+            return self._sf.relationship_field_stats(
+                field, dataset, min_entities, max_entities, transform,
+            )
         if not _SAFE_FIELD.fullmatch(field):
             raise ValueError(f"unsafe relationship field name: {field!r}")
         self._ensure_relationship_index(field)
@@ -2120,6 +2238,8 @@ class IdentityStore:
             return 0
         if self._backend == "mongo":
             raise NotImplementedError("add_relationships: not supported on mongo")
+        if self._backend == "snowflake":
+            return self._sf.add_relationships(rows)
         if self._backend == "postgres":
             sql = (
                 "INSERT INTO identity_relationships "
@@ -2156,6 +2276,8 @@ class IdentityStore:
         """
         if self._backend == "mongo":
             raise NotImplementedError("reconcile_relationships: not supported on mongo")
+        if self._backend == "snowflake":
+            return self._sf.reconcile_relationships(dataset, kind, desired)
         want: dict[tuple, tuple] = {}
         for a, b, k, field, val, _ds in desired:
             if a is None or b is None or a == b:
@@ -2222,6 +2344,8 @@ class IdentityStore:
         as ``{other_entity_id, kind, field, shared_value}``."""
         if self._backend == "mongo":
             raise NotImplementedError("get_relationships: not supported on mongo")
+        if self._backend == "snowflake":
+            return self._sf.get_relationships(entity_id)
         rows = self._fetchall(
             "SELECT entity_a_id, entity_b_id, kind, field, shared_value "
             "FROM identity_relationships "
@@ -2238,6 +2362,8 @@ class IdentityStore:
     def count_relationships(self) -> int:
         if self._backend == "mongo":
             raise NotImplementedError("count_relationships: not supported on mongo")
+        if self._backend == "snowflake":
+            return self._sf.count_relationships()
         row = self._fetchone("SELECT COUNT(*) AS n FROM identity_relationships", ())
         return int(row["n"]) if row else 0
 
@@ -2249,6 +2375,8 @@ class IdentityStore:
         export."""
         if self._backend == "mongo":
             raise NotImplementedError("list_relationships: not supported on mongo")
+        if self._backend == "snowflake":
+            return self._sf.list_relationships(dataset)
         where = "" if dataset is None else " WHERE dataset = ?"
         params: tuple = () if dataset is None else (dataset,)
         rows = self._fetchall(
@@ -2267,6 +2395,8 @@ class IdentityStore:
     ) -> int | None:
         if self._backend == "mongo":
             return self._mongo.emit_event(event)
+        if self._backend == "snowflake":
+            return self._sf.emit_event(event, return_id=return_id)
         payload = json.dumps(event.payload) if event.payload is not None else None
         # Tamper-evidence (#1078): stamp a per-event content hash at insert. Pure
         # function of the event's own fields -- no DB read, no contention -- so it
@@ -2317,6 +2447,12 @@ class IdentityStore:
         """
         if not run_name or self._backend == "mongo":
             return
+        if self._backend == "snowflake":
+            self._sf.record_run(
+                run_name, config_id=config_id, schema_version=schema_version,
+                config_json=config_json, dataset=dataset,
+            )
+            return
         self._exec(
             "INSERT INTO identity_runs "
             "(run_name, config_id, schema_version, config_json, dataset) "
@@ -2333,6 +2469,8 @@ class IdentityStore:
         """
         if self._backend == "mongo":
             return None
+        if self._backend == "snowflake":
+            return self._sf.run_config(run_name)
         row = self._fetchone(
             "SELECT run_name, config_id, schema_version, config_json, dataset, "
             "created_at FROM identity_runs WHERE run_name = ?",
@@ -2345,6 +2483,8 @@ class IdentityStore:
     ) -> list[IdentityEvent]:
         if self._backend == "mongo":
             return self._mongo.history(entity_id, limit=limit)
+        if self._backend == "snowflake":
+            return self._sf.history(entity_id, limit)
         if limit:
             rows = self._fetchall(
                 "SELECT * FROM identity_events WHERE entity_id = ? "
@@ -2370,6 +2510,10 @@ class IdentityStore:
         Callers serialize to JSONL/CSV as needed."""
         if self._backend == "mongo":
             return self._mongo.export_audit_log(
+                dataset=dataset, actor=actor, since=since
+            )
+        if self._backend == "snowflake":
+            return self._sf.export_audit_log(
                 dataset=dataset, actor=actor, since=since
             )
         clauses: list[str] = []
@@ -2399,6 +2543,8 @@ class IdentityStore:
             raise NotImplementedError(
                 "audit seals are not supported on the mongo backend"
             )
+        if self._backend == "snowflake":
+            return self._sf.add_seal(seal)
         self._exec(
             "INSERT INTO audit_seals "
             "(dataset, root_hash, event_count, last_event_id, prev_seal_id, "
@@ -2420,6 +2566,8 @@ class IdentityStore:
             raise NotImplementedError(
                 "audit seals are not supported on the mongo backend"
             )
+        if self._backend == "snowflake":
+            return self._sf.latest_seal(dataset=dataset)
         if dataset is None:
             row = self._fetchone(
                 "SELECT * FROM audit_seals WHERE dataset IS NULL "
@@ -2440,6 +2588,8 @@ class IdentityStore:
             raise NotImplementedError(
                 "audit seals are not supported on the mongo backend"
             )
+        if self._backend == "snowflake":
+            return self._sf.list_seals(dataset=dataset)
         if dataset is None:
             rows = self._fetchall(
                 "SELECT * FROM audit_seals WHERE dataset IS NULL ORDER BY seal_id",
@@ -2455,6 +2605,8 @@ class IdentityStore:
     def has_run_event(self, entity_id: str, run_name: str, kind: str) -> bool:
         if self._backend == "mongo":
             return self._mongo.has_run_event(entity_id, run_name, kind)
+        if self._backend == "snowflake":
+            return self._sf.has_run_event(entity_id, run_name, kind)
         row = self._fetchone(
             "SELECT 1 AS one FROM identity_events "
             "WHERE entity_id = ? AND run_name = ? AND kind = ? LIMIT 1",
@@ -2470,6 +2622,8 @@ class IdentityStore:
         seq-scanned ``identity_events`` (O(n^2)) whenever the secondary indexes are
         deferred by the initial-load fast path. SQL backends only; the caller
         falls back to ``has_run_event`` for mongo/minimal stores."""
+        if self._backend == "snowflake":
+            return self._sf.run_event_entities(run_name, kind)
         rows = self._fetchall(
             "SELECT DISTINCT entity_id FROM identity_events "
             "WHERE run_name = ? AND kind = ?",
@@ -2480,6 +2634,9 @@ class IdentityStore:
     def add_alias(self, alias: IdentityAlias) -> None:
         if self._backend == "mongo":
             self._mongo.add_alias(alias)
+            return
+        if self._backend == "snowflake":
+            self._sf.add_alias(alias)
             return
         self._exec(
             "INSERT OR REPLACE INTO identity_aliases "
@@ -2494,6 +2651,8 @@ class IdentityStore:
     def resolve_alias(self, alias: str, kind: str = "external_id") -> str | None:
         if self._backend == "mongo":
             return self._mongo.resolve_alias(alias, kind=kind)
+        if self._backend == "snowflake":
+            return self._sf.resolve_alias(alias, kind)
         row = self._fetchone(
             "SELECT entity_id FROM identity_aliases WHERE alias = ? AND kind = ?",
             (alias, kind),
