@@ -135,9 +135,37 @@ This is the highest-risk part of the design. Two guards:
 Neither guard is automatic. The residual risk is accepted and stated here so it
 is a known limitation rather than a surprise.
 
+## Prerequisite: consolidate the duplicate publish workflows
+
+Decided 2026-08-21, after measuring the machinery this design sits on.
+
+The 39 publish workflows total 4,087 lines in four tiers: 18 thin callers
+(31-38 lines) that already delegate to `_publish-pypi.yml` / `_publish-js.yml`;
+9 native workflows (142-156 lines) that are ~90% identical to each other; a
+~82%-identical pair at 175 lines (`goldenfuzz`, `goldenphonetic`); and 4
+genuinely bespoke ones (`mcp`, `spark-jar`, `containers`, `pg`) that stay as
+they are. `publish-goldenmatch.yml` is also 175 lines but genuinely distinct --
+it carries the ADR-0019 draft-release and cosign flow.
+
+The consolidation this repo already started is stalled halfway: the reusable
+pattern exists and 18 packages use it; 11 near-duplicates never migrated.
+Collapsing them removes roughly 1,100 of 4,087 lines (~27% of the release
+machinery).
+
+Between two native workflows, exactly three things vary: the workflow `name`,
+the `MANIFEST` path to the crate's `Cargo.toml`, and a tag prefix repeated in
+FOUR separate `if:` conditions. Across nine files that is 36 hand-maintained
+copies of a tag prefix -- the bug surface that makes this machinery feel
+unmaintainable.
+
+**This lands before the release manifest reaches those packages**, so each is
+touched once rather than twice, and wave 3 configures thin callers rather than
+divergent workflows. It is also lower risk in isolation: it changes no version
+streams, and a mistake surfaces as a failed publish rather than a wrong version.
+
 ## Rollout
 
-Three waves, one config file, staged enablement:
+Three waves, one config file, staged enablement, after the prerequisite above:
 
 1. **goldenmatch + golden-suite.** Proves version derivation against real
    commits, the bare-tag component, and the lockstep step.
