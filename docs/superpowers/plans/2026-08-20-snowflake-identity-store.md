@@ -1722,16 +1722,26 @@ Implement `bulk_upsert_records`, `bulk_add_edges` and `bulk_emit_events` the sam
 
 In `store.py`, add a `snowflake` branch to each of the four `bulk_*` methods and to `bulk_writes` / `bulk_flush_checkpoint`. `write_pipeline` and `bulk_copy_barrier` need no change — their existing `if self._backend == "postgres"` guard already makes them a no-op for Snowflake. `initial_load_writes` likewise no-ops via its `and self._backend == "postgres"` condition.
 
-Change the guard at the top of each `bulk_*` method from a Postgres-only raise to allow Snowflake, e.g. at `store.py:996`:
+Add the Snowflake branch as a sibling of the existing SQLite branch at the top of each `bulk_*` method. `store.py:996` currently opens:
+
+```python
+    def bulk_upsert_identities(self, df: Any) -> None:
+        if self._backend == "sqlite":
+            ...  # full SQLite staged implementation, unchanged
+```
+
+so the branch goes immediately above it:
 
 ```python
     def bulk_upsert_identities(self, df: Any) -> None:
         if self._backend == "snowflake":
             self._sf.bulk_upsert_identities(df)
             return
-        if self._backend != "postgres":
-            raise NotImplementedError(...)  # unchanged
+        if self._backend == "sqlite":
+            ...  # unchanged
 ```
+
+There is no Postgres-only guard to relax — SQLite gained a staged bulk implementation of its own, which is why `resolve.py`'s allowlist already names it.
 
 Then in `resolve.py`, replace lines 717-720:
 
@@ -1840,10 +1850,15 @@ def test_signatures_match() -> None:
         sf = getattr(SnowflakeIdentityStore, name, None)
         if sf is None:
             continue
-        if inspect.signature(member) != inspect.signature(sf):
+        # Parameters only, deliberately: inspect.signature() also carries the
+        # return annotation, and the two classes are written independently, so
+        # comparing whole signatures fails on annotation drift that is not a
+        # dispatch defect. Parameters are what dispatch correctness depends on.
+        want = inspect.signature(member).parameters
+        got = inspect.signature(sf).parameters
+        if want != got:
             mismatched.append(
-                f"{name}: store{inspect.signature(member)} != "
-                f"snowflake{inspect.signature(sf)}"
+                f"{name}: store({list(want)}) != snowflake({list(got)})"
             )
     assert mismatched == [], "\n".join(mismatched)
 ```
