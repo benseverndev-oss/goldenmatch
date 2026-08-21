@@ -247,7 +247,7 @@ CREATE TABLE IF NOT EXISTS identity_runs (
     run_name       STRING PRIMARY KEY,
     config_id      STRING,
     schema_version NUMBER,
-    config_json    VARIANT,
+    config_json    STRING,
     dataset        STRING,
     created_at     TIMESTAMP_NTZ NOT NULL DEFAULT CURRENT_TIMESTAMP()
 );
@@ -255,13 +255,22 @@ CREATE TABLE IF NOT EXISTS identity_runs (
 
 
 def ensure_schema(
-    conn: Any, ddl: str, *, database: str, schema: str, version: int
+    conn: Any,
+    ddl: str,
+    *,
+    database: str,
+    schema: str,
+    version: int,
+    component: str = "identity",
 ) -> None:
     """Create the schema and tables if absent, and stamp the version.
 
     Idempotent: every statement is ``IF NOT EXISTS`` and the version marker is
     written with a MERGE, so re-opening a store against a populated warehouse
-    neither drops rows nor duplicates the marker.
+    neither drops rows nor duplicates the marker. ``component`` namespaces the
+    version marker row so a second store (e.g. a future Snowflake MemoryStore)
+    calling this with its own ``ddl`` does not collide on the same
+    ``component='identity'`` row as this store.
     """
     execute(conn, f"CREATE SCHEMA IF NOT EXISTS {database}.{schema}")
     execute(conn, f"USE SCHEMA {database}.{schema}")
@@ -277,7 +286,7 @@ def ensure_schema(
         "WHEN MATCHED THEN UPDATE SET t.version = s.version "
         "WHEN NOT MATCHED THEN INSERT (component, version) "
         "VALUES (s.component, s.version)",
-        ("identity", version),
+        (component, version),
     )
 
 

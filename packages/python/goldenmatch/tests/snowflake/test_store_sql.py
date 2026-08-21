@@ -114,6 +114,12 @@ def test_ensure_schema_is_idempotent(sf_conn) -> None:
     row = fetchone_row(sf_conn, "SELECT COUNT(*) AS n FROM identity_nodes")
     assert row is not None and row["n"] == 1
     assert schema_version(sf_conn) == 7
+    # Snowflake does not enforce the PRIMARY KEY on _gm_schema_version, so the
+    # MERGE (not the constraint) is what prevents a duplicate marker row.
+    marker_row = fetchone_row(
+        sf_conn, "SELECT COUNT(*) AS n FROM _gm_schema_version"
+    )
+    assert marker_row is not None and marker_row["n"] == 1
 
 
 def test_autoincrement_ids_are_assigned(sf_conn) -> None:
