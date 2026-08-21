@@ -1562,6 +1562,8 @@ class IdentityStore:
         giant components the way a pre-cluster record-level merge does."""
         if self._backend == "mongo":
             raise NotImplementedError("merge_by_shared_field: not supported on mongo")
+        if self._backend == "snowflake":
+            return self._sf.merge_by_shared_field(dataset, field, max_group)
         fields = [field] if isinstance(field, str) else list(field)
         if not fields:
             raise ValueError("merge_by_shared_field: no fields given")
@@ -1756,6 +1758,9 @@ class IdentityStore:
             raise NotImplementedError(
                 "block-key index is not supported on the mongo backend"
             )
+        if self._backend == "snowflake":
+            self._sf.index_record_block_keys(record_id, entity_id, keys)
+            return
         rows = [
             (record_id, entity_id, str(bk), str(ps))
             for ps, bk in keys
@@ -1803,6 +1808,8 @@ class IdentityStore:
             raise NotImplementedError(
                 "block-key index is not supported on the mongo backend"
             )
+        if self._backend == "snowflake":
+            return self._sf.candidates_by_block_keys(keys)
         pairs = [(str(ps), str(bk)) for ps, bk in keys if bk is not None]
         if not pairs:
             return set()
@@ -1938,6 +1945,8 @@ class IdentityStore:
         (#2198). Raises on mongo so the caller keeps its paged fallback."""
         if self._backend == "mongo":
             raise NotImplementedError("status_counts: mongo uses the paged fallback")
+        if self._backend == "snowflake":
+            return self._sf.status_counts(dataset)
         if dataset is None:
             rows = self._fetchall(
                 "SELECT status, COUNT(*) AS n FROM identity_nodes GROUP BY status", (),
@@ -1964,6 +1973,8 @@ class IdentityStore:
             raise NotImplementedError(
                 "active_record_stats: mongo uses the paged fallback"
             )
+        if self._backend == "snowflake":
+            return self._sf.active_record_stats(dataset)
         ds = "" if dataset is None else " AND n.dataset = ?"
         params: tuple = () if dataset is None else (dataset,)
         per_entity_rows = self._fetchall(
@@ -2005,6 +2016,10 @@ class IdentityStore:
         literal field. ``None`` groups on the raw value (SQL byte-identical)."""
         if self._backend == "mongo":
             raise NotImplementedError("relationship_groups: not supported on mongo")
+        if self._backend == "snowflake":
+            return self._sf.relationship_groups(
+                field, dataset, min_entities, max_entities, transform,
+            )
         if not _SAFE_FIELD.fullmatch(field):
             raise ValueError(f"unsafe relationship field name: {field!r}")
         # Perf (#2226-followup): the old shape extracted the payload field 3x per
@@ -2053,6 +2068,8 @@ class IdentityStore:
         we avoid -- so callers get a cheap, approximate view of the payload shape."""
         if self._backend == "mongo":
             raise NotImplementedError("sample_records: not supported on mongo")
+        if self._backend == "snowflake":
+            return self._sf.sample_records(dataset, limit)
         ds = "" if dataset is None else " AND dataset = ?"
         params: tuple = () if dataset is None else (dataset,)
         rows = self._fetchall(
@@ -2100,6 +2117,10 @@ class IdentityStore:
         cap and it masquerades as a good edge field."""
         if self._backend == "mongo":
             raise NotImplementedError("relationship_field_stats: not on mongo")
+        if self._backend == "snowflake":
+            return self._sf.relationship_field_stats(
+                field, dataset, min_entities, max_entities, transform,
+            )
         if not _SAFE_FIELD.fullmatch(field):
             raise ValueError(f"unsafe relationship field name: {field!r}")
         self._ensure_relationship_index(field)
@@ -2184,6 +2205,8 @@ class IdentityStore:
             return 0
         if self._backend == "mongo":
             raise NotImplementedError("add_relationships: not supported on mongo")
+        if self._backend == "snowflake":
+            return self._sf.add_relationships(rows)
         if self._backend == "postgres":
             sql = (
                 "INSERT INTO identity_relationships "
@@ -2220,6 +2243,8 @@ class IdentityStore:
         """
         if self._backend == "mongo":
             raise NotImplementedError("reconcile_relationships: not supported on mongo")
+        if self._backend == "snowflake":
+            return self._sf.reconcile_relationships(dataset, kind, desired)
         want: dict[tuple, tuple] = {}
         for a, b, k, field, val, _ds in desired:
             if a is None or b is None or a == b:
@@ -2286,6 +2311,8 @@ class IdentityStore:
         as ``{other_entity_id, kind, field, shared_value}``."""
         if self._backend == "mongo":
             raise NotImplementedError("get_relationships: not supported on mongo")
+        if self._backend == "snowflake":
+            return self._sf.get_relationships(entity_id)
         rows = self._fetchall(
             "SELECT entity_a_id, entity_b_id, kind, field, shared_value "
             "FROM identity_relationships "
@@ -2302,6 +2329,8 @@ class IdentityStore:
     def count_relationships(self) -> int:
         if self._backend == "mongo":
             raise NotImplementedError("count_relationships: not supported on mongo")
+        if self._backend == "snowflake":
+            return self._sf.count_relationships()
         row = self._fetchone("SELECT COUNT(*) AS n FROM identity_relationships", ())
         return int(row["n"]) if row else 0
 
@@ -2313,6 +2342,8 @@ class IdentityStore:
         export."""
         if self._backend == "mongo":
             raise NotImplementedError("list_relationships: not supported on mongo")
+        if self._backend == "snowflake":
+            return self._sf.list_relationships(dataset)
         where = "" if dataset is None else " WHERE dataset = ?"
         params: tuple = () if dataset is None else (dataset,)
         rows = self._fetchall(
@@ -2383,6 +2414,12 @@ class IdentityStore:
         """
         if not run_name or self._backend == "mongo":
             return
+        if self._backend == "snowflake":
+            self._sf.record_run(
+                run_name, config_id=config_id, schema_version=schema_version,
+                config_json=config_json, dataset=dataset,
+            )
+            return
         self._exec(
             "INSERT INTO identity_runs "
             "(run_name, config_id, schema_version, config_json, dataset) "
@@ -2399,6 +2436,8 @@ class IdentityStore:
         """
         if self._backend == "mongo":
             return None
+        if self._backend == "snowflake":
+            return self._sf.run_config(run_name)
         row = self._fetchone(
             "SELECT run_name, config_id, schema_version, config_json, dataset, "
             "created_at FROM identity_runs WHERE run_name = ?",
@@ -2440,6 +2479,10 @@ class IdentityStore:
             return self._mongo.export_audit_log(
                 dataset=dataset, actor=actor, since=since
             )
+        if self._backend == "snowflake":
+            return self._sf.export_audit_log(
+                dataset=dataset, actor=actor, since=since
+            )
         clauses: list[str] = []
         params: list[Any] = []
         if dataset is not None:
@@ -2467,6 +2510,8 @@ class IdentityStore:
             raise NotImplementedError(
                 "audit seals are not supported on the mongo backend"
             )
+        if self._backend == "snowflake":
+            return self._sf.add_seal(seal)
         self._exec(
             "INSERT INTO audit_seals "
             "(dataset, root_hash, event_count, last_event_id, prev_seal_id, "
@@ -2488,6 +2533,8 @@ class IdentityStore:
             raise NotImplementedError(
                 "audit seals are not supported on the mongo backend"
             )
+        if self._backend == "snowflake":
+            return self._sf.latest_seal(dataset=dataset)
         if dataset is None:
             row = self._fetchone(
                 "SELECT * FROM audit_seals WHERE dataset IS NULL "
@@ -2508,6 +2555,8 @@ class IdentityStore:
             raise NotImplementedError(
                 "audit seals are not supported on the mongo backend"
             )
+        if self._backend == "snowflake":
+            return self._sf.list_seals(dataset=dataset)
         if dataset is None:
             rows = self._fetchall(
                 "SELECT * FROM audit_seals WHERE dataset IS NULL ORDER BY seal_id",

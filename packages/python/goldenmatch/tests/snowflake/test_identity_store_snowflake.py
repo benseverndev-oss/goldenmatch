@@ -111,6 +111,21 @@ def test_retire_identity_sets_status_and_merged_into(store) -> None:
     assert node.merged_into == winner
 
 
+def test_retire_identity_without_merged_into_sets_retired(store) -> None:
+    """The plain RETIRED branch -- ``merged_into=None`` must not become
+    ``merged_into``, and must clear any prior merge pointer."""
+    from goldenmatch.identity.model import IdentityNode
+    from goldenmatch.identity.store import new_entity_id
+
+    eid, winner = new_entity_id(), new_entity_id()
+    store.upsert_identity(IdentityNode(entity_id=eid, merged_into=winner))
+    store.retire_identity(eid)
+    node = store.get_identity(eid)
+    assert node is not None
+    assert node.status == "retired"
+    assert node.merged_into is None
+
+
 def _seed_entity(store):
     from goldenmatch.identity.model import IdentityNode
     from goldenmatch.identity.store import new_entity_id

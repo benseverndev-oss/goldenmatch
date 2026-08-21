@@ -246,7 +246,14 @@ CREATE TABLE IF NOT EXISTS identity_relationships (
     shared_value  STRING,
     dataset       STRING,
     recorded_at   TIMESTAMP_NTZ NOT NULL DEFAULT CURRENT_TIMESTAMP(),
-    PRIMARY KEY (entity_a_id, entity_b_id, kind, shared_value)
+    -- UNIQUE, not PRIMARY KEY -- same reason as identity_aliases above:
+    -- ``shared_value`` is nullable (a relationship rule may key on a derived
+    -- value that evaluates to NULL), and fakesnow's duckdb translation
+    -- enforces an implicit NOT NULL on PRIMARY KEY columns. Verified: a
+    -- PRIMARY KEY here rejects every NULL-shared_value edge with
+    -- "NOT NULL constraint failed: SHARED_VALUE". Real Snowflake enforces
+    -- neither, so this is a no-op there.
+    UNIQUE (entity_a_id, entity_b_id, kind, shared_value)
 );
 
 CREATE TABLE IF NOT EXISTS identity_runs (
