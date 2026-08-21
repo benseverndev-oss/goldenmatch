@@ -1280,7 +1280,8 @@ GoldenMatch is available as a hosted MCP server on [Smithery](https://smithery.a
 {
   "mcpServers": {
     "goldenmatch": {
-      "url": "https://goldenmatch-mcp-production.up.railway.app/mcp/"
+      "url": "https://goldenmatch-mcp-production.up.railway.app/mcp/",
+      "headers": { "Authorization": "Bearer YOUR_TOKEN" }
     }
   }
 }

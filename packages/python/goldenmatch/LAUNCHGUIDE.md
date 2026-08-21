@@ -54,4 +54,6 @@ entity-resolution, deduplication, record-matching, golden-record, data-quality, 
 https://docs.bensevern.dev/docs/
 
 ## Health Check URL
-https://goldenmatch-mcp-production.up.railway.app/mcp/
+https://goldenmatch-mcp-production.up.railway.app/.well-known/mcp/server-card.json
+(`/mcp/` returns 401 without a bearer token, so it cannot serve as a health
+check; the server card stays public for exactly this purpose.)

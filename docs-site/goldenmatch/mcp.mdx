@@ -21,7 +21,7 @@ GoldenMatch provides an MCP (Model Context Protocol) server for integration with
 
 ## Remote Server (no install required)
 
-GoldenMatch is available as a hosted remote MCP server on Smithery. Connect from Claude Desktop, Claude Code, or any MCP client without installing anything locally.
+GoldenMatch runs as a remote MCP server. The hosted endpoint **requires a bearer token** -- several of its tools read and write files on the server, so it is not open to anonymous callers. Ask the maintainer for a token, or run your own (below).
 
 Add to your `claude_desktop_config.json`:
 
@@ -29,11 +29,18 @@ Add to your `claude_desktop_config.json`:
 {
     "mcpServers": {
         "goldenmatch": {
-            "url": "https://goldenmatch-mcp-production.up.railway.app/mcp/"
+            "url": "https://goldenmatch-mcp-production.up.railway.app/mcp/",
+            "headers": {
+                "Authorization": "Bearer YOUR_TOKEN"
+            }
         }
     }
 }
 ```
+
+To self-host, `goldenmatch mcp-serve --transport http --port 8200` serves the
+same tools. A loopback bind needs no token; binding to a public interface
+without `GOLDENMATCH_MCP_TOKEN` set is refused rather than served open.
 
 Or browse on Smithery: [https://smithery.ai/servers/benzsevern/goldenmatch](https://smithery.ai/servers/benzsevern/goldenmatch)
 
