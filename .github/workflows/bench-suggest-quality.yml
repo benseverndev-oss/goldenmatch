@@ -154,6 +154,32 @@ jobs:
           fi
           uv run python -m scripts.suggest_quality gym-gate $FILTER
 
+      # `mode=bless` regenerates scripts/suggest_quality/baselines/scorecard.json
+      # inside the runner and, until this step existed, nothing persisted it --
+      # so the procedure documented at the top of this file produced a baseline
+      # and threw it away. That is why #2635's remaining checkbox ("bless
+      # dblp_acm") could not be ticked: the dataset is CI-only (gitignored,
+      # fetched at run time), so a bless MUST happen here, and the result has to
+      # survive the run. Mirrors the gym-bless step below.
+      - name: Commit re-blessed scorecard baseline
+        if: ${{ inputs.mode == 'bless' }}
+        env:
+          # Via env, not interpolated straight into the shell: a branch name is
+          # attacker-influenceable text and `${{ }}` inside `run:` is template
+          # injection (zizmor flags it high). The gym-bless step below still
+          # interpolates directly -- pre-existing, not touched here.
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if git diff --quiet -- scripts/suggest_quality/baselines/scorecard.json; then
+            echo "No scorecard baseline change to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/suggest_quality/baselines/scorecard.json
+          git commit -m "chore(suggest-quality): re-bless scorecard baseline [skip ci]"
+          git push origin "HEAD:$REF_NAME"
+
       - name: Commit re-blessed gym baseline
         if: ${{ inputs.mode == 'gym-bless' }}
         run: |
