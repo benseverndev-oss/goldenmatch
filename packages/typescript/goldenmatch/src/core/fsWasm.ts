@@ -25,7 +25,11 @@
  * they are absent the output is byte-identical to the zero-config path. (The
  * cross-batch exclude set stays host-side / unused here.)
  */
-import { score_block_pairs_fs, initSync } from "./_wasm/fsWasmBindings.js";
+import {
+  score_block_pairs_fs,
+  train_em_from_counts,
+  initSync,
+} from "./_wasm/fsWasmBindings.js";
 import { FS_WASM_BASE64 } from "./_wasm/fsWasmBytes.js";
 
 // ---------------------------------------------------------------------------
@@ -226,4 +230,132 @@ export function scoreBlockPairsFs(input: FsBlockScoringInput): FsScoredPair[] {
 
   const parsed = JSON.parse(json) as Array<[number, number, number]>;
   return parsed.map(([a, b, s]) => [a, b, s] as FsScoredPair);
+}
+
+// ---------------------------------------------------------------------------
+// Fellegi-Sunter training from COUNTED comparison vectors
+// ---------------------------------------------------------------------------
+//
+// Phase 1b of docs/superpowers/specs/2026-08-13-fs-em-rust-single-source-design.md.
+//
+// `trainEM` in ./probabilistic.ts is a hand-port of the Python trainer -- the
+// third copy of a loop that should have one. This is the shared kernel, reached
+// from TS.
+//
+// It exposes the COUNTED shape only, and deliberately does NOT reroute
+// `trainEM`: that function supports negative-evidence dimensions and the Rust
+// `em_core` explicitly does not yet, so routing it through the kernel today
+// would silently drop NE and return a model the config never asked for. The
+// counted path has no such gap -- it refuses NE on every surface. So this ships
+// the kernel + parity as an alternative surface first, exactly how this file's
+// own scoring kernel shipped before the TS scorer was rerouted onto it.
+
+/** One distinct comparison vector and how many pairs had it. */
+export interface FsPatternCount {
+  /** One level per field, ordered by the matchkey's fields; -1 = unobserved. */
+  readonly levels: readonly number[];
+  /** How many pairs carried this vector. A COUNT, not a proportion. */
+  readonly count: number;
+}
+
+export interface FsTrainFromCountsInput {
+  /** Number of levels per field, ordered by the matchkey's fields. */
+  readonly nLevels: readonly number[];
+  readonly patterns: readonly FsPatternCount[];
+  /**
+   * `u` per field, estimated from RANDOM (unblocked) pairs -- which this
+   * function never sees, so it cannot derive them. Half the likelihood ratio.
+   */
+  readonly uProbs: readonly (readonly number[])[];
+  /**
+   * Fields this blocking pass makes uninformative. Constant within a pass,
+   * which is why the counts need no pass column.
+   */
+  readonly conditioned?: readonly boolean[];
+  readonly maxIterations?: number;
+  readonly convergence?: number;
+}
+
+export interface FsTrainedModel {
+  readonly m_probs: number[][];
+  readonly u_probs: number[][];
+  readonly match_weights: number[][];
+  readonly converged: boolean;
+  readonly iterations: number;
+  readonly proportion_matched: number;
+}
+
+/**
+ * Train a Fellegi-Sunter model from counted comparison vectors, in the shared
+ * Rust kernel.
+ *
+ * The counts may come from anywhere that can group -- a SQL engine's `GROUP BY`
+ * over the gamma columns is the intended source -- because the E-step reads only
+ * the comparison vector, so pairs sharing one are interchangeable and every
+ * M-step quantity is a sum linear in how many pairs share it. Collapsing is
+ * EXACT, not a sample.
+ *
+ * The counts are COUNTS: their sum is the number of pairs represented. EM's
+ * `1e-6` smoothing is additive, so rescaling them moves the model -- in the
+ * low-probability cells, which is exactly where FS weights are largest.
+ *
+ * Throws on invalid input rather than returning a partial model: a wrong level
+ * or a zero count yields a perfectly plausible set of probabilities, and nothing
+ * downstream could tell.
+ */
+export function trainFsFromCounts(
+  input: FsTrainFromCountsInput,
+): FsTrainedModel {
+  initFsWasm();
+
+  const nFields = input.nLevels.length;
+  if (nFields === 0) throw new Error("nLevels is empty; no fields to train");
+  if (input.uProbs.length !== nFields) {
+    throw new Error(
+      `uProbs has ${input.uProbs.length} vectors but there are ${nFields} fields`,
+    );
+  }
+  const conditioned = input.conditioned ?? new Array(nFields).fill(false);
+  if (conditioned.length !== nFields) {
+    throw new Error(
+      `conditioned has ${conditioned.length} entries but there are ${nFields} fields`,
+    );
+  }
+
+  const flat: number[] = [];
+  for (const p of input.patterns) {
+    if (p.levels.length !== nFields) {
+      throw new Error(
+        `a comparison vector has ${p.levels.length} entries but there are ` +
+          `${nFields} fields -- vectors must be ordered by the matchkey's fields`,
+      );
+    }
+    flat.push(...p.levels);
+  }
+
+  const uFlat: number[] = [];
+  input.uProbs.forEach((u, j) => {
+    if (u.length !== input.nLevels[j]) {
+      throw new Error(
+        `uProbs[${j}] has ${u.length} levels but the field has ${input.nLevels[j]}`,
+      );
+    }
+    uFlat.push(...u);
+  });
+
+  const json = train_em_from_counts(
+    Uint32Array.from(input.nLevels),
+    Int32Array.from(flat),
+    Float64Array.from(input.patterns.map((p) => p.count)),
+    Float64Array.from(uFlat),
+    Uint8Array.from(conditioned.map((b) => (b ? 1 : 0))),
+    input.maxIterations ?? 20,
+    input.convergence ?? 0.001,
+  );
+
+  const out = JSON.parse(json) as FsTrainedModel & { error?: string };
+  // The kernel fails SOFT to an error envelope (every other surface reads it
+  // that way); at a typed TS boundary a thrown Error is the honest shape.
+  if (out.error) throw new Error(`FS training refused the input: ${out.error}`);
+  return out;
 }

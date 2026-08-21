@@ -54,3 +54,30 @@ types:
     value_signals:
       avg_length_min: 15
     suppress: ["pattern_consistency", "cardinality", "drift_detection"]
+
+# `carrier` is declared to lift its suppression: it appears in the
+# `shipping_method` type's name_hints, which put it in the stop-list where no
+# role could ever open a carrier party.
+roles:
+  customer:
+    kind: person
+    name_hints: ["customer", "buyer", "shopper"]
+    typical_types: ["customer_address", "order_id"]
+
+  seller:
+    kind: organization
+    name_hints: ["seller", "merchant", "marketplace"]
+
+  carrier:
+    kind: organization
+    name_hints: ["carrier", "courier", "shipper"]
+    typical_types: ["tracking_number", "shipping_method"]
+
+  recipient:
+    kind: person
+    name_hints: ["recipient", "consignee"]
+
+  product:
+    kind: asset
+    name_hints: ["product", "item", "sku"]
+    typical_types: ["sku", "product_name", "product_category"]

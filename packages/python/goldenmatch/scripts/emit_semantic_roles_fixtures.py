@@ -62,6 +62,12 @@ except ImportError:  # toolkit not installed -> isolated loader (dependency orde
     _load("goldenmatch.semantic.cube", "semantic/cube.py")
     _load("goldenmatch.semantic.osi", "semantic/osi.py")
     _load("goldenmatch.semantic.key_integrity", "semantic/key_integrity.py")
+    # feast + malloy + odcs are imported unconditionally by certify.py and (lazily)
+    # by blocking's semantic_field_roles; load them so all resolve in this isolated
+    # bootstrap.
+    _load("goldenmatch.semantic.feast", "semantic/feast.py")
+    _load("goldenmatch.semantic.malloy", "semantic/malloy.py")
+    _load("goldenmatch.semantic.odcs", "semantic/odcs.py")
     _load("goldenmatch.semantic.certify", "semantic/certify.py")
     _blocking = _load("goldenmatch.semantic.blocking", "semantic/blocking.py")
     metric_aware_attributes = _blocking.metric_aware_attributes

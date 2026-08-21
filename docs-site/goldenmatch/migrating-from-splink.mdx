@@ -1,10 +1,10 @@
 ---
 title: "Migrating from Splink"
-description: "Convert a Splink model to a GoldenMatch config, verify it reproduces Splink's clustering, and run it — in one command or one line of Python."
+description: "Convert a Splink model to a GoldenMatch config, verify it reproduces Splink's clustering, and run it. In one command or one line of Python."
 keywords: ["goldenmatch", "splink", "migration", "convert", "from_splink", "migrate-splink", "record linkage", "fellegi-sunter"]
 ---
 
-Already have a [Splink](https://moj-analytical-services.github.io/splink/) model? GoldenMatch converts it directly — comparisons, blocking rules, and trained m/u probabilities — so you keep the tuning work you've already done. The conversion is **built against real captured Splink 4 SQL**, **verifiable** against your installed Splink, and reports a **coverage scorecard** so you can see exactly what carried over.
+Already have a [Splink](https://moj-analytical-services.github.io/splink/) model? GoldenMatch converts it directly, comparisons, blocking rules, and trained m/u probabilities, so you keep the tuning work you've already done. The conversion is **built against real captured Splink 4 SQL**, **verifiable** against your installed Splink, and reports a **coverage scorecard** so you can see exactly what carried over.
 
 ## One command
 
@@ -37,7 +37,7 @@ Useful flags: `--config-out config.yaml` also writes the converted config; `--no
 
 ## Or one line of Python
 
-`from_splink` accepts a settings **dict**, a path to a **JSON** model, a live **`Linker`**, or a not-yet-fitted **`SettingsCreator`** — whatever you already have in hand, no export step:
+`from_splink` accepts a settings **dict**, a path to a **JSON** model, a live **`Linker`**, or a not-yet-fitted **`SettingsCreator`**. Whatever you already have in hand, no export step:
 
 ```python
 from goldenmatch.config.from_splink import from_splink
@@ -58,7 +58,7 @@ conv.config.matchkeys[0].model_path = "model.em.json"
 
 ## Verify it preserved behaviour
 
-The migration is only trustworthy if GoldenMatch reproduces Splink's *decisions*. `verify_against_splink` runs **both** engines on a sample of your data and reports pairwise cluster agreement — no need to run Splink separately or hand over its output:
+The migration is only trustworthy if GoldenMatch reproduces Splink's *decisions*. `verify_against_splink` runs **both** engines on a sample of your data and reports pairwise cluster agreement, no need to run Splink separately or hand over its output:
 
 ```python
 from goldenmatch.config.splink_verify import verify_against_splink
@@ -92,5 +92,5 @@ The converter recognizes the full Splink comparison library, in both the DuckDB 
 **Approximate** mappings are where Splink's measure and GoldenMatch's aren't identical (a distance/count/km/date snap), flagged in the report so you know exactly what's lossy. Constructs the converter doesn't recognize are dropped with a warning and reflected in the coverage scorecard, so nothing is silently lost.
 
 <Note>
-`splink` is an optional dependency — the conversion itself never needs it. It's only used for the agreement check, which degrades to a skip notice when absent.
+`splink` is an optional dependency: the conversion itself never needs it. It's only used for the agreement check, which degrades to a skip notice when absent.
 </Note>

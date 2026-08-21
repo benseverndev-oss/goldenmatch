@@ -1,6 +1,6 @@
 // InferMap MCP server tests. Mirrors the goldenmatch MCP server test layout
 // (TOOLS metadata + handleTool dispatcher) and adds resources/prompts coverage
-// matching the Python sibling's surface (map/inspect/validate/apply tools,
+// matching the Python sibling's surface (map/inspect/layers/validate/apply tools,
 // Supported Domains / Scorer Pipeline / Last Mapping Report resources,
 // map-walkthrough / compare-schemas / domain-mapping prompts).
 
@@ -20,9 +20,9 @@ import {
 } from "../../src/node/mcp/server.js";
 
 describe("MCP server — TOOLS metadata", () => {
-  it("exports the four InferMap tools", () => {
+  it("exports the five InferMap tools", () => {
     const names = TOOLS.map((t) => t.name);
-    expect(names).toEqual(["map", "inspect", "validate", "apply"]);
+    expect(names).toEqual(["map", "inspect", "layers", "validate", "apply"]);
   });
 
   it("each tool has name, description, inputSchema", () => {

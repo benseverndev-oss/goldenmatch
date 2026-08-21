@@ -1,0 +1,101 @@
+# PROBE (workflow_dispatch only, NOT ci-required): can a Java UDF be registered
+# and called from a Spark CONNECT client?
+#
+# This decides the SHAPE of the JVM binding for the scoring kernel, not whether
+# to build it. Spark Connect does not expose Catalyst, so a custom Expression is
+# out; what might still work is a plain Java UDF shipped per session via
+# addArtifact. If it works the binding is a drop-in; if it does not, the jar has
+# to live on the customer's cluster classpath, which reinstates the friction
+# P0-P6 removed.
+#
+# Same posture as the P0 probe that opened this arc: a red here is a FINDING to
+# read, not a merge blocker.
+name: probe-jvm-udf-connect
+
+on:
+  workflow_dispatch:
+    inputs:
+      pyspark_spec:
+        description: "pyspark requirement to install (probe the version you care about)"
+        required: false
+        default: "pyspark[connect]>=4"
+      java_version:
+        description: "Temurin JDK version"
+        required: false
+        default: "17"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+
+      # Real Spark's Connect server is JVM-side, and we need javac anyway to
+      # build the probe UDF.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java_version }}
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.13"
+
+      - name: Install the Spark Connect client
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          # workflow_dispatch applies the input's `default:` when it is not supplied,
+          # so no `||` fallback is needed here -- and the one that was here was a
+          # GitHub EXPRESSION error that `check_workflow_yaml` cannot see, because
+          # it validates YAML parsing rather than expression syntax. (Careful: a
+          # shell COMMENT inside `run:` is still interpolated, so writing an empty
+          # expression here to illustrate the point is itself a parse error.)
+          python -m pip install '${{ inputs.pyspark_spec }}'
+          python -c "import pyspark; print('pyspark', pyspark.__version__)"
+
+      # Compile against Spark's own jars so `org.apache.spark.sql.api.java.UDF2`
+      # resolves. Taking them from the installed pyspark keeps the compile and
+      # the runtime on the SAME Spark version -- compiling against a different
+      # one is its own failure mode and would confound the probe.
+      - name: Build the probe jar
+        run: |
+          set -euo pipefail
+          SPARK_JARS="$(python -c 'import pyspark, os; print(os.path.join(os.path.dirname(pyspark.__file__), "jars"))')"
+          # No `| head` here: it closes the pipe, `ls` takes SIGPIPE, and
+          # `set -o pipefail` turns a diagnostic line into a failed step.
+          JAR_COUNT=$(ls -1 "$SPARK_JARS" 2>/dev/null | wc -l)
+          echo "spark jars: $SPARK_JARS ($JAR_COUNT jars)"
+          if [ "$JAR_COUNT" -eq 0 ]; then
+            echo "::error::no Spark jars bundled -- javac cannot resolve UDF2."
+            echo "That is itself a finding: this probe needs the FULL pyspark,"
+            echo "not the jar-less pyspark-client."
+            exit 2
+          fi
+          mkdir -p build/classes
+          # Compile EVERY probe UDF, not one named file: the array-shaped and
+          # type-reporting probes were added later, and a hard-coded filename
+          # would have silently left them out of the jar -- the probe would then
+          # report ClassNotFound, which reads as a Connect refusal rather than a
+          # missing compile step.
+          javac -cp "$SPARK_JARS/*" -d build/classes scripts/jvm_probe/*.java
+          jar --create --file build/goldenmatch-probe.jar -C build/classes .
+          echo "--- jar contents ---"
+          jar --list --file build/goldenmatch-probe.jar
+
+      - name: Probe registration paths
+        env:
+          GOLDENMATCH_PROBE_JAR: ${{ github.workspace }}/build/goldenmatch-probe.jar
+          GOLDENMATCH_SPARK_REMOTE: "local[*]"
+        run: python scripts/probe_jvm_udf_connect.py
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        if: always()
+        with:
+          name: jvm-udf-connect-probe-jar
+          path: build/goldenmatch-probe.jar
+          if-no-files-found: warn

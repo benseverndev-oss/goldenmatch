@@ -18,7 +18,7 @@ crate-type = ["cdylib"]
 [dependencies]
 # abi3-py311: one stable-ABI artifact spans CPython 3.11-3.13.
 # extension-module: don't link libpython (imported BY CPython).
-pyo3 = { version = ">=0.28, <0.29", features = ["extension-module", "abi3-py311"] }
+pyo3 = { version = ">=0.29, <0.30", features = ["extension-module", "abi3-py311"] }
 # The core is the single source of truth; this crate is a pure JSON-string marshaling
 # shim. No arrow (the planner is JSON, not columnar).
 goldenpipe-core = { path = "../goldenpipe-core" }

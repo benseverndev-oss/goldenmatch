@@ -105,6 +105,11 @@ def register_core_api_functions(con: duckdb.DuckDBPyConnection) -> None:
         ["VARCHAR", "VARCHAR", "VARCHAR"], "VARCHAR",
     )
     con.create_function(
+        "goldenmatch_train_em_from_counts", _train_em_from_counts,
+        # matchkey_json, counts_json, u_probs_json, params_json
+        ["VARCHAR", "VARCHAR", "VARCHAR", "VARCHAR"], "VARCHAR",
+    )
+    con.create_function(
         "goldenmatch_score_probabilistic", _score_probabilistic,
         # rows_json, matchkey_json, em_result_json
         ["VARCHAR", "VARCHAR", "VARCHAR"], "VARCHAR",
@@ -459,6 +464,86 @@ def _train_em(rows_json: str, matchkey_json: str, params_json: str) -> str:
         }
         kwargs = {k: v for k, v in params.items() if k in allowed}
         em = train_em(df, mk, **kwargs)
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"error": str(exc)})
+    return json.dumps(dataclasses.asdict(em), default=str)
+
+
+def _train_em_from_counts(
+    matchkey_json: str, counts_json: str, u_probs_json: str, params_json: str,
+) -> str:
+    """Wrap Fellegi-Sunter ``train_em_from_counts`` -- the COUNTED shape.
+
+    ``goldenmatch_train_em`` takes ROWS and samples pairs from them, so its
+    training set is capped by the sampler no matter how much data exists. This
+    one starts from comparison vectors the ENGINE has already counted, which is
+    the shape a ``GROUP BY`` produces:
+
+    .. code-block:: sql
+
+        SELECT goldenmatch_train_em_from_counts(
+            :matchkey,
+            (SELECT json_group_array(json_array(gamma_first, gamma_last, n))
+               FROM (SELECT gamma_first, gamma_last, count(*) AS n
+                       FROM candidate_gammas
+                      GROUP BY gamma_first, gamma_last)),
+            :u_probs, '{}');
+
+    The E-step reads only the comparison vector, so pairs sharing one are
+    interchangeable and every M-step quantity is a sum linear in how many pairs
+    share it -- collapsing is EXACT, not a sample. The distinct-vector count is
+    bounded by ``prod(levels + 1)``, so what crosses the boundary is thousands
+    of rows however many pairs were compared.
+
+    Args:
+        matchkey_json: a probabilistic ``MatchkeyConfig``.
+        counts_json: ``[[l0, l1, ..., count], ...]`` -- one row per distinct
+            comparison vector, levels ordered by the matchkey's fields
+            (``-1`` = unobserved), with the pair COUNT last. A count, not a
+            proportion: EM's smoothing is additive, so rescaling moves the model.
+        u_probs_json: ``{"field": [p0, p1, ...]}`` estimated from RANDOM
+            (unblocked) pairs. Required, not defaulted -- u is half the
+            likelihood ratio and this function never sees the pairs it comes
+            from.
+        params_json: optional ``conditioned_fields`` / ``max_iterations`` /
+            ``convergence`` / ``tf_freqs`` / ``tf_collision``. Empty -> defaults.
+
+    Returns the ``EMResult`` as JSON, or ``{"error": ...}``.
+
+    NOTE this is a PYTHON UDF, unlike the Postgres
+    ``goldenmatch_train_em_from_counts`` which reaches the pyo3-free kernel
+    native-direct. Every UDF in this package is Python by construction. What
+    DuckDB gains here is the counted SHAPE -- training whose input is not a
+    sample -- not freedom from the interpreter.
+    """
+    from goldenmatch.config.schemas import MatchkeyConfig
+    from goldenmatch.core.probabilistic import train_em_from_counts
+    try:
+        mk = MatchkeyConfig.model_validate_json(matchkey_json)
+        raw = _parse_json(counts_json, [])
+        if not raw:
+            raise ValueError("counts_json is empty; nothing to train on")
+        pattern_counts = []
+        for row in raw:
+            if not isinstance(row, list) or len(row) < 2:
+                raise ValueError(
+                    f"each counts row must be [levels..., count]; got {row!r}"
+                )
+            pattern_counts.append((tuple(int(x) for x in row[:-1]), int(row[-1])))
+        u_probs = _parse_json(u_probs_json, {})
+        if not u_probs:
+            raise ValueError(
+                "u_probs_json is required: u is estimated from RANDOM pairs, "
+                "which counted vectors do not contain"
+            )
+        u_probs = {k: [float(x) for x in v] for k, v in u_probs.items()}
+        params = _parse_json(params_json, {})
+        allowed = {
+            "conditioned_fields", "max_iterations", "convergence",
+            "tf_freqs", "tf_collision",
+        }
+        kwargs = {k: v for k, v in params.items() if k in allowed}
+        em = train_em_from_counts(mk, pattern_counts, u_probs, **kwargs)
     except Exception as exc:  # noqa: BLE001
         return json.dumps({"error": str(exc)})
     return json.dumps(dataclasses.asdict(em), default=str)

@@ -6,31 +6,31 @@
 GoldenCheck (profile + validate) → GoldenFlow (standardize) → GoldenMatch (dedupe + cluster + survivorship) → GoldenAnalysis (cross-cutting reporting), orchestrated by GoldenPipe, with InferMap for schema mapping.
 
 ## Packages
-- GoldenMatch — zero-config entity resolution (fuzzy + exact + probabilistic Fellegi-Sunter + LLM). Headline package. `pip install goldenmatch` / `npm i goldenmatch`. Detail: packages/python/goldenmatch/llms.txt
-- GoldenCheck — data-quality scanning (encoding, format, anomaly detection, baseline drift). `pip install goldencheck` / `npm i goldencheck`. Detail: packages/python/goldencheck/llms.txt
-- GoldenFlow — transforms & standardizers (phone, phonetic, date, name, address, company, categorical, email/URL dedup keys, checksummed identifiers: card/IBAN/ISBN/EAN/VAT/ISIN/CUSIP/NPI). `pip install goldenflow` / `npm i goldenflow`. Detail: packages/python/goldenflow/llms.txt
-- GoldenAnalysis — read-only cross-cutting analysis & reporting + cross-run regression detection. `pip install goldenanalysis` / `npm i goldenanalysis`. Detail: packages/python/goldenanalysis/llms.txt
-- GoldenPipe — declarative YAML orchestrator wiring the stages. `pip install goldenpipe` / `npm i goldenpipe`. Detail: packages/python/goldenpipe/llms.txt
+- GoldenMatch — zero-config entity resolution (fuzzy + exact + probabilistic Fellegi-Sunter + LLM). Headline package. `pip install goldenmatch` / `npm i goldenmatch`. Detail: packages/python/goldenmatch/goldenmatch/llms.txt
+- GoldenCheck — data-quality scanning (encoding, format, anomaly detection, baseline drift). `pip install goldencheck` / `npm i goldencheck`. Detail: packages/python/goldencheck/goldencheck/llms.txt
+- GoldenFlow — transforms & standardizers (phone, phonetic, date, name, address, company, categorical, email/URL dedup keys, checksummed identifiers: card/IBAN/ISBN/EAN/VAT/ISIN/CUSIP/NPI). `pip install goldenflow` / `npm i goldenflow`. Detail: packages/python/goldenflow/goldenflow/llms.txt
+- GoldenAnalysis — read-only cross-cutting analysis & reporting + cross-run regression detection. `pip install goldenanalysis` / `npm i goldenanalysis`. Detail: packages/python/goldenanalysis/goldenanalysis/llms.txt
+- GoldenPipe — declarative YAML orchestrator wiring the stages. `pip install goldenpipe` / `npm i goldenpipe`. Detail: packages/python/goldenpipe/goldenpipe/llms.txt
 - InferMap — schema mapping; auto-aligns columns across heterogeneous sources. `pip install infermap` / `npm i infermap`.
 - goldenmatch-extensions (Rust) — Postgres (pgrx) extension + DuckDB UDFs: SQL-native dedupe / match / score / auto-config + telemetry / identity graph. Detail: packages/rust/extensions/llms.txt
 - goldenfuzz / goldenphonetic / goldenmatch-hnsw (owned libraries) — byte-identical/faster drop-in replacements for the string-matching + ANN deps: goldenfuzz replaces rapidfuzz (jaro-winkler/levenshtein/indel + the fuzz.* composites + extract/cdist), goldenphonetic replaces jellyfish (soundex/metaphone/nysiis/match-rating), goldenmatch-hnsw replaces FAISS IndexHNSWFlat (pure-Rust HNSW ANN, zero C deps). Standalone + pyo3-free: `pip install goldenfuzz` / `pip install goldenphonetic` / `pip install goldenmatch-hnsw`; crates.io `goldenfuzz-core` / `goldenphonetic-core`.
 
 ## The healing loop (GoldenMatch's core workflow)
-Zero-config gets good results and returns the config it chose; the healer (`review_config`) reviews those results and suggests ranked, self-verified tweaks; you apply them, results improve, repeat. One zero-config pass gets you most of the way; the loop closes the gap to expert-tuned without you being the expert. The healer is wired into the default pipeline: every `dedupe_df` run attaches cheap candidate suggestions to `result.suggestions` when a free signal fires (`dedupe_df(suggest=True)` for verified, `heal=True` for the full apply loop; `GOLDENMATCH_SUGGEST_ON_DEDUPE=0` to disable). Needs `goldenmatch[native]`; degrades gracefully without it. Docs: [config-suggestions](https://docs.bensevern.dev/goldenmatch/config-suggestions)
+Zero-config gets good results and returns the config it chose; the healer (`review_config`) reviews those results and suggests ranked, self-verified tweaks; you apply them, results improve, repeat. One zero-config pass gets you most of the way; the loop closes the gap to expert-tuned without you being the expert. The healer is wired into the default pipeline: every `dedupe_df` run attaches cheap candidate suggestions to `result.suggestions` when a free signal fires (`dedupe_df(suggest=True)` for verified, `heal=True` for the full apply loop; `GOLDENMATCH_SUGGEST_ON_DEDUPE=0` to disable). Needs `goldenmatch[native]`; degrades gracefully without it. Docs: [config-suggestions](https://docs.bensevern.dev/docs/goldenmatch/config-suggestions)
 
 ## Why it stands out (GoldenMatch headline proofs)
-- 96.4% F1 on DBLP-ACM out of the box. The zero-tuning Fellegi-Sunter auto-config beats hand-rolled, expert-tuned Splink head-to-head on every dataset Splink scores: historical_50k pairwise F1 0.778 vs 0.757 (cluster-level B³ 0.844 vs 0.789), febrl3 0.991 vs 0.965, synthetic_person 0.998 vs 0.996 — one shared evaluator. Bake-off: docs/benchmarks/2026-06-09-splink-bakeoff.md
+- 96.4% F1 on DBLP-ACM out of the box. The zero-tuning Fellegi-Sunter auto-config beats hand-rolled, expert-tuned Splink head-to-head on every dataset Splink scores: historical_50k pairwise F1 0.827 vs 0.757 (cluster-level B³ 0.862 vs 0.788), febrl3 0.996 vs 0.965, synthetic_person 1.000 vs 0.996 — one shared evaluator. Bake-off: docs/benchmarks/2026-06-09-splink-bakeoff.md
 - Scales from a laptop CSV to a verified 100M-row dedupe in 9.2 min on a 5-node Ray cluster — recall-complete (correct across any partitioning), 20,000,000 clusters recovered exactly, driver peak 0.36 GB RSS
 - DQbench composite 91.04; PPRL 92.4% F1 on FEBRL4; a durable Identity Graph (stable entity_ids that survive across runs)
 
 ## AI-native surface
-- Every package ships an MCP server (135 tools across the suite), a REST API, and most an A2A agent surface
+- Every package ships an MCP server (139 tools across the suite), a REST API, and most an A2A agent surface
 - One aggregator container exposes the whole suite: `docker run ghcr.io/benseverndev-oss/goldensuite-mcp:latest`
 - Hosted remote MCP on Smithery, plus the official MCP Registry: `io.github.benseverndev-oss/{goldenmatch,goldencheck,goldenflow,goldenpipe,infermap}`
 
 ## Polyglot & edge
 - Python (PyPI) + TypeScript (npm), tracked to 4-decimal scorer parity via a cross-language harness
-- Cross-language phase-handoff has KNOWN LIMITS (surface parity != byte-for-byte interop): the identity graph (+ cryptographic cross-verification) and the `score -> cluster` boundary round-trip byte-safe; string scoring is 4-decimal tolerance-bounded (can flip a threshold); standardize/dates, embeddings, and the auto-config controller diverge; distributed/VLM/routing are Python-only. Measured by a conformance harness. Details: [Cross-language parity & phase-handoff limits](https://docs.bensevern.dev/concepts/cross-language-parity)
+- Cross-language phase-handoff has KNOWN LIMITS (surface parity != byte-for-byte interop): the identity graph (+ cryptographic cross-verification) and the `score -> cluster` boundary round-trip byte-safe; string scoring is 4-decimal tolerance-bounded (can flip a threshold); standardize/dates, embeddings, and the auto-config controller diverge; distributed/VLM/routing are Python-only. Measured by a conformance harness. Details: [Cross-language parity & phase-handoff limits](https://docs.bensevern.dev/docs/concepts/cross-language-parity)
 - TypeScript cores are dependency-free and `node:*`-free, so they run in browsers, Cloudflare Workers, Vercel Edge, and Deno
 - An opt-in WebAssembly backend (`await enableWasm()` / `enableAnalysisWasm()` / `enableSuggestWasm()`) swaps in the same pyo3-free Rust kernels (`score-core` / `analysis-core` / `suggest-core`, the last being the config-suggestion "healer") the Python wheels and SQL UDFs use; pure-TS stays the default and the byte-identical fallback
 - SQL-native in PostgreSQL (pgrx extension) and DuckDB
@@ -50,5 +50,5 @@ pip install goldenpipe[full]                                   # Check + Flow + 
 
 ## Docs
 - [Repository + full README](https://github.com/benseverndev-oss/goldenmatch)
-- [Docs site](https://docs.bensevern.dev/)
+- [Docs site](https://docs.bensevern.dev/docs/)
 - Per-package `llms.txt` files are listed under "Packages" above; GoldenMatch's is the deepest.

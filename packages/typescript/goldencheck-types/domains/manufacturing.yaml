@@ -22,3 +22,30 @@ types:
     value_signals:
       max_unique: 50
     suppress: ["uniqueness", "range_distribution"]
+
+# Entity roles (schema v4) — see finance.yaml for the roles-vs-types contract.
+roles:
+  machine:
+    kind: asset
+    name_hints: ["machine", "equipment", "asset", "device", "press", "workcenter"]
+    typical_types: ["production"]
+
+  component:
+    kind: asset
+    name_hints: ["part", "component", "sku", "item"]
+    typical_types: ["part", "bom"]
+
+  supplier:
+    kind: organization
+    name_hints: ["supplier", "vendor", "manufacturer", "oem"]
+    typical_types: ["part"]
+
+  plant:
+    kind: place
+    name_hints: ["plant", "factory", "site"]
+    typical_types: ["production"]
+
+  operator:
+    kind: person
+    name_hints: ["operator", "technician", "inspector"]
+    typical_types: ["quality"]

@@ -131,6 +131,7 @@ Every config object in the pydantic tree(s), generated from the package schema. 
 
 | Field | Type | Default | Choices / notes |
 |---|---|---|---|
+| `schema_version` | int | `1` | Config schema version; set by GoldenMatch (not user-tuned). Recorded with a run's config fingerprint for lineage/migration. Excluded from the fingerprint so a semantics-preserving schema bump keeps the same config id. |
 | `input` | InputConfig \| None | `None` | [`InputConfig`](#inputconfig) -- Input files to load; omit when passing a DataFrame directly to the API. |
 | `output` | OutputConfig | _(default OutputConfig)_ | [`OutputConfig`](#outputconfig) -- Where and how results are written. |
 | `match_settings` | MatchSettingsConfig \| None | `None` | [`MatchSettingsConfig`](#matchsettingsconfig) -- Nested matchkeys container; an alternative to the top-level matchkeys field. |
@@ -145,7 +146,7 @@ Every config object in the pydantic tree(s), generated from the package schema. 
 | `llm_scorer` | LLMScorerConfig \| None | `None` | [`LLMScorerConfig`](#llmscorerconfig) -- LLM pair-scoring configuration for borderline candidates. |
 | `llm_auto` | bool | `False` | Lets auto-config enable and configure the LLM scorer automatically. |
 | `domain` | DomainConfig \| None | `None` | [`DomainConfig`](#domainconfig) -- Domain feature-extraction configuration used before matchkeys. |
-| `backend` | str \| None | `None` | Execution backend: None (default Polars in-memory), 'ray', 'duckdb', 'chunked', or 'bucket'. |
+| `backend` | str \| None | `None` | Execution backend: None (default in-memory), 'ray', 'duckdb', 'datafusion', 'chunked', 'bucket', 'polars-direct', or 'spark'. |
 | `distributed_routing` | DistributedRoutingConfig \| None | `None` | [`DistributedRoutingConfig`](#distributedroutingconfig) -- Per-stage distributed-routing pins; None lets the planner decide every stage. |
 | `semantic_blocking` | SemanticBlockingConfig \| None | `None` | [`SemanticBlockingConfig`](#semanticblockingconfig) -- Opt-in semantic candidate-generation keys (ANN, initialism, alias) unioned into blocking. |
 | `allow_slow_path` | bool | `False` | Permits falling back to a slower non-fused execution path when the fast path is ineligible. |
@@ -213,7 +214,7 @@ _A matchkey: rule for declaring two records 'the same' on a field/field-set._
 | `keys` | list[BlockingKeyConfig] | `[]` | [`BlockingKeyConfig`](#blockingkeyconfig) -- Blocking keys that generate candidate pairs; records sharing any key are compared. |
 | `max_block_size` | int | `5000` | Ceiling on how many records one block may hold before it is treated as oversized. |
 | `skip_oversized` | bool | `False` | When true, blocks exceeding max_block_size are dropped rather than scored, guarding against mega-block blowups. |
-| `strategy` | Literal | `'static'` | `static`, `adaptive`, `sorted_neighborhood`, `multi_pass`, `ann`, `canopy`, `ann_pairs`, `learned`, `lsh`, `simhash`, `perceptual` -- Candidate-generation method that selects how pairs are proposed for scoring. |
+| `strategy` | Literal | `'static'` | `static`, `adaptive`, `sorted_neighborhood`, `multi_pass`, `ann`, `canopy`, `ann_pairs`, `learned`, `lsh`, `simhash`, `perceptual`, `token` -- Candidate-generation method that selects how pairs are proposed for scoring. |
 | `learned_sample_size` | int | `5000` | Number of sampled records the learned-predicate miner trains its blocking rules on. |
 | `learned_min_recall` | float | `0.95` | Minimum pair recall a learned predicate must retain to be accepted. |
 | `learned_min_reduction` | float | `0.9` | Minimum fraction of the full comparison space a learned predicate must eliminate. |
@@ -232,6 +233,7 @@ _A matchkey: rule for declaring two records 'the same' on a field/field-set._
 | `ann_top_k` | int | `20` | Number of nearest neighbors retrieved per record in ANN blocking. |
 | `canopy` | CanopyConfig \| None | `None` | [`CanopyConfig`](#canopyconfig) -- Configuration for canopy clustering when the strategy is 'canopy'. |
 | `lsh` | LSHKeyConfig \| None | `None` | [`LSHKeyConfig`](#lshkeyconfig) -- MinHash/LSH configuration required when the strategy is 'lsh'. |
+| `token` | TokenBlockingConfig \| None | `None` | [`TokenBlockingConfig`](#tokenblockingconfig) -- DF-pruned token-blocking configuration required when the strategy is 'token'. |
 | `simhash` | SimHashKeyConfig \| None | `None` | [`SimHashKeyConfig`](#simhashkeyconfig) -- SimHash/LSH configuration required when the strategy is 'simhash'. |
 | `perceptual` | PerceptualKeyConfig \| None | `None` | [`PerceptualKeyConfig`](#perceptualkeyconfig) -- Perceptual-hash LSH configuration used when the strategy is 'perceptual'. |
 
@@ -374,6 +376,7 @@ _Identity Graph configuration._
 | `emit_singletons` | bool | `True` | Whether single-record clusters also get a durable entity id. |
 | `weak_confidence_threshold` | float | `0.6` | Cluster confidence below which the bottleneck pair is flagged as a conflict for steward review; 0 disables it. |
 | `relationships` | list[RelationshipRule] | `[]` | [`RelationshipRule`](#relationshiprule) -- Rules deriving entity-to-entity relationship edges from shared non-identity attributes; empty leaves identity resolution unchanged. |
+| `deterministic_merge_keys` | list[str \| list[str]] | `[]` | Authoritative identifier columns (e.g. 'npi') whose shared non-null value collapses fragmented entities into one AFTER resolution: records are reassigned to the surviving id and absorbed nodes retired. A unique government id can't be split across entities. Entity-level (post-resolve), so it never cascades clusters. An entry may be a single column OR a list of columns for a GUARDED merge that requires the whole tuple to match (e.g. ['npi', 'last_name'] merges on a shared NPI only when the name also agrees, so a dirty/shared id alone can't force a bad merge). Empty (default) = off. |
 | `stitching` | ChannelStitchConfig \| None | `None` | [`ChannelStitchConfig`](#channelstitchconfig) -- Cross-device/channel stitching configuration; None leaves identity resolution unchanged. |
 | `survivorship` | SurvivorshipConfig \| None | `None` | [`SurvivorshipConfig`](#survivorshipconfig) -- Identity golden-record survivorship configuration; None keeps the default flat golden record. |
 | `stabilization` | StabilizationConfig \| None | `None` | [`StabilizationConfig`](#stabilizationconfig) -- Cross-run entity stabilization configuration; None runs no stabilize pass. |
@@ -469,6 +472,16 @@ _MinHash/LSH blocking on a text column (#1081)._
 | `seed` | int | `0` | Random seed making the MinHash permutations reproducible. |
 | `threshold` | float \| None | `None` | Target Jaccard similarity from which the band/row split is derived when num_bands is unset. |
 | `num_bands` | int \| None | `None` | Explicit LSH band count (must divide num_perms); overrides threshold when set. |
+
+### `TokenBlockingConfig`
+_DF-pruned token blocking on a free-text column (#2488)._
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `column` | str | **required** | Free-text column tokenized to build the inverted index. |
+| `min_token_length` | int | `3` | Tokens shorter than this are dropped; short tokens are mostly noise ('1', 'w/') and form large low-evidence blocks. |
+| `max_df_ratio` | float | `0.02` | Drop tokens appearing in more than this fraction of records. Used to derive the cap when max_df is unset. |
+| `max_df` | int \| None | `None` | Absolute document-frequency cap. When unset it is derived from max_df_ratio and clamped to [10, 1000] so the cap stays bounded at any frame size. |
 
 ### `SimHashKeyConfig`
 _SimHash/LSH blocking on a text column via dense embeddings (#1082)._
@@ -616,6 +629,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `certify-keys` | `--data` | text | **required** | Frame for a model/dataset/cube as name=path (repeatable), e.g. -d orders=orders.csv |
 | `certify-keys` | `--resolve` | boolean | `False` | Also measure entity fragmentation / undercount via ER (MetricFlow dialect only). |
 | `certify-keys` | `--fail-untrustworthy` | boolean | `False` | Exit non-zero if any declared key is not unique at grain (CI gate). |
+| `certify-keys` | `--json` | boolean | `False` | Emit the verdict-rich report as JSON (the shared MCP/REST shape) — machine-readable for a CI gate. |
 | `compare-clusters` | `file_a` | text | **required** | First cluster JSON file (baseline / ER1) |
 | `compare-clusters` | `file_b` | text | **required** | Second cluster JSON file (comparison / ER2) |
 | `compare-clusters` | `--details` | boolean | `False` | Show per-cluster transformation details |
@@ -634,7 +648,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `dedupe` | `--model` | text | `None` | Override embedding model selection |
 | `dedupe` | `--preview` | boolean | `False` | Preview results without writing files |
 | `dedupe` | `--preview-size` | integer | `10000` | Number of records for preview sample |
-| `dedupe` | `--preview-random` | boolean | `False` | Random sample instead of first N |
+| `dedupe` | `--preview-random` | boolean | `False` | Deprecated no-op: accepted for back-compat but not applied (preview uses the first N). |
 | `dedupe` | `--output-golden` | boolean | `False` | Output golden records |
 | `dedupe` | `--output-clusters` | boolean | `False` | Output cluster info |
 | `dedupe` | `--output-dupes` | boolean | `False` | Output duplicate records |
@@ -649,13 +663,13 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `dedupe` | `--run-name` | text | `None` | Run name for output files |
 | `dedupe` | `--auto-fix` | boolean | `False` | Run auto-fix before matching |
 | `dedupe` | `--auto-block` | boolean | `False` | Auto-suggest blocking keys |
-| `dedupe` | `--chunked` | boolean | `False` | Large dataset mode - process in chunks for files >1M records |
+| `dedupe` | `--chunked` | boolean | `False` | Deprecated no-op: use --backend chunked for large-dataset chunked processing. |
 | `dedupe` | `--chunk-size` | integer | `100000` | Records per chunk in chunked mode |
 | `dedupe` | `--diff` | boolean | `False` | Generate before/after CSV diff |
-| `dedupe` | `--diff-html` | boolean | `False` | Generate before/after HTML diff with highlighting |
+| `dedupe` | `--diff-html` | boolean | `False` | Deprecated no-op: accepted for back-compat but not generated; use --diff for a CSV diff. |
 | `dedupe` | `--merge-preview` | boolean | `False` | Show merge preview (what will change) without writing |
 | `dedupe` | `--anomalies` | boolean | `False` | Detect suspicious/fake records |
-| `dedupe` | `--anomaly-sensitivity` | text | `'medium'` | low, medium, or high |
+| `dedupe` | `--anomaly-sensitivity` | text | `'medium'` | Deprecated no-op: accepted for back-compat but not applied (anomaly sensitivity is fixed). |
 | `dedupe` | `--llm-boost` | boolean | `False` | Boost accuracy with LLM-labeled training data |
 | `dedupe` | `--llm-retrain` | boolean | `False` | Force re-labeling (ignore saved model) |
 | `dedupe` | `--llm-provider` | text | `None` | LLM provider: auto, anthropic, or openai |
@@ -672,6 +686,14 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `demo` | `--dashboard` | boolean | `False` | Generate before/after dashboard |
 | `demo` | `--graph` | boolean | `False` | Generate cluster graph |
 | `demo` | `--quiet` | boolean | `False` | Suppress animated output |
+| `discover-model` | `--data` | text | **required** | A source table as name=path (repeatable), e.g. -d orders=orders.csv |
+| `discover-model` | `--dialect` | text | `'metricflow'` | Emit dialect for the draft model: metricflow / cube / osi. |
+| `discover-model` | `--output` | text | `None` | Write the draft semantic-model YAML to this path. |
+| `discover-model` | `--resolve` | boolean | `False` | Also measure entity fragmentation / undercount via ER (fail-open). |
+| `discover-model` | `--name` | boolean | `False` | Also run the OPTIONAL advisory LLM namer (business names for entities/dimensions/values/measures; abstains without an LLM key). |
+| `discover-model` | `--apply-names` | boolean | `False` | Write the namer's VERIFIED names into the emitted YAML (entity/measure label:, dimension/value meta.goldenmatch.glossary). Implies --name; post-certification + cosmetic. |
+| `discover-model` | `--fail-untrustworthy` | boolean | `False` | Exit non-zero if any proposed key is not unique at grain (CI gate). |
+| `discover-model` | `--json` | boolean | `False` | Emit the full proposed model (shape + certification) as JSON. |
 | `evaluate` | `files` | text | **required** | Input files (path or path:source_name) |
 | `evaluate` | `--config` | path | **required** | Config YAML path |
 | `evaluate` | `--ground-truth` | path | `None` | Ground truth CSV path (required unless --certify) |
@@ -749,6 +771,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `import-dbt` | `--catalog` | text | `None` | dbt catalog.json (from `dbt docs generate`); supplies model column lists so recognized most-recent survivorship is emitted as golden_rules (otherwise it is only reported) |
 | `import-dbt` | `--strict` | boolean | `False` | Fail on any lossy finding (warnings), not just errors |
 | `import-dbt` | `--min-confidence` | float | `0.5` | ER-model identification confidence floor for signal extraction |
+| `import-dbt` | `--select` | text | `[]` | Scope to specific ER models (repeatable), dbt-style; without it a full warehouse over-extracts. Globs the model name (`dedup_*`), or `path:*entity_resolution*`, or `tag:&lt;name>`. Selected models bypass --min-confidence. |
 | `import-dbt` | `--verify` | text | `None` | Prove the distillation reproduces your dbt pipeline: run the converted config on a sample of --source and report pairwise cluster agreement against this output table (parquet/csv; first two columns = id, cluster_id). Needs --source. |
 | `import-dbt` | `--source` | text | `None` | Source rows the dbt ER model consumed (parquet/csv), for --verify |
 | `import-dbt` | `--verify-sample` | integer | `5000` | Rows of --source to run through GoldenMatch for --verify |
@@ -803,7 +826,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `match` | `--config` | text | `None` | Path to YAML config file (optional - auto-detects if omitted) |
 | `match` | `--preview` | boolean | `False` | Preview results without writing files |
 | `match` | `--preview-size` | integer | `10000` | Number of records for preview sample |
-| `match` | `--preview-random` | boolean | `False` | Random sample instead of first N |
+| `match` | `--preview-random` | boolean | `False` | Deprecated no-op: accepted for back-compat but not applied (preview uses the first N). |
 | `match` | `--output-matched` | boolean | `False` | Output matched records |
 | `match` | `--output-unmatched` | boolean | `False` | Output unmatched records |
 | `match` | `--output-scores` | boolean | `False` | Output score details |
@@ -854,6 +877,19 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `migrate-splink` | `--verify-threshold` | float | `0.5` | Splink match-probability cut for --verify |
 | `migrate-splink` | `--strict` | boolean | `False` | Fail on any lossy mapping (warnings), not just errors |
 | `migrate-splink` | `--id-column` | text | `None` | Column holding each row's id (default: auto-detect unique_id/id/record_id) |
+| `ontology certify` | `ontology` | text | **required** | OWL/RDF ontology file (Turtle / RDF-XML / JSON-LD / N-Triples). |
+| `ontology certify` | `--data` | text | **required** | Instance data for a class as Class=path (repeatable), e.g. -d Patient=patients.csv |
+| `ontology certify` | `--json` | boolean | `False` | Emit the certification report as JSON. |
+| `ontology certify` | `--fail-untrustworthy` | boolean | `False` | Exit non-zero if any declared identity key is not unique at grain (CI gate). |
+| `ontology discover` | `--data` | text | **required** | A class's instance data as Class=path (repeatable), e.g. -d Customer=customers.csv |
+| `ontology discover` | `--output` | text | `None` | Write the draft OWL ontology (Turtle) to this path. |
+| `ontology discover` | `--base-iri` | text | `None` | Base IRI for the emitted terms. |
+| `ontology discover` | `--ontology-iri` | text | `None` | IRI for the ontology node. |
+| `ontology discover` | `--endpoint` | text | `None` | Write the OWL to a live SPARQL 1.1 Graph Store endpoint (a triple store). |
+| `ontology discover` | `--graph-iri` | text | `None` | Named graph for --endpoint (default graph if omitted). |
+| `ontology discover` | `--mode` | text | `'replace'` | --endpoint write mode: replace (PUT) or merge (POST). |
+| `ontology discover` | `--json` | boolean | `False` | Emit the discovery result as JSON. |
+| `ontology discover` | `--fail-untrustworthy` | boolean | `False` | Exit non-zero if any discovered class key is not unique at grain (CI gate). |
 | `pprl auto-config` | `file` | path | **required** | Data file to analyze (CSV) |
 | `pprl auto-config` | `--security` | text | `'high'` | Security level: standard, high, paranoid |
 | `pprl auto-config` | `--llm` | boolean | `False` | Use LLM for enhanced recommendations |
@@ -933,7 +969,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 
 ## MCP tools
 
-94 MCP tool(s) exposed by `goldenmatch.mcp.server` -- the programmatic / agent surface. Config-bearing tools take the same knobs as above.
+97 MCP tool(s) exposed by `goldenmatch.mcp.server` -- the programmatic / agent surface. Config-bearing tools take the same knobs as above.
 
 | Tool | Description |
 |---|---|
@@ -959,6 +995,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `create_domain` | Create a custom domain extraction rulebook. Define patterns for a specific data domain (medical devices, automotive parts, real estate, etc.). |
 | `customer_360` | The unified Customer 360 serving view of one entity, composed from the durable store in one call: the golden record + per-field source provenance, every linked source record, the event timeline, and the relationship neighborhood. This is the same durable entity_id a resolved crosswalk (semantic-layer wedge) groups metrics by, so a metric row drills straight through to the customer. Returns &#123;found: false&#125; when no such entity exists. |
 | `dedupe` | Alias for `find_duplicates`. Find duplicate matches for a record. Provide field values to search against the loaded dataset. |
+| `discover_semantic_model` | Generative half of the semantic-layer front door: point GoldenMatch at a set of source tables and it PROPOSES a draft semantic model -- entity types, keys, joins, measures, dimensions -- where every declared key is already graded by the certifier (unique-at-grain + fan-out). Discovery is hypothesis generation; certification is the falsification test, so the draft is pre-proven against the data. Advisory; nothing is auto-applied. |
 | `documents_ingest` | Extract records from documents (PDF/image) against a target schema into rows ready for dedupe_df. Returns records + an ingest report. |
 | `documents_suggest_schema` | Propose a target extraction schema (JSON) from a sample document image/PDF. |
 | `emit_semantic_model_from_store` | Emit a conformed semantic-layer catalog (the `resolved_entity_id` join a MetricFlow / Cube / OSI model should group metrics by) directly from the durable identity store — 'keep the semantic layer's identity join live against the control plane'. Returns the emitted YAML; when `path` is set, also writes it to that catalog file (refuses to clobber unless overwrite=true). |
@@ -1008,6 +1045,8 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `memory_export` | Return all corrections as a list of dicts (CSV-shaped). Caller is responsible for writing the file. Optionally filter by dataset. |
 | `memory_import` | Import corrections from a list of dicts (the exact shape memory_export returns). Upserts into the store: higher trust wins, same trust = latest wins. Returns the count imported. |
 | `memory_stats` | Return Learning Memory status: total correction count, last learn time, and current learned adjustments. Cheap; safe for status checks. |
+| `ontology_certify` | Ontology-layer front door (consume): certify the identity keys an OWL/RDF ontology DECLARES (owl:hasKey, inverse-functional properties) against real instance data. The ontology asserts identity but resolves it only by brittle exact-match; this returns a per-key verdict (unique-at-grain + fan-out) so an over-merging IFP/key is caught before a reasoner trusts it. Advisory. Needs the goldenmatch[ontology] extra. |
+| `ontology_discover` | Ontology-layer front door (generate): point GoldenMatch at a set of class instance tables and it PROPOSES a draft OWL ontology -- one owl:Class per frame whose owl:hasKey is chosen and PRE-GRADED by the certifier (gm:keyTrustworthy / gm:keyUniquenessEstimate). Discovery is hypothesis; certification is the falsification test. Returns the discovery result + the Turtle. Needs the goldenmatch[ontology] extra. |
 | `plan_routing` | Project per-stage distributed routing (scoring/clustering/golden) for a given data shape + cluster. Pure; no controller run. |
 | `pprl_auto_config` | Analyze the loaded dataset and recommend optimal PPRL (privacy-preserving record linkage) configuration. Returns recommended fields, bloom filter parameters, threshold, and explanation. |
 | `pprl_link` | Run privacy-preserving record linkage between two parties' data. Computes bloom filters, matches records without sharing raw data. Specify fields, threshold, and security level. |
@@ -1082,6 +1121,7 @@ _`BlockingConfig.strategy` -- `BlockingConfig.strategy`._
 | `simhash` | SimHash LSH over embeddings. | Semantic near-duplicate text |
 | `sorted_neighborhood` | Slide a window over sorted records. | Typos in the blocking key |
 | `static` | Group records by an exact blocking key. | Clean data with reliable keys |
+| `token` | Inverted index over DF-pruned tokens; a record joins one block per token, so a pair is a candidate when it shares any token. | Free text where no prefix agrees (product titles) |
 
 ### Simple transforms
 _`VALID_SIMPLE_TRANSFORMS` -- `transforms` chains._
@@ -1184,7 +1224,7 @@ _`_PLANNING_EFFORTS` -- `planning_effort`._
 
 ## Environment variables (index)
 
-191 `GOLDENMATCH_*` runtime knob(s) read by the package, scanned from source so this is complete. Details in [Tuning & opt-ins](/goldenmatch/tuning). Grouped by area:
+207 `GOLDENMATCH_*` runtime knob(s) read by the package, scanned from source so this is complete. Details in [Tuning & opt-ins](/goldenmatch/tuning). Grouped by area:
 
 - **AGENT** (1): `GOLDENMATCH_AGENT_TOKEN`
 - **ALLOWED** (1): `GOLDENMATCH_ALLOWED_ROOT`
@@ -1193,12 +1233,13 @@ _`_PLANNING_EFFORTS` -- `planning_effort`._
 - **API** (2): `GOLDENMATCH_API_CORS_ORIGINS`, `GOLDENMATCH_API_TOKEN`
 - **ATTRIBUTE** (1): `GOLDENMATCH_ATTRIBUTE_DEMOTION`
 - **AUTO** (1): `GOLDENMATCH_AUTO_SEMANTIC_BLOCKING`
-- **AUTOCONFIG** (10): `GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE`, `GOLDENMATCH_AUTOCONFIG_FORCE_EXCLUDE`, `GOLDENMATCH_AUTOCONFIG_FORCE_INCLUDE`, `GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET`, `GOLDENMATCH_AUTOCONFIG_LLM`, `GOLDENMATCH_AUTOCONFIG_MEMORY`, `GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC`, `GOLDENMATCH_AUTOCONFIG_SAMPLE_STRATEGY`, `GOLDENMATCH_AUTOCONFIG_ZERO_LABEL_COMMIT`, `GOLDENMATCH_AUTOCONFIG_ZERO_LABEL_STABILITY`
+- **AUTOCONFIG** (11): `GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE`, `GOLDENMATCH_AUTOCONFIG_DETERMINISTIC`, `GOLDENMATCH_AUTOCONFIG_FORCE_EXCLUDE`, `GOLDENMATCH_AUTOCONFIG_FORCE_INCLUDE`, `GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET`, `GOLDENMATCH_AUTOCONFIG_LLM`, `GOLDENMATCH_AUTOCONFIG_MEMORY`, `GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC`, `GOLDENMATCH_AUTOCONFIG_SAMPLE_STRATEGY`, `GOLDENMATCH_AUTOCONFIG_ZERO_LABEL_COMMIT`, `GOLDENMATCH_AUTOCONFIG_ZERO_LABEL_STABILITY`
 - **BASE** (1): `GOLDENMATCH_BASE_STORE`
 - **BENCH** (1): `GOLDENMATCH_BENCH_DUMP_PAIRS`
-- **BLOCKING** (9): `GOLDENMATCH_BLOCKING_CARDINALITY_SCALER`, `GOLDENMATCH_BLOCKING_COST_AWARE`, `GOLDENMATCH_BLOCKING_DEGENERATE_MAX_AVG_BLOCK_SIZE`, `GOLDENMATCH_BLOCKING_DEGENERATE_THRESHOLD`, `GOLDENMATCH_BLOCKING_MAX_RATIO`, `GOLDENMATCH_BLOCKING_MIN_RATIO`, `GOLDENMATCH_BLOCKING_PAIRS_PER_ROW`, `GOLDENMATCH_BLOCKING_PASS_MIN_WEAKPOS`, `GOLDENMATCH_BLOCKING_PRUNE_PASSES`
+- **BLOCKING** (10): `GOLDENMATCH_BLOCKING_CARDINALITY_SCALER`, `GOLDENMATCH_BLOCKING_COST_AWARE`, `GOLDENMATCH_BLOCKING_DEGENERATE_MAX_AVG_BLOCK_SIZE`, `GOLDENMATCH_BLOCKING_DEGENERATE_THRESHOLD`, `GOLDENMATCH_BLOCKING_DIVERSIFY_PAIR_BUDGET`, `GOLDENMATCH_BLOCKING_MAX_RATIO`, `GOLDENMATCH_BLOCKING_MIN_RATIO`, `GOLDENMATCH_BLOCKING_PAIRS_PER_ROW`, `GOLDENMATCH_BLOCKING_PASS_MIN_WEAKPOS`, `GOLDENMATCH_BLOCKING_PRUNE_PASSES`
 - **BRIDGE** (1): `GOLDENMATCH_BRIDGE_REQUIRE_PY`
 - **BUCKET** (5): `GOLDENMATCH_BUCKET_DEBUG`, `GOLDENMATCH_BUCKET_DEFAULT`, `GOLDENMATCH_BUCKET_SLIM_PROJECTION`, `GOLDENMATCH_BUCKET_VEC_MAX`, `GOLDENMATCH_BUCKET_VEC_MIN`
+- **CANDIDATE** (1): `GOLDENMATCH_CANDIDATE_COUNT_MAX_BLOCKS`
 - **CLUSTER** (1): `GOLDENMATCH_CLUSTER_SPLIT_EDGE_BUDGET`
 - **COLUMNAR** (1): `GOLDENMATCH_COLUMNAR_PIPELINE`
 - **CONFIG** (1): `GOLDENMATCH_CONFIG_LINT`
@@ -1214,7 +1255,7 @@ _`_PLANNING_EFFORTS` -- `planning_effort`._
 - **FD** (1): `GOLDENMATCH_FD_NEGATIVE_EVIDENCE`
 - **FIELD** (1): `GOLDENMATCH_FIELD_GROUP_SURVIVORSHIP`
 - **FRAME** (2): `GOLDENMATCH_FRAME`, `GOLDENMATCH_FRAME_LANE`
-- **FS** (37): `GOLDENMATCH_FS_ARROW_STREAM`, `GOLDENMATCH_FS_ATOMIC_NAME_BLOCKING`, `GOLDENMATCH_FS_AUTOCONFIG_V2`, `GOLDENMATCH_FS_BATCH_ROWS`, `GOLDENMATCH_FS_BLOCK_SOURCE`, `GOLDENMATCH_FS_BUCKET_BATCH`, `GOLDENMATCH_FS_BUCKET_NATIVE`, `GOLDENMATCH_FS_CALIBRATED`, `GOLDENMATCH_FS_CALIBRATE_THRESHOLD`, `GOLDENMATCH_FS_COLUMNAR_CLUSTER`, `GOLDENMATCH_FS_DEFAULT_BUCKET`, `GOLDENMATCH_FS_DOMAIN_COMPARATORS`, `GOLDENMATCH_FS_EM_AGG_BLOCKS`, `GOLDENMATCH_FS_EM_BLOCK_SLIM`, `GOLDENMATCH_FS_EM_SAMPLE_ROWS`, `GOLDENMATCH_FS_EVIDENCE_CUT`, `GOLDENMATCH_FS_FACTORIZE`, `GOLDENMATCH_FS_FACTORIZE_MIN_REPEAT`, `GOLDENMATCH_FS_MAX_PASS_PAIRS`, `GOLDENMATCH_FS_MISSING`, `GOLDENMATCH_FS_MONOTONIC`, `GOLDENMATCH_FS_NATIVE`, `GOLDENMATCH_FS_OOC_ARROW_CLUSTER`, `GOLDENMATCH_FS_OOC_DEBUG`, `GOLDENMATCH_FS_OOC_WAVE_ROWS`, `GOLDENMATCH_FS_ORTHOGONAL_BLOCKING`, `GOLDENMATCH_FS_OUT_OF_CORE`, `GOLDENMATCH_FS_POST_BLOCKING_U`, `GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE`, `GOLDENMATCH_FS_ROUTE_MIN_ROWS`, `GOLDENMATCH_FS_SCORED_PAIRS_MAX`, `GOLDENMATCH_FS_SPILL_FORCE_SHARD`, `GOLDENMATCH_FS_STRIP_HONORIFICS`, `GOLDENMATCH_FS_TF_ADJUSTMENT`, `GOLDENMATCH_FS_VECTORIZED`, `GOLDENMATCH_FS_VEC_MAX_ELEMS`, `GOLDENMATCH_FS_WORKERS`
+- **FS** (44): `GOLDENMATCH_FS_ARROW_STREAM`, `GOLDENMATCH_FS_ATOMIC_NAME_BLOCKING`, `GOLDENMATCH_FS_AUTOCONFIG_V2`, `GOLDENMATCH_FS_BATCH_ROWS`, `GOLDENMATCH_FS_BLOCK_SOURCE`, `GOLDENMATCH_FS_BUCKET_BATCH`, `GOLDENMATCH_FS_BUCKET_NATIVE`, `GOLDENMATCH_FS_BUCKET_SCORE_WORKERS`, `GOLDENMATCH_FS_CALIBRATED`, `GOLDENMATCH_FS_CALIBRATE_THRESHOLD`, `GOLDENMATCH_FS_COLUMNAR_CLUSTER`, `GOLDENMATCH_FS_DEFAULT_BUCKET`, `GOLDENMATCH_FS_DOMAIN_COMPARATORS`, `GOLDENMATCH_FS_EM_AGG_BLOCKS`, `GOLDENMATCH_FS_EM_BLOCK_SLIM`, `GOLDENMATCH_FS_EM_COUNTED`, `GOLDENMATCH_FS_EM_SAMPLE_ROWS`, `GOLDENMATCH_FS_EVIDENCE_CUT`, `GOLDENMATCH_FS_FACTORIZE`, `GOLDENMATCH_FS_FACTORIZE_MIN_REPEAT`, `GOLDENMATCH_FS_MAX_PASS_PAIRS`, `GOLDENMATCH_FS_MISSING`, `GOLDENMATCH_FS_MONOTONIC`, `GOLDENMATCH_FS_NATIVE`, `GOLDENMATCH_FS_OOC_ARROW_CLUSTER`, `GOLDENMATCH_FS_OOC_DEBUG`, `GOLDENMATCH_FS_OOC_WAVE_ROWS`, `GOLDENMATCH_FS_ORTHOGONAL_BLOCKING`, `GOLDENMATCH_FS_OUT_OF_CORE`, `GOLDENMATCH_FS_OVERSIZED_CHUNK_PAIRS`, `GOLDENMATCH_FS_POST_BLOCKING_U`, `GOLDENMATCH_FS_REFIT_SWEEP`, `GOLDENMATCH_FS_REFIT_THRESHOLD`, `GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE`, `GOLDENMATCH_FS_ROUTE_MIN_ROWS`, `GOLDENMATCH_FS_SCORED_PAIRS_MAX`, `GOLDENMATCH_FS_SEQUENTIAL_BATCHED_OUTPUT`, `GOLDENMATCH_FS_SEQUENTIAL_BOUNDED_SCORING`, `GOLDENMATCH_FS_SPILL_FORCE_SHARD`, `GOLDENMATCH_FS_STRIP_HONORIFICS`, `GOLDENMATCH_FS_TF_ADJUSTMENT`, `GOLDENMATCH_FS_VECTORIZED`, `GOLDENMATCH_FS_VEC_MAX_ELEMS`, `GOLDENMATCH_FS_WORKERS`
 - **FUSED** (5): `GOLDENMATCH_FUSED_BLOCK_CONCURRENCY`, `GOLDENMATCH_FUSED_BYTES_PER_CELL`, `GOLDENMATCH_FUSED_BYTES_PER_PAIR`, `GOLDENMATCH_FUSED_PRESSURE_FRACTION`, `GOLDENMATCH_FUSED_RSS_SCALE`
 - **GOLDEN** (4): `GOLDENMATCH_GOLDEN_FUSED`, `GOLDENMATCH_GOLDEN_SLIM_MULTIDF`, `GOLDENMATCH_GOLDEN_STRATEGY_STRICT`, `GOLDENMATCH_GOLDEN_TUNER_MIN_CORRECTIONS`
 - **GPU** (3): `GOLDENMATCH_GPU_API_KEY`, `GOLDENMATCH_GPU_ENDPOINT`, `GOLDENMATCH_GPU_MODE`
@@ -1238,14 +1279,16 @@ _`_PLANNING_EFFORTS` -- `planning_effort`._
 - **PREPARED** (2): `GOLDENMATCH_PREPARED_RECORD_STORE_DIR`, `GOLDENMATCH_PREPARED_RECORD_STORE_PERSIST`
 - **QUALITY** (2): `GOLDENMATCH_QUALITY_AWARE_BLOCKING`, `GOLDENMATCH_QUALITY_GATED_REVIEW`
 - **SAIL** (1): `GOLDENMATCH_SAIL_IDENTITY_ID_SCHEME`
-- **SEMANTIC** (1): `GOLDENMATCH_SEMANTIC_BLOCKING_THRESHOLD`
+- **SEMANTIC** (2): `GOLDENMATCH_SEMANTIC_BLOCKING_THRESHOLD`, `GOLDENMATCH_SEMANTIC_NAMER`
 - **SKIP** (1): `GOLDENMATCH_SKIP_MATCH_LOG`
+- **SPARK** (4): `GOLDENMATCH_SPARK_EXACT_PROFILING`, `GOLDENMATCH_SPARK_FUSED_BLOCK_JOIN`, `GOLDENMATCH_SPARK_JAR`, `GOLDENMATCH_SPARK_VECTOR_SCORER`
 - **STANDARDIZE** (1): `GOLDENMATCH_STANDARDIZE_STAGED`
 - **STREAMING** (1): `GOLDENMATCH_STREAMING_BLOCK_WORKERS`
 - **SUGGEST** (10): `GOLDENMATCH_SUGGEST_COHESION`, `GOLDENMATCH_SUGGEST_COVERAGE_CAP`, `GOLDENMATCH_SUGGEST_FULL_DIST`, `GOLDENMATCH_SUGGEST_HEALTH`, `GOLDENMATCH_SUGGEST_MAX_VERIFY`, `GOLDENMATCH_SUGGEST_ON_DEDUPE`, `GOLDENMATCH_SUGGEST_RECALL_COH_ABS`, `GOLDENMATCH_SUGGEST_RECALL_MIN_SHED`, `GOLDENMATCH_SUGGEST_RECALL_RATIO`, `GOLDENMATCH_SUGGEST_VERIFY`
 - **SYNC** (1): `GOLDENMATCH_SYNC_STREAMING_THRESHOLD`
 - **TF** (1): `GOLDENMATCH_TF_NAME_WEIGHTING`
 - **THROUGHPUT** (3): `GOLDENMATCH_THROUGHPUT`, `GOLDENMATCH_THROUGHPUT_RECALL`, `GOLDENMATCH_THROUGHPUT_SIMILARITY`
+- **TOKEN** (1): `GOLDENMATCH_TOKEN_BLOCKING`
 - **TRANSFORM** (1): `GOLDENMATCH_TRANSFORM_DEBUG`
 - **TRANSITIVE** (2): `GOLDENMATCH_TRANSITIVE_POSTFLIGHT`, `GOLDENMATCH_TRANSITIVE_WEAK_MARGIN`
 - **UDF** (1): `GOLDENMATCH_UDF_IMPORTS`

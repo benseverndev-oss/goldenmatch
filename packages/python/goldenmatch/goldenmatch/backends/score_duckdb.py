@@ -241,6 +241,23 @@ def score_blocks_duckdb(
             "DuckDB scoring: %d blocks, %d pairs (store=%s)",
             len(blocks), len(result), resolved_db_path,
         )
+        # Report to the auto-config emitter (#2647). This backend calls
+        # `_score_one_block` directly and bypassed `core/scorer.py`'s emitting
+        # wrapper, so a run routed here left the emitter on the all-zero
+        # `ScoringProfile()` default -- which `health()` reads as "nothing
+        # happened" -> RED, refusing the run at `n_rows >= REFUSE_AT_N`.
+        #
+        # `candidates_counted=False`: the candidate total is not computed on this
+        # path, so it is ABSENT rather than zero (#2644 added the flag to say so).
+        # A no-op when no capture is open.
+        from goldenmatch.core.scorer import (
+            _emit_scoring_profile,
+            profile_threshold,
+        )
+
+        _emit_scoring_profile(result, profile_threshold(mk, result),
+                              candidates_compared=0, candidates_counted=False,
+                              route="duckdb")
         return result
     finally:
         con.close()

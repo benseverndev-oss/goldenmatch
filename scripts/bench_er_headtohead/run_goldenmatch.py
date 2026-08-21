@@ -25,6 +25,180 @@ except ImportError:  # pragma: no cover - Windows fallback path
     resource = None
 
 
+def _score_histogram(ded, bins: int = 100) -> dict:
+    """Histogram of the scores this run ACTUALLY produced.
+
+    Reads the Arrow pair table out of ``__dict__`` rather than the
+    ``DedupeResult.scored_pairs`` property. That property calls
+    ``scored_pairs_from_table``, which materialises a ``list[tuple]`` at a
+    MEASURED ~168 B/pair; the 1M-row person shape scores ~1.5M pairs, so
+    reading it here would add ~250 MB resident to a run whose ``peak_rss_mb``
+    this same file reports two lines later. Telemetry that moves the number it
+    is printed next to is worse than no telemetry.
+
+    **This is the RETAINED-pair distribution, truncated at the cut.** It is not
+    the distribution the calibrator sees and it CANNOT answer whether a dataset
+    is separable. `DedupeResult.scored_pairs` holds the pairs the scorer
+    emitted, which are the ones that already passed; the first version of this
+    docstring claimed `largest_gap` measured separability, and the first run
+    disproved it -- `gm_probabilistic` on biblio carries `link_threshold=0.85`
+    and a minimum retained score of 0.9917, so all 22,767 pairs land in one
+    0.01-wide bin. A gap detector fed a truncated distribution reports the
+    truncation, not the structure.
+
+    Separability is answered by `dump_fs_score_histograms.py`, which spies on
+    `_posterior_split` to capture the untruncated training-pair scores AND
+    splits them by ground truth. Use that; this is not a substitute.
+
+    What this DOES show is where the retained mass sits relative to the cut,
+    which is how the posterior scale's saturation became visible: everything
+    accepted piles into [0.9917, 1.0] with nothing between it and the nominal
+    0.85 threshold.
+    """
+    try:
+        import numpy as np
+
+        tbl = ded.__dict__.get("_scored_pairs_table")
+        if tbl is not None and getattr(tbl, "num_rows", 0):
+            scores = tbl.column("score").to_numpy(zero_copy_only=False)
+        else:
+            raw = ded.__dict__.get("_scored_pairs")
+            if type(raw) is not list or not raw:
+                return {"available": False, "reason": "no scored pairs retained"}
+            scores = np.fromiter((s for _, _, s in raw), np.float64, len(raw))
+        if scores.size == 0:
+            return {"available": False, "reason": "empty"}
+
+        counts, edges = np.histogram(scores, bins=bins, range=(0.0, 1.0))
+        # Longest run of empty bins strictly INSIDE the observed range. Bins
+        # below the minimum or above the maximum are empty for a trivial
+        # reason and would report a gap that no threshold could ever sit in.
+        lo_bin = int(np.searchsorted(edges, scores.min(), "right") - 1)
+        hi_bin = int(np.searchsorted(edges, scores.max(), "right") - 1)
+        best_len = best_start = 0
+        run_len = run_start = 0
+        for i in range(max(lo_bin, 0), min(hi_bin + 1, len(counts))):
+            if counts[i] == 0:
+                if run_len == 0:
+                    run_start = i
+                run_len += 1
+                if run_len > best_len:
+                    best_len, best_start = run_len, run_start
+            else:
+                run_len = 0
+        return {
+            "available": True,
+            "n_pairs": int(scores.size),
+            "min": round(float(scores.min()), 6),
+            "max": round(float(scores.max()), 6),
+            "mean": round(float(scores.mean()), 6),
+            "quantiles": {
+                q: round(float(np.quantile(scores, q / 100)), 6)
+                for q in (1, 5, 25, 50, 75, 95, 99)
+            },
+            "bin_edges": [round(float(e), 4) for e in edges],
+            "counts": [int(c) for c in counts],
+            "largest_gap": {
+                "bins": int(best_len),
+                "lo": round(float(edges[best_start]), 4) if best_len else None,
+                "hi": round(float(edges[best_start + best_len]), 4) if best_len else None,
+                "width": round(float(best_len / bins), 4),
+            },
+        }
+    except Exception as e:  # noqa: BLE001 - diagnostics must never fail a lane
+        return {"available": False, "error": f"{type(e).__name__}: {e}"}
+
+
+def _config_telemetry(cfg) -> dict:
+    """The RESOLVED thresholds and blocking passes the run actually used.
+
+    `link_threshold` and `blocking` were already in the emitted JSON as literal
+    `null` for every lane at both scales -- present enough to look recorded,
+    empty enough to be useless. Auto-config decides both, so without them a
+    reader cannot tell an over-merge caused by a low cut from one caused by
+    loose blocking.
+    """
+    out: dict = {"matchkeys": [], "blocking_passes": None}
+    try:
+        for mk in cfg.get_matchkeys():
+            out["matchkeys"].append({
+                "name": getattr(mk, "name", None),
+                "type": getattr(mk, "type", None),
+                "link_threshold": getattr(mk, "link_threshold", None),
+                "review_threshold": getattr(mk, "review_threshold", None),
+                "fields": [getattr(f, "field", None) for f in getattr(mk, "fields", [])],
+                "scorers": [getattr(f, "scorer", None) for f in getattr(mk, "fields", [])],
+            })
+    except Exception as e:  # noqa: BLE001
+        out["matchkeys_error"] = f"{type(e).__name__}: {e}"
+    try:
+        # `.passes` FIRST, `.keys` only as the fallback -- and the order is the
+        # whole point. For a `multi_pass` config the plan lives in `.passes`
+        # while `.keys` holds just the primary key, so reading `.keys` first
+        # reported ONE pass for an eight-pass plan. That is not a cosmetic
+        # under-report: it is why `blocking_passes: [["city","first_name"]]`
+        # appeared identical for `gm_zeroconfig` and `gm_probabilistic_shipped`
+        # in run 32084546976, and why the two lanes looked like they differed
+        # only in threshold when they actually differed 2-passes-vs-8.
+        #
+        # The original comment justified `.keys` because a first version read
+        # `.passes` and got `[]` for every lane. Empty-vs-absent is the real
+        # distinction there: `or` on an EMPTY list falls through to keys, while
+        # `is None` does not. Same keys-vs-passes confusion that
+        # `_carries_own_blocking_plan` (#2488) exists for and that
+        # `rule_low_reduction_ratio` had.
+        #
+        # Transforms are recorded too: `[city, first_name]` appears twice in the
+        # probabilistic plan differing ONLY by transform (strip vs
+        # substring:0:5), so fields alone cannot tell two passes apart.
+        blocking = getattr(cfg, "blocking", None)
+        keys = list(getattr(blocking, "passes", None) or []) or list(
+            getattr(blocking, "keys", None) or []
+        )
+        if blocking is None:
+            out["blocking_error"] = "resolved config exposed no blocking at all"
+        elif not keys:
+            out["blocking_error"] = (
+                "resolved config exposed neither blocking.passes nor .keys"
+            )
+        else:
+            out["blocking_passes"] = [
+                {
+                    "fields": list(getattr(k, "fields", []) or []),
+                    "transforms": list(getattr(k, "transforms", []) or []),
+                }
+                for k in keys
+            ]
+            out["blocking_n_passes"] = len(keys)
+            out["blocking_strategy"] = getattr(blocking, "strategy", None)
+            out["blocking_max_block_size"] = getattr(blocking, "max_block_size", None)
+    except Exception as e:  # noqa: BLE001
+        out["blocking_error"] = f"{type(e).__name__}: {e}"
+    # Everything ELSE the resolved config carries, minus the two blocks already
+    # reported above. Two lanes on the same fixture were found committing an
+    # IDENTICAL 8-pass blocking plan and identical matchkeys while producing
+    # 3,287 vs 83,436 blocks and pairwise F1 0.5536 vs 0.9970 -- so the
+    # difference lives in a config field neither of those blocks covers, and
+    # naming candidates one at a time has already cost several CI rounds.
+    # Dump the rest wholesale (scalars/short reprs only, so the artifact stays
+    # readable) rather than guessing which field matters.
+    try:
+        dump = cfg.model_dump() if hasattr(cfg, "model_dump") else dict(vars(cfg))
+        rest = {}
+        for k, v in sorted(dump.items()):
+            if k in ("matchkeys", "blocking"):
+                continue
+            if v is None or isinstance(v, (bool, int, float, str)):
+                rest[k] = v
+            else:
+                r = repr(v)
+                rest[k] = r if len(r) <= 300 else r[:300] + "...<truncated>"
+        out["config_other"] = rest
+    except Exception as e:  # noqa: BLE001
+        out["config_other_error"] = f"{type(e).__name__}: {e}"
+    return out
+
+
 def _load_shapes_module():
     """Import the sibling shapes.py whether run as a script or from elsewhere."""
     try:
@@ -67,7 +241,36 @@ def _atomic_write(path: Path, payload: dict) -> None:
     os.replace(tmp, path)
 
 
+def _enable_info_logging() -> None:
+    """Let the library's INFO diagnostics reach the run log.
+
+    Nothing configures logging here, so Python falls back to `lastResort`, which
+    emits at WARNING -- every `logger.info` in the library produced NOTHING. That
+    silently defeated the decisions this bench exists to explain: the FS
+    link-threshold refit logs which of its three guards declined a candidate, and
+    on person@1M that line was the answer to why the cut stayed at the default
+    while precision sat at 0.263 with 673,277 false positives.
+
+    A bench is exactly where verbosity is cheap, so INFO is the right floor. This
+    is a HARNESS change, not a library one -- production keeps its own logging
+    policy.
+
+    Not a substitute for recording the decision as DATA in the result. A log line
+    is lossy, order-dependent and easy to lose to a level change -- which is what
+    happened here. This makes the next run answerable; persisting the refit
+    decision alongside `fs_link_thresholds` makes every run answerable.
+    """
+    import logging
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s %(name)s: %(message)s",
+        stream=sys.stderr,
+    )
+
+
 def main() -> None:
+    _enable_info_logging()
     ap = argparse.ArgumentParser()
     ap.add_argument("--input", type=Path, required=True)
     ap.add_argument("--rows", type=int, required=True)
@@ -75,6 +278,16 @@ def main() -> None:
     ap.add_argument("--pred-out", type=Path, default=None,
                     help="write {record_id, pred_cluster_id} parquet for accuracy eval")
     ap.add_argument("--threshold", type=float, default=0.85)
+    ap.add_argument(
+        "--force-link-threshold", type=float, default=None,
+        help=(
+            "Force the FS link cut WITHOUT the --fs-basic-scorers scorer "
+            "rewrite. `gm_probabilistic` couples the two, so its delta against "
+            "`gm_probabilistic_shipped` is a three-way confound (cut + scorers "
+            "+ calibration) and cannot say which term dominates. This isolates "
+            "the cut."
+        ),
+    )
     ap.add_argument("--mode", choices=["hand_built", "zeroconfig", "probabilistic"],
                     default="hand_built",
                     help="hand_built = explicit bucket+native config (default); "
@@ -227,6 +440,40 @@ def main() -> None:
             from goldenmatch.core.autoconfig import auto_configure_probabilistic_df
 
             cfg = auto_configure_probabilistic_df(df)
+            # Cut where the bench SAYS it cuts. `--threshold` was parsed and
+            # written into the result JSON but never applied on this path, so
+            # every FS datapoint was produced at GoldenMatch's internal
+            # fallback link cut (a fixed 0.99 under posterior calibration,
+            # `source: "fallback"` -- nothing about the dataset chose it) while
+            # the file claimed 0.85 and `run_splink.py` really did cluster at
+            # 0.85 via `cluster_pairwise_predictions_at_threshold`.
+            #
+            # So the two engines were compared ~14 points apart on the same
+            # probability scale, which is the opposite of what this lane's
+            # `GOLDENMATCH_FS_CALIBRATED=posterior` exists to guarantee.
+            # Measured on a 20K person fixture, the cut alone is worth
+            # F1 0.5406 (at 0.95) -> 0.8772 (at 0.85) with precision staying
+            # 1.0000 throughout -- see `diagnose_fs_recall.py`.
+            #
+            # Tied to `--fs-basic-scorers` because both adjustments serve the
+            # SAME purpose -- making this lane comparable to Splink -- and a
+            # lane that is not being compared to Splink should not inherit
+            # either. `gm_probabilistic_shipped` runs without the flag and so
+            # keeps GM's own threshold decision, which is the point of having
+            # it: a control that shows what GoldenMatch actually does.
+            if args.fs_basic_scorers:
+                for mk in cfg.get_matchkeys():
+                    mk.link_threshold = args.threshold
+            # The cut alone, nothing else touched. person@1M's shipped cut is
+            # 0.50 while its MINIMUM score is 0.60 (run 32078393523,
+            # `cut_is_inert: true`), so it admits every scored pair and the
+            # 0.2627 precision follows from that plus transitive closure. The
+            # recorded sweep puts the knee at 0.80 -- largest component
+            # 618 -> 3, expelled 0.1002 -- and going higher buys no further
+            # reduction at 2-6x the expelled cost.
+            if args.force_link_threshold is not None:
+                for mk in cfg.get_matchkeys():
+                    mk.link_threshold = args.force_link_threshold
             # Force rerank off so a 3+ field weighted matchkey can't pull a
             # cross-encoder model down from HuggingFace at dedupe time.
             for mk in cfg.get_matchkeys():
@@ -259,6 +506,20 @@ def main() -> None:
                             rewritten.append((getattr(f, "field", None), sc))
                             f.scorer = "jaro_winkler"
             result["fs_basic_scorers_rewritten"] = rewritten
+            # ALWAYS recorded, present or absent, so a reader never has to infer
+            # from a missing key whether this number is comparable-to-Splink or
+            # as-shipped. Reading a handicapped F1 as "GoldenMatch's accuracy"
+            # is a real failure mode -- it cost this repo a five-session detour
+            # on a 20K person fixture where the handicapped config scores
+            # F1 0.0000 and the shipped default scores 0.9964.
+            result["handicaps"] = {
+                "fs_basic_scorers": bool(args.fs_basic_scorers),
+                "forced_link_threshold": (
+                    args.threshold if args.fs_basic_scorers else None
+                ),
+                "fs_calibrated": os.environ.get("GOLDENMATCH_FS_CALIBRATED"),
+                "comparable_to_splink": bool(args.fs_basic_scorers),
+            }
             # FS-native per-matchkey eligibility telemetry (spec section 8): count
             # how many resolved matchkeys the native FS kernel could score. Under
             # the numpy lane (GOLDENMATCH_FS_NATIVE=0) _fs_native_enabled()
@@ -352,6 +613,27 @@ def main() -> None:
             duplicate_rows_found=getattr(getattr(ded, "dupes", None), "num_rows", None),
             unique_records=getattr(getattr(ded, "unique", None), "num_rows", None),
             bench=bench_blob,
+        )
+        # AFTER the result.update above, so a diagnostics bug cannot cost the
+        # measurement -- the numbers are already recorded by the time these run.
+        result["score_histogram"] = _score_histogram(ded)
+        # `ded.config` deliberately, NOT the `cfg` handed to dedupe_df: on the
+        # auto-config modes the resolved config is what auto-config committed,
+        # and the pre-run object can carry thresholds it overwrote.
+        # The cutoff the run ACTUALLY applied, its provenance, and what the
+        # threshold refit decided about it. `config_resolved` records only what
+        # was CONFIGURED -- on this lane `link_threshold` is null, which says
+        # nothing about where the cut landed or why. That gap is what made the
+        # person@1M over-merge unanswerable from the artifact: three separate
+        # changes were aimed at the wrong branch because no run recorded which
+        # decision was in force.
+        _stats = getattr(ded, "stats", None) or {}
+        result["fs_link_thresholds"] = _stats.get("fs_link_thresholds")
+
+        _resolved = getattr(ded, "config", None)
+        result["config_resolved"] = (
+            _config_telemetry(_resolved) if _resolved is not None
+            else {"available": False, "reason": "DedupeResult carried no config"}
         )
     except MemoryError as e:
         result.update(status="OOM", error=f"{type(e).__name__}: {e}")

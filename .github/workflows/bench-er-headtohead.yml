@@ -4,13 +4,24 @@
 # machine with an identical per-scale parquet fixture, so wall + peak-RSS are
 # comparable across engines.
 #
-# Lanes (6, selectable via the `lanes` input):
-#   splink                  - Fellegi-Sunter reference engine (pinned version)
-#   gm_hand_built           - GM fast weighted bucket+native path (speed reference)
-#   gm_probabilistic        - EM-trained FS, numpy fallback (GOLDENMATCH_FS_NATIVE=0)
-#   gm_probabilistic_native - same, Rust FS kernel (GOLDENMATCH_FS_NATIVE=1)
-#   gm_zeroconfig           - zero-effort controller
-#   gm_converted_splink     - GM running Splink's own spec via from_splink
+# Lanes (8, selectable via the `lanes` input):
+#   splink                    - Fellegi-Sunter reference engine (pinned version)
+#   gm_hand_built             - GM fast weighted bucket+native path (speed reference)
+#   gm_probabilistic          - EM-trained FS, numpy fallback (GOLDENMATCH_FS_NATIVE=0)
+#   gm_probabilistic_native   - same, Rust FS kernel (GOLDENMATCH_FS_NATIVE=1)
+#   gm_probabilistic_counted  - same again, but trained on COLLAPSED comparison
+#                               vectors over a ~200x larger blocked-pair budget
+#                               instead of the 10,000-pair sampler
+#                               (GOLDENMATCH_FS_EM_COUNTED=1). Differs from
+#                               gm_probabilistic_native ONLY in the trainer, so
+#                               the delta isolates it.
+#   gm_probabilistic_shipped  - the SAME probabilistic path with NO handicap:
+#                               no scorer rewrite, no calibration override, no
+#                               forced threshold. Not comparable to Splink and
+#                               not meant to be -- it is the control that stops
+#                               a handicapped F1 being read as GM's accuracy.
+#   gm_zeroconfig             - zero-effort controller
+#   gm_converted_splink       - GM running Splink's own spec via from_splink
 #
 # Shapes: person + biblio (default) + product (opt-in). The `shapes` input becomes a job matrix
 # (fail-fast: false), so each shape runs on its own runner and uploads its own
@@ -38,7 +49,7 @@ on:
       lanes:
         description: "Space-separated lanes to run"
         required: false
-        default: "splink gm_hand_built gm_probabilistic gm_probabilistic_native gm_zeroconfig gm_converted_splink"
+        default: "splink gm_hand_built gm_probabilistic gm_probabilistic_native gm_probabilistic_counted gm_probabilistic_shipped gm_zeroconfig gm_converted_splink"
       shapes:
         description: "Space-separated fixture shapes (person biblio product)"
         required: false
@@ -68,6 +79,16 @@ on:
         type: boolean
         required: false
         default: false
+      run_sweep:
+        description: "Run the heavy lane x shape x scale matrix sweep (600-min job). Turn OFF to dispatch only the cost-aware lane."
+        type: boolean
+        required: false
+        default: true
+      run_cost_aware:
+        description: "Run the cost-aware blocking OFF-vs-ON lane (~20 min, independent of the sweep)"
+        type: boolean
+        required: false
+        default: true
 
 permissions:
   contents: read
@@ -75,6 +96,14 @@ permissions:
 # This lane pip-installs splink/duckdb from PyPI and runs the pipeline, so it
 # needs the documented mimalloc-SIGSEGV guard (ARROW_DEFAULT_MEMORY_POOL=system).
 env:
+  # Record what the clustering would look like at each candidate cut, not just
+  # the one the valley picked. person@1M declined its refit with `max 618 ->
+  # 618, expelled 0.0`, which reads as "no repair available" and was actually
+  # "the candidate is identical to the cut already in force" -- nothing there
+  # scores below 0.60 while the cut is 0.50. A histogram could not tell those
+  # apart; the sweep reports the consequences directly. Bounded at 12
+  # clustering passes, bench-only.
+  GOLDENMATCH_FS_REFIT_SWEEP: "1"
   ARROW_DEFAULT_MEMORY_POOL: system
   # jemalloc page-decay tuning for polars (its allocator is jemalloc, `_RJEM_`
   # prefix). Default jemalloc holds freed dirty/muzzy pages ~10s for reuse; a
@@ -105,6 +134,9 @@ jobs:
 
   bench:
     needs: setup
+    # Skippable so the cheap cost-aware lane below can be dispatched on its own
+    # (run_sweep=false) instead of riding this 600-min sweep.
+    if: inputs.run_sweep
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 600
     strategy:
@@ -146,17 +178,28 @@ jobs:
       # signal"); orchestrate.py flushes bench_results.json after every datapoint
       # and skips datapoints already recorded, so restoring .bench_er lets a
       # re-run continue instead of recomputing from zero. Unique primary key per
-      # (shape, tag, run, attempt) => the post-job save always writes; the
-      # prefix restore-keys pick up the most recent partial for this shape+tag
-      # (previous attempt first, then any earlier dispatch with the same tag).
+      # (shape, tag, sha, run, attempt) => the post-job save always writes; the
+      # prefix restore-keys pick up the most recent partial for this
+      # shape+tag+SHA (previous attempt first, then any earlier dispatch of the
+      # SAME COMMIT with the same tag).
+      #
+      # `github.sha` is load-bearing, not decoration. Without it the resume key
+      # was (shape, tag) alone, so a dispatch on new code with the default tag
+      # restored the PREVIOUS dispatch's `.bench_er` and orchestrate.py skipped
+      # every datapoint as "already recorded". A run added to measure new
+      # per-lane telemetry came back with none of it and a `git_sha` in the
+      # header naming a commit from before the change -- a green run reporting
+      # stale numbers, with the only tell buried in a field nobody reads.
+      # Resume is for the same code being interrupted; it must never span a
+      # code change.
       - name: Restore partial sweep progress
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25  # v5.1.0
         with:
           path: .bench_er
-          key: er-h2h-${{ matrix.shape }}-${{ inputs.run_tag }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: er-h2h-${{ matrix.shape }}-${{ inputs.run_tag }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            er-h2h-${{ matrix.shape }}-${{ inputs.run_tag }}-${{ github.run_id }}-
-            er-h2h-${{ matrix.shape }}-${{ inputs.run_tag }}-
+            er-h2h-${{ matrix.shape }}-${{ inputs.run_tag }}-${{ github.sha }}-${{ github.run_id }}-
+            er-h2h-${{ matrix.shape }}-${{ inputs.run_tag }}-${{ github.sha }}-
 
       - name: Run head-to-head sweep
         run: |
@@ -182,7 +225,9 @@ jobs:
 
   merge:
     needs: bench
-    if: always()
+    # always() so a partially-OOMed sweep still merges what completed, but only
+    # when the sweep actually ran (otherwise there are no shape artifacts to union).
+    if: always() && inputs.run_sweep
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
@@ -232,6 +277,7 @@ jobs:
   # F1 non-regression on every shape + biblio-is-exempt clears the flip. Independent
   # of the matrix sweep above; workflow_dispatch only, not a gate.
   cost-aware-offvson:
+    if: inputs.run_cost_aware
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 120
     env:

@@ -110,6 +110,22 @@ Registered UDFs:
 | `goldenmatch_pair_dedup(...)` | Keep the best score per canonical pair. |
 | `goldenmatch_embed_local(text, model_path)` | Embed text with a local in-house model. |
 | `gm_embed(text)` (PostgreSQL) | Embed text with the in-house model, dir from `GOLDENEMBED_MODEL_DIR`. |
+| `goldenmatch_docs()` | Return this surface's `llms.txt`: what the functions are and where the authoritative docs live. |
+
+### Orientation from inside a session
+
+```sql
+SELECT goldenmatch_docs();
+```
+
+A SQL connection is the surface with the least to read: no filesystem, no package
+to import, just function names. `goldenmatch_docs()` returns the packaged
+`llms.txt` so a tool, or an AI agent, can find the authoritative documentation
+instead of inferring behaviour from call signatures.
+
+It takes no arguments and depends on nothing else in the extension. On PostgreSQL
+the text is compiled into the shared library, so the function answers even in a
+backend where the Python bridge fails to initialise.
 
 ## Graph and embedding kernels
 

@@ -15,7 +15,7 @@ authors:
     given-names: Ben
     website: "https://bensevern.dev"
 repository-code: "https://github.com/benseverndev-oss/goldenmatch"
-url: "https://docs.bensevern.dev/"
+url: "https://docs.bensevern.dev/docs/"
 license: MIT
 keywords:
   - entity-resolution

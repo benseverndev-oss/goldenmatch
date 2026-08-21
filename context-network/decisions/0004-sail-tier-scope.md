@@ -1,9 +1,51 @@
-# 0004 — Sail tier scope: full, buildable, Sail-native, ADDITIVE to Ray (amended 2026-06-15)
+# 0004 — Sail tier scope (amended twice; SUPERSEDED 2026-08-11 by the Spark-native target)
 
-**Status:** accepted (2026-06-03, Ben) • **Amended** 2026-06-15 (Sail is additive, NOT a Ray
-replacement — see Amendment) • **Spec:** `docs/superpowers/specs/2026-06-03-sail-tier-design.md`
+**Status:** superseded (2026-08-11) • accepted 2026-06-03 • amended 2026-06-15
+• **Superseding spec:** `docs/superpowers/specs/2026-08-10-spark-native-execution-design.md`
+• **Original spec:** `docs/superpowers/specs/2026-06-03-sail-tier-design.md`
 
-## Amendment (2026-06-15, Ben) — Sail is additive; Ray stays
+## Amendment 2 (2026-08-11, Ben) — the axis was wrong; the target is Apache Spark
+
+Both this decision and its first amendment argue about **Sail versus Ray**. That is
+the wrong axis, and reframing it is what P0–P3 of the superseding spec acted on.
+
+**The goal is to run GoldenMatch's native Rust kernels inside a Spark cluster the
+customer already operates** — so a Splink-on-Spark team adopts GM with no new
+infrastructure. Against that goal:
+
+- **Ray never competed.** It is the distributed path for users who are not on
+  Spark. Nothing here retires or diminishes it.
+- **Sail was the test harness, not the product.** The tier is
+  `SparkSession.builder.remote(url)` with **zero** Sail-specific calls, so it
+  always spoke generic Spark Connect. Sail is one server implementation; Apache
+  Spark is another, and it is the one customers already run.
+- **The customer's cluster is the asset.** Handing them a new engine reinstates
+  the friction the whole exercise removes.
+
+### What the reframing produced, in evidence rather than argument
+
+| | |
+|---|---|
+| P0 (run 31496638072) | the tier runs on real Spark Connect with **no API gaps** — 36 tests pass unmodified. All 20 failures were one cause: the executor's Python worker could not import goldenmatch. |
+| P1 (run 31516855744) | `addArtifact` + `spark.sql.execution.pyspark.python` ships the client venv to executors: **20 failures → 2**, no cluster-side install. |
+| P2a | the residual 2 were a **tier defect**, not a runner artifact: the WCC loop never truncated its plan. Sail wedged (recompute); Spark OOM'd (broadcast). Same cause, and the diagnosis was already written in `_truncate_lineage`'s own docstring. |
+| P3 | the native scorer narrowed to f32 at the FFI boundary, which **changed match decisions** at round thresholds. Fixed at the source (f64 kernel, `goldenmatch-native 0.1.21`) and the gate lifted. |
+
+**The decisive practical difference:** `localCheckpoint` and `addArtifacts` both
+exist on Apache Spark and are missing or unproven on Sail. The first is what fixes
+the WCC wedge; the second is what makes the zero-install cutover true. Sail's
+`pysail` dependency also pins `pyspark[connect]<4`, capping the very users this
+targets.
+
+**Sail's remaining role** is the no-cluster dev/CI server — and even that is
+replaceable by `SparkSession.builder.remote("local[*]")`, at the cost of a JVM.
+
+Read everything below as historical record. The S1–S5 work was not wasted: it
+built a tier that turned out to be backend-agnostic, which is exactly why
+retargeting it cost days rather than a rewrite.
+
+
+## Amendment 1 (2026-06-15, Ben) — Sail is additive; Ray stays
 The original decision framed Sail as **replacing** the Ray distributed stack (a one-release
 deprecation window after S4). **That is revised:** Ray clustering is effective and stays the
 default distributed substrate indefinitely. Sail is an **additive** scale-out option that can

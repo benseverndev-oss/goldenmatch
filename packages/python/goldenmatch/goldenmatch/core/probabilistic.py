@@ -1205,6 +1205,823 @@ def _training_pair_conditioning(
     return fallback_pairs, [frozenset(blocking_fields)] * len(fallback_pairs)
 
 
+def estimate_u_from_counts(
+    mk: MatchkeyConfig,
+    pattern_counts: list[tuple[tuple[int, ...], int]],
+) -> dict[str, list[float]]:
+    """``u`` from COUNTED comparison vectors over random pairs.
+
+    ``u`` is the level distribution among NON-matches. Random pairs are
+    overwhelmingly non-matches, so their observed level distribution estimates
+    it directly -- no EM, which is why ``u`` is a separate computation from
+    ``m`` here and in Splink (``estimate_u.py``).
+
+    The estimator is ``train_em``'s, reached from counts instead of a matrix::
+
+        u[level] = (count(level) + 1e-6) / (observed + n_levels * 1e-6)
+
+    Both parts are sums over pairs, so collapsing identical vectors regroups the
+    terms without changing the totals -- the same aggregation property that lets
+    ``m`` be trained from counts.
+
+    ``observed`` excludes unobserved (``-1``) entries. A field null on one side
+    is missing data, not a disagreement, and putting those pairs in the
+    denominator would shrink every level of a sparse field toward zero and
+    inflate its ``log2(m/u)`` in proportion to how little data supports it.
+
+    ``pattern_counts`` must come from RANDOM (unblocked) pairs. Counts from
+    blocked candidates estimate the level distribution among pairs that already
+    agree on a blocking key, which is not ``u``, and the resulting weights would
+    be wrong with nothing about them looking wrong.
+    """
+    if not pattern_counts:
+        raise ValueError("pattern_counts is empty; nothing to estimate u from")
+
+    n_fields = len(mk.fields)
+    for vec, count in pattern_counts:
+        if len(vec) != n_fields:
+            raise ValueError(
+                f"comparison vector {vec} has {len(vec)} entries but the "
+                f"matchkey has {n_fields} fields -- the vectors must be ordered "
+                f"by mk.fields"
+            )
+        if count <= 0:
+            raise ValueError(f"pattern {vec} has non-positive count {count}")
+
+    u_probs: dict[str, list[float]] = {}
+    for j, f in enumerate(mk.fields):
+        counts = [0.0] * f.levels
+        observed = 0.0
+        for vec, c in pattern_counts:
+            level = vec[j]
+            if level < 0:
+                continue
+            observed += c
+            if level < f.levels:
+                counts[level] += c
+        total = observed + f.levels * 1e-6
+        u_probs[f.field] = [(c + 1e-6) / total for c in counts]
+    return u_probs
+
+
+def _fixed_blocking_weights(field) -> list[float]:
+    """The bounded ``-3..+3`` ramp a conditioned field's weights take.
+
+    The other half of the #1835 prior (see :func:`_neutral_u_for`, which supplies
+    the ``u`` side). A conditioned field's ``m`` is never updated -- it keeps the
+    exponential initialisation -- so ``log2(m/u)`` for one of these is the ratio
+    of an arbitrary init to a random-pair estimate. It is not a quantity, and it
+    lands in the model looking exactly like every other weight.
+
+    The ramp supplies both properties the estimate would destroy: a real
+    DISAGREEMENT PENALTY at the bottom (drives precision) and an agreement
+    weight BOUNDED at +3 (preserves recall, by denying a near-unique key the
+    20-plus bits that let it dominate every other field).
+
+    One definition, because :func:`train_em`, :func:`train_em_from_counts`,
+    :func:`_combine_em_sessions` and :func:`estimate_m_from_labels` all need it,
+    and it is already implemented a fifth time in Rust
+    (``score-core/src/em_core.rs``). Copies of a calibration rule diverge
+    silently: every variant still produces a plausible weight vector.
+    """
+    n = field.levels
+    if n <= 1:
+        return [3.0]
+    return [-3.0 + 6.0 * k / (n - 1) for k in range(n)]
+
+
+def _neutral_u_for(field) -> list[float]:
+    """The fixed ``u`` prior for a field EM must not learn from random pairs.
+
+    A configured blocking field carries a deliberate prior (#1835): a
+    disagreement penalty that drives precision, and a BOUNDED agreement weight
+    that preserves recall. Estimating it from random pairs instead collapses a
+    near-unique key's ``u`` toward the smoothing floor, which explodes
+    ``log2(m/u)`` -- 28 bits on historical_50k -- and lets one field dominate
+    the score (measured F1 0.83 -> 0.57).
+
+    One definition, because both the pooled run and the per-pass combination
+    apply it, and two copies that drifted would differ only in the numbers a
+    blocking field's weights are built from.
+
+    The 3-level case is ``[0.34, 0.33, 0.33]`` rather than exact thirds: it is
+    the legacy prior, preserved so adopting this helper moves no model.
+    """
+    if field.levels == 2:
+        return [0.50, 0.50]  # neutral
+    if field.levels == 3:
+        return [0.34, 0.33, 0.33]
+    return [1.0 / field.levels] * field.levels
+
+
+def _train_em_from_counts_native(
+    mk: MatchkeyConfig,
+    pattern_counts: list[tuple[tuple[int, ...], int]],
+    u_probs: dict[str, list[float]],
+    *,
+    conditioned_fields: Sequence[str],
+    tf_freqs: dict[str, dict[str, float]] | None,
+    tf_collision: dict[str, float] | None,
+    max_iterations: int,
+    convergence: float,
+) -> EMResult | None:
+    """Run the counted trainer in the Rust kernel, or ``None`` to fall back.
+
+    Phase 1 of the FS-EM single-source spec. The same loop was maintained in
+    Python, TypeScript and Rust; this is what makes the Rust one load-bearing
+    for Python rather than a fourth copy nothing runs.
+
+    Returns ``None`` -- never a partial result -- when the kernel is absent, the
+    component is gated off, or the symbol is missing from an older published
+    wheel. Symbol presence is checked at the call site and not only through the
+    component gate, because a wheel predating this symbol is the normal state of
+    every environment until the wheel is republished (#688's secondary bug).
+
+    Parity is DECISION-LEVEL, not bitwise: libm's ``ln``/``log2``/``exp`` differ
+    from CPython's in the low mantissa bits, so which path ran moves the trained
+    numbers in the last ~1e-9. That is the same posture every other float kernel
+    here takes; it is stated because "the model differs by environment" is
+    otherwise a surprising thing to discover.
+    """
+    from goldenmatch.core._native_loader import native_enabled, native_module
+
+    if not native_enabled("fs_em", "train_em_from_counts_native"):
+        return None
+    mod = native_module()
+    fn = getattr(mod, "train_em_from_counts_native", None)
+    if fn is None:
+        return None
+
+    conditioned = set(conditioned_fields)
+    n_levels = [f.levels for f in mk.fields]
+    try:
+        u_in = [list(u_probs[f.field]) for f in mk.fields]
+    except KeyError as exc:
+        raise ValueError(
+            f"u_probs is missing field {exc.args[0]!r}; the counted trainer "
+            f"needs one u vector per matchkey field"
+        ) from None
+
+    m_tab, u_tab, w_tab, converged, iterations, p_match = fn(
+        n_levels,
+        [list(vec) for vec, _ in pattern_counts],
+        [float(c) for _, c in pattern_counts],
+        u_in,
+        [f.field in conditioned for f in mk.fields],
+        int(max_iterations),
+        float(convergence),
+    )
+
+    names = [f.field for f in mk.fields]
+    logger.info(
+        "EM from counts (native): %d patterns, converged=%s in %d iterations",
+        len(pattern_counts), converged, iterations,
+    )
+    return EMResult(
+        m_probs={n: list(v) for n, v in zip(names, m_tab)},
+        u_probs={n: list(v) for n, v in zip(names, u_tab)},
+        match_weights={n: list(v) for n, v in zip(names, w_tab)},
+        converged=bool(converged),
+        iterations=int(iterations),
+        proportion_matched=float(p_match),
+        # Carried through the kernel path too. The kernel computes only the
+        # numeric half; forgetting these here would drop the TF tables from
+        # every model trained on a box that has the wheel installed, and the
+        # model would look complete.
+        tf_freqs=tf_freqs,
+        tf_collision=tf_collision,
+    )
+
+
+def _combine_em_sessions(
+    mk: MatchkeyConfig,
+    sessions: list[tuple[tuple[str, ...], EMResult, float]],
+) -> EMResult:
+    """Combine independent per-pass EM sessions into one model.
+
+    ``sessions`` is ``(conditioned_fields, result, weight)``. Shared by
+    :func:`train_em_per_pass` and the distributed caller, which differ only in
+    HOW a session is trained -- from a sampled pair list or from counted
+    comparison vectors computed by a cluster. The combination itself is the same
+    question either way, and a second copy would drift silently: every variant
+    of it still returns valid probability vectors.
+
+    **m** is the pair-weighted mean over the sessions that could estimate the
+    field (those whose pass does not block on it), weighted because a pass
+    contributing 10 pairs and one contributing 10,000 are not equal evidence.
+    A field no session can estimate keeps the fixed prior every session gave it.
+
+    **u** is neutralised for the UNION of every pass's blocking fields, matching
+    ``train_em``'s ``always_conditioned |= set(blocking_fields)``. Taking one
+    session's ``u`` wholesale is wrong even though the sessions were all trained
+    against the same random-pair sample: each one neutralises only its OWN
+    blocking fields, so lifting the vector from session 0 leaves every other
+    pass's blocking field carrying the random-pair estimate and re-opens #1835
+    for it.
+    """
+    base = sessions[0][1]
+    blocking_union = {name for fields, _, _ in sessions for name in fields}
+
+    m_probs: dict[str, list[float]] = {}
+    for f in mk.fields:
+        name = f.field
+        estimable = [
+            (em, w) for fields, em, w in sessions
+            if name not in fields and name in em.m_probs
+        ]
+        if not estimable:
+            # No pass leaves this field free. Every session fell back to the
+            # fixed prior for it, so they agree and the first is as good as any
+            # -- and this is exactly the pooled run's `always_conditioned` case.
+            m_probs[name] = list(base.m_probs[name])
+            continue
+        total = sum(w for _, w in estimable)
+        n_levels = len(estimable[0][0].m_probs[name])
+        m_probs[name] = [
+            sum(em.m_probs[name][k] * w for em, w in estimable) / total
+            for k in range(n_levels)
+        ]
+
+    u_probs = {k: list(v) for k, v in base.u_probs.items()}
+    for f in mk.fields:
+        if f.field in blocking_union:
+            u_probs[f.field] = _neutral_u_for(f)
+
+    total_w = sum(w for _, _, w in sessions)
+    proportion = sum(em.proportion_matched * w for _, em, w in sessions) / total_w
+
+    # Recomputed from the COMBINED m/u rather than averaged from the sessions:
+    # log2 of a mean is not the mean of the log2s, and averaging the weights
+    # would give a model whose weights do not match its own probabilities.
+    match_weights = {}
+    for f in mk.fields:
+        name = f.field
+        if name not in m_probs:
+            continue
+        if name in blocking_union:
+            match_weights[name] = _fixed_blocking_weights(f)
+        else:
+            match_weights[name] = [
+                math.log2(max(m, 1e-10) / max(u, 1e-10))
+                for m, u in zip(m_probs[name], u_probs.get(name, m_probs[name]))
+            ]
+    return EMResult(
+        m_probs=m_probs,
+        u_probs=u_probs,
+        match_weights=match_weights,
+        converged=all(em.converged for _, em, _ in sessions),
+        iterations=max(em.iterations for _, em, _ in sessions),
+        proportion_matched=proportion,
+        tf_freqs=base.tf_freqs,
+        tf_collision=base.tf_collision,
+    )
+
+
+def train_em_from_counts(
+    mk: MatchkeyConfig,
+    pattern_counts: list[tuple[tuple[int, ...], int]],
+    u_probs: dict[str, list[float]],
+    *,
+    conditioned_fields: Sequence[str] = (),
+    tf_freqs: dict[str, dict[str, float]] | None = None,
+    tf_collision: dict[str, float] | None = None,
+    max_iterations: int = 20,
+    convergence: float = 0.001,
+) -> EMResult:
+    """Train FS from COUNTED comparison vectors instead of a pair sample.
+
+    The last link of ``compute gammas distributed -> GROUP BY them ->
+    train_em(pair_weights=counts)``. ``pattern_counts`` is what
+    :func:`goldenmatch.spark.em.agreement_pattern_counts` returns: one row per
+    distinct comparison vector, with how many pairs had it.
+
+    Calls the SAME :func:`_em_iterate` as :func:`train_em`, so this is not a
+    second EM -- it is the same loop reached without a sampler. The vectors are
+    ordered by ``mk.fields``, matching ``_build_comparison_matrix``.
+
+    Args:
+        u_probs: estimated from RANDOM (unblocked) pairs, which this function
+            does not see. Required rather than defaulted: u is half the
+            likelihood ratio, and inventing it here would produce a model whose
+            weights are wrong in a direction nobody could spot from the m
+            estimates. Splink keeps the same separation (``estimate_u.py``).
+        conditioned_fields: fields the blocking pass makes uninformative -- the
+            pass conditioning, constant within a session, which is exactly why
+            the counts needed no pass column.
+
+        tf_freqs / tf_collision: per-value frequency tables for fields with
+            ``tf_adjustment``. **Supplied, never derived** -- collapsing
+            identical comparison vectors is exactly what discards the values a
+            TF table is built from. On the one box ``_build_tf_tables`` computes
+            them from the source frame; on a cluster
+            ``spark.em.tf_value_frequencies`` computes the same thing as a
+            distributed ``GROUP BY``. Either way they only have to reach the
+            EMResult, because **TF is a SCORING-time adjustment here**:
+            ``_em_iterate`` contains no reference to tf, so the table never
+            enters the E-step.
+
+            Splink is the other way round by default -- its
+            ``estimate_without_term_frequencies`` is ``False``, so TF joins its
+            E-step via the per-pair path, and its agreement-pattern-counts path
+            is the ``True`` branch. Counted training and TF-in-training are
+            mutually exclusive there too; the difference is that we never put TF
+            in training at all, which is what makes the table separable here.
+
+    Negative evidence remains unsupported and refused rather than ignored: it
+    needs a per-pair NE matrix this function is not given, and silently dropping
+    it would train a different model from the one the config asks for.
+    """
+    if not pattern_counts:
+        raise ValueError("pattern_counts is empty; nothing to train on")
+    if _em_ne_fields(mk):
+        raise NotImplementedError(
+            f"matchkey {mk.name!r} has negative-evidence fields, which need a "
+            f"per-pair NE matrix that counted comparison vectors do not carry. "
+            f"Train it with train_em() on sampled pairs."
+        )
+    tf_fields = {f.field for f in mk.fields if getattr(f, "tf_adjustment", False)}
+    if tf_fields and not tf_freqs:
+        raise NotImplementedError(
+            f"matchkey {mk.name!r} uses term-frequency adjustment on "
+            f"{sorted(tf_fields)}, and counted comparison vectors do not carry "
+            f"the per-value frequencies to build the table from -- collapsing "
+            f"identical vectors is what discards those values. Pass tf_freqs "
+            f"(spark.em.tf_value_frequencies computes it distributed), or train "
+            f"with train_em() on sampled pairs."
+        )
+    # A table for a field that did not opt in means the caller and the config
+    # disagree about which fields are adjusted. The surplus entry would sit in
+    # the persisted model doing nothing until some later scorer honoured it.
+    surplus = set(tf_freqs or {}) - tf_fields
+    if surplus:
+        raise ValueError(
+            f"tf_freqs carries {sorted(surplus)}, which did not opt in to "
+            f"tf_adjustment on matchkey {mk.name!r}"
+        )
+
+    n_fields = len(mk.fields)
+    for vec, count in pattern_counts:
+        if len(vec) != n_fields:
+            raise ValueError(
+                f"comparison vector {vec} has {len(vec)} entries but the "
+                f"matchkey has {n_fields} fields -- the vectors must be ordered "
+                f"by mk.fields"
+            )
+        if count <= 0:
+            raise ValueError(f"pattern {vec} has non-positive count {count}")
+
+    native = _train_em_from_counts_native(
+        mk, pattern_counts, u_probs,
+        conditioned_fields=conditioned_fields,
+        tf_freqs=tf_freqs, tf_collision=tf_collision,
+        max_iterations=max_iterations, convergence=convergence,
+    )
+    if native is not None:
+        return native
+
+    comp_matrix = np.asarray([v for v, _ in pattern_counts], dtype=np.int64)
+    w = np.asarray([float(c) for _, c in pattern_counts], dtype=np.float64)
+    total_weight = float(w.sum())
+
+    conditioned = set(conditioned_fields)
+    conditioned_mask = np.asarray(
+        [[f.field in conditioned for f in mk.fields]] * len(pattern_counts),
+        dtype=bool,
+    )
+    # Constant across rows within a session, so a field conditioned by this
+    # pass is conditioned for every row -- the `always_conditioned` case, and
+    # the reason those fields keep the fixed prior rather than being learned
+    # from evidence the blocking removed.
+    always_conditioned = {f.field for f in mk.fields if f.field in conditioned}
+
+    # The #1835 prior, same as `train_em` applies. This does NOT move the
+    # trained m -- a conditioned field is skipped in the E-step either way --
+    # but `u_probs` is half the persisted model, and a caller reading it off a
+    # model trained here would otherwise see a near-unique random-pair estimate
+    # where `train_em` reports the fixed prior. Found by the Rust parity gate.
+    u_probs = dict(u_probs)
+    for f in mk.fields:
+        if f.field in always_conditioned:
+            u_probs[f.field] = _neutral_u_for(f)
+
+    empty_ne = np.zeros((len(pattern_counts), 0), dtype=np.int64)
+    m_probs, _m_ne, p_match, converged, iterations = _em_iterate(
+        mk, comp_matrix, empty_ne, conditioned_mask,
+        np.zeros((len(pattern_counts), 0), dtype=bool),
+        w, total_weight, [], u_probs, {}, always_conditioned, set(),
+        None, None, max_iterations, convergence,
+    )
+
+    match_weights = {}
+    for f in mk.fields:
+        if f.field in always_conditioned:
+            match_weights[f.field] = _fixed_blocking_weights(f)
+        elif f.field in m_probs and f.field in u_probs:
+            match_weights[f.field] = [
+                math.log2(max(m, 1e-10) / max(u, 1e-10))
+                for m, u in zip(m_probs[f.field], u_probs[f.field])
+            ]
+    logger.info(
+        "EM from counts: %d patterns, %.0f pairs, converged=%s in %d iterations",
+        len(pattern_counts), total_weight, converged, iterations,
+    )
+    return EMResult(
+        m_probs=m_probs,
+        u_probs={k: list(v) for k, v in u_probs.items()},
+        match_weights=match_weights,
+        converged=converged,
+        iterations=iterations,
+        proportion_matched=p_match,
+        tf_freqs=tf_freqs,
+        tf_collision=tf_collision,
+    )
+
+
+def train_em_per_pass(
+    df: pl.DataFrame,
+    mk: MatchkeyConfig,
+    blocks: list,
+    *,
+    blocking_fields: list[str] | None = None,
+    **kw: object,
+) -> EMResult:
+    """One EM session per BLOCKING PASS, combined -- Splink's decomposition.
+
+    ``train_em`` pools every pass into a single run and masks per (pair, field):
+    a pair emitted by a pass that blocks on ``zip`` carries no ``zip``
+    likelihood, but ``zip`` is still learnable from pairs emitted by other
+    passes. That is correct and it is one pass over the data.
+
+    Splink decomposes the same problem differently: it runs a separate EM
+    session per ``blocking_rule_for_training``, records which comparisons
+    ``cannot_be_estimated`` under that rule (the ones the rule blocks on), and
+    combines the sessions. Two properties follow, and they are the reason to
+    have this alongside the pooled run:
+
+    1. **Each session is independent**, so they can be trained anywhere --
+       including one per executor, or one per SQL engine round trip. The pooled
+       run couples every pass into one convergence loop.
+    2. **The aggregation key loses the pass.** Within a session the conditioning
+       is constant, so counting comparison vectors needs no pass column: it is
+       ``GROUP BY <gammas>``, exactly the shape ``count_agreement_patterns_sql``
+       produces. That is what makes the counts computable by a cluster and the
+       iteration cheap, -- see ``pair_weights`` on :func:`train_em`.
+
+    Combination is :func:`_combine_em_sessions`, shared with the distributed
+    caller so the two cannot drift on what combining means.
+
+    Args:
+        blocks: ``BlockResult``s carrying ``blocking_fields`` provenance. Blocks
+            are grouped by that tuple; each distinct value is one pass.
+        blocking_fields: legacy union, forwarded to :func:`train_em` for block
+            producers that carry no provenance.
+        **kw: forwarded verbatim to :func:`train_em`.
+    """
+    by_pass: dict[tuple[str, ...], list] = {}
+    for b in blocks or []:
+        by_pass.setdefault(tuple(getattr(b, "blocking_fields", ()) or ()), []).append(b)
+
+    # One pass (or none, or no provenance at all) -- there is nothing to
+    # decompose, and delegating keeps a single-pass config bit-identical to the
+    # pooled run rather than routing it through a combination step that would
+    # have to be proven a no-op.
+    if len(by_pass) <= 1:
+        return train_em(df, mk, blocks=blocks, blocking_fields=blocking_fields, **kw)
+
+    sessions: list[tuple[tuple[str, ...], EMResult, float]] = []
+    for fields, pass_blocks in sorted(by_pass.items()):
+        # `n_rows()` rather than a pair count: the sampler decides how many
+        # pairs it draws, and weighting by block size is the honest proxy for
+        # "how much evidence this pass brought" without training twice to
+        # find out.
+        weight = float(sum(max(int(b.n_rows()), 0) for b in pass_blocks))
+        if weight <= 0:
+            continue
+        em = train_em(
+            df, mk, blocks=pass_blocks, blocking_fields=list(fields), **kw
+        )
+        sessions.append((fields, em, weight))
+        logger.info(
+            "EM session: pass=%s blocks=%d rows=%.0f converged=%s",
+            fields or "(none)", len(pass_blocks), weight, em.converged,
+        )
+
+    if not sessions:
+        return train_em(df, mk, blocks=blocks, blocking_fields=blocking_fields, **kw)
+
+    return _combine_em_sessions(mk, sessions)
+
+
+def _em_iterate(
+    mk: MatchkeyConfig,
+    comp_matrix,
+    ne_matrix,
+    conditioned_mask,
+    ne_conditioned_mask,
+    w,
+    total_weight: float,
+    ne_fields_em: list,
+    u_probs: dict[str, list[float]],
+    u_probs_ne: dict[str, list[float]],
+    always_conditioned: set,
+    always_conditioned_ne: set,
+    label_clamp_idx,
+    label_clamp_val,
+    max_iterations: int,
+    convergence: float,
+):
+    """The EM loop itself: seed m, iterate to convergence, return the estimates.
+
+    Extracted so there is ONE implementation of the iteration and two ways to
+    reach it -- from sampled pairs (:func:`train_em`) and from precomputed
+    comparison rows carrying counts (:func:`train_em_from_counts`). A second
+    copy would drift, and the drift would be invisible: both copies would go on
+    producing valid probability vectors.
+
+    It reads nothing it is not handed. Every input is a matrix over rows, a mask
+    over rows, or a fixed parameter -- which is exactly why the rows can be
+    counted somewhere else (a cluster) and passed in as ``w``.
+
+    Returns ``(m_probs, m_probs_ne, p_match, converged, iterations)``.
+    """
+    n_pairs = comp_matrix.shape[0]
+    # Initialize m with strong priors (matches mostly agree at highest level)
+    p_match = 0.02  # conservative prior
+    m_probs = {}
+    for j, f in enumerate(mk.fields):
+        n_levels = f.levels
+        # Exponential prior: highest level gets most mass
+        raw = [2 ** k for k in range(n_levels)]
+        total = sum(raw)
+        m_probs[f.field] = [r / total for r in raw]
+
+    # NE dims: fired is rare in matches (a true match usually agrees on the
+    # NE field), so seed m with a low fired-probability prior.
+    m_probs_ne: dict[str, list[float]] = {ne.field: [0.05, 0.95] for ne in ne_fields_em}
+
+    # Pair weights. `None` -> all ones, which is the pair-wise caller and is
+    # bit-identical to the unweighted arithmetic it replaces (x*1.0 == x).
+    # An aggregated caller passes one row per DISTINCT (comparison vector,
+    # conditioning, NE vector) with its count, which is exact rather than a
+    # sample: the E-step reads only those three things, so identical rows have
+    # identical posteriors and every M-step sum is linear in the count.
+    #
+    # Bounded, too: the number of distinct rows is at most the product over
+    # fields of (levels + 1), times the number of blocking passes -- thousands,
+    # not millions -- which is what lets the comparison vectors be counted
+    # anywhere (a cluster, say) and the iteration run on the result.
+    #
+    # WEIGHTS ARE COUNTS, and the scale is load-bearing. The M-step smoothing
+    #
+    #     new_m[level] = (sum + 1e-6) / (eligible_match + n_levels * 1e-6)
+    #
+    # is additive and unscaled, so its influence shrinks as the weighted totals
+    # grow -- correct for a prior, and it means doubling every weight is NOT a
+    # no-op. Aggregation is exact only because collapsing identical rows
+    # regroups the terms of each sum WITHOUT changing the total: the represented
+    # population is the same, so the smoothing constant weighs the same. Pass
+    # normalised or rescaled weights and the low-probability cells shift, which
+    # is where log2(m/u) is largest and the shift is least visible.
+    # Pinned by tests/test_fs_em_weighted_pairs.py.
+    # ── Step 3: EM iterations — only update m, fix u ──
+    converged = False
+    for iteration in range(max_iterations):
+        old_m = {k: list(v) for k, v in m_probs.items()}
+        old_m_ne = {k: list(v) for k, v in m_probs_ne.items()}
+
+        # E-step: compute posterior P(match | comparison vector).
+        # Vectorized over pairs (this was the FS-training bottleneck: a
+        # per-pair Python loop with math.log/exp -- ~1.1s of a 1.46s
+        # train_em at n_sample_pairs=10000). Per-field log-prob lookup tables
+        # are gathered by level and summed left-to-right (j = 0..n_fields-1),
+        # matching the scalar accumulation order so results stay
+        # bit-identical to the loop it replaces.
+        log_m = np.zeros(n_pairs)
+        log_u = np.zeros(n_pairs)
+        for j, f in enumerate(mk.fields):
+            levels_j = comp_matrix[:, j]
+            observed = levels_j >= 0
+            m_table = np.log(np.maximum(np.asarray(m_probs[f.field], dtype=np.float64), 1e-10))
+            u_table = np.log(np.maximum(np.asarray(u_probs[f.field], dtype=np.float64), 1e-10))
+            # Compose #1819 (unobserved: level -1 carries no evidence) with
+            # #1835 (pass-conditioned pairs carry no evidence for this field).
+            eligible = observed & ~conditioned_mask[:, j]
+            log_m[eligible] += m_table[levels_j[eligible]]
+            log_u[eligible] += u_table[levels_j[eligible]]
+
+        # NE dims: same E-step accumulation, 2-entry [fired, not_fired]
+        # lookup tables indexed by the NE matrix's {0, 1} columns.
+        for j, ne in enumerate(ne_fields_em):
+            levels_j = ne_matrix[:, j]
+            m_table = np.log(np.maximum(np.asarray(m_probs_ne[ne.field], dtype=np.float64), 1e-10))
+            u_table = np.log(np.maximum(np.asarray(u_probs_ne[ne.field], dtype=np.float64), 1e-10))
+            eligible = ~ne_conditioned_mask[:, j]
+            log_m[eligible] += m_table[levels_j[eligible]]
+            log_u[eligible] += u_table[levels_j[eligible]]
+
+        log_match = math.log(max(p_match, 1e-10)) + log_m
+        log_nonmatch = math.log(max(1 - p_match, 1e-10)) + log_u
+
+        max_log = np.maximum(log_match, log_nonmatch)
+        e_match = np.exp(log_match - max_log)
+        e_nonmatch = np.exp(log_nonmatch - max_log)
+        posteriors = e_match / (e_match + e_nonmatch)
+
+        # Semi-supervised clamp: pin labeled anchors' responsibility to the
+        # label so the M-step re-estimates m (and p_match) with those pairs as
+        # ground truth. u stays fixed from the random-pair estimate, exactly as
+        # in unsupervised EM. No-op when no anchors were supplied.
+        if label_clamp_idx is not None:
+            posteriors[label_clamp_idx] = label_clamp_val
+
+        # M-step: update ONLY m_probs and p_match (u is fixed)
+        #
+        # Every quantity below is a SUM OVER PAIRS, which is the whole reason
+        # `pair_weights` can exist: two pairs with the same comparison vector,
+        # the same pass conditioning and the same NE vector contribute
+        # identically to every one of them, so they can be collapsed into one
+        # row carrying a count. `w` is all-ones for the pair-wise caller, and
+        # the aggregated caller passes the counts. Same arithmetic either way.
+        wp = posteriors * w
+        total_match = wp.sum()
+        p_match = max(total_match / total_weight, 1e-6)
+
+        for j, f in enumerate(mk.fields):
+            if f.field in always_conditioned:
+                continue  # skip blocked fields
+            n_levels = f.levels
+            # Compose #1819 + #1835: a pair contributes to this field's m
+            # only when the comparison was OBSERVED (level >= 0) and the pair
+            # is not conditioned out of this field for its pass.
+            observed = comp_matrix[:, j] >= 0
+            eligible = observed & ~conditioned_mask[:, j]
+            eligible_match = wp[eligible].sum()
+            new_m = [0.0] * n_levels
+            for level in range(n_levels):
+                mask = eligible & (comp_matrix[:, j] == level)
+                new_m[level] = (wp[mask].sum() + 1e-6) / (
+                    eligible_match + n_levels * 1e-6
+                )
+            m_probs[f.field] = new_m
+
+        # NE dimensions use the same pair-level conditioning. A field that
+        # blocks one pass can still learn its veto from the other passes.
+        for j, ne in enumerate(ne_fields_em):
+            if ne.field in always_conditioned_ne:
+                continue
+            new_m_ne = [0.0, 0.0]
+            eligible = ~ne_conditioned_mask[:, j]
+            eligible_match = wp[eligible].sum()
+            for level in range(2):
+                mask = eligible & (ne_matrix[:, j] == level)
+                new_m_ne[level] = (wp[mask].sum() + 1e-6) / (
+                    eligible_match + 2 * 1e-6
+                )
+            m_probs_ne[ne.field] = new_m_ne
+
+        # Check convergence (only m changes)
+        max_delta = 0.0
+        for f in mk.fields:
+            if f.field in always_conditioned:
+                continue
+            for k in range(f.levels):
+                max_delta = max(max_delta, abs(m_probs[f.field][k] - old_m[f.field][k]))
+        for ne in ne_fields_em:
+            if ne.field in always_conditioned_ne:
+                continue
+            for k in range(2):
+                max_delta = max(max_delta, abs(m_probs_ne[ne.field][k] - old_m_ne[ne.field][k]))
+
+        if max_delta < convergence:
+            converged = True
+            logger.info("EM converged after %d iterations (delta=%.6f)", iteration + 1, max_delta)
+            break
+
+    if not converged:
+        logger.warning("EM did not converge after %d iterations (delta=%.6f)", max_iterations, max_delta)
+
+    return m_probs, m_probs_ne, p_match, converged, iteration + 1
+
+
+
+def _fs_em_counted_budget() -> int | None:
+    """Pair budget for the counted one-box trainer, or ``None`` when off.
+
+    ``GOLDENMATCH_FS_EM_COUNTED`` unset/``0`` -> off (the sampler runs).
+    ``1`` -> on at the default budget. Any integer -> on at that budget.
+    """
+    raw = os.environ.get("GOLDENMATCH_FS_EM_COUNTED", "").strip().lower()
+    if raw in ("", "0", "false", "no"):
+        return None
+    if raw in ("1", "true", "yes"):
+        return 2_000_000
+    try:
+        n = int(raw)
+    except ValueError:
+        logger.warning(
+            "GOLDENMATCH_FS_EM_COUNTED=%r is not an integer; counted EM stays off",
+            raw,
+        )
+        return None
+    return n if n > 0 else None
+
+
+def train_em_counted(
+    df: pl.DataFrame,
+    mk: MatchkeyConfig,
+    blocks: list,
+    *,
+    n_pairs: int = 2_000_000,
+    seed: int = 42,
+    max_iterations: int = 20,
+    convergence: float = 0.001,
+) -> EMResult:
+    """Train on COLLAPSED comparison vectors over a large blocked-pair budget.
+
+    The one-box analogue of ``spark.em.train_em_distributed``, and the thing
+    that makes the arc's claim measurable without a cluster.
+
+    ``train_em`` samples ``n_sample_pairs`` (10,000 by default) blocked pairs
+    and iterates over that matrix, so its EM cost is proportional to the SAMPLE
+    and its estimates carry that sample's noise. Here the budget is ~200x
+    larger and the matrix is collapsed to distinct vectors first, so the
+    iteration cost stops tracking the pair count and starts tracking
+    ``prod(levels + 1)``. Collapsing is EXACT, not an approximation -- every
+    M-step quantity is a sum linear in how many pairs share a vector.
+
+    **Per pass, because conditioning is per pass.** Two pairs with the same
+    comparison vector are only interchangeable if the same fields were
+    conditioned out for both, and that is constant WITHIN a blocking pass and
+    not across passes. Collapsing the pooled matrix would merge rows whose
+    conditioning differs and quietly train on a population that never existed.
+    So this groups blocks by their pass, collapses inside each, and combines
+    with the same ``_combine_em_sessions`` the distributed caller uses.
+    """
+    from collections import Counter
+
+    cols = _fs_projection_cols(mk)
+    _fs_ne_extend_cols(cols, mk)
+
+    if _em_ne_fields(mk):
+        raise NotImplementedError(
+            "counted EM does not support negative-evidence fields; they need a "
+            "per-pair NE matrix collapsing discards. Unset "
+            "GOLDENMATCH_FS_EM_COUNTED for this config."
+        )
+
+    by_pass: dict[tuple[str, ...], list] = {}
+    for b in blocks or []:
+        by_pass.setdefault(tuple(getattr(b, "blocking_fields", ()) or ()), []).append(b)
+    if not by_pass:
+        raise ValueError("counted EM needs blocks; none were supplied")
+
+    # u from RANDOM pairs, exactly as train_em estimates it -- the counted path
+    # changes how m is estimated, not what u means.
+    random_pairs = _sample_pairs(df, min(10_000, 5000 * len(mk.fields)), seed)
+    if len(random_pairs) < 10:
+        return _fallback_result(mk)
+    lookup = _row_lookup_for_pairs(df, cols, [random_pairs])
+    u_probs = estimate_u_from_counts(
+        mk,
+        sorted(
+            Counter(
+                tuple(int(v) for v in row)
+                for row in _build_comparison_matrix(random_pairs, lookup, mk)
+            ).items()
+        ),
+    )
+
+    tf_freqs, tf_collision = _build_tf_tables(df, mk)
+    sessions: list[tuple[tuple[str, ...], EMResult, float]] = []
+    per_pass_budget = max(1000, n_pairs // max(len(by_pass), 1))
+
+    for fields, pass_blocks in sorted(by_pass.items()):
+        pairs, _cond = _sample_blocked_pairs_with_fields(
+            pass_blocks, per_pass_budget, seed
+        )
+        if len(pairs) < 10:
+            continue
+        pair_lookup = _row_lookup_for_pairs(df, cols, [pairs])
+        matrix = _build_comparison_matrix(pairs, pair_lookup, mk)
+        counts = sorted(
+            Counter(tuple(int(v) for v in row) for row in matrix).items()
+        )
+        em = train_em_from_counts(
+            mk, counts, u_probs, conditioned_fields=fields,
+            tf_freqs=tf_freqs, tf_collision=tf_collision,
+            max_iterations=max_iterations, convergence=convergence,
+        )
+        sessions.append((fields, em, float(len(pairs))))
+        logger.info(
+            "counted EM: pass=%s pairs=%d -> %d distinct vectors (%.3g%%)",
+            fields or "(none)", len(pairs), len(counts),
+            100.0 * len(counts) / max(len(pairs), 1),
+        )
+
+    if not sessions:
+        return _fallback_result(mk)
+    return _combine_em_sessions(mk, sessions)
+
 def train_em(
     df: pl.DataFrame,
     mk: MatchkeyConfig,
@@ -1216,6 +2033,7 @@ def train_em(
     blocking_fields: list[str] | None = None,
     target_ids: set[int] | None = None,
     label_pairs: dict[tuple[int, int], int] | None = None,
+    pair_weights: Sequence[float] | None = None,
 ) -> EMResult:
     """Train Fellegi-Sunter model using Expectation-Maximization.
 
@@ -1264,6 +2082,26 @@ def train_em(
 
     ne_fields_em = _em_ne_fields(mk)
     _warn_ne_blocking_overlap(ne_fields_em, blocking_fields)
+
+    # Counted mode (GOLDENMATCH_FS_EM_COUNTED) trades the 10k sampler for a
+    # ~200x larger blocked-pair budget collapsed to distinct vectors. Opt-in and
+    # env-gated so it can be A/B'd as a bench LANE against the default sampler
+    # without touching any call site -- the same lever the FS_NATIVE lanes use.
+    # Only when blocks exist and no per-pair overrides are in play: label
+    # anchors and caller-supplied weights are per-PAIR, and collapsing is what
+    # discards the identity of the pair they attach to.
+    _counted_budget = _fs_em_counted_budget()
+    if (
+        _counted_budget
+        and blocks
+        and label_pairs is None
+        and pair_weights is None
+        and not _em_ne_fields(mk)
+    ):
+        return train_em_counted(
+            df, mk, blocks, n_pairs=_counted_budget, seed=seed,
+            max_iterations=max_iterations, convergence=convergence,
+        )
 
     cols = [f.field for f in mk.fields
             if f.field != "__record__" and f.scorer != "record_embedding"]
@@ -1397,12 +2235,7 @@ def train_em(
     # which EM can learn it, so retain the legacy neutral-u/fixed-weight prior.
     for f in mk.fields:
         if f.field in always_conditioned:
-            if f.levels == 2:
-                u_probs[f.field] = [0.50, 0.50]  # neutral
-            elif f.levels == 3:
-                u_probs[f.field] = [0.34, 0.33, 0.33]
-            else:
-                u_probs[f.field] = [1.0 / f.levels] * f.levels
+            u_probs[f.field] = _neutral_u_for(f)
 
     logger.info("u-probabilities estimated from %d random pairs", len(random_pairs))
 
@@ -1446,128 +2279,27 @@ def train_em(
             label_clamp_val = np.asarray(vals, dtype=np.float64)
             logger.info("EM using %d semi-supervised label anchors", len(idxs))
 
-    # Initialize m with strong priors (matches mostly agree at highest level)
-    p_match = 0.02  # conservative prior
-    m_probs = {}
-    for j, f in enumerate(mk.fields):
-        n_levels = f.levels
-        # Exponential prior: highest level gets most mass
-        raw = [2 ** k for k in range(n_levels)]
-        total = sum(raw)
-        m_probs[f.field] = [r / total for r in raw]
+    if pair_weights is None:
+        w = np.ones(n_pairs, dtype=np.float64)
+    else:
+        w = np.asarray(pair_weights, dtype=np.float64)
+        if w.shape != (n_pairs,):
+            raise ValueError(
+                f"pair_weights has shape {w.shape}, expected ({n_pairs},) -- "
+                f"one weight per comparison row"
+            )
+        if not np.all(w > 0):
+            raise ValueError("pair_weights must all be positive")
+    total_weight = float(w.sum())
 
-    # NE dims: fired is rare in matches (a true match usually agrees on the
-    # NE field), so seed m with a low fired-probability prior.
-    m_probs_ne: dict[str, list[float]] = {ne.field: [0.05, 0.95] for ne in ne_fields_em}
-
-    # ── Step 3: EM iterations — only update m, fix u ──
-    converged = False
-    for iteration in range(max_iterations):
-        old_m = {k: list(v) for k, v in m_probs.items()}
-        old_m_ne = {k: list(v) for k, v in m_probs_ne.items()}
-
-        # E-step: compute posterior P(match | comparison vector).
-        # Vectorized over pairs (this was the FS-training bottleneck: a
-        # per-pair Python loop with math.log/exp -- ~1.1s of a 1.46s
-        # train_em at n_sample_pairs=10000). Per-field log-prob lookup tables
-        # are gathered by level and summed left-to-right (j = 0..n_fields-1),
-        # matching the scalar accumulation order so results stay
-        # bit-identical to the loop it replaces.
-        log_m = np.zeros(n_pairs)
-        log_u = np.zeros(n_pairs)
-        for j, f in enumerate(mk.fields):
-            levels_j = comp_matrix[:, j]
-            observed = levels_j >= 0
-            m_table = np.log(np.maximum(np.asarray(m_probs[f.field], dtype=np.float64), 1e-10))
-            u_table = np.log(np.maximum(np.asarray(u_probs[f.field], dtype=np.float64), 1e-10))
-            # Compose #1819 (unobserved: level -1 carries no evidence) with
-            # #1835 (pass-conditioned pairs carry no evidence for this field).
-            eligible = observed & ~conditioned_mask[:, j]
-            log_m[eligible] += m_table[levels_j[eligible]]
-            log_u[eligible] += u_table[levels_j[eligible]]
-
-        # NE dims: same E-step accumulation, 2-entry [fired, not_fired]
-        # lookup tables indexed by the NE matrix's {0, 1} columns.
-        for j, ne in enumerate(ne_fields_em):
-            levels_j = ne_matrix[:, j]
-            m_table = np.log(np.maximum(np.asarray(m_probs_ne[ne.field], dtype=np.float64), 1e-10))
-            u_table = np.log(np.maximum(np.asarray(u_probs_ne[ne.field], dtype=np.float64), 1e-10))
-            eligible = ~ne_conditioned_mask[:, j]
-            log_m[eligible] += m_table[levels_j[eligible]]
-            log_u[eligible] += u_table[levels_j[eligible]]
-
-        log_match = math.log(max(p_match, 1e-10)) + log_m
-        log_nonmatch = math.log(max(1 - p_match, 1e-10)) + log_u
-
-        max_log = np.maximum(log_match, log_nonmatch)
-        e_match = np.exp(log_match - max_log)
-        e_nonmatch = np.exp(log_nonmatch - max_log)
-        posteriors = e_match / (e_match + e_nonmatch)
-
-        # Semi-supervised clamp: pin labeled anchors' responsibility to the
-        # label so the M-step re-estimates m (and p_match) with those pairs as
-        # ground truth. u stays fixed from the random-pair estimate, exactly as
-        # in unsupervised EM. No-op when no anchors were supplied.
-        if label_clamp_idx is not None:
-            posteriors[label_clamp_idx] = label_clamp_val
-
-        # M-step: update ONLY m_probs and p_match (u is fixed)
-        total_match = posteriors.sum()
-        p_match = max(total_match / n_pairs, 1e-6)
-
-        for j, f in enumerate(mk.fields):
-            if f.field in always_conditioned:
-                continue  # skip blocked fields
-            n_levels = f.levels
-            # Compose #1819 + #1835: a pair contributes to this field's m
-            # only when the comparison was OBSERVED (level >= 0) and the pair
-            # is not conditioned out of this field for its pass.
-            observed = comp_matrix[:, j] >= 0
-            eligible = observed & ~conditioned_mask[:, j]
-            eligible_match = posteriors[eligible].sum()
-            new_m = [0.0] * n_levels
-            for level in range(n_levels):
-                mask = eligible & (comp_matrix[:, j] == level)
-                new_m[level] = (posteriors[mask].sum() + 1e-6) / (
-                    eligible_match + n_levels * 1e-6
-                )
-            m_probs[f.field] = new_m
-
-        # NE dimensions use the same pair-level conditioning. A field that
-        # blocks one pass can still learn its veto from the other passes.
-        for j, ne in enumerate(ne_fields_em):
-            if ne.field in always_conditioned_ne:
-                continue
-            new_m_ne = [0.0, 0.0]
-            eligible = ~ne_conditioned_mask[:, j]
-            eligible_match = posteriors[eligible].sum()
-            for level in range(2):
-                mask = eligible & (ne_matrix[:, j] == level)
-                new_m_ne[level] = (posteriors[mask].sum() + 1e-6) / (
-                    eligible_match + 2 * 1e-6
-                )
-            m_probs_ne[ne.field] = new_m_ne
-
-        # Check convergence (only m changes)
-        max_delta = 0.0
-        for f in mk.fields:
-            if f.field in always_conditioned:
-                continue
-            for k in range(f.levels):
-                max_delta = max(max_delta, abs(m_probs[f.field][k] - old_m[f.field][k]))
-        for ne in ne_fields_em:
-            if ne.field in always_conditioned_ne:
-                continue
-            for k in range(2):
-                max_delta = max(max_delta, abs(m_probs_ne[ne.field][k] - old_m_ne[ne.field][k]))
-
-        if max_delta < convergence:
-            converged = True
-            logger.info("EM converged after %d iterations (delta=%.6f)", iteration + 1, max_delta)
-            break
-
-    if not converged:
-        logger.warning("EM did not converge after %d iterations (delta=%.6f)", max_iterations, max_delta)
+    (
+        m_probs, m_probs_ne, p_match, converged, _em_iterations
+    ) = _em_iterate(
+        mk, comp_matrix, ne_matrix, conditioned_mask, ne_conditioned_mask,
+        w, total_weight, ne_fields_em, u_probs, u_probs_ne,
+        always_conditioned, always_conditioned_ne,
+        label_clamp_idx, label_clamp_val, max_iterations, convergence,
+    )
 
     # Compute match weights: log2(m/u)
     # For blocking fields, use fixed priors since EM can't learn from
@@ -1584,12 +2316,7 @@ def train_em(
     match_weights = {}
     for f in mk.fields:
         if f.field in always_conditioned:
-            # Fixed weights: linearly increasing from -3 to +3
-            n = f.levels
-            match_weights[f.field] = [
-                -3.0 + 6.0 * k / (n - 1) if n > 1 else 3.0
-                for k in range(n)
-            ]
+            match_weights[f.field] = _fixed_blocking_weights(f)
             logger.debug("Using fixed weights for blocking field '%s'", f.field)
             continue
 
@@ -1662,7 +2389,7 @@ def train_em(
         u_probs=u_probs,
         match_weights=match_weights,
         converged=converged,
-        iterations=min(iteration + 1, max_iterations) if not converged else iteration + 1,
+        iterations=_em_iterations,
         proportion_matched=p_match,
         tf_freqs=tf_freqs,
         tf_collision=tf_collision,
@@ -1878,10 +2605,7 @@ def estimate_m_from_labels(
     match_weights: dict[str, list[float]] = {}
     for f in mk.fields:
         if f.field in blocking_fields:
-            n = f.levels
-            match_weights[f.field] = [
-                -3.0 + 6.0 * k / (n - 1) if n > 1 else 3.0 for k in range(n)
-            ]
+            match_weights[f.field] = _fixed_blocking_weights(f)
             continue
         match_weights[f.field] = [
             math.log2(max(m_probs[f.field][k], 1e-10) / max(u_probs[f.field][k], 1e-10))
@@ -2446,7 +3170,54 @@ def compute_thresholds(
         # Link at the (1 - match_rate) percentile — top match_rate% of pairs
         # But clamp to reasonable range
         match_pct = max(em_result.proportion_matched, 0.001)
-        link_idx = int(n * (1 - match_pct * 2))  # 2x match rate for headroom
+
+        # `match_pct * 2` is a WINDOW over the top of the distribution, and the
+        # percentile below is only meaningful while that window is a minority of
+        # it. At proportion_matched >= 0.5 the window covers everything:
+        # `1 - match_pct*2` goes <= 0, link_idx clamps to 0, and the
+        # "data-driven" cut becomes `sorted_w[0]` -- the MINIMUM observed score.
+        # The cut is then not chosen from the data, it is the floor of the data,
+        # and every scored pair is admitted.
+        #
+        # MEASURED, person shape: EM reported proportion_matched 0.638477, which
+        # is percentile 0.0. The bench measured the shipped lane's minimum
+        # retained score at exactly 0.60 -- the two corroborate. Against
+        # comparison lanes cutting at 0.85 that admitted 276,836 pairs vs
+        # 184,285, and connected components chained the extra links until
+        # non-singleton clusters averaged 7.98 members against a truth of 2.40.
+        # Pairwise precision 0.2627.
+        #
+        # A high match rate on blocked pairs is not absurd -- good blocking
+        # concentrates duplicates -- so this does NOT try to correct EM. It only
+        # refuses to read a percentile that carries no information, and falls
+        # back to the same fixed default the no-weights path uses.
+        if match_pct * 2 >= 1.0:
+            return 0.50, 0.35
+        # Admit about as many pairs as EM says are MATCHES -- not a multiple.
+        #
+        # This was `1 - match_pct * 2`, "2x match rate for headroom". That
+        # deliberately admitted twice the estimated match rate, so by the
+        # model's own estimate half of what it admitted was a non-match: a
+        # precision ceiling of ~0.5 BY CONSTRUCTION, before connected components
+        # chained anything.
+        #
+        # Measured, person @ 1M (run 32063484894, `gm_probabilistic_shipped`,
+        # which sets no link_threshold and so lands here):
+        #
+        #     pairwise  P 0.263  R 1.000  F1 0.416   TP 239,829 FP 673,277 FN 89
+        #     splink, same fixture, cutting at 0.85:  F1 0.995, EIGHT false pos
+        #
+        # Recall 1.000 at precision 0.263 is the signature of a cut chosen for
+        # headroom: it finds everything and pays in false positives.
+        #
+        # The model is the only thing here that knows how many matches to
+        # expect, so its own estimate is the defensible bound. The change is
+        # self-limiting: at low match rates both rules sit above the 0.95 clamp
+        # ceiling and nothing moves, while at high match rates 2x drove the
+        # percentile BELOW the 0.40 floor (match_pct 0.30 -> percentile 0.40,
+        # 0.45 -> 0.10), which is how a "data-driven" cut ended up admitting 60%
+        # of pairs regardless of the data.
+        link_idx = int(n * (1 - match_pct))
         link_idx = max(0, min(link_idx, n - 1))
         link_norm = sorted_w[link_idx]
 
@@ -2487,6 +3258,34 @@ def resolve_thresholds(
     return link, min(review, link)
 
 
+#: How the FS link cutoff was arrived at, for reporting (#2483).
+LINK_THRESHOLD_CONFIGURED = "configured"
+LINK_THRESHOLD_CALIBRATED = "calibrated"
+LINK_THRESHOLD_FALLBACK = "fallback"
+
+
+def link_threshold_source(mk: MatchkeyConfig, em_result: EMResult) -> str:
+    """Which of the three precedence steps supplied the link cutoff (#2483).
+
+    Mirrors -- and must keep mirroring -- the precedence in `resolve_thresholds`
+    and `_fs_link_threshold`: explicit `mk.link_threshold`, then the
+    EM-calibrated per-dataset cutoff, then the fixed default. Derived here
+    rather than re-inferred at the reporting site so the two cannot drift; a
+    reporting layer that disagrees with the resolver about where the number
+    came from is worse than no report at all.
+
+    ``"fallback"`` means nothing about THIS dataset chose the cut. That is the
+    case worth surfacing: the reporter in #2483 had a 94.4% match rate from the
+    fixed 0.50 default, with nothing in the config or the result saying a
+    decision had never been made.
+    """
+    if mk.link_threshold is not None:
+        return LINK_THRESHOLD_CONFIGURED
+    if getattr(em_result, "calibrated_link_threshold", None) is not None:
+        return LINK_THRESHOLD_CALIBRATED
+    return LINK_THRESHOLD_FALLBACK
+
+
 def _fs_calibrate_threshold_enabled() -> bool:
     """Unsupervised per-dataset link-threshold calibration. **Default OFF.**
 
@@ -2513,6 +3312,12 @@ def _fs_calibrate_threshold_enabled() -> bool:
 # Clamp the calibrated cutoff to a sane band (mirrors compute_thresholds' own
 # [0.40, 0.95] clamp; 0.90 upper keeps recall from collapsing on odd shapes).
 _CALIBRATE_MIN, _CALIBRATE_MAX = 0.40, 0.90
+#: Posterior-scale bounds. Wider than the linear pair because a posterior is a
+#: probability: well-separated pairs sit at ~0 and ~1, so a legitimate split can
+#: land far from 0.5 (the fixed posterior default is 0.99). The bounds still
+#: refuse the degenerate ends -- a cut at 0.0 links everything and one at 1.0
+#: links nothing, and either would be a silent disaster rather than a bad model.
+_CALIBRATE_POSTERIOR_MIN, _CALIBRATE_POSTERIOR_MAX = 0.05, 0.995
 
 
 def _otsu_threshold(scores) -> float | None:
@@ -2538,6 +3343,626 @@ def _otsu_threshold(scores) -> float | None:
     return float((k + 1) / nbins)              # upper edge of the split bin
 
 
+# ── FS threshold-refit loop (Phase 3a) ───────────────────────────────────────
+# Design: docs/superpowers/specs/2026-08-02-fs-refit-loop-design.md.
+# The non-iterated FS path commits a FIXED link cutoff (0.50). On over-merge-prone
+# shapes (household hard-negatives: distinct people sharing a surname) the F1-
+# optimal cutoff sits ABOVE 0.50, and the fixed default over-merges. This picks
+# the cutoff from the ACTUAL scored-pair distribution via Otsu, GATED on a
+# bimodality test so it ONLY moves when there is a genuine class-separating valley
+# -- the guard that keeps it a no-op on 0.50-optimal data (historical_50k, whose
+# scored distribution is one non-match mass + a declining tail, no valley).
+#
+# MEASURED (score-once, re-cluster sweep):
+#   household_hardneg  Otsu-on-scored 0.750 == F1-optimal; valley_ratio 0.00 (gap)
+#   historical_50k     Otsu-on-scored 0.540 but valley_ratio 0.55 (NO valley) -> keep 0.50
+# A naive "maximize multi-member cluster count" objective was REJECTED: it peaks
+# at 0.60 on historical_50k and would regress F1 0.841 -> 0.756. The valley gate,
+# not the split, is what makes this safe.
+_REFIT_BINS = 20
+# A genuine class-separating valley is NEARLY EMPTY (household: the gap bin holds
+# 0% of the smaller flank mode). A shallow dip -- e.g. ncvr's 22%-of-mode trough
+# INSIDE its corruption-spread match distribution -- is a shoulder, not a class
+# boundary, and cutting there removes true matches. Require a deep gap so the
+# refit fires only on a real false-band / true-mass separation (measured:
+# household 0.00 < 0.10 fires; ncvr 0.22 > 0.10 does not).
+_REFIT_VALLEY_MAX = 0.10
+_REFIT_MIN_MODE_MASS = 0.02  # each side of the valley must hold >= 2% of scored pairs
+_REFIT_MIN_PAIRS = 200     # too few pairs -> histogram is noise, don't refit
+# Ceiling on the share of already-matched records a raised cutoff may strand as
+# SINGLETONS (see `_expelled_share`). Over-merge repair regroups records without
+# stranding them, so the two regimes separate by ~160x on the panel: accept-correct
+# household_hardneg 0.0000 / cotenant_hardneg 0.0006 vs reject-correct person
+# 0.1020. 0.01 sits an order of magnitude clear of BOTH sides of that gap.
+_REFIT_MAX_EXPELLED_SHARE = 0.01
+#: Absolute ceiling on the benefit-scaled allowance. Bracketed by
+#: measurement: person@1M's 0.1002 must pass, the shattering shape's
+#: 0.4060 must fail.
+_REFIT_MAX_EXPELLED_CEILING = 0.25
+
+
+def _fs_refit_threshold_enabled() -> bool:
+    """Health-gated FS link-threshold refit. **Default ON (2026-08-13, #2518).**
+
+    When ``GOLDENMATCH_FS_REFIT_THRESHOLD`` is truthy, the FS path picks the link
+    cutoff from the actual scored-pair distribution (bimodality-gated valley +
+    cluster-shape guard + expelled-share guard) instead of the fixed default,
+    correcting the over-merge the non-iterated path can't see.
+    ``GOLDENMATCH_FS_REFIT_THRESHOLD=0`` is the kill-switch and is byte-identical
+    to the fixed cutoff.
+
+    **Why it was flipped back (#2387).** #2377 turned this ON after validating on
+    the `ab_lever` panel + QIS. Neither covers `ncvr_synthetic`, and the
+    nightly-only `bench-suggest-quality` gate went red the very next morning and
+    stayed red for five nights: `convergence_final_f1` 0.9828 -> 0.8881
+    (**-0.0966**). Confirmed by single-variable A/B on one sha -- `=0` scores
+    0.9847, default-on scores 0.8881.
+
+    The cause is a DEFECT IN THE CLUSTER-SHAPE GUARD, not a baseline that needed
+    re-blessing, which is why this is a revert rather than a re-bless. On
+    ncvr_synthetic the guard commits ``0.5000 -> 0.7000 (max cluster 5 -> 2,
+    over-merge reduced)`` -- and every gold cluster in that dataset is EXACTLY
+    size 2 (2500 disjoint pairs, max gold size 2), so the guard's own objective is
+    satisfied while F1 still falls. `max_candidate < max_default` is a
+    single-outlier statistic: it fixes the one or two genuinely over-merged
+    clusters and is structurally blind to the true pairs the raised cutoff drops
+    across the other ~2500 correct size-2 clusters. It works on household_hardneg
+    (0.947 -> 1.000) only because there over-merge IS the dominant error mode.
+
+    **The guard defect was fixed in #2518**: the single-outlier max test is paired
+    with a GLOBAL one -- `_expelled_share`, the share of matched records a
+    candidate would strand as singletons -- which separates over-merge repair from
+    cluster-shattering by ~160x on the panel. (The linked-pair bound #2387
+    suggested does NOT work; see `fs_refit_link_threshold` for the numbers.)
+
+    **Why the re-flip is safe this time -- validated on the panel that GATES it.**
+    #2377's mistake was evidence from `ab_lever` + QIS, the panels that MOTIVATED
+    the change, while the panel that gated it went unrun. So this flip was measured
+    with the gate itself, `scripts.suggest_quality`, single-variable `=0` vs `=1` on
+    one sha, native kernel present:
+
+    * fast `gate` (FULL_DIST=0): **byte-identical on every metric**, both arms
+      PASS. The number that reddened the nightly -- ncvr_synthetic
+      `convergence_final_f1` -- is **0.9847 in BOTH arms**, exactly its `=0` value
+      from the #2387 A/B (where default-on scored 0.8881).
+    * heavy `gym-gate` (FULL_DIST=1, catalog recovery): run with `=1` against the
+      `=0`-blessed `gym_scorecard.json` baseline.
+
+    Mechanically the flip is a no-op on ncvr_synthetic because the valley detector
+    now finds NO candidate above 0.50 there at all, so the accept criterion is
+    never reached -- the guard fix and a shift in the scorer set the controller
+    picks both point the same way.
+
+    **The two gates that failed to fire in #2387 are widened in the same change**,
+    since "a check exists and does not fire" is what made this a five-night red
+    rather than a caught regression: `bench-suggest-quality`'s push filter now
+    includes the FS refit paths (it listed only `suggest/**` +
+    `scripts/suggest_quality/**`, so a `probabilistic.py` edit ran NO suggester
+    gate), and `fs-lever-gate`'s PR tier now includes ncvr_synthetic -- the dataset
+    that caught the regression belongs on the per-PR tier, not only the nightly."""
+    return os.environ.get("GOLDENMATCH_FS_REFIT_THRESHOLD", "1").lower() in (
+        "1", "true", "on", "yes", "enabled",
+    )
+
+
+#: Minimum-mode mass for the CALIBRATOR's population, which is not the refit
+#: loop's. `_REFIT_MIN_MODE_MASS` (2%) is tuned for SCORED pairs -- already past
+#: a threshold, so match-rich. The calibrator reads TRAINING pairs: blocked
+#: candidates, overwhelmingly non-matches, where the true-match mode is a thin
+#: sliver by construction. Measured on the 20K person fixture, its posterior
+#: histogram is cleanly bimodal (9,905 pairs in bin 0, 82 in the top two, every
+#: bin between empty) and the match side is 0.82% -- so the 2% floor rejects a
+#: textbook separation and the calibrator falls back to a cut that scores F1
+#: 0.0000.
+#:
+#: 0.2% admits that shape while still refusing a handful of stray pairs as a
+#: "mode". It is a floor on EVIDENCE, not a claim about match rates: below it
+#: the smaller flank is too small for its maximum to mean anything, and the
+#: trough ratio it anchors becomes noise.
+_CALIBRATE_MIN_MODE_MASS = 0.002
+
+
+def _score_distribution_valley(hist, min_mode_mass: float | None = None) -> float | None:
+    """Locate the class-separating VALLEY of a [0,1] score histogram: a deep
+    density trough with substantial mass on BOTH sides. Returns the valley's cut
+    point (the low edge of the deepest qualifying bin, in [0,1]) when the
+    distribution is genuinely bimodal, else None.
+
+    The valley -- NOT Otsu's variance split -- is the right cut: with the mode
+    IMBALANCE typical of FS scores (a small false-pair band vs a huge true-match
+    mass), Otsu's between-class-variance maximum lands INSIDE the dominant mode
+    (measured: 0.88, deep in the true mass, cutting recall to 0.62), while the
+    valley sits exactly on the false/true boundary. We do NOT anchor on the global
+    peak (the true mass often dwarfs the false band, so the valley is BELOW the
+    peak): instead scan every candidate cut bin, keep those with >= _REFIT_MIN_MODE
+    _MASS on each side, and take the one whose trough is deepest relative to its
+    flanking maxima. The gate (trough < _REFIT_VALLEY_MAX of the smaller flank)
+    keeps this a no-op on overlapping unimodal-with-tail shapes (historical_50k:
+    no bin has a deep trough with mass on both sides -> None)."""
+    total = hist.sum()
+    if total <= 0:
+        return None
+    # Default preserves the refit loop's behaviour exactly; the calibrator
+    # passes its own floor because it reads a different population (see
+    # `_CALIBRATE_MIN_MODE_MASS`).
+    floor = _REFIT_MIN_MODE_MASS if min_mode_mass is None else min_mode_mass
+    nb = len(hist)
+    best_idx: int | None = None
+    best_ratio = _REFIT_VALLEY_MAX
+    for v in range(1, nb - 1):
+        left, right = hist[:v], hist[v + 1:]
+        if left.sum() / total < floor:
+            continue
+        if right.sum() / total < floor:
+            continue
+        smaller = min(left.max(), right.max())
+        if smaller <= 0:
+            continue
+        ratio = hist[v] / smaller       # trough depth vs the shallower flank mode
+        if ratio < best_ratio:
+            best_ratio, best_idx = ratio, v
+    if best_idx is None:
+        return None
+    return float(best_idx) / nb         # low edge of the deepest valley bin
+
+
+def fs_refit_threshold(scores, default_link: float) -> float:
+    """Pick the FS link cutoff from the scored-pair distribution, GATED on
+    bimodality. Returns the class-separating VALLEY cut (clamped to the sane band)
+    only when the distribution has a genuine trough between a false-pair band and
+    the true-match mass; otherwise returns ``default_link`` unchanged -- so on a
+    0.50-optimal (non-bimodal) dataset the refit is a no-op and cannot regress.
+    ``scores`` is a 1-D array of the already-computed pair scores (no re-scoring)."""
+    arr = np.asarray(scores, dtype=np.float64)
+    if arr.shape[0] < _REFIT_MIN_PAIRS:
+        return default_link
+    hist, _ = np.histogram(arr, bins=_REFIT_BINS, range=(0.0, 1.0))
+    hist = hist.astype(np.float64)
+    valley = _score_distribution_valley(hist)
+    if valley is None:
+        return default_link
+    return round(float(np.clip(valley, _CALIBRATE_MIN, _CALIBRATE_MAX)), 4)
+
+
+def _max_cluster_size(id_a, id_b, score, threshold: float) -> int:
+    """Largest RAW connected component when linking pairs with score >= threshold.
+
+    ``auto_split=False`` is load-bearing, not a default being restated. The
+    signature is ``build_clusters(pairs, all_ids=None, max_cluster_size=100,
+    auto_split=True, ...)``, so the default MST-splits anything above 100 and this
+    function could never return more than the clamp. The caller compares
+    ``max_candidate >= max_default``, so once over-merge is severe enough to
+    exceed 100 at BOTH cutoffs the comparison is 100 against 100 and the refit
+    declines -- most confidently on the shape it exists to repair.
+
+    Measured, person @ 1M (run 32075000216): ``max_default 100 -> max_candidate
+    100`` with the candidate stranding ZERO records, while the true components
+    were nothing like equal.
+
+    Auto-split is a downstream MITIGATION -- it chops an over-merged cluster into
+    presentable pieces. The question here is whether the CUTOFF reduced
+    over-merge, which is a property of the raw components the cutoff produces,
+    not of how they are later presented. Singletons can't be the max, so ids are
+    inferred from the pairs."""
+    from goldenmatch.core.cluster import build_clusters  # noqa: PLC0415
+    linked = [
+        (int(a), int(b), float(s))
+        for a, b, s in zip(id_a, id_b, score) if s >= threshold
+    ]
+    if not linked:
+        return 0
+    clusters = build_clusters(linked, auto_split=False)
+    return max((c["size"] for c in clusters.values()), default=0)
+
+
+def _matched_records(id_a, id_b, score, threshold: float) -> set[int]:
+    """Records that land in a MULTI-MEMBER cluster when linking at ``threshold``.
+
+    The complement (within the linked-pair id space) is the set of records the
+    cutoff leaves unmatched, which is what ``_expelled_share`` measures.
+
+    ``auto_split=False`` for the same reason as :func:`_max_cluster_size`: MST
+    splitting can leave a weakly-attached member as a size-1 piece, which reads
+    here as "this record is unmatched" when the cutoff in fact linked it.
+    Measured on the 8x-over-merge fixture in
+    ``test_fs_refit_max_saturates.py``: 800 of 1200 records counted as matched
+    with splitting on, 1200 with it off. There the distortion happened to be
+    equal at both cutoffs and cancelled in the ratio, but nothing makes that
+    general -- and this is the SAFETY guard, so it must not depend on luck."""
+    from goldenmatch.core.cluster import build_clusters  # noqa: PLC0415
+    linked = [
+        (int(a), int(b), float(s))
+        for a, b, s in zip(id_a, id_b, score) if s >= threshold
+    ]
+    if not linked:
+        return set()
+    out: set[int] = set()
+    for c in build_clusters(linked, auto_split=False).values():
+        if c.get("size", 0) > 1:
+            out.update(int(m) for m in c["members"])
+    return out
+
+
+def _expelled_share(id_a, id_b, score, default_link: float, candidate: float) -> float:
+    """Share of records matched at ``default_link`` that become SINGLETONS at
+    ``candidate`` -- the GLOBAL statistic the max-cluster-size guard lacks.
+
+    This is the asymmetry that separates the two ways a raised cutoff changes
+    clustering, which a maximum cannot tell apart:
+
+    * **Over-merge repair** REGROUPS records. Splitting a surname-collapsed
+      cluster of 8 into three clusters of ~3 moves every record into a smaller
+      cluster, but leaves them all still matched -- so the expelled share stays
+      at ~0 (measured: household_hardneg 0.0000, cotenant_hardneg 0.0006).
+    * **Shattering correct clusters** EXPELS records. Cutting a true size-2
+      cluster leaves BOTH of its records as singletons, so the damage shows up
+      directly (measured: person 0.1020, where the refit costs -0.0616 F1).
+
+    Returns 0.0 when nothing was matched at the default (no baseline to lose)."""
+    matched_default = _matched_records(id_a, id_b, score, default_link)
+    if not matched_default:
+        return 0.0
+    matched_candidate = _matched_records(id_a, id_b, score, candidate)
+    return len(matched_default - matched_candidate) / len(matched_default)
+
+
+_SWEEP_MAX_CUTS = 12
+
+
+def _threshold_sweep(id_a, id_b, score, default_link: float,
+                     *, limit: int = _SWEEP_MAX_CUTS) -> list[dict]:
+    """What the clustering would look like at each candidate cut above the default.
+
+    The valley detector answers "is there a trough" over ``_REFIT_BINS = 20``
+    bins. On person@1M that was the wrong instrument: FS scores there take five
+    distinct values (five fields, mostly binary agreement levels), so five bins
+    are occupied and the trough search settled on 0.60 -- the bottom of the
+    support, a cut identical to the 0.50 already in force. The separation that
+    matters was the measured gap at 0.70 -> 0.80, which no 20-bin trough was
+    going to find.
+
+    This reports the consequences directly instead of inferring them from a
+    histogram: per cut, how many pairs survive, the largest RAW component, and
+    the share of currently-matched records the cut would strand.
+
+    Bounded at ``limit`` clustering passes. Discrete scores contribute their
+    distinct values; a continuous distribution is sampled at quantiles, so this
+    stays usable on the shape it is most needed for.
+    """
+    arr = np.asarray(score, dtype=np.float64)
+    above = arr[arr > default_link]
+    if above.size == 0:
+        return []
+    distinct = np.unique(above)
+    if distinct.size <= limit:
+        cuts = distinct
+    else:
+        qs = np.linspace(0.0, 1.0, limit)
+        cuts = np.unique(np.quantile(above, qs))
+    from goldenmatch.core.cluster import build_clusters  # noqa: PLC0415
+
+    def _one_pass(threshold: float) -> tuple[set[int], int]:
+        """Matched-record set AND largest component from a SINGLE clustering
+        pass. Calling `_matched_records` and `_max_cluster_size` separately
+        doubles the cost of the sweep, which is the dominant term: measured on
+        person@1M, the sweep took the shipped lane from 56.7s to 146.2s."""
+        linked = [
+            (int(a), int(b), float(v))
+            for a, b, v in zip(id_a, id_b, score) if v >= threshold
+        ]
+        if not linked:
+            return set(), 0
+        matched: set[int] = set()
+        largest = 0
+        for c in build_clusters(linked, auto_split=False).values():
+            size = c.get("size", 0)
+            largest = max(largest, size)
+            if size > 1:
+                matched.update(int(m) for m in c["members"])
+        return matched, largest
+
+    matched_default, _ = _one_pass(default_link)
+    base = len(matched_default)
+    rows: list[dict] = []
+    for cut in cuts:
+        cut = float(cut)
+        matched_cut, largest = _one_pass(cut)
+        expelled = (len(matched_default - matched_cut) / base) if base else 0.0
+        rows.append({
+            "cut": round(cut, 4),
+            "linked_pairs": int((arr >= cut).sum()),
+            "max_component": largest,
+            "expelled": round(float(expelled), 6),
+        })
+    return rows
+
+
+def _sweep_knee_candidate(id_a, id_b, score, default_link: float) -> float | None:
+    """A candidate cut chosen from measured consequences, for when the valley
+    returns one that changes nothing.
+
+    A cut below the minimum observed score is not a threshold. The regression
+    guards in :func:`fs_refit_link_threshold` exist to stop a raised cutoff from
+    damaging a cut that is WORKING, and none of their statistics mean anything
+    against a baseline in which every scored pair is linked: "how much do I lose
+    relative to the current clustering" is not a question when the current
+    clustering joins everything to everything.
+
+    Measured, person @ 1M, one variable changed (run 32079034548):
+
+        lane                     pairwise P       R      F1   clusters
+        shipped (cut 0.50)           0.2627  0.9996  0.4160    771,202
+        cut80   (cut 0.80)           1.0000  0.9576  0.9783    807,940
+        splink  (cut 0.85)           0.9999  0.9902  0.9951    801,817
+        (true clusters 799,927)
+
+    +0.562 F1 from the cut alone. The expelled cap would have refused it: 0.80
+    costs 0.1002, ten times ``_REFIT_MAX_EXPELLED_SHARE``.
+
+    Rule: the SMALLEST cut achieving the minimum largest component. On the
+    recorded sweep 0.90 and 1.00 reach the same minimum at 2.3x and 5.9x the
+    expelled cost, so this is also the least-expelling effective cut -- which is
+    why no additional expelled ceiling is imposed. Adding an unmeasured bound
+    here would reintroduce the failure mode this whole investigation kept
+    hitting: a constant with no dataset behind it silently vetoing a repair.
+
+    Positive evidence is still required. If no cut reduces the largest
+    component there is nothing to repair, and raising the cut would trade recall
+    for nothing, so the default stands.
+    """
+    rows = _threshold_sweep(id_a, id_b, score, default_link)
+    max_default = _max_cluster_size(id_a, id_b, score, default_link)
+    effective = [r for r in rows if r["max_component"] < max_default]
+    if not effective:
+        return None
+    best = min(r["max_component"] for r in effective)
+    chosen = min((r for r in effective if r["max_component"] == best),
+                 key=lambda r: r["cut"])
+    return float(chosen["cut"])
+
+
+def _expelled_allowance(max_default: int, max_candidate: int) -> float:
+    """How much stranding a candidate may cost, scaled by what it repairs.
+
+    A flat cap answers "how much do I lose" without ever asking "for what". It
+    would have refused the person@1M repair -- +0.562 F1, measured -- because
+    0.1002 exceeds 0.01, while accepting nothing about the 618 -> 3 collapse
+    that bought it.
+
+    Scaling by the reduction ratio classifies every case with a measurement
+    behind it:
+
+    =========================  ==============  ========  =========  =======
+    case                        max reduction  expelled  allowance  correct
+    =========================  ==============  ========  =========  =======
+    shattering (unit test)          5 -> 2      0.4060     0.0250   reject
+    panel person                    3 -> 3      0.1020        n/a   reject
+    panel household_hardneg         8 -> 3      0.0000     0.0267   accept
+    panel cotenant_hardneg              n/a     0.0006      >0.01   accept
+    person @ 1M, cut 0.80         618 -> 3      0.1002     0.2500   accept
+    =========================  ==============  ========  =========  =======
+
+    panel person never reaches here -- its max does not reduce, so the guard
+    above rejects it. That matters: relaxing this cap cannot regress the one
+    panel dataset the cap looks like it protects.
+
+    ``_REFIT_MAX_EXPELLED_CEILING`` is BRACKETED by measurement rather than
+    picked: 0.1002 must pass and 0.4060 must fail, so it sits between them. It
+    exists because the ratio is unbounded and a 206x repair should not license
+    stranding everything.
+    """
+    if max_candidate <= 0:
+        return _REFIT_MAX_EXPELLED_SHARE
+    ratio = max_default / max_candidate
+    return min(_REFIT_MAX_EXPELLED_CEILING, _REFIT_MAX_EXPELLED_SHARE * ratio)
+
+
+def _record(out: dict | None, reason: str, default_link: float,
+            candidate: float, **extra) -> None:
+    """Record the refit decision as DATA, not only as a log line.
+
+    Three times in the person@1M investigation the thing that unblocked it was a
+    recorded FIELD -- `route`, `candidates_counted`, `em_iterations_total` --
+    and never a log. Logs are lossy: this function's DECLINE paths sat at DEBUG
+    while its COMMIT path sat at INFO, and even after promoting them the bench
+    printed nothing because nothing configured a handler above WARNING. A field
+    in the result cannot be lost to a level nobody set.
+    """
+    if out is None:
+        return
+    out.update({"reason": reason, "default_link": float(default_link),
+                "candidate": float(candidate), **extra})
+
+
+def fs_refit_link_threshold(id_a, id_b, score, default_link: float,
+                            *, decision_out: dict | None = None) -> float:
+    """Guarded FS threshold refit: the distributional valley candidate, ACCEPTED
+    only when re-clustering at it actually REDUCES over-merge (max cluster size)
+    vs the default. This is the guard that a pure distributional valley needs: a
+    density gap can't tell an over-merge false-pair band (household: cutting it
+    shrinks giant surname-collapsed clusters, max 8 -> 3) from a gap between
+    low-scoring TRUE matches and the rest (person: cutting removes real matches,
+    max stays 3). Only a candidate that both (a) raises the cutoff and (b) shrinks
+    the largest cluster is committed; otherwise the default stands, so clean,
+    already-separated datasets (person/ncvr/historical_50k) are a no-op. Re-cluster
+    only -- scores are not recomputed.
+
+    **TWO guards, both required (#2518).** The max-cluster-size test alone is a
+    SINGLE-OUTLIER statistic -- one scalar over the whole dataset -- so a candidate
+    that fixes the one genuinely over-merged cluster is accepted no matter how many
+    CORRECT clusters the raised cutoff shatters, because that damage sits BELOW the
+    max where a max cannot see it. That is the #2387 defect. It is now paired with
+    ``_expelled_share``, a GLOBAL criterion: the share of already-matched records the
+    candidate would strand as singletons, capped at ``_REFIT_MAX_EXPELLED_SHARE``.
+    The two are complementary and neither is sufficient alone -- the max supplies the
+    positive evidence (over-merge is really being repaired), the expelled share the
+    negative (correct clusters are not being shattered).
+
+    Measured on the FS lever panel (flag ON, valley candidate vs default):
+
+    ==================  ========  ========  =======  =======
+    dataset             expelled  linked_d      dF1  correct
+    ==================  ========  ========  =======  =======
+    person                0.1020    0.1161  -0.0616   reject
+    household_hardneg     0.0000    0.0608  +0.0313   accept
+    cotenant_hardneg      0.0006    0.7341  +0.5770   accept
+    ncvr_synthetic          n/a       n/a      n/a    no valley
+    ==================  ========  ========  =======  =======
+
+    ``expelled`` separates the regimes by ~160x. Note what this does and does NOT
+    change: the max test alone already calls all three of these correctly, so no
+    LIVE panel decision moves -- person is the shattering shape the cap is
+    calibrated against, not a regression being fixed here. The case the two
+    criteria actually disagree on is ncvr-shaped, and ncvr_synthetic no longer
+    produces a valley above 0.50 at all (F1 0.9913 either way), so that shape is
+    covered by a unit test rather than a panel dataset:
+    ``test_rejects_when_correct_clusters_would_be_shattered``.
+
+    **The linked-pair-count bound that #2387 proposed as the alternative remedy is
+    FALSIFIED** -- person's 0.1161 drop sits BETWEEN the two correct accepts
+    (0.0608 / 0.7341), so no bound on it can classify all three.
+
+    **The max statistic used to SATURATE, so this guard refused hardest on the
+    shape it exists to repair.** ``_max_cluster_size`` called ``build_clusters``
+    with its defaults, and the signature is ``(pairs, all_ids=None,
+    max_cluster_size=100, auto_split=True, ...)`` -- auto-split MST-chops
+    anything above 100, so the function could never return more than the clamp.
+    The accept condition is ``max_candidate < max_default``, so as soon as
+    over-merge exceeded 100 at BOTH cutoffs the comparison was 100 against 100
+    and the candidate was declined. The worse the over-merge, the more certain
+    the refusal.
+
+    Measured, person @ 1M (run 32075000216), recorded by ``_record`` rather than
+    inferred: ``reason no-max-reduction, max_default 100, max_candidate 100,
+    expelled_if_taken 0.0`` -- a candidate stranding ZERO records, refused by a
+    statistic pinned at its own ceiling. Both statistics now measure the RAW
+    components (``auto_split=False``): auto-split is a downstream mitigation, and
+    whether the CUTOFF reduced over-merge is a property of the components the
+    cutoff produces, not of how they are later presented.
+
+    This does not move the panel. Auto-split fires only above 100 members and
+    every panel cluster is far below that (household's over-merge is max 8 -> 3),
+    so the change is confined to datasets with components over 100 -- the
+    population the panel does not contain. Pinned in
+    ``test_fs_refit_max_saturates.py``.
+
+    The alternative considered was deleting the max requirement and letting
+    ``_expelled_share`` carry the accept alone, since it classifies all three
+    panel datasets correctly on its own. It was rejected: the blind spot named at
+    the end of this docstring is exactly what the max test guards, and the defect
+    was that the max was measuring the wrong thing, not that requiring it was
+    wrong.
+
+    **Default ON since #2518** -- this docstring said "Still default-OFF" long
+    after `_fs_refit_threshold_enabled` began returning True by default
+    (`os.environ.get("GOLDENMATCH_FS_REFIT_THRESHOLD", "1")`). Two docstrings in
+    one file disagreeing about whether a behaviour ships is worse than neither
+    saying anything, so: it ships. Residual known blind spot: a candidate that splits a
+    correct cluster into two multi-member clusters expels nobody, so neither guard
+    sees it; no panel dataset exhibits that shape."""
+    _arr = np.asarray(score, dtype=np.float64)
+    # A cut below the whole distribution is not a threshold -- it admits every
+    # scored pair. Costs one min(); recorded on every path because a decline
+    # reporting equal maxima is otherwise ambiguous between "the candidate does
+    # not help" and "the candidate does nothing at all", which call for
+    # opposite responses. person@1M was the second and read as the first.
+    _score_min = float(_arr.min()) if _arr.size else float("nan")
+    _inert = bool(_arr.size and default_link <= _score_min)
+    if decision_out is not None:
+        decision_out["score_min"] = round(_score_min, 6) if _arr.size else None
+        decision_out["cut_is_inert"] = _inert
+        # `_replace_inert_cut` records its own sweep, so skip here or the bench
+        # pays for the same 12 clustering passes twice.
+        if not _inert and os.environ.get("GOLDENMATCH_FS_REFIT_SWEEP", "").lower() in (
+            "1", "true", "yes", "on",
+        ):
+            decision_out["sweep"] = _threshold_sweep(id_a, id_b, score, default_link)
+    candidate = fs_refit_threshold(_arr, default_link)
+    # A candidate admitting the SAME pairs as the default is a no-op, and the
+    # guards below cannot say so: they report `max_default == max_candidate`,
+    # which reads identically to "this candidate does not help". person@1M's
+    # valley proposed 0.60 against a 0.50 cut with a minimum score of 0.60 --
+    # literally the same pair set -- and the resulting `618 -> 618` was read as
+    # evidence for two rounds. Fall back to a candidate chosen from measured
+    # consequences; the guards still decide whether to take it.
+    if candidate > default_link and _arr.size and (
+        int((_arr >= candidate).sum()) == int((_arr >= default_link).sum())
+    ):
+        knee = _sweep_knee_candidate(id_a, id_b, score, default_link)
+        if decision_out is not None:
+            decision_out["valley_candidate_was_noop"] = round(float(candidate), 4)
+        candidate = knee if knee is not None else default_link
+    if candidate <= default_link:
+        # No valley above the default -> the loop is a no-op (the common case on
+        # 0.50-optimal data). DEBUG so an opt-in run can confirm it engaged.
+        logger.info(
+            "FS link-threshold refit DECLINED (no-valley): no distributional "
+            "valley above %.4f -> keeping %.4f",
+            default_link, default_link,
+        )
+        _record(decision_out, "no-valley", default_link, candidate)
+        return default_link
+    max_default = _max_cluster_size(id_a, id_b, score, default_link)
+    max_candidate = _max_cluster_size(id_a, id_b, score, candidate)
+    if max_candidate >= max_default:
+        logger.info(
+            "FS link-threshold refit DECLINED (no-max-reduction): candidate %.4f, "
+            "max cluster %d -> %d -> keeping %.4f. NOTE: max cluster size is a "
+            "single-outlier statistic; a shape whose over-merge is DIFFUSE (many "
+            "slightly-oversized clusters rather than one giant one) cannot move it, "
+            "so this decline does not mean there is no over-merge.",
+            candidate, max_default, max_candidate, default_link,
+        )
+        # Compute the expelled share EVEN THOUGH we are declining, because it is
+        # the number the next decision needs and returning without it is what
+        # made this branch unanswerable.
+        #
+        # The panel in this docstring shows `expelled` separating all three
+        # datasets cleanly (person 0.1020 reject, household 0.0000 accept,
+        # cotenant 0.0006 accept) where `linked_d` provably cannot -- person's
+        # 0.1161 sits BETWEEN the two accepts. So the open question is whether
+        # the max-reduction requirement is load-bearing at all, or whether
+        # expelled-share alone would do the job. That cannot be answered while
+        # this path returns before measuring it.
+        #
+        # Recorded, NOT acted on: this still declines exactly as before. Changing
+        # an accept criterion that gates a user's cluster shape needs the number
+        # first -- the same discipline that turned the blocking-skew rule from a
+        # guess into #2629.
+        expelled_if_taken = _expelled_share(id_a, id_b, score, default_link, candidate)
+        _record(decision_out, "no-max-reduction", default_link, candidate,
+                max_default=max_default, max_candidate=max_candidate,
+                expelled_if_taken=round(float(expelled_if_taken), 6),
+                expelled_cap=_REFIT_MAX_EXPELLED_SHARE)
+        return default_link
+    expelled = _expelled_share(id_a, id_b, score, default_link, candidate)
+    allowance = _expelled_allowance(max_default, max_candidate)
+    if expelled > allowance:
+        logger.info(
+            "FS link-threshold refit DECLINED (expelled-share): candidate %.4f, "
+            "max cluster %d -> %d, but %.2f%% of matched records would be stranded "
+            "as singletons (cap %.2f%%) -> keeping %.4f",
+            candidate, max_default, max_candidate, expelled * 100.0,
+            allowance * 100.0, default_link,
+        )
+        _record(decision_out, "expelled-share", default_link, candidate,
+                max_default=max_default, max_candidate=max_candidate,
+                expelled=expelled, allowance=allowance)
+        return default_link
+    # Committed: the same observability discipline the controller uses for its
+    # weighted-path commit decision, so the FS refit is auditable on one surface
+    # (this is the non-iterated FS path's analogue of a RunHistory decision).
+    logger.info(
+        "FS link-threshold refit: %.4f -> %.4f (valley candidate; max cluster "
+        "%d -> %d, over-merge reduced; %.2f%% of matched records stranded)",
+        default_link, candidate, max_default, max_candidate, expelled * 100.0,
+    )
+    _record(decision_out, "committed", default_link, candidate,
+            max_default=max_default, max_candidate=max_candidate,
+            expelled=expelled)
+    return candidate
+
+
 def _calibrate_link_threshold(comp_matrix, mk, match_weights, p_match) -> float | None:
     """Pick a link cutoff from the training-pair normalized-score distribution via
     Otsu's method, instead of the fixed 0.50.
@@ -2559,13 +3984,111 @@ def _calibrate_link_threshold(comp_matrix, mk, match_weights, p_match) -> float 
         lv = comp_matrix[:, j]
         obs = lv >= 0
         total[obs] += weights[f.field][lv[obs]]
-    norm = np.clip((total - pair_min) / (pair_max - pair_min), 0.0, 1.0)
-    if norm.shape[0] <= 50:
+    if total.shape[0] <= 50:
         return None
-    t = _otsu_threshold(norm)
+
+    # Calibrate on the scale the cut will be COMPARED against, or the number is
+    # a different quantity that merely shares the [0, 1] range.
+    #
+    # `resolve_thresholds` hands this value straight to the scorer, and under
+    # posterior calibration the scorer is comparing PROBABILITIES. Splitting the
+    # linear weight envelope and applying the result as a posterior was the
+    # original bug: measured on a 20K person fixture, Otsu picked 0.11 on the
+    # linear scale while the posterior default for the same data is 0.99, and
+    # nothing failed -- the linear value is inside [0, 1], the run reports
+    # `source: "calibrated"`, and the model quietly cuts in the wrong place.
+    #
+    # The tell is prior-invariance: the linear envelope does not depend on the
+    # match rate, so the same comparison vectors gave the same cut at a 0.1% and
+    # a 40% prior. A posterior cut must move with the prior.
+    posterior = _fs_calibration_mode() == "posterior"
+    if posterior:
+        prior_w = prior_weight(p_match)
+        norm = np.asarray(
+            [posterior_from_weight(float(w), prior_w) for w in total],
+            dtype=np.float64,
+        )
+    else:
+        norm = np.clip((total - pair_min) / (pair_max - pair_min), 0.0, 1.0)
+
+    # Otsu histograms over a FIXED [0, 1] range, which is right for the linear
+    # scale (min-max normalised scores spread across it) and wrong for
+    # posteriors: a well-separated pair sits at ~0 or ~1, so both masses land in
+    # end bins and the between-class variance peaks at the FIRST occupied bin --
+    # BELOW the low cluster rather than between the two. Measured on the two
+    # posterior clusters of the fixture below (0.0103 and 0.9942), Otsu returns
+    # 0.02, which links everything.
+    #
+    # So on the posterior scale the split is taken between the two masses
+    # directly. `_otsu_threshold` is left untouched: it is also used by the
+    # refit loop, whose scores ARE linear, and changing it there would move a
+    # separately-validated behaviour.
+    t = _posterior_split(norm) if posterior else _otsu_threshold(norm)
     if t is None:
         return None
-    return round(float(np.clip(t, _CALIBRATE_MIN, _CALIBRATE_MAX)), 4)
+    # The [0.40, 0.90] clamp is a LINEAR-scale guard: it bounds how far a
+    # min-max normalised cut may stray from the 0.50 midpoint. Posterior scores
+    # pile up against both ends (a well-separated pair is ~0 or ~1), so the same
+    # clamp there would force every dataset to 0.40 or 0.90 -- which is exactly
+    # what it did: the 0.11 split above was clamped to 0.40 and scored well by
+    # accident, because 0.40 happened to sit between this fixture's two
+    # posterior clusters.
+    if posterior:
+        lo, hi = _CALIBRATE_POSTERIOR_MIN, _CALIBRATE_POSTERIOR_MAX
+    else:
+        lo, hi = _CALIBRATE_MIN, _CALIBRATE_MAX
+    return round(float(np.clip(t, lo, hi)), 4)
+
+
+def _posterior_split(scores) -> float | None:
+    """A cut between the two posterior masses, rather than an Otsu bin edge.
+
+    Posterior scores are not spread over [0, 1] -- they pile up near 0 and 1 --
+    so a fixed-range histogram puts both classes in end bins and Otsu's split
+    lands below the low mass instead of between them (measured: 0.02 for
+    clusters at 0.0103 and 0.9942).
+
+    This finds the widest GAP between consecutive sorted scores and cuts at its
+    midpoint. On a genuinely bimodal set that gap is the class boundary. It
+    returns None when the widest gap is not a real separation -- a set with no
+    meaningful split should keep the fixed default rather than invent a cut
+    from noise, which is the failure mode the refit loop's valley gate exists
+    to prevent.
+    """
+    arr = np.asarray(scores, dtype=np.float64)
+    if arr.shape[0] < 2:
+        return None
+
+    # BIMODALITY GATE, not a gap rule. The first version of this took the
+    # midpoint of the widest gap between sorted scores, which finds *a*
+    # separation in any distribution -- including one that has none. The
+    # cross-dataset sweep (run 31844730947) measured the cost: on
+    # `historical_50k` it cut at 0.348 where that dataset's optimum is 0.99,
+    # taking F1 0.7462 -> 0.0005 while reporting `source: "calibrated"` and
+    # returning clusters the whole way. Its shape is one non-match mass
+    # decaying into the matches -- no valley, so the widest gap sits inside the
+    # tail.
+    #
+    # `_score_distribution_valley` is the refit loop's answer to exactly this
+    # problem, and its own comment names the same dataset as the reason it
+    # exists ("historical_50k ... valley_ratio 0.55 (NO valley) -> keep 0.50").
+    # Reusing it means one bimodality rule rather than two that can disagree
+    # about what a class boundary is.
+    #
+    # It is deliberately reused rather than reimplemented on the posterior
+    # scale: the detector reads a [0, 1] histogram and both scales are [0, 1],
+    # so the only thing that changes is which quantity fills the bins.
+    hist, _ = np.histogram(arr, bins=_REFIT_BINS, range=(0.0, 1.0))
+    valley = _score_distribution_valley(
+        hist.astype(np.float64), min_mode_mass=_CALIBRATE_MIN_MODE_MASS
+    )
+    if valley is None:
+        return None
+
+    # The valley is the LOW EDGE of the trough bin. Return the bin's midpoint so
+    # the cut sits inside the empty region rather than on the shoulder of the
+    # mass below it.
+    return float(valley + 0.5 / _REFIT_BINS)
 
 
 def _fs_link_threshold(

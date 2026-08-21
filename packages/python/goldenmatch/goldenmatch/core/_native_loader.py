@@ -186,17 +186,43 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
                   "documents_template", "documents_template_list",
                   "documents_classify_prompt", "documents_parse_classify",
                   "documents_parse_structured"),
-    # "sail_scoring" is intentionally absent -> _FALLBACK_ONLY below.
+    # sail_scoring: LIFTED 2026-08-11 (spec 2026-08-10-spark-native-execution
+    # -design section 6). It was _FALLBACK_ONLY because score_field_pairwise
+    # narrowed to f32 and that cast changed MATCH DECISIONS at round thresholds
+    # (a pure 0.95 -> 0.949999988, so `>= 0.95` flipped on ordinary surname
+    # pairs). goldenmatch-native 0.1.21 returns f64 and the decision-stability
+    # battery is green.
+    #
+    # SYMBOL PRESENCE IS NOT ENOUGH HERE. `score_field_pairwise` exists on the
+    # f32 0.1.20 wheel too, so this entry cannot distinguish the two. The call
+    # site (`sail/scorers.py::_native_scores`) additionally verifies the returned
+    # DTYPE is f64 and falls back otherwise -- an older installed wheel must not
+    # silently reintroduce the flips.
+    "sail_scoring": ("score_field_pairwise",),
+    # fs_em: the COUNTED Fellegi-Sunter trainer (spec
+    # 2026-08-13-fs-em-rust-single-source-design). The kernel is
+    # `score-core::em_core`, which until Phase 1 had no callers at all while the
+    # same loop was maintained separately in Python and TypeScript.
+    #
+    # Parity is DECISION-LEVEL, not bitwise: libm's ln/log2/exp differ from
+    # CPython's in the low mantissa bits, so a model trained native and one
+    # trained pure-Python agree to ~1e-9 on probabilities rather than exactly.
+    # That is the same posture every other float kernel here takes, and the
+    # per-case tolerances are pinned in
+    # packages/rust/extensions/score-core/tests/fixtures/em_counts_parity.json.
+    "fs_em": ("train_em_from_counts_native", "estimate_u_from_counts_native"),
 }
 
 # Components with a native symbol that is KNOWN to diverge from the Python
-# reference and must NOT auto-run native even under reference-mode:
-#   - sail_scoring: score_field_pairwise returns f32 vs the pure f64 floor
-#     (boundary-nondeterminism, same class as FS). Stays Python under ``auto``
-#     until its parity battery is green on the PUBLISHED wheel. Previously "off by
-#     accident" (unmapped); now off ON PURPOSE.
+# reference and must NOT auto-run native even under reference-mode.
+#
+# EMPTY as of 2026-08-11: sail_scoring was the only entry and its divergence was
+# removed at the source (f64 kernel, goldenmatch-native 0.1.21) rather than
+# tolerated. Keep the mechanism -- a future kernel that provably diverges belongs
+# here rather than being quietly enabled.
+#
 # (FS block scoring is gated separately via GOLDENMATCH_FS_NATIVE, not here.)
-_FALLBACK_ONLY: frozenset[str] = frozenset({"sail_scoring"})
+_FALLBACK_ONLY: frozenset[str] = frozenset()
 
 
 def _has_symbol(component: str) -> bool:

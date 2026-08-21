@@ -7,6 +7,17 @@ links rather than reading everything.
 - [foundation/project-definition.md](foundation/project-definition.md) — what the Golden Suite / goldenmatch is, and the gate that governs the current arc.
 - [foundation/structure.md](foundation/structure.md) — the polyglot monorepo layout and where the authoritative context lives (CLAUDE.md files).
 
+## Operations (how this repo is built, gated and released)
+Extracted from the root `CLAUDE.md` in 2026-08 so they are read when relevant rather than loaded into every session. The root file keeps a one-line Tier-1 rule for each and links here.
+- [operations/cross-language-parity-gates.md](operations/cross-language-parity-gates.md) — every gate that stops Python/TS/Rust/SQL drifting: the `api_parity` surface matrix, scorer + blocking coverage floors, `native_symbols`, the advisory SQL inventory.
+- [operations/native-runtime.md](operations/native-runtime.md) — the optional compiled kernel: loader order, the reference-mode gate, the #688 rayon park, and the wheel-symbol-skew footgun.
+- [operations/release-and-registries.md](operations/release-and-registries.md) — cutting releases to PyPI/npm/ghcr and syncing the MCP Registry + Smithery; immutable-release traps and the golden-suite lockstep rule.
+- [operations/quality-gates.md](operations/quality-gates.md) — the two scheduled ER-QUALITY gates (suggestion gym, zero-config quality-at-scale) and how to re-bless each.
+- [operations/agent-discoverability.md](operations/agent-discoverability.md) — shipping `llms.txt` inside every installed artifact, the per-ecosystem rules, and the gates enforcing it.
+- [operations/out-of-workspace-consumers.md](operations/out-of-workspace-consumers.md) — the packages that install goldenmatch from source on their own lanes, and the two halves of the one-way-break fix.
+- [operations/railway-services.md](operations/railway-services.md) — the hosted MCP server and the bench-data generator.
+- [operations/github-and-tooling-gotchas.md](operations/github-and-tooling-gotchas.md) — `gh`, CI-UI, pnpm and stacked-PR specifics that each cost an afternoon once.
+
 ## Architecture (active technical knowledge)
 - [architecture/datafusion-spine.md](architecture/datafusion-spine.md) — the embedded-DataFusion "scale mode" spine (Stages A-E); current status + entry points.
 - [architecture/sail-tier.md](architecture/sail-tier.md) — the distributed Sail-native tier (Spark Connect) that replaces Ray; specced, build not started.
@@ -78,7 +89,7 @@ links rather than reading everything.
 - [planning/security-hardening.md](planning/security-hardening.md) — the 2026-06-05 security-hardening arc: 42-alert remediation (Dependabot + code scanning), Scorecard 6.1->7.3 (Token-Permissions/Signed-Releases/Fuzzing), the CodeQL Autofix incident, property-test bug ledger, and open actions.
 
 ## Reference (operational)
-- **Runtime config / opt-ins:** the single source of truth for every `GOLDENMATCH_*` environment variable — native gate, backend selection, distributed pipeline, perf opt-ins — is the published Mintlify page `docs-site/goldenmatch/tuning.mdx` (`docs.bensevern.dev/goldenmatch/tuning`). Built 2026-06-13 after a day lost to silent pure-Python fallback + `backend="ray"`-doesn't-distribute confusion. Defaults verified against source; keep it in sync when adding an env read. Don't re-derive the flag list from memory — read that page (or re-grep `GOLDENMATCH_` read-sites) instead.
+- **Runtime config / opt-ins:** the single source of truth for every `GOLDENMATCH_*` environment variable — native gate, backend selection, distributed pipeline, perf opt-ins — is the published Mintlify page `docs-site/goldenmatch/tuning.mdx` (`docs.bensevern.dev/docs/goldenmatch/tuning`). Built 2026-06-13 after a day lost to silent pure-Python fallback + `backend="ray"`-doesn't-distribute confusion. Defaults verified against source; keep it in sync when adding an env read. Don't re-derive the flag list from memory — read that page (or re-grep `GOLDENMATCH_` read-sites) instead.
 
 ## Meta (keeping the network alive)
 - [meta/updates.md](meta/updates.md) — chronological change log for the network.

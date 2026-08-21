@@ -50,7 +50,9 @@ class Lane:
 # RAISES under the default require-native when the kernel is absent -- so all
 # four need --allow-pure-python locally (CI builds native and passes False).
 _GM_RUN_LANES = {"gm_hand_built", "gm_probabilistic",
-                 "gm_probabilistic_native", "gm_zeroconfig"}
+                 "gm_probabilistic_native", "gm_probabilistic_counted",
+                 "gm_probabilistic_shipped", "gm_probabilistic_cut80",
+                 "gm_zeroconfig"}
 
 LANES: dict[str, Lane] = {
     "splink": Lane("splink", "run_splink.py"),
@@ -58,10 +60,16 @@ LANES: dict[str, Lane] = {
     # Both FS lanes score in POSTERIOR calibration so GM's match score is a true
     # probability on the SAME scale as Splink's, making the shared --threshold a
     # fair cut for both engines. GM's default is `linear` (min-max of the weight
-    # envelope); at a fixed high threshold that scale mismatch admits a mass of
-    # weak-but-positive person-shape pairs and catastrophically over-merges
-    # (person 1M linear -> F1 0.00), which is a bench artifact, not a model gap.
-    # Posterior recovers precision 1.0 / zero FP at the same 0.85 cut.
+    # envelope), and at a fixed high threshold that scale mismatch over-merges
+    # the person shape -- a bench artifact, not a model gap. Posterior gives
+    # precision 1.0 / zero FP at the same 0.85 cut.
+    #
+    # `--fs-basic-scorers` does a SECOND thing this comment used to omit: it
+    # forces `mk.link_threshold = --threshold`. Without it the cut resolves
+    # through `compute_thresholds` to 0.60, so these lanes and
+    # `gm_probabilistic_shipped` are not cutting at the same place. See the
+    # three-way-confound note on that lane -- the threshold gap turned out to be
+    # the DOMINANT term in the over-merge this comment blames on calibration.
     "gm_probabilistic": Lane("gm_probabilistic", "run_goldenmatch.py",
                              mode="probabilistic",
                              env={"GOLDENMATCH_FS_NATIVE": "0",
@@ -72,6 +80,100 @@ LANES: dict[str, Lane] = {
                                     env={"GOLDENMATCH_FS_NATIVE": "1",
                                          "GOLDENMATCH_FS_CALIBRATED": "posterior"},
                                     extra_args=("--fs-basic-scorers",)),
+    # The FS-EM single-source arc's payoff lane, and the only one that trains on
+    # something other than a 10,000-pair sample. GOLDENMATCH_FS_EM_COUNTED swaps
+    # the sampler for a ~200x larger blocked-pair budget COLLAPSED to distinct
+    # comparison vectors, so the EM loop's cost tracks prod(levels + 1) instead
+    # of the pair count. Identical to `gm_probabilistic_native` in every other
+    # respect -- same native kernel, same posterior calibration, same basic
+    # scorers -- so the delta against it isolates the trainer and nothing else.
+    #
+    # What it is FOR: the arc removed the sampler from distributed training and
+    # nothing has measured whether that buys accuracy. If F1 does not move, the
+    # sampler was never the binding constraint on these datasets and the honest
+    # payoff is scale, not quality.
+    "gm_probabilistic_counted": Lane("gm_probabilistic_counted",
+                                     "run_goldenmatch.py",
+                                     mode="probabilistic",
+                                     env={"GOLDENMATCH_FS_NATIVE": "1",
+                                          "GOLDENMATCH_FS_CALIBRATED": "posterior",
+                                          "GOLDENMATCH_FS_EM_COUNTED": "1"},
+                                     extra_args=("--fs-basic-scorers",)),
+    # GM AS SHIPPED. Every other FS lane is deliberately handicapped for
+    # comparability -- `--fs-basic-scorers` forces the specialised name scorers
+    # (given_name_aliased_jw, name_freq_weighted_jw) down to plain jaro_winkler
+    # so GM and Splink run the same comparison model, and
+    # GOLDENMATCH_FS_CALIBRATED=posterior overrides GM's `linear` default so a
+    # shared --threshold means the same thing to both engines.
+    #
+    # Both are RIGHT for a Splink comparison and WRONG as a statement of what
+    # GoldenMatch does. Without this lane the panel's only FS numbers are
+    # handicapped ones, and they read as GM's accuracy -- which is exactly how
+    # I misread them: on a 20K person fixture the handicapped config scores
+    # F1 0.0000 where the shipped default scores 0.9964, same data, same engine.
+    #
+    # So this lane runs the probabilistic path with NO rewrite and NO
+    # calibration override. It is not comparable to Splink and is not meant to
+    # be; it is the control that keeps the handicapped lanes honest.
+    #
+    # THREE differences, not two. `--fs-basic-scorers` also FORCES
+    # `mk.link_threshold = --threshold` (0.85), and this lane does not pass it,
+    # so `mk.link_threshold` stays None and `_fs_link_threshold` falls through
+    # to `compute_thresholds`. MEASURED on the person shape at both 100k and 1M:
+    # this lane's minimum retained score is 0.60 where every handicapped lane
+    # sits at 0.85.
+    #
+    # That third difference is the dominant one, and it was invisible until the
+    # panel recorded per-lane thresholds. At 1M it admits 276,836 pairs against
+    # `gm_probabilistic_native`'s 184,285; connected components chains the extra
+    # links until non-singleton clusters average 7.98 members against a truth of
+    # 2.40, and pairwise precision falls to 0.2627 (bcubed stays 0.979 -- closure
+    # metrics are quadratic in cluster size). I first read that collapse as
+    # linear calibration being brittle at scale. It is mostly a lower cut.
+    #
+    # Calibration is still real but SECOND-ORDER, and only on some shapes:
+    # linear and posterior are both monotone in match weight, so they rank
+    # identically and can differ only where the cut lands. MEASURED by
+    # `dump_fs_score_histograms.py` at 100k, under BOTH scorer configurations:
+    # biblio is separable (non-match max 3e-06, match min 1.0) so any cut in
+    # that range decides the same -- which is why this lane and the posterior
+    # ones are byte-identical there. person is NOT (non-match max 0.999994 vs
+    # match min 0.999990): the classes touch exactly where a high cut sits, so
+    # the cut choice decides the answer. Separability tracked the SHAPE, not the
+    # scorers.
+    #
+    # So the shipped-vs-handicapped delta this lane exists to expose is a
+    # THREE-way confound. Read it as "shipped differs" and not as an
+    # attribution to the scorer rewrite alone.
+    "gm_probabilistic_shipped": Lane("gm_probabilistic_shipped",
+                                     "run_goldenmatch.py",
+                                     mode="probabilistic"),
+    # `gm_probabilistic_shipped` with ONE variable changed: the link cut.
+    #
+    # The shipped lane cuts at 0.50 while its minimum score is 0.60, so the cut
+    # admits every scored pair (run 32078393523 records `cut_is_inert: true`,
+    # `score_min: 0.6`). The threshold sweep in the same artifact:
+    #
+    #     cut   linked_pairs   max_component   expelled
+    #     0.6      1,512,249             618     0.0000   <- == the applied 0.50
+    #     0.7      1,428,680              93     0.0671
+    #     0.8      1,380,824               3     0.1002   <- knee
+    #     0.9      1,186,804               3     0.2343
+    #     1.0        662,380               3     0.5862
+    #
+    # 0.80 is the smallest cut that fully resolves the over-merge (largest
+    # component 618 -> 3, the true entity size); 0.90 achieves the same max at
+    # 2.3x the expelled cost.
+    #
+    # This is NOT `gm_probabilistic`, which reaches a forced cut only via
+    # `--fs-basic-scorers` and therefore also rewrites the scorers -- a
+    # three-way confound (cut + scorers + calibration) that cannot attribute
+    # the delta. Here the config is byte-identical to shipped except the cut,
+    # so whatever moves is the cut.
+    "gm_probabilistic_cut80": Lane("gm_probabilistic_cut80",
+                                   "run_goldenmatch.py",
+                                   mode="probabilistic",
+                                   extra_args=("--force-link-threshold", "0.80")),
     "gm_zeroconfig": Lane("gm_zeroconfig", "run_goldenmatch.py", mode="zeroconfig"),
     "gm_converted_splink": Lane("gm_converted_splink", "run_gm_converted.py"),
 }
@@ -403,12 +505,31 @@ def _load_resume_state(agg_path: Path) -> tuple[dict | None, list[dict], set[tup
     the workflow restores the workdir across runner attempts/dispatches (the cache
     step in bench-er-headtohead.yml), and the per-datapoint flush below means we
     resume from the last datapoint that completed before the runner was reclaimed.
-    A corrupt/half-written aggregate is treated as no prior state (start clean)."""
+    A corrupt/half-written aggregate is treated as no prior state (start clean).
+
+    A prior aggregate built from a DIFFERENT commit is discarded, loudly. Resume
+    means "the same code was interrupted", never "reuse results from other code":
+    every recorded datapoint would be skipped, so a sweep dispatched to measure a
+    bench change comes back reporting the numbers it was meant to replace. That
+    happened -- the workflow's cache key was (shape, tag) with no SHA, so a
+    re-dispatch on new code restored the previous dispatch's workdir and skipped
+    all 16 datapoints. The run was green, the artifact had none of the new fields,
+    and the only tell was a `git_sha` in the header naming the older commit."""
     if not agg_path.exists():
         return None, [], set()
     try:
         obj = json.loads(agg_path.read_text())
     except Exception:
+        return None, [], set()
+    prior_header = obj.get("header") or {}
+    prior_sha, now_sha = prior_header.get("git_sha"), _git_sha()
+    if prior_sha and now_sha and prior_sha != now_sha:
+        print(
+            f"[orchestrate] DISCARDING resume state: it was built at "
+            f"{prior_sha[:12]}, this is {now_sha[:12]}. Resume never spans a "
+            f"code change -- re-running all datapoints from scratch.",
+            flush=True,
+        )
         return None, [], set()
     results = [r for r in (obj.get("results") or [])
                if _datapoint_key(r) != (None, None, None)]

@@ -105,6 +105,38 @@ def _fs_out_of_core_legacy_flag() -> bool:
     )
 
 
+def _fs_sequential_batched_output_enabled() -> bool:
+    """The in-RAM ``sequential``/``spill`` FS routes stream output via the join-FREE
+    ``_stream_fs_dedupe_output_batched`` (Phase 3a) — DEFAULT ON. The legacy
+    ``_stream_fs_dedupe_output_arrow`` built ``frame.join(asn).join(sizes)``, a
+    second full-width ~frame copy that OOMed the 50M output phase (measured
+    31→63 GB); the batched writer holds ~1× frame instead. Byte-identical
+    (parity-gated). ``GOLDENMATCH_FS_SEQUENTIAL_BATCHED_OUTPUT=0`` restores the
+    legacy join output (rollback lever)."""
+    return os.environ.get(
+        "GOLDENMATCH_FS_SEQUENTIAL_BATCHED_OUTPUT", ""
+    ).strip().lower() not in ("0", "false", "no", "off")
+
+
+def _fs_sequential_bounded_scoring_enabled() -> bool:
+    """``run_fs_dedupe_sequential`` scores via the bounded in-RAM ``FrameBlockSource``
+    (``score_buckets_arrow`` with ``force_bounded_stream=True``: slice one bucket
+    off the resident frame on demand, hold only ``max_workers`` slices) + Rust WCC
+    — DEFAULT ON. This is the in-RAM SCALE path: scoring peak stays ~1× the frame
+    (like ``bucketed``) WITHOUT the fused kernel's whole-frame column gather (which
+    OOMs ~65 GB at 50M) AND WITHOUT bucketed's on-disk shards. Measured on the
+    person/multi_pass shape it CLEARS 50M at 44.7 GB and is ~2× faster than the
+    fused path (score_buckets_arrow's value-dedup + small-block batch + parallel
+    buckets, no disk round-trip). Byte-identical to fused (FrameBlockSource ==
+    eager partition per bucket; the bucket-score→Rust-WCC split is partition-exact
+    with the fused kernel). ``GOLDENMATCH_FS_SEQUENTIAL_BOUNDED_SCORING=0`` restores
+    the fused whole-frame kernel (rollback / a shape where the single-call kernel
+    wins). NOTE: perf validated on one shape; correctness is by construction."""
+    return os.environ.get(
+        "GOLDENMATCH_FS_SEQUENTIAL_BOUNDED_SCORING", ""
+    ).strip().lower() not in ("0", "false", "no", "off")
+
+
 def _fs_spill_force_shard() -> bool:
     """``GOLDENMATCH_FS_SPILL_FORCE_SHARD=1`` makes ``run_fs_dedupe_spill`` SKIP the
     fused-kernel short-circuit and always take the edge-shard spill path
@@ -153,6 +185,12 @@ def resolve_fs_block_source() -> str:
         term (largest single pass, not the sum of all passes) with no DuckDB
         dependency. Spec:
         ``docs/superpowers/specs/2026-08-02-fs-duckdb-free-spill-external-wcc-design.md``.
+      - ``"bucketed"`` — DuckDB-FREE frame-residency out-of-core: hash-bucket the
+        prepared frame to disk by EACH blocking pass's block key, then score
+        bucket-by-bucket (``run_fs_dedupe_bucketed`` / ``bucket_frame_to_shards``) —
+        never a whole-frame scoring copy, so it bounds the FRAME term the
+        ``spill``/fused paths leave resident (peak ~1x frame vs ~2.5x). Spec:
+        ``docs/superpowers/specs/2026-08-02-fs-frame-residency-bucketed-scoring-design.md``.
 
     Resolution (``GOLDENMATCH_FS_BLOCK_SOURCE`` is authoritative when set to a
     recognized value; the legacy ``GOLDENMATCH_FS_OUT_OF_CORE=1`` is honored only
@@ -160,6 +198,7 @@ def resolve_fs_block_source() -> str:
       - ``FS_BLOCK_SOURCE=frame`` → ``"frame"``
       - ``FS_BLOCK_SOURCE=sequential`` → ``"sequential"``
       - ``FS_BLOCK_SOURCE=spill`` → ``"spill"``
+      - ``FS_BLOCK_SOURCE=bucketed`` → ``"bucketed"``
       - ``FS_BLOCK_SOURCE=duckdb`` → ``"duckdb"``
       - ``FS_BLOCK_SOURCE=eager`` / ``auto`` / unset → ``"eager"`` (+ legacy alias)
 
@@ -174,6 +213,8 @@ def resolve_fs_block_source() -> str:
         return "sequential"
     if v == "spill":
         return "spill"
+    if v == "bucketed":
+        return "bucketed"
     if v == "duckdb":
         return "duckdb"
     if v in ("", "auto", "eager"):
@@ -205,6 +246,9 @@ def fs_streaming_route() -> str | None:
       - ``"spill"`` → ``run_fs_dedupe_spill`` (DuckDB-free out-of-core: per-pass
         edge shards on disk + external union-find,
         ``GOLDENMATCH_FS_BLOCK_SOURCE=spill``).
+      - ``"bucketed"`` → ``run_fs_dedupe_bucketed`` (DuckDB-free frame-residency
+        out-of-core: hash-bucket the frame to disk per pass + score bucket-by-bucket,
+        ``GOLDENMATCH_FS_BLOCK_SOURCE=bucketed``).
       - ``"duckdb"`` → ``run_fs_dedupe_streaming`` (out-of-core DuckDB spill,
         ``GOLDENMATCH_FS_OUT_OF_CORE=1`` / ``GOLDENMATCH_FS_BLOCK_SOURCE=duckdb``).
 
@@ -212,7 +256,7 @@ def fs_streaming_route() -> str | None:
     ``score_buckets``'s in-bucket residency), so they return ``None`` and the
     caller keeps the default pipeline."""
     src = resolve_fs_block_source()
-    return src if src in ("sequential", "spill", "duckdb") else None
+    return src if src in ("sequential", "spill", "bucketed", "duckdb") else None
 
 
 def _fs_ooc_arrow_cluster_enabled() -> bool:
@@ -901,6 +945,239 @@ def _stream_fs_dedupe_output_arrow(
     }
 
 
+def _fs_bucket_score_workers() -> int:
+    """Concurrency for the bucketed shard-scoring loop. ``1`` = serial (byte-
+    identical to the pre-parallel path). Default ``min(cpu, 8)`` -- each in-flight
+    shard adds a bounded scoring working set, so the cap keeps peak RSS under the
+    box even with the resident frame; override via
+    ``GOLDENMATCH_FS_BUCKET_SCORE_WORKERS`` (headroom-aware sizing on a bigger
+    box)."""
+    import os as _os
+
+    v = _os.environ.get("GOLDENMATCH_FS_BUCKET_SCORE_WORKERS")
+    if v:
+        try:
+            return max(1, int(v))
+        except ValueError:
+            pass
+    return min((_os.cpu_count() or 4), 8)
+
+
+_OUTPUT_BATCH_ROWS = 200_000
+# Golden build+write chunk size (rows). The golden builder materializes a
+# list[dict] per cluster plus polars input/output frames; chunking the build by
+# cluster-whole partitions bounds that transient at scale (the 50M OOM lever).
+_GOLDEN_BUILD_CHUNK_ROWS = 200_000
+
+
+def _split_output_batch(
+    tbl: Any, n_col_name: str, record_cols: list[str], max_cluster_size: int
+) -> tuple[Any, Any, Any]:
+    """Shared filter/select tail of the FS dedupe output (the one piece the
+    resident ``_stream_fs_dedupe_output_arrow`` and the batched variant have in
+    common). Given a frame (sub)table carrying a per-row cluster-size column
+    ``n_col_name``, split into ``(unique, dupes, golden)`` with IDENTICAL semantics:
+    unique = singleton clusters (``record_cols`` only), dupes = multi-member incl.
+    oversized (+ ``__cluster_id__``), golden = non-oversized multi-member
+    (``1 < n <= max_cluster_size``, + ``__cluster_id__``)."""
+    import pyarrow.compute as pc
+
+    n_col = tbl.column(n_col_name)
+    unique = tbl.filter(pc.equal(n_col, 1)).select(record_cols)
+    dupes = tbl.filter(pc.greater(n_col, 1)).select([*record_cols, "__cluster_id__"])
+    golden = tbl.filter(
+        pc.and_(pc.greater(n_col, 1), pc.less_equal(n_col, int(max_cluster_size)))
+    ).select([*record_cols, "__cluster_id__"])
+    return unique, dupes, golden
+
+
+def _stream_fs_dedupe_output_batched(
+    frame: Any,
+    assignments: Any,
+    config: Any,
+    out_dir: str,
+    *,
+    batch_rows: int = _OUTPUT_BATCH_ROWS,
+) -> dict:
+    """Join-FREE O(N) dedupe output for the bucketed route — the Phase-3a fix.
+
+    ``_stream_fs_dedupe_output_arrow`` builds ``frame.join(asn).join(sizes)``, a
+    second full-width ~frame copy that OOMs the 50M output phase (measured
+    31→63 GB). This variant streams the RESIDENT ``frame`` in ``__row_id__``-ordered
+    batches and attaches ``__cluster_id__`` + cluster size PER BATCH via a compact
+    lookup — never materialising the whole-frame ``joined`` — so the output peak
+    stays at ~1× frame (the scoring plateau) instead of ~2×. Byte-identical output
+    semantics to the resident function (unique=singleton, dupes=multi incl.
+    oversized, golden=non-oversized multi via ``build_golden_records_batch``,
+    ``__xform_*`` excluded, same return-dict keys, same stale-``golden.parquet``
+    unlink + ``golden_path=None`` on empty). Spec:
+    ``docs/superpowers/specs/2026-08-02-fs-frame-residency-streamed-output-design.md``.
+
+    Per-row lookup: ``assignments`` is the compact ``{__row_id__, __cluster_id__}``
+    WCC output (covers EVERY row incl. singletons). Contiguous ``__row_id__`` (the
+    common dense-index case) → build ``cluster_of`` by SCATTER
+    (``cluster_of[rid - lo] = cid`` — ``assignments`` row order is not guaranteed
+    position-aligned, and ``lo`` need not be 0) + per-cluster sizes via
+    ``bincount``, then gather each batch with ``.take``/fancy-index. Gapped
+    ``__row_id__`` (post-quarantine) → per-batch hash join (correctness over peak;
+    still bounded by ``assignments``, not 2× frame)."""
+    import os as _os
+
+    import numpy as _np
+    import pyarrow as pa
+    import pyarrow.parquet as _pq
+
+    from goldenmatch.core.golden import build_golden_records_batch
+
+    max_cluster_size = 100
+    golden_rules = getattr(config, "golden_rules", None)
+    if golden_rules is not None:
+        max_cluster_size = golden_rules.max_cluster_size
+
+    if not isinstance(assignments, pa.Table):
+        assignments = pa.table(
+            {
+                "__row_id__": pa.array([int(r) for r, _ in assignments], pa.int64()),
+                "__cluster_id__": pa.array(
+                    [int(c) for _, c in assignments], pa.int64()
+                ),
+            }
+        )
+
+    record_cols = [c for c in frame.column_names if not c.startswith("__xform_")]
+
+    _os.makedirs(out_dir, exist_ok=True)
+    unique_path = _os.path.join(out_dir, "unique.parquet")
+    dupes_path = _os.path.join(out_dir, "dupes.parquet")
+    golden_path = _os.path.join(out_dir, "golden.parquet")
+
+    # --- per-row (cluster_id, size) attach -----------------------------------
+    asn_rid = assignments.column("__row_id__").to_numpy(zero_copy_only=False)
+    asn_cid = assignments.column("__cluster_id__").to_numpy(zero_copy_only=False)
+    contiguous = False
+    lo = 0
+    if len(asn_rid):
+        lo = int(asn_rid.min())
+        hi = int(asn_rid.max())
+        contiguous = (hi - lo + 1) == len(asn_rid)
+
+    if contiguous:
+        cluster_of = _np.empty(len(asn_rid), dtype=_np.int64)
+        # Scatter: NOT a direct copy -- assignments row order == all_ids order,
+        # which is row_id-sorted only incidentally; index by (row_id - lo).
+        cluster_of[asn_rid - lo] = asn_cid
+        size_by_cid = _np.bincount(asn_cid.astype(_np.int64))
+        n_of = size_by_cid[cluster_of]  # aligned to position (row_id - lo)
+
+        def _attach(batch_tbl: Any) -> Any:
+            rids = batch_tbl.column("__row_id__").to_numpy(zero_copy_only=False)
+            pos = rids - lo
+            return batch_tbl.append_column(
+                "__cluster_id__", pa.array(cluster_of[pos], pa.int64())
+            ).append_column("__n__", pa.array(n_of[pos], pa.int64()))
+    else:
+        sizes = assignments.group_by("__cluster_id__").aggregate(
+            [("__row_id__", "count")]
+        )
+        sizes = sizes.rename_columns(
+            [
+                "__cluster_id__" if c == "__cluster_id__" else "__n__"
+                for c in sizes.column_names
+            ]
+        )
+
+        def _attach(batch_tbl: Any) -> Any:
+            return batch_tbl.join(
+                assignments, keys="__row_id__", join_type="inner"
+            ).join(sizes, keys="__cluster_id__", join_type="inner")
+
+    # --- stream the resident frame in row-id-ordered batches -----------------
+    record_schema = frame.select(record_cols).schema
+    dupes_schema = pa.schema(
+        [*list(record_schema), pa.field("__cluster_id__", pa.int64())]
+    )
+    unique_count = 0
+    dupes_count = 0
+    golden_parts: list[Any] = []
+    # Open both writers eagerly at a fixed schema so unique/dupes parquet always
+    # exist (possibly empty) -- matching the resident write_table contract.
+    uw = _pq.ParquetWriter(unique_path, record_schema)
+    dw = _pq.ParquetWriter(dupes_path, dupes_schema)
+    try:
+        for rb in frame.to_batches(max_chunksize=batch_rows):
+            att = _attach(pa.Table.from_batches([rb]))
+            uniq, dup, gold = _split_output_batch(
+                att, "__n__", record_cols, int(max_cluster_size)
+            )
+            if uniq.num_rows:
+                uw.write_table(uniq)
+                unique_count += uniq.num_rows
+            if dup.num_rows:
+                dw.write_table(dup)
+                dupes_count += dup.num_rows
+            if gold.num_rows:
+                golden_parts.append(gold)
+    finally:
+        uw.close()
+        dw.close()
+
+    # golden = non-oversized multi-member. The build materializes a list[dict] of
+    # one record per cluster PLUS the polars input + output frames; at 50M that
+    # subset (~15M rows / ~7M clusters) spikes memory and OOMs. Build+write in
+    # cluster-whole chunks (``__cluster_id__ % n`` keeps every cluster's rows in
+    # ONE chunk, since build_golden is per-cluster independent) so only one
+    # chunk's records/frames are ever resident. Byte-identical output (clusters
+    # are independent; chunk order is irrelevant -- golden is keyed by cluster).
+    golden_count = 0
+    if golden_parts:
+        import polars as pl
+
+        golden_tbl = pa.concat_tables(golden_parts)
+        del golden_parts
+        rules = golden_rules if golden_rules is not None else _default_golden_rules()
+        n_chunks = max(1, golden_tbl.num_rows // _GOLDEN_BUILD_CHUNK_ROWS)
+        # Cluster-whole chunk assignment via numpy (pyarrow.compute has no modulo
+        # kernel here): all rows of a cluster share __cluster_id__ -> same chunk.
+        chunk_of = (
+            None
+            if n_chunks == 1
+            else golden_tbl.column("__cluster_id__").to_numpy(zero_copy_only=False)
+            % n_chunks
+        )
+        gw = None
+        try:
+            for c in range(n_chunks):
+                chunk = (
+                    golden_tbl
+                    if n_chunks == 1
+                    else golden_tbl.filter(pa.array(chunk_of == c))
+                )
+                if not chunk.num_rows:
+                    continue
+                records = build_golden_records_batch(pl.from_arrow(chunk), rules)
+                if records:
+                    gt = pl.DataFrame(records).to_arrow()
+                    if gw is None:
+                        gw = _pq.ParquetWriter(golden_path, gt.schema)
+                    gw.write_table(gt)
+                    golden_count += len(records)
+                del chunk, records
+        finally:
+            if gw is not None:
+                gw.close()
+    if golden_count == 0 and _os.path.exists(golden_path):
+        _os.unlink(golden_path)
+
+    return {
+        "unique_path": unique_path,
+        "dupes_path": dupes_path,
+        "golden_path": golden_path if golden_count else None,
+        "unique_count": unique_count,
+        "dupes_count": dupes_count,
+        "golden_count": golden_count,
+    }
+
+
 def _cluster_python(
     con: Any,
     pairs: list[tuple[int, int, float]],
@@ -1040,6 +1317,93 @@ def external_wcc_from_shards(
     splitting is a scoring/output-stage concern, and the output streamer already routes
     by cluster size; the WCC emits raw components.
     """
+    import numpy as np
+    import pyarrow as pa
+
+    # Resolve the id domain. When ``__row_id__`` is a CONTIGUOUS ``{lo..hi}`` (the
+    # dense pipeline index — a ``range`` from ``_prep_all_ids_frame``, or any
+    # gapless id set), use a NUMPY ARRAY union-find: an ``int64[N]`` parent (~8
+    # bytes/row, vs the Python dict-UF's ~100 bytes/entry) + a FULLY-VECTORISED
+    # final compression, instead of a Python loop over all N ids. Gapped ids
+    # (post-quarantine) fall back to the dict-UF.
+    if isinstance(all_ids, range):
+        contiguous = len(all_ids) > 0 and all_ids.step == 1
+        lo = all_ids.start
+        n = len(all_ids)
+    else:
+        ids = all_ids.to_pylist() if isinstance(all_ids, (pa.Array, pa.ChunkedArray)) else list(all_ids)
+        n = len(ids)
+        if n:
+            _idarr = np.asarray(ids, dtype=np.int64)
+            lo = int(_idarr.min())
+            hi = int(_idarr.max())
+            # row_ids are unique, so {lo..hi} exactly iff span == count.
+            contiguous = (hi - lo + 1) == n
+        else:
+            contiguous = False
+
+    if not contiguous:
+        return _external_wcc_dict(shard_paths, all_ids, link_threshold)
+
+    # --- numpy array union-find over the dense id space [0, n) (row_id = i + lo) ---
+    parent = np.arange(n, dtype=np.int64)
+
+    def _find(x: int) -> int:
+        # path halving: array-indexed (no dict hashing / Python-int churn).
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    n_pairs = 0
+    for path in shard_paths:
+        with pa.memory_map(path, "r") as source:
+            reader = pa.ipc.open_file(source)
+            for bi in range(reader.num_record_batches):
+                batch = reader.get_batch(bi)
+                a_np = batch.column("id_a").to_numpy(zero_copy_only=False)
+                b_np = batch.column("id_b").to_numpy(zero_copy_only=False)
+                if link_threshold is not None:
+                    mask = (
+                        batch.column("score").to_numpy(zero_copy_only=False)
+                        >= link_threshold
+                    )
+                    a_np = a_np[mask]
+                    b_np = b_np[mask]
+                n_pairs += len(a_np)
+                # shift to index space once, vectorised.
+                for a, b in zip((a_np - lo).tolist(), (b_np - lo).tolist()):
+                    ra, rb = _find(a), _find(b)
+                    if ra != rb:
+                        parent[ra] = rb
+        # batch/table references dropped here -> the shard's edges leave RAM.
+
+    # Fully resolve every node to its root by pointer-jumping (vectorised;
+    # O(log tree-depth) numpy passes, no Python loop over N), then dense-number
+    # the distinct roots into cluster ids. A row in no edge points at itself ->
+    # its own singleton cluster (matches the dict-UF contract).
+    while True:
+        grandparent = parent[parent]
+        if np.array_equal(grandparent, parent):
+            break
+        parent = grandparent
+    _, cid = np.unique(parent, return_inverse=True)
+    rid = np.arange(lo, lo + n, dtype=np.int64)
+    asn = pa.table(
+        {
+            "__row_id__": pa.array(rid, pa.int64()),
+            "__cluster_id__": pa.array(cid.astype(np.int64), pa.int64()),
+        }
+    )
+    return asn, n_pairs
+
+
+def _external_wcc_dict(
+    shard_paths: Any, all_ids: Any, link_threshold: float | None
+) -> tuple[Any, int]:
+    """Dict union-find fallback for GAPPED ``__row_id__`` (post-quarantine) — the
+    original path, kept for the non-contiguous id domain the numpy array-UF can't
+    index. Partition-identical to the array-UF on the shared edge set."""
     import pyarrow as pa
 
     from goldenmatch.core.cluster import UnionFind
@@ -1051,8 +1415,6 @@ def external_wcc_from_shards(
             reader = pa.ipc.open_file(source)
             for bi in range(reader.num_record_batches):
                 batch = reader.get_batch(bi)
-                # Zero-copy numeric views of the mmap'd buffers; vectorise the
-                # threshold filter so only surviving edges become Python ints.
                 a_np = batch.column("id_a").to_numpy(zero_copy_only=False)
                 b_np = batch.column("id_b").to_numpy(zero_copy_only=False)
                 if link_threshold is not None:
@@ -1062,27 +1424,21 @@ def external_wcc_from_shards(
                     )
                     a_np = a_np[mask]
                     b_np = b_np[mask]
-                # `.tolist()` -> native Python ints so UF keys match the Python-int
-                # `all_ids` fold below (a bounded batch, not the whole wave).
                 for a, b in zip(a_np.tolist(), b_np.tolist()):
-                    uf.add(a)  # public API: resilient to UnionFind internals
+                    uf.add(a)
                     uf.add(b)
                     uf.union(a, b)
                     n_pairs += 1
-        # batch/table references dropped here -> the shard's edges leave RAM.
 
     if isinstance(all_ids, (pa.Array, pa.ChunkedArray)):
         ids = all_ids.to_pylist()
     else:
         ids = list(all_ids)
-
-    # Assign a stable cluster id per connected component; a row absent from any edge
-    # is its own singleton. O(N) in the row count, independent of the edge count.
     root_to_cid: dict[int, int] = {}
     rid_out: list[int] = []
     cid_out: list[int] = []
     next_cid = 0
-    seen = uf._parent  # membership check: a row absent here never appeared in an edge
+    seen = uf._parent
     for rid in ids:
         root = uf.find(rid) if rid in seen else rid
         cid = root_to_cid.get(root)
@@ -1142,6 +1498,14 @@ def run_fs_dedupe_streaming(
     ``_prepare_probabilistic_review_scoring`` alongside a review-cut ``scoring_mk``
     to match the in-memory clustering outcome exactly. ``None`` clusters every
     returned pair (the kernel scored at ``mk``'s own threshold)."""
+    # Stamp WHICH orchestration ran (#2647 follow-up). This layer chooses
+    # the branch and then delegates scoring, so without it an empty scoring
+    # profile says only "nobody emitted" -- not which of these four ran, nor
+    # which internal branch. Route-only; it never overwrites a measured field.
+    from goldenmatch.core.scorer import note_scoring_route
+
+    note_scoring_route("fs.streaming")
+
     import os as _os
     import tempfile
 
@@ -1228,6 +1592,14 @@ def run_fs_dedupe_sequential(
     polars core primitive fed only the multi-member subset). The fast single-box
     path for frames that FIT in RAM; ``run_fs_dedupe_streaming`` is the
     DuckDB-spilled variant past RAM."""
+    # Stamp WHICH orchestration ran (#2647 follow-up). This layer chooses
+    # the branch and then delegates scoring, so without it an empty scoring
+    # profile says only "nobody emitted" -- not which of these four ran, nor
+    # which internal branch. Route-only; it never overwrites a measured field.
+    from goldenmatch.core.scorer import note_scoring_route
+
+    note_scoring_route("fs.sequential")
+
     from goldenmatch.core.frame import is_polars_lazyframe
     from goldenmatch.core.frame import to_frame as _tf
 
@@ -1247,9 +1619,13 @@ def run_fs_dedupe_sequential(
     # in one kernel call -> cluster assignments directly. dedupe-only (no
     # target_ids / matched_pairs exclude), which is exactly how the streaming
     # dedupe caller invokes this.
+    # DEFAULT scale path: bounded in-RAM FrameBlockSource scoring (skip the fused
+    # whole-frame kernel, which OOMs ~65 GB at 50M). GOLDENMATCH_FS_SEQUENTIAL_
+    # BOUNDED_SCORING=0 restores the fused kernel.
+    _bounded = _fs_sequential_bounded_scoring_enabled()
     assignments = None
     n_pairs = None
-    if not target_ids and not matched_pairs:
+    if not target_ids and not matched_pairs and not _bounded:
         assignments = _fused_fs_assignments(
             base, blocking_config, mk, em_result, link_threshold,
         )
@@ -1257,23 +1633,35 @@ def run_fs_dedupe_sequential(
     if assignments is None:
         # Score through the SAME tuned in-memory bucket scorer the normal pipeline
         # uses (`score_buckets_arrow` -> native FS kernel + value-dedup/small-block
-        # batching + the bounded `FrameBlockSource` streaming under
-        # GOLDENMATCH_FS_BLOCK_SOURCE=frame) -- NOT a hand-rolled per-wave scorer.
-        # It emits the identical Arrow PAIR_STREAM table, which the Rust WCC
-        # (`_cluster_arrow_native`) consumes unchanged.
+        # batching + the bounded `FrameBlockSource` streaming). It emits the
+        # identical Arrow PAIR_STREAM table, which the Rust WCC
+        # (`_cluster_arrow_native`) consumes unchanged. On the scale path
+        # (`_bounded`, the default) force the bounded FrameBlockSource on so the
+        # scoring peak stays ~1x frame in-RAM (byte-identical to the eager
+        # partition; no disk shards).
         from goldenmatch.backends.score_buckets import score_buckets_arrow
 
         pairs = score_buckets_arrow(
             base, blocking_config, mk, set(matched_pairs),
             n_buckets=getattr(config, "n_buckets", None),
             target_ids=target_ids, em_result=em_result,
+            force_bounded_stream=_bounded,
         )
         assignments, n_pairs = _cluster_arrow_native(
             _prep_all_ids_frame(base), pairs, max_cluster_size, link_threshold,
         )
 
-    # O(N) unique/dupes streamed to parquet from the resident table (pure pyarrow).
-    res = _stream_fs_dedupe_output_arrow(base, assignments, config, out_dir)
+    # O(N) unique/dupes streamed to parquet from the resident table. Join-FREE
+    # batched writer by default (GOLDENMATCH_FS_SEQUENTIAL_BATCHED_OUTPUT=0 -> the
+    # legacy 2x-frame join output).
+    _batched_out = _fs_sequential_batched_output_enabled()
+    _output_fn = (
+        _stream_fs_dedupe_output_batched if _batched_out
+        else _stream_fs_dedupe_output_arrow
+    )
+    res = _output_fn(base, assignments, config, out_dir)
+    res["batched_output"] = _batched_out
+    res["bounded_scoring"] = _bounded
     res["pairs"] = n_pairs
     res["streaming"] = True
     res["sequential"] = True
@@ -1318,6 +1706,14 @@ def run_fs_dedupe_spill(
     inside ``_score_single_pass``), a native array-UF ``FsExternalWcc`` kernel, and
     frame-residency streaming during prep (this path keeps the frame resident — the edge
     term is what it bounds)."""
+    # Stamp WHICH orchestration ran (#2647 follow-up). This layer chooses
+    # the branch and then delegates scoring, so without it an empty scoring
+    # profile says only "nobody emitted" -- not which of these four ran, nor
+    # which internal branch. Route-only; it never overwrites a measured field.
+    from goldenmatch.core.scorer import note_scoring_route
+
+    note_scoring_route("fs.spill")
+
     import shutil as _shutil
     import tempfile as _tempfile
 
@@ -1368,11 +1764,266 @@ def run_fs_dedupe_spill(
         finally:
             _shutil.rmtree(shard_dir, ignore_errors=True)
 
-    res = _stream_fs_dedupe_output_arrow(base, assignments, config, out_dir)
+    _batched_out = _fs_sequential_batched_output_enabled()
+    _output_fn = (
+        _stream_fs_dedupe_output_batched if _batched_out
+        else _stream_fs_dedupe_output_arrow
+    )
+    res = _output_fn(base, assignments, config, out_dir)
+    res["batched_output"] = _batched_out
     res["pairs"] = n_pairs
     res["streaming"] = True
     res["spill"] = True
     res["fused"] = n_pairs is None
+    res["output_dir"] = out_dir
+    return res
+
+
+_BUCKETED_N_BUCKETS = 64
+_BUCKETED_BATCH_ROWS = 200_000
+
+
+def _bucketed_passes(blocking_config: BlockingConfig) -> list:
+    """The list of ``BlockingKeyConfig`` passes to bucket the frame on — one shard
+    set per pass. ``multi_pass`` keys live in ``.passes``; ``static`` in ``.keys``.
+    Only these two strategies are hash-bucketable (each pass's block is a single
+    ``__block_key__`` equivalence class); the ``_fs_streaming_dedupe_eligible`` gate
+    already restricts the route to them (SN/adaptive/ann have no single block key —
+    unsound to hash-partition, see the design spec)."""
+    if blocking_config.strategy == "multi_pass":
+        return list(blocking_config.passes or [])
+    return list(blocking_config.keys or [])
+
+
+def bucket_frame_to_shards(
+    base: Any,
+    blocking_config: BlockingConfig,
+    shard_root: str,
+    *,
+    n_buckets: int = _BUCKETED_N_BUCKETS,
+    batch_rows: int = _BUCKETED_BATCH_ROWS,
+) -> dict[int, list[str]]:
+    """Hash-bucket a resident Arrow frame by EACH blocking pass's block key to
+    on-disk Arrow IPC shards — the frame-residency mechanism (spec
+    ``2026-08-02-fs-frame-residency-bucketed-scoring-design.md`` (A)).
+
+    Streams ``base`` in ``batch_rows`` slices (zero-copy views), and for each pass
+    derives that pass's ``__block_key__`` ARROW-NATIVELY
+    (``ArrowFrame.derive_block_key`` — the same ``arrow_derive.block_key`` the
+    blocker uses, so keys are byte-identical), drops null/sentinel keys via the SAME
+    ``filter_valid_key`` guard ``build_blocks`` applies, hashes the key to a bucket
+    id, and appends each slice's rows to per-``(pass, bucket)`` Arrow IPC shards.
+    Because all members of a block share one block key, hashing co-locates the whole
+    block in one bucket, so per-bucket scoring (``run_fs_dedupe_bucketed``) is
+    partition-exact with whole-frame scoring.
+
+    Only the block key is hashed (a stable ``crc32``), so the bucketing need NOT
+    match ``score_buckets``' internal bucketing — it only needs each block wholly in
+    one bucket. Returns ``{pass_index: [shard_path, …]}``. Resident working set is
+    one slice + the open writers' buffers, never the full pass partition."""
+    import contextlib as _contextlib
+    import os as _os
+    import zlib as _zlib
+
+    import numpy as _np
+    import pyarrow as _pa
+    import pyarrow.compute as _pc
+
+    from goldenmatch.core.frame import to_frame as _tf
+
+    passes = _bucketed_passes(blocking_config)
+    paths: dict[int, dict[int, str]] = {i: {} for i in range(len(passes))}
+
+    # ExitStack guarantees every opened shard file + its Arrow IPC writer is closed
+    # even on a mid-loop error, and in LIFO order: the writer is entered AFTER its
+    # file, so the writer's __exit__ (flush footer + close) runs BEFORE the file
+    # closes. The stack exits before the return, so all shards are complete when the
+    # caller reads them.
+    writers: dict[tuple[int, int], Any] = {}
+    n = base.num_rows
+    off = 0
+    with _contextlib.ExitStack() as stack:
+        while off < n:
+            sl = base.slice(off, batch_rows)
+            off += sl.num_rows
+            for pi, key_cfg in enumerate(passes):
+                bk = _tf(sl).derive_block_key(
+                    key_cfg.fields, key_cfg.transforms or [],
+                    field_transforms=getattr(key_cfg, "field_transforms", None),
+                ).to_arrow()
+                t2 = sl.append_column("__block_key__", bk)
+                t2 = _tf(t2).filter_valid_key("__block_key__").native
+                if t2.num_rows == 0:
+                    continue
+                keys = t2.column("__block_key__").to_pylist()
+                buckets = _np.fromiter(
+                    (_zlib.crc32(k.encode()) % n_buckets for k in keys),
+                    dtype=_np.int64, count=len(keys),
+                )
+                t2 = t2.drop_columns(["__block_key__"]).append_column(
+                    "__bkt__", _pa.array(buckets)
+                )
+                for b in _np.unique(buckets):
+                    b = int(b)
+                    sub = t2.filter(_pc.equal(t2.column("__bkt__"), b)).drop_columns(
+                        ["__bkt__"]
+                    )
+                    wk = (pi, b)
+                    if wk not in writers:
+                        p = _os.path.join(shard_root, f"pass{pi}_bkt{b}.arrow")
+                        fh = stack.enter_context(open(p, "wb"))
+                        # RecordBatchFileWriter is itself a context manager; entering
+                        # it registers its __exit__ (flush footer + close). LIFO: the
+                        # writer closes before its file handle releases.
+                        writers[wk] = stack.enter_context(
+                            _pa.ipc.RecordBatchFileWriter(fh, sub.schema)
+                        )
+                        paths[pi][b] = p
+                    writers[wk].write_table(sub)
+            del sl
+    return {pi: [paths[pi][b] for b in sorted(paths[pi])] for pi in paths}
+
+
+def run_fs_dedupe_bucketed(
+    prepared_df: Any,
+    blocking_config: BlockingConfig,
+    mk: MatchkeyConfig,
+    em_result,
+    config: Any,
+    out_dir: str,
+    *,
+    matched_pairs: set[tuple[int, int]] | None = None,
+    target_ids: set[int] | None = None,
+    link_threshold: float | None = None,
+) -> dict:
+    """Frame-residency-bounded FS dedupe: bucket the frame to disk by block key,
+    then score BUCKET-BY-BUCKET (never the whole-frame partition, never the fused
+    kernel's full-frame column gather) + edge spill + external WCC.
+
+    Spec: ``docs/superpowers/specs/2026-08-02-fs-frame-residency-bucketed-scoring-design.md``.
+
+    Unlike ``run_fs_dedupe_sequential``/``_spill`` (which default to the fused FS
+    kernel — a full-frame column gather + in-kernel WCC — and fall back to a
+    whole-frame ``score_buckets`` that materializes an N-row ``partition_by`` copy),
+    this route NEVER holds a whole-frame scoring copy: ``bucket_frame_to_shards``
+    writes per-pass hash-bucket shards to disk, then each shard is scored
+    independently with a SINGLE-PASS config through the same ``score_buckets_arrow``
+    kernel, spilling edges via the ``pair_sink`` seam. Clustering is the DuckDB-free
+    ``external_wcc_from_shards`` (Phase 1 Python union-find; the native
+    ``FsExternalWcc`` array-UF is Phase 2). Partition-exact with
+    ``run_fs_dedupe_sequential`` by construction (same block keys, same edge set;
+    the per-pass union is idempotent under duplicate edges).
+
+    EM is trained upstream on the resident frame (unchanged) and passed in — only
+    the score→cluster→output back-half is bucketed. Output is the join-FREE
+    ``_stream_fs_dedupe_output_batched`` (Phase 3a): it streams the resident
+    ``base`` in batches and attaches cluster_id/size per batch, so the output peak
+    stays at ~1× frame instead of the ~2× ``base.join(asn).join(sizes)`` in
+    ``_stream_fs_dedupe_output_arrow`` that OOM'd the 50M output phase (31→63 GB).
+    Freeing the resident frame to drop BELOW 1× frame needs caller-side reference
+    drops in ``pipeline.py`` (Phase 3b, deferred; the frame is zero-copy over the
+    caller's live ``collected_df``). Restricted to ``static``/``multi_pass``
+    blocking + one probabilistic matchkey by
+    the ``_fs_streaming_dedupe_eligible`` gate (per-pass hash-bucketing is unsound
+    for SN/adaptive/ann; the single matchkey means no cross-bucket exclude set)."""
+    # Stamp WHICH orchestration ran (#2647 follow-up). This layer chooses
+    # the branch and then delegates scoring, so without it an empty scoring
+    # profile says only "nobody emitted" -- not which of these four ran, nor
+    # which internal branch. Route-only; it never overwrites a measured field.
+    from goldenmatch.core.scorer import note_scoring_route
+
+    note_scoring_route("fs.bucketed")
+
+    import shutil as _shutil
+    import tempfile as _tempfile
+
+    import pyarrow as pa
+
+    from goldenmatch.backends.score_buckets import score_buckets_arrow
+    from goldenmatch.config.schemas import BlockingConfig as _BlockingConfig
+    from goldenmatch.core.frame import is_polars_lazyframe
+    from goldenmatch.core.frame import to_frame as _tf
+
+    matched_pairs = set(matched_pairs or ())
+    max_cluster_size = 100
+    if getattr(config, "golden_rules", None) is not None:
+        max_cluster_size = config.golden_rules.max_cluster_size
+
+    _fw = _tf(prepared_df)
+    if is_polars_lazyframe(_fw.native):
+        _fw = _tf(_fw.native.collect())
+    base = _fw.to_arrow()
+
+    passes = _bucketed_passes(blocking_config)
+    shard_dir = _tempfile.mkdtemp(prefix="gm_fs_bucketed_")
+    try:
+        # (A) frame -> per-pass hash-bucket shards on disk.
+        pass_shards = bucket_frame_to_shards(base, blocking_config, shard_dir)
+
+        # (B) score bucket shards -> edges via the spill sink. Shards are
+        # INDEPENDENT (each reads its own file, scores, spills its own edges), and
+        # score_buckets_arrow releases the GIL (native kernel / rapidfuzz), so we
+        # score them CONCURRENTLY -- filling the RSS + CPU headroom the serial loop
+        # left idle during this wall-dominant phase. Byte-identical: the external
+        # WCC is invariant to edge order and shard order, so concurrency changes
+        # only the wall. Workers are bounded (each in-flight shard adds a bounded
+        # scoring working set on top of the resident frame) via
+        # GOLDENMATCH_FS_BUCKET_SCORE_WORKERS (default min(cpu, 8); =1 = serial).
+        import threading as _threading
+        from concurrent.futures import ThreadPoolExecutor as _TPE
+
+        edge_shards: list[str] = []
+        _sink_lock = _threading.Lock()
+
+        def _sink(tbl: Any) -> None:
+            if tbl.num_rows:
+                # The spill (a small arrow write) serialises; the expensive scoring
+                # runs in parallel outside the lock. Unique shard index per slot.
+                with _sink_lock:
+                    edge_shards.append(
+                        spill_pair_shard(tbl, shard_dir, len(edge_shards))
+                    )
+
+        work = [
+            (pi, sp) for pi, shard_paths in pass_shards.items() for sp in shard_paths
+        ]
+
+        def _score_shard(item: tuple[int, str]) -> None:
+            pi, sp = item
+            single_pass = _BlockingConfig(strategy="static", keys=[passes[pi]])
+            with pa.memory_map(sp, "r") as src:
+                bucket_tbl = pa.ipc.open_file(src).read_all()
+            if bucket_tbl.num_rows >= 2:
+                score_buckets_arrow(
+                    bucket_tbl, single_pass, mk, set(matched_pairs),
+                    n_buckets=getattr(config, "n_buckets", None),
+                    target_ids=target_ids, em_result=em_result,
+                    pair_sink=_sink,
+                )
+
+        _workers = _fs_bucket_score_workers()
+        if _workers <= 1 or len(work) <= 1:
+            for _item in work:
+                _score_shard(_item)
+        else:
+            with _TPE(max_workers=_workers) as _ex:
+                list(_ex.map(_score_shard, work))
+
+        assignments, n_pairs = external_wcc_from_shards(
+            edge_shards, _prep_all_ids_frame(base), max_cluster_size, link_threshold,
+        )
+    finally:
+        _shutil.rmtree(shard_dir, ignore_errors=True)
+
+    # Join-FREE batched output (Phase 3a): stream the resident `base` in batches
+    # and attach cluster_id/size per batch, instead of the ~2x-frame
+    # `base.join(asn).join(sizes)` in `_stream_fs_dedupe_output_arrow` that OOMs
+    # the 50M output phase. Peak stays ~1x frame.
+    res = _stream_fs_dedupe_output_batched(base, assignments, config, out_dir)
+    res["pairs"] = n_pairs
+    res["streaming"] = True
+    res["bucketed"] = True
+    res["fused"] = False
     res["output_dir"] = out_dir
     return res
 

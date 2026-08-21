@@ -6,6 +6,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Fixed
+- **`blockingHealth` grades skew by work concentration, not by a size
+  percentile.** Parity port of the Python fix: `blockSizesP99 > 10 * (nRows /
+  nBlocks)` divides a tail percentile by the mean block size, which is pinned
+  near 1 under fine-grained blocking, so it graded a measured 84,293-block
+  profile RED while its largest block owned 1.9% of the candidate pairs -- and
+  missed a single block owning 98.5%, because that block sits above p99 rather
+  than at it. Now compares `largestBlockPairShare` (exported) against
+  `max(0.10, 4 / nBlocks)`.
+
+## [1.29.0] - 2026-08-15
+
+### Added
+- **`goldenmatch/core/string-distance` subpath** — the edit-distance primitives
+  (`jaro`, `jaroWinkler`, `levenshteinDistance`, `levenshteinSimilarity`,
+  `damerauLevenshteinDistance`) moved verbatim from `core/scorer.ts` into a
+  zero-import leaf module and published as their own subpath. `core/scorer.ts`
+  and `core/index` re-export them, so **no existing import changes and no
+  behavior changes** — the subpath exists so a sibling package can single-source
+  these primitives without pulling `core/scorer.ts`'s reference-data tables and
+  WASM registry. First consumer: infermap, which retired its vendored copies
+  (single-kernel-collapse R5).
+
+## [1.28.0] - 2026-08-04
+
+- Lockstep suite release (2026-08 GoldenModel frontier cut). No functional changes to
+  goldenmatch-js; version kept in sync with the goldenmatch 3.12.0 / golden-suite 0.4.0 cut.
+
+## [1.27.0] - 2026-08-03
+
 ### Added
 - **Serving-join certification (`certifyServingJoins`) + the `certify_serving_joins`
   MCP tool + a net-new key-integrity certifier (`certifyKeyIntegrity` /
@@ -225,6 +255,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   `key_integrity_wasm` path filter), and the `fixture_drift` catch-all
   auto-covers the build script. Python-native + SQL reroutes are the documented
   follow-ups (the crate is ready to back them).
+- **ER-resolution fragmentation reduction single-sourced with Python via a shared
+  parity fixture.** The resolution tier's cluster→{resolved, fragmented,
+  undercount} reduction (`resolveKeyIntegrity`) is extracted into a pure exported
+  `reduceFragmentation(memberLists, keyvals)` and locked byte-for-byte against the
+  Python reference by a shared fixture
+  (`tests/parity/fixtures/key-integrity/fragmentation_reduction_cases.json`,
+  Python-generated, read directly by both surfaces — no copy). Deliberately a
+  data-driven fixture, not a wasm kernel: the reduction is a scalar loop, so
+  kernelizing it would pay marshaling on a small call (the goldenanalysis
+  quality_rollup / regressions precedent). Test:
+  `tests/parity/fragmentation-reduction.parity.test.ts`.
+- **Resolution-tier undercount confidence interval.** `KeyIntegrityCertificate`
+  gains `undercountCiLow` / `undercountCiHigh` (a 95% Wilson score interval on the
+  fragmentation rate, computed by the new exported `wilsonInterval(k, n)`) and a
+  `safeBoundConservative` accessor that discounts the CI upper bound; `safeBound`
+  is unchanged. Bounds the sampling uncertainty in `undercountEstimate` (few
+  resolved entities → wide interval). Bit-identical to the Python port (same
+  z-literal + op order), locked by the shared fixture
+  `tests/parity/fixtures/key-integrity/undercount_ci_cases.json`. Test:
+  `tests/parity/undercount-ci.parity.test.ts`.
+- **Certificate trust-verdict write-back to the semantic catalog (Cube / OSI /
+  MetricFlow).** New single-sourced `certificateVerdict(cert)` projects a
+  `KeyIntegrityCertificate` into the `key_integrity` metadata block the catalog
+  emitters embed — the advisory `verdict` plus `unique_at_grain`, per-measure
+  fan-out, and the resolution-tier trust floors (`safe_bound` / the CI-discounted
+  `safe_bound_conservative`, with the 95% undercount interval); a superset of the
+  legacy 3-field embed. `emitCubeFromCrosswalk` / `emitOsiFromCrosswalk` now write
+  the full verdict, and `emitFromCrosswalk` / `emitSemanticModel` gained a
+  `certificate` option that writes it into `meta.goldenmatch.key_integrity`
+  (MetricFlow embedded nothing before). Field-identical to the Python port
+  (`certificate_verdict`), locked by the shared fixture
+  `tests/parity/fixtures/key-integrity/certificate_verdict_cases.json`. Test:
+  `tests/parity/certificate-verdict.parity.test.ts`.
 
 ## [1.26.0] - 2026-07-27
 

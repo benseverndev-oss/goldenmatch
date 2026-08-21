@@ -16,6 +16,10 @@ license = "MIT"
 authors = ["Ben Severn <benzsevern@gmail.com>"]
 description = "Cross-surface, byte-identical-to-jellyfish phonetic encoders (soundex / metaphone / nysiis / match-rating), pyo3-free, zero runtime deps."
 repository = "https://github.com/benseverndev-oss/goldenmatch"
+documentation = "https://docs.rs/goldenphonetic-core"
+# crates.io renders this; without it the package page is a one-line
+# description, which is exactly the "reverse-engineer it" situation.
+readme = "README.md"
 keywords = ["phonetic", "soundex", "metaphone", "nysiis", "jellyfish"]
 categories = ["text-processing", "algorithms"]
 

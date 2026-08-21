@@ -13,6 +13,13 @@
 //! now call it through a field accessor, so span iteration, rayon, GIL release,
 //! and Arrow/Vec marshaling stay in `native` while the scoring *math* is single-
 //! sourced here. Parity holds by construction (same computation, relocated).
+//!
+//! Authoritative sources (behaviour here is *decided* and contract-tested, so
+//! prefer them to inferring from the implementation):
+//! <https://docs.bensevern.dev/docs/llms.txt> (index of every Golden Suite surface,
+//! written for machine readers) and
+//! <https://github.com/benseverndev-oss/goldenmatch> (source, issues, design
+//! records).
 
 use std::collections::{HashMap, HashSet};
 

@@ -1,0 +1,245 @@
+# J4: the measurement this arc has never had.
+#
+# P0-P6 built the Spark tier and score-cabi/J0/J1 built the JVM path, and not one
+# wall-clock number has been produced. Section 1 of the spark-native spec claims
+# "vectorized Rust beats Spark SQL per core" -- unmeasured. This lane compares the
+# two scoring MECHANISMS that exist today:
+#
+#   row_python   pandas_udf -> forked Python worker (the shipped path)
+#   batched_jvm  J1's array UDF, in the executor JVM (J0's jar)
+#
+# workflow_dispatch only and NOT ci-required: it is a measurement, not a gate. A
+# number that fails to meet an expectation is a finding, not a broken build.
+name: bench-spark-scoring
+
+on:
+  workflow_dispatch:
+    inputs:
+      rows:
+        description: "Rows in the synthetic dataset"
+        required: false
+        default: "200000"
+      block_size:
+        description: "Records per block (pair count is QUADRATIC in this)"
+        required: false
+        default: "20"
+      repeats:
+        description: "Timed runs per path; the median is reported"
+        required: false
+        default: "3"
+      mode:
+        description: "bench (compare paths) | diag (bisect the batched plan to find the OOM)"
+        required: false
+        default: "bench"
+      threshold:
+        description: >-
+          Score cut for BOTH arms. 0.0 reproduces J4's original measurement,
+          where nothing was filtered and the batched arm exploded every
+          candidate pair. The batched arm applies the cut INSIDE the array, so a
+          realistic cut (0.85) keeps rejected pairs out of the generator -- which
+          the plan bisect said was the whole 2.4x. Run this lane at both.
+        required: false
+        default: "0.0"
+      runner:
+        description: "Runner label"
+        required: false
+        default: "large-new-64GB"
+      driver_memory:
+        description: >-
+          Heap for the local[*] JVM, which IS the executor. Set EQUALLY for both
+          arms. The batched path materialises each group as an array in JVM heap,
+          so an unset ceiling (Spark's 1g default) measures a configuration
+          rather than a design -- and that is what OOM'd the JVM arm.
+        required: false
+        default: "12g"
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - run: uv sync --all-packages --no-install-package goldenflow-native
+      # goldenmatch-native IS installed here: the whole point of the native
+      # arm is to run the Rust kernel, and excluding the wheel is how the
+      # first version of this bench reported pure-Python numbers.
+      - name: Install the spark extra
+        run: uv pip install -e 'packages/python/goldenmatch[spark]'
+
+      # Same build the spark_connect lane does, and for the same reason:
+      # `--release 17` so the jar runs on Spark's oldest supported JDK rather
+      # than only on whatever the runner happens to have.
+      # J2: the kernel's JNI door, built BEFORE the jar because it ships inside
+      # it. Without this step the jar loads, falls back to J0's `exact`-only
+      # scorer, and this bench silently measures the wrong thing against a
+      # native row_python arm. The arm asserts on it too -- belt and braces,
+      # because a silent fallback here produces a NUMBER, and a number is
+      # believed.
+      - name: Build the native scorer library (JNI)
+        run: |
+          set -euo pipefail
+          cargo build --release \
+            --manifest-path packages/rust/extensions/score-jni/Cargo.toml
+          ls -lh packages/rust/extensions/score-jni/target/release/libgoldenmatch_score_jni.so
+
+      - name: Build the JVM scorer jar
+        run: |
+          set -euo pipefail
+          SPARK_JARS="$(.venv/bin/python -c 'import pyspark, os; print(os.path.join(os.path.dirname(pyspark.__file__), "jars"))')"
+          JVM=packages/jvm/goldenmatch-spark
+          mkdir -p "$JVM/build/classes/native/linux-x86-64"
+          javac --release 17 -encoding UTF-8 -cp "$SPARK_JARS/*" -d "$JVM/build/classes" \
+            "$JVM"/src/dev/goldensuite/spark/*.java
+          cp packages/rust/extensions/score-jni/target/release/libgoldenmatch_score_jni.so \
+            "$JVM/build/classes/native/linux-x86-64/"
+          jar --create --file "$JVM/build/goldenmatch-spark.jar" -C "$JVM/build/classes" .
+          jar --list --file "$JVM/build/goldenmatch-spark.jar" \
+            | grep -qx "native/linux-x86-64/libgoldenmatch_score_jni.so" \
+            || { echo "::error::the native library is not in the jar; the JVM arm would bench the J0 fallback"; exit 1; }
+
+      # P1's executor environment. The row_python path forks a Python worker,
+      # which has NO access to the client's site-packages -- the first run of
+      # this bench died with `ModuleNotFoundError: No module named 'goldenmatch'`
+      # inside the worker, which is P0's original failure, rediscovered by
+      # forgetting the step that exists to fix it.
+      #
+      # Worth stating plainly because it is part of the result: the batched_jvm
+      # path needs NONE of this. Its scorer is already in the executor JVM, so
+      # there is no interpreter to feed and no environment to ship. That is a
+      # deployment difference the timings do not show.
+      - name: Build + pack a runtime venv for the executors (row_python only)
+        run: |
+          set -euo pipefail
+          python -m venv /tmp/gmenv
+          /tmp/gmenv/bin/pip install --upgrade pip
+          # NO PANDAS. The tier's UDFs are `arrow_udf` over `pa.Array` now, so
+          # the worker needs pyarrow (goldenmatch's own hard dependency) and
+          # nothing else. This step still installed pandas after the tier stopped
+          # using it -- which would have made the row_python arm carry a
+          # dependency the shipped path does not have. NOT -q: a silent pip
+          # failure ships an env that unpacks fine and imports nothing.
+          #
+          /tmp/gmenv/bin/pip install ./packages/python/goldenmatch pyarrow
+          # cd out of the repo: its root directory is itself named `goldenmatch`,
+          # so a check run from here can import the source tree and pass while
+          # the env is empty.
+          (cd /tmp && /tmp/gmenv/bin/python -c "import goldenmatch, pyarrow; print('shipped env imports OK')")
+          # ASSERT the Rust kernel reached the WORKER. `goldenmatch` depends on
+          # goldenmatch-native, so it arrives transitively -- but the native
+          # row_python arm is only native if the worker has it, and setting
+          # GOLDENMATCH_NATIVE on the driver alone changes nothing. Verified
+          # rather than assumed, because the arm's whole purpose evaporates
+          # silently if this is ever untrue.
+          (cd /tmp && /tmp/gmenv/bin/python -c "import goldenmatch_native, goldenmatch_native._native; print('worker HAS the Rust kernel')") \
+            || { echo "::error::the shipped executor env has no goldenmatch-native; the NATIVE row_python arm would score with the pure floor and be labelled native"; exit 1; }
+          .venv/bin/venv-pack -p /tmp/gmenv -o gm_env.zip --force
+          ls -lh gm_env.zip
+
+      - name: Diagnose the batched plan (mode=diag)
+        if: inputs.mode == 'diag'
+        env:
+          GOLDENMATCH_SPARK_REMOTE: "local[*]"
+          SPARK_DRIVER_MEMORY: "${{ inputs.driver_memory }}"
+          GOLDENMATCH_SPARK_PYENV: "gm_env.zip"
+          GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
+          GOLDENMATCH_NATIVE: "0"
+        run: |
+          .venv/bin/python scripts/diag_spark_batched_oom.py --scorer jaro_winkler --rows '${{ inputs.rows }}' --block-size '${{ inputs.block_size }}'
+
+      # ONE ARM PER PROCESS. Both used to run in one script against one
+      # `local[*]` session, where the driver and executor SHARE A JVM -- so the
+      # second arm started with the first's cached DataFrame and shuffles still
+      # resident, and OOM'd. Three rounds of CI went into "fixing" a batched path
+      # that a plan bisect then ran end to end in 21s (run 31649168548): the
+      # benchmark was measuring itself. Separate processes share nothing, and it
+      # is the only fair shape anyway -- whichever arm ran second was penalised.
+      - name: Bench row_python
+        if: inputs.mode != 'diag'
+        env:
+          GOLDENMATCH_SPARK_REMOTE: "local[*]"
+          SPARK_DRIVER_MEMORY: "${{ inputs.driver_memory }}"
+          GOLDENMATCH_SPARK_PYENV: "gm_env.zip"
+          GOLDENMATCH_NATIVE: "0"
+        run: |
+          .venv/bin/python scripts/bench_spark_scoring.py --path row_python --scorer jaro_winkler --native 0             --rows '${{ inputs.rows }}' --block-size '${{ inputs.block_size }}'             --repeats '${{ inputs.repeats }}' --threshold '${{ inputs.threshold }}' --out bench-row_python.json
+
+      # The arm that speaks to spec section 1. Without it the bench measures UDF
+      # plumbing with the kernel switched off and says nothing about "vectorized
+      # Rust beats Spark SQL per core".
+      - name: Bench row_python (NATIVE kernel)
+        if: inputs.mode != 'diag'
+        env:
+          GOLDENMATCH_SPARK_REMOTE: "local[*]"
+          SPARK_DRIVER_MEMORY: "${{ inputs.driver_memory }}"
+          GOLDENMATCH_SPARK_PYENV: "gm_env.zip"
+        run: |
+          .venv/bin/python scripts/bench_spark_scoring.py --path row_python --scorer jaro_winkler --native 1             --rows '${{ inputs.rows }}' --block-size '${{ inputs.block_size }}'             --repeats '${{ inputs.repeats }}' --threshold '${{ inputs.threshold }}' --out bench-row_python_native.json
+
+      - name: Bench batched_jvm
+        if: inputs.mode != 'diag'
+        env:
+          GOLDENMATCH_SPARK_REMOTE: "local[*]"
+          SPARK_DRIVER_MEMORY: "${{ inputs.driver_memory }}"
+          GOLDENMATCH_SPARK_PYENV: "gm_env.zip"
+          GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
+          GOLDENMATCH_NATIVE: "0"
+        run: |
+          .venv/bin/python scripts/bench_spark_scoring.py --path batched_jvm --scorer jaro_winkler --rows '${{ inputs.rows }}' --block-size '${{ inputs.block_size }}'             --repeats '${{ inputs.repeats }}' --threshold '${{ inputs.threshold }}' --out bench-batched_jvm.json
+
+      # The CONTROL arm. Same plan as row_python -- one join, one UDF call per
+      # pair, one filter, one groupBy -- with the scorer in the executor JVM.
+      # No collect_list, no arrays_zip, no explode.
+      #
+      # J4 measured batched_jvm ~3x slower than row_python and the bisect put
+      # ~0.1s on the JNI scoring against +1.4s on the un-batching. That left one
+      # question unanswerable with two arms: how much of the gap is the JVM
+      # mechanism and how much is J1's reshape. This arm separates them.
+      - name: Bench row_jvm (row-shaped, no batching)
+        if: inputs.mode != 'diag'
+        env:
+          GOLDENMATCH_SPARK_REMOTE: "local[*]"
+          SPARK_DRIVER_MEMORY: "${{ inputs.driver_memory }}"
+          GOLDENMATCH_SPARK_PYENV: "gm_env.zip"
+          GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
+          GOLDENMATCH_NATIVE: "0"
+        run: |
+          .venv/bin/python scripts/bench_spark_scoring.py --path row_jvm --scorer jaro_winkler --rows '${{ inputs.rows }}' --block-size '${{ inputs.block_size }}'             --repeats '${{ inputs.repeats }}' --threshold '${{ inputs.threshold }}' --out bench-row_jvm.json
+
+      # A SCRIPT, not inline Python: an embedded multi-line program inside a
+      # YAML `run:` block must survive block-scalar parsing too, and this repo
+      # has now broken that twice.
+      - name: Compare
+        if: inputs.mode != 'diag'
+        run: |
+          .venv/bin/python scripts/bench_spark_compare.py             bench-row_python.json bench-row_python_native.json bench-batched_jvm.json spark-scoring-bench.json bench-row_jvm.json
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ -f spark-scoring-bench.json ]; then
+            {
+              echo '## Spark scoring bench'
+              echo '```json'
+              cat spark-scoring-bench.json
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        if: always()
+        with:
+          name: spark-scoring-bench
+          path: spark-scoring-bench.json
+          if-no-files-found: warn

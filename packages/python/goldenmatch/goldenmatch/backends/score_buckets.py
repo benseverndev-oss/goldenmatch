@@ -119,6 +119,158 @@ def _warn_stale_native_wheel_once(n_exclude: int) -> None:
     )
 
 
+# ── #1826 / #2417: bounded scoring of an un-splittable oversized block ──────
+
+
+def _fs_oversized_pair_budget() -> int:
+    """Candidate-pair budget for ONE scoring call on an oversized block.
+
+    When ``_split_oversized`` cannot split a block and ``skip_oversized=False``,
+    the block used to be handed to the scorer WHOLE -- one call carrying
+    ``C(n, 2)`` candidate pairs. That is the #1826 shape and the #2417 OOM: a
+    ~6,300-row hub block (all rows share one blocking-key value, so no split
+    exists) is ~19.8M candidate pairs in a single call.
+
+    Above this budget the block is scored in TILES instead (see
+    ``_iter_bounded_tiles``), which bounds a call's candidate pairs to roughly
+    the budget. What that buys differs by lane -- measured with
+    ``scripts/repro_issue_2417.py``, which drives this exact function:
+
+    * VECTORIZED (numpy): the peak IS the dense ``n x n`` float64 matrices, so
+      it is ``O(n^2)`` in the block's rows and independent of how many pairs
+      survive -- 434 MB at n=2,500, 866 MB at n=3,500, ~2.8 GB at n=6,300.
+      Tiling bounds it to ~``16 x budget`` bytes per field (866 -> 562 MB at the
+      default, 144 MB at a 1M budget). It also makes blocks above
+      ``GOLDENMATCH_FS_VEC_MAX_ELEMS`` (>7,071 rows), which ``_fs_vec_guard``
+      currently REFUSES outright, scoreable at all.
+    * NATIVE: the kernel threshold-filters per pair, so the candidates are never
+      materialized -- the peak tracks SURVIVING pairs (16 MB at 53K survivors,
+      654 MB at 2.4M). Tiling only removes the whole-block double-buffering
+      (Rust ``Vec`` -> pyo3 list -> rounded list), worth ~27%; the accumulated
+      survivor list is the floor and no amount of chunking moves it. Bounding
+      THAT needs pair streaming / arrow emission, not tiling.
+
+    Default 4,000,000 pairs (~2,830-row tiles): comfortably above every normal
+    block (``max_block_size`` defaults to 5,000 -> 12.5M pairs is already
+    oversized territory) so ordinary scoring is untouched, and small enough that
+    one call's dense matrix stays ~64 MB rather than gigabytes.
+
+    ``GOLDENMATCH_FS_OVERSIZED_CHUNK_PAIRS=0`` disables tiling entirely (the
+    pre-#2417 score-whole behaviour, kept as the parity escape hatch).
+    """
+    raw = os.environ.get("GOLDENMATCH_FS_OVERSIZED_CHUNK_PAIRS", "").strip()
+    if not raw:
+        return 4_000_000
+    try:
+        val = int(raw)
+    except ValueError:
+        logger.warning(
+            "GOLDENMATCH_FS_OVERSIZED_CHUNK_PAIRS=%r is not an integer; "
+            "using the 4,000,000-pair default.", raw,
+        )
+        return 4_000_000
+    return max(val, 0)
+
+
+def _pair_count(n: int) -> int:
+    return n * (n - 1) // 2 if n >= 2 else 0
+
+
+def _iter_bounded_tiles(frame, n: int, budget: int):
+    """Yield ``(tile_frame, head_len)`` covering every intra-block pair of
+    ``frame`` (``n`` rows) exactly once, with each tile's candidate-pair count
+    bounded by ``budget``.
+
+    Split the block into ``g`` contiguous groups of ``k = isqrt(budget / 2)``
+    rows and emit:
+
+    * one DIAGONAL tile per group -- ``head_len=None``, every pair it produces
+      is wanted (the group's own intra pairs);
+    * one CROSS tile per unordered group pair ``(i < j)`` -- the two groups
+      concatenated, ``head_len = len(group_i)``. The scorer sees ``2k`` rows and
+      produces intra-i, intra-j AND cross pairs; the caller keeps ONLY the cross
+      pairs (the intra ones already came from, or will come from, the diagonal
+      tiles). That discard is why tiling costs ~2x the pair comparisons of a
+      single whole-block call -- the price of bounding a call that otherwise
+      allocates ``O(n^2)`` and can take the process down.
+
+    Union of the kept pairs == the whole-block pair set, with no duplicates: an
+    unordered pair sits in one group (diagonal tile) or straddles exactly one
+    group pair (cross tile). EMISSION ORDER differs from the whole-block call
+    (tile order, not row-major); pair values are identical, and every FS
+    consumer canonicalizes + dedups pairs before use.
+    """
+    from math import isqrt
+
+    from goldenmatch.core.frame import concat_frames
+    from goldenmatch.core.frame import to_frame as _tf
+
+    # A cross tile holds 2k rows -> C(2k,2) ~ 2k^2 candidate pairs, so k is
+    # sized off the budget's HALF to keep the widest tile inside it.
+    k = max(isqrt(max(budget, 2) // 2), 2)
+    bounds = [(off, min(k, n - off)) for off in range(0, n, k)]
+    slices = [frame.slice(off, size) for off, size in bounds]
+
+    for sl, (_off, size) in zip(slices, bounds):
+        if size >= 2:
+            yield sl, None
+    for i in range(len(slices)):
+        for j in range(i + 1, len(slices)):
+            yield (
+                concat_frames([_tf(slices[i]), _tf(slices[j])]).native,
+                bounds[i][1],
+            )
+
+
+def _score_block_bounded(
+    frame,
+    n: int,
+    score_one,
+    *,
+    tile_above_rows: int,
+    row_id_col: str = "__row_id__",
+):
+    """Score ONE block, tiling it when a single call would exceed the pair
+    budget (#1826/#2417). ``score_one(frame) -> list[(a, b, score)] | None``.
+
+    Tiling engages ONLY for a block that is BOTH oversized
+    (``n > tile_above_rows``, i.e. the un-splittable score-whole fallback --
+    auto-split sub-blocks land at or under ``max_block_size`` and are left
+    alone) AND above the pair budget. Everywhere else this is exactly
+    ``score_one(frame)`` -- same call, same order, zero overhead -- so only the
+    pathological blocks pay the tiling cost. ``None`` (the
+    ``_score_block_frame`` "block pre-filtered out" signal) propagates for the
+    untiled call; per-tile ``None``s are simply skipped.
+    """
+    budget = _fs_oversized_pair_budget()
+    if budget <= 0 or n <= tile_above_rows or _pair_count(n) <= budget:
+        return score_one(frame)
+
+    from goldenmatch.core.frame import to_frame as _tf
+
+    logger.info(
+        "Oversized block (%d rows, ~%s candidate pairs) scored in bounded "
+        "tiles of <=%s pairs instead of one whole-block call (#1826/#2417). "
+        "Same pair set; ~2x pair comparisons. Set "
+        "GOLDENMATCH_FS_OVERSIZED_CHUNK_PAIRS=0 to score whole.",
+        n, f"{_pair_count(n):,}", f"{budget:,}",
+    )
+    out: list[tuple[int, int, float]] = []
+    for tile, head_len in _iter_bounded_tiles(frame, n, budget):
+        pairs = score_one(tile)
+        if not pairs:
+            continue
+        if head_len is None:
+            out.extend(pairs)
+            continue
+        # Cross tile: keep only pairs that straddle the two groups. The head
+        # group's row ids identify the side; a pair is cross iff exactly one
+        # endpoint is in the head.
+        head = set(_tf(tile).slice(0, head_len).column(row_id_col).to_list())
+        out.extend(p for p in pairs if (p[0] in head) != (p[1] in head))
+    return out
+
+
 # Scorers whose batched NxN matrix form is BYTE-IDENTICAL to the per-pair
 # score_pair callable (asserted scorer-by-scorer in
 # tests/test_score_buckets_vectorized_fallback.py). The vectorized fast-path
@@ -1163,12 +1315,22 @@ def score_probabilistic_external_blocks(
             continue
         for frame in _frames(bdf, n):
             if use_native:
-                pairs = score_probabilistic_bucket_native(
-                    frame, [_height(frame)], mk, em_result, frozen_exclude,
-                    exclude_handle=exclude_handle,
-                )
+                def _score_one(f):
+                    return score_probabilistic_bucket_native(
+                        f, [_height(f)], mk, em_result, frozen_exclude,
+                        exclude_handle=exclude_handle,
+                    )
             else:
-                pairs = prob_scorer(frame, frozen_exclude)
+                def _score_one(f):
+                    return prob_scorer(f, frozen_exclude)
+
+            # #1826/#2417: a canopy / sorted-neighborhood mega-block that
+            # cannot be auto-split arrives WHOLE; tile it so one scoring call
+            # never carries its full C(n,2).
+            pairs = _score_block_bounded(
+                frame, _height(frame), _score_one,
+                tile_above_rows=max_block_size,
+            )
             for a, b, s in pairs:
                 if target_ids is not None and (
                     (a in target_ids) == (b in target_ids)
@@ -1180,6 +1342,54 @@ def score_probabilistic_external_blocks(
                 seen.add(key)
                 out.append((a, b, s))
     return out
+
+
+def _emit_profile(
+    pairs: Any, mk: Any, route: str = "buckets", candidates: int | None = None,
+) -> None:
+    """Report this backend's scoring to the auto-config emitter (#2647).
+
+    `core/scorer.py` emits from its own entry points; this backend calls
+    `_score_one_block` directly and bypassed that wrapper entirely, so any run
+    routed here left the emitter holding the all-zero `ScoringProfile()`
+    default. `health()` reads that as "nothing happened" -> RED, and at
+    `n_rows >= REFUSE_AT_N` the controller REFUSES the run. Bucket is the
+    DEFAULT scorer (#526) and is chosen at exactly those sizes, so person@100k
+    was refused on a config whose blocking graded GREEN and whose clustering
+    produced 91,527 clusters with transitivity 1.0.
+
+    ``candidates`` (#2673): total candidate pairs the buckets handed the
+    scorer, or ``None`` when this call site has no count to give (the external
+    -blocks path). Originally hardcoded to absent, on the reasoning that this
+    path "never accumulates bucket sizes". That was true of the code, not of
+    what the code COULD do -- the workers already hold their block run-lengths
+    as plain ints for their own dispatch, so summing C(n,2) over them is
+    arithmetic on data in hand, not a re-materialisation.
+
+    Making it real matters beyond telemetry: ``_emit_scoring_profile`` needs
+    this denominator to report a truthful ``mass_above_threshold``. Without it
+    the field is tautologically 1.0 (the pairs passed here have already cleared
+    the cut), and ``pick_committed`` then demotes every RED entry that matched
+    anything as the "everything matches" pathology -- committing v0 and
+    returning an empty result (#2663).
+
+    When ``candidates`` is None the old absent-count contract stands: #2644's
+    flag says so, and the "nothing happened" clause needs BOTH counters zero,
+    so the refusal is still cleared without inventing a number.
+
+    A no-op when no capture is open, so production pays nothing.
+    """
+    from goldenmatch.core.scorer import (
+        _emit_scoring_profile,
+        profile_threshold,
+    )
+
+    _emit_scoring_profile(
+        pairs, profile_threshold(mk, pairs),
+        candidates_compared=int(candidates) if candidates is not None else 0,
+        candidates_counted=candidates is not None,
+        route=route,
+    )
 
 
 def score_buckets(
@@ -1194,8 +1404,17 @@ def score_buckets(
     em_result=None,
     _emit: str = "list",
     pair_sink: Any = None,
+    force_bounded_stream: bool = False,
 ) -> Any:
     """Score all blocks via hash-bucketed partition_by, no per-block LazyFrame.
+
+    ``force_bounded_stream`` (FS probabilistic only): score buckets via the
+    bounded in-RAM ``FrameBlockSource`` (slice one bucket off the resident frame
+    on demand, hold only ``max_workers`` slices) regardless of
+    ``GOLDENMATCH_FS_BLOCK_SOURCE`` — the in-RAM caller (``run_fs_dedupe_sequential``
+    scale path) forces it so its scoring peak stays ~1x frame without switching the
+    global block source off ``sequential``. Byte-identical to the eager path
+    (``filter_eq`` preserves within-bucket order == ``partition_by``).
 
     ``pair_sink`` (arrow mode only): an optional ``callable(pa.Table)`` invoked with
     each PASS's ``PAIR_STREAM`` table AS SOON AS the pass is scored, INSTEAD of
@@ -1606,6 +1825,31 @@ def score_buckets(
             if all(i is not None for i in ids) and not _skew_block:
                 native_scorer_ids = ids  # type: ignore[assignment]
 
+    # #2673: candidate-pair count, accumulated per scored bucket.
+    #
+    # This path previously reported `candidates_compared=0, candidates_counted=
+    # False` -- honestly absent, since nothing accumulated it. But absence has a
+    # cost: `_emit_scoring_profile` needs this denominator to report a real
+    # `mass_above_threshold`, and without it the field stays the tautological
+    # 1.0 that made `pick_committed` demote every RED entry that matched
+    # anything (#2663).
+    #
+    # It is now free to collect. The #2639 note that counting "calls
+    # Block.n_rows(), which materialises" describes the CONTROLLER's pre-scoring
+    # count, not this: the workers below already hold the block-sorted run
+    # lengths (`size_list`) as a plain list of ints, computed for their own
+    # dispatch. Summing C(n,2) over them is arithmetic on data already in hand.
+    #
+    # A plain list + `.append` rather than a lock: workers run in a
+    # ThreadPoolExecutor and list.append is atomic under the GIL. Summed once
+    # after every pass completes.
+    #
+    # Multi-pass double-counts a pair that is a candidate in more than one pass.
+    # That matches the legacy scorer's own definition of the field ("sum of
+    # n*(n-1)//2 for each block processed") and is the conservative direction
+    # for every consumer -- it can only make the admitted fraction look smaller.
+    _cand_pair_counts: list[int] = []
+
     # Track 1 Fix B: build the native ExcludeSet ONCE here, BEFORE the bucket
     # worker loop. Previously _score_one_bucket_fast called
     # list(frozen_exclude) + passed it positionally, which forced the kernel
@@ -1677,6 +1921,17 @@ def score_buckets(
         size_list = sorted_frame.run_lengths("__block_key__")
         if not size_list:
             return [], 0
+        # #2673: candidate pairs this bucket hands the scorer. Counted HERE, at
+        # the top, rather than inside the native-kernel branch below -- this
+        # worker also has a vectorized-numpy and a per-pair Python branch, and
+        # counting in only one of them leaves the accumulator empty on every
+        # run that takes another (which is then correctly, but uselessly,
+        # reported as an absent count). Predicate mirrors the `keep` masks
+        # below.
+        _cand_pair_counts.append(sum(
+            _pair_count(s) for s in size_list
+            if s >= 2 and not (skip_oversized and s > max_block_size)
+        ))
         weights = [w for _col, w, _fn, _name in field_specs]
 
         # Native Arrow kernel: hand the block-sorted __row_id__ + field columns
@@ -1918,6 +2173,15 @@ def score_buckets(
         size_list = sorted_frame.run_lengths("__block_key__")
         if not size_list:
             return [], 0
+        # #2673: candidate pairs this bucket hands the scorer. Counted once
+        # here rather than per-branch (this worker has a batched-native, a
+        # split-oversized and a plain branch, all fed from `size_list`). The
+        # predicate mirrors the `keep` masks below: a block under 2 rows has no
+        # pairs, and an oversized block under skip_oversized is never scored.
+        _cand_pair_counts.append(sum(
+            _pair_count(s) for s in size_list
+            if s >= 2 and not (skip_oversized and s > max_block_size)
+        ))
 
         def _split_oversized(block_df, size: int) -> list:
             """Auto-split an oversized block -- #1790 parity on the bucket
@@ -2017,14 +2281,23 @@ def score_buckets(
             # Oversized blocks: auto-split, then score each resolved frame in
             # its own single-block native call (same kernel, size_list=[n], so
             # the emitted cells match a per-block run exactly).
+            def _native_one(f):
+                return score_probabilistic_bucket_native(
+                    f, [len(f)], mk, em_result, frozen_exclude,
+                    exclude_handle=fs_exclude_handle,
+                )
+
             offset = 0
             for s in size_list:
                 if s > max_block_size:
                     for sub in _split_oversized(sorted_df.slice(offset, s), s):
+                        # #1826/#2417: an un-splittable oversized block comes
+                        # back WHOLE here; tile it so one kernel call never
+                        # carries the block's full C(n,2).
                         pairs.extend(
-                            score_probabilistic_bucket_native(
-                                sub, [len(sub)], mk, em_result, frozen_exclude,
-                                exclude_handle=fs_exclude_handle,
+                            _score_block_bounded(
+                                sub, len(sub), _native_one,
+                                tile_above_rows=max_block_size,
                             )
                         )
                         local_blocks += 1
@@ -2147,7 +2420,10 @@ def score_buckets(
                         for sub in _split_oversized(
                             sorted_df.slice(offset, size), size
                         ):
-                            pairs = _score_block_frame(sub)
+                            pairs = _score_block_bounded(
+                                sub, len(sub), _score_block_frame,
+                                tile_above_rows=max_block_size,
+                            )
                             if pairs is None:
                                 continue
                             local_pairs.extend(pairs)
@@ -2171,7 +2447,10 @@ def score_buckets(
                     for sub in _split_oversized(
                         sorted_df.slice(offset, size), size
                     ):
-                        pairs = _score_block_frame(sub)
+                        pairs = _score_block_bounded(
+                            sub, len(sub), _score_block_frame,
+                            tile_above_rows=max_block_size,
+                        )
                         if pairs is None:
                             continue
                         local_pairs.extend(pairs)
@@ -2197,7 +2476,9 @@ def score_buckets(
     # eager path is byte-identical (same rows, same within-bucket order via
     # filter_eq == partition_by(maintain_order), and cross-bucket order is
     # unordered downstream: thread-pool scored + pairs canonicalized).
-    _fs_streaming = is_probabilistic and _fs_bounded_stream_enabled()
+    _fs_streaming = is_probabilistic and (
+        force_bounded_stream or _fs_bounded_stream_enabled()
+    )
 
     def _score_single_pass(
         key: BlockingKeyConfig,
@@ -2537,8 +2818,34 @@ def score_buckets(
         import pyarrow as _pa
 
         if pass_tables:
-            return _pa.concat_tables(pass_tables)
+            _tbl = _pa.concat_tables(pass_tables)
+            # Arrow mode still has to report. Zipping three columns is O(pairs)
+            # and only runs when a capture is open -- `_emit_scoring_profile`
+            # returns immediately otherwise, so the zip is behind that guard.
+            from goldenmatch.core.profile_emitter import has_active_emitter
+
+            if has_active_emitter():
+                _emit_profile(
+                    list(zip(_tbl.column("id_a").to_pylist(),
+                             _tbl.column("id_b").to_pylist(),
+                             _tbl.column("score").to_pylist(), strict=True)),
+                    mk, route="buckets.arrow",
+                    candidates=(sum(_cand_pair_counts) if _cand_pair_counts else None),
+                )
+            return _tbl
+        _emit_profile(
+            [], mk, route="buckets.arrow.empty",
+            candidates=(sum(_cand_pair_counts) if _cand_pair_counts else None),
+        )
         return pairs_to_pair_stream([])
+    # `sum([])` is 0, and reporting that as a COUNTED zero would recreate the
+    # exact absent-vs-zero collapse this change exists to remove -- an empty
+    # accumulator means no worker counted anything (a route that bypasses both
+    # bucket workers), not that zero pairs were compared. Stay absent.
+    _emit_profile(
+        all_pairs, mk,
+        candidates=(sum(_cand_pair_counts) if _cand_pair_counts else None),
+    )
     return all_pairs
 
 

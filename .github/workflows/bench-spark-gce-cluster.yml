@@ -1,0 +1,1193 @@
+# Spark FS training on a REAL multi-node cluster, over a REAL network.
+#
+# ## The question this exists for
+#
+# `spark-cluster.yml` runs a standalone master + two workers + Connect as four
+# CONTAINERS ON ONE HOST. Every wall measured there is honest about topology and
+# silent about networking: the shuffle exchange never crosses a wire. That
+# limitation is written into docker/spark-cluster/docker-compose.yml, and it is
+# why #2613 had to retract a "~0% of the counts stage is the GROUP BY exchange"
+# reading.
+#
+# The shuffle-BYTE proxy (#2652) answered as much as one host can. Measured at
+# 1M rows on a sized single-host rig:
+#
+#     GoldenMatch   832 MB write / 832 MB read   120 stages
+#     Splink     16,784 MB write / 21,164 MB read  940 stages
+#
+# ~20x fewer bytes across the exchange. Bytes transfer to any topology; seconds
+# do not. This lane converts that ratio into measured NETWORK time, on separate
+# machines, which is the one thing the byte count cannot tell you.
+#
+# ## THAT ~20x IS WRONG, and this lane is what found out (2026-08-19)
+#
+# The proxy ran Splink misconfigured in four separate ways, each of which this
+# lane hit and fixed in turn:
+#
+#   1. `break_lineage_method="persist"`, which caches WITHOUT truncating the
+#      DAG. Splink's documented default is `parquet`.
+#   2. No distributed filesystem, so `parquet` had nowhere to write. This
+#      cluster now stands up HDFS.
+#   3. Splink starting before the master released Connect's cores, and its own
+#      wait returning on the FIRST executor to register.
+#   4. **`spark.executor.memory` left at Spark's 1g default while GoldenMatch's
+#      Connect server got 48g.** A 48x heap disadvantage.
+#
+# Measured at 1M with both arms on the same cluster, the same 48g executors,
+# the same 320 shuffle partitions (5x cores, per Splink's own guide), and the
+# same shared metric implementations (run 32290866436):
+#
+#     wall            35.82s   vs   90.89s      2.5x
+#     shuffle write   2.71 GB  vs   4.15 GB     1.5x
+#     stages          197      vs   449         2.3x
+#     spill           0 / 0    vs   0 / 0       equal
+#     GC              31.6s    vs   37.6s       1.19x
+#     avg precision   0.71524  vs   0.703386
+#     best F1         0.685667 vs   0.646975
+#
+# GoldenMatch wins every axis. The margin is SINGLE-DIGIT, not an order of
+# magnitude, and the earlier "Splink spills 4 GB where we spill zero" was an
+# artefact of the 1g heap: with equal memory BOTH spill nothing.
+#
+# Do not quote the 20x. It measured our configuration, not the engines.
+#
+# ## Why GCE standalone and not Dataproc
+#
+# Two reasons, and the second matters more.
+#
+# The bench service account holds `roles/compute.admin` and
+# `roles/iam.serviceAccountUser` (see bench-ray-cluster.yml). Dataproc needs
+# `roles/dataproc.editor`, a grant nobody has made.
+#
+# And Dataproc runs YARN with its own Spark defaults. The number we want is
+# comparable to the single-host rig, so the topology has to be the SAME
+# standalone master/worker/Connect shape with only the network changed. A
+# managed cluster would change two variables at once and the comparison would
+# mean nothing.
+#
+# ## Cost
+#
+# Scales with the run. The 1M default is ~$0.60: 5 x n2-standard-16 ON-DEMAND
+# for ~15 min, dominated by ~5 minutes of provisioning rather than the ~16s of
+# compute. A 50M head-to-head is hours, not minutes, and the wall is unknown
+# until one has been run -- so read the `timeout-minutes` below as the cost
+# ceiling, not the expected spend.
+#
+# The teardown step runs `if: always()`, so a failed bench still releases the
+# instances -- the same discipline bench-ray-cluster.yml uses. `keep_cluster`
+# defeats that ON PURPOSE and leaves the VMs billing; it is for debugging and
+# the operator deletes them by hand.
+#
+# ON-DEMAND, not preemptible: PREEMPTIBLE_CPUS quota in this project is 0 (see
+# the provisioning step). A multi-hour 50M run is also the worst case for
+# preemption -- losing the cluster at hour two wastes the whole spend.
+#
+# ## Both engines run ON the master VM, deliberately
+#
+# Splink drives a CLASSIC session, so its driver must be reachable BY the
+# workers. A driver on the GitHub runner cannot be: the workers are inside GCP
+# and the runner is behind NAT with no route back. Running both harnesses on
+# the master VM puts both drivers inside the cluster's own network and keeps
+# the two engines symmetric -- which is the whole point of a comparison.
+#
+# Required GitHub secrets: INFISICAL_CLIENT_ID / INFISICAL_CLIENT_SECRET.
+# Everything GCP is pulled from Infisical at runtime, exactly as
+# bench-ray-cluster.yml does it -- no new GH secrets.
+name: bench-spark-gce-cluster
+
+on:
+  workflow_dispatch:
+    inputs:
+      rows:
+        description: "Rows for the FS training run"
+        required: false
+        type: string
+        default: "1000000"
+      machine_type:
+        description: "GCE machine type per node"
+        required: false
+        type: string
+        default: "n2-standard-16"
+      workers:
+        description: "Worker VMs (the master VM runs master + Connect + both drivers)"
+        required: false
+        type: string
+        default: "4"
+      disk_gb:
+        description: "Local NVMe scratch per node, in GB, ROUNDED UP to 375GB devices (500 -> 750). This is SHUFFLE SPILL space, not OS space -- Splink projects to ~840GB of cumulative shuffle at 50M. Local SSD, not persistent disk: unbounded quota and faster. Do not lower it for a large run."
+        required: false
+        type: string
+        default: "750"
+      zone:
+        description: "GCE zone"
+        required: false
+        type: string
+        default: "us-central1-a"
+      splink_compare:
+        description: "Also run Splink on the same cluster"
+        required: false
+        type: boolean
+        default: true
+      eval_quality:
+        description: "Also measure ACCURACY (average precision / best F1) on both arms. Adds a predict + grouped-collect pass to each; without it the run reports speed and bytes but no quality, which is not a head-to-head."
+        required: false
+        type: boolean
+        default: true
+      attribute_score:
+        description: "Split the GoldenMatch score stage into join / +gammas / +weight / +truth and report each layer's MARGINAL cost. Needs eval_quality. Costs ~4x a score stage because every layer re-runs the join beneath it, so leave it OFF unless attributing that stage is the point of the run."
+        required: false
+        type: boolean
+        default: false
+      shuffle_partitions:
+        description: "spark.sql.shuffle.partitions for BOTH arms. `-1` (default) derives 5x total executor cores, which is what Splink's performance guide recommends. `0` leaves Spark's default 200, which is what both engines ran on before and is a number NEITHER vendor recommends. Applied to both engines from one shared implementation (scripts/_spark_tuning.py) so the comparison can never measure a tuning difference."
+        required: false
+        type: string
+        default: "-1"
+      splink_checkpoint_fs:
+        description: "Shared filesystem for Splink's lineage break. `hdfs` stands up a real HDFS across the cluster nodes (Spark speaks hdfs:// through the Hadoop client pyspark already bundles, so no connector is involved). `gcs` uses the bucket in splink_checkpoint_dir via the gcs-connector. `none` forces `persist`, which keeps lineage and OOMs at scale -- debugging only."
+        required: false
+        type: choice
+        default: "hdfs"
+        options: ["hdfs", "gcs", "none"]
+      splink_checkpoint_dir:
+        description: "GCS prefix for Splink's lineage break (its documented `parquet` default). Splink OOMs at scale without a distributed FS -- persist caches but does NOT truncate the DAG. Must be in the SAME REGION as the cluster or Splink pays cross-region I/O GoldenMatch does not."
+        required: false
+        type: string
+        default: "gs://goldenmatch-spark-bench-us-east1"
+      spot:
+        description: "Use SPOT VMs. OFF by default: PREEMPTIBLE_CPUS quota in golden-490919/us-central1 is 0, so SPOT provisioning FAILS. Enable only after raising it."
+        required: false
+        type: boolean
+        default: false
+      keep_cluster:
+        description: "SKIP teardown (leaves VMs BILLING -- for debugging only, delete them yourself)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  # Stamped into every instance name so a leaked VM is traceable to the run
+  # that made it, and so two concurrent dispatches cannot collide.
+  CLUSTER: gm-spark-${{ github.run_id }}
+  SPARK_IMAGE: apache/spark:4.2.0-python3
+
+jobs:
+  cluster:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+
+      - name: Fetch GCP creds from Infisical
+        # Identical mechanism to bench-ray-cluster.yml -- same Machine Identity,
+        # same project, same masking. Reusing it rather than adding GH secrets
+        # keeps one auth path to audit.
+        env:
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${INFISICAL_CLIENT_ID:-}" ] || [ -z "${INFISICAL_CLIENT_SECRET:-}" ]; then
+            echo "::error::INFISICAL_CLIENT_ID / INFISICAL_CLIENT_SECRET not set; see docs/distributed/ray-gce-cluster.md"
+            exit 1
+          fi
+          # Infisical's REST API directly, NOT the CLI. Installing the CLI needs
+          # apt, and apt on a GitHub-hosted runner needs a lock the runner's own
+          # housekeeping holds: runs 32271581601, 32273435168, 32276315793 and
+          # 32278438000 all died there, the last one with
+          #
+          #     apt lock still held after 450s
+          #     E: Could not get lock /var/lib/apt/lists/lock.
+          #        It is held by process 2199 (apt-get)
+          #
+          # after waiting for it and retrying three times. There is no published
+          # standalone binary to fall back to (checked: the CLI's releases carry
+          # no assets), so the way to stop losing runs to a package manager is
+          # to stop needing one. `curl` and `jq` are preinstalled.
+          #
+          # Same Machine Identity, same project, same secrets, same masking --
+          # only the transport changes. Routes verified against the live API
+          # before this was written, using NO credentials: an empty POST to the
+          # login route returns 422 and a bogus one returns 401 "Invalid
+          # credentials", which proves both the path and the field names; the
+          # secret routes return 401 rather than 404, which proves they exist.
+          API="${INFISICAL_API:-https://app.infisical.com}"
+          PROJECT_ID=a99885f0-c5af-4ae1-9dc8-255cc60aa129
+          ENV_SLUG=dev
+
+          # Built with jq rather than string interpolation so a quote or
+          # backslash in the client secret cannot break the JSON.
+          LOGIN_BODY=$(jq -nc --arg id "$INFISICAL_CLIENT_ID" \
+                              --arg sec "$INFISICAL_CLIENT_SECRET" \
+                              '{clientId:$id, clientSecret:$sec}')
+          LOGIN=$(curl -sS --max-time 60 -X POST "$API/api/v1/auth/universal-auth/login" \
+                    -H 'Content-Type: application/json' -d "$LOGIN_BODY")
+          TOKEN=$(jq -r '.accessToken // empty' <<<"$LOGIN")
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Infisical login failed: $(jq -r '.message // "no accessToken in response"' <<<"$LOGIN")"
+            exit 1
+          fi
+          echo "::add-mask::$TOKEN"
+
+          # v3-raw first, v4 as fallback: both are live today and the pair
+          # survives either being retired. Only the VALUE goes to stdout, so a
+          # diagnostic can never be captured as a secret.
+          get_secret() {
+            local name="$1" out val
+            out=$(curl -sS --max-time 60 -H "Authorization: Bearer $TOKEN" \
+                  "$API/api/v3/secrets/raw/$name?workspaceId=$PROJECT_ID&environment=$ENV_SLUG&secretPath=%2F") || true
+            val=$(jq -r '.secret.secretValue // empty' <<<"$out")
+            if [ -z "$val" ]; then
+              out=$(curl -sS --max-time 60 -H "Authorization: Bearer $TOKEN" \
+                    "$API/api/v4/secrets/$name?projectId=$PROJECT_ID&environment=$ENV_SLUG&secretPath=%2F") || true
+              val=$(jq -r '.secret.secretValue // empty' <<<"$out")
+            fi
+            if [ -z "$val" ]; then
+              echo "::error::could not read $name from Infisical: $(jq -r '.message // "empty value from both v3 and v4"' <<<"$out")" >&2
+              return 1
+            fi
+            printf '%s' "$val"
+          }
+
+          PROJ=$(get_secret GCP_RAY_BENCH_PROJECT_ID)
+          echo "::add-mask::$PROJ"
+
+          get_secret GCP_SA_KEY_B64 \
+            | base64 -d --ignore-garbage > "$HOME/gcp-sa.json"
+          chmod 600 "$HOME/gcp-sa.json"
+          python3 -c "import json; json.load(open('$HOME/gcp-sa.json'))"
+
+          echo "GCP_PROJECT_ID=$PROJ" >> $GITHUB_ENV
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$HOME/gcp-sa.json" >> $GITHUB_ENV
+
+      - name: Authenticate gcloud
+        run: |
+          set -euo pipefail
+          gcloud auth activate-service-account --key-file="$HOME/gcp-sa.json"
+          gcloud config set project "$GCP_PROJECT_ID" --quiet
+          gcloud config set compute/zone "${{ inputs.zone || 'us-central1-a' }}" --quiet
+          # The REQUESTED zone. Provisioning may fall back to another in the
+          # same region (capacity for this shape moves), and will overwrite this
+          # with the one that actually worked -- so every later step, teardown
+          # included, targets the real location rather than the request.
+          echo "ZONE=${{ inputs.zone || 'us-central1-a' }}" >> $GITHUB_ENV
+
+      - name: Provision the VMs
+        # PREEMPTIBLE, and every instance carries the run id in its name plus a
+        # `bench=gm-spark` label -- so a leaked VM can be traced and swept.
+        run: |
+          set -euo pipefail
+          N=${{ inputs.workers || '4' }}
+          DISK_GB=${{ inputs.disk_gb || '750' }}
+          MT="${{ inputs.machine_type || 'n2-standard-16' }}"
+          NAMES="$CLUSTER-master"
+          for i in $(seq 1 "$N"); do NAMES="$NAMES $CLUSTER-w$i"; done
+          echo "NODE_NAMES=$NAMES" >> $GITHUB_ENV
+
+          # ON-DEMAND by default, and that is MEASURED, not caution.
+          # `gcloud compute regions describe us-central1` on golden-490919:
+          #     PREEMPTIBLE_CPUS  limit=0    usage=0
+          #     CPUS              limit=200  usage=2
+          #     N2_CPUS           limit=200  usage=0
+          # SPOT consumes PREEMPTIBLE_CPUS and the limit is ZERO, so an earlier
+          # draft defaulting to SPOT would have failed at `instances create`
+          # after paying for provisioning and proving nothing. On-demand has 200
+          # vCPUs against the 48 this needs.
+          PROV=""
+          if [ "${{ inputs.spot }}" = "true" ]; then
+            PROV="--provisioning-model=SPOT --instance-termination-action=DELETE"
+            echo "::warning::SPOT requested, but PREEMPTIBLE_CPUS quota was 0 when this lane was written -- expect a quota error."
+          fi
+
+          # Container-Optimized OS: docker is already present, so no apt round
+          # trip per node and no image drift between the master and the workers.
+          #
+          # Disk is sized for SHUFFLE SPILL, not for the OS. Spark spills to the
+          # worker's local dirs, which here is the boot disk, and 100GB does not
+          # survive a 50M head-to-head. Projected from the measured 1M run
+          # (#2652), scaling linearly because the fixture's block size is pinned
+          # at 12 rows (dup=3 x blocks_per_key=4) so pairs grow with rows:
+          #
+          #     engine        shuffle write @1M   projected @50M
+          #     GoldenMatch          832 MB            ~41 GB
+          #     Splink            16,784 MB           ~840 GB
+          #
+          # Cumulative is not concurrent peak (Spark reclaims between stages),
+          # but 840 GB across 940 stages against 100 GB is the single most
+          # likely way a paid multi-hour run dies. 500 GB is a few dollars of
+          # PD-balanced against the cost of re-running the cluster.
+          # LOCAL SSD for shuffle spill, boot disk left small and default.
+          #
+          # The first attempt at sizing this raised the BOOT disk to 500GB on
+          # pd-balanced, and that failed on quota rather than capacity:
+          #
+          #     SSD_TOTAL_GB        limit=500     <- what pd-balanced consumes
+          #     DISKS_TOTAL_GB      limit=4096    <- pd-standard
+          #     LOCAL_SSD_TOTAL_GB  limit=9.2e18  <- effectively unbounded
+          #
+          # 5 nodes x 500GB = 2500GB of pd-balanced against a 500GB regional
+          # SSD limit. Local SSD is not merely the way around that quota, it is
+          # the BETTER disk for this job: physically-attached NVMe rather than
+          # network-attached PD, so it is faster than the pd-balanced that was
+          # being asked for.
+          #
+          # Ephemeral is the right trade here. Local SSD is wiped when the VM
+          # stops, and Spark shuffle spill is scratch that is meaningless once
+          # the job ends -- nothing we need to keep ever lands on it.
+          #
+          # Sized in fixed 375GB devices, so `disk_gb` is rounded UP to the next
+          # multiple: 500 -> 2 devices -> 750GB per node. More scratch than the
+          # pd-balanced plan asked for, and faster.
+          #
+          # pd-standard (DISKS_TOTAL_GB=4096) would also clear the quota, and is
+          # deliberately NOT used: ~60 MB/s at 500GB penalises Splink's ~20x
+          # heavier spill for reasons that have nothing to do with the engine,
+          # which is precisely the comparison this lane exists to make.
+          # Device count must SNAP to a machine-family-legal value, not merely
+          # round up to a multiple of 375. n2 rejects odd counts:
+          #
+          #   Number of local SSDs for an instance of type n2-standard-16 should
+          #   be one of [0, 2, 4, 8, 16, 24], while [1] is requested.
+          #
+          # So the legal sizes are 750 / 1500 / 3000 / 6000 / 9000 GB. A naive
+          # ceil(disk_gb/375) asks for 1 device at anything <= 375 and 3 at
+          # 751-1125, both of which fail AT PROVISIONING -- after the run has
+          # authenticated and started paying for the runner. The 750 default
+          # worked only because it happens to land on 2.
+          RAW=$(( (DISK_GB + 374) / 375 ))
+          SSD_DEVICES=0
+          for allowed in 2 4 8 16 24; do
+            if [ "$RAW" -le "$allowed" ]; then SSD_DEVICES=$allowed; break; fi
+          done
+          if [ "$SSD_DEVICES" -eq 0 ]; then
+            echo "::error::disk_gb=$DISK_GB needs $RAW local SSDs; the largest n2 supports is 24 (9000GB)"
+            exit 1
+          fi
+          SSD_FLAGS=""
+          for _ in $(seq 1 "$SSD_DEVICES"); do
+            SSD_FLAGS="$SSD_FLAGS --local-ssd=interface=NVME"
+          done
+          echo "local SSD: disk_gb=$DISK_GB -> $RAW device(s) requested -> snapped to $SSD_DEVICES x 375GB = $((SSD_DEVICES * 375))GB per node"
+
+          # Boot disk stays small and on pd-standard: it holds the OS and the
+          # two container images (~3GB), nothing else, now that scratch lives on
+          # the NVMe. 50GB x 5 = 250GB against DISKS_TOTAL_GB=4096, so it needs
+          # no quota anyone has to raise. COS defaults to 10GB, which is tight
+          # once both images are pulled, so it is set rather than defaulted.
+          # Try the requested zone, then fall back through the rest of its
+          # region. Capacity for this shape is genuinely scarce and MOVES:
+          # across two days this lane hit ZONE_RESOURCE_POOL_EXHAUSTED five
+          # times, including twice in us-east1-c AFTER two successful runs
+          # there. Attaching local SSD narrows the pool further -- the error is
+          # specifically "n2-standard-16 VM instance WITH 2 LOCAL SSD(s) is
+          # currently unavailable", not the bare machine type.
+          #
+          # Hand-picking a zone per dispatch was costing a round trip each time
+          # and is not knowledge anyone can hold: there is no API for "which
+          # zone has capacity right now", you find out by asking. So ask here,
+          # in a loop, instead of making a human do it.
+          #
+          # PARTIAL provisions are cleaned up between attempts. A failed create
+          # can still leave instances behind (this run created w2 before
+          # failing), and carrying them into the next zone would leave a
+          # split-brain cluster billing in two places.
+          # `tr -d '\r'` and the dedupe are not cargo-cult: testing this list
+          # locally produced `us-east1-c us-east1-b us-east1-c us-east1-d` --
+          # the requested zone twice, because gcloud on that host emitted CRLF
+          # so `us-east1-c\r` never equalled `us-east1-c`. A Linux runner emits
+          # LF and would not have shown it, which is exactly why the duplicate
+          # is worth defending against rather than reasoning away: a duplicate
+          # silently burns one of a small number of capacity attempts.
+          ZONE_LIST="$ZONE"
+          REGION="${ZONE%-*}"
+          for z in $(gcloud compute zones list --project "$GCP_PROJECT_ID" \
+                       --filter="region~${REGION}$ AND status=UP" \
+                       --format="value(name)" 2>/dev/null | tr -d '\r'); do
+            case " $ZONE_LIST " in *" $z "*) continue;; esac
+            ZONE_LIST="$ZONE_LIST $z"
+          done
+          echo "zone order: $ZONE_LIST"
+
+          PROVISIONED=""
+          for z in $ZONE_LIST; do
+            echo "--- attempting $z ---"
+            if gcloud compute instances create $NAMES \
+                 --zone="$z" \
+                 --machine-type="$MT" \
+                 --image-family=cos-stable --image-project=cos-cloud \
+                 --boot-disk-size=50GB \
+                 --boot-disk-type=pd-standard \
+                 $SSD_FLAGS \
+                 $PROV \
+                 --labels=bench=gm-spark,run-id=${{ github.run_id }} \
+                 --scopes=cloud-platform \
+                 --quiet; then
+              PROVISIONED="$z"
+              break
+            fi
+            echo "$z did not have capacity; cleaning up any partial create"
+            gcloud compute instances delete $NAMES --zone="$z" --quiet 2>/dev/null || true
+          done
+
+          if [ -z "$PROVISIONED" ]; then
+            echo "::error::no zone in $REGION had capacity for $MT with $SSD_DEVICES local SSD(s). Tried: $ZONE_LIST"
+            exit 1
+          fi
+
+          # Every later step resolves the zone from config, so pin it to the one
+          # that actually worked rather than the one that was requested.
+          gcloud config set compute/zone "$PROVISIONED" --quiet
+          echo "ZONE=$PROVISIONED" >> $GITHUB_ENV
+          echo "provisioned in $PROVISIONED: $NAMES ($((SSD_DEVICES * 375))GB local NVMe per node, 50GB boot)"
+
+      # SSH goes over the instance's EXTERNAL IP rather than IAP.
+      # `--tunnel-through-iap` would be tidier, but it needs
+      # `roles/iap.tunnelResourceAccessor` and the bench SA is documented with
+      # only `compute.admin` + `iam.serviceAccountUser`. Assuming a role nobody
+      # granted is how a lane fails 5 minutes and $1 into a run. Plain SSH needs
+      # only the `default-allow-ssh` rule a default VPC ships with.
+      - name: Wait for SSH on every node
+        run: |
+          set -euo pipefail
+          for n in $NODE_NAMES; do
+            for i in $(seq 1 30); do
+              if gcloud compute ssh "$n" --command="true" --quiet 2>/dev/null; then
+                echo "$n: ssh ok"; break
+              fi
+              if [ "$i" = "30" ]; then echo "::error::$n never accepted ssh"; exit 1; fi
+              sleep 10
+            done
+          done
+
+      - name: Start the Spark cluster across the VMs
+        # THE POINT OF THE LANE: the master and the workers are on separate
+        # machines, so every shuffle byte crosses a real network. Same standalone
+        # topology as docker/spark-cluster/docker-compose.yml, one variable
+        # changed.
+        run: |
+          set -euo pipefail
+          MASTER="$CLUSTER-master"
+          MASTER_IP=$(gcloud compute instances describe "$MASTER" \
+            --format='get(networkInterfaces[0].networkIP)')
+          echo "MASTER_IP=$MASTER_IP" >> $GITHUB_ENV
+          CORES=$(( $(echo "${{ inputs.machine_type || 'n2-standard-16' }}" | grep -oE '[0-9]+$') ))
+          # ONE definition of executor memory, used by the Connect server below
+          # and exported for the Splink arm. Two literals drift, and a drifted
+          # heap size is indistinguishable from an engine that needs more memory.
+          EXEC_MEM=48g
+
+          # Open the COS HOST firewall to intra-VPC traffic.
+          #
+          # Container-Optimized OS ships a default-DENY iptables INPUT policy.
+          # The GCP VPC firewall being permissive is not enough -- the packet is
+          # dropped after it arrives. Diagnosed from a run where every process
+          # was healthy and the connection still failed:
+          #
+          #     master:  Successfully started service 'sparkMaster' on port 7077
+          #     worker:  Connecting to /10.142.0.23:7077 timed out (120000 ms)
+          #
+          # TIMED OUT, not connection-refused, is the tell: a closed port refuses
+          # immediately, a DROP rule produces exactly this silence. And
+          # `default-allow-internal` carries NO target tags and allows
+          # tcp:0-65535 from 10.128.0.0/9, so GCP was never the blocker.
+          #
+          # The single-host lane never hit this because master, workers and
+          # Connect were containers on ONE host talking over localhost. It is
+          # the one thing that could only appear once the topology became real,
+          # which is the whole reason this lane exists.
+          #
+          # Whole subnet rather than a port list, deliberately: Spark's
+          # executor/driver/BlockManager ports are EPHEMERAL, so an allowlist of
+          # 7077/8080/15002/4040 would clear registration and then fail during
+          # the shuffle -- a far more expensive place to discover it. The VPC
+          # firewall remains the real boundary; this only stops COS
+          # second-guessing traffic GCP has already allowed.
+          for n in $NODE_NAMES; do
+            gcloud compute ssh "$n" --quiet --command \
+              "sudo iptables -w -C INPUT -s 10.128.0.0/9 -j ACCEPT 2>/dev/null || \
+               sudo iptables -w -I INPUT 1 -s 10.128.0.0/9 -j ACCEPT" &
+          done
+          wait
+          echo "COS host firewall opened to 10.128.0.0/9 on every node"
+
+          gcloud compute ssh "$MASTER" --quiet --command "
+            docker run -d --name spark-master --network host \
+              -e SPARK_NO_DAEMONIZE=true $SPARK_IMAGE \
+              /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master \
+                --host $MASTER_IP --port 7077 --webui-port 8080
+          "
+
+          # Mount the local NVMe and point Spark's scratch at it.
+          #
+          # Attaching the devices is not enough: without SPARK_LOCAL_DIRS the
+          # worker spills to the container's filesystem, which is the small
+          # default BOOT disk, and the whole point of the local SSD is missed.
+          # That failure would not be loud -- it would present as a slow run or
+          # a disk-full hours in -- so the mount is verified here rather than
+          # assumed, and a node that cannot mount fails the step immediately.
+          #
+          # RAID0 across devices when there is more than one, so the worker sees
+          # a single scratch volume of the full size rather than N separate
+          # 375GB mounts it would have to be told about individually.
+          #
+          # COS ships the NVMe devices at /dev/nvme0n{1..N} and mounts nothing
+          # by default. `nodiscard` skips the TRIM pass over a fresh device,
+          # which on 750GB is minutes of provisioning for no benefit on a disk
+          # that gets thrown away.
+          #
+          # /mnt/disks, NOT /mnt. Container-Optimized OS has a READ-ONLY root,
+          # and `/mnt` is part of it -- the first attempt used /mnt/scratch and
+          # died on `mkdir: cannot create directory '/mnt/scratch': Read-only
+          # file system` AFTER provisioning five VMs. /mnt/disks is the writable
+          # mountpoint COS provides for exactly this, and is what GCP's own
+          # "formatting and mounting a local SSD" guide uses.
+          # The MASTER is mounted too, not just the workers: it runs the Connect
+          # server and BOTH drivers, and Splink's classic driver does real
+          # driver-side work. Leaving its scratch on the 50GB boot disk would
+          # reintroduce the disk wall on one node.
+          for n in $NODE_NAMES; do
+            gcloud compute ssh "$n" --quiet --command "
+              set -euo pipefail
+              DEVS=\$(ls /dev/nvme0n* 2>/dev/null | tr '\n' ' ')
+              [ -n \"\$DEVS\" ] || { echo 'NO LOCAL SSD DEVICES FOUND'; exit 1; }
+              N=\$(echo \$DEVS | wc -w)
+              sudo mkdir -p /mnt/disks/scratch
+              if [ \"\$N\" -gt 1 ]; then
+                sudo mdadm --create /dev/md0 --level=0 --raid-devices=\$N \$DEVS --force
+                TARGET=/dev/md0
+              else
+                TARGET=\$DEVS
+              fi
+              sudo mkfs.ext4 -F -m 0 -E lazy_itable_init=0,lazy_journal_init=0,nodiscard \$TARGET
+              sudo mount -o discard,defaults,nobarrier \$TARGET /mnt/disks/scratch
+              sudo chmod 1777 /mnt/disks/scratch
+              df -h /mnt/disks/scratch
+            "
+          done
+
+          for n in $NODE_NAMES; do
+            case "$n" in *-master) continue;; esac
+            gcloud compute ssh "$n" --quiet --command "
+              docker run -d --name spark-worker --network host \
+                -v /mnt/disks/scratch:/scratch \
+                -e SPARK_LOCAL_DIRS=/scratch \
+                -e SPARK_NO_DAEMONIZE=true $SPARK_IMAGE \
+                /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker \
+                  spark://$MASTER_IP:7077 --cores $CORES --memory 48g
+            " &
+          done
+          wait
+
+          gcloud compute ssh "$MASTER" --quiet --command "
+            docker run -d --name spark-connect --network host \
+              -v /mnt/disks/scratch:/scratch \
+              -e SPARK_LOCAL_DIRS=/scratch \
+              -e SPARK_NO_DAEMONIZE=true $SPARK_IMAGE \
+              /opt/spark/sbin/start-connect-server.sh \
+                --master spark://$MASTER_IP:7077 \
+                --conf spark.connect.grpc.binding.address=0.0.0.0 \
+                --conf spark.connect.grpc.binding.port=15002 \
+                --conf spark.driver.host=$MASTER_IP \
+                --conf spark.executor.cores=$CORES \
+                --conf spark.executor.memory=$EXEC_MEM
+          "
+          # Exported so the SPLINK arm is launched with the SAME sizing. It was
+          # not, and took Spark's default `spark.executor.memory=1g` against
+          # GoldenMatch's 48g -- a 48x heap disadvantage that reads as an engine
+          # limit. See the Splink step.
+          echo "EXEC_MEM=$EXEC_MEM" >> $GITHUB_ENV
+          echo "EXEC_CORES=$CORES" >> $GITHUB_ENV
+
+      - name: Refuse to measure a cluster with no registered workers
+        # The failure this lane must not have: a master with zero workers
+        # ACCEPTS a job and queues it forever, so the run would look slow rather
+        # than broken. Same refusal the single-host lane makes.
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            N=$(gcloud compute ssh "$CLUSTER-master" --quiet --command \
+              "curl -s http://$MASTER_IP:8080/json/ | python3 -c 'import sys,json; print(len(json.load(sys.stdin)[\"workers\"]))'" 2>/dev/null || echo 0)
+            echo "registered workers: $N"
+            [ "${N:-0}" -ge 1 ] && exit 0
+            sleep 10
+          done
+          # The refusal is right, but "0 workers" is a SYMPTOM and the evidence
+          # lives in containers that the `if: always()` teardown is about to
+          # delete. The first time this fired it cost a whole run to learn
+          # nothing except that it fired.
+          #
+          # So dump what actually happened before giving up: whether each
+          # container is even running, and its logs. A worker that crashed on
+          # startup and a worker that cannot reach the master look identical
+          # from the master's `/json/` endpoint and completely different here.
+          echo "::group::master container"
+          gcloud compute ssh "$CLUSTER-master" --quiet --command \
+            "docker ps -a --filter name=spark-master --format '{{.Names}} {{.Status}}'; \
+             echo '--- logs ---'; docker logs --tail 60 spark-master 2>&1 || true" || true
+          echo "::endgroup::"
+
+          for n in $NODE_NAMES; do
+            case "$n" in *-master) continue;; esac
+            echo "::group::worker $n"
+            gcloud compute ssh "$n" --quiet --command \
+              "docker ps -a --filter name=spark-worker --format '{{.Names}} {{.Status}}'; \
+               echo '--- mount ---'; df -h /mnt/disks/scratch 2>&1 || true; \
+               ls -ld /mnt/disks/scratch 2>&1 || true; \
+               echo '--- logs ---'; docker logs --tail 60 spark-worker 2>&1 || true" || true
+            echo "::endgroup::"
+          done
+
+          echo "::error::no worker registered with the master -- every timing below would be a queue wait, not a measurement. Container status and logs are in the groups above."
+          exit 1
+
+      - name: Stand up HDFS across the cluster
+        # Splink's lineage break writes a parquet FROM THE EXECUTORS and reads
+        # it back, so it needs storage every executor can reach. Confirmed in
+        # Splink's own source rather than assumed:
+        #
+        #     checkpoint_dir = self._get_checkpoint_dir_path(spark_df)
+        #     spark_df.write.mode("overwrite").parquet(write_path)
+        #     spark_df = self.spark.read.parquet(write_path)
+        #
+        # This lane had NO distributed filesystem at all. That is the real
+        # defect: Splink's documented 100M+ deployments run on Databricks / EMR
+        # / Dataproc where a shared FS is native, and bolting a GCS connector
+        # onto bare standalone Spark was the unusual part, not Splink. Three
+        # runs died on connector configuration before the filesystem was ever
+        # reached.
+        #
+        # HDFS removes the connector from the question entirely: pyspark already
+        # bundles hadoop-client-api/runtime, so `hdfs://` needs NO extra jar on
+        # driver or executors, and it is the filesystem Spark is built around.
+        #
+        # `dfs.replication=1` ON PURPOSE. This is scratch for a lineage break
+        # that lives minutes, and replication would tax Splink with write
+        # amplification GoldenMatch does not pay. Giving the engine under test
+        # its cheapest correct configuration is the fair choice; the risk is a
+        # lost datanode failing the run, not a wrong number.
+        if: inputs.splink_compare && (inputs.splink_checkpoint_fs || 'hdfs') == 'hdfs'
+        run: |
+          set -euo pipefail
+          HADOOP_IMAGE=apache/hadoop:3.4.1
+
+          # Config written on the RUNNER and copied, rather than heredoc'd
+          # through ssh: XML inside a remote shell string is a quoting trap and
+          # a silently mangled config would surface as a filesystem that half
+          # works.
+          mkdir -p hdfs-conf
+          cat > hdfs-conf/core-site.xml <<XML
+          <?xml version="1.0"?>
+          <configuration>
+            <property><name>fs.defaultFS</name><value>hdfs://${MASTER_IP}:9000</value></property>
+            <property><name>hadoop.tmp.dir</name><value>/hadoop/tmp</value></property>
+          </configuration>
+          XML
+          cat > hdfs-conf/hdfs-site.xml <<XML
+          <?xml version="1.0"?>
+          <configuration>
+            <property><name>dfs.replication</name><value>1</value></property>
+            <property><name>dfs.namenode.name.dir</name><value>/hadoop/dfs/name</value></property>
+            <property><name>dfs.datanode.data.dir</name><value>/hadoop/dfs/data</value></property>
+            <property><name>dfs.permissions.enabled</name><value>false</value></property>
+            <property><name>dfs.namenode.rpc-bind-host</name><value>0.0.0.0</value></property>
+            <property><name>dfs.namenode.servicerpc-bind-host</name><value>0.0.0.0</value></property>
+            <property><name>dfs.namenode.http-bind-host</name><value>0.0.0.0</value></property>
+            <property><name>dfs.datanode.use.datanode.hostname</name><value>false</value></property>
+            <property><name>dfs.client.use.datanode.hostname</name><value>false</value></property>
+          </configuration>
+          XML
+          # The heredocs above are indented for YAML, so strip the leading
+          # spaces the block scalar leaves behind. `<?xml` MUST start at column
+          # 0 or the parser rejects the declaration.
+          sed -i 's/^ *//' hdfs-conf/core-site.xml hdfs-conf/hdfs-site.xml
+
+          MASTER="$CLUSTER-master"
+          for n in $NODE_NAMES; do
+            gcloud compute scp --quiet --recurse hdfs-conf "$n:~/" &
+          done
+          wait
+
+          MOUNTS="-v \$HOME/hdfs-conf/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml -v \$HOME/hdfs-conf/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml"
+
+          # CHOWN, not chmod. Run 32280604422 gave the host dirs mode 777 and
+          # the datanode still refused every volume:
+          #
+          #     WARN StorageLocationChecker: Exception checking
+          #     StorageLocation [DISK]file:/hadoop/dfs/data
+          #     EPERM: Operation not permitted
+          #       at NativeIO$POSIX.chmodImpl
+          #       at DiskChecker.mkdirsWithExistsAndPermissionCheck
+          #     Too many failed volumes - current valid volumes: 0
+          #
+          # The datanode chmods its data dir to `dfs.datanode.data.dir.perm`
+          # (0700) on startup. `sudo mkdir` leaves the dir owned by ROOT while
+          # the image runs as its own `hadoop` user, and chmod requires
+          # OWNERSHIP -- write permission is not enough. Mode 777 grants the
+          # wrong thing.
+          #
+          # The uid is read FROM THE IMAGE rather than hardcoded to 1000: it is
+          # a property of the image, and a wrong guess reproduces this exact
+          # failure one cluster later.
+          HUID=$(gcloud compute ssh "$MASTER" --quiet --command \
+            "docker run --rm --entrypoint id $HADOOP_IMAGE -u" 2>/dev/null | tr -dc '0-9')
+          [ -n "$HUID" ] || { echo "::error::could not read the hadoop uid from $HADOOP_IMAGE"; exit 1; }
+          echo "hadoop image runs as uid $HUID"
+
+          # Namenode: format, then run.
+          gcloud compute ssh "$MASTER" --quiet --command "
+            set -euo pipefail
+            sudo mkdir -p /mnt/disks/scratch/hdfs-nn && sudo chown -R $HUID:$HUID /mnt/disks/scratch/hdfs-nn
+            docker run --rm --network host $MOUNTS \
+              -v /mnt/disks/scratch/hdfs-nn:/hadoop/dfs/name \
+              $HADOOP_IMAGE hdfs namenode -format -force -nonInteractive
+            docker run -d --name hdfs-nn --network host --restart unless-stopped $MOUNTS \
+              -v /mnt/disks/scratch/hdfs-nn:/hadoop/dfs/name \
+              $HADOOP_IMAGE hdfs namenode
+          "
+
+          # A datanode on EVERY node, master included: its disk is as good as
+          # any other and the master is otherwise idle during the Splink arm.
+          for n in $NODE_NAMES; do
+            gcloud compute ssh "$n" --quiet --command "
+              set -euo pipefail
+              sudo mkdir -p /mnt/disks/scratch/hdfs-dn && sudo chown -R $HUID:$HUID /mnt/disks/scratch/hdfs-dn
+              docker run -d --name hdfs-dn --network host --restart unless-stopped $MOUNTS \
+                -v /mnt/disks/scratch/hdfs-dn:/hadoop/dfs/data \
+                $HADOOP_IMAGE hdfs datanode
+            " &
+          done
+          wait
+
+          # VERIFIED, not assumed. A namenode with zero live datanodes accepts
+          # a mkdir and then fails every write with UnreplicatedBlocks, minutes
+          # later, inside Splink -- which would read as a Splink failure.
+          echo "waiting for datanodes to register"
+          EXPECT=$(echo $NODE_NAMES | wc -w)
+          for i in $(seq 1 40); do
+            LIVE=$(gcloud compute ssh "$MASTER" --quiet --command \
+              "docker exec hdfs-nn hdfs dfsadmin -report 2>/dev/null | grep -c '^Name:' || true" 2>/dev/null | tr -dc '0-9') || true
+            echo "  attempt $i: ${LIVE:-0}/$EXPECT live datanodes"
+            [ "${LIVE:-0}" -ge "$EXPECT" ] && break
+            sleep 10
+          done
+          [ "${LIVE:-0}" -ge 1 ] || {
+            echo "::error::no HDFS datanode registered; Splink's lineage break would fail mid-run"
+            gcloud compute ssh "$MASTER" --quiet --command "docker logs --tail 40 hdfs-nn 2>&1; docker logs --tail 40 hdfs-dn 2>&1" || true
+            exit 1
+          }
+          echo "HDFS up with ${LIVE} live datanode(s)"
+
+          gcloud compute ssh "$MASTER" --quiet --command \
+            "docker exec hdfs-nn hdfs dfs -mkdir -p /splink-ckpt && docker exec hdfs-nn hdfs dfs -chmod 777 /splink-ckpt"
+          echo "HDFS_CKPT=hdfs://${MASTER_IP}:9000/splink-ckpt/run-${{ github.run_id }}" >> $GITHUB_ENV
+
+      - name: Run both harnesses ON the master VM
+        # On the master, not the runner: Splink's classic driver must be
+        # reachable BY the workers, and a runner behind NAT is not. This also
+        # keeps the two engines symmetric.
+        env:
+          # For `gh release download` of the JVM scorer jar below. The job's
+          # `permissions: contents: read` already covers reading a release
+          # asset, so this needs no new secret.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          MASTER="$CLUSTER-master"
+          # The FS harness needs the JVM scorer jar, and pip does not carry it:
+          #
+          #   goldenmatch.spark.jvm.JvmScorerUnavailable: JVM scorer jar not
+          #   found. ... The jar is built in CI rather than vendored, so a
+          #   source checkout will not have one until you build it.
+          #
+          # `spark_fs_train_scale.py` calls `install(spark, jar=find_jar())`
+          # unconditionally, so this is required rather than a fast path.
+          #
+          # Downloaded from the release rather than built here: the jar is a
+          # Rust-JNI + Scala build (`scripts/build_spark_jar.sh`), so building
+          # it in this lane would add a cargo and JDK toolchain to a job whose
+          # point is measuring a cluster, and would measure a DIFFERENT jar than
+          # the one that ships. `publish-goldenmatch-spark-jar.yml` already
+          # produces a tested artifact; use that.
+          #
+          # Checksum verified. A silently truncated download would surface as a
+          # confusing JVM error on the master, minutes and five VMs later.
+          JAR_TAG=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 60 \
+            --json tagName -q '.[].tagName' | grep '^goldenmatch-spark-v' | head -1)
+          [ -n "$JAR_TAG" ] || { echo "::error::no goldenmatch-spark-v* release found"; exit 1; }
+          echo "JVM scorer jar: $JAR_TAG"
+          gh release download "$JAR_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'goldenmatch-spark.jar*' --dir . --clobber
+          sha256sum -c goldenmatch-spark.jar.sha256 \
+            || { echo "::error::jar checksum mismatch"; exit 1; }
+
+          # The SHADED GCS connector, for SPLINK's lineage break to gs://.
+          # GoldenMatch never touches it: it has no iterative DAG to truncate.
+          #
+          # Shipped as a file rather than `spark.jars.packages` because Ivy
+          # cannot express a classifier, and the PLAIN artifact the coordinate
+          # resolves to is 155 KB of classes whose transitive deps did not
+          # resolve compatibly against this image -- run 32274795307 died on
+          # `NoClassDefFoundError: .../interceptors/LoggingInterceptor`. The
+          # `-shaded` jar is the self-contained 38 MB build.
+          GCS_VER=3.1.17
+          GCS_BASE="https://repo1.maven.org/maven2/com/google/cloud/bigdataoss/gcs-connector/${GCS_VER}"
+          curl -sSfL --retry 3 --retry-delay 5 -o gcs-connector-shaded.jar \
+            "${GCS_BASE}/gcs-connector-${GCS_VER}-shaded.jar"
+          # Checksummed for the same reason the scorer jar is: a truncated
+          # download resurfaces as a baffling JVM error minutes and five VMs
+          # later, not as a download failure.
+          echo "$(curl -sSfL --retry 3 "${GCS_BASE}/gcs-connector-${GCS_VER}-shaded.jar.sha1")  gcs-connector-shaded.jar" \
+            | sha1sum -c - || { echo "::error::gcs-connector jar checksum mismatch"; exit 1; }
+
+          # The helper list is DERIVED from what the harnesses actually import,
+          # not maintained by hand. Run 32286853831 died at session build with
+          #
+          #     FileNotFoundError: '/w/_spark_tuning.py'
+          #
+          # because a new shared module was added to the repo and not to this
+          # list -- the whole run lost, GoldenMatch's arm included, to a copy
+          # step. A hand-kept list of a growing set is the same bug waiting to
+          # recur; both harnesses name their helpers as string literals, so ask
+          # the source.
+          DEPS=$(grep -ho '"_[a-z_]*\.py"' \
+                   scripts/spark_fs_train_scale.py scripts/spark_splink_train_scale.py \
+                 | tr -d '"' | sort -u | sed 's|^|scripts/|')
+          echo "harness helpers: $(echo $DEPS | tr '\n' ' ')"
+          [ -n "$DEPS" ] || { echo "::error::could not derive the harness helper list"; exit 1; }
+          for f in $DEPS; do
+            [ -f "$f" ] || { echo "::error::harness imports $f but it does not exist"; exit 1; }
+          done
+
+          # Build the goldenmatch wheel FROM THIS CHECKOUT so the lane measures
+          # the tree under test rather than the last release. See the install
+          # line below for what this cost before.
+          python -m pip install --quiet build
+          python -m build --wheel --outdir wheelhouse packages/python/goldenmatch >/dev/null
+          WHEEL=$(ls wheelhouse/goldenmatch-*.whl | head -1)
+          [ -n "$WHEEL" ] || { echo "::error::no goldenmatch wheel was built"; exit 1; }
+          # Resolved HERE and interpolated as a plain name. Doing the lookup
+          # inside the ssh command needed a `$( )` nested in two layers of
+          # quoting, and run 32299878830 evaluated it on the wrong side of the
+          # boundary: pip ran on the runner and its output was executed as a
+          # command (`bash: line 13: Collecting: command not found`).
+          WHEEL_BASE=$(basename "$WHEEL")
+          echo "built $WHEEL_BASE"
+
+          gcloud compute scp --quiet \
+            scripts/spark_fs_train_scale.py scripts/spark_splink_train_scale.py \
+            $DEPS \
+            "$WHEEL" \
+            goldenmatch-spark.jar gcs-connector-shaded.jar \
+            "$MASTER:~/"
+
+          gcloud compute ssh "$MASTER" --quiet --command "
+            set -euo pipefail
+            docker run -d --name pyenv --network host -v \$HOME:/w -w /w \
+              -v /mnt/disks/scratch:/scratch \
+              -e SPARK_LOCAL_DIRS=/scratch \
+              python:3.12-slim sleep infinity
+            # The wheel built from THIS CHECKOUT, not PyPI.
+            #
+            # Run 32298929875 died with
+            #
+            #     TypeError: estimate_u_distributed() got an unexpected
+            #     keyword argument 'total_rows'
+            #
+            # because the harness is copied from the repo while the LIBRARY came
+            # from pip install goldenmatch[spark] -- the published 3.13.0,
+            # without the change being measured. This lane could therefore only
+            # ever measure ALREADY-RELEASED code, so any performance fix had to
+            # ship before it could be tested. Same family as the #688 stale-wheel
+            # footgun, except that one degraded silently and this one errored.
+            docker exec pyenv pip install --quiet '/w/$WHEEL_BASE[spark]' splink==4.0.16
+            docker exec pyenv python -c 'import goldenmatch, inspect; from goldenmatch.spark.em import estimate_u_distributed as f; print(\"[env] goldenmatch\", goldenmatch.__version__, \"total_rows:\", \"total_rows\" in inspect.signature(f).parameters)'
+
+            # A JVM, for SPLINK only. GoldenMatch does not need one here: it
+            # talks to the cluster over Spark CONNECT (sc://), which is a gRPC
+            # client. Splink drives a CLASSIC session, which launches a local
+            # JVM driver process -- and python:3.12-slim has no Java, so the
+            # first run that got this far died on:
+            #
+            #   PySparkRuntimeError: [JAVA_GATEWAY_EXITED] Java gateway process
+            #   exited before sending its port number.
+            #
+            # Java 17 (bookworm's default-jre-headless) rather than matching the
+            # cluster's 21: Spark 4.x requires 17 OR LATER, and driver/executor
+            # do not have to share a JDK major -- they have to share a SPARK
+            # version, which they do. 21 is only in bookworm-backports and the
+            # extra apt source buys nothing.
+            #
+            # VERIFIED right here rather than trusted. A silently failed apt
+            # would resurface as the same opaque JAVA_GATEWAY_EXITED on the
+            # master, five VMs and several minutes later.
+            docker exec pyenv sh -c \
+              'apt-get update -qq && apt-get install -y -qq --no-install-recommends default-jre-headless >/dev/null'
+            docker exec pyenv java -version
+          "
+
+          # DETACHED, not inside the ssh --command above. Run 32259409214 lost
+          # its SSH session 11 minutes into this exact call with the harness
+          # healthy and mid-pass, and took the run and five VMs with it.
+          # scripts/gce_detached.sh carries the mechanism and the log.
+          source scripts/gce_detached.sh
+          gce_detached "$MASTER" fs <<REMOTE
+          export GOLDENMATCH_SPARK_JAR=/w/goldenmatch-spark.jar
+          python spark_fs_train_scale.py \
+            --rows ${{ inputs.rows || '1000000' }} \
+            --shuffle-partitions ${{ inputs.shuffle_partitions || '-1' }} \
+            --remote sc://$MASTER_IP:15002 \
+            --spark-ui http://$MASTER_IP:4040 \
+            ${{ inputs.eval_quality && '--eval-quality' || '' }} \
+            ${{ inputs.attribute_score && '--attribute-score' || '' }} \
+            --out /w/spark-fs-train-scale.json
+          REMOTE
+
+      - name: Splink on the same cluster
+        if: inputs.splink_compare
+        # `continue-on-error`: Splink is the side expected to fail first at
+        # scale -- it shuffles ~20x the bytes (#2652) and re-scans pairs per EM
+        # iteration across ~940 stages. If it dies on disk or memory at 50M,
+        # that outcome is ITSELF the measurement, and losing GoldenMatch's
+        # completed numbers to a red step would waste the whole cluster spend.
+        #
+        # The failure is NOT swallowed: the summary step below prints
+        # `splink: MISSING` and the run is re-dispatched larger. Making it
+        # explicit there rather than auto-retrying in-workflow is deliberate --
+        # an automatic retry reprovisions a bigger paid cluster unattended.
+        continue-on-error: true
+        # Connect is stopped first: standalone Spark hands an application every
+        # free core unless `spark.cores.max` says otherwise, and the Connect
+        # server IS an application holding them all. Splink would queue forever.
+        # Learned the hard way on the single-host lane (#2630).
+        run: |
+          set -euo pipefail
+          MASTER="$CLUSTER-master"
+          gcloud compute ssh "$MASTER" --quiet --command "docker stop spark-connect"
+
+          # WAIT for the master to reclaim the cores Connect was holding.
+          #
+          # Run 32283966821 did not, and Splink built its session with
+          #
+          #     [splink] 2 executor(s) registered
+          #
+          # against GoldenMatch's 4 -- then died with
+          # `OutOfMemoryError: Java heap space` and `exited with code 52` at
+          # 50M. Splink ran the comparison on HALF the cluster's memory, and
+          # without this check that reads as "Splink cannot do 50M" when what
+          # was measured is "Splink got two executors".
+          #
+          # `docker stop` returns when the CONTAINER is gone, not when the
+          # standalone master has released the application's cores; the two are
+          # seconds to a minute apart, and the gap is invisible unless you look
+          # for it. At 1M it happened to close in time, which is why this only
+          # appeared at 50M -- a race that resolves itself on small runs is the
+          # worst kind, because it looks like a size-dependent engine limit.
+          #
+          # Polled ON THE MASTER: the standalone UI is not reachable from the
+          # runner, only from inside the VPC.
+          echo "waiting for the master to release Connect's cores"
+          for i in $(seq 1 30); do
+            USED=$(gcloud compute ssh "$MASTER" --quiet --command \
+              "curl -s http://localhost:8080/json/ | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get(\"coresused\",-1))'" 2>/dev/null | tr -dc '0-9-')
+            echo "  attempt $i: coresused=${USED:-unknown}"
+            [ "${USED:-1}" = "0" ] && break
+            sleep 10
+          done
+          # Not fatal on its own: the harness reports the executor count it
+          # actually saw, and the summary carries it, so a short-changed run is
+          # legible rather than silent. Failing here would throw away a
+          # GoldenMatch arm that already succeeded.
+          [ "${USED:-1}" = "0" ] || echo "::warning::master still reports coresused=${USED:-unknown}; Splink may start under-provisioned"
+
+          # DETACHED, and this arm needs it more than the FS one. The step is
+          # `continue-on-error: true`, so a dropped SSH here does NOT fail the
+          # job -- it prints `splink: MISSING` and reads as "Splink could not do
+          # 50M". Publishing a transport failure as an engine limit is the exact
+          # unfairness this comparison exists to avoid.
+          # Which shared filesystem Splink breaks lineage onto. `none` leaves
+          # the flag off entirely, which makes the harness fall back to
+          # `persist` -- correct output, keeps lineage, OOMs at scale.
+          case "${{ inputs.splink_checkpoint_fs || 'hdfs' }}" in
+            hdfs) CKPT="${HDFS_CKPT:?HDFS was selected but the HDFS step did not export HDFS_CKPT}" ;;
+            gcs)  CKPT="${{ inputs.splink_checkpoint_dir || 'gs://goldenmatch-spark-bench-us-east1' }}/run-${{ github.run_id }}" ;;
+            none) CKPT="" ;;
+          esac
+          echo "splink lineage break -> ${CKPT:-persist (no shared FS)}"
+
+          source scripts/gce_detached.sh
+          gce_detached "$MASTER" splink <<REMOTE
+          python spark_splink_train_scale.py \
+            --rows ${{ inputs.rows || '1000000' }} \
+            --shuffle-partitions ${{ inputs.shuffle_partitions || '-1' }} \
+            --executor-memory $EXEC_MEM \
+            --executor-cores $EXEC_CORES \
+            --expect-executors ${{ inputs.workers || '4' }} \
+            --master spark://$MASTER_IP:7077 \
+            --driver-host $MASTER_IP \
+            --spark-ui http://$MASTER_IP:4040 \
+            ${CKPT:+--checkpoint-dir $CKPT} \
+            ${{ inputs.eval_quality && '--eval-quality' || '' }} \
+            --out /w/splink-train-scale.json
+          REMOTE
+
+      - name: Pull the artifacts back
+        if: always()
+        run: |
+          set -euo pipefail
+          for f in spark-fs-train-scale.json splink-train-scale.json; do
+            gcloud compute scp --quiet \
+              "$CLUSTER-master:~/$f" "./$f" || echo "no $f (arm skipped or failed)"
+          done
+          ls -la ./*.json || true
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        if: always()
+        with:
+          name: spark-gce-multinode
+          # The two results BY NAME. This globbed `*.json` at the repo root,
+          # which always matches `package.json`, `turbo.json` and
+          # `pyrightconfig.json` -- so on run 32259409214 the upload "succeeded"
+          # carrying three repo files and zero results, and `if-no-files-found`
+          # could never fire because the glob is never empty. "Artifact present"
+          # has to mean "results present" or it is not a signal.
+          #
+          # Named rather than moved to a results/ dir on purpose: the Summary
+          # step below reads both files from the repo root in seven places, and
+          # relocating them would make it print MISSING for both arms. That is
+          # the same class of silent loss this is fixing.
+          path: |
+            spark-fs-train-scale.json
+            splink-train-scale.json
+          # `warn`, not `error`: this step is `if: always()`, so a run that died
+          # before either harness produced anything arrives here legitimately
+          # empty and the real failure is already red upstream. The warning is
+          # meaningful now that nothing else can satisfy the path.
+          if-no-files-found: warn
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo '## Spark FS on a REAL multi-node cluster'
+            echo ''
+            echo "${{ inputs.workers || '4' }} worker VM(s) + 1 master, \`${{ inputs.machine_type || 'n2-standard-16' }}\`, ${{ inputs.disk_gb || '750' }}GB local NVMe scratch/node, ${{ inputs.rows || '1000000' }} rows, zone \`${ZONE:-unknown}\` (requested \`${{ inputs.zone || 'us-central1-a' }}\`)."
+            echo ''
+            echo 'Every shuffle byte here crosses a real network, which the single-host lane cannot test.'
+            echo ''
+            # PER-ARM, not all-or-nothing. The previous version printed the
+            # table only when BOTH artifacts existed, so the most likely
+            # outcome of a large run -- GoldenMatch completes, Splink dies on
+            # disk or memory -- rendered NO numbers at all, and the completed
+            # arm's measurements were lost to a formatting branch. Splink is
+            # `continue-on-error` precisely so its failure does not cost the
+            # cluster spend; the summary has to honour that.
+            echo '### Wall and shuffle'
+            echo ''
+            echo '| engine | train wall | shuffle write | shuffle read | stages | tasks |'
+            echo '|---|---:|---:|---:|---:|---:|'
+            if [ -f spark-fs-train-scale.json ]; then
+              jq -r '"| goldenmatch | \(.stages.u_seconds + .stages.counts_seconds + .stages.train_seconds)s | \(.shuffle.shuffle_write_bytes // "n/a") | \(.shuffle.shuffle_read_bytes // "n/a") | \(.shuffle.n_stages // "n/a") | \(.shuffle.num_tasks // "n/a") |"' spark-fs-train-scale.json
+            else
+              echo '| goldenmatch | **MISSING** | | | | |'
+            fi
+            if [ -f splink-train-scale.json ]; then
+              jq -r '"| splink | \(.train_total_seconds)s | \(.shuffle.shuffle_write_bytes // "n/a") | \(.shuffle.shuffle_read_bytes // "n/a") | \(.shuffle.n_stages // "n/a") | \(.shuffle.num_tasks // "n/a") |"' splink-train-scale.json
+            elif [ "${{ inputs.splink_compare }}" = "true" ]; then
+              echo '| splink | **MISSING** | | | | |'
+            fi
+            echo ''
+
+            # Accuracy: the half a speed table cannot answer. `quality_score_groups`
+            # is printed because it is the number that says whether the bounded
+            # collect held -- an unbounded group count is a finding, not noise.
+            echo '### Accuracy'
+            echo ''
+            echo '| engine | avg precision | best F1 | @threshold | base rate | pairs | score groups |'
+            echo '|---|---:|---:|---:|---:|---:|---:|'
+            for pair in "goldenmatch:spark-fs-train-scale.json" "splink:splink-train-scale.json"; do
+              nm="${pair%%:*}"; fp="${pair#*:}"
+              if [ -f "$fp" ]; then
+                jq -r --arg nm "$nm" '"| \($nm) | \(.quality.average_precision // "n/a") | \(.quality.best_f1 // "n/a") | \(.quality.best_f1_threshold // "n/a") | \(.quality.base_rate // "n/a") | \(.quality.n_pairs // "n/a") | \(.quality_score_groups // "n/a") |"' "$fp"
+              fi
+            done
+            echo ''
+
+            # Where the time actually went. A slower engine is CPU, GC, spill or
+            # skew, and the shuffle totals alone cannot tell those apart.
+            echo '### CPU, GC, spill'
+            echo ''
+            echo '| engine | executor run | executor CPU | JVM GC | mem spill | disk spill | peak exec mem |'
+            echo '|---|---:|---:|---:|---:|---:|---:|'
+            for pair in "goldenmatch:spark-fs-train-scale.json" "splink:splink-train-scale.json"; do
+              nm="${pair%%:*}"; fp="${pair#*:}"
+              if [ -f "$fp" ]; then
+                jq -r --arg nm "$nm" '"| \($nm) | \(.shuffle.executor_run_time_ms // "n/a")ms | \(.shuffle.executor_cpu_time_ns // "n/a")ns | \(.shuffle.jvm_gc_time_ms // "n/a")ms | \(.shuffle.memory_spill_bytes // "n/a") | \(.shuffle.disk_spill_bytes // "n/a") | \(.shuffle.peak_execution_memory_max // "n/a") |"' "$fp"
+              fi
+            done
+            echo ''
+            echo 'An `n/a` above means Spark did not report the field, NOT that the value was zero.'
+            echo ''
+
+            # Executor health. At scale the likely failure is ONE node, and a
+            # cluster-wide total hides it -- so a death is surfaced, loudly.
+            echo '### Executor health'
+            echo ''
+            echo '| engine | executors | died | failed tasks | max disk used | max JVM heap |'
+            echo '|---|---:|---|---:|---:|---:|'
+            for pair in "goldenmatch:spark-fs-train-scale.json" "splink:splink-train-scale.json"; do
+              nm="${pair%%:*}"; fp="${pair#*:}"
+              if [ -f "$fp" ]; then
+                jq -r --arg nm "$nm" '.shuffle.executor_metrics as $e | "| \($nm) | \($e.n_executors // "n/a") | \(if $e.any_executor_died then "**YES** \($e.dead_executor_ids|tostring)" else "no" end) | \($e.failed_tasks_total // "n/a") | \($e.disk_used_max // "n/a") | \($e.peak_jvm_heap_max // "n/a") |"' "$fp" 2>/dev/null || echo "| $nm | (executor metrics unavailable) | | | | |"
+              fi
+            done
+            echo ''
+
+            if [ ! -f splink-train-scale.json ] && [ "${{ inputs.splink_compare }}" = "true" ]; then
+              echo '> **Splink produced no artifact.** That is a RESULT, not a lost run --'
+              echo '> it is the side expected to fail first at scale (~20x the bytes, ~940'
+              echo '> stages, re-scanning pairs per EM iteration). GoldenMatch numbers above'
+              echo '> stand. Re-dispatch larger (`workers`, `disk_gb`) to get the comparison.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Tear down
+        # `always()`, because a failed bench that leaves 3 x n2-standard-16
+        # running is a bill, not a debugging aid. `keep_cluster` is the explicit
+        # opt-out and says in its own description that YOU must delete them.
+        if: always() && !inputs.keep_cluster
+        run: |
+          set -euo pipefail
+          # `${NODE_NAMES:-}`, because this step is `always()` and a job that
+          # fails BEFORE provisioning never sets it. Under `set -u` the bare
+          # expansion aborts the step on line 1, which also skipped the GCS
+          # cleanup below -- teardown failing open is the one thing it must
+          # never do. Surfaced by run 32276315793, where the Infisical step
+          # failed early for the first time and teardown died with
+          # `NODE_NAMES: unbound variable`.
+          if [ -z "${NODE_NAMES:-}" ]; then
+            echo "no instances were provisioned; nothing to delete"
+          else
+            gcloud compute instances delete $NODE_NAMES --quiet --zone="${ZONE:-}" || true
+            echo "deleted: $NODE_NAMES"
+          fi
+
+          # Splink's lineage-break parquet for THIS run. The bucket carries a
+          # 1-day lifecycle rule as a backstop, but a 50M run writes real volume
+          # and there is no reason to pay a day of storage for scratch nobody
+          # will read. Scoped to the run's own prefix so a concurrent dispatch
+          # is untouched, and `|| true` because losing the bench to a storage
+          # cleanup would be absurd.
+          CKPT='${{ inputs.splink_checkpoint_dir || 'gs://goldenmatch-spark-bench-us-east1' }}/run-${{ github.run_id }}'
+          gcloud storage rm -r "$CKPT" --quiet 2>/dev/null || true
+          echo "cleared: $CKPT"
+
+      - name: Leaked-instance warning
+        if: always() && inputs.keep_cluster
+        run: |
+          echo "::warning::keep_cluster was set. These VMs are STILL BILLING:"
+          echo "  $NODE_NAMES"
+          echo "Delete them with:"
+          echo "  gcloud compute instances delete $NODE_NAMES --zone=$ZONE"

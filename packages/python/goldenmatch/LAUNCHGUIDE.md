@@ -51,7 +51,7 @@ Record deduplication, Entity resolution, Customer matching, Data merging, Golden
 entity-resolution, deduplication, record-matching, golden-record, data-quality, pprl, privacy, bloom-filters, fuzzy-matching, master-data, csv, zero-config, mcp, ai-tools, record-linkage
 
 ## Documentation URL
-https://docs.bensevern.dev/
+https://docs.bensevern.dev/docs/
 
 ## Health Check URL
 https://goldenmatch-mcp-production.up.railway.app/mcp/

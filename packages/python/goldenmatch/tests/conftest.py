@@ -129,35 +129,20 @@ def _disable_autoconfig_memory(monkeypatch):
         pass
 
 
-@pytest.fixture(autouse=True)
-def _ensure_refdata_plugins_registered():
-    """Re-register refdata plugins before every test.
-
-    Per the xdist gotcha in CLAUDE.md: workers don't share state, and
-    ``test_plugins.py``'s ``reset_registry`` fixture wipes the singleton
-    within a worker. The ``import goldenmatch.refdata`` side-effect
-    registration only fires once per worker process, so refdata tests
-    scheduled after a plugin-test reset would see an empty registry.
-
-    Each ``register_*`` function is idempotent. Skips silently if a
-    refdata submodule isn't importable (slim installs).
-    """
-    try:
-        import goldenmatch.refdata  # noqa: F401  triggers registration
-        from goldenmatch.refdata.scorer import register_scorers
-        register_scorers()
-    except ImportError:
-        return
-    for module_path in (
-        "goldenmatch.refdata.business",
-        "goldenmatch.refdata.addresses",
-        "goldenmatch.refdata.industries",
-    ):
-        try:
-            mod = __import__(module_path, fromlist=["register_transforms"])
-            mod.register_transforms()
-        except (ImportError, AttributeError):
-            continue
+# The autouse `_ensure_refdata_plugins_registered` fixture that used to live
+# here is gone: `PluginRegistry.reset()` now replays the bundled registrations
+# onto the fresh singleton (`PluginRegistry.add_bootstrap`, wired in
+# `goldenmatch/refdata/__init__.py`), so the library no longer loses its own
+# plugins to a reset and the test harness has nothing to paper over.
+#
+# Keeping it would have been worse than redundant. It re-registered a
+# HAND-MAINTAINED list -- business, addresses, industries, scorer -- that had
+# drifted: `business_aliases` and `core.acronym` were never added. So
+# `refdata_business_canonical` alone stayed unregistered after any resetting
+# test, and `test_business_aliases.py::test_alias_transforms_registered` failed
+# if and only if xdist put a resetting test ahead of it in the same worker.
+# That is the "shard-isolation-fragile" flake class the CI --deselect list
+# documents; a fix-list that must be kept in sync by hand is the mechanism.
 
 
 @pytest.fixture
@@ -220,3 +205,56 @@ def sample_parquet(tmp_path) -> Path:
     })
     pq.write_table(table, path)
     return path
+
+
+@pytest.fixture(scope="module")
+def spark():
+    """A Spark Connect session, from whichever server the env selects.
+
+    Backend-agnostic ON PURPOSE (P0, spec
+    ``2026-08-10-spark-native-execution-design``). ``GOLDENMATCH_SPARK_REMOTE``:
+
+      unset             -> spawn a local pysail ``SparkConnectServer`` (prior behaviour)
+      ``"local[*]"``    -> Apache Spark's own local Connect server (pyspark >= 4)
+      ``"sc://host:p"`` -> an already-running Connect endpoint
+
+    Nine test files each carried a copy of this hardcoding
+    ``pysail.spark.SparkConnectServer``. That is *why* the tier had never been
+    run against real Spark: the tests could not express it. Every import is
+    inside the body, so a suite that never requests this fixture pays nothing.
+    """
+    import os
+
+    from pyspark.sql import SparkSession
+
+    remote = os.environ.get("GOLDENMATCH_SPARK_REMOTE")
+
+    if not remote:
+        pytest.importorskip("pysail")
+        from pysail.spark import SparkConnectServer
+
+        server = SparkConnectServer()
+        server.start()
+        _, port = server.listening_address
+        sess = SparkSession.builder.remote(f"sc://localhost:{port}").getOrCreate()
+        yield sess
+        sess.stop()
+        server.stop()
+        return
+
+    # Real Spark owns its own server lifecycle; nothing to stop but the session.
+    sess = SparkSession.builder.remote(remote).getOrCreate()
+
+    # P1: real Spark FORKS a Python worker with its own environment, so the
+    # client's site-packages are not on it. Ship a packed venv when one is
+    # provided. Unset -> unchanged (the pysail path never needs this: its worker
+    # shares the client interpreter, which is exactly why P0's failure class was
+    # invisible until a real backend ran).
+    archive = os.environ.get("GOLDENMATCH_SPARK_PYENV")
+    if archive:
+        from goldenmatch.spark.deps import ship_python_environment
+
+        ship_python_environment(sess, archive)
+
+    yield sess
+    sess.stop()

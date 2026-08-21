@@ -1511,7 +1511,17 @@ pub fn score_field_matrix(
 /// Elementwise pairwise scorer: `out[i] = score(a[i], b[i])` for two equal-length
 /// Arrow string arrays. The Sail-tier (Spark Connect) vectorized Arrow UDF target --
 /// one FFI crossing per batch, no per-element Python loop, no N*N matrix. Returns a
-/// 1-D float32 numpy array in [0, 1]. Nulls are treated as "" (arrow_to_strings
+/// 1-D **float64** numpy array in [0, 1].
+///
+/// f64 ON PURPOSE, unlike `score_field_matrix`'s f32 (spec
+/// 2026-08-10-spark-native-execution-design section 6). `score_one` already
+/// computes in f64; this used to narrow to f32 at the boundary, and that cast
+/// alone changed MATCH DECISIONS: Jaro-Winkler emits exact rationals that land on
+/// round thresholds, so a pure score of exactly 0.95 became 0.949999988 and
+/// `>= 0.95` flipped. Measured on ordinary surname pairs (Jonathan/Jonothan,
+/// Anderson/Andersen), not a contrived case. A tolerance is acceptable for a
+/// score you report and not for one you THRESHOLD. The cost is 2x FFI payload;
+/// the benefit is decision parity with the pure floor. Nulls are treated as "" (arrow_to_strings
 /// maps null -> empty), matching the pure-Python rapidfuzz floor. scorer_id mirrors
 /// score_field_matrix ids 0..=3 (jaro_winkler / levenshtein / token_sort / exact);
 /// soundex (4) is excluded -- pairwise has no precompute amortization.
@@ -1522,7 +1532,7 @@ pub fn score_field_pairwise(
     values_a: PyArrowType<ArrayData>,
     values_b: PyArrowType<ArrayData>,
     scorer_id: u8,
-) -> PyResult<Py<PyArray1<f32>>> {
+) -> PyResult<Py<PyArray1<f64>>> {
     let a = arrow_to_strings(values_a.0)?;
     let b = arrow_to_strings(values_b.0)?;
     if a.len() != b.len() {
@@ -1540,10 +1550,11 @@ pub fn score_field_pairwise(
     }
     let n = a.len();
     // Score under detach, row-parallel (each pair independent).
-    let buf: Vec<f32> = py.detach(|| {
-        let mut out = vec![0.0f32; n];
+    let buf: Vec<f64> = py.detach(|| {
+        let mut out = vec![0.0f64; n];
         out.par_iter_mut().enumerate().for_each(|(i, slot)| {
-            *slot = score_one(scorer_id, &a[i], &b[i]) as f32;
+            // No narrowing cast: score_one is f64 and stays f64 all the way out.
+            *slot = score_one(scorer_id, &a[i], &b[i]);
         });
         out
     });

@@ -24,3 +24,28 @@ types:
     value_signals:
       max_unique: 100
     suppress: ["uniqueness"]
+
+# Parties an automotive dataset refers to. `vehicle` is deliberately declared:
+# it is a field TYPE here, and a role declaration is what lets `vehicle_*`
+# columns group as the asset population they describe.
+roles:
+  vehicle:
+    kind: asset
+    name_hints: ["vehicle", "car", "auto", "unit"]
+    typical_types: ["vehicle", "identifier", "odometer", "engine"]
+
+  owner:
+    kind: person
+    name_hints: ["owner", "registrant", "lessee"]
+
+  driver:
+    kind: person
+    name_hints: ["driver", "operator"]
+
+  dealer:
+    kind: organization
+    name_hints: ["dealer", "dealership"]
+
+  manufacturer:
+    kind: organization
+    name_hints: ["manufacturer", "oem", "make"]

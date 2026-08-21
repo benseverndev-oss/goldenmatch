@@ -1,9 +1,9 @@
 {
   "datasets": {
     "anchor_person_match": {
-      "baseline_f1": 0.989556,
+      "baseline_f1": 1.0,
       "convergence_final_f1": 1.0,
-      "convergence_steps": 1,
+      "convergence_steps": 0,
       "error": null,
       "gt_pairs": 379,
       "kind": "anchor",
@@ -13,7 +13,7 @@
       "rank_corr": null,
       "rows": 706,
       "suggested_order_lifts": [
-        0.010444
+        0.0
       ],
       "suggester_prec": 1.0
     },
@@ -42,19 +42,35 @@
       "error": null,
       "gt_pairs": 0,
       "kind": "anchor",
-      "n_suggestions": 1,
+      "n_suggestions": 2,
       "name": "anchor_sparse_zip",
       "native_available": true,
       "rank_corr": null,
       "rows": 20000,
       "suggested_order_lifts": [
+        null,
         null
       ],
       "suggester_prec": 1.0
     },
+    "historical_50k": {
+      "baseline_f1": 0.812209,
+      "convergence_final_f1": 0.812209,
+      "convergence_steps": 0,
+      "error": null,
+      "gt_pairs": 303961,
+      "kind": "real",
+      "n_suggestions": 0,
+      "name": "historical_50k",
+      "native_available": true,
+      "rank_corr": null,
+      "rows": 50578,
+      "suggested_order_lifts": [],
+      "suggester_prec": 1.0
+    },
     "ncvr_synthetic": {
-      "baseline_f1": 0.982804,
-      "convergence_final_f1": 0.982804,
+      "baseline_f1": 0.984677,
+      "convergence_final_f1": 0.984677,
       "convergence_steps": 0,
       "error": null,
       "gt_pairs": 2500,
@@ -68,18 +84,20 @@
       "suggester_prec": 1.0
     },
     "synthetic": {
-      "baseline_f1": 0.988662,
-      "convergence_final_f1": 0.988662,
+      "baseline_f1": 1.0,
+      "convergence_final_f1": 1.0,
       "convergence_steps": 0,
       "error": null,
       "gt_pairs": 218,
       "kind": "real",
-      "n_suggestions": 0,
+      "n_suggestions": 1,
       "name": "synthetic",
       "native_available": true,
       "rank_corr": null,
       "rows": 373,
-      "suggested_order_lifts": [],
+      "suggested_order_lifts": [
+        0.0
+      ],
       "suggester_prec": 1.0
     }
   },
@@ -88,11 +106,16 @@
       "anchor_person_match",
       "anchor_shared_email",
       "anchor_sparse_zip",
+      "dblp_acm",
+      "historical_50k",
       "ncvr_synthetic",
       "synthetic"
     ],
-    "datasets_skipped": {},
-    "git_sha": "db0c761cdc69c3bc60a07608ec7f974e65cce531",
-    "native_version": "0.1.5"
+    "datasets_skipped": {
+      "febrl3": "absent",
+      "ncvr_real": "absent"
+    },
+    "git_sha": "1ab9fb43eea8769d5436c8d3fdea9be65c2df0a3",
+    "native_version": "0.1.20"
   }
 }

@@ -183,7 +183,11 @@ def run_preview(
 
     # The pipeline returns the full scored-pair stream (SP3); read it directly
     # instead of reconstructing from cluster pair_scores.
-    scored_pairs: list[tuple[int, int, float]] = result.get("scored_pairs") or []
+    # #2417: read via the helper -- on the B2c FS path the pipeline leaves
+    # `scored_pairs` None and carries the Arrow table, so a bare `.get` is
+    # silently empty.
+    from goldenmatch.core.pairs import materialize_scored_pairs
+    scored_pairs: list[tuple[int, int, float]] = materialize_scored_pairs(result)
 
     # Re-attach __row_id__ so build_lineage can resolve pair indices. The pipeline
     # adds __row_id__ on its working copy; reconstruct the same column here.

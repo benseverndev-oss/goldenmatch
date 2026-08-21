@@ -4,6 +4,11 @@ Produces ``ctx.artifacts['inferred_schema']`` (a goldencheck_types.InferredSchem
 or None when InferMap is skipped). Consumes nothing — must run before any
 other stage that wants typed columns.
 
+The schema carries two axes: ``fields`` (what each column *is*) and ``layers``
+(which *party* the frame describes — see ``infermap.detect_identity_layers``).
+Layer detection is name-only and unconditional; it never perturbs the mapping
+or domain-detection outputs.
+
 Configuration via ``ctx.stage_config``:
     domain: str | None    Force a specific domain pack name.
     schema: InferredSchema | None    User-provided schema; skip InferMap.
@@ -133,11 +138,24 @@ def infer_schema_stage(ctx: PipeContext) -> StageResult:
     target = infermap.DomainPackTarget(pack)
     map_result = infermap.map(ctx.df, target, soft=True)
     inferred = _result_to_inferred_schema(map_result, domain)
+
+    # Identity layers: the *who is in this table* axis, detected over the same
+    # frame with the domain we just resolved. Name-only, so it costs what
+    # detect_domain costs -- cheap enough to be unconditional, which is what
+    # keeps it zero-config for downstream consumers (goldenmatch segments).
+    layer_result = infermap.detect_identity_layers(ctx.df, domain=domain)
     # Confidence reflects detection quality (was always min() of mapping
     # confidences before, regardless of whether detection was confident).
     # Replace because InferredSchema is frozen.
     from dataclasses import replace
-    inferred = replace(inferred, confidence=detect_score)
+    inferred = replace(
+        inferred, confidence=detect_score, layers=list(layer_result.layers)
+    )
     ctx.artifacts["inferred_schema"] = inferred
+    detect_evidence = {
+        **detect_evidence,
+        "layer_roles": list(layer_result.roles),
+        "layer_unassigned": list(layer_result.unassigned),
+    }
     ctx.artifacts.setdefault("infer_schema_evidence", detect_evidence)
     return StageResult(status=StageStatus.SUCCESS)

@@ -5,11 +5,11 @@
 
 **Find duplicate records in 30 seconds. No rules to write, no models to train.**
 
-*Zero-config entity resolution for Python & TypeScript — with a self-verifying auto-config that tells you when it's unsure.*
+*Zero-config entity resolution for Python & TypeScript: with a self-verifying auto-config that tells you when it's unsure.*
 
-**Scales from a CSV on your laptop to 100M+ rows on a Ray cluster — verified: 100,000,000 records deduped recall-complete (correct across any partitioning) in 9.2 min, with a 0.36 GB driver footprint.** ([how →](#scaling-to-100m))
+**Scales from a CSV on your laptop to 100M+ rows on a Ray cluster, verified: 100,000,000 records deduped recall-complete (correct across any partitioning) in 9.2 min, with a 0.36 GB driver footprint.** ([how →](#scaling-to-100m))
 
-**The resolution stage for knowledge graphs** — ER is the stage GraphRAG does *worst*. [`goldenmatch-kg`](https://github.com/benseverndev-oss/goldenmatch/blob/main/packages/python/goldenmatch-kg/README.md) plugs GoldenMatch into neo4j-graphrag / LlamaIndex / Graphiti; [`goldengraph`](https://github.com/benseverndev-oss/goldenmatch/blob/main/packages/python/goldengraph/README.md) builds a knowledge graph from text with that resolution at its core. Both in early access.
+**The resolution stage for knowledge graphs.** ER is the stage GraphRAG does *worst*. [`goldenmatch-kg`](https://github.com/benseverndev-oss/goldenmatch/blob/main/packages/python/goldenmatch-kg/README.md) plugs GoldenMatch into neo4j-graphrag / LlamaIndex / Graphiti; [`goldengraph`](https://github.com/benseverndev-oss/goldenmatch/blob/main/packages/python/goldengraph/README.md) builds a knowledge graph from text with that resolution at its core. Both in early access.
 
 <br>
 
@@ -33,13 +33,13 @@
 [![GitHub stars](https://img.shields.io/github/stars/benseverndev-oss/goldenmatch?style=flat&color=d4a017&logo=github)](https://github.com/benseverndev-oss/goldenmatch/stargazers)
 
 <!-- Ecosystem -->
-[![Docs](https://img.shields.io/badge/docs-docs.bensevern.dev-d4a017)](https://docs.bensevern.dev/)
+[![Docs](https://img.shields.io/badge/docs-docs.bensevern.dev-d4a017)](https://docs.bensevern.dev/docs/)
 [![Smithery MCP](https://img.shields.io/badge/MCP-smithery-6e40c9)](https://smithery.ai/servers/benzsevern/goldenmatch)
 [![MCP Registry](https://img.shields.io/badge/MCP%20Registry-io.github.benzsevern%2Fgoldenmatch-0ea5e9)](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.benseverndev-oss/goldenmatch)
 
 </div>
 
-[![GoldenMatch web workbench — pair drilldown with NL prose](docs/screenshots/web/web-inspector.png)](#web-ui)
+[![GoldenMatch web workbench: pair drilldown with NL prose](docs/screenshots/web/web-inspector.png)](#web-ui)
 
 <p align="center"><sub><em>Pair drilldown in the web workbench: cluster members, field-level diff, and a one-line NL explanation per pair. <code>pip install goldenmatch[web]</code> then <code>goldenmatch serve-ui &lt;project&gt;</code>. <a href="#web-ui">More screenshots →</a></em></sub></p>
 
@@ -52,33 +52,32 @@ npm install goldenmatch
 ```
 
 > **Two packages, independent versions.** PyPI `goldenmatch` (2.x) and npm `goldenmatch`
-> (1.x) are the same toolkit on **separate semver lines** — not lockstep. The npm package
+> (1.x) are the same toolkit on **separate semver lines**: not lockstep. The npm package
 > is an edge-safe subset (no Ray/GPU distributed engine, no web UI); everything else is at
 > core parity. Version map + rationale: [`docs/versioning-policy.md`](docs/versioning-policy.md).
 
-<!-- README-callouts:start  (auto-synced from CHANGELOG.md by scripts/sync_readme_callouts.py — edit the CHANGELOG, not this block) -->
-> **v3.5.0** — **New `date` scorer for date fields (#1858).** `jaro_winkler` scores unrelated
-ISO birthdays 0.80+ (the fixed `YYYY-MM-DD` shape + shared digit alphabet
-dominate), so it can't tell a typo from a different person. The `date` scorer
-compares dates by Damerau-Levenshtein over the canonical digits — a typo scores
-0.90, an unrelated date 0.00 — with a `levenshtein` fallback for non-ISO input.
-Cross-surface (Python, native kernel, TypeScript), and a preflight check warns
-when a name-oriented scorer sits on a date field.
+<!-- README-callouts:start  (auto-synced from CHANGELOG.md by scripts/sync_readme_callouts.py; edit the CHANGELOG, not this block) -->
+> **v3.13.0: Fellegi-Sunter training runs distributed on Spark.** The E-step reads only the
+comparison vector, so identical vectors collapse to one counted row and the whole
+step becomes a Spark `GROUP BY` over agreement patterns -- the cluster counts, the
+driver only fits. Training cost tracks DISTINCT vectors (bounded by
+`prod(levels + 1)`), not pairs: 1M -> 5M rows grew candidate pairs 5.00x and the
+distributed counting stage 5.25x, while distinct patterns grew 3.0% (433 -> 446)
+and driver-side EM stayed at 0.01s. Runs on jar-only executors via
+`goldenmatch-spark`, off the same Rust kernel every other surface uses.
 >
-> **v3.4.0** — **Embeddings are first-class on Fellegi-Sunter matchkeys.** `embedding` and
-`record_embedding` field scorers now train (EM) and score end-to-end on the
-probabilistic path via the vectorized matrix — previously they raised
-`Unknown scorer` on both training and scoring. They are matrix-only, so a
-matchkey carrying one always runs vectorized, and the TUI now routes FS through
-the same native/vectorized selector.
+> **v3.12.0: Semantic-model discovery reaches warehouse scale.** Model derivation now runs
+off `information_schema` instead of a sampled frame, plus catalog reconciliation
+and a real-LLM namer validation harness -- so a warehouse's existing model can be
+discovered, reconciled against what is really there, and named without hand
+curation.
 >
-> **v3.3.0** — **3.3.0 — negative evidence on Fellegi-Sunter matchkeys.** `negative_evidence`
-now works on `type: probabilistic` matchkeys as EM-learned `__ne__` dimensions
-(no labels needed; `penalty_bits` as a fixed override), and the Splink
-migration upgrade pass gains a **fan-out lever** — a risk-gated NE suggestion
-plus cluster-guard tuning from your reference clusters. `goldenmatch-native`
-0.1.15 scores NE in the Rust kernels (`FS_SUPPORTS_NE`; older wheels keep the
-pure-Python fallback automatically).
+> **v3.11.0: Customer 360 serving surface, and a fused FS kernel that covers the
+reference-data name scorers.** `customer_360` composes the golden record,
+per-field provenance, linked source records, the event timeline and the
+relationship neighborhood into one read, with semantic-layer drill-through; the
+fused Fellegi-Sunter kernel now covers the reference-data name scorers and an
+in-RAM sequential Arrow-native batch scorer with end-WCC.
 <!-- README-callouts:end -->
 
 ---
@@ -87,27 +86,27 @@ pure-Python fallback automatically).
 
 GoldenMatch's core workflow is a loop, not a one-shot:
 
-1. **Zero-config first pass** — `dedupe_df(df)` runs with no rules and no training data. Auto-config picks a defensible config and you get good results immediately.
-2. **You get the config it chose** — the chosen config comes back on `result.config`: inspectable, diffable, versionable. Never a black box.
-3. **The healer suggests tweaks** — `review_config(df, config)` reviews the results against the config and emits ranked, explainable, self-verified edits. Each suggestion is kept only if it doesn't worsen an unsupervised health proxy, so a tweak never makes results worse.
-4. **You apply the tweaks** — `apply_suggestion` turns a suggestion into an improved config.
-5. **Results improve. Repeat** — re-run and loop until the healer goes quiet.
+1. **Zero-config first pass.** `dedupe_df(df)` runs with no rules and no training data. Auto-config picks a defensible config and you get good results immediately.
+2. **You get the config it chose.** The chosen config comes back on `result.config`: inspectable, diffable, versionable. Never a black box.
+3. **The healer suggests tweaks.** `review_config(df, config)` reviews the results against the config and emits ranked, explainable, self-verified edits. Each suggestion is kept only if it doesn't worsen an unsupervised health proxy, so a tweak never makes results worse.
+4. **You apply the tweaks.** `apply_suggestion` turns a suggestion into an improved config.
+5. **Results improve. Repeat.** Re-run and loop until the healer goes quiet.
 
 Zero-config gets you most of the way in one pass; the healing loop closes the gap to an expert-tuned config without you having to be the expert.
 
-> **Status:** the healer is opt-in via the Python API (`from goldenmatch.core.suggest import review_config`) and needs `goldenmatch[native]`. It is not yet wired into the default `dedupe_df` pipeline; CLI/MCP surfaces are in progress. Full details: [config-suggestions](https://docs.bensevern.dev/goldenmatch/config-suggestions).
+> **Status:** the healer is opt-in via the Python API (`from goldenmatch.core.suggest import review_config`) and needs `goldenmatch[native]`. It is not yet wired into the default `dedupe_df` pipeline; CLI/MCP surfaces are in progress. Full details: [config-suggestions](https://docs.bensevern.dev/docs/goldenmatch/config-suggestions).
 
 ---
 
 ## Why GoldenMatch?
 
-- **Runs on unstructured input** — extract matchable records from PDFs and images (cards, forms, invoices, scanned directories) against a schema you control, then dedupe them. `pip install goldenmatch[documents]`; see [Document ingest](https://docs.bensevern.dev/goldenmatch/documents).
-- **Zero-config that beats hand-tuned** — the introspective controller auto-detects columns, picks scorers, iterates on complexity signals, and converges on a defensible config. No training data, no rules to write. (v1.8.0)
+- **Runs on unstructured input.** Extract matchable records from PDFs and images (cards, forms, invoices, scanned directories) against a schema you control, then dedupe them. `pip install goldenmatch[documents]`; see [Document ingest](https://docs.bensevern.dev/docs/goldenmatch/documents).
+- **Zero-config that beats hand-tuned.** The introspective controller auto-detects columns, picks scorers, iterates on complexity signals, and converges on a defensible config. No training data, no rules to write. (v1.8.0)
 - **96.4% F1 zero-config** on DBLP-ACM (hand-tuned ceiling: 91.8%). [DQBench ER score: 91.04 no-LLM](https://github.com/benseverndev-oss/dqbench)
-- **Learning Memory** — corrections from stewards, unmerges, and LLM votes persist to disk and apply automatically on the next run; survives row reorders via record-hash re-anchoring (v1.6.0)
-- **Privacy-preserving** — match across organizations without sharing raw data (PPRL, 92.4% F1)
-- **94 MCP tools** — use from Claude Desktop, Claude Code, or any AI assistant ([Smithery](https://smithery.ai/servers/benzsevern/goldenmatch))
-- **Production-ready** — Postgres sync, daemon mode, lineage tracking, review queues
+- **Learning Memory.** Corrections from stewards, unmerges, and LLM votes persist to disk and apply automatically on the next run; survives row reorders via record-hash re-anchoring (v1.6.0)
+- **Privacy-preserving.** Match across organizations without sharing raw data (PPRL, 92.4% F1)
+- **97 MCP tools.** Use from Claude Desktop, Claude Code, or any AI assistant ([Smithery](https://smithery.ai/servers/benzsevern/goldenmatch))
+- **Production-ready.** Postgres sync, daemon mode, lineage tracking, review queues
 
 ### Run on unstructured input (document ingest)
 
@@ -128,7 +127,7 @@ result = dedupe_df(df, exclude_columns=["_source_file", "_source_page", "_extrac
 Also available as `goldenmatch ingest-docs {suggest-schema, run}` (CLI), the
 `documents_suggest_schema` / `documents_ingest` MCP tools and A2A skills,
 `POST /api/v1/documents/{suggest-schema, ingest}` (REST), and the `/documents` Web UI page.
-Full guide: [Document ingest](https://docs.bensevern.dev/goldenmatch/documents).
+Full guide: [Document ingest](https://docs.bensevern.dev/docs/goldenmatch/documents).
 
 ### Auto-config & scale safeguards
 
@@ -142,7 +141,7 @@ section documents the durable auto-config and scale-safety behaviour.)
   explicit `GoldenMatchConfig`, lower the matchkey threshold, or
   opt out with `confidence_required=False`. See ADR-0001.
 - **Matchkey vs blocking pools are orthogonal** (ADR-0003). Pre-v1.13,
-  auto-config picked the same high-cardinality column for both —
+  auto-config picked the same high-cardinality column for both, which is
   catastrophic on identity-claim columns like NPI (1 row per block).
   v1.13 splits the pools: a column may qualify as matchkey, blocking,
   both, or neither. Composite-pair search (`zip + last_name`) fills
@@ -154,7 +153,7 @@ section documents the durable auto-config and scale-safety behaviour.)
   `GOLDENMATCH_BLOCKING_CARDINALITY_SCALER=observed`.
 - **Unified `exclude_columns` API** (ADR-0002). Single
   `GoldenMatchConfig.exclude_columns: list[str]` works across the
-  suite — GoldenMatch auto-config skips them for matchkeys + blocking,
+  suite: GoldenMatch auto-config skips them for matchkeys + blocking,
   GoldenFlow transforms skip them, GoldenCheck preflight skips them.
   CLI: `goldenmatch sync ... --exclude-columns col1,col2`. Layered
   additively with auto-config detector exclusions (audit, foreign-id,
@@ -168,23 +167,23 @@ section documents the durable auto-config and scale-safety behaviour.)
 
 ### What's new in v1.8 (foundation)
 
-- **Introspective auto-config controller** — iterates on block-size distribution, score histogram, transitivity rate, and borderline mass to converge on a config that beats hand-tuned on bibliographic and voter-record benchmarks. Zero user input required.
-- **Cross-run memory** — past committed configs are reused when the data shape signature matches (`~/.goldenmatch/autoconfig_memory.db`). Opt out with `GOLDENMATCH_AUTOCONFIG_MEMORY=0`.
-- **LLM policy fallback** — when heuristic rules exhaust without reaching GREEN, `LLMRefitPolicy` proposes a config diff. Default off; enable with `GOLDENMATCH_AUTOCONFIG_LLM=1`.
-- **Standardization auto-detection** — phone/email/zip/state/name/address columns now auto-emit `StandardizationConfig` rules without any explicit config.
+- **Introspective auto-config controller.** Iterates on block-size distribution, score histogram, transitivity rate, and borderline mass to converge on a config that beats hand-tuned on bibliographic and voter-record benchmarks. Zero user input required.
+- **Cross-run memory.** Past committed configs are reused when the data shape signature matches (`~/.goldenmatch/autoconfig_memory.db`). Opt out with `GOLDENMATCH_AUTOCONFIG_MEMORY=0`.
+- **LLM policy fallback.** When heuristic rules exhaust without reaching GREEN, `LLMRefitPolicy` proposes a config diff. Default off; enable with `GOLDENMATCH_AUTOCONFIG_LLM=1`.
+- **Standardization auto-detection.** Phone/email/zip/state/name/address columns now auto-emit `StandardizationConfig` rules without any explicit config.
 
 ### Choose your path
 
 | I want to... | Go here |
 |--------------|---------|
-| Deduplicate a CSV right now | [Quick Start](https://docs.bensevern.dev/goldenmatch/quickstart) |
-| Use from Claude Desktop / AI assistant | [MCP Server](https://docs.bensevern.dev/goldenmatch/mcp) |
-| Build AI agents that deduplicate | [ER Agent (A2A)](https://docs.bensevern.dev/goldenmatch/agent) |
-| Write Python code | [Python API](https://docs.bensevern.dev/goldenmatch/python-api) |
-| Write TypeScript / Node.js | [TypeScript API](https://docs.bensevern.dev/goldenmatch/typescript) |
-| Deploy to Vercel Edge / Cloudflare Workers | [TypeScript API](https://docs.bensevern.dev/goldenmatch/typescript) |
-| Use the interactive TUI | [TUI Guide](https://docs.bensevern.dev/goldenmatch/tui) |
-| Train the system on my corrections | [Learning Memory](https://docs.bensevern.dev/goldenmatch/learning-memory) |
+| Deduplicate a CSV right now | [Quick Start](https://docs.bensevern.dev/docs/goldenmatch/quickstart) |
+| Use from Claude Desktop / AI assistant | [MCP Server](https://docs.bensevern.dev/docs/goldenmatch/mcp) |
+| Build AI agents that deduplicate | [ER Agent (A2A)](https://docs.bensevern.dev/docs/goldenmatch/agent) |
+| Write Python code | [Python API](https://docs.bensevern.dev/docs/goldenmatch/python-api) |
+| Write TypeScript / Node.js | [TypeScript API](https://docs.bensevern.dev/docs/goldenmatch/typescript) |
+| Deploy to Vercel Edge / Cloudflare Workers | [TypeScript API](https://docs.bensevern.dev/docs/goldenmatch/typescript) |
+| Use the interactive TUI | [TUI Guide](https://docs.bensevern.dev/docs/goldenmatch/tui) |
+| Train the system on my corrections | [Learning Memory](https://docs.bensevern.dev/docs/goldenmatch/learning-memory) |
 
 ---
 
@@ -192,76 +191,76 @@ section documents the durable auto-config and scale-safety behaviour.)
 <summary><strong>All features</strong> (click to expand)</summary>
 
 ### Matching
-- **12+ scoring methods** — exact, Jaro-Winkler, Levenshtein, token sort, soundex, ensemble, embedding, record embedding, dice, jaccard, **`name_freq_weighted_jw`** (surname IDF-weighted), **`given_name_aliased_jw`** (alias-aware) + plugin extensible
-- **10+ blocking strategies** — static, adaptive, sorted neighborhood, multi-pass, ANN, ann_pairs, canopy, **learned** (data-driven predicate selection), **`lsh`** (MinHash/LSH), **`simhash`** (semantic SimHash)
-- **Bundled OSS reference data** — five packs ship with the wheel: US Census 2010 surnames, given-name aliases, business legal forms, USPS Pub. 28 addresses, NAICS 2022 industries. Auto-config swaps in the matching scorer / transform when a column name AND its profiled data shape agree. See [Reference Data](https://docs.bensevern.dev/goldenmatch/reference-data).
-- **Fellegi-Sunter probabilistic matching** — EM-trained m/u probabilities, automatic threshold estimation
-- **LLM scorer with budget controls** — GPT-4o-mini scores borderline pairs for just $0.04. Budget caps, model tiering, graceful degradation
-- **Cross-encoder reranking** — re-score borderline pairs with a pre-trained cross-encoder for higher precision
-- **Schema-free matching** — auto-maps columns between different schemas (full_name -> first_name + last_name)
+- **12+ scoring methods.** Exact, Jaro-Winkler, Levenshtein, token sort, soundex, ensemble, embedding, record embedding, dice, jaccard, **`name_freq_weighted_jw`** (surname IDF-weighted), **`given_name_aliased_jw`** (alias-aware) + plugin extensible
+- **10+ blocking strategies.** Static, adaptive, sorted neighborhood, multi-pass, ANN, ann_pairs, canopy, **learned** (data-driven predicate selection), **`lsh`** (MinHash/LSH), **`simhash`** (semantic SimHash)
+- **Bundled OSS reference data.** Five packs ship with the wheel: US Census 2010 surnames, given-name aliases, business legal forms, USPS Pub. 28 addresses, NAICS 2022 industries. Auto-config swaps in the matching scorer / transform when a column name AND its profiled data shape agree. See [Reference Data](https://docs.bensevern.dev/docs/goldenmatch/reference-data).
+- **Fellegi-Sunter probabilistic matching.** EM-trained m/u probabilities, automatic threshold estimation
+- **LLM scorer with budget controls.** GPT-4o-mini scores borderline pairs for just $0.04. Budget caps, model tiering, graceful degradation
+- **Cross-encoder reranking.** Re-score borderline pairs with a pre-trained cross-encoder for higher precision
+- **Schema-free matching.** Auto-maps columns between different schemas (full_name -> first_name + last_name)
 
 ### Data Quality
-- **GoldenCheck integration** — `pip install goldenmatch[quality]` adds data quality scanning (encoding, Unicode, format validation)
-- **GoldenFlow transforms** — `pip install goldenmatch[transform]` normalizes phone numbers, dates, categorical spelling
-- **Anomaly detection** — flag fake emails, placeholder data, suspicious records
+- **GoldenCheck integration.** `pip install goldenmatch[quality]` adds data quality scanning (encoding, Unicode, format validation)
+- **GoldenFlow transforms.** `pip install goldenmatch[transform]` normalizes phone numbers, dates, categorical spelling
+- **Anomaly detection.** Flag fake emails, placeholder data, suspicious records
 
 ### Golden Records
-- **5 merge strategies** — most_complete, majority_vote, source_priority, most_recent, first_non_null
-- **Quality-weighted survivorship** — fields scored by source quality from GoldenCheck
-- **Field-level provenance** — tracks which source row contributed each field
-- **Cluster quality scoring** — clusters labeled `strong`/`weak`/`split`; oversized clusters auto-split via MST
+- **5 merge strategies.** Most_complete, majority_vote, source_priority, most_recent, first_non_null
+- **Quality-weighted survivorship.** Fields scored by source quality from GoldenCheck
+- **Field-level provenance.** Tracks which source row contributed each field
+- **Cluster quality scoring.** Clusters labeled `strong`/`weak`/`split`; oversized clusters auto-split via MST
 
 ### Privacy
-- **PPRL multi-party linkage** — match across organizations without sharing raw data (92.4% F1 on FEBRL4)
-- **PPRL auto-configuration** — profiles your data and picks optimal fields, bloom filter parameters, and threshold
-- **In-house embedding (cloud-free)** — back the `embedding` / `record_embedding` scorer with a small numpy + ONNX model trained in-process on your labeled pairs (`goldenmatch.embeddings.inhouse.train_embedder`); set the matchkey field's `model="inhouse:<path>"`. No cloud calls, no torch. **Within ~0.2pp of Vertex AI on structured ER** (Railway-validated 3-way comparison, #506 / PR #543) — febrl3 in-house 0.9488 vs Vertex 0.9512, DBLP-ACM 0.9709 vs 0.9708, synthetic-20k 0.9814 vs 0.9834. Use it when you want embedding-grade recall without a cloud dependency.
+- **PPRL multi-party linkage.** Match across organizations without sharing raw data (92.4% F1 on FEBRL4)
+- **PPRL auto-configuration.** Profiles your data and picks optimal fields, bloom filter parameters, and threshold
+- **In-house embedding (cloud-free).** Back the `embedding` / `record_embedding` scorer with a small numpy + ONNX model trained in-process on your labeled pairs (`goldenmatch.embeddings.inhouse.train_embedder`); set the matchkey field's `model="inhouse:<path>"`. No cloud calls, no torch. **Within ~0.2pp of Vertex AI on structured ER** (Railway-validated 3-way comparison, #506 / PR #543). Febrl3 in-house 0.9488 vs Vertex 0.9512, DBLP-ACM 0.9709 vs 0.9708, synthetic-20k 0.9814 vs 0.9834. Use it when you want embedding-grade recall without a cloud dependency.
 
 ### Integration
-- **REST API + MCP Server** — 94 MCP tools for matching, explaining, reviewing, data quality, transforms, AutoConfigController telemetry, identity-graph operations, and Learning Memory
-- **A2A Agent** — 51 skills for AI-to-AI autonomous entity resolution (incl. `autoconfig` + `controller_telemetry`)
-- **AutoConfigController telemetry visible from every surface** (v1.7-v1.12 surface-parity arc, PRs #156-#161) — web ControllerPanel, TUI Controller tab (`Ctrl+A`), CLI `goldenmatch autoconfig`, REST `POST /autoconfig` + `GET /controller/telemetry`, Postgres `goldenmatch_autoconfig` + `gm_telemetry`, DuckDB UDF equivalents, MCP/A2A telemetry tools. Every surface returns the same JSON shape (`stop_reason`, `health`, refit decisions, indicator column priors, `negative_evidence` / Path Y).
-- **Database sync** — incremental Postgres matching with persistent ANN index
-- **Enterprise connectors** — Snowflake, Databricks, BigQuery, HubSpot, Salesforce
-- **Bucket backend (recommended for 5M-on-one-node, v1.16.0)** — hash-bucketed eager partition + in-process scorer with a tiny-block fast path. **Measured: 5M records in 9.94 min on a 16c/64GB runner, 6.4 GB peak RSS, 1.67M multi-member clusters, reliable completion** where the previous chunked path was hanging at the 63 GB plateau on the same fixture. Pass `backend="bucket"` or let the v3 planner pick it. With the native kernel installed (now the default on common platforms), bucket+native is the suggested backend up to 750k rows on common boxes: a sub-32GB box gets bucket in the 100k-750k band whenever the estimated pair-score memory fits available RAM (the `plan_selected_bucket_suggested` rule), and a 32GB+ box gets bucket via the existing `fast_box` rule. Above 750k, small boxes route to chunked/distributed while 32GB+ boxes keep bucket (the 5M-25M bucket scale story is unchanged). `GOLDENMATCH_PLANNER_BUCKET=0` forces polars-direct. PRs #310-#326. See `examples/at_scale_bucket_backend.py`.
-- **Chunked mode** — streaming `scan_csv().slice()` reader + vectorized cross-chunk join + block-keyed index. **Measured: 5M records in ~50 min on a 4c/16GB GitHub runner, 11.9 GB peak, no OOM** (PRs #233/#234/#235, 2026-05-14). Pass `backend="chunked"`. The bucket backend supersedes this for 16-core / 32+ GB Linux; chunked stays as the path for memory-constrained 4c/16GB shapes.
-- **DuckDB backend** — `config.backend="duckdb"` routes block scoring through a DuckDB-backed pair store that can spill to disk via `GOLDENMATCH_DUCKDB_SCORE_DB`. Doesn't replace in-memory scoring matrices yet; the value lands at 50M+ where pair counts hit 10⁸.
-- **Ray distributed backend** — `pip install goldenmatch[ray]` + pass `backend="ray"` explicitly OR set `GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1` to let the v3 planner pick it at 50M+ rows. As of v1.16.0 the planner no longer auto-picks ray after the Distributed Plan v1 stack failed the 5M kill criterion on the same workload where bucket succeeded at 6.4 GB peak RSS (PR #318).
-- **Native acceleration (default-installed on common platforms)** -- `pip install goldenmatch` now pulls the compiled Rust/PyO3 abi3 kernel (`goldenmatch-native`) automatically on macOS (x86_64 + arm64), Linux (x86_64 + aarch64), and Windows (amd64). It strips Python-loop overhead from hot paths (block scoring, record fingerprints, connected-components / cluster build, dedup-pairs, the MST oversized-split). No `[native]` extra is needed (the `[native]` extra still works as a back-compat alias). **Rust is the reference implementation** (2026-07 reference-mode change); the pure-Python + Arrow pipeline is the **lossy fallback** — byte-identical on the parity-gated hot paths — used automatically on any platform without a prebuilt wheel. Alpine/musl users may not get a prebuilt wheel yet (a `musllinux` wheel is a separate follow-up) and degrade gracefully to pure-Python. Opt out with `GOLDENMATCH_NATIVE=0` (disable the kernel) or `GOLDENMATCH_PLANNER_BUCKET=0` (force the polars-direct backend).
-- **dbt integration** — `dbt-goldenmatch` package for DuckDB-based ER in dbt pipelines
+- **REST API + MCP Server.** 97 MCP tools for matching, explaining, reviewing, data quality, transforms, AutoConfigController telemetry, identity-graph operations, and Learning Memory
+- **A2A Agent.** 51 skills for AI-to-AI autonomous entity resolution (incl. `autoconfig` + `controller_telemetry`)
+- **AutoConfigController telemetry visible from every surface** (v1.7-v1.12 surface-parity arc, PRs #156-#161). Web ControllerPanel, TUI Controller tab (`Ctrl+A`), CLI `goldenmatch autoconfig`, REST `POST /autoconfig` + `GET /controller/telemetry`, Postgres `goldenmatch_autoconfig` + `gm_telemetry`, DuckDB UDF equivalents, MCP/A2A telemetry tools. Every surface returns the same JSON shape (`stop_reason`, `health`, refit decisions, indicator column priors, `negative_evidence` / Path Y).
+- **Database sync.** Incremental Postgres matching with persistent ANN index
+- **Enterprise connectors.** Snowflake, Databricks, BigQuery, HubSpot, Salesforce
+- **Bucket backend (recommended for 5M-on-one-node, v1.16.0).** Hash-bucketed eager partition + in-process scorer with a tiny-block fast path. **Measured: 5M records in 9.94 min on a 16c/64GB runner, 6.4 GB peak RSS, 1.67M multi-member clusters, reliable completion** where the previous chunked path was hanging at the 63 GB plateau on the same fixture. Pass `backend="bucket"` or let the v3 planner pick it. With the native kernel installed (now the default on common platforms), bucket+native is the suggested backend up to 750k rows on common boxes: a sub-32GB box gets bucket in the 100k-750k band whenever the estimated pair-score memory fits available RAM (the `plan_selected_bucket_suggested` rule), and a 32GB+ box gets bucket via the existing `fast_box` rule. Above 750k, small boxes route to chunked/distributed while 32GB+ boxes keep bucket (the 5M-25M bucket scale story is unchanged). `GOLDENMATCH_PLANNER_BUCKET=0` forces polars-direct. PRs #310-#326. See `examples/at_scale_bucket_backend.py`.
+- **Chunked mode.** Streaming `scan_csv().slice()` reader + vectorized cross-chunk join + block-keyed index. **Measured: 5M records in ~50 min on a 4c/16GB GitHub runner, 11.9 GB peak, no OOM** (PRs #233/#234/#235, 2026-05-14). Pass `backend="chunked"`. The bucket backend supersedes this for 16-core / 32+ GB Linux; chunked stays as the path for memory-constrained 4c/16GB shapes.
+- **DuckDB backend.** `config.backend="duckdb"` routes block scoring through a DuckDB-backed pair store that can spill to disk via `GOLDENMATCH_DUCKDB_SCORE_DB`. Doesn't replace in-memory scoring matrices yet; the value lands at 50M+ where pair counts hit 10⁸.
+- **Ray distributed backend.** `pip install goldenmatch[ray]` + pass `backend="ray"` explicitly OR set `GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1` to let the v3 planner pick it at 50M+ rows. As of v1.16.0 the planner no longer auto-picks ray after the Distributed Plan v1 stack failed the 5M kill criterion on the same workload where bucket succeeded at 6.4 GB peak RSS (PR #318).
+- **Native acceleration (default-installed on common platforms)** -- `pip install goldenmatch` now pulls the compiled Rust/PyO3 abi3 kernel (`goldenmatch-native`) automatically on macOS (x86_64 + arm64), Linux (x86_64 + aarch64), and Windows (amd64). It strips Python-loop overhead from hot paths (block scoring, record fingerprints, connected-components / cluster build, dedup-pairs, the MST oversized-split). No `[native]` extra is needed (the `[native]` extra still works as a back-compat alias). **Rust is the reference implementation** (2026-07 reference-mode change); the pure-Python + Arrow pipeline is the **lossy fallback**, byte-identical on the parity-gated hot paths, used automatically on any platform without a prebuilt wheel. Alpine/musl users may not get a prebuilt wheel yet (a `musllinux` wheel is a separate follow-up) and degrade gracefully to pure-Python. Opt out with `GOLDENMATCH_NATIVE=0` (disable the kernel) or `GOLDENMATCH_PLANNER_BUCKET=0` (force the polars-direct backend).
+- **dbt integration.** `dbt-goldenmatch` package for DuckDB-based ER in dbt pipelines
 
 ### Migrating from Splink
-- **One-command config conversion** — `goldenmatch import-splink settings.json -o goldenmatch.yaml [--model-out model.json]` converts a Splink settings (or trained-model) JSON into a GoldenMatch YAML config; `--model-out` persists trained m/u probabilities so GoldenMatch reuses them instead of re-training via EM. Same conversion from Python: `gm.from_splink("settings.json")`, or the `convert_splink_config` MCP tool.
-- **What converts cleanly vs what warns** — exact/Jaro-Winkler/Levenshtein-style comparison levels, `block_on` blocking rules (incl. SUBSTR), and trained m/u import all map directly; unrecognized SQL (OR rules, cross-column conditions, custom UDFs) is dropped with a warning in the returned `ConversionReport` (pass `strict=True` to make any lossy finding raise instead).
-- **Parity-gated** — a converted config lands within the 0.05 F1 gate of native Splink on the shared `bench_er_headtohead` synthetic-person benchmark (measured delta 0.0203).
-- **Data-aware upgrade pass** — `goldenmatch import-splink settings.json --upgrade data.parquet -o goldenmatch.yaml --model-out model.json` runs four levers over the converted config with your data in hand: term-frequency tables (Splink exports don't carry them), distance thresholds re-derived from measured string lengths, fan-out defenses (a risk-gated negative-evidence suggestion for unused identity-grade columns plus `golden_rules.max_cluster_size` tuned from the reference clusters), and link/review thresholds calibrated from the blocked-pair score distribution (NE-aware). The faithful baseline is written alongside as `*.baseline.*`. Measured on wild Splink configs (pairwise F1 vs truth): 0.482 → **0.633**, 0.677 → **0.766**, 0.707 → **0.740** — beating native Splink (0.601 / 0.699 / 0.686) on all three benchmark pairs. Optional `--splink-clusters` / `--labels` files (first column id, second cluster_id) add agreement / truth F1 to the printed delta table. From Python: `gm.upgrade_splink_conversion(conversion, data)`.
+- **One-command config conversion.** `goldenmatch import-splink settings.json -o goldenmatch.yaml [--model-out model.json]` converts a Splink settings (or trained-model) JSON into a GoldenMatch YAML config; `--model-out` persists trained m/u probabilities so GoldenMatch reuses them instead of re-training via EM. Same conversion from Python: `gm.from_splink("settings.json")`, or the `convert_splink_config` MCP tool.
+- **What converts cleanly vs what warns.** Exact/Jaro-Winkler/Levenshtein-style comparison levels, `block_on` blocking rules (incl. SUBSTR), and trained m/u import all map directly; unrecognized SQL (OR rules, cross-column conditions, custom UDFs) is dropped with a warning in the returned `ConversionReport` (pass `strict=True` to make any lossy finding raise instead).
+- **Parity-gated.** A converted config lands within the 0.05 F1 gate of native Splink on the shared `bench_er_headtohead` synthetic-person benchmark (measured delta 0.0203).
+- **Data-aware upgrade pass.** `goldenmatch import-splink settings.json --upgrade data.parquet -o goldenmatch.yaml --model-out model.json` runs four levers over the converted config with your data in hand: term-frequency tables (Splink exports don't carry them), distance thresholds re-derived from measured string lengths, fan-out defenses (a risk-gated negative-evidence suggestion for unused identity-grade columns plus `golden_rules.max_cluster_size` tuned from the reference clusters), and link/review thresholds calibrated from the blocked-pair score distribution (NE-aware). The faithful baseline is written alongside as `*.baseline.*`. Measured on wild Splink configs (pairwise F1 vs truth): 0.482 → **0.633**, 0.677 → **0.766**, 0.707 → **0.740**. Beating native Splink (0.601 / 0.699 / 0.686) on all three benchmark pairs. Optional `--splink-clusters` / `--labels` files (first column id, second cluster_id) add agreement / truth F1 to the printed delta table. From Python: `gm.upgrade_splink_conversion(conversion, data)`.
 
 ### Learning Memory (v1.6.0)
-- **Persistent corrections** — every steward decision, unmerge, boost-tab y/n, LLM vote, and agent approve/reject writes to a local SQLite (or Postgres) store
-- **Re-anchor via record_hash** — corrections survive row reordering and refresh; ambiguous re-anchors report as `stale_ambiguous` rather than misapplying
-- **Automatic application** — `dedupe_df` and `match_df` overlay learned thresholds before scoring and apply hard 1.0/0.0 overrides after; postflight reports impact
-- **Threshold learner** — trust-weighted grid search auto-tunes matchkey thresholds once 10+ corrections accumulate
-- **CLI / Python / MCP triad** — `goldenmatch memory stats|learn|export|import|show`, `goldenmatch.add_correction()` / `learn()` / `memory_stats()`, and 5 new MCP tools (`list_corrections`, `add_correction`, `learn_thresholds`, `memory_stats`, `memory_export`)
-- **Off by default** — zero-config posture preserved; opt in via `config.memory.enabled = True`
+- **Persistent corrections.** Every steward decision, unmerge, boost-tab y/n, LLM vote, and agent approve/reject writes to a local SQLite (or Postgres) store
+- **Re-anchor via record_hash.** Corrections survive row reordering and refresh; ambiguous re-anchors report as `stale_ambiguous` rather than misapplying
+- **Automatic application.** `dedupe_df` and `match_df` overlay learned thresholds before scoring and apply hard 1.0/0.0 overrides after; postflight reports impact
+- **Threshold learner.** Trust-weighted grid search auto-tunes matchkey thresholds once 10+ corrections accumulate
+- **CLI / Python / MCP triad.** `goldenmatch memory stats|learn|export|import|show`, `goldenmatch.add_correction()` / `learn()` / `memory_stats()`, and 5 new MCP tools (`list_corrections`, `add_correction`, `learn_thresholds`, `memory_stats`, `memory_export`)
+- **Off by default.** Zero-config posture preserved; opt in via `config.memory.enabled = True`
 
 ### Developer Experience
-- **Gold-themed TUI** — interactive interface with keyboard shortcuts, live threshold tuning
-- **Active learning boost** — label 10 borderline pairs in the TUI, retrain a classifier for 99% accuracy
-- **Review queue** — REST endpoint surfaces borderline pairs for data steward approval
-- **Merge preview + undo** — rollback any run or unmerge individual records
-- **Lineage tracking** — every merge decision saved with per-field score breakdown
-- **Natural language explainability** — template-based per-pair and per-cluster explanations at zero LLM cost
-- **Evaluation CLI** — `goldenmatch evaluate` reports precision/recall/F1 against ground truth
-- **7 domain packs** — electronics, software, healthcare, financial, real estate, people, retail
-- **Plugin architecture** — extend with custom scorers, transforms, connectors via pip
-- **Streaming / CDC mode** — incremental record matching with micro-batch or immediate processing
-- **GitHub Actions "Try It"** — zero-install demo via `workflow_dispatch`
-- **Codespaces ready** — one-click dev environment
+- **Gold-themed TUI.** Interactive interface with keyboard shortcuts, live threshold tuning
+- **Active learning boost.** Label 10 borderline pairs in the TUI, retrain a classifier for 99% accuracy
+- **Review queue.** REST endpoint surfaces borderline pairs for data steward approval
+- **Merge preview + undo.** Rollback any run or unmerge individual records
+- **Lineage tracking.** Every merge decision saved with per-field score breakdown
+- **Natural language explainability.** Template-based per-pair and per-cluster explanations at zero LLM cost
+- **Evaluation CLI.** `goldenmatch evaluate` reports precision/recall/F1 against ground truth
+- **7 domain packs.** Electronics, software, healthcare, financial, real estate, people, retail
+- **Plugin architecture.** Extend with custom scorers, transforms, connectors via pip
+- **Streaming / CDC mode.** Incremental record matching with micro-batch or immediate processing
+- **GitHub Actions "Try It".** Zero-install demo via `workflow_dispatch`
+- **Codespaces ready.** One-click dev environment
 
 </details>
 
 ## TypeScript / Node.js
 
-GoldenMatch ships an npm package with full feature parity — same scorers, clustering, golden records, and YAML configs.
+GoldenMatch ships an npm package with full feature parity: same scorers, clustering, golden records, and YAML configs.
 
 ```bash
 npm install goldenmatch
@@ -285,12 +284,12 @@ const result = dedupe(rows, {
 console.log(result.stats);  // { totalRecords: 3, totalClusters: 2, ... }
 ```
 
-- **Edge-safe core** — runs in browsers, Vercel Edge Runtime, Cloudflare Workers, Deno
+- **Edge-safe core.** Runs in browsers, Vercel Edge Runtime, Cloudflare Workers, Deno
 - **Feature parity** with Python: fuzzy scorers, probabilistic Fellegi-Sunter, PPRL, graph ER, LLM reranking, MCP/REST/A2A servers, 11+ CLI commands, interactive TUI
 - **478 tests, strict TypeScript** (`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`)
-- **Zero-dep install** works — optional peer deps unlock native paths (hnswlib-node, @huggingface/transformers for ONNX cross-encoder, piscina for worker threads, pg/duckdb/snowflake for data connectors)
+- **Zero-dep install** works: optional peer deps unlock native paths (hnswlib-node, @huggingface/transformers for ONNX cross-encoder, piscina for worker threads, pg/duckdb/snowflake for data connectors)
 
-Full docs: [docs.bensevern.dev/goldenmatch/typescript](https://docs.bensevern.dev/goldenmatch/typescript)
+Full docs: [docs.bensevern.dev/docs/goldenmatch/typescript](https://docs.bensevern.dev/docs/goldenmatch/typescript)
 See [examples/typescript/](../../../examples/typescript/) for runnable usage examples (quickstart, Vercel Edge, MCP client).
 
 ## Web UI
@@ -302,7 +301,7 @@ goldenmatch serve-ui packages/python/goldenmatch/web/demo    # bundled demo proj
 ```
 
 Localhost browser workbench. Editorial gold-on-cream design, single process,
-no auth — for the dev-on-a-laptop case.
+no auth: for the dev-on-a-laptop case.
 
 ![Project page](docs/screenshots/web/web-home.png)
 
@@ -313,7 +312,7 @@ It surfaces the engine's full capability stack as 7 pages:
 | **Project** (`/`) | Browse saved runs, auto-run from `data.csv`, see GoldenCheck quality findings as a banner |
 | **Workbench** (`/workbench`) | Edit matchkey rules + threshold + standardization + blocking + per-row matchkey type (exact / weighted / probabilistic). Run sampled previews. Save back to `goldenmatch.yml` (atomic write + `.bak`). Auto-configure with optional domain-pack pinning (electronics, people, healthcare, …). |
 | **Inspector** (`/runs/{name}`) | Cluster table + member view + pair drilldown with field-level diff + one-line NL prose explanation per pair. Label pairs (mirrors to Learning Memory). Unmerge a record or shatter a cluster. F1/precision/recall vs your labels. |
-| **Match** (`/match`) | One-to-many target × reference workflow. Different output shape from dedupe — flat `target → reference` mapping + unmatched targets. |
+| **Match** (`/match`) | One-to-many target × reference workflow. Different output shape from dedupe: flat `target → reference` mapping + unmatched targets. |
 | **Compare** (`/compare`) | Run A vs B classification (CCMS): unchanged / merged / partitioned / overlapping per cluster, plus the Talburt-Wang Index over the whole transformation. No labels needed. |
 | **Sensitivity** (`/sensitivity`) | Sweep one parameter (threshold / blocking max-block-size / per-matchkey threshold), CCMS-compare each point against the baseline. Cluster-count sparkline + most-stable-value report. |
 | **Memory** (`/memory`) | Browse the Learning Memory store (corrections + sources + trust + matchkey). Trigger a learn pass. Stored adjustments table. |
@@ -332,7 +331,7 @@ the prior file to `goldenmatch.yml.bak` before clobbering.
 ![Inspector](docs/screenshots/web/web-inspector.png)
 
 Each pair card shows a one-line template explanation above the field
-breakdown — derived from the field scores via
+breakdown: derived from the field scores via
 `goldenmatch.core.explain.explain_pair_nl`, no LLM cost. Labels mirror to
 the same `MemoryStore` the pipeline reads on every run via
 `apply_corrections`, so the loop closes end-to-end.
@@ -359,7 +358,7 @@ TWI / cluster-count / case breakdown.
 
 ![Match](docs/screenshots/web/web-match.png)
 
-Different output shape from dedupe — match has no clusters. Both target
+Different output shape from dedupe: match has no clusters. Both target
 and reference paths are resolved under the project root with a path-traversal
 guard. Auto-configure mode skips the workbench rules and profiles both
 files together.
@@ -405,7 +404,7 @@ Investigative entity resolution across **ICIJ Offshore Leaks + OpenSanctions + G
 
 ### [`goldenmatch-vuln-attribution`](https://github.com/benseverndev-oss/goldenmatch-vuln-attribution)
 
-Cross-database entity resolution on **6.1M public OSS vulnerability records across 40 sources** (33 OSV ecosystems, GHSA reviewed + unreviewed, PyPA, RustSec, Go vulndb, EPSS, CISA KEV, CVE Project bulk). Reconciles `(vuln_id, alias)` graphs into canonical IDs via union-find. The full Golden Suite stack — GoldenCheck DQ + GoldenFlow normalize + GoldenMatch cluster + GoldenPipe orchestrate — runs **end-to-end in ~5 minutes** on a `large-new-64GB` GitHub Actions runner.
+Cross-database entity resolution on **6.1M public OSS vulnerability records across 40 sources** (33 OSV ecosystems, GHSA reviewed + unreviewed, PyPA, RustSec, Go vulndb, EPSS, CISA KEV, CVE Project bulk). Reconciles `(vuln_id, alias)` graphs into canonical IDs via union-find. The full Golden Suite stack, GoldenCheck DQ + GoldenFlow normalize + GoldenMatch cluster + GoldenPipe orchestrate, runs **end-to-end in ~5 minutes** on a `large-new-64GB` GitHub Actions runner.
 
 > **6,126,895 records → 847,475 canonical vulnerabilities.** Surfaces concrete failure modes in cross-source agreement that consumers shouldn't trust.
 
@@ -413,7 +412,7 @@ Cross-database entity resolution on **6.1M public OSS vulnerability records acro
 
 Cross-list coverage analysis on the **85 distinct public sanctions lists** in the OpenSanctions `sanctions` collection (50+ jurisdictions). Plus 10-year OFAC SDN history and PEP/crypto cross-analysis. Asks the questions a compliance team should have an answer to: how many canonical entities exist across every free public list combined? What fraction does an OFAC-SDN-only screening vendor actually see?
 
-> **Coverage-analysis benchmark for any sanctions-screening tool.** OpenSanctions already does the ER work — this repo turns that into evidence about which lists are structurally isolated and which entities anchor the global consensus.
+> **Coverage-analysis benchmark for any sanctions-screening tool.** OpenSanctions already does the ER work, this repo turns that into evidence about which lists are structurally isolated and which entities anchor the global consensus.
 
 ---
 
@@ -474,7 +473,7 @@ result = gm.dedupe("huge.parquet", exact=["email"], backend="ray")
 
 ### Learning Memory (v1.6.0)
 
-GoldenMatch can remember past steward decisions and apply them automatically on every subsequent run. Reject a pair once -- it stays rejected. Approve a borderline pair once -- it stays approved. After 10+ corrections accumulate against a matchkey, the learner adjusts its threshold so the system stops needing the same correction twice. Off by default; enable via `config.memory.enabled = True` or a `memory:` block in YAML. Full guide: [Learning Memory docs](https://docs.bensevern.dev/goldenmatch/learning-memory).
+GoldenMatch can remember past steward decisions and apply them automatically on every subsequent run. Reject a pair once -- it stays rejected. Approve a borderline pair once -- it stays approved. After 10+ corrections accumulate against a matchkey, the learner adjusts its threshold so the system stops needing the same correction twice. Off by default; enable via `config.memory.enabled = True` or a `memory:` block in YAML. Full guide: [Learning Memory docs](https://docs.bensevern.dev/docs/goldenmatch/learning-memory).
 
 **`goldenmatch.yml`:**
 
@@ -550,7 +549,7 @@ The host LLM calls `list_corrections` -> `add_correction` -> `learn_thresholds`.
 
 ### Auto-Config Verification (v1.5.0)
 
-Zero-config used to crash on bibliographic and domain-extracted schemas — auto-config would emit a matchkey referencing `__title_key__` without enabling `config.domain`, and the pipeline would raise `ValueError: Missing required columns`. v1.5.0 closes the gap with a preflight + postflight verification layer that runs automatically around `auto_configure_df`.
+Zero-config used to crash on bibliographic and domain-extracted schemas, auto-config would emit a matchkey referencing `__title_key__` without enabling `config.domain`, and the pipeline would raise `ValueError: Missing required columns`. v1.5.0 closes the gap with a preflight + postflight verification layer that runs automatically around `auto_configure_df`.
 
 **Preflight** (`gm.preflight`) runs 6 checks at the end of `auto_configure_df`:
 
@@ -597,7 +596,7 @@ print(f"Oversized clusters: {len(sig['oversized_clusters'])}")
 cfg = gm.auto_configure_df(df, allow_remote_assets=True)  # loads cross-encoder etc.
 ```
 
-**Strict mode for parity runs.** `strict=True` still computes postflight signals and emits advisories, but skips threshold adjustments — use it for DQBench, regression suites, and any reproducible output:
+**Strict mode for parity runs.** `strict=True` still computes postflight signals and emits advisories, but skips threshold adjustments. Use it for DQBench, regression suites, and any reproducible output:
 
 ```python
 cfg = gm.auto_configure_df(df, strict=True)
@@ -718,7 +717,7 @@ Run `goldenmatch setup` for an interactive walkthrough:
 
 ![Setup Wizard](docs/screenshots/setup-welcome.svg)
 
-Guides you through GPU mode selection, Vertex AI / Colab / local GPU configuration, LLM boost API keys, and database sync — with copy-paste commands at every step.
+Guides you through GPU mode selection, Vertex AI / Colab / local GPU configuration, LLM boost API keys, and database sync. With copy-paste commands at every step.
 
 ![GPU Selection](docs/screenshots/setup-gpu.svg)
 
@@ -731,7 +730,7 @@ Guides you through GPU mode selection, Vertex AI / Colab / local GPU configurati
 | Privacy-preserving (PPRL) | Built-in (92.4% F1) | No | No | No | No |
 | Interactive TUI | Yes | No | No | No | No |
 | Golden record synthesis | 5 strategies | No | No | No | No |
-| MCP server (AI integration) | Yes (94 tools) | No | No | No | No |
+| MCP server (AI integration) | Yes (97 tools) | No | No | No | No |
 | Database sync | Postgres + DuckDB | No | No | No | Spark/DuckDB |
 | Single `pip install` | Yes | Yes | Yes | No (Java/Spark) | Yes |
 | Polars-native | Yes | No (pandas) | No (pandas) | No (Spark) | Yes (DuckDB) |
@@ -746,7 +745,7 @@ GoldenMatch is the only tool that combines zero-config operation, probabilistic 
 goldenmatch dedupe customers.csv
 ```
 
-Auto-detects column types (name, email, phone, zip, address, description), assigns appropriate scorers, picks a blocking strategy, runs, and writes golden records (a timestamped `*_golden.csv` in the current directory) with a printed summary — zero config, no prompts. Add `--tui` to review interactively, or `--output-all` / `--output-dir` to control outputs.
+Auto-detects column types (name, email, phone, zip, address, description), assigns appropriate scorers, picks a blocking strategy, runs, and writes golden records (a timestamped `*_golden.csv` in the current directory) with a printed summary, zero config, no prompts. Add `--tui` to review interactively, or `--output-all` / `--output-dir` to control outputs.
 
 ### With Config
 
@@ -782,17 +781,17 @@ Files/DB → Ingest → Standardize → Block → Score → Cluster → Golden R
 ```
 
 **Pipeline:**
-1. **Ingest** — CSV, Excel, Parquet, or Postgres table
-2. **Standardize** — configurable per-column transforms
-3. **Block** — reduce comparison space (multi-pass, ANN, canopy, etc.)
-4. **Score** — compare record pairs with appropriate scorer
-5. **Cluster** — group matches via Union-Find; auto-split oversized clusters via MST; assign quality labels (`strong`/`weak`/`split`)
-6. **Golden** — merge each cluster into one canonical record using quality-weighted survivorship (5 strategies); track field-level provenance
-7. **Output** — files (CSV/Parquet) or database tables + lineage JSON sidecar with provenance
+1. **Ingest.** CSV, Excel, Parquet, or Postgres table
+2. **Standardize.** Configurable per-column transforms
+3. **Block.** Reduce comparison space (multi-pass, ANN, canopy, etc.)
+4. **Score.** Compare record pairs with appropriate scorer
+5. **Cluster.** Group matches via Union-Find; auto-split oversized clusters via MST; assign quality labels (`strong`/`weak`/`split`)
+6. **Golden.** Merge each cluster into one canonical record using quality-weighted survivorship (5 strategies); track field-level provenance
+7. **Output.** Files (CSV/Parquet) or database tables + lineage JSON sidecar with provenance
 
 ## Config Reference
 
-> **Copy-paste-ready configs live in [`configs/`](configs/)** — a robust
+> **Copy-paste-ready configs live in [`configs/`](configs/).** A robust
 > [`customers.yaml`](configs/customers.yaml), a [`distributed-100m.yaml`](configs/distributed-100m.yaml),
 > and a [walkthrough README](configs/README.md) explaining every knob.
 
@@ -906,11 +905,11 @@ goldenmatch sync \
 ```
 
 **Features:**
-- **Incremental sync** — only processes records added since last run
-- **Hybrid blocking** — SQL WHERE clauses for exact fields + FAISS ANN for semantic fields, results unioned
-- **Persistent ANN index** — disk cache + DB source of truth, progressive embedding across runs
-- **Golden record versioning** — append-only with `is_current` flag, full audit trail
-- **Cluster management** — persistent clusters with merge, conflict detection, max size safety cap
+- **Incremental sync.** Only processes records added since last run
+- **Hybrid blocking.** SQL WHERE clauses for exact fields + FAISS ANN for semantic fields, results unioned
+- **Persistent ANN index.** Disk cache + DB source of truth, progressive embedding across runs
+- **Golden record versioning.** Append-only with `is_current` flag, full audit trail
+- **Cluster management.** Persistent clusters with merge, conflict detection, max size safety cap
 
 **Metadata tables** (auto-created):
 
@@ -962,13 +961,13 @@ goldenmatch dedupe products.csv --llm-boost
 ```
 
 **Tiered auto-escalation:**
-- **Level 1** — zero-shot (free, instant)
-- **Level 2** — bi-encoder fine-tuning (~$0.20, ~2 min CPU)
-- **Level 3** — Ditto-style cross-encoder with data augmentation (~$0.50, ~5 min CPU)
+- **Level 1.** Zero-shot (free, instant)
+- **Level 2.** Bi-encoder fine-tuning (~$0.20, ~2 min CPU)
+- **Level 3.** Ditto-style cross-encoder with data augmentation (~$0.50, ~5 min CPU)
 
 **Active sampling** selects the most informative pairs for the LLM to label (uncertainty, disagreement, boundary, diversity), reducing label cost by ~45% compared to random sampling.
 
-**Iterative calibration:** When many borderline pairs exist, iterative calibration samples ~100 pairs per round, learns the optimal threshold via grid search, and applies it to all candidates — typically converging in 2-3 rounds.
+**Iterative calibration:** When many borderline pairs exist, iterative calibration samples ~100 pairs per round, learns the optimal threshold via grid search, and applies it to all candidates. Typically converging in 2-3 rounds.
 
 **Note:** LLM boost is most valuable for product matching with local models (MiniLM) where it improved Abt-Buy from 44.5% to 59.5% F1. For structured data (names, addresses, bibliographic), fuzzy matching alone achieves 97%+ F1.
 
@@ -1021,7 +1020,7 @@ For datasets over 1M records, use `goldenmatch sync` (database mode) with increm
 | REST API / MCP | Both | Cloud only | No | No | No |
 | GPU required | No | No | No | Spark | Yes |
 
-GoldenMatch's sweet spot is **ease of use + best-in-class zero-config accuracy**. On bibliographic matching (DBLP-ACM), the v1.8 controller reaches 96.4% zero-config — above the hand-tuned ceiling of 91.8% and without any training data. On product matching (Abt-Buy), the LLM scorer reaches 81.7% — within 8pts of Ditto's 89.3%, but with zero training labels and no GPU.
+GoldenMatch's sweet spot is **ease of use + best-in-class zero-config accuracy**. On bibliographic matching (DBLP-ACM), the v1.8 controller reaches 96.4% zero-config, above the hand-tuned ceiling of 91.8% and without any training data. On product matching (Abt-Buy), the LLM scorer reaches 81.7%, within 8pts of Ditto's 89.3%, but with zero training labels and no GPU.
 
 ### Library Comparison (v1.2.7)
 
@@ -1045,7 +1044,7 @@ Head-to-head against Splink, Dedupe, and RecordLinkage on two datasets. GoldenMa
 | Dedupe | 0.604 | 0.936 | 0.734 | 10.5s |
 | Splink | 0.646 | 0.834 | 0.728 | 3.4s |
 
-**Key takeaway:** GoldenMatch is the most consistent performer — top-2 F1 on both datasets with zero training data. Splink dominates structured PII but struggles on non-PII. RecordLinkage wins DBLP-ACM but lags on PII.
+**Key takeaway:** GoldenMatch is the most consistent performer, top-2 F1 on both datasets with zero training data. Splink dominates structured PII but struggles on non-PII. RecordLinkage wins DBLP-ACM but lags on PII.
 
 ### Probabilistic Auto-Config vs Splink (v1.29)
 
@@ -1053,15 +1052,15 @@ A separate result for the `type: probabilistic` (Fellegi-Sunter) path. With the 
 
 | Dataset | GoldenMatch (probabilistic v2) | Splink |
 |---|---|---|
-| historical_50k | **0.778** | 0.757 |
-| febrl3 | **0.991** | 0.965 |
-| synthetic_person | **0.998** | 0.996 |
+| historical_50k | **0.827** | 0.757 |
+| febrl3 | **0.996** | 0.965 |
+| synthetic_person | **1.000** | 0.996 |
 
-GoldenMatch also wins at the cluster level on `historical_50k` (B-cubed F1 0.844 vs 0.789). These numbers are **deterministic and reproducible** as of #829, which fixed a non-deterministic EM training-pair sample that previously swung `historical_50k` F1 between 0.64 and 0.80 run-to-run. The full three-engine accuracy + performance bake-off (including wall / peak RSS / throughput, and the `gm_zeroconfig` controller path) is committed at `docs/benchmarks/2026-06-09-splink-bakeoff.md`.
+GoldenMatch also wins at the cluster level on `historical_50k` (B-cubed F1 0.862 vs 0.788). These numbers are **deterministic and reproducible** as of #829, which fixed a non-deterministic EM training-pair sample that previously swung `historical_50k` F1 between 0.64 and 0.80 run-to-run. The full three-engine accuracy + performance bake-off (including wall / peak RSS / throughput, and the `gm_zeroconfig` controller path) is committed at `docs/benchmarks/2026-06-09-splink-bakeoff.md`.
 
 The v2 levers: admit `date`/dob columns as `levenshtein` comparison fields, drop redundant person-name composites, additively diversify blocking onto orthogonal stable keys, and admit `description`/`multi_name` as `token_sort` fields. This is independent of the zero-config/weighted DBLP-ACM and NCVR numbers above.
 
-**On `dblp_acm` (bibliographic), use the weighted path, not probabilistic.** Splink skips `dblp_acm`, and the probabilistic auto-config is weak there (pairwise F1 0.377, recall-bound). The zero-config **weighted** controller is the right tool for bibliographic shape — it scores 0.964 on DBLP-ACM (see the Zero-Config Controller table below).
+**On `dblp_acm` (bibliographic), use the weighted path, not probabilistic.** Splink skips `dblp_acm`, and the probabilistic auto-config is weak there (pairwise F1 0.377, recall-bound). The zero-config **weighted** controller is the right tool for bibliographic shape, it scores 0.964 on DBLP-ACM (see the Zero-Config Controller table below).
 
 ### Zero-Config Controller (v1.8)
 
@@ -1071,12 +1070,11 @@ The introspective auto-config controller iterates on ComplexityProfile signals t
 |---|---|---|---|
 | DBLP-ACM (cross-source) | 0.5102 | **0.9641** | 0.918 |
 | Febrl3 (single-source) | 0.8528 | **0.9443** | 0.971 |
-| NCVR (corruption GT) | — | **0.9719** | — |
-| DQbench (no LLM) | 46.24 (hand-tuned) | **62.87** (zero-config) | — |
+| NCVR (corruption GT) |: | **0.9719** |: |
 
 **NCVR ground truth** is generated by corruption: sample 5000 voter records, create 2500 corrupted duplicates (typos/swaps/abbreviations on 30% of name + address fields), score against `(orig_ncid, orig_ncid + "_DUP")` pairs. Dataset gitignored; reproduce locally via download + sample script in `.profile_tmp/`.
 
-**Note:** The zero-config controller achieves above-hand-tuned F1 on bibliographic-shape data (DBLP-ACM) and strong results on voter-record deduplication (NCVR). Febrl3 at 0.944 is within 3pts of the 0.971 hand-tuned ceiling. Product matching (Amazon-Google, Abt-Buy) still benefits most from domain extraction + LLM scorer; the controller's rules are not calibrated for product descriptions.
+**Note:** The table above is a historical v1.7.1 -> v1.8.0 snapshot, not current numbers. Febrl3 has since passed the hand-tuned ceiling it was chasing here: the drift-gated `docs/benchmarks/latest-results.md` reports **0.9912** (P 0.9992 / R 0.9833) against the 0.971 ceiling. The zero-config controller achieves above-hand-tuned F1 on bibliographic-shape data (DBLP-ACM) and strong results on voter-record deduplication (NCVR). Product matching (Amazon-Google, Abt-Buy) still benefits most from domain extraction + LLM scorer; the controller's rules are not calibrated for product descriptions.
 
 <details>
 <summary>Febrl explicit config example</summary>
@@ -1122,7 +1120,7 @@ goldenmatch watch --table customers --connection-string "$DATABASE_URL" --interv
 ```
 
 **How it works:**
-- Reads in configurable chunks (default 10K) — never loads entire table into memory
+- Reads in configurable chunks (default 10K): never loads entire table into memory
 - Hybrid blocking: SQL WHERE for exact fields + persistent FAISS ANN for semantic fields
 - Progressive embedding: computes 100K embeddings per run, ANN improves over time
 - Persistent clusters with golden record versioning
@@ -1139,7 +1137,7 @@ the driver process peaking at **0.36 GB RSS**.
 
 The default distributed path is **recall-complete** (#844): a blocking-key shuffle
 co-locates records that should match, then a distributed randomized-contraction
-WCC merges clusters that span input partitions — so the result is correct *no
+WCC merges clusters that span input partitions: so the result is correct *no
 matter how the input is partitioned*. The whole pipeline is **driver-collect-free**
 (nothing funnels back to a single node):
 
@@ -1152,7 +1150,7 @@ block-shuffle scoring  ->  distributed WCC (randomized contraction)
 > use `score -> per-partition local connected-components -> ...` instead. It is
 > faster (a 4-worker run clocked ~213 s, 0.30 GB driver) but only correct when
 > each cluster's duplicates already land in the same input partition (e.g. the
-> input is sorted by a blocking key); it under-merges otherwise — which is why
+> input is sorted by a blocking key); it under-merges otherwise: which is why
 > recall-complete is now the default.
 
 **Run it:**
@@ -1188,11 +1186,11 @@ block-shuffle scoring  ->  distributed WCC (randomized contraction)
 
 GoldenMatch includes a gold-themed interactive terminal UI:
 
-- **Auto-config summary** — first screen shows detected columns, scorers, and blocking strategy with Run/Edit/Save options
-- **Pipeline progress** — full-screen progress with stage tracker (✓/●/○) on first run, footer bar on re-runs
-- **Split-view matches** — cluster list on the left, golden record + member details on the right
-- **Live threshold slider** — arrow keys adjust threshold in 0.05 increments with instant cluster count preview
-- **Keyboard shortcuts** — `1-6` jump to tabs (Data, Config, Matches, Golden, Boost, Export), `F5` run, `?` show all shortcuts, `Ctrl+E` export
+- **Auto-config summary.** First screen shows detected columns, scorers, and blocking strategy with Run/Edit/Save options
+- **Pipeline progress.** Full-screen progress with stage tracker (✓/●/○) on first run, footer bar on re-runs
+- **Split-view matches.** Cluster list on the left, golden record + member details on the right
+- **Live threshold slider.** Arrow keys adjust threshold in 0.05 increments with instant cluster count preview
+- **Keyboard shortcuts.** `1-6` jump to tabs (Data, Config, Matches, Golden, Boost, Export), `F5` run, `?` show all shortcuts, `Ctrl+E` export
 
 **Data profiling:**
 
@@ -1208,7 +1206,7 @@ GoldenMatch includes a gold-themed interactive terminal UI:
 
 ## Environment Variables
 
-Key environment variables for tuning and hardening GoldenMatch. This is a curated subset — for **every** `GOLDENMATCH_*` variable with verified defaults and when-to-use guidance, see the [Tuning & opt-ins reference](https://docs.bensevern.dev/goldenmatch/tuning).
+Key environment variables for tuning and hardening GoldenMatch. This is a curated subset, for **every** `GOLDENMATCH_*` variable with verified defaults and when-to-use guidance, see the [Tuning & opt-ins reference](https://docs.bensevern.dev/docs/goldenmatch/tuning).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -1228,8 +1226,8 @@ Key environment variables for tuning and hardening GoldenMatch. This is a curate
 
 GoldenMatch saves preferences across sessions:
 
-- **Global**: `~/.goldenmatch/settings.yaml` — output mode, default model, API keys
-- **Project**: `.goldenmatch.yaml` — column mappings, thresholds, blocking config
+- **Global**: `~/.goldenmatch/settings.yaml`: output mode, default model, API keys
+- **Project**: `.goldenmatch.yaml`: column mappings, thresholds, blocking config
 
 Settings tuned in the TUI can be saved to the project file. Next run picks them up automatically.
 
@@ -1275,7 +1273,7 @@ Settings tuned in the TUI can be saved to the project file. Next run picks them 
 
 ## Remote MCP Server
 
-GoldenMatch is available as a hosted MCP server on [Smithery](https://smithery.ai/servers/benzsevern/goldenmatch) — connect from any MCP client without installing anything.
+GoldenMatch is available as a hosted MCP server on [Smithery](https://smithery.ai/servers/benzsevern/goldenmatch), connect from any MCP client without installing anything.
 
 **Claude Desktop / Claude Code:**
 ```json
@@ -1294,16 +1292,16 @@ pip install goldenmatch[mcp]
 goldenmatch mcp-serve data.csv
 ```
 
-94 tools available: deduplicate files, match records, explain decisions, review borderline pairs, privacy-preserving linkage, configure rules, scan data quality, run transforms, synthesize golden records, and manage Learning Memory (`list_corrections`, `add_correction`, `learn_thresholds`, `memory_stats`, `memory_export`).
+95 tools available: deduplicate files, match records, explain decisions, review borderline pairs, privacy-preserving linkage, configure rules, scan data quality, run transforms, synthesize golden records, and manage Learning Memory (`list_corrections`, `add_correction`, `learn_thresholds`, `memory_stats`, `memory_export`).
 
 ### Local files with the remote server
 
 The hosted server resolves `file_path` on the *server's* filesystem, so a remote client's local paths (`C:\...`, `/home/...`) aren't visible to it. Two ways to feed it a local file without hosting it anywhere:
 
-- **Inline `file_content`** — every file-taking tool (`analyze_data`, `auto_configure`, `agent_deduplicate`, `scan_quality`, `schema_match`, ...) accepts `file_content` (base64 by default, or raw with `encoding: "text"`) as an alternative to `file_path`. The server materializes it to a temp file and proceeds.
-- **`upload_dataset`** — upload the bytes once (`upload_dataset(file_content, filename)`) and get back a server path to reuse across any number of tool calls.
+- **Inline `file_content`.** Every file-taking tool (`analyze_data`, `auto_configure`, `agent_deduplicate`, `scan_quality`, `schema_match`, ...) accepts `file_content` (base64 by default, or raw with `encoding: "text"`) as an alternative to `file_path`. The server materializes it to a temp file and proceeds.
+- **`upload_dataset`.** Upload the bytes once (`upload_dataset(file_content, filename)`) and get back a server path to reuse across any number of tool calls.
 
-Uploads are ephemeral scratch, capped at 64 MB (`GOLDENMATCH_MCP_MAX_UPLOAD_BYTES`) and reaped after 24 h (`GOLDENMATCH_MCP_UPLOAD_TTL`). For larger datasets, pass a public `http(s)://` URL as `file_path` instead — the server reads those directly.
+Uploads are ephemeral scratch, capped at 64 MB (`GOLDENMATCH_MCP_MAX_UPLOAD_BYTES`) and reaped after 24 h (`GOLDENMATCH_MCP_UPLOAD_TTL`). For larger datasets, pass a public `http(s)://` URL as `file_path` instead. The server reads those directly.
 
 ## Architecture
 
@@ -1356,17 +1354,17 @@ goldenmatch/
 
 ## What's New in v1.2.7
 
-- **Auto-config cardinality guards** — three new guards prevent auto-config failures on edge-case data:
+- **Auto-config cardinality guards.** Three new guards prevent auto-config failures on edge-case data:
   - Blocking: excludes near-unique columns (cardinality_ratio >= 0.95)
   - Matchkeys: skips exact matchkeys for low-cardinality columns (cardinality_ratio < 0.01)
   - Description columns: routes long text to fuzzy matching (token_sort) alongside embedding
-- **Library comparison benchmarks** — head-to-head results against Splink, Dedupe, and RecordLinkage on Febrl (0.971 F1) and DBLP-ACM (0.918 F1). GoldenMatch is the most consistent performer across data types.
+- **Library comparison benchmarks.** Head-to-head results against Splink, Dedupe, and RecordLinkage on Febrl (0.971 F1) and DBLP-ACM (0.918 F1). GoldenMatch is the most consistent performer across data types.
 
 ## What's New in v1.2.6
 
-- **Iterative LLM calibration** — instead of scoring all candidates, calibrates the decision threshold from ~200 sampled pairs. Typically converges in 2-3 rounds at negligible cost (~$0.01 on a 401K-row equipment dataset).
-- **ANN hybrid blocking** — oversized blocks that exceed the max block size now fall back to embedding-based ANN sub-blocking automatically, keeping blocks tractable without manual tuning.
-- **Auto-config classification fixes** — improved heuristics for ID and price fields, utility-based field ranking to select better blocking keys, and LLM-assisted classification for ambiguous column names.
+- **Iterative LLM calibration.** Instead of scoring all candidates, calibrates the decision threshold from ~200 sampled pairs. Typically converges in 2-3 rounds at negligible cost (~$0.01 on a 401K-row equipment dataset).
+- **ANN hybrid blocking.** Oversized blocks that exceed the max block size now fall back to embedding-based ANN sub-blocking automatically, keeping blocks tractable without manual tuning.
+- **Auto-config classification fixes.** Improved heuristics for ID and price fields, utility-based field ranking to select better blocking keys, and LLM-assisted classification for ambiguous column names.
 
 ## Author
 

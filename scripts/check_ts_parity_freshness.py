@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 from pathlib import Path
 
 # 4-decimal scorer-parity contract (tests/parity/scorer-ground-truth.test.ts

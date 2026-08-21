@@ -1,12 +1,12 @@
 ---
 title: "Migrating from hand-rolled dbt"
-description: "Distill a hand-rolled dbt entity-resolution pipeline down to one reusable GoldenMatch config — and prove it reproduces your existing clusters."
+description: "Distill a hand-rolled dbt entity-resolution pipeline down to one reusable GoldenMatch config, and prove it reproduces your existing clusters."
 keywords: ["goldenmatch", "dbt", "migration", "entity resolution", "dedup", "manifest.json", "from_dbt", "import-dbt", "distill", "consolidation"]
 ---
 
-Got ~10k lines of hand-rolled entity-resolution SQL spread across dozens of dbt models? Almost all of it encodes a *small* set of real decisions — a few blocking keys, a handful of comparison fields and thresholds, some survivorship rules — buried in sprawl. GoldenMatch's dbt converter **ingests your dbt project and distills it into one reusable config**, then **measures how faithfully that config reproduces your pipeline's existing output**.
+Got ~10k lines of hand-rolled entity-resolution SQL spread across dozens of dbt models? Almost all of it encodes a *small* set of real decisions, a few blocking keys, a handful of comparison fields and thresholds, some survivorship rules, buried in sprawl. GoldenMatch's dbt converter **ingests your dbt project and distills it into one reusable config**, then **measures how faithfully that config reproduces your pipeline's existing output**.
 
-The value is **distillation + proof**, not faithful SQL translation. Lossy extraction is fine *because it is verified* — exactly the posture the [Splink converter](/goldenmatch/migrating-from-splink) ships with.
+The value is **distillation + proof**, not faithful SQL translation. Lossy extraction is fine *because it is verified*, exactly the posture the [Splink converter](/goldenmatch/migrating-from-splink) ships with.
 
 <Note>
 This complements the [GoldenMatch-in-dbt package](https://pypi.org/project/goldenmatch/): that adds GoldenMatch to a dbt pipeline going forward; this converter is for *replacing* hand-rolled ER a team already has. The emitted config drops straight into a `{{ goldenmatch_dedupe(...) }}` model.
@@ -14,7 +14,7 @@ This complements the [GoldenMatch-in-dbt package](https://pypi.org/project/golde
 
 ## The key enabler: the manifest, not raw SQL
 
-The converter reads your dbt **`manifest.json`** — the structured metadata `dbt compile` (or `dbt parse` / `dbt docs generate`) produces — not blind `.sql` files. The manifest carries every model's compiled SQL, the full `ref()`/`source()` DAG, columns, tests, and the warehouse adapter. That structure is what makes distillation tractable, and it needs **no warehouse credentials** (only the optional verify against a live output table does).
+The converter reads your dbt **`manifest.json`**: the structured metadata `dbt compile` (or `dbt parse` / `dbt docs generate`) produces, not blind `.sql` files. The manifest carries every model's compiled SQL, the full `ref()`/`source()` DAG, columns, tests, and the warehouse adapter. That structure is what makes distillation tractable, and it needs **no warehouse credentials** (only the optional verify against a live output table does).
 
 ```bash
 dbt compile           # produces target/manifest.json
@@ -54,18 +54,18 @@ if conv.config is not None:                # None on a non-ER project
     result = gm.dedupe_df(df, config=conv.config)
 ```
 
-`conv.er_models` is the ranked list of identified ER models (each with a confidence + the signals that fired), and `conv.signals` is every recognized signal — including the `couldnt_extract` items — so you can audit exactly what carried over.
+`conv.er_models` is the ranked list of identified ER models (each with a confidence + the signals that fired), and `conv.signals` is every recognized signal, including the `couldnt_extract` items, so you can audit exactly what carried over.
 
 ## Two honest value stories
 
 The report tells you **which** applies, so it never over-claims an F1 win:
 
 - **Fuzzy / probabilistic ER sprawl** → an *accuracy + consolidation* story: GoldenMatch does the fuzzy matching the SQL did badly, in a tested engine.
-- **Exact keep-latest dedup sprinkled everywhere** (the common case) → a *consolidation + maintainability* story: 10k lines become a 20-line tested config. The "accuracy" number here is trivially ~1.0 — the win is consolidation, and `conv.coverage.story` says so (`exact-dedup`, not `fuzzy-er`).
+- **Exact keep-latest dedup sprinkled everywhere** (the common case) → a *consolidation + maintainability* story: 10k lines become a 20-line tested config. The "accuracy" number here is trivially ~1.0, the win is consolidation, and `conv.coverage.story` says so (`exact-dedup`, not `fuzzy-er`).
 
 ## What it recognizes
 
-Over each identified ER model's compiled SQL (dialect-aware — **DuckDB, Snowflake, BigQuery** in the MVP; others fall through to a dialect-agnostic core and are flagged):
+Over each identified ER model's compiled SQL (dialect-aware: **DuckDB, Snowflake, BigQuery** in the MVP; others fall through to a dialect-agnostic core and are flagged):
 
 | dbt idiom | → GoldenMatch |
 |---|---|
@@ -76,11 +76,11 @@ Over each identified ER model's compiled SQL (dialect-aware — **DuckDB, Snowfl
 | `jaro_winkler_similarity(a, b) >= t` / `levenshtein(a, b) <= k` / `soundex(a) = soundex(b)` + a self-join `ON` key | comparison field + scorer + threshold, blocked on the join key |
 | `LOWER`/`UPPER`/`TRIM` wrapping a key column | a standardizer transform on that field |
 
-Everything else — arbitrary business logic, `CASE` ladders, priority hierarchies — is attached to the report as a `couldn't extract` finding with the model name + SQL excerpt, **never silently dropped**.
+Everything else, arbitrary business logic, `CASE` ladders, priority hierarchies, is attached to the report as a `couldn't extract` finding with the model name + SQL excerpt, **never silently dropped**.
 
 ## Verify it reproduces your pipeline (the trust step)
 
-Your hand-rolled dbt ER model already produces an output table — a surrogate-key→member mapping or a canonical/golden table. That existing output is **label-free ground truth**. `verify_against_dbt` runs the converted config on a sample of the source rows and reports pairwise cluster agreement against it:
+Your hand-rolled dbt ER model already produces an output table, a surrogate-key→member mapping or a canonical/golden table. That existing output is **label-free ground truth**. `verify_against_dbt` runs the converted config on a sample of the source rows and reports pairwise cluster agreement against it:
 
 ```python
 from goldenmatch.config.dbt_verify import verify_against_dbt
@@ -96,11 +96,11 @@ goldenmatch import-dbt target/manifest.json \
   --verify dbt_output.parquet --source source_rows.parquet --id-column id
 ```
 
-The `output_table` is a two-column `id, cluster_id` frame (name the columns with `output_id_column` / `output_cluster_column` if they differ). Verification is **best-effort**: a missing, empty, or non-overlapping output degrades to a skip notice, never a crash — the config is still written, it's just a *suggestion* until you point it at an output table.
+The `output_table` is a two-column `id, cluster_id` frame (name the columns with `output_id_column` / `output_cluster_column` if they differ). Verification is **best-effort**: a missing, empty, or non-overlapping output degrades to a skip notice, never a crash. The config is still written, it's just a *suggestion* until you point it at an output table.
 
 ## Boundaries (stated honestly in the report)
 
 - **Extraction is heuristic → partial coverage.** The `couldn't extract` list is a first-class output for human review, not a footnote.
 - **Survivorship & conditional business rules** are the hardest to extract. The MVP recognizes most-recent (DESC window order-by) and reports it with the exact remediation (GoldenMatch applies `most_recent` per field); priority hierarchies and `CASE` ladders are flagged.
-- **Dialect variance** — the MVP covers DuckDB / Snowflake / BigQuery; the long tail is flagged.
+- **Dialect variance.** The MVP covers DuckDB / Snowflake / BigQuery; the long tail is flagged.
 - **Verify needs the output table.** With it the proof is strong; without it the config is a reviewed suggestion.

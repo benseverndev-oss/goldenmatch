@@ -5,10 +5,10 @@ keywords: ["goldencheck", "native", "rust", "arrow", "deep profiling", "function
 ---
 
 GoldenCheck is pure-Python; as of 3.0.0 the everyday scan is **Arrow-native** and
-Polars-free — `scan_file`, `scan_dataframe`, and the CLI run on a `pyarrow.Table`
+Polars-free: `scan_file`, `scan_dataframe`, and the CLI run on a `pyarrow.Table`
 (a base dependency), so CSV/Parquet/Excel scanning needs no Polars. For the
 CPU-heavy **deep-profiling** checks there's an optional compiled runtime, and
-the package falls back to pure Python when it isn't installed — behaviour is
+the package falls back to pure Python when it isn't installed: behaviour is
 identical either way, native only changes wall-clock.
 
 ```bash
@@ -46,7 +46,7 @@ be **byte-identical / integer-exact** to the pure-Python reference, **and**
 measurably faster than the reference implementation on a real workload. When the
 kernels were first added, that reference was the old Polars scan path, so the
 original bar was "beat Polars" (one early kernel was actually *slower* than
-Polars and was rewritten before shipping — the rule was "beat Polars", not "it's
+Polars and was rewritten before shipping: the rule was "beat Polars", not "it's
 Rust"). After the 3.0.0 Flip there is no Polars in the default scan at all: the
 whole scan is Arrow-native, so duplicate-row detection, referential integrity,
 and freshness now run on the Arrow seam (`pyarrow.compute` plus these kernels),
@@ -78,7 +78,7 @@ wins. The levers:
 - **A parallel scan.** Column profilers AND relation profilers fan out across a
   thread pool. It's deterministic: results merge in profiler order, so findings
   are byte-identical to the sequential path.
-- **No whole-column materialization in sample paths** — profilers slice to the few
+- **No whole-column materialization in sample paths.** Profilers slice to the few
   sample values they need before converting to Python, instead of realizing the
   entire filtered column.
 
@@ -92,33 +92,33 @@ either way.
 
 ## New deep-profiling checks
 
-- **Composite keys** — surfaces `(order_id, line_no)`-style natural keys.
-- **Functional dependencies** — exact `det → dep` relationships (a column is
+- **Composite keys.** Surfaces `(order_id, line_no)`-style natural keys.
+- **Functional dependencies.** Exact `det → dep` relationships (a column is
   derivable from another), and **approximate** ones where a handful of violating
   rows are flagged as likely errors.
-- **Fuzzy values** — near-duplicate spellings within a column.
-- **Duplicate & near-duplicate rows** — exact, and rows identical after
+- **Fuzzy values.** Near-duplicate spellings within a column.
+- **Duplicate & near-duplicate rows.** Exact, and rows identical after
   normalization.
-- **Freshness / staleness** — future-dated timestamps (always on) and
+- **Freshness / staleness.** Future-dated timestamps (always on) and
   name-gated staleness (`updated_at` that hasn't advanced).
-- **Denial constraints** (opt-in) — if-then / cross-tuple invariants like
+- **Denial constraints** (opt-in): if-then / cross-tuple invariants like
   `¬(status=shipped ∧ ship_date<order_date)`, with the violating rows. The
   `dc.rs` evidence kernel is gated on `GOLDENCHECK_NATIVE`, set/byte-parity
   tested against the pure-Python fallback, and cleared the same measure-first
   gate (~1.5–1.8× over a Polars cross-join, ~60–96× over pure Python at m=1500)
   before defaulting on.
 
-## `--deep` — profile the full population
+## `--deep`: profile the full population
 
 By default GoldenCheck samples large files to 100K rows. `--deep` profiles the
 **entire** dataset, removing sampling error on cardinality, uniqueness, and
-rare-value checks — the native kernels keep it affordable.
+rare-value checks: the native kernels keep it affordable.
 
 ```bash
 goldencheck data.csv --deep
 ```
 
-## `refs` — cross-file referential integrity
+## `refs`: cross-file referential integrity
 
 Validate that a child table's foreign keys all exist in a parent's key:
 

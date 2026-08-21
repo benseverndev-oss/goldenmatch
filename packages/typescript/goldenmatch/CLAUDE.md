@@ -195,6 +195,20 @@ verified no leak into `dist/core/index.js`).
   over a committed base64 wasm under `src/core/_wasm/`; `tsc`/`vitest`/`tsup` need
   no rust toolchain). Regenerate the embed (after any `fs-core`/`fs-wasm` change):
   `node scripts/build_fs_wasm.mjs` (needs wasm-pack + the wasm32 target).
+- **FS TRAINING from counted vectors (`trainFsFromCounts`, Phase 1b of
+  `docs/superpowers/specs/2026-08-13-fs-em-rust-single-source-design.md`).** The EM
+  loop exists three times in this repo -- Python, this package's `trainEM`, and
+  Rust `score-core::em_core` -- and `trainFsFromCounts` is TS reaching the Rust
+  one. It exposes the COUNTED shape ONLY and deliberately does NOT reroute
+  `trainEM`: `trainEM` supports negative-evidence dims and `em_core` explicitly
+  does not yet, so routing it through the kernel today would silently drop NE and
+  return a model the config never asked for. Same posture as the scoring kernel
+  before the TS scorer was rerouted onto it -- ship the kernel + parity as an
+  alternative surface first. **The row-shaped duplicate stays until `em_core`
+  covers NE.** Parity: `tests/parity/fs-em-counts.parity.test.ts` pins the SAME
+  anchors as `score-core/tests/fixtures/em_counts_parity.json` (emitted from the
+  Python reference by `scripts/gen_fs_em_parity_fixture.py`), so the three
+  surfaces cannot each agree with their own hand-copied numbers and nothing else.
 - **Cross-surface parity gate:** `tests/parity/fs-wasm.parity.test.ts` feeds the
   SAME inputs the Python NATIVE kernel scored — the fixture
   `tests/parity/fixtures/fs/fs_block_scoring.json` is AUTHORED by the native

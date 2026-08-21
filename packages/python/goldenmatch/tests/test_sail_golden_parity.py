@@ -8,22 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("pysail")
 pytest.importorskip("pyspark")
-
-
-@pytest.fixture(scope="module")
-def spark():
-    from pysail.spark import SparkConnectServer
-    from pyspark.sql import SparkSession
-
-    server = SparkConnectServer()
-    server.start()
-    _, port = server.listening_address
-    sess = SparkSession.builder.remote(f"sc://localhost:{port}").getOrCreate()
-    yield sess
-    sess.stop()
-    server.stop()
 
 
 _VALUE_COLS = ["first_name", "email"]
@@ -84,7 +69,7 @@ def _sail_golden(out_df, value_cols):
 
 
 def test_sail_golden_content_parity(spark):
-    from goldenmatch.sail.golden import build_golden
+    from goldenmatch.spark.golden import build_golden
 
     rows = _source_rows()
     assignments = _assignments()

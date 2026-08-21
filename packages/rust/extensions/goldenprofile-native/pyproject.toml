@@ -15,6 +15,16 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Ben Severn", email = "benzsevern@gmail.com" }]
 
+[project.urls]
+Homepage = "https://github.com/benseverndev-oss/goldenmatch"
+Repository = "https://github.com/benseverndev-oss/goldenmatch"
+Documentation = "https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/rust/extensions/goldenprofile-core"
+# Agent-facing entry point. PyPI renders these URLs and they are scraped, so
+# this is the discovery path for a tool that never clones the repo. The same
+# file ships INSIDE the wheel at goldenprofile_native/llms.txt.
+"AI agents (llms.txt)" = "https://docs.bensevern.dev/docs/llms.txt"
+Issues = "https://github.com/benseverndev-oss/goldenmatch/issues"
+
 [tool.maturin]
 # The Rust cdylib is `_native`; ship it inside the `goldenprofile_native`
 # package so `from goldenprofile_native import resolve_json` works.

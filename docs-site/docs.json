@@ -73,6 +73,7 @@
                   "goldenmatch/llm",
                   "goldenmatch/learning-memory",
                   "goldenmatch/identity-graph",
+                  "goldenmatch/semantic-key-integrity",
                   "goldenmatch/domain-packs",
                   "goldenmatch/reference-data",
                   "goldenmatch/streaming",
@@ -174,6 +175,12 @@
               "reference/api-surface",
               "reference/versioning",
               "reference/vendor-comparison"
+            ]
+          },
+          {
+            "group": "Case studies",
+            "pages": [
+              "case-studies/zero-config-vs-splink"
             ]
           },
           {

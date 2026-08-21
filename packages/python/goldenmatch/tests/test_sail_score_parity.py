@@ -5,23 +5,9 @@ from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("pysail")
 pytest.importorskip("pyspark")
+
 pytest.importorskip("polars")
-
-
-@pytest.fixture(scope="module")
-def spark():
-    from pysail.spark import SparkConnectServer
-    from pyspark.sql import SparkSession
-
-    server = SparkConnectServer()
-    server.start()
-    _, port = server.listening_address
-    sess = SparkSession.builder.remote(f"sc://localhost:{port}").getOrCreate()
-    yield sess
-    sess.stop()
-    server.stop()
 
 
 def _fixture_rows():
@@ -36,7 +22,7 @@ def _fixture_rows():
 
 
 def test_sail_scorer_udf_matches_rapidfuzz(spark):
-    from goldenmatch.sail.scorers import make_scorer_udf
+    from goldenmatch.spark.scorers import make_scorer_udf
     from rapidfuzz.distance import JaroWinkler
 
     df = spark.createDataFrame([("Aaaa", "Aaaa"), ("Brown", "Browne")], ["a", "b"])
@@ -71,7 +57,7 @@ def _reference_pairs(rows, threshold):
 
 
 def test_sail_score_dedup_pair_set_parity(spark):
-    from goldenmatch.sail.scoring import score_and_dedup
+    from goldenmatch.spark.scoring import score_and_dedup
 
     rows = _fixture_rows()
     threshold = 0.85

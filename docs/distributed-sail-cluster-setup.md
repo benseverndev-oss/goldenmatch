@@ -7,11 +7,36 @@ Mirrors the Ray posture in [`distributed-ray-cluster-setup.md`](distributed-ray-
 option; Ray clustering stays the default
 ([`decisions/0004`](../context-network/decisions/0004-sail-tier-scope.md)).
 
-> **STATUS: SCAFFOLD.** Authored from the LakeSail Kubernetes guide without a
-> live GKE shakedown. The manifests + commands are the right *shape*; treat the
-> first real run as a bring-up, and verify the marked points. LakeSail image
-> coordinates and `SAIL_*` env keys drift — check
+> ## ⚠ READ THIS FIRST: a PROVEN kit exists, and it is not this one
+>
+> This page and the `deploy/sail/` manifests it references are a **SCAFFOLD** —
+> authored from the LakeSail Kubernetes guide and **never run against a live
+> cluster**. The paths below are valid; the kit behind them is untested.
+>
+> **[`deploy/sail-gke/README.md`](../packages/python/goldenmatch/deploy/sail-gke/README.md)
+> is the kit that actually ran** — a real multi-node GKE bring-up on
+> 2026-06-15, end-to-end distributed, with worker pods scoring on separate
+> nodes. It ships a working `Dockerfile` (exact pins: `pysail==0.6.4`,
+> `pandas<2.3`, `pyarrow<18`, `setuptools`), `sail.yaml`, bench + diag Jobs, a
+> smoke-data generator, and a runbook with the operational gotchas that only
+> surface on a real cluster.
+>
+> **Start there.** Use this page for the S4 100M binding bench narrative and the
+> `SAIL_REMOTE` wiring, not as your bring-up instructions.
+>
+> **What the proven run found, so you do not rediscover it:** the pipeline runs
+> distributed but **does not scale** as-is. WCC goes superlinear (2.9s @1.5K →
+> 22.4s @4K → wedged at 12K) because `goldenmatch/sail/clustering.py` re-joins
+> `labels` against itself each round, growing the Spark Connect plan unbounded.
+> Sail has no working lineage truncation (`cache` is a no-op; `persist` /
+> `localCheckpoint` / `checkpoint` are planned — [lakehq/sail#482](https://github.com/lakehq/sail/issues/482)).
+> Mitigate with `wcc_checkpoint_interval` + `wcc_checkpoint_dir` (opt-in,
+> default off); at scale the checkpoint dir must be shared storage every worker
+> can reach (`gs://…` via Workload Identity).
+>
+> LakeSail image coordinates and `SAIL_*` env keys drift — check
 > <https://docs.lakesail.com/sail/latest/guide/deployment/kubernetes.html>.
+> Note the proven kit pins `pysail==0.6.4` while current is `0.7.0`.
 
 > **COST:** a multi-node GKE cluster + a 100M run is real (modest) spend. Set a
 > budget, and **delete the cluster when done** (last step). This is an

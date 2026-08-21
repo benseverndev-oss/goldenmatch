@@ -125,7 +125,9 @@ def test_quality_scan_scoped_to_cluster_members(monkeypatch):
     orig = q.compute_quality_scores
 
     def _recording(df):
-        seen["height"] = df.height
+        # Representation-agnostic: the golden stage hands the seam frame over
+        # arrow-natively (pa.Table has num_rows, not polars' .height).
+        seen["height"] = getattr(df, "num_rows", None) or df.height
         return orig(df)
 
     monkeypatch.setattr(q, "compute_quality_scores", _recording)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as _dt
 import logging
 import math
+import os
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
@@ -55,11 +56,130 @@ def reset_ne_broken() -> None:
         _NE_BROKEN.clear()
 
 
+def cheap_n_rows(block: Any) -> int | None:
+    """Row count IF reading it costs nothing; ``None`` when it would collect.
+
+    The candidate-count loop is gated on BLOCK COUNT because `Block.n_rows()`
+    goes through `materialize()`. But materialising is only expensive for one
+    of the shapes a block can take:
+
+      * `RowIdBlock` carries an int array -- `len(_ids)`, free;
+      * `Block.df` already a seam `Frame` or an eager native frame -- `.height`,
+        free (`materialize()` returns it unchanged);
+      * `Block.df` a polars LazyFrame -- `.collect()`, NOT free.
+
+    Only the last deserves the gate. Returning None for it, and a real number
+    otherwise, lets the caller count without ever paying to count.
+    """
+    ids = getattr(block, "_ids", None)
+    if ids is not None:
+        try:
+            return len(ids)
+        except TypeError:  # pragma: no cover - an array without __len__
+            return None
+
+    d = getattr(block, "df", None)
+    if d is None:
+        return None
+
+    from goldenmatch.core.frame import Frame, is_polars_lazyframe
+
+    if is_polars_lazyframe(d):
+        return None  # would collect -- decline
+    if isinstance(d, Frame):
+        return d.height
+    h = getattr(d, "height", None)
+    return int(h) if isinstance(h, int) else None
+
+
+def _candidate_count_gate() -> int:
+    """Max blocks for which the candidate-count loop runs. Default 10,000.
+
+    `GOLDENMATCH_CANDIDATE_COUNT_MAX_BLOCKS` raises it. Above the gate the count
+    is skipped and `ScoringProfile.candidates_counted` is False, which is
+    correct for production -- counting calls `Block.n_rows()`, which
+    materialises -- but leaves the auto-config diagnostics unable to say whether
+    a shape had any candidate pairs at all. A garbage value falls back to the
+    default rather than raising: this is a diagnostic knob, and a typo in it
+    must not take down a scoring run.
+    """
+    raw = os.environ.get("GOLDENMATCH_CANDIDATE_COUNT_MAX_BLOCKS", "")
+    if not raw:
+        return 10_000
+    try:
+        v = int(raw)
+    except ValueError:
+        logger.warning(
+            "GOLDENMATCH_CANDIDATE_COUNT_MAX_BLOCKS=%r is not an integer; "
+            "using the default 10000", raw,
+        )
+        return 10_000
+    return v if v >= 0 else 10_000
+
+
+def note_scoring_route(route: str) -> None:
+    """Record WHICH orchestration ran, even when it emits no profile itself.
+
+    The FS orchestrators in `backends/fs_out_of_core.py` delegate scoring, so
+    they have no pairs to report -- but they are the layer that chose the
+    branch, and that choice is exactly what has been unknown. This stamps the
+    route without touching any measured field:
+
+      * no profile captured yet -> store a route-only profile (all zeros, route
+        set). An empty scoring profile that NAMES its producer is strictly more
+        informative than an empty one that does not.
+      * a profile already captured -> keep every measured value and prefix the
+        outer route, giving `fs.sequential>buckets.arrow`. The inner emitter
+        knows what it scored; the outer one knows how it was reached.
+
+    A no-op when no capture is open, like every other emit on this path.
+    """
+    from goldenmatch.core.complexity_profile import ScoringProfile
+    from goldenmatch.core.profile_emitter import current_emitter, has_active_emitter
+
+    if not has_active_emitter():
+        return
+    em = current_emitter()
+    existing = getattr(em, "scoring", None)
+    if existing is None:
+        em.set_scoring(ScoringProfile(route=route))
+        return
+    import dataclasses
+
+    inner = existing.route
+    em.set_scoring(dataclasses.replace(
+        existing, route=f"{route}>{inner}" if inner else route
+    ))
+
+
+def profile_threshold(mk: Any, pairs: list[tuple[int, int, float]]) -> float:
+    """The cut this run actually applied, safe for ANY matchkey type (#2647).
+
+    `mk.fuzzy_threshold` RAISES for probabilistic matchkeys -- *"fuzzy_threshold
+    accessed but threshold is None. Only weighted matchkeys are guaranteed to
+    have a threshold"* -- so the emitter's threshold contract silently assumed
+    weighted. That held only because probabilistic routes to the bucket backend,
+    which emitted nothing at all; making that backend report exposed it.
+
+    The fallback is the LOWEST RETURNED SCORE, which is the operative admission
+    boundary rather than a guess: `find_fuzzy_matches` returns only pairs at or
+    above the cut, so the minimum of what came back is where the cut effectively
+    sat for this run. `mass_above_threshold` is then 1.0, which is true -- every
+    returned pair did clear it.
+    """
+    try:
+        return mk.fuzzy_threshold
+    except ValueError:
+        return min((s for _a, _b, s in pairs), default=0.0)
+
+
 def _emit_scoring_profile(
     pairs: list[tuple[int, int, float]],
     threshold: float,
     *,
     candidates_compared: int = 0,
+    candidates_counted: bool = False,
+    route: str = "",
     per_field_variance: dict[str, float] | None = None,
 ) -> None:
     """Emit ScoringProfile to current emitter. No-op when emitter is null.
@@ -86,13 +206,42 @@ def _emit_scoring_profile(
     if not has_active_emitter():
         return
     scores = [s for _, _, s in pairs]
+    # `mass_above_threshold` and `mass_in_borderline` keep their ORIGINAL
+    # computation, over the already-above-cut `pairs`. That makes
+    # `mass_above_threshold` 1.0 by construction for any non-empty result --
+    # a known tautology (#2673), left in place deliberately.
+    #
+    # The first attempt at #2673 rebased this field onto `candidates_compared`.
+    # It is the honest denominator and the field reads correctly afterwards,
+    # but a dozen rules gate on hardcoded cuts (`< 0.5` in
+    # rule_blocking_too_coarse, `>= 0.95` in the precision anchor, `>= 1.0` in
+    # rule_recall_gap_suspected) that were all chosen while this input was a
+    # CONSTANT. Making it truthful invalidates their calibration at once.
+    # Measured on the quality gate, anchor_person_match: F1 1.0000 -> 0.7303
+    # (P 1.0000 -> 0.5751, recall unchanged), because the controller took a
+    # different rule path -- `low_transitivity` x3 became
+    # `blocking_too_coarse` -- and over-merged.
+    #
+    # So the honest fraction ships as a SEPARATE field, `admitted_fraction`,
+    # and only the two consumers whose bug motivated #2663/#2668 read it. The
+    # remaining consumers stay on the signal they were tuned against.
+    # Re-calibrating them is real work and needs its own before/after across
+    # all six gate datasets; it is not smuggled in here.
+    _admitted = (
+        min(1.0, len(scores) / candidates_compared)
+        if candidates_counted and candidates_compared > 0
+        else None
+    )
     profile = ScoringProfile(
         n_pairs_scored=len(scores),
         candidates_compared=candidates_compared,
+        candidates_counted=candidates_counted,
+        route=route,
         score_histogram=histogram_20(scores),
         dip_statistic=hartigan_dip(scores),
         mass_above_threshold=mass_above(scores, threshold),
         mass_in_borderline=mass_borderline(scores, threshold),
+        admitted_fraction=_admitted,
         per_field_score_variance=per_field_variance or {},
     )
     current_emitter().set_scoring(profile)
@@ -2206,7 +2355,10 @@ def score_blocks_parallel(
             if track_matched:
                 for a, b, _s in pairs:
                     matched_pairs.add((min(a, b), max(a, b)))
-        _emit_scoring_profile(all_pairs, mk.fuzzy_threshold, candidates_compared=total_candidates)
+        _emit_scoring_profile(all_pairs, mk.fuzzy_threshold,
+                              candidates_compared=total_candidates,
+                              candidates_counted=True,
+                              route="scorer.small")
         return all_pairs
 
     # Snapshot exclude_pairs so threads see a frozen copy
@@ -2234,10 +2386,30 @@ def score_blocks_parallel(
     # not literally zero candidates." For small-N workloads (the actual
     # use case for the stat -- debugging, diagnostics) we still compute
     # it cheaply because there are few blocks.
-    _CANDIDATE_COUNT_SKIP_THRESHOLD = 10_000
+    # Overridable so a DIAGNOSTIC can buy the number back (#2639). The count is
+    # skipped above this many blocks because `Block.n_rows()` materialises and
+    # doing that serially for tens of thousands of blocks is real time -- a
+    # correct default for production, and the reason `candidates_compared` is
+    # unavailable at exactly the scale where "were there any candidates at all"
+    # is the question. A diagnostic run does not care about the seconds, so it
+    # can raise the gate and get a measured answer instead of an UNDETERMINED.
+    #
+    # Env, not a parameter: the callers between here and the auto-config
+    # controller do not thread scoring knobs, and adding one to every signature
+    # to serve a diagnostic would be the wrong trade.
+    _CANDIDATE_COUNT_SKIP_THRESHOLD = _candidate_count_gate()
     _n_blocks_for_count_gate = len(blocks)
-    if _n_blocks_for_count_gate <= _CANDIDATE_COUNT_SKIP_THRESHOLD:
+    # Count when it is FREE, whatever the block count. `cheap_n_rows` declines
+    # only for blocks that would have to collect, so this pays nothing and
+    # rescues the common case: above the gate the profile used to report
+    # `candidates_compared=0` even when every count was an attribute read.
+    _free = [cheap_n_rows(b) for b in blocks]
+    if blocks and all(n is not None for n in _free):
+        total_candidates = sum(n * (n - 1) // 2 for n in _free)  # type: ignore[operator]
+        _candidates_counted = True
+    elif _n_blocks_for_count_gate <= _CANDIDATE_COUNT_SKIP_THRESHOLD:
         total_candidates = 0
+        _candidates_counted = True
         for block in blocks:
             try:
                 n = block.n_rows()
@@ -2252,6 +2424,10 @@ def score_blocks_parallel(
             _n_blocks_for_count_gate, _CANDIDATE_COUNT_SKIP_THRESHOLD,
         )
         total_candidates = 0
+        # NOT counted, and said so rather than left as an ambiguous 0 (#2639).
+        # Consumers that read `candidates_compared == 0` as "no candidates"
+        # were firing on every shape past this gate.
+        _candidates_counted = False
 
     all_pairs = []
     total_blocks = len(blocks)
@@ -2291,7 +2467,10 @@ def score_blocks_parallel(
         "Parallel scoring: %d blocks, %d workers, %d pairs found",
         total_blocks, max_workers, len(all_pairs),
     )
-    _emit_scoring_profile(all_pairs, mk.fuzzy_threshold, candidates_compared=total_candidates)
+    _emit_scoring_profile(all_pairs, mk.fuzzy_threshold,
+                          candidates_compared=total_candidates,
+                          candidates_counted=_candidates_counted,
+                          route="scorer.parallel")
     return all_pairs
 
 

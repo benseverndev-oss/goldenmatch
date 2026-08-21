@@ -1,0 +1,846 @@
+record_id,org_name,street,city,postcode,website,phone,industry,hardness
+r0000,Penhale Logistics Ltd,197 High Street,Glasgow,E94 8DE,www.penhalelogistics.co.uk,+44 1818 836002,chemicals,legal_form
+r0001,AP Corp,133 Canal Street,Glasgow,N35 3DE,www.ashcroftplastics.co.uk,+44 1920 464631,food-production,acronym
+r0002,BE Limited,155 Victoria Road,Dundee,A64 2GD,www.blackwellengineeri.co.uk,+44 1971 873266,engineering,acronym
+r0003,Hollingsworth Services PLC,10 Mill Lane,Derby,A93 3HG,www.hollingsworth.co.uk,+44 1983 729484,logistics,common_token
+r0004,Oakhampton Services Ltd,171 High Street,Norwich,A83 7JJ,www.oakhampton.co.uk,+44 1539 506872,manufacturing,common_token
+r0005,Cavendish Packaging & Co,161 High Street,Dundee,L50 7DF,www.cavendishpackaging.co.uk,+44 1451 135921,food-production,canonical
+r0006,LM Limited,185 Mill Lane,Cardiff,D21 5FE,www.langmeremanufactur.co.uk,+44 1780 564455,manufacturing,acronym
+r0007,Ashcroft Textiles Inc,140 High Street,Swansea,G87 7DJ,www.ashcrofttextiles.co.uk,+44 1750 172434,chemicals,abbrev
+r0008,"Textiles, Penhale Ltd.",199 Mill Lane,Cardiff,B23 5GH,www.penhaletextiles.co.uk,+44 1464 740394,engineering,word_order
+r0009,Netherby Logistics LLP,33 Queens Park,Plymouth,L82 6DD,www.netherbylogistics.co.uk,+44 1251 226885,manufacturing,canonical
+r0010,Redgate Textiles Ltd.,178 Queens Park,Leeds,E47 7JB,www.redgatetextiles.co.uk,+44 1846 111449,wholesale,legal_form
+r0011,Baxter Systems Inc,126 Victoria Road,Norwich,A89 1JJ,www.baxter.co.uk,+44 1342 884159,logistics,common_token
+r0012,Redgate Systems Corporation,14 Canal Street,Plymouth,N98 7HJ,www.redgategroup.co.uk,+44 1151 898712,engineering,parent_sub
+r0013,Garrick Logistics Ltd,92 Kings Way,Leeds,S96 5HJ,www.garricklogistics.co.uk,+44 1698 300279,manufacturing,legal_form
+r0014,ET & Co,158 Canal Street,Bristol,D26 7DF,www.elmhursttextiles.co.uk,+44 1420 206687,manufacturing,acronym
+r0015,Oakhampton Logistics,116 Victoria Road,Plymouth,,,,logistics,missing
+r0016,Ingleby Systems PLC,97 Station Road,Glasgow,D44 6DD,www.inglebygroup.co.uk,+44 1326 708794,wholesale,parent_sub
+r0017,Ingleby Instruments Ltd,40 High Street,Cardiff,G28 3JB,www.inglebyinstruments.co.uk,+44 1735 874284,engineering,legal_form
+r0018,PP Inc,156 Foundry Road,Glasgow,M59 8HH,www.pinnaclepackaging.co.uk,+44 1452 609045,logistics,acronym
+r0019,"Motors, Jarrow & Co",91 Queens Park,Glasgow,G75 6HH,www.jarrowmotors.co.uk,+44 1806 523519,manufacturing,word_order
+r0020,Elmhurst Manufacturing Incorporated,27 Mill Lane,Cardiff,E34 8DJ,www.elmhurstmanufactur.co.uk,+44 1817 736300,chemicals,branch
+r0021,"Textiles, Rushmoor LLP",174 High Street,Sheffield,G28 7GD,www.rushmoortextiles.co.uk,+44 1704 798344,logistics,word_order
+r0022,Ingleby Partners Inc,130 Station Road,Cardiff,E63 4HJ,www.inglebygroup.co.uk,+44 1265 606563,food-production,parent_sub
+r0023,PM LLP,20 Kings Way,Glasgow,L8 7GE,www.pinnaclemotors.co.uk,+44 1967 604475,wholesale,acronym
+r0024,Ingleby Logistics,77 Kings Way,Cardiff,,,,chemicals,missing
+r0025,Pinnacle Instruments Corporation,160 Kings Way,Dundee,G32 7AF,www.pinnacleinstrument.co.uk,+44 1534 810889,manufacturing,legal_form
+r0026,TF Ltd,132 Foundry Road,Bristol,S69 6FA,www.thorntonfoods.co.uk,+44 1638 157288,wholesale,acronym
+r0027,Elmhurst Manufacturing,16 Queens Park,Dundee,,,,chemicals,missing
+r0028,Blackwell Textiles Ltd,158 Victoria Road,Bristol,E40 4BJ,www.blackwelltextiles.co.uk,+44 1901 438441,chemicals,canonical
+r0029,"Manufacturing, Quarrenden Ltd.",143 High Street,Cardiff,B4 4DE,www.quarrendenmanufact.co.uk,+44 1946 758168,chemicals,word_order
+r0030,Cavendish Chemicals,159 Foundry Road,Plymouth,,,,chemicals,missing
+r0031,Redgate Motors Ltd.,160 Queens Park,Glasgow,A43 2HE,www.redgatemotors.co.uk,+44 1815 791040,chemicals,legal_form
+r0032,Kirkland Packaging & Co,102 Station Road,Norwich,G26 6DJ,www.kirklandpackaging.co.uk,+44 1665 397123,food-production,canonical
+r0033,Rushmoor Manufacturing LLP,132 High Street,Dundee,D9 8HA,www.rushmoormanufactur.co.uk,+44 1463 452359,manufacturing,canonical
+r0034,Mowbray Textiles LLP,57 Victoria Road,Norwich,A90 3DD,www.mowbraytextiles.co.uk,+44 1684 978144,engineering,legal_form
+r0035,Oakhampton Instruments LLP,183 Queens Park,Leeds,L66 3HE,www.oakhamptoninstrume.co.uk,+44 1804 626739,food-production,branch
+r0036,Colville Foods Ltd,32 Mill Lane,Sheffield,M2 6FF,www.colvillefoods.co.uk,+44 1657 215052,logistics,legal_form
+r0037,Kirkland Solutions PLC,16 Station Road,Plymouth,N96 4HB,www.kirklandgroup.co.uk,+44 1571 742412,food-production,parent_sub
+r0038,Hollingsworth Packaging PLC,114 Victoria Road,Cardiff,S27 8JJ,www.hollingsworthpacka.co.uk,+44 1427 961565,wholesale,legal_form
+r0039,SF Inc,111 Queens Park,Dundee,G39 4DB,www.sterlingfoods.co.uk,+44 1100 545064,chemicals,acronym
+r0040,Sterling Foods LLP,111 Queens Park,Dundee,G39 4DB,www.sterlingfoods.co.uk,+44 1929 645195,chemicals,legal_form
+r0041,Quarrenden Logistics & Co,168 Station Road,Norwich,S46 7EE,www.quarrendenlogistic.co.uk,+44 1690 586566,wholesale,legal_form
+r0042,Langmere Chem Ltd.,116 Canal Street,Dundee,B33 7BE,www.langmerechemicals.co.uk,+44 1171 538883,chemicals,abbrev
+r0043,Stanbridge Logistics Limited,86 Queens Park,Sheffield,D96 2FB,www.stanbridgelogistic.co.uk,+44 1242 163075,chemicals,legal_form
+r0044,Harrow Manufacturing Corp,168 Station Road,Dundee,L41 5EB,www.harrowmanufacturin.co.uk,+44 1304 833177,manufacturing,legal_form
+r0045,Thornton Holdings Corp,47 Mill Lane,Norwich,N18 3JD,www.thornton.co.uk,+44 1869 425868,chemicals,common_token
+r0046,Harrow Mfg Ltd,168 Station Road,Dundee,L41 5EB,www.harrowmanufacturin.co.uk,+44 1253 403961,manufacturing,abbrev
+r0047,Penhale Logistics,197 High Street,Glasgow,,,,chemicals,missing
+r0048,Garrick Services PLC,7 Queens Park,Cardiff,N21 6HG,www.garrick.co.uk,+44 1600 816696,engineering,common_token
+r0049,Draycott Chem & Co,109 Station Road,Glasgow,G18 8AB,www.draycottchemicals.co.uk,+44 1248 475104,logistics,abbrev
+r0050,"Foods, Ashcroft PLC",129 Kings Way,Dundee,G41 2FD,www.ashcroftfoods.co.uk,+44 1942 401415,chemicals,word_order
+r0051,Kirkland Motors Ltd,114 Kings Way,Dundee,N46 8DB,www.kirklandmotors.co.uk,+44 1667 384037,manufacturing,abbrev
+r0052,Quarrenden Solutions Ltd.,143 High Street,Cardiff,B4 4DE,www.quarrendengroup.co.uk,+44 1255 909093,chemicals,parent_sub
+r0053,Stanbridge Plastics Inc,39 Kings Way,Sheffield,D25 7EA,www.stanbridgeplastics.co.uk,+44 1297 151781,logistics,legal_form
+r0054,Colville Foods,25 Foundry Road,Swansea,,,,logistics,missing
+r0055,Rushmoor Textiles LLP,26 Mill Lane,Norwich,G1 5EH,www.rushmoortextiles.co.uk,+44 1122 491506,manufacturing,legal_form
+r0056,Rushmoor Instruments,175 Victoria Road,Swansea,,,,food-production,missing
+r0057,Jarrow Group & Co,114 Mill Lane,Swansea,A59 6JH,www.jarrow.co.uk,+44 1575 774086,engineering,common_token
+r0058,Nthn Plastics Inc,5 Victoria Road,Glasgow,L29 5EG,www.northernplastics.co.uk,+44 1542 930481,food-production,abbrev
+r0059,EI Inc,1 Victoria Road,Leeds,L75 3JF,www.elmhurstinstrument.co.uk,+44 1748 924664,manufacturing,acronym
+r0060,Acme Logistics Corp,52 Kings Way,Bristol,A8 3ED,www.acmelogistics.co.uk,+44 1944 810275,manufacturing,legal_form
+r0061,Cavendish Partners Corporation,95 High Street,Bristol,G96 1FB,www.cavendishgroup.co.uk,+44 1225 683811,wholesale,parent_sub
+r0062,Elmhurst Plastics Ltd.,41 Foundry Road,Leeds,B3 1FG,www.elmhurstplastics.co.uk,+44 1767 754988,food-production,legal_form
+r0063,Langmere Chemicals & Co,30 Queens Park,Bristol,L19 8HG,www.langmerechemicals.co.uk,+44 1784 147483,logistics,legal_form
+r0064,Draycott Chemicals & Co,48 Foundry Road,Cardiff,G47 7HD,www.draycottchemicals.co.uk,+44 1455 793823,engineering,canonical
+r0065,Netherby Systems Corp,130 High Street,Plymouth,A31 4EG,www.netherbygroup.co.uk,+44 1330 209850,engineering,parent_sub
+r0066,Quarrenden Engineering Limited,117 Foundry Road,Derby,D43 3GG,www.quarrendenengineer.co.uk,+44 1202 234370,logistics,canonical
+r0067,"Instruments, Elmhurst Incorporated",57 Queens Park,Leeds,B31 2GJ,www.elmhurstinstrument.co.uk,+44 1291 763210,chemicals,word_order
+r0068,Penhale Textiles,199 Mill Lane,Cardiff,,,,engineering,missing
+r0069,"Manufacturing, Draycott Inc",18 High Street,Bristol,N8 7JE,www.draycottmanufactur.co.uk,+44 1354 911446,logistics,word_order
+r0070,Draycott Manufacturing,18 High Street,Bristol,,,,logistics,missing
+r0071,"Textiles, Ashcroft PLC",154 Canal Street,Derby,G17 8HH,www.ashcrofttextiles.co.uk,+44 1104 327057,wholesale,word_order
+r0072,Mowbray Motors PLC,180 Victoria Road,Sheffield,M42 6EB,www.mowbraymotors.co.uk,+44 1603 980955,chemicals,branch
+r0073,Cavendish Instruments Corporation,95 High Street,Bristol,G96 1FB,www.cavendishinstrumen.co.uk,+44 1501 114215,wholesale,canonical
+r0074,Penhale Group PLC,40 Queens Park,Glasgow,G32 1FF,www.penhale.co.uk,+44 1331 401172,logistics,common_token
+r0075,Jarrow Logistics Ltd.,11 High Street,Plymouth,M21 4DF,www.jarrowlogistics.co.uk,+44 1706 270702,food-production,branch
+r0076,Oakhampton Foods PLC,159 Kings Way,Sheffield,N77 7HF,www.oakhamptonfoods.co.uk,+44 1809 352150,logistics,canonical
+r0077,Cavendish Instruments & Co,124 Kings Way,Swansea,L64 8EJ,www.cavendishinstrumen.co.uk,+44 1795 766302,wholesale,legal_form
+r0078,Draycott Chemicals,109 Station Road,Glasgow,,,,logistics,missing
+r0079,Stanbridge Plastics Ltd.,39 Kings Way,Sheffield,D25 7EA,www.stanbridgeplastics.co.uk,+44 1290 594097,logistics,canonical
+r0080,Draycott Services PLC,11 Station Road,Bristol,B90 3EH,www.draycott.co.uk,+44 1692 433982,chemicals,common_token
+r0081,Jarrow Plastics LLP,179 High Street,Bristol,S72 6BG,www.jarrowplastics.co.uk,+44 1865 391071,manufacturing,canonical
+r0082,Jarrow Chemicals,110 Canal Street,Swansea,,,,chemicals,missing
+r0083,DE PLC,118 Kings Way,Glasgow,L74 7EA,www.draycottengineerin.co.uk,+44 1598 892723,wholesale,acronym
+r0084,Kirkland Manufacturing Incorporated,84 Kings Way,Derby,S61 4BJ,www.kirklandmanufactur.co.uk,+44 1428 113706,food-production,legal_form
+r0085,"Foods, Colville & Co",32 Mill Lane,Sheffield,M2 6FF,www.colvillefoods.co.uk,+44 1114 494174,logistics,word_order
+r0086,Oakhampton Manufacturing LLP,50 Station Road,Derby,L15 5AF,www.oakhamptonmanufact.co.uk,+44 1557 769411,logistics,canonical
+r0087,PE Ltd,18 Kings Way,Sheffield,S74 2GG,www.pinnacleengineerin.co.uk,+44 1392 391830,engineering,acronym
+r0088,DI & Co,110 Victoria Road,Dundee,G53 8GF,www.draycottinstrument.co.uk,+44 1307 242880,manufacturing,acronym
+r0089,"Logistics, Stanbridge PLC",86 Queens Park,Sheffield,D96 2FB,www.stanbridgelogistic.co.uk,+44 1894 294360,chemicals,word_order
+r0090,Draycott Chemicals Corporation,163 Foundry Road,Plymouth,S79 7HH,www.draycottchemicals.co.uk,+44 1184 873551,engineering,legal_form
+r0091,Langmere Instr PLC,23 High Street,Sheffield,L18 7BF,www.langmereinstrument.co.uk,+44 1865 561475,wholesale,abbrev
+r0092,Kirkland Services Ltd.,171 Mill Lane,Norwich,G79 5BF,www.kirkland.co.uk,+44 1701 578167,food-production,common_token
+r0093,Hollingsworth Instruments Limited,57 Victoria Road,Dundee,M25 6AF,www.hollingsworthinstr.co.uk,+44 1317 282548,manufacturing,legal_form
+r0094,Rushmoor Manufacturing Ltd,132 High Street,Dundee,D9 8HA,www.rushmoormanufactur.co.uk,+44 1761 700521,manufacturing,legal_form
+r0095,Oakhampton Textiles Incorporated,30 Canal Street,Norwich,N35 2FA,www.oakhamptontextiles.co.uk,+44 1834 107141,wholesale,canonical
+r0096,"Textiles, Northern Corp",54 Kings Way,Norwich,L45 2DH,www.northerntextiles.co.uk,+44 1106 484108,engineering,word_order
+r0097,Cavendish Chemicals Incorporated,159 Foundry Road,Plymouth,M26 5DD,www.cavendishchemicals.co.uk,+44 1979 974802,chemicals,legal_form
+r0098,"Motors, Hollingsworth PLC",199 Station Road,Leeds,S2 4EA,www.hollingsworthmotor.co.uk,+44 1401 264927,manufacturing,word_order
+r0099,Penhale Manufacturing Incorporated,75 Kings Way,Norwich,A27 1JJ,www.penhalemanufacturi.co.uk,+44 1738 839981,food-production,legal_form
+r0100,Ashcroft Textiles Inc,154 Canal Street,Derby,G17 8HH,www.ashcrofttextiles.co.uk,+44 1695 797965,wholesale,legal_form
+r0101,Netherby Engineering PLC,26 Kings Way,Glasgow,A6 3JG,www.netherbyengineerin.co.uk,+44 1934 126841,manufacturing,branch
+r0102,Cavendish Pkg & Co,161 High Street,Dundee,L50 7DF,www.cavendishpackaging.co.uk,+44 1529 923796,food-production,abbrev
+r0103,Elmhurst Instruments,57 Queens Park,Leeds,,,,chemicals,missing
+r0104,Hollingsworth Packaging Ltd,114 Victoria Road,Cardiff,S27 8JJ,www.hollingsworthpacka.co.uk,+44 1433 273252,wholesale,canonical
+r0105,Draycott Systems Inc,18 High Street,Bristol,N8 7JE,www.draycottgroup.co.uk,+44 1398 413770,logistics,parent_sub
+r0106,"Motors, Ashcroft Limited",192 Kings Way,Glasgow,M33 6AD,www.ashcroftmotors.co.uk,+44 1977 207047,logistics,word_order
+r0107,Acme Engineering Corporation,119 Victoria Road,Bristol,L48 8EJ,www.acmeengineering.co.uk,+44 1110 455817,food-production,branch
+r0108,Cavendish Plastics LLP,158 Foundry Road,Cardiff,G45 8DA,www.cavendishplastics.co.uk,+44 1177 914576,engineering,canonical
+r0109,Langmere Chemicals Ltd.,116 Canal Street,Dundee,B33 7BE,www.langmerechemicals.co.uk,+44 1704 591568,chemicals,canonical
+r0110,Acme Foods,139 Victoria Road,Leeds,,,,manufacturing,missing
+r0111,Harrow Instruments Ltd.,61 Queens Park,Plymouth,G51 8AD,www.harrowinstruments.co.uk,+44 1464 530173,logistics,legal_form
+r0112,Kirkland Manufacturing Ltd,11 Queens Park,Norwich,L61 7FA,www.kirklandmanufactur.co.uk,+44 1791 621556,manufacturing,canonical
+r0113,Cavendish Packaging,162 Mill Lane,Leeds,,,,wholesale,missing
+r0114,GL Corporation,92 Kings Way,Leeds,S96 5HJ,www.garricklogistics.co.uk,+44 1244 142548,manufacturing,acronym
+r0115,Stanbridge Group Ltd.,154 Victoria Road,Bristol,B31 6EH,www.stanbridge.co.uk,+44 1106 933981,engineering,common_token
+r0116,Langmere Systems PLC,23 High Street,Sheffield,L18 7BF,www.langmeregroup.co.uk,+44 1337 102994,wholesale,parent_sub
+r0117,Oakhampton Instruments Ltd,43 Queens Park,Bristol,M11 3JJ,www.oakhamptoninstrume.co.uk,+44 1855 625404,food-production,legal_form
+r0118,Ingleby Textiles PLC,97 Station Road,Glasgow,D44 6DD,www.inglebytextiles.co.uk,+44 1979 894779,wholesale,canonical
+r0119,"Packaging, Cavendish & Co",162 Mill Lane,Leeds,L9 2FG,www.cavendishpackaging.co.uk,+44 1907 297471,wholesale,word_order
+r0120,Elmhurst Solutions LLP,1 Victoria Road,Leeds,L75 3JF,www.elmhurstgroup.co.uk,+44 1585 845501,manufacturing,parent_sub
+r0121,Baxter Logistics Ltd,187 Foundry Road,Bristol,G27 4BJ,www.baxterlogistics.co.uk,+44 1855 695892,wholesale,canonical
+r0122,HC Inc,77 Station Road,Plymouth,N65 5DJ,www.hollingsworthchemi.co.uk,+44 1107 596547,engineering,acronym
+r0123,Mowbray Logistics,140 Mill Lane,Plymouth,,,,chemicals,missing
+r0124,Quarrenden Manufacturing Ltd.,143 High Street,Cardiff,B4 4DE,www.quarrendenmanufact.co.uk,+44 1285 808700,chemicals,canonical
+r0125,Colville Foods,32 Mill Lane,Sheffield,,,,logistics,missing
+r0126,Draycott Engineering,118 Kings Way,Glasgow,,,,wholesale,missing
+r0127,Draycott Systems & Co,109 Station Road,Glasgow,G18 8AB,www.draycottgroup.co.uk,+44 1566 254896,logistics,parent_sub
+r0128,Elmhurst Motors Ltd,166 Station Road,Swansea,M59 1EF,www.elmhurstmotors.co.uk,+44 1231 661661,engineering,abbrev
+r0129,Redgate Instruments Incorporated,120 High Street,Leeds,L2 4AJ,www.redgateinstruments.co.uk,+44 1220 942456,food-production,canonical
+r0130,Draycott Manufacturing Inc,102 Mill Lane,Norwich,N73 8GF,www.draycottmanufactur.co.uk,+44 1155 747341,manufacturing,legal_form
+r0131,Langmere Instruments,124 Station Road,Swansea,,,,chemicals,missing
+r0132,Mowbray Partners Limited,57 Victoria Road,Norwich,A90 3DD,www.mowbraygroup.co.uk,+44 1437 404920,engineering,parent_sub
+r0133,PE Ltd,65 Victoria Road,Cardiff,B43 6DA,www.penhaleengineering.co.uk,+44 1412 613525,food-production,acronym
+r0134,Elmhurst Instruments Incorporated,57 Queens Park,Leeds,B31 2GJ,www.elmhurstinstrument.co.uk,+44 1226 154213,chemicals,canonical
+r0135,Pinnacle Partners LLP,18 Kings Way,Sheffield,S74 2GG,www.pinnaclegroup.co.uk,+44 1246 288479,engineering,parent_sub
+r0136,Kirkland Packaging,102 Station Road,Norwich,,,,food-production,missing
+r0137,Langmere Engineering Corp,173 Queens Park,Dundee,N36 4FD,www.langmereengineerin.co.uk,+44 1211 502768,food-production,canonical
+r0138,"Packaging, Cavendish & Co",161 High Street,Dundee,L50 7DF,www.cavendishpackaging.co.uk,+44 1243 554211,food-production,word_order
+r0139,"Instruments, Pinnacle Incorporated",160 Kings Way,Dundee,G32 7AF,www.pinnacleinstrument.co.uk,+44 1901 476126,manufacturing,word_order
+r0140,Jarrow Instruments,92 Canal Street,Leeds,,,,food-production,missing
+r0141,Penhale Chemicals PLC,125 High Street,Dundee,E70 3AA,www.penhalechemicals.co.uk,+44 1606 322292,wholesale,canonical
+r0142,Harrow Instruments Limited,61 Queens Park,Plymouth,G51 8AD,www.harrowinstruments.co.uk,+44 1916 804747,logistics,canonical
+r0143,Elmhurst Instruments PLC,1 Victoria Road,Leeds,L75 3JF,www.elmhurstinstrument.co.uk,+44 1469 548314,manufacturing,legal_form
+r0144,Mowbray Mfg & Co,69 High Street,Sheffield,A94 5AE,www.mowbraymanufacturi.co.uk,+44 1565 592669,logistics,abbrev
+r0145,"Plastics, Quarrenden Corp",84 Queens Park,Swansea,N96 3HF,www.quarrendenplastics.co.uk,+44 1987 651633,engineering,word_order
+r0146,Harrow Pkg & Co,147 Kings Way,Dundee,L7 2JH,www.harrowpackaging.co.uk,+44 1766 726960,chemicals,abbrev
+r0147,Cavendish Instr Inc,124 Kings Way,Swansea,L64 8EJ,www.cavendishinstrumen.co.uk,+44 1683 652042,wholesale,abbrev
+r0148,Jarrow Textiles Limited,61 Mill Lane,Glasgow,G42 1ED,www.jarrowtextiles.co.uk,+44 1734 651462,manufacturing,branch
+r0149,Redgate Instr Inc,120 High Street,Leeds,L2 4AJ,www.redgateinstruments.co.uk,+44 1784 838549,food-production,abbrev
+r0150,Pinnacle Motors Ltd.,20 Victoria Road,Norwich,A90 3GA,www.pinnaclemotors.co.uk,+44 1189 152583,engineering,branch
+r0151,Elmhurst Textiles Inc,158 Canal Street,Bristol,D26 7DF,www.elmhursttextiles.co.uk,+44 1729 593654,manufacturing,legal_form
+r0152,Oakhampton Logistics Ltd,116 Victoria Road,Plymouth,S8 8GE,www.oakhamptonlogistic.co.uk,+44 1324 637966,logistics,canonical
+r0153,Penhale Systems Corp,38 High Street,Derby,S23 3GF,www.penhale.co.uk,+44 1552 959230,food-production,common_token
+r0154,Draycott Systems & Co,48 Foundry Road,Cardiff,G47 7HD,www.draycottgroup.co.uk,+44 1881 962714,engineering,parent_sub
+r0155,Ashcroft Foods Incorporated,155 Mill Lane,Plymouth,D20 2EF,www.ashcroftfoods.co.uk,+44 1463 958408,wholesale,canonical
+r0156,Quarrenden Textiles Incorporated,120 Station Road,Cardiff,S1 7DF,www.quarrendentextiles.co.uk,+44 1618 507167,logistics,canonical
+r0157,Harrow Engineering & Co,51 Mill Lane,Norwich,G40 6BH,www.harrowengineering.co.uk,+44 1675 888634,food-production,canonical
+r0158,"Motors, Oakhampton LLP",64 Kings Way,Plymouth,B64 4FH,www.oakhamptonmotors.co.uk,+44 1875 283257,engineering,word_order
+r0159,Sterling Partners Ltd.,150 Queens Park,Cardiff,S16 5EH,www.sterlinggroup.co.uk,+44 1620 253251,chemicals,parent_sub
+r0160,Ingleby Chemicals LLP,144 Station Road,Plymouth,E26 5GH,www.inglebychemicals.co.uk,+44 1605 841913,chemicals,canonical
+r0161,Thornton Group LLP,113 Queens Park,Cardiff,E69 6BF,www.thorntongroup.co.uk,+44 1225 437974,chemicals,parent_sub
+r0162,Mowbray Motors PLC,121 Station Road,Bristol,G11 8FE,www.mowbraymotors.co.uk,+44 1168 185531,chemicals,canonical
+r0163,Penhale Textiles Ltd.,199 Mill Lane,Cardiff,B23 5GH,www.penhaletextiles.co.uk,+44 1446 298210,engineering,canonical
+r0164,Baxter Logistics,187 Foundry Road,Bristol,,,,wholesale,missing
+r0165,"Manufacturing, Penhale Limited",137 Mill Lane,Leeds,D98 1DJ,www.penhalemanufacturi.co.uk,+44 1329 290386,manufacturing,word_order
+r0166,"Packaging, Sterling Ltd.",150 Queens Park,Cardiff,S16 5EH,www.sterlingpackaging.co.uk,+44 1899 529150,chemicals,word_order
+r0167,Stanbridge Services Ltd.,184 Station Road,Glasgow,N40 5FH,www.stanbridgegroup.co.uk,+44 1864 568371,food-production,parent_sub
+r0168,"Instruments, Langmere PLC",23 High Street,Sheffield,L18 7BF,www.langmereinstrument.co.uk,+44 1824 367245,wholesale,word_order
+r0169,Hollingsworth Textiles Ltd,6 Foundry Road,Cardiff,M50 4GJ,www.hollingsworthtexti.co.uk,+44 1301 585720,chemicals,canonical
+r0170,Penhale Manufacturing Limited,137 Mill Lane,Leeds,D98 1DJ,www.penhalemanufacturi.co.uk,+44 1250 191909,manufacturing,canonical
+r0171,Elmhurst Manufacturing Ltd.,16 Queens Park,Dundee,S6 6DA,www.elmhurstmanufactur.co.uk,+44 1249 411159,chemicals,legal_form
+r0172,Stanbridge Manufacturing Inc,153 High Street,Plymouth,L91 5DG,www.stanbridgemanufact.co.uk,+44 1535 483296,food-production,legal_form
+r0173,Blackwell Textiles,36 Foundry Road,Plymouth,,,,wholesale,missing
+r0174,Pinnacle Chemicals Corp,194 High Street,Norwich,M70 3BB,www.pinnaclechemicals.co.uk,+44 1341 209831,engineering,legal_form
+r0175,JT Limited,153 Victoria Road,Norwich,N36 5FF,www.jarrowtextiles.co.uk,+44 1259 130955,manufacturing,acronym
+r0176,Acme Chem Ltd,22 Foundry Road,Plymouth,L94 5JD,www.acmechemicals.co.uk,+44 1850 534357,chemicals,abbrev
+r0177,Baxter Logistics Ltd,15 Canal Street,Norwich,M62 2FE,www.baxterlogistics.co.uk,+44 1965 684445,wholesale,branch
+r0178,NM Ltd.,197 Foundry Road,Derby,S1 2DG,www.netherbymotors.co.uk,+44 1880 262864,chemicals,acronym
+r0179,Sterling Instruments Incorporated,96 Mill Lane,Glasgow,M85 2HE,www.sterlinginstrument.co.uk,+44 1430 823875,chemicals,legal_form
+r0180,Pinnacle Engineering & Co,195 Foundry Road,Dundee,L63 5JF,www.pinnacleengineerin.co.uk,+44 1921 495358,food-production,canonical
+r0181,Ingleby Solutions LLP,144 Station Road,Plymouth,E26 5GH,www.inglebygroup.co.uk,+44 1603 601360,chemicals,parent_sub
+r0182,"Manufacturing, Quarrenden Incorporated",17 High Street,Norwich,D40 1BD,www.quarrendenmanufact.co.uk,+44 1274 161492,manufacturing,word_order
+r0183,Acme Group Inc,84 Foundry Road,Bristol,N8 8DH,www.acme.co.uk,+44 1261 820204,chemicals,common_token
+r0184,Langmere Manufacturing Incorporated,185 Mill Lane,Cardiff,D21 5FE,www.langmeremanufactur.co.uk,+44 1756 947829,manufacturing,legal_form
+r0185,Pinnacle Chemicals PLC,194 High Street,Norwich,M70 3BB,www.pinnaclechemicals.co.uk,+44 1223 219144,engineering,canonical
+r0186,BT Ltd.,36 Foundry Road,Plymouth,G35 6GF,www.blackwelltextiles.co.uk,+44 1710 551456,wholesale,acronym
+r0187,Blackwell Systems & Co,155 Victoria Road,Dundee,A64 2GD,www.blackwellgroup.co.uk,+44 1780 567988,engineering,parent_sub
+r0188,Ashcroft Engineering Incorporated,122 Victoria Road,Plymouth,N9 6DJ,www.ashcroftengineerin.co.uk,+44 1696 903154,engineering,branch
+r0189,Langmere Instruments Corp,63 Canal Street,Plymouth,A90 2EJ,www.langmereinstrument.co.uk,+44 1639 102226,chemicals,branch
+r0190,Hollingsworth Textiles Corp,16 Foundry Road,Sheffield,M91 4AA,www.hollingsworthtexti.co.uk,+44 1655 933440,chemicals,legal_form
+r0191,Harrow Partners PLC,131 Victoria Road,Sheffield,N16 7AB,www.harrow.co.uk,+44 1817 402489,manufacturing,common_token
+r0192,Oakhampton Solutions Limited,116 Station Road,Bristol,E70 6GE,www.oakhampton.co.uk,+44 1994 427906,engineering,common_token
+r0193,Draycott Group Inc,110 Victoria Road,Dundee,G53 8GF,www.draycottgroup.co.uk,+44 1173 904562,manufacturing,parent_sub
+r0194,Ashcroft Plastics,133 Canal Street,Glasgow,,,,food-production,missing
+r0195,Thornton Packaging LLP,113 Queens Park,Cardiff,E69 6BF,www.thorntonpackaging.co.uk,+44 1679 293134,chemicals,canonical
+r0196,"Textiles, Blackwell Ltd",158 Victoria Road,Bristol,E40 4BJ,www.blackwelltextiles.co.uk,+44 1750 502489,chemicals,word_order
+r0197,Draycott Instruments Inc,19 Station Road,Cardiff,B23 2JB,www.draycottinstrument.co.uk,+44 1572 849472,manufacturing,branch
+r0198,Netherby Motors PLC,197 Foundry Road,Derby,S1 2DG,www.netherbymotors.co.uk,+44 1569 637217,chemicals,canonical
+r0199,Oakhampton Motors LLP,64 Kings Way,Plymouth,B64 4FH,www.oakhamptonmotors.co.uk,+44 1203 813746,engineering,canonical
+r0200,Sterling Partners LLP,14 High Street,Glasgow,D28 5FA,www.sterling.co.uk,+44 1700 908055,manufacturing,common_token
+r0201,Pinnacle Engineering LLP,18 Kings Way,Sheffield,S74 2GG,www.pinnacleengineerin.co.uk,+44 1271 506066,engineering,canonical
+r0202,Penhale Services Limited,137 Mill Lane,Leeds,D98 1DJ,www.penhalegroup.co.uk,+44 1250 661340,manufacturing,parent_sub
+r0203,Acme Foods Corp,139 Victoria Road,Leeds,D41 1EH,www.acmefoods.co.uk,+44 1689 285532,manufacturing,legal_form
+r0204,Quarrenden Systems Incorporated,17 High Street,Norwich,D40 1BD,www.quarrendengroup.co.uk,+44 1952 595838,manufacturing,parent_sub
+r0205,Thornton Packaging Ltd,46 Foundry Road,Derby,D48 8GF,www.thorntonpackaging.co.uk,+44 1177 564421,engineering,legal_form
+r0206,Sterling Instruments & Co,96 Mill Lane,Glasgow,M85 2HE,www.sterlinginstrument.co.uk,+44 1260 349775,chemicals,canonical
+r0207,Ashcroft Logistics LLP,60 Canal Street,Dundee,L24 3HF,www.ashcroftlogistics.co.uk,+44 1894 197208,food-production,canonical
+r0208,HE Corp,51 Mill Lane,Norwich,G40 6BH,www.harrowengineering.co.uk,+44 1622 871752,food-production,acronym
+r0209,Redgate Instruments Corp,108 High Street,Leeds,L87 5HJ,www.redgateinstruments.co.uk,+44 1706 525308,chemicals,legal_form
+r0210,Thornton Packaging & Co,113 Queens Park,Cardiff,E69 6BF,www.thorntonpackaging.co.uk,+44 1239 487703,chemicals,legal_form
+r0211,Penhale Solutions PLC,125 High Street,Dundee,E70 3AA,www.penhalegroup.co.uk,+44 1408 946572,wholesale,parent_sub
+r0212,Quarrenden Engineering LLP,117 Foundry Road,Derby,D43 3GG,www.quarrendenengineer.co.uk,+44 1298 142963,logistics,legal_form
+r0213,"Engineering, Quarrenden Limited",117 Foundry Road,Derby,D43 3GG,www.quarrendenengineer.co.uk,+44 1757 655779,logistics,word_order
+r0214,"Logistics, Oakhampton Ltd",116 Victoria Road,Plymouth,S8 8GE,www.oakhamptonlogistic.co.uk,+44 1836 181212,logistics,word_order
+r0215,Mowbray Partners Ltd.,29 Canal Street,Norwich,S24 7JE,www.mowbray.co.uk,+44 1973 715140,chemicals,common_token
+r0216,Mowbray Instruments Incorporated,7 Foundry Road,Bristol,G72 2JA,www.mowbrayinstruments.co.uk,+44 1964 257427,logistics,legal_form
+r0217,Acme Manufacturing Incorporated,24 Mill Lane,Swansea,B52 8FB,www.acmemanufacturing.co.uk,+44 1662 128693,food-production,legal_form
+r0218,Netherby Solutions Corp,60 Kings Way,Plymouth,G19 5AJ,www.netherby.co.uk,+44 1642 745142,food-production,common_token
+r0219,NE Incorporated,85 High Street,Norwich,N62 1DH,www.netherbyengineerin.co.uk,+44 1258 562223,manufacturing,acronym
+r0220,Northern Plastics Ltd,5 Victoria Road,Glasgow,L29 5EG,www.northernplastics.co.uk,+44 1424 958906,food-production,legal_form
+r0221,"Engineering, Harrow Limited",14 Queens Park,Dundee,S60 5AG,www.harrowengineering.co.uk,+44 1272 976426,wholesale,word_order
+r0222,Sterling Foods PLC,111 Queens Park,Dundee,G39 4DB,www.sterlingfoods.co.uk,+44 1829 116649,chemicals,abbrev
+r0223,RP Corp,23 Kings Way,Leeds,N52 1JG,www.rushmoorpackaging.co.uk,+44 1348 311133,engineering,acronym
+r0224,HP & Co,190 Station Road,Cardiff,E61 4AH,www.harrowplastics.co.uk,+44 1231 809659,food-production,acronym
+r0225,Acme Manufacturing Ltd,24 Mill Lane,Swansea,B52 8FB,www.acmemanufacturing.co.uk,+44 1928 839312,food-production,canonical
+r0226,Ashcroft Logistics Ltd.,134 Queens Park,Cardiff,E25 8BJ,www.ashcroftlogistics.co.uk,+44 1738 699620,chemicals,canonical
+r0227,Quarrenden Manufacturing,143 High Street,Cardiff,,,,chemicals,missing
+r0228,Elmhurst Instruments LLP,1 Victoria Road,Leeds,L75 3JF,www.elmhurstinstrument.co.uk,+44 1253 465809,manufacturing,canonical
+r0229,Langmere Instruments,23 High Street,Sheffield,,,,wholesale,missing
+r0230,Jarrow Holdings Incorporated,164 Canal Street,Bristol,M2 3JA,www.jarrow.co.uk,+44 1556 677998,food-production,common_token
+r0231,Harrow Engineering LLP,51 Mill Lane,Norwich,G40 6BH,www.harrowengineering.co.uk,+44 1918 204409,food-production,legal_form
+r0232,Sterling Packaging Ltd.,150 Queens Park,Cardiff,S16 5EH,www.sterlingpackaging.co.uk,+44 1740 618772,chemicals,canonical
+r0233,Harrow Plastics Limited,190 Station Road,Cardiff,E61 4AH,www.harrowplastics.co.uk,+44 1716 779569,food-production,canonical
+r0234,Jarrow Motors Inc,91 Queens Park,Glasgow,G75 6HH,www.jarrowmotors.co.uk,+44 1101 622026,manufacturing,legal_form
+r0235,Kirkland Motors PLC,114 Kings Way,Dundee,N46 8DB,www.kirklandmotors.co.uk,+44 1583 544726,manufacturing,legal_form
+r0236,Cavendish Packaging & Co,162 Mill Lane,Leeds,L9 2FG,www.cavendishpackaging.co.uk,+44 1641 878764,wholesale,canonical
+r0237,Pinnacle Engineering & Co,18 Kings Way,Sheffield,S74 2GG,www.pinnacleengineerin.co.uk,+44 1216 125193,engineering,legal_form
+r0238,Thornton Foods,132 Foundry Road,Bristol,,,,wholesale,missing
+r0239,Ashcroft Motors Corporation,192 Kings Way,Glasgow,M33 6AD,www.ashcroftmotors.co.uk,+44 1312 950660,logistics,legal_form
+r0240,HM LLP,168 Station Road,Dundee,L41 5EB,www.harrowmanufacturin.co.uk,+44 1491 641917,manufacturing,acronym
+r0241,Langmere Instruments Corp,124 Station Road,Swansea,B52 7AB,www.langmereinstrument.co.uk,+44 1124 670676,chemicals,canonical
+r0242,Redgate Textiles PLC,178 Queens Park,Leeds,E47 7JB,www.redgatetextiles.co.uk,+44 1466 211814,wholesale,canonical
+r0243,Redgate Motors PLC,160 Queens Park,Glasgow,A43 2HE,www.redgatemotors.co.uk,+44 1583 630859,chemicals,canonical
+r0244,Colville Chem LLP,5 Victoria Road,Norwich,L83 4BB,www.colvillechemicals.co.uk,+44 1282 479397,chemicals,abbrev
+r0245,Baxter Logistics PLC,39 Queens Park,Leeds,D84 3BG,www.baxterlogistics.co.uk,+44 1369 913804,food-production,canonical
+r0246,Thornton Packaging Ltd.,46 Foundry Road,Derby,D48 8GF,www.thorntonpackaging.co.uk,+44 1863 583571,engineering,canonical
+r0247,Redgate Instruments Inc,120 High Street,Leeds,L2 4AJ,www.redgateinstruments.co.uk,+44 1745 669933,food-production,legal_form
+r0248,Jarrow Logistics Limited,183 Mill Lane,Cardiff,L33 6BD,www.jarrowlogistics.co.uk,+44 1287 982642,engineering,legal_form
+r0249,Stanbridge Engineering Ltd.,184 Station Road,Glasgow,N40 5FH,www.stanbridgeengineer.co.uk,+44 1868 492608,food-production,canonical
+r0250,Hollingsworth Instruments LLP,110 Queens Park,Glasgow,S57 1HH,www.hollingsworthinstr.co.uk,+44 1770 773806,chemicals,canonical
+r0251,Elmhurst Plastics PLC,129 Queens Park,Leeds,A71 5EG,www.elmhurstplastics.co.uk,+44 1595 693908,manufacturing,abbrev
+r0252,"Chemicals, Draycott & Co",109 Station Road,Glasgow,G18 8AB,www.draycottchemicals.co.uk,+44 1575 164829,logistics,word_order
+r0253,Jarrow Logistics PLC,183 Mill Lane,Cardiff,L33 6BD,www.jarrowlogistics.co.uk,+44 1160 778922,engineering,canonical
+r0254,Draycott Services PLC,102 Mill Lane,Norwich,N73 8GF,www.draycottgroup.co.uk,+44 1229 192758,manufacturing,parent_sub
+r0255,"Logistics, Jarrow Incorporated",160 Queens Park,Plymouth,D51 3EH,www.jarrowlogistics.co.uk,+44 1562 280314,food-production,word_order
+r0256,Netherby Motors Corporation,197 Foundry Road,Derby,S1 2DG,www.netherbymotors.co.uk,+44 1311 358562,chemicals,legal_form
+r0257,Draycott Holdings Limited,187 Mill Lane,Sheffield,E84 1AA,www.draycott.co.uk,+44 1682 866840,food-production,common_token
+r0258,Baxter Logistics & Co,59 Kings Way,Plymouth,S86 5JG,www.baxterlogistics.co.uk,+44 1895 344756,engineering,canonical
+r0259,"Instruments, Rushmoor Corporation",169 Victoria Road,Sheffield,B83 4DB,www.rushmoorinstrument.co.uk,+44 1143 725631,food-production,word_order
+r0260,Harrow Packaging & Co,147 Kings Way,Dundee,L7 2JH,www.harrowpackaging.co.uk,+44 1871 690730,chemicals,canonical
+r0261,Hollingsworth Textiles Ltd,25 Foundry Road,Dundee,M24 7DH,www.hollingsworthtexti.co.uk,+44 1399 149747,manufacturing,canonical
+r0262,Penhale Eng Corporation,65 Victoria Road,Cardiff,B43 6DA,www.penhaleengineering.co.uk,+44 1696 663695,food-production,abbrev
+r0263,Sterling Holdings Inc,158 Queens Park,Derby,G39 1BB,www.sterling.co.uk,+44 1614 517496,manufacturing,common_token
+r0264,"Textiles, Rushmoor Inc",26 Mill Lane,Norwich,G1 5EH,www.rushmoortextiles.co.uk,+44 1169 784931,manufacturing,word_order
+r0265,Ashcroft Group Inc,165 Foundry Road,Leeds,L46 6DJ,www.ashcroft.co.uk,+44 1327 475217,engineering,common_token
+r0266,Northern Logistics Corp,12 Kings Way,Sheffield,S45 2HA,www.northernlogistics.co.uk,+44 1248 729238,chemicals,legal_form
+r0267,Quarrenden Eng Ltd,117 Foundry Road,Derby,D43 3GG,www.quarrendenengineer.co.uk,+44 1751 633429,logistics,abbrev
+r0268,Penhale Textiles Corp,161 Canal Street,Swansea,N45 3JH,www.penhaletextiles.co.uk,+44 1123 498042,manufacturing,branch
+r0269,Colville Plastics Incorporated,68 Queens Park,Dundee,B72 2AB,www.colvilleplastics.co.uk,+44 1363 920529,manufacturing,canonical
+r0270,Garrick Manufacturing PLC,8 Kings Way,Glasgow,D53 1GE,www.garrickmanufacturi.co.uk,+44 1405 642312,wholesale,canonical
+r0271,Langmere Instr Corp,124 Station Road,Swansea,B52 7AB,www.langmereinstrument.co.uk,+44 1995 229564,chemicals,abbrev
+r0272,Hollingsworth Chemicals,77 Station Road,Plymouth,,,,engineering,missing
+r0273,Rushmoor Manufacturing,132 High Street,Dundee,,,,manufacturing,missing
+r0274,IL Corporation,77 Kings Way,Cardiff,L84 5AA,www.inglebylogistics.co.uk,+44 1518 766566,chemicals,acronym
+r0275,Harrow Engineering,14 Queens Park,Dundee,,,,wholesale,missing
+r0276,Penhale Textiles Limited,199 Mill Lane,Cardiff,B23 5GH,www.penhaletextiles.co.uk,+44 1306 920550,engineering,legal_form
+r0277,Northern Textiles Corp,54 Kings Way,Norwich,L45 2DH,www.northerntextiles.co.uk,+44 1300 629224,engineering,canonical
+r0278,"Logistics, Jarrow PLC",183 Mill Lane,Cardiff,L33 6BD,www.jarrowlogistics.co.uk,+44 1951 188571,engineering,word_order
+r0279,Penhale Solutions Corporation,65 Victoria Road,Cardiff,B43 6DA,www.penhalegroup.co.uk,+44 1410 575786,food-production,parent_sub
+r0280,Jarrow Holdings Incorporated,174 High Street,Dundee,B24 1GA,www.jarrow.co.uk,+44 1713 686292,chemicals,common_token
+r0281,Jarrow Logistics Incorporated,160 Queens Park,Plymouth,D51 3EH,www.jarrowlogistics.co.uk,+44 1734 273206,food-production,canonical
+r0282,Kirkland Manufacturing Corp,84 Kings Way,Derby,S61 4BJ,www.kirklandmanufactur.co.uk,+44 1130 678613,food-production,canonical
+r0283,Cavendish Pkg Inc,36 Station Road,Cardiff,N28 1JG,www.cavendishpackaging.co.uk,+44 1444 585116,manufacturing,abbrev
+r0284,Quarrenden Engineering,117 Foundry Road,Derby,,,,logistics,missing
+r0285,MT PLC,57 Victoria Road,Norwich,A90 3DD,www.mowbraytextiles.co.uk,+44 1506 822122,engineering,acronym
+r0286,Ashcroft Motors Limited,192 Kings Way,Glasgow,M33 6AD,www.ashcroftmotors.co.uk,+44 1313 321568,logistics,canonical
+r0287,Harrow Engineering Inc,14 Queens Park,Dundee,S60 5AG,www.harrowengineering.co.uk,+44 1105 577232,wholesale,legal_form
+r0288,Fairbourne Solutions LLP,132 Victoria Road,Swansea,G2 1AF,www.fairbourne.co.uk,+44 1970 692941,engineering,common_token
+r0289,Baxter Logistics Incorporated,39 Queens Park,Leeds,D84 3BG,www.baxterlogistics.co.uk,+44 1546 746239,food-production,legal_form
+r0290,Penhale Manufacturing PLC,75 Kings Way,Norwich,A27 1JJ,www.penhalemanufacturi.co.uk,+44 1594 543711,food-production,canonical
+r0291,Rushmoor Instruments Incorporated,175 Victoria Road,Swansea,M37 5BA,www.rushmoorinstrument.co.uk,+44 1442 539585,food-production,legal_form
+r0292,Acme Textiles,199 Canal Street,Bristol,,,,logistics,missing
+r0293,"Chemicals, Langmere Ltd.",116 Canal Street,Dundee,B33 7BE,www.langmerechemicals.co.uk,+44 1164 691058,chemicals,word_order
+r0294,"Plastics, Jarrow LLP",179 High Street,Bristol,S72 6BG,www.jarrowplastics.co.uk,+44 1728 455469,manufacturing,word_order
+r0295,Colville Foods & Co,32 Mill Lane,Sheffield,M2 6FF,www.colvillefoods.co.uk,+44 1174 651446,logistics,abbrev
+r0296,Cavendish Textiles Corp,185 Station Road,Glasgow,N72 4HF,www.cavendishtextiles.co.uk,+44 1528 830439,manufacturing,legal_form
+r0297,Stanbridge Engineering,56 High Street,Derby,,,,engineering,missing
+r0298,Penhale Engineering PLC,65 Victoria Road,Cardiff,B43 6DA,www.penhaleengineering.co.uk,+44 1694 554723,food-production,legal_form
+r0299,"Chemicals, Langmere Corporation",30 Queens Park,Bristol,L19 8HG,www.langmerechemicals.co.uk,+44 1484 339498,logistics,word_order
+r0300,Stanbridge Logistics PLC,128 Mill Lane,Glasgow,M85 1JH,www.stanbridgelogistic.co.uk,+44 1576 151114,chemicals,branch
+r0301,"Packaging, Fairbourne Corporation",140 Canal Street,Bristol,S80 3FF,www.fairbournepackagin.co.uk,+44 1123 345780,engineering,word_order
+r0302,Colville Foods Inc,25 Foundry Road,Swansea,A74 1AD,www.colvillefoods.co.uk,+44 1996 598203,logistics,abbrev
+r0303,Rushmoor Foods,171 Kings Way,Swansea,,,,manufacturing,missing
+r0304,Elmhurst Motors Limited,103 Canal Street,Sheffield,E71 7ED,www.elmhurstmotors.co.uk,+44 1525 130049,engineering,branch
+r0305,Jarrow Chemicals Ltd,110 Canal Street,Swansea,B53 3AG,www.jarrowchemicals.co.uk,+44 1796 816952,chemicals,legal_form
+r0306,Stanbridge Logistics PLC,86 Queens Park,Sheffield,D96 2FB,www.stanbridgelogistic.co.uk,+44 1796 663818,chemicals,canonical
+r0307,Fairbourne Packaging Corporation,67 Victoria Road,Derby,G79 8EJ,www.fairbournepackagin.co.uk,+44 1330 433027,engineering,branch
+r0308,II Limited,40 High Street,Cardiff,G28 3JB,www.inglebyinstruments.co.uk,+44 1480 625474,engineering,acronym
+r0309,Ashcroft Textiles,154 Canal Street,Derby,,,,wholesale,missing
+r0310,Acme Logistics Inc,52 Kings Way,Bristol,A8 3ED,www.acmelogistics.co.uk,+44 1101 133279,manufacturing,canonical
+r0311,Hollingsworth Instruments,93 Canal Street,Glasgow,,,,manufacturing,missing
+r0312,"Chemicals, Garrick & Co",113 Canal Street,Glasgow,E74 6FF,www.garrickchemicals.co.uk,+44 1645 947099,chemicals,word_order
+r0313,Sterling Log. Inc,49 Queens Park,Derby,A56 5DE,www.sterlinglogistics.co.uk,+44 1564 790670,chemicals,abbrev
+r0314,Langmere Chemicals Corporation,30 Queens Park,Bristol,L19 8HG,www.langmerechemicals.co.uk,+44 1752 517344,logistics,canonical
+r0315,Redgate Services Incorporated,54 Queens Park,Glasgow,N23 7DD,www.redgate.co.uk,+44 1958 683446,engineering,common_token
+r0316,Acme Engineering Incorporated,87 Kings Way,Leeds,A98 1EE,www.acmeengineering.co.uk,+44 1583 411575,food-production,legal_form
+r0317,Hollingsworth Services Ltd.,151 Queens Park,Plymouth,B56 3HG,www.hollingsworthgroup.co.uk,+44 1334 852637,wholesale,parent_sub
+r0318,Jarrow Logistics Ltd.,109 Mill Lane,Derby,L11 1DF,www.jarrowlogistics.co.uk,+44 1778 838446,food-production,canonical
+r0319,Ingleby Foods Ltd,130 Station Road,Cardiff,E63 4HJ,www.inglebyfoods.co.uk,+44 1240 227745,food-production,legal_form
+r0320,Quarrenden Textiles,120 Station Road,Cardiff,,,,logistics,missing
+r0321,Rushmoor Mfg LLP,132 High Street,Dundee,D9 8HA,www.rushmoormanufactur.co.uk,+44 1621 494185,manufacturing,abbrev
+r0322,Kirkland Packaging Ltd,16 Station Road,Plymouth,N96 4HB,www.kirklandpackaging.co.uk,+44 1702 556743,food-production,legal_form
+r0323,JC Corporation,110 Canal Street,Swansea,B53 3AG,www.jarrowchemicals.co.uk,+44 1665 309852,chemicals,acronym
+r0324,Cavendish Textiles & Co,185 Station Road,Glasgow,N72 4HF,www.cavendishtextiles.co.uk,+44 1526 286929,manufacturing,canonical
+r0325,Elmhurst Manufacturing Incorporated,16 Queens Park,Dundee,S6 6DA,www.elmhurstmanufactur.co.uk,+44 1416 963817,chemicals,canonical
+r0326,Draycott Manufacturing,102 Mill Lane,Norwich,,,,manufacturing,missing
+r0327,Draycott Mfg Inc,18 High Street,Bristol,N8 7JE,www.draycottmanufactur.co.uk,+44 1989 215022,logistics,abbrev
+r0328,Oakhampton Manufacturing LLP,91 Foundry Road,Dundee,M30 7AB,www.oakhamptonmanufact.co.uk,+44 1341 733937,logistics,branch
+r0329,Redgate Instr LLP,108 High Street,Leeds,L87 5HJ,www.redgateinstruments.co.uk,+44 1324 995254,chemicals,abbrev
+r0330,Harrow Plastics Limited,116 Victoria Road,Leeds,S40 3BH,www.harrowplastics.co.uk,+44 1923 701327,engineering,branch
+r0331,Draycott Services & Co,163 Foundry Road,Plymouth,S79 7HH,www.draycottgroup.co.uk,+44 1267 612277,engineering,parent_sub
+r0332,QT & Co,120 Station Road,Cardiff,S1 7DF,www.quarrendentextiles.co.uk,+44 1177 792789,logistics,acronym
+r0333,Elmhurst Chemicals Inc,110 Kings Way,Glasgow,N17 4BJ,www.elmhurstchemicals.co.uk,+44 1665 434607,logistics,branch
+r0334,Colville Chemicals Limited,5 Victoria Road,Norwich,L83 4BB,www.colvillechemicals.co.uk,+44 1718 284072,chemicals,legal_form
+r0335,Blackwell Textiles Inc,158 Victoria Road,Bristol,E40 4BJ,www.blackwelltextiles.co.uk,+44 1849 580226,chemicals,legal_form
+r0336,Quarrenden Manufacturing & Co,17 High Street,Norwich,D40 1BD,www.quarrendenmanufact.co.uk,+44 1425 802130,manufacturing,legal_form
+r0337,"Instruments, Redgate Incorporated",120 High Street,Leeds,L2 4AJ,www.redgateinstruments.co.uk,+44 1238 106801,food-production,word_order
+r0338,Rushmoor Packaging Ltd.,23 Kings Way,Leeds,N52 1JG,www.rushmoorpackaging.co.uk,+44 1256 986806,engineering,legal_form
+r0339,Langmere Instruments LLP,23 High Street,Sheffield,L18 7BF,www.langmereinstrument.co.uk,+44 1203 243796,wholesale,legal_form
+r0340,"Textiles, Jarrow Limited",153 Victoria Road,Norwich,N36 5FF,www.jarrowtextiles.co.uk,+44 1206 390729,manufacturing,word_order
+r0341,Stanbridge Engineering PLC,56 High Street,Derby,B39 5BE,www.stanbridgeengineer.co.uk,+44 1123 665074,engineering,legal_form
+r0342,"Packaging, Hollingsworth Ltd",114 Victoria Road,Cardiff,S27 8JJ,www.hollingsworthpacka.co.uk,+44 1716 529990,wholesale,word_order
+r0343,Pinnacle Foods,152 Foundry Road,Sheffield,,,,wholesale,missing
+r0344,"Manufacturing, Kirkland Ltd",11 Queens Park,Norwich,L61 7FA,www.kirklandmanufactur.co.uk,+44 1257 756540,manufacturing,word_order
+r0345,Ashcroft Logistics PLC,134 Queens Park,Cardiff,E25 8BJ,www.ashcroftlogistics.co.uk,+44 1130 619175,chemicals,legal_form
+r0346,Pinnacle Foods Limited,152 Foundry Road,Sheffield,B1 4FE,www.pinnaclefoods.co.uk,+44 1426 754488,wholesale,canonical
+r0347,JL Incorporated,109 Mill Lane,Derby,L11 1DF,www.jarrowlogistics.co.uk,+44 1481 520502,food-production,acronym
+r0348,Jarrow Motors & Co,91 Queens Park,Glasgow,G75 6HH,www.jarrowmotors.co.uk,+44 1991 440986,manufacturing,canonical
+r0349,Kirkland Packaging PLC,16 Station Road,Plymouth,N96 4HB,www.kirklandpackaging.co.uk,+44 1602 494638,food-production,canonical
+r0350,AF Incorporated,155 Mill Lane,Plymouth,D20 2EF,www.ashcroftfoods.co.uk,+44 1906 363975,wholesale,acronym
+r0351,Harrow Plastics Corporation,190 Station Road,Cardiff,E61 4AH,www.harrowplastics.co.uk,+44 1539 924746,food-production,legal_form
+r0352,Ingleby Textiles PLC,97 Station Road,Glasgow,D44 6DD,www.inglebytextiles.co.uk,+44 1602 278977,wholesale,abbrev
+r0353,HT LLP,25 Foundry Road,Dundee,M24 7DH,www.hollingsworthtexti.co.uk,+44 1104 920475,manufacturing,acronym
+r0354,Mowbray Logistics & Co,140 Mill Lane,Plymouth,B68 8HD,www.mowbraylogistics.co.uk,+44 1370 717009,chemicals,legal_form
+r0355,Baxter Logistics LLP,59 Kings Way,Plymouth,S86 5JG,www.baxterlogistics.co.uk,+44 1213 842157,engineering,legal_form
+r0356,Mowbray Instr Ltd,7 Foundry Road,Bristol,G72 2JA,www.mowbrayinstruments.co.uk,+44 1914 100962,logistics,abbrev
+r0357,Colville Logistics Ltd.,158 Victoria Road,Plymouth,G78 3JD,www.colvillelogistics.co.uk,+44 1680 204070,logistics,legal_form
+r0358,Cavendish Eng Inc,84 Station Road,Sheffield,M73 5HJ,www.cavendishengineeri.co.uk,+44 1821 669787,engineering,abbrev
+r0359,CP Corporation,68 Queens Park,Dundee,B72 2AB,www.colvilleplastics.co.uk,+44 1702 125234,manufacturing,acronym
+r0360,"Logistics, Baxter & Co",59 Kings Way,Plymouth,S86 5JG,www.baxterlogistics.co.uk,+44 1271 551447,engineering,word_order
+r0361,Colville Chemicals Corporation,106 Kings Way,Bristol,N69 6AF,www.colvillechemicals.co.uk,+44 1333 316303,logistics,canonical
+r0362,Stanbridge Textiles Ltd,77 Foundry Road,Cardiff,G78 2ED,www.stanbridgetextiles.co.uk,+44 1346 527786,manufacturing,abbrev
+r0363,Colville Logistics Corporation,99 Kings Way,Plymouth,E27 4AG,www.colvillelogistics.co.uk,+44 1813 565982,food-production,canonical
+r0364,Draycott Manufacturing Inc,18 High Street,Bristol,N8 7JE,www.draycottmanufactur.co.uk,+44 1635 247158,logistics,canonical
+r0365,Rushmoor Instruments Corp,169 Victoria Road,Sheffield,B83 4DB,www.rushmoorinstrument.co.uk,+44 1970 695343,food-production,legal_form
+r0366,SP Ltd.,39 Kings Way,Sheffield,D25 7EA,www.stanbridgeplastics.co.uk,+44 1753 873615,logistics,acronym
+r0367,"Foods, Thornton PLC",132 Foundry Road,Bristol,S69 6FA,www.thorntonfoods.co.uk,+44 1747 781375,wholesale,word_order
+r0368,SL PLC,49 Queens Park,Derby,A56 5DE,www.sterlinglogistics.co.uk,+44 1966 715640,chemicals,acronym
+r0369,Acme Chemicals Limited,22 Foundry Road,Plymouth,L94 5JD,www.acmechemicals.co.uk,+44 1552 746062,chemicals,canonical
+r0370,Jarrow Instruments Incorporated,92 Canal Street,Leeds,D20 8FB,www.jarrowinstruments.co.uk,+44 1649 306212,food-production,legal_form
+r0371,Thornton Pkg Ltd.,46 Foundry Road,Derby,D48 8GF,www.thorntonpackaging.co.uk,+44 1433 853180,engineering,abbrev
+r0372,Harrow Manufacturing Ltd,168 Station Road,Dundee,L41 5EB,www.harrowmanufacturin.co.uk,+44 1689 969680,manufacturing,canonical
+r0373,Netherby Services LLP,33 Queens Park,Plymouth,L82 6DD,www.netherbygroup.co.uk,+44 1456 933655,manufacturing,parent_sub
+r0374,Elmhurst Chem Inc,8 Station Road,Bristol,E78 1GE,www.elmhurstchemicals.co.uk,+44 1140 361145,logistics,abbrev
+r0375,Draycott Instruments Inc,110 Victoria Road,Dundee,G53 8GF,www.draycottinstrument.co.uk,+44 1819 451767,manufacturing,canonical
+r0376,"Textiles, Mowbray Limited",57 Victoria Road,Norwich,A90 3DD,www.mowbraytextiles.co.uk,+44 1510 952964,engineering,word_order
+r0377,Draycott Eng Corp,118 Kings Way,Glasgow,L74 7EA,www.draycottengineerin.co.uk,+44 1731 973121,wholesale,abbrev
+r0378,HI Ltd,110 Queens Park,Glasgow,S57 1HH,www.hollingsworthinstr.co.uk,+44 1237 177114,chemicals,acronym
+r0379,Ashcroft Logistics Inc,110 Canal Street,Glasgow,E74 3JG,www.ashcroftlogistics.co.uk,+44 1655 846859,logistics,canonical
+r0380,Cavendish Instruments,124 Kings Way,Swansea,,,,wholesale,missing
+r0381,Langmere Engineering Ltd.,63 Kings Way,Sheffield,B70 8DG,www.langmereengineerin.co.uk,+44 1106 649149,manufacturing,canonical
+r0382,Garrick Manufacturing & Co,8 Kings Way,Glasgow,D53 1GE,www.garrickmanufacturi.co.uk,+44 1221 597898,wholesale,legal_form
+r0383,Cavendish Engineering Incorporated,28 Kings Way,Norwich,A78 1FE,www.cavendishengineeri.co.uk,+44 1148 277123,engineering,branch
+r0384,JI Ltd.,92 Canal Street,Leeds,D20 8FB,www.jarrowinstruments.co.uk,+44 1122 179780,food-production,acronym
+r0385,Sterling Systems Inc,49 Queens Park,Derby,A56 5DE,www.sterlinggroup.co.uk,+44 1879 603160,chemicals,parent_sub
+r0386,Netherby Motors,197 Foundry Road,Derby,,,,chemicals,missing
+r0387,BT LLP,158 Victoria Road,Bristol,E40 4BJ,www.blackwelltextiles.co.uk,+44 1332 857148,chemicals,acronym
+r0388,"Textiles, Cavendish & Co",185 Station Road,Glasgow,N72 4HF,www.cavendishtextiles.co.uk,+44 1692 495487,manufacturing,word_order
+r0389,Sterling Instruments PLC,136 Victoria Road,Norwich,A44 4DE,www.sterlinginstrument.co.uk,+44 1199 818664,wholesale,branch
+r0390,Sterling Instruments,150 Victoria Road,Plymouth,,,,wholesale,missing
+r0391,Acme Foods Ltd,139 Victoria Road,Leeds,D41 1EH,www.acmefoods.co.uk,+44 1764 606736,manufacturing,abbrev
+r0392,Acme Textiles PLC,57 Canal Street,Sheffield,G88 7GE,www.acmetextiles.co.uk,+44 1137 732410,engineering,canonical
+r0393,"Manufacturing, Draycott PLC",102 Mill Lane,Norwich,N73 8GF,www.draycottmanufactur.co.uk,+44 1514 140531,manufacturing,word_order
+r0394,Northern Textiles,54 Kings Way,Norwich,,,,engineering,missing
+r0395,Pinnacle Manufacturing Inc,103 Foundry Road,Glasgow,S69 7EA,www.pinnaclemanufactur.co.uk,+44 1951 877256,logistics,branch
+r0396,"Instruments, Sterling PLC",150 Victoria Road,Plymouth,S8 8EH,www.sterlinginstrument.co.uk,+44 1716 267562,wholesale,word_order
+r0397,Hollingsworth Packaging LLP,151 Queens Park,Plymouth,B56 3HG,www.hollingsworthpacka.co.uk,+44 1713 474686,wholesale,legal_form
+r0398,Kirkland Textiles Inc,126 Kings Way,Plymouth,G24 5AF,www.kirklandtextiles.co.uk,+44 1373 277346,manufacturing,canonical
+r0399,"Packaging, Thornton Corp",186 Station Road,Norwich,S79 1JF,www.thorntonpackaging.co.uk,+44 1268 253616,wholesale,word_order
+r0400,Thornton Manufacturing Ltd.,137 Station Road,Derby,M27 8ED,www.thorntonmanufactur.co.uk,+44 1780 330339,wholesale,legal_form
+r0401,Thornton Instruments Incorporated,94 High Street,Leeds,G88 1HG,www.thorntoninstrument.co.uk,+44 1152 190621,manufacturing,legal_form
+r0402,Pinnacle Foods Corp,152 Foundry Road,Sheffield,B1 4FE,www.pinnaclefoods.co.uk,+44 1857 240227,wholesale,legal_form
+r0403,Harrow Instr Ltd,61 Queens Park,Plymouth,G51 8AD,www.harrowinstruments.co.uk,+44 1870 952669,logistics,abbrev
+r0404,Acme Motors Ltd.,193 Foundry Road,Derby,M4 3GJ,www.acmemotors.co.uk,+44 1718 110175,wholesale,canonical
+r0405,Hollingsworth Instruments,57 Victoria Road,Dundee,,,,manufacturing,missing
+r0406,"Textiles, Acme PLC",57 Canal Street,Sheffield,G88 7GE,www.acmetextiles.co.uk,+44 1254 788942,engineering,word_order
+r0407,Northern Logistics Ltd,12 Kings Way,Sheffield,S45 2HA,www.northernlogistics.co.uk,+44 1581 918955,chemicals,canonical
+r0408,Pinnacle Chem PLC,194 High Street,Norwich,M70 3BB,www.pinnaclechemicals.co.uk,+44 1789 231595,engineering,abbrev
+r0409,JM Ltd,91 Queens Park,Glasgow,G75 6HH,www.jarrowmotors.co.uk,+44 1884 262344,manufacturing,acronym
+r0410,Draycott Instruments PLC,110 Victoria Road,Dundee,G53 8GF,www.draycottinstrument.co.uk,+44 1321 997779,manufacturing,legal_form
+r0411,Jarrow Plastics & Co,179 High Street,Bristol,S72 6BG,www.jarrowplastics.co.uk,+44 1614 126514,manufacturing,legal_form
+r0412,Draycott Chem & Co,48 Foundry Road,Cardiff,G47 7HD,www.draycottchemicals.co.uk,+44 1295 115193,engineering,abbrev
+r0413,Pinnacle Motors PLC,20 Kings Way,Glasgow,L8 7GE,www.pinnaclemotors.co.uk,+44 1260 219810,wholesale,legal_form
+r0414,Langmere Chemicals Corp,116 Canal Street,Dundee,B33 7BE,www.langmerechemicals.co.uk,+44 1742 788337,chemicals,legal_form
+r0415,"Manufacturing, Thornton Limited",137 Station Road,Derby,M27 8ED,www.thorntonmanufactur.co.uk,+44 1968 142850,wholesale,word_order
+r0416,Draycott Manufacturing Inc,44 Foundry Road,Swansea,D27 1AE,www.draycottmanufactur.co.uk,+44 1321 388514,logistics,branch
+r0417,Cavendish Textiles,185 Station Road,Glasgow,,,,manufacturing,missing
+r0418,Hollingsworth Textiles,25 Foundry Road,Dundee,,,,manufacturing,missing
+r0419,Blackwell Chemicals Corp,89 Mill Lane,Glasgow,B24 7JF,www.blackwellchemicals.co.uk,+44 1581 219289,food-production,branch
+r0420,Hollingsworth Textiles Ltd.,149 Foundry Road,Dundee,A96 3GJ,www.hollingsworthtexti.co.uk,+44 1421 641721,chemicals,branch
+r0421,Sterling Instruments Ltd,150 Victoria Road,Plymouth,S8 8EH,www.sterlinginstrument.co.uk,+44 1197 507936,wholesale,legal_form
+r0422,Ingleby Instruments,40 High Street,Cardiff,,,,engineering,missing
+r0423,Hollingsworth Instruments Incorporated,93 Canal Street,Glasgow,D53 7DH,www.hollingsworthinstr.co.uk,+44 1977 777290,manufacturing,canonical
+r0424,LE Corporation,173 Queens Park,Dundee,N36 4FD,www.langmereengineerin.co.uk,+44 1832 408669,food-production,acronym
+r0425,Rushmoor Textiles LLP,174 High Street,Sheffield,G28 7GD,www.rushmoortextiles.co.uk,+44 1348 328384,logistics,canonical
+r0426,Stanbridge Engineering Ltd,56 High Street,Derby,B39 5BE,www.stanbridgeengineer.co.uk,+44 1434 250288,engineering,canonical
+r0427,Draycott Chemicals Corporation,48 Foundry Road,Cardiff,G47 7HD,www.draycottchemicals.co.uk,+44 1859 175009,engineering,legal_form
+r0428,Pinnacle Engineering Ltd,195 Foundry Road,Dundee,L63 5JF,www.pinnacleengineerin.co.uk,+44 1955 513810,food-production,legal_form
+r0429,Draycott Engineering Corp,118 Kings Way,Glasgow,L74 7EA,www.draycottengineerin.co.uk,+44 1266 764124,wholesale,canonical
+r0430,Penhale Logistics Inc,197 High Street,Glasgow,E94 8DE,www.penhalelogistics.co.uk,+44 1225 826200,chemicals,canonical
+r0431,Ingleby Systems Ltd,23 Queens Park,Leeds,L47 1DH,www.ingleby.co.uk,+44 1782 165468,engineering,common_token
+r0432,"Engineering, Langmere Corp",173 Queens Park,Dundee,N36 4FD,www.langmereengineerin.co.uk,+44 1630 259205,food-production,word_order
+r0433,Langmere Group Limited,47 Foundry Road,Glasgow,A63 4JE,www.langmere.co.uk,+44 1644 743206,manufacturing,common_token
+r0434,Ashcroft Engineering Ltd,70 Mill Lane,Cardiff,B64 1EH,www.ashcroftengineerin.co.uk,+44 1699 351306,engineering,legal_form
+r0435,Quarrenden Textiles PLC,120 Station Road,Cardiff,S1 7DF,www.quarrendentextiles.co.uk,+44 1265 119374,logistics,legal_form
+r0436,Blackwell Engineering & Co,92 Queens Park,Leeds,E86 4DD,www.blackwellengineeri.co.uk,+44 1233 883906,engineering,branch
+r0437,Penhale Textiles Corp,84 Queens Park,Cardiff,G12 5AH,www.penhaletextiles.co.uk,+44 1278 660933,manufacturing,abbrev
+r0438,Ashcroft Plastics Corporation,133 Canal Street,Glasgow,N35 3DE,www.ashcroftplastics.co.uk,+44 1853 516427,food-production,legal_form
+r0439,Jarrow Group LLP,179 High Street,Bristol,S72 6BG,www.jarrowgroup.co.uk,+44 1366 280784,manufacturing,parent_sub
+r0440,Cavendish Packaging Corp,162 Mill Lane,Leeds,L9 2FG,www.cavendishpackaging.co.uk,+44 1608 748586,wholesale,legal_form
+r0441,Quarrenden Plastics Corp,84 Queens Park,Swansea,N96 3HF,www.quarrendenplastics.co.uk,+44 1939 407811,engineering,canonical
+r0442,Elmhurst Motors,166 Station Road,Swansea,,,,engineering,missing
+r0443,Baxter Logistics Corporation,187 Foundry Road,Bristol,G27 4BJ,www.baxterlogistics.co.uk,+44 1771 429071,wholesale,legal_form
+r0444,Acme Manufacturing LLP,164 Foundry Road,Derby,A45 5AG,www.acmemanufacturing.co.uk,+44 1852 194382,wholesale,legal_form
+r0445,Netherby Textiles,154 Station Road,Derby,,,,chemicals,missing
+r0446,Elmhurst Plastics Limited,41 Foundry Road,Leeds,B3 1FG,www.elmhurstplastics.co.uk,+44 1775 806720,food-production,canonical
+r0447,"Chemicals, Cavendish Corporation",159 Foundry Road,Plymouth,M26 5DD,www.cavendishchemicals.co.uk,+44 1987 393085,chemicals,word_order
+r0448,Kirkland Services Limited,73 Kings Way,Dundee,A15 5BE,www.kirkland.co.uk,+44 1680 528734,logistics,common_token
+r0449,Cavendish Packaging & Co,36 Station Road,Cardiff,N28 1JG,www.cavendishpackaging.co.uk,+44 1764 959012,manufacturing,legal_form
+r0450,Draycott Chemicals Corporation,109 Station Road,Glasgow,G18 8AB,www.draycottchemicals.co.uk,+44 1172 905236,logistics,legal_form
+r0451,Blackwell Chemicals,98 Station Road,Norwich,,,,food-production,missing
+r0452,Ingleby Logistics PLC,77 Kings Way,Cardiff,L84 5AA,www.inglebylogistics.co.uk,+44 1747 104033,chemicals,legal_form
+r0453,"Instruments, Hollingsworth Incorporated",93 Canal Street,Glasgow,D53 7DH,www.hollingsworthinstr.co.uk,+44 1410 194453,manufacturing,word_order
+r0454,Ashcroft Engineering Incorporated,70 Mill Lane,Cardiff,B64 1EH,www.ashcroftengineerin.co.uk,+44 1470 578261,engineering,canonical
+r0455,QL Ltd.,168 Station Road,Norwich,S46 7EE,www.quarrendenlogistic.co.uk,+44 1318 473759,wholesale,acronym
+r0456,RI LLP,175 Victoria Road,Swansea,M37 5BA,www.rushmoorinstrument.co.uk,+44 1825 211810,food-production,acronym
+r0457,CP PLC,158 Foundry Road,Cardiff,G45 8DA,www.cavendishplastics.co.uk,+44 1525 313438,engineering,acronym
+r0458,Langmere Chemicals,30 Queens Park,Bristol,,,,logistics,missing
+r0459,Redgate Instruments LLP,108 High Street,Leeds,L87 5HJ,www.redgateinstruments.co.uk,+44 1273 456297,chemicals,canonical
+r0460,Pinnacle Engineering,18 Kings Way,Sheffield,,,,engineering,missing
+r0461,AT LLP,140 High Street,Swansea,G87 7DJ,www.ashcrofttextiles.co.uk,+44 1463 992414,chemicals,acronym
+r0462,"Textiles, Oakhampton Incorporated",30 Canal Street,Norwich,N35 2FA,www.oakhamptontextiles.co.uk,+44 1564 256367,wholesale,word_order
+r0463,Sterling Foods PLC,173 Queens Park,Bristol,D35 4JJ,www.sterlingfoods.co.uk,+44 1888 491540,chemicals,branch
+r0464,Pinnacle Chemicals PLC,198 Kings Way,Cardiff,A45 6FH,www.pinnaclechemicals.co.uk,+44 1649 258585,engineering,branch
+r0465,MI Corp,7 Foundry Road,Bristol,G72 2JA,www.mowbrayinstruments.co.uk,+44 1837 682504,logistics,acronym
+r0466,"Foods, Ingleby Inc",130 Station Road,Cardiff,E63 4HJ,www.inglebyfoods.co.uk,+44 1249 923981,food-production,word_order
+r0467,Jarrow Group Corporation,152 Mill Lane,Norwich,S30 1GF,www.jarrow.co.uk,+44 1877 468145,food-production,common_token
+r0468,Oakhampton Manufacturing Ltd.,50 Station Road,Derby,L15 5AF,www.oakhamptonmanufact.co.uk,+44 1930 755570,logistics,legal_form
+r0469,Jarrow Logistics Corp,160 Queens Park,Plymouth,D51 3EH,www.jarrowlogistics.co.uk,+44 1131 438844,food-production,legal_form
+r0470,Hollingsworth Textiles Ltd.,6 Foundry Road,Cardiff,M50 4GJ,www.hollingsworthtexti.co.uk,+44 1885 773899,chemicals,legal_form
+r0471,Hollingsworth Packaging Ltd.,151 Queens Park,Plymouth,B56 3HG,www.hollingsworthpacka.co.uk,+44 1160 861457,wholesale,canonical
+r0472,RT Ltd.,26 Mill Lane,Norwich,G1 5EH,www.rushmoortextiles.co.uk,+44 1378 690108,manufacturing,acronym
+r0473,Colville Foods LLP,25 Foundry Road,Swansea,A74 1AD,www.colvillefoods.co.uk,+44 1183 417775,logistics,legal_form
+r0474,Langmere Engineering LLP,173 Queens Park,Dundee,N36 4FD,www.langmereengineerin.co.uk,+44 1572 516581,food-production,legal_form
+r0475,Pinnacle Manufacturing Ltd.,119 Kings Way,Norwich,L3 1AJ,www.pinnaclemanufactur.co.uk,+44 1622 842737,logistics,legal_form
+r0476,"Chemicals, Jarrow Corporation",110 Canal Street,Swansea,B53 3AG,www.jarrowchemicals.co.uk,+44 1492 793494,chemicals,word_order
+r0477,Pinnacle Eng & Co,195 Foundry Road,Dundee,L63 5JF,www.pinnacleengineerin.co.uk,+44 1952 342722,food-production,abbrev
+r0478,Stanbridge Log. PLC,86 Queens Park,Sheffield,D96 2FB,www.stanbridgelogistic.co.uk,+44 1990 154770,chemicals,abbrev
+r0479,"Instruments, Oakhampton LLP",43 Queens Park,Bristol,M11 3JJ,www.oakhamptoninstrume.co.uk,+44 1984 672577,food-production,word_order
+r0480,Penhale Log. Inc,197 High Street,Glasgow,E94 8DE,www.penhalelogistics.co.uk,+44 1458 879428,chemicals,abbrev
+r0481,Acme Motors LLP,193 Foundry Road,Derby,M4 3GJ,www.acmemotors.co.uk,+44 1715 788763,wholesale,legal_form
+r0482,Garrick Group & Co,113 Canal Street,Glasgow,E74 6FF,www.garrickgroup.co.uk,+44 1528 706875,chemicals,parent_sub
+r0483,AM Ltd,164 Foundry Road,Derby,A45 5AG,www.acmemanufacturing.co.uk,+44 1808 446553,wholesale,acronym
+r0484,Jarrow Logistics Inc,109 Mill Lane,Derby,L11 1DF,www.jarrowlogistics.co.uk,+44 1436 380381,food-production,legal_form
+r0485,Stanbridge Manufacturing Corp,153 High Street,Plymouth,L91 5DG,www.stanbridgemanufact.co.uk,+44 1548 768811,food-production,canonical
+r0486,Northern Systems Incorporated,148 Queens Park,Glasgow,E54 4FH,www.northern.co.uk,+44 1221 180580,engineering,common_token
+r0487,Redgate Instruments LLP,167 High Street,Dundee,B71 1JA,www.redgateinstruments.co.uk,+44 1368 320931,chemicals,branch
+r0488,Garrick Logistics Limited,92 Kings Way,Leeds,S96 5HJ,www.garricklogistics.co.uk,+44 1671 657621,manufacturing,canonical
+r0489,Langmere Instruments PLC,23 High Street,Sheffield,L18 7BF,www.langmereinstrument.co.uk,+44 1770 824775,wholesale,canonical
+r0490,Elmhurst Motors Ltd,166 Station Road,Swansea,M59 1EF,www.elmhurstmotors.co.uk,+44 1704 979254,engineering,legal_form
+r0491,Garrick Chemicals & Co,113 Canal Street,Glasgow,E74 6FF,www.garrickchemicals.co.uk,+44 1947 216246,chemicals,canonical
+r0492,Redgate Group Corp,110 Canal Street,Cardiff,L47 8FJ,www.redgate.co.uk,+44 1400 383490,manufacturing,common_token
+r0493,"Logistics, Sterling Inc",49 Queens Park,Derby,A56 5DE,www.sterlinglogistics.co.uk,+44 1385 731142,chemicals,word_order
+r0494,Acme Manufacturing,24 Mill Lane,Swansea,,,,food-production,missing
+r0495,Acme Textiles PLC,199 Canal Street,Bristol,E78 6JE,www.acmetextiles.co.uk,+44 1399 824552,logistics,abbrev
+r0496,"Logistics, Ashcroft Ltd.",134 Queens Park,Cardiff,E25 8BJ,www.ashcroftlogistics.co.uk,+44 1418 118344,chemicals,word_order
+r0497,EP LLP,129 Queens Park,Leeds,A71 5EG,www.elmhurstplastics.co.uk,+44 1176 869017,manufacturing,acronym
+r0498,Rushmoor Instruments Corporation,34 Station Road,Dundee,B91 5EJ,www.rushmoorinstrument.co.uk,+44 1846 218546,food-production,branch
+r0499,Penhale Manufacturing Corporation,137 Mill Lane,Leeds,D98 1DJ,www.penhalemanufacturi.co.uk,+44 1945 335567,manufacturing,legal_form
+r0500,Thornton Packaging Ltd,186 Station Road,Norwich,S79 1JF,www.thorntonpackaging.co.uk,+44 1887 524481,wholesale,legal_form
+r0501,Oakhampton Motors Incorporated,64 Kings Way,Plymouth,B64 4FH,www.oakhamptonmotors.co.uk,+44 1251 291515,engineering,legal_form
+r0502,Blackwell Engineering Limited,155 Victoria Road,Dundee,A64 2GD,www.blackwellengineeri.co.uk,+44 1865 263412,engineering,legal_form
+r0503,Pinnacle Group Inc,183 Kings Way,Derby,S86 5JG,www.pinnaclegroup.co.uk,+44 1595 271181,wholesale,parent_sub
+r0504,ML Inc,140 Mill Lane,Plymouth,B68 8HD,www.mowbraylogistics.co.uk,+44 1219 171448,chemicals,acronym
+r0505,"Engineering, Draycott Corp",118 Kings Way,Glasgow,L74 7EA,www.draycottengineerin.co.uk,+44 1635 108234,wholesale,word_order
+r0506,Ashcroft Foods LLP,129 Kings Way,Dundee,G41 2FD,www.ashcroftfoods.co.uk,+44 1620 913736,chemicals,legal_form
+r0507,Colville Plastics Corporation,68 Queens Park,Dundee,B72 2AB,www.colvilleplastics.co.uk,+44 1821 520872,manufacturing,legal_form
+r0508,Draycott Engineering & Co,118 Kings Way,Glasgow,L74 7EA,www.draycottengineerin.co.uk,+44 1735 550811,wholesale,legal_form
+r0509,"Chemicals, Draycott & Co",48 Foundry Road,Cardiff,G47 7HD,www.draycottchemicals.co.uk,+44 1213 248397,engineering,word_order
+r0510,Kirkland Partners Incorporated,168 Station Road,Swansea,N43 8FE,www.kirkland.co.uk,+44 1225 142968,wholesale,common_token
+r0511,Thornton Foods PLC,132 Foundry Road,Bristol,S69 6FA,www.thorntonfoods.co.uk,+44 1835 766073,wholesale,canonical
+r0512,Cavendish Instruments Incorporated,69 Mill Lane,Sheffield,L28 5GE,www.cavendishinstrumen.co.uk,+44 1299 118354,wholesale,branch
+r0513,Sterling Instruments PLC,150 Victoria Road,Plymouth,S8 8EH,www.sterlinginstrument.co.uk,+44 1517 148955,wholesale,canonical
+r0514,Langmere Manufacturing Ltd,185 Mill Lane,Cardiff,D21 5FE,www.langmeremanufactur.co.uk,+44 1990 115397,manufacturing,canonical
+r0515,"Engineering, Pinnacle Inc",65 Foundry Road,Sheffield,E89 7JG,www.pinnacleengineerin.co.uk,+44 1307 864409,manufacturing,word_order
+r0516,EM LLP,166 Station Road,Swansea,M59 1EF,www.elmhurstmotors.co.uk,+44 1163 978706,engineering,acronym
+r0517,Ingleby Chemicals Corporation,144 Station Road,Plymouth,E26 5GH,www.inglebychemicals.co.uk,+44 1362 777040,chemicals,legal_form
+r0518,Netherby Textiles LLP,154 Station Road,Derby,B2 2EG,www.netherbytextiles.co.uk,+44 1655 225315,chemicals,legal_form
+r0519,Penhale Engineering,65 Victoria Road,Cardiff,,,,food-production,missing
+r0520,Oakhampton Partners LLP,43 Queens Park,Bristol,M11 3JJ,www.oakhamptongroup.co.uk,+44 1596 304341,food-production,parent_sub
+r0521,Penhale Group Incorporated,4 Queens Park,Swansea,A59 5EE,www.penhale.co.uk,+44 1819 272661,wholesale,common_token
+r0522,Hollingsworth Textiles Ltd.,16 Foundry Road,Sheffield,M91 4AA,www.hollingsworthtexti.co.uk,+44 1767 409708,chemicals,canonical
+r0523,Rushmoor Services LLP,105 Mill Lane,Sheffield,S60 7JE,www.rushmoor.co.uk,+44 1746 543045,chemicals,common_token
+r0524,Kirkland Textiles,126 Kings Way,Plymouth,,,,manufacturing,missing
+r0525,Netherby Logistics,33 Queens Park,Plymouth,,,,manufacturing,missing
+r0526,Colville Foods Inc,25 Foundry Road,Swansea,A74 1AD,www.colvillefoods.co.uk,+44 1399 154219,logistics,canonical
+r0527,Cavendish Packaging,36 Station Road,Cardiff,,,,manufacturing,missing
+r0528,Draycott Chemicals,163 Foundry Road,Plymouth,,,,engineering,missing
+r0529,Blackwell Textiles Incorporated,36 Foundry Road,Plymouth,G35 6GF,www.blackwelltextiles.co.uk,+44 1800 634851,wholesale,legal_form
+r0530,Blackwell Chem Corp,98 Station Road,Norwich,D57 8ED,www.blackwellchemicals.co.uk,+44 1960 620329,food-production,abbrev
+r0531,Garrick Chemicals Corporation,113 Canal Street,Glasgow,E74 6FF,www.garrickchemicals.co.uk,+44 1527 176660,chemicals,legal_form
+r0532,Colville Chemicals PLC,106 Kings Way,Bristol,N69 6AF,www.colvillechemicals.co.uk,+44 1471 330009,logistics,legal_form
+r0533,Cavendish Chem Corporation,159 Foundry Road,Plymouth,M26 5DD,www.cavendishchemicals.co.uk,+44 1399 755257,chemicals,abbrev
+r0534,Ashcroft Foods & Co,155 Mill Lane,Plymouth,D20 2EF,www.ashcroftfoods.co.uk,+44 1444 823972,wholesale,legal_form
+r0535,Blackwell Textiles Ltd,36 Foundry Road,Plymouth,G35 6GF,www.blackwelltextiles.co.uk,+44 1861 383948,wholesale,canonical
+r0536,Pinnacle Packaging Inc,156 Foundry Road,Glasgow,M59 8HH,www.pinnaclepackaging.co.uk,+44 1209 988686,logistics,legal_form
+r0537,Baxter Holdings Inc,40 Victoria Road,Plymouth,N78 8HA,www.baxter.co.uk,+44 1119 374490,engineering,common_token
+r0538,AF Ltd,139 Victoria Road,Leeds,D41 1EH,www.acmefoods.co.uk,+44 1191 106094,manufacturing,acronym
+r0539,Acme Engineering Corporation,87 Kings Way,Leeds,A98 1EE,www.acmeengineering.co.uk,+44 1669 424218,food-production,canonical
+r0540,Sterling Instruments PLC,119 Canal Street,Dundee,A28 2AB,www.sterlinginstrument.co.uk,+44 1952 518936,wholesale,legal_form
+r0541,Pinnacle Engineering Ltd,65 Foundry Road,Sheffield,E89 7JG,www.pinnacleengineerin.co.uk,+44 1510 162569,manufacturing,legal_form
+r0542,Pinnacle Solutions PLC,194 High Street,Norwich,M70 3BB,www.pinnaclegroup.co.uk,+44 1357 374575,engineering,parent_sub
+r0543,Cavendish Engineering Ltd.,84 Station Road,Sheffield,M73 5HJ,www.cavendishengineeri.co.uk,+44 1183 620630,engineering,legal_form
+r0544,Hollingsworth Instruments Ltd,93 Canal Street,Glasgow,D53 7DH,www.hollingsworthinstr.co.uk,+44 1161 706066,manufacturing,legal_form
+r0545,GM & Co,8 Kings Way,Glasgow,D53 1GE,www.garrickmanufacturi.co.uk,+44 1975 977560,wholesale,acronym
+r0546,Colville Logistics LLP,158 Victoria Road,Plymouth,G78 3JD,www.colvillelogistics.co.uk,+44 1356 482702,logistics,canonical
+r0547,HE Corporation,14 Queens Park,Dundee,S60 5AG,www.harrowengineering.co.uk,+44 1148 205615,wholesale,acronym
+r0548,Ingleby Logistics & Co,77 Kings Way,Cardiff,L84 5AA,www.inglebylogistics.co.uk,+44 1442 358741,chemicals,canonical
+r0549,Elmhurst Instruments LLP,49 Queens Park,Bristol,S58 3EA,www.elmhurstinstrument.co.uk,+44 1795 268241,manufacturing,branch
+r0550,Ingleby Packaging Ltd.,84 Mill Lane,Sheffield,E44 7BJ,www.inglebypackaging.co.uk,+44 1794 869905,logistics,canonical
+r0551,Netherby Engineering & Co,85 High Street,Norwich,N62 1DH,www.netherbyengineerin.co.uk,+44 1645 467933,manufacturing,legal_form
+r0552,Acme Textiles PLC,57 Canal Street,Sheffield,G88 7GE,www.acmetextiles.co.uk,+44 1455 673067,engineering,abbrev
+r0553,Thornton Foods PLC,58 Station Road,Cardiff,N11 1BG,www.thorntonfoods.co.uk,+44 1558 319820,wholesale,branch
+r0554,"Motors, Redgate Corporation",14 Canal Street,Plymouth,N98 7HJ,www.redgatemotors.co.uk,+44 1566 925352,engineering,word_order
+r0555,Ingleby Solutions & Co,76 Kings Way,Plymouth,D68 5GJ,www.ingleby.co.uk,+44 1276 517721,manufacturing,common_token
+r0556,Acme Textiles Limited,57 Canal Street,Sheffield,G88 7GE,www.acmetextiles.co.uk,+44 1777 390193,engineering,legal_form
+r0557,Colville Plastics,68 Queens Park,Dundee,,,,manufacturing,missing
+r0558,"Manufacturing, Pinnacle Inc",119 Kings Way,Norwich,L3 1AJ,www.pinnaclemanufactur.co.uk,+44 1183 747915,logistics,word_order
+r0559,Colville Chemicals,106 Kings Way,Bristol,,,,logistics,missing
+r0560,Ingleby Instruments Corp,40 High Street,Cardiff,G28 3JB,www.inglebyinstruments.co.uk,+44 1412 694512,engineering,canonical
+r0561,Elmhurst Plastics PLC,129 Queens Park,Leeds,A71 5EG,www.elmhurstplastics.co.uk,+44 1208 533677,manufacturing,canonical
+r0562,Cavendish Plastics LLP,158 Foundry Road,Cardiff,G45 8DA,www.cavendishplastics.co.uk,+44 1663 859602,engineering,abbrev
+r0563,Harrow Engineering Limited,14 Queens Park,Dundee,S60 5AG,www.harrowengineering.co.uk,+44 1715 590661,wholesale,canonical
+r0564,Harrow Group & Co,147 Kings Way,Dundee,L7 2JH,www.harrowgroup.co.uk,+44 1169 229129,chemicals,parent_sub
+r0565,Jarrow Chemicals Corporation,154 Station Road,Dundee,E80 6HH,www.jarrowchemicals.co.uk,+44 1957 749809,chemicals,branch
+r0566,Rushmoor Manufacturing Corporation,144 Queens Park,Leeds,S6 6FH,www.rushmoormanufactur.co.uk,+44 1533 507350,wholesale,canonical
+r0567,Rushmoor Instruments Corporation,169 Victoria Road,Sheffield,B83 4DB,www.rushmoorinstrument.co.uk,+44 1375 111812,food-production,canonical
+r0568,"Logistics, Garrick Limited",92 Kings Way,Leeds,S96 5HJ,www.garricklogistics.co.uk,+44 1619 818086,manufacturing,word_order
+r0569,PM LLP,75 Kings Way,Norwich,A27 1JJ,www.penhalemanufacturi.co.uk,+44 1745 962786,food-production,acronym
+r0570,Colville Plastics Inc,68 Queens Park,Dundee,B72 2AB,www.colvilleplastics.co.uk,+44 1586 570006,manufacturing,abbrev
+r0571,Quarrenden Plastics LLP,84 Queens Park,Swansea,N96 3HF,www.quarrendenplastics.co.uk,+44 1290 323571,engineering,legal_form
+r0572,Redgate Motors Corporation,14 Canal Street,Plymouth,N98 7HJ,www.redgatemotors.co.uk,+44 1996 755459,engineering,abbrev
+r0573,Penhale Solutions Inc,96 Canal Street,Swansea,E60 7BH,www.penhale.co.uk,+44 1550 767914,food-production,common_token
+r0574,Pinnacle Mfg Inc,119 Kings Way,Norwich,L3 1AJ,www.pinnaclemanufactur.co.uk,+44 1504 875168,logistics,abbrev
+r0575,Quarrenden Partners Corp,168 Station Road,Norwich,S46 7EE,www.quarrendengroup.co.uk,+44 1641 284569,wholesale,parent_sub
+r0576,Acme Textiles Ltd.,199 Canal Street,Bristol,E78 6JE,www.acmetextiles.co.uk,+44 1247 196964,logistics,legal_form
+r0577,Hollingsworth Instruments Incorporated,114 Canal Street,Leeds,B6 2GG,www.hollingsworthinstr.co.uk,+44 1700 965006,manufacturing,branch
+r0578,Jarrow Chem Corporation,110 Canal Street,Swansea,B53 3AG,www.jarrowchemicals.co.uk,+44 1327 240608,chemicals,abbrev
+r0579,Acme Manufacturing Ltd.,164 Foundry Road,Derby,A45 5AG,www.acmemanufacturing.co.uk,+44 1613 314971,wholesale,canonical
+r0580,Sterling Pkg Ltd.,150 Queens Park,Cardiff,S16 5EH,www.sterlingpackaging.co.uk,+44 1984 985108,chemicals,abbrev
+r0581,ST Incorporated,77 Foundry Road,Cardiff,G78 2ED,www.stanbridgetextiles.co.uk,+44 1720 124205,manufacturing,acronym
+r0582,Redgate Motors PLC,166 Canal Street,Swansea,B90 5HB,www.redgatemotors.co.uk,+44 1978 407689,chemicals,branch
+r0583,RF Ltd.,171 Kings Way,Swansea,E51 4DD,www.rushmoorfoods.co.uk,+44 1178 761536,manufacturing,acronym
+r0584,Colville Group Inc,25 Foundry Road,Swansea,A74 1AD,www.colvillegroup.co.uk,+44 1797 542645,logistics,parent_sub
+r0585,Harrow Packaging Ltd,147 Kings Way,Dundee,L7 2JH,www.harrowpackaging.co.uk,+44 1631 788932,chemicals,legal_form
+r0586,Kirkland Manufacturing,11 Queens Park,Norwich,,,,manufacturing,missing
+r0587,"Textiles, Hollingsworth Ltd",25 Foundry Road,Dundee,M24 7DH,www.hollingsworthtexti.co.uk,+44 1639 628313,manufacturing,word_order
+r0588,"Motors, Pinnacle LLP",20 Kings Way,Glasgow,L8 7GE,www.pinnaclemotors.co.uk,+44 1379 151045,wholesale,word_order
+r0589,Netherby Chemicals Inc,130 High Street,Plymouth,A31 4EG,www.netherbychemicals.co.uk,+44 1544 169169,engineering,legal_form
+r0590,SP Corp,150 Queens Park,Cardiff,S16 5EH,www.sterlingpackaging.co.uk,+44 1556 721048,chemicals,acronym
+r0591,Netherby Textiles Corp,154 Station Road,Derby,B2 2EG,www.netherbytextiles.co.uk,+44 1490 826551,chemicals,canonical
+r0592,Draycott Chemicals & Co,109 Station Road,Glasgow,G18 8AB,www.draycottchemicals.co.uk,+44 1846 571675,logistics,canonical
+r0593,"Foods, Rushmoor Ltd.",171 Kings Way,Swansea,E51 4DD,www.rushmoorfoods.co.uk,+44 1806 694244,manufacturing,word_order
+r0594,"Manufacturing, Acme Ltd.",164 Foundry Road,Derby,A45 5AG,www.acmemanufacturing.co.uk,+44 1922 412301,wholesale,word_order
+r0595,Pinnacle Motors Ltd.,188 Mill Lane,Derby,A60 7BJ,www.pinnaclemotors.co.uk,+44 1730 809680,engineering,canonical
+r0596,Penhale Engineering Corporation,65 Victoria Road,Cardiff,B43 6DA,www.penhaleengineering.co.uk,+44 1326 364864,food-production,canonical
+r0597,Mowbray Motors Corp,121 Station Road,Bristol,G11 8FE,www.mowbraymotors.co.uk,+44 1597 940301,chemicals,legal_form
+r0598,Colville Chemicals LLP,5 Victoria Road,Norwich,L83 4BB,www.colvillechemicals.co.uk,+44 1894 597265,chemicals,canonical
+r0599,"Instruments, Harrow Limited",61 Queens Park,Plymouth,G51 8AD,www.harrowinstruments.co.uk,+44 1658 949924,logistics,word_order
+r0600,Elmhurst Chemicals Inc,8 Station Road,Bristol,E78 1GE,www.elmhurstchemicals.co.uk,+44 1585 598202,logistics,canonical
+r0601,"Textiles, Blackwell Ltd",36 Foundry Road,Plymouth,G35 6GF,www.blackwelltextiles.co.uk,+44 1929 508323,wholesale,word_order
+r0602,Draycott Chemicals & Co,163 Foundry Road,Plymouth,S79 7HH,www.draycottchemicals.co.uk,+44 1905 959527,engineering,canonical
+r0603,Harrow Plastics Limited,195 Canal Street,Sheffield,A38 2BB,www.harrowplastics.co.uk,+44 1343 386947,engineering,canonical
+r0604,Mowbray Systems Limited,140 Mill Lane,Plymouth,B68 8HD,www.mowbraygroup.co.uk,+44 1933 314624,chemicals,parent_sub
+r0605,"Instruments, Draycott Inc",110 Victoria Road,Dundee,G53 8GF,www.draycottinstrument.co.uk,+44 1114 950386,manufacturing,word_order
+r0606,Oakhampton Foods,159 Kings Way,Sheffield,,,,logistics,missing
+r0607,Baxter Log. & Co,59 Kings Way,Plymouth,S86 5JG,www.baxterlogistics.co.uk,+44 1870 318426,engineering,abbrev
+r0608,KM Corporation,84 Kings Way,Derby,S61 4BJ,www.kirklandmanufactur.co.uk,+44 1526 479415,food-production,acronym
+r0609,Hollingsworth Motors Limited,199 Station Road,Leeds,S2 4EA,www.hollingsworthmotor.co.uk,+44 1959 229549,manufacturing,legal_form
+r0610,Rushmoor Textiles Inc,26 Mill Lane,Norwich,G1 5EH,www.rushmoortextiles.co.uk,+44 1168 818281,manufacturing,canonical
+r0611,Rushmoor Foods Ltd.,171 Kings Way,Swansea,E51 4DD,www.rushmoorfoods.co.uk,+44 1274 752694,manufacturing,canonical
+r0612,"Engineering, Pinnacle LLP",18 Kings Way,Sheffield,S74 2GG,www.pinnacleengineerin.co.uk,+44 1223 510505,engineering,word_order
+r0613,Rushmoor Textiles Limited,174 High Street,Sheffield,G28 7GD,www.rushmoortextiles.co.uk,+44 1744 732157,logistics,legal_form
+r0614,Baxter Solutions LLP,58 Mill Lane,Glasgow,E75 5DB,www.baxter.co.uk,+44 1235 983254,manufacturing,common_token
+r0615,Cavendish Pkg & Co,162 Mill Lane,Leeds,L9 2FG,www.cavendishpackaging.co.uk,+44 1117 871681,wholesale,abbrev
+r0616,CL Ltd.,99 Kings Way,Plymouth,E27 4AG,www.colvillelogistics.co.uk,+44 1648 680716,food-production,acronym
+r0617,Redgate Motors Corporation,14 Canal Street,Plymouth,N98 7HJ,www.redgatemotors.co.uk,+44 1525 395819,engineering,canonical
+r0618,"Logistics, Colville Corporation",99 Kings Way,Plymouth,E27 4AG,www.colvillelogistics.co.uk,+44 1325 618383,food-production,word_order
+r0619,Hollingsworth Solutions Ltd,77 Station Road,Plymouth,N65 5DJ,www.hollingsworthgroup.co.uk,+44 1739 575885,engineering,parent_sub
+r0620,AM & Co,192 Kings Way,Glasgow,M33 6AD,www.ashcroftmotors.co.uk,+44 1677 669325,logistics,acronym
+r0621,Garrick Solutions Ltd.,48 Victoria Road,Leeds,G66 1JE,www.garrick.co.uk,+44 1472 455612,wholesale,common_token
+r0622,Harrow Plastics LLP,195 Canal Street,Sheffield,A38 2BB,www.harrowplastics.co.uk,+44 1244 537940,engineering,legal_form
+r0623,Harrow Solutions Ltd,168 Station Road,Dundee,L41 5EB,www.harrowgroup.co.uk,+44 1719 818718,manufacturing,parent_sub
+r0624,Ashcroft Logistics,134 Queens Park,Cardiff,,,,chemicals,missing
+r0625,Rushmoor Instruments & Co,175 Victoria Road,Swansea,M37 5BA,www.rushmoorinstrument.co.uk,+44 1403 753836,food-production,canonical
+r0626,Baxter Holdings Limited,29 Queens Park,Leeds,S92 7AH,www.baxter.co.uk,+44 1883 991460,logistics,common_token
+r0627,CI LLP,124 Kings Way,Swansea,L64 8EJ,www.cavendishinstrumen.co.uk,+44 1867 724922,wholesale,acronym
+r0628,Quarrenden Manufacturing Incorporated,17 High Street,Norwich,D40 1BD,www.quarrendenmanufact.co.uk,+44 1146 298325,manufacturing,canonical
+r0629,Ashcroft Holdings Limited,80 Station Road,Norwich,G42 8BA,www.ashcroft.co.uk,+44 1832 549281,manufacturing,common_token
+r0630,Fairbourne Solutions Ltd,21 High Street,Dundee,L60 2GA,www.fairbourne.co.uk,+44 1622 427699,engineering,common_token
+r0631,Draycott Systems Limited,140 Station Road,Swansea,G41 7JE,www.draycott.co.uk,+44 1353 747659,logistics,common_token
+r0632,Elmhurst Plastics,129 Queens Park,Leeds,,,,manufacturing,missing
+r0633,PE LLP,195 Foundry Road,Dundee,L63 5JF,www.pinnacleengineerin.co.uk,+44 1165 335237,food-production,acronym
+r0634,Sterling Packaging Ltd.,19 Victoria Road,Swansea,M13 1BA,www.sterlingpackaging.co.uk,+44 1932 716242,chemicals,branch
+r0635,Stanbridge Mfg Corp,153 High Street,Plymouth,L91 5DG,www.stanbridgemanufact.co.uk,+44 1581 262993,food-production,abbrev
+r0636,Langmere Engineering Inc,63 Kings Way,Sheffield,B70 8DG,www.langmereengineerin.co.uk,+44 1846 310759,manufacturing,legal_form
+r0637,Elmhurst Instruments Ltd,57 Queens Park,Leeds,B31 2GJ,www.elmhurstinstrument.co.uk,+44 1908 191651,chemicals,legal_form
+r0638,Kirkland Textiles Corp,126 Kings Way,Plymouth,G24 5AF,www.kirklandtextiles.co.uk,+44 1223 204742,manufacturing,legal_form
+r0639,Pinnacle Engineering Inc,197 Mill Lane,Leeds,D55 1EH,www.pinnacleengineerin.co.uk,+44 1849 720765,manufacturing,branch
+r0640,"Instruments, Elmhurst LLP",1 Victoria Road,Leeds,L75 3JF,www.elmhurstinstrument.co.uk,+44 1702 126648,manufacturing,word_order
+r0641,Jarrow Instruments PLC,92 Canal Street,Leeds,D20 8FB,www.jarrowinstruments.co.uk,+44 1500 589084,food-production,canonical
+r0642,Acme Textiles PLC,199 Canal Street,Bristol,E78 6JE,www.acmetextiles.co.uk,+44 1780 433843,logistics,canonical
+r0643,"Foods, Pinnacle Limited",152 Foundry Road,Sheffield,B1 4FE,www.pinnaclefoods.co.uk,+44 1282 840932,wholesale,word_order
+r0644,"Instruments, Pinnacle Inc",183 Kings Way,Derby,S86 5JG,www.pinnacleinstrument.co.uk,+44 1340 667593,wholesale,word_order
+r0645,EC Corporation,8 Station Road,Bristol,E78 1GE,www.elmhurstchemicals.co.uk,+44 1468 743758,logistics,acronym
+r0646,Thornton Foods Ltd.,132 Foundry Road,Bristol,S69 6FA,www.thorntonfoods.co.uk,+44 1284 176840,wholesale,legal_form
+r0647,Pinnacle Instruments Corporation,183 Kings Way,Derby,S86 5JG,www.pinnacleinstrument.co.uk,+44 1997 327889,wholesale,legal_form
+r0648,Penhale Partners PLC,75 Kings Way,Norwich,A27 1JJ,www.penhalegroup.co.uk,+44 1688 988348,food-production,parent_sub
+r0649,Cavendish Chemicals Corporation,159 Foundry Road,Plymouth,M26 5DD,www.cavendishchemicals.co.uk,+44 1974 807032,chemicals,canonical
+r0650,Blackwell Chemicals LLP,98 Station Road,Norwich,D57 8ED,www.blackwellchemicals.co.uk,+44 1593 533960,food-production,legal_form
+r0651,Fairbourne Packaging Limited,140 Canal Street,Bristol,S80 3FF,www.fairbournepackagin.co.uk,+44 1339 404042,engineering,legal_form
+r0652,Oakhampton Textiles Incorporated,184 Kings Way,Sheffield,G21 2AG,www.oakhamptontextiles.co.uk,+44 1183 952553,wholesale,branch
+r0653,Rushmoor Manufacturing & Co,144 Queens Park,Leeds,S6 6FH,www.rushmoormanufactur.co.uk,+44 1555 128886,wholesale,legal_form
+r0654,"Engineering, Acme Corporation",87 Kings Way,Leeds,A98 1EE,www.acmeengineering.co.uk,+44 1224 317484,food-production,word_order
+r0655,Acme Foods Ltd,139 Victoria Road,Leeds,D41 1EH,www.acmefoods.co.uk,+44 1734 759040,manufacturing,canonical
+r0656,"Textiles, Quarrenden Incorporated",120 Station Road,Cardiff,S1 7DF,www.quarrendentextiles.co.uk,+44 1286 224153,logistics,word_order
+r0657,Rushmoor Mfg Corporation,144 Queens Park,Leeds,S6 6FH,www.rushmoormanufactur.co.uk,+44 1743 670365,wholesale,abbrev
+r0658,Draycott Manufacturing Ltd.,161 High Street,Dundee,M71 8FD,www.draycottmanufactur.co.uk,+44 1702 118429,wholesale,canonical
+r0659,Kirkland Packaging PLC,102 Station Road,Norwich,G26 6DJ,www.kirklandpackaging.co.uk,+44 1206 594933,food-production,legal_form
+r0660,Pinnacle Instruments Incorporated,160 Kings Way,Dundee,G32 7AF,www.pinnacleinstrument.co.uk,+44 1651 557627,manufacturing,canonical
+r0661,Kirkland Services Ltd,11 Queens Park,Norwich,L61 7FA,www.kirklandgroup.co.uk,+44 1291 839003,manufacturing,parent_sub
+r0662,Sterling Logistics Inc,49 Queens Park,Derby,A56 5DE,www.sterlinglogistics.co.uk,+44 1476 898773,chemicals,canonical
+r0663,Elmhurst Plastics Ltd.,129 Queens Park,Leeds,A71 5EG,www.elmhurstplastics.co.uk,+44 1970 667161,manufacturing,legal_form
+r0664,"Logistics, Acme Inc",52 Kings Way,Bristol,A8 3ED,www.acmelogistics.co.uk,+44 1975 248000,manufacturing,word_order
+r0665,Ingleby Chem LLP,144 Station Road,Plymouth,E26 5GH,www.inglebychemicals.co.uk,+44 1507 592342,chemicals,abbrev
+r0666,"Manufacturing, Rushmoor Corporation",144 Queens Park,Leeds,S6 6FH,www.rushmoormanufactur.co.uk,+44 1220 287116,wholesale,word_order
+r0667,"Instruments, Thornton Ltd",94 High Street,Leeds,G88 1HG,www.thorntoninstrument.co.uk,+44 1947 886163,manufacturing,word_order
+r0668,Hollingsworth Instruments Corporation,110 Queens Park,Glasgow,S57 1HH,www.hollingsworthinstr.co.uk,+44 1998 203873,chemicals,legal_form
+r0669,Cavendish Instruments Incorporated,124 Kings Way,Swansea,L64 8EJ,www.cavendishinstrumen.co.uk,+44 1204 796690,wholesale,canonical
+r0670,MM Corporation,69 High Street,Sheffield,A94 5AE,www.mowbraymanufacturi.co.uk,+44 1211 980996,logistics,acronym
+r0671,Rushmoor Instr & Co,175 Victoria Road,Swansea,M37 5BA,www.rushmoorinstrument.co.uk,+44 1483 682302,food-production,abbrev
+r0672,Penhale Textiles Ltd.,84 Queens Park,Cardiff,G12 5AH,www.penhaletextiles.co.uk,+44 1470 803069,manufacturing,legal_form
+r0673,Netherby Chemicals Corp,130 High Street,Plymouth,A31 4EG,www.netherbychemicals.co.uk,+44 1520 344162,engineering,canonical
+r0674,JL Inc,160 Queens Park,Plymouth,D51 3EH,www.jarrowlogistics.co.uk,+44 1304 334436,food-production,acronym
+r0675,Redgate Solutions & Co,188 Canal Street,Plymouth,L16 5GA,www.redgate.co.uk,+44 1647 183420,logistics,common_token
+r0676,Pinnacle Engineering Inc,65 Foundry Road,Sheffield,E89 7JG,www.pinnacleengineerin.co.uk,+44 1455 709680,manufacturing,canonical
+r0677,Sterling Instruments Corporation,119 Canal Street,Dundee,A28 2AB,www.sterlinginstrument.co.uk,+44 1369 473421,wholesale,canonical
+r0678,Rushmoor Packaging Limited,23 Kings Way,Leeds,N52 1JG,www.rushmoorpackaging.co.uk,+44 1811 517320,engineering,canonical
+r0679,Thornton Instr Ltd,94 High Street,Leeds,G88 1HG,www.thorntoninstrument.co.uk,+44 1287 679754,manufacturing,abbrev
+r0680,Elmhurst Motors Limited,166 Station Road,Swansea,M59 1EF,www.elmhurstmotors.co.uk,+44 1925 171808,engineering,canonical
+r0681,Hollingsworth Motors PLC,199 Station Road,Leeds,S2 4EA,www.hollingsworthmotor.co.uk,+44 1690 267321,manufacturing,canonical
+r0682,Blackwell Textiles Ltd,135 Foundry Road,Glasgow,S66 5DA,www.blackwelltextiles.co.uk,+44 1799 567621,chemicals,branch
+r0683,Kirkland Solutions Ltd,18 High Street,Norwich,B87 1DD,www.kirkland.co.uk,+44 1602 845703,logistics,common_token
+r0684,Ashcroft Foods PLC,129 Kings Way,Dundee,G41 2FD,www.ashcroftfoods.co.uk,+44 1918 675444,chemicals,canonical
+r0685,LI PLC,124 Station Road,Swansea,B52 7AB,www.langmereinstrument.co.uk,+44 1426 598525,chemicals,acronym
+r0686,Cavendish Instruments,95 High Street,Bristol,,,,wholesale,missing
+r0687,Ashcroft Foods Inc,155 Mill Lane,Plymouth,D20 2EF,www.ashcroftfoods.co.uk,+44 1977 752995,wholesale,abbrev
+r0688,Pinnacle Instruments Inc,183 Kings Way,Derby,S86 5JG,www.pinnacleinstrument.co.uk,+44 1847 743290,wholesale,canonical
+r0689,"Chemicals, Ingleby LLP",144 Station Road,Plymouth,E26 5GH,www.inglebychemicals.co.uk,+44 1660 802641,chemicals,word_order
+r0690,Thornton Pkg Corp,186 Station Road,Norwich,S79 1JF,www.thorntonpackaging.co.uk,+44 1128 856425,wholesale,abbrev
+r0691,"Motors, Redgate PLC",160 Queens Park,Glasgow,A43 2HE,www.redgatemotors.co.uk,+44 1407 687045,chemicals,word_order
+r0692,BL & Co,59 Kings Way,Plymouth,S86 5JG,www.baxterlogistics.co.uk,+44 1202 947350,engineering,acronym
+r0693,Ashcroft Group Inc,110 Canal Street,Glasgow,E74 3JG,www.ashcroftgroup.co.uk,+44 1462 534154,logistics,parent_sub
+r0694,Draycott Holdings Corp,118 Kings Way,Glasgow,L74 7EA,www.draycottgroup.co.uk,+44 1167 389401,wholesale,parent_sub
+r0695,Pinnacle Manufacturing Inc,119 Kings Way,Norwich,L3 1AJ,www.pinnaclemanufactur.co.uk,+44 1399 511231,logistics,canonical
+r0696,AT PLC,154 Canal Street,Derby,G17 8HH,www.ashcrofttextiles.co.uk,+44 1217 481606,wholesale,acronym
+r0697,Thornton Instruments Ltd,94 High Street,Leeds,G88 1HG,www.thorntoninstrument.co.uk,+44 1445 305854,manufacturing,canonical
+r0698,Jarrow Textiles & Co,153 Victoria Road,Norwich,N36 5FF,www.jarrowtextiles.co.uk,+44 1565 480809,manufacturing,legal_form
+r0699,Stanbridge Solutions Ltd.,39 Kings Way,Sheffield,D25 7EA,www.stanbridgegroup.co.uk,+44 1755 865233,logistics,parent_sub
+r0700,"Textiles, Acme PLC",199 Canal Street,Bristol,E78 6JE,www.acmetextiles.co.uk,+44 1110 914926,logistics,word_order
+r0701,Mowbray Logistics Limited,138 Kings Way,Swansea,G8 8HB,www.mowbraylogistics.co.uk,+44 1904 546676,chemicals,branch
+r0702,Jarrow Chemicals Corporation,110 Canal Street,Swansea,B53 3AG,www.jarrowchemicals.co.uk,+44 1730 457572,chemicals,canonical
+r0703,CE Ltd,84 Station Road,Sheffield,M73 5HJ,www.cavendishengineeri.co.uk,+44 1842 341907,engineering,acronym
+r0704,Northern Plastics Inc,5 Victoria Road,Glasgow,L29 5EG,www.northernplastics.co.uk,+44 1325 482381,food-production,canonical
+r0705,Pinnacle Eng LLP,18 Kings Way,Sheffield,S74 2GG,www.pinnacleengineerin.co.uk,+44 1404 758541,engineering,abbrev
+r0706,Blackwell Engineering & Co,155 Victoria Road,Dundee,A64 2GD,www.blackwellengineeri.co.uk,+44 1975 610233,engineering,canonical
+r0707,Thornton Manufacturing Limited,137 Station Road,Derby,M27 8ED,www.thorntonmanufactur.co.uk,+44 1937 675969,wholesale,canonical
+r0708,Pinnacle Motors & Co,188 Mill Lane,Derby,A60 7BJ,www.pinnaclemotors.co.uk,+44 1222 602046,engineering,legal_form
+r0709,Ashcroft Plastics PLC,133 Canal Street,Glasgow,N35 3DE,www.ashcroftplastics.co.uk,+44 1996 101597,food-production,canonical
+r0710,Cavendish Instruments & Co,95 High Street,Bristol,G96 1FB,www.cavendishinstrumen.co.uk,+44 1594 515395,wholesale,legal_form
+r0711,Acme Systems PLC,18 Canal Street,Bristol,G26 7BF,www.acme.co.uk,+44 1421 700948,wholesale,common_token
+r0712,Penhale Textiles Corp,84 Queens Park,Cardiff,G12 5AH,www.penhaletextiles.co.uk,+44 1437 213081,manufacturing,canonical
+r0713,"Chemicals, Pinnacle PLC",194 High Street,Norwich,M70 3BB,www.pinnaclechemicals.co.uk,+44 1461 464616,engineering,word_order
+r0714,Ashcroft Textiles Incorporated,140 High Street,Swansea,G87 7DJ,www.ashcrofttextiles.co.uk,+44 1613 587152,chemicals,canonical
+r0715,Northern Textiles Ltd.,54 Kings Way,Norwich,L45 2DH,www.northerntextiles.co.uk,+44 1831 742563,engineering,legal_form
+r0716,Cavendish Instruments Corporation,147 High Street,Dundee,D21 8DE,www.cavendishinstrumen.co.uk,+44 1639 688125,wholesale,branch
+r0717,IP Inc,84 Mill Lane,Sheffield,E44 7BJ,www.inglebypackaging.co.uk,+44 1567 783475,logistics,acronym
+r0718,Ingleby Solutions Corp,40 High Street,Cardiff,G28 3JB,www.inglebygroup.co.uk,+44 1732 592602,engineering,parent_sub
+r0719,Mowbray Logistics Limited,140 Mill Lane,Plymouth,B68 8HD,www.mowbraylogistics.co.uk,+44 1337 759649,chemicals,canonical
+r0720,Oakhampton Foods PLC,159 Kings Way,Sheffield,N77 7HF,www.oakhamptonfoods.co.uk,+44 1156 605747,logistics,abbrev
+r0721,Hollingsworth Instruments Corp,57 Victoria Road,Dundee,M25 6AF,www.hollingsworthinstr.co.uk,+44 1770 706316,manufacturing,canonical
+r0722,Mowbray Manufacturing & Co,69 High Street,Sheffield,A94 5AE,www.mowbraymanufacturi.co.uk,+44 1918 379644,logistics,canonical
+r0723,Oakhampton Instruments LLP,43 Queens Park,Bristol,M11 3JJ,www.oakhamptoninstrume.co.uk,+44 1322 821942,food-production,canonical
+r0724,Kirkland Manufacturing Limited,11 Queens Park,Norwich,L61 7FA,www.kirklandmanufactur.co.uk,+44 1861 399015,manufacturing,legal_form
+r0725,Pinnacle Motors LLP,20 Kings Way,Glasgow,L8 7GE,www.pinnaclemotors.co.uk,+44 1740 160170,wholesale,canonical
+r0726,LC Incorporated,116 Canal Street,Dundee,B33 7BE,www.langmerechemicals.co.uk,+44 1658 770865,chemicals,acronym
+r0727,Colville Foods & Co,32 Mill Lane,Sheffield,M2 6FF,www.colvillefoods.co.uk,+44 1302 581970,logistics,canonical
+r0728,AC Corp,22 Foundry Road,Plymouth,L94 5JD,www.acmechemicals.co.uk,+44 1694 872513,chemicals,acronym
+r0729,Ashcroft Textiles PLC,154 Canal Street,Derby,G17 8HH,www.ashcrofttextiles.co.uk,+44 1931 597286,wholesale,canonical
+r0730,Jarrow Logistics,183 Mill Lane,Cardiff,,,,engineering,missing
+r0731,Hollingsworth Textiles Incorporated,25 Foundry Road,Dundee,M24 7DH,www.hollingsworthtexti.co.uk,+44 1811 254515,manufacturing,legal_form
+r0732,Quarrenden Logistics Corp,168 Station Road,Norwich,S46 7EE,www.quarrendenlogistic.co.uk,+44 1753 463276,wholesale,canonical
+r0733,Hollingsworth Chemicals Ltd,77 Station Road,Plymouth,N65 5DJ,www.hollingsworthchemi.co.uk,+44 1789 610268,engineering,canonical
+r0734,Sterling Logistics Incorporated,49 Queens Park,Derby,A56 5DE,www.sterlinglogistics.co.uk,+44 1223 299001,chemicals,legal_form
+r0735,Rushmoor Foods Corp,171 Kings Way,Swansea,E51 4DD,www.rushmoorfoods.co.uk,+44 1912 736131,manufacturing,legal_form
+r0736,Penhale Chemicals Corp,125 High Street,Dundee,E70 3AA,www.penhalechemicals.co.uk,+44 1930 956995,wholesale,legal_form
+r0737,Pinnacle Engineering & Co,154 Kings Way,Cardiff,E42 8AA,www.pinnacleengineerin.co.uk,+44 1569 493043,food-production,branch
+r0738,Acme Chemicals PLC,22 Foundry Road,Plymouth,L94 5JD,www.acmechemicals.co.uk,+44 1584 984509,chemicals,legal_form
+r0739,Oakhampton Textiles Limited,30 Canal Street,Norwich,N35 2FA,www.oakhamptontextiles.co.uk,+44 1894 898928,wholesale,legal_form
+r0740,Cavendish Packaging Limited,161 High Street,Dundee,L50 7DF,www.cavendishpackaging.co.uk,+44 1556 116848,food-production,legal_form
+r0741,Hollingsworth Chemicals Ltd,81 Mill Lane,Glasgow,L58 3HB,www.hollingsworthchemi.co.uk,+44 1481 600232,engineering,branch
+r0742,Cavendish Engineering Incorporated,84 Station Road,Sheffield,M73 5HJ,www.cavendishengineeri.co.uk,+44 1855 174120,engineering,canonical
+r0743,SI & Co,96 Mill Lane,Glasgow,M85 2HE,www.sterlinginstrument.co.uk,+44 1219 227698,chemicals,acronym
+r0744,OM Incorporated,64 Kings Way,Plymouth,B64 4FH,www.oakhamptonmotors.co.uk,+44 1443 508238,engineering,acronym
+r0745,Oakhampton Manufacturing,50 Station Road,Derby,,,,logistics,missing
+r0746,Mowbray Textiles Limited,57 Victoria Road,Norwich,A90 3DD,www.mowbraytextiles.co.uk,+44 1320 599345,engineering,canonical
+r0747,Ingleby Foods Inc,130 Station Road,Cardiff,E63 4HJ,www.inglebyfoods.co.uk,+44 1145 660762,food-production,canonical
+r0748,Ashcroft Logistics Inc,44 Queens Park,Plymouth,M69 4FJ,www.ashcroftlogistics.co.uk,+44 1880 769466,logistics,branch
+r0749,Cavendish Plastics Corp,158 Foundry Road,Cardiff,G45 8DA,www.cavendishplastics.co.uk,+44 1576 633236,engineering,legal_form
+r0750,PC Ltd,194 High Street,Norwich,M70 3BB,www.pinnaclechemicals.co.uk,+44 1324 462942,engineering,acronym
+r0751,RT Limited,178 Queens Park,Leeds,E47 7JB,www.redgatetextiles.co.uk,+44 1370 534626,wholesale,acronym
+r0752,"Instruments, Redgate LLP",108 High Street,Leeds,L87 5HJ,www.redgateinstruments.co.uk,+44 1756 430518,chemicals,word_order
+r0753,Langmere Holdings Corp,12 Kings Way,Bristol,L64 6DB,www.langmere.co.uk,+44 1551 815147,wholesale,common_token
+r0754,Redgate Textiles,178 Queens Park,Leeds,,,,wholesale,missing
+r0755,Oakhampton Logistics LLP,116 Victoria Road,Plymouth,S8 8GE,www.oakhamptonlogistic.co.uk,+44 1891 718244,logistics,legal_form
+r0756,Hollingsworth Instruments,110 Queens Park,Glasgow,,,,chemicals,missing
+r0757,Ashcroft Services PLC,133 Canal Street,Glasgow,N35 3DE,www.ashcroftgroup.co.uk,+44 1447 207342,food-production,parent_sub
+r0758,Rushmoor Services Ltd.,171 Kings Way,Swansea,E51 4DD,www.rushmoorgroup.co.uk,+44 1772 490064,manufacturing,parent_sub
+r0759,Mowbray Instruments Ltd,7 Foundry Road,Bristol,G72 2JA,www.mowbrayinstruments.co.uk,+44 1155 754891,logistics,canonical
+r0760,Cavendish Packaging Incorporated,36 Station Road,Cardiff,N28 1JG,www.cavendishpackaging.co.uk,+44 1530 299615,manufacturing,canonical
+r0761,KM Inc,114 Kings Way,Dundee,N46 8DB,www.kirklandmotors.co.uk,+44 1456 651293,manufacturing,acronym
+r0762,Ingleby Chemicals LLP,122 High Street,Bristol,A65 5BE,www.inglebychemicals.co.uk,+44 1323 938782,chemicals,branch
+r0763,Mowbray Textiles,57 Victoria Road,Norwich,,,,engineering,missing
+r0764,Stanbridge Plastics Ltd.,39 Kings Way,Sheffield,D25 7EA,www.stanbridgeplastics.co.uk,+44 1681 308507,logistics,abbrev
+r0765,Oakhampton Foods Corporation,159 Kings Way,Sheffield,N77 7HF,www.oakhamptonfoods.co.uk,+44 1158 725103,logistics,legal_form
+r0766,Fairbourne Pkg Corporation,140 Canal Street,Bristol,S80 3FF,www.fairbournepackagin.co.uk,+44 1578 797516,engineering,abbrev
+r0767,Blackwell Chemicals Corp,98 Station Road,Norwich,D57 8ED,www.blackwellchemicals.co.uk,+44 1988 693004,food-production,canonical
+r0768,Colville Log. Corporation,99 Kings Way,Plymouth,E27 4AG,www.colvillelogistics.co.uk,+44 1331 169655,food-production,abbrev
+r0769,Ashcroft Logistics PLC,60 Canal Street,Dundee,L24 3HF,www.ashcroftlogistics.co.uk,+44 1538 792974,food-production,legal_form
+r0770,Northern Logistics Ltd,63 Canal Street,Norwich,L84 7DG,www.northernlogistics.co.uk,+44 1456 201491,chemicals,branch
+r0771,Elmhurst Textiles Corporation,158 Canal Street,Bristol,D26 7DF,www.elmhursttextiles.co.uk,+44 1310 646446,manufacturing,canonical
+r0772,AL Corp,60 Canal Street,Dundee,L24 3HF,www.ashcroftlogistics.co.uk,+44 1138 226861,food-production,acronym
+r0773,Ingleby Textiles Corp,97 Station Road,Glasgow,D44 6DD,www.inglebytextiles.co.uk,+44 1784 857336,wholesale,legal_form
+r0774,Jarrow Plastics LLP,179 High Street,Bristol,S72 6BG,www.jarrowplastics.co.uk,+44 1412 272547,manufacturing,abbrev
+r0775,Kirkland Motors Limited,114 Kings Way,Dundee,N46 8DB,www.kirklandmotors.co.uk,+44 1481 667303,manufacturing,canonical
+r0776,Acme Logistics,52 Kings Way,Bristol,,,,manufacturing,missing
+r0777,Acme Solutions PLC,19 Victoria Road,Derby,S90 2EH,www.acme.co.uk,+44 1967 806373,logistics,common_token
+r0778,OL Ltd.,116 Victoria Road,Plymouth,S8 8GE,www.oakhamptonlogistic.co.uk,+44 1211 820374,logistics,acronym
+r0779,"Logistics, Penhale Inc",197 High Street,Glasgow,E94 8DE,www.penhalelogistics.co.uk,+44 1483 166135,chemicals,word_order
+r0780,Draycott Manufacturing Inc,161 High Street,Dundee,M71 8FD,www.draycottmanufactur.co.uk,+44 1149 876186,wholesale,legal_form
+r0781,Blackwell Partners Inc,5 Station Road,Leeds,N84 8EF,www.blackwell.co.uk,+44 1736 734669,chemicals,common_token
+r0782,Kirkland Manufacturing,84 Kings Way,Derby,,,,food-production,missing
+r0783,Redgate Instruments Incorporated,165 Canal Street,Plymouth,D90 7GD,www.redgateinstruments.co.uk,+44 1575 969049,food-production,branch
+r0784,Langmere Instruments & Co,124 Station Road,Swansea,B52 7AB,www.langmereinstrument.co.uk,+44 1625 135777,chemicals,legal_form
+r0785,OI & Co,43 Queens Park,Bristol,M11 3JJ,www.oakhamptoninstrume.co.uk,+44 1773 101275,food-production,acronym
+r0786,HI LLP,57 Victoria Road,Dundee,M25 6AF,www.hollingsworthinstr.co.uk,+44 1156 394321,manufacturing,acronym
+r0787,Ingleby Instruments Corp,112 Queens Park,Plymouth,L88 8JD,www.inglebyinstruments.co.uk,+44 1102 504254,engineering,branch
+r0788,Cavendish Solutions & Co,161 High Street,Dundee,L50 7DF,www.cavendishgroup.co.uk,+44 1570 698480,food-production,parent_sub
+r0789,Draycott Manufacturing Ltd,18 High Street,Bristol,N8 7JE,www.draycottmanufactur.co.uk,+44 1262 987184,logistics,legal_form
+r0790,Sterling Instr Corporation,119 Canal Street,Dundee,A28 2AB,www.sterlinginstrument.co.uk,+44 1917 560415,wholesale,abbrev
+r0791,Pinnacle Packaging Corp,156 Foundry Road,Glasgow,M59 8HH,www.pinnaclepackaging.co.uk,+44 1220 460677,logistics,canonical
+r0792,Ashcroft Engineering,70 Mill Lane,Cardiff,,,,engineering,missing
+r0793,Stanbridge Engineering Corp,184 Station Road,Glasgow,N40 5FH,www.stanbridgeengineer.co.uk,+44 1347 174605,food-production,legal_form
+r0794,Acme Systems Ltd,139 Victoria Road,Leeds,D41 1EH,www.acmegroup.co.uk,+44 1640 271200,manufacturing,parent_sub
+r0795,Colville Logistics Ltd,99 Kings Way,Plymouth,E27 4AG,www.colvillelogistics.co.uk,+44 1157 281526,food-production,legal_form
+r0796,Ashcroft Logistics Ltd.,110 Canal Street,Glasgow,E74 3JG,www.ashcroftlogistics.co.uk,+44 1684 437536,logistics,legal_form
+r0797,Harrow Holdings Limited,195 Canal Street,Sheffield,A38 2BB,www.harrowgroup.co.uk,+44 1441 952888,engineering,parent_sub
+r0798,Draycott Manufacturing PLC,102 Mill Lane,Norwich,N73 8GF,www.draycottmanufactur.co.uk,+44 1302 679373,manufacturing,canonical
+r0799,Ashcroft Textiles Corp,140 High Street,Swansea,G87 7DJ,www.ashcrofttextiles.co.uk,+44 1379 163226,chemicals,legal_form
+r0800,Sterling Foods PLC,111 Queens Park,Dundee,G39 4DB,www.sterlingfoods.co.uk,+44 1383 903424,chemicals,canonical
+r0801,Redgate Motors & Co,14 Canal Street,Plymouth,N98 7HJ,www.redgatemotors.co.uk,+44 1991 395572,engineering,legal_form
+r0802,Quarrenden Manufacturing PLC,143 High Street,Cardiff,B4 4DE,www.quarrendenmanufact.co.uk,+44 1905 961414,chemicals,legal_form
+r0803,Elmhurst Instruments Incorporated,83 Mill Lane,Sheffield,A96 4EA,www.elmhurstinstrument.co.uk,+44 1258 101707,chemicals,branch
+r0804,Sterling Logistics,49 Queens Park,Derby,,,,chemicals,missing
+r0805,Elmhurst Chemicals Corporation,8 Station Road,Bristol,E78 1GE,www.elmhurstchemicals.co.uk,+44 1414 981523,logistics,legal_form
+r0806,Colville Plastics Incorporated,31 Mill Lane,Glasgow,D61 1BB,www.colvilleplastics.co.uk,+44 1258 574044,manufacturing,branch
+r0807,PM Corporation,188 Mill Lane,Derby,A60 7BJ,www.pinnaclemotors.co.uk,+44 1998 707520,engineering,acronym
+r0808,Cavendish Instr Corporation,95 High Street,Bristol,G96 1FB,www.cavendishinstrumen.co.uk,+44 1395 321590,wholesale,abbrev
+r0809,Pinnacle Eng Inc,65 Foundry Road,Sheffield,E89 7JG,www.pinnacleengineerin.co.uk,+44 1195 298099,manufacturing,abbrev
+r0810,Colville Foods & Co,35 Kings Way,Bristol,E74 8BD,www.colvillefoods.co.uk,+44 1112 865689,logistics,branch
+r0811,Quarrenden Plastics,84 Queens Park,Swansea,,,,engineering,missing
+r0812,Acme Systems Incorporated,198 Canal Street,Cardiff,N94 1AG,www.acme.co.uk,+44 1393 119742,engineering,common_token
+r0813,"Engineering, Netherby PLC",85 High Street,Norwich,N62 1DH,www.netherbyengineerin.co.uk,+44 1316 742565,manufacturing,word_order
+r0814,Penhale Holdings Ltd.,199 Mill Lane,Cardiff,B23 5GH,www.penhalegroup.co.uk,+44 1206 344727,engineering,parent_sub
+r0815,"Motors, Netherby PLC",197 Foundry Road,Derby,S1 2DG,www.netherbymotors.co.uk,+44 1722 463494,chemicals,word_order
+r0816,Jarrow Textiles,153 Victoria Road,Norwich,,,,manufacturing,missing
+r0817,PE Incorporated,65 Foundry Road,Sheffield,E89 7JG,www.pinnacleengineerin.co.uk,+44 1252 424420,manufacturing,acronym
+r0818,DC Inc,163 Foundry Road,Plymouth,S79 7HH,www.draycottchemicals.co.uk,+44 1548 811906,engineering,acronym
+r0819,Thornton Packaging Corp,186 Station Road,Norwich,S79 1JF,www.thorntonpackaging.co.uk,+44 1881 669874,wholesale,canonical
+r0820,Netherby Engineering PLC,85 High Street,Norwich,N62 1DH,www.netherbyengineerin.co.uk,+44 1490 644572,manufacturing,canonical
+r0821,Rushmoor Manufacturing LLP,128 Mill Lane,Norwich,D62 7FE,www.rushmoormanufactur.co.uk,+44 1903 891478,manufacturing,branch
+r0822,Blackwell Holdings Ltd,36 Foundry Road,Plymouth,G35 6GF,www.blackwellgroup.co.uk,+44 1594 287651,wholesale,parent_sub
+r0823,Baxter Logistics,59 Kings Way,Plymouth,,,,engineering,missing
+r0824,Jarrow Textiles Limited,153 Victoria Road,Norwich,N36 5FF,www.jarrowtextiles.co.uk,+44 1581 166782,manufacturing,canonical
+r0825,Hollingsworth Textiles Ltd,25 Foundry Road,Dundee,M24 7DH,www.hollingsworthtexti.co.uk,+44 1789 747346,manufacturing,abbrev
+r0826,Oakhampton Services Ltd.,193 Station Road,Derby,E43 5HJ,www.oakhampton.co.uk,+44 1778 668987,manufacturing,common_token
+r0827,Sterling Instr PLC,150 Victoria Road,Plymouth,S8 8EH,www.sterlinginstrument.co.uk,+44 1471 506287,wholesale,abbrev
+r0828,Stanbridge Textiles Ltd,77 Foundry Road,Cardiff,G78 2ED,www.stanbridgetextiles.co.uk,+44 1432 605532,manufacturing,canonical
+r0829,Stanbridge Textiles Corp,77 Foundry Road,Cardiff,G78 2ED,www.stanbridgetextiles.co.uk,+44 1200 923938,manufacturing,legal_form
+r0830,"Motors, Kirkland Limited",114 Kings Way,Dundee,N46 8DB,www.kirklandmotors.co.uk,+44 1514 257313,manufacturing,word_order
+r0831,NP PLC,5 Victoria Road,Glasgow,L29 5EG,www.northernplastics.co.uk,+44 1864 586222,food-production,acronym
+r0832,"Packaging, Rushmoor Limited",23 Kings Way,Leeds,N52 1JG,www.rushmoorpackaging.co.uk,+44 1477 672854,engineering,word_order
+r0833,Hollingsworth Chemicals PLC,77 Station Road,Plymouth,N65 5DJ,www.hollingsworthchemi.co.uk,+44 1422 989600,engineering,legal_form
+r0834,Oakhampton Motors,64 Kings Way,Plymouth,,,,engineering,missing
+r0835,"Chemicals, Netherby Corp",130 High Street,Plymouth,A31 4EG,www.netherbychemicals.co.uk,+44 1765 406582,engineering,word_order
+r0836,Mowbray Manufacturing Inc,69 High Street,Sheffield,A94 5AE,www.mowbraymanufacturi.co.uk,+44 1724 342826,logistics,legal_form
+r0837,Penhale Group Corporation,153 Foundry Road,Bristol,B4 2EJ,www.penhale.co.uk,+44 1396 617118,food-production,common_token
+r0838,"Instruments, Langmere Corp",124 Station Road,Swansea,B52 7AB,www.langmereinstrument.co.uk,+44 1973 622103,chemicals,word_order
+r0839,Netherby Logistics Incorporated,33 Queens Park,Plymouth,L82 6DD,www.netherbylogistics.co.uk,+44 1599 929125,manufacturing,legal_form
+r0840,Ashcroft Log. Inc,110 Canal Street,Glasgow,E74 3JG,www.ashcroftlogistics.co.uk,+44 1680 662839,logistics,abbrev
+r0841,Fairbourne Packaging Corporation,140 Canal Street,Bristol,S80 3FF,www.fairbournepackagin.co.uk,+44 1592 159750,engineering,canonical
+r0842,Sterling Packaging Limited,150 Queens Park,Cardiff,S16 5EH,www.sterlingpackaging.co.uk,+44 1553 715683,chemicals,legal_form
+r0843,Ingleby Packaging LLP,84 Mill Lane,Sheffield,E44 7BJ,www.inglebypackaging.co.uk,+44 1788 427040,logistics,legal_form
+r0844,"Engineering, Harrow & Co",51 Mill Lane,Norwich,G40 6BH,www.harrowengineering.co.uk,+44 1952 119395,food-production,word_order

@@ -33,7 +33,7 @@ from mcp.types import (
     Tool,
 )
 
-from goldenmatch.core._paths import PathOutsideAllowedRootError, safe_path
+from goldenmatch.core._paths import _ENV_ROOT, PathOutsideAllowedRootError, safe_path
 from goldenmatch.mcp.agent_tools import AGENT_TOOLS, handle_agent_tool
 from goldenmatch.mcp.document_tools import (
     DOCUMENT_TOOL_NAMES,
@@ -814,6 +814,119 @@ _BASE_TOOLS = [
             "required": ["model_path", "frames"],
         },
     ),
+    Tool(
+        name="discover_semantic_model",
+        description=(
+            "Generative half of the semantic-layer front door: point GoldenMatch at a "
+            "set of source tables and it PROPOSES a draft semantic model -- entity "
+            "types, keys, joins, measures, dimensions -- where every declared key is "
+            "already graded by the certifier (unique-at-grain + fan-out). Discovery is "
+            "hypothesis generation; certification is the falsification test, so the "
+            "draft is pre-proven against the data. Advisory; nothing is auto-applied."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "frames": {
+                    "type": "object",
+                    "description": (
+                        "Map of table name -> data file path, e.g. "
+                        "{\"orders\": \"orders.csv\", \"customers\": \"customers.csv\"}."
+                    ),
+                },
+                "dialect": {
+                    "type": "string",
+                    "description": "Emit dialect for the draft model: metricflow / cube / osi.",
+                    "default": "metricflow",
+                },
+                "resolve": {
+                    "type": "boolean",
+                    "description": "Also measure entity fragmentation/undercount via ER (fail-open).",
+                    "default": False,
+                },
+                "name": {
+                    "type": "boolean",
+                    "description": (
+                        "Also run the OPTIONAL advisory LLM namer (business names for "
+                        "entities/dimensions/values/measures). Never authoritative; "
+                        "abstains to no names when no LLM provider/key resolves."
+                    ),
+                    "default": False,
+                },
+                "apply_names": {
+                    "type": "boolean",
+                    "description": (
+                        "Write the namer's VERIFIED names into the emitted YAML "
+                        "(entity/measure `label:`, dimension/value `meta.goldenmatch."
+                        "glossary`). Implies `name`. Post-certification + cosmetic; the "
+                        "verdict is unchanged. Off = byte-identical structural YAML."
+                    ),
+                    "default": False,
+                },
+            },
+            "required": ["frames"],
+        },
+    ),
+    Tool(
+        name="ontology_certify",
+        description=(
+            "Ontology-layer front door (consume): certify the identity keys an "
+            "OWL/RDF ontology DECLARES (owl:hasKey, inverse-functional properties) "
+            "against real instance data. The ontology asserts identity but resolves "
+            "it only by brittle exact-match; this returns a per-key verdict "
+            "(unique-at-grain + fan-out) so an over-merging IFP/key is caught before "
+            "a reasoner trusts it. Advisory. Needs the goldenmatch[ontology] extra."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "ontology": {
+                    "type": "string",
+                    "description": "Path to an OWL/RDF ontology file (Turtle/RDF-XML/JSON-LD/N-Triples).",
+                },
+                "frames": {
+                    "type": "object",
+                    "description": (
+                        "Map of class local-name -> instance data file path, e.g. "
+                        "{\"Patient\": \"patients.csv\"}."
+                    ),
+                },
+            },
+            "required": ["ontology", "frames"],
+        },
+    ),
+    Tool(
+        name="ontology_discover",
+        description=(
+            "Ontology-layer front door (generate): point GoldenMatch at a set of "
+            "class instance tables and it PROPOSES a draft OWL ontology -- one "
+            "owl:Class per frame whose owl:hasKey is chosen and PRE-GRADED by the "
+            "certifier (gm:keyTrustworthy / gm:keyUniquenessEstimate). Discovery is "
+            "hypothesis; certification is the falsification test. Returns the "
+            "discovery result + the Turtle. Needs the goldenmatch[ontology] extra."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "frames": {
+                    "type": "object",
+                    "description": (
+                        "Map of class name -> instance data file path, e.g. "
+                        "{\"Customer\": \"customers.csv\"}."
+                    ),
+                },
+                "base_iri": {
+                    "type": "string",
+                    "description": "Base IRI for the emitted terms (optional).",
+                },
+                "ontology_iri": {
+                    "type": "string",
+                    "description": "IRI for the ontology node (optional).",
+                },
+            },
+            "required": ["frames"],
+        },
+    ),
 ]
 
 # --- Cross-language naming aliases (Python<->TS MCP parity) -----------------
@@ -1356,6 +1469,20 @@ def _handle_tool(name: str, args: dict) -> dict:
         return _tool_certify_semantic_model(
             args.get("model_path", ""), args.get("frames", {}), args.get("resolve", False)
         )
+    elif name == "discover_semantic_model":
+        return _tool_discover_semantic_model(
+            args.get("frames", {}),
+            args.get("dialect", "metricflow"),
+            args.get("resolve", False),
+            args.get("name", False),
+            args.get("apply_names", False),
+        )
+    elif name == "ontology_certify":
+        return _tool_ontology_certify(args.get("ontology", ""), args.get("frames", {}))
+    elif name == "ontology_discover":
+        return _tool_ontology_discover(
+            args.get("frames", {}), args.get("base_iri"), args.get("ontology_iri")
+        )
     else:
         return {"error": f"Unknown tool: {name}"}
 
@@ -1372,7 +1499,7 @@ def _tool_certify_semantic_model(model_path: str, frames: dict, resolve: bool) -
         return {"error": "frames must map a model/dataset/cube name to a data file path."}
 
     from goldenmatch.core.io_arrow import read_table_arrow
-    from goldenmatch.semantic import certify_semantic_model
+    from goldenmatch.semantic import certification_report_dict, certify_semantic_model
 
     loaded: dict[str, object] = {}
     for target, path in frames.items():
@@ -1390,25 +1517,114 @@ def _tool_certify_semantic_model(model_path: str, frames: dict, resolve: bool) -
     except ValueError as exc:
         return {"error": str(exc)}
 
-    return {
-        "dialect": report.dialect,
-        "n_certified": report.n_certified,
-        "all_trustworthy": report.all_trustworthy,
-        "skipped": report.skipped,
-        "note": report.note,
-        "keys": [
-            {
-                "target": e.target,
-                "key": e.key,
-                "context": e.context,
-                "is_unique_at_grain": e.certificate.is_unique_at_grain,
-                "max_fan_out": e.certificate.max_fan_out,
-                "estimate": e.certificate.estimate,
-                "measure_fan_out": e.certificate.measure_fan_out,
-            }
-            for e in report.entries
-        ],
-    }
+    # Each key carries the full trust-verdict block (verdict + fan-out + the
+    # resolution-tier undercount bounds), the single-sourced projection the
+    # catalog emitters + REST + CLI share.
+    return certification_report_dict(report)
+
+
+def _tool_discover_semantic_model(
+    frames: dict, dialect: str, resolve: bool, name: bool = False,
+    apply_names: bool = False,
+) -> dict:
+    """Discover a draft semantic model from a set of source tables.
+
+    ``frames`` maps table name -> data file path; each is loaded into a pyarrow
+    Table. Returns the JSON-serializable ``ProposedModel.to_dict()`` -- the same
+    wire shape the REST ``/semantic/discover`` endpoint + the ``discover-model``
+    CLI emit. Every proposed key is pre-graded by the certifier. ``name`` opts into
+    the advisory LLM namer (abstains to no names when no provider/key resolves).
+    """
+    if not isinstance(frames, dict) or not frames:
+        return {"error": "frames must map a table name to a data file path."}
+
+    from goldenmatch.core.io_arrow import read_table_arrow
+    from goldenmatch.semantic import discover_semantic_model
+
+    loaded: dict[str, object] = {}
+    for target, path in frames.items():
+        try:
+            loaded[str(target)] = read_table_arrow(str(path))
+        except FileNotFoundError:
+            return {"error": f"data file not found for {target!r}: {path}"}
+        except Exception as exc:  # noqa: BLE001 - surface a clean tool error
+            return {"error": f"could not read data for {target!r} ({path}): {exc}"}
+
+    try:
+        model = discover_semantic_model(
+            loaded, dialect=str(dialect or "metricflow"), resolve=bool(resolve),
+            name=bool(name), apply_names=bool(apply_names),
+        )
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    return model.to_dict()
+
+
+def _load_class_frames(frames: dict) -> tuple[dict[str, object] | None, dict | None]:
+    """Shared loader for the ontology tools: `{class: path}` -> `{class: table}`.
+    Returns `(loaded, None)` on success or `(None, error_dict)` on a bad input."""
+    if not isinstance(frames, dict) or not frames:
+        return None, {"error": "frames must map a class name to a data file path."}
+    from goldenmatch.core.io_arrow import read_table_arrow
+
+    loaded: dict[str, object] = {}
+    for cls, path in frames.items():
+        try:
+            loaded[str(cls)] = read_table_arrow(str(path))
+        except FileNotFoundError:
+            return None, {"error": f"data file not found for {cls!r}: {path}"}
+        except Exception as exc:  # noqa: BLE001 - surface a clean tool error
+            return None, {"error": f"could not read data for {cls!r} ({path}): {exc}"}
+    return loaded, None
+
+
+def _tool_ontology_certify(ontology: str, frames: dict) -> dict:
+    """Certify an ontology's declared identity keys against instance data.
+
+    ``ontology`` is a path to an OWL/RDF file; ``frames`` maps class local-name ->
+    data file path. Returns ``OntologyCertification.to_dict()``. Needs the
+    ``goldenmatch[ontology]`` extra (rdflib)."""
+    if not ontology:
+        return {"error": "ontology must be a path to an OWL/RDF file."}
+    loaded, err = _load_class_frames(frames)
+    if err is not None:
+        return err
+
+    from goldenmatch.semantic import certify_ontology
+
+    try:
+        report = certify_ontology(str(ontology), loaded)
+    except ImportError as exc:
+        return {"error": str(exc)}
+    except (FileNotFoundError, OSError) as exc:
+        return {"error": f"could not read ontology {ontology!r}: {exc}"}
+    return report.to_dict()
+
+
+def _tool_ontology_discover(frames: dict, base_iri, ontology_iri) -> dict:
+    """Discover a draft OWL ontology from class instance tables, keys pre-graded.
+
+    ``frames`` maps class name -> data file path. Returns
+    ``DiscoveredOntology.to_dict()`` plus the emitted ``turtle``. Needs the
+    ``goldenmatch[ontology]`` extra (rdflib)."""
+    loaded, err = _load_class_frames(frames)
+    if err is not None:
+        return err
+
+    from goldenmatch.semantic import discover_ontology
+    from goldenmatch.semantic.ontology import DEFAULT_BASE_IRI
+
+    try:
+        disc = discover_ontology(
+            loaded, base_iri=str(base_iri) if base_iri else DEFAULT_BASE_IRI,
+            ontology_iri=str(ontology_iri) if ontology_iri else None,
+        )
+    except ImportError as exc:
+        return {"error": str(exc)}
+    out = disc.to_dict()
+    out["turtle"] = disc.turtle
+    return out
 
 
 def _tool_get_stats() -> dict:
@@ -1588,7 +1804,7 @@ def _tool_match_record(record: dict, threshold: float | None, top_k: int) -> dic
     match_data = rs.data
     if isinstance(match_data, pa.Table):
         import polars as pl
-        match_data = pl.from_arrow(match_data)
+        match_data = pl.from_arrow(match_data)  # polars-lane: core.match_one is declared `df: pl.DataFrame`
 
     for mk in matchkeys:
         if mk.type != "weighted":
@@ -1866,12 +2082,28 @@ def _tool_profile_data() -> dict:
     return {"columns": cols, "total_records": _engine.row_count}
 
 
+# Jail root for the NETWORK-exposed HTTP transport. ``run_server_http`` sets it
+# to ``GOLDENMATCH_ALLOWED_ROOT`` (else the CWD), so an authenticated MCP client
+# can't read/write outside that root by default -- the goldenpipe/infermap
+# sibling posture. It stays ``None`` on the stdio transport, where goldenmatch is
+# intentionally local-first (a trusted local caller may reference absolute
+# paths; opt-in containment via GOLDENMATCH_ALLOWED_ROOT still applies). See
+# ``core/_paths.py``.
+_HTTP_JAIL_ROOT: str | None = None
+
+
 def _safe_path_or_error(value: str) -> Path | dict:
-    """Validate *value* via safe_path; return the resolved Path or an error dict."""
+    """Validate *value* via safe_path, jailed to the HTTP transport root when set.
+
+    Returns the resolved Path or a GENERIC error dict -- the message never leaks
+    the resolved path or the server's root to a (possibly remote) MCP client.
+    """
     try:
-        return safe_path(value)
-    except (ValueError, PathOutsideAllowedRootError) as exc:
-        return {"error": str(exc)}
+        return safe_path(value, base_dir=_HTTP_JAIL_ROOT)
+    except PathOutsideAllowedRootError:
+        return {"error": "path is outside the allowed root"}
+    except ValueError:
+        return {"error": "invalid path"}
 
 
 def _tool_export_results(output_path: str, fmt: str) -> dict:
@@ -2606,6 +2838,7 @@ async def run_server_http(
     healthchecks.
     """
     import contextlib
+    import os
     from collections.abc import AsyncIterator
 
     import uvicorn
@@ -2617,6 +2850,12 @@ async def run_server_http(
     from starlette.routing import Mount, Route
 
     token = resolve_http_auth_token(host)
+
+    # Jail every MCP file-path argument to the allowed root by default on the
+    # network-exposed transport (GOLDENMATCH_ALLOWED_ROOT, else the CWD) -- the
+    # goldenpipe/infermap sibling posture. stdio stays local-first (unset).
+    global _HTTP_JAIL_ROOT
+    _HTTP_JAIL_ROOT = os.environ.get(_ENV_ROOT) or os.getcwd()
 
     class _BearerAuthMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request, call_next):

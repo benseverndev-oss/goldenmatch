@@ -367,6 +367,57 @@ def _finalize_review_pairs(
     ]
 
 
+def _finalize_review_pairs_arrow(
+    review_pairs: list[tuple[int, int, float]],
+    linked_table: Any,
+) -> list[tuple[int, int, float]]:
+    """`_finalize_review_pairs` against an ARROW linked set (#2417).
+
+    Same contract: max-dedupe the candidates, drop anything the linked set
+    already carries. The list version builds `linked_keys` as a Python set over
+    EVERY linked pair -- another O(pairs) driver structure (~100+ B/pair), which
+    is exactly what the lazy `scored_pairs` change exists to avoid. Here the
+    linked side stays the Arrow table (~24 B/pair) and the anti-join runs in
+    Arrow.
+
+    The filter is NOT skippable even though review and linked come from one
+    threshold split: `score_buckets_arrow` can emit the SAME pair on more than
+    one blocking pass with different scores (the dedup runs later), so a pair
+    can legitimately land on both sides of the cut before dedup. That is the
+    case this filter was written for.
+    """
+    from goldenmatch.core.pairs import dedup_pairs_max_score
+
+    deduped = dedup_pairs_max_score(review_pairs)
+    if not deduped or linked_table is None or linked_table.num_rows == 0:
+        return deduped
+
+    import pyarrow as pa
+
+    review_tbl = pa.table({
+        "id_a": pa.array([p[0] for p in deduped], pa.int64()),
+        "id_b": pa.array([p[1] for p in deduped], pa.int64()),
+        "score": pa.array([p[2] for p in deduped], pa.float64()),
+    })
+    # Canonicalize the linked side the way the list path's `linked_keys` does
+    # (min, max); the review side is already canonical out of the pair stream.
+    import pyarrow.compute as pc
+
+    la, lb = linked_table.column("id_a"), linked_table.column("id_b")
+    linked_keys_tbl = pa.table({
+        "id_a": pc.min_element_wise(la, lb),  # pyright: ignore[reportAttributeAccessIssue]
+        "id_b": pc.max_element_wise(la, lb),  # pyright: ignore[reportAttributeAccessIssue]
+    })
+    kept = review_tbl.join(
+        linked_keys_tbl, keys=["id_a", "id_b"], join_type="left anti",
+    )
+    # `join` does not promise input order; restore it so the result matches the
+    # list path exactly (dedup_pairs_max_score sorts, so sorting is faithful).
+    kept = kept.sort_by([("id_a", "ascending"), ("id_b", "ascending")])
+    d = kept.to_pydict()
+    return list(zip(d["id_a"], d["id_b"], d["score"]))
+
+
 # Bucket is the DEFAULT fuzzy scorer within a memory-safe row band. It scores all
 # blocks in one batched pass (block-key + bucket assignment off the collected frame,
 # no per-block LazyFrame), where the legacy per-block ``score_blocks_parallel`` spins
@@ -381,9 +432,44 @@ _BUCKET_DEFAULT_MAX_ROWS = 750_000  # == autoconfig_planner_rules.BUCKET_SUGGEST
 _BUCKET_DEFAULT_OPT_OUT = frozenset({"0", "off", "false", "no"})
 
 
+def _bucket_can_express_blocking(blocking: Any) -> bool:
+    """Whether the bucket scorer can reproduce this blocking plan's candidate set.
+
+    Bucket derives FIELD-based block keys from ``blocking.keys`` / ``blocking.passes``
+    in a single eager pass over the frame. Two shapes it cannot express:
+
+      * Strategies that generate candidates from signatures, embeddings or learned
+        predicates (lsh / ann / learned / canopy / sorted_neighborhood / token).
+        These carry no field keys at all -- ``BlockingConfig`` actively REJECTS
+        ``keys`` alongside them -- so bucket derives an empty key and scores an
+        empty candidate set.
+      * An allowlisted strategy that has no keys AND no passes yet, i.e. the
+        degenerate ``static keys=[] auto_suggest=True`` config. With auto-suggest
+        the real plan is chosen mid-pipeline, so a routing decision taken off the
+        provisional plan can land on a strategy bucket cannot express.
+
+    This is a CORRECTNESS gate, not a performance one, so it must hold however
+    ``backend`` came to be ``"bucket"`` -- set by the caller, or written onto the
+    committed config by the execution planner (``ExecutionPlan.apply_to``). #2488.
+    """
+    if blocking is None:
+        return True  # no blocking plan -> nothing for bucket to misread
+    if getattr(blocking, "strategy", None) not in (None, "static", "multi_pass"):
+        return False
+    return bool(getattr(blocking, "keys", None) or getattr(blocking, "passes", None))
+
+
 def _use_bucket_scorer(config: GoldenMatchConfig, collected_df: Any) -> bool:
     """Whether the fuzzy scoring stage should use the bucket scorer (default) vs
     the legacy per-block path. See the module note above the constants."""
+    # Correctness gate FIRST. #2488: the execution planner writes
+    # backend="bucket" onto the committed config, which used to short-circuit
+    # past the strategy check below -- so a token/lsh/... plan silently scored an
+    # empty candidate set (zero pairs, no error) on the final dedupe pass while
+    # the controller's own sample pass, routed before the planner ran, scored it
+    # correctly on the legacy path.
+    if not _bucket_can_express_blocking(getattr(config, "blocking", None)):
+        return False
     backend = getattr(config, "backend", None)
     if backend == "bucket":
         return True  # explicit choice -- honored at any size
@@ -398,16 +484,11 @@ def _use_bucket_scorer(config: GoldenMatchConfig, collected_df: Any) -> bool:
         config, "partitioned_block_scoring", False
     ):
         return False
-    # Bucket derives FIELD-based block keys (blocking.passes/keys). lsh / ann /
-    # learned / canopy / sorted_neighborhood generate candidates from signatures /
-    # embeddings / learned predicates that bucket does not replicate -> it would
-    # split near-dups the legacy path merges. Keep those on legacy (tracked gap:
-    # test_bucket_legacy_parity_matrix). static / multi_pass are validated identical.
-    _blk = getattr(config, "blocking", None)
-    if _blk is not None and getattr(_blk, "strategy", None) not in (
-        None, "static", "multi_pass",
-    ):
-        return False
+    # (The strategy/keys gate that used to live here now runs at the top of this
+    # function as `_bucket_can_express_blocking` -- see #2488. Keeping it below the
+    # `backend == "bucket"` short-circuit made it unreachable for exactly the
+    # configs it existed to protect. Parity gap still tracked by
+    # test_bucket_legacy_parity_matrix; static / multi_pass validated identical.)
     # Controller profiling: keep the legacy per-block path so auto-config reads the
     # SAME block-size distribution signals it always has (bucket emits different
     # profile stages -> would shift the controller's refit decisions / oscillate).
@@ -473,7 +554,23 @@ def _fs_use_bucket_route(config: GoldenMatchConfig, mk: Any) -> bool:
     # (partitions internally), so it is the strictly-safer AND path-consistent
     # choice for FS. The genuinely-DISTRIBUTED backends (ray / datafusion) keep
     # their own routing.
-    if backend not in (None, "polars-direct", "duckdb"):
+    # `chunked` joins duckdb here for the same stated reason: it is a MEMORY
+    # strategy, not a distinct FS scoring route, and bucket is MORE
+    # memory-bounded than the batched path it was falling back to, not less.
+    #
+    # Excluding it was silently costing recall the moment anything routed there.
+    # Measured, person@100K zero-config: the planner sees a MEASURED 121M
+    # candidate pairs (it previously saw a tiny extrapolated count), fires
+    # rule_chunked at its >= 50M threshold, sets backend='chunked' -- and FS then
+    # fell to the legacy batched scorer, retaining 9,250 pairs where bucket
+    # retains 120,269. Same 7-pass plan, same candidates, pairwise F1 0.5536 vs
+    # 0.9970. A per-pass blocking trace showed blocking itself was healthy and
+    # identical in both lanes; the loss was entirely in which scorer ran.
+    #
+    # The bucket/legacy parity matrix that would have caught this
+    # (test_bucket_legacy_parity_matrix) covers `weighted` matchkeys three times
+    # and `probabilistic` zero times.
+    if backend not in (None, "polars-direct", "duckdb", "chunked"):
         return False
     if (
         os.environ.get("GOLDENMATCH_FS_DEFAULT_BUCKET", "1").strip().lower()
@@ -582,6 +679,7 @@ def _run_fs_streaming_dedupe(
     the streaming path exists precisely so the back-half is never materialized."""
     from goldenmatch.backends.fs_out_of_core import (
         fs_streaming_route,
+        run_fs_dedupe_bucketed,
         run_fs_dedupe_sequential,
         run_fs_dedupe_spill,
         run_fs_dedupe_streaming,
@@ -628,6 +726,8 @@ def _run_fs_streaming_dedupe(
         _orchestrator = run_fs_dedupe_sequential
     elif _route == "spill":
         _orchestrator = run_fs_dedupe_spill
+    elif _route == "bucketed":
+        _orchestrator = run_fs_dedupe_bucketed
     else:
         _orchestrator = run_fs_dedupe_streaming
     res = _orchestrator(
@@ -637,6 +737,57 @@ def _run_fs_streaming_dedupe(
     res["streaming"] = True
     res["output_dir"] = output_dir
     return res
+
+
+def _maybe_refit_link_threshold(
+    mk: Any,
+    link_threshold: float,
+    *,
+    pairs: list | None = None,
+    table: Any = None,
+    decision_out: dict | None = None,
+) -> float:
+    """Phase 3a threshold refit, applied UNIFORMLY across every FS scoring route.
+
+    Returns the refit link cutoff when the refit flag is on, the caller set no
+    explicit ``mk.link_threshold``, and there are ``>= _REFIT_MIN_PAIRS`` scored
+    pairs; otherwise returns ``link_threshold`` unchanged (byte-identical default).
+    Pass EITHER ``pairs`` (a ``list[(id_a, id_b, score)]``) OR ``table`` (a
+    ``PAIR_STREAM_SCHEMA`` ``pa.Table``) -- both hold the SAME scored-pair
+    distribution down to the review cut, so the valley/guard sees the sub-link
+    region on every route. Re-cluster only (no re-scoring); this only moves the
+    cutoff used for the link/review split. See ``fs_refit_link_threshold``.
+    """
+    from goldenmatch.core.probabilistic import (
+        _REFIT_MIN_PAIRS,
+        _fs_refit_threshold_enabled,
+        fs_refit_link_threshold,
+    )
+
+    if mk.link_threshold is not None or not _fs_refit_threshold_enabled():
+        # Record the SKIP as well. "no refit decision" and "refit declined" are
+        # indistinguishable in an artifact that only records declines, and they
+        # mean opposite things: the caller's explicit cutoff versus the guard's.
+        if decision_out is not None:
+            decision_out["reason"] = (
+                "explicit-link-threshold" if mk.link_threshold is not None
+                else "refit-disabled"
+            )
+        return link_threshold
+    if table is not None:
+        if table.num_rows < _REFIT_MIN_PAIRS:
+            return link_threshold
+        d = table.to_pydict()
+        return fs_refit_link_threshold(d["id_a"], d["id_b"], d["score"],
+                                       link_threshold, decision_out=decision_out)
+    if pairs is not None and len(pairs) >= _REFIT_MIN_PAIRS:
+        return fs_refit_link_threshold(
+            [p[0] for p in pairs], [p[1] for p in pairs], [p[2] for p in pairs],
+            link_threshold, decision_out=decision_out,
+        )
+    if decision_out is not None:
+        decision_out["reason"] = "below-min-pairs"
+    return link_threshold
 
 
 def _score_probabilistic_matchkey(
@@ -658,6 +809,7 @@ def _score_probabilistic_matchkey(
     em_results: dict | None = None,
     use_columnar: bool = False,
     columnar_out: list | None = None,
+    threshold_out: dict | None = None,
 ) -> None:
     """Score one probabilistic (Fellegi-Sunter) matchkey, folding results into
     ``all_pairs`` / ``review_pairs`` and updating ``matched_pairs`` in place.
@@ -772,6 +924,23 @@ def _score_probabilistic_matchkey(
     scoring_mk, link_threshold = _prepare_probabilistic_review_scoring(
         mk, em_result
     )
+    # One dict, recorded by reference below and mutated by the refit later --
+    # so the artifact carries the refit's verdict without the recording site
+    # having to run after it. The six refit call sites are at three indent
+    # levels across three scoring routes; threading a return value through all
+    # of them would be six chances to miss one.
+    _refit_decision: dict = {}
+    if threshold_out is not None:
+        # #2483: record the cutoff AND where it came from, so the result can
+        # report it. Without this a run gives no way to tell a deliberate
+        # threshold from a fixed default nothing about the data chose.
+        from goldenmatch.core.probabilistic import link_threshold_source
+
+        threshold_out[mk.name] = {
+            "link_threshold": float(link_threshold),
+            "source": link_threshold_source(mk, em_result),
+            "refit": _refit_decision,
+        }
     if em_results is not None:
         em_results[mk.name] = em_result
     if log_em:
@@ -812,6 +981,8 @@ def _score_probabilistic_matchkey(
                 score_frame, config.blocking, scoring_mk, matched_pairs, em_result,
                 target_ids=target_ids, db_path="auto",
             )
+            link_threshold = _maybe_refit_link_threshold(mk, link_threshold, pairs=pairs,
+                                                 decision_out=_refit_decision)
             pairs, candidates = _split_probabilistic_pairs(pairs, link_threshold)
             review_pairs.extend(candidates)
             all_pairs.extend(pairs)
@@ -842,6 +1013,25 @@ def _score_probabilistic_matchkey(
                 matched_pairs,
                 n_buckets=config.n_buckets,
                 em_result=em_result,
+            )
+            # Phase 3a threshold refit (GOLDENMATCH_FS_REFIT_THRESHOLD, default ON
+            # since #2522; `=0` is the byte-identical kill-switch):
+            # pick the link cutoff from the actual scored-pair distribution -- the
+            # class-separating valley -- but COMMIT it only when re-clustering there
+            # both (a) reduces over-merge (max cluster size) AND (b) strands at most
+            # `_REFIT_MAX_EXPELLED_SHARE` of already-matched records as singletons.
+            # Criterion (b) is not decoration: (a) alone is a single-outlier
+            # statistic, so it accepts a cutoff that shatters many correct
+            # clusters as long as the largest shrinks -- the #2387 ncvr regression.
+            # See `_expelled_share` in probabilistic.py for why the two regimes
+            # separate (repair regroups records; shattering expels them).
+            #
+            # No-op unless the flag is on and no explicit user threshold -- note
+            # that a caller-set `link_threshold` short-circuits this, which is why
+            # #2483 declined to have auto-config write one in. Scores are already
+            # computed (re-cluster only, no re-scoring); only the cutoff moves.
+            link_threshold = _maybe_refit_link_threshold(
+                mk, link_threshold, table=_pair_table, decision_out=_refit_decision
             )
             # Stay Arrow end-to-end (NO polars): split link/review on the pa.Table
             # itself. score_buckets_arrow already floors the table at the review
@@ -886,6 +1076,9 @@ def _score_probabilistic_matchkey(
                 n_buckets=config.n_buckets,
                 em_result=em_result,
             )
+            link_threshold = _maybe_refit_link_threshold(
+                mk, link_threshold, table=_pair_table, decision_out=_refit_decision
+            )
             pairs, candidates = _split_pair_stream(_pair_table, link_threshold)
             del _pair_table
             review_pairs.extend(candidates)
@@ -905,6 +1098,8 @@ def _score_probabilistic_matchkey(
             target_ids=target_ids,
             em_result=em_result,
         )
+        link_threshold = _maybe_refit_link_threshold(mk, link_threshold, pairs=pairs,
+                                                 decision_out=_refit_decision)
         pairs, candidates = _split_probabilistic_pairs(pairs, link_threshold)
         review_pairs.extend(candidates)
         all_pairs.extend(pairs)
@@ -938,6 +1133,8 @@ def _score_probabilistic_matchkey(
             em_result, target_ids=target_ids,
         )
         pairs = _across_files_filter(pairs)
+        link_threshold = _maybe_refit_link_threshold(mk, link_threshold, pairs=pairs,
+                                                 decision_out=_refit_decision)
         pairs, candidates = _split_probabilistic_pairs(pairs, link_threshold)
         review_pairs.extend(candidates)
         all_pairs.extend(pairs)
@@ -972,11 +1169,54 @@ def _score_probabilistic_matchkey(
         target_ids=target_ids,
     )
     pairs = _across_files_filter(pairs)
+    link_threshold = _maybe_refit_link_threshold(mk, link_threshold, pairs=pairs,
+                                                 decision_out=_refit_decision)
     pairs, candidates = _split_probabilistic_pairs(pairs, link_threshold)
     review_pairs.extend(candidates)
     all_pairs.extend(pairs)
     for a, b, _s in pairs:
         matched_pairs.add((min(a, b), max(a, b)))
+
+    # Report to the auto-config emitter. THIS is the path that scores a
+    # probabilistic matchkey, and it emitted nothing -- so the emitter kept the
+    # all-zero `ScoringProfile()` default, `health()` read it as "nothing
+    # happened" -> RED, and at `n_rows >= REFUSE_AT_N` the controller REFUSED
+    # the run. person@100k was refused that way while its clustering produced
+    # 91,527 clusters from 100,000 rows at transitivity 1.0.
+    #
+    # Six earlier emit sites did not cover it: `core/scorer.py` (x2),
+    # `score_buckets`, `score_duckdb`, `ray_backend` and the four
+    # `fs_out_of_core` orchestrators. The route field (#2649) found this one by
+    # ELIMINATION -- person reported `route=""` while biblio reported
+    # `scorer.parallel` -- rather than by a fourth guess.
+    #
+    # `pairs` are this matchkey's above-cut pairs and `link_threshold` is the
+    # cut, both already computed above, so unlike the bucket emit (#2648) this
+    # needs no fallback for either. `candidates_compared` stays absent rather
+    # than fabricated: the candidate total is not carried here, and #2644 added
+    # `candidates_counted` precisely so absence is sayable.
+    #
+    # Emitted per matchkey, so with several probabilistic matchkeys the last
+    # wins -- the same last-writer contract every other emit site has.
+    #
+    # #2673 made the bucket path count its candidates, so `mass_above_threshold`
+    # is a real admitted fraction there. This site STAYS absent, deliberately.
+    # The tempting denominator is `len(pairs)` before `_split_probabilistic_pairs`
+    # above -- but the FS scorer already emits only pairs above the REVIEW cut,
+    # so that ratio is "fraction of above-review pairs that are above link",
+    # not "fraction of candidates admitted". Reporting it as the latter would
+    # put a different quantity behind the same field name on a different route,
+    # which is the `block_count_scored or block_count` mistake from the
+    # zero-config recall incident. A true candidate count here needs the FS
+    # scorer to carry one; until it does, absent is the honest answer and
+    # `candidates_counted=False` says so.
+    from goldenmatch.core.scorer import _emit_scoring_profile
+
+    _emit_scoring_profile(
+        pairs, link_threshold,
+        candidates_compared=0, candidates_counted=False,
+        route="pipeline.probabilistic",
+    )
 
 
 def _get_block_scorer(config: GoldenMatchConfig):
@@ -1011,6 +1251,24 @@ def _get_block_scorer(config: GoldenMatchConfig):
             score_blocks_datafusion,
         )
         return score_blocks_datafusion
+    if backend == "spark":
+        # NOT a block scorer. Every other backend here swaps the pair-scoring
+        # implementation inside this one-box pipeline over a LOCAL dataset;
+        # `spark` means the whole pipeline runs on a cluster, over data the
+        # cluster already holds. There is no local seam to plug it into, and
+        # falling through to the default would run single-box while the user
+        # believed they were distributing -- the exact silence
+        # `_reject_unknown_backend` exists to end.
+        raise NotImplementedError(
+            "backend='spark' runs the distributed tier, which takes a SPARK "
+            "DataFrame -- it is not a block scorer for a local dataset, so it "
+            "cannot run from dedupe()/dedupe_df(). Use:\n"
+            "    from goldenmatch.spark import run_config_pipeline\n"
+            "    run_config_pipeline(spark_df, config)\n"
+            "Reading a local frame back through the driver would defeat the "
+            "point of the tier. See docs/superpowers/specs/"
+            "2026-08-10-spark-native-execution-design.md."
+        )
     return score_blocks_parallel
 from goldenmatch.core.cluster import (
     ClusterFrames,
@@ -1319,6 +1577,12 @@ def _resolve_identities(
             emit_singletons=config.identity.emit_singletons,
             weak_confidence_threshold=config.identity.weak_confidence_threshold,
             relationships=config.identity.relationships,
+            deterministic_merge_keys=config.identity.deterministic_merge_keys,
+            # Config lineage (#config-fingerprint): stamp this run's config into
+            # identity_runs so an entity resolves back to the config that made it.
+            config_id=config.config_fingerprint(),
+            config_schema_version=config.schema_version,
+            config_json=config.model_dump_json(),
             pair_score_view=pair_score_view,
             cluster_frames=cluster_frames,
         )
@@ -1619,7 +1883,14 @@ def _run_auto_suggest(df: pl.DataFrame, config: GoldenMatchConfig) -> None:
     if not matchkey_columns:
         return
 
-    suggestions = analyze_blocking(df, matchkey_columns)
+    # #2513: hand the analyzer the matchkey the pipeline will actually score
+    # with, so recall is measured against the pairs that matchkey emits rather
+    # than a character-similarity stand-in for "duplicate". First weighted
+    # matchkey -- the fallback proxy still applies if there isn't one.
+    _scoring_mk = next(
+        (m for m in config.get_matchkeys() if m.type == "weighted"), None
+    )
+    suggestions = analyze_blocking(df, matchkey_columns, matchkey=_scoring_mk)
     if not suggestions:
         logger.info("Auto-suggest: no blocking suggestions found")
         return
@@ -1640,7 +1911,21 @@ def _run_auto_suggest(df: pl.DataFrame, config: GoldenMatchConfig) -> None:
     # If no user-configured keys, use the top suggestion
     if not config.blocking.keys:
         top = suggestions[0]
-        from goldenmatch.config.schemas import BlockingKeyConfig
+        from goldenmatch.config.schemas import BlockingKeyConfig, TokenBlockingConfig
+
+        # #2488: a token candidate is not a key -- it is its own strategy, and
+        # `BlockingConfig` rejects `keys` alongside it. Committing it means
+        # switching the strategy, which is why this branch exists rather than
+        # squeezing token blocking into the key list.
+        if len(top.keys) == 1 and top.keys[0].get("kind") == "token":
+            config.blocking.strategy = "token"
+            config.blocking.token = TokenBlockingConfig(**top.keys[0]["token"])
+            logger.info(
+                "Auto-suggest: using top suggestion '%s' -> strategy='token' "
+                "(recall=%.2f, coverage over %d blocks)",
+                top.description, top.estimated_recall, top.group_count,
+            )
+            return
 
         new_keys = []
         for cand in top.keys:
@@ -2673,6 +2958,12 @@ def _fused_result_from_clusters(
                 c.get("size", 0) for c in clusters.values() if c.get("size", 0) > 1
             ),
         },
+        # #2483: always empty here -- the fused short-circuit never runs the FS
+        # scorer, so there is no link cutoff to report. Present so this dict
+        # keeps the SAME key set as the classic path's
+        # (test_result_dict_keys_match_classic); a key on one and not the other
+        # KeyErrors downstream in _api.py DedupeResult assembly.
+        "fs_link_thresholds": {},
         "golden": _dict_frame_to_arrow(golden_df),
         "unique": _dict_frame_to_arrow(unique_df),
         "dupes": _dict_frame_to_arrow(dupes_df),
@@ -2682,6 +2973,10 @@ def _fused_result_from_clusters(
         "memory_stats": None,
         "identity_summary": None,
         "scored_pairs": [],
+        # Key-set parity (#2417): the classic dict carries the Arrow
+        # backing for the lazy list. The fused path has no pair stream to
+        # hand back, so the list is already the literal [] above.
+        "scored_pairs_table": None,
         "review_pairs": [],
         "llm_cost": None,
         "throughput_posture": None,
@@ -3025,6 +3320,27 @@ def _run_dedupe_pipeline(
                         _col, _frame.derive_standardized_column(_col, _std_names)
                     )
 
+        # Domain extraction MUST precede compute_matchkeys: it is what
+        # materializes the `__brand__` / `__model__` / `__title_key__` columns
+        # that auto-config's matchkeys reference, so deriving matchkeys first
+        # sends `derive_matchkey` at a column that does not exist yet
+        # (KeyError: 'Field "__model__" does not exist in schema' -- the
+        # benchmarks Abt-Buy failure). This is the order the classic lane and
+        # the match pipeline's arrow lane already use; keep the three in sync.
+        if config.domain and config.domain.enabled:
+            # A6: domain extraction is seam-driven dual-rep -- lane preserved.
+            with stage("domain_extraction"):
+                _frame = _tf_lane(_apply_domain_extraction(_frame.native, config))
+
+        # ── Learning Memory: pre-scoring learner overlay (parity with the classic
+        # branch's memory_pre_overlay at ~3220). Operates on `matchkeys` +
+        # `memory_store` (opened once above the lane split), not the frame, so it
+        # sits here on the arrow lane before precompute. memory_post is already
+        # shared (below the lane merge), so this closes the last memory gap on the
+        # arrow lane -- arrow-lane migration phase 2.
+        with stage("memory_pre_overlay"):
+            _apply_memory_pre(memory_store, config, matchkeys)
+
         if "compute_matchkeys" not in _eager_stages_done:
             with stage("compute_matchkeys"):
                 for _mk in matchkeys:
@@ -3040,20 +3356,6 @@ def _run_dedupe_pipeline(
                             ]
                         ),
                     )
-
-        if config.domain and config.domain.enabled:
-            # A6: domain extraction is seam-driven dual-rep -- lane preserved.
-            with stage("domain_extraction"):
-                _frame = _tf_lane(_apply_domain_extraction(_frame.native, config))
-
-        # ── Learning Memory: pre-scoring learner overlay (parity with the classic
-        # branch's memory_pre_overlay at ~3220). Operates on `matchkeys` +
-        # `memory_store` (opened once above the lane split), not the frame, so it
-        # sits here on the arrow lane before precompute. memory_post is already
-        # shared (below the lane merge), so this closes the last memory gap on the
-        # arrow lane -- arrow-lane migration phase 2.
-        with stage("memory_pre_overlay"):
-            _apply_memory_pre(memory_store, config, matchkeys)
 
         with stage("precompute_matchkey_transforms"):
             collected_frame = precompute_matchkey_transforms_frame(_frame, matchkeys)
@@ -3774,6 +4076,8 @@ def _run_dedupe_pipeline(
     _bench_dump_dir = os.environ.get("GOLDENMATCH_BENCH_DUMP_PAIRS")
     _bench_candidate_pairs: set[tuple[int, int]] = set()
     _bench_emitted_pairs: set[tuple[int, int]] = set()
+    # #2483: the applied FS link cutoff + how it was chosen, surfaced on the result.
+    _fs_thresholds: dict[str, dict] = {}
     for mk in matchkeys:
         if mk.type == "probabilistic":
             if config.blocking is None:
@@ -3793,6 +4097,7 @@ def _run_dedupe_pipeline(
                 log_em=True,
                 use_columnar=_use_fs_columnar,
                 columnar_out=_fs_columnar_sink,
+                threshold_out=_fs_thresholds,
             )
 
     # B2c: fold the FS columnar pair frame into the shipped columnar downstream.
@@ -4366,23 +4671,16 @@ def _run_dedupe_pipeline(
         # relevant universe; scoped so cell_quality is not paid over the whole
         # frame on every default dedupe.
         _member_ids = _golden_member_row_ids()
-        from goldenmatch.core.golden import _polars_importable as _pl_ok
-        if _member_ids and not _pl_ok():
-            # Zero-polars env: goldencheck's cell_quality is polars-backed;
-            # quality weighting fails OPEN (None = no weighting), the same
-            # contract as goldencheck-absent. Re-opens when goldencheck
-            # ships an arrow cell_quality.
-            _member_ids = []
         if _member_ids:
             from goldenmatch.core.quality import compute_quality_scores
             with stage("golden_quality_scores"):
-                # GOLDEN BRIDGE: compute_quality_scores is goldencheck-side
-                # polars; quality_weighting defaults True, so bridging (not
-                # declining) keeps the Frame lane live on default configs.
+                # Arrow-native, no bridge: goldencheck's cell_quality takes a
+                # pa.Table, so weighting runs on the seam frame directly and does
+                # NOT depend on the optional [polars] extra. It used to decline
+                # polars-free, which silently changed survivorship between
+                # `pip install goldenmatch` and `goldenmatch[polars]`.
                 quality_scores = compute_quality_scores(
-                    _as_polars_df(
-                        _collected_frame.filter_in("__row_id__", _member_ids).native
-                    )
+                    _collected_frame.filter_in("__row_id__", _member_ids).native
                 )
             if quality_scores:
                 logger.info(
@@ -4819,6 +5117,7 @@ def _run_dedupe_pipeline(
     # split). Both pipeline paths normalize identically.
     from goldenmatch.core.pairs import dedup_pairs_max_score
     scored_pairs_shed = False
+    scored_pairs_table = None
     if _use_columnar and _columnar_pairs_df is not None:
         if _use_fs_columnar:
             # B2c (#2006): dedup the pair stream COLUMNAR (arrow-native, no
@@ -4833,10 +5132,25 @@ def _run_dedupe_pipeline(
                 scored_pairs = []
                 scored_pairs_shed = True
             else:
-                _sd = _scored_tbl.to_pydict()
-                scored_pairs = list(
-                    zip(_sd["id_a"], _sd["id_b"], _sd["score"])
-                )
+                # #2417: do NOT materialize the list[tuple] here. Carry the
+                # Arrow table and let the CONSUMER pay, via
+                # `pairs.materialize_scored_pairs` / the lazy
+                # `DedupeResult.scored_pairs` property.
+                #
+                # MEASURED (1M and 4M pair tables, linear in both): the Arrow
+                # form is ~24 B/pair; `to_pydict()` + `list(zip(...))` is
+                # ~168 B/pair resident and peaks at ~192 B/pair -- 7x. The cap
+                # defaults to 50,000,000, so eager materialization permitted an
+                # ~8.4 GB resident / ~9.6 GB transient Python list, built
+                # post-cluster. On the FS + identity path NOTHING reads it:
+                # `resolve_clusters` takes `scored_pairs` for signature
+                # compatibility only (see identity/resolve.py) and works off
+                # `pair_score_view`, so that whole cost was pure waste.
+                #
+                # Every real consumer (TUI, web, REST, cli review/match) reads
+                # it and gets a byte-identical list, cached on first access.
+                scored_pairs_table = _scored_tbl
+                scored_pairs = None
         else:
             # Weighted columnar lane -- unchanged (byte-identical).
             from goldenmatch.core.scorer import pairs_df_to_list
@@ -4899,6 +5213,9 @@ def _run_dedupe_pipeline(
             "multi_member_cluster_count": _multi_member,
             "matched_record_count": _matched_records,
         },
+        # #2483: {matchkey_name: {"link_threshold": float, "source": str}}.
+        # Empty for non-probabilistic runs.
+        "fs_link_thresholds": _fs_thresholds,
         "golden": _dict_frame_to_arrow(golden_df),
         "unique": _dict_frame_to_arrow(unique_df),
         "dupes": _dict_frame_to_arrow(dupes_df),
@@ -4907,8 +5224,17 @@ def _run_dedupe_pipeline(
         "postflight_report": postflight_report,
         "memory_stats": memory_stats,
         "identity_summary": identity_summary,
+        # #2417: on the B2c FS path `scored_pairs` is None and the Arrow table
+        # under `scored_pairs_table` is the backing. Read this through
+        # `goldenmatch.core.pairs.materialize_scored_pairs(results)` -- never
+        # `results.get("scored_pairs") or []`, which would silently read empty.
         "scored_pairs": scored_pairs,
-        "review_pairs": _finalize_review_pairs(review_pairs, scored_pairs),
+        "scored_pairs_table": scored_pairs_table,
+        "review_pairs": (
+            _finalize_review_pairs_arrow(review_pairs, scored_pairs_table)
+            if scored_pairs is None
+            else _finalize_review_pairs(review_pairs, scored_pairs)
+        ),
         "llm_cost": llm_budget_summary,
         "throughput_posture": _throughput_posture,
         "golden_fused_used": golden_fused_used,

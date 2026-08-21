@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "goldenflow"
-version = "2.1.0"
+version = "2.2.0"
 description = "Data transformation toolkit — standardize, reshape, and normalize messy data before it hits your pipeline."
 readme = "README.md"
 license = "MIT"
@@ -60,7 +60,7 @@ mcp = ["mcp>=1.28.1"]
 llm = ["anthropic>=0.30", "openai>=1.30"]
 s3 = ["boto3>=1.34"]
 gcs = ["google-cloud-storage>=2.14"]
-agent = ["aiohttp>=3.14.0"]
+agent = ["aiohttp>=3.14.3"]
 # `goldenflow-native` is now a BASE dep (the default Polars-free kernel). This extra
 # additionally pulls pyarrow for the zero-copy Series<->kernel bridge used by the Polars
 # fused-numeric fast path; kept for back-compat (`goldenflow[native]` still resolves).
@@ -73,7 +73,11 @@ goldenflow = "goldenflow.cli.main:app"
 [project.urls]
 Homepage = "https://github.com/benseverndev-oss/goldenmatch"
 Repository = "https://github.com/benseverndev-oss/goldenmatch"
-Documentation = "https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/python/goldenflow#readme"
+Documentation = "https://docs.bensevern.dev/docs/goldenflow"
+# Agent-facing entry point. PyPI renders these URLs and they are scraped,
+# so this is the discovery path for a tool that never clones the repo. The
+# same file ships INSIDE the wheel at goldenflow/llms.txt.
+"AI agents (llms.txt)" = "https://docs.bensevern.dev/docs/llms.txt"
 Issues = "https://github.com/benseverndev-oss/goldenmatch/issues"
 Changelog = "https://github.com/benseverndev-oss/goldenmatch/blob/main/packages/python/goldenflow/CHANGELOG.md"
 Author = "https://bensevern.dev"

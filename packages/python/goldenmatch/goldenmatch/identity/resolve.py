@@ -165,6 +165,8 @@ class ResolveSummary:
     # (desired-vs-existing: added = inserted, deleted = stale removed).
     relationships_added: int = 0
     relationships_deleted: int = 0
+    # deterministic merge: entities collapsed because they shared an authoritative id
+    deterministic_merged: int = 0
 
     def as_dict(self) -> dict[str, int]:
         return {
@@ -178,6 +180,7 @@ class ResolveSummary:
             "conflicts_flagged": self.conflicts_flagged,
             "relationships_added": self.relationships_added,
             "relationships_deleted": self.relationships_deleted,
+            "deterministic_merged": self.deterministic_merged,
         }
 
 
@@ -452,10 +455,14 @@ def resolve_clusters(
     emit_singletons: bool = True,
     weak_confidence_threshold: float = 0.6,
     relationships: list | None = None,
+    deterministic_merge_keys: list | None = None,
     pair_score_view: ClusterPairScores | None = None,
     cluster_frames: ClusterFrames | None = None,
     actor: str = "pipeline",
     field_strategies: dict[str, Any] | None = None,
+    config_id: str | None = None,
+    config_schema_version: int | None = None,
+    config_json: str | None = None,
     batch: ResolutionBatch | None = None,
 ) -> ResolveSummary:
     """Resolve run-local clusters to durable identities.
@@ -502,6 +509,10 @@ def resolve_clusters(
             weak_confidence_threshold=weak_confidence_threshold,
             field_strategies=field_strategies,
             relationships=relationships,
+            deterministic_merge_keys=deterministic_merge_keys,
+            config_id=config_id,
+            config_schema_version=config_schema_version,
+            config_json=config_json,
         )
     # C1 follow-on: fold the bulk DATA parts (cluster partition / record frame /
     # scored-pair stream / pair-score view) into the batch, so the whole
@@ -538,6 +549,7 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
     weak_confidence_threshold = batch.weak_confidence_threshold
     field_strategies = batch.field_strategies
     relationships = batch.relationships
+    deterministic_merge_keys = batch.deterministic_merge_keys
 
     summary = ResolveSummary()
     from goldenmatch.core.frame import to_frame as _tf_a5e
@@ -548,6 +560,22 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
 
     if emit_singletons:
         _maybe_warn_singleton_sqlite_ceiling(store, _n_input_rows)
+
+    # Config lineage (#config-fingerprint): record which config produced this
+    # run so an entity's events (which carry run_name) resolve back to it via
+    # identity_runs. Only when a fingerprint was threaded through -- keeps the
+    # no-lineage path byte-identical (no identity_runs write).
+    if batch.config_id is not None:
+        try:
+            store.record_run(
+                run_name,
+                config_id=batch.config_id,
+                schema_version=batch.config_schema_version,
+                config_json=batch.config_json,
+                dataset=dataset,
+            )
+        except Exception as e:  # noqa: BLE001 -- lineage is advisory, never fails a resolve
+            log.warning("config-lineage record_run failed: %s", e)
 
     # Iteration source: ascending-cluster_id ``(cluster_id, info)`` pairs.
     # For the dict path this is ``clusters.items()`` (insertion order = build's
@@ -1272,6 +1300,19 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
                     bulk_totals["records"], bulk_totals["edges"],
                     bulk_totals["events"],
                 )
+
+    # 3d. Deterministic merge: collapse entities that share an authoritative id
+    # (config.identity.deterministic_merge_keys, e.g. ['npi']) into one, BEFORE the
+    # relationship pass so edges reconcile onto the merged entities. Entity-level
+    # (post-resolve), so it can't cascade probabilistic clusters into giant
+    # components the way a pre-cluster record-level merge would. Opt-in; no-op unset.
+    if deterministic_merge_keys:
+        for _dm_field in deterministic_merge_keys:
+            try:
+                _merged, _grps = store.merge_by_shared_field(dataset, _dm_field)
+                summary.deterministic_merged += _merged
+            except Exception as e:  # never fail resolution over the merge
+                log.warning("deterministic merge on %r failed: %s", _dm_field, e)
 
     # 3r. Semantic-graph: derive entity<->entity relationship edges from shared
     # non-identity attributes, keyed on the entity_ids just written. A post-pass

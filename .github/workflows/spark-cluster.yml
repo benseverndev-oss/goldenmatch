@@ -1,0 +1,655 @@
+# The J-arc's claim, tested on a REAL cluster instead of `local[*]`.
+#
+# Every Spark test in this repo runs under `local[*]`, where the executor IS the
+# driver -- Spark attributes a failed task there to `executor driver`. So the
+# assertions that matter were self-certifying: `ScorerSelection` resolves the
+# native library once per JVM, and under `local[*]` that JVM already has the jar
+# on its classpath. "The executor resolved the native kernel" was true and
+# proved nothing.
+#
+# This lane stands up a standalone master, TWO workers and a Connect server in
+# separate containers, and points the existing suite at it. No test changes: the
+# `spark` fixture already takes `GOLDENMATCH_SPARK_REMOTE=sc://host:port`, and
+# its docstring says it was made backend-agnostic on purpose.
+#
+# ## Not in ci.yml, deliberately
+#
+# `workflow_dispatch` and a nightly schedule, NOT a required gate. It pulls
+# ~1.5GB of images and stands up four containers, which is the category where
+# flaky lanes live, and a flaky required gate blocks every merge in the repo.
+# Promote it into `ci.yml` once it has a run history that earns it -- and not
+# before.
+#
+# ## The failure it must not have
+#
+# A cluster lane that silently degrades to a working `local[*]` session would be
+# worse than no lane: it would report the same green as today while claiming
+# more. So the run asserts, from an EXECUTOR, that `exec=` is not `driver`,
+# before it runs anything else.
+name: spark-cluster
+
+on:
+  workflow_dispatch:
+    inputs:
+      spark_image_tag:
+        description: "Override the apache/spark image tag (default: match whatever the [spark] extra resolves)"
+        required: false
+        type: string
+        default: ""
+      train_rows:
+        description: "Rows for the distributed FS training scale run (0 = skip)"
+        required: false
+        type: string
+        default: "1000000"
+      profile_counts:
+        description: "Attribute the counts stage (pair-gen / join / scoring UDF / GROUP BY exchange). ~3x slower - diagnostic only."
+        required: false
+        type: boolean
+        default: false
+      runner:
+        description: "Runner for the cluster job. ubuntu-latest is 4 CPU - a TOPOLOGY rig. Use large-new-64GB to measure throughput."
+        required: false
+        type: string
+        default: "ubuntu-latest"
+      worker_cores:
+        description: "Cores per Spark worker (there are 2). Default 1 = 2 executor cores TOTAL, which is correctness sizing, not throughput."
+        required: false
+        type: string
+        default: "1"
+      worker_memory:
+        description: "Memory per Spark worker, e.g. 1g / 6g."
+        required: false
+        type: string
+        default: "1g"
+      vector_scorer:
+        description: "Score every field of a pair in ONE UDF call (GOLDENMATCH_SPARK_VECTOR_SCORER). Default off - this is the arm under measurement, not the shipped default."
+        required: false
+        type: boolean
+        default: false
+      scorer:
+        description: "Force every comparison field onto one scorer (e.g. exact). Required for a valid value_pad experiment - padding only preserves gammas under exact."
+        required: false
+        type: string
+        default: ""
+      value_pad:
+        description: "Append N chars to every comparison value. Same crossing COUNT, more bytes per crossing - the arm that separates per-CALL from per-BYTE scoring cost."
+        required: false
+        type: string
+        default: "0"
+      splink_compare:
+        description: "Also run Splink FS training on the SAME cluster and print both walls. Nothing currently measures the GM-vs-Splink gap on Spark."
+        required: false
+        type: boolean
+        default: false
+      match_splink_levels:
+        description: "Give GM the same four informative comparison levels Splink uses (exact / 0.9 / 0.7 / else) instead of the harness default three. Required for any accuracy comparison, or the result is a ladder difference reported as an engine difference."
+        required: false
+        type: boolean
+        default: false
+      eval_quality:
+        description: "Score both engines' trained models against the fixture's known entity structure and report average precision. The bar is match-or-better accuracy for GM, not a faster arrival at a worse model. Adds a scoring pass to each arm - keep train_rows modest."
+        required: false
+        type: boolean
+        default: false
+      train_fields:
+        description: "Comparison fields for the FS scale run (max 5). Run 5 vs 2 with profile_counts to separate per-CALL from per-BYTE scoring cost."
+        required: false
+        type: string
+        default: "5"
+  schedule:
+    # Nightly, after the usual working day. Cheap insurance that the topology
+    # still works; nothing here gates a merge.
+    - cron: "0 6 * * *"
+  # Scoped to THIS lane's own files, for two reasons.
+  #
+  # Practically: `workflow_dispatch` only works for workflows already on the
+  # DEFAULT branch, so without this trigger a new cluster lane could not be
+  # exercised until after it merged -- which is the wrong order for the one kind
+  # of lane most likely to need iteration.
+  #
+  # And on the merits: a change to the compose topology or the jar build is
+  # exactly what breaks executor-side loading, so those are the diffs worth
+  # spending 1.5GB of image pull on. It stays OUT of `ci-required`, so a red
+  # result here is information rather than a blocked merge.
+  pull_request:
+    paths:
+      - 'docker/spark-cluster/**'
+      - '.github/workflows/spark-cluster.yml'
+      - 'scripts/build_spark_jar.sh'
+      - 'scripts/spark_jni_selftest.sh'
+      - 'packages/jvm/goldenmatch-spark/**'
+
+permissions:
+  contents: read
+
+# SPARK_IMAGE_TAG is DERIVED from the resolved client below, not set here. See
+# the install step: the product's `[spark]` extra decides the Spark version, and
+# the cluster follows it.
+
+jobs:
+  # The aarch64 half of the jar. Present because `build_spark_jar.sh` REFUSES a
+  # jar missing either architecture, and that refusal is absolute on purpose --
+  # a Graviton fleet finding no `linux-aarch64` resource falls back to the
+  # exact-only scorer silently. Adding a single-arch escape hatch for a test
+  # lane is exactly how such a hatch ends up in the release path, so this lane
+  # pays the ~5 minutes instead.
+  aarch64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Build + self-test the aarch64 kernel
+        run: |
+          set -euo pipefail
+          cargo build --release \
+            --manifest-path packages/rust/extensions/score-jni/Cargo.toml
+          ARCH=linux-aarch64 bash scripts/spark_jni_selftest.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: score-jni-linux-aarch64
+          path: packages/rust/extensions/score-jni/target/release/libgoldenmatch_score_jni.so
+          if-no-files-found: error
+
+  cluster:
+    needs: aarch64
+    # ubuntu-latest (4 CPU) is the DEFAULT because this lane's original job is
+    # proving topology on an 8-row fixture. A throughput run must pass a bigger
+    # runner AND bigger workers -- see `runner` / `worker_cores` above and the
+    # sizing note in docker/spark-cluster/docker-compose.yml.
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: '3.12'
+
+      - name: Build the native kernel (linux-x86-64)
+        run: |
+          set -euo pipefail
+          cargo build --release \
+            --manifest-path packages/rust/extensions/score-jni/Cargo.toml
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          name: score-jni-linux-aarch64
+          path: /tmp/jni-aarch64
+
+      # The client, on the RUNNER -- not in any container. The jar is uploaded
+      # over Connect by `addArtifact`, so it only ever exists host-side. That is
+      # the deployment story being tested: one file, from the client, nothing
+      # installed on the cluster.
+      #
+      # Installed UNPINNED, via the extra, exactly as `ci.yml` does and exactly
+      # as a user would -- then the CLUSTER is pinned to whatever that resolved.
+      #
+      # The first version of this lane had it backwards: it pinned the client to
+      # the image tag. That makes the image the source of truth for a version
+      # the product does not choose, so the lane would happily test a Spark no
+      # user of this package runs. It failed immediately and usefully -- pinned
+      # to 4.0.0, which has no `arrow_udf`, so the Python path (the ORACLE every
+      # parity test compares against) could not run at all while the JVM path
+      # was fine.
+      - name: Install the client, then pin the cluster to what it resolved
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet -e 'packages/python/goldenmatch[spark]'
+          python -m pip install --quiet pytest pytest-timeout
+          V="$(python -c 'import pyspark; print(pyspark.__version__)')"
+          echo "client pyspark: $V"
+          TAG="${{ inputs.spark_image_tag }}"
+          if [ -n "$TAG" ]; then
+            echo "image tag OVERRIDDEN to $TAG (client is $V)"
+          else
+            TAG="$V"
+          fi
+          echo "SPARK_IMAGE_TAG=$TAG" >> "$GITHUB_ENV"
+          # `arrow_udf` is what the tier's Python path is built on, and its
+          # absence is a version problem that surfaces deep inside a UDF rather
+          # than at setup. Check it HERE, where the message can say so.
+          python -c "
+          from pyspark.sql import functions as F
+          import sys
+          if not hasattr(F, 'arrow_udf'):
+              sys.exit('::error::pyspark ' + __import__('pyspark').__version__ +
+                       ' has no arrow_udf. The tier is Arrow-native, so the Python '
+                       'path -- the oracle every parity test compares against -- '
+                       'cannot run. Nothing below would be measuring parity.')
+          print('arrow_udf present')
+          "
+
+      - name: Build the jar
+        env:
+          SO_X86_64: packages/rust/extensions/score-jni/target/release/libgoldenmatch_score_jni.so
+          SO_AARCH64: /tmp/jni-aarch64/libgoldenmatch_score_jni.so
+        run: |
+          set -euo pipefail
+          export SPARK_JARS="$(python -c 'import pyspark, os; print(os.path.join(os.path.dirname(pyspark.__file__), "jars"))')"
+          bash scripts/build_spark_jar.sh
+
+      - name: Start the cluster
+        env:
+          # Compose reads these; unset they default to the 1-core / 1g topology
+          # sizing baked into the file, so an unparameterised run is unchanged.
+          SPARK_WORKER_CORES: ${{ inputs.worker_cores || '1' }}
+          SPARK_WORKER_MEMORY: ${{ inputs.worker_memory || '1g' }}
+          SPARK_EXECUTOR_CORES: ${{ inputs.worker_cores || '1' }}
+          SPARK_EXECUTOR_MEMORY: ${{ inputs.worker_memory || '1g' }}
+        run: |
+          docker compose -f docker/spark-cluster/docker-compose.yml up -d
+          echo "cluster sized: 2 workers x ${SPARK_WORKER_CORES} core(s) / ${SPARK_WORKER_MEMORY}" >> "$GITHUB_STEP_SUMMARY"
+
+      # Readiness is polled HERE rather than by a container healthcheck, so a
+      # failure names the condition that was never met instead of surfacing as a
+      # compose timeout. Two separate conditions, because they fail for
+      # different reasons and have different fixes.
+      - name: Wait for both workers to REGISTER with the master
+        run: |
+          set -euo pipefail
+          # Not "is the port open" -- a standalone master with zero registered
+          # workers accepts a job and QUEUES IT FOREVER. That is a hung lane,
+          # which is strictly worse than a failed one, and this repo already
+          # carries a pytest --timeout for exactly that lesson.
+          for i in $(seq 1 60); do
+            n="$(curl -sf http://localhost:8080/json/ | python -c 'import json,sys; print(json.load(sys.stdin).get("aliveworkers", 0))' 2>/dev/null || echo 0)"
+            echo "  attempt $i: aliveworkers=$n"
+            [ "$n" -ge 2 ] && { echo "cluster ready with $n workers"; exit 0; }
+            sleep 5
+          done
+          echo "::error::the master never registered 2 workers"
+          docker compose -f docker/spark-cluster/docker-compose.yml logs --tail=80
+          exit 1
+
+      - name: Wait for the Spark Connect server
+        run: |
+          set -euo pipefail
+          # One line on purpose. A multi-line `python -c "..."` inside an `if`
+          # has to survive YAML block-scalar dedent AND shell quoting, and this
+          # file already carries two bugs from that class.
+          PROBE="from pyspark.sql import SparkSession; s=SparkSession.builder.remote('sc://localhost:15002').getOrCreate(); print('connect up, rows:', s.range(1).count())"
+          for i in $(seq 1 60); do
+            if python -c "$PROBE"; then
+              exit 0
+            fi
+            echo "  attempt $i: connect server not up yet"
+            sleep 5
+          done
+          echo "::error::the Spark Connect server never accepted a session"
+          docker compose -f docker/spark-cluster/docker-compose.yml logs spark-connect --tail=120
+          exit 1
+
+      # THE assertion that this lane is testing something the local one cannot.
+      # Runs before anything else: if the executor turns out to be the driver,
+      # every result below would be a `local[*]` result wearing a cluster's name.
+      - name: Assert the executor is NOT the driver
+        env:
+          GOLDENMATCH_SPARK_REMOTE: "sc://localhost:15002"
+          GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pyspark.sql import SparkSession
+          from goldenmatch.spark.jvm import find_jar, implementation, install
+
+          spark = SparkSession.builder.remote("sc://localhost:15002").getOrCreate()
+          install(spark, jar=find_jar())
+          impl, diagnostics, runtime = implementation(spark)
+          print(f"impl={impl}\nruntime={runtime}\ndiagnostics={diagnostics}")
+
+          tokens = dict(
+              t.split("=", 1) for t in runtime.split() if "=" in t
+          )
+          exec_id = tokens.get("exec", "?")
+          if exec_id in ("driver", "?"):
+              raise SystemExit(
+                  f"::error::the probe answered from exec={exec_id!r}. This lane "
+                  f"exists to test a real executor; a driver answer means the "
+                  f"session degraded to local mode and every result below would "
+                  f"be a local[*] result under a cluster's name."
+              )
+          if impl != "NativeScorer":
+              raise SystemExit(
+                  f"::error::executor {exec_id} resolved {impl!r}, not NativeScorer. "
+                  f"The jar reached the executor but its native library did not "
+                  f"load THERE: {diagnostics}"
+              )
+          print(f"OK: executor {exec_id} loaded the native kernel from the shipped jar")
+          PY
+
+      # NO oracle venv, after three runs spent trying to build one.
+      #
+      # The chase went: pack it on the runner (venv-pack's `bin/python` is a
+      # symlink into the runner's toolcache, dangling in a container -- issue
+      # #2531); pack it inside the image instead (`ensurepip` is not in Ubuntu's
+      # base python3); install `python3-venv` (the image ships Python **3.10.12**
+      # and goldenmatch requires >= 3.11).
+      #
+      # That last one is not an obstacle to work around. It says the official
+      # Spark image cannot run this package's Python path AT ALL without
+      # installing a newer interpreter -- which is a point in the jar's favour,
+      # and a fact worth having rather than papering over.
+      #
+      # It also showed the split was wrong. The two-path parity tests compare
+      # two DISTRIBUTED runs, and on a cluster with no Python that comparison is
+      # impossible by construction. They already run in `spark_connect` under
+      # `local[*]`, which is exactly where a both-arms comparison belongs.
+      #
+      # So the division of labour is by what each environment can actually
+      # prove:
+      #
+      #   local[*]  -> JVM path vs Python path. Both arms runnable, and the
+      #                machinery under test (batching, reshape, alignment) is
+      #                plan construction, which does not care how many hosts it
+      #                lands on.
+      #   cluster   -> everything that needs a SEPARATE executor: the jar
+      #                arriving, the .so loading there, kernel results from a
+      #                real executor against a client-side oracle, and the
+      #                jar-only pipeline running with nothing installed.
+      #
+      # The end-to-end jar-only run is not lost with the venv: the inventory's
+      # ENTRY dedupe probe drives `run_config_pipeline` with all three UDFs
+      # against these bare workers, which is the strongest form of that test
+      # available anywhere.
+      # Built INSIDE the executor image, not on the runner.
+      #
+      # The first attempt built it on the runner with venv-pack, exactly as
+      # `ci.yml` does, and every executor died with:
+      #
+      #   Cannot run program "./environment/bin/python": No such file or directory
+      #
+      # `bin/python` in a venv is a SYMLINK to the interpreter it was created
+      # against -- on a GitHub runner, `/opt/hostedtoolcache/Python/...`. That
+      # path does not exist in a Spark container, so the archive unpacks fine
+      # and then cannot be executed.
+      #
+      # Under `local[*]` the symlink resolves, because the "executor" is the
+      # same machine as the driver. Which means the tier's shipped
+      # `ship_python_environment` helper -- P1's whole "pack a venv and
+      # addArtifact it" story -- has only ever been exercised where relocating
+      # it is a no-op. That is a real finding about the product, not just this
+      # lane, and it is filed on the PR rather than papered over here.
+      #
+      # Building against the interpreter the venv will actually run on is the
+      # fix, and it is also what a user shipping to this cluster would have to
+      # do. `--user root` because the Spark images run as uid 185.
+      - name: JVM parity + scoring, on the cluster
+        env:
+          GOLDENMATCH_SPARK_REMOTE: "sc://localhost:15002"
+          GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
+          # No GOLDENMATCH_SPARK_PYENV: the executors stay bare.
+        run: |
+          set -euo pipefail
+          # Deselected BY NAME, with the reason: these four compare the JVM path
+          # against the PYTHON path, and both arms have to run distributed.
+          # These workers have no goldenmatch (and ship a Python too old for it),
+          # so that comparison cannot exist here. Deselecting says so; letting
+          # them fail would read as a defect in the scoring path.
+          #
+          # They are not skipped anywhere -- `spark_connect` runs them under
+          # local[*], which is where a both-arms comparison belongs. What they
+          # exercise (batching, the n*k reshape, positional alignment) is plan
+          # construction, and a plan does not change shape with the number of
+          # hosts it lands on.
+          #
+          # Everything left DOES need a real executor and now gets one: kernel
+          # results from executor 1, against a client-side oracle.
+          python -m pytest -v --timeout=600 --timeout-method=thread \
+            packages/python/goldenmatch/tests/test_spark_jvm_native_parity.py \
+            packages/python/goldenmatch/tests/test_spark_jvm_parity.py \
+            --deselect 'tests/test_spark_jvm_native_parity.py::test_jvm_scoring_matches_the_python_path_exactly' \
+            --deselect 'tests/test_spark_jvm_native_parity.py::test_end_to_end_dedupe_runs_with_every_kernel_in_the_jar' \
+            --deselect 'tests/test_spark_jvm_native_parity.py::test_block_key_normalization_routes_to_the_jar_when_asked' \
+            --deselect 'tests/test_spark_jvm_native_parity.py::test_derive_record_ids_matches_the_python_path' \
+            --deselect 'tests/test_spark_jvm_native_parity.py::test_rowwise_config_scoring_matches_the_python_path_exactly'             --deselect 'tests/test_spark_jvm_native_parity.py::test_mint_entity_ids_pure_sql_matches_the_udf_path' \
+            | tee pytest.out && rc=0 || rc=$?
+          # pytest IGNORES a --deselect that matches nothing, so a wrong node id
+          # means the tests simply RUN. That is how run 6 failed: the ids were
+          # repo-root-relative while pytest's rootdir is
+          # packages/python/goldenmatch (its pyproject.toml is the configfile),
+          # so the real ids start at `tests/`. Nothing warned; the four just ran
+          # and failed, reading like a defect in the scoring path.
+          #
+          # Checked BEFORE propagating pytest's exit code, so that when the ids
+          # drift again this says so instead of the failure looking like a
+          # scoring bug. Hence `rc` capture rather than relying on `set -e`,
+          # which would exit here first and never print the explanation.
+          # The COUNT, not just "some": adding a two-path test without adding
+          # its deselect would leave the others matching, print a smaller
+          # number, and let the new one fail on a cluster that cannot host its
+          # Python arm -- reading as a defect in the path under test. That is
+          # exactly how test_rowwise_config_scoring... and
+          # test_mint_entity_ids... first reddened this lane.
+          #
+          # 8, and it is NOT the number of --deselect flags. pytest counts TEST
+          # ITEMS, so a parametrized test contributes one per case:
+          #
+          #   test_jvm_scoring_matches_the_python_path_exactly   3  (batch_size)
+          #   test_end_to_end_dedupe_runs_with_every_kernel...   1
+          #   test_block_key_normalization_routes_to_the_jar...  1
+          #   test_derive_record_ids_matches_the_python_path     1
+          #   test_rowwise_config_scoring_matches_the_python...  1
+          #   test_mint_entity_ids_pure_sql_matches_the_udf...   1
+          #                                                     --
+          #                                                      8
+          #
+          # Six flags, eight items. Counting the flags is how this guard shipped
+          # saying 6 and would have failed the lane on its own error message.
+          if ! grep -qE ' 8 deselected' pytest.out; then
+            echo "::error::expected 8 deselected (six --deselect flags, but the batch_size test contributes three items). Either a --deselect node id no longer matches (pytest IGNORES one that matches nothing) or a two-path test was added without one. pytest's rootdir is packages/python/goldenmatch, so ids start at 'tests/', NOT 'packages/python/goldenmatch/tests/'. Either way, a test needing a Python worker just ran on a cluster that has none, and its failure reads as a defect in the path under test."
+            exit 1
+          fi
+          exit "$rc"
+
+      # The inventory against REAL workers. Note there is no
+      # GOLDENMATCH_SPARK_PYENV here and that is the point: these containers are
+      # stock Spark images with no goldenmatch and no pyarrow, so "needs a
+      # Distributed FS TRAINING at scale, on the real workers.
+      #
+      # Everything else in this lane runs on an eight-row fixture: correctness
+      # and the jar-only property, nothing about size. This is the first thing
+      # that asks whether `train_em_distributed` works at a scale one box would
+      # struggle with, which is the central claim of the distributed tier.
+      #
+      # The fixture is generated IN SPARK (`spark.range` + SQL), never through
+      # `createDataFrame`, because the driver is where this tier's scale wall
+      # has historically been -- a driver-materialised fixture would hit the
+      # driver's ceiling and report it as a training limit.
+      #
+      # continue-on-error: this is a MEASUREMENT, not a gate. Its failure is a
+      # fact about how far the tier scales on a 2-worker CI cluster, and a red
+      # X here would say "something broke" when what it found is the ceiling.
+      # The wall/pattern numbers land in the job summary either way.
+      - name: Distributed FS training at scale
+        if: inputs.train_rows != '0' && inputs.train_rows != ''
+        continue-on-error: true
+        # 45, not 25: `--profile-counts` times four DAG prefixes plus the real
+        # counts run, so a profiled pass costs ~5x a normal one. The 25-minute
+        # cap was sized for the unprofiled run and would kill a profiled 5M
+        # sweep mid-measurement. (The wedge that cap once caught -- a skewed
+        # blocking key spending 24 minutes in a join -- is now refused up front
+        # by the harness's `--max-block-pairs` guard, so the cap is no longer
+        # the thing standing between us and a silent hang.)
+        timeout-minutes: 45
+        env:
+          GOLDENMATCH_SPARK_REMOTE: "sc://localhost:15002"
+          GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
+          # Opt-in, so the row-shaped arm stays runnable as the control.
+          GOLDENMATCH_SPARK_VECTOR_SCORER: ${{ inputs.vector_scorer && '1' || '0' }}
+          # No GOLDENMATCH_SPARK_PYENV: the executors stay bare, so this also
+          # proves the scale path is jar-only and not merely the 8-row one.
+        run: |
+          set -euo pipefail
+          ROWS="${{ inputs.train_rows || '1000000' }}"
+          PROFILE=""
+          if [ "${{ inputs.profile_counts }}" = "true" ]; then PROFILE="--profile-counts"; fi
+          EVAL=""
+          if [ "${{ inputs.eval_quality }}" = "true" ]; then EVAL="--eval-quality"; fi
+          LADDER=""
+          if [ "${{ inputs.match_splink_levels }}" = "true" ]; then LADDER="--match-splink-levels"; fi
+          FIELDS="${{ inputs.train_fields || '5' }}"
+          PAD="${{ inputs.value_pad || '0' }}"
+          SCORER=""
+          if [ -n "${{ inputs.scorer }}" ]; then SCORER="--scorer ${{ inputs.scorer }}"; fi
+          python scripts/spark_fs_train_scale.py --rows "$ROWS" --fields "$FIELDS"             --value-pad "$PAD" $SCORER $PROFILE $EVAL $LADDER --out spark-fs-train-scale.json
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        if: always()
+        with:
+          name: spark-fs-train-scale
+          path: spark-fs-train-scale.json
+          if-no-files-found: ignore
+
+
+      # Python worker" fails on its own rather than because an empty virtualenv
+      # was shipped to make it fail. The local lane can only simulate this.
+      - name: Inventory -- what runs with no Python on REAL executors
+        continue-on-error: true
+        env:
+          GOLDENMATCH_SPARK_REMOTE: "sc://localhost:15002"
+          GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
+          GOLDENMATCH_SPARK_PYENV: "none"
+        run: |
+          python scripts/spark_jar_only_inventory.py \
+            --out spark-cluster-inventory.json
+
+      # Splink on the SAME cluster -- LAST, and with the Connect server stopped.
+      #
+      # Standalone Spark hands an application every free core unless
+      # `spark.cores.max` says otherwise, and the Connect server IS an
+      # application: it registers when the cluster starts and holds all 16 cores
+      # for the life of the lane. A second app then queues for resources that
+      # never free. Run 31978493018 shows it in four lines:
+      #
+      #     Master: Registering worker 172.18.0.4 with 8 cores, 16.0 GiB RAM
+      #     Master: Registering worker 172.18.0.3 with 8 cores, 16.0 GiB RAM
+      #     Master: Registering app Spark Connect server
+      #     Master: Registering app splink-train-scale      <- no cores left
+      #
+      # The symptom is "no executor registered within 120s", which reads like a
+      # connectivity fault and is not one. That misread cost a run: the driver
+      # host WAS also wrong (default bridge 172.17.0.1 against a cluster on
+      # 172.18.x), fixing it changed nothing, and core starvation was the cause
+      # both times.
+      #
+      # Capping the Connect app instead would split the cluster and leave both
+      # engines' numbers unrepresentative. Stopping it gives each engine the
+      # WHOLE cluster in turn, which is the comparison worth having. This runs
+      # last so nothing downstream needs Connect back.
+      - name: Splink FS training on the same cluster
+        if: inputs.splink_compare && inputs.train_rows != '0' && inputs.train_rows != ''
+        # NOT continue-on-error. This step exists to produce ONE number, and it
+        # is only reached when `splink_compare` is explicitly requested. Run
+        # 31978060027 was green with no Splink result at all: the step exited 1
+        # on "no executor registered within 120s" and the swallowed exit made a
+        # measurement failure look like a completed comparison.
+        timeout-minutes: 45
+        run: |
+          set -euo pipefail
+          pip install "splink==4.0.16" >/dev/null
+          # Free the cores. See the note above the step.
+          docker compose -f docker/spark-cluster/docker-compose.yml stop spark-connect
+          # The driver runs HERE; the executors are containers. They must route
+          # back to the driver, so `spark.driver.host` has to be an address they
+          # can reach, not localhost. Getting this wrong does not error -- the
+          # job hangs on "Initial job has not accepted any resources" -- so it is
+          # resolved explicitly and printed.
+          #
+          # Read the gateway off the MASTER CONTAINER's own network rather than
+          # naming the compose network. The name is `<project>_spark`, the
+          # project is inferred from the compose file's directory, and guessing
+          # it wrong fails SILENTLY: `docker network inspect <missing> 2>/dev/null
+          # || true` yielded "" and the fallback handed back the DEFAULT bridge
+          # gateway 172.17.0.1, while the cluster was on 172.18.x. The workers
+          # could not route to it and no executor ever registered. Asking the
+          # container which network it is actually on cannot drift.
+          GW=$(docker inspect spark-master \
+                 --format '{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}')
+          if [ -z "$GW" ]; then
+            echo "::error::could not resolve a gateway from the spark-master container's networks. Without a routable driver host the workers cannot call back and the job would hang until the 120s executor timeout."
+            exit 1
+          fi
+          echo "driver host (spark-master's network gateway): $GW"
+          EVAL=""
+          if [ "${{ inputs.eval_quality }}" = "true" ]; then EVAL="--eval-quality"; fi
+          python scripts/spark_splink_train_scale.py             --rows "${{ inputs.train_rows || '1000000' }}"             --master spark://localhost:7077             --driver-host "$GW"             $EVAL --out splink-train-scale.json
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        if: always() && inputs.splink_compare
+        with:
+          name: splink-train-scale
+          path: splink-train-scale.json
+          # `error` rather than `warn`: this upload runs `if: always()`, so on a
+          # failed comparison the only other signal is a warning annotation
+          # nobody reads. The step above already failed in that case, so this
+          # cannot turn a good run red -- it just stops a MISSING measurement
+          # from being quieter than a bad one.
+          if-no-files-found: error
+
+      - name: Summary
+        if: always()
+        env:
+          SPLINK_COMPARE: ${{ inputs.splink_compare }}
+        run: |
+          {
+            echo '## Spark cluster lane'
+            echo ''
+            echo "image: \`apache/spark:${SPARK_IMAGE_TAG}\`, 1 master + 2 workers + Connect"
+            if [ -f spark-cluster-inventory.json ]; then
+              echo ''
+              echo '```json'
+              cat spark-cluster-inventory.json
+              echo '```'
+            fi
+            # The whole point of `splink_compare` is two walls side by side, so
+            # say plainly when one of them is missing. A summary that silently
+            # shows GM alone reads like a comparison that was made and won.
+            if [ "${SPLINK_COMPARE}" = "true" ]; then
+              echo ''
+              echo '### GM vs Splink, same cluster'
+              if [ -f spark-fs-train-scale.json ] && [ -f splink-train-scale.json ]; then
+                echo '| engine | rows | total wall |'
+                echo '|---|---:|---:|'
+                jq -r '"| goldenmatch | \(.actual_rows) | \(.total_seconds)s |"' spark-fs-train-scale.json
+                jq -r '"| splink | \(.actual_rows) | \(.total_seconds)s |"' splink-train-scale.json
+                echo ''
+                echo '### Shuffle bytes (topology-independent)'
+                echo ''
+                echo 'Network cost on ANY cluster is a function of what crosses the exchange, so this transfers to a real multi-node topology while a wall measured on one host does not.'
+                echo ''
+                echo '| engine | shuffle write | shuffle read | stages |'
+                echo '|---|---:|---:|---:|'
+                jq -r '"| goldenmatch | \(.shuffle.shuffle_write_bytes // "n/a") | \(.shuffle.shuffle_read_bytes // "n/a") | \(.shuffle.n_stages // "n/a") |"' spark-fs-train-scale.json
+                jq -r '"| splink | \(.shuffle.shuffle_write_bytes // "n/a") | \(.shuffle.shuffle_read_bytes // "n/a") | \(.shuffle.n_stages // "n/a") |"' splink-train-scale.json
+                for f in spark-fs-train-scale.json splink-train-scale.json; do
+                  ERR=$(jq -r '.shuffle.error // .shuffle.note // empty' "$f")
+                  if [ -n "$ERR" ]; then echo ''; echo "> \`$f\`: $ERR"; fi
+                done
+                CONFOUND=$(jq -r '.session_confound // empty' splink-train-scale.json)
+                if [ -n "$CONFOUND" ]; then
+                  echo ''
+                  echo "> session confound recorded: \`${CONFOUND}\`"
+                fi
+              else
+                echo 'NO COMPARISON. One or both engines did not produce a result:'
+                [ -f spark-fs-train-scale.json ] && echo '- goldenmatch: ok' || echo '- goldenmatch: MISSING'
+                [ -f splink-train-scale.json ] && echo '- splink: ok' || echo '- splink: MISSING'
+              fi
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Always, and BEFORE teardown. A cluster lane that fails without its logs
+      # costs a full re-run to learn anything, and each re-run is a 1.5GB pull.
+      - name: Container logs
+        if: always()
+        run: docker compose -f docker/spark-cluster/docker-compose.yml logs --tail=200
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker/spark-cluster/docker-compose.yml down -v

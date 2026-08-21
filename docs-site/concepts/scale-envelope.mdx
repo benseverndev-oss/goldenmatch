@@ -24,9 +24,9 @@ These are quoted from the repository and were measured on the versions noted. Re
 
 | Records | Backend | Wall | Peak RSS | Notes |
 |---------|---------|------|----------|-------|
-| 1M exact dedupe | polars | ~7.8s | — | In-memory self-join |
+| 1M exact dedupe | polars | ~7.8s |: | In-memory self-join |
 | 100K fuzzy (name + zip) | polars | ~12.8s | 544 MB | Full pipeline, ~8,200 rec/s |
-| 1M fuzzy | polars | — | — | OOMs in-memory |
+| 1M fuzzy | polars |: |: | OOMs in-memory |
 | 5M | chunked | ~50 min | 11.9 GB | 4c/16GB runner, 618,817 multi-member clusters, no OOM |
 
 ## Block-size failure modes
@@ -67,5 +67,5 @@ Using `exact=["email"]` as the only matchkey creates oversized clusters around s
 </Steps>
 
 <Card title="Tuning & opt-ins" icon="sliders" href="/goldenmatch/tuning">
-  The flags that make a scale run fast — the native gate (`GOLDENMATCH_NATIVE=1`), the address-normalize fast path, the distributed pipeline contract, and every `GOLDENMATCH_*` default. Set these before a large run.
+  The flags that make a scale run fast: the native gate (`GOLDENMATCH_NATIVE=1`), the address-normalize fast path, the distributed pipeline contract, and every `GOLDENMATCH_*` default. Set these before a large run.
 </Card>

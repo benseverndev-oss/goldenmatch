@@ -60,7 +60,15 @@ def _load_native():
     except Exception:  # noqa: BLE001
         if require:
             raise
-        pytest.skip("goldengraph._native not built (set GOLDENGRAPH_NATIVE=1 to require)")
+        # allow_module_level is REQUIRED: this runs at import time (via the
+        # module-level `_NATIVE = _load_native()` below), and pytest turns a
+        # plain skip during collection into an ERROR that aborts the WHOLE
+        # session -- so an unbuilt engine took out every other goldengraph test
+        # instead of skipping this one module.
+        pytest.skip(
+            "goldengraph._native not built (set GOLDENGRAPH_NATIVE=1 to require)",
+            allow_module_level=True,
+        )
 
 
 _NATIVE = _load_native()

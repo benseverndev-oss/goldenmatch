@@ -7,7 +7,7 @@ from pathlib import Path
 
 import yaml
 
-from goldencheck_types.types import DomainPack, FieldSpec
+from goldencheck_types.types import IDENTITY_KINDS, DomainPack, FieldSpec, RoleSpec
 
 
 class DomainPackError(ValueError):
@@ -182,4 +182,71 @@ def _load_domain_uncached(name: str, domains_dir: Path) -> DomainPack:
         name=name,
         description=raw.get("description") or "",
         types=types,
+        roles=_parse_roles(raw, path),
     )
+
+
+def _parse_roles(raw: dict, path: Path) -> dict[str, RoleSpec]:
+    """Parse the optional ``roles:`` block (schema v4).
+
+    Absent or empty ``roles:`` yields ``{}`` — every pack predating v4 keeps
+    loading unchanged, which is what makes the block additive.
+
+    An unknown ``kind`` is a hard error rather than a coerce-to-``unknown``:
+    ``IDENTITY_KINDS`` is closed precisely so downstream matching behaviour is
+    predictable, and silently accepting a typo would defeat that.
+    """
+    roles_raw = raw.get("roles")
+    if roles_raw is None:
+        return {}
+    if not isinstance(roles_raw, dict):
+        raise DomainPackError(
+            f"{path}: 'roles' must be a mapping, got {type(roles_raw).__name__}"
+        )
+
+    roles: dict[str, RoleSpec] = {}
+    for role_name, spec in roles_raw.items():
+        if not isinstance(spec, dict):
+            raise DomainPackError(
+                f"{path}: roles.{role_name} must be a mapping, got {type(spec).__name__}"
+            )
+
+        kind = spec.get("kind")
+        if kind is None:
+            raise DomainPackError(f"{path}: roles.{role_name} is missing required 'kind'")
+        if kind not in IDENTITY_KINDS:
+            raise DomainPackError(
+                f"{path}: roles.{role_name}.kind is {kind!r}; must be one of "
+                f"{sorted(IDENTITY_KINDS)}"
+            )
+
+        name_hints = spec.get("name_hints", [])
+        if not isinstance(name_hints, list):
+            raise DomainPackError(
+                f"{path}: roles.{role_name}.name_hints must be a list, "
+                f"got {type(name_hints).__name__}"
+            )
+
+        typical_types = spec.get("typical_types", [])
+        if not isinstance(typical_types, list):
+            raise DomainPackError(
+                f"{path}: roles.{role_name}.typical_types must be a list, "
+                f"got {type(typical_types).__name__}"
+            )
+
+        # Same key/name agreement rule the types block enforces.
+        explicit_name = spec.get("name")
+        if explicit_name is not None and explicit_name != role_name:
+            raise DomainPackError(
+                f"{path}: roles.{role_name}.name is {explicit_name!r}, "
+                f"but it lives under key {role_name!r}. The two must agree.",
+            )
+
+        roles[role_name] = RoleSpec(
+            name=role_name,
+            kind=str(kind),
+            name_hints=[str(h) for h in name_hints],
+            typical_types=[str(t) for t in typical_types],
+            description=spec.get("description"),
+        )
+    return roles

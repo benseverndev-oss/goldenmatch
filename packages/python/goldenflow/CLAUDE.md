@@ -575,8 +575,13 @@ The columnar path (`engine/columnar.py`) is the DEFAULT for the public `transfor
 runs **Polars-free**: `import goldenflow` imports no Polars, all 113 transforms + CSV/
 Parquet/Excel/DB read + dict/file zero-config run without Polars. Only the 2.0 base-deps
 flip remains (drop `polars` from `[project.dependencies]` -> the `[polars]` extra).
-- **`transform(data, config)`** (Polars-free primary) takes a `dict[str, list]` or a path
-  (`.csv`/`.parquet`/`.xlsx`) -> `ColumnarResult`. Readers: `read_csv_columns` (stdlib
+- **`transform(data, config)`** (Polars-free primary) takes a `dict[str, list]`, a
+  pyarrow `Table`/`RecordBatch` (#2447 -- an arrow frame IS a typed column dict, so
+  `to_pydict()` is the whole conversion; detected by attribute so the check never
+  imports pyarrow, an optional extra here), or a path
+  (`.csv`/`.parquet`/`.xlsx`) -> `ColumnarResult`. `transform_df` REJECTS an arrow
+  frame with a pointer here rather than becoming a second Polars-free door.
+  `ColumnarResult.to_arrow()` mirrors `to_polars()` (both deferred-import). Readers: `read_csv_columns` (stdlib
   csv), `read_parquet_columns` (pyarrow `to_pydict`), `read_excel_columns` (openpyxl),
   `connectors.database.read_database_columns` (any DBAPI). `transform_df(pl.DataFrame)` is
   the Polars-backend adapter (tautologically needs Polars).
@@ -706,7 +711,7 @@ GoldenFlowConfig(
 
 ## DQBench Integration
 - **DQBench Transform Score: 100.00**
-- Adapter: `dqbench/adapters/goldenflow.py`
+- Adapter: the goldenflow adapter shipped by the external DQBench harness (not a path in this repo)
 - Run: `pip install dqbench && dqbench run goldenflow`
 
 ## Common Mistakes

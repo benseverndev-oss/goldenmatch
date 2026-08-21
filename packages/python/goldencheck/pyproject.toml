@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "goldencheck"
-version = "3.2.0"
+version = "3.5.0"
 description = "Data validation that discovers rules from your data so you don't have to write them"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -51,7 +51,11 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/benseverndev-oss/goldenmatch"
 Repository = "https://github.com/benseverndev-oss/goldenmatch"
-Documentation = "https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/python/goldencheck#readme"
+Documentation = "https://docs.bensevern.dev/docs/goldencheck"
+# Agent-facing entry point. PyPI renders these URLs and they are scraped,
+# so this is the discovery path for a tool that never clones the repo. The
+# same file ships INSIDE the wheel at goldencheck/llms.txt.
+"AI agents (llms.txt)" = "https://docs.bensevern.dev/docs/llms.txt"
 Issues = "https://github.com/benseverndev-oss/goldenmatch/issues"
 Changelog = "https://github.com/benseverndev-oss/goldenmatch/blob/main/packages/python/goldencheck/CHANGELOG.md"
 Author = "https://bensevern.dev"
@@ -76,7 +80,7 @@ mcp = [
     "mcp>=1.28.1",
 ]
 agent = [
-    "aiohttp>=3.14.0",
+    "aiohttp>=3.14.3",
 ]
 baseline = [
     # The baseline statistics + drift + correlation subsystems are opt-in and still

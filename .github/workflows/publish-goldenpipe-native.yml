@@ -1,0 +1,38 @@
+name: Publish goldenpipe-native to PyPI
+
+# Thin caller -> .github/workflows/_publish-native.yml (the shared template).
+# Builds the SEPARATE compiled runtime (maturin/abi3 wheels) across platforms and
+# publishes to PyPI: the native-runtime counterpart to publish-goldenpipe.yml.
+#
+# Fires on a release tagged `goldenpipe-native-v*`, kept distinct from sibling tags so the
+# publish workflows never cross-trigger.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag or commit to build (default: HEAD of main)"
+        required: false
+        default: ""
+      publish:
+        description: "Upload to PyPI (uncheck for a build-matrix dry run)"
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    # Only run for goldenpipe-native-v* tags. The four per-job copies of this gate in the
+    # pre-template version collapse to one here.
+    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'goldenpipe-native-v')
+    uses: ./.github/workflows/_publish-native.yml
+    with:
+      manifest-path: packages/rust/extensions/goldenpipe-native/Cargo.toml
+      ref: ${{ inputs.ref || '' }}
+      # A release always publishes; a dispatch passes its checkbox through.
+      publish: ${{ github.event_name != 'workflow_dispatch' || inputs.publish }}
+    secrets: inherit

@@ -43,8 +43,8 @@ def main() -> int:
         )
         return 2
 
-    from goldenmatch.sail.pipeline import run_sail_pipeline
-    from goldenmatch.sail.session import connect
+    from goldenmatch.spark.pipeline import run_sail_pipeline
+    from goldenmatch.spark.session import connect
 
     spark = connect(remote)
     src = spark.read.parquet(args.input)

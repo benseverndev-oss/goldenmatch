@@ -58,6 +58,13 @@ export class KeyIntegrityCertificate {
   resolvedEntities: number | null = null; // multi-member clusters found by dedupe
   fragmentedEntities: number | null = null; // resolved entities spanning >1 declared key value
   undercountEstimate: number | null = null; // fragmentedEntities / resolvedEntities
+  // 95% Wilson score interval on the fragmentation rate (= undercount), a
+  // binomial proportion over `resolvedEntities` observations. Bounds the SAMPLING
+  // uncertainty in `undercountEstimate` (few resolved entities → wide interval);
+  // it does NOT bound whether ER itself clustered correctly. null when resolution
+  // wasn't run or found no multi-member clusters. Mirrors Python.
+  undercountCiLow: number | null = null;
+  undercountCiHigh: number | null = null;
   estimable = true;
 
   constructor(init: KeyIntegrityCertificateInit) {
@@ -88,11 +95,76 @@ export class KeyIntegrityCertificate {
     return Math.min(this.estimate, 1.0 - this.undercountEstimate);
   }
 
+  /** Statistically-conservative trust floor: like `safeBound` but discounts the
+   * WORST plausible undercount at the 95% confidence upper bound
+   * (`undercountCiHigh`) rather than the point estimate — so a fragmentation rate
+   * measured from few resolved entities (wide interval) is penalized more than
+   * one from many. Falls back to `safeBound` when the interval wasn't computed.
+   * Mirrors Python `safe_bound_conservative`. */
+  get safeBoundConservative(): number {
+    if (this.undercountCiHigh === null) return this.safeBound;
+    return Math.min(this.estimate, 1.0 - this.undercountCiHigh);
+  }
+
   /** Advisory pass/fail: the declared key is unique at grain, doesn't fan out
    * beyond `maxFanOut`, and clears `minEstimate`. Never enforced. */
   isTrustworthy({ maxFanOut = 1.0, minEstimate = 1.0 }: { maxFanOut?: number; minEstimate?: number } = {}): boolean {
     return this.isUniqueAtGrain && this.maxFanOut <= maxFanOut && this.estimate >= minEstimate;
   }
+}
+
+/** The (partial) certificate shape `certificateVerdict` reads — a full
+ * `KeyIntegrityCertificate` satisfies it; a stats-only object degrades
+ * gracefully (missing fields → null / omitted), mirroring Python's getattr. */
+export interface CertificateVerdictLike {
+  isUniqueAtGrain?: boolean | null;
+  estimate?: number | null;
+  maxFanOut?: number | null;
+  measureFanOut?: Record<string, number> | null;
+  undercountEstimate?: number | null;
+  undercountCiLow?: number | null;
+  undercountCiHigh?: number | null;
+  safeBound?: number | null;
+  safeBoundConservative?: number | null;
+  isTrustworthy?: (opts?: { maxFanOut?: number; minEstimate?: number }) => boolean;
+}
+
+/**
+ * Project a certificate into the trust-verdict metadata block a semantic catalog
+ * carries — the single source (mirrors Python `certificate_verdict`) for the
+ * `key_integrity` tag the Cube / OSI / MetricFlow emitters write back. snake_case
+ * keys + fixed insertion order so the emitted block is byte-identical across
+ * surfaces. Superset of the legacy 3-field embed (`uniqueness_estimate` /
+ * `max_fan_out` / `undercount_estimate`), extended with the pass/fail `verdict`,
+ * `unique_at_grain`, per-measure fan-out, and the resolution-tier trust floors.
+ */
+export function certificateVerdict(cert: CertificateVerdictLike): Record<string, unknown> {
+  let trustworthy: boolean | null = null;
+  if (typeof cert.isTrustworthy === "function") {
+    try {
+      trustworthy = Boolean(cert.isTrustworthy());
+    } catch {
+      trustworthy = null;
+    }
+  }
+
+  const block: Record<string, unknown> = {
+    verdict: trustworthy === null ? null : trustworthy ? "trustworthy" : "untrustworthy",
+    unique_at_grain: cert.isUniqueAtGrain ?? null,
+    uniqueness_estimate: cert.estimate ?? null,
+    max_fan_out: cert.maxFanOut ?? null,
+  };
+  const mfo = cert.measureFanOut;
+  if (mfo && Object.keys(mfo).length > 0) {
+    block["measure_fan_out"] = { ...mfo };
+  }
+  block["undercount_estimate"] = cert.undercountEstimate ?? null;
+  if (cert.undercountCiLow != null && cert.undercountCiHigh != null) {
+    block["undercount_ci"] = [cert.undercountCiLow, cert.undercountCiHigh];
+  }
+  block["safe_bound"] = cert.safeBound ?? null;
+  block["safe_bound_conservative"] = cert.safeBoundConservative ?? null;
+  return block;
 }
 
 function asList(x: string | readonly string[] | undefined): string[] {
@@ -320,6 +392,62 @@ export async function resolveKeyIntegrity(
 /** Populate the fragmentation/undercount fields via GoldenMatch ER. Fail-open:
  * any error leaves the resolution fields null and returns an explanatory note.
  * Mirrors Python `_add_resolution`. */
+/**
+ * The resolution-tier reduction: cluster membership → fragmentation counts.
+ *
+ * A *resolved entity* is a cluster of ≥2 records; it is *fragmented* when its
+ * members carry >1 distinct declared key (the join therefore undercounts
+ * distinct entities). Returns resolved / fragmented counts +
+ * `undercountEstimate = fragmented / resolved` (0 when nothing resolved).
+ *
+ * Pure + engine-agnostic: `keyvals` is indexed by member id and compared only
+ * for equality, so the key representation doesn't matter. Cross-language
+ * parity-locked (Python == TS) by
+ * `tests/parity/fixtures/key-integrity/fragmentation_reduction_cases.json` —
+ * this reduction has no kernel (a scalar loop, not Arrow-bulk muscle), so a
+ * shared data-driven fixture is the single source of truth (the goldenanalysis
+ * quality_rollup / regressions parity-fixture precedent).
+ */
+export function reduceFragmentation(
+  memberLists: readonly (readonly number[])[],
+  keyvals: readonly unknown[],
+): { resolvedEntities: number; fragmentedEntities: number; undercountEstimate: number } {
+  let resolved = 0;
+  let fragmented = 0;
+  for (const members of memberLists) {
+    if (members.length < 2) continue;
+    resolved += 1;
+    const distinctKeys = new Set<unknown>();
+    for (const m of members) distinctKeys.add(keyvals[Math.trunc(m)]);
+    if (distinctKeys.size > 1) fragmented += 1;
+  }
+  const undercountEstimate = resolved ? fragmented / resolved : 0.0;
+  return { resolvedEntities: resolved, fragmentedEntities: fragmented, undercountEstimate };
+}
+
+// 97.5th percentile of the standard normal → 95% two-sided Wilson interval. The
+// same literal is used by the Python port so the interval is bit-identical.
+const WILSON_Z_95 = 1.959963984540054;
+
+/**
+ * 95% Wilson score interval for a binomial proportion `k/n` (successes over
+ * trials), clamped to [0, 1]. Returns null when `n === 0` (no observations to
+ * bound). Preferred over the normal approximation because it stays inside [0,1]
+ * and behaves at small `n` / extreme `p` — the fragmentation-rate regime. Pure
+ * arithmetic (parity-locked with the Python port via a shared fixture).
+ */
+export function wilsonInterval(k: number, n: number, z: number = WILSON_Z_95): [number, number] | null {
+  if (n <= 0) return null;
+  const p = k / n;
+  const z2 = z * z;
+  const denom = 1.0 + z2 / n;
+  const center = (p + z2 / (2.0 * n)) / denom;
+  const half = (z / denom) * Math.sqrt((p * (1.0 - p)) / n + z2 / (4.0 * n * n));
+  const low = center - half;
+  const high = center + half;
+  return [low > 0.0 ? low : 0.0, high < 1.0 ? high : 1.0];
+}
+
 async function addResolution(
   cert: KeyIntegrityCertificate,
   table: Readonly<Record<string, readonly unknown[]>>,
@@ -353,23 +481,23 @@ async function addResolution(
     const res = await dedupe(subRows, { config: subConfig });
 
     const keyvals = rowKeyValues(table, keyColumns);
-    let resolved = 0;
-    let fragmented = 0;
-    for (const cl of res.clusters.values()) {
-      const members = cl.members;
-      if (members.length < 2) continue;
-      resolved += 1;
-      const distinctKeys = new Set<string>();
-      for (const m of members) distinctKeys.add(keyvals[Math.trunc(m)]!);
-      if (distinctKeys.size > 1) fragmented += 1;
-    }
+    const memberLists = [...res.clusters.values()].map((cl) => cl.members);
+    const { resolvedEntities, fragmentedEntities, undercountEstimate } = reduceFragmentation(
+      memberLists,
+      keyvals,
+    );
 
-    cert.resolvedEntities = resolved;
-    cert.fragmentedEntities = fragmented;
-    cert.undercountEstimate = resolved ? fragmented / resolved : 0.0;
-    if (fragmented) {
+    cert.resolvedEntities = resolvedEntities;
+    cert.fragmentedEntities = fragmentedEntities;
+    cert.undercountEstimate = undercountEstimate;
+    const ci = wilsonInterval(fragmentedEntities, resolvedEntities);
+    if (ci !== null) {
+      cert.undercountCiLow = ci[0];
+      cert.undercountCiHigh = ci[1];
+    }
+    if (fragmentedEntities) {
       notes.push(
-        `${fragmented}/${resolved} resolved entities span >1 declared key ` +
+        `${fragmentedEntities}/${resolvedEntities} resolved entities span >1 declared key ` +
           "(fragmentation → the join undercounts distinct entities)",
       );
     }

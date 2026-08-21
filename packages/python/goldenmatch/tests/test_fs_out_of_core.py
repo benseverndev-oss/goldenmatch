@@ -464,6 +464,124 @@ def test_dedupe_to_parquet_streaming_parity_with_in_memory(tmp_path, monkeypatch
     assert stream_parts == sorted(mem_parts)
 
 
+def _sorted_rows(path):
+    """Column-order-checked, row-order-independent view of a parquet file for
+    byte-identity comparison."""
+    import pyarrow.parquet as pq
+
+    t = pq.read_table(path)
+    rows = sorted(tuple(sorted(r.items())) for r in t.to_pylist())
+    return (list(t.column_names), rows)
+
+
+def _sorted_golden(path):
+    """Cluster-id-AGNOSTIC view of a golden.parquet for parity comparison.
+
+    Golden rows carry `__cluster_id__`, an ARBITRARY integer label whose value
+    (and the resulting row order) depends on the bucket-processing order -- the
+    bounded / bucketed routes discover clusters in a different order than the
+    fused whole-frame kernel, so two byte-identical golden *record sets* come out
+    with different id labels. Drop the label and compare the multiset of semantic
+    rows: cluster IDs are arbitrary project-wide, and partition MEMBERSHIP (the
+    real invariant) is asserted separately via `_partition_set_from_parquet`."""
+    import json
+
+    import pyarrow.parquet as pq
+
+    t = pq.read_table(path)
+    keep = [c for c in t.column_names if c != "__cluster_id__"]
+    t = t.select(keep)
+    # Golden cells are struct columns ({value, confidence}); serialize each row to
+    # a canonical JSON string so the multiset compare never orders raw dicts (with
+    # __cluster_id__ dropped, the sort would otherwise tie on __golden_confidence__
+    # and fall through to comparing the struct dicts).
+    rows = sorted(json.dumps(r, sort_keys=True, default=str) for r in t.to_pylist())
+    return (keep, rows)
+
+
+def _native_fs_inactive() -> bool:
+    """The sequential route's clustering (`_cluster_arrow_native`) needs the native
+    kernel; the pure-Python fallback has a pre-existing _pairs_df_to_list(pa.Table)
+    bug. Skip the sequential parity tests when native isn't active."""
+    import os as _os
+
+    from goldenmatch.core._native_loader import native_available
+
+    forced_off = _os.environ.get("GOLDENMATCH_NATIVE", "auto").lower() == "0" or (
+        _os.environ.get("GOLDENMATCH_FS_NATIVE", "").lower() == "0"
+    )
+    return (not native_available()) or forced_off
+
+
+def test_sequential_batched_output_escape_parity(tmp_path, monkeypatch):
+    """The batched output writer (default) is BYTE-IDENTICAL to the legacy
+    frame.join arrow output (GOLDENMATCH_FS_SEQUENTIAL_BATCHED_OUTPUT=0). Locks the
+    rollback escape. Needs native (sequential fallback clustering)."""
+    if _native_fs_inactive():
+        pytest.skip("native FS/fused kernel not active (sequential fallback bug)")
+
+    from goldenmatch import dedupe_to_parquet
+
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+    monkeypatch.setenv("GOLDENMATCH_FS_BLOCK_SOURCE", "sequential")
+    # Hold scoring engine constant (fused) so ONLY the output writer differs.
+    monkeypatch.setenv("GOLDENMATCH_FS_SEQUENTIAL_BOUNDED_SCORING", "0")
+
+    csv_path = tmp_path / "people.csv"
+    _make_person_csv(csv_path)
+    cfg = _fs_person_config()
+
+    monkeypatch.setenv("GOLDENMATCH_FS_SEQUENTIAL_BATCHED_OUTPUT", "0")
+    legacy = dedupe_to_parquet(str(csv_path), out_dir=str(tmp_path / "legacy"), config=cfg)
+    monkeypatch.delenv("GOLDENMATCH_FS_SEQUENTIAL_BATCHED_OUTPUT", raising=False)
+    default = dedupe_to_parquet(str(csv_path), out_dir=str(tmp_path / "default"), config=cfg)
+
+    assert legacy["batched_output"] is False
+    assert default["batched_output"] is True
+    for k in ("unique_count", "dupes_count", "golden_count"):
+        assert legacy[k] == default[k], k
+    assert _partition_set_from_parquet(legacy["dupes_path"]) == _partition_set_from_parquet(
+        default["dupes_path"]
+    )
+    assert _sorted_rows(legacy["unique_path"]) == _sorted_rows(default["unique_path"])
+    if legacy["golden_count"]:
+        assert _sorted_golden(legacy["golden_path"]) == _sorted_golden(default["golden_path"])
+
+
+def test_sequential_bounded_scoring_escape_parity(tmp_path, monkeypatch):
+    """Bounded in-RAM FrameBlockSource scoring (default, the scale path) is
+    BYTE-IDENTICAL (same clusters/counts) to the fused whole-frame kernel
+    (GOLDENMATCH_FS_SEQUENTIAL_BOUNDED_SCORING=0). Locks the rollback escape.
+    Needs native. `pairs` differs (fused leaves it None) -- compare clusters."""
+    if _native_fs_inactive():
+        pytest.skip("native FS/fused kernel not active (sequential fallback bug)")
+
+    from goldenmatch import dedupe_to_parquet
+
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+    monkeypatch.setenv("GOLDENMATCH_FS_BLOCK_SOURCE", "sequential")
+
+    csv_path = tmp_path / "people.csv"
+    _make_person_csv(csv_path)
+    cfg = _fs_person_config()
+
+    monkeypatch.setenv("GOLDENMATCH_FS_SEQUENTIAL_BOUNDED_SCORING", "0")
+    fused = dedupe_to_parquet(str(csv_path), out_dir=str(tmp_path / "fused"), config=cfg)
+    monkeypatch.delenv("GOLDENMATCH_FS_SEQUENTIAL_BOUNDED_SCORING", raising=False)
+    bounded = dedupe_to_parquet(str(csv_path), out_dir=str(tmp_path / "bounded"), config=cfg)
+
+    assert fused["bounded_scoring"] is False
+    assert bounded["bounded_scoring"] is True
+    for k in ("unique_count", "dupes_count", "golden_count"):
+        assert fused[k] == bounded[k], k
+    assert _partition_set_from_parquet(fused["dupes_path"]) == _partition_set_from_parquet(
+        bounded["dupes_path"]
+    )
+    assert _sorted_rows(fused["unique_path"]) == _sorted_rows(bounded["unique_path"])
+    if fused["golden_count"]:
+        assert _sorted_golden(fused["golden_path"]) == _sorted_golden(bounded["golden_path"])
+
+
 # ── resolve_fs_block_source: the single knob unifying the two streaming lanes ──
 
 def test_resolve_fs_block_source_default_is_eager(monkeypatch):
@@ -483,6 +601,7 @@ def test_resolve_fs_block_source_default_is_eager(monkeypatch):
     [("frame", "frame"), ("duckdb", "duckdb"), ("eager", "eager"),
      ("sequential", "sequential"), (" Sequential ", "sequential"),
      ("spill", "spill"), (" Spill ", "spill"),
+     ("bucketed", "bucketed"), (" Bucketed ", "bucketed"),
      ("auto", "eager"), ("AUTO", "eager"), (" DuckDB ", "duckdb"),
      ("nonsense", "eager")],
 )
@@ -666,12 +785,340 @@ def test_spill_and_sequential_orchestrators_agree(tmp_path):
     assert seq_parts == spill_parts
 
 
+def test_end_to_end_bucketed_dedupe(tmp_path):
+    """run_fs_dedupe_bucketed: frame -> per-pass hash-bucket shards on disk ->
+    per-bucket score + edge spill -> external WCC -> streamed parquet. Rows
+    preserved, planted dups found, a golden per multi-member cluster, bucketed=True
+    (never the whole-frame partition / fused kernel)."""
+    import types
+
+    from goldenmatch.backends.fs_out_of_core import run_fs_dedupe_bucketed
+
+    df = _bigger_df()
+    mk = _make_probabilistic_mk()
+    blocking = BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])])
+    em = _train(df, blocking, mk)
+    cfg = types.SimpleNamespace(golden_rules=None)
+
+    res = run_fs_dedupe_bucketed(df, blocking, mk, em, cfg, str(tmp_path))
+
+    assert res["bucketed"] is True
+    assert res["streaming"] is True
+    assert res["fused"] is False  # bucketed never uses the frame-gathering fused kernel
+    assert res["pairs"] is not None  # real edges spilled through the shard path
+    assert res["unique_count"] + res["dupes_count"] == df.height
+    assert res["dupes_count"] >= 2
+    assert res["golden_count"] >= 1
+
+
+def test_bucketed_and_sequential_orchestrators_agree(tmp_path):
+    """run_fs_dedupe_bucketed writes the SAME unique/dupes/golden counts AND the
+    SAME dupes-partition as run_fs_dedupe_sequential. Hash-bucketing by the block
+    key co-locates each block wholly in one bucket, so per-bucket scoring is
+    partition-exact with whole-frame scoring (single static pass)."""
+    import types
+
+    from goldenmatch.backends.fs_out_of_core import (
+        run_fs_dedupe_bucketed,
+        run_fs_dedupe_sequential,
+    )
+
+    df = _bigger_df()
+    mk = _make_probabilistic_mk()
+    blocking = BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])])
+    em = _train(df, blocking, mk)
+    cfg = types.SimpleNamespace(golden_rules=None)
+
+    seq = run_fs_dedupe_sequential(df, blocking, mk, em, cfg, str(tmp_path / "seq"))
+    buk = run_fs_dedupe_bucketed(df, blocking, mk, em, cfg, str(tmp_path / "buk"))
+    for k in ("unique_count", "dupes_count", "golden_count"):
+        assert seq[k] == buk[k], k
+    assert (
+        _partition_set_from_parquet(seq["dupes_path"])
+        == _partition_set_from_parquet(buk["dupes_path"])
+    )
+
+
+def test_bucketed_multipass_agrees_with_sequential(tmp_path):
+    """The multi-pass-specific risk: per-pass hash-bucketing (bucket the frame once
+    per blocking pass on that pass's key) must reproduce the exact multi_pass edge
+    set. A dup shares BOTH block keys; each pass is bucketed independently and the
+    per-pass edges union — partition-exact with the whole-frame reference."""
+    import types
+
+    from goldenmatch.backends.fs_out_of_core import (
+        run_fs_dedupe_bucketed,
+        run_fs_dedupe_sequential,
+    )
+    from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+
+    rows = []
+    fam = [
+        ("John", "Smith", "90210", "AA"), ("Jon", "Smith", "90210", "AA"),
+        ("Jane", "Doe", "10001", "BB"), ("Janet", "Doe", "10001", "BB"),
+        ("Bob", "Jones", "60601", "CC"), ("Robert", "Jones", "60601", "CC"),
+        ("Alice", "Brown", "30301", "DD"), ("Alicia", "Brown", "30301", "DD"),
+        ("Amy", "Clark", "90210", "EE"), ("Amie", "Clark", "90210", "EE"),
+    ]
+    for rid, (fn, ln, zp, cc) in enumerate(fam, start=1):
+        rows.append({"__row_id__": rid, "first_name": fn, "last_name": ln,
+                     "zip": zp, "city_code": cc})
+    df = pl.DataFrame(rows)
+    mk = MatchkeyConfig(
+        name="fs", type="probabilistic",
+        fields=[
+            MatchkeyField(field="first_name", scorer="jaro_winkler", levels=3,
+                          partial_threshold=0.8),
+            MatchkeyField(field="last_name", scorer="jaro_winkler", levels=2,
+                          partial_threshold=0.85),
+        ],
+    )
+    blocking = BlockingConfig(
+        strategy="multi_pass",
+        passes=[BlockingKeyConfig(fields=["zip"]),
+                BlockingKeyConfig(fields=["city_code"])],
+    )
+    em = _train(df, blocking, mk)
+    cfg = types.SimpleNamespace(golden_rules=None)
+
+    seq = run_fs_dedupe_sequential(df, blocking, mk, em, cfg, str(tmp_path / "seq"))
+    buk = run_fs_dedupe_bucketed(df, blocking, mk, em, cfg, str(tmp_path / "buk"))
+    for k in ("unique_count", "dupes_count", "golden_count"):
+        assert seq[k] == buk[k], k
+    assert (
+        _partition_set_from_parquet(seq["dupes_path"])
+        == _partition_set_from_parquet(buk["dupes_path"])
+    )
+
+
+def _output_dict_and_sets(res, tmp_dir):
+    """(counts, unique-rowid-set, dupes-partition-set, golden-rowcount) for an
+    FS output result dict -- the parity surface for comparing the batched output
+    against the resident-join reference."""
+    import polars as pl
+
+    counts = (res["unique_count"], res["dupes_count"], res["golden_count"])
+    uniq = set(pl.read_parquet(res["unique_path"])["__row_id__"].to_list())
+    dupes = _partition_set_from_parquet(res["dupes_path"])
+    gcount = (
+        pl.read_parquet(res["golden_path"]).height
+        if res["golden_path"] is not None
+        else 0
+    )
+    return counts, uniq, dupes, gcount
+
+
+@pytest.mark.parametrize("gapped", [False, True])
+def test_batched_output_equals_resident_join(tmp_path, gapped):
+    """`_stream_fs_dedupe_output_batched` (join-free, Phase 3a) produces the SAME
+    unique/dupes/golden as the resident `_stream_fs_dedupe_output_arrow` join, for
+    BOTH a contiguous `__row_id__` (lo!=0 fast path -- scatter, not slice) and a
+    GAPPED `__row_id__` (the per-batch hash-join fallback). Also locks `__xform_*`
+    exclusion. Tiny batch_rows forces multi-batch streaming incl. a cluster whose
+    members straddle batches (golden built once)."""
+    import types
+
+    import pyarrow as pa
+    from goldenmatch.backends.fs_out_of_core import (
+        _stream_fs_dedupe_output_arrow,
+        _stream_fs_dedupe_output_batched,
+    )
+
+    # Row ids: contiguous {2..6} (lo=2, not 0) or gapped {2,3,7,8,11}.
+    rids = [2, 3, 7, 8, 11] if gapped else [2, 3, 4, 5, 6]
+    frame = pa.table(
+        {
+            "__row_id__": pa.array(rids, pa.int64()),
+            "first_name": ["John", "Jon", "solo", "Amy", "Amie"],
+            "last_name": ["Smith", "Smith", "Nemo", "Clark", "Clark"],
+            # A transform column that MUST be excluded from output record_cols.
+            "__xform_x__": ["a", "b", "c", "d", "e"],
+        }
+    )
+    # Clusters: (r0,r1)->0 [multi], (r2)->1 [singleton], (r3,r4)->2 [multi].
+    assignments = pa.table(
+        {
+            "__row_id__": pa.array(rids, pa.int64()),
+            "__cluster_id__": pa.array([0, 0, 1, 2, 2], pa.int64()),
+        }
+    )
+    cfg = types.SimpleNamespace(golden_rules=None)
+
+    ref = _stream_fs_dedupe_output_arrow(
+        frame, assignments, cfg, str(tmp_path / "ref")
+    )
+    # batch_rows=2 -> the (r3,r4) cluster and (r0,r1) cluster each straddle batches.
+    got = _stream_fs_dedupe_output_batched(
+        frame, assignments, cfg, str(tmp_path / "got"), batch_rows=2
+    )
+
+    assert _output_dict_and_sets(got, tmp_path / "got") == _output_dict_and_sets(
+        ref, tmp_path / "ref"
+    )
+    # Concrete: 1 singleton, 4 duped rows, 2 golden; __xform_ excluded.
+    assert got["unique_count"] == 1 and got["dupes_count"] == 4
+    assert got["golden_count"] == 2
+    import polars as pl
+
+    assert "__xform_x__" not in pl.read_parquet(got["dupes_path"]).columns
+
+
+def _partition_from_assignments(asn):
+    """Cluster partition (frozenset of frozensets of row_ids) from an
+    {__row_id__, __cluster_id__} assignments table -- cluster-id VALUES are
+    irrelevant, only the grouping is."""
+    import collections
+
+    rid = asn.column("__row_id__").to_pylist()
+    cid = asn.column("__cluster_id__").to_pylist()
+    groups = collections.defaultdict(set)
+    for r, c in zip(rid, cid):
+        groups[c].add(r)
+    return frozenset(frozenset(g) for g in groups.values())
+
+
+def test_external_wcc_array_and_dict_agree():
+    """The numpy array-UF (contiguous ids) and the dict-UF fallback (gapped ids)
+    produce the SAME partition on the same logical edge set. Locks the array-UF
+    rewrite against the reference dict path."""
+    import tempfile
+
+    import pyarrow as pa
+    from goldenmatch.backends.fs_out_of_core import (
+        _external_wcc_dict,
+        external_wcc_from_shards,
+        spill_pair_shard,
+    )
+
+    # Edges over contiguous ids {0..9}: components {0,1,2},{3,4},{5},{6,7,8,9}...
+    edges = [(0, 1), (1, 2), (3, 4), (6, 7), (7, 8), (8, 9)]
+    tbl = pa.table({
+        "id_a": pa.array([a for a, _ in edges], pa.int64()),
+        "id_b": pa.array([b for _, b in edges], pa.int64()),
+        "score": pa.array([0.9] * len(edges), pa.float64()),
+    })
+    d = tempfile.mkdtemp()
+    shard = spill_pair_shard(tbl, d, 0)
+
+    all_ids = range(0, 10)  # contiguous -> array-UF fast path
+    asn_arr, n_arr = external_wcc_from_shards([shard], all_ids, 100, None)
+    asn_dict, n_dict = _external_wcc_dict([shard], list(all_ids), None)
+
+    assert n_arr == n_dict == len(edges)
+    assert asn_arr.num_rows == asn_dict.num_rows == 10
+    assert _partition_from_assignments(asn_arr) == _partition_from_assignments(asn_dict)
+    # Singletons (5) present as their own cluster.
+    assert frozenset([5]) in _partition_from_assignments(asn_arr)
+    # Threshold filter drops the sub-cut edge on BOTH paths identically.
+    tbl2 = pa.table({
+        "id_a": pa.array([0, 3], pa.int64()), "id_b": pa.array([1, 4], pa.int64()),
+        "score": pa.array([0.9, 0.2], pa.float64()),
+    })
+    shard2 = spill_pair_shard(tbl2, d, 1)
+    a_arr, _ = external_wcc_from_shards([shard2], range(0, 5), 100, 0.5)
+    a_dict, _ = _external_wcc_dict([shard2], list(range(0, 5)), 0.5)
+    assert _partition_from_assignments(a_arr) == _partition_from_assignments(a_dict)
+
+
+def test_bucketed_parallel_scoring_parity(tmp_path, monkeypatch):
+    """Concurrent shard scoring (workers>1) yields byte-identical output to the
+    serial path (workers=1) -- the external WCC is invariant to edge/shard order,
+    so parallelism changes only the wall."""
+    import types
+
+    from goldenmatch.backends.fs_out_of_core import run_fs_dedupe_bucketed
+
+    df = _bigger_df()
+    mk = _make_probabilistic_mk()
+    blocking = BlockingConfig(
+        strategy="multi_pass",
+        passes=[BlockingKeyConfig(fields=["zip"]),
+                BlockingKeyConfig(fields=["last_name"])],
+    )
+    em = _train(df, blocking, mk)
+    cfg = types.SimpleNamespace(golden_rules=None)
+
+    monkeypatch.setenv("GOLDENMATCH_FS_BUCKET_SCORE_WORKERS", "1")
+    serial = run_fs_dedupe_bucketed(df, blocking, mk, em, cfg, str(tmp_path / "s"))
+    monkeypatch.setenv("GOLDENMATCH_FS_BUCKET_SCORE_WORKERS", "4")
+    par = run_fs_dedupe_bucketed(df, blocking, mk, em, cfg, str(tmp_path / "p"))
+
+    for k in ("unique_count", "dupes_count", "golden_count"):
+        assert serial[k] == par[k], k
+    assert (
+        _partition_set_from_parquet(serial["dupes_path"])
+        == _partition_set_from_parquet(par["dupes_path"])
+    )
+
+
+def test_bucketed_golden_chunked_write_parity(tmp_path, monkeypatch):
+    """The golden build+write is chunked by cluster (`__cluster_id__ % n`) to
+    bound the per-cluster survivorship transient at scale (the 50M OOM lever).
+    Forcing MANY chunks (tiny threshold) must produce byte-identical golden to the
+    single-chunk build -- clusters are independent, so chunk assignment/order is
+    irrelevant, and `% n` keeps every cluster's rows in ONE chunk (never split)."""
+    import types
+
+    import polars as pl
+    from goldenmatch.backends import fs_out_of_core as F
+    from goldenmatch.backends.fs_out_of_core import run_fs_dedupe_bucketed
+
+    df = _bigger_df()
+    mk = _make_probabilistic_mk()
+    blocking = BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])])
+    em = _train(df, blocking, mk)
+    cfg = types.SimpleNamespace(golden_rules=None)
+
+    monkeypatch.setattr(F, "_GOLDEN_BUILD_CHUNK_ROWS", 10**9)  # single chunk
+    one = run_fs_dedupe_bucketed(df, blocking, mk, em, cfg, str(tmp_path / "one"))
+    monkeypatch.setattr(F, "_GOLDEN_BUILD_CHUNK_ROWS", 1)  # one cluster per chunk
+    many = run_fs_dedupe_bucketed(df, blocking, mk, em, cfg, str(tmp_path / "many"))
+
+    assert one["golden_count"] == many["golden_count"] >= 1
+    g1 = pl.read_parquet(one["golden_path"])
+    g2 = pl.read_parquet(many["golden_path"])
+    assert g1.sort(by=g1.columns).equals(g2.sort(by=g2.columns))
+
+
+def test_batched_output_empty_golden_unlinks_stale(tmp_path):
+    """When a run yields no golden (all singletons or all oversized), the batched
+    output unlinks a prior-run golden.parquet and returns golden_path=None --
+    matching the resident function's empty-golden contract."""
+    import types
+
+    import pyarrow as pa
+    from goldenmatch.backends.fs_out_of_core import _stream_fs_dedupe_output_batched
+
+    out = tmp_path / "out"
+    out.mkdir()
+    stale = out / "golden.parquet"
+    stale.write_bytes(b"stale")  # a prior run's file
+
+    frame = pa.table(
+        {"__row_id__": pa.array([1, 2, 3], pa.int64()), "v": ["a", "b", "c"]}
+    )
+    # All singletons -> no golden.
+    assignments = pa.table(
+        {
+            "__row_id__": pa.array([1, 2, 3], pa.int64()),
+            "__cluster_id__": pa.array([0, 1, 2], pa.int64()),
+        }
+    )
+    res = _stream_fs_dedupe_output_batched(
+        frame, assignments, types.SimpleNamespace(golden_rules=None), str(out)
+    )
+    assert res["golden_count"] == 0
+    assert res["golden_path"] is None
+    assert not stale.exists()  # stale golden.parquet removed
+
+
 def test_fs_streaming_route_selects_orchestrator(monkeypatch):
     from goldenmatch.backends.fs_out_of_core import fs_streaming_route
 
     monkeypatch.delenv("GOLDENMATCH_FS_OUT_OF_CORE", raising=False)
     for src, expected in (
-        ("sequential", "sequential"), ("spill", "spill"), ("duckdb", "duckdb"),
+        ("sequential", "sequential"), ("spill", "spill"),
+        ("bucketed", "bucketed"), ("duckdb", "duckdb"),
         ("frame", None), ("eager", None), ("auto", None),
     ):
         monkeypatch.setenv("GOLDENMATCH_FS_BLOCK_SOURCE", src)
@@ -730,6 +1177,35 @@ def test_dedupe_to_parquet_spill_parity_with_in_memory(tmp_path, monkeypatch):
     res = dedupe_to_parquet(str(csv_path), out_dir=str(out_dir), config=cfg)
     assert res["streaming"] is True
     assert res["spill"] is True
+    stream_parts = _partition_set_from_parquet(res["dupes_path"])
+
+    assert stream_parts == sorted(mem_parts)
+
+
+def test_dedupe_to_parquet_bucketed_parity_with_in_memory(tmp_path, monkeypatch):
+    """dedupe_to_parquet under GOLDENMATCH_FS_BLOCK_SOURCE=bucketed (the
+    frame-residency per-pass-disk-bucketing route) partitions the SAME records as
+    the default in-memory FS route — end-to-end through the pipeline dispatch."""
+    import polars as pl
+    from goldenmatch import dedupe_df, dedupe_to_parquet
+
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+    monkeypatch.delenv("GOLDENMATCH_FS_OUT_OF_CORE", raising=False)
+
+    csv_path = tmp_path / "people.csv"
+    _make_person_csv(csv_path)
+    df = pl.read_csv(csv_path)
+    cfg = _fs_person_config()
+
+    monkeypatch.setenv("GOLDENMATCH_FS_BLOCK_SOURCE", "eager")
+    mem = dedupe_df(df, config=cfg)
+    mem_parts = _partitions(mem)
+
+    monkeypatch.setenv("GOLDENMATCH_FS_BLOCK_SOURCE", "bucketed")
+    out_dir = tmp_path / "out"
+    res = dedupe_to_parquet(str(csv_path), out_dir=str(out_dir), config=cfg)
+    assert res["streaming"] is True
+    assert res["bucketed"] is True
     stream_parts = _partition_set_from_parquet(res["dupes_path"])
 
     assert stream_parts == sorted(mem_parts)

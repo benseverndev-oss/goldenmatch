@@ -19,3 +19,22 @@ def test_alias_transforms_registered():
     gn = reg.get_transform("refdata_given_name_canonical")
     assert are_equivalent("Bob", "Robert")                 # precondition from the data
     assert gn.transform("Bob") == gn.transform("Robert")   # same set -> same canonical
+
+
+def test_bundled_transforms_survive_a_registry_reset():
+    """`PluginRegistry.reset()` must not permanently strip the bundled plugins.
+
+    refdata registers its scorers/transforms as an import-time side effect, and
+    a module body cannot run twice -- so before the bootstrap replay, ANY test
+    that reset the singleton left `refdata_business_canonical` unregistered for
+    the rest of the process. Under xdist that surfaced only when a resetting
+    test happened to precede this file in the same worker, so it read as
+    shard-membership flake instead of the state bug it is.
+    """
+    import goldenmatch.refdata  # noqa: F401  -- the import-time registration
+
+    assert PluginRegistry.instance().has_transform("refdata_business_canonical")
+    PluginRegistry.reset()
+    reg = PluginRegistry.instance()
+    assert reg.has_transform("refdata_business_canonical")
+    assert reg.has_transform("refdata_given_name_canonical")

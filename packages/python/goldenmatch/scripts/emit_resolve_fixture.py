@@ -91,7 +91,7 @@ def main() -> None:
         summary = resolve_clusters(
             clusters=run["clusters"],
             df=df,
-            scored_pairs=run["scored_pairs"],
+            scored_pairs=run["scored_pairs"] or [],
             matchkey_name="identity",
             store=store,
             run_name=run["run_name"],

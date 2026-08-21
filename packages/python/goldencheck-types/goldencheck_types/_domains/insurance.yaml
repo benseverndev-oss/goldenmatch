@@ -52,3 +52,35 @@ types:
     value_signals:
       max_unique: 20
     suppress: ["uniqueness", "range_distribution"]
+
+# Entity roles (schema v4) — see finance.yaml for the roles-vs-types contract.
+roles:
+  policyholder:
+    kind: person
+    name_hints: ["policyholder", "insured", "member", "subscriber"]
+    typical_types: ["policy", "coverage", "premium"]
+
+  beneficiary:
+    kind: person
+    name_hints: ["beneficiary", "dependent"]
+    typical_types: ["policy"]
+
+  claimant:
+    kind: person
+    name_hints: ["claimant"]
+    typical_types: ["claim"]
+
+  adjuster:
+    kind: person
+    name_hints: ["adjuster", "examiner"]
+    typical_types: ["claim"]
+
+  underwriter:
+    kind: organization
+    name_hints: ["underwriter", "carrier", "insurer"]
+    typical_types: ["policy", "premium"]
+
+  broker:
+    kind: organization
+    name_hints: ["broker", "agency", "producer"]
+    typical_types: ["policy", "premium"]

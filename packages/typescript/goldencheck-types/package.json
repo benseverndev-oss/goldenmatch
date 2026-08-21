@@ -1,6 +1,6 @@
 {
   "name": "goldencheck-types",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Shared TypeScript types and domain schemas for the goldencheck data-quality toolkit",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -13,7 +13,7 @@
       "require": "./dist/index.cjs"
     }
   },
-  "files": ["dist", "domains"],
+  "files": ["dist", "domains", "llms.txt"],
   "engines": { "node": ">=20" },
   "scripts": {
     "build": "tsup",
@@ -23,7 +23,7 @@
     "clean": "rimraf dist"
   },
   "dependencies": {
-    "js-yaml": "^4.3.0"
+    "js-yaml": "^4.3.1"
   },
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",

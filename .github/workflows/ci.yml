@@ -52,6 +52,12 @@ jobs:
       action: ${{ steps.filter.outputs.action }}
       dbt: ${{ steps.filter.outputs.dbt }}
       ci_workflow: ${{ steps.filter.outputs.ci_workflow }}
+      # any_workflow gates only workflow_lint's YAML validation. Separate from
+      # ci_workflow so widening it cannot change force_all's merge-queue meaning.
+      any_workflow: ${{ steps.filter.outputs.any_workflow }}
+      claude_refs: ${{ steps.filter.outputs.claude_refs }}
+      scripts_lint: ${{ steps.filter.outputs.scripts_lint }}
+      docs_regen: ${{ steps.filter.outputs.docs_regen }}
       # force_all: forces the full job matrix + the dynamic python matrix,
       # bypassing the path filters. True on (1) workflow_dispatch run_all=true,
       # and (2) a merge_group entry that edits ci.yml itself (so the filter
@@ -94,7 +100,7 @@ jobs:
       goldenhnsw: ${{ steps.filter.outputs.goldenhnsw }}
       hnsw: ${{ steps.filter.outputs.hnsw }}
       distributed: ${{ steps.filter.outputs.distributed }}
-      sail: ${{ steps.filter.outputs.sail }}
+      spark: ${{ steps.filter.outputs.spark }}
       readme_callouts: ${{ steps.filter.outputs.readme_callouts }}
       docs: ${{ steps.filter.outputs.docs }}
       wasm_score: ${{ steps.filter.outputs.wasm_score }}
@@ -121,6 +127,7 @@ jobs:
       quality_gate: ${{ steps.filter.outputs.quality_gate }}
       api_parity: ${{ steps.filter.outputs.api_parity }}
       native_symbols: ${{ steps.filter.outputs.native_symbols }}
+      downstream_symbols: ${{ steps.filter.outputs.downstream_symbols }}
       config_matrix: ${{ steps.filter.outputs.config_matrix }}
       er_matcher: ${{ steps.filter.outputs.er_matcher }}
     steps:
@@ -207,16 +214,27 @@ jobs:
   # matrix still re-validates the filter wiring at merge-queue time (force_all).
   workflow_lint:
     needs: changes
-    if: needs.changes.outputs.ci_workflow == 'true' || needs.changes.outputs.force_all == 'true'
+    # any_workflow, not ci_workflow: the YAML validation below must run for an
+    # edit to ANY of the ~118 workflow files, not just ci.yml/filters.yml. It was
+    # gated on ci_workflow and therefore never ran for the other ~115 -- which is
+    # how a duplicate `if:` key reached main unchecked.
+    if: needs.changes.outputs.any_workflow == 'true' || needs.changes.outputs.ci_workflow == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-      - name: Validate workflow YAML + lint
+      # Was an inline `yaml.safe_load` one-liner. safe_load ACCEPTS duplicate
+      # mapping keys and silently keeps the last, so a second `if:` on a step
+      # parsed clean while making the guard inert. The script uses a loader that
+      # rejects duplicates.
+      - name: Validate workflow YAML (parse + no duplicate keys)
         shell: bash
         run: |
-          python3 -m pip install --quiet pyyaml
-          python3 -c "import sys,glob,yaml; [yaml.safe_load(open(f)) for f in glob.glob('.github/workflows/*.yml')]; print('all workflow YAML parses')"
+          python3 -m pip install --quiet pyyaml pytest
+          python3 scripts/check_workflow_yaml.py
+      - name: Gate unit tests (the duplicate-key detector must actually detect)
+        shell: bash
+        run: python3 -m pytest scripts/test_workflow_yaml.py -q
       # #1846: parsing is not meaning. A path filter that lists too few paths
       # makes its job go SILENT on exactly the changes it exists to catch --
       # quality_gate pinned f1_probabilistic while not watching
@@ -342,6 +360,10 @@ jobs:
       # optional `documents` extra; install it so tests/documents RUN rather than error at
       # collection (missing PIL/fitz). Same rationale as the datafusion extra above.
       - run: uv pip install -e 'packages/python/goldenmatch[documents]'
+      # Ontology-layer (goldenmatch.semantic.ontology) tests need rdflib from the
+      # optional `ontology` extra; install it so tests/test_ontology.py RUN rather
+      # than importorskip-SKIP (a false green). Same rationale as the extras above.
+      - run: uv pip install -e 'packages/python/goldenmatch[ontology]'
       # Suite-wide lints run once (shard 1), not per shard.
       - if: matrix.shard == 1
         run: uv run ruff check packages/python/goldenmatch
@@ -427,7 +449,25 @@ jobs:
             --ignore=packages/python/goldenmatch/tests/test_memory_e2e.py \
             --deselect 'tests/test_memory_pipeline.py::test_pipeline_applies_seeded_correction' \
             --deselect 'tests/test_memory_pipeline.py::test_pipeline_persists_stale_pairs_to_review_queue' \
-            --deselect 'tests/test_memory_postflight.py::test_postflight_renders_memory_section'
+            --deselect 'tests/test_memory_postflight.py::test_postflight_renders_memory_section' \
+            --deselect 'tests/test_suggest_full_dist.py::test_full_dist_on_lowers_to_high_side_valley_when_threshold_far_above'
+        # ^ The last deselect: that test is OOM-killed under -n auto and runs
+        # SERIALLY further down instead (see the step below).
+        #
+        # DESELECT, NOT --ignore, and the distinction is load-bearing: --ignore
+        # drops the file from COLLECTION, which changes the durations pytest-split
+        # groups by and reshuffles every shard. Tried it -- shard 3 went 4,533 ->
+        # 5,088 tests and 410 of them died on a polars lazy-import recursion
+        # (polars-python py_modules.rs:19) that the previous grouping never hit.
+        # --deselect happens AFTER collection, so the groups stay byte-identical
+        # and only this one test is removed here.
+        #
+        # The OOM is established, not assumed: PYTHONFAULTHANDLER=1 produced NO
+        # dump, and faulthandler catches every fatal signal EXCEPT the uncatchable
+        # SIGKILL -- the same silent-'node down'-no-traceback signature the
+        # heavy-lane note below already documents. Details and ruled-out
+        # alternatives: docs/superpowers/notes/2026-08-18-suggest-full-dist-shard-crash.md
+
         # ^ Shard-isolation-fragile (same class as the already-ignored
         # test_memory_e2e.py): a test co-located in the shard clobbers a core
         # transform/scorer registration, so the memory-correction candidate pair
@@ -443,10 +483,33 @@ jobs:
         # shard membership happened to separate them from the clobberer --
         # any new test file reshuffles pytest-split groups and re-exposes it
         # (bit W2a PR #1632). --ignore= takes filesystem paths and is fine.
+      # test_suggest_full_dist OOM-kills its xdist worker under `-n auto` --
+      # exactly the failure the heavy-lane note below describes ("silent 'node
+      # down', no traceback"). Confirmed rather than assumed: PYTHONFAULTHANDLER=1
+      # produced NO dump, and faulthandler catches every fatal signal EXCEPT the
+      # uncatchable SIGKILL, so the kernel OOM killer took it. It surfaced on
+      # PR #2664 because four new test files reshuffle pytest-split groups and
+      # changed which memory-heavy tests share a worker.
+      #
+      # It runs HERE rather than in python_goldenmatch_heavy because that lane
+      # syncs `--no-install-package goldenmatch-native` and this test skips
+      # without the native suggest_config kernel -- relocating it would convert
+      # an OOM into a silent skip. This job already built native, so the file
+      # just needs the full runner memory: serial (no `-n`), shard 1 only so it
+      # runs once instead of three times.
+      - name: pytest (serial + native, OOM-prone under -n auto)
+        if: matrix.shard == 1
+        env:
+          COVERAGE_FILE: coverage_shard${{ matrix.shard }}_serial.dat
+        run: |
+          uv run pytest \
+            'packages/python/goldenmatch/tests/test_suggest_full_dist.py::test_full_dist_on_lowers_to_high_side_valley_when_threshold_far_above' \
+            --timeout=300 --timeout-method=thread \
+            --cov=goldenmatch --cov-report=
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         with:
           name: gm-cov-shard-${{ matrix.shard }}
-          path: coverage_shard${{ matrix.shard }}.dat
+          path: coverage_shard${{ matrix.shard }}*.dat
           retention-days: 1
           if-no-files-found: error
 
@@ -876,6 +939,14 @@ jobs:
           assert r['f1'] >= 0.90, f'Febrl3 smoke regressed: {r}'
           print('febrl3 smoke F1=', r['f1'])
           "
+      - name: Committed benchmark report is not stale
+        shell: bash
+        run: |
+          # The committed SoT doc must match its JSON (benchmarks.yml regenerates
+          # both). This catches a hand-edited docs/benchmarks/latest-results.md
+          # without needing any real-dataset run.
+          uv run python scripts/run_benchmarks.py \
+            --report docs/benchmarks/latest-results.md --check
       - name: Smoke summary
         if: always()
         shell: bash
@@ -1025,6 +1096,99 @@ jobs:
   # native-kernel references against the kernel's exports. Box-safe and
   # stdlib-only -- no uv sync / no cargo build (the checker + tests are pure
   # stdlib static analysis), so a bare system Python + pytest is all it needs.
+  # Out-of-workspace consumers (goldengraph, goldenmatch-kg, er-kg-bench) install
+  # goldenmatch from SOURCE on their own path-filtered lanes -- lanes a goldenmatch
+  # change never triggers. This reconciles their references against what goldenmatch
+  # actually exports, so deleting a depended-on symbol fails on the PR that does it
+  # rather than 15 days later when something unrelated happens to fire their lane.
+  downstream_symbols:
+    needs: changes
+    if: needs.changes.outputs.downstream_symbols == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.13"
+      # Resolution imports goldenmatch for real, so it reflects what a consumer gets.
+      - name: Install goldenmatch
+        run: pip install -e packages/python/goldenmatch
+      - name: Reconcile downstream references
+        run: python scripts/check_downstream_symbols.py
+      - name: Gate unit tests
+        run: |
+          pip install pytest
+          python -m pytest scripts/test_downstream_symbols.py -q
+
+  # scripts/ holds the gates ci-required leans on, and was the one Python
+  # directory no lint ever reached -- the python matrix lints
+  # packages/python/<pkg> only.
+  scripts_lint:
+    needs: changes
+    if: needs.changes.outputs.scripts_lint == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      # `uv run ruff`, exactly as the package lanes invoke it, so BOTH the rule
+      # set (root pyproject [tool.ruff.lint]) and the ruff VERSION are shared.
+      # Pinning a version here instead looked tidier and was wrong: uvx ruff@0.9.2
+      # (the pre-commit pin) reports 24 findings the workspace ruff does not, so
+      # the job would have landed red against a scripts/ tree that is clean under
+      # the linter every other lane runs.
+      - name: Sync workspace (resolves the same ruff the package lanes use)
+        run: uv sync --no-install-workspace
+      - name: Ruff (scripts/)
+        run: uv run ruff check scripts/
+      # This job is gated exactly on `scripts/**`, so it is the right place to
+      # RUN the scripts/ unit tests and not merely lint them -- a test that CI
+      # only ever lints is the "a check exists and does not fire" class.
+      # Network-free: `_ensure_datasets` is stubbed, so nothing here fetches.
+      # dqbench_adapters: the DBLP-ACM adapter read `.height` on whatever
+      # `match_df` returned, which is polars-only, so the arrow lane took the
+      # weekly `benchmarks` run red for a week (#2457). That lane is not in
+      # ci-required and runs on a schedule, so nothing caught it at PR time.
+      # `--with polars pyarrow`: this job syncs with --no-install-workspace, so
+      # neither is present, and the leipzig test is ABOUT polars/arrow interop --
+      # it cannot be written to skip when they are missing without becoming the
+      # check that does not fire. Added ephemerally, same idiom as er_matcher's
+      # `uv run --with scikit-learn`.
+      - name: Pytest (scripts/ unit tests)
+        run: |
+          uv run --with polars --with pyarrow \
+            pytest scripts/test_run_benchmarks_download.py \
+                   scripts/dqbench_adapters/test_leipzig_eval.py -q
+
+  # Every repo path a CLAUDE.md names must exist. These files are loaded as
+  # authoritative agent context, so a dead pointer does not merely fail to help --
+  # it sends the reader somewhere empty and they conclude the thing was never
+  # built. 34 such references had accumulated when this landed.
+  claude_refs:
+    needs: changes
+    if: needs.changes.outputs.claude_refs == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.13"
+      - name: Every path a CLAUDE.md names exists
+        run: python scripts/check_claude_refs.py
+      # The splits in #2445/#2446 were a one-time cut against a +208/-5-per-month
+      # habit. Without a ceiling they regrow.
+      - name: CLAUDE.md files are within their context budget
+        run: python scripts/check_context_budget.py --show
+      - name: Gate unit tests
+        run: |
+          pip install pytest
+          python -m pytest scripts/test_claude_refs.py scripts/test_context_and_commit_gates.py -q
+
   native_symbols:
     needs: changes
     if: needs.changes.outputs.native_symbols == 'true' || needs.changes.outputs.force_all == 'true'
@@ -1764,6 +1928,44 @@ jobs:
       - run: cargo clippy --manifest-path goldenphonetic-core/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --manifest-path score-core/Cargo.toml
       - run: cargo clippy --manifest-path score-core/Cargo.toml -- -D warnings
+      # score-cabi: the C ABI over score-core, for JVM (Panama/JNI) hosts. Its
+      # own [workspace] like every other pyo3-free sibling, so it needs its own
+      # lines here -- and it gets them in the BLOCKING `rust` job rather than an
+      # informational lane, because it wraps the canonical scorer dispatcher and
+      # its whole claim is that a score is identical across bindings. An
+      # unbuilt binding cannot make that claim.
+      - run: cargo test --manifest-path score-cabi/Cargo.toml
+      - run: cargo clippy --manifest-path score-cabi/Cargo.toml --all-targets -- -D warnings
+      # Build the cdylib too: `cargo test` links the rlib, so a cdylib-only
+      # failure (a symbol that does not export, a link error) would pass the
+      # tests and ship a library no host can load.
+      - run: cargo build --release --manifest-path score-cabi/Cargo.toml
+      # score-jni: the JNI binding over score-cabi, so a Spark executor JVM calls
+      # the kernel directly instead of forking a Python worker per batch. Its own
+      # [workspace] again, so its own lines. Gated HERE as well as in the
+      # spark_connect lane because that lane is path-filtered: a change to
+      # score-core or score-cabi that broke this binding would otherwise not be
+      # compiled by anything until someone touched a Spark file.
+      # transforms-core (2026-08-13): the pyo3-free transform chain. Written
+      # because there was NO Rust implementation -- verified against origin/main,
+      # not one file under packages/rust/ mentioned apply_transform or any
+      # sibling -- so normalization was Python-only and a Spark cluster needed a
+      # packed virtualenv to lowercase a column. Its unit tests pin the parity
+      # decisions (Python counts U+001C..U+001F as whitespace and Rust does not;
+      # slicing is by code point; honorifics include POST-nominals).
+      # survivorship-core (2026-08-13): the pyo3-free golden-record merge.
+      # Written because `merge_field` existed in Rust only inside native/, which
+      # is pyo3+pyarrow AND is the fused columnar INDICES kernel, not this. Its
+      # unit tests pin the TIE-BREAKS -- Python keeps the first maximum and
+      # Rust's max_by_key keeps the last, and a tie resolved the other way is a
+      # different golden record with no error attached.
+      - run: cargo test --manifest-path survivorship-core/Cargo.toml
+      - run: cargo clippy --manifest-path survivorship-core/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --manifest-path transforms-core/Cargo.toml
+      - run: cargo clippy --manifest-path transforms-core/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --manifest-path score-jni/Cargo.toml
+      - run: cargo clippy --manifest-path score-jni/Cargo.toml --all-targets -- -D warnings
+      - run: cargo build --release --manifest-path score-jni/Cargo.toml
       # fs-core (2026-07-17) is the pyo3-free single source of truth for the
       # Fellegi-Sunter block-scoring math (name/ensemble/tf scorers + normalize),
       # its own [workspace] path-dep of `native`. Exercised indirectly by the
@@ -2829,61 +3031,367 @@ jobs:
             --ignore=packages/python/goldenmatch/tests/test_distributed_randomized_contraction_wcc.py \
             --timeout=300 --durations=20 -v
 
-  # Sail tier (distributed, Spark Connect). The Sail tier re-expresses the
-  # one-box DataFusion spine's relational plan against PySpark/Spark Connect.
-  # This lane installs goldenmatch[sail] (pysail + pyspark[connect]) and runs
-  # tests/test_sail_*.py against an in-process Sail Spark Connect server (they
-  # SKIP everywhere else via pytest.importorskip). Spec:
-  # docs/superpowers/specs/2026-06-03-sail-tier-design.md (Stage S1).
-  sail:
+  # THE gating lane for the tier (spec: 2026-08-10-spark-native-execution-design).
+  # Runs the tier's tests against APACHE SPARK's own Connect server -- the thing
+  # customers actually operate -- rather than Sail's.
+  #
+  # P0 opened this lane advisory to find out whether the tier was genuinely
+  # backend-agnostic (goldenmatch/spark/session.py is `builder.remote(url)` with
+  # no Sail-specific call anywhere). It wasn't, quite: P0 surfaced 20 failures,
+  # P1 fixed 18 by shipping a Python environment to the executors, and P2a fixed
+  # the last 2 by truncating WCC plan lineage. It has since been green on three
+  # consecutive main runs (62 passed / 14 skipped / 0 failed).
+  #
+  # So it is now BLOCKING and in ci-required, as its P0 comment promised:
+  # "promote to required once green (P2)". `continue-on-error` is gone -- while
+  # it was set, both the job conclusion and `gh run view --json` reported success
+  # regardless of the real exit code (see CLAUDE.md), so a genuine red could not
+  # have blocked a merge and would have been easy to misread as passing.
+  #
+  # The 14 skips are test_sail_scorer_native_parity.py: they need the compiled
+  # kernel, which this lane deliberately does not install. That f32/f64 decision
+  # guard is gated by native_wheel_drift, not here -- this lane is NOT a gate on
+  # the native scorer, and promoting it does not make it one.
+  # J3: the aarch64 half of the jar, built and SELF-TESTED on real ARM hardware.
+  #
+  # The jar carries the Rust kernel as a resource per platform, and CI built
+  # linux-x86-64 only. A Graviton cluster -- which is most of the cheap capacity
+  # on AWS now, and increasingly the default -- would have found no resource for
+  # `linux-aarch64`, fallen back to the `exact`-only J0 scorer, and kept running.
+  # Slower and narrower, silently, on the exact deployment the JVM path exists to
+  # serve. That is the silent-fallback class this repo keeps paying for.
+  #
+  # NATIVE, not cross-compiled. Cross-compiling and checking the ELF header
+  # proves the file is aarch64-shaped; it does not prove the kernel RUNS there.
+  # This repo has a live example of a binary that built and loaded fine and then
+  # parked on a futex for 190s on one specific CPU (#688). So the library is
+  # built on an ARM runner and NativeSelfTest is executed on it -- 10,000 pairs
+  # across the JNI boundary, on the architecture in question.
+  #
+  # The artifact this job tests is the artifact `spark_connect` puts in the jar.
+  # Rebuilding it there would reintroduce the way "the tested jar" and "the
+  # shipped jar" can differ, which is the reason the jar is built inside the lane
+  # that tests it in the first place.
+  #
+  # No pyspark, no uv sync: NativeSelfTest exercises the Spark-FREE classes, so
+  # this job needs a JDK, cargo and nothing else.
+  spark_jvm_aarch64:
     needs: changes
-    if: needs.changes.outputs.sail == 'true' || needs.changes.outputs.force_all == 'true'
-    runs-on: ubuntu-latest
+    if: needs.changes.outputs.spark == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Build the native scorer library for aarch64
+        run: |
+          set -euo pipefail
+          cargo build --release \
+            --manifest-path packages/rust/extensions/score-jni/Cargo.toml
+          SO=packages/rust/extensions/score-jni/target/release/libgoldenmatch_score_jni.so
+          file "$SO"
+          # Assert the machine type rather than trusting the runner label. A
+          # mislabelled runner would otherwise ship an x86 library under the
+          # aarch64 resource path -- which fails at dlopen on every ARM executor,
+          # and falls back silently.
+          readelf -h "$SO" | grep -q "AArch64" \
+            || { echo "::error::$SO is not an AArch64 object"; exit 1; }
+          nm -D --defined-only "$SO" | grep -qE "Java_dev_goldensuite_spark_NativeScorer_scorePairwiseUtf8$" \
+            || { echo "::error::the JNI entry points are not exported"; exit 1; }
+      # The whole point: RUN it here. Spark-free classes only -- the two UDF
+      # classes need a Spark classpath and nothing in this job touches Spark.
+      # The source list this needs lives in the script: `ScorerSelection` gained
+      # a reference to `JarVersion` and this lane -- which nobody associates
+      # with a jar-packaging change -- was the thing that broke.
+      - name: Native scorer self-test ON aarch64
+        env:
+          ARCH: linux-aarch64
+        run: bash scripts/spark_jni_selftest.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: goldenmatch-score-jni-linux-aarch64
+          path: packages/rust/extensions/score-jni/target/release/libgoldenmatch_score_jni.so
+          if-no-files-found: error
+          retention-days: 1
+
+  spark_connect:
+    needs: [changes, spark_jvm_aarch64]
+    if: needs.changes.outputs.spark == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
+      # Real Spark's Connect server is JVM-side (unlike Sail's Rust one).
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
       - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
-      # Sail (Spark Connect) optional stack. NO Java: pyspark[connect] is a
-      # pure-gRPC client (no py4j/JVM launch) and the Sail server is Rust.
-      # Install VIA THE EXTRA so the pyproject [sail] entry is exercised.
-      - name: Install sail extra
-        run: uv pip install -e 'packages/python/goldenmatch[sail]'
-      # Run with the venv python directly (NOT `uv run`): the Sail server
-      # spawns in-process; mirror the ray lane's venv-python discipline.
-      - name: Sail connectivity gate (blocking)
+      # Install VIA THE EXTRA, matching the `sail` lane's discipline: [spark] is
+      # what a customer runs `pip install goldenmatch[spark]` to get, and this is
+      # the only place that entry is exercised. Before P2 this lane had to bypass
+      # the extra (`pyspark[connect]>=4` directly) because the only extra on offer
+      # was [sail], whose `<4` ceiling came from pysail's protocol target. Splitting
+      # the extras removed that ceiling, so the lane can now install the real thing.
+      - name: Install the spark extra (no Sail)
+        run: uv pip install -e 'packages/python/goldenmatch[spark]'
+      # [spark] is `>=3.5`, deliberately unbounded, so the RESOLVED version is not
+      # pinned by the extra. Assert it anyway: this lane exists to test Spark 4's
+      # Connect server, and a silent resolve back to 3.5 would leave it green while
+      # testing something else entirely.
+      - name: Confirm the resolved client is Spark 4
         run: |
-          .venv/bin/python -c "import pysail, pyspark; print('pyspark', pyspark.__version__)"
-          .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_sail_connectivity.py -v --timeout=300
-      # GATE (blocking): the S1 score/dedup pair-set parity vs a python-rapidfuzz
-      # reference -- the reason this lane exists at S1.
-      - name: Sail score/dedup parity gate (blocking)
+          .venv/bin/python -c "import pyspark,sys; v=int(pyspark.__version__.split('.')[0]); print('pyspark', pyspark.__version__); sys.exit(0 if v >= 4 else f'expected pyspark >= 4, resolved {pyspark.__version__}')"
+      # The load-bearing assertion. A lane that silently picked pysail up from
+      # the lockfile would prove nothing while looking green.
+      - name: Confirm Sail is absent
         run: |
-          .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_sail_score_parity.py -v --timeout=300
-      # GATE (blocking): connected-components partition parity -- the make-or-
-      # break S2 gate (the Union-Find holdout, computed distributed on Sail).
-      - name: Sail WCC parity gate (blocking)
+          .venv/bin/python -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('pysail') is None else 'pysail present; this lane must exercise real Spark')"
+      # P1: real Spark forks a Python worker with its own env, so the client's
+      # site-packages are absent -- that was P0's entire failure class. Build a
+      # PURPOSE-BUILT runtime venv and pack that, rather than packing
+      # CI's own uv-created .venv. Two reasons:
+      #   1. venv-pack rejects a uv venv outright ("Current environment is not a
+      #      virtual environment"), so `-p` at a stdlib venv is the supported path.
+      #   2. What a user should ship is goldenmatch + its RUNTIME deps, not a dev
+      #      environment carrying pytest and the whole workspace.
+      # CI is Linux, so this matches the executor platform by construction -- the
+      # trap documented in goldenmatch/sail/deps.py.
+      - name: Build + pack a runtime venv for the executors
         run: |
-          .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_sail_clustering_parity.py -v --timeout=300
-      # GATE (blocking): golden survivorship content parity per multi-member
-      # cluster vs the one-box merge_field primitive (S3).
-      - name: Sail golden parity gate (blocking)
+          set -euo pipefail
+          python -m venv /tmp/gmenv
+          /tmp/gmenv/bin/pip install --upgrade pip
+          # NO PANDAS. The tier's UDFs are `arrow_udf` over `pa.Array`, so the
+          # executor needs pyarrow (goldenmatch's own hard dependency) and
+          # nothing else. Shipping pandas was an UNDECLARED runtime dependency
+          # of a package that does not depend on it -- in a repo that evicted
+          # polars and made pyarrow the hard dep. pyarrow is named explicitly so
+          # the worker contract is stated rather than transitive. NOT -q: a
+          # silent pip failure is how you ship an env that unpacks fine and
+          # imports nothing.
+          /tmp/gmenv/bin/pip install ./packages/python/goldenmatch pyarrow
+          echo "--- shipped env contents ---"
+          /tmp/gmenv/bin/pip list | grep -iE "goldenmatch|goldenphonetic|pandas|pyarrow"
+          # cd out of the repo: its ROOT DIRECTORY is itself named `goldenmatch`,
+          # so a check run from there can import the source tree instead of the
+          # installed package and pass while the env is empty.
+          (cd /tmp && /tmp/gmenv/bin/python -c "import goldenmatch, goldenmatch.core.strsim, pyarrow; print('shipped env imports OK')")
+          # The gate: pandas must NOT be in the shipped environment. Without
+          # this the dependency creeps back the first time someone reaches for
+          # `pandas_udf`, and nothing would notice -- the env would simply grow.
+          # One-line python on purpose: a multi-line script inside `run:` has to
+          # survive YAML block parsing too, and the first attempt at this did not.
+          if /tmp/gmenv/bin/python -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('pandas') is None else 1)"; then
+            echo "shipped env is pandas-free"
+          else
+            echo "::error::pandas is in the shipped executor env; the tier is arrow-native (arrow_udf over pa.Array) and must not need it"
+            exit 1
+          fi
+          # venv-pack comes from the [spark] extra installed above -- NOT a
+          # separate `uv pip install` as before. Shipping executor deps is the
+          # whole reason the extra carries it, so resolving it from the extra is
+          # what proves a user following the docs gets a working tool.
+          #
+          # .zip, NOT .tar.gz, and the extension is load-bearing (#2531).
+          # `bin/python` in a venv is a SYMLINK to the interpreter the venv was
+          # built against. venv-pack's tar preserves that symlink, so the
+          # archive unpacks on an executor and then cannot execute -- it points
+          # at /opt/hostedtoolcache on this runner. Its zip writer dereferences
+          # the link instead (`ZipArchive.add_link` only preserves one under
+          # --zip-symlinks), so the interpreter travels BY VALUE.
+          #
+          # The exec bit survives: venv-pack stamps create_system=3 with the
+          # unix mode, Spark routes .zip to Hadoop's FileUtil.unZip, and that
+          # restores POSIX permissions for UNIX-platform entries (HADOOP-18145).
+          #
+          # This lane ran on tar.gz for months without noticing, because under
+          # local[*] the executor IS the driver and the symlink resolves. Do not
+          # switch it back.
+          .venv/bin/venv-pack -p /tmp/gmenv -o gm_env.zip --force
+          ls -lh gm_env.zip
+      # BOTH prefixes. The package renamed in P2 but the test files did not, so
+      # the tier's suite is split across test_sail_*.py (pre-rename) and
+      # test_spark_*.py (P1's executor-dependency tests, which this lane was NOT
+      # running -- the glob predated them). Renaming the files to match the
+      # package would shift pytest-split shard boundaries (CLAUDE.md), so the
+      # glob covers both instead.
+      # J0: build the JVM scorer jar here rather than in a separate job. This
+      # lane already has the JDK and the Spark jars, and the alternative is
+      # building it twice or passing it between jobs as an artifact -- both of
+      # which add a way for the tested jar and the shipped jar to differ.
+      #
+      # `--release 17` matters: Spark supports Java 17, 21 and 25, and the
+      # runner's JDK is only one of them. Compiling without it would produce a
+      # jar that runs here and fails on a 17 executor with UnsupportedClassVersionError.
+      # J2: the Rust kernel's JNI door, built BEFORE the jar because it ships
+      # INSIDE it. Riding in the jar is what keeps `addArtifact` sufficient --
+      # one file, nothing installed on the cluster, no `java.library.path`. A
+      # library the operator has to place on every executor would just replace
+      # the packed-virtualenv apparatus this arc exists to remove.
+      #
+      # This step builds `linux-x86-64` -- the runner's own architecture.
+      # `linux-aarch64` is built AND self-tested on real ARM hardware by
+      # `spark_jvm_aarch64` and downloaded below, so the binary that was tested
+      # is the binary that ships (J3).
+      - name: Build the native scorer library (JNI)
         run: |
-          .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_sail_golden_parity.py -v --timeout=300
-      # GATE (blocking): identity create + edge-emit parity vs the one-box
-      # resolve_clusters on a fresh store (S5) -- same_as edge-set + record->
-      # entity partition equivalence + count + determinism.
-      - name: Sail identity parity gate (blocking)
+          set -euo pipefail
+          cargo build --release \
+            --manifest-path packages/rust/extensions/score-jni/Cargo.toml
+          SO=packages/rust/extensions/score-jni/target/release/libgoldenmatch_score_jni.so
+          ls -lh "$SO"
+          # The kernel really is in there -- a library missing the symbol would
+          # load and then fail on first call, inside an executor.
+          nm -D --defined-only "$SO" | grep -E "Java_dev_goldensuite_spark_NativeScorer_(abiVersion|scorerIdCount|scorePairwiseUtf8)$" \
+            || { echo "::error::the JNI entry points are not exported from $SO"; exit 1; }
+      # J3: the aarch64 library, built AND self-tested on real ARM hardware by
+      # `spark_jvm_aarch64`. Downloaded rather than cross-compiled here, so the
+      # binary that was tested is the binary that ships -- rebuilding it would
+      # reintroduce exactly the "tested jar vs shipped jar" gap this lane's
+      # single-job jar build exists to close.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          name: goldenmatch-score-jni-linux-aarch64
+          path: /tmp/jni-aarch64
+      # The build itself lives in `scripts/build_spark_jar.sh` because it now has
+      # a SECOND caller: `publish-goldenmatch-spark-jar.yml`. Publishing forces a
+      # second build (a release runs on its own tag, and CI artifacts are per-run
+      # and expire), which is exactly the "tested jar vs shipped jar" gap this
+      # lane's single-job build exists to close. Sharing the script means the two
+      # jars are separate builds that cannot be built DIFFERENTLY, and the
+      # release re-runs the self-tests below before it publishes anything.
+      - name: Build the JVM scorer jar (x86-64 + aarch64)
+        env:
+          SO_X86_64: packages/rust/extensions/score-jni/target/release/libgoldenmatch_score_jni.so
+          SO_AARCH64: /tmp/jni-aarch64/libgoldenmatch_score_jni.so
         run: |
-          .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_sail_identity_parity.py -v --timeout=300
-      # GATE (blocking): the full Sail pipeline (load->...->golden[->identity])
-      # runs end-to-end on Sail (S4 + S5 emit_identity).
-      - name: Sail end-to-end pipeline gate (blocking)
+          set -euo pipefail
+          export SPARK_JARS="$(.venv/bin/python -c 'import pyspark, os; print(os.path.join(os.path.dirname(pyspark.__file__), "jars"))')"
+          bash scripts/build_spark_jar.sh
+      # The Spark-free half of the jar, gated before anything ships it. No JUnit:
+      # a test framework would mean a dependency resolver, and this package has
+      # no build system on purpose (one small jar does not justify a fourth
+      # toolchain). A main() that exits non-zero is enough to gate on.
+      - name: JVM scorer self-test
         run: |
-          .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_sail_pipeline.py -v --timeout=300
+          set -euo pipefail
+          JVM=packages/jvm/goldenmatch-spark
+          javac --release 17 -encoding UTF-8 -d "$JVM/build/test-classes" -cp "$JVM/build/classes" \
+            "$JVM"/test/dev/goldensuite/spark/*.java
+          java -cp "$JVM/build/classes:$JVM/build/test-classes" \
+            dev.goldensuite.spark.SelfTest
+      # J2's end-to-end gate with no Spark in the picture: extract the library
+      # from the classpath, dlopen it, cross the JNI boundary, score 10,000
+      # pairs. Separate from the step above because it REQUIRES the library --
+      # SelfTest must stay runnable with nothing built, and a test that learns to
+      # skip is how a lane goes green while testing nothing.
+      #
+      # It refuses to skip: CI built that library one step ago, so "not loadable"
+      # here means the build produced something the JVM cannot use.
+      - name: JVM native scorer self-test (JNI into score-cabi)
+        run: |
+          set -euo pipefail
+          JVM=packages/jvm/goldenmatch-spark
+          java -cp "$JVM/build/classes:$JVM/build/test-classes" \
+            dev.goldensuite.spark.NativeSelfTest
+      # `java -jar` is the preflight check the README tells operators to run on
+      # a box that resembles an executor, before submitting anything. It is
+      # gated HERE rather than only in the publish workflow for two reasons:
+      # every PR touching the jar exercises it, and it is the only test that
+      # runs against the ASSEMBLED jar -- the self-tests above use loose
+      # classes, where JarVersion cannot find a manifest and NativeLibrary
+      # extracts from a build directory rather than from jar resources.
+      #
+      # Exit 0 means the native kernel resolved; a fallback exits 1. That is the
+      # silent-fallback class this arc keeps paying for, made loud.
+      - name: The assembled jar runs its own preflight check
+        run: |
+          set -euo pipefail
+          JAR=packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
+          java -jar "$JAR"
+          # CI stamps no tag, so the version is the script's default. Assert it
+          # anyway: an empty or absent Implementation-Version reads as "unknown"
+          # and would go unnoticed until a release shipped an anonymous jar.
+          java -jar "$JAR" | head -1 | grep -qx "goldenmatch-spark 0.0.0-dev" \
+            || { echo "::error::the jar did not report its stamped version"; exit 1; }
+      # The J-arc's actual justification, measured rather than argued.
+      #
+      # Throughput was measured and the JVM path LOST (2.4x slower than the
+      # Python-worker path -- run 31656227516). What is left is deployment: a jar
+      # that `addArtifact` delivers, against a virtualenv that must be built for
+      # the executor platform and shipped. "No Python on the executors."
+      #
+      # That claim is unproven and, read against the source, only partly true:
+      # J2 moved SCORING into the JVM, but normalization, survivorship and the
+      # identity graph still define Python UDFs. Clustering defines none.
+      #
+      # Omitting the executor env cannot test this. Under `local[*]` the Python
+      # worker forks from the DRIVER's interpreter, which HAS goldenmatch -- so
+      # everything would pass and report that nothing needs Python on executors,
+      # which is false. So an env is shipped and it is deliberately EMPTY: any
+      # operation needing a Python worker now fails with ModuleNotFoundError
+      # exactly as it would on a cluster with no cluster-side install.
+      #
+      # continue-on-error: this is an INVENTORY, not a gate. Its failures are
+      # facts about the tier, and a red build would say "something broke" when
+      # what it found is where the work still is.
+      - name: Build a deliberately EMPTY executor env
+        run: |
+          set -euo pipefail
+          python -m venv /tmp/bare-env
+          # No goldenmatch, no pyarrow, nothing. Assert the emptiness -- an env
+          # that accidentally carried goldenmatch would make the inventory
+          # report jar-only support the tier does not have.
+          if /tmp/bare-env/bin/python -c "import goldenmatch" 2>/dev/null; then
+            echo "::error::the bare env can import goldenmatch; the inventory would be meaningless"
+            exit 1
+          fi
+          .venv/bin/venv-pack -p /tmp/bare-env -o bare_env.zip --force
+          ls -lh bare_env.zip
+      - name: Inventory -- what runs with NO Python on the executors
+        continue-on-error: true
+        env:
+          GOLDENMATCH_SPARK_REMOTE: "local[*]"
+          GOLDENMATCH_SPARK_PYENV: "bare_env.zip"
+          GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
+        run: |
+          .venv/bin/python scripts/spark_jar_only_inventory.py \
+            --out spark-jar-only-inventory.json
+      - name: Inventory summary
+        if: always()
+        run: |
+          if [ -f spark-jar-only-inventory.json ]; then
+            {
+              echo '## Spark: what runs with no Python on the executors'
+              echo '```json'
+              cat spark-jar-only-inventory.json
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Tier tests against Apache Spark Connect
+        env:
+          GOLDENMATCH_SPARK_REMOTE: "local[*]"
+          GOLDENMATCH_SPARK_PYENV: "gm_env.zip"
+          GOLDENMATCH_SPARK_JAR: packages/jvm/goldenmatch-spark/build/goldenmatch-spark.jar
+        run: |
+          .venv/bin/python -m pytest \
+            packages/python/goldenmatch/tests/test_sail_*.py \
+            packages/python/goldenmatch/tests/test_spark_*.py \
+            -v --timeout=600 --junitxml=spark-connect-results.xml
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        if: always()
+        with:
+          name: spark-connect-p0-results
+          path: spark-connect-results.xml
+          if-no-files-found: warn
 
   # dbt-goldensuite — restored after #464 dropped the lane that pointed at the
   # since-deleted packages/dbt/goldencheck and never re-pointed it at the merged
@@ -3002,9 +3510,15 @@ jobs:
           cargo pgrx install "--pg-config=/usr/lib/postgresql/${PG_VERSION}/bin/pg_config" --release --features "pg${PG_VERSION}" --no-default-features
           # pgrx 0.12.9 doesn't auto-emit the SQL extension file — copy the
           # handwritten ones into PG's extension dir so `CREATE EXTENSION`
-          # (installs default_version, now 0.16.0) and `ALTER EXTENSION ... UPDATE`
+          # (installs default_version, now 0.19.0) and `ALTER EXTENSION ... UPDATE`
           # find them. The schema files are the canonical declaration of public
           # function signatures.
+          cp sql/goldenmatch_pg--0.19.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
+          cp sql/goldenmatch_pg--0.18.0--0.19.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
+          cp sql/goldenmatch_pg--0.18.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
+          cp sql/goldenmatch_pg--0.17.0--0.18.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
+          cp sql/goldenmatch_pg--0.17.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
+          cp sql/goldenmatch_pg--0.16.0--0.17.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.16.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.15.0--0.16.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.15.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
@@ -3058,6 +3572,22 @@ jobs:
           # Confirm new v1.7-v1.12 functions registered alongside the originals.
           sudo -u postgres psql -p "${PGPORT}" -c "SELECT proname FROM pg_proc WHERE proname LIKE 'goldenmatch%' OR proname LIKE 'gm_%' ORDER BY proname;"
           sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 -c "SELECT goldenmatch.goldenmatch_score('John Smith'::TEXT, 'Jon Smyth'::TEXT, 'jaro_winkler'::TEXT);"
+          # goldenmatch_docs(): the in-SQL orientation function an agent on a bare
+          # connection calls to find the authoritative docs. Assert it is reachable
+          # with no arguments and that it really carries the pointers -- an empty
+          # or truncated include_str! would otherwise ship silently.
+          sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 <<'EOSQL'
+            DO $$
+            DECLARE d TEXT := goldenmatch.goldenmatch_docs();
+            BEGIN
+              IF d NOT LIKE '# goldenmatch_pg%' THEN
+                RAISE EXCEPTION 'goldenmatch_docs() did not return the llms.txt: %', left(d, 60);
+              END IF;
+              IF position('docs.bensevern.dev/docs/llms.txt' IN d) = 0 THEN
+                RAISE EXCEPTION 'goldenmatch_docs() is missing the suite agent index';
+              END IF;
+            END $$;
+          EOSQL
           # Cross-language determinism: the pure-Rust record fingerprint must
           # equal the pinned vector shared with Python / native C ABI / DuckDB.
           # (RAISE under ON_ERROR_STOP fails the lane on any mismatch.)
@@ -3536,6 +4066,83 @@ jobs:
   # packages/rust/extensions/duckdb/ alongside the Rust crates but the
   # main `python` matrix job doesn't see it (its dynamic-matrix only
   # enumerates packages/python/<pkg>). This lane fills that gap.
+
+      # FS training with NO embedded CPython (0.19.0, spec
+      # 2026-08-13-fs-em-rust-single-source-design). goldenmatch_train_em still
+      # bridges to Python because pair sampling + binning were never ported;
+      # this function starts from vectors the ENGINE counted, so it reaches the
+      # pyo3-free score-core::em_core kernel directly.
+      #
+      # A psql smoke and not a `#[pg_test]`: `cargo pgrx test` cannot run for
+      # this crate, so a pg_test compiles and never executes. These numbers are
+      # the SAME anchors score-core/tests/fixtures/em_counts_parity.json carries,
+      # so the SQL surface cannot drift from the wheel's trainer.
+      - name: psql smoke (FS EM from counts, no CPython)
+        run: |
+          set -euo pipefail
+          # PGPORT is a SHELL variable in the step above, not an env var, so it
+          # does not cross the step boundary -- `set -u` turned that into an
+          # unbound-variable exit rather than a silent default. Re-derived from
+          # pg_lsclusters exactly as that step does, NOT defaulted to 5432: the
+          # matrix runs three PG versions side by side and only one of them can
+          # own the default port, so a default would point this smoke at another
+          # version's cluster and test the wrong extension build.
+          PG_PORT=$(pg_lsclusters -h | grep "^${PG_VERSION}" | awk '{print $3}')
+          export PGPORT="${PG_PORT:-5432}"
+          sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 <<'EOSQL'
+            DO $$
+            DECLARE
+              j JSONB;
+            BEGIN
+              -- Case `two_level_learnable_only`: both fields free, so both
+              -- weights are log2(m/u) and neither takes the fixed ramp.
+              j := goldenmatch.goldenmatch_train_em_from_counts(
+                     ARRAY[2,2], ARRAY[1,1, 0,1, 1,0, 0,0],
+                     ARRAY[500,300,150,50]::float8[],
+                     ARRAY[0.9,0.1, 0.85,0.15]::float8[],
+                     ARRAY[false,false])::JSONB;
+              IF j ? 'error' THEN
+                RAISE EXCEPTION 'train_em_from_counts errored: %', j;
+              END IF;
+              IF abs((j->'match_weights'->0->>1)::float8 - 2.706681) > 1e-5
+                 OR abs((j->'match_weights'->1->>0)::float8 - (-2.111677)) > 1e-5 THEN
+                RAISE EXCEPTION 'learnable weights drifted from the score-core fixture: %',
+                  j->'match_weights';
+              END IF;
+
+              -- Case `near_unique_blocking_field_1836`: field 1 is conditioned,
+              -- so it must take the BOUNDED -3..+3 ramp and neutral u -- NOT an
+              -- estimate from the near-unique u it was handed. That is the
+              -- calibration failure that took F1 0.83 -> 0.57, and every wrong
+              -- variant of it still returns a valid-looking model.
+              j := goldenmatch.goldenmatch_train_em_from_counts(
+                     ARRAY[2,2], ARRAY[1,1, 0,1],
+                     ARRAY[500,300]::float8[],
+                     ARRAY[0.9,0.1, 0.999,0.001]::float8[],
+                     ARRAY[false,true])::JSONB;
+              IF (j->'match_weights'->1->>0)::float8 <> -3.0
+                 OR (j->'match_weights'->1->>1)::float8 <> 3.0 THEN
+                RAISE EXCEPTION 'a conditioned field did not take the fixed ramp: %',
+                  j->'match_weights'->1;
+              END IF;
+              IF (j->'u_probs'->1->>0)::float8 <> 0.5 THEN
+                RAISE EXCEPTION 'a conditioned field kept its random-pair u: %',
+                  j->'u_probs'->1;
+              END IF;
+
+              -- Bad input fails SOFT: an error envelope, not an aborted
+              -- transaction, because this runs inside larger queries.
+              j := goldenmatch.goldenmatch_train_em_from_counts(
+                     ARRAY[2,2], ARRAY[1,7], ARRAY[10]::float8[],
+                     ARRAY[0.9,0.1, 0.9,0.1]::float8[],
+                     ARRAY[false,false])::JSONB;
+              IF NOT (j ? 'error') THEN
+                RAISE EXCEPTION 'an out-of-range level was accepted: %', j;
+              END IF;
+
+              RAISE NOTICE 'FS EM from counts: OK (no CPython in this path)';
+            END $$;
+          EOSQL
   duckdb_extensions:
     needs: changes
     if: needs.changes.outputs.duckdb_extensions == 'true' || needs.changes.outputs.force_all == 'true'
@@ -3747,6 +4354,37 @@ jobs:
       - name: Docs cross-reference vs the matrix (${{ matrix.package }})
         # The other docs must not name an env knob the code no longer reads.
         run: uv run python scripts/gen_config_matrix.py --refs ${{ matrix.package }}
+        env:
+          POLARS_SKIP_CPU_CHECK: "1"
+          GOLDENMATCH_NATIVE: "0"
+          GOLDENCHECK_NATIVE: "0"
+          GOLDENFLOW_NATIVE: "0"
+          GOLDENPIPE_NATIVE: "0"
+          INFERMAP_NATIVE: "0"
+          GOLDENANALYSIS_NATIVE: "0"
+
+  # Single authoritative doc-drift gate (in ci-required). Regenerates the WHOLE
+  # derived-docs battery -- config-matrix, agent-manifest, agent-codemap,
+  # api-surface, suite-matrix, thesis-weaknesses, native docs + the prose count
+  # checks -- via ONE command and fails if the working tree drifted, printing the
+  # exact diff to commit. Collapses "did you regenerate all N artifacts?" (a chore
+  # that reddened this repo's config_matrix gate repeatedly) into `make docs` /
+  # `python scripts/regen_docs.py`. The per-artifact `--check`s in config_matrix
+  # remain (they also assert non-drift invariants); slimming those is a follow-up.
+  docs_regen:
+    needs: changes
+    if: needs.changes.outputs.docs_regen == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
+      - name: Regenerate the derived-docs battery; fail if the tree drifted
+        run: uv run python scripts/regen_docs.py --check
         env:
           POLARS_SKIP_CPU_CHECK: "1"
           GOLDENMATCH_NATIVE: "0"
@@ -4042,7 +4680,17 @@ jobs:
       - distributed_wcc
       # NB: distributed_broad is deliberately ABSENT -- it's continue-on-error
       # (known-fragile fixtures) and must not gate the merge queue.
-      - sail
+      # P2: the Spark tier gates on APACHE SPARK, not on Sail. `sail` is
+      # deliberately ABSENT -- it is continue-on-error and advisory (pysail
+      # tracks the 3.5 Connect protocol, so it can redden for reasons that say
+      # nothing about goldenmatch). `spark_connect` is the lane that speaks to
+      # the product goal, and it has been green on three consecutive main runs.
+      - spark_connect
+      # J3: listed DIRECTLY, not left to `spark_connect`'s `needs`. This summary
+      # treats `skipped` as a pass, and a job whose dependency FAILED is skipped
+      # -- so a broken aarch64 build would skip spark_connect and sail through
+      # here reporting nothing wrong. The jar it produces is half of what ships.
+      - spark_jvm_aarch64
       - pyright
       - version_consistency
       - readme_callouts
@@ -4054,7 +4702,11 @@ jobs:
       # were advisory -- a correct red couldn't block a merge. Now required.
       - api_parity
       - native_symbols
+      - downstream_symbols
+      - claude_refs
+      - scripts_lint
       - config_matrix
+      - docs_regen
       - er_matcher
     if: always()
     runs-on: ubuntu-latest

@@ -10,7 +10,7 @@ The [suite matrix](/suite-matrix) renders cross-language *surface* parity. This 
 
 ## Standing
 
-**2** open weakness(es) — 🟢 low 2. **8** resolved (archived below). Undeclared (a real divergence with no conformance level / contract): **0**.
+**3** open weakness(es) — 🟢 low 3. **8** resolved (archived below). Undeclared (a real divergence with no conformance level / contract): **0**.
 
 A weakness is a place the codebase does not yet fully meet the frame; each maps to one of the five decision tests (tenets). *Declared* means the divergence has a conformance level and a test — an accepted, contained cost — not an accident. The `declared: false` class is the dangerous one and is flagged below. Resolved items are archived off this live board (conformance v2 — the live list is the real risk surface, not a museum of closed wins) but kept for the record.
 
@@ -18,7 +18,7 @@ A weakness is a place the codebase does not yet fully meet the frame; each maps 
 
 | Tenet | Decision test | Open |
 |---|---|---|
-| **T1** | One authoritative semantic owner per capability (no second source of truth). | 1 |
+| **T1** | One authoritative semantic owner per capability (no second source of truth). | 2 |
 | **T2** | Conformance defines correctness (every divergence has a declared level + a test). | 0 |
 | **T3** | Kernelize on measurement (deferrals classified; no silent regress to fallback). | 0 |
 | **T4** | Compute vs control stay architecturally distinct (explicit, versioned seam). | 1 |
@@ -31,6 +31,7 @@ Ranked by severity. *Routing* applies the conformance-v2 default-routing test (0
 | Severity | Tenet | Declared | Routing | Weakness |
 |---|---|---|---|---|
 | 🟢 low | T4 | yes | — | Compute/control shared frame-residency budget: now a contract field (was env-only) |
+| 🟢 low | T1 | yes | opt-in (fallback default) | Semantic-layer structural certification (uniqueness-at-grain + fan-out) is single-sourced through key-integrity-core; Python-native + TS-wasm + SQL all bind that one kernel |
 | 🟢 low | T1 | yes | opt-in (fallback default) | Clustering + goldenanalysis frame kernels: both families now share a kernel (cluster-wasm + analysis-wasm) |
 
 ## Live harvest (auto-detected)
@@ -47,7 +48,6 @@ Static signals harvested directly from `parity/*.yaml` + each package's `_native
 **Fallback-only kernels** (a `-core` symbol the host references but the default does not run — `_FALLBACK_ONLY`):
 
 - `goldenflow`: `phone_validate`
-- `goldenmatch`: `sail_scoring`
 
 **Cross-language surface gaps** (declared Python-only / TS-only per surface — the same partition the [suite matrix](/suite-matrix) renders in full):
 
@@ -58,9 +58,9 @@ Static signals harvested directly from `parity/*.yaml` + each package's `_native
 | `goldenflow` | cli_commands | 4 | 0 |
 | `goldenflow` | transforms | 0 | 1 |
 | `goldenmatch` | a2a_skills | 15 | 13 |
-| `goldenmatch` | blocking_strategies | 1 | 0 |
-| `goldenmatch` | cli_commands | 8 | 0 |
-| `goldenmatch` | mcp_tools | 7 | 0 |
+| `goldenmatch` | blocking_strategies | 2 | 0 |
+| `goldenmatch` | cli_commands | 10 | 0 |
+| `goldenmatch` | mcp_tools | 10 | 0 |
 | `goldenpipe` | cli_commands | 1 | 0 |
 
 ## Resolved (archived)

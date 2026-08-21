@@ -1,6 +1,6 @@
 [project]
 name = "goldenpipe"
-version = "1.4.0"
+version = "1.5.0"
 description = "Pluggable pipeline framework for data quality workflows"
 readme = "README.md"
 license = {text = "MIT"}
@@ -38,7 +38,7 @@ golden-suite = ["goldencheck>=0.5.0", "goldenflow>=0.1.0", "goldenmatch>=1.2.0",
 tui = ["textual>=1.0"]
 api = ["fastapi>=0.110", "uvicorn>=0.30"]
 mcp = ["mcp>=1.28.1"]
-agent = ["aiohttp>=3.14.0"]
+agent = ["aiohttp>=3.14.3"]
 all = ["goldenpipe[golden-suite,tui,api,mcp,agent]"]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "pytest-aiohttp>=1.0", "httpx>=0.27", "ruff>=0.6", "pytest-cov>=5.0"]
 
@@ -48,7 +48,11 @@ goldenpipe = "goldenpipe.cli.main:app"
 [project.urls]
 Homepage = "https://github.com/benseverndev-oss/goldenmatch"
 Repository = "https://github.com/benseverndev-oss/goldenmatch"
-Documentation = "https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/python/goldenpipe#readme"
+Documentation = "https://docs.bensevern.dev/docs/goldenpipe"
+# Agent-facing entry point. PyPI renders these URLs and they are scraped,
+# so this is the discovery path for a tool that never clones the repo. The
+# same file ships INSIDE the wheel at goldenpipe/llms.txt.
+"AI agents (llms.txt)" = "https://docs.bensevern.dev/docs/llms.txt"
 Issues = "https://github.com/benseverndev-oss/goldenmatch/issues"
 Changelog = "https://github.com/benseverndev-oss/goldenmatch/blob/main/packages/python/goldenpipe/CHANGELOG.md"
 Author = "https://bensevern.dev"

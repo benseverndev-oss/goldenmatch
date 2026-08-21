@@ -33,8 +33,8 @@ def _green_profile() -> ComplexityProfile:
         ),
         blocking=BlockingProfile(
             keys_used=[["a"]], n_blocks=10, total_comparisons=500,
-            reduction_ratio=0.95, block_sizes_p50=10, block_sizes_p95=15,
-            block_sizes_p99=20, block_sizes_max=25,
+            reduction_ratio=0.95, block_sizes_p50=10, block_sizes_p95=11,
+            block_sizes_p99=11, block_sizes_max=11,
         ),
         scoring=ScoringProfile(
             n_pairs_scored=500, score_histogram=[0]*15 + [100]*5,
@@ -408,22 +408,27 @@ def test_rule_no_matches_resets_threshold_and_broadens_blocking():
 
 
 def test_rule_no_matches_does_not_fire_on_zero_candidates_compared():
-    """When candidates_compared==0 (singleton trap), rule_no_matches should NOT
-    fire — that's rule_blocking_singleton_trap's territory."""
+    """When candidates_compared==0 is a MEASURED zero (singleton trap),
+    rule_no_matches should NOT fire — that's rule_blocking_singleton_trap's
+    territory. `candidates_counted=True` is required to say this zero was
+    actually measured rather than merely absent (#2663) -- an absent count
+    (e.g. the bucket scorer, which never accumulates one, #2644) must NOT
+    take this branch; see test_rule_no_matches_bucket_route.py."""
     cfg = _config_with_blocking(threshold=0.85)
     profile = ComplexityProfile(
         data=DataProfile(n_rows=100, n_cols=2),
         blocking=BlockingProfile(reduction_ratio=0.99, n_blocks=100,
                                  block_sizes_p99=1, singleton_block_count=100),
         scoring=ScoringProfile(
-            n_pairs_scored=0, candidates_compared=0,  # blocking trapped everything
+            n_pairs_scored=0, candidates_compared=0, candidates_counted=True,
+            # blocking trapped everything, and we know it because it was measured
             mass_above_threshold=0.0,
             dip_statistic=0.0,
         ),
         cluster=ClusterProfile(transitivity_rate=1.0),
     )
     out = rule_no_matches(profile, cfg, RunHistory())
-    # candidates_compared=0 → singleton trap → rule_no_matches defers
+    # candidates_compared=0 (measured) → singleton trap → rule_no_matches defers
     assert out is None
 
 
@@ -493,7 +498,9 @@ def test_rule_singleton_trap_fires_on_mostly_singleton_blocks_with_no_pairs():
             oversized_block_count=0,
         ),
         scoring=ScoringProfile(
-            n_pairs_scored=0, candidates_compared=0,  # no candidates compared
+            # A MEASURED zero -- the real trap. See #2639: an uncounted 0 now
+            # makes the rule abstain rather than coarsen healthy blocking.
+            n_pairs_scored=0, candidates_compared=0, candidates_counted=True,
             mass_above_threshold=0.0,
             dip_statistic=0.0,
         ),
@@ -568,7 +575,12 @@ def test_rule_singleton_trap_fires_when_no_candidates_even_with_dense_blocks():
             block_sizes_p50=10, block_sizes_p99=15, block_sizes_max=15,
             singleton_block_count=2,  # only 20% singletons but candidates_compared=0
         ),
+        # candidates_counted=True: these fixtures mean a MEASURED zero, which
+        # is the actual singleton trap. Since #2639 an uncounted 0 makes the
+        # rule abstain, because `scorer.py` skips the count above 10,000 blocks
+        # and every fine-grained shape looked like the trap.
         scoring=ScoringProfile(n_pairs_scored=0, candidates_compared=0,
+                                candidates_counted=True,
                                 mass_above_threshold=0.0, dip_statistic=0.0),
         cluster=ClusterProfile(transitivity_rate=1.0),
     )
@@ -603,7 +615,12 @@ def test_rule_singleton_trap_returns_none_when_no_text_field_in_matchkey():
             block_sizes_p50=2, block_sizes_p99=3, block_sizes_max=3,
             singleton_block_count=18,
         ),
+        # candidates_counted=True: these fixtures mean a MEASURED zero, which
+        # is the actual singleton trap. Since #2639 an uncounted 0 makes the
+        # rule abstain, because `scorer.py` skips the count above 10,000 blocks
+        # and every fine-grained shape looked like the trap.
         scoring=ScoringProfile(n_pairs_scored=0, candidates_compared=0,
+                                candidates_counted=True,
                                 mass_above_threshold=0.0, dip_statistic=0.0),
         cluster=ClusterProfile(transitivity_rate=1.0),
     )

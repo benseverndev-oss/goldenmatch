@@ -1,0 +1,130 @@
+{
+  "_doc": [
+    "Normalized schemas used to GENERATE denormalized multi-party tables with",
+    "mechanically-derived ground truth.",
+    "",
+    "WHY THIS EXISTS. The precision corpus is hand-authored, so a perfect score",
+    "on it partly measures how well the detector matches its author's intuitions.",
+    "Here the labels are not authored at all: a wide table is produced by joining",
+    "a fact to its dimensions, and each column's party is simply THE TABLE IT",
+    "CAME FROM. The grouping is decided by the schema's original designer, and",
+    "the generator only decides how columns get renamed on the way out.",
+    "",
+    "The schemas are reconstructions of well-known public data models (TPC-H,",
+    "Northwind, Sakila). They are faithful in shape -- which entities exist and",
+    "which columns belong to each -- which is the only property the labels",
+    "depend on. They are not byte-exact reproductions of the published DDL, and",
+    "nothing here needs them to be.",
+    "",
+    "`fact` is the table being widened. `dimensions` are the entities it",
+    "references; each becomes one expected party. `own_columns` belong to the",
+    "fact itself and form its own party."
+  ],
+
+  "schemas": [
+    {
+      "name": "tpch_lineitem",
+      "source": "TPC-H",
+      "fact": "order",
+      "own_columns": ["orderkey", "orderdate", "totalprice", "orderstatus"],
+      "dimensions": {
+        "customer": ["name", "address", "phone", "acctbal"],
+        "supplier": ["name", "address", "phone", "acctbal"],
+        "part": ["name", "brand", "size", "retailprice"]
+      }
+    },
+    {
+      "name": "tpch_orders_parties",
+      "source": "TPC-H",
+      "fact": "shipment",
+      "own_columns": ["shipdate", "commitdate", "receiptdate"],
+      "dimensions": {
+        "customer": ["name", "phone", "acctbal"],
+        "supplier": ["name", "phone", "acctbal"]
+      }
+    },
+    {
+      "name": "northwind_orders",
+      "source": "Northwind",
+      "fact": "order",
+      "own_columns": ["orderid", "orderdate", "freight", "shipcountry"],
+      "dimensions": {
+        "customer": ["companyname", "contactname", "phone", "city"],
+        "employee": ["lastname", "firstname", "title", "hiredate"],
+        "shipper": ["companyname", "phone"]
+      }
+    },
+    {
+      "name": "northwind_products",
+      "source": "Northwind",
+      "fact": "orderdetail",
+      "own_columns": ["unitprice", "quantity", "discount"],
+      "dimensions": {
+        "product": ["productname", "unitsinstock", "discontinued"],
+        "supplier": ["companyname", "contactname", "country"],
+        "category": ["categoryname", "categorydescription"]
+      }
+    },
+    {
+      "name": "sakila_rental",
+      "source": "Sakila",
+      "fact": "rental",
+      "own_columns": ["rentaldate", "returndate"],
+      "dimensions": {
+        "customer": ["firstname", "lastname", "email", "active"],
+        "staff": ["firstname", "lastname", "email", "username"],
+        "film": ["title", "releaseyear", "rating", "length"]
+      }
+    },
+    {
+      "name": "sakila_payment",
+      "source": "Sakila",
+      "fact": "payment",
+      "own_columns": ["paymentdate", "amount"],
+      "dimensions": {
+        "customer": ["firstname", "lastname", "email"],
+        "staff": ["firstname", "lastname", "email"],
+        "store": ["managername", "city", "country"]
+      }
+    },
+    {
+      "name": "invoice_ap",
+      "source": "generic AP ledger",
+      "fact": "invoice",
+      "own_columns": ["invoicenumber", "issuedate", "duedate", "grossamount"],
+      "dimensions": {
+        "vendor": ["name", "taxid", "country"],
+        "buyer": ["name", "taxid", "country"],
+        "approver": ["name", "email"]
+      }
+    },
+    {
+      "name": "claims_ledger",
+      "source": "generic insurance claim",
+      "fact": "claim",
+      "own_columns": ["claimnumber", "lossdate", "paidamount"],
+      "dimensions": {
+        "insurer": ["name", "naiccode"],
+        "provider": ["name", "npi", "specialty"],
+        "patient": ["firstname", "lastname", "birthdate"]
+      }
+    }
+  ],
+
+  "conventions": {
+    "_doc": [
+      "How a dimension's columns are renamed when denormalized. Real pipelines",
+      "differ, and the detector's affix signal is exactly what these exercise.",
+      "",
+      "`initial` is expected to be UNDETECTABLE and is kept deliberately: a",
+      "one-character qualifier is below the kernel's MIN_QUALIFIER_LEN, so a",
+      "schema in TPC-H's own native style (`c_name`, `s_name`) cannot be",
+      "segmented by affix at all. Measuring that honestly is better than",
+      "choosing conventions the detector happens to win on."
+    ],
+    "full": {"style": "prefix", "abbrev": null, "detectable": true},
+    "abbrev4": {"style": "prefix", "abbrev": 4, "detectable": true},
+    "suffix": {"style": "suffix", "abbrev": null, "detectable": true},
+    "initial": {"style": "prefix", "abbrev": 1, "detectable": false}
+  }
+}

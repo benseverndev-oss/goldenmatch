@@ -598,9 +598,12 @@ def score_quality(
     bp = bp_acc / n_rows
     br = br_acc / n_rows
     bf1 = (2 * bp * br / (bp + br)) if (bp + br) else 0.0
-    # Cluster
-    cfp_cnt = pred_multi_total - exact_cluster_matches
-    cfn_cnt = gt_multi_total - exact_cluster_matches
+    # Cluster. NOTE the asymmetry with `pairwise` below: that block returns fp/fn,
+    # this one does not. The counts are `pred_multi_total - exact_cluster_matches`
+    # and `gt_multi_total - exact_cluster_matches` if they are ever wanted; they
+    # were computed here and dropped on the floor. Adding them to the returned dict
+    # is safe (qis_gate.py reads cluster via an explicit f1/p/r allowlist) but is an
+    # output change, so it is not being smuggled into a lint pass.
     cp = exact_cluster_matches / pred_multi_total if pred_multi_total else 0.0
     cr = exact_cluster_matches / gt_multi_total if gt_multi_total else 0.0
     cf1 = (2 * cp * cr / (cp + cr)) if (cp + cr) else 0.0
@@ -638,8 +641,20 @@ def _golden_hash(golden) -> str | None:
     docs/quality-invariant-scale.md (Methodology)."""
     if golden is None:
         return None
-    g = golden.sort(by=golden.columns)
-    return hashlib.sha256(g.write_csv().encode("utf-8")).hexdigest()
+    # golden is a pyarrow.Table on the arrow-native path (DedupeResult.golden is
+    # `pa.Table` since v3.0.0) and legacy-polars elsewhere; normalize through the
+    # frame protocol so the fingerprint is backend-agnostic (was polars-only
+    # `.sort(by=)` / `.write_csv()`, which AttributeError'd on a pa.Table).
+    import io
+
+    import pyarrow.csv as _pacsv
+    from goldenmatch.core.frame import to_frame
+
+    f = to_frame(golden)
+    g = f.sort(f.columns)  # sort by ALL columns (deterministic content order)
+    buf = io.BytesIO()
+    _pacsv.write_csv(g.to_arrow(), buf)
+    return hashlib.sha256(buf.getvalue()).hexdigest()
 
 
 def _golden_shape(golden) -> list[int] | None:
@@ -647,7 +662,10 @@ def _golden_shape(golden) -> list[int] | None:
     cluster partition (which IS reproducible), unlike the survivorship VALUES."""
     if golden is None:
         return None
-    return [int(golden.height), int(golden.width)]
+    from goldenmatch.core.frame import to_frame
+
+    f = to_frame(golden)
+    return [int(f.height), len(f.columns)]
 
 
 def _clusters_signature(predicted_members: dict[int, list[int]]) -> str:
@@ -1016,7 +1034,6 @@ def _run_phase5_and_collect(
     so it can be oracle-scored (golden records are one row per cluster and can't be).
     """
     import ray  # lazy: the [ray] extra is cluster-only
-
     from goldenmatch.distributed.pipeline import run_dedupe_pipeline_distributed
 
     # Phase-5 contract: a GLOBAL __row_id__. Member ids ARE the row index, so the

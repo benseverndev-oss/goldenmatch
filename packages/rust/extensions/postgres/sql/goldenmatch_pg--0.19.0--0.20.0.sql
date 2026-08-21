@@ -1,0 +1,18 @@
+-- Upgrade goldenmatch_pg 0.19.0 -> 0.20.0
+--
+-- INTENTIONALLY EMPTY. No schema change, no new function, no behaviour change:
+-- 0.20.0 exists only because the 0.19.0 tag is unusable.
+--
+-- goldenmatch-pg-v0.19.0 was created with `gh release create`, which publishes
+-- immediately. This repo has immutable releases enabled, so that sealed the
+-- release the moment it existed and its assets could never be attached -- and a
+-- tag consumed by a published immutable release is burned permanently
+-- (`gh release delete --cleanup-tag` does not free it). The release is still
+-- there, published, carrying zero assets.
+--
+-- The publish workflow was rebuilt in #2602 to own its release (draft -> attach
+-- -> publish, the shape publish-goldenmatch-spark-jar.yml already used), and it
+-- needs an unburned version to cut. Hence 0.20.0.
+--
+-- The extension itself is byte-identical to 0.19.0; sql/goldenmatch_pg--0.20.0.sql
+-- is a copy of the 0.19.0 base.

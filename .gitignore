@@ -96,6 +96,11 @@ packages/python/goldenanalysis/goldenanalysis/_native*.so
 # Same, for goldengraph (built from packages/rust/extensions/goldengraph-native
 # via scripts/build_goldengraph_native.py).
 packages/python/goldengraph/goldengraph/_native*.so
+# Same, for infermap (built from packages/rust/extensions/infermap-native
+# via scripts/build_infermap_native.py). Every sibling package had this line;
+# infermap's was missing, so a local native build left the .so untracked and
+# committable.
+packages/python/infermap/infermap/_native*.so
 
 # codebase-memory-mcp local index/snapshot (rebuilt by the SessionStart hook)
 .codebase-memory/
@@ -119,3 +124,8 @@ package-lock.json
 
 # ER-matcher synthetic training data (regenerated from scripts/er_matcher/gen_pairs.py)
 data/er_matcher/
+packages/jvm/goldenmatch-spark/build/
+
+# Zero-config refusal diagnostic workdir (regenerated fixtures, see
+# scripts/bench_er_headtohead/diagnose_zeroconfig_refusal.py --workdir).
+.zeroconfig_diag/

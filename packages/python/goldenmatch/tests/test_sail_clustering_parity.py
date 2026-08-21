@@ -1,27 +1,34 @@
-"""S2 gate: Sail connected_components produces a cluster PARTITION identical
-to a reference Union-Find on fixtures including a chain, a multi-merge
-junction, and a singleton. Self-contained; skips where the sail extra is
-absent; runs in the `sail` lane."""
+"""S2 gate: connected_components produces a cluster PARTITION identical to a
+reference Union-Find on fixtures including a chain, a multi-merge junction, and
+a singleton. Self-contained; skips where no Spark Connect client is installed.
+
+Runs in BOTH Spark lanes: `spark_connect` (Apache Spark, blocking) and `sail`
+(pysail, advisory cross-check). The two servers plan differently, which is the
+point -- these tests failed on each for a DIFFERENT reason, and both causes
+turned out to be the same tier defect. See the P2a note below."""
 from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("pysail")
 pytest.importorskip("pyspark")
 
-
-@pytest.fixture(scope="module")
-def spark():
-    from pysail.spark import SparkConnectServer
-    from pyspark.sql import SparkSession
-
-    server = SparkConnectServer()
-    server.start()
-    _, port = server.listening_address
-    sess = SparkSession.builder.remote(f"sc://localhost:{port}").getOrCreate()
-    yield sess
-    sess.stop()
-    server.stop()
+# RESOLVED (P2a). These two long-chain WCC tests carried a non-strict xfail on
+# real Spark: the iterative join loop exhausted the JVM heap building a broadcast
+# join ("Not enough memory to build and broadcast the table to all worker nodes"
+# / OutOfMemoryError: Java heap space). They passed under pysail, whose
+# in-process server plans differently.
+#
+# The reading recorded at the time -- that a loop failing on BOTH backends for
+# different reasons is usually itself the problem -- held. It was one defect, not
+# a small-runner artifact: the loop never truncated plan lineage, so the query
+# plan grew every iteration until Spark chose a broadcast it could not afford
+# (and until Sail wedged at 12K rows). `_truncate_plan` in goldenmatch/spark/
+# clustering.py fixed both.
+#
+# The marker is REMOVED rather than left to xpass. A non-strict xfail that passes
+# reports XPASS and asserts nothing, so these would not have failed if the fix
+# regressed -- the exact hole the fix closed would have reopened silently. They
+# have passed on three consecutive main runs; they are ordinary tests now.
 
 
 def _reference_partition(ids, edges):
@@ -54,7 +61,7 @@ def _sail_partition(out_df):
 
 
 def test_sail_wcc_partition_parity(spark):
-    from goldenmatch.sail.clustering import connected_components
+    from goldenmatch.spark.clustering import connected_components
 
     # ids 0..6: chain {0-1-2}, pair {3-4}, singletons {5},{6}.
     ids = list(range(7))
@@ -69,7 +76,7 @@ def test_sail_wcc_partition_parity(spark):
 def test_sail_wcc_deep_chain_converges(spark):
     """A longer chain 0-1-2-...-9 must collapse to ONE component (label-prop
     across many hops -- the correctness analog of the chain concern)."""
-    from goldenmatch.sail.clustering import connected_components
+    from goldenmatch.spark.clustering import connected_components
 
     ids = list(range(10))
     edges = [(i, i + 1) for i in range(9)]
@@ -86,7 +93,7 @@ def test_sail_wcc_junction_multimerge(spark):
     junction node 3 (min-propagation arrives from multiple neighbors in one
     round), a separate pair {4,5}, and a singleton {6}. Stresses the case
     most likely to surface a subtle min-propagation bug."""
-    from goldenmatch.sail.clustering import connected_components
+    from goldenmatch.spark.clustering import connected_components
 
     ids = list(range(7))
     edges = [(0, 3), (1, 3), (2, 3), (4, 5)]  # canonical a<b
@@ -100,7 +107,7 @@ def test_sail_wcc_junction_multimerge(spark):
 def test_sail_wcc_scale_two_node(spark):
     """Minimal case: edges=[(0,1)] -> one component {0,1}. The fastest-failing
     case for a wrong WCC (it returned two singletons in the blind attempt)."""
-    from goldenmatch.sail.clustering import connected_components_scale
+    from goldenmatch.spark.clustering import connected_components_scale
 
     ids = [0, 1]
     edges = [(0, 1)]
@@ -111,7 +118,7 @@ def test_sail_wcc_scale_two_node(spark):
 
 
 def test_sail_wcc_scale_partition_parity(spark):
-    from goldenmatch.sail.clustering import connected_components_scale
+    from goldenmatch.spark.clustering import connected_components_scale
 
     ids = list(range(7))
     edges = [(0, 1), (1, 2), (3, 4)]
@@ -124,7 +131,7 @@ def test_sail_wcc_scale_partition_parity(spark):
 def test_sail_wcc_scale_long_chain(spark):
     """A 30-node chain: pointer-jumping converges in O(log 30) rounds where
     label-prop would need ~30. Must collapse to ONE component."""
-    from goldenmatch.sail.clustering import connected_components_scale
+    from goldenmatch.spark.clustering import connected_components_scale
 
     ids = list(range(30))
     edges = [(i, i + 1) for i in range(29)]
@@ -135,7 +142,7 @@ def test_sail_wcc_scale_long_chain(spark):
 
 
 def test_sail_wcc_scale_junction(spark):
-    from goldenmatch.sail.clustering import connected_components_scale
+    from goldenmatch.spark.clustering import connected_components_scale
 
     ids = list(range(7))
     edges = [(0, 3), (1, 3), (2, 3), (4, 5)]  # singleton 6
@@ -152,7 +159,7 @@ def test_sail_wcc_scale_edge_node_seeding_singleton_heavy(spark):
     edge between two high ids (7,8) -> one {7,8} component + 8 singletons
     (incl. ids LOWER than the edge nodes). Asserts the re-attach produces the
     exact full-universe partition, incl. every singleton's cluster_id = self."""
-    from goldenmatch.sail.clustering import connected_components_scale
+    from goldenmatch.spark.clustering import connected_components_scale
 
     ids = list(range(10))
     edges = [(7, 8)]
@@ -170,7 +177,7 @@ def test_sail_wcc_scale_edge_node_seeding_singleton_heavy(spark):
 def test_sail_wcc_scale_no_edges_all_singletons(spark):
     """Degenerate edge case: zero matches -> empty edge-node seed -> every id is
     re-attached as its own singleton (no rows lost)."""
-    from goldenmatch.sail.clustering import connected_components_scale
+    from goldenmatch.spark.clustering import connected_components_scale
 
     ids = list(range(5))
     ids_df = spark.createDataFrame([(i,) for i in ids], ["__row_id__"])

@@ -148,6 +148,7 @@ def emit_semantic_model(
     grain: list[str] | str | None = None,
     model_ref: str | None = None,
     measure_agg: str = "sum",
+    certificate: Any = None,
 ) -> dict[str, Any]:
     """Build ONE MetricFlow `semantic_models[]` entry declaring `resolved_key` as
     the PRIMARY entity — the GoldenMatch-conformed join key every metric inherits.
@@ -166,6 +167,10 @@ def emit_semantic_model(
         model_ref: the `model:` ref expression (defaults to `ref('<model>')`).
         measure_agg: the aggregation stamped on each measure (a scaffold default —
             set the real aggregation per measure in your project).
+        certificate: an optional key-integrity certificate whose trust verdict is
+            written back into the model's `meta.goldenmatch.key_integrity` — the
+            MetricFlow analogue of the Cube `meta.goldenmatch` / OSI
+            `custom_extensions.goldenmatch` embed.
     """
     entities: list[dict[str, Any]] = [
         {"name": entity_name or model, "type": "primary", "expr": resolved_key},
@@ -187,6 +192,11 @@ def emit_semantic_model(
         sm["measures"] = [
             {"name": m, "agg": measure_agg, "expr": m} for m in measures
         ]
+
+    if certificate is not None:
+        from goldenmatch.core.key_integrity_certificate import certificate_verdict
+
+        sm["meta"] = {"goldenmatch": {"key_integrity": certificate_verdict(certificate)}}
     return sm
 
 
@@ -208,10 +218,15 @@ def emit_from_crosswalk(
     measures: list[str] | tuple[str, ...] = (),
     grain: list[str] | str | None = None,
     model_ref: str | None = None,
+    certificate: Any = None,
 ) -> str:
     """Emit the `semantic_models` YAML for a `ResolvedCrosswalk`: its
     `resolved_key` becomes the primary entity, its `source_pk_column` the `unique`
-    source key. Convenience over `emit_semantic_model` + `emit_metricflow_yaml`."""
+    source key. Convenience over `emit_semantic_model` + `emit_metricflow_yaml`.
+
+    Pass `certificate` to write the key-integrity trust verdict back into the
+    model's `meta.goldenmatch.key_integrity` (parity with the Cube / OSI emitters).
+    """
     sm = emit_semantic_model(
         model,
         resolved_key=getattr(crosswalk, "resolved_key", "resolved_entity_id"),
@@ -220,5 +235,6 @@ def emit_from_crosswalk(
         measures=measures,
         grain=grain,
         model_ref=model_ref,
+        certificate=certificate,
     )
     return emit_metricflow_yaml(sm)

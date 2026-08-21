@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from goldenmatch._polars_lazy import pl
 
@@ -57,12 +58,12 @@ def _scan_findings(df, domain: str | None):
             # Installed goldencheck predates its Arrow Flip (scan_dataframe
             # is polars-only there): bridge and retry. Floor bumps to
             # goldencheck>=3.0 remove this at D6.
-            findings, _ = scan_dataframe(pl.from_arrow(df), domain=domain)
+            findings, _ = scan_dataframe(pl.from_arrow(df), domain=domain)  # polars-lane: legacy goldencheck (<3.0) scan_dataframe is polars-only; removed at the >=3.0 floor bump
         return apply_confidence_downgrade(findings, llm_boost=False)
 
     from goldencheck.engine.scanner import scan_file
     if not isinstance(df, pl.DataFrame):  # legacy goldencheck: polars csv path
-        df = pl.from_arrow(df)  # type: ignore[assignment]
+        df = pl.from_arrow(df)  # type: ignore[assignment]  # polars-lane: legacy goldencheck scan_file csv path is polars-only
     with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
         df.write_csv(tmp.name)
         tmp_path = Path(tmp.name)
@@ -85,8 +86,22 @@ def _goldencheck_available() -> bool:
         return False
 
 
+def _as_arrow_table(df: Any) -> Any:
+    """Coerce a frame to a ``pyarrow.Table`` without importing polars.
+
+    The arrow runtime hands us a ``pa.Table`` directly; a polars frame (or
+    anything else exposing ``to_arrow``) is coerced via its own method, so this
+    stays polars-free."""
+    import pyarrow as pa
+
+    if isinstance(df, pa.Table):
+        return df
+    _to_arrow = getattr(df, "to_arrow", None)
+    return _to_arrow() if callable(_to_arrow) else pa.table(df)
+
+
 def compute_quality_scores(
-    df: pl.DataFrame,
+    df: Any,
     row_id_col: str = "__row_id__",
 ) -> dict[tuple[int, str], float] | None:
     """Per-cell quality weights for quality-weighted survivorship, keyed by
@@ -101,8 +116,15 @@ def compute_quality_scores(
     behaviour/perf change -- weighting only kicks in when there are real issues.
 
     ``cell_quality`` returns positional row indices; we remap them to
-    ``row_id_col`` so the builders' ``(row_id, col)`` lookups line up."""
-    if not _goldencheck_available() or row_id_col not in df.columns:
+    ``row_id_col`` so the builders' ``(row_id, col)`` lookups line up.
+
+    Arrow-native: ``cell_quality`` itself takes a ``pa.Table``, so this runs
+    unchanged on a polars-free install (weighting must NOT depend on the
+    optional ``[polars]`` extra -- that silently changed survivorship)."""
+    if not _goldencheck_available():
+        return None
+    tbl = _as_arrow_table(df)
+    if row_id_col not in tbl.column_names:
         return None
     try:
         from goldencheck import cell_quality
@@ -110,14 +132,14 @@ def compute_quality_scores(
         return None  # older goldencheck without the per-cell API
 
     try:
-        positional = cell_quality(df)
+        positional = cell_quality(tbl)
     except Exception:  # noqa: BLE001 - never let DQ scoring break a dedupe run
         logger.debug("goldencheck.cell_quality failed; skipping quality weighting", exc_info=True)
         return None
     if not positional:
         return None
 
-    row_ids = df[row_id_col].to_list()
+    row_ids = tbl.column(row_id_col).to_pylist()
     scores: dict[tuple[int, str], float] = {}
     for (idx, col), weight in positional.items():
         if 0 <= idx < len(row_ids) and row_ids[idx] is not None:
@@ -125,7 +147,7 @@ def compute_quality_scores(
     return scores or None
 
 
-def blocking_risk(df: pl.DataFrame) -> dict[str, float] | None:
+def blocking_risk(df: Any) -> dict[str, float] | None:
     """Per-column "block-shatter risk" for quality-aware blocking.
 
     `risk[col]` is the fraction of rows whose value is an edit-distance variant
@@ -144,15 +166,10 @@ def blocking_risk(df: pl.DataFrame) -> dict[str, float] | None:
     except ImportError:
         return None
     # Arrow-native: GoldenMatch is polars-free, so operate on a pyarrow.Table.
-    # The arrow runtime hands us one directly; a polars frame (or anything with
-    # to_arrow) is coerced once. cell_quality is itself arrow-native.
+    # cell_quality is itself arrow-native.
     import pyarrow as pa
 
-    if isinstance(df, pa.Table):
-        tbl = df
-    else:
-        _to_arrow = getattr(df, "to_arrow", None)
-        tbl = _to_arrow() if callable(_to_arrow) else pa.table(df)
+    tbl = _as_arrow_table(df)
     n = tbl.num_rows
     if n == 0:
         return None

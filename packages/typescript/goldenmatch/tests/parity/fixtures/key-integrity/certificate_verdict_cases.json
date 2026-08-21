@@ -1,0 +1,174 @@
+{
+  "_comment": "Cross-language parity oracle for the certificate trust-verdict block (the `key_integrity` catalog tag the Cube/OSI/MetricFlow emitters write back). Generated from the Python reference goldenmatch.core.key_integrity_certificate.certificate_verdict by scripts/emit_certificate_verdict_fixture.py. Read DIRECTLY by both tests/test_certificate_verdict.py and tests/parity/certificate-verdict.parity.test.ts -- no copy. Each case's `init` (+ optional `resolution` mutation) reconstructs the same certificate on both surfaces; `expected` is certificate_verdict(cert).",
+  "cases": [
+    {
+      "name": "clean_unique_with_measure",
+      "init": {
+        "keyColumns": [
+          "customer_id"
+        ],
+        "grain": null,
+        "nRows": 4,
+        "nKeyGroups": 4,
+        "isUniqueAtGrain": true,
+        "duplicateKeyGroups": 0,
+        "maxFanOut": 1.0,
+        "measureFanOut": {
+          "revenue": 1.0
+        }
+      },
+      "resolution": null,
+      "expected": {
+        "verdict": "trustworthy",
+        "unique_at_grain": true,
+        "uniqueness_estimate": 1.0,
+        "max_fan_out": 1.0,
+        "measure_fan_out": {
+          "revenue": 1.0
+        },
+        "undercount_estimate": null,
+        "safe_bound": 1.0,
+        "safe_bound_conservative": 1.0
+      }
+    },
+    {
+      "name": "structural_fanout_no_resolution",
+      "init": {
+        "keyColumns": [
+          "customer_id"
+        ],
+        "grain": null,
+        "nRows": 5,
+        "nKeyGroups": 4,
+        "isUniqueAtGrain": false,
+        "duplicateKeyGroups": 1,
+        "maxFanOut": 2.0,
+        "measureFanOut": {
+          "revenue": 1.4
+        }
+      },
+      "resolution": null,
+      "expected": {
+        "verdict": "untrustworthy",
+        "unique_at_grain": false,
+        "uniqueness_estimate": 0.75,
+        "max_fan_out": 2.0,
+        "measure_fan_out": {
+          "revenue": 1.4
+        },
+        "undercount_estimate": null,
+        "safe_bound": 0.75,
+        "safe_bound_conservative": 0.75
+      }
+    },
+    {
+      "name": "resolved_with_fragmentation_ci",
+      "init": {
+        "keyColumns": [
+          "customer_id"
+        ],
+        "grain": null,
+        "nRows": 5,
+        "nKeyGroups": 4,
+        "isUniqueAtGrain": false,
+        "duplicateKeyGroups": 1,
+        "maxFanOut": 2.0,
+        "measureFanOut": {
+          "revenue": 1.4
+        }
+      },
+      "resolution": {
+        "resolved_entities": 2,
+        "fragmented_entities": 1,
+        "undercount_estimate": 0.5,
+        "undercount_ci_low": 0.09453120573423074,
+        "undercount_ci_high": 0.9054687942657693
+      },
+      "expected": {
+        "verdict": "untrustworthy",
+        "unique_at_grain": false,
+        "uniqueness_estimate": 0.75,
+        "max_fan_out": 2.0,
+        "measure_fan_out": {
+          "revenue": 1.4
+        },
+        "undercount_estimate": 0.5,
+        "undercount_ci": [
+          0.09453120573423074,
+          0.9054687942657693
+        ],
+        "safe_bound": 0.5,
+        "safe_bound_conservative": 0.09453120573423068
+      }
+    },
+    {
+      "name": "clean_no_measures",
+      "init": {
+        "keyColumns": [
+          "order_id"
+        ],
+        "grain": null,
+        "nRows": 3,
+        "nKeyGroups": 3,
+        "isUniqueAtGrain": true,
+        "duplicateKeyGroups": 0,
+        "maxFanOut": 1.0,
+        "measureFanOut": {}
+      },
+      "resolution": null,
+      "expected": {
+        "verdict": "trustworthy",
+        "unique_at_grain": true,
+        "uniqueness_estimate": 1.0,
+        "max_fan_out": 1.0,
+        "undercount_estimate": null,
+        "safe_bound": 1.0,
+        "safe_bound_conservative": 1.0
+      }
+    },
+    {
+      "name": "resolved_no_fragments",
+      "init": {
+        "keyColumns": [
+          "customer_id"
+        ],
+        "grain": [
+          "day"
+        ],
+        "nRows": 6,
+        "nKeyGroups": 6,
+        "isUniqueAtGrain": true,
+        "duplicateKeyGroups": 0,
+        "maxFanOut": 1.0,
+        "measureFanOut": {
+          "revenue": 1.0,
+          "units": 1.0
+        }
+      },
+      "resolution": {
+        "resolved_entities": 3,
+        "fragmented_entities": 0,
+        "undercount_estimate": 0.0,
+        "undercount_ci_low": 0.0,
+        "undercount_ci_high": 0.5614970317550455
+      },
+      "expected": {
+        "verdict": "trustworthy",
+        "unique_at_grain": true,
+        "uniqueness_estimate": 1.0,
+        "max_fan_out": 1.0,
+        "measure_fan_out": {
+          "revenue": 1.0,
+          "units": 1.0
+        },
+        "undercount_estimate": 0.0,
+        "undercount_ci": [
+          0.0,
+          0.5614970317550455
+        ],
+        "safe_bound": 1.0,
+        "safe_bound_conservative": 0.4385029682449545
+      }
+    }
+  ]
+}

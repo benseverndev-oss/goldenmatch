@@ -1,6 +1,13 @@
 # Single-Kernel-Collapse — Roadmap (R0–R5)
 
-**Status:** Spike • **Decision:** [../decisions/0016-single-kernel-collapse-spike.md](../decisions/0016-single-kernel-collapse-spike.md) • **Inventory:** [single-kernel-collapse-inventory.md](single-kernel-collapse-inventory.md)
+**Status:** R2–R4 substantially LANDED, **R5 remaining** (reconciled 2026-08-04) • **Decision:** [../decisions/0016-single-kernel-collapse-spike.md](../decisions/0016-single-kernel-collapse-spike.md) • **Inventory:** [single-kernel-collapse-inventory.md](single-kernel-collapse-inventory.md)
+
+> **Reconciliation note (2026-08-04):** far ahead of the per-stage text below. The own-string
+> primitives shipped and rapidfuzz was fully evicted suite-wide (#2159, #2218), as were
+> scipy/jellyfish/faiss/diptest/dateutil; the shared kernels were realized as their own published
+> products — **goldenfuzz**, **goldenphonetic**, **goldenhnsw**. R2 (scorers) and much of R3/R4 are
+> done; only **R5** (decommission dead duplicated math + the ast-grep gate forbidding algorithm math
+> outside `*-core`) genuinely remains. The stage text below is retained as the original plan of record.
 
 Staged plan for collapsing the suite's N duplicated algorithm implementations
 toward one shared Rust `*-core` kernel. **Additive until R5; one reversible flag
@@ -46,6 +53,202 @@ Remove the now-dead duplicated math and add an `ast-grep` (or equivalent) CI gat
 forbidding algorithm math outside `*-core` (e.g. a hand-rolled levenshtein DP loop
 in `scorer.ts`). This is the only DELETING stage; it lands only after every prior
 stage's flag has been default-on and stable for a full release cycle.
+
+> **R5 status (2026-08-07): the GATE has landed; the DELETION half is mostly a
+> no-op by design.** Two findings from doing the work:
+>
+> 1. **"Delete the duplicated math" cannot mean deleting the pure ports.** Hard
+>    constraint 1 above makes pure-TS the *permanent* fallback (cross-target WASM
+>    is still unverified), and the architecture frame classifies pure-Python /
+>    pure-TS as conformance-tested **fallbacks**, not dead code. So `scorer.ts`'s
+>    `levenshtein`/`jaro`/… are deliberate and STAY. The only genuinely dead math
+>    is a *second* copy of a primitive that already has a sanctioned home.
+> 2. **The gate is the durable deliverable.** `ts-no-duplicate-kernel-math`
+>    (`.ast-grep/rules/`) flags a hand-rolled kernel-backed primitive declared
+>    outside the sanctioned fallback modules, which are allow-listed. It ships
+>    **warning**-severity (per the repo's gradual-landing convention) because its
+>    current findings ARE the consolidation backlog: goldencheck
+>    `fuzzy-values.ts`, goldenflow `phonetic.ts`, infermap `string-distance.ts`
+>    (×3). Promote to **error** once those are consolidated — that is the
+>    remaining R5 work, and it is cross-package (each needs a dependency
+>    decision), not a mechanical delete.
+>
+> **R5 consolidation — infermap DONE (2026-08-07), 5 findings → 2.** infermap's
+> vendored `jaroSimilarity`/`jaroWinklerSimilarity`/`levenshteinDistance` now
+> alias goldenmatch's. This was the cheap one: infermap already depended on
+> goldenmatch, and its *Python* `fuzzy_name` already reuses
+> `goldenmatch-score-core::jaro_winkler_similarity`, so the TS fork was the only
+> surface still running its own math — a Python↔TS parity gap, not just
+> duplication.
+>
+> It also validated the thesis empirically. The fork carried **all three**
+> pre-#879 bugs goldenmatch had already fixed: unfloored `t/2` transposition
+> (`jaroWinkler("saturday","sunday")` 0.7475 → 0.7775, the exact pair #879
+> cites), the `>= 0.7` vs strict `> 0.7` Winkler threshold, and UTF-16 code-unit
+> instead of codepoint iteration (57 jaro/JW + 62 levenshtein disagreements in a
+> 75.7K-pair sweep; zero on ASCII-only, so the blast radius was non-BMP input
+> plus the transposition class). A second copy does not stay in sync — it
+> silently misses the fixes the first one ships.
+>
+> **The mechanism, for the two remaining packages.** `core/scorer.ts` is 1794
+> lines and transitively pulls the reference-data tables and the WASM registry,
+> so "just import goldenmatch/core" is a disproportionate payload for three edit
+> -distance functions. The primitives were extracted into a **zero-import leaf**
+> `goldenmatch/src/core/stringDistance.ts`, published as the
+> `goldenmatch/core/string-distance` subpath; `core/scorer.ts` re-exports them,
+> so no existing import or public API changed. infermap keeps goldenmatch as a
+> **devDependency** and tsup inlines the leaf (`noExternal`) — the established
+> `goldenmatch-wasm-runtime` pattern — so no published runtime dep is added.
+> **Gotcha:** tsup's `dts.resolve` will not follow a subpath specifier, so a bare
+> `export … from` leaks an unresolvable `from 'goldenmatch/core/string-distance'`
+> into the published `.d.ts`. Re-export as type-annotated `const` aliases
+> instead; that emits self-contained declarations.
+>
+> **The remaining two findings are NOT the same problem — audited 2026-08-07.**
+> An earlier draft of this note framed goldencheck `fuzzy-values.ts` and
+> goldenflow `phonetic.ts` as needing "a dependency decision (import goldenmatch
+> vs. a new shared TS primitives package)". **That framing was wrong.** Neither
+> is a rogue copy of goldenmatch's math; both are their OWN package's sanctioned
+> parity-gated pure-TS fallback — the same category as `goldenmatch`
+> `core/scorer.ts`, which this rule already ignores:
+>
+> * goldencheck `fuzzy-values.ts` mirrors `goldencheck-core::fuzzy`, and the
+>   profiler already routes to `getGoldencheckWasmBackend()?.nearDuplicateClusters`
+>   when the wasm backend is enabled, falling back to the local `levRatio`.
+> * goldenflow `phonetic.ts` says so in its own header: "Pure-TS reference for
+>   goldenflow-core's `phonetic` kernels; MUST reproduce the Rust/Python bytes."
+>
+> So the correct action for the TS layer is to **allow-list both** (they are the
+> permanent edge-safe fallback surface, per hard constraint 1) and promote the
+> rule to `error` — not to consolidate them onto goldenmatch.
+>
+> **Two rule defects the audit found.** (1) In goldenflow the rule flags
+> `function soundex(values: readonly ColumnValue[])`, which is a one-line
+> `values.map(...)` wrapper; the actual algorithm is `soundexTs`, which the name
+> regex does NOT match. So the rule is matching series-wrapper *names* rather
+> than algorithm bodies. (2) More generally the regex cannot tell "second copy of
+> someone else's kernel" from "this package's own parity-gated fallback" — the
+> distinction that actually matters. Both argue for allow-listing by module and
+> keeping the rule as a *reintroduction* guard, which is what it is good at.
+>
+> ## The real duplication is one layer DOWN, in Rust
+>
+> The suite already owns both algorithms as standalone published kernels —
+> **`goldenfuzz-core`** (levenshtein / jaro-winkler / token ratios, Myers
+> bit-parallel) and **`goldenphonetic-core`** (soundex / metaphone / nysiis,
+> jellyfish-compatible). But the sibling cores do not all use them:
+>
+> | Consumer | Uses the shared kernel? | |
+> |---|---|---|
+> | `score-core` | **yes** — `goldenfuzz-core` path dep | the model case |
+> | `goldencheck-core` | no — private `fn levenshtein` in `fuzzy.rs` | redundant |
+> | `goldenflow-core` | no — own `phonetic::soundex` | **divergent** |
+>
+> * **goldencheck's levenshtein is redundant but semantically equivalent** —
+>   classic two-row DP vs goldenfuzz's Myers bit-parallel, and its `similarity`
+>   is the same `1 - dist/max(len)` formula as
+>   `levenshtein_normalized_similarity`. Same answers, slower algorithm. Low
+>   urgency; the win would be speed + one owner.
+> * **goldenflow's soundex genuinely DIVERGES from goldenphonetic's**, and
+>   nothing guards it. Measured 2026-08-07 by running both crates on one corpus
+>   (2 of 16 cases differ):
+>
+>   | input | `goldenphonetic-core` | `goldenflow-core` | cause |
+>   |---|---|---|---|
+>   | `T-t` | `T300` | `T000` | non-letter: goldenphonetic resets the run, goldenflow filters it out |
+>   | `Ünal` | `U540` | `N400` | non-ASCII: goldenphonetic NFKD-folds `Ü`→`U`, goldenflow drops it |
+>
+>   Both are defensible readings of "Soundex", but they are two different
+>   functions with one name, and a record standardized by goldenflow will not
+>   phonetically match the same record encoded by goldenphonetic. That is the
+>   exact failure class R5 exists to prevent, and it is invisible to the TS-only
+>   ast-grep rule.
+>
+> **Neither `goldenfuzz-core` nor `goldenphonetic-core` has a `-wasm` crate**
+> (only `-py`), so there is no TS path to them today; a TS consolidation onto
+> them would mean a new wasm crate + loader + parity fixture + CI lane each.
+> That cost is not justified by the TS findings above (which are legitimate
+> fallbacks) — but it may be justified by the Rust divergence, which should be
+> resolved in Rust first. Recommended order: (1) allow-list the two TS fallbacks
+> and promote the rule to `error`; (2) decide the soundex semantics and make one
+> crate the owner; (3) treat goldencheck's levenshtein redundancy as an
+> opportunistic perf/ownership cleanup.
+>
+> **Steps 1 and 3 LANDED 2026-08-07.** `goldencheck-core::fuzzy` now calls
+> `goldenfuzz_core::levenshtein_distance` (verified equivalent to the removed DP
+> over 60,500 generated pairs incl. non-BMP and the >64-char multiword path,
+> 0 divergences; the `1 - dist/max(len)` ratio stays in goldencheck as scoring
+> policy). `ts-no-duplicate-kernel-math` is now `error` with both TS fallbacks
+> allow-listed and its known limits documented in the rule note.
+>
+> ### Step 2 is bigger than first reported: there are FOUR soundex kernels
+>
+> The first pass found two. A full survey (`grep 'fn soundex'`) finds **four
+> independent Rust implementations**, plus two pure-TS ones:
+>
+> | crate | role |
+> |---|---|
+> | `goldenphonetic-core` | the standalone published product; jellyfish-compatible, NFKD-folding |
+> | `goldenflow-core::phonetic` | goldenflow's standardization transform |
+> | `score-core` | goldenmatch's `soundex` / `soundex_match` scorer |
+> | `fs-core` | Fellegi-Sunter's own (its test is literally `soundex_matches_jellyfish_vectors`) |
+>
+> Measured by compiling all four and running one 50-case adversarial corpus
+> (accents, punctuation, digit-only, whitespace-only, particles, short names).
+> **6 of 50 cases disagree somewhere.** Pairwise divergences:
+>
+> | | flow | score | fs |
+> |---|---|---|---|
+> | **phonetic** | 6 | 2 | 2 |
+> | **flow** | — | 4 | 6 |
+> | **score** | — | — | 4 |
+>
+> The disagreeing cases, and what each divergence *is*:
+>
+> | input | phonetic | flow | score | fs |
+> |---|---|---|---|---|
+> | `T-t` | `T300` | `T000` | `T300` | `T300` |
+> | `T t` | `T300` | `T000` | `T300` | `T300` |
+> | `Ünal` | `U540` | `N400` | `U540` | `Ü540` |
+> | `Åke` | `A200` | `K000` | `A200` | `Å200` |
+> | `"   "` | `" 000"` | `""` | `""` | `" 000"` |
+> | `"123"` | `"1000"` | `""` | `""` | `"1000"` |
+>
+> Three distinct behavioural axes, not one:
+> * **non-letter separators** — phonetic/score/fs let them reset the digit run;
+>   flow filters them out entirely, so `T-t` collapses to `Tt`.
+> * **non-ASCII leading letter** — phonetic/score NFKD-fold `Ü`→`U`; fs keeps the
+>   raw `Ü` as the code's first character; flow drops non-ASCII letters entirely,
+>   which changes *which* letter leads (`Ünal`→`N400`).
+> * **degenerate input** — phonetic/fs emit a code from a non-letter first char
+>   (jellyfish indexes `v[0]` unconditionally); score returns `""`.
+>
+> **This supports `goldenphonetic-core` as the owner**: it is the standalone
+> product, it is the jellyfish-compatible reference (the de-facto standard the
+> Python ecosystem matches), and `score-core` and `fs-core` are each already
+> within 2 edge cases of it. `goldenflow-core` is the outlier at 6.
+>
+> **But the cost is concentrated in the outlier.** Changing `goldenflow-core`
+> changes standardized output on FOUR surfaces at once — Python (`transforms/
+> phonetic.py` fallback + `_native`), TS (`soundexTs` fallback), `goldenflow-wasm`,
+> and `goldenflow-duckdb` — plus the byte-parity corpus that pins them together.
+> The affected population is real, not theoretical: accented names and names with
+> particles/punctuation are exactly the ER-relevant cases. Treat it as a breaking
+> transform change with a migration note, not a refactor. Sequencing suggestion:
+> align `fs-core` and `score-core` first (2 edge cases each, near-zero blast
+> radius) to establish `goldenphonetic-core` as the owner, then do goldenflow as
+> its own change with the parity corpus re-blessed deliberately.
+>
+> Also done: the one *intra*-package duplicate was removed — goldenmatch
+> `core/indicators.ts` carried its own Levenshtein DP used solely by
+> `tokenSortRatio`; it now calls the exported `levenshteinSimilarity` from
+> `core/scorer.ts` (same package, no new dep). That copy was UTF-16 code-unit
+> based while the scorer's is codepoint-aware (`Array.from`), so the dedup also
+> fixes a latent non-BMP divergence from the Python/Rust reference.
+>
+> Note the preconditions in the stage text are still only partly met (kill-criteria
+> 1c/2/3 below remain PENDING), which is exactly why nothing default-flipped and
+> nothing in the fallback surface was deleted here.
 
 ## The two hard constraints
 

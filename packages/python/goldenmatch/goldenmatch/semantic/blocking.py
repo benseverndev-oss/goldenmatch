@@ -114,6 +114,32 @@ def semantic_field_roles(source: str | Any) -> SemanticFieldRoles:
                 (keys if d.primary_key else dimensions).append(d.name)
             for m in cube.measures:
                 measures.append(m.name)
+    elif dialect == "feast":
+        from goldenmatch.semantic.feast import parse_feast_models
+
+        repo = parse_feast_models(data)
+        for e in repo.entities:
+            keys.extend(e.join_keys)
+        # A feature value is never identity evidence (don't merge two customers
+        # because they share a churn score), so features are measures.
+        for fv in repo.feature_views:
+            measures.extend(fv.features)
+    elif dialect == "malloy":
+        from goldenmatch.semantic.malloy import parse_malloy_models
+
+        for src in parse_malloy_models(data).sources:
+            keys.extend(src.primary_key)
+            dimensions.extend(src.dimensions)
+            measures.extend(src.measures)
+    elif dialect == "odcs":
+        from goldenmatch.semantic.odcs import parse_odcs_contract
+
+        for obj in parse_odcs_contract(data).schema_objects:
+            keys.extend(obj.identity_key())
+            # numeric properties are aggregation targets (never identity evidence);
+            # the descriptive columns are the dimensions to resolve on.
+            measures.extend(obj.numeric_measures())
+            dimensions.extend(obj.dimensions())
     else:  # osi
         from goldenmatch.semantic.osi import parse_osi_models
 

@@ -1,0 +1,24 @@
+# goldenpipe (TypeScript)
+
+> Golden Suite orchestrator — chains GoldenCheck, GoldenFlow, and GoldenMatch into one adaptive pipeline. TypeScript port of the goldenpipe Python library.
+
+## Install
+```bash
+npm install goldenpipe
+```
+
+## Authoritative sources
+Read these instead of inferring behaviour from the compiled `dist/`:
+- This file -- ships INSIDE the package: `node_modules/goldenpipe/llms.txt`.
+- https://docs.bensevern.dev/docs/goldenpipe -- full docs.
+- https://github.com/benseverndev-oss/goldenmatch -- source + issues.
+- Python sibling (the reference implementation): `pip install goldenpipe` -- same concepts, fuller surface.
+
+## Notes
+
+This is part of the Golden Suite. Suite-level index: https://docs.bensevern.dev/docs/llms.txt
+
+Behaviour here is *decided* and contract-tested against the Python
+implementation, not incidental. Reading `dist/` shows what one path does; it
+does not show which guarantees are load-bearing, which fallbacks are
+deliberate, or which knobs exist.

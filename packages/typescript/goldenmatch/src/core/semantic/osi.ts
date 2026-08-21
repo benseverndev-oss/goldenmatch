@@ -14,9 +14,14 @@
 import { type YamlValue, dumpYaml, pyFloat } from "./yamlEmit.js";
 import { pyRound6 } from "./crosswalk.js";
 import type { ResolvedCrosswalk } from "./crosswalk.js";
-import type { CubeKeyIntegrityCertificateLike } from "./cube.js";
 import { type LoadedDoc, asList, asStr, isObj } from "./parseUtil.js";
-import { certifyKeyIntegrity, resolveKeyIntegrity, type KeyIntegrityCertificate } from "./keyIntegrity.js";
+import {
+  certificateVerdict,
+  certifyKeyIntegrity,
+  resolveKeyIntegrity,
+  type CertificateVerdictLike,
+  type KeyIntegrityCertificate,
+} from "./keyIntegrity.js";
 import type { SemanticFrames } from "./frame.js";
 import { metricAwareAttributes, frameColumns } from "./blocking.js";
 import type { SemanticFieldRoles } from "./blocking.js";
@@ -57,7 +62,7 @@ export interface EmitOsiFromCrosswalkOptions {
   crosswalkDataset?: string;
   crosswalkSource?: string | null;
   resolvedField?: string;
-  certificate?: CubeKeyIntegrityCertificateLike | null;
+  certificate?: CertificateVerdictLike | null;
   modelName?: string;
 }
 
@@ -102,11 +107,7 @@ export function emitOsiFromCrosswalk(
     reduction_ratio: pyFloat(pyRound6(crosswalk.reductionRatio ?? 0.0)),
   };
   if (opts.certificate != null) {
-    gm["key_integrity"] = {
-      uniqueness_estimate: opts.certificate.estimate ?? null,
-      max_fan_out: opts.certificate.maxFanOut ?? null,
-      undercount_estimate: opts.certificate.undercountEstimate ?? null,
-    };
+    gm["key_integrity"] = certificateVerdict(opts.certificate) as YamlValue;
   }
 
   // emit_osi_model order: name, (description), (datasets), (relationships),

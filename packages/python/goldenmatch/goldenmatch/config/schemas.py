@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
+import warnings
 from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
@@ -497,6 +500,23 @@ class RulesPayload(BaseModel):
 # ── MatchkeyConfig ──────────────────────────────────────────────────────────
 
 
+def _inert_threshold_message(name: str | None, value: float) -> str:
+    """The one wording for 'you set the field that does not cut'.
+
+    Shared by the construction-time validator and the assignment-time guard so
+    the two cannot drift -- the whole point of #2483 is that a user trusted a
+    field that was measuring nothing, and two half-matching warnings would be a
+    smaller version of the same problem.
+    """
+    return (
+        f"MatchkeyConfig {name!r} (type='probabilistic') sets "
+        f"'threshold'={value}, which is IGNORED. "
+        "Probabilistic matchkeys cut on 'link_threshold' (and "
+        "'review_threshold'); 'threshold' applies to weighted "
+        "matchkeys only. Set 'link_threshold' instead. See #2483."
+    )
+
+
 _VALID_MK_TYPES = ("exact", "weighted", "probabilistic")
 
 
@@ -676,6 +696,20 @@ class MatchkeyConfig(BaseModel):
                 raise ValueError(
                     "review_threshold must be less than or equal to link_threshold."
                 )
+            if self.threshold is not None:
+                # #2483: `threshold` is the WEIGHTED matchkey's cutoff and is
+                # inert here -- the probabilistic scorers read `link_threshold`.
+                # Silently ignoring it is expensive: a user swept `threshold`
+                # 0.90-0.99, got byte-identical results, and concluded the cut
+                # did not matter on their data, when it was measuring nothing.
+                # Warn rather than raise -- rejecting would break configs that
+                # merely carry a stray key, and this is a usage mistake, not a
+                # corrupt config.
+                warnings.warn(
+                    _inert_threshold_message(self.name, self.threshold),
+                    UserWarning,
+                    stacklevel=2,
+                )
             for f in self.fields:
                 if f.scorer is None:
                     raise ValueError(
@@ -752,6 +786,53 @@ class MatchkeyConfig(BaseModel):
     # invariant the validator promised — if a property raises, a caller has
     # mutated the model after construction (or skipped validation) and the
     # crash points at the bug.
+    #: Which attribute actually decides a link, per matchkey type. Probabilistic
+    #: matchkeys cut on ``link_threshold``; ``threshold`` is inert on them
+    #: (#2483). Kept as data next to the accessors below so every caller that
+    #: needs to READ or PERTURB "the cutoff" agrees on which field that is --
+    #: two call sites each hardcoding `threshold` is how the library ended up
+    #: perturbing an inert field and calling the result a stability signal.
+    _CUTOFF_FIELD_BY_TYPE = {"probabilistic": "link_threshold"}
+
+    @property
+    def cutoff_field(self) -> str:
+        """Name of the attribute that actually cuts for this matchkey's type."""
+        return self._CUTOFF_FIELD_BY_TYPE.get(self.type or "", "threshold")
+
+    @property
+    def cutoff(self) -> float | None:
+        """The operative decision cutoff, or None when none has been chosen.
+
+        ``None`` means no cutoff was set on the field that this matchkey type
+        actually reads -- which for a probabilistic matchkey is the situation
+        #2483 reported: a runtime fallback picks the cut and nothing in the
+        config says so. Callers that perturb a cutoff must treat ``None`` as
+        NOT PERTURBABLE rather than falling back to ``threshold``: shifting an
+        inert field produces variants that match identically, and any stability
+        or sensitivity number computed from them is false confidence.
+        """
+        return getattr(self, self.cutoff_field, None)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        # Pydantic model-validators only fire at construction, and
+        # `validate_assignment` is off, so the constructor-time guard against
+        # setting `threshold` on a probabilistic matchkey never saw the workflow
+        # that actually cost the #2483 reporter their afternoon: build a config
+        # via `auto_configure_probabilistic_df`, then assign `mk.threshold` and
+        # sweep it. That path warned NOTHING and changed NOTHING.
+        #
+        # Narrow interception rather than `validate_assignment=True`: the latter
+        # re-runs every validator on every assignment, and internal code mutates
+        # these models freely (`mk.rerank = False`, threshold sweeps) in ways
+        # that would pay that cost on every write.
+        super().__setattr__(name, value)
+        if name == "threshold" and value is not None and self.type == "probabilistic":
+            warnings.warn(
+                _inert_threshold_message(self.name, value),
+                UserWarning,
+                stacklevel=2,
+            )
+
     @property
     def fuzzy_threshold(self) -> float:
         """``threshold`` narrowed to ``float`` for weighted matchkeys.
@@ -845,6 +926,60 @@ class CanopyConfig(BaseModel):
         default=500,
         description="Ceiling on records in one canopy, capping the candidate pairs it can generate.",
     )
+
+
+class TokenBlockingConfig(BaseModel):
+    """DF-pruned token blocking on a free-text column (#2488).
+
+    Classic inverted-index blocking: tokenize the column, index each record
+    under every token it contains, and treat each token as a block. A record
+    lands in many blocks, so two records are candidates when they share ANY
+    token -- unlike the prefix/soundex keys, which need agreement on one
+    derived value and therefore miss any pair that disagrees on the prefix.
+
+    Why this exists alongside ``lsh``: MinHash/LSH approximates JACCARD
+    similarity of the whole token set, so it needs the two strings to overlap
+    substantially. Cross-vendor product titles routinely share two or three
+    discriminative tokens out of fifteen, which is low Jaccard and high
+    evidence. Measured on Amazon-Google (4589 records, 1300 truth pairs), LSH
+    word-shingles peak at 55.9% pair recall while DF-pruned token blocking
+    reaches 98.4%.
+
+    The cost control is ``max_df``: a token in D records forms a block of D and
+    contributes D(D-1)/2 pairs, so pruning high-document-frequency tokens
+    ("software", "for", "the") removes nearly all the cost and almost none of
+    the recall -- those tokens are common precisely because they do not
+    discriminate.
+    """
+
+    column: str = Field(
+        description="Free-text column tokenized to build the inverted index.",
+    )
+    min_token_length: int = Field(
+        default=3,
+        description="Tokens shorter than this are dropped; short tokens are mostly noise ('1', 'w/') and form large low-evidence blocks.",
+    )
+    max_df_ratio: float = Field(
+        default=0.02,
+        description="Drop tokens appearing in more than this fraction of records. Used to derive the cap when max_df is unset.",
+    )
+    max_df: int | None = Field(
+        default=None,
+        description="Absolute document-frequency cap. When unset it is derived from max_df_ratio and clamped to [10, 1000] so the cap stays bounded at any frame size.",
+    )
+
+    @model_validator(mode="after")
+    def _validate(self) -> TokenBlockingConfig:
+        if self.min_token_length < 1:
+            raise ValueError("TokenBlockingConfig 'min_token_length' must be >= 1.")
+        if not 0.0 < self.max_df_ratio <= 1.0:
+            raise ValueError("TokenBlockingConfig 'max_df_ratio' must be in (0, 1].")
+        if self.max_df is not None and self.max_df < 2:
+            raise ValueError(
+                "TokenBlockingConfig 'max_df' must be >= 2 (a token in one record "
+                "blocks nothing)."
+            )
+        return self
 
 
 class LSHKeyConfig(BaseModel):
@@ -1022,6 +1157,24 @@ class ThroughputConfig(BaseModel):
     )
 
 
+#: Strategies whose candidate generation is driven by ``keys`` / ``passes``.
+#:
+#: For every OTHER strategy an empty ``keys`` is NORMAL, not degenerate: the plan
+#: lives in its own config block (``token``, ``lsh``, ``simhash``, ``perceptual``,
+#: ``canopy``) or is derived at run time (``learned``, ``ann``, ``ann_pairs``,
+#: ``sorted_neighborhood``). Several of those validators actively REJECT ``keys``.
+#:
+#: This exists because the #417 degenerate-blocking guard used to infer "no
+#: blocking configured" from ``not blocking.keys`` alone, which condemns every
+#: self-configured strategy on sight -- it marked a working ``token`` plan RED and
+#: then estimated block size from the MATCHKEY fields, judging a blocking plan
+#: that was not the configured one (#2488). Read by that guard and by
+#: ``_validate_keys_or_passes`` below so there is one list, not two.
+KEYS_DRIVEN_BLOCKING_STRATEGIES: frozenset[str] = frozenset({
+    "static", "adaptive", "multi_pass",
+})
+
+
 class BlockingConfig(BaseModel):
     keys: list[BlockingKeyConfig] = Field(
         default_factory=list,
@@ -1035,7 +1188,7 @@ class BlockingConfig(BaseModel):
         default=False,
         description="When true, blocks exceeding max_block_size are dropped rather than scored, guarding against mega-block blowups.",
     )
-    strategy: Literal["static", "adaptive", "sorted_neighborhood", "multi_pass", "ann", "canopy", "ann_pairs", "learned", "lsh", "simhash", "perceptual"] = Field(
+    strategy: Literal["static", "adaptive", "sorted_neighborhood", "multi_pass", "ann", "canopy", "ann_pairs", "learned", "lsh", "simhash", "perceptual", "token"] = Field(
         default="static",
         description="Candidate-generation method that selects how pairs are proposed for scoring.",
     )
@@ -1111,6 +1264,10 @@ class BlockingConfig(BaseModel):
         default=None,
         description="MinHash/LSH configuration required when the strategy is 'lsh'.",
     )
+    token: TokenBlockingConfig | None = Field(
+        default=None,
+        description="DF-pruned token-blocking configuration required when the strategy is 'token'.",
+    )
     simhash: SimHashKeyConfig | None = Field(
         default=None,
         description="SimHash/LSH configuration required when the strategy is 'simhash'.",
@@ -1128,6 +1285,8 @@ class BlockingConfig(BaseModel):
         # Strategies that don't need keys: ann, ann_pairs, canopy, learned,
         # sorted_neighborhood (uses sort_key instead). "lsh" carries its own
         # LSHKeyConfig and is validated positively below.
+        # Subset of KEYS_DRIVEN_BLOCKING_STRATEGIES: multi_pass accepts
+        # `passes` instead, handled on the next line.
         needs_keys = self.strategy in ("static", "adaptive")
         needs_passes = self.strategy == "multi_pass"
         if needs_keys and not self.keys and not self.sub_block_keys:
@@ -1145,6 +1304,14 @@ class BlockingConfig(BaseModel):
                 raise ValueError(
                     "BlockingConfig with strategy='lsh' must not set 'keys'/'passes' "
                     "(it uses the 'lsh' config block)."
+                )
+        if self.strategy == "token":
+            if self.token is None:
+                raise ValueError("BlockingConfig with strategy='token' requires 'token'.")
+            if self.keys or self.passes:
+                raise ValueError(
+                    "BlockingConfig with strategy='token' must not set 'keys'/'passes' "
+                    "(it uses the 'token' config block)."
                 )
         if self.strategy == "simhash":
             if self.simhash is None:
@@ -2009,6 +2176,10 @@ class IdentityConfig(BaseModel):
         default_factory=list,
         description="Rules deriving entity-to-entity relationship edges from shared non-identity attributes; empty leaves identity resolution unchanged.",
     )
+    deterministic_merge_keys: list[str | list[str]] = Field(
+        default_factory=list,
+        description="Authoritative identifier columns (e.g. 'npi') whose shared non-null value collapses fragmented entities into one AFTER resolution: records are reassigned to the surviving id and absorbed nodes retired. A unique government id can't be split across entities. Entity-level (post-resolve), so it never cascades clusters. An entry may be a single column OR a list of columns for a GUARDED merge that requires the whole tuple to match (e.g. ['npi', 'last_name'] merges on a shared NPI only when the name also agrees, so a dirty/shared id alone can't force a bad merge). Empty (default) = off.",
+    )
     # #1110: cross-device / channel stitching (CDP/MDM epic #1108). None ->
     # stitching is not configured (the default; identity resolution is
     # unchanged).
@@ -2106,7 +2277,39 @@ class SemanticBlockingConfig(BaseModel):
     )
 
 
+#: Current GoldenMatchConfig schema version. Bumped when the config surface
+#: changes in a way that needs migration. Recorded alongside a run's config
+#: fingerprint so lineage survives schema evolution; deliberately EXCLUDED from
+#: config_fingerprint() so a no-op schema bump doesn't change a config's id.
+CONFIG_SCHEMA_VERSION = 1
+
+# Every value `GoldenMatchConfig.backend` accepts. Closed on purpose: the field
+# was free text, so a typo ran the default in-memory path silently (see
+# `_reject_unknown_backend`).
+#
+# `spark` is the odd one out and is documented as such: the others swap the
+# block SCORER inside the one-box pipeline over a local dataset, while `spark`
+# declares that the config targets the distributed tier, whose entry point
+# (`goldenmatch.spark.run_config_pipeline`) takes a Spark DataFrame. It is
+# accepted here so a config can carry the intent, and refused loudly by the
+# local block-scorer dispatcher rather than silently ignored there.
+VALID_BACKENDS: frozenset[str] = frozenset({
+    "ray",
+    "duckdb",
+    "duckdb-backend",
+    "datafusion",
+    "bucket",
+    "chunked",
+    "polars-direct",
+    "spark",
+})
+
+
 class GoldenMatchConfig(BaseModel):
+    schema_version: int = Field(
+        default=CONFIG_SCHEMA_VERSION,
+        description="Config schema version; set by GoldenMatch (not user-tuned). Recorded with a run's config fingerprint for lineage/migration. Excluded from the fingerprint so a semantics-preserving schema bump keeps the same config id.",
+    )
     input: InputConfig | None = Field(
         default=None,
         description="Input files to load; omit when passing a DataFrame directly to the API.",
@@ -2165,8 +2368,8 @@ class GoldenMatchConfig(BaseModel):
     )
     backend: str | None = Field(
         default=None,
-        description="Execution backend: None (default Polars in-memory), 'ray', 'duckdb', 'chunked', or 'bucket'.",
-    )  # None (default Polars), "ray", "duckdb"
+        description="Execution backend: None (default in-memory), 'ray', 'duckdb', 'datafusion', 'chunked', 'bucket', 'polars-direct', or 'spark'.",
+    )
     distributed_routing: DistributedRoutingConfig | None = Field(
         default=None,
         description="Per-stage distributed-routing pins; None lets the planner decide every stage.",
@@ -2280,6 +2483,32 @@ class GoldenMatchConfig(BaseModel):
     # byte-identical when unset. Mirrors _throughput_plan's hand-off contract.
     _use_fused_match: bool = PrivateAttr(default=False)
 
+    @field_validator("backend")
+    @classmethod
+    def _reject_unknown_backend(cls, v: str | None) -> str | None:
+        """`backend` was free text, and an unrecognized value SILENTLY ran the
+        default in-memory path.
+
+        So `backend="rayy"` (or `"spark"`, before it existed) produced an
+        ordinary single-box run with no warning: the user believed they were
+        distributing and were not. `_get_block_scorer` returns the default
+        scorer for anything it does not recognize, which is the right shape for
+        a dispatcher and the wrong place to catch a typo. Catch it here, at
+        construction, where the name is still attached to the thing that named
+        it.
+        """
+        if v is None:
+            return v
+        name = v.strip()
+        if name not in VALID_BACKENDS:
+            raise ValueError(
+                f"Unknown backend {v!r}. Valid backends: "
+                f"{', '.join(sorted(VALID_BACKENDS))} (or omit for the default "
+                f"in-memory path). An unrecognized value used to run "
+                f"single-box silently."
+            )
+        return name
+
     @model_validator(mode="after")
     def _validate_fuzzy_needs_blocking(self) -> GoldenMatchConfig:
         mks = self.get_matchkeys()
@@ -2297,6 +2526,32 @@ class GoldenMatchConfig(BaseModel):
         if self.match_settings:
             return self.match_settings.matchkeys
         return []
+
+    def config_fingerprint(self) -> str:
+        """Deterministic content hash of this config's matching semantics.
+
+        sha256 over the canonical JSON dump (sorted keys), so two configs that
+        would resolve identically get the same id and a diff is a byte diff.
+        Excludes the per-run ``output.run_name`` and the ``schema_version``
+        (a semantics-preserving schema bump must not change the id). Stamp the
+        return value on a resolve run to answer "which config produced this
+        entity" and to diff configs across runs. Returns ``"sha256:<64 hex>"``.
+        """
+        data = self.model_dump(mode="json", exclude_none=False)
+        data.pop("schema_version", None)
+        out = data.get("output")
+        if isinstance(out, dict):
+            out.pop("run_name", None)
+        canon = json.dumps(data, sort_keys=True, separators=(",", ":"), default=str)
+        return "sha256:" + hashlib.sha256(canon.encode("utf-8")).hexdigest()
+
+    @property
+    def config_id(self) -> str:
+        """Short form of :meth:`config_fingerprint` for display/labels.
+
+        ``"sha256:"`` plus the first 8 hex chars, e.g. ``"sha256:9f3c8a1b"``.
+        """
+        return self.config_fingerprint()[: len("sha256:") + 8]
 
 
 # RulesPayload's `blocking` field forward-references BlockingConfig (defined

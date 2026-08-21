@@ -22,13 +22,13 @@ the most promising combination end-to-end.
 
 The combination, called **program 1+3+6**, treats ER as one amortized engine:
 
-- **(1) Amortized Bayesian partition posterior** — one trained network emits
+- **(1) Amortized Bayesian partition posterior.** One trained network emits
   `p(partition | records)` in a single forward pass, no per-dataset MCMC,
   amortized *across* datasets.
-- **(3) Reconstruction-as-likelihood** — instead of a hand-coded distortion model,
+- **(3) Reconstruction-as-likelihood.** Instead of a hand-coded distortion model,
   *learn* the co-reference signal as "can a record's masked field be reconstructed
   from its cluster-mates?"
-- **(6) EIG active design** — choose the human/LLM label that maximally collapses
+- **(6) EIG active design.** Choose the human/LLM label that maximally collapses
   the **partition** posterior's entropy (not per-pair uncertainty), so transitivity
   resolves many induced pairs per label.
 
@@ -57,12 +57,12 @@ with an honest `RESULTS-*.md` writeup.
 
 | Step | Question | Outcome |
 |---|---|---|
-| 1 — reconstructability | Does masked-field reconstruction from cluster-mates rank clusterings by F1? | **Yes** — Spearman +0.944 on real Febrl3; data-dependent kernel (char for PII, IDF for bibliographic); precision-blind to over-merge (motivates a learned prior). |
-| 2 — amortized head | Calibrated posterior + learned microclustering prior, no size penalty? | **Yes** — ECE 0.01–0.03, learned new-cluster rate within ~0.01 of truth; F1 at parity with an oracle-tuned baseline. |
-| 3 — EIG active design | Does partition-EIG beat per-pair uncertainty at equal label budget? | **Yes** — collapses posterior uncertainty ~2.7× faster than per-pair; transitivity does the work. |
-| 4 — string encoder | Does a from-scratch encoder trained on a simulator transfer zero-shot to real schemas? | **No** — memorised the simulator's vocabulary; real F1 0.03 (over-fragments). Localised the bottleneck to the encoder. |
-| 5 — pretrained encoder | Does a frozen pretrained text encoder fix transfer? | **Largely** — real F1 0.03 → 0.42, calibrated zero-shot; but now over-merges. |
-| 6 — richer simulator | Does a realistic simulator fix the over-merge? | **Yes** — exact cluster counts (60/60), real F1 ~doubles (0.61–0.68), still calibrated. |
+| 1: reconstructability | Does masked-field reconstruction from cluster-mates rank clusterings by F1? | **Yes**: Spearman +0.944 on real Febrl3; data-dependent kernel (char for PII, IDF for bibliographic); precision-blind to over-merge (motivates a learned prior). |
+| 2: amortized head | Calibrated posterior + learned microclustering prior, no size penalty? | **Yes**: ECE 0.01–0.03, learned new-cluster rate within ~0.01 of truth; F1 at parity with an oracle-tuned baseline. |
+| 3: EIG active design | Does partition-EIG beat per-pair uncertainty at equal label budget? | **Yes**: collapses posterior uncertainty ~2.7× faster than per-pair; transitivity does the work. |
+| 4: string encoder | Does a from-scratch encoder trained on a simulator transfer zero-shot to real schemas? | **No**: memorised the simulator's vocabulary; real F1 0.03 (over-fragments). Localised the bottleneck to the encoder. |
+| 5: pretrained encoder | Does a frozen pretrained text encoder fix transfer? | **Largely**: real F1 0.03 → 0.42, calibrated zero-shot; but now over-merges. |
+| 6: richer simulator | Does a realistic simulator fix the over-merge? | **Yes**: exact cluster counts (60/60), real F1 ~doubles (0.61–0.68), still calibrated. |
 
 ## The honest bottom line
 
@@ -79,22 +79,22 @@ It loses to a ~15-line baseline and is far behind the production
 [auto-config](/goldenmatch/auto-config) it was exploring alternatives to.
 
 **Why the ceiling is structural.** The residual gap is recall on hard typos, and the
-only fix is a much stronger encoder — but fine-tuning an encoder on matching pairs
+only fix is a much stronger encoder: but fine-tuning an encoder on matching pairs
 *is* supervised entity matching, already solved (Ditto ≈ 98% on DBLP-ACM).
 Amortization / zero-shot is precisely what costs the accuracy. And these benchmarks
 are near-saturated (incumbents at 0.94–0.96), so there was no accuracy headroom for
-novelty — the test favours the incumbent.
+novelty: the test favours the incumbent.
 
 ## What's worth keeping
 
-- **The mechanisms and their evidence** — reconstructability as a label-free
+- **The mechanisms and their evidence.** Reconstructability as a label-free
   cluster-quality signal, a calibrated amortized partition posterior, and
   EIG-over-partition active selection are each independently interesting and
   reproducible.
-- **The diagnosis** — for amortized ER, the encoder and the simulator (not the
+- **The diagnosis.** For amortized ER, the encoder and the simulator (not the
   inference head) are the gating problems; a pretrained encoder + realistic
   simulator recover most of the transfer.
-- **The reframing** — if this line is ever revived, it should be as a
+- **The reframing.** If this line is ever revived, it should be as a
   **calibrated-uncertainty / label-efficiency** play on **hard regimes** (messy
   product data, cross-org [PPRL](/goldenmatch/pprl)), not as an accuracy play on
   saturated structured benchmarks.

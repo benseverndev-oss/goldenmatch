@@ -30,3 +30,25 @@ types:
     value_signals:
       max_unique: 15
     suppress: ["uniqueness", "range_distribution"]
+
+# `subscriber` is declared to lift its suppression -- it is also a field type,
+# so the vertical's primary party could not be detected.
+roles:
+  subscriber:
+    kind: person
+    name_hints: ["subscriber", "customer"]
+    typical_types: ["subscriber", "plan", "usage"]
+
+  device:
+    kind: asset
+    name_hints: ["device", "handset", "terminal"]
+    typical_types: ["device"]
+
+  carrier:
+    kind: organization
+    name_hints: ["carrier", "operator", "mno"]
+    typical_types: ["network"]
+
+  reseller:
+    kind: organization
+    name_hints: ["reseller", "dealer", "mvno"]

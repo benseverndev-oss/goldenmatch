@@ -43,7 +43,7 @@ v2 (Arrow C stream polymorphism). Your ingestion code does not change.
 
 ## The Arrow backend is now the default
 
-`GOLDENMATCH_FRAME` defaults to `arrow` — the measured-faster lane (~36%
+`GOLDENMATCH_FRAME` defaults to `arrow`: the measured-faster lane (~36%
 faster end-to-end on the 100K zero-config A/B benchmark). Behavior is
 output-equivalent to the Polars lane, enforced by a differential harness with
 frozen fixtures.
@@ -56,7 +56,7 @@ export GOLDENMATCH_FRAME=polars     # opt-out escape hatch
 ```
 
 **v3.1.0 resolution**: the Arrow descent completed. `polars` moved out of the
-required dependencies — `pip install goldenmatch` runs the engine end to end
+required dependencies: `pip install goldenmatch` runs the engine end to end
 on Arrow (a zero-polars CI gate proves a full dedupe with polars imports
 blocked). The polars-free install is also the FAST configuration: measured
 head-to-head, the Arrow lane without polars beats the polars-present run
@@ -68,8 +68,8 @@ an accelerator.
 
 ## Notes for specific surfaces
 
-- **MCP / A2A**: tool responses were already JSON — no change.
-- **dbt (`dbt-goldensuite`)**: unaffected — the internal pipeline result
+- **MCP / A2A**: tool responses were already JSON, no change.
+- **dbt (`dbt-goldensuite`)**: unaffected, the internal pipeline result
   frames are `pyarrow.Table` on both lanes since the engine descent completed.
 - **One behavioral nuance**: sampling-based auto-config decisions are
   deterministic per backend but may legitimately differ between the `arrow`

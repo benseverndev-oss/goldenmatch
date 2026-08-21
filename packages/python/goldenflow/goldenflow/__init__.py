@@ -1,4 +1,20 @@
-__version__ = "2.1.0"
+"""GoldenFlow -- data transformation: standardize, clean and normalize messy
+data with auto-detection and domain-aware transforms.
+
+AUTHORITATIVE SOURCES (read these instead of inferring behaviour from source):
+
+  * ``goldenflow/llms.txt`` -- ships INSIDE this package, next to this file:
+    ``Path(goldenflow.__file__).parent / "llms.txt"``. Condensed, current, written
+    for machine readers.
+  * https://docs.bensevern.dev/docs/goldenflow -- full docs.
+  * https://github.com/benseverndev-oss/goldenmatch -- source + issues.
+
+Why this block exists: much of this package's behaviour is *decided*, not
+incidental, and those decisions are documented and contract-tested. Reading the
+implementation shows WHAT one path does, but not which guarantees are
+load-bearing, which fallbacks are deliberate, or which knobs exist.
+"""
+__version__ = "2.2.0"
 
 import goldenflow.notebook  # noqa: F401 — register Jupyter _repr_html_ methods
 import goldenflow.transforms.address  # noqa: F401
@@ -68,7 +84,24 @@ def transform_file(path, config=None, output_dir=None):
 
 
 def transform_df(df, config=None):
-    """Convenience function: transform a DataFrame."""
+    """Convenience function: transform a ``pl.DataFrame`` (needs ``goldenflow[polars]``).
+
+    An Arrow frame is redirected to :func:`transform`, which handles it Polars-free.
+    That direction is deliberate: `transform` is THE Polars-free door, and making
+    this a second one would duplicate the surface. Before the redirect an Arrow
+    caller got `ModuleNotFoundError: No module named 'polars'` from deep inside the
+    engine, which named the missing package but not the fact that a supported
+    Polars-free path existed two functions away (#2447).
+    """
+    from goldenflow.engine.columnar import _is_arrow_frame
+
+    if _is_arrow_frame(df):
+        raise TypeError(
+            "transform_df() is the polars engine; pass an arrow Table/RecordBatch "
+            "to transform() instead, which handles it polars-free and returns a "
+            "ColumnarResult (.columns dict + .manifest). transform_df() needs "
+            "goldenflow[polars] and a pl.DataFrame."
+        )
     engine = TransformEngine(config=config)
     return engine.transform_df(df)
 

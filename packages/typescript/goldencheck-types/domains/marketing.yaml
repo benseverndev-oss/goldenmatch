@@ -28,3 +28,29 @@ types:
     value_signals:
       max_unique: 100
     suppress: ["uniqueness"]
+
+# `lead` is suppressed three times over (the `lead`, `pipeline` and
+# `attribution` types all hint it), so the vertical's primary party was
+# undetectable.
+roles:
+  lead:
+    kind: person
+    name_hints: ["lead", "prospect"]
+    typical_types: ["lead", "pipeline"]
+
+  contact:
+    kind: person
+    name_hints: ["contact"]
+
+  account:
+    kind: organization
+    name_hints: ["account", "client"]
+
+  campaign:
+    kind: asset
+    name_hints: ["campaign", "promotion"]
+    typical_types: ["campaign", "metrics", "attribution"]
+
+  agency:
+    kind: organization
+    name_hints: ["agency", "partner"]

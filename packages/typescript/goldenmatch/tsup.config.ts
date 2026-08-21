@@ -66,6 +66,12 @@ export default defineConfig({
     // separate subpath (`goldenmatch/core/fs-scoring`), out of the default core
     // bundle.
     "core/fsScore": "src/core/fsScore.ts",
+    // The zero-import edit-distance leaf (jaro / jaroWinkler / levenshtein* /
+    // damerauLevenshtein*). Also re-exported from `core/index`, so this subpath
+    // adds nothing for normal consumers — it exists so a SIBLING package can
+    // single-source these primitives without pulling `core/scorer.ts`'s
+    // reference-data tables and WASM registry (single-kernel-collapse R5).
+    "core/stringDistance": "src/core/stringDistance.ts",
     "node/index": "src/node/index.ts",
     "node/mcp/server": "src/node/mcp/server.ts",
     "node/a2a/server": "src/node/a2a/server.ts",

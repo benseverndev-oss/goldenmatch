@@ -120,7 +120,10 @@ def run_graph_er(
         logger.info("Graph ER: matching entity '%s'", entity.name)
         result = run_dedupe(entity.sources, entity.config)
         entity.clusters = result.get("clusters", {})
-        entity.scored_pairs = result.get("scored_pairs", [])
+        # #2417: via the helper -- a bare `.get` reads empty on the B2c FS
+        # path, which would silently drop this entity's evidence pairs.
+        from goldenmatch.core.pairs import materialize_scored_pairs
+        entity.scored_pairs = materialize_scored_pairs(result)
 
         # Load data for relationship lookups
         from goldenmatch.core.ingest import load_file

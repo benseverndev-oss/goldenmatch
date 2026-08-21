@@ -53,7 +53,7 @@ result = dedupe_df(df, config=cfg)
 
 ## Runtime knobs (env vars)
 
-This page covers the *config object* you pass for data-shape control. The *runtime* knobs — native acceleration, backend selection, the distributed pipeline, and every `GOLDENMATCH_*` environment variable with its default and when-to-use guidance — live in the [Tuning & opt-ins reference](https://docs.bensevern.dev/goldenmatch/tuning). Reach for that page when a run is slower than expected or you're scaling past a million rows.
+This page covers the *config object* you pass for data-shape control. The *runtime* knobs — native acceleration, backend selection, the distributed pipeline, and every `GOLDENMATCH_*` environment variable with its default and when-to-use guidance — live in the [Tuning & opt-ins reference](https://docs.bensevern.dev/docs/goldenmatch/tuning). Reach for that page when a run is slower than expected or you're scaling past a million rows.
 
 ## Opting out
 

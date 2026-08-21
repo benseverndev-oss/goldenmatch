@@ -1,0 +1,42 @@
+id: ts-no-duplicate-kernel-math
+snapshots:
+  'export function jaroWinkler(a: string, b: string): number { return 0; }':
+    labels:
+    - source: 'function jaroWinkler(a: string, b: string): number { return 0; }'
+      style: primary
+      start: 7
+      end: 71
+    - source: jaroWinkler
+      style: secondary
+      start: 16
+      end: 27
+  'export function levenshteinDistance(s1: string, s2: string): number { return 0; }':
+    labels:
+    - source: 'function levenshteinDistance(s1: string, s2: string): number { return 0; }'
+      style: primary
+      start: 7
+      end: 81
+    - source: levenshteinDistance
+      style: secondary
+      start: 16
+      end: 35
+  'function levenshtein(a: string, b: string): number { return 0; }':
+    labels:
+    - source: 'function levenshtein(a: string, b: string): number { return 0; }'
+      style: primary
+      start: 0
+      end: 64
+    - source: levenshtein
+      style: secondary
+      start: 9
+      end: 20
+  'function soundex(value: string): string { return value; }':
+    labels:
+    - source: 'function soundex(value: string): string { return value; }'
+      style: primary
+      start: 0
+      end: 57
+    - source: soundex
+      style: secondary
+      start: 9
+      end: 16

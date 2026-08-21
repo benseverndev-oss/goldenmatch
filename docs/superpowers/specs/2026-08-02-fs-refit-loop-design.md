@@ -1,7 +1,111 @@
 # FS-aware refit loop — design (Phase 3, threshold-refit first slice)
 
-Status: **DESIGN — measurement done, awaiting approval before implementation.**
+Status: **IMPLEMENTED, DEFAULT-ON as of 2026-08-13 (#2518).** History: flipped on
+2026-08-02, REVERTED 2026-08-07 (#2387) because the cluster-shape guard was
+defective, then re-flipped once that guard was fixed and the change was validated
+on the panel that GATES it rather than the panels that motivated it. The
+objective below was CORRECTED by measurement during implementation (see
+"Implemented objective"); the *guard* it settled on was then found defective (see
+"Default flip reverted") and repaired in #2518 by pairing the single-outlier
+max-cluster test with a global `_expelled_share` criterion.
+`GOLDENMATCH_FS_REFIT_THRESHOLD=0` is now the kill-switch (byte-identical to the
+fixed cutoff). Wired across ALL FS routes (route-extension) and auditable (3c
+observability logging).
+
+## Default flip reverted (2026-08-07, #2387)
+
+The flip's evidence was: (a) STRUCTURAL no-op on 0.50-optimal data — the
+cluster-shape guard rejects any candidate that doesn't reduce over-merge; (b)
+MEASURED scale-neutral (QIS realistic 50k/100k ΔF1 **+0.00000**); (c) recovers
+over-merge the fixed cutoff can't — household_hardneg **+0.053**,
+cotenant_hardneg **+0.678**; no regression on the `ab_lever` panel.
+
+**Claim (a) is false, and it is the load-bearing one.** The nightly
+`bench-suggest-quality` gate went red the morning after the flip and stayed red
+five nights: `ncvr_synthetic convergence_final_f1` **0.9847 → 0.8881 (−0.0966)**,
+confirmed by single-variable A/B on one sha (`=0` → 0.9847, default-on → 0.8881).
+
+**Root cause — the cluster-shape guard is a single-outlier statistic.**
+`max_candidate < max_default` compares one scalar over the whole dataset. On
+ncvr_synthetic the guard commits `0.5000 → 0.7000 (max cluster 5 → 2, over-merge
+reduced)` — and every gold cluster in that dataset is *exactly size 2* (2500
+disjoint pairs, max gold size 2). So the guard's own objective is SATISFIED while
+F1 falls: it fixes the one or two genuinely over-merged clusters and is
+structurally blind to the true pairs the raised cutoff drops across the other
+~2500 correct size-2 clusters — all of which live BELOW the max. The guard works
+on household_hardneg only because over-merge IS the dominant error mode there.
+
+This is a defect, not a stale baseline, so the fix is a revert rather than a
+re-bless (re-blessing would bake in −0.0966 on a dataset where the guard's stated
+objective was met).
+
+**Why the gates missed it:** `ab_lever` and QIS both omit ncvr_synthetic, and the
+`fs-lever-gate` added 2026-08-03 — *after* the flip — runs that same `ab_lever`
+panel. The only lane that covers it is nightly-only, so the flip went green on
+push and reddened the next morning.
+
+**Re-flipping requires both:** (1) a GLOBAL accept criterion — e.g. reject when
+the linked-pair count drops beyond a bound, or compare the full cluster-size
+distribution instead of its maximum; and (2) a validation panel that INCLUDES
+ncvr_synthetic. Validate a default flip on the panel that *gates* it, not the
+panel that motivated it.
 Program: FS/Lever Enablement (`2026-08-01-fs-lever-enablement-design.md`), item 3.
+
+## Implemented objective (2026-08-02) — corrected by measurement
+
+The original design named a "cluster-size knee + mass_above_threshold/dip" health
+signal. Measurement during implementation REJECTED the naive forms and produced a
+different, validated objective. The negative results are the load-bearing part:
+
+- **Maximize multi-member cluster count** — REJECTED. Peaks at 0.60 on
+  historical_50k and would regress F1 0.841→0.756 (it can't tell a correctly
+  separated entity from a fragmented true one).
+- **Otsu on the scored pairs** — REJECTED as the cut. FS score distributions are
+  mode-IMBALANCED (a small false-pair band vs a huge true-match mass); Otsu's
+  variance split lands INSIDE the dominant mode (measured 0.88, cutting recall to
+  0.62).
+- **Bare distributional VALLEY** (density trough, mass on both sides) — recovers
+  household but REGRESSED person (−0.06) and ncvr (−0.10): a gap can't distinguish
+  an over-merge false band from a gap between low-scoring TRUE matches.
+
+The shipped objective is **valley + two guards** (defense-in-depth; each guard
+alone regressed):
+1. **Deep-valley gate** — the trough must be NEARLY EMPTY (`< _REFIT_VALLEY_MAX
+   = 0.10` of the smaller flank mode). A real class boundary is a near-empty gap
+   (household 0.00); ncvr's 22%-of-mode dip inside its corruption-spread match
+   distribution is a shoulder, not a boundary → no refit.
+2. **Cluster-shape guard** (`fs_refit_link_threshold`) — commit the candidate ONLY
+   when re-clustering at it REDUCES over-merge (max cluster size drops) vs the
+   default. Household: cutting shrinks giant surname-collapsed clusters (max 8→3)
+   → accept. person/ncvr/historical: already right-sized, cutting only drops real
+   matches (max unchanged) → reject, keep 0.50.
+
+**MEASURED (dedupe_df, flag on vs off):** household_hardneg F1 **0.947 → 1.000
+(+0.053)**; the full panel (febrl3 / ncvr_synthetic / dblp_acm / person /
+historical_50k) is **flat, worst ΔF1 +0.0000** (ab_lever GATE PASS). Re-cluster
+only (no re-scoring). Tests: `tests/test_fs_refit_threshold.py` (16). Helpers:
+`probabilistic.fs_refit_threshold` (pure valley), `_score_distribution_valley`,
+`fs_refit_link_threshold` (guarded).
+
+**ROUTE-EXTENSION (2026-08-02).** The refit was initially wired into the default
+B2c columnar route only. It now resolves through ONE shared helper
+(`pipeline._maybe_refit_link_threshold`, accepting a pair-list OR a
+`PAIR_STREAM_SCHEMA` table) called on EVERY FS scoring route: B2c columnar,
+arrow-stream, list/batched (the non-native fallback), external-blocks (lsh/ann/
+learned/canopy/SN), and out-of-core. Each computes the refit from its own scored
+pairs (down to the review cut) before the link/review split — same distribution,
+same guarded objective, route-independent. Only the per-block **bench-dump**
+diagnostic path keeps the fixed cutoff (it scores per-block for candidate
+accounting; the refit needs the whole distribution). **Measured (household_hardneg,
+flag on vs off): +0.0529 on ALL of B2c / list-batched / arrow-stream** (the
+non-columnar routes previously kept 0.947); **person flat +0.0000 on all** —
+no-regression preserved per-route. Route-agnostic contract locked by
+`TestMaybeRefitAcrossRoutes` (list==table, flag-off no-op, explicit-threshold
+respected, min-pairs guard).
+
+---
+
+## Original design (as approved)
 
 ## Problem
 
@@ -101,6 +205,9 @@ demands it.
 - Ships default-OFF behind a flag (`GOLDENMATCH_FS_REFIT_THRESHOLD` or similar);
   default byte-identical. Flip only after the panel + household gate prove it,
   per the domain-comparators / v2 precedent.
+  *(Superseded 2026-08-13, #2518: default is now ON, `=0` is the kill-switch.
+  The "flip only after the panel proves it" rule held — what #2377 got wrong was
+  WHICH panel. The gating panel is `bench-suggest-quality`, not `ab_lever`.)*
 
 ## Phasing
 
@@ -108,9 +215,46 @@ demands it.
   `household_hardneg` anchor as its standing target. One PR.
 - **3b** — blocking / comparison-set refit on a measured target (needs a shape
   where the *blocking*, not the threshold, is off — a separate hunt).
+  - **MEASURED-DECLINED (2026-08-02).** The hunt for an off-*blocking* target came
+    up empty for a STRUCTURAL reason: **auto-config already emits a blocking pass
+    per field** (a 7-pass `multi_pass` on person data), so a true pair co-blocks
+    via *some* pass as long as it shares *any* stable field — committed blocking
+    recall is **1.0** on every constructed adversarial shape (corrupt one name,
+    corrupt both names, heavy surname corruption). The only real under-blocking
+    case — a field the classifier MISCLASSIFIED (e.g. `birth_place`→`name`) — was
+    already solved by the merged `GOLDENMATCH_FS_ORTHOGONAL_BLOCKING` lever. Every
+    residual failure on those shapes was **over-merge (precision 0.24–0.89, recall
+    still 1.0)** — 3a's threshold domain, not blocking. On real historical_50k the
+    same holds: LOWERING the threshold RAISES recall (0.777→0.890 at link 0.30),
+    proving the missing recall is pairs that ARE co-blocked but scored below the
+    cut — scoring, not coverage. A blocking refit can only *add* an unused field,
+    and there is none to add (auto-config used them all); the inverse move —
+    *pruning* noisy passes for precision — already exists opt-in
+    (`blocking_pass_selection.py`) and is better served by the threshold loop (3a).
+    Net: the FS refit-loop value was **entirely in the threshold slice (3a)**;
+    blocking is already iterated at build time. Not built.
 - **3c** — fold the FS loop into the controller's `RunHistory` / commit
   machinery so FS and weighted share one iteration surface (the "one iteration
   surface" unification; largest, last).
+  - **REFRAMED + delivered as OBSERVABILITY (2026-08-02).** The literal framing is
+    a **conceptual mismatch**: `auto_configure_probabilistic_df` is *non-iterative
+    by design* (it does NOT run `AutoConfigController`; 3a proved the FS config is
+    already good), and the refit is a *scoring-time* threshold adjustment in
+    `pipeline._maybe_refit_link_threshold`, not a config iteration — whereas
+    `RunHistory` is a config-iteration audit trail (propose → profile → refine →
+    commit). Forcing the refit into `RunHistory` would mean either re-architecting
+    FS to iterate configs (contradicts the deliberate non-iterated design) or
+    shoehorning a scoring-time decision into a config-time structure — a refactor
+    with **no F1 delta and negative structural value**. The genuine intent behind
+    "one surface" is **auditability**: the refit silently moved the link cutoff
+    (0.50→0.70) on an opt-in path with no record. Delivered by making the decision
+    OBSERVABLE on the SAME logging surface the controller uses for its commit
+    decision — `fs_refit_link_threshold` now logs INFO on commit (`0.50 -> 0.70`,
+    valley candidate, max cluster `N -> M`, over-merge reduced) and DEBUG on
+    decline/no-op. Return behavior byte-identical (log-only); the FS refit is the
+    non-iterated path's analogue of a `RunHistory` decision, now on one surface.
+    Tests: `TestRefitDecisionLogged`. The deeper `RunHistory` merge is DECLINED as
+    a mismatch, not deferred.
 
 ## Risks / non-goals
 

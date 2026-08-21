@@ -36,6 +36,22 @@ Severity = Literal["info", "warning", "error"]
 # RecognizedLevel.approx=True so callers can surface it as a lossy conversion.
 _LEV_ASSUMED_LEN = 10
 
+
+def _resolve_edit_len(edit_len: dict[str, int] | int | None, col: str | None) -> int:
+    """Assumed average length for the edit-distance -> similarity approximation.
+
+    A per-column ``{col: length}`` map (from a data profile / catalog) makes the
+    ``sim = 1 - dist/L`` mapping faithful per field -- the flat default of 10 is
+    too lenient for long fields like email (~20+ chars), where ``dist<=1`` should
+    map to ~0.95, not 0.9, so a bare 10 silently accepts more edit distance than
+    the Splink level intended. An int overrides the default globally; None keeps
+    the historical constant."""
+    if isinstance(edit_len, dict):
+        return edit_len.get(col or "", _LEV_ASSUMED_LEN)
+    if isinstance(edit_len, int) and not isinstance(edit_len, bool) and edit_len > 0:
+        return edit_len
+    return _LEV_ASSUMED_LEN
+
 # convert_comparison emits its per-comparison success finding with this
 # mapped_to placeholder; from_splink()'s _patch_field_placeholders resolves it
 # to the field's final position once the matchkey is assembled. One shared
@@ -286,7 +302,10 @@ class RecognizedLevel:
     derive_separator: str = " "           # separator joining derive_from (geo needs ",")
 
 
-def recognize_level(sql: str, *, is_null_level: bool = False) -> RecognizedLevel | None:
+def recognize_level(
+    sql: str, *, is_null_level: bool = False,
+    edit_len: dict[str, int] | int | None = None,
+) -> RecognizedLevel | None:
     """Recognize a Splink comparison-level `sql_condition` string.
 
     Returns None when the SQL doesn't match any recognized shape (e.g.
@@ -332,7 +351,7 @@ def recognize_level(sql: str, *, is_null_level: bool = False) -> RecognizedLevel
         col_l, col_r, distance = m.group(2), m.group(3), int(m.group(4))
         if col_l != col_r:
             return None
-        sim = max(0.0, 1 - distance / _LEV_ASSUMED_LEN)
+        sim = max(0.0, 1 - distance / _resolve_edit_len(edit_len, col_l))
         return RecognizedLevel("levenshtein", col_l, sim, approx=True)
 
     if _looks_like_date_diff(sql_norm):
@@ -443,7 +462,8 @@ class SplinkConversionError(ValueError):
 
 
 def convert_comparison(
-    comp: dict, idx: int, report: ConversionReport
+    comp: dict, idx: int, report: ConversionReport,
+    edit_len: dict[str, int] | int | None = None,
 ) -> MatchkeyField | None:
     """Convert one Splink `comparisons[idx]` dict into a MatchkeyField.
 
@@ -462,7 +482,7 @@ def convert_comparison(
         level_path = f"{comp_path}.comparison_levels[{j}]"
         sql = level.get("sql_condition", "")
         is_null = bool(level.get("is_null_level"))
-        r = recognize_level(sql, is_null_level=is_null)
+        r = recognize_level(sql, is_null_level=is_null, edit_len=edit_len)
         if r is None:
             report.warn(
                 level_path,
@@ -1037,6 +1057,7 @@ def import_em(
     comparisons: list[tuple[dict, int, MatchkeyField]],
     settings: dict,
     report: ConversionReport,
+    edit_len: dict[str, int] | int | None = None,
 ) -> EMResult | None:
     """Import trained m/u probabilities into an :class:`EMResult`.
 
@@ -1103,7 +1124,7 @@ def import_em(
 
             is_null = bool(level.get("is_null_level"))
             sql = level.get("sql_condition", "")
-            r = recognize_level(sql, is_null_level=is_null)
+            r = recognize_level(sql, is_null_level=is_null, edit_len=edit_len)
 
             if r is None:
                 # Unrecognized level (already dropped by convert_comparison
@@ -1587,7 +1608,8 @@ def _patch_field_placeholders(report: ConversionReport, comp_path: str, field_id
 
 
 def from_splink(
-    source: dict | str | Path | SplinkLinkerLike, *, strict: bool = False
+    source: dict | str | Path | SplinkLinkerLike, *, strict: bool = False,
+    assumed_edit_length: int | dict[str, int] | None = None,
 ) -> SplinkConversion:
     """Convert a Splink settings dict / JSON file / live Linker into a config.
 
@@ -1602,6 +1624,14 @@ def from_splink(
             :class:`SplinkConversionError` (a fully lossless conversion is
             required). When False (default), only error-severity findings
             raise -- e.g. zero convertible comparisons or blocking rules.
+        assumed_edit_length: average string length for the edit-distance ->
+            similarity approximation (Splink ``levenshtein``/``damerau_levenshtein
+            <= k`` levels become ``sim = 1 - k/length``). A ``{column: length}``
+            map makes it faithful per field; an int overrides globally; None
+            keeps the flat default of 10, which is too lenient for long fields
+            like email (a real email averages ~20+ chars, so ``<= 1`` should map
+            to ~0.95, not 0.9). Populate it from a data profile / dbt catalog for
+            an accurate conversion of the fuzzy-string comparisons.
 
     Returns:
         A :class:`SplinkConversion` with a validated ``GoldenMatchConfig``,
@@ -1620,7 +1650,7 @@ def from_splink(
 
     survivors: list[tuple[dict, int, MatchkeyField]] = []
     for idx, comp in enumerate(settings.get("comparisons", [])):
-        field = convert_comparison(comp, idx, report)
+        field = convert_comparison(comp, idx, report, edit_len=assumed_edit_length)
         if field is not None:
             survivors.append((comp, idx, field))
 
@@ -1654,7 +1684,7 @@ def from_splink(
         **scalar_kwargs,
     )
 
-    em_model = import_em(survivors, settings, report)
+    em_model = import_em(survivors, settings, report, edit_len=assumed_edit_length)
 
     # A ValidationError here is a bug in this converter (the emitted config
     # doesn't satisfy GoldenMatchConfig's own invariants) -- let it propagate

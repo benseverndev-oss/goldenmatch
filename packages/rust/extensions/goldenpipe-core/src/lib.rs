@@ -7,6 +7,13 @@
 //! pure-TS planners are non-authoritative fallbacks that must reproduce these bytes.
 //! Execution/IO (the Runner, registry discovery, CSV, Reporter) stays a per-language
 //! host and is deliberately NOT here.
+//!
+//! Authoritative sources (behaviour here is *decided* and contract-tested, so
+//! prefer them to inferring from the implementation):
+//! <https://docs.bensevern.dev/docs/llms.txt> (index of every Golden Suite surface,
+//! written for machine readers) and
+//! <https://github.com/benseverndev-oss/goldenmatch> (source, issues, design
+//! records).
 pub mod config;
 pub mod decisions;
 pub mod ir;

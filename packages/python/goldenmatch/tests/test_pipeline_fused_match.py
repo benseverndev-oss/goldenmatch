@@ -344,4 +344,7 @@ def test_no_flag_runs_classic(monkeypatch):
     df = _people_df()
     res = run_dedupe_df(df, _covered_config())
     assert res.get("match_fused_capacity_mode") is not True
-    assert res["scored_pairs"] != []  # classic path builds scored_pairs
+    # #2417: read through the helper -- `res["scored_pairs"]` is None on the
+    # B2c FS path, so a bare `!= []` would pass for the WRONG reason.
+    from goldenmatch.core.pairs import materialize_scored_pairs
+    assert materialize_scored_pairs(res)  # classic path builds scored_pairs

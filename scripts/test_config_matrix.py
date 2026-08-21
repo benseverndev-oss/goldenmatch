@@ -8,7 +8,6 @@ Regenerate a stale page with: python scripts/gen_config_matrix.py --write <pkg>
 from __future__ import annotations
 
 import pytest
-
 from config_matrix import REGISTRY
 from config_matrix.coverage import coverage
 from config_matrix.crossref import stale_env_refs, undocumented_vocab, vocab_column_gaps
@@ -50,8 +49,8 @@ def test_goldencheck_check_types_catalog_matches_source():
     # `check="..."` literals the code actually emits, so it can't drift into a lie.
     import re
 
-    from goldencheck.models.finding import CHECK_TYPES
     from config_matrix.render import ROOT
+    from goldencheck.models.finding import CHECK_TYPES
 
     src = ROOT / "packages" / "python" / "goldencheck" / "goldencheck"
     scanned: set[str] = set()
@@ -71,8 +70,8 @@ def test_goldenpipe_builtin_stages_match_pyproject():
     # drift from what a fresh install actually registers.
     import tomllib
 
-    from goldenpipe.engine.registry import BUILTIN_STAGES
     from config_matrix.render import ROOT
+    from goldenpipe.engine.registry import BUILTIN_STAGES
 
     pp = tomllib.loads(
         (ROOT / "packages" / "python" / "goldenpipe" / "pyproject.toml").read_text(encoding="utf-8")

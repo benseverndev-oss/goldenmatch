@@ -221,6 +221,17 @@ def rule_blocking_singleton_trap(
         return None
     bp = profile.blocking
     sp = profile.scoring
+    # This rule's whole premise is "the scorer saw zero candidate pairs", and
+    # its action COARSENS blocking. Firing it on a healthy shape is the
+    # expensive direction, so it abstains unless the count is real (#2639).
+    #
+    # `candidates_compared` is 0 whenever scoring skipped its count loop, which
+    # it does above 10,000 blocks -- so before this guard, EVERY fine-grained
+    # shape looked like the trap. biblio@100k scored 1,493,182 pairs with 99.99%
+    # of the mass above threshold and was still eligible to have its blocking
+    # coarsened to `first_token`.
+    if not sp.candidates_counted:
+        return None
     # If candidates were actually compared, this is not the singleton trap.
     if sp.candidates_compared > 0:
         return None
@@ -346,6 +357,14 @@ def rule_low_reduction_ratio(
     if _near_dup_locked(current):
         return None
     bp = profile.blocking
+    if bp.n_blocks == 0:
+        # Nothing measured yet. `reduction_ratio` defaults to 0.0, so without
+        # this the rule reads an UNMEASURED profile as "reduction ratio is
+        # zero", fires on iteration 0 before any pipeline run exists, and
+        # rewrites blocking on evidence that was never collected. Measured on
+        # person@100K the real ratio is 0.999077 -- the rule should never fire
+        # on this dataset at all, and every run of it was acting on the default.
+        return None
     if bp.reduction_ratio >= 0.5:
         return None
     if current.blocking is None or not current.blocking.keys:
@@ -358,11 +377,33 @@ def rule_low_reduction_ratio(
         return None
     used = _existing_blocking_fields(current)
     soundex_candidate = next((c for c in text_cols if c not in used), text_cols[0])
-    existing_keys = list(current.blocking.keys)
+    # The plan to augment is `passes` when the config carries one, and `keys`
+    # only for the keys-driven strategies. Reading `keys` unconditionally made
+    # this rule DELETE the plan it meant to add to: auto-config emits eight
+    # passes for person@100K while `keys` holds just the primary
+    # `[city, first_name]`, so the update below rebuilt `passes` as
+    # "[city, first_name] + soundex" and silently dropped the other seven.
+    #
+    # Measured cost, person @ 100K, same fixture (run 32084546976):
+    #
+    #     lane                     scored pairs  pairwise P       R      F1
+    #     gm_probabilistic_shipped      142,933      0.9992  0.9949  0.9970
+    #     gm_zeroconfig                  11,319      1.0000  0.4684  0.6380
+    #
+    # Precision 1.0000 at recall 0.4684 is the tell: a dropped pass removes
+    # candidates and never adds them, so the loss is recall-only and no
+    # threshold can recover a pair that was never proposed. The rule fires
+    # BECAUSE the reduction ratio is low (too many comparisons) and then removes
+    # 75% of the blocking plan -- which does cut comparisons, true ones included.
+    #
+    # Same keys-vs-passes hazard `_carries_own_blocking_plan` (#2488) was added
+    # for: "`not blocking.keys` ... is only correct for the keys-driven
+    # strategies".
+    existing = list(current.blocking.passes or []) or list(current.blocking.keys or [])
     new_pass = BlockingKeyConfig(fields=[soundex_candidate], transforms=["soundex"])
     new_blocking = current.blocking.model_copy(update={
         "strategy": "multi_pass",
-        "passes": existing_keys + [new_pass],
+        "passes": existing + [new_pass],
     })
     new_cfg = current.model_copy(update={"blocking": new_blocking})
     decision = PolicyDecision(
@@ -408,10 +449,14 @@ def rule_no_matches(
     indicator priors. Falls back to today's behavior when ctx is None.
     """
     sp = profile.scoring
-    # Only fires when the fuzzy scorer actually compared candidates but none
-    # reached the threshold.  When candidates_compared == 0, the singleton-trap
-    # rule should fire instead (blocking never produced comparable pairs).
-    if sp.candidates_compared == 0:
+    # Only decline into singleton-trap territory on a MEASURED zero (#2663).
+    # `candidates_compared` is 0 whenever the bucket scorer routed this run --
+    # bucket honestly reports candidates_counted=False rather than a
+    # fabricated zero (#2644) -- so reading the bare value here meant this
+    # rule could never fire on the default scorer path, at any priority, on
+    # any iteration budget. When the count is absent rather than measured,
+    # fall through and let mass_above_threshold decide as usual.
+    if sp.candidates_counted and sp.candidates_compared == 0:
         return None  # singleton trap territory; let rule_blocking_singleton_trap handle it
     if sp.mass_above_threshold > 0:
         return None

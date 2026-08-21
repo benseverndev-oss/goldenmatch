@@ -199,6 +199,10 @@ impl ScoreDiagnostics {
     /// returns that trough's left edge. Returns None when there is no prominent
     /// high-score mode (unimodal / pure decay) -- in that case the kernel emits no
     /// dip suggestion rather than collapse the threshold into the left tail.
+    ///
+    /// A qualifying peak whose valley sits within `MIN_VALLEY_HEADROOM` of the top
+    /// of the observed range is SKIPPED, and the search falls back to the next
+    /// qualifying peak to its left (#2497). See that constant for why.
     pub fn dip(&self) -> Option<f64> {
         let counts: Vec<i64> = self.histogram.iter().map(|(_, c)| *c).collect();
         let n = counts.len();
@@ -206,6 +210,41 @@ impl ScoreDiagnostics {
             return None;
         }
         const PEAK_PROMINENCE: f64 = 3.0; // match-mode peak must stand >=3x above its left trough
+        // #2497: a valley this close to the top of the observed range is not
+        // separating a match mode from a non-match bulk -- there is nowhere above
+        // it to put a threshold. It is what you get when a hard spike of exact
+        // duplicates at 1.0 sits behind a near-empty bin: that spike is the
+        // rightmost prominent peak, so the "valley" collapses to the notch just
+        // below it instead of the real bimodal boundary, and `threshold_rule`'s
+        // DIP_MIN_GAP check then suppresses the suggestion entirely -- the healer
+        // goes silent on exactly the distribution where a bad threshold shows up
+        // most. Measured on NCVR-synthetic at threshold 0.98: dip() returned
+        // 0.9583 against a top bin of 0.9792, |0.9583 - 0.98| = 0.0217 < 0.05, so
+        // review_config emitted ZERO suggestions. Skipping that peak yields 0.8542
+        // -- the real boundary -- which clears DIP_MIN_GAP and fires.
+        //
+        // A FRACTION of the observed range, NOT an absolute score distance,
+        // because `analysis_core::histogram` bins over [min, max] of the DATA. On
+        // a corpus whose scores all sit in [0.92, 0.99] an absolute 0.05 is 71% of
+        // the entire range and rejects nearly every valley -- caught by the
+        // committed `raise_threshold` / `drop_matchkey` goldens, which an absolute
+        // constant moved from 0.98125 down to 0.92.
+        //
+        // 0.06 sits at the geometric midpoint of the two measured neighbours, which
+        // are one and two bin-widths of a 24-bin histogram: #2497's degenerate
+        // notch is 0.0436 of its range (must reject) and the right-skewed shape's
+        // genuine two-bin descent is 0.0869 (must keep). So at the resolution these
+        // histograms use the rule reads "one bin below the top is a notch; two or
+        // more is a boundary", without hard-coding a bin count -- the hand-built
+        // 3-bin fixtures are non-uniform, so bin width is not a usable unit here.
+        //
+        // The alternatives were measured and rejected: preferring the DEEPEST
+        // valley returns the 0.04 left-tail sliver on the right-skewed shape
+        // (regressing the test that motivated right-anchoring), and requiring the
+        // peak to carry a shoulder rejects the textbook bimodal
+        // `(0.0, 100), (0.5, 2), (0.9, 100)`, whose 2% neighbour is on the same
+        // side of any workable cutoff as the degenerate spike.
+        const MIN_VALLEY_HEADROOM_FRAC: f64 = 0.06;
         // Leftmost global-max bin (the non-match bulk anchor). `max_by_key`
         // returns the LAST max on ties, which would place the anchor at the
         // right mode of a clean bimodal and leave nothing to its right -- pick
@@ -216,11 +255,20 @@ impl ScoreDiagnostics {
             return None;
         }
         let global_max_idx = counts.iter().position(|&c| c == global_max)?;
+        let top_edge = self.histogram[n - 1].0;
+        let span = top_edge - self.histogram[0].0;
+        if span <= 0.0 {
+            return None; // degenerate: every score in one bin, no valley to find
+        }
 
-        // 1. Find the RIGHTMOST prominent local-maximum bin to the right of the
-        //    global max. "Prominent" = it stands >= PEAK_PROMINENCE x above the
-        //    local trough immediately to its left (walk left while non-increasing).
-        let mut peak_idx: Option<usize> = None;
+        // Find the RIGHTMOST prominent local-maximum bin to the right of the
+        // global max whose valley clears the headroom. "Prominent" = it stands
+        // >= PEAK_PROMINENCE x above the local trough immediately to its left
+        // (walk left while non-increasing). The valley is computed PER PEAK
+        // rather than once for the winner, because the headroom test is a
+        // property of the valley -- a peak that fails it must not shadow the
+        // qualifying peak below it.
+        let mut best: Option<f64> = None;
         for i in (global_max_idx + 1)..n {
             let is_local_max = counts[i] >= counts[i - 1] && (i + 1 == n || counts[i] >= counts[i + 1]);
             if !is_local_max {
@@ -232,19 +280,22 @@ impl ScoreDiagnostics {
                 t -= 1;
             }
             let trough = counts[t];
-            if trough == 0 || (counts[i] as f64) >= PEAK_PROMINENCE * (trough as f64) {
-                peak_idx = Some(i); // rightmost qualifying peak wins (loop continues)
+            if !(trough == 0 || (counts[i] as f64) >= PEAK_PROMINENCE * (trough as f64)) {
+                continue;
+            }
+            // Valley = the local minimum adjacent to (left of) this peak: walk
+            // left while the left neighbor is no greater (descending into the
+            // trough).
+            let mut v = i;
+            while v > 0 && counts[v - 1] <= counts[v] {
+                v -= 1;
+            }
+            let valley = self.histogram[v].0;
+            if (top_edge - valley) / span >= MIN_VALLEY_HEADROOM_FRAC {
+                best = Some(valley); // rightmost qualifying peak wins (loop continues)
             }
         }
-        let peak = peak_idx?;
-
-        // 2. Valley = the local minimum adjacent to (left of) that peak: walk left
-        //    while the left neighbor is no greater (descending into the trough).
-        let mut v = peak;
-        while v > 0 && counts[v - 1] <= counts[v] {
-            v -= 1;
-        }
-        Some(self.histogram[v].0)
+        best
     }
 }
 
@@ -480,6 +531,69 @@ mod tests {
         ])
         .dip();
         assert_eq!(d, None);
+    }
+
+    // (4) #2497: a hard spike of exact duplicates in the TOP bin, behind a
+    //     near-empty notch. The spike is the rightmost prominent peak (its left
+    //     trough is 8, and 1468 >= 3*8 passes comfortably), so before the
+    //     headroom rule dip() returned 0.9583 -- the notch, not the boundary --
+    //     and |0.9583 - 0.98| = 0.0217 < DIP_MIN_GAP suppressed the suggestion
+    //     entirely at a threshold of 0.98.
+    //
+    //     This is the measurement from the issue, not a reconstruction: the
+    //     24-bin histogram the kernel actually saw on NCVR-synthetic (seed 42,
+    //     7500 rows, `fuzzy_match` forced to 0.98, 123,775 diagnostic pairs).
+    //     Bins 0-10 carry the non-match bulk; their exact shape does not matter
+    //     (three different left-heavy fillers all reproduce it), only that the
+    //     global max lives there.
+    #[test]
+    fn dip_skips_a_degenerate_exact_match_spike_in_the_top_bin() {
+        let hist = vec![
+            (0.0000, 60000), (0.0208, 25000), (0.0417, 12000), (0.0625, 8000),
+            (0.0833, 5000), (0.1042, 4000), (0.1250, 3000), (0.1458, 2500),
+            (0.1667, 2000), (0.1875, 1500), (0.2083, 1200),
+            // the published tail, bins 11-23
+            (0.7292, 120), (0.7500, 55), (0.7708, 73), (0.7917, 77),
+            (0.8125, 42), (0.8333, 125), (0.8542, 26), (0.8750, 61),
+            (0.8958, 154), (0.9167, 266), (0.9375, 190),
+            (0.9583, 8),      // the notch dip() used to return
+            (0.9792, 1468),   // the exact-match spike
+        ];
+        let d = diag(hist).dip().expect("should find a valley below the spike");
+        assert_eq!(
+            d, 0.8542,
+            "must skip the top-bin spike and fall back to the peak below it"
+        );
+        // The point of the fix: the suggestion now clears DIP_MIN_GAP (0.05)
+        // against the 0.98 threshold, so threshold_rule fires instead of the
+        // healer going silent.
+        assert!((0.98_f64 - d).abs() > 0.05, "must clear DIP_MIN_GAP, got {d}");
+    }
+
+    // (5) The headroom rule must not fire on a legitimately high valley: a clean
+    //     bimodal whose modes are both near the top still yields its mid-valley.
+    #[test]
+    fn dip_headroom_does_not_reject_a_genuine_high_valley() {
+        let d = diag(vec![(0.60, 400), (0.70, 3), (0.80, 300), (0.90, 350)]).dip();
+        assert_eq!(d, Some(0.70));
+    }
+
+    // (6) The headroom is a FRACTION of the observed range, not an absolute score
+    //     distance, because the histogram bins over [min, max] of the DATA. This
+    //     is the shape of the committed `raise_threshold` / `drop_matchkey`
+    //     goldens: 7 scores inside [0.92, 0.99]. An absolute 0.05 headroom is 71%
+    //     of that range and drags the answer from 0.98125 down to ~0.92 -- so this
+    //     pins the whole range, not just the top of it.
+    #[test]
+    fn dip_headroom_scales_to_a_narrow_observed_range() {
+        let scores = [0.92, 0.94, 0.95, 0.96, 0.97, 0.98, 0.99];
+        let d = ScoreDiagnostics::from_scores(&scores, scores.len(), 0.50, 48)
+            .dip()
+            .expect("a narrow high-score range still has a valley");
+        assert!(
+            d > 0.97,
+            "an absolute headroom would collapse this to ~0.92; got {d}"
+        );
     }
 
     fn clusters_batch(

@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+# Land generated data files on `main` through a bot PR.
+#
+# Why this exists
+# ---------------
+# Scheduled jobs that regenerate committed data (the North Star scoreboard, the
+# benchmark SoT report) used to `git push` straight to `main`. Since the
+# merge queue landed (2026-06-15) the `protect-main` ruleset rejects that:
+#
+#   remote: error: GH013: Repository rule violations found for refs/heads/main.
+#     - Changes must be made through a pull request.
+#     - Required status check "ci-required" is expected.
+#     - Changes must be made through the merge queue
+#
+# The push is the LAST step of those jobs, so the work all happens and is then
+# thrown away with a red run. `git log --since=2026-06-15` confirms not one bot
+# commit has reached `main` since. This routes the same commit through a real
+# PR + the merge queue instead, which is the path the ruleset asks for.
+#
+# The token MUST be a PAT (or GitHub App token), NOT the default `GITHUB_TOKEN`.
+# A PR opened with `GITHUB_TOKEN` deliberately does not trigger workflows, so
+# `ci-required` would never run and the PR would sit in the queue permanently
+# unmergeable -- the same "required check that never ran" trap the root
+# CLAUDE.md documents for `[skip ci]`. We check for the substitution rather than
+# discover it a week later as a stuck PR.
+#
+# Usage:
+#   open_data_pr.sh <branch> <commit-subject> <pr-title> <path>...
+#
+# Environment:
+#   GM_BOT_TOKEN     required. PAT with `contents: write` + `pull-requests: write`.
+#   GITHUB_REPOSITORY  owner/repo (set by Actions).
+#   PR_BODY          optional. Body text for the PR (a default is generated).
+
+set -euo pipefail
+
+if [[ $# -lt 4 ]]; then
+  echo "usage: $0 <branch> <commit-subject> <pr-title> <path>..." >&2
+  exit 2
+fi
+
+branch="$1"; shift
+subject="$1"; shift
+title="$1"; shift
+paths=("$@")
+
+if [[ -z "${GM_BOT_TOKEN:-}" ]]; then
+  echo "::error::GM_BOT_TOKEN is empty. This job needs a PAT with contents:write +" \
+       "pull-requests:write to open a PR that actually triggers CI. The default" \
+       "GITHUB_TOKEN cannot be used here: PRs it creates do not start workflow runs," \
+       "so 'ci-required' never reports and the PR can never leave the merge queue." >&2
+  exit 1
+fi
+
+# Nothing to say is a clean no-op, not a failure -- most weeks for the badge-ish
+# files, and every run where the upstream numbers happen not to move.
+if git diff --quiet -- "${paths[@]}"; then
+  echo "No change in ${paths[*]} -- nothing to land."
+  exit 0
+fi
+
+git config user.name "github-actions[bot]"
+git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+# Rebase the generated files onto the DEFAULT branch rather than onto whatever
+# ref this run checked out. A scheduled run sits on `main` and would not notice
+# the difference, but a `workflow_dispatch` from a feature branch -- which is how
+# anyone tests this -- would otherwise open a PR carrying that whole branch
+# alongside the data. The PR must contain the data diff and nothing else, from
+# any ref.
+#
+# The files are carried across the checkout by hand instead of relying on the
+# working tree surviving it: they differ from HEAD, so a base switch could
+# conflict on exactly the paths we are trying to preserve.
+_base="${GITHUB_BASE_BRANCH:-main}"
+_stage=$(mktemp -d)
+for _p in "${paths[@]}"; do
+  mkdir -p "${_stage}/$(dirname "$_p")"
+  cp "$_p" "${_stage}/${_p}"
+done
+
+git fetch --depth=1 origin "$_base"
+
+# One rolling branch per data set, always rebuilt from current `main`, so a stale
+# unmerged PR from last week is replaced rather than stacked on. Force-push is
+# safe precisely because the branch is bot-owned and carries no history anyone
+# else builds on.
+git checkout -B "$branch" FETCH_HEAD
+
+for _p in "${paths[@]}"; do
+  mkdir -p "$(dirname "$_p")"
+  cp "${_stage}/${_p}" "$_p"
+done
+rm -rf "$_stage"
+
+git add -- "${paths[@]}"
+# Regenerated output can be byte-identical to what `main` already carries even
+# when it differed from the feature branch we started on -- that is a no-op, not
+# a failure, and `git commit` would exit non-zero on it.
+if git diff --cached --quiet; then
+  echo "Regenerated files match ${_base} -- nothing to land."
+  exit 0
+fi
+git commit -m "$subject"
+
+# Drop the credential `actions/checkout` persisted, or the push is NOT made as
+# the PAT. Whatever form it takes, the Authorization header it supplies WINS over
+# the `x-access-token:...@` userinfo in the push URL, so the token below is
+# silently ignored and the push goes out as github-actions[bot] -- which
+# protect-main rejects:
+#
+#   remote: Permission to benseverndev-oss/goldenmatch.git denied to github-actions[bot].
+#
+# A silent override rather than an error, which is what makes it worth pinning
+# down. There are TWO mechanisms and the newer one is easy to miss: checkout v6
+# writes the credential into a SEPARATE config file pulled in by `includeIf.gitdir`
+# entries, while older versions wrote `http.<url>.extraheader` into the local
+# config directly. Clearing only the latter looks right, changes nothing on v6,
+# and fails identically -- so clear both. This mirrors checkout's own post-job
+# cleanup, which likewise runs a step for each.
+#
+# Unset rather than pre-empting with `persist-credentials: false` on the
+# checkout: the base-branch fetch above still wants that credential on a private
+# repo, and this keeps the requirement inside the shared script instead of
+# relying on every caller's workflow to remember a flag.
+while IFS= read -r _key; do
+  [[ -z "$_key" ]] || git config --local --unset-all "$_key" 2>/dev/null || true
+done < <(git config --local --name-only --get-regexp '^includeIf\.gitdir:' 2>/dev/null || true)
+git config --local --unset-all 'http.https://github.com/.extraheader' 2>/dev/null || true
+
+# Token goes in the URL rather than a persisted credential so it never lands in
+# .git/config on the runner. Actions masks the secret in any log line.
+git push --force \
+  "https://x-access-token:${GM_BOT_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+  "HEAD:refs/heads/${branch}"
+
+export GH_TOKEN="$GM_BOT_TOKEN"
+
+body="${PR_BODY:-Automated data refresh from \`${GITHUB_WORKFLOW:-a scheduled job}\`.
+
+Generated by [\`$(basename "$0")\`](../blob/main/scripts/$(basename "$0")); the
+committed files are regenerated wholesale each run, so review the diff rather
+than the commit series.}"
+
+# Reuse the open PR if the branch already has one -- the force-push above has
+# already updated it, and a second `pr create` would just error.
+if existing=$(gh pr list --head "$branch" --state open --json number --jq '.[0].number') \
+   && [[ -n "$existing" ]]; then
+  echo "Refreshed existing PR #${existing} on ${branch}."
+  pr="$existing"
+else
+  gh pr create --base main --head "$branch" --title "$title" --body "$body"
+  pr=$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')
+  echo "Opened PR #${pr} on ${branch}."
+fi
+
+# Hand it to the merge queue; it lands FIFO once ci-required is green, with no
+# one babysitting it. A failure here is not fatal -- the PR exists either way
+# and a human can merge it -- but it should be visible in the log.
+gh pr merge "$pr" --auto --squash || \
+  echo "::warning::Could not enable auto-merge on PR #${pr}; it needs a manual merge."

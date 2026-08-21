@@ -78,33 +78,20 @@ fn char_trigrams(chars: &[char]) -> Vec<[char; 3]> {
         .collect()
 }
 
-/// Levenshtein edit distance between two char slices (classic two-row DP).
-fn levenshtein(a: &[char], b: &[char]) -> usize {
-    if a.is_empty() {
-        return b.len();
-    }
-    if b.is_empty() {
-        return a.len();
-    }
-    let mut prev: Vec<usize> = (0..=b.len()).collect();
-    let mut cur = vec![0usize; b.len() + 1];
-    for (i, &ca) in a.iter().enumerate() {
-        cur[0] = i + 1;
-        for (j, &cb) in b.iter().enumerate() {
-            let cost = if ca == cb { 0 } else { 1 };
-            cur[j + 1] = (prev[j + 1] + 1).min(cur[j] + 1).min(prev[j] + cost);
-        }
-        std::mem::swap(&mut prev, &mut cur);
-    }
-    prev[b.len()]
-}
-
+/// Levenshtein similarity ratio `1 - dist/max(len)` over char slices.
+///
+/// The edit distance comes from `goldenfuzz-core`, the suite's shared
+/// fuzzy-string kernel (Myers bit-parallel + a single-word fast path, and
+/// rapidfuzz-parity-tested there). This crate previously carried its own
+/// two-row DP; it computed the same distance, just slower, and was a second
+/// place for the primitive to live (single-kernel-collapse R5). The ratio
+/// itself stays here -- it is this profiler's scoring policy, not a kernel.
 fn similarity(a: &[char], b: &[char]) -> f64 {
     let maxlen = a.len().max(b.len());
     if maxlen == 0 {
         return 1.0;
     }
-    1.0 - (levenshtein(a, b) as f64) / (maxlen as f64)
+    1.0 - (goldenfuzz_core::levenshtein_distance(a, b) as f64) / (maxlen as f64)
 }
 
 struct UnionFind {

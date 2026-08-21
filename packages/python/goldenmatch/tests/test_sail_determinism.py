@@ -19,8 +19,8 @@ from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("pysail")
 pytest.importorskip("pyspark")
+
 pytest.importorskip("rapidfuzz")
 
 
@@ -39,20 +39,6 @@ _ROWS = [
     (4, "Brown", "20002"),
     (5, "Carter", "30003"),
 ]
-
-
-@pytest.fixture(scope="module")
-def spark():
-    from pysail.spark import SparkConnectServer
-    from pyspark.sql import SparkSession
-
-    server = SparkConnectServer()
-    server.start()
-    _, port = server.listening_address
-    sess = SparkSession.builder.remote(f"sc://localhost:{port}").getOrCreate()
-    yield sess
-    sess.stop()
-    server.stop()
 
 
 def _reference_partition(ids, edges):
@@ -99,7 +85,7 @@ def test_wcc_partition_invariant_to_shuffle_partitions(spark, wcc_fn_name):
     order-independent by construction; this proves Sail's distribution doesn't
     break that for either the S2 (label-prop) or the scale (pointer-jumping)
     algorithm."""
-    from goldenmatch.sail import clustering
+    from goldenmatch.spark import clustering
 
     fn = getattr(clustering, wcc_fn_name)
     ids = list(range(12))
@@ -126,8 +112,8 @@ def test_pipeline_pair_set_and_partition_invariant_to_shuffle_partitions(spark):
     float-reduction determinism the WCC-only test cannot -- the dedup
     ``max(score)`` GROUP BY runs across partitions, the place a non-deterministic
     parallel reduction would surface."""
-    from goldenmatch.sail.clustering import connected_components_scale
-    from goldenmatch.sail.scoring import score_and_dedup
+    from goldenmatch.spark.clustering import connected_components_scale
+    from goldenmatch.spark.scoring import score_and_dedup
 
     pair_sets = []
     partitions = []

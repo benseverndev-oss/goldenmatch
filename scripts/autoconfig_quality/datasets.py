@@ -61,6 +61,16 @@ def _household_hardneg() -> tuple[pl.DataFrame, set]:
     return gen_household_hardneg(n_households=350, seed=41)
 
 
+def _cotenant_hardneg() -> tuple[pl.DataFrame, set]:
+    """SEVERE address-based over-merge target (Phase 3 refit validation): distinct
+    people sharing an address (co-tenants) -- a DIFFERENT over-merge cause than
+    household_hardneg's shared surname. Committed 0.50 over-merges hard (F1 ~0.41,
+    P ~0.26); the threshold-refit loop recovers it (~0.41 -> ~1.00). See
+    anchors.gen_cotenant_hardneg."""
+    from scripts.autoconfig_quality.anchors import gen_cotenant_hardneg
+    return gen_cotenant_hardneg(n_addresses=300, seed=29)
+
+
 # ── real labeled datasets (skip-when-absent) ───────────────────────────────────
 _DATASETS_ROOT = Path(__file__).resolve().parents[2] / "packages/python/goldenmatch/tests/benchmarks/datasets"
 

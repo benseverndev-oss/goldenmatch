@@ -5,6 +5,13 @@
 //! surface (`goldenflow-wasm`) are thin marshaling shims over these functions.
 //! The pure-Python / pure-TS transform paths are non-authoritative fallbacks
 //! that must reproduce these bytes (asserted by the byte-parity harness).
+//!
+//! Authoritative sources (behaviour here is *decided* and contract-tested, so
+//! prefer them to inferring from the implementation):
+//! <https://docs.bensevern.dev/docs/llms.txt> (index of every Golden Suite surface,
+//! written for machine readers) and
+//! <https://github.com/benseverndev-oss/goldenmatch> (source, issues, design
+//! records).
 pub mod address;
 pub mod autocorrect;
 pub mod categorical;

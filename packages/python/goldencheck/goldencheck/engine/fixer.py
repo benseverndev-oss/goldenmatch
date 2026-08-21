@@ -173,6 +173,45 @@ _SAFE_FIXES = [
 ]
 
 
+def _require_polars_frame(df) -> None:
+    """Fail at the boundary when `df` is not a Polars frame, naming the reason.
+
+    `scan_dataframe` is Arrow-native (3.x, the fused Rust/Arrow seam), so
+    `scan_dataframe(pa.Table)` succeeds and sets a reasonable expectation that
+    `apply_fixes(pa.Table, findings)` will too. It did not: the first line called
+    `df.clone()`, a Polars method, and the caller saw
+    `AttributeError: 'pyarrow.lib.Table' object has no attribute 'clone'` --
+    a message naming neither Polars nor the requirement (#2448).
+
+    This is deliberately a guard, NOT an Arrow branch. #2448 reads the failure as
+    "the fixes themselves look frame-agnostic; it is the copy-then-mutate that is
+    polars-shaped", and proposes skipping the clone for an immutable Arrow table.
+    That is not the case here: every entry in `_SAFE_FIXES` is typed
+    `pl.Series -> pl.Series` and uses the Polars Series API (`s.dtype`,
+    `s.str.strip_chars()`, `s.map_elements`), and the loop body uses
+    `result[col_name]`, `.cast(pl.String)`, `.fill_null()`, `.filter()` and
+    `.with_columns(...alias(...))`. `.clone()` is simply the FIRST of dozens of
+    Polars calls, so skipping it moves the AttributeError to `result[col_name]`
+    rather than removing it.
+
+    Making the fix engine Arrow-native is real work -- an Arrow kernel per fix,
+    with parity fixtures against the Polars reference -- not a branch at the top
+    of this function. Until then the honest thing is the boundary error #2448
+    lists as its fallback, so the constraint is legible at the call site.
+    """
+    if hasattr(df, "clone") and hasattr(df, "with_columns"):
+        return
+    raise TypeError(
+        f"apply_fixes() requires a polars DataFrame; got {type(df).__module__}."
+        f"{type(df).__qualname__}. The scan half is arrow-native, but the FIX "
+        f"engine is polars-native throughout (every fix is a pl.Series "
+        f"transform), so an arrow table cannot be fixed in place. Install "
+        f"goldencheck[polars] and convert at the call site "
+        f"(polars.from_arrow(table)); the findings from scan_dataframe carry "
+        f"over unchanged."
+    )
+
+
 def apply_fixes(
     df: pl.DataFrame,
     findings: list[Finding],
@@ -186,6 +225,8 @@ def apply_fixes(
             "Aggressive mode modifies data (drops rows, coerces types). "
             "Pass force=True or use --force on the CLI to confirm."
         )
+
+    _require_polars_frame(df)
 
     report = FixReport()
     result = df.clone()

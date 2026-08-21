@@ -122,3 +122,24 @@ evaluator:
   to runner variance — treat ratios as directional, not exact. Accuracy is
   deterministic as of #829.
 - Splink skipping `dblp_acm` is recorded as a skip, never scored 0.
+
+## Refresh (2026-08-06)
+
+Re-ran the bake-off on current `main` (commit `14f06a16`, run `31105803648`, same
+16c/64 GB Linux runner, native FS kernel built) to capture post-June FS work. Both
+axes moved in GoldenMatch's favor:
+
+| Dataset | GM-prob F1 (Jun → Aug) | Splink F1 | ΔF1 (Jun → Aug) | GM-prob wall (Jun → Aug) | wall ratio GM/Splink (Jun → Aug) |
+| --- | --- | --- | --- | --- | --- |
+| historical_50k | 0.778 → **0.827** | 0.757 | +0.021 → **+0.070** | 60.8s → **14.5s** | ~19x → **4.97x** |
+| febrl3 | 0.991 → **0.996** | 0.965 | +0.026 → **+0.030** | 10.7s → **3.2s** | ~6x → **1.93x** |
+| synthetic_person | 0.998 → **1.000** | 0.996 | +0.001 → **+0.004** | 4.6s → **2.0s** | ~3x → **1.27x** |
+
+Accuracy improved on every scored dataset (the FS auto-config / orthogonal-blocking
+/ refit-threshold work since June), widening the win over Splink; and the FS-path
+speedups (native-scoring precompute, bucket work) cut GoldenMatch's wall-clock so
+the speed gap fell from **3–19x to ~1.3–5x**. `dblp_acm` unchanged in shape (Splink
+skips; GM-prob 0.381 pairwise / 0.790 B3 — the weighted path is the right tool). The
+native `gm_prob_native` row matched `gm_probabilistic` exactly (accuracy and wall),
+confirming kernel parity. Perf remains single-run/directional; accuracy is
+deterministic (#829).

@@ -8,6 +8,7 @@ import math
 import os
 import re
 from collections.abc import Callable
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -155,8 +156,36 @@ class ColumnProfile:
     confidence: float  # 0.0 to 1.0
     sample_values: list[str] = field(default_factory=list)
     null_rate: float = 0.0  # fraction of nulls (0-1)
-    cardinality_ratio: float = 0.0  # unique values / total rows (0-1)
+    cardinality_ratio: float = 0.0  # unique values / total rows (0-1), OVER THE SAMPLE
+    full_cardinality_ratio: float | None = None
+    # EXACT unique/total over the FULL frame, not the ~20K profiling sample. Only
+    # populated for columns the sample calls perfectly unique (see
+    # `profile_columns`); None everywhere else, including hand-built profiles.
+    # Read it through `_is_perfect_surrogate`, never directly -- the surrogate-key
+    # decision is the one place the sampled `cardinality_ratio` is not a usable
+    # estimator, because a fixed-size sample's distinct-FRACTION climbs toward
+    # 1.0 as the frame grows.
     avg_len: float = 0.0  # average string length
+    n_distinct: int | None = None
+    # Count of distinct non-blank values IN THE PROFILING SAMPLE. Distinct from
+    # `cardinality_ratio`, which is that count divided by the row total and so
+    # cannot answer "is this column CONSTANT?" -- a single-valued column reads
+    # 1/n, which shrinks with the frame and is indistinguishable from a merely
+    # low-cardinality one.
+    #
+    # This is a CANDIDATE signal only, never a verdict: the sample is 1,000 rows,
+    # so a column that is 99.99% one value reads 1 here. Read `full_n_distinct`
+    # to decide anything. ``None`` means the profile was built without value
+    # access (hand-built profiles in tests, the #2639/#2644 idiom).
+    full_n_distinct: int | None = None
+    # EXACT distinct count over the FULL frame, computed only for columns the
+    # sample flags as apparently-constant (`n_distinct <= 1`). Same shape as
+    # `full_cardinality_ratio` and for the same reason: a sampled statistic
+    # compared against an absolute cut makes the verdict flip with SCALE rather
+    # than with the data, which the scale-invariant-correctness commitment
+    # forbids. A value at frequency 1e-4 is missed by a 1,000-row sample ~90% of
+    # the time, so without this a 2,000-row frame keeps a field that a 5M-row
+    # frame drops. None everywhere else, including hand-built profiles.
     date_parse_rate: float | None = None
     # For col_type=="date": fraction of the profiled non-null sample that parses
     # as a well-formed date (the same parser `date_diff` uses). A per-column
@@ -169,6 +198,27 @@ class ColumnProfile:
     coord_parse_rate: float | None = None
     # For a coordinate-shaped column: fraction of the sample that parses as a
     # valid "lat,long" pair (the `geo_haversine` domain). None otherwise.
+
+
+def _is_perfect_surrogate(p: ColumnProfile) -> bool:
+    """True when every record carries its own value for this column -- a row PK,
+    which asserts no shared identity and emits zero pairs under an exact match.
+
+    THE single authority for the "#876 surrogate guard" question; four call sites
+    used to ask it independently of the sampled ratio. Prefers the EXACT
+    full-frame ratio, falling back to the sampled one only when the exact value
+    was never computed (hand-built profiles in tests, callers with no full frame),
+    which keeps the pre-existing verdict for those.
+
+    Why the sampled ratio cannot answer this on its own: `cardinality_ratio` is a
+    distinct-FRACTION over a fixed-size sample, so it rises toward 1.0 as the
+    frame grows for ANY column whose distinct count grows with n -- which is every
+    real identifier. The threshold is absolute, so the verdict flips with SCALE
+    rather than with the data.
+    """
+    if p.full_cardinality_ratio is not None:
+        return p.full_cardinality_ratio >= 1.0
+    return (p.cardinality_ratio or 0.0) >= 1.0
 
 
 @dataclass
@@ -436,6 +486,85 @@ def _concrete_dtype_spelling(frame: Any, col_name: str) -> str:
     return _arrow_to_polars_dtype_spelling(raw)
 
 
+@dataclass(frozen=True)
+class ExactStats:
+    """Column statistics measured over the FULL population, not a sample.
+
+    Supplied by a caller that can see the whole dataset when `profile_columns`
+    cannot -- the Spark path, which hands it a 20,000-row driver sample.
+
+    ``n_distinct`` and ``avg_len`` are ``None`` when the measurement was not
+    taken. Absent is NOT zero: a consumer must keep the sampled value rather
+    than read a missing measurement as a measured one.
+    """
+
+    n_rows: int
+    n_non_null: int
+    n_distinct: int | None = None
+    avg_len: float | None = None
+
+
+#: Cluster-computed statistics for the frame currently being profiled.
+#:
+#: `profile_columns` runs an exact confirm pass over the frame it is HANDED and
+#: stores it as `full_n_distinct`, documented as "the EXACT full-frame count".
+#: On the Spark path that label is false: the frame is a 20,000-row sample of a
+#: possibly 500M-row table, and the drop-constant rule reads the result as
+#: though it described the population.
+#:
+#: A ContextVar rather than a parameter because `profile_columns` has four call
+#: sites inside the controller and threading an optional argument through all of
+#: them would touch far more surface than the behaviour warrants. Same idiom as
+#: `_LAST_CONTROLLER_RUN` above and the profile-emitter stack.
+_EXACT_COLUMN_STATS: ContextVar = ContextVar("_EXACT_COLUMN_STATS", default=None)
+
+
+@contextmanager
+def exact_column_stats_applied(stats: dict) -> Any:
+    """Apply cluster-measured column statistics for the duration of the block.
+
+    Scoped and reset on exit including on exception, so one run's population
+    statistics can never leak onto the next caller's frame.
+    """
+    token = _EXACT_COLUMN_STATS.set(stats)
+    try:
+        yield
+    finally:
+        _EXACT_COLUMN_STATS.reset(token)
+
+
+def _apply_exact_stats(profiles: list) -> None:
+    """Overwrite the DISTRIBUTION statistics from the cluster's measurement.
+
+    Four fields move: `null_rate`, `avg_len`, `n_distinct` / `full_n_distinct`
+    and the `cardinality_ratio` derived from it. Those are the ones compared
+    against ABSOLUTE thresholds, so a sample measures them wrong in a way that
+    worsens with scale -- #876 (a flat 0.28 reading 0.72 -> 1.00 across
+    100K..5M) and #2687 (a 99.99%-constant column read as constant).
+
+    `col_type`, `confidence` and `sample_values` are never touched: they answer
+    "what kind of column is this", which a sample answers correctly.
+    """
+    stats = _EXACT_COLUMN_STATS.get()
+    if not stats:
+        return
+    for p in profiles:
+        st = stats.get(p.name)
+        if st is None:
+            continue
+        if st.n_rows > 0:
+            p.null_rate = (st.n_rows - st.n_non_null) / st.n_rows
+        if st.avg_len is not None:
+            p.avg_len = float(st.avg_len)
+        if st.n_distinct is not None:
+            p.n_distinct = int(st.n_distinct)
+            # `full_n_distinct` is what the drop-constant rule reads, and it is
+            # the field whose "full-frame" contract the Spark path breaks.
+            p.full_n_distinct = int(st.n_distinct)
+            if st.n_rows > 0:
+                p.cardinality_ratio = st.n_distinct / st.n_rows
+
+
 def profile_columns(
     df: pl.DataFrame, sample_size: int = 1000, max_columns: int = 40,
     llm_provider: str | None = None,
@@ -546,6 +675,16 @@ def profile_columns(
         profiles: list[ColumnProfile] = column_profiles_from_json(
             native_json, names_to_sample_values
         )
+        # `n_distinct` is stamped here rather than carried through the Rust
+        # classify contract: it is a property of the sample the caller already
+        # holds, not a classification result, so widening the JSON schema for it
+        # would couple the kernel to a field it has no opinion about. Stamping
+        # both branches from the same `values` keeps native and fallback
+        # byte-identical on this field, which the parity rules require.
+        for _p in profiles:
+            _vals = names_to_sample_values.get(_p.name)
+            if _vals is not None:
+                _p.n_distinct = len({v for v in _vals if v.strip()})
     else:
         # Pure-Python classification path (unchanged).
         profiles = []
@@ -592,12 +731,70 @@ def profile_columns(
                 null_rate=null_rate,
                 cardinality_ratio=cardinality_ratio,
                 avg_len=avg_len,
+                n_distinct=len(set(values)),
             ))
 
     # LLM correction pass for ambiguous columns (runs AFTER native classify,
     # on the same filtered set the Python path uses — unchanged).
     if llm_provider and profiles:
         profiles = _llm_classify_columns(profiles, llm_provider)
+
+    # EXACT full-frame cardinality for APPARENT surrogate keys (both classify
+    # paths converge here, so the native path is covered too).
+    #
+    # `cardinality_ratio` above is a distinct-FRACTION over the ~20K profiling
+    # sample, and a fixed-size sample of a GROWING frame drives that fraction to
+    # 1.0 for any column whose distinct count grows with n. Measured on the QIS
+    # realistic shape, an `email` column whose true ratio is a flat 0.28 reads
+    # 0.72 / 0.94 / 0.97 / 0.98 / 1.00 at 100K / 500K / 1M / 2M / 5M. Every
+    # "#876 surrogate guard" compares that number to an absolute 1.0, so at 5M
+    # zero-config discarded its ONLY exact identity column as a "perfectly-unique
+    # surrogate key", fell back to fuzzy-only matchkeys and name-based blocking,
+    # and produced a 185M-pair run that took 66 GB and killed the CI runner. The
+    # verdict flipped with SCALE, not with the data -- the exact thing the
+    # scale-invariant-correctness commitment forbids.
+    #
+    # Restricting the exact count to sample-ratio-1.0 columns is SOUND, not a
+    # cost heuristic: if every value in the full column is distinct then so is
+    # every subset of it, hence full == 1.0 implies sample == 1.0. Anything below
+    # 1.0 in the sample cannot be a perfect surrogate and is skipped. (Nulls make
+    # the sampled ratio smaller, so a null-bearing column skips the check and
+    # keeps its previous verdict -- conservative in the safe direction, since the
+    # fallback can only RETAIN a column.) In practice this is one or two columns;
+    # measured 44-307 ms each at 5M rows against a ~160s auto-config.
+    _frame_cols = set(frame.columns)
+    for p in profiles:
+        if p.cardinality_ratio >= 1.0 and p.name in _frame_cols and frame.height > 0:
+            p.full_cardinality_ratio = frame.column(p.name).n_unique() / frame.height
+
+    # EXACT full-frame distinct count for APPARENTLY-CONSTANT columns (#2668).
+    # The mirror image of the pass above, and forbidden by the same commitment:
+    # `n_distinct` is a 1,000-row sample statistic, so a column that is 99.99%
+    # one value reads 1 and `_drop_constant_scored_fields` would drop its field
+    # from the matchkey. A value at frequency 1e-4 is missed by that sample ~90%
+    # of the time, so the verdict would flip with scale -- a small frame samples
+    # the column fully and keeps the field, a large one reads it constant and
+    # drops it.
+    #
+    # The damage runs the same direction as the bug this rule exists to fix. A
+    # field that agrees on nearly every pair and disagrees only on the rare ones
+    # is carrying its whole signal in exactly those rare pairs; dropping it
+    # removes the penalty where it discriminates and the rare cross-entity pair
+    # merges.
+    #
+    # Restricting the exact count to sample-flagged columns is sound rather than
+    # a cost heuristic: a column with >1 distinct value in the sample has >1 in
+    # the full frame, so it cannot be constant and is skipped. In practice this
+    # is a handful of columns, one `n_unique()` pass each.
+    for p in profiles:
+        if (p.n_distinct is not None and p.n_distinct <= 1
+                and p.name in _frame_cols and frame.height > 0):
+            p.full_n_distinct = int(frame.column(p.name).n_unique())
+
+    # The CLUSTER's measurement wins over anything derived from this frame --
+    # on the Spark path this frame is a 20k sample and the confirm above is
+    # exact over the sample, not the population.
+    _apply_exact_stats(profiles)
 
     # Per-column date reliability signal (both classify paths converge here, so
     # the native path is covered too). For every `date` column, record the
@@ -1108,21 +1305,66 @@ def _fs_atomic_name_blocking_mode() -> str:
 _LATLONG_SAMPLE_FLOOR = 0.8
 
 
+def _has_geographic_evidence(pairs: list[tuple[float, float]]) -> bool:
+    """Whether parsed ``(lat, lon)`` pairs carry POSITIVE evidence of being
+    coordinates, rather than merely two comma-separated numbers that happen to
+    fall in valid coordinate ranges.
+
+    Parseability alone is a much weaker test than it looks: ``"25,35"`` is a
+    perfectly valid coordinate (lat 25, lon 35) AND a perfectly ordinary packed
+    age interval. So are salary bands, size ranges, version pairs and score
+    spans. #2443 hit exactly this -- auto-config emitted ``geo_haversine`` for an
+    ``age_range`` column on a real ~21k-row corpus, producing plausible-looking
+    distances that took a field-by-field diff against a hand-built matchkey to
+    notice. Nothing failed; the config was well-formed and simply wrong.
+
+    Any ONE of these is enough, and each is something an integer-interval column
+    essentially never exhibits:
+
+    * a fractional component -- real coordinates are decimal degrees; whole
+      degrees are ~111 km apart, a granularity at which haversine similarity is
+      meaningless anyway, so declining those is correct rather than a miss;
+    * ``|lon| > 90`` -- outside latitude's valid band, so unambiguously a
+      longitude and not a second small magnitude;
+    * a negative component -- southern or western hemisphere.
+
+    Deliberately data-driven rather than name-driven. A name veto
+    (``*_range``/``*_span``) was the other option in #2443 and would also have
+    caught this case, but it fails on any locale or convention we did not
+    anticipate, whereas "the numbers do not look geographic" holds regardless of
+    what the column is called.
+    """
+    for lat, lon in pairs:
+        if lat % 1 or lon % 1:
+            return True
+        if abs(lon) > 90.0:
+            return True
+        if lat < 0 or lon < 0:
+            return True
+    return False
+
+
 def _looks_like_latlong(profile: ColumnProfile) -> bool:
     """Whether a column holds combined ``"lat,long"`` coordinate strings, judged
     by profiling ``sample_values`` through the same parser the scorer uses. A
     strong majority (>= _LATLONG_SAMPLE_FLOOR) of the non-null sample must parse
-    to valid coordinates -- specific enough that a plain numeric or free-text
-    column (no ``lat,long`` shape) never trips it. Only consulted under the FS
-    domain-comparators flag, so it never runs (and can't shift behavior) by
-    default. Separate lat/long columns are the deferred cross-field comparator."""
+    to valid coordinates AND the parsed values must carry positive geographic
+    evidence (see ``_has_geographic_evidence``) -- the parse-rate floor alone
+    admits any column of two small comma-separated numbers, which is how #2443
+    scored an age-interval column with ``geo_haversine``. Only consulted under
+    the FS domain-comparators flag, so it never runs (and can't shift behavior)
+    by default. Separate lat/long columns are the deferred cross-field
+    comparator."""
     from goldenmatch.core.scorer import _parse_latlong
 
     sample = [v for v in profile.sample_values if v is not None and str(v).strip()]
     if len(sample) < 5:  # too little evidence to claim a coordinate column
         return False
-    ok = sum(1 for v in sample if _parse_latlong(str(v)) is not None)
-    return ok / len(sample) >= _LATLONG_SAMPLE_FLOOR
+    parsed = [_parse_latlong(str(v)) for v in sample]
+    ok = [p for p in parsed if p is not None]
+    if len(ok) / len(sample) < _LATLONG_SAMPLE_FLOOR:
+        return False
+    return _has_geographic_evidence(ok)
 
 
 # Domain-extracted column scorer mapping.
@@ -1143,6 +1385,194 @@ _DOMAIN_SCORER_MAP = {
     # Bibliographic
     "__title_key__": ("exact", 0.8, ["lowercase"]),
 }
+
+# A domain-extracted `exact` field becomes a STANDALONE exact matchkey -- "same
+# value implies same entity", on its own, with nothing else consulted -- only if
+# it is a genuine identifier. `_DOMAIN_SCORER_MAP` already states that: the weight
+# is the author's own confidence, 1.0 for identifiers (`__model_norm__`,
+# `__sw_part_num__`) and lower for partial signals (`__color__` 0.2,
+# `__title_key__` 0.8). That weight used to be read and then DISCARDED when the
+# standalone matchkey was built, so every exact entry made a full-strength
+# identity claim regardless.
+#
+# Measured on DBLP-ACM (#2526): `__title_key__` is the first significant WORD of
+# the title, so `domain_exact_title_key` asserted "two papers whose titles start
+# with the same word are the same paper" -- 33,563 pairs against 2,224 in ground
+# truth, clusters up to 96, precision 0.068. It cleared the old `< 0.01`
+# cardinality floor 29x over (ratio 0.29), because that floor only rejects
+# NEAR-CONSTANT columns; an identity claim needs cardinality near 1.0.
+_DOMAIN_IDENTITY_WEIGHT = 1.0
+# Belt-and-braces on top of the declared weight: even a 1.0-weighted extractor
+# cannot be an identity claim on data where the column is coarse in practice. A
+# real identifier is near-unique; this rejects the degenerate case where an
+# extractor collapses a column on some dataset it was not tuned for.
+_DOMAIN_IDENTITY_MIN_CARDINALITY = 0.5
+
+
+# Transforms that only normalise (case, surrounding whitespace) and so preserve
+# equality: if two values land in the same block under these, the values
+# themselves still compare equal. Everything else -- soundex, substring:N:M,
+# metaphone, token_sort -- is LOSSY: "Sony" and "Sonny" share a soundex block
+# while being different strings, so the raw field still discriminates inside the
+# block and must not be treated as constant. The list is deliberately a
+# whitelist: an unrecognised transform is assumed lossy.
+_EQUALITY_PRESERVING_TRANSFORMS = frozenset({
+    "lowercase", "uppercase", "lower", "upper", "strip", "trim",
+})
+
+
+def _always_agreeing_blocking_fields(blocking: BlockingConfig | None) -> set[str]:
+    """Fields on which EVERY candidate pair is guaranteed to agree.
+
+    Two conditions, both necessary:
+
+    * **Every pass must key on the field.** A blocking key is constant inside its
+      own block, but under ``multi_pass`` a pair produced by pass 2 can disagree
+      on pass 1's key -- so the field still carries signal. Hence the INTERSECTION
+      across passes, not the union.
+    * **Every transform on that key must preserve equality.** Sharing a block
+      under a LOSSY transform does not mean sharing a value (measured: abt_buy
+      keys all three passes on ``manufacturer``, but via ``soundex`` and
+      ``substring:0:5``, so ``manufacturer`` genuinely discriminates within a
+      block and dropping it would be wrong)."""
+    if blocking is None:
+        return set()
+    keys = list(getattr(blocking, "passes", None) or [])
+    if not keys:
+        keys = list(getattr(blocking, "keys", None) or [])
+    if not keys:
+        return set()
+    groups = []
+    for k in keys:
+        if not set(k.transforms or []).issubset(_EQUALITY_PRESERVING_TRANSFORMS):
+            return set()  # a lossy pass -> no field is guaranteed constant
+        groups.append(set(k.fields))
+    return set.intersection(*groups)
+
+
+def _drop_uninformative_blocking_fields(
+    matchkeys: list[MatchkeyConfig], blocking: BlockingConfig | None,
+) -> None:
+    """Drop scored fields that every candidate pair agrees on by construction.
+
+    Such a field contributes its full weight to every pair as a constant OFFSET
+    with zero discriminative power -- it cannot separate a match from a non-match,
+    it only shifts the whole score distribution up and flattens the threshold's
+    effect. Measured on DBLP-ACM (#2526), where blocking is static on
+    ``__title_key__`` and the same column was also scored at weight 0.8: it
+    supplied **18.6%** of the weighted score to 100% of candidates while
+    distinguishing none of them.
+
+    The matchkey's ``threshold`` is rescaled by the surviving weight share so the
+    decision boundary lands in the same place on the fields that actually
+    discriminate. Without that, removing an 18.6% constant makes the SAME nominal
+    threshold materially stricter and recall drops -- measured: dropping the field
+    at an unchanged 0.70 scored F1 0.6855 vs 0.6894 before, a small REGRESSION,
+    while the same field set at its rescaled boundary scored 0.7029.
+
+    Mutates ``matchkeys`` in place. A matchkey is left untouched if the rule would
+    empty it, since a matchkey with no fields cannot score anything."""
+    dead = _always_agreeing_blocking_fields(blocking)
+    if not dead:
+        return
+    for mk in matchkeys:
+        if getattr(mk, "type", None) != "weighted":
+            continue
+        fields = list(getattr(mk, "fields", None) or [])
+        keep = [f for f in fields if f.field not in dead]
+        if not keep or len(keep) == len(fields):
+            continue
+        total = sum(float(f.weight or 0) for f in fields)
+        kept = sum(float(f.weight or 0) for f in keep)
+        dropped = [f.field for f in fields if f.field in dead]
+        if total > 0 and kept > 0 and mk.threshold is not None:
+            # Same absolute score bar, expressed over the surviving weight.
+            rescaled = (float(mk.threshold) * total - (total - kept)) / kept
+            mk.threshold = round(min(max(rescaled, 0.05), 0.99), 4)
+        mk.fields = keep
+        logger.info(
+            "auto-config: dropped %s from matchkey %r -- blocking guarantees every "
+            "candidate pair agrees on %s, so it was a constant %.1f%% of the score "
+            "with no discriminative power; threshold rescaled to %.4f",
+            ", ".join(dropped), mk.name, "them" if len(dropped) > 1 else "it",
+            100.0 * (total - kept) / total if total else 0.0, mk.threshold,
+        )
+
+
+def _drop_constant_scored_fields(
+    matchkeys: list[MatchkeyConfig], profiles: list[ColumnProfile],
+) -> None:
+    """Drop scored fields that are CONSTANT in the data (#2668).
+
+    Sibling of `_drop_uninformative_blocking_fields`, for the other way a scored
+    field can carry no information. There the field varies in the data but
+    blocking guarantees agreement WITHIN a block; here it does not vary at all,
+    so no pair can ever disagree on it. Either way it is a constant offset with
+    zero discriminative power.
+
+    **It does not rescale the threshold, and that difference is the whole point.**
+    A constant field at equal weight does not merely shift scores; it HALVES the
+    effective bar on the field that actually discriminates. Measured on the
+    goldengraph TINY fixture, whose `type` column is `'concept'` on every row:
+
+        score = (name + 1.0) / 2      threshold 0.8  =>  the real bar on `name` is 0.6
+        ensemble("Beta Corp", "Delta LLC") = 0.7037  =>  0.8519, a false merge
+
+    Rescaling preserves the same absolute bar, so it would preserve that merge
+    exactly -- it is a no-op on every decision. The sibling rule rescales because
+    a blocking-agreeing field is genuinely informative elsewhere and its
+    calibrated contribution should survive; a data-constant column is informative
+    NOWHERE, so the honest config is the one auto-config would have built had the
+    useless column not been in the frame. It picks 0.8 on `name` alone there, and
+    that config makes no cross-entity merge on this fixture.
+
+    Reads `full_n_distinct`, the EXACT full-frame count, never the sampled
+    `n_distinct`. The sample is 1,000 rows, so a column that is 99.99% one value
+    reads 1 there; acting on that would drop a field on a large frame and keep it
+    on a small one -- the scale-flipping verdict `full_cardinality_ratio` exists
+    to prevent, and it would fail in the same direction as the bug this rule
+    fixes, since a field that disagrees only on rare pairs carries its whole
+    signal in exactly those pairs.
+
+    A field whose profile carries no `full_n_distinct` is LEFT ALONE: "cannot
+    answer" must not become "assumed constant". Same for a rule that would empty
+    a matchkey, since a matchkey with no fields cannot score anything.
+    """
+    const = {
+        p.name for p in profiles
+        if p.full_n_distinct is not None and p.full_n_distinct <= 1
+    }
+    if not const:
+        return
+    for mk in matchkeys:
+        if getattr(mk, "type", None) != "weighted":
+            continue
+        fields = list(getattr(mk, "fields", None) or [])
+        keep = [f for f in fields if f.field not in const]
+        if not keep or len(keep) == len(fields):
+            continue
+        dropped = [f.field for f in fields if f.field in const]
+        mk.fields = keep
+        logger.info(
+            "auto-config: dropped %s from matchkey %r -- %s constant in the data, "
+            "so every pair agreed on %s by construction and %s only relaxed the "
+            "effective bar on the fields that do discriminate. Threshold left at "
+            "%s, which is now the bar on those fields.",
+            ", ".join(dropped), mk.name,
+            "they are" if len(dropped) > 1 else "it is",
+            "them" if len(dropped) > 1 else "it",
+            "they" if len(dropped) > 1 else "it",
+            mk.threshold,
+        )
+
+
+def _is_identity_claim(col: str, weight: float, cardinality_ratio: float) -> bool:
+    """Whether a domain-extracted ``exact`` field may stand alone as its own
+    exact matchkey, versus being folded into the weighted matchkey at its
+    declared weight. See `_DOMAIN_IDENTITY_WEIGHT` for why the weight decides."""
+    if weight < _DOMAIN_IDENTITY_WEIGHT:
+        return False
+    return cardinality_ratio >= _DOMAIN_IDENTITY_MIN_CARDINALITY
 
 
 # Free-text col_types where data-entry corruption is common and `token_sort`
@@ -1603,9 +2033,14 @@ def build_matchkeys(
         # per-record surrogate key (e.g. a row PK). It is never shared, so an
         # exact match emits zero pairs and asserts no real identity. Exclude
         # it for config hygiene.
-        if scorer == "exact" and p.cardinality_ratio >= 1.0:
+        if scorer == "exact" and _is_perfect_surrogate(p):
+            _measured = (
+                f"full-frame cardinality_ratio={p.full_cardinality_ratio:.4f}"
+                if p.full_cardinality_ratio is not None
+                else f"sampled cardinality_ratio={p.cardinality_ratio:.4f}"
+            )
             reason = (
-                f"cardinality_ratio={p.cardinality_ratio:.4f} >= 1.0 "
+                f"{_measured} >= 1.0 "
                 f"-- perfectly-unique surrogate key, no shared identity to match"
             )
             logger.info(
@@ -2032,11 +2467,13 @@ def _build_strong_identifier_union(
         if p.col_type in _STRONG_EXACT_TYPES and p.name in df.columns:
             if _nonnull(p.name) < _UNION_PASS_MIN_NONNULL:
                 continue
-            # #876 surrogate guard: a perfect-surrogate id (card_ratio >= 1.0)
-            # makes singleton blocks (0 pairs) — exclude. NOTE: do NOT apply
-            # blocking_max_ratio here; the union exists precisely to use
-            # near-unique-but-repeating ids the single-key gate rejects.
-            if (p.cardinality_ratio or 0.0) >= 1.0:
+            # #876 surrogate guard: a perfect-surrogate id makes singleton blocks
+            # (0 pairs) — exclude. NOTE: do NOT apply blocking_max_ratio here; the
+            # union exists precisely to use near-unique-but-repeating ids the
+            # single-key gate rejects — which is also why this must ask
+            # `_is_perfect_surrogate` (exact, full-frame) rather than the sampled
+            # ratio, whose drift toward 1.0 at scale rejects exactly those ids.
+            if _is_perfect_surrogate(p):
                 continue
             candidate_passes.append([p.name])
             strong_id_passes += 1
@@ -2186,7 +2623,7 @@ def _build_compound_blocking(
             # Surrogate-key / near-unique guard: must actually group records.
             if not (
                 _max_block_size(p.name) > 1
-                and p.cardinality_ratio < 1.0
+                and not _is_perfect_surrogate(p)
                 and _nonnull_ratio(p.name) < _grouping_ratio_max
             ):
                 return False
@@ -3269,6 +3706,53 @@ def _compute_max_safe_block(height: int, native_scoring: bool) -> int:
     return max(1000, min(ceiling, height // 40))
 
 
+# Learned-blocking training sample. `learned_sample_size` used to be
+# `min(total_rows // 4, 5000)` -- pinned at 5,000 rows from 50K rows upward, no
+# matter how big the frame got.
+#
+# The learner trains on the TRUE PAIRS it finds inside that sample, and the
+# number of pairs whose BOTH members land in a fixed-size sample decays as
+# `s^2 / n`. Measured on the QIS realistic shape, ground-truth pairs contained
+# in a 5,000-row sample:
+#
+#     n = 500K -> 86     n = 1M -> 47     n = 2M -> 25     n = 4M -> 14
+#
+# i.e. the training signal HALVES every time the data doubles. In CI at 5M the
+# learner saw 13 true pairs (against 56 at 1M), learned rules too coarse to
+# separate anything, and emitted 160 blocks of ~31K rows instead of 791 blocks
+# of ~1.3K -- roughly 78 BILLION candidate pairs against 0.6B at 1M. Five times
+# the data, ~124x the pair work; the 5M rung ran 93 minutes without finishing.
+#
+# Holding the signal constant means growing the sample as sqrt(n): pairs scale
+# as `s^2/n`, so `s ∝ sqrt(n)` keeps `s^2/n` flat. Verified against the same
+# measurement -- an 11,180-row sample at 4M recovers 61 pairs, against 14 at
+# 5,000.
+#
+# ANCHORED so this is a pure extension of today's behaviour: below the anchor
+# the floor wins, reproducing `min(total_rows // 4, 5000)` exactly, so every
+# frame under 1M keeps its current sample byte-for-byte and only >1M changes.
+# The ceiling bounds training cost (the sample run is superlinear in `s`); past
+# roughly 100M rows the signal starts decaying again, which is a known limit of
+# this shape of fix rather than something it silently papers over.
+_LEARNED_SAMPLE_FLOOR = 5_000          # the historical fixed value
+_LEARNED_SAMPLE_ANCHOR_ROWS = 1_000_000  # frame size at which the floor is exactly right
+_LEARNED_SAMPLE_CEILING = 50_000       # bound on training cost
+
+
+def _learned_sample_size(total_rows: int) -> int:
+    """Training-sample size for learned blocking, grown as sqrt(rows).
+
+    Keeps the number of true pairs the learner trains on roughly CONSTANT with
+    scale instead of letting it decay as 1/n. Returns the pre-existing
+    ``min(total_rows // 4, 5000)`` for any frame at or below the anchor.
+    """
+    scaled = _LEARNED_SAMPLE_FLOOR * math.sqrt(total_rows / _LEARNED_SAMPLE_ANCHOR_ROWS)
+    target = min(max(_LEARNED_SAMPLE_FLOOR, int(scaled)), _LEARNED_SAMPLE_CEILING)
+    # `total_rows // 4` is the original held-out-data guard: never train on more
+    # than a quarter of the frame, so predicates generalize instead of memorizing.
+    return min(total_rows // 4, target)
+
+
 def _learned_block_cap(total_rows: int, current_cap: int, native_scoring: bool) -> int:
     """Runtime oversized-DROP cap for learned blocking.
 
@@ -3563,7 +4047,7 @@ def build_blocking(
         # regressed test_blocks_on_exact_column.
         exact_cols_sorted = [
             p for p in exact_cols_sorted
-            if (p.cardinality_ratio or 0.0) < 1.0
+            if not _is_perfect_surrogate(p)
         ]
         candidates = exact_cols_sorted[:5]
         # #876: keep only scale-safe exact keys (the linear/pairs gate applies to
@@ -4293,10 +4777,35 @@ _AUTOCONFIG_LLM_ENABLED: bool = (
 _DEFAULT_MEMORY: AutoConfigMemory | None = None
 
 
+def _autoconfig_memory_disabled() -> bool:
+    """Whether cross-run memory is off, read at CALL time.
+
+    ``_AUTOCONFIG_MEMORY_DISABLED`` is evaluated once at import, so
+    ``GOLDENMATCH_AUTOCONFIG_MEMORY=0`` only ever worked when it was already in
+    the environment before ``goldenmatch.core.autoconfig`` was imported. Setting
+    it from Python afterwards -- which is what the docstring's "useful in CI"
+    advice reads like, and what six test modules do via raw ``os.environ`` --
+    silently did nothing, leaving the shared ``~/.goldenmatch/autoconfig_memory.db``
+    live:
+
+        after import,        disabled = False
+        after setting env=0, disabled = False
+
+    Checking the constant FIRST keeps every existing caller intact, including the
+    tests that ``monkeypatch.setattr`` it to True; the env read only ever adds a
+    reason to disable, so this can turn memory off but never on.
+    """
+    if _AUTOCONFIG_MEMORY_DISABLED:
+        return True
+    return os.environ.get("GOLDENMATCH_AUTOCONFIG_MEMORY", "1").strip().lower() in (
+        "0", "false", "disabled",
+    )
+
+
 def _get_default_memory() -> AutoConfigMemory | None:
     """Return the default AutoConfigMemory, or None when disabled via env var."""
     global _DEFAULT_MEMORY
-    if _AUTOCONFIG_MEMORY_DISABLED:
+    if _autoconfig_memory_disabled():
         return None
     if _DEFAULT_MEMORY is None:
         try:
@@ -4561,6 +5070,15 @@ def auto_configure_df(
         force_exclude_list, force_include_list = (
             _resolve_effective_exclusion_overrides(config=None)
         )
+        # #2540: a frame that is several sources CONCATENATED (no source column)
+        # is a different shape from #858's below, which needs a source-indicator
+        # column to key on -- measured: `_detect_source_partition` returns None
+        # on abt_buy even though it is Abt+Buy stacked. Report it and route to
+        # `match_df`; deliberately do NOT constrain matching here, since
+        # `match_df` already owns cross-source linkage and a second owner for
+        # one capability is against the architecture frame. Advisory + fail-open.
+        from goldenmatch.core.concat_sources import warn_if_concatenated_sources
+        warn_if_concatenated_sources(df)
         # #858: multi-source source-correlated over-merge guard (spec §0-§4).
         # Detect the source partition on the FULL frame, then exclude the
         # source-indicator column + every 0-cross-source-overlap column from
@@ -4891,8 +5409,13 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
             if scorer == "exact" and cardinality_ratio < 0.01:
                 continue
             mf = MatchkeyField(field=col, scorer=scorer, weight=weight, transforms=transforms)
-            if scorer == "exact":
+            if scorer == "exact" and _is_identity_claim(col, weight, cardinality_ratio):
                 domain_exact.append(mf)
+            elif scorer == "exact":
+                # A weak exact signal: still compared, but as a WEIGHTED field
+                # carrying its declared weight -- never as a standalone identity
+                # claim. See `_is_identity_claim`.
+                domain_fuzzy.append(mf)
             else:
                 domain_fuzzy.append(mf)
 
@@ -4977,7 +5500,6 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
     # Opt-in (GOLDENMATCH_BLOCKING_PRUNE_PASSES=1): drop redundant/all-noise
     # multi-pass passes by likely-match yield.
     blocking = _maybe_prune_blocking_passes(blocking, df)
-
     # ── Data-driven strategy selection ──
 
     # 1. Learned blocking for large datasets.
@@ -5014,7 +5536,7 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
             )
         else:
             blocking.strategy = "learned"
-            blocking.learned_sample_size = min(total_rows // 4, 5000)
+            blocking.learned_sample_size = _learned_sample_size(total_rows)
             blocking.learned_min_recall = 0.95
             blocking.skip_oversized = True
             # skip_oversized DROPS whole blocks above max_block_size, so the cap
@@ -5157,9 +5679,9 @@ def _rebuild_from_decisions(
     and re-call `_rebuild_from_decisions` without re-running profile_columns /
     build_matchkeys / build_blocking.
 
-    ``_profiles`` is reserved (underscore-prefix unused parameter) for future
-    iterative-tuning hooks that may re-examine column stats without rethreading
-    them through the call chain.
+    ``_profiles`` keeps its underscore for call-compatibility, but is no longer
+    unused: `_drop_constant_scored_fields` reads `n_distinct` off it to find
+    scored columns that cannot discriminate anything (#2668).
     """
     # Rebuild final blocking from decisions, preserving runtime-only attrs
     # (learned_sample_size, learned_min_recall, skip_oversized, etc.) from
@@ -5173,6 +5695,9 @@ def _rebuild_from_decisions(
             "keys": decisions.blocking_keys,
             "passes": decisions.blocking_passes,
         })
+
+    _drop_uninformative_blocking_fields(decisions.matchkeys, final_blocking)
+    _drop_constant_scored_fields(decisions.matchkeys, _profiles)
 
     return GoldenMatchConfig(
         matchkeys=decisions.matchkeys,
@@ -5279,14 +5804,14 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
             # through to the conservative v2 default (the column isn't admitted as
             # that comparator). See `_numeric_column_reliable_for_diff` /
             # `_coord_column_reliable_for_haversine`.
-            if (p.cardinality_ratio < 1.0 and _looks_like_latlong(p)
+            if (not _is_perfect_surrogate(p) and _looks_like_latlong(p)
                     and _coord_column_reliable_for_haversine(p)):
                 fields.append(MatchkeyField(
                     field=p.name, scorer="geo_haversine", transforms=["strip"],
                     levels=3, partial_threshold=0.6,
                 ))
                 continue
-            if (p.col_type == "numeric" and p.cardinality_ratio < 1.0
+            if (p.col_type == "numeric" and not _is_perfect_surrogate(p)
                     and _numeric_column_reliable_for_diff(p)):
                 fields.append(MatchkeyField(
                     field=p.name, scorer="numeric_diff:pct:0.1", transforms=["strip"],
@@ -5300,7 +5825,7 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
         # year DOB gap becomes a weak partial rather than a near-match. partial=0.6
         # for date_diff so the 0.60 (<=1y) band lands at level 1, not level 0.
         if v2 and p.col_type == "date":
-            if p.cardinality_ratio >= 1.0:
+            if _is_perfect_surrogate(p):
                 continue  # per-record timestamp surrogate: no shared-identity signal
             # Phase 2 per-column decision: date_diff only on a RELIABLE date
             # column (high parse rate); a messy one keeps levenshtein even under
@@ -5363,7 +5888,7 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
         # (e.g. `record_id`) -- those stay out for config hygiene.
         if (
             scorer == "exact"
-            and p.cardinality_ratio >= 1.0
+            and _is_perfect_surrogate(p)
             and p.col_type not in ("email", "phone")
         ):
             continue
@@ -5593,10 +6118,27 @@ def auto_configure_probabilistic_df(
     )
 
 
+def _diversify_pair_budget_enabled() -> bool:
+    """Kill-switch for the pairs/row bound on diversified passes.
+
+    Default ON. ``GOLDENMATCH_BLOCKING_DIVERSIFY_PAIR_BUDGET=0`` restores the
+    row-cap-only behaviour without a revert, because the measurement behind the
+    bound is person-shaped and the lever's stated purpose is error-heavy PII
+    (historical_50k), where an anchor that looks wasteful on clean data may be
+    the only thing co-blocking corrupted names.
+    """
+    return os.environ.get(
+        "GOLDENMATCH_BLOCKING_DIVERSIFY_PAIR_BUDGET", "1",
+    ).strip().lower() in ("1", "true", "yes", "on", "enabled")
+
+
 def _diversify_probabilistic_blocking(
     blocking: BlockingConfig | None,
     profiles: list[ColumnProfile],
     df: Any = None,
+    *,
+    n_rows_full: int | None = None,
+    max_null_rate: float = 0.6,
 ) -> BlockingConfig | None:
     """Add orthogonal stable-key blocking passes for the probabilistic path.
 
@@ -5621,6 +6163,27 @@ def _diversify_probabilistic_blocking(
     scales where it helps (a birth-year block is ~1.5K rows at 100K) and is
     dropped only where it would be pathological. Without ``df`` (older callers)
     the guard is a no-op, preserving prior behavior.
+
+    ``n_rows_full`` scale-corrects that guard for callers handing us a SAMPLE.
+    The zero-config controller does: it builds its initial config from a ~5-6K
+    sample (measured: 6,324 rows for a 100K frame). Uncorrected, every anchor
+    looks tiny on a sample and is kept -- including birth-YEAR, ~1.5K rows at
+    100K but ~15K at 1M, which is the exact OOM #1857 added this guard for.
+    Block size grows ~linearly with N (``project_max_block_size``). Full-frame
+    callers pass None and are byte-identical.
+
+    ``max_null_rate`` defaults to the 0.6 this lever has always used -- additive
+    passes tolerate more nulls than a primary key, because the static blocker
+    filters null/sentinel block keys so a null row is simply absent from THIS
+    pass while still covered by the name passes, and error-heavy PII
+    (historical_50k dob/postcode ~24% null) is where these anchors matter most.
+    The v0 caller passes ``build_blocking``'s stricter 0.20 instead. That is
+    deliberately conservative: v0's Tier-2 contract
+    (``test_legacy_v0_skips_high_null_blocking_candidate``) is that a >20%-null
+    column is not a blocking field, and whether additive passes should be exempt
+    is a real question but an UNMEASURED one. Relaxing it here would be an
+    argument, not evidence, so v0 keeps its gate and the question is left for a
+    panel run that can actually answer it.
     """
     if blocking is None or not _fs_autoconfig_v2_enabled():
         return blocking
@@ -5642,23 +6205,44 @@ def _diversify_probabilistic_blocking(
         pass
 
     def _projected_max_block(field: str, transforms: list[str]) -> int:
-        """Exact max block size this single-field pass would produce (0 if
-        unknown / uncomputable — treated as safe so the pass is kept)."""
+        """Max block size this single-field pass would produce at FULL scale
+        (0 if unknown / uncomputable -- treated as safe so the pass is kept).
+
+        Runs on the Frame seam rather than raw polars expressions. It used to
+        build ``pl.col(field)`` and call ``df.select(expr)``, which raises on a
+        ``pyarrow.Table`` and landed in the ``except`` below -- returning 0,
+        which this guard reads as SAFE. Post-Polars-eviction most callers hand
+        this a pa.Table, so the #1857 scale guard was silently disabled on the
+        arrow lane that is now the default. Found while wiring this lever into
+        the controller path: the guard could not drop a birth-YEAR anchor even
+        when the projection asked it to.
+
+        It also derives the key through ``derive_block_key``, so the measured
+        key matches what the blocker will actually compute (the old code only
+        handled a leading ``substring:`` and ignored every other transform).
+        """
         if df is None:
             return 0
         try:
-            col = pl.col(field).cast(pl.Utf8)
-            if transforms and transforms[0].startswith("substring:"):
-                _, start, length = transforms[0].split(":")
-                col = col.str.slice(int(start), int(length))
-            sizes = (
-                df.select(col.alias("__k__"))
+            from goldenmatch.core.frame import to_frame as _to_frame  # noqa: PLC0415
+
+            frame = _to_frame(df)
+            counts = (
+                frame.derive_block_key([field], list(transforms or []))
                 .drop_nulls()
-                .group_by("__k__")
-                .len()
-                .get_column("len")
+                .value_counts_desc()
             )
-            return int(sizes.max()) if sizes.len() else 0
+            measured = int(counts[0][1]) if counts else 0
+            if measured and n_rows_full:
+                from goldenmatch.core.blocking_candidates import (  # noqa: PLC0415
+                    project_max_block_size,
+                )
+                sample_n = int(frame.height)
+                if int(n_rows_full) > sample_n:
+                    return int(project_max_block_size(
+                        measured, sample_n, int(n_rows_full),
+                    ))
+            return measured
         except Exception:
             return 0
 
@@ -5670,6 +6254,37 @@ def _diversify_probabilistic_blocking(
             return
         if len(fields) == 1:
             projected = _projected_max_block(fields[0], transforms)
+            # PAIR budget, not just the per-block ROW cap. The row cap bounds the
+            # scorer's per-block memory; it says nothing about how much WORK the
+            # pass creates, and those diverge badly for a low-cardinality anchor.
+            #
+            # Measured, person @ 100,000 rows (run 32138842887), dropping one pass
+            # at a time from the 8-pass plan:
+            #
+            #     dropped pass              comparisons saved      dF1
+            #     [dob] substring:0:4              71,337,394   +0.0000
+            #     [first_name] soundex             31,321,187   +0.0000
+            #     [surname] soundex                12,286,109   +0.0000
+            #     [postcode]                           47,022   -0.0269
+            #
+            # Birth-YEAR is 59% of every comparison in the run and buys NOTHING,
+            # while postcode carries all the recall for 47K comparisons. Both
+            # clear the row cap easily (1,549 and 9 rows), so the cap cannot tell
+            # them apart -- but in pairs/row they are 774 vs 4 against a budget of
+            # 50. Same verdict at 4K and 10K, so it is not a scale artifact.
+            #
+            # `_blocking_pairs_per_row_budget` is the engine's OWN knob (default
+            # 50, "keeps the total pair count linear"), already applied when
+            #selecting a primary key and never to these additive passes.
+            ppr = _project_pairs_per_row(projected)
+            budget = _blocking_pairs_per_row_budget()
+            if projected and ppr > budget and _diversify_pair_budget_enabled():
+                logger.debug(
+                    "probabilistic diversify: dropping pass %s%s -- projects %d "
+                    "pairs/row (max block %d) against a budget of %d",
+                    fields, transforms, ppr, projected, budget,
+                )
+                return
             if projected > row_cap:
                 logger.debug(
                     "probabilistic diversify: dropping oversized pass %s%s "
@@ -5687,11 +6302,11 @@ def _diversify_probabilistic_blocking(
         # null-valued row is simply absent from THIS pass (no giant null block)
         # while still covered by the name passes. Error-heavy PII (historical_50k
         # dob/postcode ~24% null) is exactly where these keys matter most.
-        if p.null_rate > 0.6:
+        if p.null_rate > max_null_rate:
             continue
         if p.col_type == "date":
             _add([p.name], ["substring:0:4"])  # birth YEAR — tolerant of day/month errors
-        elif p.col_type in ("zip", "identifier", "phone") and p.cardinality_ratio < 1.0:
+        elif p.col_type in ("zip", "identifier", "phone") and not _is_perfect_surrogate(p):
             _add([p.name], ["strip"])
 
     if not new_passes:
@@ -6164,38 +6779,13 @@ def _project_pass_pairs(
         )
     if not counts:
         return (0, 0)
-    import math
+    # Saturation-aware projection. Extracted to `core.block_projection` so
+    # learned blocking's rule selector gates on the SAME projection this static
+    # pass gate uses instead of growing a second, divergent one; that module's
+    # docstring carries the derivation and the 30M phantom-pair incident.
+    from goldenmatch.core.block_projection import project_block_counts
 
-    scale = effective_n_full != sample_n
-    if scale:
-        # Saturation-aware block-size growth. Extrapolating each block's SIZE by
-        # the full row ratio (the old `cnt * effective_n_full / sample_n`) is only
-        # correct for a SATURATED low-cardinality key -- one whose distinct values
-        # are all already in the sample, so bigger N just grows each block. A
-        # NEAR-UNIQUE key instead keeps producing NEW values as N grows: its
-        # blocks stay ~constant size and the block COUNT grows. Growing a
-        # near-unique key's SIZE invents ~C(ratio, 2) PHANTOM pairs per sample
-        # singleton -- which made a near-unique compound like `(zip, email)`
-        # project ~2.2B pairs at 30M and get DROPPED by the pair-gate, collapsing
-        # blocking to a single pass (the 30M zero-config FS recall collapse). Grow
-        # size only by the key's sample COLLISION headroom (1 - distinct/sample_n):
-        # a fully-saturated key (d->0) still grows by the full ratio (byte-
-        # identical to the old behavior), a near-unique key (d->1) barely grows so
-        # its singletons stay singletons (0 pairs). Block COUNT growth is implicit
-        # -- more distinct keys at full N, each ~constant size.
-        ratio = effective_n_full / sample_n
-        d = len(counts) / sample_n if sample_n else 0.0
-        growth = 1.0 + (ratio - 1.0) * (1.0 - d)
-    else:
-        growth = 1.0
-    max_block = 0
-    pairs = 0
-    for cnt in counts.values():
-        b = math.ceil(cnt * growth) if scale else cnt
-        if b > max_block:
-            max_block = b
-        pairs += b * (b - 1) // 2
-    return (max_block, pairs)
+    return project_block_counts(counts.values(), sample_n, effective_n_full)
 
 
 _FS_TOTAL_PAIR_BUDGET = 300_000_000  # small-box FLOOR (#1803 tuning anchor)
@@ -6346,9 +6936,7 @@ def _bound_probabilistic_blocking_pairs(
     # key would otherwise be chosen first. Measured on the 25M person shape
     # (record_id unique, truth keyed on cluster_id): compounding with record_id
     # dropped recall 1.0 -> 0.49 at scale. Skip them everywhere a reducer is built.
-    _surrogate = {
-        p.name for p in profiles if getattr(p, "cardinality_ratio", 0.0) >= 1.0
-    }
+    _surrogate = {p.name for p in profiles if _is_perfect_surrogate(p)}
     reducers: list[tuple[str, tuple[str, ...]]] = []
     for f in (
         by_type.get("email", [])

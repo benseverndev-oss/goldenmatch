@@ -4,6 +4,48 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.5.1] - 2026-08-20
+
+### Changed
+
+- **`goldenmatch` floor raised to `>=3.14`.** 3.14.0 takes distributed
+  Fellegi-Sunter training and scoring at 250M from 2,765.8s to 669.96s (4.13x)
+  with 3.1x less executor CPU and zero spill, and the trained model is
+  byte-identical -- so there is nothing for a suite install to weigh up and no
+  reason to leave users on the slower path.
+
+## [0.5.0] - 2026-08-15
+
+Floor bumps for the 2026-08-15 repo-wide cut. Every suite member was
+released together, so the floors move with them: `goldenpipe>=1.5`,
+`goldenmatch[polars]>=3.13`, `goldencheck[polars]>=3.5`, `goldenflow>=2.2.0`,
+`infermap>=0.7`, `goldenanalysis>=0.5`, `goldencheck-types>=0.3`, and the
+native floors `goldenmatch-native>=0.2.0`, `goldencheck-native>=0.2`,
+`goldenflow-native>=0.28.0`, `goldenanalysis-native>=0.2`.
+
+The headline member change is goldenmatch 3.13.0: Fellegi-Sunter training
+runs distributed on a Spark cluster with no Python on the executors, off the
+same Rust kernel every other surface uses.
+
+## [0.4.0] - 2026-08-04
+
+- Floor bumps for the 2026-08 GoldenModel frontier cut: `goldenmatch[polars]>=3.12` (was
+  `>=3.11`) — the nine "frontier" semantic-model discovery slices (dimension hierarchies,
+  metrics, time intelligence, cardinality/bridges, SCD, model completeness/trust score,
+  warehouse-scale derivation off `information_schema`, catalog reconciliation, and the
+  namer quality-eval harness); `goldencheck[polars]>=3.4` (was `>=3.3`, lockstep). Native
+  floors unchanged.
+
+## [0.3.6] - 2026-08-03
+
+- Floor bumps for the 2026-08 suite release: `goldenmatch[polars]>=3.11` (was
+  `>=3.10`) — the semantic-model discovery arc (certified key/join/entity/measure
+  discovery + orchestrator, MCP/REST/CLI surface, the advisory LLM namer +
+  `--apply-names` applied catalog, Cube/OSI emit, and compound + self-referential
+  keys); `goldencheck[polars]>=3.3` (was `>=3.2`) — the TS denial-constraints + refs
+  engine ports; and `goldenmatch-native>=0.1.20` (was `>=0.1.19`) — the fully-fused
+  Fellegi-Sunter kernel covering the reference-data name scorers + `ensemble`.
+
 ## [0.3.5] - 2026-07-27
 
 - Floor bump: `goldenmatch[polars]>=3.10` (was `>=3.8`). 3.9.0 + 3.10.0 close the

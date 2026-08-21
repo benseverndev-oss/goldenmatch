@@ -6,6 +6,15 @@ name: bench-graphiti-smoke
 
 on:
   workflow_dispatch:
+  # Nightly backstop. This lane installs goldenmatch from SOURCE but is
+  # path-filtered on its OWN paths, so a goldenmatch change never triggers it --
+  # a break can sit latent until something unrelated happens to fire the lane
+  # (that gap ran 15 days once). The schedule bounds detection to a day, and a
+  # scheduled run is on `main`, so `main-health` sees the red and files the
+  # tracking issue. Symbol-level breaks are caught earlier, on the PR, by
+  # scripts/check_downstream_symbols.py.
+  schedule:
+    - cron: "43 4 * * *"
   push:
     paths:
       - "packages/python/goldenmatch/benchmarks/er-kg-bench/erkgbench/qa_e2e/engines/graphiti.py"
@@ -30,7 +39,29 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install graphiti-core + goldenmatch (isolated)
-        run: python -m pip install --upgrade pip pytest numpy graphiti-core goldenmatch
+        # httpx is listed explicitly because graphiti-core UNDER-DECLARES it:
+        # `graphiti_core/llm_client/client.py` imports httpx at module scope, but
+        # a fresh `pip install graphiti-core` (0.29.3) does not pull it, so the
+        # package fails to import. That broke this lane overnight between run
+        # #138 (Aug 11, green) and #139 (Aug 12, red) with no repo change --
+        # the install line is unpinned, so an upstream release lands here
+        # unannounced. Drop this once upstream declares the dependency.
+        run: python -m pip install --upgrade pip pytest numpy httpx graphiti-core goldenmatch
+      - name: Verify graphiti-core imports (this lane's premise)
+        # The smoke test guards itself with a module-level
+        # `pytest.importorskip("graphiti_core")` -- correct, because the same
+        # file runs in the general suite where graphiti is absent. But in THIS
+        # lane, which installs graphiti-core on purpose, a failed import is the
+        # defect, not a reason to skip. Skipping collected 0 tests, pytest
+        # returned exit code 5, and the lane went red saying only "Process
+        # completed with exit code 5" -- no mention of the ImportError, so the
+        # log gave no way to tell "dependency broken" from "job misconfigured".
+        # Asserting the import here names the real cause on the failing step.
+        # importlib.metadata, NOT graphiti_core.__version__ -- the package does
+        # not define that attribute, and reaching for it turns a passing import
+        # into an AttributeError (which is exactly what the first cut of this
+        # step did).
+        run: python -c "import graphiti_core, importlib.metadata as m; print('graphiti_core', m.version('graphiti-core'))"
       - name: Graphiti adapter smoke (protocol + synthesis cost seam, DB-free)
         working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
         env:

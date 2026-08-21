@@ -66,7 +66,7 @@ def render_block(callouts: list[tuple[str, str]], target_path: Path) -> str:
         comment_suffix = "from CHANGELOG.md"
     rendered_callouts = callouts[:MAX_CALLOUTS]
     lines = [
-        f"{FENCE_START}  (auto-synced {comment_suffix} by scripts/sync_readme_callouts.py — edit the CHANGELOG, not this block) -->"
+        f"{FENCE_START}  (auto-synced {comment_suffix} by scripts/sync_readme_callouts.py; edit the CHANGELOG, not this block) -->"
     ]
     for i, (version, body) in enumerate(rendered_callouts):
         lines.append(_format_callout(version, body, is_first=(i == 0)))
@@ -76,7 +76,13 @@ def render_block(callouts: list[tuple[str, str]], target_path: Path) -> str:
     return "\n".join(lines)
 
 
-_BOLD_TITLE_RE = re.compile(r"^\*\*(?P<title>[^*]+)\*\*\s*(?P<sep>—|--|-)\s*(?P<rest>.*)$", re.DOTALL)
+_BOLD_TITLE_RE = re.compile(
+    # The separator is OPTIONAL: a CHANGELOG entry that opens `**Title.** rest`
+    # with no dash at all should still fold, otherwise it renders as two
+    # adjacent bold spans (`**v1.2.3:** **Title.**`).
+    r"^\*\*(?P<title>[^*]+)\*\*\s*(?P<sep>—|--|-)?\s*(?P<rest>.*)$",
+    re.DOTALL,
+)
 _SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+")
 
 
@@ -90,8 +96,13 @@ def _format_callout(version: str, body: str, *, is_first: bool) -> str:
 
     Input body is the raw text from the CHANGELOG marker. If it leads
     with ``**Title** — rest``, fold the version into the bold span so
-    the homepage reads ``**vX.Y.Z — Title** — rest``. Otherwise just
-    bold the version.
+    the homepage reads ``**vX.Y.Z: Title** rest``. Otherwise just bold
+    the version.
+
+    The rendered separator is a colon, not an em dash. Input is still
+    parsed leniently (``_BOLD_TITLE_RE`` accepts em dash / ``--`` / ``-``)
+    because the CHANGELOG is written by hand and we do not want a
+    punctuation choice there to change how a callout is structured.
     """
     body = body.strip()
     new_badge = ""  # latest callout is already first; no emoji marker
@@ -100,8 +111,8 @@ def _format_callout(version: str, body: str, *, is_first: bool) -> str:
     if match:
         title = match.group("title").strip()
         rest = match.group("rest").strip()
-        return f"> **{new_badge}{label} — {title}** — {rest}"
-    return f"> **{new_badge}{label}** — {body}"
+        return f"> **{new_badge}{label}: {title}** {rest}"
+    return f"> **{new_badge}{label}:** {body}"
 
 
 def rewrite_target(path: Path, new_block: str) -> tuple[str, str]:

@@ -7,22 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("pysail")
 pytest.importorskip("pyspark")
-
-
-@pytest.fixture(scope="module")
-def spark():
-    from pysail.spark import SparkConnectServer
-    from pyspark.sql import SparkSession
-
-    server = SparkConnectServer()
-    server.start()
-    _, port = server.listening_address
-    sess = SparkSession.builder.remote(f"sc://localhost:{port}").getOrCreate()
-    yield sess
-    sess.stop()
-    server.stop()
 
 
 def _partition(out_df):
@@ -37,7 +22,7 @@ def _partition(out_df):
 def test_checkpoint_is_output_invariant(spark, tmp_path):
     """checkpoint_dir=... gives the SAME partition as no-checkpoint (and the
     correct answer): a 6-node chain (the lineage-stressing shape) + a singleton."""
-    from goldenmatch.sail.clustering import connected_components_scale
+    from goldenmatch.spark.clustering import connected_components_scale
 
     ids = spark.createDataFrame([(i,) for i in range(7)], ["__row_id__"])
     edges = spark.createDataFrame(
@@ -61,7 +46,7 @@ def test_checkpoint_is_output_invariant(spark, tmp_path):
 
 def test_checkpoint_interval_requires_dir(spark):
     """checkpoint_interval>0 with no dir is a loud misconfig, not a silent no-op."""
-    from goldenmatch.sail.clustering import connected_components_scale
+    from goldenmatch.spark.clustering import connected_components_scale
 
     ids = spark.createDataFrame([(0,), (1,)], ["__row_id__"])
     edges = spark.createDataFrame([(0, 1)], ["a", "b"])

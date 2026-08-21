@@ -17,7 +17,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from goldenmatch._polars_lazy import pl
-from goldenmatch.config.schemas import GoldenMatchConfig
+from goldenmatch.config.schemas import BlockingConfig, GoldenMatchConfig
+from goldenmatch.core._docs import AGENT_DOCS_HINT
+from goldenmatch.core.autoconfig_determinism import over_budget
 from goldenmatch.core.autoconfig_history import RunHistory
 from goldenmatch.core.bench import stage
 from goldenmatch.core.complexity_profile import (
@@ -68,9 +70,24 @@ def _should_measure_blocking(
       no-materialization invariant).
     - thinking/einstein always measure — their wall budget absorbs the slow
       ``build_blocks`` fallback for non-static / oversized-split configs.
-    - fast/normal measure only when F1's cheap vectorized fast path applies
-      (``strategy="static"``) AND the frame is under the budget-backstop ceiling,
-      so a huge frame that would hit the slow fallback can't blow the tight wall.
+    - fast/normal measure only when a cheap vectorized path applies AND the
+      frame is under the budget-backstop ceiling, so a huge frame that would hit
+      the slow fallback can't blow the tight wall.
+
+    ``is_static`` now means "a vectorized path applies", which covers
+    ``multi_pass`` as well as ``static``. multi_pass is N static passes
+    (``_build_multi_pass_blocks`` delegates each to ``_build_static_blocks``),
+    and ``_fast_multi_pass_block_sizes`` vectorizes them per pass -- measured
+    1,094 ms vs 15,953 ms on the 8-pass person@100K plan, byte-identical
+    profile.
+
+    This is the load-bearing case, not an incremental one: multi_pass is the
+    common zero-config shape (#1207 per-identifier union), so before this the
+    zero-config path ALWAYS extrapolated from a ~6K sample. On person@100K that
+    extrapolation returns an all-zero blocking profile, which rolls up RED and
+    refuses, and feeds `reduction_ratio=0.0` to `rule_low_reduction_ratio` --
+    which then rewrites the blocking plan on evidence nobody collected. The
+    measured profile for the same config is `reduction_ratio=0.9757`, GREEN.
     """
     if distributed:
         return False
@@ -317,13 +334,45 @@ class ControllerNotConfidentError(Exception):
             f"Options: pass an explicit GoldenMatchConfig, lower the matchkey "
             f"threshold, or re-call with allow_red_config=True (runs the "
             f"degenerate config anyway) / confidence_required=False. See "
-            f"{self.DOCS_URL}."
+            f"{self.DOCS_URL}. {AGENT_DOCS_HINT}"
         )
 
 
 # Priority order for failing-sub-profile diagnostics: root causes
 # upstream first. Spec §Design / Confidence gate.
 _SUBPROFILE_PRIORITY_ORDER = ("data", "blocking", "scoring", "matchkey", "cluster")
+
+
+def _carries_own_blocking_plan(blocking: BlockingConfig | None) -> bool:
+    """True when this config's blocking plan lives OUTSIDE ``keys`` (#2488).
+
+    ``token``/``lsh``/``simhash``/``perceptual``/``canopy`` carry their plan in a
+    dedicated config block, and ``learned``/``ann``/``sorted_neighborhood``
+    derive theirs at run time. For all of them an empty ``keys`` is the normal,
+    valid shape -- several validators actively REJECT ``keys`` -- so it must not
+    be read as "no blocking configured".
+    """
+    from goldenmatch.config.schemas import KEYS_DRIVEN_BLOCKING_STRATEGIES
+
+    if blocking is None:
+        return False
+    return getattr(blocking, "strategy", None) not in KEYS_DRIVEN_BLOCKING_STRATEGIES
+
+
+def _blocking_is_keyless(blocking: BlockingConfig | None) -> bool:
+    """True when the committed config really has NO blocking plan.
+
+    Was ``not blocking.keys``, which is only correct for the keys-driven
+    strategies. On a ``strategy="token"`` config -- empty ``keys`` by
+    construction -- it read as degenerate, flipped the failing sub-profile to
+    `blocking`, and sent the estimator off to measure the matchkey fields
+    instead (#2488).
+    """
+    if blocking is None:
+        return True
+    if getattr(blocking, "keys", None):
+        return False
+    return not _carries_own_blocking_plan(blocking)
 
 
 def _identify_failing_subprofile(profile: ComplexityProfile) -> str:  # pyright: ignore[reportUnusedFunction]
@@ -553,6 +602,9 @@ class AutoConfigController:
         self.policy = policy
         self.budget = budget
         self._memory = memory
+        # {matchkey_name: {"link_threshold": float, "source": str}} from the most
+        # recent sample pipeline run (#2637). Empty for non-probabilistic runs.
+        self._last_fs_link_thresholds: dict[str, dict] = {}
 
     # ---- Public entry point ------------------------------------------------
     def run(
@@ -797,8 +849,13 @@ class AutoConfigController:
         try:
             _diag("entering iteration loop")
             for iteration in range(self.budget.max_iterations + 1):
-                elapsed = time.time() - start
-                if elapsed > self.budget.max_seconds and iteration > 0:
+                # #2532: the wall-clock stop makes the committed config a
+                # function of host speed and load -- how many iterations get
+                # explored depends on how busy the machine is. Anything that
+                # PINS controller output must therefore run with
+                # GOLDENMATCH_AUTOCONFIG_DETERMINISTIC=1, which drops this cut
+                # and leaves max_iterations as the only stopping rule.
+                if over_budget(start, self.budget.max_seconds) and iteration > 0:
                     history.stop_reason = StopReason.BUDGET_TIME
                     break
                 iter_start = time.time()
@@ -825,6 +882,59 @@ class AutoConfigController:
                         emitter, df=sample, iteration=iteration,
                         reference=sample_ref, config=config_n,
                     )
+                    # Measure blocking on the FULL frame for THIS iteration's
+                    # own config, not just at commit time (>=REFUSE_AT_N) or
+                    # post-commit for planner backend selection. Below
+                    # REFUSE_AT_N, profile_n.blocking was always the
+                    # sample-extrapolated all-zero default for a multi_pass
+                    # config -- the same unmeasured shape that caused the
+                    # zero-config recall incident, just never surfaced
+                    # because refusal never fires below 100K rows (#2663).
+                    # `_should_measure_blocking`'s own row ceiling (20M) is
+                    # the real cost gate here; REFUSE_AT_N was never about
+                    # cost, so it is not repeated on this call site.
+                    #
+                    # ONLY fills an ABSENT profile (`n_blocks == 0`). An earlier
+                    # version replaced unconditionally, which CLOBBERS a
+                    # populated one -- and a populated blocking profile is a
+                    # real observation from the run that just happened, not a
+                    # worse version of this measurement. It broke
+                    # `test_stop_reason_budget_iterations_when_max_iter_reached`
+                    # and `..._oscillating_when_policy_loops`, which inject
+                    # deliberately-RED profiles (`reduction_ratio=0.01`) to
+                    # drive the loop and had them silently overwritten with a
+                    # healthy measurement, ending the loop at GREEN. Those
+                    # tests were right. The defect was always ABSENCE, so
+                    # absence is what this fills -- narrower and more correct.
+                    _blk_cfg_n = getattr(config_n, "blocking", None)
+                    _is_static_n = (
+                        _blk_cfg_n is not None
+                        and getattr(_blk_cfg_n, "strategy", "static")
+                        in ("static", "multi_pass")
+                    )
+                    if profile_n.blocking.n_blocks == 0 and _should_measure_blocking(
+                        planning_effort=planning_effort,
+                        distributed=distributed,
+                        is_static=_is_static_n,
+                        n_rows=n_rows,
+                    ):
+                        try:
+                            from goldenmatch.core.blocker import (
+                                measure_blocking_profile,
+                            )
+                            _measured_n = measure_blocking_profile(df, config_n)
+                        except Exception:
+                            logger.debug(
+                                "Per-iteration blocking measurement failed; "
+                                "keeping the extrapolated profile.",
+                                exc_info=True,
+                            )
+                            _measured_n = None
+                        if _measured_n is not None:
+                            import dataclasses as _dc_iter  # noqa: PLC0415
+                            profile_n = _dc_iter.replace(
+                                profile_n, blocking=_measured_n,
+                            )
                     wall_ms = int((time.time() - iter_start) * 1000)
                     from goldenmatch.core.autoconfig_history import HistoryEntry
                     history.entries.append(HistoryEntry(
@@ -1045,6 +1155,74 @@ class AutoConfigController:
         # guard below -- a caller passes confidence_required=False to keep
         # warn-and-run on NON-RED degenerate blocking.
         _committed_red = best_entry.profile.health() == HealthVerdict.RED
+        if (
+            _committed_red
+            and n_rows >= REFUSE_AT_N
+            and not allow_red_config
+            and _identify_failing_subprofile(best_entry.profile) == "blocking"
+        ):
+            # Do not refuse on EXTRAPOLATED blocking evidence when measuring is
+            # cheap. The profile driving this decision comes from a ~6K sample
+            # (6,324 rows for a 100K frame); the full-frame measurement of the
+            # same config costs ~1.1s and is exact.
+            #
+            # It is not a marginal difference. person@100K, the 8-pass
+            # zero-config plan: the sample profile arrives as all zeros
+            # (reduction_ratio 0.0, n_blocks 0) and rolls up RED, while the
+            # measured profile is reduction_ratio 0.9757 / n_blocks 84,350 --
+            # GREEN. Refusing there is refusing on the DEFAULT VALUE of a field
+            # nobody populated.
+            #
+            # The same all-zero default also reaches `rule_low_reduction_ratio`
+            # (0.0 < 0.5), which is why zero-config's blocking plan was being
+            # rewritten on evidence that was never collected.
+            #
+            # Only runs when blocking is the failing sub-profile (nothing else
+            # is re-evidenced here) and when a vectorized path applies, so the
+            # refusal path can't take on the slow per-block loop.
+            _blk_cfg = getattr(best_entry.config, "blocking", None)
+            if _should_measure_blocking(
+                planning_effort=planning_effort,
+                distributed=distributed,
+                is_static=(
+                    _blk_cfg is not None
+                    and getattr(_blk_cfg, "strategy", "static")
+                    in ("static", "multi_pass")
+                ),
+                n_rows=n_rows,
+            ):
+                try:
+                    from goldenmatch.core.blocker import (  # noqa: PLC0415
+                        measure_blocking_profile,
+                    )
+                    _measured = measure_blocking_profile(df, best_entry.config)
+                except Exception:
+                    logger.debug(
+                        "Pre-refusal blocking measurement failed; keeping the "
+                        "extrapolated verdict.", exc_info=True,
+                    )
+                    _measured = None
+                if _measured is not None:
+                    import dataclasses as _dc  # noqa: PLC0415
+
+                    _remeasured = _dc.replace(
+                        best_entry.profile, blocking=_measured,
+                    )
+                    if _remeasured.health() != HealthVerdict.RED:
+                        logger.info(
+                            "auto-config: sample-extrapolated blocking read RED "
+                            "(reduction_ratio=%.4f, n_blocks=%d) but the measured "
+                            "full-frame profile is %s (reduction_ratio=%.4f, "
+                            "n_blocks=%d) -- committing instead of refusing.",
+                            best_entry.profile.blocking.reduction_ratio,
+                            best_entry.profile.blocking.n_blocks,
+                            _remeasured.health().name,
+                            _measured.reduction_ratio, _measured.n_blocks,
+                        )
+                        best_entry = _dc.replace(
+                            best_entry, profile=_remeasured,
+                        )
+                        _committed_red = False
         if _committed_red and n_rows >= REFUSE_AT_N and not allow_red_config:
             # Report the ACTUAL failing sub-profile (priority-ordered). Only
             # when blocking is genuinely the failing cause AND the committed
@@ -1054,9 +1232,7 @@ class AutoConfigController:
             # a data failure, not a blocking one.
             failing = _identify_failing_subprofile(best_entry.profile)
             _blocking = best_entry.config.blocking
-            _no_blocking_keys = (
-                _blocking is None or not getattr(_blocking, "keys", None)
-            )
+            _no_blocking_keys = _blocking_is_keyless(_blocking)
             if failing == "blocking" and _no_blocking_keys:
                 _stop_reason = StopReason.BLOCKING_DEGENERATE.name
             else:
@@ -1123,10 +1299,7 @@ class AutoConfigController:
             # real block-size distribution from the iteration sample;
             # config.blocking might be empty because the matchkey path
             # didn't need it).
-            _no_blocking_keys = (
-                _blocking is None
-                or not getattr(_blocking, "keys", None)
-            )
+            _no_blocking_keys = _blocking_is_keyless(_blocking)
             if _no_blocking_keys and _profile_red:
                 logger.warning(
                     "BLOCKING_DEGENERATE guard fired: committed config has "
@@ -1158,9 +1331,16 @@ class AutoConfigController:
                 for _key in _blocking.keys:
                     if _key.fields:
                         _block_fields.extend(_key.fields)
-            elif _profile_red:
+            elif _profile_red and not _carries_own_blocking_plan(_blocking):
                 # No explicit blocking.keys; fall back to matchkeys[0]
                 # so we catch the implicit-blocking degenerate case.
+                #
+                # #2488: ONLY for keys-driven strategies. A `token`/`lsh`/
+                # `simhash`/`perceptual` config legitimately has empty `keys`
+                # (their validators reject `keys`), and estimating their block
+                # size from the MATCHKEY fields measures a blocking plan that is
+                # not the configured one -- which condemned a working token plan
+                # on Amazon-Google.
                 _mks = best_entry.config.get_matchkeys() or []
                 if _mks and _mks[0].fields:
                     _block_fields = [
@@ -1300,6 +1480,9 @@ class AutoConfigController:
             best_entry.config, best_entry.profile,
         )
 
+        # #2637: write the RESOLVED FS link cutoff onto the committed config.
+        self._stamp_resolved_link_thresholds(committed_config)
+
         # ── Controller v3 planner (phase 2): pick execution plan based on the
         # committed profile + runtime introspection. Phase 2 lands with an
         # empty rule list (no behavior change); phases 3-6 register rules.
@@ -1335,9 +1518,14 @@ class AutoConfigController:
         # Distributed always extrapolates (a full-frame pass would defeat its
         # no-materialization invariant). Any measurement failure falls back too.
         _blocking_cfg = getattr(committed_config, "blocking", None)
+        # "static" here means "a vectorized block-size path applies", which now
+        # includes multi_pass via `_fast_multi_pass_block_sizes` (N static
+        # passes, vectorized per pass). multi_pass is the common zero-config
+        # shape, so restricting this to plain static meant zero-config never
+        # measured and always extrapolated from the sample.
         _is_static = (
             _blocking_cfg is not None
-            and getattr(_blocking_cfg, "strategy", "static") == "static"
+            and getattr(_blocking_cfg, "strategy", "static") in ("static", "multi_pass")
         )
         if _should_measure_blocking(
             planning_effort=planning_effort,
@@ -1719,9 +1907,95 @@ class AutoConfigController:
         # the sample profile. A polars / ray sample is untouched (byte-identical).
         config = self._maybe_bucket_route_arrow(sample, config)
         if reference is None:
-            run_dedupe_df(sample, config=config, _prep_store=_prep_store)
+            _res = run_dedupe_df(sample, config=config, _prep_store=_prep_store)
         else:
-            run_match_df(sample, reference, config=config)
+            _res = run_match_df(sample, reference, config=config)
+        # #2637: keep the RESOLVED FS link cutoff and its provenance from this
+        # sample run. `_stamp_resolved_link_thresholds` writes it onto the
+        # committed config so the cutoff stops being implicit. Reading it here
+        # is the only place it is available: `resolve_thresholds` runs inside
+        # the pipeline, after auto-config has already produced the config, so
+        # nothing upstream can know the number.
+        try:
+            self._last_fs_link_thresholds = dict(
+                (_res or {}).get("fs_link_thresholds") or {}
+            )
+        except Exception:  # noqa: BLE001 - telemetry must never fail a run
+            self._last_fs_link_thresholds = {}
+
+    def _stamp_resolved_link_thresholds(self, config: GoldenMatchConfig) -> None:
+        """Write the resolved FS link cutoff onto the committed config (#2637).
+
+        A probabilistic matchkey cuts on ``link_threshold``. Auto-config never
+        set it, so the number was resolved three layers down at scoring time by
+        ``resolve_thresholds`` (explicit > EM-calibrated > fixed default) and the
+        config it handed back was SILENT about the single most consequential
+        Fellegi-Sunter decision. Two costs, both measured in #2636:
+
+        - ``mk.cutoff`` was ``None``, so ``_perturbable_matchkeys`` was empty and
+          ``ThresholdShift`` returned ``None``. The healer's only FS-specific
+          lever was inert on every auto-config FS config (verified on 4 of 4
+          datasets), and ``threshold_perturbations`` yielded nothing, leaving
+          ``perturbation_stability`` permanently unmeasured on this path.
+        - the user in #2483 swept a field that does not cut and measured nothing,
+          with no way to see that no decision had ever been made.
+
+        Only ``calibrated`` is stamped. ``configured`` means the user set it
+        and must not be overwritten; ``fallback`` means NOTHING decided the
+        value, and stamping it is not behaviour-neutral -- see the note on
+        ``stampable`` below, which cost pairwise precision 0.9308 vs 0.9992 at
+        person@100K by pinning the cutoff to a sample-derived default and
+        skipping the full-data refit.
+
+        Silent no-op when the sample run recorded nothing (non-probabilistic
+        configs, or a path that never reached FS scoring) -- a missing
+        measurement must not invent a cutoff, which would be exactly the
+        fabricated-default problem this exists to remove.
+        """
+        recorded = getattr(self, "_last_fs_link_thresholds", None)
+        if not recorded:
+            return
+        from goldenmatch.core.probabilistic import (
+            LINK_THRESHOLD_CALIBRATED,
+        )
+        # CALIBRATED only. Stamping a FALLBACK is stamping "nothing decided
+        # this" as though it were a decision, and it is not behaviour-neutral:
+        # once `link_threshold` is set the value counts as `configured`, so the
+        # full-data run SKIPS the threshold refit (`reason:
+        # explicit-link-threshold`) and is pinned to a number derived from a ~6K
+        # sample.
+        #
+        # Measured, person@10K zero-config, identical in every other respect:
+        #
+        #     stamped fallback 0.50   P 0.9947  R 1.0000  F1 0.9973
+        #     left None (refit runs)  P 1.0000  R 0.9979  F1 0.9990
+        #
+        # The second is byte-identical to the probabilistic lane. At 100K the
+        # same pin costs precision 0.9308 vs 0.9992. A calibrated value IS a
+        # real data-driven decision and is still stamped, so #2637's lever
+        # (mk.cutoff reachable -> ThresholdShift / perturbation_stability live)
+        # survives wherever a decision actually happened.
+        stampable = (LINK_THRESHOLD_CALIBRATED,)
+        for mk in config.get_matchkeys():
+            if getattr(mk, "type", None) != "probabilistic":
+                continue
+            if mk.link_threshold is not None:
+                continue  # user's own value; never overwrite
+            entry = recorded.get(mk.name)
+            if not isinstance(entry, dict) or entry.get("source") not in stampable:
+                continue
+            value = entry.get("link_threshold")
+            if value is None:
+                continue
+            try:
+                mk.link_threshold = float(value)
+            except (TypeError, ValueError):
+                continue
+            logger.info(
+                "auto-config: recorded resolved link_threshold=%.4f on matchkey "
+                "%r (source=%s) so the cutoff is explicit and tunable (#2637)",
+                float(value), mk.name, entry.get("source"),
+            )
 
     @staticmethod
     def _maybe_bucket_route_arrow(
@@ -2036,7 +2310,14 @@ class AutoConfigController:
         """
         from goldenmatch.core.autoconfig_rules import _llm_api_key_available
         sp = profile.scoring
-        if sp.candidates_compared == 0:
+        # Only bail on a MEASURED zero (#2639). `candidates_compared` is 0
+        # whenever scoring skipped its count loop -- which it does above 10,000
+        # blocks -- so this early return was firing on every fine-grained shape
+        # and the escalation was silently dead at exactly the scale it exists
+        # for. When the count is unknown the `mass_in_borderline` check below
+        # decides, and that one is computed over pairs that were actually
+        # scored, so it cannot be satisfied by a run where nothing happened.
+        if sp.candidates_counted and sp.candidates_compared == 0:
             return config
         if sp.mass_in_borderline < 0.10:
             return config

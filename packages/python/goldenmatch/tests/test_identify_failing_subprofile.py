@@ -24,9 +24,13 @@ def _green_profile() -> ComplexityProfile:
             "a": "text", "b": "text", "c": "text",
         }),
         blocking=BlockingProfile(
+            # 10 blocks of ~5 rows -> ~10 pairs each, so the biggest owns
+            # ~10% of the 100 total. The previous sizes were impossible: a
+            # 25-row block is 300 pairs on its own, three times the stated
+            # total, and the skew rule reads both fields now.
             keys_used=[["a"]], n_blocks=10, total_comparisons=100,
-            reduction_ratio=0.9, block_sizes_p50=10, block_sizes_p95=15,
-            block_sizes_p99=20, block_sizes_max=25,
+            reduction_ratio=0.9, block_sizes_p50=5, block_sizes_p95=5,
+            block_sizes_p99=5, block_sizes_max=5,
             singleton_block_count=0, oversized_block_count=0,
         ),
         scoring=ScoringProfile(

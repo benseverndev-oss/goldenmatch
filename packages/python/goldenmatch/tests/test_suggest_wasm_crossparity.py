@@ -68,6 +68,10 @@ _CASES = [
     "swap_scorer",
     "add_negative_evidence",
     "drop_matchkey",
+    # #2497: the exact-duplicate spike. The only case with a top-bin spike, so
+    # the only one that catches a surface still running the pre-fix dip() --
+    # against the unfixed kernel it yields no suggestions at all.
+    "exact_match_spike",
 ]
 
 # Frozen schemas (mirror goldenmatch/core/suggest/adapter.py).

@@ -1,10 +1,24 @@
-# Sail Tier (distributed, Sail-native — ADDITIVE to Ray)
+# Sail Tier (distributed) — RETARGETED 2026-08-11 to Apache Spark Connect
 
-> **Scope amended 2026-06-15 ([../decisions/0004-sail-tier-scope.md](../decisions/0004-sail-tier-scope.md)):**
-> Sail is an **additive** distributed substrate that can be supercharged, **NOT a Ray
-> replacement**. Ray clustering is effective and stays the default indefinitely. "Retires
-> Ray" / "deprecation window" language below is superseded — Sail adds a parallel opt-in
-> path; Ray is untouched.
+> **READ THIS FIRST.** This tier's target is now **Apache Spark**, not Sail. See
+> [`docs/superpowers/specs/2026-08-10-spark-native-execution-design.md`](../../docs/superpowers/specs/2026-08-10-spark-native-execution-design.md)
+> and Amendment 2 of [`../decisions/0004-sail-tier-scope.md`](../decisions/0004-sail-tier-scope.md).
+>
+> The goal is to run GoldenMatch's **native Rust kernels inside a Spark cluster the
+> customer already operates**, so a Splink-on-Spark team adopts GM with no new
+> infrastructure. The code below was always backend-agnostic —
+> `SparkSession.builder.remote(url)` with zero Sail-specific calls — which is why
+> retargeting cost days rather than a rewrite.
+>
+> Sail's remaining role is the no-cluster dev/CI server, and even that is
+> replaceable by `builder.remote("local[*]")`. Two capabilities decided it:
+> `addArtifacts` (ships deps to executors — makes the zero-install cutover real)
+> and `localCheckpoint` (fixes the WCC plan-growth wedge). Both exist on Apache
+> Spark; on Sail they are missing or unproven, and `pysail` additionally pins
+> `pyspark[connect]<4`.
+>
+> **Ray is untouched** and remains the distributed path for non-Spark users. The
+> old "Sail versus Ray" framing was the wrong axis entirely.
 
 The distributed sibling of the one-box DataFusion spine. Re-expresses the spine's
 relational plan against **Sail** (LakeSail — a Rust Spark drop-in built on DataFusion,

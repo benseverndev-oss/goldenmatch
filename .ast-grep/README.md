@@ -48,6 +48,7 @@ advisory (reported, non-blocking) so new rules can land gradually.
 |---|---|---|
 | `ts-no-empty-catch` | error | empty `catch {}` silently swallows errors — log or re-throw |
 | `ts-no-spread-math-min-max` | error | `Math.min/max(...array)` throws on >65K elements — the 11 real sites were fixed (this PR), so it's now a hard guard against reintroduction |
+| `ts-no-duplicate-kernel-math` | error | a hand-rolled `levenshtein`/`jaro`/`soundex`/… outside the sanctioned pure-TS fallback modules is a second copy that drifts from the Rust `*-core` kernel and the Python port — import the existing export ([single-kernel-collapse R5](../context-network/architecture/single-kernel-collapse-roadmap.md)). **Zero findings**; now a reintroduction guard. The allow-list is the parity-gated fallback surface, which is legitimate and permanent (hard constraint 1): `goldenmatch` `core/stringDistance.ts` / `core/scorer.ts` / `core/transforms.ts` / `core/perceptualWasm.ts`, plus `goldencheck` `fuzzy-values.ts` and `goldenflow` `phonetic.ts` — each of those two mirrors *its own* package's Rust core, not goldenmatch's. Two known limits before you silence a new hit: it matches function NAMES (so a thin `.map()` wrapper can flag while the real scalar impl doesn't), and a name can't tell a rogue copy from a package's own gated fallback. It also cannot see **Rust-side** duplication — the roadmap records a live `goldenflow-core::soundex` vs `goldenphonetic-core::soundex` divergence this rule is structurally blind to |
 
 **Rust kernels** (`packages/rust/extensions/`):
 

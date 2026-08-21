@@ -32,7 +32,7 @@ result = infermap.map("crm_export.csv", "canonical_customers.csv")
 result.to_config("crm_mapping.yaml")            # commit this
 ```
 
-Then validate each incoming file against the pinned config — non-zero exit on a missing required field makes it a CI gate:
+Then validate each incoming file against the pinned config: non-zero exit on a missing required field makes it a CI gate:
 
 ```bash
 infermap validate new_drop.csv --config crm_mapping.yaml \
@@ -50,7 +50,7 @@ infermap apply new_drop.csv --config crm_mapping.yaml --output clean.csv
 **You have** source names your target schema doesn't know about (`cust_ref` really is `customer_id`). **You want** InferMap to resolve them without lowering `min_confidence`.
 
 ```yaml
-# mapping_rules.yaml — engine config (domains, aliases, scorer weights)
+# mapping_rules.yaml: engine config (domains, aliases, scorer weights)
 domains: [finance]
 aliases:
   customer_id: [cust_ref, acct_no]
@@ -67,4 +67,4 @@ engine = MapEngine(config_path="mapping_rules.yaml")   # loads domains + aliases
 result = engine.map("crm_export.csv", "canonical_customers.csv")
 ```
 
-Aliases feed the `AliasScorer` (weight 0.95), so a known alias resolves with high confidence instead of relying on the fuzzy-name tie-breaker. (Note this is the engine **config** file — distinct from the saved **mapping** an earlier `result.to_config(...)` writes, which `infermap apply`/`from_config` consume.)
+Aliases feed the `AliasScorer` (weight 0.95), so a known alias resolves with high confidence instead of relying on the fuzzy-name tie-breaker. (Note this is the engine **config** file, distinct from the saved **mapping** an earlier `result.to_config(...)` writes, which `infermap apply`/`from_config` consume.)

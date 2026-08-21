@@ -14,6 +14,39 @@ ci_workflow:
   # one level up.
   - '.github/filters.yml'
   - 'scripts/check_filter_coverage.py'
+# Every workflow file, for the YAML validation half of `workflow_lint`. Kept
+# SEPARATE from ci_workflow on purpose: ci_workflow also drives `force_all` in
+# the merge queue, so widening it would make any workflow edit re-run the whole
+# matrix. This one only decides whether the lint runs. Before it existed the
+# lint was gated on ci_workflow's three paths, so ~115 of the repo's workflow
+# files could be edited with no YAML validation at all -- a check that existed
+# and did not fire.
+any_workflow:
+  - '.github/workflows/**'
+  - '.github/filters.yml'
+  - 'scripts/check_workflow_yaml.py'
+  - 'scripts/check_filter_coverage.py'
+# Agent-context docs: the CLAUDE.md files plus the operations notes the root file
+# links to. Its own filter rather than folding into `docs` so a CLAUDE.md edit runs
+# the cheap ref check without also triggering the 8-minute Mintlify render.
+claude_refs:
+  - '**/CLAUDE.md'
+  - 'context-network/operations/**'
+  - 'packages/python/goldenmatch/docs/context/**'
+  - 'scripts/check_claude_refs.py'
+  - 'scripts/test_claude_refs.py'
+  - 'scripts/check_context_budget.py'
+  - 'scripts/check_commit_msg.py'
+  - 'scripts/test_context_and_commit_gates.py'
+# scripts/ is ~100 files including 24 check_*.py gates that ci-required depends
+# on, and NOTHING linted it: the python matrix runs `ruff check
+# packages/python/<pkg>`, which never reaches here. So the repo's own ruff config
+# (F/I/B/UP) was enforced everywhere except the directory enforcing everything
+# else. Found via a code-quality bot flagging an unused import CI could not have
+# caught (#2449).
+scripts_lint:
+  - 'scripts/**'
+  - 'pyproject.toml'
 python_root:
   - 'pyproject.toml'
   - 'uv.lock'
@@ -313,6 +346,10 @@ benchmark_runner:
   - 'scripts/run_benchmarks.py'
   - 'scripts/dqbench_adapters/**'
   - 'docs/reproducing-benchmarks.md'
+  # The committed SoT report + its JSON: a hand-edit of the markdown must
+  # trigger the smoke lane's `--check` staleness gate.
+  - 'docs/benchmarks/latest-results.md'
+  - 'docs/benchmarks/latest-results.json'
   # #435: changes to the library being benchmarked must also
   # trigger the smoke. Before this, refiner / blocker /
   # scorer / pipeline / autoconfig changes could silently
@@ -495,6 +532,16 @@ er_matcher:
 # native-kernel references must not drift from the kernel's exports.
 # Re-run the gate when the kernel crate, the host package, the
 # checker/test tooling, or its parity corpus changes.
+downstream_symbols:
+  # Covers BOTH sides on purpose. Watching only the consumers would rebuild the
+  # very blind spot this gate exists to close: the break comes from a goldenmatch
+  # change, and the consumers' own lanes never see it.
+  - 'packages/python/goldenmatch/goldenmatch/**'
+  - 'packages/python/goldengraph/**'
+  - 'packages/python/goldenmatch-kg/**'
+  - 'packages/python/goldenmatch/benchmarks/er-kg-bench/**'
+  - 'scripts/check_downstream_symbols.py'
+
 native_symbols:
   - 'packages/rust/extensions/native/**'
   - 'packages/rust/extensions/goldencheck-native/**'
@@ -828,13 +875,53 @@ distributed:
   - 'packages/python/goldenmatch/tests/test_distributed_*.py'
   - 'packages/python/goldenmatch/goldenmatch/core/cluster.py'
   - 'packages/python/goldenmatch/goldenmatch/backends/ray_backend.py'
-sail:
-  # Sail tier (distributed, Spark Connect). The main `python` job
-  # installs without the `sail` extra, so tests/test_sail_*.py SKIP
-  # there (pytest.importorskip). The `sail` job installs
-  # goldenmatch[sail] (pysail + pyspark[connect]) so they run.
+spark:
+  # Spark Connect tier (distributed). The main `python` job installs without
+  # the `spark` extra, so the tier's tests SKIP there (pytest.importorskip);
+  # the `spark_connect` job installs it. (The `sail` lane was retired on
+  # 2026-08-12: pysail pins pyspark 3.5, which has no `arrow_udf`, so it could
+  # no longer run the tier it existed to cross-check.)
+  #
+  # This filter was named `sail` and watched `goldenmatch/sail/**` only. P2
+  # (#2494) renamed the package to `goldenmatch/spark/`, which left the filter
+  # watching a directory holding nothing but the back-compat shim -- so an edit
+  # to the tier itself triggered NEITHER lane. Exactly the #1846 class the
+  # coverage checker exists for, which is why `spark` is now in its REQUIRED
+  # table: the next rename fails workflow_lint instead of going quiet.
+  - 'packages/python/goldenmatch/goldenmatch/spark/**'
+  # The deprecated alias still ships and still has its own tests.
   - 'packages/python/goldenmatch/goldenmatch/sail/**'
+  # Both prefixes: the package renamed, the test files did not (deliberately --
+  # renaming them shifts pytest-split shard boundaries, see CLAUDE.md).
   - 'packages/python/goldenmatch/tests/test_sail_*.py'
+  - 'packages/python/goldenmatch/tests/test_spark_*.py'
+  # Both lanes install VIA THE EXTRAS, so an extras edit must re-run them --
+  # that is the only place the [spark]/[sail] dependency split is exercised.
+  - 'packages/python/goldenmatch/pyproject.toml'
+  # J0: the JVM scorer jar is built and self-tested INSIDE the spark_connect
+  # lane, so a Java edit that never triggered that lane would ship untested --
+  # the same staleness the P2 rename introduced, one language over.
+  - 'packages/jvm/**'
+  # J2: the jar carries the Rust kernel, reached through score-jni -> score-cabi
+  # -> score-core. The lane BUILDS all three, and the cross-language parity gate
+  # (test_spark_jvm_native_parity.py) is the only place a divergence between the
+  # JVM's score and Python's would surface. A kernel edit that skipped this lane
+  # would ship a jar nothing had compared against.
+  - 'packages/rust/extensions/score-jni/**'
+  - 'packages/rust/extensions/score-cabi/**'
+  - 'packages/rust/extensions/score-core/**'
+  # The tier's own Python scorer is the ORACLE that gate compares against, so a
+  # change to it moves the reference the JVM is measured by.
+  - 'packages/python/goldenmatch/goldenmatch/core/strsim.py'
+  # The lane no longer contains the jar build -- it CALLS these. They are shared
+  # with publish-goldenmatch-spark-jar.yml precisely so the tested jar and the
+  # shipped jar cannot be built differently, which only holds while an edit to
+  # either script still re-runs the lane that tests it. Same staleness class as
+  # the P2 rename above, one directory over.
+  - 'scripts/build_spark_jar.sh'
+  - 'scripts/spark_jni_selftest.sh'
+  # The jar-only inventory runs in this lane and nowhere else.
+  - 'scripts/spark_jar_only_inventory.py'
 action:
   - 'packages/actions/**'
 dbt:
@@ -904,3 +991,18 @@ pyright_slice:
   - 'packages/python/goldenmatch/goldenmatch/_api.py'
   - 'packages/python/goldenmatch/goldenmatch/utils/transforms.py'
   - 'packages/python/goldenmatch/goldenmatch/config/**'
+# docs_regen: any source that feeds a committed generated doc (the regen_docs.py
+# battery). A change here means the derived docs may need regenerating, so the
+# single `docs_regen` gate (regen + `git diff` fail) must run. Broad on purpose --
+# the regen is idempotent, so an over-trigger is a cheap no-op, while an
+# under-trigger would let a stale doc through (the failure class this replaces).
+docs_regen:
+  - 'packages/python/**'
+  - 'parity/**'
+  - 'scripts/gen_*.py'
+  - 'scripts/agent_codemap.py'
+  - 'scripts/check_llms_counts.py'
+  - 'scripts/regen_docs.py'
+  - 'docs-site/**'
+  - 'docs/agent-manifest.json'
+  - 'docs/agent-codemap.json'

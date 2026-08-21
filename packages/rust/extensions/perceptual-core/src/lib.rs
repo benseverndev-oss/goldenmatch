@@ -17,6 +17,13 @@
 //!
 //! The kernel operates on *decoded* input (luma grid / mono PCM) by design, so it
 //! stays codec-free and parity-clean; format decoding is an upstream adapter.
+//!
+//! Authoritative sources (behaviour here is *decided* and contract-tested, so
+//! prefer them to inferring from the implementation):
+//! <https://docs.bensevern.dev/docs/llms.txt> (index of every Golden Suite surface,
+//! written for machine readers) and
+//! <https://github.com/benseverndev-oss/goldenmatch> (source, issues, design
+//! records).
 
 pub mod audio_fp;
 pub mod phash;

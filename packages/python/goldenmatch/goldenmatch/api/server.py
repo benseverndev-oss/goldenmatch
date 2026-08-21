@@ -18,6 +18,8 @@ Endpoints:
     POST /shatter             Break a cluster into singletons
     POST /unmerge             Pull a record out of its cluster
     POST /certify-recall      Estimate match recall without ground truth
+    POST /semantic/certify    Certify a semantic model's declared keys (verdict + gate)
+    POST /semantic/discover   Discover a draft semantic model from source tables (pre-graded)
     POST /retrieve            Semantic retrieval: records most similar to a query
 """
 
@@ -494,6 +496,82 @@ def resolve_api_auth_token(host: str) -> str | None:
     return token
 
 
+def _certify_semantic_model_endpoint(
+    model: Any, frames: Any, resolve: bool,
+) -> dict[str, Any]:
+    """Stateless `POST /semantic/certify` handler: certify every declared key in a
+    semantic model against its data files and return the verdict-rich report.
+
+    Body: ``{"model": <path>, "frames": {name: path, ...}, "resolve": bool}``.
+    Returns the same JSON shape as the MCP `certify_semantic_model` tool + the CLI
+    `certify-keys --json` (the shared `certification_report_dict`), so a build gate
+    can read `n_untrustworthy` / `all_trustworthy` identically on any surface.
+    """
+    if not model or not isinstance(model, str):
+        return {"error": "model is required (path to a MetricFlow/Cube/OSI YAML)."}
+    if not isinstance(frames, dict) or not frames:
+        return {"error": "frames must map a model/dataset/cube name to a data file path."}
+
+    from goldenmatch.core.io_arrow import read_table_arrow
+    from goldenmatch.semantic import certification_report_dict, certify_semantic_model
+
+    loaded: dict[str, object] = {}
+    for target, fpath in frames.items():
+        try:
+            loaded[str(target)] = read_table_arrow(str(fpath))
+        except FileNotFoundError:
+            return {"error": f"data file not found for {target!r}: {fpath}"}
+        except Exception as exc:  # noqa: BLE001 - surface a clean API error
+            return {"error": f"could not read data for {target!r} ({fpath}): {exc}"}
+
+    try:
+        report = certify_semantic_model(model, loaded, resolve=resolve)
+    except FileNotFoundError:
+        return {"error": f"semantic-model file not found: {model}"}
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    return certification_report_dict(report)
+
+
+def _discover_semantic_model_endpoint(
+    frames: Any, dialect: Any, resolve: bool, name: bool = False,
+    apply_names: bool = False,
+) -> dict[str, Any]:
+    """Stateless `POST /semantic/discover` handler: propose a draft semantic model
+    from a set of source tables, pre-graded by the certifier.
+
+    Body: ``{"frames": {name: path, ...}, "dialect": "metricflow", "resolve": bool}``.
+    Returns the same JSON shape as the MCP `discover_semantic_model` tool + the CLI
+    `discover-model` (the shared `ProposedModel.to_dict()`), so a build gate can read
+    `all_trustworthy` identically on any surface.
+    """
+    if not isinstance(frames, dict) or not frames:
+        return {"error": "frames must map a table name to a data file path."}
+
+    from goldenmatch.core.io_arrow import read_table_arrow
+    from goldenmatch.semantic import discover_semantic_model
+
+    loaded: dict[str, object] = {}
+    for target, fpath in frames.items():
+        try:
+            loaded[str(target)] = read_table_arrow(str(fpath))
+        except FileNotFoundError:
+            return {"error": f"data file not found for {target!r}: {fpath}"}
+        except Exception as exc:  # noqa: BLE001 - surface a clean API error
+            return {"error": f"could not read data for {target!r} ({fpath}): {exc}"}
+
+    try:
+        model = discover_semantic_model(
+            loaded, dialect=str(dialect or "metricflow"), resolve=resolve,
+            name=bool(name), apply_names=bool(apply_names),
+        )
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    return model.to_dict()
+
+
 class APIHandler(BaseHTTPRequestHandler):
     """HTTP request handler for the GoldenMatch API."""
 
@@ -636,6 +714,22 @@ class APIHandler(BaseHTTPRequestHandler):
         elif path == "/certify-recall":
             result = _server_instance.certify_recall()
             self._json_response(result, 400 if "error" in result else 200)
+        elif path == "/semantic/certify":
+            result = _certify_semantic_model_endpoint(
+                data.get("model"),
+                data.get("frames"),
+                bool(data.get("resolve", False)),
+            )
+            self._json_response(result, 400 if "error" in result else 200)
+        elif path == "/semantic/discover":
+            result = _discover_semantic_model_endpoint(
+                data.get("frames"),
+                data.get("dialect", "metricflow"),
+                bool(data.get("resolve", False)),
+                bool(data.get("name", False)),
+                bool(data.get("apply_names", False)),
+            )
+            self._json_response(result, 400 if "error" in result else 200)
         elif path == "/retrieve":
             query = data.get("query")
             column = data.get("column")
@@ -727,6 +821,8 @@ def start_server(
     print("   GET  /suggest             Config-healer suggestions (self-verified)")
     print("   GET  /reviews             Review queue (steward)")
     print("   POST /reviews/decide      Approve/reject a pair")
+    print("   POST /semantic/certify    Certify a semantic model's declared keys")
+    print("   POST /semantic/discover   Discover a draft semantic model (pre-graded)")
     print("   POST /retrieve            Semantic retrieval by query")
     print("\n   Press Ctrl+C to stop.\n")
 

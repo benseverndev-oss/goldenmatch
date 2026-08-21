@@ -22,3 +22,35 @@ types:
     value_signals:
       numeric: true
     suppress: ["pattern_consistency"]
+
+# No party token is suppressed here, so these roles are purely additive
+# vocabulary -- the vertical simply had none declared.
+roles:
+  property:
+    kind: place
+    name_hints: ["property", "listing", "dwelling", "parcel"]
+    typical_types: ["listing", "property", "features"]
+
+  buyer:
+    kind: person
+    name_hints: ["buyer", "purchaser"]
+
+  seller:
+    kind: person
+    name_hints: ["seller", "grantor"]
+
+  agent:
+    kind: person
+    name_hints: ["agent", "realtor", "broker"]
+
+  landlord:
+    kind: person
+    name_hints: ["landlord", "lessor"]
+
+  tenant:
+    kind: person
+    name_hints: ["tenant", "lessee", "renter"]
+
+  lender:
+    kind: organization
+    name_hints: ["lender", "mortgagee"]

@@ -51,7 +51,7 @@ pub enum TableData {
 /// all-NULL column) and the table is assembled via `pa.Table.from_pydict`. The
 /// per-type mapping is chosen in `spi::read_table` so the resulting schema +
 /// data match `json_to_arrow_df` exactly (proven in `tests::columnar_matches_json`).
-pub fn columns_to_arrow_df(py: Python<'_>, cols: &TableColumns) -> Result<PyObject, BridgeError> {
+pub fn columns_to_arrow_df(py: Python<'_>, cols: &TableColumns) -> Result<Py<PyAny>, BridgeError> {
     let pa = py.import("pyarrow")?;
     let dict = PyDict::new(py);
     for (name, col) in cols.names.iter().zip(cols.columns.iter()) {
@@ -83,7 +83,7 @@ pub fn columns_to_arrow_df(py: Python<'_>, cols: &TableColumns) -> Result<PyObje
 /// Dispatch table rows to a `pa.Table`: JSON via [`json_to_arrow_df`], columns
 /// via [`columns_to_arrow_df`]. The single choke point every table-op bridge fn
 /// funnels through, so parity is anchored in one place.
-pub fn table_to_arrow_df(py: Python<'_>, data: &TableData) -> Result<PyObject, BridgeError> {
+pub fn table_to_arrow_df(py: Python<'_>, data: &TableData) -> Result<Py<PyAny>, BridgeError> {
     match data {
         TableData::Json(json) => json_to_arrow_df(py, json),
         TableData::Columns(cols) => columns_to_arrow_df(py, cols),
@@ -100,7 +100,7 @@ pub fn table_to_arrow_df(py: Python<'_>, data: &TableData) -> Result<PyObject, B
 ///
 /// For table data from Postgres SPI (JSON via `row_to_json`), `from_pylist`
 /// infers the schema the same way `pl.read_json` did.
-pub fn json_to_arrow_df(py: Python<'_>, json_records: &str) -> Result<PyObject, BridgeError> {
+pub fn json_to_arrow_df(py: Python<'_>, json_records: &str) -> Result<Py<PyAny>, BridgeError> {
     let json_mod = py.import("json")?;
     let pa = py.import("pyarrow")?;
 
@@ -119,7 +119,7 @@ pub fn json_to_arrow_df(py: Python<'_>, json_records: &str) -> Result<PyObject, 
 /// one on the polars lane) passes through `write_json` unchanged for
 /// byte-identical output. `DedupeResult.golden` / `MatchResult.matched` are
 /// pyarrow Tables since v3.0.0, so the arrow branch is the default.
-pub fn arrow_df_to_json(py: Python<'_>, df: &PyObject) -> Result<String, BridgeError> {
+pub fn arrow_df_to_json(py: Python<'_>, df: &Py<PyAny>) -> Result<String, BridgeError> {
     let bound = df.bind(py);
     if bound.hasattr("write_json")? {
         // Genuine polars frame -> byte-identical legacy path (polars present).
@@ -140,9 +140,9 @@ mod tests {
 
     #[test]
     fn test_json_roundtrip() {
-        pyo3::prepare_freethreaded_python();
+        pyo3::Python::initialize();
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             // Arrow-native path: needs pyarrow (a hard goldenmatch dep), NOT polars.
             if py.import("pyarrow").is_err() {
                 eprintln!("Skipping test (pyarrow not installed)");
@@ -170,8 +170,8 @@ mod tests {
     /// Python scalar → arrow).
     #[test]
     fn columnar_matches_json() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             if py.import("pyarrow").is_err() {
                 eprintln!("Skipping test (pyarrow not installed)");
                 return;

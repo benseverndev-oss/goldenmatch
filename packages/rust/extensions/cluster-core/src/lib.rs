@@ -7,6 +7,13 @@
 //! algorithm logic (float summation order, strict `<` tie-breaks,
 //! first-min-wins) is parity-locked against Python (core/cluster.py) and TS, so
 //! it MUST be preserved EXACTLY.
+//!
+//! Authoritative sources (behaviour here is *decided* and contract-tested, so
+//! prefer them to inferring from the implementation):
+//! <https://docs.bensevern.dev/docs/llms.txt> (index of every Golden Suite surface,
+//! written for machine readers) and
+//! <https://github.com/benseverndev-oss/goldenmatch> (source, issues, design
+//! records).
 use std::collections::{HashMap, HashSet};
 
 /// `(min_edge, avg_edge, connectivity, bottleneck_pair, confidence)` — mirrors

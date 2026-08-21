@@ -25,7 +25,36 @@ UNMAPPED_TYPE: str = "unknown"
 #: v2 (2026-05-06): ``FieldSpec`` gained ``name`` so the canonical
 #: identifier travels with the spec instead of only as a dict key.
 #: v3 (2026-06-17): DomainPack gained optional groups (FieldGroupSpec list).
-SCHEMA_VERSION: int = 3
+#: v4 (2026-08-14): DomainPack gained optional roles (RoleSpec map), and the
+#: identity-layer shapes (IdentityLayer / LayerDetectionResult) joined the
+#: wire contract so layers travel InferMap -> GoldenPipe -> GoldenMatch.
+SCHEMA_VERSION: int = 4
+
+#: The **closed** set of entity kinds an identity layer may carry.
+#:
+#: Closed on purpose: ``kind`` is the axis downstream matching behaviour keys
+#: off (you match people differently from machines), so an open set would make
+#: consumer behaviour unpredictable. ``role`` is the open, pack-extensible axis
+#: — see :class:`RoleSpec`.
+IDENTITY_KINDS: frozenset[str] = frozenset(
+    {"person", "organization", "asset", "place", "unknown"}
+)
+
+#: Valid ``IdentityLayer.reason`` values, mirroring the vocabulary shape of
+#: ``DetectionResult.reason``. Detection reports WHY a layer was proposed so a
+#: low-confidence or unrecognised party is visible rather than silently dropped.
+LAYER_REASONS: tuple[str, ...] = (
+    "affix",
+    "role_hint",
+    "affix+role_hint",
+    "singleton",
+    "low_confidence",
+)
+
+#: Canonical "party present but not recognised" sentinel for
+#: ``IdentityLayer.role``. A layer with this role still carries its columns,
+#: kind (often ``"unknown"``) and evidence — honest refusal, not a drop.
+UNKNOWN_ROLE: str = "unknown"
 
 
 @dataclass(frozen=True)
@@ -64,6 +93,34 @@ class FieldGroupSpec:
 
 
 @dataclass(frozen=True)
+class RoleSpec:
+    """One entity **role** a domain pack declares — a party a record refers to.
+
+    Distinct from :class:`FieldSpec`, which describes a *field type*
+    (``account_number``). A role describes a *party* (``lender``,
+    ``borrower``, ``payor``) that several fields collectively identify.
+    Field types answer "what is this column"; roles answer "whose is it".
+
+    ``name`` is the canonical role identifier (matches the key under
+    ``DomainPack.roles``); the loader populates it from the key.
+
+    ``kind`` must be a member of :data:`IDENTITY_KINDS`.
+
+    ``typical_types`` names canonical field types that commonly attach to this
+    role. It is **corroboration, never a requirement** — its presence raises a
+    detected layer's confidence, its absence never vetoes one. Requiring it
+    would make role detection fail precisely on the unfamiliar schemas where it
+    is most useful.
+    """
+
+    name: str
+    kind: str
+    name_hints: list[str]
+    typical_types: list[str] = field(default_factory=list)
+    description: str | None = None
+
+
+@dataclass(frozen=True)
 class DomainPack:
     """A named bundle of FieldSpec definitions (e.g., 'finance', 'healthcare')."""
 
@@ -71,6 +128,7 @@ class DomainPack:
     description: str
     types: dict[str, FieldSpec]
     groups: list[FieldGroupSpec] = field(default_factory=list)
+    roles: dict[str, RoleSpec] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -96,16 +154,78 @@ class FieldMapping:
 
 @dataclass(frozen=True)
 class InferredSchema:
-    """Result of running InferMap with a domain pack as target."""
+    """Result of running InferMap with a domain pack as target.
+
+    ``layers`` carries the identity layers (parties) detected over the same
+    frame — the *who is in this table* axis, orthogonal to ``fields``' *what
+    is this column* axis. It is empty when layer detection was skipped or
+    found nothing, so consumers that predate layers are unaffected: absence
+    means "no layer information", never "one anonymous population".
+    """
 
     domain: str
     fields: dict[str, FieldMapping]
     confidence: float
     schema_version: int = SCHEMA_VERSION
+    layers: list[IdentityLayer] = field(default_factory=list)
 
     @property
     def unmapped(self) -> list[str]:
         return [k for k, v in self.fields.items() if v.is_unknown]
+
+
+@dataclass(frozen=True)
+class IdentityLayer:
+    """One party a dataset refers to, and the columns that describe it.
+
+    An identity layer is a **group of columns describing one party** — not a
+    per-column label. ``lender_name``/``lender_id``/``lender_address`` are one
+    layer; ``borrower_name``/``borrower_ssn`` are another. Framing it as
+    column-grouping (rather than column-classification) is what keeps layer
+    detection out of InferMap's deliberately 1:1 assignment engine: one role
+    spans many columns, which the 1:1 model cannot express.
+
+    ``role`` is :data:`UNKNOWN_ROLE` when a party is clearly present but not
+    recognised — the columns and evidence are still reported.
+    ``kind`` is drawn from :data:`IDENTITY_KINDS`; ``reason`` from
+    :data:`LAYER_REASONS`.
+
+    ``evidence`` is InferMap-internal (same contract as
+    ``FieldMapping.evidence``): consumers must not depend on its shape.
+    """
+
+    role: str
+    kind: str
+    columns: list[str]
+    score: float
+    reason: str
+    evidence: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def is_unknown_role(self) -> bool:
+        return self.role == UNKNOWN_ROLE
+
+
+@dataclass(frozen=True)
+class LayerDetectionResult:
+    """Result of identity-layer detection over one frame.
+
+    ``domain`` is the vertical from the existing ``detect_domain`` path, carried
+    through unchanged for context — layer detection does not alter it.
+
+    A single-entity dataset yields exactly one layer; that is the common case,
+    not a degenerate one. Columns belonging to no layer land in ``unassigned``
+    rather than being forced into the nearest one.
+    """
+
+    layers: list[IdentityLayer]
+    unassigned: list[str] = field(default_factory=list)
+    domain: str | None = None
+    schema_version: int = SCHEMA_VERSION
+
+    @property
+    def roles(self) -> list[str]:
+        return [layer.role for layer in self.layers]
 
 
 # ── Predicate parity with the TS sibling ──────────────────────────────────

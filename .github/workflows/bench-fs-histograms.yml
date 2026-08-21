@@ -1,0 +1,143 @@
+# Dump the FS score distributions the calibrator actually sees.
+#
+# The posterior-calibrated link cut is a hardcoded 0.99 whose own docstring
+# says it was measured on DBLP-ACM, and which every dataset then inherits as
+# `fs_link_thresholds: {source: "fallback"}`. On a person-shaped fixture that
+# cut costs F1 0.8772 -> 0.5406 with precision pinned at 1.0000 the whole way
+# down (scripts/bench_er_headtohead/diagnose_fs_recall.py).
+#
+# This decides whether the fix is a BETTER CONSTANT or a dataset-derived cut,
+# and it is deliberately split tune/holdout: choosing a constant by sweeping
+# every dataset and taking the argmax is how 0.99 happened in the first place.
+# The full grid runs on the tuning panel; the holdout sees exactly two points
+# (the incumbent and the recommendation) so it stays an unbiased check.
+#
+# Dispatch-only. It is a measurement, not a gate, and it pip-installs Splink
+# purely because `datasets.py` loads several fixtures through `splink_datasets`.
+name: bench-fs-histograms
+
+on:
+  workflow_dispatch:
+    inputs:
+      datasets:
+        description: "Datasets to dump (space separated)"
+        required: false
+        default: "historical_50k dblp_scholar dblp_acm febrl3"
+      shipped:
+        description: "Probe the SHIPPED config (keep specialised name scorers) instead of the Splink-comparable rewrite"
+        required: false
+        type: boolean
+        default: false
+      synthetic_rows:
+        description: "Row count for synthetic_person / synthetic_biblio (other datasets ignore it)"
+        required: false
+        default: "5000"
+
+permissions:
+  contents: read
+
+jobs:
+  histograms:
+    runs-on: large-new-64GB
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/native
+
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      # The sweep runs the FS lanes' operating point, which is the NATIVE
+      # kernel. Sweeping the numpy fallback would tune a threshold for a path
+      # the product does not take by default.
+      - name: Build native extension
+        run: uv run python scripts/build_native.py
+
+      # Not a repo dependency -- `datasets.py` reaches several fixtures through
+      # `splink_datasets`, so the loader needs it even though no Splink lane
+      # runs here.
+      - name: Install Splink (dataset loader only) + DuckDB (evaluator)
+        run: |
+          uv pip install splink==4.0.16
+          uv pip install duckdb
+
+      # febrl3/febrl4 ship INSIDE recordlinkage, which is not a goldenmatch
+      # dependency (`benchmarks.yml` installs it the same way). Without it both
+      # the tuning panel and the holdout lose a dataset each.
+      - name: Install recordlinkage (febrl3 / febrl4 fixtures)
+        continue-on-error: true
+        run: uv pip install recordlinkage
+
+      # The Leipzig benchmarks are gitignored; fetch them best-effort, exactly
+      # as `bench-probabilistic.yml` does. A failure here costs one dataset,
+      # not the run -- but silently losing all three (as the first run did)
+      # empties the holdout, so the sweep step below hard-fails on an empty
+      # holdout rather than reporting a recommendation nothing checked.
+      - name: Fetch Leipzig benchmarks (best-effort)
+        continue-on-error: true
+        run: |
+          BASE=packages/python/goldenmatch/tests/benchmarks/datasets
+          fetch() {
+            local name="$1" url="$2"; shift 2
+            local dest="$BASE/$name"
+            mkdir -p "$dest"
+            if curl -fsSL --retry 3 -o "/tmp/$name.zip" "$url"; then
+              mkdir -p "/tmp/$name" && unzip -o "/tmp/$name.zip" -d "/tmp/$name"
+              for f in "$@"; do
+                found=$(find "/tmp/$name" -name "$f" | head -1)
+                if [ -n "$found" ]; then cp "$found" "$dest/$f"
+                else echo "::warning::$name: $f not in archive"; fi
+              done
+              ls -la "$dest"
+            else
+              echo "::warning::$name download failed; it will be skipped"
+            fi
+          }
+          L=https://dbs.uni-leipzig.de/file
+          fetch DBLP-ACM "$L/DBLP-ACM.zip" DBLP2.csv ACM.csv DBLP-ACM_perfectMapping.csv
+          fetch DBLP-Scholar "$L/DBLP-Scholar.zip" DBLP1.csv Scholar.csv DBLP-Scholar_perfectMapping.csv
+          fetch Amazon-GoogleProducts "$L/Amazon-GoogleProducts.zip" Amazon.csv GoogleProducts.csv Amzon_GoogleProducts_perfectMapping.csv
+
+      - name: Dump histograms
+        env:
+          GOLDENMATCH_FS_CALIBRATED: posterior
+          GOLDENMATCH_FS_NATIVE: "1"
+          GOLDENMATCH_FS_CALIBRATE_THRESHOLD: "1"
+          GOLDENMATCH_BENCH_SYNTHETIC_ROWS: ${{ inputs.synthetic_rows }}
+        run: |
+          set -euo pipefail
+          SHIPPED=""
+          if [ "${{ inputs.shipped }}" = "true" ]; then SHIPPED="--shipped"; fi
+          uv run python scripts/bench_er_headtohead/dump_fs_score_histograms.py \
+            --datasets ${{ inputs.datasets }} \
+            $SHIPPED \
+            --out fs-histograms.json \
+            --summary-md fs-histograms.md
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ -f fs-histograms.md ]; then
+            cat fs-histograms.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'no summary produced - see the job log' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        if: always()
+        with:
+          name: fs-histograms
+          path: fs-histograms.json
+          if-no-files-found: warn

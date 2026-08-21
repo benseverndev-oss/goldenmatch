@@ -3,16 +3,31 @@ name: benchmarks
 # Real-benchmark runs (DBLP-ACM, Febrl3, NCVR, DQbench).
 # Datasets are gitignored — they're large and (DQbench) license-restricted.
 # This workflow runs:
-#   - On schedule (Mondays 06:00 UTC) so trend data accrues over time.
+#   - On schedule (nightly, 06:47 UTC) so trend data accrues over time.
 #   - On workflow_dispatch so a release PR can trigger a fresh measurement.
 # The synthetic-fixture smoke (committed fixtures) lives in ci.yml's
 # synthetic_benchmarks job and runs on every PR.
 
 on:
   schedule:
-    # Mondays 06:00 UTC — early enough that results are ready when the
-    # week starts; weekly cadence avoids burning CI minutes on noise.
-    - cron: "0 6 * * 1"
+    # Nightly, 06:47 UTC. This was weekly, and the weekly cadence was the
+    # problem rather than the saving: `main-health` clears a red row only on
+    # the next AUTOMATIC run (a workflow_dispatch is deliberately excluded,
+    # since a narrower dispatch can pass and mask a real red). So a lane
+    # failure held the main-health issue open for up to seven days AFTER its
+    # fix had landed, twice in a row -- #2461 fixed run #95 and #2659 fixed
+    # run #98, and both times the signal could not clear.
+    #
+    # The cost argument for weekly does not survive contact: the job is a
+    # ~7-minute single runner, so nightly is ~45 min/month of CI. A stale red
+    # that trains people to ignore main-health is far more expensive. Same
+    # move #2557 already made for the North Star scoreboard, for the same
+    # reason.
+    #
+    # 06:47 rather than 06:00: `spark-cluster.yml` already holds 06:00, and
+    # this repo otherwise favours off-the-hour minutes (13/17/23/33/37/43/53)
+    # to dodge the top-of-hour scheduler congestion that delays GitHub crons.
+    - cron: "47 6 * * *"
   workflow_dispatch:
     inputs:
       datasets:
@@ -25,16 +40,20 @@ on:
           - febrl3
           - ncvr
           - dqbench
+          - abt-buy
+          - amazon-google
+          - products
       with_llm:
         description: "Run DQbench with LLM scorer (requires OPENAI_API_KEY)"
         type: boolean
         default: false
       native:
-        description: "Build + run with native kernels (GOLDENMATCH_NATIVE=1) for the Phase 1/2 gate sign-off"
+        description: "Run with native kernels (GOLDENMATCH_NATIVE=1) — the perf path. Default ON; uncheck to A/B the pure-Python path."
         type: boolean
-        default: false
+        default: true
 
-# Locked-down by default; benchmarks job stays read-only.
+# The refreshed SoT report lands via a bot PR (scripts/open_data_pr.sh), which
+# authenticates with its own PAT, so GITHUB_TOKEN itself only needs read.
 permissions:
   contents: read
 
@@ -45,15 +64,17 @@ jobs:
     # the dataset secrets/vars to enable; otherwise the workflow exits 0
     # with a "not-configured" notice.
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: read
     env:
       DATASETS: ${{ inputs.datasets || 'all' }}
       WITH_LLM: ${{ inputs.with_llm || false }}
-      # "1" forces ALL native kernels (clustering + block_scoring) on; "0" pins
-      # Python. Scheduled runs (no inputs.native) stay Python.
-      NATIVE: ${{ inputs.native && '1' || '0' }}
+      # "1" forces ALL native kernels (clustering + block_scoring) on = the perf
+      # path, which is what the published numbers must reflect. Default '1';
+      # a dispatch can uncheck `native` to A/B the pure-Python path ('0').
+      # Scheduled runs (inputs.native unset, so not '== false') stay native.
+      NATIVE: ${{ inputs.native == false && '0' || '1' }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
@@ -92,17 +113,17 @@ jobs:
       # >= 91.04 sign-off gate for flipping core/_native_loader._GATED_ON).
       # Mirrors the ci.yml `native` lane's toolchain + build steps.
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
-        if: steps.prereqs.outputs.configured == 'true' && inputs.native
+        if: steps.prereqs.outputs.configured == 'true' && env.NATIVE == '1'
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
-        if: steps.prereqs.outputs.configured == 'true' && inputs.native
+        if: steps.prereqs.outputs.configured == 'true' && env.NATIVE == '1'
         with:
           workspaces: packages/rust/extensions/native
       - name: Build native extension
-        if: steps.prereqs.outputs.configured == 'true' && inputs.native
+        if: steps.prereqs.outputs.configured == 'true' && env.NATIVE == '1'
         run: uv run python scripts/build_native.py
 
-      - name: Run real benchmarks (DBLP-ACM/Febrl3/NCVR)
-        if: steps.prereqs.outputs.configured == 'true' && (env.DATASETS == 'all' || env.DATASETS != 'dqbench')
+      - name: Run benchmarks + write committed report
+        if: steps.prereqs.outputs.configured == 'true'
         shell: bash
         env:
           # Memory disabled so cross-run state doesn't leak between scheduled runs.
@@ -110,30 +131,48 @@ jobs:
           GOLDENMATCH_NATIVE: ${{ env.NATIVE }}
           # DBLP-ACM auto-pulls from Leipzig; override with a mirror if it 404s.
           # NCVR's 4.3 GB source isn't mirrored — point at a hosted 10k sample.
+          # Product sets (Abt-Buy, Amazon-Google) auto-pull from Leipzig too.
           GOLDENMATCH_DBLP_ACM_URL: ${{ vars.DBLP_ACM_URL }}
           GOLDENMATCH_NCVR_SAMPLE_URL: ${{ vars.NCVR_SAMPLE_URL }}
         run: |
           set -euo pipefail
-          # The runner auto-pulls missing file-backed datasets (--download is the
-          # default), then measures each + writes a JSON artifact + a markdown
-          # summary to $GITHUB_STEP_SUMMARY.
+          # One consolidated run over the selected datasets: measures each, writes
+          # a JSON artifact, the human summary to $GITHUB_STEP_SUMMARY, AND the
+          # committed SoT doc (docs/benchmarks/latest-results.{md,json}) so the
+          # published numbers are the perf-path truth, never a stale copy.
           uv run python scripts/run_benchmarks.py \
             --datasets "$DATASETS" \
             --output benchmark_results.json \
+            --report docs/benchmarks/latest-results.md \
             --summary-md "$GITHUB_STEP_SUMMARY"
 
-      - name: Run DQbench (no LLM)
-        if: steps.prereqs.outputs.configured == 'true' && (env.DATASETS == 'all' || env.DATASETS == 'dqbench')
+      - name: Land the refreshed report via a bot PR
+        # Only a full 'all' run is a complete SoT — a single-dataset dispatch must
+        # not clobber the doc with a partial table. Scheduled runs always use 'all'.
+        #
+        # This used to `git push` to main, which the protect-main ruleset rejects
+        # (GH013); the step has therefore been dead since the merge queue landed,
+        # silently, because it only runs on the weekly 'all' schedule and sits
+        # behind an earlier failure. Routed through the merge queue like any
+        # other change now. Note the commit subject no longer carries a CI-skip
+        # directive: it must go through ci-required to merge at all.
+        if: steps.prereqs.outputs.configured == 'true' && env.DATASETS == 'all'
         shell: bash
         env:
-          GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
-          GOLDENMATCH_NATIVE: ${{ env.NATIVE }}
+          GM_BOT_TOKEN: ${{ secrets.GM_BOT_TOKEN }}
+          PR_BODY: |
+            Refreshed benchmark source-of-truth from the weekly native run
+            (`.github/workflows/benchmarks.yml` → `scripts/run_benchmarks.py`).
+
+            These are the published numbers on the perf path; the report is
+            regenerated wholesale, so read the diff rather than the commit.
         run: |
-          set -euo pipefail
-          uv run python scripts/run_benchmarks.py \
-            --datasets dqbench \
-            --output dqbench_results.json \
-            --summary-md "$GITHUB_STEP_SUMMARY"
+          bash scripts/open_data_pr.sh \
+            bot/benchmark-results \
+            "chore(benchmarks): refresh native results" \
+            "chore(benchmarks): refresh native benchmark results" \
+            docs/benchmarks/latest-results.md \
+            docs/benchmarks/latest-results.json
 
       - name: Run DQbench (with LLM)
         if: steps.prereqs.outputs.configured == 'true' && env.WITH_LLM == 'true'

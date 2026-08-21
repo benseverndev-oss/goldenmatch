@@ -26,3 +26,29 @@ types:
     value_signals:
       max_unique: 20
     suppress: ["uniqueness", "range_distribution"]
+
+# `consignee` (via the `container` type) and `carrier` / `warehouse` (via
+# `freight`) were all suppressed -- a waybill's two core parties, shipper and
+# consignee, could not both be detected.
+roles:
+  shipper:
+    kind: organization
+    name_hints: ["shipper", "consignor", "sender"]
+
+  consignee:
+    kind: organization
+    name_hints: ["consignee", "receiver"]
+
+  carrier:
+    kind: organization
+    name_hints: ["carrier", "hauler", "forwarder", "courier"]
+    typical_types: ["tracking", "freight"]
+
+  warehouse:
+    kind: place
+    name_hints: ["warehouse", "depot", "terminal", "hub"]
+
+  container:
+    kind: asset
+    name_hints: ["container", "trailer", "pallet"]
+    typical_types: ["container"]

@@ -18,6 +18,7 @@ fields None with an explanatory note and never breaks the structural certificate
 from __future__ import annotations
 
 import json
+import math
 import os
 from collections.abc import Sequence
 from typing import Any
@@ -60,6 +61,64 @@ def _row_key_values(table: pa.Table, key_columns: list[str]) -> list[tuple]:
     """Per-row declared-key tuple (positional; row i == __row_id__ i)."""
     cols = [table.column(c).to_pylist() for c in key_columns]
     return list(zip(*cols))
+
+
+def _reduce_fragmentation(
+    member_lists: Sequence[Sequence[int]], keyvals: Sequence[Any]
+) -> tuple[int, int, float]:
+    """The resolution-tier reduction: cluster membership → fragmentation counts.
+
+    A *resolved entity* is a cluster of ≥2 records (ER decided they are one real
+    entity); it is *fragmented* when its members carry >1 distinct declared key
+    (the join therefore undercounts distinct entities). Returns
+    ``(resolved_entities, fragmented_entities, undercount_estimate)`` where
+    ``undercount_estimate = fragmented / resolved`` (0.0 when nothing resolved).
+
+    Pure + engine-agnostic: `keyvals` is indexed by member id and its elements
+    are compared only for equality, so the caller's key representation (tuple,
+    string, …) doesn't matter. Cross-language parity-locked (Python == TS) by
+    `tests/fixtures/fragmentation_reduction_cases.json` — this reduction has no
+    kernel (it is a scalar loop, not Arrow-bulk muscle), so a shared data-driven
+    fixture is the single source of truth, mirroring goldenanalysis's
+    quality_rollup / regressions parity fixtures.
+    """
+    resolved = 0
+    fragmented = 0
+    for members in member_lists:
+        if len(members) < 2:
+            continue
+        resolved += 1
+        distinct_keys = {keyvals[int(m)] for m in members}
+        if len(distinct_keys) > 1:
+            fragmented += 1
+    undercount = (fragmented / resolved) if resolved else 0.0
+    return resolved, fragmented, undercount
+
+
+# 97.5th percentile of the standard normal → 95% two-sided Wilson interval. The
+# same literal is used by the TS port so the interval is bit-identical.
+_WILSON_Z_95 = 1.959963984540054
+
+
+def _wilson_interval(k: int, n: int, z: float = _WILSON_Z_95) -> tuple[float, float] | None:
+    """95% Wilson score interval for a binomial proportion ``k/n`` (successes over
+    trials), clamped to [0, 1]. Returns None when ``n == 0`` (no observations to
+    bound). The Wilson interval is preferred over the normal approximation because
+    it stays inside [0,1] and behaves at small ``n`` / extreme ``p`` — exactly the
+    regime the fragmentation rate lives in when few entities resolve.
+
+    Pure arithmetic (parity-locked with the TS port via a shared fixture).
+    """
+    if n <= 0:
+        return None
+    p = k / n
+    z2 = z * z
+    denom = 1.0 + z2 / n
+    center = (p + z2 / (2.0 * n)) / denom
+    half = (z / denom) * math.sqrt(p * (1.0 - p) / n + z2 / (4.0 * n * n))
+    low = center - half
+    high = center + half
+    return (low if low > 0.0 else 0.0, high if high < 1.0 else 1.0)
 
 
 def _key_integrity_native_enabled() -> bool:
@@ -151,6 +210,84 @@ def _structural_native(
         }
     except Exception:  # fail-open: any marshaling / symbol issue → pyarrow reference
         return None
+
+
+def certify_structural_json(input_json: str) -> str:
+    """The JSON-in/JSON-out structural certifier — the Python analogue of the
+    `key-integrity-core` kernel's `certify_structural_json`.
+
+    Input: ``{"n_rows": N, "group_columns": [[..], ..],
+    "measures": [{"name": .., "values": [..]}, ..]}`` (the group columns are the
+    declared key, or key+grain — the caller picks). Output:
+    ``{"n_rows", "n_key_groups", "duplicate_key_groups", "max_fan_out",
+    "is_unique_at_grain", "measure_fan_out": {name: ratio}}`` — byte-identical to
+    the Rust core (locked by `key-integrity-core`'s golden + the native parity
+    test), so the SQL surfaces (`goldenmatch_certify_structural` on Postgres via
+    the Rust core, and DuckDB via this function) return the same certificate.
+
+    Runs through the shared native kernel when opted in
+    (``GOLDENMATCH_KEY_INTEGRITY_NATIVE`` + the wheel), else the pyarrow group_by
+    reference. Raises ``ValueError`` on invalid JSON / a wrong-shaped input,
+    matching the core's contract.
+    """
+    try:
+        root = json.loads(input_json)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise ValueError(f"certify_structural_json: invalid JSON: {exc}") from exc
+    if not isinstance(root, dict):
+        raise ValueError("certify_structural_json: input must be a JSON object")
+
+    n_rows = root.get("n_rows")
+    if not isinstance(n_rows, int) or isinstance(n_rows, bool) or n_rows < 0:
+        raise ValueError("certify_structural_json: n_rows must be a non-negative integer")
+    group_cols_raw = root.get("group_columns")
+    if not isinstance(group_cols_raw, list) or not all(
+        isinstance(c, list) for c in group_cols_raw
+    ):
+        raise ValueError("certify_structural_json: group_columns must be an array of arrays")
+    measures_raw = root.get("measures") or []
+    if not isinstance(measures_raw, list):
+        raise ValueError("certify_structural_json: measures must be an array")
+
+    # Native pass-through when opted in: the SAME core the Postgres surface calls,
+    # so the two are byte-identical by construction.
+    if _key_integrity_native_enabled():
+        try:
+            from goldenmatch.core._native_loader import native_module
+
+            nm = native_module()
+            if nm is not None and hasattr(nm, "certify_structural_json"):
+                return str(nm.certify_structural_json(input_json))
+        except Exception:  # fail-open → pyarrow reference below
+            pass
+
+    # pyarrow reference. Reconstruct a table from the columnar JSON and run the
+    # same reduction certify_key_integrity uses; serialize to the core's shape.
+    columns: dict[str, list] = {}
+    group_names = [f"__g{i}__" for i in range(len(group_cols_raw))]
+    for name, vals in zip(group_names, group_cols_raw):
+        columns[name] = vals
+    measure_names: list[str] = []
+    for m in measures_raw:
+        if not isinstance(m, dict) or "name" not in m or "values" not in m:
+            raise ValueError("certify_structural_json: each measure needs name + values")
+        columns[str(m["name"])] = list(m["values"])
+        measure_names.append(str(m["name"]))
+    if columns:
+        table = pa.table(columns)
+    else:  # zero group columns — an n_rows-length empty frame
+        table = pa.table({"__empty__": [None] * n_rows})
+        group_names = []
+    structural = _structural_pyarrow(table, group_names, measure_names, n_rows)
+    out = {
+        "n_rows": n_rows,
+        "n_key_groups": structural["n_key_groups"],
+        "duplicate_key_groups": structural["duplicate_key_groups"],
+        "max_fan_out": structural["max_fan_out"],
+        "is_unique_at_grain": structural["is_unique_at_grain"],
+        "measure_fan_out": structural["measure_fan_out"],
+    }
+    return json.dumps(out)
 
 
 def certify_key_integrity(
@@ -317,20 +454,18 @@ def _add_resolution(
         clusters = getattr(res, "clusters", None) or {}
 
         keyvals = _row_key_values(table, key_columns)
-        resolved = 0
-        fragmented = 0
-        for cl in clusters.values():
-            members = cl.get("members", []) if isinstance(cl, dict) else getattr(cl, "members", [])
-            if len(members) < 2:
-                continue
-            resolved += 1
-            distinct_keys = {keyvals[int(m)] for m in members}
-            if len(distinct_keys) > 1:
-                fragmented += 1
+        member_lists = [
+            (cl.get("members", []) if isinstance(cl, dict) else getattr(cl, "members", []))
+            for cl in clusters.values()
+        ]
+        resolved, fragmented, undercount = _reduce_fragmentation(member_lists, keyvals)
 
         cert.resolved_entities = resolved
         cert.fragmented_entities = fragmented
-        cert.undercount_estimate = (fragmented / resolved) if resolved else 0.0
+        cert.undercount_estimate = undercount
+        ci = _wilson_interval(fragmented, resolved)
+        if ci is not None:
+            cert.undercount_ci_low, cert.undercount_ci_high = ci
         if fragmented:
             notes.append(
                 f"{fragmented}/{resolved} resolved entities span >1 declared key "

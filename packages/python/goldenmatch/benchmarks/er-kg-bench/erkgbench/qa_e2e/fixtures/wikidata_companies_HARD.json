@@ -1,0 +1,18 @@
+{
+  "meta": {
+    "source": "wikidata",
+    "pulled": "test",
+    "sparql_sha": "test",
+    "domain": "companies",
+    "why": "TINY's hardest alias is 'Acme' vs 'Acme Holdings' -- a NEAR MISS that lands within a few hundredths of the 0.8 cut, so whether it merges flips on small environment differences (#2668: it fragments locally and resolves in CI, from the same commit). A fixture whose ER gap sits on a threshold boundary measures the environment, not the resolver. Here every entity carries one alias that string similarity CANNOT close -- an acronym or a rename -- so the oracle-vs-real gap is structural and stays stable as string matching improves. Each entity also carries a suffix variant that SHOULD resolve, so 'some variants merged' and 'some entity stayed fragmented' are both true by construction rather than by luck. Canonicals are lexically far apart so no cross-entity merge is plausible."
+  },
+  "entities": [
+    {"qid": "Q1", "canonical": "Helios Industrial Group", "aliases": ["Helios Industrial Group Inc.", "HIG"]},
+    {"qid": "Q2", "canonical": "Meridian Foodworks", "aliases": ["Meridian Foodworks Limited", "MFW"]},
+    {"qid": "Q3", "canonical": "Norvex Systems", "aliases": ["Norvex Systems Ltd"]},
+    {"qid": "Q4", "canonical": "Ostara Media", "aliases": ["Ostara Media LLC"]}
+  ],
+  "facts": [
+    {"anchor_qid": "Q1", "relation": "has_subsidiary", "member_qids": ["Q2", "Q3", "Q4"]}
+  ]
+}

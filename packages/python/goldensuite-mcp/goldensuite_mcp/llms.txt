@@ -1,0 +1,40 @@
+# goldensuite-mcp
+
+> One MCP server exposing every Golden Suite tool -- goldenmatch, goldencheck,
+> goldenflow, goldenpipe, infermap, goldenanalysis -- under a single endpoint.
+
+## Install
+
+```bash
+pip install goldensuite-mcp
+goldensuite-mcp serve --transport http --port 8300
+```
+
+```bash
+docker run -p 8300:8300 ghcr.io/benseverndev-oss/goldensuite-mcp:latest
+```
+
+## Authoritative sources
+
+This server is an aggregator: it re-exports tools whose semantics belong to the
+underlying packages. For what a tool actually does, read the owner:
+
+- `goldenmatch/llms.txt`, `goldencheck/llms.txt`, `goldenflow/llms.txt`,
+  `goldenpipe/llms.txt`, `infermap/llms.txt`, `goldenanalysis/llms.txt` -- each
+  ships inside its own wheel, next to that package's `__init__.py`.
+- https://docs.bensevern.dev/docs/llms.txt -- index of every Golden Suite surface.
+- https://github.com/benseverndev-oss/goldenmatch -- source, issues, and the
+  decision records.
+
+## Things that are decided, not incidental
+
+- **The aggregator does not hold per-run state the way a standalone server does.**
+  A standalone `goldenmatch mcp-serve` is initialised once with a file; over the
+  aggregator there is no such initialisation, so stateful tools resolve their run
+  from the current MCP session instead. A tool that seems to have "lost" a run
+  here is following that path, not failing.
+- **Sessions are bounded and TTL-evicted** (`GOLDENMATCH_MCP_SESSION_MAX` /
+  `_TTL`). Long-idle state is expected to disappear.
+- **Serving on a non-loopback host is fail-closed.** The server refuses to start
+  without a bearer token, and then requires it on every call. That is deliberate:
+  these tools read and write local data.

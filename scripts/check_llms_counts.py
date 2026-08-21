@@ -82,18 +82,21 @@ def counts(pkg: str) -> dict[str, int | None]:
     return {"mcp": mcp_tools(pkg), "exports": exports(pkg), "skills": a2a_skills(pkg)}
 
 
-_DOCS_LINK = re.compile(r"https://docs\.bensevern\.dev/([A-Za-z0-9/_-]+)")
+# The site is served under a /docs prefix, so the path AFTER that prefix is what
+# maps to a source file. The prefix is required, not optional: a URL without it
+# 404s (see scripts/check_docs_links.py, which gates that repo-wide).
+_DOCS_LINK = re.compile(r"https://docs\.bensevern\.dev/docs/([A-Za-z0-9/_-]+)")
 _DEAD_DOMAIN = re.compile(r"https://[A-Za-z0-9.-]*\.github\.io/[A-Za-z0-9/_-]*")
 
 
 def doc_link_errors() -> list[str]:
     """Network-free link check for the llms.txt: the canonical docs domain is
-    `docs.bensevern.dev` (docs.json), so a cited `docs.bensevern.dev/<path>` must
+    `docs.bensevern.dev` (docs.json), so a cited `docs.bensevern.dev/docs/<path>` must
     map to a real `docs-site/<path>.mdx`, and the old per-package `*.github.io`
     mkdocs sites (dead post-fold) must not be referenced. Catches link rot without
     a flaky network call."""
     errors: list[str] = []
-    files = [ROOT / "llms.txt"] + [ROOT / f"packages/python/{p}/llms.txt" for p in PKGS]
+    files = [ROOT / "llms.txt"] + [ROOT / f"packages/python/{p}/{p.replace('-', '_')}/llms.txt" for p in PKGS]
     for path in files:
         if not path.exists():
             continue
@@ -156,7 +159,7 @@ def main() -> int:
         c = counts(pkg)
         if c["mcp"] is not None:
             suite_total += c["mcp"]
-        llms = f"packages/python/{pkg}/llms.txt"
+        llms = f"packages/python/{pkg}/{pkg.replace('-', '_')}/llms.txt"
 
         # MCP tool count -- llms.txt (local + remote mentions).
         if c["mcp"] is not None:

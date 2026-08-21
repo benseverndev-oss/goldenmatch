@@ -331,3 +331,92 @@ def test_suggest_excludes_near_unique_matchkeys(store):
         matchkey_fields={"ssn", "phone"})]
     assert "phone" in fields        # larger groups -> real relationship
     assert "ssn" not in fields      # near-pair matchkey -> identifier, excluded
+
+
+# ── deterministic merge (collapse entities sharing an authoritative id) ──────
+
+def test_deterministic_merge_collapses_shared_id(store):
+    """Two distinct entities that share an NPI (a missed merge) collapse into one:
+    records reassign to the surviving (lowest) id; idempotent on re-run."""
+    df = _df([{"id": "1", "name": "Robert Smith", "npi": "999"},
+              {"id": "2", "name": "Bob Smith", "npi": "999"}])
+    _resolve(store, df, _singletons(2), None)
+    a = store.find_entity_by_record("src:1")
+    b = store.find_entity_by_record("src:2")
+    assert a != b
+    assert store.merge_by_shared_field("d", "npi") == (1, 1)
+    assert store.find_entity_by_record("src:1") == store.find_entity_by_record("src:2")
+    assert store.find_entity_by_record("src:1") == min(a, b)
+    assert store.merge_by_shared_field("d", "npi") == (0, 0)   # idempotent
+
+
+def test_deterministic_merge_hub_guard(store):
+    """A value shared by more entities than max_group is a placeholder id -> skipped."""
+    df = _df([{"id": str(i), "name": f"P{i}", "npi": "000"} for i in range(4)])
+    _resolve(store, df, _singletons(4), None)
+    assert store.merge_by_shared_field("d", "npi", max_group=2) == (0, 0)  # 4 > cap
+    assert store.merge_by_shared_field("d", "npi", max_group=10) == (3, 1)  # collapses
+
+
+def test_deterministic_merge_composite_key_requires_all_fields(store):
+    """A GUARDED composite key ['npi','last_name'] merges only when BOTH match:
+    same npi + same last_name collapses; same npi + a DIFFERENT last_name does
+    not (a shared/dirty id alone can't force a merge)."""
+    df = _df([{"id": "1", "name": "Robert Smith", "npi": "999", "last_name": "Smith"},
+              {"id": "2", "name": "Bob Smith", "npi": "999", "last_name": "Smith"},
+              {"id": "3", "name": "R Jones", "npi": "999", "last_name": "Jones"}])
+    _resolve(store, df, _singletons(3), None)
+    a = store.find_entity_by_record("src:1")
+    b = store.find_entity_by_record("src:2")
+    c = store.find_entity_by_record("src:3")
+    assert a != b != c
+    # 1 & 2 share (999, Smith) -> merge; 3 shares npi but (999, Jones) -> stays apart.
+    assert store.merge_by_shared_field("d", ["npi", "last_name"]) == (1, 1)
+    assert store.find_entity_by_record("src:1") == store.find_entity_by_record("src:2")
+    assert store.find_entity_by_record("src:3") == c
+    assert store.merge_by_shared_field("d", ["npi", "last_name"]) == (0, 0)  # idempotent
+
+
+def test_deterministic_merge_single_key_still_string(store):
+    """A single authoritative id (no guard) still merges on that one field."""
+    df = _df([{"id": "1", "name": "A", "npi": "777"},
+              {"id": "2", "name": "B", "npi": "777"}])
+    _resolve(store, df, _singletons(2), None)
+    assert store.merge_by_shared_field("d", "npi") == (1, 1)
+    assert store.find_entity_by_record("src:1") == store.find_entity_by_record("src:2")
+
+
+def test_config_lineage_records_run_and_resolves_entity_to_config(store):
+    """A resolve stamps identity_runs with the config fingerprint, and an entity's
+    events (which carry run_name) resolve back to that config_id."""
+    df = _df([{"id": "1", "name": "Al", "phone": "555"}])
+    resolve_clusters(
+        _singletons(1), df, [], "mk", store, run_name="run1", source_pk_col="id",
+        dataset="d", emit_singletons=True,
+        config_id="sha256:deadbeef", config_schema_version=1,
+        config_json='{"matchkeys": []}',
+    )
+    run = store.run_config("run1")
+    assert run is not None
+    assert run["config_id"] == "sha256:deadbeef"
+    assert run["schema_version"] == 1
+    assert run["config_json"] == '{"matchkeys": []}'
+    # entity -> its events' run_name -> the recorded config_id
+    ent = store.find_entity_by_record("src:1")
+    run_names = {ev.run_name for ev in store.history(ent)}
+    assert "run1" in run_names
+    assert store.run_config("run1")["config_id"] == "sha256:deadbeef"
+
+
+def test_config_lineage_absent_when_no_fingerprint(store):
+    """No config_id threaded through -> no identity_runs row (byte-identical path)."""
+    df = _df([{"id": "1", "name": "Al", "phone": "555"}])
+    _resolve(store, df, _singletons(1), None, run_name="bare")
+    assert store.run_config("bare") is None
+
+
+def test_config_lineage_idempotent_on_repeated_run_name(store):
+    """First writer wins on a repeated run_name (idempotent replay)."""
+    store.record_run("rx", config_id="sha256:aaaa", schema_version=1)
+    store.record_run("rx", config_id="sha256:bbbb", schema_version=2)
+    assert store.run_config("rx")["config_id"] == "sha256:aaaa"

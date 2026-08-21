@@ -8,6 +8,11 @@
 # rule set, ruff-format) stay in CI so the commit hook never tempts anyone into
 # `git commit --no-verify`. The `ruff` hook below uses the SAME root
 # pyproject.toml [tool.ruff.lint] config CI enforces, so it can't diverge.
+# `commit-msg` is listed so a plain `pre-commit install` wires BOTH stages --
+# without it the CI-skip guard below silently never runs, which is precisely the
+# failure mode it exists to prevent.
+default_install_hook_types: [pre-commit, commit-msg]
+
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.9.2
@@ -40,3 +45,34 @@ repos:
       # .github/workflows/secret-scan.yml) covers the broader token surface
       # such as the .mcpregistry_* bearer tokens.
       - id: detect-private-key
+
+  - repo: local
+    hooks:
+      # GitHub Actions skips a whole run when the commit message contains
+      # [skip ci] / [ci skip] / [no ci] / [skip actions] ANYWHERE, prose
+      # included. A skipped run leaves ci-required MISSING rather than failing,
+      # so the PR sits in the merge queue looking armed and never merges, with
+      # nothing red. CI cannot catch this -- there is no run to fail -- so it
+      # has to be refused before the commit exists. Bit #1620 and #2445.
+      - id: no-ci-skip-directive
+        name: commit message has no CI-skip directive
+        entry: python scripts/check_commit_msg.py
+        language: system
+        stages: [commit-msg]
+
+      # Regenerate the derived-docs battery (config-matrix, agent-manifest/codemap,
+      # api-surface, suite-matrix, thesis-weaknesses, native docs) so a surface
+      # change (new MCP tool / CLI command / scorer / config knob) can't land with
+      # a stale committed doc -- the `docs_regen` CI gate would otherwise redden.
+      # Writes in place; if it changed files pre-commit fails, so `git add` +
+      # recommit. SCOPED with `files:` so it only fires on doc-affecting source
+      # (idempotent no-op otherwise) -- respecting the fast-commit principle above.
+      # Needs the workspace importable (activate the dev venv, or run
+      # `pre-commit run regen-docs` after `uv sync`).
+      - id: regen-docs
+        name: derived docs are regenerated (no drift)
+        entry: python scripts/regen_docs.py
+        language: system
+        pass_filenames: false
+        files: '^(packages/python/|parity/.*\.ya?ml$|scripts/(gen_|agent_codemap|check_llms_counts|regen_docs))'
+        stages: [pre-commit]

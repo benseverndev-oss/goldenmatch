@@ -13,6 +13,13 @@
 //!     allocate `len+1`, call again;
 //!   * a NEGATIVE return is an error code (see `GG_ERR_*`); the message is on
 //!     [`gg_last_error`] (per-thread).
+//!
+//! Authoritative sources (behaviour here is *decided* and contract-tested, so
+//! prefer them to inferring from the implementation):
+//! <https://docs.bensevern.dev/docs/llms.txt> (index of every Golden Suite surface,
+//! written for machine readers) and
+//! <https://github.com/benseverndev-oss/goldenmatch> (source, issues, design
+//! records).
 
 use std::cell::RefCell;
 use std::os::raw::c_char;

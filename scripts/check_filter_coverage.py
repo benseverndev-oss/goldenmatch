@@ -49,6 +49,25 @@ REQUIRED: dict[str, list[tuple[str, str]]] = {
         (f"{GM}/core/scorer.py", "#435"),
         (f"{GM}/core/pipeline.py", "#435"),
     ],
+    # A rename, not a missing path, is what broke this one: #2494 moved the tier
+    # from goldenmatch/sail/ to goldenmatch/spark/ and the filter kept watching
+    # the old directory -- which by then held only the back-compat shim. Both
+    # Spark lanes went silent on every change to the tier they gate. Listing the
+    # real source dir here means the NEXT rename fails workflow_lint loudly.
+    "spark": [
+        (f"{GM}/spark/clustering.py", "#2494: the tier's own source, post-rename"),
+        (f"{GM}/spark/scorers.py", "#2494"),
+        (f"{GM}/spark/session.py", "#2494"),
+        (f"{GM}/sail/__init__.py", "the deprecated alias still ships"),
+        (
+            "packages/python/goldenmatch/pyproject.toml",
+            "both lanes install via the [spark]/[sail] extras defined here",
+        ),
+        (
+            "packages/jvm/goldenmatch-spark/src/dev/goldensuite/spark/GoldenScoreUdf.java",
+            "J0: the JVM scorer jar is built + self-tested in the spark_connect lane",
+        ),
+    ],
 }
 
 # Paths that must NOT trigger these filters -- guards against "fix" by

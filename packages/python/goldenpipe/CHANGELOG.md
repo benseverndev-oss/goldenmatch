@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## [1.5.0] - 2026-08-15
+
+### Added
+
+- **`infer_schema` emits identity layers (#2574).** The stage now runs InferMap's
+  layer detector over the same frame and puts the result on
+  `InferredSchema.layers`, so downstream consumers get the *who is in this table*
+  axis without re-detecting. Detection is name-only, so it costs what
+  `detect_domain` costs. `infer_schema_evidence` gains `layer_roles` /
+  `layer_unassigned`. The pre-existing mapping and detection outputs are
+  unchanged; a user-supplied `schema` still passes through untouched.
+
 ## 1.4.0 (2026-07-16)
 
 ### Added

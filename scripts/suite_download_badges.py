@@ -57,14 +57,24 @@ PYPI_PACKAGES = [
     # Optional Semantic-Signature accelerator (goldengraph gates on it). Gained its
     # PyPI publisher in publish-goldenprofile-native.yml; a *-native extra like the rest.
     "goldenprofile-native",
+    # Gained its PyPI publisher in #2598 without being added here, which turned
+    # the publisher<->badge gate red on main. Every other `*-native` sibling is
+    # listed, so this is the consistent home for it.
+    "goldenpipe-native",
+    # Published 0.1.0, then 0.2.0 with the identity-layers kernel. Was carried
+    # as a badge EXCEPTION while unpublished; a real wheel belongs in the
+    # counted roster like every other `*-native` sibling.
+    "infermap-native",
     "goldenmatch-embed",
     # goldengraph gained its PyPI publisher (publish-goldengraph.yml), so the
     # publisher<->badge gate now requires it here. First release is pending, so
     # pypistats 404s until then (tolerated; the badge preserves the prior value).
     # Its pepy.tech link in the root README aggregate badge is extended in lockstep.
     "goldengraph",
-    # goldenmatch-kg stays OUT by design -- it has no publish-*.yml (heavy framework
-    # extras), so adding it would break the reverse (badge -> publisher) symmetry.
+    # goldenmatch-kg gained its PyPI publisher (publish-goldenmatch-kg.yml, 2026-08-04),
+    # so the publisher<->badge symmetry gate now requires it here. First release is
+    # pending, so pypistats 404s until then (tolerated; the badge preserves the prior value).
+    "goldenmatch-kg",
 ]
 # Every TS package with a `publish-<pkg>-js.yml` → npm workflow.
 NPM_PACKAGES = [

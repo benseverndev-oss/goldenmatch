@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "goldenmatch"
 
-version = "3.10.0"
+version = "3.14.0"
 description = "Entity resolution toolkit — deduplicate records, match across sources, and maintain golden records"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -51,7 +51,11 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/benseverndev-oss/goldenmatch"
 Repository = "https://github.com/benseverndev-oss/goldenmatch"
-Documentation = "https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/python/goldenmatch#readme"
+Documentation = "https://docs.bensevern.dev/docs/goldenmatch"
+# Agent-facing entry point. PyPI renders these URLs and they are scraped, so
+# this is the discovery path for a tool that never clones the repo. The same
+# file ships INSIDE the wheel at goldenmatch/llms.txt.
+"AI agents (llms.txt)" = "https://docs.bensevern.dev/docs/llms.txt"
 Issues = "https://github.com/benseverndev-oss/goldenmatch/issues"
 Changelog = "https://github.com/benseverndev-oss/goldenmatch/blob/main/packages/python/goldenmatch/CHANGELOG.md"
 Author = "https://bensevern.dev"
@@ -72,6 +76,12 @@ dev = [
 ]
 embeddings = [
     "sentence-transformers>=2.2",
+]
+# Ontology-layer identity provider (goldenmatch.semantic.ontology): parse OWL/RDF
+# to certify owl:hasKey / IFP identity keys, emit owl:sameAs + PROV-O + SHACL.
+# rdflib is optional — the module lazy-imports it; tests skip when it is absent.
+ontology = [
+    "rdflib>=7.0",
 ]
 # Decode adapters for the multimodal-ER crawl tier (ADR 0022). The perceptual
 # kernel itself is dependency-free (operates on decoded luma grids / PCM); these
@@ -165,25 +175,32 @@ datafusion = [
 # 2026-06-03-sail-tier-design.md. Sail is programmed via PySpark/Spark
 # Connect (NOT datafusion-python).
 #
-# pyspark PINNED < 4: pysail 0.6.x targets the Spark 3.5 Connect protocol, and
-# the unbounded `>=3.5` resolved to pyspark 4.2.0, whose Spark Connect client
-# does `int(local_relation_size_limit)` on a size-suffixed config ("3GB") and
-# raises ValueError -- breaking the whole sail lane (test_sail_score_parity).
-# This is the pinning the comment above always anticipated. Revisit the upper
-# bound when pysail ships a Spark-4-Connect-compatible release.
-sail = [
-    "pysail>=0.6",
-    "pyspark[connect]>=3.5,<4",
+# The Spark Connect tier. THIS is the one to install: it targets the Apache
+# Spark cluster you already run. No upper pyspark bound: the `<4` ceiling only
+# ever existed for pysail, which is gone (see below).
+spark = [
+    # NO upper bound. `arrow_udf` needs Spark 4 anyway -- see the note below.
+    "pyspark[connect]>=3.5",
+    # P1: packs the client venv for `addArtifact`, so executors get goldenmatch
+    # without a cluster-side install. See goldenmatch/spark/deps.py.
+    "venv-pack>=0.2",
     # pyspark 3.5.x imports the stdlib `distutils`, which Python 3.12 REMOVED.
-    # setuptools ships the `distutils` shim (activated by its
-    # distutils-precedence .pth), so importing it restores `import distutils`
-    # on 3.12 -- the sail lane runs on 3.12 and otherwise dies at Spark Connect
-    # session setup with `ModuleNotFoundError: No module named 'distutils'`.
-    # Drop when pyspark >= 4 (Spark-4-Connect) is usable and no longer needs it.
+    # setuptools ships the shim. Harmless on pyspark >= 4; drop once 3.5 is
+    # no longer supported here.
     "setuptools>=83.0.0; python_version >= '3.12'",
 ]
+
+# `[sail]` was REMOVED (2026-08-12). pysail pins pyspark 3.5, which has no
+# `arrow_udf` -- and the tier's UDFs are all arrow_udf now, so pysail can no
+# longer execute the tier at all. The extra installed a backend that could not
+# run the thing it existed to cross-check, and its `pyspark[connect]<4` ceiling
+# was the only reason `[spark]` ever had to be split from it.
+#
+# `import goldenmatch.sail` still works: the deprecated module alias is a public
+# back-compat surface and is unaffected. What is gone is the pysail dependency
+# and the CI lane that used it.
 agent = [
-    "aiohttp>=3.14.0",
+    "aiohttp>=3.14.3",
 ]
 # D6: polars is OPTIONAL. The engine is arrow-native (pyarrow is the hard
 # dep); installing this extra lights up the polars-present WALL
@@ -249,10 +266,24 @@ all = [
 [tool.hatch.build.targets.wheel]
 packages = ["goldenmatch"]
 
-# `packages = ["goldenmatch"]` already collects everything inside
-# goldenmatch/, including web/static/. A force-include here would re-add
-# the same files and PyPI rejects the wheel with "Duplicate filename in
-# local headers" (this caused the v1.7.0 publish to fail).
+# AGENT DISCOVERABILITY: llms.txt lives INSIDE the importable package
+# (goldenmatch/llms.txt), so `packages = ["goldenmatch"]` collects it with no
+# force-include -- see the duplicate-filename note below for why that matters.
+#
+# An AI agent working in someone else's repo sees only site-packages/goldenmatch/
+# and cannot reach this repo's docs; with no pointer in the installed artifact
+# its only option is to reverse-engineer behaviour from source. Keeping the file
+# in the package makes `Path(goldenmatch.__file__).parent / "llms.txt"` resolve
+# IDENTICALLY from a source checkout, an editable install and a built wheel --
+# it lived at the package ROOT before, which shipped fine but made that same
+# pointer a lie in-tree, i.e. wrong for exactly the contributor-side agent it
+# was supposed to help.
+#
+# `packages = ["goldenmatch"]` already collects everything inside goldenmatch/,
+# including web/static/ and now llms.txt. A force-include of a path ALREADY
+# inside goldenmatch/ would re-add the same files and PyPI rejects the wheel
+# with "Duplicate filename in local headers" (this caused the v1.7.0 publish to
+# fail) -- so do NOT add one for llms.txt.
 #
 # The publish workflow runs scripts/build_web.py before `python -m build`
 # so the static dir contains the staged frontend at wheel-build time —

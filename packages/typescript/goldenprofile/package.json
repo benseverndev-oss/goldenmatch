@@ -1,6 +1,6 @@
 {
   "name": "goldenprofile",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "GoldenProfile Virtual Fingerprint engine — cross-document entity resolution. Edge-safe TypeScript surface over the same pyo3-free Rust kernel as the Python/C bindings, via opt-in WebAssembly.",
   "keywords": [
     "entity-resolution",
@@ -42,7 +42,8 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "llms.txt"
   ],
   "engines": {
     "node": ">=20"

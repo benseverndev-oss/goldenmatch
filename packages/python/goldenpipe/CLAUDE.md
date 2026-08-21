@@ -287,7 +287,7 @@ result = goldenmatch.dedupe_df(df, config=config)
 
 GoldenPipe is benchmarked by DQBench Pipeline category:
 - **DQBench Pipeline Score: 88.07** (without LLM)
-- Adapter: `dqbench/adapters/goldenpipe_adapter.py`
+- Adapter: the goldenpipe adapter shipped by the external DQBench harness (not a path in this repo)
 - Run: `pip install dqbench && dqbench run goldenpipe`
 - The adapter runs GoldenFlow + GoldenMatch directly (not Pipeline.run()) because PipeResult doesn't expose the DataFrame
 

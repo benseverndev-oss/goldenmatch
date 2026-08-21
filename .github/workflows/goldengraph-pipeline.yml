@@ -12,6 +12,12 @@ name: goldengraph-pipeline
 
 on:
   workflow_dispatch:
+  # Nightly backstop. The schedule bounds detection to a day, and a scheduled run
+  # is on `main`, so `main-health` sees the red and files the tracking issue.
+  # Symbol-level breaks are caught earlier, on the PR, by
+  # scripts/check_downstream_symbols.py.
+  schedule:
+    - cron: "13 4 * * *"
   push:
     paths:
       - "packages/python/goldengraph/**"
@@ -20,6 +26,23 @@ on:
       - "packages/python/goldenmatch/benchmarks/er-kg-bench/erkgbench/qa_e2e/**"
       - "packages/python/goldenmatch/benchmarks/er-kg-bench/tests/test_qa_goldengraph_smoke.py"
       - ".github/workflows/goldengraph-pipeline.yml"
+      # goldenmatch's ER core. This lane installs goldenmatch from SOURCE and its
+      # Phase 1.5 tests assert on what zero-config actually CLUSTERS, so a
+      # goldenmatch change can break it -- and until #2668 the filter listed only
+      # this lane's own paths, so such a change never fired it. That is exactly how
+      # #2648 landed: it edited core/scorer.py, went green on its PR because this
+      # lane did not run, and reddened `main` that night with an over-merge nobody
+      # had a PR signal for. The nightly detected it; detection is not prevention,
+      # and the break still sat in `main` until someone acted on the red.
+      #
+      # Deliberately the WHOLE package source, not an enumerated list of "the ER
+      # files". An enumerated list is the same bug one level up: it goes stale the
+      # moment the blast radius moves, and the thing being guarded here is a
+      # cross-package behavioural coupling nobody can enumerate in advance. The
+      # cost argument does not survive contact either -- the job is ~70 seconds
+      # (run #593: 04:24:09 -> 04:25:18), so this is a cheap, chatty check, and an
+      # absent check is strictly worse than a chatty one.
+      - "packages/python/goldenmatch/goldenmatch/**"
 
 permissions:
   contents: read

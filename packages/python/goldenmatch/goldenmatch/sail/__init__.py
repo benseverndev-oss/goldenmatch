@@ -1,33 +1,52 @@
-"""Sail tier (distributed, Spark Connect) -- the distributed sibling of the
-one-box DataFusion spine.
+"""Deprecated alias for :mod:`goldenmatch.spark`.
 
-Sail (LakeSail) is programmed via the Spark Connect protocol (PySpark
-DataFrame/SQL), NOT the datafusion Python API. This package re-expresses the
-spine's relational algorithm against PySpark; it is a parallel implementation,
-not a port. Opt-in via ``pip install goldenmatch[sail]``.
+The tier moved to ``goldenmatch.spark`` (2026-08-11) because it was never
+Sail-specific: it is ``SparkSession.builder.remote(url)`` with zero
+Sail-specific calls, and its target is now the Apache Spark cluster a customer
+already operates. Sail is one Spark Connect server implementation; the name was
+hiding the product from the people it is for. See
+``docs/superpowers/specs/2026-08-10-spark-native-execution-design.md``.
 
-Spec: docs/superpowers/specs/2026-06-03-sail-tier-design.md
+This shim keeps ``import goldenmatch.sail`` working. It forwards every attribute
+to ``goldenmatch.spark`` and warns once per process.
 """
 from __future__ import annotations
 
-# Stable public IdentityGraph API (#859). These import without the [sail] extra
-# (pyspark is imported lazily inside the builders), so a downstream consumer can
-# pin the contract via `from goldenmatch.sail import IdentityGraphFrames,
-# build_identity_graph` and a `inspect.signature` test, without a Spark runtime.
-from goldenmatch.sail.identity import (
-    EDGE_COLUMNS,
-    EVENT_COLUMNS,
-    NODE_COLUMNS,
-    RECORD_COLUMNS,
-    IdentityGraphFrames,
-    build_identity_graph,
-)
+import warnings
+from typing import Any
 
-__all__ = [
-    "IdentityGraphFrames",
-    "build_identity_graph",
-    "NODE_COLUMNS",
-    "RECORD_COLUMNS",
-    "EDGE_COLUMNS",
-    "EVENT_COLUMNS",
-]
+_WARNED = False
+
+
+def _warn_once() -> None:
+    global _WARNED
+    if _WARNED:
+        return
+    _WARNED = True
+    warnings.warn(
+        "goldenmatch.sail is deprecated; use goldenmatch.spark. The tier targets "
+        "Apache Spark Connect (any server, including but not limited to Sail) and "
+        "was renamed to say so. This alias forwards and will be removed in a "
+        "future major.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+
+
+def __getattr__(name: str) -> Any:
+    # PEP 562: forward submodules and attributes alike, so both
+    # `from goldenmatch.sail import scorers` and
+    # `import goldenmatch.sail.scorers` resolve.
+    import importlib
+
+    _warn_once()
+    try:
+        return getattr(importlib.import_module("goldenmatch.spark"), name)
+    except AttributeError:
+        return importlib.import_module(f"goldenmatch.spark.{name}")
+
+
+def __dir__() -> list[str]:
+    import importlib
+
+    return dir(importlib.import_module("goldenmatch.spark"))

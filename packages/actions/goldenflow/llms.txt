@@ -1,0 +1,40 @@
+# GoldenFlow Action
+
+> Standardize, clean and normalize data files in CI, report the transforms applied, and post a pull-request comment.
+
+## Usage
+
+```yaml
+- uses: benseverndev-oss/goldenmatch/packages/actions/goldenflow@main
+  with:
+    files: "data/*.csv"
+```
+
+## Inputs
+
+- `files` -- glob for the data files to transform (required)
+- `config` -- path to a goldenflow YAML config
+- `domain` -- domain pack to apply, e.g. `people_hr`, `healthcare`
+- `strict` -- fail the job if any transform errored (default false)
+- `python-version` -- Python to run on
+- `version` -- goldenflow version to install
+
+## Outputs
+
+- `transforms-applied`, `files-processed`, `errors`
+
+## Authoritative sources
+
+Read these instead of inferring behaviour from `action.yml`. An input list
+gives you names and types; it cannot tell you which defaults are deliberate
+or what a knob protects against:
+
+- https://docs.bensevern.dev/docs/goldenflow -- full documentation for the underlying tool.
+- `goldenflow/llms.txt` -- ships inside the goldenflow wheel this action installs (`Path(goldenflow.__file__).parent / "llms.txt"`), written for machine readers.
+- https://docs.bensevern.dev/docs/llms.txt -- index of every Golden Suite surface.
+- https://github.com/benseverndev-oss/goldenmatch -- source, issues, and the decision records.
+
+## Things that are decided, not incidental
+
+- **The job passes by default even when transforms error.** GoldenFlow lets a value it cannot parse pass through unchanged rather than failing, and the action follows suit -- errors land in the `errors` output and the PR comment, but do not fail the check. Set `strict: true` when you would rather the build break than let an unrecognised value through.
+- The transform set is single-sourced from a Rust kernel shared with the Python, TypeScript and SQL surfaces, so the same input standardizes identically wherever it runs -- CI and production do not drift.

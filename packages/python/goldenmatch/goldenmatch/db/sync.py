@@ -374,7 +374,7 @@ def _full_scan_pipeline(
     # v3.0.0: result.golden is a pa.Table. The DB write-back path
     # (write_golden_records / writer.py) uses polars semantics (.filter,
     # pl.col, column indexing), so materialize back to polars at this seam.
-    golden_df = pl.from_arrow(result.golden) if result.golden is not None else None
+    golden_df = pl.from_arrow(result.golden) if result.golden is not None else None  # polars-lane: the DB write-back consumer (writer.write_golden_records) uses polars semantics
     all_pairs = list(result.scored_pairs)
     logger.info(
         "Pipeline: dedupe_df returned %d scored pairs, %d clusters",

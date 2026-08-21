@@ -13,6 +13,7 @@ tests/benchmarks/datasets/.
 from __future__ import annotations
 
 import logging
+import os
 import tempfile
 from collections.abc import Hashable
 from pathlib import Path
@@ -238,11 +239,25 @@ def _ncvr() -> tuple[pa.Table, pa.Table]:
     )
 
 
-def _synthetic_person() -> tuple[pa.Table, pa.Table]:
-    """Synthetic person rows from the bench fixture generator.
+def _synthetic(shape: str, rows: int) -> tuple[pa.Table, pa.Table]:
+    """Synthetic rows of one head-to-head SHAPE, as a (records, truth) dataset.
 
     Reuses ``generate_fixture.generate`` (writes records + truth parquet to a
     temp dir), then reads both back into the (records, truth) contract shape.
+
+    Exposing the head-to-head shapes as datasets is what lets the score-histogram
+    probe run on them. That probe answers whether a shape's matches and
+    non-matches are SEPARABLE, and separability is the property that decides
+    whether the calibration choice matters at all: linear and posterior are both
+    monotone in match weight, so they rank pairs identically and can only differ
+    where the cut lands. The head-to-head panel shows exactly that split --
+    biblio's linear and posterior lanes are byte-identical at both scales, while
+    person's differ by 0.078 F1 -- and the probe is the instrument that can say
+    whether an empty band is the reason.
+
+    ``rows`` is a parameter because the effect is scale-dependent: the person
+    shape's over-merge is mild at 100k and catastrophic at 1M, so a probe fixed
+    at one small size could report "separable" for a shape that stops being so.
     """
     try:
         from generate_fixture import generate  # type: ignore
@@ -259,20 +274,48 @@ def _synthetic_person() -> tuple[pa.Table, pa.Table]:
         spec.loader.exec_module(gen_mod)
         generate = gen_mod.generate  # type: ignore
 
-    with tempfile.TemporaryDirectory(prefix="gm_synth_person_") as td:
+    with tempfile.TemporaryDirectory(prefix=f"gm_synth_{shape}_") as td:
         out = Path(td) / "records.parquet"
         truth_path = Path(td) / "truth.parquet"
         generate(
-            rows=5_000,
+            rows=rows,
             dupe_rate=0.20,
             out=out,
             truth=truth_path,
             seed=42,
             batch=1_000_000,
+            shape=shape,
         )
         records = pq.read_table(out)
         truth = pq.read_table(truth_path)
     return records, truth
+
+
+def _synthetic_rows(default: int = 5_000) -> int:
+    """Row count for the synthetic shapes, overridable per run.
+
+    Env rather than a loader argument because `load_dataset(name)` is a
+    single-string contract shared with the real benchmark datasets, and widening
+    it for two synthetic entries would touch every caller.
+    """
+    raw = os.environ.get("GOLDENMATCH_BENCH_SYNTHETIC_ROWS", "").strip()
+    if not raw:
+        return default
+    try:
+        n = int(raw)
+    except ValueError:
+        return default
+    return n if n > 0 else default
+
+
+def _synthetic_person() -> tuple[pa.Table, pa.Table]:
+    """Synthetic person rows. See :func:`_synthetic`."""
+    return _synthetic("person", _synthetic_rows())
+
+
+def _synthetic_biblio() -> tuple[pa.Table, pa.Table]:
+    """Synthetic biblio rows. See :func:`_synthetic`."""
+    return _synthetic("biblio", _synthetic_rows())
 
 
 def _two_source_leipzig(
@@ -400,6 +443,11 @@ _LOADERS = {
     "febrl3": _febrl3,
     "ncvr": _ncvr,
     "synthetic_person": _synthetic_person,
+    # The head-to-head panel's OTHER shape. Present so the score-histogram probe
+    # can compare the two: the panel shows biblio's linear and posterior lanes
+    # agreeing byte-for-byte while person's diverge, and only a labelled score
+    # distribution can say whether an empty band is why.
+    "synthetic_biblio": _synthetic_biblio,
     # Held-out (never in the FS-lever tuning panel) -- generalisation tests.
     "febrl4": _febrl4,
     "dblp_scholar": _dblp_scholar,

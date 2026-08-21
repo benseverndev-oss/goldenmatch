@@ -1,6 +1,6 @@
 {
   "name": "goldenanalysis",
-  "version": "0.2.0",
+  "version": "0.5.0",
   "description": "Read-only cross-cutting analysis, metrics, and reporting for the Golden Suite. TypeScript port of the goldenanalysis Python library.",
   "keywords": [
     "analysis",
@@ -21,7 +21,7 @@
     "url": "git+https://github.com/benseverndev-oss/goldenmatch.git",
     "directory": "packages/typescript/goldenanalysis"
   },
-  "homepage": "https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/typescript/goldenanalysis",
+  "homepage": "https://docs.bensevern.dev/docs/goldenanalysis",
   "bugs": {
     "url": "https://github.com/benseverndev-oss/goldenmatch/issues"
   },
@@ -53,7 +53,8 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "llms.txt"
   ],
   "engines": {
     "node": ">=20"

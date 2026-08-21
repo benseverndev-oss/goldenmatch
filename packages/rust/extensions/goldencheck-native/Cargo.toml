@@ -6,7 +6,7 @@
 
 [package]
 name = "goldencheck-native"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
 authors = ["Ben Severn <ben@bensevern.dev>"]
@@ -22,7 +22,7 @@ crate-type = ["cdylib"]
 [dependencies]
 # abi3-py311: one stable-ABI artifact spans CPython 3.11-3.13.
 # extension-module: don't link libpython (this .so is imported BY CPython).
-pyo3 = { version = ">=0.28, <0.29", features = ["extension-module", "abi3-py311"] }
+pyo3 = { version = ">=0.29, <0.30", features = ["extension-module", "abi3-py311"] }
 # Pyo3-free deep-profiling kernels (Benford, composite-key & FD mining). The
 # #[pyfunction] shims below are thin Arrow-reading wrappers over this crate.
 goldencheck-core = { path = "../goldencheck-core" }

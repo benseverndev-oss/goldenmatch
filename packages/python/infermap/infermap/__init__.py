@@ -1,6 +1,20 @@
-"""infermap — inference-driven schema mapping engine."""
+"""infermap — inference-driven schema mapping engine.
 
-__version__ = "0.6.0"
+AUTHORITATIVE SOURCES (read these instead of inferring behaviour from source):
+
+  * ``infermap/llms.txt`` -- ships INSIDE this package, next to this file:
+    ``Path(infermap.__file__).parent / "llms.txt"``. Condensed, current, written
+    for machine readers.
+  * https://docs.bensevern.dev/docs/infermap -- full docs.
+  * https://github.com/benseverndev-oss/goldenmatch -- source + issues.
+
+Why this block exists: much of this package's behaviour is *decided*, not
+incidental, and those decisions are documented and contract-tested. Reading the
+implementation shows WHAT one path does, but not which guarantees are
+load-bearing, which fallbacks are deliberate, or which knobs exist.
+"""
+
+__version__ = "0.7.0"
 
 from infermap.config import from_config
 from infermap.detect import detect_domain, detect_domain_detailed
@@ -13,6 +27,7 @@ from infermap.errors import ApplyError, ConfigError, InferMapError
 # without reaching into a submodule. The helper itself raises ImportError
 # with a clear remediation message if goldenmatch isn't installed.
 from infermap.identity import AliasWriteResult, write_aliases_from_mapping
+from infermap.layers import detect_identity_layers
 from infermap.providers import extract_schema
 from infermap.scorers import default_scorers, scorer
 from infermap.types import FieldInfo, FieldMapping, MapResult, SchemaInfo, ScorerResult
@@ -50,6 +65,7 @@ __all__ = [
     "DomainPackTarget",
     "detect_domain",
     "detect_domain_detailed",
+    "detect_identity_layers",
     "MapEngine",
     "from_config",
     "default_scorers",

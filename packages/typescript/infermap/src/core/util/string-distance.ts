@@ -1,95 +1,66 @@
-// Vendored string distance utilities.
+// String-distance primitives — single-sourced from goldenmatch's scorer.
 //
-// jaroWinklerSimilarity matches rapidfuzz.distance.JaroWinkler.similarity:
-// prefix scaling p=0.1, max prefix length 4, boost applied only when base Jaro
-// similarity >= 0.7 (classic Winkler threshold).
+// These used to be VENDORED copies (a local Jaro / Jaro-Winkler / Levenshtein).
+// They are now re-exports of goldenmatch's implementations, which are the
+// parity-gated pure-TS fallback for the `goldenmatch-score-core` Rust kernel
+// (`tests/parity/scorer-rapidfuzz.test.ts`, floating-point-identical to
+// rapidfuzz at 5.6e-17 over a 2005-pair sweep). Single-kernel-collapse R5:
+// one authoritative implementation per primitive, no second copy to drift.
+//
+// This also restores Python<->TS parity for infermap: the Python `fuzzy_name`
+// scorer already reuses `goldenmatch-score-core::jaro_winkler_similarity`
+// (infermap-core -> score-core path dep), so the TS port was the only surface
+// still running its own copy.
+//
+// THREE real divergences the vendored copies carried, now fixed by
+// construction. All three are the pre-#879 bugs: goldenmatch fixed them in its
+// own scorer and the vendored fork never got the memo — which is precisely the
+// drift a second copy produces.
+//   * Transposition count — the local `jaroSimilarity` used an UNFLOORED
+//     `transpositions / 2`; rapidfuzz (and score-core) use floored `⌊t/2⌋`.
+//     This is the one that bites real inputs: `jaroWinkler("saturday",
+//     "sunday")` was 0.7475, is now 0.7775 — the exact pair and values
+//     goldenmatch's #879 note cites as its own fix.
+//   * Winkler boost threshold — the local copy boosted at `jaro >= 0.7`;
+//     rapidfuzz boosts only at **strict** `jaro > 0.7`. Differs only when jaro
+//     is exactly 0.7, so it is rare but silently wrong when hit.
+//   * Codepoint handling — the local copies indexed UTF-16 code units
+//     (`s[i]`, `s.length`); goldenmatch's use `Array.from`, so non-BMP input
+//     (emoji, astral-plane chars) now scores like the Python/Rust reference.
+//
+// Measured old-vs-new over a 75.7K-pair sweep (generated tokens + real column
+// names + non-BMP): 57 jaro/jaro-winkler and 62 levenshtein disagreements, all
+// non-BMP; a 240K-pair ASCII-only sweep found zero, so ASCII column names —
+// infermap's normal input — are unaffected apart from the transposition class.
+//
+// The former `jaroWinklerSimilarity(s1, s2, prefixScale)` third argument is
+// gone: no call site in the repo ever passed it, and a tunable prefix scale is
+// by definition not the kernel-parity behaviour.
+//
+// The import is the narrow `goldenmatch/core/string-distance` subpath (a
+// zero-import leaf), NOT the `goldenmatch/core` barrel — the barrel drags
+// `core/scorer.ts`'s reference-data tables and WASM registry. `goldenmatch`
+// stays a devDependency: tsup bundles it (`noExternal`), exactly as it already
+// bundles `goldenmatch-wasm-runtime`, so infermap gains no published runtime
+// dependency.
+//
+// These are re-exported as ANNOTATED const aliases rather than a bare
+// `export { … } from`. tsup's `dts.resolve` does not follow a subpath specifier
+// into the sibling package, so a bare re-export leaks
+// `from 'goldenmatch/core/string-distance'` into the published .d.ts — an
+// unresolvable type reference for consumers, since goldenmatch is not a runtime
+// dep. The explicit signatures emit a self-contained declaration. They are
+// direct aliases, not wrappers: no extra call frame, and no place for the
+// signature to drift silently (a change to the kernel's shape fails typecheck
+// here).
+import {
+  jaro,
+  jaroWinkler,
+  levenshteinDistance as levenshteinDistanceImpl,
+} from "goldenmatch/core/string-distance";
 
-export function jaroSimilarity(s1: string, s2: string): number {
-  if (s1 === s2) return 1;
-  const len1 = s1.length;
-  const len2 = s2.length;
-  if (len1 === 0 || len2 === 0) return 0;
-
-  const matchWindow = Math.max(0, Math.floor(Math.max(len1, len2) / 2) - 1);
-  const s1Matches = new Array<boolean>(len1).fill(false);
-  const s2Matches = new Array<boolean>(len2).fill(false);
-
-  let matches = 0;
-  for (let i = 0; i < len1; i++) {
-    const start = Math.max(0, i - matchWindow);
-    const end = Math.min(i + matchWindow + 1, len2);
-    for (let j = start; j < end; j++) {
-      if (s2Matches[j]) continue;
-      if (s1[i] !== s2[j]) continue;
-      s1Matches[i] = true;
-      s2Matches[j] = true;
-      matches++;
-      break;
-    }
-  }
-
-  if (matches === 0) return 0;
-
-  // Count transpositions (half the out-of-order matched chars)
-  let k = 0;
-  let transpositions = 0;
-  for (let i = 0; i < len1; i++) {
-    if (!s1Matches[i]) continue;
-    while (!s2Matches[k]) k++;
-    if (s1[i] !== s2[k]) transpositions++;
-    k++;
-  }
-  transpositions = transpositions / 2;
-
-  return (
-    (matches / len1 + matches / len2 + (matches - transpositions) / matches) / 3
-  );
-}
-
-export function jaroWinklerSimilarity(
-  s1: string,
-  s2: string,
-  prefixScale = 0.1
-): number {
-  const jaro = jaroSimilarity(s1, s2);
-  if (jaro < 0.7) return jaro;
-
-  let prefix = 0;
-  const maxPrefix = Math.min(4, s1.length, s2.length);
-  for (let i = 0; i < maxPrefix; i++) {
-    if (s1[i] === s2[i]) prefix++;
-    else break;
-  }
-  return jaro + prefix * prefixScale * (1 - jaro);
-}
-
-// Levenshtein distance (vendored for future use by AliasScorer config or
-// other fuzzy matching needs). O(len1 * len2) time, O(min) space.
-export function levenshteinDistance(s1: string, s2: string): number {
-  if (s1 === s2) return 0;
-  if (s1.length === 0) return s2.length;
-  if (s2.length === 0) return s1.length;
-
-  // Ensure s1 is the shorter — smaller working array
-  if (s1.length > s2.length) [s1, s2] = [s2, s1];
-  const m = s1.length;
-  const n = s2.length;
-
-  let prev = new Array<number>(m + 1);
-  let curr = new Array<number>(m + 1);
-  for (let i = 0; i <= m; i++) prev[i] = i;
-
-  for (let j = 1; j <= n; j++) {
-    curr[0] = j;
-    for (let i = 1; i <= m; i++) {
-      const cost = s1[i - 1] === s2[j - 1] ? 0 : 1;
-      curr[i] = Math.min(
-        prev[i]! + 1, // deletion
-        curr[i - 1]! + 1, // insertion
-        prev[i - 1]! + cost // substitution
-      );
-    }
-    [prev, curr] = [curr, prev];
-  }
-  return prev[m]!;
-}
+export const jaroSimilarity: (a: string, b: string) => number = jaro;
+export const jaroWinklerSimilarity: (a: string, b: string) => number =
+  jaroWinkler;
+export const levenshteinDistance: (a: string, b: string) => number =
+  levenshteinDistanceImpl;

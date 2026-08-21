@@ -20,6 +20,13 @@
           "name": "GoldenMatchConfig",
           "fields": [
             {
+              "name": "schema_version",
+              "type": "int",
+              "required": false,
+              "default": "1",
+              "description": "Config schema version; set by GoldenMatch (not user-tuned). Recorded with a run's config fingerprint for lineage/migration. Excluded from the fingerprint so a semantics-preserving schema bump keeps the same config id."
+            },
+            {
               "name": "input",
               "type": "InputConfig | None",
               "required": false,
@@ -158,7 +165,7 @@
               "type": "str | None",
               "required": false,
               "default": "None",
-              "description": "Execution backend: None (default Polars in-memory), 'ray', 'duckdb', 'chunked', or 'bucket'."
+              "description": "Execution backend: None (default in-memory), 'ray', 'duckdb', 'datafusion', 'chunked', 'bucket', 'polars-direct', or 'spark'."
             },
             {
               "name": "distributed_routing",
@@ -541,7 +548,8 @@
                 "learned",
                 "lsh",
                 "simhash",
-                "perceptual"
+                "perceptual",
+                "token"
               ],
               "description": "Candidate-generation method that selects how pairs are proposed for scoring."
             },
@@ -685,6 +693,16 @@
                 "LSHKeyConfig"
               ],
               "description": "MinHash/LSH configuration required when the strategy is 'lsh'."
+            },
+            {
+              "name": "token",
+              "type": "TokenBlockingConfig | None",
+              "required": false,
+              "default": "None",
+              "nested": [
+                "TokenBlockingConfig"
+              ],
+              "description": "DF-pruned token-blocking configuration required when the strategy is 'token'."
             },
             {
               "name": "simhash",
@@ -1340,6 +1358,13 @@
               "description": "Rules deriving entity-to-entity relationship edges from shared non-identity attributes; empty leaves identity resolution unchanged."
             },
             {
+              "name": "deterministic_merge_keys",
+              "type": "list[str | list[str]]",
+              "required": false,
+              "default": "[]",
+              "description": "Authoritative identifier columns (e.g. 'npi') whose shared non-null value collapses fragmented entities into one AFTER resolution: records are reassigned to the surviving id and absorbed nodes retired. A unique government id can't be split across entities. Entity-level (post-resolve), so it never cascades clusters. An entry may be a single column OR a list of columns for a GUARDED merge that requires the whole tuple to match (e.g. ['npi', 'last_name'] merges on a shared NPI only when the name also agrees, so a dirty/shared id alone can't force a bad merge). Empty (default) = off."
+            },
+            {
               "name": "stitching",
               "type": "ChannelStitchConfig | None",
               "required": false,
@@ -1797,6 +1822,39 @@
             }
           ],
           "doc": "MinHash/LSH blocking on a text column (#1081)."
+        },
+        {
+          "name": "TokenBlockingConfig",
+          "fields": [
+            {
+              "name": "column",
+              "type": "str",
+              "required": true,
+              "description": "Free-text column tokenized to build the inverted index."
+            },
+            {
+              "name": "min_token_length",
+              "type": "int",
+              "required": false,
+              "default": "3",
+              "description": "Tokens shorter than this are dropped; short tokens are mostly noise ('1', 'w/') and form large low-evidence blocks."
+            },
+            {
+              "name": "max_df_ratio",
+              "type": "float",
+              "required": false,
+              "default": "0.02",
+              "description": "Drop tokens appearing in more than this fraction of records. Used to derive the cap when max_df is unset."
+            },
+            {
+              "name": "max_df",
+              "type": "int | None",
+              "required": false,
+              "default": "None",
+              "description": "Absolute document-frequency cap. When unset it is derived from max_df_ratio and clamped to [10, 1000] so the cap stays bounded at any frame size."
+            }
+          ],
+          "doc": "DF-pruned token blocking on a free-text column (#2488)."
         },
         {
           "name": "SimHashKeyConfig",
@@ -2393,6 +2451,13 @@
               "required": false,
               "default": "False",
               "help": "Exit non-zero if any declared key is not unique at grain (CI gate)."
+            },
+            {
+              "name": "--json",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Emit the verdict-rich report as JSON (the shared MCP/REST shape) — machine-readable for a CI gate."
             }
           ]
         },
@@ -2551,7 +2616,7 @@
               "type": "boolean",
               "required": false,
               "default": "False",
-              "help": "Random sample instead of first N"
+              "help": "Deprecated no-op: accepted for back-compat but not applied (preview uses the first N)."
             },
             {
               "name": "--output-golden",
@@ -2656,7 +2721,7 @@
               "type": "boolean",
               "required": false,
               "default": "False",
-              "help": "Large dataset mode - process in chunks for files >1M records"
+              "help": "Deprecated no-op: use --backend chunked for large-dataset chunked processing."
             },
             {
               "name": "--chunk-size",
@@ -2677,7 +2742,7 @@
               "type": "boolean",
               "required": false,
               "default": "False",
-              "help": "Generate before/after HTML diff with highlighting"
+              "help": "Deprecated no-op: accepted for back-compat but not generated; use --diff for a CSV diff."
             },
             {
               "name": "--merge-preview",
@@ -2698,7 +2763,7 @@
               "type": "text",
               "required": false,
               "default": "'medium'",
-              "help": "low, medium, or high"
+              "help": "Deprecated no-op: accepted for back-compat but not applied (anomaly sensitivity is fixed)."
             },
             {
               "name": "--llm-boost",
@@ -2816,6 +2881,66 @@
               "required": false,
               "default": "False",
               "help": "Suppress animated output"
+            }
+          ]
+        },
+        {
+          "command": "discover-model",
+          "options": [
+            {
+              "name": "--data",
+              "type": "text",
+              "required": true,
+              "help": "A source table as name=path (repeatable), e.g. -d orders=orders.csv"
+            },
+            {
+              "name": "--dialect",
+              "type": "text",
+              "required": false,
+              "default": "'metricflow'",
+              "help": "Emit dialect for the draft model: metricflow / cube / osi."
+            },
+            {
+              "name": "--output",
+              "type": "text",
+              "required": false,
+              "default": "None",
+              "help": "Write the draft semantic-model YAML to this path."
+            },
+            {
+              "name": "--resolve",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Also measure entity fragmentation / undercount via ER (fail-open)."
+            },
+            {
+              "name": "--name",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Also run the OPTIONAL advisory LLM namer (business names for entities/dimensions/values/measures; abstains without an LLM key)."
+            },
+            {
+              "name": "--apply-names",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Write the namer's VERIFIED names into the emitted YAML (entity/measure label:, dimension/value meta.goldenmatch.glossary). Implies --name; post-certification + cosmetic."
+            },
+            {
+              "name": "--fail-untrustworthy",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Exit non-zero if any proposed key is not unique at grain (CI gate)."
+            },
+            {
+              "name": "--json",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Emit the full proposed model (shape + certification) as JSON."
             }
           ]
         },
@@ -3416,6 +3541,13 @@
               "help": "ER-model identification confidence floor for signal extraction"
             },
             {
+              "name": "--select",
+              "type": "text",
+              "required": false,
+              "default": "[]",
+              "help": "Scope to specific ER models (repeatable), dbt-style; without it a full warehouse over-extracts. Globs the model name (`dedup_*`), or `path:*entity_resolution*`, or `tag:<name>`. Selected models bypass --min-confidence."
+            },
+            {
               "name": "--verify",
               "type": "text",
               "required": false,
@@ -3836,7 +3968,7 @@
               "type": "boolean",
               "required": false,
               "default": "False",
-              "help": "Random sample instead of first N"
+              "help": "Deprecated no-op: accepted for back-compat but not applied (preview uses the first N)."
             },
             {
               "name": "--output-matched",
@@ -4219,6 +4351,104 @@
               "required": false,
               "default": "None",
               "help": "Column holding each row's id (default: auto-detect unique_id/id/record_id)"
+            }
+          ]
+        },
+        {
+          "command": "ontology certify",
+          "options": [
+            {
+              "name": "ontology",
+              "type": "text",
+              "required": true,
+              "help": "OWL/RDF ontology file (Turtle / RDF-XML / JSON-LD / N-Triples)."
+            },
+            {
+              "name": "--data",
+              "type": "text",
+              "required": true,
+              "help": "Instance data for a class as Class=path (repeatable), e.g. -d Patient=patients.csv"
+            },
+            {
+              "name": "--json",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Emit the certification report as JSON."
+            },
+            {
+              "name": "--fail-untrustworthy",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Exit non-zero if any declared identity key is not unique at grain (CI gate)."
+            }
+          ]
+        },
+        {
+          "command": "ontology discover",
+          "options": [
+            {
+              "name": "--data",
+              "type": "text",
+              "required": true,
+              "help": "A class's instance data as Class=path (repeatable), e.g. -d Customer=customers.csv"
+            },
+            {
+              "name": "--output",
+              "type": "text",
+              "required": false,
+              "default": "None",
+              "help": "Write the draft OWL ontology (Turtle) to this path."
+            },
+            {
+              "name": "--base-iri",
+              "type": "text",
+              "required": false,
+              "default": "None",
+              "help": "Base IRI for the emitted terms."
+            },
+            {
+              "name": "--ontology-iri",
+              "type": "text",
+              "required": false,
+              "default": "None",
+              "help": "IRI for the ontology node."
+            },
+            {
+              "name": "--endpoint",
+              "type": "text",
+              "required": false,
+              "default": "None",
+              "help": "Write the OWL to a live SPARQL 1.1 Graph Store endpoint (a triple store)."
+            },
+            {
+              "name": "--graph-iri",
+              "type": "text",
+              "required": false,
+              "default": "None",
+              "help": "Named graph for --endpoint (default graph if omitted)."
+            },
+            {
+              "name": "--mode",
+              "type": "text",
+              "required": false,
+              "default": "'replace'",
+              "help": "--endpoint write mode: replace (PUT) or merge (POST)."
+            },
+            {
+              "name": "--json",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Emit the discovery result as JSON."
+            },
+            {
+              "name": "--fail-untrustworthy",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Exit non-zero if any discovered class key is not unique at grain (CI gate)."
             }
           ]
         },
@@ -4906,6 +5136,10 @@
           "description": "Alias for `find_duplicates`. Find duplicate matches for a record. Provide field values to search against the loaded dataset."
         },
         {
+          "name": "discover_semantic_model",
+          "description": "Generative half of the semantic-layer front door: point GoldenMatch at a set of source tables and it PROPOSES a draft semantic model -- entity types, keys, joins, measures, dimensions -- where every declared key is already graded by the certifier (unique-at-grain + fan-out). Discovery is hypothesis generation; certification is the falsification test, so the draft is pre-proven against the data. Advisory; nothing is auto-applied."
+        },
+        {
           "name": "documents_ingest",
           "description": "Extract records from documents (PDF/image) against a target schema into rows ready for dedupe_df. Returns records + an ingest report."
         },
@@ -5100,6 +5334,14 @@
         {
           "name": "memory_stats",
           "description": "Return Learning Memory status: total correction count, last learn time, and current learned adjustments. Cheap; safe for status checks."
+        },
+        {
+          "name": "ontology_certify",
+          "description": "Ontology-layer front door (consume): certify the identity keys an OWL/RDF ontology DECLARES (owl:hasKey, inverse-functional properties) against real instance data. The ontology asserts identity but resolves it only by brittle exact-match; this returns a per-key verdict (unique-at-grain + fan-out) so an over-merging IFP/key is caught before a reasoner trusts it. Advisory. Needs the goldenmatch[ontology] extra."
+        },
+        {
+          "name": "ontology_discover",
+          "description": "Ontology-layer front door (generate): point GoldenMatch at a set of class instance tables and it PROPOSES a draft OWL ontology -- one owl:Class per frame whose owl:hasKey is chosen and PRE-GRADED by the certifier (gm:keyTrustworthy / gm:keyUniquenessEstimate). Discovery is hypothesis; certification is the falsification test. Returns the discovery result + the Turtle. Needs the goldenmatch[ontology] extra."
         },
         {
           "name": "plan_routing",
@@ -5405,6 +5647,11 @@
               "value": "static",
               "meaning": "Group records by an exact blocking key.",
               "best_for": "Clean data with reliable keys"
+            },
+            {
+              "value": "token",
+              "meaning": "Inverted index over DF-pruned tokens; a record joins one block per token, so a pair is a candidate when it shares any token.",
+              "best_for": "Free text where no prefix agrees (product titles)"
             }
           ]
         },
@@ -5726,6 +5973,7 @@
         ],
         "AUTOCONFIG": [
           "GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE",
+          "GOLDENMATCH_AUTOCONFIG_DETERMINISTIC",
           "GOLDENMATCH_AUTOCONFIG_FORCE_EXCLUDE",
           "GOLDENMATCH_AUTOCONFIG_FORCE_INCLUDE",
           "GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET",
@@ -5747,6 +5995,7 @@
           "GOLDENMATCH_BLOCKING_COST_AWARE",
           "GOLDENMATCH_BLOCKING_DEGENERATE_MAX_AVG_BLOCK_SIZE",
           "GOLDENMATCH_BLOCKING_DEGENERATE_THRESHOLD",
+          "GOLDENMATCH_BLOCKING_DIVERSIFY_PAIR_BUDGET",
           "GOLDENMATCH_BLOCKING_MAX_RATIO",
           "GOLDENMATCH_BLOCKING_MIN_RATIO",
           "GOLDENMATCH_BLOCKING_PAIRS_PER_ROW",
@@ -5762,6 +6011,9 @@
           "GOLDENMATCH_BUCKET_SLIM_PROJECTION",
           "GOLDENMATCH_BUCKET_VEC_MAX",
           "GOLDENMATCH_BUCKET_VEC_MIN"
+        ],
+        "CANDIDATE": [
+          "GOLDENMATCH_CANDIDATE_COUNT_MAX_BLOCKS"
         ],
         "CLUSTER": [
           "GOLDENMATCH_CLUSTER_SPLIT_EDGE_BUDGET"
@@ -5830,6 +6082,7 @@
           "GOLDENMATCH_FS_BLOCK_SOURCE",
           "GOLDENMATCH_FS_BUCKET_BATCH",
           "GOLDENMATCH_FS_BUCKET_NATIVE",
+          "GOLDENMATCH_FS_BUCKET_SCORE_WORKERS",
           "GOLDENMATCH_FS_CALIBRATED",
           "GOLDENMATCH_FS_CALIBRATE_THRESHOLD",
           "GOLDENMATCH_FS_COLUMNAR_CLUSTER",
@@ -5837,6 +6090,7 @@
           "GOLDENMATCH_FS_DOMAIN_COMPARATORS",
           "GOLDENMATCH_FS_EM_AGG_BLOCKS",
           "GOLDENMATCH_FS_EM_BLOCK_SLIM",
+          "GOLDENMATCH_FS_EM_COUNTED",
           "GOLDENMATCH_FS_EM_SAMPLE_ROWS",
           "GOLDENMATCH_FS_EVIDENCE_CUT",
           "GOLDENMATCH_FS_FACTORIZE",
@@ -5850,10 +6104,15 @@
           "GOLDENMATCH_FS_OOC_WAVE_ROWS",
           "GOLDENMATCH_FS_ORTHOGONAL_BLOCKING",
           "GOLDENMATCH_FS_OUT_OF_CORE",
+          "GOLDENMATCH_FS_OVERSIZED_CHUNK_PAIRS",
           "GOLDENMATCH_FS_POST_BLOCKING_U",
+          "GOLDENMATCH_FS_REFIT_SWEEP",
+          "GOLDENMATCH_FS_REFIT_THRESHOLD",
           "GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE",
           "GOLDENMATCH_FS_ROUTE_MIN_ROWS",
           "GOLDENMATCH_FS_SCORED_PAIRS_MAX",
+          "GOLDENMATCH_FS_SEQUENTIAL_BATCHED_OUTPUT",
+          "GOLDENMATCH_FS_SEQUENTIAL_BOUNDED_SCORING",
           "GOLDENMATCH_FS_SPILL_FORCE_SHARD",
           "GOLDENMATCH_FS_STRIP_HONORIFICS",
           "GOLDENMATCH_FS_TF_ADJUSTMENT",
@@ -5966,10 +6225,17 @@
           "GOLDENMATCH_SAIL_IDENTITY_ID_SCHEME"
         ],
         "SEMANTIC": [
-          "GOLDENMATCH_SEMANTIC_BLOCKING_THRESHOLD"
+          "GOLDENMATCH_SEMANTIC_BLOCKING_THRESHOLD",
+          "GOLDENMATCH_SEMANTIC_NAMER"
         ],
         "SKIP": [
           "GOLDENMATCH_SKIP_MATCH_LOG"
+        ],
+        "SPARK": [
+          "GOLDENMATCH_SPARK_EXACT_PROFILING",
+          "GOLDENMATCH_SPARK_FUSED_BLOCK_JOIN",
+          "GOLDENMATCH_SPARK_JAR",
+          "GOLDENMATCH_SPARK_VECTOR_SCORER"
         ],
         "STANDARDIZE": [
           "GOLDENMATCH_STANDARDIZE_STAGED"
@@ -5999,6 +6265,9 @@
           "GOLDENMATCH_THROUGHPUT",
           "GOLDENMATCH_THROUGHPUT_RECALL",
           "GOLDENMATCH_THROUGHPUT_SIMILARITY"
+        ],
+        "TOKEN": [
+          "GOLDENMATCH_TOKEN_BLOCKING"
         ],
         "TRANSFORM": [
           "GOLDENMATCH_TRANSFORM_DEBUG"
@@ -7247,6 +7516,10 @@
         "LLM": [
           "GOLDENCHECK_LLM_BUDGET",
           "GOLDENCHECK_LLM_MODEL"
+        ],
+        "MCP": [
+          "GOLDENCHECK_MCP_ALLOW_PUBLIC",
+          "GOLDENCHECK_MCP_TOKEN"
         ],
         "NATIVE": [
           "GOLDENCHECK_NATIVE"
@@ -8928,6 +9201,10 @@
         "ALLOWED": [
           "GOLDENPIPE_ALLOWED_ROOT"
         ],
+        "MCP": [
+          "GOLDENPIPE_MCP_ALLOW_PUBLIC",
+          "GOLDENPIPE_MCP_TOKEN"
+        ],
         "NATIVE": [
           "GOLDENPIPE_NATIVE"
         ]
@@ -9034,6 +9311,38 @@
               "type": "text",
               "required": true,
               "help": "Source data to inspect (CSV path, schema YAML, etc.)"
+            },
+            {
+              "name": "--table",
+              "type": "text",
+              "required": false,
+              "default": "None",
+              "help": "Table name for DB sources"
+            },
+            {
+              "name": "--verbose",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Enable verbose logging"
+            }
+          ]
+        },
+        {
+          "command": "layers",
+          "options": [
+            {
+              "name": "source",
+              "type": "text",
+              "required": true,
+              "help": "Source data to inspect (CSV path, schema YAML, etc.)"
+            },
+            {
+              "name": "--domain",
+              "type": "text",
+              "required": false,
+              "default": "None",
+              "help": "Domain pack to use (auto-detected when omitted)"
             },
             {
               "name": "--table",
@@ -9199,6 +9508,10 @@
           "description": "Inspect a data source — show fields, types, sample values, null rates, unique rates, and statistics."
         },
         {
+          "name": "layers",
+          "description": "Detect the identity layers (parties) a data source refers to — e.g. a loan tape's lender AND borrower, or a claims file's patient, provider and payer. Distinct from domain detection, which returns one industry vertical for the whole source. Each layer is the group of columns describing one party, with its kind (person/organization/asset/place), a score, and the evidence behind it. Unrecognised parties are reported with role 'unknown' rather than dropped; columns belonging to no party land in 'unassigned'."
+        },
+        {
           "name": "map",
           "description": "Map source columns to target schema using a weighted scorer pipeline with optimal 1:1 assignment. Returns mappings with confidence scores and human-readable reasoning."
         },
@@ -9280,6 +9593,10 @@
         }
       ],
       "env_vars": {
+        "MCP": [
+          "INFERMAP_MCP_ALLOW_PUBLIC",
+          "INFERMAP_MCP_TOKEN"
+        ],
         "NATIVE": [
           "INFERMAP_NATIVE"
         ]
@@ -9567,6 +9884,10 @@
         }
       ],
       "env_vars": {
+        "MCP": [
+          "GOLDENANALYSIS_MCP_ALLOW_PUBLIC",
+          "GOLDENANALYSIS_MCP_TOKEN"
+        ],
         "NATIVE": [
           "GOLDENANALYSIS_NATIVE"
         ]
@@ -9739,8 +10060,16 @@
       "path": "packages/rust/extensions/perceptual-wasm"
     },
     {
+      "name": "goldenmatch-score-cabi",
+      "path": "packages/rust/extensions/score-cabi"
+    },
+    {
       "name": "goldenmatch-score-core",
       "path": "packages/rust/extensions/score-core"
+    },
+    {
+      "name": "goldenmatch-score-jni",
+      "path": "packages/rust/extensions/score-jni"
     },
     {
       "name": "goldenmatch-score-wasm",
@@ -9757,6 +10086,14 @@
     {
       "name": "goldenmatch-suggest-wasm",
       "path": "packages/rust/extensions/suggest-wasm"
+    },
+    {
+      "name": "goldenmatch-survivorship-core",
+      "path": "packages/rust/extensions/survivorship-core"
+    },
+    {
+      "name": "goldenmatch-transforms-core",
+      "path": "packages/rust/extensions/transforms-core"
     },
     {
       "name": "goldenmatch_pg",

@@ -678,6 +678,47 @@ def _kernel_suggest(
     return _parse_suggestions(raw_json)
 
 
+def _verify_baseline_clusters(df, config, clusters, engine) -> tuple[dict, str]:
+    """Clusters the verify gate should measure its BASELINE from, and where they
+    came from.
+
+    The baseline must be produced by the same procedure as the candidates,
+    because ``_verify_suggestions`` compares the two directly against a 1e-6
+    epsilon. Candidates always come from ``engine._run_pipeline``, so the
+    baseline is taken from ``engine._run_pipeline`` on the UNMODIFIED config --
+    never from the caller's clusters, however convenient those are.
+
+    That distinction is not academic. ``review_config`` passes its own engine
+    run, so the old caller-supplied baseline was already like-for-like there.
+    ``suggest_from_result`` passes ``DedupeResult.clusters``, produced by
+    ``dedupe_df``, which STANDARDIZES the frame first (titlecase name, lowercase
+    email, zero-padded zip) and therefore clusters a different population than
+    the raw frame the candidates run against. Measured on the 80-row person
+    fixture: 39 clusters / health 1.0000 from the artifacts against 8 clusters /
+    health 0.8000 from the engine -- same suggestion, two incomparable baselines.
+
+    The artifacts-in path was then held only by the epsilon (baseline 1.0 vs
+    candidate 1.0), so any run whose candidate clustering came out marginally
+    worse flipped it to DROP and returned ``[]`` while the re-run path kept its
+    0.2 margin. That is the intermittent
+    ``[] == ['thr:raise:fuzzy_match']`` failure in
+    ``test_suggest_from_result_verified_matches_review_config`` -- not float
+    noise, but a saturated baseline sitting on the boundary.
+
+    Falls back to the caller's clusters when the re-run fails, so a broken
+    baseline degrades to the previous behaviour instead of raising -- matching
+    the rest of this gate, where verification failures keep the suggestion.
+    """
+    try:
+        return (engine._run_pipeline(df, config).clusters or {}), "engine"
+    except Exception:  # noqa: BLE001 -- verification stays conservative
+        logger.debug(
+            "verify: baseline re-run failed; falling back to the caller's clusters",
+            exc_info=True,
+        )
+        return (clusters or {}), "caller"
+
+
 def _verify_suggestions(
     suggestions, df, config, clusters, engine, *, max_verify: int | None = None
 ) -> list[Suggestion]:
@@ -694,10 +735,38 @@ def _verify_suggestions(
     # issue (_run_pipeline returns only pairs >= threshold, so mass_above is
     # always 1.0 in scored_pairs -- the scored-pairs proxy is not useful here).
     n_records = df.height
-    baseline_health = suggestion_health_from_clusters(clusters, n_records)
+
+    # The baseline MUST come from the same procedure as the candidates, because
+    # `keep` compares them directly against a 1e-6 epsilon.
+    #
+    # It used to be computed from the caller's `clusters`. For `review_config`
+    # that is the engine's own run, so the comparison is like-for-like. For
+    # `suggest_from_result` it is `DedupeResult.clusters` -- produced by
+    # `dedupe_df`, which STANDARDIZES the frame first (titlecase name, lowercase
+    # email, zero-padded zip) and so clusters a different population than the raw
+    # frame the candidates are run against. Measured on the 80-row person fixture:
+    # 39 clusters / health 1.0000 from the artifacts, against 8 clusters /
+    # health 0.8000 from the engine. Same suggestion, two different baselines.
+    #
+    # The artifacts-in path was then kept only by the epsilon -- baseline 1.0
+    # against candidate 1.0 -- so any run whose candidate clustering came out
+    # even slightly worse flipped it to DROP and returned [], while the re-run
+    # path kept its 0.2 margin and always returned the suggestion. That is the
+    # intermittent `[] == ['thr:raise:fuzzy_match']` failure in
+    # test_suggest_from_result_verified_matches_review_config: not float noise,
+    # but two incomparable baselines, one of them sitting on the boundary.
+    #
+    # Re-derive it here so both callers are compared identically. Costs one extra
+    # pipeline run on a path that already runs up to `cap` of them, and only on
+    # the opt-in verify=True route. Falls back to the caller's clusters if that
+    # run fails, which keeps the pre-existing behaviour rather than raising.
+    baseline_clusters, baseline_source = _verify_baseline_clusters(
+        df, config, clusters, engine
+    )
+    baseline_health = suggestion_health_from_clusters(baseline_clusters, n_records)
     logger.debug(
-        "review_config verify: baseline_health=%.4f n_records=%d n_clusters=%d",
-        baseline_health, n_records, len(clusters),
+        "review_config verify: baseline_health=%.4f n_records=%d n_clusters=%d source=%s",
+        baseline_health, n_records, len(baseline_clusters), baseline_source,
     )
 
     # Cap verification at the resolved fan-out (cost guard; #1404 makes it tunable)
@@ -764,6 +833,39 @@ def _verify_suggestions(
 
 # ── Public API ─────────────────────────────────────────────────────────────
 
+def _require_polars_frame(df, fn: str) -> None:
+    """Fail at the boundary when `df` is not a Polars frame, naming the reason.
+
+    The suggest/review path is Polars-native END TO END, not just at the
+    `__row_id__` normalisation below: `MatchEngine._run_pipeline` calls
+    `df.lazy()` on its first line. Without this guard an Arrow caller got
+    `AttributeError: 'pyarrow.lib.Table' object has no attribute
+    'with_row_index'` -- a message that names neither Polars nor the actual
+    requirement (#2442). `pl` in this module is `_LazyPolars`, which imports
+    cleanly without Polars installed and only raises on attribute use, so
+    nothing upstream surfaces the dependency either.
+
+    Note this is deliberately NOT an Arrow branch. #2442 suggested adding one,
+    and supplying `__row_id__` up front is listed there as a workaround -- but
+    both only move the failure three lines down to `.lazy()`. Verified: a
+    `pa.Table` has neither `with_row_index` nor `lazy`. Making this path
+    Arrow-native means porting the pipeline, not the two lines that happen to
+    fail first; claiming otherwise with a local patch would be worse than the
+    honest error.
+    """
+    if hasattr(df, "lazy") and hasattr(df, "with_row_index"):
+        return
+    raise TypeError(
+        f"{fn}() requires a polars DataFrame; got {type(df).__module__}."
+        f"{type(df).__qualname__}. This path runs the full match pipeline, which "
+        f"is polars-native (MatchEngine._run_pipeline calls df.lazy()), so adding "
+        f"a __row_id__ column does NOT make an Arrow table work here. Install "
+        f"goldenmatch[polars] and convert at the call site "
+        f"(polars.from_arrow(table)), or use the arrow-native entry points in "
+        f"goldenmatch._api instead."
+    )
+
+
 def review_config(
     df: pl.DataFrame,
     config: Any,
@@ -811,6 +913,8 @@ def review_config(
 
     # Resolve verify: kwarg AND env flag must both be True
     _do_verify = verify and _verify_enabled_by_env()
+
+    _require_polars_frame(df, "review_config")
 
     # Ensure the df has __row_id__ so collision-rate lookups work
     if "__row_id__" not in df.columns:
@@ -881,6 +985,7 @@ def suggest_from_result(
         nm = _require_kernel()
     except SuggestionsNativeRequired:
         return []
+    _require_polars_frame(df, "suggest_from_result")
     if "__row_id__" not in df.columns:
         df = df.with_row_index("__row_id__").with_columns(pl.col("__row_id__").cast(pl.Int64))
     # Deep-copy + disable rerank (mirror review_config): never mutate the caller's

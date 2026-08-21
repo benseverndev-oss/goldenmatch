@@ -71,8 +71,8 @@ def _pairset_digest(pairs: list[tuple[int, int, float]]) -> tuple[int, str]:
 def _run_one(native: str, prepared, blocking, mk, n_buckets: int) -> dict[str, Any]:
     """Run score_buckets once under the given GOLDENMATCH_NATIVE value."""
     from goldenmatch.backends.score_buckets import score_buckets
-    from goldenmatch.core.bench import bench_capture
     from goldenmatch.core._native_loader import native_enabled
+    from goldenmatch.core.bench import bench_capture
 
     os.environ["GOLDENMATCH_NATIVE"] = native
     label = "native" if native == "1" else "python"
@@ -132,7 +132,10 @@ def main() -> int:
 
     import polars as pl
     from goldenmatch.config.schemas import (
-        BlockingConfig, BlockingKeyConfig, MatchkeyConfig, MatchkeyField,
+        BlockingConfig,
+        BlockingKeyConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
     from goldenmatch.core.matchkey import precompute_matchkey_transforms
 

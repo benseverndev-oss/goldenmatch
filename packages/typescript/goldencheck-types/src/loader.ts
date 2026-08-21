@@ -3,7 +3,14 @@ import * as fs from "fs";
 import * as path from "path";
 import * as url from "url";
 import * as yaml from "js-yaml";
-import type { DomainPack, FieldGroupSpec, FieldSpec } from "./types.js";
+import type {
+  DomainPack,
+  FieldGroupSpec,
+  FieldSpec,
+  IdentityKind,
+  RoleSpec,
+} from "./types.js";
+import { IDENTITY_KINDS } from "./types.js";
 
 /** A domain-pack YAML file is malformed (wrong shape, type, or value).
  *  Distinct from "file not found" so callers can react differently — a
@@ -172,7 +179,83 @@ export function loadDomain(name: string): DomainPack {
     // Mirror the Python dataclass default (field_groups: default_factory=list):
     // groups is always present, defaulting to [] when the pack YAML omits it.
     groups: Array.isArray(raw.groups) ? (raw.groups as FieldGroupSpec[]) : [],
+    roles: parseRoles(raw, filePath),
   };
   _packCache.set(cacheKey, pack);
   return pack;
+}
+
+/** Parse the optional `roles:` block (schema v4).
+ *
+ *  Absent or empty `roles:` yields `{}` — every pack predating v4 keeps
+ *  loading unchanged, which is what makes the block additive.
+ *
+ *  An unknown `kind` is a hard error rather than a coerce-to-`unknown`:
+ *  IDENTITY_KINDS is closed precisely so downstream matching behaviour is
+ *  predictable, and silently accepting a typo would defeat that. */
+function parseRoles(
+  raw: Record<string, unknown>,
+  filePath: string,
+): Record<string, RoleSpec> {
+  const rolesAny = raw.roles;
+  if (rolesAny === undefined || rolesAny === null) return {};
+  if (!isPlainObject(rolesAny)) {
+    throw new DomainPackError(
+      `${filePath}: 'roles' must be a mapping, got ${typeof rolesAny}`,
+    );
+  }
+
+  const roles: Record<string, RoleSpec> = {};
+  for (const [roleName, specAny] of Object.entries(rolesAny)) {
+    if (!isPlainObject(specAny)) {
+      throw new DomainPackError(
+        `${filePath}: roles.${roleName} must be a mapping, got ${typeof specAny}`,
+      );
+    }
+    const spec = specAny;
+
+    const kind = spec.kind;
+    if (kind === undefined || kind === null) {
+      throw new DomainPackError(
+        `${filePath}: roles.${roleName} is missing required 'kind'`,
+      );
+    }
+    if (!(IDENTITY_KINDS as readonly string[]).includes(kind as string)) {
+      throw new DomainPackError(
+        `${filePath}: roles.${roleName}.kind is ${JSON.stringify(kind)}; must be one of ` +
+          `${JSON.stringify([...IDENTITY_KINDS].sort())}`,
+      );
+    }
+
+    const nameHints = spec.name_hints ?? [];
+    if (!Array.isArray(nameHints)) {
+      throw new DomainPackError(
+        `${filePath}: roles.${roleName}.name_hints must be a list, got ${typeof nameHints}`,
+      );
+    }
+
+    const typicalTypes = spec.typical_types ?? [];
+    if (!Array.isArray(typicalTypes)) {
+      throw new DomainPackError(
+        `${filePath}: roles.${roleName}.typical_types must be a list, got ${typeof typicalTypes}`,
+      );
+    }
+
+    // Same key/name agreement rule the types block enforces.
+    if (spec.name !== undefined && spec.name !== null && spec.name !== roleName) {
+      throw new DomainPackError(
+        `${filePath}: roles.${roleName}.name is ${JSON.stringify(spec.name)}, ` +
+          `but it lives under key ${JSON.stringify(roleName)}. The two must agree.`,
+      );
+    }
+
+    roles[roleName] = {
+      name: roleName,
+      kind: kind as IdentityKind,
+      name_hints: nameHints.map(String),
+      typical_types: typicalTypes.map(String),
+      ...(typeof spec.description === "string" ? { description: spec.description } : {}),
+    };
+  }
+  return roles;
 }

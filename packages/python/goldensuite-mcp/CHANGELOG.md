@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [0.6.0] - 2026-08-15
+
 ### Changed
 
 - **`clean_and_dedupe` now runs check→flow→dedupe in-process via GoldenPipe**

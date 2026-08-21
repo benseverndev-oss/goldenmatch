@@ -6,7 +6,7 @@ Two test tiers:
     need no Sail server -- they run anywhere (incl. the normal python lane).
   * SERVER tests (the builders, the 3-part parity gate, determinism) use an
     in-process Sail Spark Connect server; the ``spark`` fixture ``importorskip``s
-    ``pysail``/``pyspark`` so they SKIP without the [sail] extra and run in the
+    ``pyspark`` so they SKIP without a Spark client and run in the
     `sail` CI lane.
 
 Parity gate (entity-id-INDEPENDENT, since one-box mints UUIDv7 while S5 mints
@@ -19,7 +19,10 @@ from __future__ import annotations
 from collections import defaultdict
 
 import pytest
-from goldenmatch.sail.identity import entity_id_for_members, record_id_for_row
+
+pytest.importorskip("pyspark")
+
+from goldenmatch.spark.identity import entity_id_for_members, record_id_for_row
 
 # --------------------------------------------------------------------------
 # Tier 1: pure-helper unit tests (no Sail server needed).
@@ -60,24 +63,8 @@ def test_entity_id_distinct_for_distinct_members():
 # --------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="module")
-def spark():
-    pytest.importorskip("pysail")
-    pytest.importorskip("pyspark")
-    from pysail.spark import SparkConnectServer
-    from pyspark.sql import SparkSession
-
-    server = SparkConnectServer()
-    server.start()
-    _, port = server.listening_address
-    sess = SparkSession.builder.remote(f"sc://localhost:{port}").getOrCreate()
-    yield sess
-    sess.stop()
-    server.stop()
-
-
 def test_derive_record_ids_pk(spark):
-    from goldenmatch.sail.identity import derive_record_ids
+    from goldenmatch.spark.identity import derive_record_ids
 
     df = spark.createDataFrame(
         [(0, "people", 10, "Jon"), (1, "people", 11, "Marg")],
@@ -91,7 +78,7 @@ def test_derive_record_ids_pk(spark):
 
 
 def test_mint_entity_ids(spark):
-    from goldenmatch.sail.identity import entity_id_for_members, mint_entity_ids
+    from goldenmatch.spark.identity import entity_id_for_members, mint_entity_ids
 
     rows = [(0, "people:10"), (0, "people:11"), (5, "people:15")]
     df = spark.createDataFrame(rows, ["cluster_id", "record_id"])
@@ -110,7 +97,7 @@ def _run_meta():
 
 
 def test_same_as_edges_set(spark):
-    from goldenmatch.sail.identity import build_same_as_edges
+    from goldenmatch.spark.identity import build_same_as_edges
 
     pairs = spark.createDataFrame([(0, 1, 0.97), (2, 3, 0.91)], ["a", "b", "score"])
     assignments = spark.createDataFrame(
@@ -132,7 +119,7 @@ def test_same_as_edges_set(spark):
 
 
 def test_nodes_include_singletons_and_records(spark):
-    from goldenmatch.sail.identity import build_identity_nodes, build_source_records
+    from goldenmatch.spark.identity import build_identity_nodes, build_source_records
 
     assignments = spark.createDataFrame(
         [(0, 0), (0, 1), (5, 5)], ["cluster_id", "member_id"]
@@ -235,7 +222,7 @@ def _clusters(assignments):
 
 
 def test_identity_graph_parity(spark, tmp_path):
-    from goldenmatch.sail.identity import build_identity_graph
+    from goldenmatch.spark.identity import build_identity_graph
 
     rows, pairs, assignments = _fixture()
     edges_ref, part_ref = _one_box_graph(
@@ -269,7 +256,7 @@ def test_identity_graph_parity(spark, tmp_path):
 
 
 def test_identity_graph_deterministic(spark, tmp_path):
-    from goldenmatch.sail.identity import build_identity_graph
+    from goldenmatch.spark.identity import build_identity_graph
 
     rows, pairs, assignments = _fixture()
     source = spark.createDataFrame(rows, ["__row_id__", "__source__", "pk", "name"])

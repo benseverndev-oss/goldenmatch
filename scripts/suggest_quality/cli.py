@@ -53,6 +53,14 @@ def _pin_determinism(native: str | None = None) -> None:
     - GOLDENMATCH_AUTOCONFIG_MEMORY=0  disables cross-run memory (CI-safe)
     - PYTHONHASHSEED=0                 stable dict iteration
     - POLARS_SKIP_CPU_CHECK=1          avoid Windows WMI hang
+    - GOLDENMATCH_AUTOCONFIG_DETERMINISTIC=1  drops the auto-config search's
+      wall-clock budgets so the committed config depends on the code and the
+      data, not on how fast and how loaded the runner is (#2532). Without it
+      this gate's numbers are host-dependent, which is what blocked blessing
+      `dblp_acm` / `historical_50k` into the scorecard: a gate over a
+      wall-clock-dependent value can go red with no code change and green
+      while masking a real one. Costs unbounded runtime, which is the right
+      trade for a gate and the wrong one for an interactive run.
     - GOLDENMATCH_NATIVE               passed as --native flag value, if given
 
     Called once at the top of main() before deferred imports.
@@ -60,6 +68,7 @@ def _pin_determinism(native: str | None = None) -> None:
     os.environ["GOLDENMATCH_AUTOCONFIG_MEMORY"] = "0"
     os.environ.setdefault("PYTHONHASHSEED", "0")
     os.environ.setdefault("POLARS_SKIP_CPU_CHECK", "1")
+    os.environ.setdefault("GOLDENMATCH_AUTOCONFIG_DETERMINISTIC", "1")
     if native is not None:
         os.environ["GOLDENMATCH_NATIVE"] = native
 

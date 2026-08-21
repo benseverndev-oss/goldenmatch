@@ -6,6 +6,1144 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [3.14.0] - 2026-08-20
+
+### Changed
+
+- **Distributed Fellegi-Sunter at 250M: 2,765.8s -> 669.96s (4.13x), with 3.1x
+  less executor CPU and zero spill.** Three changes, all on the SHIPPED Spark
+  path, all producing a byte-identical trained model (`match_weights` and
+  `m_probs` unchanged, average precision 0.704939 and best F1 0.686126
+  unchanged, identical pair counts). Seconds per million pairs: **1.192 ->
+  0.289**.
+
+  1. **The candidate frame is no longer materialised.** The block self-join
+     already holds both records of every pair; the tier projected that down to
+     `(a, b)` ids and paid two more joins to fetch back the columns the
+     projection dropped -- for counting, and again for scoring. One counts pass
+     went from 7 exchanges / 3 sort-merge joins to 3 / 1, the score path from
+     8 / 4 to 4 / 2. Shuffle write 438.1 -> 113.8 GB and memory spill 201.3 GB
+     -> **0** at 250M.
+  2. **The weight lookup named the level once per level.** `when(level == 0,
+     w0).when(level == 1, w1)...` -- and `level` is the whole gamma expression
+     with the jar scorer call inside it. Catalyst's subexpression elimination
+     does not hoist a UDF out of conditionally-evaluated CASE branches, so the
+     scorer ran once per branch. Now an array index naming the level once.
+  3. **The level ladder named the similarity once per threshold.**
+     `fs_level_expr` sums `when(sim >= t, 1)` per threshold. `gamma_frame`
+     projects each similarity by name first, which removed 94% of the bucketing
+     cost. This pays in BOTH the counts and score stages.
+
+  Measured, not inferred: `--attribute-score` splits the score stage into
+  layers (join / similarities / bucketing / weight lookup) and is what found
+  (2) and (3), after three attempts at reasoning from plan shape had failed.
+  At 50M the score stage went 347.07s -> 82.20s and counts 130s -> 80.62s.
+
+### Added
+
+- **`GOLDENMATCH_SPARK_FUSED_BLOCK_JOIN`** (default `1`) -- forces the legacy
+  three-join candidate path when set to `0`, so the comparison stays takeable
+  in both directions from one build.
+- `spark.config_pipeline.pass_candidates_joined` / `pass_joined` /
+  `score_source` / `fused_pass_frames`, and `spark.em.gamma_frame`: the joined
+  and projected shapes the above is built from. `id_col` must be unique -- every
+  caller generates `__row_id__` to be exactly that.
+
+### Fixed
+
+- Multi-pass candidates de-duplicate by **pass priority** -- each pair assigned
+  to the lowest-indexed pass that produces it, tested inside the join from the
+  two records -- instead of a `distinct()` over a frame with O(pairs) rows.
+  Same candidate set; one fewer shuffle of the largest frame this tier builds.
+- The pure-Python scoring fallback combines matchkeys with `greatest` over
+  per-matchkey nulls rather than `groupBy("a", "b").agg(max(score))`, which
+  shuffled O(pairs) rows to combine values every matchkey computes from the
+  same joined row. The jar-backed path already did this.
+- A stray second `## [Unreleased]` heading in this file split 3.9.0's own
+  entries into a phantom section. Removed; the content below it shipped in
+  3.9.0.
+
+## [3.13.1] - 2026-08-19
+
+
+### Fixed
+
+- **`u` estimation cost the TABLE, not the sample, on the distributed Spark
+  path.** `random_pairs` draws ~1,415 rows regardless of source size (the
+  inverse of r(r-1)/2 for a 1M-pair budget), but getting them cost THREE full
+  passes over the source: a `count()` purely to turn the pair budget into a
+  sampling fraction, plus a self-join whose two sides both referenced the
+  UNMATERIALISED sample, so the scan and hash filter ran twice. Measured on a
+  50M-row Spark cluster the stage took 98.63s where Splink's took 43.29s, while
+  at 1M it was FASTER than Splink (8.48s vs 13.69s) -- 50x the rows made it
+  11.6x slower, which a fixed-size sample should not do. The sample is now
+  cached before the self-join, and `estimate_u_distributed` /
+  `train_em_distributed` accept an optional `total_rows` so a caller that has
+  already counted the frame does not pay for a second count. Three passes become
+  one. `total_rows` is optional and omitting it keeps the previous behaviour, so
+  this is not a breaking change.
+
+- **`candidates_compared` was structurally 0 at scale, and two auto-config
+  decisions read it as a signal (#2639).** `scorer.py` skips the candidate-count
+  loop above 10,000 blocks -- counting calls `Block.n_rows()`, which
+  materialises -- leaving a 0 that means *not counted*, indistinguishable from a
+  measured zero. At 100k rows person had 84,293 blocks and biblio 22,151, so both
+  were past the gate: **biblio reported `candidates_compared=0` having scored
+  1,493,182 pairs at 99.9998% above threshold.** The two consumers failed in
+  opposite directions -- `rule_blocking_singleton_trap` treated every
+  fine-grained shape as the trap and offered to *coarsen* its blocking, while the
+  controller's LLM escalation early-returned on the same zero and was silently
+  dead at scale. New `ScoringProfile.candidates_counted` separates the cases and
+  each consumer now states which one it means. `health()` is deliberately
+  unchanged: its clause needs both counters zero, where `mass_above_threshold` is
+  necessarily 0.0 and the next clause returns RED anyway. TypeScript gets the
+  field for shape parity only -- it has no skip gate, so no bug, and mirroring
+  the guard would change behaviour for a state it never produces.
+
+- **Zero-config no longer refuses healthy fine-grained blocking.** The blocking
+  RED rule graded skew with `block_sizes_p99 > 10 * (n_rows / n_blocks)`, whose
+  denominator is the mean block size -- pinned near 1 whenever blocking is
+  fine-grained, so the bar collapsed toward "any block over ~12 rows". Measured
+  at 100,000 rows, a shape with 84,293 blocks, 0.976 reduction and no singletons
+  graded RED, and at `n_rows >= 100_000` a RED blocking profile refuses the run.
+  Its largest block owned **1.9%** of the candidate pairs. The rule now measures
+  work concentration -- the largest block's share of `total_comparisons` against
+  `max(0.10, 4 / n_blocks)` -- which also catches a case the percentile missed
+  entirely: one block of 10,000 rows among 5,000 blocks owns 98.5% of the work
+  but sits *above* p99 rather than at it. New `BlockingProfile.
+  largest_block_pair_share`; ported to the TypeScript surface in lockstep.
+
+## [3.13.0] - 2026-08-15
+
+<!-- README-callout
+**Fellegi-Sunter training runs distributed on Spark.** The E-step reads only the
+comparison vector, so identical vectors collapse to one counted row and the whole
+step becomes a Spark `GROUP BY` over agreement patterns -- the cluster counts, the
+driver only fits. Training cost tracks DISTINCT vectors (bounded by
+`prod(levels + 1)`), not pairs: 1M -> 5M rows grew candidate pairs 5.00x and the
+distributed counting stage 5.25x, while distinct patterns grew 3.0% (433 -> 446)
+and driver-side EM stayed at 0.01s. Runs on jar-only executors via
+`goldenmatch-spark`, off the same Rust kernel every other surface uses.
+-->
+
+### Added
+- **Segment labels: which party each column describes (#2574).**
+  `goldenmatch.core.segments` is a read-only consumer of InferMap's identity
+  layers — `segments_from_schema` reads them off an `InferredSchema` GoldenPipe
+  already produced (free), `detect_segments` detects on demand, and
+  `column_segments` / `is_heterogeneous` are the helpers per-block configuration
+  (#2575) needs as its input. Deliberately inert with respect to matching: it
+  labels, it does not vary scorers, thresholds or blocking, and nothing here
+  reaches the vectorized fast paths or the global-EM assumptions. InferMap stays
+  an optional dependency (lazy import, structural adaptation, fail-open to `[]`).
+- **Zero-config now says when a frame looks like several sources concatenated
+  together, and routes to `match_df` (#2540).** `dedupe_df` compares candidate
+  pairs WITHIN one frame. When that frame is two catalogues stacked with
+  `pl.concat`, most of the candidate set is wrong by construction -- pairs drawn
+  from a single source, which a cross-source ground truth can never mark correct.
+  Measured on the repo's own benchmarks: **48.3%** of DBLP-ACM's candidate pairs
+  and **73.4%** of Abt-Buy's are within-source. The failure was entirely silent.
+
+  New `core/concat_sources.py` detects the shape and logs a warning naming
+  `match_df`. It deliberately does **not** constrain matching: `match_df` already
+  owns cross-source linkage, so a source constraint in dedupe would be a second
+  authoritative owner for one capability, against the architecture frame -- this
+  routes rather than duplicates. Inferring a source and silently dropping pairs
+  would also turn a heuristic into a correctness dependency; a warning costs a
+  log line when wrong, a dropped true match costs recall invisibly.
+
+  **Contiguity is the entire signal.** `pl.concat` lays source A's rows down
+  first, so a genuine concatenation leaves a step -- a column goes null, or
+  changes value-shape, at one row boundary and stays that way. Real single-source
+  messiness is scattered, not contiguous, which is what keeps this from being
+  another plausible-but-wrong heuristic. The step test is tolerant (97% purity),
+  because an exact two-run test missed abt_buy: `manufacturer` is null for all
+  1081 Abt rows AND 6 Buy rows.
+
+  Validated against the benchmark corpus before shipping -- it fires on all three
+  known concatenated benchmarks at exactly the true source boundary, and stays
+  silent on all four genuine single-source corpora:
+
+  | corpus | result | boundary | true split |
+  |---|---|---|---|
+  | `dblp_acm` | fires (format step on `id`) | 2616 | DBLP2 = 2616 rows |
+  | `abt_buy` | fires (null step on `manufacturer`) | 1081 | Abt = 1081 rows |
+  | `amazon_google` | fires (null step on `title`/`name`) | 1363 | Amazon = 1363 rows |
+  | `person` / `household_hardneg` / `cotenant_hardneg` / `ncvr_synthetic` | silent | -- | genuine single-source |
+
+  Advisory and fail-open: any error returns `None`, and large frames are strided
+  (a step survives uniform striding; head-sampling would see only one source).
+- **ODCS (Open Data Contract Standard) dialect for the semantic-layer certifier
+  (`goldenmatch.semantic.odcs`).** A data contract declares its identity right in
+  the schema — `primaryKey: true` (ordered by `primaryKeyPosition` for a composite
+  key) and `unique: true` — and nothing checks that promise against the data, so a
+  duplicated key makes the contract's own uniqueness guarantee false. ODCS
+  `primaryKey` maps one-to-one onto MetricFlow `entity (primary)` / Cube / Malloy
+  `primary_key`, so the same certifier applies. New: `parse_odcs_contract` (reads
+  the v3 `schema:`/`properties:` shape, tolerant of the legacy v2
+  `dataset:`/`columns:`/`isPrimary` spelling on read — no
+  `open-data-contract-standard` dependency), `odcs_identity_keys` (the composite
+  primary key **plus each standalone `unique` property**), `certify_odcs_contract`
+  (bridge to wedge A — one certificate per declared key, with the object's numeric
+  properties as the fan-out measures) and `emit_odcs_from_crosswalk` (bridge to
+  wedge B — declares the resolved key as `primaryKey`, provenance embedded in
+  `customProperties`). `certify_semantic_model` auto-detects `kind: DataContract`
+  as the `"odcs"` dialect. Library-only, advisory, parity-free.
+- **Malloy (malloydata.dev) BI dialect for the semantic-layer certifier
+  (`goldenmatch.semantic.malloy`).** Malloy's unit is a `source` whose identity is
+  its declared `primary_key`, with `join_one`/`join_many`/`join_cross` riding on it
+  — structurally the same as Cube's `primary_key` + joins, so the same certifier
+  applies. New: `parse_malloy_models` (a structured `{sources: [...]}` projection
+  OR raw `.malloy` DSL text via a focused declaration parser), `malloy_join_keys`,
+  `certify_malloy_joins` (bridge to wedge A — certifies the one-side key of each
+  join, picking the declaring side for `join_many` and skipping `join_cross`),
+  `emit_malloy_source` (round-trips through the DSL parser) and
+  `emit_malloy_from_crosswalk` (bridge to wedge B — declares the resolved key as a
+  `primary_key` + a `join_one` to it, returning `(malloy_text, provenance)` since
+  Malloy has no metadata slot in this subset). `certify_semantic_model` auto-detects
+  a top-level `sources:` as the `"malloy"` dialect. Library-only, advisory,
+  parity-free.
+- **Feast (feature-store) dialect for the semantic-layer certifier
+  (`goldenmatch.semantic.feast`).** A feature store is a join graph one layer over
+  into ML: a `FeatureView` is keyed on an `Entity`'s `join_keys`, and a duplicated
+  join key fans out every aggregated feature (a `sum`/`count` double-counts), a
+  fragmented entity splits its own feature history (training-serving skew), and
+  non-conformed keys can't join. Feast's `Entity(join_keys=[...])` maps one-to-one
+  onto MetricFlow `entity (primary)` / Cube `primary_key`, so the same certifier
+  applies. New: `parse_feast_models` / `parse_feast_objects` (declarative doc or
+  duck-typed Feast SDK objects -- no `feast` dependency), `feast_join_keys`,
+  `certify_feast_feature_views` (bridge to wedge A -- certifies each view's entity
+  join key with the view's **features as the fan-out measures**),
+  `emit_feast_from_crosswalk` (bridge to wedge B -- declares the resolved key as the
+  entity `join_keys`), and `emit_feast_yaml` (round-trips through
+  `parse_feast_models`). `certify_semantic_model` now auto-detects a top-level
+  `feature_views:` as the `"feast"` dialect, so the CLI / MCP / REST front doors
+  certify a feature repo with no new surface. Library-only, advisory, parity-free --
+  it never mutates a feature or a key.
+
+### Fixed
+- **The config healer no longer goes silent on distributions with exact
+  duplicates (#2497).** `ScoreDiagnostics::dip()` anchors on the RIGHTMOST
+  prominent peak and walks left to the adjacent minimum. When a corpus contains
+  genuine exact duplicates, their hard spike at 1.0 sits in the top bin behind a
+  near-empty notch — and that spike *is* the rightmost prominent peak (on the
+  measured NCVR-synthetic shape its left trough is 8 against a peak of 1468, so
+  the 3x prominence test passes comfortably). The "valley" therefore collapsed
+  onto the notch just below the spike instead of the real bimodal boundary:
+  `dip()` returned 0.9583 against a threshold of 0.98, `threshold_rule`'s
+  `DIP_MIN_GAP` check saw a gap of 0.0217, and `review_config` emitted **zero
+  suggestions** — the healer said nothing about a threshold that was plainly
+  wrong. The heuristic was working as written; the written heuristic had no
+  notion that a degenerate one-bin spike at the top of the range is not a mode.
+
+  `dip()` now skips a qualifying peak whose valley sits within
+  `MIN_VALLEY_HEADROOM_FRAC` (6%) of the top of the **observed range**, falling
+  back to the next qualifying peak below it. On the measured shape that yields
+  0.8542 — the real boundary — which clears `DIP_MIN_GAP` and fires. A fraction
+  rather than an absolute distance because the histogram bins over `[min, max]`
+  of the *data*: on a corpus whose scores all sit in `[0.92, 0.99]` an absolute
+  0.05 would be 71% of the entire range and reject nearly every valley. The
+  constant sits at the geometric midpoint of the two measured neighbours, which
+  are one and two bin-widths of a 24-bin histogram (0.0436 must be rejected,
+  0.0869 must be kept).
+
+  The two rejected alternatives are recorded because both look right and are
+  not: preferring the *deepest* valley returns the 0.04 left-tail sliver on the
+  right-skewed shape, regressing the very test that motivated right-anchoring;
+  and requiring the peak to carry a shoulder rejects the textbook bimodal
+  `(0.0, 100), (0.5, 2), (0.9, 100)`, whose 2% neighbour is on the same side of
+  any workable cutoff as the degenerate spike.
+
+  A new `exact_match_spike` golden joins the cross-surface fixture set. None of
+  the existing six has a top-bin spike, so without it the TS/wasm surface could
+  have kept an unfixed kernel with every parity test still green — the same
+  "a check exists and does not fire" shape as the bug. Against the pre-fix
+  kernel the new case yields no suggestions at all, so Rust, Python-native and
+  TS/wasm parity on it is what proves the fix crossed each surface boundary; the
+  embedded wasm is rebuilt in this change accordingly.
+- **The auto-config search can now be made host-independent, so gates that pin
+  its output stop being unstable by construction (#2532).** Two layers of the
+  search stop on a WALL CLOCK: the controller's `ControllerBudget.max_seconds`
+  (which ends the iteration loop with `StopReason.BUDGET_TIME`) and the five
+  per-indicator budgets in `core/indicators.py` (which make an indicator return
+  `None` or a default, silently changing what the indicator-aware rules decide).
+  Either one makes the committed config a function of **machine speed and load**
+  rather than of the code and the data — the same input on the same commit can
+  commit a different config on a slow runner. Anything pinning controller output
+  therefore has a check that can go red with no code change, and green while
+  masking a real one; observed directly on `dblp_acm`, which flipped between
+  `BUDGET_ITERATIONS` (4 iterations) and `BUDGET_TIME` (3 iterations) across
+  runs of identical code on one machine.
+
+  New `GOLDENMATCH_AUTOCONFIG_DETERMINISTIC=1` (`core/autoconfig_determinism.py`)
+  drops every elapsed-time cut from the search, leaving the iteration caps as the
+  only stopping rule: same code + same data give the same config on any host, at
+  the cost of an unbounded runtime. Off by default — an interactive run wants a
+  bounded wait more than a bit-reproducible search. It is deliberately **not** a
+  config field: it describes the harness running auto-config, not the dataset
+  being configured. Two behaviours are load-bearing and tested: the env var is
+  read at CALL time (never cached in a module constant, the stale-import trap),
+  and a budget of `<= 0.0` still means "this indicator is switched OFF" — a
+  semantic switch, not a time limit — so deterministic mode never re-enables a
+  disabled indicator.
+
+  Both surfaces that pin controller output now go through it. The parity-pin
+  harness owns the mode inside `pin_config` itself, so the regenerate side and
+  `test_autoconfig_parity_pins_unchanged` pin the same thing, and it *refuses*
+  to pin a run that reports `BUDGET_TIME` anyway — unreachable in deterministic
+  mode, so it can only fire if the flag failed to reach the controller, which is
+  precisely the silent failure this change removes. The `autoconfig_quality`
+  scorecard and the `suggest_quality` gate set it alongside their existing
+  `GOLDENMATCH_AUTOCONFIG_MEMORY=0` / `PYTHONHASHSEED=0` determinism pins.
+- **The blocking-recall warnings now claim only what the estimate supports, and
+  surface the trade-off the ranking makes silently (#2540).**
+  `estimated_recall` is measured against the pairs the matchkey emits over an
+  *unblocked* sample, so its denominator includes the scorer's false positives -
+  pairs blocking is right to drop. Its ceiling is therefore that population's
+  true-match fraction rather than 100% (measured on DBLP-ACM: 40.5% true). The
+  low-recall warning compared that estimate against an absolute 30% floor and
+  asserted *"expect most true matches to be missed"*, which the estimate cannot
+  support: on DBLP-ACM `title[:5]` scores 0.037 while genuinely retaining
+  **98.2%** of true pairs, so the warning fired while an excellent candidate sat
+  in the list. It now reports the figure as a lower bound and says why.
+
+  A second, **relative** warning carries the actionable signal. Ranking is
+  `score x estimated_recall` with no recall floor, so a key that drops most
+  matchable pairs can win on comparison count alone and nothing said so. When the
+  ranked pick retains materially less than the best candidate measured, both are
+  now named with their costs — on DBLP-ACM: *chosen `title[:5] + authors[:5]` at
+  23.5% and 1,667 comparisons, versus `title[:3]` at 59.5% and 117,348* — so a
+  2.5x retention trade for 70x fewer comparisons is visible rather than implicit.
+  Comparing two estimates over the same target population cancels the estimator
+  bias above, which is exactly what an absolute floor cannot do.
+
+  Ranking behaviour is unchanged; these are log-only. The underlying objective
+  problem (no recall floor) and the biased denominator are tracked on #2540.
+- **`build_resolved_crosswalk` respects the caller's `config.identity` instead
+  of replacing it (#2521).** It constructed a fresh `IdentityConfig` with
+  `backend="sqlite"` hardcoded and `emit_singletons` omitted, so a
+  caller-supplied identity section was discarded wholesale -- silently, with no
+  diagnostic. Those two settings are the only single-node scale levers the
+  identity docs describe (`emit_singletons: false`, and moving the store to
+  Postgres for its bulk `COPY` write path), which made the documented scale
+  guidance unreachable through this entry point. A user who set
+  `identity.backend: postgres` and called this function still got SQLite with
+  singletons on, and at ~2x the documented ~100k-row SQLite ceiling the runtime
+  advisory would name a fix the entry point could not apply.
+
+  The function now merges rather than replaces, overriding only what it is
+  inherently deciding -- `enabled`, `source_pk_column`, `dataset`, and the
+  sqlite `path` when a `store_path` was passed. `backend`, `connection` and
+  `emit_singletons` are left to the caller, and the identity store is opened
+  with the configured backend rather than a second hardcoded
+  `IdentityStore(backend="sqlite", ...)`.
+
+  Backward compatible by construction: `IdentityConfig`'s defaults are
+  `backend="sqlite"` and `emit_singletons=True`, exactly the behaviour that was
+  hardcoded, so a config whose `identity` was never touched resolves to an
+  identical run. Two related sharp edges are also closed -- passing
+  `store_path` alongside a non-sqlite backend now warns instead of silently
+  ignoring the path, and the returned `ResolvedCrosswalk.store_path` reports
+  `None` in that case rather than a file the run never wrote.
+- **Auto-config no longer scores a field that every candidate pair agrees on by
+  construction (#2526).** Blocking makes its key constant inside each block, so
+  when the same column is also a scored field in the weighted matchkey it
+  contributes its full weight to every pair as an *offset* with zero
+  discriminative power: it cannot separate a match from a non-match, it only
+  shifts the score distribution up and flattens the threshold's effect. Measured
+  on DBLP-ACM, where blocking is static on `__title_key__` and the same column
+  was scored at weight 0.8, it supplied 18.6% of the weighted score to 100% of
+  candidates while distinguishing none of them -- F1 0.4593 -> **0.5645**
+  (precision 0.3010 -> 0.3984, recall held at 0.9685, largest cluster 43 -> 35).
+
+  The matchkey threshold is rescaled by the surviving weight share so the
+  decision boundary stays at the same absolute score. That is load-bearing
+  rather than cosmetic: dropping the field at an unchanged threshold measured
+  F1 0.6855 against 0.6894 before it, a small regression, because removing an
+  18.6% constant makes the same nominal bar materially stricter.
+
+  Two conditions gate the rule and both are necessary. Every *pass* must key on
+  the field -- under `multi_pass` a pair produced by pass 2 can disagree on pass
+  1's key, so the field still carries signal. And every *transform* on that key
+  must preserve equality: sharing a block under a lossy transform does not mean
+  sharing a value. The second condition is what keeps the electronics benchmark
+  correct, since all three of `abt_buy`'s passes key on `manufacturer` but do so
+  via `soundex` and `substring:0:5` -- "Sony" and "Sonny" share a soundex block
+  while being different strings, so `manufacturer` genuinely discriminates
+  inside the block. The transform list is a whitelist, so an unrecognised
+  transform is assumed lossy rather than assumed safe.
+- **A domain-extracted field no longer becomes a standalone identity claim
+  unless it is actually an identifier (#2526).** Auto-config promoted every
+  `exact` entry in `_DOMAIN_SCORER_MAP` to its own exact matchkey -- "same value
+  implies same entity", on its own, with nothing else consulted. On DBLP-ACM
+  that produced `domain_exact_title_key` over `__title_key__`, which is the
+  first significant *word* of the title, so zero-config asserted that two papers
+  whose titles start with the same word are the same paper: 33,563 asserted
+  pairs against 2,224 in ground truth, clusters up to 96 members, precision
+  0.068.
+
+  Two mechanisms combined. The eligibility floor was `cardinality_ratio < 0.01`,
+  which only rejects *near-constant* columns -- `__title_key__` sits at 0.29 and
+  cleared it by 29x, where an identity claim needs cardinality near 1.0. And the
+  per-column weight in `_DOMAIN_SCORER_MAP`, which is the author's own statement
+  of confidence (0.2 for `__color__`, 0.8 for `__title_key__`, 1.0 for
+  `__model_norm__` and `__sw_part_num__`), was read and then discarded when the
+  standalone matchkey was built -- so a weak partial signal became a
+  full-strength identity claim regardless.
+
+  A domain `exact` field now stands alone only when its declared weight says it
+  is an identifier and its cardinality agrees; anything weaker folds into the
+  weighted matchkey *at its declared weight*, so the signal is still compared,
+  just not trusted on its own. Measured on DBLP-ACM zero-config: F1
+  **0.1277 -> 0.4593**, precision 0.068 -> 0.301, largest cluster 96 -> 43.
+  Retaining the signal beats dropping the matchkey outright, which scored
+  0.2815.
+
+  This does not close the DBLP-ACM gap to the ~0.92 configured runs reach. The
+  remainder is a separate recall problem that the controller already reports
+  (`failing_subprofile=scoring`, best-effort RED) and is tracked apart from this.
+
+### Changed
+- **The FS link-threshold refit is ON by default (#2518 follow-up).** The FS
+  path is otherwise non-iterated: it commits a fixed 0.50 link cutoff, which
+  over-merges on shapes where a shared attribute co-blocks non-matches (distinct
+  households sharing a surname; co-tenants sharing an address). With the refit
+  on, the cutoff is chosen from the actual scored-pair distribution -- a
+  bimodality-gated valley, accepted only when it both reduces the largest
+  cluster and strands under 1% of matched records as singletons. On the lever
+  panel that recovers `household_hardneg` 0.9687 -> 1.0000 and
+  `cotenant_hardneg` 0.4193 -> 0.9963, and is a no-op everywhere else.
+  `GOLDENMATCH_FS_REFIT_THRESHOLD=0` is the kill-switch, byte-identical to the
+  fixed cutoff.
+
+  This default was flipped on once before (#2377) and reverted after five red
+  nights (#2387), so the evidence bar here is the specific one that failure
+  established: **validate on the panel that gates the change, not the panel that
+  motivated it.** #2377 rested on `ab_lever` + QIS while the gating panel went
+  unrun. This flip was measured with that gate itself -- `scripts.suggest_quality`,
+  single-variable `=0` vs `=1` on one sha, native kernel present. The fast tier
+  is byte-identical on every metric with both arms PASS; `ncvr_synthetic`
+  `convergence_final_f1`, the metric that reddened the nightly, reads **0.9847 in
+  both arms** -- exactly its `=0` value in the #2387 A/B, where default-on scored
+  0.8881. The heavy `gym-gate` tier was run with `=1` against a baseline blessed
+  with `=0`. Mechanically the flip is a no-op on that dataset because the valley
+  detector no longer finds any candidate above 0.50 there.
+
+  The same change widens the two gates that failed to fire in #2387, since a
+  check that exists and does not run is what turned a catchable defect into a
+  five-night red. `bench-suggest-quality`'s push filter now includes
+  `probabilistic.py` and `pipeline.py` -- it listed only the suggest paths, so a
+  refit edit ran no suggester gate at all. `fs-lever-gate`'s PR tier now includes
+  `ncvr_synthetic`, the dataset that caught the regression, which had been left
+  to the nightly.
+
+### Added
+- **Ontology-layer (RDF/OWL/SHACL) native identity provider
+  (`goldenmatch.semantic.ontology`).** The semantic-layer wedge one level up: an
+  ontology *asserts* identity (`owl:hasKey`, `owl:InverseFunctionalProperty`,
+  `owl:sameAs`) but resolves it only by brittle exact-match. GoldenMatch fills
+  the gap bidirectionally — **consume** an OWL/RDF ontology to extract its
+  declared identifying keys (`parse_ontology`, `ontology_identity_keys`) and
+  certify exactly those keys against instance data
+  (`certify_ontology_keys`, bridging the key-integrity certifier); **emit** the
+  resolved identity as RDF (`emit_sameas_graph`: `owl:sameAs` + W3C PROV-O
+  provenance) and a conformance shape (`emit_identity_shacl`). `rdflib` is an
+  optional dependency (`pip install goldenmatch[ontology]`), lazy-imported so
+  `from goldenmatch.semantic import …` never requires it; GoldenMatch does not
+  reimplement an OWL reasoner or triple store — it is the identity provider for
+  them. Library-only, advisory. See ADR 0053.
+- **`strategy="token"`: DF-pruned token blocking for free text (#2488).** Every
+  candidate the block analyzer can generate is an *exact* key -- a prefix, a
+  soundex code, or a compound of two -- so each record lands in exactly one
+  block and any true pair disagreeing on that one derived value is lost before
+  scoring. On free-text product titles that is most of them. Token blocking
+  indexes each record under every token it carries, so two records are
+  candidates when they share *any* token. Cost is controlled by
+  document-frequency pruning rather than a block-size cap: a token in `D`
+  records forms a block of `D` and contributes `D(D-1)/2` pairs, and the
+  frequent tokens ("software", "for") are expensive precisely because they do
+  not discriminate. `max_df` defaults to `max_df_ratio * n` clamped to
+  `[10, 1000]`, so the cap is bounded at any frame size.
+
+  Measured on Amazon-Google (4589 records, 1300 truth pairs), pair recall vs
+  candidate pairs generated:
+
+  | scheme | recall | pairs | RR |
+  |---|---|---|---|
+  | `manufacturer[:5]` (what zero-config committed) | 7.15% | 31,232 | 0.9970 |
+  | `title[:3]` | 45.92% | 99,744 | 0.9905 |
+  | MinHash/LSH word-shingles, best of six settings | 55.85% | 54,554 | 0.9948 |
+  | **`token` defaults** | **98.15%** | 183,221 | 0.9826 |
+  | `token` at `max_df=25` | 87.62% | 52,777 | 0.9950 |
+
+  Note `token` at `max_df=25` dominates `title[:3]` on *both* axes -- nearly
+  double the recall for roughly half the pairs. This complements `lsh` rather
+  than replacing it: MinHash estimates Jaccard over the whole token set, so it
+  needs substantial overlap, while cross-vendor titles often share two or three
+  discriminative tokens out of fifteen.
+
+  Python-only for now (`parity/goldenmatch.yaml`); the TS port is sequencing,
+  not a barrier -- there is no kernel or model involved.
+
+  **Auto-suggest can propose it, but that is OPT-IN and default OFF**
+  (`GOLDENMATCH_TOKEN_BLOCKING=1`). Committing a token plan automatically took
+  Amazon-Google's end-to-end F1 from 0.1014 to **0.0000**, below the #2470
+  quality floor. Measured across three runs in one environment:
+
+  | run | iteration 0 | failing subprofile | F1 |
+  |---|---|---|---|
+  | clean `main` | 430.7s | scoring | 0.1014 |
+  | token candidates on | 424.1s | blocking | 0.0000 |
+  | + total-pair cost term | 429.3s | blocking | 0.0000 |
+
+  Two things follow, and they point in opposite directions. The auto-config
+  time-budget blowout at iteration 0 is **pre-existing on `main`** (~430s in
+  all three, baseline included), so it is not caused by this work. But the F1
+  collapse is: the baseline reproduces 0.1014 exactly, and enabling token
+  candidates takes it to zero -- the failing auto-config subprofile flips from
+  `scoring` to `blocking`, `build_token_blocks` never runs, and the committed
+  RED config yields no candidate pairs. That integration gap is not diagnosed,
+  and a plan that finds nothing is strictly worse than a 7%-recall key, so the
+  default stays off until the benchmark says otherwise.
+
+### Fixed
+- **The FS threshold-refit guard no longer accepts a cutoff that shatters
+  correct clusters (#2518).** `fs_refit_link_threshold` accepted a valley
+  candidate whenever it reduced the largest cluster -- a single-outlier
+  statistic. One scalar over the whole dataset cannot see damage below the
+  maximum, so a candidate that fixed the one genuinely over-merged cluster was
+  accepted no matter how many correct clusters the raised cutoff broke apart.
+  That is why `GOLDENMATCH_FS_REFIT_THRESHOLD` has shipped default-OFF since
+  #2387. The max test is now ANDed with a global one, `_expelled_share`: the
+  share of records matched at the default that the candidate would strand as
+  singletons, capped at 1%. The two regimes are asymmetric, which is what makes
+  this separable -- over-merge repair *regroups* records (splitting a
+  surname-collapsed cluster of 8 into 3s leaves everyone matched) while
+  shattering a correct size-2 cluster *expels* both of its members. Measured on
+  the FS lever panel, valley candidate vs default: `person` 0.1020 expelled /
+  ΔF1 −0.0616 (reject), `household_hardneg` 0.0000 / +0.0313 and
+  `cotenant_hardneg` 0.0006 / +0.5770 (accept) -- a ~160× separation.
+  **This changes no decision the live panel currently makes**: the max test
+  already calls all three correctly, so the guard picks the F1-optimal cutoff
+  on every panel dataset both before and after. What the second criterion buys
+  is the ncvr-shaped case the max is structurally blind to, which no panel
+  dataset exhibits today -- `person` is the live cluster-shattering shape the
+  1% cap is calibrated against, not a regression this fixes. The case that
+  actually separates the two criteria is carried by a unit test,
+  `test_rejects_when_correct_clusters_would_be_shattered`, which asserts the
+  max test alone WOULD accept and that the shipped guard declines. The
+  linked-pair-count bound proposed in #2387
+  as the alternative remedy is falsified: person's drop (0.1161) falls between
+  the two correct accepts (0.0608 / 0.7341), so no bound on it can classify all
+  three. The flag stays default-OFF -- this fixes the criterion; flipping the
+  default is a separate decision that needs a green nightly
+  `bench-suggest-quality`, which no PR gate runs.
+- **A probabilistic run now reports the link cutoff it applied, and says when
+  nothing chose it (#2483).** The FS link cutoff is resolved through three
+  precedence steps -- configured `mk.link_threshold`, the EM-calibrated
+  per-dataset cutoff, then a fixed default -- and the run reported none of it.
+  A caller could not tell a deliberate threshold from a default, which is how
+  the reporter got a 94.4% match rate (2,554 distinct names fused into one
+  entity) with no thread to pull: `mk.threshold` is the *weighted* matchkey's
+  field and inert here, so sweeping it changed nothing, and they went through a
+  16-cell matrix of unrelated FS env knobs before finding the cause.
+  - `DedupeResult.stats["fs_link_thresholds"]` now carries
+    `{matchkey: {"link_threshold": float, "source": ...}}`, where `source` is
+    `configured` / `calibrated` / `fallback`. Absent on non-probabilistic runs.
+    Provenance is derived by `probabilistic.link_threshold_source`, next to the
+    resolver, so the report cannot drift from the precedence it describes.
+  - A `fallback` cutoff that links more than 50% of records into multi-member
+    clusters now emits a warning naming `link_threshold` and carrying the cutoff
+    and the rate. A warning, not a rejection, and only for `fallback` -- a
+    configured or EM-calibrated cutoff that links a lot is the caller's call.
+    Measured on DBLP-ACM: the fallback run reports `0.5 / fallback` at a 25.3%
+    match rate (correctly silent); an explicit `0.95` reports `configured` at
+    1.24%.
+
+  This makes the failure legible; it does not change which cutoff is chosen.
+  Picking the cutoff from the scored-pair distribution already exists as
+  `fs_refit_link_threshold` (`GOLDENMATCH_FS_REFIT_THRESHOLD`) and stays default
+  OFF: enabling it cost -0.0966 F1 on `ncvr_synthetic` (#2387) through a defect
+  in its cluster-shape accept criterion, tracked separately.
+- **Blocking-candidate recall is measured against the pairs the scorer would
+  match, and for every candidate (#2513).** Three defects in `estimate_recall` /
+  `analyze_blocking`, all in how the recall number was produced and consumed.
+
+  1. *Wrong denominator.* Candidates were scored against pairs whose
+     Jaro-Winkler similarity on the highest-cardinality matchkey column was
+     `>= 0.7`. On Amazon-Google that population is 98.5% non-duplicates (2,355
+     sample pairs, 35 truly matching), so a candidate was judged largely on how
+     many NON-matches it co-blocked — a specificity penalty reported as recall,
+     and worst for the most discriminative candidate. `analyze_blocking` now
+     accepts the weighted `matchkey` the pipeline will score with and takes the
+     target set from `find_fuzzy_matches`, the one authoritative pair scorer.
+     Blocking is accountable for retaining what the scorer would match, so that
+     is the right denominator. Estimated vs true pair recall on Amazon-Google:
+     `tokens(title, df<=10)` 26.0% → 68.7% (true 65.9%), `df<=25` 46.1% → 87.3%
+     (87.6%), `df<=50` 73.6% → 96.8% (95.3%). Callers with only column names
+     (CLI / MCP / A2A) keep the old proxy, now documented as the weak fallback
+     it is.
+  2. *A sentinel used as a value.* Recall was measured only for the top 10 by
+     score; the rest were assigned `0.0` meaning "unmeasured" — then multiplied
+     into the rank, making them unselectable however good they were. On
+     Amazon-Google that zeroed `tokens(title, df<=100)`, the candidate with the
+     highest true pair recall of any generated (98.2%). Every candidate is
+     measured now, the placeholder is gone, and the two-tier sort that existed
+     to contain it collapses to one. A measurement failure fails open to `1.0`
+     (rank on score alone) rather than to `0.0`.
+  3. *Repeated work.* The sample is seeded, so all ten measured candidates saw
+     an identical pair population — and rebuilt it from scratch each time. The
+     target is now built once. `analyze_blocking` on Amazon-Google: **195.9s →
+     1.6s**, while measuring 53 candidates instead of 10.
+
+  Net effect on the shipped ranking: the top suggestion changes from
+  `tokens(title, df<=25)` to `tokens(title, df<=10)`, which measures F1 0.1697
+  end-to-end against 0.0864 for the previous pick.
+- **Bucket routing no longer bypasses the blocking-expressibility gate (#2488).**
+  The bucket scorer derives FIELD-based block keys from `blocking.keys` /
+  `blocking.passes`; a guard kept strategies with no field keys (lsh / ann /
+  learned / canopy / sorted_neighborhood / token) on the legacy per-block path.
+  That guard sat *below* the `backend == "bucket"` short-circuit in
+  `_use_bucket_scorer`, and `ExecutionPlan.apply_to` writes `backend="bucket"`
+  onto the committed config -- so the guard was unreachable for exactly the
+  configs it protected. On a zero-config run the controller's sample pass routed
+  before the planner ran and scored the plan correctly on the legacy path, then
+  the final dedupe pass took bucket with the same plan, derived an empty block
+  key, and emitted zero pairs with no error and no warning: every record came
+  back a singleton. Measured on Amazon-Google (4589 records, 1300 truth pairs),
+  identical configs differing only in `backend`: 16,545 pairs / F1 0.0864 with
+  `backend` unset, 0 pairs / F1 0.0000 with `backend="bucket"`. The check now
+  runs first, as `_bucket_can_express_blocking`, so it holds however `backend`
+  was set. It also covers an allowlisted strategy carrying neither keys nor
+  passes (the degenerate `static keys=[] auto_suggest=True` config), since
+  auto-suggest chooses the real plan mid-pipeline and a routing decision taken
+  off the provisional plan can land on a strategy bucket cannot express; both
+  paths already yielded zero pairs for that shape, so only the routing changes.
+  An explicit `backend="bucket"` on a field-keyed plan is still honored at any
+  size.
+- **Every FS scoring path now resolves the link cutoff the same way.**
+  `_fs_link_threshold` applies three steps in order -- configured
+  `mk.link_threshold`, then the EM-calibrated per-dataset cutoff, then the
+  calibration-aware default -- and its docstring records that it was extracted
+  "so they cannot drift on how the cutoff is resolved" (#1804 item 4). Four
+  scorers used it; two did not. `fused_match._match_fused_fs` and
+  `probabilistic_fast._resolve_probabilistic_fast_path` hand-rolled only the
+  FIRST and THIRD steps, so whenever EM produced a calibrated cutoff -- what
+  `GOLDENMATCH_FS_CALIBRATE_THRESHOLD` exists to do, worth +0.49 F1 on dblp_acm
+  per that flag's own docstring -- those two routes silently ignored it and cut
+  at the fixed 0.50 while the scalar/vectorized/batched routes honoured it. The
+  same config on the same data cut differently depending on which scorer the
+  router happened to pick. Both now call the shared helper. With no calibrated
+  cutoff present the resolved value is unchanged, so this only moves runs that
+  were already asking for calibration (#2483).
+- **A `threshold` set on a probabilistic matchkey is reported instead of
+  silently ignored.** `threshold` is the weighted matchkey's cutoff; the
+  probabilistic scorers read `link_threshold`. Setting it did nothing and
+  *reading* it raised, so a user swept `threshold` from 0.90 to 0.99, got
+  byte-identical results, and reasonably concluded the cut did not matter on
+  their data -- it was measuring nothing. Config validation now emits a
+  `UserWarning` naming `link_threshold`. A warning rather than a rejection: a
+  stray key is a usage mistake, not a corrupt config (#2483).
+- **Blocking suggestions account for what a key can REACH, not just what it
+  costs.** Two compounding defects in `core/block_analyzer.py`, both measured on
+  the Amazon-Google benchmark frame (#2488). (1) `score_candidate` divided its
+  selectivity term by the records that PRODUCED a key rather than by the frame,
+  so coverage was normalised away: a key able to key only 35% of records scored
+  as though the frame were just that 35% -- maximally selective AND cheap, since
+  `total_comparisons` is summed over survivors too. Compound keys
+  null-propagate, so one sparse component nulls the whole key (Amazon-Google's
+  `manufacturer` is 100% populated on one source and 7.2% on the other, nulling
+  65% of the frame). The denominator is now the full height, which caps the term
+  at coverage; `coverage` is also reported in the metrics. This is a NO-OP for a
+  fully-covered key, so only genuinely partial-coverage keys move. (2)
+  `estimated_recall` was computed for the top candidates, logged, and then left
+  out of the ranking entirely -- the only multiplier was `check_coverage`'s
+  field-membership flag, which asks whether the key's columns are matchkey
+  columns and says nothing about retained pairs. Measured candidates are now
+  ordered by `score x recall`, in a tier ahead of the unmeasured tail so a
+  placeholder 0.0 is never read as "measured as useless". On the Amazon-Google
+  frame this drops the lower-coverage `description` keys from rank 1 to ranks
+  8-10 and promotes the fully-covered `title` keys, taking the chosen plan's
+  estimated recall from 0.05 to 0.07. A plan whose best candidate estimates
+  under 30% recall is now reported with that number rather than committed
+  silently -- a warning, not a rejection, because on a frame where every
+  candidate is below the floor (which is this one) rejecting them all leaves
+  degenerate blocking, and one mega-block is worse than a poor key. NOTE this
+  does not by itself make Amazon-Google a good result: every candidate the
+  generator produces estimates 0.05-0.07 recall there, because it emits only
+  prefix/soundex keys and pairwise compounds and has no token-overlap key for
+  free text. That gap is tracked separately.
+- **Benchmark tests skip on a missing dataset instead of erroring.** Every
+  dataset under `tests/benchmarks/datasets/` is gitignored on purpose, but three
+  of the five tests in `test_autoconfig_benchmarks.py` read one without first
+  checking it exists, so a clean checkout got a bare polars `FileNotFoundError`
+  rather than a skip (`test_abt_buy_autoconfig_offline` and
+  `test_autoconfig_ncvr_meets_target` already had the guard). They now skip with
+  a reason naming the command that gets the data.
+- **`run_benchmarks.py --download-only` fetches the benchmark datasets without
+  running a benchmark.** The script has auto-pulled DBLP-ACM, NCVR, Abt-Buy and
+  Amazon-Google since #2386, but only as a side effect of measuring, so a
+  developer running `pytest -m benchmark` had no way to just get the data. The
+  new flag reuses the existing `_ensure_datasets` and the fetchers' own
+  sentinels -- deliberately not a second copy of where each dataset lives --
+  prints each as `ok`/`MISSING`, and exits non-zero if any is absent. No library
+  behaviour changed.
+- **Learned blocking gates rules on absolute full-frame cost, not on a ratio.**
+  A rule was accepted when `reduction_ratio >= learned_min_reduction` (0.90 by
+  default). That ratio is `1 - blocked_pairs / total_pairs`, and BOTH terms grow
+  as n^2, so it is scale-INVARIANT -- measured identical to four decimal places
+  between a 7,071-row sample and the 2M frame it was drawn from. It therefore
+  carries no information about what a rule actually costs. On the QIS realistic
+  shape at 2M every one of these cleared the 0.90 floor:
+  `email:exact` 1.0000 -> 3.3M candidate pairs; `first_name:first_3` 0.9984 ->
+  3.12B; `birth_year:exact` 0.9846 -> 30.8B; `id:first_3` 0.9667 -> 66.7B. The
+  selector had no quantity that could tell the affordable rule from the one four
+  orders of magnitude past it. Rules are now additionally checked against an
+  absolute projected candidate-pair budget at the FULL frame size, projected from
+  the sample's block-size distribution by the same saturation-aware estimator
+  auto-config already uses for static passes (extracted to
+  `core.block_projection` so there is one owner rather than two), and bounded by
+  the same memory-aware `_fs_total_pair_budget` (so `GOLDENMATCH_FS_MAX_PASS_PAIRS`
+  overrides both). Every rejection is logged with the pair count behind it. The
+  budget is applied BEFORE the "did anything pass?" test that gates the depth-2
+  search, so a frame where every single predicate explodes now falls through to
+  looking for a cheaper conjunction instead of returning a rule it cannot afford.
+  The gate is opt-in on a new `total_rows` argument, so callers that do not pass
+  it -- and any frame no larger than its own training sample -- are unchanged.
+- **A learned rule with two predicates on the same field no longer crashes rule
+  evaluation.** `evaluate_rule` selected one column per predicate, so a rule like
+  `last:exact AND last:soundex` named the same column twice and raised polars'
+  `DuplicateError`. `learn_blocking_rules` deliberately generates those (its
+  combo guard compares field AND transform; collapsing them is the #1826 footgun),
+  but the depth-2 search only runs when no single predicate passes, so the crash
+  stayed latent. The pair budget above can empty that set on a narrow frame and
+  reach it. `apply_learned_blocks` already de-duplicated here.
+- **The suggestion verify gate compared its baseline against a different
+  procedure than its candidates.** `_verify_suggestions` keeps a suggestion when
+  `cand_health >= baseline_health - 1e-6`. Candidates always come from
+  `engine._run_pipeline`; the baseline came from whatever clusters the caller
+  passed. For `review_config` those coincide, but `suggest_from_result` passes
+  `DedupeResult.clusters`, produced by `dedupe_df` -- which standardizes the frame
+  first and therefore clusters a different population than the raw frame the
+  candidates run against. Measured on the 80-row person fixture: 39 clusters /
+  health 1.0000 from the artifacts against 8 clusters / health 0.8000 from the
+  engine. The artifacts-in path was then held only by the epsilon (1.0 vs 1.0), so
+  a marginally worse candidate clustering flipped it to DROP and returned nothing
+  while the re-run path kept its 0.2 margin -- the intermittent
+  `[] == ['thr:raise:fuzzy_match']` failure in
+  `test_suggest_from_result_verified_matches_review_config`. The baseline is now
+  re-derived through the same engine path as the candidates, falling back to the
+  caller's clusters only if that run fails. Both paths now report an identical
+  0.8000 baseline.
+- **`GOLDENMATCH_AUTOCONFIG_MEMORY=0` now works when set at runtime.** The gate was
+  a module-level constant evaluated at import, so the documented "useful in CI"
+  opt-out silently did nothing unless the variable was already in the environment
+  before `goldenmatch.core.autoconfig` was imported -- leaving the shared
+  `~/.goldenmatch/autoconfig_memory.db` live. The env is now read at call time. The
+  import-time constant is still checked first, so existing callers (including
+  tests that patch it) are unaffected, and the env read can only ever disable
+  memory, never enable it.
+- **The learned-blocking trainer no longer loses its training signal as the
+  dataset grows.** `learned_sample_size` was `min(total_rows // 4, 5000)` --
+  pinned at 5,000 rows from 50K upward however large the frame got. The learner
+  trains on the true pairs found INSIDE that sample, and the number of pairs with
+  both members sampled decays as `s^2 / n`. Measured on the QIS realistic shape,
+  ground-truth pairs inside a 5,000-row sample: 86 at 500K, 47 at 1M, 25 at 2M,
+  14 at 4M -- the signal halves every time the data doubles. At 5M the learner saw
+  13 true pairs against 56 at 1M. The sample now grows as `sqrt(rows)`, which
+  holds `s^2/n` constant; at 5M that is 11,180 rows and restores the trainer to 46
+  true pairs. Anchored at 1M so this is a pure extension: every frame at or below
+  1M keeps its previous sample size byte-for-byte, and only larger frames change.
+  Bounded at 50,000 rows, since the sample run is superlinear in sample size.
+
+  **This is necessary but NOT sufficient for the 5M slowdown, and is not claimed
+  as a fix for it.** With the training signal restored, the learner still emits
+  160 blocks of ~31K rows at 5M. Rule SELECTION is scored on the sample too, and
+  block SIZE is exactly what a sample cannot show: a bounded-cardinality predicate
+  like `first_name:first_3` has ~850 blocks of 13 rows in an 11K sample and ~899
+  blocks of 5,562 rows on the full 5M frame -- about 19.5 billion candidate pairs,
+  reported to the selector as `recall=1.000, reduction=1.000`. That is a separate
+  defect in the same family and is tracked on its own.
+- **Zero-config no longer discards a real identity column as a "surrogate key"
+  purely because the dataset got bigger.** The `#876` surrogate-key guard asks
+  "does every record carry its own value for this column?", and answered it from
+  `ColumnProfile.cardinality_ratio` -- a distinct-FRACTION measured over the
+  ~1,000-row profiling sample -- against an absolute threshold of 1.0. A
+  fixed-size sample of a growing frame drives that fraction toward 1.0 for ANY
+  column whose distinct count grows with the row count, which is every real
+  identifier. On the QIS realistic shape an `email` column whose true full-frame
+  ratio is a flat 0.28 profiles at 0.72 / 0.94 / 0.97 / 0.98 / 1.00 for
+  100K / 500K / 1M / 2M / 5M rows, so at 5M zero-config threw away its ONLY
+  exact identity column, fell back to fuzzy-only matchkeys plus the name-based
+  blocking fallback, and committed a config estimated at 185M candidate pairs.
+  The verdict changed with SCALE rather than with the data. Eight call sites
+  asked the question independently; they now share one authority,
+  `_is_perfect_surrogate`, which reads an EXACT full-frame cardinality and falls
+  back to the sampled value only where no full frame was available (hand-built
+  profiles in tests), so those callers keep their previous verdict. The exact
+  count is computed only for columns the sample calls perfectly unique, which is
+  sound rather than a cost trade: if every value in the full column is distinct
+  then so is every subset, so a sample below 1.0 rules the column out already.
+  Measured at 44-307 ms per column at 5M rows against a ~160s auto-config.
+  Effect at 5M: the committed matchkeys are now identical to those at 1M
+  (`exact(email)`, `exact(first_name+last_name+birth_year)`, `weighted(...)`),
+  while a genuine row PK is still excluded. Found via the `bench-quality-scale`
+  heavy tier, which had never once passed: the degenerate config it produced
+  reached 66 GB RSS and killed the CI runner.
+- **Zero-config dedupe of product data no longer crashes on the arrow lane
+  (`KeyError: 'Field "__model__" does not exist in schema'`).** Bisected from
+  the weekly `benchmarks` Abt-Buy failure to the polars->arrow `dedupe_df`
+  eviction: two separate defects, both only reachable once a polars input
+  started taking the arrow lane. (1) STAGE ORDER -- the dedupe pipeline's arrow
+  lane derived matchkeys BEFORE running domain extraction, but domain
+  extraction is what materializes the `__brand__` / `__model__` /
+  `__title_key__` columns auto-config's matchkeys reference, so
+  `derive_matchkey` reached a column that did not exist yet. The classic lane
+  and the match pipeline's arrow lane already ran domain extraction first; the
+  dedupe arrow lane now matches them. (2) THREE UN-PORTED `df.columns` READS in
+  `core/domain.py` -- `pa.Table.columns` is a list of ChunkedArrays, not names,
+  so `_emit_domain_profile` raised `'ChunkedArray' object has no attribute
+  'startswith'` (only under a profile capture, which is why the existing
+  arrow-lane tests missed it and the auto-config controller always hit it), and
+  the guards in `_detect_product_subdomain` and `_extract_biblio_features_df`
+  SILENTLY answered False for every membership test -- pinning subdomain
+  detection to its "electronics" fallback and skipping bibliographic extraction
+  entirely, with no error either time. All frame access in that module now goes
+  through the seam. Net effect on the benchmark input: the auto-config
+  controller goes from every iteration erroring (fallback to v0 + RED sentinel)
+  to running normally, byte-identical clusters to the classic lane.
+- **`PluginRegistry.reset()` no longer strips the plugins goldenmatch itself
+  ships.** refdata registers its scorers + transforms as an import-time side
+  effect; `reset()` drops the singleton, but a module body cannot run twice
+  (`sys.modules` holds it), so every bundled plugin was gone for the rest of
+  the process and the next `has_transform("refdata_business_canonical")` read
+  False with nothing to point at. `PluginRegistry.add_bootstrap` records those
+  idempotent registrations and replays them onto the fresh singleton, so a
+  reset now clears USER registrations only. Found via the
+  `test_alias_transforms_registered` xdist flake: the test-side workaround for
+  it re-registered a hand-maintained module list that had drifted --
+  `business_aliases` and `core.acronym` were never added to it -- so the
+  failure appeared only when a resetting test happened to precede a refdata one
+  in the same worker. That workaround is deleted; the library no longer needs
+  it.
+- **The suggest/review path now fails at the boundary with a message that names
+  the requirement (#2442).** `review_config` / `suggest_from_result` normalise
+  `__row_id__` with the polars-only `with_row_index`, so an Arrow caller got
+  `AttributeError: 'pyarrow.lib.Table' object has no attribute 'with_row_index'`
+  -- naming neither polars nor the actual constraint. (`pl` in that module is
+  the `_LazyPolars` proxy, which imports cleanly without polars and only raises
+  on use, so nothing upstream surfaced the dependency either.) Both entry points
+  now raise a `TypeError` naming the type received, `goldenmatch[polars]`, and
+  the `polars.from_arrow` conversion. Deliberately NOT an Arrow branch: the path
+  is polars-native end to end -- `MatchEngine._run_pipeline` calls `df.lazy()`
+  on its first line -- so both the Arrow branch #2442 suggests and its stated
+  `__row_id__` workaround only move the failure three lines down. Making this
+  Arrow-native means porting the pipeline, not the two lines that fail first.
+- **Auto-config no longer reads packed `"lo,hi"` intervals as coordinates
+  (#2443).** `_looks_like_latlong` tested only whether a column's samples PARSE
+  as `lat,long`, which admits any two small comma-separated numbers -- `"25,35"`
+  is a valid coordinate and an ordinary age interval. On a real ~21k-row corpus
+  that put `geo_haversine` on an `age_range` column; the config was well-formed
+  and the distances plausible, so nothing failed and it took a field-by-field
+  diff against a hand-built matchkey to notice. Detection now also requires
+  positive geographic evidence -- a fractional component, `|lon| > 90`, or a
+  negative component -- any one of which an integer-interval column essentially
+  never shows. Whole-degree coordinates in the positive quadrant are declined
+  deliberately: at ~111 km granularity haversine similarity is meaningless
+  anyway. Only reachable under `GOLDENMATCH_FS_DOMAIN_COMPARATORS=1`, so default
+  behaviour is unchanged.
+
+### Added
+- **Sail identity Layer 2: incremental resolution against an existing store
+  (#966).** `goldenmatch.sail.build_identity_graph_incremental` resolves a run's
+  clusters against prior state instead of always minting fresh entities. A
+  cluster whose records already belong to one entity **absorbs** into it; one
+  spanning several **merges** them, retiring the losers
+  (`status="merged_into"`, `merged_into=<winner>`) and reassigning their records
+  to the winner. Only a cluster with no overlap **creates**. This is what makes
+  a Sail-tier store converge across runs — the create-only path (shipped in
+  2.0.0 as Layer 1) re-minted an id for a record it had already seen.
+
+  Semantics mirror one-box `identity.resolve.resolve_clusters`, including the
+  winner rule that is easy to invert: the entity holding the most of **this
+  cluster's** records wins, *not* the largest entity overall. Tie-break is
+  oldest `created_at`, then `entity_id` ascending — that last step is ours, so
+  the surviving entity is deterministic (one-box breaks that tie on dict order,
+  and Spark has no stable sort).
+
+  **Additive**: `IdentityGraphFrames` and `build_identity_graph` are unchanged,
+  so every existing consumer of the frozen contract is unaffected. Omitting the
+  prior-state frames delegates to the create path verbatim, so the new entry
+  point is safe to call unconditionally. Design:
+  `docs/superpowers/specs/2026-08-08-sail-identity-layer2-incremental-design.md`.
+
+  Note the `records` frame is a **delta** — a winner's untouched records are not
+  re-emitted, only records this run assigned or moved.
+
+### Performance
+- **`DedupeResult.scored_pairs` is materialized lazily instead of eagerly
+  (#2417).** The B2c Fellegi-Sunter path already keeps the pair stream columnar
+  through scoring and clustering, then rebuilt the entire `list[tuple]`
+  post-cluster purely to populate this field. Measured across 1M and 4M pair
+  tables (linear in both): the Arrow form is **24 B/pair**, the Python list is
+  **168 B/pair resident and ~192 B/pair at the transient peak** — 7×. Since
+  `GOLDENMATCH_FS_SCORED_PAIRS_MAX` defaults to 50,000,000, that permitted an
+  **~8.4 GB resident / ~9.6 GB transient** allocation, built post-cluster.
+
+  On the `dedupe_df` + identity path nothing reads it. Verified on a real
+  FS + identity + SQLite run: `_resolve_identities` receives an empty
+  `scored_pairs`, and `resolve_clusters` accepts the parameter "for
+  call-signature compatibility" only — evidence edges come from
+  `pair_score_view`. The allocation was pure waste there.
+
+  The pipeline now carries the deduped Arrow table and the consumer pays.
+  `DedupeResult.scored_pairs` became a lazy property over `_scored_pairs_table`
+  (the same field→property idiom `clusters` uses) that **caches a real `list`**,
+  so `isinstance(result.scored_pairs, list)` and `== []` behave exactly as
+  before. Every steward surface that reads it — TUI, web, REST, `cli review`,
+  `cli match` — gets byte-identical output; runs that never touch it stop paying.
+
+  Two supporting changes: dict consumers read through the new
+  `core.pairs.materialize_scored_pairs(results)` (a bare
+  `results.get("scored_pairs")` now returns `None` on this path, so the helper
+  makes that a loud contract rather than a silent empty list), and
+  `_finalize_review_pairs_arrow` does the linked-set anti-join in Arrow — the
+  list version built `linked_keys` as a Python set over every linked pair, a
+  second O(pairs) driver structure that would have forced materialization
+  anyway. That filter is **not** skippable despite review and linked coming from
+  one threshold split: `score_buckets_arrow` can emit the same pair on several
+  blocking passes with different scores and the dedup runs later, so a pair can
+  genuinely land on both sides of the cut.
+
+  Scope: this addresses a *different* term than #2417 describes. The issue
+  expects scoring-time pair streaming to be the remaining cost; measurement
+  shows scoring is already Arrow end-to-end and the cost is this post-cluster
+  result list. The bisected #2250 delta (~1–2 GB) is a separate term, not
+  addressed here. The chunking half of #2417 landed earlier in #2419.
+
+### Fixed
+- **Arrow lane: GoldenFlow standardization is APPLIED instead of silently skipped
+  (#2430).** On a polars-free install, `core/transform.py` bridged the arrow lane
+  through `pl.from_arrow`, caught the resulting `ImportError`, and degraded to
+  no-transform — so dates, phones and whitespace were never standardized while the
+  run continued and reported success. It surfaced downstream, where column
+  profiling saw unstandardized values. The premise was stale: GoldenFlow's
+  `transform_df` is polars-native, but module-level `goldenflow.transform` is a
+  **polars-free columnar engine**, and (measured) its zero-config auto-detect runs
+  polars-free on string / int / float / bool / date columns — standardizing dates
+  to ISO and phones to E.164 with polars never imported. The arrow lane now falls
+  back to it when the polars bridge is unavailable. Verified the two engines
+  produce **identical values**, and untouched columns keep their exact arrow dtype
+  (a naive `dict`→`pa.table` rebuild silently widens `int32` to `int64`).
+
+  The polars engine stays **preferred** rather than replaced, so installs that
+  work today are unchanged and unregressed: measured on a 200K×5 arrow frame with
+  polars present, the polars bridge is 0.70s / 314 MB vs the columnar engine's
+  1.80s / 531 MB (2.6× slower, +69% RSS — `to_pydict()` materializes Python lists
+  where `pl.from_arrow` is near-zero-copy), and the polars engine also covers
+  strictly more configs. Only the polars-free install changes behavior.
+
+  The degrade path remains but is now narrow: the columnar engine declines an
+  **uncovered** config, and the warning text — which used to claim the whole
+  transform engine was polars-native — now names both triggers accurately.
+  `strict=True` still re-raises, so MCP/A2A callers that explicitly requested
+  transforms are never handed unstandardized data silently.
+
+  **Prerequisite worth knowing:** GoldenFlow's columnar engine has no pure-Python
+  core — `transform_columns_public` gates both its zero-config and
+  explicit-config branches on `native_columns_ready` — so the fallback needs the
+  `goldenflow-native` kernel. That is a **base dependency** of goldenflow, so a
+  normal install has it; CI lanes that strip it (`--no-install-package
+  goldenflow-native`, to skip the maturin build) still degrade as before. The
+  end-to-end tests skip there rather than assert something the environment cannot
+  do, and an in-process test with both engines stubbed guards the fallback wiring
+  in every lane.
+- **FS: an un-splittable oversized block is now scored in bounded tiles instead of whole
+  (#1826/#2417).** When `_split_oversized` finds no useful split and `skip_oversized=false`
+  — the "hub" shape where thousands of rows share one blocking-key value, so no split
+  exists — the block used to be handed to the scorer WHOLE, in one call carrying its full
+  `C(n, 2)`. `score_buckets` (all three bucket lanes) and
+  `score_probabilistic_external_blocks` now tile such a block above a candidate-pair
+  budget: contiguous row groups, one diagonal tile per group plus one cross tile per group
+  pair, covering every intra-block pair exactly once. Same pair set, same scores; emission
+  order within that block becomes tile order, and the tiled block costs ~2.2x the pair
+  comparisons (cross tiles recompute the intra-group pairs they discard). Measured on one
+  hub block (`scripts/repro_issue_2417.py`): the vectorized-numpy lane's peak is `O(n^2)`
+  in the dense per-field matrices — 866 MB at 3,500 rows — and tiling cuts it to 562 MB at
+  the default budget and 144 MB at a 1M budget; it also makes blocks above
+  `GOLDENMATCH_FS_VEC_MAX_ELEMS` (>7,071 rows), which `_fs_vec_guard` currently *refuses*,
+  scoreable at all. On the native lane the kernel already threshold-filters per pair, so
+  its peak tracks SURVIVING pairs rather than candidates (16 MB at 53K survivors, 654 MB at
+  2.4M); tiling removes only the whole-block double-buffering there, worth ~27%. New
+  `GOLDENMATCH_FS_OVERSIZED_CHUNK_PAIRS` (default `4000000`; `0` = the pre-#2417
+  score-whole parity hatch). Blocks at or under `max_block_size`, and any block under the
+  budget, take the untouched single call. Tests: `tests/test_fs_oversized_chunked.py`.
+
+## [3.12.0]
+
+<!-- README-callout
+**Semantic-model discovery reaches warehouse scale.** Model derivation now runs
+off `information_schema` instead of a sampled frame, plus catalog reconciliation
+and a real-LLM namer validation harness -- so a warehouse's existing model can be
+discovered, reconciled against what is really there, and named without hand
+curation.
+--> - 2026-08-04
+
+### Added
+- **Semantic-model discovery — real-LLM namer validation / eval harness (Phase 19).** New
+  `goldenmatch.semantic.score_naming(suggestions, gold)` is a pure, deterministic scorer of
+  the advisory namer's (Phase 7) output against a labeled `{target: accepted_name(s)}` gold
+  map — a `NamerQuality(coverage, accuracy, precision, verified_accuracy, results)` where a
+  name matches after normalization (lowercase, alphanumeric-only; deliberately NOT a
+  stemmer, so plural/alias variants are listed as explicit gold aliases rather than
+  silently conflated). `run_namer_eval(model, tables, gold, *, backend)` names then scores
+  in one call. The scorer is backend-agnostic: CI exercises it with hand-built suggestions
+  and a dict-driven fake backend (no API calls, fully deterministic), while the real
+  provider (`load_namer_backend`) is **opt-in** behind `GOLDENMATCH_NAMER_EVAL_LIVE` (a
+  skipped live test), so the harness never spends live calls in CI. This closes the
+  "frontier" arc: slices 11-18 added deterministic features; slice 19 is the *measurement*
+  for the one non-deterministic part (the LLM namer). New exports `score_naming`,
+  `run_namer_eval`, `NamerQuality`, `TargetResult`. The ninth and final "frontier" slice of
+  the semantic-model discovery arc (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`, item 19). Tests:
+  `tests/test_semantic_discovery_namer_eval.py`.
+- **Semantic-model discovery — catalog reconciliation (Phase 18).** New
+  `goldenmatch.semantic.reconcile_model(proposed, existing)` diffs a discovered (certified)
+  `ProposedModel` against an already-parsed existing catalog — a list of MetricFlow
+  `DeclaredKeySpec` (from `parse_semantic_models`) or Cube `Cube` (from
+  `parse_cube_models`), reusing the existing readers so there's no new format code. Both
+  sides normalize to a neutral `(name, key, measures)` shape and produce a
+  `Reconciliation` of typed `TableDiff`s: `only_in_model` / `only_in_catalog` (tables),
+  `grain_drift` (in both, but discovered certified grain ≠ declared key), and
+  `measure_only_in_model` / `measure_only_in_catalog`. **The differentiator over a text
+  diff:** the discovered side is CERTIFIED, so a `grain_drift` where the discovered grain
+  is trustworthy and the catalog's declared key isn't it is marked `proven=True` — a
+  provable double-counting defect in the catalog ("your model declares `order_id` the key;
+  we proved the grain is `order_id + line_no`"), not a stylistic difference.
+  `Reconciliation.in_sync` is the headline; `to_dict` for the serialized view.
+  Deterministic (no LLM), **default-on**. Scope cut (logged, not silently omitted): v1
+  covers tables, grain, and measures; cross-dialect join-edge reconciliation and a LookML
+  reader (no parser exists yet) are explicit follow-ons. The eighth "frontier" slice of the
+  semantic-model discovery arc (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`, item 18). Tests:
+  `tests/test_semantic_discovery_reconcile.py`.
+- **Semantic-model discovery — warehouse-scale derivation off `information_schema`
+  (Phase 17).** New `goldenmatch.semantic.read_information_schema(columns,
+  table_constraints, key_column_usage, tables=None)` reads the three ANSI
+  `information_schema` relations (pyarrow tables or row dicts — no live DB connection, so
+  it stays testable and credential-free) into a `WarehouseManifest` of
+  `CandidateTable(name, columns, declared_pk, declared_fks, row_count)`. A warehouse has
+  hundreds of tables; `information_schema` tells you cheaply which ones exist and what
+  they declare, so you can point the certified pipeline at them without pulling every
+  table into memory. **Honest thesis marker:** Snowflake/BigQuery/Redshift do NOT enforce
+  PK/FK, so every declared PK/FK is left `certified=False` — a declaration is exactly the
+  kind of guess this arc PROVES against data, never a certificate. `plan_certification(
+  manifest)` ranks the tables worth pulling + certifying first (has-declared-PK, then
+  FK-referenced in-degree = spine/dimension tables, then smaller `row_count`, then name),
+  each `CertifyStep` naming why its declarations are unproven. `discover_from_manifest(
+  manifest, loader)` pulls each candidate's data (in plan order) and runs the normal
+  certified `discover_semantic_model` — the declared PK is used only to RANK; the grain,
+  joins, and measures are re-derived and proven from the loaded data, so a wrong
+  `information_schema` declaration can never leak into the model. Deterministic (no LLM),
+  **default-on**. The seventh "frontier" slice of the semantic-model discovery arc
+  (design: `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`, item
+  17). Tests: `tests/test_semantic_discovery_warehouse.py`.
+- **Semantic-model discovery — dimension hierarchies via FD (Phase 11).**
+  `goldenmatch.semantic.discover_hierarchies(table, columns)` detects drill-down
+  hierarchies (`country > state > city`) among a table's dimension columns by finding
+  **near-functional-dependencies** (a finer level determines a coarser one; a group-by
+  "fraction of determinant groups mapping to a single dependent value" test, default
+  threshold 0.95 so a few dirty rows don't kill a genuine hierarchy). Each column's
+  *immediate* parent is the highest-cardinality coarser column it determines, yielding
+  clean coarse→fine chains (`Hierarchy(table, levels, confidence)`) rather than
+  transitive-closure noise. Deterministic (no LLM) and **default-on**: attached to
+  `ProposedTable.hierarchies` + `ProposedModel.hierarchies`, included in `to_dict`, and
+  emitted into `meta.goldenmatch.hierarchies` (MetricFlow/Cube) /
+  `custom_extensions.goldenmatch.hierarchies` (OSI) — no dialect has a native hierarchy
+  slot. The first "frontier" slice turning certified structure into a queryable semantic
+  layer (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discovery_hierarchies.py`.
+- **Semantic-model discovery — metrics (Phase 12).**
+  `goldenmatch.semantic.discover_metrics(measures, grain)` turns the grain-gated
+  measures into certifiable business metrics — proposed ONLY when the grain is
+  trustworthy (the measures are `safe_to_sum`), so the ratios can't double-count: per
+  sum-safe measure an **average** (`avg_m = SUM(m)/COUNT(grain)`), and per sum-safe
+  measure PAIR a **ratio** (`m1_per_m2 = SUM(m1)/SUM(m2)`, pool-capped to `C(5,2)`).
+  `Metric(name, kind, numerator, denominator, expression)` on
+  `ProposedTable`/`ProposedModel.metrics` + `to_dict`, emitted **natively** per dialect:
+  MetricFlow top-level `metrics:` ratio metrics (plus a declared `count` measure so
+  averages have a denominator), Cube calculated `number` measures + a `count`, and OSI
+  dataset-qualified `OsiMetric`s. Deterministic, default-on. Derived *semantic* metrics
+  (`profit = revenue − cost`) stay a namer/advisory follow-on. New exports
+  `discover_metrics` + `Metric`. The second "frontier" slice (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discovery_metrics.py`.
+- **Semantic-model discovery — time intelligence (Phase 13).** New
+  `goldenmatch/semantic/discovery/time_intelligence.py`.
+  `discover_time_dimension(table, dimensions)` picks the primary date column and infers
+  its finest grain FROM THE DATA (a cheap value scan: time-of-day → `day`; all values on
+  month/quarter/year starts → that coarser grain), then proposes the drill granularities
+  (`TimeDimension(table, column, grain, granularities)`). `discover_time_metrics(measures,
+  time_dimension)` derives per sum-safe measure the **MTD / YoY / rolling-7d** variants
+  (`TimeMetric`). On `ProposedTable`/`ProposedModel` (`time_dimensions` + `time_metrics`)
+  + `to_dict`, and emitted so the engine computes time comparisons automatically:
+  MetricFlow sets `defaults.agg_time_dimension` + a `type: time` dimension at the grain,
+  MTD/rolling as native `type: cumulative` metrics (YoY structured for now); Cube/OSI keep
+  the grain + granularities + variants in `meta.goldenmatch.time`. Deterministic,
+  default-on. New exports `discover_time_dimension`/`discover_time_metrics` +
+  `TimeDimension`/`TimeMetric`. The third "frontier" slice (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discovery_time_intelligence.py`.
+- **Semantic-model discovery — cardinality: 1:1 + m:n bridges (Phase 14).** Two lifts of
+  the "everything is many_to_one" limitation. `discover_joins` now sets
+  `relationship="one_to_one"` when the FK column is UNIQUE on the from side (each from-row
+  references a distinct to-row) — flowing straight into the Cube `CubeJoin`/OSI relationship
+  emit. New `goldenmatch/semantic/discovery/cardinality.py`:
+  `discover_bridges(proposed_tables, joins)` detects **many-to-many** junction tables — a
+  trustworthy 2-column compound key (PR-10) whose columns are certified FKs (PR-3) to two
+  DIFFERENT tables — as `Bridge(bridge_table, left_table, left_column, right_table,
+  right_column)` on `ProposedModel.bridges` + `to_dict`. Deterministic, default-on. New
+  exports `discover_bridges` + `Bridge`. The fourth "frontier" slice (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discovery_cardinality.py`.
+- **Semantic-model discovery — SCD / temporal dimensions (Phase 15).** New
+  `goldenmatch/semantic/discovery/scd.py`: `discover_scd(table, columns)` flags a
+  Slowly-Changing-Dimension (Type 2) table. Validity columns (name-pattern
+  `valid_from/valid_to`, `effective_*`, `start_date/end_date`, `from_date/to_date`)
+  and/or an `is_current`/`is_active` flag NAME-propose it; then a STRUCTURE check
+  confirms real versioning — a business key that repeats (multiple versions) but is
+  unique combined with the validity anchor `(business_key, valid_from)` — so a stray
+  `end_date` on a non-versioned table doesn't false-positive. `SCDDimension(table,
+  business_key, valid_from, valid_to, current_flag, scd_type)` on
+  `ProposedTable`/`ProposedModel.scd_dimensions` + `to_dict` + `meta.goldenmatch.scd`.
+  Deterministic, default-on. New exports `discover_scd` + `SCDDimension`. The fifth
+  "frontier" slice (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discovery_scd.py`.
+- **Semantic-model discovery — model completeness / trust score (Phase 16).** New
+  `goldenmatch/semantic/discovery/completeness.py`: `score_model(proposed_tables, joins)`
+  aggregates the existing discovery signals into a headline **grain-weighted** 0..1
+  `ModelCompleteness` score (grain coverage 0.5, connectivity 0.25, sum-safe-measure
+  coverage 0.25 — a certified grain is load-bearing, so it dominates) plus an explicit
+  `gaps` list (`Gap(table, kind, detail)` for `no_grain` / `no_measures` / `isolated`), so
+  "80% complete" always names the tables that are why it isn't 100%. On
+  `ProposedModel.completeness` + `to_dict`. Pure self-assessment; no new detection. New
+  exports `score_model` + `ModelCompleteness`. The sixth "frontier" slice (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discovery_completeness.py`.
+
+## [3.11.0]
+
+<!-- README-callout
+**Customer 360 serving surface, and a fused FS kernel that covers the
+reference-data name scorers.** `customer_360` composes the golden record,
+per-field provenance, linked source records, the event timeline and the
+relationship neighborhood into one read, with semantic-layer drill-through; the
+fused Fellegi-Sunter kernel now covers the reference-data name scorers and an
+in-RAM sequential Arrow-native batch scorer with end-WCC.
+--> - 2026-08-03
+
 ### Added
 - **Per-decision explainer for the local ER-matcher (1.5B) verdict
   (`core/er_matcher/explainer.py` + `LocalLlamaAdapter.score_and_explain`).**
@@ -171,6 +1309,245 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   `tests/test_key_integrity_native_parity.py` (native == pyarrow == the committed
   golden). Requires republishing `goldenmatch-native` to expose the symbol in
   wheel-installed environments (in-tree builds pick it up immediately).
+- **`semantic.certify_structural_json` — a public JSON-in/JSON-out structural
+  certifier + a `goldenmatch_certify_structural` SQL UDF on both backends.** The
+  structural key-integrity tier (group-by uniqueness + fan-out) is now reachable
+  as a JSON boundary (`{"n_rows", "group_columns", "measures"}` →
+  `{"n_key_groups", "duplicate_key_groups", "max_fan_out", "is_unique_at_grain",
+  "measure_fan_out"}`) — the Python analogue of the `key-integrity-core` kernel's
+  `certify_structural_json`. It runs through the shared native kernel when opted
+  in (`GOLDENMATCH_KEY_INTEGRITY_NATIVE`), else the pyarrow reference, and is
+  byte-parity-locked to the committed golden. This closes the semantic-wedge
+  certifier's last surface gap: **DuckDB** (`goldenmatch_certify_structural(VARCHAR)
+  → VARCHAR`, over this function) and **Postgres** (`goldenmatch_certify_structural`
+  native-direct over `key-integrity-core`, pgrx `0.16.0` → `0.17.0`) now emit the
+  same structural certificate as the Python / TS / WASM surfaces. Byte-identical
+  across all five by construction (shared kernel + shared golden). Tests:
+  `tests/test_certify_structural_json.py`.
+- **ER-resolution fragmentation reduction single-sourced with TS via a shared
+  parity fixture.** The resolution tier's cluster→{resolved, fragmented,
+  undercount} reduction (`certify_key_integrity(..., resolve=True)`) is extracted
+  into a pure `_reduce_fragmentation(member_lists, keyvals)` and locked byte-for-
+  byte against the TypeScript port with a shared, Python-generated fixture
+  (`tests/fixtures/.../fragmentation_reduction_cases.json`, read directly by both
+  surfaces — no copy). This is deliberately a data-driven fixture, NOT a Rust
+  kernel: the reduction is a scalar loop over a cluster dict (no Arrow-bulk
+  muscle) whose inputs differ per engine, so kernelizing it would pay FFI
+  marshaling on a small call — the goldenanalysis quality_rollup / regressions
+  precedent. Regenerated + drift-guarded via
+  `scripts/emit_fragmentation_reduction_fixture.py` (wired into
+  `regen_ts_parity_fixtures.sh` → the `ts_parity_freshness` gate). Tests:
+  `tests/test_fragmentation_reduction.py`.
+- **Resolution-tier undercount now carries a 95% confidence interval.**
+  `certify_key_integrity(..., resolve=True)` reported `undercount_estimate =
+  fragmented_entities / resolved_entities` as a bare point estimate — "undercount
+  0.5" read the same from 2 resolved entities as from 2,000. The certificate now
+  also carries `undercount_ci_low` / `undercount_ci_high`, a Wilson score interval
+  on the fragmentation rate (a binomial proportion), so a rate measured from few
+  entities honestly shows a wide interval. A new `safe_bound_conservative`
+  property discounts the CI *upper* bound (worst plausible undercount) for callers
+  who want a statistically-conservative trust floor; `safe_bound` is unchanged
+  (still the point estimate — additive, non-breaking). The interval bounds
+  *sampling* uncertainty, not whether ER clustered correctly. Pure arithmetic,
+  single-sourced with the TS port via a shared fixture
+  (`emit_undercount_ci_fixture.py`, drift-guarded by `ts_parity_freshness`).
+  Tests: `tests/test_undercount_ci.py`.
+- **End-to-end demo + docs for the semantic-layer key-integrity certifier.** A
+  runnable example (`examples/semantic_key_integrity.py`) plants two defects an
+  `orders` semantic model can carry — a duplicated declared key (structural
+  fan-out that double-counts `SUM(revenue)`) and two distinct keys that are really
+  one customer (resolution-tier fragmentation / undercount) — then shows
+  `certify_key_integrity` quantifying both (measure fan-out, the 95% Wilson
+  undercount interval, and `safe_bound_conservative`) without mutating a metric,
+  and fixes it to a clean re-certification. New docs page
+  `docs-site/goldenmatch/semantic-key-integrity.mdx` (wired into the Features nav)
+  documents the structural + resolution tiers, the certificate fields, and the
+  one-kernel cross-surface story (Python / TS / DuckDB / Postgres / dbt). Docs +
+  example only — no code change.
+- **Certificate trust-verdict write-back to the semantic catalog (MetricFlow /
+  Cube / OSI).** A new single-sourced `certificate_verdict(cert)` projects a
+  `KeyIntegrityCertificate` into the `key_integrity` metadata block a semantic
+  catalog carries — the advisory pass/fail `verdict` plus `unique_at_grain`,
+  per-measure fan-out, and the resolution-tier trust floors (`safe_bound` and the
+  CI-discounted `safe_bound_conservative`, with the 95% undercount interval). It is
+  a superset of the legacy 3-field embed. The three crosswalk emitters now share
+  it: `emit_cube_from_crosswalk` / `emit_osi_from_crosswalk` write the full verdict
+  (previously only 3 raw stats), and `emit_from_crosswalk` /
+  `emit_semantic_model` gained a `certificate=` that writes it into
+  `meta.goldenmatch.key_integrity` (MetricFlow embedded nothing before). So
+  "resolve once, the verdict travels with the join." Single-sourced with the TS
+  port (`certificateVerdict`) via a shared fixture (`emit_certificate_verdict_fixture.py`,
+  drift-guarded by `ts_parity_freshness`). Byte-unchanged when no certificate is
+  passed. Tests: `tests/test_certificate_verdict.py`.
+- **Key-integrity trust verdict surfaced on MCP, REST, and the CLI as a build
+  gate.** A shared `certification_report_dict(report)` serializer emits the
+  verdict-rich JSON (`{dialect, n_certified, n_untrustworthy, all_trustworthy,
+  keys:[{target, key, key_integrity}]}`, each key carrying the full
+  `certificate_verdict` block) so the wire shape can't drift across surfaces. The
+  MCP `certify_semantic_model` tool now returns the per-key verdict block (was a
+  flat 4-field shape); a new REST `POST /semantic/certify` endpoint (`{model,
+  frames, resolve}`) returns the same report; and `certify-keys` gained `--json`
+  (the machine-readable report) alongside the existing `--fail-untrustworthy` CI
+  gate, whose table now shows the pass/fail verdict + undercount. So certifying,
+  gating, and the catalog write-back all speak one contract. Tests in
+  `tests/test_certify_semantic_model.py`.
+- **Semantic-model discovery — certified key discovery (Phase 1).**
+  `goldenmatch.semantic.discover_keys(table)` proposes a table's candidate entity
+  keys from three cheap signals (identifier col_type / near-unique cardinality /
+  functional-dependency determinant via `fd_identity_scores`) and PROVES each with
+  `certify_key_integrity` — so a returned `KeyCandidate` is pre-graded
+  (`is_trustworthy`, fan-out, the certificate). Ranked trustworthy-first; a table
+  with no clean key returns only untrustworthy candidates (the loud "this grain
+  double-counts" signal). Numeric/date/geo/description columns are excluded from
+  the key-cardinality signal (they're measures/dimensions, not keys). The first
+  slice of the semantic-model discovery arc (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`) — the
+  generative half of the semantic wedge, where discovery is hypothesis generation
+  and the certifier is the falsification test. Single-column keys for this slice;
+  compound/grain-ambiguous keys + the entity/join/measure phases + the
+  `discover_semantic_model` orchestrator are the following PRs. Tests:
+  `tests/test_semantic_discovery_keys.py`.
+- **Semantic-model discovery — certified join / FK discovery (Phase 3).**
+  `goldenmatch.semantic.discover_joins(tables, keys)` proposes the foreign-key joins
+  across a set of tables and PROVES each join's cardinality with the same certifier
+  the certify wedge uses. FK inference is the hypothesis (a column whose non-null
+  values are a subset of another table's certified key, matching semantic type →
+  a `many_to_one` join); `certify_cube_joins` is the falsification test (the "one"
+  side must be unique at grain, else a metric joined across it double-counts). A
+  returned `JoinCandidate` is pre-graded (`is_trustworthy`, fan-out, the certificate
+  on the referenced key); ranked trustworthy-first. Numeric/date/geo columns are
+  never proposed as foreign keys, and an untrustworthy target `KeyCandidate` is
+  skipped (an unsound grain makes an unsound join). Single-column FKs referencing the
+  caller-supplied per-table keys for this slice; compound/self-referential joins are
+  follow-ons. The second slice of the semantic-model discovery arc (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discovery_joins.py`.
+- **Semantic-model discovery — cross-table entity typing (Phase 2).**
+  `goldenmatch.semantic.discover_entity_types(tables)` groups source tables into the
+  real-world entity types they realize, so the later phases conform one shared key /
+  one dimension per entity instead of one per table. Two signals decide it: a
+  **column-semantic signature** (columns canonicalize to shared tokens via the
+  `schema_match` synonym map + profiled `col_type`; high Jaccard → same kind of thing)
+  and **value overlap** on a shared identity column (email/phone/id-shaped) — but the
+  value-overlap "same entity" signal fires ONLY when the shared column is near-unique
+  on BOTH sides (the same population enumerated twice), so a foreign-key reference
+  (e.g. `orders.customer_id` into `customers`) is correctly read as a Phase-3 join, not
+  as sameness. Each `EntityType` names itself from its dominant hint (`person` /
+  `organization` / `entity_N`), records the per-table conformance key when keys are
+  supplied, and ranks multi-table-first. The third slice of the semantic-model
+  discovery arc (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discovery_entities.py`.
+- **Semantic-model discovery — grain-gated measure/dimension proposal (Phase 4).**
+  `goldenmatch.semantic.discover_measures(table, key=…)` proposes the measures +
+  dimensions a semantic model would declare over a table, and gates each measure's
+  `SUM`-safety on the grain key's Phase-1 CERTIFICATE. `COUNT`/`AVG`/`MIN`/`MAX` are
+  always proposed (fan-out-independent); `SUM` is proposed ONLY when the grain
+  certified clean (`max_fan_out == 1.0`) — on a fanned-out (or unknown) grain the
+  measure is returned with `safe_to_sum == False` and `SUM` withheld, the loud "this
+  would double-count" signal. Dimensions are the low-cardinality categorical columns +
+  dates + geo; the grain and id/reference columns are neither measure nor dimension.
+  So the certifier that graded the key directly grades the measures. The fourth slice
+  of the semantic-model discovery arc (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discovery_measures.py`.
+- **Semantic-model discovery — orchestrator + `discover-model` CLI (Phase 5).**
+  `goldenmatch.semantic.discover_semantic_model(tables)` assembles all four discovery
+  phases (keys → entity types → certified join graph → grain-gated measures) into a
+  draft MetricFlow model, emits it through the existing dialect emitters, and
+  re-certifies it end-to-end — the deliverable is a normal MetricFlow file plus a
+  verdict-rich `certification_report_dict` where EVERY key is already graded. Only
+  `SUM`-safe measures are declared in the emitted model, so a draft never scaffolds a
+  double-counting `SUM`. `ProposedModel.all_trustworthy` is the headline build-gate
+  signal; `.to_dict()` is the JSON shape the discover surfaces emit. New CLI
+  `goldenmatch discover-model -d name=path ... [--dialect metricflow] [-o model.yml]
+  [--json] [--fail-untrustworthy]` (Python-only, mirrors `certify-keys`). Nothing
+  auto-ships — a human reviews the graded draft. The fifth slice of the semantic-model
+  discovery arc (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discovery_model.py`.
+- **Semantic-model discovery — MCP tool + REST endpoint (Phase 6).** Surfaces
+  `discover_semantic_model` on MCP (`discover_semantic_model` tool) and REST
+  (`POST /semantic/discover`), both returning the same `ProposedModel.to_dict()`
+  wire shape the `discover-model` CLI emits — one contract across every surface, so a
+  build gate reads `all_trustworthy` identically whether it calls the tool, the
+  endpoint, or the CLI. Input is `frames` (table name → data file path), `dialect`
+  (default `metricflow`), and `resolve`; bad input / unreadable files / an
+  unsupported dialect return a clean `{"error": ...}` rather than raising. Python-only,
+  mirroring the `certify_semantic_model` surface. The sixth slice of the
+  semantic-model discovery arc (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discover_surface.py`.
+- **Semantic-model discovery — optional advisory LLM namer (Phase 7).**
+  `goldenmatch.semantic.name_semantic_model(model, tables, backend=...)` annotates a
+  finished `ProposedModel` with business names for entity types, dimension columns,
+  low-cardinality dimension VALUES (`status='C'` → "churned"), and measures — attached
+  as `ProposedModel.naming` (a list of `NameSuggestion`; default `[]`). It is
+  **opt-in, self-verified, and never authoritative**: the emitted YAML + certification
+  are computed before naming and are never altered, so structural discovery stays
+  byte-deterministic without it. **Two-pass self-critique** (propose, then a verify
+  pass that critiques each name against its structural evidence; unsupported /
+  low-confidence names are kept but flagged `verified=False`, never silently applied).
+  The backend is an injectable `NamerBackend` Protocol; the default reuses the existing
+  provider detection (the `goldenmatch[llm]` extra) and **abstains** (no names, never
+  raises) when no provider/key resolves. Opt-in per call
+  (`discover_semantic_model(..., name=False)`, CLI `discover-model --name`, MCP/REST
+  `name` bool); `GOLDENMATCH_SEMANTIC_NAMER=0` is a hard kill-switch. The seventh
+  slice of the semantic-model discovery arc (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discovery_namer.py`, `tests/test_semantic_discover_surface.py`.
+- **Semantic-model discovery — applied catalog `--apply-names` (Phase 8).** An opt-in
+  mode that writes the namer's **verified** names from `ProposedModel.naming` into the
+  emitted MetricFlow YAML: entity + measure business names land in native `label:`
+  fields; dimension-column + value-glossary names (`status='C'` → "Churned") land in a
+  `meta.goldenmatch.glossary` block (a sibling of the key-integrity verdict already in
+  `meta.goldenmatch`). **Post-certification + cosmetic:** structural discovery, emit,
+  and certification run unchanged; the labels/meta are applied to the final YAML
+  afterward and never touch grain/joins/measures, so the certification verdict is
+  untouched. Only `verified=True` names are applied; `apply_names=False` (default) is
+  byte-identical to today. New pure `goldenmatch.semantic.apply_names(model) -> str`
+  (no LLM). Opt-in per call (`discover_semantic_model(..., apply_names=False)`, CLI
+  `discover-model --apply-names`, MCP/REST `apply_names` bool; implies `name`); `"yaml"`
+  is now included in `ProposedModel.to_dict()` so the applied catalog is visible on
+  every surface. No new MCP tool / CLI command. The eighth slice of the semantic-model
+  discovery arc (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discovery_apply_names.py`, `tests/test_semantic_discover_surface.py`.
+- **Semantic-model discovery — Cube / OSI emit (Phase 9).** `discover_semantic_model(dialect=...)`
+  now emits `cube` and `osi` draft catalogs in addition to `metricflow` (it used to raise
+  on anything else, though certification already spanned all three). A new
+  `goldenmatch/semantic/discovery/emit.py` maps the discovered structure onto the
+  existing dialect emitters: per table, the grain → primary key (a `primary_key`
+  `CubeDimension` / an `OsiDataset.primary_key` list — composite-ready), discovered
+  dimensions → `CubeDimension`/`OsiField`, sum-safe measures → `CubeMeasure`/`OsiMetric`,
+  and the key-integrity verdict → `meta.goldenmatch` (cube) / `custom_extensions.goldenmatch`
+  (osi). The certified **trustworthy** join graph is emitted natively as
+  `CubeJoin`/`OsiRelationship`, and every emitted model is re-certified end-to-end. The
+  MetricFlow path is byte-identical. `apply_names` (Phase 8) is now dialect-aware: cube
+  → `title:` on cube/measure + `meta.goldenmatch.glossary`; osi → native field `label` +
+  metric `description` + `custom_extensions.goldenmatch.glossary`. `dialect` already
+  plumbs through CLI `--dialect` + MCP/REST `dialect`; no new params or tools. The ninth
+  slice of the semantic-model discovery arc (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discovery_cube_osi_emit.py`.
+- **Semantic-model discovery — compound + self-referential keys (Phase 10).** Lifts the
+  single-column restriction on the discovery side (the certifier, `KeyCandidate.columns`,
+  and all three emit paths already carried multi-column keys). `discover_keys` gains a
+  **fallback pairs** compound search: when no single-column candidate is unique at grain
+  (the grain double-counts), it certifies 2-column combinations of the key-eligible
+  columns (highest-cardinality first, pool-capped) and admits the trustworthy compounds
+  (`signals=["compound"]`), re-ranked trustworthy-first — so a `(order_id, product_id)`
+  order-items grain is discovered where neither column is unique alone. `discover_joins`
+  lifts the self-join exclusion for **self-referential single-column FKs** (a column whose
+  values are a subset of its OWN table's certified key, `fk_col != key_col`, e.g.
+  `employees.manager_id → employees.employee_id`; the self side reuses the table's key
+  certificate since `certify_cube_joins` can't certify a cube joined to itself). Compound
+  grains emit natively in Cube (`primary_key` dims) / OSI (`primary_key` list); MetricFlow,
+  which has no composite primary entity, declares the first column (a documented limit).
+  Compound (multi-column) FKs and 3+-column keys remain follow-ons. No surface change. The
+  tenth slice of the semantic-model discovery arc (design:
+  `docs/superpowers/specs/2026-08-03-semantic-model-discovery-design.md`). Tests:
+  `tests/test_semantic_discovery_compound_selfref.py`.
 
 ### Changed
 - **FS out-of-core streaming: single `resolve_fs_block_source` knob + DuckDB
@@ -279,9 +1656,48 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   listed all 7 primitives as TS-only and claimed "~31 Python-only tools" when the real
   figure is 7. Corrected alongside the counts.
 
-## [Unreleased]
+### Fixed
+- **Threshold perturbation no longer shifts an inert field on probabilistic matchkeys (#2483).** `zero_label_confidence.threshold_perturbations` and `config_edits.ThresholdShift` both shifted `mk.threshold` to build "variant" configs. A probabilistic matchkey cuts on `link_threshold`, so those variants matched **identically** to the baseline -- and the zero-label stability signal derived from them saw zero change and reported maximum confidence. A falsely confident number is worse than none. Both now perturb `mk.cutoff_field`, and a matchkey whose operative cutoff was never set is correctly reported NOT perturbable rather than perturbed through a field that does nothing. Weighted matchkeys are unaffected.
+- **Setting `threshold` on a probabilistic matchkey warns on assignment, not just at construction (#2483).** The constructor-time guard could not see `mk.threshold = 0.95` because `validate_assignment` is off -- and that assignment is precisely the reported workflow (build the config with `auto_configure_probabilistic_df`, then sweep `threshold` and get byte-identical results). `MatchkeyConfig.__setattr__` now emits the same warning, sharing one message with the constructor guard so the two cannot drift. Narrow interception rather than `validate_assignment=True`, which would re-run every validator on every write.
 
 ### Added
+- **`MatchkeyConfig.cutoff` / `.cutoff_field`** -- which attribute actually decides a link for this matchkey type (`link_threshold` for probabilistic, `threshold` otherwise), and its value. `cutoff is None` means no decision was recorded in the config, which is the #2483 state: the cut comes from a runtime fallback. Callers that read or perturb "the cutoff" should use these rather than hardcoding a field name.
+- **Ontology-layer live-catalog write-back.** `write_ontology_catalog(rdf, dest=…)`
+  writes emitted RDF to a file, or (`endpoint=…`) PUTs/POSTs it to a live SPARQL
+  1.1 Graph Store endpoint (a triple store — `mode="replace"`/`"merge"`,
+  `graph_iri`); `write_resolved_identity_graph(crosswalk, …)` emits a crosswalk's
+  `owl:sameAs`/PROV-O graph and writes it in one call. `goldenmatch ontology
+  discover` gains `--endpoint` / `--graph-iri` / `--mode` to push a discovered
+  ontology to a triple store. Stdlib-only (`urllib`, no new dependency); the write
+  path needs no rdflib. GoldenMatch conforms to the Graph Store protocol, it does
+  not implement a triple store. Completes the ontology arc. See ADR 0057.
+- **Ontology-layer CLI + MCP front door.** `goldenmatch ontology certify
+  <ontology.ttl> --data Class=path` and `goldenmatch ontology discover --data
+  Class=path [-o out.ttl]` surface the ontology-layer certify/discover
+  capabilities on the command line (mirroring `certify-keys` / `discover-model`),
+  and MCP tools `ontology_certify` / `ontology_discover` expose the same to
+  agents. `python_only` in the parity gate; `rdflib`-optional (fail-clean install
+  hint without the `goldenmatch[ontology]` extra). See ADR 0056.
+- **Ontology layer, produce + discover (`goldenmatch.semantic.ontology`).**
+  Completes the flesh-out with the generative half: `emit_golden_triples` emits
+  resolved golden records as typed RDF individuals (`rdf:type` + conformed
+  attribute values), `emit_sameas_graph` can type canonical entities to a class
+  (`target_class`), `emit_ontology_shapes` derives a per-class SHACL shape from the
+  ontology's own `owl:hasKey`, and `discover_ontology` proposes a draft OWL
+  ontology — one `owl:Class` per frame — whose `owl:hasKey` is chosen by reusing
+  the certifier-backed `discover_keys` and ships PRE-GRADED
+  (`gm:keyTrustworthy`/`gm:keyUniquenessEstimate`); the Turtle round-trips through
+  `parse_ontology`. See ADR 0055.
+- **Ontology layer, deeper consume + audit (`goldenmatch.semantic.ontology`).**
+  Builds on the v1 provider: `parse_ontology` now inherits `owl:hasKey` down
+  `rdfs:subClassOf` (`effective_has_keys`) and reads cardinality-1 restrictions;
+  `certify_ontology` rolls every declared identity key into one
+  `OntologyCertification` verdict (the analogue of `certify_semantic_model`); and
+  `reconcile_ontology_identity` diffs the ontology's asserted `owl:sameAs`
+  (`asserted_sameas_pairs`) against a GoldenMatch `ResolvedCrosswalk`, flagging
+  where exact-match identity **over-merged** (asserted same, resolved different)
+  or **fragmented** (resolved same, never asserted). Reuses the key-integrity
+  certifier; no reasoner. See ADR 0054.
 
 - **Registry-introspection tools/skills on MCP + A2A (TS-parity).** `list_scorers`,
   `list_transforms`, and `list_strategies` are now exposed on the Python MCP server
@@ -1484,7 +2900,7 @@ Arrow frame backend is the default — measured ~36% faster end-to-end on the
 ## [2.0.0] - 2026-06-14
 
 <!-- README-callout
-**GoldenMatch 2.0.0: the first backwards-incompatible major.** It removes four deprecation-window items, each shipped with a 1.x runway: the legacy `:hash:` identity lookup bridge + `GOLDENMATCH_IDENTITY_ID_SCHEME` (run `goldenmatch identity migrate-ids` before upgrading; un-fingerprintable rows keep their `:hash:` id), the `GOLDENMATCH_CLUSTER_FRAMES_OUT` gate + legacy dict cluster path (`build_clusters` stays as a frames-backed adapter), and the `cheapest_healthy` / `_scale_aware_backend` shims. Pipeline behavior is output-equivalent. Migration guide: [Migrating to v2](https://docs.bensevern.dev/goldenmatch/migrating-to-v2).
+**GoldenMatch 2.0.0: the first backwards-incompatible major.** It removes four deprecation-window items, each shipped with a 1.x runway: the legacy `:hash:` identity lookup bridge + `GOLDENMATCH_IDENTITY_ID_SCHEME` (run `goldenmatch identity migrate-ids` before upgrading; un-fingerprintable rows keep their `:hash:` id), the `GOLDENMATCH_CLUSTER_FRAMES_OUT` gate + legacy dict cluster path (`build_clusters` stays as a frames-backed adapter), and the `cheapest_healthy` / `_scale_aware_backend` shims. Pipeline behavior is output-equivalent. Migration guide: [Migrating to v2](https://docs.bensevern.dev/docs/goldenmatch/migrating-to-v2).
 -->
 
 ### BREAKING CHANGES

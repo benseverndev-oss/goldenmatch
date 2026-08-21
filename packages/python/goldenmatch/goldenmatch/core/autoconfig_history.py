@@ -195,9 +195,24 @@ class RunHistory:
             demoted = 1 if (demote_suspect is not None and demote_suspect(e)) else 0
             sp = e.profile.scoring
             sep = sp.mass_above_threshold - sp.mass_in_borderline
+            # #2663: this guard asks "did EVERYTHING match?", and
+            # `mass_above_threshold` cannot answer it -- it is 1.0 whenever
+            # anything matched at all (see ScoringProfile.admitted_fraction).
+            # So every RED entry that found any pairs was demoted as
+            # precision-collapsed, v0 (which found none) won, and the run
+            # returned a confident empty result on data that was ~30%
+            # duplicates. Use the real admitted fraction where the scorer
+            # supplied one; keep the old field where it did not, so an
+            # uncounted route behaves exactly as before rather than changing
+            # verdict on evidence nobody collected.
+            _collapse_signal = (
+                sp.admitted_fraction
+                if sp.admitted_fraction is not None
+                else sp.mass_above_threshold
+            )
             if (precision_collapse_floor is not None
                     and verdict == HealthVerdict.RED
-                    and sp.mass_above_threshold > precision_collapse_floor):
+                    and _collapse_signal > precision_collapse_floor):
                 # Precision-collapsed regime ("everything matches"). Within
                 # this regime, `-sep` is mechanically biased toward lower
                 # thresholds: a lower threshold narrows the borderline band,
@@ -223,11 +238,53 @@ class RunHistory:
                 # clusters vs the ~145K v0 would have produced.
                 rank = 3
                 return (rank + demoted, 0.0, e.iteration)
+            # ── the mirror guard: DEGENERATE-EMPTY (#2663) ──────────────────
+            #
+            # The collapse guard above catches "everything merged". This
+            # catches the opposite and equally degenerate outcome: a config
+            # that merged NOTHING -- every record its own cluster. It is the
+            # worst shape of wrong answer, because it looks like a clean run.
+            #
+            # Measured on `orgs_hard` (845 rows, 1,055 true duplicate pairs):
+            # v0 produced 845 clusters -- zero merges -- while iteration 3
+            # produced 607, and v0 won every tiebreak, so `dedupe_df` reported
+            # no duplicates on data that is ~30% duplicates.
+            #
+            # Why THIS signal rather than a cluster-shape one: measured, no
+            # cluster metric separates the good entry from a genuinely
+            # over-merged one. orgs_hard's correct iteration 3 and
+            # anchor_person_match's over-merged iteration 1 are near-identical
+            # on every one (giant 0.0154 vs 0.0156, oversized 0 for both,
+            # measured_bridge_risk 0.0 for both, transitivity 0.005 vs 0.085).
+            # "Did it merge anything at all" is the one thing that does
+            # separate them, and it is the actual pathology:
+            #
+            #     orgs_hard    n_rows 845, v0 -> 845 clusters (0 merges)  BAD
+            #     anchor       n_rows 706, v0 -> 400 clusters (306 merges) GOOD
+            #
+            # Deliberately NOT a health-rank change: it only breaks ties
+            # between entries of the SAME health, so a healthier config still
+            # wins on rank. And when EVERY entry is empty -- data that
+            # genuinely has no duplicates -- all are demoted equally and the
+            # ordering is exactly as before. It can only ever prefer a config
+            # that found something over one that found nothing.
+            cp = e.profile.cluster
+            _n_rows = e.profile.data.n_rows
+            _found_nothing = (
+                _n_rows > 0
+                and cp.n_clusters > 0
+                and cp.n_clusters >= _n_rows
+            )
+            _empty_demote = 1 if _found_nothing else 0
             # Zero-label Phase 2: prefer the most-plausible unlabeled structure
             # over the -sep heuristic (which is biased toward lower thresholds).
             if use_zero_label_confidence and e.profile.zero_label is not None:
-                return (rank + demoted, -e.profile.zero_label.overall_confidence, e.iteration)
-            return (rank + demoted, -sep, e.iteration)
+                return (
+                    rank + demoted + _empty_demote,
+                    -e.profile.zero_label.overall_confidence,
+                    e.iteration,
+                )
+            return (rank + demoted + _empty_demote, -sep, e.iteration)
 
         return min(survivors, key=key)
 

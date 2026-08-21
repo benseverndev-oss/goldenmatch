@@ -1,6 +1,6 @@
 {
   "name": "infermap",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Schema-to-schema field mapping engine. TypeScript port of the infermap Python library.",
   "keywords": [
     "schema",
@@ -23,7 +23,7 @@
     "url": "git+https://github.com/benseverndev-oss/goldenmatch.git",
     "directory": "packages/typescript/infermap"
   },
-  "homepage": "https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/typescript/infermap",
+  "homepage": "https://docs.bensevern.dev/docs/infermap",
   "bugs": {
     "url": "https://github.com/benseverndev-oss/goldenmatch/issues"
   },
@@ -55,7 +55,9 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md",
+    "llms.txt"
   ],
   "engines": {
     "node": ">=20"

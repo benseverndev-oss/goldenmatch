@@ -45,6 +45,17 @@ on:
       - "packages/rust/extensions/native/src/suggest.rs"
       - "packages/python/goldenmatch/goldenmatch/core/suggest/**"
       - "scripts/suggest_quality/**"
+      # The FS link-cutoff refit (#2387, #2518). This gate's convergence_final_f1
+      # is the ONLY signal that caught the #2377 default flip -- and it did so a
+      # night LATE, because these paths were absent here: a probabilistic.py edit
+      # ran no suggester gate at all, so the flip went green on push and only the
+      # nightly reddened (five nights). pipeline.py is included because
+      # `_maybe_refit_link_threshold`, the helper every FS route resolves its
+      # cutoff through, lives there. Both are hot files and this fires the fast
+      # `gate` tier (minutes) on their pushes -- that cost is the point: an
+      # absent check is strictly worse than a chatty one.
+      - "packages/python/goldenmatch/goldenmatch/core/probabilistic.py"
+      - "packages/python/goldenmatch/goldenmatch/core/pipeline.py"
       - ".github/workflows/bench-suggest-quality.yml"
 
 permissions:
@@ -98,6 +109,21 @@ jobs:
           )
           print("OK: suggest_config present in native ext")
           PY
+
+      # The real datasets live under a gitignored path, so CI has never had
+      # them and `dblp_acm` has always reported `skipped: dblp_acm (absent)`.
+      # That is why it cannot be blessed: blessing a dataset CI cannot load
+      # turns a legitimate skip into a permanent MISSING failure (#2566 tried,
+      # the gate caught it, it was reverted). The gate is right; the data was
+      # the missing piece. See #2635.
+      #
+      # Deliberately NOT fatal: the fetcher exits 0 whether or not the download
+      # worked, so a Leipzig outage degrades to exactly today's behaviour rather
+      # than reddening a quality gate on someone else's downtime. Once a dataset
+      # is blessed, its absence becomes a MISSING failure in the gate itself,
+      # which is the right place for that to be enforced.
+      - name: Fetch skip-when-absent datasets (best-effort)
+        run: uv run python -m scripts.suggest_quality.fetch_datasets
 
       - name: Run suggest_quality ${{ inputs.mode || 'gate' }}
         env:

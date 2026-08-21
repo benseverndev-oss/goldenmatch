@@ -22,7 +22,7 @@ and distributed (Ray) lanes score exact and weighted matchkeys per chunk /
 partition; a `type: probabilistic` matchkey routed through them raises
 `NotImplementedError` at lane entry (it would otherwise contribute zero pairs
 silently). Run FS configs on the in-memory / `bucket` path, which scales to tens
-of millions of rows on one node — see [Scoring → Scale-out](/goldenmatch/scoring).
+of millions of rows on one node: see [Scoring → Scale-out](/goldenmatch/scoring).
 </Note>
 
 ## Measured scale
@@ -34,7 +34,7 @@ Quoted from the repository. Re-measure for your own hardware.
 | 1,000 | polars | 0.2s | 101 MB | 210 multi-member |
 | 10,000 | polars | 1.4s | 123 MB | 7,000 multi-member |
 | 100,000 | polars | 12s | 544 MB | ~8,200 rec/s |
-| 1M (exact) | polars | ~7.8s | — | — |
+| 1M (exact) | polars | ~7.8s |: |: |
 | 1M (fuzzy) | polars | ~43 min | ~10 GB | 836K |
 | 5M | chunked | ~50 min | 11.9 GB | 618,817 multi-member, no OOM |
 
@@ -74,7 +74,7 @@ The Ray path short-circuits back to local parallel scoring below four large bloc
 
 At hundreds of millions of rows the pipeline runs fully distributed on a multi-node Ray cluster, keeping every stage as a Ray Dataset so the driver never holds the full graph. Enable it with `GOLDENMATCH_DISTRIBUTED_PIPELINE=2` and `GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1`, pointing `RAY_ADDRESS` at your cluster.
 
-The **recall-complete path is now the default** (shipped 2026-06-11): scoring block-shuffles records by blocking key so every record sharing a key co-locates, then clustering runs a distributed connected-components pass that handles components spanning partitions. It was validated end-to-end at **100M rows on a real 5-node GCP cluster — 9.2 min, 20M clusters recovered exactly, 0.36 GB driver RSS**. `GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE=0` restores the legacy per-partition path (faster but under-merges across partitions, so recall drops as partition count rises).
+The **recall-complete path is now the default** (shipped 2026-06-11): scoring block-shuffles records by blocking key so every record sharing a key co-locates, then clustering runs a distributed connected-components pass that handles components spanning partitions. It was validated end-to-end at **100M rows on a real 5-node GCP cluster, 9.2 min, 20M clusters recovered exactly, 0.36 GB driver RSS**. `GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE=0` restores the legacy per-partition path (faster but under-merges across partitions, so recall drops as partition count rises).
 
 ```bash
 export GOLDENMATCH_DISTRIBUTED_PIPELINE=2
@@ -86,10 +86,10 @@ export GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH=gs://your-bucket/rc_scratch
 The distributed connected-components algorithm is a randomized contraction (Bögeholz, Brand and Todor, 2018): relational, chain-robust, with no driver-side union-find and no per-vertex Python dictionary. Each round checkpoints its shrinking edge set to parquet, which keeps the Ray streaming executor from deadlocking on long iterative joins. Below 50M candidate pairs it uses driver-side `scipy` instead, which is correct and bounded at that scale.
 
 <Warning>
-  On a multi-node cluster, `GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH` must be shared storage (a `gs://` prefix). A node-local path is not readable by workers on other nodes, so the per-round parquet checkpoints would fail — the run now raises rather than silently under-merging.
+  On a multi-node cluster, `GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH` must be shared storage (a `gs://` prefix). A node-local path is not readable by workers on other nodes, so the per-round parquet checkpoints would fail. The run now raises rather than silently under-merging.
 </Warning>
 
-`GOLDENMATCH_DISTRIBUTED_PIPELINE=2` requires a Ray Dataset input with a global `__row_id__` column and writes golden records to `output_path` rather than returning a clusters dict. Note that `backend="ray"` *on its own* does **not** stream — it runs an in-memory cheat-line; you need `PIPELINE=2`. Cluster setup, the full env reference, and the benchmark live in the [distributed Ray cluster guide](https://github.com/benseverndev-oss/goldenmatch/blob/main/docs/distributed-ray-cluster-setup.md). For every distributed knob and its default, see [Tuning & opt-ins](/goldenmatch/tuning#distributed-pipeline).
+`GOLDENMATCH_DISTRIBUTED_PIPELINE=2` requires a Ray Dataset input with a global `__row_id__` column and writes golden records to `output_path` rather than returning a clusters dict. Note that `backend="ray"` *on its own* does **not** stream, it runs an in-memory cheat-line; you need `PIPELINE=2`. Cluster setup, the full env reference, and the benchmark live in the [distributed Ray cluster guide](https://github.com/benseverndev-oss/goldenmatch/blob/main/docs/distributed-ray-cluster-setup.md). For every distributed knob and its default, see [Tuning & opt-ins](/goldenmatch/tuning#distributed-pipeline).
 
 <Note>
   Debug the prep-versus-kernel split for the bucket backend with `GOLDENMATCH_BUCKET_DEBUG=1`. It prints a per-bucket prep / kernel / post-filter timing breakdown. It is off by default, costs nothing, and does not change output.
@@ -112,7 +112,7 @@ Once pairs are scored, GoldenMatch groups the surviving edges into entities. The
 
 | `GOLDENMATCH_NATIVE` | Behaviour |
 |---|---|
-| unset / `auto` (default) | Run native **wherever the component's kernel symbol exists** — native is the reference. Pure-Python is the fallback for a missing wheel/symbol. |
+| unset / `auto` (default) | Run native **wherever the component's kernel symbol exists**: native is the reference. Pure-Python is the fallback for a missing wheel/symbol. |
 | `1` | Require native everywhere it exists; raise if the wheel is not importable. |
 | `0` | Force the pure-Python fallback everywhere. |
 
@@ -120,7 +120,7 @@ Once pairs are scored, GoldenMatch groups the surviving edges into entities. The
   **For at-scale and benchmark runs, set `GOLDENMATCH_NATIVE=1`** so a missing/broken wheel fails loudly instead of silently running the slow pure-Python fallback. Under `auto` native already runs wherever a kernel exists; `1` just makes its absence a hard error.
 </Warning>
 
-**"Available" does not mean "your hot loop ran native."** The wheel being importable makes the native telemetry report `available: true` regardless of whether the stage that dominates *your* wall actually dispatched to the kernel — for example, the `bucket` backend's vectorized **numpy** fast-path handles many blocks instead of the native scoring kernel. Result telemetry therefore reports the per-run dispatch reality, not just availability:
+**"Available" does not mean "your hot loop ran native."** The wheel being importable makes the native telemetry report `available: true` regardless of whether the stage that dominates *your* wall actually dispatched to the kernel. For example, the `bucket` backend's vectorized **numpy** fast-path handles many blocks instead of the native scoring kernel. Result telemetry therefore reports the per-run dispatch reality, not just availability:
 
 ```json
 "native": {
@@ -135,7 +135,7 @@ Once pairs are scored, GoldenMatch groups the surviving edges into entities. The
 `ran_native` / `ran_fallback` list the components that actually dispatched to the kernel vs fell back on this run; `hot_path_native` is true when the scoring or clustering stage went native. When the kernel is importable but `GOLDENMATCH_NATIVE` is unset, a one-line `INFO` log notes that `auto` is in effect and that `=1` enables full acceleration.
 
 <Card title="Tuning & opt-ins" icon="sliders" href="/goldenmatch/tuning">
-  Every runtime knob — native gate, backend selection, the distributed pipeline, and the full `GOLDENMATCH_*` table with defaults and when-to-use guidance.
+  Every runtime knob: native gate, backend selection, the distributed pipeline, and the full `GOLDENMATCH_*` table with defaults and when-to-use guidance.
 </Card>
 <Card title="Scale envelope" icon="gauge-high" href="/concepts/scale-envelope">
   The block-size failure modes that matter more than the backend choice.

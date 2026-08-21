@@ -1,12 +1,40 @@
-# Semantic Layering (MetricFlow / Cube / OSI) — brainstorm / planning
+# Semantic Layering (MetricFlow / Cube / OSI / Ontology) — brainstorm / planning
 
 > **Status:** wedges **A + B + C** SHIPPED + **follow-ons** (Cube dialect, OSI
-> conformance validation) — decisions
+> conformance validation) + the **ontology layer** (RDF/OWL/SHACL) — decisions
 > [0049](../decisions/0049-metric-aware-key-certification.md) (certify) +
 > [0050](../decisions/0050-resolved-crosswalk-emit.md) (resolve once + emit) +
 > [0051](../decisions/0051-osi-ossie-native-provider.md) (OSI/Ossie provider) +
 > [0052](../decisions/0052-cube-dialect-and-osi-validation.md) (Cube dialect +
-> OSI validation).
+> OSI validation) +
+> [0053](../decisions/0053-ontology-layer-rdf-owl-provider.md) (ontology layer:
+> RDF/OWL/SHACL native identity provider) +
+> [0054](../decisions/0054-ontology-layer-consume-audit.md) (deeper consume +
+> certification report + reconciliation) +
+> [0055](../decisions/0055-ontology-layer-produce-discover.md) (richer emit +
+> ontology discovery).
+>
+> **Ontology layer (0053 + 0054)** — the semantic-layer thesis one level up
+> (TBox/ABox): an ontology *asserts* identity (`owl:hasKey`,
+> `owl:InverseFunctionalProperty`, `owl:sameAs`) but resolves it only by brittle
+> exact-match. `parse_ontology` + `ontology_identity_keys` (consume the declared
+> identifying keys, with `owl:hasKey` inheritance down `rdfs:subClassOf`),
+> `certify_ontology_keys` / `certify_ontology` (bridge to A — certify exactly those
+> keys, whole-ontology roll-up), `reconcile_ontology_identity` (diff asserted
+> `owl:sameAs` vs resolved identity — over-merge / fragmentation),
+> `emit_sameas_graph` (bridge to B — `owl:sameAs` + PROV-O, optional `rdf:type`),
+> `emit_golden_triples` (typed individuals + conformed values), `emit_identity_shacl`
+> / `emit_ontology_shapes` (conformance shapes), and `discover_ontology` (draft OWL
+> from data, `owl:hasKey` pre-graded by the certifier — the generative half).
+> `rdflib` optional (`goldenmatch[ontology]`); GoldenMatch is the identity provider
+> FOR the reasoner/triple store, never a reimplementation of one. **The ontology
+> arc is complete** (0053 v1 + 0054 consume/audit + 0055 produce/discover) and now
+> has a **CLI + MCP front door** ([0056](../decisions/0056-ontology-cli-mcp-front-door.md):
+> `goldenmatch ontology certify|discover`, `ontology_certify`/`ontology_discover`
+> MCP tools) and **live-catalog write-back** ([0057](../decisions/0057-ontology-live-catalog-writeback.md):
+> `write_ontology_catalog` / `write_resolved_identity_graph` → file or a live
+> SPARQL 1.1 Graph Store endpoint; `ontology discover --endpoint`). **The ontology
+> arc is fully complete — no deferred items remain.**
 > Captures the framing for how GoldenMatch relates to the semantic-layer /
 > metrics-layer ecosystem (dbt Semantic Layer + MetricFlow, Cube, and the Open
 > Semantic Interchange spec), and a crawl→walk→run plan. Problem **A**
@@ -27,6 +55,73 @@
 > Ossie `0.2.0.dev0` required-field + enum constraints that also flags the
 > non-Ossie keys (`cardinality`/`foreign_key`/`aggregation`) hand-written docs
 > tend to invent. The arc is complete — the whole crawl→walk→run is landed.
+>
+> **Cross-language single-sourcing (ratified,
+> [0059](../decisions/0059-semantic-key-integrity-single-sourced-kernel.md)).** The
+> one clean columnar primitive under all of this — the **structural** key-integrity
+> certifier (uniqueness-at-grain + fan-out) — is authored ONCE in the Rust crate
+> `key-integrity-core` and bound by every surface (TS via `key-integrity-wasm`,
+> Python via the `certify_structural_json` native shim, SQL via pgrx + DuckDB), with
+> one Python-generated golden asserted on all three. The join-cardinality wrappers
+> (`certify_serving_joins`/`certify_cube_joins`/`certify_osi_relationships`) delegate
+> to it on both Python and TS — no second source of truth. The shared kernel is
+> **opt-in by design** (pyarrow's `group_by` IS the Arrow-at-bulk boundary and is
+> measurably faster; the kernel exists for the single-owner guarantee, not speed).
+> Recorded on the thesis-conformance board as
+> `semantic-key-integrity-single-sourced-kernel` (`default_routed: opt-in`). The rest
+> of the semantic layer (discovery, resolution tier, namer, warehouse introspection)
+> is orchestration/stateful and correctly stays Python-authoritative.
+>
+> **Feature-store surface (Feast,
+> [0060](../decisions/0060-feast-feature-store-provider.md)).** The wedge one layer
+> over into ML: a Feast `FeatureView` is keyed on an `Entity`'s `join_keys`, and a
+> duplicated join key fans out every aggregated feature (a `sum`/`count`
+> double-counts), a fragmented entity splits its own feature history
+> (training-serving skew), non-conformed keys can't join. Feast's
+> `Entity(join_keys=[...])` maps one-to-one onto MetricFlow `entity (primary)` /
+> Cube `primary_key`, so the same certifier applies. `goldenmatch.semantic.feast`:
+> `parse_feast_models` / `parse_feast_objects` (declarative doc or duck-typed Feast
+> SDK objects — no `feast` dependency), `feast_join_keys`,
+> `certify_feast_feature_views` (bridge A — features are the fan-out measures),
+> `emit_feast_from_crosswalk` (bridge B). `certify_semantic_model` auto-detects a
+> top-level `feature_views:` as the `"feast"` dialect, so the CLI/MCP/REST front
+> doors certify a feature repo with no new surface (parity-free, like Cube). The
+> next missing provider surfaces from the same filter: **BI semantic-model dialects
+> (Malloy/LookML)** and **data contracts (ODCS)**; the CDP/activation lane is
+> competitive prior art, not a plug-under gap.
+>
+> **BI surface (Malloy,
+> [0061](../decisions/0061-malloy-bi-dialect.md)).** Malloy (Google's open semantic
+> modeling language) is the cleanest BI reader/emitter: a `source`'s identity is its
+> declared `primary_key`, and `join_one`/`join_many`/`join_cross` ride on it —
+> structurally the same as Cube, so the certifier applies unchanged.
+> `goldenmatch.semantic.malloy`: `parse_malloy_models` (structured `{sources: [...]}`
+> projection OR raw `.malloy` DSL text via a focused declaration parser),
+> `malloy_join_keys`, `certify_malloy_joins` (bridge A — one-side-key direction,
+> skips `join_cross`), `emit_malloy_from_crosswalk` (bridge B, returns
+> `(text, provenance)` as Malloy has no metadata slot). `certify_semantic_model`
+> auto-detects a top-level `sources:` as `"malloy"`, parity-free like Cube/Feast.
+> Remaining from the filter: **LookML / Power BI** (messier parse) and **data
+> contracts (ODCS)**.
+>
+> **Data-contract surface (ODCS,
+> [0062](../decisions/0062-odcs-data-contract-dialect.md)).** A data contract is the
+> most literal statement of the thesis: it *asserts* identity right in the schema
+> (`primaryKey: true`, ordered by `primaryKeyPosition`; `unique: true`) and nobody
+> checks the assertion against the data — so a duplicated PK makes the contract's own
+> uniqueness promise false. ODCS's `primaryKey` maps one-to-one onto MetricFlow
+> `entity (primary)` / Cube / Malloy `primary_key`, so the certifier applies
+> unchanged. `goldenmatch.semantic.odcs`: `parse_odcs_contract` (v3 `schema:`/
+> `properties:` canonically, tolerant of the legacy v2 `dataset:`/`columns:`/
+> `isPrimary` spelling on read — no `open-data-contract-standard` dependency),
+> `odcs_identity_keys` (the composite PK **plus each standalone `unique` property**),
+> `certify_odcs_contract` (bridge A — one certificate per declared key, numeric
+> properties as the fan-out measures), `emit_odcs_from_crosswalk` (bridge B —
+> resolved key as `primaryKey`, provenance embedded in `customProperties` since ODCS
+> has a metadata slot). `certify_semantic_model` auto-detects `kind: DataContract`
+> as the `"odcs"` dialect, parity-free like Cube/Feast/Malloy. **Remaining from the
+> filter: LookML / Power BI** (messier parse) — the BI-Malloy and data-contract lanes
+> are now landed.
 > Greenfield when written: no prior repo code, doc, or decision referenced this
 > ecosystem (grep, 2026-07-30).
 

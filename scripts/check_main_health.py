@@ -35,7 +35,7 @@ import argparse
 import json
 import subprocess
 import sys
-from typing import Iterable, Optional
+from collections.abc import Iterable
 
 # Trigger events we IGNORE when judging main health. A `workflow_dispatch` run is
 # a human manually kicking a lane (a one-off bench, a retro-publish); its failure
@@ -54,7 +54,7 @@ TRACKER_MARKER = "<!-- main-health-tracker -->"
 TRACKER_LABEL = "main-health"
 
 
-def classify(conclusion: Optional[str]) -> str:
+def classify(conclusion: str | None) -> str:
     """Map a run conclusion to 'red' | 'ok'. Unknown conclusions are red (fail loud)."""
     if conclusion in RED_CONCLUSIONS:
         return "red"
@@ -65,7 +65,7 @@ def classify(conclusion: Optional[str]) -> str:
     return "red"
 
 
-def select_main_run(runs: list[dict]) -> Optional[dict]:
+def select_main_run(runs: list[dict]) -> dict | None:
     """From completed main runs (GitHub returns them newest-first), the latest one
     triggered by an AUTOMATIC event. Manual ``workflow_dispatch`` runs are skipped
     so a stale one-off dispatch failure can't masquerade as a broken main lane.
@@ -120,7 +120,7 @@ def list_active_workflows(repo: str) -> list[dict]:
     return out
 
 
-def latest_main_run(repo: str, workflow_id: int) -> Optional[dict]:
+def latest_main_run(repo: str, workflow_id: int) -> dict | None:
     """Latest COMPLETED, AUTOMATIC run of this workflow on main, or None.
 
     Fetches several recent completed main runs (newest-first) and returns the
@@ -158,7 +158,7 @@ def collect_main_runs(repo: str) -> list[dict]:
 # --------------------------------------------------------------- surfaces (issue)
 
 
-def find_tracker_issue(repo: str) -> Optional[dict]:
+def find_tracker_issue(repo: str) -> dict | None:
     data = _gh_api(
         f"repos/{repo}/issues?state=open&labels={TRACKER_LABEL}&per_page=20"
     )
@@ -180,12 +180,25 @@ def _issue_body(reds: list[dict]) -> str:
         "It is opened/updated when a non-`ci-required` lane goes red on `main` "
         "and closed automatically once `main` is clean again.",
         "",
-        "| Workflow | Conclusion | Latest main run |",
+        # "Latest AUTOMATIC main run", not "Latest main run": manual dispatches
+        # are excluded by `select_main_run`, so a newer passing dispatch can and
+        # does exist alongside the run named here. Saying "latest" flatly is a
+        # false claim -- it reads as a stale or broken query and sends the
+        # reader off to debug one (it did, on #2457, where both listed lanes had
+        # newer green dispatches).
+        "| Workflow | Conclusion | Latest automatic main run |",
         "| --- | --- | --- |",
     ]
     for r in reds:
         run_ref = f"[#{r['run_number']}]({r['html_url']})" if r.get("html_url") else "-"
         lines.append(f"| `{r['name']}` | {r['conclusion']} | {run_ref} |")
+    lines.append("")
+    lines.append(
+        "Manual `workflow_dispatch` runs are deliberately excluded: a dispatch "
+        "can run a narrower scope than the scheduled lane and pass, which would "
+        "mask a real red. So a green dispatch newer than the run above does "
+        "**not** clear this -- only the next automatic (schedule/push) run does."
+    )
     lines.append("")
     lines.append("_Fix the lane, then this issue closes itself on the next scheduled run._")
     return "\n".join(lines)
@@ -255,7 +268,7 @@ def write_step_summary(records: list[dict], reds: list[dict]) -> None:
         fh.write("\n".join(lines) + "\n")
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--repo", default="benseverndev-oss/goldenmatch")
     ap.add_argument(

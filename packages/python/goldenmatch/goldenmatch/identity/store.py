@@ -233,6 +233,21 @@ CREATE TABLE IF NOT EXISTS identity_relationships (
 CREATE INDEX IF NOT EXISTS idx_rel_a    ON identity_relationships(entity_a_id);
 CREATE INDEX IF NOT EXISTS idx_rel_b    ON identity_relationships(entity_b_id);
 CREATE INDEX IF NOT EXISTS idx_rel_kind ON identity_relationships(kind);
+
+-- Config lineage (#config-fingerprint): one row per named resolve run,
+-- recording the fingerprint of the GoldenMatchConfig that produced it. Events
+-- carry run_name, so entity -> its events' run_name -> identity_runs.config_id
+-- answers "which config produced this entity" across incremental runs, and two
+-- runs' config_id / config_json can be diffed. Written once per apply_batch.
+CREATE TABLE IF NOT EXISTS identity_runs (
+    run_name       TEXT PRIMARY KEY,
+    config_id      TEXT,
+    schema_version INTEGER,
+    config_json    TEXT,
+    dataset        TEXT,
+    created_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_runs_config ON identity_runs(config_id);
 """
 
 
@@ -678,6 +693,18 @@ class IdentityStore:
         CREATE INDEX IF NOT EXISTS idx_rel_a    ON identity_relationships(entity_a_id);
         CREATE INDEX IF NOT EXISTS idx_rel_b    ON identity_relationships(entity_b_id);
         CREATE INDEX IF NOT EXISTS idx_rel_kind ON identity_relationships(kind);
+
+        -- Config lineage (#config-fingerprint): one row per named resolve run
+        -- (see _SCHEMA). entity -> events.run_name -> identity_runs.config_id.
+        CREATE TABLE IF NOT EXISTS identity_runs (
+            run_name       TEXT PRIMARY KEY,
+            config_id      TEXT,
+            schema_version INTEGER,
+            config_json    TEXT,
+            dataset        TEXT,
+            created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS idx_runs_config ON identity_runs(config_id);
         """
         with self._conn.cursor() as cur:
             cur.execute(ddl)
@@ -1465,6 +1492,114 @@ class IdentityStore:
             (new_status, merged_into, datetime.now().isoformat(), entity_id),
         )
 
+    def merge_by_shared_field(
+        self, dataset: str | None, field: str | list[str], max_group: int = 100,
+    ) -> tuple[int, int]:
+        """DETERMINISTIC merge: collapse entities that share a non-null value of
+        ``field`` -- an authoritative identifier like ``npi`` -- into ONE, so a
+        unique government id can't be split across entities (the ~6% NPI
+        fragmentation seen at 14M). Records are reassigned to the surviving
+        (lowest) entity id and the absorbed nodes retired ``merged_into`` it, in ONE
+        transaction. A value held by more than ``max_group`` DISTINCT entities is a
+        placeholder/bad id (e.g. ``'0000000000'``) and is skipped. Idempotent
+        (already one entity per value -> no-op). Relationship edges self-heal on the
+        next ``build_relationships`` (reconcile recomputes from current entity ids).
+        Returns ``(entities_merged, groups_merged)``.
+
+        ``field`` may be a single column OR a list of columns for a GUARDED
+        (composite) merge: entities collapse only when they share the same non-null
+        TUPLE of all columns -- e.g. ``['npi', 'last_name']`` reproduces a
+        crosswalk that links records on a shared NPI only when the name also
+        agrees, so a dirty/shared id alone can't force a bad merge. All columns
+        must be non-null for a record to participate.
+
+        Entity-level (post-resolve), so it can't cascade probabilistic clusters into
+        giant components the way a pre-cluster record-level merge does."""
+        if self._backend == "mongo":
+            raise NotImplementedError("merge_by_shared_field: not supported on mongo")
+        fields = [field] if isinstance(field, str) else list(field)
+        if not fields:
+            raise ValueError("merge_by_shared_field: no fields given")
+        for f in fields:
+            if not _SAFE_FIELD.fullmatch(f):
+                raise ValueError(f"unsafe merge field name: {f!r}")
+
+        def _vexpr(f: str) -> str:
+            return (f"payload ->> '{f}'" if self._backend == "postgres"
+                    else f"json_extract(payload, '$.{f}')")
+
+        parts = [_vexpr(f) for f in fields]
+        if len(parts) == 1:
+            vexpr = parts[0]
+            not_null = f"{vexpr} IS NOT NULL AND {vexpr} <> ''"
+        else:
+            # Composite value: concatenate with a unit-separator so distinct
+            # tuples can't collide. Every column must be present (guarded merge).
+            sep = "chr(31)" if self._backend == "postgres" else "char(31)"
+            vexpr = (" || " + sep + " || ").join(parts)
+            not_null = " AND ".join(f"{p} IS NOT NULL AND {p} <> ''" for p in parts)
+        ds = "" if dataset is None else " AND dataset = ?"
+        params: tuple = () if dataset is None else (dataset,)
+        rows = self._fetchall(
+            f"WITH ev AS (SELECT DISTINCT {vexpr} AS v, entity_id FROM source_records "
+            f" WHERE entity_id IS NOT NULL{ds} AND {not_null}), "
+            "grp AS (SELECT v FROM ev GROUP BY v HAVING COUNT(*) >= 2 AND COUNT(*) <= ?) "
+            "SELECT ev.v AS v, ev.entity_id AS e FROM ev JOIN grp ON ev.v = grp.v",
+            params + (max_group,))
+        if not rows:
+            return (0, 0)
+        by_val: dict = {}
+        for r in rows:
+            by_val.setdefault(r["v"], []).append(r["e"])
+        # union-find across values (an entity may share two ids -> chain); survivor
+        # is the lexicographically smallest entity id in the component.
+        parent: dict = {}
+        def _find(x):
+            parent.setdefault(x, x)
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+        def _union(a, b):
+            ra, rb = _find(a), _find(b)
+            if ra != rb:
+                lo, hi = (ra, rb) if ra < rb else (rb, ra)
+                parent[hi] = lo
+        for ents in by_val.values():
+            for e in ents[1:]:
+                _union(ents[0], e)
+        allents = {e for ents in by_val.values() for e in ents}
+        remap = [(e, _find(e)) for e in allents if _find(e) != e]
+        if not remap:
+            return (0, 0)
+        groups = len({_find(e) for e in allents})
+        ts = datetime.now().isoformat()
+        merged_status = IdentityStatus.MERGED_INTO.value
+        rec_upd = [(new, old) for old, new in remap]
+        node_upd = [(new, ts, old) for old, new in remap]
+        rec_sql = "UPDATE source_records SET entity_id = ? WHERE entity_id = ?"
+        node_sql = ("UPDATE identity_nodes SET status = ?, merged_into = ?, "
+                    "updated_at = ? WHERE entity_id = ?")
+        node_upd = [(merged_status, new, ts, old) for old, new in remap]
+        if self._backend == "postgres":
+            with self._conn.transaction(), self._conn.cursor() as cur:
+                cur.executemany(self._pg_sql(rec_sql), rec_upd)
+                cur.executemany(self._pg_sql(node_sql), node_upd)
+        else:
+            outer = self._conn.in_transaction
+            if not outer:
+                self._conn.execute("BEGIN")
+            try:
+                self._conn.executemany(rec_sql, rec_upd)
+                self._conn.executemany(node_sql, node_upd)
+                if not outer:
+                    self._conn.execute("COMMIT")
+            except BaseException:
+                if not outer and self._conn.in_transaction:
+                    self._conn.execute("ROLLBACK")
+                raise
+        return (len(remap), groups)
+
     def upsert_record(self, rec: SourceRecord) -> None:
         if self._backend == "mongo":
             self._mongo.upsert_record(rec)
@@ -2162,6 +2297,48 @@ class IdentityStore:
             (event.entity_id,),
         )
         return int(row["event_id"]) if row and row["event_id"] is not None else None
+
+    def record_run(
+        self,
+        run_name: str,
+        *,
+        config_id: str | None = None,
+        schema_version: int | None = None,
+        config_json: str | None = None,
+        dataset: str | None = None,
+    ) -> None:
+        """Record config lineage for a resolve run (idempotent by run_name).
+
+        Stamps the fingerprint of the config that produced ``run_name``. Events
+        carry run_name, so entity -> events.run_name -> this row's ``config_id``
+        answers "which config produced this entity". First writer wins on a
+        repeated run_name; calling with no ``config_id`` records the run bare.
+        No-op on the mongo backend.
+        """
+        if not run_name or self._backend == "mongo":
+            return
+        self._exec(
+            "INSERT INTO identity_runs "
+            "(run_name, config_id, schema_version, config_json, dataset) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT (run_name) DO NOTHING",
+            (run_name, config_id, schema_version, config_json, dataset),
+        )
+
+    def run_config(self, run_name: str) -> dict[str, Any] | None:
+        """The recorded config lineage for ``run_name`` (or None).
+
+        Keys: ``run_name``, ``config_id``, ``schema_version``, ``config_json``,
+        ``dataset``, ``created_at``.
+        """
+        if self._backend == "mongo":
+            return None
+        row = self._fetchone(
+            "SELECT run_name, config_id, schema_version, config_json, dataset, "
+            "created_at FROM identity_runs WHERE run_name = ?",
+            (run_name,),
+        )
+        return dict(row) if row else None
 
     def history(
         self, entity_id: str, limit: int | None = None

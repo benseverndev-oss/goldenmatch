@@ -68,6 +68,61 @@ fn bimodal_pairs() -> String {
     serde_json::to_string(&serde_json::json!({ "score": scores, "n_pairs": n_pairs })).unwrap()
 }
 
+/// #2497: the exact-duplicate shape -- a dominating non-match bulk, a fuzzy
+/// true-match mode, a near-empty NOTCH, and a hard spike of 1.0s in the top bin.
+/// Any corpus with genuine exact duplicates produces it; on NCVR-synthetic it
+/// came from a ground-truth entity id landing in the matchkey, but the shape is
+/// what matters, not its cause.
+///
+/// Authored against the kernel's real geometry (`HISTOGRAM_BINS = 24`, binned
+/// over [min, max] of the DATA), as per-bin counts scaled 1:10 from the issue's
+/// own histogram. Two properties are load-bearing:
+///   - the bulk must EXCEED the spike, so the global max is on the left and the
+///     right-anchored scan has a band to scan (a spike that is itself the global
+///     max makes `dip()` return None for an unrelated reason, which would make
+///     this fixture pin nothing);
+///   - bin 22 must be near-empty, so the spike's prominence test passes and the
+///     valley collapses onto the notch -- the actual defect.
+fn spike_pairs() -> String {
+    let scores = spike_scores();
+    let n_pairs = scores.len();
+    serde_json::to_string(&serde_json::json!({ "score": scores, "n_pairs": n_pairs })).unwrap()
+}
+
+fn spike_scores() -> Vec<f64> {
+    const BINS: usize = 24;
+    const LO: f64 = 0.50;
+    const WIDTH: f64 = (1.00 - LO) / BINS as f64;
+    // (bin index, count)
+    const SPEC: [(usize, usize); 14] = [
+        (0, 400), // non-match bulk == the global max
+        (11, 12),
+        (12, 6),
+        (13, 7),
+        (14, 8),
+        (15, 4),
+        (16, 13),
+        (17, 3),
+        (18, 6),
+        (19, 15),
+        (20, 27), // the true-match mode
+        (21, 19),
+        (22, 1),   // the notch
+        (23, 147), // the exact-duplicate spike
+    ];
+    let mut scores: Vec<f64> = Vec::new();
+    for (bin, count) in SPEC {
+        // mid-bin, except the top bin which is the literal exact-match value
+        let s = if bin == BINS - 1 {
+            1.0
+        } else {
+            LO + (bin as f64 + 0.5) * WIDTH
+        };
+        scores.extend(std::iter::repeat_n(s, count));
+    }
+    scores
+}
+
 fn config_one_matchkey(threshold: f64) -> String {
     serde_json::json!({
         "matchkeys": [{
@@ -130,6 +185,29 @@ fn cases() -> Vec<Case> {
             clusters: r#"[{"quality": "strong", "oversized": false}]"#.to_string(),
             column_signals: clean_signals(),
             config: config_one_matchkey(0.50),
+            priors: priors_empty(),
+        },
+        // (2b) exact_match_spike (#2497): a hard spike of exact duplicates at 1.0,
+        //      separated from the fuzzy bulk by a near-empty notch. The spike is
+        //      the rightmost prominent peak, so before the MIN_VALLEY_HEADROOM_FRAC
+        //      guard `dip()` returned the notch just under it, DIP_MIN_GAP then
+        //      suppressed the suggestion, and the healer emitted NOTHING at a
+        //      badly-set threshold.
+        //
+        //      This case exists to put that behaviour under the CROSS-SURFACE gate.
+        //      None of the other fixtures has a top-bin spike, so without it the
+        //      TS/wasm surface could keep an unfixed kernel and every parity test
+        //      would still pass -- a check that exists and does not fire, which is
+        //      how the bug reached main in the first place.
+        Case {
+            name: "exact_match_spike",
+            // n_pairs derived, never hardcoded: the Python cross-parity test
+            // builds an Arrow table from `score` + `n_pairs` and fails on a
+            // length mismatch, which is how a stale literal here surfaces.
+            scored_pairs: spike_pairs(),
+            clusters: r#"[{"quality": "strong", "oversized": false}]"#.to_string(),
+            column_signals: clean_signals(),
+            config: config_one_matchkey(0.98),
             priors: priors_empty(),
         },
         // (3) swap_scorer: empty pairs (no threshold signal), corrupted address

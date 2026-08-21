@@ -149,6 +149,44 @@ benchmark test the v1.8 number was measured against.
 
 ---
 
+### Product matching (Abt-Buy, Amazon-Google) — the tracked HARD case
+
+| Property | Value |
+|---|---|
+| Runner | `scripts/run_benchmarks.py --datasets abt-buy` (or `amazon-google`, or `products` for both) |
+| Helper | `scripts/dqbench_adapters/leipzig_eval.py::run_two_source_dedupe_zeroconfig` |
+| Datasets | Leipzig Abt-Buy + Amazon-GoogleProducts (two-source, heterogeneous schemas) |
+| Drop location | `packages/python/goldenmatch/tests/benchmarks/datasets/{Abt-Buy,Amazon-Google}/` (auto-pulled by `--download`) |
+| Source URL | https://dbs.uni-leipzig.de/de/research/projects/object_matching/benchmark_datasets_for_entity_resolution |
+| GT construction | ID-joined perfect mapping → connected-components cluster truth → pairwise-F1 |
+
+These are deliberately the engine's HARD domain: short product titles resist
+blocking (see issue #715), so zero-config recall is low. We publish them to
+make the gap visible and track it down, not to flatter the numbers. The
+two sources are unified into one `dedupe_df` frame with source-prefixed
+`record_id`s (`abt:123` / `buy:456`) so a single dedupe run resolves across
+both.
+
+---
+
+## The committed results doc (single source of truth)
+
+`docs/benchmarks/latest-results.md` (+ its `.json`) is the **generated,
+committed** record of the current numbers. Do not hand-edit it — the
+`benchmarks.yml` workflow regenerates both on the perf path
+(`GOLDENMATCH_NATIVE=1`) and commits them, and a `--check` gate in CI fails
+any PR whose markdown drifts from its JSON. To refresh locally:
+
+```bash
+python scripts/run_benchmarks.py --datasets all \
+  --report docs/benchmarks/latest-results.md
+```
+
+The zero-config controller is too slow on a laptop to publish honest
+wall-times, so the authoritative numbers come from the scheduled CI run.
+
+---
+
 ## Environment requirements
 
 Pin these for any benchmark run you want to publish:

@@ -1,0 +1,153 @@
+# GoldenMatch
+
+> Zero-config entity resolution — deduplicate and match records with fuzzy, exact, probabilistic (Fellegi-Sunter), and LLM scoring. Scales from a laptop CSV to 100M+ rows on Ray; the zero-tuning probabilistic path beats hand-rolled, expert-tuned Splink head-to-head.
+
+## The healing loop (core workflow)
+Zero-config gets good results and returns the config it chose; the healer (`review_config`) reviews the results and suggests ranked, self-verified tweaks; apply them, results improve, repeat — closing the gap to expert-tuned without you being the expert. Wired into the default pipeline: `dedupe_df` attaches candidate suggestions to `result.suggestions` when a free signal fires (`dedupe_df(suggest=True)` verified, `heal=True` full loop; disable with `GOLDENMATCH_SUGGEST_ON_DEDUPE=0`). Needs `goldenmatch[native]`; degrades gracefully without it. Docs: https://docs.bensevern.dev/docs/goldenmatch/config-suggestions
+
+## Interfaces
+- MCP Server: `goldenmatch mcp-serve` (97 tools across data, agent, identity, memory, routing, and document groups)
+- Remote MCP: https://goldenmatch-mcp-production.up.railway.app/mcp/ (97 tools, Smithery: https://smithery.ai/servers/benzsevern/goldenmatch)
+- A2A Server: `goldenmatch agent-serve --port 8200` (51 skills advertised in the agent card)
+- CLI: `goldenmatch dedupe`, `goldenmatch match`, `goldenmatch autoconfig`, `goldenmatch memory ...`, `goldenmatch identity ...`, + more
+- Python API: `import goldenmatch` — `dedupe_df()`, `match_df()`, `score_strings()`, `evaluate()`, ~202 exports
+- TypeScript / Edge: `npm install goldenmatch` — same API in browsers, Cloudflare Workers, Vercel Edge, Deno; optional WASM via `await enableWasm()` swaps in the Rust score-core kernel, and `enableSuggestWasm()` brings the config-suggestion "healer" (`dedupe({suggest, heal})`) to TS via suggest-core (pure-TS stays the default + byte-identical fallback)
+- REST API: `goldenmatch serve` on port 8000
+- SQL: Postgres (pgrx extension) + DuckDB UDFs — dedupe / match / score / auto-config + telemetry / identity graph
+
+## AutoConfigController telemetry (cross-surface)
+Every interface above returns the same JSON shape from `goldenmatch.web.controller_telemetry.serialize_telemetry`: `{stop_reason, health, scoring, blocking, cluster, column_priors, decisions, committed_matchkeys, negative_evidence}`. Write one parser, reuse across web / TUI / CLI / SQL / MCP / A2A / REST.
+
+## Document ingest (run on unstructured input)
+GoldenMatch doesn't require structured data. Extract matchable records from PDFs/images (cards, forms, invoices, scanned directories) against a schema you control, then dedupe them. Two-step: `suggest_schema_from_file(sample)` proposes a schema (review it), `ingest_documents(paths, schema)` returns a DataFrame -> `dedupe_df(df, exclude_columns=["_source_file","_source_page","_extract_confidence"])`. Python: `from goldenmatch.documents import ingest_documents`. CLI: `goldenmatch ingest-docs {suggest-schema, run}`. MCP tools + A2A skills: `documents_suggest_schema`, `documents_ingest`. REST: `POST /api/v1/documents/{suggest-schema, ingest}`. Web UI: `/documents`. Needs `goldenmatch[documents]` + an OpenAI vision key (`OPENAI_API_KEY_PERSONAL`; default `gpt-4o`). Docs: https://docs.bensevern.dev/docs/goldenmatch/documents
+
+## Install
+- `pip install goldenmatch` (native acceleration ships by default on common platforms)
+- Document ingest (PDF/image -> records): `pip install goldenmatch[documents]`
+- TypeScript: `npm install goldenmatch`
+- Quality scanning: `pip install goldenmatch[quality]`
+- Data transforms: `pip install goldenmatch[transform]`
+- Embeddings: `pip install goldenmatch[embeddings]`
+- Distributed (50M+): `pip install goldenmatch[ray]`
+
+## Accuracy
+- DBLP-ACM: 96.4% F1 out of the box (zero-config weighted controller path)
+- Beats hand-rolled, expert-tuned Splink head-to-head: the zero-tuning probabilistic (Fellegi-Sunter) auto-config wins on every dataset Splink scores under one shared evaluator — historical_50k F1 0.827 vs 0.757 (cluster B³ 0.862 vs 0.788), febrl3 0.996 vs 0.965, synthetic_person 1.000 vs 0.996. Bake-off: docs/benchmarks/2026-06-09-splink-bakeoff.md
+- DQbench composite: 91.04
+- PPRL: 92.4% F1 on FEBRL4
+
+## Quick Examples
+
+### Deduplicate a CSV (zero-config)
+```python
+import goldenmatch as gm
+result = gm.dedupe("customers.csv")
+result.golden.write_csv("deduped.csv")
+print(f"{result.total_clusters} clusters, {result.match_rate:.1%} match rate")
+```
+
+### Deduplicate with explicit config
+```python
+result = gm.dedupe("customers.csv",
+    exact=["email"],
+    fuzzy={"name": 0.85, "address": 0.80},
+    blocking=["zip"],
+)
+```
+
+### Match across two files
+```python
+result = gm.match("file_a.csv", "file_b.csv", fuzzy={"name": 0.85})
+```
+
+### Privacy-preserving linkage (no raw data shared)
+```python
+result = gm.pprl_link("hospital_a.csv", "hospital_b.csv",
+    fields=["first_name", "last_name", "dob", "zip"])
+```
+
+### Evaluate accuracy
+```python
+metrics = gm.evaluate("data.csv", config="config.yaml", ground_truth="gt.csv")
+print(f"F1: {metrics['f1']:.1%}, Precision: {metrics['precision']:.1%}")
+```
+
+## Config Template (YAML)
+
+```yaml
+matchkeys:
+  - name: exact_email
+    type: exact
+    fields:
+      - field: email
+        transforms: [lowercase, strip]
+
+  - name: fuzzy_name
+    type: weighted
+    threshold: 0.85
+    fields:
+      - field: first_name
+        scorer: jaro_winkler
+        weight: 0.5
+        transforms: [lowercase, strip]
+      - field: last_name
+        scorer: jaro_winkler
+        weight: 0.3
+      - field: zip
+        scorer: exact
+        weight: 0.2
+
+blocking:
+  strategy: adaptive
+  keys:
+    - fields: [zip]
+
+golden_rules:
+  default_strategy: most_complete
+```
+
+## Key Types
+
+- `DedupeResult` — `.golden` (DataFrame), `.dupes`, `.unique`, `.clusters` (dict), `.scored_pairs` (list), `.stats`, `.total_clusters`, `.match_rate`
+- `MatchResult` — same shape as DedupeResult for cross-file matching
+- `GoldenMatchConfig` — Pydantic model, loadable from YAML via `gm.load_config("config.yaml")`
+
+## Performance & Scale
+- Backend tiers: in-memory Arrow-native (<500K; the classic polars scorer needs the optional [polars] extra since v3.1.0), DuckDB out-of-core (500K-50M), Ray distributed (>=50M). The engine is Arrow-native end to end and the polars-free install measures FASTER (Rust fused kernels on the hot paths); the [polars] extra is a compatibility surface (classic lane, kernel-absent golden replay, cell-quality weighting), not an accelerator.
+- Verified at 100M: full dedupe in 9.2 min on a 5-node Ray cluster (80 CPU), 20,000,000 clusters recovered exactly, driver peak 0.36 GB RSS — recall-complete (correct across any partitioning) and driver-collect-free end to end
+- 1M exact dedupe: ~7.8s. 100K fuzzy: ~12.8s
+- LLM scorer: ~$0.04 per dataset (budget-capped, opt-in)
+
+## Scorers
+exact, jaro_winkler, levenshtein, token_sort, ensemble, dice, jaccard, soundex_match, embedding, record_embedding, name_freq_weighted_jw, given_name_aliased_jw
+
+## Transforms
+lowercase, uppercase, strip, soundex, metaphone, digits_only, alpha_only, normalize_whitespace, token_sort, first_token, last_token, substring:start:end, legal_form_strip, address_normalize, naics_normalize
+
+## Bundled Reference Data (auto-applied when col name + col_type agree)
+- Surnames (US Census 2010, top 10K) → enables `name_freq_weighted_jw` scorer on `last_name`/`surname` columns
+- Given-name aliases (~140 pairs) → enables `given_name_aliased_jw` scorer on `first_name`/`given_name` columns
+- Business legal forms (Inc, LLC, Ltd, GmbH, S.A., ...) → prepends `legal_form_strip` on company/business/org columns
+- USPS Pub. 28 addresses → prepends `address_normalize` on address/street/addr_line columns
+- NAICS 2022 industries (2,125 codes) → prepends `naics_normalize` on naics/sic/industry_code/business_type columns
+Auto-config only applies these when the profiled `col_type` agrees with the column name (e.g. a `last_name` column holding numeric IDs keeps its plain scorer). See docs/reference-data.
+
+## Golden Suite
+GoldenMatch is the headline package of a 6-package suite that composes into one pipeline: GoldenCheck (profile + validate) → GoldenFlow (standardize) → GoldenMatch (dedupe) → GoldenAnalysis (cross-cutting reporting), orchestrated by GoldenPipe, with InferMap for schema mapping. All ship on both PyPI and npm.
+
+## Knowledge Graphs (entity resolution as the resolve stage)
+- `goldenmatch-kg` (in-repo, first PyPI release pending) — drop-in GoldenMatch resolution for KG frameworks: neo4j-graphrag (`GoldenMatchResolver`), LlamaIndex PropertyGraphIndex (`GoldenMatchEntityResolver`), Graphiti (`propose_entity_merges`). One framework-agnostic `resolve_entities` core; the ER-stage lift is measured by ER-KG-Bench, not asserted.
+- `goldengraph` (in-repo, first PyPI release pending) — build-your-own-KG from text: `text → LLM extraction → GoldenMatch resolution → durable bi-temporal store`. pyo3-free Rust engine (store / query / community detection); ER is the differentiator. Early evidence program with head-to-head QA bench vs LightRAG / MS-GraphRAG / Graphiti.
+
+## Recent (v2.1–v2.2)
+- Semantic blocking (#1065, v2.2.0, opt-in): `dedupe_df(semantic_blocking=...)` unions abbreviation/initialism blocking, a business-alias canonical-form table, and an embedding ANN pass. +5.3pp recall at zero precision cost on the abbreviation-heavy benchmark.
+- `config_weaknesses` (#1064, v2.2.0): deterministic, offline config-critique tool — explains where an auto-built config is risky and maps each finding to one concrete fix.
+- Correlated survivorship (#1047/#1055, v2.1.0): `FieldGroupSpec` + `DomainPack.groups` keep correlated fields (street/city/postcode) in lock-step from one winning source; `anchor`/`allow_fill` group-winner strategy; provenance surfaced through lineage, explain, MCP, review queue.
+- Chunked PPRL linkage (#1054, v2.1.0): streams Party B in blocks; peak memory ~9-14x lower, byte-identical output.
+- Native-dispatch telemetry (#1048, v2.1.0): `result.native` reports whether the scoring hot path used the Rust kernel; warns on a silently-slow Python fallback.
+
+## Docs
+- [Full docs](https://docs.bensevern.dev/docs/goldenmatch/overview): 22 guides
+- [Full API reference](https://docs.bensevern.dev/docs/goldenmatch/python-api): 202 exports
+- [PyPI](https://pypi.org/project/goldenmatch/)
+- [GitHub](https://github.com/benseverndev-oss/goldenmatch)

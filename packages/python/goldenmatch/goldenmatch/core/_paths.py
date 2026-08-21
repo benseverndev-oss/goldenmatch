@@ -33,12 +33,23 @@ def safe_path(value: str | os.PathLike, *, base_dir: str | os.PathLike | None = 
     raw = os.fspath(value)
     if "\x00" in raw:
         raise ValueError("path contains NUL byte")
-    resolved = Path(raw).resolve()
+    resolved = os.path.realpath(raw)
     root = base_dir if base_dir is not None else os.environ.get(_ENV_ROOT)
     if root:
-        root_resolved = Path(root).resolve()
-        if not resolved.is_relative_to(root_resolved):
+        root_resolved = os.path.realpath(root)
+        # os.path.commonpath is the containment barrier CodeQL recognizes as a
+        # sanitizer for py/path-injection (Path.is_relative_to is NOT). It raises
+        # ValueError on paths with no shared anchor (e.g. different Windows
+        # drives) -- treat that as "not contained".
+        try:
+            contained = (
+                resolved == root_resolved
+                or os.path.commonpath((root_resolved, resolved)) == root_resolved
+            )
+        except ValueError:
+            contained = False
+        if not contained:
             raise PathOutsideAllowedRootError(
                 f"path {str(resolved)!r} is outside allowed root {str(root_resolved)!r}"
             )
-    return resolved
+    return Path(resolved)

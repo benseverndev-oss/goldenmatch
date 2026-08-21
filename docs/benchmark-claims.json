@@ -7,18 +7,19 @@
     "number the engine no longer hits. LIMITATION: this locks the surfaces to this",
     "declared value -- it does not re-run the benchmark. Bumping a value is a deliberate",
     "act that should follow a fresh run. Authority for the current values:",
-    "docs/benchmarks/2026-06-09-splink-bakeoff.md (summary table)."
+    "docs/benchmarks/2026-06-09-splink-bakeoff.md (the FS head-to-head F1s are the",
+    "2026-08-06 Refresh section; DBLP-ACM/DQbench/PPRL/100M are unchanged)."
   ],
   "surfaces": [
     "llms.txt",
     "README.md",
-    "packages/python/goldenmatch/llms.txt",
+    "packages/python/goldenmatch/goldenmatch/llms.txt",
     "packages/python/goldenmatch/README.md"
   ],
   "claims": [
-    {"id": "historical_50k_gm_f1", "context": "historical_50k", "value": "0.778"},
-    {"id": "febrl3_gm_f1", "context": "febrl3", "value": "0.991"},
-    {"id": "synthetic_person_gm_f1", "context": "synthetic_person", "value": "0.998"},
+    {"id": "historical_50k_gm_f1", "context": "historical_50k", "value": "0.827"},
+    {"id": "febrl3_gm_f1", "context": "febrl3", "value": "0.996"},
+    {"id": "synthetic_person_gm_f1", "context": "synthetic_person", "value": "1.000"},
     {"id": "dblp_acm_gm_f1", "context": "DBLP-ACM", "value": "96.4%"},
     {"id": "dqbench_composite", "context": "DQbench", "value": "91.04"},
     {"id": "pprl_febrl4_f1", "context": "FEBRL4", "value": "92.4%"},

@@ -48,3 +48,38 @@ types:
     value_signals:
       min_unique_pct: 0.95
     suppress: ["cardinality", "pattern_consistency", "drift_detection"]
+
+# Entity roles (schema v4). A role names a PARTY a record refers to, as
+# distinct from `types:` above, which name FIELD types. Consumed by
+# infermap's identity-layer detector; `typical_types` corroborates a
+# detected layer but never vetoes one.
+roles:
+  financial_institution:
+    kind: organization
+    name_hints: ["bank", "institution", "depository", "custodian"]
+    typical_types: ["routing_number", "account_number"]
+
+  lender:
+    kind: organization
+    name_hints: ["lender", "originator", "creditor", "issuer", "servicer"]
+    typical_types: ["account_number", "routing_number"]
+
+  borrower:
+    kind: person
+    name_hints: ["borrower", "debtor", "obligor", "applicant"]
+    typical_types: ["account_number"]
+
+  payor:
+    kind: organization
+    name_hints: ["payor", "payer", "remitter"]
+    typical_types: ["account_number", "routing_number", "transaction_amount"]
+
+  payee:
+    kind: organization
+    name_hints: ["payee", "beneficiary", "recipient"]
+    typical_types: ["account_number", "routing_number"]
+
+  merchant:
+    kind: organization
+    name_hints: ["merchant", "vendor", "counterparty", "acquirer"]
+    typical_types: ["merchant", "transaction_amount"]

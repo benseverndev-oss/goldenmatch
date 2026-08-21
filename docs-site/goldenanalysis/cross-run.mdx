@@ -4,11 +4,11 @@ description: "Trend metrics across a run history and flag regressions versus a b
 keywords: ["goldenanalysis", "cross-run", "trend", "regression detection", "report history", "drift"]
 ---
 
-A single report tells you about one run. The cross-run layer answers "how did this run compare to last week?" — trend, drift, and regression detection over a stored history of reports.
+A single report tells you about one run. The cross-run layer answers "how did this run compare to last week?", trend, drift, and regression detection over a stored history of reports.
 
 ## ReportHistory
 
-`ReportHistory` is an append-only store of `AnalysisReport`s, keyed by `(analysis_name, dataset, run_id)`. It defaults to **JSONL** (a reports log is the natural fit) with **SQLite** optional — both stdlib, no new dependencies.
+`ReportHistory` is an append-only store of `AnalysisReport`s, keyed by `(analysis_name, dataset, run_id)`. It defaults to **JSONL** (a reports log is the natural fit) with **SQLite** optional, both stdlib, no new dependencies.
 
 ```python
 from goldenanalysis import ReportHistory
@@ -24,8 +24,8 @@ flagged = hist.detect_regressions("customers")
 
 Regression flags are **direction-aware** and **per-metric**. The baseline is a *strategy*, not just "the previous value":
 
-- `rolling_median` (default) — the median of the last *window* runs; immune to one noisy night, where `previous` would alternately flag and un-flag.
-- `previous` / `last_known_good` — the most recent historical value.
+- `rolling_median` (default): the median of the last *window* runs; immune to one noisy night, where `previous` would alternately flag and un-flag.
+- `previous` / `last_known_good`: the most recent historical value.
 - a pinned `run_id`.
 
 Thresholds come from a `RegressionPolicy` and respect each metric's `direction`: a `higher_better` metric (recall) flags only on a **drop**, a `lower_better` metric (finding counts) only on a **rise**, `neutral` either way.
@@ -37,7 +37,7 @@ policy = RegressionPolicy(default_pct=10.0, per_metric={"match.recall_safe_bound
 flagged = hist.detect_regressions("customers", baseline="rolling_median", policy=policy)
 ```
 
-The worked example: a per-metric **2% gate on `match.recall_safe_bound`** catches a 0.97 → 0.89 recall drop that a global 10% gate would miss — exactly the kind of quiet quality regression a nightly pipeline should alert on.
+The worked example: a per-metric **2% gate on `match.recall_safe_bound`** catches a 0.97 → 0.89 recall drop that a global 10% gate would miss, exactly the kind of quiet quality regression a nightly pipeline should alert on.
 
 ## Narrative
 

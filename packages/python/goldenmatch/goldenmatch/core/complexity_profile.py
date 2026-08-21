@@ -250,6 +250,20 @@ class MatchkeyProfile:
         return _max_severity(*verdicts) if verdicts else HealthVerdict.GREEN
 
 
+# Blocking-skew RED thresholds (see BlockingProfile.health).
+#
+# 0.10: a block owning more than a tenth of all candidate pairs is a straggler
+# no realistic worker pool can absorb -- 8 to 16 workers is the common case, so
+# a 1/10 share already sets the floor on wall time by itself. It is also ~5x
+# above the 0.019 measured on the healthiest fine-grained shape in the
+# head-to-head panel, so the rule has room before it starts false-positiving.
+#
+# 4.0: the same block must ALSO hold more than 4x its fair share (1/n_blocks)
+# before this counts as skew rather than coarseness. Inert above 40 blocks.
+_LARGEST_BLOCK_PAIR_SHARE_RED: float = 0.10
+_LARGEST_BLOCK_FAIR_SHARE_MULTIPLE: float = 4.0
+
+
 @dataclass(frozen=True)
 class BlockingProfile:
     _version: int = 1
@@ -345,11 +359,51 @@ class BlockingProfile:
             singleton_block_count=self.singleton_block_count * n_rows_full // n_rows_sample,
         )
 
+    @property
+    def largest_block_pair_share(self) -> float:
+        """Fraction of all candidate pairs contributed by the biggest block.
+
+        Within-block pairs are quadratic in block size, so this is the measure
+        of straggler risk: a block at 0.5 owns half the scoring work of the
+        whole run and no amount of parallelism can hide it.
+
+        Both terms are measured on the same profile, so the ratio is
+        scale-free. Note that ``extrapolate_to`` scales ``total_comparisons``
+        but NOT ``block_sizes_max`` -- an extrapolated profile would understate
+        this. That is not a live hazard: the extrapolated profile feeds the
+        PLANNER (``profile_for_planner`` in autoconfig_controller), while
+        ``health`` is called on the committed sample-scale profile.
+        """
+        if self.total_comparisons <= 0 or self.block_sizes_max < 2:
+            return 0.0
+        biggest = self.block_sizes_max * (self.block_sizes_max - 1) // 2
+        return biggest / self.total_comparisons
+
     def health(self, n_rows: int) -> HealthVerdict:
+        # `n_rows` is retained for signature stability with ClusterProfile.health
+        # and the existing call sites; the skew rule below no longer needs it.
         if self.n_blocks == 0:
             return HealthVerdict.RED
-        avg = n_rows / max(self.n_blocks, 1)
-        if self.block_sizes_p99 > 10 * avg:
+        # Skew is WORK CONCENTRATION, not a size percentile. The previous rule
+        # -- `block_sizes_p99 > 10 * (n_rows / n_blocks)` -- divided a tail
+        # percentile by the MEAN block size, which is pinned near 1 whenever
+        # blocking is fine-grained, so the bar collapsed toward "any block over
+        # ~12 rows". Measured at 100k rows it graded the person shape RED
+        # (avg 1.19, p99 72) while that shape's largest block owned 1.9% of the
+        # candidate pairs, reduction was 0.976 and there were no singletons --
+        # and a RED blocking profile at n_rows >= REFUSE_AT_N REFUSES the run.
+        # It also MISSED the case it exists for: one block of 10,000 rows among
+        # 5,000 blocks owns 98.5% of the work yet sits above p99 rather than at
+        # it, so the percentile never sees it. See #2628 and
+        # tests/test_blocking_skew_pair_share.py for both fixtures.
+        #
+        # The fair-share term keeps the rule off coarse-but-UNIFORM layouts,
+        # where a 1/n_blocks share is simply what having few blocks looks like.
+        # It costs no coverage: at small n_blocks a dominating block has to hold
+        # most of the rows, which craters reduction_ratio below.
+        skew_bar = max(_LARGEST_BLOCK_PAIR_SHARE_RED,
+                       _LARGEST_BLOCK_FAIR_SHARE_MULTIPLE / self.n_blocks)
+        if self.largest_block_pair_share > skew_bar:
             return HealthVerdict.RED
         if self.reduction_ratio < 0.5:
             return HealthVerdict.RED
@@ -372,6 +426,33 @@ class ScoringProfile:
     _version: int = 1
     n_pairs_scored: int = 0
     candidates_compared: int = 0
+    # Was `candidates_compared` actually MEASURED? (#2639)
+    #
+    # `scorer.py` skips the candidate-count loop above 10,000 blocks -- counting
+    # calls `Block.n_rows()`, which materialises, and doing that serially for
+    # tens of thousands of blocks is real time. The skip is deliberate and
+    # logged, but it leaves a 0 that means "not counted" and is indistinguishable
+    # from a measured zero. Measured at 100k rows: person had 84,293 blocks and
+    # biblio 22,151, so BOTH were past the gate, and biblio reported
+    # candidates_compared=0 having scored 1,493,182 pairs.
+    #
+    # Consumers must branch on this rather than on `candidates_compared == 0`,
+    # because the two readings lead to opposite actions -- see
+    # tests/test_candidates_counted_2639.py.
+    #
+    # Defaults False: a default-constructed profile is the all-zero fallback the
+    # emitter yields when scoring never ran, which has no measurement behind it.
+    candidates_counted: bool = False
+    # WHICH code path produced this profile (#2647 follow-up). Empty means
+    # nobody claimed it -- the all-zero default nothing ever wrote to.
+    #
+    # There are at least five scoring entry points (core/scorer.py's two,
+    # score_buckets, score_duckdb, ray_backend) plus the FS orchestrators in
+    # backends/fs_out_of_core.py, and "which one scored this run?" has been
+    # answered by INFERENCE three times, wrongly twice. A profile that names its
+    # own producer ends that: an empty route on a run whose clustering clearly
+    # worked localises the gap immediately instead of costing a CI round.
+    route: str = ""
     score_histogram: list[int] = field(default_factory=lambda: [0] * 20)
     dip_statistic: float = 0.0
     mass_above_threshold: float = 0.0
@@ -380,6 +461,36 @@ class ScoringProfile:
     # Tier 1a: fraction of random non-blocked pairs whose weighted score >= threshold.
     # None = probe not run (older paths that don't invoke the probe stay valid).
     random_pair_above_threshold_rate: float | None = None
+    # Fraction of CANDIDATE pairs that cleared the cut (#2673).
+    #
+    # `mass_above_threshold` above cannot answer this. It is computed over the
+    # pairs handed to `_emit_scoring_profile`, which have ALREADY cleared the
+    # cut, so it is 1.0 by construction for any non-empty result -- one bit
+    # ("did anything match"), never a fraction, at every emit site and for
+    # every matchkey type. Two consumers needed a real fraction and silently
+    # got the constant instead:
+    #
+    #   - `pick_committed`'s precision-collapse guard (`mass_above > 0.9` =>
+    #     "everything matches") demoted EVERY red entry that matched anything,
+    #     so v0 -- which matched nothing -- won, and the run returned a
+    #     confident empty result (#2663).
+    #   - `health()`'s only YELLOW branch needs
+    #     `mass_in_borderline > mass_above_threshold`, i.e. `> 1.0`.
+    #     Unreachable, so a run that matched anything could only be GREEN or
+    #     RED, with no way to say "matched something, looks marginal" (#2668).
+    #
+    # Deliberately a NEW field rather than a repair of the old one. Rebasing
+    # `mass_above_threshold` itself was tried and reverted: about a dozen rules
+    # gate on hardcoded cuts chosen while that input was a constant, and making
+    # it truthful invalidates all of their calibration simultaneously
+    # (measured: anchor_person_match F1 1.0000 -> 0.7303, over-merging).
+    # Migrating the rest is a separate, measured change.
+    #
+    # ``None`` means the scorer had no candidate count to divide by -- the
+    # #2639/#2644 idiom. Consumers MUST treat None as "cannot answer" and fall
+    # back to their prior behaviour rather than substituting 0.0, which would
+    # read as "nothing matched".
+    admitted_fraction: float | None = None
 
     def health(self) -> HealthVerdict:
         # No candidates compared and no pairs scored → RED (nothing happened)
@@ -401,7 +512,22 @@ class ScoringProfile:
         # instead: when above-tail mass dominates the borderline band, the
         # config is fine; only flip YELLOW when borderline genuinely
         # swamps confident matches.
-        if self.mass_in_borderline > 0.3 and self.mass_in_borderline > self.mass_above_threshold:
+        #
+        # #2668: `mass_above_threshold` is 1.0 whenever anything matched (see
+        # `admitted_fraction`), so `mass_in_borderline > mass_above_threshold`
+        # required `> 1.0` -- unreachable. This branch could never fire, and a
+        # run that matched anything could only be GREEN or RED, with no way to
+        # say "matched something, but it looks marginal". Compare against the
+        # admitted fraction when the scorer gave one; fall back to the old
+        # (unreachable) comparison when it did not, so a route with no
+        # candidate count keeps exactly its prior verdict rather than acquiring
+        # a new one on evidence nobody collected.
+        _tail = (
+            self.admitted_fraction
+            if self.admitted_fraction is not None
+            else self.mass_above_threshold
+        )
+        if self.mass_in_borderline > 0.3 and self.mass_in_borderline > _tail:
             return HealthVerdict.YELLOW
         return HealthVerdict.GREEN
 

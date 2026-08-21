@@ -44,7 +44,6 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
-from landscape_er import build_affinity, default_theta  # noqa: E402
 from real_schema_encoder import _load_real  # noqa: E402
 
 
@@ -123,7 +122,6 @@ def chao2(capture_counts: dict[tuple[int, int], int], K: int) -> float:
 
 def chao2_var(counts: dict, K: int) -> float:
     """Analytic variance of the Chao2 estimator (Chao 1987, incidence form)."""
-    D = len(counts)
     Q1 = sum(1 for v in counts.values() if v == 1)
     Q2 = sum(1 for v in counts.values() if v == 2)
     c = (K - 1) / K if K > 1 else 1.0
@@ -464,13 +462,13 @@ def main() -> int:
     if r['N_ll'] == r['N_ll']:    # not nan
         print(f"    log-linear (indep) N_hat = {r['N_ll']:.0f}")
     else:
-        print(f"    log-linear (indep) N_hat = n/a (needs K>=3 non-empty groups)")
+        print("    log-linear (indep) N_hat = n/a (needs K>=3 non-empty groups)")
     print(f"  precision (sampled, n={args.precision_sample}): "
           f"p_hat={r['p_hat']:.3f}  Wilson CI [{r['p_lo']:.3f}, {r['p_hi']:.3f}]  "
           f"(true={r['true_precision']:.3f})")
     print(f"  matcher overlap (indep diagnostic): {r['mean_overlap']:.2f}\n")
     fpr = r['fpr']
-    print(f"  RECALL — naive (Chao2 on raw union, FP-contaminated):")
+    print("  RECALL — naive (Chao2 on raw union, FP-contaminated):")
     print(f"      point={r['recall_point']:.3f}  95% CI [{r['recall_lo']:.3f}, {r['recall_hi']:.3f}]")
     print(f"  RECALL — FP-aware (higher-order cells, p={fpr['p']:.3f}, ignores f1):")
     cons = fpr.get('recall_cons', float('nan'))
@@ -479,9 +477,9 @@ def main() -> int:
         if cons == cons:
             print(f"      >>> HETEROGENEITY-ROBUST conservative bound (safety): recall >= {cons:.3f}")
         else:
-            print(f"      conservative bound n/a (need f2 and f3 cells)")
+            print("      conservative bound n/a (need f2 and f3 cells)")
     else:
-        print(f"      n/a (need >=2 multi-capture cells; raise K / add modalities)")
+        print("      n/a (need >=2 multi-capture cells; raise K / add modalities)")
     print(f"  RECALL — AUDIT-calibrated (~{r['n_aud']}/stratum labels, measures miss mass):")
     print(f"      point={r['recall_audit']:.3f}  "
           f"sub-threshold stratum |B|={r['sub_size']} true-rate={r['pB']:.3f}")

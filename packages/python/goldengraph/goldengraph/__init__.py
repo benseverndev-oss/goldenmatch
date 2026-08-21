@@ -5,7 +5,7 @@ store (the goldengraph-native engine). Entity resolution is the differentiator:
 duplicate surface forms across documents collapse into one durable entity.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from .answer import ask, to_cypher
 from .bulk import bulk_load

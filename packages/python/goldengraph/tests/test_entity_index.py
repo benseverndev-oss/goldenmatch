@@ -1,7 +1,6 @@
 """SP1 EntityIndex: embed-once ANN retrieval over entity names (box-safe, numpy fallback)."""
 from __future__ import annotations
 
-import goldenmatch.core.ann_blocker as _ab
 import numpy as np
 import pytest
 from goldengraph.entity_index import EntityIndex
@@ -9,8 +8,17 @@ from goldengraph.entity_index import EntityIndex
 
 @pytest.fixture(autouse=True)
 def _force_numpy_fallback(monkeypatch):
-    # Hermetic: never depend on faiss being installed; numpy fallback gives the same neighbor set.
-    monkeypatch.setattr(_ab, "_HAS_FAISS", False)
+    """Pin the exact numpy ANN path so the expected neighbour sets are stable.
+
+    Uses goldenmatch's PUBLIC backend switch rather than patching a private
+    module attribute. The old form set ``ann_blocker._HAS_FAISS``, which stopped
+    existing when goldenmatch replaced its FAISS backend with native HNSW --
+    and because ``monkeypatch.setattr`` raises on a missing attribute, that
+    turned into a collection error across every test using this fixture.
+    ``GOLDENMATCH_ANN_BACKEND`` is documented and honoured unconditionally, so
+    it survives the next internal rename.
+    """
+    monkeypatch.setenv("GOLDENMATCH_ANN_BACKEND", "numpy")
 
 
 _VECS = {"apple": [1.0, 0.0, 0.0], "banana": [0.0, 1.0, 0.0], "cherry": [0.0, 0.0, 1.0]}
