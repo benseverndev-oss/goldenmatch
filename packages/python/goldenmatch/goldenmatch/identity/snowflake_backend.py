@@ -13,7 +13,15 @@ import json
 from collections.abc import Iterable
 from typing import Any
 
-from goldenmatch.identity.model import IdentityNode, IdentityStatus, SourceRecord
+from goldenmatch.identity.model import (
+    EvidenceEdge,
+    IdentityAlias,
+    IdentityEvent,
+    IdentityNode,
+    IdentityStatus,
+    SourceRecord,
+    canon_record_pair,
+)
 from goldenmatch.snowflake._store_sql import (
     IDENTITY_DDL,
     ensure_schema,
@@ -30,6 +38,11 @@ _NODE_UPDATE = [
     "updated_at",
 ]
 _RECORD_UPDATE = ["record_hash", "entity_id", "payload", "last_seen_at"]
+_EDGE_KEY = ["entity_id", "record_a_id", "record_b_id", "kind", "run_name"]
+
+
+def _dumps(value: Any) -> str | None:
+    return json.dumps(value) if value else None
 
 # SQLite/Postgres cap host parameters per statement (SQLITE_MAX_VARIABLE_NUMBER
 # / similar); Snowflake's own limit differs, but chunking the IN-list here is
@@ -252,3 +265,189 @@ class SnowflakeIdentityStore:
             for r in rows:
                 out[r["record_id"]] = r["entity_id"]
         return out
+
+    # ----- evidence edges --------------------------------------------------
+
+    def add_edge(self, edge: EvidenceEdge, *, return_id: bool = True) -> int | None:
+        """Insert-if-absent on the five-column edge identity.
+
+        The SQLite path relies on ``INSERT OR IGNORE`` against
+        ``UNIQUE(entity_id, record_a_id, record_b_id, kind, run_name)``. That
+        constraint is metadata-only in Snowflake, so the dedupe has to be the
+        MERGE's own ``WHEN NOT MATCHED`` -- with no ``WHEN MATCHED`` branch, which
+        is what makes it an ignore rather than an upsert.
+        """
+        a, b = canon_record_pair(edge.record_a_id, edge.record_b_id)
+        merge_one(
+            self._conn, "evidence_edges", _EDGE_KEY,
+            {
+                "entity_id": edge.entity_id,
+                "record_a_id": a,
+                "record_b_id": b,
+                "kind": edge.kind,
+                "score": edge.score,
+                "matchkey_name": edge.matchkey_name,
+                "field_scores": _dumps(edge.field_scores),
+                "negative_evidence": _dumps(edge.negative_evidence),
+                "controller_snapshot": _dumps(edge.controller_snapshot),
+                "run_name": edge.run_name,
+                "dataset": edge.dataset,
+                "actor": edge.actor,
+                "trust": edge.trust,
+                "recorded_at": edge.recorded_at.isoformat(),
+            },
+            update_cols=None,  # insert-if-absent; see docstring
+            json_cols=["field_scores", "negative_evidence", "controller_snapshot"],
+        )
+        # Fire-and-forget: the resolve_clusters write path ignores the edge_id,
+        # so skip the read-back when the caller says so (matches store.py's
+        # write_pipeline() batching rationale, #1912).
+        if not return_id:
+            return None
+        row = fetchone_row(
+            self._conn,
+            "SELECT edge_id FROM evidence_edges WHERE entity_id = %s "
+            "AND record_a_id = %s AND record_b_id = %s AND kind = %s "
+            "AND COALESCE(run_name, '') = COALESCE(%s, '')",
+            (edge.entity_id, a, b, edge.kind, edge.run_name),
+        )
+        return int(row["edge_id"]) if row else None
+
+    def edges_for_entity(self, entity_id: str) -> list[EvidenceEdge]:
+        from goldenmatch.identity.store import IdentityStore  # noqa: PLC0415
+
+        rows = fetchall_rows(
+            self._conn,
+            "SELECT * FROM evidence_edges WHERE entity_id = %s ORDER BY recorded_at",
+            (entity_id,),
+        )
+        return [IdentityStore._row_to_edge(r) for r in rows]
+
+    def edges_by_kind(
+        self, kind: str, dataset: str | None = None
+    ) -> list[EvidenceEdge]:
+        from goldenmatch.identity.store import IdentityStore  # noqa: PLC0415
+
+        if dataset is None:
+            rows = fetchall_rows(
+                self._conn,
+                "SELECT * FROM evidence_edges WHERE kind = %s "
+                "ORDER BY recorded_at DESC",
+                (kind,),
+            )
+        else:
+            rows = fetchall_rows(
+                self._conn,
+                "SELECT * FROM evidence_edges WHERE kind = %s AND dataset = %s "
+                "ORDER BY recorded_at DESC",
+                (kind, dataset),
+            )
+        return [IdentityStore._row_to_edge(r) for r in rows]
+
+    def find_conflicts(self, dataset: str | None = None) -> list[EvidenceEdge]:
+        return self.edges_by_kind("conflicts_with", dataset)
+
+    # ----- identity events ---------------------------------------------
+
+    def emit_event(
+        self, event: IdentityEvent, *, return_id: bool = True
+    ) -> int | None:
+        """Append-only log write: a plain INSERT, not a MERGE.
+
+        ``identity_events`` has no dedupe column -- just the autoincrement
+        ``event_id`` -- so there is nothing for a MERGE to key on. Replay-safety
+        lives one level up, in ``resolve_clusters``'s ``has_run_event`` guard.
+        """
+        from goldenmatch.identity.audit import event_content_hash  # noqa: PLC0415
+
+        payload = json.dumps(event.payload) if event.payload is not None else None
+        # Tamper-evidence (#1078): stamp a per-event content hash at insert,
+        # same as the SQLite/Postgres paths. Pure function of the event's own
+        # fields, so it adds no read or contention on this write.
+        if event.entry_hash is None:
+            event.entry_hash = event_content_hash(event)
+        execute(
+            self._conn,
+            "INSERT INTO identity_events "
+            "(entity_id, kind, payload, run_name, dataset, actor, trust, "
+            "claim_type, evidence_ref, previous_claim_id, entry_hash, recorded_at) "
+            "VALUES (%s, %s, PARSE_JSON(%s), %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (
+                event.entity_id, event.kind, payload, event.run_name,
+                event.dataset, event.actor, event.trust,
+                event.claim_type, event.evidence_ref, event.previous_claim_id,
+                event.entry_hash, event.recorded_at.isoformat(),
+            ),
+        )
+        # Fire-and-forget: resolve_clusters ignores the event_id; skipping the
+        # read-back keeps write_pipeline() batching (#1912).
+        if not return_id:
+            return None
+        row = fetchone_row(
+            self._conn,
+            "SELECT MAX(event_id) AS event_id FROM identity_events WHERE entity_id = %s",
+            (event.entity_id,),
+        )
+        return int(row["event_id"]) if row and row["event_id"] is not None else None
+
+    def history(
+        self, entity_id: str, limit: int | None = None
+    ) -> list[IdentityEvent]:
+        from goldenmatch.identity.store import IdentityStore  # noqa: PLC0415
+
+        if limit:
+            rows = fetchall_rows(
+                self._conn,
+                "SELECT * FROM identity_events WHERE entity_id = %s "
+                "ORDER BY event_id LIMIT %s",
+                (entity_id, limit),
+            )
+        else:
+            rows = fetchall_rows(
+                self._conn,
+                "SELECT * FROM identity_events WHERE entity_id = %s ORDER BY event_id",
+                (entity_id,),
+            )
+        return [IdentityStore._row_to_event(r) for r in rows]
+
+    def has_run_event(self, entity_id: str, run_name: str, kind: str) -> bool:
+        row = fetchone_row(
+            self._conn,
+            "SELECT 1 AS one FROM identity_events "
+            "WHERE entity_id = %s AND run_name = %s AND kind = %s LIMIT 1",
+            (entity_id, run_name, kind),
+        )
+        return row is not None
+
+    def run_event_entities(self, run_name: str, kind: str) -> set[str]:
+        rows = fetchall_rows(
+            self._conn,
+            "SELECT DISTINCT entity_id FROM identity_events "
+            "WHERE run_name = %s AND kind = %s",
+            (run_name, kind),
+        )
+        return {r["entity_id"] for r in rows}
+
+    # ----- aliases -------------------------------------------------------
+
+    def add_alias(self, alias: IdentityAlias) -> None:
+        """Upsert on (alias, kind, dataset) -- the SQLite INSERT OR REPLACE."""
+        merge_one(
+            self._conn, "identity_aliases", ["alias", "kind", "dataset"],
+            {
+                "alias": alias.alias,
+                "entity_id": alias.entity_id,
+                "kind": alias.kind,
+                "dataset": alias.dataset,
+                "recorded_at": alias.recorded_at.isoformat(),
+            },
+            update_cols=["entity_id", "recorded_at"],
+        )
+
+    def resolve_alias(self, alias: str, kind: str = "external_id") -> str | None:
+        row = fetchone_row(
+            self._conn,
+            "SELECT entity_id FROM identity_aliases WHERE alias = %s AND kind = %s",
+            (alias, kind),
+        )
+        return row["entity_id"] if row else None

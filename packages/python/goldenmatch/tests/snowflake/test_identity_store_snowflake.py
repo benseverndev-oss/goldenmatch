@@ -109,3 +109,94 @@ def test_retire_identity_sets_status_and_merged_into(store) -> None:
     assert node is not None
     assert node.status == "merged_into"
     assert node.merged_into == winner
+
+
+def _seed_entity(store):
+    from goldenmatch.identity.model import IdentityNode
+    from goldenmatch.identity.store import new_entity_id
+
+    eid = new_entity_id()
+    store.upsert_identity(IdentityNode(entity_id=eid, dataset="c"))
+    return eid
+
+
+def test_add_edge_is_idempotent_on_replay(store) -> None:
+    """The constraint trap: Snowflake does NOT enforce the edge UNIQUE key.
+
+    Replaying a run must not duplicate the edge. A bare INSERT passes on
+    SQLite (UNIQUE + INSERT OR IGNORE) and silently duplicates here.
+    """
+    from goldenmatch.identity.model import EvidenceEdge
+
+    eid = _seed_entity(store)
+    edge = EvidenceEdge(
+        entity_id=eid, record_a_id="crm:1", record_b_id="crm:2",
+        kind="same_as", score=0.95, run_name="run-1",
+    )
+    store.add_edge(edge)
+    store.add_edge(edge)
+    assert len(store.edges_for_entity(eid)) == 1
+
+
+def test_add_edge_separates_kinds_on_the_same_pair(store) -> None:
+    from goldenmatch.identity.model import EvidenceEdge
+
+    eid = _seed_entity(store)
+    for kind in ("same_as", "conflicts_with"):
+        store.add_edge(EvidenceEdge(
+            entity_id=eid, record_a_id="crm:1", record_b_id="crm:2",
+            kind=kind, run_name="run-1",
+        ))
+    assert len(store.edges_for_entity(eid)) == 2
+    assert len(store.find_conflicts(dataset=None)) == 1
+
+
+def test_add_edge_canonicalizes_pair_order(store) -> None:
+    from goldenmatch.identity.model import EvidenceEdge
+
+    eid = _seed_entity(store)
+    store.add_edge(EvidenceEdge(
+        entity_id=eid, record_a_id="crm:2", record_b_id="crm:1",
+        kind="same_as", run_name="run-1",
+    ))
+    store.add_edge(EvidenceEdge(
+        entity_id=eid, record_a_id="crm:1", record_b_id="crm:2",
+        kind="same_as", run_name="run-1",
+    ))
+    assert len(store.edges_for_entity(eid)) == 1
+
+
+def test_add_alias_replaces_rather_than_duplicating(store) -> None:
+    from goldenmatch.identity.model import IdentityAlias
+
+    first, second = _seed_entity(store), _seed_entity(store)
+    store.add_alias(IdentityAlias(alias="MDM-1", entity_id=first, kind="mdm"))
+    store.add_alias(IdentityAlias(alias="MDM-1", entity_id=second, kind="mdm"))
+    assert store.resolve_alias("MDM-1", kind="mdm") == second
+
+
+def test_emit_event_returns_an_id_and_history_reads_back(store) -> None:
+    from goldenmatch.identity.model import IdentityEvent
+
+    eid = _seed_entity(store)
+    event_id = store.emit_event(IdentityEvent(
+        entity_id=eid, kind="created", run_name="run-1",
+        payload={"reason": "new cluster"},
+    ))
+    assert isinstance(event_id, int)
+    events = store.history(eid)
+    assert [e.kind for e in events] == ["created"]
+    assert events[0].payload == {"reason": "new cluster"}
+
+
+def test_has_run_event_and_run_event_entities(store) -> None:
+    from goldenmatch.identity.model import IdentityEvent
+
+    eid = _seed_entity(store)
+    store.emit_event(IdentityEvent(
+        entity_id=eid, kind="merged", run_name="run-42",
+    ))
+    assert store.has_run_event(eid, "run-42", "merged") is True
+    assert store.has_run_event(eid, "run-42", "split") is False
+    assert store.has_run_event(eid, "run-other", "merged") is False
+    assert store.run_event_entities("run-42", "merged") == {eid}

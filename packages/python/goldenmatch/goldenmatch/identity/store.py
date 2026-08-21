@@ -1827,6 +1827,8 @@ class IdentityStore:
     def add_edge(self, edge: EvidenceEdge, *, return_id: bool = True) -> int | None:
         if self._backend == "mongo":
             return self._mongo.add_edge(edge)
+        if self._backend == "snowflake":
+            return self._sf.add_edge(edge, return_id=return_id)
         a, b = canon_record_pair(edge.record_a_id, edge.record_b_id)
         fs = json.dumps(edge.field_scores) if edge.field_scores else None
         ne = json.dumps(edge.negative_evidence) if edge.negative_evidence else None
@@ -1878,6 +1880,8 @@ class IdentityStore:
     def edges_for_entity(self, entity_id: str) -> list[EvidenceEdge]:
         if self._backend == "mongo":
             return self._mongo.edges_for_entity(entity_id)
+        if self._backend == "snowflake":
+            return self._sf.edges_for_entity(entity_id)
         rows = self._fetchall(
             "SELECT * FROM evidence_edges WHERE entity_id = ? ORDER BY recorded_at",
             (entity_id,),
@@ -1892,6 +1896,8 @@ class IdentityStore:
         -- used by the mediation workflow to list steward verdict edges."""
         if self._backend == "mongo":
             return self._mongo.edges_by_kind(kind, dataset=dataset)
+        if self._backend == "snowflake":
+            return self._sf.edges_by_kind(kind, dataset)
         if dataset is None:
             rows = self._fetchall(
                 "SELECT * FROM evidence_edges WHERE kind = ? "
@@ -1909,6 +1915,8 @@ class IdentityStore:
     def find_conflicts(self, dataset: str | None = None) -> list[EvidenceEdge]:
         if self._backend == "mongo":
             return self._mongo.find_conflicts(dataset=dataset)
+        if self._backend == "snowflake":
+            return self._sf.find_conflicts(dataset)
         if dataset is None:
             rows = self._fetchall(
                 "SELECT * FROM evidence_edges WHERE kind = 'conflicts_with' "
@@ -2323,6 +2331,8 @@ class IdentityStore:
     ) -> int | None:
         if self._backend == "mongo":
             return self._mongo.emit_event(event)
+        if self._backend == "snowflake":
+            return self._sf.emit_event(event, return_id=return_id)
         payload = json.dumps(event.payload) if event.payload is not None else None
         # Tamper-evidence (#1078): stamp a per-event content hash at insert. Pure
         # function of the event's own fields -- no DB read, no contention -- so it
@@ -2401,6 +2411,8 @@ class IdentityStore:
     ) -> list[IdentityEvent]:
         if self._backend == "mongo":
             return self._mongo.history(entity_id, limit=limit)
+        if self._backend == "snowflake":
+            return self._sf.history(entity_id, limit)
         if limit:
             rows = self._fetchall(
                 "SELECT * FROM identity_events WHERE entity_id = ? "
@@ -2511,6 +2523,8 @@ class IdentityStore:
     def has_run_event(self, entity_id: str, run_name: str, kind: str) -> bool:
         if self._backend == "mongo":
             return self._mongo.has_run_event(entity_id, run_name, kind)
+        if self._backend == "snowflake":
+            return self._sf.has_run_event(entity_id, run_name, kind)
         row = self._fetchone(
             "SELECT 1 AS one FROM identity_events "
             "WHERE entity_id = ? AND run_name = ? AND kind = ? LIMIT 1",
@@ -2526,6 +2540,8 @@ class IdentityStore:
         seq-scanned ``identity_events`` (O(n^2)) whenever the secondary indexes are
         deferred by the initial-load fast path. SQL backends only; the caller
         falls back to ``has_run_event`` for mongo/minimal stores."""
+        if self._backend == "snowflake":
+            return self._sf.run_event_entities(run_name, kind)
         rows = self._fetchall(
             "SELECT DISTINCT entity_id FROM identity_events "
             "WHERE run_name = ? AND kind = ?",
@@ -2536,6 +2552,9 @@ class IdentityStore:
     def add_alias(self, alias: IdentityAlias) -> None:
         if self._backend == "mongo":
             self._mongo.add_alias(alias)
+            return
+        if self._backend == "snowflake":
+            self._sf.add_alias(alias)
             return
         self._exec(
             "INSERT OR REPLACE INTO identity_aliases "
@@ -2550,6 +2569,8 @@ class IdentityStore:
     def resolve_alias(self, alias: str, kind: str = "external_id") -> str | None:
         if self._backend == "mongo":
             return self._mongo.resolve_alias(alias, kind=kind)
+        if self._backend == "snowflake":
+            return self._sf.resolve_alias(alias, kind)
         row = self._fetchone(
             "SELECT entity_id FROM identity_aliases WHERE alias = ? AND kind = ?",
             (alias, kind),

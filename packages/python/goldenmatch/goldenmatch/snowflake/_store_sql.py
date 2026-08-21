@@ -222,7 +222,12 @@ CREATE TABLE IF NOT EXISTS identity_aliases (
     kind         STRING NOT NULL DEFAULT 'external_id',
     dataset      STRING,
     recorded_at  TIMESTAMP_NTZ NOT NULL DEFAULT CURRENT_TIMESTAMP(),
-    PRIMARY KEY (alias, kind, dataset)
+    -- UNIQUE, not PRIMARY KEY: ``dataset`` is nullable, and real Snowflake's
+    -- PK is metadata-only either way -- but fakesnow's duckdb translation
+    -- (the test oracle for this module) enforces an implicit NOT NULL on
+    -- PRIMARY KEY columns per the SQL standard, which duckdb does NOT do for
+    -- UNIQUE. A PRIMARY KEY here would reject every alias with no dataset.
+    UNIQUE (alias, kind, dataset)
 );
 
 CREATE TABLE IF NOT EXISTS identity_record_block_keys (
@@ -337,12 +342,19 @@ def merge_one(
     ``update_cols=None`` omits the ``WHEN MATCHED`` branch entirely, which is
     the Snowflake replacement for ``INSERT OR IGNORE`` -- necessary because a
     UNIQUE constraint here is metadata and would not stop the duplicate.
+
+    The ``ON`` clause compares key columns with ``IS NOT DISTINCT FROM``, not
+    ``=``. Several key columns are nullable (``evidence_edges.run_name``,
+    ``identity_aliases.dataset``): plain ``=`` evaluates to ``NULL`` (not
+    ``TRUE``) when both sides are ``NULL``, so ``WHEN MATCHED`` would never
+    fire for a replayed row whose key column is unset, silently duplicating
+    it -- the same trap this MERGE exists to close, one level down.
     """
     cols = list(row.keys())
     src = ", ".join(
         f"{_value_sql(c, json_cols)} AS {c}" for c in cols
     )
-    on = " AND ".join(f"t.{c} = s.{c}" for c in key_cols)
+    on = " AND ".join(f"t.{c} IS NOT DISTINCT FROM s.{c}" for c in key_cols)
     sql = [
         f"MERGE INTO {table} t USING (SELECT {src}) s ON {on}",
     ]
@@ -412,7 +424,8 @@ def stage_and_merge(
             conn, df, stage.upper(),
             database=database, schema=schema, auto_create_table=False,
         )
-        on = " AND ".join(f"t.{c} = s.{c}" for c in key_cols)
+        # NULL-safe, matching merge_one -- see its docstring.
+        on = " AND ".join(f"t.{c} IS NOT DISTINCT FROM s.{c}" for c in key_cols)
         using_cols = ", ".join(
             f"PARSE_JSON({c}) AS {c}" if c in json_cols else c for c in cols
         )
