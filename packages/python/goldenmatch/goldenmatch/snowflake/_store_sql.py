@@ -13,7 +13,8 @@ caller here has to respect, so they are handled once, in this module:
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator, Mapping
+import uuid
+from collections.abc import Iterator, Mapping, Sequence
 from typing import Any
 
 
@@ -315,3 +316,120 @@ def _split_statements(ddl: str) -> list[str]:
         if stmt:
             out.append(stmt)
     return out
+
+
+def _value_sql(col: str, json_cols: Sequence[str]) -> str:
+    """Placeholder for one column, wrapping VARIANT columns in PARSE_JSON."""
+    return "PARSE_JSON(%s)" if col in json_cols else "%s"
+
+
+def merge_one(
+    conn: Any,
+    table: str,
+    key_cols: Sequence[str],
+    row: Mapping[str, Any],
+    *,
+    update_cols: Sequence[str] | None = None,
+    json_cols: Sequence[str] = (),
+) -> None:
+    """Upsert (or insert-if-absent) a single row via MERGE.
+
+    ``update_cols=None`` omits the ``WHEN MATCHED`` branch entirely, which is
+    the Snowflake replacement for ``INSERT OR IGNORE`` -- necessary because a
+    UNIQUE constraint here is metadata and would not stop the duplicate.
+    """
+    cols = list(row.keys())
+    src = ", ".join(
+        f"{_value_sql(c, json_cols)} AS {c}" for c in cols
+    )
+    on = " AND ".join(f"t.{c} = s.{c}" for c in key_cols)
+    sql = [
+        f"MERGE INTO {table} t USING (SELECT {src}) s ON {on}",
+    ]
+    if update_cols:
+        sets = ", ".join(f"t.{c} = s.{c}" for c in update_cols)
+        sql.append(f"WHEN MATCHED THEN UPDATE SET {sets}")
+    insert_cols = ", ".join(cols)
+    insert_vals = ", ".join(f"s.{c}" for c in cols)
+    sql.append(
+        f"WHEN NOT MATCHED THEN INSERT ({insert_cols}) VALUES ({insert_vals})"
+    )
+    execute(conn, "\n".join(sql), tuple(row[c] for c in cols))
+
+
+def stage_and_merge(
+    conn: Any,
+    target: str,
+    rows: list[Mapping[str, Any]],
+    key_cols: Sequence[str],
+    *,
+    update_cols: Sequence[str] | None = None,
+    json_cols: Sequence[str] = (),
+    database: str,
+    schema: str,
+) -> int:
+    """Bulk upsert: write_pandas into a transient stage, then MERGE.
+
+    The Postgres analogue is ``CREATE TEMP TABLE ... COPY ... INSERT ON
+    CONFLICT`` (see ``IdentityStore.bulk_upsert_identities``). Two Snowflake
+    specifics:
+
+    - the stage is a NAMED transient table, not a session TEMP table: fakesnow
+      cannot ``write_pandas`` into a TEMP table, and a warehouse session is not
+      somewhere to hang state in a UDF worker;
+    - the stage name carries a uuid4 so two concurrent writers cannot collide,
+      the same failure mode #2699 hit with a fixed extraction directory.
+
+    ``write_pandas`` is reached through the module, never a from-import, so
+    ``fakesnow.patch()`` binds.
+
+    The stage table is created ``LIKE target``, so its JSON columns are
+    already ``VARIANT`` -- but ``write_pandas`` writes them into the stage as
+    plain strings, which a bare ``s.<col>`` reference would insert/update as
+    a JSON-encoded string rather than a parsed VARIANT. Each ``json_cols``
+    entry is therefore cast with ``PARSE_JSON`` in the ``USING`` subquery's
+    own ``SELECT`` list (rather than at each ``s.<col>`` use in ``UPDATE
+    SET``/``INSERT VALUES``, which triggers a MERGE-rewrite binder bug in the
+    fakesnow/duckdb translation this module is tested against) so every
+    later reference to ``s.<col>`` in the ``UPDATE SET`` and ``INSERT
+    VALUES`` lists already sees the parsed value, mirroring what
+    ``merge_one`` does with its literal ``SELECT %s AS col`` source.
+    """
+    if not rows:
+        return 0
+    import pandas as pd  # noqa: PLC0415
+    import snowflake.connector.pandas_tools as pandas_tools  # noqa: PLC0415
+
+    stage = f"_gm_stage_{target}_{uuid.uuid4().hex}"
+    cols = list(rows[0].keys())
+    df = pd.DataFrame(
+        [[r.get(c) for c in cols] for r in rows],
+        columns=[c.upper() for c in cols],
+    )
+    execute(conn, f"CREATE OR REPLACE TRANSIENT TABLE {stage} LIKE {target}")
+    try:
+        pandas_tools.write_pandas(
+            conn, df, stage.upper(),
+            database=database, schema=schema, auto_create_table=False,
+        )
+        on = " AND ".join(f"t.{c} = s.{c}" for c in key_cols)
+        using_cols = ", ".join(
+            f"PARSE_JSON({c}) AS {c}" if c in json_cols else c for c in cols
+        )
+        sql = [
+            f"MERGE INTO {target} t USING "
+            f"(SELECT {using_cols} FROM {stage}) s ON {on}"
+        ]
+        if update_cols:
+            sets = ", ".join(f"t.{c} = s.{c}" for c in update_cols)
+            sql.append(f"WHEN MATCHED THEN UPDATE SET {sets}")
+        insert_cols = ", ".join(cols)
+        insert_vals = ", ".join(f"s.{c}" for c in cols)
+        sql.append(
+            f"WHEN NOT MATCHED THEN INSERT ({insert_cols}) "
+            f"VALUES ({insert_vals})"
+        )
+        execute(conn, "\n".join(sql))
+    finally:
+        execute(conn, f"DROP TABLE IF EXISTS {stage}")
+    return len(rows)
