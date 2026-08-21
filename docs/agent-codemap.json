@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 478,
+      "module_count": 479,
       "modules": [
         {
           "module": "goldenmatch",
@@ -1637,6 +1637,7 @@
             "serialize_pair_v1"
           ],
           "imports": [
+            "goldenmatch.core.er_matcher.explainer",
             "goldenmatch.core.er_matcher.prompt"
           ]
         },
@@ -3142,6 +3143,28 @@
           ],
           "imports": [
             "goldenmatch.core.er_matcher.prompt"
+          ]
+        },
+        {
+          "module": "goldenmatch.core.er_matcher.explainer",
+          "file": "packages/python/goldenmatch/goldenmatch/core/er_matcher/explainer.py",
+          "purpose": "Per-decision explainer for the local ER-matcher (1.5B) verdict.",
+          "defines": [
+            "Counterfactual",
+            "FieldSignal",
+            "PairExplanation",
+            "_agreement",
+            "_fmt",
+            "_importance_for",
+            "_render_rationale",
+            "_tokens",
+            "build_counterfactuals",
+            "explain_pair",
+            "field_agreement",
+            "field_signal_vector",
+            "render_counterfactual_note",
+            "signal_contributions",
+            "token_agreement"
           ]
         },
         {
