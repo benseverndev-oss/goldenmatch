@@ -1480,6 +1480,8 @@ def _open_identity_store(config: GoldenMatchConfig):
             backend=config.identity.backend,
             path=config.identity.path,
             connection=config.identity.connection,
+            database=config.identity.database,
+            schema=config.identity.schema_,
         )
     except Exception as e:
         logger.warning("Identity store init failed, continuing without: %s", e)

@@ -2159,6 +2159,13 @@ class IdentityConfig(BaseModel):
             "through config."
         ),
     )
+    database: str = Field(
+        default="goldenmatch",
+        description=(
+            "Database holding the identity tables for the snowflake backend, "
+            "and the database name for the mongo backend."
+        ),
+    )
     schema_: str = Field(
         default="PUBLIC",
         alias="schema",
