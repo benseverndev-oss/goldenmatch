@@ -7920,6 +7920,7 @@
             "fetchall_rows",
             "fetchone_row",
             "merge_one",
+            "normalize_identifier",
             "resolve_connection",
             "schema_version",
             "stage_and_merge"

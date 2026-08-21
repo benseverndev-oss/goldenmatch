@@ -371,6 +371,7 @@ _Identity Graph configuration._
 | `backend` | str | `'sqlite'` | Storage backend for the identity graph ('sqlite', 'postgres', 'mongo' or 'snowflake'). |
 | `path` | str | `'.goldenmatch/identity.db'` | SQLite file path for the identity graph when the backend is sqlite. |
 | `connection` | str \| dict \| None | `None` | Connection for non-sqlite backends: a DSN string for postgres, a URI for mongo, or an account name / connector-kwargs dict for snowflake. A Snowpark Session is passed programmatically, not through config. |
+| `database` | str | `'goldenmatch'` | Database holding the identity tables for the snowflake backend, and the database name for the mongo backend. |
 | `schema_` _(alias `schema`)_ | str | `'PUBLIC'` | Snowflake schema holding the identity tables. |
 | `dataset` | str \| None | `None` | Dataset name scoping identities so unrelated datasets do not share entity ids. |
 | `source_pk_column` | str \| None | `None` | Column supplying each record's source primary key for stable record ids; a payload hash is used when unset. |
