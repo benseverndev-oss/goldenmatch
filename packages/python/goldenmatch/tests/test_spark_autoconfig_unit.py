@@ -235,3 +235,85 @@ def test_default_sample_size_is_in_the_controllers_own_range():
     """The controller's budget tiers cap sub-samples at 20k; sampling far beyond
     that buys little and costs a bigger collect."""
     assert 1_000 <= DEFAULT_SAMPLE_ROWS <= 50_000
+
+
+# --- Exact distributed profiling: the COST decision (spec 2026-08-20) ---
+#
+# The merge rules themselves live in `core.autoconfig` and are tested through
+# the real `profile_columns` path in test_exact_profiling_override.py -- the
+# shipped basis, not a lookalike of it. What is unit-tested here is the part
+# that is Spark's own: which columns are worth an exact count_distinct.
+
+
+def test_only_boundary_columns_pay_for_an_exact_count_distinct():
+    """`count_distinct` is a shuffle per column and is the whole cost.
+
+    HyperLogJog is a few percent out, which is fine mid-range and useless at
+    exactly the two cuts auto-config turns on: `<= 1` (constant) and near-unique
+    (surrogate key). Only those nominate for an exact count.
+    """
+    from goldenmatch.spark.autoconfig import _boundary_columns
+
+    n_full = 1_000_000
+    approx = {
+        "status": 1,          # constant -> boundary
+        "flag": 2,            # near-constant -> boundary
+        "email": 999_000,     # near-unique -> boundary
+        "city": 40,           # mid-range -> NOT boundary
+        "zip": 500,           # mid-range -> NOT boundary
+    }
+    got = set(_boundary_columns(approx, n_full))
+    assert got == {"status", "flag", "email"}, got
+
+
+def test_boundary_selection_is_empty_on_an_unknown_row_count():
+    """No row count means no ratio, so nothing can be called near-unique.
+
+    Guessing here would nominate every column for the expensive pass.
+    """
+    from goldenmatch.spark.autoconfig import _boundary_columns
+
+    assert _boundary_columns({"a": 5, "b": 900}, 0) == []
+
+
+def test_exact_stats_returns_empty_rather_than_raising_without_pyspark(monkeypatch):
+    """A failed aggregate must leave the sampled statistics in place.
+
+    Profiling is instrumentation for a config decision. An ABSENT statistic is
+    handled by `merge_exact_stats` (it leaves the column alone); a raised one
+    would take down a run that could have proceeded on sampled values.
+    """
+    from goldenmatch.spark import autoconfig as sac
+
+    class _Boom:
+        def agg(self, *a, **k):
+            raise RuntimeError("cluster went away")
+
+    assert sac.exact_column_stats(_Boom(), ["email"]) == {}
+
+
+def test_exact_profiling_is_OFF_by_default(monkeypatch):
+    """Default OFF is the whole safety property of this slice.
+
+    Several rules compare these fields to cuts chosen while the inputs were
+    sample-derived, so making them truthful can move quality scores -- as
+    rebasing `mass_above_threshold` took `anchor_person_match` from 1.0000 to
+    0.7303. It flips on quality-gate evidence, not on being more correct.
+    """
+    from goldenmatch.spark.autoconfig import _exact_profiling_enabled
+
+    monkeypatch.delenv("GOLDENMATCH_SPARK_EXACT_PROFILING", raising=False)
+    assert _exact_profiling_enabled(None) is False
+
+
+def test_the_argument_overrides_the_environment_both_ways(monkeypatch):
+    """A caller or a test must be able to pin it without touching process state."""
+    from goldenmatch.spark.autoconfig import _exact_profiling_enabled
+
+    monkeypatch.setenv("GOLDENMATCH_SPARK_EXACT_PROFILING", "1")
+    assert _exact_profiling_enabled(None) is True
+    assert _exact_profiling_enabled(False) is False, "explicit False must win"
+
+    monkeypatch.setenv("GOLDENMATCH_SPARK_EXACT_PROFILING", "0")
+    assert _exact_profiling_enabled(None) is False
+    assert _exact_profiling_enabled(True) is True, "explicit True must win"
