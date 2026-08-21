@@ -10,9 +10,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   keeps the identity graph in Snowflake tables rather than a SQLite file, so it
   survives a UDF / stored-procedure worker. Writes are `MERGE`-based: Snowflake
   does not enforce `PRIMARY KEY` or `UNIQUE`, so a replayed run would otherwise
-  duplicate rows. The `bulk_*` fast path stages through `write_pandas` and
-  `MERGE`, and `resolve_clusters` now selects it by capability
-  (`store.supports_bulk`) rather than by backend name.
+  duplicate rows. The `bulk_*` fast path stages every write through a transient
+  table loaded by `write_pandas`, then applies it with a `MERGE` --- except
+  `bulk_emit_events`, which finishes with `INSERT ... SELECT` because the
+  append-only event log has no dedupe key for a `MERGE` to match on. Configure
+  the target with `identity.database` / `identity.schema`. `resolve_clusters`
+  now selects the bulk path by capability (`store.supports_bulk`) rather than by
+  backend name.
 
 ## [3.13.1] - 2026-08-19
 

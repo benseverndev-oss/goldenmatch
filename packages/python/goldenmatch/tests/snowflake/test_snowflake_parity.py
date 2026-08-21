@@ -10,7 +10,11 @@ fakesnow = pytest.importorskip("fakesnow")
 
 def _seed(store, eid):
     from goldenmatch.identity.model import (
-        EvidenceEdge, IdentityAlias, IdentityEvent, IdentityNode, SourceRecord,
+        EvidenceEdge,
+        IdentityAlias,
+        IdentityEvent,
+        IdentityNode,
+        SourceRecord,
     )
 
     store.upsert_identity(IdentityNode(
