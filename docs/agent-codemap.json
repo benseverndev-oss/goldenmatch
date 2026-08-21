@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 477,
+      "module_count": 478,
       "modules": [
         {
           "module": "goldenmatch",
@@ -7887,6 +7887,30 @@
           "module": "goldenmatch.snowflake",
           "file": "packages/python/goldenmatch/goldenmatch/snowflake/__init__.py",
           "purpose": "Snowflake handler module -- the inside of the goldenmatch UDF surface."
+        },
+        {
+          "module": "goldenmatch.snowflake.partitioned",
+          "file": "packages/python/goldenmatch/goldenmatch/snowflake/partitioned.py",
+          "purpose": "Partitioned Snowflake execution: distribute scoring, cluster centrally.",
+          "defines": [
+            "BlockingPassPlan",
+            "PartitionedPlan",
+            "UnsupportedBlockingError",
+            "_constant_blocking",
+            "_sql_ident",
+            "block_key_sql",
+            "blocking_passes",
+            "cluster_pairs",
+            "plan_passes",
+            "score_partition",
+            "valid_key_sql"
+          ],
+          "imports": [
+            "goldenmatch",
+            "goldenmatch.config.schemas",
+            "goldenmatch.core.cluster",
+            "goldenmatch.core.pairs"
+          ]
         },
         {
           "module": "goldenmatch.snowflake.udfs",
