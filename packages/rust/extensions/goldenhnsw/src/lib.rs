@@ -108,15 +108,19 @@ impl SplitMix64 {
 fn inner_product(a: &[f32], b: &[f32]) -> f32 {
     debug_assert_eq!(a.len(), b.len());
     let mut acc = [0.0f32; 8];
-    let mut ai = a.chunks_exact(8);
-    let mut bi = b.chunks_exact(8);
-    for (ca, cb) in ai.by_ref().zip(bi.by_ref()) {
+    // `as_chunks::<8>` rather than `chunks_exact(8)`: same split, same order,
+    // same remainder -- so the accumulation sequence, and therefore the
+    // 1e-6 golden-parity result above, is unchanged. It just hands back the
+    // tail directly instead of via `remainder()`.
+    let (a_lanes, a_tail) = a.as_chunks::<8>();
+    let (b_lanes, b_tail) = b.as_chunks::<8>();
+    for (ca, cb) in a_lanes.iter().zip(b_lanes) {
         for lane in 0..8 {
             acc[lane] += ca[lane] * cb[lane];
         }
     }
     let mut tail = 0.0f32;
-    for (x, y) in ai.remainder().iter().zip(bi.remainder()) {
+    for (x, y) in a_tail.iter().zip(b_tail) {
         tail += x * y;
     }
     ((acc[0] + acc[1]) + (acc[2] + acc[3])) + ((acc[4] + acc[5]) + (acc[6] + acc[7])) + tail
