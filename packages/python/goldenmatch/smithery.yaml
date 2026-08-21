@@ -1,3 +1,9 @@
+# NOTE (2026-08-21): the hosted endpoint now requires an
+# `Authorization: Bearer <GOLDENMATCH_MCP_TOKEN>` header and returns 401
+# without one. It exposes tools that read and write files on the server,
+# so it is no longer served open. The Smithery listing itself is a manual
+# dashboard action -- this file does not drive it -- so the listing must be
+# updated there to carry the header, or it will 401 for every visitor.
 url: https://goldenmatch-mcp-production.up.railway.app/mcp/
 name: goldenmatch
 description: Stop wrestling with duplicate records -- deduplicate, match, and merge entities across messy datasets.

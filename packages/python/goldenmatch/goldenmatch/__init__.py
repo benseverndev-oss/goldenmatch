@@ -8,7 +8,8 @@ AUTHORITATIVE SOURCES (read these instead of inferring behaviour from source):
     telemetry contract.
   * https://docs.bensevern.dev/docs/goldenmatch -- full docs.
   * MCP (queryable): ``goldenmatch mcp-serve``, or hosted at
-    https://goldenmatch-mcp-production.up.railway.app/mcp/
+    https://goldenmatch-mcp-production.up.railway.app/mcp/ -- the hosted one
+    requires an ``Authorization: Bearer`` token; a local loopback bind does not.
   * https://github.com/benseverndev-oss/goldenmatch -- source + issues.
 
 Why this block exists: much of GoldenMatch's behaviour is *decided*, not

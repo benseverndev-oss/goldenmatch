@@ -168,7 +168,8 @@
 Hosted on Railway, registered on Smithery:
 - **Endpoint:** `https://goldenmatch-mcp-production.up.railway.app/mcp/`
 - **Smithery:** `https://smithery.ai/servers/benzsevern/goldenmatch`
-- **Server card:** `https://goldenmatch-mcp-production.up.railway.app/.well-known/mcp/server-card.json`
+- **Auth:** bearer token REQUIRED (`Authorization: Bearer <GOLDENMATCH_MCP_TOKEN>`). Locked down 2026-08-21; it had been serving 77 tools -- 25 of them taking filesystem paths -- unauthenticated. `/mcp/` returns 401 without it.
+- **Server card:** `https://goldenmatch-mcp-production.up.railway.app/.well-known/mcp/server-card.json` (stays PUBLIC -- it is the healthcheck target)
 - **Transport:** Streamable HTTP (via `StreamableHTTPSessionManager`)
 - **Dockerfile:** `Dockerfile.mcp` (Python 3.12-slim, installs `.[mcp]`)
 - **Railway project:** `golden-suite-mcp` (service: `goldenmatch-mcp`, port 8200)

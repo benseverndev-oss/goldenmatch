@@ -320,11 +320,17 @@ pip install goldenmatch[mcp]               # + MCP server     (also: [agent] A2A
 
 ## Deploy
 
-**Remote MCP (nothing to install).** Hosted on [Smithery](https://smithery.ai/servers/benzsevern/goldenmatch); connect any MCP client:
+**Remote MCP.** The hosted endpoint requires a bearer token -- it exposes tools that read and write files on the server, so it is not open. Ask the maintainer for one, or self-host: `goldenmatch mcp-serve --transport http` is the same server.
 
 ```json
-{ "mcpServers": { "goldenmatch": { "url": "https://goldenmatch-mcp-production.up.railway.app/mcp/" } } }
+{ "mcpServers": { "goldenmatch": {
+    "url": "https://goldenmatch-mcp-production.up.railway.app/mcp/",
+    "headers": { "Authorization": "Bearer YOUR_TOKEN" }
+} } }
 ```
+
+Self-hosting on loopback needs no token; binding to a public interface without
+`GOLDENMATCH_MCP_TOKEN` is refused rather than served open.
 
 **Containers.** Every package ships as a multi-arch image (linux/amd64 + arm64) on GHCR, pull anonymously:
 

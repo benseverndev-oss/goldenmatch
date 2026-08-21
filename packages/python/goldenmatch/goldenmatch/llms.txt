@@ -7,7 +7,7 @@ Zero-config gets good results and returns the config it chose; the healer (`revi
 
 ## Interfaces
 - MCP Server: `goldenmatch mcp-serve` (97 tools across data, agent, identity, memory, routing, and document groups)
-- Remote MCP: https://goldenmatch-mcp-production.up.railway.app/mcp/ (97 tools, Smithery: https://smithery.ai/servers/benzsevern/goldenmatch)
+- Remote MCP: https://goldenmatch-mcp-production.up.railway.app/mcp/ (97 tools; requires `Authorization: Bearer <token>` -- returns 401 without it. Smithery: https://smithery.ai/servers/benzsevern/goldenmatch)
 - A2A Server: `goldenmatch agent-serve --port 8200` (51 skills advertised in the agent card)
 - CLI: `goldenmatch dedupe`, `goldenmatch match`, `goldenmatch autoconfig`, `goldenmatch memory ...`, `goldenmatch identity ...`, + more
 - Python API: `import goldenmatch` — `dedupe_df()`, `match_df()`, `score_strings()`, `evaluate()`, ~202 exports

@@ -23,7 +23,15 @@
   "remotes": [
     {
       "type": "streamable-http",
-      "url": "https://goldenmatch-mcp-production.up.railway.app/mcp/"
+      "url": "https://goldenmatch-mcp-production.up.railway.app/mcp/",
+      "headers": [
+        {
+          "name": "Authorization",
+          "description": "Bearer token for the hosted endpoint. It exposes tools that read and write files on the server, so anonymous access is refused (401). Ask the maintainer, or self-host with `goldenmatch mcp-serve`.",
+          "isRequired": true,
+          "isSecret": true
+        }
+      ]
     }
   ]
 }
