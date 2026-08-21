@@ -90,8 +90,6 @@ fn parse_npy_f32(buf: &[u8], name: &str) -> Result<Vec<f32>> {
     if !data.len().is_multiple_of(4) {
         bail!("{name}: data length {} is not a multiple of 4", data.len());
     }
-    Ok(data
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect())
+    let (words, _tail) = data.as_chunks::<4>();
+    Ok(words.iter().copied().map(f32::from_le_bytes).collect())
 }

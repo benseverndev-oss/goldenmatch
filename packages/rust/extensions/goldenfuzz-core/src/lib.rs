@@ -329,6 +329,17 @@ fn levenshtein_distance_sw<T: Copy>(s1: &[T], s2: &[T], get: impl Fn(T) -> u64) 
 /// Single-word FlaggedChars Jaro. Caller guarantees `s1.len() <= 64` (and, via
 /// the `len1 == 1 && len2 == 1` short-circuit in the dispatcher, `len2 >= 2` when
 /// `len1 == 1`). Same match/transposition order as the multiword path.
+// rustc 1.98 (2026-08-18) added `clippy::manual_isolate_lowest_one`, which
+// flags the `x & x.wrapping_neg()` blsi idiom below and suggests the std
+// `isolate_lowest_one()`. Silenced rather than adopted, deliberately: this is
+// the inner loop of the bit-parallel Jaro, `x & -x` is the canonical blsi form
+// and lowers to the single instruction the comment names, and the std method
+// is `isolate_most_least_significant_one`-gated -- unstable before 1.98 -- so
+// taking the suggestion would silently raise this crate's toolchain floor to a
+// release that is days old. `unknown_lints` is allowed alongside it so the
+// attribute is also inert on toolchains that predate the lint.
+#[allow(unknown_lints)]
+#[allow(clippy::manual_isolate_lowest_one)]
 fn jaro_similarity_sw<T: Copy + PartialEq>(s1: &[T], s2: &[T], get: impl Fn(T) -> u64) -> f64 {
     let len1 = s1.len();
     let len2 = s2.len();
