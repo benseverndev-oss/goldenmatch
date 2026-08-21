@@ -63,8 +63,11 @@ jobs:
       # passes both wheels, so the wheel is fine and the stale validator is not.
       # Keep the check rather than dropping it: it is what catches an unrenderable
       # README before it reaches PyPI.
+      # Path is relative to defaults.run.working-directory above (the package
+      # dir). The action below needs the full path instead, because `uses:`
+      # steps do not honour working-directory -- hence the two differing forms.
       - name: Validate distribution metadata
-        run: python -m twine check packages/python/${{ inputs.package }}/dist/*
+        run: python -m twine check dist/*
       - name: Publish to PyPI
         if: inputs.dry_run != 'true'
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
