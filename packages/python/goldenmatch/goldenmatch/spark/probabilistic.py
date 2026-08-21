@@ -239,12 +239,44 @@ def _weight_lookup_expr(level: Any, weights: list[float]) -> Any:
 
     if not weights:
         return F.lit(_UNOBSERVED_WEIGHT)
-    expr = F.when(level == F.lit(0), F.lit(float(weights[0])))
-    for i, w in enumerate(weights[1:], start=1):
-        expr = expr.when(level == F.lit(i), F.lit(float(w)))
-    # level == -1 (unobserved) and any level outside the trained range land here.
-    # Zero == skipping the field, which is exactly `fs_regular_weight_sum`.
-    return expr.otherwise(F.lit(_UNOBSERVED_WEIGHT))
+    # ONE reference to `level`, deliberately. This used to be a CASE chain --
+    # `when(level == 0, w0).when(level == 1, w1)...` -- which names `level` once
+    # per level, and `level` is the WHOLE gamma expression with the jar scorer
+    # call inside it.
+    #
+    # Catalyst's subexpression elimination does NOT hoist that call out of the
+    # CASE branches. MEASURED at 50M, splitting the score stage by layer
+    # (`--attribute-score`):
+    #
+    #     join      13.47s
+    #     + gammas 125.79s   (+112.32 marginal)
+    #     + weight 340.75s   (+214.96 marginal)   <- 2.71x the gamma layer
+    #     + truth  349.69s   (+8.94)
+    #
+    # 2.71x on a three-level model is the level count: the scorer ran once per
+    # branch. A synthetic probe using a pure-SQL stand-in for the scorer showed
+    # no such penalty, because CSE handles NATIVE expressions fine -- the UDF is
+    # the case it does not. That probe is why this comment names the measurement
+    # that used the real kernel.
+    #
+    # `get` and not `element_at`: element_at is 1-based, treats negative indices
+    # as counting from the END, and under ANSI mode THROWS on an out-of-range
+    # index rather than returning null. `get` is 0-based and returns null for
+    # any out-of-range index, ANSI or not, which is exactly the total function
+    # this needs.
+    #
+    # Index 0 holds the unobserved weight, so `level = -1` lands on it with no
+    # branch. Levels outside the trained range index past the end and come back
+    # null, and the coalesce sends them to the same place the old `otherwise`
+    # did. Zero == skipping the field, which is exactly `fs_regular_weight_sum`.
+    table = F.array(
+        F.lit(float(_UNOBSERVED_WEIGHT)),
+        *[F.lit(float(w)) for w in weights],
+    )
+    return F.coalesce(
+        F.get(table, (level + F.lit(1)).cast("int")),
+        F.lit(float(_UNOBSERVED_WEIGHT)),
+    )
 
 
 def fs_match_weight_expr(
