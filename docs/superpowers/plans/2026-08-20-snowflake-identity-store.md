@@ -56,7 +56,8 @@ In `packages/python/goldenmatch/pyproject.toml`, inside `[project.optional-depen
 Install it into the venv used for tests:
 
 ```bash
-/d/show_case/goldenmatch/.venv/Scripts/python.exe -m pip install "fakesnow>=0.11" "snowflake-connector-python[pandas]>=3.0"
+uv pip install --python /d/show_case/goldenmatch/.venv/Scripts/python.exe \
+  "fakesnow>=0.11" "snowflake-connector-python[pandas]>=3.0"
 ```
 
 - [ ] **Step 2: Write the failing test**
