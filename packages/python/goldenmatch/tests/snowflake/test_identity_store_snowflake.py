@@ -1,23 +1,9 @@
-"""IdentityStore(backend="snowflake") against fakesnow."""
+"""IdentityStore(backend="snowflake") against fakesnow (or live -- see conftest)."""
 from __future__ import annotations
 
 import pytest
 
 fakesnow = pytest.importorskip("fakesnow")
-import snowflake.connector  # noqa: E402
-
-
-@pytest.fixture
-def store():
-    from goldenmatch.identity.store import IdentityStore
-
-    with fakesnow.patch():
-        conn = snowflake.connector.connect(database="GM", schema="PUB")
-        s = IdentityStore(
-            backend="snowflake", connection=conn, database="GM", schema="PUB"
-        )
-        yield s
-        s.close()
 
 
 def test_upsert_identity_and_get(store) -> None:

@@ -6,7 +6,6 @@ from dataclasses import asdict
 import pytest
 
 fakesnow = pytest.importorskip("fakesnow")
-import snowflake.connector  # noqa: E402
 
 
 def _seed(store, eid):
@@ -54,35 +53,37 @@ def _drop_volatile(d: dict) -> dict:
     }
 
 
-def test_sqlite_and_snowflake_produce_identical_objects(tmp_path) -> None:
+def test_sqlite_and_snowflake_produce_identical_objects(tmp_path, store) -> None:
+    """``store`` is the shared conftest fixture (fakesnow by default, live
+    Snowflake under ``GOLDENMATCH_SNOWFLAKE_TEST_DSN``); the sqlite side stays
+    a plain on-disk ``IdentityStore`` built here, deliberately NOT routed
+    through any Snowflake fixture.
+    """
     from goldenmatch.identity.store import IdentityStore, new_entity_id
 
+    sf_store = store
     eid = new_entity_id()
     sqlite_store = IdentityStore(
         backend="sqlite", path=str(tmp_path / "identity.db")
     )
     _seed(sqlite_store, eid)
+    _seed(sf_store, eid)
 
-    with fakesnow.patch():
-        conn = snowflake.connector.connect(database="GM", schema="PUB")
-        sf_store = IdentityStore(
-            backend="snowflake", connection=conn, database="GM", schema="PUB",
-        )
-        _seed(sf_store, eid)
-
-        assert _drop_volatile(asdict(sqlite_store.get_identity(eid))) == \
-               _drop_volatile(asdict(sf_store.get_identity(eid)))
-        assert _drop_volatile(asdict(sqlite_store.get_record("crm:1"))) == \
-               _drop_volatile(asdict(sf_store.get_record("crm:1")))
-        a_edges = [_drop_volatile(asdict(e))
-                   for e in sqlite_store.edges_for_entity(eid)]
-        b_edges = [_drop_volatile(asdict(e))
-                   for e in sf_store.edges_for_entity(eid)]
-        assert a_edges == b_edges
-        a_hist = [_drop_volatile(asdict(e)) for e in sqlite_store.history(eid)]
-        b_hist = [_drop_volatile(asdict(e)) for e in sf_store.history(eid)]
-        assert a_hist == b_hist
-        assert sqlite_store.resolve_alias("MDM-1", kind="mdm") == \
-               sf_store.resolve_alias("MDM-1", kind="mdm")
-        sf_store.close()
+    assert _drop_volatile(asdict(sqlite_store.get_identity(eid))) == \
+           _drop_volatile(asdict(sf_store.get_identity(eid)))
+    assert _drop_volatile(asdict(sqlite_store.get_record("crm:1"))) == \
+           _drop_volatile(asdict(sf_store.get_record("crm:1")))
+    a_edges = [_drop_volatile(asdict(e))
+               for e in sqlite_store.edges_for_entity(eid)]
+    b_edges = [_drop_volatile(asdict(e))
+               for e in sf_store.edges_for_entity(eid)]
+    assert a_edges == b_edges
+    a_hist = [_drop_volatile(asdict(e)) for e in sqlite_store.history(eid)]
+    b_hist = [_drop_volatile(asdict(e)) for e in sf_store.history(eid)]
+    assert a_hist == b_hist
+    assert sqlite_store.resolve_alias("MDM-1", kind="mdm") == \
+           sf_store.resolve_alias("MDM-1", kind="mdm")
+    # sf_store is NOT closed here -- the `store` fixture deliberately leaves
+    # that to sf_target's teardown, which must run the live-path DROP SCHEMA
+    # before closing the connection. See conftest.py.
     sqlite_store.close()

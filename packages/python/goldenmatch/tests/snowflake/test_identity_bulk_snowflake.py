@@ -9,8 +9,6 @@ import pytest
 fakesnow = pytest.importorskip("fakesnow")
 pl = pytest.importorskip("polars")
 
-from tests.snowflake.test_identity_store_snowflake import store  # noqa: F401,E402
-
 
 def _nodes_df(ids):
     now = datetime(2026, 8, 20, 12, 0, 0)

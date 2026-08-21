@@ -14,8 +14,6 @@ import pytest
 
 fakesnow = pytest.importorskip("fakesnow")
 
-from tests.snowflake.test_identity_store_snowflake import store  # noqa: F401,E402
-
 
 def _node(store, dataset="c", status="active"):  # noqa: F811
     from goldenmatch.identity.model import IdentityNode

@@ -4,37 +4,46 @@ from __future__ import annotations
 import pytest
 
 fakesnow = pytest.importorskip("fakesnow")
-import snowflake.connector  # noqa: E402
 
 
-@pytest.fixture
-def sf_conn():
-    """A fakesnow-backed Snowflake connection on GM.PUB."""
-    with fakesnow.patch():
-        conn = snowflake.connector.connect(database="GM", schema="PUB")
-        conn.cursor().execute("CREATE SCHEMA IF NOT EXISTS GM.PUB")
-        yield conn
-        conn.close()
+def test_live_mode_is_off_without_the_env_var(monkeypatch) -> None:
+    monkeypatch.delenv("GOLDENMATCH_SNOWFLAKE_TEST_DSN", raising=False)
+    from tests.snowflake.conftest import live_dsn
+
+    assert live_dsn() is None
 
 
-def test_resolve_connection_passes_through_a_live_connection(sf_conn) -> None:
+def test_live_mode_reads_the_env_var(monkeypatch) -> None:
+    monkeypatch.setenv("GOLDENMATCH_SNOWFLAKE_TEST_DSN", "myacct")
+    from tests.snowflake.conftest import live_dsn
+
+    assert live_dsn() == "myacct"
+
+
+def test_resolve_connection_passes_through_a_live_connection(sf_target) -> None:
     from goldenmatch.snowflake._store_sql import resolve_connection
 
-    assert resolve_connection(sf_conn, database="GM", schema="PUB") is sf_conn
+    conn, database, schema = sf_target
+    assert resolve_connection(conn, database=database, schema=schema) is conn
 
 
-def test_resolve_connection_unwraps_a_snowpark_session(sf_conn) -> None:
+def test_resolve_connection_unwraps_a_snowpark_session(sf_target) -> None:
     from goldenmatch.snowflake._store_sql import resolve_connection
+
+    conn, database, schema = sf_target
 
     class FakeSession:
-        connection = sf_conn
+        connection = conn
 
     assert resolve_connection(
-        FakeSession(), database="GM", schema="PUB"
-    ) is sf_conn
+        FakeSession(), database=database, schema=schema
+    ) is conn
 
 
 def test_resolve_connection_rejects_none() -> None:
+    # Raises on the None check before it ever looks at database=/schema=, so
+    # this is not a live write and needs no fixture -- the literals below are
+    # placeholder values, never sent anywhere.
     from goldenmatch.snowflake._store_sql import resolve_connection
 
     with pytest.raises(ValueError, match="requires connection="):
@@ -70,19 +79,20 @@ def test_fetchall_rows_returns_every_row(sf_conn) -> None:
     assert [r["a"] for r in rows] == ["x", "y"]
 
 
-def test_ensure_schema_creates_every_identity_table(sf_conn) -> None:
+def test_ensure_schema_creates_every_identity_table(sf_target) -> None:
     from goldenmatch.snowflake._store_sql import (
         IDENTITY_DDL,
         ensure_schema,
         fetchall_rows,
     )
 
-    ensure_schema(sf_conn, IDENTITY_DDL, database="GM", schema="PUB", version=7)
+    conn, database, schema = sf_target
+    ensure_schema(conn, IDENTITY_DDL, database=database, schema=schema, version=7)
     rows = fetchall_rows(
-        sf_conn,
-        "SELECT table_name FROM GM.information_schema.tables "
+        conn,
+        f"SELECT table_name FROM {database}.information_schema.tables "
         "WHERE table_schema = %s",
-        ("PUB",),
+        (schema,),
     )
     names = {r["table_name"].lower() for r in rows}
     for expected in (
@@ -94,7 +104,7 @@ def test_ensure_schema_creates_every_identity_table(sf_conn) -> None:
         assert expected in names, f"{expected} missing from {sorted(names)}"
 
 
-def test_ensure_schema_is_idempotent(sf_conn) -> None:
+def test_ensure_schema_is_idempotent(sf_target) -> None:
     from goldenmatch.snowflake._store_sql import (
         IDENTITY_DDL,
         ensure_schema,
@@ -103,26 +113,27 @@ def test_ensure_schema_is_idempotent(sf_conn) -> None:
         schema_version,
     )
 
-    ensure_schema(sf_conn, IDENTITY_DDL, database="GM", schema="PUB", version=7)
+    conn, database, schema = sf_target
+    ensure_schema(conn, IDENTITY_DDL, database=database, schema=schema, version=7)
     execute(
-        sf_conn,
+        conn,
         "INSERT INTO identity_nodes (entity_id, status) VALUES (%s, %s)",
         ("e1", "active"),
     )
     # Re-running must not drop the row or duplicate the version marker.
-    ensure_schema(sf_conn, IDENTITY_DDL, database="GM", schema="PUB", version=7)
-    row = fetchone_row(sf_conn, "SELECT COUNT(*) AS n FROM identity_nodes")
+    ensure_schema(conn, IDENTITY_DDL, database=database, schema=schema, version=7)
+    row = fetchone_row(conn, "SELECT COUNT(*) AS n FROM identity_nodes")
     assert row is not None and row["n"] == 1
-    assert schema_version(sf_conn) == 7
+    assert schema_version(conn) == 7
     # Snowflake does not enforce the PRIMARY KEY on _gm_schema_version, so the
     # MERGE (not the constraint) is what prevents a duplicate marker row.
     marker_row = fetchone_row(
-        sf_conn, "SELECT COUNT(*) AS n FROM _gm_schema_version"
+        conn, "SELECT COUNT(*) AS n FROM _gm_schema_version"
     )
     assert marker_row is not None and marker_row["n"] == 1
 
 
-def test_autoincrement_ids_are_assigned(sf_conn) -> None:
+def test_autoincrement_ids_are_assigned(sf_target) -> None:
     from goldenmatch.snowflake._store_sql import (
         IDENTITY_DDL,
         ensure_schema,
@@ -130,25 +141,27 @@ def test_autoincrement_ids_are_assigned(sf_conn) -> None:
         fetchall_rows,
     )
 
-    ensure_schema(sf_conn, IDENTITY_DDL, database="GM", schema="PUB", version=7)
+    conn, database, schema = sf_target
+    ensure_schema(conn, IDENTITY_DDL, database=database, schema=schema, version=7)
     for kind in ("created", "merged"):
         execute(
-            sf_conn,
+            conn,
             "INSERT INTO identity_events (entity_id, kind) VALUES (%s, %s)",
             ("e1", kind),
         )
     rows = fetchall_rows(
-        sf_conn, "SELECT event_id, kind FROM identity_events ORDER BY event_id"
+        conn, "SELECT event_id, kind FROM identity_events ORDER BY event_id"
     )
     assert [r["event_id"] for r in rows] == [1, 2]
 
 
 @pytest.fixture
-def schema_conn(sf_conn):
+def schema_conn(sf_target):
     from goldenmatch.snowflake._store_sql import IDENTITY_DDL, ensure_schema
 
-    ensure_schema(sf_conn, IDENTITY_DDL, database="GM", schema="PUB", version=7)
-    return sf_conn
+    conn, database, schema = sf_target
+    ensure_schema(conn, IDENTITY_DDL, database=database, schema=schema, version=7)
+    return conn
 
 
 def test_merge_one_inserts_then_updates(schema_conn) -> None:
@@ -214,16 +227,17 @@ def test_merge_one_round_trips_a_variant_column(schema_conn) -> None:
     assert json.loads(row["golden_record"]) == {"name": "Ada", "n": 1}
 
 
-def test_stage_and_merge_upserts_a_batch(schema_conn) -> None:
+def test_stage_and_merge_upserts_a_batch(schema_conn, sf_target) -> None:
     from goldenmatch.snowflake._store_sql import fetchall_rows, stage_and_merge
 
+    _conn, database, schema = sf_target
     first = [
         {"entity_id": "b1", "status": "active", "confidence": 0.1},
         {"entity_id": "b2", "status": "active", "confidence": 0.2},
     ]
     assert stage_and_merge(
         schema_conn, "identity_nodes", first, ["entity_id"],
-        update_cols=["status", "confidence"], database="GM", schema="PUB",
+        update_cols=["status", "confidence"], database=database, schema=schema,
     ) == 2
     second = [
         {"entity_id": "b2", "status": "retired", "confidence": 0.9},
@@ -231,7 +245,7 @@ def test_stage_and_merge_upserts_a_batch(schema_conn) -> None:
     ]
     stage_and_merge(
         schema_conn, "identity_nodes", second, ["entity_id"],
-        update_cols=["status", "confidence"], database="GM", schema="PUB",
+        update_cols=["status", "confidence"], database=database, schema=schema,
     )
     rows = fetchall_rows(
         schema_conn,
@@ -243,38 +257,43 @@ def test_stage_and_merge_upserts_a_batch(schema_conn) -> None:
     assert rows[1]["confidence"] == 0.9
 
 
-def test_stage_and_merge_on_empty_input_is_a_noop(schema_conn) -> None:
+def test_stage_and_merge_on_empty_input_is_a_noop(schema_conn, sf_target) -> None:
     from goldenmatch.snowflake._store_sql import stage_and_merge
 
+    _conn, database, schema = sf_target
     assert stage_and_merge(
         schema_conn, "identity_nodes", [], ["entity_id"],
-        database="GM", schema="PUB",
+        database=database, schema=schema,
     ) == 0
 
 
-def test_stage_tables_do_not_survive(schema_conn) -> None:
+def test_stage_tables_do_not_survive(schema_conn, sf_target) -> None:
     from goldenmatch.snowflake._store_sql import fetchall_rows, stage_and_merge
 
+    _conn, database, schema = sf_target
     stage_and_merge(
         schema_conn, "identity_nodes",
         [{"entity_id": "s1", "status": "active"}], ["entity_id"],
-        database="GM", schema="PUB",
+        database=database, schema=schema,
     )
     rows = fetchall_rows(
         schema_conn,
-        "SELECT table_name FROM GM.information_schema.tables "
+        f"SELECT table_name FROM {database}.information_schema.tables "
         "WHERE table_schema = %s",
-        ("PUB",),
+        (schema,),
     )
     leaked = [r["table_name"] for r in rows if "STAGE" in r["table_name"].upper()]
     assert leaked == [], f"stage tables leaked: {leaked}"
 
 
-def test_stage_and_merge_round_trips_a_variant_column(schema_conn) -> None:
+def test_stage_and_merge_round_trips_a_variant_column(
+    schema_conn, sf_target
+) -> None:
     import json
 
     from goldenmatch.snowflake._store_sql import fetchone_row, stage_and_merge
 
+    _conn, database, schema = sf_target
     rows = [
         {
             "entity_id": "v1",
@@ -286,7 +305,7 @@ def test_stage_and_merge_round_trips_a_variant_column(schema_conn) -> None:
         schema_conn, "identity_nodes", rows, ["entity_id"],
         update_cols=["status", "golden_record"],
         json_cols=["golden_record"],
-        database="GM", schema="PUB",
+        database=database, schema=schema,
     )
     row = fetchone_row(
         schema_conn,
@@ -298,10 +317,11 @@ def test_stage_and_merge_round_trips_a_variant_column(schema_conn) -> None:
 
 
 def test_stage_and_merge_cleans_up_stage_table_on_merge_failure(
-    schema_conn,
+    schema_conn, sf_target,
 ) -> None:
     from goldenmatch.snowflake._store_sql import fetchall_rows, stage_and_merge
 
+    _conn, database, schema = sf_target
     # A key column that does not exist on the target forces the MERGE
     # statement itself to fail after the stage table has been created and
     # populated, exercising the `finally` cleanup path (not just the happy
@@ -311,13 +331,13 @@ def test_stage_and_merge_cleans_up_stage_table_on_merge_failure(
             schema_conn, "identity_nodes",
             [{"entity_id": "f1", "status": "active"}],
             ["nonexistent_column"],
-            database="GM", schema="PUB",
+            database=database, schema=schema,
         )
     rows = fetchall_rows(
         schema_conn,
-        "SELECT table_name FROM GM.information_schema.tables "
+        f"SELECT table_name FROM {database}.information_schema.tables "
         "WHERE table_schema = %s",
-        ("PUB",),
+        (schema,),
     )
     leaked = [r["table_name"] for r in rows if "STAGE" in r["table_name"].upper()]
     assert leaked == [], f"stage tables leaked after a MERGE failure: {leaked}"
