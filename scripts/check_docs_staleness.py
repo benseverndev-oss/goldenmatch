@@ -32,6 +32,7 @@ Only the flag rule can change the exit code. Everything else is informational.
 
 Run: ``python scripts/check_docs_staleness.py [--base <ref>] [--head <ref>]``
 """
+
 from __future__ import annotations
 
 import argparse
@@ -48,8 +49,19 @@ _ALL_LINE_RE = re.compile(r"__all__")
 
 
 def _git(*args: str) -> str:
+    # encoding= is load-bearing, not decoration. text=True decodes with the
+    # locale default -- cp1252 on Windows -- and tuning.mdx carries non-ASCII
+    # punctuation it cannot decode. That decode raises inside subprocess's
+    # reader thread, so stdout arrives as None with returncode 0: this function
+    # then returns None WITHOUT raising and the caller dies on None. Pinning
+    # utf-8 keeps the failure mode honest on every platform.
     proc = subprocess.run(
-        ["git", *args], cwd=ROOT, capture_output=True, text=True
+        ["git", *args],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
     )
     if proc.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
@@ -116,9 +128,7 @@ def check_flag_rule(base: str, head: str, files: list[str]) -> tuple[bool, list[
     py_files = [
         f
         for f in files
-        if f.startswith("packages/python/")
-        and f.endswith(".py")
-        and not _is_test_file(f)
+        if f.startswith("packages/python/") and f.endswith(".py") and not _is_test_file(f)
     ]
     if not py_files:
         return True, ["flag rule: no non-test packages/python/**/*.py changes -- skipped"]
@@ -143,8 +153,7 @@ def check_flag_rule(base: str, head: str, files: list[str]) -> tuple[bool, list[
     tuning_touched = TUNING_MDX in files
     if tuning_touched:
         return True, [
-            f"flag rule: flags changed ({touched_flags}) and {TUNING_MDX} is in the "
-            f"diff -- OK"
+            f"flag rule: flags changed ({touched_flags}) and {TUNING_MDX} is in the diff -- OK"
         ]
     # Drift: flag changed but tuning.mdx untouched.
     msgs = [
@@ -157,10 +166,7 @@ def check_flag_rule(base: str, head: str, files: list[str]) -> tuple[bool, list[
 
 def check_public_symbol_rule(base: str, head: str, files: list[str]) -> list[str]:
     """Advisory only. Return ::warning:: messages (never affects exit code)."""
-    init_files = [
-        f for f in files
-        if f.startswith("packages/") and f.endswith("__init__.py")
-    ]
+    init_files = [f for f in files if f.startswith("packages/") and f.endswith("__init__.py")]
     if not init_files:
         return ["public-symbol rule: no __init__.py changes -- skipped"]
 
@@ -202,8 +208,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"::warning::docs-staleness: could not compute diff ({exc}); skipping.")
         return 0
 
-    print(f"Docs staleness advisory: {args.base}...{args.head} "
-          f"({len(files)} changed file(s))")
+    print(f"Docs staleness advisory: {args.base}...{args.head} ({len(files)} changed file(s))")
 
     gate_ok, flag_msgs = check_flag_rule(args.base, args.head, files)
     symbol_msgs = check_public_symbol_rule(args.base, args.head, files)
@@ -212,8 +217,7 @@ def main(argv: list[str] | None = None) -> int:
         print(m)
 
     if not gate_ok:
-        print("\nDocs staleness FAILED (flag rule). Update "
-              f"{TUNING_MDX} in the same PR.")
+        print(f"\nDocs staleness FAILED (flag rule). Update {TUNING_MDX} in the same PR.")
         return 1
     print("\nDocs staleness OK (gating flag rule passed; symbol rule advisory only).")
     return 0
