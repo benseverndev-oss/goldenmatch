@@ -94,13 +94,19 @@ Per-package specifics the config must express:
 
 - **goldenmatch uses bare `v*` tags**; every other package is prefixed. This is
   `include-component-in-tag: false` for goldenmatch and `true` elsewhere.
-  **UNVERIFIED ASSUMPTION, and load-bearing**: that release-please supports
-  mixing a bare-tag component with prefixed ones inside a single manifest. If it
-  does not, goldenmatch -- the flagship, with 91 existing bare tags -- cannot
-  join the scheme without either changing its tag format (which would break
-  `publish-goldenmatch.yml`'s `v*` trigger and orphan the existing tag history)
-  or running it outside the manifest. The implementation plan must verify this
-  against release-please's actual behaviour before wave 1, not after.
+  **VERIFIED 2026-08-21** against release-please's own config schema
+  (`schemas/config.json`, read via the GitHub API): `packages` is typed
+  `additionalProperties: {"$ref": "#/definitions/ReleaserConfigOptions"}`, the
+  same definition applied at the root, and `include-component-in-tag` is a
+  property of `ReleaserConfigOptions`. It is therefore settable **per package**,
+  so goldenmatch keeps its bare `v*` tags alongside prefixed siblings in one
+  manifest.
+
+  Recorded because the first answer was the opposite: `manifest-releaser.md`
+  states the option is root-level and "applies uniformly across all packages".
+  Had that been believed, goldenmatch would have had to change its tag format
+  (breaking `publish-goldenmatch.yml`'s `v*` trigger and orphaning 91 tags) or
+  sit outside the scheme. The schema is authoritative; the prose is not.
 - **Three release types**: `python` (pyproject.toml), `node` (package.json),
   `rust` (Cargo.toml).
 - **Non-standard version carriers** need `extra-files`: `__init__.py` for the
