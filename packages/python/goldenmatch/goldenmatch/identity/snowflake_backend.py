@@ -605,12 +605,33 @@ class SnowflakeIdentityStore:
             for ps, bk in keys
             if bk is not None
         ]
+        if not rows:
+            return
+        # ONE staged MERGE for the whole key set, not one MERGE per key: this
+        # sits on the per-record resolve path, so a per-key round trip
+        # multiplies an already-per-record cost by the number of blocking
+        # passes. The source issues a single executemany (store.py:1770-1777);
+        # this is its bulk equivalent.
+        #
+        # Dedupe first, for the same reason add_relationships does -- and here
+        # it is a correctness requirement, not just an economy. ``keys`` is a
+        # caller-supplied iterable that can repeat a (pass_sig, block_key) pair,
+        # and this MERGE *has* a WHEN MATCHED branch, so two source rows on one
+        # target row is a non-deterministic MERGE (Snowflake raises "Duplicate
+        # row detected during DML action"). Last occurrence wins, matching
+        # executemany + ON CONFLICT ... DO UPDATE. Within a single call
+        # record_id and entity_id are fixed, so the choice is observationally
+        # moot -- it is faithful rather than load-bearing.
+        deduped: dict[tuple[str, str, str], dict[str, Any]] = {}
         for row in rows:
-            merge_one(
-                self._conn, "identity_record_block_keys",
-                ["record_id", "pass_sig", "block_key"], row,
-                update_cols=["entity_id"],
-            )
+            deduped[(row["record_id"], row["pass_sig"], row["block_key"])] = row
+        stage_and_merge(
+            self._conn, "identity_record_block_keys",
+            list(deduped.values()),
+            ["record_id", "pass_sig", "block_key"],
+            update_cols=["entity_id"],
+            database=self._database, schema=self._schema,
+        )
 
     def candidates_by_block_keys(
         self, keys: Iterable[tuple[str, str]]
@@ -846,10 +867,25 @@ class SnowflakeIdentityStore:
         ins_rows = [want[k] for k in ins_keys]
         # del key = (a, b, kind, value); DELETE binds (dataset, a, b, kind, value).
         del_rows = [(dataset, a, b, k, v) for (a, b, k, v) in del_keys]
+        # Plain ``=`` on shared_value, NOT a NULL-safe comparison -- the same
+        # rule as ``dataset`` above, and for the same reason. store.py:2271-2273
+        # binds ``AND shared_value = ?``, so on SQLite/Postgres a stale edge
+        # whose shared_value is NULL SURVIVES a reconcile that does not name it.
+        # ``IS NOT DISTINCT FROM`` here would delete it, making this backend the
+        # only one that acts on the returned ``deleted`` count. NULL-safe
+        # equality is right for a MERGE *key* (where both sides come from the
+        # same row set); it is wrong in a DELETE *predicate* built from a
+        # bound parameter. This state is reachable, not theoretical: a
+        # relationship transform that finds no match yields NULL
+        # (_store_sql.py:249-255).
+        #
+        # SQLite reporting deleted=1 for a row it does not delete is arguably
+        # the real bug, but fixing it is one change across all three backends;
+        # parity with the source comes first.
         del_sql = (
             "DELETE FROM identity_relationships WHERE dataset = %s "
             "AND entity_a_id = %s AND entity_b_id = %s AND kind = %s "
-            "AND shared_value IS NOT DISTINCT FROM %s"
+            "AND shared_value = %s"
         )
         # NOT wrapped in an explicit transaction, unlike the SQLite and Postgres
         # paths (store.py:2250-2278). The insert half goes through

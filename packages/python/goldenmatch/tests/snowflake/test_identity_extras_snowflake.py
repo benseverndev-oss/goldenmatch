@@ -383,3 +383,69 @@ def test_seal_chain_is_append_only_and_dataset_scoped(store) -> None:  # noqa: F
     store.add_seal(AuditSeal(root_hash="g1", event_count=9))
     assert store.latest_seal().root_hash == "g1"
     assert len(store.list_seals()) == 1
+
+
+def test_reconcile_keeps_stale_null_shared_value_edge(store) -> None:  # noqa: F811
+    """A NULL-shared_value edge SURVIVES a reconcile that does not name it.
+
+    Parity pin against store.py:2271-2273, which binds ``shared_value = ?``:
+    on SQLite/Postgres ``NULL = NULL`` is never true, so the DELETE misses the
+    row even though the returned ``deleted`` count claims it. A NULL-safe
+    comparison here would make Snowflake the only backend that actually
+    removes it. Reachable state -- a relationship transform with no match
+    yields NULL (_store_sql.py:249-255).
+    """
+    a, b = _node(store), _node(store)
+    store.add_relationships([(a, b, "shares_x", "co", None, "c")])
+    assert store.count_relationships() == 1
+    # Reconciling to empty reports the delete...
+    assert store.reconcile_relationships("c", "shares_x", []) == (0, 1, 0)
+    # ...but the row survives, exactly as it does on SQLite.
+    assert store.count_relationships() == 1
+    assert store.list_relationships()[0]["shared_value"] is None
+
+
+def test_reconcile_still_deletes_non_null_shared_value_edges(store) -> None:  # noqa: F811
+    """The `=` predicate must not over-correct: a real value still deletes."""
+    a, b = _node(store), _node(store)
+    store.add_relationships([(a, b, "shares_x", "co", "acme", "c")])
+    assert store.reconcile_relationships("c", "shares_x", []) == (0, 1, 0)
+    assert store.count_relationships() == 0
+
+
+def test_index_record_block_keys_batches_and_dedupes(store) -> None:  # noqa: F811
+    """A repeated (pass_sig, block_key) in one call is not a duplicate row.
+
+    The batched MERGE has a WHEN MATCHED branch, so two source rows hitting one
+    target row is a non-deterministic MERGE. The pre-stage dedupe is what stops
+    it -- and the index must still hold exactly one row per key.
+    """
+    from goldenmatch.snowflake._store_sql import fetchall_rows
+
+    eid = _node(store)
+    store.index_record_block_keys(
+        "crm:1", eid,
+        [("p1", "A"), ("p1", "A"), ("p2", "B"), ("p1", "A")],
+    )
+    rows = fetchall_rows(
+        store._sf._conn,
+        "SELECT record_id, entity_id, pass_sig, block_key "
+        "FROM identity_record_block_keys ORDER BY pass_sig",
+    )
+    assert [(r["pass_sig"], r["block_key"]) for r in rows] == [("p1", "A"), ("p2", "B")]
+    assert {r["entity_id"] for r in rows} == {eid}
+    assert store.candidates_by_block_keys([("p1", "A")]) == {"crm:1"}
+
+
+def test_index_record_block_keys_accepts_null_entity_id(store) -> None:  # noqa: F811
+    """entity_id is nullable -- an unresolved record can still be indexed."""
+    from goldenmatch.snowflake._store_sql import fetchall_rows
+
+    store.index_record_block_keys("crm:1", None, [("p1", "A")])
+    rows = fetchall_rows(
+        store._sf._conn,
+        "SELECT entity_id FROM identity_record_block_keys",
+    )
+    assert len(rows) == 1
+    assert rows[0]["entity_id"] is None
+    assert store.candidates_by_block_keys([("p1", "A")]) == {"crm:1"}
