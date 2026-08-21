@@ -1163,6 +1163,13 @@ jobs:
           uv run --with polars --with pyarrow \
             pytest scripts/test_run_benchmarks_download.py \
                    scripts/dqbench_adapters/test_leipzig_eval.py -q
+      # The pre-push hook is developer-facing, so nothing else runs it. It
+      # shipped gating tag pushes -- diffing origin/main..<older tag sha>
+      # BACKWARDS -- which would have blocked the release tag back-fill. This
+      # covers the ref-parsing only, through the hook's own print-plan seam,
+      # so it costs milliseconds and never invokes the generators.
+      - name: Shell (pre-push hook ref parsing)
+        run: sh scripts/test_pre_push_docs_check.sh
 
   # Every repo path a CLAUDE.md names must exist. These files are loaded as
   # authoritative agent context, so a dead pointer does not merely fail to help --
