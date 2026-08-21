@@ -2133,21 +2133,36 @@ class IdentityConfig(BaseModel):
 
     Spec: ``docs/superpowers/specs/2026-05-12-identity-graph-design.md``
     """
+    model_config = ConfigDict(populate_by_name=True)
+
     enabled: bool = Field(
         default=False,
         description="Turns on the durable identity graph that assigns stable entity ids across runs after clustering.",
     )
     backend: str = Field(
         default="sqlite",
-        description="Storage backend for the identity graph ('sqlite' or 'postgres').",
+        description=(
+            "Storage backend for the identity graph "
+            "('sqlite', 'postgres', 'mongo' or 'snowflake')."
+        ),
     )
     path: str = Field(
         default=".goldenmatch/identity.db",
         description="SQLite file path for the identity graph when the backend is sqlite.",
     )
-    connection: str | None = Field(
+    connection: str | dict | None = Field(
         default=None,
-        description="Database connection string used when the backend is postgres.",
+        description=(
+            "Connection for non-sqlite backends: a DSN string for postgres, a "
+            "URI for mongo, or an account name / connector-kwargs dict for "
+            "snowflake. A Snowpark Session is passed programmatically, not "
+            "through config."
+        ),
+    )
+    schema_: str = Field(
+        default="PUBLIC",
+        alias="schema",
+        description="Snowflake schema holding the identity tables.",
     )
     dataset: str | None = Field(
         default=None,

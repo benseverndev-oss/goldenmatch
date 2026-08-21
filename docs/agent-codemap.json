@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 477,
+      "module_count": 479,
       "modules": [
         {
           "module": "goldenmatch",
@@ -6501,6 +6501,24 @@
           ]
         },
         {
+          "module": "goldenmatch.identity.snowflake_backend",
+          "file": "packages/python/goldenmatch/goldenmatch/identity/snowflake_backend.py",
+          "purpose": "Identity Store backed by Snowflake tables.",
+          "defines": [
+            "SnowflakeIdentityStore",
+            "_canon_relationships",
+            "_dedupe_relationships",
+            "_dumps",
+            "_union_find_remap"
+          ],
+          "imports": [
+            "goldenmatch.identity.audit",
+            "goldenmatch.identity.model",
+            "goldenmatch.identity.store",
+            "goldenmatch.snowflake._store_sql"
+          ]
+        },
+        {
           "module": "goldenmatch.identity.stabilize",
           "file": "packages/python/goldenmatch/goldenmatch/identity/stabilize.py",
           "purpose": "Cross-run entity stabilization -- Identity v3 (#1112, epic #1108).",
@@ -6560,7 +6578,8 @@
           "imports": [
             "goldenmatch.identity.audit",
             "goldenmatch.identity.model",
-            "goldenmatch.identity.mongo_backend"
+            "goldenmatch.identity.mongo_backend",
+            "goldenmatch.identity.snowflake_backend"
           ]
         },
         {
@@ -7887,6 +7906,24 @@
           "module": "goldenmatch.snowflake",
           "file": "packages/python/goldenmatch/goldenmatch/snowflake/__init__.py",
           "purpose": "Snowflake handler module -- the inside of the goldenmatch UDF surface."
+        },
+        {
+          "module": "goldenmatch.snowflake._store_sql",
+          "file": "packages/python/goldenmatch/goldenmatch/snowflake/_store_sql.py",
+          "purpose": "Shared SQL plumbing for the Snowflake-backed IdentityStore and MemoryStore.",
+          "defines": [
+            "CaseInsensitiveRow",
+            "_split_statements",
+            "_value_sql",
+            "ensure_schema",
+            "execute",
+            "fetchall_rows",
+            "fetchone_row",
+            "merge_one",
+            "resolve_connection",
+            "schema_version",
+            "stage_and_merge"
+          ]
         },
         {
           "module": "goldenmatch.snowflake.udfs",

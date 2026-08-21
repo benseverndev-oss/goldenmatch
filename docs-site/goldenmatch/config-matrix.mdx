@@ -368,9 +368,10 @@ _Identity Graph configuration._
 | Field | Type | Default | Choices / notes |
 |---|---|---|---|
 | `enabled` | bool | `False` | Turns on the durable identity graph that assigns stable entity ids across runs after clustering. |
-| `backend` | str | `'sqlite'` | Storage backend for the identity graph ('sqlite' or 'postgres'). |
+| `backend` | str | `'sqlite'` | Storage backend for the identity graph ('sqlite', 'postgres', 'mongo' or 'snowflake'). |
 | `path` | str | `'.goldenmatch/identity.db'` | SQLite file path for the identity graph when the backend is sqlite. |
-| `connection` | str \| None | `None` | Database connection string used when the backend is postgres. |
+| `connection` | str \| dict \| None | `None` | Connection for non-sqlite backends: a DSN string for postgres, a URI for mongo, or an account name / connector-kwargs dict for snowflake. A Snowpark Session is passed programmatically, not through config. |
+| `schema_` _(alias `schema`)_ | str | `'PUBLIC'` | Snowflake schema holding the identity tables. |
 | `dataset` | str \| None | `None` | Dataset name scoping identities so unrelated datasets do not share entity ids. |
 | `source_pk_column` | str \| None | `None` | Column supplying each record's source primary key for stable record ids; a payload hash is used when unset. |
 | `emit_singletons` | bool | `True` | Whether single-record clusters also get a durable entity id. |
