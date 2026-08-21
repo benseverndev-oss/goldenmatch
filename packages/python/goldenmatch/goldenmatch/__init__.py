@@ -46,7 +46,7 @@ Quick start:
 All features are accessible via `import goldenmatch as gm`.
 """
 
-__version__ = "3.13.1"
+__version__ = "3.14.0"
 
 # ── Native Core surface ───────────────────────────────────────────────────
 # goldenmatch.native: graph/pair primitives + native string scorers, re-exported

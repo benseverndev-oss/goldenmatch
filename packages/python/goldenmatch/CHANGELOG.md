@@ -17,6 +17,62 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   the target with `identity.database` / `identity.schema`. `resolve_clusters`
   now selects the bulk path by capability (`store.supports_bulk`) rather than by
   backend name.
+## [3.14.0] - 2026-08-20
+
+### Changed
+
+- **Distributed Fellegi-Sunter at 250M: 2,765.8s -> 669.96s (4.13x), with 3.1x
+  less executor CPU and zero spill.** Three changes, all on the SHIPPED Spark
+  path, all producing a byte-identical trained model (`match_weights` and
+  `m_probs` unchanged, average precision 0.704939 and best F1 0.686126
+  unchanged, identical pair counts). Seconds per million pairs: **1.192 ->
+  0.289**.
+
+  1. **The candidate frame is no longer materialised.** The block self-join
+     already holds both records of every pair; the tier projected that down to
+     `(a, b)` ids and paid two more joins to fetch back the columns the
+     projection dropped -- for counting, and again for scoring. One counts pass
+     went from 7 exchanges / 3 sort-merge joins to 3 / 1, the score path from
+     8 / 4 to 4 / 2. Shuffle write 438.1 -> 113.8 GB and memory spill 201.3 GB
+     -> **0** at 250M.
+  2. **The weight lookup named the level once per level.** `when(level == 0,
+     w0).when(level == 1, w1)...` -- and `level` is the whole gamma expression
+     with the jar scorer call inside it. Catalyst's subexpression elimination
+     does not hoist a UDF out of conditionally-evaluated CASE branches, so the
+     scorer ran once per branch. Now an array index naming the level once.
+  3. **The level ladder named the similarity once per threshold.**
+     `fs_level_expr` sums `when(sim >= t, 1)` per threshold. `gamma_frame`
+     projects each similarity by name first, which removed 94% of the bucketing
+     cost. This pays in BOTH the counts and score stages.
+
+  Measured, not inferred: `--attribute-score` splits the score stage into
+  layers (join / similarities / bucketing / weight lookup) and is what found
+  (2) and (3), after three attempts at reasoning from plan shape had failed.
+  At 50M the score stage went 347.07s -> 82.20s and counts 130s -> 80.62s.
+
+### Added
+
+- **`GOLDENMATCH_SPARK_FUSED_BLOCK_JOIN`** (default `1`) -- forces the legacy
+  three-join candidate path when set to `0`, so the comparison stays takeable
+  in both directions from one build.
+- `spark.config_pipeline.pass_candidates_joined` / `pass_joined` /
+  `score_source` / `fused_pass_frames`, and `spark.em.gamma_frame`: the joined
+  and projected shapes the above is built from. `id_col` must be unique -- every
+  caller generates `__row_id__` to be exactly that.
+
+### Fixed
+
+- Multi-pass candidates de-duplicate by **pass priority** -- each pair assigned
+  to the lowest-indexed pass that produces it, tested inside the join from the
+  two records -- instead of a `distinct()` over a frame with O(pairs) rows.
+  Same candidate set; one fewer shuffle of the largest frame this tier builds.
+- The pure-Python scoring fallback combines matchkeys with `greatest` over
+  per-matchkey nulls rather than `groupBy("a", "b").agg(max(score))`, which
+  shuffled O(pairs) rows to combine values every matchkey computes from the
+  same joined row. The jar-backed path already did this.
+- A stray second `## [Unreleased]` heading in this file split 3.9.0's own
+  entries into a phantom section. Removed; the content below it shipped in
+  3.9.0.
 
 ## [3.13.1] - 2026-08-19
 
@@ -1599,8 +1655,6 @@ in-RAM sequential Arrow-native batch scorer with end-WCC.
 - `docs-site/reference/api-surface.mdx` prose was stale beyond the generated block: it
   listed all 7 primitives as TS-only and claimed "~31 Python-only tools" when the real
   figure is 7. Corrected alongside the counts.
-
-## [Unreleased]
 
 ### Fixed
 - **Threshold perturbation no longer shifts an inert field on probabilistic matchkeys (#2483).** `zero_label_confidence.threshold_perturbations` and `config_edits.ThresholdShift` both shifted `mk.threshold` to build "variant" configs. A probabilistic matchkey cuts on `link_threshold`, so those variants matched **identically** to the baseline -- and the zero-label stability signal derived from them saw zero change and reported maximum confidence. A falsely confident number is worse than none. Both now perturb `mk.cutoff_field`, and a matchkey whose operative cutoff was never set is correctly reported NOT perturbable rather than perturbed through a field that does nothing. Weighted matchkeys are unaffected.

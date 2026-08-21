@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 479,
+      "module_count": 480,
       "modules": [
         {
           "module": "goldenmatch",
@@ -1859,11 +1859,13 @@
           "defines": [
             "AutoConfigDecisions",
             "ColumnProfile",
+            "ExactStats",
             "SemanticBlockingDecision",
             "_adaptive_threshold",
             "_add_atomic_name_soundex_blocking",
             "_always_agreeing_blocking_fields",
             "_anchor_coblock_overlap",
+            "_apply_exact_stats",
             "_arrow_to_polars_dtype_spelling",
             "_auto_build_lsh_config",
             "_auto_semantic_blocking_enabled",
@@ -1973,6 +1975,7 @@
             "build_probabilistic_matchkeys",
             "decide_semantic_blocking",
             "deterministic_routing",
+            "exact_column_stats_applied",
             "exact_matchkey_floor",
             "profile_columns",
             "select_model",
@@ -7927,6 +7930,30 @@
           ]
         },
         {
+          "module": "goldenmatch.snowflake.partitioned",
+          "file": "packages/python/goldenmatch/goldenmatch/snowflake/partitioned.py",
+          "purpose": "Partitioned Snowflake execution: distribute scoring, cluster centrally.",
+          "defines": [
+            "BlockingPassPlan",
+            "PartitionedPlan",
+            "UnsupportedBlockingError",
+            "_constant_blocking",
+            "_sql_ident",
+            "block_key_sql",
+            "blocking_passes",
+            "cluster_pairs",
+            "plan_passes",
+            "score_partition",
+            "valid_key_sql"
+          ],
+          "imports": [
+            "goldenmatch",
+            "goldenmatch.config.schemas",
+            "goldenmatch.core.cluster",
+            "goldenmatch.core.pairs"
+          ]
+        },
+        {
           "module": "goldenmatch.snowflake.udfs",
           "file": "packages/python/goldenmatch/goldenmatch/snowflake/udfs.py",
           "purpose": "Snowflake handler functions for goldenmatch UDFs and Stored Procedures.",
@@ -7995,8 +8022,11 @@
           "defines": [
             "SparkAutoConfigTooLarge",
             "SparkAutoConfigUnsupported",
+            "_boundary_columns",
+            "_exact_profiling_enabled",
             "_refuse_at_n",
             "auto_configure_spark",
+            "exact_column_stats",
             "sample_to_driver"
           ],
           "imports": [
@@ -10370,6 +10400,7 @@
             "_tool_scan",
             "_tool_validate",
             "create_server",
+            "resolve_http_auth_token",
             "run_server",
             "run_server_http"
           ],
@@ -12868,6 +12899,7 @@
             "create_server",
             "explain_pipeline_tool",
             "list_stages_tool",
+            "resolve_http_auth_token",
             "run_pipeline_tool",
             "run_server",
             "run_server_http",
@@ -13286,6 +13318,7 @@
             "_handle_map",
             "_handle_validate",
             "create_server",
+            "resolve_http_auth_token",
             "run_server",
             "run_server_http"
           ],
@@ -13842,6 +13875,7 @@
             "detect_regressions_tool",
             "get_trend_tool",
             "list_analyzers_tool",
+            "resolve_http_auth_token",
             "run_server",
             "run_server_http"
           ],

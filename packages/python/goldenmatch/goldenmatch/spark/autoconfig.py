@@ -71,6 +71,138 @@ def _refuse_at_n() -> int:
     return int(REFUSE_AT_N)
 
 
+# `ExactStats` and the merge live in `core.autoconfig`, next to
+# `profile_columns` which consumes them -- core must never import spark.
+# Re-exported here so a caller on the Spark path has one import site.
+from goldenmatch.core.autoconfig import (  # noqa: E402
+    ExactStats,
+    exact_column_stats_applied,
+)
+
+__all__ = [
+    "ExactStats",
+    "SparkAutoConfigTooLarge",
+    "SparkAutoConfigUnsupported",
+    "auto_configure_spark",
+    "exact_column_stats",
+    "exact_column_stats_applied",
+    "sample_to_driver",
+]
+
+
+def _exact_profiling_enabled(explicit: bool | None) -> bool:
+    """Whether to measure column statistics on the CLUSTER instead of the sample.
+
+    Default OFF. `GOLDENMATCH_SPARK_EXACT_PROFILING=1` turns it on globally; the
+    ``exact_profiling`` argument overrides the environment either way, so a test
+    or a caller can pin it without touching process state.
+    """
+    if explicit is not None:
+        return bool(explicit)
+    import os
+
+    raw = os.environ.get("GOLDENMATCH_SPARK_EXACT_PROFILING", "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def _boundary_columns(
+    approx: dict[str, int], n_full: int, *, near_unique: float = 0.98
+) -> list[str]:
+    """Columns whose DECISION sits on a boundary, so approximation is not enough.
+
+    `approx_count_distinct` is HyperLogLog: cheap, and a few percent out. That is
+    fine for a column in the middle of the range and useless at exactly the two
+    cuts auto-config turns on:
+
+    * ``<= 1`` -- "is this column constant?" (#2687 drops the field)
+    * near ``n_full`` -- "is this a unique surrogate key?" (#876 discards it)
+
+    A 2% error either side of those flips the verdict, so those columns get an
+    exact `count_distinct` and nothing else does. Same shape as the exact
+    full-frame pass `core/autoconfig.py` already runs for apparent surrogate
+    keys: the cheap statistic nominates, the exact one decides.
+    """
+    if n_full <= 0:
+        return []
+    out = []
+    for name, n in approx.items():
+        if n <= 2 or (n / n_full) >= near_unique:
+            out.append(name)
+    return out
+
+
+def exact_column_stats(
+    spark_df: Any, columns: list[str], *, near_unique: float = 0.98
+) -> dict[str, ExactStats]:
+    """One distributed pass for the statistics a sample gets wrong at scale.
+
+    `count`, `count(col)` and `avg(length(col))` are free -- they ride the same
+    scan. `count_distinct` is a SHUFFLE PER COLUMN and is the entire cost, so it
+    is not run for every column: `approx_count_distinct` runs for all of them in
+    the first pass, and only the columns :func:`_boundary_columns` nominates pay
+    for an exact count.
+
+    Never raises. Profiling is instrumentation for a configuration decision, and
+    a failed aggregate must leave the sampled value in place rather than take the
+    run down -- an ABSENT statistic, which `merge_exact_stats` already treats as
+    "leave it alone".
+    """
+    try:
+        from pyspark.sql import functions as F
+    except Exception:  # pragma: no cover - no pyspark in this env
+        return {}
+
+    try:
+        aggs: list[Any] = [F.count(F.lit(1)).alias("__n_rows__")]
+        for c in columns:
+            aggs += [
+                F.count(F.col(c)).alias(f"__nn__{c}"),
+                F.avg(F.length(F.col(c).cast("string"))).alias(f"__len__{c}"),
+                F.approx_count_distinct(F.col(c)).alias(f"__ad__{c}"),
+            ]
+        row = spark_df.agg(*aggs).collect()[0]
+    except Exception as exc:  # noqa: BLE001 - instrumentation, never fatal
+        logger.warning(
+            "exact column profiling failed (%s); falling back to the sampled "
+            "statistics for every column", type(exc).__name__,
+        )
+        return {}
+
+    n_rows = int(row["__n_rows__"] or 0)
+    approx = {c: int(row[f"__ad__{c}"] or 0) for c in columns}
+
+    exact_distinct: dict[str, int] = {}
+    boundary = _boundary_columns(approx, n_rows, near_unique=near_unique)
+    if boundary:
+        try:
+            row2 = spark_df.agg(
+                *[F.count_distinct(F.col(c)).alias(f"__cd__{c}") for c in boundary]
+            ).collect()[0]
+            exact_distinct = {c: int(row2[f"__cd__{c}"] or 0) for c in boundary}
+            logger.info(
+                "exact count_distinct for %d boundary column(s): %s",
+                len(boundary), ", ".join(boundary),
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Named, not swallowed: these are precisely the columns whose
+            # verdict the approximation cannot be trusted for.
+            logger.warning(
+                "exact count_distinct failed for %s (%s); those columns keep an "
+                "APPROXIMATE distinct count and their boundary verdict is not "
+                "reliable", ", ".join(boundary), type(exc).__name__,
+            )
+
+    return {
+        c: ExactStats(
+            n_rows=n_rows,
+            n_non_null=int(row[f"__nn__{c}"] or 0),
+            n_distinct=exact_distinct.get(c, approx[c]),
+            avg_len=(float(row[f"__len__{c}"]) if row[f"__len__{c}"] is not None else None),
+        )
+        for c in columns
+    }
+
+
 def sample_to_driver(
     spark_df: Any,
     *,
@@ -125,6 +257,7 @@ def auto_configure_spark(
     seed: int = _SEED,
     allow_large: bool = False,
     allow_red_config: bool = False,
+    exact_profiling: bool | None = None,
     **kwargs: Any,
 ) -> tuple[Any, dict]:
     """``(config, provenance)`` -- zero-config for a Spark DataFrame.
@@ -186,12 +319,46 @@ def auto_configure_spark(
         "Spark zero-config: profiling %d sampled rows, n_rows_full=%d",
         n_sampled, n_full,
     )
-    config = auto_configure_df(
-        table,
-        n_rows_full=n_full,
-        allow_red_config=allow_red_config,
-        **kwargs,
-    )
+    # EXACT column statistics from the cluster, default OFF.
+    #
+    # `profile_columns` runs a confirm pass over the frame it is handed and
+    # stores it as `full_n_distinct`, documented as "the EXACT full-frame
+    # count". On this path that frame is the 20k driver sample, so the label is
+    # false and the drop-constant rule reads a sample as the population.
+    #
+    # Default OFF because several rules compare these fields to cuts chosen
+    # while the inputs were sample-derived. Making them truthful can move
+    # quality scores exactly as rebasing `mass_above_threshold` took
+    # `anchor_person_match` from 1.0000 to 0.7303 -- so this flips on evidence
+    # from the quality gate, not on the argument that it is more correct.
+    if _exact_profiling_enabled(exact_profiling):
+        stats = exact_column_stats(spark_df, [str(c) for c in table.column_names])
+        if stats:
+            logger.info(
+                "exact profiling: %d column(s) measured across %s rows",
+                len(stats), f"{n_full:,}",
+            )
+            with exact_column_stats_applied(stats):
+                config = auto_configure_df(
+                    table,
+                    n_rows_full=n_full,
+                    allow_red_config=allow_red_config,
+                    **kwargs,
+                )
+        else:
+            # The pass failed and said so. Proceed on sampled statistics rather
+            # than refuse: that is the behaviour every caller had yesterday.
+            config = auto_configure_df(
+                table, n_rows_full=n_full,
+                allow_red_config=allow_red_config, **kwargs,
+            )
+    else:
+        config = auto_configure_df(
+            table,
+            n_rows_full=n_full,
+            allow_red_config=allow_red_config,
+            **kwargs,
+        )
     # VALIDATE THE OUTPUT AGAINST THE TIER, HERE.
     #
     # Auto-config optimises for quality on the one-box, whose surface is larger
