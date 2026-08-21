@@ -24,7 +24,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "mcp>=1.28.1",
+    "mcp>=1.28.1,<2",
     "goldenmatch[mcp]",
     "goldencheck[mcp]",
     "goldenflow[mcp]",
