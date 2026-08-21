@@ -73,6 +73,7 @@ dev = [
     # `tests/test_strsim_parity.py` (+ the synonym scorer oracle tests). A plain
     # `pip install goldenmatch` no longer pulls it; the runtime is rapidfuzz-free.
     "rapidfuzz>=3.0",
+    "fakesnow>=0.11",
 ]
 embeddings = [
     "sentence-transformers>=2.2",
