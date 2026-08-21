@@ -73,7 +73,13 @@ dev = [
     # `tests/test_strsim_parity.py` (+ the synonym scorer oracle tests). A plain
     # `pip install goldenmatch` no longer pulls it; the runtime is rapidfuzz-free.
     "rapidfuzz>=3.0",
-    "fakesnow>=0.11",
+    # NOTE: fakesnow (the Snowflake test oracle for tests/snowflake/) is NOT
+    # here. CI runs `uv sync --all-packages`, which installs the ROOT
+    # [dependency-groups].dev plus member *dependencies* -- never a member's
+    # optional-extras. A test-only oracle listed here would be uninstalled in
+    # CI and every `pytest.importorskip("fakesnow")` would SKIP: a false green.
+    # It lives in the root [dependency-groups].dev alongside rapidfuzz /
+    # jellyfish / scipy / diptest for exactly that reason.
 ]
 embeddings = [
     "sentence-transformers>=2.2",

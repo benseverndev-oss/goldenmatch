@@ -100,6 +100,20 @@ dev = [
     # it in the dev group so `uv sync` installs it for CI/tests while
     # `pip install goldenflow` stays dateutil-free.
     "python-dateutil>=2.9",
+    # fakesnow is a TEST-ONLY oracle: it is a DuckDB-backed fake Snowflake and is
+    # the ONLY thing that executes goldenmatch's Snowflake IdentityStore backend
+    # (packages/python/goldenmatch/tests/snowflake/, six files, each opening with
+    # `pytest.importorskip("fakesnow")`). It was originally added to
+    # goldenmatch's own `[project.optional-dependencies].dev`, where CI never
+    # installs it -- `uv sync --all-packages` takes the ROOT dev group plus
+    # member *dependencies*, not member optional-extras -- so the whole suite
+    # importorskip-SKIPped: a false green over the branch's only oracle. Same
+    # shape as rapidfuzz/jellyfish/scipy/diptest above: `uv sync` installs it for
+    # CI/tests while `pip install goldenmatch` stays fakesnow-free. It pulls
+    # snowflake-connector-python transitively (it patches that package); the
+    # goldenmatch CI job ALSO installs `goldenmatch[snowflake]` explicitly, so
+    # the runtime import path is exercised on its own declared extra.
+    "fakesnow>=0.11",
     # transitive test deps surfaced across workspace packages:
     "httpx>=0.27",  # required by starlette.testclient (used by goldenpipe tests)
 ]
