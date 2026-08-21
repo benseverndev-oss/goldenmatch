@@ -46,6 +46,42 @@ class CaseInsensitiveRow(Mapping[str, Any]):
         return f"CaseInsensitiveRow({self._data!r})"
 
 
+def normalize_identifier(name: str) -> str:
+    """Fold an unquoted identifier to the case Snowflake actually stores.
+
+    Snowflake uppercases every unquoted identifier at parse time, and preserves
+    a double-quoted one verbatim. Two halves of this module have to agree on
+    the result or nothing works:
+
+    - ``ensure_schema`` emits **unquoted** DDL (``CREATE SCHEMA IF NOT EXISTS
+      {database}.{schema}``), so a ``database="goldenmatch"`` creates
+      ``GOLDENMATCH``;
+    - ``write_pandas`` builds its ``COPY INTO`` target through
+      ``build_location_helper`` with ``quote_identifiers=True`` by default
+      (``snowflake/connector/pandas_tools.py``), which quotes whatever string
+      it is handed **verbatim** -- so the same ``"goldenmatch"`` becomes
+      ``"goldenmatch"."PUBLIC"."_GM_STAGE_..."`` and resolves to nothing.
+
+    Passing a lowercase database/schema therefore created the objects under one
+    name and addressed them under another, and every bulk write failed with
+    *object does not exist* on a real warehouse. The tests could not see it:
+    fakesnow is DuckDB-backed and case-insensitive, and the fixtures pass
+    already-uppercase ``GM``/``PUB``.
+
+    The one rule: normalize at construction, then hand the *same* string to the
+    DDL path and to ``write_pandas``. Do not "fix" only one half -- quoting the
+    DDL without changing ``write_pandas``, or passing
+    ``quote_identifiers=False`` without changing the DDL, reintroduces the
+    same divergence from the other side.
+
+    An already-quoted name is passed through untouched, so a caller who
+    genuinely owns a lowercase-named object can still reach it.
+    """
+    if len(name) >= 2 and name.startswith('"') and name.endswith('"'):
+        return name
+    return name.upper()
+
+
 def resolve_connection(connection: Any, *, database: str, schema: str) -> Any:
     """Return a live ``SnowflakeConnection`` from any of the accepted shapes.
 
@@ -55,8 +91,19 @@ def resolve_connection(connection: Any, *, database: str, schema: str) -> Any:
       a stored procedure is handed for free;
     - a live ``SnowflakeConnection`` (has ``.cursor``), returned as-is;
     - a dict of ``snowflake.connector.connect`` kwargs;
-    - an account-name string, with the rest read from ``SNOWFLAKE_*`` env vars,
-      matching ``db/connector_snowflake.py``.
+    - an account-name string, with the rest read from the ``SNOWFLAKE_USER``,
+      ``SNOWFLAKE_PASSWORD``, ``SNOWFLAKE_WAREHOUSE`` and ``SNOWFLAKE_ROLE``
+      env vars. This is deliberately NOT the same set as
+      ``db/connector_snowflake.py``, which reads ``SNOWFLAKE_DATABASE`` and
+      ``SNOWFLAKE_SCHEMA`` but no ``SNOWFLAKE_ROLE``: here the database and
+      schema are store construction arguments, so they are taken from the
+      ``database=``/``schema=`` parameters below rather than the environment.
+
+    Only user/password auth is supported on the account-name string path.
+    There is no ``authenticator`` handling here -- no externalbrowser, no SSO,
+    and no key-pair (``private_key`` / ``private_key_file``). A deployment
+    needing any of those must build the kwargs itself and pass the dict form,
+    or pass an already-connected ``SnowflakeConnection``/Snowpark ``Session``.
     """
     if connection is None:
         raise ValueError(

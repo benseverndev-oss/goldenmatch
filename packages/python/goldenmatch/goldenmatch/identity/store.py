@@ -361,6 +361,11 @@ class IdentityStore:
             from goldenmatch.identity.snowflake_backend import (  # noqa: PLC0415
                 SnowflakeIdentityStore,
             )
+            # ``database`` is shared with the mongo branch above, which is
+            # case-SENSITIVE, so the default stays lowercase here.
+            # ``SnowflakeIdentityStore`` folds it to the case Snowflake
+            # actually stores (see ``normalize_identifier``), which is what
+            # reconciles this default with that constructor's own.
             self._sf = SnowflakeIdentityStore(
                 connection=connection, database=database, schema=schema,
             )

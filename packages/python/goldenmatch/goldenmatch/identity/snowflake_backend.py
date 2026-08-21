@@ -38,6 +38,7 @@ from goldenmatch.snowflake._store_sql import (
     fetchall_rows,
     fetchone_row,
     merge_one,
+    normalize_identifier,
     resolve_connection,
     stage_and_merge,
 )
@@ -84,9 +85,25 @@ class SnowflakeIdentityStore:
         self,
         connection: Any = None,
         *,
-        database: str = "GOLDENMATCH",
+        database: str = "goldenmatch",
         schema: str = "PUBLIC",
     ) -> None:
+        # Fold to the case Snowflake actually stores, ONCE, before anything
+        # uses these. Everything downstream -- the unquoted ``CREATE SCHEMA``
+        # DDL in ``ensure_schema`` and the ``quote_identifiers=True``
+        # ``write_pandas`` target in ``stage_and_merge`` / ``bulk_emit_events``
+        # -- reads ``self._database``/``self._schema``, so normalizing here is
+        # what keeps the identifier the DDL *creates* and the identifier
+        # ``write_pandas`` *addresses* the same string. See
+        # ``normalize_identifier``'s docstring for why fixing only one half
+        # reintroduces the bug from the other side.
+        #
+        # The default matches ``IdentityStore.__init__``'s ``database=`` default
+        # verbatim (they had drifted "goldenmatch"/"GOLDENMATCH"); only the
+        # ``IdentityStore`` one is reachable in practice, and normalization
+        # makes the two equivalent regardless.
+        database = normalize_identifier(database)
+        schema = normalize_identifier(schema)
         self._database = database
         self._schema = schema
         self._conn = resolve_connection(
