@@ -6,6 +6,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [3.15.0] - 2026-08-21
+
+### Fixed
+
+- **`mcp` 2.0 broke every MCP server (#2715).** `mcp` 2.0.0 renamed
+  `Tool.inputSchema` to `input_schema`, keeping the old name as a pydantic
+  ALIAS. Construction sites therefore kept working and only the two places that
+  READ the attribute back failed -- one of them at server startup, so
+  `goldenmatch mcp-serve` died with `AttributeError: 'Tool' object has no
+  attribute 'inputSchema'`. All seven packages declared `mcp>=1.28.1` with no
+  upper bound, so the major walked in; now pinned `<2`. `pip install
+  goldenmatch[mcp]` had been landing users on 2.0 and crashing.
+
+### Security
+
+- **The hosted MCP endpoint now requires a bearer token.** It had been serving
+  77 tools unauthenticated -- 25 taking filesystem paths, 18 mutating an
+  identity DB by `db_path`, and `documents_ingest` accepting both a server-side
+  read path and an `out_path`. `/mcp/` returns 401 without
+  `Authorization: Bearer <GOLDENMATCH_MCP_TOKEN>`; the server card stays public
+  as the healthcheck target. Self-hosting on loopback needs no token, and a
+  public bind without one is refused rather than served open.
+
+### Added
+
 - **Snowflake-native `IdentityStore` backend (#2699).** `IdentityStore(backend="snowflake")`
   keeps the identity graph in Snowflake tables rather than a SQLite file, so it
   survives a UDF / stored-procedure worker. Writes are `MERGE`-based: Snowflake
@@ -13,7 +38,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   duplicate rows. The `bulk_*` fast path stages every write through a transient
   table loaded by `write_pandas`, then applies it with a `MERGE` --- except
   `bulk_emit_events`, which finishes with `INSERT ... SELECT` because the
-  append-only event log has no dedupe key for a `MERGE` to match on. Configure
+  append-only event log has no dedupe key for a `MERGE` to match on. `pandas`
+  is NOT required: `write_pandas` ships behind
+  `snowflake-connector-python[pandas]`, which this package's `snowflake` extra
+  deliberately does not pull, so every `bulk_*` path falls back to a row-wise
+  `MERGE` when it is absent -- same statement shape, same NULL-safe `ON`, same
+  `PARSE_JSON`, so a replay still cannot duplicate. Configure
   the target with `identity.database` / `identity.schema`. `resolve_clusters`
   now selects the bulk path by capability (`store.supports_bulk`) rather than by
   backend name.
