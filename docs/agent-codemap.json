@@ -10332,6 +10332,7 @@
             "_tool_scan",
             "_tool_validate",
             "create_server",
+            "resolve_http_auth_token",
             "run_server",
             "run_server_http"
           ],
@@ -12830,6 +12831,7 @@
             "create_server",
             "explain_pipeline_tool",
             "list_stages_tool",
+            "resolve_http_auth_token",
             "run_pipeline_tool",
             "run_server",
             "run_server_http",
@@ -13248,6 +13250,7 @@
             "_handle_map",
             "_handle_validate",
             "create_server",
+            "resolve_http_auth_token",
             "run_server",
             "run_server_http"
           ],
@@ -13804,6 +13807,7 @@
             "detect_regressions_tool",
             "get_trend_tool",
             "list_analyzers_tool",
+            "resolve_http_auth_token",
             "run_server",
             "run_server_http"
           ],
