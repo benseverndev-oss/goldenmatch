@@ -423,6 +423,28 @@ def merge_one(
     execute(conn, "\n".join(sql), tuple(row[c] for c in cols))
 
 
+def pandas_tools_or_none() -> Any:
+    """``snowflake.connector.pandas_tools`` when it is importable, else None.
+
+    ``write_pandas`` is not part of a plain ``snowflake-connector-python``
+    install -- it lives behind the connector's ``[pandas]`` extra, and this
+    package's ``snowflake`` extra deliberately does not pull pandas (the
+    runtime is pandas-free and polars-free by design). Every bulk path here
+    therefore has to work without it: this returns None rather than raising,
+    and callers fall back to the row-wise MERGE, which is slower but produces
+    byte-identical rows.
+
+    Resolved through the module, never a from-import, so ``fakesnow.patch()``
+    binds its own ``write_pandas`` over it.
+    """
+    try:
+        import pandas  # noqa: F401,PLC0415
+        import snowflake.connector.pandas_tools as pandas_tools  # noqa: PLC0415
+    except ImportError:
+        return None
+    return pandas_tools
+
+
 def stage_and_merge(
     conn: Any,
     target: str,
@@ -463,8 +485,18 @@ def stage_and_merge(
     """
     if not rows:
         return 0
+    pandas_tools = pandas_tools_or_none()
+    if pandas_tools is None:
+        # No pandas: MERGE one row at a time. Same statement shape, same
+        # NULL-safe ON, same PARSE_JSON on the json_cols -- merge_one builds
+        # all three -- so the resulting rows match the staged path exactly.
+        for row in rows:
+            merge_one(
+                conn, target, key_cols, row,
+                update_cols=update_cols, json_cols=json_cols,
+            )
+        return len(rows)
     import pandas as pd  # noqa: PLC0415
-    import snowflake.connector.pandas_tools as pandas_tools  # noqa: PLC0415
 
     stage = f"_gm_stage_{target}_{uuid.uuid4().hex}"
     cols = list(rows[0].keys())

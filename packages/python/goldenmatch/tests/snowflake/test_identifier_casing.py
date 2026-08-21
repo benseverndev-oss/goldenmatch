@@ -165,6 +165,13 @@ def bulk_run(monkeypatch):
     One fixture rather than a helper called per test, so the two write paths
     are exercised once and every assertion below reads the same recording.
     """
+    # These four tests are ABOUT write_pandas, so they need it. It ships
+    # behind snowflake-connector-python's [pandas] extra, which this package
+    # deliberately does not pull -- without it the bulk paths take the
+    # row-wise fallback and never call write_pandas at all, which is a
+    # different code path, not a failure. Pinned in
+    # test_bulk_without_pandas.py instead.
+    pytest.importorskip("pandas")
     import snowflake.connector.pandas_tools as pandas_tools
     from goldenmatch.identity.store import IdentityStore
 

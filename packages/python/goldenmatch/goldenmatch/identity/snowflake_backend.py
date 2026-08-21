@@ -39,6 +39,7 @@ from goldenmatch.snowflake._store_sql import (
     fetchone_row,
     merge_one,
     normalize_identifier,
+    pandas_tools_or_none,
     resolve_connection,
     stage_and_merge,
 )
@@ -1211,14 +1212,43 @@ class SnowflakeIdentityStore:
             return
         import uuid  # noqa: PLC0415
 
-        import pandas as pd  # noqa: PLC0415
         import polars as pl  # noqa: PLC0415
-        import snowflake.connector.pandas_tools as pandas_tools  # noqa: PLC0415
 
         missing = [c for c in _EVENT_COLS if c not in df.columns]
         if missing:
             df = df.with_columns([pl.lit(None).alias(c) for c in missing])
         rows = df.select(_EVENT_COLS).to_dicts()
+        pandas_tools = pandas_tools_or_none()
+        if pandas_tools is None:
+            # No pandas (see pandas_tools_or_none): append row by row. These
+            # are INSERTs, not MERGEs -- the caller's preloaded
+            # ``run_event_entities`` set is what keeps them idempotent, the
+            # same guarantee the staged path relies on -- so the only
+            # difference is one round trip per event instead of one per batch.
+            insert_cols = ", ".join(_EVENT_COLS)
+            placeholders = ", ".join(
+                "PARSE_JSON(%s)" if c == "payload" else "%s"
+                for c in _EVENT_COLS
+            )
+            for row in rows:
+                # payload reaches here as the JSON string the staged path
+                # would have handed PARSE_JSON; dumps anything that is not
+                # already text so a dict column works either way.
+                params = []
+                for c in _EVENT_COLS:
+                    v = row.get(c)
+                    if c == "payload" and v is not None and not isinstance(v, str):
+                        v = json.dumps(v)
+                    params.append(v)
+                execute(
+                    self._conn,
+                    f"INSERT INTO identity_events ({insert_cols}) "
+                    f"VALUES ({placeholders})",
+                    tuple(params),
+                )
+            return
+        import pandas as pd  # noqa: PLC0415
+
         pdf = pd.DataFrame(
             [[r.get(c) for c in _EVENT_COLS] for r in rows],
             columns=[c.upper() for c in _EVENT_COLS],

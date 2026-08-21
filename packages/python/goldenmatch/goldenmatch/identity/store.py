@@ -309,7 +309,10 @@ class IdentityStore:
         self,
         backend: str = "sqlite",
         path: str = ".goldenmatch/identity.db",
-        connection: str | None = None,
+        # str for the DSN backends (postgres, mongo); the snowflake backend
+        # also accepts a dict of connector kwargs, which is why this is wider
+        # than a DSN. Each backend narrows it in its own branch below.
+        connection: str | dict[str, Any] | None = None,
         pool: Any = None,
         database: str = "goldenmatch",
         client: Any = None,
