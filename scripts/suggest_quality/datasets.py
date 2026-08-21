@@ -92,12 +92,6 @@ _DATASETS_ROOT = (
     / "packages/python/goldenmatch/tests/benchmarks/datasets"
 )
 
-# Committed third-party corpora. Distinct from _DATASETS_ROOT on purpose: that
-# tree is gitignored ("downloaded at runtime -- not committed"), this one is in
-# git so a gated dataset is guaranteed loadable. See vendored/*/PROVENANCE.md
-# for source + attribution (a licence condition, not a courtesy).
-_VENDORED_ROOT = Path(__file__).resolve().parent / "vendored"
-
 
 def _febrl3() -> tuple[pl.DataFrame, set] | None:
     """FEBRL3 (recordlinkage-bundled). rec_id-pair truth -> row-index via df['id'].
@@ -131,6 +125,10 @@ def _ncvr_real() -> tuple[pl.DataFrame, set] | None:
     return df, _pairs_to_row_index(df, "ncid", ncid_pairs)
 
 
+# Committed third-party corpora. Distinct from _DATASETS_ROOT on purpose: that
+# tree is gitignored ("downloaded at runtime -- not committed"), this one is in
+# git so a gated dataset is guaranteed loadable. See vendored/*/PROVENANCE.md
+# for source + attribution (a licence condition, not a courtesy).
 _VENDORED = Path(__file__).resolve().parent / "vendored"
 
 
@@ -174,7 +172,7 @@ def _dblp_acm_dir() -> Path | None:
     runtime download keeps working (and so the loader still degrades to
     skip-when-absent if the vendored copy is ever removed).
     """
-    for d in (_VENDORED_ROOT / "DBLP-ACM", _DATASETS_ROOT / "DBLP-ACM"):
+    for d in (_VENDORED / "DBLP-ACM", _DATASETS_ROOT / "DBLP-ACM"):
         if all(
             (d / f).exists()
             for f in ("DBLP2.csv", "ACM.csv", "DBLP-ACM_perfectMapping.csv")

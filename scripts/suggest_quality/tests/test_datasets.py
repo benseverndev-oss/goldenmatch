@@ -99,9 +99,9 @@ def test_dblp_acm_vendored_copy_is_preferred():
     Ordering is load-bearing: a stale/partial local download must not shadow the
     committed corpus the gate is blessed against.
     """
-    from scripts.suggest_quality.datasets import _VENDORED_ROOT, _dblp_acm_dir
+    from scripts.suggest_quality.datasets import _VENDORED, _dblp_acm_dir
 
-    assert _dblp_acm_dir() == _VENDORED_ROOT / "DBLP-ACM"
+    assert _dblp_acm_dir() == _VENDORED / "DBLP-ACM"
 
 
 def test_dblp_acm_carries_year_but_is_not_a_matchkey_column():
