@@ -1156,6 +1156,17 @@ in-RAM sequential Arrow-native batch scorer with end-WCC.
 --> - 2026-08-03
 
 ### Added
+- **Per-decision explainer for the local ER-matcher (1.5B) verdict
+  (`core/er_matcher/explainer.py` + `LocalLlamaAdapter.score_and_explain`).**
+  Given a record pair and the model's verdict, emits a field-grounded rationale
+  built from the model's OWN learned field-importance — the Layer-2 abstraction
+  of the causally-validated match direction from the mechanistic-interpretability
+  work (`docs/design/2026-08-02-15b-decision-geometry-layer1.md`). Pure /
+  model-free (jaro-winkler agreement + a weight table), schema-agnostic, and
+  honest about the R²=0.51 faithfulness bound; flags the case where the
+  field-agreement view disagrees with the verdict, and falls back to a neutral
+  profile (no faithfulness claim) on schemas outside the person profile. Additive:
+  existing `score_pair` is unchanged.
 - **Fused Fellegi-Sunter kernel now covers the reference-data name scorers +
   `ensemble` (`goldenmatch-native` 0.1.20).** The fully-fused `match_fused_fs`
   path (block-group → FS score → connected-components in ONE Rust call, no

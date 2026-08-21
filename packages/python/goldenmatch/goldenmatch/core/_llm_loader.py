@@ -281,3 +281,74 @@ class LocalLlamaAdapter:
             logger.warning("local LLM inference failed: %s", e)
             return False, 0.0
         return parse_verdict(text)
+
+    def score_and_explain(
+        self, row_a: dict, row_b: dict, columns: list[str],
+        *, weights: dict[str, float] | None = None,
+        counterfactuals: bool = False,
+    ):
+        """Score the pair AND attach a field-grounded rationale.
+
+        Returns ``(is_match, confidence, PairExplanation)``. The explanation is
+        built from the model's OWN learned field-importance (the Layer-2 abstraction
+        of the causally-validated match direction — see
+        ``core.er_matcher.explainer``), so it reflects what actually moves the
+        model's decision, to a stated faithfulness bound.
+
+        ``counterfactuals=True`` additionally re-scores the pair once per column
+        with that column blanked on BOTH records, attaching measured
+        :class:`Counterfactual` entries — "removing birth_place would reverse this
+        verdict". That is a direct causal claim about this decision rather than a
+        corpus statistic, but it costs ``len(columns)`` extra inference calls, so
+        it is OFF by default and intended for a human review queue. Measured on
+        person data, only ~19% of pairs have any single-field flip; the model
+        integrates redundant evidence, so "no single field decides this" is the
+        normal answer, not a failure.
+        """
+        from goldenmatch.core.er_matcher.explainer import explain_pair
+
+        match, conf = self.score_pair(row_a, row_b, columns)
+        p_without: dict[str, float] | None = None
+        if counterfactuals:
+            p_without = {}
+            for f in columns:
+                # blank on BOTH sides -> the prompt's "(missing)" sentinel, which
+                # the system rubric trains the model to ignore rather than treat
+                # as a conflict. Removes the evidence in-distribution.
+                a_wo = dict(row_a) | {f: None}
+                b_wo = dict(row_b) | {f: None}
+                m_wo, c_wo = self.score_pair(a_wo, b_wo, columns)
+                # score_pair returns (verdict, confidence-in-that-verdict); convert
+                # to a comparable P(match) so deltas are on one axis.
+                p_without[f] = c_wo if m_wo else 1.0 - c_wo
+        explanation = explain_pair(
+            row_a, row_b, columns, match=match, confidence=conf, weights=weights,
+            p_without=p_without,
+        )
+        return match, conf, explanation
+
+    def explain_for_review(
+        self, row_a: dict, row_b: dict, columns: list[str],
+        *, weights: dict[str, float] | None = None,
+    ):
+        """Review-queue explanation: :meth:`score_and_explain` with counterfactuals ON.
+
+        Same return shape, but this is the entry point for pairs going to a HUMAN,
+        where the extra ``len(columns)`` inference calls buy the thing a reviewer
+        actually needs — a measured counterfactual on this specific decision
+        ("removing modelno would reverse this verdict") rather than a corpus-level
+        weight.
+
+        Kept as a separate method rather than flipping ``score_and_explain``'s
+        default on purpose: bulk scoring must stay one forward pass per pair, and a
+        global default would multiply inference cost by the column count for every
+        caller. Choose the review path explicitly.
+
+        Note the measured base rate: only ~18–19% of pairs (person AND product) have
+        any single-field flip, so most reviews will legitimately read "no single
+        field decides this" — that is the model integrating redundant evidence, not
+        a missing explanation.
+        """
+        return self.score_and_explain(
+            row_a, row_b, columns, weights=weights, counterfactuals=True
+        )
