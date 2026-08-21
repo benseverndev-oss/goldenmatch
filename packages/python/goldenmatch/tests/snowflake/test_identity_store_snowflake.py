@@ -166,13 +166,49 @@ def test_add_edge_canonicalizes_pair_order(store) -> None:
     assert len(store.edges_for_entity(eid)) == 1
 
 
+def test_add_edge_is_idempotent_on_replay_with_null_run_name(store) -> None:
+    """Regression guard for the merge_one NULL-key bug this task's MERGE fix
+    closes: ``run_name`` defaults to ``None`` on ``EvidenceEdge`` (model.py),
+    so an edge with no run_name is the COMMON shape, not an edge case.
+
+    Under the pre-fix ``t.run_name = s.run_name`` MERGE ``ON`` clause, ``NULL
+    = NULL`` is not TRUE, so ``WHEN MATCHED`` never fires when run_name is
+    unset and a replay silently duplicates the row. The three other
+    ``add_edge`` idempotency tests all pass an explicit ``run_name="run-1"``
+    and would not have caught this -- this test is what actually guards the
+    fix (``IS NOT DISTINCT FROM``) in ``_store_sql.py::merge_one``.
+    """
+    from goldenmatch.identity.model import EvidenceEdge
+
+    eid = _seed_entity(store)
+    edge = EvidenceEdge(
+        entity_id=eid, record_a_id="crm:1", record_b_id="crm:2",
+        kind="same_as", score=0.95,
+    )
+    assert edge.run_name is None
+    store.add_edge(edge)
+    store.add_edge(edge)
+    assert len(store.edges_for_entity(eid)) == 1
+
+
 def test_add_alias_replaces_rather_than_duplicating(store) -> None:
     from goldenmatch.identity.model import IdentityAlias
+    from goldenmatch.snowflake._store_sql import fetchone_row
 
     first, second = _seed_entity(store), _seed_entity(store)
     store.add_alias(IdentityAlias(alias="MDM-1", entity_id=first, kind="mdm"))
     store.add_alias(IdentityAlias(alias="MDM-1", entity_id=second, kind="mdm"))
     assert store.resolve_alias("MDM-1", kind="mdm") == second
+    # resolve_alias's fetchone returning `second` is not, on its own, proof of
+    # replacement -- duckdb row order for a tie is not guaranteed, so this
+    # assertion alone could pass "by luck" even if the MERGE had duplicated
+    # the row. Assert the row count directly.
+    row = fetchone_row(
+        store._sf._conn,
+        "SELECT COUNT(*) AS n FROM identity_aliases WHERE alias = %s",
+        ("MDM-1",),
+    )
+    assert row is not None and row["n"] == 1
 
 
 def test_emit_event_returns_an_id_and_history_reads_back(store) -> None:
