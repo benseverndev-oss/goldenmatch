@@ -48,10 +48,25 @@ jobs:
           fi
           echo "Version OK: $PKG_VERSION"
 
-      - run: pip install build
+      - run: pip install build twine
       - run: python -m build
+      # Validate with a CURRENT twine, not the one bundled inside the publish
+      # action. Modern build backends emit `Metadata-Version: 2.5`; the
+      # action's bundled twine carries a `packaging` old enough to reject it
+      # outright --
+      #   InvalidDistribution: '2.5' is not a valid metadata version
+      # -- which is what failed goldenanalysis-v0.5.0 (run 32507401780). PyPI
+      # itself accepts 2.5, and current twine passes the wheel, so the wheel is
+      # fine and the stale validator is not. Same fix as _publish-pypi.yml;
+      # this workflow is not a caller of that template (it carries its own
+      # tag-vs-pyproject version check), so it needed the fix separately.
+      - name: Validate distribution metadata
+        run: python -m twine check dist/*
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
         with:
           packages-dir: packages/python/golden-suite/dist
           password: ${{ secrets.PYPI_TOKEN }}
           skip-existing: true
+          # Already checked above with a current twine. Left on, the
+          # action re-runs the check with its stale copy and fails on 2.5.
+          verify-metadata: false
