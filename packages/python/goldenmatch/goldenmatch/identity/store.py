@@ -891,6 +891,15 @@ class IdentityStore:
         partially-committed graph -- an improvement over the autocommit path,
         which the caller already treats as all-or-nothing (it has no per-cluster
         recovery).
+
+        Also a no-op for Snowflake -- deliberately, not by omission. See
+        ``SnowflakeIdentityStore.bulk_writes``'s own docstring: Snowflake DDL
+        (the ``CREATE``/``DROP TRANSIENT TABLE`` inside the staged bulk
+        methods) commits any open transaction implicitly, so an explicit
+        ``BEGIN`` spanning both the per-record writes and the bulk flushes in
+        this scope cannot deliver the atomicity this docstring promises for
+        Postgres/SQLite. The guarantee there is convergence via idempotent
+        MERGE, not atomicity.
         """
         if self._backend == "postgres":
             with self._conn.transaction():

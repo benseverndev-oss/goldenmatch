@@ -1163,15 +1163,37 @@ class SnowflakeIdentityStore:
         """Append-only bulk write for ``identity_events``.
 
         No dedupe key -- ``identity_events`` has nothing for a MERGE to key
-        on (see ``emit_event``) -- so this writes straight through with
-        ``write_pandas`` rather than via ``stage_and_merge``. ``entry_hash``
-        is left NULL, matching the SQLite/Postgres bulk paths
+        on (see ``emit_event``) -- so this is a stage + INSERT..SELECT, not
+        a ``stage_and_merge`` MERGE. It still has to go through a named
+        transient stage table LIKE the target and explicitly ``PARSE_JSON``
+        the payload column on the way out, exactly like ``stage_and_merge``
+        does for its own ``json_cols`` (see that function's docstring):
+        ``write_pandas`` loads a VARIANT column as a plain string, and a
+        bare ``payload`` reference in the final INSERT would carry that
+        string straight into the VARIANT column rather than a parsed value.
+
+        A prior version of this method wrote straight into
+        ``identity_events`` with no stage and no ``PARSE_JSON`` at all --
+        caught in review, not by this module's own tests, because fakesnow
+        (the test oracle here) implements ``write_pandas`` as a DuckDB
+        ``INSERT ... SELECT * FROM df`` (``fakesnow/pandas_tools.py:90-113``),
+        which happens to auto-parse a JSON-looking string into DuckDB's JSON
+        type regardless of any explicit cast. Real Snowflake's
+        ``write_pandas`` goes through a Parquet stage + ``COPY INTO``, which
+        does not. So a green fakesnow run on the straight-through version
+        proved nothing about the VARIANT-cast defect it had; the tests below
+        assert the same JSON round-trip that measurement did, and they
+        cannot themselves confirm this fix was necessary or that it works.
+
+        ``entry_hash`` is left NULL, matching the SQLite/Postgres bulk paths
         (store.py:1301): the seal/verify path already hashes NULL-entry_hash
         rows on the fly, so the tamper-evidence guarantee holds without
-        computing a per-row hash on this hot path.
+        computing a per-row hash here.
         """
         if df.height == 0:
             return
+        import uuid  # noqa: PLC0415
+
         import pandas as pd  # noqa: PLC0415
         import polars as pl  # noqa: PLC0415
         import snowflake.connector.pandas_tools as pandas_tools  # noqa: PLC0415
@@ -1184,27 +1206,72 @@ class SnowflakeIdentityStore:
             [[r.get(c) for c in _EVENT_COLS] for r in rows],
             columns=[c.upper() for c in _EVENT_COLS],
         )
-        pandas_tools.write_pandas(
-            self._conn, pdf, "IDENTITY_EVENTS",
-            database=self._database, schema=self._schema,
-            auto_create_table=False,
+        stage = f"_gm_stage_identity_events_{uuid.uuid4().hex}"
+        execute(
+            self._conn,
+            f"CREATE OR REPLACE TRANSIENT TABLE {stage} LIKE identity_events",
         )
+        try:
+            pandas_tools.write_pandas(
+                self._conn, pdf, stage.upper(),
+                database=self._database, schema=self._schema,
+                auto_create_table=False,
+            )
+            insert_cols = ", ".join(_EVENT_COLS)
+            select_cols = ", ".join(
+                f"PARSE_JSON({c}) AS {c}" if c == "payload" else c
+                for c in _EVENT_COLS
+            )
+            execute(
+                self._conn,
+                f"INSERT INTO identity_events ({insert_cols}) "
+                f"SELECT {select_cols} FROM {stage}",
+            )
+        finally:
+            execute(self._conn, f"DROP TABLE IF EXISTS {stage}")
 
     @contextlib.contextmanager
     def bulk_writes(self):
-        """One transaction around a batch of writes.
+        """No real transaction: an explicit BEGIN here would promise more
+        than Snowflake, or this module's own test oracle, can deliver.
 
-        Snowflake autocommits per statement otherwise, so a per-record
-        resolve pays a commit per write -- the same cost ``bulk_writes`` was
-        added to remove on Postgres (#1886) and SQLite (#2105).
+        ``stage_and_merge`` (three of the four ``bulk_*`` methods) and the
+        stage in ``bulk_emit_events`` above both run
+        ``CREATE OR REPLACE TRANSIENT TABLE`` / ``DROP TABLE`` -- DDL, and
+        Snowflake commits any open transaction implicitly at every DDL
+        statement (the same engine fact ``reconcile_relationships`` already
+        documents, one level up in this file). ``resolve_clusters`` wraps
+        its ENTIRE write body -- both the per-record absorb/merge writes AND
+        the bulk-flush calls -- in ONE ``bulk_writes()`` scope
+        (resolve.py:881), so an explicit BEGIN here would be silently ended
+        by the first flush's DDL on real Snowflake, leaving every write
+        after it back on autocommit while the trailing COMMIT/ROLLBACK
+        still claimed to close one atomic batch. That is a promise this
+        method must not make, so it does not open a transaction at all.
+
+        The correctness guarantee is therefore the one
+        ``reconcile_relationships`` already settled for: convergence, not
+        atomicity. Every write this backend makes is itself idempotent
+        (``merge_one`` / ``stage_and_merge`` MERGE, or an append guarded by
+        the caller's preloaded ``run_event_entities`` set), so a resolve
+        interrupted mid-way converges to the same end state on retry rather
+        than needing a rollback.
+
+        This could not be verified any further empirically: fakesnow (this
+        module's test oracle) cannot execute even ONE write to a real table
+        inside an explicit BEGIN at all -- every write also touches
+        fakesnow's own ``_fs_global`` information_schema bookkeeping
+        tables, and DuckDB refuses a transaction that writes to two
+        attached databases (``TransactionContext Error: ... a single
+        transaction can only write to a single attached database``,
+        reproduced with a single ``upsert_identity`` call inside a bare
+        BEGIN -- no DDL involved). That failure mode is a fakesnow
+        limitation, not documented Snowflake behaviour -- the
+        DDL-implicit-commit reasoning above is Snowflake's own documented
+        semantics, not something measured against this suite's oracle, and
+        that distinction matters more than a green run.
         """
-        execute(self._conn, "BEGIN")
-        try:
-            yield
-        except BaseException:
-            execute(self._conn, "ROLLBACK")
-            raise
-        execute(self._conn, "COMMIT")
+        yield
 
     def bulk_flush_checkpoint(self) -> None:
         """No-op: there is no client-side accumulator to flush."""
