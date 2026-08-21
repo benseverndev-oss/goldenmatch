@@ -154,10 +154,11 @@ pub fn char_ngram_project<'py>(
     seed: u64,
 ) -> Bound<'py, PyBytes> {
     let seed_le = seed.to_le_bytes();
-    let w: Vec<f32> = weights
-        .as_bytes()
-        .chunks_exact(4)
-        .map(|c| f32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
+    let (weight_words, _tail) = weights.as_bytes().as_chunks::<4>();
+    let w: Vec<f32> = weight_words
+        .iter()
+        .copied()
+        .map(f32::from_ne_bytes)
         .collect();
     let floats: Vec<f32> = py.detach(|| {
         texts
