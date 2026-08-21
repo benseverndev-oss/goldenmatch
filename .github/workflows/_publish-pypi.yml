@@ -52,8 +52,22 @@ jobs:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: "3.12"
-      - run: pip install build
+      - run: pip install build twine
       - run: python -m build
+      # Validate with a CURRENT twine, not the one bundled inside the publish
+      # action. Modern build backends emit `Metadata-Version: 2.5`; the action's
+      # bundled twine carries a `packaging` old enough to reject it outright --
+      #   InvalidDistribution: '2.5' is not a valid metadata version
+      # -- which failed goldenanalysis-v0.5.0 (run 32507401780). PyPI itself
+      # accepts 2.5 (goldenmatch 3.14.0 is published with it), and current twine
+      # passes both wheels, so the wheel is fine and the stale validator is not.
+      # Keep the check rather than dropping it: it is what catches an unrenderable
+      # README before it reaches PyPI.
+      # Path is relative to defaults.run.working-directory above (the package
+      # dir). The action below needs the full path instead, because `uses:`
+      # steps do not honour working-directory -- hence the two differing forms.
+      - name: Validate distribution metadata
+        run: python -m twine check dist/*
       - name: Publish to PyPI
         if: inputs.dry_run != 'true'
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
@@ -61,3 +75,6 @@ jobs:
           packages-dir: packages/python/${{ inputs.package }}/dist
           password: ${{ secrets.PYPI_TOKEN }}
           skip-existing: true
+          # Already checked above with a current twine. Left on, the action
+          # re-runs the check with its stale copy and fails on 2.5.
+          verify-metadata: false

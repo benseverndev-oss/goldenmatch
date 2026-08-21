@@ -1,18 +1,14 @@
 name: Publish goldenfuzz (PyPI + crates.io)
 
-# Publishes the standalone `goldenfuzz` fuzzy-string product on BOTH surfaces:
-#   * PyPI: the `goldenfuzz` maturin/abi3 wheel (pure Rust, zero C deps) built
-#     across platforms, wrapping the pyo3-free `goldenfuzz-core` crate.
-#   * crates.io: the `goldenfuzz-core` Rust crate itself (zero deps, so it
-#     publishes standalone).
+# Two independent publish targets:
+#   * PyPI: the maturin/abi3 wheels, delegated to the shared
+#     .github/workflows/_publish-native.yml template.
+#   * crates.io: the pyo3-free `goldenfuzz-core` Rust crate itself (zero deps, so it
+#     publishes standalone). Kept HERE rather than in the template -- only this
+#     package and its sibling publish a crate, so it is not shared behaviour.
 #
-# Fires on a release tagged `goldenfuzz-v*` (kept distinct from every other
-# publish tag so nothing cross-triggers). workflow_dispatch with a `ref` allows a
-# manual/retro build; the `publish` toggle turns the matrix into a dry run.
-#
-# Secrets required (configure once): PYPI_TOKEN (already used by the suite) and
-# CRATES_IO_TOKEN (crates.io API token). Both jobs `skip-existing`/tolerate an
-# already-published version so a re-run is safe.
+# Secrets: PYPI_TOKEN (via secrets: inherit) and CRATES_IO_TOKEN. Both targets
+# tolerate an already-published version so a re-run is idempotent.
 on:
   release:
     types: [published]
@@ -31,120 +27,23 @@ on:
 permissions:
   contents: read
 
-env:
-  # One manifest drives every wheel job; abi3 = one wheel per platform (3.11+).
-  MANIFEST: packages/rust/extensions/goldenfuzz-py/Cargo.toml
-
 jobs:
-  linux:
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'goldenfuzz-v')
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [x86_64, aarch64]
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
-        with:
-          ref: ${{ inputs.ref || github.ref }}
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
-        with:
-          python-version: "3.12"
-      - name: Build wheels (maturin, abi3, manylinux)
-        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b  # v1.51.0
-        with:
-          target: ${{ matrix.target }}
-          manylinux: "2_28"
-          args: --release --out dist -m ${{ env.MANIFEST }}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
-        with:
-          name: wheels-linux-${{ matrix.target }}
-          path: dist
-
-  windows:
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'goldenfuzz-v')
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
-        with:
-          ref: ${{ inputs.ref || github.ref }}
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
-        with:
-          python-version: "3.12"
-      - name: Build wheel (maturin, abi3)
-        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b  # v1.51.0
-        with:
-          target: x64
-          args: --release --out dist -m ${{ env.MANIFEST }}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
-        with:
-          name: wheels-windows-x64
-          path: dist
-
-  macos:
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'goldenfuzz-v')
-    # macos-14 (Apple Silicon) cross-builds the x86_64 wheel too; pure Rust, so
-    # the cross-compile links cleanly (no prebuilt-runtime constraint).
-    runs-on: macos-14
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [aarch64, x86_64]
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
-        with:
-          ref: ${{ inputs.ref || github.ref }}
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
-        with:
-          python-version: "3.12"
-      - name: Build wheel (maturin, abi3)
-        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b  # v1.51.0
-        with:
-          target: ${{ matrix.target }}
-          args: --release --out dist -m ${{ env.MANIFEST }}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
-        with:
-          name: wheels-macos-${{ matrix.target }}
-          path: dist
-
-  sdist:
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'goldenfuzz-v')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
-        with:
-          ref: ${{ inputs.ref || github.ref }}
-      - name: Build sdist
-        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b  # v1.51.0
-        with:
-          command: sdist
-          args: --out dist -m ${{ env.MANIFEST }}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
-        with:
-          name: wheels-sdist
-          path: dist
-
-  pypi:
-    needs: [linux, windows, macos, sdist]
-    if: github.event_name != 'workflow_dispatch' || inputs.publish
-    runs-on: ubuntu-latest
-    environment: pypi
-    steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
-        with:
-          pattern: wheels-*
-          path: dist
-          merge-multiple: true
-      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
-        with:
-          packages-dir: dist
-          password: ${{ secrets.PYPI_TOKEN }}
-          skip-existing: true
+  wheels:
+    # Only run for goldenfuzz-v* tags. The per-job copies of this gate in the
+    # pre-template version collapse to one here.
+    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'goldenfuzz-v')
+    uses: ./.github/workflows/_publish-native.yml
+    with:
+      manifest-path: packages/rust/extensions/goldenfuzz-py/Cargo.toml
+      ref: ${{ inputs.ref || '' }}
+      # A release always publishes; a dispatch passes its checkbox through.
+      publish: ${{ github.event_name != 'workflow_dispatch' || inputs.publish }}
+    secrets: inherit
 
   crates_io:
     # Publish the pyo3-free `goldenfuzz-core` Rust crate to crates.io. Zero deps,
     # so it publishes standalone. Independent of the PyPI wheel jobs.
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'goldenfuzz-v')
+    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'goldenfuzz-v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
