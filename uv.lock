@@ -683,8 +683,7 @@ name = "diptest"
 version = "0.11.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-11-goldenmatch-sail'" },
-    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-11-goldenmatch-inhouse-embeddings' or extra != 'extra-11-goldenmatch-sail'" },
+    { name = "numpy" },
     { name = "psutil" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/5e/0b/92a00796fb3a7e0fd1aea26ebcacfd6282857789ea72e847662e5103b24e/diptest-0.11.0.tar.gz", hash = "sha256:cd74d61d4e2620aa4c40900b7ff0ff48b7517fd00871c9066f737ba4081b2f81", size = 88751, upload-time = "2026-04-24T15:02:30.192Z" }
@@ -963,12 +962,12 @@ provides-extras = ["match", "check", "flow", "pipe", "suite", "native", "mcp", "
 
 [[package]]
 name = "goldenanalysis-native"
-version = "0.1.0"
+version = "0.2.0"
 source = { directory = "packages/rust/extensions/analysis-native" }
 
 [[package]]
 name = "goldencheck"
-version = "3.4.0"
+version = "3.5.0"
 source = { editable = "packages/python/goldencheck" }
 dependencies = [
     { name = "goldencheck-types" },
@@ -987,8 +986,7 @@ agent = [
     { name = "aiohttp" },
 ]
 baseline = [
-    { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-11-goldenmatch-sail'" },
-    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-11-goldenmatch-inhouse-embeddings' or extra != 'extra-11-goldenmatch-sail'" },
+    { name = "numpy" },
     { name = "polars" },
 ]
 db = [
@@ -1051,12 +1049,12 @@ provides-extras = ["dev", "llm", "db", "mcp", "agent", "baseline", "native", "se
 
 [[package]]
 name = "goldencheck-native"
-version = "0.1.0"
+version = "0.2.0"
 source = { directory = "packages/rust/extensions/goldencheck-native" }
 
 [[package]]
 name = "goldencheck-types"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "packages/python/goldencheck-types" }
 dependencies = [
     { name = "pyyaml" },
@@ -1076,7 +1074,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "goldenflow"
-version = "2.1.0"
+version = "2.2.0"
 source = { editable = "packages/python/goldenflow" }
 dependencies = [
     { name = "fastapi" },
@@ -1182,7 +1180,7 @@ provides-extras = ["dev", "check", "polars", "excel", "parquet", "db", "mcp", "l
 
 [[package]]
 name = "goldenflow-native"
-version = "0.27.0"
+version = "0.28.0"
 source = { directory = "packages/rust/extensions/native-flow" }
 dependencies = [
     { name = "pyarrow" },
@@ -1206,14 +1204,13 @@ wheels = [
 
 [[package]]
 name = "goldenmatch"
-version = "3.12.0"
+version = "3.14.0"
 source = { editable = "packages/python/goldenmatch" }
 dependencies = [
     { name = "duckdb" },
     { name = "goldenmatch-native", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or sys_platform == 'darwin' or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-11-goldenmatch-inhouse-embeddings' and extra == 'extra-11-goldenmatch-sail') or (sys_platform == 'linux' and extra == 'extra-11-goldenmatch-inhouse-embeddings' and extra == 'extra-11-goldenmatch-sail') or (sys_platform == 'win32' and extra == 'extra-11-goldenmatch-inhouse-embeddings' and extra == 'extra-11-goldenmatch-sail')" },
     { name = "goldenphonetic" },
-    { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-11-goldenmatch-sail'" },
-    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-11-goldenmatch-inhouse-embeddings' or extra != 'extra-11-goldenmatch-sail'" },
+    { name = "numpy" },
     { name = "openpyxl" },
     { name = "psutil" },
     { name = "pyarrow" },
@@ -1313,6 +1310,9 @@ mysql = [
 native = [
     { name = "goldenmatch-native" },
 ]
+ontology = [
+    { name = "rdflib" },
+]
 pgvector = [
     { name = "pgvector" },
     { name = "psycopg", extra = ["binary"] },
@@ -1337,12 +1337,6 @@ redshift = [
 s3 = [
     { name = "boto3" },
 ]
-sail = [
-    { name = "pysail" },
-    { name = "pyspark", version = "3.5.2", source = { registry = "https://pypi.org/simple" }, extra = ["connect"], marker = "extra == 'extra-11-goldenmatch-sail'" },
-    { name = "setuptools", marker = "python_full_version >= '3.12'" },
-    { name = "venv-pack" },
-]
 salesforce = [
     { name = "simple-salesforce" },
 ]
@@ -1350,8 +1344,7 @@ snowflake = [
     { name = "snowflake-connector-python" },
 ]
 spark = [
-    { name = "pyspark", version = "3.5.2", source = { registry = "https://pypi.org/simple" }, extra = ["connect"], marker = "extra == 'extra-11-goldenmatch-sail'" },
-    { name = "pyspark", version = "4.2.0", source = { registry = "https://pypi.org/simple" }, extra = ["connect"], marker = "extra == 'extra-11-goldenmatch-inhouse-embeddings' or extra != 'extra-11-goldenmatch-sail'" },
+    { name = "pyspark", extra = ["connect"] },
     { name = "setuptools", marker = "python_full_version >= '3.12' or (extra == 'extra-11-goldenmatch-inhouse-embeddings' and extra == 'extra-11-goldenmatch-sail')" },
     { name = "venv-pack" },
 ]
@@ -1387,7 +1380,6 @@ requires-dist = [
     { name = "goldencheck", extras = ["polars"], marker = "extra == 'quality'", editable = "packages/python/goldencheck" },
     { name = "goldenflow", marker = "extra == 'transform'", editable = "packages/python/goldenflow" },
     { name = "goldenmatch", extras = ["embeddings", "llm", "postgres", "mcp", "polars", "quality", "transform", "web", "vision", "audio"], marker = "extra == 'all'", editable = "packages/python/goldenmatch" },
-    { name = "goldenmatch", extras = ["spark"], marker = "extra == 'sail'", editable = "packages/python/goldenmatch" },
     { name = "goldenmatch-native", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or sys_platform == 'darwin'", directory = "packages/rust/extensions/native" },
     { name = "goldenmatch-native", marker = "extra == 'native'", directory = "packages/rust/extensions/native" },
     { name = "goldenphonetic", specifier = ">=0.1.0" },
@@ -1418,8 +1410,6 @@ requires-dist = [
     { name = "pymupdf", marker = "extra == 'documents'", specifier = ">=1.24" },
     { name = "pymysql", marker = "extra == 'mysql'", specifier = ">=1.1" },
     { name = "pyodbc", marker = "extra == 'sqlserver'", specifier = ">=5.0" },
-    { name = "pysail", marker = "extra == 'sail'", specifier = ">=0.6" },
-    { name = "pyspark", extras = ["connect"], marker = "extra == 'sail'", specifier = ">=3.5,<4" },
     { name = "pyspark", extras = ["connect"], marker = "extra == 'spark'", specifier = ">=3.5" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
@@ -1428,6 +1418,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "rapidfuzz", marker = "extra == 'dev'", specifier = ">=3.0" },
     { name = "ray", marker = "extra == 'ray'", specifier = ">=2.56.0" },
+    { name = "rdflib", marker = "extra == 'ontology'", specifier = ">=7.0" },
     { name = "redshift-connector", marker = "extra == 'redshift'", specifier = ">=2.0" },
     { name = "rich", specifier = ">=13.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
@@ -1442,7 +1433,7 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'web'", specifier = ">=0.29" },
     { name = "venv-pack", marker = "extra == 'spark'", specifier = ">=0.2" },
 ]
-provides-extras = ["dev", "embeddings", "vision", "documents", "audio", "inhouse-embeddings", "llm", "postgres", "mcp", "pprl", "snowflake", "bigquery", "databricks", "salesforce", "redshift", "s3", "gcs", "azure-blob", "sqlserver", "mysql", "duckdb", "pgvector", "ray", "datafusion", "spark", "sail", "agent", "polars", "quality", "transform", "native", "lance", "llama", "local-llm", "web", "bench", "all"]
+provides-extras = ["dev", "embeddings", "ontology", "vision", "documents", "audio", "inhouse-embeddings", "llm", "postgres", "mcp", "pprl", "snowflake", "bigquery", "databricks", "salesforce", "redshift", "s3", "gcs", "azure-blob", "sqlserver", "mysql", "duckdb", "pgvector", "ray", "datafusion", "spark", "agent", "polars", "quality", "transform", "native", "lance", "llama", "local-llm", "web", "bench", "all"]
 
 [[package]]
 name = "goldenmatch-monorepo"
@@ -1489,7 +1480,7 @@ dev = [
 
 [[package]]
 name = "goldenmatch-native"
-version = "0.1.21"
+version = "0.2.0"
 source = { directory = "packages/rust/extensions/native" }
 
 [[package]]
@@ -1507,7 +1498,7 @@ wheels = [
 
 [[package]]
 name = "goldenpipe"
-version = "1.4.0"
+version = "1.5.0"
 source = { editable = "packages/python/goldenpipe" }
 dependencies = [
     { name = "goldencheck-types" },
@@ -1605,7 +1596,7 @@ provides-extras = ["check", "flow", "match", "analysis", "golden-suite", "tui", 
 
 [[package]]
 name = "goldensuite-mcp"
-version = "0.5.0"
+version = "0.6.0"
 source = { editable = "packages/python/goldensuite-mcp" }
 dependencies = [
     { name = "goldenanalysis", extra = ["mcp"] },
@@ -2033,13 +2024,12 @@ wheels = [
 
 [[package]]
 name = "infermap"
-version = "0.6.0"
+version = "0.7.0"
 source = { editable = "packages/python/infermap" }
 dependencies = [
     { name = "goldencheck-types" },
     { name = "goldenfuzz" },
-    { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-11-goldenmatch-sail'" },
-    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-11-goldenmatch-inhouse-embeddings' or extra != 'extra-11-goldenmatch-sail'" },
+    { name = "numpy" },
     { name = "polars" },
     { name = "pyyaml" },
     { name = "typer" },
@@ -2107,7 +2097,7 @@ provides-extras = ["postgres", "mysql", "duckdb", "excel", "llm", "all", "mcp", 
 
 [[package]]
 name = "infermap-native"
-version = "0.1.0"
+version = "0.2.0"
 source = { directory = "packages/rust/extensions/infermap-native" }
 
 [[package]]
@@ -2340,8 +2330,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "diskcache" },
     { name = "jinja2" },
-    { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-11-goldenmatch-sail'" },
-    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-11-goldenmatch-inhouse-embeddings' or extra != 'extra-11-goldenmatch-sail'" },
+    { name = "numpy" },
     { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/83/0f/8e03877aa9ea79890cf64f6d12d47f4daced663d0dd6abe482fe6483e7e6/llama_cpp_python-0.3.29.tar.gz", hash = "sha256:21122165951bdc25ba27c0483a2f44082c860d89422945548c64df08b6029ce4", size = 70016946, upload-time = "2026-06-13T19:42:12.153Z" }
@@ -2584,7 +2573,7 @@ name = "ml-dtypes"
 version = "0.5.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" } },
+    { name = "numpy" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/0e/4a/c27b42ed9b1c7d13d9ba8b6905dece787d6259152f2309338aed29b2447b/ml_dtypes-0.5.4.tar.gz", hash = "sha256:8ab06a50fb9bf9666dd0fe5dfb4676fa2b0ac0f31ecff72a6c3af8e22c063453", size = 692314, upload-time = "2025-11-17T22:32:31.031Z" }
 wheels = [
@@ -2802,42 +2791,8 @@ wheels = [
 
 [[package]]
 name = "numpy"
-version = "1.26.4"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13'",
-    "python_full_version == '3.12.*'",
-    "python_full_version < '3.12'",
-]
-sdist = { url = "https://files.pythonhosted.org/packages/65/6e/09db70a523a96d25e115e71cc56a6f9031e7b8cd166c1ac8438307c14058/numpy-1.26.4.tar.gz", hash = "sha256:2a02aba9ed12e4ac4eb3ea9421c420301a0c6460d9830d74a9df87efa4912010", size = 15786129, upload-time = "2024-02-06T00:26:44.495Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/11/57/baae43d14fe163fa0e4c47f307b6b2511ab8d7d30177c491960504252053/numpy-1.26.4-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:4c66707fabe114439db9068ee468c26bbdf909cac0fb58686a42a24de1760c71", size = 20630554, upload-time = "2024-02-05T23:51:50.149Z" },
-    { url = "https://files.pythonhosted.org/packages/1a/2e/151484f49fd03944c4a3ad9c418ed193cfd02724e138ac8a9505d056c582/numpy-1.26.4-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:edd8b5fe47dab091176d21bb6de568acdd906d1887a4584a15a9a96a1dca06ef", size = 13997127, upload-time = "2024-02-05T23:52:15.314Z" },
-    { url = "https://files.pythonhosted.org/packages/79/ae/7e5b85136806f9dadf4878bf73cf223fe5c2636818ba3ab1c585d0403164/numpy-1.26.4-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:7ab55401287bfec946ced39700c053796e7cc0e3acbef09993a9ad2adba6ca6e", size = 14222994, upload-time = "2024-02-05T23:52:47.569Z" },
-    { url = "https://files.pythonhosted.org/packages/3a/d0/edc009c27b406c4f9cbc79274d6e46d634d139075492ad055e3d68445925/numpy-1.26.4-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:666dbfb6ec68962c033a450943ded891bed2d54e6755e35e5835d63f4f6931d5", size = 18252005, upload-time = "2024-02-05T23:53:15.637Z" },
-    { url = "https://files.pythonhosted.org/packages/09/bf/2b1aaf8f525f2923ff6cfcf134ae5e750e279ac65ebf386c75a0cf6da06a/numpy-1.26.4-cp311-cp311-musllinux_1_1_aarch64.whl", hash = "sha256:96ff0b2ad353d8f990b63294c8986f1ec3cb19d749234014f4e7eb0112ceba5a", size = 13885297, upload-time = "2024-02-05T23:53:42.16Z" },
-    { url = "https://files.pythonhosted.org/packages/df/a0/4e0f14d847cfc2a633a1c8621d00724f3206cfeddeb66d35698c4e2cf3d2/numpy-1.26.4-cp311-cp311-musllinux_1_1_x86_64.whl", hash = "sha256:60dedbb91afcbfdc9bc0b1f3f402804070deed7392c23eb7a7f07fa857868e8a", size = 18093567, upload-time = "2024-02-05T23:54:11.696Z" },
-    { url = "https://files.pythonhosted.org/packages/d2/b7/a734c733286e10a7f1a8ad1ae8c90f2d33bf604a96548e0a4a3a6739b468/numpy-1.26.4-cp311-cp311-win32.whl", hash = "sha256:1af303d6b2210eb850fcf03064d364652b7120803a0b872f5211f5234b399f20", size = 5968812, upload-time = "2024-02-05T23:54:26.453Z" },
-    { url = "https://files.pythonhosted.org/packages/3f/6b/5610004206cf7f8e7ad91c5a85a8c71b2f2f8051a0c0c4d5916b76d6cbb2/numpy-1.26.4-cp311-cp311-win_amd64.whl", hash = "sha256:cd25bcecc4974d09257ffcd1f098ee778f7834c3ad767fe5db785be9a4aa9cb2", size = 15811913, upload-time = "2024-02-05T23:54:53.933Z" },
-    { url = "https://files.pythonhosted.org/packages/95/12/8f2020a8e8b8383ac0177dc9570aad031a3beb12e38847f7129bacd96228/numpy-1.26.4-cp312-cp312-macosx_10_9_x86_64.whl", hash = "sha256:b3ce300f3644fb06443ee2222c2201dd3a89ea6040541412b8fa189341847218", size = 20335901, upload-time = "2024-02-05T23:55:32.801Z" },
-    { url = "https://files.pythonhosted.org/packages/75/5b/ca6c8bd14007e5ca171c7c03102d17b4f4e0ceb53957e8c44343a9546dcc/numpy-1.26.4-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:03a8c78d01d9781b28a6989f6fa1bb2c4f2d51201cf99d3dd875df6fbd96b23b", size = 13685868, upload-time = "2024-02-05T23:55:56.28Z" },
-    { url = "https://files.pythonhosted.org/packages/79/f8/97f10e6755e2a7d027ca783f63044d5b1bc1ae7acb12afe6a9b4286eac17/numpy-1.26.4-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:9fad7dcb1aac3c7f0584a5a8133e3a43eeb2fe127f47e3632d43d677c66c102b", size = 13925109, upload-time = "2024-02-05T23:56:20.368Z" },
-    { url = "https://files.pythonhosted.org/packages/0f/50/de23fde84e45f5c4fda2488c759b69990fd4512387a8632860f3ac9cd225/numpy-1.26.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:675d61ffbfa78604709862923189bad94014bef562cc35cf61d3a07bba02a7ed", size = 17950613, upload-time = "2024-02-05T23:56:56.054Z" },
-    { url = "https://files.pythonhosted.org/packages/4c/0c/9c603826b6465e82591e05ca230dfc13376da512b25ccd0894709b054ed0/numpy-1.26.4-cp312-cp312-musllinux_1_1_aarch64.whl", hash = "sha256:ab47dbe5cc8210f55aa58e4805fe224dac469cde56b9f731a4c098b91917159a", size = 13572172, upload-time = "2024-02-05T23:57:21.56Z" },
-    { url = "https://files.pythonhosted.org/packages/76/8c/2ba3902e1a0fc1c74962ea9bb33a534bb05984ad7ff9515bf8d07527cadd/numpy-1.26.4-cp312-cp312-musllinux_1_1_x86_64.whl", hash = "sha256:1dda2e7b4ec9dd512f84935c5f126c8bd8b9f2fc001e9f54af255e8c5f16b0e0", size = 17786643, upload-time = "2024-02-05T23:57:56.585Z" },
-    { url = "https://files.pythonhosted.org/packages/28/4a/46d9e65106879492374999e76eb85f87b15328e06bd1550668f79f7b18c6/numpy-1.26.4-cp312-cp312-win32.whl", hash = "sha256:50193e430acfc1346175fcbdaa28ffec49947a06918b7b92130744e81e640110", size = 5677803, upload-time = "2024-02-05T23:58:08.963Z" },
-    { url = "https://files.pythonhosted.org/packages/16/2e/86f24451c2d530c88daf997cb8d6ac622c1d40d19f5a031ed68a4b73a374/numpy-1.26.4-cp312-cp312-win_amd64.whl", hash = "sha256:08beddf13648eb95f8d867350f6a018a4be2e5ad54c8d8caed89ebca558b2818", size = 15517754, upload-time = "2024-02-05T23:58:36.364Z" },
-]
-
-[[package]]
-name = "numpy"
 version = "2.4.4"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13'",
-    "python_full_version == '3.12.*'",
-    "python_full_version < '3.12'",
-]
 sdist = { url = "https://files.pythonhosted.org/packages/d7/9f/b8cef5bffa569759033adda9481211426f12f53299629b410340795c2514/numpy-2.4.4.tar.gz", hash = "sha256:2d390634c5182175533585cc89f3608a4682ccb173cc9bb940b2881c8d6f8fa0", size = 20731587, upload-time = "2026-03-29T13:22:01.298Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ef/c6/4218570d8c8ecc9704b5157a3348e486e84ef4be0ed3e38218ab473c83d2/numpy-2.4.4-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:f983334aea213c99992053ede6168500e5f086ce74fbc4acc3f2b00f5762e9db", size = 16976799, upload-time = "2026-03-29T13:18:15.438Z" },
@@ -3071,7 +3026,7 @@ version = "1.22.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "ml-dtypes" },
-    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" } },
+    { name = "numpy" },
     { name = "protobuf" },
     { name = "typing-extensions" },
 ]
@@ -3098,7 +3053,7 @@ version = "1.26.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "flatbuffers" },
-    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" } },
+    { name = "numpy" },
     { name = "packaging" },
     { name = "protobuf" },
 ]
@@ -3167,8 +3122,7 @@ name = "pandas"
 version = "2.3.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-11-goldenmatch-sail'" },
-    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-11-goldenmatch-inhouse-embeddings' or extra != 'extra-11-goldenmatch-sail'" },
+    { name = "numpy" },
     { name = "python-dateutil" },
     { name = "pytz" },
     { name = "tzdata" },
@@ -3754,8 +3708,7 @@ version = "7.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "lance-namespace" },
-    { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-11-goldenmatch-sail'" },
-    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-11-goldenmatch-inhouse-embeddings' or extra != 'extra-11-goldenmatch-sail'" },
+    { name = "numpy" },
     { name = "pyarrow" },
 ]
 wheels = [
@@ -3841,6 +3794,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pyparsing"
+version = "3.3.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f3/91/9c6ee907786a473bf81c5f53cf703ba0957b23ab84c264080fb5a450416f/pyparsing-3.3.2.tar.gz", hash = "sha256:c777f4d763f140633dcb6d8a3eda953bf7a214dc4eff598413c070bcdc117cbc", size = 6851574, upload-time = "2026-01-21T03:57:59.36Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/10/bd/c038d7cc38edc1aa5bf91ab8068b63d4308c66c4c8bb3cbba7dfbc049f9c/pyparsing-3.3.2-py3-none-any.whl", hash = "sha256:850ba148bd908d7e2411587e247a1e4f0327839c40e2e5e6d05a007ecc69911d", size = 122781, upload-time = "2026-01-21T03:57:55.912Z" },
+]
+
+[[package]]
 name = "pyright"
 version = "1.1.409"
 source = { registry = "https://pypi.org/simple" }
@@ -3854,65 +3816,23 @@ wheels = [
 ]
 
 [[package]]
-name = "pysail"
-version = "0.6.3"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/49/d9/72b278780aa21d6298ad8996e636406216283dee86fb88b8faeb903a4815/pysail-0.6.3.tar.gz", hash = "sha256:35edaf27f0d36db5e0652b8138031543dc9123b9402dfe98c72726fc2a8c7191", size = 2477937, upload-time = "2026-05-21T13:33:20.989Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/97/a9/72cc933b8c9ee682e0d6cb0895582ab1b165548ef1754d9dcd64574fc4c0/pysail-0.6.3-cp38-abi3-macosx_10_12_x86_64.whl", hash = "sha256:1ae93ec1dcf9249e841f321eccd782af5cf46ece174401905aefe5745754500e", size = 51221982, upload-time = "2026-05-21T13:32:56.477Z" },
-    { url = "https://files.pythonhosted.org/packages/82/81/25f0db44a6d66ad3c905b735755bdfce846ca93fcea1943dc48194c2a862/pysail-0.6.3-cp38-abi3-macosx_11_0_arm64.whl", hash = "sha256:14e253bf0186af26f668ffd669a1426aea1a9547d5978f8c0d9f9e758142298b", size = 47563608, upload-time = "2026-05-21T13:33:01.571Z" },
-    { url = "https://files.pythonhosted.org/packages/b4/1d/af649532ce95206cd0887fedd677fff966b033a20506a847fe9ea2554b43/pysail-0.6.3-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:a29eff95c558155017eac7fdd9876f59727937941dfb0f336c7661691527466d", size = 52466193, upload-time = "2026-05-21T13:33:06.404Z" },
-    { url = "https://files.pythonhosted.org/packages/00/54/9450669f449481fd06ed1c8d9c5d149273e6b71bc31deb33740519022762/pysail-0.6.3-cp38-abi3-manylinux_2_24_aarch64.whl", hash = "sha256:c11f7b816ed6141aed2c186d8a58849d155f3bc11e49b02c7e2259a0848a1785", size = 49327260, upload-time = "2026-05-21T13:33:11.967Z" },
-    { url = "https://files.pythonhosted.org/packages/e6/57/a3497fefee045b8438668d2515325883d5292b864e0506401a44bac03265/pysail-0.6.3-cp38-abi3-win_amd64.whl", hash = "sha256:4583609f35cc641840393ec63e90f59a7f1a6b767bdada9fafe52f01877f6570", size = 57432411, upload-time = "2026-05-21T13:33:17.908Z" },
-]
-
-[[package]]
-name = "pyspark"
-version = "3.5.2"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13'",
-    "python_full_version == '3.12.*'",
-    "python_full_version < '3.12'",
-]
-dependencies = [
-    { name = "py4j", marker = "extra == 'extra-11-goldenmatch-sail'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/31/12/461c29d25f91c246842fb09e9cfb21ab82a9ab8ea8dd35667cc8b708f715/pyspark-3.5.2.tar.gz", hash = "sha256:bbb36eba09fa24e86e0923d7e7a986041b90c714e11c6aa976f9791fe9edde5e", size = 317276210, upload-time = "2024-08-12T14:57:56.062Z" }
-
-[package.optional-dependencies]
-connect = [
-    { name = "googleapis-common-protos", marker = "extra == 'extra-11-goldenmatch-sail'" },
-    { name = "grpcio", marker = "extra == 'extra-11-goldenmatch-sail'" },
-    { name = "grpcio-status", marker = "extra == 'extra-11-goldenmatch-sail'" },
-    { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-11-goldenmatch-sail'" },
-    { name = "pandas", marker = "extra == 'extra-11-goldenmatch-sail'" },
-    { name = "pyarrow", marker = "extra == 'extra-11-goldenmatch-sail'" },
-]
-
-[[package]]
 name = "pyspark"
 version = "4.2.0"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13'",
-    "python_full_version == '3.12.*'",
-    "python_full_version < '3.12'",
-]
 dependencies = [
-    { name = "py4j", marker = "extra == 'extra-11-goldenmatch-inhouse-embeddings' or extra != 'extra-11-goldenmatch-sail'" },
+    { name = "py4j" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/c3/33/c987434f5d50aa802779a004ca0fd45ee4350caab50554ad7283d5a22b50/pyspark-4.2.0.tar.gz", hash = "sha256:5ad689d53570ee1674193fd4f9bda065f0db3be9363a27d2a3406cc457b70b61", size = 450129423, upload-time = "2026-07-14T22:16:46Z" }
 
 [package.optional-dependencies]
 connect = [
-    { name = "googleapis-common-protos", marker = "extra == 'extra-11-goldenmatch-inhouse-embeddings' or extra != 'extra-11-goldenmatch-sail'" },
-    { name = "grpcio", marker = "extra == 'extra-11-goldenmatch-inhouse-embeddings' or extra != 'extra-11-goldenmatch-sail'" },
-    { name = "grpcio-status", marker = "extra == 'extra-11-goldenmatch-inhouse-embeddings' or extra != 'extra-11-goldenmatch-sail'" },
-    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-11-goldenmatch-inhouse-embeddings' or extra != 'extra-11-goldenmatch-sail'" },
-    { name = "pandas", marker = "extra == 'extra-11-goldenmatch-inhouse-embeddings' or extra != 'extra-11-goldenmatch-sail'" },
-    { name = "pyarrow", marker = "extra == 'extra-11-goldenmatch-inhouse-embeddings' or extra != 'extra-11-goldenmatch-sail'" },
-    { name = "zstandard", marker = "extra == 'extra-11-goldenmatch-inhouse-embeddings' or extra != 'extra-11-goldenmatch-sail'" },
+    { name = "googleapis-common-protos" },
+    { name = "grpcio" },
+    { name = "grpcio-status" },
+    { name = "numpy" },
+    { name = "pandas" },
+    { name = "pyarrow" },
+    { name = "zstandard" },
 ]
 
 [[package]]
@@ -4172,6 +4092,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/65/86/29c9444c9f11f0bf3d4da75d3dc7a27c0fb86f8604beea6513968dc2df26/ray-2.56.0-cp313-cp313-macosx_12_0_arm64.whl", hash = "sha256:992047f50473b5bfea74c8f528f999968e0b4bc735af23ad476a0f4e04741aea", size = 66289930, upload-time = "2026-06-29T20:51:20.79Z" },
     { url = "https://files.pythonhosted.org/packages/59/59/3c4d533a92e99b12b9d2e8690e41d7ace269d77deecb0aef753df7924b9e/ray-2.56.0-cp313-cp313-manylinux2014_aarch64.whl", hash = "sha256:a0e9cfe92c88ab74abca23923c15a592f49bc7617ffdda4190daca7785a7c4f6", size = 73252460, upload-time = "2026-06-29T20:51:26.216Z" },
     { url = "https://files.pythonhosted.org/packages/59/ba/285d409253b332af91884daa4b0a3be3ce799682aa2c1e0f8dbbafaf1da4/ray-2.56.0-cp313-cp313-manylinux2014_x86_64.whl", hash = "sha256:54d2725f8b65d9615c933fec5ec62e54a67b8f2e14286026fb014606253670ef", size = 74130685, upload-time = "2026-06-29T20:51:31.59Z" },
+]
+
+[[package]]
+name = "rdflib"
+version = "7.6.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyparsing" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/98/f5/18bb77b7af9526add0c727a3b2048959847dc5fb030913e2918bf384fec3/rdflib-7.6.0.tar.gz", hash = "sha256:6c831288d5e4a5a7ece85d0ccde9877d512a3d0f02d7c06455d00d6d0ea379df", size = 4943826, upload-time = "2026-02-13T07:15:55.938Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/10/c2/6604a71269e0c1bd75656d5a001432d16f2cc5b8c057140ec797155c295e/rdflib-7.6.0-py3-none-any.whl", hash = "sha256:30c0a3ebf4c0e09215f066be7246794b6492e054e782d7ac2a34c9f70a15e0dd", size = 615416, upload-time = "2026-02-13T07:15:46.487Z" },
 ]
 
 [[package]]
@@ -4475,8 +4407,7 @@ version = "1.8.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "joblib" },
-    { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-11-goldenmatch-sail'" },
-    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-11-goldenmatch-inhouse-embeddings' or extra != 'extra-11-goldenmatch-sail'" },
+    { name = "numpy" },
     { name = "scipy" },
     { name = "threadpoolctl" },
 ]
@@ -4513,8 +4444,7 @@ name = "scipy"
 version = "1.17.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-11-goldenmatch-sail'" },
-    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-11-goldenmatch-inhouse-embeddings' or extra != 'extra-11-goldenmatch-sail'" },
+    { name = "numpy" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/7a/97/5a3609c4f8d58b039179648e62dd220f89864f56f7357f5d4f45c29eb2cc/scipy-1.17.1.tar.gz", hash = "sha256:95d8e012d8cb8816c226aef832200b1d45109ed4464303e997c5b13122b297c0", size = 30573822, upload-time = "2026-02-23T00:26:24.851Z" }
 wheels = [
@@ -4578,8 +4508,7 @@ version = "5.4.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "huggingface-hub" },
-    { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-11-goldenmatch-sail'" },
-    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-11-goldenmatch-inhouse-embeddings' or extra != 'extra-11-goldenmatch-sail'" },
+    { name = "numpy" },
     { name = "scikit-learn" },
     { name = "scipy" },
     { name = "torch" },
@@ -4698,8 +4627,7 @@ version = "0.14.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cffi" },
-    { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-11-goldenmatch-sail'" },
-    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-11-goldenmatch-inhouse-embeddings' or extra != 'extra-11-goldenmatch-sail'" },
+    { name = "numpy" },
     { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/d2/db/949331952a6fb1c5b12e9de80fd08747966c2039d1a61db4764fbd3981c2/soundfile-0.14.0.tar.gz", hash = "sha256:ba1c1a2d618bca5c406647c83b89f07cc8810fa506a50622a6993ba130c1de11", size = 47842, upload-time = "2026-06-06T08:58:47.869Z" }
@@ -4732,8 +4660,7 @@ dependencies = [
     { name = "duckdb" },
     { name = "igraph" },
     { name = "jinja2" },
-    { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-11-goldenmatch-sail'" },
-    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-11-goldenmatch-inhouse-embeddings' or extra != 'extra-11-goldenmatch-sail'" },
+    { name = "numpy" },
     { name = "pandas" },
     { name = "sqlglot" },
 ]
@@ -4988,8 +4915,7 @@ version = "5.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "huggingface-hub" },
-    { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-11-goldenmatch-sail'" },
-    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-11-goldenmatch-inhouse-embeddings' or extra != 'extra-11-goldenmatch-sail'" },
+    { name = "numpy" },
     { name = "packaging" },
     { name = "pyyaml" },
     { name = "regex" },
