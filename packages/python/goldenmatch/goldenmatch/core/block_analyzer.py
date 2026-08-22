@@ -519,13 +519,38 @@ def _target_pairs_from_matchkey(sample_frame: Any, matchkey: Any) -> set[tuple[i
     Row ids are positional into ``sample_frame`` so callers can index parallel
     per-row lists directly.
     """
+    from goldenmatch.core.frame import to_frame
     from goldenmatch.core.scorer import find_fuzzy_matches
 
-    height = sample_frame.height
-    block = sample_frame.native.with_columns(
-        pl.Series("__row_id__", list(range(height)), dtype=pl.Int64)
-    )
-    emitted = find_fuzzy_matches(block, matchkey)
+    # Row ids through the seam, not `native.with_columns(pl.Series(...))`. That
+    # was a POLARS call, and on the arrow-native lane `native` is a `pa.Table`,
+    # so it raised `AttributeError: 'pyarrow.lib.Table' object has no attribute
+    # 'with_columns'`. `_build_recall_target` catches that and drops to
+    # `_target_pairs_from_similarity` -- the proxy its own docstring calls WEAK
+    # (Amazon-Google: 2,355 sample pairs, 35 true, 1.5% precision). So on the
+    # DEFAULT lane every recall estimate came from the weak proxy, and nothing
+    # failed loudly: the warning names a matchkey, not a lane.
+    #
+    # That proxy is not merely noisy, it is ANTI-correlated with true retention
+    # -- on DBLP-ACM it rates `venue[:3]` (5.9% of true pairs) above `title[:5]`
+    # (98.2%) -- so anything ranking on its numbers is ranking on noise.
+    #
+    # `find_fuzzy_matches` accepts a `pa.Table`: its body reads through the
+    # `_to_frame_d5` seam and branches on `to_dicts`/`to_pylist`. Only the type
+    # annotation said polars. Verified byte-identical on the real DBLP-ACM
+    # matchkey incl. the composite `ensemble` scorer -- same 111 pairs, max score
+    # delta 0.0 -- and arrow is FASTER (0.37s vs 0.60s at n=1000). No polars, and
+    # the vectorised rapidfuzz path is kept: a `score_pair` loop, the obvious
+    # polars-free alternative, measured 44.1s for the same work.
+    #
+    # DROP before ensure: this function's contract is that ids are POSITIONAL
+    # into `sample_frame` so callers can index parallel per-row lists.
+    # `ensure_row_ids` REUSES an existing `__row_id__` (#844), which upstream may
+    # already carry with a different numbering.
+    frame = to_frame(sample_frame.native)
+    if "__row_id__" in frame.columns:
+        frame = frame.drop(["__row_id__"])
+    emitted = find_fuzzy_matches(frame.ensure_row_ids("__row_id__").native, matchkey)
     return {(min(a, b), max(a, b)) for a, b, _ in emitted}
 
 
@@ -813,11 +838,55 @@ def analyze_blocking(
     # putting everything in one block scores badly on comparison count), so
     # ranking is not a race to maximise recall alone.
     suggestions.sort(key=lambda s: (s.score * s.estimated_recall, s.score), reverse=True)
+    suggestions = _apply_recall_tradeoff_gate(suggestions)
 
     if suggestions:
         _warn_on_recall(suggestions, scored[0][1].get("coverage", 0.0))
 
     return suggestions
+
+
+def _apply_recall_tradeoff_gate(suggestions: list) -> list:
+    """Refuse a plan retaining < `_RECALL_TRADEOFF_RATIO` of the best available.
+
+    `score * estimated_recall` lets a cheap plan outrank a much better one,
+    because `score` carries comparison count and a small block set scores well.
+    On DBLP-ACM `title[:5]+authors[:5]` (1,781 comparisons) outranked
+    `title[:5]` (39,648) while retaining 0.4164 of TRUE pairs against 0.9820.
+
+    **Only sound because `_target_pairs_from_matchkey` now works.** Against the
+    character-similarity proxy the estimate is ANTI-correlated with truth
+    (`venue[:3]` 0.2032 est / 0.0594 true vs `title[:5]` 0.0407 / 0.9820), and
+    this gate over those numbers promotes `venue[:3]` -- taking DBLP-ACM from
+    98.2% recall to 5.9% at 61x the comparisons. That was implemented, measured
+    against ground truth, and reverted. Do not enable it if the recall target
+    ever falls back to the proxy again.
+
+    Conservative: ordering WITHIN the qualifying set is untouched, so cost still
+    decides among plans that clear the bar; gated plans are demoted, not
+    dropped; and if nothing clears the bar, or recall could not be estimated at
+    all, the list is returned unchanged.
+    """
+    if not suggestions:
+        return suggestions
+    best_recall = max(s.estimated_recall for s in suggestions)
+    if best_recall <= 0.0:
+        return suggestions
+    floor = best_recall * _RECALL_TRADEOFF_RATIO
+    qualifying = [s for s in suggestions if s.estimated_recall >= floor]
+    demoted = [s for s in suggestions if s.estimated_recall < floor]
+    if not qualifying:
+        return suggestions
+    if qualifying[0] is not suggestions[0]:
+        logger.info(
+            "Auto-suggest: '%s' (recall %.4f) won on comparison count but keeps "
+            "only %.0f%% of the best available; promoting '%s' (recall %.4f). "
+            "See #2717.",
+            suggestions[0].description, suggestions[0].estimated_recall,
+            100.0 * suggestions[0].estimated_recall / best_recall,
+            qualifying[0].description, qualifying[0].estimated_recall,
+        )
+    return qualifying + demoted
 
 
 def _warn_on_recall(suggestions: list, coverage: float) -> None:

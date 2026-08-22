@@ -2400,6 +2400,7 @@
           "defines": [
             "BlockingSuggestion",
             "_apply_candidate_transforms",
+            "_apply_recall_tradeoff_gate",
             "_build_recall_target",
             "_mean_token_count",
             "_retention",
