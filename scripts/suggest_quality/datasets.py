@@ -125,6 +125,10 @@ def _ncvr_real() -> tuple[pl.DataFrame, set] | None:
     return df, _pairs_to_row_index(df, "ncid", ncid_pairs)
 
 
+# Committed third-party corpora. Distinct from _DATASETS_ROOT on purpose: that
+# tree is gitignored ("downloaded at runtime -- not committed"), this one is in
+# git so a gated dataset is guaranteed loadable. See vendored/*/PROVENANCE.md
+# for source + attribution (a licence condition, not a courtesy).
 _VENDORED = Path(__file__).resolve().parent / "vendored"
 
 
@@ -156,14 +160,35 @@ def _historical_50k() -> tuple[pl.DataFrame, set] | None:
     return match_df, gt
 
 
+def _dblp_acm_dir() -> Path | None:
+    """Locate the DBLP-ACM corpus: vendored copy first, runtime download second.
+
+    The vendored copy (#2635) is committed so the gate can actually RUN this
+    dataset -- a fetched-at-runtime dataset is absent whenever upstream is
+    unreachable, and blessing one the gate cannot guarantee it can load turns a
+    legitimate skip into a permanent MISSING failure (#2566).
+
+    The vendored copy wins; the `_DATASETS_ROOT` fallback is kept so an existing
+    runtime download keeps working (and so the loader still degrades to
+    skip-when-absent if the vendored copy is ever removed).
+    """
+    for d in (_VENDORED / "DBLP-ACM", _DATASETS_ROOT / "DBLP-ACM"):
+        if all(
+            (d / f).exists()
+            for f in ("DBLP2.csv", "ACM.csv", "DBLP-ACM_perfectMapping.csv")
+        ):
+            return d
+    return None
+
+
 def _dblp_acm() -> tuple[pl.DataFrame, set] | None:
     """DBLP-ACM bibliographic record-linkage. Concatenate the two tables, build
     row-index GT from the perfect mapping. Returns None when the data is absent."""
-    d = _DATASETS_ROOT / "DBLP-ACM"
+    d = _dblp_acm_dir()
+    if d is None:
+        return None
     dblp_p, acm_p = d / "DBLP2.csv", d / "ACM.csv"
     map_p = d / "DBLP-ACM_perfectMapping.csv"
-    if not (dblp_p.exists() and acm_p.exists() and map_p.exists()):
-        return None
     try:
         dblp = pl.read_csv(dblp_p, encoding="utf8-lossy", ignore_errors=True)
         acm = pl.read_csv(acm_p, encoding="utf8-lossy", ignore_errors=True)
