@@ -18,7 +18,14 @@ classifiers = [
 ]
 dependencies = [
     "polars>=1.0",
-    "pydantic>=2.7",
+    # Capped deliberately, unlike the other 186 uncapped requirements. The
+    # criterion (scripts/audit_dep_ceilings.py) is whether we reach into a
+    # dependency's OBJECT MODEL rather than call its documented API: 94
+    # BaseModel subclasses across the suite, plus `model_fields`,
+    # `PrivateAttr` and `model_config` reads. That is the same shape as the
+    # mcp 2.0 break (#2715), at far larger scale, and v1->v2 is the
+    # precedent for how much a pydantic major moves.
+    "pydantic>=2.7,<3",
     "typer>=0.12",
     "rich>=13.0",
     "pyarrow>=15",
