@@ -22,35 +22,46 @@ if str(_SCRIPTS) not in sys.path:
 run_benchmarks = pytest.importorskip("run_benchmarks")
 
 
-def test_amazon_google_is_floored_at_its_observed_value_not_below():
-    """The floor stops Amazon-Google getting WORSE; it does not bless 0.0697.
+def test_amazon_google_at_its_quarantine_baseline_is_reported_not_failed():
+    """Amazon-Google is quarantined (#2717), so its breaches report, not fail.
 
-    Being explicit about this because the floor is set at the observed value, so
-    the run that motivated #2470 sits exactly ON the boundary and passes. That is
-    deliberate -- the gate's job is catching regressions, not failing every run
-    until product matching improves -- but it means the guarantee here is
-    narrower than "bad runs fail", and the test should say so.
+    This test used to assert the 0.0697 run "sits on the floor and is not a
+    breach". That is no longer the contract, and the change is deliberate:
+    0.0697 was the #2470 run, and the CURRENT observed value is 0.1014. Feeding
+    0.0697 today is a real DEGRADATION and the ratchet fails it -- which is the
+    behaviour the original test wanted ("a WORSE run must breach"), now enforced
+    against a live baseline instead of a static floor.
     """
-    observed = run_benchmarks._check_quality_floors(
-        [{"name": "Amazon-Google", "f1": 0.0697, "precision": 0.2077, "recall": 0.0419}]
+    base = run_benchmarks._QUARANTINE["Amazon-Google"]["f1_at_quarantine"]
+    failing, quarantined = run_benchmarks._check_quality_floors(
+        [{"name": "Amazon-Google", "f1": base, "precision": 0.2077, "recall": 0.0419}]
     )
-    assert observed == [], "the observed run sits on the floor and is not a breach"
+    assert failing == [], f"at its own baseline it must not fail: {failing}"
 
     worse = run_benchmarks._check_quality_floors(
         [{"name": "Amazon-Google", "f1": 0.04, "precision": 0.2, "recall": 0.03}]
-    )
-    assert worse, "a WORSE Amazon-Google run must breach the floor"
-    assert "Amazon-Google" in worse[0]
+    )[0]
+    assert worse, "a WORSE Amazon-Google run must still fail"
+    assert any("Amazon-Google" in w for w in worse), worse
 
 
 def test_a_healthy_run_does_not_breach():
-    breaches = run_benchmarks._check_quality_floors(
+    """Abt-Buy sits at its quarantine baseline here, not at 0.5037.
+
+    0.5037 is the DISPUTED, unreproduced number (see the `Abt-Buy` note in
+    `_F1_FLOORS`); every reproduction gives 0.1723. Feeding it now trips the
+    IMPROVED ratchet, which is correct -- a jump that size means someone fixed
+    it and the quarantine should be lifted. Using it as "a healthy run" was
+    baking an unreproducible measurement into a test.
+    """
+    base = run_benchmarks._QUARANTINE["Abt-Buy"]["f1_at_quarantine"]
+    failing, _ = run_benchmarks._check_quality_floors(
         [
             {"name": "Febrl3", "f1": 0.9912, "precision": 0.99, "recall": 0.99},
-            {"name": "Abt-Buy", "f1": 0.5037, "precision": 0.82, "recall": 0.36},
+            {"name": "Abt-Buy", "f1": base, "precision": 0.11, "recall": 0.45},
         ]
     )
-    assert breaches == [], breaches
+    assert failing == [], failing
 
 
 def test_red_controller_health_fails_regardless_of_f1():
@@ -58,7 +69,7 @@ def test_red_controller_health_fails_regardless_of_f1():
     trustworthy even when they clear the floor. Elsewhere RED is a reasonable
     degradation; in a lane whose only job is measuring quality it is a FALSE
     RESULT."""
-    breaches = run_benchmarks._check_quality_floors(
+    breaches, _ = run_benchmarks._check_quality_floors(
         [
             {
                 "name": "Febrl3",

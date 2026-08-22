@@ -574,6 +574,48 @@ _F1_FLOORS: dict[str, float | None] = {
 }
 
 
+# Datasets with a KNOWN, TRACKED quality bug. A breach here is reported loudly
+# but does not fail the lane, because failing on a known-open bug makes the lane
+# permanently red -- and a permanently red lane cannot signal a NEW regression.
+# That is what happened with #2457: `main-health` opened a tracker that could
+# never self-close, so a third dataset regressing would have looked identical to
+# the standing failure.
+#
+# This is NOT the same as lowering a floor. The floor stays where it is, the
+# breach is still printed, and the quarantine ratchets in BOTH directions:
+#
+#   * worse than `f1_at_quarantine` by more than `tolerance` -> FAILS. The bug is
+#     tracked, not licensed to deepen.
+#   * better than `f1_at_quarantine` + `tolerance`           -> FAILS. Someone
+#     fixed it and the quarantine is now hiding good news; lift it and set a real
+#     floor in the same change.
+#
+# Every entry needs an OPEN issue. An entry whose issue is closed is a lie about
+# something being tracked, so `_quarantine_breaches` says so rather than
+# silently honouring it.
+_QUARANTINE: dict[str, dict[str, Any]] = {
+    "Abt-Buy": {
+        "issue": 2717,
+        "f1_at_quarantine": 0.1723,
+        "tolerance": 0.03,
+        "why": (
+            "product-text matching collapses; also commits a RED config "
+            "(budget_iterations). The 0.45 floor is itself DISPUTED -- see the "
+            "_F1_FLOORS note; it derives from an UNREPRODUCED 0.5037."
+        ),
+    },
+    "Amazon-Google": {
+        "issue": 2717,
+        "f1_at_quarantine": 0.1014,
+        "tolerance": 0.03,
+        "why": (
+            "clears its own 0.05 floor but commits a RED config "
+            "(budget_time), so the numbers are not trustworthy either way."
+        ),
+    },
+}
+
+
 def _llm_label(meta: dict[str, Any]) -> str:
     """How to describe a run's LLM exposure, honestly, from its metadata."""
     if meta.get("with_llm"):
@@ -642,35 +684,94 @@ def _neutralize_ambient_llm_keys(with_llm: bool) -> bool:
     return bool(present)
 
 
-def _check_quality_floors(results: list[dict[str, Any]]) -> list[str]:
-    """Return a list of human-readable breaches. Empty means the run is sound.
+def _quarantine_drift(q: dict[str, Any] | None, r: dict[str, Any]) -> str | None:
+    """Why this quarantine no longer describes this run, or None if it still does.
+
+    Quarantine is a statement that a bug is known AND unchanged. The moment the
+    number moves, that statement is false in one of two ways, and both matter:
+
+      * it got WORSE -- the bug is deepening while nothing fails. That is how a
+        quarantine turns into a place regressions hide.
+      * it got BETTER -- someone fixed it, and a silent quarantine now suppresses
+        the evidence. The lane should demand the entry be lifted and a real floor
+        set, in the same change that earned it.
+
+    A run that produced no usable f1 (crash, skip) is NOT drift: there is no
+    number to compare, and inventing one would fabricate a verdict.
+    """
+    if not q:
+        return None
+    f1 = r.get("f1")
+    if not isinstance(f1, (int, float)):
+        return None
+    base = q["f1_at_quarantine"]
+    tol = q.get("tolerance", 0.03)
+    name = r.get("name", "?")
+    if f1 < base - tol:
+        return (
+            f"{name}: f1={f1:.4f} has DEGRADED past its quarantine baseline "
+            f"{base:.4f} (tolerance {tol:.2f}, see #{q['issue']}). A quarantine "
+            "tracks a bug; it does not license it to get worse."
+        )
+    if f1 > base + tol:
+        return (
+            f"{name}: f1={f1:.4f} has IMPROVED past its quarantine baseline "
+            f"{base:.4f} (tolerance {tol:.2f}, see #{q['issue']}). Lift the "
+            "_QUARANTINE entry and set a real floor in the same change -- "
+            "leaving it quarantined hides the fix."
+        )
+    return None
+
+
+def _check_quality_floors(
+    results: list[dict[str, Any]],
+) -> tuple[list[str], list[str]]:
+    """Return (failing, quarantined) human-readable breaches.
+
+    `failing` empty means the run is sound. `quarantined` is never empty
+    silently -- its contents are printed too, they just do not fail the lane.
 
     Two independent failure modes, because they fail differently:
       * a metric below its floor -- the numbers are bad;
       * a RED controller health -- the numbers are MEANINGLESS, whatever they
         say, because auto-config never converged on a usable config.
+
+    A dataset in `_QUARANTINE` routes its breaches to the second list, but only
+    while it stays where it was quarantined: drifting outside the tolerance in
+    EITHER direction routes them back to `failing` (see `_QUARANTINE`).
     """
-    breaches: list[str] = []
+    failing: list[str] = []
+    quarantined: list[str] = []
     for r in results:
         name = r.get("name", "?")
+        q = _QUARANTINE.get(name)
+        drift = _quarantine_drift(q, r) if q else None
+        # A drifted quarantine is no longer describing this run, so its
+        # breaches go back to failing -- and the drift itself is reported.
+        if drift:
+            failing.append(drift)
+            q = None
+        sink = quarantined if q else failing
         floor = _F1_FLOORS.get(name)
         f1 = r.get("f1")
         if floor is not None and isinstance(f1, (int, float)) and f1 < floor:
-            breaches.append(
+            sink.append(
                 f"{name}: f1={f1:.4f} is below the floor {floor:.4f} "
                 f"(precision={r.get('precision')}, recall={r.get('recall')})"
+                + (f"  [QUARANTINED -- see #{q['issue']}]" if q else "")
             )
         # A RED config means the controller gave up and committed a best-effort
         # guess. Elsewhere that is a reasonable degradation; in a lane whose only
         # job is measuring quality it is a FALSE RESULT, so it fails regardless
         # of the F1 it happens to produce.
         if str(r.get("health", "")).upper() == "RED":
-            breaches.append(
+            sink.append(
                 f"{name}: controller health is RED "
                 f"(stop_reason={r.get('stop_reason')}) -- the metrics are not "
                 "trustworthy even if they clear the floor"
+                + (f"  [QUARANTINED -- see #{q['issue']}]" if q else "")
             )
-    return breaches
+    return failing, quarantined
 
 
 def _emit_markdown_summary(results: list[dict[str, Any] | None], summary_path: Path | None) -> None:
@@ -906,7 +1007,7 @@ def main() -> int:
     # #2470: decide BEFORE publishing. The committed report describes itself as
     # "the current truth" and a --check gate forces PRs to match it, so putting a
     # known-bad table there is worse than leaving a stale one.
-    breaches = _check_quality_floors(results)
+    breaches, quarantined = _check_quality_floors(results)
 
     if args.output:
         args.output.write_text(json.dumps(payload, indent=2))
@@ -926,6 +1027,19 @@ def main() -> int:
 
     _emit_markdown_summary(results, args.summary_md)
 
+    # Printed whether or not anything failed: a quarantined breach that only
+    # showed up on red runs would be invisible exactly when the lane is green,
+    # which is when someone might act on it.
+    if quarantined:
+        _info("")
+        _info("KNOWN-BAD, QUARANTINED (reported, not failing):")
+        for b in quarantined:
+            _info(f"  - {b}")
+        _info(
+            "  These do not fail the lane so that a NEW regression still can. "
+            "They are not fixed and not forgiven -- see the issue on each."
+        )
+
     if breaches:
         _info("")
         _info("QUALITY FLOOR BREACHES (#2470):")
@@ -936,7 +1050,9 @@ def main() -> int:
             _info(
                 "Failing the lane. If a floor is genuinely wrong, change it in "
                 "_F1_FLOORS as a reviewable diff -- do NOT pass "
-                "--no-enforce-floors to make a red run look green."
+                "--no-enforce-floors to make a red run look green. If a dataset "
+                "is a KNOWN open bug, quarantine it in _QUARANTINE with its "
+                "issue number rather than weakening the floor."
             )
             return 1
         _info("(--no-enforce-floors: reporting only, not failing)")

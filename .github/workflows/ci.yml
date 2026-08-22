@@ -1170,6 +1170,7 @@ jobs:
         run: |
           uv run --with polars --with pyarrow \
             pytest scripts/test_run_benchmarks_download.py \
+                   scripts/test_benchmark_quarantine.py \
                    scripts/dqbench_adapters/test_leipzig_eval.py -q
       # The pre-push hook is developer-facing, so nothing else runs it. It
       # shipped gating tag pushes -- diffing origin/main..<older tag sha>

@@ -112,9 +112,23 @@ def test_controller_health_unknown_not_na_when_absent():
 
 
 def test_red_health_is_a_breach_even_above_the_floor():
-    """The check the "n/a" hardcode disabled."""
-    breaches = rb._check_quality_floors([
-        {"name": "Abt-Buy", "f1": 0.99, "health": "RED",
+    """The check the "n/a" hardcode disabled.
+
+    Split in two since Abt-Buy became quarantined (#2717): a quarantined
+    dataset's RED is still DETECTED, it just reports instead of failing. The
+    guarantee the "n/a" hardcode broke was detection, so that is asserted on
+    Abt-Buy directly -- and the failing half is asserted on a dataset that is
+    not quarantined, so neither half can pass vacuously.
+    """
+    base = rb._QUARANTINE["Abt-Buy"]["f1_at_quarantine"]
+    failing, quarantined = rb._check_quality_floors([
+        {"name": "Abt-Buy", "f1": base, "health": "RED",
          "stop_reason": "BUDGET_ITERATIONS"},
     ])
-    assert any("RED" in b for b in breaches)
+    assert any("RED" in b for b in quarantined), (failing, quarantined)
+
+    failing, _ = rb._check_quality_floors([
+        {"name": "Febrl3", "f1": 0.99, "health": "RED",
+         "stop_reason": "BUDGET_ITERATIONS"},
+    ])
+    assert any("RED" in b for b in failing), failing
