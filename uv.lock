@@ -964,7 +964,7 @@ requires-dist = [
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.28.1,<2" },
     { name = "polars", specifier = ">=1.0" },
     { name = "pyarrow", specifier = ">=15" },
-    { name = "pydantic", specifier = ">=2.7" },
+    { name = "pydantic", specifier = ">=2.7,<3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
     { name = "rich", specifier = ">=13.0" },
@@ -1049,7 +1049,7 @@ requires-dist = [
     { name = "pyarrow", specifier = ">=14" },
     { name = "pyarrow", marker = "extra == 'native'", specifier = ">=14" },
     { name = "pyarrow", marker = "extra == 'parquet'", specifier = ">=14" },
-    { name = "pydantic", specifier = ">=2.7" },
+    { name = "pydantic", specifier = ">=2.7,<3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
     { name = "pyyaml", specifier = ">=6.0" },
@@ -1178,7 +1178,7 @@ requires-dist = [
     { name = "polars", marker = "extra == 'polars'", specifier = ">=1.0" },
     { name = "pyarrow", marker = "extra == 'native'", specifier = ">=10" },
     { name = "pyarrow", marker = "extra == 'parquet'", specifier = ">=10" },
-    { name = "pydantic", specifier = ">=2.7" },
+    { name = "pydantic", specifier = ">=2.7,<3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
     { name = "python-multipart", specifier = ">=0.0.20" },
@@ -1218,7 +1218,7 @@ wheels = [
 
 [[package]]
 name = "goldenmatch"
-version = "3.14.0"
+version = "3.15.0"
 source = { editable = "packages/python/goldenmatch" }
 dependencies = [
     { name = "duckdb" },
@@ -1419,7 +1419,7 @@ requires-dist = [
     { name = "psycopg-pool", marker = "extra == 'postgres'", specifier = ">=3.2" },
     { name = "pyarrow", specifier = ">=10" },
     { name = "pyarrow", marker = "extra == 'bench'", specifier = ">=15" },
-    { name = "pydantic", specifier = ">=2.7" },
+    { name = "pydantic", specifier = ">=2.7,<3" },
     { name = "pylance", marker = "extra == 'lance'", specifier = ">=0.20" },
     { name = "pymupdf", marker = "extra == 'documents'", specifier = ">=1.24" },
     { name = "pymysql", marker = "extra == 'mysql'", specifier = ">=1.1" },
@@ -1596,7 +1596,7 @@ requires-dist = [
     { name = "infermap", editable = "packages/python/infermap" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.28.1,<2" },
     { name = "polars", specifier = ">=1.0" },
-    { name = "pydantic", specifier = ">=2.7" },
+    { name = "pydantic", specifier = ">=2.7,<3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-aiohttp", marker = "extra == 'dev'", specifier = ">=1.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
