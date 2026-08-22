@@ -125,6 +125,22 @@ jobs:
       - name: Fetch skip-when-absent datasets (best-effort)
         run: uv run python -m scripts.suggest_quality.fetch_datasets
 
+      # These guard the dataset REGISTRY -- most importantly that the vendored
+      # DBLP-ACM corpus is present, loads, and matches its recorded checksums
+      # (#2635). They live here, not in ci.yml's `scripts_lint`, because that
+      # job syncs with --no-install-workspace and the registry transitively
+      # needs goldenmatch: datasets.py -> autoconfig_quality/anchors.py:21 ->
+      # repro_issue_715 -> goldenmatch.core.autoconfig. This job already syncs
+      # the workspace and is already push-gated on `scripts/suggest_quality/**`,
+      # so it is where they can actually run.
+      # PYTHONPATH: the repo root is not on sys.path under a bare `uv run
+      # pytest` (pytest prepends `scripts/`, which has no __init__.py), and the
+      # tests import via the `scripts.suggest_quality...` prefix.
+      - name: Pytest (suggest_quality dataset guards)
+        env:
+          PYTHONPATH: .
+        run: uv run pytest scripts/suggest_quality/tests/test_datasets.py -q
+
       - name: Run suggest_quality ${{ inputs.mode || 'gate' }}
         env:
           GOLDENMATCH_SUGGEST_FULL_DIST: ${{ (startsWith(inputs.mode, 'gym') || inputs.mode == 'bakeoff') && '1' || '0' }}
