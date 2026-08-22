@@ -519,12 +519,25 @@ def _target_pairs_from_matchkey(sample_frame: Any, matchkey: Any) -> set[tuple[i
     Row ids are positional into ``sample_frame`` so callers can index parallel
     per-row lists directly.
     """
+    from goldenmatch.core.frame import to_frame
     from goldenmatch.core.scorer import find_fuzzy_matches
 
-    height = sample_frame.height
-    block = sample_frame.native.with_columns(
-        pl.Series("__row_id__", list(range(height)), dtype=pl.Int64)
-    )
+    # Row ids through the seam, not `native.with_columns` (#2717). That is a
+    # POLARS call, and on the arrow-native lane `native` is a `pa.Table`, which
+    # raises `AttributeError: 'pyarrow.lib.Table' object has no attribute
+    # 'with_columns'`. `_build_recall_target` catches that and silently drops to
+    # `_target_pairs_from_similarity` -- the proxy its own docstring calls WEAK
+    # (on Amazon-Google: 2,355 sample pairs, 35 true, 1.5% precision, so a
+    # candidate is judged mostly on how many NON-matches it co-blocks).
+    #
+    # So the good denominator was unreachable on the default lane, and every
+    # recall estimate there came from the weak one. Nothing failed loudly: the
+    # warning names a matchkey, not a lane, and the analyzer carried on.
+    frame = to_frame(sample_frame.native).ensure_row_ids("__row_id__")
+    # find_fuzzy_matches is polars-typed; hand it a polars frame on either lane.
+    block = frame.native
+    if not isinstance(block, pl.DataFrame):
+        block = pl.from_arrow(block)
     emitted = find_fuzzy_matches(block, matchkey)
     return {(min(a, b), max(a, b)) for a, b, _ in emitted}
 
@@ -813,11 +826,59 @@ def analyze_blocking(
     # putting everything in one block scores badly on comparison count), so
     # ranking is not a race to maximise recall alone.
     suggestions.sort(key=lambda s: (s.score * s.estimated_recall, s.score), reverse=True)
+    suggestions = _apply_recall_tradeoff_gate(suggestions)
 
     if suggestions:
         _warn_on_recall(suggestions, scored[0][1].get("coverage", 0.0))
 
     return suggestions
+
+
+def _apply_recall_tradeoff_gate(suggestions: list) -> list:
+    """Refuse a plan retaining < `_RECALL_TRADEOFF_RATIO` of the best available.
+
+    `score * estimated_recall` lets a cheap plan outrank a far better one,
+    because `score` carries comparison count and a small block set scores well.
+    Measured on DBLP-ACM: `title[:5]+authors[:5]` (1,781 comparisons) outranks
+    `title[:5]` (39,648) while retaining 0.4164 of true pairs against 0.9820.
+
+    **This gate is only sound because the matchkey denominator is reachable.**
+    Against the character-similarity proxy the estimator is ANTI-correlated
+    with truth -- it rated `venue[:3]` 0.2032 and `title[:5]` 0.0407 while the
+    real retentions are 0.0594 and 0.9820 -- and this gate, applied over those
+    numbers, promotes `venue[:3]` and takes DBLP-ACM from 98.2% recall to 5.9%
+    at 61x the comparisons. That is not hypothetical: it was implemented,
+    measured against ground truth, and reverted. Do not enable this without the
+    matchkey target (#2717).
+
+    With that denominator the estimate tracks truth closely enough to rank on
+    (est 0.9565 vs true 0.9820 for `title[:5]`) and is stable across sample
+    sizes.
+
+    Conservative by construction: ordering WITHIN the qualifying set is
+    untouched, so cost still decides among plans that clear the bar; and if
+    nothing clears it, the list is returned unchanged rather than emptied.
+    """
+    if not suggestions:
+        return suggestions
+    best_recall = max(s.estimated_recall for s in suggestions)
+    if best_recall <= 0.0:
+        return suggestions
+    floor = best_recall * _RECALL_TRADEOFF_RATIO
+    qualifying = [s for s in suggestions if s.estimated_recall >= floor]
+    if not qualifying or qualifying[0] is suggestions[0]:
+        return suggestions if not qualifying else qualifying + [
+            s for s in suggestions if s.estimated_recall < floor
+        ]
+    logger.info(
+        "Auto-suggest: '%s' (recall %.4f) won on comparison count but retains "
+        "only %.0f%% of the best available; promoting '%s' (recall %.4f). "
+        "See #2717.",
+        suggestions[0].description, suggestions[0].estimated_recall,
+        100.0 * suggestions[0].estimated_recall / best_recall,
+        qualifying[0].description, qualifying[0].estimated_recall,
+    )
+    return qualifying + [s for s in suggestions if s.estimated_recall < floor]
 
 
 def _warn_on_recall(suggestions: list, coverage: float) -> None:
