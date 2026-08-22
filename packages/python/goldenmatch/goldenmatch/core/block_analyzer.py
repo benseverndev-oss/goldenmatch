@@ -520,26 +520,46 @@ def _target_pairs_from_matchkey(sample_frame: Any, matchkey: Any) -> set[tuple[i
     per-row lists directly.
     """
     from goldenmatch.core.frame import to_frame
-    from goldenmatch.core.scorer import find_fuzzy_matches
+    from goldenmatch.core.scorer import score_pair
 
-    # Row ids through the seam, not `native.with_columns` (#2717). That is a
-    # POLARS call, and on the arrow-native lane `native` is a `pa.Table`, which
-    # raises `AttributeError: 'pyarrow.lib.Table' object has no attribute
-    # 'with_columns'`. `_build_recall_target` catches that and silently drops to
+    # POLARS-FREE, deliberately. The previous implementation built row ids with
+    # `sample_frame.native.with_columns(pl.Series(...))` and handed the frame to
+    # `find_fuzzy_matches`, which is polars-typed (`block_df: pl.DataFrame`).
+    # On the arrow-native lane `native` is a `pa.Table`, so that raised, and
+    # `_build_recall_target` silently fell back to
     # `_target_pairs_from_similarity` -- the proxy its own docstring calls WEAK
-    # (on Amazon-Google: 2,355 sample pairs, 35 true, 1.5% precision, so a
-    # candidate is judged mostly on how many NON-matches it co-blocks).
+    # (Amazon-Google: 2,355 sample pairs, 35 true, 1.5% precision). Every recall
+    # estimate on the default lane came from it, and the estimates it produces
+    # are ANTI-correlated with true retention: on DBLP-ACM it rates `venue[:3]`
+    # (5.9% of true pairs) above `title[:5]` (98.2%).
     #
-    # So the good denominator was unreachable on the default lane, and every
-    # recall estimate there came from the weak one. Nothing failed loudly: the
-    # warning names a matchkey, not a lane, and the analyzer carried on.
-    frame = to_frame(sample_frame.native).ensure_row_ids("__row_id__")
-    # find_fuzzy_matches is polars-typed; hand it a polars frame on either lane.
-    block = frame.native
-    if not isinstance(block, pl.DataFrame):
-        block = pl.from_arrow(block)
-    emitted = find_fuzzy_matches(block, matchkey)
-    return {(min(a, b), max(a, b)) for a, b, _ in emitted}
+    # Feeding polars back in to reach the polars-typed scorer would work and is
+    # the wrong direction -- polars is evicted. `score_pair` is frame-agnostic
+    # (dict, dict, fields), so the target is built through the seam with no
+    # polars at all. It is the SHIPPED per-pair scorer, so composite scorers
+    # (`ensemble`) behave exactly as they do in the pipeline rather than being
+    # reimplemented here.
+    #
+    # Cost: ~13s on a 1000-row sample, once per `analyze_blocking` (the target
+    # is hoisted out of the per-candidate loop, #2513). The similarity fallback
+    # it replaces measured ~19.6s on the same sample, so this is not a new
+    # budget -- it is a cheaper one that answers the right question.
+    frame = to_frame(sample_frame.native)
+    fields = [f for f in (matchkey.fields or []) if f.field in frame.columns]
+    if not fields:
+        return set()
+    cols = {f.field: frame.column(f.field).cast_str().fill_null("").to_list()
+            for f in fields}
+    height = frame.height
+    rows = [{f.field: cols[f.field][i] for f in fields} for i in range(height)]
+    threshold = getattr(matchkey, "threshold", None) or 0.0
+    out: set[tuple[int, int]] = set()
+    for i in range(height):
+        ri = rows[i]
+        for j in range(i + 1, height):
+            if score_pair(ri, rows[j], fields) >= threshold:
+                out.add((i, j))
+    return out
 
 
 def _target_pairs_from_similarity(
