@@ -18,6 +18,7 @@ Edge cases:
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable, Sequence
 
 
 def rank_correlation(suggested_order_lifts: list[float]) -> float:
@@ -101,3 +102,59 @@ def recovery_pct(f1_degraded: float, f1_recovered: float, f1_ceiling: float) -> 
     if denom < DAMAGE_EPS:
         return float("nan")
     return (f1_recovered - f1_degraded) / denom
+
+
+def candidate_metrics(
+    block_members: Iterable[Sequence[int]],
+    gt_pairs: set[tuple[int, int]],
+) -> dict:
+    """Blocking-stage metrics: the ceiling the candidate set imposes, and its cost.
+
+    Every other metric in this module is downstream of blocking. These two are
+    the blocking stage itself -- ``candidate_recall`` is the hard ceiling no
+    scorer can exceed, because a pair blocking never emitted cannot be scored.
+
+    ``candidate_recall``
+        Fraction of ground-truth pairs that share at least one block.
+        ``nan`` when ``gt_pairs`` is empty (the blocking-shape anchors carry no
+        truth), mirroring how ``baseline_f1`` reports "not applicable".
+
+    ``candidate_pairs``
+        Within-block COMPARISONS, ``sum(n*(n-1)/2)`` over block sizes -- the
+        same identity ``block_analyzer.score_candidate`` reports as
+        ``total_comparisons``. A pair co-blocked by two passes counts twice,
+        deliberately: this is the cost signal, and the scorer really does pay
+        for it twice.
+
+    The two must be read together. Recall alone is trivially gamed -- one block
+    holding every record scores 1.0 -- which is not hypothetical: it is the
+    shape the parked recall floor produced, at 22.5x the comparisons for no
+    measured gain. Recall is the ceiling, pairs is what the ceiling costs.
+
+    Cost is O(sum of block SIZES) to index plus O(|gt_pairs|) to test -- never
+    O(candidate pairs). Enumerating the candidate set would be quadratic in
+    block size and is unnecessary: membership answers the recall question, and
+    the closed form answers the cost question.
+    """
+    row_blocks: dict[int, set[int]] = {}
+    comparisons = 0
+    for bid, members in enumerate(block_members):
+        n = 0
+        for rid in members:
+            row_blocks.setdefault(rid, set()).add(bid)
+            n += 1
+        comparisons += n * (n - 1) // 2
+
+    if not gt_pairs:
+        return {"candidate_recall": float("nan"), "candidate_pairs": comparisons}
+
+    hits = 0
+    for a, b in gt_pairs:
+        ba = row_blocks.get(a)
+        if ba and not ba.isdisjoint(row_blocks.get(b) or ()):
+            hits += 1
+
+    return {
+        "candidate_recall": hits / len(gt_pairs),
+        "candidate_pairs": comparisons,
+    }
