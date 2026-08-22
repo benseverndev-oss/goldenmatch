@@ -1180,6 +1180,43 @@ jobs:
       - name: Shell (pre-push hook ref parsing)
         run: sh scripts/test_pre_push_docs_check.sh
 
+  # Resolve dependencies the way USERS do -- `pip install`, no lockfile, no
+  # constraints -- and smoke the entry points.
+  #
+  # Every other Python lane installs via `uv sync`, which resolves through
+  # uv.lock. That made CI structurally blind to mcp 2.0.0 (#2715): the lock
+  # pinned 1.28.1, `Dockerfile.mcp` resolved 2.0.0, and the difference surfaced
+  # as a crashed production deploy rather than a red check. A lockfile protects
+  # CI from exactly the drift that reaches production.
+  #
+  # Deliberately NOT solved by capping every dependency. 187 of 195 requirements
+  # are uncapped and should stay so -- a library that pins `<N` on everything
+  # forces resolution conflicts on its consumers. This lane catches a breaking
+  # major in ANY of them without capping any (see scripts/audit_dep_ceilings.py).
+  #
+  # Scheduled as well as on dependency changes: the input that breaks this is an
+  # upstream RELEASE, which no push of ours corresponds to.
+  unlocked_resolution:
+    needs: changes
+    if: needs.changes.outputs.python_goldenmatch == 'true' || needs.changes.outputs.force_all == 'true' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      # Plain pip, no uv, no lock -- the point is to reproduce a user's resolve.
+      - name: Install goldenmatch[mcp] with a fresh resolution
+        run: pip install './packages/python/goldenmatch[mcp]'
+      - name: Smoke the entry points an upstream major would break
+        run: python scripts/smoke_unlocked_install.py
+      # Reported, never gating: the ceiling surface is a judgement call, and a
+      # count that fails a build would push people toward capping everything.
+      - name: Report the dependency ceiling surface
+        if: always()
+        run: python scripts/audit_dep_ceilings.py
+
   # Every repo path a CLAUDE.md names must exist. These files are loaded as
   # authoritative agent context, so a dead pointer does not merely fail to help --
   # it sends the reader somewhere empty and they conclude the thing was never
