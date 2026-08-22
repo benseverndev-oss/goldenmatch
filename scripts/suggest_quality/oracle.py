@@ -122,6 +122,40 @@ def _compute_f1(
     return result.f1
 
 
+def _record_candidate_metrics(record: dict, df, config, gt_pairs: set) -> None:
+    """Measure the blocking stage of the committed baseline config, in place.
+
+    Uses the pipeline's OWN ``build_blocks`` rather than deriving block keys
+    here. A private reimplementation would drift from what the pipeline
+    actually does and the metric would then certify a fiction -- the same
+    single-source discipline the er_matcher basis-parity gate exists for.
+
+    Advisory: a failure is recorded on the record and swallowed, because these
+    metrics must not be able to fail an otherwise-good dataset while they are
+    still non-gating. The failure is stored, not dropped, so "could not
+    compute" never masquerades as "not applicable".
+    """
+    from scripts.suggest_quality.metrics import candidate_metrics  # noqa: PLC0415
+
+    try:
+        blocking = getattr(config, "blocking", None)
+        if blocking is None:
+            record["candidate_error"] = "config has no blocking section"
+            return
+        from goldenmatch.core.blocker import build_blocks  # noqa: PLC0415
+
+        members = []
+        for block in build_blocks(df, blocking):
+            frame = block.materialize()
+            if "__row_id__" not in frame.columns:
+                record["candidate_error"] = "block frame lacks __row_id__"
+                return
+            members.append(frame.column("__row_id__").to_list())
+        record.update(candidate_metrics(members, gt_pairs))
+    except Exception as exc:  # noqa: BLE001 - advisory; recorded, never fatal
+        record["candidate_error"] = f"{type(exc).__name__}: {exc}"
+
+
 def evaluate_dataset(
     name: str,
     df: pl.DataFrame,
@@ -168,6 +202,17 @@ def evaluate_dataset(
         "convergence_steps": 0,
         "native_available": False,
         "error": None,
+        # Blocking-stage metrics (advisory for now -- see
+        # docs/superpowers/specs/2026-08-21-candidate-recall-gate-design.md).
+        # Every other metric here is DOWNSTREAM of blocking, so a blocking
+        # regression only ever surfaced as diffuse F1 wobble blamed on the
+        # scorer. candidate_recall is the ceiling; candidate_pairs is its cost.
+        "candidate_recall": float("nan"),
+        "candidate_pairs": 0,
+        # Non-None means the metrics could not be computed. Recorded rather
+        # than left as a silent nan: an un-computed metric that looks like an
+        # inapplicable one is the "check exists and does not fire" class.
+        "candidate_error": None,
     }
 
     # Ensure __row_id__ is present (needed by collision_rates in review_config)
@@ -179,6 +224,7 @@ def evaluate_dataset(
     try:
         # ── Step 1: Baseline ──────────────────────────────────────────────────
         baseline_config = _auto_configure_no_rerank(df)
+        _record_candidate_metrics(record, df, baseline_config, gt_pairs)
         baseline_clusters, baseline_scored_pairs = _run_config(df, baseline_config)
         baseline_f1 = _compute_f1(baseline_clusters, baseline_scored_pairs, gt_pairs)
         record["baseline_f1"] = baseline_f1

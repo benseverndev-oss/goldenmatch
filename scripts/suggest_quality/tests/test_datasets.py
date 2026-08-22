@@ -117,3 +117,40 @@ def test_dblp_acm_carries_year_but_is_not_a_matchkey_column():
 
     df, _ = _dblp_acm()
     assert "year" in df.columns
+
+
+def test_dblp_acm_vendored_checksums_match_provenance():
+    """The corpus on disk is the corpus PROVENANCE.md says it is.
+
+    PROVENANCE.md records a sha256 per file but nothing asserted them, so a
+    corrupted, truncated or silently re-fetched corpus would still load and the
+    gate would happily bless numbers measured on different data. Parsing the
+    doc rather than hardcoding the digests here keeps one source of truth: if
+    someone re-fetches upstream and updates the files, this fails until the
+    doc is updated to match (and vice versa).
+    """
+    import hashlib
+    import re
+
+    from scripts.suggest_quality.datasets import _VENDORED
+
+    d = _VENDORED / "DBLP-ACM"
+    prov = (d / "PROVENANCE.md").read_text(encoding="utf-8")
+
+    # rows look like: | `DBLP2.csv` | `<64 hex>` |
+    documented = dict(
+        re.findall(r"\|\s*`([^`]+\.csv)`\s*\|\s*`([0-9a-f]{64})`\s*\|", prov)
+    )
+    assert len(documented) == 3, (
+        f"expected 3 checksum rows in PROVENANCE.md, parsed {len(documented)}: "
+        f"{sorted(documented)}"
+    )
+
+    for fname, expected in sorted(documented.items()):
+        actual = hashlib.sha256((d / fname).read_bytes()).hexdigest()
+        assert actual == expected, (
+            f"{fname} does not match PROVENANCE.md: expected {expected}, got "
+            f"{actual}. Either the vendored file changed (re-fetched or "
+            f"corrupted) or the doc is stale -- reconcile before trusting any "
+            f"number measured on this corpus."
+        )
