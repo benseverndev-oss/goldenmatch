@@ -2615,8 +2615,27 @@ def _build_compound_blocking(
     _high_card_types = ("identifier", "zip", "email", "phone")
 
     def _is_admissible(p: ColumnProfile) -> bool:
+        # numeric/date used to be rejected outright. That excluded exactly the
+        # kind of column that makes the best compound COMPONENT: on the real
+        # DBLP-ACM data `year` profiles as numeric with unique_rate 0.0038 (10
+        # distinct over 4910 rows, zero nulls), and adding it to `__title_key__`
+        # cuts candidate pairs 33,563 -> 5,749 at IDENTICAL recall (0.9717),
+        # lifting the precision ceiling 0.064 -> 0.376 (#2633, measured).
+        #
+        # The blanket veto also contradicted the reasoning below, which admits
+        # `zip` on the opposite principle -- judge a component by whether it
+        # GROUPS records, not by col_type -- and then applies measured guards.
+        # numeric/date now take that same route: they must group
+        # (max_block > 1), not be a surrogate, and clear the grouping ratio,
+        # which still rejects a numeric ID or a continuous price.
         if p.col_type in ("numeric", "date"):
-            return False
+            if not (
+                _max_block_size(p.name) > 1
+                and not _is_perfect_surrogate(p)
+                and _nonnull_ratio(p.name) < _grouping_ratio_max
+            ):
+                return False
+            return _null_rate(p.name) <= _component_null_ceiling
         if _check_source_overlap(df, p.name) <= 0.0:
             return False
         if p.col_type in _high_card_types:
