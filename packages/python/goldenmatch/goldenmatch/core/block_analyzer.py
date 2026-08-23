@@ -138,16 +138,38 @@ def _token_candidates_enabled() -> bool:
     that fails flips from `scoring` to `blocking`, `build_token_blocks` never
     logs, and the committed RED config yields no candidate pairs at all.
 
-    That integration gap is not diagnosed yet, and a plan that finds no pairs
-    is strictly worse than a 7%-recall key, so the default stays off until the
-    benchmark says otherwise. Set GOLDENMATCH_TOKEN_BLOCKING=1 to opt in.
-    Reading the env at call time (not import) keeps it settable per-test.
+    **DIAGNOSED 2026-08-22, and the rationale above does not survive it (#2717).**
+    There was no integration gap. `build_token_blocks` never logged because
+    nothing ever set `strategy="token"`: `auto_suggest` defaults to False so
+    `_run_auto_suggest` returns on its first line, and its token branch sits
+    behind `if not config.blocking.keys`, which auto-config has already
+    populated. The strategy was UNREACHABLE, not broken -- absence of logging
+    was read as evidence of failure when it was evidence of never running.
+
+    Invoked directly on Amazon-Google it works, measured against
+    `Amzon_GoogleProducts_perfectMapping.csv`:
+
+        df<=50 : 2,718 blocks    94,938 candidate pairs   blocking recall 0.953
+        df<=100: 2,754 blocks   163,499 candidate pairs   blocking recall 0.982
+
+    against the committed key's 0.041. So "a plan that finds no pairs" describes
+    a config token blocking never produced, and the F1 0.0000 in that experiment
+    came from whatever config WAS committed.
+
+    Default flipped ON. `defer_free_text_blocking_to_analyzer` (autoconfig.py)
+    only routes FREE-TEXT keys here -- names and addresses sit below the
+    token-count bar and never reach it -- so this changes the plan exactly where
+    a prefix key is documented as near-useless. The env var still forces it
+    either way; read at call time (not import) so it stays settable per-test.
     """
     import os  # noqa: PLC0415
 
-    return os.environ.get("GOLDENMATCH_TOKEN_BLOCKING", "").strip().lower() in {
-        "1", "true", "yes", "on",
-    }
+    raw = os.environ.get("GOLDENMATCH_TOKEN_BLOCKING", "").strip().lower()
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    return True
 
 
 def _mean_token_count(df, column: str, sample: int = 2000) -> float:
