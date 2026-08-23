@@ -3582,6 +3582,51 @@ def _embedder_available(config: GoldenMatchConfig | None = None) -> bool:
     return bool(getattr(getattr(config, "embedding", None), "provider", None))
 
 
+def _best_sketch_column(profiles: list[ColumnProfile]) -> str | None:
+    """The text column a blocking sketch should be built on.
+
+    Chosen by IDENTITY (cardinality), not by LENGTH. The previous rule was
+    ``max(avg_len)`` -- the longest text column -- which is backwards: the
+    longest free-text field is the most verbose and the least identifying,
+    because it shares boilerplate with every other row.
+
+    Measured on Abt-Buy, whose two text columns BOTH profile as
+    ``col_type=description`` so neither is treated as a structured key:
+
+        name         avg_len= 54.3  cardinality=0.994   <- identity lives here
+        description  avg_len=178.5  cardinality=0.771   <- max(avg_len) picked this
+
+    Ground-truth blocking recall through the shipped blocker, on the plan
+    auto-config actually committed versus the alternatives:
+
+        lsh on 'description' (committed)   0.0009
+        lsh on 'name'                      0.1139
+        token on 'name' (max_df 0.02)      0.9198
+
+    Amazon-Google escaped this only because it carries a `manufacturer` column
+    profiling as ``col_type=name`` with cardinality 0.162, which trips
+    ``_is_text_corpus``'s blockable-name test and routes it away from this
+    branch entirely. That is luck, not design.
+
+    Length is kept as the TIE-BREAKER: with nothing to choose on identity, a
+    longer column carries more shingles for a sketch to work with, which is the
+    grain of truth the old rule was reaching for.
+    """
+    if not profiles:
+        return None
+    # NO upper ceiling on cardinality, deliberately. The first version of this
+    # capped it at 0.99 on the reasoning that a per-row-unique column "blocks
+    # nothing, every value is its own block" -- which is true of an EXACT key
+    # and false of a sketch. LSH and token blocking group by shared
+    # shingles/tokens, not by equality, so a near-unique column is the IDEAL
+    # sketch target: Abt-Buy's `name` is cardinality 0.994 and reaches 0.9198
+    # blocking recall under token blocking. The cap excluded exactly the column
+    # this function exists to pick.
+    return max(
+        profiles, key=lambda p: (round(p.cardinality_ratio, 3), p.avg_len)
+    ).name
+
+
 def _auto_build_lsh_config(profiles: list[ColumnProfile]) -> BlockingConfig:
     """Build a MinHash/LSH blocking config over the longest description column.
 
@@ -3591,7 +3636,7 @@ def _auto_build_lsh_config(profiles: list[ColumnProfile]) -> BlockingConfig:
     """
     from goldenmatch.config.schemas import LSHKeyConfig
     descs = [p for p in profiles if p.col_type == "description"]
-    col = max(descs, key=lambda p: p.avg_len).name
+    col = _best_sketch_column(descs)
     return BlockingConfig(strategy="lsh", lsh=LSHKeyConfig(
         column=col, mode="word", k=2, num_perms=128, threshold=0.5, seed=0))
 
@@ -3610,10 +3655,9 @@ def _text_corpus_blocking(
     if _embedder_available(config):
         from goldenmatch.config.schemas import BlockingConfig, SimHashKeyConfig
 
-        col = max(
-            (p for p in profiles if p.col_type == "description"),
-            key=lambda p: p.avg_len,
-        ).name
+        col = _best_sketch_column(
+            [p for p in profiles if p.col_type == "description"]
+        )
         return BlockingConfig(
             strategy="simhash",
             simhash=SimHashKeyConfig(column=col, num_planes=256, num_bands=32, seed=0),
@@ -3680,13 +3724,13 @@ def _throughput_blocking(
         return _text_corpus_blocking(profiles, None, config)
     if _embedder_available(config):
         from goldenmatch.config.schemas import SimHashKeyConfig
-        col = max(text_cols, key=lambda p: p.avg_len).name
+        col = _best_sketch_column(text_cols)
         return BlockingConfig(
             strategy="simhash",
             simhash=SimHashKeyConfig(column=col, num_planes=256, num_bands=32, seed=0),
         )
     from goldenmatch.config.schemas import LSHKeyConfig
-    col = max(text_cols, key=lambda p: p.avg_len).name
+    col = _best_sketch_column(text_cols)
     return BlockingConfig(strategy="lsh", lsh=LSHKeyConfig(
         column=col, mode="word", k=2, num_perms=128, threshold=0.5, seed=0))
 
