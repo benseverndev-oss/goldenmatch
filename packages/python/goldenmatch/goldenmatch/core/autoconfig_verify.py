@@ -970,6 +970,10 @@ def _check_date_scorer(
 # ── Postflight helpers ──────────────────────────────────────────────────
 
 
+#: Float32/float64 slack when asking whether a score sits at or above a cut.
+#: See `postflight`'s truncation guard for the measurement that forced it.
+_SCORE_EPSILON = 1e-6
+
 #: On a distribution truncated at the current cut, a valley above this fraction
 #: of the OBSERVED score range is read as the gap below the terminal near-exact
 #: spike rather than a boundary between populations, and no threshold
@@ -1307,7 +1311,18 @@ def postflight(
     _scores = [s for _a, _b, s in pair_scores]
     _min_score = min(_scores, default=None)
     _max_score = max(_scores, default=None)
-    _truncated_at_cut = _min_score is not None and _min_score >= threshold
+    # Tolerance, not `>=`. Scores arrive through a float32 arrow column while
+    # the threshold is a float64, so the lowest surviving pair lands FRACTIONALLY
+    # BELOW the cut it passed: measured on Amazon-Google, min 0.6499999761581421
+    # against threshold 0.6499999999999999, short by 2.4e-08. A bare `>=` reads
+    # that as "the population extends below the cut" and the whole guard
+    # silently no-ops -- which is exactly what happened, and it published a
+    # wrong F1 before anyone noticed the guard had never fired. 1e-6 is orders
+    # of magnitude above float32 round-trip error near 1.0 (~6e-8) and orders
+    # below any score difference that means anything.
+    _truncated_at_cut = (
+        _min_score is not None and _min_score >= threshold - _SCORE_EPSILON
+    )
     _tail_artifact = False
     if _truncated_at_cut and is_bimodal and valley is not None:
         assert _max_score is not None and _min_score is not None

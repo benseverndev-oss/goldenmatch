@@ -27,7 +27,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   constant, along with what would falsify the bar. The signal is untouched
   wherever pairs genuinely span the cut (a probabilistic matchkey scores down to
   the review threshold), because there the histogram is not truncated at all.
-  End-to-end F1 on zero-config `match_df`, Amazon-Google: **0.0761 -> 0.4636**.
+  End-to-end F1 on zero-config `match_df`, Amazon-Google: **0.0761 -> 0.4636**,
+  measured through `scripts/run_benchmarks.py`.
+
+  The truncation test itself needed a tolerance rather than a bare `>=`. Scores
+  arrive through a float32 arrow column while the threshold is a float64, so the
+  lowest surviving pair lands fractionally BELOW the cut it passed -- measured,
+  0.6499999761581421 against 0.6499999999999999, short by 2.4e-08. Written
+  exactly, the guard read that as "the population extends below the cut" and
+  silently never fired.
 - **Auto-config exclusions were applied to the target frame only (#2717).** In
   match mode the GoldenCheck column-exclusion detectors ran on `df` and dropped
   the excluded columns from it, leaving `reference` untouched. The two frames

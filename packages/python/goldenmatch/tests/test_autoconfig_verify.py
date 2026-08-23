@@ -160,6 +160,36 @@ def test_postflight_refuses_a_valley_in_the_truncated_upper_tail():
     )
 
 
+def test_truncation_is_detected_despite_float32_score_slack():
+    """The guard must not no-op on a 2.4e-08 float32 rounding difference.
+
+    Scores arrive through a float32 arrow column while the threshold is a
+    float64, so the lowest surviving pair can land FRACTIONALLY BELOW the cut it
+    passed. Measured on Amazon-Google: min 0.6499999761581421 against threshold
+    0.6499999999999999, short by 2.4e-08. Written with a bare `>=` the guard
+    read that as "the population extends below the cut" and silently did
+    nothing -- and because a silent no-op looks exactly like a guard that
+    decided not to fire, it published a wrong benchmark F1 before anyone
+    noticed it had never run.
+    """
+    from goldenmatch.core.autoconfig_verify import postflight
+
+    threshold = 0.6499999999999999
+    lowest = 0.6499999761581421  # the real float32 round-trip, not a stand-in
+    assert lowest < threshold, "fixture sanity: this is the slack being handled"
+
+    decaying = [lowest + 0.30 * (i % 60) / 60 for i in range(900)]
+    spike = [0.995] * 300
+    pair_scores = _pairs(decaying + spike)
+
+    report = postflight(pl.DataFrame({"name": [f"x{i}" for i in range(100)]}),
+                        _cfg(threshold), pair_scores=pair_scores)
+    assert not any(adj.field == "threshold" for adj in report.adjustments), (
+        "float32 slack let a truncated distribution through the guard"
+    )
+    assert any("near-exact spike" in a for a in report.advisories)
+
+
 def test_postflight_still_adjusts_on_a_truncated_but_genuinely_two_mode_shape():
     """Truncation alone must not disable the signal.
 

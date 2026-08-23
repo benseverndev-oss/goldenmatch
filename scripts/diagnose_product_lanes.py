@@ -26,6 +26,14 @@ Usage (from the repo root):
 It imports `run_benchmarks._PRODUCT_SPECS` so the file names, column renames and
 ground-truth columns can never drift from what the benchmark measures.
 
+TWO RUNS, on purpose. Capturing the curve means re-running the block scorer at
+threshold 0.0, and the pairs it returns feed the scoring profile the auto-config
+controller reads -- so the patched run can commit a DIFFERENT config from the
+shipped one. The first version of this script reported `ACTUALLY EMITTED` from
+the patched run and published an F1 that the real pipeline never produced. So
+the shipped lane is now run UNPATCHED for the emitted result, and a second,
+patched run supplies the curve only.
+
 LIMITATION, stated because it changes how the numbers read: the capture hooks
 the WEIGHTED block scorer, so `candidate pairs scored` and the P/R/F1 curve
 describe the fuzzy-matchkey path only. Pairs from an EXACT matchkey never pass
@@ -246,9 +254,15 @@ def run_dedupe_lane(a: pl.DataFrame, b: pl.DataFrame, spec: dict) -> None:
         u, v = all_ids[x], all_ids[y]
         return (u, v) if u <= v else (v, u)
 
+    # Shipped run FIRST, unpatched -- this is the only trustworthy source for
+    # what the pipeline actually emits.
+    result = dedupe_df(records)
+    committed = _committed_threshold()
+
+    # Second run, patched, for the curve only. Its committed config may differ.
     batches, handle = _capture_scored_pairs()
     try:
-        result = dedupe_df(records)
+        dedupe_df(records)
     finally:
         _restore(handle)
     captured = _final_batch(batches)
@@ -265,7 +279,7 @@ def run_dedupe_lane(a: pl.DataFrame, b: pl.DataFrame, spec: dict) -> None:
         captured,
         pair_to_ids,
         truth,
-        _committed_threshold(),
+        committed,
         emitted,
     )
 
@@ -306,9 +320,13 @@ def run_linkage_lane(a: pl.DataFrame, b: pl.DataFrame, spec: dict) -> None:
             return None  # same-source pair: not expressible as a linkage pair
         return (src_a + ":" + ids_a[lo], src_b + ":" + ids_b[hi - n_a])
 
+    # Shipped run FIRST, unpatched (see the module docstring).
+    result = match_df(a.select(shared), b.select(shared))
+    committed = _committed_threshold()
+
     batches, handle = _capture_scored_pairs()
     try:
-        result = match_df(a.select(shared), b.select(shared))
+        match_df(a.select(shared), b.select(shared))
     finally:
         _restore(handle)
     captured = _final_batch(batches)
@@ -328,7 +346,7 @@ def run_linkage_lane(a: pl.DataFrame, b: pl.DataFrame, spec: dict) -> None:
         captured,
         pair_to_ids,
         truth,
-        _committed_threshold(),
+        committed,
         emitted,
     )
 
