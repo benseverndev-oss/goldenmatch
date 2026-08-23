@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "golden-suite"
-version = "0.5.1"
+version = "0.5.2"
 description = "One-line, perf-optimized install for the entire Golden Suite — goldenmatch, goldencheck, goldenflow, goldenpipe, GoldenSchema (infermap), goldenanalysis, native acceleration on by default"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
@@ -37,7 +37,7 @@ classifiers = [
 dependencies = [
     # --- suite (floors track the current majors) ---
     "goldenpipe[golden-suite]>=1.5",    # orchestrator + check/flow/match/analysis
-    "goldenmatch[polars]>=3.14",        # entity resolution: dedupe, match, golden records (>=3.14: distributed Fellegi-Sunter 4.13x faster at 250M with zero spill and a byte-identical model, so suite installs get the perf without opting in; >=3.10: MCP surface parity both directions -- +8 MCP tools across 3.9/3.10 (82->90), mcp_tools.ts_only now empty; retains the >=3.7 zero-config FS scale-recall fix + out-of-core streaming FS for the >=40M path; [polars] keeps the wall-optimization paths + the classic lane on for suite installs)
+    "goldenmatch[polars]>=3.16",        # entity resolution: dedupe, match, golden records (>=3.16: zero-config `match_df` committed a RED config on EVERY auto-config iteration whenever the two frames' columns differed -- the ordinary case of linking two sources with slightly different schemas -- because column exclusions were dropped from the target frame only and the polars lane concatenates strictly; also stops postflight silently re-cutting the match threshold from a distribution truncated at that cut; >=3.14: distributed Fellegi-Sunter 4.13x faster at 250M with zero spill and a byte-identical model, so suite installs get the perf without opting in; >=3.10: MCP surface parity both directions -- +8 MCP tools across 3.9/3.10 (82->90), mcp_tools.ts_only now empty; retains the >=3.7 zero-config FS scale-recall fix + out-of-core streaming FS for the >=40M path; [polars] keeps the wall-optimization paths + the classic lane on for suite installs)
     "goldencheck[polars]>=3.5",       # data validation (>=3.0.0 = Arrow-native Polars-free default scan; [polars] kept for the scan_dataframe(pl.DataFrame) overload goldenmatch's quality bridge uses, also pulled transitively by goldenmatch)
     "goldenflow>=2.2.0",                 # transform / standardize / normalize (>=2.1.0 = owned auto-detect profile kernel; native floor >=0.27.0)
     "infermap>=0.7",                  # GoldenSchema: inference-driven schema mapping
