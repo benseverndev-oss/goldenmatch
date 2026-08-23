@@ -31,6 +31,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   `budget_iterations` / `budget_time` to `policy_satisfied` on every row, and
   Amazon-Google's dedupe lane drops 30.2s -> 20.4s.
 
+### Added
+
+- **Cluster-stage actions are reachable from config (`ClusterConfig`), so an
+  auto-config rule can select one (#2717).** `core/transitive_consistency.py`
+  already implemented the action that low cluster transitivity calls for --
+  splitting a cluster held together by a single weak transitive bridge -- but it
+  was reachable ONLY through `GOLDENMATCH_TRANSITIVE_POSTFLIGHT`, an environment
+  variable no rule can set. Every rule in `DEFAULT_RULES` emitted a blocking or
+  matchkey diff, so on a shape whose problem is the clustering the controller
+  went RED on cluster health with nothing to do about it.
+
+  `config.cluster.split_weak_bridges` / `weak_bridge_margin` now drive it, with
+  both env vars demoted to overrides; an explicit config value wins, so a rule
+  that decided NOT to split cannot be overridden by ambient environment.
+  Default off -> no-op -> byte-identical for every existing caller.
+  `rule_low_transitivity` reaches for this action FIRST, alone, and keeps its
+  threshold nudge as the second choice.
+
+  **Measured, and it does not move the product benchmarks:** all four rows are
+  unchanged. Forcing the splitter on is worth +0.0045 F1 on Abt-Buy at the
+  default margin and +0.008 at margin 0.05 (0.1723 -> 0.1805, precision
+  0.1068 -> 0.1136), but the controller does not commit the iteration that
+  enables it, because splitting 13 of 1202 sample clusters barely moves the
+  sampled transitivity estimate and `pick_committed` sees no improvement over
+  v0. The rule can now ASK for the right action; the profile still cannot
+  perceive its benefit. That gap is named on the issue rather than papered over.
+
 - **Postflight silently raised the match threshold using a distribution
   truncated at that threshold (#2717).** The weighted block scorer applies
   `mk.threshold` itself and returns only survivors, so the pair list postflight

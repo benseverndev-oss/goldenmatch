@@ -193,6 +193,7 @@ def test_decision_not_attached_when_no_history_entries():
 # Task 3.2 — five rules
 # ============================================================
 
+from goldenmatch.config.schemas import ClusterConfig
 from goldenmatch.core.autoconfig_rules import (
     DEFAULT_RULES,
     rule_blocking_too_coarse,
@@ -358,9 +359,23 @@ def test_rule_low_reduction_fires_and_adds_multi_pass():
     assert soundex_pass
 
 
+def _config_with_splitting_already_on(threshold: float = 0.8) -> GoldenMatchConfig:
+    """A config whose cluster lever has already been pulled.
+
+    `rule_low_transitivity` offers the cluster-stage action FIRST (#2717) --
+    splitting weak transitive bridges is the only action that can move cluster
+    transitivity, which the matchkey threshold measurably cannot in either
+    direction. The threshold nudge remains as its SECOND choice, and these tests
+    pin that fallback, so they start from a config where splitting is already on.
+    """
+    return _config_with_blocking(threshold=threshold).model_copy(
+        update={"cluster": ClusterConfig(split_weak_bridges=True)}
+    )
+
+
 # Rule 4
 def test_rule_low_transitivity_lowers_threshold():
-    cfg = _config_with_blocking(threshold=0.8)
+    cfg = _config_with_splitting_already_on(threshold=0.8)
     profile = ComplexityProfile(
         data=DataProfile(n_rows=100, n_cols=2),
         blocking=BlockingProfile(reduction_ratio=0.95, n_blocks=10, block_sizes_p99=20),
@@ -437,12 +452,59 @@ def test_rule_low_transitivity_declines_when_its_last_nudge_barely_moved_it():
 
 def test_rule_low_transitivity_keeps_going_when_the_nudge_is_working():
     """The guard must not disable the rule where it earns its place."""
-    cfg = _config_with_blocking(threshold=0.8)
+    cfg = _config_with_splitting_already_on(threshold=0.8)
     history = _history_where_the_rule_already_fired(prev_rate=0.20)
     out = rule_low_transitivity(_transitivity_profile(0.55), cfg, history)
     assert out is not None
     new_cfg, _ = out
     assert new_cfg.matchkeys[0].threshold == pytest.approx(0.75)
+
+
+def test_rule_low_transitivity_reaches_for_the_cluster_lever_first():
+    """The rule now has an action that can actually move its signal (#2717).
+
+    Low transitivity means clusters contain triples whose third edge did not
+    match -- chaining. The matchkey threshold cannot fix that in either
+    direction (measured: lowering AND raising both reduce transitivity, because
+    removing an edge from a still-connected cluster leaves more open triples).
+    Splitting the cluster at its weak bridge can. That action existed in
+    `core/transitive_consistency.py` all along and was reachable only through an
+    environment variable, so no rule could select it.
+    """
+    cfg = _config_with_blocking(threshold=0.8)
+    out = rule_low_transitivity(_transitivity_profile(0.20), cfg, RunHistory())
+    assert out is not None
+    new_cfg, decision = out
+    assert new_cfg.cluster is not None
+    assert new_cfg.cluster.split_weak_bridges is True
+    assert new_cfg.matchkeys[0].threshold == pytest.approx(0.8), (
+        "the cluster action must be tried WITHOUT also moving the threshold; "
+        "two changes at once make the next iteration unattributable"
+    )
+    assert decision.rule_name == "low_transitivity"
+
+
+def test_rule_low_transitivity_falls_back_to_the_threshold_once_splitting_is_on():
+    """Splitting is not a cure-all -- measured at only +0.0045 F1 on Abt-Buy,
+    because it splits SINGLE weak bridges and those clusters chain denser than
+    that. So the threshold nudge is kept as the second choice rather than
+    deleted, and the history guard still stops it repeating uselessly."""
+    cfg = _config_with_splitting_already_on(threshold=0.8)
+    out = rule_low_transitivity(_transitivity_profile(0.20), cfg, RunHistory())
+    assert out is not None
+    new_cfg, _ = out
+    assert new_cfg.matchkeys[0].threshold == pytest.approx(0.75)
+
+
+def test_the_cluster_lever_is_only_offered_once():
+    """Having already turned splitting on, the rule must not re-offer it --
+    that would be a no-op config and the policy would treat it as 'did nothing'."""
+    cfg = _config_with_blocking(threshold=0.8)
+    first = rule_low_transitivity(_transitivity_profile(0.20), cfg, RunHistory())
+    assert first is not None
+    second = rule_low_transitivity(_transitivity_profile(0.20), first[0], RunHistory())
+    assert second is not None
+    assert second[0].matchkeys[0].threshold == pytest.approx(0.75)
 
 
 def test_rule_low_transitivity_ignores_other_rules_history():
@@ -465,7 +527,7 @@ def test_rule_low_transitivity_ignores_other_rules_history():
 
 
 def test_rule_low_transitivity_floors_at_0_5():
-    cfg = _config_with_blocking(threshold=0.5)
+    cfg = _config_with_splitting_already_on(threshold=0.5)
     profile = ComplexityProfile(
         data=DataProfile(n_rows=100, n_cols=2),
         blocking=BlockingProfile(reduction_ratio=0.95, n_blocks=10, block_sizes_p99=20),

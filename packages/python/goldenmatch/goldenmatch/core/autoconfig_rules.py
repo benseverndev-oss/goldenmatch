@@ -484,6 +484,45 @@ def rule_low_transitivity(
     ):
         return None
 
+    # First choice: the CLUSTER-stage action, because it is the only one that
+    # can act on what low transitivity actually describes -- clusters chained
+    # together through triples whose third edge did not match. Splitting at the
+    # weak bridge removes the chain; moving the threshold cannot, in either
+    # direction (see above).
+    #
+    # This action has existed in `core/transitive_consistency.py` since the
+    # TransClean work and was reachable ONLY through
+    # GOLDENMATCH_TRANSITIVE_POSTFLIGHT, so no rule could select it -- the
+    # controller went RED on cluster health with nothing to do about it. It is
+    # config-reachable now (`ClusterConfig`), which is what lets this rule ask
+    # for it.
+    #
+    # Offered ALONE, without also moving the threshold: two changes in one
+    # iteration make the next profile unattributable, and this rule's whole
+    # problem was that it never checked whether its own change helped.
+    #
+    # It is not a cure-all -- measured at +0.0045 F1 on Abt-Buy, because it
+    # splits SINGLE weak bridges and those clusters chain denser than that. So
+    # the threshold nudge below is kept as the second choice rather than
+    # deleted, guarded by the history check above so it cannot repeat uselessly.
+    from goldenmatch.config.schemas import ClusterConfig
+
+    _cluster_cfg = getattr(current, "cluster", None)
+    if _cluster_cfg is None or not getattr(_cluster_cfg, "split_weak_bridges", False):
+        _new_cluster = (
+            ClusterConfig(split_weak_bridges=True)
+            if _cluster_cfg is None
+            else _cluster_cfg.model_copy(update={"split_weak_bridges": True})
+        )
+        return current.model_copy(update={"cluster": _new_cluster}), PolicyDecision(
+            rule_name="low_transitivity",
+            rationale=(
+                f"transitivity={cp.transitivity_rate:.2f} < 0.85; splitting "
+                f"clusters held together by a weak transitive bridge"
+            ),
+            config_diff={"cluster.split_weak_bridges": True},
+        )
+
     mk = _first_weighted_mk(current)
     if mk is None or mk.threshold is None:
         return None

@@ -2015,6 +2015,38 @@ class ChannelStitchConfig(BaseModel):
     )
 
 
+class ClusterConfig(BaseModel):
+    """Cluster-stage actions (#2717).
+
+    Exists so a cluster-level action is reachable from CONFIG, not only from an
+    environment variable. Auto-config could already observe cluster health and
+    go RED on it, but every rule in `autoconfig_rules.DEFAULT_RULES` produced a
+    blocking or matchkey diff -- so on a shape whose problem is the clustering,
+    the controller spent its whole iteration budget nudging a matchkey threshold
+    that measurably cannot move cluster transitivity in either direction.
+
+    The env vars stay as overrides, so every existing caller is unaffected and
+    the default is still OFF -> no-op -> byte-identical.
+    """
+
+    split_weak_bridges: bool = Field(
+        default=False,
+        description=(
+            "Split clusters held together by a single weak transitive bridge "
+            "(a false pair chaining two entities). Default off."
+        ),
+    )
+    weak_bridge_margin: float | None = Field(
+        default=None,
+        ge=0.0,
+        description=(
+            "How far below a cluster's average edge its weakest edge must sit "
+            "to count as a weak bridge. Larger is more conservative (splits "
+            "fewer clusters). None uses the shipped default of 0.15."
+        ),
+    )
+
+
 class SurvivorshipConfig(BaseModel):
     """Golden-record survivorship configuration (#1111, epic #1108).
 
@@ -2351,6 +2383,10 @@ class GoldenMatchConfig(BaseModel):
     blocking: BlockingConfig | None = Field(
         default=None,
         description="Candidate-generation configuration; required when any matchkey is weighted or probabilistic.",
+    )
+    cluster: ClusterConfig | None = Field(
+        default=None,
+        description="Cluster-stage actions (e.g. splitting weak transitive bridges).",
     )
     golden_rules: GoldenRulesConfig | None = Field(
         default=None,

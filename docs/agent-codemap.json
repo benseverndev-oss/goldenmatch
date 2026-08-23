@@ -1189,6 +1189,7 @@
             "BudgetConfig",
             "CanopyConfig",
             "ChannelStitchConfig",
+            "ClusterConfig",
             "DistributedRoutingConfig",
             "DomainConfig",
             "FieldTransform",
@@ -2283,6 +2284,7 @@
             "_existing_blocking_fields",
             "_first_weighted_mk",
             "_is_derived",
+            "_last_low_transitivity_rate",
             "_llm_api_key_available",
             "_near_dup_locked",
             "_orthogonal_key",
@@ -5236,6 +5238,7 @@
             "_transitive_postflight_enabled",
             "_weak_bridge_margin",
             "materialize_and_split",
+            "resolve_split_settings",
             "split_weak_transitive_bridges"
           ],
           "imports": [
