@@ -8,6 +8,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ### Fixed
 
+- **Auto-config spent its whole iteration budget on a lever that cannot move
+  its own signal (#2717).** `rule_low_transitivity` responds to a low cluster
+  transitivity by lowering the matchkey threshold. Measured on Abt-Buy, it fired
+  on EVERY iteration, walking the threshold 0.70 -> 0.50 (its floor) while
+  transitivity fell monotonically 0.200 -> 0.138 and the scored-pair count rose
+  4232 -> 4565; the run then exhausted its budget and committed v0 anyway, so all
+  four iterations were discarded. Reversing the direction is not the fix, and
+  that was measured rather than assumed -- raising the threshold also lowers
+  transitivity (0.200 -> 0.120 at step 0.05), because removing an edge from a
+  cluster that stays connected leaves MORE open triples. Transitivity is not
+  monotone in the threshold in either direction.
+
+  The rule now reads the `history` it already receives and declines to re-apply
+  a nudge its own prior application did not improve. Same pathology as the 2M
+  scale-audit degeneration (#195), where the fix was defensive and at the far end
+  of the pipeline; this stops it one stage earlier. The #127 oscillation guard
+  never caught it because that compares rationale strings, and this rule embeds
+  the changing numbers in its own.
+
+  Product benchmarks: all four F1 values unchanged, `stop_reason` moves from
+  `budget_iterations` / `budget_time` to `policy_satisfied` on every row, and
+  Amazon-Google's dedupe lane drops 30.2s -> 20.4s.
+
 - **Postflight silently raised the match threshold using a distribution
   truncated at that threshold (#2717).** The weighted block scorer applies
   `mk.threshold` itself and returns only survivors, so the pair list postflight

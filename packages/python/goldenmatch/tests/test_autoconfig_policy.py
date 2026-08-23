@@ -373,6 +373,97 @@ def test_rule_low_transitivity_lowers_threshold():
     assert new_cfg.matchkeys[0].threshold == pytest.approx(0.75)
 
 
+def _transitivity_profile(rate: float, threshold_pairs: int = 500) -> ComplexityProfile:
+    return ComplexityProfile(
+        data=DataProfile(n_rows=100, n_cols=2),
+        blocking=BlockingProfile(reduction_ratio=0.95, n_blocks=10, block_sizes_p99=20),
+        scoring=ScoringProfile(n_pairs_scored=threshold_pairs,
+                               mass_above_threshold=0.4, dip_statistic=0.05),
+        cluster=ClusterProfile(n_clusters=10, transitivity_rate=rate),
+    )
+
+
+def _history_where_the_rule_already_fired(prev_rate: float) -> RunHistory:
+    """One prior iteration that applied `low_transitivity` and observed
+    `prev_rate`, followed by the current (not yet decided) entry."""
+    from goldenmatch.core.autoconfig_history import HistoryEntry
+    from goldenmatch.core.autoconfig_policy import PolicyDecision
+
+    history = RunHistory()
+    history.entries.append(HistoryEntry(
+        iteration=0, config=None, profile=_transitivity_profile(prev_rate),
+        decision=PolicyDecision(
+            rule_name="low_transitivity",
+            rationale=f"transitivity={prev_rate:.2f} < 0.85; lowering threshold",
+            config_diff={"matchkeys[0].threshold": 0.75},
+        ),
+        error=None, wall_clock_ms=1,
+    ))
+    return history
+
+
+def test_rule_low_transitivity_declines_when_its_last_nudge_did_not_help():
+    """The lever is inert on some shapes, and the rule must notice.
+
+    Measured on Abt-Buy (#2717): the rule fires on EVERY iteration, walking the
+    threshold 0.70 -> 0.50 (its floor), while transitivity falls monotonically
+    0.200 -> 0.138 and the scored-pair count rises 4232 -> 4565. The run then
+    exhausts its budget and commits v0 anyway, so all four iterations are
+    discarded. Reversing the direction does not help either -- raising the
+    threshold also lowers transitivity (0.200 -> 0.120 at step 0.05), because
+    removing an edge from a cluster that stays connected leaves MORE open
+    triples. Transitivity is not monotone in the threshold in either direction.
+
+    The #127 oscillation guard does not catch this: it compares the rationale
+    string, and this rule embeds the changing transitivity and threshold in
+    its rationale, so every fire looks new.
+    """
+    cfg = _config_with_blocking(threshold=0.8)
+    history = _history_where_the_rule_already_fired(prev_rate=0.20)
+    # Transitivity went DOWN after the previous nudge.
+    out = rule_low_transitivity(_transitivity_profile(0.138), cfg, history)
+    assert out is None, "the rule re-applied a nudge its own history shows is inert"
+
+
+def test_rule_low_transitivity_declines_when_its_last_nudge_barely_moved_it():
+    """`transitivity_rate` samples up to 1000 triples, so it carries noise --
+    measured run-to-run drift is ~0.003-0.005 on the same config. A move
+    inside that band is not evidence the lever works."""
+    cfg = _config_with_blocking(threshold=0.8)
+    history = _history_where_the_rule_already_fired(prev_rate=0.200)
+    out = rule_low_transitivity(_transitivity_profile(0.204), cfg, history)
+    assert out is None
+
+
+def test_rule_low_transitivity_keeps_going_when_the_nudge_is_working():
+    """The guard must not disable the rule where it earns its place."""
+    cfg = _config_with_blocking(threshold=0.8)
+    history = _history_where_the_rule_already_fired(prev_rate=0.20)
+    out = rule_low_transitivity(_transitivity_profile(0.55), cfg, history)
+    assert out is not None
+    new_cfg, _ = out
+    assert new_cfg.matchkeys[0].threshold == pytest.approx(0.75)
+
+
+def test_rule_low_transitivity_ignores_other_rules_history():
+    """Only its OWN prior application is evidence about its own lever."""
+    from goldenmatch.core.autoconfig_history import HistoryEntry
+    from goldenmatch.core.autoconfig_policy import PolicyDecision
+
+    cfg = _config_with_blocking(threshold=0.8)
+    history = RunHistory()
+    history.entries.append(HistoryEntry(
+        iteration=0, config=None, profile=_transitivity_profile(0.20),
+        decision=PolicyDecision(
+            rule_name="blocking_too_coarse", rationale="unrelated",
+            config_diff={"blocking.keys": ["x"]},
+        ),
+        error=None, wall_clock_ms=1,
+    ))
+    out = rule_low_transitivity(_transitivity_profile(0.138), cfg, history)
+    assert out is not None, "an unrelated prior decision must not mute this rule"
+
+
 def test_rule_low_transitivity_floors_at_0_5():
     cfg = _config_with_blocking(threshold=0.5)
     profile = ComplexityProfile(

@@ -415,12 +415,75 @@ def rule_low_reduction_ratio(
     return new_cfg, decision
 
 
+#: How much transitivity must have risen since this rule's own last nudge for
+#: the nudge to count as working. `transitivity_rate` samples up to 1000
+#: triples, and measured run-to-run drift on an unchanged config is
+#: ~0.003-0.005, so a move inside that band is noise, not evidence.
+_TRANSITIVITY_PROGRESS_MARGIN = 0.01
+
+
+def _last_low_transitivity_rate(history: RunHistory) -> float | None:
+    """Transitivity observed when this rule last applied a nudge, if it has.
+
+    Only this rule's OWN prior decisions count: another rule's change tells us
+    nothing about whether THIS lever moves THIS signal.
+    """
+    for entry in reversed(history.entries):
+        decision = entry.decision
+        if decision is None or decision.rule_name != "low_transitivity":
+            continue
+        if entry.profile is None:
+            return None
+        return float(entry.profile.cluster.transitivity_rate)
+    return None
+
+
 def rule_low_transitivity(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     cp = profile.cluster
     if cp.transitivity_rate >= 0.85 or cp.n_clusters == 0:
         return None
+
+    # Don't re-apply a nudge this run's own history shows is inert. Measured on
+    # Abt-Buy (#2717): the rule fired on EVERY iteration, walking the threshold
+    # 0.70 -> 0.50 (its floor) while transitivity fell monotonically
+    # 0.200 -> 0.138 and the scored-pair count rose 4232 -> 4565. The run then
+    # exhausted its budget and committed v0 regardless, so all four iterations
+    # were discarded -- `budget_iterations` on a tracked benchmark, spent
+    # entirely on a lever that cannot move its own signal.
+    #
+    # Reversing the direction is NOT the fix, and that was measured rather than
+    # assumed: raising the threshold also lowers transitivity (0.200 -> 0.120 at
+    # step 0.05, 0.198 -> 0.114 at 0.10), because removing an edge from a cluster
+    # that stays CONNECTED leaves more open triples. Transitivity is not monotone
+    # in the threshold in either direction, so no scalar move reliably improves
+    # it; the action this shape needs is at the clustering stage, which no rule
+    # can currently reach.
+    #
+    # The #127 oscillation guard does not catch this: it compares the rationale
+    # string, and this rule embeds the changing transitivity and threshold in
+    # its rationale, so every fire looks new to it.
+    #
+    # This rule has form. The 2M scale-audit degeneration (#195) was the same
+    # sequence -- it fired 3x, walked the threshold 0.80 -> 0.65, and the run
+    # produced 2,570 clusters where v0 would have produced ~145K. The fix then
+    # was defensive, at the far end of the pipeline: `pick_committed` neutralises
+    # its tiebreaker in the collapsed regime so v0 wins anyway (see
+    # autoconfig_history.py). That workaround stays -- it guards every rule, not
+    # just this one -- but it only ever salvaged the OUTCOME. The iterations were
+    # still spent, and the same walk kept happening. This is the same pathology,
+    # stopped one stage earlier.
+    #
+    # Returning None lets the policy advance to the next rule rather than
+    # ending the iteration, so this only ever removes a known-inert option.
+    previous_rate = _last_low_transitivity_rate(history)
+    if (
+        previous_rate is not None
+        and cp.transitivity_rate <= previous_rate + _TRANSITIVITY_PROGRESS_MARGIN
+    ):
+        return None
+
     mk = _first_weighted_mk(current)
     if mk is None or mk.threshold is None:
         return None
