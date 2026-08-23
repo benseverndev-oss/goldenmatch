@@ -134,6 +134,17 @@ def _record_candidate_metrics(record: dict, df, config, gt_pairs: set) -> None:
     metrics must not be able to fail an otherwise-good dataset while they are
     still non-gating. The failure is stored, not dropped, so "could not
     compute" never masquerades as "not applicable".
+
+    KNOWN LIMITATION (measured 2026-08-22, do not promote this to gating
+    without fixing it): this blocks on the INPUT frame, but the pipeline blocks
+    on a PREPARED one (auto_fix -> validate -> standardize -> matchkeys ->
+    domain -> precompute -> block). A config keyed on a derived column -- e.g.
+    `dblp_acm` on `__title_key__`, which domain extraction creates -- therefore
+    raises ColumnNotFoundError here and reports no metrics at all. That is
+    precisely the dataset with the candidate-set ceiling this metric exists to
+    watch (#2633). The three datasets that DO measure all score recall 1.0000,
+    so the metric currently has no discriminating power anywhere. See the
+    MEASURED section of the design note before relying on it.
     """
     from scripts.suggest_quality.metrics import candidate_metrics  # noqa: PLC0415
 

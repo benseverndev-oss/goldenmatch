@@ -72,3 +72,39 @@ def test_singleton_blocks_cost_nothing():
     m = candidate_metrics([[0], [1], [2]], {(0, 1)})
     assert m["candidate_recall"] == 0.0
     assert m["candidate_pairs"] == 0
+
+
+def test_derived_column_blocking_is_recorded_as_an_error_not_a_silent_nan():
+    """Pins the known v1 limitation so it cannot be rediscovered by surprise.
+
+    The pipeline blocks on a PREPARED frame; this metric blocks on the input
+    one. A config keyed on a column a later stage derives (dblp_acm's
+    `__title_key__`, created by domain extraction) cannot be measured here.
+
+    What this test locks is the FAILURE MODE, not the limitation: it must land
+    on `candidate_error` with a legible reason, never as a bare nan that reads
+    like "this dataset has no ground truth". If someone fixes the prep gap,
+    this test should be replaced by a real measurement -- it is a tripwire, not
+    an endorsement.
+    """
+    from scripts.suggest_quality.oracle import _record_candidate_metrics
+
+    class _BlockingCfg:
+        pass
+
+    class _Cfg:
+        blocking = _BlockingCfg()
+
+    record: dict = {}
+    # A frame lacking the derived column the config keys on. build_blocks
+    # raises; the helper must convert that into a recorded, readable error.
+    _record_candidate_metrics(record, object(), _Cfg(), {(0, 1)})
+
+    assert record.get("candidate_error"), (
+        "a failure to compute must be RECORDED -- an un-computed metric that "
+        "looks inapplicable is the check-does-not-fire class this exists to expose"
+    )
+    assert "candidate_recall" not in record or record["candidate_recall"] != 0.0, (
+        "must not report 0.0 recall on failure -- that reads as a total "
+        "blocking regression rather than 'not measured'"
+    )

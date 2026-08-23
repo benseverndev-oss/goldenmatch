@@ -136,6 +136,57 @@ absolute pair counts span orders of magnitude across the panel.
   host-independent, so this should be stable; if a dataset proves flaky, it
   belongs in the existing advisory list rather than being papered over.
 
+## MEASURED 2026-08-22 — the v1 implementation does not yet do the job
+
+Added after implementing the above and running it. Reproduced identically by two
+independent paths (the full oracle, and a blocking-stage-only script), so this is
+the implementation's behaviour and not a harness artifact.
+
+| dataset | candidate_recall | candidate_pairs | error |
+|---|---|---|---|
+| `dblp_acm` | — | — | `ColumnNotFoundError: __title_key__` |
+| `anchor_person_match` | 1.0000 | 1,712 | — |
+| `synthetic` | 1.0000 | 861 | — |
+| `ncvr_synthetic` | 1.0000 | 434,530 | — |
+
+**1. It fails on configs that block on a DERIVED column.** `dblp_acm` blocks on
+`__title_key__`, which the domain-extraction stage creates. The implementation
+calls `build_blocks` on the INPUT frame, but the pipeline blocks on a prepared
+one — `auto_fix -> validate -> standardize -> matchkeys -> domain -> precompute
+-> block`. There is no single reusable prep seam; those stages are inline in
+`_run_dedupe_pipeline`. So the metric is unmeasurable on exactly the dataset that
+motivated it.
+
+Fixing it means choosing between two costs, neither free:
+- call the same stage functions in the same order — no reimplementation of
+  block-key derivation, but a reimplementation of stage ORDER, which can drift
+  from the pipeline and leave the metric certifying a fiction one level up;
+- capture membership from the pipeline's real blocking run (a `core/bench.py`
+  emitter), which is correct by construction but changes goldenmatch core.
+
+**2. Where it does work, it has no discriminating power.** All three
+loadable datasets score exactly 1.0000 — they are synthetic corpora with clean
+blocking keys, so that is plausible rather than suspicious, but the consequence
+is that a 0.02 drop-floor could never fire on any of them. `candidate_pairs`
+does look alive (434,530 comparisons for 2,500 true pairs on `ncvr_synthetic`).
+
+**This invalidates the Rollout assumption below.** Step 1 assumed advisory-first
+would produce a distribution to calibrate thresholds against. The actual
+distribution is `{1.0, 1.0, 1.0, error}`, which calibrates nothing. The metric is
+therefore NOT close to gating, and should not be promoted on the strength of a
+green advisory run.
+
+What survives: the pure `candidate_metrics` helper and its tests are correct and
+regime-independent; the two-metrics-together constraint and the
+do-not-enumerate construction are unaffected; and the failure is *recorded* on
+`candidate_error` rather than swallowed, so the gap is visible in the scorecard
+rather than latent.
+
+One incidental confirmation: the error message enumerates the frame's columns as
+`["__row_id__", "id", "title", "authors", "venue", "year"]`. `year` IS present on
+the raw frame — independent corroboration of #2633's premise that it is available
+and simply never proposed, because the candidate pool is matchkey-only.
+
 ## Rollout
 
 1. Land the metrics as **advisory** (reported, non-gating) for one cycle. This
