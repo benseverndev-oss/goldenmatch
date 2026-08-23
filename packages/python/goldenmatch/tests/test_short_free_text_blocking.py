@@ -75,3 +75,15 @@ def test_the_boundary_is_inclusive_and_documented():
     long_ = _text_corpus_blocking([_prof("c", _SHORT_FREE_TEXT_MAX_LEN + 1, 0.9)])
     assert short.strategy == "token"
     assert long_.strategy == "lsh"
+
+
+def test_an_unmeasured_column_keeps_the_document_route():
+    """`avg_len` 0 means UNKNOWN, not short.
+
+    A hand-built `ColumnProfile` defaults `avg_len` to 0. Reading that as
+    "short" would silently move every caller that constructs profiles directly
+    rather than measuring them -- which is how `test_autoconfig.py` builds them,
+    and how it caught this.
+    """
+    blocking = _text_corpus_blocking([_prof("desc", avg_len=0.0, cardinality=0.7)])
+    assert blocking.strategy == "lsh"

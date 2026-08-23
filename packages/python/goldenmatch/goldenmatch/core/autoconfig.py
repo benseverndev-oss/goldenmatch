@@ -3634,6 +3634,24 @@ def _best_sketch_column(profiles: list[ColumnProfile]) -> str | None:
     ).name
 
 
+def _require_sketch_column(profiles: list[ColumnProfile]) -> str:
+    """`_best_sketch_column` for callers that already guarantee a candidate.
+
+    The sketch-config builders all run behind a check that a text column exists
+    (`_is_text_corpus`, or `sketchable_text_cols` returning non-empty), and the
+    code they replaced -- `max(profiles, key=...)` -- raised on an empty list.
+    Keeping that contract here means those call sites stay `str`-typed instead
+    of threading an `Optional` they can never actually receive.
+    """
+    col = _best_sketch_column(profiles)
+    if col is None:
+        raise ValueError(
+            "no candidate text column for a blocking sketch; the caller is "
+            "expected to check for one before building a sketch config"
+        )
+    return col
+
+
 def _auto_build_lsh_config(profiles: list[ColumnProfile]) -> BlockingConfig:
     """Build a MinHash/LSH blocking config over the longest description column.
 
@@ -3643,7 +3661,7 @@ def _auto_build_lsh_config(profiles: list[ColumnProfile]) -> BlockingConfig:
     """
     from goldenmatch.config.schemas import LSHKeyConfig
     descs = [p for p in profiles if p.col_type == "description"]
-    col = _best_sketch_column(descs)
+    col = _require_sketch_column(descs)
     return BlockingConfig(strategy="lsh", lsh=LSHKeyConfig(
         column=col, mode="word", k=2, num_perms=128, threshold=0.5, seed=0))
 
@@ -3660,7 +3678,7 @@ def _text_corpus_blocking(
     fallback only catches shared shingles. See #1082.
     """
     descs = [p for p in profiles if p.col_type == "description"]
-    col = _best_sketch_column(descs)
+    col = _require_sketch_column(descs)
 
     # SHORT free text blocks with `token`, documents with `lsh`. `blocking.mdx`
     # already prescribed exactly this -- "use `lsh` for near-duplicate
@@ -3687,8 +3705,13 @@ def _text_corpus_blocking(
     # rather than presented as derived: a genuine document corpus (FineWeb-style,
     # thousands of characters) is far above it, which is the case LSH was built
     # for and keeps.
+    # `0 <` deliberately: `avg_len` defaults to 0 on a hand-built ColumnProfile,
+    # which means UNKNOWN, not "short". Routing unknown-length text to `token`
+    # would be a silent behaviour change for every caller that constructs
+    # profiles directly rather than measuring them, so an unmeasured column
+    # falls through to the prior lsh/simhash behaviour.
     _chosen = next((p for p in descs if p.name == col), None)
-    if _chosen is not None and _chosen.avg_len <= _SHORT_FREE_TEXT_MAX_LEN:
+    if _chosen is not None and 0 < _chosen.avg_len <= _SHORT_FREE_TEXT_MAX_LEN:
         from goldenmatch.config.schemas import BlockingConfig, TokenBlockingConfig
 
         return BlockingConfig(
@@ -3766,13 +3789,13 @@ def _throughput_blocking(
         return _text_corpus_blocking(profiles, None, config)
     if _embedder_available(config):
         from goldenmatch.config.schemas import SimHashKeyConfig
-        col = _best_sketch_column(text_cols)
+        col = _require_sketch_column(text_cols)
         return BlockingConfig(
             strategy="simhash",
             simhash=SimHashKeyConfig(column=col, num_planes=256, num_bands=32, seed=0),
         )
     from goldenmatch.config.schemas import LSHKeyConfig
-    col = _best_sketch_column(text_cols)
+    col = _require_sketch_column(text_cols)
     return BlockingConfig(strategy="lsh", lsh=LSHKeyConfig(
         column=col, mode="word", k=2, num_perms=128, threshold=0.5, seed=0))
 
