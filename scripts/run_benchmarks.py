@@ -213,11 +213,11 @@ def _measure_product(datasets_dir: Path, key: str) -> list[dict[str, Any]]:
     Returns TWO rows, because the dataset supports two genuinely different
     tasks and reporting one number for both was a framing error (#2717):
 
-      * ``<label>`` -- dedupe. Both sources concatenated into one frame,
-        everything compared to everything. Scored against the transitive
-        closure of the mapping. This is the historical row; its name is
-        unchanged so `_F1_FLOORS`, `_QUARANTINE` and the committed report's
-        series all keep applying to the same measurement.
+      * ``<label> (dedupe)`` -- both sources concatenated into one frame,
+        everything compared to everything, scored against the transitive
+        closure of the mapping. RENAMED from the bare ``<label>`` (#2717): the
+        unsuffixed name read as THE number for the dataset when it is the
+        harder and far less comparable of the two lanes.
       * ``<label> (linkage)`` -- record linkage via ``match_df(a, b)``, scored
         against the raw cross-source mapping. This is the task the published
         DeepMatcher / Ditto figures measure, so it is the row to compare
@@ -284,7 +284,9 @@ def _measure_product(datasets_dir: Path, key: str) -> list[dict[str, Any]]:
     if res is None:
         _info(f"  {spec['label']}: dataset files missing - skipping")
         return []
-    rows.append(_row(spec["label"], "dedupe", res, elapsed, dedupe_captured))
+    rows.append(
+        _row(f"{spec['label']} (dedupe)", "dedupe", res, elapsed, dedupe_captured)
+    )
 
     # ---- linkage lane ------------------------------------------------------
     link_captured: dict[str, Any] = {}
@@ -623,12 +625,16 @@ _F1_FLOORS: dict[str, float | None] = {
     # Kept here at 0.45 for the DEDUPE row it currently gates -- raising or
     # retiring it belongs with the same-source framing decision, not with this
     # change -- and see "Abt-Buy (linkage)" below for where it actually applies.
-    "Abt-Buy": 0.45,
+    # RENAMED to "Abt-Buy (linkage)" below (#2717). The 0.45 was DERIVED from a
+    # linkage run and enforced here for months; it now guards the lane it
+    # describes. This lane keeps no floor of its own -- see its _QUARANTINE
+    # entry for why its F1 is not a usable target.
+    "Abt-Buy (dedupe)": None,
     # KNOWN BAD (#2470). Measured 0.0697 / recall 0.0419. The floor is set at the
     # observed value ONLY to stop it getting worse; it is not an endorsement, and
     # this dataset should be treated as an open quality bug rather than a passing
     # lane. Raise it as the matcher improves.
-    "Amazon-Google": 0.05,
+    "Amazon-Google (dedupe)": 0.05,
     # No trustworthy baseline recorded yet -- these have not completed in CI.
     "DBLP-ACM": None,
     "NCVR": None,
@@ -668,7 +674,7 @@ _F1_FLOORS: dict[str, float | None] = {
 # something being tracked, so `_quarantine_breaches` says so rather than
 # silently honouring it.
 _QUARANTINE: dict[str, dict[str, Any]] = {
-    "Abt-Buy": {
+    "Abt-Buy (dedupe)": {
         "issue": 2717,
         "f1_at_quarantine": 0.0881,
         "tolerance": 0.03,
@@ -690,7 +696,7 @@ _QUARANTINE: dict[str, dict[str, Any]] = {
             "that is comparable to published figures."
         ),
     },
-    "Amazon-Google": {
+    "Amazon-Google (dedupe)": {
         "issue": 2717,
         "f1_at_quarantine": 0.1014,
         "tolerance": 0.03,

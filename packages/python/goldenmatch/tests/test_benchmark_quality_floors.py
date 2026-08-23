@@ -32,14 +32,14 @@ def test_amazon_google_at_its_quarantine_baseline_is_reported_not_failed():
     behaviour the original test wanted ("a WORSE run must breach"), now enforced
     against a live baseline instead of a static floor.
     """
-    base = run_benchmarks._QUARANTINE["Amazon-Google"]["f1_at_quarantine"]
+    base = run_benchmarks._QUARANTINE["Amazon-Google (dedupe)"]["f1_at_quarantine"]
     failing, quarantined = run_benchmarks._check_quality_floors(
-        [{"name": "Amazon-Google", "f1": base, "precision": 0.2077, "recall": 0.0419}]
+        [{"name": "Amazon-Google (dedupe)", "f1": base, "precision": 0.2077, "recall": 0.0419}]
     )
     assert failing == [], f"at its own baseline it must not fail: {failing}"
 
     worse = run_benchmarks._check_quality_floors(
-        [{"name": "Amazon-Google", "f1": 0.04, "precision": 0.2, "recall": 0.03}]
+        [{"name": "Amazon-Google (dedupe)", "f1": 0.04, "precision": 0.2, "recall": 0.03}]
     )[0]
     assert worse, "a WORSE Amazon-Google run must still fail"
     assert any("Amazon-Google" in w for w in worse), worse
@@ -54,11 +54,11 @@ def test_a_healthy_run_does_not_breach():
     it and the quarantine should be lifted. Using it as "a healthy run" was
     baking an unreproducible measurement into a test.
     """
-    base = run_benchmarks._QUARANTINE["Abt-Buy"]["f1_at_quarantine"]
+    base = run_benchmarks._QUARANTINE["Abt-Buy (dedupe)"]["f1_at_quarantine"]
     failing, _ = run_benchmarks._check_quality_floors(
         [
             {"name": "Febrl3", "f1": 0.9912, "precision": 0.99, "recall": 0.99},
-            {"name": "Abt-Buy", "f1": base, "precision": 0.11, "recall": 0.45},
+            {"name": "Abt-Buy (dedupe)", "f1": base, "precision": 0.11, "recall": 0.45},
         ]
     )
     assert failing == [], failing
