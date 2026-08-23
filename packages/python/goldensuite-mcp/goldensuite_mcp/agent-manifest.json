@@ -77,6 +77,16 @@
               "description": "Candidate-generation configuration; required when any matchkey is weighted or probabilistic."
             },
             {
+              "name": "cluster",
+              "type": "ClusterConfig | None",
+              "required": false,
+              "default": "None",
+              "nested": [
+                "ClusterConfig"
+              ],
+              "description": "Cluster-stage actions (e.g. splitting weak transitive bridges)."
+            },
+            {
               "name": "golden_rules",
               "type": "GoldenRulesConfig | None",
               "required": false,
@@ -725,6 +735,26 @@
               "description": "Perceptual-hash LSH configuration used when the strategy is 'perceptual'."
             }
           ]
+        },
+        {
+          "name": "ClusterConfig",
+          "fields": [
+            {
+              "name": "split_weak_bridges",
+              "type": "bool",
+              "required": false,
+              "default": "False",
+              "description": "Split clusters held together by a single weak transitive bridge (a false pair chaining two entities). Default off."
+            },
+            {
+              "name": "weak_bridge_margin",
+              "type": "float | None",
+              "required": false,
+              "default": "None",
+              "description": "How far below a cluster's average edge its weakest edge must sit to count as a weak bridge. Larger is more conservative (splits fewer clusters). None uses the shipped default of 0.15."
+            }
+          ],
+          "doc": "Cluster-stage actions (#2717)."
         },
         {
           "name": "GoldenRulesConfig",

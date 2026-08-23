@@ -5199,10 +5199,16 @@ def _run_dedupe_pipeline(
     # pair_scores from all_pairs) when on; opt-in so the lazy hot path is unchanged.
     _tc_clusters = None
     _tc_report = None
-    from goldenmatch.core.transitive_consistency import _transitive_postflight_enabled
-    if _transitive_postflight_enabled():
+    from goldenmatch.core.transitive_consistency import resolve_split_settings
+    # #2717: `config.cluster` first, env var as the override. Before this the env
+    # var was the ONLY way in, so no auto-config rule could select the action --
+    # the controller could go RED on cluster health with nothing to do about it.
+    _tc_enabled, _tc_margin = resolve_split_settings(getattr(config, "cluster", None))
+    if _tc_enabled:
         from goldenmatch.core.transitive_consistency import materialize_and_split
-        _tc_clusters, _tc_report = materialize_and_split(_clusters_dict(), all_pairs)
+        _tc_clusters, _tc_report = materialize_and_split(
+            _clusters_dict(), all_pairs, _tc_margin,
+        )
         if isinstance(report, dict):
             report["transitive_consistency"] = _tc_report
 

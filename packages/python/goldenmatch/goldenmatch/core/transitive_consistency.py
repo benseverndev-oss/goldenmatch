@@ -53,6 +53,23 @@ def _weak_bridge_margin() -> float:
     return _TC_DEFAULT_MARGIN
 
 
+def resolve_split_settings(cluster_config) -> tuple[bool, float]:
+    """Resolve ``(enabled, margin)`` from config, with the env vars as overrides.
+
+    Config is the more specific statement of intent, so an explicit
+    ``split_weak_bridges=False`` beats an ambient
+    ``GOLDENMATCH_TRANSITIVE_POSTFLIGHT=1`` -- otherwise a rule that decided NOT
+    to split could be overridden by whatever the shell happened to export. When
+    no config is supplied at all the env var is the only signal, which is the
+    behaviour every caller had before this seam existed (#2717).
+    """
+    if cluster_config is None:
+        return _transitive_postflight_enabled(), _weak_bridge_margin()
+    enabled = bool(getattr(cluster_config, "split_weak_bridges", False))
+    margin = getattr(cluster_config, "weak_bridge_margin", None)
+    return enabled, (_weak_bridge_margin() if margin is None else float(margin))
+
+
 def _is_weak_transitive_bridge(members, pair_scores, margin) -> bool:
     """A cluster is a weak transitive bridge if it has a severe bridge (an edge
     whose removal leaves two ≥2-node groups) AND its weakest edge is materially

@@ -137,6 +137,7 @@ Every config object in the pydantic tree(s), generated from the package schema. 
 | `match_settings` | MatchSettingsConfig \| None | `None` | [`MatchSettingsConfig`](#matchsettingsconfig) -- Nested matchkeys container; an alternative to the top-level matchkeys field. |
 | `matchkeys` | list[MatchkeyConfig] \| None | `None` | [`MatchkeyConfig`](#matchkeyconfig) -- Matchkeys defining how records are compared; takes precedence over match_settings. |
 | `blocking` | BlockingConfig \| None | `None` | [`BlockingConfig`](#blockingconfig) -- Candidate-generation configuration; required when any matchkey is weighted or probabilistic. |
+| `cluster` | ClusterConfig \| None | `None` | [`ClusterConfig`](#clusterconfig) -- Cluster-stage actions (e.g. splitting weak transitive bridges). |
 | `golden_rules` | GoldenRulesConfig \| None | `None` | [`GoldenRulesConfig`](#goldenrulesconfig) -- Survivorship rules for building one golden record per cluster. |
 | `standardization` | StandardizationConfig \| None | `None` | [`StandardizationConfig`](#standardizationconfig) -- Per-column standardizers applied before matching. |
 | `validation` | ValidationConfig \| None | `None` | [`ValidationConfig`](#validationconfig) -- Validation rules and auto-fix settings applied to the input. |
@@ -236,6 +237,14 @@ _A matchkey: rule for declaring two records 'the same' on a field/field-set._
 | `token` | TokenBlockingConfig \| None | `None` | [`TokenBlockingConfig`](#tokenblockingconfig) -- DF-pruned token-blocking configuration required when the strategy is 'token'. |
 | `simhash` | SimHashKeyConfig \| None | `None` | [`SimHashKeyConfig`](#simhashkeyconfig) -- SimHash/LSH configuration required when the strategy is 'simhash'. |
 | `perceptual` | PerceptualKeyConfig \| None | `None` | [`PerceptualKeyConfig`](#perceptualkeyconfig) -- Perceptual-hash LSH configuration used when the strategy is 'perceptual'. |
+
+### `ClusterConfig`
+_Cluster-stage actions (#2717)._
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `split_weak_bridges` | bool | `False` | Split clusters held together by a single weak transitive bridge (a false pair chaining two entities). Default off. |
+| `weak_bridge_margin` | float \| None | `None` | How far below a cluster's average edge its weakest edge must sit to count as a weak bridge. Larger is more conservative (splits fewer clusters). None uses the shipped default of 0.15. |
 
 ### `GoldenRulesConfig`
 

@@ -8,6 +8,56 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ### Fixed
 
+- **Auto-config spent its whole iteration budget on a lever that cannot move
+  its own signal (#2717).** `rule_low_transitivity` responds to a low cluster
+  transitivity by lowering the matchkey threshold. Measured on Abt-Buy, it fired
+  on EVERY iteration, walking the threshold 0.70 -> 0.50 (its floor) while
+  transitivity fell monotonically 0.200 -> 0.138 and the scored-pair count rose
+  4232 -> 4565; the run then exhausted its budget and committed v0 anyway, so all
+  four iterations were discarded. Reversing the direction is not the fix, and
+  that was measured rather than assumed -- raising the threshold also lowers
+  transitivity (0.200 -> 0.120 at step 0.05), because removing an edge from a
+  cluster that stays connected leaves MORE open triples. Transitivity is not
+  monotone in the threshold in either direction.
+
+  The rule now reads the `history` it already receives and declines to re-apply
+  a nudge its own prior application did not improve. Same pathology as the 2M
+  scale-audit degeneration (#195), where the fix was defensive and at the far end
+  of the pipeline; this stops it one stage earlier. The #127 oscillation guard
+  never caught it because that compares rationale strings, and this rule embeds
+  the changing numbers in its own.
+
+  Product benchmarks: all four F1 values unchanged, `stop_reason` moves from
+  `budget_iterations` / `budget_time` to `policy_satisfied` on every row, and
+  Amazon-Google's dedupe lane drops 30.2s -> 20.4s.
+
+### Added
+
+- **Cluster-stage actions are reachable from config (`ClusterConfig`), so an
+  auto-config rule can select one (#2717).** `core/transitive_consistency.py`
+  already implemented the action that low cluster transitivity calls for --
+  splitting a cluster held together by a single weak transitive bridge -- but it
+  was reachable ONLY through `GOLDENMATCH_TRANSITIVE_POSTFLIGHT`, an environment
+  variable no rule can set. Every rule in `DEFAULT_RULES` emitted a blocking or
+  matchkey diff, so on a shape whose problem is the clustering the controller
+  went RED on cluster health with nothing to do about it.
+
+  `config.cluster.split_weak_bridges` / `weak_bridge_margin` now drive it, with
+  both env vars demoted to overrides; an explicit config value wins, so a rule
+  that decided NOT to split cannot be overridden by ambient environment.
+  Default off -> no-op -> byte-identical for every existing caller.
+  `rule_low_transitivity` reaches for this action FIRST, alone, and keeps its
+  threshold nudge as the second choice.
+
+  **Measured, and it does not move the product benchmarks:** all four rows are
+  unchanged. Forcing the splitter on is worth +0.0045 F1 on Abt-Buy at the
+  default margin and +0.008 at margin 0.05 (0.1723 -> 0.1805, precision
+  0.1068 -> 0.1136), but the controller does not commit the iteration that
+  enables it, because splitting 13 of 1202 sample clusters barely moves the
+  sampled transitivity estimate and `pick_committed` sees no improvement over
+  v0. The rule can now ASK for the right action; the profile still cannot
+  perceive its benefit. That gap is named on the issue rather than papered over.
+
 - **Postflight silently raised the match threshold using a distribution
   truncated at that threshold (#2717).** The weighted block scorer applies
   `mk.threshold` itself and returns only survivors, so the pair list postflight
