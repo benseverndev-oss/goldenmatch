@@ -7,9 +7,9 @@ Your customer data lives in a CRM, a billing system, and three spreadsheets nobo
 
 **Splink-beating entity resolution, Arrow-native and Rust-fast with zero tuning, feeding a durable identity layer so messy records from every source become stable golden entities with whole-record, Customer-360 provenance.**
 
-Zero-config matching that **beats expert-tuned Splink head-to-head on messy customer records**, in an **Arrow-native, Rust-authoritative** engine verified from a laptop CSV to a **100M-row dedupe in 9.2 minutes**. The identities it produces live in a **transaction-native control plane** carrying stable `entity_id`s, per-field provenance, merge/split, and a tamper-evident audit log, all one call away as a Customer 360. It even **owns its primitives**: byte-identical, faster-than-`rapidfuzz` / `jellyfish` / FAISS Rust kernels, not rented dependencies.
+Zero-config matching that **beats expert-tuned Splink head-to-head on messy customer records**, in an **Arrow-native, Rust-authoritative** engine verified from a laptop CSV to a **250M-row dedupe in 11.2 minutes**. The identities it produces live in a **transaction-native control plane** carrying stable `entity_id`s, per-field provenance, merge/split, and a tamper-evident audit log, all one call away as a Customer 360. It even **owns its primitives**: byte-identical, faster-than-`rapidfuzz` / `jellyfish` / FAISS Rust kernels, not rented dependencies.
 
-**Python · TypeScript · SQL, at 4-decimal parity · native in Postgres + DuckDB · edge WASM · 70+ MCP tools · beats hand-tuned Splink · 100M rows in 9.2 min**
+**Python · TypeScript · SQL, at 4-decimal parity · native in Postgres + DuckDB · edge WASM · 70+ MCP tools · beats hand-tuned Splink · 250M rows in 11.2 min**
 
 <br>
 
@@ -25,7 +25,7 @@ Zero-config matching that **beats expert-tuned Splink head-to-head on messy cust
 [![codecov](https://codecov.io/gh/benseverndev-oss/goldenmatch/graph/badge.svg)](https://codecov.io/gh/benseverndev-oss/goldenmatch)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/benseverndev-oss/goldenmatch/badge)](https://scorecard.dev/viewer/?uri=github.com/benseverndev-oss/goldenmatch)
 [![Fellegi-Sunter beats hand-rolled Splink](https://img.shields.io/badge/Fellegi--Sunter-beats%20hand--rolled%20Splink-d4a017)](docs/benchmarks/2026-06-09-splink-bakeoff.md)
-[![100M rows in 9.2 min](https://img.shields.io/badge/scale-100M%20rows%20%2F%209.2%20min-d4a017)](packages/python/goldenmatch/README.md#benchmarks)
+[![250M rows in 11.2 min](https://img.shields.io/badge/scale-250M%20rows%20%2F%2011.2%20min-d4a017)](docs/benchmarks/2026-08-19-spark-50m-head-to-head.md)
 
 <!-- Reach -->
 [![PyPI downloads (suite)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbenseverndev-oss%2Fgoldenmatch%2Fbadges%2Fpypi-downloads.json)](https://pepy.tech/projects?q=goldenmatch+goldencheck+goldenpipe+goldenflow+goldenanalysis+infermap+goldencheck-types+goldensuite-mcp+goldenfuzz+goldenphonetic+goldenmatch-hnsw+goldenmatch-duckdb+goldenmatch-native+goldenflow-native+goldencheck-native+goldenanalysis-native+goldengraph-native+goldenprofile-native+goldenpipe-native+infermap-native+goldenmatch-embed+goldengraph+goldenmatch-kg+golden-suite)
@@ -135,7 +135,7 @@ flowchart LR
 
 **Why a platform engineer should care:**
 
-- **The compute layer isn't framework lock-in.** It's Arrow-native and backend-replaceable, so you can push the heavy matching to a query engine that plans, spills, and distributes (verified to 100M rows) without the identity state coming along for the ride.
+- **The compute layer isn't framework lock-in.** It's Arrow-native and backend-replaceable, so you can push the heavy matching to a query engine that plans, spills, and distributes (verified to 250M rows) without the identity state coming along for the ride.
 - **The identity layer is a real state machine**, not a columnar rebuild-every-time batch. Durable ids, transactional merge/split, provenance and audit are first-class operations you can integrate against.
 - **Behavior is consistent where it's shared.** SQL, Python, and TypeScript track the same answers to a conformance spec, so the surface you build on isn't quietly inventing its own semantics.
 
@@ -241,7 +241,7 @@ Every headline number maps back to a single committed runner (`scripts/run_bench
 - **Privacy-preserving.** PPRL **92.4%** F1 on FEBRL4, matching across parties with no shared raw data.
 - **Scale envelope** ([`docs/scale-envelope.md`](docs/scale-envelope.md)): per-backend ranges (in-memory/bucket to a few M · DuckDB out-of-core to ~50M · Ray distributed ≥ 50M), block-size failure modes, and a decision tree for picking a backend.
 
-**Verified at the top end:** a full **100M-row** dedupe on a 5-node Ray cluster in **9.2 min** (554 s), **20,000,000 golden records recovered exactly**, driver peak **0.36 GB RSS**. The default distributed path is **recall-complete**: duplicates merge correctly *no matter how the input is partitioned* (blocking-key shuffle scoring + distributed randomized-contraction WCC), and it stays driver-collect-free end to end. Recipe: [`configs/distributed-100m.yaml`](packages/python/goldenmatch/configs/distributed-100m.yaml).
+**Verified on the Ray tier:** a full **100M-row** dedupe on a 5-node Ray cluster in **9.2 min** (554 s), **20,000,000 golden records recovered exactly**, driver peak **0.36 GB RSS**. (The larger **250M / 11.2 min** headline is the Spark tier on a different cluster shape -- the two are separate lanes, not one number superseding the other, and this one is what carries the recall-complete guarantee below.) The default distributed path is **recall-complete**: duplicates merge correctly *no matter how the input is partitioned* (blocking-key shuffle scoring + distributed randomized-contraction WCC), and it stays driver-collect-free end to end. Recipe: [`configs/distributed-100m.yaml`](packages/python/goldenmatch/configs/distributed-100m.yaml).
 
 **Fellegi-Sunter training, distributed on Spark:** the E-step collapses to one Spark `GROUP BY` over agreement patterns, so training cost tracks the number of DISTINCT comparison vectors (bounded by `prod(levels + 1)`), not the pair count. Measured on a real 2-worker Spark cluster (jar-only executors, no Python installed), 1M -> 5M rows: candidate pairs grew **5.00x** and the distributed counting stage **5.25x**, while distinct patterns grew **3.0%** (433 -> 446) and driver-side EM stayed at **0.01s**. That is the property the tier rests on -- the cluster absorbs the data, the driver's work stays flat.
 
@@ -255,7 +255,7 @@ Every headline number maps back to a single committed runner (`scripts/run_bench
 | stages | **119** | 394 | 3.31x |
 | executor CPU | **31,300s** | 51,572s | 1.65x |
 
-Reported with it, because a benchmark that only publishes its wins is not evidence: the margin still **narrows with scale** (2.54x at 1M -> 1.91x at 50M), single runs on this lane move **~16%** so no one ratio should carry much weight, **zero spill is scale-bounded** (true at 50M, but GoldenMatch spills 56.4 GB at 100M and 201.3 GB at 250M), the fixture is **synthetic**, and the accuracy figures in it are *not* an accuracy verdict -- for that, see the [bake-off](docs/benchmarks/2026-06-09-splink-bakeoff.md). **Measured further since:** **250M rows / 2.32 billion pairs in 670s** on the same 5-node cluster, no executor deaths and zero failed tasks, at **0.289 seconds per million pairs** -- 4.13x faster than the 2,766s that curve first measured, with 3.1x less executor CPU, zero spill and a byte-identical trained model. Cost stays linear in PAIRS rather than rows; the constant got four times smaller. Four earlier attempts at this comparison were invalid because *we* had misconfigured Splink; each defect and its effect is documented alongside the results. [Full method, caveats and reproduce command](docs/benchmarks/2026-08-19-spark-50m-head-to-head.md).
+Reported with it, because a benchmark that only publishes its wins is not evidence: the margin still **narrows with scale** (2.54x at 1M -> 1.91x at 50M), single runs on this lane move **~16%** so no one ratio should carry much weight, **zero spill was scale-bounded on the build that curve measured** (true at 50M, 56.4 GB at 100M, 201.3 GB at 250M -- since taken to zero at 250M by #2698, so the caveat describes the curve rather than the shipped path), the fixture is **synthetic**, and the accuracy figures in it are *not* an accuracy verdict -- for that, see the [bake-off](docs/benchmarks/2026-06-09-splink-bakeoff.md). **Measured further since:** **250M rows / 2.32 billion pairs in 670s** on the same 5-node cluster, no executor deaths and zero failed tasks, at **0.289 seconds per million pairs** -- 4.13x faster than the 2,766s that curve first measured, with 3.1x less executor CPU, zero spill and a byte-identical trained model. Cost stays linear in PAIRS rather than rows; the constant got four times smaller. Four earlier attempts at this comparison were invalid because *we* had misconfigured Splink; each defect and its effect is documented alongside the results. [Full method, caveats and reproduce command](docs/benchmarks/2026-08-19-spark-50m-head-to-head.md).
 
 Three reproducible real-world pipelines run this on public data at scale:
 
