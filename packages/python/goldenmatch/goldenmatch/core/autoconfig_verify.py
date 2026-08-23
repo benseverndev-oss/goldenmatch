@@ -1261,7 +1261,33 @@ def postflight(
         and depth_ratio is not None
         and depth_ratio < 0.5
     )
-    if is_bimodal and valley is not None:
+    # A distribution whose lowest observed score is already AT the cut has been
+    # truncated at the cut, and its shape cannot say where the cut belongs. The
+    # weighted block scorer applies `mk.threshold` itself and returns only the
+    # survivors, so this is the ordinary case, not an edge case: every valley
+    # findable in what postflight receives lies ABOVE the current threshold, so
+    # the adjustment can only ratchet UP -- never down, and never back.
+    #
+    # Measured on Amazon-Google (#2717), linkage lane: the committed 0.65 was
+    # the F1 optimum of the candidate set (0.4284). Postflight saw the truncated
+    # tail, read it as bimodal with a valley at 0.965, and re-filtered there:
+    # 1646 pairs -> 120, F1 0.4284 -> 0.0761. The left mode had been clipped off
+    # before postflight ever saw it.
+    #
+    # The signal stays live wherever the population genuinely spans the cut --
+    # a probabilistic matchkey scores down to the REVIEW threshold, so pairs
+    # exist on both sides and the valley is real evidence. Only the truncated
+    # case is refused, and it is refused out loud.
+    _min_score = min((s for _a, _b, s in pair_scores), default=None)
+    _truncated_at_cut = _min_score is not None and _min_score >= threshold
+    if _truncated_at_cut and is_bimodal:
+        report.advisories.append(
+            f"score distribution is truncated at the current threshold "
+            f"{threshold:.3f} (lowest scored pair {_min_score:.3f}); the shape "
+            f"above the cut cannot locate the cut, so no threshold adjustment "
+            f"was emitted."
+        )
+    if is_bimodal and valley is not None and not _truncated_at_cut:
         if abs(valley - threshold) > 0.05 and not strict:
             report.adjustments.append(
                 PostflightAdjustment(

@@ -207,50 +207,101 @@ def _fetch_leipzig_product(datasets_dir: Path, key: str) -> bool:
     return (out / spec["sentinel"]).exists()
 
 
-def _measure_product(datasets_dir: Path, key: str) -> dict[str, Any] | None:
-    """Zero-config dedupe on a Leipzig two-source product dataset; pairwise F1."""
-    from dqbench_adapters.leipzig_eval import run_two_source_dedupe_zeroconfig
-    from goldenmatch import dedupe_df
+def _measure_product(datasets_dir: Path, key: str) -> list[dict[str, Any]]:
+    """Zero-config matching on a Leipzig two-source product dataset; pairwise F1.
+
+    Returns TWO rows, because the dataset supports two genuinely different
+    tasks and reporting one number for both was a framing error (#2717):
+
+      * ``<label>`` -- dedupe. Both sources concatenated into one frame,
+        everything compared to everything. Scored against the transitive
+        closure of the mapping. This is the historical row; its name is
+        unchanged so `_F1_FLOORS`, `_QUARANTINE` and the committed report's
+        series all keep applying to the same measurement.
+      * ``<label> (linkage)`` -- record linkage via ``match_df(a, b)``, scored
+        against the raw cross-source mapping. This is the task the published
+        DeepMatcher / Ditto figures measure, so it is the row to compare
+        against them.
+
+    Measured on Amazon-Google with token blocking committed: 67.5% of the
+    dedupe lane's candidates are same-source pairs, which against a
+    cross-source mapping cannot be true matches and land entirely in the
+    false-positive column. The engine already prints a warning naming this and
+    recommending ``match_df(left, right)``. Neither lane is wrong; they answer
+    different questions, and a reader cannot tell which one a bare number
+    answers. Hence both, labelled.
+    """
+    from dqbench_adapters.leipzig_eval import (
+        run_two_source_dedupe_zeroconfig,
+        run_two_source_link_zeroconfig,
+    )
+    from goldenmatch import dedupe_df, match_df
 
     spec = _PRODUCT_SPECS[key]
+    shared_kwargs = dict(
+        subdir=spec["subdir"], file_a=spec["file_a"], file_b=spec["file_b"],
+        gt_file=spec["gt_file"], gt_cols=spec["gt_cols"],
+        src_a=spec["src_a"], src_b=spec["src_b"], rename=spec["rename"],
+    )
+    rows: list[dict[str, Any]] = []
+
+    def _row(label: str, lane: str, res: Any, elapsed: float,
+             captured: dict[str, Any]) -> dict[str, Any]:
+        health, stop_reason = _controller_health(captured.get("result"))
+        _info(
+            f"  {label}: f1={res.f1:.4f} precision={res.precision:.4f} "
+            f"recall={res.recall:.4f} elapsed={elapsed:.2f}s health={health} "
+            f"stop_reason={stop_reason}"
+        )
+        return {
+            "name": label, "f1": round(res.f1, 4),
+            "precision": round(res.precision, 4), "recall": round(res.recall, 4),
+            "tp": res.true_positives, "fp": res.false_positives,
+            "fn": res.false_negatives,
+            "elapsed_seconds": round(elapsed, 2),
+            "health": health, "stop_reason": stop_reason, "domain": "product",
+            "lane": lane,
+            "planning_effort": _PLANNING_EFFORT,
+        }
+
+    # ---- dedupe lane (historical row; keeps the bare label) ----------------
     # The shared helper returns only the score, so the controller verdict would be
     # lost -- and this function used to hardcode `health: "n/a"`, which made the
     # RED-config check in `_check_quality_floors` unable to fire on the two
     # datasets in the worst shape. Both committed RED configs in the 2026-08-18
     # nightly and neither tripped it (#2457). Capture it off the result instead of
     # widening the helper's contract for one caller.
-    captured: dict[str, Any] = {}
+    dedupe_captured: dict[str, Any] = {}
 
     def _dedupe(frame):
         res = dedupe_df(frame, planning_effort=_PLANNING_EFFORT)
-        captured["result"] = res
+        dedupe_captured["result"] = res
         return res
 
     start = time.time()
-    res = run_two_source_dedupe_zeroconfig(
-        datasets_dir, _dedupe,
-        subdir=spec["subdir"], file_a=spec["file_a"], file_b=spec["file_b"],
-        gt_file=spec["gt_file"], gt_cols=spec["gt_cols"],
-        src_a=spec["src_a"], src_b=spec["src_b"], rename=spec["rename"],
-    )
+    res = run_two_source_dedupe_zeroconfig(datasets_dir, _dedupe, **shared_kwargs)
     elapsed = time.time() - start
     if res is None:
-        _info(f"  {spec['label']}: dataset files missing — skipping")
-        return None
-    health, stop_reason = _controller_health(captured.get("result"))
-    _info(
-        f"  {spec['label']}: f1={res.f1:.4f} precision={res.precision:.4f} "
-        f"recall={res.recall:.4f} elapsed={elapsed:.2f}s health={health} "
-        f"stop_reason={stop_reason}"
-    )
-    return {
-        "name": spec["label"], "f1": round(res.f1, 4),
-        "precision": round(res.precision, 4), "recall": round(res.recall, 4),
-        "tp": res.true_positives, "fp": res.false_positives, "fn": res.false_negatives,
-        "elapsed_seconds": round(elapsed, 2),
-        "health": health, "stop_reason": stop_reason, "domain": "product",
-        "planning_effort": _PLANNING_EFFORT,
-    }
+        _info(f"  {spec['label']}: dataset files missing - skipping")
+        return []
+    rows.append(_row(spec["label"], "dedupe", res, elapsed, dedupe_captured))
+
+    # ---- linkage lane ------------------------------------------------------
+    link_captured: dict[str, Any] = {}
+
+    def _match(left, right):
+        res = match_df(left, right, planning_effort=_PLANNING_EFFORT)
+        link_captured["result"] = res
+        return res
+
+    start = time.time()
+    link = run_two_source_link_zeroconfig(datasets_dir, _match, **shared_kwargs)
+    elapsed = time.time() - start
+    if link is not None:
+        rows.append(
+            _row(f"{spec['label']} (linkage)", "linkage", link, elapsed, link_captured)
+        )
+    return rows
 
 
 #: Sentinel file proving a file-backed dataset is on disk. Keyed by the same
@@ -562,6 +613,16 @@ _F1_FLOORS: dict[str, float | None] = {
     # NOT lowered here to make the lane green: Abt-Buy also commits a RED config,
     # which fails the lane on its own, so the honest fix is a quality fix rather
     # than a smaller number.
+    # ORIGIN RESOLVED 2026-08-22 (#2717): the 0.5037 was a LINKAGE measurement.
+    # Running `match_df(abt, buy)` reproduces it -- F1 0.5658, precision 0.9163,
+    # 490 emitted pairs, against the baseline's 0.5037 / P 0.8219 / 494 pairs.
+    # The pair count matching to within 4 is what settles it. So the floor was
+    # derived from the linkage lane and then enforced against the dedupe lane,
+    # which is a different and strictly harder task. It is not unreproducible
+    # and it was never a regression; the two numbers were never comparable.
+    # Kept here at 0.45 for the DEDUPE row it currently gates -- raising or
+    # retiring it belongs with the same-source framing decision, not with this
+    # change -- and see "Abt-Buy (linkage)" below for where it actually applies.
     "Abt-Buy": 0.45,
     # KNOWN BAD (#2470). Measured 0.0697 / recall 0.0419. The floor is set at the
     # observed value ONLY to stop it getting worse; it is not an endorsement, and
@@ -571,6 +632,13 @@ _F1_FLOORS: dict[str, float | None] = {
     # No trustworthy baseline recorded yet -- these have not completed in CI.
     "DBLP-ACM": None,
     "NCVR": None,
+    # The linkage rows (#2717). Measured locally 2026-08-22 at Abt-Buy 0.5658
+    # and Amazon-Google 0.4636, but a local Windows / native-off run is not a CI
+    # baseline, so no floor is claimed until the lane has published one. They are
+    # deliberately NOT quarantined either: a RED controller health on a lane that
+    # has just been repaired is exactly the signal worth seeing.
+    "Abt-Buy (linkage)": None,
+    "Amazon-Google (linkage)": None,
 }
 
 
@@ -984,7 +1052,9 @@ def main() -> int:
         results.append(_run_dqbench(with_llm=args.with_llm))
     for key in ("abt-buy", "amazon-google"):
         if key in selected:
-            results.append(_measure_product(args.datasets_dir, key))
+            # extend, not append: each product dataset yields a dedupe row AND
+            # a linkage row (#2717). See `_measure_product`.
+            results.extend(_measure_product(args.datasets_dir, key))
 
     results = [r for r in results if r is not None]
 

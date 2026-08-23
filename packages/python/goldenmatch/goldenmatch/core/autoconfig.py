@@ -5198,6 +5198,25 @@ def auto_configure_df(
                 )
             if cols_to_drop:
                 df = _excl_frame.drop(cols_to_drop).native
+                # Match mode: drop the SAME columns from the reference. The
+                # detectors ran on the target only, but the exclusion is a
+                # statement about the FEATURE ("description is free text"), not
+                # about one side of the join -- measured on Amazon-Google, both
+                # frames flag `description` independently. Dropping it from the
+                # target alone left the two frames at different widths, and
+                # `run_match_df`'s polars lane concatenates them with a strict
+                # `pl.concat`: every controller iteration raised
+                #   ShapeError: unable to append to a DataFrame of width 5 with
+                #   a DataFrame of width 6
+                # so the run fell back to v0 + a RED sentinel (#2717). The arrow
+                # lane hid it -- `pa.concat_tables(promote_options="permissive")`
+                # backfills the missing column with nulls instead of raising.
+                # Intersected, so a reference that never had the column is fine.
+                if reference is not None and not _is_ray_dataset(reference):
+                    _ref_frame = _to_frame_excl(reference)
+                    _ref_drop = [c for c in cols_to_drop if c in set(_ref_frame.columns)]
+                    if _ref_drop:
+                        reference = _ref_frame.drop(_ref_drop).native
             _LAST_AUTOCONFIG_EXCLUSIONS.set(list(exclusions))
         else:
             _LAST_AUTOCONFIG_EXCLUSIONS.set([])

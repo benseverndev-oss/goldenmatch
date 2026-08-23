@@ -120,7 +120,10 @@ _TOKEN_PAIR_BUDGET_PER_ROW = 10
 
 
 def _token_candidates_enabled() -> bool:
-    """Whether auto-suggest may propose token blocking. Default OFF (#2488).
+    """Whether auto-suggest may propose token blocking. Default ON (#2717).
+
+    It shipped default-OFF under #2488 on the reasoning below, which a later
+    measurement refuted -- both are kept so the flip is auditable.
 
     The strategy itself is sound and measured -- on Amazon-Google it reaches
     98.2% blocking recall against the committed key's 7.15%. What is NOT yet

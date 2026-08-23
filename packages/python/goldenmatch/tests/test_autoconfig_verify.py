@@ -103,6 +103,112 @@ def test_postflight_bimodal_histogram_adjusts_threshold():
     assert 0.3 <= adj.to_value <= 0.7
 
 
+def test_postflight_refuses_to_adjust_a_truncated_distribution():
+    """A histogram that starts AT the cut cannot say where the cut belongs.
+
+    The weighted block scorer applies `mk.threshold` itself and returns only
+    the survivors, so the pair list postflight receives is already truncated at
+    the current threshold. Every "valley" findable in it lies ABOVE the cut, so
+    the adjustment can only ever ratchet the threshold UP -- never down, and
+    never back.
+
+    Measured on Amazon-Google (#2717), linkage lane: the committed threshold
+    0.65 was the F1 optimum of the candidate set (F1 0.4284). Postflight saw
+    the truncated tail, called it bimodal with a valley at 0.965, and re-filtered
+    there -- 1646 pairs became 120, F1 0.4284 -> 0.0761. The distribution was
+    not bimodal; the left mode had been clipped off before postflight ever saw
+    it.
+
+    Same failure mode as measuring a posterior split on `scored_pairs`, which is
+    also truncated at the cut.
+    """
+    import random
+
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+    )
+    from goldenmatch.core.autoconfig_verify import postflight
+
+    random.seed(42)
+    threshold = 0.65
+    # The same two-mode shape the valid case uses, but with everything below
+    # the cut removed -- exactly what the block scorer hands over.
+    pair_scores = [
+        (i, i + 1000, s)
+        for i, s in enumerate(
+            max(0.0, min(1.0, random.gauss(0.70, 0.03))) for _ in range(500)
+        )
+    ] + [
+        (i + 2000, i + 3000, s)
+        for i, s in enumerate(
+            max(0.0, min(1.0, random.gauss(0.99, 0.01))) for _ in range(500)
+        )
+    ]
+    pair_scores = [p for p in pair_scores if p[2] >= threshold]
+    assert min(s for _, _, s in pair_scores) >= threshold, "fixture must be truncated"
+
+    df = pl.DataFrame({"name": [f"x{i}" for i in range(100)]})
+    cfg = GoldenMatchConfig(
+        blocking=BlockingConfig(
+            strategy="static", keys=[BlockingKeyConfig(fields=["name"])]
+        ),
+        matchkeys=[MatchkeyConfig(name="mk", type="weighted", threshold=threshold,
+                                  fields=[MatchkeyField(field="name",
+                                                        scorer="token_sort",
+                                                        weight=1.0)])],
+    )
+    report = postflight(df, cfg, pair_scores=pair_scores)
+    assert not any(adj.field == "threshold" for adj in report.adjustments), (
+        "postflight adjusted the threshold from a distribution truncated at it"
+    )
+    assert any("truncated" in a for a in report.advisories), (
+        "refusing silently is as bad as adjusting -- say why"
+    )
+
+
+def test_postflight_still_adjusts_when_mass_exists_below_the_cut():
+    """The guard must not disable the signal where it is sound.
+
+    A probabilistic matchkey scores down to the REVIEW cut, so postflight sees
+    pairs on both sides of the link threshold. There the valley is real evidence
+    and the adjustment stands.
+    """
+    import random
+
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+    )
+    from goldenmatch.core.autoconfig_verify import postflight
+
+    random.seed(42)
+    pair_scores = [
+        (i, i + 1000, max(0.0, min(1.0, random.gauss(0.2, 0.08)))) for i in range(500)
+    ] + [
+        (i + 2000, i + 3000, max(0.0, min(1.0, random.gauss(0.9, 0.05))))
+        for i in range(500)
+    ]
+    df = pl.DataFrame({"name": [f"x{i}" for i in range(100)]})
+    cfg = GoldenMatchConfig(
+        blocking=BlockingConfig(
+            strategy="static", keys=[BlockingKeyConfig(fields=["name"])]
+        ),
+        matchkeys=[MatchkeyConfig(name="mk", type="weighted", threshold=0.7,
+                                  fields=[MatchkeyField(field="name",
+                                                        scorer="token_sort",
+                                                        weight=1.0)])],
+    )
+    report = postflight(df, cfg, pair_scores=pair_scores)
+    assert any(adj.field == "threshold" for adj in report.adjustments)
+
+
 def test_postflight_unimodal_histogram_no_adjustment():
     import random
 
