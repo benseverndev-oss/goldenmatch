@@ -3582,6 +3582,13 @@ def _embedder_available(config: GoldenMatchConfig | None = None) -> bool:
     return bool(getattr(getattr(config, "embedding", None), "provider", None))
 
 
+#: Average character length at or below which a free-text column is "short
+#: free text" (a product title, a headline) rather than a document, and blocks
+#: better with `token` than with `lsh`. See `_text_corpus_blocking` for the
+#: measurement and for why this is a calibration rather than a derived value.
+_SHORT_FREE_TEXT_MAX_LEN = 120.0
+
+
 def _best_sketch_column(profiles: list[ColumnProfile]) -> str | None:
     """The text column a blocking sketch should be built on.
 
@@ -3652,12 +3659,47 @@ def _text_corpus_blocking(
     near-duplicates that share meaning but little surface text — the lexical
     fallback only catches shared shingles. See #1082.
     """
+    descs = [p for p in profiles if p.col_type == "description"]
+    col = _best_sketch_column(descs)
+
+    # SHORT free text blocks with `token`, documents with `lsh`. `blocking.mdx`
+    # already prescribed exactly this -- "use `lsh` for near-duplicate
+    # documents, `token` for short free text where only a few tokens agree" --
+    # and the text-corpus branch committed LSH for everything it reached.
+    #
+    # Ground-truth blocking recall on Abt-Buy through the shipped blocker:
+    #
+    #   lsh   on 'name'        (thr 0.5)      0.1139    5,082 comparisons
+    #   lsh   on 'name'        (thr 0.2)      0.5123   64,466
+    #   token on 'name'        (max_df 0.02)  0.9198   64,056
+    #   lsh   on 'description' (thr 0.5)      0.0009   13,071
+    #   token on 'description' (max_df 0.02)  0.3801  137,720
+    #
+    # At equal cost -- ~64k comparisons -- token nearly DOUBLES LSH's recall on
+    # the same column. The bar is read off the CHOSEN column (see
+    # `_best_sketch_column`), never off the longest one: reading it off the
+    # longest would send this shape back to LSH through the back door.
+    #
+    # `_SHORT_FREE_TEXT_MAX_LEN` is calibrated on the datasets available here
+    # and separates them with room to spare -- Abt-Buy `name` 54.3 and
+    # Amazon-Google `title` 51.1 on one side, Abt-Buy `description` 178.5 and
+    # Amazon-Google `description` 551.2 on the other. Stated as a limitation
+    # rather than presented as derived: a genuine document corpus (FineWeb-style,
+    # thousands of characters) is far above it, which is the case LSH was built
+    # for and keeps.
+    _chosen = next((p for p in descs if p.name == col), None)
+    if _chosen is not None and _chosen.avg_len <= _SHORT_FREE_TEXT_MAX_LEN:
+        from goldenmatch.config.schemas import BlockingConfig, TokenBlockingConfig
+
+        return BlockingConfig(
+            strategy="token",
+            token=TokenBlockingConfig(column=col, min_token_length=3,
+                                      max_df_ratio=0.02),
+        )
+
     if _embedder_available(config):
         from goldenmatch.config.schemas import BlockingConfig, SimHashKeyConfig
 
-        col = _best_sketch_column(
-            [p for p in profiles if p.col_type == "description"]
-        )
         return BlockingConfig(
             strategy="simhash",
             simhash=SimHashKeyConfig(column=col, num_planes=256, num_bands=32, seed=0),

@@ -63,14 +63,30 @@ def test_multi_name_high_card_blocks_text_corpus():
 def test_build_blocking_routes_text_corpus_to_lsh():
     from goldenmatch.core.autoconfig import build_blocking, profile_columns
 
-    base = "the quick brown fox jumps over the lazy dog near the river bank"
+    # DOCUMENT-length on purpose. These fixtures used ~63-character sentences
+    # to stand in for a document corpus, which is shorter than a product title
+    # -- and short free text now routes to `token` rather than `lsh` (#2717,
+    # `_SHORT_FREE_TEXT_MAX_LEN`). The intent of these tests is "a DOCUMENT
+    # corpus gets near-duplicate blocking", so the fixture is made to match its
+    # own description rather than the assertion being flipped.
+    # No commas: comma-separated text profiles as `multi_name`, not
+    # `description`, which drops the frame out of `_is_text_corpus` entirely --
+    # a first attempt at this padding did exactly that and routed to `static`.
+    _pad = (
+        " the passage continues at length describing the surrounding landscape"
+        " and the weather over several days and the habits of the people who"
+        " live nearby in the unhurried manner of a document rather than a title"
+    )
+    base = (
+        "the quick brown fox jumps over the lazy dog near the river bank" + _pad
+    )
     variants = [
         base,
         base.replace("quick", "fast"),
         base.replace("lazy", "sleepy"),
-        "a completely different statement about astronomy and distant galaxies far away",
-        "yet another unrelated remark concerning gardening tools and spring planting",
-        "an entirely separate note discussing maritime navigation and old sailing charts",
+        "a completely different statement about astronomy and distant galaxies far away" + _pad,
+        "yet another unrelated remark concerning gardening tools and spring planting" + _pad,
+        "an entirely separate note discussing maritime navigation and old sailing charts" + _pad,
     ]
     df = pl.DataFrame({"body": variants * 5})
     profiles = profile_columns(df)
@@ -86,14 +102,30 @@ def test_build_blocking_routes_text_corpus_to_lsh():
 
 
 def _text_corpus_df() -> pl.DataFrame:
-    base = "the quick brown fox jumps over the lazy dog near the river bank"
+    # DOCUMENT-length on purpose. These fixtures used ~63-character sentences
+    # to stand in for a document corpus, which is shorter than a product title
+    # -- and short free text now routes to `token` rather than `lsh` (#2717,
+    # `_SHORT_FREE_TEXT_MAX_LEN`). The intent of these tests is "a DOCUMENT
+    # corpus gets near-duplicate blocking", so the fixture is made to match its
+    # own description rather than the assertion being flipped.
+    # No commas: comma-separated text profiles as `multi_name`, not
+    # `description`, which drops the frame out of `_is_text_corpus` entirely --
+    # a first attempt at this padding did exactly that and routed to `static`.
+    _pad = (
+        " the passage continues at length describing the surrounding landscape"
+        " and the weather over several days and the habits of the people who"
+        " live nearby in the unhurried manner of a document rather than a title"
+    )
+    base = (
+        "the quick brown fox jumps over the lazy dog near the river bank" + _pad
+    )
     variants = [
         base,
         base.replace("quick", "fast"),
         base.replace("lazy", "sleepy"),
-        "a completely different statement about astronomy and distant galaxies far away",
-        "yet another unrelated remark concerning gardening tools and spring planting",
-        "an entirely separate note discussing maritime navigation and old sailing charts",
+        "a completely different statement about astronomy and distant galaxies far away" + _pad,
+        "yet another unrelated remark concerning gardening tools and spring planting" + _pad,
+        "an entirely separate note discussing maritime navigation and old sailing charts" + _pad,
     ]
     return pl.DataFrame({"body": variants * 5})
 
@@ -410,18 +442,30 @@ def test_zero_config_text_corpus_dedupe_e2e():
     import goldenmatch
     from goldenmatch.core.autoconfig import auto_configure_df
 
-    base = "the annual budget report shows a significant increase in marketing spend"
+    # Document-length, and comma-free so the column keeps profiling as
+    # `description`. At its original ~80 characters this corpus was SHORTER
+    # than a product title, and short free text now routes to `token` rather
+    # than `lsh` (#2717). Padding it keeps this test covering the LSH path
+    # end-to-end; the short-text path has its own coverage in
+    # test_short_free_text_blocking.py.
+    _pad = (
+        " the report goes on for several more paragraphs setting out the"
+        " underlying assumptions and the methodology used to arrive at them"
+        " together with a long appendix of supporting tables and commentary"
+    )
+    base = ("the annual budget report shows a significant increase in marketing spend"
+            + _pad)
     near_dups = [
         base,
         base.replace("significant", "substantial"),
         base.replace("marketing", "advertising"),
     ]
     distinct = [
-        "weather patterns over the pacific ocean shifted dramatically this winter season",
-        "the museum unveiled a new exhibit featuring ancient pottery from coastal villages",
-        "local farmers reported record yields after an unusually wet and mild growing year",
-        "the orchestra performed a moving rendition of a forgotten romantic era symphony",
-        "engineers completed the suspension bridge two months ahead of the planned schedule",
+        "weather patterns over the pacific ocean shifted dramatically this winter season" + _pad,
+        "the museum unveiled a new exhibit featuring ancient pottery from coastal villages" + _pad,
+        "local farmers reported record yields after an unusually wet and mild growing year" + _pad,
+        "the orchestra performed a moving rendition of a forgotten romantic era symphony" + _pad,
+        "engineers completed the suspension bridge two months ahead of the planned schedule" + _pad,
     ]
     rows = near_dups + distinct
     df = pl.DataFrame({"text": rows})
