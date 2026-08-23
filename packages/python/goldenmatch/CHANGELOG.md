@@ -6,6 +6,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [3.16.0] - 2026-08-23
+
 ### Fixed
 
 - **Auto-config spent its whole iteration budget on a lever that cannot move
