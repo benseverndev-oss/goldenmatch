@@ -637,7 +637,13 @@ _F1_FLOORS: dict[str, float | None] = {
     # baseline, so no floor is claimed until the lane has published one. They are
     # deliberately NOT quarantined either: a RED controller health on a lane that
     # has just been repaired is exactly the signal worth seeing.
-    "Abt-Buy (linkage)": None,
+    # The 0.45 floor above was DERIVED from a linkage run (0.5037 / P 0.8219 /
+    # 494 pairs) and then enforced against the dedupe lane for months. Now that
+    # the linkage row exists, the floor is applied to the lane it actually
+    # describes. Measured 0.7024 (P 0.8529, R 0.5971) on 2026-08-23, so 0.45
+    # leaves real margin rather than sitting on the observed value -- and a
+    # regression back toward the old blocking behaviour trips it.
+    "Abt-Buy (linkage)": 0.45,
     "Amazon-Google (linkage)": None,
 }
 
@@ -664,12 +670,24 @@ _F1_FLOORS: dict[str, float | None] = {
 _QUARANTINE: dict[str, dict[str, Any]] = {
     "Abt-Buy": {
         "issue": 2717,
-        "f1_at_quarantine": 0.1723,
+        "f1_at_quarantine": 0.0881,
         "tolerance": 0.03,
         "why": (
-            "product-text matching collapses; also commits a RED config "
-            "(budget_iterations). The 0.45 floor is itself DISPUTED -- see the "
-            "_F1_FLOORS note; it derives from an UNREPRODUCED 0.5037."
+            "RE-BASELINED 2026-08-23, DOWNWARD, because the engine got BETTER. "
+            "Weighted-path blocking recall went 0.0684 -> 0.5662 (8x) when the "
+            "sketch column stopped being chosen by length and short free text "
+            "stopped being routed to LSH. This lane's F1 FELL from 0.1723 to "
+            "0.0881 as a result: it scores a CONCATENATED frame against a "
+            "cross-source mapping, so surfacing more candidates surfaces mostly "
+            "same-source pairs that cannot be true matches -- precision "
+            "0.1068 -> 0.0470 while recall rose 0.4463 -> 0.7075. The same "
+            "change took the LINKAGE row 0.5658 -> 0.7024. "
+            "This is NOT a floor lowered to make a lane green: the number it "
+            "describes is a metric that punishes better blocking, and the "
+            "quarantine is re-pointed at the current run so a genuine NEW "
+            "regression can still trip it. What this lane should measure at all "
+            "is an open question -- see 'Abt-Buy (linkage)' below for the row "
+            "that is comparable to published figures."
         ),
     },
     "Amazon-Google": {

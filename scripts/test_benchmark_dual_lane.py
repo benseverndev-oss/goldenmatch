@@ -80,12 +80,26 @@ def test_historical_row_keeps_its_exact_name(stub_lanes):
 
 
 def test_linkage_rows_are_declared_in_the_floors_table():
-    """A row with no `_F1_FLOORS` entry is silently unfloored. Declaring them
-    as None is how "no trustworthy baseline yet" is said out loud."""
+    """A row with no `_F1_FLOORS` entry is silently unfloored, so both linkage
+    rows must appear -- `None` is how "no trustworthy baseline yet" is said out
+    loud, and a number is how a real one is."""
     for key in ("abt-buy", "amazon-google"):
         label = run_benchmarks._PRODUCT_SPECS[key]["label"] + " (linkage)"
         assert label in run_benchmarks._F1_FLOORS
-        assert run_benchmarks._F1_FLOORS[label] is None
+
+
+def test_abt_buy_linkage_carries_the_floor_that_was_derived_from_it():
+    """The 0.45 floor was derived from a LINKAGE run (0.5037 / P 0.8219 / 494
+    emitted pairs) and then enforced against the dedupe lane for months, where
+    it was recorded as DISPUTED and unreproducible. Now that the linkage row
+    exists it carries its own floor, cleared with margin at a measured 0.7024."""
+    assert run_benchmarks._F1_FLOORS["Abt-Buy (linkage)"] == 0.45
+
+
+def test_amazon_google_linkage_stays_unfloored_until_ci_publishes_one():
+    """Measured 0.4636 locally, but a local Windows / native-off run is not a
+    CI baseline and no floor is claimed on the strength of it."""
+    assert run_benchmarks._F1_FLOORS["Amazon-Google (linkage)"] is None
 
 
 def test_missing_dataset_yields_no_rows(monkeypatch):
