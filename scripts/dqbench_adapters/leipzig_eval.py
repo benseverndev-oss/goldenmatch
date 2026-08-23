@@ -296,3 +296,101 @@ def run_two_source_dedupe_zeroconfig(
         recall=r,
         f1=f1,
     )
+
+
+def run_two_source_link_zeroconfig(
+    datasets_dir: Path,
+    match_df: Callable,
+    *,
+    subdir: str,
+    file_a: str,
+    file_b: str,
+    gt_file: str,
+    gt_cols: tuple[str, str],
+    src_a: str,
+    src_b: str,
+    rename: dict[str, str] | None = None,
+) -> LeipzigResult | None:
+    """Zero-config cross-source LINKAGE of two product sources; pairwise F1.
+
+    The linkage counterpart to `run_two_source_dedupe_zeroconfig` above, over the
+    same files and the same mapping. It exists because the two lanes measure
+    genuinely different tasks and the difference is large enough to change what
+    a number means (#2717):
+
+      * Dedupe concatenates both sources into one frame and compares everything
+        to everything, so same-source pairs (Amazon-Amazon, Google-Google) enter
+        the candidate set. Against a cross-source mapping those can never be
+        true matches -- measured on Amazon-Google, 67.5% of candidates were
+        same-source, and they land entirely in the false-positive column. The
+        engine prints a warning naming this and recommending `match_df`.
+      * Linkage compares A against B only, which is the task the published
+        DeepMatcher / Ditto figures measure.
+
+    Ground truth differs accordingly, and deliberately is NOT shared with the
+    dedupe helper. Linkage scores against the raw cross-source mapping;
+    dedupe scores against the transitive closure of that mapping, which also
+    contains same-source pairs (two Amazon rows mapping to one Google row are a
+    true dedupe pair and not a linkage pair at all). Reporting one number for
+    both was the framing error; both are reported, each labelled.
+
+    Row-id convention: `match_df` stamps `__target_row_id__` from the first
+    frame and `__ref_row_id__` from the second, and the reference ids are
+    OFFSET by the target's height (verified on Amazon-Google: target ids in
+    [0, 1362], reference ids in [1363, 4588]). Both orientations are handled
+    because a pair may be emitted either way round.
+    """
+    base = datasets_dir / subdir
+    a_path, b_path, gt_path = base / file_a, base / file_b, base / gt_file
+    if not (a_path.exists() and b_path.exists() and gt_path.exists()):
+        return None
+
+    a = pl.read_csv(a_path, encoding="utf8-lossy", ignore_errors=True)
+    b = pl.read_csv(b_path, encoding="utf8-lossy", ignore_errors=True)
+    if rename:
+        a = a.rename({k: v for k, v in rename.items() if k in a.columns})
+        b = b.rename({k: v for k, v in rename.items() if k in b.columns})
+
+    shared = [c for c in a.columns if c in b.columns and c != "id"]
+    ids_a = a["id"].cast(pl.Utf8).to_list()
+    ids_b = b["id"].cast(pl.Utf8).to_list()
+    n_a = len(ids_a)
+
+    result = match_df(a.select(shared), b.select(shared))
+
+    found: set[tuple[str, str]] = set()
+    matched = _as_polars(getattr(result, "matched", None))
+    if matched is not None and matched.height > 0:
+        for row in matched.iter_rows(named=True):
+            tgt = row["__target_row_id__"]
+            ref = row["__ref_row_id__"]
+            if tgt < n_a:
+                a_idx, b_idx = tgt, ref - n_a
+            else:
+                a_idx, b_idx = ref, tgt - n_a
+            if 0 <= a_idx < n_a and 0 <= b_idx < len(ids_b):
+                found.add((f"{src_a}:{ids_a[a_idx]}", f"{src_b}:{ids_b[b_idx]}"))
+
+    gt = pl.read_csv(gt_path, encoding="utf8-lossy", ignore_errors=True)
+    ca, cb = gt_cols
+    truth = {
+        (f"{src_a}:{str(row[ca]).strip()}", f"{src_b}:{str(row[cb]).strip()}")
+        for row in gt.to_dicts()
+    }
+
+    tp = len(found & truth)
+    fp = len(found - truth)
+    fn = len(truth - found)
+    p = tp / (tp + fp) if (tp + fp) else 0.0
+    r = tp / (tp + fn) if (tp + fn) else 0.0
+    f1 = (2 * p * r / (p + r)) if (p + r) else 0.0
+    return LeipzigResult(
+        found_pairs=len(found),
+        ground_truth_pairs=len(truth),
+        true_positives=tp,
+        false_positives=fp,
+        false_negatives=fn,
+        precision=p,
+        recall=r,
+        f1=f1,
+    )

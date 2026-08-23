@@ -3796,6 +3796,72 @@ def _learned_block_cap(total_rows: int, current_cap: int, native_scoring: bool) 
     return max(current_cap, _compute_max_safe_block(total_rows, native_scoring))
 
 
+def defer_free_text_blocking_to_analyzer(blocking: Any, df: Any) -> Any:
+    """Hand FREE-TEXT blocking to the analyzer instead of committing a prefix key.
+
+    `build_blocking` only ever emits static/compound keys, so on free text it
+    commits a prefix -- and `block_analyzer.free_text_columns` says the problem
+    plainly: "a prefix key on a product title is a near-useless block."
+
+    Measured on Amazon-Google. Auto-config commits `multi_pass` on
+    `['title','manufacturer']`, blocking recall **0.0408**. The token strategy
+    the analyzer can propose reaches **0.953** (94,938 candidate pairs, df<=50),
+    taking achievable F1 from 0.094 to 0.404. The scorer is not the limit: 95%
+    of true pairs already score above the 95th percentile of negatives.
+
+    **Token blocking was never broken -- it was unreachable.** Two locks:
+    `auto_suggest` defaults to False so `_run_auto_suggest` returns immediately,
+    and its token branch sits behind `if not config.blocking.keys`, which
+    auto-config has already populated. `build_token_blocks` never logged because
+    nothing ever set `strategy="token"` -- misread as a broken integration
+    (`block_analyzer.py:140`). Invoked directly it works.
+
+    This clears BOTH locks for the one case where the static key is known bad:
+    `auto_suggest=True` with no keys, a state `BlockingConfig` already models
+    ("auto_suggest discovers keys at runtime", schemas.py:1283).
+
+    Deliberately narrow:
+
+    * only when a key field is free text by the MEASURED token-count bar
+      (`_FREE_TEXT_MIN_MEAN_TOKENS` = 5.0; names and addresses sit at 2-4,
+      product titles at 8-30), so name/address blocking is untouched. ANY rather
+      than EVERY field, because compounding a free-text prefix with a short one
+      does not rescue it -- `['title','manufacturer']` measures 0.0408;
+    * never when a non-default strategy was chosen (canopy, ann, lsh, learned
+      were picked for reasons this does not model);
+    * fail-open -- any error leaves the config untouched.
+
+    DBLP-ACM is unaffected: its committed key is `__title_key__`, a derived
+    single-token feature, so the bar is not met and its 0.9820-recall key stands.
+    """
+    if blocking is None or not getattr(blocking, "keys", None):
+        return blocking
+    if getattr(blocking, "auto_suggest", False):
+        return blocking
+    if getattr(blocking, "strategy", None) not in (None, "static", "multi_pass"):
+        return blocking
+    try:
+        from goldenmatch.core.block_analyzer import free_text_columns
+
+        fields = [f for k in blocking.keys for f in (k.fields or [])]
+        if not fields:
+            return blocking
+        free = set(free_text_columns(df, fields))
+        if not free:
+            return blocking
+        logger.info(
+            "Blocking: key field(s) %s are free text; deferring to the block "
+            "analyzer (auto_suggest) instead of committing a prefix key -- that "
+            "measures 0.0408 blocking recall on Amazon-Google against 0.953 for "
+            "the token strategy the analyzer can reach. See #2717.",
+            sorted(free),
+        )
+        return blocking.model_copy(update={"keys": [], "auto_suggest": True})
+    except Exception:  # noqa: BLE001 -- advisory; never break config generation
+        logger.debug("free-text blocking deferral skipped", exc_info=True)
+        return blocking
+
+
 def build_blocking(
     profiles: list[ColumnProfile],
     df: pl.DataFrame,
@@ -5132,6 +5198,25 @@ def auto_configure_df(
                 )
             if cols_to_drop:
                 df = _excl_frame.drop(cols_to_drop).native
+                # Match mode: drop the SAME columns from the reference. The
+                # detectors ran on the target only, but the exclusion is a
+                # statement about the FEATURE ("description is free text"), not
+                # about one side of the join -- measured on Amazon-Google, both
+                # frames flag `description` independently. Dropping it from the
+                # target alone left the two frames at different widths, and
+                # `run_match_df`'s polars lane concatenates them with a strict
+                # `pl.concat`: every controller iteration raised
+                #   ShapeError: unable to append to a DataFrame of width 5 with
+                #   a DataFrame of width 6
+                # so the run fell back to v0 + a RED sentinel (#2717). The arrow
+                # lane hid it -- `pa.concat_tables(promote_options="permissive")`
+                # backfills the missing column with nulls instead of raising.
+                # Intersected, so a reference that never had the column is fine.
+                if reference is not None and not _is_ray_dataset(reference):
+                    _ref_frame = _to_frame_excl(reference)
+                    _ref_drop = [c for c in cols_to_drop if c in set(_ref_frame.columns)]
+                    if _ref_drop:
+                        reference = _ref_frame.drop(_ref_drop).native
             _LAST_AUTOCONFIG_EXCLUSIONS.set(list(exclusions))
         else:
             _LAST_AUTOCONFIG_EXCLUSIONS.set([])
@@ -5504,6 +5589,8 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
         llm_provider=llm_provider,
         n_rows_full=total_rows,
     ) if has_fuzzy else None
+    # #2717: same deferral on the weighted path.
+    blocking = defer_free_text_blocking_to_analyzer(blocking, df)
     # Quality-aware blocking (door #1): add fuzzy-tolerant passes for columns
     # GoldenCheck flags as edit-distance-fuzzy. Fail-open + additive; OFF unless
     # GOLDENMATCH_QUALITY_AWARE_BLOCKING=1. Runs before adaptive promotion.
@@ -6094,6 +6181,8 @@ def auto_configure_probabilistic_df(
             "identifier-like fields)."
         )
     blocking = build_blocking(profiles, df, llm_provider=llm_provider)
+    # #2717: a prefix key on free text is near-useless -- let the analyzer decide.
+    blocking = defer_free_text_blocking_to_analyzer(blocking, df)
     blocking = _maybe_prune_blocking_passes(blocking, df)
     blocking = apply_quality_aware_blocking(blocking, profiles, df)
     # Lever #3: diversify onto orthogonal stable keys (date-year, postcode/zip,

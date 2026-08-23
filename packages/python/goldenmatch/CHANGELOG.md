@@ -6,6 +6,70 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Fixed
+
+- **Postflight silently raised the match threshold using a distribution
+  truncated at that threshold (#2717).** The weighted block scorer applies
+  `mk.threshold` itself and returns only survivors, so the pair list postflight
+  receives starts AT the cut. Every "valley" findable in it lies above the cut,
+  so the auto-adjustment could only ever ratchet the threshold up -- never down,
+  and never back -- and the adjustment never appeared in the committed config.
+  Measured on Amazon-Google, linkage lane: the committed 0.65 was the F1 optimum
+  of the candidate set, postflight re-cut at 0.965, and 1646 qualifying pairs
+  became 120. Postflight now refuses when the valley sits in the far upper tail
+  of a truncated distribution -- there it is the gap below the terminal
+  near-exact spike that essentially every scorer produces, not a boundary
+  between populations -- and says so in an advisory. Expressed as a fraction of
+  the observed range: Amazon-Google's valley sat at 90%, `orgs_hard`'s genuine
+  one at 49.9%; the bar is 75%. An unconditional refusal was implemented first
+  and cost 0.117 F1 on `orgs_hard`, where the second mode is real and the higher
+  cut limits transitive chaining -- both measurements are recorded next to the
+  constant, along with what would falsify the bar. The signal is untouched
+  wherever pairs genuinely span the cut (a probabilistic matchkey scores down to
+  the review threshold), because there the histogram is not truncated at all.
+  End-to-end F1 on zero-config `match_df`, Amazon-Google: **0.0761 -> 0.4636**,
+  measured through `scripts/run_benchmarks.py`.
+
+  The truncation test itself needed a tolerance rather than a bare `>=`. Scores
+  arrive through a float32 arrow column while the threshold is a float64, so the
+  lowest surviving pair lands fractionally BELOW the cut it passed -- measured,
+  0.6499999761581421 against 0.6499999999999999, short by 2.4e-08. Written
+  exactly, the guard read that as "the population extends below the cut" and
+  silently never fired.
+- **Auto-config exclusions were applied to the target frame only (#2717).** In
+  match mode the GoldenCheck column-exclusion detectors ran on `df` and dropped
+  the excluded columns from it, leaving `reference` untouched. The two frames
+  then reached `run_match_df` at different widths and its polars lane
+  concatenates them with a strict `pl.concat`, so every auto-config iteration
+  raised `ShapeError` and the run fell back to v0 plus a RED sentinel. The arrow
+  lane hid it -- `pa.concat_tables(promote_options="permissive")` backfills the
+  missing column. The detectors had agreed on both frames all along; only the
+  drop was one-sided.
+
+### Changed
+
+- **Auto-suggest now proposes `token` blocking for free-text columns by
+  default** (`GOLDENMATCH_TOKEN_BLOCKING=0` forces it off). It shipped
+  default-OFF under #2488 on the reading that committing it took Amazon-Google's
+  F1 to 0.0000; that was wrong. Nothing ever set `strategy="token"`, so
+  `build_token_blocks` never ran and the 0.0000 came from whatever config was
+  committed instead. Invoked for real it reaches 0.982 blocking recall on that
+  benchmark against the previously committed key's 0.041. Only columns that
+  measure as free text are eligible, so names and addresses keep their
+  prefix/soundex keys.
+- **The product benchmarks report both lanes, labelled (#2717).** `Abt-Buy` and
+  `Amazon-Google` each now emit a dedupe row (unchanged name, so its floor,
+  quarantine and history all still apply) and a `(linkage)` row measured through
+  `match_df(a, b)` against the raw cross-source mapping -- the task the published
+  DeepMatcher / Ditto figures measure. On Amazon-Google 67.5% of the dedupe
+  lane's candidate pairs are same-source and cannot be true matches against a
+  cross-source mapping, so one number could not honestly answer both questions.
+  Measuring the right task is the whole of Abt-Buy's improvement -- **0.1723 ->
+  0.5658**, with postflight emitting no adjustment there either way.
+  This also resolves the origin of Abt-Buy's "unreproducible" 0.5037 / P 0.8219
+  / 494-pair baseline: it was a linkage measurement, reproduced here at 0.5658 /
+  P 0.9163 / 490 pairs.
+
 ## [3.15.0] - 2026-08-21
 
 ### Fixed

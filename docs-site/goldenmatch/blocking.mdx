@@ -284,14 +284,18 @@ Measured on Amazon-Google (4589 records, 1300 ground-truth pairs):
   agree.
 </Note>
 
-<Warning>
-  Blocking **auto-suggest will not choose `token` by default.** Committing it
-  automatically took Amazon-Google's end-to-end F1 from 0.1014 to 0.0000, the
-  failing auto-config subprofile flips to `blocking` and the committed config
-  yields no candidate pairs. That is undiagnosed (#2488), so the strategy is
-  available from an explicit config as shown above, while auto-suggest stays
-  behind `GOLDENMATCH_TOKEN_BLOCKING=1`.
-</Warning>
+<Note>
+  Blocking **auto-suggest chooses `token` for free-text columns by default.**
+  Only columns that measure as free text reach it -- names and addresses sit
+  below the token-count bar and keep their prefix/soundex keys -- so the plan
+  changes exactly where a prefix key is near-useless. On Amazon-Google that is
+  0.982 blocking recall against the previously committed key's 0.041.
+
+  This shipped default-OFF at first, on a reading that committing it took that
+  benchmark's F1 to 0.0000. It did not: nothing ever set `strategy="token"`, so
+  the strategy never ran and the 0.0000 came from whatever config was committed
+  instead. Set `GOLDENMATCH_TOKEN_BLOCKING=0` to force auto-suggest back off.
+</Note>
 
 ## Auto-select
 

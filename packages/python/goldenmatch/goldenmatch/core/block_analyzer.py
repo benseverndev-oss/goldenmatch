@@ -120,7 +120,10 @@ _TOKEN_PAIR_BUDGET_PER_ROW = 10
 
 
 def _token_candidates_enabled() -> bool:
-    """Whether auto-suggest may propose token blocking. Default OFF (#2488).
+    """Whether auto-suggest may propose token blocking. Default ON (#2717).
+
+    It shipped default-OFF under #2488 on the reasoning below, which a later
+    measurement refuted -- both are kept so the flip is auditable.
 
     The strategy itself is sound and measured -- on Amazon-Google it reaches
     98.2% blocking recall against the committed key's 7.15%. What is NOT yet
@@ -138,16 +141,38 @@ def _token_candidates_enabled() -> bool:
     that fails flips from `scoring` to `blocking`, `build_token_blocks` never
     logs, and the committed RED config yields no candidate pairs at all.
 
-    That integration gap is not diagnosed yet, and a plan that finds no pairs
-    is strictly worse than a 7%-recall key, so the default stays off until the
-    benchmark says otherwise. Set GOLDENMATCH_TOKEN_BLOCKING=1 to opt in.
-    Reading the env at call time (not import) keeps it settable per-test.
+    **DIAGNOSED 2026-08-22, and the rationale above does not survive it (#2717).**
+    There was no integration gap. `build_token_blocks` never logged because
+    nothing ever set `strategy="token"`: `auto_suggest` defaults to False so
+    `_run_auto_suggest` returns on its first line, and its token branch sits
+    behind `if not config.blocking.keys`, which auto-config has already
+    populated. The strategy was UNREACHABLE, not broken -- absence of logging
+    was read as evidence of failure when it was evidence of never running.
+
+    Invoked directly on Amazon-Google it works, measured against
+    `Amzon_GoogleProducts_perfectMapping.csv`:
+
+        df<=50 : 2,718 blocks    94,938 candidate pairs   blocking recall 0.953
+        df<=100: 2,754 blocks   163,499 candidate pairs   blocking recall 0.982
+
+    against the committed key's 0.041. So "a plan that finds no pairs" describes
+    a config token blocking never produced, and the F1 0.0000 in that experiment
+    came from whatever config WAS committed.
+
+    Default flipped ON. `defer_free_text_blocking_to_analyzer` (autoconfig.py)
+    only routes FREE-TEXT keys here -- names and addresses sit below the
+    token-count bar and never reach it -- so this changes the plan exactly where
+    a prefix key is documented as near-useless. The env var still forces it
+    either way; read at call time (not import) so it stays settable per-test.
     """
     import os  # noqa: PLC0415
 
-    return os.environ.get("GOLDENMATCH_TOKEN_BLOCKING", "").strip().lower() in {
-        "1", "true", "yes", "on",
-    }
+    raw = os.environ.get("GOLDENMATCH_TOKEN_BLOCKING", "").strip().lower()
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    return True
 
 
 def _mean_token_count(df, column: str, sample: int = 2000) -> float:
@@ -519,13 +544,38 @@ def _target_pairs_from_matchkey(sample_frame: Any, matchkey: Any) -> set[tuple[i
     Row ids are positional into ``sample_frame`` so callers can index parallel
     per-row lists directly.
     """
+    from goldenmatch.core.frame import to_frame
     from goldenmatch.core.scorer import find_fuzzy_matches
 
-    height = sample_frame.height
-    block = sample_frame.native.with_columns(
-        pl.Series("__row_id__", list(range(height)), dtype=pl.Int64)
-    )
-    emitted = find_fuzzy_matches(block, matchkey)
+    # Row ids through the seam, not `native.with_columns(pl.Series(...))`. That
+    # was a POLARS call, and on the arrow-native lane `native` is a `pa.Table`,
+    # so it raised `AttributeError: 'pyarrow.lib.Table' object has no attribute
+    # 'with_columns'`. `_build_recall_target` catches that and drops to
+    # `_target_pairs_from_similarity` -- the proxy its own docstring calls WEAK
+    # (Amazon-Google: 2,355 sample pairs, 35 true, 1.5% precision). So on the
+    # DEFAULT lane every recall estimate came from the weak proxy, and nothing
+    # failed loudly: the warning names a matchkey, not a lane.
+    #
+    # That proxy is not merely noisy, it is ANTI-correlated with true retention
+    # -- on DBLP-ACM it rates `venue[:3]` (5.9% of true pairs) above `title[:5]`
+    # (98.2%) -- so anything ranking on its numbers is ranking on noise.
+    #
+    # `find_fuzzy_matches` accepts a `pa.Table`: its body reads through the
+    # `_to_frame_d5` seam and branches on `to_dicts`/`to_pylist`. Only the type
+    # annotation said polars. Verified byte-identical on the real DBLP-ACM
+    # matchkey incl. the composite `ensemble` scorer -- same 111 pairs, max score
+    # delta 0.0 -- and arrow is FASTER (0.37s vs 0.60s at n=1000). No polars, and
+    # the vectorised rapidfuzz path is kept: a `score_pair` loop, the obvious
+    # polars-free alternative, measured 44.1s for the same work.
+    #
+    # DROP before ensure: this function's contract is that ids are POSITIONAL
+    # into `sample_frame` so callers can index parallel per-row lists.
+    # `ensure_row_ids` REUSES an existing `__row_id__` (#844), which upstream may
+    # already carry with a different numbering.
+    frame = to_frame(sample_frame.native)
+    if "__row_id__" in frame.columns:
+        frame = frame.drop(["__row_id__"])
+    emitted = find_fuzzy_matches(frame.ensure_row_ids("__row_id__").native, matchkey)
     return {(min(a, b), max(a, b)) for a, b, _ in emitted}
 
 
@@ -813,11 +863,55 @@ def analyze_blocking(
     # putting everything in one block scores badly on comparison count), so
     # ranking is not a race to maximise recall alone.
     suggestions.sort(key=lambda s: (s.score * s.estimated_recall, s.score), reverse=True)
+    suggestions = _apply_recall_tradeoff_gate(suggestions)
 
     if suggestions:
         _warn_on_recall(suggestions, scored[0][1].get("coverage", 0.0))
 
     return suggestions
+
+
+def _apply_recall_tradeoff_gate(suggestions: list) -> list:
+    """Refuse a plan retaining < `_RECALL_TRADEOFF_RATIO` of the best available.
+
+    `score * estimated_recall` lets a cheap plan outrank a much better one,
+    because `score` carries comparison count and a small block set scores well.
+    On DBLP-ACM `title[:5]+authors[:5]` (1,781 comparisons) outranked
+    `title[:5]` (39,648) while retaining 0.4164 of TRUE pairs against 0.9820.
+
+    **Only sound because `_target_pairs_from_matchkey` now works.** Against the
+    character-similarity proxy the estimate is ANTI-correlated with truth
+    (`venue[:3]` 0.2032 est / 0.0594 true vs `title[:5]` 0.0407 / 0.9820), and
+    this gate over those numbers promotes `venue[:3]` -- taking DBLP-ACM from
+    98.2% recall to 5.9% at 61x the comparisons. That was implemented, measured
+    against ground truth, and reverted. Do not enable it if the recall target
+    ever falls back to the proxy again.
+
+    Conservative: ordering WITHIN the qualifying set is untouched, so cost still
+    decides among plans that clear the bar; gated plans are demoted, not
+    dropped; and if nothing clears the bar, or recall could not be estimated at
+    all, the list is returned unchanged.
+    """
+    if not suggestions:
+        return suggestions
+    best_recall = max(s.estimated_recall for s in suggestions)
+    if best_recall <= 0.0:
+        return suggestions
+    floor = best_recall * _RECALL_TRADEOFF_RATIO
+    qualifying = [s for s in suggestions if s.estimated_recall >= floor]
+    demoted = [s for s in suggestions if s.estimated_recall < floor]
+    if not qualifying:
+        return suggestions
+    if qualifying[0] is not suggestions[0]:
+        logger.info(
+            "Auto-suggest: '%s' (recall %.4f) won on comparison count but keeps "
+            "only %.0f%% of the best available; promoting '%s' (recall %.4f). "
+            "See #2717.",
+            suggestions[0].description, suggestions[0].estimated_recall,
+            100.0 * suggestions[0].estimated_recall / best_recall,
+            qualifying[0].description, qualifying[0].estimated_recall,
+        )
+    return qualifying + demoted
 
 
 def _warn_on_recall(suggestions: list, coverage: float) -> None:

@@ -55,10 +55,27 @@ def test_missing_column_is_not_free_text():
 # ---- candidate generation ----
 
 
-def test_token_candidates_are_off_by_default(monkeypatch):
-    """Default OFF: auto-suggest must not propose token blocking until the
-    integration bug that zeroed Amazon-Google F1 is resolved (#2488)."""
+def test_token_candidates_are_on_by_default(monkeypatch):
+    """Default ON (#2717). This test previously pinned the opposite.
+
+    The OFF default was justified by an integration bug that took
+    Amazon-Google end-to-end F1 to 0.0000. There was no integration bug:
+    nothing ever set `strategy="token"`, so `build_token_blocks` never ran and
+    the 0.0000 came from whatever config WAS committed. Invoked for real the
+    strategy reaches 0.982 blocking recall on that benchmark against the
+    committed key's 0.041. See `_token_candidates_enabled` for the measurement
+    that refuted the original rationale.
+    """
     monkeypatch.delenv("GOLDENMATCH_TOKEN_BLOCKING", raising=False)
+    cands = generate_candidates(["title", "sku"], df=_titles_frame())
+    tok = [c for c in cands if c.get("kind") == "token"]
+    assert tok, "expected token candidates for the free-text column by default"
+    assert {c["token"]["column"] for c in tok} == {"title"}
+
+
+def test_token_candidates_can_still_be_forced_off(monkeypatch):
+    """The escape hatch survives the flip -- it is the only way back."""
+    monkeypatch.setenv("GOLDENMATCH_TOKEN_BLOCKING", "0")
     cands = generate_candidates(["title", "sku"], df=_titles_frame())
     assert all(c.get("kind") != "token" for c in cands)
 

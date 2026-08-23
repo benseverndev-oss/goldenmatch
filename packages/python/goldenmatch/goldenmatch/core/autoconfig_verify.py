@@ -970,6 +970,18 @@ def _check_date_scorer(
 # ── Postflight helpers ──────────────────────────────────────────────────
 
 
+#: Float32/float64 slack when asking whether a score sits at or above a cut.
+#: See `postflight`'s truncation guard for the measurement that forced it.
+_SCORE_EPSILON = 1e-6
+
+#: On a distribution truncated at the current cut, a valley above this fraction
+#: of the OBSERVED score range is read as the gap below the terminal near-exact
+#: spike rather than a boundary between populations, and no threshold
+#: adjustment is emitted. Calibrated on two datasets (see `postflight`), which
+#: is stated there as a limitation rather than presented as a derived value.
+_TRUNCATED_VALLEY_MAX_POSITION = 0.75
+
+
 def _signal_score_histogram(
     pair_scores: list[tuple[int, int, float]],
     current_threshold: float,
@@ -1261,7 +1273,72 @@ def postflight(
         and depth_ratio is not None
         and depth_ratio < 0.5
     )
-    if is_bimodal and valley is not None:
+    # A distribution whose lowest observed score is already AT the cut has been
+    # truncated there: the weighted block scorer applies `mk.threshold` itself
+    # and returns only survivors, so this is the ordinary case, not an edge
+    # case. Its left mode was clipped off before postflight ever saw it, so the
+    # shape can only be read with care -- and specifically, a valley in the FAR
+    # UPPER TAIL of a truncated distribution is not a boundary between two
+    # populations. It is the gap below the terminal near-exact spike that
+    # essentially every scorer produces, and cutting there discards the whole
+    # genuine match population along with the noise.
+    #
+    # Measured 2026-08-22 (#2717); the valley position is expressed as a
+    # fraction of the OBSERVED range, since the truncated lower bound makes an
+    # absolute score meaningless:
+    #
+    #   corpus                observed        valley  position  depth  verdict
+    #   Amazon-Google linkage [0.650, 1.000]  0.965   90.0%     0.35   artifact
+    #   orgs_hard dedupe      [0.800, 0.990]  0.895   49.9%     0.12   real
+    #
+    # Acting on the Amazon-Google "valley" re-cut at 0.965 and took 1646
+    # qualifying pairs to 120 -- F1 0.4284 -> 0.0761 -- when the committed 0.65
+    # was already that candidate set's F1 optimum. Acting on the orgs_hard one
+    # is worth +0.117 F1 (0.2939 -> 0.4108): there the second mode is real, and
+    # the higher cut limits transitive chaining during clustering.
+    #
+    # `_TRUNCATED_VALLEY_MAX_POSITION` is CALIBRATED ON TWO DATASETS and sits
+    # between them. It is a real limitation, recorded rather than hidden: a
+    # third corpus with a genuine valley above 75% of its observed range, or an
+    # artifact valley below it, falsifies the bar and should move it. What is
+    # NOT in doubt is that some bar is needed -- an unconditional adjustment
+    # cost 0.388 F1 on Amazon-Google, and an unconditional refusal costs 0.117
+    # on orgs_hard.
+    #
+    # The signal is untouched wherever the population genuinely spans the cut
+    # (a probabilistic matchkey scores down to the REVIEW threshold), because
+    # there the histogram is not truncated and this branch never runs.
+    _scores = [s for _a, _b, s in pair_scores]
+    _min_score = min(_scores, default=None)
+    _max_score = max(_scores, default=None)
+    # Tolerance, not `>=`. Scores arrive through a float32 arrow column while
+    # the threshold is a float64, so the lowest surviving pair lands FRACTIONALLY
+    # BELOW the cut it passed: measured on Amazon-Google, min 0.6499999761581421
+    # against threshold 0.6499999999999999, short by 2.4e-08. A bare `>=` reads
+    # that as "the population extends below the cut" and the whole guard
+    # silently no-ops -- which is exactly what happened, and it published a
+    # wrong F1 before anyone noticed the guard had never fired. 1e-6 is orders
+    # of magnitude above float32 round-trip error near 1.0 (~6e-8) and orders
+    # below any score difference that means anything.
+    _truncated_at_cut = (
+        _min_score is not None and _min_score >= threshold - _SCORE_EPSILON
+    )
+    _tail_artifact = False
+    if _truncated_at_cut and is_bimodal and valley is not None:
+        assert _max_score is not None and _min_score is not None
+        _span = _max_score - _min_score
+        _position = (valley - _min_score) / _span if _span > 0 else 1.0
+        _tail_artifact = _position > _TRUNCATED_VALLEY_MAX_POSITION
+        if _tail_artifact:
+            report.advisories.append(
+                f"score distribution is truncated at the current threshold "
+                f"{threshold:.3f} (lowest scored pair {_min_score:.3f}) and its "
+                f"valley at {valley:.3f} sits {_position:.0%} of the way up the "
+                f"observed range -- that is the gap below the near-exact spike, "
+                f"not a boundary between populations, so no threshold "
+                f"adjustment was emitted."
+            )
+    if is_bimodal and valley is not None and not _tail_artifact:
         if abs(valley - threshold) > 0.05 and not strict:
             report.adjustments.append(
                 PostflightAdjustment(
