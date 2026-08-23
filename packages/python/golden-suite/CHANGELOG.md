@@ -4,6 +4,24 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.5.2] - 2026-08-23
+
+### Changed
+
+- **`goldenmatch` floor raised to `>=3.16`.** 3.16.0 fixes a defect that hits
+  the ordinary case rather than an edge one: zero-config `match_df` committed a
+  RED config on EVERY auto-config iteration whenever the two frames' columns
+  differed -- linking two sources with slightly different schemas -- because
+  column exclusions were dropped from the target frame only, leaving the two
+  frames at different widths for a strict `pl.concat`. It also stops postflight
+  silently re-cutting the match threshold using a score distribution that was
+  already truncated at that cut, which on one benchmark took 1,646 qualifying
+  pairs down to 120.
+
+  Only the `goldenmatch` floor moves; every other member is already at its
+  published version (goldencheck 3.5.0, goldenflow 2.2.0, goldenpipe 1.5.0,
+  goldenanalysis 0.5.0, infermap 0.7.0).
+
 ## [0.5.1] - 2026-08-20
 
 ### Changed
