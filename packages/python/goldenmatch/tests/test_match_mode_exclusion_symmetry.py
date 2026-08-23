@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import polars as pl
 import pytest
-
 from goldenmatch.core.quality_exclusions import detect_autoconfig_exclusions
 
 

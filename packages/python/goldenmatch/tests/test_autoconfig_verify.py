@@ -103,27 +103,7 @@ def test_postflight_bimodal_histogram_adjusts_threshold():
     assert 0.3 <= adj.to_value <= 0.7
 
 
-def test_postflight_refuses_to_adjust_a_truncated_distribution():
-    """A histogram that starts AT the cut cannot say where the cut belongs.
-
-    The weighted block scorer applies `mk.threshold` itself and returns only
-    the survivors, so the pair list postflight receives is already truncated at
-    the current threshold. Every "valley" findable in it lies ABOVE the cut, so
-    the adjustment can only ever ratchet the threshold UP -- never down, and
-    never back.
-
-    Measured on Amazon-Google (#2717), linkage lane: the committed threshold
-    0.65 was the F1 optimum of the candidate set (F1 0.4284). Postflight saw
-    the truncated tail, called it bimodal with a valley at 0.965, and re-filtered
-    there -- 1646 pairs became 120, F1 0.4284 -> 0.0761. The distribution was
-    not bimodal; the left mode had been clipped off before postflight ever saw
-    it.
-
-    Same failure mode as measuring a posterior split on `scored_pairs`, which is
-    also truncated at the cut.
-    """
-    import random
-
+def _cfg(threshold: float):
     from goldenmatch.config.schemas import (
         BlockingConfig,
         BlockingKeyConfig,
@@ -131,28 +111,8 @@ def test_postflight_refuses_to_adjust_a_truncated_distribution():
         MatchkeyConfig,
         MatchkeyField,
     )
-    from goldenmatch.core.autoconfig_verify import postflight
 
-    random.seed(42)
-    threshold = 0.65
-    # The same two-mode shape the valid case uses, but with everything below
-    # the cut removed -- exactly what the block scorer hands over.
-    pair_scores = [
-        (i, i + 1000, s)
-        for i, s in enumerate(
-            max(0.0, min(1.0, random.gauss(0.70, 0.03))) for _ in range(500)
-        )
-    ] + [
-        (i + 2000, i + 3000, s)
-        for i, s in enumerate(
-            max(0.0, min(1.0, random.gauss(0.99, 0.01))) for _ in range(500)
-        )
-    ]
-    pair_scores = [p for p in pair_scores if p[2] >= threshold]
-    assert min(s for _, _, s in pair_scores) >= threshold, "fixture must be truncated"
-
-    df = pl.DataFrame({"name": [f"x{i}" for i in range(100)]})
-    cfg = GoldenMatchConfig(
+    return GoldenMatchConfig(
         blocking=BlockingConfig(
             strategy="static", keys=[BlockingKeyConfig(fields=["name"])]
         ),
@@ -161,31 +121,77 @@ def test_postflight_refuses_to_adjust_a_truncated_distribution():
                                                         scorer="token_sort",
                                                         weight=1.0)])],
     )
-    report = postflight(df, cfg, pair_scores=pair_scores)
+
+
+def _pairs(scores: list[float]) -> list[tuple[int, int, float]]:
+    return [(i, i + 100000, s) for i, s in enumerate(scores)]
+
+
+def test_postflight_refuses_a_valley_in_the_truncated_upper_tail():
+    """The gap below the near-exact spike is not a population boundary.
+
+    The weighted block scorer applies `mk.threshold` itself and returns only
+    survivors, so the list postflight receives is truncated at the cut and its
+    left mode was clipped off. What remains is a decaying tail plus the terminal
+    spike of near-exact matches that essentially every scorer produces, and the
+    gap between them is an artifact of that shape -- cutting there discards the
+    real matches along with the noise.
+
+    This mirrors Amazon-Google's linkage lane (#2717), where the observed range
+    was [0.650, 1.000] with a valley at 0.965 -- 90% of the way up. Acting on it
+    re-cut at 0.965 and took 1646 qualifying pairs to 120, F1 0.4284 -> 0.0761,
+    when the committed 0.65 was already that candidate set's F1 optimum.
+    """
+    from goldenmatch.core.autoconfig_verify import postflight
+
+    threshold = 0.65
+    decaying = [0.65 + 0.30 * (i % 60) / 60 for i in range(900)]  # cut -> 0.95
+    spike = [0.995] * 300                                          # near-exact
+    pair_scores = _pairs(decaying + spike)
+    assert min(s for _, _, s in pair_scores) >= threshold, "fixture must be truncated"
+
+    report = postflight(pl.DataFrame({"name": [f"x{i}" for i in range(100)]}),
+                        _cfg(threshold), pair_scores=pair_scores)
     assert not any(adj.field == "threshold" for adj in report.adjustments), (
-        "postflight adjusted the threshold from a distribution truncated at it"
+        "postflight cut on the gap below the near-exact spike"
     )
-    assert any("truncated" in a for a in report.advisories), (
+    assert any("near-exact spike" in a for a in report.advisories), (
         "refusing silently is as bad as adjusting -- say why"
     )
 
 
-def test_postflight_still_adjusts_when_mass_exists_below_the_cut():
-    """The guard must not disable the signal where it is sound.
+def test_postflight_still_adjusts_on_a_truncated_but_genuinely_two_mode_shape():
+    """Truncation alone must not disable the signal.
 
-    A probabilistic matchkey scores down to the REVIEW cut, so postflight sees
-    pairs on both sides of the link threshold. There the valley is real evidence
-    and the adjustment stands.
+    `orgs_hard` is truncated at 0.800 and genuinely bimodal -- observed range
+    [0.800, 0.990], valley at 0.895, 49.9% of the way up. Acting on it is worth
+    +0.117 F1 there (0.2939 -> 0.4108): the second mode is real, and the higher
+    cut limits transitive chaining during clustering. An unconditional refusal
+    would have cost exactly that.
     """
+    from goldenmatch.core.autoconfig_verify import postflight
+
+    threshold = 0.80
+    # Two modes, ~45% of the observed range apart -- deliberately close to the
+    # 49.9% measured on orgs_hard, and comfortably under the 75% bar.
+    low = [0.800 + 0.055 * (i % 40) / 40 for i in range(600)]
+    high = [0.945 + 0.045 * (i % 40) / 40 for i in range(600)]
+    pair_scores = _pairs(low + high)
+    assert min(s for _, _, s in pair_scores) >= threshold, "fixture must be truncated"
+
+    report = postflight(pl.DataFrame({"name": [f"x{i}" for i in range(100)]}),
+                        _cfg(threshold), pair_scores=pair_scores)
+    adjustments = [adj for adj in report.adjustments if adj.field == "threshold"]
+    assert adjustments, "an interior valley on a truncated shape is real evidence"
+    assert 0.85 < adjustments[0].to_value < 0.95
+
+
+def test_postflight_still_adjusts_when_mass_exists_below_the_cut():
+    """Where the population spans the cut the histogram is not truncated at all
+    and the truncation branch never runs. A probabilistic matchkey scores down
+    to the REVIEW threshold, so this is a real shipped path, not a fixture."""
     import random
 
-    from goldenmatch.config.schemas import (
-        BlockingConfig,
-        BlockingKeyConfig,
-        GoldenMatchConfig,
-        MatchkeyConfig,
-        MatchkeyField,
-    )
     from goldenmatch.core.autoconfig_verify import postflight
 
     random.seed(42)
@@ -195,17 +201,8 @@ def test_postflight_still_adjusts_when_mass_exists_below_the_cut():
         (i + 2000, i + 3000, max(0.0, min(1.0, random.gauss(0.9, 0.05))))
         for i in range(500)
     ]
-    df = pl.DataFrame({"name": [f"x{i}" for i in range(100)]})
-    cfg = GoldenMatchConfig(
-        blocking=BlockingConfig(
-            strategy="static", keys=[BlockingKeyConfig(fields=["name"])]
-        ),
-        matchkeys=[MatchkeyConfig(name="mk", type="weighted", threshold=0.7,
-                                  fields=[MatchkeyField(field="name",
-                                                        scorer="token_sort",
-                                                        weight=1.0)])],
-    )
-    report = postflight(df, cfg, pair_scores=pair_scores)
+    report = postflight(pl.DataFrame({"name": [f"x{i}" for i in range(100)]}),
+                        _cfg(0.7), pair_scores=pair_scores)
     assert any(adj.field == "threshold" for adj in report.adjustments)
 
 

@@ -16,11 +16,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   and never back -- and the adjustment never appeared in the committed config.
   Measured on Amazon-Google, linkage lane: the committed 0.65 was the F1 optimum
   of the candidate set, postflight re-cut at 0.965, and 1646 qualifying pairs
-  became 120. Postflight now refuses to adjust a truncated distribution and says
-  so in an advisory; the signal stays live wherever pairs genuinely span the cut
-  (a probabilistic matchkey scores down to the review threshold). End-to-end F1
-  on zero-config `match_df`: **Amazon-Google 0.0761 -> 0.4636**, **Abt-Buy
-  0.1723 -> 0.5658**.
+  became 120. Postflight now refuses when the valley sits in the far upper tail
+  of a truncated distribution -- there it is the gap below the terminal
+  near-exact spike that essentially every scorer produces, not a boundary
+  between populations -- and says so in an advisory. Expressed as a fraction of
+  the observed range: Amazon-Google's valley sat at 90%, `orgs_hard`'s genuine
+  one at 49.9%; the bar is 75%. An unconditional refusal was implemented first
+  and cost 0.117 F1 on `orgs_hard`, where the second mode is real and the higher
+  cut limits transitive chaining -- both measurements are recorded next to the
+  constant, along with what would falsify the bar. The signal is untouched
+  wherever pairs genuinely span the cut (a probabilistic matchkey scores down to
+  the review threshold), because there the histogram is not truncated at all.
+  End-to-end F1 on zero-config `match_df`, Amazon-Google: **0.0761 -> 0.4636**.
 - **Auto-config exclusions were applied to the target frame only (#2717).** In
   match mode the GoldenCheck column-exclusion detectors ran on `df` and dropped
   the excluded columns from it, leaving `reference` untouched. The two frames
@@ -49,6 +56,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   DeepMatcher / Ditto figures measure. On Amazon-Google 67.5% of the dedupe
   lane's candidate pairs are same-source and cannot be true matches against a
   cross-source mapping, so one number could not honestly answer both questions.
+  Measuring the right task is the whole of Abt-Buy's improvement -- **0.1723 ->
+  0.5658**, with postflight emitting no adjustment there either way.
   This also resolves the origin of Abt-Buy's "unreproducible" 0.5037 / P 0.8219
   / 494-pair baseline: it was a linkage measurement, reproduced here at 0.5658 /
   P 0.9163 / 490 pairs.
