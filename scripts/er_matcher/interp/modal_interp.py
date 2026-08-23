@@ -1112,10 +1112,11 @@ def faithfulness_eval(per_class: int = 400, seed: int = 0, negatives: str = "har
         split = "deepmatcher-train/test"
         print(f"[faith] dataset={dataset} train={len(tr)} test={len(te)} "
               f"fields={len(fields)} split={split} link={link}", flush=True)
-        return _faithfulness_core(
+        _faithfulness_core(
             tok, model, dev, true_id, false_id, tr, te, rows, fields,
             dataset=dataset, split=split, negatives="n/a", seed=seed, link=link,
         )
+        return
 
     fields = FIELDS
     raw = pl.from_arrow(pq.read_table(DATA))
@@ -1163,7 +1164,7 @@ def faithfulness_eval(per_class: int = 400, seed: int = 0, negatives: str = "har
     print(f"[faith] train={len(tr)} test={len(te)} negatives={negatives} "
           f"split={split}-disjoint link={link}", flush=True)
 
-    return _faithfulness_core(
+    _faithfulness_core(
         tok, model, dev, true_id, false_id, tr, te, rows, fields,
         dataset=dataset,
         split=f"{split}-disjoint" + ("-corrmatched" if corruption_matched else ""),
