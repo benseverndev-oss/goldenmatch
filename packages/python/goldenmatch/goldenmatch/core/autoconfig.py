@@ -3582,6 +3582,76 @@ def _embedder_available(config: GoldenMatchConfig | None = None) -> bool:
     return bool(getattr(getattr(config, "embedding", None), "provider", None))
 
 
+#: Average character length at or below which a free-text column is "short
+#: free text" (a product title, a headline) rather than a document, and blocks
+#: better with `token` than with `lsh`. See `_text_corpus_blocking` for the
+#: measurement and for why this is a calibration rather than a derived value.
+_SHORT_FREE_TEXT_MAX_LEN = 120.0
+
+
+def _best_sketch_column(profiles: list[ColumnProfile]) -> str | None:
+    """The text column a blocking sketch should be built on.
+
+    Chosen by IDENTITY (cardinality), not by LENGTH. The previous rule was
+    ``max(avg_len)`` -- the longest text column -- which is backwards: the
+    longest free-text field is the most verbose and the least identifying,
+    because it shares boilerplate with every other row.
+
+    Measured on Abt-Buy, whose two text columns BOTH profile as
+    ``col_type=description`` so neither is treated as a structured key:
+
+        name         avg_len= 54.3  cardinality=0.994   <- identity lives here
+        description  avg_len=178.5  cardinality=0.771   <- max(avg_len) picked this
+
+    Ground-truth blocking recall through the shipped blocker, on the plan
+    auto-config actually committed versus the alternatives:
+
+        lsh on 'description' (committed)   0.0009
+        lsh on 'name'                      0.1139
+        token on 'name' (max_df 0.02)      0.9198
+
+    Amazon-Google escaped this only because it carries a `manufacturer` column
+    profiling as ``col_type=name`` with cardinality 0.162, which trips
+    ``_is_text_corpus``'s blockable-name test and routes it away from this
+    branch entirely. That is luck, not design.
+
+    Length is kept as the TIE-BREAKER: with nothing to choose on identity, a
+    longer column carries more shingles for a sketch to work with, which is the
+    grain of truth the old rule was reaching for.
+    """
+    if not profiles:
+        return None
+    # NO upper ceiling on cardinality, deliberately. The first version of this
+    # capped it at 0.99 on the reasoning that a per-row-unique column "blocks
+    # nothing, every value is its own block" -- which is true of an EXACT key
+    # and false of a sketch. LSH and token blocking group by shared
+    # shingles/tokens, not by equality, so a near-unique column is the IDEAL
+    # sketch target: Abt-Buy's `name` is cardinality 0.994 and reaches 0.9198
+    # blocking recall under token blocking. The cap excluded exactly the column
+    # this function exists to pick.
+    return max(
+        profiles, key=lambda p: (round(p.cardinality_ratio, 3), p.avg_len)
+    ).name
+
+
+def _require_sketch_column(profiles: list[ColumnProfile]) -> str:
+    """`_best_sketch_column` for callers that already guarantee a candidate.
+
+    The sketch-config builders all run behind a check that a text column exists
+    (`_is_text_corpus`, or `sketchable_text_cols` returning non-empty), and the
+    code they replaced -- `max(profiles, key=...)` -- raised on an empty list.
+    Keeping that contract here means those call sites stay `str`-typed instead
+    of threading an `Optional` they can never actually receive.
+    """
+    col = _best_sketch_column(profiles)
+    if col is None:
+        raise ValueError(
+            "no candidate text column for a blocking sketch; the caller is "
+            "expected to check for one before building a sketch config"
+        )
+    return col
+
+
 def _auto_build_lsh_config(profiles: list[ColumnProfile]) -> BlockingConfig:
     """Build a MinHash/LSH blocking config over the longest description column.
 
@@ -3591,7 +3661,7 @@ def _auto_build_lsh_config(profiles: list[ColumnProfile]) -> BlockingConfig:
     """
     from goldenmatch.config.schemas import LSHKeyConfig
     descs = [p for p in profiles if p.col_type == "description"]
-    col = max(descs, key=lambda p: p.avg_len).name
+    col = _require_sketch_column(descs)
     return BlockingConfig(strategy="lsh", lsh=LSHKeyConfig(
         column=col, mode="word", k=2, num_perms=128, threshold=0.5, seed=0))
 
@@ -3607,13 +3677,52 @@ def _text_corpus_blocking(
     near-duplicates that share meaning but little surface text — the lexical
     fallback only catches shared shingles. See #1082.
     """
+    descs = [p for p in profiles if p.col_type == "description"]
+    col = _require_sketch_column(descs)
+
+    # SHORT free text blocks with `token`, documents with `lsh`. `blocking.mdx`
+    # already prescribed exactly this -- "use `lsh` for near-duplicate
+    # documents, `token` for short free text where only a few tokens agree" --
+    # and the text-corpus branch committed LSH for everything it reached.
+    #
+    # Ground-truth blocking recall on Abt-Buy through the shipped blocker:
+    #
+    #   lsh   on 'name'        (thr 0.5)      0.1139    5,082 comparisons
+    #   lsh   on 'name'        (thr 0.2)      0.5123   64,466
+    #   token on 'name'        (max_df 0.02)  0.9198   64,056
+    #   lsh   on 'description' (thr 0.5)      0.0009   13,071
+    #   token on 'description' (max_df 0.02)  0.3801  137,720
+    #
+    # At equal cost -- ~64k comparisons -- token nearly DOUBLES LSH's recall on
+    # the same column. The bar is read off the CHOSEN column (see
+    # `_best_sketch_column`), never off the longest one: reading it off the
+    # longest would send this shape back to LSH through the back door.
+    #
+    # `_SHORT_FREE_TEXT_MAX_LEN` is calibrated on the datasets available here
+    # and separates them with room to spare -- Abt-Buy `name` 54.3 and
+    # Amazon-Google `title` 51.1 on one side, Abt-Buy `description` 178.5 and
+    # Amazon-Google `description` 551.2 on the other. Stated as a limitation
+    # rather than presented as derived: a genuine document corpus (FineWeb-style,
+    # thousands of characters) is far above it, which is the case LSH was built
+    # for and keeps.
+    # `0 <` deliberately: `avg_len` defaults to 0 on a hand-built ColumnProfile,
+    # which means UNKNOWN, not "short". Routing unknown-length text to `token`
+    # would be a silent behaviour change for every caller that constructs
+    # profiles directly rather than measuring them, so an unmeasured column
+    # falls through to the prior lsh/simhash behaviour.
+    _chosen = next((p for p in descs if p.name == col), None)
+    if _chosen is not None and 0 < _chosen.avg_len <= _SHORT_FREE_TEXT_MAX_LEN:
+        from goldenmatch.config.schemas import BlockingConfig, TokenBlockingConfig
+
+        return BlockingConfig(
+            strategy="token",
+            token=TokenBlockingConfig(column=col, min_token_length=3,
+                                      max_df_ratio=0.02),
+        )
+
     if _embedder_available(config):
         from goldenmatch.config.schemas import BlockingConfig, SimHashKeyConfig
 
-        col = max(
-            (p for p in profiles if p.col_type == "description"),
-            key=lambda p: p.avg_len,
-        ).name
         return BlockingConfig(
             strategy="simhash",
             simhash=SimHashKeyConfig(column=col, num_planes=256, num_bands=32, seed=0),
@@ -3680,13 +3789,13 @@ def _throughput_blocking(
         return _text_corpus_blocking(profiles, None, config)
     if _embedder_available(config):
         from goldenmatch.config.schemas import SimHashKeyConfig
-        col = max(text_cols, key=lambda p: p.avg_len).name
+        col = _require_sketch_column(text_cols)
         return BlockingConfig(
             strategy="simhash",
             simhash=SimHashKeyConfig(column=col, num_planes=256, num_bands=32, seed=0),
         )
     from goldenmatch.config.schemas import LSHKeyConfig
-    col = max(text_cols, key=lambda p: p.avg_len).name
+    col = _require_sketch_column(text_cols)
     return BlockingConfig(strategy="lsh", lsh=LSHKeyConfig(
         column=col, mode="word", k=2, num_perms=128, threshold=0.5, seed=0))
 

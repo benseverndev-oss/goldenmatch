@@ -28,11 +28,27 @@ def _r(name, f1, health="green", stop_reason="converged"):
 
 # --- the two datasets that made #2457 permanently red -----------------------
 
-def test_the_2026_08_21_nightly_no_longer_fails_the_lane():
-    """The exact numbers from run 32457009104, which had been failing nightly."""
+def _at_baseline(name: str) -> float:
+    """The f1 a quarantined dataset is currently pinned at.
+
+    Read from `_QUARANTINE` rather than hardcoded. These tests originally
+    carried the literal numbers from nightly run 32457009104 (Abt-Buy 0.1723,
+    Amazon-Google 0.1014) and silently went stale the first time a baseline
+    legitimately moved -- which it did when better blocking took Abt-Buy's
+    dedupe lane DOWN (see the `_QUARANTINE` entry). The invariant these tests
+    exist for is "a dataset sitting AT its baseline does not fail the lane",
+    and that is expressible without pinning the value twice.
+    """
+    from run_benchmarks import _QUARANTINE
+
+    return float(_QUARANTINE[name]["f1_at_quarantine"])
+
+
+def test_a_dataset_at_its_baseline_does_not_fail_the_lane():
+    """Both quarantined datasets, each sitting exactly at its own baseline."""
     failing, quarantined = _check_quality_floors([
-        _r("Abt-Buy", 0.1723, "red", "budget_iterations"),
-        _r("Amazon-Google", 0.1014, "red", "budget_time"),
+        _r("Abt-Buy", _at_baseline("Abt-Buy"), "red", "budget_iterations"),
+        _r("Amazon-Google", _at_baseline("Amazon-Google"), "red", "budget_time"),
     ])
     assert failing == [], f"quarantined datasets still failed the lane: {failing}"
     assert len(quarantined) == 3, quarantined  # Abt-Buy floor + 2 RED healths
@@ -40,7 +56,9 @@ def test_the_2026_08_21_nightly_no_longer_fails_the_lane():
 
 def test_quarantined_breaches_are_still_reported():
     """Suppressing the failure must not suppress the evidence."""
-    _, quarantined = _check_quality_floors([_r("Abt-Buy", 0.1723, "red", "x")])
+    _, quarantined = _check_quality_floors(
+        [_r("Abt-Buy", _at_baseline("Abt-Buy"), "red", "x")]
+    )
     assert quarantined, "a quarantined breach vanished entirely"
     assert all("QUARANTINED" in q and "#" in q for q in quarantined), quarantined
 

@@ -6,6 +6,52 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Fixed
+
+- **Blocking chose its sketch column by LENGTH and its strategy by branch, not
+  by measurement (#2717).** Two compounding heuristic errors on the text-corpus
+  path. `_auto_build_lsh_config` picked `max(avg_len)` -- the longest text
+  column, which is the most verbose and the LEAST identifying. And that branch
+  committed MinHash/LSH for everything it reached, where `blocking.mdx` already
+  prescribed `token` for short free text.
+
+  Abt-Buy, whose two text columns both profile as `col_type=description`:
+
+      name         avg_len= 54.3  cardinality=0.994   <- identity lives here
+      description  avg_len=178.5  cardinality=0.771   <- max(avg_len) picked this
+
+  Ground-truth blocking recall through the shipped blocker:
+
+      lsh   on 'description' (committed)   0.0009
+      lsh   on 'name'                      0.1139
+      token on 'name' (max_df 0.02)        0.9198
+
+  The sketch column is now chosen by cardinality (length kept as the
+  tie-breaker), and a chosen column at or below 120 average characters routes to
+  `token` rather than `lsh`. Weighted-path blocking recall **0.0684 -> 0.5662**,
+  and **Abt-Buy's linkage F1 0.5658 -> 0.7024** (precision 0.8529, recall
+  0.4093 -> 0.5971).
+
+  Amazon-Google never showed the bug because it carries a `manufacturer` column
+  profiling as `col_type=name`, which routes it away from this branch entirely.
+  Luck, not design -- hence a heuristic fix rather than a special case.
+
+### Changed
+
+- **Abt-Buy's dedupe quarantine baseline re-pointed DOWNWARD, to 0.0881, because
+  the engine got better.** That lane scores a concatenated frame against a
+  cross-source mapping, so better blocking surfaces more candidates, most of the
+  extra ones are same-source and unmatchable by construction, and precision
+  falls faster than recall rises (0.1068 -> 0.0470 against 0.4463 -> 0.7075).
+  It is a metric that punishes the fix. Not a floor lowered to make a lane
+  green: the quarantine is re-pointed at the current run so a genuine NEW
+  regression still trips it, and the breaches are still reported on every run.
+- **`Abt-Buy (linkage)` now carries the 0.45 floor.** That floor was DERIVED
+  from a linkage run (0.5037 / P 0.8219 / 494 emitted pairs) and then enforced
+  against the dedupe lane for months, recorded there as DISPUTED and
+  unreproducible. It is applied to the lane it describes, cleared with margin at
+  a measured 0.7024.
+
 ## [3.16.0] - 2026-08-23
 
 ### Fixed

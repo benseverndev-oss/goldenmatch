@@ -405,6 +405,9 @@ class TestBuildBlocking:
         profiles = [
             ColumnProfile("desc", "Utf8", "description", 0.7),
         ]
+        # The profile above is hand-built, so its `avg_len` is 0 -- UNKNOWN, not
+        # short -- and an unmeasured column keeps the lsh/simhash route (#2717).
+        # The df text does not drive the choice here; the passed profile does.
         df = pl.DataFrame({"desc": ["long text here"] * 3})
         blocking = build_blocking(profiles, df)
         assert blocking.strategy == "lsh"
