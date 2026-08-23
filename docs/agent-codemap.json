@@ -1953,6 +1953,7 @@
             "_promote_facility_fullname_ne",
             "_quality_aware_blocking_enabled",
             "_rebuild_from_decisions",
+            "_require_sketch_column",
             "_resolve_effective_exclusion_overrides",
             "_route_to_probabilistic_enabled",
             "_scale_safe_bounded_compound",
