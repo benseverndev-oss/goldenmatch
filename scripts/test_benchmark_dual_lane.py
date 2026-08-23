@@ -65,16 +65,22 @@ def stub_lanes(monkeypatch):
 
 def test_returns_one_row_per_lane(stub_lanes):
     rows = run_benchmarks._measure_product(Path("."), "amazon-google")
-    assert [r["name"] for r in rows] == ["Amazon-Google", "Amazon-Google (linkage)"]
+    assert [r["name"] for r in rows] == [
+        "Amazon-Google (dedupe)", "Amazon-Google (linkage)",
+    ]
     assert [r["lane"] for r in rows] == ["dedupe", "linkage"]
     assert [r["f1"] for r in rows] == [0.1, 0.46]
 
 
-def test_historical_row_keeps_its_exact_name(stub_lanes):
-    """`_F1_FLOORS` / `_QUARANTINE` key on the name -- renaming the dedupe row
-    would silently drop both, so the series must survive the split."""
+def test_every_emitted_row_is_declared_in_the_tables(stub_lanes):
+    """`_F1_FLOORS` / `_QUARANTINE` key on the row NAME, so a rename that misses
+    one silently unfloors it. Both dedupe rows carry an explicit `(dedupe)`
+    suffix now (#2717) -- the bare name read as THE number for the dataset when
+    it is the harder and less comparable lane -- and this pins that the tables
+    followed the rename."""
     rows = run_benchmarks._measure_product(Path("."), "amazon-google")
     dedupe = rows[0]["name"]
+    assert dedupe == "Amazon-Google (dedupe)"
     assert dedupe in run_benchmarks._F1_FLOORS
     assert dedupe in run_benchmarks._QUARANTINE
 
@@ -123,4 +129,4 @@ def test_a_missing_linkage_lane_does_not_lose_the_dedupe_row(stub_lanes, monkeyp
         leipzig, "run_two_source_link_zeroconfig", lambda datasets_dir, fn, **kw: None, raising=True
     )
     rows = run_benchmarks._measure_product(Path("."), "amazon-google")
-    assert [r["name"] for r in rows] == ["Amazon-Google"]
+    assert [r["name"] for r in rows] == ["Amazon-Google (dedupe)"]

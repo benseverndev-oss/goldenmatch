@@ -120,9 +120,9 @@ def test_red_health_is_a_breach_even_above_the_floor():
     Abt-Buy directly -- and the failing half is asserted on a dataset that is
     not quarantined, so neither half can pass vacuously.
     """
-    base = rb._QUARANTINE["Abt-Buy"]["f1_at_quarantine"]
+    base = rb._QUARANTINE["Abt-Buy (dedupe)"]["f1_at_quarantine"]
     failing, quarantined = rb._check_quality_floors([
-        {"name": "Abt-Buy", "f1": base, "health": "RED",
+        {"name": "Abt-Buy (dedupe)", "f1": base, "health": "RED",
          "stop_reason": "BUDGET_ITERATIONS"},
     ])
     assert any("RED" in b for b in quarantined), (failing, quarantined)

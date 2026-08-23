@@ -47,17 +47,20 @@ def _at_baseline(name: str) -> float:
 def test_a_dataset_at_its_baseline_does_not_fail_the_lane():
     """Both quarantined datasets, each sitting exactly at its own baseline."""
     failing, quarantined = _check_quality_floors([
-        _r("Abt-Buy", _at_baseline("Abt-Buy"), "red", "budget_iterations"),
-        _r("Amazon-Google", _at_baseline("Amazon-Google"), "red", "budget_time"),
+        _r("Abt-Buy (dedupe)", _at_baseline("Abt-Buy (dedupe)"), "red", "budget_iterations"),
+        _r("Amazon-Google (dedupe)", _at_baseline("Amazon-Google (dedupe)"), "red", "budget_time"),
     ])
     assert failing == [], f"quarantined datasets still failed the lane: {failing}"
-    assert len(quarantined) == 3, quarantined  # Abt-Buy floor + 2 RED healths
+    # 2, not 3: the Abt-Buy dedupe row no longer carries a floor of its own.
+    # Its 0.45 moved to "Abt-Buy (linkage)", the lane it was derived from
+    # (#2717), so what remains here is the two RED controller healths.
+    assert len(quarantined) == 2, quarantined
 
 
 def test_quarantined_breaches_are_still_reported():
     """Suppressing the failure must not suppress the evidence."""
     _, quarantined = _check_quality_floors(
-        [_r("Abt-Buy", _at_baseline("Abt-Buy"), "red", "x")]
+        [_r("Abt-Buy (dedupe)", _at_baseline("Abt-Buy (dedupe)"), "red", "x")]
     )
     assert quarantined, "a quarantined breach vanished entirely"
     assert all("QUARANTINED" in q and "#" in q for q in quarantined), quarantined
@@ -67,29 +70,29 @@ def test_quarantined_breaches_are_still_reported():
 
 def test_degrading_past_the_baseline_fails():
     """A quarantine tracks a bug; it does not license it to deepen."""
-    base = _QUARANTINE["Abt-Buy"]["f1_at_quarantine"]
-    failing, _ = _check_quality_floors([_r("Abt-Buy", base - 0.2, "green")])
+    base = _QUARANTINE["Abt-Buy (dedupe)"]["f1_at_quarantine"]
+    failing, _ = _check_quality_floors([_r("Abt-Buy (dedupe)", base - 0.2, "green")])
     assert any("DEGRADED" in f for f in failing), failing
 
 
 def test_improving_past_the_baseline_fails():
     """Someone fixed it -- the quarantine now hides good news, so it must shout."""
-    base = _QUARANTINE["Abt-Buy"]["f1_at_quarantine"]
-    failing, _ = _check_quality_floors([_r("Abt-Buy", base + 0.5, "green")])
+    base = _QUARANTINE["Abt-Buy (dedupe)"]["f1_at_quarantine"]
+    failing, _ = _check_quality_floors([_r("Abt-Buy (dedupe)", base + 0.5, "green")])
     assert any("IMPROVED" in f for f in failing), failing
 
 
 def test_inside_tolerance_stays_quarantined():
-    base = _QUARANTINE["Abt-Buy"]["f1_at_quarantine"]
-    tol = _QUARANTINE["Abt-Buy"]["tolerance"]
-    failing, _ = _check_quality_floors([_r("Abt-Buy", base + tol / 2, "green")])
+    base = _QUARANTINE["Abt-Buy (dedupe)"]["f1_at_quarantine"]
+    tol = _QUARANTINE["Abt-Buy (dedupe)"]["tolerance"]
+    failing, _ = _check_quality_floors([_r("Abt-Buy (dedupe)", base + tol / 2, "green")])
     assert failing == [], failing
 
 
 def test_a_missing_f1_is_not_drift():
     """A crashed/skipped run has no number; inventing a verdict would be worse."""
     failing, _ = _check_quality_floors([
-        {"name": "Abt-Buy", "f1": None, "health": "green", "stop_reason": "x"}
+        {"name": "Abt-Buy (dedupe)", "f1": None, "health": "green", "stop_reason": "x"}
     ])
     assert not any("DEGRADED" in f or "IMPROVED" in f for f in failing), failing
 

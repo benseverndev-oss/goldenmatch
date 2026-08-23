@@ -6,6 +6,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Changed
+
+- **Both product benchmark lanes now carry an explicit name (#2717).**
+  `Abt-Buy` / `Amazon-Google` became `Abt-Buy (dedupe)` /
+  `Amazon-Google (dedupe)`; the bare name read as THE number for the dataset
+  when it is the harder and far less comparable of the two lanes.
+
+  The dedupe framing existed for a reason that no longer holds. Its own comment
+  said so: *"Unlike DBLP-ACM (identical schemas, run through match_df), product
+  sources have heterogeneous schemas and the perf path is a UNIFIED dedupe."*
+  Heterogeneous schemas defeated `match_df` because auto-config applied its
+  column exclusions to the target frame only, so two frames of differing width
+  hit a strict `pl.concat` and every controller iteration raised `ShapeError`.
+  That was fixed earlier in this release; the workaround outlived its cause.
+
+  `_F1_FLOORS` and `_QUARANTINE` follow the rename, and `Abt-Buy`'s 0.45 floor
+  is not reinstated on the dedupe row -- it was derived from a linkage run and
+  now guards `Abt-Buy (linkage)`, which clears it at 0.7024.
+
 ### Fixed
 
 - **Blocking chose its sketch column by LENGTH and its strategy by branch, not
