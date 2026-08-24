@@ -81,10 +81,22 @@ thing to grep for.
 Three tiers of automation keep these surfaces in lockstep as the repo advances.
 All scripts are stdlib-only and anchored to the repo root via `Path(__file__)`.
 
-- **Tier 1 - `scripts/check_docs_consistency.py`** (REQUIRED CI gate, `--check`
-  default). The single umbrella entry point for "all doc gates". It (a) runs
-  `check_version_consistency.py` and `sync_readme_callouts.py --check` as
-  subprocesses; (b) **roster matrix** - derives the published-package roster from
+- **Tier 0 - `scripts/regen_docs.py`** (`make docs` / `just docs`; the
+  `docs_regen` REQUIRED CI job runs `--check`). The single command that
+  REGENERATES every derived artifact: the six config matrices, the agent manifest
+  + codemap, api-surface's table, suite-matrix, thesis-weaknesses, the native
+  pages, the llms.txt/README capability counts, and the README "what's new"
+  callouts. If a doc figure has a generator, it belongs in `WRITE_STEPS` -- a
+  `--check`-only gate for something a generator owns is a chore, not a gate. The
+  drift probe is `git status --porcelain` scoped to `GENERATED_PATHS`, so a
+  brand-new generated page counts as drift too. Only one hand-bumped figure
+  survives: the two inline numbers beside api-surface's table, reported by
+  `gen_api_surface --check`.
+
+- **Tier 1 - `scripts/check_docs_consistency.py`** (REQUIRED CI gate). The
+  umbrella entry point for STRUCTURAL doc consistency. It (a) runs
+  `check_version_consistency.py` as a subprocess -- the one doc gate no generator
+  owns; (b) **roster matrix** - derives the published-package roster from
   the `publish-*.yml` workflows (cross-checked against
   `scripts/suite_download_badges.py`) and asserts each CORE package name appears
   in the root `README.md` and the `docs-site/docs.json` nav; (c) **docs-nav
@@ -93,10 +105,17 @@ All scripts are stdlib-only and anchored to the repo root via `Path(__file__)`.
   **changelog<->version** - each `packages/python/<pkg>/CHANGELOG.md` most-recent
   *released* version heading equals its `pyproject.toml` version (packages whose
   CHANGELOG has no versioned heading, or only an `unreleased` top entry, are
-  reported, not failed). Wired as the `docs_consistency` job in `ci.yml` (in the
-  `ci-required` needs list), gated on the `docs` path filter. To satisfy it: add
-  the missing README table row / `docs.json` nav entry / fix the broken nav link
-  or orphan page, or bump the lagging CHANGELOG/version.
+  reported, not failed). Findings that are deliberately not gated print `[INFO]`,
+  not `[PASS]`, so an all-PASS summary means what it says. Wired as the
+  `docs_consistency` job in `ci.yml` (in the `ci-required` needs list), gated on
+  the `docs` path filter. To satisfy it: add the missing README table row /
+  `docs.json` nav entry / fix the broken nav link or orphan page, or bump the
+  lagging CHANGELOG/version.
+
+  It no longer subgates `sync_readme_callouts --check` or `gen_native_docs
+  --check`: `regen_docs.py` WRITES both, so checking them here asked a human to
+  fix by hand what `make docs` repairs. CI coverage is unchanged (the standalone
+  `readme_callouts` job plus `docs_regen`).
 
 - **Tier 1 - `scripts/check_docs_sections.py`** (REQUIRED CI gate, a step in the
   `docs_consistency` job). The SOURCE OF TRUTH for "what a package section looks

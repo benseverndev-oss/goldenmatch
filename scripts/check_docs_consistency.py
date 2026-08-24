@@ -5,11 +5,13 @@ This is the umbrella entry point for "are all the structural doc surfaces in
 lockstep with the published-package roster?". It is deterministic, stdlib-only,
 and exits non-zero on any FAIL so it can gate CI without flaking on clean PRs.
 
-It does SIX things (see ``.claude/doc-surfaces.md`` for the surface inventory):
+It does the following (see ``.claude/doc-surfaces.md`` for the surface inventory):
 
-1. Runs the two existing doc gates as subprocesses so there is one command for
-   "all doc gates": ``check_version_consistency.py`` and
-   ``sync_readme_callouts.py --check``.
+1. Runs ``check_version_consistency.py`` as a subprocess -- nothing GENERATES
+   the version lockstep, so a ``--check`` is the only way to run it. (The
+   readme-callouts and native-docs subgates that used to live here are gone:
+   ``regen_docs.py`` WRITES both, so checking them here asked a human to fix by
+   hand what ``make docs`` repairs.)
 
 2. roster-matrix: derive the canonical published-package roster from the
    ``publish-<pkg>.yml`` (PyPI) and ``publish-<pkg>-js.yml`` (npm) workflow
@@ -48,12 +50,9 @@ It does SIX things (see ``.claude/doc-surfaces.md`` for the surface inventory):
    ``?q=`` download-badge link lists exactly ``PYPI_PACKAGES`` so the clicked-
    through total matches the linked packages.
 
-``--check`` (the default) only reports + exits 1 on drift. ``--fix`` performs the
-narrow MECHANICAL reconciliations that are safe to automate (adding a missing
-roster package as a docs-nav ``SQL extensions`` entry is NOT auto-fixable -- that
-needs human prose -- so --fix is limited to nothing today; reconciliations on the
-current tree were done by hand in the lockstep branch). It is kept as a stub so
-the flag exists and future mechanical fixes have a home.
+Reports every check and exits 1 on any FAIL. Findings that are deliberately not
+gated print ``[INFO]`` rather than ``[PASS]``, so a summary of all-PASS means what
+it says.
 
 Run: ``python scripts/check_docs_consistency.py``
 """
@@ -81,15 +80,30 @@ _UNRELEASED_RE = re.compile(r"unreleased", re.IGNORECASE)
 
 
 class Result:
+    """Collected check outcomes. Three states, not two.
+
+    A report-only finding used to be recorded as `ok=True` and printed `[PASS]`
+    while its detail column listed real drift -- so the summary read as sixteen
+    clean checks when one of them was reporting three packages missing from the
+    README. `record_info` gives those their own `[INFO]` status: visible as not-a-
+    pass, still non-blocking.
+    """
+
+    PASS, FAIL, INFO = "PASS", "FAIL", "INFO"
+
     def __init__(self) -> None:
-        self.checks: list[tuple[str, bool, str]] = []
+        self.checks: list[tuple[str, str, str]] = []
 
     def record(self, name: str, ok: bool, detail: str = "") -> None:
-        self.checks.append((name, ok, detail))
+        self.checks.append((name, self.PASS if ok else self.FAIL, detail))
+
+    def record_info(self, name: str, detail: str = "") -> None:
+        """Report a finding without gating on it."""
+        self.checks.append((name, self.INFO, detail))
 
     @property
     def ok(self) -> bool:
-        return all(ok for _, ok, _ in self.checks)
+        return all(status != self.FAIL for _, status, _ in self.checks)
 
 
 # --------------------------------------------------------------------------- #
@@ -259,10 +273,9 @@ def check_roster_matrix(res: Result) -> None:
     )
     ext_missing = [p for p in ext if p.lower() not in readme]
     if ext_missing:
-        res.record(
-            "extension extras README presence (report-only)",
-            True,
-            f"reported, not gated -- extension distributions not named in README: {ext_missing}",
+        res.record_info(
+            "extension extras README presence",
+            f"extension distributions not named in README: {ext_missing}",
         )
 
     # docs-nav presence: roster packages that have a docs-site/<pkg>/ directory
@@ -686,21 +699,20 @@ def check_agent_pointers(res: Result) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--check", action="store_true", default=True,
-                        help="Report drift and exit 1 if any (default).")
-    parser.add_argument("--fix", action="store_true",
-                        help="Apply the narrow mechanical reconciliations (none auto-fixable today).")
-    args = parser.parse_args(argv)
+    # No --check / --fix. --check was `default=True` and never read; --fix printed a
+    # paragraph explaining that it does nothing. Both were surface that looked like
+    # behaviour. This gate reports and exits non-zero, full stop.
+    argparse.ArgumentParser(description=__doc__).parse_args(argv)
 
     res = Result()
 
+    # version_consistency stays: nothing GENERATES it, so a --check here is the
+    # only way to run it. The readme_callouts and native_docs subgates are gone --
+    # `regen_docs.py` now WRITES both, so a --check for something `make docs`
+    # repairs told you to fix by hand what a generator owns. Their CI coverage is
+    # unchanged (the standalone `readme_callouts` job plus `docs_regen`).
     run_subgate(res, "version_consistency (subprocess)",
                 [str(SCRIPTS / "check_version_consistency.py")])
-    run_subgate(res, "readme_callouts --check (subprocess)",
-                [str(SCRIPTS / "sync_readme_callouts.py"), "--check"])
-    run_subgate(res, "native_docs --check (subprocess)",
-                [str(SCRIPTS / "gen_native_docs.py"), "--check"])
     check_roster_matrix(res)
     check_docs_nav_integrity(res)
     check_changelog_versions(res)
@@ -708,14 +720,9 @@ def main(argv: list[str] | None = None) -> int:
     check_aggregate_badges(res)
     check_agent_pointers(res)
 
-    if args.fix:
-        print("--fix: no auto-fixable mechanical reconciliations pending; "
-              "all current-tree drift was reconciled by hand. Running checks.\n")
-
     print("Documentation consistency checks:")
     width = max(len(n) for n, _, _ in res.checks)
-    for name, ok, detail in res.checks:
-        status = "PASS" if ok else "FAIL"
+    for name, status, detail in res.checks:
         line = f"  [{status}] {name.ljust(width)}"
         if detail:
             line += f"  -- {detail}"
@@ -725,7 +732,9 @@ def main(argv: list[str] | None = None) -> int:
         print("\nDocs consistency FAILED. Reconcile the surfaces above (see "
               ".claude/doc-surfaces.md -> 'Automated gates').")
         return 1
-    print("\nAll documentation consistency checks PASS.")
+    infos = sum(1 for _, status, _ in res.checks if status == Result.INFO)
+    suffix = f" ({infos} reported, not gated)" if infos else ""
+    print(f"\nAll documentation consistency checks PASS{suffix}.")
     return 0
 
 

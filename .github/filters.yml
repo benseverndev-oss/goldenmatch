@@ -949,9 +949,11 @@ docs:
   - 'scripts/check_docs_consistency.py'
   - 'scripts/check_docs_links.py'
   - 'scripts/check_docs_sections.py'
-  # native.mdx pages are generated from these loaders (gen_native_docs.py --check,
-  # run by check_docs_consistency); a loader edit must re-run the docs gate.
-  - 'scripts/gen_native_docs.py'
+  # native.mdx generation moved OUT of check_docs_consistency: regen_docs.py owns
+  # gen_native_docs as a --write step, and the `docs_regen` filter already covers
+  # both the script (scripts/gen_*.py) and the loaders (packages/python/**). The
+  # loaders stay listed here only because native.mdx is a docs-site page the
+  # RENDER gate must revalidate when its content changes.
   - 'packages/python/goldenmatch/goldenmatch/core/_native_loader.py'
   - 'packages/python/goldenflow/goldenflow/core/_native_loader.py'
   - 'packages/python/infermap/infermap/_native_loader.py'
@@ -963,7 +965,9 @@ docs:
   # runs in cut-goldenmatch-release.yml, not on the PR path, so neither belongs
   # here any more; scripts_lint still covers edits to both.
   - 'scripts/check_version_consistency.py'
-  - 'scripts/sync_readme_callouts.py'
+  # sync_readme_callouts.py is NOT here: its --check subgate left
+  # check_docs_consistency (regen_docs.py now WRITES the callouts), and the
+  # standalone `readme_callouts` filter already covers the script and both targets.
   - 'scripts/suite_download_badges.py'
   - 'packages/*/**/__init__.py'
 pyright_slice:

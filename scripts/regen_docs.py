@@ -18,9 +18,12 @@ non-regenerable prose-count checks. The staleness probe is `git status
 emitting a brand-new page used to pass the gate with the file uncommitted. Run it under the synced
 workspace (`uv run python scripts/regen_docs.py`) so every package is importable.
 
-Some drift lives in hand-authored PROSE (the "97 tools" figures in llms.txt /
-README / api-surface); no generator rewrites those, so this reports them for a
-manual bump rather than silently passing.
+Almost nothing is left to hand-bump. The capability counts (llms.txt / README
+"N tools", "~N exports", "N skills") and the README "what's new" callouts used to
+be hand-authored figures a checker merely complained about; both are now WRITE
+steps, so `make docs` fixes them. The only survivor is the pair of inline figures
+beside api-surface's generated table, which sit mid-sentence in hand-written
+prose -- `gen_api_surface --check` reports those for a manual bump.
 """
 from __future__ import annotations
 
@@ -42,12 +45,15 @@ WRITE_STEPS: list[list[str]] = [
     ["scripts/gen_suite_matrix.py", "--write"],       # docs-site/suite-matrix.mdx
     ["scripts/gen_thesis_weaknesses.py", "--write"],  # docs-site/thesis-weaknesses.mdx
     ["scripts/gen_native_docs.py", "--write"],        # docs-site/*/native.mdx
+    ["scripts/check_llms_counts.py", "--write"],      # llms.txt / README capability counts
+    ["scripts/sync_readme_callouts.py"],              # README "what's new" from CHANGELOG
 ]
 
-# Checks for HAND-AUTHORED figures that no --write regenerates (prose counts).
+# Figures that share a generated source but live in hand-written prose, so no
+# --write can own them. `gen_api_surface --check` asserts the two inline numbers
+# beside its generated table; the table itself is already fresh by this point.
 PROSE_CHECKS: list[list[str]] = [
-    ["scripts/check_llms_counts.py"],                 # llms.txt / README / suite tool+export counts
-    ["scripts/gen_api_surface.py", "--check"],        # api-surface.mdx inline figures (block already fresh)
+    ["scripts/gen_api_surface.py", "--check"],
 ]
 
 # The ONLY paths a generator writes. The drift check is scoped to these so an
@@ -59,6 +65,14 @@ GENERATED_PATHS: list[str] = [
     "docs/agent-manifest.json",
     "docs/agent-codemap.json",
     "packages/python/goldensuite-mcp/goldensuite_mcp/agent-manifest.json",
+    # `:(glob)` magic is load-bearing: in a PLAIN git pathspec `*` crosses `/`, so
+    # `packages/python/*/README.md` swept 32 files (every nested example/test
+    # README) instead of the 11 package roots -- widening the drift scope back out
+    # to files no generator writes, which is exactly what scoping exists to avoid.
+    "llms.txt",                                               # suite tool total
+    ":(glob)packages/python/*/*/llms.txt",                    # per-package capability counts
+    "README.md",                                              # callouts (+ counts)
+    ":(glob)packages/python/*/README.md",                     # callouts + capability counts
 ]
 
 
