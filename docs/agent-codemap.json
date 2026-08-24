@@ -2306,6 +2306,7 @@
             "rule_enable_llm_scorer",
             "rule_low_reduction_ratio",
             "rule_low_transitivity",
+            "rule_matchkey_collapsed_field",
             "rule_matchkey_demote_high_cardinality_field",
             "rule_no_matches",
             "rule_precision_anchor_threshold_raise",

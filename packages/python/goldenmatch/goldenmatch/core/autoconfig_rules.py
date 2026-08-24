@@ -1365,6 +1365,53 @@ _DEMOTE_CARD_THRESHOLD = 0.99
 _DEMOTE_MIN_REMAINING_FIELDS = 2
 
 
+@targets("matchkey_collapsed_field")
+def rule_matchkey_collapsed_field(
+    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
+    """Answer `MatchkeyProfile.red_reason() == "matchkey_collapsed_field"`.
+
+    A field whose post-transform cardinality is 0.0 has ONE distinct value, so
+    every pair scores identically on it: it carries weight and contributes no
+    discrimination, diluting the fields that do.
+
+    Both rules that read `profile.matchkey.per_field` before this one --
+    `rule_unimodal_scoring` and `rule_matchkey_demote_high_cardinality_field` --
+    sort by HIGHEST cardinality. Neither handles this end, so the RED verdict was
+    reported and never acted on.
+
+    Declines rather than emptying the matchkey: a matchkey with no fields scores
+    nothing, which is worse than a weak field, and returning None lets the policy
+    advance to a rule that can help.
+    """
+    mk = _first_weighted_mk(current)
+    if mk is None or not mk.fields:
+        return None
+    collapsed = {
+        name
+        for name, fs in profile.matchkey.per_field.items()
+        if fs.post_transform_cardinality_ratio == 0.0
+    }
+    if not collapsed:
+        return None
+    keep = [f for f in mk.fields if f.field not in collapsed]
+    if len(keep) == len(mk.fields) or not keep:
+        return None
+    dropped = sorted({f.field for f in mk.fields if f.field in collapsed})
+    new_mk = mk.model_copy(update={"fields": keep})
+    new_cfg = current.model_copy(update={
+        "matchkeys": [new_mk if m is mk else m for m in (current.matchkeys or [])]
+    })
+    return new_cfg, PolicyDecision(
+        rule_name="matchkey_collapsed_field",
+        rationale=(
+            f"matchkey field(s) {dropped} hold a single distinct value after "
+            f"transforms, carrying weight with no discrimination; dropping them"
+        ),
+        config_diff={"matchkeys[0].fields": [f.field for f in keep]},
+    )
+
+
 @targets("blocking_no_blocks")
 def rule_matchkey_demote_high_cardinality_field(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
@@ -1676,6 +1723,7 @@ DEFAULT_RULES = [
     rule_cluster_giant,                    # 11b cluster: one cluster swallowed the frame
     rule_low_transitivity,                 # 12 tuning: transitivity low
     rule_no_matches,                       # 13 tuning: nothing matches
+    rule_matchkey_collapsed_field,         # 13b matchkey: a field collapsed to one value
     rule_matchkey_demote_high_cardinality_field,  # 14 NEW 2026-05-29: matchkey YELLOW from uniquely-identifying field
     rule_select_probabilistic_matchkey,    # NEW #491: wide fuzzy-only weighted mk + recall-limited + no exact anchor -> probabilistic
     rule_recall_gap_suspected,             # 15 tuning: random pair probe high OR over-tight signature (kept after the structural rules; only the precision-raise + sparse-expand threshold rules follow)

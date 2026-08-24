@@ -36,15 +36,11 @@ _UNACTIONABLE: frozenset[str] = frozenset({
     "data_empty",
 })
 
-#: RED conditions with no rule yet. SHRINKS ONLY -- adding an entry to turn a red
-#: gate green is the failure this exists to prevent. Each entry is a MEASURED
-#: hole with its evidence, not a hypothetical.
-_UNCOVERED: frozenset[str] = frozenset({
-    # Both rules reading profile.matchkey.per_field (rule_unimodal_scoring,
-    # rule_matchkey_demote_high_cardinality_field) sort by HIGHEST cardinality.
-    # Neither handles a field collapsing to a single value.
-    "matchkey_collapsed_field",
-})
+#: RED conditions with no rule yet. EMPTY, and it should stay that way. SHRINKS
+#: ONLY -- adding an entry to turn a red gate green is the failure this exists to
+#: prevent. If a new RED branch has no action, either write the rule or, when no
+#: config change can fix it, record it in `_UNACTIONABLE` with the reason.
+_UNCOVERED: frozenset[str] = frozenset()
 
 
 def _claimed() -> set[str]:

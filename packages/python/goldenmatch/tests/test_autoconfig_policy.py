@@ -594,12 +594,12 @@ def test_default_rules_list_has_five_entries():
     # Updated to 10: rule_uniform_heavy_blocking added (Fix 2) + rule_blocking_key_swap reordered (Fix 1)
     # Updated to 13: Phase 5 added rule_corruption_normalize, rule_cross_blocking_disagreement,
     # rule_sparse_match_expand (v1.10)
-    # 18 as of #2717's rule_cluster_giant. This assertion is duplicated six times
+    # 19 as of #2717's rule_cluster_giant + rule_matchkey_collapsed_field. This assertion is duplicated six times
     # in this file and the test NAMES around it (six/seven/nine/ten entries) are
     # all stale -- every rule addition bumped the number and left the names
     # behind. Renamed to something that cannot go stale rather than adding a
     # seventh wrong name.
-    assert len(DEFAULT_RULES) == 18
+    assert len(DEFAULT_RULES) == 19
 
 
 def test_heuristic_policy_with_default_rules_fires_on_red_blocking():
@@ -794,12 +794,12 @@ def test_default_rules_count_is_pinned_a():
     Updated to 10: rule_uniform_heavy_blocking added (Fix 2) + rule_blocking_key_swap reordered (Fix 1).
     Updated to 13: Phase 5 added 3 new rules (v1.10)."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    # 18 as of #2717's rule_cluster_giant. This assertion is duplicated six times
+    # 19 as of #2717's rule_cluster_giant + rule_matchkey_collapsed_field. This assertion is duplicated six times
     # in this file and the test NAMES around it (six/seven/nine/ten entries) are
     # all stale -- every rule addition bumped the number and left the names
     # behind. Renamed to something that cannot go stale rather than adding a
     # seventh wrong name.
-    assert len(DEFAULT_RULES) == 18
+    assert len(DEFAULT_RULES) == 19
 
 
 def test_singleton_trap_runs_before_blocking_too_coarse():
@@ -1015,12 +1015,12 @@ def test_default_rules_count_is_pinned_b():
     Updated to 10: rule_uniform_heavy_blocking added (Fix 2) + rule_blocking_key_swap reordered (Fix 1).
     Updated to 13: Phase 5 added 3 new rules (v1.10)."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    # 18 as of #2717's rule_cluster_giant. This assertion is duplicated six times
+    # 19 as of #2717's rule_cluster_giant + rule_matchkey_collapsed_field. This assertion is duplicated six times
     # in this file and the test NAMES around it (six/seven/nine/ten entries) are
     # all stale -- every rule addition bumped the number and left the names
     # behind. Renamed to something that cannot go stale rather than adding a
     # seventh wrong name.
-    assert len(DEFAULT_RULES) == 18
+    assert len(DEFAULT_RULES) == 19
 
 
 def test_rule_key_swap_is_before_rule_no_matches():
@@ -1344,12 +1344,12 @@ def test_default_rules_count_is_pinned_c():
     AutoConfigController._maybe_decorate_with_llm_scorer post-iteration decoration.)
     Updated to 13: Phase 5 added 3 new rules (v1.10)."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    # 18 as of #2717's rule_cluster_giant. This assertion is duplicated six times
+    # 19 as of #2717's rule_cluster_giant + rule_matchkey_collapsed_field. This assertion is duplicated six times
     # in this file and the test NAMES around it (six/seven/nine/ten entries) are
     # all stale -- every rule addition bumped the number and left the names
     # behind. Renamed to something that cannot go stale rather than adding a
     # seventh wrong name.
-    assert len(DEFAULT_RULES) == 18
+    assert len(DEFAULT_RULES) == 19
 
 
 def test_null_heavy_runs_before_no_matches_and_recall_gap_runs_last():
@@ -1490,12 +1490,12 @@ def test_default_rules_count_is_pinned_d():
     Updated to 13: Phase 5 added rule_corruption_normalize, rule_cross_blocking_disagreement,
     rule_sparse_match_expand (v1.10)."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    # 18 as of #2717's rule_cluster_giant. This assertion is duplicated six times
+    # 19 as of #2717's rule_cluster_giant + rule_matchkey_collapsed_field. This assertion is duplicated six times
     # in this file and the test NAMES around it (six/seven/nine/ten entries) are
     # all stale -- every rule addition bumped the number and left the names
     # behind. Renamed to something that cannot go stale rather than adding a
     # seventh wrong name.
-    assert len(DEFAULT_RULES) == 18
+    assert len(DEFAULT_RULES) == 19
 
 
 def test_rule_enable_llm_scorer_not_in_default_rules():
@@ -1743,12 +1743,12 @@ def test_default_rules_count_is_pinned_e():
     """Fix 1 (reorder) + Fix 2 (new rule) → 10 rules total.
     Updated to 13: Phase 5 added 3 new indicator-aware rules (v1.10)."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    # 18 as of #2717's rule_cluster_giant. This assertion is duplicated six times
+    # 19 as of #2717's rule_cluster_giant + rule_matchkey_collapsed_field. This assertion is duplicated six times
     # in this file and the test NAMES around it (six/seven/nine/ten entries) are
     # all stale -- every rule addition bumped the number and left the names
     # behind. Renamed to something that cannot go stale rather than adding a
     # seventh wrong name.
-    assert len(DEFAULT_RULES) == 18
+    assert len(DEFAULT_RULES) == 19
 
 
 # ============================================================
