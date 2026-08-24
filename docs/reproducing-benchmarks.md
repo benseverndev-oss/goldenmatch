@@ -154,11 +154,12 @@ benchmark test the v1.8 number was measured against.
 | Property | Value |
 |---|---|
 | Runner | `scripts/run_benchmarks.py --datasets abt-buy` (or `amazon-google`, or `products` for both) |
-| Helper | `scripts/dqbench_adapters/leipzig_eval.py::run_two_source_dedupe_zeroconfig` |
+| Helper | `scripts/dqbench_adapters/leipzig_eval.py::run_two_source_link_zeroconfig` |
 | Datasets | Leipzig Abt-Buy + Amazon-GoogleProducts (two-source, heterogeneous schemas) |
 | Drop location | `packages/python/goldenmatch/tests/benchmarks/datasets/{Abt-Buy,Amazon-Google}/` (auto-pulled by `--download`) |
 | Source URL | https://dbs.uni-leipzig.de/de/research/projects/object_matching/benchmark_datasets_for_entity_resolution |
-| GT construction | ID-joined perfect mapping → connected-components cluster truth → pairwise-F1 |
+| GT construction | ID-joined perfect mapping, scored as raw cross-source pairs (record linkage) |
+| Retired lane | A `(dedupe)` row concatenated both sources and scored `dedupe_df` against the transitive closure of the same mapping. Retired 2026-08-24: 98.1% of that truth is cross-source, so it measured linkage through the wrong API while spending half its candidate budget on same-source pairs (1,630 emitted, 9 correct). Genuine dedupe coverage is NCVR and Febrl3. |
 
 These are deliberately the engine's HARD domain: short product titles resist
 blocking (see issue #715), so zero-config recall is low. We publish them to
