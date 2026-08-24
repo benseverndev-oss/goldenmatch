@@ -504,6 +504,9 @@ config_matrix:
   # Roster single-sourcing gate (scripts/test_roster.py) runs in this job.
   - 'scripts/test_roster.py'
   - 'scripts/config_matrix/roster.py'
+  # Gates for the entry point + the count checker themselves.
+  - 'scripts/test_regen_docs.py'
+  - 'scripts/test_llms_counts.py'
   # Repo-level suite surface matrix: reads the parity manifests, the per-package
   # counts (packages/python/** above), and the recipes pages, so any of those can
   # move the cross-package view -> re-run its --check.
