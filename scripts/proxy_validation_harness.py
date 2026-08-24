@@ -155,6 +155,161 @@ def _score_candidate(lane: Lane, config: Any, kind: str) -> dict[str, Any] | Non
     }
 
 
+#: Threshold grid for generated candidates. Threshold is the dominant lever --
+#: it moves precision/recall directly -- so sweeping it is the cheapest way to
+#: manufacture the quality SPREAD the controller's own candidates lack.
+_THRESHOLD_GRID = (0.45, 0.55, 0.65, 0.75, 0.85, 0.95)
+
+
+def _config_variants(base: Any) -> list[tuple[str, Any]]:
+    """Perturb a real config into a grid spanning threshold x splitting.
+
+    Starts from a config the controller actually produced for THIS dataset, so
+    every variant is valid for its schema; only the levers under test move.
+    """
+    import copy
+
+    from goldenmatch.config.schemas import ClusterConfig
+
+    out: list[tuple[str, Any]] = []
+    for thr in _THRESHOLD_GRID:
+        for split in (False, True):
+            cfg = copy.deepcopy(base)
+            mks = getattr(cfg, "matchkeys", None) or []
+            for mk in mks:
+                if getattr(mk, "threshold", None) is not None:
+                    mk.threshold = thr
+            if not mks:
+                continue
+            cfg.cluster = ClusterConfig(
+                split_weak_bridges=split,
+                weak_bridge_margin=0.0 if split else None,
+            )
+            out.append((f"thr={thr:.2f} split={int(split)}", cfg))
+    return out
+
+
+def _assemble_profile(emitter: Any, config: Any) -> Any:
+    """Rebuild a ComplexityProfile from captured emissions, as the controller does.
+
+    IMPORTANT BASIS NOTE. `pick_committed` ranks on profiles measured from the
+    controller's SAMPLE runs. These are measured on the FULL run of the pinned
+    config, so they are not the same objects the commit decision sees.
+
+    That is deliberate, and it makes this a NECESSARY-CONDITION test: if a
+    signal carries no information about F1 even when measured on the very run
+    being scored, it cannot carry more when estimated from a sample. A proxy
+    that fails here is dead; a proxy that passes here still has to survive the
+    sampling step before it can be trusted at commit time.
+
+    `random_pair_above_threshold_rate` stays at its default -- the controller
+    computes it via `_compute_recall_probe`, which needs controller context.
+    Treat that one field as unmeasured here rather than as zero.
+    """
+    from goldenmatch.core.complexity_profile import (
+        BlockingProfile,
+        ClusterProfile,
+        ComplexityProfile,
+        DataProfile,
+        DomainProfile,
+        MatchkeyProfile,
+        ScoringProfile,
+    )
+    from goldenmatch.core.zero_label_confidence import compute_zero_label_confidence
+
+    profile = ComplexityProfile(
+        data=emitter.data or DataProfile(),
+        domain=emitter.domain or DomainProfile(),
+        matchkey=emitter.matchkey or MatchkeyProfile(),
+        blocking=emitter.blocking or BlockingProfile(),
+        scoring=emitter.scoring or ScoringProfile(),
+        cluster=emitter.cluster or ClusterProfile(),
+    )
+    return dataclasses.replace(
+        profile,
+        zero_label=compute_zero_label_confidence(profile, config),
+    )
+
+
+def _score_generated(lane: Lane, config: Any, kind: str) -> dict[str, Any] | None:
+    """Score one generated config AND capture the profile the run emitted."""
+    from goldenmatch import dedupe_df, match_df
+    from goldenmatch.core.profile_emitter import profile_capture
+
+    base = dedupe_df if kind == "dedupe" else match_df
+    fn = functools.partial(base, config=config, allow_red_config=True)
+    start = time.time()
+    try:
+        with profile_capture() as emitter:
+            res = lane.evaluate(fn)
+            profile = _assemble_profile(emitter, config)
+    except Exception as exc:
+        return {
+            "error": f"{type(exc).__name__}: {exc}"[:300],
+            "elapsed_seconds": round(time.time() - start, 2),
+        }
+    if res is None:
+        return None
+    return {
+        "true_f1": round(float(res.f1), 6),
+        "true_precision": round(float(res.precision), 6),
+        "true_recall": round(float(res.recall), 6),
+        "elapsed_seconds": round(time.time() - start, 2),
+        **_flatten_profile(profile),
+    }
+
+
+def run_lane_generated(lane: Lane) -> list[dict[str, Any]]:
+    """Sweep a generated config grid to get the quality spread the controller
+    never produces, so proxy validity is actually measurable."""
+    _info(f"{lane.name}: zero-config pass (for a valid base config)")
+    history, zero_score = _capture_history(lane, lane.kind)
+    if history is None or zero_score is None:
+        _info(f"{lane.name}: no history/score -- skipping")
+        return []
+    try:
+        committed = history.pick_committed(
+            precision_collapse_floor=0.9,
+            use_zero_label_confidence=True,
+        )
+    except Exception:
+        committed = None
+    base_cfg = getattr(committed, "config", None)
+    if base_cfg is None:
+        base_cfg = next((e.config for e in reversed(history.entries) if e.config is not None), None)
+    if base_cfg is None:
+        _info(f"{lane.name}: no usable base config -- skipping")
+        return []
+
+    variants = _config_variants(base_cfg)
+    _info(
+        f"{lane.name}: zero-config f1={zero_score['true_f1']:.4f}; "
+        f"sweeping {len(variants)} generated configs"
+    )
+    rows: list[dict[str, Any]] = []
+    for label, cfg in variants:
+        scored = _score_generated(lane, cfg, lane.kind)
+        if scored is None:
+            continue
+        rows.append(
+            {
+                "lane": lane.name,
+                "kind": lane.kind,
+                "variant": label,
+                "generated": True,
+                "zero_config_f1": zero_score["true_f1"],
+                **scored,
+            }
+        )
+        f1 = scored.get("true_f1")
+        _info(
+            f"  {label:<22} f1={'ERR' if f1 is None else f'{f1:.4f}'} "
+            f"({scored.get('elapsed_seconds')}s)"
+            + (f"  {scored['error']}" if "error" in scored else "")
+        )
+    return rows
+
+
 def _capture_history(lane: Lane, kind: str) -> tuple[Any, dict[str, Any] | None]:
     """Run the lane zero-config; return (history, zero_config_score)."""
     from goldenmatch import dedupe_df, match_df
@@ -499,6 +654,14 @@ def main() -> int:
     ap.add_argument(
         "--only", default=None, help="Comma-separated substrings; run only matching lanes"
     )
+    ap.add_argument(
+        "--generate",
+        action="store_true",
+        help="Sweep a GENERATED config grid (threshold x splitting) instead of only "
+        "the candidates the controller proposed. Measured: the controller's own sets "
+        "are too small and too homogeneous to measure proxy validity against -- four "
+        "of six lanes offered two candidates of identical F1.",
+    )
     args = ap.parse_args()
 
     if args.analyze is not None:
@@ -516,7 +679,7 @@ def main() -> int:
     with args.out.open("w", encoding="utf-8") as fh:
         for lane in lanes:
             try:
-                rows = run_lane(lane)
+                rows = run_lane_generated(lane) if args.generate else run_lane(lane)
             except SystemExit:
                 raise
             except Exception as exc:
