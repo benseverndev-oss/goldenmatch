@@ -114,17 +114,31 @@ def test_controller_health_unknown_not_na_when_absent():
 def test_red_health_is_a_breach_even_above_the_floor():
     """The check the "n/a" hardcode disabled.
 
-    Split in two since Abt-Buy became quarantined (#2717): a quarantined
-    dataset's RED is still DETECTED, it just reports instead of failing. The
-    guarantee the "n/a" hardcode broke was detection, so that is asserted on
-    Abt-Buy directly -- and the failing half is asserted on a dataset that is
-    not quarantined, so neither half can pass vacuously.
+    Split in two: a quarantined dataset's RED is still DETECTED, it just
+    reports instead of failing. The guarantee the "n/a" hardcode broke was
+    detection, so that is asserted on a quarantined lane -- and the failing
+    half on an un-quarantined one, so neither can pass vacuously.
+
+    Driven by a SYNTHETIC quarantine entry. This used to borrow
+    "Abt-Buy (dedupe)", which was retired 2026-08-24 when measurement showed it
+    was linkage wearing a dedupe API (98.1% of its ground truth is
+    cross-source). `_QUARANTINE` is empty now, so a real entry cannot carry
+    this.
     """
-    base = rb._QUARANTINE["Abt-Buy (dedupe)"]["f1_at_quarantine"]
-    failing, quarantined = rb._check_quality_floors([
-        {"name": "Abt-Buy (dedupe)", "f1": base, "health": "RED",
-         "stop_reason": "BUDGET_ITERATIONS"},
-    ])
+    import pytest as _pytest  # noqa: F401  (kept local; this module is not a fixture user)
+
+    lane = "Synthetic (quarantined)"
+    saved_q, saved_f = rb._QUARANTINE, rb._F1_FLOORS
+    rb._QUARANTINE = {lane: {"issue": 2748, "f1_at_quarantine": 0.20,
+                             "tolerance": 0.03, "why": "synthetic fixture"}}
+    rb._F1_FLOORS = {lane: None}
+    try:
+        failing, quarantined = rb._check_quality_floors([
+            {"name": lane, "f1": 0.20, "health": "RED",
+             "stop_reason": "BUDGET_ITERATIONS"},
+        ])
+    finally:
+        rb._QUARANTINE, rb._F1_FLOORS = saved_q, saved_f
     assert any("RED" in b for b in quarantined), (failing, quarantined)
 
     failing, _ = rb._check_quality_floors([
