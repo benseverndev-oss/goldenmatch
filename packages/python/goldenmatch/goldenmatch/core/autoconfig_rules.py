@@ -458,13 +458,52 @@ _TRANSITIVITY_PROGRESS_MARGIN = 0.01
 #: Above this share of the frame, one cluster is a collapse rather than a merge.
 #: Mirrors the bar `ClusterProfile.red_reason` uses to raise `cluster_giant`.
 _GIANT_CLUSTER_FRACTION = 0.1
+#: Threshold-raise step for `rule_cluster_giant`, as a band rather than a
+#: constant. The step scales with HOW FAR over the saturation bar the run sits,
+#: because a flat step is wasted motion against a large gap.
+#:
+#: Measured: Abt-Buy dedupe commits threshold 0.70 while its optimum is >=0.95
+#: (F1 0.4059 vs 0.1361, docs/measurements/). At +0.05 per firing that is five
+#: iterations -- and the rule spends its first firings offering splitting, so
+#: against a 4-iteration budget it lands ONE raise and stops at 0.75.
+#:
+#: Scaling by saturation is self-limiting in the right direction: a run pinned
+#: at the cap (ratio 1.0) is badly over-merged and takes the full step, while
+#: one just over the bar (ratio 0.5) takes the old 0.05. On Amazon-Google, whose
+#: optimum is 0.75 rather than 0.95, saturation is lower and the step is
+#: correspondingly smaller -- so the same rule does not overshoot a lane that
+#: needs to travel less far.
 _GIANT_THRESHOLD_STEP = 0.05
+_GIANT_THRESHOLD_STEP_MAX = 0.20
 _GIANT_THRESHOLD_CEILING = 0.95
+
+
+def _giant_threshold_step(cp: Any) -> float:
+    """Step size scaled across the firing band [saturation bar, 1.0].
+
+    Falls back to the flat minimum when the cap was never recorded (older
+    profiles, and the linkage lanes that emit no cluster profile) rather than
+    inventing a severity from a signal nobody measured.
+    """
+    from goldenmatch.core.complexity_profile import _CAP_SATURATION_FRACTION
+
+    cap = getattr(cp, "max_cluster_size", 0) or 0
+    if cap <= 0:
+        return _GIANT_THRESHOLD_STEP
+    span = 1.0 - _CAP_SATURATION_FRACTION
+    if span <= 0:
+        return _GIANT_THRESHOLD_STEP
+    ratio = cp.cluster_size_max / cap
+    frac = max(0.0, min(1.0, (ratio - _CAP_SATURATION_FRACTION) / span))
+    return _GIANT_THRESHOLD_STEP + frac * (
+        _GIANT_THRESHOLD_STEP_MAX - _GIANT_THRESHOLD_STEP
+    )
 
 
 @targets("cluster_giant")
 def rule_cluster_giant(
-    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
+    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
+    ctx: IndicatorContext | None = None,
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     """Answer `ClusterProfile.red_reason() == "cluster_giant"`.
 
@@ -486,9 +525,31 @@ def rule_cluster_giant(
     """
     n_rows = profile.data.n_rows
     cp = profile.cluster
-    # n_rows <= 0 is `data_empty`'s business, and 0.1 * 0 would make any cluster
-    # look giant.
-    if n_rows <= 0 or cp.cluster_size_max <= _GIANT_CLUSTER_FRACTION * n_rows:
+    # Gate on `red_reason` itself rather than re-deriving its condition. This
+    # rule previously kept its own copy of the `_GIANT_CLUSTER_FRACTION * n_rows`
+    # test, and when that bar was found unreachable and fixed on the profile
+    # (#2750), the private copy stayed dead -- so `red_reason` reported
+    # `cluster_giant` on every Abt-Buy iteration while this rule, its only actor,
+    # returned None and `rule_low_transitivity` walked the threshold DOWN instead.
+    # Duplicating the condition is exactly the drift `red_reason` exists to stop.
+    # n_rows <= 0 is `data_empty`'s business.
+    if n_rows <= 0 or cp.red_reason(n_rows) != "cluster_giant":
+        return None
+
+    # SPECIFIC BEATS GENERAL. `rule_precision_anchor_threshold_raise` is tuned
+    # for one over-merge shape (name-only weighted matchkey, #1319) and raises to
+    # a calibrated 0.9. This rule is the generic answer to `cluster_giant` and
+    # sits at position 11b, well ahead of it at 17 -- so once the step scaled
+    # with saturation, this rule reached the 0.95 ceiling first and the specific
+    # one could never fire. Its own sensitivity test caught exactly that:
+    # "threshold reached 0.95 WITHOUT the rule -- the integration test above is
+    # not sensitive to the rule".
+    #
+    # Making another rule unreachable is the defect this whole change set exists
+    # to fix (#2750), so defer instead. Reordering is not an option: moving this
+    # rule after position 17 puts `rule_low_transitivity` (12) back in front of
+    # it, restoring the shadowing that made it walk the threshold DOWN.
+    if precision_anchor_would_fire(current, profile, ctx):
         return None
 
     from goldenmatch.config.schemas import ClusterConfig
@@ -521,7 +582,8 @@ def rule_cluster_giant(
     mk = _first_weighted_mk(current)
     if mk is None or mk.threshold is None:
         return None
-    new_threshold = min(_GIANT_THRESHOLD_CEILING, mk.threshold + _GIANT_THRESHOLD_STEP)
+    _step = _giant_threshold_step(cp)
+    new_threshold = min(_GIANT_THRESHOLD_CEILING, mk.threshold + _step)
     if new_threshold == mk.threshold:
         return None
     new_mk = mk.model_copy(update={"threshold": new_threshold})
@@ -538,7 +600,9 @@ def rule_cluster_giant(
         rationale=(
             f"largest cluster {cp.cluster_size_max} still over "
             f"{_GIANT_CLUSTER_FRACTION:.0%} of {n_rows} rows with splitting on; "
-            f"raising threshold {mk.threshold:.2f} -> {new_threshold:.2f}"
+            f"raising threshold {mk.threshold:.2f} -> {new_threshold:.2f} "
+            f"(step {_step:.3f}, saturation "
+            f"{(cp.cluster_size_max / cp.max_cluster_size) if cp.max_cluster_size else 0.0:.2f})"
         ),
         config_diff={"matchkeys[0].threshold": new_threshold},
     )

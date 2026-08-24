@@ -50,13 +50,16 @@ def _run_with_spies(monkeypatch, *, splitting: bool):
     real_frames = cluster_mod._emit_cluster_profile_frames
     real_split = tc_mod.materialize_and_split
 
-    def dict_spy(clusters):
+    # Signatures mirror the emitters', including `max_cluster_size` (#2750) --
+    # the call sites pass it positionally, so a spy that omits it fails with a
+    # TypeError that looks like an ordering bug rather than a stale stub.
+    def dict_spy(clusters, max_cluster_size=0):
         order.append(("emit", len(clusters)))
-        return real_dict(clusters)
+        return real_dict(clusters, max_cluster_size)
 
-    def frames_spy(metadata, assignments, pairs=None):
+    def frames_spy(metadata, assignments, pairs=None, max_cluster_size=0):
         order.append(("emit", None))
-        return real_frames(metadata, assignments, pairs)
+        return real_frames(metadata, assignments, pairs, max_cluster_size)
 
     def split_spy(clusters, all_pairs, margin=None):
         out, report = real_split(clusters, all_pairs, margin)

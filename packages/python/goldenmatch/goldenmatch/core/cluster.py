@@ -459,8 +459,15 @@ def _measure_bridges_frames(
     return _bridge_stats(measurable)
 
 
-def _emit_cluster_profile(clusters: dict[int, dict]) -> None:
-    """Emit ClusterProfile to current emitter. No-op when no capture is active."""
+def _emit_cluster_profile(
+    clusters: dict[int, dict], max_cluster_size: int = 0,
+) -> None:
+    """Emit ClusterProfile to current emitter. No-op when no capture is active.
+
+    `max_cluster_size` is recorded so `cluster_size_max` can be read relative
+    to the ceiling it saturates against; 0 means "not recorded" and the
+    over-merge check is skipped rather than guessed (#2750).
+    """
     import math
     if not _emitter_stack.get():
         return  # fast path: no capture active
@@ -512,6 +519,7 @@ def _emit_cluster_profile(clusters: dict[int, dict]) -> None:
         oversized_cluster_count=sum(1 for c in clusters.values() if c.get("oversized")),
         bridge_edge_count=bridge_edge_count,
         measured_bridge_risk=measured_bridge_risk,
+        max_cluster_size=max_cluster_size,
     )
     current_emitter().set_cluster(profile)
 
@@ -888,12 +896,14 @@ def build_cluster_frames(
     # the df-input fast path never materializes the pair list just to feed a
     # profiler that isn't capturing -- the whole point of the lazy `_pairs_list`.
     if _emitter_stack.get():
-        _emit_cluster_profile_frames(metadata, assignments, _pairs_list())
+        _emit_cluster_profile_frames(
+            metadata, assignments, _pairs_list(), max_cluster_size,
+        )
     return ClusterFrames(assignments=assignments, metadata=metadata)
 
 
 def _emit_cluster_profile_frames(
-    metadata: Any, assignments: Any, pairs: Any = None,
+    metadata: Any, assignments: Any, pairs: Any = None, max_cluster_size: int = 0,
 ) -> None:
     """Frames-path twin of ``_emit_cluster_profile``. Telemetry only -- no-op
     when no capture is active. Builds the ``ClusterProfile`` from the metadata +
@@ -988,6 +998,7 @@ def _emit_cluster_profile_frames(
         oversized_cluster_count=oversized_count,
         bridge_edge_count=_frames_bridges,
         measured_bridge_risk=_frames_risk,
+        max_cluster_size=max_cluster_size,
     )
     current_emitter().set_cluster(profile)
 
@@ -1191,7 +1202,7 @@ def _finalize_clusters(
                 cinfo["cluster_quality"] = "strong"
             cinfo.pop("_was_split", None)
 
-    _emit_cluster_profile(result)
+    _emit_cluster_profile(result, max_cluster_size)
     return result
 
 

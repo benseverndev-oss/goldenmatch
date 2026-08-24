@@ -2287,6 +2287,7 @@
             "_blocking_recovery_target",
             "_existing_blocking_fields",
             "_first_weighted_mk",
+            "_giant_threshold_step",
             "_is_derived",
             "_llm_api_key_available",
             "_near_dup_locked",

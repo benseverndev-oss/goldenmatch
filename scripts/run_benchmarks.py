@@ -627,9 +627,26 @@ _F1_FLOORS: dict[str, float | None] = {
     # change -- and see "Abt-Buy (linkage)" below for where it actually applies.
     # RENAMED to "Abt-Buy (linkage)" below (#2717). The 0.45 was DERIVED from a
     # linkage run and enforced here for months; it now guards the lane it
-    # describes. This lane keeps no floor of its own -- see its _QUARANTINE
-    # entry for why its F1 is not a usable target.
-    "Abt-Buy (dedupe)": None,
+    # describes.
+    #
+    # REPAIRED 2026-08-24: 0.0881 -> 0.2253 (+156%) across three fixes --
+    # the over-merge detector could not fire (#2750), its rule kept a private
+    # copy of the dead bar, and commit discarded the better candidate (#2748).
+    # A fourth change scaled the rule's threshold step by saturation severity,
+    # carrying 0.1361 -> 0.2253: a flat +0.05 could not cross a 0.25 gap inside
+    # the iteration budget.
+    #
+    # Floor set BELOW the observed 0.2253 on purpose -- this is a local
+    # Windows / native-off measurement, and the convention in this file is to
+    # leave margin rather than sit on the number (see the 0.45 note above). 0.15
+    # sits above BOTH the 0.0881 this lane used to score and the 0.1361 of the
+    # first repair, so losing either fix trips it while run-to-run variance
+    # does not.
+    #
+    # Reachable headroom is far higher: a threshold sweep puts this lane at
+    # 0.4059 at thr=0.95 (docs/measurements/). Raise this floor as the
+    # controller learns to get there.
+    "Abt-Buy (dedupe)": 0.15,
     # KNOWN BAD (#2470). Measured 0.0697 / recall 0.0419. The floor is set at the
     # observed value ONLY to stop it getting worse; it is not an endorsement, and
     # this dataset should be treated as an open quality bug rather than a passing
@@ -675,34 +692,53 @@ _F1_FLOORS: dict[str, float | None] = {
 # silently honouring it.
 _QUARANTINE: dict[str, dict[str, Any]] = {
     "Abt-Buy (dedupe)": {
-        "issue": 2717,
-        "f1_at_quarantine": 0.0881,
+        # RE-BASELINED UPWARD 2026-08-24, and re-pointed from the CLOSED #2717.
+        # 0.0881 -> 0.1361 (+55%) once the over-merge detector could fire
+        # (#2750: its bar sat above a cap `cluster_size_max` can never exceed,
+        # and `rule_cluster_giant` kept a private copy of that dead bar) and
+        # commit stopped discarding the better candidate (#2748). The controller
+        # now commits iter=3 at threshold 0.75 rather than falling back to v0.
+        #
+        # STILL QUARANTINED, deliberately: the lane's controller health is RED
+        # because the detector correctly reports it is STILL over-merging
+        # (cluster_size_max 58 against a cap of 100). A threshold sweep puts the
+        # reachable optimum at 0.4059 (thr=0.95, docs/measurements/), so 0.1361
+        # is a real repair and nowhere near a healthy number. Un-quarantining it
+        # here would claim a finished job.
+        #
+        # The baseline moves UP so the gain cannot be silently lost: a run below
+        # 0.1361 - 0.03 now trips this, where the old 0.0881 baseline would have
+        # absorbed a full regression of the fix.
+        "issue": 2748,
+        "f1_at_quarantine": 0.2253,
         "tolerance": 0.03,
         "why": (
-            "RE-BASELINED 2026-08-23, DOWNWARD, because the engine got BETTER. "
-            "Weighted-path blocking recall went 0.0684 -> 0.5662 (8x) when the "
-            "sketch column stopped being chosen by length and short free text "
-            "stopped being routed to LSH. This lane's F1 FELL from 0.1723 to "
-            "0.0881 as a result: it scores a CONCATENATED frame against a "
-            "cross-source mapping, so surfacing more candidates surfaces mostly "
-            "same-source pairs that cannot be true matches -- precision "
-            "0.1068 -> 0.0470 while recall rose 0.4463 -> 0.7075. The same "
-            "change took the LINKAGE row 0.5658 -> 0.7024. "
-            "This is NOT a floor lowered to make a lane green: the number it "
-            "describes is a metric that punishes better blocking, and the "
-            "quarantine is re-pointed at the current run so a genuine NEW "
-            "regression can still trip it. What this lane should measure at all "
-            "is an open question -- see 'Abt-Buy (linkage)' below for the row "
-            "that is comparable to published figures."
+            "REPAIRED but not healthy. 0.0881 -> 0.2253 (+156%) via #2750, "
+            "#2748 and a saturation-scaled threshold step. Controller health "
+            "is still RED because the lane is still over-merging (precision "
+            "0.1525), and the measured reachable optimum is 0.4059 at "
+            "thr=0.95 -- the rule stops raising once saturation falls below "
+            "its bar, which is short of that. Quarantined until the "
+            "controller can walk the rest of the way."
         ),
     },
     "Amazon-Google (dedupe)": {
-        "issue": 2717,
-        "f1_at_quarantine": 0.1014,
+        # RE-POINTED from #2717, which is CLOSED. An entry whose issue is closed
+        # is a lie about something being tracked (see this dict's own contract),
+        # and the reason this lane is still quarantined is now precisely
+        # understood: it stops on `budget_time` after too few iterations to move
+        # its threshold, so the fixes that repaired Abt-Buy (#2750, #2748) leave
+        # it at 0.1097. Its measured optimum is 0.2211 at thr=0.75.
+        "issue": 2748,
+        "f1_at_quarantine": 0.1097,
         "tolerance": 0.03,
         "why": (
             "clears its own 0.05 floor but commits a RED config "
-            "(budget_time), so the numbers are not trustworthy either way."
+            "(budget_time), so the numbers are not trustworthy either way. "
+            "Unlike Abt-Buy (dedupe), which this change repaired, this lane "
+            "never gets enough iterations to reach a better threshold -- the "
+            "time budget truncates exploration before the over-merge rule can "
+            "walk it up. Measured headroom: 0.2211 at thr=0.75."
         ),
     },
 }
