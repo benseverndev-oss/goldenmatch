@@ -208,34 +208,43 @@ def _fetch_leipzig_product(datasets_dir: Path, key: str) -> bool:
 
 
 def _measure_product(datasets_dir: Path, key: str) -> list[dict[str, Any]]:
-    """Zero-config matching on a Leipzig two-source product dataset; pairwise F1.
+    """Zero-config RECORD LINKAGE on a Leipzig two-source product dataset.
 
-    Returns TWO rows, because the dataset supports two genuinely different
-    tasks and reporting one number for both was a framing error (#2717):
+    Returns ONE row. The `<label> (dedupe)` row was RETIRED 2026-08-24 -- it was
+    not measuring deduplication.
 
-      * ``<label> (dedupe)`` -- both sources concatenated into one frame,
-        everything compared to everything, scored against the transitive
-        closure of the mapping. RENAMED from the bare ``<label>`` (#2717): the
-        unsuffixed name read as THE number for the dataset when it is the
-        harder and far less comparable of the two lanes.
-      * ``<label> (linkage)`` -- record linkage via ``match_df(a, b)``, scored
-        against the raw cross-source mapping. This is the task the published
-        DeepMatcher / Ditto figures measure, so it is the row to compare
-        against them.
+    That row concatenated both sources into one frame and scored `dedupe_df`
+    against the transitive closure of a CROSS-SOURCE mapping. Measured on
+    Abt-Buy at the committed config:
 
-    Measured on Amazon-Google with token blocking committed: 67.5% of the
-    dedupe lane's candidates are same-source pairs, which against a
-    cross-source mapping cannot be true matches and land entirely in the
-    false-positive column. The engine already prints a warning naming this and
-    recommending ``match_df(left, right)``. Neither lane is wrong; they answer
-    different questions, and a reader cannot tell which one a bare number
-    answers. Hence both, labelled.
+        ground truth   1,097 cross-source (98.1%)  vs  21 same-source (1.9%)
+        emitted        1,530 cross-source (48.4%)  vs  1,630 same-source (51.6%)
+        false pos      1,057 cross-source          vs  1,621 same-source
+
+    So the task was linkage wearing a dedupe API: 98.1% of the truth is
+    cross-source, while half the engine's candidate budget went to a
+    within-source hunt containing 21 findable pairs, of which it got 9. Emitting
+    1,630 same-source pairs to find 9 is 99.4% waste, and it also polluted the
+    score distribution the threshold calibrates against -- which is why the
+    lane scored 0.2253 while LINKAGE over the same records scored 0.7024.
+
+    Real deduplication on Abt-Buy would mean finding duplicates WITHIN Abt.
+    This dataset carries no ground truth for that, so no honest dedupe row can
+    be built from it.
+
+    The suite keeps genuine dedupe coverage where real ground truth exists:
+    NCVR (single source, synthetic duplicate pairs) scores 0.9828 and Febrl3
+    0.9443. The engine deduplicates well; the retired row was mislabelled, and
+    reporting it beside a 0.7024 linkage row invited reading the engine as far
+    worse at products than it is.
+
+    The linkage row is also the one comparable to published DeepMatcher / Ditto
+    figures, which measure the cross-source task.
     """
     from dqbench_adapters.leipzig_eval import (
-        run_two_source_dedupe_zeroconfig,
         run_two_source_link_zeroconfig,
     )
-    from goldenmatch import dedupe_df, match_df
+    from goldenmatch import match_df
 
     spec = _PRODUCT_SPECS[key]
     shared_kwargs = dict(
@@ -264,30 +273,6 @@ def _measure_product(datasets_dir: Path, key: str) -> list[dict[str, Any]]:
             "planning_effort": _PLANNING_EFFORT,
         }
 
-    # ---- dedupe lane (historical row; keeps the bare label) ----------------
-    # The shared helper returns only the score, so the controller verdict would be
-    # lost -- and this function used to hardcode `health: "n/a"`, which made the
-    # RED-config check in `_check_quality_floors` unable to fire on the two
-    # datasets in the worst shape. Both committed RED configs in the 2026-08-18
-    # nightly and neither tripped it (#2457). Capture it off the result instead of
-    # widening the helper's contract for one caller.
-    dedupe_captured: dict[str, Any] = {}
-
-    def _dedupe(frame):
-        res = dedupe_df(frame, planning_effort=_PLANNING_EFFORT)
-        dedupe_captured["result"] = res
-        return res
-
-    start = time.time()
-    res = run_two_source_dedupe_zeroconfig(datasets_dir, _dedupe, **shared_kwargs)
-    elapsed = time.time() - start
-    if res is None:
-        _info(f"  {spec['label']}: dataset files missing - skipping")
-        return []
-    rows.append(
-        _row(f"{spec['label']} (dedupe)", "dedupe", res, elapsed, dedupe_captured)
-    )
-
     # ---- linkage lane ------------------------------------------------------
     link_captured: dict[str, Any] = {}
 
@@ -299,10 +284,14 @@ def _measure_product(datasets_dir: Path, key: str) -> list[dict[str, Any]]:
     start = time.time()
     link = run_two_source_link_zeroconfig(datasets_dir, _match, **shared_kwargs)
     elapsed = time.time() - start
-    if link is not None:
-        rows.append(
-            _row(f"{spec['label']} (linkage)", "linkage", link, elapsed, link_captured)
-        )
+    if link is None:
+        # The retired dedupe lane used to carry this message; it has to stay or
+        # a missing dataset becomes a silently empty result rather than a skip.
+        _info(f"  {spec['label']}: dataset files missing - skipping")
+        return []
+    rows.append(
+        _row(f"{spec['label']} (linkage)", "linkage", link, elapsed, link_captured)
+    )
     return rows
 
 
@@ -625,33 +614,10 @@ _F1_FLOORS: dict[str, float | None] = {
     # Kept here at 0.45 for the DEDUPE row it currently gates -- raising or
     # retiring it belongs with the same-source framing decision, not with this
     # change -- and see "Abt-Buy (linkage)" below for where it actually applies.
-    # RENAMED to "Abt-Buy (linkage)" below (#2717). The 0.45 was DERIVED from a
-    # linkage run and enforced here for months; it now guards the lane it
-    # describes.
-    #
-    # REPAIRED 2026-08-24: 0.0881 -> 0.2253 (+156%) across three fixes --
-    # the over-merge detector could not fire (#2750), its rule kept a private
-    # copy of the dead bar, and commit discarded the better candidate (#2748).
-    # A fourth change scaled the rule's threshold step by saturation severity,
-    # carrying 0.1361 -> 0.2253: a flat +0.05 could not cross a 0.25 gap inside
-    # the iteration budget.
-    #
-    # Floor set BELOW the observed 0.2253 on purpose -- this is a local
-    # Windows / native-off measurement, and the convention in this file is to
-    # leave margin rather than sit on the number (see the 0.45 note above). 0.15
-    # sits above BOTH the 0.0881 this lane used to score and the 0.1361 of the
-    # first repair, so losing either fix trips it while run-to-run variance
-    # does not.
-    #
-    # Reachable headroom is far higher: a threshold sweep puts this lane at
-    # 0.4059 at thr=0.95 (docs/measurements/). Raise this floor as the
-    # controller learns to get there.
-    "Abt-Buy (dedupe)": 0.15,
-    # KNOWN BAD (#2470). Measured 0.0697 / recall 0.0419. The floor is set at the
-    # observed value ONLY to stop it getting worse; it is not an endorsement, and
-    # this dataset should be treated as an open quality bug rather than a passing
-    # lane. Raise it as the matcher improves.
-    "Amazon-Google (dedupe)": 0.05,
+    # The two `(dedupe)` rows were RETIRED 2026-08-24 -- see `_measure_product`.
+    # They scored a concatenated frame against a mapping that is 98.1%
+    # cross-source, so they measured linkage through the wrong API rather than
+    # deduplication. Genuine dedupe coverage lives in NCVR and Febrl3.
     # No trustworthy baseline recorded yet -- these have not completed in CI.
     "DBLP-ACM": None,
     "NCVR": None,
@@ -691,56 +657,6 @@ _F1_FLOORS: dict[str, float | None] = {
 # something being tracked, so `_quarantine_breaches` says so rather than
 # silently honouring it.
 _QUARANTINE: dict[str, dict[str, Any]] = {
-    "Abt-Buy (dedupe)": {
-        # RE-BASELINED UPWARD 2026-08-24, and re-pointed from the CLOSED #2717.
-        # 0.0881 -> 0.1361 (+55%) once the over-merge detector could fire
-        # (#2750: its bar sat above a cap `cluster_size_max` can never exceed,
-        # and `rule_cluster_giant` kept a private copy of that dead bar) and
-        # commit stopped discarding the better candidate (#2748). The controller
-        # now commits iter=3 at threshold 0.75 rather than falling back to v0.
-        #
-        # STILL QUARANTINED, deliberately: the lane's controller health is RED
-        # because the detector correctly reports it is STILL over-merging
-        # (cluster_size_max 58 against a cap of 100). A threshold sweep puts the
-        # reachable optimum at 0.4059 (thr=0.95, docs/measurements/), so 0.1361
-        # is a real repair and nowhere near a healthy number. Un-quarantining it
-        # here would claim a finished job.
-        #
-        # The baseline moves UP so the gain cannot be silently lost: a run below
-        # 0.1361 - 0.03 now trips this, where the old 0.0881 baseline would have
-        # absorbed a full regression of the fix.
-        "issue": 2748,
-        "f1_at_quarantine": 0.2253,
-        "tolerance": 0.03,
-        "why": (
-            "REPAIRED but not healthy. 0.0881 -> 0.2253 (+156%) via #2750, "
-            "#2748 and a saturation-scaled threshold step. Controller health "
-            "is still RED because the lane is still over-merging (precision "
-            "0.1525), and the measured reachable optimum is 0.4059 at "
-            "thr=0.95 -- the rule stops raising once saturation falls below "
-            "its bar, which is short of that. Quarantined until the "
-            "controller can walk the rest of the way."
-        ),
-    },
-    "Amazon-Google (dedupe)": {
-        # RE-POINTED from #2717, which is CLOSED. An entry whose issue is closed
-        # is a lie about something being tracked (see this dict's own contract),
-        # and the reason this lane is still quarantined is now precisely
-        # understood: it stops on `budget_time` after too few iterations to move
-        # its threshold, so the fixes that repaired Abt-Buy (#2750, #2748) leave
-        # it at 0.1097. Its measured optimum is 0.2211 at thr=0.75.
-        "issue": 2748,
-        "f1_at_quarantine": 0.1097,
-        "tolerance": 0.03,
-        "why": (
-            "clears its own 0.05 floor but commits a RED config "
-            "(budget_time), so the numbers are not trustworthy either way. "
-            "Unlike Abt-Buy (dedupe), which this change repaired, this lane "
-            "never gets enough iterations to reach a better threshold -- the "
-            "time budget truncates exploration before the over-merge rule can "
-            "walk it up. Measured headroom: 0.2211 at thr=0.75."
-        ),
-    },
 }
 
 

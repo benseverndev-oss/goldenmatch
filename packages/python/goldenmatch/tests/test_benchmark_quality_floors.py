@@ -22,43 +22,53 @@ if str(_SCRIPTS) not in sys.path:
 run_benchmarks = pytest.importorskip("run_benchmarks")
 
 
-def test_amazon_google_at_its_quarantine_baseline_is_reported_not_failed():
-    """Amazon-Google is quarantined (#2717), so its breaches report, not fail.
+#: A synthetic quarantined lane. These tests used to borrow the live entries
+#: for "Amazon-Google (dedupe)" / "Abt-Buy (dedupe)", but those rows were
+#: RETIRED 2026-08-24 -- measurement showed 98.1% of their ground truth was
+#: cross-source, so they were linkage wearing a dedupe API and were not
+#: measuring deduplication at all. `_QUARANTINE` is empty as a result.
+#:
+#: The gate these tests exist for is not tied to any particular lane, so drive
+#: it with a fixture instead. Borrowing live entries is what coupled the
+#: MECHANISM's tests to whichever rows happened to be quarantined, and it is
+#: why retiring two rows broke a test file that has nothing to do with them.
+_LANE = "Synthetic (quarantined)"
+_BASE = 0.20
 
-    This test used to assert the 0.0697 run "sits on the floor and is not a
-    breach". That is no longer the contract, and the change is deliberate:
-    0.0697 was the #2470 run, and the CURRENT observed value is 0.1014. Feeding
-    0.0697 today is a real DEGRADATION and the ratchet fails it -- which is the
-    behaviour the original test wanted ("a WORSE run must breach"), now enforced
-    against a live baseline instead of a static floor.
-    """
-    base = run_benchmarks._QUARANTINE["Amazon-Google (dedupe)"]["f1_at_quarantine"]
-    failing, quarantined = run_benchmarks._check_quality_floors(
-        [{"name": "Amazon-Google (dedupe)", "f1": base, "precision": 0.2077, "recall": 0.0419}]
+
+@pytest.fixture
+def quarantined_lane(monkeypatch):
+    monkeypatch.setattr(run_benchmarks, "_QUARANTINE", {
+        _LANE: {"issue": 2748, "f1_at_quarantine": _BASE, "tolerance": 0.03,
+                "why": "synthetic fixture for the quality-gate tests"},
+    })
+    monkeypatch.setattr(run_benchmarks, "_F1_FLOORS", {_LANE: None, "Febrl3": 0.90})
+
+
+def test_a_quarantined_lane_at_its_baseline_is_reported_not_failed(quarantined_lane):
+    """A quarantined lane's breaches report rather than fail -- but the ratchet
+    still fails a run that DEGRADES past the baseline, which is the behaviour
+    #2470 wanted ("a WORSE run must breach"), enforced against a live baseline
+    instead of a static floor."""
+    failing, _quarantined = run_benchmarks._check_quality_floors(
+        [{"name": _LANE, "f1": _BASE, "precision": 0.2077, "recall": 0.0419}]
     )
     assert failing == [], f"at its own baseline it must not fail: {failing}"
 
     worse = run_benchmarks._check_quality_floors(
-        [{"name": "Amazon-Google (dedupe)", "f1": 0.04, "precision": 0.2, "recall": 0.03}]
+        [{"name": _LANE, "f1": _BASE - 0.16, "precision": 0.2, "recall": 0.03}]
     )[0]
-    assert worse, "a WORSE Amazon-Google run must still fail"
-    assert any("Amazon-Google" in w for w in worse), worse
+    assert worse, "a WORSE run must still fail"
+    assert any(_LANE in w for w in worse), worse
 
 
-def test_a_healthy_run_does_not_breach():
-    """Abt-Buy sits at its quarantine baseline here, not at 0.5037.
-
-    0.5037 is the DISPUTED, unreproduced number (see the `Abt-Buy` note in
-    `_F1_FLOORS`); every reproduction gives 0.1723. Feeding it now trips the
-    IMPROVED ratchet, which is correct -- a jump that size means someone fixed
-    it and the quarantine should be lifted. Using it as "a healthy run" was
-    baking an unreproducible measurement into a test.
-    """
-    base = run_benchmarks._QUARANTINE["Abt-Buy (dedupe)"]["f1_at_quarantine"]
+def test_a_healthy_run_does_not_breach(quarantined_lane):
+    """A clean lane above its floor, alongside a quarantined lane sitting
+    exactly at its baseline, must produce no breaches at all."""
     failing, _ = run_benchmarks._check_quality_floors(
         [
             {"name": "Febrl3", "f1": 0.9912, "precision": 0.99, "recall": 0.99},
-            {"name": "Abt-Buy (dedupe)", "f1": base, "precision": 0.11, "recall": 0.45},
+            {"name": _LANE, "f1": _BASE, "precision": 0.11, "recall": 0.45},
         ]
     )
     assert failing == [], failing
