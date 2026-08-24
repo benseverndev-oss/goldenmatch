@@ -486,9 +486,15 @@ def rule_cluster_giant(
     """
     n_rows = profile.data.n_rows
     cp = profile.cluster
-    # n_rows <= 0 is `data_empty`'s business, and 0.1 * 0 would make any cluster
-    # look giant.
-    if n_rows <= 0 or cp.cluster_size_max <= _GIANT_CLUSTER_FRACTION * n_rows:
+    # Gate on `red_reason` itself rather than re-deriving its condition. This
+    # rule previously kept its own copy of the `_GIANT_CLUSTER_FRACTION * n_rows`
+    # test, and when that bar was found unreachable and fixed on the profile
+    # (#2750), the private copy stayed dead -- so `red_reason` reported
+    # `cluster_giant` on every Abt-Buy iteration while this rule, its only actor,
+    # returned None and `rule_low_transitivity` walked the threshold DOWN instead.
+    # Duplicating the condition is exactly the drift `red_reason` exists to stop.
+    # n_rows <= 0 is `data_empty`'s business.
+    if n_rows <= 0 or cp.red_reason(n_rows) != "cluster_giant":
         return None
 
     from goldenmatch.config.schemas import ClusterConfig

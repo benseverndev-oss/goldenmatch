@@ -5224,8 +5224,15 @@ def _run_dedupe_pipeline(
         # materialized the dict, `set_cluster` overwrites, this block only runs
         # when splitting is enabled, and `_emit_cluster_profile` is a no-op with
         # no active capture.
+        # Pass the cap through: without it the re-emitted profile records
+        # max_cluster_size=0 and the over-merge check silently skips itself on
+        # exactly the runs that enabled splitting (#2750).
+        _tc_cap = 100
+        _gr = getattr(config, "golden_rules", None)
+        if _gr is not None and getattr(_gr, "max_cluster_size", None):
+            _tc_cap = _gr.max_cluster_size
         from goldenmatch.core.cluster import _emit_cluster_profile
-        _emit_cluster_profile(_tc_clusters)
+        _emit_cluster_profile(_tc_clusters, _tc_cap)
 
     results = {
         # Frames-out path keeps this LAZY: cluster_frames_to_dict (~900K dict

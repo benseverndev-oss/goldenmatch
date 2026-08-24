@@ -69,6 +69,26 @@ class SparsityVerdict:
 
 #: Fraction of the frame above which a single cluster is a collapse, not a merge.
 _GIANT_CLUSTER_FRACTION = 0.1
+#: Over-merge bar, as a fraction of the caller's `max_cluster_size`.
+#:
+#: `cluster_size_max` is CENSORED: `build_clusters` splits any cluster above
+#: `max_cluster_size` down to it, so the field saturates at the cap and can never
+#: reach `_GIANT_CLUSTER_FRACTION * n_rows` for n_rows >= 1000. That made
+#: `cluster_giant` -- and `rule_cluster_giant`, its only actor -- dead code on
+#: every realistic dataset (#2750).
+#:
+#: The saturation is itself the signal: "the size cap had to intervene" is not
+#: censored even though the value is. Fitted on the 72 scored configs in
+#: docs/measurements/, where it flags the over-merged region and stops before the
+#: optimum on all three dedupe lanes:
+#:
+#:     Abt-Buy        flags cmax 100..56 (F1 0.045-0.141); best 0.4059 at cmax 12
+#:     Amazon-Google  flags cmax 100..54 (F1 0.038-0.115); best 0.2211 at cmax 18
+#:     NCVR-synthetic flags cmax 100..95 (F1 0.016-0.076); best 0.9656 at cmax 5
+#:
+#: Inert on linkage lanes -- `match_df` emits no cluster profile, so
+#: `max_cluster_size` stays 0 there and the check is skipped.
+_CAP_SATURATION_FRACTION = 0.5
 #: Below this, a cluster's members do not all match each other -- chaining.
 _MIN_TRANSITIVITY = 0.85
 
@@ -611,6 +631,11 @@ class ClusterProfile:
     # measure cheaply (e.g. distributed paths) -> zero_label falls back to a proxy.
     bridge_edge_count: int = 0
     measured_bridge_risk: float | None = None
+    #: The caller's cluster size cap, recorded so `cluster_size_max` can be read
+    #: relative to what it could possibly reach. 0 = not recorded (older
+    #: profiles, or paths that emit no clustering) -> the saturation check is
+    #: skipped rather than guessed.
+    max_cluster_size: int = 0
 
     def red_reason(self, n_rows: int) -> str | None:
         """The named RED condition, or None.
@@ -619,6 +644,17 @@ class ClusterProfile:
         be added without naming it -- and `tests/test_rule_action_coverage.py`
         keys on the name to assert some rule can answer it.
         """
+        # Saturation bar FIRST: this is the one that can actually fire. See
+        # `_CAP_SATURATION_FRACTION` -- `cluster_size_max` is capped at
+        # `max_cluster_size`, so the n_rows bar below is unreachable for
+        # n_rows >= 1000 (#2750).
+        if (
+            self.max_cluster_size > 0
+            and self.cluster_size_max >= _CAP_SATURATION_FRACTION * self.max_cluster_size
+        ):
+            return "cluster_giant"
+        # Retained for SMALL frames, where `0.1 * n_rows` sits below the cap and
+        # the test is genuinely reachable. Dead above ~1000 rows, harmless there.
         if n_rows > 0 and self.cluster_size_max > _GIANT_CLUSTER_FRACTION * n_rows:
             return "cluster_giant"
         if self.transitivity_rate < _MIN_TRANSITIVITY:
