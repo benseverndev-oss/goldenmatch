@@ -10,7 +10,8 @@ Spec: docs/superpowers/specs/2026-05-06-autoconfig-introspective-controller-desi
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, TypeVar
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,30 @@ from goldenmatch.core.complexity_profile import ComplexityProfile
 
 if TYPE_CHECKING:
     from goldenmatch.core.autoconfig_controller import IndicatorContext
+
+
+#: A rule callable. Bound so `targets` returns the SAME type it was given.
+_RuleFn = TypeVar("_RuleFn", bound=Callable[..., Any])
+
+
+def targets(*reasons: str) -> Callable[[_RuleFn], _RuleFn]:
+    """Declare which RED conditions this rule answers.
+
+    Reasons come from `complexity_profile.RED_REASONS`. The point is coverage,
+    not documentation: `tests/test_rule_action_coverage.py` asserts every
+    reachable RED condition is claimed by at least one rule, so a new RED branch
+    with no action fails CI rather than producing a verdict the controller can
+    only report -- the shape #2717 hit three times.
+
+    Annotates in place and returns the SAME function object. It must not wrap:
+    `DEFAULT_RULES` holds function references and the policy compares identity.
+    """
+
+    def _decorate(fn: _RuleFn) -> _RuleFn:
+        fn.targets = reasons  # type: ignore[attr-defined]
+        return fn
+
+    return _decorate
 
 
 def _first_weighted_mk(cfg: GoldenMatchConfig) -> MatchkeyConfig | None:
@@ -197,6 +222,7 @@ def _blocking_recovery_target(
     return None
 
 
+@targets("scoring_no_candidates")
 def rule_blocking_singleton_trap(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
@@ -273,6 +299,7 @@ def rule_blocking_singleton_trap(
     return new_cfg, decision
 
 
+@targets("blocking_skewed", "blocking_too_coarse")
 def rule_blocking_too_coarse(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
@@ -309,6 +336,7 @@ def rule_blocking_too_coarse(
     return new_cfg, decision
 
 
+@targets("scoring_unimodal")
 def rule_unimodal_scoring(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
@@ -351,6 +379,7 @@ def rule_unimodal_scoring(
     return new_cfg, decision
 
 
+@targets("blocking_too_coarse")
 def rule_low_reduction_ratio(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
@@ -438,6 +467,7 @@ def _last_low_transitivity_rate(history: RunHistory) -> float | None:
     return None
 
 
+@targets("cluster_low_transitivity")
 def rule_low_transitivity(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
@@ -541,6 +571,7 @@ def rule_low_transitivity(
     return new_cfg, decision
 
 
+@targets("scoring_nothing_above_threshold")
 def rule_no_matches(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
     ctx: IndicatorContext | None = None,
@@ -599,6 +630,7 @@ def rule_no_matches(
     return None
 
 
+@targets("scoring_nothing_above_threshold")
 def rule_blocking_key_swap(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
     ctx: IndicatorContext | None = None,
@@ -706,6 +738,7 @@ def rule_blocking_key_swap(
     return new_cfg, decision
 
 
+@targets("blocking_too_coarse")
 def rule_uniform_heavy_blocking(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
@@ -799,6 +832,7 @@ def rule_uniform_heavy_blocking(
     return new_cfg, decision
 
 
+@targets("blocking_no_blocks")
 def rule_blocking_field_null_heavy(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
@@ -870,6 +904,7 @@ _FUZZY_GRADED_SCORERS = frozenset({
 })
 
 
+@targets("scoring_nothing_above_threshold")
 def rule_select_probabilistic_matchkey(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
@@ -952,6 +987,7 @@ def rule_select_probabilistic_matchkey(
     return new_cfg, decision
 
 
+@targets("scoring_no_candidates")
 def rule_recall_gap_suspected(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
@@ -1135,6 +1171,7 @@ def rule_enable_llm_scorer(
     return new_cfg, decision
 
 
+@targets("scoring_nothing_above_threshold")
 def rule_corruption_normalize(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
     ctx: IndicatorContext | None = None,
@@ -1169,6 +1206,7 @@ def rule_corruption_normalize(
     return new_cfg, decision
 
 
+@targets("scoring_no_candidates")
 def rule_cross_blocking_disagreement(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
     ctx: IndicatorContext | None = None,
@@ -1211,6 +1249,7 @@ def rule_cross_blocking_disagreement(
     return new_cfg, decision
 
 
+@targets("scoring_no_candidates")
 def rule_sparse_match_expand(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
     ctx: IndicatorContext | None = None,
@@ -1250,6 +1289,7 @@ _DEMOTE_CARD_THRESHOLD = 0.99
 _DEMOTE_MIN_REMAINING_FIELDS = 2
 
 
+@targets("blocking_no_blocks")
 def rule_matchkey_demote_high_cardinality_field(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
@@ -1394,6 +1434,7 @@ def precision_anchor_would_fire(
     return _precision_anchor_trigger(cfg, profile, ctx) is not None
 
 
+@targets("scoring_unimodal")
 def rule_precision_anchor_threshold_raise(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
     ctx: IndicatorContext | None = None,
@@ -1484,6 +1525,7 @@ def rule_precision_anchor_threshold_raise(
     return new_cfg, decision
 
 
+@targets("blocking_skewed")
 def rule_blocking_adaptive_on_p99_outlier(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:

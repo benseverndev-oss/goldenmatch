@@ -30,6 +30,10 @@ class PolicyDecision:
     rationale: str
     config_diff: dict[str, Any]
     expand_sample: float | None = None
+    #: RED conditions this rule declares it answers, from the `@targets`
+    #: decorator and stamped by the policy so rules never repeat themselves.
+    #: Records what the action was MEANT to fix, not just what it changed.
+    targets: tuple[str, ...] = ()
 
 
 @dataclass

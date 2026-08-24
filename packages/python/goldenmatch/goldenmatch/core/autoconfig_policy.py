@@ -82,6 +82,13 @@ class HeuristicRefitPolicy:
             if outcome is None:
                 continue
             new_config, decision = outcome
+            # Stamp the rule's declared targets onto its decision, so the audit
+            # trail records what the action was MEANT to fix rather than only
+            # what it changed. The decorator is the single source; rules never
+            # repeat themselves. See `autoconfig_rules.targets`.
+            declared = getattr(rule, "targets", ())
+            if declared and not decision.targets:
+                decision.targets = declared
             if new_config == current:
                 # Bug guard: rule "decided to do nothing" without saying so.
                 # Logged at WARN by the controller (not here — keep policy pure).
