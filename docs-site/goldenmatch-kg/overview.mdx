@@ -1,0 +1,32 @@
+---
+title: "GoldenMatch KG overview"
+description: "Drop-in goldenmatch entity resolution for knowledge-graph frameworks: neo4j-graphrag, LlamaIndex PropertyGraphIndex, and Graphiti."
+keywords: ["goldenmatch-kg", "knowledge graph", "neo4j-graphrag", "llamaindex", "graphiti", "entity resolution"]
+---
+
+goldenmatch is an entity-resolution engine, not a KG builder. KG pipelines ingest text,
+extract entities and relationships, **resolve and dedupe the entities**, then write a
+graph. `goldenmatch-kg` drops goldenmatch in as that resolve stage, wherever a framework
+exposes a seam for it.
+
+## The three integrations
+
+| Framework | Seam | What you get |
+| --- | --- | --- |
+| **neo4j-graphrag** | `GoldenMatchResolver`, passed into the pipeline | A true in-pipeline plugin, replacing the built-in `FuzzyMatchResolver`. |
+| **LlamaIndex `PropertyGraphIndex`** | `GoldenMatchEntityResolver` transform | Canonicalizes entity names before upsert. LlamaIndex ships no fuzzy resolver of its own, so this is additive: exact-only becomes real ER. |
+| **Graphiti** | Post-ingest pass | Resolves entities the ingest step wrote. |
+
+## Why a separate package
+
+Each framework wants a different object shape, and each pulls a heavy dependency tree.
+Keeping the adapters here means [GoldenMatch](/goldenmatch/overview) itself stays
+framework-agnostic and dependency-light, while the integrations can track each
+framework's API on their own schedule.
+
+## Choosing between this and GoldenGraph
+
+- **Adopting an existing KG pipeline?** Use `goldenmatch-kg` — it improves the resolve
+  stage of a pipeline you already have.
+- **Building the pipeline yourself?** Use [GoldenGraph](/goldengraph/overview), which owns
+  the whole path and stores the result bi-temporally.

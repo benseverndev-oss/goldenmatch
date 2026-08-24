@@ -1,0 +1,41 @@
+---
+title: "GoldenSuite MCP overview"
+description: "One MCP server exposing every Golden Suite tool under a single endpoint, over stdio or Streamable HTTP."
+keywords: ["goldensuite-mcp", "mcp", "agents", "single endpoint", "tool composition", "streamable http"]
+---
+
+`goldensuite-mcp` composes **every** Golden Suite MCP tool into one server, so an agent
+points at a single endpoint and gets the whole suite: entity resolution, data-quality
+scanning, transforms, pipeline orchestration, schema mapping, and trend analysis.
+
+```bash
+pip install goldensuite-mcp
+goldensuite-mcp serve --transport http --port 8300
+```
+
+Or via container:
+
+```bash
+docker run -p 8300:8300 ghcr.io/benseverndev-oss/goldensuite-mcp:latest
+```
+
+## How it composes
+
+It imports each sub-package's MCP tool list and dispatcher and merges them into a single
+`mcp.server.Server`, served over stdio or Streamable HTTP.
+
+Tool names register on a **first-wins** basis, so registration order decides which package
+owns a colliding name. That order is fixed and documented in the package README rather
+than left to import chance.
+
+## When to use it
+
+- **One agent, whole suite** — the common case. One endpoint, one auth story, one process.
+- **Per-package servers instead** when an agent should only reach one tool's surface, or
+  when you want to scale or deploy the packages independently.
+
+<Info>
+Each package also ships its own MCP server. The per-package `mcp-serve` commands and the
+tool inventories are listed on each package's own page, and in
+[the API surface reference](/reference/api-surface).
+</Info>

@@ -5,11 +5,13 @@ This is the umbrella entry point for "are all the structural doc surfaces in
 lockstep with the published-package roster?". It is deterministic, stdlib-only,
 and exits non-zero on any FAIL so it can gate CI without flaking on clean PRs.
 
-It does SIX things (see ``.claude/doc-surfaces.md`` for the surface inventory):
+It does the following (see ``.claude/doc-surfaces.md`` for the surface inventory):
 
-1. Runs the two existing doc gates as subprocesses so there is one command for
-   "all doc gates": ``check_version_consistency.py`` and
-   ``sync_readme_callouts.py --check``.
+1. Runs ``check_version_consistency.py`` as a subprocess -- nothing GENERATES
+   the version lockstep, so a ``--check`` is the only way to run it. (The
+   readme-callouts and native-docs subgates that used to live here are gone:
+   ``regen_docs.py`` WRITES both, so checking them here asked a human to fix by
+   hand what ``make docs`` repairs.)
 
 2. roster-matrix: derive the canonical published-package roster from the
    ``publish-<pkg>.yml`` (PyPI) and ``publish-<pkg>-js.yml`` (npm) workflow
@@ -48,12 +50,9 @@ It does SIX things (see ``.claude/doc-surfaces.md`` for the surface inventory):
    ``?q=`` download-badge link lists exactly ``PYPI_PACKAGES`` so the clicked-
    through total matches the linked packages.
 
-``--check`` (the default) only reports + exits 1 on drift. ``--fix`` performs the
-narrow MECHANICAL reconciliations that are safe to automate (adding a missing
-roster package as a docs-nav ``SQL extensions`` entry is NOT auto-fixable -- that
-needs human prose -- so --fix is limited to nothing today; reconciliations on the
-current tree were done by hand in the lockstep branch). It is kept as a stub so
-the flag exists and future mechanical fixes have a home.
+Reports every check and exits 1 on any FAIL. Findings that are deliberately not
+gated print ``[INFO]`` rather than ``[PASS]``, so a summary of all-PASS means what
+it says.
 
 Run: ``python scripts/check_docs_consistency.py``
 """
@@ -81,15 +80,30 @@ _UNRELEASED_RE = re.compile(r"unreleased", re.IGNORECASE)
 
 
 class Result:
+    """Collected check outcomes. Three states, not two.
+
+    A report-only finding used to be recorded as `ok=True` and printed `[PASS]`
+    while its detail column listed real drift -- so the summary read as sixteen
+    clean checks when one of them was reporting three packages missing from the
+    README. `record_info` gives those their own `[INFO]` status: visible as not-a-
+    pass, still non-blocking.
+    """
+
+    PASS, FAIL, INFO = "PASS", "FAIL", "INFO"
+
     def __init__(self) -> None:
-        self.checks: list[tuple[str, bool, str]] = []
+        self.checks: list[tuple[str, str, str]] = []
 
     def record(self, name: str, ok: bool, detail: str = "") -> None:
-        self.checks.append((name, ok, detail))
+        self.checks.append((name, self.PASS if ok else self.FAIL, detail))
+
+    def record_info(self, name: str, detail: str = "") -> None:
+        """Report a finding without gating on it."""
+        self.checks.append((name, self.INFO, detail))
 
     @property
     def ok(self) -> bool:
-        return all(ok for _, ok, _ in self.checks)
+        return all(status != self.FAIL for _, status, _ in self.checks)
 
 
 # --------------------------------------------------------------------------- #
@@ -111,45 +125,19 @@ def run_subgate(res: Result, name: str, argv: list[str]) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Roster derivation
+# Roster derivation -- moved to scripts/config_matrix/roster.py so the generators
+# and the stdlib-only gates share ONE definition instead of six hardcoded copies.
 # --------------------------------------------------------------------------- #
-def _publish_stems() -> list[str]:
-    return sorted(
-        p.name[len("publish-"):-len(".yml")]
-        for p in (ROOT / ".github" / "workflows").glob("publish-*.yml")
-    )
-
-
-# Stems that are NOT a per-distribution PyPI/npm publisher.
-_NON_DIST_STEMS = {"containers", "mcp"}
-
-
-def derive_roster() -> tuple[list[str], list[str], list[str]]:
-    """Return (core_pypi, ext_pypi, npm) derived from publish-*.yml callers.
-
-    ``core_pypi``  -- publishers backed by a ``packages/python/<stem>`` directory
-                      (the distribution packages that get a README row + nav group).
-    ``ext_pypi``   -- the remaining PyPI publishers (SQL / rust-extension extras
-                      like goldenmatch-duckdb / -embed / -pg). Reported, not gated
-                      structurally -- they live inside parent docs, not their own
-                      nav group.
-    ``npm``        -- ``publish-<pkg>-js.yml`` stems.
-    """
-    core: list[str] = []
-    ext: list[str] = []
-    npm: list[str] = []
-    for stem in _publish_stems():
-        if stem in _NON_DIST_STEMS:
-            continue
-        if stem.endswith("-native"):
-            continue  # compiled extras tracked separately; not a doc-nav surface
-        if stem.endswith("-js"):
-            npm.append(stem[: -len("-js")])
-        elif (PY_PKGS / stem).is_dir():
-            core.append(stem)
-        else:
-            ext.append(stem)
-    return sorted(set(core)), sorted(set(ext)), sorted(set(npm))
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+from config_matrix.roster import (  # noqa: E402
+    DOCS_DEFERRED,
+    DOCUMENTED,
+    NON_DIST_STEMS,
+    README_DEFERRED,
+    derive_roster,
+    publish_stems,
+)
 
 
 def _badge_tokens() -> set[str] | None:
@@ -247,26 +235,47 @@ def check_roster_matrix(res: Result) -> None:
             else "",
         )
 
-    # README presence: every CORE roster package name must appear in README.md.
-    # (Extension extras goldenmatch-{duckdb,embed,pg} are reported below, not gated
-    #  -- pg ships as a GitHub-release tarball and isn't an overview-table row.)
+    # README presence: every CORE roster package must be LINKED from the root
+    # README's package-overview table -- or carry a declared deferral.
+    #
+    # This was `pkg.lower() in readme.lower()` over the whole file, which every
+    # package passes on an incidental mention ("goldenmatch" appears scores of
+    # times), so the check could not fail for the very packages it was meant to
+    # cover. Requiring the `packages/python/<pkg>/README.md` link is the assertion
+    # the substring test was reaching for.
     readme = (ROOT / "README.md").read_text(encoding="utf-8").lower()
-    missing_readme = [p for p in core if p.lower() not in readme]
+    linked = {p for p in core if f"packages/python/{p}/readme.md" in readme}
+    undeclared = sorted(set(core) - linked - set(README_DEFERRED))
+    stale_readme_defer = sorted(linked & set(README_DEFERRED))
     res.record(
         "roster -> README.md presence",
-        not missing_readme,
-        f"missing from README package overview: {missing_readme}" if missing_readme else "",
+        not undeclared and not stale_readme_defer,
+        "; ".join(filter(None, [
+            f"published but not linked from the README package table and not declared "
+            f"in roster.README_DEFERRED: {undeclared}" if undeclared else "",
+            f"declared in roster.README_DEFERRED but actually linked (drop the "
+            f"deferral): {stale_readme_defer}" if stale_readme_defer else "",
+        ])),
     )
+    if README_DEFERRED:
+        res.record_info(
+            "README rows deferred by declaration",
+            f"{sorted(README_DEFERRED)} -- see roster.README_DEFERRED for the reason",
+        )
     ext_missing = [p for p in ext if p.lower() not in readme]
     if ext_missing:
-        res.record(
-            "extension extras README presence (report-only)",
-            True,
-            f"reported, not gated -- extension distributions not named in README: {ext_missing}",
+        res.record_info(
+            "extension extras README presence",
+            f"extension distributions not named in README: {ext_missing}",
         )
 
-    # docs-nav presence: roster packages that have a docs-site/<pkg>/ directory
-    # must appear in the docs.json navigation (group name or page path).
+    # docs-section presence: every CORE roster package owns a docs-site/<pkg>/
+    # section that the nav references -- or carries a declared deferral.
+    #
+    # The old rule read "every roster package that HAS a docs-site/<pkg>/ dir must
+    # appear in the nav", which a package with NO directory passes trivially. Five
+    # published packages therefore had no docs at all and the check reported PASS.
+    # Inverted, the absence has to be written down instead of being silence.
     docs = load_docs_json()
     if docs is None:
         res.record("roster -> docs.json nav presence", False, "docs-site/docs.json missing")
@@ -276,14 +285,37 @@ def check_roster_matrix(res: Result) -> None:
     _iter_nav_groups(docs.get("navigation"), groups)
     _iter_nav_pages(docs.get("navigation"), pages)
     nav_blob = " ".join(g.lower() for g in groups) + " " + " ".join(p.lower() for p in pages)
-    have_docs_dir = [p for p in core if (DOCS_SITE / p).is_dir()]
-    missing_nav = [p for p in have_docs_dir if p.lower() not in nav_blob]
+
+    has_section = {p for p in core if (DOCS_SITE / p).is_dir() and p.lower() in nav_blob}
+    dir_no_nav = sorted(p for p in core
+                        if (DOCS_SITE / p).is_dir() and p.lower() not in nav_blob)
+    no_docs_undeclared = sorted(set(core) - has_section - set(dir_no_nav) - set(DOCS_DEFERRED))
+    stale_docs_defer = sorted(has_section & set(DOCS_DEFERRED))
     res.record(
-        "roster -> docs.json nav presence",
-        not missing_nav,
-        f"package has docs-site/<pkg>/ dir but no nav reference: {missing_nav}"
-        if missing_nav
-        else "",
+        "roster -> docs section + nav presence",
+        not dir_no_nav and not no_docs_undeclared and not stale_docs_defer,
+        "; ".join(filter(None, [
+            f"has docs-site/<pkg>/ but no nav reference: {dir_no_nav}" if dir_no_nav else "",
+            f"published with no docs section and not declared in roster.DOCS_DEFERRED: "
+            f"{no_docs_undeclared}" if no_docs_undeclared else "",
+            f"declared in roster.DOCS_DEFERRED but actually documented (drop the "
+            f"deferral): {stale_docs_defer}" if stale_docs_defer else "",
+        ])),
+    )
+    if DOCS_DEFERRED:
+        res.record_info(
+            "docs sections deferred by declaration",
+            f"{sorted(DOCS_DEFERRED)} -- see roster.DOCS_DEFERRED for the reason",
+        )
+
+    # The documented roster must be a subset of what is actually published: a
+    # PackageSpec for a package no publisher ships is a docs section for a
+    # distribution nobody can install.
+    phantom = sorted(set(DOCUMENTED) - set(core))
+    res.record(
+        "documented roster is published",
+        not phantom,
+        f"REGISTRY documents package(s) with no publish-*.yml: {phantom}" if phantom else "",
     )
 
 
@@ -516,9 +548,9 @@ def check_aggregate_badges(res: Result) -> None:
 
     # (a) Bidirectional publisher <-> badge-roster coverage. A new publish-*.yml
     #     added without updating the badge totals (or vice versa) is real drift.
-    pypi_pub = {s for s in _publish_stems()
-                if s not in _NON_DIST_STEMS and not s.endswith("-js")}
-    npm_pub = {s[: -len("-js")] for s in _publish_stems() if s.endswith("-js")}
+    pypi_pub = {s for s in publish_stems()
+                if s not in NON_DIST_STEMS and not s.endswith("-js")}
+    npm_pub = {s[: -len("-js")] for s in publish_stems() if s.endswith("-js")}
     pypi_drift = (pypi_pub - _PYPI_PUBLISH_BADGE_EXCEPTIONS) ^ pypi_set
     res.record(
         "PyPI publishers <-> badge PYPI_PACKAGES",
@@ -686,21 +718,20 @@ def check_agent_pointers(res: Result) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--check", action="store_true", default=True,
-                        help="Report drift and exit 1 if any (default).")
-    parser.add_argument("--fix", action="store_true",
-                        help="Apply the narrow mechanical reconciliations (none auto-fixable today).")
-    args = parser.parse_args(argv)
+    # No --check / --fix. --check was `default=True` and never read; --fix printed a
+    # paragraph explaining that it does nothing. Both were surface that looked like
+    # behaviour. This gate reports and exits non-zero, full stop.
+    argparse.ArgumentParser(description=__doc__).parse_args(argv)
 
     res = Result()
 
+    # version_consistency stays: nothing GENERATES it, so a --check here is the
+    # only way to run it. The readme_callouts and native_docs subgates are gone --
+    # `regen_docs.py` now WRITES both, so a --check for something `make docs`
+    # repairs told you to fix by hand what a generator owns. Their CI coverage is
+    # unchanged (the standalone `readme_callouts` job plus `docs_regen`).
     run_subgate(res, "version_consistency (subprocess)",
                 [str(SCRIPTS / "check_version_consistency.py")])
-    run_subgate(res, "readme_callouts --check (subprocess)",
-                [str(SCRIPTS / "sync_readme_callouts.py"), "--check"])
-    run_subgate(res, "native_docs --check (subprocess)",
-                [str(SCRIPTS / "gen_native_docs.py"), "--check"])
     check_roster_matrix(res)
     check_docs_nav_integrity(res)
     check_changelog_versions(res)
@@ -708,14 +739,9 @@ def main(argv: list[str] | None = None) -> int:
     check_aggregate_badges(res)
     check_agent_pointers(res)
 
-    if args.fix:
-        print("--fix: no auto-fixable mechanical reconciliations pending; "
-              "all current-tree drift was reconciled by hand. Running checks.\n")
-
     print("Documentation consistency checks:")
     width = max(len(n) for n, _, _ in res.checks)
-    for name, ok, detail in res.checks:
-        status = "PASS" if ok else "FAIL"
+    for name, status, detail in res.checks:
         line = f"  [{status}] {name.ljust(width)}"
         if detail:
             line += f"  -- {detail}"
@@ -725,7 +751,9 @@ def main(argv: list[str] | None = None) -> int:
         print("\nDocs consistency FAILED. Reconcile the surfaces above (see "
               ".claude/doc-surfaces.md -> 'Automated gates').")
         return 1
-    print("\nAll documentation consistency checks PASS.")
+    infos = sum(1 for _, status, _ in res.checks if status == Result.INFO)
+    suffix = f" ({infos} reported, not gated)" if infos else ""
+    print(f"\nAll documentation consistency checks PASS{suffix}.")
     return 0
 
 

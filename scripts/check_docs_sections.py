@@ -54,14 +54,14 @@ DOCS = ROOT / "docs-site"
 
 # The package sections gated for shape. Each has a `docs-site/<pkg>/` directory
 # and a matching top-level nav group. Adding a suite package = add it here.
-SECTIONS = (
-    "goldenmatch",
-    "goldencheck",
-    "goldenflow",
-    "goldenpipe",
-    "goldenanalysis",
-    "infermap",
-)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+# Canonical roster -- see scripts/config_matrix/roster.py. Adding a PackageSpec to
+# REGISTRY is now the single edit that onboards a package; this used to be a
+# hardcoded tuple that had to be kept in step by hand.
+from config_matrix.roster import DOCUMENTED  # noqa: E402
+
+SECTIONS = DOCUMENTED
 
 # The canonical spine every section must carry as real files.
 REQUIRED_PAGES = ("overview", "config-matrix", "recipes")

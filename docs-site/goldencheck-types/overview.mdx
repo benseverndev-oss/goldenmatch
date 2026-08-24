@@ -1,0 +1,43 @@
+---
+title: "GoldenCheck types overview"
+description: "The shared canonical field-type registry for the Golden Suite: one source of truth for what a field type means, across every package and both languages."
+keywords: ["goldencheck-types", "field types", "vocabulary", "cross-language", "registry", "shared types"]
+---
+
+`goldencheck-types` is the suite's **shared canonical field-type registry** — a single
+source of truth for *"what does the field type `email` mean?"*: its name hints, its value
+signals, and its confidence thresholds.
+
+It is deliberately tiny and dependency-light, because its whole value is being depended
+on by everything without dragging anything along.
+
+## Producer and consumers
+
+[GoldenCheck](/goldencheck/overview) profiles a dataset and emits **inferred field
+types**. Downstream packages consume them:
+
+- **Producer** — `goldencheck` (data-quality profiling).
+- **Consumers** — [GoldenPipe](/goldenpipe/overview) (stage I/O contracts),
+  [InferMap](/infermap/overview) (target-schema inference), and the TypeScript mirror
+  `goldencheck-types` over a JSON wire.
+
+## Why it is its own package
+
+Two reasons, both about keeping a vocabulary honest:
+
+1. **Cross-language byte-identity.** The Python and TypeScript sides produce the same
+   types because they read the same registry, not because two implementations were
+   written to agree and then drifted.
+2. **Dependency-light consumption.** A consumer that needs the vocabulary should not have
+   to install the full profiler to get it.
+
+```bash
+pip install goldencheck-types
+npm i goldencheck-types
+```
+
+<Info>
+This package is a vocabulary, not an engine — it has no config surface, no CLI, and no MCP
+server. Field-type *detection* lives in [GoldenCheck](/goldencheck/overview); this package
+only defines what the resulting types mean.
+</Info>

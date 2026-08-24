@@ -8,6 +8,7 @@ Regenerate with: python scripts/agent_codemap.py --write
 from __future__ import annotations
 
 from agent_codemap import CODEMAP_PATH, build_codemap, codemap_is_current, codemap_json
+from config_matrix.roster import DOCUMENTED
 
 
 def test_codemap_current():
@@ -23,9 +24,7 @@ def test_codemap_deterministic():
 
 def test_codemap_covers_every_registry_package():
     m = build_codemap()
-    assert set(m["packages"]) == {
-        "goldenmatch", "goldencheck", "goldenflow", "goldenpipe", "infermap", "goldenanalysis"
-    }
+    assert set(m["packages"]) == set(DOCUMENTED)
     # Every package resolved to real modules, and every entry carries a location.
     for name, p in m["packages"].items():
         assert p["module_count"] > 0, f"{name} mapped 0 modules"

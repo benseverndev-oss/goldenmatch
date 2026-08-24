@@ -1,0 +1,49 @@
+---
+title: "Golden Suite meta-package overview"
+description: "One-line, perf-optimized install and single front door for the whole Golden Suite, with native acceleration on by default."
+keywords: ["golden-suite", "meta-package", "install", "native acceleration", "doctor", "front door"]
+---
+
+`golden-suite` is a thin **meta-package**: one install that pulls in every suite tool
+*plus* the native (Rust) acceleration kernels, on by default, and gives you and your
+agents one canonical entry point.
+
+It ships no data-processing logic of its own. Its whole job is to make the fast,
+complete configuration the default one, so nobody has to assemble it by hand.
+
+```bash
+pip install golden-suite      # whole suite + native acceleration, fast config by default
+golden-suite doctor           # verify native is actually active
+```
+
+## What it pulls in
+
+| Tool | Role | Import |
+| --- | --- | --- |
+| [GoldenPipe](/goldenpipe/overview) | Orchestrator — chains the tools as pluggable stages. Start here. | `import goldenpipe as gp` |
+| [GoldenMatch](/goldenmatch/overview) | Entity resolution: dedupe, match, golden records | `import goldenmatch as gm` |
+| [GoldenCheck](/goldencheck/overview) | Data-quality scanning and validation | `import goldencheck as gc` |
+| [GoldenFlow](/goldenflow/overview) | Transforms and standardizers | `import goldenflow as gf` |
+| [InferMap](/infermap/overview) | Schema mapping across heterogeneous sources | `import infermap` |
+| [GoldenAnalysis](/goldenanalysis/overview) | Read-only analysis, metrics, reporting | `import goldenanalysis as ga` |
+
+## Why it exists
+
+The suite's fast path depends on the native wheels being installed *and* actually
+loading. Both are easy to get subtly wrong: a wheel can be absent, or present but not
+matching the host, in which case every package silently takes its pure-Python fallback
+and you lose the speed without any error. `golden-suite doctor` is the check that turns
+that silence into a report.
+
+<Info>
+The `doctor` command reports which components resolved to a native kernel and which fell
+back. See [Native acceleration](/goldenmatch/native) for the per-component gate and the
+`GOLDENMATCH_NATIVE` knob it reads.
+</Info>
+
+## When not to use it
+
+Install the individual packages instead when you want a minimal dependency footprint —
+a service that only needs transforms should depend on `goldenflow`, not the whole suite.
+The meta-package is for the common case: a workstation, a notebook, or an agent that
+wants the whole toolbox working at full speed with one command.

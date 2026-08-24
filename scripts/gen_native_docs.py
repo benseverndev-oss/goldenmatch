@@ -217,7 +217,7 @@ def main(argv: list[str]) -> int:
     if args.write:
         for pkg in pkgs:
             p = _page_path(pkg)
-            p.write_text(render(pkg), encoding="utf-8")
+            p.write_text(render(pkg), encoding="utf-8", newline="\n")
             print(f"wrote {p.relative_to(ROOT)}")
         return 0
 

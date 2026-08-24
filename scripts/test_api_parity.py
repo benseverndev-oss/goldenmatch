@@ -311,11 +311,10 @@ def test_python_emitter_goldenmatch_smoke():
 
 
 import pytest
+from config_matrix.roster import DOCUMENTED
 
 
-@pytest.mark.parametrize(
-    "pkg", ["goldenmatch", "goldencheck", "goldenflow", "goldenpipe", "goldenanalysis", "infermap"]
-)
+@pytest.mark.parametrize("pkg", DOCUMENTED)
 def test_python_emitter_all_packages_smoke(pkg):
     """Every package's Python emitter produces a non-empty, sorted mcp+cli surface. Box-safe
     (needs each <pkg>[mcp] in the venv)."""

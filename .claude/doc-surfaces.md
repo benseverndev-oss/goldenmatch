@@ -81,10 +81,38 @@ thing to grep for.
 Three tiers of automation keep these surfaces in lockstep as the repo advances.
 All scripts are stdlib-only and anchored to the repo root via `Path(__file__)`.
 
-- **Tier 1 - `scripts/check_docs_consistency.py`** (REQUIRED CI gate, `--check`
-  default). The single umbrella entry point for "all doc gates". It (a) runs
-  `check_version_consistency.py` and `sync_readme_callouts.py --check` as
-  subprocesses; (b) **roster matrix** - derives the published-package roster from
+- **The canonical roster - `scripts/config_matrix/roster.py`.** One definition of
+  "the suite packages", consumed by every generator and doc gate. Three distinct
+  notions, not interchangeable: `DOCUMENTED` (packages owning a
+  `docs-site/<pkg>/` section + generated config matrix, derived from `REGISTRY` --
+  so **adding a `PackageSpec` is the single edit that onboards a package**);
+  `derive_roster()` (every distribution the repo actually publishes, read off the
+  `publish-*.yml` callers); and the two deferral maps `DOCS_DEFERRED` /
+  `README_DEFERRED` (published packages knowingly without a docs section / README
+  row, each with a reason). The gap between the first two must be fully covered by
+  the deferral maps or `check_docs_consistency` FAILS -- and a deferral for a
+  package that *does* have the surface fails too, so the maps cannot go stale in
+  either direction. Row ORDER stays editorial and local to each generator:
+  `REGISTRY` order is baked into the agent manifests, so deriving table order from
+  it would reshuffle published pages on an unrelated registry edit. Pure stdlib on
+  purpose -- the gates that consume it run on a bare `setup-python` runner.
+
+- **Tier 0 - `scripts/regen_docs.py`** (`make docs` / `just docs`; the
+  `docs_regen` REQUIRED CI job runs `--check`). The single command that
+  REGENERATES every derived artifact: the six config matrices, the agent manifest
+  + codemap, api-surface's table, suite-matrix, thesis-weaknesses, the native
+  pages, the llms.txt/README capability counts, and the README "what's new"
+  callouts. If a doc figure has a generator, it belongs in `WRITE_STEPS` -- a
+  `--check`-only gate for something a generator owns is a chore, not a gate. The
+  drift probe is `git status --porcelain` scoped to `GENERATED_PATHS`, so a
+  brand-new generated page counts as drift too. Only one hand-bumped figure
+  survives: the two inline numbers beside api-surface's table, reported by
+  `gen_api_surface --check`.
+
+- **Tier 1 - `scripts/check_docs_consistency.py`** (REQUIRED CI gate). The
+  umbrella entry point for STRUCTURAL doc consistency. It (a) runs
+  `check_version_consistency.py` as a subprocess -- the one doc gate no generator
+  owns; (b) **roster matrix** - derives the published-package roster from
   the `publish-*.yml` workflows (cross-checked against
   `scripts/suite_download_badges.py`) and asserts each CORE package name appears
   in the root `README.md` and the `docs-site/docs.json` nav; (c) **docs-nav
@@ -93,10 +121,17 @@ All scripts are stdlib-only and anchored to the repo root via `Path(__file__)`.
   **changelog<->version** - each `packages/python/<pkg>/CHANGELOG.md` most-recent
   *released* version heading equals its `pyproject.toml` version (packages whose
   CHANGELOG has no versioned heading, or only an `unreleased` top entry, are
-  reported, not failed). Wired as the `docs_consistency` job in `ci.yml` (in the
-  `ci-required` needs list), gated on the `docs` path filter. To satisfy it: add
-  the missing README table row / `docs.json` nav entry / fix the broken nav link
-  or orphan page, or bump the lagging CHANGELOG/version.
+  reported, not failed). Findings that are deliberately not gated print `[INFO]`,
+  not `[PASS]`, so an all-PASS summary means what it says. Wired as the
+  `docs_consistency` job in `ci.yml` (in the `ci-required` needs list), gated on
+  the `docs` path filter. To satisfy it: add the missing README table row /
+  `docs.json` nav entry / fix the broken nav link or orphan page, or bump the
+  lagging CHANGELOG/version.
+
+  It no longer subgates `sync_readme_callouts --check` or `gen_native_docs
+  --check`: `regen_docs.py` WRITES both, so checking them here asked a human to
+  fix by hand what `make docs` repairs. CI coverage is unchanged (the standalone
+  `readme_callouts` job plus `docs_regen`).
 
 - **Tier 1 - `scripts/check_docs_sections.py`** (REQUIRED CI gate, a step in the
   `docs_consistency` job). The SOURCE OF TRUTH for "what a package section looks
@@ -115,24 +150,46 @@ All scripts are stdlib-only and anchored to the repo root via `Path(__file__)`.
   package = add it to `SECTIONS`. Pure-logic unit tests in
   `scripts/test_docs_sections.py`.
 
-- **Tier 2 - `scripts/check_docs_staleness.py`** (ADVISORY CI job, `--base`/
-  `--head`, default `origin/main..HEAD`). Diff-aware. The **flag rule** (gating
-  within the job): adding/removing a `GOLDENMATCH_*` env flag in
-  `packages/python/**/*.py` without touching `docs-site/goldenmatch/tuning.mdx`
-  emits `::error::` and exits 1. The **public-symbol rule** (warning only): a
-  package `__init__.py` `__all__`/re-export change with no doc surface touched
-  emits `::warning::`. Wired as the `docs_staleness` job with
-  `continue-on-error: true` (NOT in `ci-required`) - it surfaces annotations,
-  never blocks a clean PR.
+- **Tier 2 - `scripts/check_docs_staleness.py`** (`--base`/`--head`, default
+  `origin/main..HEAD`; `--rule all|flag|symbol`). Diff-aware, two rules with
+  DIFFERENT enforcement, run as two steps of the `docs_staleness` job:
+  - **flag rule** (`--rule flag`, BLOCKING step): for every package declaring a
+    `prose_flag_page` in `scripts/config_matrix/registry.py`, adding/removing a
+    `<ENV_PREFIX>*` flag in non-test `packages/python/**/*.py` without touching
+    that page emits `::error::` and exits 1. Only goldenmatch declares one today
+    (`docs-site/goldenmatch/tuning.mdx`); the rest are N/A because their
+    GENERATED config-matrix block already covers the knob and `docs_regen` gates
+    it. Giving a package a tuning page is a one-line registry change.
+  - **public-symbol rule** (`--rule symbol`, `continue-on-error` step): a package
+    `__init__.py` `__all__`/re-export change with no doc surface touched emits
+    `::warning::`.
 
-- **Tier 3 - `scripts/check_docs_sweep.py`** + `docs/.docs-sweep.json` (RELEASE /
-  manual gate, NOT run on every PR). Asserts `docs/.docs-sweep.json` `.version`
-  equals the current `packages/python/goldenmatch` version. A bump of the
-  headline package since the last recorded sweep reds the gate. **At the END of a
-  docs sweep, bump `docs/.docs-sweep.json`** (`version` to the new goldenmatch
-  version, refresh `commit`/`date`). Run this manually before tagging a release,
-  or wire it into the publish/release workflow. It exists to catch "cut a release
-  but never swept the prose surfaces" that the structural gates can't author.
+  The job gates on its OWN `docs_staleness` path filter. It previously gated on
+  `docs`, which matches no `packages/python/**/*.py` path -- so the flag rule was
+  skipped on exactly the diffs it exists to catch, and the whole job was
+  `continue-on-error` so its "gating" exit could not fail anything either. The job
+  is still NOT in `ci-required`: a red flag-rule step is visible on the PR but does
+  not block the merge queue. Promoting it is a one-line addition to
+  `ci-required.needs`.
+
+- **Tier 3 - `scripts/check_docs_sweep.py`** + `docs/.docs-sweep.json` (RELEASE
+  gate, NOT run on every PR). Asserts `docs/.docs-sweep.json` `.version` equals
+  the current `packages/python/goldenmatch` version. A bump of the headline
+  package since the last recorded sweep reds the gate. **At the END of a docs
+  sweep, bump `docs/.docs-sweep.json`** (`version` to the new goldenmatch version,
+  refresh `commit`/`date`). It exists to catch "cut a release but never swept the
+  prose surfaces" that the structural gates can't author.
+
+  Wired into `cut-goldenmatch-release.yml` as a step BEFORE the tag push, so a
+  failed sweep leaves the version name unburned (immutable releases tombstone a
+  name permanently). Emergency hotfix escape hatch: the workflow's
+  `skip_docs_sweep_gate` dispatch input, which annotates a `::warning::`.
+
+  **History:** for a long time this script was wired into NO workflow -- it was
+  referenced only by a path filter and this document, so the marker sat at 3.3.1
+  while goldenmatch reached 3.16.0. The 3.4.0..3.16.0 prose backlog is UNSWEPT;
+  the marker was advanced to arm the gate going forward, not to claim those
+  releases were swept (see `backlog_note` in `docs/.docs-sweep.json`).
 
 ## Sweep mechanics for this repo
 

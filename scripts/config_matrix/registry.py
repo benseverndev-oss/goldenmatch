@@ -24,6 +24,14 @@ class PackageSpec:
     vocabs: list[tuple] = field(default_factory=list)
     vocab_warmup: list[str] = field(default_factory=list)
     tuning_link: str | None = None
+    # Canonical PROSE reference for this package's <PREFIX>_* env flags, if it has
+    # one. Drives check_docs_staleness's flag rule: adding or removing a flag must
+    # touch this page in the same diff. None => the rule is N/A for the package,
+    # which is the honest default: the GENERATED config-matrix block already
+    # documents every introspected knob, so the prose rule only adds value where a
+    # hand-written flag reference actually exists. Give a package a tuning page,
+    # set this, and the rule starts covering it with no code change.
+    prose_flag_page: str | None = None
     # Env names other docs may reference despite not being read in code (rare;
     # the migration-page + removal-context heuristics cover most). Explicit escape hatch.
     env_allow: tuple[str, ...] = ()
@@ -45,6 +53,7 @@ REGISTRY: dict[str, PackageSpec] = {
         doc_path="docs-site/goldenmatch/config-matrix.mdx",
         nav_group="GoldenMatch",
         env_prefix="GOLDENMATCH_",
+        prose_flag_page="docs-site/goldenmatch/tuning.mdx",
         src_dirs=["packages/python/goldenmatch/goldenmatch", _RUST],
         schema_roots=["goldenmatch.config.schemas:GoldenMatchConfig"],
         cli_module="goldenmatch.cli.main",

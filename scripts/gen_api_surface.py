@@ -49,7 +49,14 @@ ROOT = Path(__file__).resolve().parent.parent
 PAGE = ROOT / "docs-site" / "reference" / "api-surface.mdx"
 PARITY = ROOT / "parity"
 
-PKGS = ["goldenmatch", "goldencheck", "goldenflow", "goldenpipe", "goldenanalysis", "infermap"]
+# Canonical roster -- see scripts/config_matrix/roster.py.
+from config_matrix.roster import DOCUMENTED  # noqa: E402
+
+# Editorial ROW ORDER + display names for the table. Membership comes from the
+# canonical roster; the order does NOT -- REGISTRY is ordered for its own reasons
+# (and its order is baked into the agent manifests), so deriving row order from it
+# would reshuffle a published table as a side effect of an unrelated registry edit.
+# Roster = who is in the table; this map = how the table reads.
 DISPLAY = {
     "goldenmatch": "GoldenMatch",
     "goldencheck": "GoldenCheck",
@@ -58,6 +65,17 @@ DISPLAY = {
     "goldenanalysis": "GoldenAnalysis",
     "infermap": "InferMap",
 }
+
+# A package added to the roster must be given a display name + META row here, or
+# it would silently vanish from the capability matrix.
+_missing = set(DOCUMENTED) - set(DISPLAY)
+if _missing:
+    raise SystemExit(
+        f"gen_api_surface: roster package(s) {sorted(_missing)} have no DISPLAY entry. "
+        "Add a display name (and a META row) so they appear in the capability matrix."
+    )
+
+PKGS = [p for p in DISPLAY if p in set(DOCUMENTED)]
 
 # Editorial columns -- change rarely, reviewed here rather than buried in the mdx.
 #   rest:   ships a long-running REST HTTP service (the `<pkg> serve` service-shaped
@@ -171,7 +189,7 @@ def main() -> int:
     mode = sys.argv[1] if len(sys.argv) > 1 else "--check"
     if mode == "--write":
         page = PAGE.read_text(encoding="utf-8")
-        PAGE.write_text(_splice(page, render_block()), encoding="utf-8")
+        PAGE.write_text(_splice(page, render_block()), encoding="utf-8", newline="\n")
         print(f"wrote {PAGE.relative_to(ROOT)}")
         return 0
     if mode == "--check":

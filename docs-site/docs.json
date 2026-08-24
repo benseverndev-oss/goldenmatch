@@ -162,6 +162,36 @@
             ]
           },
           {
+            "group": "GoldenGraph",
+            "pages": [
+              "goldengraph/overview"
+            ]
+          },
+          {
+            "group": "GoldenMatch KG",
+            "pages": [
+              "goldenmatch-kg/overview"
+            ]
+          },
+          {
+            "group": "GoldenSuite MCP",
+            "pages": [
+              "goldensuite-mcp/overview"
+            ]
+          },
+          {
+            "group": "GoldenCheck types",
+            "pages": [
+              "goldencheck-types/overview"
+            ]
+          },
+          {
+            "group": "Golden Suite",
+            "pages": [
+              "golden-suite/overview"
+            ]
+          },
+          {
             "group": "SQL extensions",
             "pages": [
               "extensions/sql"

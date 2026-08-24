@@ -498,16 +498,56 @@ def _splice(existing: str, block: str) -> str:
     return existing[:start] + block + existing[end + len(MARKER_END):]
 
 
+def _scaffold(spec) -> str:
+    """A minimal, VALID page for a package that has no config-matrix yet.
+
+    The generator is splice-only: it needs the markers to already exist. That made
+    `--write` raise a bare ``FileNotFoundError`` for a package whose page had never
+    been authored, so onboarding one meant hand-writing a stub with byte-exact
+    marker text first -- the step nobody does, and a standing reason packages go
+    without a config matrix at all. Scaffolding removes that: add the package to
+    REGISTRY, run `make docs`, get a valid page with the generated block in place
+    and a clearly-marked TODO where the hand-authored intro belongs.
+
+    The frontmatter satisfies check_docs_sections (title/description/keywords all
+    present and non-empty, title in sentence case).
+    """
+    display = spec.nav_group or spec.name
+    return (
+        "---\n"
+        'title: "Config matrix"\n'
+        f'description: "The full matrix of {display} configuration knobs and '
+        'vocabularies -- generated so it never drifts."\n'
+        f'keywords: ["{spec.name}", "config matrix", "configuration", "reference"]\n'
+        "---\n\n"
+        f"TODO: hand-authored intro for {display}'s configuration surface. Replace "
+        "this paragraph; everything below the line is generated and must not be "
+        "edited by hand.\n\n"
+        "<Info>\n"
+        "Everything below the line is **generated from code** "
+        "(`scripts/gen_config_matrix.py`) and verified in CI. The guidance above "
+        "the line is hand-authored.\n"
+        "</Info>\n\n"
+        f"{MARKER_START}\n\n{MARKER_END}\n"
+    )
+
+
 def _rendered_full(spec) -> str:
-    return _splice(_doc_path(spec).read_text(encoding="utf-8"), render_generated_block(spec))
+    p = _doc_path(spec)
+    existing = p.read_text(encoding="utf-8") if p.exists() else _scaffold(spec)
+    return _splice(existing, render_generated_block(spec))
 
 
 def docs_are_current(spec) -> bool:
     p = _doc_path(spec)
+    # A MISSING page is not current -- it is the most stale a page can be. Reading
+    # `_rendered_full` for a nonexistent path now scaffolds rather than raising, so
+    # the existence test has to stay explicit.
     return p.exists() and p.read_text(encoding="utf-8") == _rendered_full(spec)
 
 
 def write_docs(spec) -> Path:
     p = _doc_path(spec)
+    p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(_rendered_full(spec), encoding="utf-8", newline="\n")
     return p

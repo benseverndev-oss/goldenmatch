@@ -12,13 +12,18 @@ so nobody has to remember the list:
     python scripts/regen_docs.py --check  # CI: regenerate, then fail if the tree drifted
 
 `--check` is what the `docs_regen` CI job runs: it regenerates in place and then
-`git diff --exit-code` fails (showing the exact diff to commit) if anything was
-stale, and runs the two non-regenerable prose-count checks. Run it under the synced
+fails (showing exactly what to commit) if anything was stale, and runs the two
+non-regenerable prose-count checks. The staleness probe is `git status
+--porcelain`, not `git diff`: diff sees only TRACKED changes, so a generator
+emitting a brand-new page used to pass the gate with the file uncommitted. Run it under the synced
 workspace (`uv run python scripts/regen_docs.py`) so every package is importable.
 
-Some drift lives in hand-authored PROSE (the "97 tools" figures in llms.txt /
-README / api-surface); no generator rewrites those, so this reports them for a
-manual bump rather than silently passing.
+Almost nothing is left to hand-bump. The capability counts (llms.txt / README
+"N tools", "~N exports", "N skills") and the README "what's new" callouts used to
+be hand-authored figures a checker merely complained about; both are now WRITE
+steps, so `make docs` fixes them. The only survivor is the pair of inline figures
+beside api-surface's generated table, which sit mid-sentence in hand-written
+prose -- `gen_api_surface --check` reports those for a manual bump.
 """
 from __future__ import annotations
 
@@ -40,12 +45,15 @@ WRITE_STEPS: list[list[str]] = [
     ["scripts/gen_suite_matrix.py", "--write"],       # docs-site/suite-matrix.mdx
     ["scripts/gen_thesis_weaknesses.py", "--write"],  # docs-site/thesis-weaknesses.mdx
     ["scripts/gen_native_docs.py", "--write"],        # docs-site/*/native.mdx
+    ["scripts/check_llms_counts.py", "--write"],      # llms.txt / README capability counts
+    ["scripts/sync_readme_callouts.py"],              # README "what's new" from CHANGELOG
 ]
 
-# Checks for HAND-AUTHORED figures that no --write regenerates (prose counts).
+# Figures that share a generated source but live in hand-written prose, so no
+# --write can own them. `gen_api_surface --check` asserts the two inline numbers
+# beside its generated table; the table itself is already fresh by this point.
 PROSE_CHECKS: list[list[str]] = [
-    ["scripts/check_llms_counts.py"],                 # llms.txt / README / suite tool+export counts
-    ["scripts/gen_api_surface.py", "--check"],        # api-surface.mdx inline figures (block already fresh)
+    ["scripts/gen_api_surface.py", "--check"],
 ]
 
 # The ONLY paths a generator writes. The drift check is scoped to these so an
@@ -57,6 +65,14 @@ GENERATED_PATHS: list[str] = [
     "docs/agent-manifest.json",
     "docs/agent-codemap.json",
     "packages/python/goldensuite-mcp/goldensuite_mcp/agent-manifest.json",
+    # `:(glob)` magic is load-bearing: in a PLAIN git pathspec `*` crosses `/`, so
+    # `packages/python/*/README.md` swept 32 files (every nested example/test
+    # README) instead of the 11 package roots -- widening the drift scope back out
+    # to files no generator writes, which is exactly what scoping exists to avoid.
+    "llms.txt",                                               # suite tool total
+    ":(glob)packages/python/*/*/llms.txt",                    # per-package capability counts
+    "README.md",                                              # callouts (+ counts)
+    ":(glob)packages/python/*/README.md",                     # callouts + capability counts
 ]
 
 
@@ -65,14 +81,29 @@ def _run(argv: list[str]) -> int:
     return subprocess.run([PY, *argv], cwd=ROOT).returncode
 
 
-def _git_diff_is_clean() -> bool:
-    # `git diff --quiet -- <generated paths>` = tracked modifications to the
-    # GENERATED DOCS only (exit 0 clean, 1 dirty). Scoped so an unrelated
-    # CI-mutated tracked file (e.g. `uv.lock` from `uv sync`) can't false-trip it;
-    # untracked scratch is ignored too.
-    return subprocess.run(
-        ["git", "diff", "--quiet", "--", *GENERATED_PATHS], cwd=ROOT
-    ).returncode == 0
+def _drifted_paths() -> list[str]:
+    """Porcelain status lines for the GENERATED DOCS -- empty means no drift.
+
+    `git status --porcelain` rather than `git diff --quiet`: diff reports only
+    TRACKED modifications, so a generator emitting a BRAND-NEW page (the "onboard
+    a package" case) left the gate green with the file uncommitted -- the drift
+    this job exists to catch, invisible to it. Porcelain sees added, deleted and
+    untracked alike.
+
+    Still scoped to GENERATED_PATHS so an unrelated CI-mutated file (notably
+    `uv.lock`, which `uv sync` re-resolves in the runner) can't false-trip it, and
+    `--untracked-files=normal` keeps directory-level rollup for untracked trees.
+    """
+    out = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=normal", "--", *GENERATED_PATHS],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=True,
+    ).stdout
+    return [ln for ln in out.splitlines() if ln.strip()]
 
 
 def main() -> int:
@@ -92,9 +123,14 @@ def main() -> int:
 
     if args.check:
         ok = True
-        if not _git_diff_is_clean():
-            print("\nDOC DRIFT: committed generated docs were stale. The diff below is the fix "
-                  "-- run `python scripts/regen_docs.py` and commit it:\n", file=sys.stderr)
+        drifted = _drifted_paths()
+        if drifted:
+            print("\nDOC DRIFT: committed generated docs were stale. The changes below are "
+                  "the fix -- run `python scripts/regen_docs.py` and commit them:\n",
+                  file=sys.stderr)
+            for line in drifted:
+                print(f"  {line}", file=sys.stderr)
+            print(file=sys.stderr)
             subprocess.run(["git", "--no-pager", "diff", "--stat", "--", *GENERATED_PATHS], cwd=ROOT)
             subprocess.run(["git", "--no-pager", "diff", "--", *GENERATED_PATHS], cwd=ROOT)
             ok = False

@@ -10,12 +10,15 @@ blocking a clean PR -- with ONE exception that is high-signal enough to gate.
 Rules
 -----
 1. flag rule (GATING):
-   If the diff adds or removes a ``GOLDENMATCH_[A-Z0-9_]+`` env flag in
-   ``packages/python/**/*.py``, the canonical flag reference
-   ``docs-site/goldenmatch/tuning.mdx`` MUST also be in the diff. If not ->
-   ``::error::`` annotation + exit 1. (Per .claude/doc-surfaces.md, tuning.mdx is
-   the authoritative GOLDENMATCH_* reference; an added/removed flag is the single
-   highest-signal doc drift.)
+   For every suite package that declares a ``prose_flag_page`` in
+   ``scripts/config_matrix/registry.py``: if the diff adds or removes a
+   ``<ENV_PREFIX>[A-Z0-9_]+`` env flag in ``packages/python/**/*.py``, that page
+   MUST also be in the diff. If not -> ``::error::`` annotation + exit 1.
+   Today only goldenmatch declares one (``docs-site/goldenmatch/tuning.mdx``);
+   the other packages are N/A by design, because their GENERATED config-matrix
+   block already documents every introspected knob and ``docs_regen`` gates it.
+   Giving a package a tuning page is a one-line registry change, not a code
+   change here.
    To stay false-positive-free, two classes of non-drift are excluded before
    gating: (a) test files (``**/tests/**``, ``test_*.py``, ``*_test.py``,
    ``conftest.py``) -- a flag *mention* in a test exercises an existing flag,
@@ -29,8 +32,11 @@ Rules
    ``llms.txt``, ``context-network/``) -> ``::warning::`` only (never fails).
 
 Only the flag rule can change the exit code. Everything else is informational.
+``--rule flag`` / ``--rule symbol`` select one rule so CI can run the gating half
+as a BLOCKING step and the advisory half as a ``continue-on-error`` one; the
+default ``--rule all`` keeps the single-command local behaviour.
 
-Run: ``python scripts/check_docs_staleness.py [--base <ref>] [--head <ref>]``
+Run: ``python scripts/check_docs_staleness.py [--base <ref>] [--head <ref>] [--rule all|flag|symbol]``
 """
 
 from __future__ import annotations
@@ -42,9 +48,24 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-TUNING_MDX = "docs-site/goldenmatch/tuning.mdx"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-_FLAG_RE = re.compile(r"GOLDENMATCH_[A-Z0-9_]+")
+# The per-package (env prefix -> canonical prose flag page) roster. Imported from
+# the config-matrix registry so there is ONE definition of the suite's env
+# prefixes, not a second hardcoded copy here. `config_matrix.registry` is pure
+# stdlib (the pydantic-dependent render half is lazily re-exported), so this stays
+# runnable on a bare setup-python runner.
+from config_matrix.registry import REGISTRY  # noqa: E402  (needs the sys.path line above)
+
+# (package, compiled <PREFIX>[A-Z0-9_]+ matcher, prose page) for every package
+# that HAS a hand-written flag reference. Packages without one are N/A: their
+# generated config-matrix block covers the knob and docs_regen gates it.
+FLAG_SPECS: list[tuple[str, re.Pattern[str], str]] = [
+    (spec.name, re.compile(spec.env_prefix + r"[A-Z0-9_]+"), spec.prose_flag_page)
+    for spec in REGISTRY.values()
+    if spec.prose_flag_page
+]
+
 _ALL_LINE_RE = re.compile(r"__all__")
 
 
@@ -82,16 +103,16 @@ def _is_test_file(path: str) -> bool:
     )
 
 
-def _documented_flags(head: str) -> set[str]:
-    """GOLDENMATCH_* flags already present in tuning.mdx at ``head``.
+def _documented_flags(head: str, page: str, flag_re: re.Pattern[str]) -> set[str]:
+    """Flags matching ``flag_re`` already present in ``page`` at ``head``.
 
     Used to suppress false positives: a flag that is *already documented* has no
     drift to fix, even if a non-test source line happens to reference it."""
     try:
-        content = _git("show", f"{head}:{TUNING_MDX}")
+        content = _git("show", f"{head}:{page}")
     except RuntimeError:
-        return set()  # tuning.mdx absent at head -> nothing documented yet
-    return set(_FLAG_RE.findall(content))
+        return set()  # page absent at head -> nothing documented yet
+    return set(flag_re.findall(content))
 
 
 def changed_files(base: str, head: str) -> list[str]:
@@ -103,7 +124,7 @@ def diff_for(base: str, head: str, pathspec: list[str]) -> str:
     return _git("diff", "--unified=0", f"{base}...{head}", "--", *pathspec)
 
 
-def _added_removed_flags(diff_text: str) -> tuple[set[str], set[str]]:
+def _added_removed_flags(diff_text: str, flag_re: re.Pattern[str]) -> tuple[set[str], set[str]]:
     """Flags appearing on added (+) vs removed (-) diff lines.
 
     A flag is considered *introduced/removed* only if it nets out: a flag that
@@ -115,16 +136,23 @@ def _added_removed_flags(diff_text: str) -> tuple[set[str], set[str]]:
         if line.startswith("+++") or line.startswith("---"):
             continue
         if line.startswith("+"):
-            added.update(_FLAG_RE.findall(line))
+            added.update(flag_re.findall(line))
         elif line.startswith("-"):
-            removed.update(_FLAG_RE.findall(line))
+            removed.update(flag_re.findall(line))
     net_added = added - removed
     net_removed = removed - added
     return net_added, net_removed
 
 
 def check_flag_rule(base: str, head: str, files: list[str]) -> tuple[bool, list[str]]:
-    """Return (ok, messages). ok=False means gate failure."""
+    """Return (ok, messages). ok=False means gate failure.
+
+    Runs once per package that declares a ``prose_flag_page``. The source scan is
+    repo-wide across non-test ``packages/python/**/*.py`` rather than scoped to
+    the owning package's tree: a ``GOLDENCHECK_*`` flag introduced from
+    goldenmatch's directory is still goldencheck's documented surface, and the
+    prefix is what identifies the owner.
+    """
     py_files = [
         f
         for f in files
@@ -132,36 +160,47 @@ def check_flag_rule(base: str, head: str, files: list[str]) -> tuple[bool, list[
     ]
     if not py_files:
         return True, ["flag rule: no non-test packages/python/**/*.py changes -- skipped"]
+    if not FLAG_SPECS:
+        return True, ["flag rule: no package declares a prose_flag_page -- N/A"]
 
     diff_text = diff_for(base, head, py_files)
-    net_added, net_removed = _added_removed_flags(diff_text)
+    ok = True
+    msgs: list[str] = []
 
-    # Suppress flags that have no actual doc drift:
-    #  - an *added* flag already present in tuning.mdx is already documented;
-    #  - a *removed* flag absent from tuning.mdx is already undocumented.
-    # Only the complement is real drift the canonical reference must track.
-    documented = _documented_flags(head)
-    drift_added = net_added - documented
-    drift_removed = net_removed & documented
-    touched_flags = sorted(drift_added | drift_removed)
-    if not touched_flags:
-        return True, [
-            "flag rule: no GOLDENMATCH_* flag drift "
-            "(changes are tests, or flags already in sync with tuning.mdx) -- OK"
-        ]
+    for pkg, flag_re, page in FLAG_SPECS:
+        net_added, net_removed = _added_removed_flags(diff_text, flag_re)
 
-    tuning_touched = TUNING_MDX in files
-    if tuning_touched:
-        return True, [
-            f"flag rule: flags changed ({touched_flags}) and {TUNING_MDX} is in the diff -- OK"
-        ]
-    # Drift: flag changed but tuning.mdx untouched.
-    msgs = [
-        f"::error file={TUNING_MDX}::GOLDENMATCH_* flag(s) "
-        f"{touched_flags} added/removed in this diff but {TUNING_MDX} (the canonical "
-        f"flag reference) was not updated. Add/remove the flag in tuning.mdx."
-    ]
-    return False, msgs
+        # Suppress flags that have no actual doc drift:
+        #  - an *added* flag already present in the page is already documented;
+        #  - a *removed* flag absent from the page is already undocumented.
+        # Only the complement is real drift the canonical reference must track.
+        documented = _documented_flags(head, page, flag_re)
+        drift_added = net_added - documented
+        drift_removed = net_removed & documented
+        touched_flags = sorted(drift_added | drift_removed)
+        if not touched_flags:
+            msgs.append(
+                f"flag rule [{pkg}]: no flag drift "
+                f"(changes are tests, or flags already in sync with {page}) -- OK"
+            )
+            continue
+
+        if page in files:
+            msgs.append(
+                f"flag rule [{pkg}]: flags changed ({touched_flags}) and {page} "
+                "is in the diff -- OK"
+            )
+            continue
+
+        # Drift: flag changed but the canonical page untouched.
+        ok = False
+        msgs.append(
+            f"::error file={page}::{pkg}: env flag(s) {touched_flags} added/removed "
+            f"in this diff but {page} (the canonical flag reference) was not "
+            "updated. Add/remove the flag there in the same PR."
+        )
+
+    return ok, msgs
 
 
 def check_public_symbol_rule(base: str, head: str, files: list[str]) -> list[str]:
@@ -200,6 +239,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", default="origin/main", help="Base ref (default origin/main).")
     parser.add_argument("--head", default="HEAD", help="Head ref (default HEAD).")
+    parser.add_argument(
+        "--rule",
+        choices=("all", "flag", "symbol"),
+        default="all",
+        help="Which rule to run. CI runs 'flag' as a BLOCKING step and 'symbol' as a "
+             "continue-on-error one; 'all' (default) is the local single command.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -208,18 +254,30 @@ def main(argv: list[str] | None = None) -> int:
         print(f"::warning::docs-staleness: could not compute diff ({exc}); skipping.")
         return 0
 
-    print(f"Docs staleness advisory: {args.base}...{args.head} ({len(files)} changed file(s))")
+    print(f"Docs staleness [{args.rule}]: {args.base}...{args.head} "
+          f"({len(files)} changed file(s))")
 
-    gate_ok, flag_msgs = check_flag_rule(args.base, args.head, files)
-    symbol_msgs = check_public_symbol_rule(args.base, args.head, files)
+    gate_ok = True
+    msgs: list[str] = []
+    if args.rule in ("all", "flag"):
+        gate_ok, flag_msgs = check_flag_rule(args.base, args.head, files)
+        msgs += flag_msgs
+    if args.rule in ("all", "symbol"):
+        msgs += check_public_symbol_rule(args.base, args.head, files)
 
-    for m in flag_msgs + symbol_msgs:
+    for m in msgs:
         print(m)
 
     if not gate_ok:
-        print(f"\nDocs staleness FAILED (flag rule). Update {TUNING_MDX} in the same PR.")
+        pages = sorted({page for _, _, page in FLAG_SPECS})
+        print(f"\nDocs staleness FAILED (flag rule). Update the canonical flag "
+              f"reference ({', '.join(pages)}) in the same PR.")
         return 1
-    print("\nDocs staleness OK (gating flag rule passed; symbol rule advisory only).")
+
+    if args.rule == "symbol":
+        print("\nDocs staleness OK (symbol rule is advisory; warnings above, if any).")
+    else:
+        print("\nDocs staleness OK (gating flag rule passed).")
     return 0
 
 
