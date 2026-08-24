@@ -475,56 +475,6 @@ api_parity:
 # vocabularies + the GOLDENMATCH_* env scan, so it must re-check whenever any of
 # those move. The env scan reads the whole goldenmatch python + rust source, so
 # any .py/.rs change there can add/remove a knob -> re-run the gate.
-config_matrix:
-  # The generated blocks are rendered from each package's Python + Rust source
-  # (schema, vocab constants, <PREFIX>_* env scan), so any of those can move a
-  # knob -> re-run the gate. Covers all suite packages + the repo-level generator.
-  - 'docs-site/*/config-matrix.mdx'
-  - 'packages/python/*/*/**/*.py'
-  - 'packages/rust/extensions/**/*.rs'
-  - 'scripts/config_matrix/**'
-  - 'scripts/gen_config_matrix.py'
-  # The agent-navigation manifest is rendered from the same registry; a hand-edit
-  # of the committed JSON must re-run the gate so it can't be tampered out of sync.
-  - 'docs/agent-manifest.json'
-  - 'scripts/test_config_matrix.py'
-  # llms.txt / README capability-count gate: the stated counts derive from the
-  # package source (already covered above), but a hand-edit to a surface must
-  # re-run the check too.
-  - 'scripts/check_llms_counts.py'
-  - 'packages/python/*/llms.txt'
-  - 'packages/python/*/README.md'
-  - 'llms.txt'
-  # Agent code map (docs/agent-codemap.json): a static-AST structural map of the
-  # Python source, gated in the same job. Any .py move re-runs it (already covered
-  # above); these cover the generator, its gate, and a hand-edit of the committed JSON.
-  - 'scripts/agent_codemap.py'
-  - 'scripts/test_agent_codemap.py'
-  - 'docs/agent-codemap.json'
-  # Roster single-sourcing gate (scripts/test_roster.py) runs in this job.
-  - 'scripts/test_roster.py'
-  - 'scripts/config_matrix/roster.py'
-  # Gates for the entry point + the count checker themselves.
-  - 'scripts/test_regen_docs.py'
-  - 'scripts/test_llms_counts.py'
-  # Repo-level suite surface matrix: reads the parity manifests, the per-package
-  # counts (packages/python/** above), and the recipes pages, so any of those can
-  # move the cross-package view -> re-run its --check.
-  - 'scripts/gen_suite_matrix.py'
-  - 'scripts/test_suite_matrix.py'
-  - 'docs-site/suite-matrix.mdx'
-  - 'docs-site/*/recipes.mdx'
-  # Reference api-surface capability matrix: the generated table reads the package
-  # versions (pyproject / package.json) + MCP counts (parity manifests), so a
-  # version bump or a manifest change must re-run its --check.
-  - 'scripts/gen_api_surface.py'
-  - 'scripts/test_api_surface.py'
-  - 'docs-site/reference/api-surface.mdx'
-  - 'packages/python/*/pyproject.toml'
-  - 'packages/typescript/*/package.json'
-  - 'parity/*.yaml'
-  - '.github/workflows/ci.yml'
-  - '.github/filters.yml'
 # OSS ER-matcher box-safe tests (plan 2026-07-26 §Testing): the repo-root
 # scripts/er_matcher/ suite (data-gen, eval/ship-gate, P3a perf gate, P3 trainer
 # pure helpers). The shared prompt contract lives in the goldenmatch package, so a
@@ -1034,6 +984,22 @@ docs_regen:
   - 'packages/rust/extensions/**/*.rs'   # gen_config_matrix's <PREFIX>_* env scan
   - 'packages/typescript/*/package.json' # gen_api_surface's TS version column
   - '.github/filters.yml'                # self-test: filter edits re-run the gate
+  # Absorbed from the former `config_matrix` filter when that job was merged
+  # into this one. These are the entries a glob-aware diff showed were NOT
+  # already covered by the patterns above -- the rest (docs-site/*, packages/
+  # python/*, scripts/gen_*, scripts/config_matrix/*) were redundant.
+  - '.github/workflows/ci.yml'
+  - 'llms.txt'                           # suite tool total, rewritten by --write
+  - 'scripts/test_config_matrix.py'
+  - 'scripts/test_roster.py'
+  - 'scripts/test_regen_docs.py'
+  - 'scripts/test_llms_counts.py'
+  - 'scripts/test_agent_codemap.py'
+  - 'scripts/test_api_surface.py'
+  - 'scripts/test_suite_matrix.py'
+  - 'scripts/test_thesis_weaknesses.py'
+  - 'scripts/test_thesis_conformance.py'
+  - 'scripts/check_thesis_conformance.py'
 # Diff-aware doc-staleness rules (scripts/check_docs_staleness.py). Its own filter
 # rather than riding on `docs`: the flag rule scans non-test `packages/python/**/*.py`
 # for added/removed <PREFIX>_* env flags, and `docs` matches no such path (only

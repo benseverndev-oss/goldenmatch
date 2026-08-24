@@ -90,6 +90,15 @@ REQUIRED: dict[str, list[tuple[str, str]]] = {
         ("packages/typescript/goldenmatch/package.json", "api-surface TS version column"),
         ("parity/goldenmatch.yaml", "MCP tool counts in suite-matrix + api-surface"),
         (".github/filters.yml", "self-test: filter edits must re-run the gate"),
+        # Absorbed when the 6-leg `config_matrix` job was merged into docs_regen.
+        # A glob-aware diff of the two filters showed these were the only entries
+        # not already covered; losing them would have silently narrowed the gate.
+        ("llms.txt", "the suite tool total, rewritten by check_llms_counts --write"),
+        ("scripts/test_config_matrix.py", "gate unit tests now run in this job"),
+        ("scripts/test_roster.py", "gate unit tests now run in this job"),
+        ("scripts/test_regen_docs.py", "gate unit tests now run in this job"),
+        ("scripts/test_llms_counts.py", "gate unit tests now run in this job"),
+        ("scripts/check_thesis_conformance.py", "the thesis auditor now runs in this job"),
     ],
     "docs_staleness": [
         (f"{GM}/core/pipeline.py", "the flag rule scans non-test packages/python/**/*.py"),
