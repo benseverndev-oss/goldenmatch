@@ -5211,6 +5211,21 @@ def _run_dedupe_pipeline(
         )
         if isinstance(report, dict):
             report["transitive_consistency"] = _tc_report
+        # Re-emit the cluster profile over the SPLIT clusters. Clustering emits
+        # during `build_clusters`, which is BEFORE this runs, so without this the
+        # controller's ClusterProfile describes clusters the run does not return.
+        # Measured on Abt-Buy: splitting moved the final count 669 -> 709 while
+        # the profile reported 669 either way, and the only field that differed
+        # was transitivity_rate by 0.004 -- inside the triple sampler's noise
+        # band. `pick_committed` could therefore never prefer the iteration that
+        # enabled splitting; it looked identical to the one that did not (#2717).
+        #
+        # Cheap by construction: `materialize_and_split` above has already
+        # materialized the dict, `set_cluster` overwrites, this block only runs
+        # when splitting is enabled, and `_emit_cluster_profile` is a no-op with
+        # no active capture.
+        from goldenmatch.core.cluster import _emit_cluster_profile
+        _emit_cluster_profile(_tc_clusters)
 
     results = {
         # Frames-out path keeps this LAZY: cluster_frames_to_dict (~900K dict
