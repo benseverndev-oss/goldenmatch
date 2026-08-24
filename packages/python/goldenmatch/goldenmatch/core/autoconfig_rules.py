@@ -502,7 +502,8 @@ def _giant_threshold_step(cp: Any) -> float:
 
 @targets("cluster_giant")
 def rule_cluster_giant(
-    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
+    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
+    ctx: IndicatorContext | None = None,
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     """Answer `ClusterProfile.red_reason() == "cluster_giant"`.
 
@@ -533,6 +534,22 @@ def rule_cluster_giant(
     # Duplicating the condition is exactly the drift `red_reason` exists to stop.
     # n_rows <= 0 is `data_empty`'s business.
     if n_rows <= 0 or cp.red_reason(n_rows) != "cluster_giant":
+        return None
+
+    # SPECIFIC BEATS GENERAL. `rule_precision_anchor_threshold_raise` is tuned
+    # for one over-merge shape (name-only weighted matchkey, #1319) and raises to
+    # a calibrated 0.9. This rule is the generic answer to `cluster_giant` and
+    # sits at position 11b, well ahead of it at 17 -- so once the step scaled
+    # with saturation, this rule reached the 0.95 ceiling first and the specific
+    # one could never fire. Its own sensitivity test caught exactly that:
+    # "threshold reached 0.95 WITHOUT the rule -- the integration test above is
+    # not sensitive to the rule".
+    #
+    # Making another rule unreachable is the defect this whole change set exists
+    # to fix (#2750), so defer instead. Reordering is not an option: moving this
+    # rule after position 17 puts `rule_low_transitivity` (12) back in front of
+    # it, restoring the shadowing that made it walk the threshold DOWN.
+    if precision_anchor_would_fire(current, profile, ctx):
         return None
 
     from goldenmatch.config.schemas import ClusterConfig
