@@ -18,6 +18,8 @@ from config_matrix.registry import REGISTRY
 from config_matrix.roster import (
     DOCS_DEFERRED,
     DOCUMENTED,
+    EXT_DOCS_DEFERRED,
+    EXT_README_DEFERRED,
     README_DEFERRED,
     derive_roster,
 )
@@ -145,9 +147,45 @@ def test_deferrals_are_live_and_complete():
     )
 
 
+def test_ext_deferrals_are_live_and_complete():
+    """Same contract for the EXTENSION tier, which had no gating at all.
+
+    Its README check printed [INFO] while listing packages it had found missing,
+    and nothing checked docs sections. An extension may legitimately be documented
+    inside a parent page -- what it may not be is undocumented by accident.
+    """
+    _, ext, _ = derive_roster()
+    docs_site = ROOT / "docs-site"
+
+    no_section = {p for p in ext if not (docs_site / p).is_dir()}
+    assert no_section == set(EXT_DOCS_DEFERRED), (
+        f"EXT_DOCS_DEFERRED out of step: "
+        f"undeclared={sorted(no_section - set(EXT_DOCS_DEFERRED))}, "
+        f"stale={sorted(set(EXT_DOCS_DEFERRED) - no_section)}"
+    )
+
+    readme = (ROOT / "README.md").read_text(encoding="utf-8").lower()
+    unnamed = {p for p in ext if p.lower() not in readme}
+    assert unnamed == set(EXT_README_DEFERRED), (
+        f"EXT_README_DEFERRED out of step: "
+        f"undeclared={sorted(unnamed - set(EXT_README_DEFERRED))}, "
+        f"stale={sorted(set(EXT_README_DEFERRED) - unnamed)}"
+    )
+
+
 def test_every_deferral_carries_a_reason():
-    for name, reason in {**DOCS_DEFERRED, **README_DEFERRED}.items():
+    """A reason has to be reviewable prose, not a shrug.
+
+    The CORE maps are empty (everything was onboarded); the EXT maps are not, and
+    their entries are the ones a reader will actually have to judge.
+    """
+    every = {**DOCS_DEFERRED, **README_DEFERRED,
+             **EXT_DOCS_DEFERRED, **EXT_README_DEFERRED}
+    for name, reason in every.items():
         assert len(reason.strip()) > 30, f"{name}: deferral reason is too thin to review"
+        assert "TODO" not in reason, (
+            f"{name}: deferral still says TODO -- decide it or write the real reason"
+        )
 
 
 def test_documented_roster_is_actually_published():

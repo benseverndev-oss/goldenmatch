@@ -38,6 +38,8 @@ from .registry import REGISTRY
 __all__ = [
     "DOCS_DEFERRED",
     "DOCUMENTED",
+    "EXT_DOCS_DEFERRED",
+    "EXT_README_DEFERRED",
     "NON_DIST_STEMS",
     "README_DEFERRED",
     "derive_roster",
@@ -117,3 +119,74 @@ DOCS_DEFERRED: dict[str, str] = {}
 # CURRENTLY EMPTY -- goldencheck-types and goldensuite-mcp, provisionally deferred
 # when the check landed, now have rows in the README's "Shared components" table.
 README_DEFERRED: dict[str, str] = {}
+
+
+# --------------------------------------------------------------------------- #
+# The EXTENSION tier
+#
+# `derive_roster()`'s `ext` list -- SQL/rust extras and standalone libraries -- had
+# no gating at all: no docs check, and a README check that printed [INFO] while
+# listing packages it had found missing. That is the same silence the CORE maps
+# above were created to remove, one tier down. These two maps close it.
+#
+# Unlike the CORE maps, these are NOT provisional. Every entry states a real
+# reason, because an extension genuinely can be documented inside a parent page
+# instead of owning a section -- what it cannot be is undocumented by accident.
+# --------------------------------------------------------------------------- #
+
+#: Extension distributions with no `docs-site/<pkg>/` section of their own.
+EXT_DOCS_DEFERRED: dict[str, str] = {
+    "goldenmatch-duckdb": (
+        "documented in docs-site/extensions/sql.mdx, which covers the DuckDB surface "
+        "in situ; a separate section would split one SQL story across two pages"
+    ),
+    "goldenmatch-pg": (
+        "documented in docs-site/extensions/sql.mdx alongside the DuckDB surface; "
+        "ships as a GitHub-release tarball rather than a normal wheel"
+    ),
+    "goldenmatch-embed": (
+        "documented in docs-site/extensions/sql.mdx as part of the SQL embedding "
+        "surface it exists to serve"
+    ),
+    "goldenfuzz": (
+        "standalone owned library (the rapidfuzz replacement); its package README is "
+        "the doc surface and the root README links it from 'Owned libraries'"
+    ),
+    "goldenphonetic": (
+        "standalone owned library (the jellyfish replacement); package README is the "
+        "doc surface, linked from the root README's 'Owned libraries' table"
+    ),
+    "goldenmatch-hnsw": (
+        "standalone owned library (the FAISS IndexHNSWFlat replacement); package "
+        "README is the doc surface, linked from 'Owned libraries'"
+    ),
+    "goldenmatch-spark-jar": (
+        "a JVM jar published for the Spark tier, not a Python-importable surface; "
+        "the Spark story lives in the goldenmatch section"
+    ),
+    "er-matcher": (
+        "publish-er-matcher.yml releases a quantized GGUF MODEL artifact, not a "
+        "Python distribution -- there is no package here to document"
+    ),
+}
+
+#: Extension distributions not named anywhere in the root README.
+#:
+#: Weaker than the CORE rule on purpose: CORE requires a LINK to
+#: `packages/python/<pkg>/README.md`, but the owned libraries live under
+#: `packages/rust/extensions/`, so a link-path rule would not generalise. A name
+#: mention is the honest floor for this tier.
+EXT_README_DEFERRED: dict[str, str] = {
+    "goldenmatch-pg": (
+        "ships as a GitHub-release tarball, not a pip install; the SQL extensions "
+        "page is where a reader would look for it"
+    ),
+    "goldenmatch-spark-jar": (
+        "a JVM build artifact consumed via the Spark tier's own setup, not something "
+        "a reader installs from the README"
+    ),
+    "er-matcher": (
+        "a GGUF model release, not an installable package; naming it in the package "
+        "overview would imply a dist that does not exist"
+    ),
+}

@@ -90,7 +90,13 @@ All scripts are stdlib-only and anchored to the repo root via `Path(__file__)`.
   `publish-*.yml` callers); and the two deferral maps `DOCS_DEFERRED` /
   `README_DEFERRED` (published packages knowingly without a docs section / README
   row, each with a reason). The gap between the first two must be fully covered by
-  the deferral maps or `check_docs_consistency` FAILS -- and a deferral for a
+  the deferral maps or `check_docs_consistency` FAILS. The EXTENSION tier has
+  its own pair (`EXT_DOCS_DEFERRED` / `EXT_README_DEFERRED`) on the same
+  contract; unlike the CORE maps -- which are EMPTY, everything was onboarded
+  -- those carry real reasons, because an extension can legitimately be
+  documented inside a parent page (the SQL surfaces live in
+  `docs-site/extensions/sql.mdx`) or be a standalone library whose own README
+  is the doc. What it may not be is undocumented by accident -- and a deferral for a
   package that *does* have the surface fails too, so the maps cannot go stale in
   either direction. Row ORDER stays editorial and local to each generator:
   `REGISTRY` order is baked into the agent manifests, so deriving table order from
