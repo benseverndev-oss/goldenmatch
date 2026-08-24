@@ -113,3 +113,26 @@ def test_documented_roster_is_actually_published():
     """A PackageSpec for a package no publisher ships is docs for a phantom dist."""
     core, _, _ = derive_roster()
     assert set(DOCUMENTED) <= set(core), sorted(set(DOCUMENTED) - set(core))
+
+
+def test_all_matches_the_public_surface():
+    """`__all__` is the module's stated contract; keep it honest.
+
+    Added in response to a CodeQL "unused global variable" finding on DOCUMENTED.
+    The finding is a false positive -- the constant has eight importers -- but the
+    module genuinely had no declared export list, and the suggested workaround (a
+    no-op `_ = DOCUMENTED` read inside derive_roster) would have been a line whose
+    only purpose is to fool static analysis. This asserts the real thing instead.
+    """
+    import config_matrix.roster as mod
+
+    declared = set(mod.__all__)
+    public = {
+        n for n in vars(mod)
+        if not n.startswith("_")
+        and n not in {"annotations", "Path", "REGISTRY", "ROOT", "PY_PKGS"}
+    }
+    assert declared == public, (
+        f"__all__ is out of step: missing={sorted(public - declared)}, "
+        f"stale={sorted(declared - public)}"
+    )

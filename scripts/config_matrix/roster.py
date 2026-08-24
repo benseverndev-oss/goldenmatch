@@ -30,6 +30,20 @@ from pathlib import Path
 
 from .registry import REGISTRY
 
+# This module exists to BE imported -- it is the shared public surface that
+# replaced six hardcoded copies of the package list, and nothing here is consumed
+# in-module. Declaring `__all__` states that contract explicitly (and is why a
+# static "unused global" reading of this file is wrong: DOCUMENTED alone has eight
+# importers).
+__all__ = [
+    "DOCS_DEFERRED",
+    "DOCUMENTED",
+    "NON_DIST_STEMS",
+    "README_DEFERRED",
+    "derive_roster",
+    "publish_stems",
+]
+
 ROOT = Path(__file__).resolve().parent.parent.parent
 PY_PKGS = ROOT / "packages" / "python"
 
