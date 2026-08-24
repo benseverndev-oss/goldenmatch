@@ -360,24 +360,84 @@ def _severe_bridge_count(members: list[int], pair_scores: dict) -> int:
     return count
 
 
-def _measure_bridges(clusters: dict[int, dict]) -> tuple[int, float | None]:
-    """Returns ``(bridge_edge_count, measured_bridge_risk)``. ``measured_bridge_risk``
-    is ``None`` when no multi-member cluster was small enough to measure cheaply
-    (the zero_label scorer then falls back to its heuristic proxy)."""
-    measurable = [
-        c for c in clusters.values()
-        if 2 <= c["size"] <= _BRIDGE_MAX_CLUSTER_SIZE
-    ]
+def _bridge_stats(
+    measurable: list[tuple[list[int], dict]],
+) -> tuple[int, float | None]:
+    """Shared core behind both emitters' bridge measurement.
+
+    Takes the already-size-filtered ``(members, pair_scores)`` pairs so the dict
+    and frames paths cannot drift on the gate, the counter, or the risk formula
+    -- they drifted once already (the frames path hardcoded 0), and the only
+    structural defence is one implementation with two thin adapters.
+
+    ``measured_bridge_risk`` is ``None`` when nothing was measurable, which is
+    load-bearing: ``zero_label_confidence`` reads ``None`` as "no measurement,
+    use the heuristic proxy" and any float as a real measurement.
+    """
     if not measurable:
         return 0, None
     total_bridges = 0
     risky = 0
-    for c in measurable:
-        b = _severe_bridge_count(c["members"], c.get("pair_scores", {}))
+    for members, pair_scores in measurable:
+        b = _severe_bridge_count(members, pair_scores)
         total_bridges += b
         if b > 0:
             risky += 1
     return total_bridges, risky / len(measurable)
+
+
+def _measure_bridges(clusters: dict[int, dict]) -> tuple[int, float | None]:
+    """Dict-path adapter for :func:`_bridge_stats`."""
+    return _bridge_stats([
+        (c["members"], c.get("pair_scores", {}))
+        for c in clusters.values()
+        if 2 <= c["size"] <= _BRIDGE_MAX_CLUSTER_SIZE
+    ])
+
+
+def _measure_bridges_frames(
+    members_by_cluster: dict[int, list[int]],
+    aggregated_scores: dict[tuple[int, int], float],
+    member_to_cid: dict[int, int],
+) -> tuple[int, float | None]:
+    """Frames-path adapter for :func:`_bridge_stats`.
+
+    The frames emitter holds one flat within-cluster edge dict rather than the
+    dict path's per-cluster ``pair_scores``, so regroup by cluster first. One
+    pass over the edges, not one pass per cluster -- the naive nesting is
+    O(n_clusters x n_edges) and this telemetry runs on every controller
+    iteration.
+    """
+    # Decide which clusters are measurable FIRST, then copy only their edges.
+    # The alternative -- group every within-cluster edge and filter afterwards --
+    # duplicates the whole edge dict including the giant clusters the size gate
+    # is about to discard, which is exactly where the edges are densest. On a
+    # 5k-row run with one large block that is the difference between a bounded
+    # copy and a second copy of the entire pair set.
+    measurable_cids = {
+        cid for cid, members in members_by_cluster.items()
+        if 2 <= len(members) <= _BRIDGE_MAX_CLUSTER_SIZE
+    }
+    if not measurable_cids:
+        return 0, None
+    per_cluster: dict[int, dict] = {}
+    for (a, b), s in aggregated_scores.items():
+        cid = member_to_cid.get(a)
+        if cid is not None and cid in measurable_cids and cid == member_to_cid.get(b):
+            per_cluster.setdefault(cid, {})[(a, b)] = s
+    measurable = [
+        (members_by_cluster[cid], per_cluster.get(cid, {}))
+        for cid in measurable_cids
+    ]
+    if measurable and not aggregated_scores:
+        # Multi-member clusters with no within-cluster edges is not a shape the
+        # data can produce -- a 2-member cluster exists BECAUSE a pair scored.
+        # It means the caller supplied no edge list (`pairs=None`, or an empty
+        # one), so bridges were never measurable. Report that as `None`, the
+        # same "unmeasured" signal the dict path emits, rather than a 0.0 that
+        # would read as "measured, and there is no bridge risk".
+        return 0, None
+    return _bridge_stats(measurable)
 
 
 def _emit_cluster_profile(clusters: dict[int, dict]) -> None:
@@ -882,6 +942,18 @@ def _emit_cluster_profile_frames(
         _mf.filter_mask(_mf.column("oversized")).height
     )
 
+    # These were hardcoded to (0, 0.0). This emitter runs LAST on the paths that
+    # use it (measured on Abt-Buy: dict emitter once, frames emitter four times),
+    # so the zero clobbered the dict path's real measurement -- the controller saw
+    # bridge_edge_count=0 on every non-splitting iteration, and a rule predicting
+    # "splitting drives bridges DOWN" verified itself against 0 -> 59 and read its
+    # own success as failure. The hardcoded 0.0 risk was the quieter half: it is
+    # not None, so `zero_label_confidence` treated "never measured" as "measured
+    # zero" and skipped its heuristic fallback.
+    _frames_bridges, _frames_risk = _measure_bridges_frames(
+        members_by_cluster, aggregated_scores, member_to_cid,
+    )
+
     profile = ClusterProfile(
         n_clusters=_mf.height,
         cluster_size_p50=percentile(sizes, 0.50),
@@ -895,8 +967,8 @@ def _emit_cluster_profile_frames(
         ),
         edge_confidence_min=confidences[0] if confidences else 0.0,
         oversized_cluster_count=oversized_count,
-        bridge_edge_count=0,
-        measured_bridge_risk=0.0,
+        bridge_edge_count=_frames_bridges,
+        measured_bridge_risk=_frames_risk,
     )
     current_emitter().set_cluster(profile)
 
