@@ -502,6 +502,14 @@ def rule_cluster_giant(
         )
         return current.model_copy(update={"cluster": new_cluster}), PolicyDecision(
             rule_name="cluster_giant",
+            # Splitting removes BRIDGES; it does not reliably raise transitivity.
+            # Measured on Abt-Buy with the profile emitted after the split:
+            # bridge_edge_count 59 -> 30 while transitivity_rate moved
+            # 0.132 -> 0.141, barely outside the triple sampler's ~0.003-0.005
+            # noise band. Predicting transitivity for THIS action reads noise;
+            # predicting bridges reads the effect.
+            predicts="cluster.bridge_edge_count",
+            predicts_direction="down",
             rationale=(
                 f"largest cluster {cp.cluster_size_max} is over "
                 f"{_GIANT_CLUSTER_FRACTION:.0%} of {n_rows} rows; splitting "
@@ -522,6 +530,11 @@ def rule_cluster_giant(
     })
     return new_cfg, PolicyDecision(
         rule_name="cluster_giant",
+        # Raising the threshold here is meant to SHRINK the giant cluster --
+        # splitting is already on by the time this branch runs, so bridges are
+        # not what this action moves.
+        predicts="cluster.cluster_size_max",
+        predicts_direction="down",
         rationale=(
             f"largest cluster {cp.cluster_size_max} still over "
             f"{_GIANT_CLUSTER_FRACTION:.0%} of {n_rows} rows with splitting on; "
@@ -608,8 +621,14 @@ def rule_low_transitivity(
         )
         return current.model_copy(update={"cluster": _new_cluster}), PolicyDecision(
             rule_name="low_transitivity",
-            predicts="cluster.transitivity_rate",
-            predicts_direction="up",
+            # Splitting removes BRIDGES; it does not reliably raise transitivity.
+            # Measured on Abt-Buy with the profile emitted after the split:
+            # bridge_edge_count 59 -> 30 while transitivity_rate moved
+            # 0.132 -> 0.141, barely outside the triple sampler's ~0.003-0.005
+            # noise band. Predicting transitivity for THIS action reads noise;
+            # predicting bridges reads the effect.
+            predicts="cluster.bridge_edge_count",
+            predicts_direction="down",
             rationale=(
                 f"transitivity={cp.transitivity_rate:.2f} < 0.85; splitting "
                 f"clusters held together by a weak transitive bridge"
