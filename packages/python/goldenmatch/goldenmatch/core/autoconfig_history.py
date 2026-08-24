@@ -30,6 +30,20 @@ class PolicyDecision:
     rationale: str
     config_diff: dict[str, Any]
     expand_sample: float | None = None
+    #: RED conditions this rule declares it answers, from the `@targets`
+    #: decorator and stamped by the policy so rules never repeat themselves.
+    #: Records what the action was MEANT to fix, not just what it changed.
+    targets: tuple[str, ...] = ()
+    #: Dotted path into the ComplexityProfile this action expects to move, e.g.
+    #: "cluster.transitivity_rate". With `predicts_direction`, this is what lets
+    #: a rule check whether its OWN last action worked instead of re-applying it
+    #: blindly -- the failure that had `rule_low_transitivity` walk a threshold
+    #: to its floor on every iteration while the metric fell (#2717, and #195 at
+    #: 2M before it). None means the rule made no prediction, which is read as
+    #: "no evidence" rather than "it failed".
+    predicts: str | None = None
+    #: "up" when the rule expects `predicts` to increase, "down" to decrease.
+    predicts_direction: str = "up"
 
 
 @dataclass
@@ -288,3 +302,45 @@ class RunHistory:
 
         return min(survivors, key=key)
 
+
+def _read_metric(profile: Any, dotted: str) -> float | None:
+    """Read a dotted path like "cluster.transitivity_rate" off a profile."""
+    node: Any = profile
+    for part in dotted.split("."):
+        node = getattr(node, part, None)
+        if node is None:
+            return None
+    return float(node) if isinstance(node, (int, float)) else None
+
+
+def rule_effect_was_negative(
+    history: RunHistory, rule_name: str, *, margin: float = 0.0
+) -> bool:
+    """Did `rule_name`'s own last action fail to move what it predicted?
+
+    Generalises the check `rule_low_transitivity` hand-rolled: a rule that
+    cannot tell whether its lever works will keep pulling it. On Abt-Buy that
+    rule fired on all four iterations, walking the threshold 0.70 -> 0.50 while
+    transitivity fell 0.200 -> 0.138, and the run committed v0 regardless.
+
+    False when the rule has not fired, when it declared no prediction, or when
+    the metric is unreadable. Absence of evidence is not evidence of failure --
+    a rule must not mute itself on a missing measurement.
+
+    Only the rule's OWN prior decisions count: another rule's change says
+    nothing about whether THIS lever moves THIS metric.
+    """
+    for i in range(len(history.entries) - 1, -1, -1):
+        decision = history.entries[i].decision
+        if decision is None or decision.rule_name != rule_name:
+            continue
+        if not decision.predicts:
+            return False
+        before = _read_metric(history.entries[i].profile, decision.predicts)
+        after = _read_metric(history.entries[-1].profile, decision.predicts)
+        if before is None or after is None:
+            return False
+        if decision.predicts_direction == "down":
+            return after >= before - margin
+        return after <= before + margin
+    return False

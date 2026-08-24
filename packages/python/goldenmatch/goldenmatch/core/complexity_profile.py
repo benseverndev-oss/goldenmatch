@@ -67,6 +67,29 @@ class SparsityVerdict:
     estimated_n_true_pairs: int
 
 
+#: Fraction of the frame above which a single cluster is a collapse, not a merge.
+_GIANT_CLUSTER_FRACTION = 0.1
+#: Below this, a cluster's members do not all match each other -- chaining.
+_MIN_TRANSITIVITY = 0.85
+
+#: Every RED condition any sub-profile can report. `tests/test_rule_action_coverage.py`
+#: asserts each is either answered by a rule in `DEFAULT_RULES` or explicitly
+#: recorded as unactionable, so a new RED branch without an action fails CI
+#: rather than producing a verdict the controller can only report.
+RED_REASONS: frozenset[str] = frozenset({
+    "data_empty",
+    "blocking_no_blocks",
+    "blocking_skewed",
+    "blocking_too_coarse",
+    "scoring_no_candidates",
+    "scoring_nothing_above_threshold",
+    "scoring_unimodal",
+    "matchkey_collapsed_field",
+    "cluster_giant",
+    "cluster_low_transitivity",
+})
+
+
 @dataclass(frozen=True)
 class IndicatorsProfile:
     """v1.10: dynamic measurements computed lazily by indicators.
@@ -137,11 +160,20 @@ class DataProfile:
         clause turns this from a noisy false-positive into a precise signal
         for the genuinely-degenerate single-column case.
         """
-        if self.n_rows == 0:
+        if self.red_reason() is not None:
             return HealthVerdict.RED
         if self.n_cols == 1:
             return HealthVerdict.YELLOW
         return HealthVerdict.GREEN
+
+    def red_reason(self) -> str | None:
+        """See `ClusterProfile.red_reason`. `data_empty` is deliberately listed
+        as UNACTIONABLE by the coverage gate rather than as a hole: no config
+        change fixes an empty frame, which is the same argument this class's
+        `health` docstring makes for dropping its uniform-types clause."""
+        if self.n_rows == 0:
+            return "data_empty"
+        return None
 
 
 @dataclass(frozen=True)
@@ -216,6 +248,19 @@ class FieldStats:
 class MatchkeyProfile:
     _version: int = 1
     per_field: dict[str, FieldStats] = field(default_factory=dict)
+
+    def red_reason(self, n_full_rows: int | None = None) -> str | None:
+        """See `ClusterProfile.red_reason`.
+
+        NOT derived-from by `health` here: this profile computes a per-field max
+        severity across YELLOW and RED, so a top-of-function RED short-circuit
+        would change its behaviour. `tests/test_red_reason.py` asserts the two
+        agree instead.
+        """
+        for fs in self.per_field.values():
+            if fs.post_transform_cardinality_ratio == 0.0:
+                return "matchkey_collapsed_field"
+        return None
 
     def health(self, n_full_rows: int | None = None) -> HealthVerdict:
         """RED if any field collapses to a single value (no discrimination).
@@ -379,10 +424,24 @@ class BlockingProfile:
         biggest = self.block_sizes_max * (self.block_sizes_max - 1) // 2
         return biggest / self.total_comparisons
 
+    def red_reason(self, n_rows: int) -> str | None:
+        """See `ClusterProfile.red_reason`. `n_rows` is accepted for signature
+        stability with the `health` it backs; the skew bar is relative to
+        `n_blocks`, not to row count."""
+        if self.n_blocks == 0:
+            return "blocking_no_blocks"
+        skew_bar = max(_LARGEST_BLOCK_PAIR_SHARE_RED,
+                       _LARGEST_BLOCK_FAIR_SHARE_MULTIPLE / self.n_blocks)
+        if self.largest_block_pair_share > skew_bar:
+            return "blocking_skewed"
+        if self.reduction_ratio < 0.5:
+            return "blocking_too_coarse"
+        return None
+
     def health(self, n_rows: int) -> HealthVerdict:
         # `n_rows` is retained for signature stability with ClusterProfile.health
         # and the existing call sites; the skew rule below no longer needs it.
-        if self.n_blocks == 0:
+        if self.red_reason(n_rows) is not None:
             return HealthVerdict.RED
         # Skew is WORK CONCENTRATION, not a size percentile. The previous rule
         # -- `block_sizes_p99 > 10 * (n_rows / n_blocks)` -- divided a tail
@@ -401,12 +460,6 @@ class BlockingProfile:
         # where a 1/n_blocks share is simply what having few blocks looks like.
         # It costs no coverage: at small n_blocks a dominating block has to hold
         # most of the rows, which craters reduction_ratio below.
-        skew_bar = max(_LARGEST_BLOCK_PAIR_SHARE_RED,
-                       _LARGEST_BLOCK_FAIR_SHARE_MULTIPLE / self.n_blocks)
-        if self.largest_block_pair_share > skew_bar:
-            return HealthVerdict.RED
-        if self.reduction_ratio < 0.5:
-            return HealthVerdict.RED
         if self.singleton_block_count / self.n_blocks > 0.5:
             return HealthVerdict.YELLOW
         return HealthVerdict.GREEN
@@ -492,17 +545,24 @@ class ScoringProfile:
     # read as "nothing matched".
     admitted_fraction: float | None = None
 
-    def health(self) -> HealthVerdict:
-        # No candidates compared and no pairs scored → RED (nothing happened)
+    def red_reason(self) -> str | None:
+        """See `ClusterProfile.red_reason`. Three distinct conditions across
+        four branches -- the two `mass_above_threshold == 0.0` branches differ
+        only in whether the route counted candidates, and name the same
+        pathology."""
+        # Nothing happened at all.
         if self.candidates_compared == 0 and self.n_pairs_scored == 0:
-            return HealthVerdict.RED
-        # Candidates were compared but nothing reached threshold → still RED
-        # (rule_no_matches handles the "wrong threshold" case)
-        if self.mass_above_threshold == 0.0 and self.candidates_compared > 0:
-            return HealthVerdict.RED
+            return "scoring_no_candidates"
+        # Candidates were compared but nothing reached threshold
+        # (rule_no_matches handles the "wrong threshold" case).
         if self.mass_above_threshold == 0.0:
-            return HealthVerdict.RED
+            return "scoring_nothing_above_threshold"
         if self.dip_statistic < 0.005 and self.n_pairs_scored >= _MIN_DIP_SUPPORT:
+            return "scoring_unimodal"
+        return None
+
+    def health(self) -> HealthVerdict:
+        if self.red_reason() is not None:
             return HealthVerdict.RED
         # YELLOW only when the borderline band outweighs the above-threshold
         # tail. The legacy `mass_in_borderline > 0.3` rule fired YELLOW on any
@@ -552,10 +612,21 @@ class ClusterProfile:
     bridge_edge_count: int = 0
     measured_bridge_risk: float | None = None
 
+    def red_reason(self, n_rows: int) -> str | None:
+        """The named RED condition, or None.
+
+        Single source of truth for `health`'s RED branches, so a new one cannot
+        be added without naming it -- and `tests/test_rule_action_coverage.py`
+        keys on the name to assert some rule can answer it.
+        """
+        if n_rows > 0 and self.cluster_size_max > _GIANT_CLUSTER_FRACTION * n_rows:
+            return "cluster_giant"
+        if self.transitivity_rate < _MIN_TRANSITIVITY:
+            return "cluster_low_transitivity"
+        return None
+
     def health(self, n_rows: int) -> HealthVerdict:
-        if n_rows > 0 and self.cluster_size_max > 0.1 * n_rows:
-            return HealthVerdict.RED
-        if self.transitivity_rate < 0.85:
+        if self.red_reason(n_rows) is not None:
             return HealthVerdict.RED
         if self.oversized_cluster_count > 0:
             return HealthVerdict.YELLOW

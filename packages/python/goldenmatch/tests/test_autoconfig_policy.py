@@ -398,7 +398,9 @@ def _transitivity_profile(rate: float, threshold_pairs: int = 500) -> Complexity
     )
 
 
-def _history_where_the_rule_already_fired(prev_rate: float) -> RunHistory:
+def _history_where_the_rule_already_fired(
+    prev_rate: float, current_rate: float
+) -> RunHistory:
     """One prior iteration that applied `low_transitivity` and observed
     `prev_rate`, followed by the current (not yet decided) entry."""
     from goldenmatch.core.autoconfig_history import HistoryEntry
@@ -411,8 +413,23 @@ def _history_where_the_rule_already_fired(prev_rate: float) -> RunHistory:
             rule_name="low_transitivity",
             rationale=f"transitivity={prev_rate:.2f} < 0.85; lowering threshold",
             config_diff={"matchkeys[0].threshold": 0.75},
+            # The rule declares this on its real decisions (#2717); the generic
+            # `rule_effect_was_negative` reads a missing prediction as "no
+            # evidence", so a fixture without it would silently stop exercising
+            # the guard.
+            predicts="cluster.transitivity_rate",
+            predicts_direction="up",
         ),
         error=None, wall_clock_ms=1,
+    ))
+    # The controller APPENDS the current iteration's entry (decision=None)
+    # BEFORE calling policy.propose, so `history.entries[-1].profile` is the
+    # profile the rule is reacting to. `rule_effect_was_negative` compares
+    # against that entry, so a fixture that omits it makes before and after the
+    # same object and every nudge look inert.
+    history.entries.append(HistoryEntry(
+        iteration=1, config=None, profile=_transitivity_profile(current_rate),
+        decision=None, error=None, wall_clock_ms=1,
     ))
     return history
 
@@ -434,8 +451,8 @@ def test_rule_low_transitivity_declines_when_its_last_nudge_did_not_help():
     its rationale, so every fire looks new.
     """
     cfg = _config_with_blocking(threshold=0.8)
-    history = _history_where_the_rule_already_fired(prev_rate=0.20)
     # Transitivity went DOWN after the previous nudge.
+    history = _history_where_the_rule_already_fired(prev_rate=0.20, current_rate=0.138)
     out = rule_low_transitivity(_transitivity_profile(0.138), cfg, history)
     assert out is None, "the rule re-applied a nudge its own history shows is inert"
 
@@ -445,7 +462,7 @@ def test_rule_low_transitivity_declines_when_its_last_nudge_barely_moved_it():
     measured run-to-run drift is ~0.003-0.005 on the same config. A move
     inside that band is not evidence the lever works."""
     cfg = _config_with_blocking(threshold=0.8)
-    history = _history_where_the_rule_already_fired(prev_rate=0.200)
+    history = _history_where_the_rule_already_fired(prev_rate=0.200, current_rate=0.204)
     out = rule_low_transitivity(_transitivity_profile(0.204), cfg, history)
     assert out is None
 
@@ -453,7 +470,7 @@ def test_rule_low_transitivity_declines_when_its_last_nudge_barely_moved_it():
 def test_rule_low_transitivity_keeps_going_when_the_nudge_is_working():
     """The guard must not disable the rule where it earns its place."""
     cfg = _config_with_splitting_already_on(threshold=0.8)
-    history = _history_where_the_rule_already_fired(prev_rate=0.20)
+    history = _history_where_the_rule_already_fired(prev_rate=0.20, current_rate=0.55)
     out = rule_low_transitivity(_transitivity_profile(0.55), cfg, history)
     assert out is not None
     new_cfg, _ = out
@@ -594,7 +611,12 @@ def test_default_rules_list_has_five_entries():
     # Updated to 10: rule_uniform_heavy_blocking added (Fix 2) + rule_blocking_key_swap reordered (Fix 1)
     # Updated to 13: Phase 5 added rule_corruption_normalize, rule_cross_blocking_disagreement,
     # rule_sparse_match_expand (v1.10)
-    assert len(DEFAULT_RULES) == 17  # v1.20.x #124/#458: demote_clustered_identity removed from rotation; #491 added select_probabilistic_matchkey; #1319 added precision_anchor_threshold_raise
+    # 19 as of #2717's rule_cluster_giant + rule_matchkey_collapsed_field. This assertion is duplicated six times
+    # in this file and the test NAMES around it (six/seven/nine/ten entries) are
+    # all stale -- every rule addition bumped the number and left the names
+    # behind. Renamed to something that cannot go stale rather than adding a
+    # seventh wrong name.
+    assert len(DEFAULT_RULES) == 19
 
 
 def test_heuristic_policy_with_default_rules_fires_on_red_blocking():
@@ -781,7 +803,7 @@ def test_rule_singleton_trap_returns_none_when_no_text_field_in_matchkey():
     assert out is None  # no text field → can't target first_token
 
 
-def test_default_rules_now_has_six_entries():
+def test_default_rules_count_is_pinned_a():
     """Singleton-trap rule is added to DEFAULT_RULES.
     Updated to 7 after rule_blocking_key_swap was added (2026-05-07).
     Updated to 10 after rule_enable_llm_scorer was added (2026-05-07).
@@ -789,7 +811,12 @@ def test_default_rules_now_has_six_entries():
     Updated to 10: rule_uniform_heavy_blocking added (Fix 2) + rule_blocking_key_swap reordered (Fix 1).
     Updated to 13: Phase 5 added 3 new rules (v1.10)."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    assert len(DEFAULT_RULES) == 17  # v1.20.x #124/#458: demote_clustered_identity removed from rotation; #491 added select_probabilistic_matchkey; #1319 added precision_anchor_threshold_raise
+    # 19 as of #2717's rule_cluster_giant + rule_matchkey_collapsed_field. This assertion is duplicated six times
+    # in this file and the test NAMES around it (six/seven/nine/ten entries) are
+    # all stale -- every rule addition bumped the number and left the names
+    # behind. Renamed to something that cannot go stale rather than adding a
+    # seventh wrong name.
+    assert len(DEFAULT_RULES) == 19
 
 
 def test_singleton_trap_runs_before_blocking_too_coarse():
@@ -998,14 +1025,19 @@ def test_rule_key_swap_returns_none_when_no_text_field_in_matchkey():
     assert out is None
 
 
-def test_default_rules_now_has_seven_entries():
+def test_default_rules_count_is_pinned_b():
     """Adding rule_blocking_key_swap brings the count to 7.
     Updated to 10 after rule_enable_llm_scorer was added (2026-05-07).
     Reverted to 9: rule_enable_llm_scorer moved to post-iteration decoration.
     Updated to 10: rule_uniform_heavy_blocking added (Fix 2) + rule_blocking_key_swap reordered (Fix 1).
     Updated to 13: Phase 5 added 3 new rules (v1.10)."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    assert len(DEFAULT_RULES) == 17  # v1.20.x #124/#458: demote_clustered_identity removed from rotation; #491 added select_probabilistic_matchkey; #1319 added precision_anchor_threshold_raise
+    # 19 as of #2717's rule_cluster_giant + rule_matchkey_collapsed_field. This assertion is duplicated six times
+    # in this file and the test NAMES around it (six/seven/nine/ten entries) are
+    # all stale -- every rule addition bumped the number and left the names
+    # behind. Renamed to something that cannot go stale rather than adding a
+    # seventh wrong name.
+    assert len(DEFAULT_RULES) == 19
 
 
 def test_rule_key_swap_is_before_rule_no_matches():
@@ -1322,14 +1354,19 @@ def test_rule_null_heavy_does_not_fire_on_low_null_field():
     assert out is None
 
 
-def test_default_rules_now_has_nine_entries():
+def test_default_rules_count_is_pinned_c():
     """Adding rule_blocking_field_null_heavy and rule_recall_gap_suspected brought the count to 9.
     Updated to 10: rule_uniform_heavy_blocking added (Fix 2) + rule_blocking_key_swap reordered (Fix 1).
     (rule_enable_llm_scorer was moved out of DEFAULT_RULES into
     AutoConfigController._maybe_decorate_with_llm_scorer post-iteration decoration.)
     Updated to 13: Phase 5 added 3 new rules (v1.10)."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    assert len(DEFAULT_RULES) == 17  # v1.20.x #124/#458: demote_clustered_identity removed from rotation; #491 added select_probabilistic_matchkey; #1319 added precision_anchor_threshold_raise
+    # 19 as of #2717's rule_cluster_giant + rule_matchkey_collapsed_field. This assertion is duplicated six times
+    # in this file and the test NAMES around it (six/seven/nine/ten entries) are
+    # all stale -- every rule addition bumped the number and left the names
+    # behind. Renamed to something that cannot go stale rather than adding a
+    # seventh wrong name.
+    assert len(DEFAULT_RULES) == 19
 
 
 def test_null_heavy_runs_before_no_matches_and_recall_gap_runs_last():
@@ -1463,14 +1500,19 @@ def test_rule_enable_llm_scorer_does_not_fire_when_already_enabled(monkeypatch):
     assert out is None
 
 
-def test_default_rules_now_has_ten_entries():
+def test_default_rules_count_is_pinned_d():
     """rule_uniform_heavy_blocking was added (Fix 2) and rule_blocking_key_swap
     was reordered (Fix 1), bringing the count to 10.
     (rule_enable_llm_scorer remains outside DEFAULT_RULES as post-iteration decoration.)
     Updated to 13: Phase 5 added rule_corruption_normalize, rule_cross_blocking_disagreement,
     rule_sparse_match_expand (v1.10)."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    assert len(DEFAULT_RULES) == 17  # v1.20.x #124/#458: demote_clustered_identity removed from rotation; #491 added select_probabilistic_matchkey; #1319 added precision_anchor_threshold_raise
+    # 19 as of #2717's rule_cluster_giant + rule_matchkey_collapsed_field. This assertion is duplicated six times
+    # in this file and the test NAMES around it (six/seven/nine/ten entries) are
+    # all stale -- every rule addition bumped the number and left the names
+    # behind. Renamed to something that cannot go stale rather than adding a
+    # seventh wrong name.
+    assert len(DEFAULT_RULES) == 19
 
 
 def test_rule_enable_llm_scorer_not_in_default_rules():
@@ -1714,11 +1756,16 @@ def test_default_rules_uniform_heavy_after_blocking_too_coarse():
     assert idx_too_coarse < idx_uniform
 
 
-def test_default_rules_now_has_ten_entries_final():
+def test_default_rules_count_is_pinned_e():
     """Fix 1 (reorder) + Fix 2 (new rule) → 10 rules total.
     Updated to 13: Phase 5 added 3 new indicator-aware rules (v1.10)."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    assert len(DEFAULT_RULES) == 17  # v1.20.x #124/#458: demote_clustered_identity removed from rotation; #491 added select_probabilistic_matchkey; #1319 added precision_anchor_threshold_raise
+    # 19 as of #2717's rule_cluster_giant + rule_matchkey_collapsed_field. This assertion is duplicated six times
+    # in this file and the test NAMES around it (six/seven/nine/ten entries) are
+    # all stale -- every rule addition bumped the number and left the names
+    # behind. Renamed to something that cannot go stale rather than adding a
+    # seventh wrong name.
+    assert len(DEFAULT_RULES) == 19
 
 
 # ============================================================

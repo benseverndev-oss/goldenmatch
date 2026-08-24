@@ -10,7 +10,8 @@ Spec: docs/superpowers/specs/2026-05-06-autoconfig-introspective-controller-desi
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, TypeVar
 
 logger = logging.getLogger(__name__)
 
@@ -19,11 +20,39 @@ from goldenmatch.config.schemas import (
     GoldenMatchConfig,
     MatchkeyConfig,
 )
-from goldenmatch.core.autoconfig_history import PolicyDecision, RunHistory
+from goldenmatch.core.autoconfig_history import (
+    PolicyDecision,
+    RunHistory,
+    rule_effect_was_negative,
+)
 from goldenmatch.core.complexity_profile import ComplexityProfile
 
 if TYPE_CHECKING:
     from goldenmatch.core.autoconfig_controller import IndicatorContext
+
+
+#: A rule callable. Bound so `targets` returns the SAME type it was given.
+_RuleFn = TypeVar("_RuleFn", bound=Callable[..., Any])
+
+
+def targets(*reasons: str) -> Callable[[_RuleFn], _RuleFn]:
+    """Declare which RED conditions this rule answers.
+
+    Reasons come from `complexity_profile.RED_REASONS`. The point is coverage,
+    not documentation: `tests/test_rule_action_coverage.py` asserts every
+    reachable RED condition is claimed by at least one rule, so a new RED branch
+    with no action fails CI rather than producing a verdict the controller can
+    only report -- the shape #2717 hit three times.
+
+    Annotates in place and returns the SAME function object. It must not wrap:
+    `DEFAULT_RULES` holds function references and the policy compares identity.
+    """
+
+    def _decorate(fn: _RuleFn) -> _RuleFn:
+        fn.targets = reasons  # type: ignore[attr-defined]
+        return fn
+
+    return _decorate
 
 
 def _first_weighted_mk(cfg: GoldenMatchConfig) -> MatchkeyConfig | None:
@@ -197,6 +226,7 @@ def _blocking_recovery_target(
     return None
 
 
+@targets("scoring_no_candidates")
 def rule_blocking_singleton_trap(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
@@ -273,6 +303,7 @@ def rule_blocking_singleton_trap(
     return new_cfg, decision
 
 
+@targets("blocking_skewed", "blocking_too_coarse")
 def rule_blocking_too_coarse(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
@@ -309,6 +340,7 @@ def rule_blocking_too_coarse(
     return new_cfg, decision
 
 
+@targets("scoring_unimodal")
 def rule_unimodal_scoring(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
@@ -351,6 +383,7 @@ def rule_unimodal_scoring(
     return new_cfg, decision
 
 
+@targets("blocking_too_coarse")
 def rule_low_reduction_ratio(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
@@ -422,22 +455,83 @@ def rule_low_reduction_ratio(
 _TRANSITIVITY_PROGRESS_MARGIN = 0.01
 
 
-def _last_low_transitivity_rate(history: RunHistory) -> float | None:
-    """Transitivity observed when this rule last applied a nudge, if it has.
+#: Above this share of the frame, one cluster is a collapse rather than a merge.
+#: Mirrors the bar `ClusterProfile.red_reason` uses to raise `cluster_giant`.
+_GIANT_CLUSTER_FRACTION = 0.1
+_GIANT_THRESHOLD_STEP = 0.05
+_GIANT_THRESHOLD_CEILING = 0.95
 
-    Only this rule's OWN prior decisions count: another rule's change tells us
-    nothing about whether THIS lever moves THIS signal.
+
+@targets("cluster_giant")
+def rule_cluster_giant(
+    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
+    """Answer `ClusterProfile.red_reason() == "cluster_giant"`.
+
+    Before this, `rule_low_transitivity` was the ONLY rule reading
+    `profile.cluster`, and it returns None unless `transitivity_rate < 0.85`.
+    So a run where one cluster swallowed 10%+ of the data, with healthy
+    transitivity, produced no proposal at all: the controller reported RED and
+    had nothing to do about it.
+
+    Splitting is offered FIRST because it targets the pathology -- a giant
+    cluster is usually distinct entities chained through weak bridges, which is
+    exactly what `core/transitive_consistency.py` cuts. Raising the threshold is
+    the blunt fallback: it also drops true pairs, so it only runs once splitting
+    is already on and the cluster is still giant.
+
+    Offered ALONE, never both at once. Two changes in one iteration make the
+    next profile unattributable, which is the failure `rule_low_transitivity`
+    spent four iterations demonstrating (#2717).
     """
-    for entry in reversed(history.entries):
-        decision = entry.decision
-        if decision is None or decision.rule_name != "low_transitivity":
-            continue
-        if entry.profile is None:
-            return None
-        return float(entry.profile.cluster.transitivity_rate)
-    return None
+    n_rows = profile.data.n_rows
+    cp = profile.cluster
+    # n_rows <= 0 is `data_empty`'s business, and 0.1 * 0 would make any cluster
+    # look giant.
+    if n_rows <= 0 or cp.cluster_size_max <= _GIANT_CLUSTER_FRACTION * n_rows:
+        return None
+
+    from goldenmatch.config.schemas import ClusterConfig
+
+    cluster_cfg = getattr(current, "cluster", None)
+    if cluster_cfg is None or not getattr(cluster_cfg, "split_weak_bridges", False):
+        new_cluster = (
+            ClusterConfig(split_weak_bridges=True)
+            if cluster_cfg is None
+            else cluster_cfg.model_copy(update={"split_weak_bridges": True})
+        )
+        return current.model_copy(update={"cluster": new_cluster}), PolicyDecision(
+            rule_name="cluster_giant",
+            rationale=(
+                f"largest cluster {cp.cluster_size_max} is over "
+                f"{_GIANT_CLUSTER_FRACTION:.0%} of {n_rows} rows; splitting "
+                f"clusters held together by a weak transitive bridge"
+            ),
+            config_diff={"cluster.split_weak_bridges": True},
+        )
+
+    mk = _first_weighted_mk(current)
+    if mk is None or mk.threshold is None:
+        return None
+    new_threshold = min(_GIANT_THRESHOLD_CEILING, mk.threshold + _GIANT_THRESHOLD_STEP)
+    if new_threshold == mk.threshold:
+        return None
+    new_mk = mk.model_copy(update={"threshold": new_threshold})
+    new_cfg = current.model_copy(update={
+        "matchkeys": [new_mk if m is mk else m for m in (current.matchkeys or [])]
+    })
+    return new_cfg, PolicyDecision(
+        rule_name="cluster_giant",
+        rationale=(
+            f"largest cluster {cp.cluster_size_max} still over "
+            f"{_GIANT_CLUSTER_FRACTION:.0%} of {n_rows} rows with splitting on; "
+            f"raising threshold {mk.threshold:.2f} -> {new_threshold:.2f}"
+        ),
+        config_diff={"matchkeys[0].threshold": new_threshold},
+    )
 
 
+@targets("cluster_low_transitivity")
 def rule_low_transitivity(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
@@ -477,10 +571,8 @@ def rule_low_transitivity(
     #
     # Returning None lets the policy advance to the next rule rather than
     # ending the iteration, so this only ever removes a known-inert option.
-    previous_rate = _last_low_transitivity_rate(history)
-    if (
-        previous_rate is not None
-        and cp.transitivity_rate <= previous_rate + _TRANSITIVITY_PROGRESS_MARGIN
+    if rule_effect_was_negative(
+        history, "low_transitivity", margin=_TRANSITIVITY_PROGRESS_MARGIN
     ):
         return None
 
@@ -516,6 +608,8 @@ def rule_low_transitivity(
         )
         return current.model_copy(update={"cluster": _new_cluster}), PolicyDecision(
             rule_name="low_transitivity",
+            predicts="cluster.transitivity_rate",
+            predicts_direction="up",
             rationale=(
                 f"transitivity={cp.transitivity_rate:.2f} < 0.85; splitting "
                 f"clusters held together by a weak transitive bridge"
@@ -534,6 +628,8 @@ def rule_low_transitivity(
     new_cfg = current.model_copy(update={"matchkeys": new_matchkeys})
     decision = PolicyDecision(
         rule_name="low_transitivity",
+        predicts="cluster.transitivity_rate",
+        predicts_direction="up",
         rationale=f"transitivity={cp.transitivity_rate:.2f} < 0.85; "
                   f"lowering threshold {mk.threshold:.2f} → {new_threshold:.2f}",
         config_diff={"matchkeys[0].threshold": new_threshold},
@@ -541,6 +637,7 @@ def rule_low_transitivity(
     return new_cfg, decision
 
 
+@targets("scoring_nothing_above_threshold")
 def rule_no_matches(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
     ctx: IndicatorContext | None = None,
@@ -599,6 +696,7 @@ def rule_no_matches(
     return None
 
 
+@targets("scoring_nothing_above_threshold")
 def rule_blocking_key_swap(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
     ctx: IndicatorContext | None = None,
@@ -706,6 +804,7 @@ def rule_blocking_key_swap(
     return new_cfg, decision
 
 
+@targets("blocking_too_coarse")
 def rule_uniform_heavy_blocking(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
@@ -799,6 +898,7 @@ def rule_uniform_heavy_blocking(
     return new_cfg, decision
 
 
+@targets("blocking_no_blocks")
 def rule_blocking_field_null_heavy(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
@@ -870,6 +970,7 @@ _FUZZY_GRADED_SCORERS = frozenset({
 })
 
 
+@targets("scoring_nothing_above_threshold")
 def rule_select_probabilistic_matchkey(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
@@ -952,6 +1053,7 @@ def rule_select_probabilistic_matchkey(
     return new_cfg, decision
 
 
+@targets("scoring_no_candidates")
 def rule_recall_gap_suspected(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
@@ -1135,6 +1237,7 @@ def rule_enable_llm_scorer(
     return new_cfg, decision
 
 
+@targets("scoring_nothing_above_threshold")
 def rule_corruption_normalize(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
     ctx: IndicatorContext | None = None,
@@ -1169,6 +1272,7 @@ def rule_corruption_normalize(
     return new_cfg, decision
 
 
+@targets("scoring_no_candidates")
 def rule_cross_blocking_disagreement(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
     ctx: IndicatorContext | None = None,
@@ -1211,6 +1315,7 @@ def rule_cross_blocking_disagreement(
     return new_cfg, decision
 
 
+@targets("scoring_no_candidates")
 def rule_sparse_match_expand(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
     ctx: IndicatorContext | None = None,
@@ -1250,6 +1355,54 @@ _DEMOTE_CARD_THRESHOLD = 0.99
 _DEMOTE_MIN_REMAINING_FIELDS = 2
 
 
+@targets("matchkey_collapsed_field")
+def rule_matchkey_collapsed_field(
+    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
+    """Answer `MatchkeyProfile.red_reason() == "matchkey_collapsed_field"`.
+
+    A field whose post-transform cardinality is 0.0 has ONE distinct value, so
+    every pair scores identically on it: it carries weight and contributes no
+    discrimination, diluting the fields that do.
+
+    Both rules that read `profile.matchkey.per_field` before this one --
+    `rule_unimodal_scoring` and `rule_matchkey_demote_high_cardinality_field` --
+    sort by HIGHEST cardinality. Neither handles this end, so the RED verdict was
+    reported and never acted on.
+
+    Declines rather than emptying the matchkey: a matchkey with no fields scores
+    nothing, which is worse than a weak field, and returning None lets the policy
+    advance to a rule that can help.
+    """
+    mk = _first_weighted_mk(current)
+    if mk is None or not mk.fields:
+        return None
+    collapsed = {
+        name
+        for name, fs in profile.matchkey.per_field.items()
+        if fs.post_transform_cardinality_ratio == 0.0
+    }
+    if not collapsed:
+        return None
+    keep = [f for f in mk.fields if f.field not in collapsed]
+    if len(keep) == len(mk.fields) or not keep:
+        return None
+    dropped = sorted({f.field for f in mk.fields if f.field in collapsed})
+    new_mk = mk.model_copy(update={"fields": keep})
+    new_cfg = current.model_copy(update={
+        "matchkeys": [new_mk if m is mk else m for m in (current.matchkeys or [])]
+    })
+    return new_cfg, PolicyDecision(
+        rule_name="matchkey_collapsed_field",
+        rationale=(
+            f"matchkey field(s) {dropped} hold a single distinct value after "
+            f"transforms, carrying weight with no discrimination; dropping them"
+        ),
+        config_diff={"matchkeys[0].fields": [f.field for f in keep]},
+    )
+
+
+@targets("blocking_no_blocks")
 def rule_matchkey_demote_high_cardinality_field(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
@@ -1394,6 +1547,7 @@ def precision_anchor_would_fire(
     return _precision_anchor_trigger(cfg, profile, ctx) is not None
 
 
+@targets("scoring_unimodal")
 def rule_precision_anchor_threshold_raise(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
     ctx: IndicatorContext | None = None,
@@ -1484,6 +1638,7 @@ def rule_precision_anchor_threshold_raise(
     return new_cfg, decision
 
 
+@targets("blocking_skewed")
 def rule_blocking_adaptive_on_p99_outlier(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
@@ -1555,8 +1710,10 @@ DEFAULT_RULES = [
     rule_unimodal_scoring,                 # 9  tuning: dip statistic low
     rule_low_reduction_ratio,              # 10 structural: too-tight blocking
     rule_cross_blocking_disagreement,      # 11 NEW v1.10: multi-pass on low cross-blocking overlap
+    rule_cluster_giant,                    # 11b cluster: one cluster swallowed the frame
     rule_low_transitivity,                 # 12 tuning: transitivity low
     rule_no_matches,                       # 13 tuning: nothing matches
+    rule_matchkey_collapsed_field,         # 13b matchkey: a field collapsed to one value
     rule_matchkey_demote_high_cardinality_field,  # 14 NEW 2026-05-29: matchkey YELLOW from uniquely-identifying field
     rule_select_probabilistic_matchkey,    # NEW #491: wide fuzzy-only weighted mk + recall-limited + no exact anchor -> probabilistic
     rule_recall_gap_suspected,             # 15 tuning: random pair probe high OR over-tight signature (kept after the structural rules; only the precision-raise + sparse-expand threshold rules follow)
