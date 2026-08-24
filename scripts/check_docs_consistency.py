@@ -125,45 +125,19 @@ def run_subgate(res: Result, name: str, argv: list[str]) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Roster derivation
+# Roster derivation -- moved to scripts/config_matrix/roster.py so the generators
+# and the stdlib-only gates share ONE definition instead of six hardcoded copies.
 # --------------------------------------------------------------------------- #
-def _publish_stems() -> list[str]:
-    return sorted(
-        p.name[len("publish-"):-len(".yml")]
-        for p in (ROOT / ".github" / "workflows").glob("publish-*.yml")
-    )
-
-
-# Stems that are NOT a per-distribution PyPI/npm publisher.
-_NON_DIST_STEMS = {"containers", "mcp"}
-
-
-def derive_roster() -> tuple[list[str], list[str], list[str]]:
-    """Return (core_pypi, ext_pypi, npm) derived from publish-*.yml callers.
-
-    ``core_pypi``  -- publishers backed by a ``packages/python/<stem>`` directory
-                      (the distribution packages that get a README row + nav group).
-    ``ext_pypi``   -- the remaining PyPI publishers (SQL / rust-extension extras
-                      like goldenmatch-duckdb / -embed / -pg). Reported, not gated
-                      structurally -- they live inside parent docs, not their own
-                      nav group.
-    ``npm``        -- ``publish-<pkg>-js.yml`` stems.
-    """
-    core: list[str] = []
-    ext: list[str] = []
-    npm: list[str] = []
-    for stem in _publish_stems():
-        if stem in _NON_DIST_STEMS:
-            continue
-        if stem.endswith("-native"):
-            continue  # compiled extras tracked separately; not a doc-nav surface
-        if stem.endswith("-js"):
-            npm.append(stem[: -len("-js")])
-        elif (PY_PKGS / stem).is_dir():
-            core.append(stem)
-        else:
-            ext.append(stem)
-    return sorted(set(core)), sorted(set(ext)), sorted(set(npm))
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+from config_matrix.roster import (  # noqa: E402
+    DOCS_DEFERRED,
+    DOCUMENTED,
+    NON_DIST_STEMS,
+    README_DEFERRED,
+    derive_roster,
+    publish_stems,
+)
 
 
 def _badge_tokens() -> set[str] | None:
@@ -261,16 +235,33 @@ def check_roster_matrix(res: Result) -> None:
             else "",
         )
 
-    # README presence: every CORE roster package name must appear in README.md.
-    # (Extension extras goldenmatch-{duckdb,embed,pg} are reported below, not gated
-    #  -- pg ships as a GitHub-release tarball and isn't an overview-table row.)
+    # README presence: every CORE roster package must be LINKED from the root
+    # README's package-overview table -- or carry a declared deferral.
+    #
+    # This was `pkg.lower() in readme.lower()` over the whole file, which every
+    # package passes on an incidental mention ("goldenmatch" appears scores of
+    # times), so the check could not fail for the very packages it was meant to
+    # cover. Requiring the `packages/python/<pkg>/README.md` link is the assertion
+    # the substring test was reaching for.
     readme = (ROOT / "README.md").read_text(encoding="utf-8").lower()
-    missing_readme = [p for p in core if p.lower() not in readme]
+    linked = {p for p in core if f"packages/python/{p}/readme.md" in readme}
+    undeclared = sorted(set(core) - linked - set(README_DEFERRED))
+    stale_readme_defer = sorted(linked & set(README_DEFERRED))
     res.record(
         "roster -> README.md presence",
-        not missing_readme,
-        f"missing from README package overview: {missing_readme}" if missing_readme else "",
+        not undeclared and not stale_readme_defer,
+        "; ".join(filter(None, [
+            f"published but not linked from the README package table and not declared "
+            f"in roster.README_DEFERRED: {undeclared}" if undeclared else "",
+            f"declared in roster.README_DEFERRED but actually linked (drop the "
+            f"deferral): {stale_readme_defer}" if stale_readme_defer else "",
+        ])),
     )
+    if README_DEFERRED:
+        res.record_info(
+            "README rows deferred by declaration",
+            f"{sorted(README_DEFERRED)} -- see roster.README_DEFERRED for the reason",
+        )
     ext_missing = [p for p in ext if p.lower() not in readme]
     if ext_missing:
         res.record_info(
@@ -278,8 +269,13 @@ def check_roster_matrix(res: Result) -> None:
             f"extension distributions not named in README: {ext_missing}",
         )
 
-    # docs-nav presence: roster packages that have a docs-site/<pkg>/ directory
-    # must appear in the docs.json navigation (group name or page path).
+    # docs-section presence: every CORE roster package owns a docs-site/<pkg>/
+    # section that the nav references -- or carries a declared deferral.
+    #
+    # The old rule read "every roster package that HAS a docs-site/<pkg>/ dir must
+    # appear in the nav", which a package with NO directory passes trivially. Five
+    # published packages therefore had no docs at all and the check reported PASS.
+    # Inverted, the absence has to be written down instead of being silence.
     docs = load_docs_json()
     if docs is None:
         res.record("roster -> docs.json nav presence", False, "docs-site/docs.json missing")
@@ -289,14 +285,37 @@ def check_roster_matrix(res: Result) -> None:
     _iter_nav_groups(docs.get("navigation"), groups)
     _iter_nav_pages(docs.get("navigation"), pages)
     nav_blob = " ".join(g.lower() for g in groups) + " " + " ".join(p.lower() for p in pages)
-    have_docs_dir = [p for p in core if (DOCS_SITE / p).is_dir()]
-    missing_nav = [p for p in have_docs_dir if p.lower() not in nav_blob]
+
+    has_section = {p for p in core if (DOCS_SITE / p).is_dir() and p.lower() in nav_blob}
+    dir_no_nav = sorted(p for p in core
+                        if (DOCS_SITE / p).is_dir() and p.lower() not in nav_blob)
+    no_docs_undeclared = sorted(set(core) - has_section - set(dir_no_nav) - set(DOCS_DEFERRED))
+    stale_docs_defer = sorted(has_section & set(DOCS_DEFERRED))
     res.record(
-        "roster -> docs.json nav presence",
-        not missing_nav,
-        f"package has docs-site/<pkg>/ dir but no nav reference: {missing_nav}"
-        if missing_nav
-        else "",
+        "roster -> docs section + nav presence",
+        not dir_no_nav and not no_docs_undeclared and not stale_docs_defer,
+        "; ".join(filter(None, [
+            f"has docs-site/<pkg>/ but no nav reference: {dir_no_nav}" if dir_no_nav else "",
+            f"published with no docs section and not declared in roster.DOCS_DEFERRED: "
+            f"{no_docs_undeclared}" if no_docs_undeclared else "",
+            f"declared in roster.DOCS_DEFERRED but actually documented (drop the "
+            f"deferral): {stale_docs_defer}" if stale_docs_defer else "",
+        ])),
+    )
+    if DOCS_DEFERRED:
+        res.record_info(
+            "docs sections deferred by declaration",
+            f"{sorted(DOCS_DEFERRED)} -- see roster.DOCS_DEFERRED for the reason",
+        )
+
+    # The documented roster must be a subset of what is actually published: a
+    # PackageSpec for a package no publisher ships is a docs section for a
+    # distribution nobody can install.
+    phantom = sorted(set(DOCUMENTED) - set(core))
+    res.record(
+        "documented roster is published",
+        not phantom,
+        f"REGISTRY documents package(s) with no publish-*.yml: {phantom}" if phantom else "",
     )
 
 
@@ -529,9 +548,9 @@ def check_aggregate_badges(res: Result) -> None:
 
     # (a) Bidirectional publisher <-> badge-roster coverage. A new publish-*.yml
     #     added without updating the badge totals (or vice versa) is real drift.
-    pypi_pub = {s for s in _publish_stems()
-                if s not in _NON_DIST_STEMS and not s.endswith("-js")}
-    npm_pub = {s[: -len("-js")] for s in _publish_stems() if s.endswith("-js")}
+    pypi_pub = {s for s in publish_stems()
+                if s not in NON_DIST_STEMS and not s.endswith("-js")}
+    npm_pub = {s[: -len("-js")] for s in publish_stems() if s.endswith("-js")}
     pypi_drift = (pypi_pub - _PYPI_PUBLISH_BADGE_EXCEPTIONS) ^ pypi_set
     res.record(
         "PyPI publishers <-> badge PYPI_PACKAGES",

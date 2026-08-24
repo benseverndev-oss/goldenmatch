@@ -501,6 +501,9 @@ config_matrix:
   - 'scripts/agent_codemap.py'
   - 'scripts/test_agent_codemap.py'
   - 'docs/agent-codemap.json'
+  # Roster single-sourcing gate (scripts/test_roster.py) runs in this job.
+  - 'scripts/test_roster.py'
+  - 'scripts/config_matrix/roster.py'
   # Repo-level suite surface matrix: reads the parity manifests, the per-package
   # counts (packages/python/** above), and the recipes pages, so any of those can
   # move the cross-package view -> re-run its --check.
@@ -949,6 +952,12 @@ docs:
   - 'scripts/check_docs_consistency.py'
   - 'scripts/check_docs_links.py'
   - 'scripts/check_docs_sections.py'
+  # The canonical package roster both of those gates now derive from (it
+  # replaced six hardcoded copies). Listed narrowly rather than as
+  # scripts/config_matrix/** so a render.py edit does not drag in the
+  # 8-minute Mintlify render job.
+  - 'scripts/config_matrix/roster.py'
+  - 'scripts/config_matrix/registry.py'
   # native.mdx generation moved OUT of check_docs_consistency: regen_docs.py owns
   # gen_native_docs as a --write step, and the `docs_regen` filter already covers
   # both the script (scripts/gen_*.py) and the loaders (packages/python/**). The

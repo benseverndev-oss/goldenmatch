@@ -83,6 +83,7 @@ REQUIRED: dict[str, list[tuple[str, str]]] = {
         ("scripts/config_matrix/render.py", "renders every config-matrix.mdx block"),
         ("scripts/config_matrix/manifest.py", "renders docs/agent-manifest.json"),
         ("scripts/config_matrix/registry.py", "declares what each package renders"),
+        ("scripts/config_matrix/roster.py", "DOCUMENTED drives every generator's package list"),
         ("scripts/gen_api_surface.py", "renders the api-surface capability matrix"),
         ("scripts/agent_codemap.py", "renders docs/agent-codemap.json"),
         ("packages/rust/extensions/native/src/lib.rs", "the <PREFIX>_* env scan reads Rust"),
@@ -105,6 +106,8 @@ REQUIRED: dict[str, list[tuple[str, str]]] = {
         ("packages/python/goldenmatch/CHANGELOG.md", "changelog<->version lockstep"),
         ("packages/python/goldenmatch/goldenmatch/llms.txt", "agent-surface pointers"),
         ("scripts/check_docs_consistency.py", "self-test"),
+        ("scripts/config_matrix/roster.py",
+         "the canonical roster both docs gates derive their package list from"),
     ],
 }
 

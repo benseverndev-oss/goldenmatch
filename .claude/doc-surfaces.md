@@ -81,6 +81,22 @@ thing to grep for.
 Three tiers of automation keep these surfaces in lockstep as the repo advances.
 All scripts are stdlib-only and anchored to the repo root via `Path(__file__)`.
 
+- **The canonical roster - `scripts/config_matrix/roster.py`.** One definition of
+  "the suite packages", consumed by every generator and doc gate. Three distinct
+  notions, not interchangeable: `DOCUMENTED` (packages owning a
+  `docs-site/<pkg>/` section + generated config matrix, derived from `REGISTRY` --
+  so **adding a `PackageSpec` is the single edit that onboards a package**);
+  `derive_roster()` (every distribution the repo actually publishes, read off the
+  `publish-*.yml` callers); and the two deferral maps `DOCS_DEFERRED` /
+  `README_DEFERRED` (published packages knowingly without a docs section / README
+  row, each with a reason). The gap between the first two must be fully covered by
+  the deferral maps or `check_docs_consistency` FAILS -- and a deferral for a
+  package that *does* have the surface fails too, so the maps cannot go stale in
+  either direction. Row ORDER stays editorial and local to each generator:
+  `REGISTRY` order is baked into the agent manifests, so deriving table order from
+  it would reshuffle published pages on an unrelated registry edit. Pure stdlib on
+  purpose -- the gates that consume it run on a bare `setup-python` runner.
+
 - **Tier 0 - `scripts/regen_docs.py`** (`make docs` / `just docs`; the
   `docs_regen` REQUIRED CI job runs `--check`). The single command that
   REGENERATES every derived artifact: the six config matrices, the agent manifest

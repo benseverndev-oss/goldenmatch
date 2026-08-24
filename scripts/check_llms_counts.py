@@ -45,7 +45,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PKG_DIR = ROOT / "packages" / "python"
-PKGS = ["goldenmatch", "goldencheck", "goldenflow", "goldenpipe", "goldenanalysis", "infermap"]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+# Canonical roster -- see scripts/config_matrix/roster.py. Previously this list
+# was hardcoded here (one of six verbatim copies across the doc tooling).
+from config_matrix.roster import DOCUMENTED  # noqa: E402
+
+PKGS = list(DOCUMENTED)
 
 _TOOLS = re.compile(r"(\d+)\s+tools\b")
 _EXPORTS = re.compile(r"~?(\d+)\s+exports\b")

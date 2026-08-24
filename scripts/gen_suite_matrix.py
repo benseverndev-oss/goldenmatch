@@ -35,7 +35,25 @@ ROOT = Path(__file__).resolve().parent.parent
 PAGE = ROOT / "docs-site" / "suite-matrix.mdx"
 PARITY = ROOT / "parity"
 PKG_DIR = ROOT / "packages" / "python"
-PKGS = ["goldenmatch", "goldencheck", "goldenflow", "goldenpipe", "goldenanalysis", "infermap"]
+# Canonical roster -- see scripts/config_matrix/roster.py. Membership is derived;
+# ROW ORDER is editorial and stays local. REGISTRY is ordered for its own reasons
+# (and that order is baked into the agent manifests), so deriving row order from it
+# would reshuffle these published tables whenever an unrelated registry edit moved
+# an entry. Roster = who is in the table; _ROW_ORDER = how the table reads.
+from config_matrix.roster import DOCUMENTED  # noqa: E402
+
+_ROW_ORDER = ("goldenmatch", "goldencheck", "goldenflow", "goldenpipe",
+              "goldenanalysis", "infermap")
+
+# A roster package with no row-order entry would silently vanish from the matrix.
+_missing = set(DOCUMENTED) - set(_ROW_ORDER)
+if _missing:
+    raise SystemExit(
+        f"gen_suite_matrix: roster package(s) {sorted(_missing)} are not in _ROW_ORDER. "
+        "Add them so they appear in the suite matrix."
+    )
+
+PKGS = [p for p in _ROW_ORDER if p in set(DOCUMENTED)]
 
 
 # --- Surface introspection. MCP + CLI counts come from the parity manifests
