@@ -2,6 +2,21 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-08-24 -- ADR 0063: generated API reference (Python static, REST OpenAPI, TS deferred)
+- Added **[ADR 0063](../decisions/0063-generated-api-reference.md)** + design
+  `docs/superpowers/specs/2026-08-24-generated-api-reference-design.md`. The derived-docs battery
+  covers capability surfaces exhaustively and the API not at all: **330 exported symbols** across the
+  six documented packages (202 of them goldenmatch's) with no generated reference, and three FastAPI
+  services with no committed OpenAPI spec -- `docs_render` runs `--disable-openapi` because nothing
+  feeds it. Decision: generate the Python side STATICALLY with `griffe` (no importing -- the
+  `gen_suite_matrix` lesson, where importing `<pkg>.mcp.server` needs the `[mcp]` extra and flaps
+  between a dev box and CI; at 330 symbols behind optional torch/aiohttp/ray/spark deps an
+  import-based generator inherits that trap everywhere); scope to `__all__`, one page per package,
+  driven by `config_matrix.roster.DOCUMENTED`, wired as a `regen_docs.py` WRITE step. REST: emit
+  OpenAPI from the apps and drop `--disable-openapi`. TypeScript: DEFERRED explicitly -- its public
+  surface is already gated cross-language by `parity/<pkg>.yaml` + `api_parity`. Four stages, with
+  the documented-symbol floor LAST (a ratchet on an unmeasured backlog is red on arrival).
+
 ## 2026-07-28 -- ADR 0048: own the string-matching primitives (goldenfuzz, goldenphonetic)
 - Added **[ADR 0048](../decisions/0048-own-string-matching-primitives.md)** recording the decision
   to OWN the two third-party string-matching deps as byte-identical, pyo3-free, published products:
