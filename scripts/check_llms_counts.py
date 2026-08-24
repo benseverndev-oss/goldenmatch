@@ -59,9 +59,33 @@ _SKILLS = re.compile(r"(\d+)\s+skills\b")
 _SUITE_TOTAL = re.compile(r"(\d+)\+?\s+tools across the suite")
 
 
-def mcp_tools(pkg: str) -> int | None:
+#: Returned by mcp_tools() for a package that ships no MCP server at all. Distinct
+#: from None, which means "it has one and it would not import".
+NO_MCP_SERVER = "absent"
+
+
+def mcp_tools(pkg: str) -> int | None | str:
+    """Tool count, ``None`` if unintrospectable, ``NO_MCP_SERVER`` if there is none.
+
+    The three-way return matters. This used to catch bare ``Exception`` and return
+    ``None`` for both "the [mcp] extra is missing so the import blew up" (a real
+    problem -- every count in that package's surfaces goes unchecked) and "this
+    package legitimately has no MCP server" (nothing to check, no problem). Since
+    an unintrospectable package now REFUSES the suite total, conflating them would
+    make the gate unusable the moment a package without an MCP server joins the
+    roster -- a types-only or meta-package, say. Same swallowed-error class as the
+    bug this refusal was added to fix, one level up.
+    """
     try:
         mod = importlib.import_module(f"{pkg}.mcp.server")
+    except ModuleNotFoundError as exc:
+        # Distinguish "no such module in this package" from "the module exists but
+        # one of ITS imports is missing" -- the latter is the broken-environment
+        # case and must stay loud.
+        missing = (exc.name or "")
+        if missing == f"{pkg}.mcp.server" or missing == f"{pkg}.mcp":
+            return NO_MCP_SERVER
+        return None
     except Exception:
         return None
     tools = getattr(mod, "TOOLS", None)
@@ -254,6 +278,8 @@ def run(write: bool) -> int:
         # broken value. The docstring promised UNVERIFIED here; only `skills`
         # implemented it.
         for surface, value in (("MCP tools", c["mcp"]), ("__all__ exports", c["exports"])):
+            if value is NO_MCP_SERVER:
+                continue  # ships no MCP server; nothing to verify, nothing broken
             if value is None:
                 unintrospectable.append(f"{pkg}: {surface}")
                 unverified.append(
@@ -261,7 +287,7 @@ def run(write: bool) -> int:
                     f"stated in {llms} and {readme} is UNCHECKED"
                 )
 
-        if c["mcp"] is not None:
+        if c["mcp"] is not None and c["mcp"] is not NO_MCP_SERVER:
             suite_total += c["mcp"]
             _exact_surface(llms, _TOOLS, c["mcp"], "tools", errors, edits, write)
             _exact_surface(readme, _TOOLS, c["mcp"], "tools", errors, edits, write)

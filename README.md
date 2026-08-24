@@ -210,6 +210,16 @@ flowchart LR
 
 > The deepest docs live in **[packages/python/goldenmatch/README.md](packages/python/goldenmatch/README.md)** (~1,300 lines: full feature list, CLI, architecture, benchmarks).
 
+### Shared components
+
+Not pipeline stages — the pieces the stages agree through, and the single front door
+an agent points at.
+
+| Package | What it is | Install |
+|---|---|---|
+| **[goldencheck-types](packages/python/goldencheck-types/README.md)** | Shared canonical field-type registry: one source of truth for what a field type *means*, across every package and both languages | `pip install goldencheck-types` · `npm i goldencheck-types` |
+| **[goldensuite-mcp](packages/python/goldensuite-mcp/README.md)** | One MCP server exposing every suite tool under a single endpoint (stdio or Streamable HTTP) | `pip install goldensuite-mcp` |
+
 ### Owned libraries (standalone)
 
 The suite owns its string-matching primitives instead of renting them: byte-identical drop-in replacements, published on their own so they're usable outside the suite too.

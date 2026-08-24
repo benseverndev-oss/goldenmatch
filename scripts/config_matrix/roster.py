@@ -98,37 +98,15 @@ def derive_roster() -> tuple[list[str], list[str], list[str]]:
 # section OR an entry here) turns silence into a decision that has to be written
 # down, the same way parity/<pkg>.yaml makes an uncovered scorer declare itself.
 #
-# EVERY ENTRY BELOW IS PROVISIONAL and needs a product-scope call: onboard, or
-# keep the deferral with a real reason. They are recorded as deferred so the
-# inverted check can land green rather than blocking on that decision; the
-# generator can now scaffold a config-matrix page, so onboarding one is
-# "add a PackageSpec, run make docs, write the intro prose".
-DOCS_DEFERRED: dict[str, str] = {
-    "golden-suite": (
-        "TODO(decide): one-line meta-package (whole suite + native). Arguably needs "
-        "an install/overview page rather than a full section."
-    ),
-    "goldencheck-types": (
-        "TODO(decide): shared type definitions consumed by goldencheck; may belong "
-        "inside the goldencheck section rather than its own."
-    ),
-    "goldengraph": (
-        "TODO(decide): KG engine, published to PyPI and npm, currently documented "
-        "only via goldenmatch-kg prose."
-    ),
-    "goldenmatch-kg": (
-        "TODO(decide): knowledge-graph surface over goldenmatch; has an llms.txt but "
-        "no docs-site section."
-    ),
-    "goldensuite-mcp": (
-        "TODO(decide): the suite-wide MCP aggregator. Ships an agent-manifest copy "
-        "and an llms.txt; a section would duplicate per-package MCP docs."
-    ),
-}
+# CURRENTLY EMPTY -- every published core package has a docs-site section. The five
+# that were provisionally deferred when the inverted check landed (golden-suite,
+# goldencheck-types, goldengraph, goldenmatch-kg, goldensuite-mcp) were onboarded
+# instead. Keep it that way: a new published package should get a section, and an
+# entry here needs a real reason, not a TODO.
+DOCS_DEFERRED: dict[str, str] = {}
 
 
-# Published CORE distributions with no row in the root README's package-overview
-# table (no `packages/python/<pkg>/README.md` link anywhere in it).
+# Published CORE distributions with no link from the root README.
 #
 # The old check tested `pkg.lower() in readme.lower()` over the WHOLE file, which
 # every package passes on an incidental mention -- "goldenmatch" alone appears
@@ -136,15 +114,6 @@ DOCS_DEFERRED: dict[str, str] = {
 # what the README said. Requiring a LINK to the package README is the assertion
 # the substring test was reaching for.
 #
-# EVERY ENTRY BELOW IS PROVISIONAL, same as DOCS_DEFERRED: onboard, or keep the
-# deferral with a real reason.
-README_DEFERRED: dict[str, str] = {
-    "goldencheck-types": (
-        "TODO(decide): shared type definitions consumed by goldencheck; arguably an "
-        "implementation detail of that row rather than its own."
-    ),
-    "goldensuite-mcp": (
-        "TODO(decide): the suite-wide MCP aggregator. The README covers MCP per "
-        "package; a dedicated row may or may not earn its place."
-    ),
-}
+# CURRENTLY EMPTY -- goldencheck-types and goldensuite-mcp, provisionally deferred
+# when the check landed, now have rows in the README's "Shared components" table.
+README_DEFERRED: dict[str, str] = {}

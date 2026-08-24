@@ -1,0 +1,49 @@
+---
+title: "GoldenGraph overview"
+description: "Build an own-your-KG knowledge graph from text: LLM extraction, goldenmatch entity resolution, and a durable bi-temporal store."
+keywords: ["goldengraph", "knowledge graph", "graphrag", "entity resolution", "bi-temporal", "llm extraction"]
+---
+
+GoldenGraph builds an **own-your-KG** knowledge graph from text:
+
+**text → LLM extraction → [GoldenMatch](/goldenmatch/overview) entity resolution → a
+durable, bi-temporal store.**
+
+Entity resolution is the differentiator. Duplicate surface forms across documents collapse
+into one durable entity — the step most GraphRAG frameworks do badly, because they treat
+resolution as string matching rather than as the entity-resolution problem it actually is.
+
+```python
+from goldengraph import ingest, OpenAIClient
+from goldengraph_native import _native as gg
+
+store = gg.PyStore()                    # durable bi-temporal store
+llm = OpenAIClient()                    # or any object with .complete(prompt) -> str
+ingest("Acme Inc, founded by ...", store, at=1, llm=llm)
+
+snapshot = store.snapshot()             # canonical JSON; persist + reopen later
+view = store.as_of(valid_t=1, tx_t=1)   # bi-temporal slice -> queryable graph
+```
+
+## The stages
+
+| Stage | Does |
+| --- | --- |
+| `extract(text, llm)` | Text to typed entities and relationships, via the LLM. |
+| `resolve(...)` | Collapses duplicate surface forms using goldenmatch's ER engine. |
+| `ingest(...)` | Runs the whole path and writes into the store. |
+
+## Bi-temporal by construction
+
+The store records both **valid time** (when a fact was true in the world) and
+**transaction time** (when the graph learned it). `as_of(valid_t, tx_t)` returns the graph
+as it was believed at a point in time — which is what makes a KG auditable rather than
+merely current. A correction does not erase what the graph previously asserted; it adds a
+new transaction over the same valid-time span.
+
+## Relationship to goldenmatch-kg
+
+GoldenGraph is a **complete KG builder**. [GoldenMatch KG](/goldenmatch-kg/overview) is the
+opposite shape: it drops goldenmatch's resolution into *someone else's* KG pipeline
+(neo4j-graphrag, LlamaIndex, Graphiti). Use GoldenGraph when you own the pipeline; use
+goldenmatch-kg when you are adopting one.
