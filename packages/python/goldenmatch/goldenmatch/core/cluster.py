@@ -319,6 +319,21 @@ def _confidence_fields(pair_scores: dict, size: int) -> dict:
 # Bridge detection is O(E*(V+E)) per cluster; only run on clusters at or below
 # this size so the sample path stays cheap (clusters there are small).
 _BRIDGE_MAX_CLUSTER_SIZE = 100
+# `_severe_bridge_count` runs one BFS PER EDGE, so its cost is O(E x V) per
+# cluster. `_BRIDGE_MAX_CLUSTER_SIZE` bounds V but not E, and a 100-member
+# cluster can carry ~5,000 edges -- ~500k operations for a single cluster, on a
+# telemetry path.
+#
+# That was survivable while only the dict path measured bridges. Extending the
+# measurement to the frames path (the arrow-native default lane, where it had
+# been hardcoded to 0) put it on the hot path at scale and took
+# `python_goldenmatch_heavy` shard 3 from ~115s to over its 300s timeout.
+#
+# So bound E as well as V. A cluster over budget is EXCLUDED from `measurable`
+# rather than measured approximately, which keeps the existing semantics: the
+# risk fraction is over the clusters actually measured, and `None` means
+# "nothing was measurable" -- never a fabricated zero.
+_BRIDGE_MAX_EDGES_PER_CLUSTER = 400
 
 
 def _severe_bridge_count(members: list[int], pair_scores: dict) -> int:
@@ -374,6 +389,10 @@ def _bridge_stats(
     load-bearing: ``zero_label_confidence`` reads ``None`` as "no measurement,
     use the heuristic proxy" and any float as a real measurement.
     """
+    measurable = [
+        (members, pair_scores) for members, pair_scores in measurable
+        if len(pair_scores) <= _BRIDGE_MAX_EDGES_PER_CLUSTER
+    ]
     if not measurable:
         return 0, None
     total_bridges = 0

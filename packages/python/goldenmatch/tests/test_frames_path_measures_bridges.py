@@ -151,3 +151,49 @@ def test_no_edge_list_reports_unmeasured_not_zero_risk():
     from_frames = _capture(lambda: _emit_cluster_profile_frames(md, asg, None))
     assert from_frames.measured_bridge_risk is None
     assert from_frames.bridge_edge_count == 0
+
+
+def test_dense_clusters_are_skipped_rather_than_measured_expensively():
+    """`_severe_bridge_count` is O(E x V) per cluster -- one BFS per edge -- and
+    the cluster-size cap bounds V but not E. Extending the measurement to the
+    frames path put that on the arrow-native default lane and took
+    `python_goldenmatch_heavy` shard 3 from ~115s to over its 300s timeout.
+
+    Measured on 40 x 100-member cliques (198,000 edges): 129.288s unbounded
+    versus 0.067s with the edge budget.
+
+    Note what the slow path returned: (0, 0.0). A fully connected cluster has no
+    cut edge, so the most expensive shape is also the least informative one. The
+    budget declines it and says `None` -- "not measured" -- rather than claiming
+    the zero it would have found.
+    """
+    from goldenmatch.core.cluster import (
+        _BRIDGE_MAX_EDGES_PER_CLUSTER,
+        _measure_bridges_frames,
+    )
+
+    members = list(range(60))
+    edges = {(a, b): 0.9 for i, a in enumerate(members) for b in members[i + 1:]}
+    assert len(edges) > _BRIDGE_MAX_EDGES_PER_CLUSTER, "fixture must exceed the budget"
+    member_to_cid = dict.fromkeys(members, 1)
+
+    bridges, risk = _measure_bridges_frames({1: members}, edges, member_to_cid)
+    assert bridges == 0
+    assert risk is None, (
+        "an over-budget cluster is EXCLUDED from `measurable`, so nothing was "
+        "measured and the honest report is None, not 0.0"
+    )
+
+
+def test_a_sparse_cluster_under_budget_is_still_measured():
+    """The budget must not silently switch measurement off for ordinary
+    clusters -- a chain of 60 nodes carries 59 edges, far under the bar."""
+    from goldenmatch.core.cluster import _measure_bridges_frames
+
+    members = list(range(60))
+    edges = {(a, a + 1): 0.9 for a in range(59)}
+    member_to_cid = dict.fromkeys(members, 1)
+
+    bridges, risk = _measure_bridges_frames({1: members}, edges, member_to_cid)
+    assert risk == 1.0, "measured, and the cluster is one long chain of bridges"
+    assert bridges > 0
