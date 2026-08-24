@@ -171,7 +171,7 @@ def main() -> int:
     mode = sys.argv[1] if len(sys.argv) > 1 else "--check"
     if mode == "--write":
         page = PAGE.read_text(encoding="utf-8")
-        PAGE.write_text(_splice(page, render_block()), encoding="utf-8")
+        PAGE.write_text(_splice(page, render_block()), encoding="utf-8", newline="\n")
         print(f"wrote {PAGE.relative_to(ROOT)}")
         return 0
     if mode == "--check":

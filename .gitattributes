@@ -5,7 +5,13 @@
 # PR diffs and drops them from GitHub language stats; `-diff` stops git from
 # emitting a (useless, huge) textual diff. These are outputs, not source an
 # agent or reviewer should read line-by-line.
-**/llms.txt        linguist-generated=true -diff
+#
+# NOTE on llms.txt: it is NOT listed here, deliberately. It is HAND-AUTHORED prose
+# -- scripts/check_llms_counts.py only verifies the NUMBERS stated inside it, it
+# does not write the file. Marking it linguist-generated collapsed every llms.txt
+# prose change out of PR review, which is the opposite of what these agent-facing
+# files need. (llms-full.txt stays listed: no such file is tracked today, and if
+# one appears it will be an emitted rollup.)
 **/llms-full.txt   linguist-generated=true -diff
 uv.lock            linguist-generated=true -diff
 pnpm-lock.yaml     linguist-generated=true -diff
@@ -18,3 +24,17 @@ packages/python/goldensuite-mcp/goldensuite_mcp/agent-manifest.json  linguist-ge
 # scripts/test_agent_codemap.py. Force LF so the byte-for-byte gate can't trip on
 # a CRLF checkout (Windows dev vs Linux CI).
 docs/agent-codemap.json  linguist-generated=true -diff eol=lf
+
+# Generated docs-site pages. Each is written whole (or spliced between
+# `:generated:start`/`:generated:end` markers) by a scripts/gen_*.py and gated by
+# `regen_docs.py --check`, which compares BYTES -- so `eol=lf` is load-bearing on a
+# CRLF checkout (Windows dev vs Linux CI), exactly as it is for the two JSON
+# artifacts above. The writers pin `newline="\n"` too; the attribute is the second
+# half of that guarantee (it also governs what git stores on `add`).
+docs-site/*/config-matrix.mdx        linguist-generated=true -diff eol=lf
+docs-site/*/native.mdx               linguist-generated=true -diff eol=lf
+docs-site/suite-matrix.mdx           linguist-generated=true -diff eol=lf
+docs-site/thesis-weaknesses.mdx      linguist-generated=true -diff eol=lf
+# api-surface.mdx is the exception: mostly HAND-WRITTEN prose with one spliced
+# generated table, so it gets eol=lf for the byte gate but stays fully reviewable.
+docs-site/reference/api-surface.mdx  eol=lf

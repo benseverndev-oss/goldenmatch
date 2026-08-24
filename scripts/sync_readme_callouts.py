@@ -156,7 +156,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.check:
             print(f"DRIFT: {target.relative_to(REPO_ROOT)} is out of sync", file=sys.stderr)
         else:
-            target.write_text(updated, encoding="utf-8")
+            target.write_text(updated, encoding="utf-8", newline="\n")
             print(f"updated {target.relative_to(REPO_ROOT)}")
 
     if args.check and any_diff:
