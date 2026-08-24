@@ -629,21 +629,24 @@ _F1_FLOORS: dict[str, float | None] = {
     # linkage run and enforced here for months; it now guards the lane it
     # describes.
     #
-    # REPAIRED and un-quarantined 2026-08-24: 0.0881 -> 0.1361 (+55%) once the
-    # over-merge detector could fire (#2750) and commit stopped discarding the
-    # better candidate (#2748). The controller now commits iter=3 at threshold
-    # 0.75 instead of falling back to v0 at 0.70.
+    # REPAIRED 2026-08-24: 0.0881 -> 0.2253 (+156%) across three fixes --
+    # the over-merge detector could not fire (#2750), its rule kept a private
+    # copy of the dead bar, and commit discarded the better candidate (#2748).
+    # A fourth change scaled the rule's threshold step by saturation severity,
+    # carrying 0.1361 -> 0.2253: a flat +0.05 could not cross a 0.25 gap inside
+    # the iteration budget.
     #
-    # Floor set BELOW the observed value on purpose -- this is a local
+    # Floor set BELOW the observed 0.2253 on purpose -- this is a local
     # Windows / native-off measurement, and the convention in this file is to
-    # leave margin rather than sit on the number (see the 0.45 note above). 0.10
-    # still sits above the 0.0881 it used to score, so a regression of the fix
-    # trips it while ordinary run-to-run variance does not.
+    # leave margin rather than sit on the number (see the 0.45 note above). 0.15
+    # sits above BOTH the 0.0881 this lane used to score and the 0.1361 of the
+    # first repair, so losing either fix trips it while run-to-run variance
+    # does not.
     #
     # Reachable headroom is far higher: a threshold sweep puts this lane at
     # 0.4059 at thr=0.95 (docs/measurements/). Raise this floor as the
     # controller learns to get there.
-    "Abt-Buy (dedupe)": 0.10,
+    "Abt-Buy (dedupe)": 0.15,
     # KNOWN BAD (#2470). Measured 0.0697 / recall 0.0419. The floor is set at the
     # observed value ONLY to stop it getting worse; it is not an endorsement, and
     # this dataset should be treated as an open quality bug rather than a passing
@@ -707,14 +710,16 @@ _QUARANTINE: dict[str, dict[str, Any]] = {
         # 0.1361 - 0.03 now trips this, where the old 0.0881 baseline would have
         # absorbed a full regression of the fix.
         "issue": 2748,
-        "f1_at_quarantine": 0.1361,
+        "f1_at_quarantine": 0.2253,
         "tolerance": 0.03,
         "why": (
-            "REPAIRED but not healthy. 0.0881 -> 0.1361 via #2750 + #2748; "
-            "controller health is still RED because the lane is still "
-            "over-merging (precision 0.0764), and the measured reachable "
-            "optimum is 0.4059 at thr=0.95. Quarantined until the controller "
-            "can walk its threshold the rest of the way."
+            "REPAIRED but not healthy. 0.0881 -> 0.2253 (+156%) via #2750, "
+            "#2748 and a saturation-scaled threshold step. Controller health "
+            "is still RED because the lane is still over-merging (precision "
+            "0.1525), and the measured reachable optimum is 0.4059 at "
+            "thr=0.95 -- the rule stops raising once saturation falls below "
+            "its bar, which is short of that. Quarantined until the "
+            "controller can walk the rest of the way."
         ),
     },
     "Amazon-Google (dedupe)": {

@@ -88,3 +88,63 @@ def test_the_small_frame_path_still_works():
     p = ClusterProfile(n_clusters=10, cluster_size_max=60,
                        transitivity_rate=1.0, max_cluster_size=0)
     assert p.red_reason(100) == "cluster_giant"  # 60 > 0.1 * 100
+
+
+# ── the rule's step size ─────────────────────────────────────────────────────
+#
+# Making the detector fire is not enough if its action moves too slowly to
+# arrive. Abt-Buy dedupe commits threshold 0.70 against an optimum of >=0.95
+# (F1 0.4059 vs 0.1361). At a flat +0.05 that is five firings -- and the rule
+# spends its first firings offering splitting, so against a 4-iteration budget
+# it lands ONE raise and stops at 0.75.
+
+
+def test_the_step_scales_with_how_far_over_the_bar_the_run_is():
+    """A run pinned at the cap is badly over-merged and should move decisively;
+    one just over the bar should not."""
+    from goldenmatch.core.autoconfig_rules import _giant_threshold_step
+
+    pinned = _giant_threshold_step(_profile(100))
+    mild = _giant_threshold_step(_profile(50))
+    assert pinned > mild, "severity must drive the step"
+    assert mild == pytest.approx(0.05), "at the bar, the old flat step"
+    assert pinned == pytest.approx(0.20), "pinned at the cap, the full step"
+
+
+def test_abt_buys_actual_shape_moves_in_one_step_not_five():
+    """cluster_size_max=90 is what Abt-Buy dedupe actually reports. One firing
+    should carry 0.70 into the high-0.8s, where the sweep measures F1 ~0.22,
+    rather than to 0.75 where it measures 0.141."""
+    from goldenmatch.core.autoconfig_rules import _giant_threshold_step
+
+    step = _giant_threshold_step(_profile(90))
+    assert 0.70 + step > 0.85, f"0.70 + {step:.3f} should clear 0.85"
+
+
+def test_a_lane_that_needs_less_distance_takes_a_smaller_step():
+    """Amazon-Google's optimum is 0.75, not 0.95. Its saturation is lower, so
+    the same rule must not overshoot it -- the scaling is what prevents one
+    global step size from being wrong for one lane or the other."""
+    from goldenmatch.core.autoconfig_rules import _giant_threshold_step
+
+    step = _giant_threshold_step(_profile(58))
+    assert 0.70 + step == pytest.approx(0.774, abs=0.01)
+
+
+def test_an_unrecorded_cap_falls_back_to_the_flat_step():
+    """No cap recorded (older profiles, linkage lanes) -> do not invent a
+    severity from a signal nobody measured."""
+    from goldenmatch.core.autoconfig_rules import _giant_threshold_step
+
+    assert _giant_threshold_step(_profile(100, cap=0)) == pytest.approx(0.05)
+
+
+def test_the_ceiling_still_caps_the_raise():
+    from goldenmatch.core.autoconfig_rules import (
+        _GIANT_THRESHOLD_CEILING,
+        _giant_threshold_step,
+    )
+
+    assert min(_GIANT_THRESHOLD_CEILING, 0.90 + _giant_threshold_step(_profile(100))) == (
+        pytest.approx(_GIANT_THRESHOLD_CEILING)
+    )

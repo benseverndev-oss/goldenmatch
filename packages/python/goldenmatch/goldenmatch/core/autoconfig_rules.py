@@ -458,8 +458,46 @@ _TRANSITIVITY_PROGRESS_MARGIN = 0.01
 #: Above this share of the frame, one cluster is a collapse rather than a merge.
 #: Mirrors the bar `ClusterProfile.red_reason` uses to raise `cluster_giant`.
 _GIANT_CLUSTER_FRACTION = 0.1
+#: Threshold-raise step for `rule_cluster_giant`, as a band rather than a
+#: constant. The step scales with HOW FAR over the saturation bar the run sits,
+#: because a flat step is wasted motion against a large gap.
+#:
+#: Measured: Abt-Buy dedupe commits threshold 0.70 while its optimum is >=0.95
+#: (F1 0.4059 vs 0.1361, docs/measurements/). At +0.05 per firing that is five
+#: iterations -- and the rule spends its first firings offering splitting, so
+#: against a 4-iteration budget it lands ONE raise and stops at 0.75.
+#:
+#: Scaling by saturation is self-limiting in the right direction: a run pinned
+#: at the cap (ratio 1.0) is badly over-merged and takes the full step, while
+#: one just over the bar (ratio 0.5) takes the old 0.05. On Amazon-Google, whose
+#: optimum is 0.75 rather than 0.95, saturation is lower and the step is
+#: correspondingly smaller -- so the same rule does not overshoot a lane that
+#: needs to travel less far.
 _GIANT_THRESHOLD_STEP = 0.05
+_GIANT_THRESHOLD_STEP_MAX = 0.20
 _GIANT_THRESHOLD_CEILING = 0.95
+
+
+def _giant_threshold_step(cp: Any) -> float:
+    """Step size scaled across the firing band [saturation bar, 1.0].
+
+    Falls back to the flat minimum when the cap was never recorded (older
+    profiles, and the linkage lanes that emit no cluster profile) rather than
+    inventing a severity from a signal nobody measured.
+    """
+    from goldenmatch.core.complexity_profile import _CAP_SATURATION_FRACTION
+
+    cap = getattr(cp, "max_cluster_size", 0) or 0
+    if cap <= 0:
+        return _GIANT_THRESHOLD_STEP
+    span = 1.0 - _CAP_SATURATION_FRACTION
+    if span <= 0:
+        return _GIANT_THRESHOLD_STEP
+    ratio = cp.cluster_size_max / cap
+    frac = max(0.0, min(1.0, (ratio - _CAP_SATURATION_FRACTION) / span))
+    return _GIANT_THRESHOLD_STEP + frac * (
+        _GIANT_THRESHOLD_STEP_MAX - _GIANT_THRESHOLD_STEP
+    )
 
 
 @targets("cluster_giant")
@@ -527,7 +565,8 @@ def rule_cluster_giant(
     mk = _first_weighted_mk(current)
     if mk is None or mk.threshold is None:
         return None
-    new_threshold = min(_GIANT_THRESHOLD_CEILING, mk.threshold + _GIANT_THRESHOLD_STEP)
+    _step = _giant_threshold_step(cp)
+    new_threshold = min(_GIANT_THRESHOLD_CEILING, mk.threshold + _step)
     if new_threshold == mk.threshold:
         return None
     new_mk = mk.model_copy(update={"threshold": new_threshold})
@@ -544,7 +583,9 @@ def rule_cluster_giant(
         rationale=(
             f"largest cluster {cp.cluster_size_max} still over "
             f"{_GIANT_CLUSTER_FRACTION:.0%} of {n_rows} rows with splitting on; "
-            f"raising threshold {mk.threshold:.2f} -> {new_threshold:.2f}"
+            f"raising threshold {mk.threshold:.2f} -> {new_threshold:.2f} "
+            f"(step {_step:.3f}, saturation "
+            f"{(cp.cluster_size_max / cp.max_cluster_size) if cp.max_cluster_size else 0.0:.2f})"
         ),
         config_diff={"matchkeys[0].threshold": new_threshold},
     )
