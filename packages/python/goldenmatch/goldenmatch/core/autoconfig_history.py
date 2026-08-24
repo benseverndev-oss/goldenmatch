@@ -14,6 +14,10 @@ from typing import Any
 from goldenmatch.core.complexity_profile import ComplexityProfile, HealthVerdict, StopReason
 from goldenmatch.core.execution_plan import ExecutionPlan
 
+#: Mirrors `complexity_profile._CAP_SATURATION_FRACTION`: the saturation
+#: tiebreak speaks only where the over-merge detector itself fires.
+_SATURATION_TIEBREAK_FLOOR = 0.5
+
 
 @dataclass
 class PolicyDecision:
@@ -199,7 +203,7 @@ class RunHistory:
         if not survivors:
             return None
 
-        def key(e: HistoryEntry) -> tuple[int, float, int]:
+        def key(e: HistoryEntry) -> tuple[int, float, float, int]:
             verdict = e.profile.health()
             rank = {
                 HealthVerdict.GREEN: 0,
@@ -251,7 +255,10 @@ class RunHistory:
                 # most-lowered iteration; downstream pipeline produced 2,570
                 # clusters vs the ~145K v0 would have produced.
                 rank = 3
-                return (rank + demoted, 0.0, e.iteration)
+                # Every discriminating slot neutralised: the collapsed
+                # regime deliberately falls through to `iteration` so v0
+                # wins, and the saturation term must not reopen that.
+                return (rank + demoted, 0.0, 0.0, e.iteration)
             # ── the mirror guard: DEGENERATE-EMPTY (#2663) ──────────────────
             #
             # The collapse guard above catches "everything merged". This
@@ -292,13 +299,40 @@ class RunHistory:
             _empty_demote = 1 if _found_nothing else 0
             # Zero-label Phase 2: prefer the most-plausible unlabeled structure
             # over the -sep heuristic (which is biased toward lower thresholds).
+            # Over-merge saturation, CLIPPED: discriminates only while the
+            # cluster size cap is being hit, and is 0.0 (silent) otherwise.
+            #
+            # Measured over 72 scored configs (docs/measurements/): within the
+            # saturated region smaller `cluster_size_max` is monotonically
+            # better on all three dedupe lanes --
+            #     Abt-Buy   cmax 100->F1 .045, 90->.072, 73->.087, 56->.141
+            #     Amz-Ggl   cmax 100->.038, 98->.041, 59->.110, 54->.115
+            #     NCVR      cmax 100->.016, 99->.064, 95->.076
+            # -- while BELOW the bar the relationship inverts (Amazon-Google's
+            # optimum is cmax 18 at F1 0.221; cmax 8 scores 0.110). An unclipped
+            # "smaller is better" term would pick the worse config there, which
+            # is exactly how the `-sep` tiebreak regressed Abt-Buy (#2748).
+            # Clipping confines the term to the region where the evidence is
+            # unambiguous.
+            #
+            # Silent by construction where it cannot know: `max_cluster_size` is
+            # 0 on the linkage lanes (no cluster profile is emitted for
+            # `match_df`) and on profiles predating the field.
+            _sat = 0.0
+            _cp = e.profile.cluster
+            _cap = getattr(_cp, "max_cluster_size", 0) or 0
+            if _cap > 0:
+                _ratio = _cp.cluster_size_max / _cap
+                if _ratio >= _SATURATION_TIEBREAK_FLOOR:
+                    _sat = _ratio
             if use_zero_label_confidence and e.profile.zero_label is not None:
                 return (
                     rank + demoted + _empty_demote,
                     -e.profile.zero_label.overall_confidence,
+                    _sat,
                     e.iteration,
                 )
-            return (rank + demoted + _empty_demote, -sep, e.iteration)
+            return (rank + demoted + _empty_demote, -sep, _sat, e.iteration)
 
         return min(survivors, key=key)
 
