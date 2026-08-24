@@ -115,24 +115,46 @@ All scripts are stdlib-only and anchored to the repo root via `Path(__file__)`.
   package = add it to `SECTIONS`. Pure-logic unit tests in
   `scripts/test_docs_sections.py`.
 
-- **Tier 2 - `scripts/check_docs_staleness.py`** (ADVISORY CI job, `--base`/
-  `--head`, default `origin/main..HEAD`). Diff-aware. The **flag rule** (gating
-  within the job): adding/removing a `GOLDENMATCH_*` env flag in
-  `packages/python/**/*.py` without touching `docs-site/goldenmatch/tuning.mdx`
-  emits `::error::` and exits 1. The **public-symbol rule** (warning only): a
-  package `__init__.py` `__all__`/re-export change with no doc surface touched
-  emits `::warning::`. Wired as the `docs_staleness` job with
-  `continue-on-error: true` (NOT in `ci-required`) - it surfaces annotations,
-  never blocks a clean PR.
+- **Tier 2 - `scripts/check_docs_staleness.py`** (`--base`/`--head`, default
+  `origin/main..HEAD`; `--rule all|flag|symbol`). Diff-aware, two rules with
+  DIFFERENT enforcement, run as two steps of the `docs_staleness` job:
+  - **flag rule** (`--rule flag`, BLOCKING step): for every package declaring a
+    `prose_flag_page` in `scripts/config_matrix/registry.py`, adding/removing a
+    `<ENV_PREFIX>*` flag in non-test `packages/python/**/*.py` without touching
+    that page emits `::error::` and exits 1. Only goldenmatch declares one today
+    (`docs-site/goldenmatch/tuning.mdx`); the rest are N/A because their
+    GENERATED config-matrix block already covers the knob and `docs_regen` gates
+    it. Giving a package a tuning page is a one-line registry change.
+  - **public-symbol rule** (`--rule symbol`, `continue-on-error` step): a package
+    `__init__.py` `__all__`/re-export change with no doc surface touched emits
+    `::warning::`.
 
-- **Tier 3 - `scripts/check_docs_sweep.py`** + `docs/.docs-sweep.json` (RELEASE /
-  manual gate, NOT run on every PR). Asserts `docs/.docs-sweep.json` `.version`
-  equals the current `packages/python/goldenmatch` version. A bump of the
-  headline package since the last recorded sweep reds the gate. **At the END of a
-  docs sweep, bump `docs/.docs-sweep.json`** (`version` to the new goldenmatch
-  version, refresh `commit`/`date`). Run this manually before tagging a release,
-  or wire it into the publish/release workflow. It exists to catch "cut a release
-  but never swept the prose surfaces" that the structural gates can't author.
+  The job gates on its OWN `docs_staleness` path filter. It previously gated on
+  `docs`, which matches no `packages/python/**/*.py` path -- so the flag rule was
+  skipped on exactly the diffs it exists to catch, and the whole job was
+  `continue-on-error` so its "gating" exit could not fail anything either. The job
+  is still NOT in `ci-required`: a red flag-rule step is visible on the PR but does
+  not block the merge queue. Promoting it is a one-line addition to
+  `ci-required.needs`.
+
+- **Tier 3 - `scripts/check_docs_sweep.py`** + `docs/.docs-sweep.json` (RELEASE
+  gate, NOT run on every PR). Asserts `docs/.docs-sweep.json` `.version` equals
+  the current `packages/python/goldenmatch` version. A bump of the headline
+  package since the last recorded sweep reds the gate. **At the END of a docs
+  sweep, bump `docs/.docs-sweep.json`** (`version` to the new goldenmatch version,
+  refresh `commit`/`date`). It exists to catch "cut a release but never swept the
+  prose surfaces" that the structural gates can't author.
+
+  Wired into `cut-goldenmatch-release.yml` as a step BEFORE the tag push, so a
+  failed sweep leaves the version name unburned (immutable releases tombstone a
+  name permanently). Emergency hotfix escape hatch: the workflow's
+  `skip_docs_sweep_gate` dispatch input, which annotates a `::warning::`.
+
+  **History:** for a long time this script was wired into NO workflow -- it was
+  referenced only by a path filter and this document, so the marker sat at 3.3.1
+  while goldenmatch reached 3.16.0. The 3.4.0..3.16.0 prose backlog is UNSWEPT;
+  the marker was advanced to arm the gate going forward, not to claim those
+  releases were swept (see `backlog_note` in `docs/.docs-sweep.json`).
 
 ## Sweep mechanics for this repo
 

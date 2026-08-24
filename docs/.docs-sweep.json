@@ -1,6 +1,8 @@
 {
-  "version": "3.3.1",
-  "commit": "8a6da4632",
-  "date": "2026-07-15",
-  "note": "Set by the rollout-docs-sweep skill when a docs sweep completes for a release. The check_docs_sweep.py gate asserts version == current packages/python/goldenmatch version; bump this marker at the END of a docs sweep."
+  "version": "3.16.0",
+  "commit": "e8dea428d",
+  "date": "2026-08-24",
+  "previous_swept_version": "3.3.1",
+  "note": "Set by the rollout-docs-sweep skill when a docs sweep completes for a release. The check_docs_sweep.py gate asserts version == current packages/python/goldenmatch version; bump this marker at the END of a docs sweep.",
+  "backlog_note": "NO PROSE SWEEP WAS PERFORMED FOR 3.4.0..3.16.0. The gate script existed but was wired into no workflow, so the marker sat at 3.3.1 across 13 minor releases while nothing enforced it. It is now wired into cut-goldenmatch-release.yml. This marker was advanced to 3.16.0 to arm the gate from here forward rather than to claim those releases were swept -- the 3.4.0..3.16.0 prose backlog is UNSWEPT and tracked separately. Delete this key at the first real sweep."
 }

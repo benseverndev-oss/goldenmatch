@@ -12,8 +12,10 @@ so nobody has to remember the list:
     python scripts/regen_docs.py --check  # CI: regenerate, then fail if the tree drifted
 
 `--check` is what the `docs_regen` CI job runs: it regenerates in place and then
-`git diff --exit-code` fails (showing the exact diff to commit) if anything was
-stale, and runs the two non-regenerable prose-count checks. Run it under the synced
+fails (showing exactly what to commit) if anything was stale, and runs the two
+non-regenerable prose-count checks. The staleness probe is `git status
+--porcelain`, not `git diff`: diff sees only TRACKED changes, so a generator
+emitting a brand-new page used to pass the gate with the file uncommitted. Run it under the synced
 workspace (`uv run python scripts/regen_docs.py`) so every package is importable.
 
 Some drift lives in hand-authored PROSE (the "97 tools" figures in llms.txt /
@@ -65,14 +67,29 @@ def _run(argv: list[str]) -> int:
     return subprocess.run([PY, *argv], cwd=ROOT).returncode
 
 
-def _git_diff_is_clean() -> bool:
-    # `git diff --quiet -- <generated paths>` = tracked modifications to the
-    # GENERATED DOCS only (exit 0 clean, 1 dirty). Scoped so an unrelated
-    # CI-mutated tracked file (e.g. `uv.lock` from `uv sync`) can't false-trip it;
-    # untracked scratch is ignored too.
-    return subprocess.run(
-        ["git", "diff", "--quiet", "--", *GENERATED_PATHS], cwd=ROOT
-    ).returncode == 0
+def _drifted_paths() -> list[str]:
+    """Porcelain status lines for the GENERATED DOCS -- empty means no drift.
+
+    `git status --porcelain` rather than `git diff --quiet`: diff reports only
+    TRACKED modifications, so a generator emitting a BRAND-NEW page (the "onboard
+    a package" case) left the gate green with the file uncommitted -- the drift
+    this job exists to catch, invisible to it. Porcelain sees added, deleted and
+    untracked alike.
+
+    Still scoped to GENERATED_PATHS so an unrelated CI-mutated file (notably
+    `uv.lock`, which `uv sync` re-resolves in the runner) can't false-trip it, and
+    `--untracked-files=normal` keeps directory-level rollup for untracked trees.
+    """
+    out = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=normal", "--", *GENERATED_PATHS],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=True,
+    ).stdout
+    return [ln for ln in out.splitlines() if ln.strip()]
 
 
 def main() -> int:
@@ -92,9 +109,14 @@ def main() -> int:
 
     if args.check:
         ok = True
-        if not _git_diff_is_clean():
-            print("\nDOC DRIFT: committed generated docs were stale. The diff below is the fix "
-                  "-- run `python scripts/regen_docs.py` and commit it:\n", file=sys.stderr)
+        drifted = _drifted_paths()
+        if drifted:
+            print("\nDOC DRIFT: committed generated docs were stale. The changes below are "
+                  "the fix -- run `python scripts/regen_docs.py` and commit them:\n",
+                  file=sys.stderr)
+            for line in drifted:
+                print(f"  {line}", file=sys.stderr)
+            print(file=sys.stderr)
             subprocess.run(["git", "--no-pager", "diff", "--stat", "--", *GENERATED_PATHS], cwd=ROOT)
             subprocess.run(["git", "--no-pager", "diff", "--", *GENERATED_PATHS], cwd=ROOT)
             ok = False

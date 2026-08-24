@@ -958,8 +958,10 @@ docs:
   - 'scripts/test_docs_sections.py'
   - 'scripts/check_benchmark_claims.py'
   - 'docs/benchmark-claims.json'
-  - 'scripts/check_docs_staleness.py'
-  - 'scripts/check_docs_sweep.py'
+  # check_docs_staleness.py moved to its own `docs_staleness` filter (the `docs`
+  # paths never matched the .py files its flag rule scans). check_docs_sweep.py
+  # runs in cut-goldenmatch-release.yml, not on the PR path, so neither belongs
+  # here any more; scripts_lint still covers edits to both.
   - 'scripts/check_version_consistency.py'
   - 'scripts/sync_readme_callouts.py'
   - 'scripts/suite_download_badges.py'
@@ -1006,3 +1008,25 @@ docs_regen:
   - 'docs-site/**'
   - 'docs/agent-manifest.json'
   - 'docs/agent-codemap.json'
+  # The four inputs below were MISSING while this job's ci.yml comment called it
+  # "the single authoritative doc-drift gate". It stayed honest only because the
+  # `config_matrix` job -- which that same comment proposes to slim away -- listed
+  # them and independently ran the equivalent --checks. Acting on that note first
+  # would have half-blinded the authoritative gate. `scripts/config_matrix/**` is
+  # the worst of them: it RENDERS six of the nine artifacts this job regenerates.
+  - 'scripts/config_matrix/**'
+  - 'packages/rust/extensions/**/*.rs'   # gen_config_matrix's <PREFIX>_* env scan
+  - 'packages/typescript/*/package.json' # gen_api_surface's TS version column
+  - '.github/filters.yml'                # self-test: filter edits re-run the gate
+# Diff-aware doc-staleness rules (scripts/check_docs_staleness.py). Its own filter
+# rather than riding on `docs`: the flag rule scans non-test `packages/python/**/*.py`
+# for added/removed <PREFIX>_* env flags, and `docs` matches no such path (only
+# `packages/*/**/__init__.py`). Gated on `docs`, the rule was skipped on exactly the
+# PRs it exists to catch -- a flag added in core/pipeline.py touching no doc file --
+# and could fire only on PRs that had ALREADY updated a doc surface.
+docs_staleness:
+  - 'packages/python/**/*.py'
+  - 'docs-site/goldenmatch/tuning.mdx'   # the canonical prose flag reference
+  - 'scripts/check_docs_staleness.py'
+  - 'scripts/config_matrix/registry.py'  # declares env_prefix + prose_flag_page
+  - '.github/filters.yml'

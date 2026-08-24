@@ -32,6 +32,11 @@ on:
         description: "Version WITHOUT the leading v (must equal main's goldenmatch version), e.g. 3.5.0"
         required: true
         type: string
+      skip_docs_sweep_gate:
+        description: "Emergency hotfix only: cut even if the prose docs sweep is stale for this version."
+        required: false
+        default: false
+        type: boolean
 
 # Granted here so the reusable publish-goldenmatch.yml job (called below) has the
 # token scopes it needs: id-token for cosign keyless + PyPI OIDC, attestations
@@ -77,6 +82,26 @@ jobs:
             echo "::error::tag $tag already exists on origin -- nothing to cut"
             exit 1
           fi
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+
+      # Tier-3 prose-docs gate. Tier-1/Tier-2 (docs_regen, docs_consistency,
+      # docs_staleness) catch STRUCTURAL drift on every PR; nothing on the PR path
+      # can catch "we cut a release but never swept the prose". This is the only
+      # place that check can live, and until now it lived nowhere -- the script
+      # existed and no workflow ran it, so the marker sat 13 minor versions behind
+      # the tree. Runs BEFORE the tag push on purpose: a failed gate must leave the
+      # version name unburned (immutable releases tombstone a name permanently --
+      # see the header).
+      - name: Docs-sweep gate (prose surfaces swept for this version)
+        if: ${{ !inputs.skip_docs_sweep_gate }}
+        run: python scripts/check_docs_sweep.py
+
+      - name: Note the skipped docs-sweep gate
+        if: ${{ inputs.skip_docs_sweep_gate }}
+        run: echo "::warning::docs-sweep gate SKIPPED by dispatch input. Run the rollout-docs-sweep skill and bump docs/.docs-sweep.json after this cut."
 
       - name: Configure tag signing (SSH; optional)
         id: sign

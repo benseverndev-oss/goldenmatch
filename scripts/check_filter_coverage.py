@@ -68,6 +68,44 @@ REQUIRED: dict[str, list[tuple[str, str]]] = {
             "J0: the JVM scorer jar is built + self-tested in the spark_connect lane",
         ),
     ],
+    # The doc-generation gates had the same hole in two places at once, and both
+    # were invisible because a SECOND job happened to cover the same artifacts:
+    #   docs_regen     -- ci.yml calls it "the single authoritative doc-drift gate"
+    #                     while its filter omitted scripts/config_matrix/**, which
+    #                     RENDERS six of the nine artifacts it regenerates. Only the
+    #                     `config_matrix` job (which the same comment proposes to
+    #                     delete) kept it honest.
+    #   docs_staleness -- gated on `docs`, which matches no packages/python/**/*.py
+    #                     path, so its flag rule was skipped on exactly the diffs it
+    #                     exists to catch and could fire only where docs were
+    #                     already updated.
+    "docs_regen": [
+        ("scripts/config_matrix/render.py", "renders every config-matrix.mdx block"),
+        ("scripts/config_matrix/manifest.py", "renders docs/agent-manifest.json"),
+        ("scripts/config_matrix/registry.py", "declares what each package renders"),
+        ("scripts/gen_api_surface.py", "renders the api-surface capability matrix"),
+        ("scripts/agent_codemap.py", "renders docs/agent-codemap.json"),
+        ("packages/rust/extensions/native/src/lib.rs", "the <PREFIX>_* env scan reads Rust"),
+        ("packages/typescript/goldenmatch/package.json", "api-surface TS version column"),
+        ("parity/goldenmatch.yaml", "MCP tool counts in suite-matrix + api-surface"),
+        (".github/filters.yml", "self-test: filter edits must re-run the gate"),
+    ],
+    "docs_staleness": [
+        (f"{GM}/core/pipeline.py", "the flag rule scans non-test packages/python/**/*.py"),
+        (f"{GM}/core/autoconfig.py", "same: a new GOLDENMATCH_* knob lands in ordinary source"),
+        ("docs-site/goldenmatch/tuning.mdx", "the canonical prose flag reference"),
+        ("scripts/config_matrix/registry.py", "declares env_prefix + prose_flag_page"),
+        (".github/filters.yml", "self-test: filter edits must re-run the gate"),
+    ],
+    # The umbrella doc gates (check_docs_consistency / _links / _sections) assert
+    # against the published-package roster, which is derived from the publish-*.yml
+    # callers -- so adding a publisher without a doc surface must re-run them.
+    "docs": [
+        ("docs-site/docs.json", "nav integrity + orphan detection"),
+        ("packages/python/goldenmatch/CHANGELOG.md", "changelog<->version lockstep"),
+        ("packages/python/goldenmatch/goldenmatch/llms.txt", "agent-surface pointers"),
+        ("scripts/check_docs_consistency.py", "self-test"),
+    ],
 }
 
 # Paths that must NOT trigger these filters -- guards against "fix" by

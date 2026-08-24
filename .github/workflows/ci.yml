@@ -103,6 +103,7 @@ jobs:
       spark: ${{ steps.filter.outputs.spark }}
       readme_callouts: ${{ steps.filter.outputs.readme_callouts }}
       docs: ${{ steps.filter.outputs.docs }}
+      docs_staleness: ${{ steps.filter.outputs.docs_staleness }}
       wasm_score: ${{ steps.filter.outputs.wasm_score }}
       analysis_wasm: ${{ steps.filter.outputs.analysis_wasm }}
       infermap_wasm: ${{ steps.filter.outputs.infermap_wasm }}
@@ -4447,16 +4448,28 @@ jobs:
           INFERMAP_NATIVE: "0"
           GOLDENANALYSIS_NATIVE: "0"
 
-  # Tier-2 doc-staleness ADVISORY. Diff-aware: flags a GOLDENMATCH_* env-flag
-  # change with no tuning.mdx update (gating), and an __all__/re-export change
-  # with no doc surface touched (warning). continue-on-error => never blocks
-  # ci-required; it surfaces annotations only. NOT in the ci-required needs list.
+  # Diff-aware doc-staleness. TWO rules with DIFFERENT enforcement, so they are
+  # two steps, not one continue-on-error job:
+  #   flag rule (Tier-1)   -- an added/removed <PREFIX>_* env flag with no update to
+  #                           that package's canonical prose flag reference. Runs as
+  #                           a normal BLOCKING step.
+  #   symbol rule (Tier-2) -- an __all__/re-export change with no doc surface
+  #                           touched. `continue-on-error` on the STEP, so it only
+  #                           ever annotates.
+  # Previously the whole job was `continue-on-error: true` AND absent from
+  # ci-required, so the rule its own docstring called "GATING" could not fail
+  # anything; worse, the job was gated on the `docs` filter, which matches no
+  # `packages/python/**/*.py` path -- so it was SKIPPED on exactly the diffs the
+  # flag rule exists to catch. It now has its own `docs_staleness` filter.
+  #
+  # NOT YET in the ci-required needs list: a red step here is visible on the PR but
+  # does not block the merge queue. Promoting it is a one-line addition to
+  # `ci-required.needs` once the team wants the friction.
   docs_staleness:
     needs: changes
-    if: needs.changes.outputs.docs == 'true' || needs.changes.outputs.force_all == 'true'
+    if: needs.changes.outputs.docs_staleness == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 3
-    continue-on-error: true
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
         with:
@@ -4464,11 +4477,17 @@ jobs:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: "3.12"
-      - name: Docs staleness (advisory) vs PR base
+      - name: Fetch the diff base
+        run: git fetch origin main --quiet || true
+      - name: Flag rule -- env flag added/removed without its prose reference (blocking)
         run: |
           BASE="${{ github.event.pull_request.base.sha || 'origin/main' }}"
-          git fetch origin main --quiet || true
-          python scripts/check_docs_staleness.py --base "$BASE" --head HEAD
+          python scripts/check_docs_staleness.py --base "$BASE" --head HEAD --rule flag
+      - name: Symbol rule -- __all__ changed with no doc surface touched (advisory)
+        continue-on-error: true
+        run: |
+          BASE="${{ github.event.pull_request.base.sha || 'origin/main' }}"
+          python scripts/check_docs_staleness.py --base "$BASE" --head HEAD --rule symbol
 
   ts_parity_freshness:
     needs: changes
