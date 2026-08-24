@@ -8,6 +8,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ### Changed
 
+- **The two product benchmark `(dedupe)` rows are retired (#2717, #2748).**
+  They were not measuring deduplication. Measured on Abt-Buy at the committed
+  config, 98.1% of the row's ground truth is CROSS-source (1,097 of 1,118
+  pairs), so it was record linkage wearing a dedupe API.
+
+  It was also mis-RUN rather than merely mis-scored: half the engine's
+  candidate budget went to a within-source hunt containing 21 findable pairs,
+  of which it found 9. Emitting 1,630 same-source pairs to find 9 is 99.4%
+  waste, and it polluted the score distribution the threshold calibrates
+  against. That is why the row scored 0.2253 where LINKAGE over the same
+  records scores 0.7024.
+
+  Real deduplication on these datasets means finding duplicates WITHIN Abt (or
+  within Amazon); neither carries ground truth for that, so no honest dedupe
+  row can be built from them. **Genuine dedupe coverage is unaffected and
+  strong** -- NCVR (single source, synthetic duplicates) scores 0.9828 and
+  Febrl3 0.9443. Reporting 0.2253 beside a 0.7024 linkage row made the engine
+  look far worse at products than it is.
+
+  The surviving linkage rows are also the ones comparable to published
+  DeepMatcher / Ditto figures, which measure the cross-source task.
+
+  Consequences: `_QUARANTINE` is now empty (both entries were these rows), both
+  product lanes report `health=yellow` and pass on merit rather than being
+  suppressed, and `--datasets products` drops from ~200s to ~47s.
+
 - **Both product benchmark lanes now carry an explicit name (#2717).**
   `Abt-Buy` / `Amazon-Google` became `Abt-Buy (dedupe)` /
   `Amazon-Google (dedupe)`; the bare name read as THE number for the dataset

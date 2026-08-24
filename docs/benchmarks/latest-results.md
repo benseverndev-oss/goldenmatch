@@ -14,9 +14,7 @@ current truth, not a stale copy pasted from a case study.
 | Febrl3 | record | 0.9912 | 0.9992 | 0.9833 | 8.94s |
 | NCVR-synthetic | record | 0.9925 | 0.9854 | 0.9996 | 19.32s |
 | DQbench | benchmark-suite | composite=83.16 | — | — | 362.2s |
-| Abt-Buy (dedupe) | product | 0.0881 | 0.0470 | 0.7075 | 37.77s |
 | Abt-Buy (linkage) | product | 0.7024 | 0.8529 | 0.5971 | 8.24s |
-| Amazon-Google (dedupe) | product | 0.1097 | 0.0609 | 0.5551 | 65.15s |
 | Amazon-Google (linkage) | product | 0.4636 | 0.5961 | 0.3792 | 36.35s |
 
 ## Reading these numbers
