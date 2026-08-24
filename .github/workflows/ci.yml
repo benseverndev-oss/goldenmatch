@@ -129,7 +129,6 @@ jobs:
       api_parity: ${{ steps.filter.outputs.api_parity }}
       native_symbols: ${{ steps.filter.outputs.native_symbols }}
       downstream_symbols: ${{ steps.filter.outputs.downstream_symbols }}
-      config_matrix: ${{ steps.filter.outputs.config_matrix }}
       er_matcher: ${{ steps.filter.outputs.er_matcher }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
@@ -4331,100 +4330,19 @@ jobs:
       - name: Broken internal links + anchors
         run: mint broken-links --check-anchors
 
-  # Config-matrix drift gate (BLOCKING), one leg per suite package. Each package's
-  # config-matrix.mdx generated block is rendered from its live surface (pydantic
-  # tree / constructor kwargs / vocab constants / <PREFIX>_* env scan) by the
-  # repo-level scripts/gen_config_matrix.py; this fails if the committed page is
-  # stale. Needs the packages importable (introspection) + the source tree (env
-  # scan), so it uv-syncs like api_parity.
-  config_matrix:
-    needs: changes
-    if: needs.changes.outputs.config_matrix == 'true' || needs.changes.outputs.force_all == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 12
-    strategy:
-      fail-fast: false
-      matrix:
-        package: [goldenmatch, goldencheck, goldenflow, goldenpipe, infermap, goldenanalysis]
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
-      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
-        with:
-          enable-cache: true
-          cache-dependency-glob: uv.lock
-      - name: Sync workspace (importable packages for introspection)
-        run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
-      - name: Gate unit tests (determinism + markers; run once)
-        if: matrix.package == 'goldenmatch'
-        run: uv run pytest scripts/test_config_matrix.py scripts/test_agent_codemap.py scripts/test_docs_sections.py scripts/test_api_surface.py scripts/test_roster.py -q
-        env:
-          POLARS_SKIP_CPU_CHECK: "1"
-          GOLDENMATCH_NATIVE: "0"
-          GOLDENCHECK_NATIVE: "0"
-          GOLDENFLOW_NATIVE: "0"
-          GOLDENPIPE_NATIVE: "0"
-          INFERMAP_NATIVE: "0"
-      - name: llms.txt / README capability counts match code (run once; all pkgs synced)
-        if: matrix.package == 'goldenmatch'
-        run: uv run python scripts/check_llms_counts.py
-        env:
-          POLARS_SKIP_CPU_CHECK: "1"
-          GOLDENMATCH_NATIVE: "0"
-          GOLDENCHECK_NATIVE: "0"
-          GOLDENFLOW_NATIVE: "0"
-          GOLDENPIPE_NATIVE: "0"
-          INFERMAP_NATIVE: "0"
-          GOLDENANALYSIS_NATIVE: "0"
-      - name: Suite surface matrix current (cross-package drift; run once, all pkgs synced)
-        if: matrix.package == 'goldenmatch'
-        run: |
-          uv run python scripts/gen_suite_matrix.py --check
-          uv run pytest scripts/test_suite_matrix.py -q
-          uv run python scripts/gen_thesis_weaknesses.py --check
-          uv run pytest scripts/test_thesis_weaknesses.py -q
-          # T1 default-routing auditor: HARD-fails on an owner-default kernel that
-          # regressed to opt-in (the fs-default class); advisory on the rest.
-          uv run python scripts/check_thesis_conformance.py --check
-          uv run pytest scripts/test_thesis_conformance.py -q
-          uv run python scripts/gen_api_surface.py --check
-        env:
-          POLARS_SKIP_CPU_CHECK: "1"
-          GOLDENMATCH_NATIVE: "0"
-          GOLDENCHECK_NATIVE: "0"
-          GOLDENFLOW_NATIVE: "0"
-          GOLDENPIPE_NATIVE: "0"
-          INFERMAP_NATIVE: "0"
-          GOLDENANALYSIS_NATIVE: "0"
-      - name: Config-matrix drift check (${{ matrix.package }})
-        run: uv run python scripts/gen_config_matrix.py --check ${{ matrix.package }}
-        env:
-          POLARS_SKIP_CPU_CHECK: "1"
-          GOLDENMATCH_NATIVE: "0"
-          GOLDENCHECK_NATIVE: "0"
-          GOLDENFLOW_NATIVE: "0"
-          GOLDENPIPE_NATIVE: "0"
-          INFERMAP_NATIVE: "0"
-          GOLDENANALYSIS_NATIVE: "0"
-      - name: Docs cross-reference vs the matrix (${{ matrix.package }})
-        # The other docs must not name an env knob the code no longer reads.
-        run: uv run python scripts/gen_config_matrix.py --refs ${{ matrix.package }}
-        env:
-          POLARS_SKIP_CPU_CHECK: "1"
-          GOLDENMATCH_NATIVE: "0"
-          GOLDENCHECK_NATIVE: "0"
-          GOLDENFLOW_NATIVE: "0"
-          GOLDENPIPE_NATIVE: "0"
-          INFERMAP_NATIVE: "0"
-          GOLDENANALYSIS_NATIVE: "0"
-
-  # Single authoritative doc-drift gate (in ci-required). Regenerates the WHOLE
-  # derived-docs battery -- config-matrix, agent-manifest, agent-codemap,
-  # api-surface, suite-matrix, thesis-weaknesses, native docs + the prose count
-  # checks -- via ONE command and fails if the working tree drifted, printing the
-  # exact diff to commit. Collapses "did you regenerate all N artifacts?" (a chore
-  # that reddened this repo's config_matrix gate repeatedly) into `make docs` /
-  # `python scripts/regen_docs.py`. The per-artifact `--check`s in config_matrix
-  # remain (they also assert non-drift invariants); slimming those is a follow-up.
+  # THE doc gate (in ci-required). Regenerates the WHOLE derived-docs battery via
+  # ONE command and fails if the working tree drifted, printing exactly what to
+  # commit. Collapses "did you regenerate all N artifacts?" (a chore that reddened
+  # this repo's doc gates repeatedly) into `make docs`.
+  #
+  # The former `config_matrix` job -- a 6-leg, ~12-minute matrix -- is MERGED in
+  # here. It re-ran per-artifact `--check`s that `regen_docs.py --check` already
+  # covers for every package in one process; only its non-redundant steps survive
+  # below (the dead-env-knob crossref, the thesis auditor, the gate unit tests).
+  # The merge was blocked until the docs_regen filter listed
+  # scripts/config_matrix/** -- which RENDERS six of the nine artifacts -- because
+  # until then config_matrix's filter was the only thing keeping this job honest.
+  # Order matters: close the filter gap first, consolidate second.
   docs_regen:
     needs: changes
     if: needs.changes.outputs.docs_regen == 'true' || needs.changes.outputs.force_all == 'true'
@@ -4437,8 +4355,64 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
       - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
+
+      # THE drift gate. Regenerates every derived artifact -- six config matrices,
+      # agent manifest + codemap, api-surface's table, suite-matrix,
+      # thesis-weaknesses, native pages, llms.txt/README capability counts, README
+      # callouts -- and fails if the tree moved, printing what to commit.
       - name: Regenerate the derived-docs battery; fail if the tree drifted
         run: uv run python scripts/regen_docs.py --check
+        env:
+          POLARS_SKIP_CPU_CHECK: "1"
+          GOLDENMATCH_NATIVE: "0"
+          GOLDENCHECK_NATIVE: "0"
+          GOLDENFLOW_NATIVE: "0"
+          GOLDENPIPE_NATIVE: "0"
+          INFERMAP_NATIVE: "0"
+          GOLDENANALYSIS_NATIVE: "0"
+
+      # Everything below asserts something --write CANNOT. The former
+      # `config_matrix` job (a 6-leg, ~12-minute matrix) also re-ran the per-artifact
+      # `--check`s, which the step above already covers for every package at once;
+      # only these non-redundant pieces survived the merge.
+
+      # Dead-env-knob crossref: the OTHER docs must not name a <PREFIX>_* knob the
+      # code no longer reads, and must not omit a canonical scorer/strategy. Not a
+      # drift check -- regenerating the matrix cannot detect a stale mention
+      # elsewhere -- and `--refs all` covers every package in one process, which is
+      # what made the per-package matrix unnecessary.
+      - name: Docs cross-reference vs the matrix (all packages)
+        run: uv run python scripts/gen_config_matrix.py --refs all
+        env:
+          POLARS_SKIP_CPU_CHECK: "1"
+          GOLDENMATCH_NATIVE: "0"
+          GOLDENCHECK_NATIVE: "0"
+          GOLDENFLOW_NATIVE: "0"
+          GOLDENPIPE_NATIVE: "0"
+          INFERMAP_NATIVE: "0"
+          GOLDENANALYSIS_NATIVE: "0"
+
+      # T1 default-routing auditor: HARD-fails on an owner-default kernel that
+      # regressed to opt-in (the fs-default class); advisory on the rest.
+      - name: Thesis conformance (default-routing auditor)
+        run: uv run python scripts/check_thesis_conformance.py --check
+        env:
+          POLARS_SKIP_CPU_CHECK: "1"
+          GOLDENMATCH_NATIVE: "0"
+          GOLDENCHECK_NATIVE: "0"
+          GOLDENFLOW_NATIVE: "0"
+          GOLDENPIPE_NATIVE: "0"
+          INFERMAP_NATIVE: "0"
+          GOLDENANALYSIS_NATIVE: "0"
+
+      - name: Gate unit tests (generators, roster, entry point, count checker)
+        run: |
+          uv run pytest \
+            scripts/test_config_matrix.py scripts/test_agent_codemap.py \
+            scripts/test_docs_sections.py scripts/test_api_surface.py \
+            scripts/test_roster.py scripts/test_regen_docs.py \
+            scripts/test_llms_counts.py scripts/test_suite_matrix.py \
+            scripts/test_thesis_weaknesses.py scripts/test_thesis_conformance.py -q
         env:
           POLARS_SKIP_CPU_CHECK: "1"
           GOLDENMATCH_NATIVE: "0"
@@ -4777,7 +4751,6 @@ jobs:
       - downstream_symbols
       - claude_refs
       - scripts_lint
-      - config_matrix
       - docs_regen
       - er_matcher
     if: always()

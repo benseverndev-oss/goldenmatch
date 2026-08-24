@@ -133,6 +133,8 @@ if str(SCRIPTS) not in sys.path:
 from config_matrix.roster import (  # noqa: E402
     DOCS_DEFERRED,
     DOCUMENTED,
+    EXT_DOCS_DEFERRED,
+    EXT_README_DEFERRED,
     NON_DIST_STEMS,
     README_DEFERRED,
     derive_roster,
@@ -262,12 +264,24 @@ def check_roster_matrix(res: Result) -> None:
             "README rows deferred by declaration",
             f"{sorted(README_DEFERRED)} -- see roster.README_DEFERRED for the reason",
         )
-    ext_missing = [p for p in ext if p.lower() not in readme]
-    if ext_missing:
-        res.record_info(
-            "extension extras README presence",
-            f"extension distributions not named in README: {ext_missing}",
-        )
+    # The EXTENSION tier, gated the same way -- it used to print [INFO] while
+    # listing packages it had found missing, which is the silence the CORE maps
+    # exist to remove, one tier down. Name-mention rather than link here: the owned
+    # libraries live under packages/rust/extensions/, so the CORE link-path rule
+    # would not generalise.
+    ext_missing = sorted(p for p in ext if p.lower() not in readme)
+    ext_undeclared = [p for p in ext_missing if p not in EXT_README_DEFERRED]
+    ext_stale = sorted(set(EXT_README_DEFERRED) - set(ext_missing))
+    res.record(
+        "extension -> README.md presence",
+        not ext_undeclared and not ext_stale,
+        "; ".join(filter(None, [
+            f"published but not named in the README and not declared in "
+            f"roster.EXT_README_DEFERRED: {ext_undeclared}" if ext_undeclared else "",
+            f"declared in roster.EXT_README_DEFERRED but actually named (drop the "
+            f"deferral): {ext_stale}" if ext_stale else "",
+        ])),
+    )
 
     # docs-section presence: every CORE roster package owns a docs-site/<pkg>/
     # section that the nav references -- or carries a declared deferral.
@@ -307,6 +321,20 @@ def check_roster_matrix(res: Result) -> None:
             "docs sections deferred by declaration",
             f"{sorted(DOCS_DEFERRED)} -- see roster.DOCS_DEFERRED for the reason",
         )
+
+    ext_has_section = {p for p in ext if (DOCS_SITE / p).is_dir()}
+    ext_docs_undeclared = sorted(set(ext) - ext_has_section - set(EXT_DOCS_DEFERRED))
+    ext_docs_stale = sorted(ext_has_section & set(EXT_DOCS_DEFERRED))
+    res.record(
+        "extension -> docs section presence",
+        not ext_docs_undeclared and not ext_docs_stale,
+        "; ".join(filter(None, [
+            f"published with no docs section and not declared in "
+            f"roster.EXT_DOCS_DEFERRED: {ext_docs_undeclared}" if ext_docs_undeclared else "",
+            f"declared in roster.EXT_DOCS_DEFERRED but actually has a section (drop "
+            f"the deferral): {ext_docs_stale}" if ext_docs_stale else "",
+        ])),
+    )
 
     # The documented roster must be a subset of what is actually published: a
     # PackageSpec for a package no publisher ships is a docs section for a

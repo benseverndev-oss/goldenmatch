@@ -90,7 +90,13 @@ All scripts are stdlib-only and anchored to the repo root via `Path(__file__)`.
   `publish-*.yml` callers); and the two deferral maps `DOCS_DEFERRED` /
   `README_DEFERRED` (published packages knowingly without a docs section / README
   row, each with a reason). The gap between the first two must be fully covered by
-  the deferral maps or `check_docs_consistency` FAILS -- and a deferral for a
+  the deferral maps or `check_docs_consistency` FAILS. The EXTENSION tier has
+  its own pair (`EXT_DOCS_DEFERRED` / `EXT_README_DEFERRED`) on the same
+  contract; unlike the CORE maps -- which are EMPTY, everything was onboarded
+  -- those carry real reasons, because an extension can legitimately be
+  documented inside a parent page (the SQL surfaces live in
+  `docs-site/extensions/sql.mdx`) or be a standalone library whose own README
+  is the doc. What it may not be is undocumented by accident -- and a deferral for a
   package that *does* have the surface fails too, so the maps cannot go stale in
   either direction. Row ORDER stays editorial and local to each generator:
   `REGISTRY` order is baked into the agent manifests, so deriving table order from
@@ -98,7 +104,8 @@ All scripts are stdlib-only and anchored to the repo root via `Path(__file__)`.
   purpose -- the gates that consume it run on a bare `setup-python` runner.
 
 - **Tier 0 - `scripts/regen_docs.py`** (`make docs` / `just docs`; the
-  `docs_regen` REQUIRED CI job runs `--check`). The single command that
+  `docs_regen` REQUIRED CI job runs `--check`; the former 6-leg `config_matrix`
+  job is merged into it). The single command that
   REGENERATES every derived artifact: the six config matrices, the agent manifest
   + codemap, api-surface's table, suite-matrix, thesis-weaknesses, the native
   pages, the llms.txt/README capability counts, and the README "what's new"
@@ -108,6 +115,15 @@ All scripts are stdlib-only and anchored to the repo root via `Path(__file__)`.
   brand-new generated page counts as drift too. Only one hand-bumped figure
   survives: the two inline numbers beside api-surface's table, reported by
   `gen_api_surface --check`.
+
+  The `docs_regen` job also carries the pieces a `--write` CANNOT assert, absorbed
+  when `config_matrix` was merged in: `gen_config_matrix.py --refs all` (no doc may
+  name a dead `<PREFIX>_*` knob, and no canonical scorer/strategy may go
+  undocumented), `check_thesis_conformance.py --check`, and the generator/roster
+  gate unit tests. Merging was only safe AFTER the `docs_regen` filter grew
+  `scripts/config_matrix/**` -- until then `config_matrix`'s filter was the only
+  thing keeping this job honest, so deleting it first would have half-blinded the
+  authoritative gate.
 
 - **Tier 1 - `scripts/check_docs_consistency.py`** (REQUIRED CI gate). The
   umbrella entry point for STRUCTURAL doc consistency. It (a) runs

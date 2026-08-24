@@ -18,6 +18,8 @@ from config_matrix.registry import REGISTRY
 from config_matrix.roster import (
     DOCS_DEFERRED,
     DOCUMENTED,
+    EXT_DOCS_DEFERRED,
+    EXT_README_DEFERRED,
     README_DEFERRED,
     derive_roster,
 )
@@ -50,19 +52,60 @@ def test_roster_importable_without_pydantic():
     assert proc.returncode == 0, proc.stderr
 
 
-def test_ci_config_matrix_leg_matches_the_roster():
-    """ci.yml's config_matrix job runs one leg per package, as a literal list.
+# Every per-package job matrix in ci.yml, and what it is allowed to be. A matrix
+# that should equal the roster is a copy of it and drifts like one; a deliberate
+# SUBSET is fine but has to say so here.
+_PACKAGE_MATRICES: dict[str, str] = {
+    "api_parity": "roster",   # gates every documented package's cross-language surface
+    "native_symbols": "subset",  # only packages that ship a native kernel
+}
 
-    A package added to REGISTRY but not to that list gets a generated page nothing
-    gates -- the drift class this whole battery exists to prevent.
-    """
+
+def _ci_package_matrices() -> dict[str, set[str]]:
+    """job name -> the package set in its `package: [...]` matrix."""
     ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    m = re.search(r"config_matrix:.*?matrix:\s*\n\s*package:\s*\[([^\]]+)\]", ci, re.S)
-    assert m, "could not locate the config_matrix job's package matrix in ci.yml"
-    legs = {p.strip() for p in m.group(1).split(",") if p.strip()}
-    assert legs == set(DOCUMENTED), (
-        f"ci.yml config_matrix legs {sorted(legs)} != roster {sorted(DOCUMENTED)}"
+    out: dict[str, set[str]] = {}
+    job = None
+    for line in ci.splitlines():
+        m = re.match(r"^  ([a-z_][a-z0-9_]*):\s*$", line)
+        if m:
+            job = m.group(1)
+        m = re.match(r"^\s*package:\s*\[([^\]]+)\]\s*$", line)
+        if m and job:
+            out[job] = {p.strip() for p in m.group(1).split(",") if p.strip()}
+    return out
+
+
+def test_ci_package_matrices_are_declared_and_track_the_roster():
+    """A hardcoded per-package job matrix is another copy of the roster.
+
+    The `config_matrix` job's 6-leg matrix used to be one; that job was merged into
+    `docs_regen`, which covers every package in ONE process, so the list is gone.
+    Two matrices remain and they are NOT the same kind of thing: `api_parity` gates
+    every documented package (so it must equal the roster), while `native_symbols`
+    is a deliberate subset (only packages shipping a native kernel). Anything new
+    has to declare which it is rather than quietly becoming a stale copy.
+    """
+    found = _ci_package_matrices()
+    undeclared = sorted(set(found) - set(_PACKAGE_MATRICES))
+    assert not undeclared, (
+        f"ci.yml grew a per-package matrix in job(s) {undeclared}. Declare it in "
+        "_PACKAGE_MATRICES as 'roster' or 'subset' -- an undeclared one is a "
+        "hardcoded roster copy waiting to drift."
     )
+    for job, kind in _PACKAGE_MATRICES.items():
+        if job not in found:
+            continue  # job removed; nothing to drift
+        pkgs = found[job]
+        if kind == "roster":
+            assert pkgs == set(DOCUMENTED), (
+                f"ci.yml `{job}` matrix {sorted(pkgs)} != roster {sorted(DOCUMENTED)}"
+            )
+        else:
+            assert pkgs <= set(DOCUMENTED), (
+                f"ci.yml `{job}` matrix names non-roster package(s): "
+                f"{sorted(pkgs - set(DOCUMENTED))}"
+            )
 
 
 def test_no_script_rehardcodes_the_roster():
@@ -104,9 +147,45 @@ def test_deferrals_are_live_and_complete():
     )
 
 
+def test_ext_deferrals_are_live_and_complete():
+    """Same contract for the EXTENSION tier, which had no gating at all.
+
+    Its README check printed [INFO] while listing packages it had found missing,
+    and nothing checked docs sections. An extension may legitimately be documented
+    inside a parent page -- what it may not be is undocumented by accident.
+    """
+    _, ext, _ = derive_roster()
+    docs_site = ROOT / "docs-site"
+
+    no_section = {p for p in ext if not (docs_site / p).is_dir()}
+    assert no_section == set(EXT_DOCS_DEFERRED), (
+        f"EXT_DOCS_DEFERRED out of step: "
+        f"undeclared={sorted(no_section - set(EXT_DOCS_DEFERRED))}, "
+        f"stale={sorted(set(EXT_DOCS_DEFERRED) - no_section)}"
+    )
+
+    readme = (ROOT / "README.md").read_text(encoding="utf-8").lower()
+    unnamed = {p for p in ext if p.lower() not in readme}
+    assert unnamed == set(EXT_README_DEFERRED), (
+        f"EXT_README_DEFERRED out of step: "
+        f"undeclared={sorted(unnamed - set(EXT_README_DEFERRED))}, "
+        f"stale={sorted(set(EXT_README_DEFERRED) - unnamed)}"
+    )
+
+
 def test_every_deferral_carries_a_reason():
-    for name, reason in {**DOCS_DEFERRED, **README_DEFERRED}.items():
+    """A reason has to be reviewable prose, not a shrug.
+
+    The CORE maps are empty (everything was onboarded); the EXT maps are not, and
+    their entries are the ones a reader will actually have to judge.
+    """
+    every = {**DOCS_DEFERRED, **README_DEFERRED,
+             **EXT_DOCS_DEFERRED, **EXT_README_DEFERRED}
+    for name, reason in every.items():
         assert len(reason.strip()) > 30, f"{name}: deferral reason is too thin to review"
+        assert "TODO" not in reason, (
+            f"{name}: deferral still says TODO -- decide it or write the real reason"
+        )
 
 
 def test_documented_roster_is_actually_published():
