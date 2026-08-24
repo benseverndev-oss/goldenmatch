@@ -467,6 +467,82 @@ def _last_low_transitivity_rate(history: RunHistory) -> float | None:
     return None
 
 
+#: Above this share of the frame, one cluster is a collapse rather than a merge.
+#: Mirrors `ClusterProfile._GIANT_CLUSTER_FRACTION`, which sets the RED bar.
+_GIANT_CLUSTER_FRACTION = 0.1
+_GIANT_THRESHOLD_STEP = 0.05
+_GIANT_THRESHOLD_CEILING = 0.95
+
+
+@targets("cluster_giant")
+def rule_cluster_giant(
+    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
+    """Answer `ClusterProfile.red_reason() == "cluster_giant"`.
+
+    Before this, `rule_low_transitivity` was the ONLY rule reading
+    `profile.cluster`, and it returns None unless `transitivity_rate < 0.85`.
+    So a run where one cluster swallowed 10%+ of the data, with healthy
+    transitivity, produced no proposal at all: the controller reported RED and
+    had nothing to do about it.
+
+    Splitting is offered FIRST because it targets the pathology -- a giant
+    cluster is usually distinct entities chained through weak bridges, which is
+    exactly what `core/transitive_consistency.py` cuts. Raising the threshold is
+    the blunt fallback: it also drops true pairs, so it only runs once splitting
+    is already on and the cluster is still giant.
+
+    Offered ALONE, never both at once. Two changes in one iteration make the
+    next profile unattributable, which is the failure `rule_low_transitivity`
+    spent four iterations demonstrating (#2717).
+    """
+    n_rows = profile.data.n_rows
+    cp = profile.cluster
+    # n_rows <= 0 is `data_empty`'s business, and 0.1 * 0 would make any cluster
+    # look giant.
+    if n_rows <= 0 or cp.cluster_size_max <= _GIANT_CLUSTER_FRACTION * n_rows:
+        return None
+
+    from goldenmatch.config.schemas import ClusterConfig
+
+    cluster_cfg = getattr(current, "cluster", None)
+    if cluster_cfg is None or not getattr(cluster_cfg, "split_weak_bridges", False):
+        new_cluster = (
+            ClusterConfig(split_weak_bridges=True)
+            if cluster_cfg is None
+            else cluster_cfg.model_copy(update={"split_weak_bridges": True})
+        )
+        return current.model_copy(update={"cluster": new_cluster}), PolicyDecision(
+            rule_name="cluster_giant",
+            rationale=(
+                f"largest cluster {cp.cluster_size_max} is over "
+                f"{_GIANT_CLUSTER_FRACTION:.0%} of {n_rows} rows; splitting "
+                f"clusters held together by a weak transitive bridge"
+            ),
+            config_diff={"cluster.split_weak_bridges": True},
+        )
+
+    mk = _first_weighted_mk(current)
+    if mk is None or mk.threshold is None:
+        return None
+    new_threshold = min(_GIANT_THRESHOLD_CEILING, mk.threshold + _GIANT_THRESHOLD_STEP)
+    if new_threshold == mk.threshold:
+        return None
+    new_mk = mk.model_copy(update={"threshold": new_threshold})
+    new_cfg = current.model_copy(update={
+        "matchkeys": [new_mk if m is mk else m for m in (current.matchkeys or [])]
+    })
+    return new_cfg, PolicyDecision(
+        rule_name="cluster_giant",
+        rationale=(
+            f"largest cluster {cp.cluster_size_max} still over "
+            f"{_GIANT_CLUSTER_FRACTION:.0%} of {n_rows} rows with splitting on; "
+            f"raising threshold {mk.threshold:.2f} -> {new_threshold:.2f}"
+        ),
+        config_diff={"matchkeys[0].threshold": new_threshold},
+    )
+
+
 @targets("cluster_low_transitivity")
 def rule_low_transitivity(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
@@ -1597,6 +1673,7 @@ DEFAULT_RULES = [
     rule_unimodal_scoring,                 # 9  tuning: dip statistic low
     rule_low_reduction_ratio,              # 10 structural: too-tight blocking
     rule_cross_blocking_disagreement,      # 11 NEW v1.10: multi-pass on low cross-blocking overlap
+    rule_cluster_giant,                    # 11b cluster: one cluster swallowed the frame
     rule_low_transitivity,                 # 12 tuning: transitivity low
     rule_no_matches,                       # 13 tuning: nothing matches
     rule_matchkey_demote_high_cardinality_field,  # 14 NEW 2026-05-29: matchkey YELLOW from uniquely-identifying field

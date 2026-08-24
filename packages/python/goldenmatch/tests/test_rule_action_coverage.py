@@ -40,10 +40,6 @@ _UNACTIONABLE: frozenset[str] = frozenset({
 #: gate green is the failure this exists to prevent. Each entry is a MEASURED
 #: hole with its evidence, not a hypothetical.
 _UNCOVERED: frozenset[str] = frozenset({
-    # `rule_low_transitivity` is the ONLY rule reading profile.cluster and it
-    # returns None unless transitivity < 0.85, so a run where one cluster
-    # swallowed 10%+ of the data with healthy transitivity produces no proposal.
-    "cluster_giant",
     # Both rules reading profile.matchkey.per_field (rule_unimodal_scoring,
     # rule_matchkey_demote_high_cardinality_field) sort by HIGHEST cardinality.
     # Neither handles a field collapsing to a single value.

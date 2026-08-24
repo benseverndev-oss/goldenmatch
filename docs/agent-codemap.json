@@ -2300,6 +2300,7 @@
             "rule_blocking_key_swap",
             "rule_blocking_singleton_trap",
             "rule_blocking_too_coarse",
+            "rule_cluster_giant",
             "rule_corruption_normalize",
             "rule_cross_blocking_disagreement",
             "rule_enable_llm_scorer",
