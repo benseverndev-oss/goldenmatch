@@ -2148,7 +2148,9 @@
             "ErrorRecord",
             "HistoryEntry",
             "PolicyDecision",
-            "RunHistory"
+            "RunHistory",
+            "_read_metric",
+            "rule_effect_was_negative"
           ],
           "imports": [
             "goldenmatch.core.complexity_profile",
@@ -2286,7 +2288,6 @@
             "_existing_blocking_fields",
             "_first_weighted_mk",
             "_is_derived",
-            "_last_low_transitivity_rate",
             "_llm_api_key_available",
             "_near_dup_locked",
             "_orthogonal_key",

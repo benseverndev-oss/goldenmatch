@@ -398,7 +398,9 @@ def _transitivity_profile(rate: float, threshold_pairs: int = 500) -> Complexity
     )
 
 
-def _history_where_the_rule_already_fired(prev_rate: float) -> RunHistory:
+def _history_where_the_rule_already_fired(
+    prev_rate: float, current_rate: float
+) -> RunHistory:
     """One prior iteration that applied `low_transitivity` and observed
     `prev_rate`, followed by the current (not yet decided) entry."""
     from goldenmatch.core.autoconfig_history import HistoryEntry
@@ -411,8 +413,23 @@ def _history_where_the_rule_already_fired(prev_rate: float) -> RunHistory:
             rule_name="low_transitivity",
             rationale=f"transitivity={prev_rate:.2f} < 0.85; lowering threshold",
             config_diff={"matchkeys[0].threshold": 0.75},
+            # The rule declares this on its real decisions (#2717); the generic
+            # `rule_effect_was_negative` reads a missing prediction as "no
+            # evidence", so a fixture without it would silently stop exercising
+            # the guard.
+            predicts="cluster.transitivity_rate",
+            predicts_direction="up",
         ),
         error=None, wall_clock_ms=1,
+    ))
+    # The controller APPENDS the current iteration's entry (decision=None)
+    # BEFORE calling policy.propose, so `history.entries[-1].profile` is the
+    # profile the rule is reacting to. `rule_effect_was_negative` compares
+    # against that entry, so a fixture that omits it makes before and after the
+    # same object and every nudge look inert.
+    history.entries.append(HistoryEntry(
+        iteration=1, config=None, profile=_transitivity_profile(current_rate),
+        decision=None, error=None, wall_clock_ms=1,
     ))
     return history
 
@@ -434,8 +451,8 @@ def test_rule_low_transitivity_declines_when_its_last_nudge_did_not_help():
     its rationale, so every fire looks new.
     """
     cfg = _config_with_blocking(threshold=0.8)
-    history = _history_where_the_rule_already_fired(prev_rate=0.20)
     # Transitivity went DOWN after the previous nudge.
+    history = _history_where_the_rule_already_fired(prev_rate=0.20, current_rate=0.138)
     out = rule_low_transitivity(_transitivity_profile(0.138), cfg, history)
     assert out is None, "the rule re-applied a nudge its own history shows is inert"
 
@@ -445,7 +462,7 @@ def test_rule_low_transitivity_declines_when_its_last_nudge_barely_moved_it():
     measured run-to-run drift is ~0.003-0.005 on the same config. A move
     inside that band is not evidence the lever works."""
     cfg = _config_with_blocking(threshold=0.8)
-    history = _history_where_the_rule_already_fired(prev_rate=0.200)
+    history = _history_where_the_rule_already_fired(prev_rate=0.200, current_rate=0.204)
     out = rule_low_transitivity(_transitivity_profile(0.204), cfg, history)
     assert out is None
 
@@ -453,7 +470,7 @@ def test_rule_low_transitivity_declines_when_its_last_nudge_barely_moved_it():
 def test_rule_low_transitivity_keeps_going_when_the_nudge_is_working():
     """The guard must not disable the rule where it earns its place."""
     cfg = _config_with_splitting_already_on(threshold=0.8)
-    history = _history_where_the_rule_already_fired(prev_rate=0.20)
+    history = _history_where_the_rule_already_fired(prev_rate=0.20, current_rate=0.55)
     out = rule_low_transitivity(_transitivity_profile(0.55), cfg, history)
     assert out is not None
     new_cfg, _ = out

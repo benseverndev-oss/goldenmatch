@@ -20,7 +20,11 @@ from goldenmatch.config.schemas import (
     GoldenMatchConfig,
     MatchkeyConfig,
 )
-from goldenmatch.core.autoconfig_history import PolicyDecision, RunHistory
+from goldenmatch.core.autoconfig_history import (
+    PolicyDecision,
+    RunHistory,
+    rule_effect_was_negative,
+)
 from goldenmatch.core.complexity_profile import ComplexityProfile
 
 if TYPE_CHECKING:
@@ -451,24 +455,8 @@ def rule_low_reduction_ratio(
 _TRANSITIVITY_PROGRESS_MARGIN = 0.01
 
 
-def _last_low_transitivity_rate(history: RunHistory) -> float | None:
-    """Transitivity observed when this rule last applied a nudge, if it has.
-
-    Only this rule's OWN prior decisions count: another rule's change tells us
-    nothing about whether THIS lever moves THIS signal.
-    """
-    for entry in reversed(history.entries):
-        decision = entry.decision
-        if decision is None or decision.rule_name != "low_transitivity":
-            continue
-        if entry.profile is None:
-            return None
-        return float(entry.profile.cluster.transitivity_rate)
-    return None
-
-
 #: Above this share of the frame, one cluster is a collapse rather than a merge.
-#: Mirrors `ClusterProfile._GIANT_CLUSTER_FRACTION`, which sets the RED bar.
+#: Mirrors the bar `ClusterProfile.red_reason` uses to raise `cluster_giant`.
 _GIANT_CLUSTER_FRACTION = 0.1
 _GIANT_THRESHOLD_STEP = 0.05
 _GIANT_THRESHOLD_CEILING = 0.95
@@ -583,10 +571,8 @@ def rule_low_transitivity(
     #
     # Returning None lets the policy advance to the next rule rather than
     # ending the iteration, so this only ever removes a known-inert option.
-    previous_rate = _last_low_transitivity_rate(history)
-    if (
-        previous_rate is not None
-        and cp.transitivity_rate <= previous_rate + _TRANSITIVITY_PROGRESS_MARGIN
+    if rule_effect_was_negative(
+        history, "low_transitivity", margin=_TRANSITIVITY_PROGRESS_MARGIN
     ):
         return None
 
@@ -622,6 +608,8 @@ def rule_low_transitivity(
         )
         return current.model_copy(update={"cluster": _new_cluster}), PolicyDecision(
             rule_name="low_transitivity",
+            predicts="cluster.transitivity_rate",
+            predicts_direction="up",
             rationale=(
                 f"transitivity={cp.transitivity_rate:.2f} < 0.85; splitting "
                 f"clusters held together by a weak transitive bridge"
@@ -640,6 +628,8 @@ def rule_low_transitivity(
     new_cfg = current.model_copy(update={"matchkeys": new_matchkeys})
     decision = PolicyDecision(
         rule_name="low_transitivity",
+        predicts="cluster.transitivity_rate",
+        predicts_direction="up",
         rationale=f"transitivity={cp.transitivity_rate:.2f} < 0.85; "
                   f"lowering threshold {mk.threshold:.2f} → {new_threshold:.2f}",
         config_diff={"matchkeys[0].threshold": new_threshold},
