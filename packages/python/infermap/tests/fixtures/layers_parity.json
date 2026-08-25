@@ -610,25 +610,11 @@
           ],
           "role_matched": true,
           "type_corroboration": 0.0
-        },
-        {
-          "role": "plant",
-          "kind": "place",
-          "columns": [
-            "plant_code"
-          ],
-          "score": 0.55,
-          "reason": "role_hint",
-          "qualifier": "plant",
-          "positions": [
-            "prefix"
-          ],
-          "role_matched": true,
-          "type_corroboration": 0.0
         }
       ],
       "unassigned": [
-        "reading_ts"
+        "reading_ts",
+        "plant_code"
       ]
     }
   },

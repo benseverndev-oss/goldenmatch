@@ -86,13 +86,19 @@ function remainderIsNumeric(remainder: string[]): boolean {
   return remainder.every((t) => /^[0-9]+$/.test(t));
 }
 
+/** Reject groups that share a token without sharing a party.
+ *
+ *  The whole-column carve-out is narrow on purpose (#2574): a column named
+ *  exactly `bank` refers to a party, while a lone `claim_id` is a KEY of the
+ *  table's own subject. Both labelled corpora agree the latter is not a
+ *  population. Mirrors `infermap-core::layer_group_is_viable`. */
 function groupIsViable(
   token: string,
   members: Member[],
   roleTokens: Map<string, number>,
 ): boolean {
   const recognised = roleTokens.has(token);
-  if (members.length < 2) return recognised;
+  if (members.length < 2) return recognised && members[0]![1] === "whole";
   const distinct = new Set<string>();
   for (const [, , rem] of members) {
     if (rem.length > 0 && !remainderIsNumeric(rem)) distinct.add(JSON.stringify(rem));
@@ -228,8 +234,10 @@ export function computeLayers(
   for (const s of scored) {
     const kept = s.members.filter(([idx]) => !claimed.has(idx));
     if (kept.length === 0) continue;
-    // Re-check viability after losing columns to a stronger layer.
-    if (kept.length < 2 && !roleTokens.has(s.token)) continue;
+    // Re-check viability after losing columns to a stronger layer. Mirrors
+    // groupIsViable; the two must agree or a layer can survive here that could
+    // not have opened.
+    if (kept.length < 2 && !(roleTokens.has(s.token) && kept[0]![1] === "whole")) continue;
     for (const [idx] of kept) claimed.add(idx);
     const affixStrength = Math.min(1, (kept.length - 1) / 2);
     layers.push({

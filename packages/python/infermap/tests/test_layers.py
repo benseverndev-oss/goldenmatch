@@ -79,7 +79,14 @@ def test_claims_detects_three_parties_with_distinct_kinds():
 
 
 def test_telemetry_detects_machine_asset_and_place_kinds():
-    """Non-person entities are first-class: an asset and a place, not just people."""
+    """Non-person entities are first-class: an asset and a place, not just people.
+
+    A lone ``plant_code`` no longer opens a party — one recognised column in
+    prefix position is not evidence of a population (#2574, see
+    ``_group_is_viable``). The ``place`` kind is asserted on a two-column plant
+    instead, so this still proves what it is named for rather than quietly
+    becoming a test of two kinds.
+    """
     result = detect_identity_layers(frame(TELEMETRY), domain="manufacturing")
 
     machine = layer_for(result, "machine")
@@ -87,7 +94,14 @@ def test_telemetry_detects_machine_asset_and_place_kinds():
     assert set(machine.columns) == {"machine_id", "machine_model", "machine_serial"}
 
     assert layer_for(result, "operator").kind == "person"
-    assert layer_for(result, "plant").kind == "place"
+    assert "plant_code" in result.unassigned
+
+    sited = detect_identity_layers(
+        frame([*TELEMETRY, "plant_name"]), domain="manufacturing"
+    )
+    plant = layer_for(sited, "plant")
+    assert plant.kind == "place"
+    assert set(plant.columns) == {"plant_code", "plant_name"}
 
 
 def test_suffix_qualifiers_group_with_prefix_ones():
@@ -479,3 +493,26 @@ def test_attribute_tokens_are_never_declared_as_generic_roles():
     roles, _ = _pack_inputs(load_domain("generic"))
     declared = {tok for (_n, _k, hints, _t) in roles for h in hints for tok in _tokens(h)}
     assert not (declared & _ATTRIBUTE_TOKENS)
+
+
+def test_fact_party_survives_a_colliding_field_type_hint():
+    """A token that is BOTH a party qualifier and a field-type hint must not be
+    suppressed. ``claim`` tokenizes out of healthcare's ``claim_status`` and
+    insurance's ``claim_number`` type hints, which stop-lists it; only a role
+    declaration rescues it, because ``stop -= role_tokens`` is the sole escape.
+
+    Measured on the FK ground-truth corpus: the three dimension parties scored
+    0.90-0.93 while the fact's own columns were dropped entirely, costing
+    ``claims_ledger`` two of the corpus's three exact-partition misses (#2574).
+    """
+    result = detect_identity_layers(frame([
+        "claim_claimnumber", "claim_lossdate", "claim_paidamount",
+        "insurer_name", "insurer_naiccode",
+        "provider_name", "provider_npi", "provider_specialty",
+        "patient_firstname", "patient_lastname", "patient_birthdate",
+    ]))
+
+    assert set(layer_for(result, "claim").columns) == {
+        "claim_claimnumber", "claim_lossdate", "claim_paidamount",
+    }
+    assert result.unassigned == []

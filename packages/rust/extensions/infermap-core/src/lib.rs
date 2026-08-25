@@ -332,10 +332,18 @@ fn remainder_is_numeric(remainder: &[String]) -> bool {
 
 /// Reject groups that share a token without sharing a party.
 ///
-/// Two rejections, both earning their place: single-column groups (unless a
-/// role hint recognises the token -- otherwise every column becomes its own
-/// layer), and trivial remainders (`col_1`/`col_2`/`col_3` share `col` but
-/// differ only by number: a table-wide prefix, not a party).
+/// Two rejections, both earning their place: single-column groups (unless the
+/// token IS the whole column -- otherwise every column becomes its own layer),
+/// and trivial remainders (`col_1`/`col_2`/`col_3` share `col` but differ only
+/// by number: a table-wide prefix, not a party).
+///
+/// The whole-column carve-out is narrow on purpose (#2574). A column named
+/// exactly `bank` refers to a party and nothing else can be meant by it. A
+/// lone `claim_id` is a KEY of the table's own subject, and two independently
+/// labelled corpora agree it is not a population: the hand-labelled precision
+/// corpus leaves the fact's key uncovered in 6 of 6 positives, and the
+/// FK-derived corpus only ever calls a fact a party when it contributes
+/// several columns. Accepting any recognised single column satisfied neither.
 fn layer_group_is_viable(
     token: &str,
     members: &[LayerMember],
@@ -343,7 +351,7 @@ fn layer_group_is_viable(
 ) -> bool {
     let recognised = role_tokens.contains_key(token);
     if members.len() < 2 {
-        return recognised;
+        return recognised && members[0].1 == "whole";
     }
     let distinct: HashSet<&[String]> = members
         .iter()
@@ -513,8 +521,10 @@ pub fn detect_identity_layers(
             continue;
         }
         // Re-check viability after losing columns to a stronger layer: a group
-        // reduced to one unrecognised column is no longer evidence of a party.
-        if kept.len() < 2 && !role_tokens.contains_key(&s.token) {
+        // reduced to one column is no longer evidence of a party unless that
+        // column IS the qualifier. Mirrors `layer_group_is_viable`; the two
+        // must agree or a layer can survive here that could not have opened.
+        if kept.len() < 2 && !(role_tokens.contains_key(&s.token) && kept[0].1 == "whole") {
             continue;
         }
         for (idx, _, _) in &kept {

@@ -309,8 +309,10 @@ def _layers_core_pure(
         kept = [m for m in members if m[0] not in claimed]
         if not kept:
             continue
-        # Re-check viability after losing columns to a stronger layer.
-        if len(kept) < 2 and token not in role_tokens:
+        # Re-check viability after losing columns to a stronger layer. Mirrors
+        # _group_is_viable; the two must agree or a layer can survive here that
+        # could not have opened.
+        if len(kept) < 2 and not (token in role_tokens and kept[0][1] == "whole"):
             continue
         claimed.update(m[0] for m in kept)
         n = len(kept)
@@ -369,14 +371,22 @@ def _group_is_viable(
 ) -> bool:
     """Reject groups that share a token without sharing a party.
 
-    Single-column groups unless a role hint recognises the token (otherwise
-    every column becomes its own layer), and trivial remainders —
+    Single-column groups unless the token IS the whole column (otherwise every
+    column becomes its own layer), and trivial remainders —
     ``col_1``/``col_2``/``col_3`` share ``col`` but differ only by number: a
     table-wide prefix, not a party.
+
+    The whole-column carve-out is narrow on purpose (#2574). A column named
+    exactly ``bank`` refers to a party and nothing else can be meant by it. A
+    lone ``claim_id`` is a KEY of the table's own subject, and both independently
+    labelled corpora agree it is not a population: the precision corpus leaves
+    the fact's key uncovered in 6 of 6 positives, and the FK-derived corpus only
+    calls a fact a party when it contributes several columns. Accepting any
+    recognised single column satisfied neither.
     """
     recognised = token in role_tokens
     if len(members) < 2:
-        return recognised
+        return recognised and members[0][1] == "whole"
     distinct = {
         remainder
         for _, _, remainder in members

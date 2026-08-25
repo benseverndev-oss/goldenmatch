@@ -35,11 +35,19 @@ from layers_fk_groundtruth import run  # noqa: E402
 
 #: Measured behaviour on conventions the affix signal can see. Floors, not goals.
 #:
-#: Exact partition is 22 of 24 cases (0.9166...). The floor sits just below it
-#: rather than at the rounded 92% the report prints -- a floor set from a
-#: displayed figure fails on the value it was derived from.
-MIN_EXACT_PARTITION = 0.91
-MIN_PAIRWISE_F1 = 0.98
+#: Was 22 of 24 cases (0.9166...), with both misses on `claims_ledger`: the
+#: three dimension parties scored 0.90-0.93 while the FACT's own columns were
+#: dropped, because `claim` tokenizes out of healthcare's `claim_status` type
+#: hint and is stop-listed. Declaring `claim` as a role took this to 24 of 24
+#: (#2574), so the floors are pinned at the exact values -- the same posture
+#: `test_layers_precision.py` takes with MIN_SPECIFICITY.
+#:
+#: This corpus has now SATURATED on detectable conventions, which is a reason
+#: to grow it rather than to celebrate. The discriminating signal has moved to
+#: the `initial` convention (still 0%, see the blind-spot test below) and to
+#: the blind-labelling corpus.
+MIN_EXACT_PARTITION = 1.0
+MIN_PAIRWISE_F1 = 1.0
 
 
 def _summary():
