@@ -14,7 +14,15 @@ cluster_name: goldenmatch-bench
 provider:
   type: gcp
   region: us-central1
-  availability_zone: us-central1-a
+  # Rendered from the `zone` dispatch input. NOT cosmetic: GCP capacity is
+  # per-zone and independent of quota -- run 32883530356 died on
+  # ZONE_RESOURCE_POOL_EXHAUSTED for n2-highmem-32 in us-central1-a with
+  # N2_CPUS quota at 0/200. Quota says what you are ALLOWED, capacity says what
+  # exists right now, and only the second one was the problem. With the zone
+  # hardcoded the only recovery was editing this file, so a transient capacity
+  # dip blocked the lane entirely. n2-highmem-32/-64 and n2-standard-16 are all
+  # offered in us-central1-{a,b,c,f}.
+  availability_zone: GOLDENMATCH_ZONE_PLACEHOLDER
   # project_id is injected by the workflow at dispatch time so the same
   # cluster.yaml works across MJH GCP projects.
   project_id: GOLDENMATCH_GCP_PROJECT_PLACEHOLDER
