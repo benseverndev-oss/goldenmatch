@@ -143,6 +143,29 @@ gh workflow run bench-ray-cluster.yml \
 The workflow's step summary shows the wall / RSS / F1 numbers when it
 completes; the full JSON artifact is downloadable from the run page.
 
+### Sweeping the #957 score-tuning knobs
+
+The four score knobs only apply to the **distributed** engine, so a sweep needs
+`distributed=1`; the legacy `backend=ray` path never enters the block-shuffle
+score stage. The workflow refuses a dispatch that sets a knob with
+`distributed=0` rather than running a bench that measures nothing.
+
+```sh
+gh workflow run bench-ray-cluster.yml     --repo benseverndev-oss/goldenmatch     -f rows=100000000     -f distributed=1     -f head_machine=n2-highmem-32     -f label=957-conc60-res02     -f score_concurrency=60     -f op_reservation=0.2
+```
+
+Leave a knob **empty** to keep the engine's own default: pinning every knob to
+its default silently stops testing the default. Each run's effective values are
+recorded in its artifact JSON under `score_knobs` and echoed in the step
+summary, so a null result is attributable to a configuration rather than to a
+sweep that never varied anything.
+
+The knobs reach the run as **flags**, not environment variables: `ray submit`
+gives the driver a fresh shell, so anything exported around the submit is lost.
+(That was the whole reason #957's experiment could not be run for a release
+cycle -- the engine also captured the values at import time, before the driver
+could set them. Both halves are fixed; the flags are the transport.)
+
 ## Verifying teardown
 
 If a run misbehaves, double-check no instances are leaked:

@@ -63,6 +63,33 @@ on:
         description: "Ray Dataset partition count for the distributed run"
         required: false
         default: "64"
+      # --- #957 distributed score-tuning knobs -------------------------
+      # Leave EMPTY to keep the engine's own default. Pinning every knob to
+      # its default would silently stop testing the default. The effective
+      # values land in the artifact JSON under "score_knobs", so a run always
+      # states the configuration that produced its number.
+      # Only in force when distributed=1: these tune the block-shuffle score
+      # stage, which the legacy backend=ray path never enters.
+      score_num_cpus:
+        description: "#957: CPUs reserved per distributed scoring task (empty = engine default 2)"
+        required: false
+        default: ""
+      score_concurrency:
+        description: "#957: explicit concurrency= on the _score map_batches (empty = let Ray decide)"
+        required: false
+        default: ""
+      score_project:
+        description: "#957: project to scoring columns before the block-shuffle. 1 = on, 0 = off, empty = engine default (on)"
+        required: false
+        default: ""
+      op_reservation:
+        description: "#957: Ray Data per-op object-store reservation ratio, e.g. 0.2. Lower it when _score is [backpressured:tasks(ResourceBudget)] below CPU capacity (empty = Ray default ~0.5)"
+        required: false
+        default: ""
+      shuffle_parts:
+        description: "#957: block-shuffle partition count (empty = the harness default 512)"
+        required: false
+        default: ""
       head_machine:
         description: "Head node machine type (the driver generates the full frame in memory; highmem for distributed runs). 100M: n2-highmem-32 (256 GB); 200M: n2-highmem-64 (512 GB)."
         required: false
@@ -265,10 +292,42 @@ jobs:
         # interleaved with bench stdout. Without this, the only
         # signal mid-run is autoscaler "Resized to N CPUs" lines and
         # whatever the bench script chooses to print.
+        env:
+          # Read through the environment rather than interpolated into the
+          # script body: a `${{ }}` expansion inside `run:` is a template
+          # injection seam, and these are free-text dispatch inputs.
+          SCORE_NUM_CPUS: ${{ inputs.score_num_cpus }}
+          SCORE_CONCURRENCY: ${{ inputs.score_concurrency }}
+          SCORE_PROJECT: ${{ inputs.score_project }}
+          OP_RESERVATION: ${{ inputs.op_reservation }}
+          SHUFFLE_PARTS: ${{ inputs.shuffle_parts }}
+          DISTRIBUTED: ${{ inputs.distributed }}
         run: |
           set -euo pipefail
           mkdir -p .profile_tmp/qis
           OUT_REMOTE="/tmp/qis_${{ inputs.label }}.json"
+
+          # #957 score-tuning knobs. They travel as FLAGS in the argv the
+          # submit already ships, because `ray submit` hands the driver a fresh
+          # shell -- exporting them in this step would never reach it. An empty
+          # input contributes no flag, so the engine default stays in force.
+          KNOBS=()
+          if [ -n "$SCORE_NUM_CPUS" ]; then KNOBS+=(--score-num-cpus "$SCORE_NUM_CPUS"); fi
+          if [ -n "$SCORE_CONCURRENCY" ]; then KNOBS+=(--score-concurrency "$SCORE_CONCURRENCY"); fi
+          if [ -n "$OP_RESERVATION" ]; then KNOBS+=(--op-reservation "$OP_RESERVATION"); fi
+          if [ -n "$SHUFFLE_PARTS" ]; then KNOBS+=(--shuffle-parts "$SHUFFLE_PARTS"); fi
+          case "$SCORE_PROJECT" in
+            1) KNOBS+=(--score-project) ;;
+            0) KNOBS+=(--no-score-project) ;;
+            "") ;;
+            *) echo "::error::score_project must be 1, 0, or empty (got '$SCORE_PROJECT')"; exit 1 ;;
+          esac
+          # `${KNOBS[@]+...}` guards the empty-array case under `set -u`.
+          echo "score knobs -> ${KNOBS[*]+${KNOBS[*]}}"
+          if [ "$DISTRIBUTED" != "1" ] && [ ${#KNOBS[@]} -gt 0 ]; then
+            echo "::error::score knobs were set but distributed=0. The legacy backend=ray path never enters the block-shuffle score stage, so they would measure nothing. Re-dispatch with distributed=1."
+            exit 1
+          fi
 
           # Background poller. Runs in a subshell so we can trap-kill
           # it cleanly on bench completion regardless of exit code.
@@ -302,6 +361,7 @@ jobs:
                  --distributed \
                  --partitions ${{ inputs.partitions }} \
                  --wcc-scratch "${{ inputs.wcc_scratch }}/${{ github.run_id }}" \
+                 ${KNOBS[@]+"${KNOBS[@]}"} \
                  --out "$OUT_REMOTE"
           else
             # Legacy: in-memory backend=ray (does NOT distribute; head-only).
@@ -381,6 +441,13 @@ jobs:
           rss_gb = d.get("rss_mb_peak", 0) / 1024
           f1 = d.get("pairwise", {}).get("f1", "?")
           print(f"## bench-ray-cluster: {rows:,} rows")
+          # #957: state the score-tuning configuration alongside the number.
+          # A run that reports only its wall cannot be told apart from a run
+          # that silently fell back to the defaults.
+          knobs = d.get("score_knobs")
+          if knobs:
+              print("- score knobs: " + ", ".join(
+                  f"{k}={v}" for k, v in knobs.items()))
           print(f"- wall: {wall}")
           print(f"- peak RSS: {rss_gb:.2f} GB (driver-side; per-node varies)")
           print(f"- pairwise F1: {f1}")

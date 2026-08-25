@@ -243,3 +243,85 @@ def test_qis_native_parity(tmp_path):
     assert nat["native"]["available"] is True
     assert py["pairwise"]["f1"] == pytest.approx(nat["pairwise"]["f1"], abs=1e-9)
     assert py["clusters_signature"] == nat["clusters_signature"]
+
+
+# --- #957: score-tuning knobs must survive the ray-submit boundary --------
+# `ray submit` gives the driver a FRESH shell, so a value exported around the
+# submit never reaches the rung. These flags are the transport that does work,
+# for the same reason --wcc-scratch is a flag. Exercised through the real
+# parser so a renamed or dropped flag fails here rather than on a paid cluster.
+
+_KNOB_ENV = (
+    "GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS",
+    "GOLDENMATCH_DISTRIBUTED_SCORE_CONCURRENCY",
+    "GOLDENMATCH_DISTRIBUTED_SCORE_PROJECT",
+    "GOLDENMATCH_DISTRIBUTED_OP_RESERVATION",
+    "GOLDENMATCH_DISTRIBUTED_SHUFFLE_PARTS",
+)
+
+
+@pytest.fixture
+def _clean_knob_env():
+    """Snapshot and restore explicitly rather than via monkeypatch.
+
+    ``_apply_score_knob_flags`` writes ``os.environ`` directly (it has to --
+    that IS the transport under test). ``monkeypatch.delenv(..., raising=False)``
+    records nothing when the variable was already absent, so it has no undo to
+    run and those raw writes leak into whatever test module the worker picks up
+    next. Caught by exactly that: these tests turned the score-knob defaults
+    non-default for a later module in the same process.
+    """
+    saved = {k: os.environ.get(k) for k in _KNOB_ENV}
+    for k in _KNOB_ENV:
+        os.environ.pop(k, None)
+    try:
+        yield
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def test_score_knob_flags_reach_the_engine_env(_clean_knob_env):
+    args = qis._build_parser().parse_args([
+        "--rows", "1000", "--distributed",
+        "--score-num-cpus", "4",
+        "--score-concurrency", "60",
+        "--no-score-project",
+        "--op-reservation", "0.2",
+        "--shuffle-parts", "512",
+    ])
+    qis._apply_score_knob_flags(args)
+
+    assert os.environ["GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS"] == "4"
+    assert os.environ["GOLDENMATCH_DISTRIBUTED_SCORE_CONCURRENCY"] == "60"
+    assert os.environ["GOLDENMATCH_DISTRIBUTED_SCORE_PROJECT"] == "0"
+    assert os.environ["GOLDENMATCH_DISTRIBUTED_OP_RESERVATION"] == "0.2"
+    assert os.environ["GOLDENMATCH_DISTRIBUTED_SHUFFLE_PARTS"] == "512"
+
+    # ...and the engine, imported long before these flags were parsed, sees them.
+    from goldenmatch.distributed.scoring import effective_score_knobs
+    assert effective_score_knobs() == {
+        "score_num_cpus": 4,
+        "score_project": False,
+        "score_concurrency": 60,
+        "op_reservation": "0.2",
+        "shuffle_parts": "512",
+    }
+
+
+def test_score_knob_flags_omitted_leave_engine_defaults_alone(_clean_knob_env):
+    """Unset flags must not write the env: a bench that pins every knob to a
+    default silently stops testing the default."""
+    args = qis._build_parser().parse_args(["--rows", "1000", "--distributed"])
+    qis._apply_score_knob_flags(args)
+    for k in _KNOB_ENV:
+        assert k not in os.environ, f"{k} was written despite no flag"
+
+
+def test_score_project_flag_can_turn_the_projection_back_on(_clean_knob_env):
+    args = qis._build_parser().parse_args(["--rows", "1000", "--score-project"])
+    qis._apply_score_knob_flags(args)
+    assert os.environ["GOLDENMATCH_DISTRIBUTED_SCORE_PROJECT"] == "1"

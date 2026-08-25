@@ -205,6 +205,18 @@ This is the knob most people get wrong, so read the contract before you run a 10
 | `GOLDENMATCH_DISTRIBUTED_OP_RESERVATION` | unset (Ray default ~0.5) | Ray Data per-op object-store reservation ratio. **Lower it** (e.g. `0.2`) to hand the running `_score` op more object-store budget when it's `ResourceBudget`-backpressured below CPU capacity (idle workers, object store not full). Tune at scale. |
 | `GOLDENMATCH_DISTRIBUTED_SCORE_CONCURRENCY` | unset | Explicit `concurrency=` on the `_score` map_batches. Pins the task-pool size once blocks are narrow; the object-store reservation/shuffle-parts knobs above govern the actual `ResourceBudget` cap. |
 
+<Warning>
+  **On a Ray cluster, exporting these four in your shell does not reach the run.**
+  `ray submit` hands the driver a fresh shell, so a value set around the submit
+  never arrives. Pass them as flags on the driver script instead --
+  `--score-num-cpus`, `--score-concurrency`, `--score-project` /
+  `--no-score-project`, `--op-reservation`, `--shuffle-parts` -- which travel in
+  the argv the submit already ships. The engine reads all four at call time, so
+  a driver that sets them after importing `goldenmatch.distributed` is fine.
+  `scripts/quality_invariant_scale.py` carries these flags and records the
+  effective values in its output JSON under `score_knobs`.
+</Warning>
+
 <Note>
   **If the distributed score stage leaves workers idle** (`MapBatches(_score): … [backpressured:tasks(ResourceBudget)]` with the object store well under capacity), `_score` is reservation-capped, not CPU-bound. Lower `GOLDENMATCH_DISTRIBUTED_OP_RESERVATION` (→ `0.2`) and/or raise `GOLDENMATCH_DISTRIBUTED_SHUFFLE_PARTS`, then re-measure. The optimal pair is cluster-shaped. (Shrinking Ray Data's `target_max_block_size` is **not** a safe lever: `_score` keeps each co-located partition whole via `batch_size=None`, so a split block would split a group and under-score.)
 </Note>
