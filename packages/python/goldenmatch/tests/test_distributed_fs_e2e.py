@@ -29,6 +29,7 @@ FS config builder are inline, not imported from scripts/.
 from __future__ import annotations
 
 import itertools
+import os
 import random
 
 import polars as pl
@@ -46,16 +47,18 @@ def _ray_local():
       * ``num_cpus`` is oversubscribed (6 logical slots on a smaller box). The
         block-shuffle path spawns long-lived ``HashShuffleAggregator`` actors
         that each hold a CPU slot; with too few slots those actors starve the
-        ``_score`` op (which reserves ``_SCORE_NUM_CPUS``) and the run deadlocks
+        ``_score`` op (which reserves the per-task CPU knob) and the run deadlocks
         with ~0% CPU. The data here is tiny, so oversubscribing slots only
         relieves scheduling, it does not overcommit real work.
-      * ``_SCORE_NUM_CPUS`` is pinned to 1 (its module default of 2 is tuned for
-        a 64 GB / many-core distributed box). Saved/restored around the module.
+      * the per-task CPU reservation is pinned to 1 (its default of 2 is tuned
+        for a 64 GB / many-core distributed box). Saved/restored around the
+        module. Set through the env, which the scoring module now reads at call
+        time -- it used to be an import-time constant only a monkeypatched
+        module attribute could reach.
     """
-    from goldenmatch.distributed import scoring
-
-    saved_cpus = scoring._SCORE_NUM_CPUS
-    scoring._SCORE_NUM_CPUS = 1
+    _KNOB = "GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS"
+    saved_cpus = os.environ.get(_KNOB)
+    os.environ[_KNOB] = "1"
     ray.init(
         local_mode=False, ignore_reinit_error=True,
         num_cpus=6, logging_level="WARNING",
@@ -64,7 +67,10 @@ def _ray_local():
         yield
     finally:
         ray.shutdown()
-        scoring._SCORE_NUM_CPUS = saved_cpus
+        if saved_cpus is None:
+            os.environ.pop(_KNOB, None)
+        else:
+            os.environ[_KNOB] = saved_cpus
 
 
 def _gen_fs_data(
