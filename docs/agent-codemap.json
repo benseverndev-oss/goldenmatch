@@ -4749,14 +4749,19 @@
           "purpose": "Segment labels — which *party* each column describes.",
           "defines": [
             "Segment",
+            "_column_person_rate",
+            "_looks_like_addresses",
             "_to_segment",
             "column_segments",
             "detect_segments",
+            "infer_kinds",
             "is_heterogeneous",
             "segments_from_layers",
             "segments_from_schema"
           ],
           "imports": [
+            "goldenmatch.core.frame",
+            "goldenmatch.refdata",
             "infermap"
           ]
         },

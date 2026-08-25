@@ -175,3 +175,74 @@ def test_module_imports_without_goldencheck_types():
     src = pathlib.Path(mod.__file__).read_text(encoding="utf-8")
     assert "import goldencheck_types" not in src
     assert "from goldencheck_types" not in src
+
+
+# ── kind inference from values (#2758) ───────────────────────────────────────
+
+def _frame(**cols):
+    import polars as pl
+    return pl.DataFrame(cols)
+
+
+def test_person_kind_is_inferred_from_surname_density():
+    """Short, surname-dense columns are people. Measured 0.42-0.70 on NCVR."""
+    from goldenmatch.core.segments import Segment, infer_kinds
+
+    df = _frame(cust_last=["Smith", "Johnson", "Williams", "Brown", "Jones",
+                           "Garcia", "Miller", "Davis", "Martinez", "Wilson"])
+    out = infer_kinds(df, [Segment(label="cust", kind="unknown",
+                                   columns=["cust_last"])])
+    assert out[0].kind == "person"
+
+
+def test_prose_columns_abstain_rather_than_guess():
+    """Product titles measured 0.05-0.12 surname rate at 4.5-6.7 tokens/value.
+
+    The token gate is what makes this work: a 10k-surname list contains ordinary
+    English words, so long text hits one almost surely and a per-value metric
+    scores product descriptions at 0.83.
+    """
+    from goldenmatch.core.segments import Segment, infer_kinds
+
+    df = _frame(item_title=[
+        "Sony Bravia 46 inch LCD flat panel television with stand",
+        "Canon PowerShot digital camera silver compact zoom lens",
+        "Apple iPod nano 8GB portable media player black edition",
+    ] * 4)
+    out = infer_kinds(df, [Segment(label="item", kind="unknown",
+                                   columns=["item_title"])])
+    assert out[0].kind == "unknown"
+
+
+def test_street_addresses_abstain():
+    """Street names ARE surnames -- NCVR's address column scores 0.266.
+
+    Only the tokens-per-value guard (2.2 measured, 2.0 floor) keeps addresses
+    out of `person`, so it is pinned here rather than left to the rate alone.
+    """
+    from goldenmatch.core.segments import Segment, infer_kinds
+
+    df = _frame(addr=["123 JACKSON ST", "45 FRANKLIN AVE", "9 MADISON RD",
+                      "780 JEFFERSON BLVD", "12 MONROE LN"] * 3)
+    out = infer_kinds(df, [Segment(label="site", kind="unknown", columns=["addr"])])
+    assert out[0].kind == "unknown"
+
+
+def test_a_declared_kind_is_never_overruled_by_values():
+    """A pack's `kind` is an explicit statement; values do not get a vote."""
+    from goldenmatch.core.segments import Segment, infer_kinds
+
+    df = _frame(vendor=["Smith", "Johnson", "Williams", "Brown", "Jones"] * 2)
+    out = infer_kinds(df, [Segment(label="vendor", kind="organization",
+                                   columns=["vendor"])])
+    assert out[0].kind == "organization"
+
+
+def test_inference_fails_open():
+    """Same posture as the rest of this module: absence, never a guess."""
+    from goldenmatch.core.segments import Segment, infer_kinds
+
+    segs = [Segment(label="x", kind="unknown", columns=["nope"])]
+    assert infer_kinds(None, segs) == segs
+    assert infer_kinds(_frame(other=["a"]), segs)[0].kind == "unknown"
+    assert infer_kinds(_frame(a=["x"]), []) == []

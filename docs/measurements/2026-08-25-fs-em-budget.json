@@ -1,0 +1,42 @@
+{
+  "dataset": "historical_50k",
+  "levels": 5,
+  "rows": 20000,
+  "cells": [
+    {
+      "em_iterations": 1,
+      "levels": 5,
+      "converged": false,
+      "warning": "EM did not converge after 1 iterations (delta=0.445971)",
+      "f1": 0.5109,
+      "precision": 0.3555,
+      "recall": 0.9075,
+      "seconds": 49.0
+    },
+    {
+      "em_iterations": 20,
+      "levels": 5,
+      "converged": true,
+      "warning": null,
+      "f1": 0.4744,
+      "precision": 0.3282,
+      "recall": 0.8557,
+      "seconds": 105.7
+    },
+    {
+      "em_iterations": 100,
+      "levels": 5,
+      "converged": true,
+      "warning": null,
+      "f1": 0.4744,
+      "precision": 0.3282,
+      "recall": 0.8557,
+      "seconds": 98.4
+    }
+  ],
+  "summary": {
+    "f1_spread": 0.0365,
+    "best_iterations": 1,
+    "known_positive_fired": true
+  }
+}
