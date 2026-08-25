@@ -90,9 +90,10 @@
 # the master VM puts both drivers inside the cluster's own network and keeps
 # the two engines symmetric -- which is the whole point of a comparison.
 #
-# Required GitHub secrets: INFISICAL_CLIENT_ID / INFISICAL_CLIENT_SECRET.
-# Everything GCP is pulled from Infisical at runtime, exactly as
-# bench-ray-cluster.yml does it -- no new GH secrets.
+# Required GitHub secret: DOPPLER_TOKEN (read-only, showcase/dev).
+# Everything GCP is pulled from Doppler (project `showcase`, config
+# `dev`) at runtime, exactly as bench-ray-cluster.yml does it -- one
+# shared token, no new GH secrets.
 name: bench-spark-gce-cluster
 
 on:
@@ -181,72 +182,49 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
 
-      - name: Fetch GCP creds from Infisical
-        # Identical mechanism to bench-ray-cluster.yml -- same Machine Identity,
+      - name: Fetch GCP creds from Doppler
+        # Identical mechanism to bench-ray-cluster.yml -- same service token,
         # same project, same masking. Reusing it rather than adding GH secrets
         # keeps one auth path to audit.
         env:
-          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
-          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
-          if [ -z "${INFISICAL_CLIENT_ID:-}" ] || [ -z "${INFISICAL_CLIENT_SECRET:-}" ]; then
-            echo "::error::INFISICAL_CLIENT_ID / INFISICAL_CLIENT_SECRET not set; see docs/distributed/ray-gce-cluster.md"
+          if [ -z "${DOPPLER_TOKEN:-}" ]; then
+            echo "::error::DOPPLER_TOKEN not set; see docs/distributed/ray-gce-cluster.md"
             exit 1
           fi
-          # Infisical's REST API directly, NOT the CLI. Installing the CLI needs
-          # apt, and apt on a GitHub-hosted runner needs a lock the runner's own
-          # housekeeping holds: runs 32271581601, 32273435168, 32276315793 and
-          # 32278438000 all died there, the last one with
+          # Doppler's REST API directly, NOT the CLI -- this job installs no
+          # package manager on purpose. Installing a CLI via apt needs a lock
+          # the runner's own housekeeping holds: runs 32271581601, 32273435168,
+          # 32276315793 and 32278438000 all died there, the last one with
           #
           #     apt lock still held after 450s
           #     E: Could not get lock /var/lib/apt/lists/lock.
           #        It is held by process 2199 (apt-get)
           #
-          # after waiting for it and retrying three times. There is no published
-          # standalone binary to fall back to (checked: the CLI's releases carry
-          # no assets), so the way to stop losing runs to a package manager is
-          # to stop needing one. `curl` and `jq` are preinstalled.
+          # after waiting for it and retrying three times. `curl` and `jq` are
+          # preinstalled, so needing neither apt nor a downloaded binary keeps
+          # this job's dependency surface at zero.
           #
-          # Same Machine Identity, same project, same secrets, same masking --
-          # only the transport changes. Routes verified against the live API
-          # before this was written, using NO credentials: an empty POST to the
-          # login route returns 422 and a bogus one returns 401 "Invalid
-          # credentials", which proves both the path and the field names; the
-          # secret routes return 401 rather than 404, which proves they exist.
-          API="${INFISICAL_API:-https://app.infisical.com}"
-          PROJECT_ID=a99885f0-c5af-4ae1-9dc8-255cc60aa129
-          ENV_SLUG=dev
-
-          # Built with jq rather than string interpolation so a quote or
-          # backslash in the client secret cannot break the JSON.
-          LOGIN_BODY=$(jq -nc --arg id "$INFISICAL_CLIENT_ID" \
-                              --arg sec "$INFISICAL_CLIENT_SECRET" \
-                              '{clientId:$id, clientSecret:$sec}')
-          LOGIN=$(curl -sS --max-time 60 -X POST "$API/api/v1/auth/universal-auth/login" \
-                    -H 'Content-Type: application/json' -d "$LOGIN_BODY")
-          TOKEN=$(jq -r '.accessToken // empty' <<<"$LOGIN")
-          if [ -z "$TOKEN" ]; then
-            echo "::error::Infisical login failed: $(jq -r '.message // "no accessToken in response"' <<<"$LOGIN")"
+          # A Doppler service token authenticates as HTTP Basic with the token
+          # as the username and an empty password, and carries its own
+          # project/config -- so this is ONE unauthenticated-looking request
+          # with no login round-trip, where Infisical needed a login POST plus
+          # a per-secret GET with two API-version fallbacks.
+          BODY=$(curl -sS --max-time 60 --retry 3 -u "$DOPPLER_TOKEN:"                    "https://api.doppler.com/v3/configs/config/secrets/download?format=json")
+          if ! jq -e . >/dev/null 2>&1 <<<"$BODY"; then
+            echo "::error::Doppler returned a non-JSON response (token invalid or revoked?)"
             exit 1
           fi
-          echo "::add-mask::$TOKEN"
 
-          # v3-raw first, v4 as fallback: both are live today and the pair
-          # survives either being retired. Only the VALUE goes to stdout, so a
-          # diagnostic can never be captured as a secret.
+          # Only the VALUE reaches a variable; a diagnostic can never be
+          # captured as a secret.
           get_secret() {
-            local name="$1" out val
-            out=$(curl -sS --max-time 60 -H "Authorization: Bearer $TOKEN" \
-                  "$API/api/v3/secrets/raw/$name?workspaceId=$PROJECT_ID&environment=$ENV_SLUG&secretPath=%2F") || true
-            val=$(jq -r '.secret.secretValue // empty' <<<"$out")
+            local name="$1" val
+            val=$(jq -r --arg n "$name" '.[$n] // empty' <<<"$BODY")
             if [ -z "$val" ]; then
-              out=$(curl -sS --max-time 60 -H "Authorization: Bearer $TOKEN" \
-                    "$API/api/v4/secrets/$name?projectId=$PROJECT_ID&environment=$ENV_SLUG&secretPath=%2F") || true
-              val=$(jq -r '.secret.secretValue // empty' <<<"$out")
-            fi
-            if [ -z "$val" ]; then
-              echo "::error::could not read $name from Infisical: $(jq -r '.message // "empty value from both v3 and v4"' <<<"$out")" >&2
+              echo "::error::could not read $name from Doppler showcase/dev" >&2
               return 1
             fi
             printf '%s' "$val"
@@ -255,14 +233,9 @@ jobs:
           PROJ=$(get_secret GCP_RAY_BENCH_PROJECT_ID)
           echo "::add-mask::$PROJ"
 
-          get_secret GCP_SA_KEY_B64 \
-            | base64 -d --ignore-garbage > "$HOME/gcp-sa.json"
+          get_secret GCP_SA_KEY_B64             | base64 -d --ignore-garbage > "$HOME/gcp-sa.json"
           chmod 600 "$HOME/gcp-sa.json"
           python3 -c "import json; json.load(open('$HOME/gcp-sa.json'))"
-
-          echo "GCP_PROJECT_ID=$PROJ" >> $GITHUB_ENV
-          echo "GOOGLE_APPLICATION_CREDENTIALS=$HOME/gcp-sa.json" >> $GITHUB_ENV
-
       - name: Authenticate gcloud
         run: |
           set -euo pipefail
@@ -1164,8 +1137,9 @@ jobs:
           # fails BEFORE provisioning never sets it. Under `set -u` the bare
           # expansion aborts the step on line 1, which also skipped the GCS
           # cleanup below -- teardown failing open is the one thing it must
-          # never do. Surfaced by run 32276315793, where the Infisical step
-          # failed early for the first time and teardown died with
+          # never do. Surfaced by run 32276315793, where the creds-fetch step
+          # (Infisical, at the time) failed early for the first time and
+          # teardown died with
           # `NODE_NAMES: unbound variable`.
           if [ -z "${NODE_NAMES:-}" ]; then
             echo "no instances were provisioned; nothing to delete"

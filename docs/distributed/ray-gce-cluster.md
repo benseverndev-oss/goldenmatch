@@ -57,38 +57,36 @@ gcloud iam service-accounts keys create gm-ray-bench-key.json \
     --iam-account="$SA_EMAIL"
 ```
 
-### 3. Store the GCP creds in Infisical
+### 3. Store the GCP creds in Doppler
 
-The workflow pulls these at runtime from Infisical project
-`a99885f0-c5af-4ae1-9dc8-255cc60aa129`, env `dev`, under the team's
-existing naming convention:
+The workflows pull these at runtime from Doppler project `showcase`,
+config `dev`:
 
-| Infisical secret name | Format | Decoded form |
+| Doppler secret name | Format | Decoded form |
 |---|---|---|
-| `GCP_RAY_BENCH_PROJECT_ID` | plain string | the GCP project id where the bench SA lives (e.g. `golden-490919`) |
-| `GCP_SA_KEY_B64` | base64-encoded | service account JSON |
+| `GCP_RAY_BENCH_PROJECT_ID` | plain string | the GCP project id where the bench SA lives (`golden-490919`) |
+| `GCP_SA_KEY_B64` | base64-encoded | service account JSON (`goldenmatch-vertex-bench@golden-490919`) |
 
 `GCP_RAY_BENCH_PROJECT_ID` is a Ray-bench-specific name on purpose -- the
-team's existing `GOOGLE_CLOUD_PROJECT` secret points at a different
-project used for Vertex AI work. Reusing it would 403 the bench SA on
-every cloudresourcemanager call.
+existing `GOOGLE_CLOUD_PROJECT` secret points at a different project used
+for Vertex AI work. Reusing it would 403 the bench SA on every
+cloudresourcemanager call.
 
-The workflow base64-decodes `GCP_SA_KEY_B64` and writes the JSON
-straight to disk; the raw bytes never round-trip through env vars.
+The workflows base64-decode `GCP_SA_KEY_B64` and write the JSON straight
+to disk; the raw bytes never round-trip through env vars.
 
-Set them with `infisical secrets set` (redirect stdout to `$null` so
-values don't echo into the terminal):
+Set them by piping the value in, never as an argument -- an argument
+lands in shell history and in the process table:
 
 ```powershell
 # Project id (plain)
-$projectId = (gcloud config get-value project)
-infisical.cmd secrets set --projectId a99885f0-c5af-4ae1-9dc8-255cc60aa129 --env dev `
-    GOOGLE_CLOUD_PROJECT=$projectId > $null
+gcloud config get-value project | doppler secrets set GCP_RAY_BENCH_PROJECT_ID `
+    --scope "D:\personal" -p showcase -c dev --silent
 
 # Service account JSON: base64-encode locally, store the encoded form
 $saB64 = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes("gm-ray-bench-key.json"))
-infisical.cmd secrets set --projectId a99885f0-c5af-4ae1-9dc8-255cc60aa129 --env dev `
-    GCP_SA_KEY_B64=$saB64 > $null
+$saB64 | doppler secrets set GCP_SA_KEY_B64 `
+    --scope "D:\personal" -p showcase -c dev --silent
 Remove-Variable saB64
 Remove-Item gm-ray-bench-key.json   # don't keep the JSON on disk
 ```
@@ -96,39 +94,51 @@ Remove-Item gm-ray-bench-key.json   # don't keep the JSON on disk
 Verify by name only (no values):
 
 ```powershell
-infisical.cmd secrets --projectId a99885f0-c5af-4ae1-9dc8-255cc60aa129 --env dev | Select-String "GOOGLE_CLOUD_PROJECT|GCP_SA_KEY_B64"
+doppler secrets --scope "D:\personal" -p showcase -c dev --only-names |
+    Select-String "GCP_RAY_BENCH_PROJECT_ID|GCP_SA_KEY_B64"
 ```
 
-### 4. Create a Machine Identity for GitHub Actions
+### 4. Create the Doppler service token for GitHub Actions
 
-The workflow authenticates to Infisical via a dedicated Machine
-Identity using Universal Auth (client id + secret pair):
-
-1. Infisical web UI → `goldenmatch` project → Access Control →
-   Machine Identities → Create.
-2. Name: `goldenmatch-bench-ray-cluster`. Auth method: **Universal
-   Auth**. Trusted IPs: `0.0.0.0/0` (Actions runners are dynamic;
-   restrict later if needed).
-3. Project permissions: read-only on env `dev` for
-   `GOOGLE_CLOUD_PROJECT` and `GCP_SA_KEY_B64` (the only two secrets
-   the workflow fetches).
-4. Copy the generated **Client ID** and **Client Secret**. The
-   secret is shown ONCE.
-
-### 5. Set the two GitHub Actions secrets
+A service token carries its own project and config, so the workflows need
+no login step and no scope flags -- the token *is* the scope. Create it
+read-only:
 
 ```sh
-gh secret set INFISICAL_CLIENT_ID \
-    --repo benseverndev-oss/goldenmatch \
-    --body "<paste client id>"
-
-gh secret set INFISICAL_CLIENT_SECRET \
-    --repo benseverndev-oss/goldenmatch \
-    --body "<paste client secret>"
+doppler configs tokens create gh-actions-goldenmatch \
+    --scope "D:\personal" -p showcase -c dev --access read --plain
 ```
 
-These two are the ONLY GH-Actions secrets the workflow needs. Future
-Infisical-backed secrets reuse the same auth pair.
+The value is printed ONCE. Pipe it straight into the GitHub secret rather
+than pasting it, so it never reaches the terminal or shell history:
+
+```sh
+doppler configs tokens create gh-actions-goldenmatch \
+    --scope "D:\personal" -p showcase -c dev --access read --plain \
+  | gh secret set DOPPLER_TOKEN --repo benseverndev-oss/goldenmatch
+```
+
+Confirm the token can read both secrets and cannot write, before relying
+on it -- a token that silently fails looks exactly like a workflow bug:
+
+```sh
+doppler secrets get GCP_RAY_BENCH_PROJECT_ID --plain --token "$TOK"   # -> golden-490919
+printf '%s' x | doppler secrets set CANARY --silent --token "$TOK"    # must be REFUSED
+```
+
+### 5. Set the GitHub Actions secret
+
+`DOPPLER_TOKEN` is the ONLY GH-Actions secret these workflows need --
+one, where the previous Infisical setup needed a client id and secret
+pair. Future Doppler-backed secrets ride the same token.
+
+Rotate by creating a replacement token, updating the GH secret, then
+revoking the old one by slug:
+
+```sh
+doppler configs tokens --scope "D:\personal" -p showcase -c dev --json
+doppler configs tokens revoke <slug> --scope "D:\personal" -p showcase -c dev
+```
 
 ### 6. Dispatch the workflow
 

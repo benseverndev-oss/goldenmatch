@@ -5,14 +5,13 @@
 # config (1 head + 3 preemptible workers). The tear-down step runs in
 # `if: always()` so a failed bench still releases the instances.
 #
-# Required GitHub secrets (provision once per repo):
-#   INFISICAL_CLIENT_ID      — Universal Auth client id for a Machine
-#                              Identity scoped to the goldenmatch
-#                              Infisical project (a99885f0-c5af-4ae1-9dc8-255cc60aa129) with read
-#                              access on the `dev` environment.
-#   INFISICAL_CLIENT_SECRET  — companion secret for the same identity.
+# Required GitHub secret (provision once per repo):
+#   DOPPLER_TOKEN — read-only Doppler service token scoped to
+#                   project `showcase`, config `dev`. One secret, not
+#                   two: the token carries its own project/config, so
+#                   there is no login step and no scope flags.
 #
-# Pulled FROM Infisical project a99885f0-c5af-4ae1-9dc8-255cc60aa129, env=dev, at runtime:
+# Pulled FROM Doppler showcase/dev at runtime:
 #   GCP_RAY_BENCH_PROJECT_ID  — GCP project that holds the bench SA +
 #                                APIs (golden-490919). NOT the same as
 #                                GOOGLE_CLOUD_PROJECT, which the team
@@ -25,10 +24,10 @@
 #   - roles/compute.admin       (create/delete instances + disks)
 #   - roles/iam.serviceAccountUser (let Ray attach the SA to instances)
 #
-# Pattern: any future Infisical-backed secret reuses the same auth
-# pair instead of accumulating GH secrets. See
-# docs/distributed/ray-gce-cluster.md for the one-time Infisical
-# Machine Identity setup commands.
+# Pattern: any future Doppler-backed secret rides the same token
+# instead of accumulating GH secrets. See
+# docs/distributed/ray-gce-cluster.md for the one-time service-token
+# setup command.
 
 name: bench-ray-cluster
 
@@ -89,9 +88,9 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Ray + gcloud helpers + Infisical CLI
+      - name: Install Ray + gcloud helpers + Doppler CLI
         # Ray drives `ray up` / `ray submit` / `ray down` locally; the
-        # version pin matches the cluster.yaml docker image. Infisical
+        # version pin matches the cluster.yaml docker image. The Doppler
         # CLI fetches GCP creds at runtime so the GCP secrets stay in
         # one place instead of accumulating GH-Actions copies.
         run: |
@@ -106,52 +105,45 @@ jobs:
           RAY_VER=$(python -c "import ray; print(ray.__version__)")
           echo "RAY_VER=$RAY_VER" >> "$GITHUB_ENV"
           echo "Resolved Ray version: $RAY_VER (launcher + cluster docker image)"
-          # Infisical CLI: official apt repo. The 0.43.x series ships
-          # `infisical login --method=universal-auth` and
-          # `infisical secrets get --plain` which we both use.
-          curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | sudo -E bash
-          sudo apt-get update && sudo apt-get install -y infisical
+          # Doppler CLI: official install script. We use only
+          # `doppler secrets get --plain`, which a service token authorizes
+          # directly -- no login step.
+          curl -Ls --tlsv1.2 --proto "=https" --retry 3 https://cli.doppler.com/install.sh | sudo sh -s -- --no-package-manager
+          doppler --version
 
-      - name: Fetch GCP creds from Infisical
-        # Authenticate the Machine Identity, then pull GCP_PROJECT_ID
-        # and GCP_SA_KEY from the goldenmatch Infisical project
-        # (a99885f0-c5af-4ae1-9dc8-255cc60aa129, dev env). The values are masked in subsequent
-        # logs via ::add-mask::. The SA JSON is written to disk and
-        # GOOGLE_APPLICATION_CREDENTIALS points at it; the project id
-        # is exported as a job-scope env var so the render + sweep
-        # steps see it without ${{ secrets.* }}.
+      - name: Fetch GCP creds from Doppler
+        # Pull GCP_PROJECT_ID and the SA key from Doppler project `showcase`,
+        # config `dev`. Both live in the service token, so no project/config
+        # flags and no login round-trip -- the token IS the scope. The values
+        # are masked in later logs via ::add-mask::; the SA JSON is written to
+        # disk and GOOGLE_APPLICATION_CREDENTIALS points at it, and the project
+        # id is exported job-scope so the render + sweep steps see it without
+        # reaching for ${{ secrets.* }} again.
         env:
-          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
-          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
-          if [ -z "${INFISICAL_CLIENT_ID:-}" ] || [ -z "${INFISICAL_CLIENT_SECRET:-}" ]; then
-            echo "::error::INFISICAL_CLIENT_ID or INFISICAL_CLIENT_SECRET not set; see docs/distributed/ray-gce-cluster.md"
+          if [ -z "${DOPPLER_TOKEN:-}" ]; then
+            echo "::error::DOPPLER_TOKEN not set; see docs/distributed/ray-gce-cluster.md"
             exit 1
           fi
-          INFISICAL_TOKEN=$(infisical login --silent --plain \
-            --method=universal-auth \
-            --client-id="$INFISICAL_CLIENT_ID" \
-            --client-secret="$INFISICAL_CLIENT_SECRET")
-          echo "::add-mask::$INFISICAL_TOKEN"
 
-          # GCP_RAY_BENCH_PROJECT_ID is the project where the bench SA
-          # lives and the required APIs are enabled (golden-490919).
-          # The team's GOOGLE_CLOUD_PROJECT secret points elsewhere
-          # (gen-lang-client-* Vertex project) -- using it would 403
-          # the SA on every cloudresourcemanager call. Surfaces it
-          # locally as GCP_PROJECT_ID for the rest of this workflow.
-          GCP_PROJECT_ID=$(infisical secrets get GCP_RAY_BENCH_PROJECT_ID \
-            --projectId=a99885f0-c5af-4ae1-9dc8-255cc60aa129 --env=dev --plain --token="$INFISICAL_TOKEN")
+          # GCP_RAY_BENCH_PROJECT_ID is the project where the bench SA lives
+          # and the required APIs are enabled (golden-490919). The team's
+          # GOOGLE_CLOUD_PROJECT points elsewhere (a gen-lang-client-* Vertex
+          # project) -- using it would 403 the SA on every
+          # cloudresourcemanager call. Surfaced locally as GCP_PROJECT_ID.
+          GCP_PROJECT_ID=$(doppler secrets get GCP_RAY_BENCH_PROJECT_ID --plain)
+          if [ -z "$GCP_PROJECT_ID" ]; then
+            echo "::error::GCP_RAY_BENCH_PROJECT_ID came back empty from Doppler."
+            exit 1
+          fi
           echo "::add-mask::$GCP_PROJECT_ID"
 
           # SA key is stored base64-encoded under GCP_SA_KEY_B64. Decode
-          # straight to disk (never echo). base64 -d is GNU coreutils;
-          # uses --ignore-garbage to tolerate any leading whitespace
-          # the Infisical CLI might emit alongside the value.
-          infisical secrets get GCP_SA_KEY_B64 \
-            --projectId=a99885f0-c5af-4ae1-9dc8-255cc60aa129 --env=dev --plain --token="$INFISICAL_TOKEN" \
-            | base64 -d --ignore-garbage > "$HOME/gcp-sa.json"
+          # straight to disk (never echo). `--ignore-garbage` tolerates any
+          # stray whitespace around the value.
+          doppler secrets get GCP_SA_KEY_B64 --plain             | base64 -d --ignore-garbage > "$HOME/gcp-sa.json"
           chmod 600 "$HOME/gcp-sa.json"
 
           # Sanity: the decoded file must be a JSON object. Validates the
@@ -164,7 +156,7 @@ jobs:
       - name: Render cluster.yaml with project + git SHA
         run: |
           set -euo pipefail
-          # GCP_PROJECT_ID is in $GITHUB_ENV from the Infisical fetch
+          # GCP_PROJECT_ID is in $GITHUB_ENV from the Doppler fetch
           # step. Inject project_id, git SHA, cluster_name, max_workers.
           sed -i "s|GOLDENMATCH_GCP_PROJECT_PLACEHOLDER|$GCP_PROJECT_ID|g" .ray/cluster-gce.yaml
           sed -i "s|GOLDENMATCH_GIT_SHA_PLACEHOLDER|${{ github.sha }}|g" .ray/cluster-gce.yaml
@@ -342,9 +334,9 @@ jobs:
         if: always()
         run: |
           # $GCP_PROJECT_ID + $GOOGLE_APPLICATION_CREDENTIALS were
-          # exported in $GITHUB_ENV by the Infisical fetch step.
+          # exported in $GITHUB_ENV by the Doppler fetch step.
           if [ -z "${GCP_PROJECT_ID:-}" ]; then
-            echo "GCP_PROJECT_ID not in env -- earlier step failed before Infisical fetch; nothing to sweep."
+            echo "GCP_PROJECT_ID not in env -- earlier step failed before the Doppler fetch; nothing to sweep."
             exit 0
           fi
           gcloud auth activate-service-account \
