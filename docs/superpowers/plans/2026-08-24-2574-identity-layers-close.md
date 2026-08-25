@@ -40,15 +40,48 @@ nothing in the set is costing measurable accuracy — so no instrument can say
 which of the plausible ones (`order`, `shipment`, `purchase`, `enrollment`)
 deserve a declaration.
 
-**A3's residual sharpens Part B.** The `initial` convention's remaining 3 of 8
-is provably irreducible from column names: those are exactly the schemas whose
-entity initials collide (`provider`/`patient` -> `p`). Pairwise recall stays
-at 1.0, so the failure mode is two parties fused, never one wrongly split.
-**This is a concrete, mechanically-labelled instance of the name-blind shape
-Part B was written to go looking for** — and a far sharper motivation for
-value-aware detection than the issue's own `routing number -> bank` example,
-because here the columns exist and only the qualifier is ambiguous. Part B1
-should score against it directly.
+**A3's residual is irreducible by the current RULE, not by names.** The
+`initial` convention's remaining 3 of 8 are exactly the schemas whose entity
+initials collide (`provider`/`patient` -> `p`); pairwise recall stays at 1.0,
+so the failure mode is two parties fused, never one wrongly split. I first
+wrote that this was the name-blind shape Part B went looking for. **Part B
+measured it and refuted that**: all three fused layers have DISJOINT remainder
+vocabularies (`p_npi`/`p_specialty` versus `p_firstname`/`p_birthdate` share no
+token), so a name-side rule that sub-clusters a group by remainder vocabulary
+could split them. Not evidence for values. Filed as its own follow-up rather
+than smuggled into the value case.
+
+## Part B result (2026-08-25): the gate says NO to Part C as scoped
+
+Measured over 67 frames / 608 columns across all three corpora
+(`scripts/layers_nameblind_audit.py`, output under `docs/measurements/`):
+
+| bucket | columns | share | what a value signal would have to do |
+|---|---|---|---|
+| **ungrouped and unnameable** | 31 | **5.1%** | open a party from nothing — the issue's own `routing number -> bank` shape |
+| unnamed and unnameable | 0 | 0.0% | name an existing group |
+| vocabulary gap | 331 | 54.4% | nothing — the layer carries its own qualifier |
+| no structure (whole-frame) | 80 | 13.2% | partition a frame from scratch |
+
+**Only the first bucket is a question a party-identifying value signal can
+answer, and it is 5.1%.** Against Part C's cost — a new checksum-bearing
+identifier vocabulary, host-side sampling that changes the detector's cost
+profile, a fifth score weight rebalanced across four surfaces with every
+ratchet re-derived, and a value-bearing corpus whose labels do not collapse
+into self-agreement — that does not justify the build.
+
+The audit was rewritten mid-run because its first version scored 63.5%
+"name-blind" by counting every layer whose `role` reads "unknown". Most of
+those carry their OWN qualifier (`film`, `rental`, `orderdetail`) and are
+unnamed only because no pack declares that word. Separating that bucket took
+the genuinely-unnamed count to **zero**.
+
+**What survives is `kind`, and it is genuinely value-shaped.** Every one of
+the 331 vocabulary-gap columns sits in a layer whose `kind` is `unknown`, and
+`kind` is documented as the axis downstream matching behaviour keys off. No
+name yields `film -> asset` without a vocabulary; values plausibly do. That is
+**kind inference, not party detection**, it is Part C item 4 and none of the
+rest, and it belongs in its own issue with its own gate.
 
 Not run locally: the TypeScript parity suite (`node_modules` absent in the
 worktree, and `pnpm install` is not a step to take casually here). The TS
