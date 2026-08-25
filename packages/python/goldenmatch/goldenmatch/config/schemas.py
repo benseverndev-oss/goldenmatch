@@ -615,6 +615,34 @@ class MatchkeyConfig(BaseModel):
         le=1.0,
         description="Probabilistic match probability at or above which a pair is auto-linked.",
     )
+    # Probabilistic-only: the cutoff a run RESOLVED, recorded rather than
+    # chosen (#2637). `link_threshold` carries two meanings at once -- the
+    # value, and the assertion "a human chose this, do not refit" -- and
+    # `resolve_thresholds` short-circuits on it. Stamping a resolved FALLBACK
+    # onto it therefore pins a fixed default derived from a ~6K sample and
+    # skips the full-data refit, which cost pairwise precision 0.9308 vs 0.9992
+    # at person@100K (see `docs/superpowers/notes/2026-08-18-zeroconfig-recall-incident.md`,
+    # defect 4). This field splits the two meanings apart: it is a RECORD of
+    # what got used, `resolve_thresholds` never reads it, and setting it can
+    # therefore change no matching behaviour.
+    #
+    # Two things read it. The user, who could previously not see that the most
+    # consequential Fellegi-Sunter decision on their run had never been made
+    # (#2483). And the perturbation machinery, which needs a cutoff to shift
+    # from -- `threshold_perturbations` and the healer's `ThresholdShift` both
+    # gate on having one, so on a fallback run they yielded nothing and
+    # `perturbation_stability` was permanently unmeasurable on the FS path.
+    link_threshold_observed: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "The link cutoff a run actually resolved, recorded for reporting and "
+            "for threshold perturbation. Never read when resolving thresholds, so "
+            "it does not pin the cutoff or skip the full-data refit the way "
+            "link_threshold does."
+        ),
+    )
     review_threshold: float | None = Field(
         default=None,
         ge=0.0,
@@ -812,6 +840,31 @@ class MatchkeyConfig(BaseModel):
         or sensitivity number computed from them is false confidence.
         """
         return getattr(self, self.cutoff_field, None)
+
+    @property
+    def perturbation_basis(self) -> float | None:
+        """The cutoff to shift FROM when perturbing, or None if there is none.
+
+        ``cutoff`` answers "what cuts", and it is correctly ``None`` on a
+        probabilistic matchkey whose ``link_threshold`` was never set --
+        nothing in the config decided that run's cut. But a perturbation does
+        not need a CHOSEN cutoff, only a resolved one to move away from, and
+        ``link_threshold_observed`` records exactly that (#2637).
+
+        Without this, every zero-config FS run had an empty
+        ``_perturbable_matchkeys``: ``ThresholdShift`` returned ``None`` on the
+        only FS-specific member of the closed ``ConfigEdit`` vocabulary, and
+        ``perturbation_stability`` was permanently ``None`` on that path. The
+        gap was verified structural on 4 of 4 datasets in #2636.
+
+        Deliberately NOT folded into ``cutoff``: a caller asking what cuts must
+        still get ``None``, or the fabricated-default problem #2483 reported
+        comes straight back.
+        """
+        cut = self.cutoff
+        if cut is not None:
+            return cut
+        return getattr(self, "link_threshold_observed", None)
 
     def __setattr__(self, name: str, value: Any) -> None:
         # Pydantic model-validators only fire at construction, and

@@ -186,19 +186,44 @@ def test_the_healers_only_fs_lever_goes_live():
     assert shifted.get_matchkeys()[0].link_threshold == pytest.approx(0.55)
 
 
-def test_the_healers_lever_stays_dark_on_a_fallback():
-    """The other half of #2637, left open deliberately (2026-08-18 follow-up
-    comment on the issue): a fallback-sourced run gets no working FS lever
-    either, same as before this fix existed. Stamping it would repeat defect
-    4 of the zero-config recall incident."""
+def test_a_fallback_is_recorded_without_being_pinned():
+    """The other half of #2637, closed by splitting provenance from value.
+
+    This test used to assert the opposite -- that a fallback run gets no
+    working FS lever, "same as before this fix existed". That was the
+    limitation, not a property worth keeping: it left `ThresholdShift` inert
+    and `perturbation_stability` unmeasurable on 4 of 4 datasets.
+
+    What must NOT change is the incident guard. `resolve_thresholds`
+    short-circuits on `link_threshold`, so pinning a fallback there skips the
+    full-data refit and costs precision 0.9308 vs 0.9992 at person@100K
+    (recall-incident note, defect 4). `link_threshold_observed` is read by
+    nothing in the resolver, so recording it cannot do that -- and the
+    assertion that it stays `None` on the operative field is the load-bearing
+    one here.
+    """
     ctrl = _controller()
     cfg = _cfg()
     ctrl._last_fs_link_thresholds = {
         "p": {"link_threshold": 0.50, "source": LINK_THRESHOLD_FALLBACK}
     }
     ctrl._stamp_resolved_link_thresholds(cfg)
-    assert _perturbable_matchkeys(cfg) == []
-    assert ThresholdShift(0.05).apply(cfg) is None
+    mk = cfg.get_matchkeys()[0]
+
+    # The guard: nothing decided this number, so it must not count as a choice.
+    assert mk.link_threshold is None, (
+        "a fallback was pinned to the operative field, which skips the "
+        "full-data refit -- this is defect 4 of the recall incident"
+    )
+    assert mk.cutoff is None, "`cutoff` must still answer 'nothing chose a cut'"
+
+    # And the lever it unblocks.
+    assert mk.link_threshold_observed == pytest.approx(0.50)
+    assert _perturbable_matchkeys(cfg) == [mk]
+    shifted = ThresholdShift(0.05).apply(cfg)
+    assert shifted is not None
+    assert shifted.get_matchkeys()[0].link_threshold == pytest.approx(0.55)
+    assert len(threshold_perturbations(cfg)) == 2
 
 
 def test_perturbation_stability_stops_being_dark():

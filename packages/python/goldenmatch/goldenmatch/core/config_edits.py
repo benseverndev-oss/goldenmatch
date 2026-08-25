@@ -47,9 +47,17 @@ def _perturbable_matchkeys(config: GoldenMatchConfig) -> list:
     # `cutoff` there would let the two disagree: a probabilistic matchkey with
     # a `link_threshold` and no `threshold` would be reported non-perturbable
     # and then perturbed anyway.
+    # `perturbation_basis`, not `cutoff` (#2637): a probabilistic matchkey whose
+    # cutoff was RESOLVED rather than chosen has `cutoff is None` -- correctly,
+    # nothing in the config decided it -- but `link_threshold_observed` records
+    # the number the run used, which is a perfectly good value to shift away
+    # from. Gating on `cutoff` made every zero-config FS run non-perturbable
+    # (structural, 4 of 4 datasets in #2636), so the one FS-specific member of
+    # this vocabulary was inert wherever it mattered most.
     return [
         mk for mk in config.get_matchkeys()
-        if getattr(mk, "type", None) in _PERTURBABLE_TYPES and mk.cutoff is not None
+        if getattr(mk, "type", None) in _PERTURBABLE_TYPES
+        and mk.perturbation_basis is not None
     ]
 
 
@@ -90,7 +98,7 @@ class ThresholdShift:
             # which makes the matchkey genuinely non-perturbable.
             if getattr(mk, "type", None) not in _PERTURBABLE_TYPES:
                 continue
-            current = mk.cutoff
+            current = mk.perturbation_basis
             if current is None:
                 continue
             new_t = _clamp(current + self.delta)
