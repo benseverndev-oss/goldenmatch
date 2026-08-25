@@ -1,0 +1,34 @@
+{
+  "rows": 4910,
+  "gt_pairs": 2224,
+  "keys": [
+    {
+      "key": "__title_key__ (ships)",
+      "candidates": 33563,
+      "recall": 0.9717,
+      "ceiling": 0.0644
+    },
+    {
+      "key": "__title_key__ + year",
+      "candidates": 5749,
+      "recall": 0.9717,
+      "ceiling": 0.3759
+    }
+  ],
+  "strategies": [
+    {
+      "key": "static (ships)",
+      "candidates": 33563,
+      "recall": 0.9717,
+      "ceiling": 0.0644,
+      "blocks": 1201
+    },
+    {
+      "key": "adaptive",
+      "candidates": 33563,
+      "recall": 0.9717,
+      "ceiling": 0.0644,
+      "blocks": 1201
+    }
+  ]
+}
