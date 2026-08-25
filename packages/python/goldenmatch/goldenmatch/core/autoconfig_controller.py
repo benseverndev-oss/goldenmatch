@@ -2013,19 +2013,36 @@ class AutoConfigController:
             if mk.link_threshold is not None:
                 continue  # user's own value; never overwrite
             entry = recorded.get(mk.name)
-            if not isinstance(entry, dict) or entry.get("source") not in stampable:
+            if not isinstance(entry, dict):
                 continue
             value = entry.get("link_threshold")
             if value is None:
                 continue
             try:
-                mk.link_threshold = float(value)
+                resolved = float(value)
             except (TypeError, ValueError):
                 continue
+            source = entry.get("source")
+
+            # ALWAYS record what got used, whatever chose it. This field is a
+            # RECORD, not a decision: `resolve_thresholds` never reads it, so
+            # writing it cannot pin the cutoff or skip the full-data refit, and
+            # the fallback half of #2637 closes without reopening the incident
+            # the `calibrated`-only narrowing was added to fix. It is what makes
+            # `mk.perturbation_basis` non-None, which is what puts
+            # `ThresholdShift` and `perturbation_stability` back in reach on a
+            # zero-config FS run -- inert on 4 of 4 datasets before this.
+            mk.link_threshold_observed = resolved
+
+            # And stamp the OPERATIVE field only when something about this data
+            # actually decided the number.
+            if source in stampable:
+                mk.link_threshold = resolved
             logger.info(
                 "auto-config: recorded resolved link_threshold=%.4f on matchkey "
-                "%r (source=%s) so the cutoff is explicit and tunable (#2637)",
-                float(value), mk.name, entry.get("source"),
+                "%r (source=%s, operative=%s) so the cutoff is explicit and "
+                "tunable (#2637)",
+                resolved, mk.name, source, source in stampable,
             )
 
     @staticmethod

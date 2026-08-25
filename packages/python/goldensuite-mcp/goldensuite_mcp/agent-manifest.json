@@ -488,6 +488,13 @@
               "description": "Probabilistic match probability at or above which a pair is auto-linked."
             },
             {
+              "name": "link_threshold_observed",
+              "type": "float | None",
+              "required": false,
+              "default": "None",
+              "description": "The link cutoff a run actually resolved, recorded for reporting and for threshold perturbation. Never read when resolving thresholds, so it does not pin the cutoff or skip the full-data refit the way link_threshold does."
+            },
+            {
               "name": "review_threshold",
               "type": "float | None",
               "required": false,
