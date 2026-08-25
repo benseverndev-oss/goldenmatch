@@ -245,8 +245,18 @@ const ATTRIBUTE_TOKENS: &[&str] = &[
     "gbp",
 ];
 
-/// A qualifier shorter than this is noise (`f_`, `x_`), not a party name.
+/// A qualifier shorter than this is noise (`f_`, `x_`), not a party name --
+/// unless the frame as a whole is partitioned by such qualifiers, see
+/// `admissible_short_qualifiers`.
 const MIN_QUALIFIER_LEN: usize = 3;
+
+/// Smallest group a short qualifier may name. One column carrying `x_` is
+/// noise however tidy the rest of the frame looks.
+const MIN_SHORT_QUALIFIER_GROUP: usize = 2;
+
+/// Fewest distinct short qualifiers that count as a partition. One short token
+/// on every column is the TABLE's own prefix, not a set of parties.
+const MIN_SHORT_QUALIFIER_GROUPS: usize = 2;
 
 /// One column's membership in a qualifier group:
 /// `(column index, affix position, remainder tokens)`.
@@ -328,6 +338,48 @@ fn remainder_is_numeric(remainder: &[String]) -> bool {
     remainder
         .iter()
         .all(|t| t.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// Short qualifiers admitted because they PARTITION the frame.
+///
+/// A single sub-`MIN_QUALIFIER_LEN` token is noise, which is why the length
+/// floor exists. A frame where EVERY column carries one at the same end, drawn
+/// from at least `MIN_SHORT_QUALIFIER_GROUPS` distinct tokens that each name at
+/// least `MIN_SHORT_QUALIFIER_GROUP` columns, is not noise -- it is a naming
+/// convention. TPC-H's own `c_name` / `s_name` / `o_orderkey` style is exactly
+/// this shape, and it was a measured hard blind spot: 0% exact partition,
+/// pairwise F1 0.08, a quarter of the FK ground-truth corpus (#2574).
+///
+/// The evidence is the WHOLE FRAME's shape, which no per-token rule can see --
+/// lowering `MIN_QUALIFIER_LEN` instead would admit `f_` and `x_` everywhere
+/// and take specificity with it. Prefix and suffix are tested separately and
+/// the first satisfying end wins; a convention uses one end, not both.
+fn admissible_short_qualifiers(col_tokens: &[Vec<String>]) -> HashSet<String> {
+    for prefix in [true, false] {
+        let mut counts: HashMap<&str, usize> = HashMap::new();
+        let mut covered = 0usize;
+        for toks in col_tokens {
+            if toks.len() < 2 {
+                continue;
+            }
+            let tok = if prefix {
+                toks[0].as_str()
+            } else {
+                toks[toks.len() - 1].as_str()
+            };
+            if tok.chars().count() < MIN_QUALIFIER_LEN {
+                *counts.entry(tok).or_insert(0) += 1;
+                covered += 1;
+            }
+        }
+        if covered == col_tokens.len()
+            && counts.len() >= MIN_SHORT_QUALIFIER_GROUPS
+            && counts.values().all(|&c| c >= MIN_SHORT_QUALIFIER_GROUP)
+        {
+            return counts.keys().map(|t| (*t).to_string()).collect();
+        }
+    }
+    HashSet::new()
 }
 
 /// Reject groups that share a token without sharing a party.
@@ -456,10 +508,14 @@ pub fn detect_identity_layers(
 
     // Group columns by shared qualifier. Prefix and suffix uses of the same
     // token merge deliberately: `lender_name` and `name_of_lender` are one party.
+    let col_tokens: Vec<Vec<String>> = columns.iter().map(|c| tokens(c)).collect();
+    let short_ok = admissible_short_qualifiers(&col_tokens);
+
     let mut groups: HashMap<String, Vec<LayerMember>> = HashMap::new();
-    for (idx, col) in columns.iter().enumerate() {
-        for (tok, position, remainder) in layer_candidates(&tokens(col)) {
-            if tok.chars().count() < MIN_QUALIFIER_LEN || stop.contains(&tok) {
+    for (idx, toks) in col_tokens.iter().enumerate() {
+        for (tok, position, remainder) in layer_candidates(toks) {
+            let too_short = tok.chars().count() < MIN_QUALIFIER_LEN && !short_ok.contains(&tok);
+            if too_short || stop.contains(&tok) {
                 continue;
             }
             groups
@@ -1114,6 +1170,67 @@ mod layer_tests {
 
         let unrecognised = detect_identity_layers(&cols(&["sprocket"]), &[], &[], 0.3);
         assert_eq!(unrecognised.layers[0].reason, "singleton");
+    }
+
+    #[test]
+    fn short_qualifiers_partition_a_tpch_style_frame() {
+        // Every column carries a 1-char prefix, three distinct, each naming
+        // several columns: a naming convention, not noise (#2574).
+        let d = detect_identity_layers(
+            &cols(&[
+                "c_name",
+                "c_address",
+                "c_phone",
+                "c_acctbal",
+                "s_name",
+                "s_address",
+                "s_phone",
+                "s_acctbal",
+                "o_orderkey",
+                "o_orderdate",
+                "o_totalprice",
+            ]),
+            &[],
+            &[],
+            0.3,
+        );
+        assert_eq!(d.layers.len(), 3, "{:?}", d.layers);
+        assert!(d.unassigned.is_empty(), "{:?}", d.unassigned);
+    }
+
+    #[test]
+    fn a_stray_short_prefix_is_still_noise() {
+        // Not every column carries a short qualifier, so the frame is not
+        // partitioned and `x` stays below the length floor.
+        let d = detect_identity_layers(
+            &cols(&[
+                "customer_name",
+                "customer_address",
+                "customer_phone",
+                "x_flag",
+            ]),
+            &[],
+            &[],
+            0.3,
+        );
+        assert!(
+            d.layers.iter().all(|l| l.qualifier != "x"),
+            "{:?}",
+            d.layers
+        );
+    }
+
+    #[test]
+    fn one_short_qualifier_on_every_column_is_a_table_prefix() {
+        // A single distinct qualifier is the TABLE's own prefix, not parties.
+        let d = detect_identity_layers(
+            &cols(&["t_name", "t_address", "t_phone", "t_created"]),
+            &[],
+            &[],
+            0.3,
+        );
+        assert_eq!(d.layers.len(), 1);
+        assert_eq!(d.layers[0].reason, "singleton");
     }
 
     #[test]

@@ -13325,6 +13325,7 @@
           "file": "packages/python/infermap/infermap/layers.py",
           "purpose": "Identity-layer detection — which *parties* a frame refers to.",
           "defines": [
+            "_admissible_short_qualifiers",
             "_candidates",
             "_evidence",
             "_group_is_viable",

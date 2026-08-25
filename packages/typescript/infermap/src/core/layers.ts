@@ -24,9 +24,53 @@ import {
 
 const TOKEN_SPLIT = /[_\-.\s]+/;
 
-/** A qualifier shorter than this is noise (`f_`, `x_`), not a party name.
+/** A qualifier shorter than this is noise (`f_`, `x_`), not a party name --
+ *  unless the frame as a whole is partitioned by such qualifiers, see
+ *  `admissibleShortQualifiers`.
  *  Mirrors `infermap-core::MIN_QUALIFIER_LEN`. */
 const MIN_QUALIFIER_LEN = 3;
+
+/** Smallest group a short qualifier may name; one column carrying `x_` is noise
+ *  however tidy the rest of the frame looks.
+ *  Mirrors `infermap-core::MIN_SHORT_QUALIFIER_GROUP`. */
+const MIN_SHORT_QUALIFIER_GROUP = 2;
+
+/** Fewest distinct short qualifiers that count as a partition. One short token
+ *  on every column is the TABLE's own prefix, not a set of parties.
+ *  Mirrors `infermap-core::MIN_SHORT_QUALIFIER_GROUPS`. */
+const MIN_SHORT_QUALIFIER_GROUPS = 2;
+
+/** Short qualifiers admitted because they PARTITION the frame.
+ *
+ *  A single sub-`MIN_QUALIFIER_LEN` token is noise, which is why the floor
+ *  exists. A frame where EVERY column carries one at the same end, drawn from
+ *  at least `MIN_SHORT_QUALIFIER_GROUPS` distinct tokens that each name at
+ *  least `MIN_SHORT_QUALIFIER_GROUP` columns, is a naming convention -- TPC-H's
+ *  own `c_name` / `s_name` / `o_orderkey` style, a measured hard blind spot at
+ *  0% exact partition (#2574). The evidence is the WHOLE FRAME's shape, which
+ *  no per-token rule can see. Mirrors `infermap-core::admissible_short_qualifiers`. */
+function admissibleShortQualifiers(colTokens: string[][]): Set<string> {
+  for (const prefix of [true, false]) {
+    const counts = new Map<string, number>();
+    let covered = 0;
+    for (const toks of colTokens) {
+      if (toks.length < 2) continue;
+      const tok = prefix ? toks[0]! : toks[toks.length - 1]!;
+      if (tok.length < MIN_QUALIFIER_LEN) {
+        counts.set(tok, (counts.get(tok) ?? 0) + 1);
+        covered += 1;
+      }
+    }
+    if (
+      covered === colTokens.length &&
+      counts.size >= MIN_SHORT_QUALIFIER_GROUPS &&
+      [...counts.values()].every((c) => c >= MIN_SHORT_QUALIFIER_GROUP)
+    ) {
+      return new Set(counts.keys());
+    }
+  }
+  return new Set();
+}
 
 /** Universal ATTRIBUTE tokens — they describe a property of an entity, never the
  *  identity of one, in any vertical. **Mirror of `infermap-core::ATTRIBUTE_TOKENS`**;
@@ -192,10 +236,14 @@ export function computeLayers(
   for (const hint of typeHints) for (const tok of tokens(hint)) stop.add(tok);
   for (const t of roleTokens.keys()) stop.delete(t);
 
+  const colTokens = columns.map((col) => tokens(col));
+  const shortOk = admissibleShortQualifiers(colTokens);
+
   const groups = new Map<string, Member[]>();
-  columns.forEach((col, idx) => {
-    for (const [tok, position, remainder] of candidates(tokens(col))) {
-      if (tok.length < MIN_QUALIFIER_LEN || stop.has(tok)) continue;
+  colTokens.forEach((toks, idx) => {
+    for (const [tok, position, remainder] of candidates(toks)) {
+      const tooShort = tok.length < MIN_QUALIFIER_LEN && !shortOk.has(tok);
+      if (tooShort || stop.has(tok)) continue;
       const bucket = groups.get(tok);
       if (bucket) bucket.push([idx, position, remainder]);
       else groups.set(tok, [[idx, position, remainder]]);

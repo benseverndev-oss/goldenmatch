@@ -1839,5 +1839,151 @@
       "layers": [],
       "unassigned": []
     }
+  },
+  {
+    "name": "short_qualifier_partition",
+    "columns": [
+      "c_name",
+      "c_address",
+      "c_phone",
+      "c_acctbal",
+      "s_name",
+      "s_address",
+      "s_phone",
+      "s_acctbal",
+      "o_orderkey",
+      "o_orderdate",
+      "o_totalprice"
+    ],
+    "roles": [],
+    "type_hints": [],
+    "min_score": 0.3,
+    "expected": {
+      "layers": [
+        {
+          "role": "unknown",
+          "kind": "unknown",
+          "columns": [
+            "c_name",
+            "c_address",
+            "c_phone",
+            "c_acctbal"
+          ],
+          "score": 0.6499999999999999,
+          "reason": "affix",
+          "qualifier": "c",
+          "positions": [
+            "prefix"
+          ],
+          "role_matched": false,
+          "type_corroboration": 0.0
+        },
+        {
+          "role": "unknown",
+          "kind": "unknown",
+          "columns": [
+            "o_orderkey",
+            "o_orderdate",
+            "o_totalprice"
+          ],
+          "score": 0.6499999999999999,
+          "reason": "affix",
+          "qualifier": "o",
+          "positions": [
+            "prefix"
+          ],
+          "role_matched": false,
+          "type_corroboration": 0.0
+        },
+        {
+          "role": "unknown",
+          "kind": "unknown",
+          "columns": [
+            "s_name",
+            "s_address",
+            "s_phone",
+            "s_acctbal"
+          ],
+          "score": 0.6499999999999999,
+          "reason": "affix",
+          "qualifier": "s",
+          "positions": [
+            "prefix"
+          ],
+          "role_matched": false,
+          "type_corroboration": 0.0
+        }
+      ],
+      "unassigned": []
+    }
+  },
+  {
+    "name": "short_qualifier_stray",
+    "columns": [
+      "customer_name",
+      "customer_address",
+      "customer_phone",
+      "x_flag"
+    ],
+    "roles": [],
+    "type_hints": [],
+    "min_score": 0.3,
+    "expected": {
+      "layers": [
+        {
+          "role": "unknown",
+          "kind": "unknown",
+          "columns": [
+            "customer_name",
+            "customer_address",
+            "customer_phone"
+          ],
+          "score": 0.6499999999999999,
+          "reason": "affix",
+          "qualifier": "customer",
+          "positions": [
+            "prefix"
+          ],
+          "role_matched": false,
+          "type_corroboration": 0.0
+        }
+      ],
+      "unassigned": [
+        "x_flag"
+      ]
+    }
+  },
+  {
+    "name": "short_qualifier_table_prefix",
+    "columns": [
+      "t_name",
+      "t_address",
+      "t_phone",
+      "t_created"
+    ],
+    "roles": [],
+    "type_hints": [],
+    "min_score": 0.3,
+    "expected": {
+      "layers": [
+        {
+          "role": "unknown",
+          "kind": "unknown",
+          "columns": [
+            "t_name",
+            "t_address",
+            "t_phone",
+            "t_created"
+          ],
+          "score": 0.5,
+          "reason": "singleton",
+          "qualifier": "",
+          "positions": [],
+          "role_matched": false,
+          "type_corroboration": 0.0
+        }
+      ],
+      "unassigned": []
+    }
   }
 ]

@@ -516,3 +516,43 @@ def test_fact_party_survives_a_colliding_field_type_hint():
         "claim_claimnumber", "claim_lossdate", "claim_paidamount",
     }
     assert result.unassigned == []
+
+
+def test_single_char_qualifiers_partition_a_tpch_style_frame():
+    """TPC-H's own `c_name`/`s_name` style is below MIN_QUALIFIER_LEN per token,
+    but the qualifiers PARTITION the frame — every column carries one, and each
+    names a group of its own. That whole-frame shape is the evidence a single
+    short token cannot supply on its own (#2574)."""
+    result = detect_identity_layers(frame([
+        "c_name", "c_address", "c_phone", "c_acctbal",
+        "s_name", "s_address", "s_phone", "s_acctbal",
+        "o_orderkey", "o_orderdate", "o_totalprice",
+    ]))
+    groups = sorted(sorted(layer.columns) for layer in result.layers)
+
+    assert len(result.layers) == 3, [layer.columns for layer in result.layers]
+    assert ["c_acctbal", "c_address", "c_name", "c_phone"] in groups
+    assert ["s_acctbal", "s_address", "s_name", "s_phone"] in groups
+    assert result.unassigned == []
+
+
+def test_a_stray_short_prefix_does_not_open_a_party():
+    """The specificity half. One `x_` column is noise, not a population — the
+    frame is not partitioned by short qualifiers, so none is admitted."""
+    result = detect_identity_layers(frame([
+        "customer_name", "customer_address", "customer_phone", "x_flag",
+    ]))
+
+    assert all(layer.role != "x" for layer in result.layers)
+    assert not any("x_flag" in layer.columns for layer in result.layers)
+
+
+def test_a_frame_wide_short_prefix_is_not_a_partition():
+    """A single short qualifier on every column is the table's own prefix, not
+    a set of parties. Two distinct qualifiers are the minimum evidence."""
+    result = detect_identity_layers(frame([
+        "t_name", "t_address", "t_phone", "t_created",
+    ]))
+
+    assert [layer.role for layer in result.layers] == [UNKNOWN_ROLE]
+    assert len(result.layers) == 1
