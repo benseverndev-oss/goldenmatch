@@ -35,11 +35,30 @@ from layers_fk_groundtruth import run  # noqa: E402
 
 #: Measured behaviour on conventions the affix signal can see. Floors, not goals.
 #:
-#: Exact partition is 22 of 24 cases (0.9166...). The floor sits just below it
-#: rather than at the rounded 92% the report prints -- a floor set from a
-#: displayed figure fails on the value it was derived from.
-MIN_EXACT_PARTITION = 0.91
-MIN_PAIRWISE_F1 = 0.98
+#: Was 22 of 24 cases (0.9166...), with both misses on `claims_ledger`: the
+#: three dimension parties scored 0.90-0.93 while the FACT's own columns were
+#: dropped, because `claim` tokenizes out of healthcare's `claim_status` type
+#: hint and is stop-listed. Declaring `claim` as a role took this to 24 of 24
+#: (#2574), so the floors are pinned at the exact values -- the same posture
+#: `test_layers_precision.py` takes with MIN_SPECIFICITY.
+#:
+#: This corpus has now SATURATED on detectable conventions, which is a reason
+#: to grow it rather than to celebrate. The discriminating signal has moved to
+#: the `initial` convention (still 0%, see the blind-spot test below) and to
+#: the blind-labelling corpus.
+MIN_EXACT_PARTITION = 1.0
+MIN_PAIRWISE_F1 = 1.0
+
+#: The `initial` convention was a hard blind spot -- 0% exact, pairwise F1 0.08
+#: -- because a one-character qualifier is below the kernel's floor. The
+#: whole-frame partition gate (#2574) took it to 5 of 8 exact (0.625) and
+#: pairwise F1 0.88. Floors sit just below the measured values.
+#:
+#: It does NOT join the headline floors above. The residual 3 of 8 is
+#: irreducible from column names (see the collision test below), so folding
+#: `initial` into one number would report a permanent ceiling as a score.
+MIN_INITIAL_EXACT = 0.62
+MIN_INITIAL_PAIRWISE_F1 = 0.87
 
 
 def _summary():
@@ -67,17 +86,55 @@ def test_party_count_error_stays_below_one():
     assert d["mean_count_error"] < 1.0
 
 
-def test_single_char_qualifiers_are_a_known_blind_spot():
-    """Pinned so the limitation is visible, and so a fix is noticed.
+def test_single_char_qualifiers_are_detected_when_initials_are_distinct():
+    """The inversion the previous version of this test asked for.
 
-    TPC-H ships natively as ``c_name``/``s_name``/``p_name``. Those qualifiers
-    are one character, below ``MIN_QUALIFIER_LEN``, so detection cannot see the
-    parties at all. If this ever starts passing, the floors above should gain
-    the ``initial`` convention and this test should be inverted.
+    TPC-H ships natively as ``c_name``/``s_name``/``o_orderkey``. Those
+    qualifiers are one character, below ``MIN_QUALIFIER_LEN``, and detection
+    could not see the parties at all: 0% exact, pairwise F1 0.08, a quarter of
+    this corpus. The whole-frame partition gate (#2574) took it to 62% / 0.88.
     """
     blind = _summary()["known_blind_spot"]
     assert blind["n"] > 0
-    assert blind["exact_partition"] == 0.0
+    assert blind["exact_partition"] >= MIN_INITIAL_EXACT, (
+        f"initial-convention exact fell to {blind['exact_partition']:.0%}"
+    )
+    assert blind["pairwise_f1"] >= MIN_INITIAL_PAIRWISE_F1
+
+
+def test_the_initial_residual_is_exactly_the_colliding_schemas():
+    """The residual is a property of the CONVENTION, not of the detector.
+
+    ``provider`` and ``patient`` both abbreviate to ``p``, so ``p_name`` cannot
+    name which one — irreducible from column names alone. This derives the
+    colliding set from the schema fixture rather than pinning a list, so it
+    stays true as the corpus grows, and asserts the failure MODE too: pairwise
+    recall stays at 1.0 on every miss, meaning nothing is wrongly split and the
+    only error is two parties forced into one.
+    """
+    import json
+
+    from layers_fk_groundtruth import SCHEMAS
+
+    spec = json.loads(Path(SCHEMAS).read_text(encoding="utf-8"))
+    collides = set()
+    for schema in spec["schemas"]:
+        entities = [schema["fact"], *schema["dimensions"]]
+        initials = [e[0] for e in entities]
+        if len(initials) != len(set(initials)):
+            collides.add(schema["name"])
+    assert collides, "corpus no longer exercises an initial collision"
+
+    for case in run(detect_identity_layers)["cases"]:
+        if case["convention"] != "initial":
+            continue
+        if case["schema"] in collides:
+            assert not case["exact_partition"], case["schema"]
+            assert case["pairwise_recall"] == 1.0, (
+                f"{case['schema']}: a collision should FUSE parties, never split one"
+            )
+        else:
+            assert case["exact_partition"], case["schema"]
 
 
 def test_ground_truth_is_not_hand_labelled():

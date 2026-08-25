@@ -79,7 +79,14 @@ def test_claims_detects_three_parties_with_distinct_kinds():
 
 
 def test_telemetry_detects_machine_asset_and_place_kinds():
-    """Non-person entities are first-class: an asset and a place, not just people."""
+    """Non-person entities are first-class: an asset and a place, not just people.
+
+    A lone ``plant_code`` no longer opens a party — one recognised column in
+    prefix position is not evidence of a population (#2574, see
+    ``_group_is_viable``). The ``place`` kind is asserted on a two-column plant
+    instead, so this still proves what it is named for rather than quietly
+    becoming a test of two kinds.
+    """
     result = detect_identity_layers(frame(TELEMETRY), domain="manufacturing")
 
     machine = layer_for(result, "machine")
@@ -87,7 +94,14 @@ def test_telemetry_detects_machine_asset_and_place_kinds():
     assert set(machine.columns) == {"machine_id", "machine_model", "machine_serial"}
 
     assert layer_for(result, "operator").kind == "person"
-    assert layer_for(result, "plant").kind == "place"
+    assert "plant_code" in result.unassigned
+
+    sited = detect_identity_layers(
+        frame([*TELEMETRY, "plant_name"]), domain="manufacturing"
+    )
+    plant = layer_for(sited, "plant")
+    assert plant.kind == "place"
+    assert set(plant.columns) == {"plant_code", "plant_name"}
 
 
 def test_suffix_qualifiers_group_with_prefix_ones():
@@ -479,3 +493,66 @@ def test_attribute_tokens_are_never_declared_as_generic_roles():
     roles, _ = _pack_inputs(load_domain("generic"))
     declared = {tok for (_n, _k, hints, _t) in roles for h in hints for tok in _tokens(h)}
     assert not (declared & _ATTRIBUTE_TOKENS)
+
+
+def test_fact_party_survives_a_colliding_field_type_hint():
+    """A token that is BOTH a party qualifier and a field-type hint must not be
+    suppressed. ``claim`` tokenizes out of healthcare's ``claim_status`` and
+    insurance's ``claim_number`` type hints, which stop-lists it; only a role
+    declaration rescues it, because ``stop -= role_tokens`` is the sole escape.
+
+    Measured on the FK ground-truth corpus: the three dimension parties scored
+    0.90-0.93 while the fact's own columns were dropped entirely, costing
+    ``claims_ledger`` two of the corpus's three exact-partition misses (#2574).
+    """
+    result = detect_identity_layers(frame([
+        "claim_claimnumber", "claim_lossdate", "claim_paidamount",
+        "insurer_name", "insurer_naiccode",
+        "provider_name", "provider_npi", "provider_specialty",
+        "patient_firstname", "patient_lastname", "patient_birthdate",
+    ]))
+
+    assert set(layer_for(result, "claim").columns) == {
+        "claim_claimnumber", "claim_lossdate", "claim_paidamount",
+    }
+    assert result.unassigned == []
+
+
+def test_single_char_qualifiers_partition_a_tpch_style_frame():
+    """TPC-H's own `c_name`/`s_name` style is below MIN_QUALIFIER_LEN per token,
+    but the qualifiers PARTITION the frame — every column carries one, and each
+    names a group of its own. That whole-frame shape is the evidence a single
+    short token cannot supply on its own (#2574)."""
+    result = detect_identity_layers(frame([
+        "c_name", "c_address", "c_phone", "c_acctbal",
+        "s_name", "s_address", "s_phone", "s_acctbal",
+        "o_orderkey", "o_orderdate", "o_totalprice",
+    ]))
+    groups = sorted(sorted(layer.columns) for layer in result.layers)
+
+    assert len(result.layers) == 3, [layer.columns for layer in result.layers]
+    assert ["c_acctbal", "c_address", "c_name", "c_phone"] in groups
+    assert ["s_acctbal", "s_address", "s_name", "s_phone"] in groups
+    assert result.unassigned == []
+
+
+def test_a_stray_short_prefix_does_not_open_a_party():
+    """The specificity half. One `x_` column is noise, not a population — the
+    frame is not partitioned by short qualifiers, so none is admitted."""
+    result = detect_identity_layers(frame([
+        "customer_name", "customer_address", "customer_phone", "x_flag",
+    ]))
+
+    assert all(layer.role != "x" for layer in result.layers)
+    assert not any("x_flag" in layer.columns for layer in result.layers)
+
+
+def test_a_frame_wide_short_prefix_is_not_a_partition():
+    """A single short qualifier on every column is the table's own prefix, not
+    a set of parties. Two distinct qualifiers are the minimum evidence."""
+    result = detect_identity_layers(frame([
+        "t_name", "t_address", "t_phone", "t_created",
+    ]))
+
+    assert [layer.role for layer in result.layers] == [UNKNOWN_ROLE]
+    assert len(result.layers) == 1

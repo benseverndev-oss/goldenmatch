@@ -45,9 +45,21 @@ from goldencheck_types import (
 from infermap._native_loader import native_enabled, native_module
 from infermap.detect import DEFAULT_MIN_SCORE, _tokens, detect_domain
 
-#: A qualifier shorter than this is noise (`f_`, `x_`), not a party name.
+#: A qualifier shorter than this is noise (`f_`, `x_`), not a party name --
+#: unless the frame as a whole is partitioned by such qualifiers, see
+#: :func:`_admissible_short_qualifiers`.
 #: Mirrors ``infermap-core::MIN_QUALIFIER_LEN``.
 _MIN_QUALIFIER_LEN = 3
+
+#: Smallest group a short qualifier may name; one column carrying `x_` is noise
+#: however tidy the rest of the frame looks.
+#: Mirrors ``infermap-core::MIN_SHORT_QUALIFIER_GROUP``.
+_MIN_SHORT_QUALIFIER_GROUP = 2
+
+#: Fewest distinct short qualifiers that count as a partition. One short token
+#: on every column is the TABLE's own prefix, not a set of parties.
+#: Mirrors ``infermap-core::MIN_SHORT_QUALIFIER_GROUPS``.
+_MIN_SHORT_QUALIFIER_GROUPS = 2
 
 #: Pack consulted for role vocabulary when ``detect_domain`` finds no vertical.
 #: Host-side policy, not a kernel concern -- the kernel is handed a role list and
@@ -277,10 +289,14 @@ def _layers_core_pure(
         stop.update(_tokens(hint))
     stop -= set(role_tokens)
 
+    col_tokens = [_tokens(col) for col in columns]
+    short_ok = _admissible_short_qualifiers(col_tokens)
+
     groups: dict[str, list[tuple[int, str, tuple[str, ...]]]] = {}
-    for idx, col in enumerate(columns):
-        for tok, position, remainder in _candidates(_tokens(col)):
-            if len(tok) < _MIN_QUALIFIER_LEN or tok in stop:
+    for idx, toks in enumerate(col_tokens):
+        for tok, position, remainder in _candidates(toks):
+            too_short = len(tok) < _MIN_QUALIFIER_LEN and tok not in short_ok
+            if too_short or tok in stop:
                 continue
             groups.setdefault(tok, []).append((idx, position, remainder))
 
@@ -309,8 +325,10 @@ def _layers_core_pure(
         kept = [m for m in members if m[0] not in claimed]
         if not kept:
             continue
-        # Re-check viability after losing columns to a stronger layer.
-        if len(kept) < 2 and token not in role_tokens:
+        # Re-check viability after losing columns to a stronger layer. Mirrors
+        # _group_is_viable; the two must agree or a layer can survive here that
+        # could not have opened.
+        if len(kept) < 2 and not (token in role_tokens and kept[0][1] == "whole"):
             continue
         claimed.update(m[0] for m in kept)
         n = len(kept)
@@ -362,6 +380,43 @@ def _candidates(tokens: list[str]) -> list[tuple[str, str, tuple[str, ...]]]:
     ]
 
 
+def _admissible_short_qualifiers(col_tokens: list[list[str]]) -> set[str]:
+    """Short qualifiers admitted because they PARTITION the frame.
+
+    A single sub-``_MIN_QUALIFIER_LEN`` token is noise, which is why the length
+    floor exists. A frame where EVERY column carries one at the same end, drawn
+    from at least ``_MIN_SHORT_QUALIFIER_GROUPS`` distinct tokens that each name
+    at least ``_MIN_SHORT_QUALIFIER_GROUP`` columns, is not noise — it is a
+    naming convention. TPC-H's own ``c_name`` / ``s_name`` / ``o_orderkey``
+    style is exactly this shape, and it was a measured hard blind spot: 0%
+    exact partition, pairwise F1 0.08, a quarter of the FK ground-truth corpus
+    (#2574).
+
+    The evidence is the WHOLE FRAME's shape, which no per-token rule can see —
+    lowering ``_MIN_QUALIFIER_LEN`` instead would admit ``f_`` and ``x_``
+    everywhere and take specificity with it. Prefix and suffix are tested
+    separately and the first satisfying end wins; a convention uses one end,
+    not both.
+    """
+    for prefix in (True, False):
+        counts: dict[str, int] = {}
+        covered = 0
+        for toks in col_tokens:
+            if len(toks) < 2:
+                continue
+            tok = toks[0] if prefix else toks[-1]
+            if len(tok) < _MIN_QUALIFIER_LEN:
+                counts[tok] = counts.get(tok, 0) + 1
+                covered += 1
+        if (
+            covered == len(col_tokens)
+            and len(counts) >= _MIN_SHORT_QUALIFIER_GROUPS
+            and all(c >= _MIN_SHORT_QUALIFIER_GROUP for c in counts.values())
+        ):
+            return set(counts)
+    return set()
+
+
 def _group_is_viable(
     token: str,
     members: list[tuple[int, str, tuple[str, ...]]],
@@ -369,14 +424,22 @@ def _group_is_viable(
 ) -> bool:
     """Reject groups that share a token without sharing a party.
 
-    Single-column groups unless a role hint recognises the token (otherwise
-    every column becomes its own layer), and trivial remainders —
+    Single-column groups unless the token IS the whole column (otherwise every
+    column becomes its own layer), and trivial remainders —
     ``col_1``/``col_2``/``col_3`` share ``col`` but differ only by number: a
     table-wide prefix, not a party.
+
+    The whole-column carve-out is narrow on purpose (#2574). A column named
+    exactly ``bank`` refers to a party and nothing else can be meant by it. A
+    lone ``claim_id`` is a KEY of the table's own subject, and both independently
+    labelled corpora agree it is not a population: the precision corpus leaves
+    the fact's key uncovered in 6 of 6 positives, and the FK-derived corpus only
+    calls a fact a party when it contributes several columns. Accepting any
+    recognised single column satisfied neither.
     """
     recognised = token in role_tokens
     if len(members) < 2:
-        return recognised
+        return recognised and members[0][1] == "whole"
     distinct = {
         remainder
         for _, _, remainder in members

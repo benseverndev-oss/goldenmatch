@@ -84,3 +84,12 @@ roles:
     kind: organization
     name_hints: ["broker", "agency", "producer"]
     typical_types: ["policy", "premium"]
+
+  # Same defect as healthcare.yaml: `claim` tokenizes out of the `claim` TYPE's
+  # hints (claim_number / claim_id / claim_status), so the fact's own party is
+  # stop-listed unless a role declares it (#2574). `kind: asset` per the note
+  # there.
+  claim:
+    kind: asset
+    name_hints: ["claim"]
+    typical_types: ["claim", "coverage", "deductible"]

@@ -87,3 +87,18 @@ roles:
     kind: organization
     name_hints: ["payer", "insurer", "plan"]
     typical_types: ["insurance_id", "claim_status"]
+
+  # A claim is the FACT a claims table is about, so its own columns are a party
+  # like any dimension. Declaring it is not cosmetic: `claim` tokenizes out of
+  # the `claim_status` / `claim_notes` type hints and is therefore stop-listed,
+  # and `stop -= role_tokens` is the only escape (#2574).
+  #
+  # `kind: asset` follows `product` / `vehicle`: IDENTITY_KINDS is closed and a
+  # claim is a record that gets matched, not a person or an organization.
+  #
+  # Only `claim`. `case` and `encounter` are plausible siblings with no
+  # measurement behind them, and MIN_SPECIFICITY is pinned at 1.0.
+  claim:
+    kind: asset
+    name_hints: ["claim"]
+    typical_types: ["claim_status", "icd_code", "cpt_code", "drg_code"]
