@@ -253,6 +253,29 @@ def main(argv: list[str] | None = None) -> int:
 
     names: set[str] | None = {s for s in args.datasets.split(",") if s} or None
 
+    # A bless REPLACES the baseline file -- `_cmd_bless` writes a scorecard
+    # built only from what ran, so a filtered bless silently deletes the
+    # baseline of every dataset it did not run. Six blessed datasets would
+    # vanish and the next gate would report them as `skipped`, not as missing,
+    # because a dataset with no baseline is not something the gate can miss.
+    # That is a check quietly ceasing to exist, which is the failure this
+    # scorecard exists to prevent.
+    #
+    # Refused rather than merged: merging would make a bless mean two different
+    # things depending on a flag, and "re-bless everything from one run" is the
+    # only meaning that keeps the file internally consistent -- every entry
+    # measured by the same kernel on the same commit.
+    if args.mode == "bless" and names:
+        print(
+            "refusing: `--mode bless` cannot be combined with `--datasets`. "
+            "A bless rewrites the whole baseline from the datasets that ran, so "
+            "a filtered bless would silently unbless "
+            f"everything outside {sorted(names)}. Re-bless the full set, or use "
+            "`--mode report --datasets ...` to look at a subset.",
+            file=sys.stderr,
+        )
+        return 2
+
     # Gym modes use run_catalog (not the oracle), so branch early.
     if args.mode in ("gym", "gym-bless", "gym-gate"):
         native_version, git_sha = _gather_meta()
