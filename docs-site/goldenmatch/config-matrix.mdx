@@ -204,6 +204,7 @@ _A matchkey: rule for declaring two records 'the same' on a field/field-set._
 | `em_iterations` | int | `20` | Maximum EM iterations when training probabilistic weights. |
 | `convergence_threshold` | float | `0.001` | EM stops early once parameter change between iterations falls below this value. |
 | `link_threshold` | float \| None | `None` | Probabilistic match probability at or above which a pair is auto-linked. |
+| `link_threshold_observed` | float \| None | `None` | The link cutoff a run actually resolved, recorded for reporting and for threshold perturbation. Never read when resolving thresholds, so it does not pin the cutoff or skip the full-data refit the way link_threshold does. |
 | `review_threshold` | float \| None | `None` | Probabilistic match probability at or above which a pair is sent for manual review; must not exceed link_threshold. |
 | `model_path` | str \| None | `None` | File where the trained probabilistic model is loaded from if present, or saved to after training. |
 | `missing` | Literal \| None | `None` | `unobserved`, `disagree` -- How a missing value is treated probabilistically: 'unobserved' contributes nothing, 'disagree' counts against a match. |

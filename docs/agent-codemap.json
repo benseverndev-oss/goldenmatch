@@ -4749,14 +4749,19 @@
           "purpose": "Segment labels — which *party* each column describes.",
           "defines": [
             "Segment",
+            "_column_person_rate",
+            "_looks_like_addresses",
             "_to_segment",
             "column_segments",
             "detect_segments",
+            "infer_kinds",
             "is_heterogeneous",
             "segments_from_layers",
             "segments_from_schema"
           ],
           "imports": [
+            "goldenmatch.core.frame",
+            "goldenmatch.refdata",
             "infermap"
           ]
         },
@@ -5866,13 +5871,18 @@
             "_fs_training_sample",
             "_has_colocation_plan",
             "_native_worker_baseline",
+            "_op_reservation",
             "_prepare_fs_models",
             "_project_to_scoring_columns",
             "_score_blocks_block_shuffle",
             "_score_blocks_legacy",
             "_score_colocated_groups",
+            "_score_concurrency",
+            "_score_num_cpus",
+            "_score_project",
             "_warn_worker_slow_path",
             "dedup_pairs_distributed",
+            "effective_score_knobs",
             "score_blocks_distributed"
           ],
           "imports": [

@@ -67,7 +67,7 @@ That's it — no new workflow file.
 Not every bench fits the generic runner. These keep their own file:
 
 - **Secret / remote orchestration** — `bench-distributed-stack` (`RAY_ADDRESS`),
-  `bench-ray-cluster` (Infisical), `bench-sail-100m` (`SAIL_REMOTE`),
+  `bench-ray-cluster` (`DOPPLER_TOKEN`), `bench-sail-100m` (`SAIL_REMOTE`),
   `bench-phase5-*` (Ray cluster). Bespoke secret + service wiring.
 - **Push/PR gates** — e.g. `bench-graphiti-smoke` (runs on path changes),
   `bench-probabilistic` (panel regression gate). They aren't dispatch-only.

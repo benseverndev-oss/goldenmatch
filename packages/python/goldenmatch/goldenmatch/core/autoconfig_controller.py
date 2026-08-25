@@ -501,6 +501,13 @@ class ControllerBudget:
         order of magnitude as N grows from 100K -> 1M. Cap at 20K so
         sample-iteration cost stays bounded above 1M.
 
+        Row count is a poor predictor of iteration COST -- measured 2026-08-25,
+        two lanes in this same ``< 5_000`` tier cost ~0.9s and ~4.5s per
+        iteration, and before #2747 capped an unbounded bridge measurement the
+        spread was 16x (#2756). Deliberately left as-is: see the note on the
+        budget cut in `run` for why the obvious repair was measured, built, and
+        then abandoned.
+
         Row-count base (the ``normal`` tier; n_rows -> max_seconds,
         sample_size_default, max_iterations):
           - <5K        -> 15s, 2K, 3  (sample_skip_below bypasses sampling)
@@ -849,6 +856,30 @@ class AutoConfigController:
         try:
             _diag("entering iteration loop")
             for iteration in range(self.budget.max_iterations + 1):
+                # DO NOT restart this clock after iteration 0 (#2756, measured
+                # and abandoned). The argument for it is sound: iteration 0 is
+                # the mandatory measurement pass, so charging it against the
+                # budget that caps OPTIONAL adaptation means an expensive frame
+                # spends its whole allowance on the one iteration it had no
+                # choice about, and commits v0 by construction. It is worth
+                # F1 0.1097 -> 0.1490 on Amazon-Google dedupe.
+                #
+                # It is also unshippable, and the two facts are the same fact.
+                # On a host slow enough for the budget to bind, this cut is what
+                # makes the controller CHEAP -- one adaptive iteration and stop.
+                # Restarting the clock makes it do a bounded but much larger
+                # amount of work on exactly the machine least able to afford it.
+                # Measured on the arrow-parity `shared-email-switchboard` shape:
+                # 2 pipeline passes and 6.1s became 4 and 15.8s once the budget
+                # bound, and under `-n auto` that killed a CI worker on five
+                # consecutive runs. An absolute 2x ceiling was tried and did not
+                # save it -- it bounds each run, and that test makes two.
+                #
+                # Frugality-under-load and adaptation-under-load are the same
+                # knob pointed in opposite directions. Anything that reopens
+                # this has to answer for the contended host, not just the lane.
+                # `scripts/controller_budget_cost.py` reproduces both sides.
+                #
                 # #2532: the wall-clock stop makes the committed config a
                 # function of host speed and load -- how many iterations get
                 # explored depends on how busy the machine is. Anything that
@@ -1982,19 +2013,36 @@ class AutoConfigController:
             if mk.link_threshold is not None:
                 continue  # user's own value; never overwrite
             entry = recorded.get(mk.name)
-            if not isinstance(entry, dict) or entry.get("source") not in stampable:
+            if not isinstance(entry, dict):
                 continue
             value = entry.get("link_threshold")
             if value is None:
                 continue
             try:
-                mk.link_threshold = float(value)
+                resolved = float(value)
             except (TypeError, ValueError):
                 continue
+            source = entry.get("source")
+
+            # ALWAYS record what got used, whatever chose it. This field is a
+            # RECORD, not a decision: `resolve_thresholds` never reads it, so
+            # writing it cannot pin the cutoff or skip the full-data refit, and
+            # the fallback half of #2637 closes without reopening the incident
+            # the `calibrated`-only narrowing was added to fix. It is what makes
+            # `mk.perturbation_basis` non-None, which is what puts
+            # `ThresholdShift` and `perturbation_stability` back in reach on a
+            # zero-config FS run -- inert on 4 of 4 datasets before this.
+            mk.link_threshold_observed = resolved
+
+            # And stamp the OPERATIVE field only when something about this data
+            # actually decided the number.
+            if source in stampable:
+                mk.link_threshold = resolved
             logger.info(
                 "auto-config: recorded resolved link_threshold=%.4f on matchkey "
-                "%r (source=%s) so the cutoff is explicit and tunable (#2637)",
-                float(value), mk.name, entry.get("source"),
+                "%r (source=%s, operative=%s) so the cutoff is explicit and "
+                "tunable (#2637)",
+                resolved, mk.name, source, source in stampable,
             )
 
     @staticmethod

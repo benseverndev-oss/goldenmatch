@@ -45,7 +45,18 @@ logger = logging.getLogger(__name__)
 # This setting is the practical knob until then.
 #
 # Override via GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS for different shapes.
-_SCORE_NUM_CPUS = int(os.environ.get("GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS", "2"))
+#
+# READ LAZILY (#957). These four score-tuning knobs used to be import-time
+# module constants, which made them unreachable on the one path that needs
+# them: `ray submit` hands the driver a FRESH shell, so nothing exported around
+# the submit survives, and the driver imports `goldenmatch.distributed.*`
+# before it gets a chance to set anything itself. A cluster bench therefore
+# could not vary its own independent variable -- every sweep silently ran the
+# defaults, which is indistinguishable from a sweep that found no effect.
+# Reading at call time matches this module's own existing idiom for
+# `_block_shuffle_enabled()` and GOLDENMATCH_DISTRIBUTED_SHUFFLE_PARTS.
+def _score_num_cpus() -> int:
+    return int(os.environ.get("GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS", "2"))
 
 # #957: project to scoring-relevant columns BEFORE the block-shuffle so the
 # shuffle moves narrow blocks, not full records. The block-shuffle `_explode`
@@ -54,15 +65,20 @@ _SCORE_NUM_CPUS = int(os.environ.get("GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS", "
 # few tasks (~6 of 80 CPU at 100M) while workers sit idle. Scoring reads only
 # __row_id__ + config-referenced columns, so dropping unreferenced raw columns
 # is output-invariant (parity-tested). Kill via GOLDENMATCH_DISTRIBUTED_SCORE_PROJECT=0.
-_SCORE_PROJECT = os.environ.get("GOLDENMATCH_DISTRIBUTED_SCORE_PROJECT", "1") != "0"
+# Read on the DRIVER and captured into the `_explode` closure, so the driver's
+# setting is what applies. As a module constant this was read independently in
+# each WORKER process, where the cluster's env -- not the submitter's -- decides.
+def _score_project() -> bool:
+    return os.environ.get("GOLDENMATCH_DISTRIBUTED_SCORE_PROJECT", "1") != "0"
 
 # #957: optional explicit concurrency for the `_score` map_batches. Ray Data's
 # streaming executor otherwise caps in-flight tasks by object-store budget; the
 # projection above relieves that, and this pins the target task count to
 # saturate worker CPU. Unset (default) = let Ray decide; the optimal value is
 # cluster-shaped, tuned at the 100M re-measure.
-_raw_score_conc = os.environ.get("GOLDENMATCH_DISTRIBUTED_SCORE_CONCURRENCY")
-_SCORE_CONCURRENCY = int(_raw_score_conc) if _raw_score_conc else None
+def _score_concurrency() -> int | None:
+    raw = os.environ.get("GOLDENMATCH_DISTRIBUTED_SCORE_CONCURRENCY")
+    return int(raw) if raw else None
 
 # #957 (ResourceBudget backpressure follow-up). Ray Data's streaming executor
 # RESERVES a fraction of the cluster object store (default ~0.5, split across
@@ -78,14 +94,16 @@ _SCORE_CONCURRENCY = int(_raw_score_conc) if _raw_score_conc else None
 # partition count (GOLDENMATCH_DISTRIBUTED_SHUFFLE_PARTS). Unset (default) = Ray
 # default, no change. Tune at scale; ~0.2 frees most of the store for the
 # running op. Version-guarded: no-op on a Ray without the attribute.
-_OP_RESERVATION = os.environ.get("GOLDENMATCH_DISTRIBUTED_OP_RESERVATION")
+def _op_reservation() -> str | None:
+    return os.environ.get("GOLDENMATCH_DISTRIBUTED_OP_RESERVATION")
 
 
 def _apply_ray_data_resource_tuning() -> None:
     """Apply opt-in Ray Data object-store budget tuning for the distributed score
     path (#957 ResourceBudget backpressure). No-op unless the env knob is set;
     version-guarded so it never breaks on a Ray that lacks the attribute."""
-    if _OP_RESERVATION is None:
+    reservation = _op_reservation()
+    if reservation is None:
         return
     try:
         from ray.data import DataContext
@@ -97,7 +115,7 @@ def _apply_ray_data_resource_tuning() -> None:
                 "DataContext.op_resource_reservation_ratio -- ignored."
             )
             return
-        ratio = max(0.0, min(1.0, float(_OP_RESERVATION)))
+        ratio = max(0.0, min(1.0, float(reservation)))
         ctx.op_resource_reservation_ratio = ratio
         logger.info(
             "Ray Data op_resource_reservation_ratio=%.2f "
@@ -107,6 +125,25 @@ def _apply_ray_data_resource_tuning() -> None:
         )
     except Exception as e:  # never let a tuning knob break the run
         logger.warning("Ray Data resource tuning failed (ignored): %s", e)
+
+
+def effective_score_knobs() -> dict[str, Any]:
+    """The #957 score-tuning knobs as THIS process will actually use them.
+
+    Recorded into bench output so the artifact states the configuration that
+    produced the number. Without it a sweep whose runs all silently fell back
+    to the defaults is indistinguishable from a sweep that found no effect --
+    which is precisely how these knobs sat unmeasurable for a release cycle.
+    """
+    return {
+        "score_num_cpus": _score_num_cpus(),
+        "score_project": _score_project(),
+        "score_concurrency": _score_concurrency(),
+        "op_reservation": _op_reservation(),
+        # Not a #957 knob, but the same sweep tunes it and it is read on the
+        # driver at Dataset-build time, so it belongs in the same record.
+        "shuffle_parts": os.environ.get("GOLDENMATCH_DISTRIBUTED_SHUFFLE_PARTS"),
+    }
 
 
 def _native_worker_baseline() -> dict[str, dict[str, int]]:
@@ -380,15 +417,16 @@ def _score_blocks_legacy(
             "score": [float(s) for _a, _b, s in pairs],
         })
 
+    num_cpus = _score_num_cpus()
     logger.info(
         "score_blocks_distributed: dispatching with num_cpus=%d per task "
         "(GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS to override)",
-        _SCORE_NUM_CPUS,
+        num_cpus,
     )
     return df_ds.map_batches(
         _score_partition,
         batch_format="pyarrow",
-        num_cpus=_SCORE_NUM_CPUS,
+        num_cpus=num_cpus,
     )
 
 
@@ -587,11 +625,15 @@ def _score_blocks_block_shuffle(
     n_parts = (max(1, int(_parts_override)) if _parts_override
                else min(256, max(4, cpu * 4)))
 
+    # Driver-side read, captured into the closure below so the submitter's
+    # setting travels to the workers with the function.
+    project = _score_project()
+
     def _explode(batch: Any) -> Any:  # pa.Table -> pa.Table
         import polars as pl
         df = pl.from_arrow(batch)
         assert isinstance(df, pl.DataFrame)
-        if _SCORE_PROJECT:
+        if project:
             df = _project_to_scoring_columns(df, config)
         return _attach_colocation_keys(df, config).to_arrow()
 
@@ -613,20 +655,22 @@ def _score_blocks_block_shuffle(
 
     exploded = df_ds.map_batches(_explode, batch_format="pyarrow")
     colocated = exploded.repartition(n_parts, keys=["__keyid__", "__block_key__"])
+    num_cpus = _score_num_cpus()
+    concurrency = _score_concurrency()
     logger.info(
         "score_blocks_distributed: BLOCK-SHUFFLE path (opt-in via "
         "GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE); %d shuffle partitions, "
         "num_cpus=%d per task, project=%s, concurrency=%s",
-        n_parts, _SCORE_NUM_CPUS, _SCORE_PROJECT,
-        _SCORE_CONCURRENCY if _SCORE_CONCURRENCY is not None else "auto",
+        n_parts, num_cpus, project,
+        concurrency if concurrency is not None else "auto",
     )
     _mb_kwargs: dict[str, Any] = {
         "batch_format": "pyarrow",
         "batch_size": None,
-        "num_cpus": _SCORE_NUM_CPUS,
+        "num_cpus": num_cpus,
     }
-    if _SCORE_CONCURRENCY is not None:
-        _mb_kwargs["concurrency"] = _SCORE_CONCURRENCY
+    if concurrency is not None:
+        _mb_kwargs["concurrency"] = concurrency
     return colocated.map_batches(_score, **_mb_kwargs)
 
 

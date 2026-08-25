@@ -292,10 +292,17 @@ def threshold_perturbations(config: Any, deltas: tuple[float, ...] = _PERTURB_DE
     derived from them saw zero change and reported maximum confidence. A
     falsely confident number is worse than none.
 
-    A probabilistic matchkey with no ``link_threshold`` is therefore NOT
-    perturbable, and is skipped rather than perturbed through the inert field.
-    That is the #2483 configuration itself -- the cut comes from a runtime
-    fallback, so there is nothing in the config to shift.
+    A probabilistic matchkey with no cutoff at all -- neither a chosen
+    ``link_threshold`` nor a recorded ``link_threshold_observed`` -- is NOT
+    perturbable and is skipped rather than perturbed through the inert field.
+
+    Shifting is anchored on ``mk.perturbation_basis`` (#2637). Gating on
+    ``cutoff`` meant the #2483 configuration itself was unperturbable: on a
+    zero-config FS run the cut comes from a runtime fallback, so nothing in the
+    config could be shifted and this returned ``[]`` on 4 of 4 datasets. The
+    resolved number is now written down, so there is something to move away
+    from -- without it counting as a user's choice, which is what would skip
+    the full-data refit.
     """
     variants: list[Any] = []
     for delta in deltas:
@@ -305,7 +312,14 @@ def threshold_perturbations(config: Any, deltas: tuple[float, ...] = _PERTURB_DE
             if getattr(mk, "type", None) not in _PERTURBABLE_TYPES:
                 continue
             field = mk.cutoff_field
-            current = mk.cutoff
+            # `perturbation_basis` (#2637): shifting needs a resolved cutoff to
+            # move away from, not a CHOSEN one. On a zero-config FS run
+            # `link_threshold` is None and `cutoff` with it, so this yielded no
+            # variants at all and `perturbation_stability` was permanently
+            # unmeasurable on that path -- honest, per #2483, but a whole
+            # zero-label signal that never fired. `link_threshold_observed`
+            # records the number the run actually used.
+            current = mk.perturbation_basis
             if current is None:
                 continue
             new_t = _clamp(current + delta)

@@ -23,8 +23,9 @@ def test_op_reservation_knob_sets_datacontext(monkeypatch):
 
     ctx = _ctx_or_skip()
     orig = ctx.op_resource_reservation_ratio
-    # The knob is read at import time into a module constant; patch the constant.
-    monkeypatch.setattr(S, "_OP_RESERVATION", "0.2")
+    # Read at CALL time, so setting the env is the real path (it used to be an
+    # import-time constant that only an attribute patch could reach).
+    monkeypatch.setenv("GOLDENMATCH_DISTRIBUTED_OP_RESERVATION", "0.2")
     try:
         S._apply_ray_data_resource_tuning()
         assert ctx.op_resource_reservation_ratio == pytest.approx(0.2)
@@ -36,7 +37,7 @@ def test_op_reservation_knob_noop_when_unset(monkeypatch):
     import goldenmatch.distributed.scoring as S
 
     ctx = _ctx_or_skip()
-    monkeypatch.setattr(S, "_OP_RESERVATION", None)
+    monkeypatch.delenv("GOLDENMATCH_DISTRIBUTED_OP_RESERVATION", raising=False)
     orig = ctx.op_resource_reservation_ratio
     S._apply_ray_data_resource_tuning()
     assert ctx.op_resource_reservation_ratio == orig  # unchanged
@@ -47,7 +48,7 @@ def test_op_reservation_knob_clamps_to_unit_interval(monkeypatch):
 
     ctx = _ctx_or_skip()
     orig = ctx.op_resource_reservation_ratio
-    monkeypatch.setattr(S, "_OP_RESERVATION", "5")  # out of range -> clamp to 1.0
+    monkeypatch.setenv("GOLDENMATCH_DISTRIBUTED_OP_RESERVATION", "5")  # out of range -> clamp
     try:
         S._apply_ray_data_resource_tuning()
         assert ctx.op_resource_reservation_ratio == pytest.approx(1.0)

@@ -14,7 +14,15 @@ cluster_name: goldenmatch-bench
 provider:
   type: gcp
   region: us-central1
-  availability_zone: us-central1-a
+  # Rendered from the `zone` dispatch input. NOT cosmetic: GCP capacity is
+  # per-zone and independent of quota -- run 32883530356 died on
+  # ZONE_RESOURCE_POOL_EXHAUSTED for n2-highmem-32 in us-central1-a with
+  # N2_CPUS quota at 0/200. Quota says what you are ALLOWED, capacity says what
+  # exists right now, and only the second one was the problem. With the zone
+  # hardcoded the only recovery was editing this file, so a transient capacity
+  # dip blocked the lane entirely. n2-highmem-32/-64 and n2-standard-16 are all
+  # offered in us-central1-{a,b,c,f}.
+  availability_zone: GOLDENMATCH_ZONE_PLACEHOLDER
   # project_id is injected by the workflow at dispatch time so the same
   # cluster.yaml works across MJH GCP projects.
   project_id: GOLDENMATCH_GCP_PROJECT_PLACEHOLDER
@@ -42,6 +50,20 @@ rsync_exclude:
 # series; the bench container layer installs goldenmatch on top via
 # pip.
 docker:
+  # Container-wide env, set at `docker run`. This is the ONLY placement that
+  # reaches every process: `head_start_ray_commands` exports below cover the
+  # raylet and the workers it spawns, but `ray submit` runs the DRIVER through a
+  # fresh `docker exec`, and Ray's `with_docker_exec` forwards only its OWN env
+  # vars (RAY_HEAD_IP and friends) -- so a shell export never arrives there.
+  # Same failure shape as the #957 score knobs. Without this the driver runs
+  # under NATIVE=auto, which is the GATED ALLOWLIST rather than full native
+  # acceleration, and a missing kernel degrades silently there instead of
+  # raising. Belt and braces with the exports below: harmless if both are set.
+  run_options:
+    - "--env"
+    - "GOLDENMATCH_NATIVE=1"
+    - "--env"
+    - "GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE=1"
   # Rendered to the launcher's resolved Ray version at dispatch time (see the
   # bench-ray-cluster workflow) so the cluster has the same Ray Data API as the
   # distributed pipeline code (`repartition(num_partitions, keys=[...])`). The

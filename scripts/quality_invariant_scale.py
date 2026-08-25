@@ -1109,6 +1109,41 @@ def _run_phase5_and_collect(
     return predicted, dedup_wall
 
 
+def _score_knob_provenance() -> dict:
+    """The #957 score-tuning knobs as the engine will really read them.
+
+    Falls back to the raw env if goldenmatch is too old to expose the helper,
+    so a stale wheel on the head node degrades the record rather than the run.
+    """
+    try:
+        from goldenmatch.distributed.scoring import effective_score_knobs
+        return effective_score_knobs()
+    except Exception:
+        return {k: os.environ.get(f"GOLDENMATCH_DISTRIBUTED_{k.upper()}")
+                for k in ("score_num_cpus", "score_project", "score_concurrency",
+                          "op_reservation", "shuffle_parts")}
+
+
+def _apply_score_knob_flags(args) -> None:
+    """Turn the --score-* flags into the env the engine reads.
+
+    These exist for the same reason --wcc-scratch does: `ray submit` gives the
+    driver a FRESH shell, so a value exported around the submit never arrives.
+    A flag travels in the argv the submit already ships. Set before the engine
+    reads them -- which it now does at call time rather than at import (#957).
+    """
+    if args.score_num_cpus is not None:
+        os.environ["GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS"] = str(args.score_num_cpus)
+    if args.score_concurrency is not None:
+        os.environ["GOLDENMATCH_DISTRIBUTED_SCORE_CONCURRENCY"] = str(args.score_concurrency)
+    if args.score_project is not None:
+        os.environ["GOLDENMATCH_DISTRIBUTED_SCORE_PROJECT"] = "1" if args.score_project else "0"
+    if args.op_reservation is not None:
+        os.environ["GOLDENMATCH_DISTRIBUTED_OP_RESERVATION"] = str(args.op_reservation)
+    if args.shuffle_parts is not None:
+        os.environ["GOLDENMATCH_DISTRIBUTED_SHUFFLE_PARTS"] = str(args.shuffle_parts)
+
+
 def run_distributed_rung(
     n_rows: int, seed: int = 0, shape: str = "realistic",
     corruption: str = "moderate", n_partitions: int = 64,
@@ -1142,10 +1177,16 @@ def run_distributed_rung(
         "rss_mb_peak": _peak_rss_mb(),
         **metrics,
         "multi_member_clusters": multi,
+        # #957: state the score-tuning configuration this rung actually ran
+        # under. A sweep whose artifacts don't record it cannot be told apart
+        # from a sweep that never varied anything.
+        "score_knobs": _score_knob_provenance(),
     }
 
 
-def main(argv=None) -> int:
+def _build_parser() -> argparse.ArgumentParser:
+    """Split out from ``main`` so tests can exercise the real flag strings
+    without running a rung."""
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--rows", type=int, default=1000)
     ap.add_argument("--seed", type=int, default=0)
@@ -1187,11 +1228,40 @@ def main(argv=None) -> int:
                          "(--distributed only). Sets GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH so "
                          "the head process has it (env vars don't propagate through ray submit). "
                          "MUST be gs:// on multi-node.")
+    # --- #957 distributed score-tuning knobs -----------------------------
+    # Flags, not env vars, because `ray submit` hands the driver a fresh shell
+    # (same reason --wcc-scratch above is a flag). Each maps to the
+    # GOLDENMATCH_DISTRIBUTED_* var the scoring engine reads; unset = leave the
+    # engine's own default alone. The effective values are recorded in the
+    # output JSON under "score_knobs".
+    ap.add_argument("--score-num-cpus", type=int, default=None,
+                    help="CPUs reserved per distributed scoring task "
+                         "(GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS; engine default 2).")
+    ap.add_argument("--score-concurrency", type=int, default=None,
+                    help="explicit concurrency= on the _score map_batches "
+                         "(GOLDENMATCH_DISTRIBUTED_SCORE_CONCURRENCY; default: let Ray decide).")
+    ap.add_argument("--score-project", dest="score_project", default=None,
+                    action=argparse.BooleanOptionalAction,
+                    help="project to scoring-relevant columns before the block-shuffle "
+                         "(GOLDENMATCH_DISTRIBUTED_SCORE_PROJECT; engine default on). "
+                         "--no-score-project restores the full-record shuffle.")
+    ap.add_argument("--op-reservation", type=float, default=None,
+                    help="Ray Data per-op object-store reservation ratio "
+                         "(GOLDENMATCH_DISTRIBUTED_OP_RESERVATION). Lower (~0.2) when "
+                         "_score is [backpressured:tasks(ResourceBudget)] below CPU capacity.")
+    ap.add_argument("--shuffle-parts", type=int, default=None,
+                    help="block-shuffle partition count "
+                         "(GOLDENMATCH_DISTRIBUTED_SHUFFLE_PARTS; --distributed default 512).")
     ap.add_argument("--out", type=Path, default=None, help="write per-rung JSON here")
-    args = ap.parse_args(argv)
+    return ap
+
+
+def main(argv=None) -> int:
+    args = _build_parser().parse_args(argv)
 
     if args.wcc_scratch:
         os.environ["GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH"] = args.wcc_scratch
+    _apply_score_knob_flags(args)
 
     if args.rebuild_frozen_config:
         build_frozen_config(seed=args.seed, corruption="moderate")

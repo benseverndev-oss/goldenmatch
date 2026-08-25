@@ -5,14 +5,13 @@
 # config (1 head + 3 preemptible workers). The tear-down step runs in
 # `if: always()` so a failed bench still releases the instances.
 #
-# Required GitHub secrets (provision once per repo):
-#   INFISICAL_CLIENT_ID      — Universal Auth client id for a Machine
-#                              Identity scoped to the goldenmatch
-#                              Infisical project (a99885f0-c5af-4ae1-9dc8-255cc60aa129) with read
-#                              access on the `dev` environment.
-#   INFISICAL_CLIENT_SECRET  — companion secret for the same identity.
+# Required GitHub secret (provision once per repo):
+#   DOPPLER_TOKEN — read-only Doppler service token scoped to
+#                   project `showcase`, config `dev`. One secret, not
+#                   two: the token carries its own project/config, so
+#                   there is no login step and no scope flags.
 #
-# Pulled FROM Infisical project a99885f0-c5af-4ae1-9dc8-255cc60aa129, env=dev, at runtime:
+# Pulled FROM Doppler showcase/dev at runtime:
 #   GCP_RAY_BENCH_PROJECT_ID  — GCP project that holds the bench SA +
 #                                APIs (golden-490919). NOT the same as
 #                                GOOGLE_CLOUD_PROJECT, which the team
@@ -25,10 +24,10 @@
 #   - roles/compute.admin       (create/delete instances + disks)
 #   - roles/iam.serviceAccountUser (let Ray attach the SA to instances)
 #
-# Pattern: any future Infisical-backed secret reuses the same auth
-# pair instead of accumulating GH secrets. See
-# docs/distributed/ray-gce-cluster.md for the one-time Infisical
-# Machine Identity setup commands.
+# Pattern: any future Doppler-backed secret rides the same token
+# instead of accumulating GH secrets. See
+# docs/distributed/ray-gce-cluster.md for the one-time service-token
+# setup command.
 
 name: bench-ray-cluster
 
@@ -63,6 +62,45 @@ on:
         description: "Ray Dataset partition count for the distributed run"
         required: false
         default: "64"
+      # --- #957 distributed score-tuning knobs -------------------------
+      # Leave EMPTY to keep the engine's own default. Pinning every knob to
+      # its default would silently stop testing the default. The effective
+      # values land in the artifact JSON under "score_knobs", so a run always
+      # states the configuration that produced its number.
+      # Only in force when distributed=1: these tune the block-shuffle score
+      # stage, which the legacy backend=ray path never enters.
+      score_num_cpus:
+        description: "#957: CPUs reserved per distributed scoring task (empty = engine default 2)"
+        required: false
+        default: ""
+      score_concurrency:
+        description: "#957: explicit concurrency= on the _score map_batches (empty = let Ray decide)"
+        required: false
+        default: ""
+      score_project:
+        description: "#957: project to scoring columns before the block-shuffle. 1 = on, 0 = off, empty = engine default (on)"
+        required: false
+        default: ""
+      op_reservation:
+        description: "#957: Ray Data per-op object-store reservation ratio, e.g. 0.2. Lower it when _score is [backpressured:tasks(ResourceBudget)] below CPU capacity (empty = Ray default ~0.5)"
+        required: false
+        default: ""
+      shuffle_parts:
+        description: "#957: block-shuffle partition count (empty = the harness default 512)"
+        required: false
+        default: ""
+      bucket_debug:
+        description: "1 = per-bucket prep-vs-kernel-vs-postfilter timing from the scorer (GOLDENMATCH_BUCKET_DEBUG). Output-invariant; costs an env read and a perf_counter per bucket. Splits time between the Rust kernel and the frame prep around it (sort + group_by + to_arrow), which is what tells you whether a knob moved the kernel or the wrapping. Worth having on for a baseline run."
+        required: false
+        default: "0"
+      ray_version:
+        description: "Ray version for BOTH launcher and cluster image. Default 2.56.0 = goldenmatch's own declared [ray] floor, one minor above the 2.55.1 that produced the June baseline. Pinned so a sweep varies the knob and not Ray. Empty = float to latest."
+        required: false
+        default: "2.56.0"
+      zone: 
+        description: "GCE zone. Capacity is per-zone and independent of quota -- on ZONE_RESOURCE_POOL_EXHAUSTED, retry in another zone rather than waiting. n2-highmem-32/-64 and n2-standard-16 are offered in us-central1-{a,b,c,f}."
+        required: false
+        default: "us-central1-a"
       head_machine:
         description: "Head node machine type (the driver generates the full frame in memory; highmem for distributed runs). 100M: n2-highmem-32 (256 GB); 200M: n2-highmem-64 (512 GB)."
         required: false
@@ -74,14 +112,13 @@ permissions:
 jobs:
   ray-cluster-bench:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     env:
       # We render `.ray/cluster-gce.yaml` from the placeholder template
       # at workflow runtime so each dispatch sees a fresh cluster name
       # (avoids collisions if two dispatches overlap) and the right
       # project_id + git SHA.
       CLUSTER_NAME: "goldenmatch-bench-${{ github.run_id }}"
-      RAY_RELEASE: "2.43.0"
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
 
@@ -89,69 +126,70 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Ray + gcloud helpers + Infisical CLI
+      - name: Install Ray + gcloud helpers + Doppler CLI
         # Ray drives `ray up` / `ray submit` / `ray down` locally; the
-        # version pin matches the cluster.yaml docker image. Infisical
+        # version pin matches the cluster.yaml docker image. The Doppler
         # CLI fetches GCP creds at runtime so the GCP secrets stay in
         # one place instead of accumulating GH-Actions copies.
+        env:
+          RAY_VERSION_INPUT: ${{ inputs.ray_version }}
         run: |
           pip install --upgrade pip
-          # Install the LATEST Ray (matches CI's `ray[default]>=2.0`), then render
+          # Install the requested Ray (matches CI's `ray[default]>=2.0`), then render
           # the cluster's docker image to the SAME version so launcher==cluster and
           # both carry the Ray Data API the distributed pipeline needs
           # (`repartition(num_partitions, keys=[...])`, added after 2.43 -- the old
           # pin made the golden/WCC steps TypeError on `keys`).
-          pip install "ray[default]" "google-api-python-client"
+          if [ -n "${RAY_VERSION_INPUT:-}" ]; then
+            echo "Pinning Ray to $RAY_VERSION_INPUT (dispatch input)"
+            pip install "ray[default]==$RAY_VERSION_INPUT" "google-api-python-client"
+          else
+            echo "::warning::ray_version empty -- floating to latest. Pin it instead: a sweep against a moving Ray varies two things at once."
+            pip install "ray[default]" "google-api-python-client"
+          fi
           pip install pyyaml
           RAY_VER=$(python -c "import ray; print(ray.__version__)")
           echo "RAY_VER=$RAY_VER" >> "$GITHUB_ENV"
           echo "Resolved Ray version: $RAY_VER (launcher + cluster docker image)"
-          # Infisical CLI: official apt repo. The 0.43.x series ships
-          # `infisical login --method=universal-auth` and
-          # `infisical secrets get --plain` which we both use.
-          curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | sudo -E bash
-          sudo apt-get update && sudo apt-get install -y infisical
+          # Doppler CLI: official install script. We use only
+          # `doppler secrets get --plain`, which a service token authorizes
+          # directly -- no login step.
+          curl -Ls --tlsv1.2 --proto "=https" --retry 3 https://cli.doppler.com/install.sh | sudo sh -s -- --no-package-manager
+          doppler --version
 
-      - name: Fetch GCP creds from Infisical
-        # Authenticate the Machine Identity, then pull GCP_PROJECT_ID
-        # and GCP_SA_KEY from the goldenmatch Infisical project
-        # (a99885f0-c5af-4ae1-9dc8-255cc60aa129, dev env). The values are masked in subsequent
-        # logs via ::add-mask::. The SA JSON is written to disk and
-        # GOOGLE_APPLICATION_CREDENTIALS points at it; the project id
-        # is exported as a job-scope env var so the render + sweep
-        # steps see it without ${{ secrets.* }}.
+      - name: Fetch GCP creds from Doppler
+        # Pull GCP_PROJECT_ID and the SA key from Doppler project `showcase`,
+        # config `dev`. Both live in the service token, so no project/config
+        # flags and no login round-trip -- the token IS the scope. The values
+        # are masked in later logs via ::add-mask::; the SA JSON is written to
+        # disk and GOOGLE_APPLICATION_CREDENTIALS points at it, and the project
+        # id is exported job-scope so the render + sweep steps see it without
+        # reaching for ${{ secrets.* }} again.
         env:
-          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
-          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
-          if [ -z "${INFISICAL_CLIENT_ID:-}" ] || [ -z "${INFISICAL_CLIENT_SECRET:-}" ]; then
-            echo "::error::INFISICAL_CLIENT_ID or INFISICAL_CLIENT_SECRET not set; see docs/distributed/ray-gce-cluster.md"
+          if [ -z "${DOPPLER_TOKEN:-}" ]; then
+            echo "::error::DOPPLER_TOKEN not set; see docs/distributed/ray-gce-cluster.md"
             exit 1
           fi
-          INFISICAL_TOKEN=$(infisical login --silent --plain \
-            --method=universal-auth \
-            --client-id="$INFISICAL_CLIENT_ID" \
-            --client-secret="$INFISICAL_CLIENT_SECRET")
-          echo "::add-mask::$INFISICAL_TOKEN"
 
-          # GCP_RAY_BENCH_PROJECT_ID is the project where the bench SA
-          # lives and the required APIs are enabled (golden-490919).
-          # The team's GOOGLE_CLOUD_PROJECT secret points elsewhere
-          # (gen-lang-client-* Vertex project) -- using it would 403
-          # the SA on every cloudresourcemanager call. Surfaces it
-          # locally as GCP_PROJECT_ID for the rest of this workflow.
-          GCP_PROJECT_ID=$(infisical secrets get GCP_RAY_BENCH_PROJECT_ID \
-            --projectId=a99885f0-c5af-4ae1-9dc8-255cc60aa129 --env=dev --plain --token="$INFISICAL_TOKEN")
+          # GCP_RAY_BENCH_PROJECT_ID is the project where the bench SA lives
+          # and the required APIs are enabled (golden-490919). The team's
+          # GOOGLE_CLOUD_PROJECT points elsewhere (a gen-lang-client-* Vertex
+          # project) -- using it would 403 the SA on every
+          # cloudresourcemanager call. Surfaced locally as GCP_PROJECT_ID.
+          GCP_PROJECT_ID=$(doppler secrets get GCP_RAY_BENCH_PROJECT_ID --plain)
+          if [ -z "$GCP_PROJECT_ID" ]; then
+            echo "::error::GCP_RAY_BENCH_PROJECT_ID came back empty from Doppler."
+            exit 1
+          fi
           echo "::add-mask::$GCP_PROJECT_ID"
 
           # SA key is stored base64-encoded under GCP_SA_KEY_B64. Decode
-          # straight to disk (never echo). base64 -d is GNU coreutils;
-          # uses --ignore-garbage to tolerate any leading whitespace
-          # the Infisical CLI might emit alongside the value.
-          infisical secrets get GCP_SA_KEY_B64 \
-            --projectId=a99885f0-c5af-4ae1-9dc8-255cc60aa129 --env=dev --plain --token="$INFISICAL_TOKEN" \
-            | base64 -d --ignore-garbage > "$HOME/gcp-sa.json"
+          # straight to disk (never echo). `--ignore-garbage` tolerates any
+          # stray whitespace around the value.
+          doppler secrets get GCP_SA_KEY_B64 --plain             | base64 -d --ignore-garbage > "$HOME/gcp-sa.json"
           chmod 600 "$HOME/gcp-sa.json"
 
           # Sanity: the decoded file must be a JSON object. Validates the
@@ -162,15 +200,20 @@ jobs:
           echo "GOOGLE_APPLICATION_CREDENTIALS=$HOME/gcp-sa.json" >> $GITHUB_ENV
 
       - name: Render cluster.yaml with project + git SHA
+        env:
+          # Through the environment, not interpolated into the script body: a
+          # `${{ }}` expansion inside `run:` is a template-injection seam.
+          ZONE_INPUT: ${{ inputs.zone }}
         run: |
           set -euo pipefail
-          # GCP_PROJECT_ID is in $GITHUB_ENV from the Infisical fetch
+          # GCP_PROJECT_ID is in $GITHUB_ENV from the Doppler fetch
           # step. Inject project_id, git SHA, cluster_name, max_workers.
           sed -i "s|GOLDENMATCH_GCP_PROJECT_PLACEHOLDER|$GCP_PROJECT_ID|g" .ray/cluster-gce.yaml
           sed -i "s|GOLDENMATCH_GIT_SHA_PLACEHOLDER|${{ github.sha }}|g" .ray/cluster-gce.yaml
           sed -i "s|cluster_name: goldenmatch-bench$|cluster_name: ${{ env.CLUSTER_NAME }}|" .ray/cluster-gce.yaml
           sed -i "s|max_workers: 3$|max_workers: ${{ inputs.max_workers }}|" .ray/cluster-gce.yaml
           sed -i "s|GOLDENMATCH_HEAD_MACHINE_PLACEHOLDER|${{ inputs.head_machine }}|g" .ray/cluster-gce.yaml
+          sed -i "s|GOLDENMATCH_ZONE_PLACEHOLDER|${ZONE_INPUT}|g" .ray/cluster-gce.yaml
           # Pin the cluster docker image to the launcher's resolved Ray version so
           # the cluster has the same Ray Data API (repartition keys=) as the code.
           sed -i "s|GOLDENMATCH_RAY_VERSION_PLACEHOLDER|${RAY_VER}|g" .ray/cluster-gce.yaml
@@ -265,10 +308,51 @@ jobs:
         # interleaved with bench stdout. Without this, the only
         # signal mid-run is autoscaler "Resized to N CPUs" lines and
         # whatever the bench script chooses to print.
+        env:
+          # Read through the environment rather than interpolated into the
+          # script body: a `${{ }}` expansion inside `run:` is a template
+          # injection seam, and these are free-text dispatch inputs.
+          SCORE_NUM_CPUS: ${{ inputs.score_num_cpus }}
+          SCORE_CONCURRENCY: ${{ inputs.score_concurrency }}
+          SCORE_PROJECT: ${{ inputs.score_project }}
+          OP_RESERVATION: ${{ inputs.op_reservation }}
+          SHUFFLE_PARTS: ${{ inputs.shuffle_parts }}
+          DISTRIBUTED: ${{ inputs.distributed }}
+          BUCKET_DEBUG: ${{ inputs.bucket_debug }}
         run: |
           set -euo pipefail
           mkdir -p .profile_tmp/qis
           OUT_REMOTE="/tmp/qis_${{ inputs.label }}.json"
+
+          # #957 score-tuning knobs. They travel as FLAGS in the argv the
+          # submit already ships, because `ray submit` hands the driver a fresh
+          # shell -- exporting them in this step would never reach it. An empty
+          # input contributes no flag, so the engine default stays in force.
+          KNOBS=()
+          if [ -n "$SCORE_NUM_CPUS" ]; then KNOBS+=(--score-num-cpus "$SCORE_NUM_CPUS"); fi
+          if [ -n "$SCORE_CONCURRENCY" ]; then KNOBS+=(--score-concurrency "$SCORE_CONCURRENCY"); fi
+          if [ -n "$OP_RESERVATION" ]; then KNOBS+=(--op-reservation "$OP_RESERVATION"); fi
+          if [ -n "$SHUFFLE_PARTS" ]; then KNOBS+=(--shuffle-parts "$SHUFFLE_PARTS"); fi
+          case "$SCORE_PROJECT" in
+            1) KNOBS+=(--score-project) ;;
+            0) KNOBS+=(--no-score-project) ;;
+            "") ;;
+            *) echo "::error::score_project must be 1, 0, or empty (got '$SCORE_PROJECT')"; exit 1 ;;
+          esac
+          if [ "$BUCKET_DEBUG" = "1" ]; then
+            # The scorer runs inside the Ray WORKERS, so this has to be set on
+            # the cluster rather than in this shell. Written into the container's
+            # bashrc so every later `docker exec` -- including the ray submit
+            # driver and the raylet's children -- picks it up.
+            echo "enabling GOLDENMATCH_BUCKET_DEBUG on all nodes"
+            ray exec .ray/cluster-gce.yaml               "echo 'export GOLDENMATCH_BUCKET_DEBUG=1' >> ~/.bashrc" ||               echo "::warning::could not set BUCKET_DEBUG on the cluster; continuing without it"
+          fi
+          # `${KNOBS[@]+...}` guards the empty-array case under `set -u`.
+          echo "score knobs -> ${KNOBS[*]+${KNOBS[*]}}"
+          if [ "$DISTRIBUTED" != "1" ] && [ ${#KNOBS[@]} -gt 0 ]; then
+            echo "::error::score knobs were set but distributed=0. The legacy backend=ray path never enters the block-shuffle score stage, so they would measure nothing. Re-dispatch with distributed=1."
+            exit 1
+          fi
 
           # Background poller. Runs in a subshell so we can trap-kill
           # it cleanly on bench completion regardless of exit code.
@@ -302,6 +386,7 @@ jobs:
                  --distributed \
                  --partitions ${{ inputs.partitions }} \
                  --wcc-scratch "${{ inputs.wcc_scratch }}/${{ github.run_id }}" \
+                 ${KNOBS[@]+"${KNOBS[@]}"} \
                  --out "$OUT_REMOTE"
           else
             # Legacy: in-memory backend=ray (does NOT distribute; head-only).
@@ -342,9 +427,9 @@ jobs:
         if: always()
         run: |
           # $GCP_PROJECT_ID + $GOOGLE_APPLICATION_CREDENTIALS were
-          # exported in $GITHUB_ENV by the Infisical fetch step.
+          # exported in $GITHUB_ENV by the Doppler fetch step.
           if [ -z "${GCP_PROJECT_ID:-}" ]; then
-            echo "GCP_PROJECT_ID not in env -- earlier step failed before Infisical fetch; nothing to sweep."
+            echo "GCP_PROJECT_ID not in env -- earlier step failed before the Doppler fetch; nothing to sweep."
             exit 0
           fi
           gcloud auth activate-service-account \
@@ -381,6 +466,13 @@ jobs:
           rss_gb = d.get("rss_mb_peak", 0) / 1024
           f1 = d.get("pairwise", {}).get("f1", "?")
           print(f"## bench-ray-cluster: {rows:,} rows")
+          # #957: state the score-tuning configuration alongside the number.
+          # A run that reports only its wall cannot be told apart from a run
+          # that silently fell back to the defaults.
+          knobs = d.get("score_knobs")
+          if knobs:
+              print("- score knobs: " + ", ".join(
+                  f"{k}={v}" for k, v in knobs.items()))
           print(f"- wall: {wall}")
           print(f"- peak RSS: {rss_gb:.2f} GB (driver-side; per-node varies)")
           print(f"- pairwise F1: {f1}")
