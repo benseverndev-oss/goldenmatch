@@ -33,30 +33,31 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install scorer deps + Infisical CLI
+      - name: Install scorer deps + Doppler CLI
         run: |
           pip install --upgrade pip
           pip install "polars>=1.25" "numpy>=1.26"
-          curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | sudo -E bash
-          sudo apt-get update && sudo apt-get install -y infisical
+          curl -Ls --tlsv1.2 --proto "=https" --retry 3 https://cli.doppler.com/install.sh | sudo sh -s -- --no-package-manager
+          doppler --version
 
-      - name: Fetch GCP creds from Infisical
+      - name: Fetch GCP creds from Doppler
+        # Doppler project `showcase`, config `dev`. The service token carries
+        # its own scope, so there is no login step and no project/config flags.
         env:
-          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
-          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
-          INFISICAL_TOKEN=$(infisical login --silent --plain \
-            --method=universal-auth \
-            --client-id="$INFISICAL_CLIENT_ID" \
-            --client-secret="$INFISICAL_CLIENT_SECRET")
-          echo "::add-mask::$INFISICAL_TOKEN"
-          GCP_PROJECT_ID=$(infisical secrets get GCP_RAY_BENCH_PROJECT_ID \
-            --projectId=a99885f0-c5af-4ae1-9dc8-255cc60aa129 --env=dev --plain --token="$INFISICAL_TOKEN")
+          if [ -z "${DOPPLER_TOKEN:-}" ]; then
+            echo "::error::DOPPLER_TOKEN not set; see docs/distributed/ray-gce-cluster.md"
+            exit 1
+          fi
+          GCP_PROJECT_ID=$(doppler secrets get GCP_RAY_BENCH_PROJECT_ID --plain)
+          if [ -z "$GCP_PROJECT_ID" ]; then
+            echo "::error::GCP_RAY_BENCH_PROJECT_ID came back empty from Doppler."
+            exit 1
+          fi
           echo "::add-mask::$GCP_PROJECT_ID"
-          infisical secrets get GCP_SA_KEY_B64 \
-            --projectId=a99885f0-c5af-4ae1-9dc8-255cc60aa129 --env=dev --plain --token="$INFISICAL_TOKEN" \
-            | base64 -d --ignore-garbage > "$HOME/gcp-sa.json"
+          doppler secrets get GCP_SA_KEY_B64 --plain             | base64 -d --ignore-garbage > "$HOME/gcp-sa.json"
           chmod 600 "$HOME/gcp-sa.json"
           gcloud auth activate-service-account --key-file="$HOME/gcp-sa.json" --project="$GCP_PROJECT_ID"
 
