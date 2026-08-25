@@ -97,6 +97,10 @@ on:
         description: "Ray version for BOTH launcher and cluster image. Default 2.56.0 = goldenmatch's own declared [ray] floor, one minor above the 2.55.1 that produced the June baseline. Pinned so a sweep varies the knob and not Ray. Empty = float to latest."
         required: false
         default: "2.56.0"
+      zone: 
+        description: "GCE zone. Capacity is per-zone and independent of quota -- on ZONE_RESOURCE_POOL_EXHAUSTED, retry in another zone rather than waiting. n2-highmem-32/-64 and n2-standard-16 are offered in us-central1-{a,b,c,f}."
+        required: false
+        default: "us-central1-a"
       head_machine:
         description: "Head node machine type (the driver generates the full frame in memory; highmem for distributed runs). 100M: n2-highmem-32 (256 GB); 200M: n2-highmem-64 (512 GB)."
         required: false
@@ -196,6 +200,10 @@ jobs:
           echo "GOOGLE_APPLICATION_CREDENTIALS=$HOME/gcp-sa.json" >> $GITHUB_ENV
 
       - name: Render cluster.yaml with project + git SHA
+        env:
+          # Through the environment, not interpolated into the script body: a
+          # `${{ }}` expansion inside `run:` is a template-injection seam.
+          ZONE_INPUT: ${{ inputs.zone }}
         run: |
           set -euo pipefail
           # GCP_PROJECT_ID is in $GITHUB_ENV from the Doppler fetch
@@ -205,6 +213,7 @@ jobs:
           sed -i "s|cluster_name: goldenmatch-bench$|cluster_name: ${{ env.CLUSTER_NAME }}|" .ray/cluster-gce.yaml
           sed -i "s|max_workers: 3$|max_workers: ${{ inputs.max_workers }}|" .ray/cluster-gce.yaml
           sed -i "s|GOLDENMATCH_HEAD_MACHINE_PLACEHOLDER|${{ inputs.head_machine }}|g" .ray/cluster-gce.yaml
+          sed -i "s|GOLDENMATCH_ZONE_PLACEHOLDER|${ZONE_INPUT}|g" .ray/cluster-gce.yaml
           # Pin the cluster docker image to the launcher's resolved Ray version so
           # the cluster has the same Ray Data API (repartition keys=) as the code.
           sed -i "s|GOLDENMATCH_RAY_VERSION_PLACEHOLDER|${RAY_VER}|g" .ray/cluster-gce.yaml
