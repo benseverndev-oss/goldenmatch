@@ -89,6 +89,10 @@ on:
         description: "#957: block-shuffle partition count (empty = the harness default 512)"
         required: false
         default: ""
+      ray_version:
+        description: "Ray version for BOTH launcher and cluster image. Default 2.56.0 = goldenmatch's own declared [ray] floor, one minor above the 2.55.1 that produced the June baseline. Pinned so a sweep varies the knob and not Ray. Empty = float to latest."
+        required: false
+        default: "2.56.0"
       head_machine:
         description: "Head node machine type (the driver generates the full frame in memory; highmem for distributed runs). 100M: n2-highmem-32 (256 GB); 200M: n2-highmem-64 (512 GB)."
         required: false
@@ -100,14 +104,13 @@ permissions:
 jobs:
   ray-cluster-bench:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     env:
       # We render `.ray/cluster-gce.yaml` from the placeholder template
       # at workflow runtime so each dispatch sees a fresh cluster name
       # (avoids collisions if two dispatches overlap) and the right
       # project_id + git SHA.
       CLUSTER_NAME: "goldenmatch-bench-${{ github.run_id }}"
-      RAY_RELEASE: "2.43.0"
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
 
@@ -120,14 +123,22 @@ jobs:
         # version pin matches the cluster.yaml docker image. The Doppler
         # CLI fetches GCP creds at runtime so the GCP secrets stay in
         # one place instead of accumulating GH-Actions copies.
+        env:
+          RAY_VERSION_INPUT: ${{ inputs.ray_version }}
         run: |
           pip install --upgrade pip
-          # Install the LATEST Ray (matches CI's `ray[default]>=2.0`), then render
+          # Install the requested Ray (matches CI's `ray[default]>=2.0`), then render
           # the cluster's docker image to the SAME version so launcher==cluster and
           # both carry the Ray Data API the distributed pipeline needs
           # (`repartition(num_partitions, keys=[...])`, added after 2.43 -- the old
           # pin made the golden/WCC steps TypeError on `keys`).
-          pip install "ray[default]" "google-api-python-client"
+          if [ -n "${RAY_VERSION_INPUT:-}" ]; then
+            echo "Pinning Ray to $RAY_VERSION_INPUT (dispatch input)"
+            pip install "ray[default]==$RAY_VERSION_INPUT" "google-api-python-client"
+          else
+            echo "::warning::ray_version empty -- floating to latest. Pin it instead: a sweep against a moving Ray varies two things at once."
+            pip install "ray[default]" "google-api-python-client"
+          fi
           pip install pyyaml
           RAY_VER=$(python -c "import ray; print(ray.__version__)")
           echo "RAY_VER=$RAY_VER" >> "$GITHUB_ENV"
