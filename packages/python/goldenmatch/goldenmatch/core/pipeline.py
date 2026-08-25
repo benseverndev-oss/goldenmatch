@@ -4581,6 +4581,15 @@ def _run_dedupe_pipeline(
     if cluster_frames is not None:
         # Stats from frame aggregates (no dict materialization). Matches the
         # dict path's len(clusters) / size>1 / oversized counts exactly.
+        #
+        # `oversized_cluster_count` here is 0 whenever auto_split is on, for the
+        # same reason #2755 fixed in `ClusterProfile`: the flag is re-derived
+        # from `size > max_cluster_size` after the split, so every surviving
+        # piece is under the cap. NOT fixed here, deliberately -- this is the
+        # run-metrics surface, not the controller's, and reaching the pre-split
+        # count would mean changing what `build_clusters` returns for a number
+        # nothing gates on. Recorded where the next reader is standing rather
+        # than filed as a ticket nobody would pick up.
         from goldenmatch.core.frame import to_frame as _tf_d4
 
         _m = _tf_d4(cluster_frames.metadata)

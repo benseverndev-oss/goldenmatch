@@ -461,12 +461,22 @@ def _measure_bridges_frames(
 
 def _emit_cluster_profile(
     clusters: dict[int, dict], max_cluster_size: int = 0,
+    required_split_count: int | None = None,
 ) -> None:
     """Emit ClusterProfile to current emitter. No-op when no capture is active.
 
     `max_cluster_size` is recorded so `cluster_size_max` can be read relative
     to the ceiling it saturates against; 0 means "not recorded" and the
     over-merge check is skipped rather than guessed (#2750).
+
+    ``required_split_count`` is the number of clusters that EXCEEDED the cap and
+    had to be split, counted BEFORE the split ran. Passing it is what makes
+    ``oversized_cluster_count`` mean anything on the auto-split paths: the flag
+    is re-derived from ``size > max_cluster_size`` after splitting, so every
+    surviving piece is under the cap by definition and a post-split count is 0
+    by construction (#2755). ``None`` keeps the post-split count, which is the
+    correct reading when ``auto_split=False`` -- there the flag is a real
+    observation about clusters nobody tried to split.
     """
     import math
     if not _emitter_stack.get():
@@ -516,7 +526,11 @@ def _emit_cluster_profile(
         transitivity_rate=transitivity_rate(members_by_cluster, aggregated_scores, threshold),
         edge_confidence_p50=confidences[len(confidences) // 2] if confidences else 0.0,
         edge_confidence_min=confidences[0] if confidences else 0.0,
-        oversized_cluster_count=sum(1 for c in clusters.values() if c.get("oversized")),
+        oversized_cluster_count=(
+            required_split_count
+            if required_split_count is not None
+            else sum(1 for c in clusters.values() if c.get("oversized"))
+        ),
         bridge_edge_count=bridge_edge_count,
         measured_bridge_risk=measured_bridge_risk,
         max_cluster_size=max_cluster_size,
@@ -790,6 +804,9 @@ def build_cluster_frames(
                 "avg_edge": _pa.array(m_avg),
             })
 
+    # #2755: counted BEFORE the split, because the flag is re-derived afterwards.
+    _required_split: int | None = None
+
     if auto_split:
         # Frames-native auto-split: the per-cluster dict (the SP1 bench loss) is
         # confined to the rare oversized MINORITY. Mirrors _finalize_clusters's
@@ -805,6 +822,7 @@ def build_cluster_frames(
         oversized = sorted(
             _mf.filter_mask(_mf.column("oversized")).column("cluster_id").to_list()
         )
+        _required_split = len(oversized)
         if oversized:
             _af = _tf2(assignments)
             members_by_cid = {
@@ -898,12 +916,14 @@ def build_cluster_frames(
     if _emitter_stack.get():
         _emit_cluster_profile_frames(
             metadata, assignments, _pairs_list(), max_cluster_size,
+            required_split_count=_required_split,
         )
     return ClusterFrames(assignments=assignments, metadata=metadata)
 
 
 def _emit_cluster_profile_frames(
     metadata: Any, assignments: Any, pairs: Any = None, max_cluster_size: int = 0,
+    required_split_count: int | None = None,
 ) -> None:
     """Frames-path twin of ``_emit_cluster_profile``. Telemetry only -- no-op
     when no capture is active. Builds the ``ClusterProfile`` from the metadata +
@@ -967,8 +987,10 @@ def _emit_cluster_profile_frames(
                 aggregated_scores[(min(a, b), max(a, b))] = s
     threshold = min(aggregated_scores.values()) if aggregated_scores else 0.5
 
-    oversized_count = int(
-        _mf.filter_mask(_mf.column("oversized")).height
+    oversized_count = (
+        required_split_count
+        if required_split_count is not None
+        else int(_mf.filter_mask(_mf.column("oversized")).height)
     )
 
     # These were hardcoded to (0, 0.0). This emitter runs LAST on the paths that
@@ -1202,7 +1224,10 @@ def _finalize_clusters(
                 cinfo["cluster_quality"] = "strong"
             cinfo.pop("_was_split", None)
 
-    _emit_cluster_profile(result, max_cluster_size)
+    _emit_cluster_profile(
+        result, max_cluster_size,
+        required_split_count=len(oversized_cids) if auto_split else None,
+    )
     return result
 
 

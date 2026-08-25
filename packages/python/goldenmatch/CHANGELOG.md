@@ -6,6 +6,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Fixed
+- **`oversized_cluster_count` reports a condition that can actually occur.** It was 0 by construction on every auto-split run -- `build_clusters` re-derives the `oversized` flag from `size > max_cluster_size` AFTER splitting, so every surviving piece is under the cap and the post-split count is necessarily zero (measured 0 across all 72 configs in `docs/measurements/`). The field is now counted BEFORE the split, on both the dict and frames paths, from a list the code already had in hand. Two consumers were reading that constant: `ClusterProfile.health()` (YELLOW when > 0) and `zero_label_confidence.score_cluster_confidence`, where the term carries half the weight of `cluster_size_risk`. `auto_split=False` is untouched -- there the post-hoc flag is a real observation about clusters nobody tried to split, and the fix passes no pre-split count on that path. **Measured neutral**: all four product lanes unchanged (Abt-Buy linkage 0.7024 and dedupe 0.2253, Amazon-Google linkage 0.4636 and dedupe 0.1490), verified under `GOLDENMATCH_AUTOCONFIG_DETERMINISTIC=1` because a first wall-clock run showed a 0.1490 -> 0.1097 drop on one lane that turned out to be host speed, not the change. Stated plainly: the field now varies across candidates (1,1,0,0,1 on Abt-Buy dedupe) where it was always 0, but `health()` still reads RED on that lane from `red_reason` before the YELLOW branch is reached, and the confidence contribution is 1/669. This removes a lie from the telemetry; it does not currently move anything. (#2755)
+
+
 ### Changed
 
 - **The two product benchmark `(dedupe)` rows are retired (#2717, #2748).**
