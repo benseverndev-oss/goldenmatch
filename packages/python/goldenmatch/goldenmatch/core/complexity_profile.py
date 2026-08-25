@@ -637,6 +637,16 @@ class ClusterProfile:
     #: skipped rather than guessed.
     max_cluster_size: int = 0
 
+    # KNOWN LIMITATION, recorded here rather than filed (#2755): no cluster
+    # profile is emitted on the LINKAGE path at all, so every field on this
+    # class is at its default on a `match_df` run and every cluster-derived
+    # signal -- `health()`, `red_reason()`, the `cluster_size_risk` term in
+    # zero-label confidence -- is silent there. Whether linkage SHOULD emit one
+    # is a genuine design question and not obviously yes: linkage "clusters"
+    # are all pairs, so `cluster_size_max` is degenerate and the answer may be
+    # a different profile rather than this one. No failing case today, and
+    # nothing to measure a design against, so it is a note and not a ticket.
+
     def red_reason(self, n_rows: int) -> str | None:
         """The named RED condition, or None.
 
