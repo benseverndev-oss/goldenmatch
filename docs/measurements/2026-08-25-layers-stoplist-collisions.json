@@ -1,0 +1,1104 @@
+{
+  "domains": {
+    "automotive": {
+      "n_types": 4,
+      "n_roles": 5,
+      "suppressed": {
+        "chassis": [
+          "chassis_number"
+        ],
+        "engine": [
+          "engine",
+          "engine_number"
+        ],
+        "fuel": [
+          "fuel_type"
+        ],
+        "identifier": [
+          "identifier"
+        ],
+        "license": [
+          "license_plate"
+        ],
+        "mileage": [
+          "mileage"
+        ],
+        "model": [
+          "model"
+        ],
+        "odometer": [
+          "odometer"
+        ],
+        "plate": [
+          "license_plate"
+        ],
+        "registration": [
+          "registration_number"
+        ],
+        "trim": [
+          "trim"
+        ],
+        "vin": [
+          "vin"
+        ]
+      }
+    },
+    "ecommerce": {
+      "n_types": 9,
+      "n_roles": 5,
+      "suppressed": {
+        "billing": [
+          "billing_address"
+        ],
+        "category": [
+          "category",
+          "product_category"
+        ],
+        "coupon": [
+          "coupon",
+          "coupon_code"
+        ],
+        "delivery": [
+          "delivery_address",
+          "delivery_method",
+          "delivery_status"
+        ],
+        "department": [
+          "department"
+        ],
+        "discount": [
+          "discount_code"
+        ],
+        "ean": [
+          "ean"
+        ],
+        "fulfillment": [
+          "fulfillment_status"
+        ],
+        "method": [
+          "delivery_method",
+          "shipping_method"
+        ],
+        "order": [
+          "order_id",
+          "order_num",
+          "order_number",
+          "order_status"
+        ],
+        "promo": [
+          "promo"
+        ],
+        "purchase": [
+          "purchase_id"
+        ],
+        "shipment": [
+          "shipment_id"
+        ],
+        "shipping": [
+          "shipping_address",
+          "shipping_method"
+        ],
+        "title": [
+          "product_title"
+        ],
+        "tracking": [
+          "tracking",
+          "tracking_number"
+        ],
+        "upc": [
+          "upc"
+        ],
+        "voucher": [
+          "voucher"
+        ],
+        "waybill": [
+          "waybill"
+        ]
+      }
+    },
+    "education": {
+      "n_types": 5,
+      "n_roles": 5,
+      "suppressed": {
+        "academic": [
+          "academic_year"
+        ],
+        "credit": [
+          "credit_hours"
+        ],
+        "credits": [
+          "credits"
+        ],
+        "degree": [
+          "degree"
+        ],
+        "enrollment": [
+          "enrollment",
+          "enrollment_id"
+        ],
+        "gpa": [
+          "gpa"
+        ],
+        "grade": [
+          "grade_level",
+          "grade_point"
+        ],
+        "grades": [
+          "grades"
+        ],
+        "hours": [
+          "credit_hours"
+        ],
+        "level": [
+          "grade_level"
+        ],
+        "major": [
+          "major"
+        ],
+        "point": [
+          "grade_point"
+        ],
+        "program": [
+          "program"
+        ],
+        "semester": [
+          "semester"
+        ],
+        "term": [
+          "term"
+        ],
+        "transcript": [
+          "transcript"
+        ]
+      }
+    },
+    "energy": {
+      "n_types": 4,
+      "n_roles": 4,
+      "suppressed": {
+        "account": [
+          "account",
+          "utility_account"
+        ],
+        "billing": [
+          "billing_period"
+        ],
+        "consumed": [
+          "kwh_consumed"
+        ],
+        "consumption": [
+          "consumption",
+          "consumption_kwh"
+        ],
+        "demand": [
+          "peak_demand"
+        ],
+        "kwh": [
+          "consumption_kwh",
+          "kwh",
+          "kwh_consumed",
+          "usage_kwh"
+        ],
+        "peak": [
+          "peak_demand"
+        ],
+        "period": [
+          "billing_period"
+        ],
+        "point": [
+          "service_point"
+        ],
+        "rate": [
+          "tariff_rate"
+        ],
+        "reading": [
+          "meter_reading"
+        ],
+        "service": [
+          "service_point"
+        ],
+        "tariff": [
+          "tariff",
+          "tariff_rate"
+        ],
+        "usage": [
+          "usage_kwh"
+        ]
+      }
+    },
+    "finance": {
+      "n_types": 8,
+      "n_roles": 6,
+      "suppressed": {
+        "aba": [
+          "aba"
+        ],
+        "account": [
+          "account_id",
+          "account_number"
+        ],
+        "acct": [
+          "acct_id",
+          "acct_num"
+        ],
+        "bic": [
+          "bic"
+        ],
+        "ccy": [
+          "ccy"
+        ],
+        "confirmation": [
+          "confirmation"
+        ],
+        "credit": [
+          "credit"
+        ],
+        "currency": [
+          "currency",
+          "currency_code"
+        ],
+        "cusip": [
+          "cusip"
+        ],
+        "debit": [
+          "debit"
+        ],
+        "isin": [
+          "isin"
+        ],
+        "method": [
+          "payment_method"
+        ],
+        "payment": [
+          "payment_method"
+        ],
+        "ref": [
+          "ref_number"
+        ],
+        "reference": [
+          "reference",
+          "reference_number"
+        ],
+        "routing": [
+          "routing",
+          "routing_number"
+        ],
+        "sedol": [
+          "sedol"
+        ],
+        "swift": [
+          "swift"
+        ],
+        "symbol": [
+          "symbol"
+        ],
+        "ticker": [
+          "ticker"
+        ],
+        "trace": [
+          "trace"
+        ],
+        "transaction": [
+          "transaction_amount",
+          "transaction_type"
+        ],
+        "txn": [
+          "txn_amount",
+          "txn_type"
+        ]
+      }
+    },
+    "generic": {
+      "n_types": 0,
+      "n_roles": 9,
+      "suppressed": {}
+    },
+    "healthcare": {
+      "n_types": 10,
+      "n_roles": 6,
+      "suppressed": {
+        "adjudication": [
+          "adjudication"
+        ],
+        "auth": [
+          "auth_status"
+        ],
+        "chart": [
+          "chart_number"
+        ],
+        "clinical": [
+          "clinical_notes"
+        ],
+        "cpt": [
+          "cpt",
+          "cpt_code"
+        ],
+        "diagnosis": [
+          "diagnosis",
+          "diagnosis_desc"
+        ],
+        "drg": [
+          "drg",
+          "drg_code"
+        ],
+        "hcpcs": [
+          "hcpcs"
+        ],
+        "icd": [
+          "icd",
+          "icd_code"
+        ],
+        "icd10": [
+          "icd10"
+        ],
+        "icd9": [
+          "icd9"
+        ],
+        "insurance": [
+          "insurance_id"
+        ],
+        "medical": [
+          "medical_record"
+        ],
+        "mrn": [
+          "mrn"
+        ],
+        "npi": [
+          "npi",
+          "npi_number",
+          "provider_npi",
+          "referring_npi"
+        ],
+        "place": [
+          "place_of_service"
+        ],
+        "policy": [
+          "policy_number"
+        ],
+        "primary": [
+          "primary_dx"
+        ],
+        "procedure": [
+          "procedure",
+          "procedure_code"
+        ],
+        "secondary": [
+          "secondary_dx"
+        ],
+        "service": [
+          "place_of_service",
+          "service_type"
+        ]
+      }
+    },
+    "hospitality": {
+      "n_types": 4,
+      "n_roles": 4,
+      "suppressed": {
+        "billing": [
+          "billing"
+        ],
+        "booking": [
+          "booking_id",
+          "booking_reference"
+        ],
+        "check": [
+          "check_in",
+          "check_out"
+        ],
+        "confirmation": [
+          "confirmation_number"
+        ],
+        "night": [
+          "rate_per_night"
+        ],
+        "nights": [
+          "nights"
+        ],
+        "occupancy": [
+          "occupancy"
+        ],
+        "out": [
+          "check_out"
+        ],
+        "per": [
+          "rate_per_night"
+        ],
+        "rate": [
+          "rate_per_night"
+        ],
+        "reference": [
+          "booking_reference"
+        ],
+        "reservation": [
+          "reservation",
+          "reservation_id",
+          "reservation_number"
+        ],
+        "room": [
+          "room",
+          "room_number",
+          "room_type"
+        ],
+        "stay": [
+          "stay"
+        ]
+      }
+    },
+    "hr": {
+      "n_types": 11,
+      "n_roles": 4,
+      "suppressed": {
+        "annual": [
+          "annual_salary"
+        ],
+        "appraisal": [
+          "appraisal"
+        ],
+        "arrangement": [
+          "work_arrangement"
+        ],
+        "base": [
+          "base_salary"
+        ],
+        "compensation": [
+          "compensation"
+        ],
+        "ctc": [
+          "ctc"
+        ],
+        "department": [
+          "department"
+        ],
+        "dept": [
+          "dept"
+        ],
+        "designation": [
+          "designation"
+        ],
+        "division": [
+          "division"
+        ],
+        "doj": [
+          "doj"
+        ],
+        "emp": [
+          "emp_id"
+        ],
+        "employment": [
+          "employment_status",
+          "employment_type"
+        ],
+        "grade": [
+          "pay_grade"
+        ],
+        "hire": [
+          "hire_date"
+        ],
+        "job": [
+          "job_level",
+          "job_title"
+        ],
+        "join": [
+          "join_date"
+        ],
+        "joining": [
+          "date_of_joining",
+          "joining_date"
+        ],
+        "level": [
+          "job_level"
+        ],
+        "mode": [
+          "work_mode"
+        ],
+        "pay": [
+          "pay_grade"
+        ],
+        "performance": [
+          "performance",
+          "performance_rating",
+          "performance_score"
+        ],
+        "rating": [
+          "performance_rating"
+        ],
+        "remote": [
+          "remote_work"
+        ],
+        "reporting": [
+          "reporting_manager"
+        ],
+        "salary": [
+          "annual_salary",
+          "base_salary",
+          "salary"
+        ],
+        "score": [
+          "performance_score"
+        ],
+        "service": [
+          "years_of_service"
+        ],
+        "tenure": [
+          "tenure"
+        ],
+        "title": [
+          "job_title"
+        ],
+        "work": [
+          "remote_work",
+          "work_arrangement",
+          "work_location",
+          "work_mode"
+        ],
+        "years": [
+          "years_of_service"
+        ]
+      }
+    },
+    "insurance": {
+      "n_types": 9,
+      "n_roles": 7,
+      "suppressed": {
+        "annual": [
+          "annual_premium"
+        ],
+        "coverage": [
+          "coverage",
+          "coverage_amount",
+          "coverage_type"
+        ],
+        "deductible": [
+          "deductible"
+        ],
+        "insurance": [
+          "insurance_type"
+        ],
+        "policy": [
+          "policy",
+          "policy_id",
+          "policy_no",
+          "policy_number",
+          "policy_type"
+        ],
+        "premium": [
+          "annual_premium",
+          "premium",
+          "premium_amount"
+        ]
+      }
+    },
+    "legal": {
+      "n_types": 4,
+      "n_roles": 7,
+      "suppressed": {
+        "action": [
+          "cause_of_action"
+        ],
+        "case": [
+          "case",
+          "case_id",
+          "case_number"
+        ],
+        "cause": [
+          "cause_of_action"
+        ],
+        "docket": [
+          "docket",
+          "docket_number"
+        ],
+        "filing": [
+          "filing_date"
+        ],
+        "jurisdiction": [
+          "jurisdiction"
+        ],
+        "matter": [
+          "matter",
+          "matter_id",
+          "matter_number"
+        ],
+        "parties": [
+          "parties"
+        ]
+      }
+    },
+    "logistics": {
+      "n_types": 5,
+      "n_roles": 5,
+      "suppressed": {
+        "awb": [
+          "awb"
+        ],
+        "bill": [
+          "bill_of_lading"
+        ],
+        "consignment": [
+          "consignment"
+        ],
+        "delivery": [
+          "delivery_status"
+        ],
+        "dispatch": [
+          "dispatch_date"
+        ],
+        "document": [
+          "document"
+        ],
+        "freight": [
+          "freight"
+        ],
+        "lading": [
+          "bill_of_lading"
+        ],
+        "shipment": [
+          "shipment_id",
+          "shipment_number"
+        ],
+        "tracking": [
+          "tracking",
+          "tracking_id",
+          "tracking_number"
+        ],
+        "waybill": [
+          "waybill"
+        ]
+      }
+    },
+    "manufacturing": {
+      "n_types": 4,
+      "n_roles": 5,
+      "suppressed": {
+        "assembly": [
+          "assembly_id"
+        ],
+        "bill": [
+          "bill_of_materials"
+        ],
+        "bom": [
+          "bom"
+        ],
+        "defect": [
+          "defect_rate"
+        ],
+        "lot": [
+          "lot_number"
+        ],
+        "materials": [
+          "bill_of_materials"
+        ],
+        "order": [
+          "work_order"
+        ],
+        "production": [
+          "production",
+          "production_date"
+        ],
+        "quality": [
+          "quality"
+        ],
+        "rate": [
+          "defect_rate",
+          "yield_rate"
+        ],
+        "serial": [
+          "serial_number"
+        ],
+        "shift": [
+          "shift"
+        ],
+        "work": [
+          "work_order"
+        ],
+        "yield": [
+          "yield_rate"
+        ]
+      }
+    },
+    "marketing": {
+      "n_types": 5,
+      "n_roles": 5,
+      "suppressed": {
+        "attribution": [
+          "attribution"
+        ],
+        "click": [
+          "click_through_rate"
+        ],
+        "conversion": [
+          "conversion_rate"
+        ],
+        "cost": [
+          "cost_per_lead"
+        ],
+        "funnel": [
+          "funnel_stage"
+        ],
+        "impressions": [
+          "impressions"
+        ],
+        "metrics": [
+          "metrics"
+        ],
+        "mql": [
+          "mql"
+        ],
+        "opportunity": [
+          "opportunity_id"
+        ],
+        "per": [
+          "cost_per_lead"
+        ],
+        "pipeline": [
+          "pipeline"
+        ],
+        "rate": [
+          "click_through_rate",
+          "conversion_rate"
+        ],
+        "sql": [
+          "sql_lead"
+        ],
+        "stage": [
+          "funnel_stage"
+        ],
+        "through": [
+          "click_through_rate"
+        ],
+        "utm": [
+          "utm_campaign",
+          "utm_source"
+        ]
+      }
+    },
+    "real_estate": {
+      "n_types": 4,
+      "n_roles": 7,
+      "suppressed": {
+        "asking": [
+          "asking_price"
+        ],
+        "bathrooms": [
+          "bathrooms"
+        ],
+        "bedrooms": [
+          "bedrooms"
+        ],
+        "built": [
+          "year_built"
+        ],
+        "features": [
+          "features"
+        ],
+        "feet": [
+          "square_feet"
+        ],
+        "garage": [
+          "garage"
+        ],
+        "list": [
+          "list_price"
+        ],
+        "lot": [
+          "lot_size"
+        ],
+        "mls": [
+          "mls",
+          "mls_number"
+        ],
+        "price": [
+          "asking_price",
+          "list_price",
+          "listing_price",
+          "price",
+          "sale_price",
+          "sold_price"
+        ],
+        "sale": [
+          "sale_price"
+        ],
+        "size": [
+          "lot_size"
+        ],
+        "sold": [
+          "sold_price"
+        ],
+        "sqft": [
+          "sqft"
+        ],
+        "square": [
+          "square_feet"
+        ]
+      }
+    },
+    "telecom": {
+      "n_types": 5,
+      "n_roles": 4,
+      "suppressed": {
+        "call": [
+          "call_duration"
+        ],
+        "data": [
+          "data_usage"
+        ],
+        "duration": [
+          "call_duration"
+        ],
+        "iccid": [
+          "iccid"
+        ],
+        "imei": [
+          "imei"
+        ],
+        "imsi": [
+          "imsi"
+        ],
+        "minutes": [
+          "minutes_used"
+        ],
+        "msisdn": [
+          "msisdn"
+        ],
+        "network": [
+          "network",
+          "network_type"
+        ],
+        "plan": [
+          "plan",
+          "plan_id",
+          "plan_name",
+          "rate_plan"
+        ],
+        "rate": [
+          "rate_plan"
+        ],
+        "sim": [
+          "sim_id"
+        ],
+        "sms": [
+          "sms_count"
+        ],
+        "usage": [
+          "data_usage",
+          "usage"
+        ],
+        "used": [
+          "minutes_used"
+        ]
+      }
+    }
+  },
+  "summary": {
+    "n_domains": 16,
+    "n_distinct_suppressed_tokens": 206,
+    "distinct_suppressed_tokens": [
+      "aba",
+      "academic",
+      "account",
+      "acct",
+      "action",
+      "adjudication",
+      "annual",
+      "appraisal",
+      "arrangement",
+      "asking",
+      "assembly",
+      "attribution",
+      "auth",
+      "awb",
+      "base",
+      "bathrooms",
+      "bedrooms",
+      "bic",
+      "bill",
+      "billing",
+      "bom",
+      "booking",
+      "built",
+      "call",
+      "case",
+      "category",
+      "cause",
+      "ccy",
+      "chart",
+      "chassis",
+      "check",
+      "click",
+      "clinical",
+      "compensation",
+      "confirmation",
+      "consignment",
+      "consumed",
+      "consumption",
+      "conversion",
+      "cost",
+      "coupon",
+      "coverage",
+      "cpt",
+      "credit",
+      "credits",
+      "ctc",
+      "currency",
+      "cusip",
+      "data",
+      "debit",
+      "deductible",
+      "defect",
+      "degree",
+      "delivery",
+      "demand",
+      "department",
+      "dept",
+      "designation",
+      "diagnosis",
+      "discount",
+      "dispatch",
+      "division",
+      "docket",
+      "document",
+      "doj",
+      "drg",
+      "duration",
+      "ean",
+      "emp",
+      "employment",
+      "engine",
+      "enrollment",
+      "features",
+      "feet",
+      "filing",
+      "freight",
+      "fuel",
+      "fulfillment",
+      "funnel",
+      "garage",
+      "gpa",
+      "grade",
+      "grades",
+      "hcpcs",
+      "hire",
+      "hours",
+      "iccid",
+      "icd",
+      "icd10",
+      "icd9",
+      "identifier",
+      "imei",
+      "impressions",
+      "imsi",
+      "insurance",
+      "isin",
+      "job",
+      "join",
+      "joining",
+      "jurisdiction",
+      "kwh",
+      "lading",
+      "level",
+      "license",
+      "list",
+      "lot",
+      "major",
+      "materials",
+      "matter",
+      "medical",
+      "method",
+      "metrics",
+      "mileage",
+      "minutes",
+      "mls",
+      "mode",
+      "model",
+      "mql",
+      "mrn",
+      "msisdn",
+      "network",
+      "night",
+      "nights",
+      "npi",
+      "occupancy",
+      "odometer",
+      "opportunity",
+      "order",
+      "out",
+      "parties",
+      "pay",
+      "payment",
+      "peak",
+      "per",
+      "performance",
+      "period",
+      "pipeline",
+      "place",
+      "plan",
+      "plate",
+      "point",
+      "policy",
+      "premium",
+      "price",
+      "primary",
+      "procedure",
+      "production",
+      "program",
+      "promo",
+      "purchase",
+      "quality",
+      "rate",
+      "rating",
+      "reading",
+      "ref",
+      "reference",
+      "registration",
+      "remote",
+      "reporting",
+      "reservation",
+      "room",
+      "routing",
+      "salary",
+      "sale",
+      "score",
+      "secondary",
+      "sedol",
+      "semester",
+      "serial",
+      "service",
+      "shift",
+      "shipment",
+      "shipping",
+      "sim",
+      "size",
+      "sms",
+      "sold",
+      "sqft",
+      "sql",
+      "square",
+      "stage",
+      "stay",
+      "swift",
+      "symbol",
+      "tariff",
+      "tenure",
+      "term",
+      "through",
+      "ticker",
+      "title",
+      "trace",
+      "tracking",
+      "transaction",
+      "transcript",
+      "trim",
+      "txn",
+      "upc",
+      "usage",
+      "used",
+      "utm",
+      "vin",
+      "voucher",
+      "waybill",
+      "work",
+      "years",
+      "yield"
+    ]
+  }
+}
