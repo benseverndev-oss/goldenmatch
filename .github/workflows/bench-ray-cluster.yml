@@ -89,6 +89,10 @@ on:
         description: "#957: block-shuffle partition count (empty = the harness default 512)"
         required: false
         default: ""
+      bucket_debug:
+        description: "1 = per-bucket prep-vs-kernel-vs-postfilter timing from the scorer (GOLDENMATCH_BUCKET_DEBUG). Output-invariant; costs an env read and a perf_counter per bucket. Splits time between the Rust kernel and the frame prep around it (sort + group_by + to_arrow), which is what tells you whether a knob moved the kernel or the wrapping. Worth having on for a baseline run."
+        required: false
+        default: "0"
       ray_version:
         description: "Ray version for BOTH launcher and cluster image. Default 2.56.0 = goldenmatch's own declared [ray] floor, one minor above the 2.55.1 that produced the June baseline. Pinned so a sweep varies the knob and not Ray. Empty = float to latest."
         required: false
@@ -305,6 +309,7 @@ jobs:
           OP_RESERVATION: ${{ inputs.op_reservation }}
           SHUFFLE_PARTS: ${{ inputs.shuffle_parts }}
           DISTRIBUTED: ${{ inputs.distributed }}
+          BUCKET_DEBUG: ${{ inputs.bucket_debug }}
         run: |
           set -euo pipefail
           mkdir -p .profile_tmp/qis
@@ -325,6 +330,14 @@ jobs:
             "") ;;
             *) echo "::error::score_project must be 1, 0, or empty (got '$SCORE_PROJECT')"; exit 1 ;;
           esac
+          if [ "$BUCKET_DEBUG" = "1" ]; then
+            # The scorer runs inside the Ray WORKERS, so this has to be set on
+            # the cluster rather than in this shell. Written into the container's
+            # bashrc so every later `docker exec` -- including the ray submit
+            # driver and the raylet's children -- picks it up.
+            echo "enabling GOLDENMATCH_BUCKET_DEBUG on all nodes"
+            ray exec .ray/cluster-gce.yaml               "echo 'export GOLDENMATCH_BUCKET_DEBUG=1' >> ~/.bashrc" ||               echo "::warning::could not set BUCKET_DEBUG on the cluster; continuing without it"
+          fi
           # `${KNOBS[@]+...}` guards the empty-array case under `set -u`.
           echo "score knobs -> ${KNOBS[*]+${KNOBS[*]}}"
           if [ "$DISTRIBUTED" != "1" ] && [ ${#KNOBS[@]} -gt 0 ]; then

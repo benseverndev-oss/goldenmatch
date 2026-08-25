@@ -42,6 +42,20 @@ rsync_exclude:
 # series; the bench container layer installs goldenmatch on top via
 # pip.
 docker:
+  # Container-wide env, set at `docker run`. This is the ONLY placement that
+  # reaches every process: `head_start_ray_commands` exports below cover the
+  # raylet and the workers it spawns, but `ray submit` runs the DRIVER through a
+  # fresh `docker exec`, and Ray's `with_docker_exec` forwards only its OWN env
+  # vars (RAY_HEAD_IP and friends) -- so a shell export never arrives there.
+  # Same failure shape as the #957 score knobs. Without this the driver runs
+  # under NATIVE=auto, which is the GATED ALLOWLIST rather than full native
+  # acceleration, and a missing kernel degrades silently there instead of
+  # raising. Belt and braces with the exports below: harmless if both are set.
+  run_options:
+    - "--env"
+    - "GOLDENMATCH_NATIVE=1"
+    - "--env"
+    - "GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE=1"
   # Rendered to the launcher's resolved Ray version at dispatch time (see the
   # bench-ray-cluster workflow) so the cluster has the same Ray Data API as the
   # distributed pipeline code (`repartition(num_partitions, keys=[...])`). The
