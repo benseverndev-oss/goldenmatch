@@ -13,7 +13,10 @@
 cluster_name: goldenmatch-bench
 provider:
   type: gcp
-  region: us-central1
+  # Derived from the `zone` input at render time, never set independently: a
+  # region that disagrees with its zone fails at instance creation, and the two
+  # drifting apart is a silent trap the moment the zone becomes selectable.
+  region: GOLDENMATCH_REGION_PLACEHOLDER
   # Rendered from the `zone` dispatch input. NOT cosmetic: GCP capacity is
   # per-zone and independent of quota -- run 32883530356 died on
   # ZONE_RESOURCE_POOL_EXHAUSTED for n2-highmem-32 in us-central1-a with

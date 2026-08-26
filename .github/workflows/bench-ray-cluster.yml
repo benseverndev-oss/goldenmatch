@@ -214,6 +214,11 @@ jobs:
           sed -i "s|max_workers: 3$|max_workers: ${{ inputs.max_workers }}|" .ray/cluster-gce.yaml
           sed -i "s|GOLDENMATCH_HEAD_MACHINE_PLACEHOLDER|${{ inputs.head_machine }}|g" .ray/cluster-gce.yaml
           sed -i "s|GOLDENMATCH_ZONE_PLACEHOLDER|${ZONE_INPUT}|g" .ray/cluster-gce.yaml
+          # Region is the zone minus its trailing letter. Derived, not a second
+          # input, so the pair cannot disagree.
+          REGION="${ZONE_INPUT%-*}"
+          echo "zone=${ZONE_INPUT} -> region=${REGION}"
+          sed -i "s|GOLDENMATCH_REGION_PLACEHOLDER|${REGION}|g" .ray/cluster-gce.yaml
           # Pin the cluster docker image to the launcher's resolved Ray version so
           # the cluster has the same Ray Data API (repartition keys=) as the code.
           sed -i "s|GOLDENMATCH_RAY_VERSION_PLACEHOLDER|${RAY_VER}|g" .ray/cluster-gce.yaml
