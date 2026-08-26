@@ -89,3 +89,28 @@ def test_embedded_frozen_config_matches_file():
         "_FROZEN_CONFIG_JSON drifted from qis_realistic_frozen_config.json; "
         "re-run the embed (json.dumps(json.load(open(file)), separators=(',',':')))."
     )
+
+
+@pytest.mark.parametrize("shape", ["realistic", "phase5"])
+def test_gen_schema_is_large_string(shape: str):
+    """String columns must be `large_string`, not `string`.
+
+    The engine has always been handed the frame polars produced via
+    `.to_arrow()`, and polars emits large_string (64-bit offsets). Building the
+    table with pyarrow directly emits string (32-bit). Ray Data's
+    `_hash_partition` copes with the first and raises
+    `ValueError: output array is read-only` on the second, which killed the
+    block-shuffle ten minutes into a 100M cluster run (32976499569).
+
+    The hash tests above cannot catch this: they compare values, and `string`
+    and `large_string` are equal through `to_pylist()`. Value equality is not
+    type equality, and the type is what downstream code dispatches on.
+    """
+    import pyarrow as pa
+
+    df, _ = qis.generate_with_gt(1000, seed=0, shape=shape, corruption="light")
+    plain = [f.name for f in df.schema if pa.types.is_string(f.type)]
+    assert not plain, (
+        f"{shape}: {plain} are `string`; Ray's hash_partition needs "
+        "`large_string`. Wrap the construction in _large_str()."
+    )
