@@ -270,6 +270,7 @@ These trade nothing for speed/memory at scale and are safe to leave at their def
 | Variable | Default | Effect |
 |----------|---------|--------|
 | `GOLDENMATCH_BUCKET_DEBUG` | `0` | Print per-bucket prep / kernel / post-filter timing for `backend=bucket`. Output-invariant, near-zero cost, but it's a debug aid, not a speed-up. |
+| `GOLDENMATCH_CLUSTER_DEBUG` | `0` | Print a per-step timing split for the DRIVER-SIDE clustering stage: pull pairs to driver / derive id universe / map ids to dense index / connected components / build output table. Output-invariant; one env read plus a `perf_counter` per step. Use it when that stage dominates a distributed run — at 100M rows it is ~16 minutes for ~70s of graph algorithm, and this says which step owns the rest. On a Ray cluster set it in the cluster yaml's `docker run_options`, **not** in a shell around `ray submit`: the driver runs through a fresh `docker exec` and would never see the export. |
 | `GOLDENMATCH_CANDIDATE_COUNT_MAX_BLOCKS` | `10000` | Max blocks for which scoring counts candidate pairs. Above it the loop is skipped -- counting materialises each block -- and `ScoringProfile.candidates_compared` stays 0 with `candidates_counted=False`. Raise it (e.g. `1000000000`) only to make an auto-config diagnostic answerable: it buys a serial pass over every block. Garbage or negative values fall back to the default. |
 | `GOLDENMATCH_TRANSFORM_DEBUG` | `0` | Print the prep-transform arrow-lane split (`pl.from_arrow` / `_do_transform` / `to_arrow`) to size the bridge vs the transform compute. Output-invariant, near-zero cost; a debug aid, not a speed-up. |
 | `GOLDENMATCH_PREP_STAGED_COLLECT` | `0` | Collect prepared records in stages (memory-management experiment). Can be slower; leave off unless diagnosing prep RSS. |
@@ -596,6 +597,7 @@ Every `GOLDENMATCH_*` variable the package reads (plus the one `GOLDEN_*` except
 | `GOLDENMATCH_IDENTITY_INITIAL_LOAD` | `0` (off) | Opt-in from-empty Postgres initial-load fast path (direct COPY, indexes rebuilt after). `1` = on; gated to empty tables. |
 | `GOLDENMATCH_IDENTITY_INITIAL_LOAD_UNLOGGED` | `0` (off) | Also load `UNLOGGED` (skip WAL) under the initial-load path; only for re-runnable builds. |
 | `GOLDENMATCH_BUCKET_DEBUG` | `0` | Per-bucket timing breakdown (diagnostic). |
+| `GOLDENMATCH_CLUSTER_DEBUG` | `0` | Driver-side clustering stage timing breakdown (diagnostic). |
 | `GOLDENMATCH_CANDIDATE_COUNT_MAX_BLOCKS` | `10000` | Block-count gate for the candidate-count loop; raise only for diagnostics (costs a serial pass). |
 | `GOLDENMATCH_TRANSFORM_DEBUG` | `0` | Prep-transform arrow-lane bridge split (diagnostic). |
 | `GOLDEN_DIAGNOSTICS` | `1` (on) | Anomaly diagnostics (note: no `MATCH` in the name). On states that are probably a GoldenMatch bug -- a native wheel-skew slow path, an unexpected `dedupe_df`/`match_df` crash, the config linter itself crashing, or a broken native install -- emit a warning with a prefilled GitHub issue URL plus a PII-safe environment report. Never fires on expected fallbacks or user errors, and sends nothing anywhere (a better error message, not telemetry). `0` disables. |
