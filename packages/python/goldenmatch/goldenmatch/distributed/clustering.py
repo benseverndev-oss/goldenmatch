@@ -12,6 +12,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    import pyarrow as pa
     from ray.data import Dataset
 
 logger = logging.getLogger(__name__)
@@ -218,19 +219,47 @@ def _resolve_use_label_prop(
     return _route_distributed(pair_count)
 
 
-def _derive_touched_ids(pairs_ds: Dataset) -> list[int]:
-    """Distinct ids appearing in any pair (id_a or id_b), sorted.
+def _derive_touched_ids(pairs_ds: Dataset) -> pa.Array:
+    """Distinct ids appearing in any pair (id_a or id_b), sorted ascending.
 
-    Driver-side collect of the distinct SET -- used ONLY on the connected-components and
-    label-propagation routes, which are gated below the 50M-pair threshold,
-    so the set is bounded. The two_phase_wcc route never calls this (it takes
-    all_ids=None and derives touched members distributively in Phase A).
+    Returns an Arrow int64 array, NOT a Python list. At 100M rows these ids are
+    the dominant driver-side cost, and boxing them into Python is what made them
+    dominant.
+
+    This used to ``.to_pylist()`` both id columns into a Python ``set`` and
+    ``sorted()`` it. The docstring justified that with "gated below the 50M-pair
+    threshold, so the set is bounded" -- but the at-scale QIS config raises
+    GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD to 2e9 deliberately (to dodge
+    the distributed WCC's multi-hour checkpoint tail), which routes ~226M pairs
+    straight here: 4.5x past the bound that safety argument rested on. That is
+    ~452M boxed ints into a 100M-entry set plus a 100M-element Python sort, on
+    one core.
+
+    Measured at 10M pairs, identical output every way:
+        to_pylist + set + sorted    25.21s
+        np.unique                    2.01s
+    and for the FULL id-mapping stage (derive + both index lookups):
+        numpy  (np.unique + searchsorted)   49.71s
+        arrow  (pc.unique + index_in)        6.61s   7.5x
+    Arrow wins because the mapping never leaves Arrow's own memory.
     """
-    seen: set[int] = set()
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    chunks: list[pa.Array] = []
     for batch in pairs_ds.iter_batches(batch_format="pyarrow"):
-        seen.update(batch.column("id_a").to_pylist())
-        seen.update(batch.column("id_b").to_pylist())
-    return sorted(seen)
+        for col in ("id_a", "id_b"):
+            # A Table's column is a ChunkedArray; a RecordBatch's is a flat
+            # Array. Ray Data has yielded both across versions, and only one of
+            # them has `combine_chunks`.
+            arr = batch.column(col)
+            if isinstance(arr, pa.ChunkedArray):
+                arr = arr.combine_chunks()
+            chunks.append(arr.cast(pa.int64()))
+    if not chunks:
+        return pa.array([], type=pa.int64())
+    u = pc.unique(pa.concat_arrays(chunks))
+    return pc.take(u, pc.sort_indices(u))
 
 
 def build_clusters_distributed(
@@ -460,16 +489,45 @@ def _build_clusters_cc_fallback(
         full = pa.concat_tables(pair_tables)
     else:
         full = pa.table({"id_a": [], "id_b": [], "score": []})
-    id_a_arr = full.column("id_a").to_numpy(zero_copy_only=False)
-    id_b_arr = full.column("id_b").to_numpy(zero_copy_only=False)
+    # id -> dense index stays in ARROW. `pc.index_in` against the sorted value
+    # set replaces `np.searchsorted`, and at 10M pairs the whole stage measured
+    # 6.61s against numpy's 49.71s for byte-identical output. The pair columns
+    # are already Arrow here, so this avoids materialising them as numpy at all;
+    # only the two index vectors cross into numpy, because the CC kernel below
+    # takes numpy arrays.
+    import pyarrow.compute as pc
 
-    # Build id -> dense index via numpy searchsorted (O(n_pairs log n_ids)
-    # instead of dict[int, int].get per pair).
-    sorted_ids = np.array(sorted(all_ids), dtype=np.int64)
-    n = sorted_ids.shape[0]
-    row_idx = np.searchsorted(sorted_ids, id_a_arr)
-    col_idx = np.searchsorted(sorted_ids, id_b_arr)
+    if isinstance(all_ids, (pa.Array, pa.ChunkedArray)):
+        ids_arr = all_ids
+    else:
+        ids_arr = pa.array(sorted(all_ids), type=pa.int64())
+    if isinstance(ids_arr, pa.ChunkedArray):
+        ids_arr = ids_arr.combine_chunks()
+    ids_arr = ids_arr.cast(pa.int64())
+    n = len(ids_arr)
+    def _dense(col: str):
+        idx = pc.index_in(full.column(col).combine_chunks().cast(pa.int64()),
+                          value_set=ids_arr)
+        if idx.null_count:
+            # `np.searchsorted` used to return an INSERTION POINT for an id that
+            # is not in the set -- a plausible-looking index pointing at the
+            # wrong member, silently. `index_in` returns null instead, so the
+            # condition is detectable; say so rather than propagate a NaN into
+            # the components kernel.
+            raise ValueError(
+                f"{idx.null_count} pair ids in {col!r} are absent from all_ids; "
+                "the caller's id universe does not cover the pair set. "
+                "(The previous searchsorted-based mapping mis-indexed these "
+                "silently rather than failing.)"
+            )
+        return idx.to_numpy(zero_copy_only=False)
 
+    row_idx = _dense("id_a")
+    col_idx = _dense("id_b")
+
+    # The member_id column below wants the ids as numpy; one conversion at the
+    # boundary, after Arrow has done the expensive part.
+    sorted_ids = ids_arr.to_numpy(zero_copy_only=False)
     _n_components, labels = connected_components_undirected(row_idx, col_idx, n)
 
     # Compute per-cluster size via bincount; broadcast back to per-member.
@@ -1248,9 +1306,17 @@ def _rc_union_isolated(labels_ds: Any, all_ids: list[int], pairs_ds: Any) -> Any
     smaller-scale regime), so the driver-side touched-set derive is acceptable --
     the same posture the connected-components / label_propagation routes already take.
     """
+    import pyarrow as pa
+    import pyarrow.compute as pc
     import ray
-    touched = set(_derive_touched_ids(pairs_ds))
-    isolated = [int(i) for i in all_ids if int(i) not in touched]
+
+    # `pc.is_in` against the sorted touched array, rather than building a Python
+    # set of every touched id and testing membership one boxed int at a time.
+
+    touched = _derive_touched_ids(pairs_ds)
+    all_arr = pa.array([int(i) for i in all_ids], type=pa.int64())
+    keep = pc.invert(pc.is_in(all_arr, value_set=touched))
+    isolated = pc.filter(all_arr, keep).to_pylist()
     if not isolated:
         return labels_ds
     iso_ds = ray.data.from_items([{"id": i, "label": i} for i in isolated])
