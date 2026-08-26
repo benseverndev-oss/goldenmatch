@@ -272,6 +272,29 @@ def generate_with_gt(n_rows: int, seed: int = 0, shape: str = "realistic",
     raise ValueError(f"unknown shape {shape!r}; expected 'phase5' or 'realistic'")
 
 
+def _large_str(t: pa.Table) -> pa.Table:
+    """Cast every `string` column to `large_string`.
+
+    NOT cosmetic. The engine has always received the frame polars produced via
+    `.to_arrow()`, and polars emits `large_string` (64-bit offsets). Building
+    the table with pyarrow directly emits `string` (32-bit). Ray Data's
+    `_hash_partition` copes with the first and raises
+    `ValueError: output array is read-only` on the second, killing the
+    block-shuffle ~10 minutes into a 100M run (run 32976499569).
+
+    The VALUES are identical either way, which is exactly why this got through
+    review: the fixture was verified cell-by-cell through `to_pylist()`, and
+    `string` and `large_string` compare equal there. Value equality is not type
+    equality, and the type is what downstream code dispatches on. Pinned by
+    test_realistic_gen_schema_is_large_string.
+    """
+    fields = [
+        pa.field(f.name, pa.large_string()) if pa.types.is_string(f.type) else f
+        for f in t.schema
+    ]
+    return t.cast(pa.schema(fields))
+
+
 def _generate_phase5(n_rows: int, seed: int = 0) -> tuple[pa.Table, np.ndarray]:
     n_rows = (n_rows // ROWS_PER_CLUSTER) * ROWS_PER_CLUSTER
     n_clusters = n_rows // ROWS_PER_CLUSTER
@@ -294,13 +317,13 @@ def _generate_phase5(n_rows: int, seed: int = 0) -> tuple[pa.Table, np.ndarray]:
     )
     # `(__cid__ % 100000).cast(Utf8).str.zfill(5)`
     zip_col = np.char.zfill((cids % 100000).astype("U"), 5)
-    df = pa.table({
+    df = _large_str(pa.table({
         "id": pa.array(np.arange(n_rows, dtype=np.int64).astype("U")),
         "first_name": pa.array(first_name),
         "last_name": pa.array(last_name),
         "email": pa.array(email),
         "zip": pa.array(zip_col),
-    })
+    }))
     return df, cids
 
 
@@ -399,7 +422,7 @@ def _generate_realistic(n_rows: int, seed: int = 0, corruption: str = "light"
     else:
         email_rows = [f"{f}.{l}@example.com" for f, l in zip(first_with_typo, last_rows)]
 
-    df = pa.table({
+    df = _large_str(pa.table({
         "id": [f"r{i}" for i in range(n_rows)],
         "first_name": first_with_typo,
         "last_name": last_rows,
@@ -408,7 +431,7 @@ def _generate_realistic(n_rows: int, seed: int = 0, corruption: str = "light"
         "zip": zip_rows,
         "birth_year": year_rows,
         "email": email_rows,
-    })
+    }))
     return df, cids
 
 
