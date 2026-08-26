@@ -1,11 +1,23 @@
-"""Bit-identity regression for the vectorized QIS realistic generator.
+"""Bit-identity regression for the QIS realistic generator.
 
-The generator was rewritten from per-row Python loops to numpy/`np.char` for a
-10-50x speed-up at scale (the single-threaded per-row expansion was the QIS gen
-wall). These pinned SHA-256 hashes were captured from the PRE-vectorization
-implementation; they lock the new code to byte-for-byte identical output so the
-distributed scale rungs stay directly comparable to the single-box ladder
-(a different fixture would make a cross-engine F1 delta un-attributable).
+These pinned SHA-256 hashes lock the fixture byte-for-byte, so distributed scale
+rungs stay directly comparable to the single-box ladder -- a different fixture
+would make a cross-engine F1 delta un-attributable.
+
+HISTORY, because the name used to say "vectorized" and that was misleading. A
+numpy/`np.char` rewrite was added claiming a 10-50x speed-up, but it was placed
+ABOVE the existing definition rather than replacing it, so Python's later
+binding won and the rewrite never ran. This test called the public entry point
+and therefore exercised the surviving per-row implementation, against hashes
+captured from that same implementation -- so it could not have caught the
+shadowing, and its name described code it never touched.
+
+Measured before deleting the dead copy (500K/1M/2M rows): the "vectorized"
+version was 2-3x SLOWER, not faster. The accidental shadowing had been keeping
+the quicker implementation live. The claim was never measured; the docstring was
+taken on trust. If a vectorized generator is attempted again, benchmark it
+against these row counts BEFORE swapping, and delete the loser rather than
+stacking a second definition.
 
 Lightweight by design (numpy only, no Ray, no dedupe) so it runs in the default
 `python` lane -- unlike test_qis_harness.py, which CI --ignores.
@@ -41,13 +53,13 @@ _CIDS_GOLDEN = {
 
 
 @pytest.mark.parametrize(("n_rows", "corruption"), sorted(_DF_GOLDEN))
-def test_vectorized_realistic_gen_is_bit_identical(n_rows: int, corruption: str):
+def test_realistic_gen_is_bit_identical(n_rows: int, corruption: str):
     df, cids = qis.generate_with_gt(n_rows, seed=0, shape="realistic",
                                     corruption=corruption)
     df_hash = hashlib.sha256(df.write_csv().encode()).hexdigest()
     cids_hash = hashlib.sha256(cids.tobytes()).hexdigest()
     assert df_hash == _DF_GOLDEN[(n_rows, corruption)], (
-        f"vectorized realistic gen changed the {n_rows}-row {corruption} fixture; "
+        f"realistic gen changed the {n_rows}-row {corruption} fixture; "
         f"this breaks cross-engine/cross-rung comparability."
     )
     assert cids_hash == _CIDS_GOLDEN[n_rows], (
