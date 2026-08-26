@@ -315,9 +315,14 @@ def build_clusters_distributed(
             "(driver-side, fits memory -- faster at this scale).",
             pair_count,
         )
-        ids = all_ids if all_ids is not None else _derive_touched_ids(pairs_ds)
+        # Pass all_ids THROUGH, including None. The fallback materialises the
+        # (projected) edge set anyway, so it derives the id universe from that
+        # table; pre-deriving here would send the whole edge set to the driver a
+        # second time purely to compute something the first pass already has.
+        # The label-propagation route below still pre-derives, because it never
+        # materialises the pairs on the driver.
         return _annotate_cluster_sizes(
-            _build_clusters_cc_fallback(pairs_ds, ids, max_cluster_size),
+            _build_clusters_cc_fallback(pairs_ds, all_ids, max_cluster_size),
             max_cluster_size,
             already_sized=True,
         )
@@ -473,30 +478,47 @@ def _build_clusters_cc_fallback(
     import numpy as np
     import polars as pl
     import pyarrow as pa
+    import pyarrow.compute as pc
     import ray
 
     from goldenmatch.distributed._connected_components import (
         connected_components_undirected,
     )
 
-    # Pull pairs in pyarrow batches and concatenate (vectorized; the prior
-    # take_all + per-row dict comprehension was the 67s bottleneck on
-    # run 26122054424).
+    # ONE projected pass. Connected components reads `id_a` and `id_b` and
+    # nothing else -- `score` was shipped across the network for every pair and
+    # never read. And when the caller passes all_ids=None (the at-scale route),
+    # `_derive_touched_ids` used to make its OWN full pass first, so the whole
+    # edge set crossed to the driver TWICE.
+    #
+    # At the 100M rung that is 226M pairs: 2 passes x (int64, int64, float64)
+    # = ~10.8 GB, against ~3.6 GB for one pass of the two columns actually used.
+    # The graph algorithm underneath costs ~70s (measured: scipy connected_
+    # components on 20M edges is 6.4s, and it scales close to linear), so the
+    # driver stage was overwhelmingly data movement rather than clustering.
+    projected = pairs_ds.select_columns(["id_a", "id_b"])
     pair_tables: list[pa.Table] = list(
-        pairs_ds.iter_batches(batch_format="pyarrow")
+        projected.iter_batches(batch_format="pyarrow")
     )
     if pair_tables:
         full = pa.concat_tables(pair_tables)
     else:
-        full = pa.table({"id_a": [], "id_b": [], "score": []})
-    # id -> dense index stays in ARROW. `pc.index_in` against the sorted value
-    # set replaces `np.searchsorted`, and at 10M pairs the whole stage measured
-    # 6.61s against numpy's 49.71s for byte-identical output. The pair columns
-    # are already Arrow here, so this avoids materialising them as numpy at all;
-    # only the two index vectors cross into numpy, because the CC kernel below
-    # takes numpy arrays.
-    import pyarrow.compute as pc
+        full = pa.table({"id_a": pa.array([], type=pa.int64()),
+                         "id_b": pa.array([], type=pa.int64())})
 
+    # Derive the id universe from the table already in hand rather than from a
+    # second trip to the object store. Same values, same order (sorted unique),
+    # one fewer full materialisation.
+    if all_ids is None:
+        both = pa.concat_arrays([
+            full.column(c).combine_chunks().cast(pa.int64()) for c in ("id_a", "id_b")
+        ])
+        _u = pc.unique(both)
+        all_ids = pc.take(_u, pc.sort_indices(_u))
+    # id -> dense index stays in ARROW. `pc.index_in` against the sorted value
+    # set replaces `np.searchsorted`; at 10M pairs the stage measured 6.61s
+    # against numpy's 49.71s for byte-identical output. Only the two index
+    # vectors cross into numpy, because the CC kernel below takes numpy arrays.
     if isinstance(all_ids, (pa.Array, pa.ChunkedArray)):
         ids_arr = all_ids
     else:
