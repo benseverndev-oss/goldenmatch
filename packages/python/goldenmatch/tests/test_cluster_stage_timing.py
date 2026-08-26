@@ -7,8 +7,11 @@ completed normally and produced no timing at all. A flag that silently does
 nothing is worse than no flag, because it is indistinguishable from a measured
 null.
 
-These need no Ray -- the gate is a plain env read -- so the regression is held
-in the ordinary lane rather than only on a cluster.
+The three GATE tests need no Ray -- that gate is a plain env read -- so they run
+in the ordinary python lane. The fourth exercises the real stage, which imports
+ray internally, so it skips where ray is absent and runs in the distributed
+lanes. Splitting them that way keeps the cheap half of the guard everywhere
+rather than confining all of it to a Ray-only lane.
 """
 from __future__ import annotations
 
@@ -40,6 +43,12 @@ def test_stage_timing_emits_every_step(monkeypatch, caplog):
     goes unattributed, which is the whole reason this exists."""
     import numpy as np
     import pyarrow as pa
+    import pytest
+
+    # `_build_clusters_cc_fallback` imports ray internally, so this test cannot
+    # run in the plain `python_goldenmatch` lane, which has no ray. The gate
+    # tests above still cover the env contract there.
+    pytest.importorskip("ray")
 
     class FakeDS:
         def __init__(self, t): self.t = t
