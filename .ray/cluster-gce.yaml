@@ -67,6 +67,14 @@ docker:
     - "GOLDENMATCH_NATIVE=1"
     - "--env"
     - "GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE=1"
+    # Rendered from the `cluster_debug` dispatch input. It belongs HERE and not
+    # in a shell around `ray submit`: the driver runs through a fresh
+    # `docker exec` which inherits the container env but not the submitter's,
+    # so an export would silently do nothing -- which is exactly what happened
+    # to an earlier GOLDENMATCH_BUCKET_DEBUG dispatch (it produced no output
+    # and the run looked normal).
+    - "--env"
+    - "GOLDENMATCH_CLUSTER_DEBUG=GOLDENMATCH_CLUSTER_DEBUG_PLACEHOLDER"
   # Rendered to the launcher's resolved Ray version at dispatch time (see the
   # bench-ray-cluster workflow) so the cluster has the same Ray Data API as the
   # distributed pipeline code (`repartition(num_partitions, keys=[...])`). The
