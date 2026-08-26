@@ -82,12 +82,35 @@ initialization_commands:
 
 # Install goldenmatch from the repo's tag. The bench workflow stamps
 # this from the commit SHA so reruns hit identical code.
+# EXACT pins, not floors. Every one of these floated, and between the June 100M
+# rung and the 2026-08-25 re-run EVERY SINGLE ONE moved:
+#
+#     goldenmatch-native  0.1.6  -> 0.2.0   (11 releases)
+#     polars              1.41.2 -> 1.44.0
+#     pyarrow             24.0.0 -> 25.0.1
+#     numpy               2.4.6  -> 2.5.2
+#     pandas              3.0.3  -> 3.0.5
+#     ray                 2.55.1 -> 2.58.0  (pinned separately, workflow input)
+#
+# The re-run came back 2.43x slower on dedupe with BYTE-IDENTICAL output, and
+# with eight variables moved at once it is not attributable to any of them. A
+# benchmark whose environment floats cannot produce a comparable number, by
+# construction -- the drift is not a detail, it is the reason the lane could not
+# answer the question it exists for.
+#
+# `goldenmatch` itself is already pinned, by git SHA, and stays that way: it is
+# the thing under test.
+#
+# To bump: change a version here in its own commit, so a wall-clock change has
+# exactly one candidate cause. Do NOT loosen these back to `>=`.
 setup_commands:
   - >-
     pip install --upgrade pip &&
-    pip install "polars>=1.0" "pandas>=2,<3" "pyarrow>=10" "psutil>=5.9" "rapidfuzz>=3.0" "jellyfish>=1.0" &&
+    pip install "polars==1.44.0" "pandas==3.0.5" "pyarrow==25.0.1" "numpy==2.5.2"
+    "psutil==7.2.2" "rapidfuzz==3.14.5" "jellyfish==1.2.1" &&
     pip install "git+https://github.com/benseverndev-oss/goldenmatch@GOLDENMATCH_GIT_SHA_PLACEHOLDER#subdirectory=packages/python/goldenmatch" &&
-    pip install "goldenmatch-native>=0.1.3"
+    pip install "goldenmatch-native==0.2.0" &&
+    pip freeze > /tmp/bench_env.txt
 head_setup_commands: []
 worker_setup_commands: []
 

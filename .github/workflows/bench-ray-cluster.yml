@@ -298,6 +298,41 @@ jobs:
           set -euo pipefail
           ray submit .ray/cluster-gce.yaml scripts/verify_cluster_native.py
 
+      - name: Record the resolved environment
+        # Pins say what we ASKED for; this records what actually landed, which is
+        # the only thing a later comparison can trust. Two axes drifted silently
+        # between the June rung and the 2026-08-25 re-run, and neither was
+        # recoverable afterwards:
+        #   - every Python dependency floated (now pinned in cluster-gce.yaml)
+        #   - the two runs landed in different ZONES, and n2 spans several CPU
+        #     generations, so "same machine type" did not mean same hardware.
+        # GCE reports the actual platform per instance, so capture it rather than
+        # constrain it: minCpuPlatform costs availability, and three of four
+        # zones were already capacity-short on n2-highmem-32.
+        if: always()
+        env:
+          # Through the environment, not interpolated into the script body: a
+          # `${{ }}` expansion inside `run:` is a template-injection seam.
+          LABEL: ${{ inputs.label }}
+          CLUSTER: ${{ env.CLUSTER_NAME }}
+        run: |
+          set -uo pipefail
+          mkdir -p .profile_tmp/qis
+          OUT=".profile_tmp/qis/env_${LABEL}.md"
+          {
+            echo "### bench environment"
+            echo ""
+            echo "| node | machine type | CPU platform |"
+            echo "|---|---|---|"
+            gcloud compute instances list \
+              --filter="name~^ray-${CLUSTER}" \
+              --project="$GCP_PROJECT_ID" \
+              --format="value(name,machineType.basename(),cpuPlatform)" 2>/dev/null \
+              | while read -r nm mt cp; do echo "| $nm | $mt | $cp |"; done
+          } | tee "$OUT" >> $GITHUB_STEP_SUMMARY || true
+          # The exact resolved wheel set, from the head node itself.
+          ray rsync-down .ray/cluster-gce.yaml /tmp/bench_env.txt ".profile_tmp/qis/pipfreeze_${LABEL}.txt" || echo "could not fetch pip freeze from the head (non-fatal)"
+
       - name: Submit bench
         # `ray submit` ships the script to the head node and runs it.
         # The script writes its JSON output to /tmp on the head; we
@@ -408,7 +443,13 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         with:
           name: "qis-${{ inputs.label }}"
-          path: ".profile_tmp/qis/qis_${{ inputs.label }}.json"
+          # The result AND the environment that produced it. A rung number whose
+          # environment was not captured cannot be compared to anything later --
+          # that is exactly how the June baseline became unattributable.
+          path: |
+            .profile_tmp/qis/qis_${{ inputs.label }}.json
+            .profile_tmp/qis/env_${{ inputs.label }}.md
+            .profile_tmp/qis/pipfreeze_${{ inputs.label }}.txt
           if-no-files-found: warn
 
       - name: Ray down (always)
