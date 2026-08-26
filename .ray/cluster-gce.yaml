@@ -92,7 +92,23 @@ initialization_commands:
 #     polars              1.41.2 -> 1.44.0
 #     pyarrow             24.0.0 -> 25.0.1
 #     numpy               2.4.6  -> 2.5.2
-#     pandas              3.0.3  -> 3.0.5
+#     pandas              2.x    -> 2.3.3   (see the correction below)
+#
+# CORRECTION to that table, kept because the mistake is instructive: pandas was
+# NEVER on 3.x here. The constraint was `pandas>=2,<3`, capped below 3 on
+# purpose, so the lane resolved 2.3.3. I built the drift table by asking PyPI
+# for each package's newest release WITHOUT applying the constraint already in
+# this file, read 3.0.5, and pinned it -- crossing the major version the cap
+# existed to prevent.
+#
+# It fails ~10 minutes in, after provisioning, inside Ray's shuffle:
+#   ValueError: output array is read-only
+#   ray/data/_internal/arrow_ops/transform_pyarrow.py, _hash_partition
+# Ray 2.56.0 does `np.mod(hashes, num_partitions, out=hashes)` where `hashes`
+# came from `hash_pandas_object(table.to_pandas(types_mapper=pd.ArrowDtype))
+# .values`. Under pandas 3.x that `.values` is a READ-ONLY view of the Arrow
+# buffer, so the in-place write raises. Under 2.x it is writable.
+# Runs 32976499569 and 32983663609, both us-east1-b, both after provisioning.
 #     ray                 2.55.1 -> 2.58.0  (pinned separately, workflow input)
 #
 # The re-run came back 2.43x slower on dedupe with BYTE-IDENTICAL output, and
@@ -109,7 +125,7 @@ initialization_commands:
 setup_commands:
   - >-
     pip install --upgrade pip &&
-    pip install "polars==1.44.0" "pandas==3.0.5" "pyarrow==25.0.1" "numpy==2.5.2"
+    pip install "polars==1.44.0" "pandas==2.3.3" "pyarrow==25.0.1" "numpy==2.5.2"
     "psutil==7.2.2" "rapidfuzz==3.14.5" "jellyfish==1.2.1" &&
     pip install "git+https://github.com/benseverndev-oss/goldenmatch@GOLDENMATCH_GIT_SHA_PLACEHOLDER#subdirectory=packages/python/goldenmatch" &&
     pip install "goldenmatch-native==0.2.0" &&
