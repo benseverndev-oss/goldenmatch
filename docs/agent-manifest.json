@@ -6068,6 +6068,7 @@
           "GOLDENMATCH_CANDIDATE_COUNT_MAX_BLOCKS"
         ],
         "CLUSTER": [
+          "GOLDENMATCH_CLUSTER_DEBUG",
           "GOLDENMATCH_CLUSTER_SPLIT_EDGE_BUDGET"
         ],
         "COLUMNAR": [

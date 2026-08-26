@@ -93,6 +93,10 @@ on:
         description: "1 = per-bucket prep-vs-kernel-vs-postfilter timing from the scorer (GOLDENMATCH_BUCKET_DEBUG). Output-invariant; costs an env read and a perf_counter per bucket. Splits time between the Rust kernel and the frame prep around it (sort + group_by + to_arrow), which is what tells you whether a knob moved the kernel or the wrapping. Worth having on for a baseline run."
         required: false
         default: "0"
+      cluster_debug:
+        description: "1 = per-step timing for the DRIVER-SIDE clustering stage (GOLDENMATCH_CLUSTER_DEBUG): pull / derive-ids / index / connected-components / build-output. Output-invariant. That stage is ~25 min of a 100M run for ~70s of graph algorithm, and which step owns the rest has never been measured."
+        required: false
+        default: "0"
       ray_version:
         description: "Ray version for BOTH launcher and cluster image. Default 2.56.0 = goldenmatch's own declared [ray] floor, one minor above the 2.55.1 that produced the June baseline. Pinned so a sweep varies the knob and not Ray. Empty = float to latest."
         required: false
@@ -204,6 +208,7 @@ jobs:
           # Through the environment, not interpolated into the script body: a
           # `${{ }}` expansion inside `run:` is a template-injection seam.
           ZONE_INPUT: ${{ inputs.zone }}
+          CLUSTER_DEBUG_INPUT: ${{ inputs.cluster_debug }}
         run: |
           set -euo pipefail
           # GCP_PROJECT_ID is in $GITHUB_ENV from the Doppler fetch
@@ -214,6 +219,7 @@ jobs:
           sed -i "s|max_workers: 3$|max_workers: ${{ inputs.max_workers }}|" .ray/cluster-gce.yaml
           sed -i "s|GOLDENMATCH_HEAD_MACHINE_PLACEHOLDER|${{ inputs.head_machine }}|g" .ray/cluster-gce.yaml
           sed -i "s|GOLDENMATCH_ZONE_PLACEHOLDER|${ZONE_INPUT}|g" .ray/cluster-gce.yaml
+          sed -i "s|GOLDENMATCH_CLUSTER_DEBUG_PLACEHOLDER|${CLUSTER_DEBUG_INPUT}|g" .ray/cluster-gce.yaml
           # Region is the zone minus its trailing letter. Derived, not a second
           # input, so the pair cannot disagree.
           REGION="${ZONE_INPUT%-*}"

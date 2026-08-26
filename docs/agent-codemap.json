@@ -5683,6 +5683,7 @@
             "_assert_scratch_shared_if_multinode",
             "_attach_quality_metadata",
             "_build_clusters_cc_fallback",
+            "_cluster_debug_on",
             "_derive_touched_ids",
             "_emit_boundary_pairs",
             "_phase_a_local_cc",

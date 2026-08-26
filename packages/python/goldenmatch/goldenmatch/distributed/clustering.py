@@ -9,6 +9,7 @@ without the [ray] extra installed.
 from __future__ import annotations
 
 import logging
+import os
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -459,6 +460,31 @@ def _annotate_cluster_sizes(
     return colocated.map_batches(_emit, batch_format="pyarrow")
 
 
+def _cluster_debug_on() -> bool:
+    """Whether the driver-side clustering stage prints a per-step timing split.
+
+    OFF by default; `GOLDENMATCH_CLUSTER_DEBUG=1` enables it. Costs one env read
+    plus a `perf_counter` per step, and changes no output.
+
+    This exists because the stage was optimised twice from inference rather than
+    measurement. The driver phase went 65 -> 33 -> ~25 min across two fixes, and
+    both times the predicted saving was roughly double what arrived, because a
+    single component was treated as the whole cost. The arithmetic that IS solid
+    says connected-components itself is ~70s at 226M edges and `index_in` ~150s,
+    so most of the stage is neither -- but "most" was never attributed to a
+    named step. One table settles that; another round of guessing does not.
+
+    NOTE for whoever turns it on against a Ray cluster: set it in the cluster
+    yaml's `docker run_options`, NOT in a shell around `ray submit`. Ray runs the
+    driver through a fresh `docker exec` and forwards only its own env vars, so a
+    shell export never arrives (the same trap that made an earlier
+    GOLDENMATCH_BUCKET_DEBUG dispatch silently produce nothing).
+    """
+    return os.environ.get("GOLDENMATCH_CLUSTER_DEBUG", "0") not in (
+        "0", "", "false", "False", "no", "off",
+    )
+
+
 def _build_clusters_cc_fallback(
     pairs_ds: Dataset,
     all_ids: list[int],
@@ -475,16 +501,6 @@ def _build_clusters_cc_fallback(
     Run 26122054424 had this at 67s on 8.3M pairs / 16.6M members; the
     naive Python-loop path drove that wall. Vectorized path targets <30s.
     """
-    import numpy as np
-    import polars as pl
-    import pyarrow as pa
-    import pyarrow.compute as pc
-    import ray
-
-    from goldenmatch.distributed._connected_components import (
-        connected_components_undirected,
-    )
-
     # ONE projected pass. Connected components reads `id_a` and `id_b` and
     # nothing else -- `score` was shipped across the network for every pair and
     # never read. And when the caller passes all_ids=None (the at-scale route),
@@ -496,6 +512,29 @@ def _build_clusters_cc_fallback(
     # The graph algorithm underneath costs ~70s (measured: scipy connected_
     # components on 20M edges is 6.4s, and it scales close to linear), so the
     # driver stage was overwhelmingly data movement rather than clustering.
+    import time as _time
+
+    import numpy as np
+    import polars as pl
+    import pyarrow as pa
+    import pyarrow.compute as pc
+    import ray
+
+    from goldenmatch.distributed._connected_components import (
+        connected_components_undirected,
+    )
+
+    _dbg = _cluster_debug_on()
+    _t: dict[str, float] = {}
+    _mark = _time.perf_counter()
+
+    def _lap(name: str) -> None:
+        nonlocal _mark
+        if _dbg:
+            now = _time.perf_counter()
+            _t[name] = now - _mark
+            _mark = now
+
     projected = pairs_ds.select_columns(["id_a", "id_b"])
     pair_tables: list[pa.Table] = list(
         projected.iter_batches(batch_format="pyarrow")
@@ -509,12 +548,16 @@ def _build_clusters_cc_fallback(
     # Derive the id universe from the table already in hand rather than from a
     # second trip to the object store. Same values, same order (sorted unique),
     # one fewer full materialisation.
+    _lap("1_pull_pairs_to_driver")
+
     if all_ids is None:
         both = pa.concat_arrays([
             full.column(c).combine_chunks().cast(pa.int64()) for c in ("id_a", "id_b")
         ])
         _u = pc.unique(both)
         all_ids = pc.take(_u, pc.sort_indices(_u))
+    _lap("2_derive_id_universe")
+
     # id -> dense index stays in ARROW. `pc.index_in` against the sorted value
     # set replaces `np.searchsorted`; at 10M pairs the stage measured 6.61s
     # against numpy's 49.71s for byte-identical output. Only the two index
@@ -546,11 +589,13 @@ def _build_clusters_cc_fallback(
 
     row_idx = _dense("id_a")
     col_idx = _dense("id_b")
+    _lap("3_map_ids_to_dense_index")
 
     # The member_id column below wants the ids as numpy; one conversion at the
     # boundary, after Arrow has done the expensive part.
     sorted_ids = ids_arr.to_numpy(zero_copy_only=False)
     _n_components, labels = connected_components_undirected(row_idx, col_idx, n)
+    _lap("4_connected_components")
 
     # Compute per-cluster size via bincount; broadcast back to per-member.
     sizes_per_label = np.bincount(labels, minlength=int(labels.max()) + 1 if labels.size else 1)
@@ -567,7 +612,19 @@ def _build_clusters_cc_fallback(
             "oversized": oversized,
         }
     ).to_arrow()
-    return ray.data.from_arrow(out_table)
+    out = ray.data.from_arrow(out_table)
+    _lap("5_build_output_table")
+
+    if _dbg:
+        total = sum(_t.values())
+        logger.warning(
+            "[cluster_debug] driver clustering stage: %d pairs, %d ids, total %.1fs",
+            full.num_rows, n, total,
+        )
+        for k in sorted(_t):
+            pct = (_t[k] / total * 100.0) if total else 0.0
+            logger.warning("[cluster_debug]   %-26s %8.1fs  %5.1f%%", k, _t[k], pct)
+    return out
 
 
 def two_phase_wcc(
