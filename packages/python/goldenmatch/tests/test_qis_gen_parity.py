@@ -25,9 +25,11 @@ Lightweight by design (numpy only, no Ray, no dedupe) so it runs in the default
 from __future__ import annotations
 
 import hashlib
+import io
 import sys
 from pathlib import Path
 
+import pyarrow.csv as pacsv
 import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -37,12 +39,16 @@ if str(_SCRIPTS) not in sys.path:
 
 import quality_invariant_scale as qis  # noqa: E402
 
-# (n_rows, corruption) -> sha256(df.write_csv()) from the pre-vectorization gen.
+# (n_rows, corruption) -> sha256(pyarrow CSV of the fixture).
+# Re-pinned when the harness dropped polars: the SERIALISATION changed, the
+# DATA did not. Verified cell-by-cell against the polars implementation across
+# both shapes, both corruption levels and two row counts before re-pinning --
+# a blind re-pin would have silently blessed a changed fixture.
 _DF_GOLDEN = {
-    (1000, "light"): "d7fe081918a6e4e92ba80c3dd9c009c05b11c7b2bf0b02f9852e037aefdc4ac2",
-    (1000, "moderate"): "459a60e0b2a88587ecb28d66bc0f604cf3fa2fc4e8151e1dcf59fd99a4f6ae0d",
-    (10000, "moderate"): "3f4db4a51db60c3012fc23a0a1f42d92fe3b2e62c4d9fd1c95544e69b76c41ca",
-    (25005, "hard"): "4feebc19a6ea7b8b37e9fbf704c8f82a5db59f4fd053963c65f57c20991785c5",
+    (1000, "light"): "960b9992c9e1217310101026bec6fb446cf3407a1e0babe37d123305ea1f31e9",
+    (1000, "moderate"): "2fb72e449e1937fb5e8b20abca36f61984629b3714cecedabf945d388e26d6e6",
+    (10000, "moderate"): "414b8bf9ac7544e3f1cd87e002c0ab457b754664ca9d4e5ab2e14b7d76dff05b",
+    (25005, "hard"): "43330b5cc898ba6819f6e8e428a7e6c4cb432799298dbe2651bc501d090e3959",
 }
 # n_rows -> sha256(cids.tobytes()); corruption never changes the oracle.
 _CIDS_GOLDEN = {
@@ -56,7 +62,9 @@ _CIDS_GOLDEN = {
 def test_realistic_gen_is_bit_identical(n_rows: int, corruption: str):
     df, cids = qis.generate_with_gt(n_rows, seed=0, shape="realistic",
                                     corruption=corruption)
-    df_hash = hashlib.sha256(df.write_csv().encode()).hexdigest()
+    _b = io.BytesIO()
+    pacsv.write_csv(df, _b)
+    df_hash = hashlib.sha256(_b.getvalue()).hexdigest()
     cids_hash = hashlib.sha256(cids.tobytes()).hexdigest()
     assert df_hash == _DF_GOLDEN[(n_rows, corruption)], (
         f"realistic gen changed the {n_rows}-row {corruption} fixture; "

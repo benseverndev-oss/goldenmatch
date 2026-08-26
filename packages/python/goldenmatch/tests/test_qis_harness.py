@@ -64,7 +64,7 @@ def test_generate_corruption_prefix_stable_across_n():
     # dataset is 1000 rows or 5000 rows (same seed, same corruption level).
     small, cs = qis.generate_with_gt(1000, seed=0, shape="realistic", corruption="moderate")
     big, cb = qis.generate_with_gt(5000, seed=0, shape="realistic", corruption="moderate")
-    assert small.equals(big.head(1000))
+    assert small.equals(big.slice(0, 1000))
     assert (cs == cb[:1000]).all()
 
 
@@ -92,7 +92,10 @@ def test_moderate_actually_corrupts_some_rows():
     df_light, _ = qis.generate_with_gt(1000, seed=0, shape="realistic", corruption="light")
     df_mod, _ = qis.generate_with_gt(1000, seed=0, shape="realistic", corruption="moderate")
     # At least the first_name column must differ on a meaningful fraction.
-    diff = (df_light["first_name"] != df_mod["first_name"]).sum()
+    diff = sum(
+        a != b for a, b in zip(df_light.column("first_name").to_pylist(),
+                               df_mod.column("first_name").to_pylist())
+    )
     assert diff > 50  # rate ~0.3 over 1000 rows; comfortably > 50
 
 

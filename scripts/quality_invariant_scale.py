@@ -41,7 +41,7 @@ else:
     _resource = None  # Windows: fall back to tracemalloc in _peak_rss_mb
 
 import numpy as np
-import polars as pl
+import pyarrow as pa
 
 ROWS_PER_CLUSTER = 5
 TYPO_RATE = 0.10
@@ -240,7 +240,7 @@ def _hash_names_vec(salt: str, seed: int, cids: np.ndarray,
 
 def generate_with_gt(n_rows: int, seed: int = 0, shape: str = "realistic",
                      corruption: str = "light"
-                     ) -> tuple[pl.DataFrame, np.ndarray]:
+                     ) -> tuple[pa.Table, np.ndarray]:
     """Generate a synthetic person dedupe dataset + ground-truth cluster ids.
 
     shape="phase5"   — the in-process replica of the Phase 5 generator (literal
@@ -272,36 +272,40 @@ def generate_with_gt(n_rows: int, seed: int = 0, shape: str = "realistic",
     raise ValueError(f"unknown shape {shape!r}; expected 'phase5' or 'realistic'")
 
 
-def _generate_phase5(n_rows: int, seed: int = 0) -> tuple[pl.DataFrame, np.ndarray]:
+def _generate_phase5(n_rows: int, seed: int = 0) -> tuple[pa.Table, np.ndarray]:
     n_rows = (n_rows // ROWS_PER_CLUSTER) * ROWS_PER_CLUSTER
     n_clusters = n_rows // ROWS_PER_CLUSTER
     rng = np.random.default_rng(seed)
     cids = np.repeat(np.arange(n_clusters, dtype=np.int64), ROWS_PER_CLUSTER)
     typo = rng.random(n_rows) < TYPO_RATE
-    df = (
-        pl.DataFrame({"__cid__": cids, "__typo__": typo})
-        .with_columns(
-            first_canon=pl.concat_str([pl.lit("name_"), pl.col("__cid__").cast(pl.Utf8)]),
-            last_name=pl.concat_str([pl.lit("sur_"), pl.col("__cid__").cast(pl.Utf8)]),
-        )
-        .with_columns(
-            first_name=pl.when(pl.col("__typo__"))
-            .then(pl.col("first_canon").str.replace_all("a", "@", literal=True))
-            .otherwise(pl.col("first_canon")),
-        )
-        .with_columns(
-            email=pl.concat_str([pl.col("first_name"), pl.lit("."),
-                                 pl.col("last_name"), pl.lit("@example.com")]),
-            zip=(pl.col("__cid__") % 100000).cast(pl.Utf8).str.zfill(5),
-            id=pl.int_range(0, n_rows, dtype=pl.Int64).cast(pl.Utf8),
-        )
-        .select("id", "first_name", "last_name", "email", "zip")
+    # numpy string ops, then one arrow table. The polars expression chain this
+    # replaces built the same five columns; numpy is a goldenmatch BASE
+    # dependency, polars is only an optional extra, so the harness has no
+    # business requiring it to produce a fixture.
+    cid_str = cids.astype("U")
+    first_canon = np.char.add("name_", cid_str)
+    last_name = np.char.add("sur_", cid_str)
+    # `.str.replace_all("a", "@", literal=True)` on the typo rows only.
+    first_name = np.where(
+        typo, np.char.replace(first_canon, "a", "@"), first_canon
     )
+    email = np.char.add(
+        np.char.add(np.char.add(first_name, "."), last_name), "@example.com"
+    )
+    # `(__cid__ % 100000).cast(Utf8).str.zfill(5)`
+    zip_col = np.char.zfill((cids % 100000).astype("U"), 5)
+    df = pa.table({
+        "id": pa.array(np.arange(n_rows, dtype=np.int64).astype("U")),
+        "first_name": pa.array(first_name),
+        "last_name": pa.array(last_name),
+        "email": pa.array(email),
+        "zip": pa.array(zip_col),
+    })
     return df, cids
 
 
 def _generate_realistic(n_rows: int, seed: int = 0, corruption: str = "light"
-                        ) -> tuple[pl.DataFrame, np.ndarray]:
+                        ) -> tuple[pa.Table, np.ndarray]:
     n_rows = (n_rows // ROWS_PER_CLUSTER) * ROWS_PER_CLUSTER
     n_clusters = n_rows // ROWS_PER_CLUSTER
 
@@ -395,7 +399,7 @@ def _generate_realistic(n_rows: int, seed: int = 0, corruption: str = "light"
     else:
         email_rows = [f"{f}.{l}@example.com" for f, l in zip(first_with_typo, last_rows)]
 
-    df = pl.DataFrame({
+    df = pa.table({
         "id": [f"r{i}" for i in range(n_rows)],
         "first_name": first_with_typo,
         "last_name": last_rows,
@@ -916,7 +920,7 @@ def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic",
 
 
 def _run_phase5_and_collect(
-    df: pl.DataFrame, n_partitions: int = 64,
+    df: pa.Table, n_partitions: int = 64,
 ) -> tuple[dict[int, list[int]], float]:
     """Run the REAL Phase-5 distributed engine; return (predicted_members,
     dedup_wall_s) by reading the cluster assignments it wrote.
@@ -934,8 +938,11 @@ def _run_phase5_and_collect(
 
     # Phase-5 contract: a GLOBAL __row_id__. Member ids ARE the row index, so the
     # oracle ``cids[member]`` aligns (row i's identity is gt cids[i]).
-    if "__row_id__" not in df.columns:
-        df = df.with_row_index("__row_id__")
+    if "__row_id__" not in df.column_names:
+        df = df.add_column(
+            0, "__row_id__",
+            pa.array(np.arange(df.num_rows, dtype=np.uint32)),
+        )
 
     # Recall-complete distributed path. block-shuffle is default-on (#867); set it
     # explicitly and force the distributed WCC (threshold=0) so the run can't fall
@@ -967,11 +974,11 @@ def _run_phase5_and_collect(
             "(a shared scratch the randomized-contraction WCC checkpoints to; a "
             "node-local path breaks cross-node reads)."
         )
-    assignments_path = f"{scratch.rstrip('/')}/qis_assignments_{df.height}"
+    assignments_path = f"{scratch.rstrip('/')}/qis_assignments_{df.num_rows}"
 
     cfg = load_frozen_config()
 
-    ds = ray.data.from_arrow(df.to_arrow()).repartition(n_partitions)
+    ds = ray.data.from_arrow(df).repartition(n_partitions)
     t0 = time.time()
     run_dedupe_pipeline_distributed(
         ds,
@@ -990,15 +997,20 @@ def _run_phase5_and_collect(
     # Read the assignments the engine wrote ({member_id, cluster_id, ...}) and
     # build predicted multi-member clusters. Driver-side group_by: scoring is
     # driver-side by design and score_quality is O(N) (~3 GB at 200M).
-    assign_pdf = ray.data.read_parquet(assignments_path).to_pandas()
-    grouped = (
-        pl.from_pandas(assign_pdf[["member_id", "cluster_id"]])
-        .group_by("cluster_id")
-        .agg(pl.col("member_id"))
-    )
+    # Arrow the whole way. This used to go Ray -> pandas -> polars -> dict,
+    # materialising every assignment row twice through two libraries the engine
+    # does not ship (pandas is not a goldenmatch dependency at all; polars is an
+    # optional extra). `to_arrow_refs` + `concat_tables` keeps it in the format
+    # Ray already holds, and pyarrow's own group_by does the aggregation.
+    assign_tbl = pa.concat_tables([
+        ray.get(ref) for ref in
+        ray.data.read_parquet(assignments_path).to_arrow_refs()
+    ]).select(["member_id", "cluster_id"])
+    grouped = assign_tbl.group_by("cluster_id").aggregate([("member_id", "list")])
     predicted: dict[int, list[int]] = {}
     for cid, members in zip(
-        grouped["cluster_id"].to_list(), grouped["member_id"].to_list(),
+        grouped.column("cluster_id").to_pylist(),
+        grouped.column("member_id_list").to_pylist(),
     ):
         if members is not None and len(members) > 1:
             predicted[int(cid)] = [int(m) for m in members]
