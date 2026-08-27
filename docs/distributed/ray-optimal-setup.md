@@ -21,7 +21,8 @@ backend is validated through 200M and is simpler. See
 Reach for Ray when **the frame does not fit one box**, not when you want it
 faster. On this workload the distributed engine's advantage is capacity, and the
 comparison point is sobering: a Spark lane on comparable hardware ran 100M rows /
-927.9M candidate pairs in **958s**, against **2906s** here.
+927.9M candidate pairs in **958s**, against **2900-3300s** here across four
+measured runs.
 
 > **Only scoring genuinely distributes today.** Clustering runs on the driver by
 > default (§6). Plan around that, because it caps what any amount of parallelism
@@ -160,17 +161,39 @@ clustering to the **driver** rather than the distributed WCC. The reason recorde
 in the code is that the distributed WCC's `gs://` checkpoint rounds were a
 multi-hour tail.
 
-That is a choice between two poor options, not evidence the driver path is good:
+That is a choice between two poor options, not evidence the driver path is good.
 
-- connected components on 226M edges costs **~70 seconds** (scipy on 20M edges is
-  6.4s, near-linear)
-- the driver stage takes **~16 minutes**
+**Measured split** (`GOLDENMATCH_CLUSTER_DEBUG=1`, 100M rung, run 33074452121 —
+609,398,412 pairs over 99,417,363 ids, 707.3s total):
 
-So the stage is dominated by data movement, not by clustering. Two fixes have
-landed against it — arrow-native id derivation, and a single projected pass
-instead of two full ones — taking the 100M dedupe from **6736s to 2906s (2.32x,
-byte-identical output)**. Roughly 12 minutes of that stage is still unattributed,
-which is what `GOLDENMATCH_CLUSTER_DEBUG` exists to name.
+| step | time | share |
+|---|---:|---:|
+| pull pairs to driver | 245.5s | 34.7% |
+| derive id universe | 64.7s | 9.1% |
+| map ids to dense index | 79.8s | 11.3% |
+| **connected components** | **315.9s** | **44.7%** |
+| build output table | 1.3s | 0.2% |
+
+So the stage is **not** dominated by data movement. Connected components is the
+single largest item, and transport is roughly a third. Both need answers, and
+they are different answers: CC is an algorithm and parallelism problem, transport
+is a distribution problem.
+
+> **This table replaced an estimate that was wrong by 4.5x**, and the way it was
+> wrong is worth carrying. The earlier figure — "CC costs ~70s" — came from
+> benchmarking `scipy.csgraph` on 20M edges and scaling to **226M**. Two errors
+> compounded: 226M is `tp + fp`, the *predicted pair* count, while the edge set
+> entering clustering is **609M**; and the shipped kernel is
+> `connected_components_undirected`, not scipy. Every extrapolation built on that
+> denominator was wrong at the base. If you are sizing this stage, take the pair
+> count from the instrument, not from the quality metrics.
+
+Two fixes have landed against the stage — arrow-native id derivation, and a
+single projected pass instead of two full ones — taking the 100M dedupe from
+**6736s to ~2900-3300s (roughly 2.1-2.3x, byte-identical output)**. The
+projected pass targets `pull pairs to driver`, which the table now shows is ~35%
+of the stage rather than the bulk, so its ceiling was always smaller than
+predicted.
 
 **If you are choosing a threshold:** driver-side clustering needs the whole edge
 set in driver RAM and scales with one core. Distributing it is the architectural
@@ -235,12 +258,20 @@ direction; Linux CI (`distributed_wcc`, `distributed_broad`) is the gate.
 | pre-optimisation | 6736s | 129.8 GB | 0.926551 |
 | + arrow-native id derive | 3237s | 125.2 GB | 0.926551 |
 | + single projected pass | **2906s** | 132.0 GB | 0.926551 |
+| same, instrumented (`CLUSTER_DEBUG=1`) | 3284s | 132.0 GB | 0.926551 |
 
 Output is byte-identical across all three — same tp/fp/fn. Every gain is pure
 overhead removal, not an accuracy trade.
 
-Stage split at the last measurement: scoring ~38 min (all four nodes at 33-50%
-CPU), driver clustering ~16 min (one core). Provisioning adds ~10 min.
+Run-to-run spread on an unchanged configuration is real: the last two rows
+differ by ~13% with identical output, so treat anything under ~15% as noise
+rather than signal.
+
+Stage split, measured: scoring 38-44 min (all four nodes at 33-55% CPU), driver
+clustering **11.8 min** (one core, broken down in §6). Provisioning adds ~10 min.
+The edge set entering clustering was **609M pairs over 99M ids** — note that this
+is far larger than `tp + fp` from the quality metrics, which is a different
+quantity.
 
 ---
 
