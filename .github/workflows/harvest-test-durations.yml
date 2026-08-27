@@ -108,6 +108,13 @@ jobs:
       - name: Build native ext (reference mode -> native is the default test path)
         run: uv run python scripts/build_native.py
 
+      # --cov IS PART OF THE SHAPE, not an optional extra. ci.yml's sharded run
+      # is instrumented (`--cov=goldenmatch --cov-report=`) and coverage costs
+      # real wall: measured 26.18s vs 78.53s (3.0x) on a single test locally.
+      # A duration harvested uninstrumented cannot balance shards that run
+      # instrumented -- and worse, the gap between the two then LOOKS like a
+      # contention difference, which is exactly the wrong diagnosis to reach.
+      #
       # Harvest under the SAME shape ci.yml runs (-n auto, 3 splits, identical
       # ignore + deselect lists), because a duration measured serially would not
       # predict a wall measured under xdist contention. --store-durations records
@@ -130,6 +137,7 @@ jobs:
             --durations-path "${GITHUB_WORKSPACE}/durations_shard${{ matrix.shard }}.json" \
             --store-durations \
             --timeout=120 --timeout-method=thread \
+            --cov=goldenmatch --cov-report= \
             --ignore=packages/python/goldenmatch/benchmarks \
             --ignore=packages/python/goldenmatch/tests/test_db.py \
             --ignore=packages/python/goldenmatch/tests/test_reconcile.py \
