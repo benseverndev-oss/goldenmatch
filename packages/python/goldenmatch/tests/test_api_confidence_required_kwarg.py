@@ -8,15 +8,31 @@ import goldenmatch as gm
 import polars as pl
 import pytest
 from goldenmatch.config.schemas import GoldenMatchConfig
+from goldenmatch.core import autoconfig_controller
 from goldenmatch.core.autoconfig_controller import (
     REFUSE_AT_N,
     ControllerNotConfidentError,
 )
 
+# See tests/test_allow_red_config.py for why 'at scale' is a lowered
+# threshold here rather than a real 100_000-row frame: REFUSE_AT_N has one
+# behavioural use (the gate comparison), so lowering it drives a
+# byte-identical path at 1/500th the cost. The real constant is pinned in
+# that file, and test_dedupe_df_default_raises_at_scale_at_real_threshold
+# below still runs the full path at the true threshold.
+_TEST_REFUSE_AT_N = 200
+
 
 @pytest.fixture(autouse=True)
 def _disable_autoconfig_memory(monkeypatch):
     monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+
+
+@pytest.fixture
+def at_scale(monkeypatch) -> int:
+    """Lower the RED-refuse threshold; return the row count that crosses it."""
+    monkeypatch.setattr(autoconfig_controller, "REFUSE_AT_N", _TEST_REFUSE_AT_N)
+    return _TEST_REFUSE_AT_N
 
 
 def _force_red_history(monkeypatch, n_rows_in_df: int):
@@ -56,52 +72,53 @@ def _df(n_rows: int) -> pl.DataFrame:
     })
 
 
-def test_dedupe_df_default_raises_at_scale_on_red(monkeypatch):
+def test_dedupe_df_default_raises_at_scale_at_real_threshold(monkeypatch):
+    """The one test here that pays for a real 100_000-row frame."""
     _force_red_history(monkeypatch, n_rows_in_df=REFUSE_AT_N)
     with pytest.raises(ControllerNotConfidentError):
         gm.dedupe_df(_df(REFUSE_AT_N))
 
 
-def test_dedupe_df_allow_red_config_short_circuits(monkeypatch):
+def test_dedupe_df_allow_red_config_short_circuits(monkeypatch, at_scale):
     # #715 reopened: a RED commit now raises by default regardless of
     # confidence_required; allow_red_config=True is the escape hatch that
     # restores today's warn-and-run.
-    _force_red_history(monkeypatch, n_rows_in_df=REFUSE_AT_N)
+    _force_red_history(monkeypatch, n_rows_in_df=at_scale)
     result = gm.dedupe_df(
-        _df(REFUSE_AT_N), confidence_required=False, allow_red_config=True
+        _df(at_scale), confidence_required=False, allow_red_config=True
     )
     assert result is not None
 
 
-def test_auto_configure_df_default_raises_at_scale_on_red(monkeypatch):
+def test_auto_configure_df_default_raises_at_scale_on_red(monkeypatch, at_scale):
     from goldenmatch.core.autoconfig import auto_configure_df
 
-    _force_red_history(monkeypatch, n_rows_in_df=REFUSE_AT_N)
+    _force_red_history(monkeypatch, n_rows_in_df=at_scale)
     with pytest.raises(ControllerNotConfidentError):
-        auto_configure_df(_df(REFUSE_AT_N))
+        auto_configure_df(_df(at_scale))
 
 
-def test_auto_configure_df_allow_red_config_returns_v0(monkeypatch):
+def test_auto_configure_df_allow_red_config_returns_v0(monkeypatch, at_scale):
     from goldenmatch.core.autoconfig import auto_configure_df
 
-    _force_red_history(monkeypatch, n_rows_in_df=REFUSE_AT_N)
+    _force_red_history(monkeypatch, n_rows_in_df=at_scale)
     cfg = auto_configure_df(
-        _df(REFUSE_AT_N), confidence_required=False, allow_red_config=True
+        _df(at_scale), confidence_required=False, allow_red_config=True
     )
     assert cfg is not None
 
 
-def test_match_df_default_raises_at_scale_on_red(monkeypatch):
-    _force_red_history(monkeypatch, n_rows_in_df=REFUSE_AT_N)
-    target = _df(REFUSE_AT_N)
+def test_match_df_default_raises_at_scale_on_red(monkeypatch, at_scale):
+    _force_red_history(monkeypatch, n_rows_in_df=at_scale)
+    target = _df(at_scale)
     reference = _df(100)
     with pytest.raises(ControllerNotConfidentError):
         gm.match_df(target, reference)
 
 
-def test_match_df_allow_red_config_short_circuits(monkeypatch):
-    _force_red_history(monkeypatch, n_rows_in_df=REFUSE_AT_N)
-    target = _df(REFUSE_AT_N)
+def test_match_df_allow_red_config_short_circuits(monkeypatch, at_scale):
+    _force_red_history(monkeypatch, n_rows_in_df=at_scale)
+    target = _df(at_scale)
     reference = _df(100)
     result = gm.match_df(
         target, reference, confidence_required=False, allow_red_config=True
