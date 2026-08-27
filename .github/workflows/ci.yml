@@ -352,6 +352,25 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
       - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
+      # ORDER IS LOAD-BEARING: the rust toolchain + cache come BEFORE the
+      # `uv pip install` extras below, not after. goldenmatch-native is a
+      # marker-guarded DEFAULT dependency of goldenmatch (not an extra), with
+      # tool.uv.sources pointing at the local crate -- so `uv pip install -e
+      # 'goldenmatch[documents]'` re-resolves it and BUILDS it, undoing the
+      # `--no-install-package goldenmatch-native` on the sync above. With the
+      # cache restored AFTER that install the build ran COLD: 102s inside the
+      # extras step, then 30s for the same crate in `Build native ext` once the
+      # cache (full match) had landed. Restoring first makes the first build the
+      # warm one. Measured on a full-matrix dispatch of this change: the
+      # documents-extra step went 104s -> 69-91s, `Build native ext` 30s -> 23-29s.
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: |
+            packages/rust/extensions/datafusion-udf
+            packages/rust/extensions/native
       # Scale-mode DataFusion edge stream (cluster_edges_df.py) lives behind the
       # optional `datafusion` extra; install it so the parity tests RUN rather
       # than importorskip-SKIP (a false green). Cheap (wheel download).
@@ -379,14 +398,6 @@ jobs:
       # must carry a justification noqa. goldenmatch-only gate.
       - if: matrix.shard == 1
         run: uv run python scripts/check_map_elements.py
-      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
-        with:
-          components: clippy
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
-        with:
-          workspaces: |
-            packages/rust/extensions/datafusion-udf
-            packages/rust/extensions/native
       # THE BUILD-TIME WIN: cache the built FFI UDF wheel keyed on the Rust
       # sources it's compiled from (the crate + every path-dep crate). On a hit
       # (the common case — these change rarely) the ~6.5-min --release maturin
