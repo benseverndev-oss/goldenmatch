@@ -11,14 +11,20 @@
 # 12m41s / 4m56s / 4m29s -- with shard 1 carrying HALF the tests of shard 3 and
 # 2.6x its wall. Shard 1 was the critical path for the whole PR gate.
 #
-# So: a dispatchable, scheduled workflow that opens a PR. No archaeology.
+# So: a dispatchable, scheduled workflow that pushes a refresh branch. No
+# archaeology.
 #
 # THE DRIFT IS SELF-REINFORCING, which is why the schedule matters. Stale
 # durations concentrate the memory-heavy tests into one shard; concentration
 # makes them contend under `-n auto`; contention makes them slower still, which
-# a stale file cannot see. The 100k-row auto-config tests read 11-24s in the
-# committed file and now measure 64-86s -- part real drift, part self-inflicted
-# co-scheduling.
+# a stale file cannot see.
+#
+# The first harvest (run 33099601407) settled how much of that is contention
+# rather than tests genuinely getting slower, and the answer is: nearly all of
+# it. Tests reading 11-24s in the committed file measured 64-86s in CI, but
+# re-harvested at 4-7s -- and across 3,118 ADDED tests the largest single
+# increase anywhere was +2.1s. Co-scheduling, not regression. Worth knowing
+# before anyone reads a slow shard as a product problem.
 name: harvest-test-durations
 
 on:
@@ -154,8 +160,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
+      # write to push the refresh branch. NOT pull-requests: write --
+      # the PR is opened by a human (see the push step for why).
       contents: write
-      pull-requests: write
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
@@ -221,10 +228,8 @@ jobs:
               fh.write(f"changed={'true' if merged != old else 'false'}\n")
           PY
 
-      - name: Push branch + open PR
+      - name: Push the refresh branch
         if: steps.merge.outputs.changed == 'true' && (github.event_name == 'schedule' || inputs.open_pr)
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           BRANCH="ci/refresh-test-durations-${GITHUB_RUN_ID}"
@@ -234,32 +239,42 @@ jobs:
           git add packages/python/goldenmatch/.test_durations
           git commit -m "perf(ci): refresh .test_durations (harvest run ${GITHUB_RUN_ID})"
           git push origin "$BRANCH"
-          # NOTE: a PR opened with GITHUB_TOKEN does NOT trigger workflow runs.
-          # That matters here more than usual -- see the PR body.
-          gh pr create --base main --head "$BRANCH" \
-            --title "perf(ci): refresh .test_durations" \
-            --body "$(cat <<'BODY'
-          Automated harvest of measured pytest durations. See the run's step
-          summary for the drift table.
 
-          **This PR needs CI, and will not have started it.** GitHub does not
-          trigger workflows for PRs opened with `GITHUB_TOKEN`. Close and reopen
-          this PR (or push an empty commit) to get the checks running.
-
-          **Do not merge this on the diff alone.** Refreshing durations
-          re-shuffles pytest-split group membership, and this suite has tests
-          that are sensitive to which shard they land in:
-
-          - `test_suggest_full_dist` OOM-kills its xdist worker when co-scheduled
-            with other memory-heavy tests (it is deselected and run serially).
-          - `tests/test_memory_pipeline.py` / `test_memory_postflight.py` carry
-            deselects for a registration clobber that only appears in certain
-            groupings.
-
-          Both have been re-exposed by reshuffles before (PR #1632, PR #2664).
-          A green run here is the check that this rebalance is safe.
-          BODY
-          )"
+          # The branch is the deliverable; the PR is opened by a human on
+          # purpose. Two reasons, and the first was found the hard way on this
+          # workflow's first run (33099601407): the repo forbids it outright
+          # ("GitHub Actions is not permitted to create or approve pull
+          # requests"), which failed the job AFTER a successful 40-minute
+          # harvest and a successful push. Second, and the reason not to just
+          # flip that setting: a PR opened with GITHUB_TOKEN does not trigger
+          # workflow runs, and a durations refresh whose CI never ran is worse
+          # than no refresh -- reshuffling pytest-split groups is exactly the
+          # change that needs a real run to validate.
+          #
+          # So: emit a one-click compare link. That is the whole friction, and
+          # it buys a PR that actually gets checks.
+          {
+            echo ""
+            echo "### Open the PR"
+            echo ""
+            echo "Branch \`$BRANCH\` is pushed. Open it here:"
+            echo ""
+            echo "<${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/main...${BRANCH}?expand=1>"
+            echo ""
+            echo "**Do not merge on the diff alone.** Refreshing durations"
+            echo "re-shuffles pytest-split group membership, and this suite has"
+            echo "tests sensitive to which shard they land in:"
+            echo ""
+            echo "- \`test_suggest_full_dist\` OOM-kills its xdist worker when"
+            echo "  co-scheduled with other memory-heavy tests (deselected, run"
+            echo "  serially)."
+            echo "- \`tests/test_memory_pipeline.py\` / \`test_memory_postflight.py\`"
+            echo "  carry deselects for a registration clobber that only appears"
+            echo "  in certain groupings."
+            echo ""
+            echo "Both have been re-exposed by reshuffles before (#1632, #2664)."
+            echo "The PR's own CI run is the check."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         with:
