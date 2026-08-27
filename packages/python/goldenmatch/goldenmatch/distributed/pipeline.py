@@ -123,6 +123,8 @@ def _run_phase5_pipeline(
     config: Any | None = None,
     allow_red_config: bool = False,
     assignments_output_path: str | None = None,
+    pairs_output_path: str | None = None,
+    pairs_input_path: str | None = None,
     _skip_golden: bool = False,
     **kwargs: Any,
 ):
@@ -188,7 +190,30 @@ def _run_phase5_pipeline(
 
     # 2. Distributed scoring -> Ray Dataset of pairs (RAW: per-partition, so each
     #    component's edges are co-located in one block -- required by local_cc).
-    raw_pairs_ds = score_blocks_distributed(ds, cfg)
+    if pairs_input_path is not None:
+        # Resume from a persisted scored-pair set and SKIP scoring entirely.
+        #
+        # Scoring is deterministic given the same frame and config, and at 100M
+        # it is 38-44 min of a ~50 min run. Anything downstream of it -- the
+        # clustering route, the WCC algorithm, the driver-vs-distributed trade --
+        # currently costs a full re-score per experiment, which is why iterating
+        # on clustering has meant 80-minute cycles to exercise 12 minutes of code.
+        #
+        # This is a BENCH/DEBUG seam, not a correctness feature: nothing verifies
+        # that the cached pairs came from this frame and config. Feeding it a set
+        # produced by a different config yields a clean-looking, wrong answer.
+        # Key the path by whatever identifies the run that produced it.
+        import ray
+
+        logger.warning(
+            "phase5: SKIPPING scoring, reading cached pairs from %s. "
+            "Results are only meaningful if these pairs came from this frame "
+            "and config -- nothing here checks that.",
+            pairs_input_path,
+        )
+        raw_pairs_ds = ray.data.read_parquet(pairs_input_path)
+    else:
+        raw_pairs_ds = score_blocks_distributed(ds, cfg)
 
     # 2b. MATERIALIZE the scored pairs before clustering. The randomized-contraction
     #     WCC iterates ~O(log N) rounds; each round that touches a lazy `raw_pairs_ds`
@@ -201,6 +226,13 @@ def _run_phase5_pipeline(
     #     already a barrier (WCC needs all pairs), so no pipelining is lost.
     if hasattr(raw_pairs_ds, "materialize"):
         raw_pairs_ds = raw_pairs_ds.materialize()
+
+    # 2c. Optionally persist the scored pairs. Written AFTER materialize(), so
+    #     the write reuses the already-computed set rather than triggering a
+    #     second pass over the scoring DAG.
+    if pairs_output_path is not None and pairs_input_path is None:
+        logger.info("phase5: writing scored pairs to %s", pairs_output_path)
+        raw_pairs_ds.write_parquet(pairs_output_path)
 
     # 3. Connected components: branch on whether block-shuffle is active.
     #    block-shuffle OFF (default): scoring is per-partition, so components

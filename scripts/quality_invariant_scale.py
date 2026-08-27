@@ -944,6 +944,7 @@ def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic",
 
 def _run_phase5_and_collect(
     df: pa.Table, n_partitions: int = 64,
+    pairs_cache: str | None = None,
 ) -> tuple[dict[int, list[int]], float]:
     """Run the REAL Phase-5 distributed engine; return (predicted_members,
     dedup_wall_s) by reading the cluster assignments it wrote.
@@ -999,6 +1000,30 @@ def _run_phase5_and_collect(
         )
     assignments_path = f"{scratch.rstrip('/')}/qis_assignments_{df.num_rows}"
 
+    # Scored-pair cache. Scoring is 38-44 min of a ~50 min 100M run and is
+    # deterministic given the frame and config, so any experiment DOWNSTREAM of
+    # it (clustering route, WCC algorithm, driver-vs-distributed) pays a full
+    # re-score for nothing. First run with a cache path WRITES; later runs with
+    # the same path READ and skip scoring.
+    #
+    # The path is keyed by row count only, so it is the caller's job not to point
+    # two different configs at the same cache. Nothing validates provenance.
+    pairs_in = pairs_out = None
+    if pairs_cache:
+        import subprocess
+        exists = subprocess.run(
+            ["gcloud", "storage", "ls", pairs_cache],
+            capture_output=True, text=True,
+        ).returncode == 0
+        if exists:
+            pairs_in = pairs_cache
+            print(f"pairs cache HIT  {pairs_cache} -- skipping the scoring stage",
+                  flush=True)
+        else:
+            pairs_out = pairs_cache
+            print(f"pairs cache MISS {pairs_cache} -- scoring, then writing it",
+                  flush=True)
+
     cfg = load_frozen_config()
 
     ds = ray.data.from_arrow(df).repartition(n_partitions)
@@ -1010,6 +1035,8 @@ def _run_phase5_and_collect(
         allow_red_config=True,
         output_path=None,
         assignments_output_path=assignments_path,
+        pairs_output_path=pairs_out,
+        pairs_input_path=pairs_in,
         # Quality scoring needs only the cluster assignments; skip the distributed
         # golden build (quality-weighted most_complete survivorship over every
         # multi-member row) -- substantial work at 100M and pure waste here.
@@ -1084,6 +1111,7 @@ def _apply_score_knob_flags(args) -> None:
 def run_distributed_rung(
     n_rows: int, seed: int = 0, shape: str = "realistic",
     corruption: str = "moderate", n_partitions: int = 64,
+    pairs_cache: str | None = None,
 ) -> dict:
     """A QIS rung run through the REAL Phase-5 distributed engine, oracle-scored.
 
@@ -1097,7 +1125,9 @@ def run_distributed_rung(
     df, cids = generate_with_gt(n_rows, seed=seed, shape=shape, corruption=corruption)
     t_gen = time.time() - t0
 
-    predicted, t_dedupe = _run_phase5_and_collect(df, n_partitions=n_partitions)
+    predicted, t_dedupe = _run_phase5_and_collect(
+        df, n_partitions=n_partitions, pairs_cache=pairs_cache,
+    )
     metrics = score_quality(predicted, cids)
     multi = sum(1 for v in predicted.values() if len(v) > 1)
 
@@ -1118,6 +1148,9 @@ def run_distributed_rung(
         # under. A sweep whose artifacts don't record it cannot be told apart
         # from a sweep that never varied anything.
         "score_knobs": _score_knob_provenance(),
+        # Whether scoring actually ran. A cached-pairs run's dedupe wall is NOT
+        # comparable to a full one, and the number alone cannot say which it was.
+        "pairs_cache": pairs_cache,
     }
 
 
@@ -1186,6 +1219,16 @@ def _build_parser() -> argparse.ArgumentParser:
                     help="Ray Data per-op object-store reservation ratio "
                          "(GOLDENMATCH_DISTRIBUTED_OP_RESERVATION). Lower (~0.2) when "
                          "_score is [backpressured:tasks(ResourceBudget)] below CPU capacity.")
+    ap.add_argument("--pairs-cache", type=str, default=None,
+                    help="gs:// path for the scored-pair set. First run WRITES it; "
+                         "later runs with the same path READ it and skip scoring "
+                         "entirely. Scoring is 38-44 min of a ~50 min 100M run and is "
+                         "deterministic given the frame and config, so any experiment "
+                         "downstream of it re-pays that for nothing. NOTHING validates "
+                         "that cached pairs match the current config -- point two "
+                         "different configs at one path and you get a clean-looking "
+                         "wrong answer. A cached run's dedupe wall is not comparable "
+                         "to a full one.")
     ap.add_argument("--clustering-threshold", type=int, default=None,
                     help="pair-count threshold above which clustering DISTRIBUTES "
                          "(GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD). The at-scale "
@@ -1217,6 +1260,7 @@ def main(argv=None) -> int:
         res = run_distributed_rung(
             args.rows, seed=args.seed, shape=args.shape,
             corruption=args.corruption, n_partitions=args.partitions,
+            pairs_cache=args.pairs_cache,
         )
         res["shape"] = args.shape
         print(json.dumps(res, indent=2, default=str))
