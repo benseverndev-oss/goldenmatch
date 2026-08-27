@@ -143,6 +143,12 @@ def effective_score_knobs() -> dict[str, Any]:
         # Not a #957 knob, but the same sweep tunes it and it is read on the
         # driver at Dataset-build time, so it belongs in the same record.
         "shuffle_parts": os.environ.get("GOLDENMATCH_DISTRIBUTED_SHUFFLE_PARTS"),
+        # Not a scoring knob either, but it decides whether clustering runs on
+        # the driver or distributes -- the single largest routing choice in a
+        # distributed run, and one a result is uninterpretable without.
+        "clustering_threshold": os.environ.get(
+            "GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD"
+        ),
     }
 
 

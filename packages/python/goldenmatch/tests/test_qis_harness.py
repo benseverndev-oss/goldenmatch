@@ -260,6 +260,7 @@ _KNOB_ENV = (
     "GOLDENMATCH_DISTRIBUTED_SCORE_PROJECT",
     "GOLDENMATCH_DISTRIBUTED_OP_RESERVATION",
     "GOLDENMATCH_DISTRIBUTED_SHUFFLE_PARTS",
+    "GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD",
 )
 
 
@@ -312,6 +313,10 @@ def test_score_knob_flags_reach_the_engine_env(_clean_knob_env):
         "score_concurrency": 60,
         "op_reservation": "0.2",
         "shuffle_parts": "512",
+        # Not a scoring knob, but it decides driver-side vs distributed
+        # clustering -- the largest routing choice in a distributed run, and one
+        # a recorded result is uninterpretable without.
+        "clustering_threshold": None,
     }
 
 
@@ -328,3 +333,36 @@ def test_score_project_flag_can_turn_the_projection_back_on(_clean_knob_env):
     args = qis._build_parser().parse_args(["--rows", "1000", "--score-project"])
     qis._apply_score_knob_flags(args)
     assert os.environ["GOLDENMATCH_DISTRIBUTED_SCORE_PROJECT"] == "1"
+
+
+def test_clustering_threshold_flag_flips_the_route(_clean_knob_env, monkeypatch):
+    """The flag must actually change `_route_distributed`'s answer.
+
+    Setting the env is not the same as changing the routing: the harness uses
+    `os.environ.setdefault` for this var, so a value applied in the wrong place
+    is silently ignored. And the decision is `pair_count >= threshold`, so the
+    sign matters -- a flag that set the threshold the wrong way round would look
+    applied and route exactly as before.
+    """
+    from goldenmatch.distributed.clustering import _route_distributed
+
+    pair_count = 609_398_412  # the measured 100M edge set
+
+    args = qis._build_parser().parse_args(
+        ["--rows", "1000", "--distributed", "--clustering-threshold", "2000000000"]
+    )
+    qis._apply_score_knob_flags(args)
+    assert _route_distributed(pair_count) is False, "2e9 should keep clustering on the driver"
+
+    args = qis._build_parser().parse_args(
+        ["--rows", "1000", "--distributed", "--clustering-threshold", "0"]
+    )
+    qis._apply_score_knob_flags(args)
+    assert _route_distributed(pair_count) is True, "0 should route to the distributed WCC"
+
+
+def test_clustering_threshold_omitted_leaves_the_var_unset(_clean_knob_env):
+    """Omitted must write nothing, so the harness's own default still applies."""
+    args = qis._build_parser().parse_args(["--rows", "1000", "--distributed"])
+    qis._apply_score_knob_flags(args)
+    assert "GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD" not in os.environ
