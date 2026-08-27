@@ -1073,6 +1073,12 @@ def _apply_score_knob_flags(args) -> None:
         os.environ["GOLDENMATCH_DISTRIBUTED_OP_RESERVATION"] = str(args.op_reservation)
     if args.shuffle_parts is not None:
         os.environ["GOLDENMATCH_DISTRIBUTED_SHUFFLE_PARTS"] = str(args.shuffle_parts)
+    if args.clustering_threshold is not None:
+        # Set in main() so it wins over the `setdefault` in
+        # _run_phase5_and_collect -- setdefault only fills an UNSET var.
+        os.environ["GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD"] = str(
+            args.clustering_threshold
+        )
 
 
 def run_distributed_rung(
@@ -1180,6 +1186,14 @@ def _build_parser() -> argparse.ArgumentParser:
                     help="Ray Data per-op object-store reservation ratio "
                          "(GOLDENMATCH_DISTRIBUTED_OP_RESERVATION). Lower (~0.2) when "
                          "_score is [backpressured:tasks(ResourceBudget)] below CPU capacity.")
+    ap.add_argument("--clustering-threshold", type=int, default=None,
+                    help="pair-count threshold above which clustering DISTRIBUTES "
+                         "(GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD). The at-scale "
+                         "default is 2e9, i.e. never distribute -- clustering runs on "
+                         "the driver, measured at 707s of which 45%% is connected "
+                         "components and 35%% is pulling pairs across. Pass 0 to force "
+                         "the distributed WCC and re-measure that trade; it was rejected "
+                         "as a multi-hour tail before the current code existed.")
     ap.add_argument("--shuffle-parts", type=int, default=None,
                     help="block-shuffle partition count "
                          "(GOLDENMATCH_DISTRIBUTED_SHUFFLE_PARTS; --distributed default 512).")

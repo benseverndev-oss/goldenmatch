@@ -93,6 +93,10 @@ on:
         description: "1 = per-bucket prep-vs-kernel-vs-postfilter timing from the scorer (GOLDENMATCH_BUCKET_DEBUG). Output-invariant; costs an env read and a perf_counter per bucket. Splits time between the Rust kernel and the frame prep around it (sort + group_by + to_arrow), which is what tells you whether a knob moved the kernel or the wrapping. Worth having on for a baseline run."
         required: false
         default: "0"
+      clustering_threshold:
+        description: "Pair-count threshold above which clustering DISTRIBUTES. Empty = the harness default (2e9, i.e. never: clustering runs on the driver). 0 forces the distributed WCC. The driver path measured 707s at 100M -- 45% connected components, 35% pulling pairs across -- and the distributed alternative was rejected as a multi-hour tail before the current code existed, so that trade is due a re-measure."
+        required: false
+        default: ""
       cluster_debug:
         description: "1 = per-step timing for the DRIVER-SIDE clustering stage (GOLDENMATCH_CLUSTER_DEBUG): pull / derive-ids / index / connected-components / build-output. Output-invariant. That stage is ~25 min of a 100M run for ~70s of graph algorithm, and which step owns the rest has never been measured."
         required: false
@@ -363,6 +367,7 @@ jobs:
           SCORE_PROJECT: ${{ inputs.score_project }}
           OP_RESERVATION: ${{ inputs.op_reservation }}
           SHUFFLE_PARTS: ${{ inputs.shuffle_parts }}
+          CLUSTERING_THRESHOLD: ${{ inputs.clustering_threshold }}
           DISTRIBUTED: ${{ inputs.distributed }}
           BUCKET_DEBUG: ${{ inputs.bucket_debug }}
         run: |
@@ -379,6 +384,7 @@ jobs:
           if [ -n "$SCORE_CONCURRENCY" ]; then KNOBS+=(--score-concurrency "$SCORE_CONCURRENCY"); fi
           if [ -n "$OP_RESERVATION" ]; then KNOBS+=(--op-reservation "$OP_RESERVATION"); fi
           if [ -n "$SHUFFLE_PARTS" ]; then KNOBS+=(--shuffle-parts "$SHUFFLE_PARTS"); fi
+          if [ -n "$CLUSTERING_THRESHOLD" ]; then KNOBS+=(--clustering-threshold "$CLUSTERING_THRESHOLD"); fi
           case "$SCORE_PROJECT" in
             1) KNOBS+=(--score-project) ;;
             0) KNOBS+=(--no-score-project) ;;

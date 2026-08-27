@@ -54,6 +54,7 @@ def test_effective_score_knobs_reports_what_the_run_will_use(monkeypatch):
     monkeypatch.setenv("GOLDENMATCH_DISTRIBUTED_SCORE_CONCURRENCY", "60")
     monkeypatch.setenv("GOLDENMATCH_DISTRIBUTED_OP_RESERVATION", "0.2")
     monkeypatch.setenv("GOLDENMATCH_DISTRIBUTED_SHUFFLE_PARTS", "512")
+    monkeypatch.delenv("GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD", raising=False)
 
     assert S.effective_score_knobs() == {
         "score_num_cpus": 4,
@@ -61,4 +62,5 @@ def test_effective_score_knobs_reports_what_the_run_will_use(monkeypatch):
         "score_concurrency": 60,
         "op_reservation": "0.2",
         "shuffle_parts": "512",
+        "clustering_threshold": None,
     }
