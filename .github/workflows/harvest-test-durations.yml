@@ -1,0 +1,268 @@
+# Refresh packages/python/goldenmatch/.test_durations -- the MEASURED per-test
+# timings pytest-split uses to balance the python_goldenmatch shards in ci.yml.
+#
+# WHY THIS EXISTS AS A WORKFLOW RATHER THAN A STEP
+# The durations file was committed ONCE (61976f3b5, 2026-07-17) by a
+# store+harvest step that was deleted immediately afterwards, leaving ci.yml
+# telling the next person to "re-run the store+harvest step (git history of this
+# job)". A refresh procedure that requires git archaeology does not get run: six
+# weeks and 315 commits to packages/python/goldenmatch/tests/ later the file was
+# still the original, and the split had drifted from balanced to
+# 12m41s / 4m56s / 4m29s -- with shard 1 carrying HALF the tests of shard 3 and
+# 2.6x its wall. Shard 1 was the critical path for the whole PR gate.
+#
+# So: a dispatchable, scheduled workflow that opens a PR. No archaeology.
+#
+# THE DRIFT IS SELF-REINFORCING, which is why the schedule matters. Stale
+# durations concentrate the memory-heavy tests into one shard; concentration
+# makes them contend under `-n auto`; contention makes them slower still, which
+# a stale file cannot see. The 100k-row auto-config tests read 11-24s in the
+# committed file and now measure 64-86s -- part real drift, part self-inflicted
+# co-scheduling.
+name: harvest-test-durations
+
+on:
+  workflow_dispatch:
+    inputs:
+      open_pr:
+        description: "Open a PR with the refreshed file (off = artifact only)"
+        type: boolean
+        required: false
+        default: true
+  schedule:
+    # 06:00 UTC on the 1st. Monthly, because the file only needs to track the
+    # suite's timing SHAPE, not every commit -- and each run costs a full
+    # goldenmatch suite across three runners.
+    - cron: "0 6 1 * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harvest-test-durations
+  cancel-in-progress: true
+
+jobs:
+  # Mirrors ci.yml's `python_goldenmatch` job. The setup MUST match it: a
+  # missing extra turns a RUN into an importorskip-SKIP, and a skipped test
+  # records no duration, so pytest-split would later place it by the
+  # count-based fallback and re-skew the very shards this is fixing.
+  harvest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    env:
+      GM_SPLITS: 3
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+        with:
+          # This job uploads an artifact and pushes nothing, so it has no use
+          # for a persisted token (zizmor `artipacked`). The `merge` job below
+          # keeps its credentials -- it needs them to push the refresh branch.
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
+      # The four optional extras ci.yml installs so those suites RUN rather than
+      # importorskip-SKIP. See the rationale on the mirrored job in ci.yml.
+      - run: uv pip install 'datafusion>=53,<54'
+      - run: uv pip install -e 'packages/python/goldenmatch[documents]'
+      - run: uv pip install -e 'packages/python/goldenmatch[ontology]'
+      - run: uv pip install -e 'packages/python/goldenmatch[snowflake]'
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: |
+            packages/rust/extensions/datafusion-udf
+            packages/rust/extensions/native
+      - id: dfudf_cache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25  # v5.1.0
+        with:
+          path: dist-dfudf
+          key: dfudf-wheel-${{ runner.os }}-${{ hashFiles('packages/rust/extensions/datafusion-udf/**', 'packages/rust/extensions/score-core/**', 'packages/rust/extensions/goldenfuzz-core/**', 'packages/rust/extensions/graph-core/**', 'packages/rust/extensions/goldenembed/**', 'packages/rust/extensions/fingerprint-core/**') }}
+      - name: Build (cache miss only) + install the FFI UDF wheel into .venv
+        run: |
+          if [ -z "$(ls -A dist-dfudf/*.whl 2>/dev/null)" ]; then
+            uv run --with maturin maturin build --release \
+              --manifest-path packages/rust/extensions/datafusion-udf/Cargo.toml --out dist-dfudf
+          else
+            echo "::notice::datafusion-udf wheel restored from cache; skipping the maturin build"
+          fi
+          uv pip install dist-dfudf/*.whl
+      # Reference mode: native IS the default test path, so harvest with it
+      # built. Timings taken without it would describe the pure-Python fallback
+      # lane, not the lane whose shards we are balancing.
+      - name: Build native ext (reference mode -> native is the default test path)
+        run: uv run python scripts/build_native.py
+
+      # Harvest under the SAME shape ci.yml runs (-n auto, 3 splits, identical
+      # ignore + deselect lists), because a duration measured serially would not
+      # predict a wall measured under xdist contention. --store-durations records
+      # only the tests this shard ran; the merge job unions the three.
+      #
+      # --durations-path is ABSOLUTE ($GITHUB_WORKSPACE): pytest-split writes it
+      # via a plain open() on the path verbatim, and a relative path resolves
+      # against the pytest rootdir (packages/python/goldenmatch), not the repo
+      # root -- which silently produced nothing to upload the first time this was
+      # attempted (988b653d5).
+      #
+      # Reading the CURRENT (stale) file to split while WRITING fresh timings is
+      # deliberate and not circular: --store-durations records each test's own
+      # measured time regardless of which group it landed in. A skewed input
+      # split makes this job's shards uneven; it does not bias the numbers.
+      - name: pytest --store-durations (shard ${{ matrix.shard }} of ${{ env.GM_SPLITS }})
+        run: |
+          uv run --with pytest-split pytest packages/python/goldenmatch \
+            -n auto --splits "${GM_SPLITS}" --group ${{ matrix.shard }} \
+            --durations-path "${GITHUB_WORKSPACE}/durations_shard${{ matrix.shard }}.json" \
+            --store-durations \
+            --timeout=120 --timeout-method=thread \
+            --ignore=packages/python/goldenmatch/benchmarks \
+            --ignore=packages/python/goldenmatch/tests/test_db.py \
+            --ignore=packages/python/goldenmatch/tests/test_reconcile.py \
+            --ignore=packages/python/goldenmatch/tests/test_mcp_and_watch.py \
+            --ignore=packages/python/goldenmatch/tests/test_embedder.py \
+            --ignore=packages/python/goldenmatch/tests/test_metrics_harness.py \
+            --ignore=packages/python/goldenmatch/tests/test_llm_boost.py \
+            --ignore=packages/python/goldenmatch/tests/test_autoconfig_benchmarks.py \
+            --ignore=packages/python/goldenmatch/tests/test_qis_harness.py \
+            --ignore=packages/python/goldenmatch/tests/test_controller_adaptive_e2e.py \
+            --ignore=packages/python/goldenmatch/tests/test_memory_e2e.py \
+            --deselect 'tests/test_memory_pipeline.py::test_pipeline_applies_seeded_correction' \
+            --deselect 'tests/test_memory_pipeline.py::test_pipeline_persists_stale_pairs_to_review_queue' \
+            --deselect 'tests/test_memory_postflight.py::test_postflight_renders_memory_section' \
+            --deselect 'tests/test_suggest_full_dist.py::test_full_dist_on_lowers_to_high_side_valley_when_threshold_far_above'
+      # if-no-files-found: error -- a silent empty upload is exactly how the
+      # first harvest attempt failed, and an empty artifact here would merge to
+      # a file that drops whole shards' worth of tests.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: gm-durations-shard-${{ matrix.shard }}
+          path: durations_shard${{ matrix.shard }}.json
+          retention-days: 1
+          if-no-files-found: error
+
+  merge:
+    needs: harvest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          pattern: gm-durations-shard-*
+          path: harvested
+          merge-multiple: false
+
+      - name: Merge shard durations + report the drift
+        id: merge
+        run: |
+          python - <<'PY'
+          import json, os, pathlib
+
+          old_path = pathlib.Path("packages/python/goldenmatch/.test_durations")
+          old = json.loads(old_path.read_text())
+
+          merged: dict[str, float] = {}
+          shards = sorted(pathlib.Path("harvested").glob("*/durations_shard*.json"))
+          if len(shards) != 3:
+              raise SystemExit(f"expected 3 shard files, found {len(shards)}: {shards}")
+          for p in shards:
+              merged.update(json.loads(p.read_text()))
+
+          # A harvest that lost tests would quietly re-skew the split it is meant
+          # to fix, so refuse rather than commit a thinner file. Growth is normal
+          # (315 commits added tests); a big DROP means a shard silently failed.
+          if len(merged) < len(old) * 0.9:
+              raise SystemExit(
+                  f"harvested {len(merged)} durations vs {len(old)} committed "
+                  "(>10% fewer) -- a shard likely errored; refusing to commit"
+              )
+
+          old_total, new_total = sum(old.values()), sum(merged.values())
+          shared = set(old) & set(merged)
+          drift = sorted(
+              ((merged[k] - old[k], old[k], merged[k], k) for k in shared),
+              reverse=True,
+          )[:15]
+
+          lines = [
+              "## Durations refresh",
+              "",
+              f"- committed: **{len(old)}** tests, {old_total:.0f}s total",
+              f"- harvested: **{len(merged)}** tests, {new_total:.0f}s total",
+              f"- added: **{len(set(merged) - set(old))}**, "
+              f"dropped: **{len(set(old) - set(merged))}**",
+              "",
+              "### Largest increases",
+              "",
+              "| was | now | test |",
+              "|---|---|---|",
+          ]
+          for _, o, n, k in drift:
+              lines.append(f"| {o:.1f}s | {n:.1f}s | `{k.split('::')[-1][:70]}` |")
+          summary = "\n".join(lines)
+          print(summary)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as fh:
+              fh.write(summary + "\n")
+
+          old_path.write_text(json.dumps(merged, indent=2, sort_keys=True) + "\n")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write(f"changed={'true' if merged != old else 'false'}\n")
+          PY
+
+      - name: Push branch + open PR
+        if: steps.merge.outputs.changed == 'true' && (github.event_name == 'schedule' || inputs.open_pr)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          BRANCH="ci/refresh-test-durations-${GITHUB_RUN_ID}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add packages/python/goldenmatch/.test_durations
+          git commit -m "perf(ci): refresh .test_durations (harvest run ${GITHUB_RUN_ID})"
+          git push origin "$BRANCH"
+          # NOTE: a PR opened with GITHUB_TOKEN does NOT trigger workflow runs.
+          # That matters here more than usual -- see the PR body.
+          gh pr create --base main --head "$BRANCH" \
+            --title "perf(ci): refresh .test_durations" \
+            --body "$(cat <<'BODY'
+          Automated harvest of measured pytest durations. See the run's step
+          summary for the drift table.
+
+          **This PR needs CI, and will not have started it.** GitHub does not
+          trigger workflows for PRs opened with `GITHUB_TOKEN`. Close and reopen
+          this PR (or push an empty commit) to get the checks running.
+
+          **Do not merge this on the diff alone.** Refreshing durations
+          re-shuffles pytest-split group membership, and this suite has tests
+          that are sensitive to which shard they land in:
+
+          - `test_suggest_full_dist` OOM-kills its xdist worker when co-scheduled
+            with other memory-heavy tests (it is deselected and run serially).
+          - `tests/test_memory_pipeline.py` / `test_memory_postflight.py` carry
+            deselects for a registration clobber that only appears in certain
+            groupings.
+
+          Both have been re-exposed by reshuffles before (PR #1632, PR #2664).
+          A green run here is the check that this rebalance is safe.
+          BODY
+          )"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: test-durations-merged
+          path: packages/python/goldenmatch/.test_durations
+          if-no-files-found: error
