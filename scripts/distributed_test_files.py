@@ -4,9 +4,12 @@ distributed CI jobs.
 `.github/workflows/ci.yml` used to express the split as a shell glob plus two
 `--ignore` flags. The glob expands to explicit paths and `--ignore` only filters
 directory traversal, so both flags were no-ops: on run 33176961803 the
-`distributed_broad` job collected 51 tests from test_distributed_clustering.py
-and 55 from test_distributed_randomized_contraction_wcc.py -- 106 of its 181
-tests were a second run of the two jobs that already block the merge queue.
+`distributed_broad` job collected 181 tests, of which 86 came from
+test_distributed_clustering.py and test_distributed_randomized_contraction_wcc.py
+-- a second run of the two jobs that already block the merge queue.
+
+Confirmed by the fix: the same job on run 33197155069 collected 95 (181 - 86) and
+went from 669s to 69.5s wall.
 
 Each job now asks this module for its file list, so the partition is executed
 rather than asserted.
