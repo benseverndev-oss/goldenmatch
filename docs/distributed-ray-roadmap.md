@@ -52,8 +52,11 @@ Full per-phase scope + kill criteria: `docs/superpowers/specs/2026-05-19-ray-spl
 - **5M-25M:** use `backend="bucket"` on a 64 GB box. Don't touch the Ray path.
 - **25M-100M:** `bucket` is measured single-box to 100M and is simpler, but the
   box has to be big — 276 GB peak RSS at 100M on a 503 GB `n2-highmem-64`
-  (`docs/quality-invariant-scale.md`). A Spark lane also ran 100M in 958s
-  against 2900-3300s here, so Ray is not the fast answer in this range either.
+  (`docs/quality-invariant-scale.md`). Whether Ray is faster or slower than the
+  Spark tier in this range is **not known** — see the retraction in
+  `docs/distributed/ray-optimal-setup.md` §1. An earlier version of this bullet
+  cited a 958s Spark figure against 2900-3300s here; that compared FS model
+  training to a full dedupe and has been withdrawn.
 - **>100M:** 200M projects to ~550 GB, over that 503 GB box. Either a larger
   single box (m1/m2 ultramem) or the Ray path, which is the goldenmatch-shaped
   answer and exists in code but is opt-in and not production ready. What still

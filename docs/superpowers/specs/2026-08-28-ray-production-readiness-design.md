@@ -1,9 +1,30 @@
 # Ray production readiness — design
 
-**Status:** proposed
+**Status:** **CLOSED — not being pursued** (decided 2026-08-28)
 **Date:** 2026-08-28
 **Assessed at:** `main @ 6bc8ff99e`
 **Supersedes:** the status section of `docs/distributed-ray-roadmap.md` (stamped 2026-05-19, stale)
+
+> **Read this before acting on anything below.** This spec proposed a sequenced
+> path to make the Ray lane production ready. That work is **not being done**.
+> The lane is frozen: still opt-in, still gated where it already was, no further
+> investment. It has not been deprecated or removed, and nothing here should be
+> read as a plan someone is expected to pick up.
+>
+> **Why.** Gates 1, 2, 4, 5 and 9 shipped in PR #2799 and are done. Gate 6
+> (issue #957) was measured and closed: the cluster now runs at 80/80 CPU and
+> the wall did not move, so utilisation was never the constraint. What that left
+> was a decision about whether the lane is worth further investment — and the
+> evidence that would inform it does not exist. There is no valid Ray-vs-Spark
+> measurement in this repo and no Ray-vs-Splink measurement at all, so the
+> justification the lane was originally written under (reaching Splink-Spark
+> parity, per the 2026-05 roadmap) can no longer be evaluated. The Spark tier
+> meanwhile surpassed Splink on both wall and quality by a different route.
+>
+> **The document is kept** because the gap analysis, the measurement protocols
+> and the corrections are the record of what was learned. Treat it as history,
+> not as a backlog. If the lane is ever revived, start with Protocol P1's
+> successor: build one valid comparison before designing anything.
 
 ---
 
@@ -143,10 +164,21 @@ Issue #957 records `MapBatches(_score)` holding 3 tasks / 6 CPU and the shuffle
 holding 16, against `Active & requested resources: ~19/80 CPU`, on the same 100M
 shape the benchmarks use.
 
-The lane's strategic case is built on being 3.0x slower than Spark (958s against
-2906–3284s). The idle-capacity ratio is 4.2x. Those are the same number, which
-makes the Spark gap a plausible artefact of scheduling rather than of engine
-quality — testable, and untested.
+**Resolved 2026-08-28, run `33202149180`.** Scoring now reaches 30 concurrent
+tasks and the cluster runs at 80/80 CPU — utilisation is no longer the
+constraint, almost certainly fixed by `SCORE_PROJECT` defaulting on, which was
+#957's own first ask. The wall did not move: 3420s, inside the 2906–3284s band
+already on record, with output byte-identical to sixteen digits.
+
+So saturating the cluster bought nothing, and what remains is a smaller named
+lever: `Tasks: 30 [backpressured:tasks(ResourceBudget)]` with the object store
+at 15% of capacity, which §4 of the operational guide names as the condition for
+lowering `OP_RESERVATION`.
+
+**This section originally argued that the Spark gap might be a scheduling
+artefact, on the grounds that a 3.0x wall gap and a 4.2x idle-capacity gap were
+"the same number". Both halves are withdrawn** — the 4.2x is fixed, and the 3.0x
+was never a valid measurement (see D1's second note).
 
 The issue is filed **P2**. One of its three asks (project to scoring columns
 before the shuffle) appears to have landed since — `SCORE_PROJECT` now defaults
@@ -194,8 +226,8 @@ The standing criterion is *100M dedupe under 30 minutes*
 (`docs/distributed-ray-cluster-setup.md:183`). Both routes miss it by roughly
 2x — 54 and 61 minutes. More importantly it measures wall on an engine chosen
 for capacity: `bucket` is measured single-box to 100M (276 GB peak on a 503 GB
-box) and Spark is faster through the whole overlap, so wall is the axis Ray will
-never win.
+box). The clause that used to follow — "and Spark is faster through the whole
+overlap" — is withdrawn as unmeasured; see D1's second note.
 
 Separately, the only end-to-end accuracy evidence at 100M comes from manual,
 paid `workflow_dispatch` runs. Nothing automated would catch an accuracy
@@ -207,10 +239,27 @@ regression at scale.
 
 **D1 — Ray is capacity insurance, not a Spark competitor.**
 `bucket` is measured single-box to 100M (276 GB peak RSS on a 503 GB
-`n2-highmem-64`); 200M projects to ~550 GB, over that box. Spark is faster
-through the overlap and `spark_connect` is already in `ci-required`. Ray's
-exclusive window opens where `bucket` runs out of box. Scope, messaging and the
-kill criterion all follow from this, and G10's replacement criterion encodes it.
+`n2-highmem-64`); 200M projects to ~550 GB, over that box. Ray's exclusive
+window opens where `bucket` runs out of box, which is a memory bound and not a
+row count.
+
+**Second note, 2026-08-28 — the comparison this decision leaned on was
+invalid.** D1 originally added "Spark is faster through the overlap", citing
+958s against 2900-3300s. Those numbers do not measure the same thing: 958s is
+Fellegi-Sunter **model training** from
+`docs/benchmarks/2026-08-19-spark-50m-head-to-head.md` (which states "Not
+clustering, not survivorship"), while 2900-3300s are full dedupe runs including
+blocking, ~707s of driver-side clustering, and golden-record building. The
+fixtures differ as well — 927.9M candidate pairs against ~609M, at best F1 0.685
+against 0.927.
+
+**There is no valid Ray-vs-Spark measurement, and no Ray-vs-Splink measurement
+at all.** Every Ray/Splink reference in the repo is architectural argument or an
+explicit disclaimer. The one rigorous comparison here is GoldenMatch-on-Spark
+against Splink-on-Spark, which GoldenMatch wins on wall (1.91x at 50M) and on
+quality (best F1 0.685 against 0.600) — and which says nothing about Ray.
+
+D1's *conclusion* may still be right. Its stated evidence was not.
 
 **Note, 2026-08-28:** an earlier revision of this spec said `bucket` was
 "validated single-box through 200M". That was wrong, and it was wrong in the way
