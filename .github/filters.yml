@@ -831,6 +831,7 @@ distributed:
   - 'packages/python/goldenmatch/tests/test_distributed_*.py'
   - 'packages/python/goldenmatch/goldenmatch/core/cluster.py'
   - 'packages/python/goldenmatch/goldenmatch/backends/ray_backend.py'
+  - 'scripts/distributed_test_files.py'
 spark:
   # Spark Connect tier (distributed). The main `python` job installs without
   # the `spark` extra, so the tier's tests SKIP there (pytest.importorskip);

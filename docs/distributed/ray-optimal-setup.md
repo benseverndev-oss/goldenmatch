@@ -15,8 +15,16 @@ something is not known, it says so.
 ## 1. Decide whether to distribute at all
 
 Distribution is not free and it is not always a win. The single-box `bucket`
-backend is validated through 200M and is simpler. See
-[`../scale-envelope.md`](../scale-envelope.md) for the full ladder.
+backend is measured to **100M** and is simpler — 276 GB peak RSS at 100M on a
+503 GB `n2-highmem-64`, per
+[`../quality-invariant-scale.md`](../quality-invariant-scale.md). 200M projects
+to ~550 GB, over that box, so it needs a larger single box (m1/m2 ultramem) or
+this path.
+
+**Size by peak RSS, not by row count.** The same shape needs 69 GB at 25M and
+caps a 64 GB runner near 10M, so a row-count ladder is only meaningful once the
+box is named. See [`../scale-envelope.md`](../scale-envelope.md), whose ladder
+assumes 64 GB.
 
 Reach for Ray when **the frame does not fit one box**, not when you want it
 faster. On this workload the distributed engine's advantage is capacity, and the
@@ -162,8 +170,9 @@ is gone. The harness now leaves the threshold unset so the memory-aware route
 decides, and the route is sized against a measured per-pair cost rather than a
 modelled one.
 
-The trade, measured at 100M across four runs of the same shape (realistic /
-moderate / frozen config / 64 partitions / shuffle_parts=512):
+Four runs at 100M on the same fixture shape (realistic / moderate / frozen
+config / 64 partitions / shuffle_parts=512). They are **not four replicates** —
+see the paragraphs below the table for which pair is comparable and why:
 
 | route | dedupe | driver peak RSS | run |
 | --- | --- | --- | --- |
@@ -175,17 +184,30 @@ moderate / frozen config / 64 partitions / shuffle_parts=512):
 Output was identical: pairwise F1 `0.9265507059539793` to 16 digits, cluster F1
 and `multi_member_clusters` (18,880,989) byte-identical.
 
-So distributing costs roughly **+14% dedupe wall** (3686s against a 3237s median)
-and returns **-61% driver peak RSS**. Read the wall number with care: the three
-in-memory runs spread 378s (12%) among themselves, so the penalty is about one
-noise band at n=3 vs n=1, and it is not worth a paid run to pin down because
-nothing downstream turns on it.
+The like-for-like comparison is `33074452121` against `33087786765`: same code,
+same shape, differing only in the clustering route. Distributing costs
+**+12.2% dedupe wall** and returns **-61% driver peak RSS**. This is the pair
+`clustering.py` calibrates against, and the only pair in the table that isolates
+the route.
 
-The RSS gap has no overlap, and it is the half that decides anything. The head is
-an n2-highmem-32 (256 GB) and the in-memory route already uses 52% of it at 100M
-on 609,398,412 pairs. Pairs scale with rows, so **the in-memory route runs out of
-head before it runs out of speed** -- which is why the route keys on memory and
-not on wall.
+`32992647463` is **not a replicate** of either: it predates #2781
+(`+ single projected pass`, merged 2026-08-26), and `33006980567` is the run
+that measured that change, so the 3237s to 2906s step is a code change and not
+spread. Do not take a median across all three.
+
+The closest thing to a replicate pair is `33006980567` against `33074452121`:
+same code, differing only by `GOLDENMATCH_CLUSTER_DEBUG=1`, which §4 documents
+as near-free. They differ by ~13%, which is where §8's "treat anything under
+~15% as noise" comes from. Read that as one confounded observation at n=2
+rather than a characterised noise band — the flag is *asserted* to be near-free,
+not measured to be, and no pair without a confound has been run. Establishing a
+clean band is open work.
+
+The RSS gap has no overlap, and it is the half that decides anything. The head
+is an `n2-highmem-32` (256 GB) and the in-memory route already uses 52% of it at
+100M on 609,398,412 pairs. Pairs scale with rows, so **the in-memory route runs
+out of head before it runs out of speed** — which is why the route keys on
+memory and not on wall.
 
 **Measured split** (`GOLDENMATCH_CLUSTER_DEBUG=1`, 100M rung, run 33074452121 —
 609,398,412 pairs over 99,417,363 ids, 707.3s total):
@@ -287,9 +309,11 @@ direction; Linux CI (`distributed_wcc`, `distributed_broad`) is the gate.
 Output is byte-identical across all three — same tp/fp/fn. Every gain is pure
 overhead removal, not an accuracy trade.
 
-Run-to-run spread on an unchanged configuration is real: the last two rows
-differ by ~13% with identical output, so treat anything under ~15% as noise
-rather than signal.
+The last two rows differ by ~13% with identical output, which is where the
+"anything under ~15% is noise" rule of thumb comes from. Read it as a rule of
+thumb and not a measured band: those two runs differ by the `CLUSTER_DEBUG=1`
+flag, so the spread is confounded with whatever that instrumentation costs. §6
+sets out why.
 
 Stage split, measured: scoring 38-44 min (all four nodes at 33-55% CPU), driver
 clustering **11.8 min** (one core, broken down in §6). Provisioning adds ~10 min.

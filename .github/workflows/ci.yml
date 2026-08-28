@@ -235,6 +235,9 @@ jobs:
       - name: Gate unit tests (the duplicate-key detector must actually detect)
         shell: bash
         run: python3 -m pytest scripts/test_workflow_yaml.py -q
+      - name: Gate unit tests (the distributed partition must stay disjoint)
+        shell: bash
+        run: python3 -m pytest scripts/test_distributed_test_files.py -q
       # #1846: parsing is not meaning. A path filter that lists too few paths
       # makes its job go SILENT on exactly the changes it exists to catch --
       # quality_gate pinned f1_probabilistic while not watching
@@ -1182,7 +1185,8 @@ jobs:
           uv run --with polars --with pyarrow \
             pytest scripts/test_run_benchmarks_download.py \
                    scripts/test_benchmark_quarantine.py \
-                   scripts/dqbench_adapters/test_leipzig_eval.py -q
+                   scripts/dqbench_adapters/test_leipzig_eval.py \
+                   scripts/test_distributed_test_files.py -q
       # The pre-push hook is developer-facing, so nothing else runs it. It
       # shipped gating tag pushes -- diffing origin/main..<older tag sha>
       # BACKWARDS -- which would have blocked the release tag back-fill. This
@@ -3034,7 +3038,9 @@ jobs:
       - name: Distributed quality-invariance gate (blocking)
         run: |
           .venv/bin/python -c "import ray, scipy, polars; print('ray', ray.__version__)"
-          .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_distributed_clustering.py \
+          FILES=$(python3 scripts/distributed_test_files.py --job invariance)
+          echo "$FILES"
+          .venv/bin/python -m pytest ${FILES:?no distributed test files resolved} \
             --timeout=300 --durations=20 -v
 
   # GATE (blocking, #844): the randomized-contraction WCC ray gate, in its own
@@ -3058,21 +3064,24 @@ jobs:
         run: uv pip install 'ray[default]>=2.0' 'pandas<3'
       - name: Randomized-contraction WCC ray gate (blocking)
         run: |
-          .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_distributed_randomized_contraction_wcc.py \
+          FILES=$(python3 scripts/distributed_test_files.py --job wcc)
+          echo "$FILES"
+          .venv/bin/python -m pytest ${FILES:?no distributed test files resolved} \
             --timeout=300 --durations=20 -v
 
-  # BROAD COVERAGE (non-blocking): the rest of the ray-gated suite (controller /
-  # pipeline / golden / e2e). These exercise real ray execution but several
-  # carry pre-existing, ray-independent fragilities surfaced the first time they
-  # actually ran (degenerate single-/few-value fixtures that explode the
-  # in-memory blocking+clustering path; an RSS-growth threshold tuned for a
-  # different runner). Split into its OWN job that is `continue-on-error` at the
-  # JOB level and deliberately ABSENT from ci-required's needs -- so its ~9 min
-  # never sits on the merge-queue critical path (it previously ran as a
-  # continue-on-error STEP inside `distributed`, where the merge gate still
-  # waited on its wall time). Runs for visibility only; tracked for follow-up,
-  # do not gate on it until the fixtures are cleaned up. Same ray/uv venv gotcha
-  # as the `distributed` job above.
+  # The ray-EXECUTING suite: controller, dataset, scoring, pipeline, golden, fs
+  # and phase5 end-to-end. These are the thirteen files that require ray and so
+  # SKIP in python_goldenmatch, which means this job is the only place they run.
+  #
+  # Still `continue-on-error` and still absent from ci-required, but no longer
+  # for the reason the previous comment gave: it cited fragile fixtures, and the
+  # suite has since been green on every main run where it actually ran. What it
+  # now waits on is evidence under its CURRENT contents -- it stopped re-running
+  # the two blocking gates (see scripts/distributed_test_files.py), so the greens
+  # recorded before that change do not describe what it runs today. Promotion is
+  # tracked in docs/superpowers/specs/2026-08-28-ray-production-readiness-design.md.
+  #
+  # Same ray/uv venv gotcha as the `distributed` job above.
   distributed_broad:
     needs: changes
     if: needs.changes.outputs.distributed == 'true' || needs.changes.outputs.force_all == 'true'
@@ -3088,11 +3097,11 @@ jobs:
       - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       - name: Install ray extra
         run: uv pip install 'ray[default]>=2.0' 'pandas<3'
-      - name: Distributed broad coverage (non-blocking)
+      - name: Distributed execution suite
         run: |
-          .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_distributed_*.py \
-            --ignore=packages/python/goldenmatch/tests/test_distributed_clustering.py \
-            --ignore=packages/python/goldenmatch/tests/test_distributed_randomized_contraction_wcc.py \
+          FILES=$(python3 scripts/distributed_test_files.py --job broad)
+          echo "$FILES"
+          .venv/bin/python -m pytest ${FILES:?no distributed test files resolved} \
             --timeout=300 --durations=20 -v
 
   # THE gating lane for the tier (spec: 2026-08-10-spark-native-execution-design).

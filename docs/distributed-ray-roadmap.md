@@ -1,26 +1,43 @@
 # Distributed (Ray) backend — roadmap & current state
 
-**Status as of 2026-05-19:** The Ray backend exists (`backends/ray_backend.py` + Distributed Plan v1 in `goldenmatch/distributed/`) but **failed the binding 5M kill criterion** on the 2026-05-18 bench (run `26045651074`). Soft-reverted in PR #318 — the v3 planner no longer auto-picks ray. Explicit `backend="ray"` or `GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1` opts back in.
+**Status as of 2026-08-28.** The five phases below are largely SHIPPED in code:
+`goldenmatch/distributed/` carries the loader (`dataset.py`), controller
+(`sample.py`, `indicators.py`), distributed clustering (`clustering.py`), golden
+(`golden.py`) and identity (`identity.py`, `identity_partition.py`), and
+clustering correctness is gated by two blocking CI jobs. Treat the phase
+descriptions below as historical scope, not as remaining work.
+
+What blocks production is narrower and is tracked in
+`docs/superpowers/specs/2026-08-28-ray-production-readiness-design.md`: the
+default path does not distribute, the v3 planner's soft-revert gate
+(`_ray_auto_select_enabled()`, from the 2026-05-18 kill-criterion failure) is
+still shut, the driver keeps a 50.9 GB baseline at 100M, and issue #957 has
+scoring using roughly a quarter of the cluster. Read that spec first.
 
 The supported path for 5M-25M today is **`backend="bucket"`** on a 16-core / 32+ GB Linux node. Measured: 5M in 9.94 min / 6.4 GB peak RSS on `large-new-64GB`. 25M extrapolates to ~50 min / ~32 GB peak RSS — comfortably inside a 64 GB box.
 
 ## Why the Ray stack isn't Splink-Spark equivalent
 
+> **This section describes the 2026-05 state**, which is what the five-phase plan
+> below was written against. Phases 1-4 have since largely shipped; see the status
+> block at the top. It is kept because the stage-by-stage framing is still the
+> clearest statement of what distributing this pipeline requires.
+
 Splink delegates **every** pipeline stage to Spark (load, blocking, scoring, clustering, golden, write). Spark's optimizer + shuffle layer handles distribution; the Splink Python process just compiles SQL.
 
 GoldenMatch's Ray backend distributes **one** stage (per-block pair scoring) and runs everything else in a single Polars driver process. That's the kill-criterion failure in one sentence: the driver still holds the full df during prep + clustering + golden, so worker memory doesn't help.
 
-| Stage | Splink (Spark) | GoldenMatch (Ray, today) |
-|---|---|---|
-| Data load | Spark DataFrame, partitioned | Polars driver, single-node |
-| Standardize / auto-fix | Spark SQL UDFs distributed | Polars driver |
-| Blocking | Spark group_by distributed | Polars partition_by, single-node |
-| Pair scoring | Spark UDF per partition | **Ray tasks ✓** |
-| Clustering | Spark GraphFrames / iterative | Python UnionFind, single-node |
-| Golden record | Spark groupBy().agg() | Polars group_by, single-node |
-| Driver memory | Master coordinates only | Holds the full df |
+| Stage | Splink (Spark) | GoldenMatch (Ray, 2026-05) | GoldenMatch (Ray, now) |
+|---|---|---|---|
+| Data load | Spark DataFrame, partitioned | Polars driver, single-node | Ray Dataset, partitioned (PIPELINE=2) |
+| Standardize / auto-fix | Spark SQL UDFs distributed | Polars driver | distributed (PIPELINE=2) |
+| Blocking | Spark group_by distributed | Polars partition_by, single-node | distributed block-shuffle (PIPELINE=2) |
+| Pair scoring | Spark UDF per partition | **Ray tasks ✓** | Ray tasks ✓ |
+| Clustering | Spark GraphFrames / iterative | Python UnionFind, single-node | distributed WCC or driver scipy, routed on memory |
+| Golden record | Spark groupBy().agg() | Polars group_by, single-node | distributed (PIPELINE=2) |
+| Driver memory | Master coordinates only | Holds the full df | 50.9 GB at 100M, still the ceiling |
 
-## Roadmap (5 phases, ~5-6 months total)
+## Roadmap (5 phases, as scoped in 2026-05)
 
 1. **Partition-aware data loader** (4-6 weeks) — Ray Datasets (or Daft); driver never holds the full df during prep.
 2. **Controller iteration on partitioned samples** (3-4 weeks) — `AutoConfigController._run_pipeline_sample` accepts a Ray Dataset; `compute_column_priors` and the full-df indicators rewritten for distributed exec.
@@ -33,18 +50,23 @@ Full per-phase scope + kill criteria: `docs/superpowers/specs/2026-05-19-ray-spl
 ## Pragmatic call
 
 - **5M-25M:** use `backend="bucket"` on a 64 GB box. Don't touch the Ray path.
-- **25M-100M:** wait for Phase 1 to land, or use Splink on Spark if you already have a Spark cluster. Today's Ray code will not beat single-node bucket on the same workload.
-- **>100M:** Ray roadmap is the only goldenmatch-shaped answer, and it's ~6 months out. Bigger problem; bigger investment.
+- **25M-100M:** `bucket` is measured single-box to 100M and is simpler, but the
+  box has to be big — 276 GB peak RSS at 100M on a 503 GB `n2-highmem-64`
+  (`docs/quality-invariant-scale.md`). A Spark lane also ran 100M in 958s
+  against 2900-3300s here, so Ray is not the fast answer in this range either.
+- **>100M:** 200M projects to ~550 GB, over that 503 GB box. Either a larger
+  single box (m1/m2 ultramem) or the Ray path, which is the goldenmatch-shaped
+  answer and exists in code but is opt-in and not production ready. What still
+  blocks it is listed in
+  `docs/superpowers/specs/2026-08-28-ray-production-readiness-design.md`.
 
-## Estimated effort vs Splink
+## What replaced this plan's sequencing
 
-Splink's Spark backend took **years** of work, much of it leaning on Spark's maturity. GoldenMatch is closer to "build a distributed engine on top of Polars/Ray" than "wire to an existing one". The realistic posture is:
-
-1. Phases 1-2 first; that's the foundation.
-2. Phases 3-4 to fill in the distributed parts of the pipeline.
-3. Phase 5 only after a real customer workload demands it.
-
-## Re-bench cadence
-
-- **Today's bench** at 25M will validate (or invalidate) the linear-extrapolation projection of bucket-on-one-node. If 25M fits comfortably in 64 GB, the urgency of Phase 1 drops considerably.
-- **Re-bench Ray after Phase 1** ships. If Phase 1 alone gets the kill criterion to PASS at 5M, that's a major win and Phases 2-5 can be paced against real customer pull.
+The phase ordering above is answered: phases 1-4 shipped, and the re-bench
+question it left open is now governed by two protocols in
+`docs/superpowers/specs/2026-08-28-ray-production-readiness-design.md` —
+Protocol P1 (re-measure cluster utilisation, against issue #957) and Protocol P2
+(characterise the 50.9 GB driver baseline and measure the 200M rung rather than
+extrapolating it). The remaining question is not "which phase next" but whether
+the lane clears a kill criterion shaped for a capacity engine; the spec proposes
+one and holds the planner's soft-revert gate shut until it passes.

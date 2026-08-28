@@ -352,7 +352,19 @@ jobs:
               | while read -r nm mt cp; do echo "| $nm | $mt | $cp |"; done
           } | tee "$OUT" >> $GITHUB_STEP_SUMMARY || true
           # The exact resolved wheel set, from the head node itself.
-          ray rsync-down .ray/cluster-gce.yaml /tmp/bench_env.txt ".profile_tmp/qis/pipfreeze_${LABEL}.txt" || echo "could not fetch pip freeze from the head (non-fatal)"
+          # Fatal, not advisory. A rung number whose resolved environment was not
+          # captured cannot be compared to any later run, which is exactly how the
+          # June baseline became unattributable -- and the artifact would still
+          # upload, so nothing downstream would notice.
+          if ! ray rsync-down .ray/cluster-gce.yaml /tmp/bench_env.txt \
+               ".profile_tmp/qis/pipfreeze_${LABEL}.txt"; then
+            echo "::error::could not fetch pip freeze from the head; the run is unattributable" >&2
+            exit 1
+          fi
+          if ! grep -q '^goldenmatch @' ".profile_tmp/qis/pipfreeze_${LABEL}.txt"; then
+            echo "::error::pip freeze does not record the goldenmatch git SHA" >&2
+            exit 1
+          fi
 
       - name: Submit bench
         # `ray submit` ships the script to the head node and runs it.
@@ -462,6 +474,12 @@ jobs:
           # the run completed (#958 part 3).
           ray rsync-down .ray/cluster-gce.yaml \
             "$OUT_REMOTE" ".profile_tmp/qis/qis_${{ inputs.label }}.json"
+          # rsync-down can exit 0 having transferred nothing (#958 part 3). The
+          # upload's if-no-files-found cannot catch that: it fires only when the
+          # WHOLE path set is empty, and env_*.md is always written. Check the
+          # result itself.
+          test -s ".profile_tmp/qis/qis_${{ inputs.label }}.json" \
+            || { echo "::error::ray rsync-down exited 0 but produced no result JSON" >&2; exit 1; }
 
       - name: Upload bench artifact
         if: always()
@@ -475,7 +493,10 @@ jobs:
             .profile_tmp/qis/qis_${{ inputs.label }}.json
             .profile_tmp/qis/env_${{ inputs.label }}.md
             .profile_tmp/qis/pipfreeze_${{ inputs.label }}.txt
-          if-no-files-found: warn
+          # `error` rather than `warn`. Note this fires only if the WHOLE path
+          # set is empty; the missing-result case is caught by the `test -s` in
+          # `Submit bench`.
+          if-no-files-found: error
 
       - name: Ray down (always)
         # The teardown runs even when previous steps fail so we don't

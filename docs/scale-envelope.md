@@ -20,7 +20,7 @@ backend choice does at every scale we have measured.
 | 500K - 5M (4c / 16GB)    | `chunked` | Streaming `scan_csv().slice()` + Polars-native cross-chunk join. 5M in ~50 min on `ubuntu-latest` (v1.15). |
 | 5M - 25M (16c / 64 GB)   | **`bucket`** (recommended) | Same single-node path scales linearly with memory. **25M dedupe in 6.5 min / 57.7 GB peak RSS** on a 16c/64GB node after the golden-streaming (PR #334) + tracemalloc-drop + UF-state-release (PR #335) fixes. Run 26095134836. |
 | 25M - 50M    | `duckdb`            | Out-of-core. Single machine. No OOM ceiling. Slower per record than bucket — picks up where the 64 GB box runs out of headroom. |
-| >= 50M       | `ray` (opt-in, not Splink-Spark parity) | Distributed block scoring only — data prep + clustering + golden still run single-node on the driver. v1.16+ requires `GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1` or explicit `backend="ray"` after the Distributed Plan v1 kill criterion failure (PR #318). See `docs/distributed-ray-roadmap.md` for the 5-phase plan to bring this to Splink-Spark equivalence. |
+| >= 50M       | `ray` (opt-in, not Splink-Spark parity) | Requires BOTH `GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1` (or an explicit `backend="ray"`, per the PR #318 soft-revert of the Distributed Plan v1 kill-criterion failure) AND `GOLDENMATCH_DISTRIBUTED_PIPELINE=2`. Without the second, `backend="ray"` runs a driver-materialising path that does NOT distribute. Under `PIPELINE=2` scoring, clustering and golden all distribute; clustering picks its route from measured driver memory — in-memory `scipy.csgraph` while the scored edge set fits the head, distributed WCC above it. Correlated survivorship (`field_groups`, conditional, validate) is REFUSED on this pipeline and fails fast: the driver's staged per-cluster pass has no distributed equivalent, and running plain `most_complete` instead would be silently wrong — use the in-memory path for those configs. Remaining production-readiness gaps: `docs/superpowers/specs/2026-08-28-ray-production-readiness-design.md`. |
 
 Switching backend changes the storage and parallelism model. It does not
 fix a bad blocking key. See "Block-size failure modes" below.
@@ -37,7 +37,7 @@ flowchart TD
     D2 -->|yes| E2[Use bucket backend]
     D2 -->|no| D{rows < 50M?}
     D -->|yes| E[Use duckdb backend]
-    D -->|no| F[Use ray backend]
+    D -->|no| F[Use ray: opt-in, not production ready]
     E2 --> G
     C --> G{auto-config OK?}
     E --> G
@@ -52,7 +52,7 @@ Per-step detail:
 | Node | What to check                                                           |
 |------|-------------------------------------------------------------------------|
 | B    | Row count of the largest input frame (after column filter).             |
-| D    | If you have a Ray cluster handy, jump straight to `ray` at 10M+.        |
+| D    | 25M-50M is `duckdb`'s range **on the 64 GB box this ladder assumes**. The real boundary is peak RSS, not row count, and it is shape-dependent: the realistic QIS shape needs 69 GB at 25M and caps a 64 GB runner near 10M, while `bucket` reaches 100M at 276 GB on a 503 GB box (`quality-invariant-scale.md`). Above 50M, read the `>= 50M` row in the picker before reaching for `ray`: it is opt-in and needs two environment variables. |
 | G    | Auto-config emits a postflight health report; check for RED/YELLOW.     |
 | I    | Largest block size, cardinality_ratio of the blocking column.           |
 
