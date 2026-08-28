@@ -179,6 +179,66 @@ def _warn_worker_slow_path(baseline: dict[str, dict[str, int]]) -> None:
         pass
 
 
+# FAILURE POLICY for the distributed scoring path.
+#
+# Every worker-side step below used to catch Exception, log a WARNING and carry
+# on with less data: a failed partition contributed zero pairs, a failed
+# standardization silently keyed off RAW fields, a failed blocking pass dropped
+# its candidates. The run then reported SUCCESS with fewer matches, and nothing
+# counted what was lost. At shuffle_parts=512, twenty dead partitions is ~4% of
+# your matches gone with no signal above a worker-log WARNING.
+#
+# It also defeated Ray's own fault tolerance. Ray Data retries a task that
+# raises; it cannot retry one that swallows its exception and returns an empty
+# table, because that task succeeded.
+#
+# For an entity-resolution engine, silently under-matching while reporting
+# success is the worst available failure mode -- it is a correctness bug wearing
+# a robustness costume. So the default is now RAISE.
+#
+# GOLDENMATCH_DISTRIBUTED_ON_ERROR=skip restores the lossy behaviour for an
+# operator who would rather have a partial answer than none. It logs at ERROR
+# rather than WARNING. Note what it does NOT do: the count of dropped partitions
+# is not aggregated back to the driver, so `skip` still cannot tell you how much
+# you lost. Treat it as an escape hatch, not a mode to run in.
+_ON_ERROR_VALUES = ("raise", "skip")
+
+
+def _on_error() -> str:
+    """Worker failure policy: 'raise' (default) or 'skip'.
+
+    An unrecognised value raises rather than defaulting, so a typo in the
+    escape hatch cannot quietly select a policy the operator did not intend.
+    """
+    raw = os.environ.get("GOLDENMATCH_DISTRIBUTED_ON_ERROR", "raise").strip().lower()
+    if raw not in _ON_ERROR_VALUES:
+        raise ValueError(
+            f"GOLDENMATCH_DISTRIBUTED_ON_ERROR={raw!r} is not one of "
+            f"{_ON_ERROR_VALUES}. Unset it for the default ('raise')."
+        )
+    return raw
+
+
+def _handle_worker_error(what: str, exc: BaseException) -> None:
+    """Raise, unless the operator explicitly opted into dropping data.
+
+    `what` names the step for the message; keep it specific enough that a
+    failure in a 512-partition run says which stage lost rows.
+    """
+    if _on_error() == "raise":
+        raise RuntimeError(
+            f"distributed scoring: {what} failed, so this partition would "
+            f"contribute incomplete results. Failing loudly instead. Set "
+            f"GOLDENMATCH_DISTRIBUTED_ON_ERROR=skip to drop it and continue "
+            f"with fewer matches."
+        ) from exc
+    logger.error(
+        "GOLDENMATCH_DISTRIBUTED_ON_ERROR=skip: %s failed -- DROPPING this "
+        "partition's contribution, results will under-match: %s",
+        what, exc,
+    )
+
+
 def _project_to_scoring_columns(df: Any, config: GoldenMatchConfig) -> Any:
     """Drop columns scoring never reads, BEFORE the block-shuffle (#957).
 
@@ -411,7 +471,7 @@ def _score_blocks_legacy(
                 df, local_cfg, fs_em_results=fs_em_results,
             )
         except Exception as e:
-            logger.warning("partition scoring failed: %s", e)
+            _handle_worker_error("per-partition scoring", e)
             return pa.table({"id_a": [], "id_b": [], "score": []})
         _warn_worker_slow_path(_native_base)
 
@@ -461,8 +521,11 @@ def _attach_colocation_keys(df: Any, config: GoldenMatchConfig) -> Any:
         try:
             from goldenmatch.core.standardize import apply_standardization
             std_df = apply_standardization(df.lazy(), std.rules).collect()
-        except Exception as e:  # fall back to raw fields for keying
-            logger.warning("block-shuffle: standardization for keys failed: %s", e)
+        except Exception as e:
+            # Falling back to RAW fields changes the blocking keys, so records
+            # that should co-locate no longer do -- silent recall loss, not a
+            # graceful degradation.
+            _handle_worker_error("block-shuffle standardization for keys", e)
             std_df = df
 
     pieces: list[Any] = []
@@ -480,7 +543,7 @@ def _attach_colocation_keys(df: Any, config: GoldenMatchConfig) -> Any:
                     )
                 )
             except Exception as e:
-                logger.warning("block-shuffle: pass %d key build failed: %s", i, e)
+                _handle_worker_error(f"block-shuffle blocking pass {i} key build", e)
 
     exact_mks = [mk for mk in matchkeys if getattr(mk, "type", None) == "exact"]
     if exact_mks:
@@ -498,9 +561,18 @@ def _attach_colocation_keys(df: Any, config: GoldenMatchConfig) -> Any:
                     )
                 )
         except Exception as e:
-            logger.warning("block-shuffle: exact matchkey key build failed: %s", e)
+            _handle_worker_error("block-shuffle exact matchkey key build", e)
 
     if not pieces:
+        # No key survived, so this partition co-locates with nothing and scores
+        # nothing. Under the default policy the failures above have already
+        # raised; reaching here means either `skip`, or a config that produced
+        # no blocking keys at all. Both are worth saying out loud.
+        logger.error(
+            "block-shuffle: no blocking keys built for this partition -- it will "
+            "contribute NO candidate pairs. Check the blocking config, or the "
+            "errors above if GOLDENMATCH_DISTRIBUTED_ON_ERROR=skip is set."
+        )
         return df.clear().with_columns(
             pl.lit(None).cast(pl.Utf8).alias("__block_key__"),
             pl.lit(None).cast(pl.Utf8).alias("__keyid__"),
@@ -570,7 +642,7 @@ def _score_colocated_groups(
             rec, local_cfg, fs_em_results=fs_em_results,
         )
     except Exception as e:
-        logger.warning("block-shuffle: partition scoring failed: %s", e)
+        _handle_worker_error("block-shuffle co-located group scoring", e)
         return []
 
 

@@ -199,6 +199,7 @@ This is the knob most people get wrong, so read the contract before you run a 10
 | `GOLDENMATCH_DISTRIBUTED_WCC_SEED` | unset | Seed for the randomized-contraction affine hash (reproducible cluster IDs across runs). |
 | `GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD` | unset (memory-aware) | Pair count above which clustering goes distributed. **Unset (default): memory-aware**: clustering stays on the fast driver-side scipy.csgraph path whenever the scored pair set fits available driver RAM, and only distributes when it genuinely won't. Set an explicit integer to force a pair-count boundary either way. |
 | `GOLDENMATCH_DISTRIBUTED_GOLDEN_THRESHOLD` | `5000000` | Multi-member row count above which golden-record building goes distributed. |
+| `GOLDENMATCH_DISTRIBUTED_ON_ERROR` | `raise` | Worker failure policy for the distributed scoring path. `raise` (default) fails the run when a partition cannot score, its standardization fails, or a blocking-key build fails -- all of which otherwise contribute FEWER matches while the run reports success, and none of which Ray can retry once the exception is swallowed. `skip` restores the old lossy behaviour and logs at ERROR; the dropped count is not aggregated to the driver, so treat it as an escape hatch rather than a mode. |
 | `GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS` | `2` | CPUs requested per Ray scoring task. |
 | `GOLDENMATCH_DISTRIBUTED_SCORE_PROJECT` | `1` (on) | Project to scoring-relevant columns before the block-shuffle so it moves narrow blocks, not full records (#957). Output-invariant. `0` disables. |
 | `GOLDENMATCH_DISTRIBUTED_SHUFFLE_PARTS` | `min(256, cpu×4)` | Block-shuffle partition count. **Raise it** to shrink per-partition blocks so more `_score` tasks fit the object-store budget (relieves `_score` `ResourceBudget` backpressure). Co-location stays correct at any value. |
@@ -576,6 +577,7 @@ Every `GOLDENMATCH_*` variable the package reads (plus the one `GOLDEN_*` except
 | `GOLDENMATCH_DISTRIBUTED_WCC_SEED` | unset | Randomized-contraction hash seed (reproducible cluster IDs). |
 | `GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD` | unset (memory-aware) | Pair count → distributed clustering. Unset default routes by driver-RAM fit; set an integer to force a hard boundary. |
 | `GOLDENMATCH_DISTRIBUTED_GOLDEN_THRESHOLD` | `5000000` | Row count → distributed golden. |
+| `GOLDENMATCH_DISTRIBUTED_ON_ERROR` | `raise` | Worker failure policy for the distributed scoring path. `raise` (default) fails the run when a partition cannot score, its standardization fails, or a blocking-key build fails -- all of which otherwise contribute FEWER matches while the run reports success, and none of which Ray can retry once the exception is swallowed. `skip` restores the old lossy behaviour and logs at ERROR; the dropped count is not aggregated to the driver, so treat it as an escape hatch rather than a mode. |
 | `GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS` | `2` | CPUs per Ray scoring worker. |
 
 ### Perf opt-ins & diagnostics
