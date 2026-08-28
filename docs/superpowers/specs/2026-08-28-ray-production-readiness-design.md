@@ -54,19 +54,25 @@ The shell expands the glob to explicit file paths. `--ignore` filters directory
 traversal during collection; it does not filter paths named explicitly on the
 command line. Both flags are no-ops.
 
-Measured on run `33176961803`, job `98868039914`:
-
-| file | tests collected | should be in this job |
-|---|---:|---|
-| `test_distributed_randomized_contraction_wcc.py` | 55 | no — `distributed_wcc` gates it |
-| `test_distributed_clustering.py` | 51 | no — `distributed` gates it |
-| everything else | 75 | yes |
-
-So 106 of 181 tests (59%) are a second run of the two blocking gates. The job
-takes 669–929s, and roughly 430s of the top-20 durations belong to the two files
-it believes it excluded.
+Measured on run `33176961803`, job `98868039914`: the job collected **181**
+tests, of which **86** belong to `test_distributed_clustering.py` and
+`test_distributed_randomized_contraction_wcc.py` — a second run of the two jobs
+that already block the merge queue. It took 669–929s, and roughly 430s of its
+top-20 durations belonged to the two files it believed it excluded.
 
 This is why G2 looks expensive. It is not.
+
+**Confirmed after the fix** (run `33197155069`, job `98937164988`): 95 tests
+collected, exactly 181 − 86, none from either gate file, and **69.5s wall against
+669s** — 9.6x, and well under the ~3-4 min this section originally predicted. The
+promotion in G2 therefore costs about a minute of merge-queue time, not eleven.
+
+> An earlier revision of this section said "106 of 181 (59%)". That came from
+> counting nodeid *occurrences* in the job log — each test appears on its PASSED
+> line and again in the durations list — rather than distinct tests. The correct
+> figure is 86 of 181 (48%), and it is now confirmed by arithmetic that closes:
+> the post-fix job collects exactly 181 − 86. Count distinct nodeids, not log
+> lines.
 
 ### G2 — the ray-executing pipeline cannot fail a merge
 
