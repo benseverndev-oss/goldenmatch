@@ -175,17 +175,18 @@ moderate / frozen config / 64 partitions / shuffle_parts=512):
 Output was identical: pairwise F1 `0.9265507059539793` to 16 digits, cluster F1
 and `multi_member_clusters` (18,880,989) byte-identical.
 
-So distributing costs roughly **+14% dedupe wall** (3686s against a 3237s median)
-and returns **-61% driver peak RSS**. Read the wall number with care: the three
-in-memory runs spread 378s (12%) among themselves, so the penalty is about one
-noise band at n=3 vs n=1, and it is not worth a paid run to pin down because
-nothing downstream turns on it.
+The like-for-like comparison is `33074452121` against `33087786765`: same code,
+same shape, differing only in the clustering route. Distributing costs
+**+12.2% dedupe wall** and returns **-61% driver peak RSS**. This is the pair
+`clustering.py` calibrates against, and the only pair in the table that isolates
+the route.
 
-The RSS gap has no overlap, and it is the half that decides anything. The head is
-an n2-highmem-32 (256 GB) and the in-memory route already uses 52% of it at 100M
-on 609,398,412 pairs. Pairs scale with rows, so **the in-memory route runs out of
-head before it runs out of speed** -- which is why the route keys on memory and
-not on wall.
+The other two in-memory rows are **not replicates of it**. `32992647463`
+predates #2781 (`+ single projected pass`, merged 2026-08-26) and
+`33006980567` is the run that measured it -- the 3237s to 2906s step is that
+code change, as §8 records. Do not take a median across them: run-to-run noise
+on this lane has never been measured, because no two runs of one unchanged SHA
+have been compared. Establishing that band is open work.
 
 **Measured split** (`GOLDENMATCH_CLUSTER_DEBUG=1`, 100M rung, run 33074452121 —
 609,398,412 pairs over 99,417,363 ids, 707.3s total):

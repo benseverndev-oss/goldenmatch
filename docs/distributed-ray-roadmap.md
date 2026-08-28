@@ -1,6 +1,18 @@
 # Distributed (Ray) backend — roadmap & current state
 
-**Status as of 2026-05-19:** The Ray backend exists (`backends/ray_backend.py` + Distributed Plan v1 in `goldenmatch/distributed/`) but **failed the binding 5M kill criterion** on the 2026-05-18 bench (run `26045651074`). Soft-reverted in PR #318 — the v3 planner no longer auto-picks ray. Explicit `backend="ray"` or `GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1` opts back in.
+**Status as of 2026-08-28.** The five phases below are largely SHIPPED in code:
+`goldenmatch/distributed/` carries the loader (`dataset.py`), controller
+(`sample.py`, `indicators.py`), distributed clustering (`clustering.py`), golden
+(`golden.py`) and identity (`identity.py`, `identity_partition.py`), and
+clustering correctness is gated by two blocking CI jobs. Treat the phase
+descriptions below as historical scope, not as remaining work.
+
+What blocks production is narrower and is tracked in
+`docs/superpowers/specs/2026-08-28-ray-production-readiness-design.md`: the
+default path does not distribute, the v3 planner's soft-revert gate
+(`_ray_auto_select_enabled()`, from the 2026-05-18 kill-criterion failure) is
+still shut, the driver keeps a 50.9 GB baseline at 100M, and issue #957 has
+scoring using roughly a quarter of the cluster. Read that spec first.
 
 The supported path for 5M-25M today is **`backend="bucket"`** on a 16-core / 32+ GB Linux node. Measured: 5M in 9.94 min / 6.4 GB peak RSS on `large-new-64GB`. 25M extrapolates to ~50 min / ~32 GB peak RSS — comfortably inside a 64 GB box.
 
