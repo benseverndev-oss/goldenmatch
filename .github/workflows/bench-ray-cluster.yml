@@ -352,7 +352,19 @@ jobs:
               | while read -r nm mt cp; do echo "| $nm | $mt | $cp |"; done
           } | tee "$OUT" >> $GITHUB_STEP_SUMMARY || true
           # The exact resolved wheel set, from the head node itself.
-          ray rsync-down .ray/cluster-gce.yaml /tmp/bench_env.txt ".profile_tmp/qis/pipfreeze_${LABEL}.txt" || echo "could not fetch pip freeze from the head (non-fatal)"
+          # Fatal, not advisory. A rung number whose resolved environment was not
+          # captured cannot be compared to any later run, which is exactly how the
+          # June baseline became unattributable -- and the artifact would still
+          # upload, so nothing downstream would notice.
+          if ! ray rsync-down .ray/cluster-gce.yaml /tmp/bench_env.txt \
+               ".profile_tmp/qis/pipfreeze_${LABEL}.txt"; then
+            echo "::error::could not fetch pip freeze from the head; the run is unattributable" >&2
+            exit 1
+          fi
+          if ! grep -q '^goldenmatch @' ".profile_tmp/qis/pipfreeze_${LABEL}.txt"; then
+            echo "::error::pip freeze does not record the goldenmatch git SHA" >&2
+            exit 1
+          fi
 
       - name: Submit bench
         # `ray submit` ships the script to the head node and runs it.
@@ -475,7 +487,9 @@ jobs:
             .profile_tmp/qis/qis_${{ inputs.label }}.json
             .profile_tmp/qis/env_${{ inputs.label }}.md
             .profile_tmp/qis/pipfreeze_${{ inputs.label }}.txt
-          if-no-files-found: warn
+          # `warn` let a run whose result JSON never came back finish green with
+          # no result -- the same class as a continue-on-error gate.
+          if-no-files-found: error
 
       - name: Ray down (always)
         # The teardown runs even when previous steps fail so we don't
