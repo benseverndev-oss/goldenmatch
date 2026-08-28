@@ -14,7 +14,6 @@ import logging
 
 import polars as pl
 import pytest
-
 from goldenmatch.distributed import scoring as S
 
 
