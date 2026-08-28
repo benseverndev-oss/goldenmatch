@@ -181,7 +181,9 @@ def _wcc_algorithm() -> str:
 #
 # Revise UP, not down, if another shape measures higher: under-estimating OOMs
 # the driver and kills the run, while over-estimating distributes unnecessarily
-# and cost +12.2% dedupe wall here, against a 12% run-to-run spread. `available`
+# and cost +12.2% dedupe wall here, against a run-to-run spread that has
+# never been cleanly measured (the only near-replicate pair is confounded by
+# CLUSTER_DEBUG=1; see docs/distributed/ray-optimal-setup.md §6). `available`
 # at decision time already nets off what the process holds, so this constant
 # needs to cover only the INCREMENTAL clustering allocation -- which is what the
 # inter-route gap measures.

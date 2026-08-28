@@ -37,7 +37,7 @@ flowchart TD
     D2 -->|yes| E2[Use bucket backend]
     D2 -->|no| D{rows < 50M?}
     D -->|yes| E[Use duckdb backend]
-    D -->|no| F[Use ray backend]
+    D -->|no| F[Use ray: opt-in, not production ready]
     E2 --> G
     C --> G{auto-config OK?}
     E --> G
@@ -52,7 +52,7 @@ Per-step detail:
 | Node | What to check                                                           |
 |------|-------------------------------------------------------------------------|
 | B    | Row count of the largest input frame (after column filter).             |
-| D    | If you have a Ray cluster handy, jump straight to `ray` at 10M+.        |
+| D    | 25M-50M is `duckdb`'s range. Above it, read the `>= 50M` row in the picker before reaching for `ray`: it is opt-in, needs two environment variables, and `bucket` is validated single-box through 200M. |
 | G    | Auto-config emits a postflight health report; check for RED/YELLOW.     |
 | I    | Largest block size, cardinality_ratio of the blocking column.           |
 

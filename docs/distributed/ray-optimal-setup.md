@@ -162,8 +162,9 @@ is gone. The harness now leaves the threshold unset so the memory-aware route
 decides, and the route is sized against a measured per-pair cost rather than a
 modelled one.
 
-The trade, measured at 100M across four runs of the same shape (realistic /
-moderate / frozen config / 64 partitions / shuffle_parts=512):
+Four runs at 100M on the same fixture shape (realistic / moderate / frozen
+config / 64 partitions / shuffle_parts=512). They are **not four replicates** —
+see the paragraphs below the table for which pair is comparable and why:
 
 | route | dedupe | driver peak RSS | run |
 | --- | --- | --- | --- |
@@ -300,9 +301,11 @@ direction; Linux CI (`distributed_wcc`, `distributed_broad`) is the gate.
 Output is byte-identical across all three — same tp/fp/fn. Every gain is pure
 overhead removal, not an accuracy trade.
 
-Run-to-run spread on an unchanged configuration is real: the last two rows
-differ by ~13% with identical output, so treat anything under ~15% as noise
-rather than signal.
+The last two rows differ by ~13% with identical output, which is where the
+"anything under ~15% is noise" rule of thumb comes from. Read it as a rule of
+thumb and not a measured band: those two runs differ by the `CLUSTER_DEBUG=1`
+flag, so the spread is confounded with whatever that instrumentation costs. §6
+sets out why.
 
 Stage split, measured: scoring 38-44 min (all four nodes at 33-55% CPU), driver
 clustering **11.8 min** (one core, broken down in §6). Provisioning adds ~10 min.
