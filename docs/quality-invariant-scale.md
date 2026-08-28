@@ -212,7 +212,7 @@ Identical to four decimals (18.88M multi-member clusters recovered vs 20M GT; 17
 exact-match). So **the distributed engine holds quality** — the residual precision
 drift above is a property of the *config*, not the engine, and is invariant across
 engines. Two harness lessons worth recording: (1) **only scoring needs
-distribution** — the scored pair set is ~1.76 GB and fits one node, so clustering
+distribution** — the scored pair set (609.4M pairs, ~81 GB driver peak at 100M) fits a large head, so clustering
 runs in-memory (driver-side `scipy.csgraph` connected-components, ~60s); forcing the
 distributed WCC on it was a multi-hour mistake. (2) The connected-components result
 is independent of the WCC algorithm, so a completed run's cluster *assignments* are
