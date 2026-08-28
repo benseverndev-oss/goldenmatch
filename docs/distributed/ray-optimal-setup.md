@@ -27,10 +27,25 @@ box is named. See [`../scale-envelope.md`](../scale-envelope.md), whose ladder
 assumes 64 GB.
 
 Reach for Ray when **the frame does not fit one box**, not when you want it
-faster. On this workload the distributed engine's advantage is capacity, and the
-comparison point is sobering: a Spark lane on comparable hardware ran 100M rows /
-927.9M candidate pairs in **958s**, against **2900-3300s** here across four
-measured runs.
+faster.
+
+> **Retracted 2026-08-28.** This section used to compare "a Spark lane on
+> comparable hardware ran 100M rows / 927.9M candidate pairs in 958s" against
+> "2900-3300s here". **That comparison is invalid and should not be repeated.**
+> The 958s comes from the scale curve in
+> [`../benchmarks/2026-08-19-spark-50m-head-to-head.md`](../benchmarks/2026-08-19-spark-50m-head-to-head.md),
+> which measures Fellegi-Sunter **model training** — u, EM, and a predict pass —
+> and says so in its own words: *"Not clustering, not survivorship."* The
+> 2900-3300s figures are full dedupe runs including blocking, clustering
+> (~707s of driver-side work on its own) and golden-record building. The two
+> numbers do not measure the same stages, and the fixtures differ too: 927.9M
+> candidate pairs against ~609M at the same row count, at different quality
+> operating points (best F1 0.685 against 0.927).
+>
+> **There is no valid Ray-vs-Spark measurement in this repo.** Not "Spark wins" —
+> unmeasured. If you need one, the 50M head-to-head above is the worked example
+> of how to make it valid: one fixture, one seed, one metric module, shared
+> tuning, identical pair counts.
 
 > **Only scoring genuinely distributes today.** Clustering runs on the driver by
 > default (§6). Plan around that, because it caps what any amount of parallelism
