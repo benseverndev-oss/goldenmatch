@@ -15,8 +15,16 @@ something is not known, it says so.
 ## 1. Decide whether to distribute at all
 
 Distribution is not free and it is not always a win. The single-box `bucket`
-backend is validated through 200M and is simpler. See
-[`../scale-envelope.md`](../scale-envelope.md) for the full ladder.
+backend is measured to **100M** and is simpler — 276 GB peak RSS at 100M on a
+503 GB `n2-highmem-64`, per
+[`../quality-invariant-scale.md`](../quality-invariant-scale.md). 200M projects
+to ~550 GB, over that box, so it needs a larger single box (m1/m2 ultramem) or
+this path.
+
+**Size by peak RSS, not by row count.** The same shape needs 69 GB at 25M and
+caps a 64 GB runner near 10M, so a row-count ladder is only meaningful once the
+box is named. See [`../scale-envelope.md`](../scale-envelope.md), whose ladder
+assumes 64 GB.
 
 Reach for Ray when **the frame does not fit one box**, not when you want it
 faster. On this workload the distributed engine's advantage is capacity, and the

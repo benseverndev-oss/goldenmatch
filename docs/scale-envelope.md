@@ -52,7 +52,7 @@ Per-step detail:
 | Node | What to check                                                           |
 |------|-------------------------------------------------------------------------|
 | B    | Row count of the largest input frame (after column filter).             |
-| D    | 25M-50M is `duckdb`'s range. Above it, read the `>= 50M` row in the picker before reaching for `ray`: it is opt-in, needs two environment variables, and `bucket` is validated single-box through 200M. |
+| D    | 25M-50M is `duckdb`'s range **on the 64 GB box this ladder assumes**. The real boundary is peak RSS, not row count, and it is shape-dependent: the realistic QIS shape needs 69 GB at 25M and caps a 64 GB runner near 10M, while `bucket` reaches 100M at 276 GB on a 503 GB box (`quality-invariant-scale.md`). Above 50M, read the `>= 50M` row in the picker before reaching for `ray`: it is opt-in and needs two environment variables. |
 | G    | Auto-config emits a postflight health report; check for RED/YELLOW.     |
 | I    | Largest block size, cardinality_ratio of the blocking column.           |
 

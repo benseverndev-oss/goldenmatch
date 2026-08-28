@@ -50,11 +50,14 @@ Full per-phase scope + kill criteria: `docs/superpowers/specs/2026-05-19-ray-spl
 ## Pragmatic call
 
 - **5M-25M:** use `backend="bucket"` on a 64 GB box. Don't touch the Ray path.
-- **25M-200M:** `bucket` is validated single-box through 200M and is simpler.
-  A Spark lane also ran 100M in 958s against 2900-3300s here, so Ray is not the
-  fast answer in this range either.
-- **>200M:** the Ray path is the goldenmatch-shaped answer and the code exists,
-  but it is opt-in and not production ready. What still blocks it is listed in
+- **25M-100M:** `bucket` is measured single-box to 100M and is simpler, but the
+  box has to be big — 276 GB peak RSS at 100M on a 503 GB `n2-highmem-64`
+  (`docs/quality-invariant-scale.md`). A Spark lane also ran 100M in 958s
+  against 2900-3300s here, so Ray is not the fast answer in this range either.
+- **>100M:** 200M projects to ~550 GB, over that 503 GB box. Either a larger
+  single box (m1/m2 ultramem) or the Ray path, which is the goldenmatch-shaped
+  answer and exists in code but is opt-in and not production ready. What still
+  blocks it is listed in
   `docs/superpowers/specs/2026-08-28-ray-production-readiness-design.md`.
 
 ## What replaced this plan's sequencing

@@ -187,8 +187,9 @@ The chain exists. What is missing is that nothing enforces or checks it:
 The standing criterion is *100M dedupe under 30 minutes*
 (`docs/distributed-ray-cluster-setup.md:183`). Both routes miss it by roughly
 2x — 54 and 61 minutes. More importantly it measures wall on an engine chosen
-for capacity: `bucket` is validated single-box through 200M and Spark is faster
-through the whole overlap, so wall is the axis Ray will never win.
+for capacity: `bucket` is measured single-box to 100M (276 GB peak on a 503 GB
+box) and Spark is faster through the whole overlap, so wall is the axis Ray will
+never win.
 
 Separately, the only end-to-end accuracy evidence at 100M comes from manual,
 paid `workflow_dispatch` runs. Nothing automated would catch an accuracy
@@ -199,10 +200,20 @@ regression at scale.
 ## Decisions
 
 **D1 — Ray is capacity insurance, not a Spark competitor.**
-`bucket` covers to 200M single-box; Spark is faster through the overlap and
-`spark_connect` is already in `ci-required`. Ray's exclusive window opens where
-`bucket` runs out of box. Scope, messaging and the kill criterion all follow from
-this, and G10's replacement criterion encodes it.
+`bucket` is measured single-box to 100M (276 GB peak RSS on a 503 GB
+`n2-highmem-64`); 200M projects to ~550 GB, over that box. Spark is faster
+through the overlap and `spark_connect` is already in `ci-required`. Ray's
+exclusive window opens where `bucket` runs out of box. Scope, messaging and the
+kill criterion all follow from this, and G10's replacement criterion encodes it.
+
+**Note, 2026-08-28:** an earlier revision of this spec said `bucket` was
+"validated single-box through 200M". That was wrong, and it was wrong in the way
+this document is otherwise about — the figure was read out of
+`docs/distributed/ray-optimal-setup.md` §1 and propagated without checking what
+produced it. `docs/quality-invariant-scale.md` is the source: the measured ladder
+is 25M/69 GB, 50M/138 GB, 100M/276 GB on a 503 GB box, and it names 200M as
+projected, not measured. The correction **widens** Ray's window rather than
+narrowing it: it opens around 100M on commodity hardware, not 200M.
 
 **D2 — Settle G7 before funding anything architectural.**
 If scoring saturates the cluster, the 3.0x Spark gap may substantially close, and
@@ -308,8 +319,8 @@ measurement.
   already gated.
 - Distributed correlated survivorship implementation. G5's gate is a documented
   limitation; implementing it is a separate spec if a customer needs it.
-- Retiring the `bucket` backend. It is the validated path to 200M and stays the
-  recommendation there.
+- Retiring the `bucket` backend. It is the measured path to 100M single-box and
+  stays the recommendation there.
 
 ---
 
