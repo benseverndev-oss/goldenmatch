@@ -57,15 +57,13 @@ Full per-phase scope + kill criteria: `docs/superpowers/specs/2026-05-19-ray-spl
   but it is opt-in and not production ready. What still blocks it is listed in
   `docs/superpowers/specs/2026-08-28-ray-production-readiness-design.md`.
 
-## Estimated effort vs Splink
+## What replaced this plan's sequencing
 
-Splink's Spark backend took **years** of work, much of it leaning on Spark's maturity. GoldenMatch is closer to "build a distributed engine on top of Polars/Ray" than "wire to an existing one". The realistic posture is:
-
-1. Phases 1-2 first; that's the foundation.
-2. Phases 3-4 to fill in the distributed parts of the pipeline.
-3. Phase 5 only after a real customer workload demands it.
-
-## Re-bench cadence
-
-- **Today's bench** at 25M will validate (or invalidate) the linear-extrapolation projection of bucket-on-one-node. If 25M fits comfortably in 64 GB, the urgency of Phase 1 drops considerably.
-- **Re-bench Ray after Phase 1** ships. If Phase 1 alone gets the kill criterion to PASS at 5M, that's a major win and Phases 2-5 can be paced against real customer pull.
+The phase ordering above is answered: phases 1-4 shipped, and the re-bench
+question it left open is now governed by two protocols in
+`docs/superpowers/specs/2026-08-28-ray-production-readiness-design.md` —
+Protocol P1 (re-measure cluster utilisation, against issue #957) and Protocol P2
+(characterise the 50.9 GB driver baseline and measure the 200M rung rather than
+extrapolating it). The remaining question is not "which phase next" but whether
+the lane clears a kill criterion shaped for a capacity engine; the spec proposes
+one and holds the planner's soft-revert gate shut until it passes.
