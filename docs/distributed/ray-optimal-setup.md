@@ -181,12 +181,24 @@ same shape, differing only in the clustering route. Distributing costs
 `clustering.py` calibrates against, and the only pair in the table that isolates
 the route.
 
-The other two in-memory rows are **not replicates of it**. `32992647463`
-predates #2781 (`+ single projected pass`, merged 2026-08-26) and
-`33006980567` is the run that measured it -- the 3237s to 2906s step is that
-code change, as §8 records. Do not take a median across them: run-to-run noise
-on this lane has never been measured, because no two runs of one unchanged SHA
-have been compared. Establishing that band is open work.
+`32992647463` is **not a replicate** of either: it predates #2781
+(`+ single projected pass`, merged 2026-08-26), and `33006980567` is the run
+that measured that change, so the 3237s to 2906s step is a code change and not
+spread. Do not take a median across all three.
+
+The closest thing to a replicate pair is `33006980567` against `33074452121`:
+same code, differing only by `GOLDENMATCH_CLUSTER_DEBUG=1`, which §4 documents
+as near-free. They differ by ~13%, which is where §8's "treat anything under
+~15% as noise" comes from. Read that as one confounded observation at n=2
+rather than a characterised noise band — the flag is *asserted* to be near-free,
+not measured to be, and no pair without a confound has been run. Establishing a
+clean band is open work.
+
+The RSS gap has no overlap, and it is the half that decides anything. The head
+is an `n2-highmem-32` (256 GB) and the in-memory route already uses 52% of it at
+100M on 609,398,412 pairs. Pairs scale with rows, so **the in-memory route runs
+out of head before it runs out of speed** — which is why the route keys on
+memory and not on wall.
 
 **Measured split** (`GOLDENMATCH_CLUSTER_DEBUG=1`, 100M rung, run 33074452121 —
 609,398,412 pairs over 99,417,363 ids, 707.3s total):

@@ -18,19 +18,24 @@ The supported path for 5M-25M today is **`backend="bucket"`** on a 16-core / 32+
 
 ## Why the Ray stack isn't Splink-Spark equivalent
 
+> **This section describes the 2026-05 state**, which is what the five-phase plan
+> below was written against. Phases 1-4 have since largely shipped; see the status
+> block at the top. It is kept because the stage-by-stage framing is still the
+> clearest statement of what distributing this pipeline requires.
+
 Splink delegates **every** pipeline stage to Spark (load, blocking, scoring, clustering, golden, write). Spark's optimizer + shuffle layer handles distribution; the Splink Python process just compiles SQL.
 
 GoldenMatch's Ray backend distributes **one** stage (per-block pair scoring) and runs everything else in a single Polars driver process. That's the kill-criterion failure in one sentence: the driver still holds the full df during prep + clustering + golden, so worker memory doesn't help.
 
-| Stage | Splink (Spark) | GoldenMatch (Ray, today) |
-|---|---|---|
-| Data load | Spark DataFrame, partitioned | Polars driver, single-node |
-| Standardize / auto-fix | Spark SQL UDFs distributed | Polars driver |
-| Blocking | Spark group_by distributed | Polars partition_by, single-node |
-| Pair scoring | Spark UDF per partition | **Ray tasks ✓** |
-| Clustering | Spark GraphFrames / iterative | Python UnionFind, single-node |
-| Golden record | Spark groupBy().agg() | Polars group_by, single-node |
-| Driver memory | Master coordinates only | Holds the full df |
+| Stage | Splink (Spark) | GoldenMatch (Ray, 2026-05) | GoldenMatch (Ray, now) |
+|---|---|---|---|
+| Data load | Spark DataFrame, partitioned | Polars driver, single-node | Ray Dataset, partitioned (PIPELINE=2) |
+| Standardize / auto-fix | Spark SQL UDFs distributed | Polars driver | distributed (PIPELINE=2) |
+| Blocking | Spark group_by distributed | Polars partition_by, single-node | distributed block-shuffle (PIPELINE=2) |
+| Pair scoring | Spark UDF per partition | **Ray tasks ✓** | Ray tasks ✓ |
+| Clustering | Spark GraphFrames / iterative | Python UnionFind, single-node | distributed WCC or driver scipy, routed on memory |
+| Golden record | Spark groupBy().agg() | Polars group_by, single-node | distributed (PIPELINE=2) |
+| Driver memory | Master coordinates only | Holds the full df | 50.9 GB at 100M, still the ceiling |
 
 ## Roadmap (5 phases, ~5-6 months total)
 
@@ -45,8 +50,12 @@ Full per-phase scope + kill criteria: `docs/superpowers/specs/2026-05-19-ray-spl
 ## Pragmatic call
 
 - **5M-25M:** use `backend="bucket"` on a 64 GB box. Don't touch the Ray path.
-- **25M-100M:** wait for Phase 1 to land, or use Splink on Spark if you already have a Spark cluster. Today's Ray code will not beat single-node bucket on the same workload.
-- **>100M:** Ray roadmap is the only goldenmatch-shaped answer, and it's ~6 months out. Bigger problem; bigger investment.
+- **25M-200M:** `bucket` is validated single-box through 200M and is simpler.
+  A Spark lane also ran 100M in 958s against 2900-3300s here, so Ray is not the
+  fast answer in this range either.
+- **>200M:** the Ray path is the goldenmatch-shaped answer and the code exists,
+  but it is opt-in and not production ready. What still blocks it is listed in
+  `docs/superpowers/specs/2026-08-28-ray-production-readiness-design.md`.
 
 ## Estimated effort vs Splink
 
