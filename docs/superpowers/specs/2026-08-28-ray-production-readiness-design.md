@@ -212,8 +212,13 @@ this document is otherwise about — the figure was read out of
 `docs/distributed/ray-optimal-setup.md` §1 and propagated without checking what
 produced it. `docs/quality-invariant-scale.md` is the source: the measured ladder
 is 25M/69 GB, 50M/138 GB, 100M/276 GB on a 503 GB box, and it names 200M as
-projected, not measured. The correction **widens** Ray's window rather than
-narrowing it: it opens around 100M on commodity hardware, not 200M.
+projected, not measured. The correction does not simply move the window's edge —
+it shows the edge is **not a row count at all**. `bucket` runs out of *box*, so
+the boundary tracks memory: ~10M on a 64 GB runner, and ~180M projected on the
+503 GB box (100M measured, 276 GB, ~2.76 GB per million rows — and
+`quality-invariant-scale.md` notes RSS is "~sublinear-to-linear", so treat that
+as an extrapolation like any other). Ray's window opens wherever your box ends,
+which on anything short of a high-memory instance is far below 200M.
 
 **D2 — Settle G7 before funding anything architectural.**
 If scoring saturates the cluster, the 3.0x Spark gap may substantially close, and
