@@ -37,7 +37,7 @@ GoldenMatch's Ray backend distributes **one** stage (per-block pair scoring) and
 | Golden record | Spark groupBy().agg() | Polars group_by, single-node | distributed (PIPELINE=2) |
 | Driver memory | Master coordinates only | Holds the full df | 50.9 GB at 100M, still the ceiling |
 
-## Roadmap (5 phases, ~5-6 months total)
+## Roadmap (5 phases, as scoped in 2026-05)
 
 1. **Partition-aware data loader** (4-6 weeks) — Ray Datasets (or Daft); driver never holds the full df during prep.
 2. **Controller iteration on partitioned samples** (3-4 weeks) — `AutoConfigController._run_pipeline_sample` accepts a Ray Dataset; `compute_column_priors` and the full-df indicators rewritten for distributed exec.
