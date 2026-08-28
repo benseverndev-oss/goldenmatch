@@ -235,6 +235,11 @@ jobs:
       - name: Gate unit tests (the duplicate-key detector must actually detect)
         shell: bash
         run: python3 -m pytest scripts/test_workflow_yaml.py -q
+      - name: Gate unit tests (the distributed partition must stay disjoint)
+        shell: bash
+        run: |
+          python3 -m pip install --quiet pytest
+          python3 -m pytest scripts/test_distributed_test_files.py -q
       # #1846: parsing is not meaning. A path filter that lists too few paths
       # makes its job go SILENT on exactly the changes it exists to catch --
       # quality_gate pinned f1_probabilistic while not watching
@@ -1182,7 +1187,8 @@ jobs:
           uv run --with polars --with pyarrow \
             pytest scripts/test_run_benchmarks_download.py \
                    scripts/test_benchmark_quarantine.py \
-                   scripts/dqbench_adapters/test_leipzig_eval.py -q
+                   scripts/dqbench_adapters/test_leipzig_eval.py \
+                   scripts/test_distributed_test_files.py -q
       # The pre-push hook is developer-facing, so nothing else runs it. It
       # shipped gating tag pushes -- diffing origin/main..<older tag sha>
       # BACKWARDS -- which would have blocked the release tag back-fill. This
@@ -3034,7 +3040,9 @@ jobs:
       - name: Distributed quality-invariance gate (blocking)
         run: |
           .venv/bin/python -c "import ray, scipy, polars; print('ray', ray.__version__)"
-          .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_distributed_clustering.py \
+          FILES=$(python3 scripts/distributed_test_files.py --job invariance)
+          echo "$FILES"
+          .venv/bin/python -m pytest $FILES \
             --timeout=300 --durations=20 -v
 
   # GATE (blocking, #844): the randomized-contraction WCC ray gate, in its own
@@ -3058,7 +3066,9 @@ jobs:
         run: uv pip install 'ray[default]>=2.0' 'pandas<3'
       - name: Randomized-contraction WCC ray gate (blocking)
         run: |
-          .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_distributed_randomized_contraction_wcc.py \
+          FILES=$(python3 scripts/distributed_test_files.py --job wcc)
+          echo "$FILES"
+          .venv/bin/python -m pytest $FILES \
             --timeout=300 --durations=20 -v
 
   # BROAD COVERAGE (non-blocking): the rest of the ray-gated suite (controller /
@@ -3088,11 +3098,11 @@ jobs:
       - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       - name: Install ray extra
         run: uv pip install 'ray[default]>=2.0' 'pandas<3'
-      - name: Distributed broad coverage (non-blocking)
+      - name: Distributed execution suite
         run: |
-          .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_distributed_*.py \
-            --ignore=packages/python/goldenmatch/tests/test_distributed_clustering.py \
-            --ignore=packages/python/goldenmatch/tests/test_distributed_randomized_contraction_wcc.py \
+          FILES=$(python3 scripts/distributed_test_files.py --job broad)
+          echo "$FILES"
+          .venv/bin/python -m pytest $FILES \
             --timeout=300 --durations=20 -v
 
   # THE gating lane for the tier (spec: 2026-08-10-spark-native-execution-design).
