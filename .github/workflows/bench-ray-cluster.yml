@@ -109,10 +109,10 @@ on:
         description: "Ray version for BOTH launcher and cluster image. Default 2.56.0 = goldenmatch's own declared [ray] floor, one minor above the 2.55.1 that produced the June baseline. Pinned so a sweep varies the knob and not Ray. Empty = float to latest."
         required: false
         default: "2.56.0"
-      zone: 
-        description: "GCE zone. Capacity is per-zone and independent of quota -- on ZONE_RESOURCE_POOL_EXHAUSTED, retry in another zone rather than waiting. n2-highmem-32/-64 and n2-standard-16 are offered in us-central1-{a,b,c,f}."
+      zone:
+        description: "GCE zone. Capacity is per-zone and independent of quota -- on ZONE_RESOURCE_POOL_EXHAUSTED, or on `0/N workers` at Verify workers joined, re-dispatch in another zone rather than waiting. Default us-east1-b: every green run to date used it (33087786765, 33074452121, 33006980567, 32992647463), while us-central1-a returned 0/3 on-demand n2-standard-16 workers in run 33174606401 and .ray/cluster-gce.yaml already records its spot capacity as intermittent. n2-highmem-32/-64 and n2-standard-16 are also offered in us-central1-{a,b,c,f}."
         required: false
-        default: "us-central1-a"
+        default: "us-east1-b"
       head_machine:
         description: "Head node machine type (the driver generates the full frame in memory; highmem for distributed runs). 100M: n2-highmem-32 (256 GB); 200M: n2-highmem-64 (512 GB)."
         required: false
@@ -120,6 +120,8 @@ on:
 
 permissions:
   contents: read
+  issues: write # the alert step files/updates the bench-infra failure issue
+  actions: read # the alert step reads its own run's jobs to name the failed step
 
 jobs:
   ray-cluster-bench:
@@ -513,6 +515,28 @@ jobs:
                   --quiet || true
               fi
             done
+
+      # Dispatch-only workflows get no scheduled-failure email and never reach
+      # main-health, so a failure is visible only to whoever rereads the Actions
+      # tab. Run 33174606401 failed and sat unnoticed. Runs LAST so every prior
+      # step has a conclusion to report.
+      - name: File / update the bench-infra alert issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ZONE: ${{ inputs.zone }}
+          HEAD_MACHINE: ${{ inputs.head_machine }}
+          MAX_WORKERS: ${{ inputs.max_workers }}
+        run: |
+          # Name the first failed step so the issue can say capacity vs code
+          # without the reader opening the run.
+          # Non-fatal: the step runs under `bash -e`, so a 403 or a transient
+          # API error here would abort before the issue is filed -- the alert
+          # failing silently is the exact failure it exists to prevent.
+          FAILED="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
+            --jq '[.jobs[].steps[] | select(.conclusion=="failure") | .name] | .[0] // "unknown"' \
+            2>/dev/null || echo "unknown")"
+          bash scripts/ray_bench_alert.sh "${GITHUB_RUN_ID}" "$FAILED"
 
       - name: Post headline to step summary
         if: always()
