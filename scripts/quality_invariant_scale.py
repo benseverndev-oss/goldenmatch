@@ -977,15 +977,28 @@ def _run_phase5_and_collect(
     os.environ.setdefault("GOLDENMATCH_ENABLE_DISTRIBUTED_RAY", "1")
     os.environ["GOLDENMATCH_DISTRIBUTED_PIPELINE"] = "2"
     os.environ["GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE"] = "1"
-    # Cluster the scored pairs with the FAST in-memory WCC (driver-side
-    # scipy.csgraph), NOT the distributed randomized-contraction. The scored edge
-    # set is small (~110M pairs ~1.76 GB at 100M, ~3.5 GB at 200M) and fits the
-    # highmem head, where connected-components is ~30-60s. The previous value "0"
-    # FORCED the distributed WCC (pair_count >= 0), whose ~log(N) gs://-checkpoint
-    # rounds were the multi-hour tail. Only SCORING needs distribution; the WCC
-    # does not. Setting the threshold above the pair count routes to scipy
-    # (build_clusters_distributed: pair_count < threshold -> scipy.csgraph).
-    os.environ.setdefault("GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD", "2000000000")
+    # CLUSTERING ROUTE: left UNSET on purpose, so the shipped memory-aware
+    # decision (`_route_distributed`) is what the bench measures.
+    #
+    # This used to pin the threshold to 2e9 -- "never distribute" -- as a
+    # workaround for the distributed WCC's log(N) gs://-checkpoint tail, back
+    # when the alternative was a fixed 50M-pair threshold that distributed far
+    # below where it was needed. #956 then made the unset default memory-aware:
+    # the same judgement the pin was making by hand, but sized against the actual
+    # head rather than a round number. The pin outlived its cause AND took
+    # precedence over its replacement -- an explicit threshold wins over the
+    # memory-aware route -- so every at-scale run since has measured a route the
+    # product would not choose. A harness that pins the decision under test
+    # cannot report on it.
+    #
+    # Unsetting is behaviour-preserving on the cluster these runs use: 609.4M
+    # pairs * 143 B = 81 GB estimated against ~241 GB available on the
+    # n2-highmem-32 head -> in-memory, the same route the pin forced. It differs
+    # exactly where it should: a smaller head, or a larger rung.
+    #
+    # --clustering-threshold still forces either route for a deliberate A/B, and
+    # the effective value reaches the artifact's score_knobs (None = memory-
+    # aware), so a run states which route produced its number.
     # Many small shuffle partitions so the block-shuffle's wide exploded records
     # don't form giant blocks that backpressure _score onto a single node (the
     # default cpu*4 from the driver gave ~540 MiB blocks -> pinned to 16 CPU,
@@ -1231,12 +1244,13 @@ def _build_parser() -> argparse.ArgumentParser:
                          "to a full one.")
     ap.add_argument("--clustering-threshold", type=int, default=None,
                     help="pair-count threshold above which clustering DISTRIBUTES "
-                         "(GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD). The at-scale "
-                         "default is 2e9, i.e. never distribute -- clustering runs on "
-                         "the driver, measured at 707s of which 45%% is connected "
-                         "components and 35%% is pulling pairs across. Pass 0 to force "
-                         "the distributed WCC and re-measure that trade; it was rejected "
-                         "as a multi-hour tail before the current code existed.")
+                         "(GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD). Unset by "
+                         "default so the shipped memory-aware route decides; this "
+                         "harness no longer pins it. Pass a value only to force one "
+                         "route for an A/B: 0 always distributes, a value above the "
+                         "pair count never does. Measured at 100M: in-memory 3284s / "
+                         "132.0 GB driver peak, distributed 3686s / 50.9 GB, output "
+                         "identical.")
     ap.add_argument("--shuffle-parts", type=int, default=None,
                     help="block-shuffle partition count "
                          "(GOLDENMATCH_DISTRIBUTED_SHUFFLE_PARTS; --distributed default 512).")

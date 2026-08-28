@@ -237,7 +237,7 @@ def test_route_distributed_memory_aware_default(monkeypatch):
 
     monkeypatch.delenv("GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD", raising=False)
 
-    # 200 GB available: 110M pairs (the #956 case, ~10 GB peak) FITS -> in-memory.
+    # 200 GB available: 110M pairs (the #956 case, ~15 GB peak) FITS -> in-memory.
     monkeypatch.setattr(
         psutil, "virtual_memory", lambda: types.SimpleNamespace(available=200 * 1024 ** 3)
     )
@@ -256,6 +256,75 @@ def test_route_distributed_memory_aware_default(monkeypatch):
     )
     assert _route_distributed(avail // _PAIR_PEAK_BYTES + 1) is True
     assert _route_distributed(avail // _PAIR_PEAK_BYTES - 1) is False
+
+
+def test_pair_peak_bytes_matches_the_measurement_it_cites():
+    """The constant is a measured claim, so it gets a test.
+
+    Its comment cites two 100M bench-ray-cluster runs. The sibling routing tests
+    reference the constant symbolically, so they pass for ANY value -- including
+    the 96 the measurement refuted. This pins the number against those runs.
+
+    Denominator note, because getting it wrong is the easy mistake here: the pair
+    count is 609,398,412 (GOLDENMATCH_CLUSTER_DEBUG on run 33074452121, the same
+    count `build_clusters_distributed` routes on), NOT the artifact's tp+fp of
+    226,579,648, which is the predicted-pair count used for quality scoring.
+    """
+    from goldenmatch.distributed.clustering import _PAIR_PEAK_BYTES
+
+    in_memory_peak_mb = 135198.75   # run 33074452121
+    distributed_peak_mb = 52077.27  # run 33087786765
+    pairs = 609_398_412             # cluster_debug, == pairs_ds.count()
+
+    gap_bytes = (in_memory_peak_mb - distributed_peak_mb) * 1024 ** 2
+    assert round(gap_bytes / pairs) == _PAIR_PEAK_BYTES == 143, (
+        f"measurement says {gap_bytes / pairs:.0f} B/pair; constant is "
+        f"{_PAIR_PEAK_BYTES}. Revise UP only -- see the constant's comment."
+    )
+
+    # Guard the denominator itself: tp+fp yields 385, and a future edit that
+    # "re-derives" the constant from the quality metrics lands on that number.
+    tp_plus_fp = 197_623_837 + 28_955_811
+    assert round(gap_bytes / tp_plus_fp) == 385
+    assert _PAIR_PEAK_BYTES != 385, (
+        "385 B/pair comes from tp+fp, the quality-scoring pair count -- not the "
+        "edge set that reaches the router. Use pairs_ds.count()."
+    )
+
+
+def test_route_distributes_the_measured_100m_shape_on_a_64gb_head(monkeypatch):
+    """Regression for an estimator too low to protect the driver.
+
+    This is the case the old 96 B got wrong: at the measured 100M shape a 64 GB
+    head cannot hold the in-memory route's ~81 GB of clustering allocation, but
+    96 B/pair estimated only 54.5 GB and would have kept it on the driver -- an
+    OOM, not a slow run. Written as the measured shape rather than as arithmetic
+    on the constant, so lowering the constant fails this test.
+    """
+    import types
+
+    import psutil
+    from goldenmatch.distributed.clustering import _route_distributed
+
+    monkeypatch.delenv("GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD", raising=False)
+    pairs = 609_398_412  # the measured 100M scored-pair set
+
+    # 60 GB free on a 64 GB head: the measured ~81 GB does not fit -> distribute.
+    monkeypatch.setattr(
+        psutil, "virtual_memory", lambda: types.SimpleNamespace(available=60 * 1024 ** 3)
+    )
+    assert _route_distributed(pairs) is True, (
+        "the measured 100M pair set must NOT be routed in-memory on a 64 GB head"
+    )
+
+    # 241 GB free (the n2-highmem-32 head these runs used): it fits, and three
+    # in-memory runs completing on that head is the evidence that it does.
+    monkeypatch.setattr(
+        psutil, "virtual_memory", lambda: types.SimpleNamespace(available=241 * 1024 ** 3)
+    )
+    assert _route_distributed(pairs) is False, (
+        "on the 256 GB head the in-memory route measurably fits; do not distribute"
+    )
 
 
 def test_route_distributed_env_override_wins(monkeypatch):

@@ -150,20 +150,53 @@ def _wcc_algorithm() -> str:
     return os.environ.get("GOLDENMATCH_DISTRIBUTED_WCC", "two_phase").lower()
 
 
-# Peak driver bytes per scored pair on the in-memory connected-components route: ~24 B for the
-# (id_a, id_b, score) = (int64, int64, f64) triple, times ~4 because the arrow
-# table, the numpy id arrays, the symmetrized edge arrays, and the labels array
-# are all live at once. Deliberately conservative -- routing in-memory must not
-# OOM the driver.
-_PAIR_PEAK_BYTES = 96
+# Peak driver bytes per scored pair on the in-memory connected-components route.
+#
+# MEASURED, not modelled. Two 100M-row bench-ray-cluster runs of the same shape
+# (realistic / moderate / frozen config / 64 partitions / shuffle_parts=512)
+# differing only in the clustering route:
+#
+#   run 33074452121  in-memory (scipy)   peak RSS 132.0 GB   dedupe 3284s
+#   run 33087786765  distributed WCC     peak RSS  50.9 GB   dedupe 3686s
+#
+# The distributed route has no driver collect, so 50.9 GB is the non-clustering
+# baseline and the 81.2 GB gap IS this route's driver cost. Run 33074452121 also
+# carried GOLDENMATCH_CLUSTER_DEBUG=1, so its pair count comes from the same
+# execution: 609,398,412 pairs over 99,417,363 ids. 81.2 GB / 609,398,412 =
+# 143 B/pair.
+#
+# TAKE THE DENOMINATOR FROM THE STAGE BEING SIZED. The tempting number is the
+# artifact's tp+fp (226,579,648) -- that is the PREDICTED-PAIR count used for
+# quality scoring, and it is 2.7x smaller than the edge set that reaches the
+# router. `build_clusters_distributed` routes on `pairs_ds.count()`, and
+# `_build_clusters_cc_fallback` reports that same count. Calibrating on tp+fp
+# yields 385 B/pair -- a number that is wrong by exactly the ratio of the two
+# denominators, and looks plausible while being so.
+#
+# The old 96 was also wrong at its base, not just its factor: it modelled a 24 B
+# (id_a, id_b, score) triple, but the driver pulls
+# `select_columns(["id_a", "id_b"])` -- 16 B, no score. 143 B/pair is ~8.9 live
+# copies of that 16 B, which the arrow concat, the dense-index map, the
+# symmetrized edge arrays and the CSR structure account for.
+#
+# Revise UP, not down, if another shape measures higher: under-estimating OOMs
+# the driver and kills the run, while over-estimating distributes unnecessarily
+# and cost +12.2% dedupe wall here, against a 12% run-to-run spread. `available`
+# at decision time already nets off what the process holds, so this constant
+# needs to cover only the INCREMENTAL clustering allocation -- which is what the
+# inter-route gap measures.
+_PAIR_PEAK_BYTES = 143
 
 
 def _route_distributed(pair_count: int) -> bool:
     """Decide the clustering route: True => distributed WCC, False => in-memory connected-components.
 
     The scored pair set fits one node far more often than the legacy fixed 50M
-    threshold assumed (110M pairs ~= 1.76 GB raw), so the slow distributed WCC
-    was the default well below where it was actually needed (#956).
+    threshold assumed, so the slow distributed WCC was the default well below
+    where it was actually needed (#956). "Fits" is not "is small", though: the
+    measured 100M rung is 609,398,412 pairs and ~81 GB of driver peak. It fits a
+    256 GB head and does not fit a 64 GB one, which is exactly why this routes on
+    measured memory rather than on a pair count.
 
     Precedence:
       * ``force_label_propagation`` (handled by the caller) always distributes.
@@ -229,10 +262,12 @@ def _derive_touched_ids(pairs_ds: Dataset) -> pa.Array:
 
     This used to ``.to_pylist()`` both id columns into a Python ``set`` and
     ``sorted()`` it. The docstring justified that with "gated below the 50M-pair
-    threshold, so the set is bounded" -- but the at-scale QIS config raises
-    GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD to 2e9 deliberately (to dodge
-    the distributed WCC's multi-hour checkpoint tail), which routes ~226M pairs
-    straight here: 4.5x past the bound that safety argument rested on. That is
+    threshold, so the set is bounded" -- but nothing holds the pair count under
+    that bound. The memory-aware route sends whatever fits driver RAM here, and
+    the measured 100M run is 609M pairs: 12x past the bound that safety argument
+    rested on. (The at-scale QIS harness used to pin the threshold to 2e9, which
+    forced the same exposure by hand; the pin is gone, the exposure is not.)
+    That is
     ~452M boxed ints into a 100M-entry set plus a 100M-element Python sort, on
     one core.
 
@@ -469,10 +504,19 @@ def _cluster_debug_on() -> bool:
     This exists because the stage was optimised twice from inference rather than
     measurement. The driver phase went 65 -> 33 -> ~25 min across two fixes, and
     both times the predicted saving was roughly double what arrived, because a
-    single component was treated as the whole cost. The arithmetic that IS solid
-    says connected-components itself is ~70s at 226M edges and `index_in` ~150s,
-    so most of the stage is neither -- but "most" was never attributed to a
-    named step. One table settles that; another round of guessing does not.
+    single component was treated as the whole cost.
+
+    It has since settled the question, and overturned the estimate written here.
+    Run 33074452121 at the 100M rung, 609,398,412 pairs over 99,417,363 ids,
+    707.3s total: connected components 315.9s (44.7%), pull pairs to driver
+    245.5s (34.7%), map ids to dense index 79.8s (11.3%), derive id universe
+    64.7s (9.1%), build output 1.3s (0.2%).
+
+    The estimate this replaced said CC was "~70s at 226M edges", so it was wrong
+    4.5x, and wrong two ways at once: 226M is `tp + fp`, the predicted-pair count
+    used for quality scoring, not the 609M edge set that reaches this stage; and
+    the shipped kernel is `connected_components_undirected`, not scipy, which is
+    what the 70s was benchmarked on. Size this stage from the instrument.
 
     NOTE for whoever turns it on against a Ray cluster: set it in the cluster
     yaml's `docker run_options`, NOT in a shell around `ray submit`. Ray runs the
@@ -507,11 +551,16 @@ def _build_clusters_cc_fallback(
     # `_derive_touched_ids` used to make its OWN full pass first, so the whole
     # edge set crossed to the driver TWICE.
     #
-    # At the 100M rung that is 226M pairs: 2 passes x (int64, int64, float64)
-    # = ~10.8 GB, against ~3.6 GB for one pass of the two columns actually used.
-    # The graph algorithm underneath costs ~70s (measured: scipy connected_
-    # components on 20M edges is 6.4s, and it scales close to linear), so the
-    # driver stage was overwhelmingly data movement rather than clustering.
+    # At the 100M rung that is 609,398,412 pairs: 2 passes x (int64, int64,
+    # float64) = ~27.2 GB, against ~9.1 GB for one pass of the two columns
+    # actually used.
+    #
+    # That saving is real, but the conclusion once drawn from it -- "the driver
+    # stage is overwhelmingly data movement rather than clustering" -- was not.
+    # It rested on a ~70s estimate for the graph algorithm, extrapolated from
+    # scipy on 20M edges. GOLDENMATCH_CLUSTER_DEBUG measured the shipped kernel
+    # at 315.9s of a 707.3s stage (44.7%), against 245.5s (34.7%) for the pull.
+    # Clustering is the largest single item; transport is about a third.
     import time as _time
 
     import numpy as np
