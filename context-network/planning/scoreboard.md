@@ -11,8 +11,8 @@ tool developers reach for by default?* Trend > snapshot.
 |---|---|---|---|
 | GitHub stars | 129 | 129 (▬0) | discovery momentum |
 | Forks | 13 | 13 (▬0) | intent-to-use |
-| PyPI downloads (30d, suite) | 164.8k | 164.8k | actual reach |
-| npm downloads (30d, suite) | 4.8k | 4.8k (▼-634) | actual reach (TS) |
+| PyPI downloads (30d, suite) | — | — | actual reach |
+| npm downloads (30d, suite) | 4.8k | 4.8k (▼-684) | actual reach (TS) |
 | Open issues, non-maintainer | 1 | 1 (▬0) | "someone reached for it"† |
 
 † Raw count — still needs human triage to exclude badge-marketing bots
@@ -23,7 +23,7 @@ GENUINE inbound issue from a stranger**; a bot filing a promo badge does not cou
 
 | Date | Stars | Forks | PyPI 30d | npm 30d | Ext. issues |
 |---|---|---|---|---|---|
-| 2026-08-28 | 129 | 13 | 164.8k | 4.8k | 1 |
+| 2026-08-28 | 129 | 13 | — | 4.8k | 1 |
 | 2026-08-26 | 129 | 13 | — | 5.5k | 1 |
 | 2026-08-25 | 129 | 13 | 166.3k | 5.4k | 1 |
 | 2026-08-24 | 129 | 13 | 164.9k | 5.4k | 1 |
