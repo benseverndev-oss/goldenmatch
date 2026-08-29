@@ -1186,7 +1186,8 @@ jobs:
             pytest scripts/test_run_benchmarks_download.py \
                    scripts/test_benchmark_quarantine.py \
                    scripts/dqbench_adapters/test_leipzig_eval.py \
-                   scripts/test_distributed_test_files.py -q
+                   scripts/test_distributed_test_files.py \
+                   scripts/test_ttfs_probe.py -q
       # The pre-push hook is developer-facing, so nothing else runs it. It
       # shipped gating tag pushes -- diffing origin/main..<older tag sha>
       # BACKWARDS -- which would have blocked the release tag back-fill. This

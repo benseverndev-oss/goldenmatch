@@ -39,7 +39,7 @@ badge snapshot. The "Today" column below is the seed reading.
 | Weekly PyPI + npm downloads (suite + goldenmatch alone) | Actual reach | now **tracked** (npm ~3.5k/30d; PyPI pending an unthrottled fetch) |
 | GitHub stars *velocity* (per week) | Discovery momentum | now **tracked** — 126 stars total (~28/mo since 2026-03) |
 | **Inbound issues / PRs from strangers** | The truest "someone reached for it" | **~0 genuine** — the only two "stranger" signals to date are MCP-marketplace badge bots, not users |
-| Time-to-first-success (clone → correct dedupe) | Zero-config floor, measured | still **unmeasured** (a future scoreboard row) |
+| Time-to-first-success (install → correct dedupe) | Zero-config floor, measured | now **tracked** — `scripts/ttfs_probe.py`, nightly. `pip install goldenmatch` + `goldenmatch dedupe` in a clean container **from PyPI**, scored against a labelled fixture, install and run timed apart. Tracks the last RELEASE, not `main`. (Was "clone → correct dedupe"; a stranger installs, they do not clone.) |
 
 ---
 
