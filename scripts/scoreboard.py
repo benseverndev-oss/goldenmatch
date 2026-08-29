@@ -16,6 +16,7 @@ The weekly `.github/workflows/scoreboard.yml` runs the fetch form and commits.
 Downloads are last-30-day sums (pypistats/npm); a throttled fetch records `null`
 (the prior week carries forward in the trend, never a fake 0).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -62,8 +63,7 @@ def _github_metrics() -> dict:
     # "a stranger reached for it" -- still needs human triage to exclude
     # badge-marketing bots; see the doc's caveat).
     search = _gh(
-        "https://api.github.com/search/issues?q="
-        f"repo:{_REPO}+type:issue+state:open&per_page=100"
+        f"https://api.github.com/search/issues?q=repo:{_REPO}+type:issue+state:open&per_page=100"
     )
     ext = 0
     if isinstance(search, dict):
@@ -90,18 +90,47 @@ def _download_total(pkgs: list[str], fetch) -> int | None:
     return total
 
 
-def _collect() -> dict:
+def _load_ttfs(path: str | None) -> dict:
+    """Read the time-to-first-success row produced by `scripts/ttfs_probe.py`.
+
+    The probe runs as its OWN workflow step and writes JSON, rather than being
+    called inline here: it drives a container for minutes, and a crash in it
+    must not take down the cheap API snapshot alongside it. A missing or
+    unreadable file is `ttfs_ok: None` -- "we did not measure", which the doc
+    renders differently from "we measured and it failed".
+    """
+    import ttfs_probe
+
+    if not path:
+        return ttfs_probe.unavailable_row("probe not run")
+    p = Path(path)
+    if not p.exists():
+        return ttfs_probe.unavailable_row(f"{p.name} not written by the probe step")
+    try:
+        row = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return ttfs_probe.unavailable_row(f"unreadable probe output: {exc}")
+    missing = set(ttfs_probe.ROW_KEYS) - set(row)
+    if missing:
+        return ttfs_probe.unavailable_row(f"probe output missing keys: {sorted(missing)}")
+    return {k: row[k] for k in ttfs_probe.ROW_KEYS}
+
+
+def _collect(ttfs_json: str | None = None) -> dict:
     row: dict = {"date": datetime.date.today().isoformat()}
     row.update(_github_metrics())
     row["pypi_30d"] = _download_total(PYPI_PACKAGES, pypi_last_month)
     row["npm_30d"] = _download_total(NPM_PACKAGES, npm_last_month)
+    row.update(_load_ttfs(ttfs_json))
     return row
 
 
 def _load_rows() -> list[dict]:
     if not _DATA.exists():
         return []
-    return [json.loads(line) for line in _DATA.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return [
+        json.loads(line) for line in _DATA.read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
 
 
 def _append(row: dict, rows: list[dict]) -> list[dict]:
@@ -121,6 +150,46 @@ def _delta(cur, prev) -> str:
     d = cur - prev
     arrow = "▲" if d > 0 else ("▼" if d < 0 else "▬")
     return f"{cur} ({arrow}{'+' if d > 0 else ''}{d})"
+
+
+def _ttfs_cell(row: dict) -> str:
+    """One TTFS reading, rendered so the three states stay distinguishable.
+
+    A failed probe must NOT look like an unmeasured one -- "—" for a bad first
+    run would read as "we didn't check" and quietly retire the signal.
+    """
+    ok = row.get("ttfs_ok")
+    if ok is None:
+        return "—"
+    if ok is False:
+        return f"**FAILED** ({row.get('ttfs_fail') or 'unknown'})"
+    total, f1 = row.get("ttfs_total_s"), row.get("ttfs_f1")
+    if total is None:
+        return "—"
+    return f"{total:.1f}s · F1 {f1:.2f}" if f1 is not None else f"{total:.1f}s"
+
+
+def _ttfs_delta(cur: dict, prev: dict) -> str:
+    """Day-over-day on total seconds, but only between two SUCCESSFUL probes --
+    differencing a success against a failure is a meaningless number."""
+    if cur.get("ttfs_ok") is not True or prev.get("ttfs_ok") is not True:
+        return "—"
+    c, p = cur.get("ttfs_total_s"), prev.get("ttfs_total_s")
+    if c is None or p is None:
+        return "—"
+    d = c - p
+    arrow = "▲" if d > 0 else ("▼" if d < 0 else "▬")
+    return f"{arrow}{'+' if d > 0 else ''}{d:.1f}s"
+
+
+def _ttfs_history_cell(row: dict) -> str:
+    ok = row.get("ttfs_ok")
+    if ok is None:
+        return "—"
+    if ok is False:
+        return f"fail:{row.get('ttfs_fail') or '?'}"
+    total = row.get("ttfs_total_s")
+    return f"{total:.1f}s" if total is not None else "—"
 
 
 def _render(rows: list[dict]) -> str:
@@ -154,26 +223,34 @@ def _render(rows: list[dict]) -> str:
         "",
         "| Signal | Now | WoW | North Star reading |",
         "|---|---|---|---|",
-        f"| GitHub stars | {cur.get('stars','—')} | {_delta(cur.get('stars'), prev.get('stars'))} | discovery momentum |",
-        f"| Forks | {cur.get('forks','—')} | {_delta(cur.get('forks'), prev.get('forks'))} | intent-to-use |",
+        f"| GitHub stars | {cur.get('stars', '—')} | {_delta(cur.get('stars'), prev.get('stars'))} | discovery momentum |",
+        f"| Forks | {cur.get('forks', '—')} | {_delta(cur.get('forks'), prev.get('forks'))} | intent-to-use |",
         f"| PyPI downloads (30d, suite) | {dl(cur.get('pypi_30d'))} | {dl_delta('pypi_30d')} | actual reach |",
         f"| npm downloads (30d, suite) | {dl(cur.get('npm_30d'))} | {dl_delta('npm_30d')} | actual reach (TS) |",
-        f"| Open issues, non-maintainer | {cur.get('open_issues_nonmaintainer','—')} | {_delta(cur.get('open_issues_nonmaintainer'), prev.get('open_issues_nonmaintainer'))} | \"someone reached for it\"† |",
+        f'| Open issues, non-maintainer | {cur.get("open_issues_nonmaintainer", "—")} | {_delta(cur.get("open_issues_nonmaintainer"), prev.get("open_issues_nonmaintainer"))} | "someone reached for it"† |',
+        f"| Time-to-first-success | {_ttfs_cell(cur)} | {_ttfs_delta(cur, prev)} | zero-config friction‡ |",
         "",
         "† Raw count — still needs human triage to exclude badge-marketing bots",
-        "(e.g. MCP-marketplace \"live badge\" issues). The roadmap's true gate is **≥1",
+        '(e.g. MCP-marketplace "live badge" issues). The roadmap\'s true gate is **≥1',
         "GENUINE inbound issue from a stranger**; a bot filing a promo badge does not count.",
+        "",
+        "‡ `pip install goldenmatch && goldenmatch dedupe customers.csv` in a clean",
+        "container, from **PyPI** — so it tracks the last RELEASE, not `main`. Install",
+        "and run are timed separately (`scripts/ttfs_probe.py`); the headline is their",
+        "sum, and F1 is measured against a labelled fixture so a fast wrong answer",
+        "cannot pass. **FAILED** means the probe ran and the product did not; `—` means",
+        "the probe itself did not run. The two are never merged.",
         "",
         "## History",
         "",
-        "| Date | Stars | Forks | PyPI 30d | npm 30d | Ext. issues |",
-        "|---|---|---|---|---|---|",
+        "| Date | Stars | Forks | PyPI 30d | npm 30d | Ext. issues | TTFS |",
+        "|---|---|---|---|---|---|---|",
     ]
     for r in rows[-16:][::-1]:
         lines.append(
-            f"| {r['date']} | {r.get('stars','—')} | {r.get('forks','—')} | "
+            f"| {r['date']} | {r.get('stars', '—')} | {r.get('forks', '—')} | "
             f"{dl(r.get('pypi_30d'))} | {dl(r.get('npm_30d'))} | "
-            f"{r.get('open_issues_nonmaintainer','—')} |"
+            f"{r.get('open_issues_nonmaintainer', '—')} | {_ttfs_history_cell(r)} |"
         )
     lines += [
         "",
@@ -181,8 +258,9 @@ def _render(rows: list[dict]) -> str:
         "",
         "- **Stars velocity + weekly downloads trend UP over a rolling 4-week window.**",
         "- **≥1 genuine inbound issue/PR from a stranger** (not a badge bot).",
-        "- Time-to-first-success (clone → correct dedupe) — *not yet instrumented; a"
-        " future row.*",
+        "- **Time-to-first-success trends DOWN**, and never records a FAILED probe on a",
+        "  released version — a stranger's first run has to work before anything else",
+        "  on this board can matter.",
         "",
         "_Classification: planning/active — regenerated by `scripts/scoreboard.py`._",
     ]
@@ -192,7 +270,14 @@ def _render(rows: list[dict]) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true", help="fail if the doc is stale vs the data")
-    ap.add_argument("--no-fetch", action="store_true", help="rewrite the doc from existing data only")
+    ap.add_argument(
+        "--no-fetch", action="store_true", help="rewrite the doc from existing data only"
+    )
+    ap.add_argument(
+        "--ttfs-json",
+        help="JSON row from scripts/ttfs_probe.py (omitted => ttfs_ok null, "
+        "i.e. 'not measured', never 'failed')",
+    )
     args = ap.parse_args()
 
     if args.check:
@@ -200,13 +285,16 @@ def main() -> int:
         expected = _render(rows)
         actual = _DOC.read_text(encoding="utf-8") if _DOC.exists() else ""
         if expected != actual:
-            print(f"{_DOC} is stale vs {_DATA}. Run: python scripts/scoreboard.py --no-fetch", flush=True)
+            print(
+                f"{_DOC} is stale vs {_DATA}. Run: python scripts/scoreboard.py --no-fetch",
+                flush=True,
+            )
             return 1
         return 0
 
     rows = _load_rows()
     if not args.no_fetch:
-        rows = _append(_collect(), rows)
+        rows = _append(_collect(args.ttfs_json), rows)
     _DOC.write_text(_render(rows), encoding="utf-8")
     print(f"wrote {_DOC} ({len(rows)} snapshots)")
     return 0
