@@ -230,3 +230,23 @@ class TestMatchCmd:
         result = runner.invoke(app, ["match", "--help"])
         assert result.exit_code == 0
         assert "match" in result.output.lower()
+
+
+def test_quiet_still_reports_a_fatal_error():
+    """`--quiet` hides progress, never diagnostics.
+
+    A fatal error used to be printed only `if not quiet`, so
+    `goldenmatch dedupe data.csv --quiet` exited 1 having printed NOTHING. That
+    is how the zero-config polars failure stayed invisible: the nightly
+    time-to-first-success probe ran with `--quiet`, so it recorded that the
+    first run broke without ever capturing why.
+    """
+    from goldenmatch.cli.main import app
+    from typer.testing import CliRunner
+
+    result = CliRunner().invoke(
+        app, ["dedupe", "definitely_not_a_real_file_xyz.csv", "--quiet"]
+    )
+    assert result.exit_code != 0
+    assert result.output.strip(), "a failing --quiet run printed nothing at all"
+    assert "error" in result.output.lower()

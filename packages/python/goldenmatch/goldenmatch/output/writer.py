@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from goldenmatch._polars_lazy import pl
+from goldenmatch._polars_lazy import pl, polars_available
 
 
 def write_output(
@@ -29,14 +29,32 @@ def write_output(
     filename = f"{run_name}_{output_type}.{fmt}"
     path = directory / filename
 
-    is_pl = isinstance(df, pl.DataFrame)
-    if fmt == "parquet" and not is_pl:
-        import pyarrow.parquet as pq
+    # Availability is checked BEFORE any `pl.` access: polars is an optional
+    # extra, and `isinstance(df, pl.DataFrame)` would itself import it (and
+    # raise on a polars-free install) just to ask the question.
+    have_polars = polars_available()
+    is_pl = have_polars and isinstance(df, pl.DataFrame)
 
-        pq.write_table(df, path)
-        return path
     if not is_pl:
-        df = pl.from_arrow(df)  # polars-lane: csv/xlsx byte-formatting (quoting, null spelling, xlsx engine) is the PINNED output contract; parquet already returned arrow-native above
+        if fmt == "parquet":
+            import pyarrow.parquet as pq
+
+            pq.write_table(df, path)
+            return path
+        if not have_polars:
+            if fmt == "csv":
+                # Polars-free install: write the bytes polars would have
+                # written (parity pinned by tests/test_csv_arrow_polars_parity.py)
+                # rather than failing on the missing optional extra.
+                from goldenmatch.output._csv_arrow import write_csv_polars_parity
+
+                return write_csv_polars_parity(df, path)
+            raise RuntimeError(
+                f"{fmt!r} output requires the optional polars extra "
+                f"(pip install 'goldenmatch[polars]'). 'csv' and 'parquet' "
+                f"write without it."
+            )
+        df = pl.from_arrow(df)  # polars-lane: xlsx byte-formatting (engine) is the PINNED output contract; csv/parquet already returned above
 
     if fmt == "csv":
         df.write_csv(path)

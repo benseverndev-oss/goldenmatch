@@ -5925,6 +5925,59 @@ def _rebuild_from_decisions(
     )
 
 
+def _read_autoconfig_input(path: Path):
+    """Read one auto-config input file into a ``pyarrow.Table``, polars-free.
+
+    This is the zero-config FILE front door -- ``goldenmatch dedupe data.csv``
+    lands here before anything else runs. It used to read via ``pl.read_csv`` /
+    ``pl.read_excel`` / ``pl.read_parquet``, which made a plain
+    ``pip install goldenmatch`` (polars is an optional extra, and the rest of
+    the autoconfig stack has been arrow-native since #1754) fail 100% of the
+    time with "Auto-config error: No module named 'polars'".
+
+    Reads through ``read_table_arrow``, whose polars-parity is pinned by
+    ``tests/test_io_arrow_ingest_parity.py``. The legacy polars call passed
+    ``ignore_errors=True`` (null out cells that do not parse to the inferred
+    dtype) and accepted ``.xls``, neither of which the stricter arrow reader
+    does, so a reader failure falls back to polars WHERE IT IS INSTALLED rather
+    than turning a file that used to load into a hard error. With polars absent
+    there is nothing to fall back to and the arrow error is re-raised -- a real
+    reader diagnostic, not a bare ImportError.
+    """
+    from goldenmatch.core.io_arrow import read_table_arrow
+
+    suffix = path.suffix.lower()
+    try:
+        if suffix == ".parquet" or suffix == ".xlsx":
+            return read_table_arrow(path)
+        if suffix == ".xls":
+            raise ValueError("Unsupported file format: '.xls'")
+        return read_table_arrow(path, encoding="utf8-lossy")
+    except Exception as arrow_exc:  # noqa: BLE001 -- any reader failure retries on polars
+        try:
+            if suffix in (".xlsx", ".xls"):
+                fallback = pl.read_excel(path, engine="openpyxl")
+            elif suffix == ".parquet":
+                fallback = pl.read_parquet(path)
+            else:
+                fallback = pl.read_csv(
+                    path, encoding="utf8-lossy", infer_schema_length=10000, ignore_errors=True
+                )
+        except ImportError:
+            # No polars to fall back to: surface the arrow reader's own error.
+            raise arrow_exc from None
+        logger.warning(
+            "arrow ingest failed for %s (%s); fell back to the polars reader. "
+            "Auto-config still ran, but this file will NOT load on a "
+            "polars-free install.",
+            path,
+            arrow_exc,
+        )
+        # Downstream is arrow-native; hand it a table so the fallback does not
+        # drag a polars frame through the rest of auto-config.
+        return fallback.to_arrow()
+
+
 def auto_configure(files: list[tuple[str, str]]) -> GoldenMatchConfig:
     """Auto-generate a GoldenMatchConfig from input files.
 
@@ -5934,19 +5987,18 @@ def auto_configure(files: list[tuple[str, str]]) -> GoldenMatchConfig:
     Returns:
         A fully populated GoldenMatchConfig ready for pipeline execution.
     """
-    # Load and combine files
-    dfs = []
-    for path, _source_name in files:
-        p = Path(path)
-        if p.suffix.lower() in (".xlsx", ".xls"):
-            df = pl.read_excel(p, engine="openpyxl")
-        elif p.suffix.lower() == ".parquet":
-            df = pl.read_parquet(p)
-        else:
-            df = pl.read_csv(p, encoding="utf8-lossy", infer_schema_length=10000, ignore_errors=True)
-        dfs.append(df)
+    import pyarrow as pa
 
-    combined = pl.concat(dfs, how="diagonal") if len(dfs) > 1 else dfs[0]
+    tables = [_read_autoconfig_input(Path(path)) for path, _source_name in files]
+
+    # polars' ``how="diagonal"`` unions the column sets and null-fills what a
+    # given file lacks; ``promote_options="permissive"`` is arrow's equivalent
+    # (and the spelling already used for the same job at pipeline.py:6108).
+    combined = (
+        pa.concat_tables(tables, promote_options="permissive")
+        if len(tables) > 1
+        else tables[0]
+    )
     return auto_configure_df(combined)
 
 

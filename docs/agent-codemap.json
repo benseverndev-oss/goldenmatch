@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 481,
+      "module_count": 482,
       "modules": [
         {
           "module": "goldenmatch",
@@ -162,7 +162,8 @@
           "file": "packages/python/goldenmatch/goldenmatch/_polars_lazy.py",
           "purpose": "Lazy Polars proxy -- W0 of the Polars eviction (spec:",
           "defines": [
-            "_LazyPolars"
+            "_LazyPolars",
+            "polars_available"
           ]
         },
         {
@@ -1952,6 +1953,7 @@
             "_project_pass_pairs",
             "_promote_facility_fullname_ne",
             "_quality_aware_blocking_enabled",
+            "_read_autoconfig_input",
             "_rebuild_from_decisions",
             "_require_sketch_column",
             "_resolve_effective_exclusion_overrides",
@@ -2009,6 +2011,7 @@
             "goldenmatch.core.embedder",
             "goldenmatch.core.execution_plan",
             "goldenmatch.core.frame",
+            "goldenmatch.core.io_arrow",
             "goldenmatch.core.perceptual_autoconfig",
             "goldenmatch.core.probabilistic",
             "goldenmatch.core.profile_emitter",
@@ -6924,6 +6927,16 @@
           "file": "packages/python/goldenmatch/goldenmatch/output/__init__.py"
         },
         {
+          "module": "goldenmatch.output._csv_arrow",
+          "file": "packages/python/goldenmatch/goldenmatch/output/_csv_arrow.py",
+          "purpose": "Polars-parity CSV writer for a ``pyarrow.Table`` -- the polars-free fallback.",
+          "defines": [
+            "_quote",
+            "_render",
+            "write_csv_polars_parity"
+          ]
+        },
+        {
           "module": "goldenmatch.output.report",
           "file": "packages/python/goldenmatch/goldenmatch/output/report.py",
           "purpose": "Report generators for GoldenMatch runs.",
@@ -6940,7 +6953,8 @@
             "write_output"
           ],
           "imports": [
-            "goldenmatch._polars_lazy"
+            "goldenmatch._polars_lazy",
+            "goldenmatch.output._csv_arrow"
           ]
         },
         {

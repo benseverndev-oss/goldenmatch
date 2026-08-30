@@ -194,10 +194,27 @@ def test_frame_lane_allows_throughput_plan():
     assert _eligible(cfg) is True
 
 
-def test_frame_lane_declines_preflight():
+def test_frame_lane_allows_preflight():
+    """`_preflight_report` no longer declines the lane.
+
+    `auto_configure_df` always sets it, so this decline pinned every ZERO-CONFIG
+    run to the classic polars lane -- the one path that, on a plain
+    `pip install goldenmatch`, has no polars to be pinned to. It dated from when
+    postflight's signals read a polars frame directly; `_signal_blocking_recall`
+    and `_signal_block_size_percentiles` both route through `to_frame` now.
+
+    Removed after measuring both lanes output-identical across five dataset
+    shapes (`scripts/diff_zeroconfig_lanes.py`): clusters/golden/dupes/unique
+    byte-for-byte, lineage identical up to pair order.
+
+    The separate `_preflight_report` decline on the FUSED match route is
+    unrelated and still stands (`pipeline._try_match_fused`): postflight can
+    raise the effective threshold from a score histogram the fused kernel never
+    materializes.
+    """
     cfg = _base_cfg()
     object.__setattr__(cfg, "_preflight_report", {"x": 1})
-    assert _eligible(cfg) is False
+    assert _eligible(cfg) is True
 
 
 def test_frame_lane_allows_probabilistic_mk():
