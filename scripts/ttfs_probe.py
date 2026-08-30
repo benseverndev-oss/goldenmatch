@@ -51,6 +51,10 @@ _FLOOR = 0.90
 # workflow that burns its whole budget and lands no data at all.
 _INSTALL_TIMEOUT_S = 900
 _RUN_TIMEOUT_S = 600
+# A traceback tail has to fit. The old 400 was set when the note was a
+# curiosity; it is the only diagnostic the nightly keeps, so size it for the
+# job -- an unreadable note is why a FAILED row sat unexplained.
+_NOTE_CHARS = 1500
 
 # Every row shape carries every key -- the scoreboard renders them positionally,
 # so a missing key would KeyError the nightly rather than degrade to "—".
@@ -159,6 +163,40 @@ def prf1(predicted: set[tuple[int, int]], truth: set[tuple[int, int]]) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def diagnostic_note(
+    *,
+    phase: str | None,
+    install_log: str,
+    run_log: str,
+    run_rc: int | None = None,
+    fallback: str = "",
+) -> str | None:
+    """Pick the log that explains THIS failure and return its tail.
+
+    The probe used to record ``(stdout + stderr)[-400:]`` of the whole
+    container. Two things made that useless. The halves are concatenated, not
+    interleaved, so the tail was always the END OF STDERR -- and pip writes its
+    "a new release of pip is available" notice there, after everything. And the
+    dedupe ran under ``--quiet``, which suppressed the error message entirely.
+    So a real failure ("Auto-config error: No module named 'polars'") was
+    recorded as a pip upgrade notice, and the scoreboard could report THAT the
+    first run broke but never WHY.
+
+    Now each phase writes its own log inside the container and this picks the
+    one that failed: install failures explain themselves from pip's log, run
+    failures from the CLI's. Prefixed with the exit code when there is one,
+    because "exited 1 silently" is itself the finding.
+    """
+    chosen = install_log if phase == "install" else run_log
+    text = (chosen or "").strip()
+    if not text:
+        # An empty log IS informative -- say so rather than recording nothing.
+        text = fallback.strip() or f"{phase or 'run'} produced no output"
+    if run_rc is not None and phase != "install":
+        text = f"[exit {run_rc}] {text}"
+    return text[-_NOTE_CHARS:] or None
+
+
 def build_row(
     *,
     install_s: float | None,
@@ -256,15 +294,27 @@ def probe(*, image: str = _IMAGE, floor: float = _FLOOR, keep: bool = False) -> 
         # exercised without a Docker daemon. Fewer unverifiable dependencies on
         # the branch that is hardest to test.
         now = "python -c 'import time; print(time.time())'"
+        # Each phase writes its OWN log. Without that split the host can only
+        # see one concatenated blob whose tail is pip's stderr, which is how a
+        # broken first run got recorded as a pip upgrade notice.
+        #
+        # The dedupe deliberately does NOT pass --quiet: this probe exists to
+        # find out why the first run fails, and --quiet suppresses the very
+        # message that says so. Its output goes to a file, so the extra
+        # verbosity costs nothing.
         script = (
             "set -e; "
             f"S=$({now}); "
-            "pip install --quiet --no-cache-dir goldenmatch; "
+            "pip install --quiet --no-cache-dir goldenmatch > /work/install_log 2>&1; "
             'python -c "import time,sys; '
             "open('/work/install_s','w').write('%.3f' % (time.time()-float(sys.argv[1])))\" \"$S\"; "
-            "cd /work && "
+            "cd /work; "
+            "set +e; "
             "goldenmatch dedupe customers.csv --output-clusters "
-            "--output-dir /work/out --run-name ttfs --quiet"
+            "--output-dir /work/out --run-name ttfs > /work/run_log 2>&1; "
+            # Keep the run's own status as the container's status -- writing
+            # run_rc must not turn a failed dedupe into a successful script.
+            "RC=$?; echo $RC > /work/run_rc; exit $RC"
         )
         cmd = [
             "docker",
@@ -283,6 +333,13 @@ def probe(*, image: str = _IMAGE, floor: float = _FLOOR, keep: bool = False) -> 
         ]
         elapsed, code, output = _timed(cmd, _INSTALL_TIMEOUT_S + _RUN_TIMEOUT_S)
 
+        def _read(name: str) -> str:
+            f = workdir / name
+            try:
+                return f.read_text(encoding="utf-8", errors="replace") if f.exists() else ""
+            except OSError:
+                return ""
+
         install_file = workdir / "install_s"
         install_s = None
         if install_file.exists():
@@ -290,6 +347,16 @@ def probe(*, image: str = _IMAGE, floor: float = _FLOOR, keep: bool = False) -> 
                 install_s = round(float(install_file.read_text().strip()), 3)
             except ValueError:
                 install_s = None
+
+        install_log = _read("install_log")
+        run_log = _read("run_log")
+        run_rc = None
+        rc_text = _read("run_rc").strip()
+        if rc_text:
+            try:
+                run_rc = int(rc_text)
+            except ValueError:
+                run_rc = None
 
         if code != 0:
             # If the install duration never landed, pip is what failed.
@@ -305,7 +372,15 @@ def probe(*, image: str = _IMAGE, floor: float = _FLOOR, keep: bool = False) -> 
                 f1=None,
                 floor=floor,
                 fail=phase,
-                note=output.strip()[-400:] or None,
+                note=diagnostic_note(
+                    phase=phase,
+                    install_log=install_log,
+                    run_log=run_log,
+                    run_rc=run_rc if phase == "run" else None,
+                    # `output` is the docker client's own stream: it explains a
+                    # daemon-level failure, where neither in-container log exists.
+                    fallback=output,
+                ),
             )
 
         run_s = round(elapsed - install_s, 3) if install_s is not None else None
@@ -318,7 +393,13 @@ def probe(*, image: str = _IMAGE, floor: float = _FLOOR, keep: bool = False) -> 
                 f1=None,
                 floor=floor,
                 fail="run",
-                note="run exited 0 but wrote no clusters file",
+                note=diagnostic_note(
+                    phase="run",
+                    install_log=install_log,
+                    run_log=run_log,
+                    run_rc=run_rc,
+                    fallback="run exited 0 but wrote no clusters file",
+                ),
             )
 
         rows = parse_clusters_csv(clusters.read_text(encoding="utf-8"))
