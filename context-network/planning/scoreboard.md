@@ -5,14 +5,14 @@
 [north-star-roadmap.md](./north-star-roadmap.md): *is GoldenMatch becoming the
 tool developers reach for by default?* Trend > snapshot.
 
-**Latest: 2026-08-29** (vs previous snapshot)
+**Latest: 2026-08-30** (vs previous snapshot)
 
 | Signal | Now | WoW | North Star reading |
 |---|---|---|---|
 | GitHub stars | 129 | 129 (▬0) | discovery momentum |
 | Forks | 13 | 13 (▬0) | intent-to-use |
-| PyPI downloads (30d, suite) | 159.0k | 159.0k | actual reach |
-| npm downloads (30d, suite) | 4.8k | 4.8k (▼-10) | actual reach (TS) |
+| PyPI downloads (30d, suite) | 151.9k | 151.9k (▼-7081) | actual reach |
+| npm downloads (30d, suite) | 4.7k | 4.7k (▼-127) | actual reach (TS) |
 | Open issues, non-maintainer | 1 | 1 (▬0) | "someone reached for it"† |
 | Time-to-first-success | **FAILED** (run) | — | zero-config friction‡ |
 
@@ -31,6 +31,7 @@ the probe itself did not run. The two are never merged.
 
 | Date | Stars | Forks | PyPI 30d | npm 30d | Ext. issues | TTFS |
 |---|---|---|---|---|---|---|
+| 2026-08-30 | 129 | 13 | 151.9k | 4.7k | 1 | fail:run |
 | 2026-08-29 | 129 | 13 | 159.0k | 4.8k | 1 | fail:run |
 | 2026-08-28 | 129 | 13 | — | 4.8k | 1 | — |
 | 2026-08-26 | 129 | 13 | — | 5.5k | 1 | — |
@@ -46,7 +47,6 @@ the probe itself did not run. The two are never merged.
 | 2026-08-16 | 128 | 14 | 139.2k | 4.4k | 1 | — |
 | 2026-08-15 | 128 | 13 | 137.0k | 4.9k | 1 | — |
 | 2026-08-14 | 128 | 13 | — | 4.9k | 1 | — |
-| 2026-08-13 | 128 | 13 | — | 4.9k | 1 | — |
 
 ## The gates (from the roadmap)
 
