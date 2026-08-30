@@ -196,3 +196,80 @@ def test_every_row_shape_carries_the_same_keys():
     bad = mod.build_row(install_s=1.0, run_s=None, f1=None, floor=0.9, fail="install")
     none = mod.unavailable_row("no docker")
     assert set(ok) == set(bad) == set(none) == set(mod.ROW_KEYS)
+
+
+# ---------------------------------------------------------------------------
+# diagnostic_note -- the probe's only window into WHY a first run failed
+# ---------------------------------------------------------------------------
+
+
+def test_note_takes_the_run_log_for_a_run_failure():
+    """The regression this function exists for.
+
+    The 2026-08-29 nightly recorded `ttfs_fail: "run"` with a note containing
+    only pip's "A new release of pip is available" notice -- the real cause
+    ("Auto-config error: No module named 'polars'") never reached the board,
+    because the note was the tail of stdout+stderr and pip's stderr came last.
+    """
+    note = mod.diagnostic_note(
+        phase="run",
+        install_log="Successfully installed goldenmatch-3.16.0\n"
+        "[notice] A new release of pip is available: 25.0.1 -> 26.2.1",
+        run_log="No config file - auto-detecting column types...\n"
+        "Auto-config error: No module named 'polars'",
+        run_rc=1,
+    )
+    assert "No module named 'polars'" in note
+    assert "new release of pip" not in note
+
+
+def test_note_takes_the_install_log_for_an_install_failure():
+    note = mod.diagnostic_note(
+        phase="install",
+        install_log="ERROR: Could not find a version that satisfies goldenmatch",
+        run_log="",
+    )
+    assert "Could not find a version" in note
+
+
+def test_note_carries_the_exit_code_for_a_run_failure():
+    """"Exited 1 and said nothing" is itself the finding, so the code is kept
+    even when the log is empty."""
+    note = mod.diagnostic_note(phase="run", install_log="", run_log="", run_rc=1)
+    assert note.startswith("[exit 1]")
+
+
+def test_note_on_an_empty_run_log_says_so_rather_than_recording_nothing():
+    note = mod.diagnostic_note(phase="run", install_log="x", run_log="", run_rc=1)
+    assert note is not None
+    assert "no output" in note
+
+
+def test_note_falls_back_to_the_docker_stream_when_no_container_log_exists():
+    """A daemon-level failure writes neither in-container log; the docker
+    client's own output is then the only evidence there is."""
+    note = mod.diagnostic_note(
+        phase="install",
+        install_log="",
+        run_log="",
+        fallback="docker: Error response from daemon: no such image",
+    )
+    assert "no such image" in note
+
+
+def test_note_is_tail_truncated_to_the_budget():
+    note = mod.diagnostic_note(
+        phase="run", install_log="", run_log="A" * 5000 + "THE_ACTUAL_ERROR", run_rc=2
+    )
+    assert len(note) <= mod._NOTE_CHARS
+    # Truncation keeps the END, where the error is.
+    assert note.endswith("THE_ACTUAL_ERROR")
+
+
+def test_note_install_phase_omits_the_run_exit_code():
+    """An install failure never reached the run, so there is no run status to
+    report -- labelling one would be inventing a fact."""
+    note = mod.diagnostic_note(
+        phase="install", install_log="pip exploded", run_log="", run_rc=None
+    )
+    assert not note.startswith("[exit")
