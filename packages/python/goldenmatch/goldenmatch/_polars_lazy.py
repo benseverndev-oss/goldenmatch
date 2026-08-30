@@ -25,9 +25,11 @@ the goldenflow/goldencheck template, which exposes ``Any``).
 """
 from __future__ import annotations
 
+import sys
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
-__all__ = ["pl"]
+__all__ = ["pl", "polars_available"]
 
 
 class _LazyPolars:
@@ -53,3 +55,27 @@ if TYPE_CHECKING:
     import polars as pl
 else:
     pl = _LazyPolars()
+
+
+@lru_cache(maxsize=1)
+def polars_available() -> bool:
+    """Whether ``import polars`` would succeed -- WITHOUT importing it.
+
+    Polars is an optional extra (``pip install goldenmatch[polars]``), so a
+    plain ``pip install goldenmatch`` has none. Any site that HAS a working
+    arrow path and only reaches for polars to preserve a formatting contract
+    needs to branch on availability up front: touching ``pl.anything`` to find
+    out is what turned "no polars installed" into a crash on the zero-config
+    CLI path.
+
+    Cached -- the answer cannot change within a process.
+    """
+    mod = sys.modules.get("polars")
+    if mod is not None:
+        return True
+    try:
+        from importlib.util import find_spec
+
+        return find_spec("polars") is not None
+    except Exception:  # noqa: BLE001 -- a blocked/broken polars is an absent one
+        return False

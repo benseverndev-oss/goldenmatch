@@ -176,8 +176,10 @@ def dedupe_cmd(
         try:
             cfg = load_config(config)
         except (FileNotFoundError, ValueError) as exc:
-            if not quiet:
-                console.print(f"[red]Config error:[/red] {exc}")
+            # Fatal errors go to stderr REGARDLESS of --quiet: the flag hides
+            # progress, and a command that exits non-zero in silence cannot be
+            # diagnosed by whoever ran it.
+            err_console.print(f"[red]Config error:[/red] {exc}")
             raise typer.Exit(code=1)
     else:
         # Try project settings first
@@ -208,8 +210,7 @@ def dedupe_cmd(
                 if not quiet:
                     console.print("[green]Auto-config complete. Launching TUI for review...[/green]")
             except Exception as exc:
-                if not quiet:
-                    console.print(f"[red]Auto-config error:[/red] {exc}")
+                err_console.print(f"[red]Auto-config error:[/red] {exc}")
                 raise typer.Exit(code=1)
 
             # Override model if specified
@@ -387,8 +388,7 @@ def dedupe_cmd(
     except Exception as exc:
         if _excl_token is not None:
             _RUNTIME_EXCLUDE_COLUMNS.reset(_excl_token)
-        if not quiet:
-            console.print(f"[red]Runtime error:[/red] {exc}")
+        err_console.print(f"[red]Runtime error:[/red] {exc}")
         raise typer.Exit(code=3)
     if _excl_token is not None:
         _RUNTIME_EXCLUDE_COLUMNS.reset(_excl_token)

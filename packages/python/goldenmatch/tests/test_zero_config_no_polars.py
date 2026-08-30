@@ -275,3 +275,149 @@ def test_zero_config_dedupe_df_is_polars_free():
     )
     assert proc.returncode == 0, f"stdout={proc.stdout}\nstderr={proc.stderr[-2500:]}"
     assert "ZERO-CONFIG POLARS-FREE OK" in proc.stdout
+
+
+# -- Tier 4: the FILE front-door (what `pip install goldenmatch` actually runs) --
+
+
+def test_auto_configure_files_is_polars_free(tmp_path):
+    """SUBPROCESS, polars import BLOCKED: `auto_configure([(csv, name)])` runs to
+    completion WITHOUT importing polars.
+
+    Tier 3 above proves the *DataFrame* front-door, and only when the native
+    kernel is built. Neither holds for a plain ``pip install goldenmatch``: there
+    is no native wheel and no polars (it is an optional extra), and the first
+    thing the CLI does with a file is ``auto_configure(files)``. That ingest was
+    the last polars island on the zero-config path -- ``pl.read_csv`` /
+    ``pl.read_excel`` / ``pl.read_parquet`` + ``pl.concat`` -- so
+    ``goldenmatch dedupe customers.csv`` exited 1 with "Auto-config error: No
+    module named 'polars'" for every user who installed the documented way.
+
+    Deliberately runs ``GOLDENMATCH_NATIVE=0``: the pure-Python backend is what a
+    wheel-only install gets, so the gate has to hold without the kernel.
+    """
+    csv = tmp_path / "customers.csv"
+    rows = ["first,last,email,zip"]
+    for i in range(120):
+        f = ["ann", "ann", "bob", "bobby", "cara", "dan"][i % 6]
+        last = ["smith", "smith", "jones", "jones", "lee", "poe"][i % 6]
+        rows.append(f"{f},{last},{f}.{last}@x.com,{10000 + (i % 30)}")
+    csv.write_text("\n".join(rows), encoding="utf-8")
+
+    body = f"""
+        import sys
+        from goldenmatch.core.autoconfig import auto_configure
+        cfg = auto_configure([({str(csv)!r}, "customers")])
+        assert cfg is not None
+        assert cfg.get_matchkeys(), "auto_configure produced no matchkeys"
+        assert "polars" not in sys.modules, "polars leaked on the file front-door"
+        print("FILE FRONT-DOOR POLARS-FREE OK")
+    """
+    proc = _run_subprocess(
+        body,
+        {
+            "GOLDENMATCH_FRAME": "arrow",
+            "GOLDENMATCH_NATIVE": "0",
+            "GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE": "1",
+            "POLARS_SKIP_CPU_CHECK": "1",
+            "GOLDENMATCH_AUTOCONFIG_MEMORY": "0",
+        },
+    )
+    assert proc.returncode == 0, f"stdout={proc.stdout}\nstderr={proc.stderr[-2500:]}"
+    assert "FILE FRONT-DOOR POLARS-FREE OK" in proc.stdout
+
+
+def test_auto_configure_files_matches_polars_ingest(tmp_path):
+    """The Arrow ingest must not change what auto-config DECIDES.
+
+    Config-equivalence (matchkeys + blocking), not row-identity: the same CSV
+    read through the arrow reader and through the legacy polars reader must
+    produce the same auto-config decisions. Guards the swap in
+    ``_read_autoconfig_input``.
+    """
+    import polars as pl
+    from goldenmatch.core.autoconfig import auto_configure_df
+    from goldenmatch.core.io_arrow import read_table_arrow
+
+    csv = tmp_path / "c.csv"
+    rows = ["first,last,email,zip"]
+    for i in range(200):
+        f = ["ann", "bob", "cara", "dan", "eve"][i % 5]
+        last = ["smith", "jones", "lee", "poe", "ray"][(i // 5) % 5]
+        rows.append(f"{f},{last},{f}.{last}@x.com,{10000 + (i % 40)}")
+    csv.write_text("\n".join(rows), encoding="utf-8")
+
+    def _summary(cfg):
+        mks = sorted(
+            (mk.type, tuple(sorted(fl.field for fl in (mk.fields or []) if fl.field)))
+            for mk in cfg.get_matchkeys()
+        )
+        blk = None
+        if cfg.blocking:
+            blk = (
+                cfg.blocking.strategy,
+                tuple(sorted(k.fields[0] if k.fields else "?" for k in (cfg.blocking.keys or []))),
+            )
+        return (mks, blk)
+
+    cfg_arrow = auto_configure_df(read_table_arrow(csv, encoding="utf8-lossy"), _skip_finalize=True)
+    cfg_polars = auto_configure_df(
+        pl.read_csv(csv, encoding="utf8-lossy", infer_schema_length=10000, ignore_errors=True),
+        _skip_finalize=True,
+    )
+    assert _summary(cfg_arrow) == _summary(cfg_polars)
+
+
+# -- Tier 5: the whole CLI, polars-free (what the README tells people to run) --
+
+
+def test_cli_zero_config_dedupe_is_polars_free(tmp_path):
+    """SUBPROCESS, polars import BLOCKED: the documented first command --
+    ``goldenmatch dedupe <csv> --output-clusters`` -- runs to completion,
+    exits 0 and WRITES its output, with no polars and no native kernel.
+
+    This is the end-to-end version of the tiers above and the one that matches
+    what a reader of the README actually types after ``pip install goldenmatch``.
+    Three separate leaks sat on it: the ``auto_configure`` file ingest, the
+    ``_preflight_report`` decline that pinned every zero-config run to the
+    classic polars lane, and the csv writer.
+    """
+    csv = tmp_path / "customers.csv"
+    rows = ["first,last,email,zip"]
+    for i in range(150):
+        f = ["ann", "ann", "bob", "bobby", "cara", "dan"][i % 6]
+        last = ["smith", "smith", "jones", "jones", "lee", "poe"][i % 6]
+        rows.append(f"{f},{last},{f}.{last}@x.com,{10000 + (i % 30)}")
+    csv.write_text("\n".join(rows), encoding="utf-8")
+    outdir = tmp_path / "out"
+
+    body = f"""
+        import sys
+        from typer.testing import CliRunner
+        from goldenmatch.cli.main import app
+
+        result = CliRunner().invoke(
+            app,
+            ["dedupe", {str(csv)!r}, "--output-clusters",
+             "--output-dir", {str(outdir)!r}, "--run-name", "tw"],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.output[-3000:]
+        assert "polars" not in sys.modules, "polars leaked on the CLI zero-config path"
+        import os
+        written = sorted(os.listdir({str(outdir)!r}))
+        assert any(f.endswith("_clusters.csv") for f in written), written
+        print("CLI ZERO-CONFIG POLARS-FREE OK")
+    """
+    proc = _run_subprocess(
+        body,
+        {
+            "GOLDENMATCH_FRAME": "arrow",
+            "GOLDENMATCH_NATIVE": "0",
+            "GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE": "1",
+            "POLARS_SKIP_CPU_CHECK": "1",
+            "GOLDENMATCH_AUTOCONFIG_MEMORY": "0",
+        },
+    )
+    assert proc.returncode == 0, f"stdout={proc.stdout}\nstderr={proc.stderr[-3000:]}"
+    assert "CLI ZERO-CONFIG POLARS-FREE OK" in proc.stdout

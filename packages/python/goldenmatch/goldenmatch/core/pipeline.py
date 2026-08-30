@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from goldenmatch.distributed.record_store import PreparedRecordStore
 
 from goldenmatch._polars_lazy import pl
+from goldenmatch._polars_lazy import polars_available as _polars_available
 from goldenmatch.config.schemas import GoldenMatchConfig, GoldenRulesConfig
 from goldenmatch.core.autofix import auto_fix_dataframe
 from goldenmatch.core.bench import record_metric, record_metrics, stage
@@ -5080,10 +5081,17 @@ def _run_dedupe_pipeline(
                     "__oversized__": cinfo["oversized"],
                 })
         if cluster_rows:
-            # Built from Python rows -- lane-free; polars construction keeps
-            # the writer's csv/xlsx formatting contract identical either way.
-            clusters_df = pl.DataFrame(cluster_rows)
-            write_output(clusters_df, directory, run_name, "clusters", fmt)
+            # Built from Python rows -- lane-free. Polars construction keeps the
+            # writer's csv/xlsx formatting contract identical when polars is
+            # there; without it (the optional-extra install) build the same rows
+            # as a pa.Table so `--output-clusters` still writes.
+            if _polars_available():
+                clusters_out: Any = pl.DataFrame(cluster_rows)
+            else:
+                import pyarrow as _pa_cl
+
+                clusters_out = _pa_cl.Table.from_pylist(cluster_rows)
+            write_output(clusters_out, directory, run_name, "clusters", fmt)
 
     if output_dupes and len(dupes_df) > 0:
         write_output(dupes_df, directory, run_name, "dupes", fmt)
@@ -6372,8 +6380,21 @@ def _frame_lane_eligible(
     """
     # W-7: throughput sketch tier no longer declines -- its polars-local
     # block bridges the table once at entry (TRANSITIONAL).
-    if getattr(config, "_preflight_report", None) is not None:
-        return False
+    #
+    # `_preflight_report` USED to decline here. `auto_configure_df` always sets
+    # it, so that single line pinned every ZERO-CONFIG run to the classic polars
+    # lane -- the one path that, on a plain `pip install goldenmatch`, has no
+    # polars to be pinned to. The decline dated from when postflight's signals
+    # read a polars frame directly; `_signal_blocking_recall` and
+    # `_signal_block_size_percentiles` both route through `to_frame` now, so it
+    # outlived its cause. Removed after measuring both lanes output-identical
+    # (clusters/golden/dupes/unique byte-for-byte, lineage identical up to pair
+    # order) across five dataset shapes: `scripts/diff_zeroconfig_lanes.py`.
+    #
+    # NOTE the separate `_preflight_report` decline on the FUSED match route
+    # (`_try_match_fused`) is unrelated and still stands: postflight can raise
+    # the effective threshold from a histogram the fused kernel never
+    # materializes.
     # W-4: memory + identity no longer decline -- both bridge (pa->pl) at
     # their entries (TRANSITIONAL; deep ports are D6 prerequisites).
     # W-5: blocking auto-suggest no longer declines -- _run_auto_suggest
