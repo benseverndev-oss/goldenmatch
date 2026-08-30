@@ -13,18 +13,33 @@ build-backend = "maturin"
 
 [project]
 name = "goldenmatch-native"
-version = "0.2.0"
+version = "0.2.1"
 description = "Optional native (Rust/PyO3) acceleration kernels for goldenmatch"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Ben Severn", email = "ben@bensevern.dev" }]
+# Shipped 16 releases with NO keywords at all, so it was reachable only by
+# exact name. It is an optional accelerator rather than a thing to adopt on its
+# own, so the terms lead with what it accelerates (and with `goldenmatch`
+# itself, which is how someone who already has the base package looks for it).
+keywords = [
+    "goldenmatch", "golden-suite", "entity-resolution", "deduplication",
+    "record-linkage", "fuzzy-matching", "jaro-winkler", "levenshtein",
+    "rust", "pyo3", "native-extension", "performance",
+]
 classifiers = [
+    "Development Status :: 4 - Beta",
     "Programming Language :: Rust",
     "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "License :: OSI Approved :: MIT License",
     "Intended Audience :: Developers",
+    "Topic :: Database",
     "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Information Analysis",
 ]
 
 [project.urls]

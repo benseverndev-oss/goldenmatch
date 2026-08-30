@@ -4,13 +4,22 @@ build-backend = "hatchling.build"
 
 [project]
 name = "goldensuite-mcp"
-version = "0.6.0"
+version = "0.6.1"
 description = "One MCP server exposing every Golden Suite tool — goldenmatch, goldencheck, goldenflow, goldenpipe, infermap"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 license = { text = "MIT" }
 authors = [{ name = "Ben Severn", email = "benzsevern@gmail.com" }]
-keywords = ["mcp", "data-quality", "entity-resolution", "golden-suite", "claude"]
+# The suite's MCP entry point, and the thinnest metadata in it until now (5
+# keywords, 4 URLs). Someone looking for this searches for the PROTOCOL and
+# the client ("mcp server", "model context protocol", "claude desktop") at
+# least as often as for the data terms, so both vocabularies are carried.
+keywords = [
+    "mcp", "mcp-server", "model-context-protocol", "claude", "claude-desktop",
+    "ai-agents", "llm-tools", "agent-tools",
+    "entity-resolution", "deduplication", "record-linkage", "data-quality",
+    "data-cleaning", "schema-inference", "golden-suite",
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -44,8 +53,14 @@ goldensuite-mcp = "goldensuite_mcp.cli:main"
 [project.urls]
 Homepage = "https://github.com/benseverndev-oss/goldenmatch"
 Repository = "https://github.com/benseverndev-oss/goldenmatch"
-Documentation = "https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/python/goldensuite-mcp#readme"
+Documentation = "https://docs.bensevern.dev/docs/goldensuite-mcp/overview"
+# Agent-facing entry point, matching the sibling packages. PyPI renders these
+# URLs and they are scraped, so this is the discovery path for a tool that
+# never clones the repo.
+"AI agents (llms.txt)" = "https://docs.bensevern.dev/docs/llms.txt"
 Issues = "https://github.com/benseverndev-oss/goldenmatch/issues"
+Changelog = "https://github.com/benseverndev-oss/goldenmatch/blob/main/packages/python/goldensuite-mcp/CHANGELOG.md"
+Author = "https://bensevern.dev"
 
 [tool.uv.sources]
 goldenmatch = { workspace = true }

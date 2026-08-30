@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## [0.6.1] - 2026-08-30
+
+### Changed
+
+- **PyPI discovery metadata.** Keywords 5 -> 15 and package URLs 4 -> 7. This
+  package is the suite's MCP entry point but carried its thinnest listing, and
+  the terms it did carry were all data-domain ones: someone looking for an MCP
+  server searches for the protocol and the client (`mcp-server`,
+  `model-context-protocol`, `claude-desktop`) at least as often. `Documentation`
+  now points at the docs site rather than the GitHub README, and the
+  `AI agents (llms.txt)`, `Changelog` and `Author` URLs match the sibling
+  packages.
+
 ## [0.6.0] - 2026-08-15
 
 ### Changed
