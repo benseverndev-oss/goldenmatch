@@ -47,6 +47,14 @@ Zero-config matching that **beats expert-tuned Splink head-to-head on messy cust
 <p align="center"><sub><em>Pair drilldown in the web workbench: cluster members, field-level diff, and a one-line NL explanation per pair. <code>pip install goldenmatch[web]</code> then <code>goldenmatch serve-ui &lt;project&gt;</code>. <a href="https://github.com/benseverndev-oss/goldenmatch/wiki/Web-UI">More screenshots →</a></em></sub></p>
 
 <!-- README-callouts:start  (auto-synced from packages/python/goldenmatch/CHANGELOG.md by scripts/sync_readme_callouts.py; edit the CHANGELOG, not this block) -->
+> **v3.17.0: The documented first run works on a default install.** `pip install goldenmatch`
+followed by `goldenmatch dedupe customers.csv` -- the quickstart on every doc
+surface -- exited 3 on a polars-free install, which is what a plain install has
+produced since polars became an optional extra. Three separate polars imports on
+the zero-config path (auto-config ingest, the Arrow lane's preflight decline, and
+the csv writer) are gone, with polars' exact csv bytes reproduced and
+parity-pinned.
+>
 > **v3.13.0: Fellegi-Sunter training runs distributed on Spark.** The E-step reads only the
 comparison vector, so identical vectors collapse to one counted row and the whole
 step becomes a Spark `GROUP BY` over agreement patterns -- the cluster counts, the
@@ -61,13 +69,6 @@ off `information_schema` instead of a sampled frame, plus catalog reconciliation
 and a real-LLM namer validation harness -- so a warehouse's existing model can be
 discovered, reconciled against what is really there, and named without hand
 curation.
->
-> **v3.11.0: Customer 360 serving surface, and a fused FS kernel that covers the
-reference-data name scorers.** `customer_360` composes the golden record,
-per-field provenance, linked source records, the event timeline and the
-relationship neighborhood into one read, with semantic-layer drill-through; the
-fused Fellegi-Sunter kernel now covers the reference-data name scorers and an
-in-RAM sequential Arrow-native batch scorer with end-WCC.
 <!-- README-callouts:end -->
 
 ---
