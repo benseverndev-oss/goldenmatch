@@ -72,7 +72,12 @@ FLOORS: dict[str, float] = {
     # one-way. Do not "fix" a failure here by lowering the floor.
     "goldenmatch/distributed/clustering.py": 0.15,         # 18.8%  (576 stmts)
     "goldenmatch/spark/config_pipeline.py": 0.23,          # 26.2%  (485 stmts)
-    "goldenmatch/core/boost.py": 0.03,                     #  5.8%  (397 stmts)
+    # Promoted OUT of the decay guards: 5.8% -> 34% (tests/test_boost_core.py).
+    # boost_accuracy is exported from goldenmatch/__init__.py, so this is
+    # public API. The ceiling here is ~34% until scikit-learn and
+    # sentence-transformers exist in CI -- finetune_and_rescore and the LLM
+    # labelling loop cannot run without them.
+    "goldenmatch/core/boost.py": 0.30,                     # 34.0%  (397 stmts)
     "goldenmatch/tui/app.py": 0.44,                        # 47.6%
     "goldenmatch/a2a/skills.py": 0.14,                     # 17.4%
     "goldenmatch/tui/tabs/boost_tab.py": 0.27,             # 30.5%
