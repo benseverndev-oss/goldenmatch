@@ -48,11 +48,11 @@ enum Backend {
 
 /// blake2b-8 hex digest of `data` — the cache-namespace fallback ingredient.
 fn digest8(data: &[u8]) -> String {
-    use blake2::digest::{Update, VariableOutput};
-    let mut h = blake2::Blake2bVar::new(8).expect("blake2b-8 is valid");
+    use blake2::digest::consts::U8;
+    use blake2::{Blake2b, Digest};
+    let mut h = Blake2b::<U8>::new();
     h.update(data);
-    let mut out = [0u8; 8];
-    h.finalize_variable(&mut out).expect("8-byte output fits");
+    let out: [u8; 8] = h.finalize().into();
     crate::model_id::hex(&out)
 }
 

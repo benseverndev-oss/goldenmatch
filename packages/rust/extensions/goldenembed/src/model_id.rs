@@ -6,8 +6,8 @@ use std::io::Read;
 use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
-use blake2::digest::{Update, VariableOutput};
-use blake2::Blake2bVar;
+use blake2::digest::consts::U8;
+use blake2::{Blake2b, Digest};
 
 /// Lowercase hex of a byte slice (matches Python `hexdigest()`).
 pub(crate) fn hex(bytes: &[u8]) -> String {
@@ -58,15 +58,12 @@ pub fn compute_model_id(dir: &Path, dim: usize) -> Result<String> {
     let zip_path = dir.join("weights.npz");
     let weights = read_zip_entry(&zip_path, "weights.npy")?
         .ok_or_else(|| anyhow!("weights.npy missing from {}", zip_path.display()))?;
-    let mut hasher = Blake2bVar::new(8).expect("blake2b-8 is valid");
+    let mut hasher = Blake2b::<U8>::new();
     hasher.update(npy_data(&weights)?);
     if let Some(bias) = read_zip_entry(&zip_path, "bias.npy")? {
         hasher.update(npy_data(&bias)?);
     }
-    let mut out = [0u8; 8];
-    hasher
-        .finalize_variable(&mut out)
-        .expect("8-byte output fits");
+    let out: [u8; 8] = hasher.finalize().into();
     Ok(format!("inhouse:d{dim}:{}", hex(&out)))
 }
 
