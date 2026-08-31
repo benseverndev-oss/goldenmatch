@@ -615,6 +615,11 @@ jobs:
           pattern: gm-cov-*
           merge-multiple: true
           path: .
+      # The gate's own machinery, run BEFORE the gate: a floor naming a deleted
+      # module used to pass silently (see scripts/test_coverage_floors.py).
+      - name: Test the coverage-floor gate itself
+        run: uv run pytest scripts/test_coverage_floors.py -q
+
       - name: Combine coverage + enforce per-module floors
         run: |
           uv run coverage combine --rcfile=packages/python/goldenmatch/pyproject.toml \

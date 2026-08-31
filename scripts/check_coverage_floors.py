@@ -24,28 +24,58 @@ from pathlib import Path
 # real regression trips but a 1-2pp wobble doesn't. Ratchet upward as packages
 # improve.
 FLOORS: dict[str, float] = {
-    # Core scoring / pipeline — most-touched code; high coverage required
-    "goldenmatch/core/scorer.py": 0.82,
-    "goldenmatch/core/pipeline.py": 0.77,
-    "goldenmatch/core/probabilistic.py": 0.91,
-    # Auto-config — heavily tested via v1.8-v1.12 work
-    "goldenmatch/core/autoconfig.py": 0.80,
-    "goldenmatch/core/autoconfig_controller.py": 0.85,
-    "goldenmatch/core/autoconfig_rules.py": 0.85,
-    "goldenmatch/core/autoconfig_negative_evidence.py": 0.90,
-    "goldenmatch/core/indicators.py": 0.85,
-    "goldenmatch/core/complexity_profile.py": 0.85,
-    # Config schemas — Pydantic models; should be near-100%
-    "goldenmatch/config/": 0.85,
-    # Memory + corrections (v1.6 Learning Memory)
-    "goldenmatch/core/memory/": 0.80,
-    # PPRL — Bloom filters + protocols
-    "goldenmatch/pprl/": 0.85,
-    # Public API surface
-    "goldenmatch/_api.py": 0.80,
-    # Engine / clustering
-    "goldenmatch/core/cluster.py": 0.80,
-    "goldenmatch/core/engine.py": 0.75,
+    # ---------------------------------------------------------------- core
+    # Floors sit ~3pp under the measured value: enough to absorb shard-to-shard
+    # wobble, tight enough that losing a test file trips something. Measured
+    # 2026-08-31 from the combined CI shards of run 33435122397.
+    "goldenmatch/core/scorer.py": 0.85,                    # 88.1%
+    "goldenmatch/core/pipeline.py": 0.81,                  # 84.2%
+    "goldenmatch/core/probabilistic.py": 0.90,             # 93.0%
+    "goldenmatch/core/cluster.py": 0.82,                   # 85.0%
+    "goldenmatch/core/frame.py": 0.93,                     # 96.8%  (1148 stmts)
+    "goldenmatch/core/golden.py": 0.89,                    # 92.5%
+    "goldenmatch/core/golden_fused.py": 0.89,              # 92.0%
+    "goldenmatch/core/blocker.py": 0.80,                   # 83.2%
+    "goldenmatch/core/smart_ingest.py": 0.80,              # 83.6%
+    "goldenmatch/core/config_critique.py": 0.77,           # 80.3%
+    "goldenmatch/core/llm_scorer.py": 0.83,                # 86.1%
+    # ---------------------------------------------------------- auto-config
+    "goldenmatch/core/autoconfig.py": 0.88,                # 91.4%
+    "goldenmatch/core/autoconfig_controller.py": 0.85,     # 88.2%
+    "goldenmatch/core/autoconfig_rules.py": 0.93,          # 96.5%
+    "goldenmatch/core/autoconfig_negative_evidence.py": 0.92,  # 95.7%
+    "goldenmatch/core/autoconfig_verify.py": 0.91,         # 94.7%
+    "goldenmatch/core/indicators.py": 0.84,                # 86.7%
+    "goldenmatch/core/complexity_profile.py": 0.94,        # 97.1%
+    # -------------------------------------------------------------- backends
+    "goldenmatch/backends/score_buckets.py": 0.81,         # 84.7%  (1025 stmts)
+    "goldenmatch/backends/fs_out_of_core.py": 0.88,        # 91.7%
+    # -------------------------------------------------------------- identity
+    "goldenmatch/identity/store.py": 0.75,                 # 78.6%  (1022 stmts)
+    "goldenmatch/identity/resolve.py": 0.89,               # 92.9%
+    "goldenmatch/identity/snowflake_backend.py": 0.86,     # 89.3%
+    # ---------------------------------------------------------------- other
+    "goldenmatch/semantic/ontology.py": 0.92,              # 95.9%
+    "goldenmatch/config/": 0.84,                           # 87.4% (n=12)
+    "goldenmatch/core/memory/": 0.92,                      # 95.0% (n=4)
+    "goldenmatch/pprl/": 0.93,                             # 96.4% (n=3)
+    "goldenmatch/_api.py": 0.85,                           # 88.4%
+
+    # ------------------------------------------------------- DECAY GUARDS --
+    # These are NOT targets. They are large, poorly-covered modules pinned ~3pp
+    # under today's value so the debt cannot quietly deepen. Raising them is
+    # real work; the point of listing them is that the number is visible and
+    # one-way. Do not "fix" a failure here by lowering the floor.
+    "goldenmatch/distributed/clustering.py": 0.15,         # 18.8%  (576 stmts)
+    "goldenmatch/spark/config_pipeline.py": 0.23,          # 26.2%  (485 stmts)
+    "goldenmatch/core/boost.py": 0.03,                     #  5.8%  (397 stmts)
+    "goldenmatch/tui/app.py": 0.44,                        # 47.6%
+    "goldenmatch/a2a/skills.py": 0.14,                     # 17.4%
+    "goldenmatch/tui/tabs/boost_tab.py": 0.27,             # 30.5%
+    "goldenmatch/tui/tabs/config_tab.py": 0.32,            # 35.5%
+    "goldenmatch/cli/evaluate.py": 0.36,                   # 39.9%
+    "goldenmatch/spark/identity.py": 0.15,                 # 18.4%
+    "goldenmatch/cli/identity.py": 0.42,                   # 45.1%
 }
 
 
@@ -61,15 +91,34 @@ def parse_coverage(xml_path: Path) -> dict[str, float]:
     return rates
 
 
-def check(rates: dict[str, float], floors: dict[str, float]) -> list[str]:
-    """Return list of failures: 'module: actual=X% < floor=Y%'."""
+def check(rates: dict[str, float], floors: dict[str, float]) -> tuple[list[str], int]:
+    """Return (failures, n_checked).
+
+    A floor naming something absent from the coverage report is a FAILURE, not a
+    warning. It used to `continue`, and `main` then printed "All N module floors
+    met" using ``len(FLOORS)`` — so a floor pointing at a deleted module reported
+    success for a check that never ran. ``goldenmatch/core/engine.py`` sat in this
+    list after the module was gone, and CI reported 15 floors met while
+    evaluating 14. A gate that cannot fail is worse than no gate, because it
+    occupies the space where a real one would go.
+
+    ``n_checked`` is returned so the caller reports the number actually
+    evaluated rather than the size of the dict.
+    """
     failures: list[str] = []
+    n_checked = 0
     for prefix, floor in floors.items():
         # If prefix ends with /, treat as directory — aggregate all matching modules
         if prefix.endswith("/"):
             matching = {f: r for f, r in rates.items() if f.startswith(prefix)}
             if not matching:
-                continue  # no modules under this prefix; skip silently
+                failures.append(
+                    f"{prefix}: no modules under this prefix in the coverage "
+                    f"report -- the floor matches nothing. Fix the prefix or "
+                    f"drop the entry."
+                )
+                continue
+            n_checked += 1
             # Weighted average by line count would be more accurate; for v1
             # the simple mean is good enough as a regression tripwire.
             avg = sum(matching.values()) / len(matching)
@@ -81,15 +130,18 @@ def check(rates: dict[str, float], floors: dict[str, float]) -> list[str]:
         else:
             actual = rates.get(prefix)
             if actual is None:
-                # Module missing from coverage report — could be excluded or
-                # renamed. Don't fail loudly; surface as a warning.
-                print(f"::warning::module not in coverage report: {prefix}")
+                failures.append(
+                    f"{prefix}: not in the coverage report -- the module was "
+                    f"renamed, deleted, or is excluded by `omit`. This floor is "
+                    f"checking nothing. Fix the path or drop the entry."
+                )
                 continue
+            n_checked += 1
             if actual < floor:
                 failures.append(
                     f"{prefix}: actual={actual:.1%} < floor={floor:.1%}"
                 )
-    return failures
+    return failures, n_checked
 
 
 def main() -> int:
@@ -101,16 +153,20 @@ def main() -> int:
         print(f"coverage.xml not found: {xml_path}", file=sys.stderr)
         return 2
     rates = parse_coverage(xml_path)
-    failures = check(rates, FLOORS)
+    failures, n_checked = check(rates, FLOORS)
     if failures:
         print("Per-module coverage floors NOT met:")
         for f in failures:
             print(f"  - {f}")
         print()
-        print("Ratchet floors in scripts/check_coverage_floors.py if the drop")
-        print("is intentional; otherwise add tests for the regressed module.")
+        print("A 'not in the coverage report' entry means the floor is dead --")
+        print("fix the path or delete it; do NOT leave it in place.")
+        print("For a genuine drop, add tests for the regressed module. Lower a")
+        print("floor only with a stated reason -- the DECAY GUARDS are one-way.")
         return 1
-    print(f"All {len(FLOORS)} module floors met.")
+    # Report what was actually evaluated, not len(FLOORS): they differ the
+    # moment an entry stops matching, which is exactly when you need to know.
+    print(f"All {n_checked} module floors met (of {len(FLOORS)} declared).")
     return 0
 
 
