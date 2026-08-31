@@ -6,6 +6,51 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [3.17.0] - 2026-08-30
+
+<!-- README-callout
+**The documented first run works on a default install.** `pip install goldenmatch`
+followed by `goldenmatch dedupe customers.csv` -- the quickstart on every doc
+surface -- exited 3 on a polars-free install, which is what a plain install has
+produced since polars became an optional extra. Three separate polars imports on
+the zero-config path (auto-config ingest, the Arrow lane's preflight decline, and
+the csv writer) are gone, with polars' exact csv bytes reproduced and
+parity-pinned.
+--> - 2026-08-30
+
+### Fixed
+
+- **The documented first run works on a default install (#2810).**
+  `pip install goldenmatch` then `goldenmatch dedupe customers.csv` -- the
+  quickstart on the README, the docs site and the PyPI page -- exited 3 on a
+  polars-free install, which is exactly what a plain `pip install` produces since
+  v3.1.0 made polars an optional extra. Three independent polars imports sat on
+  that path, each reachable only once the previous was fixed:
+  `auto_configure(files)` ingested csv/parquet/xlsx through `pl.read_*` and
+  `pl.concat`; `_frame_lane_eligible` declined the Arrow lane whenever a preflight
+  report was attached, which `auto_configure_df` *always* attaches, so every
+  zero-config run routed into the classic polars lane; and `write_output` bridged
+  csv through polars because the polars writer's byte formatting is the pinned
+  output contract.
+
+  Ingest now runs through the existing `read_table_arrow` parity reader (polars is
+  kept as a fallback when it is installed and Arrow rejects a file). The preflight
+  decline is removed because both signals it guarded now route through `to_frame`;
+  equivalence of the two lanes is committed as `scripts/diff_zeroconfig_lanes.py`
+  (5 fixtures, hashed outputs, `RESULT: ALL EQUIVALENT`) rather than left in a
+  scratch directory. csv writes through a new `output/_csv_arrow.py` that
+  reproduces polars' bytes -- quoting, null vs. empty string, float spelling,
+  temporal `isoformat` -- pinned by 17 cases in
+  `tests/test_csv_arrow_polars_parity.py`; pyarrow's own `write_csv` cannot match
+  it (`quoting_style="needed"` still quotes every string and the header, `"none"`
+  never quotes, and floats render `2` where polars writes `2.0`).
+
+  `xlsx` output still needs the extra and now names it instead of raising
+  `ModuleNotFoundError`. A fatal CLI error is printed to stderr unconditionally
+  rather than suppressed by `--quiet`, which is why this failed silently in the
+  time-to-first-success probe. Verified end-to-end with polars blocked at the
+  import hook: exit 0, 64 clusters, `polars` never imported.
+
 ### Added
 - **`scripts/controller_budget_cost.py` -- what auto-config's wall-clock budget costs in quality, and why the obvious repair is not shippable.** #2756 reported that `ControllerBudget.for_dataset` predicts iteration cost from row count and is wrong by 16x, so wide-text lanes commit v0 by construction. Both halves were measured. The proxy is genuinely poor (~4.5x today; the 16x collapsed once #2747 capped an unbounded bridge measurement) but it is not the mechanism: iteration 0 is the mandatory MEASUREMENT pass, and charging it against the budget that caps optional adaptation is what starves the search. Restarting the clock after it is worth **F1 0.1097 -> 0.1490** on Amazon-Google dedupe. **It was built, measured, and abandoned** -- on a host slow enough for the budget to bind, that cut is precisely what makes the controller cheap, so restarting it makes the machine least able to afford the work do the most of it. Measured on the arrow-parity `shared-email-switchboard` shape: 2 pipeline passes and 6.1s became 4 and 15.8s once the budget bound, and under `-n auto` that killed a CI worker on five consecutive runs, without reproducing once on an idle box. An absolute `2x` ceiling did not save it. Frugality-under-load and adaptation-under-load are the same knob pointed opposite ways, so the harness ships and the change does not. (#2756)
 

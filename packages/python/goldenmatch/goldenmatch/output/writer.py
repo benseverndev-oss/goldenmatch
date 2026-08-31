@@ -17,10 +17,14 @@ def write_output(
     """Write a frame to the specified format (csv, parquet, xlsx).
 
     W-2 widening: dual-rep. A ``pa.Table`` writes parquet NATIVELY
-    (pyarrow.parquet); csv/xlsx BRIDGE through polars because the polars
-    writers' formatting (csv quoting/null spelling, xlsx engine) is the
-    pinned output contract -- an arrow-native csv writer would change
-    bytes on disk. Revisit at D6 (format change allowed at a major).
+    (pyarrow.parquet). Since #2810 csv is native too on a polars-free
+    install, via ``output/_csv_arrow.py`` -- which REPRODUCES the polars
+    writer's bytes rather than changing them (quoting, null vs. empty
+    string, float spelling, temporal isoformat), parity pinned by
+    tests/test_csv_arrow_polars_parity.py. When polars IS installed csv
+    still bridges through it, so that install has a single author for the
+    pinned contract. xlsx always bridges through polars (its engine is the
+    contract) and names the extra in a clear error when polars is absent.
     Returns the Path of the written file.
     """
     directory = Path(directory)

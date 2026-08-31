@@ -10,13 +10,13 @@ keywords: ["installation", "pip", "docker", "postgresql", "duckdb", "dbt", "extr
 pip install goldenmatch
 ```
 
-Requires Python 3.11 or later. Core dependencies: Polars, RapidFuzz, Typer, Pydantic, Textual.
+Requires Python 3.11 or later. Core dependencies: PyArrow, DuckDB, NumPy, Typer, Rich, Pydantic, Textual. Polars is **not** among them -- it has been an optional compatibility extra since v3.1.0, and the polars-free install is the faster configuration. Neither is RapidFuzz: GoldenMatch owns its scorer math (a vendored Rust `score-core::strsim` plus a byte-identical pure-Python path), and RapidFuzz remains only as a dev-time parity oracle.
 
 ### Native acceleration (default on common platforms)
 
 `pip install goldenmatch` now pulls the compiled `goldenmatch-native` kernel automatically on macOS (x86_64 + arm64), Linux (x86_64 + aarch64), and Windows (amd64). No `[native]` extra is needed; the `[native]` extra still works as a back-compat alias. The kernel accelerates the hot paths (block scoring, record fingerprints, cluster build, dedup-pairs) and lets the v3 planner pick the bucket+native backend as the suggested path up to 750k rows on common boxes.
 
-The pure-Python + Polars pipeline is the byte-for-byte reference and the automatic fallback on any platform without a prebuilt wheel. Alpine/musl users may not get a prebuilt wheel yet (a `musllinux` wheel is a separate follow-up) and degrade gracefully to pure-Python.
+**Rust is the reference implementation** (the 2026-07 reference-mode change); the pure-Python + Arrow pipeline is the lossy fallback, byte-identical on the parity-gated hot paths and used automatically on any platform without a prebuilt wheel. Alpine/musl users may not get a prebuilt wheel yet (a `musllinux` wheel is a separate follow-up) and degrade gracefully to pure-Python.
 
 Opt out with environment variables:
 

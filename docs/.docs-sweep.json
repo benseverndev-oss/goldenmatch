@@ -1,8 +1,9 @@
 {
-  "version": "3.16.0",
-  "commit": "e8dea428d",
-  "date": "2026-08-24",
-  "previous_swept_version": "3.3.1",
+  "version": "3.17.0",
+  "commit": "824502d94",
+  "date": "2026-08-30",
+  "previous_swept_version": "3.16.0",
   "note": "Set by the rollout-docs-sweep skill when a docs sweep completes for a release. The check_docs_sweep.py gate asserts version == current packages/python/goldenmatch version; bump this marker at the END of a docs sweep.",
-  "backlog_note": "NO PROSE SWEEP WAS PERFORMED FOR 3.4.0..3.16.0. The gate script existed but was wired into no workflow, so the marker sat at 3.3.1 across 13 minor releases while nothing enforced it. It is now wired into cut-goldenmatch-release.yml. This marker was advanced to 3.16.0 to arm the gate from here forward rather than to claim those releases were swept -- the 3.4.0..3.16.0 prose backlog is UNSWEPT and tracked separately. Delete this key at the first real sweep."
+  "sweep_scope": "3.17.0 sweep was SCOPED to what this release changes (the polars-free zero-config path, #2810) plus anything the grep for that surface turned up. It found and fixed two live errors on docs-site/goldenmatch/installation.mdx -- Polars and RapidFuzz were both listed as core dependencies when neither has been one since v3.1.0 and the rapidfuzz eviction respectively, and the 'pure-Python + Polars pipeline is the byte-for-byte reference' line predates the 2026-07 reference-mode change that made Rust the reference. It was NOT a full-surface sweep of every page in .claude/doc-surfaces.md.",
+  "backlog_note": "NO FULL PROSE SWEEP HAS BEEN PERFORMED FOR 3.4.0..3.16.0. The gate script existed but was wired into no workflow, so the marker sat at 3.3.1 across 13 minor releases while nothing enforced it. It is now wired into cut-goldenmatch-release.yml. The marker was advanced to 3.16.0 to arm the gate rather than to claim those releases were swept, and 3.17.0's scoped sweep (above) does not discharge that backlog either. Delete this key at the first full sweep."
 }
