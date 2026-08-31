@@ -17,6 +17,10 @@ import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))
+
+from coverage_paths import normalize  # noqa: E402
+
 # Module-prefix → minimum line-rate (0.0–1.0). Prefixes match `<class
 # filename="goldenmatch/...">` in coverage.xml.
 #
@@ -85,7 +89,10 @@ def parse_coverage(xml_path: Path) -> dict[str, float]:
     root = tree.getroot()
     rates: dict[str, float] = {}
     for cls in root.iter("class"):
-        filename = cls.get("filename") or ""
+        # Normalize: CI's report shape and this table's keys were written
+        # independently and did not match, so every floor missed. See
+        # scripts/coverage_paths.py.
+        filename = normalize(cls.get("filename") or "")
         line_rate = float(cls.get("line-rate") or "0")
         rates[filename] = line_rate
     return rates
@@ -154,6 +161,17 @@ def main() -> int:
         return 2
     rates = parse_coverage(xml_path)
     failures, n_checked = check(rates, FLOORS)
+
+    if rates and n_checked == 0:
+        # Every floor missed. That is a NAMING mismatch, not 38 deleted modules,
+        # and it is the failure the old gate hid behind warnings. Show what the
+        # report actually holds so one CI run is enough to diagnose it.
+        print("NO floor matched any module -- this is a path-shape mismatch, "
+              "not a coverage problem.")
+        print(f"The report contains {len(rates)} modules, e.g.:")
+        for name in sorted(rates)[:5]:
+            print(f"    {name}")
+        print()
     if failures:
         print("Per-module coverage floors NOT met:")
         for f in failures:

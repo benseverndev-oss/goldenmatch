@@ -76,3 +76,76 @@ def test_declared_floors_are_all_plausible():
     for name, floor in FLOORS.items():
         assert 0.0 < floor < 1.0, f"{name}: floor {floor} is not a 0-1 fraction"
         assert name.startswith("goldenmatch/"), f"{name}: floors are repo-relative"
+
+
+# -- the naming mismatch that made every floor miss --------------------------
+
+
+def _write_xml(tmp_path, filenames):
+    """A coverage.xml whose <class filename=...> uses a given path shape."""
+    classes = "".join(
+        f'<class filename="{f}" line-rate="0.99">'
+        f'<lines><line number="1" hits="1"/></lines></class>'
+        for f in filenames
+    )
+    xml = tmp_path / "coverage.xml"
+    xml.write_text(
+        f'<coverage line-rate="0.99"><packages><package><classes>{classes}'
+        "</classes></package></packages></coverage>",
+        encoding="utf-8",
+    )
+    return xml
+
+
+def test_floors_match_a_package_relative_report(tmp_path):
+    """CI emitted a shape the floor table did not use, so all 15 floors missed
+    while the summary said they were met. Whatever shape the report uses, the
+    table must match it."""
+    from check_coverage_floors import parse_coverage
+
+    xml = _write_xml(tmp_path, ["core/scorer.py", "core/pipeline.py"])
+    rates = parse_coverage(xml)
+    assert "goldenmatch/core/scorer.py" in rates
+    failures, checked = check(rates, {"goldenmatch/core/scorer.py": 0.85})
+    assert failures == []
+    assert checked == 1
+
+
+def test_floors_match_a_repo_relative_report(tmp_path):
+    from check_coverage_floors import parse_coverage
+
+    xml = _write_xml(tmp_path, ["packages/python/goldenmatch/goldenmatch/core/scorer.py"])
+    rates = parse_coverage(xml)
+    assert "goldenmatch/core/scorer.py" in rates
+
+
+def test_floors_match_an_absolute_report(tmp_path):
+    from check_coverage_floors import parse_coverage
+
+    xml = _write_xml(
+        tmp_path,
+        ["/home/runner/work/goldenmatch/goldenmatch/packages/python/goldenmatch/"
+         "goldenmatch/core/scorer.py"],
+    )
+    rates = parse_coverage(xml)
+    assert "goldenmatch/core/scorer.py" in rates
+
+
+def test_every_declared_floor_matches_the_real_module_layout():
+    """The table's keys must correspond to files that exist on disk.
+
+    This is the check that would have caught the original bug at authoring time:
+    a floor naming something the tree does not contain can never be evaluated,
+    whatever shape the coverage report happens to use.
+    """
+    from pathlib import Path as _P
+
+    pkg = _P(__file__).parent.parent / "packages" / "python" / "goldenmatch"
+    missing = []
+    for name in FLOORS:
+        rel = name[len("goldenmatch/"):]
+        target = pkg / "goldenmatch" / rel
+        ok = target.is_dir() if name.endswith("/") else target.is_file()
+        if not ok:
+            missing.append(name)
+    assert not missing, f"floors naming paths that do not exist: {missing}"
