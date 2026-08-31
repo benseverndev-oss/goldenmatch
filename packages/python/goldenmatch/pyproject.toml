@@ -333,36 +333,37 @@ omit = [
 ]
 
 [tool.coverage.report]
-# MUST mirror [tool.coverage.run].omit above. `run.omit` does NOT filter the
-# report -- verified 2026-08-31 by generating coverage.xml from the CI shards
-# both ways: run-omit-only gave 487 modules / 80.4%, with report.omit it is 436
-# modules / 82.8%. So every module the run section declares untestable in CI
-# (needs Postgres, MCP runtime, GCP credentials, a Textual TTY) was still being
-# counted, dragging the global number down and making `fail_under` mean less
-# than it appears to. Keep the two lists in sync; coverage has no include
-# directive to do it for us.
-omit = [
-    "goldenmatch/db/*",
-    "goldenmatch/mcp/*",
-    "goldenmatch/core/vertex_embedder.py",
-    "goldenmatch/tui/screens/*",
-    "goldenmatch/tui/widgets/*",
-    "goldenmatch/api/*",
-    "goldenmatch/connectors/*",
-]
+# NOTE: `[tool.coverage.run].omit` above does NOT filter this report, and its
+# patterns do not match the filename shape CI produces either. Both were
+# measured on 2026-08-31 from the shards of run 33441606534:
+#   - run-omit-only vs a mirrored report-omit: 487 modules / 80.4% either way
+#     locally, but in CI the mirrored patterns matched NOTHING -- all 51
+#     db/mcp/api/connectors/vertex_embedder modules were still reported.
+# A mirrored `omit` was tried here and reverted: the patterns are written
+# `goldenmatch/db/*`, CI's report uses a different shape, and shipping a fix
+# that cannot be verified from outside CI is how the per-module floor table
+# came to match nothing for its entire life.
+#
+# This is deliberately left as a KNOWN GAP rather than a guess. It costs ~2.4pp
+# on the global number (80.4% measured vs 82.8% with omits honoured) and
+# nothing else: every one of those modules is covered per-module by
+# scripts/coverage_baseline.json, so they cannot regress unnoticed.
 exclude_lines = [
     "pragma: no cover",
     "if __name__ == .__main__.",
     "if TYPE_CHECKING:",
 ]
-# Floor for the *overall* package -- a BACKSTOP for the ~94% of modules that
-# carry no per-module floor, not the primary gate. Per-module floors live in
-# scripts/check_coverage_floors.py, run by the `python_goldenmatch_coverage`
-# job, so per-module regressions can't hide inside the global average.
+# Floor for the *overall* package. NOT the primary gate: every module now has a
+# recorded rate in scripts/coverage_baseline.json (anti-regression) and the
+# modules worth an opinion have an absolute floor in
+# scripts/check_coverage_floors.py. Both run in `python_goldenmatch_coverage`.
+# This one only catches a broad drift that somehow stays inside every
+# per-module tolerance.
 #
 # 70 was ~13pp below the real number and could absorb a whole module going dark.
-# Measured 82.8% on 2026-08-31 (combined CI shards, run 33435122397, with the
-# report-omit fix above); 80 keeps ~3pp of shard wobble. Ratchet with the
-# per-module floors, and never lower it to make a red build green.
-fail_under = 80
+# Measured 80.4% on 2026-08-31 (combined CI shards, run 33441606534, which is
+# what CI actually reports -- see the omit note above). 78 keeps ~2.4pp of
+# shard wobble and holds whether or not the omit gap is ever closed. Ratchet
+# with the per-module floors, and never lower it to make a red build green.
+fail_under = 78
 show_missing = true
