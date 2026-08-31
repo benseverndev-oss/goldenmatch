@@ -615,6 +615,11 @@ jobs:
           pattern: gm-cov-*
           merge-multiple: true
           path: .
+      # The gate's own machinery, run BEFORE the gate: a floor naming a deleted
+      # module used to pass silently (see scripts/test_coverage_floors.py).
+      - name: Test the coverage gates themselves
+        run: uv run pytest scripts/test_coverage_floors.py scripts/test_coverage_baseline.py -q
+
       - name: Combine coverage + enforce per-module floors
         run: |
           uv run coverage combine --rcfile=packages/python/goldenmatch/pyproject.toml \
@@ -623,6 +628,10 @@ jobs:
           uv run coverage xml --rcfile=packages/python/goldenmatch/pyproject.toml \
             -o packages/python/goldenmatch/coverage.xml
           uv run python scripts/check_coverage_floors.py packages/python/goldenmatch/coverage.xml
+          # Curated floors cover 38 of ~436 modules. This covers the rest: every
+          # measured module has a recorded rate, so a regression in a module
+          # nobody wrote a floor for still fails.
+          uv run python scripts/check_coverage_baseline.py packages/python/goldenmatch/coverage.xml
 
   # Reference mode: python_goldenmatch now runs NATIVE by default. This lean lane
   # asserts the pure-Python FALLBACK still imports and passes on a core behavior
