@@ -2722,6 +2722,13 @@ jobs:
         # parent tests/conftest.py isn't collected (the nopolars tests are self-contained).
         run: uv run --no-sync python -m pytest packages/python/goldenmatch/tests/nopolars --noconftest -v
 
+      - name: Every registered CLI command, swept without polars
+        # tests/nopolars above is a narrow, self-contained set -- it does not
+        # touch the CLI, which is why ten polars-bound commands sat here
+        # undetected while this job was green. The sweep enumerates every
+        # registered command and invokes it. See scripts/sweep_cli_polars_free.py.
+        run: uv run --no-sync python -m pytest scripts/test_cli_polars_free_sweep.py -q --noconftest
+
   # Polars-eviction Wave 1 proof lane (goldenmatch): runs the file-based
   # dedupe entry point under BOTH GOLDENMATCH_FRAME=polars and =arrow on
   # frozen fixture datasets and diffs the canonicalized clusters/golden/pairs
