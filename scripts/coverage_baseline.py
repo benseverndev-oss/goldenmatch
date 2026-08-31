@@ -19,8 +19,16 @@ Regenerate with `python scripts/regen_coverage_baseline.py <coverage.xml>`.
 from __future__ import annotations
 
 import json
+import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+from coverage_paths import normalize  # noqa: E402  (re-exported for callers)
+
+__all__ = ["normalize", "parse_report", "overall_rate", "tolerance_for",
+           "load_baseline", "BASELINE_PATH", "TOLERANCE_PP"]
 
 BASELINE_PATH = Path(__file__).parent / "coverage_baseline.json"
 
@@ -34,20 +42,6 @@ TOLERANCE_PP = 0.02
 # line is 5pp. Allow roughly one-and-a-half statements for small files, so the
 # effective tolerance is the larger of the two.
 SLACK_STATEMENTS = 1.5
-
-
-def normalize(filename: str) -> str:
-    """Coverage filenames differ by how the report was generated.
-
-    CI runs from the repo root and emits ``goldenmatch/core/scorer.py``; a report
-    generated inside the package directory (or through a ``[paths]`` remap) emits
-    ``core/scorer.py``. Normalizing here means a baseline generated either way
-    compares correctly, instead of every module reading as "new".
-    """
-    filename = filename.replace("\\", "/").lstrip("./")
-    if not filename.startswith("goldenmatch/"):
-        filename = "goldenmatch/" + filename
-    return filename
 
 
 def parse_report(xml_path: Path) -> dict[str, dict]:
