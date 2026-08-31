@@ -861,7 +861,7 @@ def _apply_negative_evidence_batch(
 def _apply_negative_evidence_to_exact_pairs(  # pyright: ignore[reportUnusedFunction]  # called from core/pipeline.py (outside slice)
     pairs: list[tuple[int, int, float]],
     matchkey: MatchkeyConfig,
-    full_df: pl.DataFrame,
+    full_df: Any,
 ) -> list[tuple[int, int, float]]:
     """v1.12 Path Y: filter pairs from find_exact_matches by NE penalty.
 
@@ -871,6 +871,17 @@ def _apply_negative_evidence_to_exact_pairs(  # pyright: ignore[reportUnusedFunc
 
     When matchkey.negative_evidence is None or empty: returns pairs unchanged
     (today's binary behavior preserved).
+
+    ``full_df`` is a polars DataFrame OR a ``pa.Table``: it is read through the
+    Frame seam, never with polars-only indexing. It USED to be typed
+    ``pl.DataFrame``, and the caller bridged with ``_as_polars_df`` -- which made
+    this the last polars import on the zero-config CLI path, because
+    auto-config's ``promote_negative_evidence`` step puts NE on an exact matchkey
+    by default. A polars-free install therefore died here on the documented first
+    run (every controller iteration errored, then the final pipeline raised),
+    which is what #2810 missed and 3.17.0 shipped. The sibling
+    ``_apply_guard_to_exact_pairs`` had already been given a bridge-free shape for
+    the same reason; this brings NE into line.
     """
     if not matchkey.negative_evidence:
         return pairs
@@ -882,10 +893,22 @@ def _apply_negative_evidence_to_exact_pairs(  # pyright: ignore[reportUnusedFunc
             matchkey.name,
         )
 
-    # Build a lookup of (row_id → row_index_in_full_df) for fast NE column access
+    # Read through the Frame seam so this works on both backends. Materializing
+    # each NE column ONCE (rather than indexing the frame per pair, as the
+    # polars-only version did) is also strictly less work: the old shape did two
+    # scalar frame lookups per pair per NE field.
+    from goldenmatch.core.frame import to_frame  # noqa: PLC0415
+
+    _frame = to_frame(full_df)
+    _cols = set(_frame.columns)
     row_id_to_idx: dict[int, int] = dict(
-        zip(full_df["__row_id__"].to_list(), range(full_df.height))
+        zip(_frame.column("__row_id__").to_list(), range(_frame.height))
     )
+    _ne_values: dict[str, list] = {
+        ne.field: _frame.column(ne.field).to_list()
+        for ne in matchkey.negative_evidence
+        if ne.field in _cols
+    }
 
     # Materialize the per-pair NE value dicts, then score them all in one
     # vectorized pass (_apply_negative_evidence_batch -> native pairwise). The
@@ -901,12 +924,11 @@ def _apply_negative_evidence_to_exact_pairs(  # pyright: ignore[reportUnusedFunc
             continue
         pair_dict: dict = {}
         for ne in matchkey.negative_evidence:
-            if ne.field not in full_df.columns:
+            values = _ne_values.get(ne.field)
+            if values is None:
                 continue
             try:
-                val_a = full_df[ne.field][idx_a]
-                val_b = full_df[ne.field][idx_b]
-                pair_dict[ne.field] = (val_a, val_b)
+                pair_dict[ne.field] = (values[idx_a], values[idx_b])
             except Exception:
                 pair_dict[ne.field] = (None, None)
         valid_pairs.append((row_a, row_b))

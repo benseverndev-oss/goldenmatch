@@ -3803,8 +3803,14 @@ def _run_dedupe_pipeline(
                         from goldenmatch.core.scorer import (
                             _apply_negative_evidence_to_exact_pairs,
                         )
+                        # No _as_polars_df bridge: NE reads through the Frame
+                        # seam now. That bridge was the last polars import on
+                        # the zero-config CLI path (auto-config puts NE on an
+                        # exact matchkey by default), so it raised on a
+                        # polars-free install -- see the note on
+                        # _apply_negative_evidence_to_exact_pairs.
                         pairs = _apply_negative_evidence_to_exact_pairs(
-                            pairs, mk, _as_polars_df(collected_df)
+                            pairs, mk, collected_df
                         )
                     if mk.guard:
                         # Guarded matchkey: drop pairs failing the pair predicate.

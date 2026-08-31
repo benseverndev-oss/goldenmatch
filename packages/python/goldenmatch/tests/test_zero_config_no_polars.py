@@ -421,3 +421,113 @@ def test_cli_zero_config_dedupe_is_polars_free(tmp_path):
     )
     assert proc.returncode == 0, f"stdout={proc.stdout}\nstderr={proc.stderr[-3000:]}"
     assert "CLI ZERO-CONFIG POLARS-FREE OK" in proc.stdout
+
+
+# -- Tier 6: NE on an exact matchkey, polars-free ---------------------------
+
+
+def _customers_csv_with_id(path, n: int = 90) -> None:
+    """A csv shaped like the one a reader actually has: an ``id`` column plus
+    near-duplicate rows.
+
+    The ``id`` column is the point. Tier 5's fixture has none, and without it
+    auto-config never promotes NEGATIVE EVIDENCE onto the exact matchkey -- so
+    Tier 5 ran the whole CLI polars-free and still missed the leak that
+    ``_apply_negative_evidence_to_exact_pairs`` carried (it took a
+    ``pl.DataFrame`` via an ``_as_polars_df`` bridge). The path was covered; the
+    CONFIG SHAPE that path generates on ordinary data was not.
+    """
+    firsts = ["Jonathan", "Jon", "Katherine", "Kate", "Michael", "Mike"]
+    lasts = ["Okafor", "Nakamura", "Silva", "Petrov", "Andersen", "Rahman"]
+    rows = ["id,first_name,last_name,email,city"]
+    rid = 0
+    for i in range(n):
+        f, l = firsts[i % len(firsts)], lasts[i % len(lasts)]
+        email = f"{f.lower()}.{l.lower()}@example.com"
+        city = ["Leeds", "Bristol", "Cardiff"][i % 3]
+        rid += 1
+        rows.append(f"{rid},{f},{l},{email},{city}")
+        if i % 2 == 0:  # near-duplicate: same identity, noisier spelling
+            rid += 1
+            rows.append(f"{rid},{f},{l},{email.replace('example.com', 'Example.COM')},{city.upper()}")
+    path.write_text("\n".join(rows), encoding="utf-8")
+
+
+def test_cli_zero_config_with_negative_evidence_is_polars_free(tmp_path):
+    """SUBPROCESS, polars BLOCKED: the documented first command on a csv that
+    HAS an id column -- so auto-config promotes negative evidence onto the exact
+    matchkey -- runs to completion and writes its clusters.
+
+    Regression gate for the leak 3.17.0 shipped: NE on an exact matchkey went
+    through ``_as_polars_df``, so on a polars-free install every auto-config
+    controller iteration errored and the final pipeline raised
+    ``ModuleNotFoundError: No module named 'polars'`` (exit 3) -- on the exact
+    command the README, the docs site and the PyPI page all tell people to run.
+
+    The test asserts NE is ACTUALLY ACTIVE in the committed config, not just
+    that the run exits 0. Without that assertion the fixture could drift back to
+    a shape that never promotes NE and the gate would silently stop testing
+    anything -- which is precisely how this escaped the first time.
+    """
+    csv = tmp_path / "customers.csv"
+    _customers_csv_with_id(csv)
+    outdir = tmp_path / "out"
+
+    csv_repr = repr(str(csv))
+    body = f"""
+        import os, sys
+        from typer.testing import CliRunner
+        from goldenmatch.cli.main import app
+
+        # PRECONDITION, checked BEFORE the run: this fixture must still produce
+        # a config with negative evidence on the exact matchkey, or the gate
+        # below proves nothing. Checked first because the CLI run leaves
+        # process state behind that changes what a later auto_configure returns.
+        from goldenmatch.core.autoconfig import auto_configure
+        _cfg = auto_configure([({csv_repr}, "customers")])
+        assert any(
+            getattr(mk, "negative_evidence", None) for mk in _cfg.matchkeys
+        ), (
+            "fixture no longer promotes negative evidence -- gate is now vacuous. "
+            f"matchkeys={{[(m.name, len(m.negative_evidence or [])) for m in _cfg.matchkeys]}}"
+        )
+        assert "polars" not in sys.modules, "polars leaked in auto_configure"
+
+        result = CliRunner().invoke(
+            app,
+            ["dedupe", {str(csv)!r}, "--output-clusters",
+             "--output-dir", {str(outdir)!r}, "--run-name", "ne"],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.output[-4000:]
+        assert "polars" not in sys.modules, "polars leaked on the NE exact-matchkey path"
+
+        written = sorted(os.listdir({str(outdir)!r}))
+        assert any(f.endswith("_clusters.csv") for f in written), written
+
+        print("CLI ZERO-CONFIG NE POLARS-FREE OK")
+    """
+    # Deliberately NOT the tier-5 env. GOLDENMATCH_AUTOCONFIG_MEMORY=0 and
+    # GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE=1 make auto-config drop the
+    # `exact_email` matchkey entirely, and with it the negative evidence this
+    # gate exists to exercise (measured on this fixture: matchkeys go from
+    # [exact_email (1 NE), fuzzy_match] to just [fuzzy_match]). Setting them
+    # here would leave the test green against the very bug it is written for.
+    proc = _run_subprocess(
+        body,
+        {
+            "GOLDENMATCH_FRAME": "arrow",
+            "GOLDENMATCH_NATIVE": "0",
+            "POLARS_SKIP_CPU_CHECK": "1",
+            # Set EXPLICITLY, never left to inherit. `_run_subprocess` copies
+            # `os.environ`, and `test_zero_config_dedupe_df_arrow_functional`
+            # earlier in this file does
+            # `os.environ.setdefault("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")` in
+            # the PARENT pytest process -- so running this test after that one
+            # silently handed it the one value that drops the exact matchkey,
+            # and whether this gate tested anything came down to test ORDER.
+            "GOLDENMATCH_AUTOCONFIG_MEMORY": "1",
+        },
+    )
+    assert proc.returncode == 0, f"stdout={proc.stdout}\nstderr={proc.stderr[-4000:]}"
+    assert "CLI ZERO-CONFIG NE POLARS-FREE OK" in proc.stdout
