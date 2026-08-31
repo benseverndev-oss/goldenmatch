@@ -212,6 +212,12 @@ def run_sweep() -> list[dict]:
     with tempfile.TemporaryDirectory() as td:
         script = Path(td) / "probe.py"
         script.write_text(_probe_source(), encoding="utf-8")
+        # Run from a scratch CWD. Several commands write output next to where
+        # they are invoked (`demo` and `dedupe` drop *_golden.csv), so a sweep
+        # started at the repo root litters it with files that then get swept
+        # into a commit by `git add -A`.
+        workdir = Path(td) / "cwd"
+        workdir.mkdir()
         proc = subprocess.run(
             [
                 sys.executable,
@@ -225,6 +231,7 @@ def run_sweep() -> list[dict]:
             text=True,
             env=env,
             timeout=900,
+            cwd=str(workdir),
         )
     marker = "@@RESULT@@"
     if marker not in proc.stdout:
