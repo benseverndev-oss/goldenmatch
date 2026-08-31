@@ -6,6 +6,56 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [3.17.1] - 2026-08-31
+
+<!-- README-callout
+**The polars-free first run actually works now.** 3.17.0 claimed this and did not
+deliver it: auto-config puts negative evidence on the exact matchkey by default,
+and that path still bridged to polars, so `goldenmatch dedupe customers.csv`
+exited 3 on a default install. Verified the way it should have been the first
+time -- `pip install` into a clean polars-free venv, then the documented command.
+--> - 2026-08-31
+
+### Fixed
+
+- **Negative evidence on an exact matchkey no longer requires polars -- the leak
+  3.17.0 shipped while claiming the opposite (#2810 follow-up).**
+  `_apply_negative_evidence_to_exact_pairs` took a `pl.DataFrame` and read it
+  with polars-only indexing (`full_df[col][idx]`, `.height`, `.columns`), so its
+  caller in `_run_dedupe_pipeline` bridged through `_as_polars_df`. Auto-config's
+  `promote_negative_evidence` step puts NE on the exact matchkey by default, so
+  that bridge sat on the zero-config path: on a polars-free install every
+  auto-config controller iteration errored, the run fell back to a v0 RED
+  sentinel, and the final pipeline raised `ModuleNotFoundError: No module named
+  'polars'` -- exit 3, on the exact command the README, the docs site and the
+  PyPI page all tell people to run.
+
+  It now reads through the Frame seam and works on a `pa.Table` unchanged. This
+  is also strictly less work than before: each NE column is materialized once
+  instead of two scalar frame lookups per pair per field. The sibling
+  `_apply_guard_to_exact_pairs` had already been given a bridge-free shape for
+  the same reason; NE is now in line with it. The remaining `_as_polars_df`
+  callers are the golden-record builders, which are a separate documented
+  removal point and are not on this path.
+
+  **Why 3.17.0 missed it.** The fix was verified against `run_dedupe`, the entry
+  point that had been changed -- not `run_dedupe_df`, which is what the CLI's
+  auto-config controller actually calls. A tier-5 test did run the whole CLI with
+  polars blocked and passed, because its fixture (`first,last,email,zip`) has no
+  `id` column and so never causes NE to be promoted: the code path was covered,
+  the config shape that path generates on ordinary data was not.
+
+  Both gaps are now gated. `tests/test_ne_exact_pairs_backend_parity.py` pins
+  arrow/polars equivalence of the function and asserts the arrow call imports no
+  polars. A new tier-6 test in `tests/test_zero_config_no_polars.py` runs the
+  documented CLI command on a csv **with** an id column and asserts negative
+  evidence is actually present in the committed config, so the gate cannot go
+  quietly vacuous again. Both fail on 3.17.0 and pass here. The tier-6 env pins
+  `GOLDENMATCH_AUTOCONFIG_MEMORY=1` explicitly rather than inheriting it: a
+  sibling test in the same file sets it to `0` in the parent pytest process, and
+  `0` drops the exact matchkey -- which made whether the gate tested anything
+  depend on test order alone.
+
 ## [3.17.0] - 2026-08-30
 
 <!-- README-callout

@@ -14,7 +14,11 @@ PKG = Path(__file__).parent.parent / "goldenmatch"
 # A-series ledger: update DOWNWARD only (see
 # docs/superpowers/plans/2026-07-13-goldenmatch-arrow-native-endgame.md).
 EXPECTED_BRIDGE_CALLS = {
-    "core/pipeline.py": 5,  # A1-A8 + A9-slice-1 retired; rebase onto deep-D2b removed the 2 frames-path sites; golden_quality_scores retired (cell_quality is arrow-native)
+    # NOTE: update DOWNWARD only. 5 -> 4: the NE-on-exact-matchkey bridge is
+    # retired -- _apply_negative_evidence_to_exact_pairs reads through the Frame
+    # seam now, so the caller no longer wraps collected_df in _as_polars_df.
+    # That bridge was the last polars import on the zero-config CLI path.
+    "core/pipeline.py": 4,  # A1-A8 + A9-slice-1 retired; rebase onto deep-D2b removed the 2 frames-path sites; golden_quality_scores retired (cell_quality is arrow-native); NE-on-exact retired
 }
 
 
