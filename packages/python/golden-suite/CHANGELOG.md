@@ -4,6 +4,40 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.5.3] - 2026-08-31
+
+### Changed
+
+- **`goldenmatch` floor raised to `>=3.17.1`.** 3.17.x makes the documented
+  first run work on a default install: `pip install goldenmatch` followed by
+  `goldenmatch dedupe customers.csv` -- the quickstart on the README, the docs
+  site and the PyPI page -- exited 3 on a polars-free install, which is what a
+  plain `pip install` has produced since v3.1.0 made polars an optional extra.
+
+  **The floor is `>=3.17.1`, not `>=3.17`, on purpose.** 3.17.0 fixed three of
+  the four polars imports on that path (auto-config ingest, the Arrow lane's
+  preflight decline, the csv writer) and shipped believing it was done; negative
+  evidence on the exact matchkey still bridged to polars, and auto-config
+  promotes NE by default, so the quickstart still exited 3. 3.17.1 is the
+  release where the claim is actually true, and pointing the floor at `>=3.17`
+  would permit resolving to the version where it is not.
+
+  Suite installs pin `goldenmatch[polars]` and so were never hit by any of this.
+  The floor still moves, for two reasons: the suite should not advertise a
+  member version whose own quickstart is broken for anyone who drops the extra,
+  and 3.17.0 also carries new public API
+  (`MatchkeyConfig.link_threshold_observed`, `segments.infer_kinds`) that a
+  suite install has no other way to reach.
+
+- **`goldenmatch-native` floor raised to `>=0.2.1`.** Metadata only -- 0.2.1 is
+  the first wheel to carry PyPI discovery metadata (12 keywords, 11
+  classifiers), where all 16 prior releases had none. No runtime change; the
+  floor moves so a suite install resolves to the discoverable wheel.
+
+  Every other member is already at its published version (goldencheck 3.5.0,
+  goldenflow 2.2.0, goldenpipe 1.5.0, goldenanalysis 0.5.0, infermap 0.7.0).
+
+
 ## [0.5.2] - 2026-08-23
 
 ### Changed
