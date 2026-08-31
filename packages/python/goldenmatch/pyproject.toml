@@ -123,6 +123,14 @@ inhouse-embeddings = [
 llm = [
     "anthropic>=0.30",
     "openai>=1.30",
+    # core.boost's classifier fallback imports sklearn and, on ImportError,
+    # tells the user to `pip install goldenmatch[llm]`. That instruction was
+    # false: scikit-learn reached the tree only via sentence-transformers (the
+    # much heavier [embeddings] extra), so following the message produced the
+    # identical error a second time. Declared here rather than pointing the
+    # message at [embeddings], because the fallback is a logistic regression --
+    # it has no use for torch and transformers.
+    "scikit-learn>=1.3",
 ]
 postgres = [
     "psycopg[binary]>=3.1",
