@@ -8,8 +8,8 @@
 //! truncated to 8 bytes little-endian; index = h % n_features, sign = +1 if
 //! bit63 else -1; L2-normalize with f32 sum-of-squares + f32 sqrt. The nonzero
 //! counts are small exact integers, so the result matches numpy bit-for-bit.
-use blake2::digest::{Update, VariableOutput};
-use blake2::Blake2bVar;
+use blake2::digest::consts::U8;
+use blake2::{Blake2b, Digest};
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -36,13 +36,10 @@ fn prepare(text: &str, lowercase: bool, boundary: &str) -> String {
 }
 
 fn hash_gram(seed_le: &[u8; 8], gram: &str, n_features: u64) -> (usize, f32) {
-    let mut hasher = Blake2bVar::new(8).expect("blake2b-8 is valid");
+    let mut hasher = Blake2b::<U8>::new();
     hasher.update(seed_le);
     hasher.update(gram.as_bytes());
-    let mut buf = [0u8; 8];
-    hasher
-        .finalize_variable(&mut buf)
-        .expect("8-byte output fits");
+    let buf: [u8; 8] = hasher.finalize().into();
     let h = u64::from_le_bytes(buf);
     let idx = (h % n_features) as usize;
     let sign = if (h >> 63) & 1 == 1 {
@@ -93,6 +90,28 @@ impl FeaturizerConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pins the blake2b-8 digest against CPython's `hashlib` -- see the twin test
+    /// in `goldenmatch-native`'s `featurize.rs`. `hash_gram` sets the feature
+    /// index and sign, so a drifted digest silently changes every embedding, and
+    /// the committed wasm parity fixtures would be regenerated around the drift
+    /// rather than catching it.
+    ///
+    /// Regenerate with:
+    ///   python -c "import hashlib; h=hashlib.blake2b(digest_size=8);     ///     h.update((0).to_bytes(8,'little')); h.update(b'ab'); print(h.hexdigest())"
+    #[test]
+    fn blake2b8_digest_matches_cpython_hashlib() {
+        let mut hasher = Blake2b::<U8>::new();
+        hasher.update(0u64.to_le_bytes());
+        hasher.update(b"ab");
+        let buf: [u8; 8] = hasher.finalize().into();
+        let hex: String = buf.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            hex, "1c477b7b71d464b0",
+            "blake2b-8 digest drifted from CPython hashlib"
+        );
+        assert_eq!(u64::from_le_bytes(buf), 12710517632214451996);
+    }
 
     fn cfg() -> FeaturizerConfig {
         FeaturizerConfig {

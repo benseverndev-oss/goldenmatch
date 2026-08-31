@@ -32,7 +32,7 @@ extension-module = ["pyo3/extension-module"]
 pyo3 = { version = ">=0.29, <0.30", features = ["abi3-py311"] }
 # BLAKE2b for the char-n-gram feature hashing kernel — must match Python
 # hashlib.blake2b(digest_size=8) byte-for-byte (see featurize.rs).
-blake2 = "0.10"
+blake2 = "0.11"
 # Canonical record fingerprint canonicalizer (sha256 + JSON parsing live here),
 # shared pyo3-free with the pgrx `postgres` crate so both compute the same id.
 goldenmatch-fingerprint-core = { path = "../fingerprint-core" }

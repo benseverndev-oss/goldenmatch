@@ -17,8 +17,8 @@
 //! - L2 normalize with a float32 sum-of-squares + float32 sqrt, then divide in
 //!   f64 and round to f32. The nonzero counts are small exact integers, so the
 //!   sum carries no rounding and the result matches numpy bit-for-bit.
-use blake2::digest::{Update, VariableOutput};
-use blake2::Blake2bVar;
+use blake2::digest::consts::U8;
+use blake2::{Blake2b, Digest};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use rayon::prelude::*;
@@ -38,13 +38,10 @@ fn prepare(text: &str, lowercase: bool, boundary: &str) -> String {
 
 /// `(index, sign)` for one n-gram. Matches the Python `_hash`.
 fn hash_gram(seed_le: &[u8; 8], gram: &str, n_features: u64) -> (usize, f32) {
-    let mut hasher = Blake2bVar::new(8).expect("blake2b-8 is valid");
+    let mut hasher = Blake2b::<U8>::new();
     hasher.update(seed_le);
     hasher.update(gram.as_bytes());
-    let mut buf = [0u8; 8];
-    hasher
-        .finalize_variable(&mut buf)
-        .expect("8-byte output fits");
+    let buf: [u8; 8] = hasher.finalize().into();
     let h = u64::from_le_bytes(buf);
     let idx = (h % n_features) as usize;
     let sign = if (h >> 63) & 1 == 1 {
@@ -225,6 +222,31 @@ mod tests {
     use super::*;
 
     const SEED: [u8; 8] = 42u64.to_le_bytes();
+
+    /// Pins the blake2b-8 digest itself against CPython's `hashlib`, so a future
+    /// blake2 bump cannot silently move the feature-hash space.
+    ///
+    /// `hash_gram` decides both the feature INDEX and its SIGN, so a changed
+    /// digest changes every embedding this crate produces -- silently, and in a
+    /// way that only shows up as drifted vectors. The blake2 0.10 -> 0.11 port
+    /// swapped `Blake2bVar::new(8)` for `Blake2b::<U8>` (0.11 removed the former);
+    /// the two are byte-identical, and this test is what says so out loud.
+    ///
+    /// Regenerate with:
+    ///   python -c "import hashlib; h=hashlib.blake2b(digest_size=8);     ///     h.update((42).to_bytes(8,'little')); h.update(b'smith'); print(h.hexdigest())"
+    #[test]
+    fn blake2b8_digest_matches_cpython_hashlib() {
+        let mut hasher = Blake2b::<U8>::new();
+        hasher.update(SEED);
+        hasher.update(b"smith");
+        let buf: [u8; 8] = hasher.finalize().into();
+        let hex: String = buf.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            hex, "1f56c4814a193598",
+            "blake2b-8 digest drifted from CPython hashlib"
+        );
+        assert_eq!(u64::from_le_bytes(buf), 10967700275326113311);
+    }
 
     #[test]
     fn prepare_lowercases_collapses_and_wraps() {
