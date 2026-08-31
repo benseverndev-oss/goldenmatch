@@ -426,31 +426,54 @@ def test_cli_zero_config_dedupe_is_polars_free(tmp_path):
 # -- Tier 6: NE on an exact matchkey, polars-free ---------------------------
 
 
-def _customers_csv_with_id(path, n: int = 90) -> None:
-    """A csv shaped like the one a reader actually has: an ``id`` column plus
-    near-duplicate rows.
+def _customers_csv_with_id(path, n_identities: int = 60) -> None:
+    """A csv shaped like the one a reader actually has: a unique ``id``, an
+    ``email`` that IS an identifier, and near-duplicate rows.
 
-    The ``id`` column is the point. Tier 5's fixture has none, and without it
-    auto-config never promotes NEGATIVE EVIDENCE onto the exact matchkey -- so
-    Tier 5 ran the whole CLI polars-free and still missed the leak that
-    ``_apply_negative_evidence_to_exact_pairs`` carried (it took a
-    ``pl.DataFrame`` via an ``_as_polars_df`` bridge). The path was covered; the
-    CONFIG SHAPE that path generates on ordinary data was not.
+    Two properties are load-bearing, and both were learned the hard way:
+
+    * **Emails must be mostly distinct.** Auto-config only builds an exact
+      matchkey on a column that clears an identifier-uniqueness guard
+      (``cardinality_ratio >= 0.50`` for ``col_type=email``), and it only
+      promotes NEGATIVE EVIDENCE onto a matchkey that exists. An earlier
+      version of this fixture cycled first and last names in lockstep, which
+      produced ~9 distinct emails over 135 rows (ratio 0.0667); auto-config
+      excluded every exact-eligible column and fell back to fuzzy-only, so the
+      gate went vacuous. Here each identity gets its own email and only some are
+      duplicated, giving ratio ~0.67 -- the guard wants >= 0.50, and 1.0 fails
+      too (a perfectly-unique column is a surrogate key, not shared identity).
+    * **``id`` stays perfectly unique.** It is excluded as an exact matchkey
+      (a surrogate key has no shared identity to match on) but it is exactly
+      what NE gets promoted ON.
+
+    Tier 5's fixture has no id column at all, which is why tier 5 ran the whole
+    CLI polars-free and still missed the leak in
+    ``_apply_negative_evidence_to_exact_pairs``: the code path was covered, the
+    config shape that path generates on ordinary data was not.
     """
-    firsts = ["Jonathan", "Jon", "Katherine", "Kate", "Michael", "Mike"]
-    lasts = ["Okafor", "Nakamura", "Silva", "Petrov", "Andersen", "Rahman"]
+    firsts = ["Jonathan", "Katherine", "Michael", "Elizabeth", "Robert", "Amara",
+              "Priya", "Tomasz", "Yusuf", "Ingrid"]
+    lasts = ["Okafor", "Nakamura", "Silva", "Petrov", "Andersen", "Rahman",
+             "Dubois", "Kowalski", "Mbeki", "Lindqvist"]
+    cities = ["Leeds", "Bristol", "Cardiff", "Dundee"]
     rows = ["id,first_name,last_name,email,city"]
     rid = 0
-    for i in range(n):
-        f, l = firsts[i % len(firsts)], lasts[i % len(lasts)]
-        email = f"{f.lower()}.{l.lower()}@example.com"
-        city = ["Leeds", "Bristol", "Cardiff"][i % 3]
+    for i in range(n_identities):
+        f = firsts[i % len(firsts)]
+        l = lasts[(i // len(firsts)) % len(lasts)]
+        email = f"{f.lower()}.{l.lower()}{i}@example.com"
+        city = cities[i % len(cities)]
         rid += 1
         rows.append(f"{rid},{f},{l},{email},{city}")
         if i % 2 == 0:  # near-duplicate: same identity, noisier spelling
             rid += 1
-            rows.append(f"{rid},{f},{l},{email.replace('example.com', 'Example.COM')},{city.upper()}")
-    path.write_text("\n".join(rows), encoding="utf-8")
+            # The email is repeated VERBATIM: it is the identity the exact
+            # matchkey joins on, and case-mangling it would make every address
+            # distinct -- which pushes cardinality_ratio to 1.0 and gets the
+            # column excluded as a perfectly-unique surrogate key, the same
+            # guard that excludes `id`. The noise belongs in the other columns.
+            rows.append(f"{rid},{f.upper()},{l},{email},{city.upper()}")
+    path.write_text(chr(10).join(rows), encoding="utf-8")
 
 
 def test_cli_zero_config_with_negative_evidence_is_polars_free(tmp_path):
@@ -519,6 +542,16 @@ def test_cli_zero_config_with_negative_evidence_is_polars_free(tmp_path):
             "GOLDENMATCH_FRAME": "arrow",
             "GOLDENMATCH_NATIVE": "0",
             "POLARS_SKIP_CPU_CHECK": "1",
+            # Isolate the CROSS-RUN auto-config memory
+            # (`~/.goldenmatch/autoconfig_memory.db`, keyed by data shape, with
+            # no env override -- so redirecting home is the only lever). Without
+            # this the gate reads a config REMEMBERED from an earlier run on a
+            # similarly-shaped csv instead of deriving one from this fixture:
+            # it passed on a developer box with a warm store and failed in CI
+            # with a cold one, which is a false green in the direction that
+            # matters.
+            "HOME": str(tmp_path / "home"),
+            "USERPROFILE": str(tmp_path / "home"),
             # Set EXPLICITLY, never left to inherit. `_run_subprocess` copies
             # `os.environ`, and `test_zero_config_dedupe_df_arrow_functional`
             # earlier in this file does
