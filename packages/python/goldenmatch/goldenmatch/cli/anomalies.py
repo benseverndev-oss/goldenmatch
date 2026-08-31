@@ -20,23 +20,24 @@ def anomalies_cmd(
     limit: int = typer.Option(50, "--limit", "-n", help="Max rows to print"),
 ) -> None:
     """Detect suspicious/fake records (test emails, repeated digits, bad ZIPs, ...)."""
-    import polars as pl
-
     from goldenmatch.cli.dedupe import _parse_file_source
     from goldenmatch.core.anomaly import detect_anomalies
-    from goldenmatch.core.ingest import load_file
+    from goldenmatch.core.io_arrow import read_files_arrow
 
     if sensitivity not in ("low", "medium", "high"):
         console.print("[red]Error:[/red] --sensitivity must be low, medium, or high.")
         raise typer.Exit(code=2)
 
-    frames = []
-    for raw in files:
-        path, source = _parse_file_source(raw)
-        lf = load_file(path).with_columns(pl.lit(source).alias("__source__"))
-        frames.append(lf.collect())
-    df = pl.concat(frames, how="diagonal").with_row_index("__row_id__").with_columns(
-        pl.col("__row_id__").cast(pl.Int64)
+    # Arrow ingest, not polars: polars is an OPTIONAL extra since v3.1.0, so
+    # `import polars` here made this command raise ImportError on a default
+    # install. `read_files_arrow` keeps the semantics that mattered -- the old
+    # `how="diagonal"` concat (union of columns, nulls for the gaps) and the
+    # Int64 __row_id__. detect_anomalies already reads through `to_frame`, so
+    # it takes the arrow table unchanged.
+    df = read_files_arrow(
+        [_parse_file_source(raw) for raw in files],
+        source_column="__source__",
+        row_id_column="__row_id__",
     )
 
     anomalies = detect_anomalies(df, sensitivity=sensitivity)
@@ -46,7 +47,13 @@ def anomalies_cmd(
         return
 
     if output:
-        pl.DataFrame(anomalies).write_csv(output)
+        from pathlib import Path
+
+        import pyarrow as pa
+
+        from goldenmatch.output._csv_arrow import write_csv_polars_parity
+
+        write_csv_polars_parity(pa.Table.from_pylist(anomalies), Path(output))
         console.print(f"[#2ecc71]Wrote {len(anomalies)} anomalies[/] to {output}")
         return
 

@@ -32,17 +32,26 @@ from sweep_cli_polars_free import MUTATING, run_sweep  # noqa: E402
 # Each raises ImportError: No module named 'polars' -- a traceback, not an
 # error message -- on a default install.
 KNOWN_POLARS_BOUND = {
-    "analyze-blocking",  # import polars as pl; pl.concat(frames) in the body
-    "anomalies",
-    "demo",  # the built-in demo, i.e. the first thing many run
-    "incremental",
-    "label",
+    # Remaining, with the reason each was left rather than ported:
+    "demo",               # binds via tui.engine -> _polars_lazy, several layers down
+    "incremental",        # the binding is in core/incremental.py, not the CLI
+    "label",              # interactive labelling loop; shallow, but not verifiable
+                          # end-to-end without driving stdin
     "lineage",
-    "pprl auto-config",
-    "pprl link",
-    "profile",  # indirect: load_file(...).collect() is a LazyFrame
-    "review",
+    "pprl auto-config",   # pprl/autoconfig.py has NO frame-seam use at all
+    "pprl link",          # pprl/protocol.py likewise -- porting these means
+                          # porting the pprl core, not the command
 }
+
+# Ported and verified polars-free on 2026-08-31, on BOTH lanes (arrow, and with
+# polars present so the classic lane is unregressed):
+#   anomalies          -- read_files_arrow + the arrow csv writer
+#   analyze-blocking   -- read_files_arrow; analyze_blocking already took arrow
+#   profile            -- load_file(..., return_frame=True); also fixed
+#                         format_profile_report, whose sample block called the
+#                         polars-only head()/iter_rows() and so broke
+#                         `profile --verbose` on the arrow lane
+#   review             -- polars was imported ONLY to annotate a local
 
 # Also confirmed polars-bound by hand, but never invoked by the sweep because it
 # MUTATES state (it removes a record from a cluster). Listed so the finding is

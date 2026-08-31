@@ -262,3 +262,79 @@ def _read_excel_arrow(path: Path, *, sheet: str | None):
     # letting Arrow's/Polars' own inference run rather than second-guessing
     # it here).
     return pa.table({name: pa.array(values) for name, values in columns.items()})
+
+
+# --------------------------------------------------------------------------
+# Multi-file ingest (CLI + service entry points)
+# --------------------------------------------------------------------------
+
+
+def read_files_arrow(
+    specs,
+    *,
+    source_column: str | None = None,
+    row_id_column: str | None = None,
+    encoding: str | None = "utf8-lossy",
+):
+    """Read one or more files into a single ``pyarrow.Table``, polars-free.
+
+    This is the shape half the CLI needs and kept open-coding against polars:
+    read each file, optionally stamp the source name onto every row, concat
+    with a UNION of columns, then number the rows. Written once here because it
+    had already been written three times (``auto_configure``, ``a2a.skills``,
+    ``api.server``) and, in the CLI, written against ``pl.concat`` -- which is
+    why ten commands raised ``ImportError`` on a default install.
+
+    Args:
+        specs: iterable of ``path`` or ``(path, source_name)``.
+        source_column: when set, add a column of the per-file source name.
+        row_id_column: when set, append an Int64 row index.
+        encoding: passed to the CSV reader for text files.
+
+    Returns:
+        A ``pyarrow.Table``.
+
+    Concat semantics are ``promote_options="permissive"``, which is what
+    ``pl.concat(..., how="diagonal")`` did: files with different column sets
+    union, and the missing cells are null. Plain ``pa.concat_tables`` would
+    raise instead -- the exact trap that made a multi-file fixture blow up
+    while porting auto-config.
+    """
+    import pyarrow as pa
+
+    tables = []
+    for spec in specs:
+        if isinstance(spec, (tuple, list)):
+            path, source = spec[0], (spec[1] if len(spec) > 1 else None)
+        else:
+            path, source = spec, None
+
+        path = Path(path)
+        suffix = path.suffix.lower()
+        if suffix in (".parquet", ".xlsx"):
+            table = read_table_arrow(path)
+        else:
+            table = read_table_arrow(path, encoding=encoding)
+
+        if source_column is not None:
+            label = source if source is not None else path.stem
+            table = table.append_column(
+                source_column, pa.array([label] * table.num_rows, type=pa.string())
+            )
+        tables.append(table)
+
+    if not tables:
+        raise ValueError("read_files_arrow requires at least one file")
+
+    combined = (
+        pa.concat_tables(tables, promote_options="permissive")
+        if len(tables) > 1
+        else tables[0]
+    )
+
+    if row_id_column is not None:
+        combined = combined.append_column(
+            row_id_column,
+            pa.array(list(range(combined.num_rows)), type=pa.int64()),
+        )
+    return combined

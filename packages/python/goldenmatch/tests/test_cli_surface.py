@@ -385,25 +385,16 @@ def test_score_works_without_polars(tmp_path):
     assert proc.returncode == 0, proc.stdout + proc.stderr[-1500:]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="KNOWN DEFECT: `goldenmatch profile` hard-requires polars. load_file(...)"
-    ".collect() is a polars LazyFrame round trip, so the command raises a bare"
-    " ImportError on a default install. Same class as #2810. Flip this marker"
-    " when profile is ported to the frame seam.",
-)
 def test_profile_works_without_polars(tmp_path):
+    """Was a strict xfail; `profile` is now ported (load_file(return_frame=True),
+    plus format_profile_report's sample block, which called the polars-only
+    head()/iter_rows() and broke `--verbose` on the arrow lane)."""
     proc = _cli_probe(["profile", "<CSV>"], tmp_path)
     assert proc.returncode == 0, proc.stdout + proc.stderr[-1500:]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="KNOWN DEFECT: `goldenmatch analyze-blocking` hard-requires polars --"
-    " it does `import polars as pl` and `pl.concat(frames)` in the command body,"
-    " so it raises a bare ImportError on a default install. Same class as #2810."
-    " Flip this marker when it is ported to the frame seam.",
-)
 def test_analyze_blocking_works_without_polars(tmp_path):
+    """Was a strict xfail; `analyze-blocking` now ingests via read_files_arrow.
+    analyze_blocking itself already read through the frame seam."""
     proc = _cli_probe(["analyze-blocking", "<CSV>", "--config", "<CFG>"], tmp_path)
     assert proc.returncode == 0, proc.stdout + proc.stderr[-1500:]

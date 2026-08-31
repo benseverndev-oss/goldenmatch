@@ -15,6 +15,7 @@ run learns from them.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import typer
 from rich.console import Console
@@ -45,7 +46,6 @@ def review_cmd(
     Type y (approve/match), n (reject/no match), s (skip), or q (quit).
     Decisions feed Learning Memory and are applied on the next run.
     """
-    import polars as pl
 
     from goldenmatch.config.loader import load_config
     from goldenmatch.core.memory.store import MemoryStore
@@ -60,7 +60,10 @@ def review_cmd(
     if queue_path is None:
         queue_path = _derive_review_queue_path(cfg) or ".goldenmatch/review_queue.db"
 
-    df: pl.DataFrame | None = None
+    # Annotated loosely on purpose: this was `pl.DataFrame | None`, and the
+    # `import polars` that existed ONLY to satisfy it made the whole command
+    # raise ImportError on a default install, where polars is absent.
+    df: Any | None = None
     quality_reasons: dict[tuple[int, int], str] = {}
     if files:
         from goldenmatch.cli.dedupe import _parse_file_source, _resolve_column_maps
