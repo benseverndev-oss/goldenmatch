@@ -4,6 +4,33 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.5.3] - 2026-08-31
+
+### Changed
+
+- **`goldenmatch` floor raised to `>=3.17`.** 3.17.0 makes the documented first
+  run work on a default install: `pip install goldenmatch` followed by
+  `goldenmatch dedupe customers.csv` -- the quickstart on the README, the docs
+  site and the PyPI page -- exited 3 on a polars-free install, which is what a
+  plain `pip install` has produced since v3.1.0 made polars an optional extra.
+  Three independent polars imports sat on that path (auto-config ingest, the
+  Arrow lane's preflight decline, and the csv writer).
+
+  Suite installs pin `goldenmatch[polars]` and so were never hit by this. The
+  floor still moves, for two reasons: the suite should not advertise a member
+  version whose own quickstart is broken for anyone who drops the extra, and
+  3.17.0 also carries new public API (`MatchkeyConfig.link_threshold_observed`,
+  `segments.infer_kinds`) that a suite install has no other way to reach.
+
+- **`goldenmatch-native` floor raised to `>=0.2.1`.** Metadata only -- 0.2.1 is
+  the first wheel to carry PyPI discovery metadata (12 keywords, 11
+  classifiers), where all 16 prior releases had none. No runtime change; the
+  floor moves so a suite install resolves to the discoverable wheel.
+
+  Every other member is already at its published version (goldencheck 3.5.0,
+  goldenflow 2.2.0, goldenpipe 1.5.0, goldenanalysis 0.5.0, infermap 0.7.0).
+
+
 ## [0.5.2] - 2026-08-23
 
 ### Changed
