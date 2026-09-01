@@ -112,18 +112,72 @@ def test_whole_file_rust_route_still_rejects_every_frame_op():
             )
 
 
-def test_splits_still_declared_unsupported():
-    """Honest boundary: a split dispatches as a `mode="dataframe"` transform
-    that takes the NATIVE frame, and those functions are polars-native. It is
-    the remaining work, so it must still be reported rather than silently
-    mishandled."""
+SPLIT_CASES = {
+    "split_name": ("full", "split_name"),
+    "split_name_reverse": ("rev", "split_name_reverse"),
+    "split_address": ("addr", "split_address"),
+}
+
+SPLIT_DATA = {
+    "full": ["  Ann Smith ", "Bob Jones", None, "Cher"],
+    "rev": ["Smith, Ann", "Jones, Bob", None, "Cher"],
+    "addr": ["12 High St, Leeds, LS1 1AA", "9 Low Rd, York, YO1 2BB", None, "nope"],
+}
+
+
+@pytest.mark.parametrize("label", sorted(SPLIT_CASES))
+def test_columnar_splits_match_the_polars_engine(label):
+    """Byte-for-byte, INCLUDING when the polars side uses the native kernel.
+
+    The columnar split calls the same pure-Python helper the registered
+    transform falls back to -- the one its docstring calls "the byte-exact
+    reference". This asserts that claim rather than assuming it: with
+    goldenflow-native present the polars path runs the Rust kernel while this
+    path runs the Python reference, so a divergence between them shows up here.
+    """
+    pl = pytest.importorskip("polars", reason="the reference engine is polars")
+    import goldenflow
+    from goldenflow.config.schema import SplitSpec
+
+    src, method = SPLIT_CASES[label]
+    cfg = GoldenFlowConfig(
+        transforms=[TransformSpec(column=src, ops=["strip"])],
+        splits=[SplitSpec(source=src, target=[], method=method)],
+    )
+    columnar = transform_columns_public(
+        {k: list(v) for k, v in SPLIT_DATA.items()}, cfg
+    ).columns
+
+    res = goldenflow.transform_df(pl.DataFrame(SPLIT_DATA), config=cfg)
+    pdf = res.df if hasattr(res, "df") else res
+    polars_cols = {c: pdf[c].to_list() for c in pdf.columns}
+
+    assert set(columnar) == set(polars_cols)
+    for col in sorted(columnar):
+        assert columnar[col] == polars_cols[col], col
+
+
+def test_an_unknown_split_method_still_falls_back():
+    """Only the methods in `_COLUMNAR_SPLITS` are covered. Anything else must
+    still decline, rather than silently producing no split."""
     from goldenflow.config.schema import SplitSpec
 
     cfg = GoldenFlowConfig(
         transforms=_STRIP,
-        splits=[SplitSpec(source="name", target=["a", "b"], method="split_name")],
+        splits=[SplitSpec(source="name", target=["a"], method="not_a_real_method")],
     )
     assert _frame_level_blocked(cfg)
+
+
+def test_known_splits_no_longer_force_the_polars_engine():
+    from goldenflow.config.schema import SplitSpec
+
+    for label, (src, method) in SPLIT_CASES.items():
+        cfg = GoldenFlowConfig(
+            transforms=[TransformSpec(column=src, ops=["strip"])],
+            splits=[SplitSpec(source=src, target=[], method=method)],
+        )
+        assert not _frame_level_blocked(cfg), label
 
 
 def test_frame_ops_run_without_polars_installed():

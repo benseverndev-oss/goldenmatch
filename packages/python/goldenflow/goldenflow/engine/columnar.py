@@ -88,20 +88,95 @@ _OWNED_STRING = FUSABLE_KERNELS | FUSABLE_PARAM_KERNELS
 _OWNED_NULLABLE = FUSABLE_NULLABLE_KERNELS
 
 
-def _frame_level_blocked(config) -> bool:
-    """The only frame-level op that still forces the Polars engine: ``splits``.
+def _columnar_split_table() -> dict:
+    """method name -> (output column names, per-value function).
 
-    renames / drop / filters / dedup now run on ``ColumnarFrame`` (see
-    ``_apply_frame_ops``). They were never operations the columnar engine could
-    not express -- they were unimplemented ones, and the fallback meant a config
-    carrying a single rename dragged the entire transform onto polars.
+    These call the SAME pure-Python helpers the registered dataframe-mode
+    transforms fall back to -- the ones their docstrings call "the byte-exact
+    reference" for the native kernel. Reusing them means the columnar split is
+    byte-identical to the polars split by construction rather than by a
+    reimplementation someone has to keep in step.
 
-    ``splits`` stays because a split dispatches as a ``mode="dataframe"``
-    transform -- ``info.func(frame.native, source)`` takes the NATIVE frame, and
-    the registered functions are polars-native. Porting those is the remaining
-    work; it is not something this abstraction can paper over.
+    Imported lazily: goldenflow.transforms pulls in the whole transform
+    registry, and columnar.py is imported on the hot ingest path.
     """
-    return bool(config.splits)
+    from goldenflow.transforms.address import _split_address_py
+    from goldenflow.transforms.names import _split_name_py, _split_name_reverse_py
+
+    return {
+        "split_name": (("first_name", "last_name"), _split_name_py),
+        "split_name_reverse": (("first_name", "last_name"), _split_name_reverse_py),
+        "split_address": (("street", "city", "state", "zip"), _split_address_py),
+    }
+
+
+class _LazySplitTable(dict):
+    """`_COLUMNAR_SPLITS` without paying the registry import at module load."""
+
+    _loaded = False
+
+    def _ensure(self):
+        if not self._loaded:
+            self.update(_columnar_split_table())
+            self._loaded = True
+
+    def __contains__(self, key):
+        self._ensure()
+        return dict.__contains__(self, key)
+
+    def __getitem__(self, key):
+        self._ensure()
+        return dict.__getitem__(self, key)
+
+
+_COLUMNAR_SPLITS = _LazySplitTable()
+
+
+def _apply_splits(frame, config):
+    """Apply `config.splits` on either backend.
+
+    The polars side dispatches through the transform registry exactly as
+    engine/transformer.py does. The columnar side maps each value through the
+    same pure-Python reference the registered transform falls back to.
+    """
+    from goldenflow.engine.frame import ColumnarFrame
+
+    for split in (config.splits or []):
+        if split.source not in frame.columns:
+            continue
+        if isinstance(frame, ColumnarFrame):
+            names, fn = _COLUMNAR_SPLITS[split.method]
+            values = frame.column(split.source)
+            produced = [fn(v) for v in values]
+            for i, out_name in enumerate(names):
+                frame = frame.with_column(out_name, [p[i] for p in produced])
+        else:
+            from goldenflow.transforms import get_transform
+
+            info = get_transform(split.method)
+            if info and info.mode == "dataframe":
+                frame = frame.replace_native(info.func(frame.native, split.source))
+    return frame
+
+
+def _frame_level_blocked(config) -> bool:
+    """Nothing frame-level forces the Polars engine any more.
+
+    renames / drop / filters / dedup run on ``ColumnarFrame`` via
+    ``_apply_frame_ops``, and the three registered splits run via
+    ``_apply_splits``. None of these were operations the columnar engine could
+    not express -- they were unimplemented ones, and the fallback meant a config
+    carrying a single rename dragged the whole transform onto polars, which on a
+    default install (polars is an OPTIONAL extra) meant an ImportError.
+
+    What is left is a NAME check, not a capability one: a split method outside
+    ``_COLUMNAR_SPLITS`` is one this module has no reference implementation for,
+    so it still declines rather than silently producing no split. The two
+    dataframe-mode transforms that are not splits stay out by signature --
+    ``merge_name`` takes an extra ``last_name_col`` and ``latlng_pack`` takes no
+    column at all, so neither fits ``func(frame, split.source)``.
+    """
+    return any(s.method not in _COLUMNAR_SPLITS for s in (config.splits or []))
 
 
 def _frame_level_blocked_whole_file(config) -> bool:
@@ -131,10 +206,12 @@ def _apply_frame_ops(frame, config, manifest=None):
     test_columnar_declines_unsupported_config, which had asserted the renamed
     column exists.
 
-    Applied in the SAME ORDER as engine/transformer.py -- renames, drop,
-    filters, dedup -- because they do not commute: a rename before a drop names
-    a different column than a drop before a rename.
+    Applied in the SAME ORDER as engine/transformer.py -- splits, renames,
+    drop, filters, dedup -- because they do not commute: a rename before a drop
+    names a different column than a drop before a rename, and a split creates
+    columns a later rename may target.
     """
+    frame = _apply_splits(frame, config)
 
     for old_name, new_name in (config.renames or {}).items():
         if old_name in frame.columns:

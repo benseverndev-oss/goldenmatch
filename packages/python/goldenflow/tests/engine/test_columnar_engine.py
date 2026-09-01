@@ -10,7 +10,7 @@ import goldenflow  # noqa: F401 -- import-time transform registration
 import polars as pl
 import pytest
 from goldenflow import transform_df
-from goldenflow.config.schema import SplitSpec, GoldenFlowConfig, TransformSpec
+from goldenflow.config.schema import GoldenFlowConfig, SplitSpec, TransformSpec
 from goldenflow.core._native_loader import native_module
 from goldenflow.engine import columnar
 
@@ -179,11 +179,17 @@ def test_columnar_declines_unsupported_config(monkeypatch) -> None:
     out = transform_df(SAMPLE, config=cfg)
     assert out.df["n"].to_list()[0] == "<b>John</b>  SMITH!"  # strip applied, renamed
 
-    # `splits` is the one frame-level op that still declines: it dispatches as a
-    # mode="dataframe" transform taking the NATIVE frame, and those functions
-    # are polars-native.
+    # A KNOWN split is handled too, so nothing frame-level declines any more.
     split_cfg = GoldenFlowConfig(
         transforms=[TransformSpec(column="name", ops=["strip"])],
         splits=[SplitSpec(source="name", target=["a", "b"], method="split_name")],
     )
-    assert columnar._frame_level_blocked(split_cfg)
+    assert not columnar._frame_level_blocked(split_cfg)
+
+    # What remains is a NAME check: a split method with no reference
+    # implementation here must still decline rather than silently no-op.
+    unknown_cfg = GoldenFlowConfig(
+        transforms=[TransformSpec(column="name", ops=["strip"])],
+        splits=[SplitSpec(source="name", target=["a"], method="not_a_real_method")],
+    )
+    assert columnar._frame_level_blocked(unknown_cfg)
