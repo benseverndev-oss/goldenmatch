@@ -26,7 +26,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from sweep_cli_polars_free import MUTATING, run_sweep  # noqa: E402
+from sweep_cli_polars_free import NEVER_INVOKE, run_sweep  # noqa: E402
 
 # Confirmed by invocation on 2026-08-31 against a polars-blocked interpreter.
 # Each raises ImportError: No module named 'polars' -- a traceback, not an
@@ -103,13 +103,19 @@ def test_the_sweep_actually_ran_something(sweep):
     )
 
 
-def test_mutating_commands_are_never_invoked(sweep):
-    """A sweep that changes the machine it runs on is not a sweep."""
+def test_external_system_commands_are_never_invoked(sweep):
+    """A sweep that touches a database is not a sweep.
+
+    Locally-mutating commands ARE invoked now -- under a redirected $HOME, so
+    their writes land in the scratch dir. Leaving them unprobed was safe but it
+    was also twelve commands whose polars status was simply unknown, and
+    unknown was being counted as fine.
+    """
     by_cmd = {r["cmd"]: r for r in sweep}
-    for name in MUTATING:
+    for name in NEVER_INVOKE:
         if name in by_cmd:
             assert by_cmd[name]["verdict"] == "unprobed", (
-                f"{name} is marked MUTATING but the sweep invoked it"
+                f"{name} reaches an external system but the sweep invoked it"
             )
 
 

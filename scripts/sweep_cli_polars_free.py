@@ -71,18 +71,72 @@ CSV_NAMES = {
     "csv",
     "file_a",
     "new_records",
-    "file_b",
+    "data",
     "target",
+    "against",
+    "docs",
+    "sample",
+    "input_path",
+    "file_b",
     "source",
 }
 CONFIG_NAMES = {"config", "config_path", "cfg"}
 
-# Commands that CHANGE something -- a preset on disk, an identity store, a merge
-# decision. They are never invoked here even when their arguments could be
-# synthesised: a sweep that mutates the machine it runs on is not a sweep. Some
-# are known polars-bound from a hand probe; those are recorded in
-# scripts/test_cli_polars_free_sweep.py rather than re-derived by running them.
-MUTATING = {
+# Parameters that name an OUTPUT path. Given a path inside the scratch dir that
+# does not exist yet, so a command writes there instead of refusing.
+OUT_NAMES = {"out", "output", "output_path", "dest"}
+
+# Scalar parameters, by name. Values are deliberately plausible-but-absent (an
+# entity id that is not in any store, a preset that was never saved): the point
+# is to REACH the command body, not to make it succeed. A command that then
+# exits 1 saying "not found" has answered the only question this sweep asks --
+# did it need polars to get that far.
+STRING_DEFAULTS = {
+    "entity_id": "1",
+    "id_a": "1",
+    "id_b": "2",
+    "record_id": "1",
+    "source_name": "probe_source",
+    "source_pk_column": "id",
+    "name": "probe_preset",
+    "a": "acme ltd",
+    "b": "acme limited",
+    "cluster_id": "1",
+    "keep": "1",
+    "absorb": "2",
+    "record_ids": "2",
+    "run_id": "probe_run",
+    "model": "probe_model",
+    "decision": "merge",
+    "dataset": "probe_dataset",
+    "src": "memory.json",
+}
+
+# `identity migrate --dsn` wants a DATABASE connection string. Deliberately
+# absent from STRING_DEFAULTS: a synthesised dsn either fails at parse (telling
+# us nothing) or, worse, points at something real. It stays unprobed.
+
+# Parameters wanting a structured file. Minimal-but-valid content, written into
+# the scratch dir.
+FIXTURE_NAMES = {
+    "manifest": ("manifest.json", '{"nodes": {}, "sources": {}, "metadata": {}}'),
+    "ontology": ("onto.ttl", "@prefix owl: <http://www.w3.org/2002/07/owl#> ."),
+    "schema": ("schema.json", '{"fields": []}'),
+    "sweep": ("sweep.json", "{}"),
+}
+
+# Commands that reach something this harness cannot contain: a database, a
+# remote. Never invoked, at any isolation level.
+NEVER_INVOKE = {
+    "sync",
+}
+
+# Commands that mutate LOCAL state only -- presets, a memory store, an identity
+# store, a clusters file. They ARE invoked, with $HOME redirected into the
+# scratch directory so every write lands there. Leaving them unprobed was the
+# safe default; it was also 13 commands whose polars status was simply unknown,
+# and "unknown" was quietly counted as fine.
+MUTATING_LOCAL = {
     "unmerge",
     "rollback",
     "config save",
@@ -94,7 +148,6 @@ MUTATING = {
     "identity resolve",
     "memory add",
     "memory import",
-    "sync",
     "certify-keys",
 }
 
@@ -117,7 +170,10 @@ def _probe_source() -> str:
         NON_TERMINATING = set(json.loads(sys.argv[1]))
         CSV_NAMES = set(json.loads(sys.argv[2]))
         CONFIG_NAMES = set(json.loads(sys.argv[3]))
-        MUTATING = set(json.loads(sys.argv[4]))
+        NEVER_INVOKE = set(json.loads(sys.argv[4]))
+        OUT_NAMES = set(json.loads(sys.argv[5]))
+        STRING_DEFAULTS = json.loads(sys.argv[6])
+        FIXTURE_NAMES = json.loads(sys.argv[7])
 
         d = pathlib.Path(tempfile.mkdtemp())
         csv = d / "a.csv"
@@ -131,6 +187,18 @@ def _probe_source() -> str:
         cfg.write_text(
             "matchkeys:\\n  - name: k\\n    type: exact\\n    fields:\\n      - field: email\\n",
             encoding="utf-8")
+
+        fixtures = {}
+        for pname, (fname, body) in FIXTURE_NAMES.items():
+            fp = d / fname
+            fp.write_text(body, encoding="utf-8")
+            fixtures[pname] = str(fp)
+
+        _out_seq = [0]
+
+        def out_path():
+            _out_seq[0] += 1
+            return str(d / f"out_{_out_seq[0]}.csv")
 
         grp = typer.main.get_command(app)
         ctx = click.Context(grp)
@@ -146,6 +214,27 @@ def _probe_source() -> str:
                     leaves.append((path, cmd))
         walk(grp)
 
+        def value_for(pname):
+            """A plausible value for a parameter NAME, or None if we have none.
+
+            Name-based rather than type-based on purpose: click reports `str`
+            for a preset name, an entity id and an output path alike, so the
+            type tells us nothing about what would reach the command body.
+            """
+            if pname in CONFIG_NAMES:
+                return str(cfg)
+            if pname in CSV_NAMES:
+                return str(csv2 if pname == "file_b" else csv)
+            if pname in OUT_NAMES:
+                return out_path()
+            if pname in FIXTURE_NAMES:
+                return fixtures[pname]
+            if pname in STRING_DEFAULTS:
+                return STRING_DEFAULTS[pname]
+            if pname in ("fields", "field"):
+                return "name"
+            return None
+
         def synthesise(cmd):
             """Return argv tail, or None when a required param cannot be filled."""
             argv = []
@@ -153,20 +242,15 @@ def _probe_source() -> str:
                 if isinstance(p, click.Argument):
                     if not p.required:
                         continue
-                    if p.name in CSV_NAMES:
-                        argv.append(str(csv2 if p.name == "file_b" else csv))
-                    else:
+                    v = value_for(p.name)
+                    if v is None:
                         return None
+                    argv.append(v)
                 elif p.required:
-                    flag = p.opts[0]
-                    if p.name in CONFIG_NAMES:
-                        argv += [flag, str(cfg)]
-                    elif p.name in CSV_NAMES:
-                        argv += [flag, str(csv2 if p.name == "file_b" else csv)]
-                    elif p.name in ("fields", "field"):
-                        argv += [flag, "name"]
-                    else:
+                    v = value_for(p.name)
+                    if v is None:
                         return None
+                    argv += [p.opts[0], v]
             return argv
 
         runner = CliRunner()
@@ -176,8 +260,9 @@ def _probe_source() -> str:
             if path[-1] in NON_TERMINATING or path[0] in NON_TERMINATING:
                 rows.append({"cmd": name, "verdict": "unprobed", "why": "non-terminating"})
                 continue
-            if name in MUTATING:
-                rows.append({"cmd": name, "verdict": "unprobed", "why": "mutating -- never invoked"})
+            if name in NEVER_INVOKE:
+                rows.append({"cmd": name, "verdict": "unprobed",
+                             "why": "reaches an external system -- never invoked"})
                 continue
             tail = synthesise(cmd)
             if tail is None:
@@ -228,6 +313,13 @@ def run_sweep() -> list[dict]:
         # into a commit by `git add -A`.
         workdir = Path(td) / "cwd"
         workdir.mkdir()
+        # $HOME into the scratch dir: several commands write presets, memory or
+        # identity state under ~/.goldenmatch. Redirecting it is what makes the
+        # locally-mutating commands safe to actually RUN rather than skip.
+        fake_home = Path(td) / "home"
+        fake_home.mkdir()
+        env["HOME"] = str(fake_home)
+        env["USERPROFILE"] = str(fake_home)
         proc = subprocess.run(
             [
                 sys.executable,
@@ -235,7 +327,10 @@ def run_sweep() -> list[dict]:
                 json.dumps(sorted(NON_TERMINATING)),
                 json.dumps(sorted(CSV_NAMES)),
                 json.dumps(sorted(CONFIG_NAMES)),
-                json.dumps(sorted(MUTATING)),
+                json.dumps(sorted(NEVER_INVOKE)),
+                json.dumps(sorted(OUT_NAMES)),
+                json.dumps(STRING_DEFAULTS),
+                json.dumps(FIXTURE_NAMES),
             ],
             capture_output=True,
             text=True,
