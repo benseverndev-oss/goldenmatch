@@ -10,7 +10,7 @@ import goldenflow  # noqa: F401 -- import-time transform registration
 import polars as pl
 import pytest
 from goldenflow import transform_df
-from goldenflow.config.schema import GoldenFlowConfig, TransformSpec
+from goldenflow.config.schema import SplitSpec, GoldenFlowConfig, TransformSpec
 from goldenflow.core._native_loader import native_module
 from goldenflow.engine import columnar
 
@@ -159,15 +159,31 @@ def test_columnar_split_equals_polars(monkeypatch, ops, col, data) -> None:
 
 
 def test_columnar_declines_unsupported_config(monkeypatch) -> None:
-    """A config with a data-dependent op (category_auto_correct) or a frame-level op
-    is NOT columnar-ready; it falls through to the Polars engine (still correct)."""
+    """A data-dependent op (category_auto_correct) is NOT columnar-ready and
+    falls through to the Polars engine (still correct).
+
+    A RENAME used to be in this test too. It no longer declines: renames, drop,
+    filters and dedup run on ColumnarFrame now (see
+    tests/test_columnar_frame_ops.py), so a config carrying one of them no
+    longer drags the whole transform onto polars -- which mattered because on a
+    default install, where polars is an optional extra, that fallback raised.
+    """
     monkeypatch.setenv("GOLDENFLOW_ENGINE", "columnar")
     # category_auto_correct is data-dependent (whole-column frequency map), not a
     # scalar or fused kernel -> declines (deliberately excluded from the columnar path)
     assert not columnar.config_is_columnar_ready(_cfg([("name", ["strip", "category_auto_correct"])]))
-    # a rename is a frame-level op -> declines
+
+    # A rename is now HANDLED, and still produces the same output.
     cfg = GoldenFlowConfig(transforms=[TransformSpec(column="name", ops=["strip"])], renames={"name": "n"})
-    assert not columnar.config_is_columnar_ready(cfg)
-    # but it still produces correct output via the Polars fallback
+    assert not columnar._frame_level_blocked(cfg)
     out = transform_df(SAMPLE, config=cfg)
     assert out.df["n"].to_list()[0] == "<b>John</b>  SMITH!"  # strip applied, renamed
+
+    # `splits` is the one frame-level op that still declines: it dispatches as a
+    # mode="dataframe" transform taking the NATIVE frame, and those functions
+    # are polars-native.
+    split_cfg = GoldenFlowConfig(
+        transforms=[TransformSpec(column="name", ops=["strip"])],
+        splits=[SplitSpec(source="name", target=["a", "b"], method="split_name")],
+    )
+    assert columnar._frame_level_blocked(split_cfg)

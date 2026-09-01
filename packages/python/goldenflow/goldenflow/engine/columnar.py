@@ -89,11 +89,92 @@ _OWNED_NULLABLE = FUSABLE_NULLABLE_KERNELS
 
 
 def _frame_level_blocked(config) -> bool:
-    """Frame-level ops (splits/renames/drops/filters/dedup) the columnar path
-    doesn't handle yet — any of them forces the Polars engine."""
+    """The only frame-level op that still forces the Polars engine: ``splits``.
+
+    renames / drop / filters / dedup now run on ``ColumnarFrame`` (see
+    ``_apply_frame_ops``). They were never operations the columnar engine could
+    not express -- they were unimplemented ones, and the fallback meant a config
+    carrying a single rename dragged the entire transform onto polars.
+
+    ``splits`` stays because a split dispatches as a ``mode="dataframe"``
+    transform -- ``info.func(frame.native, source)`` takes the NATIVE frame, and
+    the registered functions are polars-native. Porting those is the remaining
+    work; it is not something this abstraction can paper over.
+    """
+    return bool(config.splits)
+
+
+def _frame_level_blocked_whole_file(config) -> bool:
+    """The STRICTER rule, for the whole-file Rust CSV route.
+
+    That path runs read -> transform -> write entirely in Rust, so there is no
+    Python step in which to apply frame ops. `_frame_level_blocked` was loosened
+    to only block `splits` because the in-memory paths now apply the rest via
+    `_apply_frame_ops`; reusing it here would have let a config carrying a
+    rename take the Rust route and SILENTLY DROP the rename -- no error, just
+    output missing the operation. Keep every frame-level op blocking here until
+    the Rust path can express them.
+    """
     return bool(
         config.splits or config.renames or config.drop or config.filters or config.dedup
     )
+
+
+def _apply_frame_ops(frame, config, manifest=None):
+    """renames / drop / filters / dedup on ANY :class:`Frame` backend.
+
+    Backend-generic on purpose. `_frame_level_blocked` used to decline these
+    configs, so every code path was protected by that one guard; removing it
+    means every path that can now receive such a config has to apply them. The
+    `transform_df` boundary is one such path, and wiring only the dict-based
+    entry point silently DROPPED the rename there -- caught by
+    test_columnar_declines_unsupported_config, which had asserted the renamed
+    column exists.
+
+    Applied in the SAME ORDER as engine/transformer.py -- renames, drop,
+    filters, dedup -- because they do not commute: a rename before a drop names
+    a different column than a drop before a rename.
+    """
+
+    for old_name, new_name in (config.renames or {}).items():
+        if old_name in frame.columns:
+            frame = frame.rename({old_name: new_name})
+
+    drop_cols = [c for c in (config.drop or []) if c in frame.columns]
+    if drop_cols:
+        frame = frame.drop(drop_cols)
+
+    for filt in (config.filters or []):
+        if filt.column not in frame.columns:
+            continue
+        cond = filt.condition
+        if cond == "not_null":
+            frame = frame.filter_not_null(filt.column)
+        elif cond.startswith("after:"):
+            frame = frame.filter_cmp(filt.column, ">", cond.split(":", 1)[1])
+        elif cond.startswith("before:"):
+            frame = frame.filter_cmp(filt.column, "<", cond.split(":", 1)[1])
+        # An unrecognised condition is a NO-OP -- _apply_filter ends in a bare
+        # `return frame`, so keeping every row is the existing contract.
+
+    dedup = getattr(config, "dedup", None)
+    if dedup:
+        dedup_cols = [c for c in dedup.columns if c in frame.columns]
+        if dedup_cols:
+            before = frame.height
+            frame = frame.unique(subset=dedup_cols, keep=dedup.keep)
+            after = frame.height
+            if before != after and manifest is not None:
+                from goldenflow.engine.manifest import TransformRecord
+
+                manifest.add_record(TransformRecord(
+                    column=",".join(dedup_cols),
+                    transform="dedup",
+                    affected_rows=before - after,
+                    total_rows=before,
+                ))
+
+    return frame
 
 
 def _accepted_string(nm) -> frozenset[str]:
@@ -308,7 +389,7 @@ def columnar_file_ready(config) -> bool:
     f64*``) or SPLIT (``string* splitter``) shape, validated by the native probes
     (the single source of truth). When true, a CSV runs read->transform->write
     entirely in Rust — no ``pl.DataFrame``, no Polars, no pyarrow."""
-    if _frame_level_blocked(config) or not config.transforms:
+    if _frame_level_blocked_whole_file(config) or not config.transforms:
         return False
     nm = native_module()
     if nm is None or not hasattr(nm, "transform_csv") or not hasattr(nm, "apply_chain_str_list"):
@@ -401,6 +482,11 @@ def transform(df, config, source: str = "<dataframe>"):
     cols = {c: df[c].to_list() for c in names}
     new_cols, manifest = transform_columns(cols, config, source=source)
     out = df.with_columns([pl.Series(n, v) for n, v in new_cols.items()])
+    # The pl.DataFrame boundary needs the frame ops too: _frame_level_blocked
+    # no longer keeps these configs away from this path.
+    from goldenflow.engine.frame import PolarsFrame
+    
+    out = _apply_frame_ops(PolarsFrame(out), config, manifest).native
     return out, manifest
 
 
@@ -547,6 +633,13 @@ def _transform_via_columns(df, config, source, nm, pl):
         series = imported.to_series(0) if isinstance(imported, pl.DataFrame) else imported
         out_series.append(series.alias(spec.column))
     out = df.with_columns(out_series) if out_series else df
+    # Frame ops on this path too. `_frame_level_blocked` no longer keeps
+    # rename/drop/filter/dedup configs away from the columnar engine, so
+    # every return that can now receive one has to apply them -- wiring
+    # only some of them silently DROPS the op.
+    from goldenflow.engine.frame import PolarsFrame as _PF
+    
+    out = _apply_frame_ops(_PF(out), config, manifest).native
     return out, manifest
 
 
@@ -722,10 +815,16 @@ def transform_columns_public(data, config):
             return ColumnarResult(columns=dict(data), manifest=Manifest(source="<dataframe>"))
         if config_is_columnar_ready(built):
             cols, manifest = transform_columns_native(data, built)
+            from goldenflow.engine.frame import ColumnarFrame
+
+            cols = _apply_frame_ops(ColumnarFrame(cols), built, manifest).native
             return ColumnarResult(columns=cols, manifest=manifest)
 
     if config is not None and native_ok and config_is_columnar_ready(config):
         cols, manifest = transform_columns_native(data, config)
+        from goldenflow.engine.frame import ColumnarFrame
+
+        cols = _apply_frame_ops(ColumnarFrame(cols), config, manifest).native
         return ColumnarResult(columns=cols, manifest=manifest)
 
     # Uncovered config (or zero-config auto-detect) -> the Polars engine, via the
