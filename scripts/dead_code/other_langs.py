@@ -22,19 +22,29 @@ def _run(cmd: list[str], cwd: Path | None = None) -> str | None:
     return proc.stdout
 
 
+def _parse_machete(output: str) -> list[str]:
+    """Parse cargo-machete --with-metadata output to extract unused dependency names.
+
+    Cargo-machete outputs a section header (crate name + Cargo.toml path) followed
+    by tab-indented dependency names. This function extracts all dependency names.
+    """
+    found: list[str] = []
+    for line in output.splitlines():
+        # Dependencies are tab-indented; section headers are not.
+        # Strip leading tab and any trailing whitespace.
+        if line.startswith("\t"):
+            dep = line.lstrip("\t").strip()
+            if dep:
+                found.append(dep)
+    return sorted(set(found))
+
+
 def unused_rust_deps() -> list[str]:
     """Crate dependencies nothing uses, per cargo-machete."""
     out = _run(["cargo", "machete", "--with-metadata"])
     if not out:
         return []
-    found: list[str] = []
-    for line in out.splitlines():
-        line = line.strip()
-        # cargo-machete lists offenders as indented bare crate names under a
-        # per-manifest heading.
-        if line.startswith("-") or line.startswith("*"):
-            found.append(line.lstrip("-* ").strip())
-    return sorted(set(found))
+    return _parse_machete(out)
 
 
 def unwired_rust_exports() -> list[str]:
