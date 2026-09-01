@@ -32,16 +32,36 @@ from sweep_cli_polars_free import MUTATING, run_sweep  # noqa: E402
 # Each raises ImportError: No module named 'polars' -- a traceback, not an
 # error message -- on a default install.
 KNOWN_POLARS_BOUND = {
-    # Remaining, with the reason each was left rather than ported:
-    "demo",               # binds via tui.engine -> _polars_lazy, several layers down
-    "incremental",        # the binding is in core/incremental.py, not the CLI
-    "label",              # interactive labelling loop; shallow, but not verifiable
-                          # end-to-end without driving stdin
+    # Each is blocked behind a CORE module, not the command. Recorded with the
+    # blocker so the next person starts where the work actually is.
+    #
+    # demo, lineage   -- both run through tui.engine.MatchEngine, which is a
+    #                    polars LazyFrame pipeline end to end (df.lazy() /
+    #                    .collect() around auto-fix, validation and
+    #                    standardization). Porting the engine fixes both.
+    # incremental     -- core/incremental.py leans on apply_standardization,
+    #                    match_one and find_exact_matches; none of the three has
+    #                    any frame-seam use.
+    # pprl *          -- pprl/protocol.py and pprl/autoconfig.py have ZERO
+    #                    to_frame calls, so this is a pprl-core port.
+    "demo",
+    "incremental",
     "lineage",
-    "pprl auto-config",   # pprl/autoconfig.py has NO frame-seam use at all
-    "pprl link",          # pprl/protocol.py likewise -- porting these means
-                          # porting the pprl core, not the command
+    "pprl auto-config",
+    "pprl link",
 }
+
+# Ported and verified polars-free on 2026-08-31, each on BOTH lanes (polars
+# blocked, and polars present so the classic lane is unregressed):
+#   anomalies          read_files_arrow + the arrow csv writer
+#   analyze-blocking   read_files_arrow; the analyzer already took arrow
+#   profile            load_file(..., return_frame=True); also fixed
+#                      format_profile_report, whose sample block called the
+#                      polars-only head()/iter_rows() and broke `--verbose`
+#   review             polars was imported ONLY to annotate a local
+#   label              arrow ingest + seam select_dicts + arrow csv read/write;
+#                      also fixed a pre-existing Rich MarkupError that crashed
+#                      the command on any pair whose values differed
 
 # Ported and verified polars-free on 2026-08-31, on BOTH lanes (arrow, and with
 # polars present so the classic lane is unregressed):

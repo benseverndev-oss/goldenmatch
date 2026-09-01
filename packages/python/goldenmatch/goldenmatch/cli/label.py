@@ -5,6 +5,7 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from goldenmatch.cli.dedupe import _parse_file_source, _resolve_column_maps
@@ -26,8 +27,6 @@ def label_cmd(
     Shows pairs one at a time. Type y (match), n (no match), or s (skip).
     Saves labeled pairs to a CSV for use with 'goldenmatch evaluate'.
     """
-    import polars as pl
-
     from goldenmatch.core.pipeline import run_dedupe
 
     cfg = load_config(str(config))
@@ -67,26 +66,35 @@ def label_cmd(
     if df is None:
         # Reconstruct from files
         from goldenmatch.core.autofix import auto_fix_dataframe
-        from goldenmatch.core.ingest import load_file
-        frames = []
-        for spec in file_specs:
-            path = spec[0] if isinstance(spec, tuple) else spec
-            lf = load_file(path)
-            frames.append(lf.collect())
-        combined = pl.concat(frames, how="diagonal")
-        combined = combined.with_row_index("__row_id__").with_columns(pl.col("__row_id__").cast(pl.Int64))
+        from goldenmatch.core.io_arrow import read_files_arrow
+
+        # Arrow ingest: `pl.concat(..., how="diagonal")` here made the whole
+        # command raise ImportError on a default install. read_files_arrow keeps
+        # the union-of-columns semantics and the Int64 __row_id__.
+        combined = read_files_arrow(
+            [(spec[0] if isinstance(spec, tuple) else spec) for spec in file_specs],
+            row_id_column="__row_id__",
+        )
         combined, _ = auto_fix_dataframe(combined)
     else:
         combined = df
 
-    row_lookup = {r["__row_id__"]: r for r in combined.to_dicts()}
-    display_cols = [c for c in combined.columns if not c.startswith("__")][:6]
+    # Through the seam: `to_dicts` is polars-only, and `combined` is an arrow
+    # table on a default install (and on the FS path, whatever is installed).
+    from goldenmatch.core.frame import to_frame as _to_frame
+
+    _combined_f = _to_frame(combined)
+    _all_cols = list(_combined_f.columns)
+    row_lookup = {r["__row_id__"]: r for r in _combined_f.select_dicts(_all_cols)}
+    display_cols = [c for c in _all_cols if not c.startswith("__")][:6]
 
     # Load existing labels if appending
     existing = set()
     if append and output.exists():
-        existing_df = pl.read_csv(output)
-        for r in existing_df.to_dicts():
+        from goldenmatch.core.io_arrow import read_table_arrow
+
+        _existing_tbl = read_table_arrow(output)
+        for r in _existing_tbl.to_pylist():
             existing.add((int(r["id_a"]), int(r["id_b"])))
         console.print(f"[dim]Loaded {len(existing)} existing labels from {output}[/dim]")
 
@@ -114,10 +122,21 @@ def label_cmd(
         for col in display_cols:
             val_a = str(row_a.get(col, ""))[:60]
             val_b = str(row_b.get(col, ""))[:60]
-            style_a = style_b = ""
-            if val_a.lower() == val_b.lower() and val_a:
-                style_a = style_b = "bold"
-            table.add_row(col, f"[{style_a}]{val_a}[/{style_a}]", f"[{style_b}]{val_b}[/{style_b}]")
+            # Emphasise only when the two agree. Wrapping unconditionally
+            # produced "[]value[/]" whenever they differed -- an empty tag and an
+            # orphan closer -- and Rich raises MarkupError on it. Labelling
+            # exists to compare records that DIFFER, so this crashed on
+            # essentially the first pair; `goldenmatch label` did not work at
+            # all, with or without polars.
+            same = bool(val_a) and val_a.lower() == val_b.lower()
+            # escape(): these are DATA values. A record containing "[bold]" would
+            # otherwise be parsed as markup and raise on the next row.
+            cell_a = escape(val_a)
+            cell_b = escape(val_b)
+            if same:
+                cell_a = f"[bold]{cell_a}[/bold]"
+                cell_b = f"[bold]{cell_b}[/bold]"
+            table.add_row(col, cell_a, cell_b)
         console.print(table)
 
         # Get input
@@ -144,11 +163,20 @@ def label_cmd(
 
     # Save results
     if labels:
-        labels_df = pl.DataFrame(labels)
+        import pyarrow as pa
+
+        from goldenmatch.core.io_arrow import read_table_arrow
+        from goldenmatch.output._csv_arrow import write_csv_polars_parity
+
+        labels_tbl = pa.Table.from_pylist(labels)
         if append and output.exists():
-            existing_df = pl.read_csv(output)
-            labels_df = pl.concat([existing_df, labels_df], how="diagonal")
-        labels_df.write_csv(output)
+            # promote_options="permissive" is the pl.concat(how="diagonal") this
+            # replaces: an older label file with different columns unions rather
+            # than raising.
+            labels_tbl = pa.concat_tables(
+                [read_table_arrow(output), labels_tbl], promote_options="permissive"
+            )
+        write_csv_polars_parity(labels_tbl, output)
 
         match_count = sum(1 for l in labels if l["label"] == 1)
         console.print(f"\n[green]Saved {len(labels)} labels to {output}[/green]")
