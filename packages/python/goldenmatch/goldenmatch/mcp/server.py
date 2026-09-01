@@ -2227,13 +2227,12 @@ def _tool_write_csv(path: str, rows: object) -> dict:
         return p
 
     try:
-        import pyarrow as pa
-        from pyarrow import csv as _pacsv
+        import csv as _csv
+        import io as _io
 
         # Union the keys across ALL rows, first-seen order. `pl.DataFrame(rows)`
-        # did this; `pa.Table.from_pylist` infers its schema from the FIRST row
-        # only and silently DROPS a key that appears later, so porting without
-        # this loop loses columns with no error.
+        # did this; building a pa.Table with `from_pylist` infers its schema from
+        # the FIRST row only and silently DROPS a key that appears later.
         keys: list[str] = []
         seen: set[str] = set()
         for r in rows:
@@ -2241,24 +2240,32 @@ def _tool_write_csv(path: str, rows: object) -> dict:
                 if k not in seen:
                     seen.add(k)
                     keys.append(k)
-        # An empty list has no schema to infer; write a header-less empty file
-        # rather than raising, so a zero-result export still produces the file.
-        table = (
-            pa.Table.from_pylist([{k: r.get(k) for k in keys} for r in rows])
-            if keys
-            else pa.table({})
-        )
-        # ONE filesystem sink, deliberately. Writing the empty case with
-        # `p.write_text("")` instead tripped CodeQL py/path-injection (high):
-        # `p` IS validated by `_safe_path_or_error` -> `safe_path`, but CodeQL
-        # does not recognise that as a sanitizer and does model `Path.write_text`
-        # as a sink. Routing both cases through the arrow writer removes the
-        # second sink rather than suppressing the alert.
-        #
-        # An empty export is now a 0-byte file. polars wrote a lone newline
-        # here; neither carries a header, and a 0-byte file is the more
-        # honest "no rows" artifact.
-        _pacsv.write_csv(table, str(p))
+
+        # stdlib csv, NOT pyarrow's writer. pyarrow quotes every string
+        # (`"a","b"` / `1,"x"`) with no quoting style that matches; polars quoted
+        # minimally, and tests/test_mcp_host_helpers.py asserts the exact bytes.
+        # Changing that assertion to match the new writer would be moving the
+        # contract to suit the implementation -- this tool's output format is
+        # part of what callers consume. QUOTE_MINIMAL + an LF line terminator is
+        # byte-identical to what polars wrote, including the empty-rows case.
+        def _cell(v):
+            # polars serialised booleans lowercase; str(True) is "True".
+            # `is` rather than truthiness, so 1/0 are not rewritten.
+            if v is None:
+                return ""
+            if v is True:
+                return "true"
+            if v is False:
+                return "false"
+            return v
+
+        buf = _io.StringIO()
+        writer = _csv.writer(buf, lineterminator="\n")
+        if keys:
+            writer.writerow(keys)
+            for r in rows:
+                writer.writerow([_cell(r.get(k)) for k in keys])
+        p.write_text(buf.getvalue(), encoding="utf-8")
     except OSError as exc:
         return {"error": f"Could not write {path}: {exc}"}
     except Exception as exc:  # noqa: BLE001 - surface as a tool error
