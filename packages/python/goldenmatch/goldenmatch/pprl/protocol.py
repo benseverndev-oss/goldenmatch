@@ -14,11 +14,12 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
-from goldenmatch._polars_lazy import pl
 from goldenmatch.core.cluster import build_clusters
+from goldenmatch.core.frame import to_frame as _to_frame
 from goldenmatch.utils.transforms import bloom_clk_batch
 
 logger = logging.getLogger(__name__)
@@ -61,7 +62,7 @@ class LinkageResult:
 
 
 def compute_bloom_filters(
-    df: pl.DataFrame,
+    df: Any,
     fields: list[str],
     config: PPRLConfig,
     hmac_key: str | None = None,
@@ -75,14 +76,26 @@ def compute_bloom_filters(
     if hmac_key:
         transform = f"{transform}:{hmac_key}"
 
-    if "__row_id__" not in df.columns:
-        df = df.with_row_index("__row_id__").with_columns(pl.col("__row_id__").cast(pl.Int64))
+    # Seam, not polars: `run_pprl` is reached from the `pprl link` CLI command,
+    # and polars is an optional extra -- these two lines made the command raise
+    # ImportError on a default install. `ensure_row_ids` is the seam's Int64
+    # row index on both backends.
+    from goldenmatch.core.frame import to_frame as _to_frame
+
+    _frame = _to_frame(df)
+    if "__row_id__" not in _frame.columns:
+        _frame = _frame.ensure_row_ids("__row_id__")
+    df = _frame.native
 
     # Concatenate fields per row, then CLK the whole column in one bulk call
     # (a single FFI crossing when the native pprl_bloom kernel is gated on,
     # versus a per-row Python hash loop). bloom_clk_batch is output-identical
     # to the prior apply_transforms(text, [transform]) per row.
-    rows = df.to_dicts()
+    # Seam, not `to_dicts`: `df` is a pa.Table on a default install.
+    from goldenmatch.core.frame import to_frame as _tf_rows
+
+    _rf = _tf_rows(df)
+    rows = _rf.select_dicts(list(_rf.columns))
     rids = [row["__row_id__"] for row in rows]
     texts = [" ".join(str(row.get(f, "") or "") for f in fields) for row in rows]
     clks = bloom_clk_batch(texts, transform)
@@ -315,8 +328,8 @@ def _compute_match_bits(
 
 
 def run_pprl(
-    df_a: pl.DataFrame,
-    df_b: pl.DataFrame,
+    df_a: Any,
+    df_b: Any,
     config: PPRLConfig,
     party_a_id: str = "party_a",
     party_b_id: str = "party_b",
@@ -335,12 +348,12 @@ def run_pprl(
     party_a = PartyData(
         party_id=party_a_id,
         bloom_filters=filters_a,
-        record_count=df_a.height,
+        record_count=_to_frame(df_a).height,
     )
     party_b = PartyData(
         party_id=party_b_id,
         bloom_filters=filters_b,
-        record_count=df_b.height,
+        record_count=_to_frame(df_b).height,
     )
 
     if config.protocol == "smc":

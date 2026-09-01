@@ -32,13 +32,13 @@ from sweep_cli_polars_free import MUTATING, run_sweep  # noqa: E402
 # Each raises ImportError: No module named 'polars' -- a traceback, not an
 # error message -- on a default install.
 KNOWN_POLARS_BOUND = {
-    # incremental -- core/incremental.py leans on apply_standardization,
-    #                match_one and find_exact_matches; none has any seam use.
-    # pprl *      -- pprl/protocol.py and pprl/autoconfig.py have ZERO to_frame
-    #                calls, so this is a pprl-core port, not a CLI change.
+    # The last one. core/incremental.py needs apply_standardization, which is a
+    # 506-line polars-expression module (33 `pl.` sites) -- a real port, and the
+    # honest place to stop rather than half-do it. match_one also needs a small
+    # seam port (.height / .to_dicts only); find_exact_matches already accepts
+    # arrow, and matchkey derivation has a seam equivalent in
+    # Frame.derive_matchkey.
     "incremental",
-    "pprl auto-config",
-    "pprl link",
 }
 
 # Ported and verified polars-free on 2026-08-31, each on BOTH lanes (polars
@@ -52,6 +52,10 @@ KNOWN_POLARS_BOUND = {
 #                      fixed a pre-existing MarkupError that crashed it entirely
 #   demo, lineage      MatchEngine now DELEGATES to run_dedupe_df instead of
 #                      keeping its own ~200-line copy of the pipeline
+#   pprl link,
+#   pprl auto-config   pprl/protocol.py + pprl/autoconfig.py read through the
+#                      seam; the polars there was mostly type annotations plus
+#                      three real operations
 
 # Also confirmed polars-bound by hand, but never invoked by the sweep because it
 # MUTATES state (it removes a record from a cluster). Listed so the finding is
