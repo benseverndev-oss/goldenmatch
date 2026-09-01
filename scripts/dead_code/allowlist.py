@@ -11,9 +11,20 @@ ALLOW = REPO / "parity" / "dead_code.allow"
 
 
 def load_allowlist() -> set[str]:
-    """Allowlisted module names, reasons stripped."""
+    """Allowlisted module names, reasons stripped.
+
+    Raises FileNotFoundError if the allowlist file is missing, to prevent
+    silent deletion of live integrations (MongoDB, BigQuery, HubSpot, Vertex AI)
+    that sit at 0% coverage only because CI lacks credentials. A missing file
+    is a hard failure, not a safe default.
+    """
     if not ALLOW.exists():
-        return set()
+        raise FileNotFoundError(
+            f"Dead-code allowlist not found: {ALLOW}\n"
+            f"This file documents live integrations that cannot run in CI.\n"
+            f"A missing allowlist is not a safe default — it silently allows\n"
+            f"Task 7 to delete working code with every test still green."
+        )
     out: set[str] = set()
     for line in ALLOW.read_text(encoding="utf-8").splitlines():
         entry = line.split("#", 1)[0].strip()
