@@ -633,6 +633,41 @@ jobs:
           # nobody wrote a floor for still fails.
           uv run python scripts/check_coverage_baseline.py packages/python/goldenmatch/coverage.xml
 
+  # Harvests coverage from the two sweeps, which reach 66 CLI commands and 97 MCP
+  # tools -- surfaces no other job measures. Feeds the dead_code job's combine
+  # ONLY; the coverage floors and baseline gates are unaffected.
+  goldenmatch_sweep_coverage:
+    needs: changes
+    if: needs.changes.outputs.python_goldenmatch == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: CLI sweep under coverage
+        env:
+          COVERAGE_FILE: coverage_sweep_cli.dat
+          COVERAGE_PROCESS_START: packages/python/goldenmatch/.coveragerc-sweep
+        run: |
+          uv run coverage run --rcfile=packages/python/goldenmatch/.coveragerc-sweep \
+            scripts/sweep_cli_polars_free.py
+          uv run coverage combine --rcfile=packages/python/goldenmatch/.coveragerc-sweep
+      - name: MCP sweep under coverage
+        env:
+          COVERAGE_FILE: coverage_sweep_mcp.dat
+          COVERAGE_PROCESS_START: packages/python/goldenmatch/.coveragerc-sweep
+        run: |
+          uv run coverage run --rcfile=packages/python/goldenmatch/.coveragerc-sweep \
+            scripts/sweep_mcp_polars_free.py
+          uv run coverage combine --rcfile=packages/python/goldenmatch/.coveragerc-sweep
+      - name: Prove the sweep coverage is not empty
+        run: uv run python scripts/assert_sweep_coverage.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gm-cov-sweeps
+          path: coverage_sweep_*.dat
+          retention-days: 1
+          if-no-files-found: error
+
   # Reference mode: python_goldenmatch now runs NATIVE by default. This lean lane
   # asserts the pure-Python FALLBACK still imports and passes on a core behavior
   # slice -- the no-wheel path (musl / unsupported platform / GOLDENMATCH_NATIVE=0)
