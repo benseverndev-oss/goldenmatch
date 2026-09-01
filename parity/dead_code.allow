@@ -1,0 +1,11 @@
+# Modules the dead-code audit must never report. One `module  # reason` per
+# line, matching parity/native_symbols/*.allow.
+#
+# An entry here is a claim that the module IS live and the detector cannot see
+# it -- not that it is dead and we would rather not deal with it.
+
+goldenmatch.identity.mongo_backend  # live MongoDB identity backend; 0% coverage because CI has no MongoDB
+goldenmatch.connectors.mongo  # live MongoDB connector; same reason
+goldenmatch.core.vertex_embedder  # live Vertex AI embedder; needs GCP credentials CI does not carry
+goldenmatch.connectors.bigquery  # live BigQuery connector; needs GCP credentials
+goldenmatch.connectors.hubspot  # live HubSpot connector; needs a HubSpot API key
