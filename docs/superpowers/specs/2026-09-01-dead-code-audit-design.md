@@ -76,7 +76,7 @@ they can dispatch to is marked live **by construction**:
 
 | registry | live set |
 | --- | ---: |
-| transform registry | 147 registered transforms |
+| transform registry | 113 registered transforms |
 | MCP `TOOLS` | 97 dispatchable tools |
 | typer command tree | 36 commands |
 | `entry_points` | 2 |
