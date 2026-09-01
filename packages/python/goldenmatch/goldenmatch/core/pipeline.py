@@ -1611,17 +1611,6 @@ def _resolve_identities(
             pass
 
 
-def _cast_user_cols_to_str(df: pl.DataFrame) -> pl.DataFrame:
-    """Cast all non-internal columns to Utf8.
-
-    Used by both file and DataFrame match entry points so that (a) per-file
-    CSV inference cannot produce schema-incompatible columns across the
-    target/reference vstack and (b) string transforms like lowercase/strip
-    always have a string to consume in zero-config paths.
-    """
-    return df.cast({c: pl.Utf8 for c in df.columns if not c.startswith("__")})
-
-
 def _apply_domain_extraction(
     combined_lf: Any,  # pl.LazyFrame (classic) | native frame (Frame lane)
     config: GoldenMatchConfig,
