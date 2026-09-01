@@ -18,6 +18,21 @@ from goldenmatch._exclusions_schema import (
 )
 from goldenmatch.core._logging import sanitize_for_log
 
+
+def _to_frame(df):
+    """Coerce to the frame seam. These tools read via pyarrow now, so the
+    polars attribute style (`df.height`, `df.columns`) is not available."""
+    from goldenmatch.core.frame import to_frame
+
+    return to_frame(df)
+
+
+def _h(df) -> int:
+    """Row count, backend-agnostic. `df.height` is polars-only; a pa.Table
+    spells it `num_rows`, so the attribute read was a hard failure rather
+    than a wrong answer -- but only once a tool actually ran."""
+    return _to_frame(df).height
+
 if TYPE_CHECKING:
     from goldenmatch.core.memory.store import MemoryStore
 
@@ -892,7 +907,6 @@ def _dispatch(
         }
 
     if name == "scan_quality":
-        import polars as pl
 
         from goldenmatch.config.schemas import QualityConfig
         from goldenmatch.core.quality import _goldencheck_available, run_quality_check
@@ -907,27 +921,30 @@ def _dispatch(
             return {"error": "Missing required parameter: file_path"}
 
         try:
-            # W5: CSV ingest routes through core/ingest.load_file (io_arrow) at the flip.
-            df = pl.read_csv(file_path, encoding="utf8-lossy", ignore_errors=True)
+            # Arrow ingest. This was `pl.read_csv`, which made five MCP tools
+            # raise a bare ImportError at an agent on a default install --
+            # polars has been an optional extra since v3.1.0.
+            from goldenmatch.core.io_arrow import read_table_arrow
+
+            df = read_table_arrow(file_path, encoding="utf8-lossy")
         except FileNotFoundError:
             return {"error": f"File not found: {file_path}"}
         except Exception as exc:
             return {"error": f"Could not read CSV '{file_path}': {exc}"}
 
-        logger.info("scan_quality: scanning %s (%d records)", sanitize_for_log(file_path), df.height)
+        logger.info("scan_quality: scanning %s (%d records)", sanitize_for_log(file_path), _h(df))
         qc = QualityConfig(mode="silent", fix_mode="none", domain=args.get("domain"))
         _, issues = run_quality_check(df, qc)
         logger.info("scan_quality: found %d issues", len(issues))
 
         return {
             "file": file_path,
-            "total_records": df.height,
+            "total_records": _h(df),
             "issues_found": len(issues),
             "issues": issues,
         }
 
     if name == "fix_quality":
-        import polars as pl
 
         from goldenmatch.config.schemas import QualityConfig
         from goldenmatch.core.quality import _goldencheck_available, run_quality_check
@@ -942,7 +959,9 @@ def _dispatch(
             return {"error": "Missing required parameter: file_path"}
 
         try:
-            df = pl.read_csv(file_path, encoding="utf8-lossy", ignore_errors=True)
+            from goldenmatch.core.io_arrow import read_table_arrow
+
+            df = read_table_arrow(file_path, encoding="utf8-lossy")
         except FileNotFoundError:
             return {"error": f"File not found: {file_path}"}
         except Exception as exc:
@@ -967,7 +986,7 @@ def _dispatch(
         result = {
             "file": file_path,
             "fix_mode": fix_mode,
-            "total_records": fixed_df.height,
+            "total_records": _h(fixed_df),
             "fixes_applied": len(fixes),
             "fixes": fixes,
             "output_path": output_path,
@@ -977,7 +996,6 @@ def _dispatch(
         return result
 
     if name == "run_transforms":
-        import polars as pl
 
         from goldenmatch.config.schemas import TransformConfig
         from goldenmatch.core.transform import _goldenflow_available, run_transform
@@ -992,13 +1010,15 @@ def _dispatch(
             return {"error": "Missing required parameter: file_path"}
 
         try:
-            df = pl.read_csv(file_path, encoding="utf8-lossy", ignore_errors=True)
+            from goldenmatch.core.io_arrow import read_table_arrow
+
+            df = read_table_arrow(file_path, encoding="utf8-lossy")
         except FileNotFoundError:
             return {"error": f"File not found: {file_path}"}
         except Exception as exc:
             return {"error": f"Could not read CSV '{file_path}': {exc}"}
 
-        logger.info("run_transforms: transforming %s (%d records)", sanitize_for_log(file_path), df.height)
+        logger.info("run_transforms: transforming %s (%d records)", sanitize_for_log(file_path), _h(df))
         tc = TransformConfig(mode="silent")
         transformed_df, fixes = run_transform(df, tc, strict=True)
         logger.info("run_transforms: %d transforms applied", len(fixes))
@@ -1014,7 +1034,7 @@ def _dispatch(
 
         result = {
             "file": file_path,
-            "total_records": transformed_df.height,
+            "total_records": _h(transformed_df),
             "transforms_applied": len(fixes),
             "transforms": fixes,
             "output_path": output_path,
@@ -1077,13 +1097,14 @@ def _dispatch(
         )
 
     if name == "certify_recall":
-        import polars as pl
 
         from goldenmatch.core.recall_certificate import certify_recall_df
 
         file_path = args["file_path"]
         try:
-            df = pl.read_csv(file_path, encoding="utf8-lossy", ignore_errors=True)
+            from goldenmatch.core.io_arrow import read_table_arrow
+
+            df = read_table_arrow(file_path, encoding="utf8-lossy")
         except FileNotFoundError:
             return {"error": f"File not found: {file_path}"}
         except Exception as exc:
@@ -1099,7 +1120,6 @@ def _dispatch(
         }
 
     if name == "retrieve_similar":
-        import polars as pl
 
         from goldenmatch.core.retrieval import retrieve_similar_records
 
@@ -1114,13 +1134,16 @@ def _dispatch(
             return {"error": "Missing required parameter: column"}
 
         try:
-            df = pl.read_csv(file_path, encoding="utf8-lossy", ignore_errors=True)
+            from goldenmatch.core.io_arrow import read_table_arrow
+
+            df = read_table_arrow(file_path, encoding="utf8-lossy")
         except FileNotFoundError:
             return {"error": f"File not found: {file_path}"}
         except Exception as exc:
             return {"error": f"Could not read CSV '{file_path}': {exc}"}
-        if column not in df.columns:
-            return {"error": f"Column {column!r} not in {file_path} (have {df.columns})"}
+        _cols = list(_to_frame(df).columns)
+        if column not in _cols:
+            return {"error": f"Column {column!r} not in {file_path} (have {_cols})"}
 
         results = retrieve_similar_records(
             df,

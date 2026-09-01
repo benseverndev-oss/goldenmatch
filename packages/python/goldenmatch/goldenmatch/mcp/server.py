@@ -2318,15 +2318,19 @@ def _adhoc_matchkey(
 
 
 def _load_rows_with_ids(path: str):
-    """Load a file and stamp `__row_id__` (the ids the returned pairs refer to)."""
-    import polars as pl
+    """Load a file and stamp `__row_id__` (the ids the returned pairs refer to).
 
-    from goldenmatch.core.ingest import load_file
+    Arrow ingest: polars is an OPTIONAL extra, and this helper is shared by
+    find_exact_matches, find_fuzzy_matches and build_clusters -- three MCP tools
+    that raised a bare ImportError at an agent on a default install.
+    """
+    from goldenmatch.core.frame import to_frame
+    from goldenmatch.core.io_arrow import read_files_arrow
 
-    df = load_file(path).collect()
-    if "__row_id__" not in df.columns:
-        df = df.with_row_index("__row_id__").with_columns(pl.col("__row_id__").cast(pl.Int64))
-    return df
+    frame = to_frame(read_files_arrow([path]))
+    if "__row_id__" not in frame.columns:
+        frame = frame.ensure_row_ids("__row_id__")
+    return frame.native
 
 
 def _tool_find_exact_matches(path: str, field: str, transforms: list | None) -> dict:
@@ -2340,16 +2344,30 @@ def _tool_find_exact_matches(path: str, field: str, transforms: list | None) -> 
         df = _load_rows_with_ids(str(p))
     except (FileNotFoundError, OSError) as exc:
         return {"error": f"Could not read {path}: {exc}"}
-    if field not in df.columns:
-        return {"error": f"Column {field!r} not in {path} (have: {sorted(df.columns)[:20]})"}
+    # Column NAMES through the seam. `pa.Table.columns` returns ARRAYS, so the
+    # old membership test compared a string against ChunkedArrays and raised
+    # TypeError instead of returning this error message.
+    from goldenmatch.core.frame import to_frame as _tf
+
+    _frame = _tf(df)
+    _names = list(_frame.columns)
+    if field not in _names:
+        return {"error": f"Column {field!r} not in {path} (have: {sorted(_names)[:20]})"}
 
     # find_exact_matches reads the PRECOMPUTED `__mk_<name>__` column, so the
     # matchkey column has to be materialized first (the pipeline does this in
     # its own prep step). Without it: ColumnNotFoundError, not an empty result.
-    from goldenmatch.core.matchkey import compute_matchkeys
-
     mk = _adhoc_matchkey("adhoc_exact", "exact", field, "exact", transforms, None)
-    pairs = find_exact_matches(compute_matchkeys(df.lazy(), [mk]), mk)
+    # derive_matchkey on the seam rather than compute_matchkeys(df.lazy(), ...):
+    # the latter builds polars expressions, and `.lazy()` does not exist on an
+    # arrow table. find_exact_matches itself already reads through the seam.
+    _keyed = _frame.with_column(
+        f"__mk_{mk.name}__",
+        _frame.derive_matchkey(
+            [(f.field, list(f.transforms or [])) for f in mk.fields if f.field]
+        ),
+    )
+    pairs = find_exact_matches(_keyed, mk)
     return {
         "pair_count": len(pairs),
         "pairs": [[a, b, s] for a, b, s in pairs[:_PAIR_RESPONSE_CAP]],
@@ -2369,8 +2387,15 @@ def _tool_find_fuzzy_matches(
         df = _load_rows_with_ids(str(p))
     except (FileNotFoundError, OSError) as exc:
         return {"error": f"Could not read {path}: {exc}"}
-    if field not in df.columns:
-        return {"error": f"Column {field!r} not in {path} (have: {sorted(df.columns)[:20]})"}
+    # Column NAMES through the seam. `pa.Table.columns` returns ARRAYS, so the
+    # old membership test compared a string against ChunkedArrays and raised
+    # TypeError instead of returning this error message.
+    from goldenmatch.core.frame import to_frame as _tf
+
+    _frame = _tf(df)
+    _names = list(_frame.columns)
+    if field not in _names:
+        return {"error": f"Column {field!r} not in {path} (have: {sorted(_names)[:20]})"}
 
     mk = _adhoc_matchkey(
         "adhoc_fuzzy",
@@ -2597,8 +2622,6 @@ def _tool_pprl_auto_config(security_level: str = "high", use_llm: bool = False) 
 
 def _tool_pprl_link(args: dict) -> dict:
     """Run PPRL linkage between two files."""
-    import polars as pl
-
     from goldenmatch.pprl.protocol import PPRLConfig, run_pprl
 
     file_a = _safe_path_or_error(args["file_a"])
@@ -2624,8 +2647,10 @@ def _tool_pprl_link(args: dict) -> dict:
         ngram_size=ngram, hash_functions=hashes, bloom_filter_size=size,
     )
 
-    df_a = pl.read_csv(file_a)
-    df_b = pl.read_csv(file_b)
+    from goldenmatch.core.io_arrow import read_table_arrow
+
+    df_a = read_table_arrow(file_a)
+    df_b = read_table_arrow(file_b)
 
     result = run_pprl(df_a, df_b, config)
 
@@ -2718,7 +2743,7 @@ def _tool_compare_clusters(clusters_a_path: str, clusters_b_path: str) -> dict:
 
 
 def _tool_schema_match(file_a: str, file_b: str, min_score: float = 0.5) -> dict:
-    from goldenmatch.core.ingest import load_file
+    from goldenmatch.core.io_arrow import read_table_arrow
     from goldenmatch.core.schema_match import auto_map_columns
     va = _safe_path_or_error(file_a)
     if isinstance(va, dict):
@@ -2726,8 +2751,11 @@ def _tool_schema_match(file_a: str, file_b: str, min_score: float = 0.5) -> dict
     vb = _safe_path_or_error(file_b)
     if isinstance(vb, dict):
         return vb
-    df_a = load_file(str(va)).collect()
-    df_b = load_file(str(vb)).collect()
+    # read_table_arrow, not load_file(...).collect(): the latter ends at
+    # `pl.from_arrow(tbl).lazy()`, a legacy boundary conversion, which made this
+    # tool raise a bare ImportError on a default install.
+    df_a = read_table_arrow(str(va))
+    df_b = read_table_arrow(str(vb))
     return {"mappings": auto_map_columns(df_a, df_b, min_score=min_score)}
 
 

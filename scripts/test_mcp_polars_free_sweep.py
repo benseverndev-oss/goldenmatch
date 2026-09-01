@@ -27,17 +27,16 @@ sys.path.insert(0, str(Path(__file__).parent))
 from sweep_mcp_polars_free import NEVER_INVOKE, run_sweep  # noqa: E402
 
 # Measured 2026-08-31 by dispatching every tool with polars blocked.
-KNOWN_POLARS_BOUND = {
-    "build_clusters",
-    "certify_recall",
-    "find_exact_matches",
-    "find_fuzzy_matches",
-    "fix_quality",
-    "pprl_link",
-    "retrieve_similar",
-    "run_transforms",
-    "scan_quality",
-}
+KNOWN_POLARS_BOUND: set[str] = set()
+# EMPTY. Opened at NINE on first measurement of this surface and closed the same
+# day. As with the CLI ratchet, an entry added later is a decision to ship a
+# tool that raises a bare ImportError at an agent on a default install.
+#
+# One of the original nine (`run_transforms`) turned out NOT to be a defect: the
+# probe venv had goldenflow-native 0.1.1 against a >=0.27 floor, a wheel with 4
+# symbols instead of 113, so every transform fell to the polars engine. Rebuilt
+# from packages/rust/extensions/native-flow, it passes. Worth remembering before
+# "fixing" a tool on this list: check the native wheel is current first.
 
 
 @pytest.fixture(scope="module")

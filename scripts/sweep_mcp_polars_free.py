@@ -21,6 +21,11 @@ Verdicts match the CLI sweep exactly, and for the same reason:
                  ImportError for an AttributeError has not been fixed -- but
                  many are expected here, since synthesised arguments name
                  records and datasets that do not exist.
+  needs_extra    raised an ImportError that NAMES an extra to install. A
+                 documented capability limit, not a defect: GoldenFlow does
+                 this on purpose when a transform config falls outside its
+                 native columnar engine. Distinguished from `polars_bound` so
+                 nobody "fixes" behaviour that is working as designed.
   unprobed       a required property this harness will not invent.
 
 `mcp/*` is in the coverage `omit` list, so none of this surface appears in the
@@ -60,6 +65,8 @@ PATH_PROPS = {
     "reference_file",
     "csv_path",
     "source_file",
+    "file_a",
+    "file_b",
 }
 CONFIG_PROPS = {"config_path", "config_file", "config"}
 
@@ -95,7 +102,16 @@ def _probe_source() -> str:
         def synth(schema):
             """Fill REQUIRED properties only, from the declared schema."""
             props = (schema or {}).get("properties", {}) or {}
-            required = (schema or {}).get("required", []) or []
+            required = list((schema or {}).get("required", []) or [])
+            # Fill path-like properties even when the schema does not mark them
+            # required. Several tools under-declare -- certify_recall and
+            # pprl_link raised KeyError on a property listed as optional -- and
+            # an under-filled call reports `errored` for a reason that is about
+            # the harness rather than the code.
+            for key in props:
+                if key in PATH_PROPS or key in CONFIG_PROPS:
+                    if key not in required:
+                        required.append(key)
             args = {}
             for key in required:
                 spec = props.get(key, {})
@@ -140,14 +156,26 @@ def _probe_source() -> str:
                 dispatch(name, args)
                 rows.append({"tool": name, "verdict": "ok", "why": ""})
             except BaseException as exc:  # noqa: BLE001 - classify everything
-                bound = (
-                    isinstance(exc, (ImportError, ModuleNotFoundError))
-                    and "polars" in str(exc).lower()
-                )
+                msg = str(exc)
+                is_import = isinstance(exc, (ImportError, ModuleNotFoundError))
+                # A DEFECT is the bare interpreter message. A deliberate,
+                # actionable error that names the extra to install is a
+                # documented capability limit, not a bug -- GoldenFlow raises
+                # one on purpose when a transform config is not covered by its
+                # native columnar engine. Collapsing the two would have had me
+                # "fix" something working as designed.
+                raw = is_import and "no module named" in msg.lower() and "polars" in msg.lower()
+                actionable = is_import and "pip install" in msg.lower()
+                if raw:
+                    verdict = "polars_bound"
+                elif actionable:
+                    verdict = "needs_extra"
+                else:
+                    verdict = "errored"
                 rows.append({
                     "tool": name,
-                    "verdict": "polars_bound" if bound else "errored",
-                    "why": (type(exc).__name__ + ": " + str(exc))[:120],
+                    "verdict": verdict,
+                    "why": (type(exc).__name__ + ": " + msg)[:140],
                 })
         print("@@RESULT@@" + json.dumps(rows))
         '''
@@ -204,16 +232,22 @@ def main() -> int:
     bound = [r for r in rows if r["verdict"] == "polars_bound"]
     ok = [r for r in rows if r["verdict"] == "ok"]
     errored = [r for r in rows if r["verdict"] == "errored"]
+    needs_extra = [r for r in rows if r["verdict"] == "needs_extra"]
     unprobed = [r for r in rows if r["verdict"] == "unprobed"]
 
     print(
         f"{len(rows)} MCP tools: {len(ok)} ok, {len(bound)} polars-bound, "
-        f"{len(errored)} errored (non-polars), {len(unprobed)} unprobed\n"
+        f"{len(errored)} errored, {len(needs_extra)} needs-extra, {len(unprobed)} unprobed\n"
     )
     if bound:
         print("POLARS-BOUND (raw ImportError on a default install):")
         for r in sorted(bound, key=lambda r: r["tool"]):
             print(f"  - {r['tool']}")
+        print()
+    if needs_extra:
+        print("NEEDS AN EXTRA (an ImportError naming a package to install):")
+        for r in sorted(needs_extra, key=lambda r: r["tool"]):
+            print(f"  - {r['tool']:30s} {r['why'][:70]}")
         print()
     if unprobed:
         print("UNPROBED (not a pass):")

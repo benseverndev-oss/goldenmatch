@@ -236,6 +236,51 @@ def _spec_ready(
     return False
 
 
+def _uncovered_reason(config) -> str:
+    """Say WHICH part of a config the columnar engine cannot run.
+
+    The previous message said only "uncovered ... install polars", which told a
+    user nothing actionable about their own config and pointed at a dependency
+    the project has evicted. These are the real fall-through causes, in the same
+    order the readiness checks apply them.
+    """
+    if config is None:
+        return "zero-config auto-detect produced a config the native path declined"
+    frame_ops = [
+        n for n, v in (
+            ("splits", getattr(config, "splits", None)),
+            ("renames", getattr(config, "renames", None)),
+            ("drop", getattr(config, "drop", None)),
+            ("filters", getattr(config, "filters", None)),
+            ("dedup", getattr(config, "dedup", None)),
+        ) if v
+    ]
+    if frame_ops:
+        return (
+            "it uses frame-level operations the columnar engine does not "
+            f"implement yet ({', '.join(frame_ops)})"
+        )
+    nm = native_module()
+    if nm is None:
+        return "the goldenflow-native kernel is not installed"
+    if not native_columns_ready(nm):
+        return (
+            "the installed goldenflow-native wheel predates the in-memory "
+            "columnar core (no Column.from_pylist) -- upgrade goldenflow-native"
+        )
+    accepted = _accepted_string(nm)
+    numeric_ok = _numeric_inmem_ok(nm)
+    split_ok = _split_inmem_ok(nm)
+    unsupported = [
+        " -> ".join(spec.ops)
+        for spec in (getattr(config, "transforms", None) or [])
+        if not _spec_ready(nm, spec, accepted, numeric_ok, split_ok, True)
+    ]
+    if unsupported:
+        return f"these transform chains have no native kernel: {unsupported}"
+    return "the native readiness probe declined the config"
+
+
 def config_is_columnar_ready(config) -> bool:
     """A config runs on the IN-MEMORY columnar engine iff EVERY spec is an owned
     string run, a NUMERIC shape (wave 3d, via ``Column.apply_numeric``), or a SPLIT
@@ -693,10 +738,15 @@ def transform_columns_public(data, config):
         df = pl.DataFrame(data)
         result = goldenflow.transform_df(df, config=config)
     except ImportError as e:  # pragma: no cover - exercised only without polars
+        # Do NOT tell the user to install polars. polars is an evicted optional
+        # extra, and "install the thing we removed" is not an answer -- it is
+        # the gap restated as an instruction. Name what is actually unsupported
+        # instead, so the message points at work on THIS engine.
         raise ImportError(
-            "This transform needs the Polars backend for the config given "
-            "(uncovered by the native columnar engine, or zero-config auto-detect). "
-            "Install it with: pip install goldenflow[polars]"
+            "This config is not covered by the polars-free columnar engine: "
+            + _uncovered_reason(config)
+            + ". The columnar engine is the supported path; the polars engine "
+            "is a legacy fallback and is not present on a default install."
         ) from e
     return ColumnarResult(
         columns=result.df.to_dict(as_series=False), manifest=result.manifest
