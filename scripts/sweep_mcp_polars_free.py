@@ -35,6 +35,7 @@ coverage numbers either. It was unmeasured twice over.
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import os
 import subprocess
@@ -42,6 +43,8 @@ import sys
 import tempfile
 import textwrap
 from pathlib import Path
+
+from _polars_free_detect import looks_like_polars_import_error
 
 REPO = Path(__file__).resolve().parent.parent
 PKG = REPO / "packages" / "python" / "goldenmatch"
@@ -72,7 +75,7 @@ CONFIG_PROPS = {"config_path", "config_file", "config"}
 
 
 def _probe_source() -> str:
-    return textwrap.dedent(
+    return inspect.getsource(looks_like_polars_import_error) + textwrap.dedent(
         '''
         import json, sys, pathlib, tempfile
         class _Block:
@@ -153,8 +156,23 @@ def _probe_source() -> str:
                              "why": "required property this harness will not invent"})
                 continue
             try:
-                dispatch(name, args)
-                rows.append({"tool": name, "verdict": "ok", "why": ""})
+                result = dispatch(name, args)
+                # A RETURNED error counts. Several tools wrap their body in a
+                # broad `except Exception` and return {"error": str(exc)}, so a
+                # missing polars comes back as a payload rather than a raise --
+                # `read_file` returned "Could not parse ...: No module named
+                # 'polars'" and this sweep scored it `ok`. Checking only for
+                # raised ImportErrors measured the error-handling style, not
+                # the dependency.
+                blob = json.dumps(result, default=str)
+                if looks_like_polars_import_error(blob):
+                    rows.append({
+                        "tool": name,
+                        "verdict": "polars_bound",
+                        "why": "returned (did not raise) a polars ImportError",
+                    })
+                else:
+                    rows.append({"tool": name, "verdict": "ok", "why": ""})
             except BaseException as exc:  # noqa: BLE001 - classify everything
                 msg = str(exc)
                 is_import = isinstance(exc, (ImportError, ModuleNotFoundError))
@@ -164,7 +182,7 @@ def _probe_source() -> str:
                 # one on purpose when a transform config is not covered by its
                 # native columnar engine. Collapsing the two would have had me
                 # "fix" something working as designed.
-                raw = is_import and "no module named" in msg.lower() and "polars" in msg.lower()
+                raw = is_import and looks_like_polars_import_error(msg)
                 actionable = is_import and "pip install" in msg.lower()
                 if raw:
                     verdict = "polars_bound"

@@ -31,6 +31,7 @@ invocation finds that class.
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import os
 import subprocess
@@ -38,6 +39,8 @@ import sys
 import tempfile
 import textwrap
 from pathlib import Path
+
+from _polars_free_detect import looks_like_polars_import_error
 
 REPO = Path(__file__).resolve().parent.parent
 PKG = REPO / "packages" / "python" / "goldenmatch"
@@ -153,7 +156,10 @@ MUTATING_LOCAL = {
 
 
 def _probe_source() -> str:
-    return textwrap.dedent(
+    # The probe runs in a subprocess, so it cannot import the shared module --
+    # inline the predicate's SOURCE, exactly as sweep_mcp_polars_free.py does,
+    # so both sweeps and their tests apply one definition.
+    return inspect.getsource(looks_like_polars_import_error) + textwrap.dedent(
         '''
         import json, sys, tempfile, pathlib
         class _Block:
@@ -270,9 +276,13 @@ def _probe_source() -> str:
                 continue
             res = runner.invoke(app, list(path) + tail)
             exc = res.exception
-            bound = (
-                isinstance(exc, (ImportError, ModuleNotFoundError))
-                and "polars" in str(exc).lower()
+            # The RAISED case, plus the caught-and-printed one. A command that
+            # catches its own ImportError and prints "No module named 'polars'"
+            # is exactly as broken for the user as one that lets it propagate,
+            # but only the first was being counted -- which is how the MCP sweep
+            # reported a clean zero while `read_file` was polars-bound.
+            bound = looks_like_polars_import_error(str(exc) if exc else "") or (
+                looks_like_polars_import_error(res.output or "")
             )
             if bound:
                 verdict = "polars_bound"

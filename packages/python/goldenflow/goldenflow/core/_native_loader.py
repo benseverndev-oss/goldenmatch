@@ -168,6 +168,85 @@ def _has_symbol(component: str) -> bool:
     return any(hasattr(_native, s) for s in syms)
 
 
+# --- native capability table -------------------------------------------------
+#
+# ONE place naming what each native code path needs from the installed wheel, as
+# ``capability -> (module symbols, Column methods)``. It lives HERE, beside
+# ``native_module``, rather than in engine/columnar.py, because transforms/_chain.py
+# needs it too and columnar.py imports FROM _chain -- the other direction is a cycle.
+#
+# This used to be ~20 hand-rolled ``hasattr(nm, ...)`` checks in three different
+# spellings, and their strictness did not always match what the code went on to
+# call: `transform_columns_native` tested only ``columnar_split_ready`` before
+# reaching ``Column.apply_split``, and was safe solely because its CALLERS had
+# already run the stronger `config_is_columnar_ready` gate. Safety that lives in
+# a caller contract is safety you cannot see at the call site.
+#
+# It matters more than tidiness because of the documented wheel-skew footgun
+# (see CLAUDE.md): Python reaches new kernel symbols through these guards, so a
+# published wheel missing one silently takes a slower path instead of failing.
+# `test_every_declared_capability_exists_on_this_wheel` turns that into a test
+# failure at the moment a capability is declared without the wheel to back it.
+#
+# The `*_shape` entries are DELIBERATELY weaker, not an oversight: the whole-file
+# CSV route runs through ``transform_csv`` and never touches ``Column``, so it
+# needs the shape probe alone. Splitting them makes that asymmetry legible.
+_CAPABILITIES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    # in-memory string execution
+    "string_chain": (("apply_chain_str_list",), ()),
+    "nullable_chain": (("chain_supports_nullable",), ()),
+    # the Polars-free in-memory core
+    "columns": ((), ("from_pylist",)),
+    # Zero-copy Arrow C-Data ingress (the Polars-frame Column path).
+    # NOT named `*_arrow`: scripts/check_native_symbols.py scans goldenflow with
+    # the literal pattern `"(\w+_arrow)"`, so a capability KEY ending in _arrow
+    # is read as a kernel export and reported missing. The key is ours to choose;
+    # the symbol name is not.
+    "arrow_ingress": ((), ("from_arrow",)),
+    # in-memory shapes: probe AND the Column method that executes them
+    "numeric": (("columnar_numeric_ready",), ("apply_numeric",)),
+    "split": (("columnar_split_ready",), ("apply_split",)),
+    # whole-file CSV route: the shape probe only (no Column involved)
+    "numeric_shape": (("columnar_numeric_ready",), ()),
+    "split_shape": (("columnar_split_ready",), ()),
+    "csv": (("transform_csv", "apply_chain_str_list"), ()),
+    "format_f64": (("format_f64",), ()),
+    # transforms/_chain.py -- the fused chain kernels it dispatches between
+    "arrow_chain": (("apply_chain_arrow",), ()),
+    "arrow_chain_ops": (("apply_chain_ops_arrow",), ()),
+    "arrow_chain_nullable": (("apply_chain_nullable_arrow",), ()),
+    "arrow_chain_f64": (("apply_chain_f64_arrow",), ()),
+    # engine/profiler_bridge.py
+    "arrow_infer_type": (("infer_type_list_arrow",), ()),
+    "column_profile": ((), ("profile",)),
+}
+
+
+def native_can(nm, capability: str) -> bool:
+    """Whether the installed native wheel can run ``capability``.
+
+    ``nm is None`` (no kernel at all) answers False rather than raising, so call
+    sites read as one condition. An unknown capability name raises -- a typo
+    silently answering False would disable a path with no signal, which is the
+    failure this table exists to prevent.
+    """
+    if capability not in _CAPABILITIES:
+        raise KeyError(
+            f"unknown native capability {capability!r}; "
+            f"known: {sorted(_CAPABILITIES)}"
+        )
+    if nm is None:
+        return False
+    mod_syms, col_syms = _CAPABILITIES[capability]
+    if not all(hasattr(nm, s) for s in mod_syms):
+        return False
+    if col_syms:
+        col_cls = getattr(nm, "Column", None)
+        if col_cls is None or not all(hasattr(col_cls, s) for s in col_syms):
+            return False
+    return True
+
+
 def native_module() -> Any:
     """The imported native module, or ``None`` if unavailable. Guard call sites
     with ``native_enabled(...)`` first."""

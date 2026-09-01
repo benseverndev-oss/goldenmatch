@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 
 from goldenflow._polars_lazy import pl
-from goldenflow.core._native_loader import native_module
+from goldenflow.core._native_loader import native_can, native_module
 
 # Owned, no-arg, TOTAL (never-null) string->string kernels eligible for fusion.
 # Mirror of goldenflow_core::chain::Kernel::ALL_NAMES. Option-returning
@@ -126,7 +126,7 @@ def fused_enabled() -> bool:
     ``GOLDENFLOW_NATIVE``); off when native is forced off or the fused symbol isn't
     in the installed wheel (graceful fallback, so a pre-0.12.0 wheel is unaffected)."""
     nm = _native_if_on()
-    return nm is not None and hasattr(nm, "apply_chain_arrow")
+    return native_can(nm, "arrow_chain")
 
 
 def fusable_names() -> frozenset[str]:
@@ -139,11 +139,11 @@ def fusable_names() -> frozenset[str]:
     if nm is None:
         return frozenset()
     names: set[str] = set()
-    if hasattr(nm, "apply_chain_arrow"):
+    if native_can(nm, "arrow_chain"):
         names |= FUSABLE_KERNELS
-    if hasattr(nm, "apply_chain_ops_arrow"):
+    if native_can(nm, "arrow_chain_ops"):
         names |= FUSABLE_KERNELS | FUSABLE_PARAM_KERNELS
-    if hasattr(nm, "apply_chain_nullable_arrow"):
+    if native_can(nm, "arrow_chain_nullable"):
         names |= FUSABLE_NULLABLE_KERNELS
     return frozenset(names)
 
@@ -153,7 +153,7 @@ def fusable_f64_names() -> frozenset[str]:
     native symbol: ``FUSABLE_F64_KERNELS`` when ``apply_chain_f64_arrow`` is present
     (goldenflow-native 0.13.0+), else empty (a 0.12.0 wheel has no f64 chain)."""
     nm = _native_if_on()
-    if nm is None or not hasattr(nm, "apply_chain_f64_arrow"):
+    if not native_can(nm, "arrow_chain_f64"):
         return frozenset()
     return FUSABLE_F64_KERNELS
 
@@ -187,7 +187,7 @@ def apply_chain_native(
     except ImportError:
         return None
     if series.dtype == pl.Float64:
-        if not hasattr(nm, "apply_chain_f64_arrow"):
+        if not native_can(nm, "arrow_chain_f64"):
             return None
         out_arrow, changed = nm.apply_chain_f64_arrow(
             series.to_arrow(), [(name, list(params)) for name, params in ops]
@@ -195,16 +195,16 @@ def apply_chain_native(
     elif any(name in FUSABLE_NULLABLE_KERNELS for name, _ in ops):
         # The run contains an Option-returning kernel -> the nullable executor
         # (which also handles the total/param kernels in the run, wrapped as Total).
-        if not hasattr(nm, "apply_chain_nullable_arrow"):
+        if not native_can(nm, "arrow_chain_nullable"):
             return None
         out_arrow, changed = nm.apply_chain_nullable_arrow(
             series.to_arrow(), [(name, list(params)) for name, params in ops]
         )
-    elif hasattr(nm, "apply_chain_ops_arrow"):
+    elif native_can(nm, "arrow_chain_ops"):
         out_arrow, changed = nm.apply_chain_ops_arrow(
             series.to_arrow(), [(name, list(params)) for name, params in ops]
         )
-    elif hasattr(nm, "apply_chain_arrow") and all(not params for _, params in ops):
+    elif native_can(nm, "arrow_chain") and all(not params for _, params in ops):
         out_arrow, changed = nm.apply_chain_arrow(
             series.to_arrow(), [name for name, _ in ops]
         )

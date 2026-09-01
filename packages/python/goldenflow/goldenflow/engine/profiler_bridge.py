@@ -171,7 +171,7 @@ def _profile_column_native_or_pure(series: pl.Series) -> ColumnProfile:
     (Int8/16/32, UInt*, Float32) fall back to the pure path via an explicit dtype
     pre-check -- NO broad ``except`` around the native call, so a real kernel bug
     surfaces instead of silently degrading."""
-    from goldenflow.core._native_loader import native_enabled, native_module
+    from goldenflow.core._native_loader import native_can, native_enabled, native_module
 
     if native_enabled("profile") and series.dtype in _kernel_profile_dtypes():
         nm = native_module()
@@ -182,7 +182,7 @@ def _profile_column_native_or_pure(series: pl.Series) -> ColumnProfile:
         # here -- the native_symbols gate scans file text for quoted *_arrow
         # literals and would read one as a referenced kernel symbol, but the
         # constructor is a pyclass METHOD, not a wrap_pyfunction export.
-        if column_cls is not None and hasattr(column_cls, "profile"):
+        if native_can(nm, "column_profile"):
             # GOTCHA (P1b): pass a 1-col DataFrame (series.to_frame()), never a
             # bare Series -- a bare Series is a non-struct Arrow stream arrow-rs
             # can't read.
@@ -255,11 +255,11 @@ def _infer_type_list_native_or_pure(values: list) -> str:
     The hint is derived EXACTLY as :func:`_infer_type_list` decides numeric/bool,
     and each value is stringified via ``str(v)`` (None stays None) so the kernel's
     Utf8 regex block sees the same text the pure path does."""
-    from goldenflow.core._native_loader import native_enabled, native_module
+    from goldenflow.core._native_loader import native_can, native_enabled, native_module
 
     if native_enabled("profile"):
         nm = native_module()
-        if nm is not None and hasattr(nm, "infer_type_list_arrow"):
+        if native_can(nm, "arrow_infer_type"):
             hint = _scalar_type_hint(values) or "string"  # None -> Utf8
             strs = [None if v is None else str(v) for v in values]
             return nm.infer_type_list_arrow(strs, hint)

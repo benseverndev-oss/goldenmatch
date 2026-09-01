@@ -6905,7 +6905,6 @@
             "goldenmatch.core.evaluate",
             "goldenmatch.core.explainer",
             "goldenmatch.core.frame",
-            "goldenmatch.core.ingest",
             "goldenmatch.core.io_arrow",
             "goldenmatch.core.lineage",
             "goldenmatch.core.match_one",
@@ -11351,6 +11350,7 @@
           "defines": [
             "_has_symbol",
             "native_available",
+            "native_can",
             "native_enabled",
             "native_module"
           ],
@@ -11495,7 +11495,6 @@
             "columnar_engine_selected",
             "columnar_file_ready",
             "config_is_columnar_ready",
-            "native_can",
             "native_columns_ready",
             "read_csv_columns",
             "read_excel_columns",

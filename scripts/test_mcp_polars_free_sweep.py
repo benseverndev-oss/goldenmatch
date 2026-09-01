@@ -24,13 +24,26 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from sweep_mcp_polars_free import NEVER_INVOKE, run_sweep  # noqa: E402
+from sweep_mcp_polars_free import (  # noqa: E402
+    NEVER_INVOKE,
+    looks_like_polars_import_error,
+    run_sweep,
+)
 
 # Measured 2026-08-31 by dispatching every tool with polars blocked.
 KNOWN_POLARS_BOUND: set[str] = set()
 # EMPTY. Opened at NINE on first measurement of this surface and closed the same
 # day. As with the CLI ratchet, an entry added later is a decision to ship a
 # tool that raises a bare ImportError at an agent on a default install.
+#
+# REOPENED at TWO on 2026-09-01 and closed again the same day. `read_file` and
+# `write_csv` had been scored `ok` by a sweep that only recognised a RAISED
+# ImportError. Both wrap their body in a broad `except Exception` and RETURN
+# {"error": str(exc)}, so a missing polars came back as a payload -- read_file
+# answered "Could not parse ...: No module named 'polars'" and counted as a pass.
+# The detector now inspects the returned value too. The lesson is not about
+# those two tools: a sweep that recognises one failure SHAPE reports a clean
+# zero for every tool that fails in another shape.
 #
 # One of the original nine (`run_transforms`) turned out NOT to be a defect: the
 # probe venv had goldenflow-native 0.1.1 against a >=0.27 floor, a wheel with 4
@@ -88,3 +101,50 @@ def test_known_bad_list_carries_no_stale_entries(sweep):
     registered = {r["tool"] for r in sweep}
     missing = KNOWN_POLARS_BOUND - registered
     assert not missing, f"listed but no longer registered tools: {sorted(missing)}"
+
+
+# -- the detector itself ----------------------------------------------------
+#
+# `run_sweep` is only as good as its classifier, and a narrowed classifier makes
+# the ratchet above pass while measuring nothing -- which is exactly what
+# happened before `read_file` and `write_csv` were found. So the predicate is
+# tested directly, not just through the sweep that depends on it.
+
+
+@pytest.mark.parametrize(
+    "blob",
+    [
+        "No module named 'polars'",
+        'no module named "polars"',
+        "Could not parse /tmp/a.csv: No module named 'polars'",
+        """{"error": "Could not parse a.csv: No module named 'polars'"}""",
+    ],
+)
+def test_a_returned_polars_import_error_is_recognised(blob):
+    assert looks_like_polars_import_error(blob)
+
+
+@pytest.mark.parametrize(
+    "blob",
+    [
+        "",
+        "No module named 'pyarrow'",
+        "polars is an optional extra",          # mentions polars, not an ImportError
+        "install goldenflow[polars] for this",  # an actionable needs-extra message
+    ],
+)
+def test_unrelated_text_is_not_flagged(blob):
+    assert not looks_like_polars_import_error(blob)
+
+
+def test_the_probe_uses_the_same_predicate_the_test_does():
+    """The probe runs in a subprocess and cannot import this module, so it
+    INLINES the predicate's source. If someone reimplements the check inside the
+    probe instead, the two can drift and only the subprocess one matters."""
+    import inspect
+
+    import sweep_mcp_polars_free as sweep
+
+    probe = sweep._probe_source()
+    assert "def looks_like_polars_import_error" in probe
+    assert inspect.getsource(sweep.looks_like_polars_import_error) in probe
