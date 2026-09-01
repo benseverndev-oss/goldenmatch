@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from dead_code.allowlist import load_allowlist  # noqa: E402
 from dead_code.liveness import live_modules  # noqa: E402
-from dead_code.report import candidates  # noqa: E402
+from dead_code.report import candidacy_scope, candidates  # noqa: E402
 from dead_code.static import unimported_modules  # noqa: E402
 
 
@@ -101,12 +101,25 @@ def test_a_registry_live_module_is_never_reported(tmp_path):
     live_modules() alone -- a live module that was never in the static pool
     to begin with would pass this assertion whether or not the `- live`
     exclusion exists, witnessing nothing.
+
+    Scoped to goldenmatch, same reasoning as _pick_real_candidate(): the
+    runtime signal (and therefore candidates()) only ever exists for
+    goldenmatch modules, so a non-goldenmatch victim can never appear in
+    _uncovered_modules()'s output regardless of whether the `- live`
+    exclusion is even present -- the assertion would pass either way and
+    witness nothing. This is the same defect fixed in this test in an
+    earlier round, reintroduced through coverage_paths.normalize()'s
+    goldenmatch-only construction.
     """
-    overlap = sorted(live_modules() & unimported_modules())
+    overlap = sorted(
+        m for m in (live_modules() & unimported_modules()) if m.startswith("goldenmatch.")
+    )
     if not overlap:
         pytest.fail(
-            "no module is both registry-live and statically unimported -- "
-            "this test can no longer witness the liveness exclusion"
+            "no goldenmatch module is both registry-live and statically unimported -- "
+            "this test can no longer witness the liveness exclusion (the victim must "
+            "also be goldenmatch-scoped, since only a goldenmatch module can ever have "
+            "a runtime signal for the exclusion to apply to)"
         )
     victim = overlap[0]
     xml = _coverage_xml(tmp_path, uncovered=[victim], covered=[])
@@ -152,3 +165,37 @@ def test_real_ci_filename_shape_is_recognized(tmp_path):
     target = _pick_real_candidate()
     xml = _ci_shape_coverage_xml(tmp_path, uncovered=[target])
     assert {c["module"] for c in candidates(xml)} == {target}
+
+
+def test_non_goldenmatch_module_is_excluded_not_evaluated(tmp_path):
+    """A module outside goldenmatch can never be a candidate -- not because
+    it's clean, but because the combined coverage.xml is goldenmatch's alone
+    (`source = ["goldenmatch"]`) and coverage_paths.normalize() is itself
+    goldenmatch-only, so no other package ever has a runtime signal at all.
+
+    Pins BOTH halves of that distinction: the module is never reported, AND
+    candidacy_scope()'s excluded count is non-zero -- so if coverage.xml ever
+    becomes multi-package, this test fails and tells whoever changed it to
+    revisit the goldenmatch-only restriction rather than letting the report's
+    meaning silently change from "out of scope" to "evaluated and clean".
+    """
+    pool = sorted(
+        m
+        for m in (unimported_modules() - live_modules() - load_allowlist())
+        if not m.startswith("goldenmatch.")
+    )
+    if not pool:
+        pytest.fail(
+            "no non-goldenmatch unimported module exists -- this test can no "
+            "longer witness the goldenmatch-only runtime-signal restriction"
+        )
+    victim = pool[0]
+    xml = _coverage_xml(tmp_path, uncovered=[victim], covered=[])
+    assert victim not in {c["module"] for c in candidates(xml)}
+
+    scope = candidacy_scope()
+    assert scope["excluded_no_runtime_signal"] > 0, (
+        "excluded count is zero -- either every unimported module is now "
+        "goldenmatch-scoped, or candidacy_scope() stopped counting correctly. "
+        "Either way this test can no longer witness the restriction it names."
+    )
