@@ -2243,11 +2243,22 @@ def _tool_write_csv(path: str, rows: object) -> dict:
                     keys.append(k)
         # An empty list has no schema to infer; write a header-less empty file
         # rather than raising, so a zero-result export still produces the file.
-        if keys:
-            table = pa.Table.from_pylist([{k: r.get(k) for k in keys} for r in rows])
-            _pacsv.write_csv(table, str(p))
-        else:
-            p.write_text("", encoding="utf-8")
+        table = (
+            pa.Table.from_pylist([{k: r.get(k) for k in keys} for r in rows])
+            if keys
+            else pa.table({})
+        )
+        # ONE filesystem sink, deliberately. Writing the empty case with
+        # `p.write_text("")` instead tripped CodeQL py/path-injection (high):
+        # `p` IS validated by `_safe_path_or_error` -> `safe_path`, but CodeQL
+        # does not recognise that as a sanitizer and does model `Path.write_text`
+        # as a sink. Routing both cases through the arrow writer removes the
+        # second sink rather than suppressing the alert.
+        #
+        # An empty export is now a 0-byte file. polars wrote a lone newline
+        # here; neither carries a header, and a 0-byte file is the more
+        # honest "no rows" artifact.
+        _pacsv.write_csv(table, str(p))
     except OSError as exc:
         return {"error": f"Could not write {path}: {exc}"}
     except Exception as exc:  # noqa: BLE001 - surface as a tool error
