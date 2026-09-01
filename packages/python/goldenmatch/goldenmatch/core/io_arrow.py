@@ -106,6 +106,7 @@ def read_table_arrow(
 
 def _read_csv_arrow(path: Path, *, separator: str, encoding: str | None):
     import pyarrow.csv as pa_csv
+    import pyarrow.types as pa_types
 
     parse_options = pa_csv.ParseOptions(delimiter=separator)
 
@@ -114,7 +115,28 @@ def _read_csv_arrow(path: Path, *, separator: str, encoding: str | None):
             if encoding == "utf8":
                 # Strict utf-8, matching polars scan_csv(encoding="utf8"):
                 # invalid bytes raise rather than being silently replaced.
-                return _read_csv_direct(path, parse_options)
+                #
+                # pyarrow does NOT enforce this on its own. Handed invalid
+                # UTF-8 it does not raise -- it silently infers the column as
+                # BINARY, so `Café` came back as b'Café' and every
+                # downstream string transform got bytes. polars raises
+                # `ComputeError: invalid utf-8 sequence` on the same input, so
+                # the strict mode has to enforce strictness itself. A binary
+                # column is the reliable tell: pyarrow's CSV reader only falls
+                # back to binary when a value fails UTF-8 validation.
+                table = _read_csv_direct(path, parse_options)
+                bad = [
+                    f.name
+                    for f in table.schema
+                    if pa_types.is_binary(f.type) or pa_types.is_large_binary(f.type)
+                ]
+                if bad:
+                    raise ValueError(
+                        f"invalid utf-8 sequence in {path} (columns: {bad}). "
+                        f'Pass encoding="utf8-lossy" to replace invalid bytes, '
+                        f"or name the real encoding (e.g. cp1252, latin-1)."
+                    )
+                return table
             # utf8-lossy: decode with replacement, then feed the re-encoded
             # text through the same buffer-reader path as the auto/non-utf8
             # branches below.
