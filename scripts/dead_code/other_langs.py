@@ -68,7 +68,11 @@ def unwired_rust_exports() -> list[str]:
 
 
 def unused_ts_exports() -> list[str]:
-    """Exported TypeScript symbols with no importer, per ts-prune."""
+    """Exported TypeScript symbols with no importer, per ts-prune.
+
+    Note: The parser is UNVERIFIED — ts-prune is not installed in this environment,
+    so an empty result may indicate no findings or that the parser has never run.
+    """
     ts_root = REPO / "packages" / "typescript" / "goldenmatch"
     if not ts_root.exists():
         return []
