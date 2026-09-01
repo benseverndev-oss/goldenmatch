@@ -140,7 +140,8 @@ def test_full_provenance_declines_fused(monkeypatch):
 def _write_nonstring_csv(path) -> None:
     """CSV with a NON-string golden column (`age` Int). The file path
     (scan_csv) infers native dtypes and does NOT pre-cast user columns to Utf8
-    (unlike run_match's _cast_user_cols_to_str), so the classic slow golden path
+    (unlike run_match, which casts user columns via the seam's cast_all_str),
+    so the classic slow golden path
     forces `age` to String while the fused kernel would preserve Int64 -- the
     exact byte-identity divergence the Utf8 cast in _try_fused_golden fixes."""
     lines = ["name,email,zip,age"]

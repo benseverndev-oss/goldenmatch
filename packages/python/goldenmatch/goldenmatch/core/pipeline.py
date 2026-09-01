@@ -1611,17 +1611,6 @@ def _resolve_identities(
             pass
 
 
-def _cast_user_cols_to_str(df: pl.DataFrame) -> pl.DataFrame:
-    """Cast all non-internal columns to Utf8.
-
-    Used by both file and DataFrame match entry points so that (a) per-file
-    CSV inference cannot produce schema-incompatible columns across the
-    target/reference vstack and (b) string transforms like lowercase/strip
-    always have a string to consume in zero-config paths.
-    """
-    return df.cast({c: pl.Utf8 for c in df.columns if not c.startswith("__")})
-
-
 def _apply_domain_extraction(
     combined_lf: Any,  # pl.LazyFrame (classic) | native frame (Frame lane)
     config: GoldenMatchConfig,
@@ -5512,57 +5501,109 @@ def run_match(
     """
     matchkeys = [] if auto_config else config.get_matchkeys()
 
-    # ── Step 1: Load target ──
-    if len(target_file) == 3:
-        target_path, target_source, target_col_map = target_file
-    else:
-        target_path, target_source = target_file[0], target_file[1]
-        target_col_map = None
-    target_lf = load_file(target_path)
-    if target_col_map:
-        target_lf = apply_column_map(target_lf, target_col_map)
-    target_lf = target_lf.with_columns(pl.lit(target_source).alias("__source__"))
-    target_lf = _add_row_ids(target_lf, offset=0)
-    target_df = target_lf.collect()
-    # Cast user columns to string before concat: target and reference files
-    # may have schema-incompatible types for the same column (e.g. DBLP
-    # ``id`` is string while ACM ``id`` is Int64), and CSV inference produces
-    # numeric columns that string transforms cannot consume downstream.
-    target_df = _cast_user_cols_to_str(target_df)
-    target_ids = set(target_df["__row_id__"].to_list())
-    offset = len(target_df)
+    # ── Steps 1-2: Load target + references, through the frame seam ──
+    #
+    # This was `load_file(...)` (a pl.LazyFrame) plus polars expressions, which
+    # made `goldenmatch match` raise on a default install -- polars has been an
+    # optional extra since v3.1.0. Worse, it was INVISIBLE to the polars-free CLI
+    # sweep: cli/match.py catches the ImportError, prints "Runtime error: ..." and
+    # exits 3, so there was no exception for the sweep to classify.
+    #
+    # `_run_match_pipeline` already had a full arrow lane; it was simply never
+    # reached from this entry point, because run_match always handed it a
+    # LazyFrame. Handing it a seam Frame is the whole port.
+    from goldenmatch.core.frame import concat_frames, to_frame
+    from goldenmatch.core.io_arrow import read_files_arrow
 
-    # ── Step 2: Load references ──
-    ref_frames = []
-    ref_sources = set()
-    for ref_spec in reference_files:
-        if len(ref_spec) == 3:
-            ref_path, ref_source, ref_col_map = ref_spec
+    def _ingest(spec: tuple, offset: int):
+        """One file -> a seam Frame with __source__ and offset __row_id__."""
+        if len(spec) == 3:
+            path, source, col_map = spec
         else:
-            ref_path, ref_source = ref_spec[0], ref_spec[1]
-            ref_col_map = None
-        ref_lf = load_file(ref_path)
-        if ref_col_map:
-            ref_lf = apply_column_map(ref_lf, ref_col_map)
-        ref_lf = ref_lf.with_columns(pl.lit(ref_source).alias("__source__"))
-        ref_lf = _add_row_ids(ref_lf, offset=offset)
-        ref_df = _cast_user_cols_to_str(ref_lf.collect())
-        offset += len(ref_df)
-        ref_frames.append(ref_df)
-        ref_sources.add(ref_source)
+            path, source, col_map = spec[0], spec[1], None
+        frame = to_frame(
+            read_files_arrow([(path, source)], source_column="__source__")
+        )
+        if col_map:
+            # Same contract as ingest.apply_column_map, which this replaces:
+            # a map naming a column the file does not have is an error, not a
+            # silent no-op.
+            missing = [src for src in col_map if src not in frame.columns]
+            if missing:
+                raise ValueError(
+                    f"Column map references columns not in file: {missing}. "
+                    f"Available: {sorted(frame.columns)}"
+                )
+            frame = frame.rename(col_map)
+        frame = frame.ensure_row_ids("__row_id__", offset=offset)
+        # Cast user columns to string before concat: target and reference files
+        # may have schema-incompatible types for the same column (e.g. DBLP
+        # ``id`` is string while ACM ``id`` is Int64), and CSV inference produces
+        # numeric columns that string transforms cannot consume downstream.
+        # `cast_all_str` skips __-prefixed internals, so __row_id__ stays Int64.
+        return frame.cast_all_str()
 
-    # Concat all (frames are already Utf8-cast on user columns above so the
-    # vstack can never fail on cross-file schema mismatches).
-    combined_df = pl.concat([target_df] + ref_frames)
-    combined_lf = combined_df.lazy()
+    target_frame = _ingest(target_file, 0)
+    target_ids = set(range(target_frame.height))
+    offset = target_frame.height
+
+    frames = [target_frame]
+    for ref_spec in reference_files:
+        ref_frame = _ingest(ref_spec, offset)
+        offset += ref_frame.height
+        frames.append(ref_frame)
+
+    # relaxed=True is the old `pl.concat` on already-Utf8-cast frames: the union
+    # of columns with nulls in the gaps, so a cross-file schema mismatch cannot
+    # fail the concat.
+    combined_frame = concat_frames(frames, relaxed=True)
 
     return _run_match_pipeline(
-        combined_lf, config, matchkeys, target_ids,
+        combined_frame, config, matchkeys, target_ids,
         output_matched, output_unmatched, output_scores,
         output_report, match_mode,
         auto_config=auto_config,
         auto_config_llm_provider=auto_config_llm_provider,
     )
+
+
+def _match_autoconfig_on_cleaned(data: Any, config: GoldenMatchConfig, provider: str | None) -> list:
+    """Zero-config auto-configuration for MATCH mode, on already-cleaned data.
+
+    Shared by both match lanes. `auto_configure_df` accepts a pl.DataFrame, a
+    pa.Table or a seam Frame, so the only thing the two lanes differed in was
+    how they materialised the frame -- and keeping two copies of the
+    config-field copying is how they drift.
+
+    Returns the refreshed matchkeys; mutates ``config`` in place, as the classic
+    branch did.
+    """
+    from goldenmatch.core.autoconfig import (
+        _match_mode_autoconfig,
+        auto_configure_df,
+    )
+
+    # #858: this is match mode -- the 2-value __source__ here is the
+    # target/reference split, and cross-source linking is the goal, not
+    # over-merge. Suppress the multi-source dedupe guard.
+    with _match_mode_autoconfig():
+        auto_cfg = auto_configure_df(
+            data,
+            llm_provider=provider,
+            llm_auto=config.llm_auto,
+        )
+    config.matchkeys = auto_cfg.matchkeys
+    config.match_settings = auto_cfg.match_settings
+    config.blocking = auto_cfg.blocking
+    config.golden_rules = auto_cfg.golden_rules
+    config.llm_scorer = auto_cfg.llm_scorer
+    config.memory = auto_cfg.memory
+    if auto_cfg.domain is not None:
+        config.domain = auto_cfg.domain
+    _propagate_autoconfig_markers(auto_cfg, config)
+    matchkeys = config.get_matchkeys()
+    logger.info("Auto-configured from cleaned data: %d matchkeys", len(matchkeys))
+    return matchkeys
 
 
 def _run_match_pipeline(
@@ -5594,7 +5635,21 @@ def _run_match_pipeline(
     from goldenmatch.core.frame import to_frame as _tf_match
     from goldenmatch.core.matchkey import precompute_matchkey_transforms_frame
 
-    _match_arrow_lane = not _is_pl_lf(combined_lf) and not auto_config
+    # NOTE on the suggest_quality gate: it is RED on main independently of this
+    # change (last green run f827a0616; red from the #2826 merge 74af9823e
+    # onward, and on that branch from 70772c24e). orgs_hard convergence_final_f1
+    # 0.2939 -> 0.0000 and dblp_acm 0.7296 -> 0.5645 are byte-identical with and
+    # without this lane covering auto_config, which is the evidence that routing
+    # auto-config through arrow is NEUTRAL on that scorecard rather than its
+    # cause. Do not read the red gate as a verdict on this code.
+    #
+    # The arrow lane no longer excludes auto_config. It used to, which made
+    # zero-config match polars-bound -- and worse, `run_match_df`'s arrow path
+    # passes a seam Frame straight through with `auto_config=auto_config`, so a
+    # zero-config arrow caller fell into the CLASSIC branch below and hit
+    # `combined_lf.collect()` on a pa.Table. `auto_configure_df` has accepted a
+    # pa.Table / Frame for a while; only this gate said otherwise.
+    _match_arrow_lane = not _is_pl_lf(combined_lf)
     if _match_arrow_lane:
         _frame = _tf_match(combined_lf)
         if config.validation and config.validation.auto_fix:
@@ -5602,6 +5657,12 @@ def _run_match_pipeline(
             if _af_fixes:
                 logger.info("Auto-fix applied: %d fix type(s)", len(_af_fixes))
             _frame = _tf_match(_fixed_native)
+        # Auto-config runs on CLEANED data, in the same position as the classic
+        # branch, through the same helper.
+        if auto_config:
+            matchkeys = _match_autoconfig_on_cleaned(
+                _frame.native, config, auto_config_llm_provider
+            )
         if config.validation and config.validation.rules:
             _v_rules = [
                 ValidationRule(
@@ -5660,31 +5721,10 @@ def _run_match_pipeline(
 
     # ── Step 2.5a': AUTO-CONFIG ON CLEANED DATA (if zero-config) ──
     if auto_config:
-        from goldenmatch.core.autoconfig import (
-            _match_mode_autoconfig,
-            auto_configure_df,
-        )
         combined_df_tmp = combined_lf.collect()
-        # #858: this is match mode -- the 2-value __source__ here is the
-        # target/reference split, and cross-source linking is the goal, not
-        # over-merge. Suppress the multi-source dedupe guard.
-        with _match_mode_autoconfig():
-            auto_cfg = auto_configure_df(
-                combined_df_tmp,
-                llm_provider=auto_config_llm_provider,
-                llm_auto=config.llm_auto,
-            )
-        config.matchkeys = auto_cfg.matchkeys
-        config.match_settings = auto_cfg.match_settings
-        config.blocking = auto_cfg.blocking
-        config.golden_rules = auto_cfg.golden_rules
-        config.llm_scorer = auto_cfg.llm_scorer
-        config.memory = auto_cfg.memory
-        if auto_cfg.domain is not None:
-            config.domain = auto_cfg.domain
-        _propagate_autoconfig_markers(auto_cfg, config)
-        matchkeys = config.get_matchkeys()
-        logger.info("Auto-configured from cleaned data: %d matchkeys", len(matchkeys))
+        matchkeys = _match_autoconfig_on_cleaned(
+            combined_df_tmp, config, auto_config_llm_provider
+        )
         combined_lf = combined_df_tmp.lazy()
 
     if config.validation and config.validation.rules:
