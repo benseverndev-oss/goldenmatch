@@ -226,6 +226,12 @@ git commit -m "feat(dead-code): resolve registries into a live module set"
 
 ### Task 2: Static candidates from the codemap
 
+> **Superseded.** This task's `docs/agent-codemap.json`-backed implementation was
+> later converged onto the pre-existing `scripts/check_dead_code.py`'s AST import
+> graph instead. See "Convergence with the pre-existing detector" in
+> `docs/superpowers/specs/2026-09-01-dead-code-audit-design.md`. Left as-is below
+> as the historical record of what was originally built.
+
 **Files:**
 - Create: `scripts/dead_code/static.py`
 - Test: `scripts/test_dead_code_static.py`
@@ -345,6 +351,12 @@ git commit -m "feat(dead-code): module-level static candidacy from the codemap g
 ---
 
 ### Task 3: Allowlist
+
+> **Superseded.** This task's `parity/dead_code.allow` implementation was later
+> converged onto the pre-existing `parity/dead_code/*.yaml` classification maps
+> instead. See "Convergence with the pre-existing detector" in
+> `docs/superpowers/specs/2026-09-01-dead-code-audit-design.md`. Left as-is below
+> as the historical record of what was originally built.
 
 **Files:**
 - Create: `scripts/dead_code/allowlist.py`
@@ -1247,11 +1259,6 @@ Add to `.github/workflows/ci.yml`, after `python_goldenmatch_coverage`:
             coverage_sweep_mcp.dat coverage_sweep_cli.dat
           uv run coverage xml --rcfile=packages/python/goldenmatch/pyproject.toml \
             -o packages/python/goldenmatch/coverage.xml
-      - name: Prove the sweep coverage reached the report
-        # End-to-end proof that the union is real rather than nominal: mcp/* is
-        # omitted by every other coverage config in the repo, so an mcp module
-        # in this coverage.xml can only have come from the MCP sweep.
-        run: uv run python scripts/assert_union_reached_mcp.py packages/python/goldenmatch/coverage.xml
       - name: Detector self-tests
         run: uv run pytest scripts/test_dead_code_liveness.py scripts/test_dead_code_static.py scripts/test_dead_code_allowlist.py scripts/test_dead_code_report.py scripts/test_dead_code_other_langs.py -q
       - name: Dead-code report
@@ -1262,47 +1269,15 @@ Add to `.github/workflows/ci.yml`, after `python_goldenmatch_coverage`:
         run: uv run pytest scripts/test_no_new_dead_code.py -q
 ```
 
-Create `scripts/assert_union_reached_mcp.py`:
-
-```python
-"""Fail if the combined coverage.xml never saw the MCP surface.
-
-`goldenmatch/mcp/*` is omitted by the pyproject coverage config, so the only way
-an mcp module reaches this report is through the sweep coverage collected under
-.coveragerc-sweep. Its absence means the union silently degraded to the old
-shard-only coverage -- which would mark every MCP-only module uncovered and turn
-it into a deletion candidate.
-"""
-
-from __future__ import annotations
-
-import sys
-import xml.etree.ElementTree as ET
-from pathlib import Path
-
-
-def main(path: str) -> int:
-    root = ET.parse(Path(path)).getroot()
-    names = [
-        c.get("filename", "")
-        for c in root.iter("class")
-    ]
-    mcp = [n for n in names if "goldenmatch/mcp/" in n.replace("\\", "/")]
-    print(f"{len(names)} measured modules, {len(mcp)} of them under goldenmatch/mcp/")
-    if not mcp:
-        print(
-            "FAIL no goldenmatch/mcp/ module in the combined coverage. The sweep "
-            "coverage did not reach the report; every MCP-only module would now "
-            "read as a dead-code candidate.",
-            file=sys.stderr,
-        )
-        return 1
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1]))
-```
+A guard script was originally added here to prove the sweep `.dat` files had actually
+been combined into the report, by checking for an executed `goldenmatch/mcp/` line in
+the combined `coverage.xml`. It was removed in a later change: `coverage_baseline.json`
+(CI's own output) already carries `goldenmatch/mcp/*` entries with `hits > 0` from
+ordinary shard coverage alone, so the check passed whether or not the sweep data was
+present -- it could not witness the thing it claimed to prove. The union is protected
+without it: `coverage combine` names the sweep `.dat` files explicitly and fails loudly
+if one is missing, and the sweep job's own coverage-not-empty assertion runs before its
+artifact is uploaded.
 
 The detector self-tests run BEFORE the report in the same job: a detector whose own tests fail must not be believed, and running them here means the report can never be read as authoritative while its classifier is broken.
 
@@ -1314,7 +1289,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add scripts/test_no_new_dead_code.py scripts/assert_union_reached_mcp.py .github/workflows/ci.yml
+git add scripts/test_no_new_dead_code.py .github/workflows/ci.yml
 git commit -m "ci: report-only dead-code job with the detector's own tests"
 ```
 

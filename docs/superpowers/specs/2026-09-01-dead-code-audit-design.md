@@ -116,17 +116,41 @@ removes working integrations.
 | component | responsibility |
 | --- | --- |
 | `scripts/dead_code/liveness.py` | Resolve the four registries into the live symbol set |
-| `scripts/dead_code/static.py` | Per-language candidates: codemap `imports` graph (Python modules), `ts-prune` (TypeScript), `cargo-machete` plus the `check_native_symbols` unwired list (Rust) |
+| `scripts/dead_code/static.py` | Per-language candidates: `check_dead_code.build_graph_ast`'s AST import graph (Python modules), `ts-prune` (TypeScript), `cargo-machete` plus the `check_native_symbols` unwired list (Rust) |
 | CI coverage change | Run the CLI and MCP sweeps under coverage; add both to `coverage combine` |
-| `parity/dead_code.allow` | Allowlist, one reason per line, matching the `parity/native_symbols/*.allow` convention |
+| `parity/dead_code/*.yaml` | Allowlist, one reason per entry, the pre-existing per-package classification maps `check_dead_code.py`'s `dead_code_deferred` mechanism already consumed |
 | `scripts/dead_code/report.py` | Intersect the signals; emit the candidate list with the evidence for each item; and separately emit the unused-public-export inventory, which is reported but never actioned in this phase |
 | `scripts/test_dead_code_detector.py` | Tests for the detector itself |
 | `scripts/test_no_new_dead_code.py` | Regrowth ratchet, `KNOWN_DEAD: set[str] = set()`, matching the `KNOWN_POLARS_BOUND` pattern |
 
-`docs/agent-codemap.json` is the static backbone for module-level work: it
-already records `defines` and `imports` per module across six packages and is
-regenerated in CI. It does not record symbol-level references, which is why
-module-level and symbol-level work are staged separately.
+`docs/agent-codemap.json` is the static backbone for module-level work elsewhere
+in the repo: it already records `defines` and `imports` per module across six
+packages and is regenerated in CI. It does not record symbol-level references,
+which is why module-level and symbol-level work are staged separately. It is
+not, however, this detector's source for the import graph — see below.
+
+### Convergence with the pre-existing detector
+
+A dead-code detector already existed in this repo before this phase started:
+`scripts/check_dead_code.py`, spec'd at
+`docs/superpowers/specs/2026-07-22-arch-aware-dead-code-detection.md` and shipped
+via PRs #2020 and #2027. Phase A's `scripts/dead_code/*` began as a second,
+independent detector; a later change in this phase converged it onto the
+existing one's analysis rather than shipping a competing implementation.
+
+Each side contributed a different half. The prior work brought the AST import
+graph (`check_dead_code.build_graph_ast`) and the curated per-package
+classification maps (`parity/dead_code/*.yaml`, consumed by its
+`dead_code_deferred` mechanism). This phase brought the tests neither had, the
+runtime coverage signal, the CI wiring, the regrowth ratchet, and the
+TypeScript/Rust candidate sources.
+
+The AST graph is the correct source, not `docs/agent-codemap.json`, because the
+codemap under-records `from <pkg> import <submodule>` edges: measured, 42 of the
+176 static candidates the codemap-backed version reported were modules that ARE
+imported (e.g. `goldenmatch.core.strsim`, `goldenmatch.mcp._ingest`,
+`goldenanalysis.mcp.server`, `goldenmatch.core.refit`) — false candidates from
+the source alone, before any liveness or allowlist reasoning ran.
 
 ## Delivery stages
 

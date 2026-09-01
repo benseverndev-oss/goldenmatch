@@ -645,11 +645,12 @@ jobs:
     # not arrive through python_goldenmatch_coverage.
     needs: [python_goldenmatch_coverage, goldenmatch_sweep_coverage]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - run: uv sync --all-packages
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
           pattern: gm-cov-*
           merge-multiple: true
@@ -667,11 +668,6 @@ jobs:
             coverage_sweep_mcp.dat coverage_sweep_cli.dat
           uv run coverage xml --rcfile=packages/python/goldenmatch/pyproject.toml \
             -o packages/python/goldenmatch/coverage.xml
-      - name: Prove the sweep coverage reached the report
-        # End-to-end proof that the union is real rather than nominal: mcp/* is
-        # omitted by every other coverage config in the repo, so an mcp module
-        # in this coverage.xml can only have come from the MCP sweep.
-        run: uv run python scripts/assert_union_reached_mcp.py packages/python/goldenmatch/coverage.xml
       - name: Detector self-tests
         run: uv run pytest scripts/test_dead_code_liveness.py scripts/test_dead_code_static.py scripts/test_dead_code_allowlist.py scripts/test_dead_code_report.py scripts/test_dead_code_other_langs.py -q
       - name: Dead-code report
@@ -679,6 +675,10 @@ jobs:
           PYTHONPATH: scripts
         run: uv run python -m dead_code.report --coverage-xml packages/python/goldenmatch/coverage.xml
       - name: Ratchet
+        # A0 (docs/superpowers/specs/2026-09-01-dead-code-audit-design.md, Delivery
+        # stages) lands this job report-only: it must not gate. Flipping the ratchet
+        # to gating is A3, a later phase -- until then a candidate must not fail CI.
+        continue-on-error: true
         run: uv run pytest scripts/test_no_new_dead_code.py -q
 
   # Harvests coverage from the two sweeps, which reach 66 CLI commands and 97 MCP
@@ -688,9 +688,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.python_goldenmatch == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
       - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       # Both env vars MUST be absolute. run_sweep() launches the probe with
       # cwd set to a scratch TemporaryDirectory, not the workspace: a relative
@@ -717,7 +718,7 @@ jobs:
           uv run coverage combine --rcfile=packages/python/goldenmatch/.coveragerc-sweep
       - name: Prove the sweep coverage is not empty
         run: uv run python scripts/assert_sweep_coverage.py
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         with:
           name: gm-cov-sweeps
           path: coverage_sweep_*.dat
