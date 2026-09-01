@@ -88,6 +88,71 @@ _OWNED_STRING = FUSABLE_KERNELS | FUSABLE_PARAM_KERNELS
 _OWNED_NULLABLE = FUSABLE_NULLABLE_KERNELS
 
 
+# --- native capability table -------------------------------------------------
+#
+# ONE place naming what each native code path needs from the installed wheel, as
+# ``capability -> (module symbols, Column methods)``.
+#
+# This used to be ~20 hand-rolled ``hasattr(nm, ...)`` checks in three different
+# spellings, and their strictness did not always match what the code went on to
+# call: `transform_columns_native` tested only ``columnar_split_ready`` before
+# reaching ``Column.apply_split``, and was safe solely because its CALLERS had
+# already run the stronger `config_is_columnar_ready` gate. Safety that lives in
+# a caller contract is safety you cannot see at the call site.
+#
+# It matters more than tidiness because of the documented wheel-skew footgun
+# (see CLAUDE.md): Python reaches new kernel symbols through these guards, so a
+# published wheel missing one silently takes a slower path instead of failing.
+# `test_every_declared_capability_exists_on_this_wheel` turns that into a test
+# failure at the moment a capability is declared without the wheel to back it.
+#
+# The `*_shape` entries are DELIBERATELY weaker, not an oversight: the whole-file
+# CSV route runs through ``transform_csv`` and never touches ``Column``, so it
+# needs the shape probe alone. Splitting them makes that asymmetry legible.
+_CAPABILITIES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    # in-memory string execution
+    "string_chain": (("apply_chain_str_list",), ()),
+    "nullable_chain": (("chain_supports_nullable",), ()),
+    # the Polars-free in-memory core
+    "columns": ((), ("from_pylist",)),
+    # zero-copy Arrow C-Data ingress (the Polars-frame Column path)
+    "columns_arrow": ((), ("from_arrow",)),
+    # in-memory shapes: probe AND the Column method that executes them
+    "numeric": (("columnar_numeric_ready",), ("apply_numeric",)),
+    "split": (("columnar_split_ready",), ("apply_split",)),
+    # whole-file CSV route: the shape probe only (no Column involved)
+    "numeric_shape": (("columnar_numeric_ready",), ()),
+    "split_shape": (("columnar_split_ready",), ()),
+    "csv": (("transform_csv", "apply_chain_str_list"), ()),
+    "format_f64": (("format_f64",), ()),
+}
+
+
+def native_can(nm, capability: str) -> bool:
+    """Whether the installed native wheel can run ``capability``.
+
+    ``nm is None`` (no kernel at all) answers False rather than raising, so call
+    sites read as one condition. An unknown capability name raises -- a typo
+    silently answering False would disable a path with no signal, which is the
+    failure this table exists to prevent.
+    """
+    if capability not in _CAPABILITIES:
+        raise KeyError(
+            f"unknown native capability {capability!r}; "
+            f"known: {sorted(_CAPABILITIES)}"
+        )
+    if nm is None:
+        return False
+    mod_syms, col_syms = _CAPABILITIES[capability]
+    if not all(hasattr(nm, s) for s in mod_syms):
+        return False
+    if col_syms:
+        col_cls = getattr(nm, "Column", None)
+        if col_cls is None or not all(hasattr(col_cls, s) for s in col_syms):
+            return False
+    return True
+
+
 def _split_ops_spec(method: str) -> list:
     """One `config.splits` entry as the ``string* splitter`` op chain that both
     the native probe and the native kernel take. No leading string ops: those
@@ -167,7 +232,7 @@ def _frame_level_blocked(config) -> bool:
     methods instead; that is a second source of truth, and it can only ever drift
     from the kernel that does the work.
 
-    ``_split_inmem_ok`` guards an OLD native wheel that predates ``apply_split``.
+    ``native_can(nm, "split")`` guards an OLD wheel that predates ``apply_split``.
     On that skew we DECLINE, which routes to polars and raises an actionable
     ImportError on a polars-free install. We do not fall back to a Python split:
     a silently slower path is the failure mode this whole change exists to remove.
@@ -176,7 +241,7 @@ def _frame_level_blocked(config) -> bool:
     if not splits:
         return False
     nm = native_module()
-    if nm is None or not _split_inmem_ok(nm):
+    if not native_can(nm, "split"):
         return True
     return not all(
         nm.columnar_split_ready(_split_ops_spec(s.method)) for s in splits
@@ -262,7 +327,7 @@ def _apply_frame_ops(frame, config, manifest=None):
 def _accepted_string(nm) -> frozenset[str]:
     """The owned string kernels this native build accepts: total + parameterized,
     plus the nullable URL/company/email family when it auto-routes them (0.20+)."""
-    if hasattr(nm, "chain_supports_nullable"):
+    if native_can(nm, "nullable_chain"):
         return _OWNED_STRING | _OWNED_NULLABLE
     return _OWNED_STRING
 
@@ -273,28 +338,6 @@ def _spec_string_ready(spec, accepted: frozenset[str]) -> bool:
         if name not in accepted or get_transform(name) is None:
             return False
     return True
-
-
-def _numeric_inmem_ok(nm) -> bool:
-    """The in-memory Column path can run a numeric spec when the kernel exposes the
-    shape probe AND the Column egresses a raw numeric array (``apply_numeric``,
-    native-flow 0.23+). Skew-safe: an older wheel lacks it -> numeric declines to
-    Polars in-memory, no hard error."""
-    col_cls = getattr(nm, "Column", None)
-    return hasattr(nm, "columnar_numeric_ready") and col_cls is not None and hasattr(
-        col_cls, "apply_numeric"
-    )
-
-
-def _split_inmem_ok(nm) -> bool:
-    """The in-memory Column path can run a split spec when the kernel exposes the
-    shape probe AND the Column returns the source + output columns (``apply_split``,
-    native-flow 0.24+). Skew-safe: an older wheel lacks it -> split declines to
-    Polars in-memory."""
-    col_cls = getattr(nm, "Column", None)
-    return hasattr(nm, "columnar_split_ready") and col_cls is not None and hasattr(
-        col_cls, "apply_split"
-    )
 
 
 def _spec_scalar_ready(spec, accepted: frozenset[str]) -> bool:
@@ -432,8 +475,8 @@ def _uncovered_reason(config) -> str:
             "columnar core (no Column.from_pylist) -- upgrade goldenflow-native"
         )
     accepted = _accepted_string(nm)
-    numeric_ok = _numeric_inmem_ok(nm)
-    split_ok = _split_inmem_ok(nm)
+    numeric_ok = native_can(nm, "numeric")
+    split_ok = native_can(nm, "split")
     unsupported = [
         " -> ".join(spec.ops)
         for spec in (getattr(config, "transforms", None) or [])
@@ -453,11 +496,11 @@ def config_is_columnar_ready(config) -> bool:
     if _frame_level_blocked(config) or not config.transforms:
         return False
     nm = native_module()
-    if nm is None or not hasattr(nm, "apply_chain_str_list"):
+    if not native_can(nm, "string_chain"):
         return False
     accepted = _accepted_string(nm)
-    numeric_ok = _numeric_inmem_ok(nm)
-    split_ok = _split_inmem_ok(nm)
+    numeric_ok = native_can(nm, "numeric")
+    split_ok = native_can(nm, "split")
     scalar_ok = native_columns_ready(nm)  # scalar-chain needs from_pylist (4b)
     return all(
         _spec_ready(nm, spec, accepted, numeric_ok, split_ok, scalar_ok)
@@ -474,11 +517,11 @@ def columnar_file_ready(config) -> bool:
     if _frame_level_blocked_whole_file(config) or not config.transforms:
         return False
     nm = native_module()
-    if nm is None or not hasattr(nm, "transform_csv") or not hasattr(nm, "apply_chain_str_list"):
+    if not native_can(nm, "csv"):
         return False
     accepted = _accepted_string(nm)
-    numeric_ok = hasattr(nm, "columnar_numeric_ready")
-    split_ok = hasattr(nm, "columnar_split_ready")
+    numeric_ok = native_can(nm, "numeric_shape")
+    split_ok = native_can(nm, "split_shape")
     return all(_spec_ready(nm, spec, accepted, numeric_ok, split_ok) for spec in config.transforms)
 
 
@@ -538,7 +581,7 @@ def _stringify_for_column(col_list, nm) -> list:
     float format) so a numeric-INPUT column round-trips and its manifest matches. Falls
     back to ``_cast_utf8`` when the kernel predates ``format_f64``."""
     float_idx = [i for i, v in enumerate(col_list) if type(v) is float]
-    if not float_idx or not hasattr(nm, "format_f64"):
+    if not float_idx or not native_can(nm, "format_f64"):
         return [_cast_utf8(v) for v in col_list]
     fmt = nm.format_f64([col_list[i] for i in float_idx])
     out = [_cast_utf8(v) for v in col_list]
@@ -557,7 +600,7 @@ def transform(df, config, source: str = "<dataframe>"):
     import polars as pl
 
     nm = native_module()
-    if nm is not None and hasattr(nm, "Column"):
+    if native_can(nm, "columns_arrow"):
         return _transform_via_columns(df, config, source, nm, pl)
     # Fallback: the Phase 1 list path (marshals, but Polars-free execution).
     names = [s.column for s in config.transforms if s.column in df.columns]
@@ -577,8 +620,8 @@ def _transform_via_columns(df, config, source, nm, pl):
     C-Data interface, run the owned chain on the Rust-held Arrow buffer, egress back.
     No list marshaling, no pyarrow."""
     manifest = Manifest(source=source)
-    numeric_ok = _numeric_inmem_ok(nm)
-    split_ok = _split_inmem_ok(nm)
+    numeric_ok = native_can(nm, "numeric")
+    split_ok = native_can(nm, "split")
     out_series = []
 
     def _add_records(column, records):
@@ -939,8 +982,7 @@ def native_columns_ready(nm) -> bool:
     native `Column` can ingest a Python list (`from_pylist`) — plus the string /
     numeric / split methods already gated by their own probes. A pre-0.25 wheel lacks
     `from_pylist`, so the caller stays on the Polars-frame path."""
-    col_cls = getattr(nm, "Column", None)
-    return col_cls is not None and hasattr(col_cls, "from_pylist")
+    return native_can(nm, "columns")
 
 
 def transform_columns_native(columns, config, source: str = "<dataframe>"):
@@ -1004,7 +1046,7 @@ def transform_columns_native(columns, config, source: str = "<dataframe>"):
         col = nm.Column.from_pylist(_stringify_for_column(col_list, nm))
 
         # Split (string* splitter): source kept, fixed-name outputs appended.
-        if hasattr(nm, "columnar_split_ready") and nm.columnar_split_ready(ops_spec):
+        if native_can(nm, "split") and nm.columnar_split_ready(ops_spec):
             src_col, new_cols, records = col.apply_split(ops_spec)
             for name, affected, total, before, after in records:
                 manifest.add_record(TransformRecord(
@@ -1017,7 +1059,7 @@ def transform_columns_native(columns, config, source: str = "<dataframe>"):
             continue
 
         # Numeric (string* parser f64*): egress the raw Int64/Float64 as int/float.
-        if hasattr(nm, "columnar_numeric_ready") and nm.columnar_numeric_ready(ops_spec):
+        if native_can(nm, "numeric") and nm.columnar_numeric_ready(ops_spec):
             num_col, records = col.apply_numeric(ops_spec)
             for name, affected, total, before, after in records:
                 manifest.add_record(TransformRecord(
