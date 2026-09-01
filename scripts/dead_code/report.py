@@ -81,6 +81,22 @@ def main() -> int:
     if args.coverage_xml is None:
         print("  no --coverage-xml given: runtime signal unknown, reporting nothing")
     print(f"\npublic-export inventory (reported only): {len(inventory)}")
+
+    from dead_code.other_langs import (
+        unused_rust_deps,
+        unused_ts_exports,
+        unwired_rust_exports,
+    )
+
+    for label, items in (
+        ("unused rust deps", unused_rust_deps()),
+        ("unwired rust exports", unwired_rust_exports()),
+        ("unused ts exports", unused_ts_exports()),
+    ):
+        print(f"\n{label}: {len(items)}")
+        for item in items[:40]:
+            print(f"  - {item}")
+
     return 0
 
 
