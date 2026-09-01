@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -16,16 +17,31 @@ from dead_code.allowlist import load_allowlist
 from dead_code.liveness import live_modules
 from dead_code.static import all_modules, unimported_modules
 
+# report.py sits in scripts/dead_code/, so scripts/ (where coverage_paths.py
+# lives) is the parent's parent.
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from coverage_paths import normalize  # noqa: E402
+
 
 def _uncovered_modules(coverage_xml: Path) -> set[str]:
-    """Modules with zero covered lines in the combined coverage report."""
+    """Modules with zero covered lines in the combined coverage report.
+
+    Coverage emits a different `filename` shape depending on how the report was
+    produced -- package-relative, repo-root-relative (with the doubled
+    `packages/python/goldenmatch/goldenmatch/` nesting), or absolute. Route
+    through coverage_paths.normalize() first so this always compares against
+    the same `goldenmatch/...`-rooted shape static.py's module names imply --
+    see scripts/coverage_paths.py's docstring for why the naive form silently
+    matches nothing against real CI coverage.
+    """
     root = ET.parse(coverage_xml).getroot()
     out: set[str] = set()
     for cls in root.iter("class"):
-        filename = cls.get("filename") or ""
+        filename = normalize(cls.get("filename") or "")
         hits = sum(1 for line in cls.iter("line") if int(line.get("hits", "0")) > 0)
         if hits == 0:
-            mod = filename.replace("/", ".").replace("\\", ".")
+            mod = filename.replace("/", ".")
             if mod.endswith(".py"):
                 mod = mod[:-3]
             if mod.endswith(".__init__"):

@@ -27,10 +27,24 @@ def _pick_real_candidate() -> str:
     Chosen dynamically rather than hardcoded: pinning a specific module name
     would break the day someone imports it, and the test would then be
     'fixed' by weakening it.
+
+    Scoped to goldenmatch: the real coverage.xml this detector consumes is
+    produced with `source = ["goldenmatch"]` (see .github/workflows/ci.yml),
+    so it can never contain a class from any other package, and
+    coverage_paths.normalize() (used by _uncovered_modules) is itself
+    goldenmatch-only -- it prepends "goldenmatch/" to anything that isn't
+    already rooted there. A victim from another package would get the wrong
+    prefix silently prepended by normalize() and candidates(xml) would come
+    back empty, which every "not reported" assertion below would then pass
+    vacuously instead of actually witnessing the exclusion it names.
     """
-    pool = sorted(unimported_modules() - live_modules() - load_allowlist())
+    pool = sorted(
+        m
+        for m in (unimported_modules() - live_modules() - load_allowlist())
+        if m.startswith("goldenmatch.")
+    )
     if not pool:
-        pytest.skip("no unimported module available to build a fixture from")
+        pytest.skip("no unimported goldenmatch module available to build a fixture from")
     return pool[0]
 
 
@@ -43,6 +57,27 @@ def _coverage_xml(tmp_path: Path, uncovered: list[str], covered: list[str]) -> P
     for mod in covered:
         lines.append(f'<class filename="{mod.replace(".", "/")}.py">')
         lines.append('<lines><line number="1" hits="3"/></lines></class>')
+    lines.append("</classes></package></packages></coverage>")
+    p = tmp_path / "coverage.xml"
+    p.write_text("\n".join(lines), encoding="utf-8")
+    return p
+
+
+def _ci_shape_coverage_xml(tmp_path: Path, uncovered: list[str]) -> Path:
+    """coverage.xml using the REAL CI filename shape, not the clean one.
+
+    CI's `coverage xml` emits repo-root-relative names with the doubled
+    `packages/python/goldenmatch/goldenmatch/` nesting (see
+    scripts/coverage_paths.py's docstring), not the package-relative
+    `goldenmatch/...` shape `_coverage_xml` above hand-writes. A fixture that
+    only ever exercises the clean shape can pass while the real pipeline is
+    broken -- which is exactly what shipped in the first version of this job.
+    """
+    lines = ['<?xml version="1.0" ?>', "<coverage><packages><package><classes>"]
+    for mod in uncovered:
+        rel = mod.replace(".", "/")
+        lines.append('<class filename="packages/python/goldenmatch/' + rel + '.py">')
+        lines.append('<lines><line number="1" hits="0"/></lines></class>')
     lines.append("</classes></package></packages></coverage>")
     p = tmp_path / "coverage.xml"
     p.write_text("\n".join(lines), encoding="utf-8")
@@ -104,3 +139,16 @@ def test_without_coverage_runtime_evidence_is_absent_not_assumed():
     """With no coverage.xml the runtime signal is unknown, so NOTHING is a
     candidate. An unknown treated as proof is how live code gets deleted."""
     assert candidates(None) == []
+
+
+def test_real_ci_filename_shape_is_recognized(tmp_path):
+    """CI's actual filename shape (repo-root-relative, doubled
+    goldenmatch/goldenmatch/ nesting) must produce a candidate, not just the
+    hand-simplified goldenmatch/... shape the other fixtures in this file
+    use. Reproduces the bug where _uncovered_modules compared this shape
+    naively against unimported_modules()'s canonical names and the
+    intersection was always empty -- the report found nothing, forever, on
+    every real CI run."""
+    target = _pick_real_candidate()
+    xml = _ci_shape_coverage_xml(tmp_path, uncovered=[target])
+    assert {c["module"] for c in candidates(xml)} == {target}
