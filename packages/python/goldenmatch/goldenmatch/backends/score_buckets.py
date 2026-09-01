@@ -1484,7 +1484,23 @@ def score_buckets(
     # worked -- issue #1048. `passes` is None for static/single-key configs, so
     # fall back to `keys`; only a config with NEITHER (nothing to block on)
     # returns empty, matching the no-candidate-pairs semantics.
-    pass_keys = blocking_config.passes or blocking_config.keys
+    # Mirror blocker.py's dispatch EXACTLY. `passes or keys` was wrong for one
+    # shape: a `static` config carrying BOTH. Legacy blocks a static config on
+    # `keys` and never looks at `passes` (blocker.py: the static branch iterates
+    # `config.keys`); `passes or keys` took `passes` instead, so the two
+    # backends blocked on DIFFERENT fields and bucket scored a candidate set the
+    # plan never described -- zero pairs, no error.
+    #
+    # Every parity test in tests/test_score_buckets_multipass.py sets
+    # `keys=[zip]` alongside `passes=[zip, ssn]`, i.e. keys is a SUBSET of
+    # passes, so dropping keys lost nothing and none of them could see this.
+    # Auto-config emits keys=[org_name] with passes=[postcode, record_id],
+    # where the dropped key is the only one that pairs the duplicates: on the
+    # suggest_quality orgs_hard corpus that was 0 pairs vs legacy's 242.
+    if blocking_config.strategy == "multi_pass":
+        pass_keys = blocking_config.passes or blocking_config.keys
+    else:
+        pass_keys = blocking_config.keys or blocking_config.passes
     if not pass_keys:
         return []
 
