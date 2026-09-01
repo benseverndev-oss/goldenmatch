@@ -633,6 +633,54 @@ jobs:
           # nobody wrote a floor for still fails.
           uv run python scripts/check_coverage_baseline.py packages/python/goldenmatch/coverage.xml
 
+  # Report-only dead-code audit. Combines the required gate's shard/heavy
+  # coverage with the CLI/MCP sweep coverage (a strictly wider union: more
+  # coverage can only remove false candidates, never add one) and runs the
+  # detector against it. The ratchet (test_no_new_dead_code.py) currently
+  # gates on an empty KNOWN_DEAD floor populated from the first CI report;
+  # nothing here deletes code.
+  dead_code:
+    # goldenmatch_sweep_coverage is a DIRECT dependency: Task 5 deliberately
+    # leaves the required gate's combine untouched, so the sweep artifact does
+    # not arrive through python_goldenmatch_coverage.
+    needs: [python_goldenmatch_coverage, goldenmatch_sweep_coverage]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --all-packages
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: gm-cov-*
+          merge-multiple: true
+      - name: Combine coverage for the dead-code report
+        # coverage_shard1_serial.dat is written and uploaded by the shard job
+        # but is absent from the required gate's combine, so its coverage has
+        # always been discarded. It is included HERE because more coverage can
+        # only remove false candidates, never add one. Deliberately not added to
+        # the gate's own combine, which is out of scope for this phase.
+        run: |
+          uv run coverage combine --rcfile=packages/python/goldenmatch/pyproject.toml \
+            coverage_shard1.dat coverage_shard2.dat coverage_shard3.dat \
+            coverage_shard1_serial.dat \
+            coverage_heavy_1.dat coverage_heavy_2.dat coverage_heavy_3.dat \
+            coverage_sweep_mcp.dat coverage_sweep_cli.dat
+          uv run coverage xml --rcfile=packages/python/goldenmatch/pyproject.toml \
+            -o packages/python/goldenmatch/coverage.xml
+      - name: Prove the sweep coverage reached the report
+        # End-to-end proof that the union is real rather than nominal: mcp/* is
+        # omitted by every other coverage config in the repo, so an mcp module
+        # in this coverage.xml can only have come from the MCP sweep.
+        run: uv run python scripts/assert_union_reached_mcp.py packages/python/goldenmatch/coverage.xml
+      - name: Detector self-tests
+        run: uv run pytest scripts/test_dead_code_liveness.py scripts/test_dead_code_static.py scripts/test_dead_code_allowlist.py scripts/test_dead_code_report.py scripts/test_dead_code_other_langs.py -q
+      - name: Dead-code report
+        env:
+          PYTHONPATH: scripts
+        run: uv run python -m dead_code.report --coverage-xml packages/python/goldenmatch/coverage.xml
+      - name: Ratchet
+        run: uv run pytest scripts/test_no_new_dead_code.py -q
+
   # Harvests coverage from the two sweeps, which reach 66 CLI commands and 97 MCP
   # tools -- surfaces no other job measures. Feeds the dead_code job's combine
   # ONLY; the coverage floors and baseline gates are unaffected.
