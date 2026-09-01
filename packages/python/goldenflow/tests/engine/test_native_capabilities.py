@@ -17,9 +17,15 @@ from __future__ import annotations
 import inspect
 
 import pytest
-from goldenflow.core._native_loader import native_module
-from goldenflow.engine import columnar
-from goldenflow.engine.columnar import _CAPABILITIES, native_can
+from goldenflow.core._native_loader import _CAPABILITIES, native_can, native_module
+from goldenflow.engine import columnar, profiler_bridge
+from goldenflow.transforms import _chain
+
+# Every module that asks "can this wheel do X?". The table lives in
+# core/_native_loader.py rather than engine/columnar.py precisely so
+# transforms/_chain.py can use it -- columnar imports FROM _chain, so the other
+# direction would be a cycle.
+GUARDED_MODULES = (columnar, _chain, profiler_bridge)
 
 
 def _missing_symbols(nm, capability: str) -> list[str]:
@@ -65,7 +71,7 @@ def test_no_kernel_answers_false_for_every_capability():
 def test_capability_names_are_reachable_from_the_call_sites():
     """Guard against a table entry nothing consults -- a capability declared and
     then never asked about is dead weight that still passes the wheel check."""
-    src = inspect.getsource(columnar)
+    src = chr(10).join(inspect.getsource(m) for m in GUARDED_MODULES)
     unused = [c for c in _CAPABILITIES if f'native_can(nm, "{c}")' not in src]
     assert not unused, f"declared but never queried: {unused}"
 
@@ -77,14 +83,15 @@ def test_the_hand_rolled_guards_do_not_come_back():
 
     If you need a new symbol, add it to `_CAPABILITIES` and call `native_can`.
     """
-    src = inspect.getsource(columnar)
-    allowed = inspect.getsource(columnar.native_can)
-    rest = src.replace(allowed, "")
-    offenders = [
-        line.strip()
-        for line in rest.splitlines()
-        if "hasattr(nm" in line and not line.strip().startswith("#")
-    ]
+    allowed = inspect.getsource(native_can)
+    offenders = []
+    for module in GUARDED_MODULES:
+        rest = inspect.getsource(module).replace(allowed, "")
+        offenders += [
+            f"{module.__name__}: {line.strip()}"
+            for line in rest.splitlines()
+            if "hasattr(nm" in line and not line.strip().startswith("#")
+        ]
     assert not offenders, (
         f"hand-rolled native guards outside native_can: {offenders}. Add the "
         f"symbol to _CAPABILITIES and use native_can(nm, ...) instead."

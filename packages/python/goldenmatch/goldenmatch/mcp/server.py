@@ -2201,9 +2201,14 @@ def _tool_read_file(path: str, limit: object) -> dict:
         return {"error": f"`limit` must be a number, got {limit!r}"}
 
     try:
-        from goldenmatch.core.ingest import load_file
+        # Arrow ingest, not `load_file(...).collect()`. load_file returns a
+        # pl.LazyFrame, so this tool was polars-bound -- but its broad
+        # `except Exception` below turned the ImportError into a RETURNED
+        # {"error": "... No module named 'polars'"}, which the polars-free sweep
+        # scored as `ok`. It only ever looked for a RAISED ImportError.
+        from goldenmatch.core.io_arrow import read_table_arrow
 
-        rows = load_file(str(p)).collect().to_dicts()
+        rows = read_table_arrow(p, encoding="utf8-lossy").to_pylist()
     except (FileNotFoundError, OSError) as exc:
         return {"error": f"Could not read {path}: {exc}"}
     except Exception as exc:  # noqa: BLE001 - malformed file is a tool error, not a crash
@@ -2222,11 +2227,27 @@ def _tool_write_csv(path: str, rows: object) -> dict:
         return p
 
     try:
-        import polars as pl
+        import pyarrow as pa
+        from pyarrow import csv as _pacsv
 
+        # Union the keys across ALL rows, first-seen order. `pl.DataFrame(rows)`
+        # did this; `pa.Table.from_pylist` infers its schema from the FIRST row
+        # only and silently DROPS a key that appears later, so porting without
+        # this loop loses columns with no error.
+        keys: list[str] = []
+        seen: set[str] = set()
+        for r in rows:
+            for k in r:
+                if k not in seen:
+                    seen.add(k)
+                    keys.append(k)
         # An empty list has no schema to infer; write a header-less empty file
         # rather than raising, so a zero-result export still produces the file.
-        (pl.DataFrame(rows) if rows else pl.DataFrame()).write_csv(str(p))
+        if keys:
+            table = pa.Table.from_pylist([{k: r.get(k) for k in keys} for r in rows])
+            _pacsv.write_csv(table, str(p))
+        else:
+            p.write_text("", encoding="utf-8")
     except OSError as exc:
         return {"error": f"Could not write {path}: {exc}"}
     except Exception as exc:  # noqa: BLE001 - surface as a tool error

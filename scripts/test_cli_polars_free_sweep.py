@@ -31,8 +31,28 @@ from sweep_cli_polars_free import NEVER_INVOKE, run_sweep  # noqa: E402
 # Confirmed by invocation on 2026-08-31 against a polars-blocked interpreter.
 # Each raises ImportError: No module named 'polars' -- a traceback, not an
 # error message -- on a default install.
-KNOWN_POLARS_BOUND: set[str] = set()
-# EMPTY, and that is the point. This started at ELEVEN commands and the list is
+KNOWN_POLARS_BOUND: set[str] = {
+    # `match` -- FOUND 2026-09-01 by widening the detector, not by a regression.
+    # It was always polars-bound; the sweep could not see it. cli/match.py wraps
+    # run_match in `except Exception`, prints "Runtime error: {exc}" and exits 3,
+    # so there is no ImportError to catch and the old rule (inspect
+    # `res.exception` only) classified it `errored` -- indistinguishable from a
+    # command that failed on synthesised arguments.
+    #
+    # Reproduced: `match a.csv --against b.csv --config c.yaml` on a polars-free
+    # interpreter exits 3 with "Runtime error: No module named 'polars'".
+    # Source: core/pipeline.py run_match -> core/ingest.py load_file (a
+    # pl.LazyFrame), then `_run_match_pipeline(combined_lf, ...)`.
+    #
+    # NOT a green-washing entry: this is a real, user-facing break on
+    # `pip install goldenmatch`, listed so the ratchet stops lying rather than to
+    # make a build pass. The fix is porting the match lane onto the seam the way
+    # the dedupe lane already is -- run_match is 80 lines (3 `pl.` refs) and
+    # _run_match_pipeline is 340 (6 refs), so it is a scoped change, just not
+    # this one.
+    "match",
+}
+# The list above is the ONLY entry, and it is a known defect awaiting a port. This started at ELEVEN commands and the list is
 # now closed: no registered command may require polars. The assertion below has
 # stopped being "the debt has not grown" and become "there is no debt", which is
 # the only version of this gate worth having.
