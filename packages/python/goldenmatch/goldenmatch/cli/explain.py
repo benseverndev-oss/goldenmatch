@@ -40,6 +40,7 @@ def explain_cmd(
     console.print("[bold]Running pipeline...[/bold]")
     engine = MatchEngine(paths)
     result = engine.run_full(cfg)
+
     df = engine.data
     clusters = result.clusters
     scored_pairs = result.scored_pairs
@@ -100,9 +101,9 @@ def _print_fs_waterfall(df, matchkeys, em_results, id_a: int, id_b: int) -> None
 
     No-op unless a probabilistic matchkey ran and produced a trained model.
     """
-    import polars as pl
 
     from goldenmatch.core.explain import format_fs_waterfall
+    from goldenmatch.core.frame import to_frame as _tf_explain
     from goldenmatch.core.probabilistic import explain_pair_fs
 
     mk = next(
@@ -112,8 +113,9 @@ def _print_fs_waterfall(df, matchkeys, em_results, id_a: int, id_b: int) -> None
     if mk is None:
         return
     try:
-        row_a = df.filter(pl.col("__row_id__") == id_a).to_dicts()[0]
-        row_b = df.filter(pl.col("__row_id__") == id_b).to_dicts()[0]
+        _frame = _tf_explain(df)
+        row_a = _frame.filter_eq("__row_id__", id_a).to_dicts()[0]
+        row_b = _frame.filter_eq("__row_id__", id_b).to_dicts()[0]
     except IndexError:
         return
     wf = explain_pair_fs(row_a, row_b, mk, em_results[mk.name])

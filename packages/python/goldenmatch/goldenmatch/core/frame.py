@@ -257,6 +257,12 @@ class Frame(Protocol):
     ) -> Frame: ...
     # D5c: row-dict projection (probabilistic's select(cols).to_dicts()).
     def select_dicts(self, cols: Sequence[str]) -> list[dict]: ...
+    # Whole-frame row dicts. `to_dicts()` is polars-only, so a surface that read
+    # a frame straight off MatchEngine broke the moment that frame became arrow
+    # (`'pyarrow.lib.Table' object has no attribute 'to_dicts'` -- the REST API
+    # and 10 MCP tools). Routing it through the seam is what makes the backend
+    # swap invisible to the caller, which is the point of the seam.
+    def to_dicts(self) -> list[dict]: ...
     def evaluate_validation_rule(
         self, column: str, rule_type: str, params: dict
     ) -> Column: ...
@@ -834,6 +840,9 @@ class PolarsFrame:
     def select_dicts(self, cols: Sequence[str]) -> list[dict]:
         # probabilistic.py row_lookup build: select(cols).to_dicts().
         return self._df.select(list(cols)).to_dicts()
+
+    def to_dicts(self) -> list[dict]:
+        return self._df.to_dicts()
 
     def evaluate_validation_rule(
         self, column: str, rule_type: str, params: dict
@@ -1790,6 +1799,9 @@ class ArrowFrame:
 
     def select_dicts(self, cols: Sequence[str]) -> list[dict]:
         return self._tbl.select(list(cols)).to_pylist()
+
+    def to_dicts(self) -> list[dict]:
+        return self._tbl.to_pylist()
 
     def evaluate_validation_rule(
         self, column: str, rule_type: str, params: dict

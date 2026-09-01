@@ -34,6 +34,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from goldenmatch.config.schemas import GoldenMatchConfig
+from goldenmatch.core.frame import to_frame
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,7 @@ class MatchServer:
     def initialize(self) -> None:
         """Run initial matching and cache results."""
         self.result = self.engine.run_full(self.config)
-        self._rows = self.engine.data.to_dicts()
+        self._rows = to_frame(self.engine.data).to_dicts()
         self._id_to_idx = {
             row["__row_id__"]: i for i, row in enumerate(self._rows)
         }

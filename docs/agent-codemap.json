@@ -242,6 +242,7 @@
             "goldenmatch.config.schemas",
             "goldenmatch.core.autoconfig",
             "goldenmatch.core.explainer",
+            "goldenmatch.core.frame",
             "goldenmatch.core.io_arrow",
             "goldenmatch.core.memory.store",
             "goldenmatch.core.recall_certificate",
@@ -635,6 +636,7 @@
             "goldenmatch.config.loader",
             "goldenmatch.config.schemas",
             "goldenmatch.core.explain",
+            "goldenmatch.core.frame",
             "goldenmatch.core.lineage",
             "goldenmatch.core.probabilistic",
             "goldenmatch.tui.engine"
@@ -4211,7 +4213,7 @@
             "format_score_histogram"
           ],
           "imports": [
-            "goldenmatch._polars_lazy",
+            "goldenmatch.core.frame",
             "goldenmatch.tui.engine"
           ]
         },
@@ -4536,15 +4538,17 @@
           "purpose": "Semantic retrieval -- find records similar to a query string (#1089).",
           "defines": [
             "RetrievedRecord",
+            "_filtered_rows",
             "_fuzzy_extract",
+            "_validated_frame",
             "retrieve_similar_fuzzy",
             "retrieve_similar_records"
           ],
           "imports": [
-            "goldenmatch._polars_lazy",
             "goldenmatch.core",
             "goldenmatch.core.ann_blocker",
-            "goldenmatch.core.embedder"
+            "goldenmatch.core.embedder",
+            "goldenmatch.core.frame"
           ]
         },
         {
@@ -8701,6 +8705,7 @@
           ],
           "imports": [
             "goldenmatch._polars_lazy",
+            "goldenmatch.core.frame",
             "goldenmatch.tui.engine",
             "goldenmatch.tui.screens.matches_correction_modal",
             "goldenmatch.tui.widgets.threshold_slider"

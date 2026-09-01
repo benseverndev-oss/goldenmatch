@@ -92,11 +92,26 @@ _PRAGMA = re.compile(r"#\s*polars-lane:")
 
 
 def _count_from_arrow(text: str) -> int:
-    return sum(
-        1
-        for line in text.splitlines()
-        if _FROM_ARROW.search(line) and not _PRAGMA.search(line)
-    )
+    """Count real `pl.from_arrow(` CALLS, not mentions of one.
+
+    The comment part of a line is stripped before matching. Without that, prose
+    ABOUT the seam counted as a breach of it: a comment reading "load_file ends
+    at `pl.from_arrow(tbl).lazy()` -- a legacy boundary" made cli/main.py and
+    mcp/server.py fail `test_from_arrow_no_new_files` as brand-new polars
+    re-entrants, in a change that had added no polars call at all. A gate that
+    punishes documenting the thing it guards teaches people to stop documenting
+    it.
+
+    The pragma is checked on the FULL line, since `# polars-lane:` lives in a
+    comment by construction; only the call probe uses the code part.
+    """
+    n = 0
+    for line in text.splitlines():
+        if _PRAGMA.search(line):
+            continue
+        if _FROM_ARROW.search(line.split("#", 1)[0]):
+            n += 1
+    return n
 
 
 def _scan_from_arrow() -> dict[str, int]:

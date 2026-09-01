@@ -115,8 +115,12 @@ _CAPABILITIES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "nullable_chain": (("chain_supports_nullable",), ()),
     # the Polars-free in-memory core
     "columns": ((), ("from_pylist",)),
-    # zero-copy Arrow C-Data ingress (the Polars-frame Column path)
-    "columns_arrow": ((), ("from_arrow",)),
+    # Zero-copy Arrow C-Data ingress (the Polars-frame Column path).
+    # NOT named `*_arrow`: scripts/check_native_symbols.py scans goldenflow with
+    # the literal pattern `"(\w+_arrow)"`, so a capability KEY ending in _arrow
+    # is read as a kernel export and reported missing. The key is ours to choose;
+    # the symbol name is not.
+    "arrow_ingress": ((), ("from_arrow",)),
     # in-memory shapes: probe AND the Column method that executes them
     "numeric": (("columnar_numeric_ready",), ("apply_numeric",)),
     "split": (("columnar_split_ready",), ("apply_split",)),
@@ -600,7 +604,7 @@ def transform(df, config, source: str = "<dataframe>"):
     import polars as pl
 
     nm = native_module()
-    if native_can(nm, "columns_arrow"):
+    if native_can(nm, "arrow_ingress"):
         return _transform_via_columns(df, config, source, nm, pl)
     # Fallback: the Phase 1 list path (marshals, but Polars-free execution).
     names = [s.column for s in config.transforms if s.column in df.columns]

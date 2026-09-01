@@ -72,6 +72,7 @@ def _initialize(file_paths: list[str], config_path: str | None = None) -> None:
     """Load data and run initial matching."""
     global _engine, _config, _result, _rows, _id_to_idx
 
+    from goldenmatch.core.frame import to_frame
     from goldenmatch.tui.engine import MatchEngine
 
     _engine = MatchEngine(file_paths)
@@ -87,7 +88,7 @@ def _initialize(file_paths: list[str], config_path: str | None = None) -> None:
         logger.info("Auto-configured matching rules")
 
     _result = _engine.run_full(_config)
-    _rows = _engine.data.to_dicts()
+    _rows = to_frame(_engine.data).to_dicts()
     _id_to_idx = {row["__row_id__"]: i for i, row in enumerate(_rows)}
     logger.info(
         "Matching complete: %d clusters, %.1f%% match rate",
