@@ -31,28 +31,18 @@ from sweep_cli_polars_free import NEVER_INVOKE, run_sweep  # noqa: E402
 # Confirmed by invocation on 2026-08-31 against a polars-blocked interpreter.
 # Each raises ImportError: No module named 'polars' -- a traceback, not an
 # error message -- on a default install.
-KNOWN_POLARS_BOUND: set[str] = {
-    # `match` -- FOUND 2026-09-01 by widening the detector, not by a regression.
-    # It was always polars-bound; the sweep could not see it. cli/match.py wraps
-    # run_match in `except Exception`, prints "Runtime error: {exc}" and exits 3,
-    # so there is no ImportError to catch and the old rule (inspect
-    # `res.exception` only) classified it `errored` -- indistinguishable from a
-    # command that failed on synthesised arguments.
-    #
-    # Reproduced: `match a.csv --against b.csv --config c.yaml` on a polars-free
-    # interpreter exits 3 with "Runtime error: No module named 'polars'".
-    # Source: core/pipeline.py run_match -> core/ingest.py load_file (a
-    # pl.LazyFrame), then `_run_match_pipeline(combined_lf, ...)`.
-    #
-    # NOT a green-washing entry: this is a real, user-facing break on
-    # `pip install goldenmatch`, listed so the ratchet stops lying rather than to
-    # make a build pass. The fix is porting the match lane onto the seam the way
-    # the dedupe lane already is -- run_match is 80 lines (3 `pl.` refs) and
-    # _run_match_pipeline is 340 (6 refs), so it is a scoped change, just not
-    # this one.
-    "match",
-}
-# The list above is the ONLY entry, and it is a known defect awaiting a port. This started at ELEVEN commands and the list is
+KNOWN_POLARS_BOUND: set[str] = set()
+# EMPTY again, and this time the detector is the widened one -- it counts a
+# RETURNED or PRINTED polars ImportError, not just a raised one. That is the
+# version of "zero" worth having; the previous zero was an artefact of only
+# recognising exceptions.
+#
+# `match` was the single entry here for exactly as long as it took to port it:
+# run_match built a pl.LazyFrame, so it never reached the arrow lane that
+# _run_match_pipeline already had. It now ingests through read_files_arrow and
+# the seam. Do not add an entry to make a build green -- polars is an OPTIONAL
+# extra, so an entry is a decision to ship a command that fails on a default
+# install.
 # now closed: no registered command may require polars. The assertion below has
 # stopped being "the debt has not grown" and become "there is no debt", which is
 # the only version of this gate worth having.
