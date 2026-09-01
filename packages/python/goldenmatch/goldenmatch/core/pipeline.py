@@ -1611,16 +1611,6 @@ def _resolve_identities(
             pass
 
 
-def _cast_user_cols_to_str(df: Any) -> Any:
-    """Cast all non-internal columns to Utf8 (polars zero-config match ingest).
-
-    Kept for the ONE remaining polars ingest path -- see the auto_config note in
-    `run_match`. The arrow ingest uses the seam's `cast_all_str`, which applies
-    the same non-``__`` rule.
-    """
-    return df.cast({c: pl.Utf8 for c in df.columns if not c.startswith("__")})
-
-
 def _apply_domain_extraction(
     combined_lf: Any,  # pl.LazyFrame (classic) | native frame (Frame lane)
     config: GoldenMatchConfig,
@@ -5511,7 +5501,7 @@ def run_match(
     """
     matchkeys = [] if auto_config else config.get_matchkeys()
 
-    # ── Steps 1-2: Load target + references ──
+    # ── Steps 1-2: Load target + references, through the frame seam ──
     #
     # This was `load_file(...)` (a pl.LazyFrame) plus polars expressions, which
     # made `goldenmatch match` raise on a default install -- polars has been an
@@ -5522,79 +5512,51 @@ def run_match(
     # `_run_match_pipeline` already had a full arrow lane; it was simply never
     # reached from this entry point, because run_match always handed it a
     # LazyFrame. Handing it a seam Frame is the whole port.
-    #
-    # ZERO-CONFIG STILL INGESTS THROUGH POLARS, deliberately. pyarrow's CSV
-    # inference plus a Utf8 cast does not produce the same strings as polars'
-    # scan_csv plus a Utf8 cast, and auto-config derives the entire config from
-    # those strings -- swapping the ingest under it collapsed orgs_hard's
-    # convergence F1 from 0.2939 to 0.0000 on the suggest_quality scorecard (see
-    # the gate note in `_run_match_pipeline`). Configured match is unaffected and
-    # runs polars-free; zero-config keeps the old path until arrow auto-config
-    # parity is established on that scorecard.
-    if auto_config:
-        def _ingest_polars(spec: tuple, offset: int):
-            if len(spec) == 3:
-                path, source, col_map = spec
-            else:
-                path, source, col_map = spec[0], spec[1], None
-            lf = load_file(path)
-            if col_map:
-                lf = apply_column_map(lf, col_map)
-            lf = lf.with_columns(pl.lit(source).alias("__source__"))
-            lf = _add_row_ids(lf, offset=offset)
-            return _cast_user_cols_to_str(lf.collect())
+    from goldenmatch.core.frame import concat_frames, to_frame
+    from goldenmatch.core.io_arrow import read_files_arrow
 
-        target_df = _ingest_polars(target_file, 0)
-        target_ids = set(target_df["__row_id__"].to_list())
-        offset = len(target_df)
-        ref_frames = []
-        for ref_spec in reference_files:
-            ref_df = _ingest_polars(ref_spec, offset)
-            offset += len(ref_df)
-            ref_frames.append(ref_df)
-        combined_frame = pl.concat([target_df] + ref_frames).lazy()
-    else:
-        from goldenmatch.core.frame import concat_frames, to_frame
-        from goldenmatch.core.io_arrow import read_files_arrow
+    def _ingest(spec: tuple, offset: int):
+        """One file -> a seam Frame with __source__ and offset __row_id__."""
+        if len(spec) == 3:
+            path, source, col_map = spec
+        else:
+            path, source, col_map = spec[0], spec[1], None
+        frame = to_frame(
+            read_files_arrow([(path, source)], source_column="__source__")
+        )
+        if col_map:
+            # Same contract as ingest.apply_column_map, which this replaces:
+            # a map naming a column the file does not have is an error, not a
+            # silent no-op.
+            missing = [src for src in col_map if src not in frame.columns]
+            if missing:
+                raise ValueError(
+                    f"Column map references columns not in file: {missing}. "
+                    f"Available: {sorted(frame.columns)}"
+                )
+            frame = frame.rename(col_map)
+        frame = frame.ensure_row_ids("__row_id__", offset=offset)
+        # Cast user columns to string before concat: target and reference files
+        # may have schema-incompatible types for the same column (e.g. DBLP
+        # ``id`` is string while ACM ``id`` is Int64), and CSV inference produces
+        # numeric columns that string transforms cannot consume downstream.
+        # `cast_all_str` skips __-prefixed internals, so __row_id__ stays Int64.
+        return frame.cast_all_str()
 
-        def _ingest_arrow(spec: tuple, offset: int):
-            """One file -> a seam Frame with __source__ and offset __row_id__."""
-            if len(spec) == 3:
-                path, source, col_map = spec
-            else:
-                path, source, col_map = spec[0], spec[1], None
-            frame = to_frame(
-                read_files_arrow([(path, source)], source_column="__source__")
-            )
-            if col_map:
-                # Same contract as ingest.apply_column_map, which this replaces:
-                # a map naming a column the file does not have is an error, not a
-                # silent no-op that leaves a matchkey pointing at nothing.
-                missing = [src for src in col_map if src not in frame.columns]
-                if missing:
-                    raise ValueError(
-                        f"Column map references columns not in file: {missing}. "
-                        f"Available: {sorted(frame.columns)}"
-                    )
-                frame = frame.rename(col_map)
-            frame = frame.ensure_row_ids("__row_id__", offset=offset)
-            # Cast user columns to string before concat: target and reference
-            # files may have schema-incompatible types for the same column (e.g.
-            # DBLP ``id`` is string while ACM ``id`` is Int64). `cast_all_str`
-            # skips __-prefixed internals, so __row_id__ stays Int64.
-            return frame.cast_all_str()
+    target_frame = _ingest(target_file, 0)
+    target_ids = set(range(target_frame.height))
+    offset = target_frame.height
 
-        target_frame = _ingest_arrow(target_file, 0)
-        target_ids = set(range(target_frame.height))
-        offset = target_frame.height
-        frames = [target_frame]
-        for ref_spec in reference_files:
-            ref_frame = _ingest_arrow(ref_spec, offset)
-            offset += ref_frame.height
-            frames.append(ref_frame)
-        # relaxed=True is the old `pl.concat` on already-Utf8-cast frames: the
-        # union of columns with nulls in the gaps.
-        combined_frame = concat_frames(frames, relaxed=True)
+    frames = [target_frame]
+    for ref_spec in reference_files:
+        ref_frame = _ingest(ref_spec, offset)
+        offset += ref_frame.height
+        frames.append(ref_frame)
+
+    # relaxed=True is the old `pl.concat` on already-Utf8-cast frames: the union
+    # of columns with nulls in the gaps, so a cross-file schema mismatch cannot
+    # fail the concat.
+    combined_frame = concat_frames(frames, relaxed=True)
 
     return _run_match_pipeline(
         combined_frame, config, matchkeys, target_ids,
@@ -5673,25 +5635,21 @@ def _run_match_pipeline(
     from goldenmatch.core.frame import to_frame as _tf_match
     from goldenmatch.core.matchkey import precompute_matchkey_transforms_frame
 
-    # The arrow lane deliberately EXCLUDES auto_config, and this is measured,
-    # not cautious. Routing zero-config match through arrow auto-config regressed
-    # the suggest_quality scorecard:
+    # NOTE on the suggest_quality gate: it is RED on main independently of this
+    # change (last green run f827a0616; red from the #2826 merge 74af9823e
+    # onward, and on that branch from 70772c24e). orgs_hard convergence_final_f1
+    # 0.2939 -> 0.0000 and dblp_acm 0.7296 -> 0.5645 are byte-identical with and
+    # without this lane covering auto_config, which is the evidence that routing
+    # auto-config through arrow is NEUTRAL on that scorecard rather than its
+    # cause. Do not read the red gate as a verdict on this code.
     #
-    #   orgs_hard  convergence_final_f1  0.2939 -> 0.0000  (-0.2939)
-    #   dblp_acm   convergence_final_f1  0.7296 -> 0.5645  (-0.1651)
-    #
-    # and every other convergence_final_f1 drifted DOWN too (historical_50k
-    # -0.0055, ncvr_synthetic -0.0048), which is the signature of auto-config
-    # seeing different input rather than a switch being off: pyarrow's CSV
-    # inference plus a Utf8 cast does not produce the same strings as polars'
-    # scan_csv plus a Utf8 cast, and auto-config derives the whole config from
-    # those strings. `suggester_prec` was unaffected, so CONFIGURED matching is
-    # fine on arrow -- it is the config-derivation step that is input-sensitive.
-    #
-    # So zero-config match keeps the polars ingest (see run_match) until arrow
-    # auto-config parity is established on that scorecard. Fixing an install-time
-    # error by shipping an F1 collapse is not a trade worth making.
-    _match_arrow_lane = not _is_pl_lf(combined_lf) and not auto_config
+    # The arrow lane no longer excludes auto_config. It used to, which made
+    # zero-config match polars-bound -- and worse, `run_match_df`'s arrow path
+    # passes a seam Frame straight through with `auto_config=auto_config`, so a
+    # zero-config arrow caller fell into the CLASSIC branch below and hit
+    # `combined_lf.collect()` on a pa.Table. `auto_configure_df` has accepted a
+    # pa.Table / Frame for a while; only this gate said otherwise.
+    _match_arrow_lane = not _is_pl_lf(combined_lf)
     if _match_arrow_lane:
         _frame = _tf_match(combined_lf)
         if config.validation and config.validation.auto_fix:
@@ -5699,6 +5657,12 @@ def _run_match_pipeline(
             if _af_fixes:
                 logger.info("Auto-fix applied: %d fix type(s)", len(_af_fixes))
             _frame = _tf_match(_fixed_native)
+        # Auto-config runs on CLEANED data, in the same position as the classic
+        # branch, through the same helper.
+        if auto_config:
+            matchkeys = _match_autoconfig_on_cleaned(
+                _frame.native, config, auto_config_llm_provider
+            )
         if config.validation and config.validation.rules:
             _v_rules = [
                 ValidationRule(

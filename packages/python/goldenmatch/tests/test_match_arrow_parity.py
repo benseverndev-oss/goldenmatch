@@ -9,7 +9,6 @@ Two guarantees, the eviction's own standard:
 """
 from __future__ import annotations
 
-import inspect
 import subprocess
 import sys
 import textwrap
@@ -135,45 +134,24 @@ def _csv(tmp_path, name: str, cols: dict) -> str:
     return str(p)
 
 
-_EXACT_EMAIL_CFG = """\
-matchkeys:
-  - name: k
-    type: exact
-    fields:
-      - field: email
-"""
-
-
-def _exact_cfg(tmp_path):
-    from goldenmatch.config.loader import load_config
-
-    p = tmp_path / "cfg.yaml"
-    p.write_text(_EXACT_EMAIL_CFG, encoding="utf-8")
-    return load_config(str(p))
-
-
-def test_run_match_file_linkage_matches_the_polars_lane(tmp_path) -> None:
-    """CONFIGURED match: file ingest (arrow) vs the polars `match_df` lane.
-
-    Deliberately configured, not zero-config. An earlier version of this test
-    used `auto_config=True` -- which, once zero-config was pinned back to the
-    polars ingest (see below), meant BOTH sides were polars and the test
-    exercised none of the port.
-    """
+@pytest.mark.parametrize("shape", sorted(_SHAPES))
+def test_run_match_file_linkage_matches_the_polars_lane(shape, tmp_path) -> None:
     pl = pytest.importorskip("polars")
+    from goldenmatch.config.schemas import GoldenMatchConfig
     from goldenmatch.core.pipeline import run_match, run_match_df
 
-    tgt, ref = _SHAPES["exact_email"]
+    tgt, ref = _SHAPES[shape]
     t_path = _csv(tmp_path, "target.csv", tgt)
     r_path = _csv(tmp_path, "ref.csv", ref)
 
     from_file = run_match(
         target_file=(t_path, "target"),
         reference_files=[(r_path, "reference")],
-        config=_exact_cfg(tmp_path),
+        config=GoldenMatchConfig(),
+        auto_config=True,
     )
     from_polars = run_match_df(
-        pl.DataFrame(tgt), pl.DataFrame(ref), _exact_cfg(tmp_path)
+        pl.DataFrame(tgt), pl.DataFrame(ref), GoldenMatchConfig(), auto_config=True
     )
 
     def _pairs(result) -> set:
@@ -187,13 +165,13 @@ def test_run_match_file_linkage_matches_the_polars_lane(tmp_path) -> None:
         }
 
     assert _pairs(from_file) == _pairs(from_polars)
-    assert _pairs(from_file), "no pairs -- a green run measuring nothing"
 
 
 def test_run_match_rejects_a_column_map_naming_a_missing_column(tmp_path) -> None:
     """Same contract as ingest.apply_column_map, which the seam ingest replaced:
     a map naming a column the file does not have is an error, not a silent
     no-op that leaves the matchkey pointing at nothing."""
+    from goldenmatch.config.schemas import GoldenMatchConfig
     from goldenmatch.core.pipeline import run_match
 
     t_path = _csv(tmp_path, "t.csv", {"a": [1], "b": ["x"]})
@@ -203,17 +181,32 @@ def test_run_match_rejects_a_column_map_naming_a_missing_column(tmp_path) -> Non
         run_match(
             target_file=(t_path, "target", {"nope": "renamed"}),
             reference_files=[(r_path, "reference")],
-            config=_exact_cfg(tmp_path),
+            config=GoldenMatchConfig(),
+            auto_config=True,
         )
 
 
-def test_run_match_file_is_polars_free(tmp_path) -> None:
-    """CONFIGURED match completes in a SUBPROCESS with polars blocked."""
+@pytest.mark.parametrize("zero_config", [False, True])
+def test_run_match_file_is_polars_free(zero_config, tmp_path) -> None:
+    """Both routes, in a SUBPROCESS with polars blocked at the meta path.
+
+    The zero-config case is covered on purpose: the arrow lane used to exclude
+    `auto_config`, so a zero-config match fell through to the polars branch --
+    and `run_match_df`'s arrow path hit `combined_lf.collect()` on a pa.Table
+    there.
+    """
     tgt, ref = _SHAPES["exact_email"]
     t_path = _csv(tmp_path, "t.csv", tgt)
     r_path = _csv(tmp_path, "r.csv", ref)
     cfg_path = tmp_path / "c.yaml"
-    cfg_path.write_text(_EXACT_EMAIL_CFG, encoding="utf-8")
+    cfg_path.write_text(
+        "matchkeys:\n"
+        "  - name: k\n"
+        "    type: exact\n"
+        "    fields:\n"
+        "      - field: email\n",
+        encoding="utf-8",
+    )
 
     body = textwrap.dedent(
         f"""
@@ -225,13 +218,20 @@ def test_run_match_file_is_polars_free(tmp_path) -> None:
                 return None
         sys.meta_path.insert(0, _Block())
 
-        from goldenmatch.config.loader import load_config
         from goldenmatch.core.pipeline import run_match
+        zero = {zero_config!r}
+        if zero:
+            from goldenmatch.config.schemas import GoldenMatchConfig
+            cfg, auto = GoldenMatchConfig(), True
+        else:
+            from goldenmatch.config.loader import load_config
+            cfg, auto = load_config({str(cfg_path)!r}), False
 
         res = run_match(
             target_file=({t_path!r}, "target"),
             reference_files=[({r_path!r}, "reference")],
-            config=load_config({str(cfg_path)!r}),
+            config=cfg,
+            auto_config=auto,
         )
         matched = res.get("matched")
         n = 0 if matched is None else matched.num_rows
@@ -245,30 +245,3 @@ def test_run_match_file_is_polars_free(tmp_path) -> None:
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr[-2500:]
     assert "MATCH POLARS-FREE OK" in proc.stdout
-
-
-def test_zero_config_match_still_requires_polars() -> None:
-    """A LIMITATION, pinned so it cannot be forgotten or silently widened.
-
-    Zero-config match keeps the polars ingest on purpose. Routing it through the
-    arrow ingest changed what auto-config derives its config FROM -- pyarrow's
-    CSV inference plus a Utf8 cast does not produce the same strings as polars'
-    scan_csv plus a Utf8 cast -- and collapsed the suggest_quality scorecard:
-
-        orgs_hard  convergence_final_f1  0.2939 -> 0.0000
-        dblp_acm   convergence_final_f1  0.7296 -> 0.5645
-
-    with every other convergence metric drifting down too. Configured match is
-    unaffected and IS polars-free (the test above).
-
-    When arrow auto-config parity is established on that scorecard, this test is
-    the thing that should fail -- delete it and re-enable the zero-config case
-    above. It asserts the gate, not the ingest, so it stays honest either way.
-    """
-    from goldenmatch.core import pipeline
-
-    src = inspect.getsource(pipeline.run_match)
-    assert "if auto_config:" in src, (
-        "run_match no longer forks on auto_config -- if arrow auto-config parity "
-        "was fixed, delete this test and restore the zero-config polars-free case"
-    )

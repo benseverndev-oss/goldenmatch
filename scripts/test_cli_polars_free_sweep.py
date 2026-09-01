@@ -37,18 +37,7 @@ KNOWN_POLARS_BOUND: set[str] = set()
 # version of "zero" worth having; the previous zero was an artefact of only
 # recognising exceptions.
 #
-# WHAT THIS ZERO DOES NOT COVER: the sweep fills `config` from CONFIG_PROPS, so
-# `match` is probed in its CONFIGURED form. Zero-config `match` still ingests
-# through polars on purpose -- routing it onto the arrow ingest changed what
-# auto-config derives its config from and collapsed the suggest_quality
-# scorecard (orgs_hard convergence F1 0.2939 -> 0.0000). That limitation is
-# pinned by test_zero_config_match_still_requires_polars in
-# packages/python/goldenmatch/tests/test_match_arrow_parity.py, NOT by this
-# ratchet. Saying so here because a bare "0 polars-bound" would otherwise read
-# as a stronger claim than the sweep actually makes.
-#
-# `match` was the single entry here for exactly as long as it took to port its
-# configured path:
+# `match` was the single entry here for exactly as long as it took to port it:
 # run_match built a pl.LazyFrame, so it never reached the arrow lane that
 # _run_match_pipeline already had. It now ingests through read_files_arrow and
 # the seam. Do not add an entry to make a build green -- polars is an OPTIONAL
