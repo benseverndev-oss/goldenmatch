@@ -643,18 +643,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
+      # Both env vars MUST be absolute. run_sweep() launches the probe with
+      # cwd set to a scratch TemporaryDirectory, not the workspace: a relative
+      # COVERAGE_PROCESS_START fails to resolve there (ConfigError, no
+      # @@RESULT@@ marker, run_sweep raises SystemExit before this job ever
+      # reaches the assertion step) and a relative COVERAGE_FILE writes the
+      # child's data INSIDE that same TemporaryDirectory, which is deleted
+      # before run_sweep() even returns -- destroyed before combine runs.
       - name: CLI sweep under coverage
         env:
-          COVERAGE_FILE: coverage_sweep_cli.dat
-          COVERAGE_PROCESS_START: packages/python/goldenmatch/.coveragerc-sweep
+          COVERAGE_FILE: ${{ github.workspace }}/coverage_sweep_cli.dat
+          COVERAGE_PROCESS_START: ${{ github.workspace }}/packages/python/goldenmatch/.coveragerc-sweep
         run: |
           uv run coverage run --rcfile=packages/python/goldenmatch/.coveragerc-sweep \
             scripts/sweep_cli_polars_free.py
           uv run coverage combine --rcfile=packages/python/goldenmatch/.coveragerc-sweep
       - name: MCP sweep under coverage
         env:
-          COVERAGE_FILE: coverage_sweep_mcp.dat
-          COVERAGE_PROCESS_START: packages/python/goldenmatch/.coveragerc-sweep
+          COVERAGE_FILE: ${{ github.workspace }}/coverage_sweep_mcp.dat
+          COVERAGE_PROCESS_START: ${{ github.workspace }}/packages/python/goldenmatch/.coveragerc-sweep
         run: |
           uv run coverage run --rcfile=packages/python/goldenmatch/.coveragerc-sweep \
             scripts/sweep_mcp_polars_free.py
