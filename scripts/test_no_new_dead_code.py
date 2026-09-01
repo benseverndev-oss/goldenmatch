@@ -33,8 +33,8 @@ def test_no_new_dead_modules():
     new = found - KNOWN_DEAD
     assert not new, (
         f"NEW dead module(s): {sorted(new)}. Either delete them, or add an "
-        f"entry to parity/dead_code.allow explaining why the detector cannot "
-        f"see that they are live."
+        f"entry to the matching parity/dead_code/<pkg>.yaml explaining why the "
+        f"detector cannot see that they are live."
     )
 
     fixed = KNOWN_DEAD - found
