@@ -97,6 +97,11 @@ def candidates(coverage_xml: Path | None) -> list[dict]:
 
     eligible = _goldenmatch_eligible(static)
     uncovered = _uncovered_modules(coverage_xml)
+    # "static" and "runtime" are invariants of candidacy, not per-item measurements:
+    # a module only reaches this list when both signals already agree (it's in the
+    # `eligible & uncovered` intersection), so the two keys are always True by
+    # construction. They're kept in the schema for downstream consumers, but reading
+    # them as evidence gathered for each entry would be wrong.
     return [{"module": m, "static": True, "runtime": True} for m in sorted(eligible & uncovered)]
 
 
@@ -142,8 +147,13 @@ def main() -> int:
         "signal (the combined coverage.xml is goldenmatch's alone -- excluded means OUT "
         "OF SCOPE, not clean)\n"
     )
+    if found:
+        print(
+            "every listed candidate satisfies both signals by definition -- "
+            "static: no importer found; runtime: 0 covered lines\n"
+        )
     for c in found:
-        print(f"  {c['module']}  (static: no importer, runtime: 0 covered lines)")
+        print(f"  {c['module']}")
     if args.coverage_xml is None:
         print("  no --coverage-xml given: runtime signal unknown, reporting nothing")
     print(f"\npublic-export inventory (reported only): {len(inventory)}")

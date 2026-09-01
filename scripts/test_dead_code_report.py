@@ -140,7 +140,17 @@ def test_a_covered_module_is_never_reported(tmp_path):
     assert target not in {c["module"] for c in candidates(xml)}
 
 
-def test_every_candidate_carries_its_evidence(tmp_path):
+def test_candidate_schema_has_static_and_runtime_keys(tmp_path):
+    """Every candidate dict carries `static` and `runtime` keys, both True.
+
+    This checks the schema is present and well-formed, not that the values
+    were independently gathered per candidate -- they can't be, and aren't:
+    `candidates()` sets them as hardcoded literals, True BY CONSTRUCTION,
+    because a module only becomes a candidate when both signals already
+    agree (see the comment at that construction site). A candidate with
+    `static: False` or `runtime: False` would be a contradiction of how the
+    list was built, not a finding this test could discover either way.
+    """
     target = _pick_real_candidate()
     xml = _coverage_xml(tmp_path, uncovered=[target], covered=[])
     for c in candidates(xml):
@@ -173,11 +183,21 @@ def test_non_goldenmatch_module_is_excluded_not_evaluated(tmp_path):
     (`source = ["goldenmatch"]`) and coverage_paths.normalize() is itself
     goldenmatch-only, so no other package ever has a runtime signal at all.
 
-    Pins BOTH halves of that distinction: the module is never reported, AND
-    candidacy_scope()'s excluded count is non-zero -- so if coverage.xml ever
-    becomes multi-package, this test fails and tells whoever changed it to
-    revisit the goldenmatch-only restriction rather than letting the report's
-    meaning silently change from "out of scope" to "evaluated and clean".
+    Two assertions below, but only the SECOND one witnesses that claim. The
+    first (`victim not in candidates(...)`) is vacuous: _coverage_xml writes
+    victim's bare dotted-to-slash filename (e.g. "goldenflow/foo.py"), and
+    normalize() -- finding no "goldenmatch/" substring in it -- rewrites that
+    to "goldenmatch/goldenflow/foo.py". That mangled name matches nothing in
+    the static pool regardless of whether the goldenmatch-only eligibility
+    filter exists at all, so the assertion would pass even if
+    `_goldenmatch_eligible` were deleted. It stays because a regression that
+    makes it FAIL would still be worth catching; it just cannot serve as
+    evidence that the restriction holds. Only the second assertion
+    (`candidacy_scope()["excluded_no_runtime_signal"] > 0`) actually pins the
+    restriction -- so if coverage.xml ever becomes multi-package, that count
+    goes to zero and tells whoever changed it to revisit the goldenmatch-only
+    restriction rather than letting the report's meaning silently change from
+    "out of scope" to "evaluated and clean".
     """
     pool = sorted(
         m

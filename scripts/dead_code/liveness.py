@@ -15,7 +15,7 @@ REPO = Path(__file__).resolve().parent.parent.parent
 
 
 def _transform_modules() -> set[str]:
-    """Modules defining a transform in goldenflow's registry (147 entries)."""
+    """Modules defining a transform in goldenflow's registry (113 entries)."""
     from goldenflow.transforms import list_transforms
 
     out: set[str] = set()

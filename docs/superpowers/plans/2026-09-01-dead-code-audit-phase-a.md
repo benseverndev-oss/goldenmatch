@@ -1314,7 +1314,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add scripts/test_no_new_dead_code.py .github/workflows/ci.yml
+git add scripts/test_no_new_dead_code.py scripts/assert_union_reached_mcp.py .github/workflows/ci.yml
 git commit -m "ci: report-only dead-code job with the detector's own tests"
 ```
 

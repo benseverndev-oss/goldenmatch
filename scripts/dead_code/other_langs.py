@@ -48,7 +48,12 @@ def unused_rust_deps() -> list[str]:
 
 
 def unwired_rust_exports() -> list[str]:
-    """Kernel exports with no host reference, per check_native_symbols."""
+    """Kernel exports with no host reference, per check_native_symbols.
+
+    Note: The parser is spot-checked, not fixture-tested — verified against real
+    check_native_symbols output (5 goldencheck entries matched exactly, 39 items
+    total), unlike `_parse_machete`, which has a committed fixture test.
+    """
     found: list[str] = []
     for pkg in ("goldenmatch", "goldenflow", "goldencheck", "infermap", "goldenanalysis"):
         out = _run(["python", "scripts/check_native_symbols.py", pkg])
