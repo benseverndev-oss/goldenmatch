@@ -75,6 +75,27 @@ def apply_suggestion(
 
     if op == "set_threshold":
         _apply_set_threshold(new_config, patch)
+        # An explicitly applied threshold must SURVIVE the pipeline.
+        #
+        # `_apply_postflight` re-cuts pair scores to its own recomputed
+        # threshold whenever the config came from `auto_configure_df`, unless
+        # `_strict_autoconfig` is set. Applying a raise here truncates the score
+        # distribution, postflight then recomputes a cut FROM that truncated
+        # distribution, and the raise is undone -- the known
+        # postflight-on-a-truncated-distribution failure.
+        #
+        # It made threshold suggestions unverifiable: `review_config`'s verify
+        # gate scored `thr:raise:fuzzy_match` at 0.8200 against a 0.6467
+        # baseline when postflight was suppressed, and 0.3913 -> DROP when it
+        # was not. The suggester was correctly refusing to recommend a change
+        # the pipeline would immediately revert. Measured on the
+        # suggest_quality dblp_acm corpus, which is why its convergence F1 sat
+        # at base (0.5645) instead of 0.7296.
+        #
+        # Only for set_threshold: the other ops do not fight postflight, and
+        # pinning strict for them would suppress adjustments nobody asked to
+        # keep.
+        new_config._strict_autoconfig = True
     elif op == "set_scorer":
         _apply_set_scorer(new_config, patch)
     elif op == "add_negative_evidence":
