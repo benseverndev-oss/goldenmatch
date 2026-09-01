@@ -751,12 +751,10 @@ jobs:
             exit 1
           fi
 
-          files=("${shard_heavy[@]}" "${sweep[@]}")
-          echo "combining: ${files[*]}"
-          uv run coverage combine --rcfile=packages/python/goldenmatch/pyproject.toml "${files[@]}"
-          uv run coverage xml --rcfile=packages/python/goldenmatch/pyproject.toml \
-            -o packages/python/goldenmatch/coverage.xml
-
+          # Classify and EXPORT before running coverage. If a later command
+          # fails, the step aborts and anything after it never runs -- so a
+          # classification written below the coverage calls is lost exactly
+          # when something went wrong and the diagnostic is most needed.
           if [ "${#shard_heavy[@]}" -gt 0 ]; then
             echo "full coverage union: shard+heavy+sweep"
             echo "full_union=true" >> "$GITHUB_OUTPUT"
@@ -764,6 +762,19 @@ jobs:
             echo "PARTIAL coverage union: sweep only, shard/heavy absent (python_goldenmatch_coverage skipped) -- the dead-code report is SUPPRESSED because a partial union manufactures false candidates"
             echo "full_union=false" >> "$GITHUB_OUTPUT"
           fi
+
+          files=("${shard_heavy[@]}" "${sweep[@]}")
+          echo "combining: ${files[*]}"
+          uv run coverage combine --rcfile=packages/python/goldenmatch/pyproject.toml "${files[@]}"
+          # --fail-under=0 overrides `fail_under = 78` in the rcfile's
+          # [tool.coverage.report]. This job is NOT the coverage gate -- it only
+          # needs the XML to compute dead-code candidates, and the real gate
+          # (python_goldenmatch_coverage) keeps its own threshold. Without this
+          # the step dies on a partial union: a sweep-only run totals ~25%, so
+          # `coverage xml` exited 2 and took the whole job down even though the
+          # report was already correctly suppressed.
+          uv run coverage xml --rcfile=packages/python/goldenmatch/pyproject.toml \
+            --fail-under=0 -o packages/python/goldenmatch/coverage.xml
       - name: Dead-code report
         if: steps.combine.outputs.full_union == 'true'
         env:
