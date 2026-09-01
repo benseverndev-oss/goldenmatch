@@ -130,6 +130,7 @@ jobs:
       native_symbols: ${{ steps.filter.outputs.native_symbols }}
       downstream_symbols: ${{ steps.filter.outputs.downstream_symbols }}
       er_matcher: ${{ steps.filter.outputs.er_matcher }}
+      dead_code: ${{ steps.filter.outputs.dead_code }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v4.0.1
@@ -642,8 +643,32 @@ jobs:
   dead_code:
     # goldenmatch_sweep_coverage is a DIRECT dependency: Task 5 deliberately
     # leaves the required gate's combine untouched, so the sweep artifact does
-    # not arrive through python_goldenmatch_coverage.
-    needs: [python_goldenmatch_coverage, goldenmatch_sweep_coverage]
+    # not arrive through python_goldenmatch_coverage. `changes` is ALSO a
+    # direct dependency (not just transitive) so this job's own `if:` below
+    # can read needs.changes.outputs.* -- GitHub Actions only exposes a job's
+    # outputs via `needs` to jobs that list it directly.
+    needs: [changes, python_goldenmatch_coverage, goldenmatch_sweep_coverage]
+    # A default (omitted) `if:` implies `success()`, which requires EVERY
+    # entry in `needs` to have succeeded -- including python_goldenmatch_coverage,
+    # which stays SKIPPED on a scripts/dead_code-only change (its own upstream,
+    # python_goldenmatch/python_goldenmatch_heavy, is gated on `python_goldenmatch`
+    # alone). That is the root cause this whole filter change exists to fix: the
+    # implicit success() check silently re-imposes the exact gate we are trying to
+    # widen. `always()` replaces that default, so the job runs purely off the
+    # conditions below -- filter match, plus explicit tolerance for
+    # python_goldenmatch_coverage being SKIPPED (fine; the sweep union still has
+    # something to report against) while still refusing to run if either upstream
+    # job actually FAILED or was cancelled (a real break there should not be
+    # masked by "the report ran anyway").
+    if: >-
+      always() &&
+      (needs.changes.outputs.python_goldenmatch == 'true' ||
+      needs.changes.outputs.dead_code == 'true' ||
+      needs.changes.outputs.force_all == 'true') &&
+      needs.python_goldenmatch_coverage.result != 'failure' &&
+      needs.python_goldenmatch_coverage.result != 'cancelled' &&
+      needs.goldenmatch_sweep_coverage.result != 'failure' &&
+      needs.goldenmatch_sweep_coverage.result != 'cancelled'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -660,12 +685,24 @@ jobs:
         # always been discarded. It is included HERE because more coverage can
         # only remove false candidates, never add one. Deliberately not added to
         # the gate's own combine, which is out of scope for this phase.
+        #
+        # A scripts/dead_code-only change runs this job via the `dead_code`
+        # filter (see the `if:` above) while python_goldenmatch_coverage stays
+        # SKIPPED -- its own upstream shard/heavy jobs are gated on
+        # `python_goldenmatch` alone, so coverage_shard*.dat / coverage_heavy_*.dat
+        # never arrive. `coverage combine` errors on an explicit filename that
+        # does not exist, so only pass the files this run actually produced;
+        # this job's `if:` above guarantees goldenmatch_sweep_coverage did NOT
+        # fail, so the sweep files are present at minimum.
         run: |
-          uv run coverage combine --rcfile=packages/python/goldenmatch/pyproject.toml \
-            coverage_shard1.dat coverage_shard2.dat coverage_shard3.dat \
-            coverage_shard1_serial.dat \
-            coverage_heavy_1.dat coverage_heavy_2.dat coverage_heavy_3.dat \
-            coverage_sweep_mcp.dat coverage_sweep_cli.dat
+          files=()
+          for f in coverage_shard1.dat coverage_shard2.dat coverage_shard3.dat \
+                   coverage_shard1_serial.dat coverage_heavy_1.dat coverage_heavy_2.dat \
+                   coverage_heavy_3.dat coverage_sweep_mcp.dat coverage_sweep_cli.dat; do
+            [ -f "$f" ] && files+=("$f")
+          done
+          echo "combining: ${files[*]}"
+          uv run coverage combine --rcfile=packages/python/goldenmatch/pyproject.toml "${files[@]}"
           uv run coverage xml --rcfile=packages/python/goldenmatch/pyproject.toml \
             -o packages/python/goldenmatch/coverage.xml
       - name: Detector self-tests
@@ -686,7 +723,12 @@ jobs:
   # ONLY; the coverage floors and baseline gates are unaffected.
   goldenmatch_sweep_coverage:
     needs: changes
-    if: needs.changes.outputs.python_goldenmatch == 'true' || needs.changes.outputs.force_all == 'true'
+    # #1846 class: the two sweeps' probes carry the dead-code detector's
+    # runtime-coverage signal, and their own source (plus the coverage hook
+    # under scripts/) lives outside packages/python/goldenmatch/ -- so
+    # `python_goldenmatch` alone missed a scripts/-only change to them. See the
+    # `dead_code` filter's comment in .github/filters.yml.
+    if: needs.changes.outputs.python_goldenmatch == 'true' || needs.changes.outputs.dead_code == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
