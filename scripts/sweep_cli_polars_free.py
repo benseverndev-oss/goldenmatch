@@ -189,9 +189,19 @@ def _probe_source() -> str:
                 isinstance(exc, (ImportError, ModuleNotFoundError))
                 and "polars" in str(exc).lower()
             )
+            if bound:
+                verdict = "polars_bound"
+            elif res.exit_code == 0:
+                verdict = "ok"
+            else:
+                # NOT "ok". Lumping these in with success hid a real regression:
+                # after the MatchEngine port `demo` swapped its ImportError for an
+                # AttributeError and the sweep still called it fine, because it
+                # only ever looked for polars.
+                verdict = "errored"
             rows.append({
                 "cmd": name,
-                "verdict": "polars_bound" if bound else "ok",
+                "verdict": verdict,
                 "exit": res.exit_code,
                 "why": (type(exc).__name__ + ": " + str(exc))[:120] if exc else "",
             })
@@ -253,16 +263,22 @@ def main() -> int:
 
     bound = [r for r in rows if r["verdict"] == "polars_bound"]
     ok = [r for r in rows if r["verdict"] == "ok"]
+    errored = [r for r in rows if r["verdict"] == "errored"]
     unprobed = [r for r in rows if r["verdict"] == "unprobed"]
 
     print(
         f"{len(rows)} registered commands: {len(ok)} ok, "
-        f"{len(bound)} polars-bound, {len(unprobed)} unprobed\n"
+        f"{len(bound)} polars-bound, {len(errored)} errored, {len(unprobed)} unprobed\n"
     )
     if bound:
         print("POLARS-BOUND (raw ImportError on a default install):")
         for r in sorted(bound, key=lambda r: r["cmd"]):
             print(f"  - {r['cmd']}")
+        print()
+    if errored:
+        print("ERRORED for a non-polars reason (not a pass):")
+        for r in sorted(errored, key=lambda r: r["cmd"]):
+            print(f"  - {r['cmd']:26s} {r['why'][:60]}")
         print()
     if unprobed:
         print("UNPROBED (not a pass -- see the module docstring):")

@@ -44,8 +44,16 @@ class TriageScreen(Screen):
         self._row_lookup: dict[int, dict] = {}
         self._display_cols: list[str] = []
         if df is not None:
-            self._row_lookup = {r["__row_id__"]: r for r in df.to_dicts()}
-            self._display_cols = [c for c in df.columns if not c.startswith("__")][:6]
+            # Through the seam: `engine.data` is a pa.Table since the engine was
+            # ported off polars, and `to_dicts`/`.columns` are polars-only --
+            # `.columns` on a pa.Table returns ARRAYS, so the display-column
+            # filter would silently select nothing rather than raise.
+            from goldenmatch.core.frame import to_frame
+
+            _f = to_frame(df)
+            _cols = list(_f.columns)
+            self._row_lookup = {r["__row_id__"]: r for r in _f.select_dicts(_cols)}
+            self._display_cols = [c for c in _cols if not c.startswith("__")][:6]
 
     def compose(self) -> ComposeResult:
         yield Header()

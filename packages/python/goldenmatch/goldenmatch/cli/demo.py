@@ -144,8 +144,12 @@ def demo_cmd(
     console.print(result_table)
     console.print()
 
-    # Show clusters
-    rows = engine.data.to_dicts()
+    # Show clusters. Through the seam: `engine.data` is a pa.Table since the
+    # engine was ported off polars, and `to_dicts` is polars-only.
+    from goldenmatch.core.frame import to_frame as _tf
+
+    _df = _tf(engine.data)
+    rows = _df.select_dicts(list(_df.columns))
     id_to_row = {r["__row_id__"]: r for r in rows}
 
     for cid, info in sorted(multi_clusters.items(), key=lambda x: -x[1]["size"]):

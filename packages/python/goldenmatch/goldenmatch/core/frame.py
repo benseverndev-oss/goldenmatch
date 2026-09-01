@@ -1430,9 +1430,26 @@ class ArrowFrame:
         return ArrowFrame(self._tbl.append_column(name, arr))
 
     def with_literal_column(self, name: str, value: Any) -> ArrowFrame:
+        """Add or REPLACE a constant column.
+
+        Replace, not append, because that is what the polars side of this seam
+        does: ``with_columns(pl.lit(value).alias(name))`` overwrites a column of
+        the same name. ``append_column`` instead produced a SECOND field, and
+        the table then raised ``Field "x" exists 2 times in schema`` on the next
+        lookup -- so the same seam call meant different things on the two
+        backends, which is the divergence the seam exists to remove.
+
+        Reachable in practice: ``run_dedupe_df`` stamps ``__source__`` onto its
+        input, so any arrow frame that already carried one blew up here.
+        """
         import pyarrow as pa
 
-        return ArrowFrame(self._tbl.append_column(name, pa.array([value] * self._tbl.num_rows)))
+        arr = pa.array([value] * self._tbl.num_rows)
+        if name in self._tbl.column_names:
+            return ArrowFrame(
+                self._tbl.set_column(self._tbl.column_names.index(name), name, arr)
+            )
+        return ArrowFrame(self._tbl.append_column(name, arr))
 
     def group_partitions(self, key: str) -> list[tuple[Any, ArrowFrame]]:
         # Hash-grouped, first-appearance order, correct on UNSORTED input

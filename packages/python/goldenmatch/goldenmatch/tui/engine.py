@@ -10,8 +10,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from goldenmatch._polars_lazy import pl
-from goldenmatch.core.frame import frame_from_records as _frame_from_records
 from goldenmatch.core.frame import to_frame as _to_frame
 
 
@@ -33,12 +31,17 @@ class EngineStats:
 @dataclass
 class EngineResult:
     clusters: dict[int, dict]
-    golden: pl.DataFrame | None
-    unique: pl.DataFrame | None
-    dupes: pl.DataFrame | None
-    quarantine: pl.DataFrame | None
-    matched: pl.DataFrame | None
-    unmatched: pl.DataFrame | None
+    # `Any`, not `pl.DataFrame`: since the pipeline delegation these arrive as
+    # pa.Table on the arrow lane (the default install has no polars at all).
+    # `from __future__ import annotations` keeps these unevaluated, so the old
+    # names never actually forced an import -- but they told the reader the
+    # wrong thing, which is how the polars assumptions spread.
+    golden: Any | None
+    unique: Any | None
+    dupes: Any | None
+    quarantine: Any | None
+    matched: Any | None
+    unmatched: Any | None
     scored_pairs: list[tuple[int, int, float]]
     stats: EngineStats
     # Trained Fellegi-Sunter models keyed by probabilistic matchkey name, for
@@ -69,33 +72,34 @@ class MatchEngine:
 
     def __init__(self, files: list[Path | str]):
         self._files = [Path(f) for f in files]
-        self._data: pl.DataFrame | None = None
+        self._data: Any | None = None
         self._profile: dict | None = None
         self._last_result: EngineResult | None = None
         self._last_telemetry: ControllerTelemetry | None = None
         self._load()
 
     def _load(self) -> None:
-        from goldenmatch.core.ingest import load_file
+        from goldenmatch.core.io_arrow import read_files_arrow
         from goldenmatch.core.profiler import profile_dataframe
 
-        frames = []
-        for f in self._files:
-            lf = load_file(f)
-            lf = lf.with_columns(pl.lit(f.stem).alias("__source__"))
-            frames.append(lf.collect())
-        combined = pl.concat(frames)
-        # Add row IDs
-        combined = combined.with_row_index("__row_id__").with_columns(
-            pl.col("__row_id__").cast(pl.Int64)
+        # Arrow ingest. This used `pl.concat` + `with_row_index`, which made
+        # every command that builds a MatchEngine (`demo`, `lineage`) raise
+        # ImportError on a default install, where polars is absent.
+        combined = read_files_arrow(
+            [(f, f.stem) for f in self._files],
+            source_column="__source__",
+            row_id_column="__row_id__",
         )
         self._data = combined
-        # Profile without internal columns
-        profile_cols = [c for c in combined.columns if not c.startswith("__")]
-        self._profile = profile_dataframe(combined.select(profile_cols))
+        # Profile without internal columns. Column NAMES come from the seam:
+        # `pa.Table.columns` returns arrays, not names -- reading it like the
+        # polars attribute is a silent wrong answer rather than an error.
+        _f = _to_frame(combined)
+        profile_cols = [c for c in _f.columns if not c.startswith("__")]
+        self._profile = profile_dataframe(_f.select(profile_cols).native)
 
     @classmethod
-    def from_dataframe(cls, df: pl.DataFrame) -> MatchEngine:
+    def from_dataframe(cls, df: Any) -> MatchEngine:
         """Build an engine over an in-memory frame (no file loading).
 
         For callers like config-suggestion review (``core/suggest``) that
@@ -115,7 +119,10 @@ class MatchEngine:
         return engine
 
     @property
-    def data(self) -> pl.DataFrame:
+    def data(self) -> Any:
+        """The loaded frame. A ``pa.Table`` from the file constructor; whatever
+        the caller passed via :meth:`from_dataframe` otherwise. Read it through
+        ``core.frame.to_frame`` rather than assuming polars attributes."""
         return self._data
 
     @property
@@ -124,16 +131,19 @@ class MatchEngine:
 
     @property
     def columns(self) -> list[str]:
-        return [c for c in self._data.columns if not c.startswith("__")]
+        # Seam, not `.columns`: on a pa.Table that attribute returns ARRAYS, so
+        # the old expression would compare column data against a string prefix
+        # and silently return nothing.
+        return [c for c in _to_frame(self._data).columns if not c.startswith("__")]
 
     @property
     def row_count(self) -> int:
-        return self._data.height
+        return _to_frame(self._data).height
 
-    def get_sample(self, n: int) -> pl.DataFrame:
-        if n >= self._data.height:
+    def get_sample(self, n: int) -> Any:
+        if n >= self.row_count:
             return self._data
-        return self._data.head(n)
+        return _to_frame(self._data).head(n).native
 
     def _compute_stats(self, clusters: dict[int, dict], total_records: int) -> EngineStats:
         """Compute statistics from cluster results."""
@@ -157,208 +167,60 @@ class MatchEngine:
             oversized_count=oversized_count,
         )
 
-    def _run_pipeline(self, df: pl.DataFrame, config) -> EngineResult:
-        """Core pipeline logic — mirrors run_dedupe but returns EngineResult."""
-        from goldenmatch.config.schemas import GoldenRulesConfig
-        from goldenmatch.core.autofix import auto_fix_dataframe
-        from goldenmatch.core.blocker import build_blocks
-        from goldenmatch.core.cluster import build_clusters
-        from goldenmatch.core.golden import build_golden_record
-        from goldenmatch.core.matchkey import compute_matchkeys
-        from goldenmatch.core.scorer import (
-            find_exact_matches,
-            rerank_top_pairs,
-            score_blocks_parallel,
+    def _run_pipeline(self, df: Any, config) -> EngineResult:
+        """Delegate to the real dedupe pipeline and adapt its result.
+
+        This used to be a ~200-line REIMPLEMENTATION of ``run_dedupe`` -- its own
+        docstring said "mirrors run_dedupe" -- and that copy is why `demo` and
+        `lineage` raised ImportError on a default install: it drove the polars
+        LazyFrame API (``df.lazy()`` / ``.collect()``) while the shipped pipeline
+        had moved to an eager arrow path behind ``_eager_stages_done``. Mirroring
+        a pipeline means inheriting none of its fixes, so it is deleted rather
+        than ported.
+
+        ``run_dedupe_df`` takes ``pl.DataFrame | pa.Table | Frame`` through the
+        frame seam, so both lanes work. The FS models the TUI's match-weight
+        waterfall needs come back through the ``_em_results`` out-param, which is
+        the one thing this delegation needed that the pipeline did not already
+        expose.
+        """
+        from goldenmatch.core.pairs import materialize_scored_pairs
+        from goldenmatch.core.pipeline import run_dedupe_df
+
+        em_results: dict[str, Any] = {}
+        result = run_dedupe_df(
+            df,
+            config,
+            output_golden=True,
+            output_clusters=True,
+            output_dupes=True,
+            output_unique=True,
+            _em_results=em_results,
         )
-        from goldenmatch.core.standardize import apply_standardization
-        from goldenmatch.core.validate import ValidationRule, validate_dataframe
 
-        combined_lf = df.lazy()
-        quarantine_df = None
+        clusters = result.get("clusters") or {}
+        # Via the helper, not `result["scored_pairs"]`: on the FS path that key
+        # is None and an Arrow table is the backing (#2417).
+        scored_pairs = materialize_scored_pairs(result) or []
 
-        # ── Auto-fix ──
-        if config.validation and config.validation.auto_fix:
-            combined_df_tmp = combined_lf.collect()
-            combined_df_tmp, _fix_log = auto_fix_dataframe(combined_df_tmp)
-            combined_lf = combined_df_tmp.lazy()
-
-        # ── Validation ──
-        if config.validation and config.validation.rules:
-            rules = [
-                ValidationRule(
-                    column=rc.column,
-                    rule_type=rc.rule_type,
-                    params=rc.params,
-                    action=rc.action,
-                )
-                for rc in config.validation.rules
-            ]
-            combined_df_tmp = combined_lf.collect()
-            valid_df, quarantine_df, _val_report = validate_dataframe(combined_df_tmp, rules)
-            combined_lf = valid_df.lazy()
-
-        # ── Standardization ──
-        if config.standardization and config.standardization.rules:
-            # W5: LazyFrame expression engines; rewire with the core pipeline flip.
-            combined_lf = apply_standardization(combined_lf, config.standardization.rules)
-
-        # ── Domain feature extraction ──
-        # Materializes derived columns (e.g. ``__title_key__``) that auto-config
-        # may reference from matchkeys / blocking keys. Must run BEFORE
-        # compute_matchkeys, mirroring ``_run_dedupe_pipeline`` -- without it this
-        # path crashes with ColumnNotFoundError whenever auto-config detects a
-        # domain (bibliographic / product shapes, e.g. DBLP-ACM). See issue #1300.
-        from goldenmatch.core.pipeline import _apply_domain_extraction
-        combined_lf = _apply_domain_extraction(combined_lf, config)
-
-        # ── Compute matchkeys ──
-        matchkeys = config.get_matchkeys()
-        combined_lf = compute_matchkeys(combined_lf, matchkeys)
-
-        # ── Auto-suggest blocking keys ──
-        collected_df = combined_lf.collect()
-        if config.blocking and config.blocking.auto_suggest:
-            from goldenmatch.core.pipeline import _run_auto_suggest
-            _run_auto_suggest(collected_df, config)
-
-        # ── Score all pairs (cascading: exact first, then fuzzy) ──
-        all_pairs: list[tuple[int, int, float]] = []
-        matched_pairs: set[tuple[int, int]] = set()
-        em_results: dict[str, Any] = {}  # FS models by matchkey name (waterfall)
-
-        # Phase 1: Exact matchkeys (fast)
-        for mk in matchkeys:
-            if mk.type == "exact":
-                pairs = find_exact_matches(combined_lf, mk)
-                all_pairs.extend(pairs)
-                for a, b, s in pairs:
-                    matched_pairs.add((min(a, b), max(a, b)))
-
-        # Phase 2: Fuzzy matchkeys (parallel block scoring)
-        for mk in matchkeys:
-            if mk.type == "weighted":
-                if config.blocking is None:
-                    continue
-                blocks = build_blocks(combined_lf, config.blocking)
-                pairs = score_blocks_parallel(blocks, mk, matched_pairs)
-                all_pairs.extend(pairs)
-
-        # Phase 2b: Probabilistic matchkeys (Fellegi-Sunter with EM)
-        for mk in matchkeys:
-            if mk.type == "probabilistic":
-                if config.blocking is None:
-                    continue
-                from goldenmatch.core.pipeline import (
-                    _score_probabilistic_matchkey,
-                )
-                # Route through the ONE shared FS scorer the dedupe / match
-                # pipelines use (#1804 item 3): memory-bounded bucket routing,
-                # multi_pass-correct blocking-field collection, and the #1798
-                # build_blocks skip -- replacing the TUI's stale per-block loop
-                # (eager build_blocks + the `block.df` accessor + a keys-only
-                # blocking_fields that missed multi_pass `.passes`). The trained
-                # model is stored in `em_results` for the waterfall; review-band
-                # pairs are discarded (the TUI shows the >= link cut, unchanged).
-                _score_probabilistic_matchkey(
-                    mk, config,
-                    block_frame=combined_lf,
-                    score_frame=collected_df,
-                    matched_pairs=matched_pairs,
-                    all_pairs=all_pairs,
-                    review_pairs=[],
-                    em_results=em_results,
-                )
-
-        # ── Rerank (optional) ──
-        for mk in matchkeys:
-            if mk.type == "weighted" and mk.rerank:
-                all_pairs = rerank_top_pairs(all_pairs, collected_df, mk)
-                break
-
-        # ── LLM scorer (optional) ──
-        llm_budget_summary = None
-        if config.llm_scorer and config.llm_scorer.enabled and all_pairs:
-            has_budget = config.llm_scorer.budget is not None
-            if config.llm_scorer.mode == "cluster":
-                from goldenmatch.core.llm_cluster import llm_cluster_pairs
-                result = llm_cluster_pairs(
-                    all_pairs, collected_df,
-                    config=config.llm_scorer,
-                    return_budget=has_budget,
-                )
-            else:
-                from goldenmatch.core.llm_scorer import llm_score_pairs
-                result = llm_score_pairs(
-                    all_pairs, collected_df,
-                    config=config.llm_scorer,
-                    return_budget=has_budget,
-                )
-            if has_budget:
-                all_pairs, llm_budget_summary = result
-            else:
-                all_pairs = result
-            all_pairs = [(a, b, s) for a, b, s in all_pairs if s > 0.5]
-
-        # ── Cluster ──
-        all_ids = collected_df["__row_id__"].to_list()
-        max_cluster_size = 100
-        if config.golden_rules and hasattr(config.golden_rules, "max_cluster_size"):
-            max_cluster_size = config.golden_rules.max_cluster_size
-
-        clusters = build_clusters(all_pairs, all_ids, max_cluster_size=max_cluster_size)
-
-        # ── Golden records ──
-        golden_rules = config.golden_rules or GoldenRulesConfig(default_strategy="most_complete")
-        golden_records = []
-        for cluster_id, cluster_info in clusters.items():
-            if cluster_info["size"] > 1 and not cluster_info["oversized"]:
-                member_ids = cluster_info["members"]
-                cluster_df = _to_frame(collected_df).filter_in("__row_id__", member_ids).native
-                golden = build_golden_record(cluster_df, golden_rules)
-                golden["__cluster_id__"] = cluster_id
-                golden_records.append(golden)
-
-        golden_df = None
-        if golden_records:
-            golden_rows = []
-            for rec in golden_records:
-                row = {"__cluster_id__": rec["__cluster_id__"]}
-                row["__golden_confidence__"] = rec.get("__golden_confidence__", 0.0)
-                for col, val_info in rec.items():
-                    if col in ("__cluster_id__", "__golden_confidence__"):
-                        continue
-                    if isinstance(val_info, dict) and "value" in val_info:
-                        row[col] = val_info["value"]
-                golden_rows.append(row)
-            golden_df = _frame_from_records(golden_rows, backend="polars").native
-
-        # ── Classify dupes / unique ──
-        multi_cluster_ids = [cid for cid, c in clusters.items() if c["size"] > 1]
-        dupe_row_ids = set()
-        for cid in multi_cluster_ids:
-            dupe_row_ids.update(clusters[cid]["members"])
-        unique_row_ids = set(all_ids) - dupe_row_ids
-
-        dupes_df = _to_frame(collected_df).filter_in("__row_id__", list(dupe_row_ids)).native
-        unique_df = _to_frame(collected_df).filter_in("__row_id__", list(unique_row_ids)).native
-
-        # ── Stats ──
-        stats = self._compute_stats(clusters, collected_df.height)
-        if llm_budget_summary:
-            stats.llm_cost = llm_budget_summary
+        stats = self._compute_stats(clusters, _to_frame(df).height)
+        llm_cost = result.get("llm_cost")
+        if llm_cost:
+            stats.llm_cost = llm_cost
 
         return EngineResult(
             clusters=clusters,
-            golden=golden_df,
-            unique=unique_df,
-            dupes=dupes_df,
-            quarantine=quarantine_df,
+            golden=result.get("golden"),
+            unique=result.get("unique"),
+            dupes=result.get("dupes"),
+            quarantine=result.get("quarantine"),
             matched=None,
             unmatched=None,
-            scored_pairs=all_pairs,
+            scored_pairs=scored_pairs,
             stats=stats,
             em_results=em_results or None,
         )
+
 
     def auto_configure(self, domain: str | None = None) -> tuple[Any, ControllerTelemetry]:
         """Run AutoConfigController on the loaded data, capture telemetry.
@@ -448,7 +310,7 @@ class MatchEngine:
             record_id, self._last_result.clusters, threshold,
             scored_pairs=self._last_result.scored_pairs,
         )
-        stats = self._compute_stats(clusters, self._data.height)
+        stats = self._compute_stats(clusters, _to_frame(self._data).height)
 
         self._last_result = EngineResult(
             clusters=clusters,
@@ -472,7 +334,7 @@ class MatchEngine:
         from goldenmatch.core.cluster import unmerge_cluster
 
         clusters = unmerge_cluster(cluster_id, self._last_result.clusters)
-        stats = self._compute_stats(clusters, self._data.height)
+        stats = self._compute_stats(clusters, _to_frame(self._data).height)
 
         self._last_result = EngineResult(
             clusters=clusters,

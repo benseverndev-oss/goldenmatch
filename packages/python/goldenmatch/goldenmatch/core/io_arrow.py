@@ -318,9 +318,18 @@ def read_files_arrow(
 
         if source_column is not None:
             label = source if source is not None else path.stem
-            table = table.append_column(
-                source_column, pa.array([label] * table.num_rows, type=pa.string())
-            )
+            col = pa.array([label] * table.num_rows, type=pa.string())
+            # REPLACE when the column already exists. polars' `with_columns`
+            # overwrites by name, so a file that already carries a __source__
+            # column simply had it replaced; `append_column` instead produces a
+            # duplicate field, and the table then raises
+            # `Field "__source__" exists 2 times in schema` on the first lookup.
+            if source_column in table.column_names:
+                table = table.set_column(
+                    table.column_names.index(source_column), source_column, col
+                )
+            else:
+                table = table.append_column(source_column, col)
         tables.append(table)
 
     if not tables:
@@ -333,8 +342,13 @@ def read_files_arrow(
     )
 
     if row_id_column is not None:
-        combined = combined.append_column(
-            row_id_column,
-            pa.array(list(range(combined.num_rows)), type=pa.int64()),
-        )
+        # Same replace-not-append rule: `with_row_index` overwrote an existing
+        # index column rather than duplicating it.
+        rid = pa.array(list(range(combined.num_rows)), type=pa.int64())
+        if row_id_column in combined.column_names:
+            combined = combined.set_column(
+                combined.column_names.index(row_id_column), row_id_column, rid
+            )
+        else:
+            combined = combined.append_column(row_id_column, rid)
     return combined

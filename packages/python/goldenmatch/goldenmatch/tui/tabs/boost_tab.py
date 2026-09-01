@@ -242,8 +242,11 @@ class BoostTab(Static):
             table.clear(columns=True)
             table.add_column("Field")
             table.add_column(label)
-            if row_df.height > 0:
-                row = row_df.to_dicts()[0]
+            from goldenmatch.core.frame import to_frame as _tf
+
+            _rf = _tf(row_df)
+            if _rf.height > 0:
+                row = _rf.select_dicts(list(_rf.columns))[0]
                 for col in self._display_cols:
                     val = row.get(col, "")
                     table.add_row(col, str(val) if val is not None else "")

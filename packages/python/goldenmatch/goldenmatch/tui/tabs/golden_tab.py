@@ -54,7 +54,9 @@ class GoldenTab(Static):
         table = self.query_one("#golden-table", DataTable)
 
         golden_df = result.golden
-        if golden_df is None or golden_df.height == 0:
+        from goldenmatch.core.frame import to_frame as _tf
+
+        if golden_df is None or _tf(golden_df).height == 0:
             placeholder.update("[dim]Run matching to see golden records here.[/dim]")
             placeholder.display = True
             table.display = False

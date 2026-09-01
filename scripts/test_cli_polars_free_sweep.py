@@ -32,21 +32,11 @@ from sweep_cli_polars_free import MUTATING, run_sweep  # noqa: E402
 # Each raises ImportError: No module named 'polars' -- a traceback, not an
 # error message -- on a default install.
 KNOWN_POLARS_BOUND = {
-    # Each is blocked behind a CORE module, not the command. Recorded with the
-    # blocker so the next person starts where the work actually is.
-    #
-    # demo, lineage   -- both run through tui.engine.MatchEngine, which is a
-    #                    polars LazyFrame pipeline end to end (df.lazy() /
-    #                    .collect() around auto-fix, validation and
-    #                    standardization). Porting the engine fixes both.
-    # incremental     -- core/incremental.py leans on apply_standardization,
-    #                    match_one and find_exact_matches; none of the three has
-    #                    any frame-seam use.
-    # pprl *          -- pprl/protocol.py and pprl/autoconfig.py have ZERO
-    #                    to_frame calls, so this is a pprl-core port.
-    "demo",
+    # incremental -- core/incremental.py leans on apply_standardization,
+    #                match_one and find_exact_matches; none has any seam use.
+    # pprl *      -- pprl/protocol.py and pprl/autoconfig.py have ZERO to_frame
+    #                calls, so this is a pprl-core port, not a CLI change.
     "incremental",
-    "lineage",
     "pprl auto-config",
     "pprl link",
 }
@@ -56,22 +46,12 @@ KNOWN_POLARS_BOUND = {
 #   anomalies          read_files_arrow + the arrow csv writer
 #   analyze-blocking   read_files_arrow; the analyzer already took arrow
 #   profile            load_file(..., return_frame=True); also fixed
-#                      format_profile_report, whose sample block called the
-#                      polars-only head()/iter_rows() and broke `--verbose`
+#                      format_profile_report's polars-only head()/iter_rows()
 #   review             polars was imported ONLY to annotate a local
-#   label              arrow ingest + seam select_dicts + arrow csv read/write;
-#                      also fixed a pre-existing Rich MarkupError that crashed
-#                      the command on any pair whose values differed
-
-# Ported and verified polars-free on 2026-08-31, on BOTH lanes (arrow, and with
-# polars present so the classic lane is unregressed):
-#   anomalies          -- read_files_arrow + the arrow csv writer
-#   analyze-blocking   -- read_files_arrow; analyze_blocking already took arrow
-#   profile            -- load_file(..., return_frame=True); also fixed
-#                         format_profile_report, whose sample block called the
-#                         polars-only head()/iter_rows() and so broke
-#                         `profile --verbose` on the arrow lane
-#   review             -- polars was imported ONLY to annotate a local
+#   label              arrow ingest + seam select_dicts + arrow csv io; also
+#                      fixed a pre-existing MarkupError that crashed it entirely
+#   demo, lineage      MatchEngine now DELEGATES to run_dedupe_df instead of
+#                      keeping its own ~200-line copy of the pipeline
 
 # Also confirmed polars-bound by hand, but never invoked by the sweep because it
 # MUTATES state (it removes a record from a cluster). Listed so the finding is
