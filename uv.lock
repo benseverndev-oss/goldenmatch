@@ -1218,7 +1218,7 @@ wheels = [
 
 [[package]]
 name = "goldenmatch"
-version = "3.16.0"
+version = "3.17.1"
 source = { editable = "packages/python/goldenmatch" }
 dependencies = [
     { name = "duckdb" },
@@ -1496,7 +1496,7 @@ dev = [
 
 [[package]]
 name = "goldenmatch-native"
-version = "0.2.0"
+version = "0.2.1"
 source = { directory = "packages/rust/extensions/native" }
 
 [[package]]
@@ -1612,7 +1612,7 @@ provides-extras = ["check", "flow", "match", "analysis", "golden-suite", "tui", 
 
 [[package]]
 name = "goldensuite-mcp"
-version = "0.6.0"
+version = "0.6.1"
 source = { editable = "packages/python/goldensuite-mcp" }
 dependencies = [
     { name = "goldenanalysis", extra = ["mcp"] },
