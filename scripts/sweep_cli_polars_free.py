@@ -161,6 +161,11 @@ def _probe_source() -> str:
     # so both sweeps and their tests apply one definition.
     return inspect.getsource(looks_like_polars_import_error) + textwrap.dedent(
         '''
+        import os
+        if os.environ.get("COVERAGE_PROCESS_START"):
+            import coverage
+            coverage.process_startup()
+
         import json, sys, tempfile, pathlib
         class _Block:
             def find_spec(self, name, path=None, target=None):

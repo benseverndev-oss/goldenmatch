@@ -16,6 +16,12 @@ goldenmatch.connectors.databricks: "surface -- dynamic load_connector() 'module:
 goldenmatch.connectors.hubspot: "surface -- dynamic load_connector() 'module:Class' dispatch (optional dep)"
 goldenmatch.connectors.salesforce: "surface -- dynamic load_connector() 'module:Class' dispatch (optional dep)"
 goldenmatch.connectors.snowflake: "surface -- dynamic load_connector() 'module:Class' dispatch (optional dep)"
+goldenmatch.connectors.mongo: "surface -- dynamic load_connector() 'module:Class' dispatch; live MongoDB connector, 0% coverage because CI has no MongoDB"
+
+# -- live external-service integrations, 0% coverage only because CI carries neither the
+#    service nor its credentials. Carried over from the retired parity/dead_code.allow.
+goldenmatch.identity.mongo_backend: "surface -- live MongoDB identity backend; 0% coverage because CI has no MongoDB"
+goldenmatch.core.vertex_embedder: "surface -- live Vertex AI embedder; needs GCP credentials CI does not carry"
 
 # -- Alembic migration runtime loads env + versions by convention (goldenmatch identity migrate)
 goldenmatch.db.alembic.env: "surface -- Alembic runtime entry (loaded by the alembic command)"

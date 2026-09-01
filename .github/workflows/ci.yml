@@ -633,6 +633,98 @@ jobs:
           # nobody wrote a floor for still fails.
           uv run python scripts/check_coverage_baseline.py packages/python/goldenmatch/coverage.xml
 
+  # Report-only dead-code audit. Combines the required gate's shard/heavy
+  # coverage with the CLI/MCP sweep coverage (a strictly wider union: more
+  # coverage can only remove false candidates, never add one) and runs the
+  # detector against it. The ratchet (test_no_new_dead_code.py) currently
+  # gates on an empty KNOWN_DEAD floor populated from the first CI report;
+  # nothing here deletes code.
+  dead_code:
+    # goldenmatch_sweep_coverage is a DIRECT dependency: Task 5 deliberately
+    # leaves the required gate's combine untouched, so the sweep artifact does
+    # not arrive through python_goldenmatch_coverage.
+    needs: [python_goldenmatch_coverage, goldenmatch_sweep_coverage]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          pattern: gm-cov-*
+          merge-multiple: true
+      - name: Combine coverage for the dead-code report
+        # coverage_shard1_serial.dat is written and uploaded by the shard job
+        # but is absent from the required gate's combine, so its coverage has
+        # always been discarded. It is included HERE because more coverage can
+        # only remove false candidates, never add one. Deliberately not added to
+        # the gate's own combine, which is out of scope for this phase.
+        run: |
+          uv run coverage combine --rcfile=packages/python/goldenmatch/pyproject.toml \
+            coverage_shard1.dat coverage_shard2.dat coverage_shard3.dat \
+            coverage_shard1_serial.dat \
+            coverage_heavy_1.dat coverage_heavy_2.dat coverage_heavy_3.dat \
+            coverage_sweep_mcp.dat coverage_sweep_cli.dat
+          uv run coverage xml --rcfile=packages/python/goldenmatch/pyproject.toml \
+            -o packages/python/goldenmatch/coverage.xml
+      - name: Detector self-tests
+        run: uv run pytest scripts/test_dead_code_liveness.py scripts/test_dead_code_static.py scripts/test_dead_code_allowlist.py scripts/test_dead_code_report.py scripts/test_dead_code_other_langs.py -q
+      - name: Dead-code report
+        env:
+          PYTHONPATH: scripts
+        run: uv run python -m dead_code.report --coverage-xml packages/python/goldenmatch/coverage.xml
+      - name: Ratchet
+        # A0 (docs/superpowers/specs/2026-09-01-dead-code-audit-design.md, Delivery
+        # stages) lands this job report-only: it must not gate. Flipping the ratchet
+        # to gating is A3, a later phase -- until then a candidate must not fail CI.
+        continue-on-error: true
+        run: uv run pytest scripts/test_no_new_dead_code.py -q
+
+  # Harvests coverage from the two sweeps, which reach 66 CLI commands and 97 MCP
+  # tools -- surfaces no other job measures. Feeds the dead_code job's combine
+  # ONLY; the coverage floors and baseline gates are unaffected.
+  goldenmatch_sweep_coverage:
+    needs: changes
+    if: needs.changes.outputs.python_goldenmatch == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
+      # Both env vars MUST be absolute. run_sweep() launches the probe with
+      # cwd set to a scratch TemporaryDirectory, not the workspace: a relative
+      # COVERAGE_PROCESS_START fails to resolve there (ConfigError, no
+      # @@RESULT@@ marker, run_sweep raises SystemExit before this job ever
+      # reaches the assertion step) and a relative COVERAGE_FILE writes the
+      # child's data INSIDE that same TemporaryDirectory, which is deleted
+      # before run_sweep() even returns -- destroyed before combine runs.
+      - name: CLI sweep under coverage
+        env:
+          COVERAGE_FILE: ${{ github.workspace }}/coverage_sweep_cli.dat
+          COVERAGE_PROCESS_START: ${{ github.workspace }}/packages/python/goldenmatch/.coveragerc-sweep
+        run: |
+          uv run coverage run --rcfile=packages/python/goldenmatch/.coveragerc-sweep \
+            scripts/sweep_cli_polars_free.py
+          uv run coverage combine --rcfile=packages/python/goldenmatch/.coveragerc-sweep
+      - name: MCP sweep under coverage
+        env:
+          COVERAGE_FILE: ${{ github.workspace }}/coverage_sweep_mcp.dat
+          COVERAGE_PROCESS_START: ${{ github.workspace }}/packages/python/goldenmatch/.coveragerc-sweep
+        run: |
+          uv run coverage run --rcfile=packages/python/goldenmatch/.coveragerc-sweep \
+            scripts/sweep_mcp_polars_free.py
+          uv run coverage combine --rcfile=packages/python/goldenmatch/.coveragerc-sweep
+      - name: Prove the sweep coverage is not empty
+        run: uv run python scripts/assert_sweep_coverage.py
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: gm-cov-sweeps
+          path: coverage_sweep_*.dat
+          retention-days: 1
+          if-no-files-found: error
+
   # Reference mode: python_goldenmatch now runs NATIVE by default. This lean lane
   # asserts the pure-Python FALLBACK still imports and passes on a core behavior
   # slice -- the no-wheel path (musl / unsupported platform / GOLDENMATCH_NATIVE=0)

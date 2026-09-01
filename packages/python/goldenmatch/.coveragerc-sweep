@@ -1,0 +1,24 @@
+# Coverage config for the CLI and MCP sweeps ONLY, read by the
+# goldenmatch_sweep_coverage job and by nothing else.
+#
+# One deliberate difference from [tool.coverage.run] in pyproject.toml:
+#   parallel  the sweeps do their work in a child process, which needs its own
+#             data file or it clobbers the parent's.
+#
+# No `omit` here on purpose -- pyproject.toml's own [tool.coverage.report]
+# comment (~line 344) records that the equivalent `goldenmatch/db/*`-shaped
+# omit patterns matched NOTHING in CI (a filename-shape mismatch between what
+# CI's coverage.xml reports and what the pattern expects), so copying that
+# shape here would silently omit nothing while reading as if it omitted
+# something. mcp/* is also omitted in pyproject.toml, and measuring the MCP
+# surface is the entire reason the MCP sweep runs here. `source = goldenmatch`
+# already bounds collection to the package, and for this consumer (the
+# dead_code detector's runtime-coverage signal) more measured coverage is
+# strictly better: an extra measured module can only remove a false deletion
+# candidate, never create one.
+#
+# This feeds the dead_code job's combine only. It does NOT feed the coverage
+# floors or baseline gates - those keep reading the pyproject config.
+[run]
+source = goldenmatch
+parallel = True
