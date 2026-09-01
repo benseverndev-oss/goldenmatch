@@ -84,16 +84,25 @@ def _clusters_from_df(clusters_df) -> dict[int, dict]:
 
 def _group_members(clusters_df) -> dict[int, list[int]]:
     members: dict[int, list[int]] = {}
-    for row in clusters_df.select(["__cluster_id__", "__row_id__"]).iter_rows():
-        cid, rid = int(row[0]), int(row[1])
+    # select_dicts, not iter_rows: the latter is polars-only and this is reached
+    # from `unmerge` / `rollback`, which must work on a default install.
+    from goldenmatch.core.frame import to_frame
+
+    _cols = ["__cluster_id__", "__row_id__"]
+    for row in to_frame(clusters_df).select_dicts(_cols):
+        cid, rid = int(row["__cluster_id__"]), int(row["__row_id__"])
         members.setdefault(cid, []).append(rid)
     return members
 
 
 def _load_scored_pairs(path: str) -> list[tuple[int, int, float]]:
-    import polars as pl
+    # Arrow read: `unmerge` and `rollback` are registered commands, and polars
+    # is an optional extra, so `pl.read_csv` here made both raise ImportError on
+    # a default install.
+    from goldenmatch.core.frame import to_frame
+    from goldenmatch.core.io_arrow import read_table_arrow
 
-    df = pl.read_csv(path)
+    df = to_frame(read_table_arrow(path))
     cols = set(df.columns)
     a_col = next((c for c in ("id_a", "__row_id_a__", "a", "row_id_a") if c in cols), None)
     b_col = next((c for c in ("id_b", "__row_id_b__", "b", "row_id_b") if c in cols), None)
@@ -121,9 +130,8 @@ def unmerge_cmd(
     The record becomes a singleton. Remaining cluster members are re-clustered
     using their stored pair scores. Use --shatter to break the entire cluster.
     """
-    import polars as pl
-
     from goldenmatch.core.cluster import unmerge_cluster, unmerge_record
+    from goldenmatch.core.frame import to_frame
 
     if not clusters_file:
         console.print(
@@ -132,19 +140,23 @@ def unmerge_cmd(
         )
         raise typer.Exit(code=2)
 
-    clusters_df = pl.read_csv(clusters_file)
+    from goldenmatch.core.io_arrow import read_table_arrow
+
+    clusters_df = to_frame(read_table_arrow(clusters_file))
     if "__row_id__" not in clusters_df.columns or "__cluster_id__" not in clusters_df.columns:
         console.print(
             "[red]Error:[/red] clusters file must contain __row_id__ and __cluster_id__ columns."
         )
         raise typer.Exit(code=2)
 
-    target_row = clusters_df.filter(pl.col("__row_id__") == record_id)
+    # filter_in is the seam's equivalent of `filter(pl.col(...) == x)` for a
+    # membership test, and works on both backends.
+    target_row = clusters_df.filter_in("__row_id__", [record_id])
     if target_row.height == 0:
         console.print(f"[red]Record {record_id} not found in clusters file.[/red]")
         raise typer.Exit(code=1)
 
-    cluster_id = int(target_row["__cluster_id__"][0])
+    cluster_id = int(target_row.column("__cluster_id__").to_list()[0])
     clusters = _clusters_from_df(clusters_df)
     before_members = clusters[cluster_id]["members"]
     console.print(f"[#d4a017]Unmerge record {record_id}[/]")
@@ -168,14 +180,20 @@ def unmerge_cmd(
     row_to_cid = {
         rid: cid for cid, cinfo in clusters.items() for rid in cinfo["members"]
     }
-    updated = clusters_df.with_columns(
-        pl.col("__row_id__")
-        .replace_strict(row_to_cid, default=None)
-        .alias("__cluster_id__")
+    from goldenmatch.core.frame import column_from_values
+
+    _rids = clusters_df.column("__row_id__").to_list()
+    updated = clusters_df.with_column(
+        "__cluster_id__",
+        column_from_values([row_to_cid.get(r) for r in _rids], "int64"),
     )
 
     out_path = output or f"{clusters_file.rsplit('.', 1)[0]}.unmerged.csv"
-    updated.write_csv(out_path)
+    from pathlib import Path as _P
+
+    from goldenmatch.output._csv_arrow import write_csv_polars_parity
+
+    write_csv_polars_parity(updated.to_arrow(), _P(out_path))
 
     new_cid = row_to_cid.get(record_id)
     console.print(

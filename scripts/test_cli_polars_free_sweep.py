@@ -31,15 +31,18 @@ from sweep_cli_polars_free import MUTATING, run_sweep  # noqa: E402
 # Confirmed by invocation on 2026-08-31 against a polars-blocked interpreter.
 # Each raises ImportError: No module named 'polars' -- a traceback, not an
 # error message -- on a default install.
-KNOWN_POLARS_BOUND = {
-    # The last one. core/incremental.py needs apply_standardization, which is a
-    # 506-line polars-expression module (33 `pl.` sites) -- a real port, and the
-    # honest place to stop rather than half-do it. match_one also needs a small
-    # seam port (.height / .to_dicts only); find_exact_matches already accepts
-    # arrow, and matchkey derivation has a seam equivalent in
-    # Frame.derive_matchkey.
-    "incremental",
-}
+KNOWN_POLARS_BOUND: set[str] = set()
+# EMPTY, and that is the point. This started at ELEVEN commands and the list is
+# now closed: no registered command may require polars. The assertion below has
+# stopped being "the debt has not grown" and become "there is no debt", which is
+# the only version of this gate worth having.
+#
+# Do not add an entry to make a build green. polars is an OPTIONAL extra, so an
+# entry here is a decision to ship a command that raises a bare ImportError at
+# someone who followed the install instructions. Route the frame through
+# goldenmatch.core.frame instead; every op these eleven needed already existed
+# on the seam (derive_standardized_column, derive_matchkey, ensure_row_ids,
+# select_dicts, semantic_dtype, concat_frames(relaxed=True)).
 
 # Ported and verified polars-free on 2026-08-31, each on BOTH lanes (polars
 # blocked, and polars present so the classic lane is unregressed):
@@ -57,10 +60,12 @@ KNOWN_POLARS_BOUND = {
 #                      seam; the polars there was mostly type annotations plus
 #                      three real operations
 
-# Also confirmed polars-bound by hand, but never invoked by the sweep because it
-# MUTATES state (it removes a record from a cluster). Listed so the finding is
-# not lost when the harness declines to run it.
-KNOWN_POLARS_BOUND_MUTATING = {"unmerge"}
+# Also EMPTY. `unmerge` and `rollback` live in cli/rollback.py and are never
+# invoked by the sweep (they mutate state), so "zero polars-bound" would have
+# been slightly false while they still imported polars. Both were ported by
+# hand and verified on both lanes, so the claim now holds for every registered
+# command -- probed or not.
+KNOWN_POLARS_BOUND_MUTATING: set[str] = set()
 
 
 @pytest.fixture(scope="module")
