@@ -58,12 +58,22 @@ def test_a_module_failing_both_signals_is_reported(tmp_path):
 
 
 def test_a_registry_live_module_is_never_reported(tmp_path):
-    """The whole point of the inversion. Feed the report a live module with
-    zero coverage: it must still not be a candidate."""
-    live = live_modules()
-    if not live:
-        pytest.fail("liveness returned nothing -- the fixture cannot mean anything")
-    victim = sorted(live)[0]
+    """The whole point of the inversion. Feed the report a live module that
+    IS in the static candidate pool, with zero coverage: it must still not be
+    a candidate.
+
+    The victim must come from live_modules() & unimported_modules(), not from
+    live_modules() alone -- a live module that was never in the static pool
+    to begin with would pass this assertion whether or not the `- live`
+    exclusion exists, witnessing nothing.
+    """
+    overlap = sorted(live_modules() & unimported_modules())
+    if not overlap:
+        pytest.fail(
+            "no module is both registry-live and statically unimported -- "
+            "this test can no longer witness the liveness exclusion"
+        )
+    victim = overlap[0]
     xml = _coverage_xml(tmp_path, uncovered=[victim], covered=[])
     assert victim not in {c["module"] for c in candidates(xml)}
 
