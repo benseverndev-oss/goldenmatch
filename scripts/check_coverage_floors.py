@@ -65,6 +65,15 @@ FLOORS: dict[str, float] = {
     "goldenmatch/pprl/": 0.93,                             # 96.4% (n=3)
     "goldenmatch/_api.py": 0.85,                           # 88.4%
 
+    # ---------------------------------------------------------------- CLI
+    # What users actually type. cli/main.py wires every command and defines
+    # several inline, so a drop here means a verb stopped working, not a metric
+    # moved. 52.9% -> 64% (tests/test_cli_surface.py); the remainder is the
+    # `profile` and `analyze-blocking` bodies, both polars-bound (see the strict
+    # xfails in that file) and the TUI launchers.
+    "goldenmatch/cli/main.py": 0.61,                       # 64.0%  (272 stmts)
+    "goldenmatch/prefs/store.py": 0.82,                    # 85.0%
+
     # ------------------------------------------------------- DECAY GUARDS --
     # These are NOT targets. They are large, poorly-covered modules pinned ~3pp
     # under today's value so the debt cannot quietly deepen. Raising them is

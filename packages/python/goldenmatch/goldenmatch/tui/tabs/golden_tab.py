@@ -54,7 +54,13 @@ class GoldenTab(Static):
         table = self.query_one("#golden-table", DataTable)
 
         golden_df = result.golden
-        if golden_df is None or golden_df.height == 0:
+        from goldenmatch.core.frame import to_frame as _tf
+
+        # The WHOLE frame goes through the seam, not just the height check. An
+        # earlier pass converted only this guard and left `.columns` (arrow gives
+        # ChunkedArrays, not names) and `.iter_rows` (polars-only) below it.
+        golden_frame = None if golden_df is None else _tf(golden_df)
+        if golden_frame is None or golden_frame.height == 0:
             placeholder.update("[dim]Run matching to see golden records here.[/dim]")
             placeholder.display = True
             table.display = False
@@ -67,7 +73,7 @@ class GoldenTab(Static):
 
         # Determine data columns (exclude internal columns)
         data_cols = [
-            c for c in golden_df.columns
+            c for c in golden_frame.columns
             if c not in ("__cluster_id__", "__golden_confidence__")
         ]
 
@@ -78,7 +84,7 @@ class GoldenTab(Static):
             table.add_column(col)
 
         # Add rows
-        for row in golden_df.iter_rows(named=True):
+        for row in golden_frame.to_dicts():
             cluster_id = str(row.get("__cluster_id__", ""))
             confidence = row.get("__golden_confidence__", 0.0)
             if confidence is None:

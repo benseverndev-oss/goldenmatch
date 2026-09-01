@@ -8,8 +8,8 @@ re-run needed.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
-from goldenmatch._polars_lazy import pl
 from goldenmatch.config.schemas import MatchkeyConfig
 from goldenmatch.core.scorer import score_pair
 
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 def match_one(
     record: dict,
-    df: pl.DataFrame,
+    df: Any,
     mk: MatchkeyConfig,
     ann_blocker=None,
     embedder=None,
@@ -62,7 +62,7 @@ def match_one(
 
 def _match_one_ann(
     record: dict,
-    df: pl.DataFrame,
+    df: Any,
     mk: MatchkeyConfig,
     ann_blocker,
     embedder,
@@ -108,18 +108,25 @@ def _match_one_ann(
 
 def _match_one_brute(
     record: dict,
-    df: pl.DataFrame,
+    df: Any,
     mk: MatchkeyConfig,
 ) -> list[tuple[int, float]]:
     """Brute-force single-record matching (no ANN index)."""
-    if df.height > 10000:
+    # Through the seam: `.height`, `df[col]` and `.to_dicts()` are polars-only,
+    # and this is reached from `goldenmatch incremental`, where a default
+    # install has no polars at all.
+    from goldenmatch.core.frame import to_frame
+
+    frame = to_frame(df)
+    height = frame.height
+    if height > 10000:
         logger.warning(
             "Brute-force match_one on %d records. Consider using ANN blocking.",
-            df.height,
+            height,
         )
 
-    row_ids = df["__row_id__"].to_list()
-    rows = df.to_dicts()
+    row_ids = frame.column("__row_id__").to_list()
+    rows = frame.select_dicts(list(frame.columns))
 
     results = []
     for i, candidate_row in enumerate(rows):
@@ -131,6 +138,6 @@ def _match_one_brute(
 
     logger.info(
         "match_one (brute): %d records scanned, %d above threshold %.2f",
-        df.height, len(results), float(mk.threshold),
+        height, len(results), float(mk.threshold),
     )
     return results

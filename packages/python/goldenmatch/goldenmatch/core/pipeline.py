@@ -3138,8 +3138,17 @@ def _run_dedupe_pipeline(
     _eager_stages_done: frozenset[str] = frozenset(),
     _prep_cache_seed: tuple[int, int] | int | None = None,
     _prep_store: PreparedRecordStore | None = None,
+    _em_results: dict | None = None,
 ) -> dict:
     """Shared dedupe pipeline logic (post-ingest).
+
+    ``_em_results``: optional OUT-param. When a dict is passed, trained
+    Fellegi-Sunter models are folded into it keyed by matchkey name.
+    ``_score_probabilistic_matchkey`` has always accepted this; it simply was
+    never threaded from here, so the only way to obtain the models was the TUI
+    engine's own parallel copy of this pipeline. Threading it lets that copy be
+    deleted. Default ``None`` keeps every existing caller byte-identical -- the
+    scorer skips the fold entirely when it is None.
 
     This function contains all pipeline steps from auto-fix/validation through
     output. Both run_dedupe() and run_dedupe_df() delegate to this function.
@@ -4110,6 +4119,7 @@ def _run_dedupe_pipeline(
                 bench_candidate_pairs=_bench_candidate_pairs,
                 bench_emitted_pairs=_bench_emitted_pairs,
                 log_em=True,
+                em_results=_em_results,
                 use_columnar=_use_fs_columnar,
                 columnar_out=_fs_columnar_sink,
                 threshold_out=_fs_thresholds,
@@ -5356,8 +5366,14 @@ def run_dedupe_df(
     auto_config: bool = False,
     auto_config_llm_provider: str | None = None,
     _prep_store: PreparedRecordStore | None = None,
+    _em_results: dict | None = None,
 ) -> dict:
     """Run dedupe pipeline on a DataFrame directly (no file I/O).
+
+    ``_em_results``: optional OUT-param, forwarded to the pipeline. Pass a dict
+    to collect trained Fellegi-Sunter models keyed by matchkey name (the TUI's
+    match-weight waterfall needs them). ``None`` -- the default -- leaves every
+    existing caller unchanged.
 
     ``_prep_store``: caller-provided PreparedRecordStore. When supplied
     (Phase 3: controller path), this function does NOT open its own store
@@ -5460,7 +5476,8 @@ def run_dedupe_df(
                                     auto_config=auto_config,
                                     auto_config_llm_provider=auto_config_llm_provider,
                                     _prep_cache_seed=cache_seed,
-                                    _prep_store=_prep_store_ctx)
+                                    _prep_store=_prep_store_ctx,
+                                    _em_results=_em_results)
     finally:
         if own_store and _prep_store_ctx is not None:
             _prep_store_ctx.close()

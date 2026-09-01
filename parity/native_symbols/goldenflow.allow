@@ -2,3 +2,4 @@
 # A host reference whose symbol the static scanner can't attribute to a build
 # (cross-kernel, or a deliberately-aspirational fallback with a tracked issue).
 # EMPTY at bootstrap — the computed FAIL set is empty.
+from_arrow  # Column::from_arrow is a #[pymethods] method, not a wrap_pyfunction! module export, so the scanner's registration parser structurally cannot see it. Referenced from engine/columnar.py's _CAPABILITIES table. The real fix is teaching check_native_symbols.py to parse #[pymethods] impl blocks; until then this entry stops a REAL symbol reading as a missing one.

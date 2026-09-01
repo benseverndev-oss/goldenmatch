@@ -55,6 +55,98 @@ class TestProgressOverlay:
             await pilot.pause()
             assert not app.query("#progress-overlay")
 
+    # The mount/remove test above drives `update_progress` only via the 0.1s
+    # interval timer `_start_progress` installs, so whether it runs at all
+    # between start and stop is a scheduling race -- `pilot.pause()` yields, it
+    # does not wait 0.1s. That made coverage of this module swing between ~46%
+    # and ~83% run to run (it tripped the coverage baseline gate on a commit
+    # that touched neither the widget nor the app). `update_progress` is the
+    # bulk of the file, and nothing asserted what it RENDERS. These call it
+    # directly.
+
+    @pytest.mark.asyncio
+    async def test_update_progress_renders_stage_pairs_and_elapsed(self, sample_csv):
+        from goldenmatch.tui.widgets.progress_overlay import PIPELINE_STAGES
+
+        app = GoldenMatchApp(files=[str(sample_csv)])
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._start_progress()
+            await pilot.pause()
+            # Stop the 0.1s ticker before driving the widget by hand: it calls
+            # update_progress(stage=0, ...) and would race whatever we set.
+            app._progress_timer.stop()
+            overlay = app.query_one("#progress-overlay")
+
+            overlay.update_progress(stage=2, percent=40.0, pairs=1234, elapsed=3.5)
+            await pilot.pause()
+
+            stats = str(app.query_one("#progress-stats").render())
+            assert PIPELINE_STAGES[2] in stats
+            assert "1,234" in stats          # thousands separator
+            assert "3.5s" in stats
+            app._stop_progress()
+
+    @pytest.mark.asyncio
+    async def test_pipeline_view_marks_done_current_and_pending(self, sample_csv):
+        from goldenmatch.tui.widgets.progress_overlay import PIPELINE_STAGES
+
+        app = GoldenMatchApp(files=[str(sample_csv)])
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._start_progress()
+            await pilot.pause()
+            # Stop the 0.1s ticker before driving the widget by hand: it calls
+            # update_progress(stage=0, ...) and would race whatever we set.
+            app._progress_timer.stop()
+            overlay = app.query_one("#progress-overlay")
+
+            overlay.update_progress(stage=2, elapsed=1.0, stage_times={0: 0.4})
+            await pilot.pause()
+
+            pipeline = str(app.query_one("#progress-pipeline").render())
+            assert f"✓ {PIPELINE_STAGES[0]}" in pipeline   # done
+            assert f"● {PIPELINE_STAGES[2]}" in pipeline   # current
+            assert f"○ {PIPELINE_STAGES[-1]}" in pipeline  # pending
+            assert "0.4s" in pipeline                            # stage_times merged
+            app._stop_progress()
+
+    @pytest.mark.asyncio
+    async def test_a_stage_past_the_end_falls_back_to_processing(self, sample_csv):
+        app = GoldenMatchApp(files=[str(sample_csv)])
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._start_progress()
+            await pilot.pause()
+            # Stop the 0.1s ticker before driving the widget by hand: it calls
+            # update_progress(stage=0, ...) and would race whatever we set.
+            app._progress_timer.stop()
+            overlay = app.query_one("#progress-overlay")
+
+            overlay.update_progress(stage=999, elapsed=0.1)
+            await pilot.pause()
+
+            assert "Processing" in str(app.query_one("#progress-stats").render())
+            app._stop_progress()
+
+    @pytest.mark.asyncio
+    async def test_set_complete_announces_completion(self, sample_csv):
+        app = GoldenMatchApp(files=[str(sample_csv)])
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._start_progress()
+            await pilot.pause()
+            # Stop the 0.1s ticker before driving the widget by hand: it calls
+            # update_progress(stage=0, ...) and would race whatever we set.
+            app._progress_timer.stop()
+            overlay = app.query_one("#progress-overlay")
+
+            overlay.set_complete()
+            await pilot.pause()
+
+            assert "complete" in str(app.query_one("#progress-title").render()).lower()
+            app._stop_progress()
+
 
 class TestThresholdSlider:
     @pytest.mark.asyncio

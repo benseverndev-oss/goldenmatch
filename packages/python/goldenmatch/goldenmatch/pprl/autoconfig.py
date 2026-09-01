@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
-from goldenmatch._polars_lazy import pl
 from goldenmatch.pprl.protocol import PPRLConfig
 
 logger = logging.getLogger(__name__)
@@ -55,14 +55,28 @@ class PPRLAutoConfigResult:
     explanation: str
 
 
-def profile_for_pprl(df: pl.DataFrame) -> list[FieldProfile]:
-    """Profile DataFrame columns for PPRL suitability."""
+def profile_for_pprl(df: Any) -> list[FieldProfile]:
+    """Profile frame columns for PPRL suitability.
+
+    Reads through ``core.frame`` rather than polars: ``pprl auto-config`` is a
+    registered CLI command, and polars is an OPTIONAL extra, so the direct
+    ``pl.`` calls here made it raise ImportError on a default install.
+
+    ``semantic_dtype() == "text"`` replaces ``dtype != pl.Utf8``. The seam tag
+    is the cross-backend normalization point: polars spells it String/Utf8 and
+    arrow spells it large_string, so a raw dtype comparison is backend-specific
+    by construction.
+    """
+    from goldenmatch.core.frame import to_frame
+
+    frame = to_frame(df)
     profiles = []
 
-    for col in df.columns:
+    for col in frame.columns:
         if col.startswith("__"):
             continue
-        if df[col].dtype != pl.Utf8:
+        column = frame.column(col)
+        if column.semantic_dtype() != "text":
             continue
 
         col_lower = col.lower()
@@ -75,18 +89,18 @@ def profile_for_pprl(df: pl.DataFrame) -> list[FieldProfile]:
                 break
 
         # Compute stats
-        non_null = df[col].drop_nulls().cast(pl.Utf8)
-        if non_null.len() == 0:
+        non_null = column.drop_nulls().cast_str()
+        if len(non_null) == 0:
             continue
 
-        avg_len = non_null.str.len_chars().mean()
+        avg_len = non_null.str_len_chars().mean()
         cardinality = non_null.n_unique()
-        null_pct = df[col].null_count() / df.height
+        null_pct = column.null_count() / frame.height if frame.height else 0.0
 
         # PPRL usefulness: moderate cardinality + short length + low null rate
         # For PPRL, near-unique fields (IDs) are USELESS -- they differ across parties
         # Sweet spot: cardinality between 10% and 80% of record count
-        card_ratio = cardinality / df.height
+        card_ratio = cardinality / frame.height if frame.height else 0.0
         if card_ratio > 0.95:
             # Near-unique (IDs, keys) -- terrible for PPRL
             card_score = 0.0
@@ -141,7 +155,7 @@ def profile_for_pprl(df: pl.DataFrame) -> list[FieldProfile]:
 
 
 def auto_configure_pprl(
-    df: pl.DataFrame,
+    df: Any,
     security_level: str = "high",
     max_fields: int = 4,
 ) -> PPRLAutoConfigResult:
@@ -229,7 +243,7 @@ def auto_configure_pprl(
 
 
 def _estimate_threshold(
-    df: pl.DataFrame,
+    df: Any,
     fields: list[str],
     ngram_size: int,
     hash_count: int,
@@ -242,8 +256,14 @@ def _estimate_threshold(
     transform = f"bloom_filter:{ngram_size}:{hash_count}:{filter_size}"
 
     # Sample records
-    sample = df.sample(n=min(sample_size, df.height), seed=42)
-    rows = sample.to_dicts()
+    # Seam: `sample`/`to_dicts` are polars-only. There is no cross-backend
+    # random sample, and head() is the honest substitute -- the seed was
+    # pinned at 42, so this was never random across runs, just fixed.
+    from goldenmatch.core.frame import to_frame as _tf_s
+
+    _sf = _tf_s(df)
+    sample = _sf.head(min(sample_size, _sf.height))
+    rows = sample.select_dicts(list(sample.columns))
 
     # Compute bloom filters for sample
     filters = []
@@ -292,7 +312,7 @@ def _estimate_threshold(
 
 
 def auto_configure_pprl_llm(
-    df: pl.DataFrame,
+    df: Any,
     api_key: str | None = None,
     model: str = "gpt-4o-mini",
     security_level: str = "high",
@@ -316,7 +336,9 @@ def auto_configure_pprl_llm(
 
     # Build profile summary for LLM
     profile_text = "Dataset profile for PPRL configuration:\n"
-    profile_text += f"Records: {df.height}\n"
+    from goldenmatch.core.frame import to_frame as _tf_pt
+
+    profile_text += f"Records: {_tf_pt(df).height}\n"
     profile_text += "Columns:\n"
     for p in baseline.field_profiles:
         profile_text += f"  - {p.column}: type={p.field_type}, avg_len={p.avg_length:.1f}, cardinality={p.cardinality}, nulls={p.null_pct:.0%}\n"

@@ -30,7 +30,6 @@ def incremental_cmd(
     ),
 ) -> None:
     """Match new records against an existing base dataset incrementally."""
-    import polars as pl
 
     from goldenmatch._exclusions_schema import merge_exclude_columns_into_config
     from goldenmatch.core.incremental import run_incremental
@@ -64,7 +63,16 @@ def incremental_cmd(
     console.print(table)
 
     if output and summary["matches"]:
-        pl.DataFrame(summary["matches"]).write_csv(output)
+        # Arrow writer, byte-parity with polars' (tests/test_csv_arrow_polars_parity.py).
+        # The `import polars` this replaced made the whole command unusable on a
+        # default install, not just this one output branch.
+        from pathlib import Path
+
+        import pyarrow as pa
+
+        from goldenmatch.output._csv_arrow import write_csv_polars_parity
+
+        write_csv_polars_parity(pa.Table.from_pylist(summary["matches"]), Path(output))
         console.print(f"\n[green]Results saved to {output}[/green]")
     elif output:
         console.print("\n[yellow]No matches found - no output written[/yellow]")

@@ -139,8 +139,7 @@ def golden_provenance_for_run(data_df, clusters, rules) -> list | None:
     multi-member clusters. Returns None for non-survivorship configs so plain
     runs stay byte-identical."""
     try:
-        import polars as pl
-
+        from goldenmatch.core.frame import frame_from_records, to_frame
         from goldenmatch.core.golden import (
             _survivorship_active,
             build_golden_records_batch,
@@ -156,11 +155,35 @@ def golden_provenance_for_run(data_df, clusters, rules) -> list | None:
         ]
         if not member_rows:
             return None
-        multi_df = pl.DataFrame(member_rows).join(data_df, on="__row_id__", how="inner")
-        rows = build_golden_records_batch(multi_df, rules, provenance=True)
+        # Attach __cluster_id__ to the member rows through the seam instead of
+        # `pl.DataFrame(member_rows).join(data_df, ...)`. That join needed both
+        # sides to be polars, so it threw the moment `data_df` became a pa.Table
+        # -- and the fail-open below turned the break into a log line, which is
+        # how `golden_records` went missing from lineage output without anything
+        # going red. The local `import polars` it also carried meant this feature
+        # was silently unavailable on a polars-free install too.
+        #
+        # `build_golden_records_batch` takes any Frame-able, so building a fresh
+        # frame from records avoids a cross-backend join entirely. It materialises
+        # the member rows as dicts, but the old join produced a frame of exactly
+        # the same size, so this is not an asymptotic change.
+        cluster_of = {int(r["__row_id__"]): r["__cluster_id__"] for r in member_rows}
+        members = to_frame(data_df).filter_in("__row_id__", sorted(cluster_of))
+        merged = [
+            {**row, "__cluster_id__": cluster_of[int(row["__row_id__"])]}
+            for row in members.to_dicts()
+            if int(row["__row_id__"]) in cluster_of
+        ]
+        if not merged:
+            return None
+        rows = build_golden_records_batch(frame_from_records(merged), rules, provenance=True)
         return golden_records_to_provenance(rows, clusters, rules)
     except Exception:
-        logger.warning("lineage: golden provenance unavailable; skipping")
+        # Still fail-open, but LOUD in the log: a bare warning here hid a real
+        # regression for the length of this branch.
+        logger.warning(
+            "lineage: golden provenance unavailable; skipping", exc_info=True
+        )
         return None
 
 

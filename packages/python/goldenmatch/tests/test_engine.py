@@ -83,10 +83,22 @@ class TestMatchEngineLoad:
         assert "__row_id__" not in cols
 
     def test_sample_extraction(self, sample_csv):
+        """Asserts the CONTRACT (n rows, readable through the seam), not the
+        backend class. MatchEngine ingests via arrow now -- polars is an
+        optional extra, so a default install has no pl.DataFrame to be an
+        instance of, and pinning the class here would make the test demand the
+        very dependency the engine was ported off."""
+        from goldenmatch.core.frame import to_frame
+
         engine = MatchEngine([sample_csv])
         sample = engine.get_sample(3)
-        assert isinstance(sample, pl.DataFrame)
-        assert sample.height == 3
+        assert to_frame(sample).height == 3
+
+    def test_sample_larger_than_data_returns_everything(self, sample_csv):
+        from goldenmatch.core.frame import to_frame
+
+        engine = MatchEngine([sample_csv])
+        assert to_frame(engine.get_sample(10_000)).height == engine.row_count
 
 
 from goldenmatch.config.schemas import (

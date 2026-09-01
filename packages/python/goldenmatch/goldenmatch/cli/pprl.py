@@ -37,7 +37,6 @@ def pprl_link(
     ),
 ) -> None:
     """Link records across two parties without sharing raw data."""
-    import polars as pl
 
     from goldenmatch._exclusions_schema import parse_csv_exclude_columns
     from goldenmatch.core.autoconfig import _RUNTIME_EXCLUDE_COLUMNS
@@ -83,11 +82,14 @@ def pprl_link(
         config.ngram_size, config.hash_functions, config.bloom_filter_size = _LEVELS[security]
 
     console.print("[bold]Loading data...[/bold]")
-    df_a = pl.read_csv(file_a)
-    df_b = pl.read_csv(file_b)
+    from goldenmatch.core.frame import to_frame as _tf
+    from goldenmatch.core.io_arrow import read_table_arrow
 
-    console.print(f"  Party A: {df_a.height} records")
-    console.print(f"  Party B: {df_b.height} records")
+    df_a = read_table_arrow(file_a)
+    df_b = read_table_arrow(file_b)
+
+    console.print(f"  Party A: {_tf(df_a).height} records")
+    console.print(f"  Party B: {_tf(df_b).height} records")
     console.print(f"  Fields: {', '.join(field_list)}")
     console.print(f"  Protocol: {protocol}")
     console.print(f"  Security: {security}")
@@ -127,7 +129,11 @@ def pprl_link(
                     "party": party_id,
                     "record_id": record_id,
                 })
-        pl.DataFrame(rows).write_csv(output)
+        import pyarrow as pa
+
+        from goldenmatch.output._csv_arrow import write_csv_polars_parity
+
+        write_csv_polars_parity(pa.Table.from_pylist(rows), Path(output))
         console.print(f"\n[green]Results saved to {output}[/green]")
 
 
@@ -138,7 +144,6 @@ def pprl_auto_config(
     use_llm: bool = typer.Option(False, "--llm", help="Use LLM for enhanced recommendations"),
 ) -> None:
     """Analyze data and recommend optimal PPRL configuration."""
-    import polars as pl
 
     from goldenmatch.pprl.autoconfig import auto_configure_pprl, auto_configure_pprl_llm
 
@@ -147,8 +152,12 @@ def pprl_auto_config(
         raise typer.Exit(1)
 
     console.print(f"[bold]Analyzing {file.name}...[/bold]")
-    df = pl.read_csv(file, ignore_errors=True, encoding="utf8-lossy")
-    console.print(f"  {df.height} records, {len(df.columns)} columns\n")
+    from goldenmatch.core.frame import to_frame as _tf2
+    from goldenmatch.core.io_arrow import read_table_arrow
+
+    df = read_table_arrow(file, encoding="utf8-lossy")
+    _f = _tf2(df)
+    console.print(f"  {_f.height} records, {len(_f.columns)} columns\n")
 
     if use_llm:
         result = auto_configure_pprl_llm(df, security_level=security)

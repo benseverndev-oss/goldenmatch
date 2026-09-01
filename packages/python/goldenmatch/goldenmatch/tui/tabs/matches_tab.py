@@ -160,8 +160,12 @@ class MatchesTab(Static):
         if cluster_info is None:
             return
 
+        from goldenmatch.core.frame import to_frame as _tf
+
         member_ids = cluster_info["members"]
-        member_df = self._data.filter(pl.col("__row_id__").is_in(member_ids))
+        # `self._data` is engine.data, a pa.Table on the arrow lane -- so the
+        # filter, the column names and the row iteration all go through the seam.
+        member_frame = _tf(self._data).filter_in("__row_id__", member_ids)
 
         # Show in detail table
         detail_table = self.query_one("#detail-table", DataTable)
@@ -169,12 +173,12 @@ class MatchesTab(Static):
         detail_table.display = True
 
         # Add columns (skip internal columns)
-        display_cols = [c for c in member_df.columns if not c.startswith("__")]
+        display_cols = [c for c in member_frame.columns if not c.startswith("__")]
         for col in display_cols:
             detail_table.add_column(col)
 
         # Add rows
-        for row in member_df.iter_rows(named=True):
+        for row in member_frame.to_dicts():
             values = [str(row.get(c, "")) for c in display_cols]
             detail_table.add_row(*values)
 

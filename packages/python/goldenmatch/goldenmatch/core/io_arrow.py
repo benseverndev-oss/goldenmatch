@@ -106,6 +106,7 @@ def read_table_arrow(
 
 def _read_csv_arrow(path: Path, *, separator: str, encoding: str | None):
     import pyarrow.csv as pa_csv
+    import pyarrow.types as pa_types
 
     parse_options = pa_csv.ParseOptions(delimiter=separator)
 
@@ -114,7 +115,28 @@ def _read_csv_arrow(path: Path, *, separator: str, encoding: str | None):
             if encoding == "utf8":
                 # Strict utf-8, matching polars scan_csv(encoding="utf8"):
                 # invalid bytes raise rather than being silently replaced.
-                return _read_csv_direct(path, parse_options)
+                #
+                # pyarrow does NOT enforce this on its own. Handed invalid
+                # UTF-8 it does not raise -- it silently infers the column as
+                # BINARY, so `Café` came back as b'Café' and every
+                # downstream string transform got bytes. polars raises
+                # `ComputeError: invalid utf-8 sequence` on the same input, so
+                # the strict mode has to enforce strictness itself. A binary
+                # column is the reliable tell: pyarrow's CSV reader only falls
+                # back to binary when a value fails UTF-8 validation.
+                table = _read_csv_direct(path, parse_options)
+                bad = [
+                    f.name
+                    for f in table.schema
+                    if pa_types.is_binary(f.type) or pa_types.is_large_binary(f.type)
+                ]
+                if bad:
+                    raise ValueError(
+                        f"invalid utf-8 sequence in {path} (columns: {bad}). "
+                        f'Pass encoding="utf8-lossy" to replace invalid bytes, '
+                        f"or name the real encoding (e.g. cp1252, latin-1)."
+                    )
+                return table
             # utf8-lossy: decode with replacement, then feed the re-encoded
             # text through the same buffer-reader path as the auto/non-utf8
             # branches below.
@@ -262,3 +284,93 @@ def _read_excel_arrow(path: Path, *, sheet: str | None):
     # letting Arrow's/Polars' own inference run rather than second-guessing
     # it here).
     return pa.table({name: pa.array(values) for name, values in columns.items()})
+
+
+# --------------------------------------------------------------------------
+# Multi-file ingest (CLI + service entry points)
+# --------------------------------------------------------------------------
+
+
+def read_files_arrow(
+    specs,
+    *,
+    source_column: str | None = None,
+    row_id_column: str | None = None,
+    encoding: str | None = "utf8-lossy",
+):
+    """Read one or more files into a single ``pyarrow.Table``, polars-free.
+
+    This is the shape half the CLI needs and kept open-coding against polars:
+    read each file, optionally stamp the source name onto every row, concat
+    with a UNION of columns, then number the rows. Written once here because it
+    had already been written three times (``auto_configure``, ``a2a.skills``,
+    ``api.server``) and, in the CLI, written against ``pl.concat`` -- which is
+    why ten commands raised ``ImportError`` on a default install.
+
+    Args:
+        specs: iterable of ``path`` or ``(path, source_name)``.
+        source_column: when set, add a column of the per-file source name.
+        row_id_column: when set, append an Int64 row index.
+        encoding: passed to the CSV reader for text files.
+
+    Returns:
+        A ``pyarrow.Table``.
+
+    Concat semantics are ``promote_options="permissive"``, which is what
+    ``pl.concat(..., how="diagonal")`` did: files with different column sets
+    union, and the missing cells are null. Plain ``pa.concat_tables`` would
+    raise instead -- the exact trap that made a multi-file fixture blow up
+    while porting auto-config.
+    """
+    import pyarrow as pa
+
+    tables = []
+    for spec in specs:
+        if isinstance(spec, (tuple, list)):
+            path, source = spec[0], (spec[1] if len(spec) > 1 else None)
+        else:
+            path, source = spec, None
+
+        path = Path(path)
+        suffix = path.suffix.lower()
+        if suffix in (".parquet", ".xlsx"):
+            table = read_table_arrow(path)
+        else:
+            table = read_table_arrow(path, encoding=encoding)
+
+        if source_column is not None:
+            label = source if source is not None else path.stem
+            col = pa.array([label] * table.num_rows, type=pa.string())
+            # REPLACE when the column already exists. polars' `with_columns`
+            # overwrites by name, so a file that already carries a __source__
+            # column simply had it replaced; `append_column` instead produces a
+            # duplicate field, and the table then raises
+            # `Field "__source__" exists 2 times in schema` on the first lookup.
+            if source_column in table.column_names:
+                table = table.set_column(
+                    table.column_names.index(source_column), source_column, col
+                )
+            else:
+                table = table.append_column(source_column, col)
+        tables.append(table)
+
+    if not tables:
+        raise ValueError("read_files_arrow requires at least one file")
+
+    combined = (
+        pa.concat_tables(tables, promote_options="permissive")
+        if len(tables) > 1
+        else tables[0]
+    )
+
+    if row_id_column is not None:
+        # Same replace-not-append rule: `with_row_index` overwrote an existing
+        # index column rather than duplicating it.
+        rid = pa.array(list(range(combined.num_rows)), type=pa.int64())
+        if row_id_column in combined.column_names:
+            combined = combined.set_column(
+                combined.column_names.index(row_id_column), row_id_column, rid
+            )
+        else:
+            combined = combined.append_column(row_id_column, rid)
+    return combined

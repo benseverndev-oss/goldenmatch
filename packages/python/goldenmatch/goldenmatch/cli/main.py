@@ -158,13 +158,10 @@ def analyze_blocking_cmd(
     config: str = typer.Option(..., "--config", "-c", help="Config file with matchkeys"),
 ) -> None:
     """Analyze data and suggest optimal blocking strategies."""
-    from pathlib import Path
-
-    import polars as pl
 
     from goldenmatch.config.loader import load_config
     from goldenmatch.core.block_analyzer import analyze_blocking
-    from goldenmatch.core.ingest import load_file
+    from goldenmatch.core.io_arrow import read_files_arrow
 
     # Load config
     try:
@@ -181,20 +178,20 @@ def analyze_blocking_cmd(
         console.print("[red]Error:[/red] No matchkey columns found in config.")
         raise typer.Exit(code=1)
 
-    # Load and concat files
-    frames = []
-    for file_path in files:
-        p = Path(file_path)
-        try:
-            lf = load_file(p)
-            frames.append(lf.collect())
-        except (FileNotFoundError, ValueError) as exc:
-            console.print(f"[red]Error loading {p.name}:[/red] {exc}")
-            raise typer.Exit(code=1)
+    # Arrow ingest, not polars: polars is an OPTIONAL extra since v3.1.0, so
+    # `import polars` here made this command raise ImportError on a default
+    # install. analyze_blocking already reads through `to_frame`, so it takes
+    # the arrow table unchanged.
+    try:
+        combined_df = read_files_arrow(files)
+    except (FileNotFoundError, ValueError) as exc:
+        console.print(f"[red]Error loading input:[/red] {exc}")
+        raise typer.Exit(code=1)
 
-    combined_df = pl.concat(frames) if len(frames) > 1 else frames[0]
-
-    console.print(f"[cyan]Analyzing {combined_df.height} records across {len(files)} file(s)...[/cyan]")
+    console.print(
+        f"[cyan]Analyzing {combined_df.num_rows} records across "
+        f"{len(files)} file(s)...[/cyan]"
+    )
     console.print(f"[dim]Matchkey columns: {', '.join(matchkey_columns)}[/dim]\n")
 
     # Run analyzer
@@ -412,8 +409,11 @@ def profile_cmd(
         p = Path(file_path)
         console.print(f"\n[bold cyan]Profiling:[/bold cyan] {p.name}")
         try:
-            lf = load_file(p)
-            df = lf.collect()
+            # return_frame=True keeps this on the arrow lane. Without it
+            # load_file ends at `pl.from_arrow(tbl).lazy()` -- a legacy boundary
+            # conversion -- which made `goldenmatch profile` raise ImportError on
+            # a default install, where polars is not present at all.
+            df = load_file(p, return_frame=True)
         except (FileNotFoundError, ValueError) as exc:
             console.print(f"[red]Error:[/red] {exc}")
             continue

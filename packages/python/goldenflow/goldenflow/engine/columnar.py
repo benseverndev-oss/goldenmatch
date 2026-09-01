@@ -88,18 +88,250 @@ _OWNED_STRING = FUSABLE_KERNELS | FUSABLE_PARAM_KERNELS
 _OWNED_NULLABLE = FUSABLE_NULLABLE_KERNELS
 
 
+# --- native capability table -------------------------------------------------
+#
+# ONE place naming what each native code path needs from the installed wheel, as
+# ``capability -> (module symbols, Column methods)``.
+#
+# This used to be ~20 hand-rolled ``hasattr(nm, ...)`` checks in three different
+# spellings, and their strictness did not always match what the code went on to
+# call: `transform_columns_native` tested only ``columnar_split_ready`` before
+# reaching ``Column.apply_split``, and was safe solely because its CALLERS had
+# already run the stronger `config_is_columnar_ready` gate. Safety that lives in
+# a caller contract is safety you cannot see at the call site.
+#
+# It matters more than tidiness because of the documented wheel-skew footgun
+# (see CLAUDE.md): Python reaches new kernel symbols through these guards, so a
+# published wheel missing one silently takes a slower path instead of failing.
+# `test_every_declared_capability_exists_on_this_wheel` turns that into a test
+# failure at the moment a capability is declared without the wheel to back it.
+#
+# The `*_shape` entries are DELIBERATELY weaker, not an oversight: the whole-file
+# CSV route runs through ``transform_csv`` and never touches ``Column``, so it
+# needs the shape probe alone. Splitting them makes that asymmetry legible.
+_CAPABILITIES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    # in-memory string execution
+    "string_chain": (("apply_chain_str_list",), ()),
+    "nullable_chain": (("chain_supports_nullable",), ()),
+    # the Polars-free in-memory core
+    "columns": ((), ("from_pylist",)),
+    # Zero-copy Arrow C-Data ingress (the Polars-frame Column path).
+    # NOT named `*_arrow`: scripts/check_native_symbols.py scans goldenflow with
+    # the literal pattern `"(\w+_arrow)"`, so a capability KEY ending in _arrow
+    # is read as a kernel export and reported missing. The key is ours to choose;
+    # the symbol name is not.
+    "arrow_ingress": ((), ("from_arrow",)),
+    # in-memory shapes: probe AND the Column method that executes them
+    "numeric": (("columnar_numeric_ready",), ("apply_numeric",)),
+    "split": (("columnar_split_ready",), ("apply_split",)),
+    # whole-file CSV route: the shape probe only (no Column involved)
+    "numeric_shape": (("columnar_numeric_ready",), ()),
+    "split_shape": (("columnar_split_ready",), ()),
+    "csv": (("transform_csv", "apply_chain_str_list"), ()),
+    "format_f64": (("format_f64",), ()),
+}
+
+
+def native_can(nm, capability: str) -> bool:
+    """Whether the installed native wheel can run ``capability``.
+
+    ``nm is None`` (no kernel at all) answers False rather than raising, so call
+    sites read as one condition. An unknown capability name raises -- a typo
+    silently answering False would disable a path with no signal, which is the
+    failure this table exists to prevent.
+    """
+    if capability not in _CAPABILITIES:
+        raise KeyError(
+            f"unknown native capability {capability!r}; "
+            f"known: {sorted(_CAPABILITIES)}"
+        )
+    if nm is None:
+        return False
+    mod_syms, col_syms = _CAPABILITIES[capability]
+    if not all(hasattr(nm, s) for s in mod_syms):
+        return False
+    if col_syms:
+        col_cls = getattr(nm, "Column", None)
+        if col_cls is None or not all(hasattr(col_cls, s) for s in col_syms):
+            return False
+    return True
+
+
+def _split_ops_spec(method: str) -> list:
+    """One `config.splits` entry as the ``string* splitter`` op chain that both
+    the native probe and the native kernel take. No leading string ops: those
+    come from ``config.transforms``, which has already run by the time splits
+    apply."""
+    return [(method, [])]
+
+
+def _apply_splits(frame, config):
+    """Apply ``config.splits`` -- natively on BOTH backends.
+
+    The polars side dispatches through the transform registry exactly as
+    engine/transformer.py does, and those registered functions already route to
+    the native kernel. The columnar side reaches the same kernel directly:
+    ``nm.Column.from_pylist(...).apply_split(ops)`` runs the whole shape in Rust.
+    No pyarrow is involved -- ``from_pylist``/``to_pylist`` marshal plain Python
+    lists -- so this costs the columnar path none of its pyarrow-free property.
+
+    The first version of this function mapped every value through the pure-Python
+    ``_split_name_py`` reference instead. That was wrong on two counts:
+    ``goldenflow-native`` is a BASE dependency, so the kernel is always present,
+    and the Rust side already owned this shape end to end. It is the same kernel
+    `_spec_ready` reaches when a splitter appears as a terminal op.
+
+    Output names are FIXED by the kernel (``first_name``/``last_name``;
+    ``street``/``city``/``state``/``zip``). That matches the polars path, which
+    does not consult ``SplitSpec.target`` either.
+
+    Two deliberate omissions, both for parity with the polars engine:
+
+    * the SOURCE column is left untouched. ``apply_split`` also returns it (post
+      string-ops), but writing it back would push the ``cast(Utf8)`` form of a
+      non-string column into the output, where polars leaves the original.
+    * NO manifest record is added. ``apply_split`` returns per-op records, but
+      engine/transformer.py records nothing for a ``config.splits`` entry, and
+      manifest parity is part of the contract. Records ARE kept on the terminal-op
+      path, which is a different config shape and IS audited.
+    """
+    splits = config.splits or []
+    if not splits:
+        return frame
+
+    from goldenflow.engine.frame import ColumnarFrame
+
+    nm = native_module()
+    for split in splits:
+        if split.source not in frame.columns:
+            continue
+        if isinstance(frame, ColumnarFrame):
+            col = nm.Column.from_pylist(
+                _stringify_for_column(frame.column(split.source), nm)
+            )
+            _src, new_cols, _records = col.apply_split(_split_ops_spec(split.method))
+            for name, out_col in new_cols:
+                frame = frame.with_column(name, out_col.to_pylist())
+        else:
+            info = get_transform(split.method)
+            if info and info.mode == "dataframe":
+                frame = frame.replace_native(info.func(frame.native, split.source))
+    return frame
+
+
 def _frame_level_blocked(config) -> bool:
-    """Frame-level ops (splits/renames/drops/filters/dedup) the columnar path
-    doesn't handle yet — any of them forces the Polars engine."""
+    """Nothing frame-level forces the Polars engine any more.
+
+    renames / drop / filters / dedup run on ``ColumnarFrame`` via
+    ``_apply_frame_ops``; splits run on the native kernel via ``_apply_splits``.
+    None of these were operations the columnar engine could not express -- they
+    were unimplemented ones, and the fallback meant a config carrying a single
+    rename dragged the whole transform onto polars, which on a default install
+    (polars is an OPTIONAL extra) meant a bare ImportError.
+
+    Split coverage is decided by ``columnar_split_ready``, the Rust probe whose
+    own docstring calls itself "the single source of truth" for this question --
+    and which `_spec_ready` already consults for a splitter appearing as a
+    terminal op. This function briefly carried a Python-side table of supported
+    methods instead; that is a second source of truth, and it can only ever drift
+    from the kernel that does the work.
+
+    ``native_can(nm, "split")`` guards an OLD wheel that predates ``apply_split``.
+    On that skew we DECLINE, which routes to polars and raises an actionable
+    ImportError on a polars-free install. We do not fall back to a Python split:
+    a silently slower path is the failure mode this whole change exists to remove.
+    """
+    splits = config.splits or []
+    if not splits:
+        return False
+    nm = native_module()
+    if not native_can(nm, "split"):
+        return True
+    return not all(
+        nm.columnar_split_ready(_split_ops_spec(s.method)) for s in splits
+    )
+
+
+
+def _frame_level_blocked_whole_file(config) -> bool:
+    """The STRICTER rule, for the whole-file Rust CSV route.
+
+    That path runs read -> transform -> write entirely in Rust, so there is no
+    Python step in which to apply frame ops. `_frame_level_blocked` was loosened
+    to only block `splits` because the in-memory paths now apply the rest via
+    `_apply_frame_ops`; reusing it here would have let a config carrying a
+    rename take the Rust route and SILENTLY DROP the rename -- no error, just
+    output missing the operation. Keep every frame-level op blocking here until
+    the Rust path can express them.
+    """
     return bool(
         config.splits or config.renames or config.drop or config.filters or config.dedup
     )
 
 
+def _apply_frame_ops(frame, config, manifest=None):
+    """renames / drop / filters / dedup on ANY :class:`Frame` backend.
+
+    Backend-generic on purpose. `_frame_level_blocked` used to decline these
+    configs, so every code path was protected by that one guard; removing it
+    means every path that can now receive such a config has to apply them. The
+    `transform_df` boundary is one such path, and wiring only the dict-based
+    entry point silently DROPPED the rename there -- caught by
+    test_columnar_declines_unsupported_config, which had asserted the renamed
+    column exists.
+
+    Applied in the SAME ORDER as engine/transformer.py -- splits, renames,
+    drop, filters, dedup -- because they do not commute: a rename before a drop
+    names a different column than a drop before a rename, and a split creates
+    columns a later rename may target.
+    """
+    frame = _apply_splits(frame, config)
+
+    for old_name, new_name in (config.renames or {}).items():
+        if old_name in frame.columns:
+            frame = frame.rename({old_name: new_name})
+
+    drop_cols = [c for c in (config.drop or []) if c in frame.columns]
+    if drop_cols:
+        frame = frame.drop(drop_cols)
+
+    for filt in (config.filters or []):
+        if filt.column not in frame.columns:
+            continue
+        cond = filt.condition
+        if cond == "not_null":
+            frame = frame.filter_not_null(filt.column)
+        elif cond.startswith("after:"):
+            frame = frame.filter_cmp(filt.column, ">", cond.split(":", 1)[1])
+        elif cond.startswith("before:"):
+            frame = frame.filter_cmp(filt.column, "<", cond.split(":", 1)[1])
+        # An unrecognised condition is a NO-OP -- _apply_filter ends in a bare
+        # `return frame`, so keeping every row is the existing contract.
+
+    dedup = getattr(config, "dedup", None)
+    if dedup:
+        dedup_cols = [c for c in dedup.columns if c in frame.columns]
+        if dedup_cols:
+            before = frame.height
+            frame = frame.unique(subset=dedup_cols, keep=dedup.keep)
+            after = frame.height
+            if before != after and manifest is not None:
+                from goldenflow.engine.manifest import TransformRecord
+
+                manifest.add_record(TransformRecord(
+                    column=",".join(dedup_cols),
+                    transform="dedup",
+                    affected_rows=before - after,
+                    total_rows=before,
+                ))
+
+    return frame
+
+
 def _accepted_string(nm) -> frozenset[str]:
     """The owned string kernels this native build accepts: total + parameterized,
     plus the nullable URL/company/email family when it auto-routes them (0.20+)."""
-    if hasattr(nm, "chain_supports_nullable"):
+    if native_can(nm, "nullable_chain"):
         return _OWNED_STRING | _OWNED_NULLABLE
     return _OWNED_STRING
 
@@ -110,28 +342,6 @@ def _spec_string_ready(spec, accepted: frozenset[str]) -> bool:
         if name not in accepted or get_transform(name) is None:
             return False
     return True
-
-
-def _numeric_inmem_ok(nm) -> bool:
-    """The in-memory Column path can run a numeric spec when the kernel exposes the
-    shape probe AND the Column egresses a raw numeric array (``apply_numeric``,
-    native-flow 0.23+). Skew-safe: an older wheel lacks it -> numeric declines to
-    Polars in-memory, no hard error."""
-    col_cls = getattr(nm, "Column", None)
-    return hasattr(nm, "columnar_numeric_ready") and col_cls is not None and hasattr(
-        col_cls, "apply_numeric"
-    )
-
-
-def _split_inmem_ok(nm) -> bool:
-    """The in-memory Column path can run a split spec when the kernel exposes the
-    shape probe AND the Column returns the source + output columns (``apply_split``,
-    native-flow 0.24+). Skew-safe: an older wheel lacks it -> split declines to
-    Polars in-memory."""
-    col_cls = getattr(nm, "Column", None)
-    return hasattr(nm, "columnar_split_ready") and col_cls is not None and hasattr(
-        col_cls, "apply_split"
-    )
 
 
 def _spec_scalar_ready(spec, accepted: frozenset[str]) -> bool:
@@ -236,6 +446,51 @@ def _spec_ready(
     return False
 
 
+def _uncovered_reason(config) -> str:
+    """Say WHICH part of a config the columnar engine cannot run.
+
+    The previous message said only "uncovered ... install polars", which told a
+    user nothing actionable about their own config and pointed at a dependency
+    the project has evicted. These are the real fall-through causes, in the same
+    order the readiness checks apply them.
+    """
+    if config is None:
+        return "zero-config auto-detect produced a config the native path declined"
+    frame_ops = [
+        n for n, v in (
+            ("splits", getattr(config, "splits", None)),
+            ("renames", getattr(config, "renames", None)),
+            ("drop", getattr(config, "drop", None)),
+            ("filters", getattr(config, "filters", None)),
+            ("dedup", getattr(config, "dedup", None)),
+        ) if v
+    ]
+    if frame_ops:
+        return (
+            "it uses frame-level operations the columnar engine does not "
+            f"implement yet ({', '.join(frame_ops)})"
+        )
+    nm = native_module()
+    if nm is None:
+        return "the goldenflow-native kernel is not installed"
+    if not native_columns_ready(nm):
+        return (
+            "the installed goldenflow-native wheel predates the in-memory "
+            "columnar core (no Column.from_pylist) -- upgrade goldenflow-native"
+        )
+    accepted = _accepted_string(nm)
+    numeric_ok = native_can(nm, "numeric")
+    split_ok = native_can(nm, "split")
+    unsupported = [
+        " -> ".join(spec.ops)
+        for spec in (getattr(config, "transforms", None) or [])
+        if not _spec_ready(nm, spec, accepted, numeric_ok, split_ok, True)
+    ]
+    if unsupported:
+        return f"these transform chains have no native kernel: {unsupported}"
+    return "the native readiness probe declined the config"
+
+
 def config_is_columnar_ready(config) -> bool:
     """A config runs on the IN-MEMORY columnar engine iff EVERY spec is an owned
     string run, a NUMERIC shape (wave 3d, via ``Column.apply_numeric``), or a SPLIT
@@ -245,11 +500,11 @@ def config_is_columnar_ready(config) -> bool:
     if _frame_level_blocked(config) or not config.transforms:
         return False
     nm = native_module()
-    if nm is None or not hasattr(nm, "apply_chain_str_list"):
+    if not native_can(nm, "string_chain"):
         return False
     accepted = _accepted_string(nm)
-    numeric_ok = _numeric_inmem_ok(nm)
-    split_ok = _split_inmem_ok(nm)
+    numeric_ok = native_can(nm, "numeric")
+    split_ok = native_can(nm, "split")
     scalar_ok = native_columns_ready(nm)  # scalar-chain needs from_pylist (4b)
     return all(
         _spec_ready(nm, spec, accepted, numeric_ok, split_ok, scalar_ok)
@@ -263,14 +518,14 @@ def columnar_file_ready(config) -> bool:
     f64*``) or SPLIT (``string* splitter``) shape, validated by the native probes
     (the single source of truth). When true, a CSV runs read->transform->write
     entirely in Rust — no ``pl.DataFrame``, no Polars, no pyarrow."""
-    if _frame_level_blocked(config) or not config.transforms:
+    if _frame_level_blocked_whole_file(config) or not config.transforms:
         return False
     nm = native_module()
-    if nm is None or not hasattr(nm, "transform_csv") or not hasattr(nm, "apply_chain_str_list"):
+    if not native_can(nm, "csv"):
         return False
     accepted = _accepted_string(nm)
-    numeric_ok = hasattr(nm, "columnar_numeric_ready")
-    split_ok = hasattr(nm, "columnar_split_ready")
+    numeric_ok = native_can(nm, "numeric_shape")
+    split_ok = native_can(nm, "split_shape")
     return all(_spec_ready(nm, spec, accepted, numeric_ok, split_ok) for spec in config.transforms)
 
 
@@ -330,7 +585,7 @@ def _stringify_for_column(col_list, nm) -> list:
     float format) so a numeric-INPUT column round-trips and its manifest matches. Falls
     back to ``_cast_utf8`` when the kernel predates ``format_f64``."""
     float_idx = [i for i, v in enumerate(col_list) if type(v) is float]
-    if not float_idx or not hasattr(nm, "format_f64"):
+    if not float_idx or not native_can(nm, "format_f64"):
         return [_cast_utf8(v) for v in col_list]
     fmt = nm.format_f64([col_list[i] for i in float_idx])
     out = [_cast_utf8(v) for v in col_list]
@@ -349,13 +604,18 @@ def transform(df, config, source: str = "<dataframe>"):
     import polars as pl
 
     nm = native_module()
-    if nm is not None and hasattr(nm, "Column"):
+    if native_can(nm, "arrow_ingress"):
         return _transform_via_columns(df, config, source, nm, pl)
     # Fallback: the Phase 1 list path (marshals, but Polars-free execution).
     names = [s.column for s in config.transforms if s.column in df.columns]
     cols = {c: df[c].to_list() for c in names}
     new_cols, manifest = transform_columns(cols, config, source=source)
     out = df.with_columns([pl.Series(n, v) for n, v in new_cols.items()])
+    # The pl.DataFrame boundary needs the frame ops too: _frame_level_blocked
+    # no longer keeps these configs away from this path.
+    from goldenflow.engine.frame import PolarsFrame
+    
+    out = _apply_frame_ops(PolarsFrame(out), config, manifest).native
     return out, manifest
 
 
@@ -364,8 +624,8 @@ def _transform_via_columns(df, config, source, nm, pl):
     C-Data interface, run the owned chain on the Rust-held Arrow buffer, egress back.
     No list marshaling, no pyarrow."""
     manifest = Manifest(source=source)
-    numeric_ok = _numeric_inmem_ok(nm)
-    split_ok = _split_inmem_ok(nm)
+    numeric_ok = native_can(nm, "numeric")
+    split_ok = native_can(nm, "split")
     out_series = []
 
     def _add_records(column, records):
@@ -502,6 +762,13 @@ def _transform_via_columns(df, config, source, nm, pl):
         series = imported.to_series(0) if isinstance(imported, pl.DataFrame) else imported
         out_series.append(series.alias(spec.column))
     out = df.with_columns(out_series) if out_series else df
+    # Frame ops on this path too. `_frame_level_blocked` no longer keeps
+    # rename/drop/filter/dedup configs away from the columnar engine, so
+    # every return that can now receive one has to apply them -- wiring
+    # only some of them silently DROPS the op.
+    from goldenflow.engine.frame import PolarsFrame as _PF
+    
+    out = _apply_frame_ops(_PF(out), config, manifest).native
     return out, manifest
 
 
@@ -677,10 +944,16 @@ def transform_columns_public(data, config):
             return ColumnarResult(columns=dict(data), manifest=Manifest(source="<dataframe>"))
         if config_is_columnar_ready(built):
             cols, manifest = transform_columns_native(data, built)
+            from goldenflow.engine.frame import ColumnarFrame
+
+            cols = _apply_frame_ops(ColumnarFrame(cols), built, manifest).native
             return ColumnarResult(columns=cols, manifest=manifest)
 
     if config is not None and native_ok and config_is_columnar_ready(config):
         cols, manifest = transform_columns_native(data, config)
+        from goldenflow.engine.frame import ColumnarFrame
+
+        cols = _apply_frame_ops(ColumnarFrame(cols), config, manifest).native
         return ColumnarResult(columns=cols, manifest=manifest)
 
     # Uncovered config (or zero-config auto-detect) -> the Polars engine, via the
@@ -693,10 +966,15 @@ def transform_columns_public(data, config):
         df = pl.DataFrame(data)
         result = goldenflow.transform_df(df, config=config)
     except ImportError as e:  # pragma: no cover - exercised only without polars
+        # Do NOT tell the user to install polars. polars is an evicted optional
+        # extra, and "install the thing we removed" is not an answer -- it is
+        # the gap restated as an instruction. Name what is actually unsupported
+        # instead, so the message points at work on THIS engine.
         raise ImportError(
-            "This transform needs the Polars backend for the config given "
-            "(uncovered by the native columnar engine, or zero-config auto-detect). "
-            "Install it with: pip install goldenflow[polars]"
+            "This config is not covered by the polars-free columnar engine: "
+            + _uncovered_reason(config)
+            + ". The columnar engine is the supported path; the polars engine "
+            "is a legacy fallback and is not present on a default install."
         ) from e
     return ColumnarResult(
         columns=result.df.to_dict(as_series=False), manifest=result.manifest
@@ -708,8 +986,7 @@ def native_columns_ready(nm) -> bool:
     native `Column` can ingest a Python list (`from_pylist`) — plus the string /
     numeric / split methods already gated by their own probes. A pre-0.25 wheel lacks
     `from_pylist`, so the caller stays on the Polars-frame path."""
-    col_cls = getattr(nm, "Column", None)
-    return col_cls is not None and hasattr(col_cls, "from_pylist")
+    return native_can(nm, "columns")
 
 
 def transform_columns_native(columns, config, source: str = "<dataframe>"):
@@ -773,7 +1050,7 @@ def transform_columns_native(columns, config, source: str = "<dataframe>"):
         col = nm.Column.from_pylist(_stringify_for_column(col_list, nm))
 
         # Split (string* splitter): source kept, fixed-name outputs appended.
-        if hasattr(nm, "columnar_split_ready") and nm.columnar_split_ready(ops_spec):
+        if native_can(nm, "split") and nm.columnar_split_ready(ops_spec):
             src_col, new_cols, records = col.apply_split(ops_spec)
             for name, affected, total, before, after in records:
                 manifest.add_record(TransformRecord(
@@ -786,7 +1063,7 @@ def transform_columns_native(columns, config, source: str = "<dataframe>"):
             continue
 
         # Numeric (string* parser f64*): egress the raw Int64/Float64 as int/float.
-        if hasattr(nm, "columnar_numeric_ready") and nm.columnar_numeric_ready(ops_spec):
+        if native_can(nm, "numeric") and nm.columnar_numeric_ready(ops_spec):
             num_col, records = col.apply_numeric(ops_spec)
             for name, affected, total, before, after in records:
                 manifest.add_record(TransformRecord(

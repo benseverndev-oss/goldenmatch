@@ -24,9 +24,9 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from goldenmatch._polars_lazy import pl
 from goldenmatch.core.ann_blocker import ANNBlocker
 from goldenmatch.core.embedder import get_embedder
+from goldenmatch.core.frame import to_frame
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +47,49 @@ class RetrievedRecord:
         }
 
 
+def _validated_frame(df, column: str, what: str):
+    """Seam-normalise ``df`` and check ``column`` exists.
+
+    Both retrievers took a ``pl.DataFrame`` and asked ``column not in df.columns``.
+    That is a seam trap rather than a typo: polars' ``.columns`` is a list of
+    NAMES, pyarrow's is a list of ChunkedArrayS. Once MatchEngine started handing
+    these functions an arrow table the membership test compared a name against
+    arrays, so every lookup "failed" -- and the error message then printed the
+    array CONTENTS, which is what the MCP and a2a retrieval tools reported.
+    """
+    frame = to_frame(df)
+    if column not in frame.columns:
+        raise ValueError(
+            f"{what}: column {column!r} not in dataframe (have {frame.columns})"
+        )
+    return frame
+
+
+def _filtered_rows(frame, column: str, filters: dict | None):
+    """``(values, row_ids, rows, height)``, or None when nothing is left to rank.
+
+    Equality filters go through ``filter_eq`` instead of a composed ``pl.Expr``,
+    so this runs on either backend.
+    """
+    if frame.height == 0:
+        return None
+    for col, val in (filters or {}).items():
+        if col not in frame.columns:
+            return None
+        frame = frame.filter_eq(col, val)
+    if frame.height == 0:
+        return None
+    values = ["" if v is None else str(v) for v in frame.utf8_values(column)]
+    rows = frame.to_dicts()
+    if "__row_id__" in frame.columns:
+        row_ids = [int(r["__row_id__"]) for r in rows]
+    else:
+        row_ids = list(range(frame.height))
+    return values, row_ids, rows, frame.height
+
+
 def retrieve_similar_records(
-    df: pl.DataFrame,
+    df: Any,  # any Frame-able: pl.DataFrame or pa.Table (routed via to_frame)
     query: str,
     column: str,
     *,
@@ -85,29 +126,15 @@ def retrieve_similar_records(
     Raises:
         ValueError: if ``column`` is not in ``df``.
     """
-    if column not in df.columns:
-        raise ValueError(
-            f"retrieve_similar_records: column {column!r} not in dataframe "
-            f"(have {df.columns})"
-        )
-    if not query or df.is_empty():
+    frame = _validated_frame(df, column, "retrieve_similar_records")
+    if not query:
         return []
-
-    work = df
-    if filters:
-        cond: pl.Expr | None = None
-        for col, val in filters.items():
-            if col not in work.columns:
-                return []
-            pred = pl.col(col) == val
-            cond = pred if cond is None else (cond & pred)
-        if cond is not None:
-            work = work.filter(cond)
-    if work.is_empty():
+    prepared = _filtered_rows(frame, column, filters)
+    if prepared is None:
         return []
+    values, row_ids, rows, height = prepared
 
     emb = embedder if embedder is not None else get_embedder(model)
-    values = ["" if v is None else str(v) for v in work[column].to_list()]
     try:
         corpus = emb.embed_column(values, cache_key=f"retrieve:{column}:{hash(tuple(values))}")
         q_vec = emb.embed_column([str(query)], cache_key=f"retrieve_q:{hash(str(query))}")
@@ -119,17 +146,11 @@ def retrieve_similar_records(
     blocker.build_index(corpus)
     neighbors = blocker.query_one(q_vec[0])  # [(position, cosine_score), ...] desc
 
-    if "__row_id__" in work.columns:
-        row_ids = [int(r) for r in work["__row_id__"].to_list()]
-    else:
-        row_ids = list(range(work.height))
-    rows = work.to_dicts()
-
     out: list[RetrievedRecord] = []
     for pos, score in neighbors:
         if score < threshold:
             continue
-        if pos < 0 or pos >= work.height:
+        if pos < 0 or pos >= height:
             continue
         record = {k2: v2 for k2, v2 in rows[pos].items() if not k2.startswith("__")}
         out.append(RetrievedRecord(row_id=row_ids[pos], score=float(score), record=record))
@@ -169,7 +190,7 @@ def _fuzzy_extract(
 
 
 def retrieve_similar_fuzzy(
-    df: pl.DataFrame,
+    df: Any,  # any Frame-able: pl.DataFrame or pa.Table (routed via to_frame)
     query: str,
     column: str,
     *,
@@ -200,40 +221,21 @@ def retrieve_similar_fuzzy(
     Raises:
         ValueError: if ``column`` is not in ``df`` or ``scorer`` is unknown.
     """
-    if column not in df.columns:
-        raise ValueError(
-            f"retrieve_similar_fuzzy: column {column!r} not in dataframe (have {df.columns})"
-        )
+    frame = _validated_frame(df, column, "retrieve_similar_fuzzy")
     if scorer not in _FUZZY_SCORERS:
         raise ValueError(f"retrieve_similar_fuzzy: scorer must be one of {_FUZZY_SCORERS}, got {scorer!r}")
-    if not query or df.is_empty():
+    if not query:
         return []
-
-    work = df
-    if filters:
-        cond: pl.Expr | None = None
-        for col, val in filters.items():
-            if col not in work.columns:
-                return []
-            pred = pl.col(col) == val
-            cond = pred if cond is None else (cond & pred)
-        if cond is not None:
-            work = work.filter(cond)
-    if work.is_empty():
+    prepared = _filtered_rows(frame, column, filters)
+    if prepared is None:
         return []
+    values, row_ids, rows, height = prepared
 
-    values = ["" if v is None else str(v) for v in work[column].to_list()]
     ranked = _fuzzy_extract(str(query), values, scorer, threshold, k)
-
-    if "__row_id__" in work.columns:
-        row_ids = [int(r) for r in work["__row_id__"].to_list()]
-    else:
-        row_ids = list(range(work.height))
-    rows = work.to_dicts()
 
     out: list[RetrievedRecord] = []
     for pos, score in ranked:
-        if pos < 0 or pos >= work.height:
+        if pos < 0 or pos >= height:
             continue
         record = {k2: v2 for k2, v2 in rows[pos].items() if not k2.startswith("__")}
         out.append(RetrievedRecord(row_id=row_ids[pos], score=float(score), record=record))

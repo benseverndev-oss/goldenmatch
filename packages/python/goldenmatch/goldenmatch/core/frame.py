@@ -257,6 +257,12 @@ class Frame(Protocol):
     ) -> Frame: ...
     # D5c: row-dict projection (probabilistic's select(cols).to_dicts()).
     def select_dicts(self, cols: Sequence[str]) -> list[dict]: ...
+    # Whole-frame row dicts. `to_dicts()` is polars-only, so a surface that read
+    # a frame straight off MatchEngine broke the moment that frame became arrow
+    # (`'pyarrow.lib.Table' object has no attribute 'to_dicts'` -- the REST API
+    # and 10 MCP tools). Routing it through the seam is what makes the backend
+    # swap invisible to the caller, which is the point of the seam.
+    def to_dicts(self) -> list[dict]: ...
     def evaluate_validation_rule(
         self, column: str, rule_type: str, params: dict
     ) -> Column: ...
@@ -834,6 +840,9 @@ class PolarsFrame:
     def select_dicts(self, cols: Sequence[str]) -> list[dict]:
         # probabilistic.py row_lookup build: select(cols).to_dicts().
         return self._df.select(list(cols)).to_dicts()
+
+    def to_dicts(self) -> list[dict]:
+        return self._df.to_dicts()
 
     def evaluate_validation_rule(
         self, column: str, rule_type: str, params: dict
@@ -1430,9 +1439,26 @@ class ArrowFrame:
         return ArrowFrame(self._tbl.append_column(name, arr))
 
     def with_literal_column(self, name: str, value: Any) -> ArrowFrame:
+        """Add or REPLACE a constant column.
+
+        Replace, not append, because that is what the polars side of this seam
+        does: ``with_columns(pl.lit(value).alias(name))`` overwrites a column of
+        the same name. ``append_column`` instead produced a SECOND field, and
+        the table then raised ``Field "x" exists 2 times in schema`` on the next
+        lookup -- so the same seam call meant different things on the two
+        backends, which is the divergence the seam exists to remove.
+
+        Reachable in practice: ``run_dedupe_df`` stamps ``__source__`` onto its
+        input, so any arrow frame that already carried one blew up here.
+        """
         import pyarrow as pa
 
-        return ArrowFrame(self._tbl.append_column(name, pa.array([value] * self._tbl.num_rows)))
+        arr = pa.array([value] * self._tbl.num_rows)
+        if name in self._tbl.column_names:
+            return ArrowFrame(
+                self._tbl.set_column(self._tbl.column_names.index(name), name, arr)
+            )
+        return ArrowFrame(self._tbl.append_column(name, arr))
 
     def group_partitions(self, key: str) -> list[tuple[Any, ArrowFrame]]:
         # Hash-grouped, first-appearance order, correct on UNSORTED input
@@ -1773,6 +1799,9 @@ class ArrowFrame:
 
     def select_dicts(self, cols: Sequence[str]) -> list[dict]:
         return self._tbl.select(list(cols)).to_pylist()
+
+    def to_dicts(self) -> list[dict]:
+        return self._tbl.to_pylist()
 
     def evaluate_validation_rule(
         self, column: str, rule_type: str, params: dict

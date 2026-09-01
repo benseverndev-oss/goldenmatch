@@ -472,14 +472,27 @@ def format_profile_report(profile: dict, df: pl.DataFrame | None = None) -> str:
         console.print("[green]No issues detected.[/green]")
 
     # ── Data sample ───────────────────────────────────────────────────
-    if df is not None and df.height > 0:
-        console.print()
-        sample = df.head(5)
-        sample_table = Table(title="Data Sample (first 5 rows)", show_lines=True)
-        for col in sample.columns:
-            sample_table.add_column(col)
-        for row in sample.iter_rows():
-            sample_table.add_row(*(str(v) if v is not None else "[dim]null[/dim]" for v in row))
-        console.print(sample_table)
+    if df is not None:
+        # Through the seam: `head`/`iter_rows` are polars-only, so passing an
+        # ArrowFrame here raised AttributeError. That is reachable from
+        # `goldenmatch profile --verbose` on a default (polars-free) install,
+        # where the arrow lane is the ONLY lane.
+        from goldenmatch.core.frame import to_frame
+
+        _f = to_frame(df)
+        if _f.height > 0:
+            console.print()
+            cols = list(_f.columns)
+            sample_table = Table(title="Data Sample (first 5 rows)", show_lines=True)
+            for col in cols:
+                sample_table.add_column(col)
+            for row in _f.select_dicts(cols)[:5]:
+                sample_table.add_row(
+                    *(
+                        str(row[c]) if row.get(c) is not None else "[dim]null[/dim]"
+                        for c in cols
+                    )
+                )
+            console.print(sample_table)
 
     return buf.getvalue()

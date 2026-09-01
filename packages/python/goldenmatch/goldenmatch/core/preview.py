@@ -8,7 +8,7 @@ from __future__ import annotations
 from rich.console import Console
 from rich.table import Table
 
-from goldenmatch._polars_lazy import pl
+from goldenmatch.core.frame import to_frame
 from goldenmatch.tui.engine import EngineStats
 
 
@@ -38,7 +38,7 @@ def format_preview_stats(stats: EngineStats) -> str:
 
 
 def format_preview_clusters(
-    clusters: dict, data: pl.DataFrame, max_clusters: int = 10
+    clusters: dict, data=None, max_clusters: int = 10
 ) -> str:
     """Show top N clusters sorted by size descending."""
     console = Console(record=True, width=120)
@@ -57,17 +57,21 @@ def format_preview_clusters(
     sorted_clusters = sorted_clusters[:max_clusters]
 
     # Determine display columns (first 6 non-__ columns)
-    display_cols = [c for c in data.columns if not c.startswith("__")][:6]
+    # Through the seam: MatchEngine.data is a pa.Table now, and pyarrow's
+    # `.columns` is a list of ChunkedArrayS where polars' is a list of NAMES --
+    # so `c.startswith("__")` raised AttributeError on every `--preview` run.
+    frame = to_frame(data)
+    display_cols = [c for c in frame.columns if not c.startswith("__")][:6]
 
     for cluster_id, cluster_info in sorted_clusters:
         member_ids = cluster_info["members"]
-        member_df = data.filter(pl.col("__row_id__").is_in(member_ids))
+        member_frame = frame.filter_in("__row_id__", member_ids)
 
         table = Table(title=f"Cluster {cluster_id} (size: {cluster_info['size']})")
         for col in display_cols:
             table.add_column(col)
 
-        for row in member_df.iter_rows(named=True):
+        for row in member_frame.to_dicts():
             table.add_row(*[str(row.get(col, "")) for col in display_cols])
 
         console.print(table)
@@ -75,17 +79,18 @@ def format_preview_clusters(
     return console.export_text()
 
 
-def format_preview_golden(
-    golden: pl.DataFrame | None, max_records: int = 10
-) -> str:
-    """Show top N golden records in a Rich table."""
+def format_preview_golden(golden=None, max_records: int = 10) -> str:
+    """Show top N golden records in a Rich table.
+
+    ``golden`` is any Frame-able (pl.DataFrame or pa.Table), routed via the seam.
+    """
     console = Console(record=True, width=120)
 
-    if golden is None or golden.height == 0:
+    if golden is None or to_frame(golden).height == 0:
         console.print("[dim]No golden records found.[/dim]")
         return console.export_text()
 
-    display_df = golden.head(max_records)
+    display_frame = to_frame(golden).head(max_records)
 
     table = Table(title="Golden Records")
     # Always include cluster_id and confidence first
@@ -93,13 +98,13 @@ def format_preview_golden(
     table.add_column("__golden_confidence__")
 
     other_cols = [
-        c for c in display_df.columns
+        c for c in display_frame.columns
         if c not in ("__cluster_id__", "__golden_confidence__")
     ]
     for col in other_cols:
         table.add_column(col)
 
-    for row in display_df.iter_rows(named=True):
+    for row in display_frame.to_dicts():
         values = [
             str(row.get("__cluster_id__", "")),
             f"{row.get('__golden_confidence__', 0.0):.2f}",

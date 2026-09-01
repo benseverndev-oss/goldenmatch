@@ -242,6 +242,7 @@
             "goldenmatch.config.schemas",
             "goldenmatch.core.autoconfig",
             "goldenmatch.core.explainer",
+            "goldenmatch.core.frame",
             "goldenmatch.core.io_arrow",
             "goldenmatch.core.memory.store",
             "goldenmatch.core.recall_certificate",
@@ -498,7 +499,8 @@
           "imports": [
             "goldenmatch.cli.dedupe",
             "goldenmatch.core.anomaly",
-            "goldenmatch.core.ingest"
+            "goldenmatch.core.io_arrow",
+            "goldenmatch.output._csv_arrow"
           ]
         },
         {
@@ -579,6 +581,7 @@
           "imports": [
             "goldenmatch.config.schemas",
             "goldenmatch.core.dashboard",
+            "goldenmatch.core.frame",
             "goldenmatch.core.graph",
             "goldenmatch.core.report",
             "goldenmatch.tui.app",
@@ -633,6 +636,7 @@
             "goldenmatch.config.loader",
             "goldenmatch.config.schemas",
             "goldenmatch.core.explain",
+            "goldenmatch.core.frame",
             "goldenmatch.core.lineage",
             "goldenmatch.core.probabilistic",
             "goldenmatch.tui.engine"
@@ -707,7 +711,8 @@
           "imports": [
             "goldenmatch._exclusions_schema",
             "goldenmatch.config.loader",
-            "goldenmatch.core.incremental"
+            "goldenmatch.core.incremental",
+            "goldenmatch.output._csv_arrow"
           ]
         },
         {
@@ -736,9 +741,11 @@
             "goldenmatch.cli.dedupe",
             "goldenmatch.config.loader",
             "goldenmatch.core.autofix",
-            "goldenmatch.core.ingest",
+            "goldenmatch.core.frame",
+            "goldenmatch.core.io_arrow",
             "goldenmatch.core.pairs",
-            "goldenmatch.core.pipeline"
+            "goldenmatch.core.pipeline",
+            "goldenmatch.output._csv_arrow"
           ]
         },
         {
@@ -831,6 +838,7 @@
             "goldenmatch.core.autofix",
             "goldenmatch.core.block_analyzer",
             "goldenmatch.core.ingest",
+            "goldenmatch.core.io_arrow",
             "goldenmatch.core.profiler",
             "goldenmatch.core.quality_exclusions",
             "goldenmatch.prefs.store",
@@ -925,6 +933,9 @@
           "imports": [
             "goldenmatch._exclusions_schema",
             "goldenmatch.core.autoconfig",
+            "goldenmatch.core.frame",
+            "goldenmatch.core.io_arrow",
+            "goldenmatch.output._csv_arrow",
             "goldenmatch.pprl.autoconfig",
             "goldenmatch.pprl.protocol"
           ]
@@ -961,7 +972,10 @@
           ],
           "imports": [
             "goldenmatch.core.cluster",
-            "goldenmatch.core.rollback"
+            "goldenmatch.core.frame",
+            "goldenmatch.core.io_arrow",
+            "goldenmatch.core.rollback",
+            "goldenmatch.output._csv_arrow"
           ]
         },
         {
@@ -3576,11 +3590,10 @@
           "imports": [
             "goldenmatch.config.schemas",
             "goldenmatch.core.autofix",
-            "goldenmatch.core.ingest",
+            "goldenmatch.core.frame",
+            "goldenmatch.core.io_arrow",
             "goldenmatch.core.match_one",
-            "goldenmatch.core.matchkey",
-            "goldenmatch.core.scorer",
-            "goldenmatch.core.standardize"
+            "goldenmatch.core.scorer"
           ]
         },
         {
@@ -3644,6 +3657,7 @@
             "_read_excel_arrow",
             "_read_parquet_arrow",
             "_temporal_override_types",
+            "read_files_arrow",
             "read_table_arrow"
           ],
           "imports": [
@@ -3862,9 +3876,9 @@
             "match_one"
           ],
           "imports": [
-            "goldenmatch._polars_lazy",
             "goldenmatch.config.schemas",
             "goldenmatch.core.candidate_store",
+            "goldenmatch.core.frame",
             "goldenmatch.core.scorer"
           ]
         },
@@ -4199,7 +4213,7 @@
             "format_score_histogram"
           ],
           "imports": [
-            "goldenmatch._polars_lazy",
+            "goldenmatch.core.frame",
             "goldenmatch.tui.engine"
           ]
         },
@@ -4524,15 +4538,17 @@
           "purpose": "Semantic retrieval -- find records similar to a query string (#1089).",
           "defines": [
             "RetrievedRecord",
+            "_filtered_rows",
             "_fuzzy_extract",
+            "_validated_frame",
             "retrieve_similar_fuzzy",
             "retrieve_similar_records"
           ],
           "imports": [
-            "goldenmatch._polars_lazy",
             "goldenmatch.core",
             "goldenmatch.core.ann_blocker",
-            "goldenmatch.core.embedder"
+            "goldenmatch.core.embedder",
+            "goldenmatch.core.frame"
           ]
         },
         {
@@ -4616,7 +4632,8 @@
           ],
           "imports": [
             "goldenmatch._polars_lazy",
-            "goldenmatch.core"
+            "goldenmatch.core",
+            "goldenmatch.core.frame"
           ]
         },
         {
@@ -6707,8 +6724,10 @@
           "purpose": "Agent-level MCP tools for autonomous entity resolution.",
           "defines": [
             "_dispatch",
+            "_h",
             "_persist_session",
             "_serialize_result",
+            "_to_frame",
             "_write_agent_correction",
             "_write_frame_csv",
             "handle_agent_tool"
@@ -6723,6 +6742,7 @@
             "goldenmatch.core.autoconfig",
             "goldenmatch.core.frame",
             "goldenmatch.core.incremental",
+            "goldenmatch.core.io_arrow",
             "goldenmatch.core.memory.corrections",
             "goldenmatch.core.memory.store",
             "goldenmatch.core.quality",
@@ -6884,11 +6904,11 @@
             "goldenmatch.core.domain_registry",
             "goldenmatch.core.evaluate",
             "goldenmatch.core.explainer",
+            "goldenmatch.core.frame",
             "goldenmatch.core.ingest",
             "goldenmatch.core.io_arrow",
             "goldenmatch.core.lineage",
             "goldenmatch.core.match_one",
-            "goldenmatch.core.matchkey",
             "goldenmatch.core.rollback",
             "goldenmatch.core.schema_match",
             "goldenmatch.core.scorer",
@@ -7078,7 +7098,7 @@
             "profile_for_pprl"
           ],
           "imports": [
-            "goldenmatch._polars_lazy",
+            "goldenmatch.core.frame",
             "goldenmatch.core.llm_scorer",
             "goldenmatch.core.scorer",
             "goldenmatch.pprl.protocol",
@@ -7101,8 +7121,8 @@
             "run_pprl"
           ],
           "imports": [
-            "goldenmatch._polars_lazy",
             "goldenmatch.core.cluster",
+            "goldenmatch.core.frame",
             "goldenmatch.core.scorer",
             "goldenmatch.utils.transforms"
           ]
@@ -8502,24 +8522,15 @@
             "MatchEngine"
           ],
           "imports": [
-            "goldenmatch._polars_lazy",
             "goldenmatch.config.schemas",
             "goldenmatch.core.autoconfig",
-            "goldenmatch.core.autofix",
-            "goldenmatch.core.blocker",
             "goldenmatch.core.cluster",
             "goldenmatch.core.frame",
-            "goldenmatch.core.golden",
-            "goldenmatch.core.ingest",
-            "goldenmatch.core.llm_cluster",
-            "goldenmatch.core.llm_scorer",
+            "goldenmatch.core.io_arrow",
             "goldenmatch.core.match_one",
-            "goldenmatch.core.matchkey",
+            "goldenmatch.core.pairs",
             "goldenmatch.core.pipeline",
-            "goldenmatch.core.profiler",
-            "goldenmatch.core.scorer",
-            "goldenmatch.core.standardize",
-            "goldenmatch.core.validate"
+            "goldenmatch.core.profiler"
           ]
         },
         {
@@ -8577,6 +8588,7 @@
             "TriageScreen"
           ],
           "imports": [
+            "goldenmatch.core.frame",
             "goldenmatch.tui.screens.matches_correction_modal"
           ]
         },
@@ -8679,6 +8691,7 @@
             "GoldenTab"
           ],
           "imports": [
+            "goldenmatch.core.frame",
             "goldenmatch.tui.engine",
             "goldenmatch.tui.screens.golden_edit_modal"
           ]
@@ -8692,6 +8705,7 @@
           ],
           "imports": [
             "goldenmatch._polars_lazy",
+            "goldenmatch.core.frame",
             "goldenmatch.tui.engine",
             "goldenmatch.tui.screens.matches_correction_modal",
             "goldenmatch.tui.widgets.threshold_slider"
@@ -11460,24 +11474,28 @@
           "defines": [
             "ColumnarResult",
             "_accepted_string",
+            "_apply_frame_ops",
             "_apply_special",
+            "_apply_splits",
             "_autoconfig_columns",
             "_cast_utf8",
             "_frame_level_blocked",
+            "_frame_level_blocked_whole_file",
             "_is_arrow_frame",
-            "_numeric_inmem_ok",
             "_sample3",
             "_scalar_fn",
             "_spec_ready",
             "_spec_scalar_ready",
             "_spec_special_ready",
             "_spec_string_ready",
-            "_split_inmem_ok",
+            "_split_ops_spec",
             "_stringify_for_column",
             "_transform_via_columns",
+            "_uncovered_reason",
             "columnar_engine_selected",
             "columnar_file_ready",
             "config_is_columnar_ready",
+            "native_can",
             "native_columns_ready",
             "read_csv_columns",
             "read_excel_columns",
@@ -11493,6 +11511,7 @@
             "goldenflow._polars_lazy",
             "goldenflow.config.schema",
             "goldenflow.core._native_loader",
+            "goldenflow.engine.frame",
             "goldenflow.engine.manifest",
             "goldenflow.engine.profiler_bridge",
             "goldenflow.engine.selector",
@@ -11518,6 +11537,7 @@
           "file": "packages/python/goldenflow/goldenflow/engine/frame.py",
           "purpose": "Backend-agnostic columnar container — the seam for evicting Polars as a hard",
           "defines": [
+            "ColumnarFrame",
             "Frame",
             "PolarsFrame",
             "to_frame"

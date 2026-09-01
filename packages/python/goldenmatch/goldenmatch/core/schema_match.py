@@ -11,9 +11,11 @@ Uses column name similarity + value overlap analysis to find mappings.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from goldenmatch._polars_lazy import pl
 from goldenmatch.core import strsim
+from goldenmatch.core.frame import to_frame as _tf
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +47,8 @@ for canonical, aliases in SYNONYMS.items():
 
 
 def auto_map_columns(
-    df_a: pl.DataFrame,
-    df_b: pl.DataFrame,
+    df_a: Any,
+    df_b: Any,
     min_score: float = 0.5,
 ) -> list[dict]:
     """Auto-detect column mappings between two DataFrames with different schemas.
@@ -55,8 +57,12 @@ def auto_map_columns(
         [{"col_a": "full_name", "col_b": "first_name", "score": 0.85, "method": "synonym"},
          {"col_a": "email", "col_b": "contact_email", "score": 0.92, "method": "name_sim"}, ...]
     """
-    cols_a = [c for c in df_a.columns if not c.startswith("__")]
-    cols_b = [c for c in df_b.columns if not c.startswith("__")]
+    # Seam: `.columns` on a pa.Table returns ARRAYS, not names, so this
+    # comparison silently selected nothing rather than raising. Reached from the
+    # `schema_match` MCP tool, which a default install has no polars for.
+    _fa, _fb = _tf(df_a), _tf(df_b)
+    cols_a = [c for c in _fa.columns if not c.startswith("__")]
+    cols_b = [c for c in _fb.columns if not c.startswith("__")]
 
     # Score every (col_a, col_b) pair
     scores: list[tuple[str, str, float, str]] = []
@@ -96,7 +102,7 @@ def auto_map_columns(
 
 def _score_column_pair(
     col_a: str, col_b: str,
-    df_a: pl.DataFrame, df_b: pl.DataFrame,
+    df_a: Any, df_b: Any,
 ) -> tuple[float, str]:
     """Score how likely two columns represent the same field."""
     best_score = 0.0
@@ -139,19 +145,19 @@ def _score_column_pair(
 
 def _value_overlap(
     col_a: str, col_b: str,
-    df_a: pl.DataFrame, df_b: pl.DataFrame,
+    df_a: Any, df_b: Any,
     sample_size: int = 200,
 ) -> float:
     """Compute Jaccard-like overlap between value sets."""
     try:
         vals_a = set(
             str(v).lower().strip()
-            for v in df_a[col_a].head(sample_size).to_list()
+            for v in _tf(df_a).column(col_a).to_list()[:sample_size]
             if v is not None
         )
         vals_b = set(
             str(v).lower().strip()
-            for v in df_b[col_b].head(sample_size).to_list()
+            for v in _tf(df_b).column(col_b).to_list()[:sample_size]
             if v is not None
         )
         if not vals_a or not vals_b:
@@ -165,12 +171,15 @@ def _value_overlap(
 
 def _type_similarity(
     col_a: str, col_b: str,
-    df_a: pl.DataFrame, df_b: pl.DataFrame,
+    df_a: Any, df_b: Any,
 ) -> float:
     """Check if two columns have compatible data types."""
     try:
-        dtype_a = str(df_a[col_a].dtype)
-        dtype_b = str(df_b[col_b].dtype)
+        # semantic_dtype is the cross-backend tag: polars spells String/Utf8
+        # where arrow spells large_string, so a raw dtype string differs by
+        # backend for the same data.
+        dtype_a = _tf(df_a).column(col_a).semantic_dtype()
+        dtype_b = _tf(df_b).column(col_b).semantic_dtype()
 
         numeric_types = {"Int8", "Int16", "Int32", "Int64", "Float32", "Float64", "UInt8", "UInt16", "UInt32", "UInt64"}
         a_numeric = any(t in dtype_a for t in numeric_types)
@@ -187,7 +196,7 @@ def _type_similarity(
 
 def _detect_composites(
     unmapped_a: list[str], unmapped_b: list[str],
-    df_a: pl.DataFrame, df_b: pl.DataFrame,
+    df_a: Any, df_b: Any,
 ) -> list[dict]:
     """Detect composite column mappings (e.g., full_name → first_name + last_name)."""
     composites = []
