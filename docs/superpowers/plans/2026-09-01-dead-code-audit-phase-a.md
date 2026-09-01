@@ -879,77 +879,275 @@ git commit -m "feat(dead-code): TypeScript and Rust candidates alongside the Pyt
 
 ### Task 5: Sweep coverage in the union (A0 complete)
 
+**Context - read this before the steps.** The original version of this task was
+wrong in three ways, each found by running the code rather than reading it. All
+three are corrected below; the steps are the fixed version.
+
+1. **The sweeps do their work in a subprocess.** `run_sweep()` in
+   `scripts/sweep_cli_polars_free.py` invokes every CLI command inside
+   `subprocess.run([sys.executable, probe.py, ...])`, and the MCP twin does the
+   same. Putting `--cov` on the parent pytest process therefore measures the
+   parent, which does almost nothing. The `.dat` file still gets written, so
+   `if-no-files-found: error` is satisfied and the combine succeeds - a green
+   coverage union measuring nil.
+2. **`goldenmatch/mcp/*` is in the coverage `omit` list** in
+   `packages/python/goldenmatch/pyproject.toml`, so the MCP surface cannot be
+   measured under that rcfile at all. The MCP sweep's own module docstring
+   already says as much.
+3. **`parallel` is not set** in `[tool.coverage.run]`, so a child process
+   pointed at that rcfile writes straight to `$COVERAGE_FILE` and clobbers the
+   parent's data.
+
+**Scope decision.** The sweep coverage feeds ONLY the `dead_code` job's combine
+(Task 6). The required gate's combine at `.github/workflows/ci.yml:626-627` is
+NOT touched by this task. Un-omitting `mcp/*` changes what `coverage.xml`
+contains, and that file is read by `check_coverage_floors.py` and
+`check_coverage_baseline.py` - required gates whose curated baseline holds no
+`mcp/` entries. The detector's S2 union is the requirement here; changing the
+headline coverage baseline is a separate change needing its own baseline re-cut.
+
 **Files:**
-- Modify: `.github/workflows/ci.yml:2725-2736` (the two sweep steps in `goldenmatch_nopolars`)
-- Modify: `.github/workflows/ci.yml:623-630` (the combine step)
+- Modify: `scripts/sweep_cli_polars_free.py` (`_probe_source`)
+- Modify: `scripts/sweep_mcp_polars_free.py` (`_probe_source`)
+- Create: `packages/python/goldenmatch/.coveragerc-sweep`
+- Modify: `.github/workflows/ci.yml` (new job only)
+- Test: `scripts/test_sweep_subprocess_coverage.py`
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `coverage_sweep_mcp.dat` and `coverage_sweep_cli.dat` artifacts, merged into the combined `coverage.xml` that Task 4's `--coverage-xml` reads.
+- Produces: a `gm-cov-sweeps` artifact holding `coverage_sweep_cli.dat` and
+  `coverage_sweep_mcp.dat`, each already locally combined into one file. Task 6's
+  `dead_code` job names both in its own combine.
 
-- [ ] **Step 1: Add coverage to the two sweep steps**
+- [ ] **Step 1: Write the failing test**
 
-In `.github/workflows/ci.yml`, change the MCP sweep step's `run:` to:
+Create `scripts/test_sweep_subprocess_coverage.py`. This test is the point of the
+task: it proves coverage actually crosses the subprocess boundary.
 
-```yaml
-        run: |
-          COVERAGE_FILE=coverage_sweep_mcp.dat uv run --no-sync python -m pytest \
-            scripts/test_mcp_polars_free_sweep.py -q --noconftest \
-            --cov=goldenmatch --cov-report=
+```python
+"""Coverage must cross the sweep's subprocess boundary.
+
+The sweeps run every command in a child process. Without an explicit
+process-startup hook the parent's coverage records nothing, and the resulting
+.dat file is a green artifact measuring nil.
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
+
+SCRIPTS = Path(__file__).parent
+
+
+def test_probe_source_starts_coverage_in_the_child():
+    """Both sweeps must inject the startup hook into their generated probe."""
+    sys.path.insert(0, str(SCRIPTS))
+    from sweep_cli_polars_free import _probe_source as cli_probe
+    from sweep_mcp_polars_free import _probe_source as mcp_probe
+
+    for name, src in (("cli", cli_probe()), ("mcp", mcp_probe())):
+        assert "COVERAGE_PROCESS_START" in src, f"{name} probe has no coverage hook"
+        assert "coverage.process_startup()" in src, f"{name} probe never starts coverage"
+
+
+def test_a_child_process_actually_records_coverage(tmp_path):
+    """End-to-end: a child importing goldenmatch must produce its own data file."""
+    rc = tmp_path / "rc"
+    rc.write_text("[run]\nsource = goldenmatch\nparallel = True\n", encoding="utf-8")
+    child = tmp_path / "child.py"
+    child.write_text(
+        textwrap.dedent(
+            """
+            import os
+            if os.environ.get("COVERAGE_PROCESS_START"):
+                import coverage
+                coverage.process_startup()
+            import goldenmatch.core.frame  # noqa: F401
+            """
+        ),
+        encoding="utf-8",
+    )
+    parent = tmp_path / "parent.py"
+    parent.write_text(
+        "import subprocess, sys\nsubprocess.run([sys.executable, sys.argv[1]], check=True)\n",
+        encoding="utf-8",
+    )
+    env = dict(os.environ)
+    env["COVERAGE_FILE"] = str(tmp_path / "c.dat")
+    env["COVERAGE_PROCESS_START"] = str(rc)
+    subprocess.run(
+        [sys.executable, "-m", "coverage", "run", "--rcfile", str(rc), str(parent), str(child)],
+        check=True,
+        env=env,
+        cwd=str(tmp_path),
+    )
+    written = sorted(tmp_path.glob("c.dat*"))
+    assert len(written) >= 2, f"expected a parent and a child data file, got {written}"
 ```
 
-and the CLI sweep step's `run:` to:
+- [ ] **Step 2: Run it to verify it fails**
 
-```yaml
-        run: |
-          COVERAGE_FILE=coverage_sweep_cli.dat uv run --no-sync python -m pytest \
-            scripts/test_cli_polars_free_sweep.py -q --noconftest \
-            --cov=goldenmatch --cov-report=
+Run: `python -m pytest scripts/test_sweep_subprocess_coverage.py -q`
+Expected: `test_probe_source_starts_coverage_in_the_child` FAILS - neither probe
+mentions `COVERAGE_PROCESS_START` yet.
+
+- [ ] **Step 3: Inject the startup hook into both probes**
+
+In `scripts/sweep_cli_polars_free.py` and `scripts/sweep_mcp_polars_free.py`, add
+these lines to the generated probe source at the very top of the
+`textwrap.dedent(...)` block - BEFORE the `sys.meta_path` block, so coverage is
+recording before anything is imported:
+
+```python
+        import os
+        if os.environ.get("COVERAGE_PROCESS_START"):
+            import coverage
+            coverage.process_startup()
 ```
 
-- [ ] **Step 2: Upload the two new coverage files**
+Guard on the env var rather than wrapping the import in `try`/`except`. With no
+variable set this is a no-op and the sweeps behave exactly as before; with it set
+but coverage missing it fails loudly, which is right - a silent pass there is the
+failure this whole phase exists to remove.
 
-Add to the same job, after the sweep steps:
+`run_sweep` builds its subprocess environment as `dict(os.environ)`, so
+`COVERAGE_PROCESS_START` is inherited with no further code change. Confirm that
+line still reads `dict(os.environ)` before relying on it.
+
+- [ ] **Step 4: Run the tests again**
+
+Run: `python -m pytest scripts/test_sweep_subprocess_coverage.py -q`
+Expected: PASS, both tests.
+
+- [ ] **Step 5: Add the sweep rcfile**
+
+Create `packages/python/goldenmatch/.coveragerc-sweep`:
+
+```ini
+# Coverage config for the CLI and MCP sweeps ONLY, read by the
+# goldenmatch_sweep_coverage job and by nothing else.
+#
+# Two deliberate differences from [tool.coverage.run] in pyproject.toml:
+#   parallel  the sweeps do their work in a child process, which needs its own
+#             data file or it clobbers the parent's.
+#   omit      mcp/* is omitted in pyproject.toml, and measuring the MCP surface
+#             is the entire reason the MCP sweep runs here.
+#
+# This feeds the dead_code job's combine only. It does NOT feed the coverage
+# floors or baseline gates - those keep reading the pyproject config.
+[run]
+source = goldenmatch
+parallel = True
+omit =
+    goldenmatch/db/*
+    goldenmatch/api/*
+    goldenmatch/tui/screens/*
+    goldenmatch/tui/widgets/*
+```
+
+- [ ] **Step 6: Add the CI job**
+
+Add to `.github/workflows/ci.yml`, gated identically to `python_goldenmatch` so
+it runs exactly when the coverage chain runs. Note the assertion step: it exists
+because a `.dat` that is present but empty is the precise failure this task was
+originally going to ship.
 
 ```yaml
-      - name: Upload sweep coverage
-        uses: actions/upload-artifact@v4
+  # Harvests coverage from the two sweeps, which reach 66 CLI commands and 97 MCP
+  # tools -- surfaces no other job measures. Feeds the dead_code job's combine
+  # ONLY; the coverage floors and baseline gates are unaffected.
+  goldenmatch_sweep_coverage:
+    needs: changes
+    if: needs.changes.outputs.python_goldenmatch == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: CLI sweep under coverage
+        env:
+          COVERAGE_FILE: coverage_sweep_cli.dat
+          COVERAGE_PROCESS_START: packages/python/goldenmatch/.coveragerc-sweep
+        run: |
+          uv run coverage run --rcfile=packages/python/goldenmatch/.coveragerc-sweep \
+            scripts/sweep_cli_polars_free.py
+          uv run coverage combine --rcfile=packages/python/goldenmatch/.coveragerc-sweep
+      - name: MCP sweep under coverage
+        env:
+          COVERAGE_FILE: coverage_sweep_mcp.dat
+          COVERAGE_PROCESS_START: packages/python/goldenmatch/.coveragerc-sweep
+        run: |
+          uv run coverage run --rcfile=packages/python/goldenmatch/.coveragerc-sweep \
+            scripts/sweep_mcp_polars_free.py
+          uv run coverage combine --rcfile=packages/python/goldenmatch/.coveragerc-sweep
+      - name: Prove the sweep coverage is not empty
+        run: uv run python scripts/assert_sweep_coverage.py
+      - uses: actions/upload-artifact@v4
         with:
           name: gm-cov-sweeps
           path: coverage_sweep_*.dat
+          retention-days: 1
           if-no-files-found: error
 ```
 
-`if-no-files-found: error` is deliberate: a silently absent artifact would make the combine quietly weaker, which is exactly the failure this phase exists to prevent.
+Create `scripts/assert_sweep_coverage.py` for that step - a real file rather than
+an inline heredoc, so it is testable and lintable like everything else:
 
-- [ ] **Step 3: Include them in the combine**
+```python
+"""Fail if a sweep coverage file exists but measured nothing.
 
-In the `python_goldenmatch_coverage` job, change the combine command to:
+A present-but-empty .dat combines cleanly and reports success, which is exactly
+how a coverage union comes to measure nil while every check stays green.
+"""
 
-```yaml
-          uv run coverage combine --rcfile=packages/python/goldenmatch/pyproject.toml \
-            coverage_shard1.dat coverage_shard2.dat coverage_shard3.dat \
-            coverage_heavy_1.dat coverage_heavy_2.dat coverage_heavy_3.dat \
-            coverage_sweep_mcp.dat coverage_sweep_cli.dat
+from __future__ import annotations
+
+import sys
+
+import coverage
+
+MIN_FILES = 50
+
+def main() -> int:
+    for name in ("coverage_sweep_cli.dat", "coverage_sweep_mcp.dat"):
+        data = coverage.CoverageData(basename=name)
+        data.read()
+        measured = list(data.measured_files())
+        print(f"{name}: {len(measured)} measured files")
+        if len(measured) < MIN_FILES:
+            print(
+                f"FAIL {name} measured {len(measured)} files, expected >= {MIN_FILES}. "
+                "The subprocess coverage hook is not working.",
+                file=sys.stderr,
+            )
+            return 1
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())
 ```
 
-The download step in that job already uses `pattern: gm-cov-*`, so `gm-cov-sweeps` is collected without further change. Verify that is still true before relying on it.
+Do NOT modify the existing sweep steps in `goldenmatch_nopolars`. Those prove
+polars absence - a different gate with a different purpose.
 
-- [ ] **Step 4: Verify the workflow still parses**
+Do NOT modify the combine at `.github/workflows/ci.yml:626-627`.
+
+- [ ] **Step 7: Verify the workflow still parses**
 
 Run: `python -m pytest scripts/test_workflow_yaml.py -q`
 Expected: PASS. A YAML failure here means the required gate never reports at all.
 
-- [ ] **Step 5: Commit and push, then confirm in CI**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add .github/workflows/ci.yml
-git commit -m "ci: fold the CLI and MCP sweeps into the coverage union"
+git add scripts/sweep_cli_polars_free.py scripts/sweep_mcp_polars_free.py \
+  scripts/test_sweep_subprocess_coverage.py scripts/assert_sweep_coverage.py \
+  packages/python/goldenmatch/.coveragerc-sweep .github/workflows/ci.yml
+git commit -m "ci: harvest real coverage from the CLI and MCP sweeps"
 ```
-
-After CI runs, download the combined `coverage.xml` and confirm coverage rose for at least one module that only the sweeps reach. Record the module name in the PR description as evidence the union is real, not nominal.
-
----
 
 ### Task 6: Report-only CI job, then the ratchet
 
@@ -1022,7 +1220,10 @@ Add to `.github/workflows/ci.yml`, after `python_goldenmatch_coverage`:
 
 ```yaml
   dead_code:
-    needs: [python_goldenmatch_coverage]
+    # goldenmatch_sweep_coverage is a DIRECT dependency: Task 5 deliberately
+    # leaves the required gate's combine untouched, so the sweep artifact does
+    # not arrive through python_goldenmatch_coverage.
+    needs: [python_goldenmatch_coverage, goldenmatch_sweep_coverage]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -1033,13 +1234,24 @@ Add to `.github/workflows/ci.yml`, after `python_goldenmatch_coverage`:
           pattern: gm-cov-*
           merge-multiple: true
       - name: Combine coverage for the dead-code report
+        # coverage_shard1_serial.dat is written and uploaded by the shard job
+        # but is absent from the required gate's combine, so its coverage has
+        # always been discarded. It is included HERE because more coverage can
+        # only remove false candidates, never add one. Deliberately not added to
+        # the gate's own combine, which is out of scope for this phase.
         run: |
           uv run coverage combine --rcfile=packages/python/goldenmatch/pyproject.toml \
             coverage_shard1.dat coverage_shard2.dat coverage_shard3.dat \
+            coverage_shard1_serial.dat \
             coverage_heavy_1.dat coverage_heavy_2.dat coverage_heavy_3.dat \
             coverage_sweep_mcp.dat coverage_sweep_cli.dat
           uv run coverage xml --rcfile=packages/python/goldenmatch/pyproject.toml \
             -o packages/python/goldenmatch/coverage.xml
+      - name: Prove the sweep coverage reached the report
+        # End-to-end proof that the union is real rather than nominal: mcp/* is
+        # omitted by every other coverage config in the repo, so an mcp module
+        # in this coverage.xml can only have come from the MCP sweep.
+        run: uv run python scripts/assert_union_reached_mcp.py packages/python/goldenmatch/coverage.xml
       - name: Detector self-tests
         run: uv run pytest scripts/test_dead_code_liveness.py scripts/test_dead_code_static.py scripts/test_dead_code_allowlist.py scripts/test_dead_code_report.py scripts/test_dead_code_other_langs.py -q
       - name: Dead-code report
@@ -1048,6 +1260,48 @@ Add to `.github/workflows/ci.yml`, after `python_goldenmatch_coverage`:
         run: uv run python -m dead_code.report --coverage-xml packages/python/goldenmatch/coverage.xml
       - name: Ratchet
         run: uv run pytest scripts/test_no_new_dead_code.py -q
+```
+
+Create `scripts/assert_union_reached_mcp.py`:
+
+```python
+"""Fail if the combined coverage.xml never saw the MCP surface.
+
+`goldenmatch/mcp/*` is omitted by the pyproject coverage config, so the only way
+an mcp module reaches this report is through the sweep coverage collected under
+.coveragerc-sweep. Its absence means the union silently degraded to the old
+shard-only coverage -- which would mark every MCP-only module uncovered and turn
+it into a deletion candidate.
+"""
+
+from __future__ import annotations
+
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+
+def main(path: str) -> int:
+    root = ET.parse(Path(path)).getroot()
+    names = [
+        c.get("filename", "")
+        for c in root.iter("class")
+    ]
+    mcp = [n for n in names if "goldenmatch/mcp/" in n.replace("\\", "/")]
+    print(f"{len(names)} measured modules, {len(mcp)} of them under goldenmatch/mcp/")
+    if not mcp:
+        print(
+            "FAIL no goldenmatch/mcp/ module in the combined coverage. The sweep "
+            "coverage did not reach the report; every MCP-only module would now "
+            "read as a dead-code candidate.",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1]))
 ```
 
 The detector self-tests run BEFORE the report in the same job: a detector whose own tests fail must not be believed, and running them here means the report can never be read as authoritative while its classifier is broken.
