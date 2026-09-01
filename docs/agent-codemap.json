@@ -11468,14 +11468,12 @@
           "purpose": "Columnar (Polars-free) transform execution — Phase 1 of the Polars eviction",
           "defines": [
             "ColumnarResult",
-            "_LazySplitTable",
             "_accepted_string",
             "_apply_frame_ops",
             "_apply_special",
             "_apply_splits",
             "_autoconfig_columns",
             "_cast_utf8",
-            "_columnar_split_table",
             "_frame_level_blocked",
             "_frame_level_blocked_whole_file",
             "_is_arrow_frame",
@@ -11487,6 +11485,7 @@
             "_spec_special_ready",
             "_spec_string_ready",
             "_split_inmem_ok",
+            "_split_ops_spec",
             "_stringify_for_column",
             "_transform_via_columns",
             "_uncovered_reason",
@@ -11514,7 +11513,6 @@
             "goldenflow.engine.selector",
             "goldenflow.transforms",
             "goldenflow.transforms._chain",
-            "goldenflow.transforms.address",
             "goldenflow.transforms.auto_correct",
             "goldenflow.transforms.names"
           ]

@@ -125,25 +125,35 @@ SPLIT_DATA = {
 }
 
 
-@pytest.mark.parametrize("label", sorted(SPLIT_CASES))
-def test_columnar_splits_match_the_polars_engine(label):
-    """Byte-for-byte, INCLUDING when the polars side uses the native kernel.
-
-    The columnar split calls the same pure-Python helper the registered
-    transform falls back to -- the one its docstring calls "the byte-exact
-    reference". This asserts that claim rather than assuming it: with
-    goldenflow-native present the polars path runs the Rust kernel while this
-    path runs the Python reference, so a divergence between them shows up here.
-    """
-    pl = pytest.importorskip("polars", reason="the reference engine is polars")
-    import goldenflow
+def _split_cfg(src, method):
     from goldenflow.config.schema import SplitSpec
 
-    src, method = SPLIT_CASES[label]
-    cfg = GoldenFlowConfig(
+    return GoldenFlowConfig(
         transforms=[TransformSpec(column=src, ops=["strip"])],
         splits=[SplitSpec(source=src, target=[], method=method)],
     )
+
+
+@pytest.mark.parametrize("label", sorted(SPLIT_CASES))
+def test_columnar_splits_match_the_polars_engine(label):
+    """Both sides run the SAME Rust kernel, so this checks WIRING, not semantics.
+
+    Worth being exact about, because an earlier version of this test claimed
+    otherwise. When the columnar path ran a pure-Python split it was reasonable
+    to call this a cross-implementation check; it never was an oracle, since
+    under `Rust is the reference` a divergence would have condemned the Python
+    side by definition. Now that both paths reach `apply_split`, what remains is
+    that the columnar ingress/egress (`from_pylist` / `to_pylist`) puts the same
+    values in the same columns as the polars ingress does. That is a real thing
+    to protect and a much narrower one than "the split is correct".
+
+    Split CORRECTNESS lives with the kernel, in Rust.
+    """
+    pl = pytest.importorskip("polars", reason="the reference engine is polars")
+    import goldenflow
+
+    src, method = SPLIT_CASES[label]
+    cfg = _split_cfg(src, method)
     columnar = transform_columns_public(
         {k: list(v) for k, v in SPLIT_DATA.items()}, cfg
     ).columns
@@ -157,27 +167,85 @@ def test_columnar_splits_match_the_polars_engine(label):
         assert columnar[col] == polars_cols[col], col
 
 
-def test_an_unknown_split_method_still_falls_back():
-    """Only the methods in `_COLUMNAR_SPLITS` are covered. Anything else must
-    still decline, rather than silently producing no split."""
-    from goldenflow.config.schema import SplitSpec
+def test_the_split_runs_on_the_kernel_not_on_python(monkeypatch):
+    """The test with actual teeth, and the reason this file was reworked.
 
-    cfg = GoldenFlowConfig(
-        transforms=_STRIP,
-        splits=[SplitSpec(source="name", target=["a"], method="not_a_real_method")],
+    The first implementation of `_apply_splits` looped in Python over
+    `_split_name_py` while `goldenflow-native` -- a BASE dependency, always
+    present -- sat there with `apply_split`. Output was correct, so every
+    value-comparing test passed. Nothing failed; the path was just needlessly
+    slow and off the arrow-native line.
+
+    So assert the mechanism, not the values: `Column.apply_split` is CALLED.
+    """
+    from goldenflow.engine import columnar as C
+
+    real = C.native_module()
+    assert real is not None, "goldenflow-native is a base dep; it must be present"
+    real_column = real.Column
+    calls = []
+
+    class _SpyColumn:
+        # Present so `_split_inmem_ok`'s skew probe still sees the capability.
+        apply_split = real_column.apply_split
+
+        @staticmethod
+        def from_pylist(values):
+            inner = real_column.from_pylist(values)
+
+            class _Proxy:
+                def apply_split(self, ops):
+                    calls.append(ops)
+                    return inner.apply_split(ops)
+
+                def __getattr__(self, name):
+                    return getattr(inner, name)
+
+            return _Proxy()
+
+    class _SpyNative:
+        Column = _SpyColumn
+
+        def __getattr__(self, name):
+            return getattr(real, name)
+
+    monkeypatch.setattr(C, "native_module", lambda: _SpyNative())
+
+    out = transform_columns_public(
+        {k: list(v) for k, v in SPLIT_DATA.items()}, _split_cfg("full", "split_name")
+    ).columns
+
+    assert calls == [[("split_name", [])]], (
+        "the columnar split did not reach Column.apply_split -- it is running in "
+        "Python again"
     )
+    assert out["first_name"] == ["Ann", "Bob", None, "Cher"]
+
+
+def test_split_declines_when_the_kernel_is_unavailable(monkeypatch):
+    """Skew or a missing kernel must DECLINE, never silently run Python.
+
+    Declining routes to polars, which on a polars-free install raises an
+    actionable ImportError. That is the loud failure; a slower Python path that
+    quietly produces the right answer is the one worth preventing.
+    """
+    from goldenflow.engine import columnar as C
+
+    monkeypatch.setattr(C, "native_module", lambda: None)
+    assert C._frame_level_blocked(_split_cfg("full", "split_name"))
+
+
+def test_an_unknown_split_method_still_falls_back():
+    """Coverage is decided by the Rust probe `columnar_split_ready`, so a method
+    the kernel does not know declines here without any Python-side list of
+    supported methods to keep in sync."""
+    cfg = _split_cfg("name", "not_a_real_method")
     assert _frame_level_blocked(cfg)
 
 
 def test_known_splits_no_longer_force_the_polars_engine():
-    from goldenflow.config.schema import SplitSpec
-
     for label, (src, method) in SPLIT_CASES.items():
-        cfg = GoldenFlowConfig(
-            transforms=[TransformSpec(column=src, ops=["strip"])],
-            splits=[SplitSpec(source=src, target=[], method=method)],
-        )
-        assert not _frame_level_blocked(cfg), label
+        assert not _frame_level_blocked(_split_cfg(src, method)), label
 
 
 def test_frame_ops_run_without_polars_installed():

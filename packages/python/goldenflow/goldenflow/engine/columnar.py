@@ -88,71 +88,62 @@ _OWNED_STRING = FUSABLE_KERNELS | FUSABLE_PARAM_KERNELS
 _OWNED_NULLABLE = FUSABLE_NULLABLE_KERNELS
 
 
-def _columnar_split_table() -> dict:
-    """method name -> (output column names, per-value function).
-
-    These call the SAME pure-Python helpers the registered dataframe-mode
-    transforms fall back to -- the ones their docstrings call "the byte-exact
-    reference" for the native kernel. Reusing them means the columnar split is
-    byte-identical to the polars split by construction rather than by a
-    reimplementation someone has to keep in step.
-
-    Imported lazily: goldenflow.transforms pulls in the whole transform
-    registry, and columnar.py is imported on the hot ingest path.
-    """
-    from goldenflow.transforms.address import _split_address_py
-    from goldenflow.transforms.names import _split_name_py, _split_name_reverse_py
-
-    return {
-        "split_name": (("first_name", "last_name"), _split_name_py),
-        "split_name_reverse": (("first_name", "last_name"), _split_name_reverse_py),
-        "split_address": (("street", "city", "state", "zip"), _split_address_py),
-    }
-
-
-class _LazySplitTable(dict):
-    """`_COLUMNAR_SPLITS` without paying the registry import at module load."""
-
-    _loaded = False
-
-    def _ensure(self):
-        if not self._loaded:
-            self.update(_columnar_split_table())
-            self._loaded = True
-
-    def __contains__(self, key):
-        self._ensure()
-        return dict.__contains__(self, key)
-
-    def __getitem__(self, key):
-        self._ensure()
-        return dict.__getitem__(self, key)
-
-
-_COLUMNAR_SPLITS = _LazySplitTable()
+def _split_ops_spec(method: str) -> list:
+    """One `config.splits` entry as the ``string* splitter`` op chain that both
+    the native probe and the native kernel take. No leading string ops: those
+    come from ``config.transforms``, which has already run by the time splits
+    apply."""
+    return [(method, [])]
 
 
 def _apply_splits(frame, config):
-    """Apply `config.splits` on either backend.
+    """Apply ``config.splits`` -- natively on BOTH backends.
 
     The polars side dispatches through the transform registry exactly as
-    engine/transformer.py does. The columnar side maps each value through the
-    same pure-Python reference the registered transform falls back to.
+    engine/transformer.py does, and those registered functions already route to
+    the native kernel. The columnar side reaches the same kernel directly:
+    ``nm.Column.from_pylist(...).apply_split(ops)`` runs the whole shape in Rust.
+    No pyarrow is involved -- ``from_pylist``/``to_pylist`` marshal plain Python
+    lists -- so this costs the columnar path none of its pyarrow-free property.
+
+    The first version of this function mapped every value through the pure-Python
+    ``_split_name_py`` reference instead. That was wrong on two counts:
+    ``goldenflow-native`` is a BASE dependency, so the kernel is always present,
+    and the Rust side already owned this shape end to end. It is the same kernel
+    `_spec_ready` reaches when a splitter appears as a terminal op.
+
+    Output names are FIXED by the kernel (``first_name``/``last_name``;
+    ``street``/``city``/``state``/``zip``). That matches the polars path, which
+    does not consult ``SplitSpec.target`` either.
+
+    Two deliberate omissions, both for parity with the polars engine:
+
+    * the SOURCE column is left untouched. ``apply_split`` also returns it (post
+      string-ops), but writing it back would push the ``cast(Utf8)`` form of a
+      non-string column into the output, where polars leaves the original.
+    * NO manifest record is added. ``apply_split`` returns per-op records, but
+      engine/transformer.py records nothing for a ``config.splits`` entry, and
+      manifest parity is part of the contract. Records ARE kept on the terminal-op
+      path, which is a different config shape and IS audited.
     """
+    splits = config.splits or []
+    if not splits:
+        return frame
+
     from goldenflow.engine.frame import ColumnarFrame
 
-    for split in (config.splits or []):
+    nm = native_module()
+    for split in splits:
         if split.source not in frame.columns:
             continue
         if isinstance(frame, ColumnarFrame):
-            names, fn = _COLUMNAR_SPLITS[split.method]
-            values = frame.column(split.source)
-            produced = [fn(v) for v in values]
-            for i, out_name in enumerate(names):
-                frame = frame.with_column(out_name, [p[i] for p in produced])
+            col = nm.Column.from_pylist(
+                _stringify_for_column(frame.column(split.source), nm)
+            )
+            _src, new_cols, _records = col.apply_split(_split_ops_spec(split.method))
+            for name, out_col in new_cols:
+                frame = frame.with_column(name, out_col.to_pylist())
         else:
-            from goldenflow.transforms import get_transform
-
             info = get_transform(split.method)
             if info and info.mode == "dataframe":
                 frame = frame.replace_native(info.func(frame.native, split.source))
@@ -163,20 +154,34 @@ def _frame_level_blocked(config) -> bool:
     """Nothing frame-level forces the Polars engine any more.
 
     renames / drop / filters / dedup run on ``ColumnarFrame`` via
-    ``_apply_frame_ops``, and the three registered splits run via
-    ``_apply_splits``. None of these were operations the columnar engine could
-    not express -- they were unimplemented ones, and the fallback meant a config
-    carrying a single rename dragged the whole transform onto polars, which on a
-    default install (polars is an OPTIONAL extra) meant an ImportError.
+    ``_apply_frame_ops``; splits run on the native kernel via ``_apply_splits``.
+    None of these were operations the columnar engine could not express -- they
+    were unimplemented ones, and the fallback meant a config carrying a single
+    rename dragged the whole transform onto polars, which on a default install
+    (polars is an OPTIONAL extra) meant a bare ImportError.
 
-    What is left is a NAME check, not a capability one: a split method outside
-    ``_COLUMNAR_SPLITS`` is one this module has no reference implementation for,
-    so it still declines rather than silently producing no split. The two
-    dataframe-mode transforms that are not splits stay out by signature --
-    ``merge_name`` takes an extra ``last_name_col`` and ``latlng_pack`` takes no
-    column at all, so neither fits ``func(frame, split.source)``.
+    Split coverage is decided by ``columnar_split_ready``, the Rust probe whose
+    own docstring calls itself "the single source of truth" for this question --
+    and which `_spec_ready` already consults for a splitter appearing as a
+    terminal op. This function briefly carried a Python-side table of supported
+    methods instead; that is a second source of truth, and it can only ever drift
+    from the kernel that does the work.
+
+    ``_split_inmem_ok`` guards an OLD native wheel that predates ``apply_split``.
+    On that skew we DECLINE, which routes to polars and raises an actionable
+    ImportError on a polars-free install. We do not fall back to a Python split:
+    a silently slower path is the failure mode this whole change exists to remove.
     """
-    return any(s.method not in _COLUMNAR_SPLITS for s in (config.splits or []))
+    splits = config.splits or []
+    if not splits:
+        return False
+    nm = native_module()
+    if nm is None or not _split_inmem_ok(nm):
+        return True
+    return not all(
+        nm.columnar_split_ready(_split_ops_spec(s.method)) for s in splits
+    )
+
 
 
 def _frame_level_blocked_whole_file(config) -> bool:
