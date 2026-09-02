@@ -354,7 +354,7 @@ git commit -m "feat(shared-decisions): cross-module config-field readers, proven
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `load_allowlist() -> set[str]` — field names whose multi-module readers are known to agree. `stale_entries(known: set[str]) -> set[str]` — allowlisted names no longer present in `known`.
+- Produces: `load_allowlist() -> set[str]` — field names whose multi-module readers are known to agree. `stale_entries(known: set[str]) -> set[str]` — allowlisted names no longer present in `known`. `entries_missing_reasons(lines: list[str]) -> list[str]` — entries with no `# reason`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -394,13 +394,25 @@ def test_a_missing_allowlist_raises_rather_than_returning_empty(monkeypatch):
         mod.load_allowlist()
 
 
-def test_every_entry_carries_a_reason():
-    raw = ALLOW.read_text(encoding="utf-8")
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        assert "#" in line, f"entry without a reason: {line!r}"
+def test_an_entry_without_a_reason_is_rejected():
+    """The shipped allowlist is EMPTY at B0a, so a loop over it never executes
+    and would pass whatever the format rule was. Drive the rule with a synthetic
+    entry instead, so the test can actually fail."""
+    from shared_decisions.allowlist import entries_missing_reasons
+
+    good = ["field_a  # checked 2026-09-02, both readers agree"]
+    bad = ["field_b", "field_c  # fine"]
+    assert entries_missing_reasons(good) == []
+    assert entries_missing_reasons(bad) == ["field_b"]
+
+
+def test_the_shipped_allowlist_obeys_the_format():
+    """Vacuous while the file is empty, which is correct -- it becomes a real
+    check the moment B1 adds the first entry."""
+    from shared_decisions.allowlist import entries_missing_reasons
+
+    lines = ALLOW.read_text(encoding="utf-8").splitlines()
+    assert entries_missing_reasons(lines) == []
 
 
 def test_stale_entries_are_detected(tmp_path, monkeypatch):
@@ -466,6 +478,23 @@ def load_allowlist() -> set[str]:
             continue
         out.add(line.split("#", 1)[0].strip())
     return out
+
+
+def entries_missing_reasons(lines: list[str]) -> list[str]:
+    """Allowlist entries carrying no `# reason`.
+
+    Takes lines rather than reading the file so the rule is testable against a
+    synthetic entry: the shipped allowlist is empty at B0a, and a check that
+    only ever runs over an empty file passes whatever the rule says.
+    """
+    bad: list[str] = []
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "#" not in line:
+            bad.append(line)
+    return bad
 
 
 def stale_entries(known: set[str]) -> set[str]:
