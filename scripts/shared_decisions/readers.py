@@ -182,7 +182,54 @@ def _module_alias_names(
         segments = _base_chain(node.value)
         if segments is not None and _chain_looks_like_config(segments, targets):
             aliases.add(node.targets[0].id.lower())
-    return frozenset(aliases)
+    return frozenset(aliases | _annotated_config_names(tree))
+
+
+def _annotated_config_names(tree: ast.Module) -> set[str]:
+    """Names ANNOTATED with a declared config class: `mk: MatchkeyConfig`.
+
+    The assignment scan above only sees a name bound from a config-looking
+    EXPRESSION. It cannot see a config that arrives as a typed parameter --
+    `def score(mk: MatchkeyConfig)` -- because there is no right-hand side to
+    inspect, and `mk` matches no config class name by word boundary.
+
+    That blind spot was large. Measured 2026-09-02 on goldenmatch: `mk`
+    accounted for 626 attribute accesses to known field names, roughly half
+    again the entire attributed set, and `current: GoldenMatchConfig` another
+    54 -- all invisible. Adding annotations took the inventory from 73 shared
+    fields to 82 and moved `fields` from 17 modules to 26.
+
+    Discovered while sabotage-checking the B3 ratchet: a divergent fallback
+    planted in `core/autoconfig.py` did not trip the gate, because the site
+    read `k.transforms` off a loop variable the scan never attributed. The
+    sabotage was invalid rather than the gate weak -- but the reason it was
+    invalid was a real recall hole.
+
+    Names only, matching `_module_alias_names`' module-scope contract: this
+    does not track shadowing, and a parameter named `mk` in a function with no
+    config in sight is treated as config here. Over-reporting costs one triage
+    decision; under-reporting is invisible.
+    """
+    from shared_decisions.fields import config_fields
+
+    classes = set(config_fields())
+    out: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            name, annotation = node.target.id, node.annotation
+        elif isinstance(node, ast.arg) and node.annotation is not None:
+            name, annotation = node.arg, node.annotation
+        else:
+            continue
+        try:
+            text = ast.unparse(annotation)
+        except Exception:  # pragma: no cover - unparse is total on parsed trees
+            continue
+        # Substring, not equality: the annotation is often `X | None`,
+        # `list[X]`, or a quoted forward reference.
+        if any(cls in text for cls in classes):
+            out.add(name.lower())
+    return out
 
 
 def unparseable_modules(root: Path) -> list[str]:

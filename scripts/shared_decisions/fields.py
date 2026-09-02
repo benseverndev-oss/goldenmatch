@@ -7,14 +7,35 @@ whole package and its optional extras, and this must run in a bare CI step.
 from __future__ import annotations
 
 import ast
+from functools import lru_cache
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent.parent
 SCHEMAS = REPO / "packages" / "python" / "goldenmatch" / "goldenmatch" / "config" / "schemas.py"
 
 
+@lru_cache(maxsize=1)
+def _config_fields_cached() -> tuple[tuple[str, frozenset[str]], ...]:
+    """Immutable cached form of `config_fields`.
+
+    `_annotated_config_names` needs the class list once PER MODULE, and the
+    accessor scan walks ~493 of them. Uncached, that re-parsed schemas.py (a
+    2,500-class-line file) once per module and pushed the readers tests past a
+    two-minute timeout. Returned as tuples because `lru_cache` results must not
+    be mutable -- `config_fields` rebuilds the dict for callers.
+    """
+    return tuple(
+        (cls, frozenset(fields)) for cls, fields in _config_fields_uncached().items()
+    )
+
+
 def config_fields() -> dict[str, set[str]]:
-    """Map each Pydantic config class to the field names it declares.
+    """Map each Pydantic config class to the field names it declares."""
+    return {cls: set(fields) for cls, fields in _config_fields_cached()}
+
+
+def _config_fields_uncached() -> dict[str, set[str]]:
+    """The real AST parse. See `config_fields`.
 
     A field is an annotated assignment at class-body level (`name: type = ...`),
     which is how Pydantic models declare fields. Methods, ClassVars and private
