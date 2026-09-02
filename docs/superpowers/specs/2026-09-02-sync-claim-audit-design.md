@@ -30,12 +30,34 @@ this document uses:
 
 | | claims | resolvable target |
 | --- | ---: | ---: |
-| on a function or class | 270 | 119 |
-| on a module | 49 | 21 |
-| **total** | **319** | **140** |
+| on a function or class | 270 | 212 |
+| on a module | 49 | (not triaged, see below) |
+| **total** | **319** | |
 
-**87 of the 119 symbol-level resolvable claims (73%) are unenforced.** 18 of
-the 87 say "byte-identical to".
+**168 of the 212 symbol-level resolvable claims (79%) are unenforced.** 48 of
+the 168 say "byte-identical to" or "identical to".
+
+### A correction, made while planning
+
+An earlier draft of this spec reported 119 resolvable and 87 unenforced. Those
+came from a target-extraction rule that only accepted a name in backticks
+(`` `run_dedupe` ``) or with a call suffix (`run_dedupe()`).
+
+**That rule could not extract this phase's own motivating example.**
+`_run_pipeline`'s docstring says "mirrors run_dedupe but returns EngineResult"
+-- a BARE identifier. The rule found nothing, the incident was not in the
+resolvable set, and C0's exit criterion as originally written was
+unsatisfiable.
+
+The rule is now: any word in the 200-character window after the claim keyword
+that names a symbol declared in the package, taking the first match.
+**Resolution is the filter**, so no punctuation convention is required. That is
+also why the population nearly doubled: most claims name their target in
+prose, not in markup.
+
+The cost is a first-match heuristic that can pick the wrong name when a claim
+mentions several symbols. C1 triage classifies those as false positives, and
+the report prints the matched window so a reader can see what it keyed on.
 
 ## What this phase was going to be, and why it is not
 
@@ -95,7 +117,7 @@ large-function pairs. B0b is dropped.
 ### What survived
 
 The incident had a different detectable property: **it said what it was doing.**
-That generalises to a population of 319 claims -- 119 of them both
+That generalises to a population of 319 claims -- 212 of them both
 symbol-level and resolvable, which is what this phase triages -- and unlike
 clone detection it finds the motivating incident by construction rather than
 by threshold.
@@ -109,7 +131,7 @@ relationship to another symbol. A **resolvable claim** names a symbol that
 exists in the package. A claim is **unenforced** when no single test file
 references both the claimant and its target in *executable* code.
 
-**The enforcement check needs a claimant SYMBOL, so it applies to the 119
+**The enforcement check needs a claimant SYMBOL, so it applies to the 212
 symbol-level resolvable claims only.** A module-level claim has no single name
 a test can reference — "this module MIRRORS the datafusion backend" is a claim
 about a file, and the check would have to guess which of its symbols carries
@@ -130,7 +152,7 @@ reference `_run_pipeline`, 10 reference `run_dedupe`, **0 reference both**.
 **Sound as a negative, suggestive as a positive.** No co-reference genuinely
 proves that nothing compares the two. Co-reference proves only that one file
 mentions both, never that it compares them. So the finding is the unenforced
-set; the 32 possibly-enforced claims are reported as UNVERIFIED and never as
+set; the 44 possibly-enforced claims are reported as UNVERIFIED and never as
 safe.
 
 This is A and B's inversion. A resolved declared liveness (registries) and
@@ -191,10 +213,10 @@ enforcement check, report. Exit criterion: it extracts
 `_run_pipeline --mirrors--> run_dedupe` from a checked-in fixture and classifies
 it unenforced.
 
-**C1 — triage all 87 symbol-level findings.** Every finding classified as: enforceable and should be /
+**C1 — triage all 168 symbol-level findings.** Every finding classified as: enforceable and should be /
 claim is stale because the coupling is gone / already drifted, therefore a
 defect / false positive. Exit criterion: every finding carries a classification
-and a reason. **Start with the 18 "byte-identical to" claims** — unlike
+and a reason. **Start with the 48 "byte-identical to" / "identical to" claims** — unlike
 "mirrors", that phrasing states a property that can actually be checked, so
 triaging one either produces an enforcing test or discovers a drifted pair.
 
@@ -241,11 +263,13 @@ that the sabotage actually landed before reading the test result.
 ## Success criteria
 
 - The detector extracts and reports the motivating incident from a fixture.
-- Every one of the 87 findings carries a classification and a reason.
+- Every one of the 168 findings carries a classification and a reason.
 - Every claim surviving triage is either enforced or recorded with why it stands.
 - No claim is deleted while its coupling remains.
 - Every "byte-identical to" claim is either enforced by a test or recorded as a
   defect.
+- C0's report names the matched claim window, so a wrong target resolution is
+  visible to triage rather than silent.
 - The ratchet gates at the triaged floor, as a named set of pairs.
 
 ## Out of scope
