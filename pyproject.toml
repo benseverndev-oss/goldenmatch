@@ -126,6 +126,10 @@ dev = [
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# scripts/fixtures/incident_1c843c8a5/*: verbatim historical copies (pre-fix
+# 1c843c8a5^) kept as evidence for the shared-decision scan's exit criterion.
+# Editing them to satisfy lint would edit the thing they exist to prove.
+extend-exclude = ["scripts/fixtures/incident_1c843c8a5"]
 
 [tool.ruff.lint]
 select = ["E9", "F63", "F7", "F", "I", "B", "UP"]
