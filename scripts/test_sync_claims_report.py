@@ -23,9 +23,13 @@ def test_inventory_buckets_the_fixture():
     assert {c["symbol"] for c in inv["unresolvable"]} == {"stray_lane"}
 
 
-def test_claim_count_and_finding_count_are_separate():
+def test_claim_count_and_finding_count_are_separate(capsys):
     """Deleting a claim must not read as progress. Reporting only a finding
-    count lets six words removed from a docstring look like a fix."""
+    count lets six words removed from a docstring look like a fix -- so this
+    has to pin the printed report, not just the dict `main()` builds it
+    from. A mutation that dropped the `{counts['claims']} claim(s);` prose
+    fragment (but kept the dict intact) passed this test when it only
+    inspected `inventory()`."""
     inv = inventory(FIXTURE / "src", FIXTURE / "tests")
     counts = inv["counts"]
     assert counts["claims"] >= counts["unenforced"]
@@ -37,6 +41,12 @@ def test_claim_count_and_finding_count_are_separate():
         "unresolvable",
         "module_level",
     } <= set(counts)
+
+    rc = main(["--root", str(FIXTURE / "src"), "--tests", str(FIXTURE / "tests")])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert f"{counts['claims']} claim(s)" in out
+    assert f"{counts['unenforced']} UNENFORCED" in out
 
 
 def test_module_level_claims_are_reported_but_never_triaged():
@@ -57,12 +67,18 @@ def test_module_level_claims_are_reported_but_never_triaged():
 
 def test_the_report_names_the_matched_window(capsys):
     """A wrong target resolution must be visible, not silent. The first-match
-    rule can pick the wrong symbol when a claim mentions several."""
+    rule can pick the wrong symbol when a claim mentions several.
+
+    "slow_lane" and "orphan_lane" alone are not enough to pin the
+    `claim: {window}` print line: both strings also appear on the
+    `--mirrors--> slow_lane` and symbol header lines that print regardless.
+    `orphan_lane`'s docstring reads "...and nothing tests them together" --
+    text that exists nowhere else in the fixture or the report, so it can
+    only reach stdout through the window print itself."""
     rc = main(["--root", str(FIXTURE / "src"), "--tests", str(FIXTURE / "tests")])
     out = capsys.readouterr().out
     assert rc == 0
-    assert "slow_lane" in out
-    assert "orphan_lane" in out
+    assert "nothing tests them together" in out
 
 
 def test_the_report_states_its_scope(capsys):

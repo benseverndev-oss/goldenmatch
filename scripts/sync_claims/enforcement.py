@@ -60,10 +60,27 @@ def unenforced(claim_list: list[Claim], reference_sets: list[set[str]]) -> list[
     Claims with no resolved target are excluded: there is nothing for a test to
     enforce them against, and counting them would inflate the finding list with
     items nobody can act on. They are reported in their own bucket instead.
+
+    Module-level claims (`kind != "symbol"`) are excluded too, and for a
+    sharper reason than "out of scope": `claim.symbol` for a module-level
+    claim is the literal string `"<module>"`, which can never appear in a
+    test's reference set (no test references a module by that name). So
+    every RESOLVABLE module-level claim would become a permanent, unfixable
+    finding -- measured on the real package, 213 findings with no filter
+    versus 172 scoped, 41 of them module-level. The spec excludes
+    module-level claims from triage by construction (a module has no single
+    symbol a test can reference); this filter is what makes that true here
+    rather than only in whichever caller remembers to pre-scope its input.
+    `inventory()` already filters to `kind == "symbol"` before calling this,
+    so the check is a no-op for the shipped caller today -- it exists for
+    every future one that doesn't pre-scope so carefully, and matters
+    concretely once C3 seeds a ratchet floor from a call here.
     """
     out: list[Claim] = []
     for claim in claim_list:
         if claim.target is None:
+            continue
+        if claim.kind != "symbol":
             continue
         if not any(claim.symbol in names and claim.target in names for names in reference_sets):
             out.append(claim)

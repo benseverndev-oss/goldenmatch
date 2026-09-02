@@ -30,12 +30,12 @@ this document uses:
 
 | | claims | resolvable target |
 | --- | ---: | ---: |
-| on a function or class | 270 | 212 |
+| on a function or class | 270 | 216 |
 | on a module | 49 | (not triaged, see below) |
 | **total** | **319** | |
 
-**168 of the 212 symbol-level resolvable claims (79%) are unenforced.** 48 of
-the 168 say "byte-identical to" or "identical to".
+**172 of the 216 symbol-level resolvable claims (80%) are unenforced.** 50 of
+the 172 say "byte-identical to" or "identical to".
 
 ### A correction, made while planning
 
@@ -58,6 +58,29 @@ prose, not in markup.
 The cost is a first-match heuristic that can pick the wrong name when a claim
 mentions several symbols. C1 triage classifies those as false positives, and
 the report prints the matched window so a reader can see what it keyed on.
+
+### A second correction, made while finishing Task 1
+
+Every count in this document was re-measured against what the shipped
+detector reports today, and it does not match what an earlier version of
+this document said, either: 212 resolvable became **216**, 168 unenforced
+became **172**, and the "48 byte-identical / identical claims" line became
+**50**. The cause is a one-line fix to the same rule this correction already
+covers. `_WORD`'s continuation class includes `.`, so a target word
+immediately followed by sentence-ending punctuation (`"...mirrors helper."`)
+matched WITH the trailing period, and `"helper."` was never equal to
+`"helper"` in the known-symbols set — the resolver silently missed it.
+`claims()` now strips that trailing period before comparing, and four more
+targets resolve as a result.
+
+**The "179 unresolvable claims" line under Out of scope, below, was wrong
+under either measurement, not just the current one.** 270 symbol-level claims
+minus 212 (the earlier resolvable count) is 58; minus 216 (the current one)
+is 54. Neither arithmetic produces 179 — it is not a stale snapshot of a real
+intermediate state, it is simply an error, and the fix is to read it off the
+detector rather than to explain it. Every count in this document is now
+generated from a live run of `python -m sync_claims.report`, not typed by
+hand from an intermediate measurement.
 
 ## What this phase was going to be, and why it is not
 
@@ -117,7 +140,7 @@ large-function pairs. B0b is dropped.
 ### What survived
 
 The incident had a different detectable property: **it said what it was doing.**
-That generalises to a population of 319 claims -- 212 of them both
+That generalises to a population of 319 claims -- 216 of them both
 symbol-level and resolvable, which is what this phase triages -- and unlike
 clone detection it finds the motivating incident by construction rather than
 by threshold.
@@ -131,7 +154,7 @@ relationship to another symbol. A **resolvable claim** names a symbol that
 exists in the package. A claim is **unenforced** when no single test file
 references both the claimant and its target in *executable* code.
 
-**The enforcement check needs a claimant SYMBOL, so it applies to the 212
+**The enforcement check needs a claimant SYMBOL, so it applies to the 216
 symbol-level resolvable claims only.** A module-level claim has no single name
 a test can reference — "this module MIRRORS the datafusion backend" is a claim
 about a file, and the check would have to guess which of its symbols carries
@@ -213,12 +236,18 @@ enforcement check, report. Exit criterion: it extracts
 `_run_pipeline --mirrors--> run_dedupe` from a checked-in fixture and classifies
 it unenforced.
 
-**C1 — triage all 168 symbol-level findings.** Every finding classified as: enforceable and should be /
+**C1 — triage all 172 symbol-level findings.** Every finding classified as: enforceable and should be /
 claim is stale because the coupling is gone / already drifted, therefore a
 defect / false positive. Exit criterion: every finding carries a classification
-and a reason. **Start with the 48 "byte-identical to" / "identical to" claims** — unlike
+and a reason. **Start with the 50 "byte-identical to" / "identical to" claims** — unlike
 "mirrors", that phrasing states a property that can actually be checked, so
 triaging one either produces an enforcing test or discovers a drifted pair.
+Budget for the first-match heuristic's measured cost while triaging the rest:
+13 of the 172 findings (7.5%) resolve to a generic word -- `min`, `row`,
+`key`, `max`, `run` and the like -- picked up because it happens to also be
+the first declared symbol name in the 200-character window, not because the
+claim is actually about it. Those are false positives by construction, not
+edge cases; expect roughly one in thirteen findings to be one.
 
 **C2 — remediation, one per PR.** Enforcing tests where the property holds;
 defect fixes where it does not; claim removal only where the coupling is gone.
@@ -263,7 +292,7 @@ that the sabotage actually landed before reading the test result.
 ## Success criteria
 
 - The detector extracts and reports the motivating incident from a fixture.
-- Every one of the 168 findings carries a classification and a reason.
+- Every one of the 172 findings carries a classification and a reason.
 - Every claim surviving triage is either enforced or recorded with why it stands.
 - No claim is deleted while its coupling remains.
 - Every "byte-identical to" claim is either enforced by a test or recorded as a
@@ -276,7 +305,7 @@ that the sabotage actually landed before reading the test result.
 
 - Module splitting and cohesion, and structural clone detection — both refuted
   above.
-- The 179 unresolvable claims (they name nothing that exists): reported in
+- The 54 unresolvable claims (they name nothing that exists): reported in
   their own bucket, not triaged.
 - The 49 module-level claims: extracted and reported, not triaged — the
   enforcement check needs a claimant symbol. See the evidence model.

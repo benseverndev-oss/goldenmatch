@@ -1074,3 +1074,4 @@ sync_claims:
   - 'packages/python/goldenmatch/goldenmatch/**'
   - 'packages/python/goldenmatch/tests/**'
   - '.github/workflows/ci.yml'
+  - '.github/filters.yml'                # self-test: a narrowing edit here must still re-run the gate
