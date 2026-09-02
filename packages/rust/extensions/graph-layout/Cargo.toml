@@ -34,6 +34,15 @@ tiny-skia = { version = "0.12", optional = true }
 default = []
 skia = ["dep:tiny-skia"]
 
+# tiny-skia backs the `skia` feature's anti-aliased PNG output, but that swap
+# (raster.rs's own comment: "--features skia swaps in tiny-skia") isn't
+# implemented yet -- the built-in PPM rasterizer is the only renderer today.
+# cargo-machete can't see "declared for a documented, not-yet-built optional
+# feature" -- ignored rather than removed, so the placeholder survives
+# without a nag every run of a demo crate the default CI lane doesn't build.
+[package.metadata.cargo-machete]
+ignored = ["tiny-skia"]
+
 [profile.release]
 opt-level = 3
 lto = "thin"

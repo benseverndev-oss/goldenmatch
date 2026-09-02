@@ -303,3 +303,38 @@ def test_non_goldenmatch_module_is_excluded_not_evaluated(tmp_path):
         "goldenmatch-scoped, or candidacy_scope() stopped counting correctly. "
         "Either way this test can no longer witness the restriction it names."
     )
+
+
+def test_other_langs_report_carries_the_ts_public_export_split():
+    """other_langs_report() must expose the TS public-export inventory as its
+    own key, separate from the actionable `unused ts exports` -- the fix this
+    whole module change is for. Conflating the two (as the report used to)
+    made `unused ts exports` dominated by the published `src/node/index.ts`
+    barrel: 666 of an early profiled run's 840 raw findings."""
+    from dead_code.report import _OTHER_LANGS_NOT_MEASURED_REASON, other_langs_report
+
+    result = other_langs_report()
+    assert set(result) == {
+        "unused rust deps",
+        "unwired rust exports",
+        "unused ts exports",
+        "ts public-export inventory",
+    }
+    # Every key must have a NOT-MEASURED reason -- main() looks this up
+    # unconditionally for any signal that came back None, so a key missing
+    # here is a KeyError waiting for a machine without ts-prune installed.
+    for label in result:
+        assert label in _OTHER_LANGS_NOT_MEASURED_REASON
+
+
+def test_other_langs_report_ts_signals_are_none_or_lists_never_mixed(monkeypatch):
+    """With no PATH at all, both TS-derived signals must read NOT MEASURED
+    (None) together -- they share one ts-prune invocation
+    (`_ts_prune_split()`), so one coming back None and the other a list would
+    mean the split logic silently diverged from the tool-availability check."""
+    from dead_code.report import other_langs_report
+
+    monkeypatch.setenv("PATH", "")
+    result = other_langs_report()
+    assert result["unused ts exports"] is None
+    assert result["ts public-export inventory"] is None

@@ -12,8 +12,6 @@ pub mod extrapolate;
 pub mod planner;
 pub mod select_blocking;
 pub mod thresholds;
-#[cfg(feature = "arrow")]
-pub mod profile;
 
 // Layer 1 re-exports (A3)
 pub use planner::{

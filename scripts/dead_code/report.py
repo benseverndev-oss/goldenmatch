@@ -158,12 +158,15 @@ def candidates(coverage_xml: Path | None) -> list[dict]:
 _OTHER_LANGS_NOT_MEASURED_REASON = {
     "unused rust deps": "cargo-machete not installed",
     "unwired rust exports": "check_native_symbols could not run for any package",
-    "unused ts exports": "ts-prune not installed",
+    "unused ts exports": "ts-prune not installed, or the package's exports map could not be read",
+    "ts public-export inventory": (
+        "ts-prune not installed, or the package's exports map could not be read"
+    ),
 }
 
 
 def other_langs_report() -> dict[str, list[str] | None]:
-    """The three other_langs signals, keyed by their report label.
+    """The four other_langs signals, keyed by their report label.
 
     Each value is exactly what its function returned: None means NOT
     MEASURED, a list (possibly empty) means measured. Both main()'s text and
@@ -171,6 +174,7 @@ def other_langs_report() -> dict[str, list[str] | None]:
     about which signals were actually measured.
     """
     from dead_code.other_langs import (
+        ts_public_export_inventory,
         unused_rust_deps,
         unused_ts_exports,
         unwired_rust_exports,
@@ -180,6 +184,7 @@ def other_langs_report() -> dict[str, list[str] | None]:
         "unused rust deps": unused_rust_deps(),
         "unwired rust exports": unwired_rust_exports(),
         "unused ts exports": unused_ts_exports(),
+        "ts public-export inventory": ts_public_export_inventory(),
     }
 
 

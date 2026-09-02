@@ -28,7 +28,6 @@ crate-type = ["cdylib"]
 datafusion-common = { version = "53", default-features = false }
 datafusion-expr = "53"
 datafusion-ffi = "53"
-arrow = { version = "58", features = ["ffi"] }
 arrow-array = "58"
 arrow-schema = "58"
 # Canonical string scorers shared pyo3-free with the `native` ext, so the FFI
@@ -63,8 +62,14 @@ pyo3 = { version = "0.29", features = ["extension-module", "abi3", "abi3-py311"]
 alloc-stdlib = "=0.2.4"
 brotli-decompressor = "=5.0.3"
 
-[build-dependencies]
-pyo3-build-config = "0.29"
+# alloc-stdlib and brotli-decompressor above are version-pin-only entries (see
+# the comment on them): nothing in this crate imports either directly, by
+# design. cargo-machete has no way to distinguish that from a genuinely dead
+# dependency, so it flags both every run -- ignored rather than removed,
+# because removing them is exactly what would let the resolver drift back
+# into the alloc-no-stdlib 2.x/3.x conflict the comment describes.
+[package.metadata.cargo-machete]
+ignored = ["alloc-stdlib", "brotli-decompressor"]
 
 [profile.release]
 opt-level = 3

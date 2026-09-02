@@ -249,10 +249,3 @@ export function countTokensApprox(text: string): number {
   if (!text) return 0;
   return Math.ceil(text.length / 4);
 }
-
-/** Return the pricing table (read-only) for inspection/tests. */
-export function getPricing(): Readonly<
-  Record<string, { readonly input: number; readonly output: number }>
-> {
-  return PRICING;
-}

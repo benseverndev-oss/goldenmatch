@@ -62,6 +62,16 @@ required-features = ["web"]
 # node). Build for the wasm32-unknown-unknown target.
 web = ["dep:dioxus", "dioxus/web", "dep:gloo-net", "dep:wasm-bindgen-futures", "charming/wasm"]
 
+# wasm-bindgen-futures: staged for the `web` feature's async JS interop (the
+# Sensitivity route port), but nothing calls it yet -- `web.rs` only reaches
+# `dioxus::launch` so far, and Dioxus's own internal use of
+# wasm-bindgen-futures already covers what's built today. cargo-machete can't
+# see "declared for the next increment of an optional, sandbox-unbuildable
+# feature" -- ignored rather than removed, so it doesn't get silently
+# re-added (and re-verified) the day the web build actually needs it.
+[package.metadata.cargo-machete]
+ignored = ["wasm-bindgen-futures"]
+
 [profile]
 
 [profile.wasm-dev]
