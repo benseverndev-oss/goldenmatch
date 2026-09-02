@@ -34,8 +34,8 @@ this document uses:
 | on a module | 49 | (not triaged, see below) |
 | **total** | **319** | |
 
-**172 of the 216 symbol-level resolvable claims (80%) are unenforced.** 50 of
-the 172 say "byte-identical to" or "identical to".
+**167 of the 216 symbol-level resolvable claims (77%) are unenforced.** 50 of
+the strongest say "byte-identical to" or "identical to".
 
 ### A correction, made while planning
 
@@ -58,6 +58,35 @@ prose, not in markup.
 The cost is a first-match heuristic that can pick the wrong name when a claim
 mentions several symbols. C1 triage classifies those as false positives, and
 the report prints the matched window so a reader can see what it keyed on.
+
+### A third correction, made during C1 triage
+
+Triaging the 50 strongest claims -- the ones saying "byte-identical to", which
+state a property that can actually be checked -- found that **the detector's
+targets were often simply wrong**, and that the rest of this section had been
+measuring the wrong thing.
+
+Not one of the 49 comparable pairs was structurally similar to its resolved
+target. Reading the claim text explained why: `slice` came from "slice one
+bucket off the keyed frame", `min` from "Default ``min(cpu, 8)``", `edge`
+from "the shared edge set", `native` from "the per-block native path". Seven
+of eight sampled targets were wrong. This package declares thousands of
+symbols, many of them ordinary English words, so nearly any prose sentence
+contains one and a first-match rule finds it.
+
+The one correct target in that sample was the one the author had written in
+backticks. `claims()` now prefers a MARKED-UP target -- ``` ``x`` ```,
+`` `x` ``, or a Sphinx role -- and falls back to a bare word only when the
+window carries no markup. That corrects 26 of the 216 resolvable claims
+outright (`slice` -> `score_buckets`, `native` -> `_fs_native_eligible`,
+`dedupe` -> `dedupe_df`, `value` -> `value_frequencies`) and moves the
+unenforced count from 172 to **167**: five findings were false because their
+target was.
+
+**The bare-word fallback is not vestigial.** 103 of the 216 claims carry no
+markup at all, including this phase's motivating incident ("mirrors
+run_dedupe but returns EngineResult"). Deleting the fallback fails the
+incident test -- verified by sabotage.
 
 ### A second correction, made while finishing Task 1
 
@@ -175,7 +204,7 @@ reference `_run_pipeline`, 10 reference `run_dedupe`, **0 reference both**.
 **Sound as a negative, suggestive as a positive.** No co-reference genuinely
 proves that nothing compares the two. Co-reference proves only that one file
 mentions both, never that it compares them. So the finding is the unenforced
-set; the 44 possibly-enforced claims are reported as UNVERIFIED and never as
+set; the 49 possibly-enforced claims are reported as UNVERIFIED and never as
 safe.
 
 This is A and B's inversion. A resolved declared liveness (registries) and
@@ -236,21 +265,23 @@ enforcement check, report. Exit criterion: it extracts
 `_run_pipeline --mirrors--> run_dedupe` from a checked-in fixture and classifies
 it unenforced.
 
-**C1 — triage all 172 symbol-level findings.** Every finding classified as: enforceable and should be /
+**C1 — triage all 167 symbol-level findings.** Every finding classified as: enforceable and should be /
 claim is stale because the coupling is gone / already drifted, therefore a
 defect / false positive. Exit criterion: every finding carries a classification
 and a reason. **Start with the 50 "byte-identical to" / "identical to" claims** — unlike
 "mirrors", that phrasing states a property that can actually be checked, so
 triaging one either produces an enforcing test or discovers a drifted pair.
 Budget for the first-match heuristic's measured cost while triaging the rest:
-13 of the 172 findings (7.6%) resolve to a generic word, picked up because it
-happens to also be the first declared symbol name in the 200-character window,
-rather than because the claim is about it. **The rule that produces 13**, so a
-reader can reproduce the figure rather than take it on trust: a target of three
-characters or fewer, OR one drawn from a fixed common-word set (`min`, `max`,
-`row`, `key`, `run`, `sum`, `len`, `get`, `set`, `add`, `map`, `all`, `any`,
-`col`, `val`, `obj`, `idx`). Both halves independently select the same 13, of
-which `row` accounts for 6 and `key` for 3. Those are false positives by construction, not
+**83 of the 167 findings (50%) resolve their target from author MARKUP** --
+``` ``x`` ```, `` `x` ``, or a Sphinx role -- and the other 84 from the
+bare-word fallback. Triage the bare-word half first: it is where a wrong
+target lives, because this package declares thousands of symbols and many are
+ordinary English words. That split is the reproducible confidence signal, and
+it replaces an earlier "13 of 172 resolve to a generic word (7.6%)" figure
+that was measured with a length-and-common-word proxy. **The proxy was badly
+wrong.** It counted `min`, `row` and `key` but missed `slice`, `edge`,
+`native`, `value` and `pair` -- and reading the claim text for the 50
+strongest claims showed 7 of 8 sampled targets were wrong, not 1 in 13. Those are false positives by construction, not
 edge cases; expect roughly one in thirteen findings to be one.
 
 **C2 — remediation, one per PR.** Enforcing tests where the property holds;
@@ -296,7 +327,7 @@ that the sabotage actually landed before reading the test result.
 ## Success criteria
 
 - The detector extracts and reports the motivating incident from a fixture.
-- Every one of the 172 findings carries a classification and a reason.
+- Every one of the 167 findings carries a classification and a reason.
 - Every claim surviving triage is either enforced or recorded with why it stands.
 - No claim is deleted while its coupling remains.
 - Every "byte-identical to" claim is either enforced by a test or recorded as a

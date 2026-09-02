@@ -40,6 +40,49 @@ WINDOW = 200
 
 _WORD = re.compile(r"[A-Za-z_][\w.]*")
 
+# A target the author MARKED UP as code: ``x``, `x`, or a Sphinx role such as
+# :func:`~mod.x`. Preferred over a bare word, because a bare word is how the
+# scan went wrong.
+_MARKED = re.compile(r"``([A-Za-z_][\w.]*)``|`([A-Za-z_][\w.]*)`|:\w+:`~?([A-Za-z_][\w.]*)`")
+
+
+def _resolve_target(window: str, known: set[str], claimant: str) -> str | None:
+    """The symbol a claim names, preferring one the author wrote as code.
+
+    MARKED-UP FIRST, bare word only as a fallback. This package declares
+    thousands of symbols, many of them ordinary English words -- `slice`,
+    `edge`, `native`, `value`, `pair`, `min`, `row` -- so almost any prose
+    sentence contains one, and a plain first-match rule finds it instead of
+    the real target. Measured during the C1 triage on the 50 strongest claims
+    ("byte-identical to"), 7 of 8 sampled targets were wrong that way:
+    `slice` came from "slice one bucket off the keyed frame", `min` from
+    "Default ``min(cpu, 8)``", `edge` from "the shared edge set". The one
+    correct target in that sample was the one in backticks.
+
+    Preferring markup corrects 26 of the 216 resolvable claims outright --
+    `slice` -> `score_buckets`, `native` -> `_fs_native_eligible`,
+    `dedupe` -> `dedupe_df`, `value` -> `value_frequencies`.
+
+    The bare-word fallback stays, and is not vestigial: 103 of 216 claims
+    carry no markup at all, INCLUDING this phase's motivating incident, whose
+    docstring reads "mirrors run_dedupe but returns EngineResult". Dropping
+    the fallback would lose the one case the detector exists to catch.
+
+    `_WORD`'s continuation class includes ".", so a word immediately followed
+    by sentence-ending punctuation ("...mirrors helper.") matches WITH the
+    period; rstrip before taking the dotted tail or "helper." never equals
+    "helper".
+    """
+    for pattern, groups in ((_MARKED, True), (_WORD, False)):
+        for found in pattern.findall(window):
+            for word in found if groups else (found,):
+                if not word:
+                    continue
+                tail = word.rstrip(".").split(".")[-1]
+                if tail in known and tail != claimant:
+                    return tail
+    return None
+
 
 @dataclass(frozen=True)
 class Claim:
@@ -101,19 +144,7 @@ def claims(root: Path, *, symbols: set[str] | None = None) -> list[Claim]:
             is_module = isinstance(node, ast.Module)
             name = "<module>" if is_module else node.name
             window = doc[match.end() : match.end() + WINDOW]
-            # _WORD's continuation class includes "." so a word immediately
-            # followed by sentence-ending punctuation (e.g. "...mirrors
-            # helper.") is matched WITH the trailing period. rstrip it before
-            # taking the dotted tail, or "helper." never equals "helper".
-            target = next(
-                (
-                    tail
-                    for word in _WORD.findall(window)
-                    for tail in (word.rstrip(".").split(".")[-1],)
-                    if tail in known and tail != name
-                ),
-                None,
-            )
+            target = _resolve_target(window, known, name)
             out.append(
                 Claim(
                     module=rel,
