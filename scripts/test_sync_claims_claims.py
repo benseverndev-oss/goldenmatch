@@ -118,3 +118,75 @@ def test_a_bom_prefixed_file_is_not_skipped(tmp_path):
         b"\xef\xbb\xbf" + b'def a():\n    """Mirrors b."""\n\n\ndef b():\n    pass\n'
     )
     assert [c.target for c in claims(tmp_path)] == ["b"]
+
+
+def test_a_marked_up_target_wins_over_an_earlier_bare_word(tmp_path):
+    """The bare word comes FIRST in the window and must still lose.
+
+    This package declares thousands of symbols, many of them ordinary English
+    words, so a plain first-match rule resolves "slice one bucket off the
+    keyed frame" to `slice`. Measured on the 50 strongest claims during C1
+    triage, 7 of 8 sampled targets were wrong that way.
+    """
+    (tmp_path / "m.py").write_text(
+        '''
+def claimant():
+    """Byte-identical to the slice path -- see ``score_buckets``."""
+
+
+def slice():
+    pass
+
+
+def score_buckets():
+    pass
+'''.strip(),
+        encoding="utf-8",
+    )
+    found = [c for c in claims(tmp_path) if c.symbol == "claimant"]
+    assert len(found) == 1
+    assert found[0].target == "score_buckets", (
+        f"resolved to {found[0].target!r}; `slice` appears earlier in the window "
+        f"but ``score_buckets`` is the one the author marked up as code"
+    )
+
+
+def test_the_bare_word_fallback_still_resolves_when_there_is_no_markup(tmp_path):
+    """103 of 216 real claims carry no markup at all -- including this
+    phase's motivating incident ("mirrors run_dedupe but returns
+    EngineResult"). Dropping the fallback loses the one case the detector
+    exists to catch."""
+    (tmp_path / "m.py").write_text(
+        '''
+def claimant():
+    """Mirrors run_dedupe but returns EngineResult."""
+
+
+def run_dedupe():
+    pass
+'''.strip(),
+        encoding="utf-8",
+    )
+    found = [c for c in claims(tmp_path) if c.symbol == "claimant"]
+    assert found[0].target == "run_dedupe"
+
+
+def test_a_sphinx_role_target_is_treated_as_marked_up(tmp_path):
+    """`:func:`~mod.name`` is how several goldenmatch docstrings name a target."""
+    (tmp_path / "m.py").write_text(
+        '''
+def claimant():
+    """Mirrors the value path, see :func:`~core.golden.merge_field`."""
+
+
+def value():
+    pass
+
+
+def merge_field():
+    pass
+'''.strip(),
+        encoding="utf-8",
+    )
+    found = [c for c in claims(tmp_path) if c.symbol == "claimant"]
+    assert found[0].target == "merge_field"
