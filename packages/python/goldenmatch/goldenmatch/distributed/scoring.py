@@ -295,7 +295,7 @@ def _has_colocation_plan(config: GoldenMatchConfig) -> bool:
     if any(getattr(mk, "type", None) == "exact" for mk in matchkeys):
         return True
     blocking = getattr(config, "blocking", None)
-    if blocking is not None and (blocking.passes or blocking.keys):
+    if blocking is not None and blocking.resolved_keys():
         return True
     return False
 
@@ -532,7 +532,7 @@ def _attach_colocation_keys(df: Any, config: GoldenMatchConfig) -> Any:
 
     blocking = getattr(config, "blocking", None)
     if blocking is not None:
-        passes = blocking.passes or blocking.keys or []
+        passes = blocking.resolved_keys()
         for i, key_cfg in enumerate(passes):
             try:
                 key_series = std_df.select(_build_block_key_expr(key_cfg))["__block_key__"]
