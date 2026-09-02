@@ -1,8 +1,12 @@
 """TypeScript and Rust candidacy.
 
-Each returns [] when its tool is missing rather than raising, so a machine
-without cargo-machete reports "nothing found" instead of failing the run -- but
-the CI job installs the tools, so [] there means genuinely none.
+Each returns None -- NOT MEASURED -- when its tool is missing rather than
+raising or silently reporting an empty list, so a machine without
+cargo-machete distinguishes "never looked" from "looked, found nothing"
+instead of collapsing both into `0`. That collapse was itself the exact
+defect class this detector exists to catch: it shipped inside the detector,
+where the CI runner's missing cargo-machete/ts-prune made "unused rust deps: 0"
+and "unused ts exports: 0" indistinguishable from a genuine clean result.
 """
 
 from __future__ import annotations
@@ -27,13 +31,20 @@ def test_the_machete_invocation_actually_returns_output():
     """A wrong flag or cwd makes _run return None, which every other test would read as 'no findings'."""
     if shutil.which("cargo") is None:
         pytest.skip("cargo not on PATH")
-    assert _run(["cargo", "machete", "--with-metadata"]) is not None
+    result = _run(["cargo", "machete", "--with-metadata"])
+    assert result is not None
+    assert result.stdout
 
 
-def test_a_missing_tool_is_empty_not_an_exception(monkeypatch):
+def test_a_missing_tool_is_not_measured_not_an_empty_list(monkeypatch):
+    """With no PATH at all, `cargo` and `pnpm` can't be found -- _run returns
+    None -- and the public functions must surface that as None (NOT
+    MEASURED), not as [] (measured, clean). [] would be indistinguishable
+    from a genuine zero-findings run, which is the whole bug this test
+    guards against."""
     monkeypatch.setenv("PATH", "")
-    assert unused_rust_deps() == []
-    assert unused_ts_exports() == []
+    assert unused_rust_deps() is None
+    assert unused_ts_exports() is None
 
 
 def test_parse_machete_real_output():
@@ -100,3 +111,15 @@ def test_parse_machete_no_unused_deps():
     """Test parser when cargo-machete reports no unused dependencies."""
     no_findings = "cargo-machete found no unused dependencies.\n"
     assert _parse_machete(no_findings) == []
+
+
+def test_machete_present_reports_a_real_nonzero_count():
+    """SABOTAGE CHECK for the honest/real split: with cargo-machete actually
+    on PATH, unused_rust_deps() must report a real non-empty finding (this
+    repo genuinely has unused Cargo dependencies right now), not an empty
+    list masquerading as clean and not None masquerading as absent."""
+    if shutil.which("cargo") is None or shutil.which("cargo-machete") is None:
+        pytest.skip("cargo-machete not on PATH")
+    result = unused_rust_deps()
+    assert result is not None
+    assert len(result) > 0

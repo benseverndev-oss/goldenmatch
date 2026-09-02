@@ -151,6 +151,38 @@ def candidates(coverage_xml: Path | None) -> list[dict]:
     return [{"module": m, "static": True, "runtime": True} for m in sorted(eligible & uncovered)]
 
 
+# Human-readable reasons a signal reads NOT MEASURED, keyed by the same label
+# main() prints it under. Kept beside the presentation code that uses them,
+# not in other_langs.py -- the "why" here is about this CI run's environment,
+# not a property of the tool functions themselves.
+_OTHER_LANGS_NOT_MEASURED_REASON = {
+    "unused rust deps": "cargo-machete not installed",
+    "unwired rust exports": "check_native_symbols could not run for any package",
+    "unused ts exports": "ts-prune not installed",
+}
+
+
+def other_langs_report() -> dict[str, list[str] | None]:
+    """The three other_langs signals, keyed by their report label.
+
+    Each value is exactly what its function returned: None means NOT
+    MEASURED, a list (possibly empty) means measured. Both main()'s text and
+    --json branches read this so the two presentations can never disagree
+    about which signals were actually measured.
+    """
+    from dead_code.other_langs import (
+        unused_rust_deps,
+        unused_ts_exports,
+        unwired_rust_exports,
+    )
+
+    return {
+        "unused rust deps": unused_rust_deps(),
+        "unwired rust exports": unwired_rust_exports(),
+        "unused ts exports": unused_ts_exports(),
+    }
+
+
 def public_export_inventory() -> list[str]:
     """Modules that are unimported internally but MAY be public API.
 
@@ -175,11 +207,29 @@ def main() -> int:
     found = candidates(args.coverage_xml)
     inventory = public_export_inventory()
     scope = candidacy_scope(args.coverage_xml)
+    other_langs = other_langs_report()
 
     if args.json:
+        other_langs_json = {
+            label: (
+                {"measured": True, "items": items}
+                if items is not None
+                else {
+                    "measured": False,
+                    "items": None,
+                    "reason": _OTHER_LANGS_NOT_MEASURED_REASON[label],
+                }
+            )
+            for label, items in other_langs.items()
+        }
         print(
             json.dumps(
-                {"candidates": found, "public_inventory": inventory, "candidacy_scope": scope},
+                {
+                    "candidates": found,
+                    "public_inventory": inventory,
+                    "candidacy_scope": scope,
+                    "other_langs": other_langs_json,
+                },
                 indent=2,
             )
         )
@@ -210,17 +260,10 @@ def main() -> int:
         print("  no --coverage-xml given: runtime signal unknown, reporting nothing")
     print(f"\npublic-export inventory (reported only): {len(inventory)}")
 
-    from dead_code.other_langs import (
-        unused_rust_deps,
-        unused_ts_exports,
-        unwired_rust_exports,
-    )
-
-    for label, items in (
-        ("unused rust deps", unused_rust_deps()),
-        ("unwired rust exports", unwired_rust_exports()),
-        ("unused ts exports", unused_ts_exports()),
-    ):
+    for label, items in other_langs.items():
+        if items is None:
+            print(f"\n{label}: NOT MEASURED ({_OTHER_LANGS_NOT_MEASURED_REASON[label]})")
+            continue
         print(f"\n{label}: {len(items)}")
         for item in items[:40]:
             print(f"  - {item}")
