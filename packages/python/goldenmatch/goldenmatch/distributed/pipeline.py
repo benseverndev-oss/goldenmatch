@@ -278,7 +278,13 @@ def _run_phase5_pipeline(
 
     # 5. Distributed golden (groupby __cluster_id__ via repartition + map_batches)
     #    -> a Ray Dataset. Stays distributed; NOT collected to the driver.
-    rules = cfg.golden_rules or GoldenRulesConfig()
+    # `GoldenRulesConfig()` does not construct -- `_validate_default` raises
+    # unless `default_strategy` or `default` is set -- so an unset
+    # `cfg.golden_rules` (it is Optional) killed this lane HERE, after phase-4
+    # matching and phase-5 clustering had already run. `most_complete` is what
+    # core/pipeline.py, backends/datafusion_spine.py and spark/config_pipeline.py
+    # all fall back to; this lane was the only one out of step.
+    rules = cfg.golden_rules or GoldenRulesConfig(default_strategy="most_complete")
     user_columns = [c for c in _row_columns(ds) if not c.startswith("__")]
     golden_ds = build_golden_records_distributed(
         multi_ds, rules, user_columns=user_columns,

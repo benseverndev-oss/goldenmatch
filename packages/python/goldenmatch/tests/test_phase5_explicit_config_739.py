@@ -29,9 +29,19 @@ def _no_survivorship_rules():
       ``golden_rules.field_groups`` / ``.field_rules``; a bare MagicMock exposes
       truthy auto-attributes there and trips the guard. Empty list/dict make it a
       no-op (these tests configure no field-group/conditional survivorship).
-    - The golden tail does ``rules = cfg.golden_rules or GoldenRulesConfig()``;
-      the mock must stay TRUTHY so it short-circuits -- a bare GoldenRulesConfig()
-      raises (it requires a ``default_strategy``/``default``).
+    - The golden tail does ``rules = cfg.golden_rules or <fallback>``; the mock
+      must stay TRUTHY so these tests exercise the CONFIGURED rules rather than
+      the lane's default.
+
+      This bullet used to read "a bare GoldenRulesConfig() raises (it requires a
+      ``default_strategy``/``default``)" -- which was true, and was the actual
+      bug: the Ray lane's fallback could not construct, so any run that left
+      ``golden_rules`` unset died at the golden step. Fixed in
+      distributed/pipeline.py by falling back to
+      ``GoldenRulesConfig(default_strategy="most_complete")``, matching the
+      other three lanes. A falsy mock no longer raises here -- it would quietly
+      test the default instead of the explicit config, which is why the mock
+      stays truthy.
     """
     return MagicMock(field_groups=[], field_rules={})
 
