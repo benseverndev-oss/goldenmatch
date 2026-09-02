@@ -528,6 +528,17 @@ dead_code:
   # Self-test, same rule quality_gate/er_matcher/rust_pgrx/docs_regen already
   # follow: an edit to THIS file must re-run the gate it defines.
   - '.github/filters.yml'
+# The shared-decision inventory's source lives in scripts/, so gating its job on
+# a package filter would let a detector-only change ship without ever running
+# the detector -- the exact hole check_filter_coverage.py now ratchets against.
+shared_decisions:
+  - 'scripts/shared_decisions/**'
+  - 'scripts/test_shared_decisions_*.py'
+  - 'scripts/fixtures/incident_1c843c8a5/**'
+  - 'parity/shared_decisions.allow'
+  - 'packages/python/goldenmatch/goldenmatch/config/schemas.py'
+  - '.github/workflows/ci.yml'
+  - '.github/filters.yml'
 # Native-symbol reconciliation gate: the goldenmatch host's
 # native-kernel references must not drift from the kernel's exports.
 # Re-run the gate when the kernel crate, the host package, the

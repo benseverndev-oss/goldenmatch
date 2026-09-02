@@ -131,6 +131,7 @@ jobs:
       downstream_symbols: ${{ steps.filter.outputs.downstream_symbols }}
       er_matcher: ${{ steps.filter.outputs.er_matcher }}
       dead_code: ${{ steps.filter.outputs.dead_code }}
+      shared_decisions: ${{ steps.filter.outputs.shared_decisions }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v4.0.1
@@ -862,6 +863,31 @@ jobs:
           path: coverage_sweep_*.dat
           retention-days: 1
           if-no-files-found: error
+
+  # Shared-decision inventory (report-only): flags config fields read by more than
+  # one module, where accessors implicitly agree about that field's meaning. The
+  # detector's entire source lives under scripts/, NOT packages/python/goldenmatch/,
+  # so this gets its own `shared_decisions` filter rather than reusing
+  # `python_goldenmatch` -- see that filter's comment in .github/filters.yml and
+  # the `dead_code` job above for the exact prior incident this avoids repeating.
+  shared_decisions:
+    needs: changes
+    if: needs.changes.outputs.shared_decisions == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
+      - name: Detector self-tests
+        run: uv run pytest scripts/test_shared_decisions_fields.py scripts/test_shared_decisions_readers.py scripts/test_shared_decisions_allowlist.py scripts/test_shared_decisions_report.py -q
+      - name: Shared-decision inventory
+        # Report-only by design: main() returns 0 for a non-empty inventory (a
+        # finding is not a failure) and 1 only for a STALE allowlist entry, which
+        # is a real defect -- no continue-on-error here, that exit must fail the job.
+        env:
+          PYTHONPATH: scripts
+        run: uv run python -m shared_decisions.report
 
   # Reference mode: python_goldenmatch now runs NATIVE by default. This lean lane
   # asserts the pure-Python FALLBACK still imports and passes on a core behavior
