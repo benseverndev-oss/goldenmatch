@@ -177,7 +177,7 @@ git commit -m "feat(shared-decisions): enumerate config-model fields from the sc
 **Interfaces:**
 - Consumes: `config_fields() -> dict[str, set[str]]` from Task 1.
 - Produces:
-  - `field_readers(root: Path) -> dict[str, set[str]]` — field name to the set of module paths (posix, relative to `root`) that read it.
+  - `field_accessors(root: Path) -> dict[str, set[str]]` — field name to the set of module paths (posix, relative to `root`) that ACCESS it. Access means READ **or** WRITE, deliberately: a module that mutates a shared field is exactly what the other accessors must agree with (`core/pipeline.py:1934` writes `config.blocking.keys`). Renamed from `field_readers` in fix round 4 — the old name measured readers-and-writers while claiming only readers.
   - `shared_fields(root: Path) -> dict[str, set[str]]` — only the entries whose reader set has more than one module.
 
 **THIS TASK CARRIES THE PHASE'S EXIT CRITERION.** The scan must surface the `score_buckets` / `blocker.py` pair from checked-in fixtures. If it does not, the approach is wrong and that must be reported, not worked around.
@@ -223,7 +223,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from shared_decisions.readers import field_readers, shared_fields  # noqa: E402
+from shared_decisions.readers import field_accessors, shared_fields  # noqa: E402
 
 FIXTURES = Path(__file__).parent / "fixtures" / "incident_1c843c8a5"
 REPO = Path(__file__).resolve().parent.parent
@@ -242,7 +242,7 @@ def test_the_incident_pair_is_surfaced():
 
 
 def test_a_field_read_by_one_module_is_not_shared():
-    readers = field_readers(FIXTURES)
+    readers = field_accessors(FIXTURES)
     shared = shared_fields(FIXTURES)
     single = {f for f, mods in readers.items() if len(mods) == 1}
     assert single, "fixture has no single-reader field; test cannot witness the filter"
@@ -295,7 +295,7 @@ def _known_field_names() -> set[str]:
     return names
 
 
-def field_readers(root: Path) -> dict[str, set[str]]:
+def field_accessors(root: Path) -> dict[str, set[str]]:
     """Map each config field name to the modules under `root` that read it.
 
     Only attribute reads whose base is a plain name containing "config" or
@@ -325,7 +325,7 @@ def field_readers(root: Path) -> dict[str, set[str]]:
 
 def shared_fields(root: Path) -> dict[str, set[str]]:
     """Fields read by MORE THAN ONE module -- the ones whose readers must agree."""
-    return {f: mods for f, mods in field_readers(root).items() if len(mods) > 1}
+    return {f: mods for f, mods in field_accessors(root).items() if len(mods) > 1}
 ```
 
 - [ ] **Step 5: Run to verify it passes**
