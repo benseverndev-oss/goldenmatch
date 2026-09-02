@@ -82,12 +82,7 @@ def _emit_blocking_profile(
         n_rows = int(cast(int, _hv))
 
     # Determine keys_used: prefer passes if truthy, else keys if truthy, else []
-    if config.passes:
-        keys_used = [list(k.fields) for k in config.passes]
-    elif config.keys:
-        keys_used = [list(k.fields) for k in config.keys]
-    else:
-        keys_used = []
+    keys_used = [list(k.fields) for k in config.resolved_keys()]
 
     # Collect block sizes by collecting each LazyFrame.
     # For static/adaptive blocks the underlying DataFrame is already in memory
@@ -308,12 +303,7 @@ def measure_blocking_profile(
         )
         n_rows: int = frame.height
 
-        if blocking_cfg.passes:
-            keys_used = [list(k.fields) for k in blocking_cfg.passes]
-        elif blocking_cfg.keys:
-            keys_used = [list(k.fields) for k in blocking_cfg.keys]
-        else:
-            keys_used = []
+        keys_used = [list(k.fields) for k in blocking_cfg.resolved_keys()]
 
         fast = _fast_static_block_sizes(frame, blocking_cfg)
         if fast is None:
@@ -560,7 +550,7 @@ def build_em_blocks_agg(frame: Any, config: BlockingConfig) -> list:
     if config.strategy == "multi_pass":
         results: list = []
         seen: set = set()
-        for pass_config in config.passes or []:
+        for pass_config in config.resolved_keys():
             pass_sig = (
                 tuple(pass_config.fields),
                 tuple(pass_config.transforms or []),
@@ -572,8 +562,13 @@ def build_em_blocks_agg(frame: Any, config: BlockingConfig) -> list:
                     seen.add(dedup_key)
         return results
 
+    # `resolved_keys()` here too, not `config.keys` -- the branch above selects
+    # the DEDUP behaviour (multi_pass dedups by pass signature), not which keys
+    # to block on. Behaviour-identical today, since the validator requires
+    # `keys` for static/adaptive, but leaving one arm reading the field
+    # directly is how the copies drifted apart in the first place.
     results = []
-    for key_config in config.keys or []:
+    for key_config in config.resolved_keys():
         results.extend(_agg_pass(key_config, "static"))
     return results
 
@@ -1287,7 +1282,7 @@ def _build_multi_pass_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[B
     # keeping distinct-field blocks that merely share a value string.
     seen_keys: set[tuple] = set()
 
-    for pass_config in config.passes or []:
+    for pass_config in config.resolved_keys():
         temp_config = BlockingConfig(
             keys=[pass_config],
             max_block_size=config.max_block_size,
