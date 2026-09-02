@@ -103,16 +103,21 @@ def test_non_config_named_bases_are_not_missed():
     """The "config"/"cfg"-substring rule alone misses readers whose base is
     named after the config *type* it holds rather than containing "config" --
     e.g. `blocking.passes` (base `blocking`, a CamelCase segment of
-    `BlockingConfig`). These three modules were silently absent from the
+    `BlockingConfig`). These modules were silently absent from the
     real-package scan until the base-name rule was widened past the literal
     substring; naming them explicitly means a future narrowing says which one
-    vanished, not just that the count dropped."""
+    vanished, not just that the count dropped.
+
+    Originally this named three modules. `distributed/scoring.py` and
+    `identity/block_index.py` were dropped when PR #2845 routed them through
+    `BlockingConfig.resolved_keys()` -- they no longer read `.passes`/`.keys`
+    at all, so they can no longer witness anything about the base-name rule.
+    The two below still use a type-named base and still exercise it."""
     accessors = field_accessors(GM)
     both = {m for m in accessors.get("passes", set()) if m in accessors.get("keys", set())}
     for expected in (
         "core/autoconfig_verify.py",
-        "distributed/scoring.py",
-        "identity/block_index.py",
+        "core/autoconfig.py",
     ):
         assert expected in both, f"{expected} missing from passes+keys accessors: {sorted(both)}"
 
@@ -123,16 +128,25 @@ def test_non_config_named_bases_are_not_missed():
 # accessor, gain an unrelated false positive somewhere else, and the number
 # holds while the inventory has quietly stopped watching a module. Each entry
 # was verified by reading its access site.
+# FOUR MODULES LEFT THIS SET WHEN THE DECISION WAS SINGLE-SOURCED.
+#
+# `backends/score_buckets.py`, `backends/fs_out_of_core.py`,
+# `distributed/scoring.py` and `identity/block_index.py` used to resolve
+# keys-vs-passes by hand. PR #2845 moved that rule onto
+# `BlockingConfig.resolved_keys()` and routed all ten call sites through it, so
+# those modules no longer read `.passes`/`.keys` directly and are no longer
+# shared-decision accessors at all.
+#
+# That is the remediation working, observed by the detector that found it: this
+# inventory exists to surface duplicated decisions, and the decision it
+# surfaced has been de-duplicated. The set shrinks; it must never grow without
+# a triage.
 EXPECTED_PASSES_AND_KEYS_ACCESSORS = {
     # bare `blocking_config.passes` -- the original "config"/"cfg" rule
-    "backends/score_buckets.py",  # one half of the 1c843c8a5 incident pair
-    "core/blocker.py",  # the other half; disagreed about precedence
-    "backends/fs_out_of_core.py",
+    "core/blocker.py",  # half of the 1c843c8a5 incident pair; still reads both
     "core/autoconfig.py",
     # base named after the config TYPE (`blocking.passes`), no "config" in it
     "core/autoconfig_verify.py",
-    "distributed/scoring.py",
-    "identity/block_index.py",
     "core/autoconfig_rules.py",
     # attribute-chain base (`config.blocking.passes`)
     "core/fused_match.py",

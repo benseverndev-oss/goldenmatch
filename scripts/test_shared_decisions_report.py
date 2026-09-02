@@ -65,8 +65,24 @@ def test_known_incident_fields_rank_near_the_top():
     """
     items = inventory(DEFAULT_ROOT)
     top10 = [item["field"] for item in items[:10]]
-    for field in ("keys", "strategy", "passes"):
+    for field in ("keys", "strategy"):
         assert field in top10, f"{field} fell out of the top 10: {top10}"
+
+    # `passes` USED to be here, and left for the right reason: PR #2845 moved
+    # the keys-vs-passes decision onto `BlockingConfig.resolved_keys()` and
+    # routed ten call sites through it, so four modules stopped reading
+    # `.passes` directly and its accessor count fell. The window was NOT
+    # widened to top-15 to paper over that -- this docstring's own warning
+    # forbids it. What the tripwire still guarantees is that the field remains
+    # VISIBLE: it must not vanish from the inventory altogether while
+    # `core/blocker.py` and five others still read it.
+    fields = [item["field"] for item in items]
+    assert "passes" in fields, (
+        "`passes` disappeared from the inventory entirely. That is not the "
+        "remediation shrinking its accessor count -- it means the scan stopped "
+        "seeing a field the 1c843c8a5 incident turned on. Investigate the "
+        "accessor rule before touching this test."
+    )
 
 
 def test_a_field_declared_on_multiple_classes_carries_the_ambiguity_marker():
