@@ -71,16 +71,29 @@ def test_non_config_named_bases_are_not_missed():
         assert expected in both, f"{expected} missing from passes+keys readers: {sorted(both)}"
 
 
-def test_at_least_nine_modules_read_both_passes_and_keys():
+def test_at_least_ten_modules_read_both_passes_and_keys():
     """Lower bound on the real package, not an exact count -- the incident
     field pair (`passes`/`keys`) is read by every blocking-strategy consumer,
     and a narrowing rule should not be able to silently drop below what's
-    already known to be there. 9 = the 8 found once bare-Name class-prefix
-    matching was added, plus core/fused_match.py once attribute-chain bases
-    (`config.blocking.passes`) were handled."""
+    already known to be there. 10 = the 9 found once attribute-chain bases
+    were handled, plus core/config_critique.py once module-local aliases
+    (`b = config.blocking`, then `b.passes`/`b.keys`) were tracked."""
     readers = field_readers(GM)
     both = {m for m in readers.get("passes", set()) if m in readers.get("keys", set())}
-    assert len(both) >= 9, f"only {len(both)} modules read both passes and keys: {sorted(both)}"
+    assert len(both) >= 10, f"only {len(both)} modules read both passes and keys: {sorted(both)}"
+
+
+def test_config_critique_is_a_reader_of_both_passes_and_keys():
+    """core/config_critique.py aliases `b = config.blocking` and then reads
+    `b.strategy`/`b.passes`/`b.keys` in the SAME multi_pass precedence branch
+    the 1c843c8a5 incident fix added to score_buckets -- a module making the
+    identical precedence-shaped decision on the identical fields. It was
+    silently absent from the scan (a bare `b` doesn't word-boundary-match any
+    config class) until module-local alias tracking was added; named
+    explicitly so a future narrowing says this exact module vanished."""
+    readers = field_readers(GM)
+    both = {m for m in readers.get("passes", set()) if m in readers.get("keys", set())}
+    assert "core/config_critique.py" in both, f"config_critique.py missing from: {sorted(both)}"
 
 
 def test_fused_match_is_a_reader_of_both_passes_and_keys():
