@@ -51,6 +51,20 @@ def test_a_bom_prefixed_source_file_is_parsed_not_skipped(tmp_path):
     assert unparseable_modules(tmp_path) == []
 
 
+def test_unparseable_modules_names_the_genuinely_broken_file_only(tmp_path):
+    """`unparseable_modules` exists so a silent ast.parse SyntaxError is
+    COUNTED rather than swallowed -- the same silence
+    `modules_without_coverage_data` exists to surface in the companion
+    parity_coverage.py tool. Drive the REAL function against a genuinely
+    unparseable file (unbalanced parens, not a BOM) alongside a valid one,
+    and pin that it names the broken file and ONLY the broken file --
+    non-emptiness alone wouldn't tell a future regression that returns
+    every module, or a hardcoded module name, apart from a correct one."""
+    (tmp_path / "broken.py").write_text("def f(:\n", encoding="utf-8")
+    (tmp_path / "fine.py").write_text("def g():\n    return 1\n", encoding="utf-8")
+    assert unparseable_modules(tmp_path) == ["broken.py"]
+
+
 def test_the_incident_pair_is_surfaced():
     """EXIT CRITERION. Both fixture modules read `passes` and `keys`; the scan
     must report both fields as read by more than one module."""
