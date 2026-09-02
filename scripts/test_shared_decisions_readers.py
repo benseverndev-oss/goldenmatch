@@ -51,3 +51,31 @@ def test_scan_reports_module_paths_not_absolute():
     for mods in shared.values():
         for m in mods:
             assert not Path(m).is_absolute(), m
+
+
+def test_non_config_named_bases_are_not_missed():
+    """The "config"/"cfg"-substring rule alone misses readers whose base is
+    named after the config *type* it holds rather than containing "config" --
+    e.g. `blocking.passes` (base `blocking`, prefix of `BlockingConfig`). These
+    three modules were silently absent from the real-package scan until the
+    base-name rule was widened to also match a class-name prefix; naming them
+    explicitly means a future narrowing says which one vanished, not just that
+    the count dropped."""
+    readers = field_readers(GM)
+    both = {m for m in readers.get("passes", set()) if m in readers.get("keys", set())}
+    for expected in (
+        "core/autoconfig_verify.py",
+        "distributed/scoring.py",
+        "identity/block_index.py",
+    ):
+        assert expected in both, f"{expected} missing from passes+keys readers: {sorted(both)}"
+
+
+def test_at_least_seven_modules_read_both_passes_and_keys():
+    """Lower bound on the real package, not an exact count -- the incident
+    field pair (`passes`/`keys`) is read by every blocking-strategy consumer,
+    and a narrowing rule should not be able to silently drop below what's
+    already known to be there."""
+    readers = field_readers(GM)
+    both = {m for m in readers.get("passes", set()) if m in readers.get("keys", set())}
+    assert len(both) >= 7, f"only {len(both)} modules read both passes and keys: {sorted(both)}"
