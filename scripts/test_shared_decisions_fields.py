@@ -24,12 +24,25 @@ def test_blocking_config_fields_are_found():
 
 def test_a_plausible_number_of_models_is_found():
     """A parse failure or a wrong path yields a near-empty dict that would make
-    every downstream result vacuously clean."""
+    every downstream result vacuously clean. (Measured at implementation: 41)"""
     fields = config_fields()
-    assert len(fields) >= 10, f"only {len(fields)} config models found"
+    assert len(fields) >= 30, f"only {len(fields)} config models found (was 41)"
 
 
-def test_every_model_has_at_least_one_field():
+def test_known_models_are_present():
+    """Parser regression test: named models must be present with plausible field
+    counts. Failure names the missing or emptied model."""
     fields = config_fields()
-    empty = [k for k, v in fields.items() if not v]
-    assert not empty, f"models parsed with no fields: {empty}"
+    required_models = {
+        "BlockingConfig": 25,
+        "GoldenMatchConfig": 29,
+        "IdentityConfig": 16,
+        "MatchkeyConfig": 18,
+    }
+    for model, expected_field_count in required_models.items():
+        assert model in fields, f"model {model!r} not found; available: {sorted(fields)[:20]}"
+        actual_count = len(fields[model])
+        assert actual_count > 0, f"model {model!r} has no fields"
+        assert actual_count == expected_field_count, (
+            f"model {model!r}: expected {expected_field_count} fields, got {actual_count}"
+        )

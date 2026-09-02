@@ -35,6 +35,8 @@ def config_fields() -> dict[str, set[str]]:
                     head = stmt.annotation.value
                     if isinstance(head, ast.Name) and head.id == "ClassVar":
                         continue
+                    if isinstance(head, ast.Attribute) and head.attr == "ClassVar":
+                        continue
                 names.add(name)
         if names:
             out[node.name] = names
