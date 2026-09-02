@@ -61,3 +61,15 @@ path = "src/bin/pgrx_embed.rs"
 
 [dev-dependencies]
 pgrx-tests = "0.12.9"
+
+# pgrx-tests backs the `#[pg_test]` attribute macro (pgrx crate) used under
+# `#[cfg(any(test, feature = "pg_test"))]` in kernels.rs / docs.rs /
+# key_integrity.rs / goldencheck_kernels.rs, plus the `pg_test` harness module
+# in lib.rs -- referenced only through that macro's generated code, invisible
+# to cargo-machete's static text scan. `cargo pgrx test` itself doesn't run in
+# this repo (see fs_em.rs's NOTE and reference_pgrx_test_incompatible.md: a
+# psql smoke test stands in for it), but the dev-dependency still has to
+# exist for `cargo check --tests` / `cargo build --tests` to compile those
+# cfg(test) modules at all.
+[package.metadata.cargo-machete]
+ignored = ["pgrx-tests"]

@@ -411,7 +411,6 @@ dependencies = [
  "arrow",
  "goldencheck-core",
  "pyo3",
- "rustc-hash",
 ]
 
 [[package]]

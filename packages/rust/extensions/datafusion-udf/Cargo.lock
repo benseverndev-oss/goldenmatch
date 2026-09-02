@@ -1678,7 +1678,6 @@ name = "goldenmatch-datafusion-udf"
 version = "0.1.0"
 dependencies = [
  "alloc-stdlib",
- "arrow 58.4.0",
  "arrow-array 58.4.0",
  "arrow-schema 58.4.0",
  "brotli-decompressor",
@@ -1690,7 +1689,6 @@ dependencies = [
  "goldenmatch-graph-core",
  "goldenmatch-score-core",
  "pyo3",
- "pyo3-build-config",
 ]
 
 [[package]]
