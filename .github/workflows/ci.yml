@@ -675,6 +675,26 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
       - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
+      # Provisions cargo-machete and ts-prune (via `pnpm dlx`, so no lockfile/
+      # devDependency change needed) so the other_langs signals below actually
+      # measure something instead of reading NOT MEASURED on every run. See
+      # scripts/dead_code/other_langs.py's docstring for why a tool-absent
+      # result must never look like a clean one.
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - name: Install cargo-machete
+        # `cargo install --locked`, matching the five other cargo-tool installs
+        # in this file (cargo-llvm-cov, cargo-pgrx, wasm-bindgen-cli, inferno).
+        # Deliberately NOT the cargo-binstall bootstrap, which is a `curl | bash`
+        # of an unpinned script from a moving branch -- every action here is
+        # SHA-pinned precisely to avoid that, and a dead-code gate is not worth
+        # a new supply-chain surface to save a minute of build time.
+        run: cargo install cargo-machete --locked
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271  # v6.0.9
+        # Reads version from root package.json `packageManager` field.
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
+        with:
+          node-version: 22
+          cache: pnpm
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
           pattern: gm-cov-*
@@ -782,10 +802,12 @@ jobs:
         run: uv run python -m dead_code.report --coverage-xml packages/python/goldenmatch/coverage.xml
       - name: Ratchet
         if: steps.combine.outputs.full_union == 'true'
-        # A0 (docs/superpowers/specs/2026-09-01-dead-code-audit-design.md, Delivery
-        # stages) lands this job report-only: it must not gate. Flipping the ratchet
-        # to gating is A3, a later phase -- until then a candidate must not fail CI.
-        continue-on-error: true
+        # A3 (docs/superpowers/specs/2026-09-01-dead-code-audit-design.md, Delivery
+        # stages): the gate is now armed. A0 landed this job report-only
+        # (continue-on-error: true) so the first real CI report could be triaged
+        # without blocking merges; that report came back 790 modules known, 0
+        # candidates, KNOWN_DEAD is empty, and the ratchet passes -- so a new dead
+        # module now fails this job for real, same as any other required check.
         run: uv run pytest scripts/test_no_new_dead_code.py -q
       - name: Report + ratchet skipped (partial coverage union)
         if: steps.combine.outputs.full_union != 'true'
