@@ -896,7 +896,7 @@ jobs:
           COVERAGE_FILE: ${{ github.workspace }}/coverage_native_off.dat
         run: |
           uv run coverage run --source=goldenflow -m pytest \
-            packages/python/goldenflow/tests -q -x --timeout=300 || true
+            packages/python/goldenflow/tests -q --timeout=300 || true
           uv run coverage xml -o coverage_native_off.xml --fail-under=0
       - name: Unguarded pure-Python fallbacks
         # KNOWN SCOPING ARTEFACT, not a finding: parity_coverage.py scans _py
@@ -909,10 +909,14 @@ jobs:
         # core/scorer.py) can NEVER have coverage data from this run and will
         # always show up in main()'s second line, "N module(s) had no
         # coverage data at all" -- currently printing 4 (those 4 modules), a
-        # fixed floor from this goldenflow-only scoping, not a regression. If
-        # that second-line count ever exceeds 4, the excess is a real gap;
-        # investigate it, don't fold it into this baseline.
-        run: uv run python scripts/parity_coverage.py --native-off-xml coverage_native_off.xml
+        # fixed floor from this goldenflow-only scoping, not a regression.
+        # `--max-no-data 4` turns that floor into an enforced check rather
+        # than a comment nobody reads: a no-data count above 4 does not mean
+        # more code went unguarded, it means the MEASUREMENT didn't happen
+        # for those modules (suite died early, a collection error truncated
+        # it, the runner OOMed) and the report below it is untrustworthy --
+        # so this step fails loudly instead of printing a bigger number.
+        run: uv run python scripts/parity_coverage.py --native-off-xml coverage_native_off.xml --max-no-data 4
 
   # Reference mode: python_goldenmatch now runs NATIVE by default. This lean lane
   # asserts the pure-Python FALLBACK still imports and passes on a core behavior

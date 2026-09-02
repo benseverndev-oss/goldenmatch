@@ -9,6 +9,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+import parity_coverage as pc  # noqa: E402
 from parity_coverage import (  # noqa: E402
     modules_without_coverage_data,
     unguarded_py_functions,
@@ -106,3 +107,42 @@ def test_an_ambiguous_filename_match_raises_rather_than_guessing(tmp_path):
     spans = {"scoring.py": [("_ambiguous_py", 1, 1)]}
     with pytest.raises(ValueError, match="ambiguous"):
         unguarded_py_functions(_write(tmp_path, body), spans=spans)
+
+
+def test_max_no_data_below_the_limit_exits_0(tmp_path, monkeypatch):
+    """The CLI's --max-no-data enforces the documented no-data floor: a gap
+    count AT OR BELOW the limit is fine and main() exits clean."""
+    monkeypatch.setattr(pc, "unguarded_py_functions", lambda *a, **k: [])
+    monkeypatch.setattr(pc, "modules_without_coverage_data", lambda *a, **k: ["a.py", "b.py"])
+    monkeypatch.setattr(pc, "_py_function_spans", lambda: {})
+    xml = _write(tmp_path, XML)
+    rc = pc.main(["--native-off-xml", str(xml), "--max-no-data", "2"])
+    assert rc == 0
+
+
+def test_max_no_data_above_the_limit_exits_1_and_names_count_and_limit(tmp_path, monkeypatch, capsys):
+    """A gap count exceeding the limit means the RUN was incomplete, not that
+    more code is unguarded -- that must fail loudly, and the message must
+    name both the actual count and the configured limit so a reader doesn't
+    have to go dig through the printed module list to find them."""
+    monkeypatch.setattr(pc, "unguarded_py_functions", lambda *a, **k: [])
+    monkeypatch.setattr(
+        pc, "modules_without_coverage_data", lambda *a, **k: ["a.py", "b.py", "c.py"]
+    )
+    monkeypatch.setattr(pc, "_py_function_spans", lambda: {})
+    xml = _write(tmp_path, XML)
+    rc = pc.main(["--native-off-xml", str(xml), "--max-no-data", "2"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "FAIL: 3 module(s) had no coverage data, exceeding --max-no-data 2" in out
+
+
+def test_max_no_data_unset_never_fails_regardless_of_gap_count(tmp_path, monkeypatch):
+    """Existing callers (no --max-no-data) must be unaffected: even a large
+    gap count is report-only when no limit was requested."""
+    monkeypatch.setattr(pc, "unguarded_py_functions", lambda *a, **k: [])
+    monkeypatch.setattr(pc, "modules_without_coverage_data", lambda *a, **k: ["a.py"] * 50)
+    monkeypatch.setattr(pc, "_py_function_spans", lambda: {})
+    xml = _write(tmp_path, XML)
+    rc = pc.main(["--native-off-xml", str(xml)])
+    assert rc == 0

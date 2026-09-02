@@ -134,6 +134,20 @@ def modules_without_coverage_data(
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--native-off-xml", type=Path, required=True)
+    ap.add_argument(
+        "--max-no-data",
+        type=int,
+        default=None,
+        help=(
+            "Fail if more than this many modules have no coverage data at "
+            "all. A no-data count above this floor doesn't mean more code "
+            "went unguarded -- it means the measurement didn't happen for "
+            "those modules (suite died early, a collection error truncated "
+            "it, the runner OOMed), which makes the whole report "
+            "untrustworthy. Unset by default so existing callers are "
+            "unaffected."
+        ),
+    )
     args = ap.parse_args(argv)
     spans = _py_function_spans()
     items = unguarded_py_functions(args.native_off_xml, spans=spans)
@@ -144,6 +158,13 @@ def main(argv: list[str]) -> int:
     print(f"{len(gaps)} module(s) had no coverage data at all (not counted above)")
     for g in gaps:
         print(f"   {g}")
+    if args.max_no_data is not None and len(gaps) > args.max_no_data:
+        print(
+            f"FAIL: {len(gaps)} module(s) had no coverage data, exceeding "
+            f"--max-no-data {args.max_no_data} -- the coverage run is "
+            f"incomplete or mis-scoped, not just 'more unguarded code'"
+        )
+        return 1
     return 0
 
 
