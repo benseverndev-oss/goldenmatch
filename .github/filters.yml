@@ -544,6 +544,13 @@ shared_decisions:
   - 'packages/python/goldenmatch/goldenmatch/**'
   - '.github/workflows/ci.yml'
   - '.github/filters.yml'
+  - 'scripts/parity_coverage.py'
+  - 'scripts/test_parity_coverage.py'
+  - 'packages/python/goldenflow/goldenflow/**'
+  # The coverage step also runs the goldenflow test suite itself (to harvest
+  # native-off coverage for parity_coverage.py); the source glob above covers
+  # only the package under test, not the tests that exercise it.
+  - 'packages/python/goldenflow/tests/**'
 # Native-symbol reconciliation gate: the goldenmatch host's
 # native-kernel references must not drift from the kernel's exports.
 # Re-run the gate when the kernel crate, the host package, the

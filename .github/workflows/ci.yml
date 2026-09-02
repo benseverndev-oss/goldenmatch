@@ -888,6 +888,31 @@ jobs:
         env:
           PYTHONPATH: scripts
         run: uv run python -m shared_decisions.report
+      - name: Companion A tests
+        run: uv run pytest scripts/test_parity_coverage.py -q
+      - name: goldenflow suite with native OFF, under coverage
+        env:
+          GOLDENFLOW_NATIVE: "0"
+          COVERAGE_FILE: ${{ github.workspace }}/coverage_native_off.dat
+        run: |
+          uv run coverage run --source=goldenflow -m pytest \
+            packages/python/goldenflow/tests -q -x --timeout=300 || true
+          uv run coverage xml -o coverage_native_off.xml --fail-under=0
+      - name: Unguarded pure-Python fallbacks
+        # KNOWN SCOPING ARTEFACT, not a finding: parity_coverage.py scans _py
+        # functions across BOTH goldenflow and goldenmatch, but this step's
+        # coverage run above is `--source=goldenflow` only (goldenmatch's
+        # native wheel is platform-gated, so its native-off story doesn't fit
+        # this job -- that's a separate task, not scope creep here). That
+        # means goldenmatch's 9 `_py` functions (across 4 modules:
+        # core/_hashing.py, core/autoconfig.py, core/indicators.py,
+        # core/scorer.py) can NEVER have coverage data from this run and will
+        # always show up in main()'s second line, "N module(s) had no
+        # coverage data at all" -- currently printing 4 (those 4 modules), a
+        # fixed floor from this goldenflow-only scoping, not a regression. If
+        # that second-line count ever exceeds 4, the excess is a real gap;
+        # investigate it, don't fold it into this baseline.
+        run: uv run python scripts/parity_coverage.py --native-off-xml coverage_native_off.xml
 
   # Reference mode: python_goldenmatch now runs NATIVE by default. This lean lane
   # asserts the pure-Python FALLBACK still imports and passes on a core behavior
