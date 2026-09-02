@@ -131,6 +131,7 @@ jobs:
       downstream_symbols: ${{ steps.filter.outputs.downstream_symbols }}
       er_matcher: ${{ steps.filter.outputs.er_matcher }}
       dead_code: ${{ steps.filter.outputs.dead_code }}
+      shared_decisions: ${{ steps.filter.outputs.shared_decisions }}
       sync_claims: ${{ steps.filter.outputs.sync_claims }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
@@ -863,6 +864,78 @@ jobs:
           path: coverage_sweep_*.dat
           retention-days: 1
           if-no-files-found: error
+
+  # Shared-decision inventory (report-only): flags config fields read by more than
+  # one module, where accessors implicitly agree about that field's meaning. The
+  # detector's entire source lives under scripts/, NOT packages/python/goldenmatch/,
+  # so this gets its own `shared_decisions` filter rather than reusing
+  # `python_goldenmatch` -- see that filter's comment in .github/filters.yml and
+  # the `dead_code` job above for the exact prior incident this avoids repeating.
+  shared_decisions:
+    needs: changes
+    if: needs.changes.outputs.shared_decisions == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
+      - name: Detector self-tests
+        run: uv run pytest scripts/test_shared_decisions_fields.py scripts/test_shared_decisions_readers.py scripts/test_shared_decisions_allowlist.py scripts/test_shared_decisions_report.py -q
+      - name: Shared-decision inventory
+        # Report-only by design: main() returns 0 for a non-empty inventory (a
+        # finding is not a failure) and 1 only for a STALE allowlist entry, which
+        # is a real defect -- no continue-on-error here, that exit must fail the job.
+        env:
+          PYTHONPATH: scripts
+        run: uv run python -m shared_decisions.report
+      - name: Companion A tests
+        run: uv run pytest scripts/test_parity_coverage.py -q
+      - name: goldenflow suite with native OFF, under coverage
+        env:
+          GOLDENFLOW_NATIVE: "0"
+          COVERAGE_FILE: ${{ github.workspace }}/coverage_native_off.dat
+        run: |
+          set +e
+          uv run coverage run --source=goldenflow -m pytest \
+            packages/python/goldenflow/tests -q --timeout=300
+          rc=$?
+          set -e
+          # pytest exit codes: 0=all passed, 1=tests failed (fine -- goldenflow
+          # has its own gating job for that), 2=interrupted, 3=internal error,
+          # 4=usage error, 5=no tests collected. Anything above 1 means the RUN
+          # itself broke (crash, OOM, a collection error) rather than merely
+          # went red, and `coverage run` still emits a <line hits="0"/> entry
+          # for every module it imported successfully even though the suite
+          # never got a chance to exercise anything -- so a broken run and a
+          # complete one produce coverage XML that looks the same shape to
+          # parity_coverage.py's --max-no-data floor below. Fail here, before
+          # that floor ever gets a chance to (not) catch it.
+          [ "$rc" -le 1 ] || { echo "::error::pytest exited $rc -- coverage harvest is not trustworthy"; exit 1; }
+          uv run coverage xml -o coverage_native_off.xml --fail-under=0
+      - name: Unguarded pure-Python fallbacks
+        # KNOWN SCOPING ARTEFACT, not a finding: parity_coverage.py scans _py
+        # functions across BOTH goldenflow and goldenmatch, but this step's
+        # coverage run above is `--source=goldenflow` only (goldenmatch's
+        # native wheel is platform-gated, so its native-off story doesn't fit
+        # this job -- that's a separate task, not scope creep here). That
+        # means goldenmatch's 9 `_py` functions (across 4 modules:
+        # core/_hashing.py, core/autoconfig.py, core/indicators.py,
+        # core/scorer.py) can NEVER have coverage data from this run and will
+        # always show up in main()'s second line, "N module(s) had no
+        # coverage data at all" -- currently printing 4 (those 4 modules), a
+        # fixed floor from this goldenflow-only scoping, not a regression.
+        # `--max-no-data 4` still guards that goldenmatch-scoping floor (a
+        # jump past 4 means something is ALSO excluded beyond the known
+        # scoping gap), but it does NOT guard against a truncated or crashed
+        # suite -- `coverage run --source=goldenflow` emits a <class> entry
+        # with recorded (if all-zero) <line> data for every goldenflow module
+        # it merely IMPORTED, whether or not any test ran, so
+        # modules_without_coverage_data() stays at exactly 4 regardless of
+        # whether the suite ran to completion. That truncation case is now
+        # caught by the pytest-rc check in the previous step, not by this
+        # floor.
+        run: uv run python scripts/parity_coverage.py --native-off-xml coverage_native_off.xml --max-no-data 4
 
   # Reference mode: python_goldenmatch now runs NATIVE by default. This lean lane
   # asserts the pure-Python FALLBACK still imports and passes on a core behavior

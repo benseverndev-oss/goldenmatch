@@ -528,6 +528,29 @@ dead_code:
   # Self-test, same rule quality_gate/er_matcher/rust_pgrx/docs_regen already
   # follow: an edit to THIS file must re-run the gate it defines.
   - '.github/filters.yml'
+# The shared-decision inventory's source lives in scripts/, so gating its job on
+# a package filter would let a detector-only change ship without ever running
+# the detector -- the exact hole check_filter_coverage.py now ratchets against.
+shared_decisions:
+  - 'scripts/shared_decisions/**'
+  - 'scripts/test_shared_decisions_*.py'
+  - 'scripts/fixtures/incident_1c843c8a5/**'
+  - 'parity/shared_decisions.allow'
+  # readers.py rglobs this whole tree to find config-field accessors, so the
+  # inventory's answer changes whenever ANY goldenmatch module changes (a new
+  # accessor added, or the last one removed). A narrower filter (e.g. just
+  # config/schemas.py, what fields.py reads) leaves the report stale and
+  # quietly wrong -- the same failure shape this detector exists to catch.
+  - 'packages/python/goldenmatch/goldenmatch/**'
+  - '.github/workflows/ci.yml'
+  - '.github/filters.yml'
+  - 'scripts/parity_coverage.py'
+  - 'scripts/test_parity_coverage.py'
+  - 'packages/python/goldenflow/goldenflow/**'
+  # The coverage step also runs the goldenflow test suite itself (to harvest
+  # native-off coverage for parity_coverage.py); the source glob above covers
+  # only the package under test, not the tests that exercise it.
+  - 'packages/python/goldenflow/tests/**'
 # Native-symbol reconciliation gate: the goldenmatch host's
 # native-kernel references must not drift from the kernel's exports.
 # Re-run the gate when the kernel crate, the host package, the

@@ -1,0 +1,7 @@
+# Config fields read by more than one module whose readers are KNOWN to agree.
+#
+# An entry is a claim that someone checked the readers and they agree -- not
+# that the finding is inconvenient. Format: `field  # reason`.
+#
+# Deliberately EMPTY at B0a. The first inventory is triaged in B1; entries are
+# added there, with the reason recorded at the time the check was done.
