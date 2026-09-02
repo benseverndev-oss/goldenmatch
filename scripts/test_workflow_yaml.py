@@ -11,10 +11,22 @@ import textwrap
 from pathlib import Path
 
 import pytest
+import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import check_workflow_yaml as mod  # noqa: E402
+
+
+def _load_ci_workflow() -> dict:
+    """Parse the real `.github/workflows/ci.yml`, not a synthetic fixture.
+
+    The wiring-reachability test below asserts something about the actual
+    file this repo ships, not about a scratch workflow built by the `wf`
+    fixture -- so it needs its own loader rather than that fixture.
+    """
+    ci_path = mod.WORKFLOW_DIR / "ci.yml"
+    return yaml.safe_load(ci_path.read_text(encoding="utf-8"))
 
 
 @pytest.fixture
@@ -151,3 +163,18 @@ def test_the_repo_as_it_stands_passes():
     problems, scanned = mod.check(mod.WORKFLOW_DIR)
     assert scanned >= mod.MIN_EXPECTED_WORKFLOWS, scanned
     assert problems == [], problems
+
+
+def test_sync_claims_job_is_reachable():
+    """A job whose gating output is never emitted is skipped on every run.
+
+    The `changes` job needs an explicit `outputs:` line per filter. Without it
+    `needs.changes.outputs.sync_claims` is empty, the `if:` is false, and the
+    lane reports green having measured nothing -- PR #2839's defect.
+    """
+    spec = _load_ci_workflow()
+    outputs = spec["jobs"]["changes"]["outputs"]
+    assert "sync_claims" in outputs, (
+        "the changes job emits no sync_claims output, so the job can never run"
+    )
+    assert "sync_claims" in spec["jobs"]["sync_claims"]["if"]
