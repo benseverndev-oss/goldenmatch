@@ -71,11 +71,37 @@ def test_non_config_named_bases_are_not_missed():
         assert expected in both, f"{expected} missing from passes+keys readers: {sorted(both)}"
 
 
-def test_at_least_seven_modules_read_both_passes_and_keys():
+def test_at_least_nine_modules_read_both_passes_and_keys():
     """Lower bound on the real package, not an exact count -- the incident
     field pair (`passes`/`keys`) is read by every blocking-strategy consumer,
     and a narrowing rule should not be able to silently drop below what's
-    already known to be there."""
+    already known to be there. 9 = the 8 found once bare-Name class-prefix
+    matching was added, plus core/fused_match.py once attribute-chain bases
+    (`config.blocking.passes`) were handled."""
     readers = field_readers(GM)
     both = {m for m in readers.get("passes", set()) if m in readers.get("keys", set())}
-    assert len(both) >= 7, f"only {len(both)} modules read both passes and keys: {sorted(both)}"
+    assert len(both) >= 9, f"only {len(both)} modules read both passes and keys: {sorted(both)}"
+
+
+def test_fused_match_is_a_reader_of_both_passes_and_keys():
+    """core/fused_match.py is a shipping scoring backend that reads BOTH
+    incident fields via `config.blocking.keys`/`config.blocking.passes` --
+    an attribute-chain base (`config.blocking`), not a bare Name. It was
+    silently absent from the scan until attribute chains were walked; named
+    explicitly so a future narrowing says this exact module vanished."""
+    readers = field_readers(GM)
+    both = {m for m in readers.get("passes", set()) if m in readers.get("keys", set())}
+    assert "core/fused_match.py" in both, f"fused_match.py missing from: {sorted(both)}"
+
+
+def test_single_letter_bases_do_not_falsely_match_a_config_class_prefix():
+    """A base name that merely PREFIXES a config class name (`c` prefixes
+    `CanopyConfig`, `f` prefixes `FieldTransform`) must not count as a config
+    read -- `c` in cli/memory.py:253 (`for c in corrections:`) is a
+    Correction record, not a CanopyConfig, and its `.trust` read is unrelated
+    to any config field. The word-boundary rule (equality, not prefix)
+    rejects it; a looser prefix rule previously let it through."""
+    readers = field_readers(GM)
+    assert "cli/memory.py" not in readers.get(
+        "trust", set()
+    ), f"cli/memory.py falsely counted as a 'trust' reader: {readers.get('trust', set())}"
