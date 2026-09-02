@@ -172,7 +172,13 @@ def test_shared_fields_is_computed_once_per_invocation(monkeypatch, capsys):
     inside `inventory()`, once again for the stale-allowlist check -- each
     re-parsing all ~493 files under root. It's a pure function so the two
     calls never disagreed, it was just double the CI cost. Pin the call
-    count so a future edit can't reintroduce the duplicate parse."""
+    count so a future edit can't reintroduce the duplicate parse.
+
+    The invariant is NO TREE IS PARSED TWICE, not "exactly one call". Scoping
+    the stale check to DEFAULT_ROOT means a run under a custom `--root` legally
+    parses two DISTINCT trees; asserting a bare count of 1 would have forced
+    that fix to either re-couple staleness to the scanned root or drop the
+    guard, so it is the roots that are pinned, not the tally."""
     import shared_decisions.report as mod
 
     calls = []
@@ -185,7 +191,12 @@ def test_shared_fields_is_computed_once_per_invocation(monkeypatch, capsys):
     monkeypatch.setattr(mod, "shared_fields", counting)
     rc = main(["--root", str(FIXTURES)])
     assert rc == 0
-    assert len(calls) == 1, f"shared_fields(root) called {len(calls)} times, expected 1"
+    assert len(calls) == len(set(calls)), f"a tree was parsed twice: {calls}"
+
+    # The default root must still be scanned exactly once when it IS the root.
+    calls.clear()
+    assert main([]) == 0
+    assert calls == [DEFAULT_ROOT], f"expected one scan of DEFAULT_ROOT, got {calls}"
 
 
 def test_allowlisted_fields_are_excluded(monkeypatch):
@@ -242,3 +253,28 @@ def test_main_json_with_no_stale_entries_exits_0(tmp_path, monkeypatch, capsys):
     captured = capsys.readouterr()
     assert rc == 0
     assert '"stale_allowlist_entries": []' in captured.out, captured.out
+
+
+def test_stale_check_is_scoped_to_the_default_root(capsys):
+    """Staleness is judged against DEFAULT_ROOT, not against whatever was scanned.
+
+    `stale_entries` used to compare the shipped allowlist against `--root`'s
+    fields. Under a fixture root nearly every entry names a field that root does
+    not contain, so the whole allowlist read as stale and `main` exited 1. An
+    empty allowlist could never show this -- an empty set has no stale members
+    whatever it is compared against -- so it surfaced only when B1 populated it.
+    """
+    from shared_decisions.allowlist import load_allowlist
+
+    assert load_allowlist(), "vacuous: an empty allowlist cannot exercise this"
+    assert main(["--root", str(FIXTURES)]) == 0
+    assert "stale" not in capsys.readouterr().out.lower()
+
+
+def test_stale_check_still_fires_under_a_custom_root(monkeypatch, capsys):
+    """...and re-scoping it must not disable it under a custom root."""
+    import shared_decisions.report as report_mod
+
+    monkeypatch.setattr(report_mod, "stale_entries", lambda known: {"ghost_field"})
+    assert main(["--root", str(FIXTURES)]) == 1
+    assert "ghost_field" in capsys.readouterr().out

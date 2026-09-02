@@ -102,7 +102,17 @@ def main(argv: list[str]) -> int:
 
     shared = shared_fields(args.root)  # computed ONCE, passed to inventory()
     items = inventory(args.root, shared=shared)
-    stale = stale_entries(set(shared))
+    # The allowlist describes DEFAULT_ROOT's field population, so staleness is
+    # judged against THAT population -- never against whatever `--root` was
+    # asked to report on. Comparing against a custom root (a test fixture, or
+    # one package of several) reported nearly every entry as stale and exited
+    # 1, because those fields simply are not in that tree. This stayed
+    # invisible for as long as the allowlist was empty: an empty set has no
+    # stale members whatever it is compared against, so it surfaced only when
+    # B1 populated it.
+    stale = stale_entries(
+        set(shared) if args.root == DEFAULT_ROOT else set(shared_fields(DEFAULT_ROOT))
+    )
     skipped = unparseable_modules(args.root)
 
     if args.json:
