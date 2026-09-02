@@ -37,7 +37,3 @@ export type { BigQueryConfig } from "./bigquery.js";
 export type { DatabricksConfig } from "./databricks.js";
 export type { SalesforceConfig } from "./salesforce.js";
 export type { HubSpotConfig } from "./hubspot.js";
-
-// Re-export the existing local-file connector for convenience.
-export { readFile, readCsv, readJson, writeCsv, writeJson } from "./file.js";
-export type { ReadCsvOptions, WriteCsvOptions } from "./file.js";
