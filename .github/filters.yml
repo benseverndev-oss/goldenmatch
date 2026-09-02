@@ -536,7 +536,12 @@ shared_decisions:
   - 'scripts/test_shared_decisions_*.py'
   - 'scripts/fixtures/incident_1c843c8a5/**'
   - 'parity/shared_decisions.allow'
-  - 'packages/python/goldenmatch/goldenmatch/config/schemas.py'
+  # readers.py rglobs this whole tree to find config-field accessors, so the
+  # inventory's answer changes whenever ANY goldenmatch module changes (a new
+  # accessor added, or the last one removed). A narrower filter (e.g. just
+  # config/schemas.py, what fields.py reads) leaves the report stale and
+  # quietly wrong -- the same failure shape this detector exists to catch.
+  - 'packages/python/goldenmatch/goldenmatch/**'
   - '.github/workflows/ci.yml'
   - '.github/filters.yml'
 # Native-symbol reconciliation gate: the goldenmatch host's
