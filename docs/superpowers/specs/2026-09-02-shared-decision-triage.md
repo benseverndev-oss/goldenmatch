@@ -1,16 +1,29 @@
 # Phase B1 — Shared-Decision Triage
 
-**Status:** complete
+**Status:** complete; revised during B3 after the detector's recall was measured
 **Date:** 2026-09-02
 **Spec:** `docs/superpowers/specs/2026-09-02-duplication-drift-audit-design.md`
 **Predecessor:** phase B0a, the shared-decision inventory (PR #2843)
 
-B0a reported 73 config fields accessed by more than one module. This is the
-triage the spec requires: **every finding carries a classification and a
-reason.** 64 are recorded as agreed in `parity/shared_decisions.allow`; 9 are
-held out so the inventory keeps reporting them.
+B0a reported 73 config fields accessed by more than one module, and B3's
+attribution fix took that to **81**. This is the triage the spec requires:
+**every finding carries a classification and a reason.**
 
-## What separated the 64 from the 9
+| bucket | count | meaning |
+| --- | ---: | --- |
+| `parity/shared_decisions.allow` | 65 | agreed; no reader supplies a conflicting default |
+| `KNOWN_ACTIONABLE` | 3 | a signal fires on a field declared by ONE config class |
+| `KNOWN_AMBIGUOUS` | 12 | a signal fires, but the name is declared on several classes |
+| `HELD_BY_HAND` | 1 | no signal fires; `strategy`, held out on judgement |
+
+The four partition the 81 exactly, and
+`test_the_three_sets_partition_the_shared_fields` enforces that.
+
+**Read the "detector recall" section below before trusting any count here.**
+The first cut of this triage ran against a detector that attributed 23% of the
+config-field accesses in the package.
+
+## What separated the 65 from the 16
 
 B0a's inventory answers "which modules touch this field". It does not answer
 whether those modules had to AGREE about anything, and mostly they did not:
@@ -22,14 +35,13 @@ threshold. Two modules supplying different ones is the `1c843c8a5` shape.
 
 | signal | definition | fields |
 | --- | --- | ---: |
-| A — fallback divergence | >1 module falls back to a DIFFERENT value | 3 |
-| B — unguarded optional | field is nullable; some module falls back, another reads it bare | 6 |
-| neither | no reader supplies anything, or they all supply the same thing | 65 |
+| A — fallback divergence | >1 module falls back to a DIFFERENT value | 4 |
+| B — unguarded optional | field is nullable; some module falls back, another reads it bare | 12 |
+| neither | no reader supplies anything, or they all supply the same thing | 66 |
 
-64 of that 65 are allowlisted; `strategy` is the exception, held out by hand
-(below).
-
-(A and B overlap on `golden_rules`, so the two signals name 8 distinct fields.)
+A and B overlap on `golden_rules`, so 15 distinct fields trip a signal. 65 of
+the 66 no-signal fields are allowlisted; `strategy` is the exception, held out
+by hand (below).
 
 **`strategy` is held out as a ninth, against the signals.** Neither fires on it
 -- no reader supplies a fallback; its 14 modules only compare it against
@@ -127,6 +139,14 @@ function: the sizes come from `_fast_static_block_sizes`, which reads
 The consumer is auto-config's controller, so a wrong profile feeds a planning
 decision. Same reachability caveat as F2.
 
+### F9 — `weight` is defaulted in one module and read bare in two
+
+Signal B, single-class (`MatchkeyField`), so actionable but NOT confirmed.
+`core/autoconfig.py` falls back to `0`/`0.0` at four sites; `core/scorer.py`
+and `spark/config_pipeline.py` read it with no fallback and no None-guard.
+Surfaced only after the attribution fix -- `mk: MatchkeyConfig` was invisible
+before it.
+
 ### F4-F8 — nullable fields read bare by some modules
 
 Signal B only, NOT confirmed. Each needs a per-module reachability check that
@@ -155,6 +175,71 @@ triage and could still carry a semantic disagreement.
 
 That bound is the honest limit of a syntactic pass, and it is why the entries
 say what was checked rather than "agreed".
+
+## Detector recall: the first cut read 23% of the surface
+
+Found while sabotage-checking the B3 ratchet, and it is the most consequential
+thing in this document.
+
+To prove the ratchet's central gate fires on a recurrence of `1c843c8a5`, a
+divergent fallback was planted on an allowlisted field in the real package --
+`core/autoconfig.py`'s `k.transforms or []` became `or ["lower"]`. **The gate
+did not fire.** The sabotage turned out to be invalid rather than the gate
+weak: `k` is a loop variable, and the accessor scan never attributed that site
+at all. But the reason it was invalid was a real recall hole.
+
+Measured across the package: of 5,663 attribute accesses to a known config
+field name, the scan attributed **1,313 (23%)**. The largest single miss was
+`mk`, at 626 accesses -- `mk: MatchkeyConfig` appears as a typed PARAMETER 78
+times, and the scan only ever saw names bound from a config-looking
+*expression*, never from an annotation. `current: GoldenMatchConfig` was
+another 54.
+
+`_annotated_config_names` closes that: a name annotated with any of the 41
+declared config classes counts as a config base. Effect:
+
+| | before | after |
+| --- | ---: | ---: |
+| attributed access sites | 1,313 | 1,849 |
+| shared fields | 73 | 81 |
+| modules reading `fields` | 17 | 26 |
+| modules reading `threshold` | 11 | 18 |
+
+The B1 triage in the sections above was re-run against the wider scan; its
+findings survived and one was added (F9).
+
+**Recall is still not complete.** Annotation binding does not reach an
+unannotated parameter, a name bound from a function's return value, or an
+element of a config collection (`for k in blocking.keys: k.transforms` remains
+invisible -- that is the exact site the invalid sabotage landed on). Every
+count in this document is a FLOOR.
+
+## The inventory is keyed by name, and names collide
+
+Widening recall made a second limit unmissable. An access
+(`cfg.transforms`) does not say which class the object is, so fields are
+grouped by NAME -- and 11 of the 15 signal fields are declared on more than one
+config class.
+
+`transforms` is declared on `BlockingKeyConfig`, `MatchkeyField`,
+`NegativeEvidenceField` and `SortKeyField`. It appeared as a fallback
+divergence purely because `web/routers/autoconfig.py:84` defaults a
+**`MatchkeyField`**'s transforms to `["lowercase", "strip"]`, and that was
+compared against ten `BlockingKeyConfig` readers defaulting to `[]`. Two
+different fields. No divergence.
+
+So a signal is only actionable when the name is declared on exactly ONE class,
+which is what `split_by_ambiguity` computes and what separates
+`KNOWN_ACTIONABLE` from `KNOWN_AMBIGUOUS`. Both confirmed findings survive that
+test: `golden_rules` and `passes` are each single-class.
+
+`keys` moved to `KNOWN_AMBIGUOUS` (`BlockingConfig` and
+`SemanticBlockingConfig`), but F2 is unaffected -- it is carried by `passes`,
+which is not ambiguous.
+
+Resolving the class an access refers to would need type inference the scan does
+not do. Until then, 12 findings are parked rather than claimed, and none of
+them is asserted to be a defect.
 
 ## A defect this triage exposed in B0a
 
@@ -195,7 +280,9 @@ Both were defects in this triage's own first cut, and both are pinned by tests.
 
 ## What B1 does not cover
 
-- The 64 are cleared syntactically, not semantically (above).
+- The 65 are cleared syntactically, not semantically (above).
+- Recall is a floor, not a census -- see "Detector recall" above.
+- 12 findings are parked on name ambiguity and are not claimed as defects.
 - Scope is `packages/python/goldenmatch/goldenmatch` only. `goldenflow`,
   `scripts/`, and the TypeScript port are out of reach by construction, and
   their silence is not a clean bill.
