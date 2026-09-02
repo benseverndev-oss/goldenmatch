@@ -43,6 +43,44 @@ def _py_function_spans() -> dict[str, list[tuple[str, int, int]]]:
     return out
 
 
+def _load_executed(native_off_xml: Path) -> dict[str, set[int]]:
+    """Parse a coverage.xml into {filename: {executed line numbers}}.
+
+    A class with zero `<line>` elements at all (no per-line data recorded for
+    that file) is dropped rather than treated as "every line unexecuted" --
+    those are two different facts and conflating them misreports a module the
+    run never touched as one whose functions were all confirmed unguarded.
+    """
+    if not native_off_xml.exists():
+        raise FileNotFoundError(f"coverage report missing: {native_off_xml}")
+    root = ET.parse(native_off_xml).getroot()
+    executed: dict[str, set[int]] = {}
+    for cls in root.iter("class"):
+        name = (cls.get("filename") or "").replace("\\", "/")
+        all_lines = list(cls.iter("line"))
+        if not all_lines:
+            continue
+        hits = {int(ln.get("number", "0")) for ln in all_lines if int(ln.get("hits", "0")) > 0}
+        executed.setdefault(name, set()).update(hits)
+    return executed
+
+
+def _match(mod_path: str, executed: dict[str, set[int]]) -> str | None:
+    """The one `executed` filename that corresponds to `mod_path`, or None.
+
+    More than one candidate is an error, not a pick-the-first: a short or
+    source-relative `filename` in the XML would suffix-match any absolute
+    path ending the same way, silently attributing one module's coverage to
+    another module's functions. That is worse than no answer.
+    """
+    matches = sorted(k for k in executed if mod_path.endswith(k) or k.endswith(mod_path))
+    if not matches:
+        return None
+    if len(matches) > 1:
+        raise ValueError(f"ambiguous coverage match for {mod_path!r}: candidates {matches}")
+    return matches[0]
+
+
 def unguarded_py_functions(
     native_off_xml: Path,
     spans: dict[str, list[tuple[str, int, int]]] | None = None,
@@ -52,27 +90,18 @@ def unguarded_py_functions(
     `spans` is injectable so the unit is testable against synthetic data. A
     version that could only be exercised against the real tree would be checked
     by nobody, and its silence would have to be trusted.
+
+    A module with no matching coverage data at all is silently excluded from
+    this list -- that is "no evidence either way", not "guarded". Use
+    `modules_without_coverage_data` to see which modules that happened to.
     """
-    if not native_off_xml.exists():
-        raise FileNotFoundError(f"coverage report missing: {native_off_xml}")
     if spans is None:
         spans = _py_function_spans()
-    root = ET.parse(native_off_xml).getroot()
-    executed: dict[str, set[int]] = {}
-    for cls in root.iter("class"):
-        name = (cls.get("filename") or "").replace("\\", "/")
-        all_lines = list(cls.iter("line"))
-        if not all_lines:
-            # No per-line data at all -- not the same as "every line has zero
-            # hits". Treat as no signal rather than reporting every function
-            # in the module as unguarded.
-            continue
-        hits = {int(ln.get("number", "0")) for ln in all_lines if int(ln.get("hits", "0")) > 0}
-        executed.setdefault(name, set()).update(hits)
+    executed = _load_executed(native_off_xml)
 
     out: list[str] = []
     for mod_path, fn_spans in spans.items():
-        match = next((k for k in executed if mod_path.endswith(k) or k.endswith(mod_path)), None)
+        match = _match(mod_path, executed)
         if match is None:
             continue
         ran = executed[match]
@@ -82,14 +111,39 @@ def unguarded_py_functions(
     return sorted(out)
 
 
+def modules_without_coverage_data(
+    native_off_xml: Path,
+    spans: dict[str, list[tuple[str, int, int]]] | None = None,
+) -> list[str]:
+    """`spans` modules with no matching `<class>` in the coverage XML at all.
+
+    Distinct from a module that matched and had every function's lines
+    unexecuted: that case is a real, reportable finding from
+    `unguarded_py_functions`. This case means the run produced no evidence at
+    all for the module -- e.g. a whole package excluded from that run's
+    `--source`. Silently dropping it (as `unguarded_py_functions` must, since
+    it has nothing to report) would make the tool read as "fewer unguarded
+    functions" or "zero", for a reason having nothing to do with coverage.
+    """
+    if spans is None:
+        spans = _py_function_spans()
+    executed = _load_executed(native_off_xml)
+    return sorted(mod for mod in spans if _match(mod, executed) is None)
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--native-off-xml", type=Path, required=True)
     args = ap.parse_args(argv)
-    items = unguarded_py_functions(args.native_off_xml)
+    spans = _py_function_spans()
+    items = unguarded_py_functions(args.native_off_xml, spans=spans)
+    gaps = modules_without_coverage_data(args.native_off_xml, spans=spans)
     print(f"{len(items)} `_py` function(s) executed by no test with native off")
     for i in items:
         print(f"   {i}")
+    print(f"{len(gaps)} module(s) had no coverage data at all (not counted above)")
+    for g in gaps:
+        print(f"   {g}")
     return 0
 
 
