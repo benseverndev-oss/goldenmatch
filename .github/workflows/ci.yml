@@ -131,6 +131,7 @@ jobs:
       downstream_symbols: ${{ steps.filter.outputs.downstream_symbols }}
       er_matcher: ${{ steps.filter.outputs.er_matcher }}
       dead_code: ${{ steps.filter.outputs.dead_code }}
+      sync_claims: ${{ steps.filter.outputs.sync_claims }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v4.0.1
@@ -4950,6 +4951,32 @@ jobs:
         env:
           GOLDENMATCH_NATIVE: "0"
           POLARS_SKIP_CPU_CHECK: "1"
+
+  sync_claims:
+    # Report-only audit for docstrings that claim "this code mirrors that
+    # code" with no test enforcing the relationship (scripts/sync_claims/).
+    # Not in ci-required and the report step has no continue-on-error to
+    # suppress -- it always exits 0 by design. The gate is a later stage
+    # (C3), after the C1 triage establishes a floor; this job only prints.
+    needs: changes
+    if: needs.changes.outputs.sync_claims == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
+      - name: Detector self-tests
+        # Listed by name, so a new test FILE must be added here or it never runs.
+        env:
+          PYTHONPATH: scripts
+        run: uv run pytest scripts/test_sync_claims_claims.py scripts/test_sync_claims_enforcement.py scripts/test_sync_claims_report.py -q
+      - name: Unenforced sync-claim report
+        # Report-only by design: main() returns 0 whatever it finds. The gate
+        # is stage C3, after the C1 triage establishes a floor.
+        env:
+          PYTHONPATH: scripts
+        run: uv run python -m sync_claims.report
 
   ci-required:
     needs:
