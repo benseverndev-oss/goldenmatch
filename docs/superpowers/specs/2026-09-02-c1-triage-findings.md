@@ -1,6 +1,8 @@
 # Phase C1 — Triage of the Unenforced Sync Claims
 
-**Status:** first pass complete; bulk triage BLOCKED on one more detector fix
+**Status:** first pass complete; bulk triage BLOCKED, and the proposed
+unblock was measured and rejected -- the phase needs re-scoping, not another
+refinement
 **Date:** 2026-09-02
 **Spec:** `docs/superpowers/specs/2026-09-02-sync-claim-audit-design.md`
 **Detector:** shipped in #2846, target rule corrected in #2847
@@ -89,12 +91,70 @@ The motivating incident survives even the tightest setting — "mirrors
 run_dedupe but returns EngineResult" puts the target one character after the
 keyword.
 
-**The tradeoff is real and is why this is not being changed unilaterally.**
-A tighter window drops findings, and some of those drops would be correct
-claims whose target legitimately appears later in the sentence. Choosing the
-number is a judgement about what C1 wants to triage, not a bug fix. It should
-be decided, measured against the incident fixture, and shipped as its own
-change.
+### The proximity lever was measured, and it does not work
+
+The paragraph above proposed picking a window and shipping it. That was
+measured against seven findings hand-identified as wrong targets and three
+hand-identified as right, plus a "same sentence as the keyword" rule that
+seemed more principled than a character count:
+
+| rule | findings kept | known-BAD kept | known-GOOD kept |
+| --- | ---: | --- | --- |
+| 20 chars | 54 | 2/7 | **0/3** |
+| 40 chars | 111 | 3/7 | 2/3 |
+| 60 chars | 133 | 4/7 | 3/3 |
+| same sentence | 144 | **6/7** | 3/3 |
+| 200 chars (today) | 167 | 7/7 | 3/3 |
+
+**The sentence rule barely helps: 6 of 7 wrong targets sit in the same
+sentence as their keyword.** The grammatical intuition behind it -- that a
+claim's object is in its own sentence -- is simply false for this corpus.
+20 characters drops every known-good finding. The best available setting,
+60 characters, still keeps 4 of the 7 known-bad.
+
+So proximity is a marginal precision gain, not the gate this document
+claimed it was. **No proximity change is being shipped**, because shipping
+one would trade real findings for a minority of the false ones and leave
+the triage no more tractable.
+
+## What this means for the phase
+
+This document's own guard, written before the measurement:
+
+> If the next pass produces a fourth precision problem of the same kind,
+> that is evidence the docstring-claim signal is weaker than the spec
+> assumed, and the phase should be re-scoped rather than refined again.
+
+The measurement is that evidence, arriving a different way: not a fourth
+problem, but proof that the proposed fix for the second one does not work.
+Three attempts to make the target rule precise have produced one real
+improvement (markup preference, #2847) and one dead end.
+
+**The weak link is the concept of "the target".** The detector tries to
+resolve each claim to exactly one symbol, and a docstring sentence does not
+reliably contain exactly one resolvable referent in a position a regex can
+find. Grammatical resolution needs parsing, which is out of proportion to
+the phase.
+
+Two honest ways forward, neither of which is "refine the regex again":
+
+1. **Drop the auto-resolved target and report the CLAIM.** The detector
+   keeps what it does well -- finding the 319 docstrings that assert a
+   synchronisation and noting which are unenforced -- and stops asserting
+   which symbol each one means. The output becomes "these N claims exist and
+   nothing tests the thing they name", triaged by reading. That loses the
+   automatic enforcement check, which depends on knowing the target, so the
+   unenforced/unverified split would go with it.
+
+2. **Narrow the phase to the claims that ARE machine-resolvable.** Keep only
+   claims whose target is marked up AND within a tight window -- the
+   high-confidence subset. That is roughly 54 findings at 20 characters, of
+   which the hand-checked precision was best. Small, trustworthy, ratchetable
+   at C3; explicitly does not attempt the other two thirds.
+
+Option 2 preserves a working gate and is the smaller change. Option 1 keeps
+coverage and abandons automation. This is a scoping decision, not an
+engineering one, and it belongs to whoever owns the programme's budget.
 
 ## Precision problem 3: pattern claims (NOT FIXED, low priority)
 
@@ -137,15 +197,14 @@ carries an explicit warning against widening its window to silence it.
 
 ## Recommended order
 
-1. **Decide the proximity window**, measure it against the incident fixture
-   and the 167, ship it as its own change. This is the gate on everything
-   below.
-2. **Re-run the triage** against the corrected detector; expect the "needs
-   reading" population to fall substantially.
+1. **Decide between re-scoping options 1 and 2 above.** Proximity was
+   measured and rejected; there is nothing to ship until this is settled.
+2. **Re-run the triage** under whichever scope is chosen.
 3. **Read what remains** and classify it, meeting the spec's exit criterion.
-4. **Write the `_rel_expr` vocabulary test** — the one confirmed, actionable
-   finding so far, and independent of the above.
-5. **C3's ratchet last**, once the floor is worth freezing.
+4. ~~Write the `_rel_expr` vocabulary test~~ — DONE, PR #2849. The one
+   confirmed finding, and it never depended on any of the above.
+5. **C3's ratchet last**, and only if a scope survives that is worth
+   freezing.
 
 ## Being wrong about this document
 
