@@ -24,6 +24,28 @@ SCOPE_NOTE = (
 )
 
 
+def _degrade_non_utf8_stdout() -> None:
+    """Never let an unprintable claim-window character kill a report-only run.
+
+    Some claim windows carry non-ASCII text (arrows, smart quotes, ...) and
+    the platform's default stdout encoding cannot always encode it -- on
+    Windows cp1252, a `UnicodeEncodeError` partway through the findings loop
+    would exit non-zero after printing only the first few findings. That
+    reads as a short, complete report; it is actually a truncated one, and
+    `main` is contracted to exit 0 whatever it finds. Degrade the character
+    instead of crashing. `reconfigure` does not exist on every stream object
+    (a plain redirected file, pytest's `capsys`), so this is a guarded no-op
+    wherever it is unavailable or refused.
+    """
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is None:
+        return
+    try:
+        reconfigure(errors="backslashreplace")
+    except (AttributeError, ValueError, OSError):
+        pass
+
+
 def _as_dict(claim: Claim) -> dict:
     return {
         "module": claim.module,
@@ -66,6 +88,7 @@ def inventory(root: Path, tests_root: Path) -> dict:
 
 
 def main(argv: list[str]) -> int:
+    _degrade_non_utf8_stdout()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=DEFAULT_ROOT)
     parser.add_argument("--tests", type=Path, default=DEFAULT_TESTS)

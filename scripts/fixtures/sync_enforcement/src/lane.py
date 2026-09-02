@@ -1,4 +1,9 @@
-"""Synthetic fixture: four claims -- enforced, unenforced, prose-only, unresolvable."""
+"""Synthetic fixture: five claims -- enforced, unenforced, prose-only,
+unresolvable, module-level.
+
+Module-level claim: this module mirrors slow_lane as a whole and is never
+triaged -- a module has no single symbol a test can reference.
+"""
 
 
 def fast_lane():
@@ -22,4 +27,9 @@ def prose_lane():
 
 def stray_lane():
     """Mirrors the legacy pipeline that no longer exists here."""
+    return 1
+
+
+def arrow_lane():
+    """Mirrors slow_lane: caller → callee directly, no wrapper indirection."""
     return 1

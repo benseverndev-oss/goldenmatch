@@ -21,6 +21,16 @@ def _claims():
     return claims(SRC, symbols=declared_symbols(SRC))
 
 
+def _symbol_claims():
+    """Symbol-level claims only, scoped the way `inventory()` scopes its
+    input to `unenforced()`. `unenforced()` itself only filters on
+    `target is None`, not on `kind` -- a module-level claim with a
+    resolved target (the fixture now has one) would otherwise flow
+    straight into a finding set that is supposed to hold only claims a
+    test COULD reference both halves of."""
+    return [c for c in _claims() if c.kind == "symbol"]
+
+
 def test_a_docstring_only_co_mention_is_not_enforcement():
     """THE TRAP THIS PHASE TURNS ON.
 
@@ -36,8 +46,8 @@ def test_a_docstring_only_co_mention_is_not_enforcement():
 
 
 def test_the_unenforced_claims_are_reported():
-    found = {c.symbol for c in unenforced(_claims(), test_reference_sets(TESTS))}
-    assert found == {"orphan_lane", "prose_lane"}, found
+    found = {c.symbol for c in unenforced(_symbol_claims(), test_reference_sets(TESTS))}
+    assert found == {"orphan_lane", "prose_lane", "arrow_lane"}, found
 
 
 def test_the_enforced_claim_is_not_reported():
