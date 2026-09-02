@@ -21,6 +21,20 @@ from dead_code.report import candidacy_scope, candidates  # noqa: E402
 from dead_code.static import unimported_modules  # noqa: E402
 
 
+def _pick_two_real_candidates() -> tuple[str, str]:
+    """Two distinct modules from the same eligible pool _pick_real_candidate() draws
+    from, for tests that need to tell a line-less victim apart from a covered-with-
+    lines-all-zero victim in the same fixture."""
+    pool = sorted(
+        m
+        for m in (unimported_modules() - live_modules() - load_allowlist())
+        if m.startswith("goldenmatch.")
+    )
+    if len(pool) < 2:
+        pytest.skip("fewer than two unimported goldenmatch modules available")
+    return pool[0], pool[1]
+
+
 def _pick_real_candidate() -> str:
     """A module that IS statically unimported, live-free and un-allowlisted.
 
@@ -82,6 +96,76 @@ def _ci_shape_coverage_xml(tmp_path: Path, uncovered: list[str]) -> Path:
     p = tmp_path / "coverage.xml"
     p.write_text("\n".join(lines), encoding="utf-8")
     return p
+
+
+def _lineless_coverage_xml(
+    tmp_path: Path, lineless: list[str], uncovered_with_lines: list[str] | None = None
+) -> Path:
+    """coverage.xml where `lineless` modules get a <class> with NO <line> children.
+
+    Reproduces the real shape a bare `__init__.py` or a docstring-only module
+    gets from `coverage xml`: the file is still collected as a `<class>` (it's
+    part of `source = ["goldenmatch"]`), it just has no `<line>` children because
+    there was nothing in it for coverage.py to measure. This is the shape that
+    made 14 of 14 candidates in the first real CI run false positives -- every
+    one was a package `__init__.py` or docstring-only module read as "covered
+    zero lines" when it had zero MEASURABLE lines.
+
+    `uncovered_with_lines` optionally adds real zero-hit modules alongside, so a
+    single fixture can assert both behaviors don't interfere with each other.
+    """
+    lines = ['<?xml version="1.0" ?>', "<coverage><packages><package><classes>"]
+    for mod in lineless:
+        lines.append(f'<class filename="{mod.replace(".", "/")}.py">')
+        lines.append("<lines></lines></class>")
+    for mod in uncovered_with_lines or []:
+        lines.append(f'<class filename="{mod.replace(".", "/")}.py">')
+        lines.append('<lines><line number="1" hits="0"/></lines></class>')
+    lines.append("</classes></package></packages></coverage>")
+    p = tmp_path / "coverage.xml"
+    p.write_text("\n".join(lines), encoding="utf-8")
+    return p
+
+
+def test_a_lineless_module_is_not_reported(tmp_path):
+    """A <class> with NO <line> children at all -- the shape a bare __init__.py
+    or a docstring-only module gets from `coverage xml` -- must NOT be reported,
+    even though it is in the static pool and neither live nor allowlisted.
+
+    Before the fix, `_uncovered_modules` read "zero lines with hits > 0" as
+    uncovered regardless of whether there was anything to hit, so this exact
+    fixture reported the victim as a candidate. That was the real bug: every
+    one of the first CI run's 14 candidates was a module in this shape.
+    """
+    target = _pick_real_candidate()
+    xml = _lineless_coverage_xml(tmp_path, lineless=[target])
+    assert target not in {c["module"] for c in candidates(xml)}
+
+
+def test_an_uncovered_module_with_real_lines_is_still_reported(tmp_path):
+    """The line-less guard must not over-suppress: a module WITH measurable
+    lines, all at hits="0", is the genuine uncovered case and must still be
+    reported -- alongside a line-less module in the same fixture, so the guard
+    can't be satisfied by some accident that suppresses both."""
+    lineless_victim, uncovered_victim = _pick_two_real_candidates()
+    xml = _lineless_coverage_xml(
+        tmp_path, lineless=[lineless_victim], uncovered_with_lines=[uncovered_victim]
+    )
+    found = {c["module"] for c in candidates(xml)}
+    assert uncovered_victim in found
+    assert lineless_victim not in found
+
+
+def test_lineless_exclusion_count_is_surfaced_and_nonzero(tmp_path):
+    """candidacy_scope(coverage_xml) must disclose how many modules were set
+    aside for having no measurable lines -- the same disclosure habit this
+    report already applies to the goldenmatch-only restriction. A fixture with
+    a known line-less module must make that count nonzero, or the disclosure
+    itself is decorative."""
+    target = _pick_real_candidate()
+    xml = _lineless_coverage_xml(tmp_path, lineless=[target])
+    scope = candidacy_scope(xml)
+    assert scope["excluded_no_measurable_lines"] > 0
 
 
 def test_a_module_failing_both_signals_is_reported(tmp_path):

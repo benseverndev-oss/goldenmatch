@@ -130,6 +130,7 @@ jobs:
       native_symbols: ${{ steps.filter.outputs.native_symbols }}
       downstream_symbols: ${{ steps.filter.outputs.downstream_symbols }}
       er_matcher: ${{ steps.filter.outputs.er_matcher }}
+      dead_code: ${{ steps.filter.outputs.dead_code }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v4.0.1
@@ -642,8 +643,32 @@ jobs:
   dead_code:
     # goldenmatch_sweep_coverage is a DIRECT dependency: Task 5 deliberately
     # leaves the required gate's combine untouched, so the sweep artifact does
-    # not arrive through python_goldenmatch_coverage.
-    needs: [python_goldenmatch_coverage, goldenmatch_sweep_coverage]
+    # not arrive through python_goldenmatch_coverage. `changes` is ALSO a
+    # direct dependency (not just transitive) so this job's own `if:` below
+    # can read needs.changes.outputs.* -- GitHub Actions only exposes a job's
+    # outputs via `needs` to jobs that list it directly.
+    needs: [changes, python_goldenmatch_coverage, goldenmatch_sweep_coverage]
+    # A default (omitted) `if:` implies `success()`, which requires EVERY
+    # entry in `needs` to have succeeded -- including python_goldenmatch_coverage,
+    # which stays SKIPPED on a scripts/dead_code-only change (its own upstream,
+    # python_goldenmatch/python_goldenmatch_heavy, is gated on `python_goldenmatch`
+    # alone). That is the root cause this whole filter change exists to fix: the
+    # implicit success() check silently re-imposes the exact gate we are trying to
+    # widen. `always()` replaces that default, so the job runs purely off the
+    # conditions below -- filter match, plus explicit tolerance for
+    # python_goldenmatch_coverage being SKIPPED (fine; the sweep union still has
+    # something to report against) while still refusing to run if either upstream
+    # job actually FAILED or was cancelled (a real break there should not be
+    # masked by "the report ran anyway").
+    if: >-
+      always() &&
+      (needs.changes.outputs.python_goldenmatch == 'true' ||
+      needs.changes.outputs.dead_code == 'true' ||
+      needs.changes.outputs.force_all == 'true') &&
+      needs.python_goldenmatch_coverage.result != 'failure' &&
+      needs.python_goldenmatch_coverage.result != 'cancelled' &&
+      needs.goldenmatch_sweep_coverage.result != 'failure' &&
+      needs.goldenmatch_sweep_coverage.result != 'cancelled'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -654,39 +679,130 @@ jobs:
         with:
           pattern: gm-cov-*
           merge-multiple: true
+      # Runs BEFORE the coverage combine on purpose: these tests need no
+      # coverage.xml at all (they exercise the detector's own AST/liveness/
+      # allowlist/report code directly), and they are the thing that validates
+      # a scripts/dead_code-only change -- the whole point of widening this
+      # job's `if:`. They must run whenever the job runs, even on the rare
+      # anomaly where the combine step below hard-fails (a half-present sweep
+      # union), so they cannot sit downstream of a step that can fail for
+      # reasons unrelated to the detector's own correctness.
+      - name: Detector self-tests
+        run: uv run pytest scripts/test_dead_code_liveness.py scripts/test_dead_code_static.py scripts/test_dead_code_allowlist.py scripts/test_dead_code_report.py scripts/test_dead_code_other_langs.py -q
       - name: Combine coverage for the dead-code report
+        id: combine
         # coverage_shard1_serial.dat is written and uploaded by the shard job
         # but is absent from the required gate's combine, so its coverage has
         # always been discarded. It is included HERE because more coverage can
         # only remove false candidates, never add one. Deliberately not added to
         # the gate's own combine, which is out of scope for this phase.
+        #
+        # A scripts/dead_code-only change runs this job via the `dead_code`
+        # filter (see the `if:` above) while python_goldenmatch_coverage stays
+        # SKIPPED -- its own upstream shard/heavy jobs are gated on
+        # `python_goldenmatch` alone, so coverage_shard*.dat / coverage_heavy_*.dat
+        # never arrive. `coverage combine` errors on an explicit filename that
+        # does not exist, so only pass the files this run actually produced.
+        #
+        # A partial union (sweep-only) is NOT a smaller-but-still-valid signal.
+        # coverage.py's `source = goldenmatch` (set in .coveragerc-sweep, and
+        # implicitly by the required gate's own rcfile) marks every file it
+        # scans as present with zero lines when nothing measured it, so every
+        # module the two sweeps do not reach reads as fully dead -- a flood of
+        # false candidates, not a smaller true set. This branch caused exactly
+        # that on this branch already (14 false candidates from a subtler
+        # version of the same mistake). So this step does not just combine
+        # whatever exists: it records whether the shard/heavy group showed up
+        # (`full_union`) via $GITHUB_OUTPUT, and the report/ratchet steps below
+        # refuse to run against a partial union.
         run: |
-          uv run coverage combine --rcfile=packages/python/goldenmatch/pyproject.toml \
-            coverage_shard1.dat coverage_shard2.dat coverage_shard3.dat \
-            coverage_shard1_serial.dat \
-            coverage_heavy_1.dat coverage_heavy_2.dat coverage_heavy_3.dat \
-            coverage_sweep_mcp.dat coverage_sweep_cli.dat
+          shard_heavy=()
+          for f in coverage_shard1.dat coverage_shard2.dat coverage_shard3.dat \
+                   coverage_shard1_serial.dat coverage_heavy_1.dat coverage_heavy_2.dat \
+                   coverage_heavy_3.dat; do
+            [ -f "$f" ] && shard_heavy+=("$f")
+          done
+
+          # This job's `if:` above only guarantees goldenmatch_sweep_coverage
+          # did not FAIL -- and assert_sweep_coverage.py already fails that job
+          # if either sweep .dat is missing or empty (CoverageData.read() on a
+          # nonexistent file silently yields zero measured files, which is
+          # exactly the >=100-executed-files floor that script enforces). The
+          # one gap that check does NOT cover is the upload step AFTER it:
+          # `path: coverage_sweep_*.dat` with `if-no-files-found: error` only
+          # errors when the glob matches ZERO files, so a run that uploaded ONE
+          # of the two sweep files (both existed when assert_sweep_coverage.py
+          # ran; one vanished, or never made it into the artifact) would report
+          # success upstream and land here silently short one file. Treat that
+          # as a hard failure of THIS step rather than silently combining
+          # without it -- a half-present sweep union is exactly the kind of
+          # quiet under-measurement this whole change exists to stop shipping.
+          sweep=()
+          missing_sweep=()
+          for f in coverage_sweep_cli.dat coverage_sweep_mcp.dat; do
+            if [ -f "$f" ]; then
+              sweep+=("$f")
+            else
+              missing_sweep+=("$f")
+            fi
+          done
+          if [ "${#missing_sweep[@]}" -gt 0 ]; then
+            echo "::error::goldenmatch_sweep_coverage reported success but ${missing_sweep[*]} did not arrive -- refusing to combine a half-present sweep union"
+            exit 1
+          fi
+
+          # Classify and EXPORT before running coverage. If a later command
+          # fails, the step aborts and anything after it never runs -- so a
+          # classification written below the coverage calls is lost exactly
+          # when something went wrong and the diagnostic is most needed.
+          if [ "${#shard_heavy[@]}" -gt 0 ]; then
+            echo "full coverage union: shard+heavy+sweep"
+            echo "full_union=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "PARTIAL coverage union: sweep only, shard/heavy absent (python_goldenmatch_coverage skipped) -- the dead-code report is SUPPRESSED because a partial union manufactures false candidates"
+            echo "full_union=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          files=("${shard_heavy[@]}" "${sweep[@]}")
+          echo "combining: ${files[*]}"
+          uv run coverage combine --rcfile=packages/python/goldenmatch/pyproject.toml "${files[@]}"
+          # --fail-under=0 overrides `fail_under = 78` in the rcfile's
+          # [tool.coverage.report]. This job is NOT the coverage gate -- it only
+          # needs the XML to compute dead-code candidates, and the real gate
+          # (python_goldenmatch_coverage) keeps its own threshold. Without this
+          # the step dies on a partial union: a sweep-only run totals ~25%, so
+          # `coverage xml` exited 2 and took the whole job down even though the
+          # report was already correctly suppressed.
           uv run coverage xml --rcfile=packages/python/goldenmatch/pyproject.toml \
-            -o packages/python/goldenmatch/coverage.xml
-      - name: Detector self-tests
-        run: uv run pytest scripts/test_dead_code_liveness.py scripts/test_dead_code_static.py scripts/test_dead_code_allowlist.py scripts/test_dead_code_report.py scripts/test_dead_code_other_langs.py -q
+            --fail-under=0 -o packages/python/goldenmatch/coverage.xml
       - name: Dead-code report
+        if: steps.combine.outputs.full_union == 'true'
         env:
           PYTHONPATH: scripts
         run: uv run python -m dead_code.report --coverage-xml packages/python/goldenmatch/coverage.xml
       - name: Ratchet
+        if: steps.combine.outputs.full_union == 'true'
         # A0 (docs/superpowers/specs/2026-09-01-dead-code-audit-design.md, Delivery
         # stages) lands this job report-only: it must not gate. Flipping the ratchet
         # to gating is A3, a later phase -- until then a candidate must not fail CI.
         continue-on-error: true
         run: uv run pytest scripts/test_no_new_dead_code.py -q
+      - name: Report + ratchet skipped (partial coverage union)
+        if: steps.combine.outputs.full_union != 'true'
+        run: |
+          echo "::warning::dead-code report and ratchet SKIPPED -- only sweep coverage arrived (python_goldenmatch_coverage was skipped, e.g. a scripts/-only PR that does not touch packages/python/goldenmatch/). Detector self-tests above already ran and validated the change; the report itself needs the full shard+heavy+sweep union, or it would flag every module the sweeps do not reach as a false dead-code candidate."
 
   # Harvests coverage from the two sweeps, which reach 66 CLI commands and 97 MCP
   # tools -- surfaces no other job measures. Feeds the dead_code job's combine
   # ONLY; the coverage floors and baseline gates are unaffected.
   goldenmatch_sweep_coverage:
     needs: changes
-    if: needs.changes.outputs.python_goldenmatch == 'true' || needs.changes.outputs.force_all == 'true'
+    # #1846 class: the two sweeps' probes carry the dead-code detector's
+    # runtime-coverage signal, and their own source (plus the coverage hook
+    # under scripts/) lives outside packages/python/goldenmatch/ -- so
+    # `python_goldenmatch` alone missed a scripts/-only change to them. See the
+    # `dead_code` filter's comment in .github/filters.yml.
+    if: needs.changes.outputs.python_goldenmatch == 'true' || needs.changes.outputs.dead_code == 'true' || needs.changes.outputs.force_all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

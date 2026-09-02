@@ -24,6 +24,16 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from coverage_paths import normalize  # noqa: E402
 
 
+def _class_module_name(filename: str) -> str:
+    """A coverage `<class filename=...>` attribute, normalized to a module name."""
+    mod = normalize(filename).replace("/", ".")
+    if mod.endswith(".py"):
+        mod = mod[:-3]
+    if mod.endswith(".__init__"):
+        mod = mod[: -len(".__init__")]
+    return mod
+
+
 def _uncovered_modules(coverage_xml: Path) -> set[str]:
     """Modules with zero covered lines in the combined coverage report.
 
@@ -34,19 +44,45 @@ def _uncovered_modules(coverage_xml: Path) -> set[str]:
     the same `goldenmatch/...`-rooted shape static.py's module names imply --
     see scripts/coverage_paths.py's docstring for why the naive form silently
     matches nothing against real CI coverage.
+
+    A `<class>` with NO `<line>` children at all (a bare `__init__.py`, or a
+    module whose only content is a docstring -- coverage.py doesn't count a
+    docstring as an executable line) is excluded here rather than counted as
+    uncovered. Such a module was never measured, so "zero lines with hits > 0"
+    is trivially true of it for having nothing to hit, not for having gone
+    unexecuted -- absence of evidence is not evidence of deadness. Reading it
+    the naive way is exactly the bug that made every package `__init__.py` a
+    false-positive dead-code candidate: 14 of the first real CI run's 14
+    candidates were this. See _no_measurable_lines_modules() for where the
+    excluded set is surfaced instead of silently dropped.
     """
     root = ET.parse(coverage_xml).getroot()
     out: set[str] = set()
     for cls in root.iter("class"):
-        filename = normalize(cls.get("filename") or "")
-        hits = sum(1 for line in cls.iter("line") if int(line.get("hits", "0")) > 0)
+        lines = list(cls.iter("line"))
+        if not lines:
+            continue
+        hits = sum(1 for line in lines if int(line.get("hits", "0")) > 0)
         if hits == 0:
-            mod = filename.replace("/", ".")
-            if mod.endswith(".py"):
-                mod = mod[:-3]
-            if mod.endswith(".__init__"):
-                mod = mod[: -len(".__init__")]
-            out.add(mod)
+            out.add(_class_module_name(cls.get("filename") or ""))
+    return out
+
+
+def _no_measurable_lines_modules(coverage_xml: Path) -> set[str]:
+    """Modules set aside by _uncovered_modules() for having no `<line>` entries.
+
+    Companion to _uncovered_modules()'s guard: named separately so the report
+    can disclose how many modules were excluded for lack of measurable lines,
+    the same way candidacy_scope() discloses the goldenmatch-only restriction.
+    A silently smaller candidate set defeats the point of this phase just as
+    much as a silently larger one.
+    """
+    root = ET.parse(coverage_xml).getroot()
+    out: set[str] = set()
+    for cls in root.iter("class"):
+        if list(cls.iter("line")):
+            continue
+        out.add(_class_module_name(cls.get("filename") or ""))
     return out
 
 
@@ -72,20 +108,30 @@ def _goldenmatch_eligible(static: set[str]) -> set[str]:
     return {m for m in static if m.startswith("goldenmatch.")}
 
 
-def candidacy_scope() -> dict[str, int]:
-    """Counts behind the goldenmatch-only restriction, for CI output.
+def candidacy_scope(coverage_xml: Path | None = None) -> dict[str, int]:
+    """Counts behind the narrowings this report applies, for CI output.
 
-    Without this, a report showing zero goldencheck/goldenflow/goldenanalysis
-    candidates is indistinguishable from "those packages are clean" -- they
-    were never eligible for the two-signal test at all.
+    Without the goldenmatch-only counts, a report showing zero
+    goldencheck/goldenflow/goldenanalysis candidates is indistinguishable
+    from "those packages are clean" -- they were never eligible for the
+    two-signal test at all.
+
+    When `coverage_xml` is given, also counts modules set aside for having no
+    measurable lines (see _no_measurable_lines_modules()) -- without this, a
+    report that dropped from 14 candidates to near-zero is indistinguishable
+    from "13 modules turned out to be live" and "13 modules were silently
+    excluded from the runtime signal", which is a very different claim.
     """
     static = _static_pool()
     eligible = _goldenmatch_eligible(static)
-    return {
+    scope = {
         "static_considered": len(static),
         "goldenmatch_eligible": len(eligible),
         "excluded_no_runtime_signal": len(static) - len(eligible),
     }
+    if coverage_xml is not None:
+        scope["excluded_no_measurable_lines"] = len(_no_measurable_lines_modules(coverage_xml))
+    return scope
 
 
 def candidates(coverage_xml: Path | None) -> list[dict]:
@@ -128,7 +174,7 @@ def main() -> int:
 
     found = candidates(args.coverage_xml)
     inventory = public_export_inventory()
-    scope = candidacy_scope()
+    scope = candidacy_scope(args.coverage_xml)
 
     if args.json:
         print(
@@ -147,6 +193,12 @@ def main() -> int:
         "signal (the combined coverage.xml is goldenmatch's alone -- excluded means OUT "
         "OF SCOPE, not clean)\n"
     )
+    if args.coverage_xml is not None:
+        print(
+            f"{scope['excluded_no_measurable_lines']} additional modules set aside for "
+            "having no measurable lines in coverage.xml (a bare __init__.py, or a "
+            "docstring-only module) -- absence of evidence is not evidence of deadness\n"
+        )
     if found:
         print(
             "every listed candidate satisfies both signals by definition -- "

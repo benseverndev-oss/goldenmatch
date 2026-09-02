@@ -484,6 +484,50 @@ er_matcher:
   - 'packages/python/goldenmatch/goldenmatch/core/er_matcher/**'
   - '.github/workflows/ci.yml'
   - '.github/filters.yml'
+# Dead-code / sweep-coverage detector gate (the `dead_code` and
+# `goldenmatch_sweep_coverage` CI jobs). The detector's entire source lives in
+# scripts/, NOT packages/python/goldenmatch/ -- so gating these jobs on
+# `python_goldenmatch` alone let a detector-only change ship without ever
+# running the detector or its own test suite. PR #2839 changed only
+# scripts/dead_code/report.py + scripts/assert_sweep_coverage.py (+ tests) and
+# its own CI ran green with `dead_code: skipped` and
+# `goldenmatch_sweep_coverage: skipped`. `python_goldenmatch` stays in both
+# jobs' `if:` in ci.yml alongside this key -- a goldenmatch source change moves
+# the candidate list the detector reports on, so it must still re-run the
+# detector even when nothing under scripts/ moved.
+dead_code:
+  - 'scripts/dead_code/**'
+  # The AST import graph static.py/liveness.py delegate to (build_graph_ast,
+  # _ENTRY_HUBS) -- the detector's real static-candidacy source of truth.
+  - 'scripts/check_dead_code.py'
+  # Module-name normalization report.py depends on (coverage.xml path <->
+  # dotted-module mapping).
+  - 'scripts/coverage_paths.py'
+  - 'scripts/assert_sweep_coverage.py'
+  # The CLI/MCP sweep probes whose subprocess coverage hook feeds the
+  # dead_code job's combine (goldenmatch_sweep_coverage's two "under coverage"
+  # steps run these directly).
+  - 'scripts/sweep_cli_polars_free.py'
+  - 'scripts/sweep_mcp_polars_free.py'
+  - 'scripts/test_dead_code_*.py'
+  - 'scripts/test_no_new_dead_code.py'
+  - 'scripts/test_assert_sweep_coverage.py'
+  # Reads .github/workflows/ci.yml directly (asserts the sweep job's
+  # COVERAGE_FILE/COVERAGE_PROCESS_START env vars are absolute) -- see the
+  # ci.yml self-reference below.
+  - 'scripts/test_sweep_subprocess_coverage.py'
+  # Curated per-package classification maps allowlist.py reads (the set of
+  # names the detector will not flag even when statically unimported).
+  - 'parity/dead_code/**'
+  - 'packages/python/goldenmatch/.coveragerc-sweep'
+  # test_sweep_subprocess_coverage.py parses this file's `goldenmatch_sweep_coverage`
+  # job definition directly, so an edit to that job's wiring (env vars, step
+  # order) must re-run the test that pins it -- otherwise a ci.yml edit could
+  # silently break the sweep's coverage collection with nothing to catch it.
+  - '.github/workflows/ci.yml'
+  # Self-test, same rule quality_gate/er_matcher/rust_pgrx/docs_regen already
+  # follow: an edit to THIS file must re-run the gate it defines.
+  - '.github/filters.yml'
 # Native-symbol reconciliation gate: the goldenmatch host's
 # native-kernel references must not drift from the kernel's exports.
 # Re-run the gate when the kernel crate, the host package, the
