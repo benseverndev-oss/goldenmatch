@@ -215,3 +215,35 @@ def nullable_fields(schemas: Path) -> dict[str, set[str]]:
                 if "None" in ast.unparse(body.annotation):
                     out[body.target.id].add(cls.name)
     return dict(out)
+
+
+def declaring_classes() -> dict[str, set[str]]:
+    """Field name -> the config classes that declare it.
+
+    The inventory is keyed by field NAME, because an access
+    (`cfg.blocking.transforms`) does not say which class the object is. When
+    one name is declared on several classes, readers grouped under it may be
+    reading DIFFERENT fields, and a "divergence" between them can be no
+    divergence at all: `transforms` is declared on `BlockingKeyConfig`,
+    `MatchkeyField`, `NegativeEvidenceField` and `SortKeyField`, and the
+    `or ["lowercase", "strip"]` fallback that made it look divergent is a
+    `MatchkeyField`, compared against ten `BlockingKeyConfig` readers.
+
+    So a signal on a single-class field is ACTIONABLE, and a signal on a
+    multi-class field needs class resolution before it means anything. Both
+    confirmed findings -- `golden_rules` and `passes` -- are single-class.
+    """
+    from shared_decisions.fields import config_fields
+
+    out: dict[str, set[str]] = defaultdict(set)
+    for cls, fields in config_fields().items():
+        for field in fields:
+            out[field].add(cls)
+    return dict(out)
+
+
+def split_by_ambiguity(fields: set[str]) -> tuple[set[str], set[str]]:
+    """(actionable, ambiguous) -- declared on exactly one class, or more."""
+    declared = declaring_classes()
+    ambiguous = {f for f in fields if len(declared.get(f, set())) > 1}
+    return fields - ambiguous, ambiguous
