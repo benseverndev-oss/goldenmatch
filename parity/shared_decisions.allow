@@ -3,5 +3,79 @@
 # An entry is a claim that someone checked the readers and they agree -- not
 # that the finding is inconvenient. Format: `field  # reason`.
 #
-# Deliberately EMPTY at B0a. The first inventory is triaged in B1; entries are
-# added there, with the reason recorded at the time the check was done.
+# TRIAGED 2026-09-02 (phase B1). Every entry below was classified by
+# `scripts/shared_decisions/shapes.py`, which asks what DECISION each reader
+# makes -- the fallback or threshold it supplies that the field does not carry.
+#
+# WHAT AN ENTRY CLAIMS, EXACTLY: no two modules supply DIFFERENT fallbacks for
+# this field. It does NOT claim the readers agree about semantics a fallback
+# cannot express (units, ordering, normalisation). That bound is real and is
+# recorded in docs/superpowers/specs/2026-09-02-shared-decision-triage.md.
+#
+# 65 of the 73 shared fields are here. The other 8 are findings and
+# are deliberately absent so the inventory keeps reporting them.
+
+action  # 2 modules, no reader supplies a fallback -- nothing to disagree about
+ann_model  # 2 modules, no reader supplies a fallback -- nothing to disagree about
+ann_top_k  # 2 modules, no reader supplies a fallback -- nothing to disagree about
+auto_fix  # 3 modules, no reader supplies a fallback -- nothing to disagree about
+auto_split  # 3 modules, no reader supplies a fallback -- nothing to disagree about
+auto_suggest  # 3 modules, no reader supplies a fallback -- nothing to disagree about
+auto_threshold  # 2 modules, no reader supplies a fallback -- nothing to disagree about
+backend  # 8 modules, no reader supplies a fallback -- nothing to disagree about
+budget  # 3 modules, no reader supplies a fallback -- nothing to disagree about
+candidate_hi  # 2 modules, no reader supplies a fallback -- nothing to disagree about
+candidate_lo  # 2 modules, no reader supplies a fallback -- nothing to disagree about
+cluster_overrides  # 3 modules, no reader supplies a fallback -- nothing to disagree about
+column  # 9 modules, no reader supplies a fallback -- nothing to disagree about
+columns  # 5 modules, no reader supplies a fallback -- nothing to disagree about
+connection  # 2 modules, no reader supplies a fallback -- nothing to disagree about
+dataset  # 3 modules, no reader supplies a fallback -- nothing to disagree about
+default_strategy  # 6 modules; only core/golden.py supplies a fallback (`or 'most_complete'`), so no second module can contradict it
+deterministic_merge_keys  # 2 modules, no reader supplies a fallback -- nothing to disagree about
+directory  # 3 modules; only core/pipeline.py supplies a fallback (`or config.output.path`), so no second module can contradict it
+domain  # 2 modules, no reader supplies a fallback -- nothing to disagree about
+enabled  # 7 modules, no reader supplies a fallback -- nothing to disagree about
+exclude_columns  # 2 modules, no reader supplies a fallback -- nothing to disagree about
+field  # 7 modules, no reader supplies a fallback -- nothing to disagree about
+field_groups  # 5 modules, no reader supplies a fallback -- nothing to disagree about
+field_rules  # 6 modules, no reader supplies a fallback -- nothing to disagree about
+fields  # 17 modules; only core/autoconfig_negative_evidence.py supplies a fallback (`or []`), so no second module can contradict it
+format  # 3 modules; only core/pipeline.py supplies a fallback (`or 'csv'`), so no second module can contradict it
+identity  # 5 modules, no reader supplies a fallback -- nothing to disagree about
+k  # 2 modules, no reader supplies a fallback -- nothing to disagree about
+learned_min_recall  # 2 modules, no reader supplies a fallback -- nothing to disagree about
+learned_sample_size  # 2 modules, no reader supplies a fallback -- nothing to disagree about
+lineage_provenance  # 3 modules, no reader supplies a fallback -- nothing to disagree about
+llm_auto  # 2 modules, no reader supplies a fallback -- nothing to disagree about
+llm_boost  # 3 modules, no reader supplies a fallback -- nothing to disagree about
+llm_scorer  # 5 modules, no reader supplies a fallback -- nothing to disagree about
+match_settings  # 4 modules, no reader supplies a fallback -- nothing to disagree about
+max_block_size  # 5 modules, no reader supplies a fallback -- nothing to disagree about
+max_cluster_size  # 7 modules, no reader supplies a fallback -- nothing to disagree about
+memory  # 2 modules, no reader supplies a fallback -- nothing to disagree about
+model  # 3 modules, no reader supplies a fallback -- nothing to disagree about
+name  # 5 modules, no reader supplies a fallback -- nothing to disagree about
+num_bands  # 3 modules, no reader supplies a fallback -- nothing to disagree about
+num_perms  # 3 modules, no reader supplies a fallback -- nothing to disagree about
+output  # 5 modules, no reader supplies a fallback -- nothing to disagree about
+prepared_record_store  # 2 modules, no reader supplies a fallback -- nothing to disagree about
+provider  # 2 modules, no reader supplies a fallback -- nothing to disagree about
+quality  # 2 modules, no reader supplies a fallback -- nothing to disagree about
+recall_target  # 2 modules, no reader supplies a fallback -- nothing to disagree about
+relationships  # 2 modules; only config/from_dbt.py supplies a fallback (`or []`), so no second module can contradict it
+rules  # 7 modules; 3 supply a fallback and all use `or state.rules`
+run_name  # 3 modules; only core/pipeline.py supplies a fallback (`or datetime.now().strftime('%Y%m%d_%H%M%S')`), so no second module can contradict it
+scorer  # 4 modules, no reader supplies a fallback -- nothing to disagree about
+seed  # 7 modules, no reader supplies a fallback -- nothing to disagree about
+semantic_blocking  # 2 modules, no reader supplies a fallback -- nothing to disagree about
+skip_oversized  # 3 modules, no reader supplies a fallback -- nothing to disagree about
+source_pk_column  # 2 modules, no reader supplies a fallback -- nothing to disagree about
+standardization  # 7 modules, no reader supplies a fallback -- nothing to disagree about
+threshold  # 11 modules, no reader supplies a fallback -- nothing to disagree about
+throughput  # 2 modules, no reader supplies a fallback -- nothing to disagree about
+token  # 2 modules, no reader supplies a fallback -- nothing to disagree about
+transform  # 2 modules, no reader supplies a fallback -- nothing to disagree about
+transforms  # 12 modules; 8 supply a fallback and all use `or []`
+validation  # 3 modules, no reader supplies a fallback -- nothing to disagree about
+weak_cluster_threshold  # 2 modules, no reader supplies a fallback -- nothing to disagree about
