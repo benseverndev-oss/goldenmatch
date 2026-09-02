@@ -120,16 +120,28 @@ def test_parse_machete_no_unused_deps():
     assert _parse_machete(no_findings) == []
 
 
-def test_machete_present_reports_a_real_nonzero_count():
+def test_machete_present_measures_for_real():
     """SABOTAGE CHECK for the honest/real split: with cargo-machete actually
-    on PATH, unused_rust_deps() must report a real non-empty finding (this
-    repo genuinely has unused Cargo dependencies right now), not an empty
-    list masquerading as clean and not None masquerading as absent."""
+    on PATH, unused_rust_deps() must return a real MEASURED result (a list,
+    even an empty one) -- never None, which would mean the invocation
+    silently failed and got misread as "measured, clean" instead of "didn't
+    run". `result is not None` is the assertion this test exists for; a
+    non-empty list is not, on its own, evidence the invocation worked (an
+    empty list from a broken invocation would look identical).
+
+    Originally this asserted `len(result) > 0` because the repo genuinely
+    had unused dependencies at the time (the 11 findings the phase-A dead-
+    code audit's Rust triage went on to resolve on 2026-09-01: 7 removed, 4
+    kept `ignored` with a reason). Now that they're triaged, a real measured
+    run legitimately comes back empty, so that assertion would fail on
+    correctly-clean output -- hardcoding it back to `== []` would make this
+    test double as an unrelated regrowth ratchet, which is
+    test_no_new_dead_code.py's job, not this one's.
+    """
     if shutil.which("cargo") is None or shutil.which("cargo-machete") is None:
         pytest.skip("cargo-machete not on PATH")
     result = unused_rust_deps()
     assert result is not None
-    assert len(result) > 0
 
 
 def test_ts_public_entry_files_reads_the_real_exports_map():
