@@ -17,11 +17,38 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from shared_decisions.readers import field_accessors, shared_fields  # noqa: E402
+from shared_decisions.readers import (  # noqa: E402
+    field_accessors,
+    shared_fields,
+    unparseable_modules,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures" / "incident_1c843c8a5"
 REPO = Path(__file__).resolve().parent.parent
 GM = REPO / "packages" / "python" / "goldenmatch" / "goldenmatch"
+
+
+def test_a_bom_prefixed_source_file_is_parsed_not_skipped(tmp_path):
+    """core/autoconfig_planner.py and core/execution_plan.py both carry a
+    UTF-8 BOM (`\\ufeff`) in the committed blob. A plain `encoding="utf-8"`
+    decode leaves the BOM character in the source string, `ast.parse` raises
+    a SyntaxError on it, and the module falls into the silent `except
+    SyntaxError: continue` -- invisible to every field this scan reports,
+    on Linux CI too, not just locally. `encoding="utf-8-sig"` strips it."""
+    src = textwrap.dedent(
+        """
+        def look(config):
+            return config.blocking.passes
+        """
+    ).lstrip("\n")
+    # "utf-8-sig" PREPENDS the BOM bytes on encode -- writing `src` (no
+    # leading "\ufeff") through it reproduces exactly the byte layout
+    # `autoconfig_planner.py`/`execution_plan.py` carry, without double-BOM
+    # bytes that manually prepending "\ufeff" first would have produced.
+    (tmp_path / "bommed.py").write_bytes(src.encode("utf-8-sig"))
+    accessors = field_accessors(tmp_path)
+    assert "bommed.py" in accessors.get("passes", set()), accessors.get("passes")
+    assert unparseable_modules(tmp_path) == []
 
 
 def test_the_incident_pair_is_surfaced():

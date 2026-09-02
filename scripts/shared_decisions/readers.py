@@ -185,6 +185,29 @@ def _module_alias_names(
     return frozenset(aliases)
 
 
+def unparseable_modules(root: Path) -> list[str]:
+    """Module paths under `root` that `field_accessors` could not parse.
+
+    `field_accessors` silently `continue`s past an `ast.parse` SyntaxError so
+    one bad file cannot crash the whole scan -- but a module that raises IS a
+    module invisible to every field this scan reports, the same silence
+    `modules_without_coverage_data` exists to surface in the companion
+    parity_coverage.py tool. `core/autoconfig_planner.py` and
+    `core/execution_plan.py` carried a UTF-8 BOM (`\\ufeff`) that survived a
+    plain `encoding="utf-8"` decode and made `ast.parse` raise on both --
+    fixed by decoding with `utf-8-sig` instead, but the failure mode (a file
+    silently absent from every count) is not fully closed unless something
+    ALSO fires when it happens again for a different reason.
+    """
+    out: list[str] = []
+    for path in sorted(root.rglob("*.py")):
+        try:
+            ast.parse(path.read_text(encoding="utf-8-sig", errors="ignore"))
+        except SyntaxError:
+            out.append(path.relative_to(root).as_posix())
+    return out
+
+
 def field_accessors(root: Path) -> dict[str, set[str]]:
     """Map each config field name to the modules under `root` that ACCESS it.
 
@@ -213,7 +236,7 @@ def field_accessors(root: Path) -> dict[str, set[str]]:
     out: dict[str, set[str]] = defaultdict(set)
     for path in sorted(root.rglob("*.py")):
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8", errors="ignore"))
+            tree = ast.parse(path.read_text(encoding="utf-8-sig", errors="ignore"))
         except SyntaxError:
             continue
         rel = path.relative_to(root).as_posix()

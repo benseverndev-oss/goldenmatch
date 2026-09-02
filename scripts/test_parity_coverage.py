@@ -36,10 +36,29 @@ def _write(tmp_path: Path, body: str) -> Path:
 
 SPANS = {
     "packages/python/goldenflow/goldenflow/transforms/email.py": [
-        ("_never_ran_py", 25, 26),   # both lines hits=0
-        ("_did_run_py", 39, 41),     # covers line 40, hits=3
+        ("_never_ran_py", 25, 26),  # both lines hits=0
+        ("_did_run_py", 39, 41),  # covers line 40, hits=3
     ]
 }
+
+
+def test_a_bom_prefixed_module_is_scanned_for_py_functions(tmp_path, monkeypatch):
+    """core/autoconfig_planner.py and core/execution_plan.py in the real
+    goldenmatch tree both carry a UTF-8 BOM (`﻿`). A plain
+    `encoding="utf-8"` decode left the BOM character in the source string,
+    `ast.parse` raised a SyntaxError, and `_py_function_spans` silently
+    `continue`d past the module -- any `_py` function in it invisible to
+    `unguarded_py_functions` on every platform, Linux CI included.
+    `encoding="utf-8-sig"` strips it before parsing."""
+    (tmp_path / "bommed.py").write_bytes(
+        b"def fallback_py():\n    return 1\n".decode("ascii").encode("utf-8-sig")
+    )
+    monkeypatch.setattr(pc, "PACKAGES", (tmp_path,))
+    spans = pc._py_function_spans()
+    matches = [k for k in spans if k.endswith("bommed.py")]
+    assert matches, f"BOM-prefixed module was skipped entirely: {sorted(spans)}"
+    names = {fn for fn, _, _ in spans[matches[0]]}
+    assert "fallback_py" in names, names
 
 
 def test_an_unexecuted_function_is_reported_and_an_executed_one_is_not(tmp_path):
@@ -120,7 +139,9 @@ def test_max_no_data_below_the_limit_exits_0(tmp_path, monkeypatch):
     assert rc == 0
 
 
-def test_max_no_data_above_the_limit_exits_1_and_names_count_and_limit(tmp_path, monkeypatch, capsys):
+def test_max_no_data_above_the_limit_exits_1_and_names_count_and_limit(
+    tmp_path, monkeypatch, capsys
+):
     """A gap count exceeding the limit means the RUN was incomplete, not that
     more code is unguarded -- that must fail loudly, and the message must
     name both the actual count and the configured limit so a reader doesn't

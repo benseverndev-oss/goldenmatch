@@ -895,8 +895,22 @@ jobs:
           GOLDENFLOW_NATIVE: "0"
           COVERAGE_FILE: ${{ github.workspace }}/coverage_native_off.dat
         run: |
+          set +e
           uv run coverage run --source=goldenflow -m pytest \
-            packages/python/goldenflow/tests -q --timeout=300 || true
+            packages/python/goldenflow/tests -q --timeout=300
+          rc=$?
+          set -e
+          # pytest exit codes: 0=all passed, 1=tests failed (fine -- goldenflow
+          # has its own gating job for that), 2=interrupted, 3=internal error,
+          # 4=usage error, 5=no tests collected. Anything above 1 means the RUN
+          # itself broke (crash, OOM, a collection error) rather than merely
+          # went red, and `coverage run` still emits a <line hits="0"/> entry
+          # for every module it imported successfully even though the suite
+          # never got a chance to exercise anything -- so a broken run and a
+          # complete one produce coverage XML that looks the same shape to
+          # parity_coverage.py's --max-no-data floor below. Fail here, before
+          # that floor ever gets a chance to (not) catch it.
+          [ "$rc" -le 1 ] || { echo "::error::pytest exited $rc -- coverage harvest is not trustworthy"; exit 1; }
           uv run coverage xml -o coverage_native_off.xml --fail-under=0
       - name: Unguarded pure-Python fallbacks
         # KNOWN SCOPING ARTEFACT, not a finding: parity_coverage.py scans _py
@@ -910,12 +924,16 @@ jobs:
         # always show up in main()'s second line, "N module(s) had no
         # coverage data at all" -- currently printing 4 (those 4 modules), a
         # fixed floor from this goldenflow-only scoping, not a regression.
-        # `--max-no-data 4` turns that floor into an enforced check rather
-        # than a comment nobody reads: a no-data count above 4 does not mean
-        # more code went unguarded, it means the MEASUREMENT didn't happen
-        # for those modules (suite died early, a collection error truncated
-        # it, the runner OOMed) and the report below it is untrustworthy --
-        # so this step fails loudly instead of printing a bigger number.
+        # `--max-no-data 4` still guards that goldenmatch-scoping floor (a
+        # jump past 4 means something is ALSO excluded beyond the known
+        # scoping gap), but it does NOT guard against a truncated or crashed
+        # suite -- `coverage run --source=goldenflow` emits a <class> entry
+        # with recorded (if all-zero) <line> data for every goldenflow module
+        # it merely IMPORTED, whether or not any test ran, so
+        # modules_without_coverage_data() stays at exactly 4 regardless of
+        # whether the suite ran to completion. That truncation case is now
+        # caught by the pytest-rc check in the previous step, not by this
+        # floor.
         run: uv run python scripts/parity_coverage.py --native-off-xml coverage_native_off.xml --max-no-data 4
 
   # Reference mode: python_goldenmatch now runs NATIVE by default. This lean lane

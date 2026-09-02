@@ -30,7 +30,7 @@ def _py_function_spans() -> dict[str, list[tuple[str, int, int]]]:
     for root in PACKAGES:
         for path in sorted(root.rglob("*.py")):
             try:
-                tree = ast.parse(path.read_text(encoding="utf-8", errors="ignore"))
+                tree = ast.parse(path.read_text(encoding="utf-8-sig", errors="ignore"))
             except SyntaxError:
                 continue
             spans = [
