@@ -37,7 +37,7 @@
 - Consumes: nothing.
 - Produces:
   - `@dataclass(frozen=True) class Claim` with fields `module: str`, `symbol: str`, `kind: str` (`"module"` or `"symbol"`), `keyword: str`, `window: str`, `target: str | None`, `lineno: int`
-  - `def claims(root: Path) -> list[Claim]` — every claim under `root`, targets resolved where possible
+  - `def claims(root: Path, *, symbols: set[str] | None = None) -> list[Claim]` — every claim under `root`, targets resolved against `symbols` (defaulting to `declared_symbols(root)`)
   - `def declared_symbols(root: Path) -> set[str]` — every function/class name declared under `root`
   - `CLAIM_PATTERN: re.Pattern` and `WINDOW = 200`
 
@@ -88,6 +88,7 @@ from sync_claims.claims import Claim, claims, declared_symbols
 
 REPO = Path(__file__).resolve().parent.parent
 FIXTURE = REPO / "scripts" / "fixtures" / "incident_6c89042c7"
+GOLDENMATCH = REPO / "packages" / "python" / "goldenmatch" / "goldenmatch"
 
 
 def test_the_incident_claim_is_extracted_with_its_target():
@@ -96,8 +97,24 @@ def test_the_incident_claim_is_extracted_with_its_target():
     `_run_pipeline`'s docstring says "mirrors run_dedupe but returns
     EngineResult". The target is a BARE identifier -- no backticks, no call
     suffix -- which is exactly what an earlier target rule could not see.
+
+    Targets resolve against the REAL package, not the fixture: `run_dedupe`
+    lives in `core/pipeline.py`, not in `tui/engine.py`, so resolving against
+    the fixture alone returns None and this test could never pass. That is
+    what the `symbols` keyword is for.
     """
-    found = [c for c in claims(FIXTURE) if c.symbol == "_run_pipeline"]
+    package_symbols = declared_symbols(GOLDENMATCH)
+    assert "run_dedupe" in package_symbols, (
+        "run_dedupe is no longer declared in goldenmatch -- the fixture's claim "
+        "names a symbol that has been renamed or removed, so this test's premise "
+        "is gone. Fix the premise, do not weaken the assertion."
+    )
+
+    found = [
+        c
+        for c in claims(FIXTURE, symbols=package_symbols)
+        if c.symbol == "_run_pipeline"
+    ]
 
     assert len(found) == 1, f"expected one claim on _run_pipeline, got {found}"
     claim = found[0]
@@ -422,7 +439,7 @@ Three test files against one source file. The third is the trap that decides the
 `scripts/fixtures/sync_enforcement/src/lane.py`:
 
 ```python
-"""Synthetic fixture: three claims with three enforcement states."""
+"""Synthetic fixture: four claims -- enforced, unenforced, prose-only, unresolvable."""
 
 
 def fast_lane():
@@ -442,7 +459,17 @@ def orphan_lane():
 def prose_lane():
     """Mirrors slow_lane; a test mentions both only in prose."""
     return 1
+
+
+def stray_lane():
+    """Mirrors the legacy pipeline that no longer exists here."""
+    return 1
 ```
+
+`stray_lane`'s claim names nothing declared in the fixture, so its target
+resolves to `None`. It exists so the unresolvable-claim bucket has a member to
+assert on — without it those assertions iterate an empty list and pass while
+checking nothing.
 
 `scripts/fixtures/sync_enforcement/tests/test_enforced.py`:
 
@@ -535,10 +562,17 @@ def test_the_enforced_claim_is_not_reported():
 
 def test_a_claim_with_no_target_is_never_reported_unenforced():
     """An unresolvable claim has nothing to be enforced against. Reporting it
-    as unenforced would inflate the finding count with claims nobody can act
-    on."""
+    as unenforced would inflate the finding count with claims nobody can act on.
+
+    `stray_lane` exists in the fixture to give this something to assert on. An
+    earlier draft filtered for `target is None` against a fixture that had no
+    such claim, so it iterated an empty list and passed while checking nothing.
+    """
     unresolved = [c for c in _claims() if c.target is None]
-    assert all(c not in unenforced(_claims(), []) for c in unresolved)
+    assert {c.symbol for c in unresolved} == {"stray_lane"}, (
+        "the fixture must contain an unresolvable claim or this test is vacuous"
+    )
+    assert unenforced(unresolved, []) == []
 
 
 def test_executable_references_covers_all_three_node_kinds():
@@ -549,10 +583,11 @@ def test_executable_references_covers_all_three_node_kinds():
     assert {"fast_lane", "slow_lane"} <= names
 
 
-def test_an_empty_tests_directory_reports_everything_unenforced(tmp_path):
-    """Distinguish 'nothing enforced' from 'nothing scanned'. If the tests
-    root is wrong, every claim looks unenforced -- the report must be able to
-    say so rather than present it as a finding."""
+def test_an_empty_tests_directory_yields_no_reference_sets(tmp_path):
+    """An empty list is how 'nothing was scanned' reaches the report.
+
+    Distinguishing that from 'nothing is enforced' is the report's job
+    (test_sync_claims_report.py); this pins the signal it keys on."""
     assert test_reference_sets(tmp_path) == []
 ```
 
@@ -733,6 +768,7 @@ def test_inventory_buckets_the_fixture():
     inv = inventory(FIXTURE / "src", FIXTURE / "tests")
     assert {c["symbol"] for c in inv["unenforced"]} == {"orphan_lane", "prose_lane"}
     assert {c["symbol"] for c in inv["unverified"]} == {"fast_lane"}
+    assert {c["symbol"] for c in inv["unresolvable"]} == {"stray_lane"}
 
 
 def test_claim_count_and_finding_count_are_separate():
@@ -748,7 +784,6 @@ def test_claim_count_and_finding_count_are_separate():
 def test_the_report_names_the_matched_window(capsys):
     """A wrong target resolution must be visible, not silent. The first-match
     rule can pick the wrong symbol when a claim mentions several."""
-    inventory(FIXTURE / "src", FIXTURE / "tests")
     rc = main(["--root", str(FIXTURE / "src"), "--tests", str(FIXTURE / "tests")])
     out = capsys.readouterr().out
     assert rc == 0
@@ -1005,7 +1040,17 @@ sync_claims:
   - '.github/workflows/ci.yml'
 ```
 
-- [ ] **Step 2: Add the job**
+- [ ] **Step 2: Wire the filter into the `changes` job's outputs**
+
+**Without this the job never runs.** `ci.yml`'s `changes` job declares one explicit output line per filter (see its `outputs:` block). A filter that has no line produces an empty output, `needs.changes.outputs.sync_claims` is falsy, and the `if:` gate below is never true — the job is skipped on every run and the lane reports green having measured nothing. PR #2839 shipped exactly this, with two jobs silently skipped.
+
+Add to the `changes` job's `outputs:` block, alongside `scripts_lint` and `docs_regen`:
+
+```yaml
+      sync_claims: ${{ steps.filter.outputs.sync_claims }}
+```
+
+- [ ] **Step 3: Add the job**
 
 In `.github/workflows/ci.yml`, after the `shared_decisions` job:
 
@@ -1032,13 +1077,13 @@ In `.github/workflows/ci.yml`, after the `shared_decisions` job:
         run: uv run python -m sync_claims.report
 ```
 
-- [ ] **Step 3: Do NOT add an entry to `check_filter_coverage.py`'s `REQUIRED` map**
+- [ ] **Step 4: Do NOT add an entry to `check_filter_coverage.py`'s `REQUIRED` map**
 
 Called out because it is the tempting move and it is wrong. That map's own comment reads: *"Each entry is a real regression or a real near-miss, not a hypothetical."* A `sync_claims` entry today would be a hypothetical, and adding one dilutes a curated list whose value is that every line records something that actually happened.
 
 The generic `check_job_filter_coverage` in the same file already checks every job in `ci.yml` against the filter gating it, with no curation needed. That is what covers this job. If it reports a NEW gap for `sync_claims`, the filter is wrong — widen the filter; never add the job to `KNOWN_JOB_FILTER_GAPS`.
 
-- [ ] **Step 4: Run the gates**
+- [ ] **Step 5: Run the gates**
 
 ```bash
 python scripts/check_filter_coverage.py
@@ -1047,12 +1092,40 @@ PYTHONPATH=scripts python -m pytest scripts/test_workflow_yaml.py -q
 
 Expected: `CI filter coverage OK (...)`, `CI job-vs-filter coverage OK (...)`, and the workflow-yaml tests passing. If the job-vs-filter gate reports a NEW gap, the filter is wrong — fix the filter, do not add the job to the known-gaps list.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Prove the job is not skipped**
+
+A filter gate that is wired wrong fails silently, so assert the wiring rather than trusting it. `scripts/test_workflow_yaml.py` already parses `ci.yml`; add:
+
+```python
+def test_sync_claims_job_is_reachable():
+    """A job whose gating output is never emitted is skipped on every run.
+
+    The `changes` job needs an explicit `outputs:` line per filter. Without it
+    `needs.changes.outputs.sync_claims` is empty, the `if:` is false, and the
+    lane reports green having measured nothing -- PR #2839's defect.
+    """
+    spec = _load_ci()  # existing helper in this file
+    outputs = spec["jobs"]["changes"]["outputs"]
+    assert "sync_claims" in outputs, (
+        "the changes job emits no sync_claims output, so the job can never run"
+    )
+    assert "sync_claims" in spec["jobs"]["sync_claims"]["if"]
+```
+
+Run: `PYTHONPATH=scripts python -m pytest scripts/test_workflow_yaml.py -q`
+Expected: all pass, including the new test. If `_load_ci` is named differently in that file, use whatever helper the existing tests use — do not add a second YAML loader.
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add .github/filters.yml .github/workflows/ci.yml
+git add .github/filters.yml .github/workflows/ci.yml scripts/test_workflow_yaml.py
 git commit -F - <<'EOF'
 ci: report-only sync-claim job on its own filter
+
+The changes job emits an explicit sync_claims output. Without that line the
+gating expression is empty, the if: is false, and the job is skipped on
+every run while the lane reports green -- PR #2839's defect. A workflow
+test asserts the output exists.
 
 The filter watches the goldenmatch package and its tests, not just the
 detector: a claim is added by editing a docstring in the scanned tree, and
