@@ -4,17 +4,20 @@ Report-only, by design. This proposes; a person disposes. See the spec's "Being
 wrong": phase B's dangerous failure is a BAD MERGE -- collapsing two
 implementations that must stay separate -- so nothing here remediates.
 
-Ordering: the inventory is sorted by ACCESSOR COUNT ASCENDING, then by field
-name for ties -- NOT alphabetically by field, despite what an earlier draft of
-this module did. Measured against the real package: the scan finds 71 shared
-fields, and sorting by name puts `field` (48 accessor modules) and `name` (44)
-at the top while `passes`/`keys` -- the pair that actually shipped a silent
-wrong answer, with 11 accessors -- sits far below. A field touched by 48
-modules is a universal accessor; the divergence risk this inventory exists to
-surface is highest where FEW accessors make a NON-TRIVIAL, easy-to-diverge-on
-choice, so fewer accessors sort first. Nothing is dropped -- every shared,
-un-allowlisted field is still here -- only ranked, so the decision-shaped
-entries lead and the universal accessors sink to the bottom.
+Ordering: the inventory is sorted by ACCESSOR COUNT DESCENDING, then by field
+name for ties. An earlier draft sorted ascending, on the theory that few
+accessors making a non-trivial choice carries the highest divergence risk.
+That theory was never checked against the incident it was meant to surface,
+and it was backwards: ascending buried `passes` and `keys` -- the pair that
+actually shipped a silent wrong answer, 0 pairs where legacy produced 242 --
+at ranks 64 and 70 of 71. The incident's real shape is a WIDELY-shared field:
+more accessors means more modules that have to agree, hence more chances to
+disagree, not fewer. Descending order puts `passes`, `keys`, and `strategy`
+all in the top 8. This ranking is validated against the incident's own
+position in the real inventory, not argued from first principles -- see
+test_known_incident_fields_rank_near_the_top, which pins it to that evidence
+rather than to a rule. Nothing is dropped -- every shared, un-allowlisted
+field is still here -- only ranked, so the highest-blast-radius entries lead.
 """
 
 from __future__ import annotations
@@ -34,16 +37,17 @@ DEFAULT_ROOT = REPO / "packages" / "python" / "goldenmatch" / "goldenmatch"
 def inventory(root: Path) -> list[dict]:
     """Shared fields minus the declared-agreement allowlist.
 
-    Sorted by accessor count ascending, then field name -- see the module
-    docstring for why. The return shape (`list[dict]` with `field`/`readers`
-    keys) is unchanged by the ranking: only the order of the list differs.
+    Sorted by accessor count descending, then field name ascending for ties
+    -- see the module docstring for why. The return shape (`list[dict]` with
+    `field`/`readers` keys) is unchanged by the ranking: only the order of
+    the list differs.
     """
     shared = shared_fields(root)
     allowed = load_allowlist()
     items = [
         {"field": f, "readers": sorted(mods)} for f, mods in shared.items() if f not in allowed
     ]
-    items.sort(key=lambda item: (len(item["readers"]), item["field"]))
+    items.sort(key=lambda item: (-len(item["readers"]), item["field"]))
     return items
 
 

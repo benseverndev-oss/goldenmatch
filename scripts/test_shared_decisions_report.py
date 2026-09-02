@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from shared_decisions.report import inventory  # noqa: E402
+from shared_decisions.report import DEFAULT_ROOT, inventory  # noqa: E402
 
 FIXTURES = Path(__file__).parent / "fixtures" / "incident_1c843c8a5"
 
@@ -27,17 +27,34 @@ def test_readers_are_sorted_for_stable_output():
     items = inventory(FIXTURES)
     for item in items:
         assert item["readers"] == sorted(item["readers"]), item
-    # Ranking is by accessor count ASCENDING, then field name for ties -- the
-    # entries with the fewest accessors (the highest divergence risk; see
-    # shared_decisions/report.py's module docstring) lead the list, not
-    # universal accessors. Pin the order, not just the per-item sort, so a
-    # regression to alphabetical-by-field (or a flip to descending) fails
-    # this test rather than merely reading "differently ranked" in a report
-    # a human might not re-check.
+    # Ranking is by accessor count DESCENDING, then field name ASCENDING for
+    # ties -- see shared_decisions/report.py's module docstring: descending
+    # was validated against the incident's own position in the real
+    # inventory, not argued from first principles. Every field in THIS
+    # fixture ties at exactly 2 accessors, so it can only pin the tie-break
+    # (field name ascending) and the shape of the count column, not the
+    # count direction itself -- test_known_incident_fields_rank_near_the_top
+    # below is what actually pins descending, against the real package.
     counts = [len(i["readers"]) for i in items]
-    assert counts == sorted(counts), [i["field"] for i in items]
-    keys = [(len(i["readers"]), i["field"]) for i in items]
-    assert keys == sorted(keys), [i["field"] for i in items]
+    assert counts == sorted(counts, reverse=True), [i["field"] for i in items]
+    fields_in_order = [i["field"] for i in items]
+    assert fields_in_order == sorted(fields_in_order), fields_in_order
+
+
+def test_known_incident_fields_rank_near_the_top():
+    """Pin the ranking to the EVIDENCE, not to a rule.
+
+    `passes`/`keys` shipped the silent wrong answer this whole detector
+    exists to surface (0 pairs where legacy produced 242); `strategy` is the
+    same shape (many readers, non-trivial precedence). An ascending-by-count
+    ranking buried all three at ranks 64, 67, and 70 of 71 in the real
+    inventory -- this test is what makes a future re-sort that buries them
+    again fail loudly, naming exactly which field sank.
+    """
+    items = inventory(DEFAULT_ROOT)
+    top10 = [item["field"] for item in items[:10]]
+    for field in ("keys", "strategy", "passes"):
+        assert field in top10, f"{field} fell out of the top 10: {top10}"
 
 
 def test_allowlisted_fields_are_excluded(monkeypatch):
