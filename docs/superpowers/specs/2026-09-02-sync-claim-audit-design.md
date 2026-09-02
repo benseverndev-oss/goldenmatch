@@ -243,10 +243,14 @@ and a reason. **Start with the 50 "byte-identical to" / "identical to" claims** 
 "mirrors", that phrasing states a property that can actually be checked, so
 triaging one either produces an enforcing test or discovers a drifted pair.
 Budget for the first-match heuristic's measured cost while triaging the rest:
-13 of the 172 findings (7.5%) resolve to a generic word -- `min`, `row`,
-`key`, `max`, `run` and the like -- picked up because it happens to also be
-the first declared symbol name in the 200-character window, not because the
-claim is actually about it. Those are false positives by construction, not
+13 of the 172 findings (7.6%) resolve to a generic word, picked up because it
+happens to also be the first declared symbol name in the 200-character window,
+rather than because the claim is about it. **The rule that produces 13**, so a
+reader can reproduce the figure rather than take it on trust: a target of three
+characters or fewer, OR one drawn from a fixed common-word set (`min`, `max`,
+`row`, `key`, `run`, `sum`, `len`, `get`, `set`, `add`, `map`, `all`, `any`,
+`col`, `val`, `obj`, `idx`). Both halves independently select the same 13, of
+which `row` accounts for 6 and `key` for 3. Those are false positives by construction, not
 edge cases; expect roughly one in thirteen findings to be one.
 
 **C2 — remediation, one per PR.** Enforcing tests where the property holds;

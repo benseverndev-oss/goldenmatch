@@ -23,8 +23,9 @@ def _claims():
 
 def _symbol_claims():
     """Symbol-level claims only, scoped the way `inventory()` scopes its
-    input to `unenforced()`. `unenforced()` itself only filters on
-    `target is None`, not on `kind` -- a module-level claim with a
+    input to `unenforced()`. This mirrors the caller rather than relying on
+    the callee: `unenforced()` now filters on `kind` as well as
+    `target is None`, but it did not always -- a module-level claim with a
     resolved target (the fixture now has one) would otherwise flow
     straight into a finding set that is supposed to hold only claims a
     test COULD reference both halves of."""
