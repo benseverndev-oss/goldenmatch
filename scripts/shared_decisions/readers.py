@@ -1,9 +1,14 @@
-"""Which modules read which config fields.
+"""Which modules touch which config fields.
 
-A field read by more than one module is a shared decision: those readers must
-agree about what it means, and nothing checks that they do. That is exactly the
-1c843c8a5 incident -- score_buckets and blocker.py both read
+A field touched by more than one module is a shared decision: those modules
+must agree about what it means, and nothing checks that they do. That is
+exactly the 1c843c8a5 incident -- score_buckets and blocker.py both read
 `blocking_config.passes` and `.keys` and resolved their precedence differently.
+
+"Touch" means READ **or** WRITE, deliberately -- see `field_accessors`. The
+module file is still named `readers.py` because the plan's later tasks import
+`shared_decisions.readers`; the accurate word for what it measures is
+*accessor*, and the public function says so.
 """
 
 from __future__ import annotations
@@ -77,6 +82,9 @@ def _looks_like_config_name(
     matchkey field, from `for f in mk.fields`). Word-boundary equality
     rejects both. No minimum length is used instead -- a word boundary is
     the principled cut; an arbitrary length floor is a guess.
+
+    Callers should almost always go through `_chain_looks_like_config`, which
+    applies this to a whole chain the ONE agreed way.
     """
     low = name.lower()
     if "config" in low or "cfg" in low:
@@ -88,12 +96,40 @@ def _looks_like_config_name(
     return stripped in aliases
 
 
+def _chain_looks_like_config(
+    segments: list[str],
+    targets: tuple[set[str], set[str], set[str]],
+    aliases: frozenset[str] = frozenset(),
+) -> bool:
+    """THE config-look decision for a Name/Attribute chain, in ONE place.
+
+    A chain (from `_base_chain`) looks like it holds a config object when its
+    WHOLE dotted string looks like config, OR when ANY single segment does.
+    Both halves earn their place: `blocking_config` matches as a whole,
+    `config.blocking` matches on its `config` segment.
+
+    This function exists because that rule used to be written twice and the two
+    copies disagreed. The accessor scan tested whole-chain-OR-any-segment;
+    `_module_alias_names` tested only the whole dotted string -- so
+    `b = profile.blocking` failed to register `b` as a config alias, not for
+    any principled reason but because "profile.blocking" carries no literal
+    "config"/"cfg" substring, while its `blocking` segment does
+    word-boundary-match `BlockingConfig`. Two implementations of one rule,
+    silently disagreeing, inside the detector built to find exactly that, is
+    the defect class this whole inventory exists to remove. One function, two
+    call sites.
+    """
+    if _looks_like_config_name(".".join(segments), targets, aliases):
+        return True
+    return any(_looks_like_config_name(seg, targets, aliases) for seg in segments)
+
+
 def _base_chain(node: ast.expr) -> list[str] | None:
     """Walk a Name/Attribute chain to its segments, e.g. `config.blocking` ->
     ["config", "blocking"].
 
     Real code writes `config.blocking.passes`, where the base of the
-    `.passes` read is the Attribute node `config.blocking`, not a plain Name
+    `.passes` access is the Attribute node `config.blocking`, not a plain Name
     -- a bare-`ast.Name` check alone misses it. Returns None when the chain
     bottoms out in anything else (a call result, a subscript, ...), which
     this scan cannot attribute to a config object.
@@ -115,17 +151,17 @@ def _module_alias_names(
 ) -> frozenset[str]:
     """PASS 1: local variables this module assigns from a config-looking
     expression, e.g. `b = config.blocking` records "b" -- so `b.passes` /
-    `b.keys` later in the module are recognized as config field reads even
+    `b.keys` later in the module are recognized as config field accesses even
     though `b` alone doesn't word-boundary-match any known config class.
     core/config_critique.py does exactly this (`b = config.blocking`, then
     `b.strategy`, `b.passes`, `b.keys`), the same multi_pass precedence
     decision the 1c843c8a5 incident fix added to score_buckets -- without
-    alias tracking that reader is invisible.
+    alias tracking that module is invisible.
 
     A target counts when it is a single plain name (`x = ...`, not tuple/
-    attribute/subscript unpacking) and its value is either a bare Name that
-    itself looks like a config base, or a Name/Attribute chain whose full
-    dotted string looks like config (`config.blocking`).
+    attribute/subscript unpacking) and its value is a Name/Attribute chain
+    that `_chain_looks_like_config` accepts -- the SAME rule the accessor scan
+    applies to an access base, not a stricter lookalike of it.
 
     MODULE SCOPE ONLY, by design -- this is a single flat pass over every
     Assign in the module regardless of which function it's in, so it does
@@ -143,28 +179,34 @@ def _module_alias_names(
             continue
         if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
             continue
-        value = node.value
-        if isinstance(value, ast.Name):
-            if _looks_like_config_name(value.id, targets):
-                aliases.add(node.targets[0].id.lower())
-        elif isinstance(value, ast.Attribute):
-            segments = _base_chain(value)
-            if segments is not None and _looks_like_config_name(".".join(segments), targets):
-                aliases.add(node.targets[0].id.lower())
+        segments = _base_chain(node.value)
+        if segments is not None and _chain_looks_like_config(segments, targets):
+            aliases.add(node.targets[0].id.lower())
     return frozenset(aliases)
 
 
-def field_readers(root: Path) -> dict[str, set[str]]:
-    """Map each config field name to the modules under `root` that read it.
+def field_accessors(root: Path) -> dict[str, set[str]]:
+    """Map each config field name to the modules under `root` that ACCESS it.
 
-    An attribute read counts when its base -- a bare name (`blocking_config`),
-    a dotted chain (`config.blocking`), or a module-local alias of either
+    ACCESS MEANS READ **OR** WRITE, on purpose. `core/pipeline.py` does
+    `config.blocking.keys = new_keys` -- an `ast.Store` context -- and this
+    scan counts it. For a shared-decision inventory a writer matters MORE than
+    a reader, not less: a module that mutates a field shared with ten others
+    is precisely the module every reader has to agree with, and the 1c843c8a5
+    incident was two modules disagreeing about how that field resolves. So
+    writes are not filtered out, and the name says "accessors" rather than
+    "readers" so the count cannot be mistaken for a read-only one. (This
+    function was called `field_readers` through three fix rounds while
+    measuring reads AND writes -- a name that overstates what it measures is
+    the same defect class the inventory exists to remove.)
+
+    An access counts when its base -- a bare name (`blocking_config`), a
+    dotted chain (`config.blocking`), or a module-local alias of either
     (`b`, from `b = config.blocking`; see `_module_alias_names`) -- looks
-    like it holds a config object: see `_looks_like_config_name`. Both the
-    whole dotted chain and each of its segments are checked, so
-    `config.blocking.passes` matches on its `config` segment even though the
-    immediate base of `.passes` is the Attribute node `config.blocking`, not
-    a plain Name.
+    like it holds a config object. That single decision lives in
+    `_chain_looks_like_config`.
+
+    Returns field name -> set of module paths (posix, relative to `root`).
     """
     known = _known_field_names()
     targets = _config_look_targets()
@@ -182,14 +224,16 @@ def field_readers(root: Path) -> dict[str, set[str]]:
             segments = _base_chain(node.value)
             if segments is None:
                 continue
-            dotted = ".".join(segments)
-            if _looks_like_config_name(dotted, targets, aliases) or any(
-                _looks_like_config_name(seg, targets, aliases) for seg in segments
-            ):
+            if _chain_looks_like_config(segments, targets, aliases):
                 out[node.attr].add(rel)
     return dict(out)
 
 
 def shared_fields(root: Path) -> dict[str, set[str]]:
-    """Fields read by MORE THAN ONE module -- the ones whose readers must agree."""
-    return {f: mods for f, mods in field_readers(root).items() if len(mods) > 1}
+    """Fields ACCESSED -- read or written -- by MORE THAN ONE module.
+
+    These are the shared decisions: every module in the set has to agree about
+    what the field means, and (writes included, see `field_accessors`) about
+    who is allowed to change it.
+    """
+    return {f: mods for f, mods in field_accessors(root).items() if len(mods) > 1}
