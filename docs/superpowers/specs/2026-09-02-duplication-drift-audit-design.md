@@ -68,20 +68,43 @@ other: A's inventory of declared pairs is B's exclusion set.
 correct.** An undeclared parity pair is precisely a pair that can drift
 silently. The remedy is to declare it, not to suppress it.
 
-### Validation against the known incidents (load-bearing)
+### The two incidents are different classes — so there are two engines
 
-The detector MUST find both motivating incidents at their pre-fix commits before
-it is trusted for anything:
+AMENDED 2026-09-02, during planning. This section originally required a single
+clone detector to find both incidents. Reading the actual diffs rather than the
+commit subjects showed that is unsatisfiable, and narrowing the requirement to
+the detectable one would have optimised for what is convenient over what hurt.
 
-- `6c89042c7^` — `MatchEngine`'s copy of the dedupe pipeline
-- `1c843c8a5^` — `score_buckets` vs `blocker.py` block-key dispatch
+| incident | shape | detectable by |
+| --- | --- | --- |
+| `6c89042c7^` `MatchEngine._run_pipeline` | a ~200-line reimplementation whose own docstring said "mirrors run_dedupe"; 203 lines became 54 | structural clone detection |
+| `1c843c8a5^` `score_buckets` vs `blocker.py` | ONE line: `pass_keys = blocking_config.passes or blocking_config.keys`, the opposite precedence to blocker.py | NOT clone detection — see below |
 
-Both are extracted into checked-in fixtures so the test does not depend on git
-history staying reachable, and both become permanent regression tests.
+Incident 2 shares no code with its counterpart. Two modules independently
+implemented the same rule and one got the precedence backwards. What was
+duplicated is the DECISION, not the code, so no similarity threshold can reach
+it. It is also the incident that shipped a SILENT WRONG ANSWER — 0 pairs where
+legacy produced 242 — while incident 1 raised a loud ImportError.
 
-A detector that cannot find the bugs that motivated it is decoration. If the
-thresholds cannot catch both, the thresholds are wrong — or the approach is, and
-that is worth learning in B0 rather than after shipping a green gate.
+**Engine 1 — shared-decision inventory.** For each configuration field,
+enumerate the modules that read it, and surface the fields read by more than one
+module: those readers must agree, and nothing checks that they do. Measured
+2026-09-02 on `goldenmatch`: seven modules read BOTH `blocking_config.passes`
+and `.keys` and so must agree on precedence — `backends/fs_out_of_core.py`,
+`backends/score_buckets.py`, `core/autoconfig.py`, `core/autoconfig_verify.py`,
+`core/blocker.py`, `distributed/scoring.py`, `identity/block_index.py`. The
+incident-2 pair is among them, so this engine would have surfaced it before it
+shipped. Five of the other six are unexamined and may carry the same defect now.
+
+A plain AST attribute scan: deterministic, no thresholds, no tuning, and its
+output is a bounded reviewable inventory rather than a ranked findings list.
+
+**Engine 2 — structural clone detection.** As described above, validated against
+incident 1.
+
+Each engine MUST find its own incident from a checked-in fixture before it is
+trusted, so neither depends on git history staying reachable. A detector that
+cannot find the bug that motivated it is decoration.
 
 ### Engine: AST normalisation on stdlib `ast`
 
