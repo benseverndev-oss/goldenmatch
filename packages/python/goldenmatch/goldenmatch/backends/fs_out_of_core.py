@@ -446,11 +446,7 @@ def score_fs_out_of_core(
         prob_scorer = None if use_native else probabilistic_block_scorer(mk, em_result)
         frozen_exclude = frozenset(matched_pairs)
 
-        passes = (
-            list(blocking_config.passes or [])
-            if blocking_config.strategy == "multi_pass"
-            else list(blocking_config.keys or [])
-        )
+        passes = blocking_config.resolved_keys()
 
         _arrow = emit == "arrow"
         out: list[tuple[int, int, float]] = []
@@ -1790,9 +1786,7 @@ def _bucketed_passes(blocking_config: BlockingConfig) -> list:
     ``__block_key__`` equivalence class); the ``_fs_streaming_dedupe_eligible`` gate
     already restricts the route to them (SN/adaptive/ann have no single block key —
     unsound to hash-partition, see the design spec)."""
-    if blocking_config.strategy == "multi_pass":
-        return list(blocking_config.passes or [])
-    return list(blocking_config.keys or [])
+    return blocking_config.resolved_keys()
 
 
 def bucket_frame_to_shards(

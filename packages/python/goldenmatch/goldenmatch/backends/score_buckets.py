@@ -1497,10 +1497,7 @@ def score_buckets(
     # Auto-config emits keys=[org_name] with passes=[postcode, record_id],
     # where the dropped key is the only one that pairs the duplicates: on the
     # suggest_quality orgs_hard corpus that was 0 pairs vs legacy's 242.
-    if blocking_config.strategy == "multi_pass":
-        pass_keys = blocking_config.passes or blocking_config.keys
-    else:
-        pass_keys = blocking_config.keys or blocking_config.passes
+    pass_keys = blocking_config.resolved_keys()
     if not pass_keys:
         return []
 

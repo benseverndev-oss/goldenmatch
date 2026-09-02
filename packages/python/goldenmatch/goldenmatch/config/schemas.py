@@ -1330,6 +1330,40 @@ class BlockingConfig(BaseModel):
         description="Perceptual-hash LSH configuration used when the strategy is 'perceptual'.",
     )
 
+    def resolved_keys(self) -> list[BlockingKeyConfig]:
+        """The block-key configs to actually block on. ONE definition, here.
+
+        `keys` and `passes` are two places to put the same thing, and which one
+        wins depends on `strategy`. That rule was written out seven times
+        across the package -- core/blocker.py (three sites),
+        backends/score_buckets.py, backends/fs_out_of_core.py (two sites),
+        identity/block_index.py, distributed/scoring.py -- and the copies did
+        not agree:
+
+        - `distributed/scoring.py` read `passes or keys` with NO strategy
+          branch, so a `static` config carrying both blocked on `passes` where
+          `core/blocker.py` blocked on `keys`. Different backends, different
+          candidate sets, no error.
+        - `_build_multi_pass_blocks` iterated `passes or []` with no fallback,
+          so a `multi_pass` config carrying only `keys` -- a shape this class's
+          OWN validator accepts, and whose error message advertises as valid
+          ("requires 'keys' or 'passes'") -- produced ZERO blocks and zero
+          candidate pairs. Silently.
+        - `core/blocker.py`'s two profile sites labelled the emitted
+          `BlockingProfile` with `passes` while the build used `keys`.
+
+        The rule adopted here is the one `1c843c8a5` established when it fixed
+        `score_buckets`, and it is the only one of the variants that honours
+        the validator's promise: a strategy prefers its own field, and falls
+        back to the other rather than blocking on nothing.
+
+        This is a method, not a `@property`, so it cannot be mistaken for a
+        Pydantic field in serialisation or `model_dump`.
+        """
+        if self.strategy == "multi_pass":
+            return list(self.passes or self.keys or [])
+        return list(self.keys or self.passes or [])
+
     @model_validator(mode="after")
     def _validate_keys_or_passes(self) -> BlockingConfig:
         """Ensure at least keys or passes is provided for strategies that need them."""

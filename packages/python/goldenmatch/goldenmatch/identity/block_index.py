@@ -44,9 +44,7 @@ def _pass_signature(key_config: BlockingKeyConfig) -> str:
 
 def _passes_of(blocking: BlockingConfig) -> list[BlockingKeyConfig]:
     """The blocking passes to index: ``passes`` for multi_pass, else ``keys``."""
-    if getattr(blocking, "strategy", None) == "multi_pass":
-        return list(blocking.passes or [])
-    return list(blocking.keys or [])
+    return blocking.resolved_keys()
 
 
 def compute_frame_block_keys(

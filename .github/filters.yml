@@ -1080,3 +1080,21 @@ docs_staleness:
   - 'scripts/check_docs_staleness.py'
   - 'scripts/config_matrix/registry.py'  # declares env_prefix + prose_flag_page
   - '.github/filters.yml'
+# Sync-claim audit: docstrings that claim "this mirrors that" with no test
+# enforcing it (scripts/sync_claims/{claims,enforcement,report}.py). Watches
+# the code the audit READS, not just the detector's own files -- a filter
+# scoped to scripts/ would never re-run the job when someone ADDS a claim to
+# a docstring elsewhere, which is precisely the change this job exists to
+# catch. #2839: two jobs whose filter watched only the surface they ran FROM
+# (packages/python/goldenmatch) rather than what they scanned (scripts/) went
+# silently skipped; this filter makes the same mistake in the other direction
+# on purpose -- the scanned tree, not just the runner.
+sync_claims:
+  - 'scripts/sync_claims/**'
+  - 'scripts/test_sync_claims_*.py'
+  - 'scripts/fixtures/incident_6c89042c7/**'
+  - 'scripts/fixtures/sync_enforcement/**'
+  - 'packages/python/goldenmatch/goldenmatch/**'
+  - 'packages/python/goldenmatch/tests/**'
+  - '.github/workflows/ci.yml'
+  - '.github/filters.yml'                # self-test: a narrowing edit here must still re-run the gate
