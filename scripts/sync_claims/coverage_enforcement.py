@@ -66,6 +66,8 @@ def _collect_spans(node: ast.AST, prefix: list[str], out: list[tuple[str, int, i
             _collect_spans(child, [*prefix, child.name], out)
         elif isinstance(child, ast.ClassDef):
             _collect_spans(child, [*prefix, child.name], out)
+        else:
+            _collect_spans(child, prefix, out)
 
 
 def function_contexts(

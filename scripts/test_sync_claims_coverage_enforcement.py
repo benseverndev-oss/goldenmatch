@@ -62,6 +62,29 @@ def test_function_spans_reads_bom_prefixed_files(tmp_path):
     assert spans["bom.py"][0][0] == "has_bom"
 
 
+def test_function_spans_finds_functions_in_control_flow_blocks(tmp_path):
+    """Regression test: _collect_spans must recurse into all node types,
+    not just FunctionDef/AsyncFunctionDef/ClassDef. Functions defined inside
+    try/except, if, for, while, with, etc. blocks must be discovered.
+    Concrete case: goldenmatch/core/_native_loader.py uses try/except import
+    fallbacks to discover optional features."""
+    (tmp_path / "control_flow.py").write_text(
+        """try:
+    def fallback():
+        pass
+except ImportError:
+    pass
+if True:
+    def conditional():
+        pass
+""",
+        encoding="utf-8",
+    )
+    spans = function_spans(tmp_path)
+    names = {name for name, _, _ in spans["control_flow.py"]}
+    assert names == {"fallback", "conditional"}, names
+
+
 import subprocess
 
 
