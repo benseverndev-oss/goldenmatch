@@ -311,3 +311,86 @@ def test_build_clusters_distributed_algorithm_kwarg_overrides_env(monkeypatch, c
     assert any("randomized_contraction" in m for m in msgs), msgs
     rows = {r["member_id"]: r["cluster_size"] for r in out.take_all()}
     assert rows[1] == 3 and rows[5] == 2
+
+
+def test_randomized_contraction_agrees_with_two_phase_wcc(tmp_path):
+    """The claim this pins: `randomized_contraction_wcc`'s docstring says
+    "Same {id,label} contract as two_phase_wcc", and `_rc_union_isolated`
+    says it "mirrors two_phase_wcc's isolated-node handling so the two routes
+    agree on the build_clusters_distributed contract". NOTHING previously ran
+    both algorithms on the same input and compared -- the existing tests each
+    assert one algorithm's output independently, never both against each
+    other. Surfaced by the phase-C sync-claim audit
+    (docs/superpowers/specs/2026-09-02-c1-read-of-55.md), the same shape as
+    `#2717`: two WCC implementations disagreeing on cluster membership is a
+    silent wrong answer with no exception, not a crash.
+
+    Compares PARTITIONS (which ids end up grouped together), not label
+    VALUES. Both algorithms use min-id-of-component as their label today
+    (`_rc_normalize_distributed`'s "per-partition min(orig_id) == global
+    component min" comment), but pinning that internal convention would be a
+    stricter and more fragile claim than the one either docstring actually
+    makes -- "the two routes agree" means the same clustering, not
+    necessarily the same representative id.
+
+    The input graph is deliberately not one component: a 5-node chain (the
+    shape `two_phase_wcc`'s own docstring calls label-prop's worst case, and
+    RC's rival), an isolated triangle, a pair, and two singletons seeded only
+    through `all_ids` -- so isolated-node handling (the specific thing
+    `_rc_union_isolated`'s docstring calls out) is exercised by both routes.
+    """
+    pytest.importorskip("ray")
+    from goldenmatch.distributed.clustering import (
+        pairs_list_to_dataset,
+        randomized_contraction_wcc,
+        two_phase_wcc,
+    )
+
+    edges = [
+        (1, 2, 0.9), (2, 3, 0.9), (3, 4, 0.9), (4, 5, 0.9),  # chain
+        (10, 11, 0.9), (11, 12, 0.9), (10, 12, 0.9),  # triangle
+        (20, 21, 0.9),  # pair
+    ]
+    all_ids = [1, 2, 3, 4, 5, 10, 11, 12, 20, 21, 99, 100]  # 99, 100: isolated
+    expected_partition = {
+        frozenset({1, 2, 3, 4, 5}),
+        frozenset({10, 11, 12}),
+        frozenset({20, 21}),
+        frozenset({99}),
+        frozenset({100}),
+    }
+
+    def _partition(rows):
+        groups: dict[int, set[int]] = {}
+        for r in rows:
+            groups.setdefault(r["label"], set()).add(r["id"])
+        return {frozenset(members) for members in groups.values()}
+
+    two_phase = two_phase_wcc(
+        pairs_list_to_dataset(edges), all_ids=list(all_ids)
+    ).take_all()
+    randomized = randomized_contraction_wcc(
+        pairs_list_to_dataset(edges),
+        all_ids=list(all_ids),
+        scratch_dir=str(tmp_path),
+        seed=0,
+    ).take_all()
+
+    two_phase_partition = _partition(two_phase)
+    randomized_partition = _partition(randomized)
+
+    # Guard the guard: if the fixture graph does not produce the intended
+    # shape, the comparison below would be comparing two WRONG answers and
+    # agreeing on that would prove nothing.
+    assert two_phase_partition == expected_partition, (
+        f"two_phase_wcc did not produce the intended fixture shape: "
+        f"{two_phase_partition}"
+    )
+
+    assert randomized_partition == two_phase_partition, (
+        f"randomized_contraction_wcc disagrees with two_phase_wcc on cluster "
+        f"membership -- the two routes do NOT agree, contradicting both "
+        f"docstrings' claim.\n"
+        f"two_phase_wcc:              {sorted(map(sorted, two_phase_partition))}\n"
+        f"randomized_contraction_wcc: {sorted(map(sorted, randomized_partition))}"
+    )
