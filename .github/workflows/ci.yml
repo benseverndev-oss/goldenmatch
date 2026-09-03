@@ -460,7 +460,7 @@ jobs:
             -n auto --splits "${GM_SPLITS}" --group ${{ matrix.shard }} \
             --durations-path "${GITHUB_WORKSPACE}/packages/python/goldenmatch/.test_durations" \
             --timeout=120 --timeout-method=thread --durations=20 \
-            --cov=goldenmatch --cov-report= \
+            --cov=goldenmatch --cov-report= --cov-context=test \
             --ignore=packages/python/goldenmatch/benchmarks \
             --ignore=packages/python/goldenmatch/tests/test_db.py \
             --ignore=packages/python/goldenmatch/tests/test_reconcile.py \
@@ -588,7 +588,7 @@ jobs:
             --splitting-algorithm least_duration \
             --durations-path "${GITHUB_WORKSPACE}/packages/python/goldenmatch/.test_durations_heavy" \
             --timeout=300 --timeout-method=thread --durations=20 \
-            --cov=goldenmatch --cov-report=
+            --cov=goldenmatch --cov-report= --cov-context=test
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         with:
           name: gm-cov-heavy-${{ matrix.shard }}
@@ -5040,8 +5040,23 @@ jobs:
     # Not in ci-required and the report step has no continue-on-error to
     # suppress -- it always exits 0 by design. The gate is a later stage
     # (C3), after the C1 triage establishes a floor; this job only prints.
-    needs: changes
-    if: needs.changes.outputs.sync_claims == 'true' || needs.changes.outputs.force_all == 'true'
+    #
+    # Coverage-based enforcement (docs/superpowers/specs/2026-09-03-coverage-
+    # based-enforcement-design.md): downloads the SAME gm-cov-* shard
+    # artifacts python_goldenmatch_coverage combines, and combines them
+    # itself -- with dynamic test contexts intact, which `coverage xml`
+    # (what that job produces) drops entirely. Depends on the shard-producing
+    # jobs directly, mirroring dead_code's existing always()+skip-tolerant
+    # pattern below, so a PR that does not touch goldenmatch code degrades to
+    # text-only enforcement rather than hanging on a job that never runs.
+    needs: [changes, python_goldenmatch, python_goldenmatch_heavy]
+    if: >-
+      always() &&
+      (needs.changes.outputs.sync_claims == 'true' || needs.changes.outputs.force_all == 'true') &&
+      needs.python_goldenmatch.result != 'failure' &&
+      needs.python_goldenmatch.result != 'cancelled' &&
+      needs.python_goldenmatch_heavy.result != 'failure' &&
+      needs.python_goldenmatch_heavy.result != 'cancelled'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -5052,13 +5067,39 @@ jobs:
         # Listed by name, so a new test FILE must be added here or it never runs.
         env:
           PYTHONPATH: scripts
-        run: uv run pytest scripts/test_sync_claims_claims.py scripts/test_sync_claims_enforcement.py scripts/test_sync_claims_report.py -q
+        run: uv run pytest scripts/test_sync_claims_claims.py scripts/test_sync_claims_enforcement.py scripts/test_sync_claims_report.py scripts/test_sync_claims_coverage_enforcement.py -q
+      - name: Download coverage shards (best-effort)
+        # Absent when python_goldenmatch/_heavy were both skipped (this PR
+        # did not touch goldenmatch code) -- continue-on-error, not a
+        # required step, so a skip here degrades rather than fails the job.
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          pattern: gm-cov-*
+          merge-multiple: true
+          path: .
+      - name: Combine coverage contexts (best-effort)
+        # Same file list as python_goldenmatch_coverage's own combine, so
+        # this measures the identical population the required gate's floors
+        # already measure. continue-on-error: errors when shards are absent
+        # (the download step above found nothing), which is the expected
+        # degrade-to-text-only path, not a real failure.
+        continue-on-error: true
+        run: |
+          uv run coverage combine --rcfile=packages/python/goldenmatch/pyproject.toml \
+            coverage_shard1.dat coverage_shard2.dat coverage_shard3.dat \
+            coverage_heavy_1.dat coverage_heavy_2.dat coverage_heavy_3.dat
       - name: Unenforced sync-claim report
         # Report-only by design: main() returns 0 whatever it finds. The gate
         # is stage C3, after the C1 triage establishes a floor.
         env:
           PYTHONPATH: scripts
-        run: uv run python -m sync_claims.report
+        run: |
+          if [ -f .coverage ]; then
+            uv run python -m sync_claims.report --coverage-db .coverage
+          else
+            uv run python -m sync_claims.report
+          fi
 
   ci-required:
     needs:

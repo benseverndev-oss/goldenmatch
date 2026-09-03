@@ -178,3 +178,55 @@ def test_sync_claims_job_is_reachable():
         "the changes job emits no sync_claims output, so the job can never run"
     )
     assert "sync_claims" in spec["jobs"]["sync_claims"]["if"]
+
+
+def test_shard_jobs_carry_cov_context():
+    """Without --cov-context=test on BOTH shard-producing jobs, the .coverage
+    file sync_claims combines has no per-test data at all, and coverage-based
+    enforcement silently finds nothing -- the exact failure mode this whole
+    mechanism exists to avoid, one level up the chain."""
+    spec = _load_ci_workflow()
+    for job_name in ("python_goldenmatch", "python_goldenmatch_heavy"):
+        steps = spec["jobs"][job_name]["steps"]
+        cov_steps = [s for s in steps if "--cov=goldenmatch" in (s.get("run") or "")]
+        assert cov_steps, f"{job_name} has no --cov=goldenmatch step to check"
+        assert any("--cov-context=test" in s["run"] for s in cov_steps), (
+            f"{job_name}'s coverage step is missing --cov-context=test"
+        )
+
+
+def test_sync_claims_depends_on_the_shard_jobs():
+    spec = _load_ci_workflow()
+    needs = spec["jobs"]["sync_claims"]["needs"]
+    assert "python_goldenmatch" in needs
+    assert "python_goldenmatch_heavy" in needs
+
+
+def test_sync_claims_degrades_when_shard_jobs_are_skipped():
+    """The `if:` must tolerate SKIPPED (not require success()) on both shard
+    jobs, or sync_claims never runs at all on a PR that does not touch
+    goldenmatch code -- exactly the scenario coverage-based enforcement must
+    degrade through, not disappear under."""
+    spec = _load_ci_workflow()
+    job = spec["jobs"]["sync_claims"]
+    condition = job["if"]
+    assert "always()" in condition, (
+        "the if: must start from always() or an implicit success() re-requires "
+        "both shard jobs to have run, defeating graceful degradation"
+    )
+    for dep in ("python_goldenmatch", "python_goldenmatch_heavy"):
+        assert f"needs.{dep}.result != 'failure'" in condition
+        assert f"needs.{dep}.result != 'cancelled'" in condition
+
+
+def test_sync_claims_downloads_coverage_shards_and_passes_the_flag():
+    spec = _load_ci_workflow()
+    steps = spec["jobs"]["sync_claims"]["steps"]
+    download_steps = [s for s in steps if s.get("uses", "").startswith("actions/download-artifact")]
+    assert download_steps, "sync_claims has no download-artifact step"
+    assert download_steps[0].get("with", {}).get("pattern") == "gm-cov-*"
+    report_steps = [s for s in steps if "sync_claims.report" in (s.get("run") or "")]
+    assert report_steps, "sync_claims has no report step"
+    assert "--coverage-db" in report_steps[0]["run"], (
+        "the report step never passes --coverage-db even conditionally"
+    )
