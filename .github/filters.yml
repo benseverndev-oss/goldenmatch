@@ -1100,5 +1100,11 @@ sync_claims:
   - 'scripts/fixtures/sync_enforcement/**'
   - 'packages/python/goldenmatch/goldenmatch/**'
   - 'packages/python/goldenmatch/tests/**'
+  # Coverage-based enforcement (2026-09-03): the job's own "Combine coverage
+  # contexts" step reads this file (--rcfile=) to combine the gm-cov-* shard
+  # artifacts. A change to [tool.coverage] here (source paths, exclusions)
+  # changes what that combine measures without touching goldenmatch/** or
+  # tests/** -- check_filter_coverage.py caught this as a real gap.
+  - 'packages/python/goldenmatch/pyproject.toml'
   - '.github/workflows/ci.yml'
   - '.github/filters.yml'                # self-test: a narrowing edit here must still re-run the gate
