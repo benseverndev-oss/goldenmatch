@@ -1514,6 +1514,13 @@ def _alias_score_matrix(values: list) -> np.ndarray:
     hash-groupings (one per space) unioned together reproduce the pairwise
     OR — and stay byte-identical to the pairwise ``score_field`` (parity-
     checked in ``tests/test_semantic_scorers.py``).
+
+    This is the motivating case for the sync-claims coverage-enforcement
+    mechanism (scripts/sync_claims/coverage_enforcement.py): the parity test
+    above reaches this function only through ``_fuzzy_score_matrix``, never
+    naming ``_alias_score_matrix`` directly, so a text-only claim-vs-test
+    check reports the "byte-identical" claim above as unenforced even though
+    it genuinely is verified.
     """
     from goldenmatch.refdata.business_aliases import canonical_company_form
     from goldenmatch.refdata.given_names import canonical_form
