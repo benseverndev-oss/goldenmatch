@@ -131,3 +131,38 @@ def test_the_default_roots_exist():
     """A default path that does not exist makes every CI run vacuously clean."""
     assert DEFAULT_ROOT.is_dir(), DEFAULT_ROOT
     assert DEFAULT_TESTS.is_dir(), DEFAULT_TESTS
+
+
+def test_low_confidence_findings_are_reported_not_hidden():
+    """Splitting the buckets must not lose claims.
+
+    Every symbol-level claim lands in exactly one of: unenforced (high
+    confidence), unenforced_low_confidence, unverified, or unresolvable.
+    A split that quietly dropped the low-confidence half would shrink the
+    reported number while the claims stayed exactly as unchecked.
+    """
+    inv = inventory(DEFAULT_ROOT, DEFAULT_TESTS)
+    c = inv["counts"]
+    assert "unenforced_low_confidence" in c
+    total = (
+        c["unenforced"]
+        + c["unenforced_low_confidence"]
+        + c["unverified"]
+        + c["unresolvable"]
+    )
+    assert total == c["claims"] - c["module_level"], (
+        f"buckets sum to {total} but there are "
+        f"{c['claims'] - c['module_level']} symbol-level claims -- the "
+        f"confidence split lost some"
+    )
+    assert c["unenforced_low_confidence"] > 0, (
+        "no low-confidence findings at all: either the rule stopped firing or "
+        "the corpus changed shape -- check before assuming this is good news"
+    )
+
+
+def test_the_report_says_low_confidence_findings_are_not_triaged(capsys):
+    """A reader must not mistake the low-confidence bucket for a clean bill."""
+    main(["--root", str(FIXTURE / "src"), "--tests", str(FIXTURE / "tests")])
+    out = capsys.readouterr().out.lower()
+    assert "low-confidence" in out or "low confidence" in out

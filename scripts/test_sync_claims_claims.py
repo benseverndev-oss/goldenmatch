@@ -190,3 +190,74 @@ def merge_field():
     )
     found = [c for c in claims(tmp_path) if c.symbol == "claimant"]
     assert found[0].target == "merge_field"
+
+
+def test_the_incident_is_HIGH_confidence_despite_a_bare_target():
+    """The rule must not exclude the bug the detector exists to catch.
+
+    `_run_pipeline`'s docstring reads "mirrors run_dedupe but returns
+    EngineResult" -- `run_dedupe` carries no markup. A high-confidence rule
+    that required markup would drop this claim from the triage set, which
+    would make the whole confidence split decoration. The bare path exists
+    for exactly this case.
+    """
+    package_symbols = declared_symbols(GOLDENMATCH)
+    found = [
+        c
+        for c in claims(FIXTURE, symbols=package_symbols)
+        if c.symbol == "_run_pipeline"
+    ]
+    assert found[0].target == "run_dedupe"
+    assert found[0].confidence == "high", (
+        "the motivating incident fell out of the high-confidence set; a gate "
+        "that cannot see it is decoration"
+    )
+
+
+def test_a_bare_target_far_from_the_keyword_is_LOW_confidence(tmp_path):
+    """The failure C1 measured: a real symbol that the claim does not equate."""
+    (tmp_path / "m.py").write_text(
+        '''
+def claimant():
+    """Mirrors the general shape of the pipeline, and note that the batching
+    path is governed elsewhere by helper which does the real work."""
+
+
+def helper():
+    pass
+'''.strip(),
+        encoding="utf-8",
+    )
+    found = [c for c in claims(tmp_path) if c.symbol == "claimant"]
+    assert found[0].target == "helper"
+    assert found[0].confidence == "low"
+
+
+def test_a_marked_up_target_is_HIGH_confidence_further_out(tmp_path):
+    """Markup is trusted further than a bare word: the author wrote it as code."""
+    (tmp_path / "m.py").write_text(
+        '''
+def claimant():
+    """Byte-identical to the resolved path used by ``helper`` here."""
+
+
+def helper():
+    pass
+'''.strip(),
+        encoding="utf-8",
+    )
+    found = [c for c in claims(tmp_path) if c.symbol == "claimant"]
+    assert found[0].confidence == "high"
+
+
+def test_an_unresolved_target_is_LOW_confidence(tmp_path):
+    (tmp_path / "m.py").write_text(
+        '''
+def claimant():
+    """Mirrors the legacy behaviour of the old system."""
+'''.strip(),
+        encoding="utf-8",
+    )
+    found = [c for c in claims(tmp_path) if c.symbol == "claimant"]
+    assert found[0].target is None
+    assert found[0].confidence == "low"
