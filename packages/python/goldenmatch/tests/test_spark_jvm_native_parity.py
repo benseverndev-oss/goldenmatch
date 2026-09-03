@@ -970,3 +970,79 @@ def test_fs_training_runs_with_no_python_on_the_executors(spark, registered):
     # `last` keys pass 2, so it must carry the #1835 neutral prior rather than
     # an estimate the blocking made unrepresentative.
     assert got.u_probs["last"] == pytest.approx([0.5, 0.5], abs=1e-12)
+
+
+def test_block_key_column_matches_arrow_derive(spark):
+    """The claim this pins: `_block_key_column`'s docstring says "Mirrors
+    `arrow_derive.block_key`". Nothing previously compared the two column
+    builders' OUTPUT on the same input -- the existing block-key test
+    (`test_block_key_normalization_routes_to_the_jar_when_asked`) only checks
+    that a UDF name threads through, never that the resulting key matches
+    Arrow's. Surfaced by the phase-C sync-claim audit
+    (docs/superpowers/specs/2026-09-02-c1-read-of-55.md), the same class as
+    the block-key defects phase B already found (F2/F10 in
+    docs/superpowers/specs/2026-09-02-shared-decision-triage.md): a wrong or
+    differently-null'd block key silently changes which rows compare to which,
+    with no exception.
+
+    The case worth pinning by name is the any-null guard.
+    `_block_key_column`'s own docstring explains why it exists: plain
+    `concat_ws` SKIPS nulls, so `("a", null)` and `("a", "")` would collide
+    into the same joined string if the guard were ever removed. Row 2 below
+    (`b=None`) and row 3 (`b=""`) are adjacent and otherwise identical
+    specifically so that collapse would be visible as a wrong answer, not an
+    exception.
+
+    Lives here (not the session-free unit file, per this module's own
+    documented gotcha above `test_block_key_normalization_routes_to_the_jar_
+    when_asked`) because building the column expression needs an active
+    Spark session.
+    """
+    import pyarrow as pa
+    from goldenmatch.config.schemas import BlockingKeyConfig
+    from goldenmatch.core.arrow_derive import block_key
+    from goldenmatch.spark.config_pipeline import _block_key_column
+    from pyspark.sql import Row
+
+    rows = [
+        {"a": "Foo", "b": "Bar"},  # both present -> joined
+        {"a": "Foo", "b": None},  # b null -> WHOLE KEY null
+        {"a": "Foo", "b": ""},  # b empty string -> NOT null; distinct from above
+        {"a": None, "b": "Bar"},  # a null -> whole key null
+    ]
+
+    def _oracle(field_chains):
+        a_arr = pa.array([r["a"] for r in rows], type=pa.large_string())
+        b_arr = pa.array([r["b"] for r in rows], type=pa.large_string())
+        return block_key([a_arr, b_arr], transforms=[], field_chains=field_chains).to_pylist()
+
+    df = spark.createDataFrame([Row(a=r["a"], b=r["b"]) for r in rows])
+
+    # Shared transform chain (the key-level `transforms` field).
+    shared_key = BlockingKeyConfig(fields=["a", "b"], transforms=["lowercase"])
+    shared_expr, _ = _block_key_column(shared_key)
+    shared_spark = [r[0] for r in df.select(shared_expr).collect()]
+    shared_oracle = _oracle([["lowercase"], ["lowercase"]])
+    assert shared_spark == shared_oracle, (
+        f"shared-chain block keys diverge:\n  spark={shared_spark}\n  arrow={shared_oracle}"
+    )
+    # The any-null guard, named: row 1 (b=None) must be null; row 2 (b="")
+    # must NOT be null and must differ from row 0. A `concat_ws`-only
+    # implementation would collapse rows 1 and 2 into the same string.
+    assert shared_spark[1] is None
+    assert shared_spark[2] is not None
+    assert shared_spark[2] != shared_spark[0]
+
+    # Per-field transform chain (the `field_transforms` slot overriding the
+    # shared chain for one field) -- the other half of the claim's "each
+    # field takes its own transform chain (the per-field slot when set, else
+    # the key-level chain)".
+    per_field_key = BlockingKeyConfig(
+        fields=["a", "b"], transforms=["lowercase"], field_transforms={"b": ["uppercase"]}
+    )
+    per_field_expr, _ = _block_key_column(per_field_key)
+    per_field_spark = [r[0] for r in df.select(per_field_expr).collect()]
+    per_field_oracle = _oracle([["lowercase"], ["uppercase"]])
+    assert per_field_spark == per_field_oracle, (
+        f"per-field-chain block keys diverge:\n  spark={per_field_spark}\n  arrow={per_field_oracle}"
+    )
