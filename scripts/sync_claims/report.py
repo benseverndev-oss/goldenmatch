@@ -89,6 +89,7 @@ def inventory(root: Path, tests_root: Path, coverage_db: Path | None = None) -> 
 
     coverage_consulted = False
     coverage_rescued: list[Claim] = []
+    contexts: dict[tuple[str, str], frozenset[str]] = {}
     if coverage_db is not None and coverage_db.exists():
         try:
             spans = function_spans(root)
@@ -101,7 +102,10 @@ def inventory(root: Path, tests_root: Path, coverage_db: Path | None = None) -> 
             spans = {}
             contexts = {}
         for claim in findings:
-            claimant_key = (claim.module, claim.symbol)
+            claimant_name = _resolve_dotted_name(spans, claim.module, claim.symbol)
+            if claimant_name is None:
+                continue
+            claimant_key = (claim.module, claimant_name)
             target_module, target_name = _locate_target(spans, claim.target)
             if target_module is None:
                 continue
@@ -122,6 +126,7 @@ def inventory(root: Path, tests_root: Path, coverage_db: Path | None = None) -> 
             "unverified": len(unverified),
             "coverage_enforced": len(coverage_rescued),
             "coverage_consulted": coverage_consulted,
+            "coverage_functions_with_data": len(contexts),
             "unresolvable": len(unresolvable),
             "module_level": len(module_claims),
             "test_files_scanned": len(reference_sets),
@@ -160,6 +165,26 @@ def _locate_target(
             if name == target_name or name.rsplit(".", 1)[-1] == target_name:
                 return module, name
     return None, None
+
+
+def _resolve_dotted_name(
+    spans: dict[str, list[tuple[str, int, int]]], module: str, bare_name: str
+) -> str | None:
+    """Resolve a claim's bare declared-symbol name (claims.py does not
+    distinguish a method from a module-level function -- both come from
+    `node.name`) against the dotted qualified names `function_spans`
+    produces for the SAME module. Exact match first, then the last dotted
+    segment -- the same tolerance `_locate_target` already applies on the
+    target side, applied here to the claimant side, which was missing it.
+
+    Unlike `_locate_target`, the module is already known here (it's the
+    claim's own declared module), so this never has the cross-module
+    ambiguity `_locate_target`'s docstring names as a real limitation.
+    """
+    for name, _, _ in spans.get(module, []):
+        if name == bare_name or name.rsplit(".", 1)[-1] == bare_name:
+            return name
+    return None
 
 
 def main(argv: list[str]) -> int:
@@ -207,7 +232,8 @@ def main(argv: list[str]) -> int:
     print(
         f"  coverage consulted: {counts['coverage_consulted']}"
         + (
-            f" -- {counts['coverage_enforced']} claim(s) rescued from unenforced"
+            f" ({counts['coverage_functions_with_data']} function(s) with test data) "
+            f"-- {counts['coverage_enforced']} claim(s) rescued from unenforced"
             if counts["coverage_consulted"]
             else ""
         )

@@ -254,11 +254,60 @@ def target():
     rescued = [f for f in with_coverage["coverage_enforced"] if f["symbol"] == "claimant"]
     assert len(rescued) == 1
     assert with_coverage["counts"]["coverage_consulted"] is True
+    assert with_coverage["counts"]["coverage_functions_with_data"] > 0
+
+
+def test_coverage_rescues_a_method_level_claim(tmp_path):
+    """claims.py's Claim.symbol is always a bare name (ast.walk visits
+    methods too, and node.name for a method is just the method name).
+    function_spans produces DOTTED names for methods. Without a bare-to-
+    dotted resolution step, a method-level claimant's coverage lookup
+    always misses, silently, no matter how well-tested the method is."""
+    src = tmp_path / "src"
+    tests = tmp_path / "tests"
+    src.mkdir()
+    tests.mkdir()
+    (src / "m.py").write_text(
+        '''
+class Widget:
+    def claimant(self):
+        """Byte-identical to ``target``."""
+        return 1
+
+    def wrapper(self):
+        return self.claimant()
+
+
+def target():
+    return 1
+'''.strip(),
+        encoding="utf-8",
+    )
+    (tests / "test_it.py").write_text(
+        "from m import Widget, target\n\n"
+        "def test_wrapper_matches_target():\n"
+        "    w = Widget()\n"
+        "    assert w.wrapper() == target()\n",
+        encoding="utf-8",
+    )
+
+    text_only = inventory(src, tests)
+    assert any(f["symbol"] == "claimant" for f in text_only["unenforced"]), (
+        "text check must not see this enforced -- claimant never named in test source"
+    )
+
+    subprocess_env = _run_real_coverage(src, tests)
+    with_coverage = inventory(src, tests, coverage_db=subprocess_env)
+    assert not any(f["symbol"] == "claimant" for f in with_coverage["unenforced"]), (
+        f"method-level claimant should be rescued by coverage; still unenforced: "
+        f"{with_coverage['unenforced']}"
+    )
 
 
 def test_coverage_consulted_is_false_when_no_db_given():
     inv = inventory(FIXTURE / "src", FIXTURE / "tests")
     assert inv["counts"]["coverage_consulted"] is False
+    assert inv["counts"]["coverage_functions_with_data"] == 0
 
 
 def test_coverage_consulted_is_false_when_db_path_does_not_exist(tmp_path):
@@ -266,6 +315,7 @@ def test_coverage_consulted_is_false_when_db_path_does_not_exist(tmp_path):
     scenario where the shard-producing jobs did not run on this PR."""
     inv = inventory(FIXTURE / "src", FIXTURE / "tests", coverage_db=tmp_path / "nonexistent")
     assert inv["counts"]["coverage_consulted"] is False
+    assert inv["counts"]["coverage_functions_with_data"] == 0
     assert inv["coverage_enforced"] == []
 
 

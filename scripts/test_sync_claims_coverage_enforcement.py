@@ -4,7 +4,26 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sync_claims.coverage_enforcement import function_spans
+from sync_claims.coverage_enforcement import coverage_enforced, function_spans
+
+
+def test_coverage_enforced_is_a_pure_intersection_check():
+    """A fast, offline unit test for coverage_enforced() itself -- every
+    other test exercising it goes through a real subprocess coverage run
+    (~5s) or is skipped on Windows. This one needs neither."""
+    shared = frozenset({"tests/t.py::test_a|run"})
+    disjoint_a = frozenset({"tests/t.py::test_a|run"})
+    disjoint_b = frozenset({"tests/t.py::test_b|run"})
+    contexts = {
+        ("m.py", "both_a"): shared,
+        ("m.py", "both_b"): shared,
+        ("m.py", "only_a"): disjoint_a,
+        ("m.py", "only_b"): disjoint_b,
+    }
+    assert coverage_enforced(("m.py", "both_a"), ("m.py", "both_b"), contexts)
+    assert not coverage_enforced(("m.py", "only_a"), ("m.py", "only_b"), contexts)
+    assert not coverage_enforced(("m.py", "both_a"), ("m.py", "missing"), contexts)
+    assert not coverage_enforced(("m.py", "missing1"), ("m.py", "missing2"), contexts)
 
 
 def test_function_spans_finds_top_level_and_nested_functions(tmp_path):
