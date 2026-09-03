@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from sync_claims.claims import Claim, claims, declared_symbols
+from sync_claims.coverage_enforcement import coverage_enforced, function_contexts, function_spans
 from sync_claims.enforcement import test_reference_sets, unenforced
 
 REPO = Path(__file__).resolve().parent.parent.parent
@@ -58,8 +59,23 @@ def _as_dict(claim: Claim) -> dict:
     }
 
 
-def inventory(root: Path, tests_root: Path) -> dict:
-    """Bucket every claim under `root` by enforcement state."""
+def inventory(root: Path, tests_root: Path, coverage_db: Path | None = None) -> dict:
+    """Bucket every claim under `root` by enforcement state.
+
+    `coverage_db` is optional and additive. When given and readable, a
+    HIGH-confidence claim the text check reports unenforced is re-checked
+    against real test-execution data: if some single test executed both the
+    claimant and the target, the claim moves from `unenforced` to
+    `coverage_enforced` rather than staying a false negative. Absent, wrong
+    path, or unreadable -> exactly today's text-only behavior, silently and
+    correctly -- this must never raise or hang on missing coverage data, the
+    CI scenario where the shard-producing jobs did not run on this PR.
+
+    Coverage-rescue is scoped to HIGH-confidence findings only. A
+    LOW-confidence claim's problem is that its resolved TARGET may be wrong
+    (a different axis than enforcement); coverage evidence against a wrong
+    target proves nothing about the claim the docstring actually makes.
+    """
     all_claims = claims(root, symbols=declared_symbols(root))
     symbol_claims = [c for c in all_claims if c.kind == "symbol"]
     module_claims = [c for c in all_claims if c.kind == "module"]
@@ -68,11 +84,30 @@ def inventory(root: Path, tests_root: Path) -> dict:
 
     reference_sets = test_reference_sets(tests_root)
     all_findings = unenforced(resolvable, reference_sets)
-    # C1 triage measured that a LOW-confidence target is frequently a real
-    # symbol the claim does not equate. Those stay reported, in their own
-    # bucket, but are not the triage set and must not seed C3's ratchet floor.
     findings = [c for c in all_findings if c.confidence == "high"]
     low_confidence = [c for c in all_findings if c.confidence != "high"]
+
+    coverage_consulted = False
+    coverage_rescued: list[Claim] = []
+    if coverage_db is not None and coverage_db.exists():
+        try:
+            spans = function_spans(root)
+            contexts = function_contexts(coverage_db, root, spans)
+            coverage_consulted = True
+        except Exception:
+            # A malformed or foreign .coverage file must degrade to
+            # text-only, not crash a report-only job.
+            contexts = {}
+        for claim in findings:
+            claimant_key = (claim.module, claim.symbol)
+            target_module, target_name = _locate_target(spans, claim.target)
+            if target_module is None:
+                continue
+            target_key = (target_module, target_name)
+            if coverage_enforced(claimant_key, target_key, contexts):
+                coverage_rescued.append(claim)
+        findings = [c for c in findings if c not in coverage_rescued]
+
     finding_ids = {(c.module, c.symbol, c.lineno) for c in all_findings}
     unverified = [c for c in resolvable if (c.module, c.symbol, c.lineno) not in finding_ids]
 
@@ -83,6 +118,8 @@ def inventory(root: Path, tests_root: Path) -> dict:
             "unenforced": len(findings),
             "unenforced_low_confidence": len(low_confidence),
             "unverified": len(unverified),
+            "coverage_enforced": len(coverage_rescued),
+            "coverage_consulted": coverage_consulted,
             "unresolvable": len(unresolvable),
             "module_level": len(module_claims),
             "test_files_scanned": len(reference_sets),
@@ -90,9 +127,37 @@ def inventory(root: Path, tests_root: Path) -> dict:
         "unenforced": [_as_dict(c) for c in findings],
         "unenforced_low_confidence": [_as_dict(c) for c in low_confidence],
         "unverified": [_as_dict(c) for c in unverified],
+        "coverage_enforced": [_as_dict(c) for c in coverage_rescued],
         "unresolvable": [_as_dict(c) for c in unresolvable],
         "module_level": [_as_dict(c) for c in module_claims],
     }
+
+
+def _locate_target(
+    spans: dict[str, list[tuple[str, int, int]]], target_name: str
+) -> tuple[str, str] | tuple[None, None]:
+    """The claim's `target` is a bare symbol NAME (claims.py resolves it
+    from prose, not a module path), but `function_contexts` is keyed by
+    (module, name) -- coverage cannot be checked without knowing which
+    module the target lives in. Searches the already-computed function
+    spans for a function with this exact name; the FIRST module found
+    wins.
+
+    A real limitation, stated rather than hidden: if the target name
+    exists in more than one module, this can pick the wrong one, and the
+    ambiguity is silent. Scoped narrowly on purpose -- coverage-rescue
+    only applies to HIGH-confidence claims, which are already the subset
+    least likely to collide on a name (see KNOWN_AMBIGUOUS in the
+    shared-decisions detector for what a real per-name collision problem
+    looks like at scale). A future pass could resolve this properly by
+    carrying the target's module through from claims.py instead of
+    re-deriving it here; out of scope for this plan.
+    """
+    for module, functions in spans.items():
+        for name, _, _ in functions:
+            if name == target_name or name.rsplit(".", 1)[-1] == target_name:
+                return module, name
+    return None, None
 
 
 def main(argv: list[str]) -> int:
@@ -100,10 +165,11 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=DEFAULT_ROOT)
     parser.add_argument("--tests", type=Path, default=DEFAULT_TESTS)
+    parser.add_argument("--coverage-db", type=Path, default=None)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
 
-    inv = inventory(args.root, args.tests)
+    inv = inventory(args.root, args.tests, coverage_db=args.coverage_db)
     if args.json:
         print(json.dumps(inv, indent=2))
         return 0
@@ -136,6 +202,14 @@ def main(argv: list[str]) -> int:
         f"{counts['module_level']} module-level"
     )
     print(f"  test files scanned: {counts['test_files_scanned']}")
+    print(
+        f"  coverage consulted: {counts['coverage_consulted']}"
+        + (
+            f" -- {counts['coverage_enforced']} claim(s) rescued from unenforced"
+            if counts["coverage_consulted"]
+            else ""
+        )
+    )
     print()
 
     for entry in sorted(inv["unenforced"], key=lambda e: (e["module"], e["lineno"])):
