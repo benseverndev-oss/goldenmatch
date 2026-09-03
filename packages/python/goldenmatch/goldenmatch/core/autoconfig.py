@@ -1482,8 +1482,14 @@ def _drop_uninformative_blocking_fields(
         keep = [f for f in fields if f.field not in dead]
         if not keep or len(keep) == len(fields):
             continue
-        total = sum(float(f.weight or 0) for f in fields)
-        kept = sum(float(f.weight or 0) for f in keep)
+        # `fields` came from an already-validated MatchkeyConfig, and this loop
+        # already skipped anything not type=="weighted" -- weight is guaranteed
+        # non-None here (MatchkeyConfig._validate_weighted enforces it). Using
+        # the schema's own accessor instead of `or 0` means a validator-bypass
+        # bug (mutation post-construction) crashes loudly here instead of
+        # silently zeroing a field's weight and mis-scaling the threshold.
+        total = sum(f.fuzzy_weight for f in fields)
+        kept = sum(f.fuzzy_weight for f in keep)
         dropped = [f.field for f in fields if f.field in dead]
         if total > 0 and kept > 0 and mk.threshold is not None:
             # Same absolute score bar, expressed over the surviving weight.

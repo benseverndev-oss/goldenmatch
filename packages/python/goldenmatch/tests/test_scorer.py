@@ -470,6 +470,31 @@ class TestFindFuzzyMatches:
         assert len(matches) == 1
         assert matches[0][2] == 1.0
 
+    def test_a_none_weight_raises_instead_of_bare_typeerror(self):
+        """F9: MatchkeyConfig._validate_weighted rejects a None weight at
+        construction for type=='weighted', so the only way weight becomes
+        None here is a post-construction mutation bypassing the validator.
+        find_fuzzy_matches used to narrow weight via a bare typing.cast (no
+        runtime check at all) and let the subsequent arithmetic raise
+        whatever generic TypeError it happened to produce; it now goes
+        through `fuzzy_weight`, which raises a ValueError naming the field
+        directly, before any arithmetic runs."""
+        mk = MatchkeyConfig(
+            name="name",
+            type="weighted",
+            threshold=0.5,
+            fields=[
+                MatchkeyField(field="first_name", scorer="jaro_winkler", weight=1.0),
+            ],
+        )
+        mk.fields[0].weight = None  # simulate the validator-bypass bug
+        df = pl.DataFrame({
+            "__row_id__": [0, 1],
+            "first_name": ["John", "Jon"],
+        })
+        with pytest.raises(ValueError, match="first_name"):
+            find_fuzzy_matches(df, mk)
+
 
 # ---------------------------------------------------------------------------
 # Dice / Jaccard score_field tests

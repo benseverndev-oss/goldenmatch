@@ -16,7 +16,7 @@
 #
 # Bounds in docs/superpowers/specs/2026-09-02-shared-decision-triage.md.
 #
-# 66 of 81 shared fields. The other 15 are findings or
+# 67 of 81 shared fields. The other 14 are findings or
 # held out by hand, and are absent so the inventory keeps reporting them.
 
 action  # 2 modules, no reader supplies a fallback -- nothing to disagree about
@@ -85,3 +85,4 @@ transform  # 2 modules, no reader supplies a fallback -- nothing to disagree abo
 type  # 7 modules, no reader supplies a fallback -- nothing to disagree about; declared on 2 classes, so its readers may not even share a field
 validation  # 3 modules, no reader supplies a fallback -- nothing to disagree about
 weak_cluster_threshold  # 2 modules, no reader supplies a fallback -- nothing to disagree about
+weight  # F9, fixed: core/autoconfig.py, core/scorer.py, spark/config_pipeline.py all route through MatchkeyField.fuzzy_weight now instead of `or 0`/bare cast/bare float() -- one accessor, one raise-on-None behavior, no more divergent fallbacks to disagree
