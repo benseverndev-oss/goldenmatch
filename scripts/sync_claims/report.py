@@ -18,7 +18,8 @@ SCOPE_NOTE = (
     "scope: claims are read from docstrings under {root} and enforcement from "
     "{tests} only -- other packages, the TypeScript port and _archive are out "
     "of reach by construction, and their silence here is not a clean bill. "
-    "Module-level claims are reported but NOT triaged: a module has no single "
+    "Low-confidence findings and module-level claims are reported but NOT "
+    "triaged. A module has no single "
     "symbol a test can reference. A claim listed as UNVERIFIED is not safe -- "
     "some test references both names, which does not mean it compares them."
 )
@@ -66,8 +67,13 @@ def inventory(root: Path, tests_root: Path) -> dict:
     unresolvable = [c for c in symbol_claims if c.target is None]
 
     reference_sets = test_reference_sets(tests_root)
-    findings = unenforced(resolvable, reference_sets)
-    finding_ids = {(c.module, c.symbol, c.lineno) for c in findings}
+    all_findings = unenforced(resolvable, reference_sets)
+    # C1 triage measured that a LOW-confidence target is frequently a real
+    # symbol the claim does not equate. Those stay reported, in their own
+    # bucket, but are not the triage set and must not seed C3's ratchet floor.
+    findings = [c for c in all_findings if c.confidence == "high"]
+    low_confidence = [c for c in all_findings if c.confidence != "high"]
+    finding_ids = {(c.module, c.symbol, c.lineno) for c in all_findings}
     unverified = [c for c in resolvable if (c.module, c.symbol, c.lineno) not in finding_ids]
 
     return {
@@ -75,12 +81,14 @@ def inventory(root: Path, tests_root: Path) -> dict:
             "claims": len(all_claims),
             "resolvable": len(resolvable),
             "unenforced": len(findings),
+            "unenforced_low_confidence": len(low_confidence),
             "unverified": len(unverified),
             "unresolvable": len(unresolvable),
             "module_level": len(module_claims),
             "test_files_scanned": len(reference_sets),
         },
         "unenforced": [_as_dict(c) for c in findings],
+        "unenforced_low_confidence": [_as_dict(c) for c in low_confidence],
         "unverified": [_as_dict(c) for c in unverified],
         "unresolvable": [_as_dict(c) for c in unresolvable],
         "module_level": [_as_dict(c) for c in module_claims],
@@ -115,8 +123,13 @@ def main(argv: list[str]) -> int:
 
     print(
         f"{counts['claims']} claim(s); {counts['resolvable']} resolvable and "
-        f"symbol-level; {counts['unenforced']} UNENFORCED, "
+        f"symbol-level; {counts['unenforced']} UNENFORCED (high confidence), "
         f"{counts['unverified']} unverified"
+    )
+    print(
+        f"  {counts['unenforced_low_confidence']} further unenforced claim(s) "
+        f"resolve a LOW-confidence target -- reported, not triaged: the "
+        f"resolved symbol is often real but not what the claim equates"
     )
     print(
         f"  reported but not triaged: {counts['unresolvable']} unresolvable, "

@@ -1,8 +1,7 @@
 # Phase C1 — Triage of the Unenforced Sync Claims
 
-**Status:** first pass complete; bulk triage BLOCKED, and the proposed
-unblock was measured and rejected -- the phase needs re-scoping, not another
-refinement
+**Status:** re-scoped. Option 2 chosen and implemented -- findings are now
+the high-confidence subset, and the rest are reported without being triaged.
 **Date:** 2026-09-02
 **Spec:** `docs/superpowers/specs/2026-09-02-sync-claim-audit-design.md`
 **Detector:** shipped in #2846, target rule corrected in #2847
@@ -155,6 +154,45 @@ Two honest ways forward, neither of which is "refine the regex again":
 Option 2 preserves a working gate and is the smaller change. Option 1 keeps
 coverage and abandons automation. This is a scoping decision, not an
 engineering one, and it belongs to whoever owns the programme's budget.
+
+## Option 2, as implemented -- and the trap in its first formulation
+
+Chosen. Findings are now the HIGH-CONFIDENCE subset; everything else is
+reported in its own bucket and excluded from triage.
+
+**The obvious formulation of option 2 was unusable, and the measurement
+caught it.** "Keep only claims whose target is marked up and near the
+keyword" excludes this phase's own motivating incident: `_run_pipeline`'s
+docstring reads "mirrors run_dedupe but returns EngineResult", and
+`run_dedupe` carries no markup at all. A gate that cannot see the bug the
+detector exists to catch is decoration -- the exact failure this programme
+was built to remove, proposed by the programme.
+
+The rule that ships accounts for it: **marked up within 40 characters, OR
+bare within 12.** A bare word immediately after the claim keyword IS the
+object by position; one 100 characters later is not. Measured on the real
+package:
+
+| rule | findings | known-bad kept | known-good kept | incident |
+| --- | ---: | --- | --- | --- |
+| markup only, 40 chars | 47 | 2/7 | 4/6 | **EXCLUDED** |
+| markup 40 **or** bare 12 | 59 | 2/7 | 4/6 | survives |
+| markup 40 or bare 20 | 82 | 3/7 | 4/6 | survives |
+| markup 60 or bare 30 | 109 | 4/7 | 5/6 | survives |
+
+The shipped setting rejects five of seven hand-identified wrong targets
+while keeping four of six hand-identified right ones, and keeps the
+incident.
+
+**Nothing is discarded.** The low-confidence findings go to
+`unenforced_low_confidence`, printed with a line saying they are not
+triaged. A bucket split that quietly dropped them would shrink the reported
+number while the claims stayed exactly as unchecked, which is the shape of
+defect this document exists to record. A test asserts the buckets sum to
+the symbol-level claim count.
+
+Current split: **55 high-confidence findings**, 112 low-confidence, 49
+unverified, 54 unresolvable, 49 module-level.
 
 ## Precision problem 3: pattern claims (NOT FIXED, low priority)
 

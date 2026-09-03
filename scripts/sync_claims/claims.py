@@ -46,6 +46,61 @@ _WORD = re.compile(r"[A-Za-z_][\w.]*")
 _MARKED = re.compile(r"``([A-Za-z_][\w.]*)``|`([A-Za-z_][\w.]*)`|:\w+:`~?([A-Za-z_][\w.]*)`")
 
 
+# A target the author marked up is trusted further from the keyword than a bare
+# word is. See `_confidence` for how these were chosen.
+MARKED_WINDOW = 40
+BARE_WINDOW = 12
+
+
+def _confidence(
+    window: str, known: set[str], claimant: str, target: str | None
+) -> str:
+    """"high" when the target sits where a claim's OBJECT actually sits.
+
+    C1 triage found that a resolved target is frequently a real symbol that
+    the claim does not equate: "Only gates the BATCHED bucket call; whether
+    the per-block loop is native still follows ``_fs_native_eligible``"
+    resolves to a correctly-spelled symbol and asserts no equivalence at all.
+    The claim keyword and the symbol are both present; the symbol is simply
+    elsewhere in the sentence.
+
+    Proximity alone does not fix that -- measured, a same-sentence rule keeps
+    6 of 7 known-wrong targets, because they ARE in the same sentence.
+    Proximity combined with markup does: an author who wrote ``x`` meant the
+    symbol, and a bare word immediately after the keyword ("mirrors
+    run_dedupe") is the object by position.
+
+    So: marked up within MARKED_WINDOW, or bare within the much tighter
+    BARE_WINDOW. Measured on the real package -- 59 high-confidence findings
+    of 167, rejecting 5 of 7 hand-identified wrong targets while keeping 4 of
+    6 hand-identified right ones.
+
+    BARE_WINDOW IS WHY THIS PHASE'S OWN INCIDENT STILL COUNTS. Requiring
+    markup alone excludes it: `_run_pipeline`'s docstring reads "mirrors
+    run_dedupe but returns EngineResult", and `run_dedupe` carries no markup.
+    A high-confidence rule that cannot see the bug the detector exists to
+    catch would be decoration, so the bare path is not a concession -- it is
+    the case that matters most.
+
+    Low confidence is NOT discarded. `report.py` puts those findings in their
+    own bucket, reported and excluded from triage rather than hidden.
+    """
+    if target is None:
+        return "low"
+    marked = [
+        group.split(".")[-1]
+        for found in _MARKED.findall(window[:MARKED_WINDOW])
+        for group in found
+        if group
+    ]
+    if any(m in known and m != claimant for m in marked):
+        return "high"
+    bare = [
+        word.rstrip(".").split(".")[-1] for word in _WORD.findall(window[:BARE_WINDOW])
+    ]
+    return "high" if any(b in known and b != claimant for b in bare) else "low"
+
+
 def _resolve_target(window: str, known: set[str], claimant: str) -> str | None:
     """The symbol a claim names, preferring one the author wrote as code.
 
@@ -95,6 +150,7 @@ class Claim:
     window: str
     target: str | None
     lineno: int
+    confidence: str  # "high" or "low" -- see `_confidence`
 
 
 def _parse(path: Path) -> ast.Module | None:
@@ -145,6 +201,7 @@ def claims(root: Path, *, symbols: set[str] | None = None) -> list[Claim]:
             name = "<module>" if is_module else node.name
             window = doc[match.end() : match.end() + WINDOW]
             target = _resolve_target(window, known, name)
+            confidence = _confidence(window, known, name, target)
             out.append(
                 Claim(
                     module=rel,
@@ -153,6 +210,7 @@ def claims(root: Path, *, symbols: set[str] | None = None) -> list[Claim]:
                     keyword=match.group(0),
                     window=" ".join(window.split()),
                     target=target,
+                    confidence=confidence,
                     lineno=0 if is_module else node.lineno,
                 )
             )
