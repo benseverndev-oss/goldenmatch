@@ -16,7 +16,7 @@
 #
 # Bounds in docs/superpowers/specs/2026-09-02-shared-decision-triage.md.
 #
-# 65 of 81 shared fields. The other 16 are findings or
+# 66 of 81 shared fields. The other 15 are findings or
 # held out by hand, and are absent so the inventory keeps reporting them.
 
 action  # 2 modules, no reader supplies a fallback -- nothing to disagree about
@@ -64,6 +64,7 @@ negative_evidence  # 7 modules; 4 supply a fallback and all use `or []`
 num_bands  # 3 modules, no reader supplies a fallback -- nothing to disagree about; declared on 3 classes, so its readers may not even share a field
 num_perms  # 3 modules, no reader supplies a fallback -- nothing to disagree about
 output  # 5 modules, no reader supplies a fallback -- nothing to disagree about
+passes  # F2, fully fixed: the 4 block-execution readers routed through resolved_keys() in #2845, and the 7 remaining "plan-building" sites (core/autoconfig.py x6, core/autoconfig_rules.py x1) now do too -- no more unconditional `passes or keys` anywhere outside schemas.py, ratcheted by tests/test_block_key_resolution.py::test_no_module_resolves_keys_versus_passes_by_hand
 prepared_record_store  # 2 modules, no reader supplies a fallback -- nothing to disagree about
 provider  # 2 modules, no reader supplies a fallback -- nothing to disagree about
 quality  # 2 modules, no reader supplies a fallback -- nothing to disagree about

@@ -432,7 +432,10 @@ def rule_low_reduction_ratio(
     # Same keys-vs-passes hazard `_carries_own_blocking_plan` (#2488) was added
     # for: "`not blocking.keys` ... is only correct for the keys-driven
     # strategies".
-    existing = list(current.blocking.passes or []) or list(current.blocking.keys or [])
+    # resolved_keys() dispatches on strategy instead of unconditionally
+    # preferring `passes` -- the exact keys-vs-passes hazard the comment
+    # above already names, still present in this unconditional-or form.
+    existing = current.blocking.resolved_keys()
     new_pass = BlockingKeyConfig(fields=[soundex_candidate], transforms=["soundex"])
     new_blocking = current.blocking.model_copy(update={
         "strategy": "multi_pass",

@@ -91,14 +91,41 @@ def test_the_validator_still_accepts_multi_pass_with_only_keys():
     assert config.passes is None
 
 
+def _attr_name(node: ast.expr) -> str | None:
+    """The field name one operand of an `X or Y` chain resolves to, for the
+    two shapes that actually shipped bugs: a bare attribute (`X.passes`) and
+    a `list(X.passes or [])`-wrapped one -- the shape 6 of autoconfig.py's
+    own "plan-building" sites used (constructing a NEW multi_pass config from
+    an existing one's active keys/passes) before they were routed through
+    `resolved_keys()`. Both normalize a value's LIST-ness away identically
+    (`X.passes` is already `list[...] | None`; `list(X.passes or [])` is the
+    same thing spelled defensively), so both are the same decision made by
+    hand and both must resolve to `resolved_keys()` instead."""
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "list"
+        and len(node.args) == 1
+        and isinstance(node.args[0], ast.BoolOp)
+        and isinstance(node.args[0].op, ast.Or)
+        and node.args[0].values
+        and isinstance(node.args[0].values[0], ast.Attribute)
+    ):
+        return node.args[0].values[0].attr
+    return None
+
+
 def test_no_module_resolves_keys_versus_passes_by_hand():
     """The decision has ONE home. A new copy is how the last two drifted.
 
-    Scans for `X.passes or X.keys` (and the reverse) outside schemas.py.
-    Deliberately narrow: it catches the two shapes that actually shipped
-    defects, not every mention of both fields -- unions
-    (`list(keys or []) + list(passes or [])`) and existence checks
-    (`if keys or passes`) are precedence-free and legitimate.
+    Scans for `X.passes or X.keys` (and the reverse), bare or `list(...)`-
+    wrapped, outside schemas.py. Deliberately narrow: it catches the shapes
+    that actually shipped defects, not every mention of both fields --
+    unions (`list(keys or []) + list(passes or [])`, note the `+`, not
+    `or`) and existence checks (`if keys or passes`) are precedence-free
+    and legitimate.
     """
     offenders: list[str] = []
     for path in sorted(PACKAGE.rglob("*.py")):
@@ -111,7 +138,7 @@ def test_no_module_resolves_keys_versus_passes_by_hand():
         for node in ast.walk(tree):
             if not isinstance(node, ast.BoolOp) or not isinstance(node.op, ast.Or):
                 continue
-            attrs = [v.attr for v in node.values if isinstance(v, ast.Attribute)]
+            attrs = [n for n in (_attr_name(v) for v in node.values) if n is not None]
             if len(attrs) < 2:
                 continue
             for left, right in zip(attrs, attrs[1:]):
