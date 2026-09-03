@@ -66,7 +66,7 @@ back to `[]` and `score_buckets_prefix.py` to `blocking_config.keys`, on
 
 ## Findings
 
-### F1 — `distributed/pipeline.py:281` constructs a config that raises
+### F1 — `distributed/pipeline.py:281` constructs a config that raises  **[FIXED, #2844]**
 
 CONFIRMED. Severity: crash, after the expensive work is done.
 
@@ -92,7 +92,7 @@ discarded on a config default.
 Fix: one line, matching the other three lanes. Not applied here — the spec puts
 remediation in B2, one per PR.
 
-### F2 — `distributed/scoring.py:535` blocks on the wrong field
+### F2 — `distributed/scoring.py:535` blocks on the wrong field  **[FIXED, #2845]**
 
 CONFIRMED, narrow reachability. Severity: silent recall loss.
 
@@ -125,7 +125,7 @@ same answer. So this is reachable only through a user-authored config, not
 through anything auto-config emits today. That is a narrower exposure than the
 original incident, which auto-config produced directly.
 
-### F3 — `core/blocker.py:85-88` and `:311-314` report a key set they did not block on
+### F3 — `core/blocker.py:85-88` and `:311-314` report a key set they did not block on  **[FIXED, #2845]**
 
 CONFIRMED. Severity: wrong telemetry, no wrong records.
 
@@ -163,6 +163,30 @@ this triage did not do.
 Signal B says one reader has thought about None and another has not. It does
 not say the bare reader can ever SEE None. Recorded as open rather than
 confirmed or dismissed.
+
+## Status after remediation
+
+F1 fixed in #2844: the Ray lane's `golden_rules` fallback now matches the
+other three lanes.
+
+F2 and F3 fixed in #2845, together with a third defect the remediation work
+uncovered. Reading the four sites that were supposed to agree showed they
+were not the same rule at all: `multi_pass` carrying only `keys` -- valid,
+and advertised as valid by the schema's own error message -- made
+`_build_multi_pass_blocks` return ZERO blocks on the main path. Silent zero
+pairs, the same symptom as `1c843c8a5`. The keys-vs-passes decision now lives
+on `BlockingConfig.resolved_keys()` and all ten call sites route through it.
+
+**The inventory then observed its own remediation.** Four modules --
+`backends/score_buckets.py`, `backends/fs_out_of_core.py`,
+`distributed/scoring.py`, `identity/block_index.py` -- stopped reading
+`.passes`/`.keys` directly and left the accessor set entirely.
+
+`passes` is still ACTIONABLE, and correctly so: `core/autoconfig.py:4500`
+still resolves `compound_config.passes or list(compound_config.keys or [])`
+unconditionally. That is one of eight plan-building sites deliberately left
+out of #2845's scope -- they construct configs rather than block on them, so
+whether they are defects needs its own analysis. Recorded, not swept.
 
 ## What the 64 allowlist entries do and do not claim
 

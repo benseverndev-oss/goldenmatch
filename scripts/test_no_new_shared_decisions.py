@@ -44,8 +44,12 @@ from shared_decisions.shapes import (  # noqa: E402
 # carries the finding behind each. Shrinks as B2 lands remediations; never
 # grows without a triage.
 KNOWN_ACTIONABLE: set[str] = {
-    "golden_rules",  # F1  Ray lane's fallback could not construct (fix in #2844)
-    "passes",  # F2  distributed/scoring.py resolves it with no strategy branch
+    "golden_rules",  # F1  Ray lane's fallback could not construct -- FIXED #2844
+    # F2 fixed in #2845 (distributed/scoring.py now calls resolved_keys()), but
+    # `passes` stays actionable: core/autoconfig.py:4500 still resolves
+    # `compound_config.passes or list(compound_config.keys or [])` with no
+    # strategy branch, one of eight plan-building sites left out of that scope.
+    "passes",
     "weight",  # F9  autoconfig defaults to 0; scorer.py and Spark read it bare
 }
 
