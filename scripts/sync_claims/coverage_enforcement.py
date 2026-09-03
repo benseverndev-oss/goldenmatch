@@ -84,13 +84,32 @@ def function_contexts(
     spuriously share that context with every other.
     """
     import coverage
+    from coverage_paths import normalize
 
     data = coverage.CoverageData(basename=str(coverage_db))
     data.read()
 
+    # Coverage emits `measured_files()` in whatever path shape the run that
+    # produced them used -- a Linux CI checkout's absolute path is never a
+    # subpath of a local Windows `root`, so literal path containment
+    # (`.resolve().relative_to(root)`) silently matches nothing the moment
+    # the data is read somewhere other than where it was produced. Confirmed
+    # by hand: `coverage_functions_with_data` read 0 against a real CI
+    # artifact downloaded and read locally -- coverage_consulted was True,
+    # the read succeeded, every file was just invisible to this check.
+    # `coverage_paths.normalize()` was already built and proven for exactly
+    # this problem (phase A's per-module floor table went silently vacuous
+    # the same way); reused here instead of a second bespoke reconciliation.
+    # .resolve() first (lexical only for a path that doesn't exist on this
+    # machine, e.g. a CI-produced absolute path read locally -- pathlib does
+    # not require the path to exist) so same-environment matches stay robust
+    # to `..`/`.` segments and redundant separators; normalize() alone then
+    # carries the cross-environment case via its substring match.
+    canonical_to_relative = {normalize(str((root / rel).resolve())): rel for rel in spans}
+
     line_contexts_by_file: dict[str, dict[int, set[str]]] = {}
     for measured in data.measured_files():
-        rel = _relative_to_root(measured, root)
+        rel = canonical_to_relative.get(normalize(str(Path(measured).resolve())))
         if rel is None:
             continue
         line_contexts_by_file[rel] = data.contexts_by_lineno(measured)
@@ -108,19 +127,6 @@ def function_contexts(
             if ctxs:
                 out[(module, name)] = frozenset(ctxs)
     return out
-
-
-def _relative_to_root(measured_path: str, root: Path) -> str | None:
-    """`coverage.py` reports measured files with whatever path shape the run
-    that produced them used (absolute, or relative to that run's CWD) -- not
-    guaranteed to match `root`-relative posix paths. Returns None for a file
-    outside `root` rather than raising, since a coverage run's `source`
-    scope and this scan's `root` are configured independently and are not
-    guaranteed identical."""
-    try:
-        return Path(measured_path).resolve().relative_to(root.resolve()).as_posix()
-    except ValueError:
-        return None
 
 
 def coverage_enforced(

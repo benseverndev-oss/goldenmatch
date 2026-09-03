@@ -228,3 +228,74 @@ def test_coverage_enforced_survives_xdist_and_combine(tmp_path):
         "target (shard1 only) and only_shard_2_calls_this (shard2 only) "
         f"share NO test -- must not be reported enforced. contexts: {contexts}"
     )
+
+
+def test_function_contexts_matches_paths_across_environments(tmp_path):
+    """A CI-produced `.coverage`'s `measured_files()` are absolute paths
+    shaped by wherever the run happened (e.g. a Linux CI checkout); `root`
+    when the data is later read can be a completely different absolute
+    location (e.g. a local dev machine's own checkout). Literal path
+    containment (`.resolve().relative_to(root)`) matches nothing across that
+    gap -- confirmed directly against a real downloaded CI artifact:
+    `coverage_functions_with_data` read 0 despite `coverage_consulted` being
+    True, the read succeeded, every file was simply invisible to that check.
+
+    This pins the fix: two genuinely different absolute directory trees,
+    sharing only a `goldenmatch/`-rooted tail, must still match via
+    `coverage_paths.normalize()`'s substring-based canonical form."""
+    from sync_claims.coverage_enforcement import coverage_enforced, function_contexts
+
+    module_src = "def claimant():\n    return target()\n\n\ndef target():\n    return 1\n"
+    test_src = (
+        "from m import claimant, target\n\ndef test_it():\n    assert claimant() == target()\n"
+    )
+
+    # The "CI" checkout: coverage actually runs here.
+    ci_root = tmp_path / "home_runner_work" / "goldenmatch" / "goldenmatch"
+    ci_root.mkdir(parents=True)
+    (ci_root / "m.py").write_text(module_src, encoding="utf-8")
+    (ci_root / "test_it.py").write_text(test_src, encoding="utf-8")
+    (ci_root / "pyproject.toml").write_text(
+        '[tool.coverage.run]\nsource = ["."]\n', encoding="utf-8"
+    )
+
+    data_file = ci_root / "probe.dat"
+    result = subprocess.run(
+        [
+            "uv",
+            "run",
+            "--with",
+            "pytest-cov",
+            "pytest",
+            "test_it.py",
+            "--cov=.",
+            "--cov-context=test",
+            "--cov-report=",
+            "-q",
+        ],
+        cwd=str(ci_root),
+        env={**__import__("os").environ, "COVERAGE_FILE": str(data_file)},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+
+    # A DIFFERENT, unrelated absolute directory -- simulating a local dev
+    # checkout -- containing a COPY of the same module. Coverage never ran
+    # here; only `root` for the span scan and the later lookup points at it.
+    local_root = tmp_path / "d_show_case" / "goldenmatch" / "goldenmatch"
+    local_root.mkdir(parents=True)
+    (local_root / "m.py").write_text(module_src, encoding="utf-8")
+
+    spans = function_spans(local_root)
+    contexts = function_contexts(data_file, local_root, spans)
+
+    assert contexts, (
+        "no functions resolved any coverage data across the two different "
+        "roots -- the cross-environment path match failed"
+    )
+    assert coverage_enforced(("m.py", "claimant"), ("m.py", "target"), contexts), (
+        f"claimant and target share test_it's context; the CI-vs-local root "
+        f"mismatch must not hide that. contexts: {contexts}"
+    )
