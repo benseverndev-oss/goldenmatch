@@ -2,6 +2,12 @@
 
 **Status:** re-scoped. Option 2 chosen and implemented -- findings are now
 the high-confidence subset, and the rest are reported without being triaged.
+**Superseded in part by:** `docs/superpowers/specs/2026-09-03-stage4-coverage-
+retriage.md` -- the false-negative rate this document extrapolates from 8
+checked items is corrected there with a population-scale, coverage-based
+measurement (lower than the extrapolation implied, for a reason -- a
+material false-positive class -- this document had no evidence for yet).
+Read both.
 **Date:** 2026-09-02
 **Spec:** `docs/superpowers/specs/2026-09-02-sync-claim-audit-design.md`
 **Detector:** shipped in #2846, target rule corrected in #2847
