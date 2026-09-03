@@ -7,8 +7,8 @@ be removed so the ratchet keeps its value.
 
 Every shared field is covered by exactly one of three places:
 
-  parity/shared_decisions.allow   65  agreed; readers supply no conflicting default
-  KNOWN_ACTIONABLE                 3  a signal fires on a SINGLE-class field
+  parity/shared_decisions.allow   66  agreed; readers supply no conflicting default
+  KNOWN_ACTIONABLE                 2  a signal fires on a SINGLE-class field
   KNOWN_AMBIGUOUS                 12  a signal fires, but the name is declared on
                                       several classes, so the readers grouped
                                       under it may not share a field at all
@@ -45,11 +45,11 @@ from shared_decisions.shapes import (  # noqa: E402
 # grows without a triage.
 KNOWN_ACTIONABLE: set[str] = {
     "golden_rules",  # F1  Ray lane's fallback could not construct -- FIXED #2844
-    # F2 fixed in #2845 (distributed/scoring.py now calls resolved_keys()), but
-    # `passes` stays actionable: core/autoconfig.py:4500 still resolves
-    # `compound_config.passes or list(compound_config.keys or [])` with no
-    # strategy branch, one of eight plan-building sites left out of that scope.
-    "passes",
+    # F2 FIXED: #2845 routed the block-execution readers through
+    # resolved_keys(); the 7 remaining "plan-building" sites (6 in
+    # core/autoconfig.py, 1 in core/autoconfig_rules.py -- building a NEW
+    # multi_pass config from an existing one's active keys/passes) now do
+    # too, so "passes" moved to parity/shared_decisions.allow.
     "weight",  # F9  autoconfig defaults to 0; scorer.py and Spark read it bare
 }
 

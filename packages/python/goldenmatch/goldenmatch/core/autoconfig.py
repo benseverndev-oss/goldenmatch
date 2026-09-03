@@ -4497,7 +4497,11 @@ def build_blocking(
             # projected guard as the name path; if nothing survives, fall
             # through to single-column fallbacks rather than ship a bomb.
             c_primary = (compound_config.keys or [None])[0]
-            c_passes = compound_config.passes or list(compound_config.keys or [])
+            # resolved_keys() dispatches on strategy (multi_pass -> passes-first,
+            # else keys-first) instead of always preferring `passes` -- the F2/
+            # 1c843c8a5 shape: a schema-valid config carrying BOTH fields, where
+            # the wrong unconditional preference silently used the wrong set.
+            c_passes = compound_config.resolved_keys()
             if c_primary is not None:
                 gated_primary, gated_passes = _gate_passes(c_primary, c_passes)
                 if gated_primary is not None:
@@ -6582,7 +6586,9 @@ def _diversify_probabilistic_blocking(
         return blocking
 
     # Fold into a multi_pass union; keep the original keys/passes as passes.
-    base_passes = list(blocking.passes or []) or list(blocking.keys or [])
+    # resolved_keys() dispatches on strategy instead of unconditionally
+    # preferring `passes` -- see the resolved_keys() call above for the shape.
+    base_passes = blocking.resolved_keys()
     return blocking.model_copy(update={
         "strategy": "multi_pass",
         "passes": base_passes + new_passes,
@@ -6633,7 +6639,10 @@ def _add_atomic_name_soundex_blocking(
     if mode == "auto" and not _dataset_is_person_shaped(profiles):
         return blocking
 
-    passes = list(blocking.passes or []) or list(blocking.keys or [])
+    # resolved_keys() dispatches on strategy instead of unconditionally
+    # preferring `passes` -- the F2/1c843c8a5 shape (a schema-valid config
+    # carrying both fields silently used the wrong one).
+    passes = blocking.resolved_keys()
     if not passes:
         return blocking
 
@@ -6773,10 +6782,10 @@ def _diversify_unused_orthogonal_blocking(
             if cap > 0:
                 row_cap = int(cap**0.5)
             overlap_cap = min(sample_n, _ORTHO_OVERLAP_SAMPLE)
-            base_specs = [
-                _pass_specs(k)
-                for k in (list(blocking.passes or []) or list(blocking.keys or []))
-            ]
+            # resolved_keys() dispatches on strategy instead of unconditionally
+            # preferring `passes` -- see the resolved_keys() call above in this
+            # module for the F2/1c843c8a5 shape this avoids.
+            base_specs = [_pass_specs(k) for k in blocking.resolved_keys()]
             if base_specs:
                 overlap_memb = _coblock_membership(
                     bframe, base_specs, overlap_cap, _col_cache, _tx_cache
@@ -6841,7 +6850,10 @@ def _diversify_unused_orthogonal_blocking(
     if not new_passes:
         return blocking
 
-    base_passes = list(blocking.passes or []) or list(blocking.keys or [])
+    # resolved_keys() dispatches on strategy instead of unconditionally
+    # preferring `passes` -- see the resolved_keys() call above in this
+    # module for the F2/1c843c8a5 shape this avoids.
+    base_passes = blocking.resolved_keys()
     return blocking.model_copy(update={
         "strategy": "multi_pass",
         "passes": base_passes + new_passes,
@@ -7173,7 +7185,10 @@ def _bound_probabilistic_blocking_pairs(
             "n=%d.", total_budget, _FS_TOTAL_PAIR_BUDGET, effective_n_full,
         )
 
-    passes = list(blocking.passes or []) or list(blocking.keys or [])
+    # resolved_keys() dispatches on strategy instead of unconditionally
+    # preferring `passes` -- the F2/1c843c8a5 shape (a schema-valid config
+    # carrying both fields silently used the wrong one).
+    passes = blocking.resolved_keys()
     if not passes:
         return blocking
 

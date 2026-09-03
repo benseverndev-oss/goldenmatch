@@ -170,3 +170,35 @@ def test_a_keys_only_config_is_unchanged():
     )
     assert _sigs(new_cfg.blocking)[0] == (("city",), ("lowercase",))
     assert len(new_cfg.blocking.passes) == 2
+
+
+def test_a_static_config_carrying_both_fields_prefers_keys():
+    """The F2/1c843c8a5 shape, at this exact site: a schema-valid config with
+    strategy='static' carrying BOTH `keys` and `passes` non-empty (unusual,
+    but not rejected -- the validator only requires ONE of them for static).
+
+    `existing = list(passes or []) or list(keys or [])` unconditionally
+    prefers `passes` whenever it's non-empty, regardless of strategy -- wrong
+    here, where `keys` is the field that actually drives blocking for
+    strategy='static' and `passes` may be a stale leftover from an earlier
+    multi_pass edit. `resolved_keys()` dispatches on strategy correctly:
+    keys-first for anything that isn't multi_pass. Neither
+    test_existing_passes_survive nor test_a_keys_only_config_is_unchanged
+    above exercises this -- the first always uses strategy='multi_pass'
+    (where old and new code agree), the second never populates `passes` at
+    all (making the `or` trivial either way)."""
+    cfg = _multipass_config()
+    cfg.blocking = BlockingConfig(
+        strategy="static",
+        keys=[BlockingKeyConfig(fields=["city"], transforms=["lowercase"])],
+        passes=[BlockingKeyConfig(fields=["postcode"], transforms=["strip"])],
+    )
+    new_cfg, _ = rule_low_reduction_ratio(
+        _low_reduction_profile(), cfg, RunHistory(),
+    )
+    sigs = _sigs(new_cfg.blocking)
+    assert sigs[0] == (("city",), ("lowercase",)), (
+        f"expected the static strategy's own key ('city') first, not the "
+        f"stale 'postcode' pass: {sigs}"
+    )
+    assert len(sigs) == 2  # the static key + the new soundex pass, `postcode` dropped
