@@ -342,6 +342,24 @@ def test_coverage_rescue_only_applies_to_high_confidence_claims(monkeypatch, tmp
     )
 
 
+def test_inventory_survives_function_spans_raising(monkeypatch, tmp_path):
+    """A broken `root` (not just a broken coverage file) must also degrade
+    to text-only, not crash -- function_spans can fail independently of
+    function_contexts, and the fallback must cover both."""
+    from sync_claims import report as report_mod
+
+    def _boom(root):
+        raise OSError("simulated failure walking root")
+
+    monkeypatch.setattr(report_mod, "function_spans", _boom)
+    fake_db = tmp_path / "fake.coverage"
+    fake_db.write_text("", encoding="utf-8")
+
+    inv = report_mod.inventory(FIXTURE / "src", FIXTURE / "tests", coverage_db=fake_db)
+    assert inv["counts"]["coverage_consulted"] is False
+    assert inv["coverage_enforced"] == []
+
+
 def test_the_real_alias_score_matrix_claim_resolves_via_coverage():
     """The Stage 2 exit criterion from the spec, literally: run a REAL,
     scoped coverage pass over core/scorer.py's own test file and confirm

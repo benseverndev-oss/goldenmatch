@@ -96,7 +96,9 @@ def inventory(root: Path, tests_root: Path, coverage_db: Path | None = None) -> 
             coverage_consulted = True
         except Exception:
             # A malformed or foreign .coverage file must degrade to
-            # text-only, not crash a report-only job.
+            # text-only, not crash a report-only job. A broken root
+            # (permission error, missing, etc.) must also degrade the same way.
+            spans = {}
             contexts = {}
         for claim in findings:
             claimant_key = (claim.module, claim.symbol)
