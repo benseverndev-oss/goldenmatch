@@ -881,7 +881,8 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
       - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       - name: Detector self-tests
-        run: uv run pytest scripts/test_shared_decisions_fields.py scripts/test_shared_decisions_readers.py scripts/test_shared_decisions_allowlist.py scripts/test_shared_decisions_report.py -q
+        # Listed by name, so a new test FILE must be added here or it never runs.
+        run: uv run pytest scripts/test_shared_decisions_fields.py scripts/test_shared_decisions_readers.py scripts/test_shared_decisions_allowlist.py scripts/test_shared_decisions_report.py scripts/test_shared_decisions_shapes.py -q
       - name: Shared-decision inventory
         # Report-only by design: main() returns 0 for a non-empty inventory (a
         # finding is not a failure) and 1 only for a STALE allowlist entry, which
@@ -889,6 +890,14 @@ jobs:
         env:
           PYTHONPATH: scripts
         run: uv run python -m shared_decisions.report
+      - name: Ratchet -- no new or diverging shared decision (B3)
+        # Its own step so a failure names the ratchet, not "the self-tests".
+        # No continue-on-error: the floors were triaged in B1 against a real
+        # report, and the central gate (an allowlisted field starting to
+        # diverge) is the 1c843c8a5 recurrence this phase exists to catch.
+        env:
+          PYTHONPATH: scripts
+        run: uv run pytest scripts/test_no_new_shared_decisions.py -q
       - name: Companion A tests
         run: uv run pytest scripts/test_parity_coverage.py -q
       - name: goldenflow suite with native OFF, under coverage

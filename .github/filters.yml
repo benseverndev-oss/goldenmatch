@@ -534,6 +534,10 @@ dead_code:
 shared_decisions:
   - 'scripts/shared_decisions/**'
   - 'scripts/test_shared_decisions_*.py'
+  # The B3 ratchet does NOT match the glob above -- it is test_no_new_*, not
+  # test_shared_decisions_*. Without this line the job runs a gate whose own
+  # test file cannot re-trigger it. Caught by check_filter_coverage.py.
+  - 'scripts/test_no_new_shared_decisions.py'
   - 'scripts/fixtures/incident_1c843c8a5/**'
   - 'parity/shared_decisions.allow'
   # readers.py rglobs this whole tree to find config-field accessors, so the
