@@ -207,6 +207,18 @@ mentions both, never that it compares them. So the finding is the unenforced
 set; the 49 possibly-enforced claims are reported as UNVERIFIED and never as
 safe.
 
+> **THIS SOUNDNESS CLAIM WAS REFUTED IN C1.** A test can compare two
+> functions without naming both, by reaching one through a caller.
+> `core/scorer.py:_alias_score_matrix` is reported UNENFORCED, and is in fact
+> parity-checked by `test_alias_match_matrix_parity`, which calls
+> `_fuzzy_score_matrix` -- which calls the claimant. The negative verdict is
+> therefore suggestive, not sound, and every "unenforced" count carries an
+> unknown false-negative rate. See
+> `docs/superpowers/specs/2026-09-02-c1-read-of-55.md`. The fix is
+> coverage-based enforcement, the option rejected below as "buying precision
+> in the direction that does not carry the finding" -- that reasoning was
+> wrong.
+
 This is A and B's inversion. A resolved declared liveness (registries) and
 flagged the unexplained. B resolved declared parity and flagged undeclared
 shared decisions. C resolves declared synchronisation and flags the unenforced
