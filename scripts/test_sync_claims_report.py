@@ -6,7 +6,6 @@ import io
 import sys
 from pathlib import Path
 
-import pytest
 from sync_claims.report import DEFAULT_ROOT, DEFAULT_TESTS, inventory, main
 
 REPO = Path(__file__).resolve().parent.parent
@@ -415,18 +414,21 @@ def test_the_real_alias_score_matrix_claim_resolves_via_coverage():
     scoped coverage pass over core/scorer.py's own test file and confirm
     `_alias_score_matrix` -- reported unenforced by text alone -- resolves
     as coverage-enforced against real coverage data. Scoped to one test
-    file so this runs in seconds, not the whole suite."""
-    if sys.platform == "win32":
-        pytest.skip(
-            "coverage.py 7.13.5 + numpy 2.4.4 + Python 3.13.12 on Windows: "
-            "`--cov=goldenmatch.core.scorer` alone (no other coverage flags "
-            "needed to reproduce) raises 'ImportError: cannot load module "
-            "more than once per process' on `import numpy` during test "
-            "collection, on a bare non-nested pytest invocation -- verified "
-            "not fixable via COVERAGE_CORE=ctrace. This test runs for real "
-            "in CI (Linux), where the mechanism it validates actually gets "
-            "wired in (Task 3)."
-        )
+    file so this runs in seconds, not the whole suite.
+
+    `--cov=goldenmatch.core.scorer` (a DOTTED submodule path) is not used
+    here on purpose. It reproduces `ImportError: cannot load module more
+    than once per process` on `import numpy` during test collection --
+    confirmed by isolating the trigger directly: `--cov=goldenmatch` (the
+    bare top-level package) and `--cov=goldenmatch.core.blocker` (an
+    unrelated dotted submodule) were both tried against the same fixture,
+    and only the bare package name avoided the double-load. This was
+    first found and (wrongly) diagnosed as Windows-specific; it reproduces
+    identically on Linux CI (PR #2855's first real run, coverage.py
+    7.13.5-equivalent, Python 3.12), so the fix is the invocation shape,
+    not a platform skip. `--cov-fail-under=0` disables this package's own
+    coverage floor for the probe -- irrelevant here, this run measures a
+    handful of lines from one test file, not the real coverage gate."""
     import subprocess
 
     goldenmatch_src = DEFAULT_ROOT
@@ -442,13 +444,12 @@ def test_the_real_alias_score_matrix_claim_resolves_via_coverage():
         [
             "uv",
             "run",
-            "--with",
-            "pytest-cov",
             "pytest",
             "tests/test_semantic_scorers.py",
-            "--cov=goldenmatch.core.scorer",
+            "--cov=goldenmatch",
             "--cov-context=test",
             "--cov-report=",
+            "--cov-fail-under=0",
             "-q",
         ],
         cwd=str(scratch),
