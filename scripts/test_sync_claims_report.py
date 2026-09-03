@@ -6,6 +6,7 @@ import io
 import sys
 from pathlib import Path
 
+import pytest
 from sync_claims.report import DEFAULT_ROOT, DEFAULT_TESTS, inventory, main
 
 REPO = Path(__file__).resolve().parent.parent
@@ -220,11 +221,11 @@ def test_coverage_rescues_a_claim_the_text_check_misses(tmp_path):
         '''
 def claimant():
     """Byte-identical to ``target``."""
-    return wrapper()
+    return 1
 
 
 def wrapper():
-    return target()
+    return claimant()
 
 
 def target():
@@ -268,41 +269,77 @@ def test_coverage_consulted_is_false_when_db_path_does_not_exist(tmp_path):
     assert inv["coverage_enforced"] == []
 
 
-def test_coverage_rescue_only_applies_to_high_confidence_claims(tmp_path):
-    """Verify that coverage rescue is scoped to HIGH-confidence findings only.
-    A LOW-confidence claim's problem is a wrong target; coverage evidence
-    against a wrong target proves nothing about the actual claim."""
-    src = tmp_path / "src"
-    tests = tmp_path / "tests"
-    src.mkdir()
-    tests.mkdir()
+def test_coverage_rescue_only_applies_to_high_confidence_claims(monkeypatch, tmp_path):
+    """A LOW-confidence claim must never be coverage-rescued, even when its
+    (possibly wrong) target genuinely shares a test context with the
+    claimant -- coverage evidence against a wrong target proves nothing.
+    Constructs the scenario directly (bypassing the confidence heuristic,
+    which needs specific docstring shapes to fire) so this test is fast,
+    deterministic, and does not depend on real subprocess coverage."""
+    from sync_claims import report as report_mod
+    from sync_claims.claims import Claim
 
-    # Create functions where coverage can show they share a test context
-    (src / "m.py").write_text(
-        '''
-def func_a():
-    """Calls helper."""
-    return helper()
-
-
-def helper():
-    return 1
-'''.strip(),
-        encoding="utf-8",
+    high = Claim(
+        module="m.py",
+        symbol="high_claim",
+        kind="symbol",
+        keyword="mirrors",
+        window="high_claim mirrors high_target",
+        target="high_target",
+        lineno=1,
+        confidence="high",
     )
-    (tests / "test_it.py").write_text(
-        "from m import helper\n\ndef test_it():\n    assert helper() == 1\n",
-        encoding="utf-8",
+    low = Claim(
+        module="m.py",
+        symbol="low_claim",
+        kind="symbol",
+        keyword="mirrors",
+        window="low_claim mirrors low_target",
+        target="low_target",
+        lineno=2,
+        confidence="low",
     )
 
-    # The key invariant: all claims in coverage_enforced should have originally
-    # been in the high-confidence findings set. If we sabotage by changing
-    # "for claim in findings:" to "for claim in all_findings:", this test
-    # would fail by trying to process low-confidence claims.
-    # For now, we just verify that coverage_consulted works as expected.
-    with_coverage_path = _run_real_coverage(src, tests)
-    inv = inventory(src, tests, coverage_db=with_coverage_path)
-    assert inv["counts"]["coverage_consulted"] is True
+    monkeypatch.setattr(report_mod, "claims", lambda root, symbols: [])
+    monkeypatch.setattr(report_mod, "declared_symbols", lambda root: set())
+    monkeypatch.setattr(report_mod, "test_reference_sets", lambda tests_root: {})
+    monkeypatch.setattr(report_mod, "unenforced", lambda resolvable, reference_sets: [high, low])
+    monkeypatch.setattr(
+        report_mod,
+        "function_spans",
+        lambda root: {
+            "m.py": [
+                ("high_claim", 1, 1),
+                ("high_target", 3, 3),
+                ("low_claim", 5, 5),
+                ("low_target", 7, 7),
+            ]
+        },
+    )
+    shared_ctx = frozenset({"tests/test_it.py::test_it|run"})
+    monkeypatch.setattr(
+        report_mod,
+        "function_contexts",
+        lambda coverage_db, root, spans: {
+            ("m.py", "high_claim"): shared_ctx,
+            ("m.py", "high_target"): shared_ctx,
+            ("m.py", "low_claim"): shared_ctx,
+            ("m.py", "low_target"): shared_ctx,
+        },
+    )
+
+    fake_db = tmp_path / "fake.coverage"
+    fake_db.write_text("", encoding="utf-8")
+
+    inv = report_mod.inventory(Path("unused"), Path("unused"), coverage_db=fake_db)
+
+    rescued_symbols = {c["symbol"] for c in inv["coverage_enforced"]}
+    assert rescued_symbols == {"high_claim"}, (
+        f"only the high-confidence claim should be rescued; got {rescued_symbols}"
+    )
+    assert any(c["symbol"] == "low_claim" for c in inv["unenforced_low_confidence"]), (
+        "the low-confidence claim must remain reported, untouched by coverage"
+    )
 
 
 def test_the_real_alias_score_matrix_claim_resolves_via_coverage():
@@ -311,6 +348,17 @@ def test_the_real_alias_score_matrix_claim_resolves_via_coverage():
     `_alias_score_matrix` -- reported unenforced by text alone -- resolves
     as coverage-enforced against real coverage data. Scoped to one test
     file so this runs in seconds, not the whole suite."""
+    if sys.platform == "win32":
+        pytest.skip(
+            "coverage.py 7.13.5 + numpy 2.4.4 + Python 3.13.12 on Windows: "
+            "`--cov=goldenmatch.core.scorer` alone (no other coverage flags "
+            "needed to reproduce) raises 'ImportError: cannot load module "
+            "more than once per process' on `import numpy` during test "
+            "collection, on a bare non-nested pytest invocation -- verified "
+            "not fixable via COVERAGE_CORE=ctrace. This test runs for real "
+            "in CI (Linux), where the mechanism it validates actually gets "
+            "wired in (Task 3)."
+        )
     import subprocess
 
     goldenmatch_src = DEFAULT_ROOT
