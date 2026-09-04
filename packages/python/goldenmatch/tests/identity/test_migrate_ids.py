@@ -33,6 +33,31 @@ def test_recompute_h1_id_returns_none_when_unfingerprintable(monkeypatch):
     assert _recompute_h1_id("acme", {"x": 1}) is None
 
 
+def test_recompute_h1_id_none_agrees_with_resolves_legacy_fallback(monkeypatch):
+    """``_recompute_h1_id``'s docstring: None "mirrors resolve.py's legacy-only
+    path". Pin the two decisions together directly, the way
+    ``test_referenced_row_ids_mirrors_the_cluster_loops_skip_rules`` pins
+    resolve.py's own loop against its helper: for the SAME (source, payload)
+    where ``record_fingerprint`` raises, migrate_ids must return None exactly
+    when resolve.py's ``_record_id_candidates`` falls back to a ``:hash:``
+    legacy id (never an ``:h1:`` one)."""
+    import goldenmatch.identity.migrate_ids as M
+    import goldenmatch.identity.resolve as R
+
+    def boom(_):
+        raise ValueError("unfingerprintable")
+
+    monkeypatch.setattr(M, "record_fingerprint", boom)
+    monkeypatch.setattr(R, "record_fingerprint", boom)
+
+    payload = {"name": "Ann"}
+    new_id = M._recompute_h1_id("acme", payload)
+    primary, cands = R._record_id_candidates(payload, "acme", None)
+
+    assert new_id is None
+    assert primary.startswith("acme:hash:") and cands == [primary]
+
+
 def test_migration_report_defaults():
     r = MigrationReport()
     assert (r.scanned, r.rewritten, r.merged, r.clashed_distinct_entity,

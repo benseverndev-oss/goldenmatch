@@ -8,6 +8,8 @@ are deduped by canonical key, the emitted pair set — and therefore the cluster
 must match the sequential (``GOLDENMATCH_FS_WORKERS=1``) path exactly.
 """
 
+import os
+
 import goldenmatch as gm
 import polars as pl
 import pytest
@@ -137,6 +139,29 @@ def test_batched_target_ids_drop_same_side_pairs(monkeypatch, workers, vectorize
         (a in target_ids) != (b in target_ids)
         for a, b, _score in filtered
     )
+
+
+def test_fs_scoring_workers_default_diverges_from_weighted_default(monkeypatch):
+    """``_fs_scoring_workers``'s docstring used to call its default a "mirror"
+    of the weighted path's ``core.scorer._DEFAULT_MAX_WORKERS`` -- that was
+    true when #1566 added this function, but #303 (earlier) had already
+    pinned ``_DEFAULT_MAX_WORKERS`` at a fixed 4 (RSS pathology on a 16-core
+    runner) instead of scaling with ``cpu_count()``. They have not tracked
+    each other since. This pins the current, divergent relationship rather
+    than asserting a false equality."""
+    from goldenmatch.core.probabilistic import _fs_scoring_workers
+    from goldenmatch.core.scorer import _DEFAULT_MAX_WORKERS
+
+    monkeypatch.delenv("GOLDENMATCH_FS_WORKERS", raising=False)
+    fs_default = _fs_scoring_workers()
+
+    assert _DEFAULT_MAX_WORKERS == 4  # pinned by #303, not cpu-scaled
+    assert fs_default == min(16, os.cpu_count() or 1)
+    if (os.cpu_count() or 1) > 4:
+        assert fs_default != _DEFAULT_MAX_WORKERS, (
+            "defaults converged again -- if intentional, update the docstring "
+            "and this test together"
+        )
 
 
 if __name__ == "__main__":

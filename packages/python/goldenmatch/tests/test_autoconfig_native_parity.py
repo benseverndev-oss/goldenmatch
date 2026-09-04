@@ -212,6 +212,38 @@ def test_exact_matchkey_floor_golden_vectors(monkeypatch: pytest.MonkeyPatch) ->
         )
 
 
+def test_exact_matchkey_floor_dispatcher_matches_python_oracle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``exact_matchkey_floor``'s docstring claims the native dispatch is
+    "byte-identical to the pure-Python oracle" (``_exact_matchkey_floor_py``).
+    Drive the PUBLIC dispatcher with native ON vs OFF over every golden-vector
+    col_type and assert both sides agree with the oracle -- not just that the
+    raw FFI shim matches the hardcoded golden values (test_exact_matchkey_floor_
+    golden_vectors, above)."""
+    _nm = native_module()
+    if not hasattr(_nm, "autoconfig_exact_matchkey_floor"):
+        pytest.skip("native ext predates S3 (no autoconfig_exact_matchkey_floor)")
+
+    from goldenmatch.core.autoconfig import _exact_matchkey_floor_py, exact_matchkey_floor
+
+    vectors_path = GOLDEN_DIR / "exact_matchkey_floor_vectors.json"
+    vectors = json.loads(vectors_path.read_text(encoding="utf-8"))
+    col_types = [v["input"]["col_type"] for v in vectors]
+
+    for col_type in col_types:
+        oracle = _exact_matchkey_floor_py(col_type)
+
+        monkeypatch.setenv("GOLDENMATCH_NATIVE", "0")
+        py_dispatched = exact_matchkey_floor(col_type)
+
+        monkeypatch.setenv("GOLDENMATCH_NATIVE", "1")
+        native_dispatched = exact_matchkey_floor(col_type)
+
+        assert py_dispatched == oracle, col_type
+        assert native_dispatched == oracle, col_type
+
+
 # ── Test 3: wiring equivalence ───────────────────────────────────────────────
 
 def _make_person_df() -> pl.DataFrame:

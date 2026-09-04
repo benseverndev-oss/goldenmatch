@@ -144,3 +144,74 @@ class TestChunkedMatcher:
         # The whole file is also reachable when we keep iterating.
         remaining = sum(c.height for c in reader)
         assert first.height + remaining == 50
+
+
+class TestBlockKeyColumnMirrorsBuildBlockKeyExpr:
+    """``ChunkedMatcher._block_key_column``'s docstring claims it "Mirrors
+    ``goldenmatch.core.blocker._build_block_key_expr`` but kept inline".
+
+    ``_build_block_key_expr`` honors per-field ``field_transforms`` (a field
+    listed there uses its OWN chain; other fields keep the key-level
+    ``transforms``, #1826). ``_block_key_column`` takes no ``field_transforms``
+    parameter at all -- it applies ``key_config.transforms`` uniformly to
+    every field. This test checks whether the two actually agree once
+    ``field_transforms`` is in play.
+    """
+
+    def test_uniform_transforms_match(self, config):
+        """Baseline: no field_transforms configured -> the two helpers agree
+        (both apply key_config.transforms to every field)."""
+        import polars as pl
+        from goldenmatch.core.blocker import _build_block_key_expr
+        from goldenmatch.core.chunked import ChunkedMatcher
+
+        key_config = BlockingKeyConfig(fields=["name", "zip"], transforms=["lowercase"])
+        df = pl.DataFrame({"name": ["Alice Smith", "BOB JONES"], "zip": ["10001", "20002"]})
+
+        matcher = ChunkedMatcher(config=config, chunk_size=100)
+        got = matcher._block_key_column(df, key_config)["__block_key__"].to_list()
+
+        expected = df.with_columns(_build_block_key_expr(key_config))["__block_key__"].to_list()
+        assert got == expected
+
+    def test_field_transforms_diverges_from_build_block_key_expr(self, config):
+        """A key with PER-FIELD ``field_transforms`` (#1826) is where the
+        docstring's "mirrors" claim breaks: ``_build_block_key_expr`` gives
+        ``last`` its own ``uppercase`` chain while ``first`` keeps the
+        key-level ``lowercase`` chain; ``_block_key_column`` has no
+        field_transforms parameter and applies ``lowercase`` to BOTH fields.
+
+        This is a real divergence, not a test bug -- the chunked/streaming
+        large-dataset path can silently compute a DIFFERENT block key than
+        the main path for the exact same BlockingKeyConfig whenever
+        field_transforms is used.
+        """
+        import polars as pl
+        from goldenmatch.core.blocker import _build_block_key_expr
+        from goldenmatch.core.chunked import ChunkedMatcher
+
+        key_config = BlockingKeyConfig(
+            fields=["first", "last"],
+            transforms=["lowercase"],
+            field_transforms={"last": ["uppercase"]},
+        )
+        df = pl.DataFrame({"first": ["Alice"], "last": ["Smith"]})
+
+        matcher = ChunkedMatcher(config=config, chunk_size=100)
+        got = matcher._block_key_column(df, key_config)["__block_key__"].to_list()
+
+        expected = df.with_columns(_build_block_key_expr(key_config))["__block_key__"].to_list()
+
+        # DIVERGENCE, confirmed: _build_block_key_expr honors field_transforms
+        # (last -> UPPERCASE), _block_key_column ignores it (last -> lowercase
+        # via the uniform key-level chain). If this assertion ever starts
+        # failing, _block_key_column has been fixed to thread field_transforms
+        # through and the docstring's "mirrors" claim is true again -- update
+        # this test (and the one above) to assert equality instead.
+        assert expected == ["alice||SMITH"]
+        assert got == ["alice||smith"]
+        assert got != expected, (
+            "_block_key_column now matches _build_block_key_expr on "
+            "field_transforms -- the divergence this test pins has been "
+            "fixed; replace this test with a straight equality assertion."
+        )

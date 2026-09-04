@@ -110,6 +110,41 @@ def test_bulk_on_empty_frame_is_a_noop(store) -> None:  # noqa: F811
     assert store.count_identities() == 0
 
 
+def test_bulk_upsert_identities_fills_missing_columns_with_none(store) -> None:  # noqa: F811
+    """``SnowflakeIdentityStore.bulk_upsert_identities`` "Mirrors
+    ``IdentityStore.bulk_upsert_identities`` (store.py:1023): missing columns
+    are filled with None so callers need not carry all eight." Give it a
+    frame missing ``merged_into`` / ``golden_record`` / ``confidence``
+    entirely and confirm it doesn't raise and the row lands with those
+    columns defaulted to None, exactly like the Postgres/SQLite branches."""
+    from goldenmatch.identity.store import new_entity_id
+
+    eid = new_entity_id()
+    now = datetime(2026, 8, 20, 12, 0, 0)
+    df = pl.DataFrame(
+        # merged_into / golden_record / confidence intentionally omitted --
+        # created_at/updated_at are NOT NULL in the schema so they stay, to
+        # isolate the claim (missing OPTIONAL columns) from an unrelated
+        # constraint failure.
+        {
+            "entity_id": [eid], "status": ["active"], "dataset": ["c"],
+            "created_at": [now], "updated_at": [now],
+        },
+        schema={
+            "entity_id": pl.Utf8, "status": pl.Utf8, "dataset": pl.Utf8,
+            "created_at": pl.Datetime, "updated_at": pl.Datetime,
+        },
+    )
+    store.bulk_upsert_identities(df)
+    node = store.get_identity(eid)
+    assert node is not None
+    assert node.status == "active"
+    assert node.dataset == "c"
+    assert node.merged_into is None
+    assert node.golden_record is None
+    assert node.confidence is None
+
+
 def test_bulk_add_edges_is_idempotent_no_duplicates(store) -> None:  # noqa: F811
     """``stage_and_merge(update_cols=None)`` is the insert-if-absent path that
     replaces the UNIQUE constraint Snowflake does not enforce. Calling

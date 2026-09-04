@@ -137,3 +137,37 @@ def test_backfill_carries_entity_id(store):
 def test_backfill_requires_row_id(store):
     with pytest.raises(ValueError, match="__row_id__"):
         backfill_block_index(store, pl.DataFrame({"last": ["x"]}), _static(["last"]))
+
+
+def test_pass_signature_mirrors_blockers_pass_sig_tuple():
+    """``_pass_signature``'s string encoding must preserve the distinguishing
+    power of ``core/blocker.py``'s inline ``(tuple(fields), tuple(transforms
+    or []))`` pass_sig (``build_em_blocks_agg`` / ``_build_multi_pass_blocks``'s
+    multi_pass dedup key) -- two configs equal in (fields, transforms) get the
+    same signature, and configs whose (fields, transforms) tuple differs must
+    not collide."""
+    from goldenmatch.identity.block_index import _pass_signature
+
+    def blocker_tuple(cfg: BlockingKeyConfig) -> tuple:
+        # The exact expression core/blocker.py builds its pass_sig from.
+        return (tuple(cfg.fields), tuple(cfg.transforms or []))
+
+    same_a = BlockingKeyConfig(fields=["last", "zip"], transforms=["lowercase"])
+    same_b = BlockingKeyConfig(fields=["last", "zip"], transforms=["lowercase"])
+    assert blocker_tuple(same_a) == blocker_tuple(same_b)
+    assert _pass_signature(same_a) == _pass_signature(same_b)
+
+    configs = [
+        BlockingKeyConfig(fields=["last"], transforms=[]),
+        BlockingKeyConfig(fields=["last"], transforms=["soundex"]),
+        BlockingKeyConfig(fields=["zip"], transforms=[]),
+        BlockingKeyConfig(fields=["last", "zip"], transforms=[]),
+        BlockingKeyConfig(fields=["last"], transforms=["soundex", "substring"]),
+    ]
+    tuples = [blocker_tuple(c) for c in configs]
+    sigs = [_pass_signature(c) for c in configs]
+    assert len(set(tuples)) == len(configs)  # sanity: fixture tuples are distinct
+    assert len(set(sigs)) == len(configs), (
+        "distinct blocker.py pass_sig tuples collided into the same "
+        "_pass_signature string"
+    )

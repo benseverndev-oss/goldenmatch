@@ -1897,8 +1897,11 @@ def score_buckets(
     def _apply_match_mode_filter(
         pairs: list[tuple[int, int, float]],
     ) -> list[tuple[int, int, float]]:
-        """Mirror the slow path's match-mode post-filter (_score_one_bucket
-        lines 544-553). Applies in two stages: across_files_only drops
+        """Mirror the slow path's match-mode post-filter (_score_one_bucket's
+        native-kernel branch, currently ~lines 2327-2336 -- the line numbers in
+        this docstring have drifted before and will again; match on the
+        across_files_only/target_ids post-filter block, not the line numbers).
+        Applies in two stages: across_files_only drops
         same-source pairs; target_ids drops same-side-of-target pairs.
 
         Both filters are O(pairs) and very cheap relative to scoring; safe

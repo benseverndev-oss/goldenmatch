@@ -294,6 +294,63 @@ def test_fs_fused_parity_ensemble(monkeypatch):
     )
 
 
+def _cluster_partition_from_fused_table(tbl) -> set[frozenset[int]]:
+    """(__row_id__, __cluster_id__) fused-kernel Table -> multi-member partition,
+    same shape as ``_multi_partition`` over the classic ``clusters`` dict."""
+    import collections
+
+    by_cluster: dict[int, list[int]] = collections.defaultdict(list)
+    for rid, cid in zip(
+        tbl.column("__row_id__").to_pylist(), tbl.column("__cluster_id__").to_pylist()
+    ):
+        by_cluster[cid].append(rid)
+    return {frozenset(members) for members in by_cluster.values() if len(members) > 1}
+
+
+@requires_kernel
+def test_fused_fs_assignments_mirrors_inmemory_short_circuit(monkeypatch):
+    """backends.fs_out_of_core._fused_fs_assignments's docstring claims its
+    column gathering + ``GoldenMatchConfig`` shape "mirror the in-memory
+    ``_run_fused_fs_short_circuit`` [now ``_run_fused_fs_match_short_circuit``]
+    exactly (byte-parity by construction)". Drive both from the SAME trained EM
+    over the SAME data and assert the fused-kernel cluster partition each
+    produces is identical."""
+    monkeypatch.delenv("GOLDENMATCH_MATCH_FUSED", raising=False)
+    import goldenmatch.core.probabilistic as probabilistic_mod
+    from goldenmatch.backends.fs_out_of_core import _fused_fs_assignments
+    from goldenmatch.core.blocker import build_blocks, collect_blocking_fields
+    from goldenmatch.core.frame import to_frame as _tf
+    from goldenmatch.core.probabilistic import load_or_train_em
+
+    # Needs a __row_id__ column -- the pipeline adds one (_add_row_ids) before
+    # either short-circuit runs; add it once up front so both sides + the EM
+    # trainer see the identical ids.
+    df = _people_df().with_row_index("__row_id__")
+    cfg = _fs_config()
+    mk = cfg.get_matchkeys()[0]
+
+    blocking_fields = collect_blocking_fields(cfg.blocking, for_em=True)
+    blocks = list(build_blocks(df.lazy(), cfg.blocking))
+    em_result = load_or_train_em(df, mk, blocks=blocks, blocking_fields=blocking_fields)
+
+    # Streaming side: fs_out_of_core._fused_fs_assignments, called directly with
+    # the pre-trained EM (exactly how run_fs_dedupe_sequential feeds it).
+    base = _tf(df).to_arrow()
+    streaming_tbl = _fused_fs_assignments(base, cfg.blocking, mk, em_result, mk.link_threshold)
+    assert streaming_tbl is not None
+    streaming_partition = _cluster_partition_from_fused_table(streaming_tbl)
+
+    # In-memory side: force _run_fused_fs_match_short_circuit (via run_dedupe_df)
+    # to reuse the SAME trained EM instead of retraining its own, so both sides
+    # run the identical fused kernel call over the identical model.
+    monkeypatch.setattr(probabilistic_mod, "load_or_train_em", lambda *a, **k: em_result)
+    inmem = run_dedupe_df(df, _flag(cfg))
+    assert inmem["match_fused_capacity_mode"] is True
+    inmem_partition = _multi_partition(inmem["clusters"])
+
+    assert streaming_partition == inmem_partition
+
+
 @requires_given_names
 def test_fs_fused_covers_name_scorer():
     """A reference-data name scorer (`given_name_aliased_jw`, FS id 5) is now a

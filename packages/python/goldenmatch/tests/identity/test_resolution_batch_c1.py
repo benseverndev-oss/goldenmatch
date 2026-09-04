@@ -43,6 +43,22 @@ def test_flush_rows_defaults_to_env(monkeypatch):
     assert ResolutionBatch.from_args(run_id="r1", flush_rows=7).flush_rows == 7
 
 
+def test_bulk_fast_path_enabled_mirrors_resolves_own_read(monkeypatch):
+    """``resolution_batch.bulk_fast_path_enabled`` is a kill-switch mirror of
+    ``resolve._bulk_fast_path_enabled`` -- resolution_batch's docstring: "the
+    resolve body still owns the runtime read to stay byte-identical". Both
+    read the SAME ``GOLDENMATCH_IDENTITY_BULK`` env var and must agree for
+    every value."""
+    from goldenmatch.identity.resolution_batch import bulk_fast_path_enabled
+    from goldenmatch.identity.resolve import _bulk_fast_path_enabled
+
+    for raw in ("0", "1", "", "yes", "0 ", " 0"):
+        monkeypatch.setenv("GOLDENMATCH_IDENTITY_BULK", raw)
+        assert bulk_fast_path_enabled() == _bulk_fast_path_enabled(), raw
+    monkeypatch.delenv("GOLDENMATCH_IDENTITY_BULK", raising=False)
+    assert bulk_fast_path_enabled() == _bulk_fast_path_enabled() is True
+
+
 def test_batch_path_is_byte_identical_to_kwargs_path():
     """resolve_clusters(batch=...) must dispatch the same store writes, in the same
     order, as the equivalent loose-kwargs call."""

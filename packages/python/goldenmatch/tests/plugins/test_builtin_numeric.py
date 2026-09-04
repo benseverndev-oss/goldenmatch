@@ -79,6 +79,38 @@ def test_numeric_min_all_null_returns_none():
     assert conf == 0.0
 
 
+# The following pin NumericMinStrategy's docstring claim -- "Same shape as
+# `numeric_max`" -- against the numeric_max cases above it mirrors: string
+# coercion, ignoring non-numeric values, all-non-numeric -> None, and the
+# tie rule (first index wins, confidence 0.7).
+
+
+def test_numeric_min_handles_string_numbers():
+    val, conf, idx = NumericMinStrategy().merge(["10", "50", "25"])
+    assert val == "10"
+    assert conf == 1.0
+    assert idx == 0
+
+
+def test_numeric_min_ignores_non_numeric():
+    val, conf, idx = NumericMinStrategy().merge(["abc", 100, None, "xyz", 200])
+    assert val == 100
+    assert idx == 1
+
+
+def test_numeric_min_all_non_numeric_returns_none():
+    val, conf = NumericMinStrategy().merge(["abc", "xyz", None])
+    assert val is None
+    assert conf == 0.0
+
+
+def test_numeric_min_ties_give_first_index():
+    val, conf, idx = NumericMinStrategy().merge([50, 50, 100])
+    assert val == 50
+    assert idx == 0
+    assert conf == 0.7  # tie
+
+
 # ---------------------------------------------------------------------------
 # numeric_mean
 # ---------------------------------------------------------------------------

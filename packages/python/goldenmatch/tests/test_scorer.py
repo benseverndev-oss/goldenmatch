@@ -617,6 +617,29 @@ class TestJaccardScoreMatrix:
         assert mat[0, 1] == pytest.approx(1.0)
 
 
+class TestPadToEqualLengthParity:
+    """core/scorer._pad_to_equal_length (#784) claims the scalar single-pair
+    dice/jaccard helpers agree with the batch matrix path on the SAME inputs
+    when the two hex bloom filters differ in byte length -- the exact case
+    that used to raise an opaque numpy broadcast ValueError. Neither
+    TestDiceScoreMatrix/TestJaccardScoreMatrix nor TestDiceJaccardScoreField
+    above exercises unequal-length filters."""
+
+    def test_dice_scalar_matches_matrix_on_unequal_length(self):
+        a = bytes([0xFF, 0xFF]).hex()  # 2 bytes
+        b = bytes([0x0F]).hex()        # 1 byte
+        scalar = score_field(a, b, "dice")
+        matrix = _dice_score_matrix([a, b])
+        assert scalar == pytest.approx(float(matrix[0, 1]))
+
+    def test_jaccard_scalar_matches_matrix_on_unequal_length(self):
+        a = bytes([0xFF, 0xFF]).hex()
+        b = bytes([0x0F]).hex()
+        scalar = score_field(a, b, "jaccard")
+        matrix = _jaccard_score_matrix([a, b])
+        assert scalar == pytest.approx(float(matrix[0, 1]))
+
+
 class TestBuildNullMask:
     def test_no_nulls(self):
         mask = _build_null_mask(["a", "b"])

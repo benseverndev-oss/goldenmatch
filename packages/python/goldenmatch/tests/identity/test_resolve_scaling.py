@@ -489,6 +489,75 @@ def test_bulk_upsert_identities_works_on_sqlite(tmp_path):
     store.close()
 
 
+def test_bulk_upsert_identities_datetime_is_byte_identical_to_per_row(tmp_path):
+    """``_sqlite_stage``'s docstring: staged rows are "byte-identical to what
+    the per-row ``upsert_*`` path writes (which stores ``.isoformat()``
+    strings)". Compare the RAW stored ``created_at``/``updated_at`` strings
+    (not the round-tripped ``IdentityNode``, which would mask a formatting
+    mismatch) for the same ``datetime`` written via each path."""
+    from datetime import datetime
+
+    from goldenmatch.identity.model import IdentityNode
+
+    store = IdentityStore(path=str(tmp_path / "id.db"))
+    ts = datetime(2026, 3, 4, 5, 6, 7, 123456)
+
+    store.upsert_identity(IdentityNode(
+        entity_id="row", status="active", dataset="d", created_at=ts, updated_at=ts,
+    ))
+    df = pl.DataFrame({
+        "entity_id": ["bulk"], "status": ["active"], "merged_into": [None],
+        "golden_record": [None], "confidence": [None], "dataset": ["d"],
+        "created_at": [ts], "updated_at": [ts],
+    })
+    store.bulk_upsert_identities(df)
+
+    raw_row = store._conn.execute(
+        "SELECT created_at, updated_at FROM identity_nodes WHERE entity_id = ?",
+        ("row",),
+    ).fetchone()
+    raw_bulk = store._conn.execute(
+        "SELECT created_at, updated_at FROM identity_nodes WHERE entity_id = ?",
+        ("bulk",),
+    ).fetchone()
+    assert tuple(raw_row) == tuple(raw_bulk) == (ts.isoformat(), ts.isoformat())
+    store.close()
+
+
+def test_bulk_flush_checkpoint_mirrors_execs_automatic_chunk_commit(tmp_path):
+    """``bulk_flush_checkpoint``'s docstring: "mirrors the per-statement chunk
+    commit in ``_exec`` for the bulk (COPY-equivalent) path." An explicit
+    checkpoint must leave the same state ``_exec``'s own automatic chunk
+    commit leaves when ``_sqlite_pending`` reaches ``_sqlite_batch`` -- COMMIT
+    + BEGIN + ``_sqlite_pending`` reset to 0 -- so mixing manual and automatic
+    checkpoints in one ``bulk_writes`` block never leaks a stale count."""
+    from datetime import datetime
+
+    from goldenmatch.identity.model import IdentityNode
+    from goldenmatch.identity.store import new_entity_id
+
+    store = IdentityStore(path=str(tmp_path / "id.db"))
+    ts = datetime.now()
+    with store.bulk_writes():
+        store.upsert_identity(IdentityNode(
+            entity_id=new_entity_id(), status="active", dataset="d",
+            created_at=ts, updated_at=ts,
+        ))
+        assert store._sqlite_pending == 1
+        store.bulk_flush_checkpoint()  # the EXPLICIT checkpoint
+        assert store._sqlite_pending == 0
+
+        # Force _exec's AUTOMATIC chunk commit to fire on the very next write.
+        store._sqlite_batch = 1
+        store.upsert_identity(IdentityNode(
+            entity_id=new_entity_id(), status="active", dataset="d",
+            created_at=ts, updated_at=ts,
+        ))
+        assert store._sqlite_pending == 0  # _exec's own checkpoint reset it identically
+    assert store.count_identities() == 2
+    store.close()
+
+
 def test_bulk_methods_raise_on_mongo():
     """The bulk fast-path is SQL-backend only; a non-SQL backend (mongo) still
     routes through the per-row loop, so the bulk entry points reject it loudly

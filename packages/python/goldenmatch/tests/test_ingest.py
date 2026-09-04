@@ -55,6 +55,70 @@ class TestLoadFile:
             load_file(path)
 
 
+class TestArrowRouteEligibleMirrorsDispatch:
+    """``_arrow_route_eligible``'s docstring claims it "Mirrors the exact
+    dispatch below" in ``load_file``: for every (suffix, parse_mode,
+    delimiter) combination, its verdict must match whether ``load_file``
+    actually takes the pyarrow route (vs. falling through to
+    ``smart_load``/the polars-native suffix branches) once the arrow frame
+    backend is selected."""
+
+    @pytest.mark.parametrize(
+        "suffix,parse_mode,delimiter",
+        [
+            (".parquet", "auto", None),
+            (".parquet", "fixed_width", None),  # suffix always wins over parse_mode
+            (".xlsx", "auto", None),
+            (".xlsx", "block", None),
+            (".csv", "auto", None),  # suffix == ".csv" -> eligible even with no delimiter
+            (".csv", "auto", ";"),
+            (".csv", "fixed_width", None),  # non-auto parse_mode -> smart_load
+            (".txt", "auto", None),  # non-.csv text, no delimiter -> smart_load
+            (".txt", "auto", "|"),  # non-.csv text, explicit delimiter -> eligible
+            (".txt", "key_value", "|"),  # non-auto parse_mode -> smart_load regardless
+            ("", "auto", None),  # no suffix, no delimiter -> smart_load
+            ("", "auto", ","),  # no suffix, explicit delimiter -> eligible
+        ],
+    )
+    def test_eligibility_matches_actual_route_taken(
+        self, tmp_path, monkeypatch, suffix, parse_mode, delimiter
+    ):
+        from goldenmatch.core.ingest import _arrow_route_eligible
+
+        expected = _arrow_route_eligible(suffix, parse_mode, delimiter)
+
+        monkeypatch.setenv("GOLDENMATCH_FRAME", "arrow")
+
+        path = tmp_path / f"data{suffix}"
+        if suffix == ".parquet":
+            pl.DataFrame({"a": [1, 2]}).write_parquet(path)
+        elif suffix == ".xlsx":
+            pytest.importorskip("xlsxwriter")
+            pl.DataFrame({"a": [1, 2]}).write_excel(path)
+        else:
+            path.write_text("a,b\n1,2\n", encoding="utf-8")
+
+        took_arrow_route = {"value": False}
+
+        def fake_read_table_arrow(*args, **kwargs):
+            took_arrow_route["value"] = True
+            import pyarrow as pa
+
+            return pa.table({"a": [1, 2]})
+
+        monkeypatch.setattr(
+            "goldenmatch.core.io_arrow.read_table_arrow", fake_read_table_arrow
+        )
+
+        load_file(path, parse_mode=parse_mode, delimiter=delimiter)
+
+        assert took_arrow_route["value"] == expected, (
+            f"_arrow_route_eligible({suffix!r}, {parse_mode!r}, {delimiter!r}) "
+            f"= {expected} but load_file actually took the arrow route: "
+            f"{took_arrow_route['value']}"
+        )
+
+
 class TestLoadFiles:
     """Tests for the load_files function."""
 

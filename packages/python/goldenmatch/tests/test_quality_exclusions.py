@@ -62,6 +62,37 @@ def test_column_profile_is_immutable():
         p.cardinality_ratio = 0.99  # type: ignore[misc]
 
 
+def test_build_column_profile_seam_matches_polars_decisions():
+    """``_build_column_profile_seam``'s docstring claim: decisions are
+    byte-identical to the polars ``_build_column_profile`` path -- NOT
+    necessarily an identical ``ColumnProfile`` struct (``profile.dtype`` is
+    cosmetic outside the temporal check, per the seam's own docstring).
+    Exercise a text/foreign-id/timestamp/hash mix through
+    ``detect_autoconfig_exclusions`` on both a ``pl.DataFrame`` (polars
+    lane) and its ``pa.Table`` twin (arrow lane, routes through the seam),
+    including a datetime column so the ONE dtype-reading detector (the
+    temporal check) actually fires."""
+    import datetime
+
+    df = pl.DataFrame({
+        "first_name": [f"name_{i}" for i in range(60)],
+        "external_id": [f"ext_{i:08d}" for i in range(60)],
+        "created_at": [
+            datetime.datetime(2026, 1, 1) + datetime.timedelta(seconds=i)
+            for i in range(60)
+        ],
+        "record_hash": [f"{i:032x}" for i in range(60)],
+    })
+
+    pl_result = detect_autoconfig_exclusions(df)
+    arrow_result = detect_autoconfig_exclusions(df.to_arrow())
+
+    pl_by_col = {e.column: (e.detector, e.reason) for e in pl_result}
+    arrow_by_col = {e.column: (e.detector, e.reason) for e in arrow_result}
+    assert arrow_by_col == pl_by_col
+    assert "created_at" in pl_by_col  # sanity: the temporal path actually fired
+
+
 # ---------------------------------------------------------------------------
 # Detector 1: audit_column
 # ---------------------------------------------------------------------------
