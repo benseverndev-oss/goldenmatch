@@ -55,6 +55,25 @@ def test_non_finite_confidence_raises(token):
         parse_classify(f'{{"doctype":"po","confidence":{token}}}')
 
 
+def test_strip_fence_mirrors_parse_message_text_rsplit_on_last_fence():
+    """`_strip_fence`'s docstring claims it mirrors `_openai.parse_message_text`:
+    both rsplit on the LAST ``` marker, not a trailing-only strip. Use text
+    with an EMBEDDED ``` inside the payload itself (so a first-occurrence
+    split would truncate the JSON) plus prose after the real closing fence (so
+    a strip that only fires when the fence is literally at the end of the
+    string would fail to strip it)."""
+    from goldenmatch.documents._openai import parse_message_text
+    from goldenmatch.documents.classify import _strip_fence
+
+    raw = '```json\n{"example": "wrap in ```code``` blocks"}\n``` some trailing note'
+    expected = '{"example": "wrap in ```code``` blocks"}'
+
+    assert _strip_fence(raw) == expected
+
+    resp = {"choices": [{"message": {"content": raw}}]}
+    assert parse_message_text(resp) == expected
+
+
 def test_confidence_coercion_boundaries():
     # integer confidence coerces to float; direct 0/1 are valid (not via clamp)
     assert parse_classify('{"doctype":"po","confidence":1}').confidence == 1.0

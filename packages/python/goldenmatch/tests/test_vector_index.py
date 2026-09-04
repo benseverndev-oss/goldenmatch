@@ -199,3 +199,32 @@ def test_id_column_used_for_row_id(tmp_path):
     hits = idx.query("globex incorporated", k=1)
     assert hits[0].row_id == 200
     assert "pk" in hits[0].record  # non-internal columns are preserved
+
+
+# ── shape parity with retrieve_similar_records (#1089) ──────────────────────
+
+
+def test_query_matches_retrieve_similar_records_shape(tmp_path):
+    """VectorIndex.query's docstring: it "returns the most similar records as
+    RetrievedRecord (the same shape as retrieve_similar_records)". Build an
+    equivalent in-memory corpus and check the two paths return the same
+    dataclass (same field set) and, for the same deterministic inhouse
+    embedder + query + corpus text + default (positional) row ids, the same
+    top hit."""
+    from dataclasses import fields
+
+    from goldenmatch.core.retrieval import RetrievedRecord, retrieve_similar_records
+
+    idx = VectorIndex(tmp_path / "vi", column="name").build(CORP)
+    vi_hits = idx.query("acme corporation", k=3)
+    rs_hits = retrieve_similar_records(CORP, "acme corporation", "name", k=3)
+
+    assert vi_hits and rs_hits
+    assert type(vi_hits[0]) is RetrievedRecord
+    assert type(rs_hits[0]) is RetrievedRecord
+    assert {f.name for f in fields(vi_hits[0])} == {f.name for f in fields(rs_hits[0])}
+
+    # Same corpus, same query, same default model -> same top hit end-to-end.
+    assert vi_hits[0].row_id == rs_hits[0].row_id
+    assert vi_hits[0].record == rs_hits[0].record
+    assert vi_hits[0].score == pytest.approx(rs_hits[0].score, abs=1e-4)

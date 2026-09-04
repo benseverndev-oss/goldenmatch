@@ -89,6 +89,27 @@ def test_broadband_audio_amplitude_and_shift_invariant():
     assert _sim(fp, _fp(base[4096:])) == 1.0  # ~2-frame time offset (alignment search)
 
 
+def test_audio_ber_aligned_matches_plain_audio_ber_when_frame_aligned():
+    """Docstring claim (perceptual.audio_ber_aligned): 'the offset-search ADR
+    0022 flagged as the scoring-side counterpart to the frame-aligned
+    audio_ber.' Two equal-length fingerprints of the same recording are
+    already frame-aligned -- offset 0 is the only alignment with a full
+    overlap. Forcing min_overlap to the full fingerprint length restricts
+    audio_ber_aligned's search to exactly that offset, so it must agree with
+    plain audio_ber's frame-aligned computation on the same pair."""
+    base = _fp(_broadband(3))
+    noisy = _fp(_noisy(_broadband(3), 5))
+    assert len(base) == len(noisy)  # same length -> no genuine time offset
+
+    aligned = perceptual.audio_ber_aligned(base, noisy, min_overlap=len(base))
+    plain = perceptual.audio_ber(base, noisy)
+    assert aligned == plain
+
+    # Identical fingerprints: 0.0 is the global floor, trivially reached at
+    # offset 0 -- both functions must agree here too.
+    assert perceptual.audio_ber_aligned(base, base) == perceptual.audio_ber(base, base) == 0.0
+
+
 def test_pure_tone_is_the_noise_artifact():
     # documents WHY finding 3's first read was wrong: a pure tone leaves the bands
     # near-empty, so the SAME noise destroys the fingerprint (BER ~0.5), unlike the

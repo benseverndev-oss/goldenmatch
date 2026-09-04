@@ -1,6 +1,19 @@
 # Phase C, Stage 4b — Full Hand-Triage of the 25 Coverage-Rescued Claims
 
-**Status:** complete — all 25 claims individually verified, no more extrapolation
+**Status:** complete — all 25 claims individually verified, no more extrapolation.
+**CORRECTION (2026-09-04, same day):** `_rc_union_isolated` below was verdicted
+FALSE POSITIVE from the 3 shared coverage contexts available at the time.
+Writing its test (see the test-writing pass this triage fed into) found a
+real, dedicated test already exists --
+`tests/test_distributed_randomized_contraction_wcc.py::test_randomized_contraction_agrees_with_two_phase_wcc`
+-- invisible to this document's coverage-based method because it's gated
+behind `pytest.importorskip("ray")` and never runs (so never generates a
+coverage context) in an environment without Ray. Corrected to TRUE
+POSITIVE below, with the tally updated (14 TRUE POSITIVE / 7 FALSE
+POSITIVE / 4 PATTERN CLAIM). A fourth blind-spot shape, distinct from the
+three named in this document's own body: a real test whose coverage
+signal is invisible because it's conditionally skipped in the very
+environment that produces the coverage data being checked against.
 **Date:** 2026-09-04
 **Prior:** `docs/superpowers/specs/2026-09-03-stage4-coverage-retriage.md` (the 5-item
 spot-check and the ≈19% estimate this document replaces with a real count),
@@ -74,12 +87,13 @@ that could genuinely diverge, and nothing currently would catch it.
 | `core/probabilistic.py:3096` | `_add_ne_matrix_contribution` → `_ne_fired` | **TRUE POSITIVE** |
 | `core/standardize.py:269` | `_native_address` → `std_address` | **TRUE POSITIVE** |
 | `db/sync.py:765` | `_full_scan_streaming` → `_full_scan_pipeline` | **FALSE POSITIVE** |
-| `distributed/clustering.py:1430` | `_rc_union_isolated` → `two_phase_wcc` | **FALSE POSITIVE** |
+| `distributed/clustering.py:1430` | `_rc_union_isolated` → `two_phase_wcc` | **TRUE POSITIVE** (corrected, see note above) |
 | `identity/profile.py:537` | `customer_360` → `entity_profile` | **PATTERN CLAIM** |
 | `mcp/server.py:2292` | `_tool_score_strings` → `score_strings` | **PATTERN CLAIM** |
 | `semantic/catalog.py:90` | `emit_semantic_model_from_store` → `write_resolved_catalog` | **PATTERN CLAIM** |
 
-**Tally: 13 TRUE POSITIVE, 8 FALSE POSITIVE, 4 PATTERN CLAIM.**
+**Tally: 14 TRUE POSITIVE, 7 FALSE POSITIVE, 4 PATTERN CLAIM** (corrected;
+originally 13/8/4, see the `_rc_union_isolated` correction above).
 
 (`customer_360`→`entity_profile` and `emit_semantic_model_from_store`→
 `write_resolved_catalog` were investigated and reported as FALSE POSITIVE by
@@ -95,10 +109,12 @@ consistency correction across the whole 25, not new evidence — see the
 ## What this changes about the headline number
 
 Stage 4's extrapolation (2/5 = 40% real, projected to ≈10/53 ≈ 19%) undersold
-the true rescue rate. The full count is **13 of 25 (52%)** genuinely
-enforced, not 40%. Of the 53 original high-confidence findings:
+the true rescue rate. The full count is **14 of 25 (56%)** genuinely
+enforced, not 40% (corrected from an original 13/25 — see the
+`_rc_union_isolated` correction above). Of the 53 original high-confidence
+findings:
 
-- **13 (≈25%) are confirmed audit false alarms** — the text-only check's
+- **14 (≈26%) are confirmed audit false alarms** — the text-only check's
   "unenforced" was wrong; a real test compares the claimant and target
   directly or one level of indirection out. These should be removed from any
   future gap-count entirely, the same way `_alias_score_matrix` already was.
@@ -108,7 +124,7 @@ enforced, not 40%. Of the 53 original high-confidence findings:
   diverge, or the real target isn't a Python symbol in this repo at all).
   These need a docstring fix (soften "mirrors"/"Mirrors" language), not a
   test.
-- **8 (≈15%) are confirmed real gaps within the rescued pool** — the
+- **7 (≈13%) are confirmed real gaps within the rescued pool** — the
   mechanical "coverage-rescue" was itself a false alarm: a test executes
   both functions but never compares them, and the two sides ARE independent
   implementations that could genuinely diverge. These are genuine findings
@@ -120,7 +136,7 @@ enforced, not 40%. Of the 53 original high-confidence findings:
   cross-language target, and an AST-string-reference test). The other 26
   have not been individually re-verified by this or any prior pass — their
   composition should NOT be assumed to follow the rescued pool's ratio
-  (13:8:4). Extrapolating from one pool to the other would repeat exactly
+  (14:7:4). Extrapolating from one pool to the other would repeat exactly
   the mistake this whole document exists to correct.
 
 ## Three claims worth reading individually
@@ -194,11 +210,20 @@ None of this is done in this document — it is triage, matching what was
 asked for. Writing the 8 tests, the 4 docstring fixes, and the
 `_resolve_target` cross-language fix are each their own scoped piece of work.
 
+**Update, same day:** all of the above (the tests, the docstring
+softenings — 11 in the end, not 4, once Stage 4c's own findings were
+folded in — and the ambiguous-target resolver fix) is now done. See
+`docs/superpowers/specs/2026-09-04-stage4d-test-writing-results.md` for
+what writing the tests actually found, including a real production bug
+the docstring-triage alone could never have surfaced.
+
 ## Being wrong about this document
 
 All 25 claims were read individually this pass — there is no sampling
-uncertainty left in the 13/8/4 split itself. The uncertainty that remains is
-scoped correctly above: the 28 still-unenforced claims outside the rescued
-pool were not touched by this pass (only 2 of them, previously), and their
-true/false-negative composition is unknown, not "probably similar to the
-rescued pool." Treat that 28 as a separate, larger open question.
+uncertainty left in the 14/7/4 split itself (corrected from an original
+13/8/4 the same day — see the top of this document). The uncertainty that
+remains is scoped correctly above: the 28 still-unenforced claims outside
+the rescued pool were not touched by this pass (only 2 of them,
+previously), and their true/false-negative composition is unknown, not
+"probably similar to the rescued pool." Treat that 28 as a separate,
+larger open question.

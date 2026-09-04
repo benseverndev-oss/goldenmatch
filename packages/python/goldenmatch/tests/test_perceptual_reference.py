@@ -88,6 +88,28 @@ def test_image_invariant_to_brightness_contrast_and_blur():
     assert perceptual.hamming(base, perceptual.phash_image(blurred)) <= 6
 
 
+def test_phash_image_batch_identical_to_per_image_mapping():
+    """Docstring claim (perceptual.phash_image_batch): 'Output is identical
+    to mapping :func:`phash_image`.' Assert
+    phash_image_batch(images) == [phash_image(im) for im in images]
+    element-wise, over the committed golden-fixture images (>= 3, per
+    test_fixture_params_match_constants above) plus a couple of ad hoc grids
+    of differing sizes, so the batch path is exercised over more than one
+    shape."""
+    fx = _load()
+    images = [img["pixels"] for img in fx["images"]]
+    # A couple of hand-built grids of different sizes/content, so the batch
+    # path isn't only exercised over the fixture's own shapes.
+    images.append([[float((r + c) % 7) * 10 for c in range(12)] for r in range(9)])
+    images.append([[255.0 if (r + c) % 2 == 0 else 0.0 for c in range(5)] for r in range(5)])
+
+    batch = perceptual.phash_image_batch(images)
+    per_image = [perceptual.phash_image(im) for im in images]
+
+    assert len(batch) == len(images)
+    assert batch == per_image
+
+
 def test_image_distinct_inputs_are_far():
     fx = _load()
     a = perceptual.phash_image(_img(fx, "gradient_16x16"))

@@ -95,6 +95,28 @@ class TestScoreBlocksDuckdb:
         # the specific path was deleted (we don't expose it). Verifying the
         # call returned and didn't leak the connection is sufficient here.
 
+    def test_matches_score_blocks_parallel(self):
+        """Docstring claim: 'Signature mirrors score_blocks_parallel so it's a
+        drop-in via _get_block_scorer.' Run the SAME blocks/config through both
+        backends and assert they produce the same pair set and scores (order
+        may differ; compare as a (min, max) -> rounded-score dict, the
+        `_pairset` convention used elsewhere in this suite, e.g.
+        tests/test_fs_bucket_streaming.py)."""
+        from goldenmatch.core.scorer import score_blocks_parallel
+
+        def _pairset(pairs):
+            return {(min(a, b), max(a, b)): round(s, 4) for a, b, s in pairs}
+
+        block = _make_block(
+            [0, 1, 2, 3],
+            ["John", "Jon", "Robert", "Roberto"],
+        )
+        duckdb_pairs = score_blocks_duckdb([block], _mk(), set())
+        parallel_pairs = score_blocks_parallel([block], _mk(), set())
+
+        assert duckdb_pairs  # sanity: the fixture actually produces matches
+        assert _pairset(duckdb_pairs) == _pairset(parallel_pairs)
+
     def test_pipeline_routes_duckdb_backend(self):
         """_get_block_scorer returns score_blocks_duckdb for backend='duckdb'."""
         from goldenmatch.config.schemas import (

@@ -276,6 +276,47 @@ def test_boundary_selection_is_empty_on_an_unknown_row_count():
     assert _boundary_columns({"a": 5, "b": 900}, 0) == []
 
 
+def test_boundary_columns_nominates_the_same_columns_profile_columns_confirms():
+    """`_boundary_columns`' docstring claims the same SHAPE as the exact
+    full-frame pass `profile_columns` (`core/autoconfig.py`) already runs for
+    apparent surrogate keys: a cheap statistic nominates, an exact one
+    decides. Verify the two mechanisms agree on WHICH columns get nominated
+    for that exact confirm, on equivalent synthetic data.
+
+    Box-safe: `_boundary_columns` is pure arithmetic (no pyspark import) and
+    `profile_columns` is core (spark-free by convention), so both run without
+    a Spark session -- unlike Tasks 3/4's other spark-adjacent claims.
+    """
+    import polars as pl
+    from goldenmatch.core.autoconfig import _is_perfect_surrogate, profile_columns
+    from goldenmatch.spark.autoconfig import _boundary_columns
+
+    n = 200
+    frame = pl.DataFrame({
+        "record_id": [f"id-{i}" for i in range(n)],  # every row unique -> surrogate key
+        "city": [f"city{i % 7}" for i in range(n)],   # mid-range -> not a surrogate key
+    })
+
+    profiles = {p.name: p for p in profile_columns(frame)}
+    nominated_by_profile_columns = {
+        name for name, p in profiles.items() if p.full_cardinality_ratio is not None
+    }
+
+    # Equivalent-data approx stats for the Spark cheap pass: exact distinct
+    # counts stand in for approx_count_distinct (HyperLogLog is a few percent
+    # off, but neither column here is close to the 0.98 cut).
+    approx = {name: p.n_distinct for name, p in profiles.items()}
+    nominated_by_boundary_columns = set(_boundary_columns(approx, n))
+
+    assert nominated_by_profile_columns == {"record_id"}, nominated_by_profile_columns
+    assert nominated_by_boundary_columns == {"record_id"}, nominated_by_boundary_columns
+    assert nominated_by_profile_columns == nominated_by_boundary_columns
+
+    # And the nominated column's exact pass reaches the SAME verdict.
+    assert _is_perfect_surrogate(profiles["record_id"]) is True
+    assert _is_perfect_surrogate(profiles["city"]) is False
+
+
 def test_exact_stats_returns_empty_rather_than_raising_without_pyspark(monkeypatch):
     """A failed aggregate must leave the sampled statistics in place.
 

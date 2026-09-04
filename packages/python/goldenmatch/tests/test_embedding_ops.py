@@ -228,3 +228,20 @@ def test_empty_records():
     assert ev.n_records == 0
     assert ev.field_completeness == 0.0
     assert ev.summary()["n_records"] == 0
+
+
+def test_no_gold_zero_defaults_mirror_evalresult():
+    """CanonicalizationEval's docstring: tp/fp/fn (and precision/recall/f1) are
+    populated only when a gold is supplied, "mirroring EvalResult". Build both
+    WITHOUT gold-derived counts and check they share the same zero-default
+    convention: tp == fp == fn == 0 and precision == recall == f1 == 0.0."""
+    from goldenmatch.core.evaluate import EvalResult
+
+    cr = canonicalize_cluster(RECS)
+    ev = evaluate_canonicalization([cr])  # no gold -> construction path leaves tp/fp/fn unset
+    assert (ev.tp, ev.fp, ev.fn) == (0, 0, 0)
+    assert ev.precision == 0.0 and ev.recall == 0.0 and ev.f1 == 0.0
+
+    base = EvalResult()  # EvalResult's own zero-default state
+    assert (base.tp, base.fp, base.fn) == (0, 0, 0)
+    assert base.precision == 0.0 and base.recall == 0.0 and base.f1 == 0.0

@@ -128,21 +128,26 @@ types with different comparison metrics. Not comparable outputs, ever — same s
 
 ## Combined totals: the entire clean high-confidence population is now individually verified
 
-Stage 4b triaged the 25 mechanically-rescued claims (13 TRUE POSITIVE / 8 FALSE POSITIVE / 4
-PATTERN CLAIM). This document triages the remaining 20 (5 / 11 / 4). Together, that is **45 of
-45** — the complete `unenforced` + `coverage_enforced` population after PR #2863's ambiguity
-fix, with zero claims left unverified by extrapolation:
+Stage 4b triaged the 25 mechanically-rescued claims (14 TRUE POSITIVE / 7 FALSE POSITIVE / 4
+PATTERN CLAIM — corrected the same day from an original 13/8/4, see that document's own
+correction note: `_rc_union_isolated` turned out to already have a real test, invisible to
+coverage because it's gated behind `pytest.importorskip("ray")`). This document triages the
+remaining 20 (5 / 11 / 4). Together, that is **45 of 45** — the complete `unenforced` +
+`coverage_enforced` population after PR #2863's ambiguity fix, with zero claims left unverified
+by extrapolation:
 
 | | Stage 4b (25) | Stage 4c (20) | Combined (45) |
 | --- | ---: | ---: | ---: |
-| TRUE POSITIVE (confirmed enforced) | 13 | 5 | **18 (40%)** |
-| FALSE POSITIVE (confirmed real gap) | 8 | 11 | **19 (42%)** |
+| TRUE POSITIVE (confirmed enforced) | 14 | 5 | **19 (42%)** |
+| FALSE POSITIVE (confirmed real gap) | 7 | 11 | **18 (40%)** |
 | PATTERN CLAIM (not a real claim) | 4 | 4 | **8 (18%)** |
 
 The originally-reported "53 high-confidence findings" is now fully decomposed: 8 were
-ambiguous-target artifacts (PR #2863), and of the remaining 45, 18 are confirmed false alarms,
-8 need a docstring fix instead of a test, and **19 are confirmed real, individually-verified
+ambiguous-target artifacts (PR #2863), and of the remaining 45, 19 are confirmed false alarms,
+8 need a docstring fix instead of a test, and **18 are confirmed real, individually-verified
 gaps** — not an estimate, an exact count with a named test file (or absence of one) for each.
+(Same-day update: all 18 now have tests. See
+`docs/superpowers/specs/2026-09-04-stage4d-test-writing-results.md`.)
 
 ## What remains, precisely scoped now
 
