@@ -137,14 +137,21 @@ def test_low_confidence_findings_are_reported_not_hidden():
     """Splitting the buckets must not lose claims.
 
     Every symbol-level claim lands in exactly one of: unenforced (high
-    confidence), unenforced_low_confidence, unverified, or unresolvable.
-    A split that quietly dropped the low-confidence half would shrink the
-    reported number while the claims stayed exactly as unchecked.
+    confidence), unenforced_low_confidence, unenforced_ambiguous_target,
+    unverified, or unresolvable. A split that quietly dropped a bucket would
+    shrink the reported number while the claims stayed exactly as unchecked.
     """
     inv = inventory(DEFAULT_ROOT, DEFAULT_TESTS)
     c = inv["counts"]
     assert "unenforced_low_confidence" in c
-    total = c["unenforced"] + c["unenforced_low_confidence"] + c["unverified"] + c["unresolvable"]
+    assert "unenforced_ambiguous_target" in c
+    total = (
+        c["unenforced"]
+        + c["unenforced_low_confidence"]
+        + c["unenforced_ambiguous_target"]
+        + c["unverified"]
+        + c["unresolvable"]
+    )
     assert total == c["claims"] - c["module_level"], (
         f"buckets sum to {total} but there are "
         f"{c['claims'] - c['module_level']} symbol-level claims -- the "

@@ -78,6 +78,55 @@ def widget():
     assert found[0].keyword.lower() == "mirrors"
 
 
+def test_target_ambiguous_flags_a_name_declared_in_two_modules(tmp_path):
+    """A bare word like `helper` can be declared in more than one module --
+    `_resolve_target`'s first-match-wins rule still picks one (unchanged
+    behaviour, checked below), but the pick is not trustworthy: `report.py`
+    needs to know that so it does not report it as an ordinary, confidently-
+    wrong finding. Stage 4b found this for real: `score`, `row`, `keys`, and
+    (worst) `__init__` with 79 same-named candidates."""
+    (tmp_path / "a.py").write_text(
+        "def helper():\n    pass\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "b.py").write_text(
+        "def helper():\n    pass\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "c.py").write_text(
+        '''
+def claimant():
+    """Mirrors helper exactly."""
+'''.strip(),
+        encoding="utf-8",
+    )
+    found = [c for c in claims(tmp_path) if c.symbol == "claimant"]
+    assert len(found) == 1
+    assert found[0].target == "helper"
+    assert found[0].target_ambiguous is True
+
+
+def test_target_ambiguous_is_false_for_a_uniquely_declared_target(tmp_path):
+    """The common case -- a target declared in exactly one module -- must
+    not be flagged, or every ordinary finding would land in the wrong
+    bucket."""
+    (tmp_path / "a.py").write_text(
+        "def helper():\n    pass\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "b.py").write_text(
+        '''
+def claimant():
+    """Mirrors helper exactly."""
+'''.strip(),
+        encoding="utf-8",
+    )
+    found = [c for c in claims(tmp_path) if c.symbol == "claimant"]
+    assert len(found) == 1
+    assert found[0].target == "helper"
+    assert found[0].target_ambiguous is False
+
+
 def test_a_claim_never_resolves_to_its_own_claimant(tmp_path):
     """`def build(): "mirrors build"` is a self-reference, not a relationship."""
     (tmp_path / "m.py").write_text(
@@ -202,11 +251,7 @@ def test_the_incident_is_HIGH_confidence_despite_a_bare_target():
     for exactly this case.
     """
     package_symbols = declared_symbols(GOLDENMATCH)
-    found = [
-        c
-        for c in claims(FIXTURE, symbols=package_symbols)
-        if c.symbol == "_run_pipeline"
-    ]
+    found = [c for c in claims(FIXTURE, symbols=package_symbols) if c.symbol == "_run_pipeline"]
     assert found[0].target == "run_dedupe"
     assert found[0].confidence == "high", (
         "the motivating incident fell out of the high-confidence set; a gate "

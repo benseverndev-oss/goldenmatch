@@ -32,14 +32,17 @@ _EMPTY_CONTEXT = ""
 
 
 def function_spans(root: Path) -> dict[str, list[tuple[str, int, int]]]:
-    """Every function/method in every `.py` file under `root`, with its line
-    range. Keys are module paths relative to `root`, posix-separated.
+    """Every function/method AND class in every `.py` file under `root`,
+    with its line range. Keys are module paths relative to `root`,
+    posix-separated. The name is legacy (classes were added later, see
+    `_collect_spans`); the return shape did not need to change to grow this.
 
-    Deliberately general -- every function, not a naming-convention subset.
-    `parity_coverage.py:_py_function_spans` looks similar but answers a
-    narrower, unrelated question (only names ending `_py`, Companion A's
-    scope); that function is module-private and this one is not a call to
-    it, it is the same AST technique applied to a different question.
+    Deliberately general -- every function (and class), not a
+    naming-convention subset. `parity_coverage.py:_py_function_spans` looks
+    similar but answers a narrower, unrelated question (only names ending
+    `_py`, Companion A's scope); that function is module-private and this
+    one is not a call to it, it is the same AST technique applied to a
+    different question.
     """
     out: dict[str, list[tuple[str, int, int]]] = {}
     for path in sorted(root.rglob("*.py")):
@@ -58,13 +61,26 @@ def function_spans(root: Path) -> dict[str, list[tuple[str, int, int]]]:
 def _collect_spans(node: ast.AST, prefix: list[str], out: list[tuple[str, int, int]]) -> None:
     """Walk `node`'s direct children, recursing into class/function bodies so
     nested functions and methods get dotted names (`Widget.method`) and their
-    OWN enclosing scope's line range is not what gets recorded for them."""
+    OWN enclosing scope's line range is not what gets recorded for them.
+
+    A `ClassDef` ALSO gets its own entry, spanning the whole class body (not
+    just recursing into it) -- a claim can be attached to a class's own
+    docstring, not just a function's, and without this such a claim's
+    claimant or target has no span to look up a coverage context for at all
+    (found triaging Stage 4b: `VectorIndex`, `LintInput`, `CanonicalizationEval`,
+    `FreshnessWithMaxAgeStrategy` all carry claims this way). Coverage for a
+    class's own span is a genuine proxy for "was this class exercised": any
+    line inside it, including every method's body, counts, since a
+    class-level claim is a claim about the class's behavior as a whole, not
+    one specific method."""
     for child in ast.iter_child_nodes(node):
         if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
             name = ".".join([*prefix, child.name])
             out.append((name, child.lineno, child.end_lineno or child.lineno))
             _collect_spans(child, [*prefix, child.name], out)
         elif isinstance(child, ast.ClassDef):
+            name = ".".join([*prefix, child.name])
+            out.append((name, child.lineno, child.end_lineno or child.lineno))
             _collect_spans(child, [*prefix, child.name], out)
         else:
             _collect_spans(child, prefix, out)
