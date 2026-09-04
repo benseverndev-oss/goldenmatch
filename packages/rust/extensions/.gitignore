@@ -10,7 +10,8 @@ Cargo.lock
 !goldenembed/Cargo.lock
 # Same rationale for goldencheck-native: the publish-goldencheck-native workflow
 # builds it as a verified wheel, so pin the exact resolved deps. (goldencheck-core
-# is a pyo3-free library dep -- its lock stays ignored, like score-core/graph-core.)
+# is a pyo3-free library dep -- its lock stays ignored, like graph-core; score-core
+# WAS such a crate too until the tinyvec incident below promoted it to pinned.)
 !goldencheck-native/Cargo.lock
 # Same rationale for score-wasm: build_wasm.sh produces a shipped .wasm artifact
 # and wasm-bindgen-cli MUST match the exact wasm-bindgen crate version resolved
@@ -25,6 +26,31 @@ Cargo.lock
 # brotli 8.0.3 (`StandardAlloc` no longer satisfies `Allocator<T>`); pinning the
 # lock (brotli held at 8.0.2) keeps the verified resolve reproducible.
 !datafusion-udf/Cargo.lock
+# Same rationale for postgres: rust_pgrx installs and psql-smoke-tests this
+# extension as a verified artifact via `cargo pgrx install` (which has no
+# --locked flag to pass -- confirmed against pgrx 0.12.9's own CLI source,
+# so a tracked lock is the ONLY way to pin this build), so its deps must NOT
+# float. A fresh resolve on a checkout with no lock pulled tinyvec 1.13.0
+# (a real upstream regression: "cannot find macro `vec` in this scope")
+# where 1.12.0 -- now pinned here -- builds clean. Same incident shape as
+# the datafusion-udf entry above (brotli 8.0.3 there).
+!postgres/Cargo.lock
+# score-core, transforms-core, fs-core and fs-wasm are pyo3-free library
+# deps (no shipped artifact), so per the goldencheck-core comment above
+# their locks would normally stay floating. But the `rust` job's `cargo
+# test --manifest-path <crate>/Cargo.toml` step (and, for fs-wasm, the
+# fixture_drift job's `wasm-pack build`) runs the SAME tinyvec-1.13.0 fresh
+# resolve every required CI run repeats -- so an unpinned "library dep"
+# crate can still fail a required job on any unrelated PR the moment
+# crates.io's latest compatible version regresses, exactly what happened
+# here (confirmed live: 2026-09-04 run 33820649810, "cannot find macro
+# `vec` in this scope", same incident shape as datafusion-udf/postgres
+# above). Pinning is about the CI step's reproducibility, not artifact
+# shipping -- extend it to any floating crate CI directly builds or tests.
+!score-core/Cargo.lock
+!transforms-core/Cargo.lock
+!fs-core/Cargo.lock
+!fs-wasm/Cargo.lock
 *.so
 *.dylib
 *.dll

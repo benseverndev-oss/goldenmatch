@@ -51,7 +51,11 @@ function run(cmd, args, cwd) {
 
 // 1. Build the wasm (wasm-opt disabled in the crate's Cargo.toml metadata so the
 //    build is hermetic — no binaryen download in a network-restricted CI).
-run("wasm-pack", ["build", wasmCrate, "--target", "web"], tsPkg);
+// --locked (forwarded to `cargo build` via wasm-pack's EXTRA_OPTIONS) pins
+// fs-wasm's now-tracked Cargo.lock: a floating resolve here hit a real
+// upstream tinyvec 1.13.0 regression ("cannot find macro `vec`") mid-CI-run
+// (2026-09-04, run 33820649810) — see packages/rust/extensions/.gitignore.
+run("wasm-pack", ["build", wasmCrate, "--target", "web", "--locked"], tsPkg);
 
 mkdirSync(outWasmDir, { recursive: true });
 

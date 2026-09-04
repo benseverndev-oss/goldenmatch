@@ -2317,20 +2317,20 @@ jobs:
       # tests + the jellyfish parity oracle explicitly.
       - run: cargo test --manifest-path goldenphonetic-core/Cargo.toml
       - run: cargo clippy --manifest-path goldenphonetic-core/Cargo.toml --all-targets -- -D warnings
-      - run: cargo test --manifest-path score-core/Cargo.toml
-      - run: cargo clippy --manifest-path score-core/Cargo.toml -- -D warnings
+      - run: cargo test --locked --manifest-path score-core/Cargo.toml
+      - run: cargo clippy --locked --manifest-path score-core/Cargo.toml -- -D warnings
       # score-cabi: the C ABI over score-core, for JVM (Panama/JNI) hosts. Its
       # own [workspace] like every other pyo3-free sibling, so it needs its own
       # lines here -- and it gets them in the BLOCKING `rust` job rather than an
       # informational lane, because it wraps the canonical scorer dispatcher and
       # its whole claim is that a score is identical across bindings. An
       # unbuilt binding cannot make that claim.
-      - run: cargo test --manifest-path score-cabi/Cargo.toml
-      - run: cargo clippy --manifest-path score-cabi/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --locked --manifest-path score-cabi/Cargo.toml
+      - run: cargo clippy --locked --manifest-path score-cabi/Cargo.toml --all-targets -- -D warnings
       # Build the cdylib too: `cargo test` links the rlib, so a cdylib-only
       # failure (a symbol that does not export, a link error) would pass the
       # tests and ship a library no host can load.
-      - run: cargo build --release --manifest-path score-cabi/Cargo.toml
+      - run: cargo build --release --locked --manifest-path score-cabi/Cargo.toml
       # score-jni: the JNI binding over score-cabi, so a Spark executor JVM calls
       # the kernel directly instead of forking a Python worker per batch. Its own
       # [workspace] again, so its own lines. Gated HERE as well as in the
@@ -2352,11 +2352,11 @@ jobs:
       # different golden record with no error attached.
       - run: cargo test --manifest-path survivorship-core/Cargo.toml
       - run: cargo clippy --manifest-path survivorship-core/Cargo.toml --all-targets -- -D warnings
-      - run: cargo test --manifest-path transforms-core/Cargo.toml
-      - run: cargo clippy --manifest-path transforms-core/Cargo.toml --all-targets -- -D warnings
-      - run: cargo test --manifest-path score-jni/Cargo.toml
-      - run: cargo clippy --manifest-path score-jni/Cargo.toml --all-targets -- -D warnings
-      - run: cargo build --release --manifest-path score-jni/Cargo.toml
+      - run: cargo test --locked --manifest-path transforms-core/Cargo.toml
+      - run: cargo clippy --locked --manifest-path transforms-core/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --locked --manifest-path score-jni/Cargo.toml
+      - run: cargo clippy --locked --manifest-path score-jni/Cargo.toml --all-targets -- -D warnings
+      - run: cargo build --release --locked --manifest-path score-jni/Cargo.toml
       # fs-core (2026-07-17) is the pyo3-free single source of truth for the
       # Fellegi-Sunter block-scoring math (name/ensemble/tf scorers + normalize),
       # its own [workspace] path-dep of `native`. Exercised indirectly by the
@@ -2364,10 +2364,10 @@ jobs:
       # run. fs-wasm is the wasm-bindgen wrapper (TS-WASM analogue of `native`);
       # host `cargo test`/clippy validate its rlib logic (the wasm32 build runs in
       # the typescript lane's drift guard).
-      - run: cargo test --manifest-path fs-core/Cargo.toml
-      - run: cargo clippy --manifest-path fs-core/Cargo.toml --all-targets -- -D warnings
-      - run: cargo test --manifest-path fs-wasm/Cargo.toml
-      - run: cargo clippy --manifest-path fs-wasm/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --locked --manifest-path fs-core/Cargo.toml
+      - run: cargo clippy --locked --manifest-path fs-core/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --locked --manifest-path fs-wasm/Cargo.toml
+      - run: cargo clippy --locked --manifest-path fs-wasm/Cargo.toml --all-targets -- -D warnings
       # goldenflow-core (owned checksummed-identifier kernels, Wave 0b) is its own
       # [workspace] pyo3-free sibling too — excluded from the bridge workspace, so
       # `cargo clippy --workspace` above never touches it and its clippy was DEAD in
@@ -3498,7 +3498,7 @@ jobs:
       - name: Build the native scorer library for aarch64
         run: |
           set -euo pipefail
-          cargo build --release \
+          cargo build --release --locked \
             --manifest-path packages/rust/extensions/score-jni/Cargo.toml
           SO=packages/rust/extensions/score-jni/target/release/libgoldenmatch_score_jni.so
           file "$SO"
@@ -3653,7 +3653,7 @@ jobs:
       - name: Build the native scorer library (JNI)
         run: |
           set -euo pipefail
-          cargo build --release \
+          cargo build --release --locked \
             --manifest-path packages/rust/extensions/score-jni/Cargo.toml
           SO=packages/rust/extensions/score-jni/target/release/libgoldenmatch_score_jni.so
           ls -lh "$SO"

@@ -1,2 +1,12 @@
 /target
-Cargo.lock
+# Cargo.lock IS committed here, on purpose -- score-jni links this crate's
+# rlib into ITS shipped cdylib (the Spark JVM jar's native library), and
+# this crate's own cdylib is separately built in CI as a verified artifact
+# too ("Build the cdylib too" -- ci.yml). Its deps must NOT float. A fresh
+# resolve on a checkout with no lock pulled tinyvec 1.13.0 (a real upstream
+# regression: "cannot find macro `vec` in this scope") where 1.12.0 --
+# already pinned here -- builds clean. Same rationale and same incident
+# shape as packages/rust/extensions/.gitignore's datafusion-udf entry
+# (brotli 8.0.3 there). The parent .gitignore's blanket `Cargo.lock` rule
+# still applies to this directory unless explicitly negated here.
+!Cargo.lock
