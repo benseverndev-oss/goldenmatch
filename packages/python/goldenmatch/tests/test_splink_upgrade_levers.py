@@ -1319,3 +1319,41 @@ def test_measure_mean_token_set_size_mirrors_measure_mean_length_edge_cases():
     mean_tokens = _measure_mean_token_set_size(df_present, "skills", [])
     assert mean_len == pytest.approx((5 + 3) / 2)  # len("a|b|c")=5, len("d|e")=3
     assert mean_tokens == pytest.approx((3 + 2) / 2)  # {a,b,c}=3, {d,e}=2
+
+
+# ── _measure_mean_length mirrors tf_tables.value_frequencies ───────────────
+
+
+def test_measure_mean_length_mirrors_value_frequencies_filtering():
+    """``_measure_mean_length``'s docstring claims it "Mirrors the per-value
+    transform loop in ``goldenmatch.core.tf_tables.value_frequencies``" --
+    same ``apply_transforms`` semantics, same null/empty-string filtering,
+    just collecting lengths instead of frequencies. Cross-check both
+    functions against the SAME frames so a filtering divergence shows up as
+    a length/frequency-count mismatch rather than passing in isolation.
+    """
+    from goldenmatch.config.splink_upgrade import _measure_mean_length
+    from goldenmatch.core.tf_tables import value_frequencies
+
+    # (a) column absent from the frame -> None / {}.
+    df_missing = pl.DataFrame({"other": ["a", "b"]})
+    assert _measure_mean_length(df_missing, "name", []) is None
+    assert value_frequencies(df_missing, "name", []) == {}
+
+    # (b) every value null/empty -> None / {}.
+    df_empty = pl.DataFrame({"name": [None, "", ""]})
+    assert _measure_mean_length(df_empty, "name", []) is None
+    assert value_frequencies(df_empty, "name", []) == {}
+
+    # (c) a transform ("digits_only") turns a non-empty value into "" --
+    # both functions must skip that row identically POST-transform, not
+    # just pre-transform.
+    df_mixed = pl.DataFrame({"name": ["abc", "123", None, "45"]})
+    mean_len = _measure_mean_length(df_mixed, "name", ["digits_only"])
+    freqs = value_frequencies(df_mixed, "name", ["digits_only"])
+    # "abc" -> "" (dropped by both), "123" -> "123" (len 3), None dropped,
+    # "45" -> "45" (len 2).
+    assert mean_len == pytest.approx((3 + 2) / 2)
+    assert set(freqs) == {"123", "45"}
+    assert freqs["123"] == pytest.approx(0.5)
+    assert freqs["45"] == pytest.approx(0.5)

@@ -329,3 +329,39 @@ def test_unfingerprintable_row_keeps_hash_fallback(monkeypatch):
     monkeypatch.setattr(R, "record_fingerprint", lambda _: (_ for _ in ()).throw(ValueError()))
     primary, cands = R._record_id_candidates({"name": "Ann"}, "acme", None)
     assert primary.startswith("acme:hash:") and cands == [primary]
+
+
+def test_referenced_row_ids_mirrors_the_cluster_loops_skip_rules():
+    """``_referenced_row_ids`` must reach exactly the rows the resolve body's
+    own cluster-iteration loop reads -- same skip rules: a cluster with no
+    members is skipped, and a singleton (``len(members) == 1``) is skipped
+    only when ``emit_singletons`` is False. Reproduces the loop's own
+    conditions (resolve.py's cluster-iteration section: ``if not members:
+    continue`` / ``if size == 1 and not emit_singletons: continue``) as an
+    independent reference so a future edit to either side that breaks the
+    mirror is caught."""
+    from goldenmatch.identity.resolve import _referenced_row_ids
+
+    def loop_reads(cluster_items, emit_singletons):
+        seen: set[int] = set()
+        for _cid, info in cluster_items:
+            members = list(info.get("members") or [])
+            if not members:
+                continue
+            if len(members) == 1 and not emit_singletons:
+                continue
+            for m in members:
+                seen.add(int(m))
+        return seen
+
+    cluster_items = [
+        (1, {"members": []}),        # empty -> always skipped
+        (2, {}),                     # no "members" key -> treated as empty
+        (3, {"members": [10]}),      # singleton
+        (4, {"members": [11, 12]}),  # multi-member -> always included
+        (5, {"members": [13]}),      # another singleton
+    ]
+    for emit_singletons in (True, False):
+        assert _referenced_row_ids(cluster_items, emit_singletons) == loop_reads(
+            cluster_items, emit_singletons
+        )

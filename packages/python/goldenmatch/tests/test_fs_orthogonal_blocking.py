@@ -358,3 +358,42 @@ def test_overlap_gate_inert_without_frame():
         f for p in out.passes if getattr(p, "additive", False) for f in p.fields
     }
     assert {"first_name", "surname", "birth_place"} <= additive
+
+
+class TestPassSpecsMirrorsBuildBlockKeyExpr:
+    """``_pass_specs``'s docstring claims its ``[(field, transforms), ...]``
+    output "mirrors how the blocker derives the block key" -- i.e. the same
+    per-field ``field_transforms``-vs-key-level-``transforms`` dispatch as
+    ``goldenmatch.core.blocker._build_block_key_expr``."""
+
+    def test_field_transforms_override_per_field(self):
+        from goldenmatch.core.autoconfig import _pass_specs
+        from goldenmatch.core.blocker import _build_block_key_expr
+
+        key_config = BlockingKeyConfig(
+            fields=["first", "last", "zip"],
+            transforms=["lowercase"],
+            field_transforms={"last": ["uppercase"]},
+        )
+        specs = _pass_specs(key_config)
+        assert dict(specs) == {
+            "first": ("lowercase",),
+            "last": ("uppercase",),
+            "zip": ("lowercase",),
+        }
+
+        # Cross-check against the real block-key expression on sample data:
+        # each field's actual transform, per _build_block_key_expr, must equal
+        # what _pass_specs says it used.
+        import polars as pl
+
+        df = pl.DataFrame({"first": ["Alice"], "last": ["Smith"], "zip": ["Ab1"]})
+        key_col = df.with_columns(_build_block_key_expr(key_config))["__block_key__"][0]
+        assert key_col == "alice||SMITH||ab1"
+
+    def test_no_field_transforms_falls_back_to_key_level(self):
+        from goldenmatch.core.autoconfig import _pass_specs
+
+        key_config = BlockingKeyConfig(fields=["a", "b"], transforms=["strip"])
+        specs = _pass_specs(key_config)
+        assert dict(specs) == {"a": ("strip",), "b": ("strip",)}

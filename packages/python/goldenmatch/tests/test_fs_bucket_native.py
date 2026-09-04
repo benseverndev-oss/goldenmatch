@@ -222,6 +222,41 @@ def test_fs_bucket_native_env_off_reproduces_per_block_byte_for_byte(monkeypatch
     assert _pairset(via_bucket) == _pairset(ref)
 
 
+# ── 2b. _fs_bucket_batch_enabled: batched (#869) == per-block loop, non-native ─
+
+
+def test_fs_bucket_batch_matches_per_block_loop_when_native_declined(monkeypatch):
+    """When the native kernel is declined, `_fs_bucket_batch_enabled` (default
+    ON) coalesces small blocks into one `score_probabilistic_vectorized_batch`
+    call. Its docstring claims this is byte-identical to the per-block loop
+    (GOLDENMATCH_FS_BUCKET_BATCH=0, the parity escape hatch). Force native OFF
+    so the batch/per-block branch under test is the one actually exercised."""
+    df = _oversized_df()
+    mk = _mk()
+    blocking = BlockingConfig(
+        strategy="static",
+        keys=[BlockingKeyConfig(fields=["zip"])],
+        max_block_size=3,
+        skip_oversized=True,
+    )
+    em = train_em(df, mk, n_sample_pairs=200)
+
+    from goldenmatch.backends.score_buckets import score_buckets
+
+    monkeypatch.setenv("GOLDENMATCH_FS_BUCKET_NATIVE", "0")
+
+    monkeypatch.setenv("GOLDENMATCH_FS_BUCKET_BATCH", "1")
+    got_batch = score_buckets(df, blocking, mk, set(), em_result=em)
+
+    monkeypatch.setenv("GOLDENMATCH_FS_BUCKET_BATCH", "0")
+    got_perblock = score_buckets(df, blocking, mk, set(), em_result=em)
+
+    assert _pairset(got_batch) == _pairset(got_perblock)
+    # Oversized block A (rows 1..5) must still contribute no pairs on either path.
+    for a, b in _pairset(got_batch):
+        assert not (a <= 5 and b <= 5)
+
+
 # ── 3. Routing ───────────────────────────────────────────────────────────────
 
 

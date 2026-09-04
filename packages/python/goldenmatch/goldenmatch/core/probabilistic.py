@@ -4944,11 +4944,14 @@ def score_probabilistic_blocks_batched(
 def _fs_scoring_workers() -> int:
     """Thread-pool size for parallel probabilistic block scoring.
 
-    ``GOLDENMATCH_FS_WORKERS`` overrides; default is ``min(cpu_count(), 16)``
-    (mirrors the weighted path's ``_DEFAULT_MAX_WORKERS``). ``1`` forces the
-    sequential unit loop — the byte-identical, deterministic reference path.
-    Both FS kernels (native Rust, vectorized ``rapidfuzz.cdist``) release the
-    GIL, so threads give real parallelism.
+    ``GOLDENMATCH_FS_WORKERS`` overrides; default is ``min(cpu_count(), 16)``.
+    This does NOT track the weighted path's ``_DEFAULT_MAX_WORKERS`` (core/
+    scorer.py) as-is today: #303 pinned that constant at a fixed 4 (RSS
+    pathology on a 16-core runner) before this function was added in #1566
+    with its own independent cpu-count-based default -- the two have diverged
+    since. ``1`` forces the sequential unit loop — the byte-identical,
+    deterministic reference path. Both FS kernels (native Rust, vectorized
+    ``rapidfuzz.cdist``) release the GIL, so threads give real parallelism.
     """
     val = os.environ.get("GOLDENMATCH_FS_WORKERS")
     if val is not None:

@@ -156,3 +156,39 @@ def test_controller_run_attaches_execution_plan_to_history():
     assert plan.rule_name is not None
     # 80-row fixture hits the simple plan (rule 2); backend is the real selector's choice.
     assert plan.backend == _scoring_backend()
+
+
+def test_build_planner_capabilities_bucket_available_matches_scoring_backend(
+    monkeypatch,
+):
+    """``build_planner_capabilities``'s docstring claims ``bucket_available`` is
+    "the same check as ``_scoring_backend()``" -- verify the two independently
+    computed booleans actually agree across the opt-out env var, for both
+    values of whether the native block-scoring kernel is enabled."""
+    from goldenmatch.core.autoconfig_native import build_planner_capabilities
+
+    for bucket_env in ("1", "0"):
+        monkeypatch.setenv("GOLDENMATCH_PLANNER_BUCKET", bucket_env)
+        caps = build_planner_capabilities(None)
+        assert caps["bucket_available"] == (_scoring_backend() == "bucket"), (
+            f"bucket_available diverged from _scoring_backend() with "
+            f"GOLDENMATCH_PLANNER_BUCKET={bucket_env!r}"
+        )
+
+
+def test_build_planner_capabilities_ray_fields_match_planner_rules_helpers(
+    monkeypatch,
+):
+    """``ray_available``/``ray_auto_select`` claim to mirror ``_has_ray()`` and
+    ``_ray_auto_select_enabled()`` from ``autoconfig_planner_rules`` verbatim."""
+    from goldenmatch.core.autoconfig_native import build_planner_capabilities
+    from goldenmatch.core.autoconfig_planner_rules import (
+        _has_ray,
+        _ray_auto_select_enabled,
+    )
+
+    monkeypatch.setenv("GOLDENMATCH_ENABLE_DISTRIBUTED_RAY", "1")
+    caps = build_planner_capabilities({"user_backend": "ray"})
+    assert caps["ray_available"] == _has_ray()
+    assert caps["ray_auto_select"] == _ray_auto_select_enabled()
+    assert caps["user_backend"] == "ray"

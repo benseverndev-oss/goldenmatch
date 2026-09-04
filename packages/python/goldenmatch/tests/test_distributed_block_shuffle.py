@@ -102,6 +102,29 @@ def test_has_colocation_plan():
     assert _has_colocation_plan(GoldenMatchConfig()) is False
 
 
+def test_dedup_num_partitions_mirrors_golden_build_heuristic(monkeypatch):
+    """_dedup_num_partitions's docstring claims to mirror "the golden build's
+    ``min(256, max(4, cpu*4))`` heuristic" -- the same formula used as the
+    ``num_partitions`` default in
+    ``distributed.pipeline.build_golden_records_distributed``
+    (``goldenmatch/distributed/pipeline.py``, and duplicated again in
+    ``distributed/clustering.py``'s WCC repartition). All three read
+    ``os.cpu_count() or 16`` and compute the identical expression."""
+    import os as _os
+
+    from goldenmatch.distributed.scoring import _dedup_num_partitions
+
+    for cpu in (1, 4, 16, 64, 200):
+        monkeypatch.setattr(_os, "cpu_count", lambda cpu=cpu: cpu)
+        expected = min(256, max(4, cpu * 4))
+        assert _dedup_num_partitions() == expected
+
+    # No-cpu-count environment: falls back to 16 (matching the golden build's
+    # own ``os.cpu_count() or 16``), i.e. min(256, max(4, 16*4)) == 64.
+    monkeypatch.setattr(_os, "cpu_count", lambda: None)
+    assert _dedup_num_partitions() == 64
+
+
 # ── co-location ──────────────────────────────────────────────────────
 
 

@@ -582,6 +582,24 @@ def test_sequential_bounded_scoring_escape_parity(tmp_path, monkeypatch):
         assert _sorted_golden(fused["golden_path"]) == _sorted_golden(bounded["golden_path"])
 
 
+# ── _fs_ooc_workers: mirrors the in-memory FS scorer's worker default ────────
+
+
+def test_fs_ooc_workers_mirrors_in_memory_fs_scoring_workers_default(monkeypatch):
+    """`_fs_ooc_workers`'s docstring claims its default mirrors the in-memory
+    FS scorer's `_fs_scoring_workers` (`core.probabilistic`): both read
+    `GOLDENMATCH_FS_WORKERS` and default to `min(16, cpu)`. Confirm the two
+    resolve identically, both on the default and on a valid override."""
+    from goldenmatch.backends.fs_out_of_core import _fs_ooc_workers
+    from goldenmatch.core.probabilistic import _fs_scoring_workers
+
+    monkeypatch.delenv("GOLDENMATCH_FS_WORKERS", raising=False)
+    assert _fs_ooc_workers() == _fs_scoring_workers()
+
+    monkeypatch.setenv("GOLDENMATCH_FS_WORKERS", "3")
+    assert _fs_ooc_workers() == _fs_scoring_workers() == 3
+
+
 # ── resolve_fs_block_source: the single knob unifying the two streaming lanes ──
 
 def test_resolve_fs_block_source_default_is_eager(monkeypatch):

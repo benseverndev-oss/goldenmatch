@@ -113,6 +113,50 @@ def test_materialize_cluster_dict_matches_in_memory_shape():
     assert partitions(in_mem) == partitions(distributed)
 
 
+def test_materialize_cluster_dict_confidence_matches_in_memory():
+    """_attach_quality_metadata's docstring claims to mirror the in-memory
+    build_clusters confidence/cluster_quality semantics (core/cluster.py
+    compute_cluster_confidence + the weak-downgrade test in build_clusters).
+
+    Star topology 1-2, 1-3 (score 0.9) + 1-4 (score 0.1): 3 of the 6 possible
+    edges among 4 members are present, so edge-density connectivity (0.5)
+    differs from avg_edge (~0.633). In-memory uses edge-density for
+    ``connectivity`` and downgrades confidence *0.7 when
+    ``avg_edge - min_edge > weak_cluster_threshold`` (0.3); the distributed
+    path sets ``connectivity = avg_edge`` and instead classifies weak as
+    ``confidence < 0.3`` with no downgrade multiplier -- a different formula,
+    not a mirror.
+    """
+    from goldenmatch.core.cluster import build_clusters
+    from goldenmatch.distributed.clustering import (
+        build_clusters_distributed,
+        materialize_cluster_dict,
+        pairs_list_to_dataset,
+    )
+
+    pairs = [(1, 2, 0.9), (1, 3, 0.9), (1, 4, 0.1)]
+    all_ids = [1, 2, 3, 4]
+    in_mem = build_clusters(pairs, all_ids=all_ids)
+    pairs_ds = pairs_list_to_dataset(pairs)
+    clusters_ds = build_clusters_distributed(pairs_ds, all_ids=all_ids)
+    distributed = materialize_cluster_dict(clusters_ds, pairs_ds)
+
+    in_mem_c = next(iter(in_mem.values()))
+    dist_c = next(iter(distributed.values()))
+
+    assert dist_c["cluster_quality"] == in_mem_c["cluster_quality"], (
+        f"in-memory={in_mem_c['cluster_quality']!r} "
+        f"(confidence={in_mem_c['confidence']!r}) vs "
+        f"distributed={dist_c['cluster_quality']!r} "
+        f"(confidence={dist_c['confidence']!r}) -- "
+        "_attach_quality_metadata does NOT mirror build_clusters semantics"
+    )
+    assert dist_c["confidence"] == pytest.approx(in_mem_c["confidence"]), (
+        f"in-memory confidence={in_mem_c['confidence']!r} vs "
+        f"distributed confidence={dist_c['confidence']!r}"
+    )
+
+
 def test_materialize_cluster_dict_includes_pair_scores():
     from goldenmatch.distributed.clustering import (
         build_clusters_distributed,
