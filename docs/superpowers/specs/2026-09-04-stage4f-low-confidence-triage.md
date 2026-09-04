@@ -72,20 +72,29 @@ test in `tests/test_chunked.py`; not fixed (would mean threading
 `_build_block_key_expr` directly, as its own docstring already half-suggests
 — a real fix, not a docstring correction).
 
-**2. `distributed/clustering.py::_attach_quality_metadata` computes cluster
-confidence differently than the in-memory path.** Docstring claims it
-mirrors `core/cluster.py`'s `build_clusters`/`compute_cluster_confidence`.
-Confirmed false by calling both production functions directly on the same
-star-topology cluster (`1-2`:0.9, `1-3`:0.9, `1-4`:0.1): in-memory computes
-`confidence=0.266`, quality `"weak"` (edge-density connectivity, ×0.7
-downgrade when `avg_edge - min_edge` exceeds a threshold); distributed
-computes `confidence=0.420`, quality `"strong"` (sets `connectivity =
-avg_edge` directly, downgrades only below a flat `0.3` threshold, no
-downgrade logic at all). **The identical cluster is classified weak via the
-in-memory path and strong via the distributed path.** Pinned with a test in
-`tests/test_distributed_clustering.py` (Ray-gated, correctly skips locally
-per this repo's own policy, verified independently by calling the
-production functions directly without Ray); not fixed.
+**2. `distributed/clustering.py::_attach_quality_metadata` computed cluster
+confidence differently than the in-memory path -- FIXED, same day.**
+Docstring claimed it mirrors `core/cluster.py`'s
+`build_clusters`/`compute_cluster_confidence`. Confirmed false by calling
+both production functions directly on the same star-topology cluster
+(`1-2`:0.9, `1-3`:0.9, `1-4`:0.1): in-memory computed `confidence=0.266`,
+quality `"weak"`; distributed computed `confidence=0.420`, quality
+`"strong"` -- the identical cluster classified weak one way, strong the
+other. Root cause, found on review: `compute_cluster_confidence` routes
+through the native Rust kernel when enabled
+(`native_module().cluster_confidence(edges, size)`) -- this project's own
+standing principle is that the Rust kernel is the reference, not an
+optional fast path (`project_rust_is_the_reference`) --
+but `_attach_quality_metadata` never called it at all, reimplementing its
+own hand-written formula instead. Not a design choice between two valid
+formulas; a genuine failure to route through the established reference
+implementation. Fixed by having `_attach_quality_metadata` call
+`compute_cluster_confidence` directly, then apply the identical
+`weak_cluster_threshold` downgrade `build_clusters` applies afterward --
+verified against the same star-topology example, now agrees exactly
+(`weak`, `confidence=0.266` on both paths). The pinning test in
+`tests/test_distributed_clustering.py` (Ray-gated, correctly skips locally)
+now asserts genuine parity rather than an `xfail`.
 
 **3. `core/probabilistic.py::_fs_scoring_workers`'s default has drifted from
 `_DEFAULT_MAX_WORKERS`, the function it claims to mirror.** Git history:

@@ -1621,22 +1621,37 @@ def materialize_cluster_dict(
     return result
 
 
-def _attach_quality_metadata(clusters: dict[int, dict]) -> None:
+def _attach_quality_metadata(
+    clusters: dict[int, dict], weak_cluster_threshold: float = 0.3
+) -> None:
     """Populate confidence, bottleneck_pair, cluster_quality on each cluster.
 
-    Mirrors the in-memory build_clusters semantics. Mutates in place.
+    Was a hand-written reimplementation that never called
+    core.cluster.compute_cluster_confidence -- and so never routed through
+    the native kernel that function uses when enabled, silently diverging
+    from the in-memory build_clusters path (this project's own standing
+    principle: the Rust kernel is the reference, not an optional fast path
+    -- confirmed as a real, empirically-reproducible divergence, see
+    docs/superpowers/specs/2026-09-04-stage4f-low-confidence-triage.md).
+    Now calls the SAME compute_cluster_confidence() build_clusters calls,
+    then applies the identical weak_cluster_threshold downgrade build_clusters
+    applies afterward (core/cluster.py's own cluster_quality_assignment
+    stage) -- genuinely mirrors the in-memory semantics rather than merely
+    claiming to. Mutates in place.
     """
+    from goldenmatch.core.cluster import compute_cluster_confidence
+
     for cinfo in clusters.values():
-        scores = list(cinfo["pair_scores"].values())
-        if not scores:
-            cinfo["confidence"] = 1.0
-            cinfo["bottleneck_pair"] = None
+        conf = compute_cluster_confidence(cinfo["pair_scores"], cinfo["size"])
+        cinfo["confidence"] = conf["confidence"]
+        cinfo["bottleneck_pair"] = conf["bottleneck_pair"]
+        min_edge, avg_edge = conf["min_edge"], conf["avg_edge"]
+        if (
+            min_edge is not None
+            and avg_edge is not None
+            and avg_edge - min_edge > weak_cluster_threshold
+        ):
+            cinfo["cluster_quality"] = "weak"
+            cinfo["confidence"] *= 0.7
+        else:
             cinfo["cluster_quality"] = "strong"
-            continue
-        min_edge = min(scores)
-        avg_edge = sum(scores) / len(scores)
-        connectivity = avg_edge
-        cinfo["confidence"] = 0.4 * min_edge + 0.3 * avg_edge + 0.3 * connectivity
-        weakest = min(cinfo["pair_scores"].items(), key=lambda kv: kv[1])
-        cinfo["bottleneck_pair"] = weakest[0]
-        cinfo["cluster_quality"] = "weak" if cinfo["confidence"] < 0.3 else "strong"
