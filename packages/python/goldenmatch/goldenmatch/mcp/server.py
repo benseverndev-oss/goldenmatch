@@ -2290,7 +2290,10 @@ _DEFAULT_TRANSFORMS = ["lowercase", "strip"]
 
 
 def _tool_score_strings(a: str, b: str, scorer: str) -> dict:
-    """Score two strings (mirrors TS `score_strings` -> `{scorer, score}`)."""
+    """Score two strings. Wraps `_api.score_strings` directly; the wire shape
+    (`{scorer, score}`) is meant to match the TypeScript SDK's `score_strings`
+    tool of the same name -- a cross-language contract no Python test in this
+    repo can check."""
     from goldenmatch._api import score_strings
 
     try:

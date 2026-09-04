@@ -339,9 +339,11 @@ def simhash_band_hashes(sig: list[int], num_bands: int) -> list[int]:
 
     ``len(sig)`` must be divisible by ``num_bands``. For band ``b`` the bucket id
     is ``base_hash(le8(b) ++ bytes(sig[b*r:(b+1)*r]))`` — the band index as 8
-    little-endian bytes, then one byte (0 or 1) per plane-bit in the band. Mirrors
-    the MinHash :func:`band_hashes` byte layout (u64 band-index prefix + per-element
-    bytes).
+    little-endian bytes, then one byte (0 or 1) per plane-bit in the band. Follows
+    the same byte-layout CONVENTION as the MinHash :func:`band_hashes` (a u64
+    band-index prefix, then per-element bytes) -- not the same bytes: MinHash
+    packs 8-byte little-endian elements, this packs one byte (0/1) per
+    plane-bit, by design, so the two are never comparable output for output.
     """
     n = len(sig)
     if num_bands <= 0 or n % num_bands != 0:

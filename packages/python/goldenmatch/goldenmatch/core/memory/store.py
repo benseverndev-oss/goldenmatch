@@ -310,7 +310,10 @@ class MemoryStore:
         pre-existing DBs.
 
         Idempotent: SQLite raises OperationalError on duplicate column;
-        swallow it. Pattern mirrors `_migrate_field_correction_columns`.
+        swallow it. Same idempotent-ADD-COLUMN idiom as
+        `_migrate_field_correction_columns`, applied to different columns for
+        a different feature -- not two implementations that could disagree,
+        since neither adds or touches the other's columns.
         Spec: docs/superpowers/specs/2026-05-22-cluster-decision-tuner-design.md
         """
         for col, sql_type in (

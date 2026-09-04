@@ -69,8 +69,11 @@ def _do_transform_columnar(columns: dict, config=None):
 
     Takes ``dict[str, list]``, returns a ``ColumnarResult`` (``.columns`` dict +
     ``.manifest``). Raises ``ImportError`` when the config is uncovered and
-    polars is absent to fall back to. Separated for testability, mirroring
-    ``_do_transform``."""
+    polars is absent to fall back to. Separated out as its own function for
+    testability, alongside ``_do_transform`` -- a different function for a
+    different (incompatible) input shape, ``pl.DataFrame`` there vs.
+    ``dict[str, list]`` here, not two implementations of the same
+    conversion whose outputs should ever be compared."""
     from goldenflow import transform
     return transform(columns, config)
 

@@ -212,10 +212,12 @@ def _validate_scale_mode_supported(config) -> None:
 
 
 def _resolve_single_weighted_matchkey(config) -> Any:
-    """Pick the single weighted matchkey the spine scores. The spine
-    scope mirrors ``score_blocks_datafusion`` (single-field weighted,
-    supported scorer); ``_validate_matchkey`` enforces the field shape
-    downstream, so here we only locate the weighted matchkey."""
+    """Pick the single weighted matchkey the spine scores. The spine's
+    scope (single-field weighted, supported scorer) is the same scope
+    ``score_blocks_datafusion`` enforces, via the same ``_validate_matchkey``
+    call this function's caller makes downstream -- not a second
+    implementation of that scope check, so here we only locate the
+    weighted matchkey."""
     matchkeys = config.get_matchkeys()
     weighted = [mk for mk in matchkeys if mk.type == "weighted"]
     if not weighted:
