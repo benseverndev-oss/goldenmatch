@@ -25,6 +25,15 @@ Cargo.lock
 # brotli 8.0.3 (`StandardAlloc` no longer satisfies `Allocator<T>`); pinning the
 # lock (brotli held at 8.0.2) keeps the verified resolve reproducible.
 !datafusion-udf/Cargo.lock
+# Same rationale for postgres: rust_pgrx installs and psql-smoke-tests this
+# extension as a verified artifact via `cargo pgrx install` (which has no
+# --locked flag to pass -- confirmed against pgrx 0.12.9's own CLI source,
+# so a tracked lock is the ONLY way to pin this build), so its deps must NOT
+# float. A fresh resolve on a checkout with no lock pulled tinyvec 1.13.0
+# (a real upstream regression: "cannot find macro `vec` in this scope")
+# where 1.12.0 -- now pinned here -- builds clean. Same incident shape as
+# the datafusion-udf entry above (brotli 8.0.3 there).
+!postgres/Cargo.lock
 *.so
 *.dylib
 *.dll

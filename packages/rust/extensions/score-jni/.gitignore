@@ -1,2 +1,11 @@
 /target
-Cargo.lock
+# Cargo.lock IS committed here, on purpose -- this crate's cdylib ships
+# inside the Spark JVM jar as a verified artifact (see the CI comment near
+# spark_jvm_aarch64/spark_connect), so its deps must NOT float. A fresh
+# resolve on a checkout with no lock pulled tinyvec 1.13.0 (a real upstream
+# regression: "cannot find macro `vec` in this scope") where 1.12.0 --
+# already pinned here -- builds clean. Same rationale and same incident
+# shape as packages/rust/extensions/.gitignore's datafusion-udf entry
+# (brotli 8.0.3 there). The parent .gitignore's blanket `Cargo.lock` rule
+# still applies to this directory unless explicitly negated here.
+!Cargo.lock
