@@ -543,7 +543,9 @@ def customer_360(
 ) -> Customer360 | None:
     """The single Customer 360 serving read: everything known about one entity,
     composed from the durable store in one call. Returns ``None`` if the entity
-    does not exist (mirrors ``entity_profile``).
+    does not exist -- it calls ``entity_profile`` directly for that check and
+    returns its ``None`` through, so this is not a separate implementation
+    that could disagree with it.
 
     Composes, all from persisted state (no live frame, no migration):
 

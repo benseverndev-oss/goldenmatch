@@ -400,9 +400,13 @@ def radial_align_similarity(a: Sequence[float], b: Sequence[float]) -> float:
     """Rotation-aligned similarity of two radial-variance profiles in ``[0, 1]``.
 
     Maximum Pearson correlation over all cyclic angular shifts of ``b`` against
-    ``a`` — rotation just rotates the profile, so the best shift recovers it (the
-    angular counterpart to :func:`audio_ber_aligned`'s time-offset search).
-    Negative correlations (unrelated images) clamp to 0.0; mismatched lengths or
+    ``a`` — rotation just rotates the profile, so the best shift recovers it.
+    The same "search the offset that best aligns two signals" idea
+    :func:`audio_ber_aligned` applies to time-offset search on audio, applied
+    here to angular offset search on images -- a shared approach, not a
+    shared or comparable output (different domains, different comparison
+    metrics, nothing to test for equality). Negative correlations (unrelated
+    images) clamp to 0.0; mismatched lengths or
     empty input -> 0.0. This is the scoring-side comparison and stays pure-Python
     (the kernel parity contract is the profile, not the compare)."""
     la = len(a)

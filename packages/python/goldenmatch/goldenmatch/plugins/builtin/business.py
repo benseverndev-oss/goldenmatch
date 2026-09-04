@@ -155,8 +155,10 @@ class FreshnessWithMaxAgeStrategy:
     e.g. KYC address must be < 90 days old, else missing-data
     follow-up triggers.
 
-    Requires `dates` kwarg (parallel to values). Without dates,
-    behaves as if every value is stale (emits None).
+    Requires a `dates` kwarg: one date per entry in `values`, same
+    length, same order (zipped together, not a reference to another
+    function's `values`). Without dates, behaves as if every value is
+    stale (emits None).
     """
 
     name = "freshness_with_max_age"

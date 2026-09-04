@@ -171,12 +171,14 @@ class MatchEngine:
         """Delegate to the real dedupe pipeline and adapt its result.
 
         This used to be a ~200-line REIMPLEMENTATION of ``run_dedupe`` -- its own
-        docstring said "mirrors run_dedupe" -- and that copy is why `demo` and
-        `lineage` raised ImportError on a default install: it drove the polars
-        LazyFrame API (``df.lazy()`` / ``.collect()``) while the shipped pipeline
-        had moved to an eager arrow path behind ``_eager_stages_done``. Mirroring
-        a pipeline means inheriting none of its fixes, so it is deleted rather
-        than ported.
+        docstring claimed the two stayed in step -- and that copy is why `demo`
+        and `lineage` raised ImportError on a default install: it drove the
+        polars LazyFrame API (``df.lazy()`` / ``.collect()``) while the shipped
+        pipeline had moved to an eager arrow path behind ``_eager_stages_done``.
+        A second implementation inherits none of the first's fixes, so it was
+        deleted rather than ported -- this method just calls the real pipeline
+        now, below, which is what makes that whole class of drift impossible
+        going forward.
 
         ``run_dedupe_df`` takes ``pl.DataFrame | pa.Table | Frame`` through the
         frame seam, so both lanes work. The FS models the TUI's match-weight

@@ -123,8 +123,8 @@ def emit_semantic_model_from_store(
             (defaults to `source_name`).
         resolved_key: the conformed join column name (the control-plane id).
         path: when given, also write the emitted YAML to this catalog file
-            (refuses to clobber unless `overwrite=True`), mirroring
-            `write_resolved_catalog`.
+            by calling `write_resolved_catalog` directly (refuses to clobber
+            unless `overwrite=True`) -- same call, not a separate write path.
         **emit_kwargs: forwarded to the dialect emitter (`measures`, `grain`, ...).
 
     Returns:

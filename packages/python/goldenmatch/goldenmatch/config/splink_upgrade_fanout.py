@@ -139,8 +139,10 @@ def _suggest_negative_evidence(ctx: _LeverContext) -> None:
     """Risk-gated, posterior-weighted NE suggestion (spec: "The shared risk
     diagnosis" + "NE weight estimation (posterior-weighted)").
 
-    Mirrors ``_lever_calibration``'s pair machinery (blocked-pair sampling,
-    row lookup, regular-field FS weight sums), then per candidate measures
+    Calls ``_lever_calibration``'s pair machinery directly (blocked-pair
+    sampling, row lookup, regular-field FS weight sums) -- same call, not a
+    separate implementation of it, so there is nothing here that could drift
+    out of step -- then per candidate measures
     the NE firing rate among CONFIDENT-merge pairs (posterior >=
     ``_FANOUT_POSTERIOR_CONFIDENT`` under the shared within-block prior
     re-estimate -- NOT the equal-odds posterior the re-estimation uses
