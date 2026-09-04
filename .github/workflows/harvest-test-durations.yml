@@ -288,4 +288,10 @@ jobs:
         with:
           name: test-durations-merged
           path: packages/python/goldenmatch/.test_durations
+          # `.test_durations` starts with a dot; without this flag,
+          # upload-artifact v4 silently treats it as hidden and
+          # `if-no-files-found: error` below then fails the job right after
+          # a successful commit + push (run 33478139969: same root cause
+          # scale-audit.yml already carries a fix + comment for).
+          include-hidden-files: true
           if-no-files-found: error
