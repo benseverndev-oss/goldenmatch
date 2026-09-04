@@ -161,6 +161,43 @@ class TestPairCanonicalization:
         assert (1, 2) in result
 
 
+class TestNullDataset:
+    """``_null_dataset_pred`` (sqlite: ``dataset IS NULL``) must retrieve a
+    correction stored with ``dataset=None`` the same way a non-null dataset
+    is retrieved, and the sqlite upsert path (which reads via
+    ``get_pair_correction`` before DELETE+INSERT) must treat a second
+    null-dataset correction for the same pair as an update, not a duplicate."""
+
+    def test_null_dataset_roundtrip(self, store):
+        store.add_correction(_make_correction(id="c1", id_a=1, id_b=2, dataset=None))
+        result = store.get_pair_correction(1, 2)
+        assert result is not None
+        assert result.decision == "approve"
+        assert result.dataset is None
+
+    def test_null_dataset_upsert_not_duplicate(self, store):
+        store.add_correction(_make_correction(id="c1", id_a=1, id_b=2, dataset=None))
+        store.add_correction(
+            _make_correction(id="c2", id_a=1, id_b=2, dataset=None, decision="reject")
+        )
+        result = store.get_pair_correction(1, 2)
+        assert result.decision == "reject"
+        assert store.count_corrections() == 1
+
+    def test_null_dataset_distinct_from_named_dataset(self, store):
+        """A null-dataset correction and a same-pair 'test'-dataset correction
+        are different rows -- the null predicate must not accidentally match
+        the named dataset too."""
+        store.add_correction(_make_correction(id="c1", id_a=1, id_b=2, dataset=None))
+        store.add_correction(
+            _make_correction(id="c2", id_a=1, id_b=2, dataset="test", decision="reject")
+        )
+        null_result = store.get_pair_correction(1, 2)
+        named_result = store.get_pair_correction(1, 2, dataset="test")
+        assert null_result.decision == "approve"
+        assert named_result.decision == "reject"
+
+
 class TestUnsupportedBackend:
     def test_raises_not_implemented(self, tmp_path):
         import pytest

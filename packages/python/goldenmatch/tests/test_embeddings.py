@@ -257,6 +257,83 @@ def test_cortex_provider_resolves_via_name():
     assert prov.model_id == "snowflake-cortex:snowflake-arctic-embed-m-v1.5"
     # Hyphenated + short alias.
     assert resolve_provider("snowflake-cortex").model_id == prov.model_id
+
+
+# ---------------------------------------------------------------------------
+# SnowflakeCortexProvider._open_conn -- env-driven path. Its docstring claims
+# this "mirrors goldenmatch's existing Snowflake connector usage", i.e. the
+# same SNOWFLAKE_* env var names goldenmatch.db.connector_snowflake.
+# SnowflakeConnector.connect already reads (account/user/password + the
+# db/schema/warehouse extras), plus the OAuth SNOWFLAKE_TOKEN path.
+# ---------------------------------------------------------------------------
+
+
+def test_open_conn_env_path_mirrors_connector_snowflake_env_vars(monkeypatch):
+    """account/user/password come from the SAME env var names ``SnowflakeConnector.
+    connect`` (goldenmatch.db.connector_snowflake) reads -- that shared convention is
+    what the ``_open_conn`` docstring means by "mirrors ... existing Snowflake
+    connector usage"."""
+    import snowflake.connector
+    from goldenmatch.embeddings import SnowflakeCortexProvider
+
+    captured: dict = {}
+
+    def fake_connect(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(snowflake.connector, "connect", fake_connect)
+    monkeypatch.setenv("SNOWFLAKE_ACCOUNT", "acct1")
+    monkeypatch.setenv("SNOWFLAKE_USER", "user1")
+    monkeypatch.setenv("SNOWFLAKE_PASSWORD", "pw1")
+    monkeypatch.setenv("SNOWFLAKE_WAREHOUSE", "wh1")
+    monkeypatch.setenv("SNOWFLAKE_DATABASE", "db1")
+    monkeypatch.setenv("SNOWFLAKE_SCHEMA", "sch1")
+    monkeypatch.delenv("SNOWFLAKE_TOKEN", raising=False)
+
+    prov = SnowflakeCortexProvider()
+    conn, owned = prov._open_conn()
+    assert owned is True
+    assert captured["account"] == "acct1"
+    assert captured["user"] == "user1"
+    assert captured["password"] == "pw1"
+    assert captured["warehouse"] == "wh1"
+    assert captured["database"] == "db1"
+    assert captured["schema"] == "sch1"
+    assert "token" not in captured
+
+
+def test_open_conn_env_path_oauth_token(monkeypatch):
+    """No SNOWFLAKE_PASSWORD -> the OAuth SNOWFLAKE_TOKEN branch, same as the
+    connector's account/user + OAuth convention."""
+    import snowflake.connector
+    from goldenmatch.embeddings import SnowflakeCortexProvider
+
+    captured: dict = {}
+    monkeypatch.setattr(
+        snowflake.connector, "connect",
+        lambda **kwargs: captured.update(kwargs) or object(),
+    )
+    monkeypatch.setenv("SNOWFLAKE_ACCOUNT", "acct1")
+    monkeypatch.setenv("SNOWFLAKE_USER", "user1")
+    monkeypatch.delenv("SNOWFLAKE_PASSWORD", raising=False)
+    monkeypatch.setenv("SNOWFLAKE_TOKEN", "tok1")
+
+    prov = SnowflakeCortexProvider()
+    prov._open_conn()
+    assert captured["token"] == "tok1"
+    assert captured["authenticator"] == "OAUTH"
+    assert "password" not in captured
+
+
+def test_open_conn_missing_account_or_user_raises(monkeypatch):
+    from goldenmatch.embeddings import SnowflakeCortexProvider
+
+    monkeypatch.delenv("SNOWFLAKE_ACCOUNT", raising=False)
+    monkeypatch.delenv("SNOWFLAKE_USER", raising=False)
+    prov = SnowflakeCortexProvider()
+    with pytest.raises(RuntimeError, match="SNOWFLAKE_ACCOUNT"):
+        prov._open_conn()
     assert resolve_provider("cortex").model_id == prov.model_id
 
 

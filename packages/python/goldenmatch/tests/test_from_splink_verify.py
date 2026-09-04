@@ -188,6 +188,105 @@ def test_is_faithful_threshold() -> None:
     assert not lo.is_faithful
 
 
+# ── model-injection seam (mirrors splink_upgrade_measure's) ─────────────────
+# _run_goldenmatch's docstring claims it "mirrors the model-injection seam
+# splink_upgrade_measure uses": save the EMResult to a temp JSON file and point
+# the probabilistic matchkey's model_path at it, so dedupe_df (load_or_train_em)
+# loads the imported weights instead of retraining on the sample.
+
+
+def _fs_gm_config():
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+    )
+
+    return GoldenMatchConfig(
+        matchkeys=[
+            MatchkeyConfig(
+                name="fs",
+                type="probabilistic",
+                fields=[MatchkeyField(field="first_name", scorer="jaro_winkler", levels=3, partial_threshold=0.8)],
+            )
+        ],
+        blocking=BlockingConfig(keys=[BlockingKeyConfig(fields=["surname"])]),
+    )
+
+
+def _em_model():
+    from goldenmatch.core.probabilistic import EMResult
+
+    return EMResult(
+        m_probs={"first_name": [0.05, 0.25, 0.7]},
+        u_probs={"first_name": [0.9, 0.08, 0.02]},
+        match_weights={"first_name": [-4.17, 1.64, 5.13]},
+        converged=True,
+        iterations=5,
+        proportion_matched=0.1,
+    )
+
+
+def test_run_goldenmatch_injects_model_path_when_fully_covered(monkeypatch) -> None:
+    """When every field the matchkey uses is covered by the imported EMResult's
+    match_weights, _run_goldenmatch writes it to a temp file and points the
+    matchkey's model_path at it -- the same save_json + model_path mechanism
+    splink_upgrade_measure._measure_pass uses for its baseline/upgraded runs."""
+    from goldenmatch.core.probabilistic import EMResult
+
+    seen: dict = {}
+
+    def _capture_run_once(sample, config, ids):
+        # The injected model file lives in a TemporaryDirectory that
+        # _run_goldenmatch tears down on return -- read it back INSIDE this
+        # hook, while it still exists.
+        path = config.get_matchkeys()[0].model_path
+        seen["model_path"] = path
+        seen["loaded"] = EMResult.load_json(path) if path else None
+        return {}, 0.0
+
+    monkeypatch.setattr(splink_verify, "_run_once", _capture_run_once)
+
+    em_model = _em_model()
+    mapping = splink_verify._run_goldenmatch(_DF, _fs_gm_config(), em_model, ["0", "1", "2", "3", "4", "5"])
+
+    assert mapping == {}
+    assert seen["model_path"] is not None
+    assert seen["loaded"].match_weights == em_model.match_weights
+
+
+def test_run_goldenmatch_no_injection_when_not_fully_covered(monkeypatch) -> None:
+    """An EMResult that doesn't cover every field the matchkey scores leaves
+    model_path unset -- the run falls through to retraining EM on the sample
+    (same all-or-nothing coverage gate splink_upgrade_measure's copy-on-write
+    config guard implies: never point a matchkey at a model missing weights for
+    a field it scores)."""
+    seen: dict = {}
+
+    def _capture_run_once(sample, config, ids):
+        seen["config"] = config
+        return {}, 0.0
+
+    monkeypatch.setattr(splink_verify, "_run_once", _capture_run_once)
+
+    from goldenmatch.core.probabilistic import EMResult
+
+    # match_weights covers "surname", not the config's "first_name" field.
+    partial_em = EMResult(
+        m_probs={"surname": [0.1, 0.9]},
+        u_probs={"surname": [0.9, 0.1]},
+        match_weights={"surname": [-3.17, 3.17]},
+        converged=True,
+        iterations=5,
+        proportion_matched=0.1,
+    )
+    splink_verify._run_goldenmatch(_DF, _fs_gm_config(), partial_em, ["0", "1", "2", "3", "4", "5"])
+
+    assert seen["config"].get_matchkeys()[0].model_path is None
+
+
 # ── real end-to-end (needs splink) ───────────────────────────────────────────
 
 

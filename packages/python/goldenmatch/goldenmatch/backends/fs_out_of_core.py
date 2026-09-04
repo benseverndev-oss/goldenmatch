@@ -1571,7 +1571,7 @@ def run_fs_dedupe_sequential(
     ``(__row_id__, __cluster_id__)`` cluster assignments directly — no Python block
     orchestration, no candidate-pair list, no separate edge-stream + WCC pass. This
     is the same arrow-native/Rust engine the in-memory dedupe short-circuit
-    (``_run_fused_fs_short_circuit``) uses; the streaming path just feeds it the
+    (``_run_fused_fs_match_short_circuit`` in ``core/pipeline.py``) uses; the streaming path just feeds it the
     resident frame and streams the assignments to parquet. When the config is
     outside the fused kernel's covered surface (or the native kernel is absent), it
     scores through the tuned ``score_buckets_arrow`` (the SAME native-kernel bucket
@@ -2038,7 +2038,8 @@ def _fused_fs_assignments(
     The kernel emits links at the REAL ``link_threshold`` cut and CCs them, so the
     resulting partition matches the classic ``score -> filter(>=link) -> cluster``
     split. Column gathering + the ``GoldenMatchConfig`` shape mirror the in-memory
-    ``_run_fused_fs_short_circuit`` exactly (byte-parity by construction)."""
+    ``_run_fused_fs_match_short_circuit`` (``core/pipeline.py``) exactly
+    (byte-parity by construction)."""
     from goldenmatch.config.schemas import GoldenMatchConfig
     from goldenmatch.core.frame import to_frame as _tf
     from goldenmatch.core.fused_match import (

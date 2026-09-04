@@ -8,8 +8,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import polars as pl
+import pyarrow as pa
 from goldenmatch.distributed.record_store import (
     PreparedRecordStore,
+    _is_arrow_table,
     load_prepared_records,
     materialize_prepared_records,
 )
@@ -22,6 +24,21 @@ def _sample_df() -> pl.DataFrame:
         "email": ["a@x.com", "b@x.com", "c@x.com", "d@x.com"],
         "__mk_email_lower__": ["a@x.com", "b@x.com", "c@x.com", "d@x.com"],
     })
+
+
+def test_is_arrow_table_matches_hashing_duck_type_idiom():
+    """``_is_arrow_table``'s docstring claims it mirrors the duck-typing
+    idiom in ``core._hashing`` (``hasattr(obj, "column_names")``) rather
+    than importing pyarrow/polars eagerly to do an isinstance check.
+    Pin both the truth table AND the exact attribute the check hinges on."""
+    table = pa.table({"a": [1, 2]})
+    frame = pl.DataFrame({"a": [1, 2]})
+
+    assert _is_arrow_table(table) is True
+    assert _is_arrow_table(frame) is False
+    # Same idiom core._hashing.record_fingerprints_batch_arrow uses.
+    assert _is_arrow_table(table) == hasattr(table, "column_names")
+    assert _is_arrow_table(frame) == hasattr(frame, "column_names")
 
 
 def test_store_init_creates_tempdir(tmp_path: Path):
