@@ -7,8 +7,8 @@ be removed so the ratchet keeps its value.
 
 Every shared field is covered by exactly one of three places:
 
-  parity/shared_decisions.allow   66  agreed; readers supply no conflicting default
-  KNOWN_ACTIONABLE                 2  a signal fires on a SINGLE-class field
+  parity/shared_decisions.allow   67  agreed; readers supply no conflicting default
+  KNOWN_ACTIONABLE                 1  a signal fires on a SINGLE-class field
   KNOWN_AMBIGUOUS                 12  a signal fires, but the name is declared on
                                       several classes, so the readers grouped
                                       under it may not share a field at all
@@ -50,7 +50,10 @@ KNOWN_ACTIONABLE: set[str] = {
     # core/autoconfig.py, 1 in core/autoconfig_rules.py -- building a NEW
     # multi_pass config from an existing one's active keys/passes) now do
     # too, so "passes" moved to parity/shared_decisions.allow.
-    "weight",  # F9  autoconfig defaults to 0; scorer.py and Spark read it bare
+    #
+    # F9 FIXED: core/autoconfig.py, core/scorer.py, and spark/config_pipeline.py
+    # all route through MatchkeyField.fuzzy_weight now -- no divergent fallback
+    # left to trip the signal, so "weight" moved to parity/shared_decisions.allow.
 }
 
 # A signal fires, but the name is declared on SEVERAL config classes. An access

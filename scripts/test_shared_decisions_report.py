@@ -8,12 +8,24 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 import shared_decisions.allowlist as allowlist_mod  # noqa: E402
+import shared_decisions.report as report_mod  # noqa: E402
 from shared_decisions.report import DEFAULT_ROOT, inventory, main  # noqa: E402
 
 FIXTURES = Path(__file__).parent / "fixtures" / "incident_1c843c8a5"
 
 
-def test_inventory_reports_the_incident_fields():
+def test_inventory_reports_the_incident_fields(monkeypatch):
+    """`inventory()` filters by the REAL, live allowlist regardless of which
+    `root` it scans -- so once Phase B fully resolved "passes" (moved it to
+    parity/shared_decisions.allow), it disappears even from this frozen
+    historical FIXTURE, whose own content never changed. That is the allow-
+    list mechanism working correctly, not a break in what this test is
+    illustrating (a real shared field with multiple accessors) -- patch the
+    allowlist empty so the fixture's own accessors are what's under test,
+    not today's allowlist state. Mirrors test_allowlisted_fields_are_excluded
+    below, which already exercises this same monkeypatch for the opposite
+    assertion."""
+    monkeypatch.setattr(report_mod, "load_allowlist", lambda: set())
     items = inventory(FIXTURES)
     fields = {i["field"] for i in items}
     assert {"passes", "keys"} <= fields, sorted(fields)
@@ -53,35 +65,46 @@ def test_known_incident_fields_rank_near_the_top():
     again fail loudly, naming exactly which field sank.
 
     THIS TEST IS FRAGILE TO LEGITIMATE GROWTH, ON PURPOSE. As of this
-    writing `passes` sits at rank 8 with 11 accessors, TIED with
-    `golden_rules` and `threshold` at 11 -- a field gaining or losing one or
-    two accessors anywhere in the package could push `passes` to rank 11
-    with nothing incident-relevant having changed. If this test starts
-    failing: RE-INVESTIGATE whether the ordering still surfaces the
-    incident's shape (has something genuinely changed about how widely
-    `passes`/`keys`/`strategy` are read?) -- do NOT reflexively widen the
-    window to top-15 to make it pass again. A tripwire that people learn to
-    silence on sight is worse than no tripwire.
+    writing `keys` and `strategy` remain unresolved findings; a field
+    gaining or losing accessors anywhere in the package could push either
+    out of the top 10 with nothing incident-relevant having changed. If this
+    test starts failing: RE-INVESTIGATE whether the ordering still surfaces
+    the incident's shape -- do NOT reflexively widen the window to top-15 to
+    make it pass again. A tripwire that people learn to silence on sight is
+    worse than no tripwire.
     """
     items = inventory(DEFAULT_ROOT)
     top10 = [item["field"] for item in items[:10]]
     for field in ("keys", "strategy"):
         assert field in top10, f"{field} fell out of the top 10: {top10}"
 
-    # `passes` USED to be here, and left for the right reason: PR #2845 moved
-    # the keys-vs-passes decision onto `BlockingConfig.resolved_keys()` and
-    # routed ten call sites through it, so four modules stopped reading
-    # `.passes` directly and its accessor count fell. The window was NOT
-    # widened to top-15 to paper over that -- this docstring's own warning
-    # forbids it. What the tripwire still guarantees is that the field remains
-    # VISIBLE: it must not vanish from the inventory altogether while
-    # `core/blocker.py` and five others still read it.
-    fields = [item["field"] for item in items]
-    assert "passes" in fields, (
-        "`passes` disappeared from the inventory entirely. That is not the "
-        "remediation shrinking its accessor count -- it means the scan stopped "
-        "seeing a field the 1c843c8a5 incident turned on. Investigate the "
-        "accessor rule before touching this test."
+    # `passes` is gone from here now, and that is the CORRECT terminal state,
+    # not a break in the tripwire: #2845 fixed the block-execution readers,
+    # and the plan-building sites (core/autoconfig.py x6, core/
+    # autoconfig_rules.py x1) closed the rest, so "passes" moved to
+    # parity/shared_decisions.allow. `inventory()` excludes allowlisted
+    # fields by design (`if f not in allowed`) -- so its absence from THIS
+    # un-allowlisted view means resolved, not invisible. Prove the
+    # distinction directly: the underlying SCAN still sees passes' real
+    # accessors (the mechanism did not silently break), it is the allowlist
+    # filter -- not the scan -- that removes it.
+    from shared_decisions.readers import shared_fields
+
+    raw = shared_fields(DEFAULT_ROOT)
+    assert "passes" in raw, (
+        "`passes` disappeared from the raw scan entirely, not just the "
+        "allowlist-filtered view -- that means the scan stopped seeing a "
+        "field the 1c843c8a5 incident turned on. Investigate the accessor "
+        "rule before touching this test."
+    )
+    assert len(raw["passes"]) >= 2, (
+        f"expected passes to still have multiple real accessors, got {sorted(raw['passes'])}"
+    )
+    assert "passes" in allowlist_mod.load_allowlist(), (
+        "passes is missing from BOTH the inventory and the allowlist -- "
+        "if it was intentionally re-triaged as a finding again, it belongs "
+        "in KNOWN_ACTIONABLE/KNOWN_AMBIGUOUS in "
+        "scripts/test_no_new_shared_decisions.py, not simply dropped"
     )
 
 
@@ -113,10 +136,18 @@ def test_main_prints_the_declared_on_marker_for_a_multi_class_field(capsys):
     assert "BlockingConfig" in out and "GoldenFieldRule" in out and "GoldenGroupRule" in out
 
 
-def test_a_single_class_field_carries_no_marker(capsys):
+def test_a_single_class_field_carries_no_marker(capsys, monkeypatch):
     """Contrast case: `passes` is declared on exactly one class
     (`BlockingConfig`) in the fixture, so its line in the report must not
-    carry the ambiguity marker."""
+    carry the ambiguity marker.
+
+    Same allowlist-independence reasoning as
+    test_inventory_reports_the_incident_fields above: "passes" is now fully
+    resolved and correctly excluded by the REAL, live allowlist regardless
+    of `root` -- patch it empty so this illustrative example (a real
+    single-class field with multiple accessors) isn't coupled to whether
+    today's allowlist happens to still carry a finding for it."""
+    monkeypatch.setattr(report_mod, "load_allowlist", lambda: set())
     items = inventory(FIXTURES)
     passes = next(i for i in items if i["field"] == "passes")
     assert passes["declared_on"] == ["BlockingConfig"], passes["declared_on"]

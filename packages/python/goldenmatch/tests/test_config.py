@@ -78,6 +78,23 @@ class TestMatchkeyField:
             f = MatchkeyField(field="x", scorer=s, weight=1.0)
             assert f.scorer == s
 
+    def test_fuzzy_weight_narrows_a_set_weight(self):
+        f = MatchkeyField(field="x", scorer="jaro_winkler", weight=0.7)
+        assert f.fuzzy_weight == 0.7
+
+    def test_fuzzy_weight_raises_on_none_naming_the_field(self):
+        """F9: this is the accessor 7 production call sites (core/autoconfig.py,
+        core/scorer.py, spark/config_pipeline.py) now route through instead of
+        an unguarded `float(f.weight)`/`f.weight or 0` -- pinned directly here,
+        without needing Spark, since three of those sites live in spark/
+        config_pipeline.py functions that require a live PySpark session to
+        exercise end-to-end (CI-only on this project's own convention) and
+        this is the one part of the fix a local test can verify."""
+        f = MatchkeyField(field="x", scorer="jaro_winkler", weight=1.0)
+        f.weight = None  # simulate the validator-bypass bug the accessor guards
+        with pytest.raises(ValueError, match="x"):
+            _ = f.fuzzy_weight
+
 
 # ── MatchkeyConfig ──────────────────────────────────────────────────────────
 

@@ -123,3 +123,25 @@ class TestDropUninformativeFields:
         b = _blocking("static", keys=[_key(["k"], ["lowercase"])])
         _drop_uninformative_blocking_fields([mk], b)
         assert [f.field for f in mk.fields] == ["k"]
+
+    def test_a_none_weight_raises_instead_of_mis_scaling(self):
+        """MatchkeyConfig._validate_weighted rejects a None weight at
+        construction for type=='weighted', so the only way weight becomes
+        None here is a post-construction mutation bypassing the validator --
+        a real bug class, not a hypothetical. Before F9, `f.weight or 0`
+        silently treated that field as weight-0 and computed a WRONG
+        rescaled threshold from a wrong total; it must now raise loudly
+        instead, naming the field, via `fuzzy_weight`."""
+        mk = self._mk([("title", "token_sort", 1.5), ("authors", "token_sort", 1.0),
+                       ("__title_key__", "exact", 0.8)])
+        mk.fields[0].weight = None  # simulate the validator-bypass bug
+        b = _blocking("static", keys=[_key(["__title_key__"], ["lowercase"])])
+        try:
+            _drop_uninformative_blocking_fields([mk], b)
+        except ValueError as e:
+            assert "title" in str(e) and "weight" in str(e).lower()
+        else:
+            raise AssertionError(
+                "expected a ValueError naming the field with the missing "
+                "weight; _drop_uninformative_blocking_fields returned normally"
+            )

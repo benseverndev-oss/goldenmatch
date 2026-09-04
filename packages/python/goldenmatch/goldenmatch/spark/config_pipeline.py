@@ -619,7 +619,12 @@ def _field_score_parts(field: Any, a_prefix: str, b_prefix: str) -> tuple[Any, A
     col = field.resolved_field
     a_col = F.col(f"{a_prefix}.{col}")
     b_col = F.col(f"{b_prefix}.{col}")
-    weight = float(field.weight)
+    # Only reached for weighted-matchkey fields (the caller rules out
+    # probabilistic/exact first) -- weight is guaranteed non-None here
+    # by the guard at config_pipeline.py's weighted-matchkey validation.
+    # fuzzy_weight raises a clear error if that's ever bypassed, instead of
+    # float(None)'s generic TypeError.
+    weight = field.fuzzy_weight
 
     chain = list(getattr(field, "transforms", None) or [])
     if chain:
@@ -1198,7 +1203,11 @@ def _score_candidates_jvm(
         else:
             nums, dens = [], []
             for f in mk.fields:
-                weight = float(f.weight)
+                # Reached only in the weighted-matchkey branch (exact/
+                # probabilistic are ruled out above) -- weight is guaranteed
+                # non-None; fuzzy_weight raises clearly if that's ever
+                # bypassed, instead of float(None)'s generic TypeError.
+                weight = f.fuzzy_weight
                 idx = index[_slot_key(f)]
                 if f.scorer == "exact":
                     raw = F.col(f"{row}.r{idx}")
@@ -1400,7 +1409,11 @@ def _score_candidates_jvm_rowwise(
         else:
             nums, dens = [], []
             for f in mk.fields:
-                weight = float(f.weight)
+                # Reached only in the weighted-matchkey branch (exact/
+                # probabilistic are ruled out above) -- weight is guaranteed
+                # non-None; fuzzy_weight raises clearly if that's ever
+                # bypassed, instead of float(None)'s generic TypeError.
+                weight = f.fuzzy_weight
                 idx = index[_slot_key(f)]
                 raw = F.col(f"r{idx}" if f.scorer == "exact" else f"s{idx}")
                 comparable = F.col(f"c{idx}")

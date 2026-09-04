@@ -1988,14 +1988,15 @@ def find_fuzzy_matches(
         if f.scorer not in _EQUALITY_SCORERS and f.scorer != "record_embedding"
     ]
 
-    # All scoring-path MatchkeyFields are upstream-validated to have weight set;
-    # narrow with cast helper so the schema-level Optional doesn't poison every
-    # sum(). Runtime behavior unchanged: if weight is None, the subsequent
-    # arithmetic raises TypeError exactly as today.
-    from typing import cast as _cast
-
+    # All scoring-path MatchkeyFields are upstream-validated to have weight set
+    # (MatchkeyConfig._validate_weighted enforces non-None for type=="weighted").
+    # `fuzzy_weight` narrows the schema-level Optional AND raises a clear
+    # ValueError naming the field if that invariant is ever bypassed --
+    # previously this used a bare `typing.cast` (no runtime check at all) and
+    # fell through to whatever TypeError the subsequent arithmetic happened to
+    # produce on a None.
     def _w(f: MatchkeyField) -> float:
-        return _cast(float, f.weight)
+        return f.fuzzy_weight
 
     total_weight = sum(_w(f) for f in mk.fields)
     if total_weight == 0.0:
