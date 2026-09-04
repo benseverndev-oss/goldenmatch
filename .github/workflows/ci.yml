@@ -5035,11 +5035,15 @@ jobs:
           POLARS_SKIP_CPU_CHECK: "1"
 
   sync_claims:
-    # Report-only audit for docstrings that claim "this code mirrors that
-    # code" with no test enforcing the relationship (scripts/sync_claims/).
-    # Not in ci-required and the report step has no continue-on-error to
-    # suppress -- it always exits 0 by design. The gate is a later stage
-    # (C3), after the C1 triage establishes a floor; this job only prints.
+    # Audit for docstrings that claim "this code mirrors that code" with no
+    # test enforcing the relationship (scripts/sync_claims/). C0/C1 were
+    # report-only -- the informational report step below still always
+    # exits 0. C3 (stage 4b-4g: docs/superpowers/specs/2026-09-04-stage4b-
+    # full-rescue-triage.md and siblings) is the real gate: the "Ratchet"
+    # step has no continue-on-error, and this job is in ci-required, so a
+    # NEW high-confidence unenforced claim blocks the merge queue. Scoped
+    # narrowly to that one bucket -- see test_sync_claims_ratchet.py's
+    # module docstring for why the noisier buckets stay report-only.
     #
     # Coverage-based enforcement (docs/superpowers/specs/2026-09-03-coverage-
     # based-enforcement-design.md): downloads the SAME gm-cov-* shard
@@ -5090,8 +5094,9 @@ jobs:
             coverage_shard1.dat coverage_shard2.dat coverage_shard3.dat \
             coverage_heavy_1.dat coverage_heavy_2.dat coverage_heavy_3.dat
       - name: Unenforced sync-claim report
-        # Report-only by design: main() returns 0 whatever it finds. The gate
-        # is stage C3, after the C1 triage establishes a floor.
+        # Report-only by design: main() returns 0 whatever it finds, for
+        # every bucket. The C3 gate is the separate "Ratchet" step below --
+        # scoped to just `unenforced` -- not this one.
         env:
           PYTHONPATH: scripts
         run: |
@@ -5100,6 +5105,14 @@ jobs:
           else
             uv run python -m sync_claims.report
           fi
+      - name: Ratchet -- no new unenforced sync claim (C3)
+        # Its own step so a failure names the ratchet, not "the report".
+        # No continue-on-error: the floor was triaged by hand against the
+        # exact commit it's seeded from (see test_sync_claims_ratchet.py),
+        # and this is the real gate -- the whole point of C3.
+        env:
+          PYTHONPATH: scripts
+        run: uv run pytest scripts/test_sync_claims_ratchet.py -q
 
   ci-required:
     needs:
@@ -5176,6 +5189,11 @@ jobs:
       - scripts_lint
       - docs_regen
       - er_matcher
+      # C3 (docs/superpowers/specs/2026-09-04-stage4b-full-rescue-triage.md
+      # and siblings): the ratchet step is the real gate now, not just a
+      # print. Path-filtered like everything else here -- skipped counts as
+      # a pass via the same jq check below.
+      - sync_claims
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 1
