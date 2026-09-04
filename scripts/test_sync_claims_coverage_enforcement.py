@@ -44,7 +44,38 @@ class Widget:
     )
     spans = function_spans(tmp_path)
     names = {name for name, _, _ in spans["m.py"]}
-    assert names == {"top_level", "Widget.method", "Widget.async_method"}, names
+    assert names == {
+        "top_level",
+        "Widget",
+        "Widget.method",
+        "Widget.async_method",
+    }, names
+
+
+def test_function_spans_class_span_covers_its_own_body_and_all_methods(tmp_path):
+    """A claim can be attached to a class's own docstring, not just a
+    function's (found triaging Stage 4b: VectorIndex, LintInput,
+    CanonicalizationEval, FreshnessWithMaxAgeStrategy). The class needs its
+    OWN span -- the whole body, from `class` to its last line -- so a claim
+    naming the class as claimant or target has something to look up a
+    coverage context against, and so any test touching ANY of its methods
+    counts as coverage for the class overall, not just for that one method."""
+    (tmp_path / "m.py").write_text(
+        """
+class Widget:
+    def method_a(self):
+        pass
+
+    def method_b(self):
+        pass
+""".strip(),
+        encoding="utf-8",
+    )
+    spans = function_spans(tmp_path)
+    by_name = {name: (start, end) for name, start, end in spans["m.py"]}
+    assert by_name["Widget"] == (1, 6), by_name["Widget"]
+    assert by_name["Widget"][0] <= by_name["Widget.method_a"][0]
+    assert by_name["Widget"][1] >= by_name["Widget.method_b"][1]
 
 
 def test_function_spans_line_ranges_are_correct(tmp_path):

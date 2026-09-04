@@ -52,10 +52,8 @@ MARKED_WINDOW = 40
 BARE_WINDOW = 12
 
 
-def _confidence(
-    window: str, known: set[str], claimant: str, target: str | None
-) -> str:
-    """"high" when the target sits where a claim's OBJECT actually sits.
+def _confidence(window: str, known: set[str], claimant: str, target: str | None) -> str:
+    """ "high" when the target sits where a claim's OBJECT actually sits.
 
     C1 triage found that a resolved target is frequently a real symbol that
     the claim does not equate: "Only gates the BATCHED bucket call; whether
@@ -95,9 +93,7 @@ def _confidence(
     ]
     if any(m in known and m != claimant for m in marked):
         return "high"
-    bare = [
-        word.rstrip(".").split(".")[-1] for word in _WORD.findall(window[:BARE_WINDOW])
-    ]
+    bare = [word.rstrip(".").split(".")[-1] for word in _WORD.findall(window[:BARE_WINDOW])]
     return "high" if any(b in known and b != claimant for b in bare) else "low"
 
 
@@ -151,6 +147,10 @@ class Claim:
     target: str | None
     lineno: int
     confidence: str  # "high" or "low" -- see `_confidence`
+    # True when `target` is declared in more than one module under the tree
+    # `claims()` resolved against -- `_resolve_target`'s first-match-wins
+    # rule picked one, but the pick is not trustworthy. See `_symbol_modules`.
+    target_ambiguous: bool = False
 
 
 def _parse(path: Path) -> ast.Module | None:
@@ -173,13 +173,48 @@ def declared_symbols(root: Path) -> set[str]:
     return out
 
 
-def claims(root: Path, *, symbols: set[str] | None = None) -> list[Claim]:
+def _symbol_modules(root: Path) -> dict[str, set[str]]:
+    """Every function/class name declared under `root`, mapped to the set of
+    module-relative paths that declare it.
+
+    `declared_symbols` collapses this to a flat membership set, which is all
+    `_resolve_target` needs to pick a target -- but the same flat set hides
+    whether the name it picked was unique. A bare word like `score` or `row`
+    can be declared in several modules; `_resolve_target`'s first-match-wins
+    rule silently picks one, and it is not necessarily the one the claim's
+    author meant. `claims()` uses this to flag that case explicitly
+    (`Claim.target_ambiguous`) rather than let a coin-flip resolution report
+    as an ordinary, confidently-wrong finding.
+    """
+    out: dict[str, set[str]] = {}
+    for path in sorted(root.rglob("*.py")):
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(root).as_posix()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                out.setdefault(node.name, set()).add(rel)
+    return out
+
+
+def claims(
+    root: Path,
+    *,
+    symbols: set[str] | None = None,
+    symbol_modules: dict[str, set[str]] | None = None,
+) -> list[Claim]:
     """Every synchronisation claim under `root`, with targets resolved.
 
     `symbols` defaults to `declared_symbols(root)`. Pass it explicitly when the
     claims live in a fixture but must resolve against the real package.
+    `symbol_modules` defaults to `_symbol_modules(root)` the same way, and
+    should be passed alongside a `symbols` override for the same reason --
+    ambiguity is checked against whichever tree the target is really meant to
+    resolve against.
     """
     known = declared_symbols(root) if symbols is None else symbols
+    known_modules = _symbol_modules(root) if symbol_modules is None else symbol_modules
     out: list[Claim] = []
     for path in sorted(root.rglob("*.py")):
         tree = _parse(path)
@@ -202,6 +237,7 @@ def claims(root: Path, *, symbols: set[str] | None = None) -> list[Claim]:
             window = doc[match.end() : match.end() + WINDOW]
             target = _resolve_target(window, known, name)
             confidence = _confidence(window, known, name, target)
+            target_ambiguous = target is not None and len(known_modules.get(target, ())) > 1
             out.append(
                 Claim(
                     module=rel,
@@ -212,6 +248,7 @@ def claims(root: Path, *, symbols: set[str] | None = None) -> list[Claim]:
                     target=target,
                     confidence=confidence,
                     lineno=0 if is_module else node.lineno,
+                    target_ambiguous=target_ambiguous,
                 )
             )
     return out

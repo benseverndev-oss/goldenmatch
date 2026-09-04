@@ -19,10 +19,13 @@ SCOPE_NOTE = (
     "scope: claims are read from docstrings under {root} and enforcement from "
     "{tests} only -- other packages, the TypeScript port and _archive are out "
     "of reach by construction, and their silence here is not a clean bill. "
-    "Low-confidence findings and module-level claims are reported but NOT "
-    "triaged. A module has no single "
-    "symbol a test can reference. A claim listed as UNVERIFIED is not safe -- "
-    "some test references both names, which does not mean it compares them."
+    "Low-confidence findings, module-level claims, and ambiguous-target "
+    "claims are reported but NOT triaged. A module has no single "
+    "symbol a test can reference. An ambiguous-target claim's resolved "
+    "symbol is one of several same-named declarations and may not be the "
+    "one the claim's author meant. A claim listed as UNVERIFIED is not safe "
+    "-- some test references both names, which does not mean it compares "
+    "them."
 )
 
 
@@ -75,6 +78,13 @@ def inventory(root: Path, tests_root: Path, coverage_db: Path | None = None) -> 
     LOW-confidence claim's problem is that its resolved TARGET may be wrong
     (a different axis than enforcement); coverage evidence against a wrong
     target proves nothing about the claim the docstring actually makes.
+    An ambiguous-target claim (`Claim.target_ambiguous`, see
+    `claims._symbol_modules`) is excluded from both `unenforced` and
+    coverage-rescue for the same reason and reported separately, in
+    `unenforced_ambiguous_target` -- the resolved target is not necessarily
+    the one the claim's author meant, so neither "this test doesn't
+    reference it" nor "this test executes it" is evidence about anything in
+    particular.
     """
     all_claims = claims(root, symbols=declared_symbols(root))
     symbol_claims = [c for c in all_claims if c.kind == "symbol"]
@@ -86,6 +96,18 @@ def inventory(root: Path, tests_root: Path, coverage_db: Path | None = None) -> 
     all_findings = unenforced(resolvable, reference_sets)
     findings = [c for c in all_findings if c.confidence == "high"]
     low_confidence = [c for c in all_findings if c.confidence != "high"]
+
+    # An ambiguous-target high-confidence finding is not a trustworthy
+    # finding at all -- `target` was picked by `_resolve_target`'s
+    # first-match-wins rule among more than one same-named declaration
+    # (Stage 4b found this affecting ~a third of the still-unenforced
+    # population: `score`, `row`, `keys`, `__init__`, ...). Route it to its
+    # own bucket, same treatment `unresolvable` already gets for a target
+    # that isn't Python at all -- and split it out BEFORE coverage-rescue,
+    # for the same reason low-confidence claims are excluded from rescue:
+    # coverage evidence against a possibly-wrong target proves nothing.
+    ambiguous_target = [c for c in findings if c.target_ambiguous]
+    findings = [c for c in findings if not c.target_ambiguous]
 
     coverage_consulted = False
     coverage_rescued: list[Claim] = []
@@ -123,6 +145,7 @@ def inventory(root: Path, tests_root: Path, coverage_db: Path | None = None) -> 
             "resolvable": len(resolvable),
             "unenforced": len(findings),
             "unenforced_low_confidence": len(low_confidence),
+            "unenforced_ambiguous_target": len(ambiguous_target),
             "unverified": len(unverified),
             "coverage_enforced": len(coverage_rescued),
             "coverage_consulted": coverage_consulted,
@@ -133,6 +156,7 @@ def inventory(root: Path, tests_root: Path, coverage_db: Path | None = None) -> 
         },
         "unenforced": [_as_dict(c) for c in findings],
         "unenforced_low_confidence": [_as_dict(c) for c in low_confidence],
+        "unenforced_ambiguous_target": [_as_dict(c) for c in ambiguous_target],
         "unverified": [_as_dict(c) for c in unverified],
         "coverage_enforced": [_as_dict(c) for c in coverage_rescued],
         "unresolvable": [_as_dict(c) for c in unresolvable],
@@ -226,7 +250,8 @@ def main(argv: list[str]) -> int:
     )
     print(
         f"  reported but not triaged: {counts['unresolvable']} unresolvable, "
-        f"{counts['module_level']} module-level"
+        f"{counts['module_level']} module-level, "
+        f"{counts['unenforced_ambiguous_target']} ambiguous-target"
     )
     print(f"  test files scanned: {counts['test_files_scanned']}")
     print(
