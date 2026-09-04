@@ -101,6 +101,49 @@ class TestMatchEngineLoad:
         assert to_frame(engine.get_sample(10_000)).height == engine.row_count
 
 
+class TestMatchEngineFromDataframe:
+    """`from_dataframe`'s docstring claims it "[m]irrors every instance field
+    ``__init__`` assigns so it can't break silently if ``__init__`` evolves".
+    That is a claim about THIS class's two constructors, not a cross-module
+    one -- `from_dataframe` builds via ``object.__new__(cls)`` and hand-sets
+    each field, so a new field added to ``__init__`` later and forgotten here
+    would silently produce an incomplete instance. Checked by comparing
+    ``__dict__`` shape and values across both construction paths."""
+
+    def test_field_set_matches_init(self, sample_csv):
+        import pyarrow as pa
+
+        via_init = MatchEngine([sample_csv])
+        via_df = MatchEngine.from_dataframe(pa.table({"a": [1, 2]}))
+
+        assert set(via_df.__dict__.keys()) == set(via_init.__dict__.keys())
+
+    def test_non_data_fields_match_inits_post_load_defaults(self, sample_csv):
+        """Everything besides ``_files``/``_data``/``_profile`` (the fields the
+        docstring calls out as deliberately different) must equal
+        ``__init__``'s post-load value -- here, ``_last_result`` and
+        ``_last_telemetry`` start ``None`` on both paths."""
+        import pyarrow as pa
+
+        via_init = MatchEngine([sample_csv])
+        via_df = MatchEngine.from_dataframe(pa.table({"a": [1, 2]}))
+
+        for field in ("_last_result", "_last_telemetry"):
+            assert getattr(via_df, field) is None
+            assert getattr(via_df, field) == getattr(via_init, field)
+
+    def test_documented_deviations_from_init(self):
+        """``_files`` and ``_profile`` are the two fields the docstring says
+        `from_dataframe` does NOT mirror from a loaded ``__init__``: no file
+        constructor ran, so ``_files`` is ``[]`` and ``_profile`` stays
+        ``None`` rather than the populated dict a file load would produce."""
+        import pyarrow as pa
+
+        engine = MatchEngine.from_dataframe(pa.table({"a": [1, 2]}))
+        assert engine._files == []
+        assert engine.profile is None
+
+
 from goldenmatch.config.schemas import (
     GoldenFieldRule,
     GoldenMatchConfig,

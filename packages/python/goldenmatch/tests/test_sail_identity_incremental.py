@@ -240,6 +240,54 @@ def test_merge_retires_losers_into_the_winner(spark):
     assert kinds.count("MERGED_WITH") == 2  # winner + loser
 
 
+def test_loser_created_at_is_preserved_not_reset(spark):
+    """A retired (merged_into) node keeps its OWN prior `created_at` -- the part
+    of `build_incremental_nodes`'s docstring ("a loser keeps its created_at too
+    ... mirroring `store.retire_identity`") that `test_merge_retires_losers_
+    into_the_winner` above does not check. One-box `IdentityStore.retire_identity`
+    (`goldenmatch/identity/store.py`) runs
+    ``UPDATE identity_nodes SET status = ?, merged_into = ?, updated_at = ?``
+    -- `created_at` is never in that SET clause. Spark's `build_incremental_nodes`
+    coalesces the loser's `created_at` against its own `__prior_created__` the
+    same way it does for a winner/absorb, so only `updated_at` should move to
+    this run's timestamp.
+
+    ent:WINNER holds 2 of this cluster's 3 records (ent:LOSER holds 1), so the
+    winner is decided by in-cluster count alone -- the distinct `created_at`
+    values below are there only to catch a `created_at` mix-up, not to drive
+    the winner choice.
+    """
+    from goldenmatch.spark.identity import build_identity_graph_incremental
+
+    LOSER_BORN = "2019-03-03T00:00:00"
+
+    src = _source(spark, [(0, 1), (1, 2), (2, 3)])
+    asg = _assignments(spark, [(0, 100), (1, 100), (2, 100)])
+    prs = _pairs(spark, [(0, 1, 0.9), (1, 2, 0.9)])
+    gld = _golden(spark, [(100, "name1")])
+
+    frames = build_identity_graph_incremental(
+        prs, asg, src, gld,
+        existing_records=_existing_records(spark, [
+            ("people:1", "ent:WINNER"), ("people:2", "ent:WINNER"),  # 2 in-cluster
+            ("people:3", "ent:LOSER"),                                # 1 in-cluster
+        ]),
+        existing_nodes=_existing_nodes(spark, [
+            ("ent:WINNER", T0), ("ent:LOSER", LOSER_BORN),
+        ]),
+        run_meta=RUN, source_pk_col="pk",
+    )
+
+    nodes = _by(frames.nodes, "entity_id")
+    loser = nodes["ent:LOSER"]
+    assert loser["status"] == "merged_into"
+    assert loser["merged_into"] == "ent:WINNER"
+    # The regression this pins: created_at stays the loser's OWN birth date --
+    # not reset to `now` (RUN["recorded_at"]) and not clobbered with the winner's.
+    assert loser["created_at"] == LOSER_BORN
+    assert loser["updated_at"] == RUN["recorded_at"]
+
+
 def test_records_frame_is_a_delta_not_a_restatement(spark):
     """A WINNER's pre-existing records that this run did not touch are NOT
     re-emitted -- they already point at the winner, so re-stating them would
