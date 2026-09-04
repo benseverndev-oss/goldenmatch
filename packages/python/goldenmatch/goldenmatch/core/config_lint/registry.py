@@ -53,9 +53,11 @@ class ConfigLintError(Exception):
 
 @dataclass(frozen=True)
 class LintInput:
-    """Cheap, data-shape facts a rule may consult. Mirrors the fields the
-    auto-config profiler already computes (cardinality_ratio / null_rate /
-    col_type), so rules reuse the exact same signals the controller uses."""
+    """Cheap, data-shape facts a rule may consult. Field names line up with
+    ``ColumnProfile`` (core/autoconfig.py) and ``data_profile_column_stats``
+    (core/_profile_helpers.py) -- cardinality_ratio / null_rate / col_type --
+    for cross-reference; see ``build_lint_input`` (core/config_lint/profile.py)
+    for how these fields are actually computed here."""
     row_count: int
     cardinality_ratio: dict[str, float]  # col -> unique/non-null (0-1)
     null_rate: dict[str, float]          # col -> null fraction (0-1)

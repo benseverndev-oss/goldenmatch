@@ -602,6 +602,56 @@ def test_apply_demote_to_blocking_migrates_static_to_multipass():
     assert ("phone",) in pass_fields  # demoted column added as a pass
 
 
+def test_add_blocking_pass_migration_matches_quality_aware_blocking_shape():
+    """Docstring claim (config_critique._add_blocking_pass): 'Mirrors
+    apply_quality_aware_blocking's static->multi_pass migration so a demoted
+    column actually serves as a blocking key.' Both independently fold an
+    existing static blocking key into `passes`, empty `keys`, and set
+    `strategy='multi_pass'`. Run the SAME starting static key through both
+    migration paths and assert they produce the identical migrated shape for
+    that original key."""
+    import pytest as _pytest
+    from goldenmatch.core.autoconfig import ColumnProfile, apply_quality_aware_blocking
+    from goldenmatch.core.quality import _goldencheck_available
+
+    if not _goldencheck_available():
+        _pytest.skip("goldencheck not installed")
+
+    # -- _add_blocking_pass, via its caller apply_hint/demote_to_blocking --
+    # (same pattern as test_apply_demote_to_blocking_migrates_static_to_multipass
+    # above: an exact-matchkey config with a static blocking key on "state",
+    # demoting an unrelated column "other" into a new blocking pass.)
+    cfg_a = _exact_config(fields=["name", "other"], blocking_fields=["state"])
+    new_a, applied_a = apply_hint(cfg_a, {"action": "demote_to_blocking", "column": "other"})
+    assert applied_a
+    blocking_a = new_a.blocking
+
+    # -- apply_quality_aware_blocking, same starting static key on "state" --
+    # (same fixture shape as tests/test_quality_aware_blocking.py's
+    # test_adds_fuzzy_pass_for_fuzzy_key: 'Californa' variants make "state"
+    # edit-distance-fuzzy, which is what drives the migration.)
+    states = ["California"] * 40 + ["Californa"] * 4 + ["Texas"] * 46
+    fuzzy_df = pl.DataFrame({"state": states})
+    profiles = [ColumnProfile(name="state", dtype="str", col_type="string", confidence=1.0)]
+    cfg_b = BlockingConfig(strategy="static", keys=[BlockingKeyConfig(fields=["state"])])
+    blocking_b = apply_quality_aware_blocking(cfg_b, profiles, fuzzy_df, enabled=True)
+
+    # Both migrations independently converted the SAME starting static key
+    # into the SAME multi_pass shape.
+    assert blocking_a.strategy == "multi_pass"
+    assert blocking_b.strategy == "multi_pass"
+    assert blocking_a.keys == []
+    assert blocking_b.keys == []
+
+    # The original "state" key survives byte-identical as a pass in both.
+    orig_pass_a = next(p for p in blocking_a.passes if p.fields == ["state"])
+    orig_pass_b = next(
+        p for p in blocking_b.passes if p.fields == ["state"] and p.transforms == []
+    )
+    assert orig_pass_a.fields == orig_pass_b.fields == ["state"]
+    assert orig_pass_a.transforms == orig_pass_b.transforms == []
+
+
 def test_apply_raise_threshold_bumps_weighted_matchkey():
     cfg = _weighted_config(
         fields_weights=[("name", 1.0)], blocking_fields=["zip"], threshold=0.7

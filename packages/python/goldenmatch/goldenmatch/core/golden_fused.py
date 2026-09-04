@@ -479,8 +479,11 @@ def run_golden_fused_arrow(
     dtype + ``__cluster_id__`` + ``__golden_confidence__``):
 
     - ``provenance=False`` (default): a golden ``pl.DataFrame``.
-    - ``provenance=True``: a ``(golden_df, records)`` tuple, mirroring
-      ``build_golden_records_from_frames``'s ``(df, list[dict])`` shape. ``records``
+    - ``provenance=True``: a ``(golden_df, records)`` tuple -- UNLIKE
+      ``build_golden_records_from_frames``, which populates exactly one of
+      its two return slots, this populates BOTH ``golden_df`` and
+      ``records`` always (confirmed by test; the shapes are not the same,
+      only superficially similar). ``records``
       is byte-identical at the FIELD level to
       ``build_golden_records_batch(..., provenance=True)`` -- each user-column field
       dict carries ``{value, confidence, source_row_id}`` alongside

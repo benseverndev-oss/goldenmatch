@@ -464,6 +464,41 @@ def test_projection_no_phantom_pairs_for_near_unique_key_at_scale():
     assert saturated[1] > 10_000_000_000  # quadratic growth preserved
 
 
+def test_pass_row_keys_matches_project_pass_pairs_block_sizes():
+    # _pass_row_keys' docstring claims it "Mirrors _project_pass_pairs' key
+    # derivation (shared _col_cache/_tx_cache) but returns the per-row keys
+    # instead of block-size counts." Cross-check: block sizes independently
+    # derived (Counter) from _pass_row_keys' per-row output must match what
+    # _project_pass_pairs reports for the SAME frame/specs -- with
+    # effective_n_full == sample_n so project_block_counts' saturation-aware
+    # growth is the identity (growth=1.0), i.e. no scaling to account for.
+    from collections import Counter
+
+    from goldenmatch.core.autoconfig import _pass_row_keys
+
+    bframe = to_frame(pl.DataFrame({
+        "city": ["nyc", "nyc", "nyc", "la", "la", "sf", "sf"],
+        "surname": ["smith", "smith", "jones", "lee", "lee", "brown", "brown"],
+    }))
+    specs = [("city", ()), ("surname", ())]
+    cap = 7
+
+    keys = _pass_row_keys(bframe, specs, cap, {}, {})
+    assert keys is not None
+    assert keys == [
+        "nyc\x1fsmith", "nyc\x1fsmith", "nyc\x1fjones",
+        "la\x1flee", "la\x1flee", "sf\x1fbrown", "sf\x1fbrown",
+    ]
+
+    sizes = Counter(k for k in keys if k is not None)
+    expected_max_block = max(sizes.values())
+    expected_pairs = sum(c * (c - 1) // 2 for c in sizes.values())
+
+    projected = _project_pass_pairs(bframe, specs, cap, cap, {}, {})
+    assert projected == (expected_max_block, expected_pairs)
+    assert projected == (2, 3)  # nyc/smith=2, la/lee=2, sf/brown=2 -> 1+1+1 pairs
+
+
 def test_pair_gate_prefers_identity_field_reducer(monkeypatch):
     # THE 30M recall-collapse fix: when an exact-agreement identity field (email)
     # is present, an over-budget coarse pass is compounded with EMAIL AT FULL VALUE

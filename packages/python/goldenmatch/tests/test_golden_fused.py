@@ -1735,6 +1735,81 @@ def test_provenance_cluster_overrides():
     assert got[3]["v"]["source_row_id"] == 21
 
 
+def test_provenance_shape_vs_build_golden_records_from_frames():
+    """run_golden_fused_arrow's docstring claims provenance=True "mirror[s]
+    build_golden_records_from_frames's (df, list[dict]) shape". But
+    build_golden_records_from_frames's OWN docstring says "Exactly one slot is
+    populated" -- and since its fast path requires `not provenance`,
+    provenance=True always forces its slow path, i.e. always (None, records).
+    run_golden_fused_arrow(provenance=True), by contrast, returns a REAL
+    golden_df AND records both populated. That is a genuine shape mismatch, not
+    a mirror. What CAN be checked -- and is checked here -- is that the fields
+    that ARE populated on both sides agree record-for-record.
+    """
+    from goldenmatch.core.cluster import ClusterFrames
+    from goldenmatch.core.golden import build_golden_records_from_frames
+
+    source = pl.DataFrame(
+        {
+            "__row_id__": [1, 2, 3, 4, 5],
+            "name": ["Bob", "Robert", "Bob", "Sue", "Suzanne"],
+        }
+    )
+    frames = ClusterFrames(
+        assignments=pl.DataFrame({
+            "cluster_id": pl.Series([100, 100, 100, 101, 101], dtype=pl.Int64),
+            "member_id": pl.Series([1, 2, 3, 4, 5], dtype=pl.Int64),
+        }),
+        metadata=pl.DataFrame({
+            "cluster_id": pl.Series([100, 101], dtype=pl.Int64),
+            "size": pl.Series([3, 2], dtype=pl.Int64),
+            "confidence": pl.Series([0.9, 0.9], dtype=pl.Float64),
+            "quality": pl.Series(["strong", "strong"], dtype=pl.Utf8),
+            "oversized": pl.Series([False, False], dtype=pl.Boolean),
+            "bottleneck_pair_a": pl.Series([1, 4], dtype=pl.Int64),
+            "bottleneck_pair_b": pl.Series([3, 5], dtype=pl.Int64),
+        }),
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"name": GoldenFieldRule(strategy="most_complete")},
+    )
+
+    frames_df, frames_records = build_golden_records_from_frames(
+        source, frames, rules, provenance=True,
+    )
+    # provenance=True forces the slow path (fast_eligible requires `not
+    # provenance`) -> exactly ONE slot populated, per build_golden_records_from_frames's
+    # own docstring.
+    assert frames_df is None
+    assert frames_records  # the other slot IS populated
+
+    # The cluster frame run_golden_fused_arrow expects: __row_id__ +
+    # __cluster_id__ on the same rows the frames join produces.
+    multi_df = source.join(
+        frames.assignments.rename({"cluster_id": "__cluster_id__"}),
+        left_on="__row_id__", right_on="member_id", how="inner",
+    )
+    fused_out = run_golden_fused_arrow(multi_df, rules, provenance=True)
+    assert fused_out is not None, "fused path declined on a provenance-eligible config"
+    fused_df, fused_records = fused_out
+    # Unlike build_golden_records_from_frames, BOTH slots are populated here --
+    # the docstring's "mirroring ... shape" does not literally hold.
+    assert fused_df is not None and fused_df.height > 0
+    assert fused_records
+
+    # What CAN be compared: the populated fields agree record-for-record.
+    ref_map = {r["__cluster_id__"]: r for r in frames_records}
+    got_map = {r["__cluster_id__"]: r for r in fused_records}
+    assert set(got_map) == set(ref_map)
+    for cid, grec in got_map.items():
+        rrec = ref_map[cid]
+        assert grec["name"]["value"] == rrec["name"]["value"], f"value cid={cid}"
+        assert grec["name"]["source_row_id"] == rrec["name"]["source_row_id"], f"source_row_id cid={cid}"
+        assert abs(grec["name"]["confidence"] - rrec["name"]["confidence"]) < 1e-12
+        assert abs(grec["__golden_confidence__"] - rrec["__golden_confidence__"]) < 1e-12
+
+
 # ─── full parity matrix + mixed-type fixtures (Task 8.2) ─────────────────────
 #
 # Each case builds a frame + config that routes the reference to the EXACT

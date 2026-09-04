@@ -119,8 +119,9 @@ def _boundary_columns(
 
     A 2% error either side of those flips the verdict, so those columns get an
     exact `count_distinct` and nothing else does. Same shape as the exact
-    full-frame pass `core/autoconfig.py` already runs for apparent surrogate
-    keys: the cheap statistic nominates, the exact one decides.
+    full-frame pass `profile_columns` (`core/autoconfig.py`) already runs for
+    apparent surrogate keys: the cheap statistic nominates, the exact one
+    decides.
     """
     if n_full <= 0:
         return []

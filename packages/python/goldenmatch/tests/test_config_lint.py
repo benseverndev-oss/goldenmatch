@@ -133,3 +133,34 @@ def test_every_rule_has_a_heading_in_the_docs():
         assert f"### {r.title}\n" in rendered
         # the heading's slug == the anchor the linter emits
         assert slugify(r.title) == r.doc_anchor.split("#", 1)[1]
+
+
+# ── build_lint_input vs the auto-config profiler's own stats ────────────────
+#
+# LintInput's docstring cross-references ColumnProfile / data_profile_column_stats
+# as computing the same cardinality_ratio / null_rate signals. build_lint_input
+# (core/config_lint/profile.py) does NOT call the shared helper -- it duplicates
+# the formula locally, which is a real drift risk even where the numbers
+# currently agree. This locks that the two implementations currently agree, so a
+# future change to either formula that silently diverges them fails here.
+
+
+def test_build_lint_input_cardinality_and_nulls_match_data_profile_column_stats():
+    import polars as pl
+    from goldenmatch.core._profile_helpers import data_profile_column_stats
+    from goldenmatch.core.config_lint.profile import build_lint_input
+
+    df = pl.DataFrame({
+        "id": [1, 2, 3, 4, None],
+        "name": ["a", "a", "b", "c", "c"],
+        "zip": ["1", "1", None, None, None],
+    })
+    cfg = _cfg(blocking_keys=[["id", "zip"]], fuzzy_fields=["name"])
+
+    li = build_lint_input(df, cfg)
+    _, ref_cardinality, ref_null_rate, _, _ = data_profile_column_stats(
+        df, ["id", "name", "zip"]
+    )
+
+    assert li.cardinality_ratio == pytest.approx(ref_cardinality)
+    assert li.null_rate == pytest.approx(ref_null_rate)

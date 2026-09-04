@@ -345,6 +345,56 @@ def test_full_scan_streaming_returns_expected_dict_shape(tmp_path, monkeypatch):
     assert result["matches"] > 0
 
 
+def test_full_scan_streaming_dict_shape_matches_full_scan_pipeline(tmp_path):
+    """Step 3: _full_scan_streaming's docstring claims it "Returns the same
+    shape as _full_scan_pipeline so callers see no difference at the dict
+    level." Run BOTH orchestrators on the SAME synthetic input (dry_run so
+    neither needs a real DB connector) and cross-check the actual dict
+    shape -- key set AND each key's value type -- rather than asserting one
+    function's shape in isolation."""
+    from unittest.mock import MagicMock
+
+    from goldenmatch.db.sync import _full_scan_pipeline, _full_scan_streaming
+
+    df = pl.DataFrame({
+        "last_name": ["smith"] * 4 + ["jones"] * 4,
+        "first_name": ["alice"] * 4 + ["bob"] * 4,
+        "id": list(range(8)),
+    })
+    df.write_parquet(tmp_path / "chunk_000000.parquet")
+
+    cfg = _kernel_config(df)
+
+    streaming_result = _full_scan_streaming(
+        connector=MagicMock(),
+        staging_dir=tmp_path,
+        source_table="test_table",
+        config=cfg,
+        matchkeys=cfg.get_matchkeys(),
+        output_mode="separate",
+        dry_run=True,
+        run_id="run_stream",
+        cfg_hash="hash_1",
+        total_rows=8,
+    )
+    pipeline_result = _full_scan_pipeline(
+        MagicMock(), df, "test_table", cfg, cfg.get_matchkeys(),
+        "separate", True, "run_pipeline", "hash_1", 8,
+    )
+
+    assert set(streaming_result.keys()) == set(pipeline_result.keys())
+    for key in streaming_result:
+        assert type(streaming_result[key]) is type(pipeline_result[key]), (
+            f"key {key!r}: streaming={type(streaming_result[key])!r} "
+            f"vs pipeline={type(pipeline_result[key])!r}"
+        )
+    # "actions" is the one nested/structured value -- same element shape too.
+    if streaming_result["actions"] and pipeline_result["actions"]:
+        s_action, p_action = streaming_result["actions"][0], pipeline_result["actions"][0]
+        assert len(s_action) == len(p_action) == 4
+        assert [type(v) for v in s_action] == [type(v) for v in p_action]
+
+
 def test_full_scan_streaming_writes_incrementally(tmp_path, monkeypatch):
     """Step 3: match log writes fire as blocks complete, not all at the
     end. Lets a long sync show progress as blocks finish.

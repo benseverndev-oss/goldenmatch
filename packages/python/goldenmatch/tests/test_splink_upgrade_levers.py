@@ -1284,3 +1284,38 @@ def test_domain_bands_applies_without_em_model():
     # K=4 -> 3/4=0.75, 1/4=0.25
     assert _field(result.upgraded_config, "skills").level_thresholds == pytest.approx([0.75, 0.25])
     assert result.em_model is None
+
+
+# ── _measure_mean_token_set_size mirrors _measure_mean_length ───────────────
+
+
+def test_measure_mean_token_set_size_mirrors_measure_mean_length_edge_cases():
+    """``_measure_mean_token_set_size``'s docstring claims it "Mirrors
+    ``_measure_mean_length``" -- same absent-column / all-empty-after-transform
+    None-handling, just counting tokens instead of characters. Cross-check both
+    functions against the SAME frames rather than each in isolation."""
+    from goldenmatch.config.splink_upgrade import (
+        _measure_mean_length,
+        _measure_mean_token_set_size,
+    )
+
+    # (a) column absent from the frame -> both return None.
+    df_missing = pl.DataFrame({"other": ["a|b", "c|d", "e|f"]})
+    assert _measure_mean_length(df_missing, "skills", []) is None
+    assert _measure_mean_token_set_size(df_missing, "skills", []) is None
+
+    # (b) every value yields an empty set/string after transforms (null and
+    # empty-string values alike) -> both return None.
+    df_empty = pl.DataFrame({"skills": [None, "", ""]})
+    assert _measure_mean_length(df_empty, "skills", []) is None
+    assert _measure_mean_token_set_size(df_empty, "skills", []) is None
+
+    # (c) same overall strategy: mean over non-empty values, ignoring nulls --
+    # just a different unit (chars vs. distinct tokens). "a|b|c" contributes
+    # length 5 to _measure_mean_length but 3 tokens to the token-set version;
+    # both skip the None row the same way.
+    df_present = pl.DataFrame({"skills": ["a|b|c", None, "d|e"]})
+    mean_len = _measure_mean_length(df_present, "skills", [])
+    mean_tokens = _measure_mean_token_set_size(df_present, "skills", [])
+    assert mean_len == pytest.approx((5 + 3) / 2)  # len("a|b|c")=5, len("d|e")=3
+    assert mean_tokens == pytest.approx((3 + 2) / 2)  # {a,b,c}=3, {d,e}=2
