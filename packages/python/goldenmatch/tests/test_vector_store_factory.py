@@ -137,3 +137,24 @@ def test_prep_rows_uses_id_column():
 def test_prep_rows_missing_column_raises():
     with pytest.raises(ValueError, match="not in dataframe"):
         prep_rows(pl.DataFrame({"a": [1]}), "missing", None, base=0)
+
+
+def test_prep_rows_matches_vector_index_prep_frame():
+    """``prep_rows``'s docstring claims its row-id/text derivation is "identical
+    to ``VectorIndex._prep_frame``" -- verify both agree on row ids and texts,
+    with and without an ``id_column``, and with a nonzero base (the
+    incremental-add case ``_prep_frame`` derives from ``self.size``)."""
+    from goldenmatch.core.vector_index import VectorIndex
+
+    df = pl.DataFrame({"name": ["x", "y", None], "pk": [7, 8, 9], "__internal__": [1, 2, 3]})
+
+    for id_col in (None, "pk"):
+        idx = VectorIndex(column="name", embedder=object())
+        # Simulate an index that already holds 2 records, so base == 2 -- the
+        # incremental-add numbering ``prep_rows`` says it matches.
+        idx._frame = pl.DataFrame({"__row_id__": [100, 101], "__vec_text__": ["p", "q"]})
+        base = idx.size
+        frame, frame_texts = idx._prep_frame(df, "name", id_col)
+        row_ids, texts, _ = prep_rows(df, "name", id_col, base=base)
+        assert frame["__row_id__"].to_list() == row_ids
+        assert frame_texts == texts

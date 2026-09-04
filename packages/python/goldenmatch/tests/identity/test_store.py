@@ -188,6 +188,28 @@ def test_find_conflicts(store: IdentityStore):
     assert conflicts[0].kind == EdgeKind.CONFLICTS_WITH.value
 
 
+def test_find_conflicts_is_edges_by_kind_conflicts_with(store: IdentityStore):
+    """``edges_by_kind``'s docstring: ``find_conflicts`` "is
+    ``edges_by_kind('conflicts_with')``" -- verify they return the same edges,
+    both with and without a ``dataset`` filter."""
+    e = new_entity_id()
+    store.upsert_identity(IdentityNode(entity_id=e, dataset="d1"))
+    store.add_edge(EvidenceEdge(
+        entity_id=e, record_a_id="a:1", record_b_id="a:2",
+        kind=EdgeKind.CONFLICTS_WITH.value, dataset="d1", run_name="r",
+    ))
+    store.add_edge(EvidenceEdge(
+        entity_id=e, record_a_id="a:3", record_b_id="a:4",
+        kind=EdgeKind.CONFLICTS_WITH.value, dataset="d2", run_name="r",
+    ))
+    store.add_edge(EvidenceEdge(
+        entity_id=e, record_a_id="a:5", record_b_id="a:6",
+        kind=EdgeKind.SAME_AS.value, dataset="d1", run_name="r",
+    ))
+    assert store.find_conflicts(dataset="d1") == store.edges_by_kind("conflicts_with", "d1")
+    assert store.find_conflicts() == store.edges_by_kind("conflicts_with")
+
+
 def test_list_and_count(store: IdentityStore):
     for i in range(5):
         store.upsert_identity(IdentityNode(entity_id=new_entity_id(), dataset="d1"))
