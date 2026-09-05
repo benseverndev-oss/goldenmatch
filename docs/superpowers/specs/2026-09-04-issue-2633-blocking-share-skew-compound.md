@@ -37,7 +37,7 @@ best=__title_key__  safe_exact=['__title_key__', 'year']
 looks like an email address, but because `autoconfig.py:5696` (the
 exact-scored domain-extracted-column injection) hardcodes `col_type="email"`
 for **every** domain column with an `"exact"` scorer, regardless of what it
-actually is. That's a separate, pre-existing bug (filed as #2884, not fixed
+actually is. That's a separate, pre-existing bug (filed as #2876, not fixed
 here — the blast radius of changing what type these columns carry is wider
 than this issue needs, since several other branches key off `col_type ==
 "email"`/`_high_card_types` for these same columns). It's *why*
@@ -93,7 +93,7 @@ was regenerated (`tests/parity/capture_autoconfig_output.py`'s `pin_config`)
 to reflect the new, better key.
 
 **Not done, and deliberately out of scope:** the `col_type="email"`
-misclassification (filed separately as #2884) and the general
+misclassification (filed separately as #2876) and the general
 `_build_compound_blocking`/Gate-2 reachability question the original
 proposal below targeted — that branch is real and still shut, but nothing
 in this issue's evidence trail (including this session's own trace) shows it
