@@ -1,8 +1,109 @@
 # #2633 — Reach `title + year`-shaped compounds on a share-skewed, size-safe blocking key
 
-**Status:** design proposal, NOT approved, NOT implemented
+**Status:** IMPLEMENTED (see correction below) — PR TBD
 **Date:** 2026-09-04
 **Issue:** https://github.com/benseverndev-oss/goldenmatch/issues/2633
+**Verified against:** `origin/main` @ `53780971e` (2026-09-04)
+
+## Correction (same day, before implementation) — the original proposal below targeted the wrong site
+
+Everything under "Why" and "Proposed fix" below was written from re-reading the
+issue's own extensive comment trail (6+ comments, 2 explicit retractions from
+the issue's own author) and confirming the cited functions/lines still exist
+unchanged. That was necessary but **not sufficient** — it repeats exactly the
+"signature matches, not traces" failure mode the issue's own history warns
+about. Before implementing, I instrumented a real `auto_configure_df` run on
+the real DBLP-ACM data (patching `BlockingKeyConfig.__init__` to print a call
+stack + caller locals the first time a `title`-shaped key gets constructed)
+rather than trusting the static read.
+
+**The real site:** `build_blocking`'s `exact_cols`/`safe_exact` branch,
+`autoconfig.py:4280-4285` — a completely different branch from the one
+proposed below. `Gate 2` (`_all_single_oversized` gating
+`_build_compound_blocking`) is real code but is **never reached** for
+DBLP-ACM: the exact-key branch returns first. Implementing the original
+proposal would have measured zero change, exactly the trap the issue's
+own 2026-08-25 comment already fell into once ("Gate 1 fixed... confirmed to
+change nothing on its own").
+
+**What the trace showed**, printing `safe_exact` / `best` / caller locals at
+the real construction site:
+
+```
+best=__title_key__  safe_exact=['__title_key__', 'year']
+```
+
+`__title_key__`'s `ColumnProfile.col_type` is `'email'` — not because it
+looks like an email address, but because `autoconfig.py:5696` (the
+exact-scored domain-extracted-column injection) hardcodes `col_type="email"`
+for **every** domain column with an `"exact"` scorer, regardless of what it
+actually is. That's a separate, pre-existing bug (filed as #2884, not fixed
+here — the blast radius of changing what type these columns carry is wider
+than this issue needs, since several other branches key off `col_type ==
+"email"`/`_high_card_types` for these same columns). It's *why*
+`__title_key__` is `exact_cols`-eligible at all, which — coincidentally
+correctly — is the right outcome (an exact-scored domain column belongs in
+the exact-blocking pool).
+
+`year` (col_type `"year"`, 10 distinct) is *also* in `safe_exact`, because
+the demotion-skip for bibliographic data (`autoconfig.py:4267-4279`,
+`_is_bibliographic_dataset`) already keeps it there. The actual defect: line
+4281's `best = max(safe_exact, key=n_unique)` picks the higher-cardinality
+column (`__title_key__`, ~946 distinct) and returns it **alone** — `year`
+was sitting in the same list, measured, and never used.
+
+## Implemented fix
+
+In the `if safe_exact:` branch, after picking `best`, and only when
+`_is_bibliographic_dataset(profiles)` is true: look for a `year`/`date`-typed
+candidate elsewhere in `safe_exact`, and if compounding it onto `best`
+measurably shrinks the block (`_sample_block_and_distinct`, the same helper
+`_projected_block`/`_is_scale_safe` already use in this function), commit the
+compound instead of `best` alone.
+
+Scoped to `_is_bibliographic_dataset` rather than "any 2 safe_exact
+candidates" — deliberately narrower than the "(a) no new guard, rely on
+conjunction" decision might suggest in full generality. The conjunction
+argument (candidates only shrink, never grow) is airtight for *count*; it
+says nothing about *recall*, which depends on whether every true match
+actually agrees on the second field. On bibliographic data that's already an
+established, code-level trust (the same one the demotion-skip above relies
+on: "every true match is same-year"). On an arbitrary other dataset shape, an
+arbitrary second `safe_exact` column has no such backing — so the fix reuses
+exactly the trust boundary that's already vetted, rather than manufacturing a
+new one.
+
+**Result on real DBLP-ACM** (`scripts/blocking_headroom.py`, `strategies`
+section — the real engine via `build_blocks`, not a hand-rolled bucket):
+`static (ships)` moved from 33,563 candidates to **5,749**, recall unchanged
+at 0.9717 — the issue's exact acceptance criterion. `auto_configure_df`'s
+`failing_subprofile` moved from `blocking` to `cluster` on this dataset (a
+separate, unrelated RED reason took its place — not this issue's scope).
+
+**Test:** `test_blocking_cost_aware.py::
+test_exact_pool_compounds_year_instead_of_picking_highest_cardinality_alone`,
+exercising `build_blocking` directly with a synthetic fixture that reproduces
+the mechanism (a `col_type="email"`-forced `title` column, mirroring the real
+injection bug, coarser than the true cluster identity but higher-cardinality
+than `year`) — TDD: written failing against the pre-fix code, confirmed
+failing for the right reason, then passing after the fix. Full
+`test_autoconfig*`/`test_blocking_cost_aware`/`test_domain*` suite (305 tests)
+green; the `dblp_acm` entry in `tests/parity/autoconfig-classification.json`
+was regenerated (`tests/parity/capture_autoconfig_output.py`'s `pin_config`)
+to reflect the new, better key.
+
+**Not done, and deliberately out of scope:** the `col_type="email"`
+misclassification (filed separately as #2884) and the general
+`_build_compound_blocking`/Gate-2 reachability question the original
+proposal below targeted — that branch is real and still shut, but nothing
+in this issue's evidence trail (including this session's own trace) shows it
+being reached by any dataset investigated so far. Leaving it as read, not
+re-proposing changes to an unreached path.
+
+---
+
+## Original proposal (superseded by the correction above — kept for the record)
+
 **Verified against:** `origin/main` @ `53780971e` (2026-09-04) — the issue's diagnosis,
 last updated 2026-08-25, still matches current code at every file:line cited below.
 Nothing in the 10 days between has touched `_build_compound_blocking`,

@@ -159,6 +159,92 @@ def test_cost_aware_demotes_year_on_person_at_build_blocking(monkeypatch):
     assert keys_on != [["birth_year"]], keys_on
 
 
+def _biblio_title_coarser_than_year_df(n_clusters: int = 300, per: int = 5) -> pl.DataFrame:
+    """Bibliographic data where `title` (the `__title_key__` stand-in) has
+    MORE distinct values than `year` (100 vs. 60, matching real DBLP-ACM
+    where the title-derived key beats year on raw cardinality) while still
+    being a COARSER grouping than the true cluster: many different papers
+    collide on a title bucket, but two papers in the same bucket usually
+    disagree on `year`. Each real cluster is internally consistent on both
+    fields (every member shares its own title bucket AND year), so `year`
+    never breaks up a true match -- it only splits together different
+    clusters that happen to collide on the title bucket. This is the
+    DBLP-ACM shape: `__title_key__` (the first significant word) collides
+    across unrelated papers; `year` is free extra selectivity, not a
+    recall risk.
+    """
+    rows = []
+    for c in range(n_clusters):
+        title_bucket = c % 100  # coarser than n_clusters, but > year's domain
+        year = 1950 + (c % 60)
+        for m in range(per):
+            rows.append({
+                "doi": f"{c}-{m}",
+                "title": f"Title{title_bucket}",
+                "authors": f"Authors{c}",
+                "year": str(year),
+                "venue": f"Venue{c % 8}",
+            })
+    return pl.DataFrame(rows)
+
+
+def test_exact_pool_compounds_year_instead_of_picking_highest_cardinality_alone():
+    """#2633: on real DBLP-ACM, the domain-extracted `__title_key__` column is
+    injected into blocking candidates with `col_type="email"`
+    (`autoconfig.py:5696`'s exact-domain-column injection tags every
+    exact-scored domain column that way -- a separate, pre-existing
+    misclassification, not fixed here, filed separately). That's what makes
+    it `exact_cols`-eligible alongside `year` on bibliographic data (both
+    survive `_is_scale_safe` into `safe_exact`).
+
+    Once both are in `safe_exact`, the branch used to do
+    ``best = max(safe_exact, key=n_unique)`` and commit `best` ALONE --
+    title_key (higher cardinality) always beats year (lower cardinality) on
+    raw distinct-value count, so `year` was measured, present, and never
+    used. On real DBLP-ACM this produces 33,563 candidate pairs where
+    `title_key + year` produces 5,749 at IDENTICAL recall (every true match
+    shares its publication year -- the same domain-routed trust
+    `_is_bibliographic_dataset` already relies on to keep year off the
+    demotion path above).
+
+    A compound of two exact keys is a strict refinement (AND) of `best`
+    alone -- it can only keep-or-shrink `best`'s blocks, never grow them,
+    as long as every true match agrees on both fields (asserted by
+    construction in the fixture) -- so this is free once the eligibility
+    question is already settled by biblio-domain routing.
+    """
+    import dataclasses
+
+    from goldenmatch.core.autoconfig import build_blocking, profile_columns
+
+    df = _biblio_title_coarser_than_year_df()
+    profiles = profile_columns(df)
+    # Stand-in for the real __title_key__ injection: force `title`'s profile
+    # to col_type="email", exactly as autoconfig.py:5696 does for any
+    # exact-scored domain-extracted column, so it enters exact_cols the same
+    # way it does on real DBLP-ACM.
+    profiles = [
+        dataclasses.replace(p, col_type="email") if p.name == "title" else p
+        for p in profiles
+    ]
+
+    cfg = build_blocking(profiles, df)
+    keys = _bc_keys(cfg)
+    assert keys and set(keys[0]) == {"title", "year"}, (
+        f"expected a compound of the two safe_exact candidates (title + "
+        f"year); got {keys} -- picking the single highest-cardinality exact "
+        f"column measures the defect this issue reports, not a fix for it"
+    )
+
+    # And it must actually reduce candidates, not just add a no-op field.
+    solo_block = df.group_by("title").len().select(pl.col("len").max()).item()
+    compound_block = df.group_by(["title", "year"]).len().select(pl.col("len").max()).item()
+    assert compound_block < solo_block, (
+        f"fixture doesn't demonstrate the shrink this fix targets: "
+        f"solo={solo_block} compound={compound_block}"
+    )
+
+
 def test_off_is_default(monkeypatch):
     # No env set -> OFF (byte-identical legacy behaviour).
     monkeypatch.delenv("GOLDENMATCH_BLOCKING_COST_AWARE", raising=False)

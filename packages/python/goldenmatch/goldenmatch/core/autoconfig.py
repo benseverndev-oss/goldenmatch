@@ -4280,6 +4280,37 @@ def build_blocking(
         if safe_exact:
             best = max(safe_exact, key=lambda p: _bf.column(p.name).n_unique())
             transforms = ["lowercase", "strip"] if best.col_type == "email" else ["strip"]
+            # #2633: `best` wins by raw cardinality alone, which on bibliographic
+            # data (DBLP-ACM: title-derived key ~300+ distinct) always beats a
+            # `year`/`date` exact candidate (~10-65 distinct) even though `year`
+            # is free selectivity there -- every true match shares its
+            # publication year, the same domain-routed trust the demotion-skip
+            # above already relies on. AND-ing `year` onto `best` is a strict
+            # refinement (a compound record must share BOTH values), so it can
+            # only keep-or-shrink `best`'s blocks, never lose a match `best`
+            # alone would have kept together -- on THIS domain. Scoped to
+            # `_is_bibliographic_dataset` rather than "any 2 safe_exact
+            # candidates" because that guarantee is what the domain routing
+            # vouches for; it is not free in general (an arbitrary second exact
+            # column could disagree on real duplicates on other data shapes).
+            if _is_bibliographic_dataset(profiles):
+                year_candidates = [
+                    p for p in safe_exact
+                    if p.name != best.name and p.col_type in ("year", "date")
+                ]
+                if year_candidates:
+                    refine = min(
+                        year_candidates,
+                        key=lambda p: _sample_block_and_distinct([best.name, p.name])[0],
+                    )
+                    best_block, _ = _sample_block_and_distinct([best.name])
+                    compound_block, _ = _sample_block_and_distinct([best.name, refine.name])
+                    if compound_block < best_block:
+                        return BlockingConfig(
+                            keys=[BlockingKeyConfig(
+                                fields=[best.name, refine.name], transforms=transforms,
+                            )],
+                        )
             return BlockingConfig(
                 keys=[BlockingKeyConfig(fields=[best.name], transforms=transforms)],
             )
