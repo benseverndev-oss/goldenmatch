@@ -61,12 +61,14 @@ KNOWN_ACTIONABLE: set[tuple[str, str, int]] = {
     # here landing at high confidence instead. Closing this means softening
     # the docstring so the pattern no longer resolves a target, not writing
     # a test against `row`.
-    # Line moved 203 -> 231 when `_prep_chunk_rows` was added above it
-    # (the streamed-prep change). Same finding, same docstring, same
-    # reason -- this registry keys on line number, so a pure insertion
-    # above an entry reads as one finding vanishing and a new one
-    # appearing.
-    ("identity/resolve.py", "_batch_fingerprint_enabled", 231),
+    # NOTE FOR THE NEXT EDITOR: this registry keys on LINE NUMBER, so any
+    # insertion above a tracked symbol fails BOTH tests at once -- the old
+    # line "no longer reproduces" and the new one is "new and untriaged" --
+    # while the finding itself is unchanged. Seen twice on 2026-09-08 alone
+    # (203 -> 231 when `_prep_chunk_rows` landed, 231 -> 243 when the
+    # derived-structure views landed). If the failure names this symbol and
+    # only the number differs, update the number; it is not a new gap.
+    ("identity/resolve.py", "_batch_fingerprint_enabled", 243),
     ("identity/snowflake_backend.py", "_rel_expr", 501),
     ("spark/identity.py", "record_id_for_row", 45),
 }
