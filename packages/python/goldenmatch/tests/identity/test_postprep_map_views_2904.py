@@ -281,3 +281,63 @@ def test_multi_source_frame_keeps_per_row_source_and_pk(tmp_path):
         rid, src, pk = r["record_id"], r["source"], r["source_pk"]
         assert rid.startswith(f"{src}:"), "record id must carry its own source"
         assert pk == rid[len(src) + 1:]
+
+
+# --- the hash digest buffer ---------------------------------------------------
+
+def test_hash_view_returns_the_same_hex_hexdigest_would():
+    import hashlib
+
+    from goldenmatch.identity.resolve import _HASH_BYTES, _HashView
+
+    payloads = [b"alpha", b"beta", b"gamma"]
+    buf = bytearray()
+    for p in payloads:
+        buf.extend(hashlib.sha256(p).digest())
+    v = _HashView({7: 0, 8: 1, 9: 2}, buf)
+    for i, p in enumerate(payloads):
+        assert v[7 + i] == hashlib.sha256(p).hexdigest()
+        assert len(v[7 + i]) == 2 * _HASH_BYTES
+    assert v.get(99) is None
+    assert v.get(99, "x") == "x"
+    assert 8 in v and 99 not in v
+    with pytest.raises(KeyError):
+        v[99]
+
+
+def test_hash_payload_helpers_agree():
+    from goldenmatch.identity.resolve import _hash_payload, _hash_payload_digest
+
+    payload = {"name": "Ann", "city": None, "n": 3}
+    assert _hash_payload(payload) == _hash_payload_digest(payload).hex()
+
+
+def test_record_hash_written_to_the_store_is_unchanged(tmp_path):
+    """The digest buffer must not change what lands in `source_records`.
+
+    Pinned against an INDEPENDENT recomputation of the documented hash --
+    json.dumps(sort_keys, default=str) over the non-dunder columns -- not
+    against the function under test, so a change to either side shows up.
+    """
+    import hashlib
+    import json
+
+    store = IdentityStore(backend="sqlite", path=str(tmp_path / "hash.db"))
+    try:
+        resolve_clusters(
+            clusters=_clusters(), df=_frame(), store=store,
+            run_name="hash", dataset="views", emit_singletons=False,
+        )
+        rows = store._fetchall(
+            "SELECT record_hash, payload FROM source_records", ()
+        )
+    finally:
+        store.close()
+
+    assert rows
+    for r in rows:
+        payload = json.loads(r["payload"])
+        want = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
+        assert r["record_hash"] == want

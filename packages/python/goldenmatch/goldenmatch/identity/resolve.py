@@ -189,9 +189,20 @@ def _row_to_payload(row: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in row.items() if not k.startswith("__")}
 
 
-def _hash_payload(payload: dict[str, Any]) -> str:
+# sha256 digest width. The stored form is the RAW digest; the 64-char hex is
+# regenerated on read (`_HashView`). Hex is 2x the bytes and, as a Python str,
+# ~113 B per row against 32 -- and it has to be built per row anyway for
+# `legacy_id`, so what this saves is retaining 5M of them, not making them.
+_HASH_BYTES = 32
+
+
+def _hash_payload_digest(payload: dict[str, Any]) -> bytes:
     blob = json.dumps(payload, sort_keys=True, default=str)
-    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+    return hashlib.sha256(blob.encode("utf-8")).digest()
+
+
+def _hash_payload(payload: dict[str, Any]) -> str:
+    return _hash_payload_digest(payload).hex()
 
 
 # Sentinel: ``_record_id_candidates`` was called WITHOUT a precomputed batch
@@ -329,6 +340,47 @@ class _OrdinalView(Mapping):
     def get(self, key: int, default: Any = None) -> Any:  # type: ignore[override]
         o = self._ord.get(key)
         return default if o is None else self._values[o]
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._ord
+
+    def __iter__(self):
+        return iter(self._ord)
+
+    def __len__(self) -> int:
+        return len(self._ord)
+
+
+class _HashView(Mapping[int, str]):
+    """``rowid -> record_hash`` hex, stored as one contiguous digest buffer.
+
+    A sha256 hex digest is 64 characters; as a Python ``str`` that is ~113 B of
+    object plus a list slot, against 32 B for the digest it encodes. At 5M rows
+    the difference is ~445 MB of pure representation.
+
+    Regenerating the hex on read is affordable because each row's hash is read
+    at most twice in the write loop (the bulk row payload and the per-row
+    ``SourceRecord``), while it was retained for the whole of ``apply_batch``.
+    ``bytes.hex()`` and ``hashlib.sha256(...).hexdigest()`` are both lowercase,
+    so the value handed to the store is byte-identical to the old one.
+    """
+
+    __slots__ = ("_ord", "_buf")
+
+    def __init__(self, ordinals: dict[int, int], buf: bytearray) -> None:
+        self._ord = ordinals
+        self._buf = buf
+
+    def _hex(self, o: int) -> str:
+        start = o * _HASH_BYTES
+        return self._buf[start:start + _HASH_BYTES].hex()
+
+    def __getitem__(self, key: int) -> str:
+        return self._hex(self._ord[key])
+
+    def get(self, key: int, default: Any = None) -> Any:  # type: ignore[override]
+        o = self._ord.get(key)
+        return default if o is None else self._hex(o)
 
     def __contains__(self, key: object) -> bool:
         return key in self._ord
@@ -828,7 +880,10 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
     _ord: dict[int, int] = {}
     _primaries: list[str] = []
     _payloads: list[dict[str, Any]] = []
-    _hashes: list[str] = []
+    # Preallocated to the frame height and truncated once the prepped count is
+    # known: appending 32 B five million times makes a bytearray double its way
+    # up, and the copy at the top end is transiently larger than the buffer.
+    _hash_buf = bytearray()
     # `source` is one scalar for the overwhelmingly common single-source case;
     # see `_SourceView`. `_src_default` is fixed by the first prepped row.
     _src_default: str | None = None
@@ -866,6 +921,7 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
         _batch_fp = _batch_fingerprint_enabled()
         _total_rows = _fa5.height
         _chunk_rows_n = _prep_chunk_rows() or max(_total_rows, 1)
+        _hash_buf = bytearray(_total_rows * _HASH_BYTES)
         for _off in range(0, max(_total_rows, 1), _chunk_rows_n):
             _chunk = _fa5.slice(_off, _chunk_rows_n)
             _crows = _chunk.select_dicts(_cols)
@@ -891,7 +947,10 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
                 # were previously recomputed inside `_record_id_candidates`
                 # (5.86 us/row, ~29s at 5M).
                 _payload = _row_to_payload(row)
-                _phash = _hash_payload(_payload)
+                _digest = _hash_payload_digest(_payload)
+                # Transient: `_record_id_candidates` needs hex[:12] for
+                # `legacy_id`, but only the digest is retained.
+                _phash = _digest.hex()
                 primary_id, candidates = _record_id_candidates(
                     row, source, source_pk_col,
                     precomputed_h1=_pre,
@@ -910,11 +969,10 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
                 if _o == len(_primaries):
                     _primaries.append(primary_id)
                     _payloads.append(_payload)
-                    _hashes.append(_phash)
                 else:
                     _primaries[_o] = primary_id
                     _payloads[_o] = _payload
-                    _hashes[_o] = _phash
+                _hash_buf[_o * _HASH_BYTES:(_o + 1) * _HASH_BYTES] = _digest
                 if source != _src_default:
                     _src_overrides[irid] = source
                 elif irid in _src_overrides:
@@ -925,7 +983,8 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
 
     _rowid_primary: Mapping[int, str] = _OrdinalView(_ord, _primaries)
     rowid_to_payload: Mapping[int, dict[str, Any]] = _OrdinalView(_ord, _payloads)
-    rowid_to_hash: Mapping[int, str] = _OrdinalView(_ord, _hashes)
+    del _hash_buf[len(_primaries) * _HASH_BYTES:]
+    rowid_to_hash: Mapping[int, str] = _HashView(_ord, _hash_buf)
     rowid_to_source: Mapping[int, str] = _SourceView(
         _ord, _src_default if _src_default is not None else "dataframe", _src_overrides
     )
