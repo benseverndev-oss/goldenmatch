@@ -641,6 +641,15 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
     rowid_to_pk: dict[int, str] = {}
     rowid_to_hash: dict[int, str] = {}
     _rowid_primary: dict[int, str] = {}
+    # SPARSE: only rows whose candidate list differs from the singleton
+    # ``[primary_id]``. Every current return in ``_record_id_candidates`` is
+    # ``(x, [x])`` (verified across all four branches -- natural PK, per-row
+    # fingerprint, batched h1, un-fingerprintable), so today this stays empty
+    # and the 182 B/row it used to cost per row is not paid at all (~0.9 GB at
+    # 5M). Storing the exception rather than the rule keeps the multi-candidate
+    # contract the docstring describes: if the helper ever returns a real
+    # alternate list again (the legacy-migration shape), it is recorded here and
+    # both readers below pick it up.
     _rowid_candidates: dict[int, list[str]] = {}
 
     # Optional batch fingerprinting (GOLDENMATCH_IDENTITY_BATCH_FINGERPRINT=1):
@@ -692,7 +701,8 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
                 payload_hash=_phash,
             )
             _rowid_primary[irid] = primary_id
-            _rowid_candidates[irid] = candidates
+            if candidates != [primary_id]:
+                _rowid_candidates[irid] = candidates
             rowid_to_payload[irid] = _payload
             rowid_to_source[irid] = source
             rowid_to_hash[irid] = _phash
@@ -702,15 +712,18 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
     # bulk fast-path below uses to spot brand-new clusters (the 500K-cluster
     # bench, #368 Phase 6, depends on this single pre-flight lookup).
     with _stage("identity_prep_candidate_union"):
-        _all_candidates = sorted({c for cs in _rowid_candidates.values() for c in cs})
+        _all_candidates = sorted({
+            c
+            for _i, _pid in _rowid_primary.items()
+            for c in (_rowid_candidates.get(_i) or (_pid,))
+        })
     _existing_by_id: dict[str, str] = (
         store.lookup_entity_ids(_all_candidates) if _all_candidates else {}
     )
     preflight_existing: dict[str, str] = {}
-    for irid, candidates in _rowid_candidates.items():
-        chosen = next(
-            (c for c in candidates if c in _existing_by_id), _rowid_primary[irid]
-        )
+    for irid, _pid in _rowid_primary.items():
+        candidates = _rowid_candidates.get(irid) or (_pid,)
+        chosen = next((c for c in candidates if c in _existing_by_id), _pid)
         rowid_to_recid[irid] = chosen
         src = rowid_to_source[irid]
         rowid_to_pk[irid] = (

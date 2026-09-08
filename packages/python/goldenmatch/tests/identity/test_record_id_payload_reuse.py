@@ -71,3 +71,32 @@ def test_helpers_are_called_once_per_row_not_twice(monkeypatch):
     n = len(_ROWS)
     assert calls["payload"] == n, f"expected {n} payload builds, got {calls['payload']}"
     assert calls["hash"] == n, f"expected {n} hashes, got {calls['hash']}"
+
+
+def test_candidates_is_the_singleton_primary_on_every_branch():
+    """`apply_batch` stores `_rowid_candidates` SPARSELY -- only rows whose
+    candidate list differs from `[primary_id]` -- because today every branch
+    returns `(x, [x])`, making a per-row list pure duplication of
+    `_rowid_primary` (182 B/row, ~0.9 GB at 5M).
+
+    That storage choice is safe for multi-candidate lists (both readers fall
+    back to `[primary]` only when no entry exists), but this test is the
+    tripwire: if the helper starts returning a genuinely different candidate
+    list again, this fails and points whoever did it at the sparse-storage
+    assumption so they can confirm the readers still do what they want.
+    """
+    row = {"__row_id__": 7, "id": "42", "name": "Ann"}
+    cases = [
+        ("natural PK", dict(source_pk_col="id")),
+        ("per-row fingerprint", dict(source_pk_col=None)),
+        ("batched h1", dict(source_pk_col=None, precomputed_h1="b" * 64)),
+        ("un-fingerprintable", dict(source_pk_col=None, precomputed_h1=None)),
+    ]
+    for label, kw in cases:
+        pk = kw.pop("source_pk_col")
+        primary, candidates = R._record_id_candidates(row, "src", pk, **kw)
+        assert candidates == [primary], (
+            f"{label}: candidates {candidates!r} != [{primary!r}] -- the sparse "
+            "_rowid_candidates storage in apply_batch assumes this; re-check "
+            "both readers before changing it"
+        )
