@@ -55,7 +55,7 @@ removed on purpose — the honest way to isolate engine cost):
      item on both, though already COPY/staged and possibly near its floor.
   2. The ~210 s prep path and the 12.6 GB, both untouched and with obvious
      headroom. Riskier than it looks: `apply_batch` is load-bearing correctness
-     code with many branches.
+     code with many branches. **Partly done — see the addendum below.**
   3. Residual `lookup_entity_ids` gap: 10.4 s (PG) vs 1.9 s (SQLite) post-#2893.
 - **One real defect came out of the profile.** #2893: `lookup_entity_ids`
   chunked its IN-list at 900 — `SQLITE_MAX_VARIABLE_NUMBER` (#670) — for *every*
@@ -92,3 +92,47 @@ zeros — and a result that confirms your prior is the one to re-derive from the
 other direction before filing it. Each guard now asserts the thing it assumed:
 the zero-work check, and the cold-phase check that `created` equals the clusters
 processed (verified to fire, not assumed to).
+
+## Addendum, 2026-09-08: follow-on item 2, first results
+
+The 12.6 GB figure above is superseded. Item 2 was attacked in four slices;
+the peak RSS at 5M cold is now **9,009.6 MB (sqlite) / 8,996.5 MB (postgres)**,
+[run 34256747975](https://github.com/benseverndev-oss/goldenmatch/actions/runs/34256747975)
+against the same rungs, backends and `pair_scores=spanning` as the original.
+
+| slice | what | peak RSS at 5M |
+|---|---|---|
+| — | baseline | 12,554.8 MB |
+| #2900 | payload + hash computed once, not twice | (wall only, −42% on `identity_prep_record_ids`) |
+| #2902 | `_rowid_candidates` stored sparsely | −0.08% — **a negative result** |
+| #2903 | streamed prep, row dicts bounded at O(chunk) | **8,996–9,010 MB (−28%)** |
+
+Two things worth carrying forward.
+
+**The instruments disagreed with the outcome twice, in opposite directions.**
+#2902 was sized from tracemalloc at ~0.9 GB and delivered 0.08%: tracemalloc
+counts requested Python allocation, not resident pages, and the difference is
+allocator behaviour, not arithmetic. #2903 was shipped with *no* local memory
+evidence at all — the only A/B available compared new-1-chunk against
+new-2-chunks, both of which release row dicts, so it measured the wrong
+contrast — and it delivered the full predicted 3.5 GB. The usable rule is that
+peak RSS is only knowable from `ru_maxrss` on the real rung; a local proxy is
+worth running for a signal but never for a number.
+
+**Stage boundaries decide what you can see.** The `+935 MB` that appeared to
+belong to `identity_write_loop` was not in the write loop: it was an unstaged
+pass between two markers that built `rowid_to_recid` and `rowid_to_pk`, two
+whole-frame dicts duplicating values already in hand. It was invisible while
+the prep peak (12,557 MB) sat above it and only became attributable once #2903
+lowered the peak beneath it. A stage marker that does not bracket a loop hides
+that loop inside its neighbour.
+
+**Residual, and where the next slice has to go.** Of the 9.0 GB: ~2.1 GB before
+prep, ~0.4 GB the filtered frame, **~5.5 GB the derived structures**, ~0.9 GB
+the post-prep maps. The 5.5 GB is five per-row Python maps over an identical
+5M-key set — payload 324 B/row, hash 157, primary 118, source 52 — where the
+container overhead is paid five times and the values are stored as individual
+Python objects. Streaming cannot touch it, because those values outlive the
+chunk. The columnar reshape (one rowid→ordinal index plus dense arrays, and a
+payload representation that is not a dict per row) is the remaining item, and
+it is a materially larger change than any of the four above.

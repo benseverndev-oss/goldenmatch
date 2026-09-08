@@ -18,6 +18,7 @@ import json
 import logging
 import os
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -296,6 +297,84 @@ def _record_id_candidates(
         full_h1 = precomputed_h1  # type: ignore[assignment]
     h1_id = f"{source}:h1:{full_h1[:12]}"
     return h1_id, [h1_id]
+
+
+class _RecordIdView(Mapping[int, str]):
+    """``rowid -> chosen record_id``, without a second whole-frame dict.
+
+    The chosen id is the primary id from ``_record_id_candidates`` UNLESS the
+    candidate-union pre-flight found an existing record under an alternate
+    candidate -- which requires a non-empty ``_existing_by_id``, i.e. records
+    already in the store. On a cold load nothing is resident, so the override
+    is empty for every row and this view is a pure alias of ``_rowid_primary``.
+
+    Measured at 5M (ADR 0064): materializing this as its own dict cost ~500 MB
+    of the 935 MB the un-staged post-prep loop added on top of the prep peak,
+    duplicating a string reference already held by ``_rowid_primary`` for
+    every row. Same reasoning as the sparse ``_rowid_candidates`` (#2902):
+    store the exception, not the rule.
+
+    Read-only and keyed exactly like the dict it replaces -- ``__contains__``
+    and ``get`` answer from ``_rowid_primary``, whose key set is every prepped
+    row, so a rowid that never reached prep still misses.
+    """
+
+    __slots__ = ("_primary", "_override")
+
+    def __init__(self, primary: dict[int, str], override: dict[int, str]) -> None:
+        self._primary = primary
+        self._override = override
+
+    def __getitem__(self, key: int) -> str:
+        chosen = self._override.get(key)
+        return self._primary[key] if chosen is None else chosen
+
+    def get(self, key: int, default: Any = None) -> Any:  # type: ignore[override]
+        chosen = self._override.get(key)
+        if chosen is not None:
+            return chosen
+        return self._primary.get(key, default)
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._primary
+
+    def __iter__(self):
+        return iter(self._primary)
+
+    def __len__(self) -> int:
+        return len(self._primary)
+
+
+class _SourcePkView(Mapping[int, str]):
+    """``rowid -> source_pk``, derived on read instead of stored.
+
+    The source_pk is a pure function of the record_id and its source: strip a
+    leading ``"{source}:"`` if present. Storing it built a fresh string per row
+    plus a 5M-entry dict (~600 MB at 5M) to hold values recomputable in a few
+    hundred nanoseconds, at two call sites that each touch a member once.
+
+    Byte-identical to the eager form: ``len(source) + 1 == len(source + ":")``.
+    """
+
+    __slots__ = ("_recids", "_sources")
+
+    def __init__(self, recids: Mapping[int, str], sources: dict[int, str]) -> None:
+        self._recids = recids
+        self._sources = sources
+
+    def __getitem__(self, key: int) -> str:
+        rid = self._recids[key]
+        prefix = self._sources[key] + ":"
+        return rid[len(prefix):] if rid.startswith(prefix) else rid
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._sources
+
+    def __iter__(self):
+        return iter(self._sources)
+
+    def __len__(self) -> int:
+        return len(self._sources)
 
 
 def derive_record_id(
@@ -661,10 +740,8 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
             _needed = _referenced_row_ids(cluster_items, emit_singletons)
             if len(_needed) < _fa5.height:
                 _fa5 = _fa5.filter_in("__row_id__", sorted(_needed))
-    rowid_to_recid: dict[int, str] = {}
     rowid_to_payload: dict[int, dict[str, Any]] = {}
     rowid_to_source: dict[int, str] = {}
-    rowid_to_pk: dict[int, str] = {}
     rowid_to_hash: dict[int, str] = {}
     _rowid_primary: dict[int, str] = {}
     # SPARSE: only rows whose candidate list differs from the singleton
@@ -756,16 +833,24 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
         store.lookup_entity_ids(_all_candidates) if _all_candidates else {}
     )
     preflight_existing: dict[str, str] = {}
-    for irid, _pid in _rowid_primary.items():
-        candidates = _rowid_candidates.get(irid) or (_pid,)
-        chosen = next((c for c in candidates if c in _existing_by_id), _pid)
-        rowid_to_recid[irid] = chosen
-        src = rowid_to_source[irid]
-        rowid_to_pk[irid] = (
-            chosen[len(src) + 1:] if chosen.startswith(f"{src}:") else chosen
-        )
-        if chosen in _existing_by_id:
-            preflight_existing[chosen] = _existing_by_id[chosen]
+    # SPARSE, and empty unless the pre-flight actually hit something: the
+    # chosen id differs from the primary id only when an ALTERNATE candidate is
+    # already resident, which requires a non-empty `_existing_by_id`. With an
+    # empty pre-flight every `chosen` is `_pid` and every `chosen in
+    # _existing_by_id` is False, so the whole pass is provably a no-op -- skip
+    # it rather than walk 5M rows to write two dicts that duplicate values
+    # already in hand (~935 MB and ~5M iterations at 5M, ADR 0064).
+    _recid_override: dict[int, str] = {}
+    if _existing_by_id:
+        for irid, _pid in _rowid_primary.items():
+            candidates = _rowid_candidates.get(irid) or (_pid,)
+            chosen = next((c for c in candidates if c in _existing_by_id), _pid)
+            if chosen != _pid:
+                _recid_override[irid] = chosen
+            if chosen in _existing_by_id:
+                preflight_existing[chosen] = _existing_by_id[chosen]
+    rowid_to_recid: Mapping[int, str] = _RecordIdView(_rowid_primary, _recid_override)
+    rowid_to_pk: Mapping[int, str] = _SourcePkView(rowid_to_recid, rowid_to_source)
 
     # 2. ``scored_pairs`` is accepted for call-signature compatibility but is
     # NOT read: evidence edges come from the per-cluster ``pair_scores`` /

@@ -6532,6 +6532,8 @@
           "purpose": "Identity resolution -- map run-local clusters to durable identity_ids.",
           "defines": [
             "ResolveSummary",
+            "_RecordIdView",
+            "_SourcePkView",
             "_batch_fingerprint_enabled",
             "_bulk_fast_path_enabled",
             "_bulk_flush_rows",
