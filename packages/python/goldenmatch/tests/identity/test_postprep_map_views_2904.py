@@ -189,3 +189,95 @@ def test_source_pk_column_matches_the_record_id_it_was_derived_from(tmp_path):
     for r in rows:
         rid, src, pk = r["record_id"], r["source"], r["source_pk"]
         assert pk == (rid[len(src) + 1:] if rid.startswith(f"{src}:") else rid)
+
+
+# --- the ordinal collapse: one index, dense lists -----------------------------
+
+def test_ordinal_view_reads_like_the_dict_it_replaced():
+    from goldenmatch.identity.resolve import _OrdinalView
+
+    v = _OrdinalView({10: 0, 20: 1, 30: 2}, ["a", "b", "c"])
+    assert v[10] == "a" and v[30] == "c"
+    assert v.get(20) == "b"
+    assert dict(v) == {10: "a", 20: "b", 30: "c"}
+    assert len(v) == 3
+    assert 20 in v and 21 not in v
+    assert v.get(21) is None
+    assert v.get(21, "fallback") == "fallback"
+    with pytest.raises(KeyError):
+        v[21]
+
+
+def test_source_view_default_and_overrides():
+    from goldenmatch.identity.resolve import _SourceView
+
+    v = _SourceView({1: 0, 2: 1, 3: 2}, "dataframe", {2: "crm"})
+    assert v[1] == "dataframe"
+    assert v[2] == "crm"
+    assert dict(v) == {1: "dataframe", 2: "crm", 3: "dataframe"}
+    assert v.get(9) is None
+    with pytest.raises(KeyError):
+        v[9]
+    # a rowid in the override but NOT prepped must still miss, or the view
+    # would resurrect a row the dict form never held
+    assert 9 not in _SourceView({1: 0}, "dataframe", {9: "ghost"})
+
+
+def test_repeated_row_id_overwrites_in_place(tmp_path):
+    """The dict form let a repeated `__row_id__` overwrite all four values.
+    The ordinal form must too -- `setdefault` returns the existing ordinal, so
+    the second row writes over the first rather than appending a second entry.
+    """
+    df = pl.DataFrame([
+        {"__row_id__": 0, "name": "First", "city": "A"},
+        {"__row_id__": 0, "name": "Second", "city": "B"},   # same row id
+        {"__row_id__": 1, "name": "Other", "city": "C"},
+    ])
+    store = IdentityStore(backend="sqlite", path=str(tmp_path / "dup.db"))
+    try:
+        resolve_clusters(
+            clusters={0: {"members": [0, 1]}}, df=df, store=store,
+            run_name="dup", dataset="views", emit_singletons=False,
+        )
+        rows = store._fetchall("SELECT record_id, payload FROM source_records", ())
+    finally:
+        store.close()
+
+    # two distinct rowids -> two records, not three
+    assert len(rows) == 2
+    payloads = [r["payload"] for r in rows]
+    assert any("Second" in p for p in payloads), "last write for rowid 0 must win"
+    assert not any("First" in p for p in payloads), "overwritten row must not survive"
+
+
+def test_multi_source_frame_keeps_per_row_source_and_pk(tmp_path):
+    """`_SourceView` degenerates to a scalar only when every row agrees. A
+    linkage frame carries a real `__source__`, so the override map is exercised
+    and every record's source / source_pk must still be its own."""
+    df = pl.DataFrame([
+        {
+            "__row_id__": i,
+            "__source__": "crm" if i % 2 else "erp",
+            "name": f"Name{i // 2}",
+        }
+        for i in range(12)
+    ])
+    store = IdentityStore(backend="sqlite", path=str(tmp_path / "multi.db"))
+    try:
+        resolve_clusters(
+            clusters={c: {"members": [2 * c, 2 * c + 1]} for c in range(6)},
+            df=df, store=store, run_name="multi", dataset="views",
+            emit_singletons=False,
+        )
+        rows = store._fetchall(
+            "SELECT record_id, source, source_pk FROM source_records", ()
+        )
+    finally:
+        store.close()
+
+    assert len(rows) == 12
+    assert {r["source"] for r in rows} == {"crm", "erp"}
+    for r in rows:
+        rid, src, pk = r["record_id"], r["source"], r["source_pk"]
+        assert rid.startswith(f"{src}:"), "record id must carry its own source"
+        assert pk == rid[len(src) + 1:]

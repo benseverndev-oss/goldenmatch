@@ -299,6 +299,88 @@ def _record_id_candidates(
     return h1_id, [h1_id]
 
 
+class _OrdinalView(Mapping):
+    """A per-row map stored as one shared rowid->ordinal index plus a dense list.
+
+    `apply_batch`'s prep built four dicts over an IDENTICAL key set -- every
+    prepped rowid, written unconditionally in the same loop iteration. Four
+    dicts means the hash table is allocated, probed and grown four times for
+    one set of keys; only the values differ. Splitting that into one index and
+    N dense lists pays the table once and 8 bytes per row per value after that.
+
+    It is also the shape the remaining work needs: with an ordinal in hand the
+    values can become genuinely columnar (a fixed-width hash buffer, an Arrow
+    array) instead of a Python object per row. This change does NOT do that --
+    the lists still hold the same objects -- so what it measures cleanly is how
+    much of the derived-structure cost is CONTAINER rather than content.
+
+    Read-only, and keyed exactly like the dict it replaces.
+    """
+
+    __slots__ = ("_ord", "_values")
+
+    def __init__(self, ordinals: dict[int, int], values: list) -> None:
+        self._ord = ordinals
+        self._values = values
+
+    def __getitem__(self, key: int):
+        return self._values[self._ord[key]]
+
+    def get(self, key: int, default: Any = None) -> Any:  # type: ignore[override]
+        o = self._ord.get(key)
+        return default if o is None else self._values[o]
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._ord
+
+    def __iter__(self):
+        return iter(self._ord)
+
+    def __len__(self) -> int:
+        return len(self._ord)
+
+
+class _SourceView(Mapping[int, str]):
+    """``rowid -> source``, as one scalar plus the rows that disagree with it.
+
+    A single-frame dedupe has no ``__source__`` column at all, so every row
+    takes the same ``"dataframe"`` default -- literally the same Python object,
+    since ``str()`` of a ``str`` is identity. The 52 B/row this cost at 5M
+    (ADR 0064) was never the strings; it was the dict holding 5M references to
+    one of them. Linkage flows DO carry a real ``__source__``, typically with a
+    handful of distinct values, so the exception map stays small there too and
+    degenerates to the old cost only if every row differs from the first.
+    """
+
+    __slots__ = ("_ord", "_default", "_overrides")
+
+    def __init__(
+        self, ordinals: dict[int, int], default: str, overrides: dict[int, str]
+    ) -> None:
+        self._ord = ordinals
+        self._default = default
+        self._overrides = overrides
+
+    def __getitem__(self, key: int) -> str:
+        if key not in self._ord:
+            raise KeyError(key)
+        return self._overrides.get(key, self._default)
+
+    def get(self, key: int, default: Any = None) -> Any:  # type: ignore[override]
+        if key not in self._ord:
+            return default
+        return self._overrides.get(key, self._default)
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._ord
+
+    def __iter__(self):
+        return iter(self._ord)
+
+    def __len__(self) -> int:
+        return len(self._ord)
+
+
 class _RecordIdView(Mapping[int, str]):
     """``rowid -> chosen record_id``, without a second whole-frame dict.
 
@@ -321,7 +403,7 @@ class _RecordIdView(Mapping[int, str]):
 
     __slots__ = ("_primary", "_override")
 
-    def __init__(self, primary: dict[int, str], override: dict[int, str]) -> None:
+    def __init__(self, primary: Mapping[int, str], override: dict[int, str]) -> None:
         self._primary = primary
         self._override = override
 
@@ -358,7 +440,7 @@ class _SourcePkView(Mapping[int, str]):
 
     __slots__ = ("_recids", "_sources")
 
-    def __init__(self, recids: Mapping[int, str], sources: dict[int, str]) -> None:
+    def __init__(self, recids: Mapping[int, str], sources: Mapping[int, str]) -> None:
         self._recids = recids
         self._sources = sources
 
@@ -445,7 +527,7 @@ def _golden_record_from_members(
 
 
 def _golden_record_from_payloads(
-    payload_by_row_id: dict[int, dict[str, Any]],
+    payload_by_row_id: Mapping[int, dict[str, Any]],
     row_ids: list[int],
     field_strategies: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -740,10 +822,17 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
             _needed = _referenced_row_ids(cluster_items, emit_singletons)
             if len(_needed) < _fa5.height:
                 _fa5 = _fa5.filter_in("__row_id__", sorted(_needed))
-    rowid_to_payload: dict[int, dict[str, Any]] = {}
-    rowid_to_source: dict[int, str] = {}
-    rowid_to_hash: dict[int, str] = {}
-    _rowid_primary: dict[int, str] = {}
+    # ONE index over the prepped rowids, plus a dense list per derived value.
+    # These four were four dicts over an identical key set (every one written
+    # unconditionally in the same loop iteration below); see `_OrdinalView`.
+    _ord: dict[int, int] = {}
+    _primaries: list[str] = []
+    _payloads: list[dict[str, Any]] = []
+    _hashes: list[str] = []
+    # `source` is one scalar for the overwhelmingly common single-source case;
+    # see `_SourceView`. `_src_default` is fixed by the first prepped row.
+    _src_default: str | None = None
+    _src_overrides: dict[int, str] = {}
     # SPARSE: only rows whose candidate list differs from the singleton
     # ``[primary_id]``. Every current return in ``_record_id_candidates`` is
     # ``(x, [x])`` (verified across all four branches -- natural PK, per-row
@@ -809,15 +898,37 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
                     payload=_payload,
                     payload_hash=_phash,
                 )
-                _rowid_primary[irid] = primary_id
                 if candidates != [primary_id]:
                     _rowid_candidates[irid] = candidates
-                rowid_to_payload[irid] = _payload
-                rowid_to_source[irid] = source
-                rowid_to_hash[irid] = _phash
+                if _src_default is None:
+                    _src_default = source
+                # `setdefault` returns the EXISTING ordinal, or the one just
+                # inserted -- which equals the pre-append length. A repeated
+                # __row_id__ therefore overwrites in place, exactly as the dict
+                # form did, rather than appending a second row.
+                _o = _ord.setdefault(irid, len(_primaries))
+                if _o == len(_primaries):
+                    _primaries.append(primary_id)
+                    _payloads.append(_payload)
+                    _hashes.append(_phash)
+                else:
+                    _primaries[_o] = primary_id
+                    _payloads[_o] = _payload
+                    _hashes[_o] = _phash
+                if source != _src_default:
+                    _src_overrides[irid] = source
+                elif irid in _src_overrides:
+                    del _src_overrides[irid]
             # Release the chunk's row dicts before building the next one --
             # this is what bounds the working set.
             del _crows, _h1, _chunk
+
+    _rowid_primary: Mapping[int, str] = _OrdinalView(_ord, _primaries)
+    rowid_to_payload: Mapping[int, dict[str, Any]] = _OrdinalView(_ord, _payloads)
+    rowid_to_hash: Mapping[int, str] = _OrdinalView(_ord, _hashes)
+    rowid_to_source: Mapping[int, str] = _SourceView(
+        _ord, _src_default if _src_default is not None else "dataframe", _src_overrides
+    )
 
     # One bulk lookup over the candidate union resolves each record to an
     # existing id (legacy-fallback) and doubles as the pre-flight check the
@@ -826,8 +937,8 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
     with _stage("identity_prep_candidate_union"):
         _all_candidates = sorted({
             c
-            for _i, _pid in _rowid_primary.items()
-            for c in (_rowid_candidates.get(_i) or (_pid,))
+            for _i, _o in _ord.items()
+            for c in (_rowid_candidates.get(_i) or (_primaries[_o],))
         })
     _existing_by_id: dict[str, str] = (
         store.lookup_entity_ids(_all_candidates) if _all_candidates else {}
@@ -842,7 +953,8 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
     # already in hand (~935 MB and ~5M iterations at 5M, ADR 0064).
     _recid_override: dict[int, str] = {}
     if _existing_by_id:
-        for irid, _pid in _rowid_primary.items():
+        for irid, _o in _ord.items():
+            _pid = _primaries[_o]
             candidates = _rowid_candidates.get(irid) or (_pid,)
             chosen = next((c for c in candidates if c in _existing_by_id), _pid)
             if chosen != _pid:
