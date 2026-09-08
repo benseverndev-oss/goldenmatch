@@ -96,9 +96,15 @@ processed (verified to fire, not assumed to).
 ## Addendum, 2026-09-08: follow-on item 2, first results
 
 The 12.6 GB figure above is superseded. Item 2 was attacked in four slices;
-the peak RSS at 5M cold is now **9,009.6 MB (sqlite) / 8,996.5 MB (postgres)**,
-[run 34256747975](https://github.com/benseverndev-oss/goldenmatch/actions/runs/34256747975)
-against the same rungs, backends and `pair_scores=spanning` as the original.
+the peak RSS at 5M cold is now **8,390.6 MB (sqlite) / 8,404.8 MB (postgres)**
+— **−33%** — measured against the same rungs, backends and
+`pair_scores=spanning` as the original
+([run 34256747975](https://github.com/benseverndev-oss/goldenmatch/actions/runs/34256747975)
+for #2903,
+[run 34266817099](https://github.com/benseverndev-oss/goldenmatch/actions/runs/34266817099)
+for #2904). Wall is unchanged throughout: every slice is inside the ~19%
+run-to-run variance the store wall already carries, which is the point — this
+is a memory result, not a speed one.
 
 | slice | what | peak RSS at 5M |
 |---|---|---|
@@ -106,8 +112,9 @@ against the same rungs, backends and `pair_scores=spanning` as the original.
 | #2900 | payload + hash computed once, not twice | (wall only, −42% on `identity_prep_record_ids`) |
 | #2902 | `_rowid_candidates` stored sparsely | −0.08% — **a negative result** |
 | #2903 | streamed prep, row dicts bounded at O(chunk) | **8,996–9,010 MB (−28%)** |
+| #2904 | post-prep maps derived, not stored | **8,390–8,405 MB (−33% cumulative)** |
 
-Two things worth carrying forward.
+Three things worth carrying forward.
 
 **The instruments disagreed with the outcome twice, in opposite directions.**
 #2902 was sized from tracemalloc at ~0.9 GB and delivered 0.08%: tracemalloc
@@ -127,9 +134,21 @@ the prep peak (12,557 MB) sat above it and only became attributable once #2903
 lowered the peak beneath it. A stage marker that does not bracket a loop hides
 that loop inside its neighbour.
 
-**Residual, and where the next slice has to go.** Of the 9.0 GB: ~2.1 GB before
-prep, ~0.4 GB the filtered frame, **~5.5 GB the derived structures**, ~0.9 GB
-the post-prep maps. The 5.5 GB is five per-row Python maps over an identical
+**A stage gap is an upper bound on what lives in it.** #2904 was sized at
+−935 MB — the entire unstaged gap between the prep peak and the write-loop
+peak — and delivered **−592 MB (postgres) / −619 MB (sqlite)**, about 65%. The
+prediction assumed the whole gap was the two maps; measured, ~620 MB was, and
+the remaining ~340 MB is the write loop's own accumulators, which were simply
+never visible on their own. An unstaged region attributes to whatever you
+guess is in it until you remove one candidate and re-measure. It also is not
+free: deriving `source_pk` on read costs a slice per member access, and the
+write loop's non-store wall rose a few seconds on both backends, consistently
+and as expected. ~600 MB for that is the right trade at this scale; it is
+still a trade.
+
+**Residual, and where the next slice has to go.** Of the 8.4 GB: ~2.1 GB before
+prep, ~0.4 GB the filtered frame, **~5.5 GB the derived structures**, ~0.34 GB
+the write loop. The 5.5 GB is five per-row Python maps over an identical
 5M-key set — payload 324 B/row, hash 157, primary 118, source 52 — where the
 container overhead is paid five times and the values are stored as individual
 Python objects. Streaming cannot touch it, because those values outlive the
