@@ -6546,6 +6546,7 @@
             "_match_record_rows",
             "_maybe_warn_singleton_sqlite_ceiling",
             "_node_age",
+            "_prep_chunk_rows",
             "_record_id_candidates",
             "_referenced_row_ids",
             "_resolve_via_index",

@@ -200,6 +200,34 @@ def _hash_payload(payload: dict[str, Any]) -> str:
 _NOT_BATCHED = object()
 
 
+def _prep_chunk_rows() -> int:
+    """Rows per chunk in ``apply_batch``'s streamed prep pass.
+
+    The prep used to materialize EVERY row as a Python dict up front
+    (``select_dicts`` over the whole frame) and hold the list for the entire
+    derivation loop. Measured at 5M (ADR 0064): that list alone is ~3.9 GB of
+    the 10.4 GB ``apply_batch`` adds, and the whole-frame ``h1_by_rowid`` dict
+    another ~0.6 GB on top. Neither is needed all at once -- each row is read
+    exactly once, and only small scalars survive the loop.
+
+    Streaming in chunks caps the row-dict working set at O(chunk) instead of
+    O(N) while leaving every derived value byte-identical: chunks are contiguous
+    slices in the original order, and ``batch_fingerprints`` is explicitly
+    per-row (restricting the frame changes which hashes are computed, never
+    their values), so a per-chunk call is equivalent to slicing the whole-frame
+    result.
+
+    ``0`` restores the legacy single-pass behaviour (kill-switch).
+    """
+    raw = os.environ.get("GOLDENMATCH_IDENTITY_PREP_CHUNK_ROWS")
+    if raw is None:
+        return 250_000
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 250_000
+
+
 def _batch_fingerprint_enabled() -> bool:
     """Batch fingerprinting for ``resolve_clusters``: no-PK record h1 hashes are
     computed once via ``batch_fingerprints(df)`` (Arrow kernel) instead of per-row
@@ -633,8 +661,6 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
             _needed = _referenced_row_ids(cluster_items, emit_singletons)
             if len(_needed) < _fa5.height:
                 _fa5 = _fa5.filter_in("__row_id__", sorted(_needed))
-    with _stage("identity_prep_materialize_rows"):
-        rows = _fa5.select_dicts(list(_fa5.columns))
     rowid_to_recid: dict[int, str] = {}
     rowid_to_payload: dict[int, dict[str, Any]] = {}
     rowid_to_source: dict[int, str] = {}
@@ -645,67 +671,76 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
     # ``[primary_id]``. Every current return in ``_record_id_candidates`` is
     # ``(x, [x])`` (verified across all four branches -- natural PK, per-row
     # fingerprint, batched h1, un-fingerprintable), so today this stays empty
-    # and the 182 B/row it used to cost per row is not paid at all (~0.9 GB at
-    # 5M). Storing the exception rather than the rule keeps the multi-candidate
-    # contract the docstring describes: if the helper ever returns a real
-    # alternate list again (the legacy-migration shape), it is recorded here and
-    # both readers below pick it up.
+    # and the 182 B/row it used to cost per row is not paid at all. Storing the
+    # exception rather than the rule keeps the multi-candidate contract the
+    # docstring describes: if the helper ever returns a real alternate list
+    # again, it is recorded here and both readers below pick it up.
     _rowid_candidates: dict[int, list[str]] = {}
 
-    # Optional batch fingerprinting (GOLDENMATCH_IDENTITY_BATCH_FINGERPRINT=1):
-    # compute every no-PK row's h1 hash once via the Arrow batch kernel instead
-    # of per-row inside the loop. ``batch_fingerprints`` returns FULL 64-char
-    # hashes positionally aligned to its input's rows (None = un-fingerprintable),
-    # so it MUST run on the SAME frame ``rows`` came from -- i.e. the bounded
-    # ``_fa5``, not the caller's ``df`` -- to stay aligned with
-    # ``enumerate(rows)``. Each row's hash covers only that row's own values, so
-    # restricting the frame changes which hashes are computed, never their
-    # values. Only NO-PK rows get a precomputed hash -- the PK-detection here
-    # mirrors ``_record_id_candidates`` exactly, so a PK row never receives one
-    # (it would be ignored anyway) and a no-PK row always does. Gate off ->
-    # ``h1_by_rowid`` empty -> every row falls to _NOT_BATCHED -> byte-identical
-    # to the per-row path.
-    h1_by_rowid: dict[int, str | None] = {}
-    if _batch_fingerprint_enabled() and rows:
-        h1_list = batch_fingerprints(_fa5.native)
-        for i, row in enumerate(rows):
-            rid = row.get("__row_id__")
-            if rid is None:
-                continue
-            has_pk = (
-                source_pk_col is not None
-                and source_pk_col in row
-                and row[source_pk_col] is not None
-            )
-            if not has_pk:
-                h1_by_rowid[int(rid)] = h1_list[i]
-
+    # STREAMED PREP. Materialization, batch fingerprinting and per-row
+    # derivation used to be three whole-frame passes: `select_dicts` built a
+    # list of EVERY row dict, `batch_fingerprints` built a 5M-entry
+    # ``h1_by_rowid``, and the derivation loop then walked the list. Measured at
+    # 5M (ADR 0064), the row-dict list is ~3.9 GB of the 10.4 GB apply_batch
+    # adds, and h1_by_rowid ~0.6 GB more -- yet each row is read exactly once
+    # and only small scalars outlive the loop.
+    #
+    # Fusing them into one chunked pass caps the row-dict working set at
+    # O(chunk) instead of O(N), and lets each chunk's h1 hashes be consumed
+    # immediately rather than accumulated. Values are unchanged: chunks are
+    # contiguous slices in the original order, and ``batch_fingerprints`` is
+    # documented per-row (restricting the frame changes WHICH hashes are
+    # computed, never their values), so a per-chunk call equals a slice of the
+    # whole-frame result. Only NO-PK rows take a precomputed hash, mirroring
+    # ``_record_id_candidates``'s own PK detection exactly, as before.
+    #
+    # ``GOLDENMATCH_IDENTITY_PREP_CHUNK_ROWS=0`` restores the single-pass form.
     with _stage("identity_prep_record_ids"):
-        for row in rows:
-            rid = row.get("__row_id__")
-            if rid is None:
+        _cols = list(_fa5.columns)
+        _batch_fp = _batch_fingerprint_enabled()
+        _total_rows = _fa5.height
+        _chunk_rows_n = _prep_chunk_rows() or max(_total_rows, 1)
+        for _off in range(0, max(_total_rows, 1), _chunk_rows_n):
+            _chunk = _fa5.slice(_off, _chunk_rows_n)
+            _crows = _chunk.select_dicts(_cols)
+            if not _crows:
                 continue
-            irid = int(rid)
-            source = str(row.get("__source__", "dataframe"))
-            # Build the payload + its hash ONCE and hand them down. Both were
-            # previously computed here AND again inside
-            # `_record_id_candidates` (5.86 us/row of duplicate work, ~29s at
-            # 5M). The caller needs them unconditionally for rowid_to_payload /
-            # rowid_to_hash, so hoisting is a strict win on the PK path too.
-            _payload = _row_to_payload(row)
-            _phash = _hash_payload(_payload)
-            primary_id, candidates = _record_id_candidates(
-                row, source, source_pk_col,
-                precomputed_h1=h1_by_rowid.get(irid, _NOT_BATCHED),
-                payload=_payload,
-                payload_hash=_phash,
-            )
-            _rowid_primary[irid] = primary_id
-            if candidates != [primary_id]:
-                _rowid_candidates[irid] = candidates
-            rowid_to_payload[irid] = _payload
-            rowid_to_source[irid] = source
-            rowid_to_hash[irid] = _phash
+            _h1 = batch_fingerprints(_chunk.native) if _batch_fp else None
+            for _i, row in enumerate(_crows):
+                rid = row.get("__row_id__")
+                if rid is None:
+                    continue
+                irid = int(rid)
+                source = str(row.get("__source__", "dataframe"))
+                if _h1 is None:
+                    _pre: object = _NOT_BATCHED
+                else:
+                    _has_pk = (
+                        source_pk_col is not None
+                        and source_pk_col in row
+                        and row[source_pk_col] is not None
+                    )
+                    _pre = _NOT_BATCHED if _has_pk else _h1[_i]
+                # Build the payload + its hash ONCE and hand them down; both
+                # were previously recomputed inside `_record_id_candidates`
+                # (5.86 us/row, ~29s at 5M).
+                _payload = _row_to_payload(row)
+                _phash = _hash_payload(_payload)
+                primary_id, candidates = _record_id_candidates(
+                    row, source, source_pk_col,
+                    precomputed_h1=_pre,
+                    payload=_payload,
+                    payload_hash=_phash,
+                )
+                _rowid_primary[irid] = primary_id
+                if candidates != [primary_id]:
+                    _rowid_candidates[irid] = candidates
+                rowid_to_payload[irid] = _payload
+                rowid_to_source[irid] = source
+                rowid_to_hash[irid] = _phash
+            # Release the chunk's row dicts before building the next one --
+            # this is what bounds the working set.
+            del _crows, _h1, _chunk
 
     # One bulk lookup over the candidate union resolves each record to an
     # existing id (legacy-fallback) and doubles as the pre-flight check the

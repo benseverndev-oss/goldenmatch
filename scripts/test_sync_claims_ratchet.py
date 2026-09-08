@@ -61,7 +61,12 @@ KNOWN_ACTIONABLE: set[tuple[str, str, int]] = {
     # here landing at high confidence instead. Closing this means softening
     # the docstring so the pattern no longer resolves a target, not writing
     # a test against `row`.
-    ("identity/resolve.py", "_batch_fingerprint_enabled", 203),
+    # Line moved 203 -> 231 when `_prep_chunk_rows` was added above it
+    # (the streamed-prep change). Same finding, same docstring, same
+    # reason -- this registry keys on line number, so a pure insertion
+    # above an entry reads as one finding vanishing and a new one
+    # appearing.
+    ("identity/resolve.py", "_batch_fingerprint_enabled", 231),
     ("identity/snowflake_backend.py", "_rel_expr", 501),
     ("spark/identity.py", "record_id_for_row", 45),
 }
