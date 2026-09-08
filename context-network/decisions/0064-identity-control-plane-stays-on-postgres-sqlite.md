@@ -96,12 +96,13 @@ processed (verified to fire, not assumed to).
 ## Addendum, 2026-09-08: follow-on item 2, first results
 
 The 12.6 GB figure above is superseded. Item 2 was attacked in four slices;
-the peak RSS at 5M cold is now **8,390.6 MB (sqlite) / 8,404.8 MB (postgres)**
-— **−33%** — measured against the same rungs, backends and
+the peak RSS at 5M cold is now **8,197.4 MB (sqlite) / 8,200.3 MB (postgres)**
+— **−35%** — measured against the same rungs, backends and
 `pair_scores=spanning` as the original
 ([run 34256747975](https://github.com/benseverndev-oss/goldenmatch/actions/runs/34256747975)
 for #2903,
 [run 34266817099](https://github.com/benseverndev-oss/goldenmatch/actions/runs/34266817099)
+and [run 34270540909](https://github.com/benseverndev-oss/goldenmatch/actions/runs/34270540909)
 for #2904). Wall is unchanged throughout: every slice is inside the ~19%
 run-to-run variance the store wall already carries, which is the point — this
 is a memory result, not a speed one.
@@ -113,6 +114,7 @@ is a memory result, not a speed one.
 | #2902 | `_rowid_candidates` stored sparsely | −0.08% — **a negative result** |
 | #2903 | streamed prep, row dicts bounded at O(chunk) | **8,996–9,010 MB (−28%)** |
 | #2904 | post-prep maps derived, not stored | **8,390–8,405 MB (−33% cumulative)** |
+| #2904 | one rowid index + dense lists, not four dicts | **8,197–8,200 MB (−35% cumulative)** |
 
 Three things worth carrying forward.
 
@@ -146,8 +148,31 @@ write loop's non-store wall rose a few seconds on both backends, consistently
 and as expected. ~600 MB for that is the right trade at this scale; it is
 still a trade.
 
-**Residual, and where the next slice has to go.** Of the 8.4 GB: ~2.1 GB before
-prep, ~0.4 GB the filtered frame, **~5.5 GB the derived structures**, ~0.34 GB
+**The container theory is mostly wrong, and that is the useful result.** The
+ordinal collapse was sized at ~600 MB on the reasoning that four dicts over an
+identical 5M-key set pay for the hash table four times. It returned **−204 MB
+(postgres) / −193 MB (sqlite)**, about a third. Netting off what it ADDED — 5M
+ordinal `int` objects (~140 MB) and three list slots per row (~120 MB) — the
+gross saving is ~470 MB across three removed dicts, i.e. **~31 B/row/dict**,
+not the ~100 B assumed. A dict whose keys are already shared with another dict
+is far cheaper than an isolated one.
+
+So the ~5.3 GB of derived structures is overwhelmingly **content, not
+container**, and the full columnar reshape can only pay if it changes how the
+VALUES are represented: the payload dict per row (~324 B/row, ~1.6 GB), the
+64-char hash string (~157 B/row, ~785 MB → ~320 MB as a fixed-width buffer),
+the primary id (~118 B/row). The honest ceiling on that work is perhaps 2–2.5
+GB of the 5.3, and most of it requires replacing the payload dict — the one
+change that touches `_golden_record_from_payloads` and both write paths.
+
+This is what the slice was for. It cost one small, low-risk change and it
+converted the reshape from a guess into a bounded estimate; had it returned
+600 MB the container argument would have carried the larger rewrite on its own.
+It also came free on wall — prep fell ~3–5 s, one dict write per row instead
+of four.
+
+**Residual, and where the next slice has to go.** Of the 8.2 GB: ~2.1 GB before
+prep, ~0.4 GB the filtered frame, **~5.3 GB the derived structures**, ~0.35 GB
 the write loop. The 5.5 GB is five per-row Python maps over an identical
 5M-key set — payload 324 B/row, hash 157, primary 118, source 52 — where the
 container overhead is paid five times and the values are stored as individual
