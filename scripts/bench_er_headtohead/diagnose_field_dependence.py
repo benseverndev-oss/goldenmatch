@@ -77,26 +77,32 @@ def _norm(v) -> str | None:
 
 
 def _jw():
-    """The ENGINE's comparator, not a lookalike.
+    """The ENGINE's comparator, reached the way the engine reaches it.
 
     This read `rapidfuzz.distance.JaroWinkler` when it was written. rapidfuzz
-    has since been evicted from the runtime -- GoldenMatch owns its scorer
-    (goldenfuzz) and `pip install goldenmatch` no longer pulls rapidfuzz -- so
-    on a modern install the import failed, the whole diagnostic skipped, and
-    the lane went GREEN having measured nothing.
+    was later evicted from the runtime, so on a modern install the import
+    failed, the whole diagnostic skipped, and the lane went GREEN having
+    measured nothing.
 
-    Beyond availability, fidelity decides it: this measures how often two
-    fields AGREE, and 'agree' has to mean what the engine means by it.
-    Verified numerically identical to the rapidfuzz form on the cases this
-    exercises, so the swap does not move the numbers -- it stops them being a
-    lookalike's numbers.
+    The first repair reached for `goldenfuzz`, which was ALSO wrong: it is
+    not a goldenmatch dependency, so CI could not import it either. Two
+    lookalikes in a row for the same reason -- picking a library that computes
+    the same function instead of the one the engine calls.
+
+    `goldenmatch.core.strsim` is what `core/scorer.py` imports (line 17) and
+    what its pure path scores jaro_winkler with, so it ships wherever
+    goldenmatch does and needs no extra install. Fidelity matters here beyond
+    availability: this measures how often two fields AGREE, and 'agree' has
+    to mean what the engine means by it. All three implementations are
+    numerically identical on the cases this exercises, so the swap does not
+    move the numbers -- it stops them being a lookalike's numbers.
 
     Deliberately NOT wrapped in try/except: a missing comparator is a broken
     measurement, and this script's one job is to measure.
     """
-    from goldenfuzz import jaro_winkler
+    from goldenmatch.core.strsim import jaro_winkler_normalized_similarity
 
-    return jaro_winkler
+    return jaro_winkler_normalized_similarity
 
 
 def _run_gm_emitted(records):
