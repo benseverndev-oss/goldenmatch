@@ -64,6 +64,16 @@ on:
           earned its flip against the same over-merge panel.
         type: string
         default: GOLDENMATCH_FS_REFIT_THRESHOLD
+      calibrated:
+        description: >-
+          Value for GOLDENMATCH_FS_CALIBRATED, applied to BOTH arms. Empty
+          leaves the default (min-max) in place. Set "posterior" to A/B a lever
+          under the principled 0.5 boundary instead: a correction that shifts
+          the score distribution can lose recall to min-max renormalization
+          rather than to its own effect, which is exactly what stalled the
+          field-dependence spike.
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -124,6 +134,9 @@ jobs:
         # byte-identical to the hardcoded form.
         env:
           LEVER: ${{ inputs.lever || 'GOLDENMATCH_FS_REFIT_THRESHOLD' }}
+          # Applied to BOTH arms, so it is a held constant and not a
+          # second variable. Empty -> unset -> today's default.
+          GOLDENMATCH_FS_CALIBRATED: ${{ inputs.calibrated }}
         run: |
           uv run python -m scripts.bench_er_headtohead.ab_lever \
             --env "$LEVER" --off 0 --on 1 \
