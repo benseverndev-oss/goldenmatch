@@ -27,9 +27,24 @@ def value_frequencies(
     frame = to_frame(df)
     if field not in frame.columns:
         return {}
+    # Count DISTINCT values, not rows. The row loop below used to be
+    # `for v in df[field].to_list()`, doing a str() and a transform chain
+    # per ROW. That was survivable while this returned {} instantly on any
+    # Arrow frame (the polars-era column test), because the arrow lane
+    # never reached it. Fixing that guard made the work real and pushed
+    # test_arrow_native_cluster_equivalence[shared-email-switchboard] to
+    # 43s locally, over CI's --timeout=120 under xdist contention -- which
+    # surfaces as a killed worker, not a slow test.
+    #
+    # `value_counts_desc` is on the Column protocol and is computed
+    # columnar by both engines, so the Python work becomes O(distinct).
+    # Output is unchanged: transforms are deterministic per value, so
+    # applying them once per distinct value and adding its count equals
+    # applying them per row (two raw values that collide after transform
+    # still sum into one bucket).
     counts: dict[str, int] = {}
     total = 0
-    for v in frame.column(field).to_list():
+    for v, n in frame.column(field).value_counts_desc():
         if v is None:
             continue
         s = str(v)
@@ -37,8 +52,8 @@ def value_frequencies(
             s = apply_transforms(s, transforms)
         if s is None or s == "":
             continue
-        counts[s] = counts.get(s, 0) + 1
-        total += 1
+        counts[s] = counts.get(s, 0) + n
+        total += n
     if total == 0:
         return {}
     return {val: c / total for val, c in counts.items()}
