@@ -311,6 +311,28 @@ def _fs_post_blocking_u_enabled() -> bool:
     )
 
 
+# Field-dependence correction knobs (GOLDENMATCH_FS_FIELD_DEPENDENCE).
+_FD_MIN_BITS = 0.5   # only correct pairs whose excess-lift is at least this
+_FD_MAX_PAIRS = 3    # cap corrected pairs (bounds pairwise over-subtraction)
+
+
+def _fs_field_dependence_enabled() -> bool:
+    """FS field-dependence (conditional-independence) correction. **Default OFF.**
+
+    When ``GOLDENMATCH_FS_FIELD_DEPENDENCE`` is truthy, EM estimates how much
+    each comparison field PAIR co-agrees at its top level among NON-matches
+    beyond independence, and scoring subtracts that excess-lift (``log2`` bits)
+    when a pair agrees on both — removing the double-count FS's
+    conditional-independence assumption creates. On historical_50k the
+    first_name x surname agreements co-occur ~5.6x independence among
+    non-matches, so FS over-counts ~2.5 bits and over-merges namesakes; this
+    corrects it. Default off is byte-identical (no correction estimated).
+    """
+    return os.environ.get("GOLDENMATCH_FS_FIELD_DEPENDENCE", "0").lower() in (
+        "1", "true", "on", "yes", "enabled",
+    )
+
+
 def _deconvolve_post_blocking_u(
     comp_matrix, mk, m_probs, p_match, always_conditioned, u_floor: float = 1e-4,
 ) -> dict:
@@ -339,6 +361,59 @@ def _deconvolve_post_blocking_u(
         if s > 0:
             out[f.field] = [x / s for x in u_new]
     return out
+def _compute_joint_corrections(
+    comp_matrix, mk, m_probs, u_probs, p_match, conditioned_mask, always_conditioned,
+) -> list[tuple[str, str, float]]:
+    """Estimate the excess-lift bits FS over-counts on each correlated field pair.
+
+    Among the NON-match population (posterior-weighted over the scored/blocked
+    pairs), measures P(both fields agree at top level) vs the independence
+    product ``u_a_top * u_b_top``. Returns ``(field_a, field_b, excess_bits)`` for
+    pairs whose ``log2(joint / independent)`` exceeds ``_FD_MIN_BITS`` (top
+    ``_FD_MAX_PAIRS`` by excess). Scoring subtracts ``excess_bits`` when both
+    agree — dropping the namesake double-count.
+    """
+    # Non-match posterior over the scored pairs (forward E-step, converged m/u).
+    n_pairs = comp_matrix.shape[0]
+    log_m = np.zeros(n_pairs)
+    log_u = np.zeros(n_pairs)
+    for j, f in enumerate(mk.fields):
+        levels_j = comp_matrix[:, j]
+        eligible = (levels_j >= 0) & ~conditioned_mask[:, j]
+        m_table = np.log(np.maximum(np.asarray(m_probs[f.field], dtype=np.float64), 1e-10))
+        u_table = np.log(np.maximum(np.asarray(u_probs[f.field], dtype=np.float64), 1e-10))
+        log_m[eligible] += m_table[levels_j[eligible]]
+        log_u[eligible] += u_table[levels_j[eligible]]
+    log_match = math.log(max(p_match, 1e-10)) + log_m
+    log_nonmatch = math.log(max(1 - p_match, 1e-10)) + log_u
+    mx = np.maximum(log_match, log_nonmatch)
+    e_match = np.exp(log_match - mx)
+    e_nonmatch = np.exp(log_nonmatch - mx)
+    w = e_nonmatch / np.maximum(e_match + e_nonmatch, 1e-300)  # non-match responsibility
+    W = float(w.sum())
+    if W <= 0:
+        return []
+
+    # Top-level agreement mask per regular (non-blocking) field.
+    fields = [(j, f) for j, f in enumerate(mk.fields) if f.field not in always_conditioned]
+    top = {}
+    for j, f in fields:
+        lv = comp_matrix[:, j]
+        top[f.field] = (lv == (int(f.levels) - 1)) & (lv >= 0)
+
+    out = []
+    for (ja, fa), (jb, fb) in combinations(fields, 2):
+        ta, tb = top[fa.field], top[fb.field]
+        u_a = float((w * ta).sum()) / W
+        u_b = float((w * tb).sum()) / W
+        u_ab = float((w * (ta & tb)).sum()) / W
+        if u_a <= 0 or u_b <= 0 or u_ab <= 0:
+            continue
+        excess = math.log2(u_ab / (u_a * u_b))
+        if excess >= _FD_MIN_BITS:
+            out.append((fa.field, fb.field, excess))
+    out.sort(key=lambda t: t[2], reverse=True)
+    return out[:_FD_MAX_PAIRS]
 
 
 def enforce_weight_monotonicity(
@@ -434,6 +509,13 @@ class EMResult:
     # namesakes pile up just below it (historical_50k: 0.50 F1 0.75 vs 0.55 F1
     # 0.80); this adapts the cutoff per dataset. None = off = fixed default.
     calibrated_link_threshold: float | None = None
+    # Field-dependence correction (GOLDENMATCH_FS_FIELD_DEPENDENCE). Each entry is
+    # (field_a, field_b, excess_bits): among NON-matches, fields a and b co-agree
+    # at their top level more than independence predicts, so FS over-counts
+    # ``excess_bits = log2(u_joint / (u_a_top * u_b_top))`` of match weight
+    # whenever a pair agrees on both. Scoring subtracts it (drops the namesake
+    # double-count). None/empty = off = byte-identical.
+    joint_corrections: list[tuple[str, str, float]] | None = None
     training_config: dict | None = None
     # Non-serialized marker distinguishing a loaded schema-v1 model from an
     # in-memory result constructed before manifests existed.
@@ -468,6 +550,9 @@ class EMResult:
         }
         if self.calibrated_link_threshold is not None:
             data["calibrated_link_threshold"] = self.calibrated_link_threshold
+        if self.joint_corrections:
+            # tuples -> lists over JSON; consumers unpack positionally either way.
+            data["joint_corrections"] = [list(t) for t in self.joint_corrections]
         if self.training_config is not None:
             data["training_config"] = self.training_config
         return data
@@ -498,6 +583,10 @@ class EMResult:
                 tf_freqs=data.get("tf_freqs"),
                 tf_collision=data.get("tf_collision"),
                 calibrated_link_threshold=data.get("calibrated_link_threshold"),
+                joint_corrections=(
+                    [tuple(t) for t in data["joint_corrections"]]
+                    if data.get("joint_corrections") else None
+                ),
                 training_config=data.get("training_config"),
                 _source_schema_version=version,
             )
@@ -2384,6 +2473,21 @@ def train_em(
                 calibrated_link_threshold,
             )
 
+    # Field-dependence correction: excess-lift bits per correlated field pair
+    # (GOLDENMATCH_FS_FIELD_DEPENDENCE, default off -> None -> byte-identical).
+    joint_corrections = None
+    if _fs_field_dependence_enabled():
+        joint_corrections = _compute_joint_corrections(
+            comp_matrix, mk, m_probs, u_probs, p_match,
+            conditioned_mask, always_conditioned,
+        ) or None
+        if joint_corrections:
+            logger.info(
+                "FS field-dependence: correcting %d field pair(s): %s",
+                len(joint_corrections),
+                ", ".join(f"{a}x{b}(-{bits:.2f}b)" for a, b, bits in joint_corrections),
+            )
+
     return EMResult(
         m_probs=m_probs,
         u_probs=u_probs,
@@ -2394,6 +2498,7 @@ def train_em(
         tf_freqs=tf_freqs,
         tf_collision=tf_collision,
         calibrated_link_threshold=calibrated_link_threshold,
+        joint_corrections=joint_corrections,
         training_config=_training_config_manifest(mk),
     )
 
@@ -4224,6 +4329,9 @@ def score_probabilistic(
             for ne in ne_fields:
                 total_weight += _ne_scalar_contribution(row_a, row_b, ne, em_result)
 
+            # Field-dependence correction: drop the correlated-pair double-count.
+            total_weight += _joint_correction_scalar(vec, mk, em_result)
+
             if calibrated:
                 normalized = posterior_from_weight(total_weight, prior_w)
             elif not has_regular_evidence and total_weight == 0.0:
@@ -4468,6 +4576,45 @@ def _scalar_tf_contribution(va, vb, level: int, f, em_result) -> float:
     return float(np.clip(math.log2(collision / fv), -_TF_CLAMP, _TF_CLAMP))
 
 
+def _joint_field_indices(mk, em_result):
+    """Resolve joint_corrections into ((idx_a, top_a), (idx_b, top_b), bits).
+
+    Returns [] when the correction is off/empty. Cached per (mk, em_result) is
+    unnecessary — the list is tiny (<= _FD_MAX_PAIRS)."""
+    jc = getattr(em_result, "joint_corrections", None)
+    if not jc:
+        return []
+    pos = {f.field: (i, int(f.levels) - 1) for i, f in enumerate(mk.fields)}
+    out = []
+    for a, b, bits in jc:
+        pa, pb = pos.get(a), pos.get(b)
+        if pa is not None and pb is not None:
+            out.append((pa, pb, float(bits)))
+    return out
+
+
+def _joint_correction_scalar(vec, mk, em_result) -> float:
+    """Bits to SUBTRACT from a scalar pair's weight for correlated co-agreement:
+    for each corrected pair, drop ``excess_bits`` when both fields are at their
+    top level (the namesake double-count the independence assumption creates)."""
+    adj = 0.0
+    for (ia, ta), (ib, tb), bits in _joint_field_indices(mk, em_result):
+        if vec[ia] == ta and vec[ib] == tb:
+            adj -= bits
+    return adj
+
+
+def _apply_joint_correction_vectorized(total_weight, top_masks, mk, em_result) -> None:
+    """Subtract correlated-pair excess bits over an NxN block IN PLACE. ``top_masks``
+    is ``{field -> boolean NxN mask of top-level agreement}`` accumulated during
+    the field loop (mirrors how ``lvl`` is per-field but not retained)."""
+    for (ia, _ta), (ib, _tb), bits in _joint_field_indices(mk, em_result):
+        fa, fb = mk.fields[ia].field, mk.fields[ib].field
+        ma, mb = top_masks.get(fa), top_masks.get(fb)
+        if ma is not None and mb is not None:
+            total_weight -= np.where(ma & mb, bits, 0.0)
+
+
 #: Scorers that CANNOT run through the scalar per-pair ``score_field`` (they are
 #: matrix-only by nature) — model-backed embedding scorers. The FS path handles
 #: them exclusively on the vectorized matrix (EM E-step + block scoring); they
@@ -4602,6 +4749,8 @@ def score_probabilistic_vectorized(
     has_regular_evidence = np.zeros((n, n), dtype=bool)
     pair_min_weight = np.full((n, n), ne_min_weight, dtype=np.float64)
     pair_max_weight = np.full((n, n), ne_max_weight, dtype=np.float64)
+    # field -> top-level agreement mask, for the field-dependence correction.
+    top_masks: dict = {}
     for f in mk.fields:
         if f.scorer == "record_embedding":
             # Record-level embedding: one cosine matrix over the concatenated
@@ -4650,6 +4799,9 @@ def score_probabilistic_vectorized(
         pair_min_weight += float(weights.min())
         pair_max_weight += float(weights.max())
         _apply_tf_adjustment(total_weight, vals, lvl, f, em_result, n)
+        top_masks[f.field] = observed & (lvl == int(f.levels) - 1)
+
+    _apply_joint_correction_vectorized(total_weight, top_masks, mk, em_result)
 
     for ne in (mk.negative_evidence or []):
         ne_vals = _field_values_for_block(block_df, ne, n)
@@ -4749,6 +4901,7 @@ def score_probabilistic_vectorized_batch(
     has_regular_evidence = np.zeros((S, S), dtype=bool)
     pair_min_weight = np.full((S, S), ne_min_weight, dtype=np.float64)
     pair_max_weight = np.full((S, S), ne_max_weight, dtype=np.float64)
+    top_masks: dict = {}
     for f in mk.fields:
         vals: list[str | None] = []
         for bdf, (s, e) in zip(block_dfs, spans):
@@ -4777,6 +4930,9 @@ def score_probabilistic_vectorized_batch(
         pair_min_weight += float(weights.min())
         pair_max_weight += float(weights.max())
         _apply_tf_adjustment(total_weight, vals, lvl, f, em_result, S)
+        top_masks[f.field] = observed & (lvl == int(f.levels) - 1)
+
+    _apply_joint_correction_vectorized(total_weight, top_masks, mk, em_result)
 
     for ne in (mk.negative_evidence or []):
         ne_vals: list[str | None] = []
@@ -5657,7 +5813,12 @@ def probabilistic_block_scorer(mk: MatchkeyConfig, em_result: EMResult):
     NxN-matrix numpy path -> scalar ``score_probabilistic`` (model-backed
     scorers or ``GOLDENMATCH_FS_VECTORIZED=0``).
     """
-    if _fs_native_eligible(mk):
+    # Field-dependence correction is a Python post-adjustment; the native kernel
+    # returns pre-normalized/thresholded scores, so decline it to the numpy path
+    # when a correction is present (mirrors the tf-on-old-wheel decline).
+    _decline_native = bool(getattr(em_result, "joint_corrections", None))
+
+    if not _decline_native and _fs_native_eligible(mk):
         def _native(block_df, exclude_pairs=None):
             return score_probabilistic_native(block_df, mk, em_result, exclude_pairs)
         return _native
@@ -5711,6 +5872,7 @@ def score_pair_probabilistic(
             )
     for ne in (mk.negative_evidence or []):
         total_weight += _ne_scalar_contribution(row_a, row_b, ne, em_result)
+    total_weight += _joint_correction_scalar(vec, mk, em_result)
 
     if _fs_calibration_mode() == "posterior":
         return posterior_from_weight(total_weight, prior_weight(em_result.proportion_matched))
