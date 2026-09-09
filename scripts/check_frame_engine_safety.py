@@ -132,6 +132,10 @@ def scan() -> list[tuple[tuple[str, str, str, str], int]]:
 # entry.
 #
 # Keyed by (module, function, parameter, source text), NOT line number.
+#
+# Two seed entries are already gone: `_build_tf_tables` and
+# `value_frequencies` were the sites this gate was written for, and #2908
+# routed both through `to_frame`. The floor is 61.
 # ---------------------------------------------------------------------------
 KNOWN: set[tuple[str, str, str, str]] = {
     ('config/splink_upgrade.py', '_measure_mean_length', 'df',
@@ -186,8 +190,6 @@ KNOWN: set[tuple[str, str, str, str]] = {
      'if "__row_id__" not in df.columns:'),
     ('core/pipeline.py', '_score_partition_with_config', 'df',
      'if "__source__" not in df.columns:'),
-    ('core/probabilistic.py', '_build_tf_tables', 'df',
-     'if f.field not in df.columns:'),
     ('core/probabilistic_fast.py', '_resolve_probabilistic_fast_path', 'prepared_df',
      'if xform_col not in prepared_df.columns:'),
     ('core/quality.py', 'row_quality_floor', 'df',
@@ -222,8 +224,6 @@ KNOWN: set[tuple[str, str, str, str]] = {
      'if strategy == "anchor" and g.anchor not in multi_df.columns:'),
     ('core/survivorship/native.py', '_sorted_for_group', 'multi_df',
      'if strategy == "most_recent" and g.date_column not in multi_df.columns:'),
-    ('core/tf_tables.py', 'value_frequencies', 'df',
-     'if field not in df.columns:'),
     ('core/vector_index.py', '_prep_frame', 'df',
      'if column not in df.columns:'),
     ('core/vector_index.py', '_prep_frame', 'df',

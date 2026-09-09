@@ -5201,6 +5201,7 @@
           ],
           "imports": [
             "goldenmatch._polars_lazy",
+            "goldenmatch.core.frame",
             "goldenmatch.utils.transforms"
           ]
         },

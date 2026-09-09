@@ -351,6 +351,24 @@ jobs:
         shard: [1, 2, 3]
     env:
       GM_SPLITS: 3
+      # pyarrow's bundled mimalloc SIGSEGVs in mi_thread_init on worker
+      # threads. The root CLAUDE.md standard covers lanes that pip-install
+      # pyarrow from PyPI and notes the workspace `uv sync` pyarrow does not
+      # trip it -- which held while the arrow lane did comparatively little
+      # pyarrow work under xdist.
+      #
+      # It stopped holding. `value_frequencies` silently returned {} on any
+      # pa.Table (a polars-era `field not in df.columns` test), so the
+      # arrow-native config path did no per-value frequency work at all.
+      # Fixing that made it materialize a ChunkedArray column inside an
+      # xdist worker, and gw1 went down mid-test on
+      # test_arrow_native_cluster_equivalence[shared-email-switchboard] --
+      # a segfault, not an assertion, in the merge queue only.
+      #
+      # Set here rather than retried: a crashed worker is a real defect and
+      # this is the documented Arrow remedy, already applied to the rust
+      # bridge job for the identical signature.
+      ARROW_DEFAULT_MEMORY_POOL: system
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
@@ -569,6 +587,12 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3]
+    env:
+      # Same hazard and remedy as python_goldenmatch above: this lane also
+      # executes goldenmatch's own test files under sharding, so it can run
+      # the arrow-native paths that materialize pyarrow columns in a
+      # worker. Harmless where unneeded (root CLAUDE.md).
+      ARROW_DEFAULT_MEMORY_POOL: system
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
@@ -958,6 +982,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
+      # Same hazard and remedy as python_goldenmatch above: this lane also
+      # executes goldenmatch's own test files under sharding, so it can run
+      # the arrow-native paths that materialize pyarrow columns in a
+      # worker. Harmless where unneeded (root CLAUDE.md).
+      ARROW_DEFAULT_MEMORY_POOL: system
       GOLDENMATCH_NATIVE: "0"
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
