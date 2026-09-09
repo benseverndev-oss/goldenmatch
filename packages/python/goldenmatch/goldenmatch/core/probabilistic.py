@@ -483,7 +483,69 @@ def _compute_joint_corrections(
             _FD_MIN_BITS,
             ", ".join(f"{a}x{b}={e:+.2f}b" for a, b, e in observed[:3]),
         )
-    return out[:_FD_MAX_PAIRS]
+
+    corrections = out[:_FD_MAX_PAIRS]
+    if corrections and os.environ.get("GOLDENMATCH_FS_FD_PROBE", "").strip() not in ("", "0"):
+        _log_fd_reach_probe(corrections, top, log_m, log_u)
+    return corrections
+
+
+def _log_fd_reach_probe(corrections, top, log_m, log_u) -> None:
+    """Answer one question: can the correction reach a pair whose decision is open?
+
+    The correction fires only where BOTH fields agree at their TOP level. Those
+    pairs are overwhelming matches. If none of them sits within ``excess_bits``
+    of the decision bar, subtracting those bits cannot flip a single pair, and a
+    flat A/B is a targeting property rather than a wiring fault -- which is a
+    different finding, and a fixable one.
+
+    Reports, per corrected pair, how many pairs it touches, where their evidence
+    sits relative to the bar, and how many fall in the flippable band
+    ``[cut, cut + bits)`` -- the only pairs whose classification the subtraction
+    can change.
+
+    CAVEAT, stated in the output because it changes how to read it: ``log_m`` and
+    ``log_u`` here accumulate over NON-conditioned fields only (that is what the
+    estimator above needs), so these weights are LOWER BOUNDS on what the engine
+    actually scores -- each blocking-conditioned field adds roughly +0.93 b on
+    agreement. The bias runs toward reporting MORE near-cut pairs than exist, so
+    an empty flippable band here is the stronger form of the result.
+
+    Diagnostic only -- never changes the correction it measures.
+    """
+    cut = _fs_evidence_cut()
+    if cut is None:
+        logger.warning(
+            "FS field-dependence probe: no GOLDENMATCH_FS_EVIDENCE_CUT is set, so "
+            "there is no prior-invariant bar to measure distance to. Re-run with "
+            "GOLDENMATCH_FS_EVIDENCE_CUT set; skipping the probe."
+        )
+        return
+    weights = (log_m - log_u) / math.log(2)  # per-pair FS evidence, bits
+    n_pairs = int(weights.size)
+    for fa, fb, bits in corrections:
+        mask = top[fa] & top[fb]
+        touched = int(mask.sum())
+        if not touched:
+            logger.warning(
+                "FS field-dependence probe %sx%s: touches 0 of %d pairs.", fa, fb, n_pairs
+            )
+            continue
+        tw = weights[mask]
+        band = (weights >= cut) & (weights < cut + bits)
+        flippable = int((band & mask).sum())
+        in_band = int(band.sum())
+        logger.warning(
+            "FS field-dependence probe %sx%s (-%.2fb, cut=%.2fb): touches %d/%d "
+            "pairs; their evidence spans %.1f..%.1f b (median %.1f), closest is "
+            "%+.1f b above the cut. FLIPPABLE band [%.2f, %.2f): %d touched of "
+            "%d pairs there. NOTE weights exclude blocking-conditioned fields, "
+            "so they UNDERSTATE the engine's -- a near-cut count here is an "
+            "upper bound.",
+            fa, fb, bits, cut, touched, n_pairs,
+            float(tw.min()), float(tw.max()), float(np.median(tw)),
+            float(tw.min() - cut), cut, cut + bits, flippable, in_band,
+        )
 
 
 def enforce_weight_monotonicity(

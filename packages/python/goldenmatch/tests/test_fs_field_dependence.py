@@ -8,6 +8,8 @@ it when both agree. Default OFF = byte-identical.
 """
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
@@ -153,3 +155,66 @@ def test_single_comparison_field_is_reported_not_silent():
     m = {"only": [0.1, 0.9]}
     u = {"only": [0.5, 0.5]}
     assert _compute_joint_corrections(comp, mk, m, u, 0.05, cond, set()) == []
+
+
+# ---------------------------------------------------------------------------
+# Reach probe (GOLDENMATCH_FS_FD_PROBE)
+#
+# The probe exists to answer whether the correction can touch a pair whose
+# decision is still open. Its useful answer is "none" -- which is exactly the
+# answer a BROKEN probe also gives, so these tests pin the known-positive first
+# and the empty case second. An empty verification is not a pass.
+# ---------------------------------------------------------------------------
+
+def _probe_arrays(weight_bits: float, n: int = 10):
+    """log_m/log_u whose implied FS evidence is exactly ``weight_bits`` per pair."""
+    log_u = np.zeros(n, dtype=np.float64)
+    log_m = np.full(n, weight_bits * math.log(2), dtype=np.float64)
+    top = {"a": np.ones(n, dtype=bool), "b": np.ones(n, dtype=bool)}
+    return top, log_m, log_u
+
+
+def test_probe_reports_flippable_pairs_when_they_exist(monkeypatch, caplog):
+    """KNOWN-POSITIVE: pairs sitting inside [cut, cut+bits) are reported."""
+    monkeypatch.setenv("GOLDENMATCH_FS_EVIDENCE_CUT", "10")
+    top, log_m, log_u = _probe_arrays(11.0, n=10)
+    with caplog.at_level("WARNING"):
+        P._log_fd_reach_probe([("a", "b", 2.0)], top, log_m, log_u)
+    msg = caplog.text
+    assert "FLIPPABLE band [10.00, 12.00): 10 touched of 10" in msg, msg
+
+
+def test_probe_reports_none_when_pairs_are_far_above_the_cut(monkeypatch, caplog):
+    """The real-panel shape: touched pairs are overwhelming matches, band empty."""
+    monkeypatch.setenv("GOLDENMATCH_FS_EVIDENCE_CUT", "9")
+    top, log_m, log_u = _probe_arrays(40.0, n=10)
+    with caplog.at_level("WARNING"):
+        P._log_fd_reach_probe([("a", "b", 5.0)], top, log_m, log_u)
+    msg = caplog.text
+    assert "touches 10/10 pairs" in msg, msg
+    assert "0 touched of 0" in msg, msg
+    assert "+31.0 b above the cut" in msg, msg
+
+
+def test_probe_skips_without_an_evidence_cut(monkeypatch, caplog):
+    """No prior-invariant bar means no distance to measure -- say so, don't guess."""
+    monkeypatch.delenv("GOLDENMATCH_FS_EVIDENCE_CUT", raising=False)
+    top, log_m, log_u = _probe_arrays(11.0)
+    with caplog.at_level("WARNING"):
+        P._log_fd_reach_probe([("a", "b", 2.0)], top, log_m, log_u)
+    assert "no GOLDENMATCH_FS_EVIDENCE_CUT is set" in caplog.text
+
+
+@pytest.mark.parametrize("val,fires", [("1", True), ("0", False), ("", False)])
+def test_probe_gated_by_its_own_env(monkeypatch, caplog, val, fires):
+    monkeypatch.setenv(FLAG, "1")
+    monkeypatch.setenv("GOLDENMATCH_FS_FD_PROBE", val)
+    monkeypatch.setenv("GOLDENMATCH_FS_EVIDENCE_CUT", "1")
+    rows = [[1, 1, 0]] * 40 + [[0, 0, 0]] * 40 + [[1, 0, 0]] * 10 + [[0, 1, 0]] * 10
+    comp = np.array(rows, dtype=np.int64)
+    cond = np.zeros((len(comp), 3), dtype=bool)
+    m = {"first_name": [0.1, 0.9], "surname": [0.1, 0.9], "city": [0.5, 0.5]}
+    u = {"first_name": [0.5, 0.5], "surname": [0.5, 0.5], "city": [0.5, 0.5]}
+    with caplog.at_level("WARNING"):
+        _compute_joint_corrections(comp, _mk(), m, u, 0.05, cond, set())
+    assert ("field-dependence probe" in caplog.text) is fires

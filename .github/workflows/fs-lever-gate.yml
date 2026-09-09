@@ -86,6 +86,17 @@ on:
           should be judged on.
         type: string
         default: ""
+      fd_probe:
+        description: >-
+          Set GOLDENMATCH_FS_FD_PROBE=1 to log, per corrected field pair, how
+          many pairs the correction actually touches and how many of those sit
+          in the flippable band [cut, cut+bits) -- the only pairs a subtraction
+          can reclassify. Diagnostic only; it never changes the correction it
+          measures, and it needs evidence_cut set to have a bar to measure
+          against. Answers whether a flat A/B is a wiring fault or a targeting
+          property.
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -150,6 +161,7 @@ jobs:
           # second variable. Empty -> unset -> today's default.
           GOLDENMATCH_FS_CALIBRATED: ${{ inputs.calibrated }}
           GOLDENMATCH_FS_EVIDENCE_CUT: ${{ inputs.evidence_cut }}
+          GOLDENMATCH_FS_FD_PROBE: ${{ inputs.fd_probe }}
         run: |
           uv run python -m scripts.bench_er_headtohead.ab_lever \
             --env "$LEVER" --off 0 --on 1 \
