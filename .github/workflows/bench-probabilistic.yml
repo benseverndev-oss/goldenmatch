@@ -69,6 +69,10 @@ on:
         type: boolean
         required: false
         default: true
+      run_field_dependence:
+        description: "Run the FS conditional-independence diagnostic (first_name x surname joint-agreement lift on historical_50k)"
+        type: boolean
+        default: false
       run_honorific:
         description: "Run the FS honorific-strip OFF-vs-ON lane (gates the GOLDENMATCH_FS_STRIP_HONORIFICS default flip)"
         type: boolean
@@ -817,3 +821,50 @@ jobs:
             bakeoff_out/bakeoff.md
             bakeoff_out/bakeoff.json
           retention-days: 90
+
+  # Measurement only -- there is no dependence correction on main to A/B.
+  # Fellegi-Sunter sums per-field weights assuming the comparison components
+  # are independent GIVEN match status. Where two fields co-agree more often
+  # than chance among NON-matches, the true joint u exceeds prod(u_i), FS
+  # under-counts the denominator, and every pair agreeing on both is
+  # over-weighted -- the namesake double-count.
+  #
+  # The July spike measured first_name x surname at 5.57x lift / +2.48 bits on
+  # 98% of false merges, then died before its own follow-up A/B ran. That
+  # number is now seven weeks old against a baseline that moved from precision
+  # ~0.75 to 0.939, so it is re-derived here rather than assumed.
+  panel-field-dependence:
+    if: ${{ inputs.run_field_dependence }}
+    runs-on: large-new-64GB
+    timeout-minutes: 120
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+      ARROW_DEFAULT_MEMORY_POOL: system
+      _RJEM_MALLOC_CONF: "dirty_decay_ms:1000,muzzy_decay_ms:0"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install goldenmatch[bench]
+        run: pip install -e packages/python/goldenmatch[bench]
+
+      # The emitted-pair dump under GOLDENMATCH_BENCH_DUMP_PAIRS writes parquet
+      # via polars, which goldenmatch itself no longer depends on.
+      - name: Install polars (for the emitted-pair dump the diagnostic reads)
+        run: pip install polars
+
+      - name: Conditional-independence diagnostic - historical_50k
+        run: |
+          python scripts/bench_er_headtohead/diagnose_field_dependence.py \
+            --dataset historical_50k | tee field_dependence.md
+
+      - name: Upload diagnostic
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: field-dependence
+          path: field_dependence.md
+          if-no-files-found: error
