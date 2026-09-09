@@ -402,6 +402,7 @@ def _compute_joint_corrections(
         top[f.field] = (lv == (int(f.levels) - 1)) & (lv >= 0)
 
     out = []
+    observed: list[tuple[str, str, float]] = []
     for (ja, fa), (jb, fb) in combinations(fields, 2):
         ta, tb = top[fa.field], top[fb.field]
         u_a = float((w * ta).sum()) / W
@@ -410,9 +411,45 @@ def _compute_joint_corrections(
         if u_a <= 0 or u_b <= 0 or u_ab <= 0:
             continue
         excess = math.log2(u_ab / (u_a * u_b))
+        observed.append((fa.field, fb.field, excess))
         if excess >= _FD_MIN_BITS:
             out.append((fa.field, fb.field, excess))
     out.sort(key=lambda t: t[2], reverse=True)
+    if len(fields) < 2:
+        # The correction only considers fields NOT conditioned by blocking.
+        # When the blocking key covers most comparison fields, fewer than
+        # two remain and NO pair is ever evaluated -- so it returns empty
+        # for a structural reason, not because it measured low excess.
+        # Measured on a name-blocked person shape: always_conditioned =
+        # {dob, first_name, surname}, leaving one eligible field. The pair
+        # the field-dependence DIAGNOSTIC names (first_name x surname, 5.57x
+        # lift over random pairs) is inside that exclusion by construction.
+        logger.info(
+            "FS field-dependence: enabled, but only %d comparison field(s) "
+            "are outside the blocking conditioning (%s), so no field PAIR "
+            "can be evaluated. Excluded as blocking-conditioned: %s.",
+            len(fields),
+            ", ".join(f.field for _, f in fields) or "none",
+            ", ".join(sorted(always_conditioned)) or "none",
+        )
+        return []
+
+    if not out and observed:
+        # Enabled and found nothing is NOT the same as disabled, and the
+        # difference was invisible: this only ever logged on success, so a
+        # correction that measured no excess looked exactly like a flag
+        # that was never set. Both now say so.
+        observed.sort(key=lambda t: t[2], reverse=True)
+        logger.info(
+            "FS field-dependence: enabled, but no field pair cleared "
+            "_FD_MIN_BITS=%.2f -- no correction applied. Top observed "
+            "excess: %s. NOTE this is measured over the BLOCKED "
+            "non-match population, where a field the blocking key is "
+            "built from has already been conditioned toward agreement; "
+            "lift over RANDOM pairs can be far larger.",
+            _FD_MIN_BITS,
+            ", ".join(f"{a}x{b}={e:+.2f}b" for a, b, e in observed[:3]),
+        )
     return out[:_FD_MAX_PAIRS]
 
 
