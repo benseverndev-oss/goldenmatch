@@ -4283,6 +4283,7 @@
             "_joint_field_indices",
             "_label_anchors_for",
             "_levels_from_similarity",
+            "_log_fd_reach_probe",
             "_matched_records",
             "_max_cluster_size",
             "_ne_fired",
