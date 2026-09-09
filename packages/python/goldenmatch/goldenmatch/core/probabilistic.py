@@ -424,7 +424,7 @@ def _compute_joint_corrections(
         # {dob, first_name, surname}, leaving one eligible field. The pair
         # the field-dependence DIAGNOSTIC names (first_name x surname, 5.57x
         # lift over random pairs) is inside that exclusion by construction.
-        logger.info(
+        logger.warning(
             "FS field-dependence: enabled, but only %d comparison field(s) "
             "are outside the blocking conditioning (%s), so no field PAIR "
             "can be evaluated. Excluded as blocking-conditioned: %s.",
@@ -440,7 +440,7 @@ def _compute_joint_corrections(
         # correction that measured no excess looked exactly like a flag
         # that was never set. Both now say so.
         observed.sort(key=lambda t: t[2], reverse=True)
-        logger.info(
+        logger.warning(
             "FS field-dependence: enabled, but no field pair cleared "
             "_FD_MIN_BITS=%.2f -- no correction applied. Top observed "
             "excess: %s. NOTE this is measured over the BLOCKED "
