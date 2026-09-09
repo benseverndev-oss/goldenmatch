@@ -56,6 +56,14 @@ on:
         type: choice
         options: [pr, full]
         default: full
+      lever:
+        description: >-
+          Env var to A/B. Defaults to the default-ON refit threshold, which is
+          what the scheduled/PR runs guard. Point it at a default-OFF lever
+          (e.g. GOLDENMATCH_FS_TF_ADJUSTMENT) to measure whether that lever has
+          earned its flip against the same over-merge panel.
+        type: string
+        default: GOLDENMATCH_FS_REFIT_THRESHOLD
 
 permissions:
   contents: read
@@ -108,8 +116,15 @@ jobs:
             echo "datasets=--datasets person,household_hardneg,cotenant_hardneg,ncvr_synthetic" >> "$GITHUB_OUTPUT"
             echo "label=synthetic over-merge panel" >> "$GITHUB_OUTPUT"
           fi
-      - name: FS refit-threshold lever A/B (${{ steps.scope.outputs.label }})
+      - name: FS lever A/B (${{ steps.scope.outputs.label }})
+        # `lever` reaches the script through env, never interpolated into
+        # the shell: a `${{ }}` expansion inside `run:` is the
+        # template-injection shape zizmor rejects. `inputs.lever` is empty
+        # on schedule/push/PR, so the fallback keeps those runs
+        # byte-identical to the hardcoded form.
+        env:
+          LEVER: ${{ inputs.lever || 'GOLDENMATCH_FS_REFIT_THRESHOLD' }}
         run: |
           uv run python -m scripts.bench_er_headtohead.ab_lever \
-            --env GOLDENMATCH_FS_REFIT_THRESHOLD --off 0 --on 1 \
+            --env "$LEVER" --off 0 --on 1 \
             ${{ steps.scope.outputs.datasets }}
