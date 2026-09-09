@@ -2536,7 +2536,13 @@ def train_em(
             conditioned_mask, always_conditioned,
         ) or None
         if joint_corrections:
-            logger.info(
+            # WARNING, not info, while this lever is opt-in and under
+            # evaluation. Both inert paths already warn; leaving the
+            # SUCCESS path at info meant a correction that fired and one
+            # that found nothing produced the same empty log, which is
+            # exactly the ambiguity the other two warnings were added to
+            # remove. A run that changes scoring should say so.
+            logger.warning(
                 "FS field-dependence: correcting %d field pair(s): %s",
                 len(joint_corrections),
                 ", ".join(f"{a}x{b}(-{bits:.2f}b)" for a, b, bits in joint_corrections),
