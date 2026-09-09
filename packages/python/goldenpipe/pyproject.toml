@@ -29,8 +29,8 @@ dependencies = [
     # precedent for how much a pydantic major moves.
     "pydantic>=2.7,<3",
     "pyyaml>=6.0",
-    "goldencheck-types",
-    "infermap",
+    "goldencheck-types>=0.3.0",
+    "infermap>=0.7.0",
 ]
 
 [project.optional-dependencies]

@@ -47,7 +47,7 @@ dependencies = [
     "pydantic>=2.7,<3",
     "openpyxl>=3.1",
     "textual>=1.0",
-    "goldencheck-types",
+    "goldencheck-types>=0.3.0",
     # Levenshtein for the fuzzy_values / cell_quality Python path (the fallback
     # when goldencheck-native is absent). goldenfuzz is our owned string-metric
     # kernel: its normalized similarity IS `1 - dist/max(len)`, the metric this

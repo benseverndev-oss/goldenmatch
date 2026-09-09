@@ -34,12 +34,12 @@ classifiers = [
 
 dependencies = [
     "mcp>=1.28.1,<2",
-    "goldenmatch[mcp]",
-    "goldencheck[mcp]",
-    "goldenflow[mcp]",
-    "goldenpipe[mcp]",
-    "infermap[mcp]",
-    "goldenanalysis[mcp]",
+    "goldenmatch[mcp]>=3.17.1",
+    "goldencheck[mcp]>=3.5.0",
+    "goldenflow[mcp]>=2.2.0",
+    "goldenpipe[mcp]>=1.5.0",
+    "infermap[mcp]>=0.7.0",
+    "goldenanalysis[mcp]>=0.5.0",
     "uvicorn>=0.30",
     "starlette>=1.0.1",
 ]
