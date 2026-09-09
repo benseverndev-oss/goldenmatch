@@ -30,7 +30,7 @@ dependencies = [
     "pydantic>=2.7,<3",
     "pyyaml>=6.0",
     "goldencheck-types",
-    "infermap",
+    "infermap>=0.7.0",
 ]
 
 [project.optional-dependencies]
