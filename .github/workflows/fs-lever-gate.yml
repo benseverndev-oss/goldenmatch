@@ -74,6 +74,18 @@ on:
           field-dependence spike.
         type: string
         default: ""
+      evidence_cut:
+        description: >-
+          Value for GOLDENMATCH_FS_EVIDENCE_CUT, applied to BOTH arms. Empty
+          leaves it unset. The linear min-max default renormalizes against the
+          summed per-field weight extremes, so a weight-space lever relocates
+          every pair's operating point and its effect is muted or distorted --
+          measured, post-blocking-u swings ncvr F1 by -0.162 under the default
+          but only +0.025 at c=6. An evidence cut makes the bar `W >= c`,
+          prior- and endpoint-invariant, which is the axis a weight correction
+          should be judged on.
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -137,6 +149,7 @@ jobs:
           # Applied to BOTH arms, so it is a held constant and not a
           # second variable. Empty -> unset -> today's default.
           GOLDENMATCH_FS_CALIBRATED: ${{ inputs.calibrated }}
+          GOLDENMATCH_FS_EVIDENCE_CUT: ${{ inputs.evidence_cut }}
         run: |
           uv run python -m scripts.bench_er_headtohead.ab_lever \
             --env "$LEVER" --off 0 --on 1 \
