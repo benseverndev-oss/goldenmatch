@@ -1,0 +1,93 @@
+# Does Fellegi-Sunter's conditional-independence assumption still cost us
+# anything on historical_50k?
+#
+# FS sums per-field weights log2(m_i/u_i) assuming the comparison components
+# are independent GIVEN match status. Where two fields co-agree more often than
+# chance among NON-matches, the true joint u exceeds prod(u_i), FS under-counts
+# the denominator, and every pair agreeing on both is over-weighted -- the
+# namesake double-count.
+#
+# A July 2026 spike measured first_name x surname at 5.57x lift / +2.48 bits on
+# 98% of false merges and built a correction on `spike/fs-joint-weight`. Neither
+# the diagnostic nor the correction merged, so the number became unreproducible
+# and has been carried since as settled fact. It is not: that baseline had
+# historical_50k precision ~0.75 and today's panel reads 0.939, so much of the
+# over-count may already be absorbed. This re-derives it before anything is
+# designed against it.
+#
+# MEASUREMENT ONLY. There is no dependence correction on main to A/B.
+#
+# Deliberately its own workflow rather than a lane in bench-probabilistic:
+# that workflow's `panel` and `panel-v1-v2` jobs carry no `if:` gate, so every
+# dispatch ran two full accuracy panels on 64GB runners to reach one
+# diagnostic. ubuntu-latest for the same reason fs-lever-gate gives:
+# historical_50k is 50k rows and fits well under 16GB, and it avoids the
+# 30-60 minute provisioning lottery on brand-new large runners.
+name: fs-field-dependence
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ARROW_DEFAULT_MEMORY_POOL: system
+  _RJEM_MALLOC_CONF: "dirty_decay_ms:1000,muzzy_decay_ms:0"
+  GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+
+concurrency:
+  group: fs-field-dependence-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install goldenmatch[bench]
+        run: pip install -e packages/python/goldenmatch[bench]
+
+      # The emitted-pair dump under GOLDENMATCH_BENCH_DUMP_PAIRS writes parquet
+      # via polars, which goldenmatch itself no longer depends on.
+      - name: Install polars (for the emitted-pair dump the diagnostic reads)
+        run: pip install polars
+
+      - name: Conditional-independence diagnostic - historical_50k
+        run: |
+          python scripts/bench_er_headtohead/diagnose_field_dependence.py \
+            --dataset historical_50k | tee field_dependence.md
+
+      # The script is documented as never failing a job (dataset gaps -> note +
+      # exit 0). That is fine for a best-effort side-lane and WRONG here, where
+      # the measurement is the entire purpose. Two runs proved the point: the
+      # comparator it imported had been evicted from the runtime, the
+      # diagnostic skipped, and the job went green having measured nothing.
+      # `if-no-files-found: error` did not catch it, because a file WAS written
+      # -- one containing the word "skipped". Assert on content, not existence.
+      - name: Refuse a run that measured nothing
+        run: |
+          if grep -qi 'skipped' field_dependence.md; then
+            echo '::error::diagnostic skipped -- it measured nothing'
+            cat field_dependence.md
+            exit 1
+          fi
+          if ! grep -qi 'lift' field_dependence.md; then
+            echo '::error::no lift table in the output -- nothing to read'
+            cat field_dependence.md
+            exit 1
+          fi
+
+      - name: Upload diagnostic
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: field-dependence
+          path: field_dependence.md
+          if-no-files-found: error
