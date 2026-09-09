@@ -77,11 +77,26 @@ def _norm(v) -> str | None:
 
 
 def _jw():
-    try:
-        from rapidfuzz.distance import JaroWinkler
-        return JaroWinkler.normalized_similarity
-    except Exception:
-        return None
+    """The ENGINE's comparator, not a lookalike.
+
+    This read `rapidfuzz.distance.JaroWinkler` when it was written. rapidfuzz
+    has since been evicted from the runtime -- GoldenMatch owns its scorer
+    (goldenfuzz) and `pip install goldenmatch` no longer pulls rapidfuzz -- so
+    on a modern install the import failed, the whole diagnostic skipped, and
+    the lane went GREEN having measured nothing.
+
+    Beyond availability, fidelity decides it: this measures how often two
+    fields AGREE, and 'agree' has to mean what the engine means by it.
+    Verified numerically identical to the rapidfuzz form on the cases this
+    exercises, so the swap does not move the numbers -- it stops them being a
+    lookalike's numbers.
+
+    Deliberately NOT wrapped in try/except: a missing comparator is a broken
+    measurement, and this script's one job is to measure.
+    """
+    from goldenfuzz import jaro_winkler
+
+    return jaro_winkler
 
 
 def _run_gm_emitted(records):
@@ -164,10 +179,6 @@ def main() -> int:
         records, truth = ds_mod.load_dataset(args.dataset)
     except Exception as e:
         lines.append(f"_dataset unavailable ({type(e).__name__}: {e}); skipped._")
-        _emit("\n".join(lines) + "\n")
-        return 0
-    if _jw() is None:
-        lines.append("_rapidfuzz unavailable; install goldenmatch[bench]. skipped._")
         _emit("\n".join(lines) + "\n")
         return 0
 

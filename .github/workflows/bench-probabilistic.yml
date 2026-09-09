@@ -861,6 +861,27 @@ jobs:
           python scripts/bench_er_headtohead/diagnose_field_dependence.py \
             --dataset historical_50k | tee field_dependence.md
 
+      # The script is documented as never failing a job (dataset gaps -> note
+      # + exit 0). That is fine for a best-effort side-lane and WRONG here,
+      # where the measurement is the entire purpose. The first run of this
+      # lane proved the point: rapidfuzz had been evicted from the runtime,
+      # the diagnostic skipped, and the job went green having measured
+      # nothing. `if-no-files-found: error` did not catch it because a file
+      # WAS written -- one containing the word 'skipped'. Assert on content,
+      # not existence.
+      - name: Refuse a run that measured nothing
+        run: |
+          if grep -qi 'skipped' field_dependence.md; then
+            echo '::error::diagnostic skipped -- it measured nothing'
+            cat field_dependence.md
+            exit 1
+          fi
+          if ! grep -qi 'lift' field_dependence.md; then
+            echo '::error::no lift table in the output -- nothing to read'
+            cat field_dependence.md
+            exit 1
+          fi
+
       - name: Upload diagnostic
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
